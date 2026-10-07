@@ -76,16 +76,6 @@ impl Row {
     }
 }
 
-/// A `Vec<Arg>`'s allocation and those of the lists it holds.
-fn operands(args: &Vec<Arg>, row: &mut Row) {
-    row.add(args.len(), args.capacity() * size_of::<Arg>());
-    for a in args {
-        if let Arg::List(items) = a {
-            operands(items, row);
-        }
-    }
-}
-
 /// What the VM holds, by kind, as console lines (docs/userland/beamlet.md, "What the VM holds
 /// at its prompt"): what each allocation asked for and what Redoubt's heap holds for it. Every
 /// process not running is collected first, so its heap's row is before and after. B-tree nodes
@@ -105,10 +95,9 @@ pub fn footprint(sys: &mut System, heap_pages: HeapPages) -> Vec<String> {
     let mut largest: Vec<(usize, &str)> = Vec::new();
     for m in sys.modules.values() {
         let before = [instrs, args, lits, strings, attrs, cinf, tables].iter().map(|r| r.held).sum::<usize>();
-        instrs.add(m.code.len(), m.code.capacity() * size_of::<Instr>());
-        for i in &m.code {
-            operands(&i.args, &mut args);
-        }
+        instrs.add(m.code.len(), size_of_val(&*m.code));
+        // Lists' items included: they are in the same array.
+        args.add(m.operands.len(), size_of_val(&*m.operands));
         lits.add(m.literals.len(), m.literals.capacity() * size_of::<Term>());
         strings.add(1, m.strings.capacity());
         attrs.add(1, m.attributes.capacity());

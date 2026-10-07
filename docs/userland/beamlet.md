@@ -138,12 +138,13 @@ VM's own count: each allocation as the runtime's heap holds it (a power-of-two b
 whole pages above), every waiting process collected first; B-tree nodes are not counted.
 `beamlet` adds its runtime heap's pages held at that moment and its record's peak, and the bench's
 scan of that record ([the memory budget](../testbench.md#the-memory-budget)) is the independent
-total, read once the case has typed one command. In pages, each row rounded up on its own:
+total, read once the case has typed one command. In pages, each row rounded to whole pages on its
+own:
 
 | What | rv64 | rv32 |
 | --- | ---: | ---: |
-| Decoded code: instructions | 1,944 | 993 |
-| Decoded code: operands | 4,455 | 2,313 |
+| Decoded code: instructions | 514 | 514 |
+| Decoded code: operands | 2,081 | 2,081 |
 | Literals: each module's | 36 | 36 |
 | Literals: the shared table | 753 | 749 |
 | Module tables | 231 | 202 |
@@ -151,21 +152,21 @@ total, read once the case has typed one command. In pages, each row rounded up o
 | Processes (19): heaps, collected | 46 | 46 |
 | Processes: the rest | 100 | 95 |
 | ETS and binaries | 1 | 1 |
-| Accounted | 7,660 | 4,502 |
-| Runtime heap at the prompt: held, peak | 7,876, 7,897 | 4,616, 4,622 |
-| Not accounted (held less accounted) | 216 | 114 |
-| The scan's peak, after one command | 9,369 | 5,511 |
+| Accounted | 3,856 | 3,791 |
+| Runtime heap at the prompt: held, peak | 4,073, 4,537 | 3,906, 4,373 |
+| Not accounted (held less accounted) | 217 | 115 |
+| The scan's peak, after one command | 5,240 | 5,067 |
 
-An instruction is 32 bytes on rv64 and 16 on rv32, its operands a vector of their own, so decoded
-code is most of the count: about four fifths on rv64 and seven tenths on rv32. The five largest
-modules are `unicode_util`, `erl_parse`, `Elixir.Enum`, `erl_eval` and `string`. What is not
-accounted is free small blocks, B-tree nodes and the platform's buffers; the peak above what is
-held is a load's transient, and the scan's peak is higher than the prompt's because the first
-command loads more modules.
+A module's instructions are 8-byte entries over one array of its operands, 16 bytes each on either
+width, a list operand's items in the same array, so decoded code is the same size on both widths
+and still about two thirds of the count. The five largest modules are `unicode_util`, `erl_parse`,
+`Elixir.Enum`, `Elixir.Kernel` and `erl_eval`. What is not accounted is free small blocks, B-tree
+nodes and the platform's buffers; the peak above what is held is the boot pack, which is held
+until the prompt, and a load's transient, and the scan's peak is higher than the prompt's because
+the first command loads more modules.
 
-- **Loaded code keeps no spare room.** The loader shrinks a module's instructions to their count
-  once decoded, where the decoding's doubling left up to twice as many (about 780 pages on rv64,
-  370 on rv32).
+- **Loaded code keeps no spare room.** The loader shrinks a module's instructions and its operand
+  array to their counts once decoded, where the decoding's doubling left up to twice as many.
 - **A literal chunk keeps no spare room.** A module's constants are shrunk to their count before
   they join the shared table (about 350 pages on either width).
 - **Loading stays eager.** The shell's start loads what its prompt needs. The largest modules are
@@ -177,9 +178,9 @@ that budget the image boots in 512 MiB
 ([budgets](../kernel/budgets.md#the-tree-from-the-boot-manifest)).
 
 Residual: QEMU's default 256 MiB is out of reach. Its `system` budget leaves the VM about 2,700
-pages beside the other servers, and the VM would still hold about 5,450 on rv64 at its prompt with
-code decoded compactly (one operand array a module, an 8-byte instruction). Fitting needs code
-kept in its on-disk form or loaded a function at a time.
+pages beside the other servers, and the VM holds more than that at its prompt (the table above),
+most of it decoded code and the shared literal table. Fitting needs code kept in its on-disk form or
+loaded a function at a time.
 
 ### The `Platform` boundary
 

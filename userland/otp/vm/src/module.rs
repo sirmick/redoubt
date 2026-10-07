@@ -1,5 +1,6 @@
-//! A loaded module: its tables and its code, decoded into [`Instr`]s.
+//! A loaded module: its tables and its code, decoded into [`Instr`]s over one array of operands.
 
+use alloc::boxed::Box;
 use alloc::vec::Vec;
 
 use crate::atom::Atom;
@@ -52,7 +53,7 @@ pub struct FunctionInfo {
 }
 
 /// An instruction operand.
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum Arg {
     X(u16),
     Y(u16),
@@ -63,7 +64,11 @@ pub enum Arg {
     U(u64),
     /// A jump target as an index into the code, or `None` for "no label" (raise instead).
     Label(Option<u32>),
-    List(Vec<Arg>),
+    /// The items at `start..start + len` of [`Module::operands`].
+    List {
+        start: u32,
+        len: u32,
+    },
     /// A heap allocation hint. This VM has no heap to reserve, so it is only validated.
     Alloc,
 }
@@ -73,11 +78,43 @@ pub enum Arg {
 /// [`Module::body_natives`]. Put in place at load time, like `erlang:load_nif/2`.
 pub const NATIVE_BODY: u8 = 255;
 
-/// A decoded instruction. Operands are in the order of the compiler's `genop.tab`.
-#[derive(Clone, Debug)]
+/// A decoded instruction: its operands are `count` entries of [`Module::operands`] from
+/// `start`, in the order of the compiler's `genop.tab`.
+#[derive(Clone, Copy, Debug)]
 pub struct Instr {
     pub op: u8,
-    pub args: Vec<Arg>,
+    /// At most 8 (`genop.tab`'s largest arity).
+    pub count: u8,
+    pub start: u32,
+}
+
+// The code's size, on either width (docs/userland/beamlet.md, "What the VM holds at its prompt").
+const _: () = assert!(size_of::<Instr>() == 8 && size_of::<Arg>() == 16);
+
+/// An instruction as the interpreter reads it: the one way to its operands.
+#[derive(Clone, Copy)]
+pub struct InstrView<'a> {
+    pub op: u8,
+    args: &'a [Arg],
+    operands: &'a [Arg],
+}
+
+impl<'a> InstrView<'a> {
+    /// `ins`, of the module whose operands are `operands`.
+    pub fn new(ins: &Instr, operands: &'a [Arg]) -> Option<Self> {
+        let args = operands.get(ins.start as usize..)?.get(..ins.count as usize)?;
+        Some(InstrView { op: ins.op, args, operands })
+    }
+
+    /// Operand `i`.
+    pub fn arg(&self, i: usize) -> Option<&'a Arg> { self.args.get(i) }
+
+    pub fn count(&self) -> usize { self.args.len() }
+
+    /// The items of an [`Arg::List`].
+    pub fn items(&self, start: u32, len: u32) -> Option<&'a [Arg]> {
+        self.operands.get(start as usize..)?.get(..len as usize)
+    }
 }
 
 pub struct Module {
@@ -87,7 +124,10 @@ pub struct Module {
     pub funs: Vec<FunEntry>,
     pub literals: Vec<Term>,
     pub strings: Vec<u8>,
-    pub code: Vec<Instr>,
+    pub code: Box<[Instr]>,
+    /// Every instruction's operands, in code order; the items of an instruction's lists follow
+    /// its own operands.
+    pub operands: Box<[Arg]>,
     /// Functions in code order.
     pub functions: Vec<FunctionInfo>,
     /// Source locations, for stack traces. See [`Module::location`].
@@ -123,6 +163,25 @@ impl Module {
         let pc = self.code.iter().position(|i| i.op == crate::opcodes::ON_LOAD)?;
         let f = self.function_at(pc as u32).filter(|f| f.arity == 0)?;
         Some((f.name, f.start + 1))
+    }
+
+    /// Instruction `pc` and its operands.
+    pub fn instr(&self, pc: u32) -> Option<InstrView<'_>> {
+        InstrView::new(self.code.get(pc as usize)?, &self.operands)
+    }
+
+    /// Replace the `label` at `entry` with [`NATIVE_BODY`], calling `native`; nothing if
+    /// `entry` is not a `label`.
+    pub fn replace_body(&mut self, entry: usize, native: (crate::bif::Native, Atom, u32)) {
+        let Some(ins) = self.code.get_mut(entry).filter(|i| i.op == crate::opcodes::LABEL) else {
+            return;
+        };
+        // A `label`'s one operand, its number, becomes the native's index.
+        if let Some(arg) = self.operands.get_mut(ins.start as usize) {
+            ins.op = NATIVE_BODY;
+            *arg = Arg::U(self.body_natives.len() as u64);
+            self.body_natives.push(native);
+        }
     }
 
     pub fn export(&self, function: &Atom, arity: u32) -> Option<u32> {

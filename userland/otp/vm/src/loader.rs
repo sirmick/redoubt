@@ -11,7 +11,7 @@ use alloc::vec::Vec;
 
 use crate::atom::{Atom, AtomTable};
 use crate::etf;
-use crate::module::{Arg, Export, FunEntry, FunctionInfo, Import, Instr, Module};
+use crate::module::{Arg, Export, FunEntry, FunctionInfo, Import, Instr, InstrView, Module};
 use crate::opcodes::{self, MAX_OPCODE, OPCODES};
 use crate::term::{Heap, Literals, Term};
 
@@ -53,23 +53,14 @@ type Result<T> = core::result::Result<T, LoadError>;
 pub fn load(bytes: &[u8], atoms: &mut AtomTable, lits: &mut Literals) -> Result<Module> {
     let mut heap = Heap::new(&Literals::default());
     let mut module = parse(bytes, atoms, &mut heap)?;
-    // Loaded code never grows: it keeps no room the decoding's doubling left.
-    module.code.shrink_to_fit();
     let space = lits.add(heap, &mut []);
     let relocate = |t: &mut Term| crate::term::relocate(t, space);
     module.literals.iter_mut().for_each(relocate);
     module.lines.files.iter_mut().for_each(relocate);
-    fn args(a: &mut [Arg], space: u32) {
-        for a in a {
-            match a {
-                Arg::Const(t) => crate::term::relocate(t, space),
-                Arg::List(items) => args(items, space),
-                _ => {}
-            }
+    for a in module.operands.iter_mut() {
+        if let Arg::Const(t) = a {
+            relocate(t);
         }
-    }
-    for ins in module.code.iter_mut() {
-        args(&mut ins.args, space);
     }
     Ok(module)
 }
@@ -102,7 +93,7 @@ fn parse(bytes: &[u8], atoms: &mut AtomTable, heap: &mut Heap) -> Result<Module>
     let strings = chunk(b"StrT").unwrap_or(&[]).to_vec();
 
     let mut ctx = Tables { atoms: &atom_table, literals: &literals, heap };
-    let (code, label_count, labels) = code_chunk(need("Code")?, &mut ctx)?;
+    let (code, mut operands, label_count, labels) = code_chunk(need("Code")?, &mut ctx)?;
     let heap = ctx.heap;
     let resolve = |label: usize| -> Result<u32> {
         match labels.get(label) {
@@ -142,14 +133,20 @@ fn parse(bytes: &[u8], atoms: &mut AtomTable, heap: &mut Heap) -> Result<Module>
         Some(d) => line_chunk(d, name.as_str(), heap)?,
         None => crate::module::Lines::default(),
     };
-    let mut code = code;
     let mut functions = Vec::new();
-    for (pc, ins) in code.iter_mut().enumerate() {
+    for (pc, ins) in code.iter().enumerate() {
         // Rewrite label numbers into code indices.
-        resolve_labels(&mut ins.args, &resolve, label_count)?;
-        check_operands(ins, &imports, &funs, strings.len())?;
+        resolve_labels(
+            &mut operands,
+            ins.start as usize..ins.start as usize + ins.count as usize,
+            &resolve,
+            label_count,
+        )?;
+        // In range: code_chunk wrote each instruction's operands where its entry says.
+        let ins = InstrView::new(ins, &operands).expect("operands decoded in range");
+        check_operands(&ins, &imports, &funs, strings.len())?;
         if ins.op == opcodes::LINE {
-            match ins.args.first() {
+            match ins.arg(0) {
                 Some(Arg::U(item)) if (*item as usize) < lines.items.len().max(1) => {
                     lines.marks.push((pc as u32, *item as u32));
                 }
@@ -157,7 +154,7 @@ fn parse(bytes: &[u8], atoms: &mut AtomTable, heap: &mut Heap) -> Result<Module>
             }
         }
         if ins.op == opcodes::FUNC_INFO {
-            if let [_, Arg::Const(Term::Atom(f)), Arg::U(a)] = &ins.args[..] {
+            if let (Some(Arg::Const(Term::Atom(f))), Some(Arg::U(a))) = (ins.arg(1), ins.arg(2)) {
                 functions.push(FunctionInfo { start: pc as u32, name: *f, arity: arity(*a as usize)? });
             } else {
                 return Err(LoadError::Malformed("func_info"));
@@ -175,7 +172,9 @@ fn parse(bytes: &[u8], atoms: &mut AtomTable, heap: &mut Heap) -> Result<Module>
         funs,
         literals,
         strings,
-        code,
+        // Loaded code never grows: it keeps no room the decoding's doubling left.
+        code: code.into_boxed_slice(),
+        operands: operands.into_boxed_slice(),
         functions,
         lines,
         body_natives: Vec::new(),
@@ -340,10 +339,11 @@ struct Tables<'a> {
     heap: &'a mut Heap,
 }
 
-/// Decode the code chunk. Returns the instructions (with label *numbers* in `Arg::Label`), the
-/// number of labels, and for each label number the index of its `label` instruction.
+/// Decode the code chunk. Returns the instructions, their operands (with label *numbers* in
+/// `Arg::Label`), the number of labels, and for each label number the index of its `label`
+/// instruction.
 #[allow(clippy::type_complexity)]
-fn code_chunk(d: &[u8], t: &mut Tables) -> Result<(Vec<Instr>, usize, Vec<Option<u32>>)> {
+fn code_chunk(d: &[u8], t: &mut Tables) -> Result<(Vec<Instr>, Vec<Arg>, usize, Vec<Option<u32>>)> {
     let mut r = Compact { bytes: d, pos: 0 };
     let header_size = r.word()? as usize;
     let header_start = r.pos;
@@ -363,6 +363,7 @@ fn code_chunk(d: &[u8], t: &mut Tables) -> Result<(Vec<Instr>, usize, Vec<Option
     }
 
     let mut code = Vec::new();
+    let mut operands = Vec::new();
     let mut labels = alloc::vec![None; label_count];
     loop {
         let op = r.byte()?;
@@ -378,12 +379,14 @@ fn code_chunk(d: &[u8], t: &mut Tables) -> Result<(Vec<Instr>, usize, Vec<Option
         if info.deprecated {
             return Err(LoadError::Unsupported(info.name));
         }
-        let mut args = Vec::with_capacity(info.arity as usize);
-        for _ in 0..info.arity {
-            args.push(r.operand(t, 0)?);
+        // The instruction's operands, then its lists' items.
+        let start = operands.len();
+        operands.resize(start + info.arity as usize, Arg::Alloc);
+        for i in start..start + info.arity as usize {
+            operands[i] = r.operand(t, &mut operands, 0)?;
         }
         if op == opcodes::LABEL {
-            let n = match args[0] {
+            let n = match operands[start] {
                 Arg::U(n) => n as usize,
                 _ => return Err(LoadError::Malformed("label operand")),
             };
@@ -392,21 +395,38 @@ fn code_chunk(d: &[u8], t: &mut Tables) -> Result<(Vec<Instr>, usize, Vec<Option
                 _ => return Err(LoadError::Malformed("label out of range or defined twice")),
             }
         }
-        code.push(Instr { op, args });
+        code.push(Instr { op, count: info.arity, start: index32(start)? });
     }
-    Ok((code, label_count, labels))
+    // Every list's items were reserved in the array as it was read; the interpreter checks again
+    // where it reads them.
+    assert!(operands.iter().all(|a| match *a {
+        Arg::List { start, len } => start as usize + len as usize <= operands.len(),
+        _ => true,
+    }));
+    Ok((code, operands, label_count, labels))
 }
 
-fn resolve_labels(args: &mut [Arg], resolve: &impl Fn(usize) -> Result<u32>, count: usize) -> Result<()> {
-    for a in args {
-        match a {
+/// An index into the code's operands.
+fn index32(i: usize) -> Result<u32> { u32::try_from(i).map_err(|_| LoadError::Malformed("code too large")) }
+
+/// Resolve the labels among `operands[at]`, and the items of its lists, in operand order.
+fn resolve_labels(
+    operands: &mut [Arg],
+    at: core::ops::Range<usize>,
+    resolve: &impl Fn(usize) -> Result<u32>,
+    count: usize,
+) -> Result<()> {
+    for i in at {
+        match operands[i] {
             Arg::Label(Some(n)) => {
-                if *n as usize >= count {
+                if n as usize >= count {
                     return Err(LoadError::Malformed("label out of range"));
                 }
-                *a = Arg::Label(Some(resolve(*n as usize)?));
+                operands[i] = Arg::Label(Some(resolve(n as usize)?));
             }
-            Arg::List(items) => resolve_labels(items, resolve, count)?,
+            Arg::List { start, len } => {
+                resolve_labels(operands, start as usize..start as usize + len as usize, resolve, count)?
+            }
             _ => {}
         }
     }
@@ -414,9 +434,9 @@ fn resolve_labels(args: &mut [Arg], resolve: &impl Fn(usize) -> Result<u32>, cou
 }
 
 /// Checks that need to know what an operand means: table indices.
-fn check_operands(ins: &Instr, imports: &[Import], funs: &[FunEntry], strings: usize) -> Result<()> {
+fn check_operands(ins: &InstrView, imports: &[Import], funs: &[FunEntry], strings: usize) -> Result<()> {
     use opcodes::*;
-    let index_at = |i: usize| match ins.args.get(i) {
+    let index_at = |i: usize| match ins.arg(i) {
         Some(Arg::U(n)) => Ok(*n as usize),
         _ => Err(LoadError::Malformed("expected an index operand")),
     };
@@ -554,7 +574,8 @@ impl Compact<'_> {
         }
     }
 
-    fn operand(&mut self, t: &mut Tables, depth: usize) -> Result<Arg> {
+    /// Read one operand. A list's items go to the end of `out`.
+    fn operand(&mut self, t: &mut Tables, out: &mut Vec<Arg>, depth: usize) -> Result<Arg> {
         let (tag, value) = self.tag_and_wide()?;
         let small = |v: &Value| match v {
             Value::Small(v) => Ok(*v),
@@ -602,11 +623,12 @@ impl Compact<'_> {
                     if n > self.bytes.len() - self.pos {
                         return Err(LoadError::Malformed("list operand length"));
                     }
-                    let mut items = Vec::with_capacity(n);
-                    for _ in 0..n {
-                        items.push(self.operand(t, depth + 1)?);
+                    let start = out.len();
+                    out.resize(start + n, Arg::Alloc);
+                    for i in start..start + n {
+                        out[i] = self.operand(t, out, depth + 1)?;
                     }
-                    Arg::List(items)
+                    Arg::List { start: index32(start)?, len: index32(n)? }
                 }
                 2 => Arg::FloatReg(
                     usize::try_from(self.unsigned()?)
@@ -639,7 +661,7 @@ impl Compact<'_> {
                 }
                 5 => {
                     // A register annotated with a type for the JIT. The type is only a hint.
-                    let reg = self.operand(t, MAX_OPERAND_DEPTH)?;
+                    let reg = self.operand(t, out, MAX_OPERAND_DEPTH)?;
                     let _type_index = self.unsigned()?;
                     match reg {
                         Arg::X(_) | Arg::Y(_) => reg,
