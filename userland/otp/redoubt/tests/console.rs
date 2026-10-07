@@ -136,6 +136,38 @@ fn a_read_waits_for_typing_without_holding_the_vm() {
     });
 }
 
+/// The reader leaves with typing queued: with nobody to take it, it is no reason to wake the VM,
+/// whose idle sleeps to its deadline rather than returning at once on every pass; the next reader
+/// gets what was held, then what is typed after.
+#[test]
+fn input_nobody_reads_holds_no_idle_and_waits_for_the_next_reader() {
+    let (keyboard, mut keys) = std::io::pipe().unwrap();
+    with_platform(keyboard, move |p| {
+        assert_eq!(p.console_read(), ConsoleInput::Nothing);
+        // One key, so it arrives in one piece, and is left queued: the reader goes away before
+        // taking it.
+        keys.write_all(b"y").unwrap();
+        p.idle(None);
+        p.console_listening(false);
+        let deadline = p.monotonic_us() + 200_000;
+        p.idle(Some(deadline));
+        assert!(p.monotonic_us() >= deadline, "the idle returned on input nobody reads");
+        // A reader again: what was held first, then the rest.
+        p.console_listening(true);
+        assert_eq!(p.console_read(), ConsoleInput::Data(b"y".to_vec()));
+        keys.write_all(b"later\n").unwrap();
+        let mut read = Vec::new();
+        while read != b"later\n" {
+            p.idle(None);
+            if let ConsoleInput::Data(bytes) = p.console_read() {
+                read.extend(bytes);
+            }
+        }
+        drop(keys);
+        assert_eq!(read_to_end(p), b"");
+    });
+}
+
 #[test]
 fn a_vm_busy_past_the_session_bound_keeps_its_console() {
     let (keyboard, mut keys) = std::io::pipe().unwrap();

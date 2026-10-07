@@ -41,6 +41,11 @@ pub trait Platform: crate::sync::Sendable {
     /// input arrives). The default is a console with no input at all.
     fn console_read(&mut self) -> ConsoleInput { ConsoleInput::Eof }
 
+    /// Whether a process of the VM reads the console now. With none, input the platform holds is
+    /// no reason for [`Platform::idle`] to return, or the VM would spin on what nobody takes; the
+    /// platform keeps it, as little as it can, for the next reader. The default holds nothing.
+    fn console_listening(&mut self, _listening: bool) {}
+
     /// Fill `buf` from a cryptographically secure source. On failure the VM raises rather than
     /// using a weaker source.
     fn random(&mut self, buf: &mut [u8]) -> Result<(), PlatformError>;

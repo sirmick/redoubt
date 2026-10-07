@@ -209,6 +209,7 @@ Everything the VM gets from outside comes through the `Platform` trait
 | `monotonic_us`, `idle` | a clock that never goes backwards; sleeping until a deadline or an event | required |
 | `system_time_us` | wall-clock time | required; may answer `None` |
 | `console_write`, `console_read`, `console_size` | the `user` I/O device; input never blocks | no input; size unknown |
+| `console_listening` | told whether a process reads the console; with none, input held is no reason for `idle` to return | holds nothing |
 | `random` | random bytes from a cryptographic source; on failure the VM raises rather than use a weaker source | required |
 | `load_module`, `load_app`, `module_file` | a system `.beam` or `.app` lookup answers found bytes, an absent name or a refused object; `module_file` names a loaded module | applications absent |
 | `files` | a file system, as `prim_file` sees it | none: `file` calls fail with `enotsup` |
@@ -317,7 +318,7 @@ interrupt key with it, from the driver.
 
 ### The console, the clock and randomness
 
-<details><summary>Status: built · partly tested: its tests run on the host, on the fake kernel, against a console server that keeps `consoled`'s protocol with a host terminal for its device; it runs in a boot in bench:beamlet-boot and bench:beamlet-console · tested (11)</summary>
+<details><summary>Status: built · partly tested: its tests run on the host, on the fake kernel, against a console server that keeps `consoled`'s protocol with a host terminal for its device; it runs in a boot in bench:beamlet-boot and bench:beamlet-console · tested (13)</summary>
 
 - host:beamlet-redoubt::writes_reach_the_screen
 - host:beamlet-redoubt::a_long_write_reaches_the_screen_whole_and_in_order
@@ -330,6 +331,8 @@ interrupt key with it, from the driver.
 - host:beamlet-redoubt::idling_with_a_deadline_returns_by_it
 - host:beamlet-redoubt::after_the_console_ends_idling_still_waits_for_its_deadline
 - host:beamlet-redoubt::there_is_no_wall_clock
+- host:beamlet-redoubt::input_nobody_reads_holds_no_idle_and_waits_for_the_next_reader
+- host:beamlet-vm::the_platform_hears_the_console_reader_come_and_go
 
 </details>
 
@@ -343,7 +346,11 @@ wrote after it waiting in order behind it, since the console's share is a page a
 neither a read that waits nor a slow console holds the VM's thread, until 64 KiB wait unwritten,
 when a write waits in place as one to a slow terminal does. When the VM ends, what it wrote
 reaches the console before its last line, waiting at most 2 s. After the console's end, `idle`
-still sleeps until its deadline. There is no wall clock, so `system_time_us` is `None`.
+still sleeps until its deadline. When the process reading the console exits, the VM says so
+(`console_listening`) and no read goes out until another process reads it: typing waits at the
+console, what came in before is held for the next reader, and `idle` does not return for it, so a
+VM with nobody at the console sleeps rather than spins. There is no wall clock, so
+`system_time_us` is `None`.
 `./shell --fake` runs the shell on it.
 - **The size is still the VM's own call.** It is a typed call, which no hub carries, so a console
   that stops answering a size query stops the VM.
