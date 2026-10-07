@@ -6,7 +6,10 @@
                                              wait for a lease of N cores, run <cmd> pinned to them
                                              (taskset), exit with its code; the lease ends with
                                              this process, however it ends
-    q ls                                     the core map, the running jobs, the queue
+    q ls                                     the core map, the running jobs, the queue, and a line
+                                             per tenant (what it has running and waiting; a make
+                                             submits its targets as it reaches them, so a stream's
+                                             remainder is larger than the queue shows)
     q log [N]                                the last N finished jobs (default 30)
     q stop                                   end the daemon (running jobs keep their cores)
 
@@ -222,6 +225,18 @@ class Daemon:
                          f"{'  [quiet]' if j.quiet else ''}{'  lock=' + j.lock if j.lock else ''}")
         if self.locks:
             lines.append("locks: " + ", ".join(sorted(self.locks)))
+        by = {}
+        for j in self.running.values():
+            r = by.setdefault(j.tenant, [0, 0, 0, 0])
+            r[0] += 1
+            r[1] += len(j.cores)
+        for j in self.waiting:
+            r = by.setdefault(j.tenant, [0, 0, 0, 0])
+            r[2] += 1
+            r[3] += j.want
+        lines.append("by tenant (running jobs/cores, waiting jobs/cores wanted):")
+        for t, (rj, rc, wj, wc) in sorted(by.items(), key=lambda kv: (-kv[1][2], kv[0])):
+            lines.append(f"  {t:<18} running {rj:>2}/{rc:>3}   waiting {wj:>2}/{wc:>3}")
         return "\n".join(lines) + "\n"
 
     def handle(self, conn):
