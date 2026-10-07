@@ -1,5 +1,5 @@
 # The shared part of the generated typed-message codecs (redoubt-wire's `typed` module, in
-# Elixir). Hand-written; the per-protocol modules in proto/ are generated and call these.
+# Elixir). Hand-written; the per-protocol modules in ../proto/ are generated and call these.
 defmodule Redoubt.Wire do
   @moduledoc """
   Typed-message framing (docs/servers/wire.md), the Elixir twin of redoubt-wire's
