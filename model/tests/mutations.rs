@@ -13,6 +13,11 @@ use redoubt_model::mutation::Mutation;
 /// Seeds tried per family before a mutation counts as not caught.
 const CAP: u64 = 20_000;
 
+/// Seeds tried in each steward family, whose seeds cost up to a second each: a mutation these
+/// catch only past it is caught too late, and fails as not caught. Every one is caught by seed
+/// 345 but `PolicyDeclassifyUnfit` (`steward_policy`'s seed 4709).
+const STEWARD_CAP: u64 = 500;
+
 /// Every kernel rule the model holds, and I16: all of R1 to R24 but the six outside the model
 /// (kernel/model.md, "Mutations"), with R4a and R4b beside R4.
 const MODELLED: [&str; 21] = [
@@ -90,7 +95,8 @@ fn mutations_are_caught() {
             if caught.is_some() {
                 break;
             }
-            if let Some(fail) = run(name, f, sequences(CAP).min(CAP).div_ceil(divisor), Some(m)) {
+            let cap = if name.starts_with("steward_") { STEWARD_CAP } else { CAP };
+            if let Some(fail) = run(name, f, sequences(CAP).min(cap).div_ceil(divisor), Some(m)) {
                 caught = Some(fail);
                 break;
             }
@@ -105,10 +111,10 @@ fn mutations_are_caught() {
                 f.message
             ),
             None => {
-                eprintln!("{:6} {:32} NOT CAUGHT", m.rule(), format!("{m:?}"));
+                eprintln!("{:6} {:32} NOT CAUGHT within the caps", m.rule(), format!("{m:?}"));
                 missed.push(m);
             }
         }
     }
-    assert!(missed.is_empty(), "mutations no property caught: {missed:?}");
+    assert!(missed.is_empty(), "mutations no property caught within the caps: {missed:?}");
 }
