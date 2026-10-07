@@ -120,6 +120,10 @@ struct ConsoleIo {
     /// Whether reading has begun, and whether the input has ended.
     started: bool,
     ended: bool,
+    /// The input's end has come and the VM has not read it yet: an idle returns with it, as with
+    /// input (`ended` itself stays, so it is not what the early return tests, or an idle after
+    /// the end would spin).
+    eof_pending: bool,
     /// The write out, by its tag; and a write's buffer while none is.
     writing: Option<u16>,
     write_buffer: Option<Buffer>,
@@ -146,7 +150,10 @@ impl ConsoleIo {
         if self.reading == Some(done.tag) {
             self.reading = None;
             match done.outcome {
-                Outcome::Read(0) => self.ended = true,
+                Outcome::Read(0) => {
+                    self.ended = true;
+                    self.eof_pending = true;
+                }
                 Outcome::Read(n) => {
                     if let Some(buffer) = &done.buffer {
                         self.input.extend(&buffer[..n.min(buffer.len())]);
@@ -155,7 +162,10 @@ impl ConsoleIo {
                 // Over the console's share for a moment: asked again below.
                 Outcome::Busy => {}
                 // Refused, flushed, or the console has gone: there is no more input.
-                _ => self.ended = true,
+                _ => {
+                    self.ended = true;
+                    self.eof_pending = true;
+                }
             }
             self.read_buffer = done.buffer;
             self.read(io);
@@ -278,6 +288,7 @@ impl Redoubt {
             input: VecDeque::new(),
             started: false,
             ended: false,
+            eof_pending: false,
             writing: None,
             write_buffer: None,
             output: VecDeque::new(),
@@ -437,11 +448,18 @@ impl Platform for Redoubt {
     fn system_time_us(&mut self) -> Option<u64> { None }
 
     /// Waits on the VM's own endpoint, where the waiters' wake-ups arrive, until a completion or
-    /// `deadline`. After the console's end a timer still wants its deadline: the wait then sleeps
-    /// until it, rather than returning at once and spinning.
+    /// `deadline`; at once, if anything arrived before it was called. After the console's end a
+    /// timer still wants its deadline: the wait then sleeps until it, rather than returning at
+    /// once and spinning.
     fn idle(&mut self, deadline: Option<u64>) {
         self.take_completed();
-        if !self.cons.input.is_empty() {
+        // Anything that arrived before this idle is handed over now: a wait would sleep on it
+        // until some other wake-up came, if one ever did.
+        if !self.cons.input.is_empty()
+            || self.cons.eof_pending
+            || self.files.has_finished()
+            || self.sys.has_events()
+        {
             return;
         }
         let now = self.monotonic_us();
@@ -487,7 +505,12 @@ impl Platform for Redoubt {
         if !self.cons.input.is_empty() {
             return ConsoleInput::Data(self.cons.input.drain(..).collect());
         }
-        if self.cons.ended { ConsoleInput::Eof } else { ConsoleInput::Nothing }
+        if self.cons.ended {
+            self.cons.eof_pending = false;
+            ConsoleInput::Eof
+        } else {
+            ConsoleInput::Nothing
+        }
     }
 
     fn random(&mut self, buf: &mut [u8]) -> Result<(), PlatformError> {

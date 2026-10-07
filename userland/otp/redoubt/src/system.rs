@@ -168,6 +168,9 @@ impl Sys {
     /// Whether anything the system calls began is still to end: a call, a served endpoint or a job.
     pub(crate) fn busy(&self) -> bool { self.pool.busy() || self.served.busy() || self.jobs.busy() }
 
+    /// Whether an event waits for the VM to poll it.
+    pub(crate) fn has_events(&self) -> bool { !self.events.is_empty() }
+
     /// Takes a wake-up of the system calls' threads; anything else is handed back.
     pub(crate) fn deliver(&mut self, wake: &Endpoint, delivery: Delivery) -> Option<Delivery> {
         let delivery = self.pool.deliver(wake, delivery)?;
