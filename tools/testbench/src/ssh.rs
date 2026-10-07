@@ -177,7 +177,11 @@ pub fn redoubt(
     host_key: Option<&str>,
 ) -> Result<Server<'static>> {
     let keys = workspace.join(KEYS);
-    let log = fresh_log(dir, case)?.display().to_string();
+    let log = fresh_log(dir, case)?;
+    // The log exists even if no session's ssh gets as far as starting the server, as the
+    // reference server's does: a case whose sessions time out first reads an empty log.
+    std::fs::File::create(&log).with_context(|| format!("creating {}", log.display()))?;
+    let log = log.display().to_string();
     let mut words = vec![
         binary.display().to_string(),
         "--host-key".into(),
@@ -887,6 +891,16 @@ mod tests {
             );
             std::thread::sleep(Duration::from_millis(1));
         }
+    }
+
+    /// Redoubt's server's log exists, empty, before any session starts it, as the reference
+    /// server's does: a case whose sessions time out before ssh starts the server reads it empty.
+    #[test]
+    fn the_redoubt_servers_log_exists_before_any_session() {
+        let dir = std::env::temp_dir().join(format!("redoubt-log-test-{}", std::process::id()));
+        redoubt(Path::new("/w"), Path::new("/w/server"), &dir, "case", &[], Some("ssh-ed25519 K")).unwrap();
+        assert_eq!(std::fs::read_to_string(loopback_log(&dir, "case")).unwrap(), "");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     /// The keeper finds a process by its program and an argument naming the case's directory,
