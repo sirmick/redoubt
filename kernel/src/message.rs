@@ -1187,8 +1187,8 @@ pub fn pump_endpoint(ss: &mut ProcessTable, mm: &mut MemoryManager, e: EndpointR
 }
 
 /// The end of a destruction: pump each endpoint it listed, once, in the order listed. Every dying
-/// endpoint left the list as its owner's walk met it (`budgets_dying`), and every frame is freed,
-/// so each is a survivor and nothing doomed is left to take anything. A pump here lists nothing,
+/// endpoint left the list at the end of the message reach (`budgets_dying`), and every frame is
+/// freed, so each is a survivor and nothing doomed is left to take anything. A pump here lists nothing,
 /// since the destruction is over.
 pub fn pump_listed(ss: &mut ProcessTable, mm: &mut MemoryManager) {
     loop {
@@ -1862,8 +1862,7 @@ pub fn budgets_dying(ss: &mut ProcessTable, mm: &mut MemoryManager, top: BudgetF
     // the subtree owns, never a scan of every frame. A destroyed device leaves the chain, so
     // only endpoints are left on it; it is moved to the chain's head first, so leaving it does
     // not walk the endpoints ahead of it. Each endpoint's message reach is its own lists
-    // (`endpoint_dying`); one that nothing waits on costs one read, its count of members, and one
-    // or two more to take it off the destruction's to-pump list if a kill put it there.
+    // (`endpoint_dying`); one that nothing waits on costs one read, its count of members.
     let mut cur = Some(top);
     while let Some(frame) = cur {
         let (mut owned, mut prev) = (mm.budget(frame).first_owned, None);
@@ -1873,10 +1872,6 @@ pub fn budgets_dying(ss: &mut ProcessTable, mm: &mut MemoryManager, top: BudgetF
                 prev = Some(o);
                 if lists::waiting(&Frames(mm), o) != 0 {
                     endpoint_dying(ss, mm, o);
-                }
-                let w = &mut Frames(mm);
-                if List::pumps().contains(w, frame_word(o)) {
-                    List::pumps().remove(w, frame_word(o));
                 }
             } else {
                 mm.owned_to_head(frame, prev, o);
@@ -1898,6 +1893,19 @@ pub fn budgets_dying(ss: &mut ProcessTable, mm: &mut MemoryManager, top: BudgetF
     while let Some(frame) = cur {
         fail_callers(ss, mm, List::taken(frame));
         cur = mm.subtree_next(top, frame);
+    }
+    // The endpoints a kill or a failed caller listed to be pumped at the end (`pump_endpoint`):
+    // nothing lists one past this point, so the subtree's own leave the list now, in one walk of
+    // the list, a read per listed endpoint and never one per endpoint the subtree owns; their
+    // frames go in `destroy_marked`, after. A survivor's stays for `pump_listed`.
+    let mut r = List::pumps().first(&Frames(mm));
+    while r != 0 {
+        let next = List::pumps().next(&Frames(mm), r);
+        let frame = frame_of(r).expect("I1: the to-pump list names an endpoint");
+        if mm.budget(mm.endpoint(frame).owner.frame).dying {
+            List::pumps().remove(&mut Frames(mm), r);
+        }
+        r = next;
     }
 }
 
