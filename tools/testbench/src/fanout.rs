@@ -24,6 +24,9 @@ pub const TIMED_OUT: [i32; 2] = [124, 137];
 /// Seconds `timeout` waits after TERM before it kills.
 pub const KILL_AFTER: &str = "10";
 
+/// Set to 1 for the jobs of a value the case's `late` names.
+const LATE: &str = "TESTBENCH_LATE";
+
 /// One job: run `argv` from `dir` with `vars` set.
 struct Job {
     value: String,
@@ -55,6 +58,10 @@ pub fn run(
         Ok(jobs) => jobs,
         Err(why) => return Ok(Some(why)),
     };
+    // A late entry for no job would outlive what it excuses.
+    if let Some(stale) = fanout.late.iter().find(|late| !jobs.iter().any(|job| &job.value == *late)) {
+        return Ok(Some(format!("late names {stale}, which no job runs")));
+    }
 
     let dir = builder.run.join(name);
     std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
@@ -88,12 +95,19 @@ pub fn run(
     };
     let mut log = format!("{count} jobs, {how}: {:.1}s\n", started.elapsed().as_secs_f32());
     for e in &ended {
-        let verdict = if e.failure.is_some() { "FAIL" } else { "PASS" };
+        let verdict = match (&e.failure, fanout.late.contains(&e.value)) {
+            (Some(_), _) => "FAIL",
+            (None, true) => "LATE",
+            (None, false) => "PASS",
+        };
         log.push_str(&format!("{verdict}  {:<40} {:7.1}s  (wall {:.1}s)\n", e.value, e.tests, e.wall));
     }
     let path = builder.run.join(format!("{name}.log"));
     std::fs::write(&path, log).with_context(|| format!("writing {}", path.display()))?;
 
+    for e in ended.iter().filter(|e| e.failure.is_none() && fanout.late.contains(&e.value)) {
+        println!("      {}: caught late, known", e.value);
+    }
     let failed: Vec<_> = ended.iter().filter(|e| e.failure.is_some()).collect();
     let Some(first) = failed.first() else { return Ok(None) };
     let names: Vec<_> = failed.iter().map(|e| e.value.as_str()).collect();
@@ -134,7 +148,11 @@ fn jobs(
                 };
                 for test in tests.into_iter().filter(wanted) {
                     let value = format!("{}::{test}", binary.name);
-                    jobs.push(native(binary, value, vec![test, "--exact".into()], vars.clone()));
+                    let mut vars = vars.clone();
+                    if fanout.late.contains(&value) {
+                        vars.push((LATE.into(), "1".into()));
+                    }
+                    jobs.push(native(binary, value, vec![test, "--exact".into()], vars));
                 }
             }
             return Ok(Ok(jobs));
@@ -149,6 +167,9 @@ fn jobs(
     for value in values {
         let mut vars = vars.clone();
         vars.extend(fanout.env.iter().map(|env| (env.clone(), value.clone())));
+        if fanout.late.contains(&value) {
+            vars.push((LATE.into(), "1".into()));
+        }
         let file = if fanout.each == Each::Value { &host.tests[0] } else { &value };
         // Miri's test binaries run only under `cargo miri`, which shares the build.
         if host.miri {

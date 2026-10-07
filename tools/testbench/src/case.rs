@@ -253,6 +253,11 @@ pub struct Fanout {
     /// Variables every job has: a thread count to match `cores`, for a test that spawns its own.
     #[serde(default)]
     pub vars: BTreeMap<String, String>,
+    /// Values known to pass only past a bound their test keeps (a mutation caught late), each
+    /// until the follow-up its comment names: their jobs run with `TESTBENCH_LATE=1`, which the
+    /// test reads as leave to go past it, and a pass is reported as late, not hidden.
+    #[serde(default)]
+    pub late: Vec<String>,
 }
 
 /// One job per...
