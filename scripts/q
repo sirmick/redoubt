@@ -444,18 +444,24 @@ def cmd_run(a, cmd):
     env["RUST_TEST_THREADS"] = str(max(1, n))
     env["Q_CORES"] = fmt_cores(cores)
     argv = ["taskset", "-c", ",".join(map(str, cores))] + cmd
-    # Keep the socket open for the whole run: the lease is the connection.
-    child = subprocess.Popen(argv, env=env)
+    # Keep the socket open for the whole run: the lease is the connection. The command runs
+    # in a process group of its own, so a signal to this client ends everything it started
+    # (a bench's QEMU and test binaries included), never leaving orphans on freed cores.
+    child = subprocess.Popen(argv, env=env, start_new_session=True)
 
     def relay(sig, _):
         try:
-            child.send_signal(sig)
+            os.killpg(child.pid, sig)
         except OSError:
             pass
 
     for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
         signal.signal(sig, relay)
     rc = child.wait()
+    try:
+        os.killpg(child.pid, signal.SIGTERM)  # stragglers the command left behind
+    except OSError:
+        pass
     s.close()
     return rc
 
