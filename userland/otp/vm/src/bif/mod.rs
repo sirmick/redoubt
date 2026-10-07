@@ -28,6 +28,7 @@ mod math;
 mod phash;
 pub(crate) mod port;
 mod proc;
+pub(crate) mod system;
 mod unicode;
 mod zlib;
 
@@ -620,6 +621,19 @@ const TABLE: &[(&str, &str, u32, Native)] = &[
     ("erlang", "crc32", 2, info::crc32),
     ("beamlet", "app_spec", 1, info::app_spec),
     ("beamlet", "console_subscribe", 0, info::console_subscribe),
+    // The system's natives, over the platform's `System` (docs/userland/beamlet.md, "Natives").
+    ("redoubt", "ns_lookup", 1, system::ns_lookup),
+    ("redoubt", "bind", 2, system::bind),
+    ("redoubt", "ns", 0, system::ns),
+    ("redoubt", "call", 3, system::call),
+    ("redoubt", "send", 2, system::send),
+    ("redoubt", "serve", 1, system::serve),
+    ("redoubt", "reply", 2, system::reply),
+    ("redoubt", "budget_create", 1, system::budget_create),
+    ("redoubt", "budget_destroy", 1, system::budget_destroy),
+    ("redoubt", "budget_usage", 1, system::budget_usage),
+    ("redoubt", "labels", 0, system::labels),
+    ("redoubt", "launch", 1, system::launch),
     ("inet", "gethostname", 0, info::gethostname),
     ("net_adm", "localhost", 0, info::localhost),
     ("init", "get_arguments", 0, info::init_get_arguments),

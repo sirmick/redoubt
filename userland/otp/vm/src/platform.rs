@@ -72,6 +72,131 @@ pub trait Platform: crate::sync::Sendable {
     /// default is none: opening such a port then fails with `eacces`. Output from programs is
     /// an external event: [`Platform::idle`] should return when some arrives.
     fn programs(&mut self) -> Option<&mut dyn Programs> { None }
+
+    /// The system's own calls, which have no POSIX equivalent: the namespace, calls and serving,
+    /// budgets, labels and launching (docs/userland/beamlet.md, "Natives"). The default is none:
+    /// the `redoubt` natives then answer `{error, not_supported}`.
+    fn system(&mut self) -> Option<&mut dyn System> { None }
+}
+
+/// A kernel object the platform holds for Erlang code: the value behind a handle's resource term.
+/// Its type is the platform's, which tells the kinds apart; its drop is the platform's too (a
+/// handle closes when its last copy is collected). Erlang code cannot make one or read it.
+pub type Object = alloc::sync::Arc<crate::sync::AnyShared>;
+
+/// Why a system call was refused: one of Redoubt's error names (`not_found`, `not_a_connection`),
+/// never a POSIX one; Erlang sees it as `{error, Name}`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Refused(pub &'static str);
+
+/// A message as the wire carries it (docs/servers/wire.md, "The message convention"): four words,
+/// a buffer if the message lends one (`None` for an inline message, which travels in its words
+/// alone), and handles. The platform encodes nothing of a protocol; the generated clients do.
+pub struct Message {
+    pub words: [u64; 4],
+    pub buffer: Option<Vec<u8>>,
+    pub handles: Vec<Object>,
+}
+
+/// One entry of the namespace's table: a path's prefix or a named handle's name, the handle's
+/// name when it came as one, and the handle.
+pub struct Entry {
+    pub path: String,
+    pub name: Option<String>,
+    pub handle: Object,
+}
+
+/// A child budget's spec (docs/kernel/budgets.md, "The calls"); a deadline, in the clock's
+/// microseconds, makes it a lease.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BudgetSpec {
+    pub pages: u64,
+    pub processes: u64,
+    pub weight: u64,
+    pub labels: Vec<u64>,
+    pub account: u64,
+    pub deadline: Option<u64>,
+}
+
+/// A budget's limits and use: `(limit, used)` of pages and processes, and of weight `(limit,
+/// carved)`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Usage {
+    pub pages: (u64, u64),
+    pub processes: (u64, u64),
+    pub weight: (u64, u64),
+}
+
+/// A native program to start (docs/userland/native.md, "Launching from a session"): every
+/// authority it gets is here, from the Erlang caller.
+pub struct Launch {
+    /// The program's bytes, which the caller read.
+    pub image: Vec<u8>,
+    /// The budget it runs in, which the caller carved.
+    pub budget: Object,
+    /// Its namespace: a clean absolute path and a connection each.
+    pub namespace: Vec<(String, Object)>,
+    /// Its named handles.
+    pub handles: Vec<(String, Object)>,
+    pub args: Vec<String>,
+    pub stack_pages: Option<u64>,
+    pub heap_pages: Option<u64>,
+}
+
+/// Something that happened for an Erlang process: [`System::poll`] names the process (the number
+/// [`Files::asker`] uses) and this, which the VM sends it as a message.
+pub enum Event {
+    /// A request on an endpoint it serves: `{request, Request, Badge, Account, Labels, {Words,
+    /// Buffer, Handles}}`, with `Request` a new resource holding `request` (to answer it; `nil` for
+    /// a one-way send).
+    Request { request: Option<Object>, badge: u64, account: u64, labels: Vec<u64>, message: Message },
+    /// A call it made has ended: `{reply, Ref, {ok, {Words, Buffer, Handles}} | {error, Name}}`,
+    /// `Ref` the reference its `call` returned.
+    Reply { call: u64, result: Result<Message, Refused> },
+    /// A job it launched has ended: `{exit, Job, Cause, Code}`, `Job` the reference its launch
+    /// returned.
+    Exit { job: u64, cause: &'static str, code: u64 },
+}
+
+/// The system's calls (docs/userland/beamlet.md, "Natives"). Each answers at once: a call that
+/// waits for a server bounds its wait.
+pub trait System {
+    /// The handle `path` resolves to and the rest of the path: the longest matching prefix for an
+    /// absolute path, the named handle for a name.
+    fn lookup(&mut self, path: &str) -> Result<(Object, String), Refused>;
+    /// Puts the connection `handle` at `prefix` as well.
+    fn bind(&mut self, prefix: &str, handle: &Object) -> Result<(), Refused>;
+    /// The table: the namespace's entries in binding order, then the named handles.
+    fn table(&mut self) -> Vec<Entry>;
+    /// Calls `to` for `asker`, waiting at most `timeout_us` for the reply, which arrives as
+    /// [`Event::Reply`] naming `call`. No scheduler waits for it.
+    fn call(
+        &mut self,
+        asker: u64,
+        call: u64,
+        to: &Object,
+        message: Message,
+        timeout_us: u64,
+    ) -> Result<(), Refused>;
+    /// Sends `message` on `to`, one way.
+    fn send(&mut self, to: &Object, message: Message) -> Result<(), Refused>;
+    /// Serves the endpoint `endpoint` (a receive right) for `asker`: its requests arrive as
+    /// [`Event::Request`].
+    fn serve(&mut self, asker: u64, endpoint: &Object) -> Result<(), Refused>;
+    /// Answers `request` with `reply`.
+    fn reply(&mut self, request: &Object, reply: Message) -> Result<(), Refused>;
+    /// Carves a child from this VM's own budget.
+    fn budget_create(&mut self, spec: &BudgetSpec) -> Result<Object, Refused>;
+    /// Destroys `budget` and everything in it.
+    fn budget_destroy(&mut self, budget: &Object) -> Result<(), Refused>;
+    fn budget_usage(&mut self, budget: &Object) -> Result<Usage, Refused>;
+    /// This VM's label set, fixed when its budget was made.
+    fn labels(&mut self) -> Vec<u64>;
+    /// Starts `launch` for `asker`; its end arrives as [`Event::Exit`] naming `job`.
+    fn launch(&mut self, asker: u64, job: u64, launch: Launch) -> Result<(), Refused>;
+    /// The next event for a process, if one has come. Must not block; [`Platform::idle`] should
+    /// return when one arrives.
+    fn poll(&mut self) -> Option<(u64, Event)>;
 }
 
 /// The result of a system module or application lookup. Refusal is terminal for this lookup;
