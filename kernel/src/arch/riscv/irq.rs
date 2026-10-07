@@ -269,8 +269,12 @@ pub extern "C" fn trap_handler(
             #[cfg(all(feature = "debug-print", feature = "print-panics"))]
             println!("KERNEL({}): RISC-V fault: {} @ {:08x}, addr {:08x} - ", pid, ex, _pc, addr);
             // A translation already valid that allows the access: another hart changed it and this
-            // one cached the old entry. Flush that address in this ASID and retry, once.
-            if crate::arch::mem::retry_stale(addr, matches!(ex, RiscvException::StorePageFault(..))) {
+            // one cached the old entry. Flush that address in this ASID and retry, once. Only a
+            // fault from user mode: the kernel never reaches a user mapping (R24), so its own fault
+            // on one is a kernel failure, and `resume_current` would resume the thread, not it.
+            if from_user
+                && crate::arch::mem::retry_stale(addr, matches!(ex, RiscvException::StorePageFault(..)))
+            {
                 resume_current();
             }
             crate::mem::MemoryManager::with_mut(|mm| {
