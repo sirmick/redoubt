@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 269
+revision = 273
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -852,8 +852,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   body = "Found by BENCHENV1's merge-gate bench 2026-10-04 and shown to predate it: on main 9212f6f60 the case fails 1 of 10 runs alone; on wp-BENCHENV1 f7a0cb1eb (no AIO, kernel or boot change) 4 of 15. rv32 only. First failing line: 'forbidden output /aio-reader TEST FAILED/: ... aio-reader TEST FAILED: receive: Timeout' at ~21 s. AIO1's case (tests/aio-many-reads-two, the hub keeping 64 reads outstanding on one thread). Find whether the case's timeout is too tight for rv32 under TCG or the hub drops a completion; the case must order on events or the bug is the hub's. Memory: AIO1's timeout tests also failed under host load before. Tier A if the hub changes (libs/client), Tier B if the case alone. Size S."
-  state = "active"
-  revision = 268
+  state = "reported"
+  revision = 271
 
 [[node]]
   id = "B9"
@@ -1125,8 +1125,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["B18"]
   body = "Measured by B18 (2026-10-06): in release on one thread, the model's steward_policy family costs 0.6 s/seed and steward_noninterference 0.94 s/seed (kernel families under 1 ms/seed); at 20,000 and 10,000 seeds the two are about 6 core-hours, which no fanout hides; and three mutations (PolicyDeclassifyUnfit caught at steward_policy seed 4,709 after 1,720 s; R2OneCursor and PolicyAgentOtherSet past 29 min) are caught only deep in the run. B18 splits the steward families into their own bounded case and bounds a mutation job. Tier A (the model), size M: (1) profile a steward seed and bring its cost down where the cost is accidental (allocation, cloning the steward core's state per step, the Elixir-shaped reference); (2) decide the seed counts from the coverage they buy, with a measurement (how many seeds until every rule and mutation is reached), not by habit; (3) the three late-caught mutations: a directed scenario each that catches them in seconds, or the finding that the model cannot distinguish them, written as a residual; (4) the model's page states the per-family cost and budget. Acceptance: the steward case under 10 min on 4 cores; every mutation caught inside the bench's bound."
-  state = "active"
-  revision = 255
+  state = "done"
+  revision = 273
 
 [[node]]
   id = "K25"
@@ -1143,8 +1143,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   body = "Seen by B18 (2026-10-06) on the quiet core set with nothing else there: libs/client's aio.rs test a_server_that_breaks_its_hold_loses_the_session_at_the_margin fails about one run in eight; libs/client untouched by B18. A host-clock test at a margin: find whether the margin is a measurement (then widen it with the reason on the page, or make it a count as B10 did) or a race in the test's fixture. Tier B, size S: fix, run the test 50 times alone through `q run --quiet`, record the count. BEAM3 changes aio.rs's waiter (bounded hand-over): coordinate, the fix may belong in that commit."
-  state = "todo"
-  revision = 221
+  state = "active"
+  revision = 272
 
 [[node]]
   id = "B21"

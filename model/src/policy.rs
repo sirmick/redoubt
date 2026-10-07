@@ -28,6 +28,7 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
+use redoubt_steward::Policy;
 use redoubt_steward::audit::Record;
 use redoubt_steward::consts::{BLAME_COUNT, BLAME_WINDOW, DECLASSIFY_MAX, FIELD_CAP, MAX_LEASE, PENDING_CAP};
 use redoubt_steward::domain::Labels;
@@ -371,6 +372,9 @@ pub struct Run {
     /// (account, label set)s locked out, and when their lockout ends (P7).
     pub ghost_locked: BTreeMap<(u64, Vec<u64>), u64>,
     pub per_session: BTreeMap<u64, u64>,
+    /// The properties' instances the checks met: a check holds non-vacuously only from the first
+    /// sequence that gives it one (the coverage instrument, model/tests/steward_reach.rs).
+    pub reached: BTreeSet<&'static str>,
 }
 
 fn hash_of(x: u64) -> [u8; 32] {
@@ -381,7 +385,13 @@ fn hash_of(x: u64) -> [u8; 32] {
 
 impl Run {
     pub fn new(mutation: Option<Mutation>, secret: u64) -> Run {
-        let st = Steward::new(&manifest(), secret, mutation).expect("the test manifest is valid");
+        Run::with_policy(mutation, secret, crate::mutation::policy(mutation))
+    }
+
+    /// As `new`, with the core deciding by `policy` (`Steward::with_policy`).
+    pub fn with_policy(mutation: Option<Mutation>, secret: u64, policy: Policy) -> Run {
+        let st =
+            Steward::with_policy(&manifest(), secret, mutation, policy).expect("the test manifest is valid");
         let checker = Checker::new(&st.k);
         Run {
             st,
@@ -395,6 +405,7 @@ impl Run {
             held: None,
             ghost_locked: BTreeMap::new(),
             per_session: BTreeMap::new(),
+            reached: BTreeSet::new(),
         }
     }
 
@@ -426,6 +437,9 @@ impl Run {
             PolicyOp::StartAgent { session, lease } => {
                 let requester = self.st.caller(*session);
                 let r = self.st.start_agent(*session, *lease);
+                if requester.as_ref().is_some_and(|c| c.labelled()) {
+                    self.reached.insert("P8 a labelled caller asks to start an agent");
+                }
                 if let (Some(req), Some(Answer::Lease { id, .. })) = (&requester, &r) {
                     if req.labelled() {
                         return Err(format!("P8: labelled {:?} {session} started an agent", req.kind));
@@ -490,6 +504,9 @@ impl Run {
                 if r == Some(Answer::Ok) && !approval {
                     return Err(format!("P3: {}'s approval channel opened with key {key}", p.name));
                 }
+                if r == Some(Answer::Ok) {
+                    self.reached.insert("P3 a channel opens");
+                }
                 format!("{r:?}")
             }
             PolicyOp::Close { channel } => {
@@ -552,6 +569,13 @@ impl Run {
                         b.map(|b| b.domain)
                     ));
                 }
+                if leased {
+                    self.reached.insert(if sponsor {
+                        "P13 a sponsor ends its agent"
+                    } else {
+                        "P13 another caller tries to end an agent"
+                    });
+                }
                 format!("{r:?}")
             }
             PolicyOp::Serve => {
@@ -607,7 +631,8 @@ impl Run {
     }
 
     /// P5's fair share and P4's notices, after a submission by `by`.
-    fn submitted_checks(&self, by: &Caller, outputs_from: usize) -> Result<(), String> {
+    fn submitted_checks(&mut self, by: &Caller, outputs_from: usize) -> Result<(), String> {
+        self.reached.insert("P5 a request is pending");
         let state = inspect::domain(&self.st.store, &by.domain).ok_or("P5: a request in no domain")?;
         let mine = state.requests.values().filter(|r| r.by.kind == by.kind && r.by.id == by.id).count();
         let share = (PENDING_CAP / (state.sessions.len() + state.leases.len()).max(1)).max(1);
@@ -620,6 +645,7 @@ impl Run {
         let index = inspect::index(&self.st.store);
         for o in &self.st.outputs[outputs_from..] {
             let Output::Notice { to, notice: Notice::ApprovalWaiting } = o else { continue };
+            self.reached.insert("P4 an approval-waiting notice");
             match to {
                 Notified::Session(b) => {
                     let labels = index.routes.get(b).map(|r| r.domain.labels().clone());
@@ -676,11 +702,13 @@ impl Run {
         if account == 0 {
             return Ok(());
         }
+        self.reached.insert("P7 a crash is blamed");
         let times = self.ghost_blames.entry(key).or_default();
         times.push(now);
         times.retain(|t| now - *t < BLAME_WINDOW);
         let lockout = times.len() >= BLAME_COUNT;
         if lockout {
+            self.reached.insert("P7 a domain is locked out");
             times.clear();
             self.ghost_locked.insert((account, labels.clone()), now + BLAME_WINDOW);
         }
@@ -713,6 +741,9 @@ impl Run {
         if !self.st.audit_authentic() {
             return Err(String::from("P14: altered or unsigned audit record"));
         }
+        if !self.st.audit.is_empty() {
+            self.reached.insert("P14 an audit record");
+        }
         if inspect::exited(&self.st.store) {
             return Err(String::from("the steward exited: an event its guarantee excludes"));
         }
@@ -741,6 +772,12 @@ impl Run {
             if b.parent != sub && !in_agent {
                 return Err(format!("P1: {what} is not carved from its domain's sub-budget"));
             }
+            self.reached.insert(match (c.kind, in_agent, c.labelled()) {
+                (Kind::Lease, true, _) => "P1 a sub-agent",
+                (Kind::Lease, false, _) => "P1 an agent",
+                (_, _, true) => "P1 a labelled session",
+                _ => "P1 an unlabelled session",
+            });
             if !p.owned.includes(c.domain.labels()) {
                 return Err(format!("P1: {what} carries labels its principal does not own"));
             }
@@ -779,12 +816,16 @@ impl Run {
                         h.stamp
                     ));
                 }
+                self.reached.insert("P12 a session's connection");
             }
         }
         // P5: the cap per domain, and no request of an ended session or agent.
         for (d, s) in inspect::domains(&st.store) {
             if s.requests.len() > PENDING_CAP {
                 return Err(format!("P5: {d:?} has {} pending requests", s.requests.len()));
+            }
+            if s.requests.len() == PENDING_CAP {
+                self.reached.insert("P5 a domain at the cap");
             }
             for r in s.requests.values() {
                 let live = match r.by.kind {
@@ -802,6 +843,18 @@ impl Run {
         let mut copied: Vec<&Vec<u8>> = Vec::new();
         for a in &st.audit[audit_from..] {
             let labels = a.domain().labels();
+            let instance = match a.record() {
+                Record::Login { .. } => Some("P2 a login"),
+                Record::Approved { .. } => Some("P3 an approval"),
+                Record::AgentStarted { .. } => Some("P9 an agent starts"),
+                Record::LeaseEnded { .. } => Some("P9 a lease ends"),
+                Record::Declassified { .. } => Some("P6 a declassification"),
+                Record::Pushed { .. } => Some("P6 a push"),
+                _ => None,
+            };
+            if let Some(r) = instance {
+                self.reached.insert(r);
+            }
             match a.record() {
                 Record::Login { principal, key, .. }
                     if !fixed.principals[*principal].login_keys.contains(key) || fixed.keyd.contains(key) =>
@@ -904,8 +957,11 @@ impl Run {
         // P11, and P6's copy out: what reached the unlabelled volume is the snapshot.
         for w in &st.writes[writes_from..] {
             match &w.through {
-                Some(t) if *t == w.labels => {}
+                Some(t) if *t == w.labels => {
+                    self.reached.insert("P11 a write");
+                }
                 None if w.by.kind == Kind::Crossing && w.labels.is_empty() => {
+                    self.reached.insert("P6 a copy out");
                     if !copied.contains(&&w.bytes) {
                         return Err(format!(
                             "P6: the copy out wrote {:?}, which is no snapshot approved now",
@@ -947,6 +1003,11 @@ impl Run {
                     ch.principal, r.id, r.labels
                 ));
             }
+            self.reached.insert(if g.by.labelled() {
+                "P4 a labelled request's screen"
+            } else {
+                "P4 a screen"
+            });
             if r.text.chars().any(|c| !(' '..='~').contains(&c)) {
                 return Err(format!("P4: rendered request {} is not printable ASCII: {:?}", r.id, r.text));
             }
@@ -973,18 +1034,30 @@ impl Run {
 
 /// P1-P9, P11-P14: a random sequence of policy operations.
 pub fn steward_policy(seed: u64, mutation: Option<Mutation>) -> Result<(), Failure> {
-    policy_sequence(seed, mutation, false).map(|_| ())
+    policy_sequence(seed, mutation, false, crate::mutation::policy(mutation)).map(|_| ())
+}
+
+/// The coverage instrument's run of `steward_policy`'s sequence for `seed`, unmutated, with the
+/// core deciding by `policy`: the properties' instances its checks met.
+pub fn steward_policy_reach(seed: u64, policy: Policy) -> Result<BTreeSet<&'static str>, Failure> {
+    policy_sequence(seed, None, false, policy).map(|run| run.reached)
 }
 
 /// The events `steward_policy`'s sequence for `seed` gives the core: a trace for the Elixir
 /// reference (servers/steward.md, "Two embedders and a reference").
 pub fn steward_policy_events(seed: u64) -> Result<Vec<Event>, Failure> {
-    policy_sequence(seed, None, true).map(|mut run| run.st.recorded.take().unwrap_or_default())
+    policy_sequence(seed, None, true, Policy::SHIPPED)
+        .map(|mut run| run.st.recorded.take().unwrap_or_default())
 }
 
-fn policy_sequence(seed: u64, mutation: Option<Mutation>, record: bool) -> Result<Run, Failure> {
+fn policy_sequence(
+    seed: u64,
+    mutation: Option<Mutation>,
+    record: bool,
+    policy: Policy,
+) -> Result<Run, Failure> {
     let mut rng = Rng::new(seed);
-    let mut run = Run::new(mutation, rng.next_u64());
+    let mut run = Run::with_policy(mutation, rng.next_u64(), policy);
     run.st.recorded = record.then(Vec::new);
     for i in 0..rng.range(20, 160) {
         let op = random_op(&run, &mut rng);
@@ -1012,31 +1085,67 @@ fn policy_sequence(seed: u64, mutation: Option<Mutation>, record: bool) -> Resul
 /// blame and outcomes are service-slot timing (servers/steward.md R37, "Residual risks"). The
 /// owner's approval screen is not an observer.
 pub fn steward_noninterference(seed: u64, mutation: Option<Mutation>) -> Result<(), Failure> {
-    noninterference_runs(seed, mutation, false).map(|_| ())
+    noninterference_runs(seed, mutation, false, crate::mutation::policy(mutation)).map(|_| ())
+}
+
+/// The coverage instrument's run of `steward_noninterference`'s two runs for `seed`, unmutated,
+/// with the core deciding by `policy`: the properties' instances their checks met.
+pub fn steward_noninterference_reach(seed: u64, policy: Policy) -> Result<BTreeSet<&'static str>, Failure> {
+    noninterference_runs(seed, None, false, policy).map(|(with, without)| &with.reached | &without.reached)
 }
 
 /// The events `steward_noninterference`'s two runs for `seed` give the core, with the vault's
 /// work and without it: traces for the Elixir reference.
 pub fn steward_noninterference_events(seed: u64) -> Result<[Vec<Event>; 2], Failure> {
-    let (mut with, mut without) = noninterference_runs(seed, None, true)?;
+    let (mut with, mut without) = noninterference_runs(seed, None, true, Policy::SHIPPED)?;
     Ok([with.st.recorded.take().unwrap_or_default(), without.st.recorded.take().unwrap_or_default()])
 }
 
-fn noninterference_runs(seed: u64, mutation: Option<Mutation>, record: bool) -> Result<(Run, Run), Failure> {
+fn noninterference_runs(
+    seed: u64,
+    mutation: Option<Mutation>,
+    record: bool,
+    policy: Policy,
+) -> Result<(Run, Run), Failure> {
     let mut rng = Rng::new(seed);
     let secret = rng.next_u64();
+    let mut left = rng.range(20, 100);
+    let mut next = |first: &Run| {
+        left = left.checked_sub(1)?;
+        Some(random_op(first, &mut rng))
+    };
+    paired_runs(seed, secret, mutation, record, policy, &mut next)
+}
+
+/// P10 on a scripted sequence (a directed scenario, model/tests/common/contracts.rs): `next`
+/// gives each op from the state of the run with the vault's work so far, until it gives none.
+pub fn steward_noninterference_script(
+    mutation: Option<Mutation>,
+    next: &mut dyn FnMut(&Run) -> Option<PolicyOp>,
+) -> Result<(), Failure> {
+    paired_runs(0, 0, mutation, false, crate::mutation::policy(mutation), next).map(|_| ())
+}
+
+/// The two runs of P10: the sequence `next` gives, with the vault's work and without it.
+fn paired_runs(
+    seed: u64,
+    secret: u64,
+    mutation: Option<Mutation>,
+    record: bool,
+    policy: Policy,
+    next: &mut dyn FnMut(&Run) -> Option<PolicyOp>,
+) -> Result<(Run, Run), Failure> {
     let fail =
         |message: String| Failure { family: "steward_noninterference", seed, message, ops: Vec::new() };
     // Build the sequence on a first run, recording which ops are vault work.
-    let mut first = Run::new(mutation, secret);
+    let mut first = Run::with_policy(mutation, secret, policy);
     let mut ops: Vec<(PolicyOp, bool)> = Vec::new();
     let mut vault_sessions: BTreeSet<u64> = BTreeSet::new();
     // Sessions and agents vault work started: they exist only with the vault's work, so an op
     // that names one is vault work too.
     let mut vault_made: BTreeSet<u64> = BTreeSet::new();
     let mut owners: BTreeSet<usize> = BTreeSet::new();
-    for _ in 0..rng.range(20, 100) {
-        let op = random_op(&first, &mut rng);
+    while let Some(op) = next(&first) {
         let vault = match &op {
             PolicyOp::WriteItem { session, .. }
             | PolicyOp::Submit { session, .. }
@@ -1068,8 +1177,8 @@ fn noninterference_runs(seed: u64, mutation: Option<Mutation>, record: bool) -> 
         }
         ops.push((op, vault));
     }
-    let mut with = Run::new(mutation, secret);
-    let mut without = Run::new(mutation, secret);
+    let mut with = Run::with_policy(mutation, secret, policy);
+    let mut without = Run::with_policy(mutation, secret, policy);
     with.st.recorded = record.then(Vec::new);
     without.st.recorded = record.then(Vec::new);
     // A vault session's id follows its domain's own history, which the vault's work is part of:
@@ -1079,6 +1188,8 @@ fn noninterference_runs(seed: u64, mutation: Option<Mutation>, record: bool) -> 
     // How much of each run's take log has been read, and the unlabelled takes read from it.
     let mut seen = (0, 0);
     let mut order: (Vec<u64>, Vec<u64>) = (Vec::new(), Vec::new());
+    // Whether vault work has been left out of the run without it yet.
+    let mut left_out = false;
     let unlabelled = |r: &Run, id: &u64| r.st.caller(*id).is_some_and(|c| !c.labelled());
     for (i, (op, vault)) in ops.iter().enumerate() {
         let observed = match op {
@@ -1100,6 +1211,7 @@ fn noninterference_runs(seed: u64, mutation: Option<Mutation>, record: bool) -> 
         let (before_with, before_without) = (ids(&with), ids(&without));
         let a = with.apply(op).map_err(fail)?;
         if *vault {
+            left_out = true;
             continue;
         }
         let b = without.apply(&rename(op, &renamed)).map_err(fail)?;
@@ -1110,6 +1222,9 @@ fn noninterference_runs(seed: u64, mutation: Option<Mutation>, record: bool) -> 
             if let Some(at) = started.iter().position(same) {
                 renamed.insert(c.id, started.remove(at).id);
             }
+        }
+        if observed && left_out {
+            with.reached.insert("P10 an observation after vault work left out");
         }
         if observed && a != b {
             return Err(fail(format!(

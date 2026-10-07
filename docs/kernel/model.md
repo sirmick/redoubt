@@ -19,7 +19,7 @@ failing sequence in hand.
 
 ## What the model is
 
-Status: built · partly tested: independence from the kernel's source and the empty dependency list are held by `model/Cargo.toml` and `#![forbid(unsafe_code)]`, not attacked by a case · tested: host:redoubt-model::overflow_checks_are_on, host:redoubt-model::map_fixed_near_user_top_does_not_starve_map_anon
+Status: built · partly tested: independence from the kernel's source and the empty dependency list are held by `model/Cargo.toml` and `#![forbid(unsafe_code)]`, not attacked by a case · tested: host:redoubt-model::overflow_checks_are_on, host:redoubt-model::map_fixed_near_user_top_does_not_starve_map_anon, host:redoubt-model::event_free_tick_matches_slice_reference
 
 - **Independent.** The crate is `no_std` with `alloc`, `#![forbid(unsafe_code)]`, and its
   `[dependencies]` table is empty: it links no kernel crate, not `redoubt-sys`, nothing from
@@ -61,7 +61,12 @@ Status: built · partly tested: independence from the kernel's source and the em
   when the cost table is rv32's.
 - **Threads** have no registers. A call is instantaneous and atomic; time is logical and
   advances only on a `tick`. So the model tests accounting and state changes, not real-time
-  latency, and not races between harts.
+  latency, and not races between harts. A tick charges time slice by slice, but where nothing
+  is due, to deliver or to wake, its whole slices are charged at once: with one budget queued, or
+  with several (the same picks, charges and requeues, on the queued budgets alone).
+  `event_free_tick_matches_slice_reference` holds every such tick equal to the slice-by-slice
+  reference, field by field, on boundary worlds of one to five queued budgets and on random
+  histories, with no mutation and under every one.
 - **Records** (the user memory a call reads and writes) are abstracted as a whole: owned,
   unmapped, read-only, borrowed, device memory, a copy that faults, or an address whose every
   page, for the call's record size, is checked against the modelled mappings. Byte layouts are
@@ -87,7 +92,7 @@ Status: built · partly tested: independence from the kernel's source and the em
 
 ## Property families
 
-<details><summary>Status: built · tested (6)</summary>
+<details><summary>Status: built · tested (7)</summary>
 
 - host:redoubt-model::kernel_sequences
 - host:redoubt-model::budget_lifecycles
@@ -95,6 +100,7 @@ Status: built · partly tested: independence from the kernel's source and the em
 - host:redoubt-model::flood
 - host:redoubt-model::every_call_and_error_is_reached
 - host:redoubt-model::reset_at_one_death_does_not_cover_a_co_holder
+- host:redoubt-model::the_reach_table_is_reproduced
 
 </details>
 
@@ -119,20 +125,48 @@ reached it.
 | `kernel_sequences` | 20,000, up to 150 steps each | every check of the checker, after every step |
 | `budget_lifecycles` | 20,000 | I10 (create-destroy leaves the parent unchanged): a child created, used only from inside its subtree and destroyed leaves every other budget's counters as they were |
 | `scheduler_fairness` | 20,000 | R12 (scheduling), as the scenarios below |
-| `steward_policy`, `steward_noninterference` | 20,000 and 10,000 | [the steward model](#the-steward-model) |
+| `steward_policy`, `steward_noninterference` | 5,000 and 7,000 | [the steward model](#the-steward-model) |
 | `flood` | 20 scenarios of up to 10,000 senders | R2 (fair waiting), I11 (fair turns) and R4a (open calls) under a flood |
 
-A default run is 90,020 sequences. The bench case `model-host-tests` runs it but for the steward
-families, in about two minutes; `steward-model-host-tests` runs those two, each a job of its own
-on eight threads ([fanout](../testbench.md#the-case-file)), in about half an hour. Their seeds
-cost about 0.6 s (`steward_policy`) and 0.94 s (`steward_noninterference`) each on one thread,
-in release and dev alike, against under a millisecond for the kernel's: the cost is the steward
-model's own ([residual risks](#residual-risks)).
+A default run is 72,020 sequences. The bench case `model-host-tests` runs it but for the steward
+families, in under two minutes, the build included; `steward-model-host-tests` runs those
+two, each a job of its own on four threads ([fanout](../testbench.md#the-case-file)), with the
+check below, in under four minutes, the build included.
 `REDOUBT_MODEL_SEQUENCES` sets the count per family. A bound on cargo's test threads is a bound
 on the whole binary: each test's runner spawns `MODEL_THREADS` threads if it is set (a positive
 integer; anything else fails the test, naming it), else one if `RUST_TEST_THREADS` is set, else
 one per core. The test `million` runs 1,000,000 sequences in each of the five non-flood families
 and 1,000 floods; it is marked ignored and runs only when asked for.
+
+A steward operation, the core's decision, the embedder's calls on the kernel model and every
+check after it, costs tens of microseconds. Most of a steward seed is its ticks of minutes over
+several queued budgets, which cost a thousand slices a second of model time slice by slice and
+are charged in batches ([what it abstracts](#what-it-abstracts)). Measured on one thread, in
+release:
+
+| Family | A seed, slice by slice | A seed, batched | Count | One core |
+| --- | --- | --- | --- | --- |
+| `steward_policy` | 0.43 s | 0.011 s | 5,000 | about a minute |
+| `steward_noninterference` | 0.73 s | 0.025 s | 7,000 | about three minutes |
+
+The counts come from what the seeds reach, not from habit. `model/tests/steward_reach.rs`
+records, per seed, each rule of the core's `Policy` table that held and each that refused, each
+effect that ran, each filter's answers, and each property's first instance (a session's budget
+checked, a declassification copied out, a blame, a lockout, a lease ended, an observation after
+vault work left out). Searched to 20,000 and 10,000 seeds, `steward_policy` reaches 113 of these,
+its last new one at seed 655, and `steward_noninterference` 116, its last at seed 1,295. A
+family's count comes from that measured seed of its last new coverage: four times it, rounded up
+to a thousand, but never below a seed at which the family's random search catches a mutation
+(`PolicyDeclassifyUnfit`, at 4,709 and 6,333), so 5,000 and 7,000. The counts are for coverage:
+the three mutations the random search catches only after many seeds are held by their named
+scenarios ([mutations](#mutations)), whatever the counts.
+`the_reach_table_is_reproduced` checks what the first seeds reach: seeds 0 to 655 of
+`steward_policy` reach 113 items and 0 to 1,295 of `steward_noninterference` 116, the last of
+them first at that seed, so a change to the generator, the core or the checks that moves either
+fails. That no later seed reaches a new item, and the catch floor of 4,709 and 6,333, come from
+the ignored runs (`reach_table`, `catch_table` in `model/tests/steward_reach.rs`): they are
+recorded here and checked by no test. Three of the core's effects are reached by neither family
+([residual risks](#residual-risks)).
 
 ### The checker
 
@@ -237,18 +271,20 @@ from the completion table, not from the model's output. They cover:
   (`model/tests/dma_contracts.rs`);
 - `map_fixed`'s ranges, flags, overlap and cost checks (`model/tests/map_fixed_contracts.rs`).
 
-The mutation check runs the IPC and scheduling contracts first, for every variant.
+The mutation check runs the IPC and scheduling contracts first, for every variant, and a
+steward scenario for each of the three breaks the steward families catch only after many seeds
+([mutations](#mutations)).
 
 ## Mutations
 
-Status: built · tested: host:redoubt-model::every_rule_has_a_mutation, host:redoubt-model::mutations_are_caught
+Status: built · tested: host:redoubt-model::every_rule_has_a_mutation, host:redoubt-model::mutations_are_caught, host:redoubt-model::declassify_unfit_scenario, host:redoubt-model::one_cursor_scenario, host:redoubt-model::agent_other_set_scenario
 
 A **mutation** is one deliberate break planted in the model. Each variant of `enum Mutation`
 (`model/src/mutation.rs`) breaks one rule, at the sites in the model marked
 `self.broken(Mutation::...)`: one site for most variants, two or three where the rule is kept in
 more than one place, and a direct comparison with the mutation for `AbandonNoticeMissing` and
 `R11LendStaysMapped`. With no mutation, the model is the specified kernel.
-`Mutation::ALL` lists all 148 variants. `Mutation::rule()` returns the ID each one breaks, as in
+`Mutation::ALL` lists all 153 variants. `Mutation::rule()` returns the ID each one breaks, as in
 the table below; the steward's variants, named `Policy...`, break the server rules the steward
 model checks. Each of those but four is one broken entry of the core's `Policy` table
 (`mutation::policy`), since the crate that ships has no mutation switch; the other four break the
@@ -257,8 +293,8 @@ model's embedder: its entropy, its admission, a volume's write check and the ser
 - `every_rule_has_a_mutation` requires at least one variant for every kernel rule the model
   holds (each R row of the table below, before the steward's) and for I16.
 - `mutations_are_caught` plants each variant in turn. It runs the scripted IPC and scheduling
-  contracts, then every property family, the one that pressures the rule first
-  (`scheduler_fairness` for R12, the steward families for the `Policy` variants, `flood` for the open-call
+  contracts, the variant's steward scenario if it has one (below), then every property family,
+  the one that pressures the rule first (`scheduler_fairness` for R12, the steward families for the `Policy` variants, `flood` for the open-call
   limit, `steward_noninterference` for the breaks that show as one domain's work in another's
   view, `R2OneCursor`'s turns among them), up to 20,000 seeds each (20 for the flood) but 500
   in each steward family. A variant not caught within those caps fails it, by name: one the
@@ -268,11 +304,23 @@ model's embedder: its entropy, its admission, a volume's write check and the ser
   names whole. The bench case `model-mutations` runs it once per variant, each a job of its own
   in release, the names coming from `cargo run --example mutations`
   ([fanout](../testbench.md#the-case-file)); `model-host-tests` skips it. Every variant is
-  caught within the caps but `PolicyDeclassifyUnfit`, which `steward_policy` catches at seed
-  4709, about half an hour on one thread ([residual risks](#residual-risks)): the case names it
-  as known to be late, so its job searches the steward families to 20,000 seeds and passes
-  reported as late, while any other late variant, this one no longer caught at all, and this one
-  caught within the caps, whose entry has then outlived its need, fail it.
+  caught within the caps, each job in under 20 seconds on one core.
+- Three variants the steward families' random search catches only after many seeds have a
+  **directed scenario** each (`model/tests/common/contracts.rs`), a few operations that build
+  the state the break needs, tried before any family. Each is a named test that holds on the
+  specified model and catches its variant with the property it names, so these catches are
+  deterministic and the random search is the backstop:
+  - `declassify_unfit_scenario`: a {7} session writes an item one byte over `DECLASSIFY_MAX`, or
+    one with a control character, asks to declassify it and its owner approves; without the
+    item's check, P6 sees it copied out. The random search: `steward_policy`'s seed 4709.
+  - `one_cursor_scenario`: alice's and bob's unlabelled sessions and bob's {9} session call the
+    server, which takes alice's call, then the {9} call, then bob's and alice's next; with one
+    cursor over every group the last round starts after the {9} group with the vault's work and
+    after alice's without, so P10 sees the unlabelled calls taken in another order. The random
+    search: `steward_noninterference`'s seed 345.
+  - `agent_other_set_scenario`: a {7} session asks for an unlabelled agent and its owner
+    approves; without the own-set check, P10 sees the request in the unlabelled audit view. The
+    random search: `steward_noninterference`'s seed 96.
 
 | ID | Variants | What they break |
 | --- | --- | --- |
@@ -547,7 +595,7 @@ Replay is what turns the model from a reference into evidence about the kernel.
 - **One boot case copies model results by hand.** `tests/programs/src/bin/budget-test.rs` runs a
   short budget sequence whose expected results were read off the model. Nothing re-derives them
   from the model, so a change to the model leaves them stale without a failure.
-- **Finite worlds.** The default run is 90,020 sequences on small boots (the testing boot's
+- **Finite worlds.** The default run is 72,020 sequences on small boots (the testing boot's
   `root` has 1,024 pages and 24 processes), and random record changes target blocked calls only.
   Sizes and mapping geometry bound what the runs explore. The million-sequence run is a separate
   test that the bench does not run.
@@ -556,13 +604,16 @@ Replay is what turns the model from a reference into evidence about the kernel.
   non-interference comparison leaves out a server crash on its own and one a vault's call causes:
   which call such a crash blames, and when the server takes the calls before it, is service timing,
   a stated residual of [R37 (vault non-interference)](../servers/steward.md#residual-risks).
-- **The steward families are slow, and catch one break late.** A steward seed costs most of a
-  second in the model's own code, a thousand times a kernel family's, so their 30,000 default
-  seeds are six to seven core-hours, a bench case of their own. `PolicyDeclassifyUnfit` (an
-  over-long or unprintable declassified item) is caught only at `steward_policy`'s seed 4709, past
-  the mutations' cap, so `model-mutations` lists it as known to be late. Open, for a follow-up
-  on the steward model, which removes that entry: making a seed cheaper, and whether that catch
-  depth is a coverage weakness of the family's generator.
+- **The steward families reach no failed crossing.** Neither family, searched to 20,000 and
+  10,000 seeds, makes a declassification's copy out or a push fail, so the core's effects for a
+  failed crossing (`audit_copy_failed`, `audit_push_failed`, `pass_failure`) never run in the
+  model and no property is checked on their outcome; `steward_policy` never calls the audit filter
+  (`audit_visible`), which only `steward_noninterference`'s audit view reaches. The counts are set
+  from what the families reach ([property families](#property-families)), which bounds what a
+  lower count gives up, not what the generator never builds. The three breaks the random search
+  catches only after many seeds (`PolicyDeclassifyUnfit` at the policy family's seed 4709) are
+  caught first by directed scenarios, which pin the state each break needs rather than show that
+  the generator finds it.
 - **Rules outside the model** (R15, R16, R17, R19, R23, R24) have no model check at all; their
   boot cases are their only attack.
 

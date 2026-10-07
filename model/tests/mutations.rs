@@ -13,11 +13,13 @@ use redoubt_model::mutation::Mutation;
 /// Seeds tried per family before a mutation counts as not caught.
 const CAP: u64 = 20_000;
 
-/// Seeds tried in each steward family, whose seeds cost up to a second each: a mutation these
-/// catch only past it is caught too late, and fails as not caught. Every one is caught by seed
-/// 345 but `PolicyDeclassifyUnfit` (`steward_policy`'s seed 4709). With `TESTBENCH_LATE` set, the
-/// bench's word that the mutation is known to be late, the steward families get `CAP` too, and
-/// one caught within the caps after all fails, so that its entry is removed.
+/// Seeds tried in each steward family: a mutation these catch only past it is caught too late,
+/// and fails as not caught. The random search catches every one by seed 345 but
+/// `PolicyDeclassifyUnfit` (`steward_policy`'s seed 4709), which its scenario catches first
+/// (`steward_scenario`), as it does `R2OneCursor` and `PolicyAgentOtherSet`. With
+/// `TESTBENCH_LATE` set, the bench's word that the mutation is known to be late, the steward
+/// families get `CAP` too, and one caught within the caps after all fails, so that its entry is
+/// removed.
 const STEWARD_CAP: u64 = 500;
 
 /// Every kernel rule the model holds, and I16: all of R1 to R24 but the six outside the model
@@ -32,6 +34,33 @@ fn every_rule_has_a_mutation() {
     for rule in MODELLED {
         assert!(Mutation::ALL.iter().any(|m| m.rule() == rule), "no mutation breaks {rule}");
     }
+}
+
+/// A scenario holds on the specified model and catches its break, with the property it names.
+fn scenario(f: impl Fn(Option<Mutation>) -> Result<(), String>, m: Mutation, property: &str) {
+    if let Err(e) = f(None) {
+        panic!("the specified model fails {m:?}'s scenario: {e}");
+    }
+    match f(Some(m)) {
+        Err(e) => assert!(e.starts_with(property), "{m:?} caught by {e}, not {property}"),
+        Ok(()) => panic!("{m:?}'s scenario does not catch it"),
+    }
+}
+
+#[test]
+fn declassify_unfit_scenario() {
+    for item in common::contracts::UNFIT {
+        let f = |m| common::contracts::declassify_unfit_item(m, item);
+        scenario(f, Mutation::PolicyDeclassifyUnfit, "P6:");
+    }
+}
+
+#[test]
+fn one_cursor_scenario() { scenario(common::contracts::one_cursor, Mutation::R2OneCursor, "P10:") }
+
+#[test]
+fn agent_other_set_scenario() {
+    scenario(common::contracts::agent_other_set, Mutation::PolicyAgentOtherSet, "P10:")
 }
 
 #[test]
@@ -66,6 +95,15 @@ fn mutations_are_caught() {
             .or_else(|| {
                 common::contracts::sched_contracts(Some(m)).err().map(|message| {
                     redoubt_model::check::Failure { family: "sched_contracts", seed: 0, message, ops: vec![] }
+                })
+            })
+            .or_else(|| {
+                // The steward's directed scenario for this break, before the random search.
+                common::contracts::steward_scenario(m)?.err().map(|message| redoubt_model::check::Failure {
+                    family: "steward_scenario",
+                    seed: 0,
+                    message,
+                    ops: vec![],
                 })
             });
         // Try the rule's pressure family first, retaining every family and unchanged seed caps.

@@ -4,8 +4,9 @@
 //!     cargo test -p redoubt-model --release --test properties
 //!     REDOUBT_MODEL_SEQUENCES=1000000 cargo test -p redoubt-model --release --test properties
 //!
-//! Defaults: 20,000 sequences each for kernel, budget lifecycle, scheduler and steward policy;
-//! 10,000 for steward noninterference; 20 flood sequences (90,020 total).
+//! Defaults: 20,000 sequences each for kernel, budget lifecycle and scheduler; 5,000 for steward
+//! policy and 7,000 for steward noninterference, from what their seeds reach
+//! (model/tests/steward_reach.rs); 20 flood sequences (72,020 total).
 //! Without a sequence-count environment override, the ignored `million` acceptance test runs
 //! 1,000,000 sequences in each of the five non-flood families and 1,000 flood sequences
 //! (5,001,000 total).
@@ -33,10 +34,10 @@ fn budget_lifecycles() { family(1, 20_000) }
 fn scheduler_fairness() { family(2, 20_000) }
 
 #[test]
-fn steward_policy() { family(3, 20_000) }
+fn steward_policy() { family(3, 5_000) }
 
 #[test]
-fn steward_noninterference() { family(4, 10_000) }
+fn steward_noninterference() { family(4, 7_000) }
 
 #[test]
 fn flood() { family(5, 20_000) }

@@ -46,7 +46,7 @@ use redoubt_steward::effect::{
 };
 use redoubt_steward::event::{Content, Event, EventKind};
 use redoubt_steward::manifest::{self, Manifest};
-use redoubt_steward::{Store, decide, inspect};
+use redoubt_steward::{Policy, Store, decide, inspect};
 
 use crate::kernel::{Boot, INIT_PID, Kernel, Limits, Note};
 use crate::mutation::Mutation;
@@ -194,8 +194,18 @@ impl Steward {
     /// steward in `system`; the steward starts the server and carves what boot carves: each
     /// principal's top budget and its fixed sub-budgets.
     pub fn new(manifest: &Manifest, secret: u64, mutation: Option<Mutation>) -> Res<Steward> {
-        let (store, carves) =
-            Store::boot(manifest, crate::mutation::policy(mutation)).ok_or(Denied::BadManifest)?;
+        Steward::with_policy(manifest, secret, mutation, crate::mutation::policy(mutation))
+    }
+
+    /// As `new`, with the core deciding by `policy`: the coverage instrument's table, whose entries
+    /// record that they ran and then do what the shipped ones do (model/tests/steward_reach.rs).
+    pub fn with_policy(
+        manifest: &Manifest,
+        secret: u64,
+        mutation: Option<Mutation>,
+        policy: Policy,
+    ) -> Res<Steward> {
+        let (store, carves) = Store::boot(manifest, policy).ok_or(Denied::BadManifest)?;
         let boot = Boot {
             root: Limits { pages: 4096, processes: 64, weight: 1000 },
             system: Limits { pages: 512, processes: 8, weight: 250 },

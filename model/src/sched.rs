@@ -567,4 +567,87 @@ impl Scheduler {
 
     /// Budgets that are queued (runnable, or running).
     pub fn runnable_budgets(&self) -> usize { self.queued().count() }
+
+    /// A reconcile would change nothing: every queued budget has a runnable thread and every
+    /// budget with one is queued. Then, with nothing due and nothing to deliver, a run of whole
+    /// slices is only picks, charges and requeues ([`Scheduler::run_queue_slices`]).
+    pub fn steady(&self) -> bool { self.budgets.values().all(|e| e.queued == !e.runnable.is_empty()) }
+
+    /// `n` whole slices on a [steady](Scheduler::steady) queue, the running thread on a fresh
+    /// slice taking the first: what `n` rounds of `pick`, a slice of runtime, `slice_end` and a
+    /// reconcile come to, slice by slice, on a copy of the queued budgets alone. A pick takes the
+    /// lowest rank key and its budget's next thread after its cursor; the deschedule charges the
+    /// slice (and what the running thread had pending), requeues the budget behind its equals and
+    /// raises the floor; the reconciles between change nothing, since no thread wakes or blocks.
+    pub fn run_queue_slices(&mut self, n: u64) {
+        let Some(c) = self.current else { return };
+        if n == 0 {
+            return;
+        }
+        struct Q {
+            id: u64,
+            tier: u64,
+            pass: u128,
+            rem: u64,
+            tie: i64,
+            /// The stride weight a charge divides by: 0 charges nothing.
+            w: u64,
+            threads: alloc::vec::Vec<ThreadId>,
+            cursor: Option<ThreadId>,
+        }
+        let ignore_weight = self.broken(Mutation::R12IgnoreWeight);
+        let by_id = self.broken(Mutation::R12PriorityById);
+        let mut q: alloc::vec::Vec<Q> = self
+            .queued()
+            .map(|(id, e)| Q {
+                id: *id,
+                tier: if by_id { *id } else { 0 },
+                pass: e.pass,
+                rem: e.rem,
+                tie: e.tie,
+                w: if ignore_weight { 1 } else { self.weight(*id) },
+                threads: e.runnable.iter().copied().collect(),
+                cursor: e.cursor,
+            })
+            .collect();
+        let drop_rem = self.broken(Mutation::R12DropRemainder);
+        let (ahead, lifo) = (self.broken(Mutation::R12RequeueAhead), self.broken(Mutation::R12RequeueLifo));
+        let no_min = self.broken(Mutation::R12NoMinimumCharge);
+        let mut at = q.iter().position(|x| x.id == c.budget).expect("the running budget is queued");
+        let mut pending = c.pending;
+        for i in 0..n {
+            if i > 0 {
+                // pick: the lowest (tier, pass, tie, id), and its next thread.
+                at = (0..q.len()).min_by_key(|j| (q[*j].tier, q[*j].pass, q[*j].tie, q[*j].id)).unwrap();
+                let x = &mut q[at];
+                let after = x.cursor.map_or(0, |c| x.threads.partition_point(|t| *t <= c));
+                x.cursor = Some(x.threads[if after < x.threads.len() { after } else { 0 }]);
+                pending = 0;
+            }
+            // run(SLICE), then slice_end's deschedule: fold at least MIN_CHARGE.
+            let runtime = if no_min { pending + SLICE } else { (pending + SLICE).max(MIN_CHARGE) };
+            let x = &mut q[at];
+            // As `charge`: R12ShortRunsFree spares only a run under a slice, and this one is not.
+            if x.w != 0 {
+                let rem = if drop_rem { 0 } else { x.rem };
+                let t = rem + runtime.min(RUNTIME_CAP) * STRIDE;
+                x.pass += u128::from(t / x.w);
+                x.rem = if drop_rem { 0 } else { t % x.w };
+            }
+            // Requeued behind its equals (`deschedule`).
+            x.tie = if ahead {
+                self.front -= 1;
+                self.front
+            } else {
+                self.back = self.back.saturating_add(1);
+                if lifo { i64::MAX - self.back } else { self.back }
+            };
+            self.floor = self.floor.max(q.iter().map(|x| x.pass).min().unwrap());
+        }
+        for x in q {
+            let e = self.budgets.get_mut(&x.id).unwrap();
+            (e.pass, e.rem, e.tie, e.cursor) = (x.pass, x.rem, x.tie, x.cursor);
+        }
+        self.current = None;
+    }
 }

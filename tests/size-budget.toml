@@ -91,7 +91,7 @@ max_lines = 1691
 [[crate]]
 name = "model"
 paths = ["model/src"]
-max_lines = 10325
+max_lines = 10509
 
 [[crate]]
 name = "servers/keyd"
