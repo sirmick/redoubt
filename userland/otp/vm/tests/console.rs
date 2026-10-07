@@ -7,10 +7,12 @@
 use beamlet_vm::Vm;
 use beamlet_vm::platform::{ConsoleInput, Lookup, Platform, PlatformError};
 
-/// A console with one line typed on it, and a clock that jumps to each deadline it idles to.
+/// A console with one line typed on it, whose size is known on the first call and gone on the
+/// second, and a clock that jumps to each deadline it idles to.
 struct Typed {
     now: u64,
     input: Option<Vec<u8>>,
+    size: Option<(u16, u16)>,
 }
 
 impl Platform for Typed {
@@ -36,6 +38,8 @@ impl Platform for Typed {
         }
     }
 
+    fn console_size(&mut self) -> Option<(u16, u16)> { self.size.take() }
+
     fn random(&mut self, _buf: &mut [u8]) -> Result<(), PlatformError> { Err(PlatformError::Unavailable) }
 
     fn load_module(&mut self, module: &str) -> Lookup {
@@ -48,9 +52,14 @@ impl Platform for Typed {
 
 /// Runs `console:f()` and returns its result as text.
 fn run(f: &str) -> String {
-    let mut vm = Vm::new(Box::new(Typed { now: 0, input: Some(b"x".to_vec()) }));
+    let mut vm = Vm::new(Box::new(Typed { now: 0, input: Some(b"x".to_vec()), size: Some((40, 12)) }));
     let pid = vm.spawn("console", f, |_| Vec::new()).unwrap();
     vm.run_bounded(pid, 10_000_000).expect("finished").unwrap().unwrap().to_string()
+}
+
+#[test]
+fn the_console_size_is_the_platforms_answer_asked_at_each_call() {
+    assert_eq!(run("size"), "{{40,12},unknown}");
 }
 
 #[test]

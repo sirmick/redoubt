@@ -912,6 +912,17 @@ pub fn console_subscribe(c: &mut Ctx, _a: &[Term]) -> R {
     }
 }
 
+/// `beamlet:console_size()`: the console's size as `{Cols, Rows}`, asked of the platform afresh
+/// at each call, or `unknown`, when layout assumes 80 columns (docs/userland/shell.md, "The
+/// terminal library").
+pub fn console_size(c: &mut Ctx, _a: &[Term]) -> R {
+    let size = c.platform().console_size();
+    Ok(match size {
+        Some((cols, rows)) => c.tuple(&[Term::Int(cols as i64), Term::Int(rows as i64)]),
+        None => c.atom("unknown"),
+    })
+}
+
 // ---- erlang:memory ----
 
 /// The categories of `erlang:memory/0`, in its order.

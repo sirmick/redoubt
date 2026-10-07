@@ -1,7 +1,11 @@
 %% Fixture for vm/tests/console.rs: who reads the console. Only the VM's own BIFs are used: the
 %% tests load no OTP modules. Rebuild: erlc +deterministic -o vm/tests/fixtures vm/tests/src/console.erl
 -module(console).
--export([second_reader/0, after_exit/0]).
+-export([second_reader/0, after_exit/0, size/0]).
+
+%% The console's size is the platform's answer, asked at each call.
+size() ->
+    {beamlet:console_size(), beamlet:console_size()}.
 
 %% While one process reads the console, a second subscription is refused: the input goes to the
 %% first, and the second gets nothing.

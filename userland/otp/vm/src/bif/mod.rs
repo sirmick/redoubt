@@ -621,6 +621,7 @@ const TABLE: &[(&str, &str, u32, Native)] = &[
     ("erlang", "crc32", 2, info::crc32),
     ("beamlet", "app_spec", 1, info::app_spec),
     ("beamlet", "console_subscribe", 0, info::console_subscribe),
+    ("beamlet", "console_size", 0, info::console_size),
     // The system's natives, over the platform's `System` (docs/userland/beamlet.md, "Natives").
     ("redoubt", "ns_lookup", 1, system::ns_lookup),
     ("redoubt", "bind", 2, system::bind),
