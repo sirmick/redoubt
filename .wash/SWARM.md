@@ -383,7 +383,8 @@ the pool stays free for packages being built and reviewed.
   `plan_accept`: both builds (rv64 and rv32); the host tests of every crate the package touches;
   the docs checker, `cargo fmt --check`, the size budget, the `unsafe` ratchet and the no-cruft
   gate; the package's own cases on both widths; and the **smoke set**, fixed for every package:
-  `userland-boot`, `init-boot`, `bench-net-peer` and `ipc-outcomes`, on both widths. The smoke
+  `userland-boot`, `init-boot`, `bench-net-peer`, `ipc-outcomes`, `sum-clear` and
+  `lend-untouched-page` (at four harts too), on both widths. The smoke
   set stays under fifteen minutes of pool time; changing it means changing this page. Reviewers rule on the short gate's evidence.
 - **A train** is the accepted packages merged `--no-ff` onto `main` in order of acceptance, oldest
   first, each rebased onto the one before it, with the whole bench run once on the train's tip
