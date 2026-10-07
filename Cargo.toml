@@ -41,6 +41,7 @@ members = [
   "stub",
   "tests/programs",
   "tests/init-programs",
+  "tests/beamlet-programs",
   "tests/erofsd-programs",
   "tests/littlefsd-programs",
   "tests/walfsd-programs",

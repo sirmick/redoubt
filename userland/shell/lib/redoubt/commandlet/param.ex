@@ -14,6 +14,7 @@ defmodule Redoubt.Commandlet.Param do
   | `command` | a commandlet's name, as an atom or a string; the parameter holds the commandlet |
   | `name` | a name, as an atom or a string; the parameter holds the string, so a command can look it up without making an atom |
   | `ref` | a module, or a function reference such as `&File.cp/2`; the parameter holds `{:module, m}` or `{:function, m, f, arity}` |
+  | `handle` | a handle the session holds, as `ns_lookup/1` gives one: a resource term, which is a reference to Erlang code (a reference that is not a handle is refused by the native it reaches) |
   | `many(type)` | one `type`, or a list of them; the parameter holds a list. Only the last parameter, or the one before `flags` |
   | `flags(name: type, ...)` | options, as a keyword list: `sort(lines, reverse: true)`. The parameter holds a map with every flag, a flag not given being `false` if it is a boolean and `nil` if not. Only the last parameter; its default is `[]` |
 
@@ -35,7 +36,7 @@ defmodule Redoubt.Commandlet.Param do
           default: :none | {:default, String.t()}
         }
 
-  @types [:path, :string, :integer, :boolean, :pattern, :lines, :command, :name, :ref]
+  @types [:path, :string, :integer, :boolean, :pattern, :lines, :command, :name, :ref, :handle]
   @options %{integer: [:min, :max]}
 
   @doc false
@@ -126,6 +127,8 @@ defmodule Redoubt.Commandlet.Param do
   end
 
   defp accept({:string, _opts}, value) when is_binary(value), do: {:ok, value}
+
+  defp accept({:handle, _opts}, value) when is_reference(value), do: {:ok, value}
 
   defp accept({:integer, opts}, value) when is_integer(value) do
     in_bounds = value >= Keyword.get(opts, :min, value) and value <= Keyword.get(opts, :max, value)
@@ -257,6 +260,7 @@ defmodule Redoubt.Commandlet.Param do
   def describe({:integer, _opts} = type), do: "an " <> name(type)
   def describe({:path, _opts}), do: "a path"
   def describe({:string, _opts}), do: "a string"
+  def describe({:handle, _opts}), do: "a handle, as ns_lookup gives one"
   def describe({:boolean, _opts}), do: "true or false"
   def describe({:pattern, _opts}), do: "a string or a regex"
   def describe({:one_of, values}), do: "one of " <> Enum.map_join(values, ", ", &inspect/1)

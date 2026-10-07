@@ -51,13 +51,17 @@ file with `ed("notes.txt")`; browse and copy files in two panes with `fm("projec
 
 ### The shell in a session
 
-Status: built · partly tested: built for the UART console only; files and launching are BEAM3's and BEAM4's, and sessions are the steward's · tested: bench:userland-boot
+Status: built · partly tested: built for the UART console only; launching a program is tested on the host only, and sessions are the steward's · tested: bench:userland-boot, host:beamlet-redoubt::a_launch_takes_what_it_is_given_and_its_end_is_an_event
 
 Every session starts `Redoubt.Shell` over the session's console connection, `/dev/cons`
 ([consoled](../servers/consoled.md) on the UART, [sshd](../servers/sshd.md) for an SSH channel).
 In M1 (separation and containment) the shell is what the attack suite needs and no more: the
 console, reading and writing files through OTP's `File`, and launching a native program through
-the launch natives ([beamlet](beamlet.md#natives)). The shell's modules come from the userland
+the launch natives ([beamlet](beamlet.md#natives)): `exec("name", args)` runs `/boot/name` in a
+budget carved from the session's, with a connection of its own to the session's console, waits
+for it to end, and returns how it ended and what its budget held
+([native programs](native.md#launching-from-a-session)). `ns()`, `ns_lookup/1` and `bind/2` are the
+session's namespace ([sessions](sessions.md#namespaces)). The shell's modules come from the userland
 disk, checked against the signed bundle
 ([R75 (verified userland)](../kernel/boot.md#r75-verified-userland)).
 

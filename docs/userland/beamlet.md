@@ -210,6 +210,7 @@ Everything the VM gets from outside comes through the `Platform` trait
 | `load_module`, `load_app`, `module_file` | a system `.beam` or `.app` lookup answers found bytes, an absent name or a refused object; `module_file` names a loaded module | applications absent |
 | `files` | a file system, as `prim_file` sees it | none: `file` calls fail with `enotsup` |
 | `programs` | starting programs behind ports | none: `open_port` fails with `eacces` |
+| `system` | the system's own calls: the namespace, calls and serving, budgets, labels, launching ([natives](#natives)) | none: each `redoubt` native answers `{error, not_supported}` |
 
 - **`load_module` is a lookup, not a gate.** It asks the platform for a module before examining
   the code path. `Found` uses those bytes, so no directory shadows a system module
@@ -346,12 +347,12 @@ still sleeps until its deadline. There is no wall clock, so `system_time_us` is 
 
 ### beamlet on Redoubt
 
-Status: built · partly tested: programs, `/net` and the system natives are not built · tested: bench:beamlet-boot, bench:beamlet-console, bench:beamlet-files, bench:boot-profile, bench:boot-profile-unverified, bench:pack-outside-module, bench:pack-bad-truncated, bench:pack-bad-wrong-length, bench:pack-bad-wrong-name, bench:beamlet-heap-flood, bench:beamlet-budget-flood, bench:userland-boot, bench:userland-bad-start, bench:userland-read-only, bench:verity-flipped-tree, bench:verity-wrong-root, host:beamlet-redoubt::a_module_is_its_file_and_a_failed_read_is_refused, host:beamlet-redoubt::not_found_at_the_open_is_absent_and_every_other_error_is_refused_by_name, host:beamlet-redoubt::verified_module_lookup_propagates_found_absent_and_refused, host:beamlet-redoubt::verified_application_lookup_propagates_found_absent_and_refused, host:beamlet-redoubt::a_packed_module_comes_from_the_pack_and_any_other_from_the_volume, host:beamlet-redoubt::a_pack_with_a_bad_entry_is_refused_whole, host:testbench::the_boot_pack_is_deterministic_sorted_and_only_of_the_objects
+Status: built · partly tested: programs and `/net` are not built; the system natives are tested on the host only ([natives](#natives)) · tested: bench:beamlet-boot, bench:beamlet-console, bench:beamlet-files, bench:boot-profile, bench:boot-profile-unverified, bench:pack-outside-module, bench:pack-bad-truncated, bench:pack-bad-wrong-length, bench:pack-bad-wrong-name, bench:beamlet-heap-flood, bench:beamlet-budget-flood, bench:userland-boot, bench:userland-bad-start, bench:userland-read-only, bench:verity-flipped-tree, bench:verity-wrong-root, host:beamlet-redoubt::a_module_is_its_file_and_a_failed_read_is_refused, host:beamlet-redoubt::not_found_at_the_open_is_absent_and_every_other_error_is_refused_by_name, host:beamlet-redoubt::verified_module_lookup_propagates_found_absent_and_refused, host:beamlet-redoubt::verified_application_lookup_propagates_found_absent_and_refused, host:beamlet-redoubt::a_packed_module_comes_from_the_pack_and_any_other_from_the_volume, host:beamlet-redoubt::a_pack_with_a_bad_entry_is_refused_whole, host:testbench::the_boot_pack_is_deterministic_sorted_and_only_of_the_objects
 
 On Redoubt, beamlet is a native program. Its built `Platform` adapter uses the client library
-([native programs](native.md#the-client-library)) for the console, files and verified code
-lookup, and the kernel's calls for the clock and randomness. The network and program adapters
-remain planned.
+([native programs](native.md#the-client-library)) for the console, files, verified code lookup
+and the system natives, and the kernel's calls for the clock and randomness. The network and
+program adapters remain planned.
 
 | Method | On Redoubt |
 | --- | --- |
@@ -362,7 +363,8 @@ remain planned.
 | `random` | the kernel's `random` call |
 | `load_module`, `load_app` | takes the requested file from the boot pack, if the pack holds it (below); otherwise reads the requested file (`Elixir.Enum.beam`, `elixir.app`) whole from the root of the verified userland volume, through its `erofsd` (`erofsd:system`), which reads it through its `verityd`; a reader of the volume trusts that `erofsd` and `verityd` ([R76 (verified volumes)](../servers/verityd.md#r76-verified-volumes)) in place of checking each object itself. A name `erofsd` answers `not_found` to at the open is `Absent`; any other refusal at the open or on the read is `Refused`, with one console diagnostic naming the file and the error's name and no other source tried; the bytes read whole are `Found` ([R75 (verified userland)](../kernel/boot.md#r75-verified-userland)). From M5 (persist, install, share), the principal's profile joins the lookup ([packages](packages.md)), never the session's writable namespace. This decides which module a name finds, not what code may run |
 | `files` | 9P on the namespace's connections through the VM's hub: walk, open, create, read, write, stat, remove and clunk, and `littlefsd`'s `rename` ([files](files.md#files-over-9p)) |
-| `programs` | the client library's `launch`: native programs in carved budgets ([native programs](native.md)) |
+| `programs` | the client library's `launch`: native programs in carved budgets ([native programs](native.md)); planned, as ports. Launching is the `launch/1` native's |
+| `system` | the namespace's files and named handles, typed calls on a pool of threads, served endpoints on a thread each, budgets from the named handle `budget`, the kernel's label stamp, and `launch` ([natives](#natives)) |
 
 TCP is Plan 9's `/net`, served by `ipd`: `gen_tcp` works unchanged over a backend that opens
 `/net/tcp/clone` and reads and writes the data file, and framing stays in Erlang, so the Rust side
@@ -451,7 +453,35 @@ The timer's counter frequency is not needed: `time_now`'s microseconds serve the
 
 ### Natives
 
-Status: planned · M1 (separation and containment)
+<details><summary>Status: built · partly tested: on the host only, on the fake kernel and against a test platform; no boot runs the natives · tested (25)</summary>
+
+- host:beamlet-vm::a_lookup_gives_the_prefixs_connection_and_the_rest_and_refuses_by_name
+- host:beamlet-vm::a_bind_names_a_connection_and_refuses_anything_else
+- host:beamlet-vm::the_table_lists_path_name_and_handle
+- host:beamlet-vm::a_calls_reply_arrives_as_a_message_with_its_handles_as_resources
+- host:beamlet-vm::a_send_is_one_way
+- host:beamlet-vm::budgets_are_carved_read_and_destroyed
+- host:beamlet-vm::labels_are_fixed
+- host:beamlet-vm::a_launch_takes_everything_from_its_caller_and_its_end_arrives_as_a_message
+- host:beamlet-vm::requests_arrive_with_badge_account_and_labels_and_are_answered
+- host:beamlet-vm::a_decoded_handle_grants_nothing
+- host:beamlet-vm::arguments_of_the_wrong_type_are_badarg_and_reach_no_platform_call
+- host:beamlet-vm::lists_past_their_caps_are_refused
+- host:beamlet-vm::a_handle_of_the_wrong_kind_is_refused_by_name
+- host:beamlet-vm::a_dropped_handle_is_closed_when_its_holder_is_collected
+- host:beamlet-vm::without_system_calls_every_native_is_not_supported
+- host:beamlet-redoubt::the_labels_are_the_kernels_stamp_on_the_vms_own_send
+- host:beamlet-redoubt::a_lookup_gives_the_longest_prefix_and_the_rest_and_refuses_by_name
+- host:beamlet-redoubt::a_bind_is_the_files_namespace_and_one_connection
+- host:beamlet-redoubt::a_budget_is_no_connection_and_no_endpoint
+- host:beamlet-redoubt::a_bind_to_a_server_that_never_answers_is_refused_within_its_bound
+- host:beamlet-redoubt::a_typed_call_goes_out_on_a_pool_thread_and_its_reply_is_an_event
+- host:beamlet-redoubt::requests_arrive_with_badge_account_and_labels_and_an_answer_reaches_the_caller
+- host:beamlet-redoubt::a_request_never_answered_is_answered_by_the_serve_thread_at_its_deadline
+- host:beamlet-redoubt::an_endpoint_served_stays_open_when_its_term_is_dropped
+- host:beamlet-redoubt::a_launch_takes_what_it_is_given_and_its_end_is_an_event
+
+</details>
 
 A native is one of three kinds, and no other:
 - **OTP's own**, reimplemented in Rust where BEAM has C (`crypto`, `re`, `zlib`, the file and
@@ -481,12 +511,100 @@ every server binding is pure Elixir over them:
 | `labels/0` | this VM's label set, fixed when its budget was made |
 | `launch/1` | launching a native program: the image, budget, namespace, handles and arguments come from the Elixir caller, and the client library's `launch` makes the calls and writes the startup block |
 
+They are the module `redoubt`'s, over the platform's `System`
+([`userland/otp/vm/src/platform.rs`](../../userland/otp/vm/src/platform.rs); the argument checks in
+[`bif/system.rs`](../../userland/otp/vm/src/bif/system.rs), the calls in
+[`userland/otp/redoubt/src/system.rs`](../../userland/otp/redoubt/src/system.rs)). A platform
+with no `System`, the host CLI's, answers each `{error, not_supported}`; the host's
+`fake-redoubt` runs Redoubt's, on the fake kernel. Each native, as Erlang sees it:
+- **`ns_lookup(Path)`** is `{ok, Handle, Rest}`: the connection the longest matching prefix of a
+  clean absolute path names and the rest below it, or, for a name with no `/`, the named handle the
+  VM was started with (`keyd`, `budget`) and `<<>>`. A path that is not clean (`..`, `//`) is
+  `bad_name`, one nothing is bound at `not_found`. **`bind(Prefix, Connection)`** puts a connection
+  at a clean absolute prefix of the files' own namespace: a path under an existing prefix shadows
+  it for longer matches only. A handle that is not a 9P connection is attached once, then and
+  there, each of the attach's two calls waiting at most `ATTACH_US` on the VM's thread; one whose
+  server does not answer or does not speak 9P, or a budget, is `not_a_connection`.
+  **`ns()`** is `[{Path, Name | nil, Handle}]`, the namespace's entries in binding order, then the
+  named handles.
+- **`call(Handle, {Words, Buffer, Handles}, TimeoutMs)`** is `{ok, Ref}`, and the reply arrives as
+  `{reply, Ref, {ok, {Words, Buffer, Handles}} | {error, Name}}`. A buffer is a binary for a message
+  that lends one and `nil` for an inline one; the reply's buffer is the bytes its word 1 says at
+  the front of the lend. No hub carries a typed call, and no scheduler waits for one: a pool of
+  `CALL_THREADS` threads makes them, `MAX_QUEUED` more wait, and past that a call is `busy`; each
+  is bounded by its timeout, at most `MAX_CALL_MS`. The caller waits in `receive`, as for any
+  message. **`send(Handle, {Words, Buffer, Handles})`** is one way, waiting at most
+  `SEND_TIMEOUT_US` for its receiver.
+  The natives encode nothing of a protocol: the generated clients do
+  ([wire](../servers/wire.md#generated-clients)).
+- **`serve(Endpoint)`** serves a receive right the VM holds, on a thread of its own, which keeps
+  the endpoint open and serves it for the VM's life (at most `MAX_SERVED` endpoints; one served
+  already is `already_served`): each call is admitted by the serving library's admission, per (account,
+  label set) with a share per badge
+  ([R26 (admission fairness)](../servers/serving.md#r26-admission-fairness)), and parked with the
+  library's deadline, `REQUEST_WAIT_US`
+  ([R28 (parked-call accounting)](../servers/serving.md#r28-parked-call-accounting)); it reaches the
+  serving process as `{request, Request, Badge, Account, Labels, {Words, Buffer, Handles}}`, `Request`
+  `nil` for a one-way send. **`reply(Request, {Words, Buffer, Handles})`** answers it once. A request
+  the Erlang side never answers is ended by that thread at its deadline and its admission given
+  back: the VM holds nothing for it. These are calls, not 9P, so the multiplexed connections' rule
+  ([R77 (multiplexed requests)](../servers/serving.md#r77-multiplexed-requests)) is not this one's.
+- **`budget_create(#{pages, processes, weight, labels, account, deadline})`** carves a child from
+  the VM's own budget, the named handle `budget` (`no_budget` without one); `labels`, `account`
+  and `deadline` may be left out, and a deadline, in the clock's microseconds, makes it a lease
+  ([deadlines](../kernel/budgets.md#deadlines)). **`budget_destroy(Budget)`** destroys it and
+  everything in it; **`budget_usage(Budget)`** is `{ok, #{pages => {Limit, Used}, processes =>
+  {Limit, Used}, weight => {Limit, Carved}}}`. A handle of another kind is `wrong_object` before
+  the kernel is asked.
+- **`labels()`** is the VM's label set, read at its start off the first call thread's first
+  wake-up, which the kernel stamps with the sender's labels as it stamps every message: the
+  kernel's word, not a launcher's, and fixed.
+- **`launch(#{image, budget, namespace, handles, args, stack_pages, heap_pages})`** is `{ok, Job}`,
+  and the job's end arrives as `{exit, Job, Cause, Code}` (`exited`, `faulted` or `killed`):
+  the client library's `launch` with the image the caller read, a budget it carved, its namespace
+  entries and named handles (at most `MAX_START_HANDLES` together), and arguments; the platform
+  adds the loader stub, which it carries as `init` does, and the job's own exit endpoint
+  ([native programs](native.md#launching-from-a-session)). At most `MAX_JOBS` run at once, each
+  watched by a thread that waits for its exit notice.
+
+Every refusal is a Redoubt name: a term of the wrong type is `badarg`, as for any native, and a
+well-formed request the platform refuses is `{error, Name}`, the kernel's error by its name in the
+ABI (`wrong_object`, `label_denied`), a 9P error by the one table's
+([wire](../servers/wire.md#error-names)), or the platform's own (`not_found`, `not_a_connection`,
+`no_budget`, `busy`). What waits on the VM's thread is bounded and named: a `send/2`, at most
+`SEND_TIMEOUT_US`; a bind of a handle not yet a connection, its attach's two calls at most
+`ATTACH_US` each; a hand-off to a thread of the platform's, at most `HAND_US`; and the kernel's
+own calls for budgets and launching, which answer at once. Each native bounds its work: no list is
+walked past its cap, and no binary is copied past its own:
+
+| Bound | Value | Where |
+| --- | --- | --- |
+| `MAX_MESSAGE_HANDLES`, `MAX_LABELS` | 4 handles a message, 16 labels a spec, and a message's 4 words | [`bif/system.rs`](../../userland/otp/vm/src/bif/system.rs) |
+| `MAX_START_HANDLES`, `MAX_ARGS` | 128 namespace entries and named handles together, 128 arguments | [`bif/system.rs`](../../userland/otp/vm/src/bif/system.rs) |
+| `MAX_BUFFER`, `MAX_IMAGE`, `MAX_NAME` | 64 KiB a message's buffer, 8 MiB an image, 4 KiB a path, name or argument | [`bif/system.rs`](../../userland/otp/vm/src/bif/system.rs) |
+| `MAX_CALL_MS` | 5 s, the longest a call waits | [`bif/system.rs`](../../userland/otp/vm/src/bif/system.rs) |
+| `CALL_THREADS`, `MAX_QUEUED` | 2 calls out at once, 64 waiting | [`pool.rs`](../../userland/otp/redoubt/src/pool.rs) |
+| `SEND_TIMEOUT_US`, `ATTACH_US`, `HAND_US` | 1 ms a send waits for its receiver, 1 s each of a bind's attach calls, 1 s a thread of the platform's to take its work (one that does not has ended, and is set aside) | [`system.rs`](../../userland/otp/redoubt/src/system.rs) |
+| `MAX_SERVED`, `REQUEST_WAIT_US` | 2 endpoints served, 5 s a request waits for its answer | [`serve.rs`](../../userland/otp/redoubt/src/serve.rs) |
+| `MAX_JOBS` | 4 jobs running at once | [`jobs.rs`](../../userland/otp/redoubt/src/jobs.rs) |
+
 Handles are resource terms: unforgeable, collected, and never serialisable. A copy of a handle
 inside the VM is the same connection (one badge, one client), so passing one to another Erlang
-process is sharing it. It cannot reach another VM in a message: the term format writes a resource
-as a plain reference, with no state behind it, so a decoded copy grants nothing, and a handle
-crosses between processes only in a kernel call that names it. Delegation is
-always `new_connection`, a typed call on a connection, not a native ([sessions](sessions.md)).
+process is sharing it. A handle no process holds is closed at the next collection; a budget's is
+closed and the budget lives on, since destruction is a call. It cannot reach another VM in a
+message: the term format writes a resource as a plain reference, with no state behind it, so a
+decoded copy grants nothing, and a handle crosses between processes only in a kernel call that
+names it. Delegation is always `new_connection`, a typed call on a connection, not a native
+([sessions](sessions.md)). Tested: `a_decoded_handle_grants_nothing`,
+`a_dropped_handle_is_closed_when_its_holder_is_collected`,
+`arguments_of_the_wrong_type_are_badarg_and_reach_no_platform_call`,
+`lists_past_their_caps_are_refused` and `a_handle_of_the_wrong_kind_is_refused_by_name`.
+
+Residuals:
+- A request the Erlang side never answers is ended at its deadline with `malformed` (status 1):
+  no status every protocol shares means a timeout, so its caller cannot tell the two apart.
+- A typed call whose caller exits is not cancelled: it holds its pool thread until its reply or
+  its timeout, and the reply, with any handles it brought, is dropped and closed.
 
 The namespace and launching natives are the client library's `ns` and `launch`, so policy stays
 in Elixir and encoding in Rust. The file server's operations that name fids (`Redoubt.File`'s
@@ -497,7 +615,8 @@ The Elixir modules over them are of two layers. A server's typed calls are gener
 wire table, one function per message ([wire](../servers/wire.md#generated-clients)), so the
 binding cannot drift from the server. Above the natives and the generated calls, a thin
 hand-written module gives what is idiomatic and adds no authority: `Redoubt.Namespace`,
-`Redoubt.Budget` and `Redoubt.Process` over the natives, `Redoubt.Keys` over `keyd`'s calls.
+`Redoubt.Budget` and `Redoubt.Process` over the natives, `Redoubt.Keys` over `keyd`'s calls
+([`userland/shell/lib/redoubt`](../../userland/shell/lib/redoubt)).
 
 The Elixir modules live on the userland disk, one file per module, on a volume whose root the
 signed manifest pins ([R75](../kernel/boot.md#r75-verified-userland)); only what the VM needs
@@ -505,8 +624,6 @@ before it can read the disk is embedded in it: its own console server, code and 
 (`beamlet_io`, `beamlet_code`, `beamlet_kernel`, `beamlet_port`, `beamlet_tcp`) and its
 stand-ins for `application`, `gen_tcp` and `ram_file`
 ([`userland/otp/vm/src/vm.rs`](../../userland/otp/vm/src/vm.rs), `EMBEDDED`).
-
-**Open:** none.
 
 ### Screen natives
 

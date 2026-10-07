@@ -2,7 +2,8 @@
 # Runs the typed-message vector files (libs/wire/vectors/example*.txt) through the generated
 # Elixir codec on the real BEAM (the oracle) and on beamlet. Each must accept every accepted
 # line exactly and refuse every refused one, and the two outputs must be identical byte for
-# byte. The Rust codec runs the same files (cargo test -p redoubt-wire).
+# byte. The Rust codec runs the same files (cargo test -p redoubt-wire). Then the generated
+# clients' checks (test/client_test.ex), on the BEAM alone: they stand in for beamlet's natives.
 #
 #   libs/wire/elixir/run-vectors
 #
@@ -15,7 +16,7 @@ repo="$(cd "$wire/../.." && pwd)"
 
 out="$(mktemp -d)"
 trap 'rm -rf -- "$out"' EXIT
-elixirc --ignore-module-conflict -o "$out/ebin" "$wire/elixir/wire.ex" "$wire"/elixir/proto/*.ex "$wire/elixir/test/vectors_test.ex" > /dev/null
+elixirc --ignore-module-conflict -o "$out/ebin" "$wire/elixir/lib/wire.ex" "$wire"/elixir/proto/*.ex "$wire/elixir/test/vectors_test.ex" > /dev/null
 
 # Both print the per-file lines, then the result (`ok` or `failed`) on the last line.
 elixir -pa "$out/ebin" -e 'IO.puts(Redoubt.Wire.VectorsTest.start(Enum.at(System.argv(), 0)))' "$wire/vectors" > "$out/beam.txt"
@@ -29,6 +30,15 @@ fi
 echo "beamlet: identical"
 if [ "$(tail -n 1 "$out/beam.txt")" != "ok" ]; then
     echo "FAIL"
+    exit 1
+fi
+
+elixirc --ignore-module-conflict -o "$out/client-ebin" "$wire"/elixir/lib/*.ex "$wire"/elixir/proto/*.ex \
+    "$wire"/elixir/client/*.ex "$wire/elixir/test/client_test.ex" > /dev/null
+elixir -pa "$out/client-ebin" -e 'IO.puts(Redoubt.Wire.ClientTest.start())' > "$out/client.txt"
+sed 's/^/BEAM:    /' "$out/client.txt"
+if [ "$(tail -n 1 "$out/client.txt")" != "ok" ]; then
+    echo "FAIL: the generated clients"
     exit 1
 fi
 echo "PASS"

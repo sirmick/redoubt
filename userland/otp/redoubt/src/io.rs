@@ -10,6 +10,7 @@
 //! - **Nothing waits but the VM's idle**: [`Io::wait`] is a `receive` on that endpoint with the VM's next
 //!   deadline, and every wake-up goes to the hub, whose completions the platform takes in turn.
 
+use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 use core::num::NonZeroU64;
 
@@ -17,7 +18,7 @@ use redoubt_client::Error;
 use redoubt_client::aio::{COMPLETION_PAGES, Conn, Done, Hub, RETRY_US};
 use redoubt_client::file::Connection;
 use redoubt_rt::handle::Endpoint;
-use redoubt_rt::ipc::Event;
+use redoubt_rt::ipc::{Delivery, Event};
 
 /// The most waiter threads the VM starts: one per connection of a session's namespace (bootfsd,
 /// the home volume, a labelled volume, `ipd`, the console, the system volume); a bind is one of
@@ -33,11 +34,19 @@ pub struct Io {
     conns: Vec<(Connection, Result<Conn, Error>)>,
     /// Requests handed to the hub so far.
     requests: u64,
+    /// Wake-ups that are not the hub's (the system calls' threads'), for the platform.
+    others: VecDeque<Delivery>,
 }
 
 impl Io {
     pub fn new() -> Result<Io, Error> {
-        Ok(Io { hub: Hub::new(), wake: Endpoint::create()?, conns: Vec::new(), requests: 0 })
+        Ok(Io {
+            hub: Hub::new(),
+            wake: Endpoint::create()?,
+            conns: Vec::new(),
+            requests: 0,
+            others: VecDeque::new(),
+        })
     }
 
     /// `conn`'s hub connection: the first time, a multiplexed session on it and its waiter. A server
@@ -89,16 +98,20 @@ impl Io {
         }
     }
 
+    /// The VM's own endpoint, where every thread of the platform wakes it.
+    pub fn wake(&self) -> &Endpoint { &self.wake }
+
+    /// The next wake-up that was not the hub's, if any.
+    pub fn other(&mut self) -> Option<Delivery> { self.others.pop_front() }
+
     /// How many waiter threads have started.
     pub fn waiters(&self) -> usize { self.hub.waiters() }
 
     fn take(&mut self, event: Event) {
         let Event::Send(delivery) = event else { return };
-        // Nothing but a waiter sends here, and a wake-up carries no handle; anything else is closed.
+        // A waiter's wake-up is the hub's; any other is the platform's to take or close.
         if let Some(other) = self.hub.deliver(delivery) {
-            for handle in other.handles.as_slice().iter().flatten() {
-                let _ = redoubt_rt::handle::close(*handle);
-            }
+            self.others.push_back(other);
         }
     }
 }

@@ -18,6 +18,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
 
+use redoubt_rt::abi::FOREVER;
 use redoubt_rt::client::{self, Lend};
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::server::ninep::MAX_FIDS;
@@ -75,7 +76,13 @@ impl Connection {
     /// A session on `endpoint` (`Tversion`) with its root attached. One per endpoint handle: a
     /// second `Tversion` on the same handle would end the first's fids (intro(5)).
     pub fn attach(endpoint: Endpoint, lend: &mut Lend) -> Result<Connection, Error> {
-        let nine = client::Connection::new(endpoint);
+        Connection::attach_within(endpoint, lend, FOREVER)
+    }
+
+    /// As [`Connection::attach`], each of this connection's blocking calls waiting at most `timeout`
+    /// µs for its reply: for a caller that must not wait on a server without bound.
+    pub fn attach_within(endpoint: Endpoint, lend: &mut Lend, timeout: u64) -> Result<Connection, Error> {
+        let nine = client::Connection::within(endpoint, timeout);
         nine.version(lend)?;
         nine.attach(lend, ROOT, "")?;
         Ok(Connection(Arc::new(Inner { nine, fids: Fids::new() })))

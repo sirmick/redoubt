@@ -154,7 +154,7 @@ enum Owner {
 
 /// The VM's files: the namespace, the open files, and each asker's operation.
 pub(crate) struct Table {
-    ns: Namespace,
+    pub(crate) ns: Namespace,
     open: BTreeMap<u64, Open>,
     next: u64,
     asker: Option<u64>,

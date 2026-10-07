@@ -732,6 +732,11 @@ unsafe impl redoubt_rt::Transport for Fake {
                 s.rng ^= s.rng << 17;
                 Ok(Return::Random(s.rng))
             }
+            // The thread ends: it never runs again. Its host thread waits for good, since nothing
+            // may unwind through the runtime's `extern "C"` trampoline; the test's end ends it.
+            Call::ThreadExit => loop {
+                std::thread::park();
+            },
             Call::ProcessExit { code } => {
                 self.lock().exits.insert(pid, code);
                 std::panic::resume_unwind(Box::new(Exited(code)))

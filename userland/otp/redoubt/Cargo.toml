@@ -44,3 +44,7 @@ required-features = ["fake"]
 [[test]]
 name = "files"
 required-features = ["fake"]
+
+[[test]]
+name = "system"
+required-features = ["fake"]

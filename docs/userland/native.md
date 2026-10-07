@@ -97,11 +97,13 @@ and a well-formed child still runs afterwards.
 
 ### Launching from a session
 
-Status: planned · M1 (separation and containment)
+Status: built · partly tested: on the host only, on the fake kernel; no boot launches from a session · tested: host:beamlet-redoubt::a_launch_takes_what_it_is_given_and_its_end_is_an_event, host:beamlet-vm::a_launch_takes_everything_from_its_caller_and_its_end_arrives_as_a_message, host:redoubt-client::a_bad_launch_is_refused_before_any_kernel_call
 
 A session launches a native program through beamlet's launch native
-([beamlet](beamlet.md#natives)). The namespace, the handles and the budget come from the Elixir
-caller, so every authority the child gets is on that one call.
+([beamlet](beamlet.md#natives)), and its end arrives as a message to the process that launched
+it; the shell's `exec` is one launch and its wait ([the shell](shell.md#the-shell-in-a-session)).
+The namespace, the handles and the budget come from the Elixir caller, so every authority the
+child gets is on that one call.
 - **The launcher reads the program.** There is no kernel path lookup: a session that cannot read
   a program's file cannot run it. In M1 (separation and containment) programs come from the boot
   bundle, `/boot`.
@@ -114,8 +116,8 @@ caller, so every authority the child gets is on that one call.
 - **No dynamic linking.** Code shared at run time is a server, not a library. The dynamic part of
   the system is the BEAM, whose modules load at run time.
 
-**Open:** none. The launch native is the client library's `launch`: the namespace, the handles
-and the budget come from the Elixir caller, and Rust makes the calls and writes the startup block
+The launch native is the client library's `launch`: the namespace, the handles and the budget come
+from the Elixir caller, and Rust makes the calls and writes the startup block
 ([the client library](#the-client-library)).
 
 ### Standard input and output, and pipes
@@ -157,6 +159,13 @@ What follows from pipes being served files:
 - **A pipe is readable as a file.** A zero-copy alternative, stages sending pages to each other
   over an endpoint, is not 9P, so a program could not read its input as a file; it is not taken.
 
+**What is built in M1 (separation and containment):** a program the shell's `exec` launches gets
+one stream, a connection of its own to the session's console as `/dev/cons`, which the console
+mints for it with `new_connection` and which is disconnected when the program ends; its lines
+carry that connection's id. It reads that console as well as writes it, so until pipes exist a
+launched program can take typing the shell would have read, and the rule above that no stage
+holds the console waits for them (M2 (usable shell)).
+
 **Open:** two choices.
 - The names of the three streams: with no descriptors to duplicate, each child needs distinct
   names. Recommended: `/dev/stdin`, `/dev/stdout` and `/dev/stderr` namespace entries.
@@ -185,6 +194,10 @@ connections and releases what typed servers granted it.
 
 Ctrl+C destroys the budgets of every native stage of the foreground job
 ([the shell](shell.md#interrupting-and-killing-jobs)).
+
+Built: beamlet's `budget_destroy/1` is the kill, and the launch native's `{exit, Job, Cause,
+Code}` message is the exit notice, with `exited`, `faulted` or `killed`
+([beamlet](beamlet.md#natives)); `Job` and Ctrl+C come in M2 (usable shell).
 
 **Open:** none.
 
@@ -363,7 +376,8 @@ Every one is also to build for rv32, where the vendored crates are checked too, 
 `redoubt-client` ([`libs/client`](../../libs/client/src/lib.rs)) is the one client API every
 userland binds to: native programs link it, beamlet's Redoubt platform and natives are thin
 adapters over it ([beamlet](beamlet.md#beamlet-on-redoubt)), and `init` launches and asks its
-servers through it.
+servers through it. beamlet's VM is a caller of `ns`, through its namespace natives, and of
+`launch`, through its launch native ([beamlet](beamlet.md#natives)).
 It is `no_std` with `alloc`, has no `unsafe`, and sits on the runtime and the wire codecs, adding
 what is more than one typed call. Its calls block, one per thread, or a hub keeps many 9P requests
 outstanding on as few threads as one ([below](#many-requests-at-once)); beamlet's VM owns a hub

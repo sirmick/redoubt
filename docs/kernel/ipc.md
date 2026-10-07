@@ -437,9 +437,10 @@ destruction.
 
 ### R13 (one outcome per call)
 
-<details><summary>Status: built · partly tested: completion races between harts are not attacked by a case · tested (5)</summary>
+<details><summary>Status: built · partly tested: completion races between harts are not attacked by a case · tested (6)</summary>
 
 - bench:ipc-outcomes
+- bench:elixir-oracles
 - mutation:IpcWrongLend
 - mutation:IpcFalseDelivery
 - mutation:IpcSkipOutputCheck
@@ -457,6 +458,10 @@ caller gets `InvalidArgument`, its lend back and `absent`, and the server gets `
 Checking the record, copying, installing or rolling back handles and publishing the outcome are
 one step: the kernel runs with interrupts off and holds the memory manager's guard throughout,
 so no unmap, remap or teardown can fall between them.
+
+The clients keep it above the kernel: the client library's typed call, and a session's generated
+Elixir client, return a reply's handles to the caller and keep none that an error reply, or one
+that does not decode, brought ([wire](../servers/wire.md#generated-clients)).
 
 ### R14 (unforgeable sender)
 

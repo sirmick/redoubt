@@ -605,6 +605,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "redoubt-beamlet-programs"
+version = "0.1.0"
+dependencies = [
+ "redoubt-client",
+ "redoubt-init-programs",
+ "redoubt-rt",
+]
+
+[[package]]
 name = "redoubt-blkd"
 version = "0.1.0"
 dependencies = [
