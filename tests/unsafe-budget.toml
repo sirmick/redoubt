@@ -177,6 +177,13 @@ max_unsafe = 0
 max_undocumented = 0
 
 [[budget]]
+# walfsd forbids unsafe code: walfs and the runtime do all it needs.
+name = "walfsd (the file server; parses one volume's medium)"
+paths = ["servers/walfsd/src"]
+max_unsafe = 0
+max_undocumented = 0
+
+[[budget]]
 # erofsd forbids unsafe code: erofs and the runtime do all it needs.
 name = "erofsd (the read-only file server; parses one volume's medium)"
 paths = ["servers/erofsd/src"]

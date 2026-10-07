@@ -7,7 +7,7 @@ The sources of the signed boot bundle and the disk images; what they produce goe
   manifest. `./mkimage` packs it with the bench's builder into `target/image/redoubt.bundle`, and
   the `init-boot` case boots the same bundle. The builder writes the userland volume's root and
   block count into the manifest it packs, from its own pack of `userland.toml`.
-- `manifest.json`: the boot manifest `init` reads, with eleven servers, including `littlefsd:data` for
+- `manifest.json`: the boot manifest `init` reads, with eleven servers, including `walfsd:data` for
   the disk's `data` volume, the userland disk's `blkd:system`, `verity:system` and `erofsd:system`,
   and `beamlet` running the shell, `Redoubt.Shell`, on the UART console. The userland volume is
   verified: its entry's `verity` names `verity:system`, and the root and block count in this file
@@ -16,8 +16,10 @@ The sources of the signed boot bundle and the disk images; what they produce goe
   shell's budget, twice what its VM holds at its largest peak, does not fit the `system` budget of
   a smaller machine ([budgets](../docs/kernel/budgets.md)).
 - `disk.toml`: the disk image. `./mkimage` packs it into `target/image/disk.img`: a GPT, then the
-  `data` partition as a littlefs volume holding `target/image/stage/`, written through `littlefsd`'s own
-  code, and the `image-disk` case boots a disk packed the same way.
+  `data` partition as a walfs volume holding `target/image/stage/`, written by `libs/walfs` itself
+  ([walfsd](../docs/servers/walfsd.md#the-packer)), and the `image-disk` case boots a disk packed
+  the same way. The image holds no littlefs volume; `littlefsd` stays in the bundle for a flash
+  medium and the cases that ask for one.
 - `userland.toml`: the userland disk, attached read-only. `./mkimage` packs it with the same
   packer into `target/image/userland.img`: each module of the applications it names, compiled by
   the pinned toolchain and stripped, as a plain file under its own name (`Elixir.Enum.beam`,

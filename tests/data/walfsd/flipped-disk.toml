@@ -1,0 +1,10 @@
+# walfsd-flipped-block's disk: a GPT whose one partition is a walfs volume holding `damaged`, a
+# block of `d` and a tail, and `whole`, packed by libs/walfs; then one bit of `damaged`'s first
+# data block is flipped (tools/testbench/src/disk.rs, `flip`).
+size_kib = 4096
+
+[[partition]]
+name = "data"
+fs = "walfs"
+stage = "tests/data/walfsd/flipped"
+damage = { what = "flip", path = "damaged" }

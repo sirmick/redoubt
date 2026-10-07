@@ -1233,7 +1233,11 @@ read-only case also scans its additional client from the merged manifest. `beaml
 rv64 with the boot pack read before its VM starts and its console on the hub; twice it needs its
 18 pages. `consoled`'s row is from the runs once it serves beamlet's console as a multiplexed
 session: its stack peak from rv64 `userland-read-only`, its heap peak from rv32
-`beamlet-footprint`.
+`beamlet-footprint`. `walfsd:data`'s row is from six runs of `walfsd-quota`, three on each width,
+which writes through it, as the image's memory cases do not (their boots peak at 16,040 bytes of
+stack and 9 heap pages); its heap cap is also above what a transaction of the format's 32 blocks
+adds to that case's peak, 32 pages, since no case writes that many at once
+([walfsd](servers/walfsd.md#memory)).
 `erofsd:system`'s row and `verity:system`'s heap, which holds 4 checked data blocks, are from the
 six runs with the userland volume on EROFS. `verity:system`'s stack is from rv64 `userland-boot`
 once it also checks a signed volume's root block, which it does not use there but whose code lies
@@ -1247,7 +1251,7 @@ in its start path.
 | `blkd` | 4,504 | 3 | 17 | 34 |
 | `netd` | 4,280 | 3 | 2 | 4 |
 | `ipd` | 8,040 | 4 | 4 | 8 |
-| `littlefsd:data` | 7,176 | 4 | 9 | 18 |
+| `walfsd:data` | 28,616 | 14 | 15 | 64 |
 | `blkd:system` | 4,504 | 3 | 17 | 34 |
 | `verity:system` | 8,264 | 5 | 50 | 100 |
 | `erofsd:system` | 9,704 | 5 | 12 | 24 |

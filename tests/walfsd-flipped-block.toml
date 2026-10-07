@@ -1,0 +1,38 @@
+description = "One bit flipped in a data block is corrupt where it is read, and nowhere else (servers/walfsd.md, \"What is corrupt\", R49): the case's disk is a walfs volume packed with two files, then one bit flipped in the first data block of one of them; under init a client reads that file over 9P and copies it with the typed call, and gets corrupt each time, walfsd's word from the block's hash slot, while the other file reads back whole and walfsd stays up"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The real init, the servers the manifest names, and walfsd-client, which holds no Reset right, so
+# the case ends at its verdict.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-walfsd", bin = "walfsd" },
+    { package = "redoubt-walfsd-programs", bin = "walfsd-client" },
+]
+timeout_secs = 60
+expect = [
+    '^init: the manifest is checked: 5 servers, bound \d+ pages$',
+    '^init: started walfsd, console [0-9a-f]{16}$',
+    '^init: started client, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] walfsd-client: /damaged is corrupt, read and copied, and /whole reads back$',
+    '^\[con [0-9a-f]{16}\] walfsd-client TEST PASSED$',
+]
+forbid = [
+    'init: refused the boot',
+    '^init: .* (exited|faulted|was killed)',
+    'init: restarted',
+    'init: rebooting',
+    'walfsd: the volume does not mount',
+    'walfsd-client TEST FAILED',
+]
+reporter = "client"
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/walfsd/own.json" }
+servers = [{ name = "client", args = ["flipped", "walfsd:data", "/damaged", "/whole", "read back whole"] }]
+
+[disk]
+recipe = "tests/data/walfsd/flipped-disk.toml"

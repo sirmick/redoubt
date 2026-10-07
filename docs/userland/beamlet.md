@@ -377,7 +377,7 @@ budget, and a connection to the userland disk's `erofsd`, a named handle its arg
 ([several harts](../plan/m2-usable-shell.md#several-harts)), and its waiter threads are the
 runtime's `thread::spawn`.
 - **`bind=PREFIX=HANDLE`** puts a named handle beamlet was handed at a prefix of its namespace
-  (`bind=/home/alice=littlefsd:data`): the `bind/2` a session performs for itself
+  (`bind=/home/alice=walfsd:data`): the `bind/2` a session performs for itself
   ([namespaces](sessions.md#namespaces)), for a VM `init` launches alone, whose namespace holds
   only `/dev/cons`. In the steward's sessions the session's namespace does this. It creates no authority:
   the handle was handed already, and a bind naming a handle it was not handed, or a prefix that is

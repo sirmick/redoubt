@@ -1,15 +1,15 @@
-# The virtio-blk disk image: a partition table plus one littlefs volume served by `littlefsd`.
+# The virtio-blk disk image: a partition table plus one walfs volume served by `walfsd`.
 #
 # `./mkimage` packs it into target/image/disk.img with the bench's packer (`testbench --pack-disk`):
-# a GPT of equal partitions in this order, by `blkd`'s builder, then each partition as a littlefs
-# volume holding its stage's tree, written through `littlefsd`'s own code so that every entry carries
-# its id (servers/littlefsd.md). Partition i is GPT entry i, the manifest's `volumes` partition.
+# a GPT of equal partitions in this order, by `blkd`'s builder, then each partition as a walfs
+# volume holding its stage's tree, written by libs/walfs itself (servers/walfsd.md, "The packer").
+# Partition i is GPT entry i, the manifest's `volumes` partition.
 
 # Whole disk, in KiB (a whole number of 512-byte sectors).
 size_kib = 65536
 
 [[partition]]
 name = "data"
-fs = "littlefs"
+fs = "walfs"
 # Where the partition's contents come from; built artifacts are copied in first.
 stage = "target/image/stage"

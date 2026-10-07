@@ -93,7 +93,7 @@ fn the_image_manifest_passes_and_its_plan_is_what_the_boot_follows() {
     assert!(plan.placements[0].is_empty());
     // No principals: only the bundle key is asked about.
     assert_eq!(plan.keys, vec![("bundle key".into(), BUNDLE_KEY)]);
-    // keyd, consoled and bootfsd: init alone calls them; ipd: netd's badge; littlefsd:data: nobody's
+    // keyd, consoled and bootfsd: init alone calls them; ipd: netd's badge; walfsd:data: nobody's
     // yet, a principal's connection being the steward's to grant; erofsd:system: beamlet's.
     assert_eq!(plan.buckets, vec![(0, 1), (1, 1), (2, 1), (5, 1), (6, 0), (9, 1)]);
     // No handed item names keyd, consoled or bootfsd: init's own badge at each is 1.
@@ -182,7 +182,7 @@ fn the_image_manifest_s_bound() {
     // threads (an IPC page, 4 stack pages and 3 tables each), one launch (stub 4 + 3, one 64-page
     // batch of beamlet's image + 3, stack 18 + 3), the lend (2 + 3), and one handle-table page:
     // 22 handles at the start (3 budgets, the Reset right, 18 devices) and 10 + 6 + 44 + 3 + 1 =
-    // 64 added (the three volume ranges, littlefsd:data's, erofsd:system's at verity:system and
+    // 64 added (the three volume ranges, walfsd:data's, erofsd:system's at verity:system and
     // verity:system's at blkd:system, among the 6 badges) pass page 0's 64.
     let devices = virt_devices();
     let m = machine(&devices, &ENTRIES);
@@ -448,7 +448,7 @@ fn servers_that_do_not_fit_in_system_are_refused() {
     let mut machine = machine(&devices, &ENTRIES);
     let m = image();
     // keyd 256, consoled 1024, bootfsd 640, the two blkds 512 each, verity:system 256, netd 1024,
-    // ipd 4096, littlefsd:data and erofsd:system 1024 each, beamlet 10,880 pages, and a page each for the
+    // ipd 4096, walfsd:data and erofsd:system 1024 each, beamlet 10,880 pages, and a page each for the
     // budgets.
     let pages = 256 + 1024 + 640 + 512 * 2 + 256 + 1024 + 4096 + 1024 * 2 + 10_880 + 11;
     machine.system.pages_limit = machine.system.pages_usage + pages - 1;
@@ -619,9 +619,10 @@ fn second_disk(m: &mut Manifest, device: &str, suffix: &str, labels: Vec<String>
         args: vec![format!("endpoint={blkd}")],
         ..base
     });
-    let base = server(&mut image(), "littlefsd:data").clone();
+    let base = server(&mut image(), "walfsd:data").clone();
     m.servers.push(Server {
         name: littlefsd.clone(),
+        program: "littlefsd".into(),
         labels,
         volume: Some(volume),
         receives: vec![littlefsd.clone()],
@@ -890,7 +891,7 @@ fn confined_refuses_two_label_sets_on_one_disk() {
             handed: vec![],
             devices: vec![],
             args: vec![format!("endpoint={endpoint}")],
-            ..server(&mut image(), "littlefsd:data").clone()
+            ..server(&mut image(), "walfsd:data").clone()
         });
     }
     assert_eq!(sharing(&m), Sharing::Device);
@@ -956,7 +957,7 @@ fn confined_refuses_a_server_instance_serving_two_label_sets() {
     let secret = || vec![String::from("alice-secrets")];
     m.volumes.push(Volume { name: "vault".into(), partition: 0, labels: secret(), disk: None, verity: None });
     server(&mut m, "blkd").devices.clear();
-    let base = server(&mut image(), "littlefsd:data").clone();
+    let base = server(&mut image(), "walfsd:data").clone();
     m.servers.push(Server { labels: secret(), volume: Some("vault".into()), ..base });
     let blkd = m.servers.iter().position(|s| s.program == "blkd").unwrap();
     assert_eq!(
@@ -969,8 +970,8 @@ fn confined_refuses_a_server_instance_serving_two_label_sets() {
 
 /// A shared server's users are the principal domains with its own label set, since only those
 /// may later be granted a connection there: alice working under {alice-secrets} beside unlabelled
-/// shared keyd and consoled, with a labelled blkd, littlefsd and client, boots; the client unlabelled
-/// shares littlefsd's endpoint across two sets and is refused.
+/// shared keyd and consoled, with a labelled blkd, walfsd and client, boots; the client unlabelled
+/// shares walfsd's endpoint across two sets and is refused.
 #[test]
 fn confined_counts_only_a_shared_servers_own_label_set() {
     let mut m = without_volumes();
@@ -983,23 +984,23 @@ fn confined_counts_only_a_shared_servers_own_label_set() {
     let secret = || vec![String::from("alice-secrets")];
     m.volumes.push(Volume { name: "data".into(), partition: 0, labels: secret(), disk: None, verity: None });
     server(&mut m, "blkd").labels = secret();
-    let base = server(&mut image(), "littlefsd:data").clone();
+    let base = server(&mut image(), "walfsd:data").clone();
     m.servers.push(Server { labels: secret(), ..base.clone() });
     m.servers.push(Server {
         name: "client".into(),
         volume: None,
         labels: secret(),
         receives: vec!["client".into()],
-        handed: vec![Handed { endpoint: "littlefsd:data".into(), badge: 7 }],
+        handed: vec![Handed { endpoint: "walfsd:data".into(), badge: 7 }],
         args: vec!["endpoint=client".into(), "buckets=4".into()],
         ..base
     });
     assert!(on_virt(&m).is_ok());
     m.servers.last_mut().unwrap().labels.clear();
-    let littlefsd = m.servers.len() - 2;
+    let walfsd = m.servers.len() - 2;
     assert_eq!(
         on_virt(&m).unwrap_err(),
-        Refusal::Confined { at: format!("servers[{littlefsd}].receives[0]"), sharing: Sharing::Endpoint }
+        Refusal::Confined { at: format!("servers[{walfsd}].receives[0]"), sharing: Sharing::Endpoint }
     );
 }
 
@@ -1130,10 +1131,11 @@ fn verified_volume(m: &mut Manifest, name: &str, partition: i64, labels: Vec<Str
         receives: vec![verifier],
         ..declared
     });
-    let base = server(&mut image(), "littlefsd:data").clone();
+    let base = server(&mut image(), "walfsd:data").clone();
     let littlefsd = format!("littlefsd:{name}");
     m.servers.push(Server {
         name: littlefsd.clone(),
+        program: "littlefsd".into(),
         labels,
         volume: Some(name.into()),
         receives: vec![littlefsd.clone()],
@@ -1327,7 +1329,7 @@ fn a_verifier_costs_init_one_server_and_its_range() {
         disk: None,
         verity: None,
     });
-    plain.servers.push(server(&mut image(), "littlefsd:data").clone());
+    plain.servers.push(server(&mut image(), "walfsd:data").clone());
     let mut verified = without_volumes();
     verified_volume(&mut verified, "data", 0, vec![], None);
     let bound = |m: &Manifest| on_virt(m).unwrap().bound;
@@ -1419,6 +1421,27 @@ fn an_erofsd_entry_is_a_volume_server_as_a_littlefsd_one_is() {
         on(&m, &machine).unwrap_err(),
         Refusal::Confined { at: format!("servers[{verifier}].receives[0]"), sharing: Sharing::Endpoint }
     );
+}
+
+/// A `walfsd` entry is a volume server as a `littlefsd` one is (servers/init.md, "The boot
+/// manifest"): `init` names neither program, so the image's `walfsd:data` gets its range at
+/// `blkd`, its arguments, its place among the budgets and its share of the bound exactly as a
+/// `littlefsd` in its place would.
+#[test]
+fn a_walfsd_entry_is_a_volume_server_as_a_littlefsd_one_is() {
+    use redoubt_init::check::range;
+    let args = |m: &Manifest, s: &Server| redoubt_init::check::args(m, s, &BUNDLE_KEY);
+    let walfs = image();
+    let mut littlefs = image();
+    server(&mut littlefs, "walfsd:data").program = "littlefsd".into();
+    let devices = virt_devices();
+    let machine = machine(&devices, &ENTRIES);
+    let (w, l) = (on(&walfs, &machine).unwrap(), on(&littlefs, &machine).unwrap());
+    assert_eq!((&w.placements, &w.buckets, w.bound), (&l.placements, &l.buckets, l.bound));
+    let data = |m: &Manifest| range(m, named(m, "walfsd:data")).map(|(at, badge)| (at.to_string(), badge));
+    assert_eq!(data(&walfs).as_ref().map(|(at, _)| at.as_str()), Some("blkd"));
+    assert_eq!(data(&walfs), data(&littlefs));
+    assert_eq!(args(&walfs, named(&walfs, "walfsd:data")), ["endpoint=walfsd:data", "buckets=4"]);
 }
 
 /// `boot-profile-unverified` boots the image less its verification

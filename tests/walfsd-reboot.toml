@@ -1,0 +1,53 @@
+description = "Files survive a reboot (servers/walfsd.md, \"Failure and restart\"): under init, a client writes a directory and a file through walfsd and notes their qid paths (inode numbers), then exits at each of its six starts until init reboots the machine; in the same QEMU run, on the same disk, the next boot's walfsd mounts the volume and the client reads both back with the same qid paths"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The real init, the servers the manifest names, and littlefsd-client, which counts its starts on the
+# volume (tests/littlefsd-programs). The reporter is announced again in the second boot, whose client
+# gives the verdict.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-walfsd", bin = "walfsd" },
+    { package = "redoubt-littlefsd-programs", bin = "littlefsd-client" },
+]
+timeout_secs = 90
+expect = [
+    '^init: started walfsd, console [0-9a-f]{16}$',
+    '^init: started client, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] littlefsd-client wrote kept and kept/notes, qid paths \d+ \d+$',
+    '^init: client \(PID [0-9]+\) exited, code 7$',
+    '^init: restarted client, console [0-9a-f]{16}$',
+    '^init: client \(PID [0-9]+\) exited, code 7$',
+    '^init: restarted client, console [0-9a-f]{16}$',
+    '^init: client \(PID [0-9]+\) exited, code 7$',
+    '^init: restarted client, console [0-9a-f]{16}$',
+    '^init: client \(PID [0-9]+\) exited, code 7$',
+    '^init: restarted client, console [0-9a-f]{16}$',
+    '^init: client \(PID [0-9]+\) exited, code 7$',
+    '^init: restarted client, console [0-9a-f]{16}$',
+    '^init: client \(PID [0-9]+\) exited, code 7$',
+    '^init: rebooting: client was restarted 5 times within 60 seconds$',
+    '^loader: Redoubt rv(64|32) loader, boot hart 0$',
+    '^init: started walfsd, console [0-9a-f]{16}$',
+    '^init: started client, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] littlefsd-client read back kept and kept/notes after the reboot, qid paths \d+ \d+$',
+    '^\[con [0-9a-f]{16}\] littlefsd-client TEST PASSED$',
+]
+forbid = [
+    'init: refused the boot',
+    '^init: (keyd|consoled|blkd|walfsd) .*(exited|faulted|was killed)',
+    '^init: restarted (keyd|consoled|blkd|walfsd)\b',
+    'littlefsd-client TEST FAILED',
+]
+reporter = "client"
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/walfsd/boot.json" }
+servers = [{ name = "client", args = ["reboot", "walfsd:data"] }]
+
+[disk]
+size_kib = 4096
+partitions = 1

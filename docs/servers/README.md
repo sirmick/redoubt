@@ -34,9 +34,9 @@ flowchart TD
     I -.-> BF[bootfsd<br/>/boot]
     I -.-> BL[blkd<br/>the disk]
     I -.-> VD[verityd<br/>one per verified volume]
-    I -.-> FS[littlefsd:volume<br/>one per flash volume, and the data volume]
+    I -.-> FS[littlefsd:volume<br/>one per flash volume]
     I -.-> EF[erofsd:volume<br/>one per read-only volume]
-    I -.-> WF[walfsd:volume<br/>planned: one per writable SSD volume]
+    I -.-> WF[walfsd:volume<br/>one per writable SSD volume]
     I -.-> ND[netd<br/>the network card]
     I -.-> IP[ipd:network<br/>TCP/IP]
     I -.-> KD[keyd<br/>keys]
@@ -49,7 +49,7 @@ flowchart TD
 M1 (separation and containment).*
 
 `init` starts the drivers and the servers that need no principal first (`consoled`, `bootfsd`,
-`blkd`, each `verityd`, each `littlefsd` and `erofsd`, `netd`, each `ipd`, `keyd`), then the steward
+`blkd`, each `verityd`, each `littlefsd`, `erofsd` and `walfsd`, `netd`, each `ipd`, `keyd`), then the steward
 and `sshd`.
 It keeps each server's receive right, so a restarted server receives on the same endpoint (Restarts
 and crash blame, below). The servers planned for later milestones join the same graph:
@@ -68,7 +68,7 @@ Status: planned · M1 (separation and containment)
 | --- | --- | --- | --- |
 | TCB | firmware, loader, kernel; `blkd` and `netd` while there is no IOMMU | everything | the whole machine |
 | Trusted system servers | `init`, the steward, `keyd`, `sshd` | crossing principals: logins, keys, approvals, launching | every principal |
-| Shared servers | `consoled`, `bootfsd`, each `littlefsd` and `erofsd`, each `ipd`; later the resolver and `gatewayd` | serving many principals and keeping them apart by badge and label | the principals that server serves |
+| Shared servers | `consoled`, `bootfsd`, each `littlefsd`, `erofsd` and `walfsd`, each `ipd`; later the resolver and `gatewayd` | serving many principals and keeping them apart by badge and label | the principals that server serves |
 | Per-principal code | sessions, agents, native programs | nothing beyond their own capabilities | that principal's own capabilities |
 
 - **The DMA drivers are TCB.** A driver that holds a DMA-flagged device handle can point a bus
@@ -79,7 +79,8 @@ Status: planned · M1 (separation and containment)
   userland: a compromised session VM holds exactly its principal's capabilities, like a native
   program.
 - **A shared server is split by network or medium,** so one parser bug does not reach every
-  principal: one `littlefsd` or `erofsd` per volume, one `ipd` per network or trust domain.
+  principal: one `littlefsd`, `erofsd` or `walfsd` per volume, one `ipd` per network or trust
+  domain.
 - **Server work is paid by the server's weight,** not the caller's; no time is donated. Each
   shared server therefore bounds the work one request can cause and admits by caps
   ([scheduling](../kernel/scheduling.md#residual-risks), [serving](serving.md)).
@@ -228,7 +229,7 @@ Status: planned · M1 (separation and containment)
 | Server | Receives on | Holds | Never holds |
 | --- | --- | --- | --- |
 | `init` | the exit endpoint of every server | `root`, `system` and `users`; every device object and the Reset right; every server's receive right; the bundle's pages | network, user data, keys |
-| steward | its own endpoint | `users`; a connection to each `littlefsd` and `ipd`; a `keyd` grant for the `audit` purpose | any key; a budget of a server |
+| steward | its own endpoint | `users`; a connection to each writable volume's server and each `ipd`; a `keyd` grant for the `audit` purpose | any key; a budget of a server |
 | `keyd` | its own endpoint | the keys the manifest names | a key a person logs in or approves with; the bundle key |
 | `sshd` | its own endpoint | the network through `ipd`; a `keyd` badge for the host key; the steward's endpoint | any login key |
 | `consoled` | its own endpoint | the UART's MMIO and IRQ handles | anything else |
@@ -257,13 +258,14 @@ flowchart LR
     I -. passes seeds .-> KD[keyd]
     FS[littlefsd:volume] -. range badge .-> BL
     EF[erofsd:volume] -. range badge .-> BL
-    WF[walfsd:volume<br/>planned] -. range badge .-> BL
+    WF[walfsd:volume] -. range badge .-> BL
     IP[ipd:network] -. netif connection .-> ND
     ST -. audit grant .-> KD
     SS[sshd] -. host-key badge .-> KD
     SS -. login and sessions .-> ST
     SS -. connections .-> IP
     ST -. connections .-> FS
+    ST -. connections .-> WF
     ST -. scoped grants .-> IP
 ```
 *Figure: the capabilities each server holds. An edge from `init` is a handle it places; any other
@@ -278,9 +280,9 @@ and so stays a co-holder ([devices](../kernel/devices.md#which-process-gets-whic
 Status: built · tested: bench:init-boot, bench:userland-boot
 
 A file server is named for the format it serves, and its endpoints for the volumes: `erofsd`
-serves EROFS and `erofsd:system` is the system volume; `littlefsd` serves littlefs and
-`littlefsd:data` is the data volume; `walfsd` serves walfs. The name says what parser stands
-between a client and the medium, which is what
+serves EROFS and `erofsd:system` is the system volume; `walfsd` serves walfs and `walfsd:data`
+is the data volume; `littlefsd` serves littlefs. The name says what parser stands between a
+client and the medium, which is what
 [R47 (one volume per instance)](littlefsd.md#r47-one-volume-per-instance) bounds. Servers that
 serve no format keep their role's name (`blkd`, `bootfsd`, `verityd`).
 
@@ -338,7 +340,7 @@ inside `gatewayd` until the web stack needs `tlsd` beyond M5.
   server's share of the CPU from its other callers, never more
   ([scheduling](../kernel/scheduling.md#residual-risks)).
 - **The DMA drivers are TCB** while there is no IOMMU ([devices](../kernel/devices.md#residual-risks)).
-- **Volumes are kept apart by placement.** The image's `init` runs `littlefsd:data` and `erofsd:system`,
+- **Volumes are kept apart by placement.** The image's `init` runs `walfsd:data` and `erofsd:system`,
   one instance per volume, so one volume's data is out of another's instance only because `init`
   places each volume once ([R47 (one volume per instance)](littlefsd.md#r47-one-volume-per-instance)).
 

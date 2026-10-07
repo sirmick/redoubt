@@ -11,7 +11,7 @@ programs = [
     { package = "redoubt-verityd", bin = "verityd" },
     { package = "redoubt-netd", bin = "netd" },
     { package = "redoubt-ipd", bin = "ipd" },
-    { package = "redoubt-littlefsd", bin = "littlefsd" },
+    { package = "redoubt-walfsd", bin = "walfsd" },
     { package = "redoubt-erofsd", bin = "erofsd" },
     { package = "beamlet-redoubt", bin = "beamlet", workspace = "userland/otp" },
     { package = "redoubt-littlefsd-programs", bin = "littlefsd-client" },

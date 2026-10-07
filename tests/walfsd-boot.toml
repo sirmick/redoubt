@@ -1,0 +1,31 @@
+description = "walfsd under init (servers/walfsd.md, \"Serving\"): init starts blkd and a walfsd for the manifest's one volume, minting its range badge at blkd; walfsd formats the blank partition as walfs; a client handed a root badge at walfsd (littlefsd-client, a client of either writable server) writes, reads, renames and removes a file and a directory through 9P and walfsd's typed rename"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The real init, the servers the manifest names, and littlefsd-client, which holds no Reset right,
+# so the case ends at its verdict.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-walfsd", bin = "walfsd" },
+    { package = "redoubt-littlefsd-programs", bin = "littlefsd-client" },
+]
+timeout_secs = 60
+expect = [
+    '^init: the manifest is checked: 5 servers, bound \d+ pages$',
+    '^init: started walfsd, console [0-9a-f]{16}$',
+    '^init: started client, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] littlefsd-client wrote, read, renamed and removed$',
+    '^\[con [0-9a-f]{16}\] littlefsd-client TEST PASSED$',
+]
+forbid = ['init: refused the boot', '^init: .* (exited|faulted|was killed)', 'init: restarted', 'init: rebooting']
+reporter = "client"
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/walfsd/boot.json" }
+
+[disk]
+size_kib = 4096
+partitions = 1

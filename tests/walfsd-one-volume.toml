@@ -1,0 +1,33 @@
+description = "One volume per walfsd instance (servers/walfsd.md, R47): init starts blkd and a walfsd for each of two volumes on one disk, minting each its own range; each walfsd, built with its test-only feature one-volume-probe, tries before serving to reach past its endpoint, its range and its console: the kernel finds every other handle index empty and refuses a badge minted from its range, and blkd refuses the sector just past its range as out_of_range; a client handed a root badge at each writes a file of the same name through both and reads each back apart"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The real init, the servers the manifest names, walfsd built with its test-only feature
+# one-volume-probe (both walfsds run it), and littlefsd-client.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-walfsd", bin = "walfsd", features = ["one-volume-probe"] },
+    { package = "redoubt-littlefsd-programs", bin = "littlefsd-client" },
+]
+timeout_secs = 60
+expect = [
+    '^init: the manifest is checked: 6 servers, bound \d+ pages$',
+    '^init: started walfsd:a, console [0-9a-f]{16}$',
+    # Each walfsd's line, in whichever order the two print them.
+    '^\[con [0-9a-f]{16}\] walfsd:[ab] reaches only its endpoint, its range and its console: its range mints nothing, and sector [0-9]+ is out_of_range$',
+    '^\[con [0-9a-f]{16}\] walfsd:[ab] reaches only its endpoint, its range and its console: its range mints nothing, and sector [0-9]+ is out_of_range$',
+    '^\[con [0-9a-f]{16}\] littlefsd-client read walfsd:a.s which and walfsd:b.s apart$',
+    '^\[con [0-9a-f]{16}\] littlefsd-client TEST PASSED$',
+]
+forbid = ['init: refused the boot', '^init: .* (exited|faulted|was killed)', 'init: restarted', 'init: rebooting', 'FAILED R47', 'littlefsd-client TEST FAILED']
+reporter = "client"
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/walfsd/one-volume.json" }
+
+[disk]
+size_kib = 4096
+partitions = 2

@@ -54,19 +54,19 @@
       "args": ["endpoint=erofsd:system", "buckets=4"]
     },
     {
-      "name": "littlefsd:data",
-      "program": "littlefsd",
+      "name": "walfsd:data",
+      "program": "walfsd",
       "budget": {"pages": "1024", "processes": 1, "weight": 100},
       "volume": "data",
-      "receives": ["littlefsd:data"],
-      "args": ["endpoint=littlefsd:data", "buckets=4"]
+      "receives": ["walfsd:data"],
+      "args": ["endpoint=walfsd:data", "buckets=4"]
     },
     {
       "name": "beamlet",
       "program": "beamlet",
       "budget": {"pages": "4096", "processes": 1, "weight": 100},
-      "handed": [{"endpoint": "erofsd:system", "badge": "7"}, {"endpoint": "littlefsd:data", "badge": "8"}],
-      "args": ["budget_pages=4096", "endpoint=erofsd:system", "report_io", "bind=/home/alice=littlefsd:data", "beamlet_files"]
+      "handed": [{"endpoint": "erofsd:system", "badge": "7"}, {"endpoint": "walfsd:data", "badge": "8"}],
+      "args": ["budget_pages=4096", "endpoint=erofsd:system", "report_io", "bind=/home/alice=walfsd:data", "beamlet_files"]
     }
   ]
 }
