@@ -31,7 +31,11 @@ mod files;
 #[cfg(feature = "fake")]
 pub mod fixture;
 pub mod io;
+mod jobs;
 pub mod pack;
+mod pool;
+mod serve;
+pub mod system;
 pub mod userland;
 
 use alloc::boxed::Box;
@@ -42,7 +46,7 @@ use alloc::vec::Vec;
 
 use beamlet_vm::bif::NativeSpec;
 use beamlet_vm::memory::HeapPages;
-use beamlet_vm::platform::{ConsoleInput, Files, Lookup, Platform, PlatformError};
+use beamlet_vm::platform::{ConsoleInput, Files, Lookup, Platform, PlatformError, System};
 use beamlet_vm::vm::{Config, Limits};
 use beamlet_vm::{Class, Vm};
 pub use files::posix;
@@ -92,6 +96,8 @@ pub struct Redoubt {
     cons: ConsoleIo,
     /// The namespace's files, open files and file operations.
     files: files::Table,
+    /// The system calls' handles and events ([`system`]).
+    sys: system::Sys,
     /// Say what the I/O cost when the VM ends ([`REPORT_IO`]).
     report_io: bool,
     modules: Box<dyn Modules>,
@@ -238,6 +244,9 @@ impl Redoubt {
         }
         let console = Arc::new(Console::open(&ns, &mut lend)?);
         let mut io = Io::new()?;
+        // Before any waiter: the first wake-up on the VM's endpoint is the first call thread's.
+        let (pool, labels) = pool::Pool::start(io.wake()).map_err(|_| Error::Unexpected)?;
+        let sys = system::Sys::new(startup, &ns, labels, pool);
         let conn = io.connect(console.file().connection())?;
         let cons = ConsoleIo {
             conn,
@@ -258,6 +267,7 @@ impl Redoubt {
             io,
             cons,
             files: files::Table::new(ns),
+            sys,
             report_io: startup.args().any(|arg| arg == REPORT_IO),
             modules,
             #[cfg(feature = "boot-stats")]
@@ -332,6 +342,15 @@ impl Redoubt {
             // Anything else is no one's: dropped, with its buffer.
             self.files.take(&mut self.io, done);
         }
+        while let Some(delivery) = self.io.other() {
+            // A wake-up of no thread of the platform's: what it brought is closed.
+            if let Some(other) = self.sys.deliver(self.io.wake(), delivery) {
+                for handle in other.handles.as_slice().iter().flatten() {
+                    let _ = redoubt_rt::handle::close(*handle);
+                }
+            }
+        }
+        self.sys.collect();
     }
 }
 
@@ -397,7 +416,9 @@ impl Platform for Redoubt {
         let timeout = match deadline {
             Some(deadline) => deadline.saturating_sub(self.monotonic_us()),
             // Nothing will arrive, so nothing would wake the VM: return, and it gives up.
-            None if (!self.cons.started || self.cons.ended) && !self.files.busy() => return,
+            None if (!self.cons.started || self.cons.ended) && !self.files.busy() && !self.sys.busy() => {
+                return;
+            }
             None => FOREVER,
         };
         self.io.wait(timeout);
@@ -442,6 +463,9 @@ impl Platform for Redoubt {
 
     /// The namespace's files over 9P ([`files`]).
     fn files(&mut self) -> Option<&mut dyn Files> { Some(self) }
+
+    /// The system's calls ([`system`]).
+    fn system(&mut self) -> Option<&mut dyn System> { Some(self) }
 }
 
 /// The argument that binds a named handle the VM was given at a prefix of its namespace,
