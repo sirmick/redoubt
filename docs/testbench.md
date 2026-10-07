@@ -327,7 +327,8 @@ brings it under ten minutes.
 
 A case with `whole_run = false` is left out of a run with no filter and out of one whose filter
 is only part of its name; it runs when the filter is its whole name, and `--list` marks it "by
-name only". It has one reason: a measurement too long to repeat at every train.
+name only"; `jobs.mk`'s `cases-*` and `quiet-*` leave it out too, and its own target runs it. It has
+one reason: a measurement too long to repeat at every train.
 
 The kinds, and the fields each takes besides `description`, `arch` and `whole_run`:
 

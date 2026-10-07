@@ -20,6 +20,7 @@
 #   docs                       cargo testbench docs                    (2 cores)
 #   cases-rv64   cases-rv32    every case of that width but the quiet ones
 #   quiet-rv64   quiet-rv32    the host-clock cases of that width (run on the quiet core set)
+#                              (neither takes a case with `whole_run = false`: by its own target only)
 #   all-rv64     all-rv32      cases + quiet
 #   list / list-classes        the case names; every class's members
 #
@@ -50,6 +51,8 @@ bounded := $(filter-out $(quiet) $(net) $(fanned),$(sort $(basename $(notdir $(s
 boot := $(filter-out $(quiet) $(net) $(fanned) $(bounded),$(cases))
 # cases with no target: one run, under rv64
 hostonly := $(sort $(basename $(notdir $(shell grep -LE '^arch *=' tests/*.toml))))
+# cases out of the whole run: only by their own target
+byname := $(sort $(basename $(notdir $(shell grep -lE '^whole_run *= *false' tests/*.toml))))
 logs := target/jobs
 prebuilt := target/prebuilt
 # cores for a boot case: its largest smp value (default 1)
@@ -62,7 +65,7 @@ list:
 	@printf '%s\n' $(cases)
 
 list-classes:
-	@printf 'quiet: %s\n' "$(quiet)"; printf 'net: %s\n' "$(net)"; printf 'fanned: %s\n' "$(fanned)"; printf 'bounded: %s\n' "$(bounded)"; printf 'boot: %s cases\n' "$(words $(boot))"; printf 'rv64 only: %s cases\n' "$(words $(hostonly))"
+	@printf 'quiet: %s\n' "$(quiet)"; printf 'net: %s\n' "$(net)"; printf 'fanned: %s\n' "$(fanned)"; printf 'bounded: %s\n' "$(bounded)"; printf 'boot: %s cases\n' "$(words $(boot))"; printf 'rv64 only: %s cases\n' "$(words $(hostonly))"; printf 'by name only: %s\n' "$(byname)"
 
 docs:
 	@mkdir -p $(logs); $(q) run --cores 2 --name docs -- cargo testbench docs > $(logs)/docs.log 2>&1; rc=$$?; tail -3 $(logs)/docs.log; echo "docs rc=$$rc"; exit $$rc
@@ -99,9 +102,9 @@ $(addprefix rv64/,$(bounded)) $(addprefix rv32/,$(filter-out $(hostonly),$(bound
 $(addprefix rv32/,$(hostonly)): %:
 	@echo "$@: no target; rv64/$(@F) runs it"
 
-cases-rv64: $(addprefix rv64/,$(filter-out $(quiet),$(cases)))
-cases-rv32: $(addprefix rv32/,$(filter-out $(quiet),$(cases)))
-quiet-rv64: $(addprefix rv64/,$(quiet))
-quiet-rv32: $(addprefix rv32/,$(quiet))
+cases-rv64: $(addprefix rv64/,$(filter-out $(quiet) $(byname),$(cases)))
+cases-rv32: $(addprefix rv32/,$(filter-out $(quiet) $(byname),$(cases)))
+quiet-rv64: $(addprefix rv64/,$(filter-out $(byname),$(quiet)))
+quiet-rv32: $(addprefix rv32/,$(filter-out $(byname),$(quiet)))
 all-rv64: cases-rv64 quiet-rv64
 all-rv32: cases-rv32 quiet-rv32
