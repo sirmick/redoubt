@@ -1,0 +1,33 @@
+[package]
+name = "walfs-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Host-only, and outside the workspace (see the root Cargo.toml `exclude`).
+# Run from libs/walfs (nightly comes from rust-toolchain.toml):
+#   cargo fuzz run -s none image
+#   cargo fuzz run -s none mutate
+[workspace]
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+sha2 = { version = "0.11", default-features = false }
+walfs = { path = ".." }
+
+[[bin]]
+name = "image"
+path = "fuzz_targets/image.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mutate"
+path = "fuzz_targets/mutate.rs"
+test = false
+doc = false
+bench = false

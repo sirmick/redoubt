@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 230
+revision = 233
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -880,8 +880,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "steward"
   needs = ["STEWARD1", "FSD3", "BEAM2", "SSH1", "INIT3", "MEM2"]
   body = "Brief: .wash/local/STEWARD2-implementer.md (architect-15). Tier A, size L. docs/servers/steward.md#principals, #fixed-sub-budgets-per-label-set, #authentication-and-sessions (the console is one principal's session: owner's decision on QA steward-console-principal), #the-stewards-protocol; docs/userland/sessions.md#logging-in, #a-session-is-a-vm-in-a-budget, #vault-sessions, #namespaces; docs/servers/sshd.md#sessions-over-ssh; docs/servers/init.md#the-boot-manifest."
-  state = "active"
-  revision = 112
+  state = "reported"
+  revision = 231
   overrides = ["2026-10-06: started by Orchestrator before MEM2 (active): owner's go (2026-10-06): the steward server starts now; MEM2 merges within hours and STEWARD2 rebases onto it (heap_pages for the sub-budgets' servers is the one dependency)", "2026-10-06: started by Orchestrator before MEM2 (active): STEWARD2 runs ahead of MEM2's merge on the owner's go; it rebases onto MEM2's merge when told"]
 
 [[node]]
@@ -1057,8 +1057,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["STEWARD2"]
   body = "Owner (2026-10-06): \"a crash should restart it\": a dead steward's restart must be a logout, not a reboot. Brief: .wash/local/K23-implementer.md (architect-16). Tier A, size M. A kernel call budget_reap(handle) -> remaining destroys one child subtree of the budget as R10 does and keeps the budget (limits, class, labels, account, deadline), returning the children left, so each kernel entry is one destruction within R10's bound; authority is the handle, as budget_destroy's; a child handle cannot reap its parent; the model gets reap_budget and three mutations. init, on the steward's exit: settles the dead steward's carve (sessions' process objects and notices go with it), reaps users in a loop, restarts the steward, which finds users empty and starts the console session again; its users-not-empty check stays as the guard. steward-restart's verdict becomes: emptied, restarted, prompt back, no reboot. Pages: budgets.md (the call, R10's paragraph, the lost-budget residual), init.md, steward.md, abi.md, SECURITY.md; docs/todo/empty-a-budget.md deleted."
-  state = "todo"
-  revision = 194
+  state = "active"
+  revision = 232
+  overrides = ["2026-10-07: started by Orchestrator before STEWARD2 (reported): STEWARD2 is rebasing onto main and lands within hours; K23's kernel call, model rule, init's reap loop and pages need only main, and the steward-restart case's new verdict is written against wp-STEWARD2 and rebased at its merge (the brief names the split)"]
 
 [[node]]
   id = "WFS1"
@@ -1067,8 +1068,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["EROFS1"]
   body = "Owner (2026-10-06): the SSD's writable volumes move off littlefs ('not a NAND flash one') to walfs, an xv6-style logged file system of Redoubt's own with per-block hashes (owner's decision 4e1539fe: the logged format; littlefs STAYS in the image for a flash medium; WFS1 and WFS2 both in M1). Design note .wash/local/WFS1-design.md (architect-16). Tier A, size M: the format's specification page; libs/walfs (no_std, no unsafe, deps: libs/sha256): superblock, write-ahead log of whole 4 KiB blocks with one commit block, inodes, bitmap, data, a hash region with a SHA-256 per block checked on read (corrupt, never a crash); whole-transaction atomicity (R50 exact); a model oracle with random operations, a power-loss fuzzer cutting the device at every write, image fuzzing; the host packer writes a volume. Not here: the server (WFS2), the volumes' move."
-  state = "reported"
-  revision = 225
+  state = "done"
+  revision = 233
 
 [[node]]
   id = "WFS2"

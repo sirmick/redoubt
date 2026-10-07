@@ -1,0 +1,4 @@
+description = "walfs on the host: its records against the page's tables, the model with handles held open and volumes run full, power cut at every write and inside recovery, and hostile volumes that must read as corrupt, never crash"
+kind = "host-tests"
+# The fuzz targets need cargo-fuzz (libs/walfs/fuzz) and are not a host-tests package (walfsd.md).
+packages = ["walfs"]

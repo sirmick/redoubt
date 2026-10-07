@@ -8,7 +8,8 @@ shell as objects) is one. Its clients see the same 9P face every file server sho
 ([littlefsd](littlefsd.md)); what changes is underneath: a file is one sequential run of 4 KiB blocks,
 found through one inode and one sorted directory, so a read of an object touches each of its
 blocks once, and a verifier's tree over the volume is read in order. It is named for the format
-it serves ([naming](README.md#naming)); writable volumes stay littlefs ([littlefsd](littlefsd.md)).
+it serves ([naming](README.md#naming)); a writable volume on flash, and the data volume, are
+littlefs ([littlefsd](littlefsd.md)); the SSD's writable volumes are walfs ([walfsd](walfsd.md)).
 
 ## Interface
 

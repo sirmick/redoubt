@@ -1,0 +1,11 @@
+[package]
+name = "walfs"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "walfs, Redoubt's write-ahead-log file system with a SHA-256 per block, in pure Rust, no_std + alloc"
+
+# SHA-256 and nothing else: this crate parses an untrusted medium (TENETS.md 5), and the hash is
+# what checks every block it reads.
+[dependencies]
+sha2 = { version = "0.11", default-features = false }

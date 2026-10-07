@@ -23,6 +23,7 @@ members = [
   "libs/erofs",
   "libs/littlefs",
   "libs/verity",
+  "libs/walfs",
   "libs/wire",
   "libs/wire/gen",
   "servers/keyd",
@@ -65,6 +66,8 @@ exclude = [
   # workspace build and are never linked into anything that runs on the machine).
   "libs/littlefs/diff",
   "libs/littlefs/fuzz",
+  # Host-only walfs fuzz targets (see libs/walfs/fuzz/Cargo.toml).
+  "libs/walfs/fuzz",
   # Host-only fuzz targets for redoubt-rt (see libs/littlefs/fuzz/Cargo.toml).
   "libs/rt/fuzz",
   # Host-only fuzz targets for blkd (see servers/blkd/fuzz/Cargo.toml).

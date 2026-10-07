@@ -34,6 +34,7 @@
   - [bootfsd](servers/bootfsd.md)
   - [littlefsd](servers/littlefsd.md)
   - [erofsd](servers/erofsd.md)
+  - [walfsd](servers/walfsd.md)
   - [blkd](servers/blkd.md)
   - [verityd](servers/verityd.md)
   - [netd](servers/netd.md)

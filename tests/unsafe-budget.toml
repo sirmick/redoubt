@@ -251,6 +251,13 @@ paths = ["libs/erofs/src"]
 max_unsafe = 0
 max_undocumented = 0
 
+[[budget]]
+# walfs, the SSD's writable volumes' format. `#![forbid(unsafe_code)]`; the budget says so where the rest is counted.
+name = "walfs"
+paths = ["libs/walfs/src"]
+max_unsafe = 0
+max_undocumented = 0
+
 # Members built for the target whose sources no budget counts. Every other `no_std` member's
 # sources must all be in a budget above, or the case fails.
 [[uncounted]]

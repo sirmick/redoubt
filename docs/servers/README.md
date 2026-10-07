@@ -34,8 +34,9 @@ flowchart TD
     I -.-> BF[bootfsd<br/>/boot]
     I -.-> BL[blkd<br/>the disk]
     I -.-> VD[verityd<br/>one per verified volume]
-    I -.-> FS[littlefsd:volume<br/>one per writable volume]
+    I -.-> FS[littlefsd:volume<br/>one per flash volume, and the data volume]
     I -.-> EF[erofsd:volume<br/>one per read-only volume]
+    I -.-> WF[walfsd:volume<br/>planned: one per writable SSD volume]
     I -.-> ND[netd<br/>the network card]
     I -.-> IP[ipd:network<br/>TCP/IP]
     I -.-> KD[keyd<br/>keys]
@@ -236,6 +237,7 @@ Status: planned · M1 (separation and containment)
 | `verityd` | its own endpoint | a `blkd` range for its verified volume | a device; a write to the range |
 | `littlefsd:volume` | its own endpoint | a `blkd` range for its volume, or a [`verityd`](verityd.md) range for a verified one | another volume |
 | [`erofsd:volume`](erofsd.md) | its own endpoint | a `blkd` range for its read-only volume, or a [`verityd`](verityd.md) range for a verified one | another volume; a write to the range |
+| [`walfsd:volume`](walfsd.md) | its own endpoint | a `blkd` range for its writable volume on the SSD | another volume |
 | `netd` | its own endpoint | the network card's MMIO (DMA) and IRQ handles | anything else |
 | `ipd:network` | its own endpoint | a `netd` connection | a budget; a labelled caller's request |
 
@@ -255,6 +257,7 @@ flowchart LR
     I -. passes seeds .-> KD[keyd]
     FS[littlefsd:volume] -. range badge .-> BL
     EF[erofsd:volume] -. range badge .-> BL
+    WF[walfsd:volume<br/>planned] -. range badge .-> BL
     IP[ipd:network] -. netif connection .-> ND
     ST -. audit grant .-> KD
     SS[sshd] -. host-key badge .-> KD
@@ -276,9 +279,10 @@ Status: built · tested: bench:init-boot, bench:userland-boot
 
 A file server is named for the format it serves, and its endpoints for the volumes: `erofsd`
 serves EROFS and `erofsd:system` is the system volume; `littlefsd` serves littlefs and
-`littlefsd:data` is the data volume. The name says what parser stands between a client and
-the medium, which is what [R47 (one volume per instance)](littlefsd.md#r47-one-volume-per-instance)
-bounds. Servers that serve no format keep their role's name (`blkd`, `bootfsd`, `verityd`).
+`littlefsd:data` is the data volume; `walfsd` serves walfs. The name says what parser stands
+between a client and the medium, which is what
+[R47 (one volume per instance)](littlefsd.md#r47-one-volume-per-instance) bounds. Servers that
+serve no format keep their role's name (`blkd`, `bootfsd`, `verityd`).
 
 ## The network path
 
