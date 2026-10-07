@@ -65,9 +65,9 @@
       "receives": ["erofsd:system"],
       "args": ["endpoint=erofsd:system", "buckets=4"] },
     { "name": "beamlet", "program": "beamlet",
-      "stack_pages": "18", "heap_pages": "10861",
-      "budget": { "pages": "10880", "processes": 1, "weight": 100 },
+      "stack_pages": "18", "heap_pages": "10989",
+      "budget": { "pages": "11008", "processes": 1, "weight": 100 },
       "handed": [ { "endpoint": "erofsd:system", "badge": "7" } ],
-      "args": ["budget_pages=10880", "endpoint=erofsd:system", "Elixir.Redoubt.Shell"] }
+      "args": ["budget_pages=11008", "endpoint=erofsd:system", "Elixir.Redoubt.Shell"] }
   ]
 }
