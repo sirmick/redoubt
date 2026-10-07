@@ -443,13 +443,13 @@ checks that receiving notices refunds the creator's pages exactly.
 With k groups of R2 blocked on an endpoint, and the receiving process holding fewer than
 `MAX_OPEN_CALLS` open calls, each group's oldest message is taken within k receives.
 
-**Kept in** `next_sender` (`kernel/src/message.rs`): the oldest message of the group whose turn
-has been due longest, ties to the lower group. Each queued message carries its group's turn
-(`W_DUE`): its arrival, then, at each take of its group, a fresh value of the kernel's one order
-of arrivals and takes (`next_seq`), which `deliver` writes to the group's waiting messages. A
-waiting group keeps its turn until it is taken, a taken group goes behind every group already
-waiting, and a group that arrives later is due later, so at most k−1 groups go first. A refused
-message (R4) takes its turn too, so a group that cannot be paid for does not stall the others.
+**Kept in** `pick` (`kernel/src/message.rs`) and `redoubt-ipclist`'s groups: each endpoint keeps
+its waiting groups in the order their turns fall due, a group's turn being its oldest queued
+message's arrival or its last take, whichever came later, both values of the kernel's one order of
+arrivals and takes (`next_seq`). A take (`served`) moves its group behind every group already
+waiting, in one write, and a group that arrives later is due later, so at most k−1 groups go
+first. A refused message (R4) takes its turn too, so a group that cannot be paid for does not
+stall the others.
 
 **Model check:** `Ghost::took`: while one group's oldest message waits, no other group is taken
 twice. The `flood` family queues up to 10,000 senders from many groups, some servers hoarding
@@ -567,12 +567,13 @@ written takes nothing, so the notice stays for the holder's next good `receive`
 sets the call's notice flag in the same step that clears its waiting flag; `pump` delivers the
 notice to the holding thread before any exit notice or message and clears the flag; `reply` to a
 call whose caller no longer waits frees the lend and reports `discarded`, and since the call
-leaves the thread's open calls there, no notice is left to deliver; `budgets_dying` clears the
-notices owed on every endpoint a destruction ends, whose `Dead` is the holder's report (and
-`process::endpoints_dying` the exit notices owed there), and `reply` checks,
-in a checked build, that none is owed on a destroyed endpoint. Each step runs to its end
-with interrupts off, holding the memory manager, so a reply and an abandonment cannot both
-win.
+leaves the thread's open calls there, no notice is left to deliver; `endpoint_dying` clears the
+notices owed on every endpoint a destruction ends, those its own failed callers left included,
+whose `Dead` is the holder's report (and `process::endpoint_dying` the exit notices owed there),
+and `reply` checks, in a checked build, that none is owed on a destroyed endpoint; and since
+nothing is delivered while a budget is dying, no notice reaches a thread the destruction is
+about to end. Each step runs to its end with interrupts off, holding the memory manager, so a
+reply and an abandonment cannot both win.
 
 **Model check:** `Checker::i15_abandoned`: a thread waiting in `receive` on the call's endpoint
 has been told of every abandoned call it holds; `Checker::flows`: a notice goes only to the

@@ -431,9 +431,9 @@ gets `Dead` and its lend back intact; the lend of an abandoned call is freed. Se
 queued on the endpoint keep waiting: the endpoint outlives the server, and a restarted server
 receives them ([init](../servers/init.md#restarts-and-reboots)). A thread of a
 [doomed](budgets.md#r10-destruction) process (one the destruction will kill: its budget is dying,
-or its creator's is) takes nothing from the endpoint: no message, no exit notice, no
-abandoned-call notice. What it would have taken stays for the next receiver outside the
-destruction.
+or its creator's is) is offered nothing (no message, exit notice or abandoned-call notice):
+nothing is delivered while the destruction runs, and the deliveries at its end find it gone.
+What it would have taken stays for the next receiver outside the destruction.
 
 ### R13 (one outcome per call)
 

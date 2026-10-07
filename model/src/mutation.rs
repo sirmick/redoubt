@@ -143,6 +143,9 @@ pub enum Mutation {
     R10ReapKeepsCarve,
     /// `budget_reap` spares the reaped child's own children.
     R10ReapSkipsGrandchildren,
+    /// A destruction delivers as it kills: what each kill makes deliverable is delivered at once,
+    /// so a receiver the destruction has yet to end takes what was owed to a survivor.
+    R10DeliveredMidDestruction,
     // R11. Memory.
     /// Reused pages are not zeroed.
     R11NoZeroing,
@@ -378,7 +381,7 @@ pub enum Mutation {
 }
 
 impl Mutation {
-    pub const ALL: [Mutation; 153] = {
+    pub const ALL: [Mutation; 154] = {
         use Mutation::*;
         [
             R1SkipLabelCheck,
@@ -436,6 +439,7 @@ impl Mutation {
             R10ReapDestroysParent,
             R10ReapKeepsCarve,
             R10ReapSkipsGrandchildren,
+            R10DeliveredMidDestruction,
             R11NoZeroing,
             R11SetFlagsAllowsWx,
             R11SetFlagsAllowsWriteOnly,
@@ -594,6 +598,7 @@ impl Mutation {
             | R10ReapDestroysParent
             | R10ReapKeepsCarve
             | R10ReapSkipsGrandchildren
+            | R10DeliveredMidDestruction
             | BudgetDeadlineIgnored => "R10",
             R11NoZeroing
             | R11SetFlagsAllowsWx

@@ -825,7 +825,7 @@ Status: built · tested: bench:sched-carve-inflation, bench:legacy-gone, host:re
 
 ### R12 (scheduling)
 
-<details><summary>Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search, `map_fixed`'s range, `process_create` and, after RAM fills, a one-page `map_anon`, `budget_create` and a rolled-back `process_create` (with a recorded negative run, `alloc-first-fit`); and at full occupancy, every PID in use with every thread, for a delivery, a timer expiry ending 250 waits at once and the reconcile that wakes their 250 budgets (7.6 ms on rv64, 8.7 ms on rv32) (`bench:worst-walk`), where a destruction is measured over its bound ([residual risks](#residual-risks)) · tested (45)</summary>
+<details><summary>Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search, `map_fixed`'s range, `process_create` and, after RAM fills, a one-page `map_anon`, `budget_create` and a rolled-back `process_create` (with a recorded negative run, `alloc-first-fit`); and at full occupancy, every PID in use with every thread, for a delivery, a timer expiry ending 250 waits at once and the reconcile that wakes their 250 budgets (7.6 ms on rv64, 8.7 ms on rv32) and a destruction (at most 17.1 ms on rv64, 18.2 ms on rv32) (`bench:worst-walk`) · tested (45)</summary>
 
 - bench:sched-share
 - bench:sched-sleep-gaming
@@ -1083,10 +1083,6 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   work after a pick took more than a 1 ms slice. While the slice started at the pick, the picked
   thread was preempted at its first instruction, every time, and the case never reached its
   destruction. Now the round grows by that work until the reconcile is held to its loop bounds.
-- **A destruction walks every process.** At full occupancy (510 processes) a destruction takes
-  53.5 ms on rv64 and 58.3 ms on rv32, over R10's 30, and breaks R12's "never depends on what
-  other processes hold": three of its steps walk every process object
-  ([destruction walks every process](../todo/destruction-walks-every-process.md)).
 - **A destroyed lineage's debt is carried onto its siblings as the parent's lead.** Debt lifted onto
   a shared parent is normalized to the parent's weight, and a sibling created under it enters at the
   parent's pass; the oracle recomputes every lift. A fresh lift delays the sibling by the child's

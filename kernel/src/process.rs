@@ -222,13 +222,8 @@ impl MemoryManager {
         }
     }
 
-    /// The lowest process-object frame for which `f` holds: the objects that exist, through the
-    /// PID index, never a scan of the object frames (R12).
-    fn find_process(&self, f: impl Fn(&MemoryManager, u32) -> bool) -> Option<u32> {
-        self.process_frames().filter(|frame| f(self, *frame)).min()
-    }
-
-    /// Every process object's frame, from the PID index.
+    /// Every process object's frame, from the PID index: the checked build's audits.
+    #[cfg(debug_assertions)]
     pub fn process_frames(&self) -> impl Iterator<Item = u32> + '_ {
         self.objects.process_pids.iter().filter_map(move |i| self.objects.processes[i])
     }
@@ -256,12 +251,13 @@ impl MemoryManager {
         }
     }
 
-    /// R10 step 8, after the dying subtree's carve went back to `parent`: every PID a process
-    /// object still holds and counts in a dying budget counts in `parent` instead. Those PIDs were
-    /// part of the subtree's usage, at most its top's limit, which the parent just got back whole,
-    /// so the count cannot fail (I5).
-    pub fn migrate_held_pids(&mut self, parent: Option<BudgetFrame>) {
-        let Some(parent) = parent else {
+    /// R10 step 8, after the carve of the dying subtree `top` heads went back to its parent: every
+    /// PID a process object still holds and counts in a dying budget counts in the parent instead.
+    /// Those PIDs were part of the subtree's usage, at most its top's limit, which the parent just
+    /// got back whole, so the count cannot fail (I5). Each dying budget's chain of the objects it
+    /// counts moves onto the parent's, never a read of an object outside the subtree.
+    pub fn migrate_held_pids(&mut self, top: BudgetFrame) {
+        let Some(parent) = self.budget(top).parent else {
             // No parent: the destroyed top was `root`, so the whole tree is gone, and every held
             // PID's count goes with it.
             #[cfg(debug_assertions)]
@@ -269,16 +265,16 @@ impl MemoryManager {
             return;
         };
         let to = BudgetRef { frame: parent, id: self.budget_id(parent) };
-        // The set is read once: the walk changes the objects, never which exist.
-        for i in self.objects.process_pids.iter() {
-            let Some(frame) = self.objects.processes[i] else { continue };
-            let mut p = self.process(frame);
-            if !self.budget(p.counted_in.frame).dying {
-                continue;
+        let mut cur = Some(top);
+        while let Some(b) = cur {
+            while let Some(frame) = crate::message::next_counted(self, b, None) {
+                self.count_process(parent).expect("I5: the carve just returned covers it");
+                crate::message::recount(self, frame, b, parent);
+                let mut p = self.process(frame);
+                p.counted_in = to;
+                self.store_process(frame, &p);
             }
-            self.count_process(to.frame).expect("I5: the carve just returned covers it");
-            p.counted_in = to;
-            self.store_process(frame, &p);
+            cur = self.subtree_next(top, b);
         }
     }
 
@@ -414,8 +410,13 @@ pub fn process_create(
         let object = Object::Process(ProcessRef { frame, id });
         let installed = mm.install_handle(pid, Handle { object, badge: 0, stamp: creator });
         match installed {
-            // It reports to its exit endpoint until its notice is received or dropped.
-            Ok(_) => crate::message::reporting(mm, endpoint.frame, frame),
+            // It reports to its exit endpoint until its notice is received or dropped, and is on
+            // the chains of its creator's budget and of the one counting its PID until it is freed.
+            Ok(_) => {
+                crate::message::reporting(mm, endpoint.frame, frame);
+                crate::message::chain(mm, frame, caller_budget, target);
+            }
+            // Undone: it joined no list, since every list takes it only once its handle is in.
             Err(_) => {
                 mm.free_object_frame(frame);
                 mm.index_process(child, None);
@@ -681,8 +682,9 @@ pub fn faulted(pid: Pid, code: u32) {
     ProcessTable::with_mut(|ss| died(ss, pid, tid, Cause::Faulted, code));
 }
 
-/// R10: destroying a budget kills the processes running in it. The notice has cause `killed`
-/// (`died` drops it if the object is going too, which [`budgets_dying`] sees to afterwards).
+/// R10: destroying a budget kills the processes running in it. The notice has cause `killed`; one
+/// whose object is going too is withdrawn when [`budgets_dying`] frees the object, before anything
+/// is delivered.
 pub fn killed(ss: &mut ProcessTable, victim: Pid) { died(ss, victim, INITIAL_TID, Cause::Killed, 0); }
 
 /// The one path out of a process, whatever ended it: record the notice, tear the process down,
@@ -756,14 +758,12 @@ fn end_process(ss: &mut ProcessTable, pid: Pid) {
 
 /// Deliver the notice if R1 allows and there is somewhere to deliver it, or drop it. A dropped
 /// notice frees the object at once, so nothing waits for a notice that can never arrive.
+///
+/// Inside a destruction nothing is delivered until its end, so a notice whose object is charged to
+/// a dying budget is withdrawn before anyone could take it: step 3 frees the object, which takes
+/// it off the exits (R10).
 fn settle_notice(ss: &mut ProcessTable, mm: &mut MemoryManager, frame: u32, flow: Option<Flow>) {
     let p = mm.process(frame);
-    // R10 drops objects charged to a dying creator without emitting their notices, even
-    // when an external receiver is already blocked on a surviving exit endpoint.
-    if mm.budget_at(p.creator).dying {
-        free_object(mm, frame);
-        return;
-    }
     match p.endpoint.filter(|e| mm.is_live_endpoint(*e) && allowed(mm, *e, flow)) {
         Some(e) => {
             let mut p = p;
@@ -778,10 +778,8 @@ fn settle_notice(ss: &mut ProcessTable, mm: &mut MemoryManager, frame: u32, flow
 
 /// R1 for an exit notice: a flow from the budget the process ran in to the exit endpoint's owner.
 fn allowed(mm: &MemoryManager, e: EndpointRef, flow: Option<Flow>) -> bool {
+    // An endpoint whose owner is dying drops the notices owed there with it (R10 step 4).
     let owner = mm.budget_at(mm.endpoint_at(e).owner);
-    if owner.dying {
-        return false;
-    }
     // Notices carry a one-way flow. Only a system-class destination bypasses its label check.
     if owner.class == Class::System {
         return true;
@@ -801,6 +799,7 @@ pub fn free_object(mm: &mut MemoryManager, frame: u32) {
         crate::message::unreport(mm, e.frame, frame, p.notice_queued());
     }
     mm.close_handles_to(frame);
+    crate::message::unchain(mm, frame, p.creator.frame, p.counted_in.frame);
     if mm.is_live_budget(p.creator) {
         mm.uncharge(p.creator.frame, PROCESS_PAGES);
     }
@@ -843,11 +842,22 @@ pub fn pending_notice(mm: &MemoryManager, e: EndpointRef) -> Option<(u32, ExitNo
 /// R10: every process object charged to a dying budget is freed, its process killed first if it
 /// still runs, and then there is no notice. Runs after `budget_destroy` has killed the processes
 /// *in* the dying budgets, so what is usually left here is objects whose process already died in
-/// another budget.
-pub fn budgets_dying(ss: &mut ProcessTable) {
+/// another budget. Each dying budget's chain of the objects charged to it, from the subtree `top`
+/// heads: never a read of another budget's.
+pub fn budgets_dying(ss: &mut ProcessTable, top: BudgetFrame) {
+    let mut cur = Some(top);
+    while let Some(b) = cur {
+        free_charged(ss, b);
+        cur = MemoryManager::with(|mm| mm.subtree_next(top, b));
+    }
+}
+
+/// Free every process object charged to dying budget `b`, first to last, killing each process
+/// still running.
+fn free_charged(ss: &mut ProcessTable, b: BudgetFrame) {
     loop {
         let next = MemoryManager::with(|mm| {
-            mm.find_process(|mm, frame| mm.budget_at(mm.process(frame).creator).dying)
+            crate::message::first_charged(mm, b)
                 .map(|frame| (frame, mm.process(frame).alive(), mm.process(frame).pid))
         });
         let Some((frame, alive, pid)) = next else { return };

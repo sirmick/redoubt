@@ -246,7 +246,7 @@ checker runs every 512 steps and at the end.
 
 ## Scripted contracts
 
-<details><summary>Status: built · tested (6)</summary>
+<details><summary>Status: built · tested (7)</summary>
 
 - host:redoubt-model::ipc_completion_table_and_rollback
 - host:redoubt-model::sparse_committed_reply_mask_is_positional
@@ -254,6 +254,7 @@ checker runs every 512 steps and at the end.
 - host:redoubt-model::pid_reuse_only_after_notice_receipt
 - host:redoubt-model::deaf_device_quarantines_the_co_holder_too
 - host:redoubt-model::partial_overlap_is_refused_whole
+- host:redoubt-model::a_destruction_delivers_at_its_end
 
 </details>
 
@@ -266,6 +267,9 @@ from the completion table, not from the model's output. They cover:
   that order, budgets with no free weight are refused a process, and the pick and switch into a
   budget are billed to the budget picked, not to the one whose thread blocked before it;
 - a PID is reused only after its exit notice is received or dropped;
+- a destruction delivers nothing until its end: a notice owed during it goes to the receiver that
+  survives, not to one the destruction ends later, and a send stamped with the dying budget fails
+  with `Dead`;
 - DMA frames stay held through `unmap`, return to the pool only after a confirmed reset, and are
   quarantined, with the co-holder's, when a reset is not confirmed
   (`model/tests/dma_contracts.rs`);
@@ -335,7 +339,7 @@ model's embedder: its entropy, its admission, a volume's write check and the ser
 | [R7 (carving)](budgets.md#r7-carving) | `R7NoCarveCheck`, `R7CarveToZeroFree`, `ProcessInWeightlessBudget` | carving within free limits; no process in a budget with free weight 0 |
 | [R8 (accounts)](budgets.md#r8-accounts) | `R8AccountFromArgument` | inheriting the parent's account |
 | [R9 (stamps)](objects.md#r9-stamps) | `R9ReceivedHandleRestamped`, `R9MintStampsCaller`, `R9MsgStampIsSenderBudget` | which budget a handle is stamped with |
-| [R10 (destruction)](budgets.md#r10-destruction) | `R10KeepForeignHandles`, `R10KeepCarvedLimits`, `R10SpareDescendantProcesses`, `R10ExitNoticesOutlivePayer`, `R10RevokedMessageDelivered`, `R10RevokedCallAnswered`, `R10SweptHandlesDropped`, `R10CreatorDeathSparesProcess`, `R10HeldPidsDropped`, `R10ReapDestroysParent`, `R10ReapKeepsCarve`, `R10ReapSkipsGrandchildren`, `BudgetDeadlineIgnored` | everything a destruction reaches, a deadline destroying the budget, and a reap destroying one child and keeping the budget |
+| [R10 (destruction)](budgets.md#r10-destruction) | `R10KeepForeignHandles`, `R10KeepCarvedLimits`, `R10SpareDescendantProcesses`, `R10ExitNoticesOutlivePayer`, `R10RevokedMessageDelivered`, `R10RevokedCallAnswered`, `R10SweptHandlesDropped`, `R10CreatorDeathSparesProcess`, `R10HeldPidsDropped`, `R10ReapDestroysParent`, `R10ReapKeepsCarve`, `R10ReapSkipsGrandchildren`, `R10DeliveredMidDestruction`, `BudgetDeadlineIgnored` | everything a destruction reaches, nothing delivered before its end, a deadline destroying the budget, and a reap destroying one child and keeping the budget |
 | [R11 (memory)](memory.md#r11-memory) | `R11NoZeroing`, `R11SetFlagsAllowsWx`, `R11SetFlagsAllowsWriteOnly`, `R11LendStaysMapped`, `R11MapFixedSkipsOverlap`, `R11ExecOnDeviceMemory`, `R11ProcessMapSkipsFlags` | zeroing, W^X per mapping and per frame, write without read, lends unmapped, `map_fixed` never replacing, `process_map`'s own flag check |
 | [R12 (scheduling)](scheduling.md#r12-scheduling) | `R12PriorityById`, `R12IgnoreWeight`, `R12WakeBanksCredit`, `R12TieQueuedFirst`, `R12RequeueAhead`, `R12RequeueLifo`, `R12PreemptOnWake`, `R12TimeoutWakePreempts`, `R12NoFloorWhenIdle`, `R12ShortRunsFree`, `R12DropRemainder`, `R12ExitRunsFree`, `R12DestroyDropsDebt`, `R12CreateAtFloorOnly`, `R12LiftByMax`, `R12StrideWeightIsLimit`, `R12UnnormalizedLift`, `R12LiftCountsEntryWait`, `R12FoldAtNewWeight`, `R12NoMinimumCharge`, `R12DeadlineWorkUnbilled`, `R12RescaleOnlyOnReturn`, `R12SliceCountsExitWork`, `R12TimerWorkUnbilled`, `R12SwitchBilledToPrevious` | one flat queue, charging, the floor, ranks, preemption, the slice as user time, inheritance at create and destroy |
 | [R13 (one outcome per call)](ipc.md#r13-one-outcome-per-call) | `IpcWrongLend`, `IpcDropPartial`, `IpcFalseDelivery`, `IpcSkipOutputCheck`, `IpcLeakRollback` | the lend disposition, a partial reply, `delivered`, the completion-time record check, rollback |
@@ -439,8 +443,10 @@ The tests:
 - `traces_round_trip` writes 3,000 random sequences, reads each back to the same operations and
   replays it.
 - `a_rule_breaking_kernel_fails_replay` lets a mutated model stand in for a kernel that breaks a
-  rule. It replays 2,000 random traces with epilogues, plus four scripted ones (a partial reply,
-  current-call blame, the equal-instant expiry order, a quarantined device named again), and
+  rule. It replays 2,000 random traces with epilogues, plus seven scripted ones (a partial reply,
+  current-call blame, the equal-instant expiry order, a quarantined device named again, a record
+  gone bad as an abandoned-call notice or an interrupt comes, and a notice owed during a
+  destruction), and
   requires some trace to fail for every variant that results can show. Not required, because
   results cannot show them: the `Policy` variants; R12's, since scheduling shows only in timing;
   `R5NoMaskOnFire`, since every result is the same and the model's own R5 check catches it; the
@@ -554,7 +560,8 @@ model, on the host; the kernel's own use of it runs in boot cases
 
 `redoubt-ipclist` (`libs/ipclist`) holds the kernel's IPC lists: the links of what waits on each
 endpoint, device and budget, of the exit notices owed on an endpoint and the processes that
-report there, and of each process's waits with a deadline; R2's groups in the order their turns
+report there, of the process objects charged to each budget and counted in it, and of each
+process's waits with a deadline; R2's groups in the order their turns
 fall due, the expiry's sort, and each list's audit. The kernel links it and keeps every rule in
 `message.rs`. `the_groups_follow_the_model` states R2 beside it as the model's `next_sender` and
 `served` do, and in 200 seeds of 300 random queues, leaves and takes each, the two must pick the

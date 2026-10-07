@@ -7,9 +7,10 @@
 //! the page the cost table charges for it, so budgets need no kernel-static table whose size
 //! another budget could exhaust (R7: an allocation fails only on the caller's own budget). A
 //! budget is named by its frame's index in the page-ownership table ([`BudgetFrame`]); the tree
-//! is linked through the frames by `parent` alone, and a subtree is found by scanning the object
-//! frames for budgets below its top (as the model does), since a scan costs less than keeping
-//! sibling links right.
+//! is linked through the frames, each budget naming its parent, its first child and its next
+//! sibling, so a destruction walks the dying subtree from its top. Each budget also heads chains,
+//! through the frames of their members, of what is charged to it, counted in it or stamped with
+//! it (R10).
 //!
 //! The per-process side ([`Account`]: which budget pays, how many threads and frames, the handle
 //! table) is a fixed array indexed by PID, because PIDs are a fixed pool anyway (processes are
@@ -150,6 +151,11 @@ const READY_WORD: usize = 104;
 /// every object's own words too; 0 for an empty chain, as a new frame is.
 pub(crate) const QUEUED_WORD: usize = 105;
 pub(crate) const TAKEN_WORD: usize = 106;
+/// The heads of the chains of the process objects charged to this budget and of those whose PIDs
+/// it counts (`message.rs`, R10 steps 2, 3 and 8). Above every object's own words too; 0 for an
+/// empty chain, as a new frame is.
+pub(crate) const CHARGED_WORD: usize = 107;
+pub(crate) const COUNTED_WORD: usize = 108;
 
 /// The frame index a `frame + 1` word names, or `None` for 0.
 pub(crate) fn frame_of(word: u64) -> Option<u32> { (word as u32).checked_sub(1) }
@@ -948,7 +954,7 @@ impl MemoryManager {
 
     /// First step of `budget_destroy(h)`: check the handle and mark the budget and everything
     /// below it dying. The caller then kills every process in a dying budget
-    /// (`runs_in_dying`), and finishes with [`MemoryManager::destroy_marked`].
+    /// ([`destroy_subtree`]), and finishes with [`MemoryManager::destroy_marked`].
     pub fn destroy_begin(&mut self, pid: Pid, h: u32) -> Result<BudgetFrame, Error> {
         let top = self.budget_handle(pid, h)?;
         self.mark_dying(top);
@@ -1121,21 +1127,6 @@ impl MemoryManager {
         }
     }
 
-    /// Whether `pid` runs in a budget that is being destroyed: the processes `destroy_subtree`
-    /// kills first.
-    pub fn runs_in_dying(&self, pid: Pid) -> bool {
-        self.budget_of(pid).is_some_and(|b| self.budget(b).dying)
-    }
-
-    /// Whether the destruction under way will kill `pid`: it runs in a dying budget, or its
-    /// process object is charged to one, which frees the object and kills the process with it
-    /// (`process::budgets_dying`).
-    pub fn process_is_doomed(&self, pid: Pid) -> bool {
-        self.runs_in_dying(pid)
-            || crate::process::object_of(self, pid)
-                .is_some_and(|f| self.budget_at(self.process(f).creator).dying)
-    }
-
     /// Last step of `budget_destroy`, once the doomed budgets' processes are gone: close every
     /// handle naming a doomed budget or stamped with one, in every table (R10, I2); give the
     /// parent back what `top` carved from it (I10), then charge it the quarantined DMA pages and
@@ -1161,7 +1152,7 @@ impl MemoryManager {
         // which has just got back at least that much (kernel/devices.md, "Quarantine").
         self.dma_migrate_quarantine(self.budget(top).parent);
         // And so does every PID still held for a process that ran in the subtree (R6).
-        self.migrate_held_pids(self.budget(top).parent);
+        self.migrate_held_pids(top);
         // Free the dying budgets themselves: children before their parent, so a parent's frame
         // still holds the links the walk reads.
         self.free_dying_budgets(top);
@@ -1319,17 +1310,45 @@ pub fn destroy_subtree(
     // From here the destruction defers every object-frame free and folds the per-object sweeps
     // into `destroy_marked`'s single pass (I1, I2).
     MemoryManager::with_mut(|mm| mm.begin_destruction());
+    // Each gets an exit notice with cause `killed`, unless its process object is charged to a
+    // budget in the same doomed subtree (`process.rs`); the caller last.
     let mut caller_doomed = false;
-    for victim in MemoryManager::with(|mm| mm.live_pids()) {
-        if !MemoryManager::with(|mm| mm.runs_in_dying(victim)) {
-            continue;
-        }
+    let mut kill = |ss: &mut ProcessTable, victim: Pid| {
         if Some(victim) == caller {
             caller_doomed = true;
         } else {
-            // Each gets an exit notice with cause `killed`, unless its process object is
-            // charged to a budget in the same doomed subtree (`process.rs`).
             crate::process::killed(ss, victim);
+        }
+    };
+    if MemoryManager::with(|mm| mm.budget(top).parent.is_none()) {
+        // `root`: every process dies, `init` too, which the loader started with no process object
+        // and which runs in `root` alone.
+        for victim in MemoryManager::with(|mm| mm.live_pids()) {
+            kill(ss, victim);
+        }
+    } else {
+        // Every process running in a dying budget is on its chain of the objects it counts: while
+        // a process lives, its PID counts in the budget it runs in.
+        let mut cur = Some(top);
+        while let Some(b) = cur {
+            let mut at = MemoryManager::with(|mm| crate::message::next_counted(mm, b, None));
+            while let Some(frame) = at {
+                let (pid, alive) = MemoryManager::with(|mm| {
+                    let p = mm.process(frame);
+                    at = crate::message::next_counted(mm, b, Some(frame));
+                    (p.pid, p.alive())
+                });
+                if alive {
+                    // A kill frees at most its victim's own object, never the next on the chain.
+                    kill(ss, pid);
+                    #[cfg(debug_assertions)]
+                    MemoryManager::with(|mm| {
+                        let live = |f: u32| crate::process::object_of(mm, mm.process(f).pid) == Some(f);
+                        assert!(at.is_none_or(live), "a kill freed the next process object on its chain");
+                    });
+                }
+            }
+            cur = MemoryManager::with(|mm| mm.subtree_next(top, b));
         }
     }
     if let (true, Some(caller)) = (caller_doomed, caller) {
@@ -1337,7 +1356,7 @@ pub fn destroy_subtree(
     }
     // R10 reaches the process objects charged to the subtree: each is freed, with no notice,
     // its process killed first if it still runs.
-    crate::process::budgets_dying(ss);
+    crate::process::budgets_dying(ss, top);
     // The caller may run outside this subtree but have its process object charged to it.
     // R10 killed it through its creator above; never return registers to that dead PID.
     if let Some(caller) = caller {
@@ -1350,11 +1369,18 @@ pub fn destroy_subtree(
         // Each budget's work since entry moves to its parent, bottom-up, and its carve returns.
         mm.lift_dying(top);
         mm.destroy_marked(top);
+        mm.end_destruction();
+        // Nothing was delivered while a budget was dying: each endpoint a kill, a free or a failed
+        // caller may have given something to deliver was listed instead (`message::pump_endpoint`),
+        // and is pumped now, once, when no doomed thread and no dying object is left to take
+        // anything (R4b). What this delivers is notices, never a message stamped with a dying
+        // budget, and why a pump inside the destruction could only have handed a doomed thread a
+        // notice owed to a survivor, is kernel/budgets.md's, under R10.
+        crate::message::pump_listed(ss, mm);
         // A deadline's whole cost, the walk that found it included, is its payer's (R10, R12).
         if let (Some(started), Some(payer)) = (deadline_since, payer) {
             crate::sched::bill(mm, payer, crate::sched::now_ticks().saturating_sub(started));
         }
-        mm.end_destruction();
     });
     #[cfg(feature = "sched-trace")]
     crate::sched::trace::r10(crate::sched::trace::R10_END, top_id);

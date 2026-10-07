@@ -123,7 +123,10 @@ up from the holder's budget, at most `MAX_DEPTH` steps, and enters the slot:
 
 A handle held inside dies with its holder's table, which goes whole when the holder ends. Each
 chain is doubly linked, from a head word in the budget's or process object's frame, so adding or
-closing a handle costs a constant and using one costs nothing more.
+closing a handle costs a constant and using one costs nothing more. Beside its two handle chains'
+heads a budget's frame holds two more heads, of its charged chain and its counted chain of process
+objects; each process object carries a pair of links for each, beside
+the pair that puts it on its exit endpoint's lists ([what objects cost](#what-objects-cost)).
 
 A new handle takes the **lowest free index**. A table page is a frame of its own, allocated and
 charged one page to the process's budget when its first handle arrives, and freed when its last
@@ -253,6 +256,13 @@ holds the exit notice, and that notice must outlive the budget it ran in; the pa
 `process_create`, so delivering a notice never allocates. Everything the running process needs
 (header, page tables, thread pages, handle table) is charged where it runs, and comes back when
 it ends.
+
+So a process object belongs to two budgets, and each heads a chain of them, doubly linked through
+the objects' own frames from a head word in the budget's: the creator's **charged chain**, of the
+objects charged to it, and a budget's **counted chain**, of the objects whose PIDs it counts, which
+while a process lives is the budget it runs in. An object joins both when `process_create` makes it and leaves both when
+it is freed. A destruction finds the processes it kills, the objects it frees and the PIDs it moves
+from the dying budgets' chains alone ([R10](budgets.md#r10-destruction)).
 
 Every charge comes back exactly, with one exception. Closing a handle, unmapping, replying,
 receiving an exit notice and destroying a budget each return what they freed; a refused call
@@ -458,7 +468,8 @@ is being destroyed.
   R10's chain walk would stop the kernel, and every process with it; it would not let a process use a
   freed object.
 - **Slot searches and one sweep scan.** Destroying a budget closes the handles in its chains and
-  frees the dying tables whole; it walks the dying subtree and its owner lists, not the object
+  frees the dying tables whole; it walks the dying subtree, its owner lists and its process
+  chains, not the object
   frames or the live tables ([budgets](budgets.md#residual-risks)). Destroying a quarantined
   device still closes its handles in one pass over every table of every process (up to
   `MAX_PROCESS_COUNT` (511) processes of 64 table pages), bounded by compile-time constants.

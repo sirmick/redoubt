@@ -77,6 +77,8 @@ fn a_rule_breaking_kernel_fails_replay() {
     texts.push(common::contracts::dma_quarantine_trace());
     // A record gone bad while its thread waits, as an abandoned-call notice or an interrupt comes.
     texts.extend(common::contracts::bad_record_traces());
+    // A notice owed during a destruction, with a receiver the destruction ends ahead of a survivor.
+    texts.push(common::contracts::destruction_delivery_trace());
     let mut missed = Vec::new();
     let invisible = |m: &Mutation| {
         m.is_policy()

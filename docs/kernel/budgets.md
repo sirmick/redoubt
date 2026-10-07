@@ -509,7 +509,7 @@ by itself.
 
 ### R10 (destruction)
 
-<details><summary>Status: built · partly tested: destroying the budget a device object is charged to is not checked by a case; destroying `root` is not checked by a case; that the caller is killed last is not pinned by a case: the kernel's kill lines, the only ones in kill order, carry the PIDs it draws, the tester's lines that name each program come in no defined order, and the bench has no check across lines (`budget-destroy-kills` checks that both die); the equal-instant order of timeouts before deadlines is attacked only in the model · tested (34)</summary>
+<details><summary>Status: built · partly tested: destroying the budget a device object is charged to is not checked by a case; destroying `root` is not checked by a case; that the caller is killed last is not pinned by a case: the kernel's kill lines, the only ones in kill order, carry the PIDs it draws, the tester's lines that name each program come in no defined order, and the bench has no check across lines (`budget-destroy-kills` checks that both die); the equal-instant order of timeouts before deadlines is attacked only in the model · tested (36)</summary>
 
 - bench:budget
 - bench:budget-destroy-attack
@@ -532,6 +532,7 @@ by itself.
 - host:redoubt-model::budget_lifecycles
 - host:redoubt-model::a_reap_destroys_one_child_and_keeps_the_budget
 - host:redoubt-model::quarantine_charge_moves_to_a_parent_at_its_limit
+- host:redoubt-model::a_destruction_delivers_at_its_end
 - mutation:R10KeepForeignHandles
 - mutation:R10KeepCarvedLimits
 - mutation:R10SpareDescendantProcesses
@@ -544,6 +545,7 @@ by itself.
 - mutation:R10ReapDestroysParent
 - mutation:R10ReapKeepsCarve
 - mutation:R10ReapSkipsGrandchildren
+- mutation:R10DeliveredMidDestruction
 - mutation:ExpireBudgetsFirst
 
 </details>
@@ -566,9 +568,10 @@ this order:
 4. **Reach messages in flight.** Every endpoint a dying budget owns is destroyed: calls and sends
    blocked on it and receives waiting on it fail with `Dead`, calls a server took through it are
    abandoned (R3), and exit notices owed to it are dropped. Every device object charged to a
-   dying budget is destroyed. A message still queued that was sent through a handle stamped with
-   a dying budget fails its sender with `Dead`. A call sent through one that a server already took
-   fails its caller with `Dead` at once, not when the server replies, and is abandoned.
+   dying budget is destroyed. From the mark on, no message stamped with a dying budget is
+   delivered: a message still queued that was sent through a handle stamped with a dying budget
+   fails its sender with `Dead`. A call sent through one that a server already took fails its
+   caller with `Dead` at once, not when the server replies, and is abandoned.
 5. **Lift.** Each dying budget's work since it entered the queue moves to its parent, bottom-up
    ([scheduling](scheduling.md)).
 6. **Sweep.** Every handle that names a dying budget, or an endpoint, device or process object that
@@ -585,6 +588,18 @@ this order:
    not taken the notice ([R6](#r6-charging)). Both move after the carve came back, and both were
    inside it, so the parent never goes over its limit.
 9. **Free.** The dying budgets' pages are freed and they leave the deadline list.
+
+Nothing is delivered while a budget is dying. Every surviving endpoint that lost a receiver or
+gained a notice during the destruction is pumped once, at its end, when no doomed process and no
+dying object is left to take anything.
+
+What that end delivers is notices, never a message stamped with a dying budget. Outside a
+destruction every delivery is made at once, so at the mark nothing a waiting receiver could take
+is queued. A kill gives the survivors only notices, callers woken with `Dead` and the dying
+processes' freed open-call slots, never a receiver newly able to take a message, and step 4 fails
+every message stamped with a dying budget. The one thing a delivery inside the destruction could
+do is hand a doomed receiver a notice owed to a survivor, which putting each endpoint on a list
+and pumping the list at the end prevents.
 
 A budget is emptied one child at a time by `budget_reap`, each child destroyed as above (B is
 the child: its processes killed, the calls its servers held failing their callers with `Dead`,
@@ -684,8 +699,13 @@ without preemption.*
      devices, which leave them, each moved to its chain's head first so that leaving does not
      walk the endpoints ahead of it; the endpoints stay until the handle chains are closed, and a
      second walk frees each in a link read and a free. Process objects are not scanned either:
-     the PID index (`Objects::processes`) finds them in at most 510 lookups, one for each PID a
-     process can take ([R12 (scheduling)](scheduling.md#r12-scheduling)).
+     each budget heads a chain of the process objects charged to it and one of those whose PIDs
+     it counts ([objects](objects.md#what-objects-cost)). Step 2 kills the live processes on the
+     dying budgets' counted chains, step 3 frees what is on their charged chains, and step 8 moves
+     what is left on their counted chains onto the parent's, recounting each; none reads a process
+     object outside the subtree. Only `root`'s destruction walks every live PID, since then every
+     process dies, `init` with them, which the loader started with no process object and which
+     runs in `root` alone.
   3. **Handles held outside a budget are chained to it.** A handle dies when the object it names
      is destroyed or when the budget that stamped it is. A handle whose holder runs inside that
      budget's subtree dies with its holder's table, so it needs nothing more. A handle held
@@ -728,12 +748,15 @@ without preemption.*
      a handle stamped with it, the queued messages and the taken calls whose callers wait.
      `budgets_dying` walks the dying subtree's owner chains and empties each dying endpoint's lists:
      its receivers and senders fail with `Dead`, the notices owed on it are dropped, and the callers
-     waiting for a reply through it fail with `Dead`, their calls abandoned with no notice
-     (`abandon` owes none on an endpoint whose owner is dying). Then it empties every dying budget's
-     chain of queued messages, and then each one's chain of taken calls, so no pump a failed caller
-     makes takes a message whose stamp is dying. Each fails in list order. The cost follows the
-     subtree's own parked messages and calls, never the threads that exist or its endpoint count.
-     `process::endpoints_dying` drops the exit notices in one process-object pass. Freeing an
+     waiting for a reply through it fail with `Dead`, their calls abandoned, and then every notice
+     owed on it is dropped, those abandonments' included. Then it empties every dying budget's
+     chain of queued messages, and then each one's chain of taken calls. Each fails in list order.
+     No pump runs inside a destruction: each endpoint that may have something to deliver is put
+     once on a to-pump list, linked through the endpoints' own frames, a dying one leaves it as the
+     owner walk meets it, and the destruction's last act pumps each survivor on it once. The cost
+     follows the subtree's own parked messages and calls, never the threads that exist or its
+     endpoint count. `process::endpoint_dying` drops the exit notices owed on a dying endpoint
+     from its own exits and reporters. Freeing an
      endpoint's frame touches only the frame, once its handles are closed (item 2), not the dying
      budget that owns it: the budget's whole object list is going with it, and its endpoints' pages
      come back in one write.
@@ -802,11 +825,13 @@ without preemption.*
     dying endpoints' lists and the dying budgets' two stamp chains;
   - the rest, 2.9 ms (3 ms).
 
-  Those are the gate's fill.
-- **A destruction at full occupancy walks every process.** At full occupancy (510 processes) a
-  destruction takes 53.5 ms on rv64 and 58.3 ms on rv32, over R10's 30: three of its steps walk
-  every process object
-  ([destruction walks every process](../todo/destruction-walks-every-process.md)).
+  Those are the gate's fill. At full occupancy, every PID in use and each holder's budget
+  holding `MAX_THREADS` threads (129,796 live threads across 510 processes), one holder's
+  destruction stays within R10's 30 ms (`bench:worst-walk`, net of the checked build's audits, at
+  the 1 ms slice): the run's two destructions, one near empty and one at full occupancy, take 16.4
+  and 17.1 ms on rv64 and 17.4 and 18.2 ms on rv32. Their threads' teardown is 13.1 and 13.8 ms
+  of each, and the rest, about 4.0 and 4.4 ms at most, follows the dying subtree's own chains
+  (item 2).
 - **A `system`-class budget handle is a lot of authority.** The kernel lets any holder create
   `system`-class children with added labels and any account the parent allows, and run processes
   in them. The wall is policy: only `init` and the steward hold one ([init](../servers/init.md)).

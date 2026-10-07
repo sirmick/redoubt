@@ -291,6 +291,57 @@ fn exit_notices_wait_in_the_order_they_came() {
     assert_eq!(waiting(&w, E), 3);
 }
 
+/// A destruction's to-pump list: endpoints in the order listed, each once, linked through their own
+/// frames apart from the members they hold; a dying one leaves from anywhere, and the drain pops them.
+#[test]
+fn the_pump_list_drains_in_order() {
+    let mut w = Mem::default();
+    let pumps = List::pumps();
+    // Endpoint frames 6, 9 and 7, named frame + 1; E (7) also has a receiver.
+    List::receivers(E).push_back(&mut w, 0x201);
+    for r in [7, 10, 8, 7] {
+        if !pumps.contains(&w, r) {
+            pumps.push_back(&mut w, r);
+        }
+    }
+    assert!(pumps.contains(&w, 8) && !pumps.contains(&w, 9));
+    assert_eq!(members(&w, pumps), [7, 10, 8]);
+    assert_eq!(waiting(&w, E), 1, "the list counts nothing in the endpoint");
+    // Frame 9's owner is dying: it leaves before the drain.
+    pumps.remove(&mut w, 10);
+    let drained: Vec<u64> =
+        core::iter::from_fn(|| Some(pumps.pop_front(&mut w)).filter(|r| *r != 0)).collect();
+    assert_eq!(drained, [7, 8]);
+    assert_eq!(members(&w, List::receivers(E)), [0x201]);
+}
+
+/// A process object is on its exit endpoint's list and on two budgets' chains at once, each through
+/// its own links: leaving one leaves the others as they were, and the chains count nothing in the
+/// endpoint.
+#[test]
+fn a_process_object_is_on_three_lists_at_once() {
+    let mut w = Mem::default();
+    let (reporters, charged, counted) = (List::reporters(E), List::charged(5), List::counted_in(6));
+    for p in 1..=3 {
+        reporters.push_front(&mut w, p);
+        charged.push_front(&mut w, p);
+        counted.push_front(&mut w, p);
+    }
+    assert_eq!(waiting(&w, E), 3);
+    charged.remove(&mut w, 2);
+    assert_eq!(members(&w, charged), [3, 1]);
+    assert_eq!(members(&w, counted), [3, 2, 1]);
+    assert_eq!(members(&w, reporters), [3, 2, 1]);
+    // A destroyed budget's remaining members move to its parent's chain.
+    let parent = List::counted_in(4);
+    while let r @ 1.. = counted.pop_front(&mut w) {
+        parent.push_front(&mut w, r);
+    }
+    assert_eq!(members(&w, parent), [1, 2, 3]);
+    assert!(counted.is_empty(&w));
+    assert_eq!(waiting(&w, E), 3);
+}
+
 /// A process's timed waits: a wait leaves by whichever path ends it (answered, woken, expired,
 /// its thread destroyed), from anywhere in the list, and a process's end empties it. A wait ended
 /// but left on the list (a missed unlink) is what the kernel's audit finds: its member check says
@@ -393,6 +444,9 @@ fn each_audit_trips_on_a_corrupted_link() {
         List::exits(E),
         List::reporters(E),
         List::timed(3),
+        List::pumps(),
+        List::charged(5),
+        List::counted_in(5),
     ];
     for list in lists {
         for (word, value) in [(list.prev, 0x999), (list.next, 0), (list.next, 3)] {

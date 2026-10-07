@@ -1,4 +1,4 @@
-description = "The worst walk, measured (kernel/ipc.md, kernel/timer.md, kernel/scheduling.md, kernel/budgets.md, \"Residual risks\"): every PID in use, each child in a budget of its own holding MAX_THREADS threads (509 x 255 and init's, 129,796 threads); one timer expiry ends 250 children's waits at once and one reconcile wakes their budgets; then one receive's pump and one destruction. The walks' times come from the trace (walk-trace), net of the checked build's audits: no pump or expiry walks every thread, each within its bound, and the reconcile is reported. Must fail while the residual stands: R10 at full occupancy is over 30 ms, three of its steps walking every process object (docs/todo/destruction-walks-every-process.md); once they follow the dying subtree, the case passes with must_fail gone"
+description = "The worst walk, measured (kernel/ipc.md, kernel/timer.md, kernel/scheduling.md, kernel/budgets.md, \"Residual risks\"): every PID in use, each child in a budget of its own holding MAX_THREADS threads (509 x 255 and init's, 129,796 threads); one timer expiry ends 250 children's waits at once and one reconcile wakes their budgets; then one receive's pump and one destruction. The walks' times come from the trace (walk-trace), net of the checked build's audits: no pump or expiry walks every thread, each within its bound, and the reconcile is reported. R10 at full occupancy is within its 30 ms: its kills, frees and PID moves follow the dying subtree, never every process"
 arch = ["rv64", "rv32"]
 # About 5 minutes a width, every audited exit walking every thread: run by name
 # (`cargo testbench worst-walk`), never in every merge's run.
@@ -17,12 +17,9 @@ programs = ["worst-walk"]
 # the usual ring's 2.1 million.
 kernel_features = ["sched-trace-large", "walk-trace"]
 # A pump takes about 1 ms at most at either fill, so 2 ms catches any walk of every process; the
-# expiry's own walk is within R12's 30 ms (about 27 ms on rv64 and 29 ms on rv32).
+# expiry's own walk is within R12's 30 ms (about 27 ms on rv64 and 29 ms on rv32); a destruction
+# at full occupancy is within R10's 30 ms (about 17 ms on rv64 and 18 ms on rv32).
 post_check = "sched_oracle pump_max_us=2000 expiry_max_us=30000 r10_p99_us=30000"
-# A residual, not a target (docs/todo/destruction-walks-every-process.md): the run passes while R10
-# at full occupancy is past 30 ms and fails once it is under, or once a walk is past its bound. The
-# change that brings R10 under removes this line.
-must_fail = '^sched_oracle: R10.s p99 is \d+ µs over 2 destructions, above 30000$'
 timeout_secs = 3600
 expect = [
     '^\[worst-walk\] 509 holders of \d+ pages, 129796 threads live$',

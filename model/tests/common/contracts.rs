@@ -194,9 +194,72 @@ pub fn reap_empties_and_keeps(mutation: Option<Mutation>) -> Result<(), String> 
     trace_roundtrip(&w, mutation)
 }
 
+/// R10: a destruction delivers nothing until its end. Budget B holds K, which reports to init's
+/// endpoint E; B's child C holds a receiver S on E, waiting there before init's own receiver R, and
+/// reporting to init's endpoint F, where a send stamped with B waits and nobody receives. Destroying
+/// B owes K's notice on E, the only one owed there: it goes to R, since S is gone by the time
+/// anything is delivered, whatever order the kills take; and the send fails with `Dead`, never
+/// delivered. A destruction that delivered as it killed would hand it to S, killed after K (the
+/// walk starts at its top, B).
+fn destruction_delivers_at_its_end(mutation: Option<Mutation>) -> Result<World, String> {
+    let mut w = World::new(mutation);
+    let handle = |r: Ret| match r {
+        Ret::Handle(h) => Ok(h),
+        r => Err(format!("expected a handle, got {r:?}")),
+    };
+    let tid = |r: Ret| match r {
+        Ret::Tid(t) => Ok(t),
+        r => Err(format!("expected a thread, got {r:?}")),
+    };
+    let e = handle(w.value(1, Syscall::EndpointCreate)?)?;
+    let f = handle(w.value(1, Syscall::EndpointCreate)?)?;
+    // B holds K and carves C, which holds S: more than `budget`'s 64 pages and 2 processes.
+    let carve = Syscall::BudgetCreate {
+        parent: 3,
+        pages: 256,
+        processes: 4,
+        weight: 20,
+        labels: vec![],
+        account: 0,
+        deadline: FOREVER,
+    };
+    let b = handle(w.value(1, carve)?)?;
+    let c = budget(&mut w, b, 10, FOREVER)?;
+    let (k, _) = spawn(&mut w, b, e)?;
+    let (s, st) = spawn_with(&mut w, c, f, vec![e])?;
+    let stamped =
+        handle(w.value(1, Syscall::Mint { source: MintSource::Handle(f), badge: 3, budget: Some(b) })?)?;
+    let r = tid(w.value(1, Syscall::ThreadCreate { entry: 0, sp: 0, arg: 0 })?)?;
+    let sender = tid(w.value(1, Syscall::ThreadCreate { entry: 0, sp: 0, arg: 0 })?)?;
+    w.op(Op::Sys {
+        pid: s,
+        tid: st,
+        call: Syscall::Receive { h: Some(1), timeout: FOREVER, max_transfer: 0 },
+    })?;
+    w.sys(r, Syscall::Receive { h: Some(e), timeout: FOREVER, max_transfer: 0 })?;
+    let send =
+        Syscall::Send { h: stamped, words: [5; WORDS], handles: vec![], transfer: None, timeout: FOREVER };
+    expect(w.sys(sender, send)?.outcome == Outcome::Blocked, "the stamped send waits on F")?;
+    let step = w.sys(1, Syscall::BudgetDestroy { h: b })?;
+    let woke = |t: u64| step.wakes.iter().find(|x| x.tid == t).map(|x| x.result.clone());
+    expect(
+        matches!(woke(r), Some(Ok(Ret::ExitNotice { pid, cause: Cause::Killed, .. })) if pid == k),
+        "the notice owed on E goes to the receiver that survives",
+    )?;
+    expect(woke(sender) == Some(Err(Error::Dead)), "a send stamped with a dying budget fails with Dead")?;
+    expect(!w.k.processes.contains_key(&s), "the receiver in C is gone")?;
+    Ok(w)
+}
+
+/// The trace of [`destruction_delivers_at_its_end`], for replay.
+pub fn destruction_delivery_trace() -> String {
+    trace::record(&Boot::default(), &destruction_delivers_at_its_end(None).unwrap().ops, None).unwrap()
+}
+
 /// Independent examples from the completion table, not kernel-derived expectations.
 pub fn ipc_contracts(mutation: Option<Mutation>) -> Result<(), String> {
     bad_record_takes_nothing(mutation)?;
+    trace_roundtrip(&destruction_delivers_at_its_end(mutation)?, mutation)?;
     reap_empties_and_keeps(mutation)?;
     for taken in [false, true] {
         let mut w = World::new(mutation);
