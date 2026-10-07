@@ -16,6 +16,12 @@ redoubt-client = { path = "../../libs/client" }
 redoubt-rt = { path = "../../libs/rt" }
 redoubt-steward = { path = "../../libs/steward" }
 
+[features]
+# Test-only, for the bench's steward-restart case, and off in every default build, as littlefsd's
+# and netd's restart-probe are: a login for one principal name ends the steward
+# (src/protocol.rs, PROBE).
+restart-probe = []
+
 [dev-dependencies]
 # init's manifest reading and its writer of the steward's lines, for the round trip over the image's
 # manifest in tests/steward.rs.

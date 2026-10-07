@@ -1,6 +1,7 @@
 //! The reboot rule (servers/init.md, "Restarts and reboots"): a server already restarted
 //! [`MOST`] times within the last [`WINDOW`] is not restarted again, and `init` reboots the
-//! machine instead, because failing closed beats a server that cannot stay up.
+//! machine instead, because failing closed beats a server that cannot stay up. A dead steward's
+//! `users` is emptied before it starts again ([`empty`]).
 
 /// The restarts of one server that may fall within [`WINDOW`].
 pub const MOST: usize = 5;
@@ -26,6 +27,25 @@ impl Restarts {
         self.times[self.next] = Some(now);
         self.next = (self.next + 1) % MOST;
         true
+    }
+}
+
+/// Empties a budget one child at a time: `reap` is `budget_reap` on it, which destroys one child
+/// and returns how many are left (kernel/budgets.md, R10). `occupied` is whether the budget holds
+/// anything: a reap of a budget with no children also returns 0, having reaped nothing, so the
+/// count starts from what the budget's usage says. Returns how many children were reaped, or the
+/// first error. Nothing carves under the budget meanwhile (its other holder, the steward, is
+/// dead), so each reap leaves one fewer and the loop ends.
+pub fn empty<E>(occupied: bool, mut reap: impl FnMut() -> Result<u32, E>) -> Result<u32, E> {
+    if !occupied {
+        return Ok(0);
+    }
+    let mut reaped = 0;
+    loop {
+        reaped += 1;
+        if reap()? == 0 {
+            return Ok(reaped);
+        }
     }
 }
 
@@ -75,5 +95,32 @@ mod tests {
             assert!(r.restart(10 * S));
         }
         assert!(!r.restart(9 * S));
+    }
+
+    #[test]
+    fn emptying_reaps_until_none_are_left_and_counts_each() {
+        let mut left = 3u32;
+        let mut calls = 0;
+        let reaped = empty::<()>(true, || {
+            calls += 1;
+            left -= 1;
+            Ok(left)
+        });
+        assert_eq!((reaped, calls, left), (Ok(3), 3, 0));
+    }
+
+    #[test]
+    fn an_empty_budget_is_not_reaped() {
+        assert_eq!(empty::<()>(false, || panic!("reaped an empty budget")), Ok(0));
+    }
+
+    #[test]
+    fn a_refused_reap_stops_the_loop_with_its_error() {
+        let mut calls = 0;
+        let r = empty(true, || {
+            calls += 1;
+            if calls == 2 { Err("refused") } else { Ok(5) }
+        });
+        assert_eq!((r, calls), (Err("refused"), 2));
     }
 }

@@ -514,7 +514,7 @@ launcher could not free the child's state without losing its own.
 
 ### Restarts and reboots
 
-<details><summary>Status: built · partly tested: blame, `blame`'s badge and a wedged steward are the steward's, not built; a restarted `consoled`'s attach is read from the code, not attacked · tested (11)</summary>
+<details><summary>Status: built · partly tested: blame, `blame`'s badge and a wedged steward are the steward's, not built; a restarted `consoled`'s attach is read from the code, not attacked · tested (15)</summary>
 
 - bench:init-restart
 - bench:init-handed-revoked
@@ -526,7 +526,11 @@ launcher could not free the child's state without losing its own.
 - host:redoubt-init::a_restart_older_than_the_window_is_dropped_from_the_count
 - host:redoubt-init::restarts_spread_wider_than_the_window_never_reboot
 - host:redoubt-init::a_clock_that_reads_earlier_counts_the_restart_as_recent
+- host:redoubt-init::emptying_reaps_until_none_are_left_and_counts_each
+- host:redoubt-init::an_empty_budget_is_not_reaped
+- host:redoubt-init::a_refused_reap_stops_the_loop_with_its_error
 - bench:steward-restart
+- bench:steward-restart-reboot
 
 </details>
 
@@ -577,9 +581,23 @@ launcher could not free the child's state without losing its own.
   the machine: failing closed beats a server that cannot stay up. So does a restart `init`
   cannot make: a budget it cannot carve, a badge or console connection it cannot mint, or a
   launch the kernel refuses.
-- **The steward** is part of the trusted base; its crash is a bug. If it dies, `init` restarts it;
-  a steward that finds `users` not empty exits, and its restarts end in a reboot, which logs every
-  session out.
+- **The steward** is part of the trusted base; its crash is a bug. If it dies, `init` logs every
+  session out and ends every lease before it starts the steward again, in this order:
+  1. The dead instance's budget is destroyed and carved afresh, as every server's is (above).
+     The sessions' process objects are charged to the steward, their creator, so R10 frees them
+     with that budget, their processes killed first and no notice owed: the sessions end there.
+  2. `init` empties `users` with `budget_reap` until no child is left
+     ([R10 (destruction)](../kernel/budgets.md#r10-destruction)): every principal's budget, its
+     label sets' sub-budgets, and their sessions' and leases' budgets, endpoints and handles go,
+     one principal's subtree per kernel entry, the work billed to `init`. Every session's VM ends
+     with its budget; an `sshd` channel stays open until `sshd` is told
+     ([steward](steward.md#residual-risks)). `init` says `init: emptied users: N budgets reaped`; a reap the kernel refuses is a restart `init`
+     cannot make, and it reboots.
+  3. The steward starts, finds `users` empty and carves afresh, and starts the console
+     principal's session again, as at boot.
+
+  The steward's own check at its start stays: a steward that finds `users` holding anything
+  exits, and the reboot rule above is the bound on a steward that dies the same way every time.
 
 ```mermaid
 stateDiagram-v2

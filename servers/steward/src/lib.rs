@@ -87,8 +87,8 @@ pub trait Kernel {
 pub enum StartError {
     /// A manifest line the parser refused, with why.
     Lines(String),
-    /// `users` was not empty: a steward restarted without `init` recreating it (servers/init.md,
-    /// "Restarts and reboots") would carve a second set beside the first.
+    /// `users` was not empty: a steward restarted without `init` emptying it first
+    /// (servers/init.md, "Restarts and reboots") would carve a second set beside the first.
     UsersNotEmpty,
     /// A `servers` line other than [`SLOTS`]: the core would connect a session to slots the
     /// binding table does not have, or leave some out.

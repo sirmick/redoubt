@@ -922,24 +922,33 @@ item's labels.
 
 ## Failure and restart
 
-Status: built · tested: bench:steward-restart, bench:steward-session-ends, host:redoubt-steward-server::users_not_empty_is_a_start_failure_before_any_carve
+Status: built · tested: bench:steward-restart, bench:steward-restart-reboot, bench:steward-session-ends, host:redoubt-steward-server::users_not_empty_is_a_start_failure_before_any_carve
 
-- **The steward is part of the trusted base; its crash is a bug.** If it dies, `init` restarts it
-  ([init](init.md#restarts-and-reboots)); a steward that finds `users` not empty exits, and its
-  restarts end in a reboot, which logs every session out and ends every lease. It checks at its
-  start: a `users` holding any pages, process or child is a start failure, said once (`users not
-  empty`), never a second set of carves beside the first.
+- **The steward is part of the trusted base; its crash is a bug.** If it dies, `init` reaps
+  `users`, which logs every session out and ends every lease, and restarts the steward; the
+  console session starts again ([init](init.md#restarts-and-reboots)). The steward says what
+  `users` holds as it starts (`users holds N pages, M processes`), and checks it: a `users`
+  holding any pages, process or child is a start failure, said once (`users not empty`), never a
+  second set of carves beside the first. A steward that dies the same way at every start ends in
+  `init`'s reboot.
 - **A session crashes:** the steward destroys its budget and tells its console `ended`; `sshd`
   closes its channel; nobody else is affected.
 - **A reader or writer budget** outlives nothing: it has a deadline, and the steward destroys it
   when its one item is done.
 
+**The restart probe** is a test-only feature, `restart-probe` (`src/protocol.rs`, `PROBE`), off
+in every default build; the bench's `steward-restart` builds the steward with it. A login for the
+principal `steward-restart-probe`, which no manifest names, then ends the steward while it holds
+`sshd`'s call, before the login is looked at further.
+
 ## Residual risks
 
-- **A steward crash ends in a reboot:** `users` cannot be destroyed and made again, which its
-  class forbids, and `init` does not empty it of a dead steward's carves with `budget_reap` before
-  the restart; doing so would make the restart a logout instead
-  ([a dead steward's carves](../todo/empty-a-budget.md)).
+- **An `sshd` channel outlives its reaped session.** When `init` empties `users` after the
+  steward's death, every session's VM ends with its budget, but `sshd` ends a channel only on the
+  steward's `ended`, which a dead steward never sends; the channel stays open, its input going
+  nowhere, until its client closes it. Until the restarted steward tells `sshd` that every earlier
+  session is over, the restart logs every session out but leaves their SSH connections open
+  ([sshd](sshd.md#residual-risks)).
 - **An approved text can carry a hidden message.** Text an agent wrote and a person approved for
   declassification can still hide one; no rule on the item's form prevents that.
 - **A push is one human action,** so a confined domain's input rate is a person's approval rate.

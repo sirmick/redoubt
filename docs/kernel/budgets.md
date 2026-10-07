@@ -847,10 +847,6 @@ without preemption.*
   [`budget_children`](#budget_children) exists. A holder of the parent can take it back only with
   the rest: `budget_reap` destroys the parent's children one at a time, the lost one among them,
   with no way to pick it out. The loss is the closer's own tree's, never another budget's.
-- **A dead steward's carves cost a reboot.** `budget_reap` can empty `users` of them, but `init`
-  does not call it before it starts the steward again, so a restarted steward finds `users` not
-  empty and exits, and the restart rule ends in a reboot
-  ([a dead steward's carves](../todo/empty-a-budget.md)).
 - **Quarantined DMA pages stay charged.** A DMA run whose device did not confirm its reset is held
   until reboot. When its budget is destroyed, the charge moves to the parent, which keeps paying
   for those pages until it too is destroyed or the machine reboots

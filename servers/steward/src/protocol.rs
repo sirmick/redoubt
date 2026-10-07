@@ -139,6 +139,15 @@ impl<'a, K: Kernel> Serving<'a, K> {
 /// the server runs each batch before it receives again.
 const CALL: u64 = 1;
 
+/// Test-only, for the bench's `steward-restart` (feature `restart-probe`, off in every default
+/// build, as `littlefsd`'s and `netd`'s are): a login for this principal ends the steward with
+/// [`PROBE_EXIT`] while it holds `sshd`'s call, so `init` empties `users` and restarts it. No
+/// principal has the name; only the case's one session logs in as it, once.
+#[cfg(feature = "restart-probe")]
+pub const PROBE: &str = "steward-restart-probe";
+#[cfg(feature = "restart-probe")]
+pub const PROBE_EXIT: u32 = 9;
+
 impl<K: Kernel> TypedServer<StewardProtocol> for Serving<'_, K>
 where
     K::Budget: Copy,
@@ -156,6 +165,10 @@ where
         let mut login_labels = Vec::new();
         let (kind, ok) = match request {
             Message::Login(m) => {
+                #[cfg(feature = "restart-probe")]
+                if m.principal == PROBE {
+                    redoubt_rt::handle::process_exit(PROBE_EXIT);
+                }
                 // A label the manifest does not name is one the principal does not own.
                 login_labels = self.steward.label(m.label).ok_or(ErrorCode::NotOwner)?;
                 let key = <[u8; 32]>::try_from(m.key).map_err(|_| ErrorCode::BadKey)?;

@@ -655,8 +655,26 @@ mod machine {
                 ));
             }
             self.restarting = true;
+            // The dead steward's carves outlive it under `users`: every principal's budgets, their
+            // sessions and leases. They go before it starts again, so the new instance finds
+            // `users` empty; a reap that fails is a restart `init` cannot make.
+            if is_steward(m, &m.servers[i]) {
+                self.empty_users();
+            }
             self.start(i);
             self.restarting = false;
+        }
+
+        /// Reaps `users` to empty, one principal's subtree per kernel entry, the work billed to
+        /// `init` (kernel/budgets.md, R10), and says how many went. Any budget holds its own page
+        /// in its parent's usage, so a `users` whose usage is 0 has no children.
+        fn empty_users(&mut self) {
+            let users = Budget::from_handle(h(USERS_BUDGET));
+            let occupied = users.usage().map(|u| u.pages_usage > 0 || u.processes_usage > 0);
+            match occupied.and_then(|occupied| restarts::empty(occupied, || users.reap())) {
+                Ok(n) => self.say(format_args!("init: emptied users: {n} budgets reaped")),
+                Err(e) => self.reboot(format_args!("users cannot be emptied: {e:?}")),
+            }
         }
 
         /// Step 3: asks `keyd` whether it holds any key the box is authenticated by; a yes refuses

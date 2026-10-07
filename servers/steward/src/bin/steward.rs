@@ -438,6 +438,14 @@ mod machine {
             session_pages: 0,
             program_len: 0,
         };
+        // The kernel's count of what `users` holds as this instance starts: 0, at boot and after
+        // `init` emptied a dead steward's carves.
+        if let Ok(u) = Budget::from_handle(users).usage() {
+            say(
+                startup,
+                &format!("steward: users holds {} pages, {} processes\n", u.pages_usage, u.processes_usage),
+            );
+        }
         let mut steward: Steward<Handle, Handle> = match start(&lines, users, &mut machine) {
             Ok(s) => s,
             Err(e) => {
