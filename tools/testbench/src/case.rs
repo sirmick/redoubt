@@ -233,7 +233,8 @@ pub struct HostTests {
     pub profile: Option<String>,
     /// Many jobs instead of one `cargo test` (`fanout.rs`).
     pub fanout: Option<Fanout>,
-    /// With `fanout`, each job's deadline, from its start; none when absent.
+    /// With `fanout`, each job's deadline, from its start, on the cores it asks for: on fewer, the
+    /// lease q granted, it stretches in proportion. None when absent.
     pub timeout_secs: Option<f64>,
 }
 
@@ -251,6 +252,7 @@ pub struct Fanout {
     #[serde(default = "one_core")]
     pub cores: u32,
     /// Variables every job has: a thread count to match `cores`, for a test that spawns its own.
+    /// `{cores}` in a value becomes the job's own count of cores.
     #[serde(default)]
     pub vars: BTreeMap<String, String>,
     /// Values known to pass only past a bound their test keeps (a mutation caught late), each
@@ -258,6 +260,8 @@ pub struct Fanout {
     /// test reads as leave to go past it, and a pass is reported as late, not hidden.
     #[serde(default)]
     pub late: Vec<String>,
+    /// The cores a `late` value's job asks for instead of `cores`: its search is the long one.
+    pub late_cores: Option<u32>,
 }
 
 /// One job per...
@@ -937,7 +941,19 @@ impl Case {
                 );
                 // Miri lists no test without interpreting the binary.
                 ensure!(fanout.each != Each::Test || !host.miri, "a fanout of each test runs no Miri");
-                ensure!(fanout.cores > 0, "a job needs a core");
+                ensure!(fanout.cores > 0 && fanout.late_cores != Some(0), "a job needs a core");
+                // A variable naming `{cores}` is exported by a shell, which takes only plain names.
+                for key in fanout.vars.keys() {
+                    let plain = key
+                        .chars()
+                        .enumerate()
+                        .all(|(i, c)| c == '_' || c.is_ascii_alphabetic() || (i > 0 && c.is_ascii_digit()));
+                    ensure!(!key.is_empty() && plain, "vars: {key:?} is not a variable's name");
+                }
+                ensure!(
+                    fanout.late_cores.is_none() || !fanout.late.is_empty(),
+                    "late_cores needs late values"
+                );
                 Ok(())
             }
             Kind::Elixir(oracle) => {
@@ -1054,6 +1070,8 @@ mod tests {
         assert!(check("fanout = { each = 'file' }").is_err(), "no files");
         assert!(check("miri = true\nfanout = { each = 'test' }").is_err(), "Miri lists no tests");
         assert!(check("fanout = { each = 'test', cores = 0 }").is_err(), "no core");
+        assert!(check("fanout = { each = 'test', late_cores = 4 }").is_err(), "cores for no late value");
+        assert!(check("fanout = { each = 'test', vars = { 'A B' = '1' } }").is_err(), "not a name");
         assert!(check("timeout_secs = 9").is_err(), "a deadline for no jobs");
         assert!(check(&format!("tests = ['m']\n{value}\ntimeout_secs = 0")).is_err(), "no deadline at all");
         assert!(

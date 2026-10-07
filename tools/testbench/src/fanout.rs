@@ -79,8 +79,11 @@ pub fn run(
                     // Taken apart from the loop's test, whose lock would last the whole job.
                     let next = queue.lock().unwrap().next();
                     let Some(job) = next else { return };
-                    let one =
-                        run_one(job, name, q.as_deref(), fanout.cores, host.timeout_secs, workspace, &dir);
+                    let cores = match fanout.late_cores {
+                        Some(late) if fanout.late.contains(&job.value) => late,
+                        _ => fanout.cores,
+                    };
+                    let one = run_one(job, name, q.as_deref(), cores, host.timeout_secs, workspace, &dir);
                     ended.lock().unwrap().push(one);
                 }
             });
@@ -255,13 +258,36 @@ fn run_one(
         argv.extend([q.to_string_lossy().into_owned(), "run".into(), "--cores".into(), cores.to_string()]);
         argv.extend(["--name".into(), name, "--".into()]);
     }
-    if let Some(secs) = timeout {
+    // The count the job was granted, which q may lower from its ask once it has waited, only the
+    // job's own shell sees (q exports it as RUST_TEST_THREADS; without q, it is the ask). There a
+    // `{cores}` variable is set from it, and the deadline, the one on the cores asked for,
+    // stretches by ask over grant, so a smaller lease is never a deadline's expiry.
+    let (leased, fixed): (Vec<_>, Vec<_>) = job.vars.iter().partition(|(_, var)| var.contains("{cores}"));
+    if cores > 1 || !leased.is_empty() {
+        let mut script = format!(
+            "g=\"${{RUST_TEST_THREADS:-{cores}}}\"; [ \"$g\" -ge 1 ] 2>/dev/null && [ \"$g\" -le {cores} ] || g={cores}"
+        );
+        for (key, var) in &leased {
+            let value = var.split("{cores}").map(quote).collect::<Vec<_>>().join("\"$g\"");
+            script.push_str(&format!("; export {key}={value}"));
+        }
+        match timeout {
+            Some(secs) => {
+                let secs = secs.ceil() as u64;
+                script.push_str(&format!(
+                    "; exec timeout -k {KILL_AFTER} \"$(( ({secs} * {cores} + g - 1) / g ))\" \"$@\""
+                ));
+            }
+            None => script.push_str("; exec \"$@\""),
+        }
+        argv.extend(["sh".into(), "-c".into(), script, "sh".into()]);
+    } else if let Some(secs) = timeout {
         argv.extend(["timeout".into(), "-k".into(), KILL_AFTER.into(), format!("{secs}")]);
     }
     // `env` moves into the job's directory and sets its variables under q and `timeout` alike;
     // `q` itself runs from the workspace, whose name is the tenant it bills.
     argv.extend(["env".into(), "-C".into(), job.dir.to_string_lossy().into_owned()]);
-    argv.extend(job.vars.iter().map(|(key, var)| format!("{key}={var}")));
+    argv.extend(fixed.iter().map(|(key, var)| format!("{key}={var}")));
     argv.extend(job.argv);
 
     let started = Instant::now();
@@ -289,6 +315,9 @@ fn run_one(
     };
     Ended { value: job.value, failure, wall, tests }
 }
+
+/// `text` as one single-quoted shell word.
+fn quote(text: &str) -> String { format!("'{}'", text.replace('\'', "'\\''")) }
 
 /// The machine's scheduler, `scripts/q`, if the workspace has it and its daemon answers.
 fn scheduler(workspace: &Path) -> Option<PathBuf> {
@@ -342,15 +371,22 @@ mod tests {
         let job = |value: &str, script: &str| Job {
             value: value.into(),
             dir: dir.clone(),
-            vars: vec![("V".into(), value.into())],
+            vars: vec![
+                ("V".into(), value.into()),
+                ("N".into(), "{cores}".into()),
+                ("Q".into(), "it's".into()),
+            ],
             argv: vec!["sh".into(), "-c".into(), script.into()],
         };
         let one = |job, timeout| run_one(job, "c", None, 1, timeout, &dir, &dir);
 
-        let pass = one(job("a", "echo \"$V finished in 1.25s\"; echo finished in 0.5s"), None);
+        let pass =
+            one(job("a", "echo \"$V finished in 1.25s\"; echo finished in 0.5s; echo cores $N $Q"), None);
         assert!(pass.failure.is_none());
         assert_eq!(pass.tests, 1.75);
-        assert!(std::fs::read_to_string(dir.join("a.log")).unwrap().starts_with("a finished"));
+        // The grant never exceeds the ask: one core here, whatever lease runs this test.
+        let log = std::fs::read_to_string(dir.join("a.log")).unwrap();
+        assert!(log.starts_with("a finished") && log.contains("cores 1 it's"), "{log}");
 
         let fail = one(job("b/c", "echo not caught; exit 3"), Some(30.0));
         let why = fail.failure.unwrap();
