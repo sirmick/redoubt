@@ -34,7 +34,7 @@ fn start(seen: Seen) -> Served {
             Ok(Message::CopyFile(c)) => {
                 ("copy_file", vec![c.src_fid, c.dst_dir], Ok(Reply::CopyFile(CopyFileReply { count: 42 })))
             }
-            Ok(Message::SetAttr(s)) if s.attr == 7 => ("set_attr", vec![s.fid], Err(ErrorCode::Refused)),
+            Ok(Message::SetAttr(s)) if s.attr == 7 => ("set_attr", vec![s.fid], Err(ErrorCode::NotPermitted)),
             Ok(Message::SetAttr(s)) => ("set_attr", vec![s.fid], Ok(Reply::SetAttr(SetAttrReply {}))),
             Ok(Message::GetAttr(g)) => {
                 ("get_attr", vec![g.fid], Ok(Reply::GetAttr(GetAttrReply { value: b"blue" })))
@@ -68,7 +68,7 @@ fn each_operation_names_its_files_fids() {
         // The server's refusal is its own code.
         assert_eq!(
             littlefsd::set_attr(&mut lend, &note, 7, b"x"),
-            Err(Error::Server(ErrorCode::Refused.code()))
+            Err(Error::Server(ErrorCode::NotPermitted.code()))
         );
         let fids = |files: &[&redoubt_client::file::File]| files.iter().map(|f| f.fid()).collect::<Vec<_>>();
         assert_eq!(

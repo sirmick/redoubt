@@ -72,9 +72,9 @@ fn rename_moves_within_the_volume_and_keeps_the_inode() {
     assert_eq!(t.stat(&who, 1).unwrap_err(), "removed");
     assert_eq!(rename(&mut t, &who, 0, "notes", 0, "x"), Err(ErrorCode::NotFound));
     assert_eq!(rename(&mut t, &who, 3, "a", 0, "b"), Err(ErrorCode::NotDir));
-    assert_eq!(rename(&mut t, &who, 0, "d", 0, ".."), Err(ErrorCode::Refused));
+    assert_eq!(rename(&mut t, &who, 0, "d", 0, ".."), Err(ErrorCode::BadName));
     // Into itself, refused by walfs.
-    assert_eq!(rename(&mut t, &who, 0, "d", 2, "self"), Err(ErrorCode::Refused));
+    assert_eq!(rename(&mut t, &who, 0, "d", 2, "self"), Err(ErrorCode::NotPermitted));
 }
 
 /// A rename over a file ends that file for every fid on it, as a remove does, in one
@@ -107,7 +107,7 @@ fn copy_file_copies_and_counts_the_bytes() {
     }
     assert_eq!(got, big);
     assert_eq!(copy(&mut t, &who, 1, 2, "copy"), Err(ErrorCode::Exists));
-    assert_eq!(copy(&mut t, &who, 2, 0, "dir"), Err(ErrorCode::Refused), "a directory is not copied");
+    assert_eq!(copy(&mut t, &who, 2, 0, "dir"), Err(ErrorCode::NotSupported), "a directory is not copied");
     t.server.fs.audit(false);
 }
 
@@ -124,7 +124,7 @@ fn attributes_set_and_get_with_the_reserved_types_refused() {
     set(&mut t, &who, 1, 16, b"other").unwrap();
     assert_eq!(get(&mut t, &who, 1, 16).unwrap(), b"other");
     for own in [0, 2, 15] {
-        assert_eq!(set(&mut t, &who, 1, own, b"x"), Err(ErrorCode::Refused));
+        assert_eq!(set(&mut t, &who, 1, own, b"x"), Err(ErrorCode::NotPermitted));
     }
     assert_eq!(get(&mut t, &who, 1, 0), Err(ErrorCode::NotFound));
     assert_eq!(set(&mut t, &who, 1, 17, &[1; 255]), Err(ErrorCode::TooLarge));
@@ -154,9 +154,9 @@ fn typed_operations_check_the_volumes_labels() {
     t.attach(&above, 0).unwrap();
     t.walk(&above, 0, 1, &["notes"]).unwrap();
     assert_eq!(get(&mut t, &above, 1, 16), Err(ErrorCode::NotFound));
-    assert_eq!(set(&mut t, &above, 1, 16, b"x"), Err(ErrorCode::Refused));
-    assert_eq!(rename(&mut t, &above, 0, "notes", 0, "x"), Err(ErrorCode::Refused));
-    assert_eq!(copy(&mut t, &above, 1, 0, "x"), Err(ErrorCode::Refused));
+    assert_eq!(set(&mut t, &above, 1, 16, b"x"), Err(ErrorCode::NotPermitted));
+    assert_eq!(rename(&mut t, &above, 0, "notes", 0, "x"), Err(ErrorCode::NotPermitted));
+    assert_eq!(copy(&mut t, &above, 1, 0, "x"), Err(ErrorCode::NotPermitted));
 }
 
 #[test]
@@ -171,8 +171,8 @@ fn a_read_only_volume_refuses_every_typed_change() {
     let mut t = T::on(&disk.clone().read_only(), &[]);
     t.attach(&who, 0).unwrap();
     t.walk(&who, 0, 1, &["notes"]).unwrap();
-    assert_eq!(rename(&mut t, &who, 0, "notes", 0, "x"), Err(ErrorCode::Refused));
-    assert_eq!(copy(&mut t, &who, 1, 0, "x"), Err(ErrorCode::Refused));
-    assert_eq!(set(&mut t, &who, 1, 16, b"x"), Err(ErrorCode::Refused));
+    assert_eq!(rename(&mut t, &who, 0, "notes", 0, "x"), Err(ErrorCode::ReadOnly));
+    assert_eq!(copy(&mut t, &who, 1, 0, "x"), Err(ErrorCode::ReadOnly));
+    assert_eq!(set(&mut t, &who, 1, 16, b"x"), Err(ErrorCode::ReadOnly));
     assert_eq!(disk.0.borrow().writes, before);
 }

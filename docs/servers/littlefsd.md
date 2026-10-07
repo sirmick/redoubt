@@ -150,14 +150,22 @@ The attack test: after a remove, the file's other fids get `removed` on read, wr
 label and quota checks as 9P, and exactly these four:
 
 - **`rename(old_dir, old_name, new_dir, new_name)`**: atomic, within one volume; `old_dir` and
-  `new_dir` are the caller's fids on directories. Renaming a directory into itself is refused. There
-  is no rename across volumes: one `littlefsd` serves one volume and cannot act on another's files, so
-  the client's `File.rename` returns `{:error, :exdev}`, and a move is the caller's own copy and
-  remove, which is not atomic.
+  `new_dir` are the caller's fids on directories. Renaming a directory into itself is
+  `not_permitted`. There is no rename across volumes: one `littlefsd` serves one volume and cannot
+  act on another's files, so the client's `File.rename` returns `{:error, :exdev}`, and a move is
+  the caller's own copy and remove, which is not atomic.
 - **`copy_file(src_fid, dst_dir, dst_name)`**: copies a file within the volume and replies with the
-  bytes copied.
+  bytes copied. A directory is not copied: `not_supported`.
 - **`set_attr(fid, attr, value)`** and **`get_attr(fid, attr)`**: a file's or directory's user
   attribute `attr`.
+
+**Refusals** carry the table's names, each meaning what it means in a 9P reply
+([error names](wire.md#error-names)): a caller whose labels may not change the volume, a rename
+that would end a live root or move a directory into itself, and a `set_attr` of one of
+`littlefsd`'s own attribute types are `not_permitted`; what the server does not do is
+`not_supported`; a name that is not one plain path element is `bad_name`; and a change to a
+read-only volume is `read_only`. None is `refused`, which is a connection's refusal: in the
+shell it reads as `econnrefused`.
 
 The table: [libs/wire/tables/littlefsd.md](../../libs/wire/tables/littlefsd.md).
 
@@ -165,10 +173,10 @@ The table: [libs/wire/tables/littlefsd.md](../../libs/wire/tables/littlefsd.md).
 
 **Attributes.** A value is at most littlefs's `attr_max`, 1022 bytes; a larger one is refused with
 `too_large`. Attribute types 0 to 15 are `littlefsd`'s own (the id, mtime, qid version, the root's id
-counter, and later use), and `set_attr` refuses them; types 16 to 255 are the user's. The id
-counter moves before each create, in a commit of its own, so a create that then fails (the name
-exists, or the volume is full) still uses up an id and a write; ids are never reused, and a 64-bit
-counter does not run out.
+counter, and later use), and `set_attr` refuses them (`not_permitted`); types 16 to 255 are the
+user's. The id counter moves before each create, in a commit of its own, so a create that then
+fails (the name exists, or the volume is full) still uses up an id and a write; ids are never
+reused, and a 64-bit counter does not run out.
 
 **Corruption.** An operation that meets a corrupt volume, or an I/O error from `blkd`, answers
 `corrupt`, for 9P and the typed operations alike, so a client can tell a broken volume from a
@@ -231,9 +239,9 @@ library holds no byte counters; `littlefsd` is the only server that meters bytes
 - **A quota of 0 means nothing:** the connection can read and remove, but not create or grow. A
   quota is never charged to a parent root, which would reopen a shared pool.
 - **A rename or remove never ends a live root.** Moving a live root or a directory holding one,
-  removing a live root's directory, or renaming over it is refused: it would end that root's
-  connections and carry its count away. A rename between two roots' parts of the tree moves the
-  bytes and needs room in the second.
+  removing a live root's directory, or renaming over it is `not_permitted`: it would end that
+  root's connections and carry its count away. A rename between two roots' parts of the tree
+  moves the bytes and needs room in the second.
 
 The attack tests: a write past one root's quota is refused while another root still writes; a
 root with quota 0 reads and removes, but cannot create.
@@ -277,10 +285,10 @@ Nothing C runs on the target.
 - **Memory** is bounded: one block-sized buffer per metadata fetch, one block per file handle that
   is writing, and an allocation bitmap of `block_count / 8` bytes.
 - **Where it departs from the C reference:** open handles follow renames and survive removal (their
-  data stays readable); renaming a directory into itself is refused; directory reads return no `.`
-  or `..`; CRC-valid commits that make no sense (duplicate names, entries without names, tags out
-  of range) are corrupt; the configured block count must equal the superblock's; only on-disk
-  version 2.1 mounts; a file's attributes and its data are two commits.
+  data stays readable); renaming a directory into itself is refused (`not_permitted`); directory
+  reads return no `.` or `..`; CRC-valid commits that make no sense (duplicate names, entries
+  without names, tags out of range) are corrupt; the configured block count must equal the
+  superblock's; only on-disk version 2.1 mounts; a file's attributes and its data are two commits.
 - **Left out on purpose:** wear levelling and bad-block relocation, since a virtio disk's device
   handles both (a failed program or erase is reported, not worked around); growing the
   superblock chain; migration from older versions.

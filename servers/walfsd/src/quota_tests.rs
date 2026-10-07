@@ -242,7 +242,7 @@ fn a_rename_between_two_roots_moves_the_bytes_and_never_ends_a_live_root() {
     audit(&mut t);
     rename(&mut t, &base, 1, "f", 2, "g").unwrap();
     audit(&mut t);
-    assert_eq!(rename(&mut t, &base, 0, "a", 2, "a"), Err(ErrorCode::Refused), "a live root moved");
+    assert_eq!(rename(&mut t, &base, 0, "a", 2, "a"), Err(ErrorCode::NotPermitted), "a live root moved");
     t.walk(&base, 0, 3, &["b"]).unwrap();
     assert_eq!(t.remove(&base, 3).unwrap_err(), "permission denied", "a live root removed");
 }

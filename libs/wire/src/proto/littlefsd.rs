@@ -245,13 +245,19 @@ impl<'a> Reply<'a> {
 pub enum ErrorCode {
     Malformed,
     NotFound,
-    Refused,
     Exists,
     NotDir,
     Removed,
     TooLarge,
     Corrupt,
     NoSpace,
+    NotPermitted,
+    NotSupported,
+    BadName,
+    ReadOnly,
+    NoMemory,
+    IsDir,
+    NotEmpty,
 }
 
 impl ErrorCode {
@@ -259,13 +265,19 @@ impl ErrorCode {
         match self {
             ErrorCode::Malformed => 1,
             ErrorCode::NotFound => 2,
-            ErrorCode::Refused => 3,
             ErrorCode::Exists => 4,
             ErrorCode::NotDir => 5,
             ErrorCode::Removed => 6,
             ErrorCode::TooLarge => 7,
             ErrorCode::Corrupt => 8,
             ErrorCode::NoSpace => 9,
+            ErrorCode::NotPermitted => 10,
+            ErrorCode::NotSupported => 11,
+            ErrorCode::BadName => 12,
+            ErrorCode::ReadOnly => 13,
+            ErrorCode::NoMemory => 14,
+            ErrorCode::IsDir => 15,
+            ErrorCode::NotEmpty => 16,
         }
     }
 
@@ -273,13 +285,19 @@ impl ErrorCode {
         match code {
             1 => Some(ErrorCode::Malformed),
             2 => Some(ErrorCode::NotFound),
-            3 => Some(ErrorCode::Refused),
             4 => Some(ErrorCode::Exists),
             5 => Some(ErrorCode::NotDir),
             6 => Some(ErrorCode::Removed),
             7 => Some(ErrorCode::TooLarge),
             8 => Some(ErrorCode::Corrupt),
             9 => Some(ErrorCode::NoSpace),
+            10 => Some(ErrorCode::NotPermitted),
+            11 => Some(ErrorCode::NotSupported),
+            12 => Some(ErrorCode::BadName),
+            13 => Some(ErrorCode::ReadOnly),
+            14 => Some(ErrorCode::NoMemory),
+            15 => Some(ErrorCode::IsDir),
+            16 => Some(ErrorCode::NotEmpty),
             _ => None,
         }
     }

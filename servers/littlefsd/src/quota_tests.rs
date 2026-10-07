@@ -364,9 +364,9 @@ fn a_rename_or_remove_never_ends_a_live_root() {
     t.clunk(&base, 1).unwrap();
     let (b, _) = mint(&mut t, &mut k, &base, "a/b", 0).unwrap();
     t.walk(&base, 0, 1, &["a"]).unwrap();
-    assert_eq!(rename(&mut t, &base, 0, "a", 0, "c"), Err(ErrorCode::Refused));
-    assert_eq!(rename(&mut t, &base, 1, "b", 0, "b"), Err(ErrorCode::Refused));
-    assert_eq!(rename(&mut t, &base, 0, "x", 1, "b"), Err(ErrorCode::Refused));
+    assert_eq!(rename(&mut t, &base, 0, "a", 0, "c"), Err(ErrorCode::NotPermitted));
+    assert_eq!(rename(&mut t, &base, 1, "b", 0, "b"), Err(ErrorCode::NotPermitted));
+    assert_eq!(rename(&mut t, &base, 0, "x", 1, "b"), Err(ErrorCode::NotPermitted));
     t.walk(&base, 0, 2, &["a", "b"]).unwrap();
     assert_eq!(t.remove(&base, 2).unwrap_err(), "permission denied");
     t.attach(&b, 0).unwrap();

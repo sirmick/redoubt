@@ -190,8 +190,9 @@ alike: `not_permitted`, not a second word for it.
 | a text not in the table | `other` | `eio` |
 
 `removed` is a file removed under a fid still held, so `estale`; a name never there is
-`not_found`, so `enoent`. A typed protocol's error code means the same as the 9P name it shares
-(`littlefsd`'s `refused` is `refused`).
+`not_found`, so `enoent`. A typed protocol's error code means the same as the 9P name it shares:
+`littlefsd`'s `not_permitted` is `not_permitted`, so a refusal by label or policy is `eacces`
+whichever way it comes, and `refused` is only ever a connection's refusal.
 
 A walk of several names that stops short says only how far it got, not why: a refusal after
 the first name (a label check, a failed read) reads as `not_found`, so a caller that must tell the

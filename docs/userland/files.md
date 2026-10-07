@@ -45,9 +45,10 @@ per-file metadata.
 
 ### Files over 9P
 
-<details><summary>Status: built · partly tested: the host tests run beamlet's platform against the real `littlefsd` on the fake kernel, and OTP's `prim_file` over the natives runs in a boot in bench:beamlet-files; Elixir's `File` over them runs in a session once the steward's sessions do · tested (19)</summary>
+<details><summary>Status: built · partly tested: the host tests run beamlet's platform against the real `littlefsd` on the fake kernel, and OTP's `prim_file` over the natives runs in a boot in bench:beamlet-files; Elixir's `File` over them runs in a session once the steward's sessions do · tested (20)</summary>
 
 - host:beamlet-redoubt::files_are_written_read_listed_renamed_and_removed
+- host:beamlet-redoubt::a_rename_the_volume_refuses_is_eacces
 - host:beamlet-redoubt::opening_to_write_replaces_and_appending_adds
 - host:beamlet-redoubt::a_read_past_one_answer_comes_in_pieces
 - host:beamlet-redoubt::the_position_lives_in_the_vm_and_moves_with_reads_and_seeks
@@ -103,7 +104,7 @@ neither inside nor above one is `:enoent` ([sessions](sessions.md#namespaces)).
   per-file metadata is the file server's typed `set_attr` and `get_attr`, kept in the volume's
   attributes.
 - **An error is a Redoubt error first.** The file server refuses with its own reasons
-  (`not_found`, `refused`, `exists`, `not_dir`, `removed` for a fid whose file was removed,
+  (`not_found`, `not_permitted`, `exists`, `not_dir`, `removed` for a fid whose file was removed,
   `too_large` for an attribute over its limit), and labels and budgets add theirs, each a name of
   the one table ([wire](../servers/wire.md#error-names)). Everywhere but the `File` boundary a
   Redoubt error keeps its name; there, beamlet's platform maps each name to the POSIX error OTP's

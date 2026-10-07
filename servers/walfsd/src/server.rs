@@ -564,20 +564,23 @@ pub(crate) fn nine(e: Failure) -> NineError {
     }
 }
 
-/// The same failure as the typed operations' error (libs/wire/tables/littlefsd.md).
+/// The same failure as the typed operations' error (libs/wire/tables/littlefsd.md), by the name
+/// [`nine`] gives it (servers/wire.md, "Error names").
 pub(crate) fn code(e: Failure) -> ErrorCode {
     match e {
         Failure::Removed => ErrorCode::Removed,
-        Failure::NoMemory | Failure::ReadOnly => ErrorCode::Refused,
+        Failure::NoMemory => ErrorCode::NoMemory,
+        Failure::ReadOnly => ErrorCode::ReadOnly,
         Failure::Fs(FsError::Io | FsError::Corrupt | FsError::Poisoned) => ErrorCode::Corrupt,
         Failure::Fs(FsError::NoEntry | FsError::NoAttr) => ErrorCode::NotFound,
         Failure::Fs(FsError::Exists) => ErrorCode::Exists,
         Failure::Fs(FsError::NotDir) => ErrorCode::NotDir,
+        Failure::Fs(FsError::IsDir) => ErrorCode::IsDir,
+        Failure::Fs(FsError::NotEmpty) => ErrorCode::NotEmpty,
         Failure::Fs(FsError::NoSpace) => ErrorCode::NoSpace,
         Failure::Fs(FsError::FileTooBig) => ErrorCode::TooLarge,
-        Failure::Fs(FsError::IsDir | FsError::NotEmpty | FsError::Invalid | FsError::NameTooLong) => {
-            ErrorCode::Refused
-        }
+        Failure::Fs(FsError::NameTooLong) => ErrorCode::BadName,
+        Failure::Fs(FsError::Invalid) => ErrorCode::NotPermitted,
     }
 }
 
