@@ -2,7 +2,7 @@
 
 ## Purpose
 
-`walfsd` is to serve a **writable volume** on the SSD in walfs, a write-ahead-log file system of
+`walfsd` serves each **writable volume** on the SSD in walfs, a write-ahead-log file system of
 Redoubt's own: a superblock, a log of whole blocks, a table of inodes, a block bitmap, and a
 SHA-256 for every block, checked on every read. littlefs ([littlefsd](littlefsd.md)) is built
 for raw flash, with wear levelling and erase units an SSD does not need, and it checksums no
@@ -363,43 +363,235 @@ and a `write` for each file, each the transactions it takes. It is deterministic
 
 ### Serving
 
-Status: planned · M1 (separation and containment)
+<details><summary>Status: built · tested (33)</summary>
 
-`walfsd` will serve walfs as `littlefsd` serves littlefs: one instance per volume, under a
-`blkd` range, with the same 9P face, labels and typed operations.
+- bench:walfsd-boot
+- bench:walfsd-confined-labelled
+- bench:walfsd-corrupt-volume
+- bench:walfsd-flipped-block
+- bench:walfsd-host-tests
+- bench:walfsd-label-check
+- bench:walfsd-reboot
+- host:redoubt-init::a_walfsd_entry_is_a_volume_server_as_a_littlefsd_one_is
+- host:redoubt-walfsd::a_blank_range_is_formatted_and_only_a_blank_one
+- host:redoubt-walfsd::a_cut_at_every_write_of_a_write_and_a_rename_leaves_before_or_after
+- host:redoubt-walfsd::a_device_that_fails_makes_the_volume_corrupt_until_it_is_mounted_again
+- host:redoubt-walfsd::a_flipped_bit_in_a_file_is_corrupt_for_that_file_alone
+- host:redoubt-walfsd::a_range_too_small_is_no_volume
+- host:redoubt-walfsd::a_read_only_range_is_never_written
+- host:redoubt-walfsd::a_read_only_volume_refuses_every_typed_change
+- host:redoubt-walfsd::a_removed_files_other_fids_get_removed
+- host:redoubt-walfsd::a_rename_over_a_file_removes_it
+- host:redoubt-walfsd::a_sequential_read_costs_a_few_block_reads_per_request_and_per_block
+- host:redoubt-walfsd::a_strangers_fid_is_not_found
+- host:redoubt-walfsd::arguments_it_does_not_understand_stop_it_before_serving
+- host:redoubt-walfsd::attach_walk_open_read_write
+- host:redoubt-walfsd::attributes_set_and_get_with_the_reserved_types_refused
+- host:redoubt-walfsd::copy_file_copies_and_counts_the_bytes
+- host:redoubt-walfsd::every_transaction_is_four_flushes
+- host:redoubt-walfsd::fids_are_bounded_and_disconnect_frees_them
+- host:redoubt-walfsd::files_and_directories_survive_a_remount
+- host:redoubt-walfsd::listing_a_directory_reads_it_once_per_window
+- host:redoubt-walfsd::noise_is_never_formatted_and_never_mounted
+- host:redoubt-walfsd::rename_moves_within_the_volume_and_keeps_the_inode
+- host:redoubt-walfsd::the_client_library_works_against_walfsd
+- host:redoubt-walfsd::the_conformance_vectors_run_against_walfsd
+- host:redoubt-walfsd::the_volumes_labels_are_checked_on_every_request
+- host:redoubt-walfsd::typed_operations_check_the_volumes_labels
 
-**Open:** what a quota counts (blocks or bytes) and which attribute types `walfsd` serves.
+</details>
+
+`walfsd` serves walfs as `littlefsd` serves littlefs
+([littlefsd](littlefsd.md#volumes-connections-and-labels)), with the same 9P face, labels and
+typed operations, so a client names no format:
+
+- **One instance per volume.** A `walfsd` holds one block-range handle, `volume`, its partition at
+  [`blkd`](blkd.md), and no MMIO, interrupt or DMA. `init` starts it as it starts `littlefsd` and
+  `erofsd`: a `servers` entry whose `program` is `walfsd` and whose `volume` names the volume, with
+  the arguments `endpoint=NAME` (`walfsd:data`), `labels=ID[,ID...]` and `buckets=N`
+  ([init](init.md#the-boot-manifest)). A block is eight of `blkd`'s sectors, so the volume's block
+  count is its range's sectors divided by 8; a range of fewer than 40 blocks, the smallest volume
+  at the packer's inode density, is no volume and `walfsd` exits.
+- **Mounting.** A range whose first two blocks (the superblock and the log's header) are all zero
+  has never been written, and `walfsd` formats it at the packer's inode density
+  ([The packer](#the-packer)). Any other range is mounted, which recovers a transaction left in the log
+  ([The log](#the-log)) and finishes the orphan list; one that does not mount is served as
+  corrupt: every attach is refused with `corrupt`, `walfsd` says so on its console, and it stays
+  up, so a damaged or hostile medium never becomes a restart loop. `walfsd` never formats a range
+  that holds anything. A range `blkd` reports read-only is served read-only: every change is
+  refused before it reaches `blkd`, and a blank one is not formatted.
+- **`sync` is `blkd`'s `flush`.** walfs's device `sync`, between each of a transaction's four
+  steps ([The log](#the-log)), is a `flush` on the range, which returns only when the device's own
+  flush has completed ([blkd](blkd.md#messages)): four flushes a transaction, and nothing written
+  is acknowledged before them.
+- **A fid is a path, an inode and a generation.** A node is the path its client walked, built only
+  from names clients walked or created, and the inode and generation the file had there
+  ([Inodes](#inodes)). Every request finds the path again and checks the pair: an entry gone, or
+  another file in its place, even in the same inode at a later generation, is `removed`. So a
+  remove or a rename over a file ends every other fid on it, and fids do not follow renames, as on
+  `littlefsd`. A qid's path is the inode and its version the generation's low 32 bits, so a qid
+  names one file for the volume's life, and survives a reboot.
+- **A remove ends the file at once.** No walfs handle outlives a request, so a removed file's
+  blocks are freed in the same call, and nothing removed holds space or quota.
+- **One transaction an operation.** Each of 9P's `create`, `write` (one transaction while it
+  fits one, [Atomicity](#atomicity)), `remove` and an open that truncates, and each typed
+  `rename` and `set_attr`, is the walfs operation of the same name; a power cut leaves it before
+  or after ([R50 (power loss leaves before or after), on walfs volumes](#r50-power-loss-leaves-before-or-after-on-walfs-volumes)).
+- **Damage is corrupt where it is read.** A block that fails its hash, or any structure the format
+  calls corrupt ([What is corrupt](#what-is-corrupt)), fails the request that read it with
+  `corrupt` (the `Rerror` text for 9P, the table's `corrupt` for a typed operation), and nothing
+  else: other files read and the volume still writes. An I/O error from `blkd` poisons the volume
+  until `walfsd` starts again, as on `littlefsd`.
+- **Labels are per volume.** Each volume has one label set, and `walfsd` reports it as every
+  node's, so the skeleton's label check runs on every request
+  ([R25 (the label check)](serving.md#r25-the-label-check)); there are no per-file labels, owners
+  or permission bits.
+- **Typed operations** are `littlefsd`'s table, served alike: `rename`, `copy_file`, `set_attr`
+  and `get_attr` ([littlefsd](littlefsd.md#typed-operations)). Attributes live in the inode's
+  256-byte area ([User attributes](#user-attributes)): types 16 to 255 are the user's and 0 to 15
+  are refused, as on `littlefsd`, so a client sees one contract; a value is at most 254 bytes
+  (`too_large` above), and attributes that no longer fit the area are `no_space`. `copy_file`
+  writes a new file a block at a time and removes it if it does not finish. Times: a file's mtime
+  is walfs's, 0 until a clock reaches `walfsd`.
+- **Listings** are served from a window of up to 64 entries filled by one pass over the
+  directory, as on `littlefsd`, so listing n entries costs about n / 64 passes.
+- **Admission** is the serving library's, with `littlefsd`'s caps per bucket
+  ([R26 (admission fairness)](serving.md#r26-admission-fairness)).
+- **Memory** is the format's ([Memory](#memory)), a node per fid (its path), the listing window,
+  and the quota's records; the image declares the heap the memory scan measured
+  ([testbench](../testbench.md#the-memory-budget)).
+- **Reads.** Each request finds its file by path and opens it, about nine block reads with their
+  hash blocks, then reads its data blocks, each about two block reads, since a data block's hash
+  block takes turns with the inode table's in the one hash block walfs keeps: 10.8 block reads per
+  data block in 4 KiB reads, 2.9 in 32 KiB reads. `walfsd` keeps no block cache.
+
+### Quotas
+
+<details><summary>Status: built · tested (10)</summary>
+
+- bench:walfsd-quota
+- host:redoubt-walfsd::a_copy_past_the_quota_is_no_space
+- host:redoubt-walfsd::a_mint_at_a_stale_root_records_nothing
+- host:redoubt-walfsd::a_mint_the_room_cannot_take_is_refused_and_disconnect_gives_it_back
+- host:redoubt-walfsd::a_rename_between_two_roots_moves_the_bytes_and_never_ends_a_live_root
+- host:redoubt-walfsd::a_root_minted_over_files_counts_them
+- host:redoubt-walfsd::a_root_with_quota_0_cannot_create_but_can_read_and_remove
+- host:redoubt-walfsd::a_write_past_one_roots_quota_is_refused_while_another_still_writes
+- host:redoubt-walfsd::file_bytes_counts_data_and_indirect_blocks
+- host:redoubt-walfsd::the_volume_never_runs_out_while_every_root_is_within_its_quota
+
+</details>
+
+A quota is in **bytes**, carved at `new_connection` from the room of the live root above, and
+kept by `littlefsd`'s ledger, rules and refusals: a root's quota is the sum of its connections',
+a change is charged to the nearest live root above it, a root minted over more than its quota
+can read and remove only, nothing is stored on the medium, and a rename or remove never ends a
+live root ([littlefsd](littlefsd.md#quotas)). What walfs counts:
+
+- **The volume root's room** is the data region's bytes: its blocks times 4096.
+- **An entry holds** its share, ⌈room / (`inode_count` − 2)⌉ bytes (inodes 0 and 1 are never an
+  entry's), and 4096 bytes for each data block its size reaches, holes included, and each
+  indirect block that would map them; a directory holds its own blocks too, and what lies under
+  it. So entries that fit a quota never take more inodes than the volume has, nor blocks: no
+  quota is a promise the volume cannot keep, in blocks or inodes.
+- **A change is refused before its transaction begins.** A write needs the bytes its new size
+  adds; a create, its share and a block its directory may gain; a copy, the whole file; a rename
+  between two roots, what moves less what it replaces, and the block. What the change then made
+  is charged: the file's size, the directory's blocks, as they are after it.
+
+With the packer's inode for every 16 blocks, the share is about 64 KiB, so a root of quota Q holds
+about Q / 64 KiB entries, fewer if they hold data
+([Residual risks](#residual-risks)).
 
 ## Authority
 
-Status: planned · M1 (separation and containment)
+Status: built · tested: bench:walfsd-one-volume
 
-`walfsd` will hold its own endpoint, one `blkd` range and the connections it mints, as
-`littlefsd` does.
-
-**Open:** none.
+`walfsd` holds its endpoint, its one block-range handle at `blkd`, the console `init` gave it,
+and the connections it mints, as `littlefsd` does. It holds no device, no budget handle and no
+connection to any other file server. What a client may reach is the subtree its connection is
+rooted at, under the volume's labels and its root's quota.
 
 ## Security properties
 
-Status: planned · M1 (separation and containment)
+### R47 (one volume per instance), on walfs volumes
 
-`walfsd` is to keep, for its volumes, what `littlefsd` keeps today:
-[R47 (one volume per instance)](littlefsd.md#r47-one-volume-per-instance),
-[R48 (a quota per attach root)](littlefsd.md#r48-a-quota-per-attach-root),
-[R49 (a hostile medium is corrupt, not a crash)](littlefsd.md#r49-a-hostile-medium-is-corrupt-not-a-crash)
-and [R50 (power loss leaves before or after)](littlefsd.md#r50-power-loss-leaves-before-or-after),
-each restated here when the server is built. The format above is what R49 and R50 will rest on.
+<details><summary>Status: built · tested (2)</summary>
 
-**Open:** none beyond Serving's.
+- bench:walfsd-one-volume
+- host:redoubt-init::a_walfsd_entry_is_a_volume_server_as_a_littlefsd_one_is
+
+</details>
+
+Each `walfsd` instance serves one volume and holds only its block range, placed by `init` as a
+`littlefsd`'s is: a parser exploit through a crafted volume or request reaches that volume and
+nothing else.
+
+### R48 (a quota per attach root), on walfs volumes
+
+<details><summary>Status: built · tested (3)</summary>
+
+- bench:walfsd-quota
+- host:redoubt-walfsd::a_root_with_quota_0_cannot_create_but_can_read_and_remove
+- host:redoubt-walfsd::a_write_past_one_roots_quota_is_refused_while_another_still_writes
+
+</details>
+
+Every connection's root has a byte quota carved from its granter's, and no change takes a root
+past it ([Quotas](#quotas)); an entry's share keeps inodes, as well as blocks, within what the
+quotas promise, so one principal filling a shared volume cannot make another's creates or writes
+fail.
+
+### R49 (a hostile medium is corrupt, not a crash), on walfs volumes
+
+<details><summary>Status: built · tested (8)</summary>
+
+- bench:walfsd-corrupt-volume
+- bench:walfsd-flipped-block
+- fuzz:walfs/image
+- fuzz:walfs/mutate
+- host:redoubt-walfsd::a_flipped_bit_in_a_file_is_corrupt_for_that_file_alone
+- host:redoubt-walfsd::noise_is_never_formatted_and_never_mounted
+- host:walfs::every_flipped_bit_is_corrupt_where_it_is_read
+- host:walfs::noise_never_panics
+
+</details>
+
+Whatever bytes the medium holds, walfs refuses them as corrupt where they are read rather than
+panicking, looping or allocating past the volume ([What is corrupt](#what-is-corrupt)), and
+`walfsd` answers `corrupt` for that request alone; a volume that does not mount is served as
+corrupt, and `walfsd` stays up. A block of a file changed on the medium is found by its hash, so
+unlike littlefs's, a walfs volume's data is checked too.
+
+### R50 (power loss leaves before or after), on walfs volumes
+
+<details><summary>Status: built · tested (5)</summary>
+
+- bench:walfsd-power-loss
+- host:redoubt-walfsd::a_cut_at_every_write_of_a_write_and_a_rename_leaves_before_or_after
+- host:walfs::crash_at_every_write_fixed_workload
+- host:walfs::crash_at_every_write_random_workloads
+- host:walfs::crash_during_recovery
+
+</details>
+
+On a device that keeps `blkd`'s `flush`, a power cut at any block write leaves each operation,
+data and metadata together, as before it or after it ([Atomicity](#atomicity)), and the next mount
+recovers the log. The bench cuts `walfsd` itself after a block write drawn from its seed, inside a
+write of three blocks and a rename, and the restarted instance serves the file as before or after
+each, with the volume check finding nothing.
 
 ## Failure and restart
 
-Status: planned · M1 (separation and containment)
+Status: built · tested: bench:walfsd-power-loss, bench:walfsd-corrupt-volume, bench:walfsd-reboot
 
-A cut transaction is recovered at mount, so a restarted `walfsd` serves the volume as of its
-last committed transaction; a corrupt volume will be served as corrupt, not an exit.
-
-**Open:** none.
+- **`walfsd` crashes:** its clients' calls get `Dead`, `init` restarts it on the same endpoint
+  ([init](init.md#restarts-and-reboots)), and its mount recovers a cut transaction from the log,
+  so the volume is as of its last committed transaction. Clients ask for fresh connections.
+- **The medium is corrupt:** a volume that does not mount is served as corrupt, never exited on;
+  a damaged block fails the requests that read it.
+- **An I/O error from `blkd`** poisons the volume until `walfsd` starts again, whose mount
+  recovers what the error left.
 
 ## Residual risks
 
@@ -410,11 +602,24 @@ last committed transaction; a corrupt volume will be served as corrupt, not an e
   fails reads as a commit torn by power loss, so the transaction it held is lost rather than
   refused as corrupt. The blocks it would have written are left as they were, each still
   checked by its slot.
-- **A directory lookup is linear** in the directory's size.
+- **A directory lookup is linear** in the directory's size, and `walfsd` finds a file by its path
+  on every request ([Serving](#serving), reads).
 - **No wear levelling:** an SSD levels its own wear; walfs on raw flash would wear its log and
   hash region first. littlefs stays the format for raw flash.
 - **A large write is several transactions.** Each is before or after, so a power cut inside a
   write of more than one transaction's blocks leaves a prefix of it.
+- **A quota is counted coarsely.** An entry costs its share ([Quotas](#quotas)) whatever it
+  holds, and a file every block its size reaches, holes included, so a
+  quota holds fewer small or sparse files than its bytes suggest; and once every inode's share
+  is carved, the volume's last directory blocks are out of every quota's reach.
+- **A qid's version is the generation,** not a count of writes: a write does not move it, so a
+  client caching a file by its qid does not see the change. mtime is 0 until a clock reaches
+  `walfsd`.
+- **A shared `walfsd` is shared state,** as a shared `littlefsd` is
+  ([littlefsd](littlefsd.md#residual-risks)).
+- **`walfsd` copies `littlefsd`'s argument parser, range client, quota ledger and one-volume
+  probe,** so a change to one must reach both
+  ([a follow-up](../todo/file-server-arguments-and-range-client.md)).
 
 ## Why
 

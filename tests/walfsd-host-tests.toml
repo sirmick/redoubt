@@ -1,0 +1,6 @@
+description = "walfsd on one volume: 9P, labels, remove, quotas, typed operations, the mount rule and a cut at every block write against a range in memory, and the program and client library against a fake blkd"
+kind = "host-tests"
+# The server's rules run against a block device in memory standing in for blkd's range; the
+# program runs on the runtime's fake kernel with a fake blkd serving sectors from memory, and
+# the client library reaches it unchanged. walfsd under init is in the walfsd-* boot cases.
+packages = ["redoubt-walfsd"]

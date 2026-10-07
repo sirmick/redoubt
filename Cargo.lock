@@ -890,6 +890,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "redoubt-walfsd-programs"
+version = "0.1.0"
+dependencies = [
+ "redoubt-client",
+ "redoubt-init-programs",
+ "redoubt-rt",
+]
+
+[[package]]
 name = "redoubt-wire"
 version = "0.1.0"
 

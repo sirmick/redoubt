@@ -10,7 +10,8 @@
 //! - `read ENDPOINT PATH TEXT...`: each path holds exactly the text after it.
 //! - `apart ENDPOINT ENDPOINT`: writes a file of the same name through each, and reads each back.
 //! - `corrupt ENDPOINT`: every attach is refused, and `littlefsd` still answers the next.
-//! - `quota ENDPOINT`: mints two roots with a quota each; one fills its quota, and the other still writes.
+//! - `quota ENDPOINT [BYTES]`: mints two roots with a quota each, 64 KiB unless `BYTES` says; one fills its
+//!   quota, and the other still writes half of it.
 //! - `restart ENDPOINT PROBE`: writes a file, walks to `PROBE`, which ends a `littlefsd` built with its
 //!   test-only feature `restart-probe`, and reads the file back through a fresh connection.
 //! - `readonly ENDPOINT FILE`: on a volume `littlefsd` serves read-only (the userland disk), a create, and a
@@ -79,7 +80,7 @@ fn run(startup: &Startup) -> u32 {
         (Some("read"), Some(at)) => read(startup, &mut out, at, args).map(|()| Ends::Passed),
         (Some("apart"), Some(at)) => apart(startup, &mut out, at, args.next()).map(|()| Ends::Passed),
         (Some("corrupt"), Some(at)) => corrupt(startup, &mut out, at).map(|()| Ends::Passed),
-        (Some("quota"), Some(at)) => quota(startup, &mut out, at).map(|()| Ends::Passed),
+        (Some("quota"), Some(at)) => quota(startup, &mut out, at, args.next()).map(|()| Ends::Passed),
         (Some("outsider"), Some(at)) => {
             outsider(startup, &mut out, at, args.next().zip(args.next())).map(|()| Ends::Passed)
         }
@@ -305,12 +306,17 @@ fn corrupt(startup: &Startup, out: &mut Out, endpoint: &str) -> Result<(), Strin
     out.say("littlefsd-client was refused at each of 3 attaches\n").map_err(|e| format!("say: {e:?}"))
 }
 
-/// Each root's quota in `quota`, in bytes.
+/// Each root's quota in `quota`, in bytes, unless its case gives another.
 const QUOTA: u64 = 64 * 1024;
 
-/// `littlefsd-quota` (R48): two roots minted at one volume with [`QUOTA`] each; one writes until a
-/// write is refused, within its quota, and the other still writes half a quota.
-fn quota(startup: &Startup, out: &mut Out, endpoint: &str) -> Result<(), String> {
+/// `littlefsd-quota` and `walfsd-quota` (R48): two roots minted at one volume with `bytes` (or
+/// [`QUOTA`]) each; one writes until a write is refused, within its quota, and the other still
+/// writes half a quota.
+fn quota(startup: &Startup, out: &mut Out, endpoint: &str, bytes: Option<&str>) -> Result<(), String> {
+    let quota = match bytes {
+        Some(n) => n.parse().map_err(|_| format!("quota {n:?} is not a number of bytes"))?,
+        None => QUOTA,
+    };
     let base = attach(startup, out, endpoint)?;
     let mut roots = Vec::new();
     for name in ["hog", "saver"] {
@@ -318,7 +324,7 @@ fn quota(startup: &Startup, out: &mut Out, endpoint: &str) -> Result<(), String>
             .and_then(|d| d.close(&mut out.lend))
             .map_err(|e| format!("mkdir {name}: {e:?}"))?;
         let (minted, _) = base
-            .new_connection(&mut out.lend, &format!("/{name}"), QUOTA)
+            .new_connection(&mut out.lend, &format!("/{name}"), quota)
             .map_err(|e| format!("mint {name}: {e:?}"))?;
         roots.push(Connection::attach(minted, &mut out.lend).map_err(|e| format!("attach {name}: {e:?}"))?);
     }
@@ -334,8 +340,8 @@ fn quota(startup: &Startup, out: &mut Out, endpoint: &str) -> Result<(), String>
             Err(Error::Rerror(_)) => break,
             Err(e) => return Err(format!("write full: {e:?}")),
         }
-        if filled > QUOTA {
-            return Err(format!("wrote {filled} bytes past a quota of {QUOTA}"));
+        if filled > quota {
+            return Err(format!("wrote {filled} bytes past a quota of {quota}"));
         }
     }
     let half = [9u8; 4096];
@@ -344,9 +350,9 @@ fn quota(startup: &Startup, out: &mut Out, endpoint: &str) -> Result<(), String>
         .map_err(|e| format!("create kept: {e:?}"))?;
     // A write may take less than it is given (the lend bounds it); each goes on where it ended.
     let mut kept = 0u64;
-    while kept < QUOTA / 2 {
+    while kept < quota / 2 {
         match saver
-            .write_at(&mut out.lend, kept, &half[..half.len().min((QUOTA / 2 - kept) as usize)])
+            .write_at(&mut out.lend, kept, &half[..half.len().min((quota / 2 - kept) as usize)])
             .map_err(|e| format!("write kept at {kept}: {e:?}"))?
         {
             0 => return Err(format!("a write to kept at {kept} took nothing")),
@@ -355,7 +361,7 @@ fn quota(startup: &Startup, out: &mut Out, endpoint: &str) -> Result<(), String>
     }
     out.say(&format!(
         "littlefsd-client filled one root at {filled} bytes, and the other still wrote {}\n",
-        QUOTA / 2
+        quota / 2
     ))
     .map_err(|e| format!("say: {e:?}"))
 }

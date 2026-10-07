@@ -53,8 +53,8 @@ pub struct Partition {
     /// the pack says its root and block count, which the manifest pins.
     #[serde(default)]
     pub verity: bool,
-    /// For `erofs`, for a case: one thing the packed volume is made to hold that `erofsd` must
-    /// serve as corrupt ([`Damage`]).
+    /// For `erofs` or `walfs`, for a case: one thing the packed volume is made to hold that its
+    /// server must serve as corrupt ([`Damage`]).
     pub damage: Option<Damage>,
     /// For a verified volume, a signed root block in place of a pinned root.
     pub sign: Option<Sign>,
@@ -64,7 +64,10 @@ pub struct Partition {
 /// (servers/erofsd.md, "The format"): `magic`, a bit of the superblock's magic flipped;
 /// `block-past-count`, the file at `path` (with at least one whole block) starting at the volume's
 /// block count; `compressed`, the file at `path` laid out as compressed; `name-offset`, the last
-/// name of the first block of the directory at `path` starting past the block's end.
+/// name of the first block of the directory at `path` starting past the block's end. And what a
+/// walfs volume is damaged with, for `walfsd-flipped-block` (servers/walfsd.md, "What is corrupt"):
+/// `flip`, one bit flipped in the first data block of the file at `path`, found by its bytes, which
+/// must fill the block and be on the volume once.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Damage {
@@ -144,8 +147,8 @@ impl Recipe {
         );
         for p in &recipe.partition {
             ensure!(
-                p.damage.is_none() || p.fs == "erofs",
-                "{}: partition {}: only an erofs volume is damaged",
+                p.damage.is_none() || p.fs == "erofs" || p.fs == "walfs",
+                "{}: partition {}: only an erofs or walfs volume is damaged",
                 path.display(),
                 p.name
             );
@@ -315,8 +318,15 @@ pub fn pack(recipe: &Recipe, root: &Path, stage: Option<&Path>) -> Result<(Vec<u
                 volume.resize((data * SECTOR) as usize, 0);
                 volume
             }
-            "walfs" => pack_walfs(data / SECTORS_PER_BLOCK, &staged)
-                .with_context(|| format!("packing {}", p.name))?,
+            "walfs" => {
+                let mut volume = pack_walfs(data / SECTORS_PER_BLOCK, &staged)
+                    .with_context(|| format!("packing {}", p.name))?;
+                if let Some(damage) = &p.damage {
+                    damage_walfs(&mut volume, damage, &staged)
+                        .with_context(|| format!("damaging {}", p.name))?;
+                }
+                volume
+            }
             _ => {
                 let entries: Vec<pack::Entry> = staged
                     .iter()
@@ -479,6 +489,23 @@ fn damage_erofs(volume: &mut [u8], damage: &Damage) -> Result<()> {
         }
         what => bail!("no damage {what:?}: magic, block-past-count, compressed or name-offset"),
     }
+    Ok(())
+}
+
+/// `damage` done to the walfs volume packed from `staged`: `flip`, a bit of the first data block
+/// of the file at `damage.path`, which walfs then refuses against its hash slot.
+fn damage_walfs(volume: &mut [u8], damage: &Damage, staged: &[(String, Option<Vec<u8>>)]) -> Result<()> {
+    ensure!(damage.what == "flip", "no damage {:?}: flip", damage.what);
+    let data = staged
+        .iter()
+        .find_map(|(path, data)| (*path == damage.path).then_some(data.as_deref()).flatten())
+        .with_context(|| format!("no file {}", damage.path))?;
+    let first = data.get(..BLOCK).with_context(|| format!("{} has no whole block", damage.path))?;
+    let mut at = volume.chunks(BLOCK).enumerate().filter(|(_, b)| *b == first).map(|(i, _)| i * BLOCK);
+    let (Some(block), None) = (at.next(), at.next()) else {
+        bail!("{}'s first block is not on the volume once", damage.path)
+    };
+    volume[block + 17] ^= 0x04;
     Ok(())
 }
 
@@ -707,8 +734,8 @@ mod tests {
     }
 
     /// A `walfs` partition is the stage as `libs/walfs` itself writes it, read back whole and sound
-    /// by the same crate; two packs of one stage are the same bytes; a stage that does not fit is
-    /// refused.
+    /// by the same crate; two packs of one stage are the same bytes; a flipped file is refused
+    /// where it is read; a stage that does not fit is refused.
     #[test]
     fn a_walfs_partition_is_its_stage_and_two_packs_are_the_same_bytes() {
         let dir = stage("walfs");
@@ -747,6 +774,24 @@ mod tests {
         fs.read_dir("/", |_| names += 1).unwrap();
         assert_eq!(names, 3, "big, etc and motd");
         drop(fs);
+
+        // `flip` damages the file's first data block alone: walfs refuses that file's read as
+        // corrupt, and still reads the rest.
+        let staged = tree(&dir).unwrap();
+        let mut volume = pack_walfs(400, &staged).unwrap();
+        damage_walfs(&mut volume, &Damage { what: "flip".into(), path: "big".into() }, &staged).unwrap();
+        let mut ram = Ram(volume);
+        let mut fs = walfs::Filesystem::mount(&mut ram).unwrap();
+        let h = fs.open("/big", walfs::OpenOptions { read: true, ..Default::default() }).unwrap();
+        assert_eq!(fs.read(h, &mut [0u8; 100]), Err(walfs::Error::Corrupt));
+        let h = fs.open("/motd", walfs::OpenOptions { read: true, ..Default::default() }).unwrap();
+        assert!(fs.read(h, &mut [0u8; 100]).is_ok());
+        drop(fs);
+        let mut volume = ram.0;
+        for (what, path) in [("flip", "motd"), ("flip", "nothing"), ("magic", "big")] {
+            let damage = Damage { what: what.into(), path: path.into() };
+            assert!(damage_walfs(&mut volume, &damage, &staged).is_err(), "{what} {path}");
+        }
         std::fs::write(dir.join("huge"), vec![1u8; 3 << 20]).unwrap();
         assert!(pack_disk(&recipe, Path::new("/"), Some(&dir)).is_err(), "3 MiB does not fit 2 MiB");
         std::fs::remove_dir_all(dir).unwrap();
@@ -794,10 +839,11 @@ mod tests {
         );
         assert!(damage_erofs(&mut volume, &Damage { what: "nothing".into(), path: String::new() }).is_err());
         let path = std::env::temp_dir().join(format!("testbench-erofs-damage-{}.toml", std::process::id()));
+        // Only a littlefs volume is never damaged.
         let littlefs = "size_kib = 1024\n[[partition]]\nname = \"a\"\nfs = \"littlefs\"\nstage = \"x\"\n\
             damage = { what = \"magic\" }\n";
         std::fs::write(&path, littlefs).unwrap();
-        assert!(Recipe::load(&path).is_err(), "only an erofs volume is damaged");
+        assert!(Recipe::load(&path).is_err(), "only an erofs or walfs volume is damaged");
         std::fs::remove_file(path).unwrap();
         std::fs::remove_dir_all(dir).unwrap();
     }

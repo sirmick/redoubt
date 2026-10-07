@@ -43,6 +43,7 @@ members = [
   "tests/init-programs",
   "tests/erofsd-programs",
   "tests/littlefsd-programs",
+  "tests/walfsd-programs",
   "tests/net",
   "tests/net/client",
   "tools/doccheck",

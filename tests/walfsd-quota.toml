@@ -1,0 +1,32 @@
+description = "A quota per attach root, in a boot (servers/walfsd.md, R48): under init a client handed a root badge at walfsd mints two roots at directories of the volume with a 256 KiB quota each, four of the volume's entry shares; one writes until walfsd refuses a write, having written no more than its quota, and the other still writes half its quota"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The real init, the servers the manifest names, and littlefsd-client, which holds no Reset right,
+# so the case ends at its verdict.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-walfsd", bin = "walfsd" },
+    { package = "redoubt-littlefsd-programs", bin = "littlefsd-client" },
+]
+timeout_secs = 60
+expect = [
+    '^init: the manifest is checked: 5 servers, bound \d+ pages$',
+    '^init: started walfsd, console [0-9a-f]{16}$',
+    '^init: started client, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] littlefsd-client filled one root at [0-9]+ bytes, and the other still wrote 131072$',
+    '^\[con [0-9a-f]{16}\] littlefsd-client TEST PASSED$',
+]
+forbid = ['init: refused the boot', '^init: .* (exited|faulted|was killed)', 'init: restarted', 'init: rebooting', 'littlefsd-client TEST FAILED']
+reporter = "client"
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/walfsd/boot.json" }
+servers = [{ name = "client", args = ["quota", "walfsd:data", "262144"] }]
+
+[disk]
+size_kib = 4096
+partitions = 1

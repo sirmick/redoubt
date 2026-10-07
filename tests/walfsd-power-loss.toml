@@ -1,0 +1,48 @@
+description = "Power loss leaves before or after, on the machine (servers/walfsd.md, R50, beside walfs's host harness): under init, a client writes a file of three blocks through walfsd, then arms walfsd's test-only cut (feature cut-after-write) at a block write N drawn from the kernel's randomness, 1 to the 20 the next two operations take, and rewrites the file in one Twrite and renames it; walfsd exits right after its N-th block write, init restarts it, and its mount recovers the log; the call in flight gets Dead and the old connection's next one is refused, and through a fresh connection the client finds the file as before the operation the cut fell in or as after it, by content, length and inode, never between; and walfsd, checking the volume whole at each start under the feature, finds no problem. The cut is a crash of walfsd with every block write before it completed and none after it made: the restarted instance mounts what the device holds, as a power-on would. It does not model a device's volatile cache losing writes it acknowledged (QEMU's default writeback cache keeps them in the host file); walfs's host harness tears and drops unsynced writes for that. Run it over seeds (--sweep): each draws another N"
+arch = ["rv64", "rv32"]
+kind = "boot"
+qemu_seed = 1
+# The real init, the servers the manifest names, walfsd built with its test-only feature
+# cut-after-write, and walfsd-client.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-walfsd", bin = "walfsd", features = ["cut-after-write"] },
+    { package = "redoubt-walfsd-programs", bin = "walfsd-client" },
+]
+timeout_secs = 60
+expect = [
+    '^init: the manifest is checked: 5 servers, bound \d+ pages$',
+    '^init: started walfsd, console [0-9a-f]{16}$',
+    # walfsd's check runs before it serves, so before the client's first call, but its line may
+    # come before or after init's line starting the client: that one is not expected.
+    '^\[con [0-9a-f]{16}\] walfsd: the volume check found no problem$',
+    # 10: CUT_EXIT (servers/walfsd/src/cut.rs). An exit holding the client's call is faulted, with
+    # the code given (kernel/processes.md).
+    '^init: walfsd \(PID [0-9]+\) faulted, code 10, serving nobody, labels none; blamed on nobody: no steward$',
+    '^init: restarted walfsd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] walfsd: the volume check found no problem$',
+    '^\[con [0-9a-f]{16}\] walfsd-client cut after block write [0-9]+: found (before|written|renamed), the same file$',
+    '^\[con [0-9a-f]{16}\] walfsd-client TEST PASSED$',
+]
+# walfsd's one exit is the point; nothing else may end, and the machine may not reboot.
+forbid = [
+    'init: refused the boot',
+    '^init: (keyd|consoled|blkd|client) .*(exited|faulted|was killed)',
+    '^init: walfsd .*(exited|was killed)',
+    '^init: restarted (keyd|consoled|blkd|client)\b',
+    'init: rebooting',
+    'walfsd: the volume check (found [0-9]+ problems|stopped)',
+    'walfsd-client TEST FAILED',
+]
+reporter = "client"
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/walfsd/own.json" }
+
+[disk]
+size_kib = 4096
+partitions = 1
