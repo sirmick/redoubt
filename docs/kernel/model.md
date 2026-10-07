@@ -268,7 +268,10 @@ model's embedder: its entropy, its admission, a volume's write check and the ser
   in release, the names coming from `cargo run --example mutations`
   ([fanout](../testbench.md#the-case-file)); `model-host-tests` skips it. Every variant is
   caught within the caps but `PolicyDeclassifyUnfit`, which `steward_policy` catches at seed
-  4709, about half an hour on one thread ([residual risks](#residual-risks)).
+  4709, about half an hour on one thread ([residual risks](#residual-risks)): the case names it
+  as known to be late, so its job searches the steward families to 20,000 seeds and passes
+  reported as late, while any other late variant, this one no longer caught at all, and this one
+  caught within the caps, whose entry has then outlived its need, fail it.
 
 | ID | Variants | What they break |
 | --- | --- | --- |
@@ -554,9 +557,9 @@ Replay is what turns the model from a reference into evidence about the kernel.
   second in the model's own code, a thousand times a kernel family's, so their 30,000 default
   seeds are six to seven core-hours, a bench case of their own. `PolicyDeclassifyUnfit` (an
   over-long or unprintable declassified item) is caught only at `steward_policy`'s seed 4709, past
-  the mutations' cap, so `model-mutations` fails on it. Open, for a follow-up on the steward
-  model: making a seed cheaper, and whether that catch depth is a coverage weakness of the
-  family's generator.
+  the mutations' cap, so `model-mutations` lists it as known to be late. Open, for a follow-up
+  on the steward model, which removes that entry: making a seed cheaper, and whether that catch
+  depth is a coverage weakness of the family's generator.
 - **Rules outside the model** (R15, R16, R17, R19, R23, R24) have no model check at all; their
   boot cases are their only attack.
 

@@ -316,7 +316,7 @@ the core map and the queue; `q log` the recent jobs with the time each waited an
 
 | Case | Its cost | `timeout_secs` |
 | --- | --- | --- |
-| `model-mutations` | 147 jobs, one per mutation, in release, four cores and threads each; a mutation's steward families stop at 500 seeds ([mutations](kernel/model.md#mutations)). A job that searches every family to its cap takes 200 s, the longest; the slowest that catch, `R2OneCursor` (`steward_noninterference`'s seed 345) 164 s and `PolicyAgentOtherSet` (seed 96) 64 s; the rest under a minute. About 12 min of wall with the machine to itself | per job, 267 |
+| `model-mutations` | 147 jobs, one per mutation, in release, four cores and threads each; a mutation's steward families stop at 500 seeds ([mutations](kernel/model.md#mutations)) but for the one the case names as late, `PolicyDeclassifyUnfit`, whose full search to `steward_policy`'s seed 4709 is the longest job, 582 s. A job that searches every family to its cap takes 200 s; `R2OneCursor` (`steward_noninterference`'s seed 345) 164 s and `PolicyAgentOtherSet` (seed 96) 64 s; the rest under a minute. About 12 min of wall with the machine to itself | per job, 776 |
 | `model-host-tests` | one `cargo test` on four cores, every model test but the mutations and the steward families: about two minutes, the build included | none |
 | `steward-model-host-tests` | the two steward families, each a job on eight cores and threads: about 30 min of wall, 1,777 s for `steward_policy` and 1,469 s for `steward_noninterference`. A seed costs 0.6 s and 0.94 s on one thread in the model's own code, in release and dev alike: six to seven core-hours at their default counts | per job, 2369 |
 | `rt-miri` | 12 jobs, one per file, about 100 s of wall: `heap`'s 60 to 96 s; `connection` 25 s; the rest under 10 s | per job, 128 |
@@ -336,7 +336,7 @@ The kinds, and the fields each takes besides `description`, `arch` and `whole_ru
 | --- | --- | --- |
 | `boot` | boots the kernel with `programs` as its first processes and judges the run | those above |
 | `build` | only checks that a package compiles for each target: coverage for what the bench does not boot | `package`, `features` |
-| `host-tests` | runs `cargo test` on the host for the named workspace packages, for what no boot can reach (a constant the loader and the bench share is right in the machine's eyes even when it is wrong); with `miri`, under nightly Miri. These cases are the bench's only host tests; `cargo test --workspace` is not run, though it compiles. The kernel and the test programs have no host tests (`test = false` on their targets) | `packages`, `tests` (the test files to run; default all), `miri`, `workspace`, `features`, `tools`, `filter` (only the tests whose names contain one of these), `skip` (tests left out, by part of their name), `profile` (Cargo's, such as `release`), `fanout` (`each`, `env`, `values`, `cores`, `vars`), `timeout_secs` (each fanned job's deadline) |
+| `host-tests` | runs `cargo test` on the host for the named workspace packages, for what no boot can reach (a constant the loader and the bench share is right in the machine's eyes even when it is wrong); with `miri`, under nightly Miri. These cases are the bench's only host tests; `cargo test --workspace` is not run, though it compiles. The kernel and the test programs have no host tests (`test = false` on their targets) | `packages`, `tests` (the test files to run; default all), `miri`, `workspace`, `features`, `tools`, `filter` (only the tests whose names contain one of these), `skip` (tests left out, by part of their name), `profile` (Cargo's, such as `release`), `fanout` (`each`, `env`, `values`, `cores`, `vars`, `late`), `timeout_secs` (each fanned job's deadline) |
 | `ssh-loopback` | runs `[[session]]`s against a host OpenSSH server with no guest, to check the session runner on its own | `authorized` (the test keys the server accepts), `[[session]]`, `timeout_secs`, `host_key` (default: the server's own), `server_log` (patterns each of which must match a line of the server's own log), `must_fail` |
 | `unsafe-budget` | the ratchet on `unsafe` ([below](#the-unsafe-budget)) | `[[budget]]`: `name`, `paths`, `max_unsafe`, `max_undocumented`; `[[uncounted]]`: `path`, `reason` |
 | `size-budget` | the ceiling on each trusted crate's size ([below](#the-size-budget)) | `[[crate]]`: `name`, `paths`, `max_lines` |
@@ -368,7 +368,11 @@ many it has (the model's `MODEL_THREADS`), since under `q` its `RUST_TEST_THREAD
 Where `q` does not answer, the jobs run one after another. Each job's output is a file in
 `<case>/` of the run's directory, and `<case>.log` lists every value with the time its tests
 took; the case passes when every job does, and its failure names each value whose job failed. A
-job that runs past `timeout_secs` fails, saying so.
+job that runs past `timeout_secs` fails, saying so. `late` names values known to pass only past
+a bound their test keeps, each with the follow-up that removes it: their jobs run with
+`TESTBENCH_LATE=1`, the test's leave to go past it, and a pass is reported as "caught late,
+known" in the result and as `LATE` in the log, never hidden; any other value past the bound, an
+entry that names no job, and one whose test now passes within the bound fail the case.
 
 A `post_check` judges the console after the boot has passed. `sched_oracle` rebuilds the
 scheduler's order from the raw events a tracing kernel prints and checks every pick against its own
