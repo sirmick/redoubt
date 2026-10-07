@@ -599,8 +599,14 @@ a net share is never past the whole (`sched-budget-churn`'s deadline victim, whi
 the program's calibrated CPU count runs at least 0.3% (rv64) and 0.65% (rv32) over the work it
 measures, a bias in every share's CPU that the cap now hides behind its `credited` note; the
 calibration is the likely source, and it is a follow-up. A case that judges a share
-in its program has no audit inside its window. Where the budgets a share is judged among run
-hostile agents, no count of theirs may decide it, so the share is the kernel's charges alone
+in its program still has audits inside its window: the scheduler's marks are audited about once
+a slice. They, and the kernel time of a slice end that switches budgets, fall on every budget
+per slice it runs, so `sched-share` and `sched-server-busy` judge a ratio of counts, which is net
+of both; the cases that judge a count of the window carry them in their tolerance. So
+`sched-share`'s share is relative, as the scheduler promises it, and what the three counted of
+the calibrated rate, the efficiency the slice ends leave, is reported beside it with no verdict
+(`counted <n> of the calibrated 1000`). Where the budgets a share is judged among run hostile
+agents, no count of theirs may decide it, so the share is the kernel's charges alone
 (`CHARGED-SHARE <name> <start> <end> <tolerance> <mark>...`, the containment gate's bystander).
 The program prints its window and marks the budgets it means, each by carving an empty child of
 the mark's weight and destroying it, so the trace's lift names the parent; `sched_oracle` sums

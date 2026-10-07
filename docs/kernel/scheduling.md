@@ -229,7 +229,14 @@ under QEMU (about 45,000 and 56,000 instructions), most of it the reconcile that
 at a 1 ms slice under nine runnable budgets that is about a quarter of the CPU, billed to the
 budgets picked after each slice's end, so relative shares hold while useful work falls to about three quarters
 of the 10 ms build's (0.762 on rv64 and 0.718 on rv32, both in the release build). The reconcile's
-cost is above its loop bounds. This is today's cost; a later measurement replaces it.
+cost is above its loop bounds. This is today's cost; a later measurement replaces it. A count of
+user work therefore falls short of the window: in the checked build, `bench:sched-share`'s three
+spinners count 938 (rv64) and 929 (rv32) of 1000 of what the loop's rate alone would fill, the
+rest being what a slice end that switches budgets costs over a lone spinner's, the checked
+build's audits among it (the marks' audit after about every slice end: 49 ms of the 2 s window
+on rv64 and 71 ms on rv32, in a traced run), so the case judges each spinner's share of what the
+three counted (599 and 600 of 1000 for the weight-300 spinner, against its 600; 563 and 558 of
+the window), not of the window. It reports the sum beside, with no verdict.
 
 The top of a destruction returns its carve to its parent before any of the destruction's work is
 billed. So the parent, often the caller of `budget_destroy`, pays for the destruction at the
@@ -910,7 +917,8 @@ fails the case on both widths in a recorded negative run (a one-page `map_anon`:
 
 It is attacked three ways:
 - **Boot cases, in virtual time**, count each budget's work over a window and compare it with
-  its weight's share, within 50 per thousand: spinners at 100, 100 and 300; near-slice, 20 µs
+  its weight's share, within 50 per thousand: spinners at 100, 100 and 300, each of the CPU the
+  three counted ([charging](#charging)); near-slice, 20 µs
   and long-sleep bursts; a sleeper waking into an idle gap; threads and processes that exit or
   fault just before their slice ends; budget churn; carving; 30 sleepers a microsecond apart,
   64 staggered deadlines, and waits ended before their timeouts; a system server flooded by one
