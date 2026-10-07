@@ -143,19 +143,19 @@ own:
 
 | What | rv64 | rv32 |
 | --- | ---: | ---: |
-| Decoded code: instructions | 514 | 514 |
-| Decoded code: operands | 2,081 | 2,081 |
-| Literals: each module's | 36 | 36 |
-| Literals: the shared table | 753 | 749 |
-| Module tables | 231 | 202 |
-| Atoms | 92 | 64 |
+| Decoded code: instructions | 518 | 518 |
+| Decoded code: operands | 2,095 | 2,095 |
+| Literals: each module's | 37 | 37 |
+| Literals: the shared table | 771 | 767 |
+| Module tables | 231 | 201 |
+| Atoms | 94 | 65 |
 | Processes (19): heaps, collected | 46 | 46 |
 | Processes: the rest | 100 | 95 |
 | ETS and binaries | 1 | 1 |
-| Accounted | 3,856 | 3,791 |
-| Runtime heap at the prompt: held, peak | 4,073, 4,537 | 3,906, 4,373 |
-| Not accounted (held less accounted) | 217 | 115 |
-| The scan's peak, after one command | 5,240 | 5,067 |
+| Accounted | 3,897 | 3,830 |
+| Runtime heap at the prompt: held, peak | 4,119, 4,584 | 3,948, 4,415 |
+| Not accounted (held less accounted) | 222 | 118 |
+| The scan's peak, after one command | 5,287 | 5,108 |
 
 A module's instructions are 8-byte entries over one array of its operands, 16 bytes each on either
 width, a list operand's items in the same array, so decoded code is the same size on both widths
@@ -173,9 +173,12 @@ the first command loads more modules.
   the ones evaluating any line needs, so loading them on first call would move their pages to the
   first command, not save them.
 
-The image budgets the VM twice the largest peak the scan finds across its memory cases, and with
-that budget the image boots in 512 MiB
-([budgets](../kernel/budgets.md#the-tree-from-the-boot-manifest)).
+The image budgets the VM twice the largest peak the scan finds across its memory cases, 5,475
+pages on rv64 after the `Version` call `userland-read-only` types, and with that budget, 11,008
+pages, the image boots in 512 MiB ([budgets](../kernel/budgets.md#the-tree-from-the-boot-manifest)).
+The session's commands over the natives, `ns`, `bind` and `exec` with the four modules under them,
+are loaded at the prompt like every module of the shell's, and the 45 pages the peak grew by, 39
+of them in the rows above, moved it from 5,430 and the budget up its step from 10,880.
 
 Residual: QEMU's default 256 MiB is out of reach. Its `system` budget leaves the VM about 2,700
 pages beside the other servers, and the VM holds more than that at its prompt (the table above),
@@ -539,7 +542,8 @@ with no `System`, the host CLI's, answers each `{error, not_supported}`; the hos
   ([wire](../servers/wire.md#generated-clients)).
 - **`serve(Endpoint)`** serves a receive right the VM holds, on a thread of its own, which keeps
   the endpoint open and serves it for the VM's life (at most `MAX_SERVED` endpoints; one served
-  already is `already_served`): each call is admitted by the serving library's admission, per (account,
+  already, by the same handle, is `already_served`; a second handle to the same receive right is
+  not told apart): each call is admitted by the serving library's admission, per (account,
   label set) with a share per badge
   ([R26 (admission fairness)](../servers/serving.md#r26-admission-fairness)), and parked with the
   library's deadline, `REQUEST_WAIT_US`
@@ -565,7 +569,8 @@ with no `System`, the host CLI's, answers each `{error, not_supported}`; the hos
   entries and named handles (at most `MAX_START_HANDLES` together), and arguments; the platform
   adds the loader stub, which it carries as `init` does, and the job's own exit endpoint
   ([native programs](native.md#launching-from-a-session)). At most `MAX_JOBS` run at once, each
-  watched by a thread that waits for its exit notice.
+  watched by a thread that waits for its exit notice; a job no thread takes to watch is killed,
+  its budget destroyed, since nothing would hear its end.
 
 Every refusal is a Redoubt name: a term of the wrong type is `badarg`, as for any native, and a
 well-formed request the platform refuses is `{error, Name}`, the kernel's error by its name in the

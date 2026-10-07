@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 278
+revision = 289
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -861,8 +861,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   body = "Found by TOOL1's gates 2026-10-05: tools/testbench ssh::tests::the_keeper_finds_what_names_the_case (BENCHENV1's keeper: a qemu-system-riscv64 naming the case directory after the sessions) failed once in a whole bench's host-tests case and once in cargo test -p testbench under load, 0 of 30 alone. Likely a /proc/*/cmdline scan racing a process that is starting or exiting. Make the test deterministic (spawn and wait for the stand-in to be visible before scanning; or order on an event) without weakening the keeper. Tier B (a host test), size S, no needs."
-  state = "todo"
-  revision = 2
+  state = "active"
+  revision = 288
 
 [[node]]
   id = "DOC1"
@@ -1143,8 +1143,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   body = "Seen by B18 (2026-10-06) on the quiet core set with nothing else there: libs/client's aio.rs test a_server_that_breaks_its_hold_loses_the_session_at_the_margin fails about one run in eight; libs/client untouched by B18. A host-clock test at a margin: find whether the margin is a measurement (then widen it with the reason on the page, or make it a count as B10 did) or a race in the test's fixture. Tier B, size S: fix, run the test 50 times alone through `q run --quiet`, record the count. BEAM3 changes aio.rs's waiter (bounded hand-over): coordinate, the fix may belong in that commit."
-  state = "active"
-  revision = 272
+  state = "reported"
+  revision = 287
 
 [[node]]
   id = "B21"
@@ -1202,3 +1202,39 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "Trains 4 and 5 (2026-10-07), both widths, deterministic: the case expects '... ssh exited (status 255), expected 0; last output: Host key verification failed.' and gets '... last output: Error: Broken pipe (os error 32)': ssh refuses the pinned key and exits 255 as intended, but the loopback sshd's ProxyCommand side writes its broken-pipe error after ssh's own last line, so the bench's 'last output' is the wrong process's. Tier B, size S: the session runner's failure text names ssh's exit status and the last line ssh itself wrote (stderr of the ssh process, not the ProxyCommand's), or must_fail matches the host-key line anywhere in the session's output; the bench's own test for the runner's text; rerun the case both widths and the 13 other loopback cases."
   state = "done"
   revision = 264
+
+[[node]]
+  id = "BEAM9"
+  title = "A hub write on a twice-minted consoled connection never completes on rv32: the steward's console session prints nothing after its first prompt"
+  template = "package"
+  parent = "M1"
+  body = "Found by STEWARD2's gate on rv32 only: the console session's VM reads and evaluates every typed line (verityd's expected block-mismatch line appears, so the reads and the evaluation ran) but nothing it writes after its first prompt reaches the UART; ConsoleIo instrumented: no write is refused, short or ended; a write is put out on the hub and its completion never comes back, while the console's read completions do. Ruled out: beamlet's limit change, erofsd budget/buckets, the VM's erofsd connection, RAM, consoled heap, the steward's own console lines. What is left: the connection: the session's /dev/cons is a consoled connection the steward mints (new_connection, root \"\") through its own /dev/cons, which init minted; main's VM gets init's minted console directly; SSH sessions are fine on rv32; rv64 is fine. Cases: rv32 userland-boot, userland-read-only, boot-profile, boot-profile-unverified on wp-STEWARD2. Probe notes: .wash/local/STEWARD2-rv32-probe.md. Suspects: the hub's completion matching (libs/client aio.rs, BEAM3) or consoled's handling of a minted connection's writes under 32-bit tags/offsets; the kernel is not suspected. Tier A if libs/client or consoled changes. Size S-M. Blocks STEWARD2's merge."
+  state = "active"
+  revision = 284
+
+[[node]]
+  id = "B23"
+  title = "beamlet's heap peak in userland-read-only crossed half its manifest cap: 5,475 pages against a cap of 10,861"
+  template = "package"
+  parent = "M1"
+  body = "Train 8's bench on bdb38430e (B21, MODEL1, BEAM4): rv64 userland-read-only fails alone and in the train: 'beamlet: heap needs 10950 pages for twice its 5475-page peak, capped at 10861' (tools/testbench/src/memory.rs:244: MEM2's rule, a capped heap passes with its cap at least twice its measured peak). userland-boot passes (BEAM4's gate ran it; userland-read-only was not in its gate). Attribution: run on c425bf4d7 (pre-BEAM4) pending; BEAM4 (the natives: served objects, launch, namespace) is the suspect. Decide, as MEM2 did: is the peak growth real and wanted (then raise beamlet's manifest heap cap with the measured peak and the reason on the beamlet page) or accidental (an allocation the read-only workload should not make: find it and cut it). Size S. Gates: userland-read-only and userland-boot both widths, beamlet-footprint, the memory scan's report lines in the commit. Tier B unless beamlet's VM code changes materially."
+  state = "done"
+  revision = 289
+
+[[node]]
+  id = "BEAM10"
+  title = "beamlet-redoubt's tests/system.rs is intermittent under load: one test of 47 fails or the binary hangs; a request the serve thread handed over never surfaced in the VM"
+  template = "package"
+  parent = "M1"
+  body = "Found by BEAM4's final gate on a4e57aaf9 under `q run --quiet -- cargo test -p beamlet-redoubt --features fake --test system`: 46 pass / 1 fail in one run, the rerun hung in the system binary and was killed; the binary run directly is 30/30; which test fails varies. One run showed a request the serve thread handed over (BEAM4's HAND_US hand-off) that never surfaced in the VM, so it may be a real platform bug in the hand-off, not only a host bound too tight under load. Suspects and how to debug (ptrace is blocked on this host) are in .wash/local/handoffs/beam4-implementer.md. Reproduce under load (q --quiet beside other jobs, or RUST_TEST_THREADS high) 30 times, name the failing tests, find the lost request. Tier A if userland/otp/redoubt/src/{serve,jobs,system}.rs changes. Size S-M. After B23 and BEAM9."
+  state = "todo"
+  revision = 282
+
+[[node]]
+  id = "K28"
+  title = "A process index audit runs inside a destruction after K19: the oracle fails sched-latency, sched-latency-tcg and kernel-containment on main"
+  template = "package"
+  parent = "M1"
+  body = "Found by RECON1 on main f4d3b41d9 (K19's merge, after train 8's tip, never under a train bench): sched_oracle fails 'record N: an audit inside a destruction' on sched-latency (rv64, rv32), sched-latency-tcg (both) and kernel-containment (both, seed 13); reproduced on an untouched export (/tmp/recon1-main/sched-latency-rv64.log). The record is `U 2` (AUDIT_PROCESS_INDEX) between the destruction's `D` and its `Y`: process.rs index_process runs that audit when !self.objects.deferring, and K19 moved a process free ('frees and PID moves follow the dying subtree') to after deferring is cleared and before the destruction's end record. Fix: the free (or the audit's guard) sits inside the deferring window, or the audit is skipped on the destruction path with the oracle's rule unchanged (K18: a checked build's audits do not move its schedule; checked-audit-cost: one-word skip checks on destruction paths). The model's rule must still match. Tier A kernel, size S. Blocks train 9's bench. Handoff: .wash/local/handoffs/k19-implementer-2.md."
+  state = "active"
+  revision = 286

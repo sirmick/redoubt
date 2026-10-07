@@ -1284,8 +1284,8 @@ such runs: each stack rounded up to pages, from the runs that sized the stacks, 
 caps existed; and each heap cap in pages, from six later runs with the stacks as declared. The
 stack columns below are the first runs' and the heap columns the later runs'. `beamlet`'s heap peak
 moves by a page between runs, so its cap is instead the most its budget holds beside its stack,
-10,861 pages: at least twice its largest peak across six runs of each memory case on each width,
-`beamlet-footprint` included, 3 pages over twice it. Its budget, 10,880 pages, is that cap and its
+10,989 pages: at least twice its largest peak across six runs of each memory case on each width,
+`beamlet-footprint` included, 39 pages over twice it. Its budget, 11,008 pages, is that cap and its
 stack rounded up to 128 ([budgets](kernel/budgets.md#the-tree-from-the-boot-manifest)). The
 read-only case also scans its additional client from the merged manifest. `beamlet`'s stack peak is from `beamlet-footprint` on
 rv64 with the boot pack read before its VM starts and its console on the hub; twice it needs its
@@ -1313,13 +1313,13 @@ in its start path.
 | `blkd:system` | 4,504 | 3 | 17 | 34 |
 | `verity:system` | 8,264 | 5 | 50 | 100 |
 | `erofsd:system` | 9,704 | 5 | 12 | 24 |
-| `beamlet` | 35,288 | 18 | 5,429 | 10,861 |
+| `beamlet` | 35,288 | 18 | 5,475 | 10,989 |
 
 The read-only client's largest stack peak is 6,616 bytes and its heap's 31 pages; its case uses
 the 16-page stack default and no cap. `beamlet`'s heap peak is the shell after the commands
-`userland-read-only` types (5,231 pages on rv32), above what its prompt holds
+`userland-read-only` types (5,274 pages on rv32), above what its prompt holds
 ([beamlet](userland/beamlet.md#what-the-vm-holds-at-its-prompt)); its cap leaves its process heap
-and ETS limits, a sixteenth of its budget each (680 pages), reachable: a flooding process, about
+and ETS limits, a sixteenth of its budget each (688 pages), reachable: a flooding process, about
 four times its limit, still fits under the cap ([beamlet](userland/beamlet.md#limits-inside-one-vm)).
 
 This is a measurement of the paths the case drove. Other requests or deeper call paths may
