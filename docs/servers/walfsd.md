@@ -449,10 +449,10 @@ typed operations, so a client names no format:
 - **Typed operations** are `littlefsd`'s table, served alike: `rename`, `copy_file`, `set_attr`
   and `get_attr` ([littlefsd](littlefsd.md#typed-operations)). Attributes live in the inode's
   256-byte area ([User attributes](#user-attributes)): types 16 to 255 are the user's and 0 to 15
-  are refused, as on `littlefsd`, so a client sees one contract; a value is at most 254 bytes
-  (`too_large` above), and attributes that no longer fit the area are `no_space`. `copy_file`
-  writes a new file a block at a time and removes it if it does not finish. Times: a file's mtime
-  is walfs's, 0 until a clock reaches `walfsd`.
+  are `not_permitted`, and every refusal has `littlefsd`'s name for it, so a client sees one
+  contract; a value is at most 254 bytes (`too_large` above), and attributes that no longer fit
+  the area are `no_space`. `copy_file` writes a new file a block at a time and removes it if it
+  does not finish. Times: a file's mtime is walfs's, 0 until a clock reaches `walfsd`.
 - **Listings** are served from a window of up to 64 entries filled by one pass over the
   directory, as on `littlefsd`, so listing n entries costs about n / 64 passes.
 - **Admission** is the serving library's, with `littlefsd`'s caps per bucket

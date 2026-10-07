@@ -70,7 +70,7 @@ fn rename_moves_within_the_volume_and_keeps_the_files_id() {
     assert_eq!(t.read(&who, 3, 0, 100).unwrap(), b"hello, world");
     assert_eq!(rename(&mut t, &who, 0, "notes", 0, "x"), Err(ErrorCode::NotFound));
     assert_eq!(rename(&mut t, &who, 3, "a", 0, "b"), Err(ErrorCode::NotDir));
-    assert_eq!(rename(&mut t, &who, 0, "d", 0, ".."), Err(ErrorCode::Refused));
+    assert_eq!(rename(&mut t, &who, 0, "d", 0, ".."), Err(ErrorCode::BadName));
 }
 
 #[test]
@@ -80,9 +80,9 @@ fn a_directory_is_not_renamed_into_itself() {
     t.walk(&who, 0, 1, &["d"]).unwrap();
     t.create(&who, 1, "inner", DMDIR | 0o755, mode::OREAD).unwrap();
     t.walk(&who, 0, 2, &["d"]).unwrap();
-    assert_eq!(rename(&mut t, &who, 0, "d", 2, "self"), Err(ErrorCode::Refused));
+    assert_eq!(rename(&mut t, &who, 0, "d", 2, "self"), Err(ErrorCode::NotPermitted));
     t.walk(&who, 0, 3, &["d", "inner"]).unwrap();
-    assert_eq!(rename(&mut t, &who, 0, "d", 3, "deeper"), Err(ErrorCode::Refused));
+    assert_eq!(rename(&mut t, &who, 0, "d", 3, "deeper"), Err(ErrorCode::NotPermitted));
     t.walk(&who, 0, 4, &["d", "inner"]).unwrap();
 }
 
@@ -118,7 +118,7 @@ fn copy_file_copies_and_counts_the_bytes() {
     }
     assert!(back == big);
     assert_eq!(copy(&mut t, &who, 1, 2, "copy"), Err(ErrorCode::Exists));
-    assert_eq!(copy(&mut t, &who, 2, 0, "dir"), Err(ErrorCode::Refused));
+    assert_eq!(copy(&mut t, &who, 2, 0, "dir"), Err(ErrorCode::NotSupported));
     assert_eq!(copy(&mut t, &who, 1, 1, "x"), Err(ErrorCode::NotDir));
 }
 
@@ -132,7 +132,7 @@ fn attributes_set_and_get_with_littlefsds_own_types_refused() {
     set(&mut t, &who, 0, 255, b"on the root").unwrap();
     assert_eq!(get(&mut t, &who, 0, 255).unwrap(), b"on the root");
     for own in 0..OWN_ATTRS {
-        assert_eq!(set(&mut t, &who, 1, own, b"forged"), Err(ErrorCode::Refused), "type {own}");
+        assert_eq!(set(&mut t, &who, 1, own, b"forged"), Err(ErrorCode::NotPermitted), "type {own}");
     }
     assert_eq!(set(&mut t, &who, 1, 17, &[0; ATTR_MAX + 1]), Err(ErrorCode::TooLarge));
     set(&mut t, &who, 1, 17, &[1; ATTR_MAX]).unwrap();
@@ -170,9 +170,9 @@ fn typed_operations_check_the_volumes_labels() {
     t.attach(&above, 0).unwrap();
     t.walk(&above, 0, 1, &["notes"]).unwrap();
     assert_eq!(get(&mut t, &above, 1, 16), Err(ErrorCode::NotFound), "a read is allowed");
-    assert_eq!(set(&mut t, &above, 1, 16, b"x"), Err(ErrorCode::Refused));
-    assert_eq!(rename(&mut t, &above, 0, "notes", 0, "x"), Err(ErrorCode::Refused));
-    assert_eq!(copy(&mut t, &above, 1, 0, "x"), Err(ErrorCode::Refused));
+    assert_eq!(set(&mut t, &above, 1, 16, b"x"), Err(ErrorCode::NotPermitted));
+    assert_eq!(rename(&mut t, &above, 0, "notes", 0, "x"), Err(ErrorCode::NotPermitted));
+    assert_eq!(copy(&mut t, &above, 1, 0, "x"), Err(ErrorCode::NotPermitted));
     t.walk(&owner, 0, 1, &["notes"]).unwrap();
     set(&mut t, &owner, 1, 16, b"ok").unwrap();
     assert_eq!(get(&mut t, &above, 1, 16).unwrap(), b"ok");
@@ -228,9 +228,9 @@ fn a_read_only_volume_refuses_every_typed_change() {
     t.attach(&who, 0).unwrap();
     t.walk(&who, 0, 1, &["notes"]).unwrap();
     t.walk(&who, 0, 2, &["d"]).unwrap();
-    assert_eq!(set(&mut t, &who, 1, 16, b"after"), Err(ErrorCode::Refused));
-    assert_eq!(rename(&mut t, &who, 0, "notes", 2, "moved"), Err(ErrorCode::Refused));
-    assert_eq!(copy(&mut t, &who, 1, 2, "copy"), Err(ErrorCode::Refused));
+    assert_eq!(set(&mut t, &who, 1, 16, b"after"), Err(ErrorCode::ReadOnly));
+    assert_eq!(rename(&mut t, &who, 0, "notes", 2, "moved"), Err(ErrorCode::ReadOnly));
+    assert_eq!(copy(&mut t, &who, 1, 2, "copy"), Err(ErrorCode::ReadOnly));
     assert_eq!(get(&mut t, &who, 1, 16).unwrap(), b"before");
 }
 

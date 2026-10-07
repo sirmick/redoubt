@@ -1,7 +1,8 @@
 %% beamlet-files (docs/userland/files.md, "Files over 9P"): files over 9P on the home volume
 %% bound at /home/alice, through OTP's own prim_file, whose natives are beamlet's. It writes a
 %% file, reads it back, lists the directory, removes the file, reads one larger than one 9P answer
-%% with eight processes at once, and reads a path no binding holds.
+%% with eight processes at once, renames a directory into itself, which the volume refuses, and
+%% reads a path no binding holds.
 -module(beamlet_files).
 -export([start/0]).
 
@@ -21,6 +22,11 @@ start() ->
     Readers = [spawn(fun() -> Self ! {self(), prim_file:read_file("/home/alice/big")} end) || _ <- lists:seq(1, 8)],
     Same = [receive {P, {ok, B}} -> B =:= Big; {P, _} -> false end || P <- Readers],
     say("eight readers of ~s bytes at once: ~s", [byte_size(Big), lists:all(fun(X) -> X end, Same)]),
+    % A rename the volume will not do, a directory into itself: refused by name, not as a
+    % connection refused.
+    ok = prim_file:make_dir("/home/alice/d"),
+    ok = prim_file:make_dir("/home/alice/d/inner"),
+    say("directory into itself: ~s", [prim_file:rename("/home/alice/d", "/home/alice/d/inner/d")]),
     say("bob's file: ~s", [prim_file:read_file("/home/bob/x")]),
     say("mode: ~s", [element(8, element(2, prim_file:read_file_info("/home/alice/big")))]),
     done.

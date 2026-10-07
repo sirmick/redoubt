@@ -94,6 +94,19 @@ fn files_are_written_read_listed_renamed_and_removed() {
     });
 }
 
+/// A rename `littlefsd` will not do inside its own volume answers its typed error by the table's
+/// name: a directory moved into itself is `not_permitted`, so `eacces`, never a connection's
+/// `econnrefused`.
+#[test]
+fn a_rename_the_volume_refuses_is_eacces() {
+    with_home(|p| {
+        ask(p, |p| p.make_dir("/home/alice/d")).unwrap();
+        ask(p, |p| p.make_dir("/home/alice/d/inner")).unwrap();
+        assert_eq!(ask(p, |p| p.rename("/home/alice/d", "/home/alice/d/inner/d")), Err(FileError::Eacces));
+        assert_eq!(ask(p, |p| p.list_dir("/home/alice/d")).unwrap(), [b"inner".to_vec()]);
+    });
+}
+
 #[test]
 fn opening_to_write_replaces_and_appending_adds() {
     with_home(|p| {

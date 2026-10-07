@@ -49,7 +49,8 @@ impl<R: Range> Typed<'_, R> {
     /// check 9P makes, against the volume's labels.
     fn node(&self, caller: &Caller, fid: u32, access: Access) -> Result<(Node, bool), ErrorCode> {
         let (node, qid) = self.0.fid_node(caller, fid).map_err(|_| ErrorCode::NotFound)?;
-        check(caller.labels.as_slice(), self.0.fs.volume_labels(), access).map_err(|_| ErrorCode::Refused)?;
+        check(caller.labels.as_slice(), self.0.fs.volume_labels(), access)
+            .map_err(|_| ErrorCode::NotPermitted)?;
         Ok((node, qid.kind & QTDIR != 0))
     }
 
@@ -62,7 +63,7 @@ impl<R: Range> Typed<'_, R> {
     fn rename(&mut self, caller: &Caller, r: &Rename<'_>) -> Result<(), ErrorCode> {
         let (old_dir, new_dir) = (self.dir(caller, r.old_dir)?, self.dir(caller, r.new_dir)?);
         if !path::valid_name(r.old_name) || !path::valid_name(r.new_name) {
-            return Err(ErrorCode::Refused);
+            return Err(ErrorCode::BadName);
         }
         let fs = &mut self.0.fs;
         fs.writable().map_err(code)?;
@@ -75,7 +76,7 @@ impl<R: Range> Typed<'_, R> {
         // Moving a live root or a directory holding one, or renaming over a live root's
         // directory, would end its connections (servers/littlefsd.md, "Quotas").
         if fs.ledger.holds_live(&from) || fs.ledger.holds_live(&to) {
-            return Err(ErrorCode::Refused);
+            return Err(ErrorCode::NotPermitted);
         }
         // What moves leaves the root holding `old_dir` for the one holding `new_dir`, which
         // also gets back what the rename replaces.
@@ -90,7 +91,7 @@ impl<R: Range> Typed<'_, R> {
         let dst = fs.room(new_dir.path(), need).map_err(code)?;
         // Only the destination may split: littlefs makes no pair for the source's commit.
         fs.recounted(dst, need, [old_dir.path(), new_dir.path()], |fs| {
-            // littlefs refuses a directory moved into itself (`Invalid`, so `refused`).
+            // littlefs refuses a directory moved into itself (`Invalid`, so `not_permitted`).
             fs.with(|fs| fs.rename(&from, &to))?;
             fs.ledger.change(src, 0, moved);
             fs.ledger.change(dst, moved, replaced);
@@ -102,11 +103,12 @@ impl<R: Range> Typed<'_, R> {
     fn copy_file(&mut self, caller: &Caller, c: &CopyFile<'_>) -> Result<u64, ErrorCode> {
         let (src, src_dir) = self.node(caller, c.src_fid, Access::Read)?;
         let dst_dir = self.dir(caller, c.dst_dir)?;
+        // A directory is not copied: the server does no tree copy.
         if src_dir {
-            return Err(ErrorCode::Refused);
+            return Err(ErrorCode::NotSupported);
         }
         if !path::valid_name(c.dst_name) {
-            return Err(ErrorCode::Refused);
+            return Err(ErrorCode::BadName);
         }
         let fs = &mut self.0.fs;
         fs.writable().map_err(code)?;
@@ -166,8 +168,9 @@ impl<R: Range> Typed<'_, R> {
 
     fn set_attr(&mut self, caller: &Caller, s: &SetAttr<'_>) -> Result<(), ErrorCode> {
         let (node, _) = self.node(caller, s.fid, Access::Write)?;
+        // The attributes below `OWN_ATTRS` are the server's own.
         if s.attr < OWN_ATTRS {
-            return Err(ErrorCode::Refused);
+            return Err(ErrorCode::NotPermitted);
         }
         if s.value.len() > ATTR_MAX {
             return Err(ErrorCode::TooLarge);

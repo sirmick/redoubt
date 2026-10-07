@@ -201,7 +201,7 @@ fn the_client_library_works_against_walfsd() {
         assert_eq!(littlefsd::get_attr(&mut lend, &file, 16).unwrap(), b"blue");
         assert_eq!(
             littlefsd::set_attr(&mut lend, &file, 2, b"forged"),
-            Err(Error::Server(ErrorCode::Refused.code()))
+            Err(Error::Server(ErrorCode::NotPermitted.code()))
         );
         assert_eq!(
             littlefsd::set_attr(&mut lend, &file, 16, &[0; 1023]),
@@ -211,7 +211,7 @@ fn the_client_library_works_against_walfsd() {
         littlefsd::rename(&mut lend, &root, "notes", &dir, "moved").unwrap();
         assert_eq!(
             littlefsd::rename(&mut lend, &root, "d", &dir, "self"),
-            Err(Error::Server(ErrorCode::Refused.code()))
+            Err(Error::Server(ErrorCode::NotPermitted.code()))
         );
         // The handle on the renamed file now names nothing at its path.
         assert_eq!(file.read_at(&mut lend, 0, &mut out), Err(Error::Rerror(Name::Removed)));

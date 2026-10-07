@@ -27,13 +27,19 @@ defmodule Redoubt.Wire.Proto.Littlefsd do
   @errors %{
     1 => :malformed,
     2 => :not_found,
-    3 => :refused,
     4 => :exists,
     5 => :not_dir,
     6 => :removed,
     7 => :too_large,
     8 => :corrupt,
-    9 => :no_space
+    9 => :no_space,
+    10 => :not_permitted,
+    11 => :not_supported,
+    12 => :bad_name,
+    13 => :read_only,
+    14 => :no_memory,
+    15 => :is_dir,
+    16 => :not_empty
   }
 
   @doc """
