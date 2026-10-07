@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 265
+revision = 266
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1019,8 +1019,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["B13"]
   body = "Bisected 2026-10-06 (.wash/local/bisect-main/summary.txt, summary-pre.txt): rv32 sched-share ('weight 300 got 543..544 of 1000, want 600 +- 50'), sched-exit-churn and sched-carve-return ('parent 31 lost its running turn at record 108') pass at a9f54ffcb and fail at 777bba164 (SCHED1, the 1 ms slice) and every merge after; train 3 never ran its rv32 scheduler cases. rv64 sched-share sits at 544..549 against a 550 floor and flips between merges (fails at 673be7afc and in B19's gate on 86c76a9f0, passes in the bisect at 992d447ce and 86c76a9f0). Earlier finding: the share fixtures' calibrated CPU count runs over the work it measures. Tier A (the scheduler's measurement), size M: find the bias in the calibration at the 1 ms slice (the per-switch cost SCHED1 recorded as a residual, 0.357/0.449 ms, is a third of a slice and is charged inside the measured work), make the fixtures' expected share account for it or measure net of it as B5 does for audits, so a share verdict is stable on both widths; carve-return's lost turn is a separate clause to explain. Rerun the sched-* cases both widths alone and in the light set. Needs nothing; RECON1 reduces the cost it accounts for."
-  state = "reported"
-  revision = 227
+  state = "done"
+  revision = 266
 
 [[node]]
   id = "PACK1"

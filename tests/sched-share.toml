@@ -1,4 +1,4 @@
-description = "A spinning budget cannot delay another beyond its weight (R12): spinners at weights 100, 100 and 300 each get their weight's share (virtual time, checked build)"
+description = "A spinning budget cannot delay another beyond its weight (R12): spinners at weights 100, 100 and 300 each get their weight's share of the CPU the three counted (virtual time, checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true
@@ -9,6 +9,7 @@ expect = [
     '^\[share\] ok: weight 100 got',
     '^\[share\] ok: weight 100 got',
     '^\[share\] ok: weight 300 got',
+    '^\[share\] counted \d+ of the calibrated 1000$',
     '^SCHED-SHARE TEST PASSED$',
 ]
 forbid = ['\[share\] FAIL']
