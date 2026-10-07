@@ -317,10 +317,11 @@ interrupt key with it, from the driver.
 
 ### The console, the clock and randomness
 
-<details><summary>Status: built · partly tested: its tests run on the host, on the fake kernel, against a console server that keeps `consoled`'s protocol with a host terminal for its device; it runs in a boot in bench:beamlet-boot and bench:beamlet-console · tested (9)</summary>
+<details><summary>Status: built · partly tested: its tests run on the host, on the fake kernel, against a console server that keeps `consoled`'s protocol with a host terminal for its device; it runs in a boot in bench:beamlet-boot and bench:beamlet-console · tested (10)</summary>
 
 - host:beamlet-redoubt::writes_reach_the_screen
 - host:beamlet-redoubt::a_long_write_reaches_the_screen_whole_and_in_order
+- host:beamlet-redoubt::a_write_answered_busy_goes_again_after_the_retry_interval
 - host:beamlet-redoubt::the_console_is_one_hub_connection_with_one_waiter
 - host:beamlet-redoubt::typing_reaches_the_vm_then_its_end
 - host:beamlet-redoubt::a_read_waits_for_typing_without_holding_the_vm
@@ -709,7 +710,8 @@ out as each answer comes. A process that dies while it waits has its operation d
 it holds, and an operation that opened a file closes it. The VM's own code loading reads files
 waiting in place. Concurrency is bounded by each server's shares of requests and pages per
 connection ([R77 (multiplexed requests)](../servers/serving.md#r77-multiplexed-requests)); over
-them, a request is answered `busy` and asked again.
+them, a request is answered `busy` and asked again: a console write `RETRY_US` (10 ms) later, a
+file operation's request at once.
 
 **Threads.** A process has at most 255 threads ([processes](../kernel/processes.md)). The VM's are
 its schedulers (one until several harts) and its waiters, one per connection it uses, at most 6:

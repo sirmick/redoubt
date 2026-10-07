@@ -504,7 +504,10 @@ schedulers submit, and a waiter per connection wakes it
   bug, not the hub's. Requests sent together go end to end in transfers of one page, so a batch
   of 64 reads is one page on either width, and a send never needs more than the one page a
   server's share may give a badge (a bucket of 2 pages is a page a badge); a request longer than
-  a page goes alone.
+  a page goes alone. The server keeps a request that fits the words out of the page it came in,
+  so on rv32, where the words carry 12 bytes and every read goes in a page, a read that waits
+  does not pin the share's one page against the next write
+  ([multiplexed connections](../servers/serving.md#multiplexed-connections)).
 - **Data moves as the kernel moves pages.** A write's data goes in a page of its own, transferred
   to the server; a read's data comes back in the completion call's lend and is copied into the
   read's buffer, which is handed back. Writes go a page at a time, at most `MAX_WRITE` (4 072

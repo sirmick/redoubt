@@ -49,6 +49,9 @@ pub struct ConsoleServer {
     /// Its receive endpoint, which a session is granted a connection to.
     pub endpoint: Handle,
     pub thread: JoinHandle<u32>,
+    /// When each write reached it (`time_now`, µs), answered or refused: how a test sees a
+    /// client's retries spaced.
+    pub writes: Arc<Mutex<Vec<u64>>>,
 }
 
 /// Starts the console server, with `input` as what is typed and `output` as the screen.
@@ -63,12 +66,33 @@ pub fn console_labelled(
     output: Box<dyn Write + Send>,
     labels: &[u64],
 ) -> ConsoleServer {
+    console_built(input, output, labels, 0)
+}
+
+/// As [`console`], answering the first `busy` writes `busy`, as a server over its share does,
+/// and taking the rest.
+pub fn console_busy(
+    input: Box<dyn std::io::Read + Send>,
+    output: Box<dyn Write + Send>,
+    busy: u32,
+) -> ConsoleServer {
+    console_built(input, output, &[], busy)
+}
+
+fn console_built(
+    input: Box<dyn std::io::Read + Send>,
+    output: Box<dyn Write + Send>,
+    labels: &[u64],
+    busy: u32,
+) -> ConsoleServer {
     let f = fake();
     let pid = f.process(0, labels);
     let endpoint = f.endpoint(pid);
     let labels = labels.to_vec();
-    let thread = f.run(pid, move || serve(endpoint, pid, input, output, labels));
-    ConsoleServer { pid, endpoint, thread }
+    let writes = Arc::new(Mutex::new(Vec::new()));
+    let stamps = Arc::clone(&writes);
+    let thread = f.run(pid, move || serve(endpoint, pid, input, output, labels, busy, stamps));
+    ConsoleServer { pid, endpoint, thread, writes }
 }
 
 /// A new session process, with a connection to `console` bound at `/dev/cons`, and its startup
@@ -140,11 +164,14 @@ struct Input {
     ended: bool,
 }
 
-/// The console: its input, shared with the input thread, the screen, and its file's labels.
+/// The console: its input, shared with the input thread, the screen, its file's labels, how many
+/// writes it still answers `busy`, and when each write reached it.
 struct Stream {
     input: Arc<Mutex<Input>>,
     output: Box<dyn Write + Send>,
     labels: Vec<u64>,
+    busy: u32,
+    writes: Arc<Mutex<Vec<u64>>>,
 }
 
 impl Stream {
@@ -193,7 +220,13 @@ impl FileServer for Stream {
         Ok(Read::Done(n))
     }
 
+    /// Output; `busy` while the fixture is told to be, as a server over its share answers.
     fn write(&mut self, _: &Caller, _: &Cons, _offset: u64, data: &[u8]) -> Result<usize, NineError> {
+        self.writes.lock().expect("the writes").push(redoubt_rt::handle::time_now().unwrap_or(0));
+        if self.busy > 0 {
+            self.busy -= 1;
+            return Err(NineError::BUSY);
+        }
         let written = self.output.write_all(data).and_then(|()| self.output.flush());
         Ok(if written.is_ok() { data.len() } else { 0 })
     }
@@ -216,13 +249,15 @@ fn serve(
     input: Box<dyn std::io::Read + Send>,
     output: Box<dyn Write + Send>,
     labels: Vec<u64>,
+    busy: u32,
+    writes: Arc<Mutex<Vec<u64>>>,
 ) -> u32 {
     let endpoint = Endpoint::from_handle(endpoint);
     // `consoled`'s shares: a page a badge for writes, and requests to spare for a parked read.
     let limits = Limits { buckets: 4, in_flight: 2, files: 4, state: 4, requests: 80, pages: 2 };
     let random = redoubt_rt::handle::random_u64().unwrap_or(1);
     let typed = Arc::new(Mutex::new(Input::default()));
-    let stream = Stream { input: Arc::clone(&typed), output, labels };
+    let stream = Stream { input: Arc::clone(&typed), output, labels, busy, writes };
     let Ok(mut server) = NineServer::new(stream, limits, random) else { return 1 };
     // A console read waits on a person, so it has no deadline.
     server.requests_wait(FOREVER);

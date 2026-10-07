@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 299
+revision = 304
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -645,7 +645,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["BEAM3"]
   body = "docs/userland/beamlet.md#natives: ns_lookup/bind/ns, call/send, serve/reply, budget_create/destroy/usage, labels, launch; handles as resource terms that no term format carries; generated clients from wire tables (docs/servers/wire.md#generated-clients) and Redoubt.Namespace/Budget/Process/Keys. The M1 shell's launch (docs/userland/shell.md#the-shell-in-a-session). Attacks: hostile native arguments, a decoded handle grants nothing. Brief to come."
   state = "reported"
-  revision = 275
+  revision = 303
 
 [[node]]
   id = "BEAM5"
@@ -880,8 +880,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "steward"
   needs = ["STEWARD1", "FSD3", "BEAM2", "SSH1", "INIT3", "MEM2"]
   body = "Brief: .wash/local/STEWARD2-implementer.md (architect-15). Tier A, size L. docs/servers/steward.md#principals, #fixed-sub-budgets-per-label-set, #authentication-and-sessions (the console is one principal's session: owner's decision on QA steward-console-principal), #the-stewards-protocol; docs/userland/sessions.md#logging-in, #a-session-is-a-vm-in-a-budget, #vault-sessions, #namespaces; docs/servers/sshd.md#sessions-over-ssh; docs/servers/init.md#the-boot-manifest."
-  state = "active"
-  revision = 241
+  state = "reported"
+  revision = 300
   overrides = ["2026-10-06: started by Orchestrator before MEM2 (active): owner's go (2026-10-06): the steward server starts now; MEM2 merges within hours and STEWARD2 rebases onto it (heap_pages for the sub-budgets' servers is the one dependency)", "2026-10-06: started by Orchestrator before MEM2 (active): STEWARD2 runs ahead of MEM2's merge on the owner's go; it rebases onto MEM2's merge when told"]
 
 [[node]]
@@ -1190,9 +1190,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   title = "The shell VM ends silently when a budget carve is refused; the kernel's refusal is right and the VM's handling is not"
   template = "package"
   parent = "M1"
-  body = "Found by BEAM4 (2026-10-07), judged by its red: when the shell VM carved a child budget taking all of its own budget's weight, the VM ended with exit 0 and no console line. The kernel is right: budget.rs:880-885 refuses carving all of a parent's free weight when the parent holds a process (invalid_argument), and process.rs:366 refuses process_create into free weight 0; the silent exit is the VM's handling of that error (an unmatched {error,_}, or idle(None) giving up). BEAM4 fixes the handling in its fold (the shell prints the refusal and stays). Tier B, size S, remaining: a case that carves the whole weight from a session and expects the refusal line and the prompt back; budgets.md's carve paragraph states the floor rule in one sentence if it does not; close when the case passes both widths."
+  body = "BEAM4's Q6: the shell VM ends silently when a budget carve is refused; the kernel's refusal (budget.rs) is right and the VM's handling is not. Confirmed by STEWARD2's red from the code on the rv32 steward-sub-budget-flood intermittency (1 pass of 3): 'terminate_process: 509' is printed only on the self-end path (kernel process.rs:746-757, died -> end_process with the current pid); the steward's budget_destroy goes through kill_process, which prints nothing; no 'a step failed' line; alice's carve is from users/alice/{7}; the steward then reaped bob's budget (0 pages, 0 processes). So bob's idle VM ended itself around alice's vault flood: the VM/console side, not the steward's carve. Make the refusal (or whatever the VM meets under a neighbour's flood: a refused carve, a refused page, a busy share) surface to the session as an error with the VM alive; the shell's exec returns {:error, :invalid_argument} today and stays; a case (or sub-budget-flood's R37 verdict on rv32, deterministic) proves a refused carve or a neighbour's flood leaves bob's prompt usable. Tier B unless libs/client changes. Size S-M. Evidence: /tmp/s2runs rv32 flood log (STEWARD2's red), .wash/local/STEWARD2-report.md."
   state = "todo"
-  revision = 257
+  revision = 302
 
 [[node]]
   id = "B22"
@@ -1209,8 +1209,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   body = "Found by STEWARD2's gate on rv32 only: the console session's VM reads and evaluates every typed line (verityd's expected block-mismatch line appears, so the reads and the evaluation ran) but nothing it writes after its first prompt reaches the UART; ConsoleIo instrumented: no write is refused, short or ended; a write is put out on the hub and its completion never comes back, while the console's read completions do. Ruled out: beamlet's limit change, erofsd budget/buckets, the VM's erofsd connection, RAM, consoled heap, the steward's own console lines. What is left: the connection: the session's /dev/cons is a consoled connection the steward mints (new_connection, root \"\") through its own /dev/cons, which init minted; main's VM gets init's minted console directly; SSH sessions are fine on rv32; rv64 is fine. Cases: rv32 userland-boot, userland-read-only, boot-profile, boot-profile-unverified on wp-STEWARD2. Probe notes: .wash/local/STEWARD2-rv32-probe.md. Suspects: the hub's completion matching (libs/client aio.rs, BEAM3) or consoled's handling of a minted connection's writes under 32-bit tags/offsets; the kernel is not suspected. Tier A if libs/client or consoled changes. Size S-M. Blocks STEWARD2's merge."
-  state = "reported"
-  revision = 293
+  state = "done"
+  revision = 304
 
 [[node]]
   id = "B23"
