@@ -1,8 +1,9 @@
 //! The platform's console, over the client library's hub, against the fixture's console server, on
 //! the fake kernel: what the VM writes reaches the screen, whole and in order, what is typed
 //! reaches the VM, a read with nothing typed yet waits without holding the VM's thread, the end of
-//! the input is the end, a VM away from it past the server's session bound keeps it, and the
-//! console costs one waiter thread and no other.
+//! the input is the end, a VM away from it past the server's session bound keeps it, a write
+//! answered `busy` goes again after the retry interval, and the console costs one waiter thread
+//! and no other.
 
 use std::io::Write;
 use std::sync::{Arc, Mutex};
@@ -10,6 +11,7 @@ use std::sync::{Arc, Mutex};
 use beamlet_redoubt::Redoubt;
 use beamlet_redoubt::fixture::{self, ConsoleServer, Dirs};
 use beamlet_vm::platform::{ConsoleInput, Platform};
+use redoubt_client::aio::RETRY_US;
 use redoubt_fake_kernel::fake;
 
 /// The console server's screen, which a test reads back.
@@ -31,9 +33,19 @@ fn with_platform(
     input: impl std::io::Read + Send + 'static,
     test: impl FnOnce(&mut Redoubt) + Send + 'static,
 ) -> Vec<u8> {
+    with_platform_on(input, |input, screen| fixture::console(input, screen), test).0
+}
+
+/// As [`with_platform`], on the console server `start` makes of the input and the screen; also
+/// returns when each write reached the server.
+fn with_platform_on(
+    input: impl std::io::Read + Send + 'static,
+    start: impl FnOnce(Box<dyn std::io::Read + Send>, Box<dyn Write + Send>) -> ConsoleServer,
+    test: impl FnOnce(&mut Redoubt) + Send + 'static,
+) -> (Vec<u8>, Vec<u64>) {
     let f = fake();
     let screen = Screen::default();
-    let console: ConsoleServer = fixture::console(Box::new(input), Box::new(screen.clone()));
+    let console = start(Box::new(input), Box::new(screen.clone()));
     let (pid, block) = fixture::session(&console);
     let session = f.run(pid, move || {
         let startup = fixture::startup(&block);
@@ -45,7 +57,8 @@ fn with_platform(
     f.destroy(console.pid, console.endpoint);
     assert_eq!(console.thread.join().unwrap(), redoubt_rt::exit::OK);
     let bytes = screen.0.lock().unwrap().clone();
-    bytes
+    let writes = console.writes.lock().unwrap().clone();
+    (bytes, writes)
 }
 
 /// Everything read until the end of the input, idling between reads as the VM does.
@@ -144,6 +157,30 @@ fn a_vm_busy_past_the_session_bound_keeps_its_console() {
         drop(keys);
         assert_eq!(read_to_end(p), b"");
     });
+}
+
+/// A console over its share answers a write `busy`; the write goes again `RETRY_US` later, as the
+/// hub's rule for a queued request has it, not at once: a console that stays busy costs the VM
+/// a request every retry interval, never a spin.
+#[test]
+fn a_write_answered_busy_goes_again_after_the_retry_interval() {
+    let (screen, writes) = with_platform_on(
+        std::io::empty(),
+        |i, o| fixture::console_busy(i, o, 2),
+        |p| {
+            p.console_write(b"third time lucky\r\n");
+            // Idle past the two retries, as the VM does with nothing to run.
+            let until = p.monotonic_us() + 10 * RETRY_US;
+            while p.monotonic_us() < until {
+                p.idle(Some(until));
+            }
+        },
+    );
+    assert_eq!(screen, b"third time lucky\r\n");
+    assert_eq!(writes.len(), 3, "two refused, then taken: {writes:?}");
+    for pair in writes.windows(2) {
+        assert!(pair[1] - pair[0] >= RETRY_US, "a retry went early: {writes:?}");
+    }
 }
 
 #[test]

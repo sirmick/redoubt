@@ -14,7 +14,8 @@
 //!
 //! - **The console** is `/dev/cons` in the process's namespace, opened once. One read is out on the hub at a
 //!   time, parked by the server until there is typing, and one write: the bytes the VM writes wait here, in
-//!   order, for the write before them, since the console's share is a page a badge and a write is a page.
+//!   order, for the write before them, since the console's share is a page a badge and a write is a page. A
+//!   write the console answers `busy` goes again `RETRY_US` later, not at once.
 //! - **Time** is the kernel's microseconds since boot, and `system_time_us` is `None`: there is no wall clock
 //!   until M5 (persist, install, share) brings one. **Randomness** is the kernel's.
 //!
@@ -50,7 +51,7 @@ use beamlet_vm::platform::{ConsoleInput, Files, Lookup, Platform, PlatformError,
 use beamlet_vm::vm::{Config, Limits};
 use beamlet_vm::{Class, Vm};
 pub use files::posix;
-use redoubt_client::aio::{Conn, Done, MAX_WRITE, Outcome};
+use redoubt_client::aio::{Conn, Done, MAX_WRITE, Outcome, RETRY_US};
 use redoubt_client::console::Console;
 use redoubt_client::ns::Namespace;
 use redoubt_client::{Error, Lend, Refusal};
@@ -124,9 +125,16 @@ struct ConsoleIo {
     write_buffer: Option<Buffer>,
     /// What the VM wrote that the console has not taken, the write out's bytes first.
     output: VecDeque<u8>,
+    /// The console answered the write out `busy` (over the connection's share for a moment): when
+    /// the next goes, [`RETRY_US`] later rather than at once, as the hub's rule for a queued
+    /// request has it; and how many times it has.
+    retry_at: Option<u64>,
+    busy: u64,
     /// The console took nothing, or has gone: nothing more is written.
     gone: bool,
 }
+
+fn now() -> u64 { redoubt_rt::handle::time_now().unwrap_or(0) }
 
 impl ConsoleIo {
     /// Takes `done` if it is the console's read or write; anything else, a file operation on
@@ -155,7 +163,10 @@ impl ConsoleIo {
             self.writing = None;
             match done.outcome {
                 Outcome::Wrote(n) if n > 0 => drop(self.output.drain(..(n as usize).min(self.output.len()))),
-                Outcome::Busy => {}
+                Outcome::Busy => {
+                    self.busy += 1;
+                    self.retry_at = Some(now().saturating_add(RETRY_US));
+                }
                 // A console that takes nothing, or has gone, gets no more.
                 _ => self.stop_writing(),
             }
@@ -181,11 +192,16 @@ impl ConsoleIo {
         }
     }
 
-    /// Puts the next write out, unless one is or there is nothing to write.
+    /// Puts the next write out, unless one is, there is nothing to write, or a `busy` answer's
+    /// retry is not yet due.
     fn write(&mut self, io: &mut Io) {
         if self.writing.is_some() || self.output.is_empty() || self.gone {
             return;
         }
+        if self.retry_at.is_some_and(|at| now() < at) {
+            return;
+        }
+        self.retry_at = None;
         let buffer = match self.write_buffer.take() {
             Some(buffer) => Ok(buffer),
             None => Buffer::new(1).map_err(Error::from),
@@ -210,6 +226,12 @@ impl ConsoleIo {
 
     /// Whether anything written is still to reach the console.
     fn writes_pending(&self) -> bool { !self.gone && (self.writing.is_some() || !self.output.is_empty()) }
+
+    /// How long until a write the console answered `busy` goes again, if one waits to: a bound on
+    /// any wait meanwhile, so nothing else need wake the VM for it.
+    fn retry_in(&self, now: u64) -> Option<u64> {
+        self.retry_at.filter(|_| self.writes_pending()).map(|at| at.saturating_sub(now))
+    }
 }
 
 /// What the VM's lookups cost, said at its first console read (`boot-stats`, test-only, for the
@@ -259,6 +281,8 @@ impl Redoubt {
             writing: None,
             write_buffer: None,
             output: VecDeque::new(),
+            retry_at: None,
+            busy: 0,
             gone: false,
         };
         Ok(Redoubt {
@@ -335,13 +359,15 @@ impl Redoubt {
         self.dispatch();
     }
 
-    /// Hands each completion to whoever's request it was.
+    /// Hands each completion to whoever's request it was, and sends a console write whose retry
+    /// has come due.
     fn dispatch(&mut self) {
         while let Some(done) = self.io.completed() {
             let Some(done) = self.cons.take(&mut self.io, done) else { continue };
             // Anything else is no one's: dropped, with its buffer.
             self.files.take(&mut self.io, done);
         }
+        self.cons.write(&mut self.io);
         while let Some(delivery) = self.io.other() {
             // A wake-up of no thread of the platform's: what it brought is closed.
             if let Some(other) = self.sys.deliver(self.io.wake(), delivery) {
@@ -365,14 +391,19 @@ impl Drop for Redoubt {
                 self.io.waiters()
             );
             self.console_write(line.as_bytes());
+            if self.cons.busy > 0 {
+                let line = format!("beamlet: io: the console answered busy {} times\n", self.cons.busy);
+                self.console_write(line.as_bytes());
+            }
         }
-        let until = redoubt_rt::handle::time_now().unwrap_or(0).saturating_add(FLUSH_US);
+        let until = now().saturating_add(FLUSH_US);
         while self.cons.writes_pending() {
             let now = redoubt_rt::handle::time_now().unwrap_or(until);
             if now >= until {
                 return;
             }
-            self.io.wait(until - now);
+            let wait = self.cons.retry_in(now).map_or(until - now, |r| r.min(until - now));
+            self.io.wait(wait);
             self.dispatch();
         }
     }
@@ -413,15 +444,21 @@ impl Platform for Redoubt {
         if !self.cons.input.is_empty() {
             return;
         }
+        let now = self.monotonic_us();
+        let retry = self.cons.retry_in(now);
         let timeout = match deadline {
-            Some(deadline) => deadline.saturating_sub(self.monotonic_us()),
+            Some(deadline) => deadline.saturating_sub(now),
             // Nothing will arrive, so nothing would wake the VM: return, and it gives up.
-            None if (!self.cons.started || self.cons.ended) && !self.files.busy() && !self.sys.busy() => {
+            None if retry.is_none()
+                && (!self.cons.started || self.cons.ended)
+                && !self.files.busy()
+                && !self.sys.busy() =>
+            {
                 return;
             }
             None => FOREVER,
         };
-        self.io.wait(timeout);
+        self.io.wait(retry.map_or(timeout, |r| r.min(timeout)));
         self.dispatch();
     }
 
@@ -434,7 +471,7 @@ impl Platform for Redoubt {
         self.cons.output.extend(bytes);
         self.cons.write(&mut self.io);
         while self.cons.output.len() > MAX_OUTPUT && self.cons.writes_pending() {
-            self.io.wait(FOREVER);
+            self.io.wait(self.cons.retry_in(now()).unwrap_or(FOREVER));
             self.dispatch();
         }
     }
