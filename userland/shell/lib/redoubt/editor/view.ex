@@ -19,10 +19,20 @@ defmodule Redoubt.Editor.View do
   @spec tab() :: pos_integer()
   def tab, do: @tab
 
-  @doc "The column on screen, before any scroll, where grapheme `col` of `line` starts."
+  @doc """
+  The column on screen, before any scroll, where grapheme `col` of `line` starts: only the
+  graphemes before it are read.
+  """
   @spec column(String.t(), non_neg_integer()) :: non_neg_integer()
-  def column(line, col) do
-    line |> String.graphemes() |> Enum.take(col) |> Enum.reduce(0, &(&2 + Width.columns(piece(&1, &2))))
+  def column(line, col), do: column(line, col, 0)
+
+  defp column(_line, 0, at), do: at
+
+  defp column(line, col, at) do
+    case String.next_grapheme(line) do
+      {g, rest} -> column(rest, col - 1, at + Width.columns(piece(g, at)))
+      nil -> at
+    end
   end
 
   @doc """
@@ -31,6 +41,8 @@ defmodule Redoubt.Editor.View do
   `nil`; `cursor` is the grapheme the cursor is on, or `nil`. The cursor at the line's end is a
   blank cell; a selection that runs on to the next line shows a blank cell at this one's end.
   `pieces` is the line cut by its highlighting, each piece with its role, or `nil` for plain text.
+  Only the graphemes up to the window's right edge are read, so a draw costs what is left of the
+  window and in it, not the line's length.
   """
   @spec runs(
           String.t(),
@@ -43,20 +55,13 @@ defmodule Redoubt.Editor.View do
         ) ::
           [run()]
   def runs(line, left, width, selected, cursor, selected_end? \\ false, pieces \\ nil) do
-    graphemes = String.graphemes(line)
-    count = length(graphemes)
+    walked = %{stop: left + width, selected: selected, cursor: cursor}
+    {drawn, at, count, rest} = walk(line, walked, 0, 0, 0, ends(pieces), [])
 
-    {drawn, at} =
-      graphemes
-      |> Enum.zip(roles(graphemes, pieces))
-      |> Enum.with_index()
-      |> Enum.reduce({[], 0}, fn {{g, base}, i}, {acc, at} ->
-        text = piece(g, at)
-        {[{at, text, role(i, selected, cursor, base)} | acc], at + Width.columns(text)}
-      end)
-
+    # The line's end, when the walk reached it before the window's edge.
     tail =
       cond do
+        rest != "" -> []
         cursor == count -> [{at, " ", :cursor}]
         selected_end? -> [{at, " ", :selected}]
         true -> []
@@ -71,27 +76,40 @@ defmodule Redoubt.Editor.View do
   defp piece("\t", at), do: String.duplicate(" ", @tab - rem(at, @tab))
   defp piece(g, _at), do: Text.visible(g)
 
+  # The graphemes from the line's start to the window's right edge, each drawn at its column in
+  # its role: `i` counts graphemes, `byte` is where the grapheme starts in the line, and `ends` is
+  # what is left of the highlighting's pieces, each grapheme taking the role of the piece it
+  # starts in. Gives the pieces drawn, the column and grapheme reached, and the line not read.
+  defp walk(text, %{stop: stop}, at, i, _byte, _ends, acc) when at >= stop, do: {acc, at, i, text}
+
+  defp walk(text, walked, at, i, byte, ends, acc) do
+    case String.next_grapheme(text) do
+      nil ->
+        {acc, at, i, ""}
+
+      {g, rest} ->
+        ends = Enum.drop_while(ends, fn {stop, _role} -> stop <= byte end)
+        base = with [{_stop, role} | _] <- ends, do: role, else: (_ -> :normal)
+        drawn = piece(g, at)
+        acc = [{at, drawn, role(i, walked.selected, walked.cursor, base)} | acc]
+        walk(rest, walked, at + Width.columns(drawn), i + 1, byte + byte_size(g), ends, acc)
+    end
+  end
+
   defp role(i, _selected, i, _base), do: :cursor
   defp role(i, %Range{} = selected, _cursor, base), do: if(i in selected, do: :selected, else: base)
   defp role(_i, nil, _cursor, base), do: base
 
-  # Each grapheme's role from the highlighting: the role of the piece the grapheme starts in.
-  defp roles(graphemes, nil), do: Enum.map(graphemes, fn _ -> :normal end)
+  # Where each piece of the highlighting ends in the line, in bytes, with its role.
+  defp ends(nil), do: []
 
-  defp roles(graphemes, pieces) do
+  defp ends(pieces) do
     {ends, _at} =
       Enum.map_reduce(pieces, 0, fn {text, role}, at ->
         {{at + byte_size(text), role}, at + byte_size(text)}
       end)
 
-    {roles, _} =
-      Enum.map_reduce(graphemes, {0, ends}, fn g, {at, ends} ->
-        ends = Enum.drop_while(ends, fn {stop, _role} -> stop <= at end)
-        role = with [{_stop, role} | _] <- ends, do: role, else: (_ -> :normal)
-        {role, {at + byte_size(g), ends}}
-      end)
-
-    roles
+    ends
   end
 
   # A piece as it falls in the window: whole, or as blanks where only part of it shows.

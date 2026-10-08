@@ -39,7 +39,7 @@ defmodule Redoubt.EditorTest do
 
     File.write!(Path.join(dir, "bin"), <<"ok", 0xFF, 0xFE, "\n">>)
     bin = start(Path.join(dir, "bin"))
-    assert doc(bin).readonly and text(bin) == "ok<FF><FE>\n"
+    assert doc(bin).readonly == :not_utf8 and text(bin) == "ok<FF><FE>\n"
     bin = typed(bin, "x")
     assert text(bin) == "ok<FF><FE>\n" and bin.message =~ "read only"
     assert keys(bin, [key("s", [:ctrl])]).message =~ "read only"
@@ -93,6 +93,34 @@ defmodule Redoubt.EditorTest do
     {:cont, state} = Editor.update(key("q", [:ctrl]), state)
     assert_received :more_keys_behind
     assert [%{id: {:guard, :close}}] = state.dialogs.stack
+  end
+
+  test "a paste longer than the deaf moment cannot answer either: the question stays deaf to it",
+       %{tmp_dir: dir} do
+    path = Path.join(dir, "notes.txt")
+    File.write!(path, "kept\n")
+    state = start(path) |> typed("edit ")
+
+    send(self(), :more_keys_behind)
+    {:cont, state} = Editor.update(key("s", [:ctrl]), state)
+    assert_received :more_keys_behind
+    assert [%{id: {:guard, :save}}] = state.dialogs.stack
+
+    # 5,000 keys, each with the rest still queued behind it, arriving over more than 300 ms;
+    # then the Enter that ends the paste, with nothing behind it.
+    for _ <- 1..5_000, do: send(self(), :queued_key)
+
+    state =
+      Enum.reduce(1..5_000, state, fn i, state ->
+        receive do: (:queued_key -> :ok)
+        if rem(i, 50) == 0, do: Process.sleep(4)
+        {:cont, state} = Editor.update(key("x"), state)
+        state
+      end)
+
+    state = keys(state, [key(:enter)])
+    assert File.read!(path) == "kept\n"
+    assert [%{id: {:guard, :save}}] = state.dialogs.stack
   end
 
   test "a paste that ends in Ctrl+S, Ctrl+Q or Ctrl+O asks too, though nothing waits behind its last key",
@@ -224,6 +252,25 @@ defmodule Redoubt.EditorTest do
     state = keys(state, [key("y", [:ctrl])])
     assert Buffer.cursor(doc(state).buffer) |> elem(0) > 256
     assert doc(state).marks[2] == {:comment, 1}
+  end
+
+  test "a draw reads a line only to the window's edge: a 1 MiB line costs what the window shows" do
+    line = "x = \"" <> String.duplicate("a", 1024 * 1024) <> "\""
+    {pieces, _state} = Redoubt.Editor.Syntax.line(Redoubt.Editor.Syntax.Ex, line, :code)
+
+    {us, runs} = :timer.tc(fn -> View.runs(line, 0, 80, 2..9, 0, true, pieces) end)
+
+    assert runs == [
+             {0, "x", :cursor},
+             {1, " ", :normal},
+             {2, "= \"aaaaa", :selected},
+             {10, String.duplicate("a", 70), :string}
+           ]
+
+    assert us < 100_000, "#{div(us, 1000)} ms to draw a window of a 1 MiB line"
+
+    {us, column} = :timer.tc(fn -> View.column(line, 10) end)
+    assert column == 10 and us < 100_000
   end
 
   test "a line is drawn with tabs to the stop, control characters visible, clipped to the window" do

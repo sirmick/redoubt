@@ -13,10 +13,11 @@ defmodule Redoubt.Editor do
   session's own key, Ctrl+\\, ends it, unsaved changes and all, as it ends any screen.
 
   Nothing a key does reaches a file without the person: a save, a close, or an open that arrives
-  in a burst of keys asks first, and the keys that arrive with that question are dropped, so a
-  pasted Enter cannot answer it. A key is in a burst when more keys are already waiting behind it
-  (a paste, which the terminal sends all at once), or when it comes within 300 ms of one that
-  had: so a paste that ends in Ctrl+S, with nothing behind its last key, asks too.
+  in a burst of keys asks first, and the keys that arrive with that question are dropped, until
+  300 ms after the burst's last, so a pasted Enter cannot answer it however long the paste. A key
+  is in a burst when more keys are already waiting behind it (a paste, which the terminal sends
+  all at once), or when it comes within 300 ms of one that had: so a paste that ends in Ctrl+S,
+  with nothing behind its last key, asks too.
   """
 
   use Redoubt.Commandlet, area: "Screens"
@@ -29,7 +30,8 @@ defmodule Redoubt.Editor do
   alias Redoubt.Term.Buffer, as: Cells
   alias Redoubt.Term.Text
 
-  # Keys arriving this long after a question a burst of keys raised are dropped with it.
+  # Keys arriving this long after a question a burst of keys raised are dropped with it, and
+  # this long after the last of the burst's keys.
   @deaf_ms 300
 
   # A key this soon after one that had more keys waiting behind it is of the same burst: the last
@@ -98,19 +100,21 @@ defmodule Redoubt.Editor do
   # ---- files ----
 
   @doc false
-  # A file opened for editing: what is read, or a new file where nothing is.
-  @spec open(Path.t()) :: {:ok, map()} | {:error, term()}
-  def open(path) do
+  # A file opened for editing: what is read, or a new file where nothing is. With `view: true`,
+  # read only, and a file that is not there is refused.
+  @spec open(Path.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  def open(path, opts \\ []) do
     path = Path.expand(path)
+    view = Keyword.get(opts, :view, false)
 
     case Files.read(path) do
       {:ok, %{bytes: bytes, utf8: true, digest: digest}} ->
-        {:ok, doc(path, Buffer.new(bytes), digest, false)}
+        {:ok, doc(path, Buffer.new(bytes), digest, if(view, do: :viewing, else: false))}
 
       {:ok, %{bytes: bytes, utf8: false, digest: digest}} ->
-        {:ok, doc(path, Buffer.new(shown(bytes)), digest, true)}
+        {:ok, doc(path, Buffer.new(shown(bytes)), digest, :not_utf8)}
 
-      {:error, :enoent} ->
+      {:error, :enoent} when not view ->
         {:ok, doc(path, Buffer.new(), :absent, false)}
 
       {:error, _reason} = error ->
@@ -178,7 +182,14 @@ defmodule Redoubt.Editor do
     queued = queued?()
     burst = queued or (state.burst_at != nil and now - state.burst_at < @burst_ms)
     state = if queued, do: %{state | burst_at: now}, else: state
-    if deaf?(state, now), do: {:cont, state}, else: key(state, key, burst)
+
+    cond do
+      # Dropped with more queued behind it: the burst is still arriving, so the question stays
+      # deaf until 300 ms after its last key, however long the burst.
+      deaf?(state, now) and queued -> {:cont, %{state | deaf_until: now + @deaf_ms}}
+      deaf?(state, now) -> {:cont, state}
+      true -> key(state, key, burst)
+    end
   end
 
   defp handle(_message, state), do: {:cont, state}
@@ -422,7 +433,7 @@ defmodule Redoubt.Editor do
 
     cond do
       doc.readonly ->
-        {:cont, %{state | message: "read only: not UTF-8"}}
+        {:cont, %{state | message: read_only(doc)}}
 
       true ->
         case Files.save(doc.path, Buffer.text(doc.buffer), expected) do
@@ -443,7 +454,7 @@ defmodule Redoubt.Editor do
   defp close(state) do
     doc = current(state)
 
-    if Buffer.modified?(doc.buffer) and not doc.readonly do
+    if Buffer.modified?(doc.buffer) and doc.readonly == false do
       text = "Save the changes to #{Path.basename(doc.path)}?"
       {:cont, ask(state, Dialogs.confirm(:unsaved, "Close", text))}
     else
@@ -482,8 +493,11 @@ defmodule Redoubt.Editor do
 
   # An edit, unless the file is read only.
   defp change(state, fun) do
-    if current(state).readonly, do: %{state | message: "read only: not UTF-8"}, else: buffer(state, fun)
+    if current(state).readonly, do: %{state | message: read_only(current(state))}, else: buffer(state, fun)
   end
+
+  defp read_only(%{readonly: :not_utf8}), do: "read only: not UTF-8"
+  defp read_only(%{readonly: :viewing}), do: "read only: viewing"
 
   # The view scrolled so the cursor shows.
   defp follow(state) do
@@ -570,7 +584,9 @@ defmodule Redoubt.Editor do
   defp draw_line(buffer, state, doc, {line, pieces}, row, y, w) do
     {crow, ccol} = Buffer.cursor(doc.buffer)
     cursor = if row == crow, do: ccol
-    {selected, to_end} = selected_on(Buffer.selection(doc.buffer), row, String.length(line))
+    # A row the selection crosses whole is selected to its end: its bytes are at least its
+    # graphemes, and cost nothing to count.
+    {selected, to_end} = selected_on(Buffer.selection(doc.buffer), row, byte_size(line))
 
     for {x, text, role} <- View.runs(line, doc.left, w, selected, cursor, to_end, pieces) do
       Cells.put(buffer, x, y, text, Theme.style(state.theme, role))
