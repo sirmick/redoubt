@@ -136,7 +136,9 @@ Built and attack-tested today:
   ([the steward](../servers/steward.md#authentication-and-sessions)). A steward that dies is
   restarted with every session logged out, `users` emptied by the kernel's `budget_reap`, and the
   console session starts again; the machine does not reboot
-  ([failure and restart](../servers/steward.md#failure-and-restart)).
+  ([failure and restart](../servers/steward.md#failure-and-restart)). Each principal's home
+  holds the manifest's quota, shared by all its sessions, its console session among them
+  ([home quotas and vaults](../servers/steward.md#home-quotas-and-vaults)).
 - **`sshd`'s core** on its host platform, which the bench's SSH sessions run against, with
   OpenSSH's server as the reference ([sshd](../servers/sshd.md#the-core-and-its-platforms),
   [SSH sessions](../testbench.md#sessions-and-the-loopback-server)), and on the box's, logins

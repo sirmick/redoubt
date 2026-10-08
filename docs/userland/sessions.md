@@ -167,7 +167,7 @@ steward](../servers/steward.md)).
 
 ### Namespaces
 
-Status: built · partly tested: on the box the cases show which connections the steward made and in which budget, and a session's paths are walked once its namespace reaches the VM; the binding table, slot by slot, is host-tested · tested: bench:steward-ssh-two-principals, bench:steward-vault-session, host:redoubt-steward-server::a_login_runs_the_session_batch_and_answers_the_session, host:redoubt-steward-server::a_vault_login_carves_from_the_vault_s_sub_budget_and_has_no_network
+Status: built · partly tested: on the box the cases show which connections the steward made and in which budget, and a session's paths are walked once its namespace reaches the VM; the binding table, slot by slot, is host-tested · tested: bench:steward-ssh-two-principals, bench:steward-vault-session, bench:steward-home-quota, host:redoubt-steward-server::a_login_runs_the_session_batch_and_answers_the_session, host:redoubt-steward-server::a_vault_login_carves_from_the_vault_s_sub_budget_and_has_no_network
 
 A namespace is a table inside the process: path prefixes, each naming a capability (a 9P
 connection) the process holds. The launcher writes it into the child's startup block before the
@@ -214,6 +214,12 @@ What follows from a table of capabilities:
 - **Different prefixes are usually different servers.** `/home/alice` and a vault's volume are
   two connections, so a rename between them is a copy and a remove, never atomic
   ([files](files.md)).
+- **A home holds its principal's quota, whatever its sessions.** Every session of Alice's,
+  her console session and her named contexts among them, is minted through the one connection the
+  steward carved at her home with her `home_quota`, so together they hold at most that many bytes;
+  a write past it is `:enospc`, and Bob's home on the same volume keeps its own
+  ([home quotas and vaults](../servers/steward.md#home-quotas-and-vaults)). A vault has no quota
+  of its own: it is its labelled volume, bounded by its room.
 - **A copy of a connection is the same connection.** All holders of a handle share one badge and
   one set of open files, so a launcher never passes its own connection to a child: it asks the
   server for a fresh one with `new_connection`, and disconnects it when the child's exit notice

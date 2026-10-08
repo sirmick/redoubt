@@ -504,6 +504,17 @@ With the packer's inode for every 16 blocks, the share is about 64 KiB, so a roo
 about Q / 64 KiB entries, fewer if they hold data
 ([Residual risks](#residual-risks)).
 
+The steward is the main granter: it carves each principal's home once, with the manifest's
+`home_quota`, and mints every session's home through that connection with no quota of its own,
+so a principal's sessions share one root and one quota
+([steward](steward.md#home-quotas-and-vaults)). What a home can hold is a little under its
+`home_quota`, since every entry costs its share as well as its blocks: in `steward-home-quota`, an
+8 MiB home with two files in it held 7,936 KiB of data. A vault session's connection is minted at its
+labelled volume's own root, which carves nothing: a vault is bounded by its volume's room. What
+`init` checks, that a volume's home quotas fit its `bytes`
+([init](init.md#home-quotas)), is a promise about the partition; the bound itself is this
+server's refusal of a carve its room cannot hold.
+
 ## Authority
 
 Status: built · tested: bench:walfsd-one-volume

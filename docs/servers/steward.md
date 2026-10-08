@@ -323,8 +323,9 @@ the manifest is never public, so `/boot` cannot carry it. A trace begins with th
 After the core's lines `init` appends the steward's own, which the server parses and the core
 never sees, each naming only what `init`'s check found in the manifest:
 - `label "NAME" id=N`, a label's name, for a login's label;
-- `home "PRINCIPAL" handle=H path=/P`, its home at the server `init` handed the steward as the
-  named handle `H`;
+- `home "PRINCIPAL" handle=H path=/P quota=N`, its home at the server `init` handed the steward
+  as the named handle `H`, holding at most `N` bytes, 1 or more
+  ([home quotas and vaults](#home-quotas-and-vaults));
 - `vault "PRINCIPAL" labels=[..] handle=H`, the labelled volume of one label set it works under
   (a set with no volume has no line);
 - `net "PRINCIPAL" PREFIX:PORTS ...`, its network scope in the manifest's form, `*` for every
@@ -417,6 +418,35 @@ principals in M6 (persist, install, share), if evidence asks for them.
 The steward carves at its start: for each principal a top budget under `users` with its account,
 and under it a sub-budget per label set with that set's labels; a carve the kernel refuses is a
 start failure, and the box has no users.
+
+### Home quotas and vaults
+
+Status: built · tested: bench:steward-home-quota, bench:init-refuses-overcommit, host:redoubt-fileserver::sessions_minted_through_one_carve_share_its_quota_across_a_restart, host:redoubt-steward-server::a_malformed_line_is_refused, host:redoubt-init::home_quotas_are_checked_against_their_volume, host:redoubt-init::a_vault_is_one_principals, host:redoubt-init::no_home_is_another_s_or_inside_it
+
+- **A home's quota is the principal's, whatever its sessions.** The manifest gives each home a
+  byte quota (`home_quota`, [init](init.md#home-quotas)), which reaches the steward on its `home`
+  line. The first time a session of the principal needs its home, the steward mints one
+  connection at the home's server, rooted at the home, with that quota, and keeps it for its own
+  life; every session's home is minted through it with no quota of its own, at its root, so they
+  all share the one quota: two sessions, or a session and the console session, stop together at
+  it, and so do a principal's named contexts. A session's connection is disconnected through the
+  kept one when the session ends. A write past the quota is the server's `enospc`
+  ([walfsd](walfsd.md#quotas)); the principal's other homes' room, and every other principal's,
+  is untouched.
+- **A restart re-carves.** A dead steward's kept connections go with it: `init` disconnects the
+  fresh connection it made for the steward at each server, and every connection minted under it
+  with it ([failure and restart](#failure-and-restart)). The restarted steward carves each home
+  again when it is next needed, and the server counts what the home already holds against the new
+  carve, so what was written counts once.
+- **The quotas fit their volume.** `init` refuses a manifest whose homes on one volume ask for more
+  than the bytes it gives, or in which one principal's home is another's or inside it, so the
+  steward can carve every principal's home at once, each its own root; the volume's
+  server refuses a carve its room cannot hold all the same, and a session then has no home.
+- **A vault is its labelled volume, with no quota of its own.** A vault session's slot is minted
+  at the labelled volume's own root, which carves nothing: it is bounded by the volume's room. A
+  labelled volume is one principal's: `init` refuses a manifest in which two principals' label
+  sets name it (a label set need not be owned, so the manifest alone could otherwise share one),
+  as principals are kept apart.
 
 ### Authentication and sessions
 

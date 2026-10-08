@@ -4,8 +4,9 @@
 //! the handles `init` handed the steward.
 //!
 //! - `label "NAME" id=N`: a label's name, for a login's label.
-//! - `home "PRINCIPAL" handle=H path=/P`: the principal's home, at the server `init` handed the steward as
-//!   the named handle `H`, rooted at the clean absolute path `/P`.
+//! - `home "PRINCIPAL" handle=H path=/P quota=N`: the principal's home, at the server `init` handed the
+//!   steward as the named handle `H`, rooted at the clean absolute path `/P`, holding at most `N` bytes (at
+//!   least 1) whatever the principal's sessions.
 //! - `vault "PRINCIPAL" labels=[..] handle=H`: the labelled volume of one label set the principal works
 //!   under, at the server handed as `H`.
 //! - `console "PRINCIPAL"`: the principal whose unlabelled session the steward opens on the UART, at its
@@ -32,6 +33,8 @@ pub struct Home {
     pub principal: String,
     pub handle: String,
     pub path: String,
+    /// The bytes the home holds, for all the principal's sessions together.
+    pub quota: u64,
 }
 
 /// A labelled volume one of a principal's label sets works on.
@@ -133,15 +136,19 @@ impl Own {
                 self.labels.push((label, u64_of(id)?));
             }
             "home" => {
-                let [h, path] = fields(rest, ["handle", "path"])?;
+                let [h, path, quota] = fields(rest, ["handle", "path", "quota"])?;
                 if !is_clean_absolute(path) {
                     return Err(format!("`{path}` is not a clean absolute path"));
+                }
+                let quota = u64_of(quota)?;
+                if quota == 0 {
+                    return Err("a home's quota is at least 1 byte".into());
                 }
                 let principal = name(who)?;
                 if self.homes.iter().any(|h| h.principal == principal) {
                     return Err(format!("a second home for {principal}"));
                 }
-                self.homes.push(Home { principal, handle: handle(h)?, path: path.into() });
+                self.homes.push(Home { principal, handle: handle(h)?, path: path.into(), quota });
             }
             "vault" => {
                 let [labels, h] = fields(rest, ["labels", "handle"])?;
@@ -216,6 +223,10 @@ pub const SYSTEM: &str = "erofsd:system";
 pub enum How {
     /// A fresh connection to the server the steward was handed as `server`, rooted at `root`.
     Fresh { server: String, root: String },
+    /// A fresh connection minted, with no quota of its own, through the one connection the
+    /// steward holds for `key`: minted once, at `server` rooted at `root` with `quota` bytes, and
+    /// kept for the steward's life, so every session it binds shares that quota.
+    Carved { key: String, server: String, root: String, quota: u64 },
     /// A connection `ipd` grants, narrowed to `scope` (its `grant` encoding).
     Grant { scope: Vec<u8> },
     /// The session's console: `sshd`'s channel, or a connection minted at `consoled`.
@@ -251,7 +262,12 @@ pub fn binding(own: &Own, principal: &str, labels: &[u64], slot: u16) -> Option<
     match slot {
         0 => Some(Bound { how: fresh("bootfsd", ""), at: Some("/boot".into()), name: Some("bootfsd") }),
         1 => own.home(principal).map(|h| Bound {
-            how: fresh(&h.handle, &h.path),
+            how: How::Carved {
+                key: format!("home {principal}"),
+                server: h.handle.clone(),
+                root: h.path.clone(),
+                quota: h.quota,
+            },
             at: Some(h.path.clone()),
             name: None,
         }),

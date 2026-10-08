@@ -87,6 +87,7 @@ fn alice() -> Principal {
         labels: vec![],
         label_sets: vec![],
         home: None,
+        home_quota: None,
         net: vec![],
     }
 }
@@ -215,7 +216,14 @@ fn the_image_manifest_s_bound() {
 #[test]
 fn a_volume_s_range_badge_counts_in_the_bound_as_a_handed_item_does() {
     let mut m = without_volumes();
-    m.volumes.push(Volume { name: "data".into(), partition: 0, labels: vec![], disk: None, verity: None });
+    m.volumes.push(Volume {
+        name: "data".into(),
+        partition: 0,
+        labels: vec![],
+        disk: None,
+        verity: None,
+        bytes: None,
+    });
     let bound = |m: &Manifest| on_virt(m).unwrap().bound;
     let mut handed = m.clone();
     server(&mut handed, "ipd").handed.push(Handed { endpoint: "bootfsd".into(), badge: 1 });
@@ -366,6 +374,7 @@ fn principals_values_are_checked() {
     m.principals[0].home = Some("data:home/../x".into());
     refused_at(&m, "principals[0].home", Why::Value);
     m.principals[0].home = Some("data:/home/alice".into());
+    m.principals[0].home_quota = Some(8 << 20);
     assert!(on_virt(&m).is_ok());
     for (prefix, port) in [("10.0.0.0/33", 22), ("10.0.0.0/08", 22), ("10.0.0/8", 22), ("::/0", 0)] {
         let mut m = image();
@@ -560,13 +569,21 @@ fn a_volume_s_labels_go_to_its_server_and_to_blkd() {
     let mut m = without_volumes();
     secrets(&mut m);
     m.principals.push(alice());
-    m.volumes.push(Volume { name: "scratch".into(), partition: 0, labels: vec![], disk: None, verity: None });
+    m.volumes.push(Volume {
+        name: "scratch".into(),
+        partition: 0,
+        labels: vec![],
+        disk: None,
+        verity: None,
+        bytes: None,
+    });
     m.volumes.push(Volume {
         name: "vault".into(),
         partition: 2,
         labels: vec!["alice-secrets".into()],
         disk: None,
         verity: None,
+        bytes: None,
     });
     server(&mut m, "keyd").volume = Some("vault".into());
     server(&mut m, "bootfsd").volume = Some("scratch".into());
@@ -588,7 +605,14 @@ fn a_volume_s_labels_go_to_its_server_and_to_blkd() {
 /// is minted at its disk's `blkd`; and no entry carries an argument `init` passes itself.
 #[test]
 fn a_volume_is_one_entry_for_one_server_at_one_blkd() {
-    let data = || Volume { name: "data".into(), partition: 0, labels: vec![], disk: None, verity: None };
+    let data = || Volume {
+        name: "data".into(),
+        partition: 0,
+        labels: vec![],
+        disk: None,
+        verity: None,
+        bytes: None,
+    };
     let mut m = without_volumes();
     m.volumes = vec![data(), Volume { name: "other".into(), ..data() }];
     refused_at(&m, "volumes[1].partition", Why::Twice);
@@ -626,7 +650,14 @@ fn a_volume_is_one_entry_for_one_server_at_one_blkd() {
 #[test]
 fn no_server_is_handed_a_badge_at_blkd() {
     let mut m = without_volumes();
-    m.volumes.push(Volume { name: "data".into(), partition: 0, labels: vec![], disk: None, verity: None });
+    m.volumes.push(Volume {
+        name: "data".into(),
+        partition: 0,
+        labels: vec![],
+        disk: None,
+        verity: None,
+        bytes: None,
+    });
     m.servers[0].volume = Some("data".into());
     assert!(on_virt(&m).is_ok());
     let blkd = server(&mut m, "blkd").receives[0].clone();
@@ -658,6 +689,7 @@ fn second_disk(m: &mut Manifest, device: &str, suffix: &str, labels: Vec<String>
         labels: labels.clone(),
         disk: Some(blkd.clone()),
         verity: None,
+        bytes: None,
     });
     let base = server(&mut image(), "blkd").clone();
     m.servers.push(Server {
@@ -914,7 +946,14 @@ fn confined_refuses_two_label_sets_on_one_volume() {
     m.confined = true;
     secrets(&mut m);
     m.principals.push(alice());
-    m.volumes.push(Volume { name: "data".into(), partition: 0, labels: vec![], disk: None, verity: None });
+    m.volumes.push(Volume {
+        name: "data".into(),
+        partition: 0,
+        labels: vec![],
+        disk: None,
+        verity: None,
+        bytes: None,
+    });
     // A labelled server attaching an unlabelled volume.
     m.servers[0].volume = Some("data".into());
     m.servers[0].labels = vec!["alice-secrets".into()];
@@ -959,6 +998,7 @@ fn confined_refuses_two_label_sets_on_one_disk() {
             labels: vec![label.into()],
             disk: None,
             verity: None,
+            bytes: None,
         });
         let endpoint = format!("littlefsd:{name}");
         m.servers.push(Server {
@@ -1034,7 +1074,14 @@ fn confined_refuses_a_server_instance_serving_two_label_sets() {
     secrets(&mut m);
     m.principals.push(alice());
     let secret = || vec![String::from("alice-secrets")];
-    m.volumes.push(Volume { name: "vault".into(), partition: 0, labels: secret(), disk: None, verity: None });
+    m.volumes.push(Volume {
+        name: "vault".into(),
+        partition: 0,
+        labels: secret(),
+        disk: None,
+        verity: None,
+        bytes: None,
+    });
     server(&mut m, "blkd").devices.clear();
     let base = server(&mut image(), "walfsd:data").clone();
     m.servers.push(Server { labels: secret(), volume: Some("vault".into()), ..base });
@@ -1059,7 +1106,14 @@ fn confined_counts_only_a_shared_servers_own_label_set() {
     m.principals
         .push(Principal { label_sets: vec![LabelSet { labels: vec!["alice-secrets".into()] }], ..alice() });
     let secret = || vec![String::from("alice-secrets")];
-    m.volumes.push(Volume { name: "data".into(), partition: 0, labels: secret(), disk: None, verity: None });
+    m.volumes.push(Volume {
+        name: "data".into(),
+        partition: 0,
+        labels: secret(),
+        disk: None,
+        verity: None,
+        bytes: None,
+    });
     server(&mut m, "blkd").labels = secret();
     let base = server(&mut image(), "walfsd:data").clone();
     m.servers.push(Server { labels: secret(), ..base.clone() });
@@ -1200,6 +1254,74 @@ fn the_steward_object_and_console_name_what_the_manifest_holds() {
     refused_at(&m, "servers[7].args[1]", Why::Argument);
 }
 
+/// A home has a quota of at least a byte, and a quota a home; the homes' quotas on a volume sum to
+/// at most the bytes it gives, which it must give (servers/init.md, "Home quotas"). The image's
+/// two 8 MiB homes fit its 32 MiB data volume.
+#[test]
+fn home_quotas_are_checked_against_their_volume() {
+    let full = full_image();
+    on_virt(&full).unwrap();
+    let data = full.volumes.iter().position(|v| v.name == "data").unwrap();
+    let bytes = full.volumes[data].bytes.unwrap();
+    let mut m = full.clone();
+    m.principals[0].home_quota = None;
+    refused_at(&m, "principals[0].home_quota", Why::Quota);
+    m.principals[0].home_quota = Some(0);
+    refused_at(&m, "principals[0].home_quota", Why::Quota);
+    let mut m = full.clone();
+    m.principals[1].home = None;
+    refused_at(&m, "principals[1].home_quota", Why::Quota);
+    let mut m = full.clone();
+    m.volumes[data].bytes = None;
+    refused_at(&m, &format!("volumes[{data}].bytes"), Why::OverCommitted);
+    // Over-committed by one byte, then exactly full.
+    let mut m = full.clone();
+    m.principals[0].home_quota = Some(bytes / 2 + 1);
+    m.principals[1].home_quota = Some(bytes / 2);
+    refused_at(&m, &format!("volumes[{data}].bytes"), Why::OverCommitted);
+    m.principals[0].home_quota = Some(bytes - bytes / 2);
+    on_virt(&m).unwrap();
+}
+
+/// The bench's over-committed manifest (`init-refuses-overcommit`) is refused at its volume, and
+/// nowhere sooner: two homes of 10 MiB on 16 MiB.
+#[test]
+fn the_over_committed_case_is_refused_at_its_volume() {
+    let m = read(include_bytes!("../../../tests/data/init/overcommit.json"), ARENA_PAGES).unwrap();
+    refused_at(&m, "volumes[0].bytes", Why::OverCommitted);
+    let mut fits = m.clone();
+    fits.principals[1].home_quota = Some(6 << 20);
+    on_virt(&fits).unwrap();
+}
+
+/// A labelled volume is one principal's vault: a second principal's label set naming it is
+/// refused, though a label set need not be owned (servers/steward.md, "Home quotas and vaults").
+#[test]
+fn a_vault_is_one_principals() {
+    let mut m = full_image();
+    m.principals[1].label_sets = vec![LabelSet { labels: vec!["alice-secrets".into()] }];
+    refused_at(&m, "principals[1].label_sets[0]", Why::SharedVault);
+}
+
+/// A home is one principal's: a home equal to another's, inside it or holding it, on one volume,
+/// is refused, since the volume's server would count one under the other's root; a home beside
+/// another whose name shares its prefix is not inside it.
+#[test]
+fn no_home_is_another_s_or_inside_it() {
+    let homes = |alice: &str, bob: &str| {
+        let mut m = full_image();
+        m.principals[0].home = Some(format!("data:{alice}"));
+        m.principals[1].home = Some(format!("data:{bob}"));
+        m
+    };
+    for (alice, bob) in
+        [("/home", "/home/bob"), ("/home/bob/x", "/home/bob"), ("/home/a", "/home/a"), ("/", "/b")]
+    {
+        refused_at(&homes(alice, bob), "principals[1].home", Why::SharedHome);
+    }
+    on_virt(&homes("/home/al", "/home/alice")).unwrap();
+}
+
 /// After the core's lines, the steward's own: each label's name, alice's home at the handle of
 /// her volume's server, her vault set's labelled volume, and her network scope; bob has none of
 /// them. A home or vault whose server the steward is not handed is refused.
@@ -1212,6 +1334,7 @@ fn the_steward_s_own_lines_bind_homes_vaults_and_scopes() {
         labels: vec!["alice-secrets".into()],
         disk: None,
         verity: None,
+        bytes: None,
     });
     let base = server(&mut m, "walfsd:data").clone();
     m.servers.push(Server {
@@ -1222,6 +1345,7 @@ fn the_steward_s_own_lines_bind_homes_vaults_and_scopes() {
         ..base
     });
     m.principals[0].home = Some("data:/home/alice".into());
+    m.principals[0].home_quota = Some(8 << 20);
     m.console = Some("alice".into());
     m.principals[0].net = vec![
         Net { prefix: "0.0.0.0/0".into(), ports: vec![22, 443] },
@@ -1238,7 +1362,7 @@ fn the_steward_s_own_lines_bind_homes_vaults_and_scopes() {
         own,
         [
             "label \"alice-secrets\" id=7",
-            "home \"alice\" handle=walfsd:data path=/home/alice",
+            "home \"alice\" handle=walfsd:data path=/home/alice quota=8388608",
             "vault \"alice\" labels=[7] handle=walfsd:alice-secrets",
             "net \"alice\" 0.0.0.0/0:22,443 10.0.0.0/8:*",
             "console \"alice\"",
@@ -1390,6 +1514,7 @@ fn verified_volume(m: &mut Manifest, name: &str, partition: i64, labels: Vec<Str
             blocks: Some(100),
             ..Verity::default()
         }),
+        bytes: None,
     });
     let declared = server(&mut image(), "verity:system").clone();
     m.servers.push(Server {
@@ -1440,7 +1565,14 @@ fn a_verified_volume_s_server_reads_through_its_verifier() {
     assert_eq!(args_of("littlefsd:vault").last().unwrap(), "labels=7");
     assert_eq!(args_of("blkd"), ["endpoint=blkd", "labels.0=7"]);
     // Beside it, an unverified volume's server keeps its range at blkd.
-    m.volumes.push(Volume { name: "plain".into(), partition: 1, labels: vec![], disk: None, verity: None });
+    m.volumes.push(Volume {
+        name: "plain".into(),
+        partition: 1,
+        labels: vec![],
+        disk: None,
+        verity: None,
+        bytes: None,
+    });
     server(&mut m, "keyd").volume = Some("plain".into());
     assert!(on_virt(&m).is_ok());
     assert_eq!(range(&m, named(&m, "keyd")), Some(("blkd", 2)));
@@ -1490,7 +1622,14 @@ fn a_verified_volume_s_key_and_verifier_are_refused_naming_the_field() {
     refused_at(&m, "servers[8]", Why::NoVolume);
     // A verifier attaching a volume itself, receiving on nothing, or carrying an argument.
     let mut m = base();
-    m.volumes.push(Volume { name: "other".into(), partition: 1, labels: vec![], disk: None, verity: None });
+    m.volumes.push(Volume {
+        name: "other".into(),
+        partition: 1,
+        labels: vec![],
+        disk: None,
+        verity: None,
+        bytes: None,
+    });
     m.servers[verifier].volume = Some("other".into());
     refused_at(&m, &format!("servers[{verifier}].volume"), Why::Verifier);
     let mut m = base();
@@ -1595,6 +1734,7 @@ fn a_verifier_costs_init_one_server_and_its_range() {
         labels: vec![],
         disk: None,
         verity: None,
+        bytes: None,
     });
     plain.servers.push(server(&mut image(), "walfsd:data").clone());
     let mut verified = without_volumes();
