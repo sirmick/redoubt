@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 471
+revision = 472
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1658,8 +1658,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M2"
   body = "Found by CTX1's gate: init-refuses-bound fails on origin/main (415c86ad6, alone too) on rv64 and rv32, printing 1061 pages against an expected 1047. Bisect which merge moved it (candidates: B35, BOOT2, BEAM17, SRV1, B39), decide whether the case's number or the code is wrong, and fix it with the reason in the commit. If a bound itself moved, the page that states it moves too. Size S."
-  state = "todo"
-  revision = 465
+  state = "done"
+  revision = 472
 
 [[node]]
   id = "B42"
