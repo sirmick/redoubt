@@ -38,6 +38,9 @@ libs/*/fuzz/target/
 /.worktrees/
 /.wash/local/
 
+# Scratch: sweeps, exported trees, probe logs ($REDOUBT_TMP; scripts/q's jobs get it as TMPDIR)
+/.tmp/
+
 # Editors / misc
 *~
 .vs

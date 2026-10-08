@@ -300,7 +300,10 @@ cores: `q run --cores N -- <command>` waits for N free cores, runs the command p
 (`taskset`; cargo's jobs and `RUST_TEST_THREADS` follow the lease) and returns its exit code;
 `--quiet` runs a host-clock case on a reserved core set, one such case at a time, while the rest
 of the machine keeps working; `--lock net` keeps two `[net]` boots apart; a lease ends with the
-client process, so a killed job frees its cores. `scripts/jobs.mk` names every case as a make
+client process, so a killed job frees its cores. A job's scratch goes to `$REDOUBT_TMP`, by
+default `.tmp` at the checkout's root, which git ignores, so removing the checkout removes it;
+the job gets it as `TMPDIR` too, since a host's `/tmp` may be a RAM filesystem a sweep would
+fill. `scripts/jobs.mk` names every case as a make
 target (`rv64/<case>`, `cases-rv64`, `quiet-rv64`, `build-rv64`, `prebuilt`, `docs`) and picks
 the class for it: a boot takes one core per guest hart, a `host-tests` case or an Elixir case four
 (an Elixir case is mostly the build of beamlet and the model's trace writer), a case with a

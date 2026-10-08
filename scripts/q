@@ -16,8 +16,9 @@
 A job says how many cores it needs; the daemon bin-packs leases onto real core IDs and the
 client pins the command there, so a QEMU guest gets a core of its own and a build gets its N
 (CARGO_BUILD_JOBS and RUST_TEST_THREADS are set to N; make's jobserver flags are stripped).
-A job's TMPDIR is a directory on disk, $Q_TMPDIR or /var/tmp/redoubt: this host's /tmp is a RAM
-filesystem, and a sweep's scratch there runs it out.
+A job's scratch directory is $REDOUBT_TMP, by default .tmp at the root of the checkout this script
+is in (ignored by git, so deleting the checkout removes it); the job gets it as REDOUBT_TMP and as
+TMPDIR, since /tmp may be a RAM filesystem that a sweep's scratch fills.
 
 Classes are flags, not names to learn:
   --quiet     a host-clock case: runs alone on the reserved quiet core set, one at a time
@@ -445,8 +446,10 @@ def cmd_run(a, cmd):
     env["CARGO_BUILD_JOBS"] = str(n)
     env["RUST_TEST_THREADS"] = str(max(1, n))
     env["Q_CORES"] = fmt_cores(cores)
-    scratch = os.environ.get("Q_TMPDIR", "/var/tmp/redoubt")
+    scratch = os.environ.get("REDOUBT_TMP") or os.path.join(
+        os.path.dirname(os.path.dirname(os.path.realpath(__file__))), ".tmp")
     os.makedirs(scratch, exist_ok=True)
+    env["REDOUBT_TMP"] = scratch
     env["TMPDIR"] = scratch
     argv = ["taskset", "-c", ",".join(map(str, cores))] + cmd
     # Keep the socket open for the whole run: the lease is the connection. The command runs
