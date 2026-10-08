@@ -365,9 +365,7 @@ impl<'a> Reader<'a, '_> {
             return Err(EtfError::Malformed);
         };
         let old_index = u32::try_from(old_index).map_err(|_| EtfError::Malformed)?;
-        if !matches!(self.term(depth + 1)?, Term::Pid(_)) {
-            return Err(EtfError::Malformed);
-        }
+        self.creator(depth)?;
         let mut env = Vec::with_capacity(num_free);
         for _ in 0..num_free {
             env.push(self.term(depth + 1)?);
@@ -385,6 +383,18 @@ impl<'a> Reader<'a, '_> {
             let external = External { md5, old_index };
             self.heap.fun_decoded(module, index, arity, uniq, name, external, &env)
         })
+    }
+
+    /// A fun's creator: a pid of any node, as BEAM reads it, since the fun does not keep it (in
+    /// safe mode its node must be an atom that exists, as any atom).
+    fn creator(&mut self, depth: usize) -> Result<(), EtfError> {
+        let tag = self.u8()?;
+        if tag != 88 && tag != 103 {
+            return Err(EtfError::Malformed);
+        }
+        self.atom(depth)?;
+        self.take(if tag == 88 { 12 } else { 9 })?;
+        Ok(())
     }
 
     /// A node name that must be this VM's own ([`NODE`]).
