@@ -692,9 +692,10 @@ sizes move with its build path). With it, `init`'s lines and beamlet's line for 
 carry `[t=N]`, `time_now` in µs; `blkd`, `littlefsd` and `erofsd` say their counts at each power
 of two of their requests from 2^12 and `verityd` from 2^7, and `littlefsd` and `erofsd` once more, exactly, on a
 walk of
-`Elixir.BootStats.beam`, a name no volume holds; and at the VM's first console read beamlet says
+`Elixir.BootStats.beam`, a name no volume holds; at the VM's first console read beamlet says
 `beamlet: first console read [t=N]` and what its lookups cost: their count and the guest time spent
-in them ([beamlet on Redoubt](userland/beamlet.md#beamlet-on-redoubt)). The feature needs no
+in them; and when the shell's driver has drawn its first prompt, `beamlet: first prompt drawn
+[t=N]`, the end of the boot's span ([beamlet on Redoubt](userland/beamlet.md#beamlet-on-redoubt)). The feature needs no
 checked build. `boot-profile` and `boot-profile-unverified` boot the image's programs with it under `icount` and a pinned seed: measurements, which bound only the boot's time
 to its prompt ([the boot-time target](userland/beamlet.md#beamlet-on-redoubt)).
 

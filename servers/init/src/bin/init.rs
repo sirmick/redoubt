@@ -64,8 +64,13 @@ mod machine {
     const USERS_BUDGET: u32 = 3;
     const RESET: u32 = 4;
     const CONSOLE_MMIO: u32 = 5;
-    /// The bytes of a public entry each `add` carries: a page, inside the lend with its name.
-    const CHUNK: usize = PAGE_SIZE;
+    /// The bytes of a public entry each `add` carries: 32 KiB, half the lend, so a 4 MB entry
+    /// takes 128 calls, not 1,024 (a call costs about the same whatever it carries:
+    /// docs/userland/beamlet.md, "beamlet on Redoubt"). A power of two, so that `bootfsd`'s entry,
+    /// which grows by doubling from the first chunk, reaches 4 MiB exactly and not 3.75 MiB and
+    /// then 7.5 MiB: its heap's peak is the old and the new capacity together, and the odd series
+    /// put rv32's 3.76 MiB image over `bootfsd`'s cap.
+    const CHUNK: usize = 8 * PAGE_SIZE;
 
     /// The 16550's registers `init` writes before `consoled` starts: transmit, and the line status
     /// whose bit 5 says the transmitter can take a byte.

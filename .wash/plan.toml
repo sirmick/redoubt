@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 407
+revision = 413
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1163,8 +1163,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["STEWARD2"]
   body = "Measured by STEWARD2 after its rebase (2026-10-07): with the steward starting the shell, the first console read is at 15.1 s on rv64 against main's 12.4 s: init pushes beamlet's 4 MB public entry to bootfsd (0.6 to 3.0 s; the steward starts after it), the steward carves and streams the session's image from /boot in 64-page batches (3.0 to 7.6 s), then the shell starts as on main (7.6 to 15.1 s). STEWARD2 restates the boot-profile targets from that path (17 s verified by the cases' rule) with the breakdown on the page. Tier A, size S: stream the public entry once (the steward launches from bootfsd's copy, or init hands the steward what it already read) without the 64-page batches; measure the three spans again; the targets return to 15 s / the unverified figure by the same rule; beamlet.md and steward.md carry the new breakdown. Not here: the shell's own start (PACK1's pack already covers it)."
-  state = "active"
-  revision = 370
+  state = "done"
+  revision = 413
 
 [[node]]
   id = "SRV1"
@@ -1173,8 +1173,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   needs = ["WFS2"]
   body = "Found by EROFS1's and WFS2's simplifiers (2026-10-06/07): littlefsd, erofsd and walfsd each carry their own copy of parse_args (endpoint=, labels=, buckets=), the blkd range client (MAX_SECTORS 64, call(), Fault/Geometry/Range/SECTOR), the quota ledger (quota.rs, 222 lines, differing in VOLUME and spare()) and one_volume.rs; about 310 of walfsd's 1,156 lines are littlefsd's verbatim; docs/todo/file-server-arguments-and-range-client.md records the first two. Tier A (servers' trusted code shrinks), size M: lift the four into redoubt_rt::server (or a libs/fileserver crate on the skeleton) with one set of tests, the three servers calling them; size-budget lines fall per server and rise once in the shared crate; the todo page is deleted; servers/README.md's skeleton section names the shared pieces. Gates: every file server's host tests and cases both widths, the smoke set."
-  state = "todo"
-  revision = 323
+  state = "active"
+  revision = 408
+  overrides = ["2026-10-08: started by Orchestrator before M1 (reported): WFS2 is merged; SRV1 refactors the file servers and doesn't change M1's behaviour."]
 
 [[node]]
   id = "K26"
@@ -1340,8 +1341,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "shell-host"
   needs = ["SHELL3"]
   body = "M2 host step 3: docs/userland/shell.md#session-commands-and-the-pager, #completion, #help. Size M."
-  state = "active"
-  revision = 391
+  state = "reported"
+  revision = 409
   overrides = ["2026-10-08: started by Orchestrator before M1 (reported): The owner started M2's host shell track early; it does not touch M1's remaining work."]
 
 [[node]]
@@ -1528,3 +1529,21 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "From BEAM16's review. Sized resources (SHELL3, BEAM16) count toward their holder's max_heap_size, but one stored in ETS or persistent_term and dropped counts for nobody, and max_ets_words (1 GiB) is larger than a session's budget. Count a sized resource's declared bytes in max_ets_words and persistent_term's limit, or lower those limits to fit the session, and test both. Size S."
   state = "todo"
   revision = 402
+
+[[node]]
+  id = "SHELL9"
+  title = "A prompt wider than about 256 columns hides the typed text: Redoubt.Term and edlin lose the cursor past it"
+  template = "package"
+  parent = "shell-host"
+  body = "Found by SHELL4. With a prompt over about 256 columns (a long cwd, say), the text typed after it is not shown. Find whether Redoubt.Term's model or edlin's redraw is at fault, fix it, and add a test with a 300-column prompt on a 120-column terminal. Size S."
+  state = "todo"
+  revision = 410
+
+[[node]]
+  id = "B35"
+  title = "bootfsd's entry grows by doubling from the first chunk: its peak depends on the pusher's chunk size and the image's size against a power of two"
+  template = "package"
+  parent = "M2"
+  body = "Found by BOOT2. bootfsd's entry Vec doubles from the first add, so its realloc peak (old + new) depends on the chunk size and on where the image falls against a power of two: an image just over 4 MiB doubles to 8 MiB and needs about 3,000 pages at the peak, near bootfsd's 3,080-page cap. Reserve once: a `begin(name, len)` in the bootfs table, or sizes from the manifest. Add a test with an image just over a power of two. Size S."
+  state = "todo"
+  revision = 412

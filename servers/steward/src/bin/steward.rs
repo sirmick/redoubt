@@ -38,7 +38,7 @@ mod machine {
     use redoubt_client::grants::RELEASE_TIMEOUT;
     use redoubt_client::launch::Launch;
     use redoubt_client::typed;
-    use redoubt_rt::abi::{BudgetSpec, Error, FOREVER, Handle};
+    use redoubt_rt::abi::{BudgetSpec, Error, FOREVER, Handle, MAX_LEND_PAGES};
     use redoubt_rt::client::{Connection as Nine, Lend};
     use redoubt_rt::handle::{Budget, Endpoint, close};
     use redoubt_rt::ipc::{Buffer, Event, Request};
@@ -91,9 +91,10 @@ mod machine {
     const WATCH_STACK_PAGES: usize = 4;
     /// The badge the steward sends a session's exit endpoint to an idle watcher under.
     const WORK: u64 = 1;
-    /// The steward's lend, in pages: a batch of the program's image is read through it a page
-    /// at a time.
-    const LEND_PAGES: usize = 2;
+    /// The steward's lend, in pages: the most a call may lend, so a 64-page batch of a session's
+    /// image is read from `bootfsd` in four reads, not sixteen or more (a 9P read carries at most
+    /// the lend's `iounit`, and a call costs about the same whatever it carries).
+    const LEND_PAGES: usize = MAX_LEND_PAGES;
 
     /// The handle the watchers report on: `EXITS` minted on the steward's endpoint.
     static REPORT: AtomicU32 = AtomicU32::new(0);

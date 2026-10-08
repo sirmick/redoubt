@@ -33,8 +33,9 @@ pub const INIT_CALLER_HANDLES: u64 = 3;
 /// The endpoints `init` makes for itself: the one its watching threads report exits on.
 pub const INIT_ENDPOINTS: u64 = 1;
 /// The pages `init` lends in its own calls (`holds`, its console, the public entries), one lend
-/// used for all of them.
-pub const LEND_PAGES: u64 = 2;
+/// used for all of them: the most a call may lend, so a public entry is pushed in the fewest
+/// calls (a call costs the same whatever it carries).
+pub const LEND_PAGES: u64 = 16;
 
 /// What the bound is computed from: the manifest's counts, and what `init` holds at the start.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -106,7 +107,7 @@ mod tests {
         let c = Counts { arena_pages: 512, ..none() };
         // The arena, its tables (1 + 2), the lend and its tables, the reports endpoint, and no
         // table page: 10 + 4 handles fit page 0.
-        assert_eq!(bound(&c), 512 + 3 + 2 + 3 + 1);
+        assert_eq!(bound(&c), 512 + 3 + LEND_PAGES + 3 + 1);
     }
 
     #[test]
@@ -123,7 +124,7 @@ mod tests {
         let c =
             Counts { stub_bytes: 1, largest_image_bytes: PAGE_SIZE as u64 + 1, stack_pages: 16, ..none() };
         // Beside the launch: the lend and its tables, and the reports endpoint.
-        assert_eq!(bound(&c), 1 + 3 + 2 + 3 + 16 + 3 + (2 + 3 + 1));
+        assert_eq!(bound(&c), 1 + 3 + 2 + 3 + 16 + 3 + (LEND_PAGES + 3 + 1));
     }
 
     #[test]
@@ -136,15 +137,16 @@ mod tests {
         assert_eq!(at(batch, 0), at(10 * batch, 0));
         assert_eq!(at(0, batch), at(0, 10 * batch));
         // One batch and its tables, beside the lend and its tables, and the reports endpoint.
-        assert_eq!(at(10 * batch, 10 * batch), 2 * (batch + 3) + (2 + 3 + 1));
+        assert_eq!(at(10 * batch, 10 * batch), 2 * (batch + 3) + (LEND_PAGES + 3 + 1));
         assert!(at(batch - 1, 0) < at(batch, 0));
     }
 
     #[test]
     fn handle_table_pages_count_only_past_those_in_use() {
         // Less what every boot costs: the lend and its tables, and the reports endpoint.
-        let at =
-            |handles_at_start, handed| bound(&Counts { handles_at_start, handed, ..Counts::default() }) - 6;
+        let at = |handles_at_start, handed| {
+            bound(&Counts { handles_at_start, handed, ..Counts::default() }) - (LEND_PAGES + 3 + 1)
+        };
         // 60 + 4 init handles fill page 0 exactly; one more opens page 1.
         assert_eq!(at(60, 0), 0);
         assert_eq!(at(60, 1), 1);

@@ -322,7 +322,8 @@ impl Redoubt {
     pub fn requests(&self) -> u64 { self.io.requests() }
 
     /// Starts reading the console, the first time input is asked for. A `boot-stats` build says so,
-    /// with the time and what the lookups cost: for the shell, its prompt is drawn and waiting.
+    /// with the time and what the lookups cost: for the shell, its driver has started and is about
+    /// to draw its banner and prompt, which [`Platform::prompt_drawn`] stamps.
     fn start_reading(&mut self) {
         #[cfg(feature = "boot-stats")]
         {
@@ -505,6 +506,13 @@ impl Platform for Redoubt {
 
     /// Asked afresh each time, never cached: the console's size can change.
     fn console_size(&mut self) -> Option<(u16, u16)> { self.console.size(&mut self.lend).ok().flatten() }
+
+    /// The shell's first prompt is drawn: where a user sees the box ready, the end of the span the
+    /// boot profile times (`boot-stats`, docs/userland/beamlet.md, "beamlet on Redoubt").
+    fn prompt_drawn(&mut self) {
+        #[cfg(feature = "boot-stats")]
+        self.console_write(format!("beamlet: first prompt drawn{}\n", stamp()).as_bytes());
+    }
 
     /// A reader again: the read that waited for one goes out (it may be the first).
     fn console_listening(&mut self, listening: bool) {

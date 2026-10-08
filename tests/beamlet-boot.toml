@@ -16,8 +16,9 @@ programs = [
 timeout_secs = 60
 expect = [
     # init's bound, which budgets.md quotes ("the tree from the boot manifest"), the same on both
-    # widths: beamlet's image counts one batch, so it changes only with init's own costs.
-    '^init: the manifest is checked: 6 servers, bound 446 pages$',
+    # widths: beamlet's image counts one batch, so it changes only with init's own costs, as when
+    # its lend grew from 2 to 16 pages (446 to 460).
+    '^init: the manifest is checked: 6 servers, bound 460 pages$',
     '^init: started beamlet, console [0-9a-f]{16}$',
     '^\[con [0-9a-f]{16}\] beamlet-boot: hello from the VM$',
     '^init: beamlet \(PID [0-9]+\) exited, code 0$',
