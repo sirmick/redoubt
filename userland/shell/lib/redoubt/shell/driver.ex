@@ -4,11 +4,12 @@ defmodule Redoubt.Shell.Driver do
   `group` and `edlin` above it, unchanged, and `Redoubt.Term` drawing for it
   (docs/userland/shell.md, "Line editing and history"). It replaces `user_drv` and `prim_tty`.
 
-  Bytes typed go to `group` as they are, for `edlin` to edit with, but for the two keys the
-  session keeps: Ctrl+C ends the line being edited, not the session, and Ctrl+D on an empty
-  line ends the input, and with it the shell. Whatever `group` asks to draw is drawn by
-  `Redoubt.Term`, and so passes its guard; what it asks about the terminal (its size, its
-  encoding) is answered here. The driver ends when `group` does, which is when the shell has.
+  Bytes typed go to `group` as they are, for `edlin` to edit with, but for the keys the session
+  keeps: the interrupt, Ctrl+C or the session's own key Ctrl+\\, ends the line being edited,
+  not the session, and Ctrl+D on an empty line ends the input, and with it the shell. Ctrl+\\
+  is never forwarded to anything. Whatever `group` asks to draw is drawn by `Redoubt.Term`, and
+  so passes its guard; what it asks about the terminal (its size, its encoding) is answered
+  here. The driver ends when `group` does, which is when the shell has.
 
   History is `group`'s own, in the session's memory only. `group` keeps every line, so the
   driver cuts its list to the newest lines at each prompt.
@@ -17,7 +18,8 @@ defmodule Redoubt.Shell.Driver do
   alternate screen, decodes the bytes typed into keys (`Redoubt.Term.Keys`) and sends them to the
   screen's process, draws each frame it sends through the one decoder (`Redoubt.Term.Cells`) and
   `Redoubt.Term.Frame`, and holds what `group` asks to draw, answering it at once so a writer
-  never waits on the screen. Ctrl+C ends the screen. When the screen ends, the main screen is
+  never waits on the screen. Ctrl+\\ ends the screen, and so does Ctrl+C unless the screen takes
+  it as a key (`Redoubt.Screen.run/3`'s `ctrl_c: :key`). When the screen ends, the main screen is
   shown again, as it was, and what was held is drawn.
 
   While the driver runs, the logger writes through it too (`Redoubt.Shell.Log`): its `default`
@@ -34,6 +36,8 @@ defmodule Redoubt.Shell.Driver do
   Record.defrecordp(:group_state, :state, Record.extract(:state, from_lib: "kernel/src/group.erl"))
 
   @history_lines 1000
+  # The session's own key, Ctrl+\: the interrupt no screen can take.
+  @session_key 0x1C
   @esc_timeout 50
 
   @doc """
@@ -86,7 +90,8 @@ defmodule Redoubt.Shell.Driver do
       # input that came after it, newest first.
       eof_check: nil,
       # The screen in front, if any: its process, monitor, what group asked to draw meanwhile
-      # (newest first), bytes that may begin a key, and the timer that ends their wait.
+      # (newest first), bytes that may begin a key, the timer that ends their wait, and the
+      # bytes that interrupt it.
       screen: nil,
       esc_timeout: Keyword.get(opts, :esc_timeout, @esc_timeout)
     }
@@ -108,8 +113,8 @@ defmodule Redoubt.Shell.Driver do
       {:beamlet_console, input} ->
         loop(input(state, input))
 
-      {:redoubt_screen, :open, pid} ->
-        loop(open_screen(state, pid))
+      {:redoubt_screen, :open, pid, ctrl_c} when ctrl_c in [:interrupt, :key] ->
+        loop(open_screen(state, pid, ctrl_c))
 
       {:redoubt_screen, :frame, pid, bytes} when state.screen != nil and state.screen.pid == pid ->
         loop(frame(state, bytes))
@@ -189,7 +194,7 @@ defmodule Redoubt.Shell.Driver do
     do: %{state | screen: %{screen | held: [request | screen.held]}}
 
   # After an interrupt, what group asks to draw until the next prompt is the dropped line's:
-  # the keys typed just before Ctrl+C, which group was still editing when the driver drew the
+  # the keys typed just before the interrupt, which group was still editing when the driver drew the
   # ^C. They are not drawn.
   defp draw(%{dropping: true} = state, request) do
     if prompting?(request), do: draw(%{state | dropping: false}, request), else: state
@@ -268,7 +273,7 @@ defmodule Redoubt.Shell.Driver do
   defp keys(state, <<>>), do: state
 
   defp keys(state, text) do
-    case :binary.match(text, [<<3>>, <<4>>]) do
+    case :binary.match(text, [<<3>>, <<4>>, <<@session_key>>]) do
       :nomatch ->
         to_group(state, text)
 
@@ -278,11 +283,11 @@ defmodule Redoubt.Shell.Driver do
     end
   end
 
-  # Ctrl+C: the line being edited is dropped and the session stays. What was typed with it in
-  # the same read goes with the line, as user_drv drops it too. With no line open, a line is
-  # being evaluated, and ending that is not the driver's yet (docs/userland/shell.md,
-  # "Interrupting and killing jobs"): the key is dropped.
-  defp key(state, 3, _rest) do
+  # The interrupt, Ctrl+C or Ctrl+\: the line being edited is dropped and the session stays.
+  # What was typed with it in the same read goes with the line, as user_drv drops it too. With
+  # no line open, a line is being evaluated, and ending that is not the driver's yet
+  # (docs/userland/shell.md, "Interrupting and killing jobs"): the key is dropped.
+  defp key(state, interrupt, _rest) when interrupt in [3, @session_key] do
     if Term.line_open?(state.term) do
       {out, term} = Term.interrupt(state.term)
       write(state, out)
@@ -307,16 +312,27 @@ defmodule Redoubt.Shell.Driver do
   # ---- a screen in front ----
 
   # One screen at a time: a second is refused, and its process ends, before it has run any of
-  # its module's code.
-  defp open_screen(%{screen: nil} = state, pid) do
+  # its module's code. The bytes that interrupt a screen are the session's key, and Ctrl+C
+  # unless the screen takes it as a key.
+  defp open_screen(%{screen: nil} = state, pid, ctrl_c) do
     {cols, rows} = state.size.()
     write(state, Frame.enter())
     send(pid, {:redoubt_screen, :opened, cols, rows})
-    screen = %{pid: pid, ref: Process.monitor(pid), held: [], pending: <<>>, timer: nil}
+    interrupts = if ctrl_c == :key, do: [<<@session_key>>], else: [<<@session_key>>, <<3>>]
+
+    screen = %{
+      pid: pid,
+      ref: Process.monitor(pid),
+      held: [],
+      pending: <<>>,
+      timer: nil,
+      interrupts: interrupts
+    }
+
     %{state | screen: screen}
   end
 
-  defp open_screen(state, pid) do
+  defp open_screen(state, pid, _ctrl_c) do
     Process.exit(pid, :another_screen_in_front)
     state
   end
@@ -341,10 +357,25 @@ defmodule Redoubt.Shell.Driver do
     screen.held |> Enum.reverse() |> Enum.reduce(%{state | screen: nil}, &draw(&2, &1))
   end
 
-  # Keys for the screen; Ctrl+C ends it, and the input's end ends it before ending the input.
+  # Keys for the screen; the input's end ends it before ending the input. An interrupt byte ends
+  # it wherever it falls, found in the bytes before any decoding: no escape sequence or UTF-8
+  # sequence holds one, so neither a key the decoder waits on nor a paste can carry it to the
+  # screen. The keys before it in the same read reach the screen; those after it go with it.
   defp screen_input(state, :eof), do: state |> interrupt_screen() |> input(:eof)
 
   defp screen_input(%{screen: screen} = state, bytes) do
+    case :binary.match(bytes, screen.interrupts) do
+      :nomatch ->
+        screen_keys(state, bytes)
+
+      {at, 1} ->
+        state |> screen_keys(binary_part(bytes, 0, at)) |> interrupt_screen()
+    end
+  end
+
+  defp screen_keys(%{screen: nil} = state, _bytes), do: state
+
+  defp screen_keys(%{screen: screen} = state, bytes) do
     cancel(screen.timer)
     {keys, pending} = Keys.decode(screen.pending <> bytes)
     state = send_keys(%{state | screen: %{screen | pending: pending, timer: nil}}, keys)
@@ -370,7 +401,6 @@ defmodule Redoubt.Shell.Driver do
 
   defp send_keys(state, []), do: state
   defp send_keys(%{screen: nil} = state, _keys), do: state
-  defp send_keys(state, [{:key, "c", [:ctrl]} | _rest]), do: interrupt_screen(state)
 
   defp send_keys(state, [key | rest]) do
     send(state.screen.pid, key)

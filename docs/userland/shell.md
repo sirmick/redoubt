@@ -236,25 +236,31 @@ else. `Job.status(job)` is `:running`, `:exited`, `:faulted` or `:killed`, read 
 notice ([processes](../kernel/processes.md#exit-notices)). A job's budget is carved from the
 session's, so ending it can never touch the session.
 
-The interrupt key:
-- **Ctrl+C with a job in the foreground** destroys the budget of every native stage of that job.
+The interrupt is Ctrl+C or the session's own key, Ctrl+\ (0x1C), which no full-screen program
+can take and the driver never forwards:
+- **The interrupt with a job in the foreground** destroys the budget of every native stage of that job.
   Elixir work, a line's evaluation or a screen program, is ended by killing its Erlang process
   with an untrappable exit (`:kill`); a screen's process is sent the exit `:interrupt` first, so
   its line tells the interrupt from a failure. The session and its VM survive, and the shell
   keeps the bindings of every line before the interrupted one.
-- **Ctrl+C at an idle prompt** clears the line. There is no break menu and no job-control menu:
+- **The interrupt at an idle prompt** clears the line, drawing `^C` after it whichever key it was. There is no break menu and no job-control menu:
   both are OTP's `user_drv`, which the shell's driver replaces
   ([line editing](#line-editing-and-history)). A session ends only by `exit` or Ctrl+D.
-- **With a full-screen program in front**, Ctrl+C may be the program's key; the key the session
-  keeps for itself is [a screen's](#widgets-focus-themes-and-a-native-programs-screen).
-- **Over SSH**, `sshd` turns the channel's `signal` request (INT) and `break` request into the same
-  interrupt a 0x03 byte gives. It is a protocol message, not a Unix signal; nothing inside Redoubt
+- **With a full-screen program in front**, Ctrl+\ ends it. So does Ctrl+C, unless the program
+  declared that it takes Ctrl+C as a key ([a screen's life](#full-screen-programs)): then Ctrl+C
+  reaches it and Ctrl+\ is the only interrupt.
+- **Over SSH**, `sshd` turns the channel's `signal` request (INT) and `break` request into the
+  session's own key, the 0x1C byte, so they interrupt whatever is in front. It is a protocol message, not a Unix signal; nothing inside Redoubt
   has signals ([sshd](../servers/sshd.md)).
 
 What a job cannot do:
 - **Swallow the interrupt.** The session's driver reads `/dev/cons` all the time, not only while
   a line is requested, and a native stage never gets the raw console: its standard input is a
-  pipe the session feeds. So no foreground program can hide Ctrl+C from the shell.
+  pipe the session feeds. So no foreground program can hide the interrupt from the shell, and a
+  screen that takes Ctrl+C still cannot take Ctrl+\\: the driver finds that byte in what was read
+  before decoding any key, so neither an escape sequence begun before it nor a paste carries it
+  to the screen. Under a screen that does not take Ctrl+C, the 0x03 byte is found the same way:
+  ESC then Ctrl+C is the interrupt, never the key Alt+Ctrl+C.
 - **Take the session's memory on the heap.** Every Erlang process the session starts, the
   evaluator, what a line spawns and every screen program, runs with Erlang's `max_heap_size` flag
   (killing), set to a fixed share of the session's budget, so a runaway allocation kills that
@@ -442,12 +448,14 @@ own. It draws into a **screen buffer**, a grid of cells beamlet holds natively
 - **Widgets are functions, not processes:** each draws into a rectangle of the buffer from what it
   is given, every text made visible first. Built are the three `pick` uses: a box with a title and
   a shadow, a list with a selection, and a status line.
-- **A screen's life.** A line starts a screen with `Redoubt.Screen.run(module, args)`, which
-  returns when the screen ends, with the value its `update` ended it with. While it is in front,
-  the driver shows the alternate screen with the cursor hidden, sends it every key as
-  `{:key, key, modifiers}`, and holds other processes' output, answering them at once so none
-  waits on the screen; then it shows the main screen again, as it was, and draws what it held.
-  The interrupt ends it with `nil`. One screen is in front at a time.
+- **A screen's life.** A line starts a screen with `Redoubt.Screen.run(module, args, opts)`,
+  which returns when the screen ends, with the value its `update` ended it with. While it is in
+  front, the driver shows the alternate screen with the cursor hidden, sends it every key as
+  `{:key, key, modifiers}` but the interrupt, and holds other processes' output, answering them
+  at once so none waits on the screen; then it shows the main screen again, as it was, and draws
+  what it held. The interrupt ends it with `nil`: Ctrl+\\, and Ctrl+C unless it was started with
+  `ctrl_c: :key`, which makes Ctrl+C a key it is sent (the editor copies with it). One screen is
+  in front at a time.
 - **`pick(items)`** is a screen, `menuconfig`'s chooser: a list in a box, the arrows,
   Page Up and Down, Home and End to move, Enter to choose, Esc to leave. It returns the chosen
   item, or `nil`.
@@ -459,8 +467,9 @@ What a full-screen program cannot do:
   buffer's natives, which refuse a control character, and through the one decoder, which refuses
   a frame that is not exactly cells; the driver ends a screen whose frame it refuses
   ([hostile text](#hostile-text-never-drives-the-terminal)).
-- **Keep the interrupt from the session.** Ctrl+C ends the screen in front, as it ends a line at
-  the prompt.
+- **Keep the interrupt from the session.** Ctrl+\ ends the screen in front, as it ends a line at
+  the prompt, and so does Ctrl+C unless the screen takes it as a key
+  ([interrupting](#interrupting-and-killing-jobs)).
 
 ### Widgets, focus, themes and a native program's screen
 
@@ -477,13 +486,11 @@ Status: planned · M2 (usable shell)
   output, and the session draws them through the same decoder and encoder. It holds its pipes and
   its budget, no `/dev/cons`, and a cell cannot carry a control sequence, so a hijacked one can
   draw wrong cells, or crash and have its budget reclaimed, and nothing more.
-- **The session's own key.** A full-screen program may take Ctrl+C as a key (the editor copies
-  with it), so the session keeps one other key for itself, never forwards it, and ends the
-  foreground screen or job on it, as Ctrl+C does at the prompt. The key is configurable per
-  principal. Until a screen takes Ctrl+C, Ctrl+C is that key.
+- **A key per principal.** The session's own key, Ctrl+\\
+  ([interrupting](#interrupting-and-killing-jobs)), is the same for every session; a principal
+  choosing another is planned here and not built.
 
-**Open:** the default interrupt key for full-screen programs; the candidate is Ctrl+\ (0x1C),
-which neither `edlin` nor the common full-screen programs take.
+**Open:** none.
 
 ### Line editing and history
 
@@ -512,8 +519,9 @@ requests through `Redoubt.Term`'s encoder. `group`'s driver protocol is small: r
 and the interrupt as an exit signal. That gives Emacs keys, a kill ring, multi-line input and
 history with Ctrl+R search. `group` writes one escape sequence itself, its bold Ctrl+R prompt;
 the encoder recognises exactly that, at the head of the request that carries it, and draws every
-other byte through the guard. The driver reads two keys itself: Ctrl+C ends the line being edited
-and nothing else ([interrupting](#interrupting-and-killing-jobs)); Ctrl+D on an empty line, like
+other byte through the guard. The driver reads three keys itself: Ctrl+C and Ctrl+\ end the line
+being edited and nothing else ([interrupting](#interrupting-and-killing-jobs)), and Ctrl+\ never
+reaches `group`; Ctrl+D on an empty line, like
 the console's end, ends the input and so the shell. `group` has no way to hand its reader an end
 of input (`edlin` takes `eof` for a line's end), so the driver answers the pending read with the
 error `eof`, which `group` keeps in order behind the keys before it, and the shell reads as its

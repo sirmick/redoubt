@@ -164,6 +164,25 @@ defmodule Redoubt.Shell.DriverTest do
     ends(driver)
   end
 
+  test "Ctrl+\\ at the prompt is the interrupt too, and never reaches the line" do
+    {driver, terminal} = start()
+    type(driver, "1 +")
+    terminal = screen(terminal)
+    type(driver, "\x1C")
+    type(driver, "\"a")
+    terminal = screen(terminal)
+    # What follows it in the same read goes with the line.
+    type(driver, "\x1Cb\"\r")
+    terminal = screen(terminal)
+
+    assert row(terminal, 0) =~ ~r/\(1\)> 1 \+\^C$/
+    assert row(terminal, 1) =~ ~r/\(1\)> "a\^C$/
+    assert row(terminal, 2) =~ ~r/\(1\)>$/
+    refute Terminal.text(terminal) =~ "^\\"
+    type(driver, "exit\r")
+    ends(driver)
+  end
+
   test "Ctrl+C in the middle of an unfinished expression drops all of it" do
     {driver, terminal} = start()
     type(driver, "[1,\r")

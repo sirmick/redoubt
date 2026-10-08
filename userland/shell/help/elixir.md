@@ -29,5 +29,9 @@ Values last
   x = cat("app.log") |> grep("error") keeps x for the lines that follow. A line that fails, or is
   killed, loses only itself: x is still there.
 
+Stopping
+  Ctrl+C drops the line being typed. Ctrl+\ does too, and also ends any full-screen program,
+  even one that takes Ctrl+C as a key.
+
 Leaving
   exit, exit() or Ctrl+D.

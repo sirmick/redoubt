@@ -111,6 +111,50 @@ defmodule Redoubt.ScreenTest do
     ends(driver)
   end
 
+  test "Ctrl+\\ ends the screen with nil, and the session goes on" do
+    {driver, t} = start()
+    type(driver, ~S|pick(["x", "y"])| <> "\r")
+    t = screen(t, &shows?(&1, "│ y"))
+    type(driver, "\x1C")
+    t = screen(t, &(not Terminal.alternate?(&1)))
+    assert shows?(t, "nil")
+    ends(driver)
+  end
+
+  test "a screen that takes Ctrl+C gets it as a key, and Ctrl+\\ still ends it" do
+    {driver, t} = start()
+    Process.register(self(), :screen_keys)
+    type(driver, ~S|Redoubt.Screen.run(Redoubt.ScreenTest.Keys, [], ctrl_c: :key)| <> "\r")
+    t = screen(t, &shows?(&1, "keys:"))
+    type(driver, "\x03")
+    assert_receive {:screen_key, {:key, "c", [:ctrl]}}, 5_000
+    t = screen(t, &shows?(&1, "keys: c"))
+    assert Terminal.alternate?(t)
+
+    type(driver, "\x1C")
+    t = screen(t, &shows?(&1, ":killed"))
+    refute Terminal.alternate?(t)
+    ends(driver)
+  end
+
+  test "no screen can swallow Ctrl+\\: not after a key's first byte, not in a paste" do
+    {driver, t} = start(esc_timeout: 5_000)
+    Process.register(self(), :screen_keys)
+    type(driver, ~S|Redoubt.Screen.run(Redoubt.ScreenTest.Keys, [], ctrl_c: :key)| <> "\r")
+    t = screen(t, &shows?(&1, "keys:"))
+    type(driver, "ab")
+    assert_receive {:screen_key, {:key, "a", []}}, 5_000
+    assert_receive {:screen_key, {:key, "b", []}}, 5_000
+    # A lone ESC waiting to begin a key does not make the next byte part of it, and in a paste
+    # neither the session's key nor what follows it reaches the screen.
+    type(driver, "\e")
+    type(driver, "\x1Ccd")
+    t = screen(t, &shows?(&1, ":killed"))
+    refute Terminal.alternate?(t)
+    refute_received {:screen_key, _key}
+    ends(driver)
+  end
+
   test "a shell that ends under a screen leaves the main screen shown" do
     {driver, t} = start()
     ref = Process.monitor(driver)
@@ -184,6 +228,29 @@ defmodule Redoubt.ScreenTest do
 
     @impl true
     def view(_state, buffer, _size), do: Redoubt.Term.Buffer.put(buffer, 0, 0, "trapping")
+  end
+
+  defmodule Keys do
+    # A screen that traps exits, takes every key it is sent and tells the test of each.
+    @behaviour Redoubt.Screen
+
+    @impl true
+    def init(_args) do
+      Process.flag(:trap_exit, true)
+      []
+    end
+
+    @impl true
+    def update({:key, key, _mods} = event, keys) do
+      send(:screen_keys, {:screen_key, event})
+      {:cont, [key | keys]}
+    end
+
+    def update(_event, keys), do: {:cont, keys}
+
+    @impl true
+    def view(keys, buffer, _size),
+      do: Redoubt.Term.Buffer.put(buffer, 0, 0, Enum.join(["keys:" | Enum.reverse(keys)], " "))
   end
 
   @doc false
