@@ -1,25 +1,33 @@
 defmodule Redoubt.Test.Terminal do
   @moduledoc """
-  A model of the terminal the encoder draws on, for the tests to judge: a grid of cells and a
-  cursor, fed the bytes the driver writes, as a VT102 would take them.
+  A model of the terminal the encoder draws on, for the tests to judge: a grid of cells, each
+  with its style, and a cursor, fed the bytes the driver writes, as a VT102 with xterm's common
+  extensions would take them.
 
-  It understands exactly what `Redoubt.Term` writes: printable text, CR, LF, BS and BEL,
-  relative cursor movement, erasing to the end of the screen, and the bold and underline
-  attributes. Anything else is a control sequence the encoder must never write, and raises. It
-  translates nothing: a bare LF keeps its column, as Redoubt's console leaves it.
+  It understands exactly what `Redoubt.Term` writes: printable text, CR, LF, BS and BEL; relative
+  and absolute cursor movement; erasing to the end of the screen and the whole screen; SGR's
+  attributes and its 16, 256 and 24-bit colours; and the private modes for the alternate screen
+  (1049) and the cursor's visibility (25). Anything else is a control sequence the encoder must
+  never write, and raises. It translates nothing: a bare LF keeps its column, as Redoubt's
+  console leaves it.
   """
 
   alias Redoubt.Term.Width
 
+  @plain %{fg: :reset, bg: :reset, modifiers: MapSet.new()}
+
   defstruct cols: 80,
             rows: 24,
             cells: %{},
-            bold: MapSet.new(),
+            styles: %{},
             row: 0,
             col: 0,
             pending: false,
-            attribute: false,
-            bells: 0
+            style: @plain,
+            bells: 0,
+            cursor: true,
+            # The main screen while the alternate one is shown: {cells, styles, row, col}.
+            saved: nil
 
   def new(cols, rows), do: %__MODULE__{cols: cols, rows: rows}
 
@@ -44,10 +52,17 @@ defmodule Redoubt.Test.Terminal do
   def cursor(%{pending: true} = terminal), do: {terminal.row, terminal.cols - 1}
   def cursor(terminal), do: {terminal.row, terminal.col}
 
+  @doc "The style a cell was drawn in: `%{fg, bg, modifiers}`, the modifiers a set of names."
+  def style(terminal, row, col), do: Map.get(terminal.styles, {row, col}, @plain)
+
   @doc "Whether the cell was drawn with the bold attribute on."
-  def bold?(terminal, row, col), do: MapSet.member?(terminal.bold, {row, col})
+  def bold?(terminal, row, col), do: MapSet.member?(style(terminal, row, col).modifiers, :bold)
+
+  @doc "Whether the alternate screen is shown."
+  def alternate?(terminal), do: terminal.saved != nil
 
   defp parse(terminal, <<>>), do: terminal
+  defp parse(terminal, <<"\e[?", rest::binary>>), do: private(terminal, rest, "")
   defp parse(terminal, <<"\e[", rest::binary>>), do: csi(terminal, rest, "")
 
   defp parse(_terminal, <<"\e", rest::binary>>) do
@@ -70,6 +85,11 @@ defmodule Redoubt.Test.Terminal do
 
   defp parse(terminal, text) do
     {grapheme, rest} = String.next_grapheme(text)
+
+    if grapheme |> String.to_charlist() |> Enum.any?(&Redoubt.Term.Text.control?/1) do
+      raise "a control character reached the terminal: #{inspect(grapheme)}"
+    end
+
     parse(put(terminal, grapheme), rest)
   end
 
@@ -83,14 +103,12 @@ defmodule Redoubt.Test.Terminal do
         do: down(%{terminal | col: 0, pending: false}),
         else: terminal
 
-    cells = Map.put(terminal.cells, {terminal.row, terminal.col}, grapheme)
+    at = {terminal.row, terminal.col}
+    cells = Map.put(terminal.cells, at, grapheme)
+    styles = Map.put(terminal.styles, at, terminal.style)
     cells = if width == 2, do: Map.put(cells, {terminal.row, terminal.col + 1}, ""), else: cells
-
-    bold =
-      if terminal.attribute, do: MapSet.put(terminal.bold, {terminal.row, terminal.col}), else: terminal.bold
-
     col = terminal.col + width
-    %{terminal | cells: cells, bold: bold, col: min(col, terminal.cols), pending: col >= terminal.cols}
+    %{terminal | cells: cells, styles: styles, col: min(col, terminal.cols), pending: col >= terminal.cols}
   end
 
   defp down(terminal) do
@@ -98,9 +116,8 @@ defmodule Redoubt.Test.Terminal do
   end
 
   defp scroll(terminal) do
-    cells = for {{row, col}, g} <- terminal.cells, row > 0, into: %{}, do: {{row - 1, col}, g}
-    bold = for {row, col} <- terminal.bold, row > 0, into: MapSet.new(), do: {row - 1, col}
-    %{terminal | cells: cells, bold: bold}
+    up = fn map -> for {{row, col}, v} <- map, row > 0, into: %{}, do: {{row - 1, col}, v} end
+    %{terminal | cells: up.(terminal.cells), styles: up.(terminal.styles)}
   end
 
   # A cursor pending at the margin is in the last column once anything but text moves it.
@@ -138,23 +155,20 @@ defmodule Redoubt.Test.Terminal do
         {?D, [n]} ->
           %{terminal | col: max(terminal.col - (n || 1), 0)}
 
+        {?H, [nil]} ->
+          %{terminal | row: 0, col: 0}
+
+        {?H, [r, c]} ->
+          %{terminal | row: clamp(r - 1, terminal.rows), col: clamp(c - 1, terminal.cols)}
+
         {?J, [nil]} ->
           erase_below(terminal)
 
         {?J, [2]} ->
-          %{terminal | cells: %{}, bold: MapSet.new()}
+          %{terminal | cells: %{}, styles: %{}}
 
-        {?H, [nil]} ->
-          %{terminal | row: 0, col: 0}
-
-        {?m, [nil]} ->
-          %{terminal | attribute: false}
-
-        {?m, [0]} ->
-          %{terminal | attribute: false}
-
-        {?m, _} ->
-          %{terminal | attribute: true}
+        {?m, args} ->
+          %{terminal | style: sgr(terminal.style, args, params)}
 
         _other ->
           raise "a control sequence the encoder does not write reached the terminal: ESC [ #{params}#{<<final>>}"
@@ -163,10 +177,70 @@ defmodule Redoubt.Test.Terminal do
     parse(terminal, rest)
   end
 
+  defp clamp(n, size), do: n |> max(0) |> min(size - 1)
+
+  # The private modes: the alternate screen and the cursor's visibility.
+  defp private(terminal, <<c, rest::binary>>, params) when c in ?0..?9,
+    do: private(terminal, rest, params <> <<c>>)
+
+  defp private(terminal, <<final, rest::binary>>, params) do
+    terminal =
+      case {params, final} do
+        {"1049", ?h} ->
+          saved = {terminal.cells, terminal.styles, terminal.row, terminal.col}
+          %{terminal | saved: saved, cells: %{}, styles: %{}, row: 0, col: 0, pending: false}
+
+        {"1049", ?l} ->
+          {cells, styles, row, col} = terminal.saved || raise("left an alternate screen never entered")
+          %{terminal | saved: nil, cells: cells, styles: styles, row: row, col: col, pending: false}
+
+        {"25", ?l} ->
+          %{terminal | cursor: false}
+
+        {"25", ?h} ->
+          %{terminal | cursor: true}
+
+        _other ->
+          raise "a private mode the encoder does not set reached the terminal: ESC [ ? #{params}#{<<final>>}"
+      end
+
+    parse(terminal, rest)
+  end
+
+  @sgr %{1 => :bold, 2 => :dim, 3 => :italic, 4 => :underlined, 5 => :slow_blink, 6 => :rapid_blink}
+  @sgr Map.merge(@sgr, %{7 => :reversed, 8 => :hidden, 9 => :crossed_out})
+
+  defp sgr(_style, [nil], _params), do: @plain
+  defp sgr(style, [], _params), do: style
+  defp sgr(_style, [0 | rest], params), do: sgr(@plain, rest, params)
+
+  defp sgr(style, [n | rest], params) when is_map_key(@sgr, n),
+    do: sgr(%{style | modifiers: MapSet.put(style.modifiers, @sgr[n])}, rest, params)
+
+  defp sgr(style, [n | rest], params) when n in 30..37,
+    do: sgr(%{style | fg: {:indexed, n - 30}}, rest, params)
+
+  defp sgr(style, [n | rest], params) when n in 90..97,
+    do: sgr(%{style | fg: {:indexed, n - 82}}, rest, params)
+
+  defp sgr(style, [n | rest], params) when n in 40..47,
+    do: sgr(%{style | bg: {:indexed, n - 40}}, rest, params)
+
+  defp sgr(style, [n | rest], params) when n in 100..107,
+    do: sgr(%{style | bg: {:indexed, n - 92}}, rest, params)
+
+  defp sgr(style, [38, 5, i | rest], params), do: sgr(%{style | fg: {:indexed, i}}, rest, params)
+  defp sgr(style, [48, 5, i | rest], params), do: sgr(%{style | bg: {:indexed, i}}, rest, params)
+  defp sgr(style, [38, 2, r, g, b | rest], params), do: sgr(%{style | fg: {:rgb, r, g, b}}, rest, params)
+  defp sgr(style, [48, 2, r, g, b | rest], params), do: sgr(%{style | bg: {:rgb, r, g, b}}, rest, params)
+
+  defp sgr(_style, _args, params),
+    do: raise("an SGR the encoder does not write reached the terminal: ESC [ #{params} m")
+
   defp erase_below(terminal) do
     before = fn {row, col} -> row < terminal.row or (row == terminal.row and col < terminal.col) end
     cells = for {at, g} <- terminal.cells, before.(at), into: %{}, do: {at, g}
-    bold = for at <- terminal.bold, before.(at), into: MapSet.new(), do: at
-    %{terminal | cells: cells, bold: bold}
+    styles = for {at, s} <- terminal.styles, before.(at), into: %{}, do: {at, s}
+    %{terminal | cells: cells, styles: styles}
   end
 end
