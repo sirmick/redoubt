@@ -1,14 +1,23 @@
-description = "A large-weight server keeps its share under load (R12): weight 1000 against eight users of 100 gets 1000/1800 by ratio of counts, within 50 per thousand either side, and each user within a tenth of the users' mean, with useful work over the window printed beside (virtual time, checked build)"
+description = "A large-weight server keeps its share under load (R12): weight 1000 against eight users of 100 gets its water-filling share of the harts (1000/1800 at one hart, one hart of two at two) by the kernel's charges net of lock waits, within 50 per thousand either side, and each user's count within a tenth of the users' mean, with useful work over the window printed beside (virtual time, checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true
 icount = "shift=3,sleep=off"
 programs = ["sched-large-weight"]
+# Test builds only: the trace ring (never in a default kernel). Under icount a count is the
+# machine's instructions, not a hart's time, so the server's share is the kernel's charges.
+kernel_features = ["sched-trace"]
+post_check = "sched_oracle"
+# One hart: at two harts the checked build's audits, charged to no one, fall mostly on the hart
+# that switches budgets each slice, the users', so the server's share of the charges reads high on
+# rv32 (572 against 450 to 550; rv64 547). A release build runs no audit.
+keep_smp = true
 timeout_secs = 600
 expect = [
-    '^\[large-weight\] ok: the weight-1000 server got',
+    '^HART-SHARE server \d+ \d+ 50 2:1( 100:1){8}$',
     '^\[large-weight\] ok: the least user got',
     '^SCHED-LARGE-WEIGHT TEST PASSED$',
+    '^SCHED-TRACE-END \d+ dropped 0$',
 ]
 forbid = ['\[large-weight\] FAIL']
 poweroff = true

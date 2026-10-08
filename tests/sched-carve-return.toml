@@ -1,21 +1,24 @@
-description = "The lead follows the weight: a budget that carves most of its weight away while it runs, then returns it, gets its half back against an equal victim; its share from the carve's return judged by the post-check net of the checked build's audits inside it (virtual time, checked build)"
+description = "The lead follows the weight: a budget that carves most of its weight away while it runs, then returns it, gets its share of the harts back against an equal victim; its share from the carve's return judged by the post-check on the kernel's charges net of lock waits (virtual time, checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true
 icount = "shift=3,sleep=off"
 programs = ["sched-carve-return"]
 # Test builds only: the trace ring (never in a default kernel). The oracle checks every pick, and
-# judges U's share from its carve's return, which the program prints with that window (`SHARE`),
-# net of the audit time inside it (kernel/scheduling.md, "Responsiveness"). U sleeps before it
+# judges U's share of what the kernel charged from its carve's return, the window the program
+# prints (`HART-SHARE`), net of lock waits; audits are charged to no one. U sleeps before it
 # carves, so the carve begins a slice, and runs until 9/10 of it, so the destruction falls inside
 # it: a slice ending first would requeue U at weight 1, whose pass defers the destruction past the
 # window.
 kernel_features = ["sched-trace"]
 post_check = "sched_oracle carve_return"
+# One hart: U's lead at weight 1 needs U to compete for a hart. With two budgets on two harts V is
+# capped, U alone sets the floor and never leads it, so the restatement has nothing to show.
+keep_smp = true
 timeout_secs = 600
 expect = [
     '^CARVE-OBS \d+ \d+ \d+$',
-    '^SHARE u-after-return \d+ \d+ \d+ 450 1000$',
+    '^HART-SHARE u-after-return \d+ \d+ 50\+ 2:1 1000:1$',
     '^SCHED-CARVE-RETURN TEST PASSED$',
     '^SCHED-TRACE-END \d+ dropped 0$',
 ]

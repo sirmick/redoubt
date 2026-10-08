@@ -179,6 +179,13 @@ impl Role {
 /// `rdtime`.
 pub fn ticks() -> u64 { crate::read_time() }
 
+/// Mark `budget` in the kernel's trace: carve an empty child of weight `weight` and destroy it, so
+/// the trace's lift names `budget` as its parent.
+pub fn mark(budget: u32, weight: u32) {
+    let child = rd::create(budget, &rd::spec(0, 0, weight)).expect("a mark");
+    rd::destroy(child).expect("a mark's destruction");
+}
+
 /// Count until `rdtime` reaches `end`; the count.
 #[inline(never)]
 pub fn spin_until(end: u64) -> u64 {
@@ -1192,13 +1199,14 @@ fn steward(k: usize, leases: usize, hold: bool) {
     }
     // By deadline: a budget's deadline is fixed when it is created, before the spawn, so it
     // leaves room for the spawn under load; a lease whose deadline came first is retried. The
-    // steward's spawn at N = 16 takes about 150 ms, so the lead is twice that: at 150 ms every
-    // retry on one seed lost the race and took no sample.
+    // steward's spawn at N = 16 takes about 150 ms on one hart: at a lead of 150 ms every retry on
+    // one seed lost the race and took no sample. On two, the spawn waits for the lock behind the
+    // sessions' kernel entries too, and at 300 ms rv64 took 19 of 50, so the lead is 600 ms.
     for _ in 0..leases * 2 {
         if nn == leases {
             break;
         }
-        let deadline = now() + 300_000;
+        let deadline = now() + 600_000;
         let Ok(lease) = rd::create(3, &rd::BudgetSpec { deadline, ..rd::spec(pages, 1, 10) }) else {
             continue;
         };
@@ -2434,32 +2442,52 @@ impl Bench {
         count * 1000 / (self.rate * window_us / 1000).max(1)
     }
 
-    /// A share the bench's post-check (`sched_oracle`) judges, net of the checked build's audits
-    /// inside its window, as it judges the latency targets: printed as `SHARE <name> <start> <end>
-    /// <cpu> <min> <max>`, the window (from [`Bench::go`]) and the CPU `count` stands for in µs,
-    /// and the share's bounds in thousandths. The share gross of audits, for the program's note.
-    pub fn judged_share(
-        &self,
-        name: &str,
-        count: u64,
-        (start, end): (u64, u64),
-        (min, max): (u64, u64),
-    ) -> u64 {
-        let cpu = count * 1000 / self.rate.max(1);
-        let _ = writeln!(Console, "SHARE {} {} {} {} {} {}", name, start, end, cpu, min, max);
-        self.share(count, end - start)
-    }
-
     /// A share of the CPU the kernel charged, which the bench's post-check (`sched_oracle`) reads
     /// from the trace alone: printed as `CHARGED-SHARE <name> <start> <end> <tolerance>
-    /// <mark>...`, the window in µs, how far in thousandths the share may lie from what its weight
-    /// is owed among the budgets charged beside it, and the weights of the empty budgets the
+    /// <mark>[:<threads>]...`, the window in µs, how far in thousandths the share may lie from what
+    /// it is owed among the budgets charged beside it, and the weights of the empty budgets the
     /// program carved and destroyed to mark the budget judged (the first) and the budgets it is
-    /// judged among (each mark's, and those under it).
-    pub fn charged_share(&self, name: &str, (start, end): (u64, u64), tolerance: u64, marks: &[u32]) {
+    /// judged among (each mark's, and those under it), each with its runnable threads if it has
+    /// fewer than the harts (its water-filling share is capped at them).
+    pub fn charged_share(
+        &self,
+        name: &str,
+        (start, end): (u64, u64),
+        tolerance: u64,
+        marks: &[(u32, Option<u32>)],
+    ) {
         let _ = write!(Console, "CHARGED-SHARE {} {} {} {}", name, start, end, tolerance);
-        for m in marks {
-            let _ = write!(Console, " {}", m);
+        for (m, k) in marks {
+            let _ = match k {
+                Some(k) => write!(Console, " {}:{}", m, k),
+                None => write!(Console, " {}", m),
+            };
+        }
+        let _ = writeln!(Console);
+    }
+
+    /// A share across harts of the CPU the kernel charged, which the bench's post-check
+    /// (`sched_oracle`) reads from the trace alone: printed as `HART-SHARE <name> <start> <end>
+    /// <tolerance>[+|-] <mark>:<threads> <weight>:<threads>...`, the window in µs, how far in
+    /// thousandths the share may lie from what it is owed (`+` only below it, `-` only above), the
+    /// weight of the empty budget the program carved and destroyed to mark the budget judged
+    /// ([`mark`]) with its runnable threads, and the weight and runnable threads of each budget it
+    /// runs against it.
+    pub fn hart_share(
+        &self,
+        name: &str,
+        (start, end): (u64, u64),
+        (tolerance, side): (u64, &str),
+        (mark, threads): (u32, u32),
+        others: &[(u32, u32)],
+    ) {
+        let _ = write!(
+            Console,
+            "HART-SHARE {} {} {} {}{} {}:{}",
+            name, start, end, tolerance, side, mark, threads
+        );
+        for (w, k) in others {
+            let _ = write!(Console, " {}:{}", w, k);
         }
         let _ = writeln!(Console);
     }
@@ -2485,6 +2513,40 @@ impl Bench {
     pub fn exit_endpoint(&self) -> u32 { self.exit }
 
     pub fn image(&self) -> &Image { &self.image }
+}
+
+/// Budget churn against an equal-weight victim (`sched-budget-churn` and its shell's case): each
+/// phase is `(variant, the child's weight, name, what, the victim's mark)`, the attacker running
+/// [`Role::BudgetChurn`] and the victim spinning, and the victim's share printed for the
+/// post-check (`HART-SHARE`) with the counts noted beside.
+pub fn churn_against_victim(b: &mut Bench, phases: &[(u64, u64, &str, &str, u32)]) {
+    // The window, and how far below its share the victim may get, thousandths (R12's 50).
+    const WINDOW: u64 = 2_000_000;
+    const TOL: u64 = 50;
+    for &(variant, weight, name, what, m) in phases {
+        // Room for the attacker, its children and (variant 3) intermediates.
+        let attacker = b.budget(rd::USERS, 100, 3, rd::FOREVER);
+        let victim = b.budget(rd::USERS, 100, 1, rd::FOREVER);
+        mark(victim, m);
+        let a = b.start(attacker, Role::BudgetChurn, &[variant, weight], &[attacker]);
+        let v = b.start(victim, Role::Spin, &[], &[]);
+        let window = b.go(50_000, WINDOW);
+        let counts = b.collect(2);
+        // Every variant is judged by the victim, who keeps at least half; the shell's own share
+        // pays for its calls at its halved weight, so the victim may get more (no ceiling). The
+        // post-check judges the victim's share of the kernel's charges, which bill the checked
+        // build's audits to no one, and recomputes every lift. The attacker's subtree runs at
+        // most two threads, its own and a child's.
+        b.hart_share(name, window, (TOL, "+"), (m, 1), &[(100, 2)]);
+        b.note(format_args!(
+            "{}: the victim counted {} of 1000 of the window, the attacker's subtree {}",
+            what,
+            b.share(counts[v], window.1 - window.0),
+            b.share(counts[a], window.1 - window.0)
+        ));
+        rd::destroy(attacker).unwrap();
+        rd::destroy(victim).unwrap();
+    }
 }
 
 /// `Error` re-exported for the cases.

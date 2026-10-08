@@ -1,7 +1,7 @@
 # Time and timeouts
 
-The kernel owns the hart timer and keeps it armed for the earliest thing
-due: the running thread's slice end, a blocking call's timeout or a budget's deadline. Time is
+The kernel owns each hart's timer and keeps it armed for the earliest thing
+due: its running thread's slice end, a blocking call's timeout or a budget's deadline. Time is
 monotonic microseconds since the kernel started, read with `time_now`; user mode also reads the
 raw counter with `rdtime`. Every blocking call takes a timeout, and a budget with a deadline is
 destroyed when it passes. No process programs the timer, and the kernel keeps no date.
@@ -47,7 +47,7 @@ a time never fires before `time_now` reaches it.
 </details>
 
 The kernel keeps three times (`kernel/src/time.rs`) and arms the hardware for the earliest:
-- the **slice end** of the running thread: set to the time plus `SLICE_US` (1,000 µs) when a
+- the **slice end** of each hart's running thread: set to the time plus `SLICE_US` (1,000 µs) when a
   thread `kmain` picked returns to user mode, and to never while `kmain` itself runs and from a
   pick until that return ([R12 (scheduling)](scheduling.md#r12-scheduling));
 - the **earliest timeout** of any blocked thread;

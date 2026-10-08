@@ -9,7 +9,11 @@
 //! to lift the floor above all six own passes. This program then destroys Y (one call: every B
 //! send fails `Dead` in one kernel entry) and then X (A's three, in a later entry). Each group's
 //! three wake in one entry by construction, at the floor, an equal pass, so within a group the
-//! lower id runs first (clause 3): b1, b2, b3 and a1, a2, a3, under any slice.
+//! lower id is picked first (clause 3): b1, b2, b3 and a1, a2, a3, under any slice. On one hart
+//! each runs before the next is picked; on two the first two are picked onto the two harts and
+//! may return to user mode in either order, and the third waits for a hart, so the program checks
+//! that the group's last ran after the others. The oracle checks every pick on any number of
+//! harts.
 //!
 //! A later entry's wakers rank first (clause 2: A before B) only while both groups are queued
 //! together, and nothing keeps this program on the CPU from one destruction to the next: a slice
@@ -57,9 +61,10 @@ pub extern "C" fn _start() -> ! {
         destroyed.0.is_ok() && destroyed.1.is_ok() && ta.iter().chain(tb.iter()).all(|t| *t != 0),
         format_args!("B woken by one destroy, A by another ({:?}): all six woke", destroyed),
     );
+    let last_ran_last = |t: [u64; G]| t[..G - 1].iter().all(|x| *x < t[G - 1]);
     b.check(
-        tb.windows(2).all(|w| w[0] < w[1]) && ta.windows(2).all(|w| w[0] < w[1]),
-        format_args!("wakers of one entry ran lowest id first, in each group (clause 3)"),
+        last_ran_last(tb) && last_ran_last(ta),
+        format_args!("wakers of one entry ran highest id last, in each group (clause 3)"),
     );
     b.note(format_args!(
         "the later entry's group ran first: {} (clause 2 is the oracle's alone)",

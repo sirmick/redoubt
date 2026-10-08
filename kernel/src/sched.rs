@@ -160,6 +160,9 @@ impl Budgets<BudgetRef> for MemoryManager {
 
     #[cfg(feature = "sched-trace")]
     fn reweighed(&mut self, b: BudgetRef, r: &redoubt_stride::Reweigh) { trace::reweigh(b.id, r) }
+
+    #[cfg(feature = "sched-trace")]
+    fn uncapped(&mut self, b: BudgetRef, pass: u128) { trace::record(trace::UNCAPPED, b.id, pass) }
 }
 
 impl Ready<BudgetRef> for MemoryManager {
@@ -558,7 +561,11 @@ pub fn leave(pid: Pid) {
                 if next != s.cpu.cur(here()) {
                     s.cpu.switch(here(), mm, next, |mm, b| mm.ready(b) > 0);
                     #[cfg(feature = "sched-trace")]
-                    trace::record(trace::RUNS, next.map_or(0, |b| b.id), 0);
+                    trace::record(
+                        trace::RUNS,
+                        next.map_or(0, |b| b.id),
+                        next.map_or(0, |b| mm.weight(b).into()),
+                    );
                     s.b().user_since = None;
                     // The budget picked pays what it owes for getting here (below).
                     if let Some(b) = next {
@@ -822,7 +829,9 @@ pub mod trace {
     /// A budget's threads waiting for a hart, those no hart runs, changed: the count in the pass
     /// field. The queue passes over a budget with none, whose threads all run on harts.
     pub const READY: u8 = b'J';
-    /// The writing hart's runner changed: the budget it runs now, 0 for none.
+    /// The writing hart's runner changed: the budget it runs now, 0 for none, and its stride
+    /// weight in the pass field, so the oracle can weigh the charges of a budget it never saw
+    /// carve.
     pub const RUNS: u8 = b'H';
     /// A trap from user mode waited for the kernel lock another hart held: the wait's start in
     /// ticks in the id, its end in the pass field. The hart's runner loses that time (R78).
@@ -830,6 +839,9 @@ pub mod trace {
     /// Just before `C`: the ticks since boot, and the harts started in the pass field, so the
     /// oracle can state the lock waits as a share of the harts' time.
     pub const HART_TIME: u8 = b'F';
+    /// A budget stopped being capped and is lifted to the floor: the pass it is lifted to, ahead of
+    /// the `P` that sets it. The rise is no charge.
+    pub const UNCAPPED: u8 = b'u';
 
     /// Frames the ring takes (64 MiB, 192 MiB with `sched-trace-large`), and the records they hold.
     const PAGES: usize = if cfg!(feature = "sched-trace-large") { 49152 } else { 16384 };

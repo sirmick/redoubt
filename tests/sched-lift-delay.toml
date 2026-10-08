@@ -10,6 +10,10 @@ programs = ["sched-lift-delay"]
 # (kernel/scheduling.md, "Residual risks").
 kernel_features = ["sched-trace"]
 post_check = "sched_oracle lift-delay"
+# One hart: the delay is counted in rounds of one queue's picks. At two harts the capped launcher
+# runs on a hart of its own, below the peers, which spread over more than a round, so a round of
+# picks no longer measures the lift.
+keep_smp = true
 timeout_secs = 600
 expect = [
     '^\[lift-delay\] phase 1: S ran at',

@@ -132,7 +132,7 @@ queue keeps beside its slots, each written where the queue changes a queued budg
 the pick compares the same ranks. Neither reads a budget's frame, which stays the record: a checked
 kernel audits the ranks against the frames with the marks' audit. So a slice end's scheduler work
 is under 3 µs per queued budget (2.4 µs measured in a checked build, "Charging"), the frame reads
-it makes being the running budget's own.
+it makes being its hart's running budget's own.
 
 On several harts the floor leaves out a **capped** budget, one whose weight's share of the harts
 is more than it has runnable threads. Running every thread it has, its pass lags, and counting it
@@ -188,7 +188,7 @@ flowchart TD
     LV --> REC
     REC["reconcile: each budget that gained a<br/>runnable thread wakes, highest id first,<br/>pass = max(own, floor), tie = front - 1"] --> FL["floor = max(floor, lowest queued pass)"]
     FL --> R{"is the CPU<br/>with kmain?"}
-    R -- no --> RUN[the running thread resumes]
+    R -- no --> RUN[the hart's running thread resumes]
     R -- yes --> P["kmain picks the lowest (pass, tie, id)<br/>and runs that budget's next thread<br/>after its cursor, for up to 1 ms"]
 ```
 *Figure: the pass and wake rule at one kernel entry. `w` is the budget's free weight.*
@@ -250,7 +250,7 @@ Kernel time is billed as well:
   interrupted pays for none of it. Each bill closes its interval at the tick that opens the next,
   so a bill's own handling is in the interval after it and no part of a timeout's expiry is
   nobody's ([residual risks](#residual-risks)). A
-  timer interrupt that found neither is the running budget's when it ends that budget's slice,
+  timer interrupt that found neither is the budget's its hart runs when it ends that budget's slice,
   and nobody's otherwise;
 - an interrupt's handling is billed to the owner of its device object
   ([R5 (interrupts)](devices.md#r5-interrupts)); one with no device object, to nobody;
@@ -448,7 +448,7 @@ got 0.
 
 ### Responsiveness
 
-<details><summary>Status: built · tested (15)</summary>
+<details><summary>Status: built · tested (16)</summary>
 
 - bench:sched-latency
 - bench:sched-cluster
@@ -460,7 +460,8 @@ got 0.
 - bench:sched-carve-return
 - host:testbench::destructions_are_timed_and_bounded
 - host:testbench::audits_are_subtracted_inside_each_window
-- host:testbench::shares_are_judged_net_of_audits
+- host:testbench::a_hart_share_is_judged_of_every_charge_against_water_filling
+- host:testbench::latency_targets_are_gated_up_to_gate_harts
 - host:testbench::an_unmatched_audit_fails
 - host:testbench::cluster_envelope_qualifies_where_the_old_rtc_interval_did_not
 - host:testbench::the_old_control_must_fail_on_its_lower_witness
@@ -468,7 +469,8 @@ got 0.
 
 </details>
 
-No wake latency follows from weight. A wake waits out the running thread's slice, a waking
+No wake latency follows from weight. Unless a hart is idle, a wake waits out a running thread's
+slice, a waking
 budget keeps a pass above the floor if it has one, and several budgets can tie at the floor. So
 wakeup is prompt but not bounded, and responsiveness is a **measured target** under a named
 workload, not a bound derived from the queue.
@@ -498,7 +500,7 @@ thread run. Each target counts the kernel a release build runs, a share as well 
 audit neither fills a window nor moves the schedule. The audit time inside each window, a share's
 included, is subtracted, from the trace's audit records, and reported beside it
 ([checked builds](../testbench.md#checked-builds)). The scheduler does not see an audit either: its
-time is charged to no budget, and the running slice's end and the start of the kernel time being
+time is charged to no budget, and its hart's running slice's end and the start of the kernel time being
 billed both move forward by its length, so the thread that ran it is picked and preempted as in a
 release build (`sched::audit`). With two full handle tables live, the audits are about 24 ms after
 a destruction and 8 ms at a free.
@@ -528,32 +530,36 @@ net on rv64: the target misses, since the oracle subtracts only what the trace s
 audit's time billed to the budget that ran it and counted against its slice (`audit-billed`, the
 second recorded negative run), it is 44,761 and 45,577 µs net: the target misses. The steward
 stand-in spends its slice on the audit at the first `killed` notice, is requeued, and the victim
-and a hostile budget run a slice each before it takes the second. A share is judged the same way:
-in `sched-budget-churn`, whose attacker destroys a budget each slice, the victim of the spinning
-parent gets 494 of 1000 net of audits on rv64 (403 gross) and 495 on rv32 (416), and the shell's
-victim 580 (391) and 497 (316).
-`sched-exit-churn` and `sched-timer-flood` are judged the same way, since a process's start and
-end and a deadline's destruction each run an audit: against processes that exit, the victim gets
-495 of 1000 net on rv64 (459 gross) and 492 on rv32 (459); against processes that fault, 497
-(464) and 498 (468); against sleepers, 473 (465) and 468 (455); against sleepers and staggered
-budget deadlines, 473 (429) and 469 (408); against waits ended early, 477 (432) and 481 (425). So
-is `sched-carve-return`'s, from its carve's return, whose destruction and audit come before it: 496
-and 497, net and gross. The other shares stay in their programs. `sched-large-weight`,
-`sched-server-busy` and `sched-carve-inflation` judge a ratio of counts: what each budget ran,
-against the others. Audits and slice ends' kernel time take from every budget in proportion, so
-they leave the ratio as it is. Each program prints its counts against what the window would give
-one loop alone beside it, as the useful work left after the kernel's time. At 1 ms in the checked
-build, rv64 then rv32:
-- `sched-large-weight`'s server: 560 and 560 of 1000 by counts, within 50 of 1000/1800 (555) either
-  way; useful work 411 and 397. Its least user gets 992 and 988 per 1000 of the users' mean, against
-  a floor of 900;
-- `sched-carve-inflation`'s victim: one deep, 502 and 502 by counts, 459 and 452 useful; four deep,
-  502 and 503 by counts, 409 and 398 useful;
-- `sched-server-busy`: the server's work for A is 351 and 363 per 1000 of the users' mean, and
-  each user has 195 and 187 useful.
+and a hostile budget run a slice each before it takes the second.
 
-The rest have no audit inside their windows: no process or budget is created or destroyed there,
-or (`deadline-flood-billed`) the build is a release one.
+A share is judged from the same trace: what the kernel charged the budget in the window, against
+what it charged every budget, never a count, since under `icount` a count is the machine's
+instructions ([checked builds](../testbench.md#checked-builds)). An audit is charged to no budget,
+so every share is net of the audits, and on several harts net of the lock waits too. Each is
+owed its water-filling share, which at one hart is its weight's; the victims of churn, floods and
+gaming are owed at least theirs. Measured at 1 ms in the checked build, of 1000, rv64 / rv32:
+
+| Share (owed at one hart, at two) | One hart | Two harts |
+| --- | --- | --- |
+| `sched-share`, the 300 spinner (600, 500) | 599 / 599 | 505 / 519 |
+| `sched-share`, each 100 spinner (200, 250) | 200 / 200 | 247 / 240 |
+| `sched-large-weight`'s server (557, kept at one hart) | 555 / 553 | |
+| `sched-idle-gap`, B after the gap (333) | 333 / 332 | 332 / 332 |
+| `sched-sleep-gaming`, the near-slice victim (500) | 500 / 499 | 535 / 522 |
+| `sched-budget-churn`, the spinning parent's victim (500) | 486 / 486 | 607 / 473 |
+| `sched-exit-churn`, against processes that exit (500) | 499 / 500 | 548 / 549 |
+| `sched-exit-churn`, against processes that fault (500) | 499 / 499 | 526 / 533 |
+| `sched-timer-flood`, against sleepers and staggered deadlines (500) | 499 / 499 | 593 / 530 |
+| `sched-timer-flood`, against waits ended early (500) | 499 / 500 | 536 / 537 |
+| `sched-carve-inflation`, four deep (500) | 499 / 498 | 474 / 474 |
+| `sched-carve-return`, after the carve's return (500, kept at one hart) | 500 / 499 | |
+| `deadline-flood-billed-traced`, 64 deadlines (500, kept at one hart) | 498 / 498 | |
+| the containment gate's bystander (833, 500 reported) | 833 / 833 | 480 / 445 |
+
+`sched-large-weight`'s users and `sched-server-busy` judge a ratio of counts between budgets alike,
+which the machine's rate leaves as it is: the least user gets 992 and 988 per 1000 of the users'
+mean, against a floor of 900, and the server's work for A is 351 and 363 per 1000 of the users'
+mean (one hart, rv64 then rv32).
 
 **The gate runs one pinned seed.** The guest's boot RNG seed decides the PIDs the kernel draws,
 which shift instruction counts and so the phase of every later event; with it pinned, a run
@@ -575,6 +581,36 @@ stated margin. The sweep's seeds and worst case are recorded here with the targe
 
 In instructions: 15 ms is 1,875,000, 25 ms is 3,125,000, 30 ms is 3,750,000, 40 ms is 5,000,000,
 50 ms is 6,250,000, 95 ms is 11,875,000, 125 ms is 15,625,000, and one 1 ms slice is 125,000.
+
+At 2 harts the targets above are gated; at 4 they are recorded (`gate_harts`). Under `icount` with
+several harts the clock counts every running hart's instructions: the harts take turns on one host
+thread, so a millisecond is still 125,000 instructions, now of the whole machine, and a hart that
+halts gives its turns to the others. Measured at the pinned seed 3 in the checked, traced build,
+p99 in µs, net / gross:
+
+| Measure (p99, N = 1 / 4 / 16) | rv64, 2 harts | rv32, 2 harts |
+| --- | --- | --- |
+| deadline notice | 4312 / 4144 / 4369 net, 27733 / 29428 / 40113 gross | 4465 / 4366 / 5352 net, 32146 / 34232 / 46496 gross |
+| driver wake | 2700 / 4395 / 7177 net, 4807 / 5395 / 14640 gross | 3285 / 6186 / 11816 net, 5777 / 7607 / 22218 gross |
+| steward timer wake | 2663 / 4847 / 16086 net, 3582 / 6525 / 30816 gross | 4066 / 8777 / 20959 net, 7744 / 12428 / 38813 gross |
+| steward decision wake | 2115 / 2496 / 5209 net, 2306 / 2777 / 7645 gross | 2087 / 1676 / 9264 net, 2307 / 1890 / 14821 gross |
+| a lease's end (worst decision wake + R10) | 5209 + 2956 = 8165 | 9264 + 2894 = 12158 |
+
+| Measure (p99, N = 1 / 4 / 16) | rv64, 4 harts | rv32, 4 harts |
+| --- | --- | --- |
+| deadline notice | 4556 / 9490 / 3971 net, 31333 / 36374 / 45392 gross | 5904 / 10897 / 4231 net, 36140 / 42978 / 51390 gross |
+| driver wake | 5745 / 17617 / 26569 net, 13543 / 22239 / 44502 gross | 7325 / 21054 / 36694 net, 16467 / 26857 / 67374 gross |
+| steward timer wake | 6186 / 17173 / 25141 net, 14497 / 21241 / 45379 gross | 9080 / 18145 / 25771 net, 17931 / 23633 / 46649 gross |
+| steward decision wake | 5221 / 13631 / 19727 net, 9871 / 17125 / 40918 gross | 5522 / 16758 / 21598 net, 10683 / 21050 / 34622 gross |
+| a lease's end (worst decision wake + R10) | 19727 + 2962 = 22689 | 21598 + 2902 = 24500 |
+
+Every target is met at two harts on both widths, and over a 16-seed sweep there too: the worst
+net p99s over the sweep's N = 1, 4 and 16 are, rv64 then rv32, 11.5 and 13.0 ms for the driver
+wake, 18.2 and 26.5 ms for the steward timer wake, 6.8 and 13.7 ms for its decision wake and 5.4
+and 12.0 ms for the deadline notice, and a lease's end at most 9.8 and 16.6 ms; the worst p50 is
+7.2 ms (rv32's timer wake at N = 16). At four, every p99 is met, and one p50 is not:
+rv32's driver wake at N = 16, 17.2 ms against 15 ms; rv64's is 12.6 ms. At four harts a wake can
+wait for the kernel lock behind three sections ([residual risks](#residual-risks)).
 
 A slice end adds its own kernel time ([charging](#charging)). In the release build that is about
 15,000 instructions on rv64 and 22,000 on rv32, so a 1 ms slice takes about 1.12 ms and 1.17 ms
@@ -863,7 +899,7 @@ Status: built · tested: bench:sched-carve-inflation, bench:legacy-gone, host:re
 
 ### R12 (scheduling)
 
-<details><summary>Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search, `map_fixed`'s range, `process_create` and, after RAM fills, a one-page `map_anon`, `budget_create` and a rolled-back `process_create` (with a recorded negative run, `alloc-first-fit`); and at full occupancy, every PID in use with every thread, for a delivery, a timer expiry ending 250 waits at once and the reconcile that wakes their 250 budgets (7.1 ms on rv64, 8.1 ms on rv32) and a destruction (at most 17.1 ms on rv64, 18.2 ms on rv32) (`bench:worst-walk`) · tested (55)</summary>
+<details><summary>Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search, `map_fixed`'s range, `process_create` and, after RAM fills, a one-page `map_anon`, `budget_create` and a rolled-back `process_create` (with a recorded negative run, `alloc-first-fit`); and at full occupancy, every PID in use with every thread, for a delivery, a timer expiry ending 250 waits at once and the reconcile that wakes their 250 budgets (7.1 ms on rv64, 8.1 ms on rv32) and a destruction (at most 17.1 ms on rv64, 18.2 ms on rv32) (`bench:worst-walk`) · tested (57)</summary>
 
 - bench:sched-share
 - bench:sched-share-release
@@ -871,6 +907,7 @@ Status: built · tested: bench:sched-carve-inflation, bench:legacy-gone, host:re
 - bench:sched-idle-gap
 - bench:sched-exit-churn
 - bench:sched-budget-churn
+- bench:sched-budget-churn-shell
 - bench:sched-carve-inflation
 - bench:sched-debt-lift
 - bench:sched-lift-delay
@@ -879,6 +916,7 @@ Status: built · tested: bench:sched-carve-inflation, bench:legacy-gone, host:re
 - bench:sched-large-weight
 - bench:sched-large-weight-release
 - bench:deadline-flood-billed
+- bench:deadline-flood-billed-traced
 - bench:sched-carve-return
 - bench:map-anon-search-bound
 - bench:scan-bounds
@@ -971,13 +1009,13 @@ fails the case on both widths in a recorded negative run (a one-page `map_anon`:
 374 µs on rv64, 1274 against 474 on rv32).
 
 It is attacked three ways:
-- **Boot cases, in virtual time**, count each budget's work over a window and compare it with
-  its weight's share, within 50 per thousand: spinners at 100, 100 and 300, each of the CPU the
-  three counted ([charging](#charging)); near-slice, 20 µs
-  and long-sleep bursts; a sleeper waking into an idle gap; threads and processes that exit or
-  fault just before their slice ends; budget churn; carving; 30 sleepers a microsecond apart,
-  64 staggered deadlines, and waits ended before their timeouts; a system server flooded by one
-  user; a weight-1000 server among eight users of 100.
+- **Boot cases, in virtual time**, judge what the kernel charged each budget over a window, net of
+  the harts' lock waits, against its water-filling share of the harts, within 50 per thousand, at
+  one hart and two ([checked builds](../testbench.md#checked-builds)): spinners at 100, 100 and
+  300; near-slice, 20 µs and long-sleep bursts; a sleeper waking into an idle gap; threads and
+  processes that exit or fault just before their slice ends; budget churn; carving; 30 sleepers a
+  microsecond apart, 64 staggered deadlines, and waits ended before their timeouts; a system
+  server flooded by one user; a weight-1000 server among eight users of 100.
 - **The differential** drives `libs/stride`, wired as the kernel wires it, and the model's
   scheduler through 3,000 random sequences of creations, destructions (leaf, on a hart, and
   whole subtrees), wakes, blocks, runs and preemptions, at 1, 2 and 4 harts, and requires every
@@ -1052,12 +1090,14 @@ tells whoever reads the console who runs when. It exists only under the Cargo fe
   `kernel/src/arch/riscv/irq.rs` sits under
   `#[cfg(feature = "sched-trace")]`, so with the feature off the ring, its records and its
   `SCHED-TRACE` console lines are not compiled;
-- the bench turns it on per case (`kernel_features`), only for `sched-ties`,
-  `sched-budget-churn`, `sched-exit-churn`, `sched-timer-flood`, `sched-carve-return`,
+- the bench turns it on per case (`kernel_features`), only for the cases whose `sched_oracle`
+  post-check reads the trace printed at `system_reset`: the share cases (`sched-share`,
+  `sched-large-weight`, `sched-idle-gap`, `sched-sleep-gaming`, `sched-capped`,
+  `sched-budget-churn`, `sched-budget-churn-shell`, `sched-exit-churn`, `sched-timer-flood`,
+  `sched-carve-return`, `sched-carve-inflation`, `deadline-flood-billed-traced`), `sched-ties`,
   `sched-debt-lift`, `sched-lift-delay`, `sched-wake-no-preempt`, `sched-cluster`,
-  `sched-cluster-old-control`, `sched-latency`, `sched-latency-tcg`, `kernel-containment` and
-  `endpoint-destroy-full`, whose `sched_oracle` post-check reads the trace printed at
-  `system_reset`.
+  `sched-cluster-old-control`, `sched-latency`, `sched-latency-tcg`, `kernel-containment`, `endpoint-destroy-full`, `smp-fence` and
+  `worst-walk`.
 
 The other diagnostic features are off by default in the same way: `walk-trace`, which implies
 the trace and brackets each receive's pump, timer expiry and reconcile in it, for `worst-walk`
@@ -1140,11 +1180,11 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   each other user and 258 for the server. Servers therefore bound the work of one
   request, and the steward, whose weight is large, bounds its per-request work and relies on its
   per-(account, label set) caps ([steward](../servers/steward.md)).
-- **Wakeup is prompt but not bounded.** A wake waits out the running slice, may keep a larger
+- **Wakeup is prompt but not bounded.** Unless a hart is idle, a wake waits out a running slice, may keep a larger
   pass, and may tie. Human control rests on a measured steward lease-termination latency, not a
   proven bound, until something needs a real-time rule ([TENETS](../TENETS.md#guarantees)).
 - **The steward decision wake is late by whole slices.** A wake never preempts: at N = 16 the
-  steward stand-in waits out the running slice, then the slices of any budgets that rank ahead of
+  steward stand-in waits out a running slice, then the slices of any budgets that rank ahead of
   it. With the 1 ms slice (the sixth sweep above) its p50 falls in a few modes, depending on where
   its timeout lands against the running slices: about 1.6 ms or 3.2 ms on rv64, and about 8.2,
   10.0 or 11.7 ms on rv32. Its p99 is a wake that lands behind several of the sixteen budgets, so
@@ -1161,13 +1201,42 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   the other harts up to its own length, bounded by count, not by share: the wait is the waiting
   hart's runner's time, billed to it and counted against its slice, and no billing gives it back.
   A traced kernel records each wait from user mode and the oracle reports them as a share of the
-  harts' time, `lock waits N of 1000`, beside `nobody`. At two harts in `sched-exit-churn`, whose
-  attacker makes and ends processes, they are 292 of 1000 (rv64); in `deadline-flood-billed`, whose
-  creator's deadlines end in destructions, one hart waited about 1000 ms of a 2 s window, and the
-  victim keeps 390 (rv64) and 358 (rv32) of 1000 where it keeps more than 450 at one hart.
-  Destruction's work
+  harts' time, `lock waits N of 1000`, beside `nobody`. Shares across harts are judged net of
+  these waits ([checked builds](../testbench.md#checked-builds)), and the cases whose waits decide
+  the share keep one hart (below). Taking them out has a blind spot: the judge subtracts each wait
+  from the budget the hart's runner record names, so a kernel that billed a wait to the wrong
+  budget, or to none, would pass it, and no case checks the billing of a wait itself. Once the
+  waits are short (step 5 below), the shares can be judged without taking them out, which closes
+  it. At two harts they are 84 to 210 of 1000 in the share cases
+  (rv64 then rv32: `sched-exit-churn` 146 and 139, `sched-timer-flood` 185 and 194,
+  `sched-budget-churn` 131 and 125, `sched-share` 130 and 195) and 229 and 280 in the containment
+  gate. In
+  `deadline-flood-billed-traced`, whose creator's deadlines end in destructions, one hart waited
+  about 1000 ms of a 2 s window. Destruction's work
   moving outside the lock ([several harts](../plan/m2-usable-shell.md#several-harts), step 5) is
-  what shortens them.
+  what shortens the waits.
+- **Some cases keep one hart.** A case that does not keep its hart count runs at the count the
+  bench is given (`--smp`); these keep theirs (`keep_smp`), each for one of four reasons: the lock
+  waits above, which destruction's work leaving the lock removes (step 5 of
+  [several harts](../plan/m2-usable-shell.md#several-harts) un-keeps them); where a
+  checked build's audits fall; a count with no trace, which under `icount` is the machine's
+  instructions, not a hart's time; or a scenario that measures one queue's rounds. Each kept
+  property has a case at two harts that covers it, or says none:
+
+  | Case | Class | Why | At two harts |
+  | --- | --- | --- | --- |
+  | `sched-budget-churn-shell` | lock waits | the shell's create and destroy calls hold the lock; the victim waits 848 ms of 2 s and keeps 326 (rv64) and 406 (rv32) of 1000 net of its waits | `sched-budget-churn`'s other variants |
+  | `deadline-flood-billed-traced` | lock waits | the creator's deadline destructions hold the lock; the victim's share net of the waits swings from 407 to 884 | `sched-timer-flood`'s staggered budget deadlines |
+  | `sched-wake-no-preempt` | lock waits | the hart taking the timeout waited for the lock past its own slice's end, so no nap of twenty ended mid-slice | none |
+  | `sched-large-weight` | audits | its users' hart switches budgets each slice and takes most audits, charged to no one, so the server reads 572 of 1000 on rv32 against 450 to 550 | `sched-share` (its 300 holds a hart) |
+  | `deadline-flood-billed` | a count | a release build with no trace | `deadline-flood-billed-traced` (kept itself) and `sched-timer-flood` |
+  | `sched-share-release` | a count | a release build with no trace | `sched-share` |
+  | `sched-large-weight-release` | a count | a release build with no trace | `sched-share` |
+  | `sched-lift-delay` | one queue's rounds | the capped launcher runs on a hart of its own and the peers spread over more than a round | `sched-debt-lift` |
+  | `sched-carve-return` | one queue's rounds | V is capped at two budgets on two harts, so U alone sets the floor and never leads it | `sched-carve-inflation` |
+  | `sched-cluster`, `sched-cluster-old-control` | one queue's rounds | the envelope is calibrated against one runner's slice period | `sched-latency`'s targets |
+
+  `bench-poweroff-missing` keeps one hart too, a bound of the bench's own.
 - **A call within one budget crosses harts.** A wake sends an idle hart the reschedule interrupt
   even when the woken thread's budget runs elsewhere, so a server and its client in one budget
   hand each call and reply across two harts, each hand-off an interrupt and a wait for the lock,
@@ -1206,10 +1275,10 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
 - **Scheduling is observable.** `rdtime` is readable in user mode, so a thread that times its own
   gaps learns how busy the machine is. Timing channels are out of scope
   ([TENETS](../TENETS.md#threat-model)).
-- **Measured on QEMU, on one hart.** The targets are guest instructions under `icount`; no hardware
+- **Measured on QEMU.** The targets are guest instructions under `icount`; no hardware
   run is measured, and a hardware run will characterise in cycles, not gate. A target set from a
-  sweep holds for the seeds swept, not for every seed. The queue and its accounting are judged on
-  one hart until R12 is restated across harts
+  sweep holds for the seeds swept, not for every seed. The queue and its accounting are judged at
+  1, 2 and 4 harts; the targets are gated at 1 and 2 and recorded at 4
   ([several harts](../plan/m2-usable-shell.md#several-harts)). The cases
   that read the trace run a kernel built with it, which has a record at every queue event and 64
   MiB less RAM for the budget tree, taken from the top of RAM below the DMA pool so the frames

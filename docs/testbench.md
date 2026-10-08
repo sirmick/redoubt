@@ -417,6 +417,9 @@ any other budget is picked twice, and `lift-delay`, that it comes within a round
 on its parent predicts. A `walk-trace` kernel's walks are bounded by their longest, net of the
 audits inside them (`pump_max_us`, `expiry_max_us`, `reconcile_max_us`), judged before
 `r10_p99_us`, so a run whose destruction is over its bound still has its walks judged.
+`gate_harts=2` judges the latency targets on a trace of at most two harts (its `F` record) and
+only reports them on more, marked `recorded at N harts, not gated`: the targets are gated at one
+hart and two and recorded at four ([responsiveness](kernel/scheduling.md#responsiveness)).
 `smp_fence` reads only the same trace's shootdown records: a page made executable was shot down
 on another hart running its process, which acknowledged ([memory](kernel/memory.md#instruction-fetch-after-mapping)).
 
@@ -519,7 +522,7 @@ parks when it is done, unless its exit is the point of its case.
 
 ### The scheduler oracle
 
-<details><summary>Status: built · tested (16)</summary>
+<details><summary>Status: built · tested (18)</summary>
 
 - bench:sched-ties
 - host:testbench::a_pick_passes_over_only_a_budget_that_other_harts_run
@@ -535,7 +538,9 @@ parks when it is done, unless its exit is the point of its case.
 - host:testbench::the_floor_and_the_passes_are_checked_on_their_own
 - host:testbench::destructions_are_timed_and_bounded
 - host:testbench::audits_are_subtracted_inside_each_window
-- host:testbench::shares_are_judged_net_of_audits
+- host:testbench::water_filling_caps_a_budget_at_its_threads
+- host:testbench::a_charged_share_across_harts_is_judged_by_water_filling_net_of_lock_waits
+- host:testbench::a_hart_share_is_judged_of_every_charge_against_water_filling
 - host:testbench::an_unmatched_audit_fails
 
 </details>
@@ -580,7 +585,7 @@ starts and the oracles run in under a second, so nothing else is shared between 
 
 ## Checked builds
 
-<details><summary>Status: built · tested (14)</summary>
+<details><summary>Status: built · tested (15)</summary>
 
 - bench:bench-debug-assertions
 - bench:bench-debug-assertions-off
@@ -591,8 +596,9 @@ starts and the oracles run in under a second, so nothing else is shared between 
 - bench:sched-exit-churn
 - bench:sched-timer-flood
 - bench:sched-carve-return
+- bench:deadline-flood-billed-traced
 - host:testbench::audits_are_subtracted_inside_each_window
-- host:testbench::shares_are_judged_net_of_audits
+- host:testbench::a_hart_share_is_judged_of_every_charge_against_water_filling
 - host:testbench::an_unmatched_audit_fails
 - host:testbench::cluster_credit_is_the_certified_interior_only
 - host:testbench::cluster_lower_witness_counts_the_union_of_outer_bins
@@ -626,33 +632,36 @@ sample's window, its end on `time_now` and its length (`LATENCY-SAMPLE <group> <
 judges none of them. `sched_oracle` subtracts the audit time inside each window,
 counting only the part of an audit that falls in it, and then applies the case's bounds
 (`deadline_notice_p99_us=40000`). It reports the gross, the net and the audit time beside each
-target ([responsiveness](kernel/scheduling.md#responsiveness)). A share is judged the same way:
-the program prints its window, the CPU its count stands for and its bounds in thousandths
-(`SHARE <name> <start> <end> <cpu> <min> <max>`), and `sched_oracle` judges it of the window net of
-the audit time inside it (`sched-budget-churn`'s victim, whose attacker destroys a budget each
-slice; `sched-exit-churn`'s, whose attacker's processes start and end; `sched-timer-flood`'s,
-beside deadlines; `sched-carve-return`'s, from the return of a carve). An audit runs beside the
-work a share counts, never inside it, so the credit stops at the window less the share's CPU and
-a net share is never past the whole (`sched-budget-churn`'s deadline victim, which counted
-1,960,657 µs of a 2 s window holding 49,077 µs of audits, read 1004 before the cap). The residual:
-the program's calibrated CPU count runs at least 0.3% (rv64) and 0.65% (rv32) over the work it
-measures, a bias in every share's CPU that the cap now hides behind its `credited` note; the
-calibration is the likely source, and it is a follow-up. A case that judges a share
-in its program still has audits inside its window: the scheduler's marks are audited about once
-a slice. They, and the kernel time of a slice end that switches budgets, fall on every budget
-per slice it runs, so `sched-share` and `sched-server-busy` judge a ratio of counts, which is net
-of both; the cases that judge a count of the window carry them in their tolerance. So
-`sched-share`'s share is relative, as the scheduler promises it, and what the three counted of
-the calibrated rate, the efficiency the slice ends leave, is reported beside it with no verdict
-(`counted <n> of the calibrated 1000`). Where the budgets a share is judged among run hostile
-agents, no count of theirs may decide it, so the share is the kernel's charges alone
-(`CHARGED-SHARE <name> <start> <end> <tolerance> <mark>...`, the containment gate's bystander).
-The program prints its window and marks the budgets it means, each by carving an empty child of
+target ([responsiveness](kernel/scheduling.md#responsiveness)). A share is the kernel's
+charges, never a count: under `icount` a count is the machine's instructions, not a hart's time
+([R12 (scheduling)](kernel/scheduling.md#r12-scheduling)). The program prints its window, marks the budget it
+judges (an empty child of the mark's weight, carved and destroyed, so the trace's lift names the
+parent), and names by weight and runnable threads each budget it runs against it (`HART-SHARE
+<name> <start> <end> <tolerance>[+|-] <mark>:<threads> <weight>:<threads>...`; `+` for
+at least, `-` for at most).
+`sched_oracle` sums what the kernel charged each budget in the window, its pass's rises times its
+weight as the trace states it (each hart's runner, `H`, carries its weight), less each hart's
+waits for the kernel lock, which bill the waiting hart's runner though no thread of it ran; a lift
+out of the cap set (`u`) is no charge. The part is the marked budget's and what was lifted into
+it, the whole every budget's, and what the budget is owed is its water-filling share of the
+trace's harts (`F`) among the budgets the program names, which on one hart is its weight's share;
+every want is stated in the result. An audit is charged to no budget, so the share is net of the
+audits; on several harts they fall mostly on the hart that switches budgets each slice, so
+`sched-large-weight` keeps one hart. Each program notes its counts beside with no verdict, and
+`sched-share` reports what the three counted of the calibrated rate (`counted <n> of the
+calibrated 1000`), the efficiency the slice ends leave. The release twins (`sched-share-release`,
+`sched-large-weight-release`, `deadline-flood-billed`) have no trace and judge their counts at one
+hart, in their expect lines; `deadline-flood-billed-traced` judges the same run's share across
+harts. Where the budgets a share is judged among are hostile agents the program cannot name one
+by one, the share is of the charges under marks (`CHARGED-SHARE <name> <start> <end> <tolerance>
+<mark>[:<threads>]...`, the containment gate's bystander against the leases under `users`). The
+program prints its window and marks the budgets it means, each by carving an empty child of
 the mark's weight and destroying it, so the trace's lift names the parent; `sched_oracle` sums
 each budget's pass rises in the window times its weight as the trace states it, for the first
 mark's budget against every marked budget and those lifted into them. What the budget is owed is
-its weight over the weights of those the kernel charged in the window, its competitors, and the
-share must lie within the tolerance of it; a window in which a budget under the marks is
+its weight over the weights of those the kernel charged in the window, its competitors, at one
+hart, and on several its water-filling share of the harts among them, net of their harts' lock
+waits as above, a mark naming its runnable threads; the share must lie within the tolerance of it; a window in which a budget under the marks is
 reweighed or ended is refused, since its competitors changed. The audits are charged to no
 budget, so the share is net of them by construction; what a budget is charged out of the queue
 shows only under its next wake's floor lift and is not counted, so the wakes in the window are

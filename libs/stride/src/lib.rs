@@ -181,6 +181,9 @@ pub trait Budgets<B> {
     /// `b`'s weight changed and its state was converted (called before its new state is set, so
     /// the conversion is recorded ahead of the pass it may lower).
     fn reweighed(&mut self, _b: B, _r: &Reweigh) {}
+    /// `b` stopped being capped and is lifted to `pass`, the floor (called before its new state
+    /// is set, so the lift is recorded ahead of the pass it sets, and is not read as a charge).
+    fn uncapped(&mut self, _b: B, _pass: u128) {}
 }
 
 /// The queue: every budget with a runnable thread (or running on a hart), at most `N` of them,
@@ -366,6 +369,7 @@ impl<B: Copy + PartialEq, const N: usize> Queue<B, N> {
                 let b = self.slots[i].expect("a queued slot");
                 let mut s = bs.state(b);
                 s.pass = self.floor;
+                bs.uncapped(b, s.pass);
                 bs.set_state(b, s);
                 self.ranks[i].pass = s.pass;
             }

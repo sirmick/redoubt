@@ -1,16 +1,20 @@
-description = "A spinning budget cannot delay another beyond its weight (R12): spinners at weights 100, 100 and 300 each get their weight's share of the CPU the three counted (virtual time, checked build)"
+description = "A spinning budget cannot delay another beyond its weight (R12): spinners at weights 100, 100 and 300 each get their water-filling share of the harts, judged by the post-check on the kernel's charges net of lock waits; at one hart their weight's share (virtual time, checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true
 icount = "shift=3,sleep=off"
 programs = ["sched-share"]
+# Test builds only: the trace ring (never in a default kernel). Under icount a count is the
+# machine's instructions, not a hart's time, so the shares are the kernel's charges (`HART-SHARE`).
+kernel_features = ["sched-trace"]
+post_check = "sched_oracle"
 timeout_secs = 600
 expect = [
-    '^\[share\] ok: weight 100 got',
-    '^\[share\] ok: weight 100 got',
-    '^\[share\] ok: weight 300 got',
+    '^HART-SHARE share-a \d+ \d+ 50 2:1 100:1 300:1$',
+    '^HART-SHARE share-b \d+ \d+ 50 3:1 300:1 100:1$',
+    '^HART-SHARE share-c \d+ \d+ 50 4:1 100:1 100:1$',
     '^\[share\] counted \d+ of the calibrated 1000$',
     '^SCHED-SHARE TEST PASSED$',
+    '^SCHED-TRACE-END \d+ dropped 0$',
 ]
-forbid = ['\[share\] FAIL']
 poweroff = true

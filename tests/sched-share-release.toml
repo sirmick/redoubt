@@ -1,19 +1,22 @@
-description = "Three spinners' useful work in the release build (R12): the same program and checks as sched-share with no audits, trace or checks, so what the three counted of the calibrated window is the kernel's slice-end cost alone (virtual time, release build)"
+description = "Three spinners' useful work in the release build (R12): the same program as sched-share with no audits, trace or checks, so what the three counted of the calibrated window is the kernel's slice-end cost alone, and each spinner's count of what the three counted within 50 per thousand of its weight's share (virtual time, release build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = false
 icount = "shift=3,sleep=off"
 programs = ["sched-share"]
 timeout_secs = 600
+# One hart: with no trace the shares are counts, and at several harts under icount a count is the
+# machine's instructions, not a hart's time; sched-share judges the shares across harts from the
+# kernel's charges.
+keep_smp = true
 # The three counted at least 960 of the calibrated 1000: a slice end that switches budgets costs
 # the release kernel about 0.12 ms (rv64) and 0.17 ms (rv32) over a lone spinner's slice end
 # (kernel/scheduling.md, "Charging", which records the measurement), under 4 % of a 1 ms slice.
 expect = [
-    '^\[share\] ok: weight 100 got',
-    '^\[share\] ok: weight 100 got',
-    '^\[share\] ok: weight 300 got',
+    '^\[share\] weight 100 counted (1[5-9]\d|2[0-4]\d|250) of 1000 of what the three counted',
+    '^\[share\] weight 100 counted (1[5-9]\d|2[0-4]\d|250) of 1000 of what the three counted',
+    '^\[share\] weight 300 counted (5[5-9]\d|6[0-4]\d|650) of 1000 of what the three counted',
     '^\[share\] counted (9[6-9]\d|1000) of the calibrated 1000$',
     '^SCHED-SHARE TEST PASSED$',
 ]
-forbid = ['\[share\] FAIL']
 poweroff = true

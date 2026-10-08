@@ -10,14 +10,16 @@ qemu_seed = 3
 # table, in a budget under system at 240,000, the weight it had when it ran in system itself:
 # measured from init's weight (1,000) the N = 16 wakes miss (tests/programs/src/bin/sched-latency.rs).
 programs = ["sched-latency"]
+# The targets are gated at one hart and at two (kernel/scheduling.md, "Responsiveness").
+smp = [1, 2]
 # Test builds only: the trace ring and its dump (never in a default or production kernel).
 kernel_features = ["sched-trace"]
 # The rank oracle; R10's kernel time from the trace's X/Y records, p99 <= 30 ms (back from the
 # 39 ms the handle-sweep term forced; kernel/budgets.md, "Residual risks"); a lease's end, the worst
 # decision-wake p99 plus R10's, <= 95 + 30 ms; and every latency target, judged on the program's
 # sample windows net of the checked build's audit time inside each (kernel/scheduling.md,
-# "Responsiveness").
-post_check = "sched_oracle r10_p99_us=30000 lease_end_p99_us=125000 driver_wake_p50_us=15000 driver_wake_p99_us=50000 timer_wake_p50_us=15000 timer_wake_p99_us=50000 decision_wake_p50_us=25000 decision_wake_p99_us=95000 deadline_notice_p99_us=40000"
+# "Responsiveness"); the targets are gated at one hart and two and recorded at more (`gate_harts`).
+post_check = "sched_oracle gate_harts=2 r10_p99_us=30000 lease_end_p99_us=125000 driver_wake_p50_us=15000 driver_wake_p99_us=50000 timer_wake_p50_us=15000 timer_wake_p99_us=50000 decision_wake_p50_us=25000 decision_wake_p99_us=95000 deadline_notice_p99_us=40000"
 timeout_secs = 1800
 expect = [
     '^\[latency\] the RTC keeps virtual time: met',
@@ -37,7 +39,7 @@ expect = [
     '^\[latency\] N=16 deadline notice: .*: gross, audits included; net in the post-check',
     '^\[latency\] N=16 budget_destroy, call to return: ',
     '^LATENCY-SAMPLE N=16 deadline_notice \d+ \d+$',
-    '^\[latency\] N=16: the 1000-weight server got \d+ of 1000 of the spinning CPU: target met',
+    '^\[latency\] N=16: the 1000-weight server counted \d+ of 1000 of the spinning CPU \(its weight.s 384\)$',
     '^SCHED-LATENCY TEST PASSED$',
     '^SCHED-TRACE-END \d+ dropped 0$',
 ]

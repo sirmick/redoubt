@@ -1,4 +1,4 @@
-description = "Ties in the stride queue (kernel/scheduling.md, \"The current minimum and ties\"): a sched-trace kernel's record of every queue event, checked pick by pick against the four rank clauses by the bench's independent oracle, which alone carries clause 2 (a later entry's wakers first); in the guest, two groups of three each woken in one kernel entry by one destruction run lowest id first (b1, b2, b3 and a1, a2, a3) (virtual time, checked build)"
+description = "Ties in the stride queue (kernel/scheduling.md, \"The current minimum and ties\"): a sched-trace kernel's record of every queue event, checked pick by pick against the four rank clauses by the bench's independent oracle, which alone carries clause 2 (a later entry's wakers first); in the guest, two groups of three each woken in one kernel entry by one destruction run highest id last (b3 and a3; on up to two harts the first two may return to user mode in either order) (virtual time, checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true
@@ -10,7 +10,7 @@ post_check = "sched_oracle"
 timeout_secs = 120
 expect = [
     '^\[ties\] ok: B woken by one destroy, A by another',
-    '^\[ties\] ok: wakers of one entry ran lowest id first, in each group \(clause 3\)$',
+    '^\[ties\] ok: wakers of one entry ran highest id last, in each group \(clause 3\)$',
     '^SCHED-TIES TEST PASSED$',
     '^SCHED-TRACE-END \d+ dropped 0$',
 ]

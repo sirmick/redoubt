@@ -24,7 +24,7 @@ expect = [
     '^\[latency\] N=16 steward decision wake: .*: gross, audits included; net in the post-check',
     '^\[latency\] N=16 deadline notice: .*: gross, audits included; net in the post-check',
     '^\[latency\] N=16 budget_destroy, call to return: ',
-    '^\[latency\] N=16: the 1000-weight server got \d+ of 1000 of the spinning CPU: target (met|missed)',
+    '^\[latency\] N=16: the 1000-weight server counted \d+ of 1000 of the spinning CPU \(its weight.s 384\)$',
     '^SCHED-LATENCY TEST PASSED$',
     '^SCHED-TRACE-END \d+ dropped 0$',
 ]

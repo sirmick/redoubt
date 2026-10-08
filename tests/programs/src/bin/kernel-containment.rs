@@ -29,22 +29,15 @@
 use test_programs::rd::{self, Received};
 use test_programs::sched::{
     Bench, CT_CALLERS, CT_LEASES, CT_STEADY, CT_VERDICT, K, R10_P99, Role, Stats, containment_child, join,
-    rtc,
+    mark, rtc,
 };
 
-/// How far the bystander's share may lie from its weight's, thousandths (R12's 50).
+/// How far the bystander's share may lie from what it is owed, thousandths (R12's 50).
 const TOLERANCE: u64 = 50;
 /// The weights of the empty children that mark the bystander and `sessions` in the kernel's trace
 /// for the post-check: no lease (10) or sub-agent (1) weighs either.
 const BYSTANDER_MARK: u32 = 2;
 const SESSIONS_MARK: u32 = 3;
-
-/// Mark `budget` in the kernel's trace: carve an empty child of weight `weight` and destroy it, so
-/// the trace's lift names `budget` as its parent.
-fn mark(budget: u32, weight: u32) {
-    let child = rd::create(budget, &rd::spec(0, 0, weight)).expect("a mark");
-    rd::destroy(child).expect("a mark's destruction");
-}
 
 fn verdict(met: bool) -> &'static str { if met { "met" } else { "missed" } }
 
@@ -284,7 +277,8 @@ pub extern "C" fn _start() -> ! {
                 "bystander",
                 (start, start + length),
                 TOLERANCE,
-                &[BYSTANDER_MARK, SESSIONS_MARK],
+                // The bystander counts on one thread; the sessions' leases run many.
+                &[(BYSTANDER_MARK, Some(1)), (SESSIONS_MARK, None)],
             );
             b.note(format_args!(
                 "the bystander's count under both slots' leases: {} of 1000 of the window ({} µs), gross: its useful work; its share of the CPU charged under users is the post-check's",

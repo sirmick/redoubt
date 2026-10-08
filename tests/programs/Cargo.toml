@@ -86,6 +86,7 @@ bin = [
     { name = "rng-test", test = false },
     { name = "scan-bounds", test = false },
     { name = "sched-budget-churn", test = false },
+    { name = "sched-budget-churn-shell", test = false },
     { name = "sched-carve-inflation", test = false },
     { name = "sched-carve-return", test = false },
     { name = "sched-cluster", test = false },

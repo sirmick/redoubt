@@ -5,8 +5,6 @@ debug_assertions = true
 icount = "shift=3,sleep=off"
 programs = ["budget-deadline"]
 timeout_secs = 120
-# The 1 ms lateness bound is a one-hart target; SMP2 restates it across harts.
-keep_smp = true
 expect = [
     '^\[deadline\] ok: the running spinner.s budget was destroyed at its deadline, killed notices blaming nobody$',
     '^\[deadline\] lateness ok \(',

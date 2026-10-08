@@ -1,14 +1,18 @@
-description = "A deadline's whole destruction is billed to the dying budget's parent (R10, R12): a creator flooding its own budget with empty weight-0 deadline budgets pays for them, and an equal-weight victim keeps half (virtual time)"
+description = "A deadline's whole destruction is billed to the dying budget's parent (R10, R12): a creator flooding its own budget with empty weight-0 deadline budgets pays for them, and an equal-weight victim keeps half by its count of the window, at one hart; deadline-flood-billed-traced judges it across harts (virtual time)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 icount = "shift=3,sleep=off"
 programs = ["deadline-flood-billed"]
-# A release build: it runs no audit, so the program judges the victim's share itself, net as it is
+# A release build: it runs no audit, so the victim's count of the window is net as it is
 # (kernel/scheduling.md, "Responsiveness").
 timeout_secs = 600
+# One hart: the release build has no trace, so the victim's share is its count of the window, and
+# at several harts under icount a count is the machine's instructions, not a hart's time. Across
+# harts, deadline-flood-billed-traced judges it from the kernel's charges.
+keep_smp = true
 expect = [
-    '^\[deadline-flood\] ok: 16 deadlines a round',
-    '^\[deadline-flood\] ok: 64 deadlines a round',
+    '^\[deadline-flood\] 16 deadlines a round: the creator got \d+ of 1000, the victim (4[5-9]\d|[5-9]\d\d|1000)$',
+    '^\[deadline-flood\] 64 deadlines a round: the creator got \d+ of 1000, the victim (4[5-9]\d|[5-9]\d\d|1000)$',
     '^\[deadline-flood\] ok: the creator',
     '^DEADLINE-FLOOD-BILLED TEST PASSED$',
 ]

@@ -211,6 +211,9 @@ library's parked calls ([serving](../servers/serving.md#parked-calls)), `console
 hart halts rather than spins (`bench:smp-lock-wait`), and a destruction's
 shootdown is attacked (`bench:smp-boot`, `bench:smp-evict`). One process's threads run on
 several harts at once, and every unmap, lend and return shoots the process down on the others
-(`smp-shootdown`, `smp-fence`). For named contexts: a login names its context, `ssh alice.work@box`, the
+(`smp-shootdown`, `smp-fence`). R12 holds across harts: each budget gets its water-filling share
+of the harts, judged from the kernel's charges by the oracle and by the model at 1, 2 and 4 harts
+([R12](../kernel/scheduling.md#r12-scheduling)), and the latency targets are gated at 2 harts and
+recorded at 4 ([responsiveness](../kernel/scheduling.md#responsiveness)). For named contexts: a login names its context, `ssh alice.work@box`, the
 steward holds one session per context at a time, and every refusal before a session reads the same
 ([sessions](../userland/sessions.md#contexts)).
