@@ -17,7 +17,7 @@ defmodule Redoubt.Term.Frame do
 
   import Bitwise
 
-  alias Redoubt.Term.{Text, Width}
+  alias Redoubt.Term.{Buffer, Text, Width}
 
   @csi "\e["
 
@@ -35,7 +35,7 @@ defmodule Redoubt.Term.Frame do
     start = if clear, do: [@csi, "0m", @csi, "2J"], else: [@csi, "0m"]
 
     {out, _cursor, _style} =
-      Enum.reduce(cells, {[start], nil, plain()}, fn cell, {out, cursor, style} ->
+      Enum.reduce(cells, {[start], nil, Buffer.plain()}, fn cell, {out, cursor, style} ->
         at = {cell.y, cell.x}
 
         place =
@@ -53,8 +53,6 @@ defmodule Redoubt.Term.Frame do
 
     [out, @csi, "0m"]
   end
-
-  defp plain, do: {:reset, :reset, 0}
 
   # The whole style, from a reset: the attributes, then the colours.
   defp sgr({fg, bg, modifiers}) do

@@ -84,9 +84,16 @@ on_fake_kernel() {
     grep -qx '\[10, 20\]' <<<"$out" && grep -qx '30' <<<"$out" || { printf '%s\n' "$out"; return 1; }
 }
 
+# The shell on a pseudo-terminal: beamlet's binary, the shell's code path, and a screen taking the
+# terminal and giving it back (userland/otp/cli/tests/shell_pty.rs).
+terminal() {
+    (cd "$otp" && SHELL_PTY_ARGS="$(printf '%s\n' --root "$sandbox" "${path[@]}")" \
+        cargo test -q --release -p beamlet --test shell_pty -- --ignored)
+}
+
 set +e
 failed=()
-for stage in formatting native on_beamlet on_beam entry_point on_fake_kernel; do
+for stage in formatting native on_beamlet on_beam entry_point terminal on_fake_kernel; do
     echo "== $stage"
     if "$stage"; then echo "== $stage: ok"; else echo "== $stage: FAILED"; failed+=("$stage"); fi
 done

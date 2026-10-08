@@ -239,13 +239,14 @@ session's, so ending it can never touch the session.
 The interrupt key:
 - **Ctrl+C with a job in the foreground** destroys the budget of every native stage of that job.
   Elixir work, a line's evaluation or a screen program, is ended by killing its Erlang process
-  with an untrappable exit (`:kill`). The session and its VM survive, and the shell keeps the
-  bindings of every line before the interrupted one.
+  with an untrappable exit (`:kill`); a screen's process is sent the exit `:interrupt` first, so
+  its line tells the interrupt from a failure. The session and its VM survive, and the shell
+  keeps the bindings of every line before the interrupted one.
 - **Ctrl+C at an idle prompt** clears the line. There is no break menu and no job-control menu:
   both are OTP's `user_drv`, which the shell's driver replaces
   ([line editing](#line-editing-and-history)). A session ends only by `exit` or Ctrl+D.
 - **With a full-screen program in front**, Ctrl+C may be the program's key; the key the session
-  keeps for itself is [full-screen programs](#full-screen-programs)'.
+  keeps for itself is [a screen's](#widgets-focus-themes-and-a-native-programs-screen).
 - **Over SSH**, `sshd` turns the channel's `signal` request (INT) and `break` request into the same
   interrupt a 0x03 byte gives. It is a protocol message, not a Unix signal; nothing inside Redoubt
   has signals ([sshd](../servers/sshd.md)).
@@ -268,7 +269,11 @@ in a `Job`.
 
 ### The terminal library
 
-Status: built · partly tested: the host only, where it draws the line editor; its tests are the shell's own ExUnit suite (`test/redoubt/term_test.exs`, `test/redoubt/shell/driver_test.exs`), which `./test-shell` runs on beamlet and on the BEAM against a model of the terminal that takes only the encoder's sequences, and no bench case runs
+<details><summary>Status: built · partly tested: the host only, for the line editor and screens, and screens on beamlet alone (the BEAM has no screen buffer); its tests are the shell's own ExUnit suite (`test/redoubt/term_test.exs`, `test/redoubt/term/frame_test.exs`, `test/redoubt/term/keys_test.exs`, `test/redoubt/term/width_test.exs`, `test/redoubt/shell/driver_test.exs`, `test/redoubt/screen_test.exs`), judged on a model of the terminal that takes only the encoder's sequences, and a pseudo-terminal test of the real binary, both of which `./test-shell` runs and no bench case does · tested (1)</summary>
+
+- host:beamlet::pick_on_a_terminal_takes_the_screen_and_gives_it_back_with_the_choice
+
+</details>
 
 Nothing between the keyboard and the shell edits a line: `consoled` and `sshd` serve `/dev/cons`
 as a raw byte stream with no echo. So the shell owns the terminal, through one library,
@@ -288,32 +293,40 @@ and every [full-screen program](#full-screen-programs).
   erasing below it and drawing the line again, which needs nothing of the terminal but relative
   cursor movement, CR, LF, erasing below and bold; typing at the end of the line draws only what
   was typed. The terminal's size is read at the start and at each prompt: until a change of size
-  is delivered ([below](#screens-keys-and-the-consoles-size)), a window resized while a line is
-  edited is laid out afresh at the next prompt.
+  is delivered ([below](#paste-scrolling-a-plainer-terminal-and-the-consoles-size)), a window
+  resized while a line is edited is laid out afresh at the next prompt.
+- **Frames are the cell protocol** ([the cell protocol](#the-cell-protocol)): the screen buffer's
+  diff speaks it ([beamlet](beamlet.md#screen-natives)), and the encoder reads it through the one
+  decoder (`Redoubt.Term.Cells`) and draws it
+  ([`Redoubt.Term.Frame`](../../userland/shell/lib/redoubt/term/frame.ex)): each cell placed
+  absolutely unless the cursor is already there, its style set when it changes (the attributes,
+  and 16, 256 and 24-bit colour), on the alternate screen with the cursor hidden. Drawing is a
+  diff: only the cells that changed are sent. Box drawing, block elements and Braille patterns (a
+  2×4 dot grid per cell, the buffer's `plot`) are cells like any other.
+- **Keys for a screen:** a key decoder
+  ([`Redoubt.Term.Keys`](../../userland/shell/lib/redoubt/term/keys.ex)) for VT100, xterm and
+  Linux sequences, including modifier forms (`ESC [1;5C` is Ctrl+Right) and UTF-8. A lone ESC is
+  held for a short timeout (50 ms, the driver's) before it is the Esc key, so Alt+F (ESC then `f`)
+  is one key; the decoder itself reads no clock. At the prompt `edlin` decodes its own keys.
+- **Width:** a grapheme's columns are OTP's judgement, `:unicode_util.is_wide/1`, from which the
+  screen buffer's table is generated, so what the session measures is what it draws. The person's
+  terminal has a table of its own, which may disagree on a wide or ambiguous grapheme, so after one
+  the encoder places the cursor absolutely again, and a disagreement costs a cell's misplacement,
+  never the rest of the line.
 
-### Screens, keys and the console's size
+### Paste, scrolling, a plainer terminal and the console's size
 
 Status: planned · M2 (usable shell)
 
-What the line editor does not need, the library has for screens and the pager:
-- **Frames are the cell protocol** ([the cell protocol](#the-cell-protocol)): the screen buffer's
-  diff speaks it ([beamlet](beamlet.md#screen-natives)), and so does a native program with a
-  screen, and the encoder reads both through one decoder.
-- **Output:** cursor movement, erasing, scroll regions, the alternate screen, colour and
-  attributes, bracketed paste, and synchronized update so a redraw does not flicker. Drawing is a
-  diff: only the cells that changed are sent.
-- **Glyphs:** 24-bit colour, box drawing, block elements and Braille patterns (a 2×4 dot grid per
-  cell, for sparklines and graphs), with a 16-colour ASCII fallback a session can choose, for a
-  UART or a console font without them.
-- **Input:** a key decoder for VT100, xterm and Linux sequences, including modifier forms
-  (`ESC [1;5C` is Ctrl+Right), UTF-8, and bracketed paste as one event, so a paste can never
-  trigger completion. A lone ESC is held for a short timeout before it is the Esc key, so Alt+F
-  (ESC then `f`) is one key; a mouse report, if one is ever taken, is SGR only and decoded under
-  the same rules.
-- **Width:** grapheme and East Asian width, from one table the screen buffer uses too, so what
-  the session measures is what it draws. The person's terminal has a table of its own, which may
-  disagree on a wide or ambiguous grapheme, so after one the encoder places the cursor absolutely
-  again, and a disagreement costs a cell's misplacement, never the rest of the line.
+What the line editor and the screens built so far do not need:
+- **A native program's frames:** a native program with a screen sends `cells` frames, and the
+  encoder reads them through the same decoder as the buffer's.
+- **Output:** scroll regions, bracketed paste, and synchronized update so a redraw does not
+  flicker.
+- **Glyphs:** a 16-colour ASCII fallback a session can choose, for a UART or a console font
+  without box drawing, blocks or Braille.
+- **Input:** bracketed paste as one event, so a paste can never trigger completion; a mouse
+  report, if one is ever taken, is SGR only and decoded under the same rules.
 - **Size:** `Console.size/0` asks `/dev/cons` afresh on every call and returns `{cols, rows}` or
   `{:error, :unknown}`; layout then assumes 80 columns.
 - **Resize:** there is no callback. `Console.await_resize(pid)` makes a `resize` call the console
@@ -328,7 +341,12 @@ because a query on a UART that never answers costs a timeout at every login).
 
 ### Hostile text never drives the terminal
 
-Status: built · partly tested: the host only, and the paths that exist there: the printer, a line's own writes to the console, the prompt and the typed line; the screen buffer's and a native program's frames are not built, and the attack case is the shell's own ExUnit suite (`test/redoubt/shell/driver_test.exs`, `test/redoubt/term_test.exs`), judged by a model of the terminal that refuses any sequence but the encoder's own, which `./test-shell` runs on beamlet and on the BEAM and no bench case does
+<details><summary>Status: built · partly tested: the host only, and the paths that exist there: the printer, a line's own writes to the console, the prompt and the typed line, and a screen program's text through the screen buffer (on beamlet alone); a native program's frames are not built; the attack case is the shell's own ExUnit suite (`test/redoubt/shell/driver_test.exs`, `test/redoubt/term_test.exs`, `test/redoubt/screen_test.exs`), judged by a model of the terminal that refuses any sequence but the encoder's own, which `./test-shell` runs and no bench case does, and the buffer's own refusals · tested (2)</summary>
+
+- host:beamlet-screen::a_control_character_is_badarg_and_nothing_is_drawn
+- host:beamlet-screen::a_control_character_is_refused_and_nothing_of_the_call_is_written
+
+</details>
 
 Text the session draws, from a file's contents, a file name, a program's output or a model's reply,
 reaches `/dev/cons` only as visible characters: every control character in it (the ASCII and 8-bit
@@ -368,68 +386,85 @@ is refused, never repaired. One file of vectors holds the two decoders to the sa
 
 ### Full-screen programs
 
-Status: planned · M2 (usable shell)
+<details><summary>Status: built · partly tested: the host only, on beamlet alone (the BEAM has no screen buffer), with the three widgets `pick` uses; its tests are the shell's own ExUnit suite (`test/redoubt/screen_test.exs`, `test/redoubt/screen/layout_test.exs`), judged on a model of the terminal, and a pseudo-terminal test of the real binary, both of which `./test-shell` runs and no bench case does · tested (1)</summary>
+
+- host:beamlet::pick_on_a_terminal_takes_the_screen_and_gives_it_back_with_the_choice
+
+</details>
 
 ```mermaid
 flowchart LR
-    APP["screen program: an Erlang process<br/>init, update, view"] -.->|"widgets draw"| W["Redoubt.Screen: layout, widgets"]
-    W -.->|"put, fill, plot"| B["the screen buffer<br/>(beamlet natives)"]
-    B -.->|"diff: a cells frame"| E["Redoubt.Term's encoder"]
+    APP["screen program: an Erlang process<br/>init, update, view"] -->|"widgets draw"| W["Redoubt.Screen: layout, widgets"]
+    W -->|"put, fill, plot"| B["the screen buffer<br/>(beamlet natives)"]
+    B -->|"diff: a cells frame"| E["Redoubt.Term's encoder"]
     NP["a native program with a screen"] -.->|"cells frames on a pipe"| E
-    E -.->|"escape sequences"| C["/dev/cons"]
-    C -.->|"raw bytes"| K["the session's key decoder"]
-    K -.->|"key events"| APP
+    E -->|"escape sequences"| C["/dev/cons"]
+    C -->|"raw bytes"| K["the session's key decoder"]
+    K -->|"key events"| APP
     K -.->|"key events"| NP
 ```
-*Figure: how a full-screen program reaches the terminal. Every part is planned (dashed). Only the
-session's encoder writes to `/dev/cons`; everything else hands it cells.*
+*Figure: how a full-screen program reaches the terminal. Solid is built; a native program's
+screen is planned (dashed). Only the session's encoder writes to `/dev/cons`; everything else
+hands it cells.*
 
 A full-screen program (the pager, `help`'s pages, `top`, the editor, a `menuconfig`-style form, a
 QBasic-style menu bar and dialogs) is an Erlang process in the session's VM, not a program of its
 own. It draws into a **screen buffer**, a grid of cells beamlet holds natively
 ([beamlet](beamlet.md#screen-natives)), and everything above the buffer is Elixir:
-- **`Redoubt.Screen`**, a behaviour of three functions in the Elm style: `init`, `update` on a key
-  or a message, and `view`, which draws into the buffer. One Erlang process runs a screen: the
+- **`Redoubt.Screen`** ([`userland/shell/lib/redoubt/screen.ex`](../../userland/shell/lib/redoubt/screen.ex)),
+  a behaviour of three functions in the Elm style: `init`, `update` on a key or a message, and
+  `view`, which draws the whole screen into the buffer, blank each time; only what changed since
+  the last frame is sent. One Erlang process runs a screen, with the evaluator's heap limit: the
   shell's driver sends it the keys while it is in front, and it answers each with `update`,
-  `view` and the buffer's diff, a frame the driver draws. The shell supervises it, and the
-  interrupt ends it as it ends an evaluation.
+  `view` and the buffer's diff, a frame the driver reads through the one decoder and draws. Its
+  first event is `{:resize, cols, rows}`, with its size.
 - **Layout** is rectangles only: split into rows or columns by fixed size, percentage or what is
   left; centre; inset. A screen lays out in fixed rectangles.
-- **Widgets are functions, not processes:** each draws into a rectangle of the buffer from its
-  state, and a widget that takes keys answers a key with a new state. The set: a box with a title
-  and a shadow, a label, a status line, a menu bar with drop-downs, a list with scrolling and a
-  selection, a checklist and a radio list, buttons, a text input with a cursor, a completion
-  pop-up, a stack of modal dialogs (a message, yes or no, an input), a table, and a Braille canvas.
-- **Focus:** keys go to the top dialog of the stack, or to the screen when there is none; inside
-  either, Tab and Shift+Tab move along a focus ring. On a resize the stack is laid out again, top
-  to bottom, at the new size.
-- **A theme** is a map from roles to styles; QBasic's blue and `menuconfig`'s are two maps.
+- **Widgets are functions, not processes:** each draws into a rectangle of the buffer from what it
+  is given, every text made visible first. Built are the three `pick` uses: a box with a title and
+  a shadow, a list with a selection, and a status line.
 - **A screen's life.** A line starts a screen with `Redoubt.Screen.run(module, args)`, which
   returns when the screen ends, with the value its `update` ended it with. While it is in front,
-  the driver shows the alternate screen, sends it every key as `{:key, key, modifiers}` and every
-  change of size as `{:resize, cols, rows}`, and holds other processes' output until it ends;
-  then the driver restores the screen and the line as they were. The interrupt ends it with
-  `nil`.
-- **`pick(items)`** is the first screen, `menuconfig`'s chooser: a list in a box, arrows and
-  Enter to choose, Esc to leave. It returns the chosen item, or `nil`.
+  the driver shows the alternate screen with the cursor hidden, sends it every key as
+  `{:key, key, modifiers}`, and holds other processes' output, answering them at once so none
+  waits on the screen; then it shows the main screen again, as it was, and draws what it held.
+  The interrupt ends it with `nil`. One screen is in front at a time.
+- **`pick(items)`** is a screen, `menuconfig`'s chooser: a list in a box, the arrows,
+  Page Up and Down, Home and End to move, Enter to choose, Esc to leave. It returns the chosen
+  item, or `nil`.
 - **Small things skip it.** A spinner, a progress line or a single status line is drawn by
   `Redoubt.Term` directly.
 
-A **native program with a screen**, a package's own TUI, sends `cells` frames on its standard
-output, and the session draws them through the same decoder and encoder. It holds its pipes and
-its budget, no `/dev/cons`, and a cell cannot carry a control sequence, so a hijacked one can draw
-wrong cells, or crash and have its budget reclaimed, and nothing more.
-
 What a full-screen program cannot do:
 - **Draw a control sequence.** What a screen program draws reaches the terminal only through the
-  buffer's natives, which refuse a control character, and what a native one draws only as cells
+  buffer's natives, which refuse a control character, and through the one decoder, which refuses
+  a frame that is not exactly cells; the driver ends a screen whose frame it refuses
   ([hostile text](#hostile-text-never-drives-the-terminal)).
-- **Keep the interrupt from the session.** A full-screen program may take Ctrl+C as a key (the
-  editor copies with it), so the session keeps one other key for itself, never forwards it, and
-  ends the foreground screen or job on it, as Ctrl+C does at the prompt. The key is configurable
-  per principal.
+- **Keep the interrupt from the session.** Ctrl+C ends the screen in front, as it ends a line at
+  the prompt.
 
-**Open:** the default interrupt key for full-screen programs.
+### Widgets, focus, themes and a native program's screen
+
+Status: planned · M2 (usable shell)
+
+- **The rest of the widgets:** a menu bar with drop-downs, a checklist and a radio list, buttons,
+  a text input with a cursor, a completion pop-up, a stack of modal dialogs (a message, yes or no,
+  an input), a table, and a Braille canvas.
+- **Focus:** keys go to the top dialog of the stack, or to the screen when there is none; inside
+  either, Tab and Shift+Tab move along a focus ring. On a resize the stack is laid out again, top
+  to bottom, at the new size, and the screen gets `{:resize, cols, rows}`.
+- **A theme** is a map from roles to styles; QBasic's blue and `menuconfig`'s are two maps.
+- **A native program with a screen**, a package's own TUI, sends `cells` frames on its standard
+  output, and the session draws them through the same decoder and encoder. It holds its pipes and
+  its budget, no `/dev/cons`, and a cell cannot carry a control sequence, so a hijacked one can
+  draw wrong cells, or crash and have its budget reclaimed, and nothing more.
+- **The session's own key.** A full-screen program may take Ctrl+C as a key (the editor copies
+  with it), so the session keeps one other key for itself, never forwards it, and ends the
+  foreground screen or job on it, as Ctrl+C does at the prompt. The key is configurable per
+  principal. Until a screen takes Ctrl+C, Ctrl+C is that key.
+
+**Open:** the default interrupt key for full-screen programs; the candidate is Ctrl+\ (0x1C),
+which neither `edlin` nor the common full-screen programs take.
 
 ### Line editing and history
 

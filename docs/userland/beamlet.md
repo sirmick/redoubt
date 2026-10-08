@@ -329,7 +329,8 @@ and restores it on every exit: a result, an exception, a halt, a signal, a panic
 on, so a line written past the shell's encoder still lands where a line does on a host; the
 encoder ends its lines with CR LF itself, as it must on Redoubt. `console_size` is the
 terminal's size, read afresh at each call. A change of size is not delivered; the shell reads the
-size at each prompt ([the shell](shell.md#screens-keys-and-the-consoles-size)).
+size at each prompt
+([the shell](shell.md#paste-scrolling-a-plainer-terminal-and-the-consoles-size)).
 Console input goes to one Erlang process, the shell's driver, which takes it with
 `beamlet:console_subscribe/0`; a second subscription is refused, so no code run at the prompt
 can take the keyboard, or the interrupt key with it, from the driver.
@@ -763,7 +764,7 @@ modifiers the cell protocol's bits; a `Rect` is `{X, Y, W, H}`.
   grapheme draws them in one cell, misplacing what follows, and nothing more.
 - **The diff speaks the cell protocol**, so a screen drawn in the session and a native program's
   frames reach the encoder by one decoder
-  ([the shell](shell.md#screens-keys-and-the-consoles-size)).
+  ([the shell](shell.md#the-terminal-library)).
 
 ### Asynchronous underneath, synchronous on top
 
