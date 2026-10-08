@@ -160,7 +160,7 @@ Files come in through `cat` and go out through `w`; everything between takes lin
 | --- | --- |
 | `pwd()`, `cd(dir)` | the current directory; there is no kernel working directory |
 | `ls(path)`, `ls_r(path)`, `find(path, pattern)`, `glob(pattern)`, `stat(path)` | list, walk, find by name, expand a pattern, stat |
-| `cp(src, dst)`, `mv(src, dst)` | copy and rename; within one volume the server renames, across volumes it is a copy and `mv` is not atomic ([files](files.md)) |
+| `cp(src, dst)`, `mv(src, dst)` | copy and rename; within one volume the server copies or renames, across volumes the copy passes through the session and `mv` is not atomic ([files](files.md)) |
 | `rm(path)`, `rm_rf(path)`, `mkdir(path)`, `mkdir_p(path)`, `touch(path)` | remove, make directories and files |
 | `cat(paths)` | the files' lines, read as they are consumed |
 | `grep`, `grep_v`, `sub`, `cut`, `sort`, `uniq`, `uniq_c`, `head`, `tail`, `count` | lines in, lines or a number out |
@@ -210,17 +210,21 @@ The **pager** ([`Redoubt.Screen.Pager`](../../userland/shell/lib/redoubt/screen/
 
 ### Session commands
 
-Status: planned · M2 (usable shell)
+Status: built · partly tested: runs on the host only, where a VM is no session; its tests are the shell's own ExUnit suite (`test/redoubt/shell/session_test.exs`, `test/redoubt/shell/driver_test.exs`), which `./test-shell` runs and no bench case does, and beamlet's natives under them are host-tested ([beamlet](beamlet.md#natives))
 
 | Command | What it does |
 | --- | --- |
-| `ns()`, `bind(prefix, conn)` | show the namespace; bind a held connection at a prefix |
-| `whoami()`, `labels()` | the principal and the session's label set |
-| `clear()` | clear the screen |
-| `follow(path)` | the lines added to a file, as they come, until Ctrl+C |
-| `now()`, `today()`, `ago(time)` | wall-clock time, which a session has from M6 (persist, install, share) |
+| `ns()`, `ns_lookup(path)`, `bind(prefix, conn)` | show the namespace; the connection a path resolves to; bind a held connection at a prefix ([binds](files.md#copying-moving-removing-and-binds)) |
+| `whoami()` | the principal, with a named context after a dot (`alice.work`), as the steward told the session ([sessions](sessions.md#what-a-session-is-told)); `nil` for a VM that is no session |
+| `labels()` | the session's label set, the kernel's, by the names the steward gave |
+| `clear()` | clear the screen; the next prompt is drawn at its top |
 
-**Open:** none.
+Not built:
+- **`follow(path)`**, the lines added to a file as they come until the interrupt, waits for
+  [interrupting a line](#interrupting-and-killing-jobs): until then the interrupt ends no line
+  being evaluated, so nothing would end it.
+- **`now()`, `today()`, `ago(time)`**, wall-clock time, which a session has from
+  M6 (persist, install, share).
 
 ### Native programs and pipes
 

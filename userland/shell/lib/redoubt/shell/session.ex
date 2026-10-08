@@ -1,12 +1,16 @@
 defmodule Redoubt.Shell.Session do
   @moduledoc """
   The session's own commands, imported at the prompt: its namespace (docs/userland/sessions.md,
-  "Namespaces"), printing without the pager, and running a native program (docs/userland/shell.md,
-  "The shell in a session").
-  Each is a thin layer over `Redoubt.Namespace` and `Redoubt.Process`, and adds no authority.
+  "Namespaces"), who it is and its labels ("What a session is told"), printing without the pager,
+  and running a native program (docs/userland/shell.md, "The shell in a session").
+  Each is a thin layer over `Redoubt.Namespace`, `Redoubt.Process` and beamlet's natives, and adds
+  no authority.
   """
 
   use Redoubt.Commandlet, area: "Session"
+
+  # beamlet's natives (docs/userland/beamlet.md, "Natives"): no module, so nothing to check at compile time.
+  @compile {:no_warn_undefined, :redoubt}
 
   alias Redoubt.Util.Lines
 
@@ -54,6 +58,34 @@ defmodule Redoubt.Shell.Session do
     Redoubt.Namespace.bind(prefix, connection)
   end
 
+  @summary "Who this session is"
+  @help """
+  The principal this session is logged in as, with its context's name after a dot when it is a
+  named one (`alice.work`), as the steward told the session when it started it. nil for a VM that
+  is no session, as on a host. It is what the session was told, not what it can reach: that is
+  its namespace.
+  """
+  @examples [{"whoami()", "the principal, as \"alice\""}]
+  defcommand whoami() do
+    case identity() do
+      %{principal: principal, context: context} when is_binary(context) -> principal <> "." <> context
+      %{principal: principal} -> principal
+      nil -> nil
+    end
+  end
+
+  @summary "The session's labels"
+  @help """
+  The labels this session's budget carries, by name: none for a plain session, the vault's for a
+  vault session. The set is the kernel's, fixed when the session's budget was made; the names are
+  the steward's, and a label it named no name for shows as its number.
+  """
+  @examples [{"labels()", "[\"alice-secrets\"] in a vault session"}]
+  defcommand labels() do
+    names = Map.new(Map.get(identity() || %{}, :labels, []), fn {name, id} -> {id, name} end)
+    Enum.map(kernel_labels(), &Map.get(names, &1, &1))
+  end
+
   @summary "Print a value without the pager"
   @help """
   Prints value as the prompt would, but lines however many there are, a screenful or not,
@@ -80,5 +112,23 @@ defmodule Redoubt.Shell.Session do
       {:ok, ending, usage} -> {ending, usage}
       {:error, _} = error -> error
     end
+  end
+
+  # What the steward told the session of itself (`redoubt:identity/0`), or nil for a VM that is
+  # no session, or has no beamlet natives.
+  defp identity do
+    case :redoubt.identity() do
+      {:ok, identity} -> identity
+      {:error, _} -> nil
+    end
+  rescue
+    UndefinedFunctionError -> nil
+  end
+
+  # The session's label set, as the kernel stamped it.
+  defp kernel_labels do
+    :redoubt.labels()
+  rescue
+    UndefinedFunctionError -> []
   end
 end

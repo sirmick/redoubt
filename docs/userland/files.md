@@ -37,9 +37,9 @@ bind("/h", home)
 File.ls!("/h/projects")                     # the same files as /home/alice/projects
 ```
 
-Redoubt-only operations are in `Redoubt.File`: `copy_file` (a copy the server does), `rename`
-(the file server's own, between two directories of one volume), and `set_attr`/`get_attr` for
-per-file metadata.
+Redoubt-only operations are in `Redoubt.File`: `copy_file`, a copy the file server makes itself.
+`File.rename` within one volume is already the file server's own rename, between two directories
+of it; per-file metadata through the server's `set_attr` and `get_attr` is planned.
 
 ## What it can and cannot do
 
@@ -143,14 +143,21 @@ Residuals, each a departure from the table, until the file server serves what it
 
 ### Copying, moving, removing and binds
 
-Status: planned · M2 (usable shell)
+<details><summary>Status: built · partly tested: beamlet's server copy and binds are host-tested on the fake kernel, the shell's commands run on the host only, and no case runs them in a session yet, since a session's home is not yet writable · tested (4)</summary>
+
+- host:beamlet-redoubt::a_copy_within_one_volume_is_the_servers
+- host:beamlet-redoubt::a_bind_is_the_files_namespace_and_one_connection
+- host:beamlet-redoubt::binds_past_the_cap_are_refused_and_a_bound_prefix_is_still_replaced
+- host:beamlet-redoubt::a_rename_the_volume_refuses_is_eacces
+
+</details>
 
 Two paths on different prefixes are usually on different servers, and one server cannot act on
 another's files. So what an operation costs depends on where its two ends are:
 
 | Operation | Within one volume | Across volumes |
 | --- | --- | --- |
-| copy (`File.cp`, `cp_r`, `cp`) | the file server's `copy_file`: no bytes cross into the VM | a read and write loop in the VM |
+| copy (`cp`, `Redoubt.File.copy_file`) | the file server's `copy_file`: no bytes cross into the VM; `cp` over a file that is there copies through the VM | a read and write loop in the VM (`File.cp` and `File.cp_r` always loop) |
 | rename or move (`File.rename`, `mv`) | the file server's `rename`, atomic, within one directory or between two | `File.rename` returns `{:error, :exdev}`; a move is the caller's copy and remove (`mv` does both), not atomic |
 | remove (`rm`, `rm_rf`) | a 9P `remove`, recursively for `rm_rf` | |
 | make a directory (`mkdir`, `mkdir_p`) | a 9P `create` with the directory bit | |
@@ -160,11 +167,19 @@ another's files. So what an operation costs depends on where its two ends are:
 authority, and no other process sees it. It replaces what Unix does with symbolic links, hard
 links and bind mounts: giving something a second name. A bind at a prefix already bound replaces
 what was there, and the table holds at most 64 entries, so a bind of a new prefix past them is
-`{:error, :system_limit}` ([beamlet](beamlet.md#natives)). A child gets only what its launcher writes
-into its startup block, so a session's binds reach a child only if the session passes them on
-([native programs](native.md)).
-
-**Open:** none.
+`{:error, :system_limit}` ([beamlet](beamlet.md#natives)).
+- **Replacing is within the session's own authority.** A bind over `/boot` or `/dev/cons` changes
+  what the session's own `exec` reads its program from and mints its child's console at, as any
+  path does: a session can already run any code it writes, so a program read from elsewhere gains
+  nothing ([native programs](native.md#launching-from-a-session)). `/boot` in a session is the boot
+  bundle only while the session leaves it so.
+- **A child gets only what its launcher writes** into its startup block: the shell's `exec` writes
+  `/dev/cons` alone, so a session's binds reach a child only if the session passes them on
+  ([native programs](native.md)).
+- **One connection, one badge.** A connection bound at two prefixes is one connection, with one
+  badge and one label set, so every server's check is the same through either name. A handle the
+  VM holds that is no connection yet is attached once, over 9P; a server that does not speak it,
+  or a budget, is `not_a_connection`.
 
 ### Labels on files
 

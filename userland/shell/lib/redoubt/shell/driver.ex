@@ -106,6 +106,29 @@ defmodule Redoubt.Shell.Driver do
     end
   end
 
+  @doc """
+  The driver under the group leader, if the group leader is the shell's own console (OTP's
+  `group`, which has completion among its options); `nil` for any other output, a captured one or
+  a file, which has no driver to ask.
+  """
+  @spec of_group() :: pid() | nil
+  def of_group do
+    group = Process.group_leader()
+
+    with opts when is_list(opts) <- :io.getopts(group),
+         true <- Keyword.has_key?(opts, :expand_fun) do
+      send(group, {:driver_id, self()})
+
+      receive do
+        {^group, :driver_id, driver} -> driver
+      after
+        1000 -> nil
+      end
+    else
+      _not_a_terminal -> nil
+    end
+  end
+
   defp loop(%{group: group} = state) do
     receive do
       {:beamlet_console, input} when state.screen != nil ->
@@ -177,6 +200,12 @@ defmodule Redoubt.Shell.Driver do
 
       {^group, request} ->
         loop(draw(state, request))
+
+      # clear(): the screen cleared and the cursor home, or, under a screen, once it ends.
+      {:redoubt_clear, pid, ref} ->
+        state = draw(state, :clear)
+        send(pid, {:redoubt_cleared, ref})
+        loop(state)
 
       # The fixed line for a log event the logger's relay would not write through group.
       {:redoubt_shell_log, line} ->
