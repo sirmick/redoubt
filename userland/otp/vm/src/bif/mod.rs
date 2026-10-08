@@ -33,6 +33,9 @@ mod unicode;
 mod zlib;
 
 pub use proc::send;
+/// What a deflater holds behind `miniz_oxide`'s own boxes, which a stream counts as its holder's
+/// memory; a test measures it against the crate.
+pub use zlib::DEFLATE_BOXED;
 
 /// A resource a native holds while it works: the `Arc` keeps it alive, so the caller's heap is
 /// free for building the result.

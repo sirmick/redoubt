@@ -1,7 +1,8 @@
 //! A resource that declares its size counts as its holder's own memory, toward the process's own
-//! `max_heap_size` (docs/userland/beamlet.md, "Screen natives": a buffer counts toward its
-//! owner's heap limit). The test's natives make such resources; the fixture's source is
-//! `src/sized.erl`.
+//! `max_heap_size` (docs/userland/beamlet.md, "Limits inside one VM"). The test's natives make
+//! such resources, and so do the VM's own: an atomics or counters array declares its cells, and a
+//! zlib stream its queues and its codec's state. Past the limit, each ends its holder as heap
+//! growth does. The fixture's source is `src/sized.erl`.
 
 use beamlet_vm::bif::{Ctx, NativeSpec};
 use beamlet_vm::platform::{Lookup, Platform, PlatformError};
@@ -75,4 +76,39 @@ fn sized_resources_past_a_processs_own_heap_limit_end_it() {
 #[test]
 fn a_resource_resized_past_the_limit_ends_its_holder() {
     assert_eq!(run("grown"), "killed");
+}
+
+#[test]
+fn an_atomics_array_within_the_limit_is_held() {
+    assert_eq!(run("atomics_held"), "normal");
+}
+
+#[test]
+fn an_atomics_array_past_a_processs_own_heap_limit_ends_it() {
+    assert_eq!(run("atomics_past"), "killed");
+}
+
+#[test]
+fn counters_arrays_past_the_limit_together_end_their_holder() {
+    assert_eq!(run("counters_past"), "killed");
+}
+
+#[test]
+fn a_zlib_stream_within_the_limit_is_held() {
+    assert_eq!(run("zlib_held"), "normal");
+}
+
+#[test]
+fn a_zlib_streams_queue_past_the_limit_ends_its_holder() {
+    assert_eq!(run("zlib_queued_past"), "killed");
+}
+
+#[test]
+fn zlib_codecs_past_the_limit_together_end_their_holder() {
+    assert_eq!(run("zlib_codecs_past"), "killed");
+}
+
+#[test]
+fn a_zlib_streams_stash_past_the_limit_ends_its_holder() {
+    assert_eq!(run("zlib_stash_past"), "killed");
 }

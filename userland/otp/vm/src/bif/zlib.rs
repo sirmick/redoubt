@@ -4,6 +4,10 @@
 //! input and asks for output a chunk at a time, which bounds what one call may produce (and so
 //! what hostile input can make `safeInflate` allocate).
 //!
+//! A stream's queues, its codec's state and its stash count as the memory of each process that
+//! holds it, toward its heap limit (docs/userland/beamlet.md, "Limits inside one VM"): every
+//! native that changes them declares the stream's new size.
+//!
 //! Not provided: preset dictionaries (`deflateSetDictionary`, `inflateSetDictionary`, raising
 //! `not_supported`) and compression strategies other than the default (accepted, ignored).
 
@@ -122,6 +126,33 @@ fn stream(c: &mut Ctx, t: &Term) -> Result<StreamRef, Exception> {
     Ok(s)
 }
 
+/// What a deflater holds behind its own boxes, beyond `size_of::<CompressorOxide>()`: in
+/// `miniz_oxide` 0.9.1 (vendor/miniz_oxide), its dictionary (`LZ_DICT_FULL_SIZE`, 32,768 + 258
+/// bytes), its two hash chains (`LZ_DICT_SIZE` u16s each), its Huffman tables (3 tables of 288
+/// symbols: two u16s and a u8 each) and its output buffer (`OUT_BUF_SIZE`, 64 KiB x 13 / 10).
+/// An inflater holds its dictionary inline. The crate's constants are its own, so the sum is
+/// written out; `tests/zlib_codec.rs` measures it, so a new `miniz_oxide` fails that test.
+pub const DEFLATE_BOXED: usize =
+    (32_768 + 258) + 2 * (32_768 * 2) + 3 * 288 * (2 + 2 + 1) + (64 * 1024 * 13) / 10;
+
+/// What stream `s` holds, in bytes: its queued input and output, its codec's state, and the term
+/// stashed in it.
+fn held(s: &Stream) -> usize {
+    let codec = match &*s.codec.lock() {
+        Codec::None => 0,
+        Codec::Deflate(_) => core::mem::size_of::<CompressorOxide>() + DEFLATE_BOXED,
+        Codec::Inflate(i) => core::mem::size_of::<InflateState>() + i.frame.len(),
+    };
+    let stash = s.stash.lock().as_ref().map_or(0, |t| t.words() as usize * 8);
+    s.input.lock().len() + s.output.lock().len() + codec + stash
+}
+
+/// Declares what stream `s`, the resource `t`, now holds, as its holders' memory.
+fn counted(c: &mut Ctx, t: Term, s: &Stream) {
+    let bytes = held(s);
+    c.resize_resource(t, bytes);
+}
+
 fn int(c: &Ctx, t: &Term) -> Result<i64, Exception> {
     match t {
         Term::Int(n) => Ok(*n),
@@ -175,8 +206,7 @@ pub fn open(c: &mut Ctx, _a: &[Term]) -> R {
         codec: Lock::new(Codec::None),
         stash: Lock::new(None),
     };
-    let id = c.sys().make_ref().0;
-    Ok(c.heap_mut().resource(Resource::new(id, Box::new(s))))
+    Ok(c.new_resource(s))
 }
 
 pub fn close(c: &mut Ctx, a: &[Term]) -> R {
@@ -184,6 +214,7 @@ pub fn close(c: &mut Ctx, a: &[Term]) -> R {
     *s.codec.lock() = Codec::None;
     s.input.lock().clear();
     s.output.lock().clear();
+    counted(c, a[0], &s);
     Ok(c.ok())
 }
 
@@ -220,6 +251,7 @@ pub fn deflate_init(c: &mut Ctx, a: &[Term]) -> R {
         used: false,
         finished: false,
     });
+    counted(c, a[0], &s);
     Ok(c.ok())
 }
 
@@ -243,6 +275,7 @@ pub fn inflate_init(c: &mut Ctx, a: &[Term]) -> R {
         return Err(raise(c, "already_initialized"));
     }
     *s.codec.lock() = Codec::Inflate(new_inflater(wrap, after_end));
+    counted(c, a[0], &s);
     Ok(c.ok())
 }
 
@@ -275,6 +308,8 @@ pub fn enqueue(c: &mut Ctx, a: &[Term]) -> R {
         return Err(c.system_limit());
     }
     input.extend(data);
+    drop(input);
+    counted(c, a[0], &s);
     Ok(c.ok())
 }
 
@@ -307,6 +342,12 @@ fn chunk(c: &mut Ctx, s: &Stream, chunk: usize) -> Term {
 /// 4 (finish), applied once the queued input is used up.
 pub fn deflate(c: &mut Ctx, a: &[Term]) -> R {
     let s = stream(c, &a[0])?;
+    let r = deflate_on(c, &s, a);
+    counted(c, a[0], &s);
+    r
+}
+
+fn deflate_on(c: &mut Ctx, s: &Stream, a: &[Term]) -> R {
     let (in_chunk, out_chunk, flush) = (int(c, &a[1])?, int(c, &a[2])?, int(c, &a[3])?);
     let (in_chunk, out_chunk) = (in_chunk.max(1) as usize, out_chunk.max(1) as usize);
     let flush = match flush {
@@ -325,7 +366,7 @@ pub fn deflate(c: &mut Ctx, a: &[Term]) -> R {
         out.extend_from_slice(&GZIP_HEADER);
         d.header_done = true;
     }
-    let input = take_input(&s, in_chunk);
+    let input = take_input(s, in_chunk);
     if !input.is_empty() {
         d.used = true;
         if d.gzip {
@@ -364,12 +405,18 @@ pub fn deflate(c: &mut Ctx, a: &[Term]) -> R {
     }
     drop(codec);
     s.output.lock().extend(out);
-    Ok(chunk(c, &s, out_chunk))
+    Ok(chunk(c, s, out_chunk))
 }
 
 /// `inflate_nif(Z, InputChunk, OutputChunk, Flush)`.
 pub fn inflate_nif(c: &mut Ctx, a: &[Term]) -> R {
     let s = stream(c, &a[0])?;
+    let r = inflate_on(c, &s, a);
+    counted(c, a[0], &s);
+    r
+}
+
+fn inflate_on(c: &mut Ctx, s: &Stream, a: &[Term]) -> R {
     let (in_chunk, out_chunk) = (int(c, &a[1])?.max(1) as usize, int(c, &a[2])?.max(1) as usize);
     let mut codec = s.codec.lock();
     let Codec::Inflate(inf) = &mut *codec else {
@@ -461,7 +508,7 @@ pub fn inflate_nif(c: &mut Ctx, a: &[Term]) -> R {
     }
     drop(codec);
     s.output.lock().extend(out);
-    Ok(chunk(c, &s, out_chunk))
+    Ok(chunk(c, s, out_chunk))
 }
 
 /// `deflateReset_nif` and `inflateReset_nif`: start a new stream with the same settings.
@@ -479,6 +526,7 @@ pub fn reset(c: &mut Ctx, a: &[Term]) -> R {
     drop(codec);
     s.input.lock().clear();
     s.output.lock().clear();
+    counted(c, a[0], &s);
     Ok(c.ok())
 }
 
@@ -492,6 +540,7 @@ pub fn deflate_end(c: &mut Ctx, a: &[Term]) -> R {
     *s.codec.lock() = Codec::None;
     s.input.lock().clear();
     s.output.lock().clear();
+    counted(c, a[0], &s);
     if bad {
         return Err(raise(c, "data_error"));
     }
@@ -508,6 +557,7 @@ pub fn inflate_end(c: &mut Ctx, a: &[Term]) -> R {
     *s.codec.lock() = Codec::None;
     s.input.lock().clear();
     s.output.lock().clear();
+    counted(c, a[0], &s);
     if bad {
         return Err(raise(c, "data_error"));
     }
@@ -549,6 +599,7 @@ pub fn set_stash(c: &mut Ctx, a: &[Term]) -> R {
         return Err(raise(c, "error"));
     }
     *s.stash.lock() = Some(c.own(a[1]));
+    counted(c, a[0], &s);
     Ok(c.ok())
 }
 
@@ -557,5 +608,6 @@ pub fn clear_stash(c: &mut Ctx, a: &[Term]) -> R {
     if s.stash.lock().take().is_none() {
         return Err(raise(c, "error"));
     }
+    counted(c, a[0], &s);
     Ok(c.ok())
 }
