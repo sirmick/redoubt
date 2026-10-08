@@ -75,13 +75,32 @@ entry_point() {
 
 # beamlet's Redoubt platform (userland/otp/redoubt): built for the machine, without the fake
 # kernel, as it ships; its tests; then the shell on it, as ./shell --fake runs it, its console
-# reached through the client library and the fake kernel.
+# reached through the client library and the fake kernel. The tests run only when what they run
+# changed since they last passed here: the binaries cargo built, byte for byte, and the VM's
+# fixtures they load; an Elixir-only change rebuilds none of it.
 on_fake_kernel() {
-    local out
+    local out key stamp="$otp/target/test-shell-fake-kernel"
     (cd "$otp" && cargo build -q -p beamlet-redoubt --target riscv64imac-unknown-none-elf) || return 1
-    (cd "$otp" && cargo test -q -p beamlet-redoubt --features fake) || return 1
+    (cd "$otp" && cargo test -q -p beamlet-redoubt --features fake --no-run) || return 1
+    key="$(fake_kernel_inputs)" || return 1
+    if [ "$key" = "$(cat "$stamp" 2>/dev/null)" ]; then
+        echo "beamlet-redoubt's tests: skipped, nothing they run changed since they last passed"
+    else
+        (cd "$otp" && cargo test -q -p beamlet-redoubt --features fake) || return 1
+        printf '%s\n' "$key" >"$stamp"
+    fi
     out="$(printf 'x = Enum.map([1, 2], &(&1 * 10))\nEnum.sum(x)\n' | "$fake" "${path[@]}" Elixir.Redoubt.Shell 2>&1 | tr -d '\r')"
     grep -qx '\[10, 20\]' <<<"$out" && grep -qx '30' <<<"$out" || { printf '%s\n' "$out"; return 1; }
+}
+
+# One hash of what on_fake_kernel's tests run: every executable of both builds (cargo, asked
+# again, builds nothing and names them) and the fixtures limits.rs loads.
+fake_kernel_inputs() {
+    (cd "$otp" && {
+        cargo build -q -p beamlet-redoubt --target riscv64imac-unknown-none-elf --message-format=json
+        cargo test -q -p beamlet-redoubt --features fake --no-run --message-format=json
+    } 2>/dev/null | grep -o '"executable":"[^"]*"' | sed 's/^"executable":"//; s/"$//' | sort |
+        xargs sha256sum && sha256sum vm/tests/fixtures/*) | sha256sum
 }
 
 # The shell on a pseudo-terminal: beamlet's binary, the shell's code path, and a screen taking the
