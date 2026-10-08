@@ -227,6 +227,7 @@ fn main() -> Result<()> {
         run: run.dir.clone(),
         verbose: args.verbose,
         staged: Default::default(),
+        built: Default::default(),
     };
 
     if args.run {
@@ -891,6 +892,7 @@ fn prebuild(workspace: &Path, verbose: bool, dir: &Path, cases: &[&Case], arch: 
             run: staging.clone(),
             verbose,
             staged: Default::default(),
+            built: Default::default(),
         };
         let mut entries = Vec::new();
         let mut failed = 0;

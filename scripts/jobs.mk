@@ -22,6 +22,8 @@
 #   quiet-rv64   quiet-rv32    the host-clock cases of that width (run on the quiet core set)
 #                              (neither takes a case with `whole_run = false`: by its own target only)
 #   all-rv64     all-rv32      cases + quiet
+#   set CASES="<case>..."      those cases on both widths, at once, each in its own class (as
+#                              rv64/<case> and rv32/<case>); add -k to run every one past a failure
 #   list / list-classes        the case names; every class's members
 #
 # Classes (docs/testbench.md "On a shared host"):
@@ -62,7 +64,7 @@ prebuilt := target/prebuilt
 # cores for a boot case: its largest smp value (default 1)
 smp = $(or $(lastword $(sort $(shell grep -oE '[0-9]+' <<< "$$(grep -E '^smp *=' tests/$(1).toml 2>/dev/null)"))),1)
 
-.PHONY: list list-classes docs prebuilt build-rv64 build-rv32 cases-rv64 cases-rv32 quiet-rv64 quiet-rv32 all-rv64 all-rv32 \
+.PHONY: list list-classes docs prebuilt build-rv64 build-rv32 cases-rv64 cases-rv32 quiet-rv64 quiet-rv32 all-rv64 all-rv32 set \
 	$(addprefix rv64/,$(cases)) $(addprefix rv32/,$(cases))
 
 list:
@@ -112,3 +114,5 @@ quiet-rv64: $(addprefix rv64/,$(filter-out $(byname),$(quiet)))
 quiet-rv32: $(addprefix rv32/,$(filter-out $(byname),$(quiet)))
 all-rv64: cases-rv64 quiet-rv64
 all-rv32: cases-rv32 quiet-rv32
+set: $(addprefix rv64/,$(CASES)) $(addprefix rv32/,$(CASES))
+	@echo "set: $(words $(CASES)) cases"

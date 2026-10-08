@@ -158,6 +158,12 @@ tools/difftest                # differential tests against the real BEAM
 tools/elixir-tests            # Elixir's own suite on beamlet
 ```
 
+`tools/difftest` runs its tests in parallel, one per core it may use: under `scripts/q run --cores
+N`, N. The BEAM's results are cached per module in `build/difftest/<suite>/cache`, each from a
+BEAM of its own, so a run after a beamlet change runs only beamlet, and a test edited is the only
+one compiled again, its suite's the only results the BEAM gives again; `DIFFTEST_FRESH=1` starts
+from nothing.
+
 ## The shell
 
 Redoubt's shell, `Redoubt.Shell` in `userland/shell`, is a read-eval-print loop over Elixir of
@@ -171,10 +177,12 @@ OTP and Elixir as above; `./shell` puts them on the path itself.
 ./shell                       # the shell, the VM's / at userland/shell/_build/sandbox
 ./shell --root ~/scratch      # another directory as the VM's /
 ./shell --fake                # the shell on Redoubt's platform, on the fake kernel
-./test-shell                  # formatting, the cell protocol, the tests on BEAM then on
-                              # beamlet, the entry point, the platform built for the
+./test-shell                  # formatting, the cell protocol, the tests on beamlet and on
+                              # BEAM at once, the entry point, the platform built for the
                               # machine and run on the fake kernel
 ./test-shell test/redoubt/util_test.exs   # some test files only (in userland/shell)
+scripts/shell-cases           # the machine cases your change must pass, from git diff;
+                              # make -k -f scripts/jobs.mk set CASES="$(scripts/shell-cases)"
 ```
 
 A test that passes on BEAM and fails on beamlet is a beamlet bug. For the quickest loop,

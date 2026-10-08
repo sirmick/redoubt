@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 436
+revision = 438
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1531,8 +1531,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   needs = ["BEAM16"]
   body = "From BEAM16's review. Sized resources (SHELL3, BEAM16) count toward their holder's max_heap_size, but one stored in ETS or persistent_term and dropped counts for nobody, and max_ets_words (1 GiB) is larger than a session's budget. Count a sized resource's declared bytes in max_ets_words and persistent_term's limit, or lower those limits to fit the session, and test both. Size S."
-  state = "todo"
-  revision = 402
+  state = "active"
+  revision = 437
+  overrides = ["2026-10-08: started by Orchestrator before M1 (reported): Strict beamlet hardening; BEAM16 is merged."]
 
 [[node]]
   id = "SHELL9"
@@ -1569,8 +1570,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M2"
   body = "Owner's ask: get userland test times right down. Step 1, measure. Take a typical shell change and a typical beamlet change. Time every step of each gate list (./test-shell's stages, the beamlet build, the ExUnit runs on both VMs, the pty stage, the difftest per suite, prebuilt, the machine shell cases) and say where the time goes, in a table in the report. Step 2, the difftest: run modules in parallel under q's lease (each has its own scratch root), and cache the BEAM oracle per module keyed on that module's source hash (plus .stdin/.args), not one stamp per suite. Target: the full difftest, every suite, in about 20 s with a warm cache. Step 3: propose, with the measured numbers, the next cuts (for example no beamlet rebuild for Elixir-only changes; machine shell cases only when the driver or beamlet changes), as a checkpoint before doing them. Size M."
-  state = "reported"
-  revision = 431
+  state = "done"
+  revision = 438
   overrides = ["2026-10-08: started by Orchestrator before M1 (reported): The owner asked for this now (2026-10-08): userland test times down."]
 
 [[node]]

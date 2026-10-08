@@ -1,14 +1,18 @@
 #!/usr/bin/env escript
-%% Runs Module:start() on the real BEAM for every .beam in DIR and writes the result, formatted
-%% with ~kw (maps in key order, which beamlet always uses) exactly as `beamlet` prints it, to DIR/Module.expected. The oracle for difftest.
+%% Runs Module:start() on the real BEAM for every .beam in DIR, or for the MODULEs named, and
+%% writes the result, formatted with ~kw (maps in key order, which beamlet always uses) exactly
+%% as `beamlet` prints it, to DIR/Module.expected. The oracle for difftest, which runs it once
+%% per module, so that no test's result depends on what another left in the VM.
 %% Each test runs with an empty working directory, DIR/root/Module: beamlet gets the same
 %% directory as its file system root (`--root`).
-main([Dir]) ->
+main([Dir | Named]) ->
     true = code:add_patha(Dir),
+    Modules = case Named of
+        [] -> [filename:basename(F, ".beam") || F <- filelib:wildcard(filename:join(Dir, "*.beam"))];
+        _ -> Named
+    end,
     %% Tests with console input (a .stdin file next to the source) are run by difftest itself.
-    [expect(Dir, M) || F <- filelib:wildcard(filename:join(Dir, "*.beam")),
-                       M <- [list_to_atom(filename:basename(F, ".beam"))],
-                       has_start(M), not reads_console(M)],
+    [expect(Dir, M) || M <- [list_to_atom(N) || N <- Modules], has_start(M), not reads_console(M)],
     ok.
 
 reads_console(M) ->
