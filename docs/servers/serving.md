@@ -305,8 +305,14 @@ stack only after a `receive` that returned no call, so never with a call current
 frames from `netd`, and bounds each wait by its stack's timers and its link's retry, so hooks for
 all of that would be its loop again. It hands each send to `deliver` and each abandoned-call notice
 to `abandoned` first, calls `expire` and bounds its `receive` by `next_deadline`, and calls `wake`
-after each poll. A file server that pays for what a request makes around it does so in the `serving`
-and `served` hooks (`ipd`'s sockets, [ipd](ipd.md)).
+after each poll. `sshd`'s driver keeps one too, around its channel's console, for the same reasons
+(the SSH core and its reader's calls), and does the same, calling `wake` after each turn of the
+core. A loop of its own owes all of this: a server that never calls `expire`, or receives without
+the bound, never answers a parked completion call at its hold, so a client whose console is quiet
+for longer than its hold and margin reads the server's silence and its session ends. A `receive`
+bounded so that runs out (`Timeout`) is a turn, never the server's end. A file server that pays
+for what a request makes around it does so in the `serving` and `served` hooks (`ipd`'s sockets,
+[ipd](ipd.md)).
 
 ### Typed dispatch
 

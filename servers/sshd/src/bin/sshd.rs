@@ -460,6 +460,9 @@ mod machine {
         let mut pending: Vec<u8> = Vec::new();
         loop {
             let now = redoubt_rt::handle::time_now().unwrap_or(0);
+            // A completion call whose hold ran out is answered empty, or the console's client
+            // reads the server's silence as the session's end.
+            slot.nine.expire(now);
             // The core, until it is idle: input it takes, output it makes, the session's bytes.
             let closed = loop {
                 let n = match conn.input(&pending) {
@@ -518,7 +521,12 @@ mod machine {
             if closed {
                 break;
             }
-            match endpoint.receive(FOREVER, MAX_LEND_PAGES) {
+            let before = redoubt_rt::handle::time_now().unwrap_or(0);
+            let timeout = slot.nine.next_deadline().map_or(FOREVER, |d| d.saturating_sub(before).max(1));
+            let received = endpoint.receive(timeout, MAX_LEND_PAGES);
+            // What came is served at the time it came, so a deadline it sets runs from then.
+            let now = redoubt_rt::handle::time_now().unwrap_or(0);
+            match received {
                 Ok(Event::Call(mut r)) if r.caller.badge == READER => match reader.took(r.words[0]) {
                     Read::Data => {
                         let n = (r.words[1] as usize).min(READ);
@@ -561,7 +569,7 @@ mod machine {
                         slot.parked.abandoned(slot.nine.admission_mut(), id, &WORDS_9P);
                     }
                 }
-                Ok(_) => {}
+                Ok(_) | Err(Error::Timeout) => {}
                 Err(_) => break,
             }
         }
