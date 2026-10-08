@@ -42,8 +42,11 @@ done
 
 (cd "$app" && mix compile)
 path+=(-pa "$app/_build/dev/lib/redoubt_shell/ebin")
-beamlet="${BEAMLET:-$(RE_ENGINE="${RE_ENGINE:-rust}" "$otp/tools/build-beamlet")}"
+# beamlet-redoubt has a bin named beamlet too, the machine's, which this build writes to
+# target/release/beamlet as well: so it goes first, and the host's beamlet, built last, is the
+# one that name then holds.
 (cd "$otp" && cargo build -q --release -p beamlet-redoubt --features fake)
 fake="$otp/target/release/fake-redoubt"
+beamlet="${BEAMLET:-$(RE_ENGINE="${RE_ENGINE:-rust}" "$otp/tools/build-beamlet")}"
 sandbox="$app/_build/sandbox"
 mkdir -p "$sandbox"
