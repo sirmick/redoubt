@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 345
+revision = 346
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1192,8 +1192,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   body = "Closed as: no product defect. 356 rv32 steward-sub-budget-flood runs under three probes: 3 failures, all in one 3 s host-time window, each at bob's console hold's end right after alice's vault login (sshd's channel console missed its 10 s hold by more than the client's 1 s margin; the VM timed out on time; Ended read as EOF; bob's shell exited). 196 later runs with in-guest detectors (kernel entries, user stretches, late idle wakes) all passed, the longest kernel entry 30.7 ms, no late wake over 5 ms: the guest never stalled while running. Cause consistent with everything: a host-side stall of QEMU on a host-clock case (its SSH forward keeps it off guest time) while 8 QEMUs share the host. Deliverable: the case (and every host-clock steward/ssh case judging a session's survival across a hold) joins jobs.mk's alone class; testbench.md's shared-host rule says why. The hub's 1 s margin stays. Evidence: .wash/local/K27-checkpoint.md, probe patches in .wash/local."
-  state = "reported"
-  revision = 340
+  state = "done"
+  revision = 346
 
 [[node]]
   id = "B22"

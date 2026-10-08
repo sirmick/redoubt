@@ -26,7 +26,9 @@
 #
 # Classes (docs/testbench.md "On a shared host"):
 #   quiet   host-clock cases: crates asserting wall-clock bounds (rt, client, r4),
-#           bench-ssh-guest and the loopback deadline case (they expect a timeout): `q run
+#           bench-ssh-guest and the loopback deadline case (they expect a timeout), and the
+#           cases whose VM session, its console on the hub's hold, must still be alive after
+#           a hold boundary (a host stall of a second or more at the boundary ends it): `q run
 #           --quiet`, one at a time on the reserved cores while the rest of the machine keeps
 #           running
 #   net     a [net] table opening host sockets: one at a time among themselves (`--lock net`)
@@ -44,6 +46,7 @@ here := $(dir $(lastword $(MAKEFILE_LIST)))
 q := $(here)q
 cases := $(sort $(basename $(notdir $(wildcard tests/*.toml))))
 quiet := rt-host-tests client-host-tests r4-host-tests bench-ssh-guest bench-ssh-loopback-deadlock
+quiet += steward-sub-budget-flood steward-ssh-two-principals steward-vault-session steward-session-ends
 quiet := $(filter $(cases),$(quiet))
 net := $(filter-out $(quiet),$(sort $(basename $(notdir $(shell grep -lE '^(forward *=|\[\[?net\.(peer|dial|poke))' $$(grep -lE '^\[net\]' tests/*.toml))))))
 fanned := $(filter-out $(quiet) $(net),$(sort $(basename $(notdir $(shell grep -lE '^(fanout *=|\[fanout\])' tests/*.toml)))))
