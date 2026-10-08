@@ -211,19 +211,20 @@ impl System for Test {
         Some(Identity { principal: "alice".into(), labels, context: Some("work".into()) })
     }
 
-    fn launch(&mut self, asker: u64, job: u64, launch: Launch) -> Result<(), Refused> {
+    fn launch(&mut self, asker: u64, job: u64, launch: Launch) -> Result<Option<Object>, Refused> {
         let ns: Vec<(&str, &str)> =
             launch.namespace.iter().map(|(p, h)| (p.as_str(), mock(h).name)).collect();
         let named: Vec<(&str, &str)> =
             launch.handles.iter().map(|(n, h)| (n.as_str(), mock(h).name)).collect();
         self.saw(format!(
-            "launch {:?} {} {ns:?} {named:?} {:?}",
+            "launch {:?} {} {ns:?} {named:?} {:?} {:?}",
             launch.image,
             mock(&launch.budget).name,
-            launch.args
+            launch.args,
+            launch.serve
         ));
         self.events.push_back((asker, Event::Exit { job, cause: "exited", code: 0 }));
-        Ok(())
+        Ok(launch.serve.map(|_| self.make("endpoint", "served")))
     }
 
     fn poll(&mut self) -> Option<(u64, Event)> { self.events.pop_front() }
@@ -339,8 +340,18 @@ fn a_launch_takes_everything_from_its_caller_and_its_end_arrives_as_a_message() 
     let launch = calls.iter().find(|c| c.starts_with("launch")).expect("launched");
     assert_eq!(
         launch,
-        "launch [69, 76, 70] child [(\"/data\", \"home\")] [(\"budget\", \"child\")] [\"-v\"]"
+        "launch [69, 76, 70] child [(\"/data\", \"home\")] [(\"budget\", \"child\")] [\"-v\"] None"
     );
+}
+
+#[test]
+fn a_launch_that_serves_gives_its_caller_the_send_right() {
+    let (result, calls) = run("launch_serve");
+    // The connection is a handle like any other: bound, it is the platform's to attach.
+    assert_eq!(result, "{true,true,ok,exited}");
+    let launch = calls.iter().find(|c| c.starts_with("launch")).expect("launched");
+    assert_eq!(launch, "launch [69, 76, 70] child [] [] [] Some(\"serve\")");
+    assert!(calls.contains(&"bind /dev/pipe served".to_string()), "{calls:?}");
 }
 
 #[test]
@@ -361,7 +372,7 @@ fn a_decoded_handle_grants_nothing() {
 #[test]
 fn arguments_of_the_wrong_type_are_badarg_and_reach_no_platform_call() {
     let (result, calls) = run("wrong_types");
-    assert_eq!(result, format!("[{}]", ["{raised,badarg}"; 16].join(",")));
+    assert_eq!(result, format!("[{}]", ["{raised,badarg}"; 18].join(",")));
     // Only the fixture's own lookup reached the platform.
     assert_eq!(calls, ["lookup /home/alice"]);
 }
@@ -369,7 +380,10 @@ fn arguments_of_the_wrong_type_are_badarg_and_reach_no_platform_call() {
 #[test]
 fn lists_past_their_caps_are_refused() {
     let (result, calls) = run("oversize");
-    assert_eq!(result, format!("[{},{{error,too_many}}]", ["{raised,badarg}"; 7].join(",")));
+    assert_eq!(
+        result,
+        format!("[{},{{error,too_many}},{{error,too_many}}]", ["{raised,badarg}"; 7].join(","))
+    );
     assert_eq!(calls, ["lookup /home/alice"]);
 }
 

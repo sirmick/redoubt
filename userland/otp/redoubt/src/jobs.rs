@@ -6,6 +6,9 @@
 //!   namespace entries and named handles, its arguments. The platform adds the loader stub, which it carries
 //!   as `init` does, and the job's own exit endpoint, since `process_create` gives no PID to tell two
 //!   children's notices apart.
+//! - **A server is given its endpoint here.** With `serve`, the platform makes an endpoint, gives the child
+//!   its receive right under that name and closes its own once the child has started, so the child alone
+//!   serves it; the caller gets a send right ([`SERVED_BADGE`]), the one connection to it that nobody minted.
 //! - **At most [`MAX_JOBS`] jobs run at once**, each watched by one of as many threads, started the first
 //!   time one is needed and reused: a thread receives on its job's exit endpoint until the notice comes and
 //!   wakes the VM with it through a badge minted for it ([`BADGE`] + its index). The VM then closes the job's
@@ -13,6 +16,7 @@
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::num::NonZeroU64;
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use beamlet_vm::platform::{Event, Launch, Object, Refused};
@@ -23,8 +27,12 @@ use redoubt_rt::ipc::{Delivery, Event as IpcEvent};
 
 use crate::system::{HAND_US, kernel, name, worker};
 
-/// The most jobs one VM runs at once.
-pub const MAX_JOBS: usize = 4;
+/// The most jobs one VM runs at once: a pipeline's stages and the server of its pipes among them.
+pub const MAX_JOBS: usize = 16;
+
+/// The badge of the send right a launch with `serve` gives its caller: below the serving library's
+/// first minted badge, so the server's own root connection.
+pub const SERVED_BADGE: u64 = 1;
 
 /// The badge of job thread `i`'s wake-ups is `BADGE + i`: above every serve thread's.
 pub const BADGE: u64 = 0x300;
@@ -80,7 +88,8 @@ impl Jobs {
     pub(crate) fn busy(&self) -> bool { self.threads.iter().any(|t| t.job.is_some()) }
 
     /// Starts `l` for `asker` as the job `job`, its budget, namespace entries and named handles
-    /// already resolved by the platform ([`Resolved`]).
+    /// already resolved by the platform ([`Resolved`]); with `l.serve`, the send right to the
+    /// endpoint the child serves comes back.
     pub(crate) fn launch(
         &mut self,
         wake: &Endpoint,
@@ -88,7 +97,7 @@ impl Jobs {
         job: u64,
         l: Launch,
         resolved: Resolved,
-    ) -> Result<(), Refused> {
+    ) -> Result<Option<Endpoint>, Refused> {
         let i = match self.threads.iter().position(|t| t.job.is_none() && !t.gone) {
             Some(i) => i,
             None if self.threads.iter().filter(|t| !t.gone).count() < MAX_JOBS => {
@@ -98,7 +107,23 @@ impl Jobs {
             None => return Err(Refused("too_many")),
         };
         let Resolved { budget, namespace, handles } = resolved;
-        let exit = Endpoint::create().map_err(|e| Refused(kernel(e)))?;
+        let served = match &l.serve {
+            Some(_) => Some(served()?),
+            None => None,
+        };
+        let close_served = |served: &Option<(Endpoint, Endpoint)>| {
+            if let Some((receive, send)) = served {
+                let _ = redoubt_rt::handle::close(receive.handle());
+                let _ = redoubt_rt::handle::close(send.handle());
+            }
+        };
+        let exit = match Endpoint::create() {
+            Ok(exit) => exit,
+            Err(e) => {
+                close_served(&served);
+                return Err(Refused(kernel(e)));
+            }
+        };
         let mut builder = launch::Launch::new(
             STUB,
             &l.image,
@@ -111,23 +136,40 @@ impl Jobs {
         for ((n, _), h) in l.handles.iter().zip(handles) {
             builder.handle(n, h);
         }
+        if let (Some(n), Some((receive, _))) = (&l.serve, &served) {
+            builder.handle(n, receive.handle());
+        }
         for arg in &l.args {
             builder.arg(arg);
         }
         if let Some(pages) = l.stack_pages {
             builder.stack_pages(usize::try_from(pages).unwrap_or(usize::MAX));
         }
-        if let Some(pages) = l.heap_pages {
-            builder.heap_pages(u32::try_from(pages).map_err(|_| Refused("too_large"))?);
+        let heap_pages = match l.heap_pages.map(u32::try_from).transpose() {
+            Ok(pages) => pages,
+            Err(_) => {
+                close_served(&served);
+                let _ = redoubt_rt::handle::close(exit.handle());
+                return Err(Refused("too_large"));
+            }
+        };
+        if let Some(pages) = heap_pages {
+            builder.heap_pages(pages);
         }
         let started = match builder.start() {
             Ok(started) => started,
             Err(failed) => {
                 // The budget holds the process that never started; it is the caller's to destroy.
+                close_served(&served);
                 let _ = redoubt_rt::handle::close(exit.handle());
                 return Err(name(failed.error));
             }
         };
+        // The child holds its own copy of the receive right now: the VM keeps only the send right.
+        let send = served.map(|(receive, send)| {
+            let _ = redoubt_rt::handle::close(receive.handle());
+            send
+        });
         let process = started.process().handle();
         let thread = &mut self.threads[i];
         thread.watch.store(exit.handle().index(), Ordering::SeqCst);
@@ -135,12 +177,15 @@ impl Jobs {
             thread.gone = true;
             let _ = started.kill();
             let _ = redoubt_rt::handle::close(process);
+            if let Some(send) = send {
+                let _ = redoubt_rt::handle::close(send.handle());
+            }
             return Err(Refused("protocol"));
         }
         let mut held = l.namespace.into_iter().chain(l.handles).map(|(_, o)| o).collect::<Vec<_>>();
         held.push(l.budget);
         thread.job = Some(Job { asker, job, exit, process, held });
-        Ok(())
+        Ok(send)
     }
 
     /// Takes a job thread's notice: the job's end for its asker. Anything else is handed back.
@@ -160,6 +205,19 @@ impl Jobs {
             _ => "ended",
         };
         Ok((job.asker, Event::Exit { job: job.job, cause, code: delivery.words[2] }))
+    }
+}
+
+/// A new endpoint for a child to serve: its receive right, and the caller's send right to it.
+fn served() -> Result<(Endpoint, Endpoint), Refused> {
+    let receive = Endpoint::create().map_err(|e| Refused(kernel(e)))?;
+    let badge = NonZeroU64::new(SERVED_BADGE).ok_or(Refused("protocol"))?;
+    match receive.mint(badge, None) {
+        Ok(send) => Ok((receive, send)),
+        Err(e) => {
+            let _ = redoubt_rt::handle::close(receive.handle());
+            Err(Refused(kernel(e)))
+        }
     }
 }
 

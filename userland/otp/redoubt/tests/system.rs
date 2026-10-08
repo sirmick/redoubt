@@ -171,6 +171,7 @@ fn a_labelled_sessions_child_takes_its_labels_and_runs() {
                 args: vec![],
                 stack_pages: None,
                 heap_pages: None,
+                serve: None,
             };
             p.launch(ME, 1, launch).unwrap();
             p.budget_destroy(&child).unwrap();
@@ -488,10 +489,11 @@ fn a_launch_takes_what_it_is_given_and_its_end_is_an_event() {
                 args: vec!["-v".into()],
                 stack_pages: None,
                 heap_pages: None,
+                serve: None,
             };
             // Not a budget: refused before any kernel call.
             assert_eq!(p.launch(ME, 1, launch(&home)).err(), Some(Refused("wrong_object")));
-            p.launch(ME, 2, launch(&own)).unwrap();
+            assert!(p.launch(ME, 2, launch(&own)).unwrap().is_none());
             let held = budget.lock().unwrap().unwrap();
             assert_eq!(f.launched_in(pid, held).len(), 1);
             // Its budget destroyed, it is killed, and the notice comes back naming the job.
@@ -546,4 +548,75 @@ fn the_platform_tells_a_session_its_identity() {
     f.destroy(console.pid, console.endpoint);
     let _ = console.thread.join();
     with_session(|_| Vec::new(), |p, _| assert_eq!(p.identity(), None));
+}
+
+#[test]
+fn a_launch_that_serves_gives_the_child_the_receive_right_and_its_caller_a_send_right() {
+    let f = fake();
+    let budget = Arc::new(Mutex::new(None));
+    let carved = Arc::clone(&budget);
+    with_session(
+        move |pid| {
+            let b = f.budget(pid);
+            *carved.lock().unwrap() = Some(b);
+            vec![("budget", b)]
+        },
+        move |p, pid| {
+            let (own, _) = p.lookup("budget").unwrap();
+            let launch = Launch {
+                image: b"\x7fELF".to_vec(),
+                budget: own.clone(),
+                namespace: vec![],
+                handles: vec![],
+                args: vec![],
+                stack_pages: None,
+                heap_pages: None,
+                serve: Some("serve".into()),
+            };
+            let conn = p.launch(ME, 1, launch).unwrap().expect("a send right");
+            let child = f.launched_in(pid, budget.lock().unwrap().unwrap()).remove(0);
+            // The child's one handle is the receive right; the session keeps none of it, only the
+            // send right it was given, with the server's own badge.
+            assert_eq!(f.served(pid, &child, 0), Some(vec![1]));
+            // Its last copy dropped, the send right is closed.
+            drop(conn);
+            assert_eq!(f.served(pid, &child, 0), Some(vec![]));
+            p.budget_destroy(&own).unwrap();
+            let (_, event) = next(p);
+            assert!(matches!(event, Event::Exit { job: 1, cause: "killed", .. }));
+        },
+    );
+}
+
+#[test]
+fn a_launch_past_its_jobs_is_refused_and_a_serves_endpoint_with_it() {
+    let f = fake();
+    with_session(
+        move |pid| vec![("budget", f.budget(pid))],
+        move |p, pid| {
+            let (own, _) = p.lookup("budget").unwrap();
+            let launch = |serve: Option<String>| Launch {
+                image: b"\x7fELF".to_vec(),
+                budget: own.clone(),
+                namespace: vec![],
+                handles: vec![],
+                args: vec![],
+                stack_pages: None,
+                heap_pages: None,
+                serve,
+            };
+            for job in 0..beamlet_redoubt::MAX_JOBS as u64 {
+                p.launch(ME, job, launch(None)).unwrap();
+            }
+            let before = f.held(pid).0;
+            assert_eq!(p.launch(ME, 99, launch(Some("serve".into()))).err(), Some(Refused("too_many")));
+            // Refused before anything was made: no endpoint, no handle left behind.
+            assert_eq!(f.held(pid).0, before);
+            p.budget_destroy(&own).unwrap();
+            for _ in 0..beamlet_redoubt::MAX_JOBS {
+                let (_, event) = next(p);
+                assert!(matches!(event, Event::Exit { cause: "killed", .. }));
+            }
+        },
+    );
 }

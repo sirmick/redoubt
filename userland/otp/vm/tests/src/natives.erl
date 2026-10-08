@@ -2,7 +2,7 @@
 %% `System`. Only natives are used: the tests load no OTP modules. Rebuild:
 %% erlc +deterministic -o vm/tests/fixtures vm/tests/src/natives.erl
 -module(natives).
--export([lookup/0, bind/0, table/0, call/0, send/0, budgets/0, labels/0, identity/0, launch/0, serve/0,
+-export([lookup/0, bind/0, table/0, call/0, send/0, budgets/0, labels/0, identity/0, launch/0, launch_serve/0, serve/0,
          decoded/0, wrong_types/0, oversize/0, wrong_kind/0, dropped/0, unsupported/0]).
 
 %% The longest prefix's connection and the rest; a named handle; refusals by name.
@@ -55,6 +55,13 @@ launch() ->
                                 handles => [{<<"budget">>, B}], args => [<<"-v">>]}),
     receive {exit, Job, Cause, Code} -> {is_reference(Job), Cause, Code} after 1000 -> none end.
 
+%% A launch that serves: the caller gets the send right to what the child serves, and binds it.
+launch_serve() ->
+    {ok, B} = redoubt:budget_create(#{pages => 64, processes => 1, weight => 10}),
+    {ok, Job, Conn} = redoubt:launch(#{image => <<"ELF">>, budget => B, serve => <<"serve">>}),
+    Bound = redoubt:bind(<<"/dev/pipe">>, Conn),
+    receive {exit, Job, Cause, _} -> {is_reference(Job), is_reference(Conn), Bound, Cause} after 1000 -> none end.
+
 %% Requests on a served endpoint arrive as messages; a reply answers one.
 serve() ->
     {ok, E, _} = redoubt:ns_lookup(<<"service">>),
@@ -94,7 +101,9 @@ wrong_types() ->
      t(fun() -> redoubt:budget_create(#{pages => -1, processes => 1, weight => 1}) end),
      t(fun() -> redoubt:budget_create([]) end),
      t(fun() -> redoubt:launch(#{budget => H}) end),
-     t(fun() -> redoubt:launch(#{image => <<>>, budget => H, args => [<<"a", 0>>]}) end)].
+     t(fun() -> redoubt:launch(#{image => <<>>, budget => H, args => [<<"a", 0>>]}) end),
+     t(fun() -> redoubt:launch(#{image => <<"ELF">>, budget => H, serve => serve}) end),
+     t(fun() -> redoubt:launch(#{image => <<"ELF">>, budget => H, serve => <<"s", 0>>}) end)].
 
 %% Lists past their caps are refused without being walked: words, handles, labels, entries.
 oversize() ->
@@ -110,7 +119,10 @@ oversize() ->
      t(fun() -> redoubt:launch(#{image => <<"ELF">>, budget => H, namespace => lists_seq(1, 64) ++ improper}) end),
      t(fun() -> redoubt:launch(#{image => <<"ELF">>, budget => H,
                                  namespace => [{<<"/p">>, H} || _ <- lists_seq(1, 64)],
-                                 handles => [{<<"h">>, H} || _ <- lists_seq(1, 65)]}) end)].
+                                 handles => [{<<"h">>, H} || _ <- lists_seq(1, 65)]}) end),
+     t(fun() -> redoubt:launch(#{image => <<"ELF">>, budget => H,
+                                 namespace => [{<<"/p">>, H} || _ <- lists_seq(1, 128)],
+                                 serve => <<"serve">>}) end)].
 
 %% A handle of the wrong kind is refused by the platform before any kernel call.
 wrong_kind() ->

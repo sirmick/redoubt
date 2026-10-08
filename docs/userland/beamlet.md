@@ -596,7 +596,7 @@ The timer's counter frequency is not needed: `time_now`'s microseconds serve the
 
 ### Natives
 
-<details><summary>Status: built · partly tested: the machine's cases run the VM under a tester in the steward's place, but for budgets and launching, which also run in the steward's own sessions over SSH, a vault session's among them · tested (37)</summary>
+<details><summary>Status: built · partly tested: the machine's cases run the VM under a tester in the steward's place, but for budgets and launching, which also run in the steward's own sessions over SSH, a vault session's among them · tested (40)</summary>
 
 - bench:steward-vault-launch
 - bench:beamlet-natives
@@ -612,6 +612,7 @@ The timer's counter frequency is not needed: `time_now`'s microseconds serve the
 - host:beamlet-vm::labels_are_fixed
 - host:beamlet-vm::the_identity_is_the_platforms_and_without_a_system_is_not_supported
 - host:beamlet-vm::a_launch_takes_everything_from_its_caller_and_its_end_arrives_as_a_message
+- host:beamlet-vm::a_launch_that_serves_gives_its_caller_the_send_right
 - host:beamlet-vm::requests_arrive_with_badge_account_and_labels_and_are_answered
 - host:beamlet-vm::a_decoded_handle_grants_nothing
 - host:beamlet-vm::arguments_of_the_wrong_type_are_badarg_and_reach_no_platform_call
@@ -634,6 +635,8 @@ The timer's counter frequency is not needed: `time_now`'s microseconds serve the
 - host:beamlet-redoubt::a_request_already_waiting_ends_the_idle_that_takes_it
 - host:beamlet-redoubt::an_endpoint_served_stays_open_when_its_term_is_dropped
 - host:beamlet-redoubt::a_launch_takes_what_it_is_given_and_its_end_is_an_event
+- host:beamlet-redoubt::a_launch_that_serves_gives_the_child_the_receive_right_and_its_caller_a_send_right
+- host:beamlet-redoubt::a_launch_past_its_jobs_is_refused_and_a_serves_endpoint_with_it
 - host:beamlet-redoubt::a_labelled_sessions_child_takes_its_labels_and_runs
 
 </details>
@@ -666,7 +669,7 @@ every server binding is pure Elixir over them:
 | `budget_create/1`, `budget_destroy/1`, `budget_usage/1` | carve and end budgets; a deadline makes one a lease |
 | `labels/0` | this VM's label set, fixed when its budget was made |
 | `identity/0` | what the steward told a session's VM of itself: its principal, its labels' names, its context |
-| `launch/1` | launching a native program: the image, budget, namespace, handles and arguments come from the Elixir caller, and the client library's `launch` makes the calls and writes the startup block |
+| `launch/1` | launching a native program: the image, budget, namespace, handles and arguments come from the Elixir caller, and the client library's `launch` makes the calls and writes the startup block; a server is given a new endpoint to serve, and its caller the send right |
 
 They are the module `redoubt`'s, over the platform's `System`
 ([`userland/otp/vm/src/platform.rs`](../../userland/otp/vm/src/platform.rs); the argument checks in
@@ -736,14 +739,20 @@ with no `System`, the host CLI's, answers each `{error, not_supported}`; the hos
   is the launcher's word, information and not authority: `labels()` is the kernel's, and what the
   session can reach is its handles. A VM started with no `principal=`, as one under `init`, gets
   `{error, not_found}`.
-- **`launch(#{image, budget, namespace, handles, args, stack_pages, heap_pages})`** is `{ok, Job}`,
-  and the job's end arrives as `{exit, Job, Cause, Code}` (`exited`, `faulted` or `killed`):
-  the client library's `launch` with the image the caller read, a budget it carved, its namespace
-  entries and named handles (at most `MAX_START_HANDLES` together), and arguments; the platform
-  adds the loader stub, which it carries as `init` does, and the job's own exit endpoint
-  ([native programs](native.md#launching-from-a-session)). At most `MAX_JOBS` run at once, each
-  watched by a thread that waits for its exit notice; a job no thread takes to watch is killed,
-  its budget destroyed, since nothing would hear its end.
+- **`launch(#{image, budget, namespace, handles, args, stack_pages, heap_pages, serve})`** is
+  `{ok, Job}`, and the job's end arrives as `{exit, Job, Cause, Code}` (`exited`, `faulted` or
+  `killed`): the client library's `launch` with the image the caller read, a budget it carved, its
+  namespace entries and named handles (at most `MAX_START_HANDLES` together, `serve`'s counted),
+  and arguments; the platform adds the loader stub, which it carries as `init` does, and the job's
+  own exit endpoint ([native programs](native.md#launching-from-a-session)). With `serve => Name`
+  the program is a server: the platform makes an endpoint, gives the child its receive right as
+  the named handle `Name`, keeps none of it once the child has started, and answers `{ok, Job,
+  Connection}`, the caller's send right with the server's own badge (below every minted one), which
+  `bind/2` attaches like any other; this is how a session starts the server of its pipes
+  ([native programs](native.md#standard-input-and-output-and-pipes)). At most `MAX_JOBS` run at
+  once, each watched by a thread, started the first time one is needed, that waits for its exit
+  notice; a launch past them is `too_many`, before anything is made; a job no thread takes to
+  watch is killed, its budget destroyed, since nothing would hear its end.
 
 Every refusal is a Redoubt name: a term of the wrong type is `badarg`, as for any native, and a
 well-formed request the platform refuses is `{error, Name}`, the kernel's error by its name in the
@@ -764,7 +773,7 @@ walked past its cap, and no binary is copied past its own:
 | `CALL_THREADS`, `MAX_QUEUED` | 2 calls out at once, 64 waiting | [`pool.rs`](../../userland/otp/redoubt/src/pool.rs) |
 | `SEND_TIMEOUT_US`, `ATTACH_US`, `HAND_US` | 1 ms a send waits for its receiver, 1 s each of a bind's attach calls, 1 s a thread of the platform's to take its work (one that does not has ended, and is set aside) | [`system.rs`](../../userland/otp/redoubt/src/system.rs) |
 | `MAX_SERVED`, `REQUEST_WAIT_US` | 2 endpoints served, 5 s a request waits for its answer | [`serve.rs`](../../userland/otp/redoubt/src/serve.rs) |
-| `MAX_JOBS` | 4 jobs running at once | [`jobs.rs`](../../userland/otp/redoubt/src/jobs.rs) |
+| `MAX_JOBS` | 16 jobs running at once, a thread of 4 pages each once one is needed | [`jobs.rs`](../../userland/otp/redoubt/src/jobs.rs) |
 
 Handles are resource terms: unforgeable, collected, and never serialisable. A copy of a handle
 inside the VM is the same connection (one badge, one client), so passing one to another Erlang
