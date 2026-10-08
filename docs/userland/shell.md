@@ -727,10 +727,11 @@ line of a megabyte costs a draw what the window shows of it. Like every command,
 loaded when it is first called. A key that would save, close or open a file asks first when it
 comes in a burst: with more keys already waiting behind it, as a paste does, or within 300 ms of
 a key that had, as a paste's last key does. The keys arriving with the question are dropped,
-until 300 ms after the last of them however long the paste, so a pasted Enter cannot answer it. The 300 ms are measured between the editor's handling of two
-keys, not their arrival, so a paste whose keys each take the editor longer than that (an edit to
-a line of megabytes) could outrun the window; what such a paste can do is bounded by the
-screen's heap limit, which ends the editor.
+until 300 ms after the last of them however long the paste, so a pasted Enter cannot answer it.
+The 300 ms are measured between the editor's handling of two keys, not their arrival, so a
+paste whose keys each take the editor longer than that (an edit to a line of megabytes) could
+outrun the window; what such a paste can do is bounded by the screen's heap limit, which ends
+the editor.
 
 The highlighting ([`Redoubt.Editor.Syntax`](../../userland/shell/lib/redoubt/editor/syntax.ex))
 is chosen by the file's extension (`.ex` and `.exs`, `.erl` and `.hrl`, `.rs`, `.md`, `.toml`,
