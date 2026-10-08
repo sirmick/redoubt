@@ -39,7 +39,7 @@ defmodule Redoubt.EditorTest do
 
     File.write!(Path.join(dir, "bin"), <<"ok", 0xFF, 0xFE, "\n">>)
     bin = start(Path.join(dir, "bin"))
-    assert doc(bin).readonly and text(bin) == "ok<FF><FE>\n"
+    assert doc(bin).readonly == :not_utf8 and text(bin) == "ok<FF><FE>\n"
     bin = typed(bin, "x")
     assert text(bin) == "ok<FF><FE>\n" and bin.message =~ "read only"
     assert keys(bin, [key("s", [:ctrl])]).message =~ "read only"

@@ -98,19 +98,21 @@ defmodule Redoubt.Editor do
   # ---- files ----
 
   @doc false
-  # A file opened for editing: what is read, or a new file where nothing is.
-  @spec open(Path.t()) :: {:ok, map()} | {:error, term()}
-  def open(path) do
+  # A file opened for editing: what is read, or a new file where nothing is. With `view: true`,
+  # read only, and a file that is not there is refused.
+  @spec open(Path.t(), keyword()) :: {:ok, map()} | {:error, term()}
+  def open(path, opts \\ []) do
     path = Path.expand(path)
+    view = Keyword.get(opts, :view, false)
 
     case Files.read(path) do
       {:ok, %{bytes: bytes, utf8: true, digest: digest}} ->
-        {:ok, doc(path, Buffer.new(bytes), digest, false)}
+        {:ok, doc(path, Buffer.new(bytes), digest, if(view, do: :viewing, else: false))}
 
       {:ok, %{bytes: bytes, utf8: false, digest: digest}} ->
-        {:ok, doc(path, Buffer.new(shown(bytes)), digest, true)}
+        {:ok, doc(path, Buffer.new(shown(bytes)), digest, :not_utf8)}
 
-      {:error, :enoent} ->
+      {:error, :enoent} when not view ->
         {:ok, doc(path, Buffer.new(), :absent, false)}
 
       {:error, _reason} = error ->
@@ -422,7 +424,7 @@ defmodule Redoubt.Editor do
 
     cond do
       doc.readonly ->
-        {:cont, %{state | message: "read only: not UTF-8"}}
+        {:cont, %{state | message: read_only(doc)}}
 
       true ->
         case Files.save(doc.path, Buffer.text(doc.buffer), expected) do
@@ -443,7 +445,7 @@ defmodule Redoubt.Editor do
   defp close(state) do
     doc = current(state)
 
-    if Buffer.modified?(doc.buffer) and not doc.readonly do
+    if Buffer.modified?(doc.buffer) and doc.readonly == false do
       text = "Save the changes to #{Path.basename(doc.path)}?"
       {:cont, ask(state, Dialogs.confirm(:unsaved, "Close", text))}
     else
@@ -482,8 +484,11 @@ defmodule Redoubt.Editor do
 
   # An edit, unless the file is read only.
   defp change(state, fun) do
-    if current(state).readonly, do: %{state | message: "read only: not UTF-8"}, else: buffer(state, fun)
+    if current(state).readonly, do: %{state | message: read_only(current(state))}, else: buffer(state, fun)
   end
+
+  defp read_only(%{readonly: :not_utf8}), do: "read only: not UTF-8"
+  defp read_only(%{readonly: :viewing}), do: "read only: viewing"
 
   # The view scrolled so the cursor shows.
   defp follow(state) do

@@ -697,17 +697,17 @@ Not built:
 
 ### The editor
 
-Status: built · partly tested: the host only; the editor and its highlighting, not the file manager; its keys, files and highlighting on beamlet and on the BEAM, its drawing on beamlet alone; its tests are the shell's own ExUnit suite (`test/redoubt/editor_test.exs`, `test/redoubt/editor/buffer_test.exs`, `test/redoubt/editor/syntax_test.exs`), judged on the files and on a model of the terminal, which `./test-shell` runs and no bench case does
+Status: built · partly tested: the host only; the editor, its highlighting and the file manager; their keys, files and highlighting on beamlet and on the BEAM, their drawing on beamlet alone; their tests are the shell's own ExUnit suite (`test/redoubt/editor_test.exs`, `test/redoubt/editor/buffer_test.exs`, `test/redoubt/editor/syntax_test.exs`, `test/redoubt/editor/manager_test.exs`), judged on the files and on a model of the terminal, which `./test-shell` runs and no bench case does
 
-The editor and the file manager are one screen program with two views, in the manner of Midnight
-Commander: `ed("notes.txt")` opens the editor on a file, and `fm("project")` opens two panes on a
-directory, from which F4 edits the selected file and closing the editor returns to the panes.
+The editor and the file manager work as one, in the manner of Midnight Commander:
+`ed("notes.txt")` opens the editor on a file, and `fm("project")` opens two panes on a directory,
+from which F4 edits the selected file in the editor and closing the editor returns to the panes.
 - **Modeless, with the keys people expect.** The editor keeps micro's keys: Ctrl+S saves, Ctrl+Q
   quits, Ctrl+F finds, Ctrl+Z undoes, Ctrl+C and Ctrl+V copy and paste, and the mouse is not used.
   The editor takes Ctrl+C as a key, and the session's own key, Ctrl+\, ends it, as it ends any
   screen ([the session's key](#a-native-programs-screen-and-the-sessions-key)).
-  The panes keep Midnight Commander's: F3 views, F4 edits, F5 copies, F6 moves, F7 makes a
-  directory, F8 removes.
+  The panes keep Midnight Commander's: Tab changes pane, Enter goes into a directory, F3 views,
+  F4 edits, F5 copies, F6 moves, F7 makes a directory, F8 removes, F10 leaves.
 - **What it edits well:** search and replace by regular expression, in linear time for every
   pattern ([beamlet](beamlet.md#what-runs-on-it)); syntax highlighting for the languages of the
   box (Elixir, Erlang, Rust, Markdown, TOML, JSON); undo and redo; several files open at once. A
@@ -746,7 +746,17 @@ a line's first 4 KiB are read, the rest drawn plain, so a window costs a bounded
 its lines hold; a scan costs time in a line's length (a 1 MiB line in some 7 s on beamlet, on
 the host, were it read whole).
 
-What is not built: the file manager (`fm`) with its panes.
+The file manager is `fm(dir)` ([`Redoubt.Editor.Manager`](../../userland/shell/lib/redoubt/editor/manager.ex)),
+a screen program of two panes, each listing one directory through
+[the editor's files](#the-editors-files): a directory is drawn `/name`, and a name those refuse
+`!name`, which every key refuses in turn. Enter goes into a listed directory, or up on `..`
+through the pane's own path, never through a listed name, and on a file edits it. F3 opens the
+editor read only, F4 to edit, and closing it comes back to the panes, listed again. F5 copies
+and F6 moves the selected name into the other pane's directory, F7 makes a directory by a name
+typed, and F8 removes a file or a directory and all it holds. Copy, move and remove ask first,
+naming what and where, and a question is deaf for its first 300 ms and, while keys arrive with
+more queued behind them, until 300 ms after the last: so no paste, however long, answers it with
+its Enter. A failure is said in a dialog.
 
 Undo keeps at most 500 steps, and holds at most a million lines between them. A step holds a
 new copy of the list of lines the cursor crossed since the step before (the lines' bytes are
@@ -774,7 +784,7 @@ contents into an action:
 
 ### The editor's files
 
-Status: built · partly tested: the host only, on beamlet and on the BEAM; the file manager that will use its listing and its pane operations is not built; its tests are the shell's own ExUnit suite (`test/redoubt/editor/files_test.exs`), each verdict read from the file system afterwards, which `./test-shell` runs and no bench case does
+Status: built · partly tested: the host only, on beamlet and on the BEAM; the editor and the file manager use it; its tests are the shell's own ExUnit suite (`test/redoubt/editor/files_test.exs`), each verdict read from the file system afterwards, which `./test-shell` runs and no bench case does
 
 What the editor and the file manager do to files is one module,
 [`Redoubt.Editor.Files`](../../userland/shell/lib/redoubt/editor/files.ex), over `File`, with
