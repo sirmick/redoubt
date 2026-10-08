@@ -1043,6 +1043,13 @@ fn post_check(boot: &case::Boot, log: &Path, out: &mut dyn FnMut(String)) -> Res
             }
             Err(why) => Outcome::Fail(format!("sched_oracle: {why}")),
         },
+        Some("smp_fence") => match sched_oracle::fence(&text) {
+            Ok(summary) => {
+                out(format!("      {summary}"));
+                Outcome::Pass
+            }
+            Err(why) => Outcome::Fail(format!("smp_fence: {why}")),
+        },
         Some(other) => bail!("unknown post_check {other:?}"),
         None => Outcome::Pass,
     })

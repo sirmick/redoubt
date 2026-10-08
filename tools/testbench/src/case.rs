@@ -407,8 +407,9 @@ pub struct Boot {
     /// expression: self-checks proving that a bench feature can fail (TENETS.md, tenet 6).
     pub must_fail: Option<String>,
     /// A check the bench runs on the console log once everything else passed, by name, then its
-    /// arguments. The one there is: `sched_oracle`, the stride queue's ranks, floor and lifts over
-    /// a `sched-trace` kernel's trace (`sched_oracle.rs`); `r10_p99_us=N` bounds destructions.
+    /// arguments. `sched_oracle`: the stride queue's ranks, floor and lifts over a `sched-trace`
+    /// kernel's trace (`sched_oracle.rs`); `r10_p99_us=N` bounds destructions. `smp_fence`: the same
+    /// trace's shootdowns for a page made executable reached the other harts running the process.
     pub post_check: Option<String>,
 }
 

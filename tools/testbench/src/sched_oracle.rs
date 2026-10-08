@@ -4,7 +4,9 @@
 //!
 //! The kernel's trace says what its queue did, never why: a budget woke (`W`), was requeued (`R`),
 //! left the queue (`D`), had its pass changed (`P`), or was picked (`K`); each record carries the
-//! kernel entry (reconcile) it belongs to and the budget's pass after the event (its low 64 bits).
+//! kernel entry (reconcile) it belongs to, the budget's pass after the event (its low 64 bits),
+//! and the hart that wrote it. A shootdown of a process on other harts (`S`) is recorded too; the
+//! checks here pass it over, and [`fence`] reads it.
 //! It holds no tie key. This module rebuilds the order from those events alone, with its own reading of the
 //! rules, and checks every pick against it:
 //! - the lowest pass first; at an equal pass,
@@ -108,6 +110,8 @@ pub struct Record {
     pub kind: char,
     pub id: u64,
     pub pass: u128,
+    /// The boot index of the hart that wrote it (0 in a trace that does not say).
+    pub hart: u64,
 }
 
 /// Where a queued budget ranks among those of equal pass: `(0, -entry)` for a wake, `(1, n)` for
@@ -136,11 +140,11 @@ pub fn parse(log: &str) -> Result<Vec<Record>, String> {
         }
         let f: Vec<&str> = rest.split_whitespace().collect();
         let bad = || format!("malformed record {line:?}");
-        if f.len() != 5 {
+        if f.len() != 5 && f.len() != 6 {
             return Err(bad());
         }
         let kind = f[2].chars().next().ok_or_else(bad)?;
-        if f[2].len() != 1 || !"WRDPKLlefrqwAaGgvNnXYZUVTtIBEOMmC".contains(kind) {
+        if f[2].len() != 1 || !"WRDPKLlefrqwAaGgvNnXYZUVTtIBEOMmCS".contains(kind) {
             return Err(bad());
         }
         records.push(Record {
@@ -149,6 +153,7 @@ pub fn parse(log: &str) -> Result<Vec<Record>, String> {
             kind,
             id: f[3].parse().map_err(|_| bad())?,
             pass: u128::from_str_radix(f[4], 16).map_err(|_| bad())?,
+            hart: f.get(5).map_or(Ok(0), |h| h.parse()).map_err(|_| bad())?,
         });
     }
     let Some((n, dropped)) = end else {
@@ -2436,9 +2441,70 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
     if missed { Err(out) } else { Ok(out) }
 }
 
+/// A shootdown record's why for a page made executable (`S`, its pass field's bits 32 and up).
+const SHOT_FETCH: u128 = 2;
+
+/// `post_check = "smp_fence"` (kernel/memory.md, "Instruction fetch after mapping"): the trace
+/// holds a shootdown for a page made executable that asked a hart other than its own, and every
+/// hart it asked acknowledged, having run `fence.i`. With none, no hart running the process was
+/// fenced, and it fails. It reads the shootdown records alone: the rank checks judge one-hart
+/// runs.
+pub fn fence(log: &str) -> Result<String, String> {
+    let records = parse(log)?;
+    let fetches: Vec<&Record> =
+        records.iter().filter(|r| r.kind == 'S' && r.pass >> 32 == SHOT_FETCH).collect();
+    let fenced = fetches
+        .iter()
+        .filter(|r| {
+            let (asked, acked) = (r.pass & 0xffff, r.pass >> 16 & 0xffff);
+            asked != 0 && acked == asked && asked & 1 << r.hart == 0
+        })
+        .count();
+    if fenced == 0 {
+        return Err(format!(
+            "no shootdown for a page made executable fenced another hart ({} such records)",
+            fetches.len()
+        ));
+    }
+    Ok(format!(
+        "{fenced} shootdown(s) for a page made executable fenced every other hart running the process"
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A trace of `records` (kind, id, pass, hart), in one kernel entry, with its end line.
+    fn shot_trace(records: &[(char, u64, u128, u64)]) -> String {
+        let mut log = String::new();
+        for (seq, (kind, id, pass, hart)) in records.iter().enumerate() {
+            log += &format!("SCHED-TRACE {seq} 1 {kind} {id} {pass:x} {hart}\n");
+        }
+        log + &format!("SCHED-TRACE-END {} dropped 0\n", records.len())
+    }
+
+    #[test]
+    fn the_fence_check_needs_an_acknowledged_shootdown_of_another_hart_for_a_page_made_executable() {
+        let fetch = |asked: u128, acked: u128| SHOT_FETCH << 32 | acked << 16 | asked;
+        // Hart 0 shot PID 5 down on hart 1, which acknowledged.
+        assert!(fence(&shot_trace(&[('K', 9, 1, 0), ('S', 5, fetch(0b10, 0b10), 0)])).is_ok());
+        // None at all: the recorded negative.
+        assert!(fence(&shot_trace(&[('K', 9, 1, 0)])).is_err());
+        // A removal's shootdown, or an ending's, is not a fence for new code.
+        assert!(fence(&shot_trace(&[('S', 5, 1 << 32 | 0b10 << 16 | 0b10, 0)])).is_err());
+        assert!(fence(&shot_trace(&[('S', 5, 3 << 32 | 0b10 << 16 | 0b10, 0)])).is_err());
+        // Not acknowledged by every hart asked, or asking only its own hart.
+        assert!(fence(&shot_trace(&[('S', 5, fetch(0b110, 0b010), 0)])).is_err());
+        assert!(fence(&shot_trace(&[('S', 5, fetch(0b1, 0b1), 0)])).is_err());
+    }
+
+    #[test]
+    fn a_record_without_its_hart_still_parses() {
+        let old = "SCHED-TRACE 0 1 K 9 1\nSCHED-TRACE-END 1 dropped 0\n";
+        assert_eq!(parse(old).unwrap()[0].hart, 0);
+        assert_eq!(parse(&shot_trace(&[('K', 9, 1, 3)])).unwrap()[0].hart, 3);
+    }
 
     #[test]
     fn cluster_plan_rejects_the_old_construction() {
@@ -2760,7 +2826,7 @@ mod tests {
         let mut records = Vec::new();
         let mut add = |kind: char, id: u64| {
             let at = records.len() as u64;
-            records.push(Record { seq: at, entry: at, kind, id, pass: 1 });
+            records.push(Record { seq: at, entry: at, kind, id, pass: 1, hart: 0 });
         };
         for child in 0..19 {
             let id = 100 + child;
@@ -2859,7 +2925,7 @@ mod tests {
     fn cluster_go_protocol_distinguishes_readiness_from_window_and_release() {
         fn add(records: &mut Vec<Record>, kind: char, id: u64) -> usize {
             let at = records.len();
-            records.push(Record { seq: at as u64, entry: at as u64, kind, id, pass: 1 });
+            records.push(Record { seq: at as u64, entry: at as u64, kind, id, pass: 1, hart: 0 });
             at
         }
         fn mapped(records: &[Record]) -> Vec<(usize, u64)> {
@@ -2941,6 +3007,7 @@ mod tests {
                 kind,
                 id: 17,
                 pass: 1,
+                hart: 0,
             });
         };
         push('W', &mut records); // The already validated go wake.
@@ -2959,7 +3026,7 @@ mod tests {
         immediate.remove(1 + 4 * 3 + 1); // No W for sample 4; later report W remains.
         assert!(cluster_waits_before(&immediate, 17, 0, boundary - 1).is_err());
         let mut extra = records.clone();
-        extra.insert(4, Record { seq: 0, entry: 0, kind: 'W', id: 17, pass: 1 });
+        extra.insert(4, Record { seq: 0, entry: 0, kind: 'W', id: 17, pass: 1, hart: 0 });
         assert!(cluster_waits_before(&extra, 17, 0, boundary + 1).is_err());
         let mut reordered = records;
         reordered.swap(1, 2);
@@ -2968,7 +3035,7 @@ mod tests {
 
     #[test]
     fn cluster_fences_reject_missing_duplicate_and_wrong_callers() {
-        let rec = |kind, id, time| Record { seq: 0, entry: 0, kind, id, pass: time };
+        let rec = |kind, id, time| Record { seq: 0, entry: 0, kind, id, pass: time, hart: 0 };
         let good = vec![
             rec('W', 17, 0),
             rec('K', 17, 0),
@@ -3015,7 +3082,14 @@ mod tests {
             events
                 .iter()
                 .enumerate()
-                .map(|(i, &(kind, id, pass))| Record { seq: i as u64, entry: i as u64, kind, id, pass })
+                .map(|(i, &(kind, id, pass))| Record {
+                    seq: i as u64,
+                    entry: i as u64,
+                    kind,
+                    id,
+                    pass,
+                    hart: 0,
+                })
                 .collect::<Vec<_>>()
         };
         assert!(check_wake_no_preempt(&records(&events), 1).is_ok());
@@ -3044,7 +3118,14 @@ mod tests {
             events
                 .iter()
                 .enumerate()
-                .map(|(i, &(kind, id, pass))| Record { seq: i as u64, entry: i as u64, kind, id, pass })
+                .map(|(i, &(kind, id, pass))| Record {
+                    seq: i as u64,
+                    entry: i as u64,
+                    kind,
+                    id,
+                    pass,
+                    hart: 0,
+                })
                 .collect::<Vec<_>>()
         };
         assert!(check_carve_return("CARVE-OBS 900 950 12345\n", &records(&events)).is_ok());
@@ -3056,7 +3137,7 @@ mod tests {
         events
             .iter()
             .enumerate()
-            .map(|(i, &(kind, id))| Record { seq: i as u64, entry: i as u64, kind, id, pass: 0 })
+            .map(|(i, &(kind, id))| Record { seq: i as u64, entry: i as u64, kind, id, pass: 0, hart: 0 })
             .collect()
     }
 
@@ -3148,7 +3229,7 @@ mod tests {
         let records = events
             .iter()
             .enumerate()
-            .map(|(i, &(kind, id, pass))| Record { seq: i as u64, entry: i as u64, kind, id, pass })
+            .map(|(i, &(kind, id, pass))| Record { seq: i as u64, entry: i as u64, kind, id, pass, hart: 0 })
             .collect();
         (records, floor)
     }
@@ -4070,7 +4151,7 @@ mod model {
         };
         let mut push = |out: &mut Vec<Record>, entry: u64, kind: char, id: u64, pass: u128| {
             let seq = out.len() as u64;
-            out.push(Record { seq, entry, kind, id, pass });
+            out.push(Record { seq, entry, kind, id, pass, hart: 0 });
         };
         // What changed between two snapshots, as records; `requeued` names the budget a deschedule
         // requeued, if any.
