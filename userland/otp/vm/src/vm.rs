@@ -928,6 +928,21 @@ impl System {
         None
     }
 
+    /// What decoding a term needs of the system at once: the atom table, and a view of the
+    /// loaded code (a module's checksum, whether a function is exported), loading nothing.
+    pub(crate) fn term_decoding(
+        &mut self,
+    ) -> (&mut AtomTable, impl Fn(&Atom) -> Option<[u8; 16]> + '_, impl Fn(&Atom, &Atom, u32) -> bool + '_)
+    {
+        let (modules, natives) = (&self.modules, &self.natives);
+        let md5_of = move |m: &Atom| modules.get(m.as_str()).map(|m| m.md5);
+        let exported = move |m: &Atom, f: &Atom, a: u32| {
+            natives.get(m, f, a).is_some()
+                || modules.get(m.as_str()).is_some_and(|md| md.export(f, a).is_some())
+        };
+        (&mut self.atom_table, md5_of, exported)
+    }
+
     /// The checksum of a loaded module (without loading it).
     pub fn loaded_md5(&self, name: &Atom) -> Option<[u8; 16]> {
         self.modules.get(name.as_str()).map(|m| m.md5)

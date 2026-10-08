@@ -773,12 +773,13 @@ pub fn binary_to_term(c: &mut Ctx, a: &[Term]) -> R {
             }
         }
     }
-    // A fun names its module's code by checksum: one of the loaded code's is that code's fun.
+    // A fun names its module's code by checksum: one of the loaded code's is that code's fun;
+    // and in safe mode an export fun must name a function exported now.
     let decoded = {
         let mut guard = c.sys();
-        let sys = &mut *guard;
-        let md5_of = |m: &crate::atom::Atom| sys.modules.get(m.as_str()).map(|m| m.md5);
-        crate::etf::decode_prefix(&bytes, &mut sys.atom_table, &mut c.p.heap, safe, &md5_of)
+        let (atoms, md5_of, exported) = guard.term_decoding();
+        let loaded = crate::etf::Loaded { md5_of: &md5_of, exported: &exported };
+        crate::etf::decode_prefix(&bytes, atoms, &mut c.p.heap, safe, loaded)
     };
     let (t, n) = decoded.map_err(|_| c.badarg())?;
     if used {

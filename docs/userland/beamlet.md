@@ -42,7 +42,7 @@ in the VM sees is ordinary Elixir: `File.read!/1`, `IO.puts/1`, `:gen_tcp.connec
 
 ### Loading hostile code
 
-<details><summary>Status: built · partly tested: hostile loader tests run on the host; checked modules boot on Redoubt, but the refusal of other OTP versions' opcodes and atom tables is not attacked by a named test · tested (10)</summary>
+<details><summary>Status: built · partly tested: hostile loader tests run on the host; checked modules boot on Redoubt, but the refusal of other OTP versions' opcodes and atom tables is not attacked by a named test · tested (12)</summary>
 
 - host:beamlet-vm::fixtures_load
 - host:beamlet-vm::every_truncation_is_rejected
@@ -51,6 +51,8 @@ in the VM sees is ordinary Elixir: `File.read!/1`, `IO.puts/1`, `:gen_tcp.connec
 - host:beamlet-vm::empty_frames_count_against_the_stack
 - host:beamlet-vm::rejects_hostile_input
 - host:beamlet-vm::safe_mode_creates_no_atoms
+- host:beamlet-vm::safe_mode_refuses_an_export_fun_of_code_not_exported
+- host:beamlet-vm::safe_mode_decodes_no_local_fun
 - host:beamlet-vm::nesting_is_bounded
 - host:beamlet-vm::deep_terms_are_handled_iteratively
 - bench:userland-boot
@@ -68,7 +70,12 @@ The VM crate (`beamlet-vm`) is `#![forbid(unsafe_code)]`, and so are `beamlet-re
   refused, and 20,000 mutated modules per run load or fail without a panic or a hang.
 - **Deep terms do not recurse.** Copying, comparing, printing and collecting use work lists, never
   Rust recursion, so a million-level nested term is fine. The external term format limits
-  nesting to 256 and, in safe mode, creates no atoms.
+  nesting to 256.
+- **Safe decoding names no code.** `binary_to_term(Bin, [safe])` creates no atoms, decodes an
+  export fun only of a function exported now (a loaded module's export, or a BIF), as BEAM does,
+  and decodes no local fun at all, where BEAM decodes one whose atoms exist: a fun is code to run,
+  with free variables the sender chose, and safe mode is for data from outside
+  ([`userland/otp/vm/src/etf.rs`](../../userland/otp/vm/src/etf.rs)).
 
 ### Limits inside one VM
 
