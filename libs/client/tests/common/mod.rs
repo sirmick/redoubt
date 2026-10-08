@@ -41,8 +41,8 @@ impl Boot {
         let founding = f.grant(server, receive, init, 1);
         let mut block = StartupBuilder::new(receive.index());
         block.handle("bootfsd", receive).arg("buckets=4");
-        for (name, _) in BOOT {
-            block.arg(name);
+        for (name, data) in BOOT {
+            block.arg(&format!("{}:{name}", data.len()));
         }
         let block = block.finish().unwrap();
         let thread = f.run(server, move || bootfsd::serve(&Startup::parse(&block).unwrap()));
