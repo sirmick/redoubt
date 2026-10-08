@@ -427,7 +427,8 @@ impl ProcTable {
 /// system, the boot process, tracing). This VM does their job itself or not at all, so they are
 /// never loaded, even if found on the code path; calls to them are `undef` unless a native
 /// answers. (`erlang`, `erts_internal`, `persistent_term`, `atomics` and `counters` do load:
-/// their Erlang code is useful and their NIF stubs are replaced by natives.)
+/// their Erlang code is useful and their NIF stubs are replaced by natives. So does `prim_eval`,
+/// whose shipped `.beam` is BEAM assembly, not a stub: `erl_eval`'s `receive` runs on it.)
 pub const RUNTIME_MODULES: &[&str] = &[
     "init",
     "erl_init",
@@ -437,7 +438,6 @@ pub const RUNTIME_MODULES: &[&str] = &[
     "erts_dirty_process_signal_handler",
     "erts_literal_area_collector",
     "erts_trace_cleaner",
-    "prim_eval",
     "prim_inet",
     "prim_net",
     "prim_socket",

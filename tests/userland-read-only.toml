@@ -1,4 +1,4 @@
-description = "The attack: a program handed the userland erofsd's endpoint tries to create a file on the userland disk and to write Elixir.Version.beam (servers/erofsd.md, \"Serving\"; docs/kernel/boot.md, R75). erofsd serves only reads and refuses the create and the writes itself, before they reach verityd, which refuses every write too, blkd, or the host, which attaches the disk read-only; the file reads back the same length. The verdict that the file did not change is the system's: the shell then calls Version, and beamlet loads it only because verityd served every block of it as hashing to the signed manifest's root (R76; rule F)"
+description = "The attack: a program handed the userland erofsd's endpoint tries to create a file on the userland disk and to write Elixir.Version.beam (servers/erofsd.md, \"Serving\"; docs/kernel/boot.md, R75). erofsd serves only reads and refuses the create and the writes itself, before they reach verityd, which refuses every write too, blkd, or the host, which attaches the disk read-only; the file reads back the same length. The verdict that the file did not change is the system's: the shell then calls Version, and beamlet loads it only because verityd served every block of it as hashing to the signed manifest's root (R76; rule F). Then a receive typed at the prompt takes a message the line sent itself, and another waits out its after: erl_eval's receive runs on prim_eval, loaded from the volume when first called, not from the boot pack (docs/userland/beamlet.md, \"beamlet on Redoubt\")"
 arch = ["rv64", "rv32"]
 kind = "boot"
 # The image's programs and littlefsd-client; the manifest is the image's with the client added.
@@ -31,6 +31,8 @@ expect = [
     '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
     '^\[con [0-9a-f]{16}\] / \(1\)> Version\.parse!\("1\.2\.3"\) \|> to_string\(\)$',
     '^\[con [0-9a-f]{16}\] "1\.2\.3"$',
+    '^\[con [0-9a-f]{16}\] :received$',
+    '^\[con [0-9a-f]{16}\] :waited$',
 ]
 forbid = [
     'init: refused the boot',
@@ -38,11 +40,12 @@ forbid = [
     'init: restarted',
     'not loaded',
     'littlefsd-client TEST FAILED',
+    'prim_eval',
 ]
 
 [[input]]
 after = 'Redoubt shell, on Elixir '
-send = "Version.parse!(\"1.2.3\") |> to_string()\n"
+send = "Version.parse!(\"1.2.3\") |> to_string()\nsend(self(), :r); receive do :r -> :received end\nreceive do :x -> :got after 10 -> :waited end\n"
 
 [[file]]
 name = "manifest"
