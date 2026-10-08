@@ -14,7 +14,9 @@ The sources of the signed boot bundle and the disk images; what they produce goe
   their test keys from `tests/keys/`, so it must never ship. Alice's 47,624 pages give each of her
   label sets room for two sessions of 11,009 pages (a session's limit and its budget's cost): her
   console session and one SSH login under `{}`. The figure was set for sessions of 11,905 pages
-  and leaves each label set 1,794 pages over two sessions now. The shell, `Redoubt.Shell`, is started by the
+  and leaves each label set 1,794 pages over two sessions now. A session holds 10 processes, its VM, its
+  console's relay, `piped` and up to 7 stages of a pipeline, and alice's 40 and bob's 20 give
+  each label set two sessions of them. The shell, `Redoubt.Shell`, is started by the
   steward as the console principal's session (`console: "alice"`) on the UART, and as each SSH
   login's session on port 22 ([steward](../docs/servers/steward.md#authentication-and-sessions)).
   `beamlet` and `piped`, the server a session starts for its pipes
