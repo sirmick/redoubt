@@ -87,14 +87,17 @@ under [the case file](#the-case-file)).
 
 ### What a case passes on
 
-<details><summary>Status: built · tested (6)</summary>
+<details><summary>Status: built · tested (9)</summary>
 
 - bench:bench-console-after-expect
 - bench:bench-poweroff-missing
 - bench:bench-qemu-early-exit
 - bench:rustsbi-boot
 - host:testbench::a_killed_bench_leaves_no_qemu
+- host:testbench::a_line_is_shown_without_its_control_sequences
 - host:testbench::a_qemu_lacking_an_option_is_named
+- host:testbench::a_shown_line_keeps_its_own_prefix_first
+- host:testbench::forbid_matches_the_line_as_it_came_or_as_shown
 
 </details>
 
@@ -108,6 +111,17 @@ times out, while an `expect` is still waited for fails with the first failure a 
 (`[name] FAIL`) ahead of the line it waited for, since that is the cause. The bench starts QEMU
 with Linux's parent-death signal asked for between fork and exec, so a bench killed at its
 timeout, even outright, takes its QEMU with it and leaves no guest running to skew the next run.
+
+A console line is matched as a terminal shows its text: with its control sequences removed. A CSI
+sequence goes whole, any other escape with the character after it, and every other ASCII control
+character but tab, DEL among them, and trailing space after them. Nothing is drawn, so a carriage
+return does not take the line back to its start, and the prefix the log server or `consoled` gave
+the line stays first: no program's text can be shown in front of it. `expect`, `expect_after`,
+`[[input]]` and the poke's `after`, and `distinct_across_boots` match the shown line. `forbid`, the
+three always forbidden, and the checks on the reporter's `PASSED` and `DONE` lines see both the
+line as it came and as it is shown, so a forbidden word split by a sequence is caught, and so is a
+raw sequence a case forbids (`'\x1b'`). The console log keeps every line as it came, and `distinct`
+and a `post_check` read that log.
 
 Before a width's first boot the bench runs that width's QEMU with `-version`, and a QEMU that
 cannot run fails every boot case at once with its complaint (skips them, with `--allow-skip`, as a

@@ -436,49 +436,91 @@ const LOADER_LINE: &str = r"^loader: Redoubt rv(64|32) loader, boot hart \d+$";
 /// `[badge N]`, so no program's text can start this way.
 const DONE_LINE: &str = "[server] done:";
 
+/// A console line as a terminal shows its text: the line with its control sequences removed.
+/// A CSI sequence goes whole (`ESC [`, its parameter and intermediate bytes, its final byte), any
+/// other escape goes with the one character after it, every other ASCII control character but tab
+/// goes, DEL among them, and the line ends without trailing space, as the line itself does. Nothing
+/// is drawn: a carriage return does not take the line back to its start, so the prefix the log
+/// server or `consoled` gave the line stays first, and no text a program printed can stand in front
+/// of it.
+fn shown(line: &str) -> String {
+    let mut shown = String::with_capacity(line.len());
+    let mut chars = line.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\x1b' => {
+                if chars.next() == Some('[') {
+                    // Up to and with the first character that is not a parameter or intermediate.
+                    for c in chars.by_ref() {
+                        if !('\x20'..='\x3f').contains(&c) {
+                            break;
+                        }
+                    }
+                }
+            }
+            '\t' => shown.push(c),
+            c if c.is_ascii_control() => {}
+            c => shown.push(c),
+        }
+    }
+    shown.truncate(shown.trim_end().len());
+    shown
+}
+
+/// The first of `forbid` that matches a line, as it came (`raw`) or as it is shown: a forbidden
+/// text split by control sequences is still caught, and so is a control sequence a case forbids.
+fn forbidden<'a>(forbid: &'a [Regex], raw: &str, shown: &str) -> Option<&'a Regex> {
+    forbid.iter().find(|p| p.is_match(raw) || p.is_match(shown))
+}
+
 impl Console {
+    /// The next line. `forbid` and the verdict lines are judged on it as it came and as it is
+    /// shown ([`shown`]); `expect`, `expect_after`, captures, inputs and the poke match the shown
+    /// text, which [`Line::Text`] carries. The log keeps the line as it came.
     fn next(&mut self, until: Instant) -> Result<Line> {
-        let line = match self.lines.recv_timeout(until.saturating_duration_since(Instant::now())) {
+        let raw = match self.lines.recv_timeout(until.saturating_duration_since(Instant::now())) {
             Ok(line) => line,
             Err(mpsc::RecvTimeoutError::Timeout) => return Ok(Line::Timeout),
             Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(Line::Exited),
         };
-        writeln!(self.log, "{line}")?;
+        writeln!(self.log, "{raw}")?;
         self.seen = true;
-        if let Some(pattern) = self.forbid.iter().find(|p| p.is_match(&line)) {
-            return Ok(Line::Forbidden(format!("forbidden output /{pattern}/: {line}")));
+        let line = shown(&raw);
+        if let Some(pattern) = forbidden(&self.forbid, &raw, &line) {
+            return Ok(Line::Forbidden(format!("forbidden output /{pattern}/: {raw}")));
         }
-        if self.failed.is_none() && self.fail.is_match(&line) {
-            self.failed = Some(line.clone());
+        if self.failed.is_none() && self.fail.is_match(&raw) {
+            self.failed = Some(raw.clone());
         }
         if let Some(announced) = &self.announced {
             // A reboot: the next boot's `init` announces the reporter again, under a console
             // connection of the new `consoled`. The verdict is still one line in the whole run.
-            if self.loader.is_match(&line) {
+            if self.loader.is_match(&raw) {
                 self.reporter = None;
             }
             // `init`'s own lines are the only bare ones (`consoled` prefixes every other), so the
             // anchored announcement cannot be a program's; and `init` announces each child once a
             // boot.
-            if let Some(id) = announced.captures(&line).and_then(|c| c.get(1)) {
+            if let Some(id) = announced.captures(&raw).and_then(|c| c.get(1)) {
                 if self.reporter.is_some() {
-                    return Ok(Line::Forbidden(format!("the reporter announced twice: {line}")));
+                    return Ok(Line::Forbidden(format!("the reporter announced twice: {raw}")));
                 }
                 self.reporter = Some(format!("[con {}] ", id.as_str()));
             }
-            if line.contains(PASSED) {
+            // A verdict in either form is the reporter's, or forged.
+            if raw.contains(PASSED) || line.contains(PASSED) {
                 match &self.reporter {
-                    Some(prefix) if !self.passed_seen && line.starts_with(prefix.as_str()) => {
+                    Some(prefix) if !self.passed_seen && raw.starts_with(prefix.as_str()) => {
                         self.passed_seen = true
                     }
-                    _ => return Ok(Line::Forbidden(format!("a PASSED line not the reporter's: {line}"))),
+                    _ => return Ok(Line::Forbidden(format!("a PASSED line not the reporter's: {raw}"))),
                 }
             }
         }
-        if line.starts_with(DONE_LINE) {
+        if raw.starts_with(DONE_LINE) || line.starts_with(DONE_LINE) {
             match &self.done {
-                Some(done) if !self.done_seen && done.is_match(&line) => self.done_seen = true,
-                _ => return Ok(Line::Forbidden(format!("a DONE line not the reporter's: {line}"))),
+                Some(done) if !self.done_seen && done.is_match(&raw) => self.done_seen = true,
+                _ => return Ok(Line::Forbidden(format!("a DONE line not the reporter's: {raw}"))),
             }
         }
         for (pattern, slot) in
@@ -850,6 +892,45 @@ mod tests {
         after.see("c");
         assert_eq!(after.missing(), None, "every pattern matched, in order");
         assert_eq!(After::new(&[]).unwrap().missing(), None);
+    }
+
+    /// The shell's redraws, as the console carries them, show as the text a terminal leaves.
+    #[test]
+    fn a_line_is_shown_without_its_control_sequences() {
+        let con = "[con e4d341640dc0d5c0] ";
+        assert_eq!(shown(&format!("{con}\r55")), format!("{con}55"));
+        assert_eq!(
+            shown(&format!("{con}\r\x1b[1A\r\x1b[J/ (2)> Enum.sum(1..10)")),
+            format!("{con}/ (2)> Enum.sum(1..10)"),
+        );
+        assert_eq!(shown(&format!("{con}\r\x1b[J/ (3)> \r\x1b[7C")), format!("{con}/ (3)>"));
+        assert_eq!(shown("a\x1b[?25;1hb\x1b7c\x1b"), "abc", "private CSI, a two-byte escape, a cut one");
+        assert_eq!(shown("a\tb\x07\x7fc"), "a\tbc", "tab stays; BEL and DEL go");
+        assert_eq!(shown("x\x1b[1"), "x", "a CSI the line cuts off");
+    }
+
+    /// Stripping never moves text in front of the prefix `consoled` gave the line: a program that
+    /// prints a carriage return and another connection's prefix is still shown under its own, so
+    /// no anchored pattern takes the line as the other connection's.
+    #[test]
+    fn a_shown_line_keeps_its_own_prefix_first() {
+        let line = shown("[con aaaaaaaaaaaaaaaa] \r\x1b[J[con bbbbbbbbbbbbbbbb] x");
+        assert_eq!(line, "[con aaaaaaaaaaaaaaaa] [con bbbbbbbbbbbbbbbb] x");
+        let other = Regex::new(r"^\[con bbbbbbbbbbbbbbbb\] x$").unwrap();
+        let any = Regex::new(r"^\[con [0-9a-f]{16}\] x$").unwrap();
+        assert!(!other.is_match(&line) && !any.is_match(&line));
+    }
+
+    /// `forbid` sees a line both ways: a forbidden word split by a sequence, and a raw sequence a
+    /// case forbids, are each caught.
+    #[test]
+    fn forbid_matches_the_line_as_it_came_or_as_shown() {
+        let forbid = [Regex::new("PANIC").unwrap(), Regex::new(r"\x1b").unwrap()];
+        let split = "[con a] PA\x1b[0mNIC";
+        assert_eq!(forbidden(&forbid, split, &shown(split)).map(Regex::as_str), Some("PANIC"));
+        let escape = "[con a] \x1b]0;title\x07";
+        assert_eq!(forbidden(&forbid, escape, &shown(escape)).map(Regex::as_str), Some(r"\x1b"));
+        assert!(forbidden(&forbid, "[con a] clean", "[con a] clean").is_none());
     }
 
     fn boot(devices: &str) -> Boot {
