@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 357
+revision = 362
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1418,3 +1418,12 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "SHELL2 residual, named on docs/userland/shell.md. A crash report from a process spawned at the prompt is written via `user`, not through Redoubt.Term's Text.visible. Add a logger handler, or a formatter, so every byte drawn goes through the escaping. Add a test with a hostile crash reason. Size S."
   state = "todo"
   revision = 354
+
+[[node]]
+  id = "B29"
+  title = "beamlet-serve orders console lines across two processes: under load the caller's '41 answered' prints before the server's 'reply: ok', and the ordered expect list waits past it"
+  template = "package"
+  parent = "M1"
+  body = "Found closing train 13 on main 7743587e2. rv64 beamlet-serve timed out 4 of 4 beside other work, and passes 2 of 2 alone. The kept console logs hold every line, but the caller's '41 answered 0 42' comes before the server's 'serve: request' and 'serve: reply: ok', and the case's expect list orders them the other way. The order across two processes' consoles is not guaranteed. Neither SHELL2 nor B27 is at fault. Fix the case: no line of one process is ordered after another's. Size S."
+  state = "done"
+  revision = 362
