@@ -226,6 +226,25 @@ defmodule Redoubt.EditorTest do
     assert doc(state).marks[2] == {:comment, 1}
   end
 
+  test "a draw reads a line only to the window's edge: a 1 MiB line costs what the window shows" do
+    line = "x = \"" <> String.duplicate("a", 1024 * 1024) <> "\""
+    {pieces, _state} = Redoubt.Editor.Syntax.line(Redoubt.Editor.Syntax.Ex, line, :code)
+
+    {us, runs} = :timer.tc(fn -> View.runs(line, 0, 80, 2..9, 0, true, pieces) end)
+
+    assert runs == [
+             {0, "x", :cursor},
+             {1, " ", :normal},
+             {2, "= \"aaaaa", :selected},
+             {10, String.duplicate("a", 70), :string}
+           ]
+
+    assert us < 100_000, "#{div(us, 1000)} ms to draw a window of a 1 MiB line"
+
+    {us, column} = :timer.tc(fn -> View.column(line, 10) end)
+    assert column == 10 and us < 100_000
+  end
+
   test "a line is drawn with tabs to the stop, control characters visible, clipped to the window" do
     assert View.runs("a\tb", 0, 20, nil, nil) == [{0, "a   b", :normal}]
     assert View.runs("\e[31mx", 0, 20, nil, nil) == [{0, "^[[31mx", :normal}]

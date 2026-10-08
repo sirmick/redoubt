@@ -575,7 +575,9 @@ defmodule Redoubt.Editor do
   defp draw_line(buffer, state, doc, {line, pieces}, row, y, w) do
     {crow, ccol} = Buffer.cursor(doc.buffer)
     cursor = if row == crow, do: ccol
-    {selected, to_end} = selected_on(Buffer.selection(doc.buffer), row, String.length(line))
+    # A row the selection crosses whole is selected to its end: its bytes are at least its
+    # graphemes, and cost nothing to count.
+    {selected, to_end} = selected_on(Buffer.selection(doc.buffer), row, byte_size(line))
 
     for {x, text, role} <- View.runs(line, doc.left, w, selected, cursor, to_end, pieces) do
       Cells.put(buffer, x, y, text, Theme.style(state.theme, role))
