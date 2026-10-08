@@ -271,6 +271,7 @@ pub fn shootdown(pid: Pid, shot: Shot) -> usize {
     let me = index();
     let target = usize::from(pid.get());
     let word = (target + 1) | if shot == Shot::Leave { SHOOT_LEAVE } else { 0 };
+    SHOOTER.store(me, Ordering::Relaxed);
     let mut asked = 0usize;
     for (i, block) in HART_BLOCKS[..started()].iter().enumerate() {
         if i != me
@@ -284,8 +285,12 @@ pub fn shootdown(pid: Pid, shot: Shot) -> usize {
     }
     let mut acked = 0usize;
     for (i, block) in HART_BLOCKS.iter().enumerate().filter(|(i, _)| asked & 1 << i != 0) {
+        // Halted, not spinning, as for the lock (cell.rs): the hart that acknowledges sends this
+        // one the interrupt after it clears its word ([`serve`]), and the pending interrupt ends a
+        // halt begun after it came, so none is lost.
         while block.shoot.load(Ordering::Acquire) != 0 {
-            crate::cell::pause();
+            super::halt();
+            ack_ipi();
         }
         acked |= 1 << i;
     }
@@ -321,8 +326,16 @@ pub fn serve() {
         // hart running a process is never idle, so no reschedule interrupt is pending to lose.
         ack_ipi();
         block.shoot.store(0, Ordering::Release);
+        // The hart that asked waits halted for this: wake it. It holds the kernel lock, so it is
+        // the lock's holder, and no other hart asks meanwhile.
+        let asker = &HART_BLOCKS[SHOOTER.load(Ordering::Relaxed)];
+        let _ = sbi_rt::send_ipi(sbi_rt::HartMask::from_mask_base(1, asker.id.load(Ordering::Relaxed)));
     }
 }
+
+/// The hart, by boot index, whose shootdown is being served: the kernel lock's holder at the
+/// shootdown ([`shootdown`]), which [`serve`] wakes once it acknowledges.
+static SHOOTER: AtomicUsize = AtomicUsize::new(0);
 
 /// What each started hart runs, by boot index: its PID and thread, for the checked build's audit
 /// at every pick (`sched.rs`). A hart a destruction made leave its process is left out: it names a

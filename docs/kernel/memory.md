@@ -436,8 +436,13 @@ kernel, running the call to its end with interrupts off, would stall every other
   frees one of its tables or makes one executable first shoots the process down on each other
   hart running it now, which flushes its ASID, runs `fence.i` and acknowledges before the call
   returns; a destruction's shootdown also makes the hart leave the process's space before any of
-  its frames is freed. So no stale translation reaches a page unmapped, lent or returned, or a
-  frame's next owner. A missed shootdown cannot be seen on QEMU, which empties a hart's TLB at
+  its frames is freed. The asking hart waits for the acknowledgements halted, and each hart
+  sends it an interrupt as it acknowledges, as a hart waits for the kernel lock
+  ([R78 (fair kernel entry)](scheduling.md#r78-fair-kernel-entry)): spinning, under QEMU's `icount`
+  it spent the turns the other hart needed to acknowledge, and the p99 of a destruction's kernel
+  time ([R10 (destruction)](budgets.md#r10-destruction)) in `sched-latency` at two harts was
+  51.9 ms on rv64 against 3.0 ms halted. So no stale translation reaches a page
+  unmapped, lent or returned, or a frame's next owner. A missed shootdown cannot be seen on QEMU, which empties a hart's TLB at
   every `satp` write: the checked build stops when a process loses an entry while another hart
   runs it and is not shot down there (`bench:smp-shootdown`, the case's recorded negative), and
   `smp-fence` checks from the trace that the fence was taken.
