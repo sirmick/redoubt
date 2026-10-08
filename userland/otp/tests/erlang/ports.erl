@@ -38,7 +38,9 @@ spawned() ->
     B = collect(Q),
     R = open_port({spawn, "sh -c 'echo out; echo err 1>&2'"}, [stderr_to_stdout, binary, exit_status, {line, 10}]),
     C = lists:sort(collect(R)),
-    E = open_port({spawn, "sh -c 'echo $FOO; echo ${HOMEX-unset}'"}, [{env, [{"FOO", "bar"}, {"HOMEX", false}]}, exit_status]),
+    %% Two writes: line mode frames them one a message, however the pipe chunks them.
+    E = open_port({spawn, "sh -c 'echo $FOO; echo ${HOMEX-unset}'"},
+                  [{env, [{"FOO", "bar"}, {"HOMEX", false}]}, exit_status, {line, 16}]),
     D = collect(E),
     F = open_port({spawn, "pwd -P"}, [{cd, "/usr"}, exit_status]),
     {A, B, C, D, collect(F)}.

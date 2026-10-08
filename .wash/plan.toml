@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 397
+revision = 405
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1456,8 +1456,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   needs = ["SHELL3"]
   body = "Found by SHELL3. Use Ctx::new_resource_sized (SHELL3's commit 1) so atomics and zlib streams count toward their holder's max_heap_size. Add a test that a process past its limit by atomics or zlib is killed as for any heap growth. Size S."
-  state = "active"
-  revision = 393
+  state = "reported"
+  revision = 400
   overrides = ["2026-10-08: started by Orchestrator before M1 (reported): An M2 beamlet hardening package, independent of M1's remaining work; SHELL3's sized resources are on main."]
 
 [[node]]
@@ -1498,3 +1498,33 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   state = "active"
   revision = 386
   overrides = ["2026-10-08: started by Orchestrator before M1 (reported): Two-hart stalls on main under SMP1's lock; SMP3, already in flight for M2, needs these understood."]
+
+[[node]]
+  id = "B33"
+  title = "difftest erlang/ports 1.4 is flaky: two echoes from one sh -c read without line mode arrive as one chunk or two, on either VM"
+  template = "package"
+  parent = "M2"
+  body = "Found by BEAM15 on d5f1af40b: erlang/ports failed 3 of 4 at 1.4: want [\"bar\\n\",\"unset\\n\",{exit_status,0}], got [\"bar\\nunset\\n\",{exit_status,0}]. The port reads `sh -c 'echo $FOO; echo ${HOMEX-unset}'` without line mode, so how the two writes are chunked depends on pipe timing. B28 moved the test onto sh. Make the test independent of chunking (join the data before comparing, or open with {line, N}), keeping what 1.4 checks (env and unset variables). Run it 20 of 20. Size S."
+  state = "done"
+  revision = 405
+  overrides = ["2026-10-08: started by Orchestrator before M1 (reported): A flaky test on main; small."]
+
+[[node]]
+  id = "B34"
+  title = "The atomvm difftest suite fails 6 of its cases on main (binary_to_term, code_all_available_loaded, code_server_nifs, display_string, node, unicode); recent gates ran only the erlang suite"
+  template = "package"
+  parent = "M2"
+  body = "Found by BEAM16 on 2e3057e64: the difftest's full run is 517/523; all 6 failures are in the atomvm suite and fail the same way without BEAM16. Find when each began (bisect against the last full difftest run) and fix them, or record each as a known VM difference with its reason. Then the full difftest, not only the erlang suite, joins the gate list for any change under userland/otp. Size S-M."
+  state = "active"
+  revision = 404
+  overrides = ["2026-10-08: started by Orchestrator before M1 (reported): Failing difftest cases on main; small."]
+
+[[node]]
+  id = "BEAM17"
+  title = "A sized resource put in ETS or persistent_term and dropped by its holder counts toward no limit; max_ets_words (1 GiB) exceeds a session's budget"
+  template = "package"
+  parent = "M2"
+  needs = ["BEAM16"]
+  body = "From BEAM16's review. Sized resources (SHELL3, BEAM16) count toward their holder's max_heap_size, but one stored in ETS or persistent_term and dropped counts for nobody, and max_ets_words (1 GiB) is larger than a session's budget. Count a sized resource's declared bytes in max_ets_words and persistent_term's limit, or lower those limits to fit the session, and test both. Size S."
+  state = "todo"
+  revision = 402
