@@ -140,7 +140,10 @@ end
   or an example that calls it does not compile. The same declaration becomes the function's
   `@doc`, its page in `help`, and what completion offers for each argument.
 - **Nothing else to wire.** The registry finds every module of the shell's application that
-  declares commands; they are imported at the prompt and listed by `help`, grouped by area.
+  declares commands; they are imported at the prompt and listed by `help`, grouped by area. The
+  finding is done when the shell is built, which writes an index of the commands, each a function
+  that calls its own; the prompt imports the index, so a command's module is loaded when the
+  command is first called, not at the shell's start.
 
 A command's arguments are Elixir values the person wrote, evaluated as Elixir evaluates them
 anywhere. There are no bare words for the shell to quote, so there is no quoting to get wrong and

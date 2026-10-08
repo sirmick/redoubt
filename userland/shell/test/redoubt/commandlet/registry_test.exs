@@ -27,17 +27,30 @@ defmodule Redoubt.Commandlet.RegistryTest do
     assert_raise ArgumentError, fn -> String.to_existing_atom(name) end
   end
 
-  test "the prompt imports each command, every arity of it, and nothing else of its module" do
-    {:__block__, [], imports} = Registry.imports()
-    only = Map.new(imports, fn {:import, _meta, [module, [only: only]]} -> {module, only} end)
+  test "the prompt imports each command, every arity of it, from the index, and nothing else" do
+    {:import, _meta, [Redoubt.Commandlet.Index, [only: only]]} = Registry.imports()
     commands = MapSet.new(Registry.all(), & &1.name)
 
-    assert [help: 0, help: 1, h: 1] -- only[Redoubt.Shell.Help] == []
-    assert [{:grep, 2}, {:grep, 3}, {:head, 1}, {:head, 2}, {:cat, 1}] -- only[Redoubt.Util] == []
+    assert [help: 0, help: 1, h: 1, grep: 2, grep: 3, head: 1, head: 2, cat: 1] -- only == []
+    assert Enum.sort(only) == Enum.sort(Enum.flat_map(Registry.all(), &Commandlet.arities/1))
 
-    for {_module, functions} <- only,
-        {name, _arity} <- functions,
+    for {name, _arity} <- only,
         do: assert(name in commands, "#{name} is imported but is not a command")
+  end
+
+  test "the index finds every module that declares commands, and calls the command's own function" do
+    # Loading is idempotent, and makes the module list known where nothing has started the
+    # application, as under beamlet's test runner.
+    _ = Application.load(:redoubt_shell)
+
+    declaring =
+      for module <- Application.spec(:redoubt_shell, :modules),
+          Code.ensure_loaded?(module),
+          function_exported?(module, :__commandlets__, 0),
+          do: module
+
+    assert Enum.sort(Registry.modules()) == Enum.sort(declaring)
+    assert Redoubt.Commandlet.Index.pwd() == Redoubt.Shell.Helpers.pwd()
   end
 
   test "help lists every command by area, and shows one command's page" do
