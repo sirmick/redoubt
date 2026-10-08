@@ -477,8 +477,12 @@ pub fn fun_to_list(c: &mut Ctx, a: &[Term]) -> R {
     Ok(c.string(&text))
 }
 
-/// `display_string(String)` / `display_string(Device, String)`: raw text to the console.
+/// `display_string(String)` / `display_string(Device, String)`: raw text to the console. The
+/// device is `stdout` or `stderr`, as on BEAM; anything else (`standard_io` too) is `badarg`.
 pub fn display_string(c: &mut Ctx, a: &[Term]) -> R {
+    if a.len() == 2 && !matches!(a[0], Term::Atom(d) if d.as_str() == "stdout" || d.as_str() == "stderr") {
+        return Err(c.badarg());
+    }
     let s = a.last().expect("one or two arguments");
     let text = match c.heap().as_bits(*s) {
         Some(b) if b.is_binary() => b.to_bytes().into_owned(),
