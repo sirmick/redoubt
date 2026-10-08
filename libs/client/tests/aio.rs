@@ -85,7 +85,7 @@ struct Transfers {
 fn serve(ep: Endpoint, open: Arc<AtomicBool>, paused: Arc<AtomicBool>, seen: Arc<Transfers>) -> u32 {
     let limits = Limits { buckets: 2, in_flight: 8, files: 16, state: 0, requests: 128, pages: 4 };
     let mut nine = NineServer::new(Files { open }, limits, 7).unwrap();
-    let own = |_: &mut NineServer<Files>, r: Request| refuse_malformed(r);
+    let own = |_: &mut NineServer<Files>, r: Request| refuse_malformed(r).map(|()| None);
     loop {
         while paused.load(Ordering::Acquire) {
             std::thread::sleep(Duration::from_millis(1));

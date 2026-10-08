@@ -507,18 +507,32 @@ stateDiagram-v2
 
 ### Parking a typed call
 
-Status: planned · M2 (usable shell)
+<details><summary>Status: built · tested (3)</summary>
+
+- host:redoubt-rt::a_waiting_request_comes_back_unanswered_with_its_lend_as_it_came
+- host:redoubt-rt::a_waiting_request_that_carries_handles_is_malformed_and_they_close
+- host:redoubt-rt::a_waiting_typed_call_is_parked_answered_later_and_freed_when_abandoned
+
+</details>
 
 A typed request that must wait (the console's `resize`, which returns when the window's size
-changes) parks like a 9P read: the server's `handle` answers "wait", the dispatcher hands the
-request back unanswered with its words and lend intact, and the server parks it in the same
-`Admission` and serves it again later. Its admission, deadline, `serve` and abandonment follow
-the rules of [parked calls](#parked-calls) exactly.
+changes) parks like a 9P read. Its admission, deadline, `serve` and abandonment follow the rules of
+[parked calls](#parked-calls) exactly.
 
-**Open:** how a typed server says "wait" (a third outcome of `TypedServer::handle`, or a separate
-dispatch entry point like `serve_parking`); whether the waiting request's decoded fields are kept
-or decoded again when it is served; which typed operations may park at all
-([consoled](consoled.md)).
+- **The server says which requests wait.** `TypedServer::waits` is asked once the request has
+  decoded; it is false unless a server says otherwise, so no other typed server changes.
+  `typed::serve_parking` hands a waiting request back unanswered, its words and lend as they
+  came, for the server to park in the same `Admission` as its other calls. `serve_call`, which must
+  answer every call, answers one malformed, as the 9P skeleton's `serve_with` does a waiting read.
+  On a 9P server's endpoint the server's own dispatch (`own`) hands a waiting typed request back
+  through `NineServer::serve_parking` beside its waiting reads.
+- **Decoded again, not kept.** Nothing of a waiting request is kept but the call and the server's
+  own state for it in `Parked<T>` (for `resize`, the size it waited from). Served again, it is
+  decoded afresh from its lend, as a parked 9P read is; or the server answers it from its state with
+  `typed::reply`, which writes the reply into the call's own lend.
+- **A request that carries handles never waits.** It is answered malformed and its handles are
+  closed, so a parked call holds none of its caller's handles.
+- **Which operations wait** is each protocol's to say on its owning page.
 
 ## Authority
 

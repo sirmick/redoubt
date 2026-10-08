@@ -484,20 +484,21 @@ impl<S: FileServer> NineServer<S> {
 
     /// Handles one call and replies to it: 9P, or `ninep_common`; any other opcode is malformed.
     pub fn serve(&mut self, request: Request) -> Result<(), Error> {
-        self.serve_with(request, |_, request| refuse_malformed(request))
+        self.serve_with(request, |_, request| refuse_malformed(request).map(|()| None))
     }
 
     /// Handles one call and replies to it: 9P and `ninep_common` here, and a typed opcode above
     /// [`NINEP_COMMON_OPCODES`] by `own` (the server's own protocol on this endpoint; its
     /// dispatch closes handles the protocol did not ask for, as [`super::typed::serve_call`]
-    /// does).
+    /// does). `own` hands back a typed request that waits ([`super::typed::serve_parking`]),
+    /// which this path answers malformed.
     ///
     /// Every request is answered, so a file server that asks to wait ([`Read::Wait`],
     /// [`Write::Wait`]) is refused here; one that waits serves through [`NineServer::serve_parking`].
     pub fn serve_with(
         &mut self,
         request: Request,
-        own: impl FnOnce(&mut Self, Request) -> Result<(), Error>,
+        own: impl FnOnce(&mut Self, Request) -> Result<Option<Request>, Error>,
     ) -> Result<(), Error> {
         match self.serve_parking(request, own)? {
             None => Ok(()),
@@ -508,14 +509,15 @@ impl<S: FileServer> NineServer<S> {
     }
 
     /// [`NineServer::serve_with`], except that a request the file server asked to hold
-    /// ([`Read::Wait`], [`Write::Wait`]) is **not** answered: it comes back, with its T-message untouched in
-    /// its lend, for the server to park ([`super::parked::Parked`]). Serving it again later answers
+    /// ([`Read::Wait`], [`Write::Wait`]), or a typed one `own` hands back as waiting, is **not**
+    /// answered: it comes back, with its message untouched in its lend, for the server to park
+    /// ([`super::parked::Parked`]). Serving it again later answers
     /// it, because the request is read from the lend afresh each time; a fid clunked meanwhile
     /// makes that second serving an `Rerror`, which is what the client should see.
     pub fn serve_parking(
         &mut self,
         mut request: Request,
-        own: impl FnOnce(&mut Self, Request) -> Result<(), Error>,
+        own: impl FnOnce(&mut Self, Request) -> Result<Option<Request>, Error>,
     ) -> Result<Option<Request>, Error> {
         let (caller, words) = (request.caller, request.words);
         // A missing handle (revoked on its way, R10) makes any request malformed
@@ -551,7 +553,7 @@ impl<S: FileServer> NineServer<S> {
             return finish(request, &Outcome { words, send: Handles::new(), close: handles }).map(|_| None);
         }
         if !NINEP_COMMON_OPCODES.contains(&words[0]) {
-            return own(self, request).map(|()| None);
+            return own(self, request);
         }
         if missing {
             return finish(request, &Outcome { words: MALFORMED, send: Handles::new(), close: handles })

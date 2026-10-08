@@ -276,7 +276,7 @@ impl Served {
             loop {
                 match endpoint.receive(FOREVER, 0) {
                     Ok(Event::Call(request)) => {
-                        let _ = nine.serve_with(request, &mut own);
+                        let _ = nine.serve_with(request, |nine, request| own(nine, request).map(|()| None));
                     }
                     Ok(_) => {}
                     Err(_) => return 0,

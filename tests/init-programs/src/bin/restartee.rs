@@ -42,7 +42,7 @@ fn serve(startup: &Startup) -> u32 {
     loop {
         match endpoint.receive(FOREVER, 0) {
             Ok(Event::Call(request)) => {
-                let _ = server.serve_with(request, |_, request| own(request, console, &mut held));
+                let _ = server.serve_with(request, |_, r| own(r, console, &mut held).map(|()| None));
             }
             Ok(Event::Send(delivery)) => {
                 for handle in delivery.handles.as_slice().iter().flatten() {

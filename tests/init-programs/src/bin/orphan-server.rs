@@ -45,7 +45,7 @@ fn serve(startup: &Startup) -> u32 {
                     for handle in request.handles.as_slice().iter().flatten() {
                         let _ = close.push(*handle);
                     }
-                    finish(request, &Outcome { words, send: Handles::new(), close }).map(|_| ())
+                    finish(request, &Outcome { words, send: Handles::new(), close }).map(|_| None)
                 });
             }
             Ok(Event::Send(delivery)) => {

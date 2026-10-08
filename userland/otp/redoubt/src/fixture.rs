@@ -435,7 +435,7 @@ fn serve_or_park(
     request: Request,
     now: u64,
 ) -> Result<(), Error> {
-    let held = server.serve_parking(request, |_, request| refuse_malformed(request))?;
+    let held = server.serve_parking(request, |_, request| refuse_malformed(request).map(|()| None))?;
     let Some(request) = held else { return Ok(()) };
     let charge = server.charge_of(&request.caller);
     match parked.park(server.admission_mut(), request, charge, (), now) {

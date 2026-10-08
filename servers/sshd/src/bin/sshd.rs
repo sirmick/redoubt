@@ -254,7 +254,8 @@ mod machine {
 
         /// Answers `request`, or parks it if the console asked to wait.
         fn serve(&mut self, request: Request, now: u64) {
-            let Ok(Some(request)) = self.nine.serve_parking(request, |_, request| refuse_malformed(request))
+            let Ok(Some(request)) =
+                self.nine.serve_parking(request, |_, r| refuse_malformed(r).map(|()| None))
             else {
                 return;
             };
