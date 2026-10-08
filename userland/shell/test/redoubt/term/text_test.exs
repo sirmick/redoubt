@@ -37,6 +37,12 @@ defmodule Redoubt.Term.TextTest do
     assert Text.visible(<<"a", 0xFF, 0xC3, "b">>) == "a<FF><C3>b"
   end
 
+  test "chardata is made UTF-8, a byte that is not drawn as visible/1 draws it, controls kept" do
+    assert Text.utf8(["a", <<0xFF, ?b>>, ?c, 0x202E, [<<0xE4, 0xB8>>]]) == "a<FF>bc\u202E<E4><B8>"
+    assert Text.utf8(<<27, "[2J">>) == "\e[2J"
+    assert Text.visible(<<0xFF>>) == Text.utf8(<<0xFF>>)
+  end
+
   test "a tab moves to the next multiple of eight columns" do
     assert Text.visible("ab\tc") == "ab      c"
     assert Text.visible("\t") == "        "

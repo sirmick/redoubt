@@ -104,8 +104,8 @@ What the loop does not have:
 
 What a line writes to the console itself, as `IO.puts/1` does, reaches the console through the
 shell's driver and its encoder too ([line editing](#line-editing-and-history)), so it is guarded
-the same. Not guarded: the crash reports of processes a line spawned, which OTP's logger
-writes to `standard_error`, past the driver.
+the same, and so is what the VM logs, the crash reports of processes a line spawned among it
+([hostile text](#hostile-text-never-drives-the-terminal)).
 
 ### Commands
 
@@ -341,7 +341,7 @@ because a query on a UART that never answers costs a timeout at every login).
 
 ### Hostile text never drives the terminal
 
-<details><summary>Status: built · partly tested: the host only, and the paths that exist there: the printer, a line's own writes to the console, the prompt and the typed line, and a screen program's text through the screen buffer (on beamlet alone); a native program's frames are not built; the attack case is the shell's own ExUnit suite (`test/redoubt/shell/driver_test.exs`, `test/redoubt/term_test.exs`, `test/redoubt/screen_test.exs`), judged by a model of the terminal that refuses any sequence but the encoder's own, which `./test-shell` runs and no bench case does, and the buffer's own refusals · tested (2)</summary>
+<details><summary>Status: built · partly tested: the host only, and the paths that exist there: the printer, a line's own writes to the console, what the VM logs, the prompt and the typed line, and a screen program's text through the screen buffer (on beamlet alone); a native program's frames are not built; the attack case is the shell's own ExUnit suite (`test/redoubt/shell/driver_test.exs`, `test/redoubt/term_test.exs`, `test/redoubt/screen_test.exs`), judged by a model of the terminal that refuses any sequence but the encoder's own, which `./test-shell` runs and no bench case does, and the buffer's own refusals · tested (2)</summary>
 
 - host:beamlet-screen::a_control_character_is_badarg_and_nothing_is_drawn
 - host:beamlet-screen::a_control_character_is_refused_and_nothing_of_the_call_is_written
@@ -358,11 +358,30 @@ because nothing reaches the encoder but cells, whose symbols cannot hold a contr
 the shell's printer, from a screen program through the buffer's natives, which refuse one, and
 from a native program only as `cells` frames. The line editor is the one path that hands the
 encoder text rather than cells: `group`'s requests, which the encoder makes visible grapheme by
-grapheme under the same rule. One path still passes the encoder: OTP's logger writes the crash
-reports of processes a line spawned to `standard_error` ([the loop](#the-loop)).
+grapheme under the same rule.
+
+**What the VM logs goes through `group` too.** OTP's logger writes through its `default` handler
+to `user`, the VM's own console server, past the driver. While the driver holds the console, the
+logger's handler is the shell's instead
+([`Redoubt.Shell.Log`](../../userland/shell/lib/redoubt/shell/log.ex)): every event, the crash
+report of a process a line spawned, the emulator's report of one that died, an `error_logger` or
+`Logger` call, is formatted as the `default` handler would have (OTP's formatter bounded to 4 KiB
+an event), and written to `group` like any other output, so the encoder draws it visibly and
+`group` draws the line being edited again after it. A byte that is not UTF-8 is written as
+`<FF>`.
+- **It never waits.** A handler runs in the process that logs, which may be one the console's own
+  path waits on, so it only formats and sends; a relay process writes to `group` and is the only
+  one that waits. An event logged by `group` or the driver themselves is drawn as one fixed line,
+  `[a log event from the shell's terminal, not shown]`, by the driver, never through `group`.
+- **It is bounded.** At most 32 events wait in the relay; a process that logs faster loses the
+  rest, and their count is drawn with the next event shown (`[N log events dropped]`).
+- **It ends with the driver,** which puts the `default` handler back as it was.
 
 What it does not cover: code the person runs holds the session's authority, and can write to its
-own console as it can do anything else the session can; and the bidirectional marks (U+200E,
+own console as it can do anything else the session can, `user` and `standard_error` among them;
+a VM without OTP's logger in its code (the host's beamlet run with no system path) loads beamlet's
+small stand-in, which prints to `standard_error` past the driver, though Redoubt's userland volume
+holds OTP's; and the bidirectional marks (U+200E,
 U+200F, U+061C) are drawn, since they only settle the direction of the weak and neutral characters
 next to them. The invisible format characters (U+00AD, U+200B to U+200D, U+2060 to U+2064,
 U+FEFF, the tag characters of plane 14) and the line and paragraph separators (U+2028, U+2029)

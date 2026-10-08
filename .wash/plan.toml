@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 454
+revision = 456
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1422,8 +1422,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "shell-host"
   needs = ["SHELL2"]
   body = "SHELL2 residual, named on docs/userland/shell.md. A crash report from a process spawned at the prompt is written via `user`, not through Redoubt.Term's Text.visible. Add a logger handler, or a formatter, so every byte drawn goes through the escaping. Add a test with a hostile crash reason. Size S."
-  state = "reported"
-  revision = 422
+  state = "done"
+  revision = 456
   overrides = ["2026-10-08: started by Orchestrator before M1 (reported): An M2 host-shell hardening package; independent of M1's remaining work."]
 
 [[node]]
@@ -1541,8 +1541,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "shell-host"
   body = "Found by SHELL4. With a prompt over about 256 columns (a long cwd, say), the text typed after it is not shown. Find whether Redoubt.Term's model or edlin's redraw is at fault, fix it, and add a test with a 300-column prompt on a 120-column terminal. Size S."
-  state = "reported"
-  revision = 439
+  state = "done"
+  revision = 455
   overrides = ["2026-10-08: started by Orchestrator before M1 (reported): Shell track on the `shell` branch; owner asked to fill the bandwidth (2026-10-08)."]
 
 [[node]]

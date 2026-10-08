@@ -19,6 +19,9 @@ defmodule Redoubt.Shell.Driver do
   `Redoubt.Term.Frame`, and holds what `group` asks to draw, answering it at once so a writer
   never waits on the screen. Ctrl+C ends the screen. When the screen ends, the main screen is
   shown again, as it was, and what was held is drawn.
+
+  While the driver runs, the logger writes through it too (`Redoubt.Shell.Log`): its `default`
+  handler, which writes to the console past the guard, is put back when the driver ends.
   """
 
   alias Redoubt.Term
@@ -64,7 +67,7 @@ defmodule Redoubt.Shell.Driver do
     {cols, rows} = size.()
     group = :group.start(self(), shell, echo: true, expand_below: true, expand_fun: &expand/1)
 
-    loop(%{
+    state = %{
       group: group,
       term: Term.new(cols, rows),
       output: output,
@@ -86,7 +89,15 @@ defmodule Redoubt.Shell.Driver do
       # (newest first), bytes that may begin a key, and the timer that ends their wait.
       screen: nil,
       esc_timeout: Keyword.get(opts, :esc_timeout, @esc_timeout)
-    })
+    }
+
+    log = Redoubt.Shell.Log.install(self(), group)
+
+    try do
+      loop(state)
+    after
+      Redoubt.Shell.Log.uninstall(log)
+    end
   end
 
   defp loop(%{group: group} = state) do
@@ -156,6 +167,10 @@ defmodule Redoubt.Shell.Driver do
 
       {^group, request} ->
         loop(draw(state, request))
+
+      # The fixed line for a log event the logger's relay would not write through group.
+      {:redoubt_shell_log, line} ->
+        loop(draw(state, {:put_chars, :unicode, line}))
 
       # The shell has ended, even under a screen: the main screen is shown again.
       {:EXIT, ^group, _reason} ->
