@@ -1329,7 +1329,7 @@ additional client from the merged manifest.
 | `netd` | 4,296 | 3 | 2 | 4 |
 | `ipd` | 13,672 | 7 | 37 | 74 |
 | `walfsd:data` | 28,616 | 14 | 15 | 64 |
-| `littlefsd:alice-secrets` | 7,192 | 4 | 9 | 18 |
+| `littlefsd:alice-secrets` | 8,536 | 5 | 9 | 18 |
 | `blkd:system` | 4,520 | 3 | 17 | 34 |
 | `verity:system` | 8,264 | 5 | 50 | 100 |
 | `erofsd:system` | 9,704 | 5 | 13 | 26 |

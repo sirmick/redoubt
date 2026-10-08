@@ -132,7 +132,10 @@ Built and attack-tested today:
 - **The steward**: its policy core, tested on the host, and the server, which carves the
   principals from the manifest, logs in `sshd`'s users and starts each session as a beamlet VM in
   its label set's sub-budget, and the console principal's on the UART
-  ([the steward](../servers/steward.md#authentication-and-sessions)).
+  ([the steward](../servers/steward.md#authentication-and-sessions)). A steward that dies is
+  restarted with every session logged out, `users` emptied by the kernel's `budget_reap`, and the
+  console session starts again; the machine does not reboot
+  ([failure and restart](../servers/steward.md#failure-and-restart)).
 - **`sshd`'s core** on its host platform, which the bench's SSH sessions run against, with
   OpenSSH's server as the reference ([sshd](../servers/sshd.md#the-core-and-its-platforms),
   [SSH sessions](../testbench.md#sessions-and-the-loopback-server)), and on the box's, logins

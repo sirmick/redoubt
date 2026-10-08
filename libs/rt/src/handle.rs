@@ -184,6 +184,15 @@ impl Budget {
     /// Destroys the budget and everything charged to it (R10).
     pub fn destroy(self) -> Result<(), Error> { nothing(syscall(&Call::BudgetDestroy { budget: self.0 })) }
 
+    /// Destroys the budget's first child and everything below it, keeps the budget, and returns
+    /// how many children it still has (`budget_reap`, R10).
+    pub fn reap(&self) -> Result<u32, Error> {
+        match syscall(&Call::BudgetReap { budget: self.0 })? {
+            Return::Remaining(n) => Ok(n),
+            _ => Err(Error::InvalidArgument),
+        }
+    }
+
     pub fn usage(&self) -> Result<Usage, Error> {
         let mut rec = Record([0; USAGE_SLOTS]);
         nothing(syscall(&Call::BudgetUsage { budget: self.0, usage_rec: rec.addr_mut() }))?;

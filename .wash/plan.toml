@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 346
+revision = 347
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1058,8 +1058,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["STEWARD2"]
   body = "Owner (2026-10-06): \"a crash should restart it\": a dead steward's restart must be a logout, not a reboot. Brief: .wash/local/K23-implementer.md (architect-16). Tier A, size M. The kernel part is merged: budget_reap(handle) -> remaining destroys one child subtree of the budget (the newest) as R10 does and keeps the budget, authority as budget_destroy's, the model's reap rule and three mutations, the bench case budget-reap, pages. The init and steward part (init settles the dead steward's carve, reaps users to zero and restarts it; the test-only restart-probe; steward-restart's verdict: emptied, restarted, prompt back, no reboot; the todo page deleted) is on wp-K23-steward against wp-STEWARD2 and lands after STEWARD2 with its own review; the node closes then. Residual filed as K26: an sshd channel outlives its reaped session until the restarted steward tells sshd."
-  state = "reported"
-  revision = 253
+  state = "done"
+  revision = 347
   overrides = ["2026-10-07: started by Orchestrator before STEWARD2 (reported): STEWARD2 is rebasing onto main and lands within hours; K23's kernel call, model rule, init's reap loop and pages need only main, and the steward-restart case's new verdict is written against wp-STEWARD2 and rebased at its merge (the brief names the split)"]
 
 [[node]]

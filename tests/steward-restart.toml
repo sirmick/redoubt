@@ -1,7 +1,8 @@
-description = "The steward's restart fails closed (docs/servers/init.md, \"Restarts and reboots\"; docs/servers/steward.md, \"Failure and restart\"): a steward whose heap cap holds its boot's carve but not its console session's launch dies after carving; init restarts it, the new instance finds users not empty, says so and exits NOT_STARTED (3) rather than carve a second set beside the first; after five restarts init reboots, and the next boot's steward carves a fresh users. The verdicts are the steward's own line on users and init's exit, restart and reboot lines (rule F)"
+description = "A dead steward's restart is a logout, not a reboot, and leaves the shared servers as it found them (docs/servers/init.md, \"Restarts and reboots\"; docs/servers/steward.md, \"Failure and restart\"): the steward's test-only restart-probe ends every instance 14 s after it starts the console principal's session, so it dies thirteen times with that session and its connections live, slowly enough to stay under the reboot rule. Each time init disconnects the fresh connections it made for the steward at its servers, which frees every connection the steward minted under them for its sessions, empties users one principal's subtree at a time (budget_reap) and restarts the steward, which finds users at 0, carves afresh and starts the console session again. After the thirteenth restart the console session still starts: had the dead stewards' connections been kept, its connections would have met the cap of 8 at bootfsd, erofsd:system and walfsd:data by the ninth, and ipd's cap of 12 by the thirteenth. littlefsd:alice-secrets is released by the same code but holds no connection here, since the case opens no vault session. The verdicts are the kernel's usage through the steward's lines, init's lines and the console's banner (rule F)"
 arch = ["rv64", "rv32"]
 kind = "boot"
-# The image's programs; the manifest is the image's with the steward's heap capped.
+# The image's programs, the steward built with its test-only restart-probe (servers/steward,
+# src/bin/steward.rs, PROBE_EXIT): every instance exits 14 s after its console session starts.
 programs = [
     { package = "redoubt-init", bin = "init" },
     { package = "redoubt-keyd", bin = "keyd" },
@@ -15,48 +16,110 @@ programs = [
     { package = "redoubt-walfsd", bin = "walfsd" },
     { package = "redoubt-erofsd", bin = "erofsd" },
     { package = "beamlet-redoubt", bin = "beamlet", workspace = "userland/otp" },
-    { package = "redoubt-steward-server", bin = "steward" },
+    { package = "redoubt-steward-server", bin = "steward", features = ["restart-probe"] },
     { package = "redoubt-sshd", bin = "sshd" },
 ]
+# The principals' budgets, each holding a shell VM's session, need 1 GiB (steward-session-ends).
 memory_mib = 1024
-timeout_secs = 400
+# The console session's VM fourteen times, 14 s apart.
+timeout_secs = 1500
 expect = [
     '^init: started steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] steward: users holds 0 pages, 0 processes$',
     '^\[con [0-9a-f]{16}\] steward: carved users/alice account 1001: ',
-    '^init: steward \(PID [0-9]+\) (exited|faulted), code [0-9]+',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+    # 9: PROBE_EXIT (servers/steward/src/bin/steward.rs), thirteen times; each restarted instance
+    # starts the console session again, the thirteenth's being the verdict.
+    '^init: steward \(PID [0-9]+\) exited, code 9$',
+    '^init: emptied users: [0-9]+ budgets reaped$',
     '^init: restarted steward, console [0-9a-f]{16}$',
-    '^\[con [0-9a-f]{16}\] steward: users not empty$',
-    '^init: steward \(PID [0-9]+\) exited, code 3$',
-    '^init: restarted steward, console [0-9a-f]{16}$',
-    '^\[con [0-9a-f]{16}\] steward: users not empty$',
-    '^init: steward \(PID [0-9]+\) exited, code 3$',
-    '^init: restarted steward, console [0-9a-f]{16}$',
-    '^\[con [0-9a-f]{16}\] steward: users not empty$',
-    '^init: steward \(PID [0-9]+\) exited, code 3$',
-    '^init: restarted steward, console [0-9a-f]{16}$',
-    '^\[con [0-9a-f]{16}\] steward: users not empty$',
-    '^init: steward \(PID [0-9]+\) exited, code 3$',
-    '^init: restarted steward, console [0-9a-f]{16}$',
-    '^\[con [0-9a-f]{16}\] steward: users not empty$',
-    '^init: steward \(PID [0-9]+\) exited, code 3$',
-    '^init: rebooting: steward was restarted 5 times within 60 seconds$',
-    # The reboot's steward carves a fresh users: every session logged out.
-    '^loader: Redoubt rv(64|32) loader, boot hart 0$',
+    '^\[con [0-9a-f]{16}\] steward: users holds 0 pages, 0 processes$',
     '^\[con [0-9a-f]{16}\] steward: carved users/alice account 1001: ',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+    '^init: steward \(PID [0-9]+\) exited, code 9$',
+    '^init: emptied users: [0-9]+ budgets reaped$',
+    '^init: restarted steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] steward: users holds 0 pages, 0 processes$',
+    '^\[con [0-9a-f]{16}\] steward: carved users/alice account 1001: ',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+    '^init: steward \(PID [0-9]+\) exited, code 9$',
+    '^init: emptied users: [0-9]+ budgets reaped$',
+    '^init: restarted steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] steward: users holds 0 pages, 0 processes$',
+    '^\[con [0-9a-f]{16}\] steward: carved users/alice account 1001: ',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+    '^init: steward \(PID [0-9]+\) exited, code 9$',
+    '^init: emptied users: [0-9]+ budgets reaped$',
+    '^init: restarted steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] steward: users holds 0 pages, 0 processes$',
+    '^\[con [0-9a-f]{16}\] steward: carved users/alice account 1001: ',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+    '^init: steward \(PID [0-9]+\) exited, code 9$',
+    '^init: emptied users: [0-9]+ budgets reaped$',
+    '^init: restarted steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] steward: users holds 0 pages, 0 processes$',
+    '^\[con [0-9a-f]{16}\] steward: carved users/alice account 1001: ',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+    '^init: steward \(PID [0-9]+\) exited, code 9$',
+    '^init: emptied users: [0-9]+ budgets reaped$',
+    '^init: restarted steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] steward: users holds 0 pages, 0 processes$',
+    '^\[con [0-9a-f]{16}\] steward: carved users/alice account 1001: ',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+    '^init: steward \(PID [0-9]+\) exited, code 9$',
+    '^init: emptied users: [0-9]+ budgets reaped$',
+    '^init: restarted steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] steward: users holds 0 pages, 0 processes$',
+    '^\[con [0-9a-f]{16}\] steward: carved users/alice account 1001: ',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+    '^init: steward \(PID [0-9]+\) exited, code 9$',
+    '^init: emptied users: [0-9]+ budgets reaped$',
+    '^init: restarted steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] steward: users holds 0 pages, 0 processes$',
+    '^\[con [0-9a-f]{16}\] steward: carved users/alice account 1001: ',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+    '^init: steward \(PID [0-9]+\) exited, code 9$',
+    '^init: emptied users: [0-9]+ budgets reaped$',
+    '^init: restarted steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] steward: users holds 0 pages, 0 processes$',
+    '^\[con [0-9a-f]{16}\] steward: carved users/alice account 1001: ',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+    '^init: steward \(PID [0-9]+\) exited, code 9$',
+    '^init: emptied users: [0-9]+ budgets reaped$',
+    '^init: restarted steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] steward: users holds 0 pages, 0 processes$',
+    '^\[con [0-9a-f]{16}\] steward: carved users/alice account 1001: ',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+    '^init: steward \(PID [0-9]+\) exited, code 9$',
+    '^init: emptied users: [0-9]+ budgets reaped$',
+    '^init: restarted steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] steward: users holds 0 pages, 0 processes$',
+    '^\[con [0-9a-f]{16}\] steward: carved users/alice account 1001: ',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+    '^init: steward \(PID [0-9]+\) exited, code 9$',
+    '^init: emptied users: [0-9]+ budgets reaped$',
+    '^init: restarted steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] steward: users holds 0 pages, 0 processes$',
+    '^\[con [0-9a-f]{16}\] steward: carved users/alice account 1001: ',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+    '^init: steward \(PID [0-9]+\) exited, code 9$',
+    '^init: emptied users: [0-9]+ budgets reaped$',
+    '^init: restarted steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] steward: users holds 0 pages, 0 processes$',
+    '^\[con [0-9a-f]{16}\] steward: carved users/alice account 1001: ',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
 ]
-forbid = ['init: refused the boot', 'Redoubt shell, on Elixir']
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    'steward: users not empty',
+    '^init: steward \(PID [0-9]+\) exited, code 3$',
+]
 
-# The steward's heap capped below what its console session's launch needs (its boot's carve
-# fits): the one instance that carves dies after. The carve takes at most 9 pages and the launch
-# 10 (rv32) or 12 (rv64), from the memory scans (docs/testbench.md, "The memory budget").
 [[file]]
 name = "manifest"
 from = { path = "image/manifest.json" }
 verity = "image/userland.toml"
-
-[[file.servers]]
-name = "steward"
-heap_pages = "9"
 
 [userland]
 recipe = "image/userland.toml"
@@ -64,3 +127,4 @@ recipe = "image/userland.toml"
 [disk]
 recipe = "image/disk.toml"
 stage = "tests/data/steward/stage"
+
