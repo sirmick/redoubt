@@ -618,8 +618,6 @@ Status: built · tested: bench:walfsd-power-loss, bench:walfsd-corrupt-volume, b
   `walfsd`.
 - **A shared `walfsd` is shared state,** as a shared `littlefsd` is
   ([littlefsd](littlefsd.md#residual-risks)).
-- **`walfsd` copies `littlefsd`'s one-volume probe,** so a change to one must reach both
-  ([a follow-up](../todo/file-server-arguments-and-range-client.md)).
 
 ## Why
 

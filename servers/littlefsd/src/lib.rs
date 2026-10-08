@@ -33,8 +33,6 @@
 
 extern crate alloc;
 
-#[cfg(feature = "one-volume-probe")]
-pub mod one_volume;
 #[cfg(not(target_os = "none"))]
 pub mod pack;
 pub mod server;

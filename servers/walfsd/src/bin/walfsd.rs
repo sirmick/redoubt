@@ -48,11 +48,11 @@ pub fn serve(startup: &Startup) -> u32 {
     let Some(volume) = startup.handle("volume") else { return NO_VOLUME };
     // Two pages lent to each call: a block of sectors, and the message around it.
     let Ok(range) = Blkd::new(Endpoint::from_handle(volume), 2) else { return NO_VOLUME };
-    // Test-only: R47 tried from inside, before anything is served (src/one_volume.rs).
+    // Test-only: R47 tried from inside, before anything is served (libs/fileserver/src/probe.rs).
     #[cfg(feature = "one-volume-probe")]
     let range = {
         let mut range = range;
-        say(startup, &redoubt_walfsd::one_volume::verdict(startup, name, &mut range));
+        say(startup, &redoubt_fileserver::probe::verdict(startup, name, &mut range));
         range
     };
     let Ok(mounted) = mount(range) else { return NO_VOLUME };

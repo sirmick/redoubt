@@ -284,7 +284,10 @@ serves EROFS and `erofsd:system` is the system volume; `walfsd` serves walfs and
 is the data volume; `littlefsd` serves littlefs. The name says what parser stands between a
 client and the medium, which is what
 [R47 (one volume per instance)](littlefsd.md#r47-one-volume-per-instance) bounds. Servers that
-serve no format keep their role's name (`blkd`, `bootfsd`, `verityd`).
+serve no format keep their role's name (`blkd`, `bootfsd`, `verityd`). What the volume servers
+share beside their formats, their arguments, their client of `blkd`'s range and the quota ledger,
+is one crate beside the serving library, `redoubt-fileserver`
+([serving](serving.md#the-9p-server-skeleton)), so a volume server's own code is its format's.
 
 ## The network path
 

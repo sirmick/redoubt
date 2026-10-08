@@ -12,7 +12,7 @@ redoubt-rt = { path = "../rt" }
 
 [features]
 # Test-only, for the bench's one-volume cases, and off in every default build: the probe's reads
-# of the range (src/range.rs), and the probe itself.
+# of the range (src/range.rs), and the probe itself (src/probe.rs).
 one-volume-probe = []
 # Test-only, off in every target build: a range in memory (src/range/memory.rs), for the servers'
 # tests and littlefsd's host packer.

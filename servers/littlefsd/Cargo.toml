@@ -22,7 +22,7 @@ littlefs = { path = "../../libs/littlefs" }
 restart-probe = []
 # Test-only, for the bench's littlefsd-one-volume case, and off in every default build: before
 # serving, littlefsd tries to reach past its endpoint and its range and says what it found
-# (src/one_volume.rs).
+# (libs/fileserver/src/probe.rs).
 one-volume-probe = ["redoubt-fileserver/one-volume-probe"]
 # Test-only, for the bench's boot-profile cases, and off in every default build: littlefsd counts
 # its 9P operations and littlefs's reads, and says them (src/stats.rs).

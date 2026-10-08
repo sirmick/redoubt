@@ -36,8 +36,6 @@ extern crate alloc;
 
 #[cfg(feature = "cut-after-write")]
 pub mod cut;
-#[cfg(feature = "one-volume-probe")]
-pub mod one_volume;
 pub mod server;
 pub mod typed;
 pub mod volume;

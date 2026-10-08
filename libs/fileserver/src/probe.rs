@@ -1,22 +1,23 @@
-//! Test-only, for the bench's `littlefsd-one-volume` (feature `one-volume-probe`, off in every default
-//! build): R47 (one volume per instance) tried from inside `littlefsd` before it serves, as a parser
-//! exploit would try it. Each answer is the kernel's or `blkd`'s, never this code's opinion: a
-//! handle index other than its own is empty, its range's badge mints nothing, and the sector past
-//! its range is `out_of_range`.
+//! Test-only, for the bench's `littlefsd-one-volume` and `walfsd-one-volume` (feature
+//! `one-volume-probe`, off in every default build): R47 (one volume per instance) tried from inside
+//! a volume server before it serves, as a parser exploit would try it. Each answer is the kernel's
+//! or `blkd`'s, never this code's opinion: a handle index other than its own is empty, its range's
+//! badge mints nothing, and the sector past its range is `out_of_range`.
 
 use alloc::format;
 use alloc::string::String;
 use core::num::NonZeroU64;
 
-use redoubt_fileserver::range::{Blkd, Range};
 use redoubt_rt::abi::{Error, Handle};
 use redoubt_rt::startup::Startup;
 use redoubt_rt::wire::proto::blkd::ErrorCode;
 
+use crate::range::{Blkd, Range};
+
 /// The handle indices tried: far past any a startup block carries.
 const TRIED: u32 = 1024;
 
-/// What the instance found, as its console line: `name` and its verdict.
+/// What the instance found, as its console line: `name`, its endpoint's, and its verdict.
 pub fn verdict(startup: &Startup, name: &str, range: &mut Blkd) -> String {
     match tried(startup, name, range) {
         Ok(sectors) => format!(

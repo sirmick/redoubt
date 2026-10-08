@@ -8,7 +8,8 @@
 //! - [`range`]: the range at `blkd` (or at a `verityd`) as a format needs it, and the one client of `blkd`'s
 //!   protocol;
 //! - [`quota`]: the byte quotas per attach root that `littlefsd` and `walfsd` carve, a ledger their servers
-//!   keep counted.
+//!   keep counted;
+//! - `probe`, test-only (feature `one-volume-probe`): R47 tried from inside a volume server before it serves.
 //!
 //! **No `unsafe`.** The crate forbids it outright.
 
@@ -18,5 +19,7 @@
 extern crate alloc;
 
 pub mod args;
+#[cfg(feature = "one-volume-probe")]
+pub mod probe;
 pub mod quota;
 pub mod range;
