@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 379
+revision = 382
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1463,8 +1463,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   body = "SHELL2 (c144f28fc) put the shell's line editing under its own driver, which redraws the line with CR and CSI J/A/C, and prints a result on its own line ('\\r55'). Its gates ran on the host only. On main 3b049cacc, rv64 userland-boot fails 'timed out waiting for /\\(N\\)> 55/'. Cases with a '\\)> ' pattern: userland-boot, userland-read-only, steward-vault-session, steward-sub-budget-flood, steward-session-ends and steward-ssh-two-principals. Decide whether the bench reads console lines with terminal control sequences stripped (one rule for every case), or the cases match the new output. Then fix, and rerun every case that types at a shell prompt on both widths. Size S."
-  state = "active"
-  revision = 376
+  state = "done"
+  revision = 382
 
 [[node]]
   id = "B31"
@@ -1474,3 +1474,13 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "Found by BEAM14 on main abd3fcd6d. An SSH session (steward + sshd; pty or not; labelled or not) that is quiet for 12-15 s ends: its shell reads the input's end, prints 'ok' and exits; the steward logs 'users/<p>/{} holds 0 pages', sshd 'session ... ended'. Probes on rv64, quiet class: sleeps of 4-12 s survive, 15 s ends; bob idle at his prompt for about 17 s dies 6 of 6. Suspect (unread): the session VM's hub connection to sshd's channel console holds its completion call no longer than the session bound, and the hold boundary is read as the server's silence (K27's mechanism, with no load). A user who stops typing for 15 s loses the session. Check the UART console session too. Fix, and add a case where a session stays idle past several hold boundaries, on both widths. Size S-M."
   state = "active"
   revision = 378
+
+[[node]]
+  id = "B32"
+  title = "beamlet-footprint fails since SHELL2: the shell VM's heap at twice its peak (11,804 rv64 / 11,406 rv32 pages) passes the manifest cap of 10,989"
+  template = "package"
+  parent = "M2"
+  needs = ["B30"]
+  body = "Found by B30. Once B30 fixes beamlet-footprint's result match, the memory check behind it fails on both widths: heap 2x peak 11,804/11,406 > cap 10,989. SHELL2's driver (group, edlin, Redoubt.Term, history) raised the shell VM's heap. Measure what grew. Then cut it, or raise the cap with a measured reason, under B23's rule (the peak stays under half the cap). Size S."
+  state = "todo"
+  revision = 381

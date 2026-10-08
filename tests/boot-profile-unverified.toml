@@ -28,12 +28,13 @@ expect = [
     '^init: started steward, console [0-9a-f]{16} \[t=[0-9]+\]$',
     '^\[con [0-9a-f]{16}\] beamlet: boot pack read [0-9]+ bytes, 94 entries \[t=[0-9]+\]$',
     '^\[con [0-9a-f]{16}\] beamlet: Elixir.Redoubt.Shell read from (erofsd:system|the boot pack) \[t=[0-9]+\]$',
-    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
-    # The shell's prompt has no newline: the line follows it on the console's line.
+    # The shell's driver reads the console before the shell draws its banner and prompt.
     # The boot-time target: the prompt within 20 s: the 15.3 s measured on rv32 (13.2 s on rv64)
     # with the steward starting the shell and a tenth, rounded up to 5 s (docs/userland/beamlet.md).
     'beamlet: first console read \[t=([0-9]{1,7}|1[0-9]{7})\]$',
     '^\[con [0-9a-f]{16}\] beamlet: boot-stats: loads [0-9]+ ',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+    '^\[con [0-9a-f]{16}\] / \([0-9]+\)> Enum\.sum\(1\.\.10\)$',
     '^\[con [0-9a-f]{16}\] 55$',
     '^\[con [0-9a-f]{16}\] erofsd: boot-stats: 9P [0-9]+ ',
     'UndefinedFunctionError\) function BootStats.x/0 is undefined',
