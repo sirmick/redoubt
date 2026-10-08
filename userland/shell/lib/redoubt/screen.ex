@@ -12,8 +12,8 @@ defmodule Redoubt.Screen do
   - `view(state, buffer, {cols, rows})`: draws the whole screen into the buffer, which starts
     blank each time; only what changed since the last frame is sent.
 
-  `run/3`, from a line, runs one: it starts the screen's process, with the evaluator's heap limit,
-  and returns the value it ended with, or `nil` when the interrupt ended it. The interrupt is the
+  `run/3`, from a line, runs one: it starts the screen's process, with its caller's heap limit (the
+  evaluator's, from a line), and returns the value it ended with, or `nil` when the interrupt ended it. The interrupt is the
   session's key, Ctrl+\\, which no screen is ever sent, and Ctrl+C unless the screen takes it as
   a key. While it is in front, the shell's driver shows the alternate screen, sends it the keys,
   draws its frames through the one decoder and encoder, and holds other processes' output; then
@@ -26,8 +26,8 @@ defmodule Redoubt.Screen do
   @callback update(event :: term(), state :: term()) :: {:cont, term()} | {:halt, term()}
   @callback view(state :: term(), buffer :: Buffer.t(), size :: {pos_integer(), pos_integer()}) :: term()
 
-  # The screen's process's heap limit, as the evaluator's: a fixed share until the session's
-  # budget is known (128 MiB on a 64-bit VM).
+  # The screen's process's heap limit when its caller has none: the evaluator's fixed share until
+  # the session's budget is known (128 MiB on a 64-bit VM).
   @max_heap_words 16 * 1024 * 1024
 
   @doc """
@@ -41,6 +41,19 @@ defmodule Redoubt.Screen do
   """
   @spec run(module(), term(), keyword()) :: term()
   def run(module, args, opts \\ []) do
+    {value, nil} = serve(module, args, fn _request, nil -> {nil, nil} end, nil, opts)
+    value
+  end
+
+  @doc """
+  Runs `module` as `run/3` does, and while it is in front answers what it asks with `call/1`:
+  `handle.(request, state)` returns the reply and the next state, in the caller's process. So a
+  screen can be handed what only its caller may touch, a file the caller opened, a bit at a time.
+  Returns the screen's value and the last state.
+  """
+  @spec serve(module(), term(), (term(), state -> {term(), state}), state, keyword()) :: {term(), state}
+        when state: term()
+  def serve(module, args, handle, state, opts \\ []) do
     ctrl_c = Keyword.get(opts, :ctrl_c, :interrupt)
 
     unless ctrl_c in [:interrupt, :key],
@@ -48,21 +61,82 @@ defmodule Redoubt.Screen do
 
     driver = driver!()
     caller = self()
-    heap = %{size: @max_heap_words, kill: true, error_logger: false}
+    # What a screen holds is what it shows (the pager keeps the lines it has read), and lines are
+    # binaries, which a heap limit leaves out unless told: so they count toward this one.
+    heap = %{size: heap_words(), kill: true, error_logger: false, include_shared_binaries: true}
 
     {pid, ref} =
       Process.spawn(fn -> start(driver, caller, module, args, ctrl_c) end, [:monitor, max_heap_size: heap])
 
+    await(pid, ref, handle, state)
+  end
+
+  defp await(pid, ref, handle, state) do
     receive do
+      {:redoubt_screen, :call, ^pid, tag, request} ->
+        {reply, state} = handle.(request, state)
+        send(pid, {tag, reply})
+        await(pid, ref, handle, state)
+
       {:redoubt_screen, :result, ^pid, value} ->
         Process.demonitor(ref, [:flush])
-        value
+        {value, state}
 
       {:DOWN, ^ref, :process, ^pid, :interrupt} ->
-        nil
+        {nil, state}
 
       {:DOWN, ^ref, :process, ^pid, reason} ->
         exit({:screen, reason})
+    end
+  end
+
+  @doc """
+  From a screen's process: asks the process that runs it (`serve/5`), and waits for the reply.
+  If that process ends first, so does the screen.
+  """
+  @spec call(term()) :: term()
+  def call(request) do
+    caller = Process.get(:redoubt_screen_caller)
+    tag = Process.monitor(caller)
+    send(caller, {:redoubt_screen, :call, self(), tag, request})
+
+    receive do
+      {^tag, reply} ->
+        Process.demonitor(tag, [:flush])
+        reply
+
+      {:DOWN, ^tag, :process, _caller, reason} ->
+        exit({:caller, reason})
+    end
+  end
+
+  @doc """
+  The size of the terminal a screen would draw on, `{:ok, {cols, rows}}`, or `:none` when the
+  line's output is not the shell's terminal, or the terminal's size is not known (a console that
+  does not say it), when a screen's layout would be a guess.
+  """
+  @spec terminal_size() :: {:ok, {pos_integer(), pos_integer()}} | :none
+  def terminal_size do
+    # OTP's group, the shell's own console, has completion among its options; anything else
+    # (a captured output, a file) has not, and has no driver to ask.
+    with opts when is_list(opts) <- :io.getopts(Process.group_leader()),
+         true <- Keyword.has_key?(opts, :expand_fun) do
+      send(driver!(), {:redoubt_screen, :size, self()})
+
+      receive do
+        {:redoubt_screen, :size, {cols, rows}} -> {:ok, {cols, rows}}
+        {:redoubt_screen, :size, :unknown} -> :none
+      end
+    else
+      _not_a_terminal -> :none
+    end
+  end
+
+  # The caller's own limit, so a screen holds no more than the line that started it could.
+  defp heap_words do
+    case Process.info(self(), :max_heap_size) do
+      {:max_heap_size, %{size: words}} when words > 0 -> words
+      _none -> @max_heap_words
     end
   end
 
@@ -81,6 +155,7 @@ defmodule Redoubt.Screen do
   # ---- the screen's process ----
 
   defp start(driver, caller, module, args, ctrl_c) do
+    Process.put(:redoubt_screen_caller, caller)
     send(driver, {:redoubt_screen, :open, self(), ctrl_c})
 
     {cols, rows} =

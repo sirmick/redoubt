@@ -106,7 +106,7 @@ step is one a person can use, in this order:
    ([beamlet](../userland/beamlet.md#screen-natives),
    [the shell](../userland/shell.md#full-screen-programs)).
 3. **The pager, help drawn in it, and completion**
-   ([the shell](../userland/shell.md#session-commands-and-the-pager),
+   ([the shell](../userland/shell.md#the-pager),
    [the shell](../userland/shell.md#completion)).
 4. **The widgets:** the menu bar, dialogs, the input, the lists, the table and the canvas
    ([the shell](../userland/shell.md#widgets-focus-and-themes)).
@@ -119,7 +119,7 @@ On Redoubt, after M1 (sessions over SSH, kept apart), in this order:
    `resize`) on it ([serving](../servers/serving.md#parking-a-typed-call),
    [consoled](../servers/consoled.md#the-consol-protocol)).
 2. **The commands on Redoubt:** files through beamlet's platform, the session's own commands, and
-   binds ([the shell](../userland/shell.md#session-commands-and-the-pager),
+   binds ([the shell](../userland/shell.md#session-commands),
    [files](../userland/files.md#copying-moving-removing-and-binds)).
 3. **Native programs and pipes**: standard streams as served files, pipelines of native stages
    ([native programs](../userland/native.md#standard-input-and-output-and-pipes),
@@ -190,7 +190,8 @@ a line, and hostile text drawn visibly on every path the host has
 the screen buffer's natives, `Redoubt.Screen` with its layout, and `pick`
 ([the shell](../userland/shell.md#full-screen-programs)); the widgets: the menu bar, dialogs,
 the input, the lists, the table, the Braille canvas, focus and themes
-([the shell](../userland/shell.md#widgets-focus-and-themes)); and resource use, `free`, `uptime`,
+([the shell](../userland/shell.md#widgets-focus-and-themes)); the pager, with help drawn in it
+([the shell](../userland/shell.md#the-pager)); and resource use, `free`, `uptime`,
 `ps` and `top`, over the session's own budget and its VM, `df` not yet
 ([the shell](../userland/shell.md#resource-use)). On Redoubt it runs only on the fake kernel (`./shell --fake`). What the milestone builds on: the serving
 library's parked calls ([serving](../servers/serving.md#parked-calls)), `consoled`'s 9P console

@@ -132,8 +132,8 @@ end
 
 - **Typed.** A parameter is `name :: type`, with an optional default: `path`, `string`,
   `integer` (with bounds), `pattern` (a string or a `~r//`), `lines`, `boolean`, `one_of`,
-  `flags(...)` for keyword options, `ref` (a function or module), `name`, a command's name, and
-  `many(t)`.
+  `flags(...)` for keyword options, `ref` (a function or module), `name`, a command's name,
+  `term` (any value), and `many(t)`.
   The arguments are checked, and coerced where a type says so, before the body runs; a wrong one
   raises a usage error naming the parameter and showing the usage.
 - **The help is not optional.** A command without a summary, a page, a line for each parameter,
@@ -179,7 +179,36 @@ Files come in through `cat` and go out through `w`; everything between takes lin
 What each file operation does underneath, and why a rename across volumes cannot be atomic, is
 [files and binds](files.md)'s.
 
-### Session commands and the pager
+### The pager
+
+Status: built · partly tested: the host only, on beamlet alone (the BEAM has no screen buffer, and prints instead); its tests are the shell's own ExUnit suite (`test/redoubt/screen/pager_test.exs`, `test/redoubt/screen/pager/doc_test.exs`), judged on a model of the terminal, and a pseudo-terminal test of the real binary, both of which `./test-shell` runs; on the machine, whose console does not say its size, a bench case shows a long value printed whole · tested: host:beamlet::help_longer_than_the_terminal_is_paged_and_q_gives_the_screen_back, bench:userland-read-only
+
+The **pager** ([`Redoubt.Screen.Pager`](../../userland/shell/lib/redoubt/screen/pager.ex)) shows a
+`%Lines{}` that is the value at the prompt a screen at a time, when it is longer than the screen;
+`help`'s pages and topics are drawn in it with their headings bold. It is a screen program
+([full-screen programs](#full-screen-programs)).
+- **When it takes the screen.** Only on the shell's own terminal, of a size the console says:
+  lines that fit the screen, and any lines on a console of unknown size (the machine's UART and
+  an SSH channel, whose console does not say its size: [consoled](../servers/consoled.md)) or
+  printed elsewhere, are printed as they are. `out(value)` prints without it.
+- **Keys:** Space, `f` or Page Down a page on, `b` or Page Up a page back; Down, `j` or Enter a
+  row on, Up or `k` a row back; `g` or Home the top, `G` or End the end; `/`, a text and Enter
+  search forward, `n` and `N` the next and the one before, each match drawn reversed; `q` or Esc
+  leaves, and the line's value is not printed again. A line wider than the screen goes on in
+  further rows, a list item's under its text.
+- **It reads what it shows.** The lines are read as far as the screen or a search needs, so
+  `cat("big.log")` reads what is looked at, and leaving the pager stops the reading and closes the
+  file. They are read by the line's evaluator, which opened the file, and handed to the pager a
+  batch at a time. What the pager has read it keeps, to page back, counted toward the line's
+  heap limit, binaries too: paging to the end of more than that ends the line with
+  `{:screen, :killed}`, and the shell goes on.
+- **Text and style.** Every line is drawn through the visible-text rule, the search text typed
+  too. Help's style (bold headings, indented list items) is chosen by the shell's own help, never
+  by the lines: anything made from them, `help() |> grep(...)`, is plain. A line typed at the
+  prompt can make lines of help's style too; that costs nothing, since a style only makes some of
+  them bold and indents others, and the text still passes the visible-text rule.
+
+### Session commands
 
 Status: planned · M2 (usable shell)
 
@@ -188,13 +217,8 @@ Status: planned · M2 (usable shell)
 | `ns()`, `bind(prefix, conn)` | show the namespace; bind a held connection at a prefix |
 | `whoami()`, `labels()` | the principal and the session's label set |
 | `clear()` | clear the screen |
-| `out(value)` | print without the pager |
 | `follow(path)` | the lines added to a file, as they come, until Ctrl+C |
 | `now()`, `today()`, `ago(time)` | wall-clock time, which a session has from M6 (persist, install, share) |
-
-The **pager** shows a long value a screen at a time (space, `b`, `/search`, `q`); a `%Lines{}`
-that is the value at the prompt goes through it, and `help`'s pages and topics are drawn in it
-with bold and indentation. It is a screen program ([full-screen programs](#full-screen-programs)).
 
 **Open:** none.
 
@@ -350,7 +374,7 @@ because a query on a UART that never answers costs a timeout at every login).
 
 ### Hostile text never drives the terminal
 
-<details><summary>Status: built · partly tested: the host only, and the paths that exist there: the printer, a line's own writes to the console, what the VM logs, the prompt and the typed line, and a screen program's text through the screen buffer (on beamlet alone); a native program's frames are not built; the attack case is the shell's own ExUnit suite (`test/redoubt/shell/driver_test.exs`, `test/redoubt/term_test.exs`, `test/redoubt/screen_test.exs`), judged by a model of the terminal that refuses any sequence but the encoder's own, which `./test-shell` runs and no bench case does, and the buffer's own refusals · tested (2)</summary>
+<details><summary>Status: built · partly tested: the host only, and the paths that exist there: the printer, a line's own writes to the console, what the VM logs, the prompt and the typed line, and a screen program's text, the pager's included, through the screen buffer (on beamlet alone); a native program's frames are not built; the attack case is the shell's own ExUnit suite (`test/redoubt/shell/driver_test.exs`, `test/redoubt/term_test.exs`, `test/redoubt/screen_test.exs`, `test/redoubt/screen/pager_test.exs`), judged by a model of the terminal that refuses any sequence but the encoder's own, which `./test-shell` runs and no bench case does, and the buffer's own refusals · tested (2)</summary>
 
 - host:beamlet-screen::a_control_character_is_badarg_and_nothing_is_drawn
 - host:beamlet-screen::a_control_character_is_refused_and_nothing_of_the_call_is_written
@@ -442,10 +466,11 @@ own. It draws into a **screen buffer**, a grid of cells beamlet holds natively
 - **`Redoubt.Screen`** ([`userland/shell/lib/redoubt/screen.ex`](../../userland/shell/lib/redoubt/screen.ex)),
   a behaviour of three functions in the Elm style: `init`, `update` on a key or a message, and
   `view`, which draws the whole screen into the buffer, blank each time; only what changed since
-  the last frame is sent. One Erlang process runs a screen, with the evaluator's heap limit: the
-  shell's driver sends it the keys while it is in front, and it answers each with `update`,
-  `view` and the buffer's diff, a frame the driver reads through the one decoder and draws. Its
-  first event is `{:resize, cols, rows}`, with its size.
+  the last frame is sent. One Erlang process runs a screen, with its caller's heap limit (the
+  evaluator's, from a line), the binaries it holds counted too: the shell's driver sends it the
+  keys while it is in front, and it answers each with `update`, `view` and the buffer's diff, a
+  frame the driver reads through the one decoder and draws. Its first event is
+  `{:resize, cols, rows}`, with its size.
 - **Layout** is rectangles only: split into rows or columns by fixed size, percentage or what is
   left; centre; inset. A screen lays out in fixed rectangles.
 - **Widgets are functions, not processes:** each draws into a rectangle of the buffer from what it
@@ -458,10 +483,12 @@ own. It draws into a **screen buffer**, a grid of cells beamlet holds natively
   at once so none waits on the screen; then it shows the main screen again, as it was, and draws
   what it held. The interrupt ends it with `nil`: Ctrl+\\, and Ctrl+C unless it was started with
   `ctrl_c: :key`, which makes Ctrl+C a key it is sent (the editor copies with it). One screen is
-  in front at a time.
-- **`pick(items)`** is a screen, `menuconfig`'s chooser: a list in a box, the arrows,
-  Page Up and Down, Home and End to move, Enter to choose, Esc to leave. It returns the chosen
-  item, or `nil`.
+  in front at a time. A screen can ask the process that started it for what only that process
+  may touch (`Redoubt.Screen.serve/5`), as the pager asks its line's evaluator for lines from a
+  file the evaluator opened.
+- **`pick(items)`** and [the pager](#the-pager) are screens. `pick` is `menuconfig`'s chooser:
+  a list in a box, the arrows, Page Up and Down, Home and End to move, Enter to choose, Esc to
+  leave. It returns the chosen item, or `nil`.
 - **Small things skip it.** A spinner, a progress line or a single status line is drawn by
   `Redoubt.Term` directly.
 
@@ -603,7 +630,7 @@ The shell's completer (`group`'s `expand_fun`) looks at the line before the curs
 
 ### Help
 
-Status: built · partly tested: runs on the host only; its tests are the shell's own ExUnit suite, which `./test-shell` runs and no bench case does
+Status: built · partly tested: runs on the host only, and in the pager on beamlet alone; its tests are the shell's own ExUnit suite and a pseudo-terminal test of the real binary, which `./test-shell` runs, and a bench case that prints `help()` on the machine's console · tested: host:beamlet::help_longer_than_the_terminal_is_paged_and_q_gives_the_screen_back, bench:userland-read-only
 
 ```text
 help()            # commands grouped by area, one line each
@@ -613,8 +640,12 @@ h(File)           # Elixir's own documentation of a module; h(&File.cp/2) of a f
 ```
 
 A command's page comes from its `defcommand` ([commands](#commands)), so a command cannot exist
-without one. A topic is a short Markdown page bundled with the shell, shown as its text. `h/1`
-reads the documentation chunks of the module's `.beam` file.
+without one. A topic is a short Markdown page bundled with the shell. `h/1` reads the
+documentation chunks of the module's `.beam` file. What help shows is lines, so it can be
+searched (`help() |> grep("file")`); longer than the screen, it is shown in
+[the pager](#the-pager), with a topic's headings, the index's areas and a page's usage line and
+"Examples" in bold. Only the shell's own help is styled so: `h/1` shows a module's documentation,
+which is the module's, as it is.
 
 ### Resource use
 

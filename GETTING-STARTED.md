@@ -197,10 +197,11 @@ out in columns: `ls_r() |> Enum.map(&[&1, stat(&1).size]) |> table(title: "sizes
 prints shows control characters as visible text (`^[` for ESC), so a hostile file cannot drive
 the terminal; `hexdump` shows a file's bytes. Lines are edited with OTP's `edlin` under the
 shell's own driver, with Emacs keys, the session's history (arrows, Ctrl+R) and Ctrl+C or
-Ctrl+\ ending the line; there is no completion. `pick(items)` chooses one on a screen of its own,
-on beamlet only: the BEAM has no screen buffer. A screen program of your own is built of the
-widgets in `Redoubt.Screen.Widget`, with dialogs, focus and themes beside them. `exit` or Ctrl+D
-ends it.
+Ctrl+\ ending the line; there is no completion. A value of lines longer than the screen opens the
+pager (Space, `b`, `/`, `q`), and `out(value)` prints it whole; `help()` pages too. `pick(items)`
+chooses one on a screen of its own. The pager and `pick` are on beamlet only: the BEAM has no
+screen buffer, and prints instead. A screen program of your own is built of the widgets in
+`Redoubt.Screen.Widget`, with dialogs, focus and themes beside them. `exit` or Ctrl+D ends it.
 
 Each command is a commandlet, declared once with `defcommand` in any module of
 `userland/shell` that uses `Redoubt.Commandlet`: typed parameters, and help that a command does

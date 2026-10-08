@@ -167,6 +167,23 @@ defmodule Redoubt.ScreenTest do
     refute Terminal.alternate?(t)
   end
 
+  test "a screen whose serving line ends while it asks ends too, and the session goes on" do
+    {driver, t} = start()
+
+    type(
+      driver,
+      ~S|Redoubt.Screen.serve(Redoubt.ScreenTest.Asking, nil, fn _, _ -> Process.exit(self(), :kill) end, nil)| <>
+        "\r"
+    )
+
+    t = screen(t, &shows?(&1, "asking"))
+    type(driver, "x")
+    t = screen(t, &(not Terminal.alternate?(&1)))
+    refute Terminal.alternate?(t)
+    assert shows?(t, "the evaluation ended")
+    ends(driver)
+  end
+
   test "an item holding control characters is drawn visibly, and drives nothing" do
     {driver, t} = start()
     type(driver, ~S|pick(["\e]52;c;aGk=\a", "\u202Eevil", "ok"])| <> "\r")
@@ -333,6 +350,25 @@ defmodule Redoubt.ScreenTest do
     @impl true
     def view(keys, buffer, _size),
       do: Redoubt.Term.Buffer.put(buffer, 0, 0, Enum.join(["keys:" | Enum.reverse(keys)], " "))
+  end
+
+  defmodule Asking do
+    # A screen that asks the line serving it, at any key.
+    @behaviour Redoubt.Screen
+
+    @impl true
+    def init(_args), do: nil
+
+    @impl true
+    def update({:key, _key, _mods}, state) do
+      _reply = Redoubt.Screen.call(:anything)
+      {:cont, state}
+    end
+
+    def update(_event, state), do: {:cont, state}
+
+    @impl true
+    def view(_state, buffer, _size), do: Redoubt.Term.Buffer.put(buffer, 0, 0, "asking")
   end
 
   @doc false

@@ -1,7 +1,8 @@
 defmodule Redoubt.Shell.Session do
   @moduledoc """
   The session's own commands, imported at the prompt: its namespace (docs/userland/sessions.md,
-  "Namespaces") and running a native program (docs/userland/shell.md, "The shell in a session").
+  "Namespaces"), printing without the pager, and running a native program (docs/userland/shell.md,
+  "The shell in a session").
   Each is a thin layer over `Redoubt.Namespace` and `Redoubt.Process`, and adds no authority.
   """
 
@@ -51,6 +52,18 @@ defmodule Redoubt.Shell.Session do
   @examples [{~S'bind("/h", home)', "the home volume, at /h too"}]
   defcommand bind(prefix :: string, connection :: handle) do
     Redoubt.Namespace.bind(prefix, connection)
+  end
+
+  @summary "Print a value without the pager"
+  @help """
+  Prints value as the prompt would, but lines however many there are, a screenful or not,
+  straight to the console and never into the pager. Returns :ok.
+  """
+  @args value: "what to print: lines, or any value"
+  @examples [{~S'cat("big.log") |> out()', "the whole file, scrolling past"}]
+  defcommand out(value :: term) do
+    Redoubt.Shell.Printer.out(value)
+    :ok
   end
 
   @summary "Run a native program and wait for it"

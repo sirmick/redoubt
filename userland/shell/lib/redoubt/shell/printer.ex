@@ -2,13 +2,15 @@ defmodule Redoubt.Shell.Printer do
   @moduledoc """
   Prints values, errors and messages at the prompt, every line through `Redoubt.Term.Text`.
 
-  A `%Lines{}` is printed a line at a time, as it is read; any other value is inspected, which
-  never reads a `%Lines{}`. An error's stack trace stops where the shell's own evaluation
+  A `%Lines{}` longer than the screen is shown in the pager (`Redoubt.Screen.Pager`), and any
+  other is printed a line at a time, as it is read; `out/1` prints one without the pager. Any
+  other value is inspected, which never reads a `%Lines{}`. An error's stack trace stops where the shell's own evaluation
   begins.
   """
 
   alias Redoubt.Commandlet
   alias Redoubt.Commandlet.{Registry, UsageError}
+  alias Redoubt.Screen.Pager
   alias Redoubt.Term.Text
   alias Redoubt.Util.Lines
 
@@ -18,14 +20,15 @@ defmodule Redoubt.Shell.Printer do
   # The frames of the evaluation machinery under every line, left out of a stack trace.
   @machinery [Redoubt.Shell.Evaluator, Code, :elixir, :elixir_eval, :elixir_expand, :erl_eval]
 
-  @doc "Prints a value."
-  def value(%Lines{} = lines) do
-    lines
-    |> Stream.chunk_every(@batch)
-    |> Enum.each(fn batch -> IO.write(Enum.map(batch, &[Text.visible(&1), ?\n])) end)
-  end
+  @doc "Prints a value, the value of a line: lines longer than the screen in the pager."
+  def value(%Lines{} = lines), do: Pager.show(lines, &lines/1)
+  def value(value), do: out(value)
 
-  def value(value), do: value |> inspect(pretty: true, width: width()) |> text()
+  @doc "Prints a value, and lines a batch at a time however many there are: never in the pager."
+  def out(%Lines{} = lines), do: lines |> Stream.chunk_every(@batch) |> Enum.each(&lines/1)
+  def out(value), do: value |> inspect(pretty: true, width: width()) |> text()
+
+  defp lines(batch), do: IO.write(Enum.map(batch, &[Text.visible(&1), ?\n]))
 
   @doc """
   Prints an error caught with `kind` and `reason`, and the part of its stack that is the line's.
