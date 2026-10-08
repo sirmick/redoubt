@@ -4,6 +4,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use erofs::{BLOCK, Corrupt, Dirents, EXTENDED, Inode, Kind, SUPERBLOCK_AT, SUPERBLOCK_LEN, Superblock};
+use redoubt_fileserver::range::{Fault, Range};
 use redoubt_rt::abi::PAGE_SIZE;
 use redoubt_rt::ipc::Caller;
 use redoubt_rt::server::ninep::{
@@ -43,65 +44,11 @@ pub mod text {
     pub const READ_ONLY: NineError = NineError("read-only volume");
 }
 
-/// A request to the range failed: the range refused it, or its disk did.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Fault;
-
-/// The range as `erofsd` uses it: its size, and bytes read from anywhere in it
-/// (libs/wire/tables/blkd.md's `info` and `read`, in [`crate::blkd`]).
-pub trait Range {
-    /// The range's length in sectors (`info`).
-    fn sectors(&mut self) -> Result<u64, Fault>;
-    /// `out.len()` bytes from byte `at`.
-    fn read(&mut self, at: u64, out: &mut [u8]) -> Result<(), Fault>;
-}
-
-/// Why the arguments were refused.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct BadArgs;
-
-/// What `erofsd`'s arguments other than `buckets=` say.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Args<'a> {
-    /// The manifest name of the endpoint it receives on (`erofsd:system`): its startup block
-    /// holds that endpoint under this name.
-    pub endpoint: &'a str,
-    /// The volume's label set; empty when `labels=` is absent.
-    pub labels: Vec<u64>,
-}
-
-/// The arguments other than `buckets=`, as `littlefsd` takes them: `endpoint=NAME` exactly once,
-/// a name under the manifest's rule; and `labels=ID[,ID...]` at most once, each ID decimal
-/// without leading zeros, at most `MAX_LABELS`, absent for an empty set. Anything else is refused.
-pub fn parse_args<'a>(args: impl Iterator<Item = &'a str>) -> Result<Args<'a>, BadArgs> {
-    let (mut endpoint, mut labels) = (None, None);
-    for arg in args {
-        if let Some(name) = arg.strip_prefix("endpoint=") {
-            if endpoint.is_some() || !redoubt_rt::startup::valid_name(name) {
-                return Err(BadArgs);
-            }
-            endpoint = Some(name);
-            continue;
-        }
-        let list = arg.strip_prefix("labels=").ok_or(BadArgs)?;
-        if labels.is_some() {
-            return Err(BadArgs);
-        }
-        let mut set = Vec::new();
-        for id in list.split(',') {
-            let canonical = !id.is_empty()
-                && id.bytes().all(|b| b.is_ascii_digit())
-                && (id == "0" || !id.starts_with('0'));
-            let id: u64 = id.parse().ok().filter(|_| canonical).ok_or(BadArgs)?;
-            if set.contains(&id) || set.len() >= redoubt_rt::abi::MAX_LABELS {
-                return Err(BadArgs);
-            }
-            set.try_reserve(1).map_err(|_| BadArgs)?;
-            set.push(id);
-        }
-        labels = Some(set);
-    }
-    Ok(Args { endpoint: endpoint.ok_or(BadArgs)?, labels: labels.unwrap_or_default() })
+/// `out.len()` bytes of the range from byte `at` (`Range::read_at`), counted under `boot-stats`.
+fn read_at<R: Range>(range: &mut R, at: u64, out: &mut [u8]) -> Result<(), Fault> {
+    #[cfg(feature = "boot-stats")]
+    crate::stats::call(out.len());
+    range.read_at(at, out)
 }
 
 /// What a fid rests on: the inode it was walked to, read and checked then, and the name it was
@@ -149,7 +96,7 @@ fn read_inode<R: Range>(range: &mut R, sb: &Superblock, nid: u64) -> Result<Inod
     let len = (sb.bytes() - at).min(EXTENDED as u64) as usize;
     #[cfg(feature = "boot-stats")]
     crate::stats::read_for(crate::stats::For::Inode);
-    range.read(at, &mut bytes[..len])?;
+    read_at(range, at, &mut bytes[..len])?;
     Ok(Inode::parse(sb, nid, &bytes[..len])?)
 }
 
@@ -191,7 +138,7 @@ impl<R: Range> Erofsd<R> {
     /// read and checked now. A range that cannot be sized, or no memory for the scratch block, is
     /// no volume at all (`Err`: the program exits); anything else that fails is served as corrupt.
     pub fn new(mut range: R, labels: Vec<u64>) -> Result<Erofsd<R>, Fault> {
-        let sectors = range.sectors()?;
+        let sectors = range.info()?.sectors;
         let mut scratch = Vec::new();
         scratch.try_reserve_exact(BLOCK).map_err(|_| Fault)?;
         scratch.resize(BLOCK, 0);
@@ -257,7 +204,7 @@ impl<R: Range> Erofsd<R> {
         let volume = self.volume.as_mut().ok_or(Failure::Corrupt)?;
         #[cfg(feature = "boot-stats")]
         crate::stats::read_for(crate::stats::For::Directory);
-        volume.range.read(at, &mut self.scratch[..len])?;
+        read_at(&mut volume.range, at, &mut self.scratch[..len])?;
         self.held = Some(Held { nid: dir.nid(), index, len });
         Ok(len)
     }
@@ -312,7 +259,7 @@ impl<R: Range> Erofsd<R> {
 /// `None` if any of it fails.
 fn open<R: Range>(mut range: R, sectors: u64, scratch: &mut [u8]) -> Option<Volume<R>> {
     let head = &mut scratch[..SUPERBLOCK_AT + SUPERBLOCK_LEN];
-    range.read(0, head).ok()?;
+    read_at(&mut range, 0, head).ok()?;
     let sb = Superblock::parse(head, sectors / (BLOCK as u64 / 512)).ok()?;
     let root = read_inode(&mut range, &sb, sb.root).ok().filter(|r| r.kind() == Kind::Dir)?;
     Some(Volume { range, sb, root })
@@ -404,7 +351,7 @@ impl<R: Range> FileServer for Erofsd<R> {
             let n = run.min((want - done) as u64) as usize;
             #[cfg(feature = "boot-stats")]
             crate::stats::read_for(crate::stats::For::Data);
-            if let Err(f) = self.volume()?.range.read(at, &mut out[done..done + n]) {
+            if let Err(f) = read_at(&mut self.volume()?.range, at, &mut out[done..done + n]) {
                 return Err(self.failed(f.into()));
             }
             done += n;

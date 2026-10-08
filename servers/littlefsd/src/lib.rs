@@ -18,7 +18,7 @@
 //!
 //! **Quotas.** Each root a connection is minted at has a byte quota carved from the live root
 //! above it, counted when the first connection is minted there and never stored; every change is
-//! charged to the nearest live root above it (R48, [`quota`]).
+//! charged to the nearest live root above it (R48, [`redoubt_fileserver::quota`]).
 //!
 //! **Typed operations.** `rename`, `copy_file`, `set_attr` and `get_attr` on the 9P endpoint
 //! ([`typed`]), naming the caller's own fids through the skeleton.
@@ -33,17 +33,14 @@
 
 extern crate alloc;
 
-pub mod blkd;
-#[cfg(feature = "one-volume-probe")]
-pub mod one_volume;
 #[cfg(not(target_os = "none"))]
 pub mod pack;
-mod quota;
 pub mod server;
 #[cfg(feature = "boot-stats")]
 pub mod stats;
 pub mod typed;
 pub mod volume;
 
-pub use server::{Args, BUDGET, BadArgs, COST, Littlefsd, limits, parse_args};
+pub use redoubt_fileserver::args::{Args, BadArgs, parse_args};
+pub use server::{BUDGET, COST, Littlefsd, limits};
 pub use volume::{Mounted, NoVolume, Range, mount};

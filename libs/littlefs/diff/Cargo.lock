@@ -32,10 +32,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "redoubt-fileserver"
+version = "0.1.0"
+dependencies = [
+ "redoubt-rt",
+]
+
+[[package]]
 name = "redoubt-littlefsd"
 version = "0.1.0"
 dependencies = [
  "littlefs",
+ "redoubt-fileserver",
  "redoubt-rt",
 ]
 

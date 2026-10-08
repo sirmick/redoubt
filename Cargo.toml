@@ -22,6 +22,7 @@ members = [
   "libs/steward/trace",
   "libs/sys",
   "libs/erofs",
+  "libs/fileserver",
   "libs/littlefs",
   "libs/verity",
   "libs/walfs",

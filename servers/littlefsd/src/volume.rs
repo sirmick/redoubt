@@ -4,40 +4,14 @@
 use alloc::vec::Vec;
 
 use littlefs::{BlockDevice, Config, Error, Filesystem};
+pub use redoubt_fileserver::range::{Fault, Geometry, Range, SECTOR};
 
-/// `blkd`'s sector.
-pub const SECTOR: u32 = 512;
 /// A littlefs block: eight sectors, fixed, with no argument to change it.
 pub const BLOCK: u32 = 4096;
 /// Sectors per block.
 pub const SECTORS_PER_BLOCK: u64 = (BLOCK / SECTOR) as u64;
 /// littlefs's smallest volume: the superblock pair and one more pair.
 pub const MIN_BLOCKS: u32 = 4;
-
-/// A request to the range failed: `blkd` refused it, or the disk did.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Fault;
-
-/// What `blkd`'s `info` says of a range.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Geometry {
-    pub sectors: u64,
-    /// The range refuses writes: `littlefsd` then writes nothing at all.
-    pub read_only: bool,
-}
-
-/// `blkd`'s range as `littlefsd` uses it (libs/wire/tables/blkd.md): its size, and whole sectors read,
-/// written and flushed, at most one block of them at a time.
-pub trait Range {
-    /// The range's length in sectors and whether it may be written (`info`).
-    fn info(&mut self) -> Result<Geometry, Fault>;
-    /// Reads `out.len() / SECTOR` sectors from `sector`.
-    fn read(&mut self, sector: u64, out: &mut [u8]) -> Result<(), Fault>;
-    /// Writes whole sectors from `sector`.
-    fn write(&mut self, sector: u64, data: &[u8]) -> Result<(), Fault>;
-    /// Makes every write so far durable.
-    fn flush(&mut self) -> Result<(), Fault>;
-}
 
 /// A range as littlefs's [`BlockDevice`]: programs are whole sectors (`prog_size` is one), and
 /// a disk needs no erase, since a later write replaces a sector whole.

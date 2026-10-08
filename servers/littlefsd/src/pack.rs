@@ -7,18 +7,16 @@
 //! (servers/littlefsd.md, "Volumes, connections and labels"). A second writer would have to keep that
 //! rule in step by hand.
 
-use alloc::rc::Rc;
 use alloc::string::String;
-use alloc::vec;
 use alloc::vec::Vec;
-use core::cell::RefCell;
 
+use redoubt_fileserver::range::Memory;
 use redoubt_rt::abi::Labels;
 use redoubt_rt::ipc::Caller;
 use redoubt_rt::server::ninep::{DMDIR, FileServer};
 
 use crate::server::{Littlefsd, Node};
-use crate::volume::{Fault, Geometry, Mounted, Range, SECTOR, mount};
+use crate::volume::{Mounted, SECTOR, mount};
 
 /// One entry of the tree, by its path from the volume's root (`a/b`, no leading `/`). A
 /// directory comes before anything in it.
@@ -35,46 +33,11 @@ pub struct PackError {
     pub why: String,
 }
 
-/// A range held in memory.
-#[derive(Clone)]
-struct Memory(Rc<RefCell<Vec<u8>>>);
-
-impl Memory {
-    fn span(&self, sector: u64, len: usize) -> Result<core::ops::Range<usize>, Fault> {
-        let start = usize::try_from(sector).ok().and_then(|s| s.checked_mul(SECTOR as usize)).ok_or(Fault)?;
-        let end = start.checked_add(len).ok_or(Fault)?;
-        if end > self.0.borrow().len() || !len.is_multiple_of(SECTOR as usize) {
-            return Err(Fault);
-        }
-        Ok(start..end)
-    }
-}
-
-impl Range for Memory {
-    fn info(&mut self) -> Result<Geometry, Fault> {
-        Ok(Geometry { sectors: (self.0.borrow().len() / SECTOR as usize) as u64, read_only: false })
-    }
-
-    fn read(&mut self, sector: u64, out: &mut [u8]) -> Result<(), Fault> {
-        let span = self.span(sector, out.len())?;
-        out.copy_from_slice(&self.0.borrow()[span]);
-        Ok(())
-    }
-
-    fn write(&mut self, sector: u64, data: &[u8]) -> Result<(), Fault> {
-        let span = self.span(sector, data.len())?;
-        self.0.borrow_mut()[span].copy_from_slice(data);
-        Ok(())
-    }
-
-    fn flush(&mut self) -> Result<(), Fault> { Ok(()) }
-}
-
 /// A volume of `sectors` sectors holding `tree`, formatted and written by `littlefsd`'s own code.
 pub fn pack(sectors: u64, tree: &[Entry]) -> Result<Vec<u8>, PackError> {
     let fail = |path: &str, why: &str| PackError { path: path.into(), why: why.into() };
-    let len = usize::try_from(sectors).ok().and_then(|s| s.checked_mul(SECTOR as usize));
-    let memory = Memory(Rc::new(RefCell::new(vec![0; len.ok_or_else(|| fail("", "too large"))?])));
+    let len = usize::try_from(sectors).ok().filter(|s| s.checked_mul(SECTOR as usize).is_some());
+    let memory = Memory::blank(len.ok_or_else(|| fail("", "too large"))?);
     let mounted = mount(memory.clone()).map_err(|e| fail("", &alloc::format!("{e:?}")))?;
     if let Mounted::Corrupt(e) = mounted {
         return Err(fail("", &alloc::format!("{e:?}")));
@@ -102,7 +65,7 @@ pub fn pack(sectors: u64, tree: &[Entry]) -> Result<Vec<u8>, PackError> {
         }
     }
     drop(littlefsd);
-    Ok(memory.0.take())
+    Ok(memory.bytes())
 }
 
 #[cfg(test)]
@@ -110,7 +73,7 @@ mod tests {
     use redoubt_rt::server::ninep::mode;
 
     use super::*;
-    use crate::server::tests::{Memory as Disk, T, caller};
+    use crate::server::tests::{T, caller};
 
     /// A packed tree mounts in `littlefsd` as a volume it wrote (the mount's id check passes), reads
     /// back whole, and takes a new file whose id is above every packed one.
@@ -125,7 +88,7 @@ mod tests {
             Entry::File("nothing", b""),
         ];
         let bytes = pack(64 * 8, &tree).expect("packed");
-        let mut t = T::on(&Disk::holding(bytes), &[]);
+        let mut t = T::on(&Memory::holding(bytes), &[]);
         let who = caller(1, &[]);
         t.attach(&who, 0).unwrap();
         t.walk(&who, 0, 5, &[]).unwrap();

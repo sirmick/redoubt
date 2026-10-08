@@ -5,6 +5,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use littlefs::{BlockDevice, DirRef, Error as FsError, FileHandle, FileType, Filesystem, OpenOptions};
+use redoubt_fileserver::quota::{Ledger, Refusal};
 use redoubt_rt::abi::PAGE_SIZE;
 use redoubt_rt::ipc::Caller;
 use redoubt_rt::path;
@@ -14,7 +15,6 @@ use redoubt_rt::server::ninep::{
 use redoubt_rt::server::{Cost, Limits};
 use redoubt_rt::wire::proto::littlefsd::ErrorCode;
 
-use crate::quota::{Ledger, Refusal};
 use crate::volume::{BLOCK, Blocks, Mounted, Range};
 
 /// What admission lets each of `buckets` buckets hold (servers/serving.md R26); the count is the
@@ -80,55 +80,6 @@ pub mod text {
     pub const QUOTA_REFUSED: NineError = NineError("quota refused");
     pub const TOO_BIG: NineError = NineError("file too large");
     pub const READ_ONLY: NineError = NineError("read-only volume");
-}
-
-/// Why the arguments were refused.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct BadArgs;
-
-/// What `littlefsd`'s arguments other than `buckets=` say.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Args<'a> {
-    /// The manifest name of the endpoint it receives on (`littlefsd:data`): its startup block holds
-    /// that endpoint under this name.
-    pub endpoint: &'a str,
-    /// The volume's label set; empty when `labels=` is absent.
-    pub labels: Vec<u64>,
-}
-
-/// The arguments other than `buckets=`: `endpoint=NAME` exactly once, a name under the
-/// manifest's rule, never defaulted; and `labels=ID[,ID...]` at most once, each ID decimal
-/// without leading zeros, at most `MAX_LABELS`, absent for an empty set. Anything else is refused,
-/// so `littlefsd` never serves under an endpoint or labels it misread.
-pub fn parse_args<'a>(args: impl Iterator<Item = &'a str>) -> Result<Args<'a>, BadArgs> {
-    let (mut endpoint, mut labels) = (None, None);
-    for arg in args {
-        if let Some(name) = arg.strip_prefix("endpoint=") {
-            if endpoint.is_some() || !redoubt_rt::startup::valid_name(name) {
-                return Err(BadArgs);
-            }
-            endpoint = Some(name);
-            continue;
-        }
-        let list = arg.strip_prefix("labels=").ok_or(BadArgs)?;
-        if labels.is_some() {
-            return Err(BadArgs);
-        }
-        let mut set = Vec::new();
-        for id in list.split(',') {
-            let canonical = !id.is_empty()
-                && id.bytes().all(|b| b.is_ascii_digit())
-                && (id == "0" || !id.starts_with('0'));
-            let id: u64 = id.parse().ok().filter(|_| canonical).ok_or(BadArgs)?;
-            if set.contains(&id) || set.len() >= redoubt_rt::abi::MAX_LABELS {
-                return Err(BadArgs);
-            }
-            set.try_reserve(1).map_err(|_| BadArgs)?;
-            set.push(id);
-        }
-        labels = Some(set);
-    }
-    Ok(Args { endpoint: endpoint.ok_or(BadArgs)?, labels: labels.unwrap_or_default() })
 }
 
 /// What a fid rests on: a path from the volume's root, built only from names clients walked or
@@ -312,7 +263,7 @@ impl<R: Range> Littlefsd<R> {
             labels,
             attr: Vec::new(),
             blocks,
-            ledger: Ledger::new(room, held),
+            ledger: Ledger::new(room, held, ROOT_ID),
             changes: 0,
             window: Window::default(),
             #[cfg(test)]
@@ -1045,3 +996,7 @@ impl<R: Range> FileServer for Littlefsd<R> {
 #[cfg(test)]
 #[path = "server_tests.rs"]
 pub(crate) mod tests;
+
+#[cfg(test)]
+#[path = "quota_tests.rs"]
+mod quota_tests;

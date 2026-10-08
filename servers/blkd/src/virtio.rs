@@ -80,13 +80,13 @@ pub mod blk_status {
 }
 
 /// The sector, in bytes: virtio-blk's unit, fixed by the specification whatever the disk's own
-/// block size (§5.2.6: "the offset (multiplied by 512)").
-pub const SECTOR_SIZE: u32 = 512;
+/// block size (§5.2.6: "the offset (multiplied by 512)"), and so the protocol's, named with its
+/// other limit in the wire crate, where `blkd` and its clients both take it from.
+pub const SECTOR_SIZE: u32 = redoubt_rt::wire::blkd::SECTOR;
 
-/// The most sectors one `read` or `write` may carry (servers/blkd.md, "Messages"). 64 sectors is
-/// 32 KiB: comfortably inside one `MAX_LEND_PAGES` lend with its encoding, and a whole number of
-/// littlefs blocks at every block size `littlefsd` uses.
-pub const MAX_SECTORS: u32 = 64;
+/// The most sectors one `read` or `write` may carry (servers/blkd.md, "Messages"), the protocol's
+/// limit: 64 sectors is 32 KiB, comfortably inside one `MAX_LEND_PAGES` lend with its encoding.
+pub const MAX_SECTORS: u32 = redoubt_rt::wire::blkd::MAX_SECTORS;
 
 /// The bytes of the data buffer: [`MAX_SECTORS`] sectors.
 pub const DATA_LEN: usize = (MAX_SECTORS * SECTOR_SIZE) as usize;

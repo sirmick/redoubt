@@ -214,7 +214,8 @@ records it in the skeleton's `minted` hook, which refuses a quota that room does
 (`refused`), and gives it back when the connection is disconnected. A change that would take a
 root past its quota is refused with `no space`. So Bob filling the `data` volume cannot make
 Alice's saves fail ([R48 (a quota per attach root)](#r48-a-quota-per-attach-root)). The serving
-library holds no byte counters; `littlefsd` is the only server that meters bytes.
+library holds no byte counters; `littlefsd` and [`walfsd`](walfsd.md#quotas) meter bytes, with one
+ledger, `redoubt-fileserver`'s ([serving](serving.md#the-9p-server-skeleton)).
 
 - **A root holds what lies under it:** whole blocks for a file stored in blocks, the byte length
   of an inline file, and each directory's metadata pairs, less what lies under the live roots

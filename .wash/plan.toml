@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 416
+revision = 419
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1173,8 +1173,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   needs = ["WFS2"]
   body = "Found by EROFS1's and WFS2's simplifiers (2026-10-06/07): littlefsd, erofsd and walfsd each carry their own copy of parse_args (endpoint=, labels=, buckets=), the blkd range client (MAX_SECTORS 64, call(), Fault/Geometry/Range/SECTOR), the quota ledger (quota.rs, 222 lines, differing in VOLUME and spare()) and one_volume.rs; about 310 of walfsd's 1,156 lines are littlefsd's verbatim; docs/todo/file-server-arguments-and-range-client.md records the first two. Tier A (servers' trusted code shrinks), size M: lift the four into redoubt_rt::server (or a libs/fileserver crate on the skeleton) with one set of tests, the three servers calling them; size-budget lines fall per server and rise once in the shared crate; the todo page is deleted; servers/README.md's skeleton section names the shared pieces. Gates: every file server's host tests and cases both widths, the smoke set."
-  state = "active"
-  revision = 408
+  state = "done"
+  revision = 419
   overrides = ["2026-10-08: started by Orchestrator before M1 (reported): WFS2 is merged; SRV1 refactors the file servers and doesn't change M1's behaviour."]
 
 [[node]]
@@ -1516,8 +1516,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M2"
   body = "Found by BEAM16 on 2e3057e64: the difftest's full run is 517/523; all 6 failures are in the atomvm suite and fail the same way without BEAM16. Find when each began (bisect against the last full difftest run) and fix them, or record each as a known VM difference with its reason. Then the full difftest, not only the erlang suite, joins the gate list for any change under userland/otp. Size S-M."
-  state = "active"
-  revision = 404
+  state = "reported"
+  revision = 417
   overrides = ["2026-10-08: started by Orchestrator before M1 (reported): Failing difftest cases on main; small."]
 
 [[node]]

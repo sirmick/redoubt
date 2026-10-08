@@ -2,14 +2,13 @@
 //! in for `blkd`'s or a `verityd`'s. The whole program against a fake kernel and a fake `blkd` is
 //! in `tests/`.
 
-use alloc::rc::Rc;
 use alloc::string::ToString;
 use alloc::vec;
 use alloc::vec::Vec;
-use core::cell::RefCell;
 use core::num::NonZeroU64;
 
 use erofs::{Entry, pack};
+use redoubt_fileserver::range::Memory;
 use redoubt_rt::abi::{Error, Handle, Handles, Labels};
 use redoubt_rt::server::ninep::{Answer, FIRST_MINTED_BADGE, Minter, NineServer, mode, ninep_common};
 use redoubt_rt::wire::MSIZE;
@@ -19,48 +18,6 @@ use super::*;
 
 extern crate std;
 use std::string::String as StdString;
-
-/// A range in memory. Clones share it, so a test can count its reads or break it under a running
-/// server.
-#[derive(Clone)]
-struct Memory(Rc<RefCell<Disk>>);
-
-struct Disk {
-    bytes: Vec<u8>,
-    /// Every request fails from now on.
-    failing: bool,
-    /// Reads that reached the range.
-    reads: usize,
-}
-
-impl Memory {
-    fn holding(mut bytes: Vec<u8>) -> Memory {
-        bytes.resize(bytes.len().next_multiple_of(512), 0);
-        Memory(Rc::new(RefCell::new(Disk { bytes, failing: false, reads: 0 })))
-    }
-
-    fn fail(&self) { self.0.borrow_mut().failing = true }
-
-    fn reads(&self) -> usize { self.0.borrow().reads }
-}
-
-impl Range for Memory {
-    fn sectors(&mut self) -> Result<u64, Fault> {
-        let disk = self.0.borrow();
-        if disk.failing { Err(Fault) } else { Ok(disk.bytes.len() as u64 / 512) }
-    }
-
-    fn read(&mut self, at: u64, out: &mut [u8]) -> Result<(), Fault> {
-        let mut disk = self.0.borrow_mut();
-        disk.reads += 1;
-        let end = at as usize + out.len();
-        if disk.failing || end > disk.bytes.len() {
-            return Err(Fault);
-        }
-        out.copy_from_slice(&disk.bytes[at as usize..end]);
-        Ok(())
-    }
-}
 
 fn caller(badge: u64, labels: &[u64]) -> Caller {
     Caller { badge, account: 1001, labels: Labels::from_slice(labels).unwrap() }
@@ -287,7 +244,7 @@ fn a_directory_lists_exactly_its_children_in_order_by_page() {
 #[test]
 fn every_way_of_writing_is_refused_read_only() {
     let disk = Memory::holding(image(&tree()));
-    let before = disk.0.borrow().bytes.clone();
+    let before = disk.bytes();
     let mut t = T::on(&disk, &[]);
     let who = caller(1, &[]);
     t.attach(&who, 0).unwrap();
@@ -303,7 +260,7 @@ fn every_way_of_writing_is_refused_read_only() {
     t.open(&who, 3, mode::OREAD).unwrap();
     let wrote = t.try_rpc(&who, Body::Twrite { fid: 3, offset: 0, data: b"x" });
     assert!(wrote.is_err());
-    assert_eq!(disk.0.borrow().bytes, before);
+    assert_eq!(disk.bytes(), before);
     assert_eq!(t.read(&who, 3, 0, 100).unwrap(), b"hello\n");
 }
 
@@ -420,34 +377,15 @@ fn a_minted_connection_sees_only_below_its_root() {
 }
 
 #[test]
-fn arguments_it_does_not_understand_stop_it_before_serving() {
-    fn ok<'a>(args: &[&'a str]) -> Result<Args<'a>, BadArgs> { parse_args(args.iter().copied()) }
-    assert_eq!(ok(&["endpoint=erofsd:system"]), Ok(Args { endpoint: "erofsd:system", labels: Vec::new() }));
-    assert_eq!(ok(&["endpoint=e", "labels=3,1"]).map(|a| a.labels), Ok(vec![3, 1]));
-    for bad in [
-        &[][..],
-        &["endpoint=e", "endpoint=f"],
-        &["endpoint="],
-        &["endpoint=e", "labels=01"],
-        &["endpoint=e", "labels=1,1"],
-        &["endpoint=e", "labels="],
-        &["endpoint=e", "labels=1", "labels=2"],
-        &["endpoint=e", "volume=x"],
-    ] {
-        assert_eq!(ok(bad), Err(BadArgs), "{bad:?}");
-    }
-}
-
-#[test]
 fn the_conformance_vectors_run_against_erofsd() {
     let tree = tree();
     let disk = Memory::holding(image(&tree));
-    let before = disk.0.borrow().bytes.clone();
+    let before = disk.bytes();
     let mut t = T::on(&disk, &[]);
     let who = caller(1, &[]);
     let counts = redoubt_fake_kernel::vectors::run(&mut t.server, &who);
     assert!(counts.well_formed > 20 && counts.malformed > 5, "{counts:?}");
-    assert_eq!(disk.0.borrow().bytes, before);
+    assert_eq!(disk.bytes(), before);
     assert!(!t.server.fs.is_corrupt());
 }
 

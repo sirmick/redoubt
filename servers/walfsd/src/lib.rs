@@ -20,8 +20,9 @@
 //!
 //! **Quotas.** Each root a connection is minted at has a byte quota carved from the live root
 //! above it, counted when the first connection is minted there and never stored; every change is
-//! charged to the nearest live root above it (R48, [`quota`]). An entry holds its blocks and a
-//! share of the volume for its inode, so no root's quota promises an inode the volume lacks.
+//! charged to the nearest live root above it (R48, [`redoubt_fileserver::quota`]). An entry holds
+//! its blocks and a share of the volume for its inode, so no root's quota promises an inode the
+//! volume lacks.
 //!
 //! **Typed operations.** `littlefsd`'s `rename`, `copy_file`, `set_attr` and `get_attr` on the
 //! 9P endpoint ([`typed`]), naming the caller's own fids through the skeleton.
@@ -33,15 +34,12 @@
 
 extern crate alloc;
 
-pub mod blkd;
 #[cfg(feature = "cut-after-write")]
 pub mod cut;
-#[cfg(feature = "one-volume-probe")]
-pub mod one_volume;
-mod quota;
 pub mod server;
 pub mod typed;
 pub mod volume;
 
-pub use server::{Args, BUDGET, BadArgs, COST, Walfsd, limits, parse_args};
+pub use redoubt_fileserver::args::{Args, BadArgs, parse_args};
+pub use server::{BUDGET, COST, Walfsd, limits};
 pub use volume::{Mounted, NoVolume, Range, mount};

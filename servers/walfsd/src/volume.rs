@@ -1,10 +1,9 @@
 //! The volume under the files: `blkd`'s range as walfs blocks, and the mounting rule
 //! (servers/walfsd.md, "Serving").
 
+pub use redoubt_fileserver::range::{Fault, Geometry, Range, SECTOR};
 use walfs::{Block, BlockDevice, Error, Filesystem, Geometry as Shape};
 
-/// `blkd`'s sector.
-pub const SECTOR: u32 = 512;
 /// A walfs block.
 pub const BLOCK: u32 = walfs::BLOCK as u32;
 /// Sectors per block.
@@ -13,31 +12,6 @@ pub const SECTORS_PER_BLOCK: u64 = (BLOCK / SECTOR) as u64;
 /// 33 blocks, one block of inodes and two of their attributes, a hash block, a bitmap block and
 /// one data block.
 pub const MIN_BLOCKS: u32 = 40;
-
-/// A request to the range failed: `blkd` refused it, or the disk did.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Fault;
-
-/// What `blkd`'s `info` says of a range.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Geometry {
-    pub sectors: u64,
-    /// The range refuses writes: `walfsd` then writes nothing at all.
-    pub read_only: bool,
-}
-
-/// `blkd`'s range as `walfsd` uses it (libs/wire/tables/blkd.md): its size, and whole sectors
-/// read, written and flushed, one block of them at a time.
-pub trait Range {
-    /// The range's length in sectors and whether it may be written (`info`).
-    fn info(&mut self) -> Result<Geometry, Fault>;
-    /// Reads `out.len() / SECTOR` sectors from `sector`.
-    fn read(&mut self, sector: u64, out: &mut [u8]) -> Result<(), Fault>;
-    /// Writes whole sectors from `sector`.
-    fn write(&mut self, sector: u64, data: &[u8]) -> Result<(), Fault>;
-    /// Returns once every write so far is durable: `blkd`'s `flush`.
-    fn flush(&mut self) -> Result<(), Fault>;
-}
 
 /// A range as walfs's [`BlockDevice`]: a block is eight sectors, and walfs's `sync`, which the
 /// format puts between the steps of every transaction, is `blkd`'s `flush`.

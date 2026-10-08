@@ -4,7 +4,8 @@
 //! - [`typed`]: the typed-message framing, used by the codecs in [`proto`] that `redoubt-wire-gen` generates
 //!   from the owning servers' tables;
 //! - [`json`]: the strict JSON (I-JSON) profile for files people write;
-//! - [`labels`]: a label set in a typed message's `bytes`; [`ipd_scope`]: a scope in `ipd`'s `grant`.
+//! - [`labels`]: a label set in a typed message's `bytes`; [`ipd_scope`]: a scope in `ipd`'s `grant`;
+//! - [`blkd`]: `blkd`'s protocol limits, the sector and the most sectors one request carries.
 //!
 //! All three parse untrusted bytes. The rules they share: no `unsafe`, no panics (every
 //! slice access is checked, every length is bounded by the input it claims to describe),
@@ -16,6 +17,7 @@
 
 extern crate alloc;
 
+pub mod blkd;
 pub mod codec;
 pub mod ipd_scope;
 pub mod json;

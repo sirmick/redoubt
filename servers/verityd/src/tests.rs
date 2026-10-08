@@ -31,7 +31,7 @@ impl Range for Fake {
         if self.fail {
             return Err(Fault);
         }
-        Ok(Size { sectors: (self.bytes.len() / SECTOR as usize) as u64 })
+        Ok(Size { sectors: (self.bytes.len() / SECTOR as usize) as u64, read_only: true })
     }
 
     fn read(&mut self, sector: u64, out: &mut [u8]) -> Result<(), Fault> {

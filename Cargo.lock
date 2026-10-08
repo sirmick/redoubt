@@ -659,6 +659,7 @@ dependencies = [
  "erofs",
  "redoubt-client",
  "redoubt-fake-kernel",
+ "redoubt-fileserver",
  "redoubt-rt",
 ]
 
@@ -674,6 +675,14 @@ dependencies = [
 name = "redoubt-fake-kernel"
 version = "0.1.0"
 dependencies = [
+ "redoubt-rt",
+]
+
+[[package]]
+name = "redoubt-fileserver"
+version = "0.1.0"
+dependencies = [
+ "redoubt-fake-kernel",
  "redoubt-rt",
 ]
 
@@ -751,6 +760,7 @@ dependencies = [
  "littlefs",
  "redoubt-client",
  "redoubt-fake-kernel",
+ "redoubt-fileserver",
  "redoubt-rt",
 ]
 
@@ -906,6 +916,7 @@ name = "redoubt-verityd"
 version = "0.1.0"
 dependencies = [
  "ed25519-compact",
+ "redoubt-fileserver",
  "redoubt-rt",
  "redoubt-verity",
 ]
@@ -916,6 +927,7 @@ version = "0.1.0"
 dependencies = [
  "redoubt-client",
  "redoubt-fake-kernel",
+ "redoubt-fileserver",
  "redoubt-rt",
  "walfs",
 ]

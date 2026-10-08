@@ -4,7 +4,7 @@
 //! power of two of 9P requests from 2^12, and once more, exactly, on a walk of [`SENTINEL`].
 //!
 //! The range's reads are told apart by what they are for: an inode, a directory block, or a
-//! file's bytes; and counted again as the calls the range client made, with their bytes.
+//! file's bytes; and counted again as the reads asked of the range, with their bytes.
 
 use alloc::format;
 use alloc::string::String;
@@ -54,7 +54,7 @@ pub fn read_bytes(n: usize) { READ_BYTES.fetch_add(n as u32, Relaxed); }
 /// Counts one read of the volume, for `what`.
 pub fn read_for(what: For) { FOR[what as usize].fetch_add(1, Relaxed); }
 
-/// Counts one call to the range, of `bytes`.
+/// Counts one read asked of the range, of `bytes`.
 pub fn call(bytes: usize) {
     CALLS.fetch_add(1, Relaxed);
     CALL_BYTES.fetch_add(bytes as u32, Relaxed);
@@ -67,7 +67,7 @@ pub fn line() -> String {
     format!(
         "erofsd: boot-stats: 9P {} (walk {walk}, open {open}, read {read}, clunk {clunk}, stat {stat}), \
          {} bytes read; volume reads {} (inodes {inodes}, directory blocks {dirs}, data {data}); \
-         range calls {}, {} bytes\n",
+         range reads {}, {} bytes\n",
         walk + open + read + clunk + stat,
         READ_BYTES.load(Relaxed),
         inodes + dirs + data,
