@@ -58,9 +58,8 @@ defmodule Redoubt.Shell.Driver do
 
     # `beamlet` is the VM's own module, there on beamlet alone: called by name, so the BEAM,
     # where the tests also run, compiles this without a word.
-    if Keyword.get(opts, :input, :console) == :console do
-      :ok = apply(:beamlet, :console_subscribe, [])
-    end
+    console? = Keyword.get(opts, :input, :console) == :console
+    if console?, do: :ok = apply(:beamlet, :console_subscribe, [])
 
     {cols, rows} = size.()
     group = :group.start(self(), shell, echo: true, expand_below: true, expand_fun: &expand/1)
@@ -71,6 +70,9 @@ defmodule Redoubt.Shell.Driver do
       output: output,
       size: size,
       history: Keyword.get(opts, :history_lines, @history_lines),
+      # Whether the first prompt is still to be drawn on the console: the VM is told when it is
+      # (`:beamlet.prompt_drawn/0`), the moment a boot profile times to.
+      first_prompt: console?,
       # Bytes of a UTF-8 sequence the read cut, waiting for the rest.
       held: <<>>,
       # The last byte sent to group.
@@ -184,7 +186,9 @@ defmodule Redoubt.Shell.Driver do
     term = if prompting, do: sized(state), else: state.term
     {out, term} = Term.request(term, request)
     write(state, out)
-    %{state | term: term}
+    first_prompt = state.first_prompt and not prompting
+    if state.first_prompt and prompting, do: :ok = apply(:beamlet, :prompt_drawn, [])
+    %{state | term: term, first_prompt: first_prompt}
   end
 
   # A line has just ended, and group has kept it: its history is cut to the newest lines, by a

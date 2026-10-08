@@ -923,6 +923,13 @@ pub fn console_size(c: &mut Ctx, _a: &[Term]) -> R {
     })
 }
 
+/// `beamlet:prompt_drawn()`: the shell's driver says its first prompt is drawn; the platform
+/// hears it ([`crate::platform::Platform::prompt_drawn`]), and a boot profile stamps the moment.
+pub fn prompt_drawn(c: &mut Ctx, _a: &[Term]) -> R {
+    c.platform().prompt_drawn();
+    Ok(c.ok())
+}
+
 // ---- erlang:memory ----
 
 /// The categories of `erlang:memory/0`, in its order.

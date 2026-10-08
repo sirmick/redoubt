@@ -217,7 +217,7 @@ Everything the VM gets from outside comes through the `Platform` trait
 | --- | --- | --- |
 | `monotonic_us`, `idle` | a clock that never goes backwards; sleeping until a deadline or an event | required |
 | `system_time_us` | wall-clock time | required; may answer `None` |
-| `console_write`, `console_read`, `console_size` | the `user` I/O device; input never blocks | no input; size unknown |
+| `console_write`, `console_read`, `console_size`, `prompt_drawn` | the `user` I/O device; input never blocks; the shell's driver says when its first prompt is drawn | no input; size unknown; nothing |
 | `console_listening` | told whether a process reads the console; with none, input held is no reason for `idle` to return | holds nothing |
 | `random` | random bytes from a cryptographic source; on failure the VM raises rather than use a weaker source | required |
 | `load_module`, `load_app`, `module_file` | a system `.beam` or `.app` lookup answers found bytes, an absent name or a refused object; `module_file` names a loaded module | applications absent |
@@ -402,6 +402,7 @@ program adapters remain planned.
 | `system_time_us` | `None` until wall-clock time and time sync exist, in M6 (persist, install, share); the VM then counts system time from the Unix epoch at boot, so the logger and anything else that stamps a time works and a date says 1970. A check that a date has begun (a certificate's `notBefore`) then fails, a check only that one has not passed (a token's expiry) passes, and times from two boots cannot be ordered |
 | `console_write`, `console_read` | the client library's `console`: writes and reads on the `/dev/cons` connection; a read with nothing to read is parked by the server, so input arrives as a completion and `Eof` means the connection ended ([consoled](../servers/consoled.md)) |
 | `console_size` | a fresh `consol` `size` call on every query, never cached; a server that does not serve it refuses the call and the answer is `None` |
+| `prompt_drawn` | nothing, but in a `boot-stats` build the line `beamlet: first prompt drawn [t=N]`, the end of the span the boot profile times |
 | `random` | the kernel's `random` call |
 | `load_module`, `load_app` | takes the requested file from the boot pack, if the pack holds it (below); otherwise reads the requested file (`Elixir.Enum.beam`, `elixir.app`) whole from the root of the verified userland volume, through its `erofsd` (`erofsd:system`), which reads it through its `verityd`; a reader of the volume trusts that `erofsd` and `verityd` ([R76 (verified volumes)](../servers/verityd.md#r76-verified-volumes)) in place of checking each object itself. A name `erofsd` answers `not_found` to at the open is `Absent`; any other refusal at the open or on the read is `Refused`, with one console diagnostic naming the file and the error's name and no other source tried; the bytes read whole are `Found` ([R75 (verified userland)](../kernel/boot.md#r75-verified-userland)). From M6 (persist, install, share), the principal's profile joins the lookup ([packages](packages.md)), never the session's writable namespace. This decides which module a name finds, not what code may run |
 | `files` | 9P on the namespace's connections through the VM's hub: walk, open, create, read, write, stat, remove and clunk, and `littlefsd`'s `rename` ([files](files.md#files-over-9p)) |
@@ -432,12 +433,12 @@ runtime's `thread::spawn`.
   waiters`); bench:beamlet-files reads it.
 
 In a `boot-stats` build ([checked builds](../testbench.md#checked-builds)) beamlet says `beamlet:
-first console read [t=N]` at the VM's first console read, with `time_now` in µs. For the shell that
-read is its line driver's, made when it takes the console and before the shell draws its banner and
-prompt: the line comes before the banner, and the boot's time to its prompt is the line's time and
-the shell's own start after it, which the line does not count. `boot-profile` and
-`boot-profile-unverified` measure it. The rows below were taken when the read was the prompt's,
-drawn and waiting; the line driver's earlier read is not measured yet.
+first console read [t=N]` at the VM's first console read, with `time_now` in µs, and `beamlet:
+first prompt drawn [t=N]` when the shell's driver has drawn its first prompt
+(`beamlet:prompt_drawn/0`): the driver takes the console before it draws its banner and prompt,
+so the second line is the boot's time to its prompt, where a user sees the box ready, and the span
+the target is on; both lines are drawn beside the prompt. `boot-profile` and
+`boot-profile-unverified` measure it.
 Measured in that build under `icount` (`shift=3`, sleep on) with seed 1, in guest time
 (bench:boot-profile, bench:boot-profile-unverified):
 
@@ -446,7 +447,8 @@ Measured in that build under `icount` (`shift=3`, sleep on) with seed 1, in gues
 | littlefs (`littlefsd`, retired for this volume) | 1,016.7 s | 534.7 s | 1,044.2 s | 558.0 s |
 | EROFS (`erofsd`) | 16.0 s | 12.5 s | 15.7 s | 12.1 s |
 | EROFS, with the boot pack | 12.4 s | 9.9 s | 12.0 s | 9.6 s |
-| EROFS, with the boot pack, the shell the steward's console session | 15.4 s | 13.2 s | 17.6 s | 15.3 s |
+| EROFS, with the boot pack, the shell the steward's console session, to the driver's first read | 15.4 s | 13.2 s | 17.6 s | 15.3 s |
+| the same, 16-page lends for the public entry's push and the session's stream, to the first prompt drawn | 14.7 s | 12.2 s | 16.3 s | 13.7 s |
 
 On littlefs 99 % of the boot was in the VM's 96 lookups: `littlefsd` found each file's name in the
 volume's root directory again two or three times for every 9P operation, 77,710 block reads of 673
@@ -462,14 +464,21 @@ called, 8.0 s; the verified prompt is the same across seeds 1 to 5. On littlefs 
 the boot pack is at 152 s verified, since `littlefsd` finds the file again for each read.
 
 Since the steward starts the shell as the console principal's session
-([the steward](../servers/steward.md#authentication-and-sessions)), the verified prompt on rv64
-comes at 15.4 s: `init` has started its servers by 0.6 s, and pushes beamlet's 4 MB public entry
-to `bootfsd` until 3.1 s, when it starts the steward; from 3.1 to 7.7 s the steward carves the
-session's budget, streams its image from `bootfsd` into the new process in the client library's
-launch batches of 64 pages ([native programs](native.md#the-client-library)), and the VM reads its
-boot pack; from 7.7 to 15.4 s the shell starts. Unverified the same points are at 3.1, 5.6 and
-13.2 s. On rv32 the steward starts at 4.0 s, the boot pack is read by 9.2 s and the prompt comes
-at 17.6 s; unverified at 3.9, 7.0 and 15.3 s.
+([the steward](../servers/steward.md#authentication-and-sessions)), the verified first prompt on
+rv64 comes at 14.7 s: `init` has started its servers by 0.6 s, and pushes beamlet's 4 MB public
+entry to `bootfsd` until 1.9 s, when it starts the steward; from 1.9 to 5.8 s the steward carves
+the session's budget, streams its image from `bootfsd` into the new process in the client
+library's launch batches of 64 pages ([native programs](native.md#the-client-library)), and the VM
+reads its boot pack; from 5.8 to 11.8 s the shell's application starts, until its driver takes
+the console; from 11.8 to 14.7 s the shell starts under the driver, to its banner and first
+prompt. Unverified the same points are at 1.8, 3.6, 9.5 and 12.2 s. On rv32 the steward starts
+at 2.3 s, the boot pack is read by 6.6 s, the driver reads at 13.2 s and the prompt comes at
+16.3 s; unverified at 2.2, 4.4, 10.9 and 13.7 s. The push and the stream are calls of the same
+cost whatever they carry, about 2.5 ms each in this build: before `init` and the steward lent 16
+pages a call (one page of a public entry per `add`, a 9P read of 8 KiB), they were 1,024 and about
+512 calls, and the steward started at 3.1 s and the shell's driver read at 13.7 s on rv64 (4.0
+and 15.7 s on rv32). The `add` carries 32 KiB, a power of two, so `bootfsd`'s entry doubles onto
+4 MiB and its heap's peak stays half its cap.
 
 **The boot-time target:** in this build, the prompt within 20 s of guest time, verified and
 unverified, on both widths: the slowest measured prompt plus a tenth, rounded up to 5 s.

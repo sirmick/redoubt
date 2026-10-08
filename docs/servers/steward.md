@@ -439,7 +439,10 @@ start failure, and the box has no users.
 - **A session** is processes started with capabilities derived from the principal's set, never
   more. The steward carves the session budget from the right sub-budget, with the principal's
   account and the session's labels, gives it a namespace of fresh connections it asked each server
-  for ([init](init.md#fresh-connections-per-child)), and launches it through the loader stub. Each
+  for ([init](init.md#fresh-connections-per-child)), and launches it through the loader stub,
+  streaming the session's image from `bootfsd` through a 16-page lend, the most a call may lend,
+  so the console session's VM is running within a second of the steward's start
+  ([beamlet on Redoubt](../userland/beamlet.md#beamlet-on-redoubt)). Each
   session's process has an exit endpoint of its own, which a watcher thread of the steward's waits
   on and reports on the steward's endpoint when the process ends. A thread's stack is never given
   back, so a watcher that has reported waits for the next session, and a new one starts only when

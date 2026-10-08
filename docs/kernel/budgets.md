@@ -209,7 +209,8 @@ and its kernel objects.
   `stack_pages` size ([the boot manifest](../servers/init.md#the-boot-manifest)).
 
   With the steward, `sshd` and the userland disk's `blkd`, `verity` and `erofsd`, the image
-  manifest's bound is 550 pages on both widths (`init-boot` prints it), and the fixed 1,024-page
+  manifest's bound is 564 pages on both widths (`init-boot` prints it; 14 of them the 16-page lend
+  `init` pushes the public entries through), and the fixed 1,024-page
   limit is nearly twice it. The image's servers need 16,909 of `system`'s pages, each
   budget and its own page. The shell's VMs are not among them: the steward carves each session
   from its principal's sub-budget under `users`, from the top budgets the manifest names, 47,624
