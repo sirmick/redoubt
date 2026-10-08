@@ -45,7 +45,7 @@ of it; per-file metadata through the server's `set_attr` and `get_attr` is plann
 
 ### Files over 9P
 
-<details><summary>Status: built · partly tested: the host tests run beamlet's platform against the real `littlefsd` on the fake kernel, and OTP's `prim_file` over the natives runs in a boot in bench:beamlet-files; Elixir's `File` over them runs in a session once the steward's sessions do · tested (25)</summary>
+<details><summary>Status: built · partly tested: the host tests run beamlet's platform against the real `littlefsd` on the fake kernel, and OTP's `prim_file` over the natives runs in a boot in bench:beamlet-files; Elixir's `File` over them runs in a session once the steward's sessions do · tested (26)</summary>
 
 - host:beamlet-redoubt::files_are_written_read_listed_renamed_and_removed
 - host:beamlet-redoubt::a_rename_the_volume_refuses_is_eacces
@@ -66,6 +66,7 @@ of it; per-file metadata through the server's `set_attr` and `get_attr` is plann
 - host:beamlet-redoubt::a_field_set_on_a_missing_file_is_enoent
 - host:beamlet-redoubt::a_directory_that_is_there_is_eexist_to_make
 - host:beamlet-redoubt::mkdir_p_of_a_nested_new_path_makes_it
+- host:beamlet-redoubt::a_create_refused_is_its_refusal
 - host:beamlet-redoubt::every_row_of_the_error_table_maps_to_its_posix_error
 - host:beamlet-redoubt::a_bind_argument_puts_a_handed_volume_in_the_namespace
 - host:beamlet-vm::a_completion_reaches_the_process_that_asked_and_no_other

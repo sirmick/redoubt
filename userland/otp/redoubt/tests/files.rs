@@ -482,3 +482,28 @@ fn a_bind_argument_puts_a_handed_volume_in_the_namespace() {
     f.destroy(console.pid, console.endpoint);
     let _ = console.thread.join();
 }
+
+/// A create the server refuses for any reason but the name being there is that refusal, never an
+/// open of a file that is not there: a session labelled `{7}` writing down into an unlabelled volume
+/// is refused by the volume's label check, `eacces`, not `enoent`.
+#[test]
+fn a_create_refused_is_its_refusal() {
+    let f = fake();
+    let console = fixture::console_labelled(Box::new(std::io::empty()), Box::new(std::io::sink()), &[7]);
+    let volume = fixture::volume(2048, &["buckets=4"]);
+    let (pid, block) =
+        fixture::session_built(&console, &[("/home/alice", &volume)], &[], &[7], |_| Vec::new());
+    let session = f.run(pid, move || {
+        let startup = fixture::startup(&block);
+        let mut p = Redoubt::new(&startup, Box::new(Dirs(Vec::new()))).expect("a platform");
+        assert_eq!(ask(&mut p, |p| p.list_dir("/home/alice")), Ok(vec![]));
+        let how = create(OpenMode::default());
+        assert_eq!(ask(&mut p, |p| p.open("/home/alice/leak", how)), Err(FileError::Eacces));
+        assert_eq!(ask(&mut p, |p| p.make_dir("/home/alice/d")), Err(FileError::Eacces));
+        0
+    });
+    assert_eq!(session.join().unwrap(), 0);
+    assert_eq!(volume.stop(), redoubt_rt::exit::OK);
+    f.destroy(console.pid, console.endpoint);
+    let _ = console.thread.join();
+}
