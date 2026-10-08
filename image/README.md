@@ -12,8 +12,9 @@ The sources of the signed boot bundle and the disk images; what they produce goe
   disk's `blkd:system`, `verity:system` and `erofsd:system`, the steward and `sshd`. Its principals
   are alice (who owns `alice-secrets` and works under `{}` and `{alice-secrets}`) and bob, with
   their test keys from `tests/keys/`, so it must never ship. Alice's 47,624 pages give each of her
-  label sets room for two sessions of 11,905 pages (a session's limit and its budget's cost): her
-  console session and one SSH login under `{}`. The shell, `Redoubt.Shell`, is started by the
+  label sets room for two sessions of 11,009 pages (a session's limit and its budget's cost): her
+  console session and one SSH login under `{}`. The figure was set for sessions of 11,905 pages
+  and leaves each label set 1,794 pages over two sessions now. The shell, `Redoubt.Shell`, is started by the
   steward as the console principal's session (`console: "alice"`) on the UART, and as each SSH
   login's session on port 22 ([steward](../docs/servers/steward.md#authentication-and-sessions)).
   `beamlet` is the one `public` entry, read from `/boot`. The userland volume is

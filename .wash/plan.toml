@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 491
+revision = 493
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1727,3 +1727,12 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "Cut from SMP2: beamlet on the machine runs one scheduler thread (docs/userland/beamlet.md); give a session's VM N schedulers on N harts and a case measuring a parallel Elixir workload's throughput at 2 harts against 1 on both widths, with the VM's heap and the session budget unchanged. Design checkpoint first (scheduler threads vs the I/O hub, locks in the VM, budgets per thread)."
   state = "todo"
   revision = 488
+
+[[node]]
+  id = "B44"
+  title = "The session's budget follows its prompt peak again: 11,904 pages down by B32's rule, and beamlet.md's not-accounted rows"
+  template = "package"
+  parent = "M2"
+  body = "From the shell red's handoff: B32 raised a session to 11,904 pages when the prompt peak was ~5,900; SHELL7's index cut it to ~5,460 (rv64 5,459 / rv32 5,277 on main 012900114), so B32's rule (twice the largest peak, rounded up to 128) now gives about 11,008. Re-measure on main, set sizes.session and every manifest copy sharing it, and fix beamlet.md's 'Not accounted' rows (222 / 117 per SHELL7's red). Check what else derives from the session size (steward sub-budgets, alice's top budget, CTX3's cap arithmetic, HOME1's case notes) and say so. Gates: beamlet-footprint both widths, the steward-*/sshd-*/userland-* cases + the shell set both widths, init host tests, docs. Size S."
+  state = "done"
+  revision = 493

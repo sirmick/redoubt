@@ -175,8 +175,8 @@ required argument `budget_pages=N`, the budget's pages
 counts a process (two for a 16-byte term), so a limit is the same bytes on rv32 as on rv64. A flooding process peaks at about four times its
 heap limit, the old heap, the collector's copy and its growth, so the budget must be at least twice
 what the VM uses with no Erlang process running; then one flooding process, the tables or
-`persistent_term` meets its limit while the VM still has pages. A session's sixteenth is 744
-pages, 3,047,424 bytes; the shell at its prompt holds 3,696 bytes in ETS and 36,112 counted in
+`persistent_term` meets its limit while the VM still has pages. A session's sixteenth is 688
+pages, 2,818,048 bytes; the shell at its prompt holds 3,696 bytes in ETS and 36,112 counted in
 `persistent_term`, about a thousandth and a hundredth of it. Several flooding at once, or a native's single large allocation,
 reach the backstop instead, which ends the VM, and `init` restarts it. It is a server like any other
 under `init`'s restart rule: a VM that cannot stay up (a start module that fails every time, a
@@ -198,19 +198,19 @@ own:
 
 | What | rv64 | rv32 |
 | --- | ---: | ---: |
-| Decoded code: instructions | 523 | 523 |
-| Decoded code: operands | 2,119 | 2,119 |
-| Literals: each module's | 36 | 36 |
-| Literals: the shared table | 685 | 682 |
-| Module tables | 227 | 198 |
-| Atoms | 94 | 66 |
-| Processes (23): heaps, collected | 56 | 56 |
-| Processes: the rest | 121 | 116 |
+| Decoded code: instructions | 526 | 526 |
+| Decoded code: operands | 2,131 | 2,131 |
+| Literals: each module's | 37 | 37 |
+| Literals: the shared table | 690 | 688 |
+| Module tables | 233 | 204 |
+| Atoms | 95 | 66 |
+| Processes (22): heaps, collected | 57 | 57 |
+| Processes: the rest | 117 | 111 |
 | ETS and binaries | 1 | 1 |
-| Accounted | 3,866 | 3,801 |
-| Runtime heap at the prompt: held, peak | 4,088, 4,489 | 3,918, 4,326 |
-| Not accounted (held less accounted) | 222 | 117 |
-| The scan's peak, after one command | 5,432 | 5,253 |
+| Accounted | 3,887 | 3,821 |
+| Runtime heap at the prompt: held, peak | 4,110, 4,510 | 3,939, 4,343 |
+| Not accounted (held less accounted) | 223 | 118 |
+| The scan's peak, after one command | 5,459 | 5,277 |
 
 A module's instructions are 8-byte entries over one array of its operands, 16 bytes each on either
 width, a list operand's items in the same array, so decoded code is the same size on both widths
@@ -232,11 +232,10 @@ the first command loads more modules.
 
 The image budgets the VM twice the largest peak the scan finds across its memory cases, in
 `beamlet-footprint`, the one case that scans a shell's VM now that the steward starts the others'
-shells, and with that budget, 11,904 pages, the single VM boots in 512 MiB
-([budgets](../kernel/budgets.md#the-tree-from-the-boot-manifest)). The budget was set from a peak of
-5,904 pages on rv64, when every module of the shell's was loaded at its start, the commands'
-among them; with the commands loaded when called the peak is 5,432, which the rule would make
-11,008 (residual: the budget is not lowered yet). The line editor under the shell's driver is loaded at
+shells, and with that budget, 11,008 pages from a peak of 5,459 on rv64, the single VM boots in
+512 MiB ([budgets](../kernel/budgets.md#the-tree-from-the-boot-manifest)). The budget was 11,904
+pages while every module of the shell's was loaded at its start, the commands' among them, and
+the peak was 5,904. The line editor under the shell's driver is loaded at
 the prompt: OTP's `group`, `edlin`, `edlin_key`, `group_history`, `prim_tty`, `shell`,
 `gen_statem`, `sys` and `kernel`, with `Redoubt.Term` and the driver. The shell's protocols are not
 consolidated, but nothing at the prompt, nor a plain line, dispatches a protocol on a struct, so
