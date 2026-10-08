@@ -1,0 +1,73 @@
+description = "An SSH session outlives its console's quiet (docs/servers/sshd.md, \"Sessions over SSH\"; docs/servers/serving.md, \"Who runs it\"): sshd answers its channel console's parked completion call empty at the end of each hold, so a session with no console traffic for longer than several holds is still there. Alice's VM sleeps 45 s inside one evaluation, with nothing on her channel, and then answers; bob sits at his prompt for as long, and then answers. Neither session ends before its ssh closes its input. The verdicts are the sessions' own answers over sshd's channels, and sshd's and the steward's lines, with init's showing no exit and no reboot (rule F)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+recipe = "image/boot.toml"
+# The image needs 1 GiB: the principals' budgets, each holding a shell VM's session, do not fit
+# the users budget 256 MiB leaves (docs/kernel/budgets.md).
+memory_mib = 1024
+# Two logins, each booting a shell VM, and 45 s of quiet.
+timeout_secs = 1500
+expect = [
+    '^init: started sshd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
+    '^init: started steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+]
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    '^init: .* (exited|faulted|was killed)',
+    'init: restarted',
+    'EXCEPTION',
+    'sshd: login .*: refused',
+]
+expect_after = [
+    '^\[con [0-9a-f]{16}\] sshd: login alice: session [0-9a-f]{16}, labels \[\]$',
+    '^\[con [0-9a-f]{16}\] sshd: login bob: session [0-9a-f]{16}, labels \[\]$',
+]
+
+# Alice's quiet is one evaluation's: her VM sleeps with its console's completion call parked.
+[[session]]
+user = "alice"
+steps = [
+    { expect = 'Elixir.Redoubt.Shell read from' },
+    { expect = '\([0-9]+\)> ' },
+    { mark = "alice-up" },
+    { wait = "bob-up" },
+    { send = ":timer.sleep(45_000); \"alice-\" <> \"awake\"\n" },
+    { expect = '"alice-awake"' },
+    { mark = "alice-awake" },
+    { expect = '\([0-9]+\)> ' },
+    { send = "\"alice-\" <> \"still\"\n" },
+    { expect = '"alice-still"' },
+    { wait = "bob-done" },
+    { exit = 0 },
+]
+
+# Bob's quiet is his prompt's: his shell waits for typing all through alice's sleep.
+[[session]]
+user = "bob"
+steps = [
+    { wait = "alice-up" },
+    { expect = 'Elixir.Redoubt.Shell read from' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "\"bob-\" <> \"up\"\n" },
+    { expect = '"bob-up"' },
+    { expect = '\([0-9]+\)> ' },
+    { mark = "bob-up" },
+    { wait = "alice-awake" },
+    { send = "\"bob-\" <> \"still\"\n" },
+    { expect = '"bob-still"' },
+    { mark = "bob-done" },
+    { exit = 0 },
+]
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]
+forward = [22]

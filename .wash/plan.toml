@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 382
+revision = 388
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -583,9 +583,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M2"
   needs = ["SMP3"]
-  body = "docs/kernel/scheduling.md R12 restated across harts, once, with several runners per budget (after SMP3). Brief: .wash/local/SMP2-implementer.md. Tier A, size M-L.\n\n- R12: a budget gets its weight's share of the harts, at most one per runnable thread, what it cannot use going to the others by weight (water-filling); spreading gains nothing.\n- Architect's ruling: the floor leaves out capped budgets (weight share above their runnable threads, found by water-filling over the top H-1 by w/k); a budget leaving the cap is lifted to the floor. At one hart nothing is capped, so nothing changes.\n- Checkpoint before kernel work: four scenarios (late join, second cap, uncap, spread) in the model, under the old floor and the new rule, sent to the Architect.\n- The stride crate, the model (1, 2, 4 harts, independent water-filling) and five new mutations; the oracle judges multi-hart traces.\n- Cases: unpin SMP1's pins to [1, 2, 4]; sched-capped; sched-lock-contention (FIFO wait from the trace); sched-latency swept at 2 harts.\n- Targets (owner, QA SMP1-design): gated at 1 and 2 harts, recorded at 4.\n- The VM's two schedulers on two harts, once beamlet runs on Redoubt; else cut to its own node."
+  body = "Several harts: R12's shares and the targets across harts. Starting list from SMP3's --smp 2 sweep: the share and oracle cases that fail at 2 harts (see .wash/local/SMP3-smp2-findings.md), plus expiry-deadline-then-timeout and scan-bounds (measurements disturbed by a second hart). Later scheduling work noted here: wake affinity (no IPI when the waker blocks next) for the icount IPC cost SMP3 records on scheduling.md."
   state = "todo"
-  revision = 2
+  revision = 385
 
 [[node]]
   id = "RT2"
@@ -1369,9 +1369,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "shell-host"
   needs = ["SHELL2"]
-  body = "M2 host step 6: docs/userland/shell.md#resource-use. Size S-M."
+  body = "M2 host step 6: docs/userland/shell.md#resource-use. Size S-M. Also, from B32's measurement (.wash/local/B32-measure.md): the shell is built with unconsolidated protocols, so Protocol, Enumerable and Enumerable.Range (83K) load only for Redoubt.Term's Enum.chunk_while. Build the shell with consolidated protocols, keep Term off Enumerable, and measure the session's peak against B32's 5,902 pages (rv64); lower the session size if the margin allows."
   state = "todo"
-  revision = 323
+  revision = 384
 
 [[node]]
   id = "shell-host"
@@ -1472,8 +1472,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   body = "Found by BEAM14 on main abd3fcd6d. An SSH session (steward + sshd; pty or not; labelled or not) that is quiet for 12-15 s ends: its shell reads the input's end, prints 'ok' and exits; the steward logs 'users/<p>/{} holds 0 pages', sshd 'session ... ended'. Probes on rv64, quiet class: sleeps of 4-12 s survive, 15 s ends; bob idle at his prompt for about 17 s dies 6 of 6. Suspect (unread): the session VM's hub connection to sshd's channel console holds its completion call no longer than the session bound, and the hold boundary is read as the server's silence (K27's mechanism, with no load). A user who stops typing for 15 s loses the session. Check the UART console session too. Fix, and add a case where a session stays idle past several hold boundaries, on both widths. Size S-M."
-  state = "active"
-  revision = 378
+  state = "done"
+  revision = 388
 
 [[node]]
   id = "B32"
@@ -1482,5 +1482,16 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   needs = ["B30"]
   body = "Found by B30. Once B30 fixes beamlet-footprint's result match, the memory check behind it fails on both widths: heap 2x peak 11,804/11,406 > cap 10,989. SHELL2's driver (group, edlin, Redoubt.Term, history) raised the shell VM's heap. Measure what grew. Then cut it, or raise the cap with a measured reason, under B23's rule (the peak stays under half the cap). Size S."
-  state = "todo"
-  revision = 381
+  state = "active"
+  revision = 383
+  overrides = ["2026-10-08: started by Orchestrator before M1 (reported): A case failing on main since SHELL2's merge; fixing main's failures goes first."]
+
+[[node]]
+  id = "K30"
+  title = "Two stalls at 2 harts on main: budget-deadline prints no [deadline] line in 120 s after four terminations; redoubt-ipc-attack's attacker stops after its buffers step"
+  template = "package"
+  parent = "smp"
+  body = "Found by SMP3's --smp 2 sweep (rv64) on main 0b1ddf839 plus the bench option. Both also fail without SMP3's kernel commits, so the cause is under SMP1's one big lock. budget-deadline: after four terminations no [deadline] line comes in 120 s. redoubt-ipc-attack: the attacker stops after its buffers step (20 s). Read SMP3's findings (.wash/local/SMP3-smp2-findings.md). Find out whether these are lost wakeups or IPIs, or a wrong result, and fix them. Coordinate with SMP3, which changes the pick and running state; rebase onto it if it merges first. Size M."
+  state = "active"
+  revision = 386
+  overrides = ["2026-10-08: started by Orchestrator before M1 (reported): Two-hart stalls on main under SMP1's lock; SMP3, already in flight for M2, needs these understood."]

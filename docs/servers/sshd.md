@@ -130,9 +130,10 @@ Miri both crates take their portable Rust paths. Those two assembly blocks are r
 
 ### Sessions over SSH
 
-<details><summary>Status: built · partly tested: a channel's window size reaches the session only once `consol`'s `size` and `resize` are served (consoled.md, "The `consol` protocol") · tested (14)</summary>
+<details><summary>Status: built · partly tested: a channel's window size reaches the session only once `consol`'s `size` and `resize` are served (consoled.md, "The `consol` protocol") · tested (15)</summary>
 
 - bench:steward-ssh-two-principals
+- bench:steward-ssh-idle
 - bench:steward-vault-session
 - bench:steward-login-refused
 - bench:steward-session-ends
@@ -178,7 +179,10 @@ Miri both crates take their portable Rust paths. Those two assembly blocks are r
   session sees it: any other signal is refused, a break's length is not passed on, and a window
   size over 1,024 columns or rows reaches the session cut to 1,024. A zero means no size, as
   RFC 4254 says (a client whose input is not a terminal sends zeros): a `window-change` carrying
-  one is refused, and a pty asked for with one starts at 80 by 24.
+  one is refused, and a pty asked for with one starts at 80 by 24. The console's parked
+  completion call is answered at the end of each hold
+  ([multiplexed connections](serving.md#multiplexed-connections)), so a session stays however
+  long its channel is quiet.
 - **Randomness.** The program provides `getrandom`'s `__getrandom_v03_custom`, the only source
   `getrandom` has on bare metal, and it writes all of the buffer it is given before it returns
   `Ok`: `getrandom` then reads every byte as initialised
