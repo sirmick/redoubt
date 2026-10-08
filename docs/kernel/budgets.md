@@ -219,8 +219,8 @@ and its kernel objects.
   across the memory cases plus its stack, rounded up to 128
   ([beamlet](../userland/beamlet.md#what-the-vm-holds-at-its-prompt)), set when that peak was
   5,904 pages on rv64; it moved seven steps from 11,008 when the shell's line editor took the peak
-  there. The peak is 5,430 on rv64 and 5,251 on rv32 since the shell's commands are loaded when
-  first called, so the rule gives 10,880 (residual: the size is not lowered yet). The scan's cap
+  there. The peak is 5,432 on rv64 and 5,253 on rv32 since the shell's commands are loaded when
+  first called, so the rule gives 11,008 (residual: the size is not lowered yet). The scan's cap
   rule bounds it from below: an rv64 peak above 5,942 pages puts the cap under twice the peak, and
   the size then moves up a step of 128. The bench and
   `mkimage`'s instructions give the image 1 GiB ([the image](../../image/README.md)). The bound

@@ -559,16 +559,34 @@ reads the documentation chunks of the module's `.beam` file.
 
 ### Resource use
 
-Status: planned · M2 (usable shell)
+Status: built · partly tested: runs on the host only, where there are no budgets but the fake kernel's; its tests are the shell's own ExUnit suite, which `./test-shell` runs and no bench case does
 
-`top()` shows the session's budgets, their weights and usage, and their processes; `ps()`,
-`df()`, `free()` and `uptime()` show a part of that. They read the budgets the session holds
-(`budget_usage`: [budgets](../kernel/budgets.md#budget_usage)), so they show only what is the
-caller's own: its (account, label set). Another principal's processes, and a vault session's
-from an ordinary one, are not listed, because a count of someone else's work is a channel. PIDs
-are drawn at random for the same reason ([processes](../kernel/processes.md#processes-and-pids)).
+```text
+free()      # the session's pages: limit, used, free; what the VM's processes, binaries, atoms, ETS hold
+uptime()    # since the box booted, by the kernel's clock, and since the session started
+ps()        # the session's budget, then the VM's Erlang processes, the largest first
+top()       # all of it on a screen, refreshed each second, the busiest process first; q leaves
+```
 
-**Open:** none.
+They read and change nothing ([`Redoubt.Shell.Resources`](../../userland/shell/lib/redoubt/shell/resources.ex);
+`top`'s screen, [`Redoubt.Screen.Top`](../../userland/shell/lib/redoubt/screen/top.ex), is loaded only when it is called).
+The session's budget is read through `budget_usage` on the named handle `budget`
+([budgets](../kernel/budgets.md#budget_usage)), so they show only what is the caller's own: its
+(account, label set). Another principal's processes, and a vault session's from an ordinary one,
+are not listed, because a count of someone else's work is a channel. PIDs are drawn at random for
+the same reason ([processes](../kernel/processes.md#processes-and-pids)). The processes listed are
+the VM's own, Erlang processes; a native program the session runs is counted in the session's
+pages and processes, in a budget carved from its own. A platform with no budgets, the host's,
+shows the VM's part and says so.
+
+Not built:
+- **`df()`**, the session's volumes' space: no file server answers a call for it yet, neither the
+  free space of a volume nor what is left of a byte quota
+  ([walfsd](../servers/walfsd.md#quotas), [littlefsd](../servers/littlefsd.md#quotas)); that call
+  comes first.
+- **The session's jobs in `ps()` and `top()`**, each native stage and its budget, with jobs
+  ([interrupting and killing jobs](#interrupting-and-killing-jobs)): a launch gives the session a
+  job, not a PID.
 
 ### The editor
 

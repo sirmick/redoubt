@@ -149,18 +149,18 @@ own:
 | What | rv64 | rv32 |
 | --- | ---: | ---: |
 | Decoded code: instructions | 523 | 523 |
-| Decoded code: operands | 2,118 | 2,118 |
+| Decoded code: operands | 2,119 | 2,119 |
 | Literals: each module's | 36 | 36 |
-| Literals: the shared table | 684 | 681 |
+| Literals: the shared table | 685 | 682 |
 | Module tables | 227 | 198 |
 | Atoms | 94 | 66 |
 | Processes (23): heaps, collected | 56 | 56 |
 | Processes: the rest | 121 | 116 |
 | ETS and binaries | 1 | 1 |
-| Accounted | 3,864 | 3,799 |
-| Runtime heap at the prompt: held, peak | 4,086, 4,482 | 3,916, 4,319 |
+| Accounted | 3,866 | 3,801 |
+| Runtime heap at the prompt: held, peak | 4,088, 4,489 | 3,918, 4,326 |
 | Not accounted (held less accounted) | 222 | 117 |
-| The scan's peak, after one command | 5,430 | 5,251 |
+| The scan's peak, after one command | 5,432 | 5,253 |
 
 A module's instructions are 8-byte entries over one array of its operands, 16 bytes each on either
 width, a list operand's items in the same array, so decoded code is the same size on both widths
@@ -185,8 +185,8 @@ The image budgets the VM twice the largest peak the scan finds across its memory
 shells, and with that budget, 11,904 pages, the single VM boots in 512 MiB
 ([budgets](../kernel/budgets.md#the-tree-from-the-boot-manifest)). The budget was set from a peak of
 5,904 pages on rv64, when every module of the shell's was loaded at its start, the commands'
-among them; with the commands loaded when called the peak is 5,430, and twice it would be 10,880
-(residual: the budget is not lowered yet). The line editor under the shell's driver is loaded at
+among them; with the commands loaded when called the peak is 5,432, which the rule would make
+11,008 (residual: the budget is not lowered yet). The line editor under the shell's driver is loaded at
 the prompt: OTP's `group`, `edlin`, `edlin_key`, `group_history`, `prim_tty`, `shell`,
 `gen_statem`, `sys` and `kernel`, with `Redoubt.Term` and the driver. The shell's protocols are not
 consolidated, but nothing at the prompt, nor a plain line, dispatches a protocol on a struct, so
