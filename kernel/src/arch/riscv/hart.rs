@@ -212,6 +212,28 @@ pub fn wake_idle() {
     }
 }
 
+/// Wake the harts in `mask` (a bit each by boot index) from their halt in the wait for the kernel
+/// lock ([`halt_for_lock`]): the release's interrupt. Called by the hart releasing the lock.
+pub fn wake_halted(mask: usize) {
+    for (i, block) in HART_BLOCKS[..started()].iter().enumerate() {
+        if mask & 1 << i != 0 {
+            let _ = sbi_rt::send_ipi(sbi_rt::HartMask::from_mask_base(1, block.id.load(Ordering::Relaxed)));
+        }
+    }
+}
+
+/// Halt this hart in its wait for the kernel lock until an interrupt is pending: the release's
+/// ([`wake_halted`]), a shootdown's or the timer's, all enabled in `sie` on every hart before its
+/// first wait ([`hart_main`]). With `sstatus.SIE` clear none is taken: the halt ends and the wait
+/// goes on. The pending reschedule interrupt is cleared, so that it does not end the next halt at
+/// once. That loses nothing: a shootdown is asked in the block's `shoot` word, which the wait
+/// serves on its next turn, and a reschedule interrupt goes only to a hart marked idle, which picks
+/// once it holds the lock.
+pub fn halt_for_lock() {
+    super::halt();
+    ack_ipi();
+}
+
 /// Whether a hart other than this one runs `pid` now: its block names `pid`, and no destruction
 /// has made it leave `pid`'s space ([`serve`]). Exact under the kernel lock, as the blocks change
 /// only under it but for that leaving.
@@ -437,12 +459,14 @@ fn phys_of(virt: usize) -> usize {
 /// kernel stack, `sscratch` its block).
 #[no_mangle]
 extern "C" fn hart_main(id: usize) -> ! {
+    // Its timer and reschedule interrupt first, without the lock: the release that ends its wait
+    // for the lock wakes it with that interrupt (`halt_for_lock`).
+    super::irq::timer::init_hart();
     crate::cell::KERNEL_LOCK.acquire();
     // R11 and R24: `_hart_land` wrote them as `_start` does on the boot hart.
     assert_eq!(riscv::register::senvcfg::read().bits(), 0, "senvcfg is not 0 on hart {} (R11)", id);
     let status = riscv::register::sstatus::read();
     assert!(!status.sum() && !status.mxr(), "sstatus.SUM or MXR is set on hart {} (R24)", id);
-    super::irq::timer::init_hart();
     println!("hart {} (boot index {}) runs the scheduler", id, index());
     crate::kmain();
     panic!("kmain returned on hart {}", id)

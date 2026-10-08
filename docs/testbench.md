@@ -263,15 +263,15 @@ result under it is worth is the shared-host rule below. A timing gate runs one p
 states its target from a sweep of seeds ([responsiveness](kernel/scheduling.md#responsiveness)).
 
 **Which cases run in guest time.** A boot case runs under `icount = "shift=3,sleep=off"` unless
-something in it waits on the host, and 137 of the 205 do. What keeps a case on the host's clock:
+something in it waits on the host, and 145 of the 226 do. What keeps a case on the host's clock:
 a disk or a userland disk (38 cases; the rule for a disk is above); host sockets, a `forward`, a
 `poke`, a peer or a dial (8); input the host types on the console, `[[input]]` (4; under `icount`
-the rv32 UART lost a burst of it); several harts that spin, since under `icount` QEMU runs the
-harts in turn on one host thread and a hart spinning on the kernel's lock spends its whole turn
-(3: `all-together` at 2 harts and `ipc` at 4 take from three to ten times as long, and
-`smp-boot` at 4 sees a hart that never ran user code); and a run whose purpose is the host's
+the rv32 UART lost a burst of it); and a run whose purpose is the host's
 time (`asid-cost-host`, `sched-latency-tcg`, `timeouts-tcg`, and `smp-evict-mttcg` and
-`smp-shootdown-mttcg`, which need QEMU's multi-threaded TCG). One case reads no host clock and stays on it for now: `redoubt-ipc`
+`smp-shootdown-mttcg`, which need QEMU's multi-threaded TCG). Several harts do not keep a case
+on the host's clock: under `icount` QEMU runs the harts in turn on one host thread, and a hart
+waiting for the kernel lock halts rather than spending its turn
+([R78 (fair kernel entry)](kernel/scheduling.md#r78-fair-kernel-entry)). One case reads no host clock and stays on it for now: `redoubt-ipc`
 fails under `icount` on both widths (189 calls abandoned of the 256 it wants), until that is
 understood. A `timeout_secs` is the bench's bound, never a measurement: a case in guest time
 is given at least four times its slowest pass alone on either width, rounded up to 10 s, and

@@ -951,7 +951,7 @@ It is attacked three ways:
 
 ### R78 (fair kernel entry)
 
-Status: built · tested: bench:smp-boot
+Status: built · tested: bench:smp-boot, bench:smp-lock-wait
 
 On several harts, kernel entry is fair across them: the one kernel lock is a FIFO ticket lock,
 so a hart that arrives at the kernel waits behind at most `MAX_HARTS` - 1 kernel sections, never
@@ -961,13 +961,28 @@ budget's harts can starve another's of kernel entry, which no pattern of calls m
 bounds the wait by the hart count, and the bound is part of how R12's shares are judged across
 harts ([several harts](../plan/m2-usable-shell.md#several-harts)).
 
-The lock (`kernel/src/cell.rs`, `TicketLock`) draws a ticket with a relaxed `fetch_add`, spins
-until `serving` reads it (acquire), and releases by `serving + 1` (release); each turn of the
-spin runs the pause hint through one named place, `wait_for_change`, where a Zawrs wait goes
-later (no `wrs.nto` is emitted today). It is taken once at trap entry and released before the
-return to user mode or an idle wait. A checked build asserts, at every acquisition, that the
-hart waited behind fewer sections than harts were started (the draw, the read and the release
-are sequentially consistent there, so the count can only under-count); `bench:smp-boot` prints
+The lock (`kernel/src/cell.rs`, `TicketLock`) draws a ticket with a relaxed `fetch_add`, waits
+until `serving` reads it (acquire), and releases by `serving + 1`. A hart waits halted, not
+spinning: it marks itself in the lock's `halted` set, reads `serving` again and, if its turn has
+not come, halts (`wfi`) until an interrupt is pending; the release sends each marked hart the
+reschedule interrupt (through the firmware, SBI), and the woken hart reads `serving` again. The
+mark, the read, the release's store and its read of the set are sequentially consistent, so either
+the release sees the mark or the waiter sees the new ticket: no hart halts past its turn. Under
+QEMU's `icount`, where the harts take turns on one host thread and the clock counts every running
+hart's instructions, a spinning hart would spend its turns and the guest's time while the holder
+waited for them, and a halted one gives them up. Spinning cost every case at two harts:
+`ipc-client`'s 1000 lend round trips took 17.4 s on rv64 and 20.0 s on rv32 against 2.0 s at
+one hart, and take 2.1 s on both widths halted; `sched-latency`'s N = 16 driver wake p99 was 345
+ms, and is 6.3 ms (gross, rv64). On real harts the halt costs one interrupt at each contended
+release: without `icount`, at two harts, the same round trips take 546 ms halted against 505 ms
+spinning on rv64 (+8 %) and 563 against 508 ms on rv32 (+11 %), each a mean of five runs alone;
+a spin of 300 turns before the halt took back most of that on rv32 and little on rv64, and cost
+7.5 % under `icount`, so there is none. The halt is the Zawrs hook: a `wrs.nto` reservation wait
+on `serving` would stall the hart with no interrupt, but QEMU runs `wrs.nto`, like the pause
+hint, as a no-op that keeps the hart's turn. The lock is taken once at trap entry and released
+before the return to user mode or an idle wait. A checked build asserts, at every acquisition,
+that the hart waited behind fewer sections than harts were started (the draw, the read and the
+release are sequentially consistent there, so the count can only under-count); `bench:smp-boot` prints
 the most any hart waited (one section at two harts, three at four, on both widths). Under the
 ticket lock the count cannot exceed the harts less one by construction, so the assertion is
 structural for the real lock, and the test-and-set negative below is the one attack. It is
@@ -976,6 +991,14 @@ attacked by a kernel built with the ticket lock replaced by test-and-set
 [below](#failure-and-restart); not a model mutation, since the model has one hart): with it,
 `smp-boot` fails at the FIFO assertion at two and at four harts on both widths, in a recorded
 negative run. The one-hart kernel is the uncontended case of the same lock.
+
+`bench:smp-lock-wait` holds the halt: two threads of one process make 20,000 system calls each
+at once on two harts, every call contended, then one thread makes all 40,000 alone, and the calls
+at once may take at most three times as long. Halted they take 1.87 s against 1.26 s on rv64 and
+4.87 s against 1.97 s on rv32: each hand-off of the lock is an interrupt through the firmware,
+dearer on rv32. A kernel whose waiting hart spins (`sched-spin-entry`, a debug-only kernel
+feature) fails it on both widths in a recorded negative run: 250 s against 1.25 s on rv64, 170 s
+against 1.97 s on rv32.
 
 ### R23 (no test channels)
 
@@ -1001,8 +1024,9 @@ tells whoever reads the console who runs when. It exists only under the Cargo fe
 The other diagnostic features are off by default in the same way: `walk-trace`, which implies
 the trace and brackets each receive's pump, timer expiry and reconcile in it, for `worst-walk`
 alone; `sched-inject-tie-fault`, a debug-only break of the tie rule that implies the trace;
-`sched-test-and-set-entry`, which replaces the kernel lock by test-and-set for
-[R78](#r78-fair-kernel-entry)'s recorded negative run;
+`sched-test-and-set-entry`, which replaces the kernel lock by test-and-set, and
+`sched-spin-entry`, which makes a hart wait for it spinning, each for one of
+[R78](#r78-fair-kernel-entry)'s recorded negative runs;
 `audit-unstamped`, which leaves the audit
 after a destruction out of the trace, and `audit-billed`, which bills each audit's time to the
 budget that ran it and counts it against its slice, each for one recorded negative run
@@ -1099,9 +1123,10 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
 - **A call within one budget crosses harts.** A wake sends an idle hart the reschedule interrupt
   even when the woken thread's budget runs elsewhere, so a server and its client in one budget
   hand each call and reply across two harts, each hand-off an interrupt and a wait for the lock,
-  where one hart would run them in turn. `ipc-client`'s run against `log-server` in `system` at
-  two harts takes 2.5 s as at one without `icount`, and 8.2 s against 1.3 s under it, where a hart
-  spinning on the lock spends its whole turn. No rule keeps a woken thread on its waker's hart. A call's or a destruction's kernel time delays every wake
+  where one hart would run them in turn. Under `icount`, `ipc-client`'s 1000 lend round trips
+  against `log-server` in `system` take 2.07 s at two harts against 2.02 s at one (rv64; 2.06 and
+  2.01 s on rv32), since a hart waiting for the lock halts ([R78](#r78-fair-kernel-entry)). No
+  rule keeps a woken thread on its waker's hart. A call's or a destruction's kernel time delays every wake
   on the machine, which is why R12 bounds a call's kernel time whoever pays for it. R10's time
   dominates lease termination and follows the dying subtree and the handles that depend on it, so its target
   and the deadline notice's are 30 and 40 ms, not the 39 and 54 ms a whole-frame scan had

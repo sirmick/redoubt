@@ -31,8 +31,9 @@ pub fn init() {
     init_hart();
 }
 
-/// This hart's timer, at boot and on each hart started (`hart::hart_main`): nothing due yet, the
-/// timer and the reschedule interrupt on, and `time` readable from U-mode.
+/// This hart's timer, at boot and on each hart started (`hart::hart_main`, before its first wait
+/// for the kernel lock, which the reschedule interrupt ends): nothing due yet, the timer and the
+/// reschedule interrupt on, and `time` readable from U-mode. It reaches no kernel global.
 pub fn init_hart() {
     sbi_rt::set_timer(u64::MAX);
     // SAFETY: these only choose which interrupts reach the trap handler. The kernel itself runs

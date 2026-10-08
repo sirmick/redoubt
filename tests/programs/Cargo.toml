@@ -105,6 +105,7 @@ bin = [
     { name = "smp-boot", test = false },
     { name = "smp-evict", test = false },
     { name = "smp-fence", test = false },
+    { name = "smp-lock-wait", test = false },
     { name = "smp-shootdown", test = false },
     { name = "sleeper", test = false },
     { name = "stub-launch", test = false },

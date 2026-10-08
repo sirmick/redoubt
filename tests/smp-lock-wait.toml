@@ -1,0 +1,11 @@
+description = "A hart waiting for the kernel lock halts, so it takes no time from the hart holding it (R78): two threads of one process making system calls at once on two harts take at most three times the same calls made in turn on one, a hundred times and more with a spinning wait (checked build, 2 harts, icount: the harts round-robin in one host thread)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+icount = "shift=3,sleep=off"
+programs = ["smp-lock-wait"]
+smp = [2]
+timeout_secs = 300
+expect = ['^SMP-LOCK-WAIT TEST PASSED$']
+forbid = ['\[lock-wait\] FAIL']
+poweroff = true

@@ -39,6 +39,13 @@ pub fn init() {
     }
 }
 
+/// Halt the hart (`wfi`) until an interrupt enabled in `sie` is pending, taken or not: with
+/// `sstatus.SIE` clear it is not, and the hart goes on after the halt.
+pub fn halt() {
+    // SAFETY: `wfi` has no memory effect.
+    unsafe { core::arch::asm!("wfi", options(nomem, nostack)) };
+}
+
 /// Put the core to sleep until an interrupt hits. Returns `true` to indicate the kernel
 /// should not exit.
 pub fn idle() -> bool {
@@ -46,8 +53,7 @@ pub fn idle() -> bool {
     // sends this one the reschedule interrupt while it is marked idle (`hart::wake_idle`).
     hart::set_idle(true);
     crate::cell::KERNEL_LOCK.release();
-    // SAFETY: `wfi` has no memory effect.
-    unsafe { core::arch::asm!("wfi", options(nomem, nostack)) };
+    halt();
     crate::cell::KERNEL_LOCK.acquire();
     hart::set_idle(false);
 
