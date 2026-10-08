@@ -29,6 +29,7 @@ impl Heap {
         let from_offheap = core::mem::take(&mut self.offheap);
         self.offheap_index.clear();
         self.offheap_bytes = 0;
+        self.held_bytes = 0;
         let offheap_moved = alloc::vec![u32::MAX; from_offheap.len()];
         Collector { heap: self, from, from_offheap, offheap_moved }
     }

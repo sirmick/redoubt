@@ -176,7 +176,7 @@ pub fn open(c: &mut Ctx, _a: &[Term]) -> R {
         stash: Lock::new(None),
     };
     let id = c.sys().make_ref().0;
-    Ok(c.heap_mut().resource(Resource { id, value: Box::new(s) }))
+    Ok(c.heap_mut().resource(Resource::new(id, Box::new(s))))
 }
 
 pub fn close(c: &mut Ctx, a: &[Term]) -> R {

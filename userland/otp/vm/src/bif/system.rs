@@ -347,10 +347,8 @@ fn body(h: &mut Heap, (words, buffer, handles): Numbered, nil: Term) -> Term {
         Some(b) => h.binary(b),
         None => nil,
     };
-    let handles: Vec<Term> = handles
-        .into_iter()
-        .map(|(id, o)| h.resource(Resource { id, value: alloc::boxed::Box::new(o) }))
-        .collect();
+    let handles: Vec<Term> =
+        handles.into_iter().map(|(id, o)| h.resource(Resource::new(id, alloc::boxed::Box::new(o)))).collect();
     let handles = h.list(handles);
     h.tuple(&[words, buffer, handles])
 }
@@ -377,7 +375,7 @@ impl crate::vm::System {
                     let tag = Term::Atom(self.atom("request"));
                     self.send_with(to, |h| {
                         let request = match request {
-                            Some((id, r)) => h.resource(Resource { id, value: alloc::boxed::Box::new(r) }),
+                            Some((id, r)) => h.resource(Resource::new(id, alloc::boxed::Box::new(r))),
                             None => nil,
                         };
                         let (badge, account) = (h.from_u64(badge), h.from_u64(account));

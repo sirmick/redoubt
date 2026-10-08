@@ -102,7 +102,9 @@ VM down. Every limit fails closed: the offender ends, and nothing is lost silent
   silently, like a TCP stream with a hole in it.
 - **Process memory** (`max_heap_words`, 2^27 words, and `max_heap_size`, which a process can only
   lower): checked at the end of each slice; a process over it is collected first and killed only
-  if what is live is still over.
+  if what is live is still over. A resource whose native declares its size, a
+  [screen buffer](#screen-natives), counts that size as its holder's own memory, toward
+  `max_heap_size` as heap words do.
 - **ETS** (`max_ets_words`, 2^27 words for all tables together): an insert past it raises
   `system_limit`.
 - **CPU:** reductions preempt every process, including a loop of plain jumps with no calls.

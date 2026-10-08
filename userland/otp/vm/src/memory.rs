@@ -3,7 +3,8 @@
 //!
 //! Terms live on per-process heaps, so memory is read off them, not measured: a heap cell is
 //! two words, and the bytes a heap holds off-heap (binaries, bignums) are counted separately,
-//! as BEAM counts its reference-counted binaries.
+//! as BEAM counts its reference-counted binaries. A resource that declares its size (a screen
+//! buffer) counts with the heap words, as the holder's own memory.
 //!
 //! [`footprint`] is the other measure: everything the VM holds, by kind, in the bytes its
 //! allocations hold.
@@ -21,7 +22,8 @@ use crate::vm::System;
 /// What a process holds.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Usage {
-    /// Heap words (including garbage not yet collected), stack and registers.
+    /// Heap words (including garbage not yet collected), stack and registers, and the declared
+    /// sizes of the resources the heap holds.
     pub words: u64,
     /// Bytes held off the heap.
     pub binary_bytes: u64,
@@ -35,7 +37,8 @@ impl Usage {
 /// Everything process `p` holds.
 pub fn process(p: &Process) -> Usage {
     let fixed = PROCESS_WORDS + p.x.len() as u64 + 2 * p.stack.len() as u64 + p.frames.len() as u64;
-    Usage { words: fixed + 2 * p.heap.len() as u64, binary_bytes: p.heap.offheap_bytes() as u64 }
+    let held = p.heap.held_bytes().div_ceil(8) as u64;
+    Usage { words: fixed + 2 * p.heap.len() as u64 + held, binary_bytes: p.heap.offheap_bytes() as u64 }
 }
 
 /// A process's own structures (BEAM's process struct and minimum heap), in words.

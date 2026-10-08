@@ -801,8 +801,27 @@ impl Ctx<'_> {
 
     /// A new resource holding `value`, with a fresh id.
     pub fn new_resource<T: core::any::Any + crate::sync::Shared>(&mut self, value: T) -> Term {
+        self.new_resource_sized(value, 0)
+    }
+
+    /// A new resource holding `value`, which holds `bytes` of memory the caller chose: they count
+    /// as the memory of every process that holds the resource, toward its own heap limit.
+    pub fn new_resource_sized<T: core::any::Any + crate::sync::Shared>(
+        &mut self,
+        value: T,
+        bytes: usize,
+    ) -> Term {
         let id = self.sys().make_ref().0;
-        self.p.heap.resource(crate::term::Resource { id, value: alloc::boxed::Box::new(value) })
+        self.p.heap.resource(crate::term::Resource::sized(id, alloc::boxed::Box::new(value), bytes))
+    }
+
+    /// Resource `t`, on the calling process's heap, now holds `bytes`: the caller's memory counts
+    /// the new size at once, any other holder's from its next collection.
+    pub fn resize_resource(&mut self, t: Term, bytes: usize) {
+        if let Some(r) = self.p.heap.as_resource(t) {
+            let old = r.set_bytes(bytes);
+            self.p.heap.resized(old, bytes);
+        }
     }
 
     /// A copy of a term kept outside the process.

@@ -190,14 +190,37 @@ impl OffHeap {
 
 /// A resource: a unique id (from the VM's reference counter) and the native value. Natives
 /// that need to change their state keep it in a [`crate::sync::Lock`] inside `value`.
+///
+/// A resource whose value holds memory of a size its caller chose (a screen buffer) declares
+/// that size, `bytes`, and every heap that holds it counts those bytes as its own memory, as heap
+/// words are counted, not as a shared binary's: so they count toward a process's own
+/// `max_heap_size`. A native that changes the size says so with [`Resource::set_bytes`].
 pub struct Resource {
     pub id: u64,
     pub value: Box<crate::sync::AnyShared>,
+    bytes: core::sync::atomic::AtomicUsize,
 }
 
 impl Resource {
+    /// A resource of no declared size.
+    pub fn new(id: u64, value: Box<crate::sync::AnyShared>) -> Resource { Resource::sized(id, value, 0) }
+
+    /// A resource holding `bytes` its holders count as their own.
+    pub fn sized(id: u64, value: Box<crate::sync::AnyShared>, bytes: usize) -> Resource {
+        Resource { id, value, bytes: core::sync::atomic::AtomicUsize::new(bytes) }
+    }
+
     /// The value, if it is a `T`.
     pub fn get<T: 'static>(&self) -> Option<&T> { self.value.downcast_ref::<T>() }
+
+    /// The declared size, in bytes.
+    pub fn bytes(&self) -> usize { self.bytes.load(core::sync::atomic::Ordering::Relaxed) }
+
+    /// Declares a new size, and returns the old one. A heap counts the new size from its next
+    /// collection, or at once through [`Heap::resized`].
+    pub fn set_bytes(&self, bytes: usize) -> usize {
+        self.bytes.swap(bytes, core::sync::atomic::Ordering::Relaxed)
+    }
 }
 
 /// A bitstring read off a heap: a window of `len` bits starting `offset` bits into shared bytes.
@@ -365,6 +388,8 @@ pub struct Heap {
     offheap_index: BTreeMap<usize, u32>,
     /// Bytes held off the heap by this heap's own table.
     offheap_bytes: usize,
+    /// The declared sizes of the resources this heap holds: counted as its own memory.
+    held_bytes: usize,
     lits: Literals,
 }
 
@@ -436,6 +461,7 @@ impl Heap {
             offheap: Vec::new(),
             offheap_index: BTreeMap::new(),
             offheap_bytes: 0,
+            held_bytes: 0,
             lits: lits.clone(),
         }
     }
@@ -447,6 +473,7 @@ impl Heap {
             offheap: Vec::new(),
             offheap_index: BTreeMap::new(),
             offheap_bytes: 0,
+            held_bytes: 0,
             lits: lits.clone(),
         }
     }
@@ -462,8 +489,18 @@ impl Heap {
     /// Bytes held off the heap by this heap's own table (binaries, bignums).
     pub fn offheap_bytes(&self) -> usize { self.offheap_bytes }
 
-    /// Memory in 8-byte words: two per cell, and the off-heap bytes.
-    pub fn words(&self) -> u64 { (self.terms.len() * 2 + self.offheap_bytes.div_ceil(8)) as u64 }
+    /// The declared sizes of the resources this heap holds, in bytes ([`Resource`]).
+    pub fn held_bytes(&self) -> usize { self.held_bytes }
+
+    /// A resource this heap holds changed its declared size from `old` bytes to `new`.
+    pub fn resized(&mut self, old: usize, new: usize) {
+        self.held_bytes = self.held_bytes.saturating_sub(old) + new;
+    }
+
+    /// Memory in 8-byte words: two per cell, the off-heap bytes and the resources' sizes.
+    pub fn words(&self) -> u64 {
+        (self.terms.len() * 2 + self.offheap_bytes.div_ceil(8) + self.held_bytes.div_ceil(8)) as u64
+    }
 
     pub fn literals(&self) -> &Literals { &self.lits }
 
@@ -663,6 +700,9 @@ impl Heap {
             return Term::OffHeap(i);
         }
         self.offheap_bytes += o.size();
+        if let OffHeap::Resource(r) = &o {
+            self.held_bytes += r.bytes();
+        }
         let i = u32::try_from(self.offheap.len()).expect("under 2^32 off-heap entries");
         self.offheap.push(o);
         self.offheap_index.insert(addr, i);
