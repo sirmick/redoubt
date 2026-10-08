@@ -676,7 +676,11 @@ signed manifest pins ([R75](../kernel/boot.md#r75-verified-userland)); only what
 before it can read the disk is embedded in it: its own console server, code and kernel modules
 (`beamlet_io`, `beamlet_code`, `beamlet_kernel`, `beamlet_port`, `beamlet_tcp`) and its
 stand-ins for `application`, `gen_tcp` and `ram_file`
-([`userland/otp/vm/src/vm.rs`](../../userland/otp/vm/src/vm.rs), `EMBEDDED`).
+([`userland/otp/vm/src/vm.rs`](../../userland/otp/vm/src/vm.rs), `EMBEDDED`). The `application`
+stand-in runs no kernel application; when the first application with a callback module starts,
+it starts the kernel's servers that other code calls, as BEAM starts them at boot:
+`erl_signal_server`, `global_name_server`, and `kernel_safe_sup`, which OTP's `group` waits for
+before it serves a line.
 
 ### Screen natives
 
