@@ -3,9 +3,11 @@
 # shell-cases -- the machine cases a change to the shell or beamlet must pass, from what it changed.
 #
 # Usage: scripts/shell-cases [BASE]
-#        scripts/shell-cases --check     checks the placing below on paths whose set is known
+#        scripts/shell-cases --check     checks the placing below on paths whose set is known,
+#                                        and which tree is read
 #   BASE defaults to the merge-base with main. The change is `git diff --name-only BASE` (the
-#   commits since BASE and the uncommitted edits) and the untracked files git does not ignore.
+#   commits since BASE and the uncommitted edits) and the untracked files git does not ignore,
+#   in the checkout it is run in, whichever checkout's copy of the script is run.
 #   It prints the cases on one line, for jobs.mk's set target, and on stderr each path that
 #   chose them:
 #
@@ -25,7 +27,22 @@
 #   userland/otp/, servers/, any other path     beamlet's set: what no rule here places is taken
 #                                               to reach the machine
 set -euo pipefail
-cd "$(dirname "${BASH_SOURCE[0]}")/.."
+# This script's own tree, before anything moves the working directory.
+self="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+
+# The tree a change is read from: the git checkout the command is run in, when it is a Redoubt
+# tree (it has this script), whichever checkout's copy of the script was run; else the script's
+# own. A worktree's change is then its own, and not its main checkout's.
+tree() {
+    local here
+    here="$(git rev-parse --show-toplevel 2>/dev/null)" || here=""
+    if [ -n "$here" ] && [ -f "$here/scripts/shell-cases" ]; then
+        (cd "$here" && pwd -P)
+    else
+        echo "$self"
+    fi
+}
+cd "$(tree)"
 
 # The set a path chooses: none, shell or beamlet.
 place() {
@@ -56,7 +73,20 @@ userland/otp/README.md none
 servers/steward/src/main.rs beamlet
 tests/userland-boot.toml beamlet
 KNOWN
-    [ "$failed" = 0 ] && echo "shell-cases: every known path chooses its set"
+    # The tree: run from inside another Redoubt tree, that tree; from a git tree without this
+    # script, this script's own. Scratch trees, under REDOUBT_TMP.
+    mkdir -p "${REDOUBT_TMP:-$PWD/.tmp}"
+    scratch="$(mktemp -d "${REDOUBT_TMP:-$PWD/.tmp}/shell-cases.XXXXXX")"
+    trap 'rm -rf "$scratch"' EXIT
+    git init -q "$scratch/redoubt" && mkdir -p "$scratch/redoubt/scripts"
+    touch "$scratch/redoubt/scripts/shell-cases"
+    git init -q "$scratch/other"
+    for dir in redoubt/scripts:"$scratch/redoubt" other:"$self"; do
+        got="$(cd "$scratch/${dir%%:*}" && tree)"
+        [ "$got" = "$(cd "${dir#*:}" && pwd -P)" ] ||
+            { echo "shell-cases: run in $scratch/${dir%%:*}, read $got" >&2; failed=1; }
+    done
+    [ "$failed" = 0 ] && echo "shell-cases: every known path chooses its set, from the caller's tree"
     exit "$failed"
 fi
 
