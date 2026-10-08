@@ -130,11 +130,12 @@ Miri both crates take their portable Rust paths. Those two assembly blocks are r
 
 ### Sessions over SSH
 
-<details><summary>Status: built · partly tested: a channel's window size reaches the session only once `consol`'s `size` and `resize` are served (consoled.md, "The `consol` protocol") · tested (15)</summary>
+<details><summary>Status: built · partly tested: a channel's window size reaches the session only once `consol`'s `size` and `resize` are served (consoled.md, "The `consol` protocol") · tested (16)</summary>
 
 - bench:steward-ssh-two-principals
 - bench:steward-ssh-idle
 - bench:steward-vault-session
+- bench:steward-vault-launch
 - bench:steward-login-refused
 - bench:steward-session-ends
 - bench:steward-sub-budget-flood
@@ -182,7 +183,11 @@ Miri both crates take their portable Rust paths. Those two assembly blocks are r
   one is refused, and a pty asked for with one starts at 80 by 24. The console's parked
   completion call is answered at the end of each hold
   ([multiplexed connections](serving.md#multiplexed-connections)), so a session stays however
-  long its channel is quiet.
+  long its channel is quiet. A program the session launches
+  gets a connection of its own to the same console, which the session mints with `new_connection`
+  ([the serving library](serving.md#the-9p-server-skeleton)); its writes meet the channel's label
+  check like the session's, so on a vault channel only a program carrying the channel's labels
+  is shown.
 - **Randomness.** The program provides `getrandom`'s `__getrandom_v03_custom`, the only source
   `getrandom` has on bare metal, and it writes all of the buffer it is given before it returns
   `Ok`: `getrandom` then reads every byte as initialised
@@ -316,7 +321,7 @@ Status: built · partly tested: the transfer server request comes with M4 (files
 
 ### R67 (a channel keeps its labels)
 
-Status: built · tested: bench:sshd-loopback-r67, bench:steward-vault-session, host:redoubt-sshd::the_console_is_one_file_carrying_the_channel_s_labels
+Status: built · tested: bench:sshd-loopback-r67, bench:steward-vault-session, bench:steward-vault-launch, host:redoubt-sshd::the_console_is_one_file_carrying_the_channel_s_labels
 
 Each SSH channel carries its session's labels, and a labelled session's output reaches only its own
 pty channel, authenticated by the label's owner, with no forwarding, subsystem or `exec`. So vault

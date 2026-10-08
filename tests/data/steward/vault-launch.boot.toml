@@ -1,0 +1,77 @@
+# The image's bundle (image/boot.toml) with one test program added, for steward-vault-launch alone:
+# `beamlet-hello`, which a vault session's `exec` launches from `/boot`, and the image's manifest
+# with that entry public (tests/data/steward/vault-launch.manifest.json: image/manifest.json with
+# "public" naming beamlet-hello too). The shipped image's /boot holds no test program.
+
+[[entry]]
+name = "kernel"
+package = "redoubt-kernel"
+
+[[entry]]
+name = "init"
+package = "redoubt-init"
+
+[[entry]]
+name = "keyd"
+package = "redoubt-keyd"
+
+[[entry]]
+name = "consoled"
+package = "redoubt-consoled"
+
+[[entry]]
+name = "bootfsd"
+package = "redoubt-bootfsd"
+
+[[entry]]
+name = "blkd"
+package = "redoubt-blkd"
+
+[[entry]]
+name = "verityd"
+package = "redoubt-verityd"
+
+[[entry]]
+name = "netd"
+package = "redoubt-netd"
+
+[[entry]]
+name = "ipd"
+package = "redoubt-ipd"
+
+[[entry]]
+name = "littlefsd"
+package = "redoubt-littlefsd"
+
+[[entry]]
+name = "erofsd"
+package = "redoubt-erofsd"
+
+[[entry]]
+name = "walfsd"
+package = "redoubt-walfsd"
+
+[[entry]]
+name = "steward"
+package = "redoubt-steward-server"
+
+[[entry]]
+name = "sshd"
+package = "redoubt-sshd"
+
+[[entry]]
+name = "beamlet"
+# The Erlang VM, the shell's, in a workspace of its own.
+package = "beamlet-redoubt"
+workspace = "userland/otp"
+
+[[entry]]
+name = "beamlet-hello"
+package = "redoubt-beamlet-programs"
+
+[[entry]]
+name = "manifest"
+path = "tests/data/steward/vault-launch.manifest.json"
+# The userland volume's root and data blocks, from the pack of image/userland.toml: the signed
+# manifest pins the disk (docs/servers/verityd.md).
+verity = "image/userland.toml"

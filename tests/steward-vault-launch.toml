@@ -1,0 +1,98 @@
+description = "A vault session and a plain one, open together, each launch a native program (docs/userland/native.md, \"Launching from a session\"; docs/userland/beamlet.md, \"Natives\"; docs/kernel/budgets.md, \"Labels on budgets\"): alice+alice-secrets@box, on a pty, in a session labelled {alice-secrets} the steward carved, runs the shell's exec of /boot/beamlet-hello. The child's budget is carved from the session's with its labels left out, so it carries the session's {7}, and its line reaches the vault channel only because sshd's label check finds the writer's labels equal to the channel's (R25, R67); its exit code and its budget's use come back to the session. A carve that names fewer labels is refused label_denied and one that names more class_denied, the kernel's answers to a user-class caller; one with its labels left out is carved and destroyed. Bob@box, unlabelled, is at his prompt before the vault session's exec, and execs the same program while the vault session is still open: the plain M1 path, its child unlabelled. Neither child's line reaches the other session's channel, though both channels are open throughout. The verdicts are sshd's label check on the channel, the kernel's refusals and usage through the session, and the steward's and sshd's own lines (rule F)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The image's bundle with beamlet-hello public in /boot, for this case alone.
+recipe = "tests/data/steward/vault-launch.boot.toml"
+# As steward-vault-session: the principal's budgets, each holding a shell VM's session, need 1 GiB.
+memory_mib = 1024
+# Two logins, open together, each booting a shell VM: four times the slowest pass alone
+# (37.4 s on rv32; 36.1 s on rv64), rounded up to 10 s. Six at once on rv32 took 40 to 43 s.
+timeout_secs = 150
+expect = [
+    '^init: started sshd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
+    '^init: started steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{\} at [0-9]+: Login ',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+]
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    '^init: .* (exited|faulted|was killed)',
+    'init: restarted',
+    'EXCEPTION',
+    'steward: the core exited',
+    'steward: a step failed',
+    'sshd: login .*: refused',
+]
+# Bob logs in once the vault session has carved, and the steward says a login's lines before
+# it answers sshd, so the lines come in this order.
+expect_after = [
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{7\} at [0-9]+: Login \{ session: [0-9]+, principal: 0, key: [1-9]',
+    '^\[con [0-9a-f]{16}\] steward: users/alice/\{7\} holds [0-9]+ pages, 2 processes$',
+    '^\[con [0-9a-f]{16}\] sshd: login alice\+alice-secrets: session [0-9a-f]{16}, labels \[7\]$',
+    '^\[con [0-9a-f]{16}\] steward: audit 1002/\{\} at [0-9]+: Login \{ session: [0-9]+, principal: 1, key: [1-9]',
+    '^\[con [0-9a-f]{16}\] steward: users/bob/\{\} holds [0-9]+ pages, 2 processes$',
+    '^\[con [0-9a-f]{16}\] sshd: login bob: session [0-9a-f]{16}, labels \[\]$',
+]
+
+# The two sessions are open together through both execs: bob is at his prompt before alice's
+# exec, and execs while her session is still open, so each session's forbid judges a channel that
+# exists beside the other's. Alice carves before bob logs in.
+[[session]]
+user = "alice+alice-secrets"
+pty = true
+forbid = ['beamlet-hello: from bob']
+# Each answer is tagged, so a pattern matches what the shell printed and never the echo of the
+# line typed: the echo holds the expression, not its value.
+steps = [
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:own, Redoubt.Budget.carve(pages: 1, processes: 0, weight: 0) |> elem(1) |> Redoubt.Budget.destroy()}\n" },
+    { expect = '\{:own, :ok\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:fewer, Redoubt.Budget.carve(pages: 1, processes: 0, weight: 0, labels: [])}\n" },
+    { expect = '\{:fewer, \{:error, :label_denied\}\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:more, Redoubt.Budget.carve(pages: 1, processes: 0, weight: 0, labels: [7, 8])}\n" },
+    { expect = '\{:more, \{:error, :class_denied\}\}' },
+    { expect = '\([0-9]+\)> ' },
+    { mark = "vault-up" },
+    { wait = "bob-up" },
+    { send = "exec(\"beamlet-hello\", [\"from\", \"the\", \"vault\"])\n" },
+    { expect = 'beamlet-hello: from the vault' },
+    { expect = '\{:exited, 3\}' },
+    { expect = 'pages: \{256, [0-9]+\}' },
+    { expect = '\([0-9]+\)> ' },
+    { mark = "vault-done" },
+    { wait = "bob-done" },
+    { exit = 0 },
+]
+
+# The plain path: an unlabelled session over SSH execs the same program, its child unlabelled,
+# while the vault session is still open.
+[[session]]
+user = "bob"
+forbid = ['beamlet-hello: from the vault']
+steps = [
+    { wait = "vault-up" },
+    { expect = '\([0-9]+\)> ' },
+    { mark = "bob-up" },
+    { wait = "vault-done" },
+    { send = "exec(\"beamlet-hello\", [\"from\", \"bob\"])\n" },
+    { expect = 'beamlet-hello: from bob' },
+    { expect = '\{:exited, 3\}' },
+    { expect = 'pages: \{256, [0-9]+\}' },
+    { expect = '\([0-9]+\)> ' },
+    { mark = "bob-done" },
+    { exit = 0 },
+]
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]
+forward = [22]

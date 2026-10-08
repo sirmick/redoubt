@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 390
+revision = 392
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1340,8 +1340,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "shell-host"
   needs = ["SHELL3"]
   body = "M2 host step 3: docs/userland/shell.md#session-commands-and-the-pager, #completion, #help. Size M."
-  state = "todo"
-  revision = 323
+  state = "active"
+  revision = 391
+  overrides = ["2026-10-08: started by Orchestrator before M1 (reported): The owner started M2's host shell track early; it does not touch M1's remaining work."]
 
 [[node]]
   id = "SHELL5"
@@ -1435,8 +1436,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "beamlet-redoubt"
   body = "BEAM12's follow-up. On the fake kernel, a labelled session's child budget takes the session's labels. No machine case shows it, because a labelled session cannot write-open the UART console (R69). Give the beamlet-session tester a console of the session's labels, or run the session over SSH, and add `labels=N` before vm=beamlet_launch:start in a labelled variant of beamlet-launch. The child carves, runs and is destroyed, and a narrower or wider carve is refused as the kernel says. Size S."
-  state = "reported"
-  revision = 371
+  state = "done"
+  revision = 392
 
 [[node]]
   id = "BEAM15"

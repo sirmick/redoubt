@@ -107,12 +107,14 @@ and a session holds only what its principal was granted.
 
 ### Vault sessions
 
-Status: built · partly tested: a vault session's own reads and writes wait for its namespace to reach the VM; the label check they meet at `walfsd` is attacked on its own · tested: bench:steward-vault-session, bench:steward-sub-budget-flood, bench:walfsd-label-check, host:redoubt-steward-server::a_vault_login_carves_from_the_vault_s_sub_budget_and_has_no_network
+Status: built · partly tested: a vault session's own reads and writes wait for its namespace to reach the VM; the label check they meet at `walfsd` is attacked on its own · tested: bench:steward-vault-session, bench:steward-vault-launch, bench:steward-sub-budget-flood, bench:walfsd-label-check, host:redoubt-steward-server::a_vault_login_carves_from_the_vault_s_sub_budget_and_has_no_network
 
 A **vault session** carries one of its principal's labels: `ssh alice+tax@box` starts a session
 whose budget has Alice's `tax` label. A budget's labels are fixed when it is created and only grow
 downward (I6 (labels only grow downward)), so nothing started inside a vault session can shed the
-label.
+label. A program the session launches runs in a budget carved from the session's with the same
+labels, which are the only ones the kernel lets a session's child carry: it writes to the
+session's own channel, and to nothing unlabelled ([native programs](native.md#launching-from-a-session)).
 
 What the label changes, per the label rule of the servers ([labels](../servers/README.md#labels)):
 - **It can read** unlabelled data and data carrying `tax`: reading needs the caller's labels to
