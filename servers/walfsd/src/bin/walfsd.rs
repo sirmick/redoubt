@@ -10,13 +10,13 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
+use redoubt_fileserver::range::Blkd;
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::server::ninep::NineServer;
 use redoubt_rt::server::own_args;
 use redoubt_rt::server::typed::serve_call;
 use redoubt_rt::start::say;
 use redoubt_rt::startup::Startup;
-use redoubt_walfsd::blkd::Blkd;
 use redoubt_walfsd::typed::{Typed, Walfsds};
 use redoubt_walfsd::{Args, BUDGET, COST, Walfsd, limits, mount, parse_args};
 
@@ -46,7 +46,8 @@ pub fn serve(startup: &Startup) -> u32 {
         return BAD_ARGS;
     }
     let Some(volume) = startup.handle("volume") else { return NO_VOLUME };
-    let Ok(range) = Blkd::new(Endpoint::from_handle(volume)) else { return NO_VOLUME };
+    // Two pages lent to each call: a block of sectors, and the message around it.
+    let Ok(range) = Blkd::new(Endpoint::from_handle(volume), 2) else { return NO_VOLUME };
     // Test-only: R47 tried from inside, before anything is served (src/one_volume.rs).
     #[cfg(feature = "one-volume-probe")]
     let range = {

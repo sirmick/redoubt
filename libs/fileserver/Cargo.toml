@@ -9,3 +9,14 @@ description = "What the volume servers share beside the 9P skeleton: their argum
 # verityd), not every server's, so they live beside the runtime, not in it.
 [dependencies]
 redoubt-rt = { path = "../rt" }
+
+[features]
+# Test-only, for the bench's one-volume cases, and off in every default build: the probe's reads
+# of the range (src/range.rs), and the probe itself.
+one-volume-probe = []
+# Test-only, off in every target build: a range in memory (src/range/memory.rs), for the servers'
+# tests and littlefsd's host packer.
+test-support = []
+
+[dev-dependencies]
+redoubt-fake-kernel = { path = "../rt/fake" }

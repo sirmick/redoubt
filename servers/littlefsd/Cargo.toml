@@ -23,10 +23,14 @@ restart-probe = []
 # Test-only, for the bench's littlefsd-one-volume case, and off in every default build: before
 # serving, littlefsd tries to reach past its endpoint and its range and says what it found
 # (src/one_volume.rs).
-one-volume-probe = []
+one-volume-probe = ["redoubt-fileserver/one-volume-probe"]
 # Test-only, for the bench's boot-profile cases, and off in every default build: littlefsd counts
 # its 9P operations and littlefs's reads, and says them (src/stats.rs).
 boot-stats = []
+
+# On the host, the range in memory the packer writes into (src/pack.rs) and the tests serve from.
+[target.'cfg(not(target_os = "none"))'.dependencies]
+redoubt-fileserver = { path = "../../libs/fileserver", features = ["test-support"] }
 
 [dev-dependencies]
 redoubt-fake-kernel = { path = "../../libs/rt/fake" }

@@ -80,6 +80,11 @@ it asks the device to touch can be checked.
   read whose reply would not fit the lend is refused before the disk is touched; a count of 0 is
   malformed.
 - **`write(sector, data)`**: at most `MAX_SECTORS` sectors, a whole number of them.
+
+`MAX_SECTORS` and the sector size are the protocol's limits, named once in the wire crate's `blkd`
+module (`libs/wire/src/blkd.rs`), beside the generated messages: `blkd` and every client of a
+range take them from there ([serving](serving.md#the-9p-server-skeleton), the volume servers'
+shared client).
 - **`flush`**: returns only when the device says its flush completed, so what was written before
   it is durable. The device must offer flush at negotiation; one that does not is refused at
   bring-up. On a read-only disk nothing was ever written, so `flush` answers at once without asking

@@ -682,6 +682,7 @@ dependencies = [
 name = "redoubt-fileserver"
 version = "0.1.0"
 dependencies = [
+ "redoubt-fake-kernel",
  "redoubt-rt",
 ]
 

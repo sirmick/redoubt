@@ -10,8 +10,8 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
-use redoubt_erofsd::blkd::Blkd;
 use redoubt_erofsd::{Args, BUDGET, COST, Erofsd, limits, parse_args};
+use redoubt_fileserver::range::Blkd;
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::server::ninep::{NineServer, refuse_malformed};
 use redoubt_rt::server::own_args;
@@ -44,7 +44,8 @@ pub fn serve(startup: &Startup) -> u32 {
         return BAD_ARGS;
     }
     let Some(volume) = startup.handle("volume") else { return NO_VOLUME };
-    let Ok(range) = Blkd::new(Endpoint::from_handle(volume)) else { return NO_VOLUME };
+    // Nine pages lent to each call: the most sectors one read carries, and the message around them.
+    let Ok(range) = Blkd::new(Endpoint::from_handle(volume), 9) else { return NO_VOLUME };
     // A volume that does not parse is served as corrupt, not exited on: a damaged medium must
     // not become a restart loop.
     let Ok(erofsd) = Erofsd::new(range, labels) else { return NO_VOLUME };

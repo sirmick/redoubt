@@ -454,14 +454,18 @@ On littlefs 99 % of the boot was in the VM's 96 lookups: `littlefsd` found each 
 volume's root directory again two or three times for every 9P operation, 77,710 block reads of 673
 distinct blocks ([littlefsd](../servers/littlefsd.md#residual-risks)). On EROFS the same 96 loads
 make the same 652 9P operations, and `erofsd` reads the volume 641 times (112 inodes, 243
-directory blocks, 286 runs of a file's blocks) in 642 range calls of 3.35 MB; the loads take 7.1 s
-verified and 3.7 s unverified, and the VM's own work and its console about 6.5 s either way.
+directory blocks, 286 runs of a file's blocks) in 642 calls to `blkd` of 3.35 MB in whole sectors;
+the loads take 7.1 s verified and 3.7 s unverified, and the VM's own work and its console about
+6.5 s either way.
 With the boot pack (below) the 96 lookups become one read of the pack, 115 9P reads of 16 KiB:
 the boot makes 208 9P operations, and `erofsd` reads the volume 208 times (16 inodes, 35 directory
-blocks, 157 runs of a file's blocks) in 209 range calls of 2.46 MB. Reading the pack takes 3.6 s
-verified and 1.2 s unverified, and the VM's work after it, decoding the modules as they are
-called, 8.0 s; the verified prompt is the same across seeds 1 to 5. On littlefs the prompt with
-the boot pack is at 152 s verified, since `littlefsd` finds the file again for each read.
+blocks, 157 runs of a file's blocks) in 209 calls to `blkd` of 2.46 MB. (That build counted each
+call `erofsd` made to `blkd`, and the whole sectors it carried; `erofsd`'s `boot-stats` now
+counts each read it asks of its range, whatever calls the range client splits it into, and the
+bytes it asks for.) Reading the pack takes 3.6 s verified and 1.2 s unverified, and the VM's work
+after it, decoding the modules as they are called, 8.0 s; the verified prompt is the same across
+seeds 1 to 5. On littlefs the prompt with the boot pack is at 152 s verified, since `littlefsd`
+finds the file again for each read.
 
 Since the steward starts the shell as the console principal's session
 ([the steward](../servers/steward.md#authentication-and-sessions)), the verified first prompt on

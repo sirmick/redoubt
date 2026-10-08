@@ -179,8 +179,6 @@ no state to lose.
   not one block's against the next; a walk binary-searches the blocks by their first and last
   names, so a volume whose blocks are out of order makes a listed name walk to `not_found`. It is
   a wrong answer, not an unsafe one, and a verified volume's blocks are the ones its builder wrote.
-- **Its range client is a copy.** `erofsd` calls its range as `littlefsd` and `verityd` do, each
-  with its own copy ([a follow-up](../todo/file-server-arguments-and-range-client.md)).
 - **Extended attributes are skipped, not parsed.** Their count and size are bounds-checked so
   that skipping them cannot leave the inode area; their content is never read.
 

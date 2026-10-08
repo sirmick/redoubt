@@ -4,7 +4,9 @@
 //! same four pieces; one copy each lives here, with one set of tests.
 //!
 //! - [`args`]: the arguments `init` passes a volume server, `endpoint=NAME` and `labels=ID[,ID...]`, under
-//!   the manifest's rules.
+//!   the manifest's rules;
+//! - [`range`]: the range at `blkd` (or at a `verityd`) as a format needs it, and the one client of `blkd`'s
+//!   protocol.
 //!
 //! **No `unsafe`.** The crate forbids it outright.
 
@@ -14,3 +16,4 @@
 extern crate alloc;
 
 pub mod args;
+pub mod range;

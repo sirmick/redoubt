@@ -9,8 +9,9 @@ description = "verityd: one verified volume, its range at blkd checked block by 
 name = "verityd"
 path = "src/bin/verityd.rs"
 
-# The runtime, the tree's one definition, and the loader's Ed25519 for a signed volume's root
-# block; nothing else reads what the range holds (TENETS.md 5).
+# The runtime, what the volume servers share (the range client), the tree's one definition, and
+# the loader's Ed25519 for a signed volume's root block; nothing else reads what the range holds
+# (TENETS.md 5).
 [dependencies]
 ed25519-compact = { version = "2", default-features = false }
 redoubt-rt = { path = "../../libs/rt" }

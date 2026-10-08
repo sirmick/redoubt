@@ -4,7 +4,7 @@
 //! checked blocks on `blkd`'s own protocol to the volume's `littlefsd` (R76 (verified volumes)).
 //!
 //! It holds no MMIO, interrupt or DMA, and mints nothing. Everything it does is here, so host
-//! tests drive the same code against a fake range ([`Range`]); the program
+//! tests drive the same code against a fake range (`Range`); the program
 //! (`src/bin/verityd.rs`) only wires the startup block to it.
 
 #![no_std]
@@ -15,37 +15,17 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 use redoubt_fileserver::args::{label_set, number};
+/// The range at `blkd` as `verityd` uses it: its size, and whole sectors read; `verityd` never
+/// writes it.
+pub use redoubt_fileserver::range::{Fault, Geometry as Size, Range, SECTOR};
 use redoubt_rt::startup::valid_name;
 use redoubt_verity::{Geometry, Hash};
 
-pub mod blkd;
 pub mod server;
 pub mod volume;
 
 pub use server::Verityd;
 pub use volume::{Refusal, Volume};
-
-/// `blkd`'s sector.
-pub const SECTOR: u32 = 512;
-
-/// A request to the range at `blkd` failed: `blkd` refused it, or the disk did.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Fault;
-
-/// What `blkd`'s `info` says of the range.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Size {
-    pub sectors: u64,
-}
-
-/// The range at `blkd` as `verityd` uses it (libs/wire/tables/blkd.md): its size, and whole
-/// sectors read. `verityd` never writes it.
-pub trait Range {
-    /// The range's length in sectors (`info`).
-    fn info(&mut self) -> Result<Size, Fault>;
-    /// Reads `out.len() / SECTOR` sectors from `sector`.
-    fn read(&mut self, sector: u64, out: &mut [u8]) -> Result<(), Fault>;
-}
 
 /// An argument `verityd` refuses: it then does not start.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

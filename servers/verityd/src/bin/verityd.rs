@@ -12,10 +12,10 @@
 
 extern crate alloc;
 
+use redoubt_fileserver::range::Blkd;
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::start::say;
 use redoubt_rt::startup::Startup;
-use redoubt_verityd::blkd::Blkd;
 use redoubt_verityd::server::Said;
 use redoubt_verityd::{Args, Verityd, parse_args};
 
@@ -34,7 +34,8 @@ pub fn serve(startup: &Startup) -> u32 {
     let Ok(Args { endpoint, labels, mode }) = parse_args(startup.args()) else { return BAD_ARGS };
     let Some(endpoint) = startup.handle(endpoint).map(Endpoint::from_handle) else { return BAD_ARGS };
     let Some(volume) = startup.handle(VOLUME) else { return NO_VOLUME };
-    let Ok(range) = Blkd::new(Endpoint::from_handle(volume)) else { return NO_VOLUME };
+    // Two pages lent to each call: a block of sectors, and the message around it.
+    let Ok(range) = Blkd::new(Endpoint::from_handle(volume), 2) else { return NO_VOLUME };
     let mut server = Verityd::new(range, &mode, labels);
     let tell = |line: Said| say(startup, &alloc::format!("{line}\n"));
     if let Some(line) = server.take_line() {

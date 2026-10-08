@@ -8,12 +8,10 @@ use alloc::format;
 use alloc::string::String;
 use core::num::NonZeroU64;
 
+use redoubt_fileserver::range::{Blkd, Range};
 use redoubt_rt::abi::{Error, Handle};
 use redoubt_rt::startup::Startup;
 use redoubt_rt::wire::proto::blkd::ErrorCode;
-
-use crate::blkd::Blkd;
-use crate::volume::Range;
 
 /// The handle indices tried: far past any a startup block carries.
 const TRIED: u32 = 1024;

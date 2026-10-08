@@ -19,12 +19,14 @@ walfs = { path = "../../libs/walfs" }
 # Test-only, for the bench's walfsd-one-volume case, and off in every default build: before
 # serving, walfsd tries to reach past its endpoint and its range and says what it found
 # (src/one_volume.rs).
-one-volume-probe = []
+one-volume-probe = ["redoubt-fileserver/one-volume-probe"]
 # Test-only, for the bench's walfsd-power-loss case, and off in every default build: a walk to
 # `walfsd-cut-N` ends the instance after its N-th block write from then on, and every start
 # checks the volume and says what the check found (src/cut.rs).
 cut-after-write = []
 
 [dev-dependencies]
+# The range in memory the tests serve from.
+redoubt-fileserver = { path = "../../libs/fileserver", features = ["test-support"] }
 redoubt-fake-kernel = { path = "../../libs/rt/fake" }
 redoubt-client = { path = "../../libs/client" }

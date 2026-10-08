@@ -9,8 +9,8 @@ description = "erofsd: one read-only EROFS volume, a range at blkd or at a verit
 name = "erofsd"
 path = "src/bin/erofsd.rs"
 
-# The runtime, and erofs for the medium; nothing else parses what the volume holds
-# (TENETS.md 5).
+# The runtime, what the volume servers share, and erofs for the medium; nothing else parses what
+# the volume holds (TENETS.md 5).
 [dependencies]
 redoubt-rt = { path = "../../libs/rt" }
 redoubt-fileserver = { path = "../../libs/fileserver" }
@@ -22,5 +22,7 @@ erofs = { path = "../../libs/erofs" }
 boot-stats = []
 
 [dev-dependencies]
+# The range in memory the tests serve from.
+redoubt-fileserver = { path = "../../libs/fileserver", features = ["test-support"] }
 redoubt-fake-kernel = { path = "../../libs/rt/fake" }
 redoubt-client = { path = "../../libs/client" }

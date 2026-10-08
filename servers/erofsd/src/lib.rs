@@ -22,10 +22,10 @@
 
 extern crate alloc;
 
-pub mod blkd;
 pub mod server;
 #[cfg(feature = "boot-stats")]
 pub mod stats;
 
 pub use redoubt_fileserver::args::{Args, BadArgs, parse_args};
-pub use server::{BUDGET, COST, Erofsd, Fault, Range, limits};
+pub use redoubt_fileserver::range::{Fault, Range};
+pub use server::{BUDGET, COST, Erofsd, limits};

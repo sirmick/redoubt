@@ -22,6 +22,8 @@ use redoubt_rt::ipc::{Caller, Request, Words};
 use redoubt_rt::server::typed::{Answer, Outcome, Protocol, TypedServer, answer, finish};
 use redoubt_rt::server::{Access, check};
 use redoubt_rt::wire::Error as WireError;
+/// The most sectors one `read` may ask for, as at `blkd` (servers/blkd.md, "Messages").
+pub use redoubt_rt::wire::blkd::MAX_SECTORS;
 use redoubt_rt::wire::proto::blkd::{
     ErrorCode, FlushReply, Info, InfoReply, Message, Read, ReadReply, Reply,
 };
@@ -29,9 +31,6 @@ use redoubt_verity::SECTORS_PER_BLOCK;
 
 use crate::volume::{Bad, Refusal, Volume};
 use crate::{Mode, Range, SECTOR};
-
-/// The most sectors one `read` may ask for, as at `blkd` (servers/blkd.md, "Messages").
-pub const MAX_SECTORS: u32 = 64;
 /// The one badge `verityd` serves: the volume's, which `init` mints for its `littlefsd`.
 pub const BADGE: u64 = 1;
 

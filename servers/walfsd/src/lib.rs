@@ -33,7 +33,6 @@
 
 extern crate alloc;
 
-pub mod blkd;
 #[cfg(feature = "cut-after-write")]
 pub mod cut;
 #[cfg(feature = "one-volume-probe")]

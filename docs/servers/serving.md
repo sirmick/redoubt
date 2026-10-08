@@ -371,7 +371,17 @@ what the files are. A `FileServer` supplies the files: `attach`, `walk`, `open`,
 `blkd`'s protocol) share `redoubt-fileserver` (`libs/fileserver`): the arguments `init` passes
 them, `endpoint=NAME` and `labels=ID[,ID...]`, parsed once under the manifest's rules
 (host:redoubt-fileserver::arguments_it_does_not_understand_stop_it_before_serving,
-host:redoubt-fileserver::a_number_and_a_label_set_follow_the_manifests_rules). What a format
+host:redoubt-fileserver::a_number_and_a_label_set_follow_the_manifests_rules); and their range,
+`blkd`'s protocol on the `volume` badge ([blkd](blkd.md#messages)) or a `verityd`'s, as a format
+needs it (`Range`: whole sectors read, written and flushed, and bytes from any offset for a
+format whose structures are not sector-aligned,
+host:redoubt-fileserver::a_byte_read_over_a_sector_range_reads_whole_sectors) with the one client
+of the protocol (`Blkd`), which checks every reply before it is believed, splits a read at
+`MAX_SECTORS`, the limit `blkd` and its clients take from the wire crate's `blkd` module, and
+refuses a read of part of a sector as a fault
+(host:redoubt-fileserver::reads_split_at_the_lend_and_part_of_a_sector_is_a_fault). The
+servers' host tests drive the client against a fake `blkd`, and their files against one range in
+memory, the crate's `Memory` (feature `test-support`, never in a target build). What a format
 needs of its medium stays with its server: how a range is mounted as its blocks, and the files.
 
 **On the wire.** A request whose word 0 is 0 is 9P: a `call` whose words are all zero, with the

@@ -2,146 +2,22 @@
 //! in for `blkd`'s. The whole program against a fake kernel and a fake `blkd`, and the client
 //! library against it, are in `tests/`.
 
-use alloc::collections::BTreeMap;
-use alloc::rc::Rc;
 use alloc::vec;
 use alloc::vec::Vec;
-use core::cell::RefCell;
 
+pub(crate) use redoubt_fileserver::range::Memory;
 use redoubt_rt::abi::Labels;
 use redoubt_rt::server::ninep::{Answer, NineServer, mode};
 use redoubt_rt::wire::MSIZE;
 use redoubt_rt::wire::ninep::{Body, Message, NOFID, Names};
 
 use super::*;
-use crate::volume::{Fault, Geometry, MIN_BLOCKS, NoVolume, SECTOR, SECTORS_PER_BLOCK, mount};
+use crate::volume::{MIN_BLOCKS, NoVolume, SECTOR, SECTORS_PER_BLOCK, mount};
 
 extern crate std;
 use std::string::String as StdString;
 
-/// A range in memory, sparse: a sector never written reads as zero. Clones share the sectors,
-/// so a test can look at or break the disk under a running server.
-#[derive(Clone)]
-pub(crate) struct Memory(pub Rc<RefCell<Disk>>);
-
-pub(crate) struct Disk {
-    /// The range's length in sectors.
-    pub len: u64,
-    /// The sectors that hold anything but zeros.
-    pub sectors: BTreeMap<u64, Vec<u8>>,
-    /// Every request fails from now on.
-    pub failing: bool,
-    /// Writes are refused, as `blkd` refuses them on a read-only range.
-    pub read_only: bool,
-    /// Writes that reached the disk.
-    pub writes: usize,
-    /// Power fails at this write: it and every later one are lost.
-    pub fail_at: Option<usize>,
-    /// Reads that reached the disk: one per block.
-    pub reads: usize,
-    /// Flushes that reached the disk.
-    pub flushes: usize,
-}
-
 const S: usize = SECTOR as usize;
-
-impl Memory {
-    pub fn blank(sectors: usize) -> Memory {
-        Memory(Rc::new(RefCell::new(Disk {
-            len: sectors as u64,
-            sectors: BTreeMap::new(),
-            failing: false,
-            read_only: false,
-            writes: 0,
-            fail_at: None,
-            reads: 0,
-            flushes: 0,
-        })))
-    }
-
-    pub fn holding(bytes: Vec<u8>) -> Memory {
-        let disk = Memory::blank(bytes.len() / S);
-        disk.put(0, &bytes);
-        disk
-    }
-
-    pub fn fail(&self) { self.0.borrow_mut().failing = true }
-
-    /// The same bytes, now a read-only range.
-    pub fn read_only(self) -> Memory {
-        self.0.borrow_mut().read_only = true;
-        self
-    }
-
-    /// The whole range, for a small one.
-    pub fn bytes(&self) -> Vec<u8> { self.get(0, self.0.borrow().len as usize * S) }
-
-    /// A copy of the disk as it is now, sharing nothing.
-    pub fn copy(&self) -> Memory { Memory::holding(self.bytes()) }
-
-    fn get(&self, sector: u64, len: usize) -> Vec<u8> {
-        let disk = self.0.borrow();
-        let mut out = vec![0; len];
-        for (i, chunk) in out.chunks_mut(S).enumerate() {
-            if let Some(data) = disk.sectors.get(&(sector + i as u64)) {
-                chunk.copy_from_slice(data);
-            }
-        }
-        out
-    }
-
-    pub fn put(&self, sector: u64, data: &[u8]) {
-        let mut disk = self.0.borrow_mut();
-        for (i, chunk) in data.chunks(S).enumerate() {
-            if chunk.iter().all(|b| *b == 0) {
-                disk.sectors.remove(&(sector + i as u64));
-            } else {
-                disk.sectors.insert(sector + i as u64, chunk.to_vec());
-            }
-        }
-    }
-
-    fn check(&self, sector: u64, len: usize) -> Result<(), Fault> {
-        let disk = self.0.borrow();
-        let end = sector.checked_add((len / S) as u64).ok_or(Fault)?;
-        if disk.failing || !len.is_multiple_of(S) || end > disk.len { Err(Fault) } else { Ok(()) }
-    }
-}
-
-impl Range for Memory {
-    fn info(&mut self) -> Result<Geometry, Fault> {
-        let disk = self.0.borrow();
-        if disk.failing {
-            return Err(Fault);
-        }
-        Ok(Geometry { sectors: disk.len, read_only: disk.read_only })
-    }
-
-    fn read(&mut self, sector: u64, out: &mut [u8]) -> Result<(), Fault> {
-        self.0.borrow_mut().reads += 1;
-        self.check(sector, out.len())?;
-        out.copy_from_slice(&self.get(sector, out.len()));
-        Ok(())
-    }
-
-    fn write(&mut self, sector: u64, data: &[u8]) -> Result<(), Fault> {
-        self.check(sector, data.len())?;
-        let mut disk = self.0.borrow_mut();
-        if disk.read_only || disk.fail_at.is_some_and(|at| disk.writes + 1 >= at) {
-            return Err(Fault);
-        }
-        disk.writes += 1;
-        drop(disk);
-        self.put(sector, data);
-        Ok(())
-    }
-
-    fn flush(&mut self) -> Result<(), Fault> {
-        self.check(0, 0)?;
-        self.0.borrow_mut().flushes += 1;
-        Ok(())
-    }
-}
 
 /// A volume of 1024 blocks (4 MiB), the bench cases' disk.
 pub(crate) const SECTORS: usize = 1024 * 8;
