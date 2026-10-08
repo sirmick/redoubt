@@ -4,7 +4,7 @@ The sources of the signed boot bundle and the disk images; what they produce goe
 `target/image/`. The bundle is on [boot](../docs/kernel/boot.md) and [init](../docs/servers/init.md).
 
 - `boot.toml`: the bundle's entries in order, the kernel, `init`, the servers (the steward and
-  `sshd` among them), `beamlet` and the manifest. `./mkimage` packs it with the bench's builder into `target/image/redoubt.bundle`, and
+  `sshd` among them), `beamlet`, `piped` and the manifest. `./mkimage` packs it with the bench's builder into `target/image/redoubt.bundle`, and
   the `init-boot` case boots the same bundle. The builder writes the userland volume's root and
   block count into the manifest it packs, from its own pack of `userland.toml`.
 - `manifest.json`: the boot manifest `init` reads, with thirteen servers, including `walfsd:data`
@@ -17,7 +17,8 @@ The sources of the signed boot bundle and the disk images; what they produce goe
   and leaves each label set 1,794 pages over two sessions now. The shell, `Redoubt.Shell`, is started by the
   steward as the console principal's session (`console: "alice"`) on the UART, and as each SSH
   login's session on port 22 ([steward](../docs/servers/steward.md#authentication-and-sessions)).
-  `beamlet` is the one `public` entry, read from `/boot`. The userland volume is
+  `beamlet` and `piped`, the server a session starts for its pipes
+  ([piped](../docs/servers/piped.md)), are the `public` entries, read from `/boot`. The userland volume is
   verified: its entry's `verity` names `verity:system`, and the root and block count in this file
   are placeholders the builder replaces with the pack's ([verityd](../docs/servers/verityd.md)),
   so the signed manifest pins the disk. The image needs 1 GiB of RAM (QEMU `-m 1G`): the

@@ -69,7 +69,7 @@ Status: planned · M1 (sessions over SSH, kept apart)
 | TCB | firmware, loader, kernel; `blkd` and `netd` while there is no IOMMU | everything | the whole machine |
 | Trusted system servers | `init`, the steward, `keyd`, `sshd` | crossing principals: logins, keys, approvals, launching | every principal |
 | Shared servers | `consoled`, `bootfsd`, each `littlefsd`, `erofsd` and `walfsd`, each `ipd`; later the resolver and `gatewayd` | serving many principals and keeping them apart by badge and label | the principals that server serves |
-| Per-principal code | sessions, agents, native programs | nothing beyond their own capabilities | that principal's own capabilities |
+| Per-principal code | sessions, agents, native programs, a session's [`piped`](piped.md) | nothing beyond their own capabilities | that principal's own capabilities |
 
 - **The DMA drivers are TCB.** A driver that holds a DMA-flagged device handle can point a bus
   master at any physical address ([devices](../kernel/devices.md#authority)). `blkd` and `netd`
@@ -241,6 +241,7 @@ Status: planned · M1 (sessions over SSH, kept apart)
 | [`walfsd:volume`](walfsd.md) | its own endpoint | a `blkd` range for its writable volume on the SSD | another volume |
 | `netd` | its own endpoint | the network card's MMIO (DMA) and IRQ handles | anything else |
 | `ipd:network` | its own endpoint | a `netd` connection | a budget; a labelled caller's request |
+| [`piped`](piped.md) | the endpoint its session's launch made | the buffers of one session's pipes | any other handle; another session's bytes |
 
 No server's startup block carries a budget handle. A manifest that gives a server one is refused,
 because a budget handle is a destroy right and a create right: a compromised `ipd` holding its

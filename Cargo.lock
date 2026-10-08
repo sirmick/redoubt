@@ -815,6 +815,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "redoubt-piped"
+version = "0.1.0"
+dependencies = [
+ "redoubt-fake-kernel",
+ "redoubt-rt",
+]
+
+[[package]]
 name = "redoubt-rt"
 version = "0.1.0"
 dependencies = [

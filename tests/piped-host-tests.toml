@@ -1,0 +1,3 @@
+description = "piped against the runtime's fake kernel: a pipe carries one stage's bytes to the next and ends when its writer goes, a full pipe holds its writer, a write whose reader has gone is refused even while it waits, a stage reaches only the end it was given, only the session's own badge makes and removes pipes, a multiplexed read of the session's waits for a stage to write, the file server's rules alone, and the 9P conformance vectors"
+kind = "host-tests"
+packages = ["redoubt-piped"]

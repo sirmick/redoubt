@@ -1,0 +1,6 @@
+description = "piped builds for both widths (rv32 keeps compiling)"
+arch = ["rv64", "rv32"]
+kind = "build"
+# Builds the library and the `piped` binary a session launches for its pipes. Its host tests are
+# piped-host-tests; a session's pipelines in a boot are the pipe-* cases.
+package = "redoubt-piped"

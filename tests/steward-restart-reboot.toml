@@ -14,6 +14,7 @@ programs = [
     { package = "redoubt-walfsd", bin = "walfsd" },
     { package = "redoubt-erofsd", bin = "erofsd" },
     { package = "beamlet-redoubt", bin = "beamlet", workspace = "userland/otp" },
+    { package = "redoubt-piped", bin = "piped" },
     { package = "redoubt-steward-server", bin = "steward" },
     { package = "redoubt-sshd", bin = "sshd" },
 ]

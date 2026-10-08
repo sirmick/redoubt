@@ -43,6 +43,7 @@
   - [gatewayd](servers/gatewayd.md)
   - [sshd](servers/sshd.md)
   - [consoled](servers/consoled.md)
+  - [piped](servers/piped.md)
   - [Packages](servers/pkg.md)
   - [The supervisor](servers/supervisor.md)
 

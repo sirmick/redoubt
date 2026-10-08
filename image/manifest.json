@@ -29,7 +29,7 @@
       "receives": ["consoled"],
       "args": ["buckets=4"] },
     { "name": "bootfsd", "program": "bootfsd",
-      "stack_pages": "4", "heap_pages": "2048",
+      "stack_pages": "4", "heap_pages": "2176",
       "budget": { "pages": "4096", "processes": 1, "weight": 100 },
       "receives": ["bootfsd"],
       "args": ["buckets=5"] },
@@ -93,7 +93,7 @@
       "handed": [ { "endpoint": "ipd", "badge": "6" }, { "endpoint": "keyd", "badge": "1" },
                   { "endpoint": "steward", "badge": "1" } ] }
   ],
-  "public": ["beamlet"],
+  "public": ["beamlet", "piped"],
   "labels": [ { "name": "alice-secrets", "owner": "alice", "id": "7" } ],
   "principals": [
     { "name": "alice", "account": "1001",

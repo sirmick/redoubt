@@ -41,6 +41,7 @@ members = [
   "servers/erofsd",
   "servers/littlefsd",
   "servers/walfsd",
+  "servers/piped",
   "servers/verityd",
   "stub",
   "tests/programs",
