@@ -20,7 +20,7 @@ serves the steward.
 
 ### One flat stride queue
 
-<details><summary>Status: built · partly tested: round-robin among one budget's threads is not attacked by a case · tested (13)</summary>
+<details><summary>Status: built · partly tested: round-robin among one budget's threads is not attacked by a case · tested (15)</summary>
 
 - bench:sched-share
 - bench:sched-large-weight
@@ -35,6 +35,8 @@ serves the steward.
 - mutation:R12PriorityById
 - mutation:R12IgnoreWeight
 - mutation:R12StrideWeightIsLimit
+- mutation:R12OneRunnerPerBudget
+- mutation:R12SpreadChargesOnce
 
 </details>
 
@@ -97,7 +99,7 @@ context as it saves a thread's.
 
 ### The current minimum and ties
 
-<details><summary>Status: built · partly tested: wakers ahead of requeued budgets, and requeues in order, are checked on the target only when a run happens to produce such a tie; the host tests and the model attack them · tested (12)</summary>
+<details><summary>Status: built · partly tested: wakers ahead of requeued budgets, and requeues in order, are checked on the target only when a run happens to produce such a tie; the host tests and the model attack them · tested (18)</summary>
 
 - bench:sched-ties
 - bench:sched-idle-gap
@@ -106,6 +108,12 @@ context as it saves a thread's.
 - host:redoubt-stride::a_running_budget_stays_queued_and_counts_for_the_floor
 - host:redoubt-stride::a_slice_end_reads_no_more_states_for_a_longer_queue
 - host:redoubt-stride::a_rank_out_of_step_with_its_frame_trips_the_audit
+- host:redoubt-stride::a_budget_capped_at_its_threads_is_left_out_of_the_floor
+- host:redoubt-stride::a_budget_no_longer_capped_is_lifted_to_the_floor
+- mutation:R12CappedHoldsFloor
+- mutation:R12CapOnce
+- mutation:R12AllCappedHoldsFloor
+- mutation:R12UncapBanksCredit
 - mutation:R12WakeBanksCredit
 - mutation:R12NoFloorWhenIdle
 - mutation:R12TieQueuedFirst
@@ -125,6 +133,23 @@ the pick compares the same ranks. Neither reads a budget's frame, which stays th
 kernel audits the ranks against the frames with the marks' audit. So a slice end's scheduler work
 is under 3 µs per queued budget (2.4 µs measured in a checked build, "Charging"), the frame reads
 it makes being the running budget's own.
+
+On several harts the floor leaves out a **capped** budget, one whose weight's share of the harts
+is more than it has runnable threads. Running every thread it has, its pass lags, and counting it
+would hold the floor below the budgets that share the other harts, so a waker would enter far
+behind them and take their harts until it caught up. The cap is found as the shares are: in
+descending weight per runnable thread, a budget is capped if `w x H > k x W` (`H` the harts, `k`
+its runnable threads, waiting or on a hart, `W` the queued budgets' free weight), and the next is
+tested with the capped one's harts and weight taken out. At one hart no budget is ever capped. When
+every queued budget is capped, fewer runnable threads than harts, the floor rises to the highest
+of their passes instead of holding: uncontested time banks for no one, so a budget waking then
+cannot take the others' harts later for time no budget wanted. A budget that stops being capped
+is lifted to `max(own pass, floor)`, as a waker is: it cannot bank what it had no thread to run.
+With more than one hart online the queue keeps each budget's free weight, its threads no hart runs
+(as the kernel's settle counts them) and its harts beside its slot, counted afresh as a hart comes
+online and kept by no scan at one hart, so every floor raise finds the cap set in one scan, keeping the top `H - 1` by `w / k`, linear in the queue, with no frame read
+but a lifted budget's. A checked kernel audits the set, with the marks' audit, against
+water-filling done its own way over every queued budget.
 
 A pick takes the lowest **rank**, `(pass, tie, id)`. At an equal pass:
 1. a waker ranks ahead of a budget that was requeued;
@@ -838,7 +863,7 @@ Status: built · tested: bench:sched-carve-inflation, bench:legacy-gone, host:re
 
 ### R12 (scheduling)
 
-<details><summary>Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search, `map_fixed`'s range, `process_create` and, after RAM fills, a one-page `map_anon`, `budget_create` and a rolled-back `process_create` (with a recorded negative run, `alloc-first-fit`); and at full occupancy, every PID in use with every thread, for a delivery, a timer expiry ending 250 waits at once and the reconcile that wakes their 250 budgets (7.1 ms on rv64, 8.1 ms on rv32) and a destruction (at most 17.1 ms on rv64, 18.2 ms on rv32) (`bench:worst-walk`) · tested (49)</summary>
+<details><summary>Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search, `map_fixed`'s range, `process_create` and, after RAM fills, a one-page `map_anon`, `budget_create` and a rolled-back `process_create` (with a recorded negative run, `alloc-first-fit`); and at full occupancy, every PID in use with every thread, for a delivery, a timer expiry ending 250 waits at once and the reconcile that wakes their 250 budgets (7.1 ms on rv64, 8.1 ms on rv32) and a destruction (at most 17.1 ms on rv64, 18.2 ms on rv32) (`bench:worst-walk`) · tested (55)</summary>
 
 - bench:sched-share
 - bench:sched-share-release
@@ -889,11 +914,24 @@ Status: built · tested: bench:sched-carve-inflation, bench:legacy-gone, host:re
 - mutation:R12SliceCountsExitWork
 - mutation:R12TimerWorkUnbilled
 - mutation:R12SwitchBilledToPrevious
+- mutation:R12CappedHoldsFloor
+- mutation:R12CapOnce
+- mutation:R12AllCappedHoldsFloor
+- mutation:R12UncapBanksCredit
+- mutation:R12OneRunnerPerBudget
+- mutation:R12SpreadChargesOnce
 
 </details>
 
-A budget's CPU follows its free weight, in one queue with no priority. While it has a runnable
-thread, a budget gets at least its weight's share of the CPU the runnable budgets share. No
+A budget's CPU follows its free weight, in one queue with no priority, on every hart. While it
+has a runnable thread, a budget gets at least its weight's share of the harts the runnable budgets
+share, but never more harts than it has runnable threads; what it cannot use goes to the others in
+proportion to their weights, so spreading its threads across harts gains it nothing. The shares are
+of hart time, as the kernel charges it, each hart's runner by that hart's clock; a hart runs at a
+rate that does not depend on what the others run on real harts and on a strict barrel
+([the FPGA platform](../beyond/fpga-platform.md#the-system-on-chip)), but not under QEMU's
+`icount`, whose clock counts every running hart's instructions, so what a budget's loop counts
+there is a share of the machine's instructions. No
 pattern of spinning, sleeping and waking, exiting or faulting, creating, carving and destroying
 budgets, or arming timeouts and deadlines gets it more. The rule's parts are the sections above:
 free weight, the preemption points, the wake rule and ranks, charging and inheritance. A slice is

@@ -72,6 +72,8 @@ struct Sched {
     /// The processes whose ready threads changed since the last reconcile, and what each was
     /// counted as: a reconcile visits only the budgets they moved.
     marks: Marks<BudgetRef, MAX_PROCESS_COUNT>,
+    /// The harts that have reached the scheduler, the boot hart first ([`hart_online`]).
+    online: u32,
 }
 
 /// One hart's side of the accounting at the trap boundary.
@@ -110,6 +112,7 @@ static SCHED: KernelCell<Sched> = KernelCell::new(Sched {
         irq_audits: None,
     }; MAX_HARTS],
     marks: Marks::new(BudgetRef { frame: 0, id: 0 }),
+    online: 1,
 });
 
 /// This hart's boot index: its runner in the queue's wiring, and its [`Billing`].
@@ -208,6 +211,13 @@ impl Sched {
     /// is one read ([`Ready`]); before a deschedule asks it, and before the reconcile.
     fn settle(&mut self, ss: &ProcessTable, mm: &mut MemoryManager) {
         self.marks.settle(mm, |mm, i| ready_now(ss, mm, i));
+        // The budgets they moved: each one's threads no hart runs, for the cap set across harts.
+        if self.online > 1 {
+            let (lost, gained) = self.marks.changed();
+            for &b in lost.iter().chain(gained.iter()) {
+                self.cpu.set_waiting(b, mm.ready(b));
+            }
+        }
     }
 
     /// The end of a kernel entry: the queue takes in the budgets the settle moved.
@@ -225,6 +235,17 @@ impl Sched {
         }
         self.marks.clear();
     }
+}
+
+/// A hart came online (`hart_main`, holding the kernel lock): the cap set counts it from here
+/// (kernel/scheduling.md, "The current minimum and ties").
+pub fn hart_online() {
+    MemoryManager::with(|mm| {
+        SCHED.with(|s| {
+            s.online += 1;
+            s.cpu.set_harts(s.online, |b| mm.ready(b), |b| mm.weight(b));
+        })
+    })
 }
 
 /// Process `pid`'s ready threads changed (`ptable.rs`, at every change of its state that changes
@@ -251,7 +272,7 @@ fn audit_marks(ss: &ProcessTable, mm: &MemoryManager) {
         SCHED.with(|s| {
             // A process with no account is in no budget, so has nothing counted.
             let live = mm.live_pids().map(|pid| usize::from(pid.get()) - 1);
-            let Sched { cpu, marks, .. } = s;
+            let Sched { cpu, marks, online, .. } = s;
             if let Err(e) = marks.audit(mm, &cpu.q, |b| cpu.running(b), live, |mm, i| ready_now(ss, mm, i)) {
                 panic!("the scheduler's marks: {:?}", e);
             }
@@ -259,6 +280,7 @@ fn audit_marks(ss: &ProcessTable, mm: &MemoryManager) {
             if let Err(b) = cpu.q.audit(mm) {
                 panic!("the scheduler's ranks: budget {} is out of step with its frame", b.id);
             }
+            audit_caps(cpu, mm, *online);
         });
         audit_harts(ss, mm);
         // The other half of [`audit_harts`]: a process on the CPU is on some hart.
@@ -271,6 +293,57 @@ fn audit_marks(ss: &ProcessTable, mm: &MemoryManager) {
             );
         }
     });
+}
+
+/// The checked build's check, with the marks' audit ([`audit_marks`]), of the cap set the queue
+/// keeps against water-filling over every queued budget, done its own way: every budget not capped
+/// whose `w x H` is more than `k x W` (its threads `k`, waiting or on a hart; `H` the harts and `W`
+/// the weight of the budgets not capped yet) is capped, and its threads and weight leave `H` and
+/// `W`, until none is. The queue's set was found at its last floor raise, after the reconcile that
+/// precedes this audit, with the counts it holds now.
+#[cfg(debug_assertions)]
+fn audit_caps(cpu: &Harts<BudgetRef, MAX_PROCESS_COUNT, MAX_HARTS>, mm: &MemoryManager, harts: u32) {
+    let threads = |b: BudgetRef| {
+        u128::from(mm.ready(b)) + cpu.runners.iter().filter(|r| r.cur == Some(b)).count() as u128
+    };
+    let counted = |b: &BudgetRef| mm.weight(*b) > 0 && threads(*b) > 0;
+    let mut capped = [None; MAX_HARTS];
+    let mut n = 0;
+    let is_capped = |capped: &[Option<BudgetRef>], b: BudgetRef| capped.iter().any(|c| *c == Some(b));
+    if harts > 1 {
+        loop {
+            let held: u128 = capped[..n].iter().flatten().map(|b| threads(*b)).sum();
+            let Some(h) = u128::from(harts).checked_sub(held) else { break };
+            let w: u128 = cpu
+                .q
+                .queued()
+                .filter(|b| counted(b) && !is_capped(&capped[..n], *b))
+                .map(|b| u128::from(mm.weight(b)))
+                .sum();
+            let mut over = [None; MAX_HARTS];
+            let mut m = 0;
+            for b in cpu.q.queued().filter(|b| counted(b) && !is_capped(&capped[..n], *b)) {
+                if u128::from(mm.weight(b)) * h > threads(b) * w {
+                    assert!(n + m < MAX_HARTS, "the cap set: more budgets capped than harts");
+                    over[m] = Some(b);
+                    m += 1;
+                }
+            }
+            if m == 0 {
+                break;
+            }
+            capped[n..n + m].copy_from_slice(&over[..m]);
+            n += m;
+        }
+    }
+    let kept = cpu.q.capped().count();
+    assert!(
+        kept == n && cpu.q.capped().all(|b| is_capped(&capped[..n], b)),
+        "the cap set: the queue holds {} capped, water-filling {} ({} harts)",
+        kept,
+        n,
+        harts
+    );
 }
 
 /// The checked build's check, with the marks' audit ([`audit_marks`], so its time is billed to no

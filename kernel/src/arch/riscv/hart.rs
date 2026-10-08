@@ -480,6 +480,7 @@ extern "C" fn hart_main(id: usize) -> ! {
     assert_eq!(riscv::register::senvcfg::read().bits(), 0, "senvcfg is not 0 on hart {} (R11)", id);
     let status = riscv::register::sstatus::read();
     assert!(!status.sum() && !status.mxr(), "sstatus.SUM or MXR is set on hart {} (R24)", id);
+    crate::sched::hart_online();
     println!("hart {} (boot index {}) runs the scheduler", id, index());
     crate::kmain();
     panic!("kmain returned on hart {}", id)
