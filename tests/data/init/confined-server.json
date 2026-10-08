@@ -62,7 +62,7 @@
       "account": "1001",
       "budget": {"pages": "4096", "processes": 1, "weight": 100},
       "ssh_keys": ["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8g"],
-      "label_sets": [{"labels": ["alice-secrets"], "budget": {"pages": "64", "processes": 1, "weight": 100}}]
+      "label_sets": [{"labels": ["alice-secrets"]}]
     }
   ]
 }

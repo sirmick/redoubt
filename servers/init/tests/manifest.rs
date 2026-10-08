@@ -3,10 +3,11 @@
 //! image's own manifest (`image/manifest.json`) in one way and expects the refusal for that rule
 //! and no other.
 
-use redoubt_init::check::{MANIFEST, Machine, Plan};
+use redoubt_init::check::{MANIFEST, Machine, Plan, STEWARD_SLOTS, args, is_steward};
 use redoubt_init::fuzz::{BUNDLE_KEY, ENTRIES, machine, virt_devices};
 use redoubt_init::manifest::{
-    Budget, Device, DeviceUse, Handed, Label, LabelSet, Net, Principal, Server, Verity, Volume,
+    Budget, Device, DeviceUse, Handed, Label, LabelSet, Net, Principal, Server, Sizes, Steward, Verity,
+    Volume,
 };
 use redoubt_init::refusal::{Refusal, Sharing, Why};
 use redoubt_init::{ARENA_PAGES, Manifest, check, read};
@@ -19,7 +20,22 @@ const IMAGE: &str = include_str!("../../../image/manifest.json");
 /// An OpenSSH Ed25519 key whose 32 bytes are 1 to 32.
 const LOGIN_KEY: &str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8g";
 
-fn image() -> Manifest { read(IMAGE.as_bytes(), ARENA_PAGES).expect("the image's manifest decodes") }
+/// The image's manifest whole: its servers, the steward and its principals.
+fn full_image() -> Manifest { read(IMAGE.as_bytes(), ARENA_PAGES).expect("the image's manifest decodes") }
+
+/// The image's servers and devices without the steward and `sshd`, which calls it, its
+/// principals, labels, alice's labelled volume and its `littlefsd`, and console: the base each test
+/// below changes in one way.
+fn image() -> Manifest {
+    let mut m = full_image();
+    m.principals.clear();
+    m.labels.clear();
+    m.steward = None;
+    m.console = None;
+    m.volumes.retain(|v| v.labels.is_empty());
+    m.servers.retain(|s| !["steward", "sshd", "littlefsd:alice-secrets"].contains(&s.name.as_str()));
+    m
+}
 
 /// The image's manifest with one disk: without the userland disk (`disk1`, its `blkd`, its
 /// volume, its verifier and `erofsd`, and `beamlet`, which reads it).
@@ -81,7 +97,7 @@ fn secrets(m: &mut Manifest) {
 
 #[test]
 fn the_image_manifest_passes_and_its_plan_is_what_the_boot_follows() {
-    let plan = on_virt(&image()).unwrap();
+    let plan = on_virt(&full_image()).unwrap();
     let h = |n| redoubt_rt::abi::Handle::new(n).unwrap();
     // virt's handles: the console in 5 and 6, slots 0x1000_1000 on from 7, their interrupts
     // (1 to 8) from 15.
@@ -89,15 +105,19 @@ fn the_image_manifest_passes_and_its_plan_is_what_the_boot_follows() {
     assert_eq!(plan.placements[3], vec![("disk".into(), h(14)), ("disk-irq".into(), h(22))]);
     assert_eq!(plan.placements[4], vec![("net".into(), h(13)), ("net-irq".into(), h(21))]);
     // The userland disk's blkd: slot 0x1000_6000, interrupt 6.
-    assert_eq!(plan.placements[7], vec![("disk".into(), h(12)), ("disk-irq".into(), h(20))]);
+    assert_eq!(plan.placements[8], vec![("disk".into(), h(12)), ("disk-irq".into(), h(20))]);
     assert!(plan.placements[0].is_empty());
-    // No principals: only the bundle key is asked about.
-    assert_eq!(plan.keys, vec![("bundle key".into(), BUNDLE_KEY)]);
-    // keyd, consoled and bootfsd: init alone calls them; ipd: netd's badge; walfsd:data: nobody's
-    // yet, a principal's connection being the steward's to grant; erofsd:system: beamlet's.
-    assert_eq!(plan.buckets, vec![(0, 1), (1, 1), (2, 1), (5, 1), (6, 0), (9, 1)]);
-    // No handed item names keyd, consoled or bootfsd: init's own badge at each is 1.
-    assert_eq!(plan.init_badges, vec![(0, 1), (1, 1), (2, 1)]);
+    // Alice's and bob's login keys, then the bundle key.
+    let asked: Vec<&str> = plan.keys.iter().map(|(at, _)| at.as_str()).collect();
+    assert_eq!(asked, ["principals[0].ssh_keys[0]", "principals[1].ssh_keys[0]", "bundle key"]);
+    // Three domains (alice's {} and {alice-secrets}, bob's {}) at every shared server, beside its
+    // system callers: init and sshd at keyd; init at consoled; init and the steward at bootfsd;
+    // netd, the steward and sshd at ipd; the steward at walfsd:data, littlefsd:alice-secrets and
+    // erofsd.
+    assert_eq!(plan.buckets, vec![(0, 5), (1, 4), (2, 5), (5, 6), (6, 4), (7, 4), (10, 4)]);
+    // No handed item names consoled or bootfsd: init's own badge at each is 1. sshd is handed
+    // keyd's 1, the host key's, so init's there is 2.
+    assert_eq!(plan.init_badges, vec![(0, 2), (1, 1), (2, 1)]);
 }
 
 #[test]
@@ -177,17 +197,17 @@ fn init_s_own_badge_is_the_smallest_no_handed_item_uses_there() {
 #[test]
 fn the_image_manifest_s_bound() {
     let plan = on_virt(&image()).unwrap();
-    // The arena (256 + 3 tables), 10 receive and 11 exit endpoints and init's reports endpoint
-    // (beamlet receives on none), 11 process objects, 11 blocks with 3 tables each, 11 watching
-    // threads (an IPC page, 4 stack pages and 3 tables each), one launch (stub 4 + 3, one 64-page
-    // batch of beamlet's image + 3, stack 18 + 3), the lend (2 + 3), and one handle-table page:
-    // 22 handles at the start (3 budgets, the Reset right, 18 devices) and 10 + 6 + 44 + 3 + 1 =
-    // 64 added (the three volume ranges, walfsd:data's, erofsd:system's at verity:system and
-    // verity:system's at blkd:system, among the 6 badges) pass page 0's 64.
+    // The arena (256 + 3 tables), 10 receive and 10 exit endpoints and init's reports endpoint,
+    // 10 process objects, 10 blocks with 3 tables each, 10 watching threads (an IPC page, 4 stack
+    // pages and 3 tables each), one launch (stub 4 + 3, one 64-page batch of ipd's image + 3,
+    // the largest stack, walfsd:data's 14 + 3), the lend (2 + 3), and one handle-table page: 22
+    // handles at the start (3 budgets, the Reset right, 18 devices) and 10 + 5 + 40 + 3 + 1 = 59
+    // added (the three volume ranges, walfsd:data's, erofsd:system's at verity:system and
+    // verity:system's at blkd:system, among the 5 badges) pass page 0's 64.
     let devices = virt_devices();
     let m = machine(&devices, &ENTRIES);
     assert_eq!(m.handles_at_start, 22);
-    assert_eq!(plan.bound, 259 + 22 + 11 + 44 + 88 + (4 + 3 + 64 + 3 + 18 + 3) + 1 + 5);
+    assert_eq!(plan.bound, 259 + 21 + 10 + 40 + 80 + (4 + 3 + 64 + 3 + 14 + 3) + 1 + 5);
 }
 
 /// A volume's range badge is a handle `init` mints, as a `handed` item is: with the handle table
@@ -275,7 +295,7 @@ fn names_follow_the_rule_and_differ() {
 #[test]
 fn references_name_what_the_manifest_and_bundle_hold() {
     let mut m = image();
-    m.servers[0].program = "sshd".into();
+    m.servers[0].program = "nosuch".into();
     refused_at(&m, "servers[0].program", Why::Unknown);
     let mut m = image();
     m.servers[0].program = MANIFEST.into();
@@ -447,10 +467,9 @@ fn servers_that_do_not_fit_in_system_are_refused() {
     let devices = virt_devices();
     let mut machine = machine(&devices, &ENTRIES);
     let m = image();
-    // keyd 256, consoled 1024, bootfsd 640, the two blkds 512 each, verity:system 256, netd 1024,
-    // ipd 4096, walfsd:data and erofsd:system 1024 each, beamlet 11,008 pages, and a page each for the
-    // budgets.
-    let pages = 256 + 1024 + 640 + 512 * 2 + 256 + 1024 + 4096 + 1024 * 2 + 11_008 + 11;
+    // keyd 256, consoled 1024, bootfsd 4096, the two blkds 512 each, verity:system 256, netd
+    // 1024, ipd 4096, walfsd:data and erofsd:system 1024 each, and a page each for the budgets.
+    let pages = 256 + 1024 + 4096 + 512 * 2 + 256 + 1024 + 4096 + 1024 * 2 + 10;
     machine.system.pages_limit = machine.system.pages_usage + pages - 1;
     assert_eq!(
         on(&m, &machine).unwrap_err(),
@@ -458,11 +477,11 @@ fn servers_that_do_not_fit_in_system_are_refused() {
     );
     machine.system.pages_limit += 1;
     assert!(on(&m, &machine).is_ok());
-    machine.system.processes_usage = machine.system.processes_limit - 10;
-    assert_eq!(on(&m, &machine).unwrap_err(), Refusal::SystemFit { what: "processes", need: 11, free: 10 });
+    machine.system.processes_usage = machine.system.processes_limit - 9;
+    assert_eq!(on(&m, &machine).unwrap_err(), Refusal::SystemFit { what: "processes", need: 10, free: 9 });
     machine.system.processes_usage = 0;
-    machine.system.weight_carved = machine.system.weight_limit - 4699;
-    assert_eq!(on(&m, &machine).unwrap_err(), Refusal::SystemFit { what: "weight", need: 4700, free: 4699 });
+    machine.system.weight_carved = machine.system.weight_limit - 4599;
+    assert_eq!(on(&m, &machine).unwrap_err(), Refusal::SystemFit { what: "weight", need: 4600, free: 4599 });
 }
 
 // ---- public ----
@@ -489,7 +508,7 @@ fn bootfsd_is_given_the_public_list_after_its_buckets() {
     let mut m = image();
     m.public = vec!["trace".into()];
     let bootfsd = &m.servers[2];
-    assert_eq!(redoubt_init::check::args(&m, bootfsd, &BUNDLE_KEY), ["buckets=4", "trace"]);
+    assert_eq!(redoubt_init::check::args(&m, bootfsd, &BUNDLE_KEY), ["buckets=5", "trace"]);
     assert_eq!(redoubt_init::check::args(&m, &m.servers[0], &BUNDLE_KEY).len(), 3, "only bootfsd gets it");
     // The names bootfsd serves come from public alone.
     server(&mut m, "bootfsd").args.push("trace".into());
@@ -531,7 +550,7 @@ fn a_volume_s_labels_go_to_its_server_and_to_blkd() {
         redoubt_init::check::args(m, m.servers.iter().find(|s| s.name == name).unwrap(), &BUNDLE_KEY)
     };
     assert_eq!(args(&m, "keyd").last().unwrap(), "labels=7");
-    assert_eq!(args(&m, "bootfsd"), ["buckets=4"]);
+    assert_eq!(args(&m, "bootfsd"), ["buckets=5", "beamlet"]);
     assert_eq!(args(&m, "blkd"), ["endpoint=blkd", "labels.2=7"]);
 }
 
@@ -774,28 +793,53 @@ fn every_login_and_approval_key_then_the_bundle_key_is_asked_about() {
     refused_at(&m, "principals[0].ssh_keys[1]", Why::Key);
 }
 
+/// Every key once across all principals' lists: a login key of one principal that is another's
+/// approval key, or one listed twice, refuses the boot before any server runs.
+#[test]
+fn a_key_in_two_roles_across_principals_is_refused() {
+    let mut m = image();
+    m.principals.push(alice());
+    m.principals.push(Principal {
+        name: "bob".into(),
+        account: 1002,
+        ssh_keys: vec![],
+        approval_keys: vec![LOGIN_KEY.into()],
+        ..alice()
+    });
+    refused_at(&m, "principals[1].approval_keys[0]", Why::Twice);
+    let mut m = image();
+    m.principals.push(Principal { ssh_keys: vec![LOGIN_KEY.into(), LOGIN_KEY.into()], ..alice() });
+    refused_at(&m, "principals[0].ssh_keys[1]", Why::Twice);
+    let mut m = image();
+    m.principals.push(Principal { approval_keys: vec![LOGIN_KEY.into()], ..alice() });
+    refused_at(&m, "principals[0].approval_keys[0]", Why::Twice);
+}
+
 // ---- buckets ----
 
 #[test]
 fn a_shared_server_needs_a_bucket_per_declared_domain_and_root_badge() {
-    // Without beamlet, a fifth caller at bootfsd beside the three domains and init.
+    // Without beamlet, a fifth caller at bootfsd beside the three domains and init; keyd at the
+    // four buckets this counts against.
     let mut m = without_userland();
+    *server(&mut m, "keyd").args.last_mut().unwrap() = "buckets=4".into();
     secrets(&mut m);
     m.principals.push(Principal {
         label_sets: vec![
-            LabelSet { labels: vec!["alice-secrets".into()], budget: budget(64) },
+            LabelSet { labels: vec!["alice-secrets".into()] },
             // The same set again is the same domain.
-            LabelSet { labels: vec!["alice-secrets".into()], budget: budget(64) },
+            LabelSet { labels: vec!["alice-secrets".into()] },
         ],
         ..alice()
     });
-    m.principals.push(Principal { name: "bob".into(), account: 1002, ..alice() });
+    // Without alice's login key, which may appear only once.
+    m.principals.push(Principal { name: "bob".into(), account: 1002, ssh_keys: vec![], ..alice() });
     // alice {} and {alice-secrets}, bob {}: 3, and init at keyd: 4, which buckets=4 holds.
     let plan = on_virt(&m).unwrap();
     assert_eq!(plan.buckets[0], (0, 4));
     // ipd: the 3 domains and netd's root badge.
     assert_eq!(plan.buckets[3], (5, 4));
-    m.principals.push(Principal { name: "carol".into(), account: 1003, ..alice() });
+    m.principals.push(Principal { name: "carol".into(), account: 1003, ssh_keys: vec![], ..alice() });
     assert_eq!(on_virt(&m).unwrap_err(), Refusal::Buckets { at: "servers[0]".into(), have: 4, need: 5 });
     let mut m = image();
     server(&mut m, "keyd").args.push("buckets=5".into());
@@ -848,7 +892,7 @@ fn confined_gives_a_labelled_domain_no_network() {
     let mut m = confined();
     secrets(&mut m);
     m.principals.push(Principal {
-        label_sets: vec![LabelSet { labels: vec!["alice-secrets".into()], budget: budget(64) }],
+        label_sets: vec![LabelSet { labels: vec!["alice-secrets".into()] }],
         net: vec![Net { prefix: "0.0.0.0/0".into(), ports: vec![443] }],
         ..alice()
     });
@@ -977,10 +1021,8 @@ fn confined_counts_only_a_shared_servers_own_label_set() {
     let mut m = without_volumes();
     m.confined = true;
     secrets(&mut m);
-    m.principals.push(Principal {
-        label_sets: vec![LabelSet { labels: vec!["alice-secrets".into()], budget: budget(64) }],
-        ..alice()
-    });
+    m.principals
+        .push(Principal { label_sets: vec![LabelSet { labels: vec!["alice-secrets".into()] }], ..alice() });
     let secret = || vec![String::from("alice-secrets")];
     m.volumes.push(Volume { name: "data".into(), partition: 0, labels: secret(), disk: None, verity: None });
     server(&mut m, "blkd").labels = secret();
@@ -1013,6 +1055,193 @@ fn confined_lets_label_sets_that_share_nothing_share_the_cores() {
     m.servers[0].labels = vec!["alice-secrets".into()];
     m.servers[0].args.pop();
     assert!(on_virt(&m).is_ok());
+}
+
+// ---- the steward: its entry, sizes, console and manifest lines ----
+
+/// The image without its userland, with alice (owning alice-secrets and working under it) and
+/// bob, and a steward entry the `steward` object names.
+fn with_steward() -> Manifest {
+    let mut m = without_userland();
+    secrets(&mut m);
+    let top = Budget { pages: 4096, processes: 4, weight: 100 };
+    m.principals.push(Principal {
+        labels: vec!["alice-secrets".into()],
+        label_sets: vec![LabelSet { labels: vec!["alice-secrets".into()] }],
+        budget: top,
+        ..alice()
+    });
+    m.principals.push(Principal {
+        name: "bob".into(),
+        account: 1002,
+        ssh_keys: vec![],
+        budget: top,
+        ..alice()
+    });
+    let base = server(&mut image(), "keyd").clone();
+    m.servers.push(Server {
+        name: "steward".into(),
+        program: "steward".into(),
+        budget: budget(256),
+        receives: vec!["steward".into()],
+        args: vec![],
+        ..base
+    });
+    let size = |pages| Budget { pages, processes: 1, weight: 10 };
+    m.steward = Some(Steward {
+        server: "steward".into(),
+        sizes: Sizes {
+            session: size(512),
+            agent: size(256),
+            sub_agent: size(64),
+            crossing: size(32),
+            cost: 1,
+        },
+    });
+    m
+}
+
+/// The lines carry each principal with its keys' ids, its owned labels' ids and its domains, its
+/// unlabelled set first; `keyd []`, since the live key-separation checks are init's and sshd's;
+/// the steward's slot count; and the sizes. Only the steward's entry gets them, and `users`.
+#[test]
+fn the_steward_s_entry_alone_is_given_the_manifest_lines() {
+    let m = with_steward();
+    on_virt(&m).unwrap();
+    let key: [u8; 32] = core::array::from_fn(|i| i as u8 + 1);
+    let id = redoubt_steward::hash::key_id(&key);
+    let steward = m.servers.iter().find(|s| s.name == "steward").unwrap();
+    assert_eq!(
+        args(&m, steward, &BUNDLE_KEY),
+        [
+            format!(
+                "principal \"alice\" account=1001 login=[{id}] approval=[] owned=[7] sets=[[],[7]] top=4096,4,100"
+            ),
+            "principal \"bob\" account=1002 login=[] approval=[] owned=[] sets=[[]] top=4096,4,100".into(),
+            "keyd []".into(),
+            format!("servers {STEWARD_SLOTS}"),
+            "sizes session=512,1,10 agent=256,1,10 sub_agent=64,1,10 crossing=32,1,10 cost=1".into(),
+            "label \"alice-secrets\" id=7".into(),
+        ]
+    );
+    // The policy core reads its own back as the manifest they came from.
+    let lines = args(&m, steward, &BUNDLE_KEY);
+    let core = lines.iter().map(String::as_str).filter(|l| !l.starts_with("label "));
+    let read = redoubt_steward::manifest::parse_lines(core).unwrap();
+    assert_eq!(read.principals[0].login_keys, [id]);
+    for s in m.servers.iter().filter(|s| s.name != "steward") {
+        assert!(!is_steward(&m, s));
+        assert!(!args(&m, s, &BUNDLE_KEY).iter().any(|a| a.starts_with("principal ")), "{}", s.name);
+    }
+    assert!(is_steward(&m, steward));
+}
+
+#[test]
+fn the_steward_object_and_console_name_what_the_manifest_holds() {
+    let schema = |text: &str| match read(text.as_bytes(), ARENA_PAGES) {
+        Err(Refusal::Schema(e)) => (e.path, e.kind),
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(schema(r#"{ "steward": {} }"#), ("steward.server".into(), SchemaKind::Missing));
+    // A label set's sub-budget is the steward's equal share, never the manifest's to give.
+    let set = r#"{ "principals": [ { "name": "a", "account": "1", "budget": { "pages": "4", "processes": 1, "weight": 1 }, "label_sets": [ { "labels": [], "budget": {} } ] } ] }"#;
+    assert_eq!(schema(set), ("principals[0].label_sets[0].budget".into(), SchemaKind::Unknown));
+    let mut m = with_steward();
+    m.steward.as_mut().unwrap().server = "nobody".into();
+    refused_at(&m, "steward.server", Why::Unknown);
+    let mut m = with_steward();
+    m.console = Some("carol".into());
+    refused_at(&m, "console", Why::Unknown);
+    m.console = Some("alice".into());
+    assert!(on_virt(&m).is_ok());
+    m.steward = None;
+    refused_at(&m, "console", Why::Unknown); // The lines are init's to write: a principal in the entry's own arguments is refused.
+    let mut m = with_steward();
+    server(&mut m, "steward").args = vec!["buckets=4".into(), "principal \"eve\"".into()];
+    refused_at(&m, "servers[7].args[1]", Why::Argument);
+}
+
+/// After the core's lines, the steward's own: each label's name, alice's home at the handle of
+/// her volume's server, her vault set's labelled volume, and her network scope; bob has none of
+/// them. A home or vault whose server the steward is not handed is refused.
+#[test]
+fn the_steward_s_own_lines_bind_homes_vaults_and_scopes() {
+    let mut m = with_steward();
+    m.volumes.push(Volume {
+        name: "alice-secrets".into(),
+        partition: 1,
+        labels: vec!["alice-secrets".into()],
+        disk: None,
+        verity: None,
+    });
+    let base = server(&mut m, "walfsd:data").clone();
+    m.servers.push(Server {
+        name: "littlefsd:alice-secrets".into(),
+        program: "littlefsd".into(),
+        volume: Some("alice-secrets".into()),
+        receives: vec!["littlefsd:alice-secrets".into()],
+        args: vec!["endpoint=littlefsd:alice-secrets".into(), "buckets=4".into()],
+        ..base
+    });
+    m.principals[0].home = Some("data:/home/alice".into());
+    m.console = Some("alice".into());
+    m.principals[0].net = vec![
+        Net { prefix: "0.0.0.0/0".into(), ports: vec![22, 443] },
+        Net { prefix: "10.0.0.0/8".into(), ports: vec![] },
+    ];
+    for e in ["walfsd:data", "littlefsd:alice-secrets"] {
+        server(&mut m, "steward").handed.push(Handed { endpoint: e.into(), badge: 9 });
+    }
+    on_virt(&m).unwrap();
+    let steward = m.servers.iter().find(|s| s.name == "steward").unwrap();
+    let lines = args(&m, steward, &BUNDLE_KEY);
+    let own: Vec<&str> = lines.iter().map(String::as_str).skip_while(|l| !l.starts_with("label ")).collect();
+    assert_eq!(
+        own,
+        [
+            "label \"alice-secrets\" id=7",
+            "home \"alice\" handle=walfsd:data path=/home/alice",
+            "vault \"alice\" labels=[7] handle=littlefsd:alice-secrets",
+            "net \"alice\" 0.0.0.0/0:22,443 10.0.0.0/8:*",
+            "console \"alice\"",
+        ]
+    );
+    // A scope the steward cannot ask ipd for: IPv6, or more than ipd's eight rules.
+    let mut v6 = m.clone();
+    v6.principals[0].net = vec![Net { prefix: "::/0".into(), ports: vec![22] }];
+    refused_at(&v6, "principals[0].net", Why::Value);
+    let mut wide = m.clone();
+    wide.principals[0].net = vec![Net { prefix: "0.0.0.0/0".into(), ports: (1..=9).collect() }];
+    refused_at(&wide, "principals[0].net", Why::Value);
+    let mut unhanded = m.clone();
+    server(&mut unhanded, "steward").handed.retain(|h| h.endpoint != "walfsd:data");
+    refused_at(&unhanded, "principals[0].home", Why::Unknown);
+    server(&mut m, "steward").handed.retain(|h| h.endpoint != "littlefsd:alice-secrets");
+    refused_at(&m, "principals[0].label_sets[0]", Why::Unknown);
+}
+
+/// Every size a process can run in, and each within the smallest sub-budget the steward carves:
+/// an equal share of a principal's budget per domain, less a budget's own cost.
+#[test]
+fn the_steward_s_sizes_fit_every_principal_s_smallest_share() {
+    let mut m = with_steward();
+    m.steward.as_mut().unwrap().sizes.agent.pages = 0;
+    refused_at(&m, "steward.sizes.agent", Why::Budget);
+    let mut m = with_steward();
+    m.steward.as_mut().unwrap().sizes.crossing.processes = 0;
+    refused_at(&m, "steward.sizes.crossing", Why::Budget);
+    let mut m = with_steward();
+    m.steward.as_mut().unwrap().sizes.cost = 0;
+    refused_at(&m, "steward.sizes.cost", Why::Budget);
+    // alice's two domains share 4096 pages: 2047 each after the cost; bob's one, 4095.
+    let mut m = with_steward();
+    m.steward.as_mut().unwrap().sizes.session.pages = 2047;
+    assert!(on_virt(&m).is_ok());
+    m.steward.as_mut().unwrap().sizes.session.pages = 2048;
+    refused_at(&m, "principals[0].budget", Why::Sizes("session"));
+    let mut m = with_steward();
+    m.principals[1].budget.weight = 9;
+    refused_at(&m, "principals[1].budget", Why::Sizes("session"));
 }
 
 // ---- the bound on root ----
@@ -1441,7 +1670,7 @@ fn a_walfsd_entry_is_a_volume_server_as_a_littlefsd_one_is() {
     let data = |m: &Manifest| range(m, named(m, "walfsd:data")).map(|(at, badge)| (at.to_string(), badge));
     assert_eq!(data(&walfs).as_ref().map(|(at, _)| at.as_str()), Some("blkd"));
     assert_eq!(data(&walfs), data(&littlefs));
-    assert_eq!(args(&walfs, named(&walfs, "walfsd:data")), ["endpoint=walfsd:data", "buckets=4"]);
+    assert_eq!(args(&walfs, named(&walfs, "walfsd:data")), ["endpoint=walfsd:data", "buckets=5"]);
 }
 
 /// `boot-profile-unverified` boots the image less its verification
@@ -1453,7 +1682,7 @@ fn a_walfsd_entry_is_a_volume_server_as_a_littlefsd_one_is() {
 fn the_boot_profiles_unverified_copies_are_the_image_less_its_verification() {
     let copy = include_str!("../../../tests/data/boot-profile/manifest-unverified.json");
     let copy = read(copy.as_bytes(), ARENA_PAGES).expect("the copy decodes");
-    let mut m = image();
+    let mut m = full_image();
     let verifiers: Vec<String> =
         m.volumes.iter_mut().filter_map(|v| v.verity.take()).map(|v| v.server).collect();
     assert!(!verifiers.is_empty(), "the image verifies a volume");

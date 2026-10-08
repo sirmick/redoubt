@@ -137,10 +137,20 @@ max_unsafe = 0
 max_undocumented = 0
 
 [[budget]]
+# The box's SHA-256, which keyd, init and the steward link. The crate says
+# `#![forbid(unsafe_code)]`, so this can only stay at 0.
+name = "redoubt-sha256 (SHA-256)"
+paths = ["libs/sha256/src"]
+max_unsafe = 0
+max_undocumented = 0
+
+[[budget]]
 name = "sshd (the network's first parser; carries every channel)"
 paths = ["servers/sshd/src"]
-# None, and the crate says `#![forbid(unsafe_code)]`, so this can only stay at 0.
-max_unsafe = 0
+# The core says `#![forbid(unsafe_code)]`. The program's two: `getrandom`'s source, which
+# `getrandom` declares and calls as an `unsafe` function, and the one slice it makes of the
+# buffer that call passes (vendor/README.md, "sshd's SSH library").
+max_unsafe = 2
 max_undocumented = 0
 
 [[budget]]
@@ -217,6 +227,14 @@ max_undocumented = 0
 # `#![forbid(unsafe_code)]`, so this can only stay at 0.
 name = "redoubt-steward (the steward's policy core)"
 paths = ["libs/steward/src"]
+max_unsafe = 0
+max_undocumented = 0
+
+[[budget]]
+# The steward server: the principals' carve, the protocol and the sessions' batches. Its library
+# says `#![forbid(unsafe_code)]`, and its program holds none, so this can only stay at 0.
+name = "redoubt-steward-server (the steward)"
+paths = ["servers/steward/src"]
 max_unsafe = 0
 max_undocumented = 0
 

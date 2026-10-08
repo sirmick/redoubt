@@ -16,12 +16,15 @@ fuzz = []
 # milestones carry `[t=N]`, `time_now` in µs (docs/testbench.md, "Checked builds").
 boot-stats = []
 
-# Only our own crates: the most privileged process after the kernel reads one file, through
-# wire's strict JSON parser (TENETS.md 5).
+# Our own crates, and `sha2` through the steward's core: the most privileged process after the
+# kernel reads one file, through wire's strict JSON parser (TENETS.md 5).
 [dependencies]
 redoubt-client = { path = "../../libs/client" }
 redoubt-rt = { path = "../../libs/rt" }
 redoubt-signing = { path = "../../libs/signing" }
+# The manifest lines' writer and the key id, so `init` writes what the steward's core reads
+# (servers/steward.md, "The manifest lines"). It brings `sha2`, the core's one outside crate.
+redoubt-steward = { path = "../../libs/steward" }
 redoubt-sys = { path = "../../libs/sys" }
 # A verified volume's block count is checked by the tree's own geometry, as verityd checks it.
 redoubt-verity = { path = "../../libs/verity" }

@@ -1,0 +1,2 @@
+principal "a\x41\n\"" account=1 login=[] approval=[] owned=[] sets=[] top=0,0,0
+sizes session=0,0,0 agent=0,0,0 sub_agent=0,0,0 crossing=0,0,0 cost=0

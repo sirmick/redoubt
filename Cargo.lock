@@ -685,6 +685,7 @@ dependencies = [
  "redoubt-init",
  "redoubt-rt",
  "redoubt-signing",
+ "redoubt-steward",
  "redoubt-sys",
  "redoubt-verity",
  "stub",
@@ -733,6 +734,7 @@ dependencies = [
  "ed25519-compact",
  "redoubt-fake-kernel",
  "redoubt-rt",
+ "redoubt-sha256",
 ]
 
 [[package]]
@@ -807,6 +809,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "redoubt-sha256"
+version = "0.1.0"
+
+[[package]]
 name = "redoubt-signing"
 version = "0.1.0"
 
@@ -814,8 +820,13 @@ version = "0.1.0"
 name = "redoubt-sshd"
 version = "0.1.0"
 dependencies = [
+ "getrandom",
  "heapless",
+ "redoubt-client",
+ "redoubt-fake-kernel",
+ "redoubt-ipd",
  "redoubt-keyd",
+ "redoubt-rt",
  "sunset",
 ]
 
@@ -833,13 +844,24 @@ dependencies = [
 name = "redoubt-steward"
 version = "0.1.0"
 dependencies = [
+ "redoubt-sha256",
+ "redoubt-steward",
  "redoubt-sys",
- "sha2",
 ]
 
 [[package]]
 name = "redoubt-steward-gen"
 version = "0.1.0"
+
+[[package]]
+name = "redoubt-steward-server"
+version = "0.1.0"
+dependencies = [
+ "redoubt-client",
+ "redoubt-init",
+ "redoubt-rt",
+ "redoubt-steward",
+]
 
 [[package]]
 name = "redoubt-steward-trace"

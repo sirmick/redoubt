@@ -1,0 +1,48 @@
+description = "Logins the steward refuses (docs/servers/steward.md, \"Authentication and sessions\" and \"The steward's protocol\"; docs/servers/sshd.md, \"Sessions over SSH\"): bob's key, which the manifest lists for bob, used as alice is refused by the steward as a key not alice's (bad_key), and bob asking for alice's label is refused as a label bob does not own (not_owner); each ssh is told Permission denied and no session starts. The verdict is the steward's typed refusal, as sshd's core reads it and says it on its console (rule F); that a session's badge cannot send login is the badge-class table's host test"
+arch = ["rv64", "rv32"]
+kind = "boot"
+recipe = "image/boot.toml"
+# The image needs 1 GiB: the principals' budgets, each holding a shell VM's session, do not fit
+# the users budget 256 MiB leaves (docs/kernel/budgets.md).
+memory_mib = 1024
+timeout_secs = 900
+expect = [
+    '^init: started sshd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
+    '^init: started steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{\} at [0-9]+: Login ',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+]
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    '^init: .* (exited|faulted|was killed)',
+    'init: restarted',
+    'EXCEPTION',
+    'steward: the core exited',
+    'sshd: login alice: session',
+    'sshd: login bob\+alice-secrets: session',
+]
+expect_after = [
+    '^\[con [0-9a-f]{16}\] sshd: login alice: refused \(BadKey\)$',
+    '^\[con [0-9a-f]{16}\] sshd: login bob\+alice-secrets: refused \(NotOwner\)$',
+]
+
+[[session]]
+user = "alice"
+key = "bob"
+steps = [{ expect = 'Permission denied \(publickey\)' }, { mark = "alice-refused" }, { exit = 255 }]
+
+[[session]]
+user = "bob+alice-secrets"
+steps = [{ wait = "alice-refused" }, { expect = 'Permission denied \(publickey\)' }, { exit = 255 }]
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]
+forward = [22]

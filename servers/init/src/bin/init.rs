@@ -36,7 +36,7 @@ mod machine {
     use redoubt_client::typed;
     use redoubt_init::bound::{LEND_PAGES, WATCH_STACK_PAGES};
     use redoubt_init::bundle::{Bundle, Entry};
-    use redoubt_init::check::{BOOTFSD, MANIFEST, Machine, Plan, VOLUME, args, range};
+    use redoubt_init::check::{BOOTFSD, MANIFEST, Machine, Plan, USERS, VOLUME, args, is_steward, range};
     use redoubt_init::manifest::{DeviceUse, Manifest};
     use redoubt_init::refusal::Refusal;
     use redoubt_init::restarts::{self, Restarts};
@@ -61,6 +61,7 @@ mod machine {
     /// then every other device.
     const ROOT: u32 = 1;
     const SYSTEM: u32 = 2;
+    const USERS_BUDGET: u32 = 3;
     const RESET: u32 = 4;
     const CONSOLE_MMIO: u32 = 5;
     /// The bytes of a public entry each `add` carries: a page, inside the lend with its name.
@@ -334,8 +335,8 @@ mod machine {
             }
         }
 
-        /// Steps 2 to 5: the endpoints, `keyd` and the key check, `consoled`, the rest, and the
-        /// public entries, restarting any server that ends meanwhile; then the exits.
+        /// Steps 2 to 6: the endpoints, `keyd` and the key check, `consoled`, the rest, the public
+        /// entries and the steward, restarting any server that ends meanwhile; then the exits.
         fn run(&mut self) -> ! {
             let m = self.manifest;
             for s in &m.servers {
@@ -357,13 +358,20 @@ mod machine {
                 self.settle(i, false);
             }
             let consoled = self.consoled;
-            for i in (0..m.servers.len()).filter(|&i| i != keyd && Some(i) != consoled) {
+            // The steward starts sessions from `/boot`, so it comes after the public entries.
+            let steward = m.servers.iter().position(|s| is_steward(m, s));
+            for i in (0..m.servers.len()).filter(|&i| i != keyd && Some(i) != consoled && Some(i) != steward)
+            {
                 self.start(i);
                 self.drain();
             }
             if let Some(i) = self.bootfsd {
                 self.public = true;
                 self.settle(i, false);
+            }
+            if let Some(i) = steward {
+                self.start(i);
+                self.drain();
             }
             // What the boot cost `root`, against the bound the check passed it on: more is a bug
             // in the bound, and the boot is refused rather than kept on a bound that lied.
@@ -483,6 +491,11 @@ mod machine {
             // `init`'s own copies: a restart places them again.
             for (name, device) in &self.plan.placements[i] {
                 launch.handle(name, *device);
+            }
+            // The steward's entry alone gets `users`, which it carves the principals' budgets
+            // from (step 6; R33). `init` keeps its own copy.
+            if is_steward(m, s) {
+                launch.handle(USERS, h(USERS_BUDGET));
             }
             if let Some((conn, _)) = &console {
                 launch.namespace("/dev/cons", conn.handle());

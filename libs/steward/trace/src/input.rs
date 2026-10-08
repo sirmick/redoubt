@@ -7,9 +7,9 @@ use redoubt_steward::consts::RANDOM_WORDS;
 use redoubt_steward::domain::{Domain, Labels};
 use redoubt_steward::effect::{Kind, Object, Produced, StepFailed};
 use redoubt_steward::event::{Content, Event, EventKind};
-use redoubt_steward::manifest::{Limits, Manifest, PrincipalSpec, Sizes};
+use redoubt_steward::manifest::{Lines, Manifest};
 
-use crate::text::{bytes, field, hash, list, lists, string, tokens, triple, u64_of};
+use crate::text::{bytes, field, hash, list, string, tokens, u64_of};
 
 /// One event line: its line number and text, the event, and whether its hash is the one the last
 /// screen of its request showed (`hash=shown`).
@@ -36,11 +36,6 @@ impl<'a> Fields<'a> {
     fn u64(&self, key: &str) -> Result<u64, String> { u64_of(self.get(key)?) }
 
     fn list(&self, key: &str) -> Result<Vec<u64>, String> { list(self.get(key)?) }
-}
-
-fn limits(s: &str) -> Result<Limits, String> {
-    let [pages, processes, weight] = triple(s)?;
-    Ok(Limits { pages, processes, weight })
 }
 
 /// `1/` or `1/7,9`.
@@ -141,6 +136,7 @@ fn event_kind(name: &str, f: &Fields<'_>) -> Result<(EventKind, bool), String> {
             labels: f.list("labels")?,
             key: f.u64("key")?,
         },
+        "Console" => EventKind::Console { principal: string(f.get("principal")?)? },
         "ChannelClosed" => EventKind::ChannelClosed { session: f.u64("session")? },
         "ApprovalOpened" => EventKind::ApprovalOpened {
             channel: f.u64("channel")?,
@@ -197,54 +193,22 @@ fn event(toks: &[&str]) -> Result<(Event, bool), String> {
     Ok((Event { now, random, reply, kind }, shown))
 }
 
-fn principal(toks: &[&str]) -> Result<PrincipalSpec, String> {
-    let name = string(toks.first().ok_or("a principal has a name")?)?;
-    let f = Fields(toks[1..].to_vec());
-    Ok(PrincipalSpec {
-        name,
-        account: f.u64("account")?,
-        login_keys: f.list("login")?,
-        approval_keys: f.list("approval")?,
-        owned: f.list("owned")?,
-        label_sets: lists(f.get("sets")?)?,
-        top: limits(f.get("top")?)?,
-    })
-}
-
-fn sizes(f: &Fields<'_>) -> Result<Sizes, String> {
-    Ok(Sizes {
-        session: limits(f.get("session")?)?,
-        agent: limits(f.get("agent")?)?,
-        sub_agent: limits(f.get("sub_agent")?)?,
-        crossing: limits(f.get("crossing")?)?,
-        budget_cost: f.u64("cost")?,
-    })
-}
-
-/// A trace file: the manifest's lines (`principal`, `keyd`, `servers`, `sizes`) before the first
-/// `event` line. Blank lines and `#` comments are skipped.
+/// A trace file: the manifest's lines (`principal`, `keyd`, `servers`, `sizes`), read by the core's
+/// parser, before the first `event` line. Blank lines and `#` comments are skipped.
 pub fn parse(text: &str) -> Result<Trace, String> {
-    let mut principals = Vec::new();
-    let (mut keyd, mut servers, mut sz, mut events) = (Vec::new(), 0, None, Vec::new());
+    let (mut lines, mut events) = (Lines::default(), Vec::new());
     for (i, raw) in text.lines().enumerate() {
         let at = |e: String| format!("line {}: {e}", i + 1);
         let toks = tokens(raw).map_err(at)?;
         let Some((head, rest)) = toks.split_first() else { continue };
-        if *head != "event" && !events.is_empty() {
-            return Err(at(format!("`{head}` after the first event")));
-        }
         match *head {
-            "principal" => principals.push(principal(rest).map_err(at)?),
-            "keyd" => keyd = list(rest.first().ok_or("keyd [..]").map_err(|e| at(e.into()))?).map_err(at)?,
-            "servers" => servers = u64_of(rest.first().unwrap_or(&"")).map_err(at)? as u16,
-            "sizes" => sz = Some(sizes(&Fields(rest.to_vec())).map_err(at)?),
             "event" => {
                 let (event, shown) = event(rest).map_err(at)?;
                 events.push(Line { number: i + 1, text: raw.trim().to_string(), event, shown });
             }
-            _ => return Err(at(format!("unknown line `{head}`"))),
+            _ if !events.is_empty() => return Err(at(format!("`{head}` after the first event"))),
+            _ => lines.line(raw).map_err(at)?,
         }
     }
-    let sizes = sz.ok_or("no `sizes` line")?;
-    Ok(Trace { manifest: Manifest { principals, keyd_keys: keyd, servers, sizes }, events })
+    Ok(Trace { manifest: lines.finish()?, events })
 }

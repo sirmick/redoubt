@@ -372,6 +372,23 @@ struct Shared<'a> {
 impl Shared<'_> {
     fn aborted(&self) -> bool { self.abort.load(Ordering::Relaxed) }
 
+    /// Waits until some session sets `mark`.
+    fn wait(&self, mark: &str, deadline: Instant) -> Result<(), Stop> {
+        let mut marks = self.marks.lock().unwrap();
+        while !marks.contains(mark) {
+            if self.aborted() {
+                return Err(Stop::Aborted);
+            }
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return Err(Stop::Failed(format!("timed out waiting for mark {mark:?}")));
+            }
+            // Wake up now and then to notice the case being aborted from outside.
+            marks = self.changed.wait_timeout(marks, left.min(Duration::from_millis(50))).unwrap().0;
+        }
+        Ok(())
+    }
+
     fn fail(&self) {
         self.abort.store(true, Ordering::Relaxed);
         self.changed.notify_all();
@@ -563,6 +580,8 @@ enum Event {
 struct Driver<'a> {
     shared: &'a Shared<'a>,
     deadline: Instant,
+    /// When ssh started: each `expect` notes in the log how long after it matched.
+    started: Instant,
     ssh: Reaped,
     /// ssh's standard input: a pipe, or for a `pty = true` session its terminal's master.
     stdin: Option<std::fs::File>,
@@ -596,6 +615,17 @@ fn drive(
         .map(|p| Regex::new(p))
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| Stop::Broken(e.to_string()))?;
+    // The waits a session starts with come before its ssh does: it logs in only once the marks
+    // are set.
+    let first = session.steps.iter().take_while(|s| matches!(s, Step::Wait(_))).count();
+    for (number, step) in session.steps[..first].iter().enumerate() {
+        if let Step::Wait(mark) = step {
+            shared.wait(mark, deadline).map_err(|stop| match stop {
+                Stop::Failed(why) => Stop::Failed(format!("step {}: {why}", number + 1)),
+                other => other,
+            })?;
+        }
+    }
     // A terminal session reads a terminal, so that ssh reports its size changes; its output stays
     // on pipes. The size is the one a terminal gets when nothing sets it.
     let (master, input) = match session.pty {
@@ -630,6 +660,7 @@ fn drive(
     let mut driver = Driver {
         shared,
         deadline,
+        started: Instant::now(),
         stdin: master.or_else(|| child.stdin.take().map(|pipe| std::os::fd::OwnedFd::from(pipe).into())),
         pty: session.pty,
         ssh: Reaped(child),
@@ -644,14 +675,14 @@ fn drive(
         last_line: String::new(),
         unmatched: String::new(),
     };
-    for (number, step) in session.steps.iter().enumerate() {
+    for (number, step) in session.steps.iter().enumerate().skip(first) {
         driver.step(step).map_err(|stop| match stop {
             Stop::Failed(why) => Stop::Failed(format!("step {}: {why}", number + 1)),
             other => other,
         })?;
     }
     // Every session ends with ssh's exit, so all of its output passes `forbid`.
-    if !matches!(session.steps.last(), Some(Step::Exit(_))) {
+    if !session.steps.iter().any(|s| matches!(s, Step::Exit(_))) {
         driver.step(&Step::Exit(0)).map_err(|stop| match stop {
             Stop::Failed(why) => Stop::Failed(format!("at the end: {why}")),
             other => other,
@@ -684,26 +715,7 @@ impl Driver<'_> {
                 self.shared.changed.notify_all();
                 Ok(())
             }
-            Step::Wait(mark) => {
-                let mut marks = self.shared.marks.lock().unwrap();
-                while !marks.contains(mark) {
-                    if self.shared.aborted() {
-                        return Err(Stop::Aborted);
-                    }
-                    let left = self.deadline.saturating_duration_since(Instant::now());
-                    if left.is_zero() {
-                        return Err(Stop::Failed(format!("timed out waiting for mark {mark:?}")));
-                    }
-                    // Wake up now and then to notice the case being aborted from outside.
-                    marks = self
-                        .shared
-                        .changed
-                        .wait_timeout(marks, left.min(Duration::from_millis(50)))
-                        .unwrap()
-                        .0;
-                }
-                Ok(())
-            }
+            Step::Wait(mark) => self.shared.wait(mark, self.deadline),
             Step::Expect(pattern) => {
                 // Multi-line mode: the unmatched output may span lines, and `^`/`$` should
                 // still mean the start and end of a line, as they do everywhere else here.
@@ -711,6 +723,10 @@ impl Driver<'_> {
                 loop {
                     if let Some(found) = regex.find(&self.unmatched) {
                         self.unmatched.drain(..found.end());
+                        // Only in the log, as the exit marker is: how long the session took to
+                        // get here, the login's latency for its first prompt.
+                        let after = self.started.elapsed().as_secs_f64();
+                        writeln!(self.log, "\n[/{pattern}/ matched {after:.3} s after ssh started]")?;
                         return Ok(());
                     }
                     if let Some(status) = self.status {

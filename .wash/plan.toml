@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 335
+revision = 342
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -881,8 +881,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "steward"
   needs = ["STEWARD1", "FSD3", "BEAM2", "SSH1", "INIT3", "MEM2"]
   body = "Brief: .wash/local/STEWARD2-implementer.md (architect-15). Tier A, size L. docs/servers/steward.md#principals, #fixed-sub-budgets-per-label-set, #authentication-and-sessions (the console is one principal's session: owner's decision on QA steward-console-principal), #the-stewards-protocol; docs/userland/sessions.md#logging-in, #a-session-is-a-vm-in-a-budget, #vault-sessions, #namespaces; docs/servers/sshd.md#sessions-over-ssh; docs/servers/init.md#the-boot-manifest."
-  state = "reported"
-  revision = 300
+  state = "done"
+  revision = 341
   overrides = ["2026-10-06: started by Orchestrator before MEM2 (active): owner's go (2026-10-06): the steward server starts now; MEM2 merges within hours and STEWARD2 rebases onto it (heap_pages for the sub-budgets' servers is the one dependency)", "2026-10-06: started by Orchestrator before MEM2 (active): STEWARD2 runs ahead of MEM2's merge on the owner's go; it rebases onto MEM2's merge when told"]
 
 [[node]]
@@ -1188,12 +1188,12 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
 
 [[node]]
   id = "K27"
-  title = "Bob's SSH session ends when Alice opens her vault session: bob's console connection's server stalls for more than a second around the vault session's carve and launch"
+  title = "A host-clock steward case judging a session's survival across a hold is a verdict only alone: steward-sub-budget-flood joins the alone class"
   template = "package"
   parent = "M1"
-  body = "Reproduced 3 of 100 on STEWARD2's tip 47a830958 (rv32 steward-sub-budget-flood, 6 at a time on a loaded pool; .wash/local/K27-checkpoint.md): in each failure and in no passing run, the hub's completion call on bob's console connection (sshd's channel for bob's slot) times out at hold 10 s + 1 s margin (took 11,001-11,002 ms); the read ends Ended, ConsoleIo takes it as EOF, bob's shell exits, ssh exits 0, the steward reaps bob. The missed window opens within 0.4 s of alice's vault login (audit 1001/{7}, carve users/alice/{7} 11,009 pages, launch), before her flood. Bob's console is served by bob's slot's own sshd driver thread, so a thread unrelated to alice did not run for over a second: a system-wide stall, likely one long kernel entry during the vault session's carve or launch (image push/stream; cf. BOOT2). Next: a local probe timing the steward's vault-login calls and logging any kernel entry over 100 ms (60 runs), then the fix where the stall is (bounded kernel work per entry, or the launch split into bounded steps). The client's 1 s rule stays (owner's call if ever). Tier A if kernel or steward changes. Blocks M1."
-  state = "active"
-  revision = 331
+  body = "Closed as: no product defect. 356 rv32 steward-sub-budget-flood runs under three probes: 3 failures, all in one 3 s host-time window, each at bob's console hold's end right after alice's vault login (sshd's channel console missed its 10 s hold by more than the client's 1 s margin; the VM timed out on time; Ended read as EOF; bob's shell exited). 196 later runs with in-guest detectors (kernel entries, user stretches, late idle wakes) all passed, the longest kernel entry 30.7 ms, no late wake over 5 ms: the guest never stalled while running. Cause consistent with everything: a host-side stall of QEMU on a host-clock case (its SSH forward keeps it off guest time) while 8 QEMUs share the host. Deliverable: the case (and every host-clock steward/ssh case judging a session's survival across a hold) joins jobs.mk's alone class; testbench.md's shared-host rule says why. The hub's 1 s margin stays. Evidence: .wash/local/K27-checkpoint.md, probe patches in .wash/local."
+  state = "reported"
+  revision = 340
 
 [[node]]
   id = "B22"
@@ -1273,8 +1273,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   body = "Found by BEAM4's cases branch once the tester carved sessions as the steward does (a sub-budget per label set with its labels): beamlet's budget_create without `labels` passes an empty set to the kernel, and a labelled session's every child carve is refused label_denied, so a labelled principal's shell can launch nothing. Decide the rule with the Architect's page (budgets.md / labels): a child carve defaults to the parent's labels (narrowing allowed, widening refused) or the VM must always pass labels; implement in userland/otp's natives (Budget module, budget_create path), a host test on the fake kernel and the beamlet-launch case under a labelled session. Tier B unless the kernel's carve rule changes (it should not). Size S."
-  state = "active"
-  revision = 333
+  state = "reported"
+  revision = 342
 
 [[node]]
   id = "BEAM13"
@@ -1380,3 +1380,12 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "docs/plan/m2-usable-shell.md#the-shell (the host steps 1-6); docs/userland/shell.md; the owner's signed-off shell plan (.wash/local/shell-plan.md, phases G1-G5). Starts now, ahead of M1, on the owner's word (2026-10-07): every package here runs on the host (beamlet and the BEAM), no kernel or server change, tested by the shell's ExUnit suite through ./test-shell."
   state = "todo"
   revision = 323
+
+[[node]]
+  id = "B26"
+  title = "rv32 beamlet-files fails once in a while with eexist at its first make_dir: likely init restarting beamlet after an early exit, the case replaying on a volume that already holds the directory"
+  template = "package"
+  parent = "M1"
+  body = "Found by the BEAM4 cases branch's gate on STEWARD2's final tip (rv32): beamlet-files failed once with badmatch {error,eexist} at prim_file:make_dir(\"/home/alice/d\") after every earlier line passed, then passed 2/2 alone. Ruled out by BEAM4's red (from the code): BEAM11's busy retry cannot duplicate a mkdir: a `busy` always means not served (ninep_mux.rs:585, produced only by take() before the message is decoded; littlefsd, walfsd and consoled return no BUSY from a handler). Likely cause: init restarts an exited program (servers/init/src/restarts.rs, up to MOST times) on the same walfsd volume, and beamlet-files forbids only servers' exits, so a first beamlet run that ended early replays make_dir on a volume already holding d. Check the failing log (BEAM4 cases implementer's run logs) for a second beamlet start or an earlier beamlet exit line; then (a) the case forbids a beamlet restart (its verdict then names the early exit), and (b) find why beamlet ended early, if it did. Tier B (the case) unless (b) finds a defect. Size S."
+  state = "active"
+  revision = 339

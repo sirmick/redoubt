@@ -1,0 +1,59 @@
+description = "A session ends with its channel, and its channel with the session (docs/servers/steward.md, \"Authentication and sessions\"; docs/servers/sshd.md, \"Sessions over SSH\"): alice's SSH session runs beside her console session, both carved from users/alice/{}; the end of her channel's input ends her shell, the steward ends the session, destroys its budget and tells sshd, which closes the channel with status 0; bob's VM halting from inside (:erlang.halt) ends his session the same way. The kernel's view, through the steward's lines, shows each sub-budget back to what it held before; every login has a fresh id; init never restarts the steward or reboots. The verdicts are the kernel's usage, sshd's and the steward's lines (rule F)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+recipe = "image/boot.toml"
+# The image needs 1 GiB: the principals' budgets, each holding a shell VM's session, do not fit
+# the users budget 256 MiB leaves (docs/kernel/budgets.md).
+memory_mib = 1024
+# The scan sizes sshd, ipd and the steward with SSH sessions served and ended.
+memory = true
+# Two logins, one after the other, each booting a shell VM.
+timeout_secs = 1500
+expect = [
+    '^init: started sshd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
+    '^init: started steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{\} at [0-9]+: Login ',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+]
+distinct = ['steward: audit [0-9]+/\{\} at [0-9]+: Login \{ session: ([0-9]+)']
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    '^init: .* (exited|faulted|was killed)',
+    'init: restarted',
+    'EXCEPTION',
+    'steward: the core exited',
+]
+# The steward says a login's lines before it answers sshd, so they come in one order.
+expect_after = [
+    '^\[con [0-9a-f]{16}\] steward: users/alice/\{\} holds [0-9]+ pages, 4 processes$',
+    '^\[con [0-9a-f]{16}\] sshd: login alice: session [0-9a-f]{16}, labels \[\]$',
+    '^\[con [0-9a-f]{16}\] steward: users/alice/\{\} holds [0-9]+ pages, 2 processes$',
+    '^\[con [0-9a-f]{16}\] steward: users/bob/\{\} holds [0-9]+ pages, 2 processes$',
+    '^\[con [0-9a-f]{16}\] steward: users/bob/\{\} holds 0 pages, 0 processes$',
+]
+
+# Bob logs in once alice's ssh is gone, so the steward's lines come in one order.
+[[session]]
+user = "alice"
+steps = [{ expect = '\([0-9]+\)> ' }, { exit = 0 }, { mark = "alice-gone" }]
+
+[[session]]
+user = "bob"
+steps = [
+    { wait = "alice-gone" },
+    { expect = '\([0-9]+\)> ' },
+    { send = ":erlang.halt()\n" },
+    { exit = 0 },
+]
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]
+forward = [22]

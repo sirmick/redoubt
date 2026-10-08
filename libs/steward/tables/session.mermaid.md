@@ -3,6 +3,7 @@
 ```mermaid
 stateDiagram-v2
     [*] --> Starting: Login
+    [*] --> Starting: Console
     Starting --> Ending: Done [not not_locked]
     Starting --> Running: Done
     Starting --> Ending: Failed

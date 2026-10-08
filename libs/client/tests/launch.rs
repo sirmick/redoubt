@@ -1,8 +1,8 @@
 //! `launch` and `grants` on the fake kernel, which keeps what each child was given: the stub, the
 //! image, the stack and the startup block where the launching convention puts them, the block
 //! read back by the runtime's own parser; refusals before any kernel call; a refusal midway
-//! handing the budget back; an image moved one batch at a time; and a child's grants released at
-//! every server by its exit notice.
+//! handing the budget back; an image moved one batch at a time, held or streamed from a reader; and
+//! a child's grants released at every server by its exit notice.
 
 mod common;
 
@@ -382,4 +382,60 @@ fn a_killed_job_ends_with_its_notice() {
     let ended = f.as_process(launcher, || job.wait(FOREVER).unwrap());
     assert_eq!(ended.notice.cause, Cause::Killed);
     assert_eq!(ended.released, Ok(()));
+}
+
+/// A streamed image (`Launch::streamed`, read a batch at a time from a file, as the steward reads
+/// beamlet from `/boot`) moves into the child exactly as the same bytes held do: batch by batch,
+/// the launcher holding one batch at most, the reader asked only for the image's own bytes, so an
+/// image that is not a whole number of pages ends in zeros it never read.
+#[test]
+fn a_streamed_image_moves_as_held_bytes_do_and_is_read_only_where_it_is() {
+    let f = fake();
+    let (launcher, budget, exit) = launcher();
+    let image: Vec<u8> = (0..(2 * PLACE_PAGES + 1) * PAGE_SIZE + 100).map(|i| (i % 253) as u8).collect();
+    let held = f.held(launcher).1;
+    f.held_peak(launcher);
+    let mut asked = Vec::new();
+    let job = f.as_process(launcher, || {
+        let mut read = |at: usize, buf: &mut [u8]| {
+            asked.push((at, buf.len()));
+            buf.copy_from_slice(&image[at..at + buf.len()]);
+            Ok(())
+        };
+        let budget = Budget::from_handle(budget);
+        let launch = Launch::streamed(STUB, image.len(), &mut read, budget, Endpoint::from_handle(exit));
+        launch.start().ok().unwrap()
+    });
+    let batch = PLACE_PAGES * PAGE_SIZE;
+    assert_eq!(asked, [(0, batch), (batch, batch), (2 * batch, PAGE_SIZE + 100)]);
+    let child = f.launched(launcher, job.process().handle());
+    let moved: Vec<u8> = child.maps[1..4].iter().flat_map(|(_, _, bytes)| bytes.iter().copied()).collect();
+    assert_eq!(moved, padded(&image, 2 * PLACE_PAGES + 2));
+    assert_eq!(f.held_peak(launcher), held + PLACE_PAGES);
+    assert_eq!(f.held(launcher).1, held);
+    let startup = Startup::parse(&child.maps[5].2).unwrap();
+    assert_eq!(startup.image(), Some((IMAGE_AT, image.len())));
+}
+
+/// A read that fails (a short file, a server gone) refuses the launch at that batch, as a kernel
+/// refusal does: the budget comes back for the caller to destroy, the child never started, and
+/// the launcher holds no batch of it.
+#[test]
+fn a_failed_read_refuses_the_launch_at_its_batch() {
+    let f = fake();
+    let (launcher, budget, exit) = launcher();
+    let held = f.held(launcher).1;
+    let failed = f.as_process(launcher, || {
+        let mut read =
+            |at: usize, _: &mut [u8]| if at == 0 { Ok(()) } else { Err(SysError::InvalidArgument) };
+        let budget = Budget::from_handle(budget);
+        let len = 2 * PLACE_PAGES * PAGE_SIZE;
+        Launch::streamed(STUB, len, &mut read, budget, Endpoint::from_handle(exit)).start().err().unwrap()
+    });
+    assert_eq!(failed.error, Error::Sys(SysError::InvalidArgument));
+    assert_eq!(failed.budget.handle(), budget);
+    let [child] = &f.launched_in(launcher, budget)[..] else { panic!("one child in the budget") };
+    assert_eq!(child.start, None);
+    assert_eq!(child.maps.len(), 2, "the stub and the image's first batch");
+    assert_eq!(f.held(launcher).1, held);
 }

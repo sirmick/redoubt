@@ -13,19 +13,24 @@ use core::net::IpAddr;
 use redoubt_rt::abi::{Handle, MAX_LABELS, MAX_START_HANDLES, MAX_THREADS, Usage};
 use redoubt_rt::server::minted::FIRST_MINTED_BADGE;
 use redoubt_rt::startup::{StartupBuilder, valid_name};
+use redoubt_steward::hash::key_id;
+use redoubt_steward::manifest::{
+    Limits, Manifest as StewardManifest, PrincipalSpec, Sizes, lines as manifest_lines, quote, show_list,
+};
 use redoubt_sys::DeviceInfo;
 use stub::MAX_STACK_PAGES;
 
 use crate::bound::{self, Counts};
 use crate::confine;
-use crate::manifest::{Budget, Manifest, Server, Verity, Volume};
+use crate::manifest::{Budget, Manifest, Server, Steward, Verity, Volume};
 use crate::refusal::{Refusal, Why};
 use crate::sshkey::{self, KEY_LEN};
 
 /// The bundle entry that is the manifest. It is never public.
 pub const MANIFEST: &str = "manifest";
-/// The budgets `init` holds. No endpoint takes their names, and a server is handed none
-/// (R33 (no server holds a system budget)).
+/// The budgets `init` holds. No endpoint takes their names, and no `handed` item names one
+/// (R33 (no server holds a system budget)): `init` hands `users` to the steward's entry alone, by
+/// the manifest's `steward.server`, at step 6, never through `handed`.
 pub const BUDGETS: [&str; 3] = ["root", "system", "users"];
 /// The longest device name, so that `NAME-irq` is still a name (servers/init.md, "One entry per
 /// device").
@@ -39,6 +44,12 @@ pub const BOOTFSD: &str = "bootfsd";
 /// The programs `init` calls itself, each through a root badge of its own there: `keyd` for
 /// `holds`, `consoled` for its own lines, `bootfsd` for the public entries.
 pub const INIT_CALLS: [&str; 3] = ["keyd", "consoled", BOOTFSD];
+/// The most rules a scope `ipd` grants holds ([`redoubt_rt::wire::ipd_scope::MAX_RULES`]).
+pub use redoubt_rt::wire::ipd_scope::MAX_RULES as IPD_RULES;
+/// The steward's binding table's shared slots ([`redoubt_steward::consts::SLOTS`]).
+pub use redoubt_steward::consts::SLOTS as STEWARD_SLOTS;
+/// The startup-block name of the `users` budget, handed to the steward's entry alone.
+pub const USERS: &str = "users";
 /// The program that serves a disk's ranges: `init` mints each volume's range at its disk's.
 pub const BLKD: &str = "blkd";
 /// The startup-block name of a volume's range, handed to the server attaching it.
@@ -517,6 +528,44 @@ fn references(m: &Manifest, machine: &Machine) -> Result<(), Refusal> {
             }
         }
     }
+    if let Some(st) = &m.steward {
+        let Some(i) = m.servers.iter().position(|s| s.name == st.server) else {
+            return Err(at("steward.server".into(), Why::Unknown));
+        };
+        // The manifest lines are `init`'s to write: the entry's own arguments carry none.
+        if let Some(k) = m.servers[i].args.iter().position(|a| !a.starts_with(BUCKETS_ARG)) {
+            return Err(at(format!("servers[{i}].args[{k}]"), Why::Argument));
+        }
+        // Every home's and vault's server is one the steward is handed, so each line names a
+        // handle it holds.
+        let handed = |e: &str| m.servers[i].handed.iter().any(|h| h.endpoint == e);
+        for (j, p) in m.principals.iter().enumerate() {
+            // The scope the steward asks `ipd` for: IPv4 connect rules, one per port or one for
+            // every port, at most `ipd`'s eight.
+            let rules = p.net.iter().map(|n| n.ports.len().max(1)).sum::<usize>();
+            let v4 = p.net.iter().all(|n| {
+                n.prefix.split_once('/').is_some_and(|(a, _)| a.parse::<core::net::Ipv4Addr>().is_ok())
+            });
+            if rules > IPD_RULES || !v4 {
+                return Err(at(format!("principals[{j}].net"), Why::Value));
+            }
+            let home = p.home.as_deref().and_then(|h| h.split_once(':'));
+            if home.is_some_and(|(v, _)| volume_handle(m, v).is_none_or(|e| !handed(e))) {
+                return Err(at(format!("principals[{j}].home"), Why::Unknown));
+            }
+            for (k, set) in p.label_sets.iter().enumerate() {
+                if vault_handle(m, &set.labels).is_some_and(|e| !handed(e)) {
+                    return Err(at(format!("principals[{j}].label_sets[{k}]"), Why::Unknown));
+                }
+            }
+        }
+    }
+    if let Some(c) = &m.console {
+        // The console session is the steward's to open, for a principal the manifest names.
+        if m.steward.is_none() || !m.principals.iter().any(|p| &p.name == c) {
+            return Err(at("console".into(), Why::Unknown));
+        }
+    }
     let mut accounts: Vec<u64> = Vec::new();
     for (i, p) in m.principals.iter().enumerate() {
         if p.account == 0 || accounts.contains(&p.account) {
@@ -636,7 +685,8 @@ fn devices(m: &Manifest, machine: &Machine) -> Result<Vec<Vec<(String, Handle)>>
 }
 
 /// Limits a process can run in: at least one process and some weight, within what the kernel
-/// takes; a first-thread stack, and a heap cap if any, that leave room in the server's budget.
+/// takes; a first-thread stack, and a heap cap if any, that leave room in the server's budget; and
+/// the steward's sizes, each with pages too, within every principal's smallest share.
 fn budgets(m: &Manifest) -> Result<(), Refusal> {
     let fine = |b: &Budget| {
         (1..=i64::from(u32::MAX)).contains(&b.processes) && (1..=i64::from(u32::MAX)).contains(&b.weight)
@@ -658,8 +708,34 @@ fn budgets(m: &Manifest) -> Result<(), Refusal> {
         if !fine(&p.budget) {
             return Err(at(format!("principals[{i}].budget"), Why::Budget));
         }
-        if let Some(j) = p.label_sets.iter().position(|s| !fine(&s.budget)) {
-            return Err(at(format!("principals[{i}].label_sets[{j}].budget"), Why::Budget));
+    }
+    let Some(st) = &m.steward else { return Ok(()) };
+    // Every size a process can run in, and a budget object's cost at least its page.
+    let z = &st.sizes;
+    let sizes = [
+        ("session", &z.session),
+        ("agent", &z.agent),
+        ("sub_agent", &z.sub_agent),
+        ("crossing", &z.crossing),
+    ];
+    for (name, b) in sizes {
+        if !fine(b) || b.pages == 0 {
+            return Err(at(format!("steward.sizes.{name}"), Why::Budget));
+        }
+    }
+    if z.cost == 0 {
+        return Err(at("steward.sizes.cost".into(), Why::Budget));
+    }
+    // Each size fits the smallest sub-budget the steward carves: an equal share of a principal's
+    // budget per domain, less a budget's own cost (servers/steward.md, "Fixed sub-budgets per
+    // label set").
+    for (i, p) in m.principals.iter().enumerate() {
+        let n = domains(p) as u64;
+        let share = (p.budget.pages / n).saturating_sub(z.cost);
+        let (processes, weight) = (p.budget.processes as u64 / n, p.budget.weight as u64 / n);
+        let over = |b: &Budget| b.pages > share || b.processes as u64 > processes || b.weight as u64 > weight;
+        if let Some((name, _)) = sizes.iter().find(|(_, b)| over(b)) {
+            return Err(at(format!("principals[{i}].budget"), Why::Sizes(name)));
         }
     }
     Ok(())
@@ -690,8 +766,9 @@ fn fit(m: &Manifest, system: &Usage) -> Result<(), Refusal> {
 /// (servers/blkd.md, "Ranges and badges"); for a volume's `verityd`, `endpoint=` its first
 /// endpoint, `labels=` its volume's ids as its server's, and `root=` and `blocks=`, or `key=`
 /// (`bundle_key` in hex for `bundle`) and `floor=`, from the volume's `verity`
-/// (servers/verityd.md, "Arguments"). A label the manifest does not define is left out: the
-/// check refused it before.
+/// (servers/verityd.md, "Arguments"); for the steward's entry, the manifest lines
+/// ([`steward_lines`]). A label the manifest does not define is left out: the check refused it
+/// before.
 pub fn args(m: &Manifest, s: &Server, bundle_key: &[u8; KEY_LEN]) -> Vec<String> {
     let ids = |names: &[String]| {
         let ids: Vec<String> = names
@@ -738,7 +815,139 @@ pub fn args(m: &Manifest, s: &Server, bundle_key: &[u8; KEY_LEN]) -> Vec<String>
             args.push(format!("{RANGE_LABELS_ARG}{}={}", v.partition, ids(&v.labels)));
         }
     }
+    if let Some(st) = m.steward.as_ref().filter(|_| is_steward(m, s)) {
+        args.extend(steward_lines(m, st));
+    }
     args
+}
+
+/// Whether `s` is the entry the manifest's `steward.server` names: the one `init` hands `users`.
+pub fn is_steward(m: &Manifest, s: &Server) -> bool {
+    m.steward.as_ref().is_some_and(|st| st.server == s.name)
+}
+
+/// The manifest lines the steward is started with, one per argument (servers/steward.md, "The
+/// manifest lines"), written by the policy core's own writer: each principal with its keys' ids,
+/// its owned labels' ids, and its domains, its unlabelled set first and then each different label
+/// set, as [`domains`] counts them; `keyd []`, since the live key-separation checks are `init`'s
+/// and `sshd`'s (R35); the steward's [`STEWARD_SLOTS`]; and the sizes. A key or label the check
+/// refused is left out: the check ran first.
+pub fn steward_lines(m: &Manifest, st: &Steward) -> Vec<String> {
+    let ids = |names: &[String]| label_ids(m, names);
+    let keys = |texts: &[String]| -> Vec<u64> {
+        texts.iter().filter_map(|t| sshkey::ed25519(t)).map(|k| key_id(&k)).collect()
+    };
+    let limits =
+        |b: &Budget| Limits { pages: b.pages, processes: b.processes as u64, weight: b.weight as u64 };
+    let principals = m
+        .principals
+        .iter()
+        .map(|p| {
+            let mut sets: Vec<Vec<u64>> = alloc::vec![Vec::new()];
+            for set in &p.label_sets {
+                let set = ids(&set.labels);
+                if !sets.contains(&set) {
+                    sets.push(set);
+                }
+            }
+            PrincipalSpec {
+                name: p.name.clone(),
+                account: p.account,
+                login_keys: keys(&p.ssh_keys),
+                approval_keys: keys(&p.approval_keys),
+                owned: ids(&p.labels),
+                label_sets: sets,
+                top: limits(&p.budget),
+            }
+        })
+        .collect();
+    let z = &st.sizes;
+    let lines = StewardManifest {
+        principals,
+        keyd_keys: Vec::new(),
+        servers: STEWARD_SLOTS,
+        sizes: Sizes {
+            session: limits(&z.session),
+            agent: limits(&z.agent),
+            sub_agent: limits(&z.sub_agent),
+            crossing: limits(&z.crossing),
+            budget_cost: z.cost,
+        },
+    };
+    let mut out = manifest_lines(&lines);
+    out.extend(steward_own_lines(m));
+    out
+}
+
+/// The server attaching volume `name`, by the named handle its first endpoint is handed as.
+fn volume_handle<'m>(m: &'m Manifest, name: &str) -> Option<&'m str> {
+    let s = m.servers.iter().find(|s| s.volume.as_deref() == Some(name))?;
+    s.receives.first().map(String::as_str)
+}
+
+/// The labelled volume whose label set is `set` (names, any order), by its server's handle.
+fn vault_handle<'m>(m: &'m Manifest, set: &[String]) -> Option<&'m str> {
+    let mut want: Vec<&str> = set.iter().map(String::as_str).collect();
+    want.sort_unstable();
+    let v = m.volumes.iter().find(|v| {
+        let mut have: Vec<&str> = v.labels.iter().map(String::as_str).collect();
+        have.sort_unstable();
+        !have.is_empty() && have == want
+    })?;
+    volume_handle(m, &v.name)
+}
+
+/// The ids of the labels `names` names, sorted, each once; a name no label has is left out (the
+/// check refused it first).
+fn label_ids(m: &Manifest, names: &[String]) -> Vec<u64> {
+    let mut ids: Vec<u64> =
+        names.iter().filter_map(|n| m.labels.iter().find(|l| &l.name == n)).map(|l| l.id).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    ids
+}
+
+/// The steward's own lines, after the core's (servers/steward.md, "The manifest lines"): each
+/// label's name and id; each principal's home, at the handle of its volume's server; the labelled
+/// volume of each label set it works under that has one; its network scope, in the manifest's
+/// prefix-and-ports form (`*` for every port); and the console's principal, if the manifest names
+/// one.
+pub fn steward_own_lines(m: &Manifest) -> Vec<String> {
+    let q = |s: &str| quote(s.as_bytes());
+    let mut out: Vec<String> = m.labels.iter().map(|l| format!("label {} id={}", q(&l.name), l.id)).collect();
+    for p in &m.principals {
+        let home = p.home.as_deref().and_then(|h| h.split_once(':'));
+        if let Some((handle, path)) = home.and_then(|(v, path)| Some((volume_handle(m, v)?, path))) {
+            out.push(format!("home {} handle={handle} path={path}", q(&p.name)));
+        }
+        let mut seen: Vec<Vec<u64>> = Vec::new();
+        for set in &p.label_sets {
+            let ids = label_ids(m, &set.labels);
+            if ids.is_empty() || seen.contains(&ids) {
+                continue;
+            }
+            if let Some(handle) = vault_handle(m, &set.labels) {
+                out.push(format!("vault {} labels={} handle={handle}", q(&p.name), show_list(&ids)));
+            }
+            seen.push(ids);
+        }
+        if !p.net.is_empty() {
+            let rules: Vec<String> = p
+                .net
+                .iter()
+                .map(|n| {
+                    let ports: Vec<String> = n.ports.iter().map(|p| format!("{p}")).collect();
+                    let ports = if ports.is_empty() { String::from("*") } else { ports.join(",") };
+                    format!("{}:{ports}", n.prefix)
+                })
+                .collect();
+            out.push(format!("net {} {}", q(&p.name), rules.join(" ")));
+        }
+    }
+    if let Some(c) = &m.console {
+        out.push(format!("console {}", q(c)));
+    }
+    out
 }
 
 /// `public` names bundle entries, each once, never the manifest, and a `bootfsd` serves them
@@ -779,6 +988,9 @@ fn blocks(m: &Manifest, machine: &Machine, bundle_key: &[u8; KEY_LEN]) -> Result
         if s.volume.is_some() || verified(m, s).is_some() {
             names.push(String::from(VOLUME));
         }
+        if is_steward(m, s) {
+            names.push(String::from(USERS));
+        }
         for d in &s.devices {
             names.push(d.name.clone());
             names.push(format!("{}{IRQ_SUFFIX}", d.name));
@@ -804,15 +1016,20 @@ fn blocks(m: &Manifest, machine: &Machine, bundle_key: &[u8; KEY_LEN]) -> Result
     Ok(())
 }
 
-/// Every principal's login and approval key, decoded (R35 (key separation)).
+/// Every principal's login and approval key, decoded (R35 (key separation)), each once across
+/// every principal's lists: a key that logs one principal in and approves for another, or is
+/// listed twice, is refused here, before any server runs (the steward's core refuses it too).
 fn keys(m: &Manifest) -> Result<Vec<(String, [u8; KEY_LEN])>, Refusal> {
-    let mut keys = Vec::new();
+    let mut keys: Vec<(String, [u8; KEY_LEN])> = Vec::new();
     for (i, p) in m.principals.iter().enumerate() {
         let lists = [("ssh_keys", &p.ssh_keys), ("approval_keys", &p.approval_keys)];
         for (member, list) in lists {
             for (k, text) in list.iter().enumerate() {
                 let path = format!("principals[{i}].{member}[{k}]");
                 let key = sshkey::ed25519(text).ok_or_else(|| at(path.clone(), Why::Key))?;
+                if keys.iter().any(|(_, seen)| *seen == key) {
+                    return Err(at(path, Why::Twice));
+                }
                 keys.push((path, key));
             }
         }

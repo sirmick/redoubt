@@ -13,10 +13,16 @@ defmodule Redoubt.Steward.Gen.Session do
   # table gives no row is `:no_row`.
   def rows(nil, :login) do
     [
-      {10, [{:not, :login_key}], [:refuse], :nothing},
-      {11, [{:not, :owns_labels}], [:refuse], :nothing},
-      {12, [{:not, :not_locked}], [:refuse], :nothing},
-      {13, [], [:carve_session, :create_scope, :connect, :launch], {:to, :starting}},
+      {11, [{:not, :login_key}], [:refuse], :nothing},
+      {12, [{:not, :owns_labels}], [:refuse], :nothing},
+      {13, [{:not, :not_locked}], [:refuse], :nothing},
+      {14, [], [:carve_session, :create_scope, :connect, :launch], {:to, :starting}},
+    ]
+  end
+  def rows(nil, :console) do
+    [
+      {15, [{:not, :not_locked}], [:refuse], :nothing},
+      {16, [], [:carve_session, :create_scope, :connect, :launch], {:to, :starting}},
     ]
   end
   def rows(nil, :done), do: :no_row
@@ -27,103 +33,107 @@ defmodule Redoubt.Steward.Gen.Session do
   def rows(nil, :locked_out), do: :no_row
 
   def rows(:starting, :login), do: :no_row
+  def rows(:starting, :console), do: :no_row
   def rows(:starting, :done) do
     [
-      {14, [{:not, :not_locked}], [:refuse, :destroy_budget], {:to, :ending}},
-      {15, [], [:route, :audit_login, :reply_login], {:to, :running}},
+      {17, [{:not, :not_locked}], [:refuse, :destroy_budget], {:to, :ending}},
+      {18, [], [:route, :audit_login, :reply_login], {:to, :running}},
     ]
   end
   def rows(:starting, :failed) do
     [
-      {16, [], [:refuse, :destroy_partial], {:to, :ending}},
+      {19, [], [:refuse, :destroy_partial], {:to, :ending}},
     ]
   end
   def rows(:starting, :end_session) do
     [
-      {17, [], :unreachable, :stay},
+      {20, [], :unreachable, :stay},
     ]
   end
   def rows(:starting, :channel_closed) do
     [
-      {17, [], :unreachable, :stay},
+      {20, [], :unreachable, :stay},
     ]
   end
   def rows(:starting, :exited) do
     [
-      {17, [], :unreachable, :stay},
+      {20, [], :unreachable, :stay},
     ]
   end
   def rows(:starting, :locked_out) do
     [
-      {18, [], [], :stay},
+      {21, [], [], :stay},
     ]
   end
 
   def rows(:ending, :login), do: :no_row
+  def rows(:ending, :console), do: :no_row
   def rows(:ending, :done) do
     [
-      {22, [], [:forget], {:to, :ended}},
+      {25, [], [:forget], {:to, :ended}},
     ]
   end
   def rows(:ending, :failed) do
     [
-      {22, [], [:forget], {:to, :ended}},
+      {25, [], [:forget], {:to, :ended}},
     ]
   end
   def rows(:ending, :end_session) do
     [
-      {23, [], :unreachable, :stay},
+      {26, [], :unreachable, :stay},
     ]
   end
   def rows(:ending, :channel_closed) do
     [
-      {23, [], :unreachable, :stay},
+      {26, [], :unreachable, :stay},
     ]
   end
   def rows(:ending, :exited) do
     [
-      {23, [], :unreachable, :stay},
+      {26, [], :unreachable, :stay},
     ]
   end
   def rows(:ending, :locked_out) do
     [
-      {24, [], [], :stay},
+      {27, [], [], :stay},
     ]
   end
 
   def rows(:running, :login), do: :no_row
+  def rows(:running, :console), do: :no_row
   def rows(:running, :done) do
     [
-      {21, [], :unreachable, :stay},
+      {24, [], :unreachable, :stay},
     ]
   end
   def rows(:running, :failed) do
     [
-      {21, [], :unreachable, :stay},
+      {24, [], :unreachable, :stay},
     ]
   end
   def rows(:running, :end_session) do
     [
-      {19, [], [:unroute, :drop_requests, :reply_ok, :destroy_budget], {:to, :ending}},
+      {22, [], [:unroute, :drop_requests, :reply_ok, :destroy_budget], {:to, :ending}},
     ]
   end
   def rows(:running, :channel_closed) do
     [
-      {20, [], [:unroute, :drop_requests, :destroy_budget], {:to, :ending}},
+      {23, [], [:unroute, :drop_requests, :destroy_budget], {:to, :ending}},
     ]
   end
   def rows(:running, :exited) do
     [
-      {20, [], [:unroute, :drop_requests, :destroy_budget], {:to, :ending}},
+      {23, [], [:unroute, :drop_requests, :destroy_budget], {:to, :ending}},
     ]
   end
   def rows(:running, :locked_out) do
     [
-      {20, [], [:unroute, :drop_requests, :destroy_budget], {:to, :ending}},
+      {23, [], [:unroute, :drop_requests, :destroy_budget], {:to, :ending}},
     ]
   end
 
   def rows(:ended, :login), do: :no_row
+  def rows(:ended, :console), do: :no_row
   def rows(:ended, :done), do: :no_row
   def rows(:ended, :failed), do: :no_row
   def rows(:ended, :end_session), do: :no_row

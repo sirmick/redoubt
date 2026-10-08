@@ -1,5 +1,5 @@
 //! The VM's limits from its budget (docs/userland/beamlet.md, "Limits inside one VM"): one
-//! process's heap and all ETS tables each get a sixteenth of the budget, in machine words, so a
+//! process's heap and all ETS tables each get a sixteenth of the budget, in the VM's 8-byte words, so a
 //! flood meets its limit in Erlang before the budget ends the VM; `budget_pages=N` gives the
 //! budget, and `run` builds its VM with these limits.
 
@@ -8,15 +8,16 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use beamlet_redoubt::fixture::{self, ConsoleServer, Dirs};
-use beamlet_redoubt::{budget_pages, limits, run};
+use beamlet_redoubt::{VM_WORD_BYTES, budget_pages, limits, run};
 use beamlet_vm::vm::Limits;
 use redoubt_fake_kernel::fake;
 
 #[test]
 fn a_sixteenth_of_the_budget_goes_to_each_limit() {
-    let word = core::mem::size_of::<usize>() as u64;
     let got = limits(Some(4096));
-    let sixteenth = 4096 * 4096 / 16 / word;
+    // The same bytes at either width: the VM counts its words as 8 bytes on rv32 too.
+    let sixteenth = 4096 * 4096 / 16 / 8;
+    assert_eq!(VM_WORD_BYTES, 8);
     assert_eq!(got.max_heap_words, sixteenth);
     assert_eq!(got.max_ets_words, sixteenth);
     // The rest are the VM's own.
@@ -31,7 +32,7 @@ fn without_a_budget_the_defaults_stand() {
 
 #[test]
 fn a_huge_budget_saturates_rather_than_wraps() {
-    assert_eq!(limits(Some(u64::MAX)).max_heap_words, u64::MAX / 16 / core::mem::size_of::<usize>() as u64);
+    assert_eq!(limits(Some(u64::MAX)).max_heap_words, u64::MAX / 16 / VM_WORD_BYTES);
 }
 
 #[test]

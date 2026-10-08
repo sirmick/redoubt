@@ -1,0 +1,72 @@
+description = "A vault session (docs/servers/steward.md, \"Authentication and sessions\"; docs/userland/sessions.md, \"Vault sessions\"; docs/servers/sshd.md, R67): alice+alice-secrets@box, on a pty, gets a prompt in a session labelled {alice-secrets}, carved from users/alice/{alice-secrets}, its channel carrying the label; a bare alice@box session beside it is unlabelled, carved from users/alice/{}. The steward made the vault session's connections, its labelled volume's among them, with no /net, and the bare session's with /net and no labelled volume (the binding table's host test says which slots each binds); the sessions' file verdicts wait for beamlet's file platform (BEAM3). Neither session's marker reaches the other's channel. The verdicts are the steward's records and the kernel's usage through them, and sshd's channel labels (rule F)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+recipe = "image/boot.toml"
+# The image needs 1 GiB: the principals' budgets, each holding a shell VM's session, do not fit
+# the users budget 256 MiB leaves (docs/kernel/budgets.md).
+memory_mib = 1024
+# Two logins, one after the other, each booting a shell VM.
+timeout_secs = 1500
+expect = [
+    '^init: started sshd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
+    '^init: started steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{\} at [0-9]+: Login ',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+]
+distinct = ['steward: audit 1001/\{[0-9]*\} at [0-9]+: Login \{ session: ([0-9]+)']
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    '^init: .* (exited|faulted|was killed)',
+    'init: restarted',
+    'EXCEPTION',
+    'steward: the core exited',
+    'steward: a step failed',
+    'sshd: login .*: refused',
+]
+# The bare session logs in once the vault session has its prompt, and the steward says a login's
+# lines before it answers sshd, so the lines come in one order.
+expect_after = [
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{7\} at [0-9]+: Login \{ session: [0-9]+, principal: 0, key: [1-9]',
+    '^\[con [0-9a-f]{16}\] steward: users/alice/\{7\} holds [0-9]+ pages, 2 processes$',
+    '^\[con [0-9a-f]{16}\] sshd: login alice\+alice-secrets: session [0-9a-f]{16}, labels \[7\]$',
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{\} at [0-9]+: Login \{ session: [0-9]+, principal: 0, key: [1-9]',
+    '^\[con [0-9a-f]{16}\] steward: users/alice/\{\} holds [0-9]+ pages, 4 processes$',
+    '^\[con [0-9a-f]{16}\] sshd: login alice: session [0-9a-f]{16}, labels \[\]$',
+]
+
+[[session]]
+user = "alice+alice-secrets"
+pty = true
+forbid = ['plain-marker']
+steps = [
+    { expect = '\([0-9]+\)> ' },
+    { mark = "vault-up" },
+    { send = "\"vault-\" <> \"marker\"\n" },
+    { expect = '"vault-marker"' },
+    { wait = "plain-done" },
+    { exit = 0 },
+]
+
+[[session]]
+user = "alice"
+forbid = ['vault-marker']
+steps = [
+    { wait = "vault-up" },
+    { expect = '\([0-9]+\)> ' },
+    { send = "\"plain-\" <> \"marker\"\n" },
+    { expect = '"plain-marker"' },
+    { mark = "plain-done" },
+    { exit = 0 },
+]
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]
+forward = [22]

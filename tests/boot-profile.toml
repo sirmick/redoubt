@@ -1,4 +1,4 @@
-description = "A measurement, and the boot-time target (the prompt within 15 s of guest time): the image's boot to its prompt through its verified userland volume, profiled (docs/userland/beamlet.md, \"beamlet on Redoubt\"; docs/servers/verityd.md, \"Memory and cost\"). The image's programs and manifest, with init, blkd, verityd, erofsd and beamlet built with boot-stats (docs/testbench.md, \"Checked builds\"): init's lines and beamlet's first object carry [t=N], guest time under icount with sleep on (a disk case: docs/testbench.md) and a pinned seed, so a run repeats closely, its spread shown by a sweep; blkd and erofsd say their counts at each power of two of their requests from 2^12, verityd from 2^7; at the VM's first console read beamlet says `beamlet: first console read [t=N]` and what its lookups cost: for the shell that read is its prompt, drawn and waiting, so in this build the line is drawn after the prompt, on its line, and the line editor's first line is misdrawn, the stamp's known cost; and a call to BootStats, a module no volume holds, makes erofsd say its counts exactly before it answers not_found. beamlet reads the volume's boot pack whole before its VM starts and says its size and entries, stamped, and its lookups' count says how many the pack answered (docs/userland/beamlet.md, \"beamlet on Redoubt\"). A typed Enum.sum(1..10) prints 55. boot-profile-unverified is the same boot with the volume unverified"
+description = "A measurement, and the boot-time target (the prompt within 20 s of guest time): the image's boot to its prompt through its verified userland volume, profiled (docs/userland/beamlet.md, \"beamlet on Redoubt\"; docs/servers/verityd.md, \"Memory and cost\"). The image's programs and manifest, with init, blkd, verityd, erofsd and beamlet built with boot-stats (docs/testbench.md, \"Checked builds\"): init's lines and beamlet's first object carry [t=N], guest time under icount with sleep on (a disk case: docs/testbench.md) and a pinned seed, so a run repeats closely, its spread shown by a sweep; blkd and erofsd say their counts at each power of two of their requests from 2^12, verityd from 2^7; at the VM's first console read beamlet says `beamlet: first console read [t=N]` and what its lookups cost: for the shell that read is its prompt, drawn and waiting, so in this build the line is drawn after the prompt, on its line, and the line editor's first line is misdrawn, the stamp's known cost; and a call to BootStats, a module no volume holds, makes erofsd say its counts exactly before it answers not_found. beamlet reads the volume's boot pack whole before its VM starts and says its size and entries, stamped, and its lookups' count says how many the pack answered (docs/userland/beamlet.md, \"beamlet on Redoubt\"). A typed Enum.sum(1..10) prints 55. boot-profile-unverified is the same boot with the volume unverified"
 arch = ["rv64", "rv32"]
 kind = "boot"
 programs = [
@@ -10,12 +10,15 @@ programs = [
     { package = "redoubt-verityd", bin = "verityd", features = ["boot-stats"] },
     { package = "redoubt-netd", bin = "netd" },
     { package = "redoubt-ipd", bin = "ipd" },
+    { package = "redoubt-littlefsd", bin = "littlefsd" },
     { package = "redoubt-walfsd", bin = "walfsd" },
     { package = "redoubt-erofsd", bin = "erofsd", features = ["boot-stats"] },
     { package = "beamlet-redoubt", bin = "beamlet", workspace = "userland/otp", features = ["boot-stats"] },
+    { package = "redoubt-steward-server", bin = "steward" },
+    { package = "redoubt-sshd", bin = "sshd" },
 ]
-# The image needs 1 GiB: beamlet's budget, twice the shell VM's use at its prompt, does not fit
-# the system budget a quarter of 256 MiB gives (docs/kernel/budgets.md).
+# The image needs 1 GiB: the principals' budgets, each holding the shell VM's session, do not fit
+# the users budget 256 MiB leaves (docs/kernel/budgets.md).
 memory_mib = 1024
 icount = "shift=3"
 qemu_seed = 1
@@ -24,15 +27,15 @@ expect = [
     '^init: up \[t=[0-9]+\]$',
     '^init: started verity:system, console [0-9a-f]{16} \[t=[0-9]+\]$',
     '^init: started erofsd:system, console [0-9a-f]{16} \[t=[0-9]+\]$',
-    '^init: started beamlet, console [0-9a-f]{16} \[t=[0-9]+\]$',
+    # The steward starts the shell as the console principal's session.
+    '^init: started steward, console [0-9a-f]{16} \[t=[0-9]+\]$',
     '^\[con [0-9a-f]{16}\] beamlet: boot pack read [0-9]+ bytes, 94 entries \[t=[0-9]+\]$',
     '^\[con [0-9a-f]{16}\] beamlet: Elixir.Redoubt.Shell read from (erofsd:system|the boot pack) \[t=[0-9]+\]$',
     '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
     # The shell's prompt has no newline: the line follows it on the console's line.
-    # The boot-time target: the prompt within 15 s: the 12.4 s measured with the boot pack on rv64
-    # (12.3 to 12.4 s over seeds 1 to 5; 12.0 s on rv32) and a tenth, rounded up to 5 s
-    # (docs/userland/beamlet.md).
-    'beamlet: first console read \[t=([0-9]{1,7}|1[0-4][0-9]{6})\]$',
+    # The boot-time target: the prompt within 20 s: the 17.6 s measured on rv32 (15.4 s on rv64)
+    # with the steward starting the shell and a tenth, rounded up to 5 s (docs/userland/beamlet.md).
+    'beamlet: first console read \[t=([0-9]{1,7}|1[0-9]{7})\]$',
     '^\[con [0-9a-f]{16}\] beamlet: boot-stats: loads [0-9]+ ',
     '^\[con [0-9a-f]{16}\] 55$',
     '^\[con [0-9a-f]{16}\] erofsd: boot-stats: 9P [0-9]+ ',
@@ -66,6 +69,6 @@ recipe = "image/userland.toml"
 
 [disk]
 recipe = "image/disk.toml"
-stage = "tests/data/littlefsd/stage"
+stage = "tests/data/steward/stage"
 
 [net]

@@ -40,8 +40,9 @@ pub const COST: Cost =
 /// The bytes of this server's budget its clients may use between them, over and above
 /// [`MAX_BYTES`] of published entries. A bucket at its caps costs 2 completion calls at 64 KiB,
 /// 32 fids and 8 connections at 256 bytes, 64 requests at 256 and 2 pages at 4 KiB: 165 888 bytes,
-/// so the manifests' 4 buckets take 663 552, and 4 fit here.
-pub const BUDGET: u64 = 768 * 1024;
+/// so 6 fit here (995 328), and the image's 5 (`init`, the steward and three principals' domains)
+/// take 829 440.
+pub const BUDGET: u64 = 1024 * 1024;
 
 /// Why an argument list was refused. Each one stops the server starting: a `/boot` that is not
 /// what the manifest named is worse than no `/boot` at all (TENETS.md 2, fail closed).

@@ -1,0 +1,2 @@
+principal "alice" account=1 account=2 login=[11] approval=[21] owned=[7] sets=[[]] top=1,1,1
+sizes session=1,1,1 agent=1,1,1 sub_agent=1,1,1 crossing=1,1,1 cost=1

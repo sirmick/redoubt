@@ -289,8 +289,8 @@ no `std`. What it brings:
   `.cargo/config.toml` sets it for every `target_os = "none"` build, where no other crate reads
   it. Cargo joins those flags with any `[target.<triple>]` ones (checked with cargo 1.98.1),
   but a `RUSTFLAGS` environment variable replaces them all; nothing in the tree or the bench
-  sets one. No program provides the function yet: `sshd` is a library until its box platform is
-  built, and that platform must ([sshd](../docs/servers/sshd.md#sessions-over-ssh)).
+  sets one. `sshd`'s program provides the function (`servers/sshd/src/bin/sshd.rs`), from the
+  kernel's generator ([sshd](../docs/servers/sshd.md#sessions-over-ssh)).
 
 **`unsafe` on RISC-V.** Most of these crates' `unsafe` is in SIMD and instruction backends for
 x86, ARM, LoongArch and WebAssembly, and in `sha2`'s RISC-V `zknh` backend, which only an

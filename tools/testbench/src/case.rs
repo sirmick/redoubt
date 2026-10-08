@@ -391,6 +391,11 @@ pub struct Boot {
     /// console is still watched.
     #[serde(default)]
     pub session: Vec<Session>,
+    /// Regular expressions that must each match a console line, in this order, from the
+    /// sessions' start to the case's deadline: the lines the sessions cause, which `expect`
+    /// cannot ask for, since the sessions start only once it has all matched.
+    #[serde(default)]
+    pub expect_after: Vec<String>,
     /// The case passes only if the bench fails it for a reason matching this regular
     /// expression: self-checks proving that a bench feature can fail (TENETS.md, tenet 6).
     pub must_fail: Option<String>,
@@ -568,8 +573,9 @@ impl Session {
     pub fn key(&self) -> &str { self.key.as_deref().unwrap_or_else(|| self.user.split('+').next().unwrap()) }
 }
 
-/// One step of a session. A session runs its steps in order; unless the last one is `exit`,
-/// the bench then ends the session as `{ exit = 0 }` does.
+/// One step of a session. A session runs its steps in order; without an `exit`, the bench then
+/// ends the session as `{ exit = 0 }` does. Only `mark`s follow an `exit`: they tell other
+/// sessions this one's ssh is gone.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Step {
@@ -850,6 +856,13 @@ impl Case {
                         "sessions need net.forward = [22]"
                     );
                 }
+                ensure!(
+                    boot.expect_after.is_empty() || !boot.session.is_empty(),
+                    "expect_after needs sessions"
+                );
+                for pattern in &boot.expect_after {
+                    regex::Regex::new(pattern)?;
+                }
                 if let Some(disk) = &boot.disk {
                     match &disk.recipe {
                         Some(_) => ensure!(
@@ -1022,9 +1035,10 @@ fn check_sessions(sessions: &[Session]) -> Result<()> {
                         "session {user} waits for mark {mark:?}, which no session sets"
                     )
                 }
-                Step::Exit(_) => {
-                    ensure!(number + 1 == session.steps.len(), "session {user}: `exit` must be the last step")
-                }
+                Step::Exit(_) => ensure!(
+                    session.steps[number + 1..].iter().all(|s| matches!(s, Step::Mark(_))),
+                    "session {user}: only `mark` may follow `exit`"
+                ),
                 Step::Resize(_) => ensure!(session.pty, "session {user}: `resize` needs `pty = true`"),
                 _ => {}
             }
@@ -1108,12 +1122,14 @@ mod tests {
                 "littlefsd",
                 "erofsd",
                 "walfsd",
+                "steward",
+                "sshd",
                 "beamlet"
             ]
         );
         assert!(programs[0].is_init());
         let otp = Path::new("userland/otp");
-        assert!(matches!(&programs[11], Program::Package { workspace: Some(w), .. } if w == otp));
+        assert!(matches!(&programs[13], Program::Package { workspace: Some(w), .. } if w == otp));
         assert!(matches!(&programs[9], Program::Package { workspace: None, .. }));
         // The manifest, with the userland disk's root pinned in it from the run's pack.
         assert_eq!(files.len(), 1);
@@ -1179,6 +1195,17 @@ mod tests {
         assert!(check_sessions(&[session(true)]).is_ok());
         let err = check_sessions(&[session(false)]).unwrap_err().to_string();
         assert!(err.contains("`resize` needs `pty = true`"), "{err}");
+    }
+
+    /// Only marks follow a session's `exit`, so another session can wait for its ssh to be gone.
+    #[test]
+    fn only_marks_follow_exit() {
+        let session = |steps: &str| -> Session {
+            toml::from_str(&format!("user = \"alice\"\nsteps = [{steps}]\n")).unwrap()
+        };
+        assert!(check_sessions(&[session("{ exit = 0 }, { mark = \"gone\" }")]).is_ok());
+        let err = check_sessions(&[session("{ exit = 0 }, { send = \"x\" }")]).unwrap_err().to_string();
+        assert!(err.contains("only `mark` may follow `exit`"), "{err}");
     }
 
     /// A package's program takes `features`, none unless named.
