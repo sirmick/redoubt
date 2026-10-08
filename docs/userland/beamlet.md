@@ -589,7 +589,7 @@ The timer's counter frequency is not needed: `time_now`'s microseconds serve the
 
 ### Natives
 
-<details><summary>Status: built · partly tested: the machine's cases run the VM under a tester in the steward's place, but for budgets and launching, which also run in the steward's own sessions over SSH, a vault session's among them · tested (34)</summary>
+<details><summary>Status: built · partly tested: the machine's cases run the VM under a tester in the steward's place, but for budgets and launching, which also run in the steward's own sessions over SSH, a vault session's among them · tested (37)</summary>
 
 - bench:steward-vault-launch
 - bench:beamlet-natives
@@ -603,6 +603,7 @@ The timer's counter frequency is not needed: `time_now`'s microseconds serve the
 - host:beamlet-vm::a_send_is_one_way
 - host:beamlet-vm::budgets_are_carved_read_and_destroyed
 - host:beamlet-vm::labels_are_fixed
+- host:beamlet-vm::the_identity_is_the_platforms_and_without_a_system_is_not_supported
 - host:beamlet-vm::a_launch_takes_everything_from_its_caller_and_its_end_arrives_as_a_message
 - host:beamlet-vm::requests_arrive_with_badge_account_and_labels_and_are_answered
 - host:beamlet-vm::a_decoded_handle_grants_nothing
@@ -618,6 +619,8 @@ The timer's counter frequency is not needed: `time_now`'s microseconds serve the
 - host:beamlet-redoubt::a_bind_to_a_server_that_never_answers_is_refused_within_its_bound
 - host:beamlet-redoubt::binds_past_the_cap_are_refused_and_a_bound_prefix_is_still_replaced
 - host:beamlet-redoubt::a_copy_within_one_volume_is_the_servers
+- host:beamlet-redoubt::a_sessions_identity_is_read_from_its_arguments
+- host:beamlet-redoubt::the_platform_tells_a_session_its_identity
 - host:beamlet-redoubt::a_typed_call_goes_out_on_a_pool_thread_and_its_reply_is_an_event
 - host:beamlet-redoubt::requests_arrive_with_badge_account_and_labels_and_an_answer_reaches_the_caller
 - host:beamlet-redoubt::a_request_never_answered_is_answered_by_the_serve_thread_at_its_deadline
@@ -655,6 +658,7 @@ every server binding is pure Elixir over them:
 | `serve/1`, `reply/2` | serve an endpoint: requests arrive as messages carrying badge, account and labels |
 | `budget_create/1`, `budget_destroy/1`, `budget_usage/1` | carve and end budgets; a deadline makes one a lease |
 | `labels/0` | this VM's label set, fixed when its budget was made |
+| `identity/0` | what the steward told a session's VM of itself: its principal, its labels' names, its context |
 | `launch/1` | launching a native program: the image, budget, namespace, handles and arguments come from the Elixir caller, and the client library's `launch` makes the calls and writes the startup block |
 
 They are the module `redoubt`'s, over the platform's `System`
@@ -719,6 +723,12 @@ with no `System`, the host CLI's, answers each `{error, not_supported}`; the hos
 - **`labels()`** is the VM's label set, read at its start off the first call thread's first
   wake-up, which the kernel stamps with the sender's labels as it stamps every message: the
   kernel's word, not a launcher's, and fixed.
+- **`identity()`** is `{ok, #{principal => Name, labels => [{Name, Id}], context => Name | nil}}`:
+  what the steward told a session's VM of itself in its arguments (`principal=`, `label=NAME:ID`,
+  `context=`; [sessions](sessions.md#what-a-session-is-told)), read once at the start and fixed. It
+  is the launcher's word, information and not authority: `labels()` is the kernel's, and what the
+  session can reach is its handles. A VM started with no `principal=`, as one under `init`, gets
+  `{error, not_found}`.
 - **`launch(#{image, budget, namespace, handles, args, stack_pages, heap_pages})`** is `{ok, Job}`,
   and the job's end arrives as `{exit, Job, Cause, Code}` (`exited`, `faulted` or `killed`):
   the client library's `launch` with the image the caller read, a budget it carved, its namespace

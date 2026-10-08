@@ -643,6 +643,7 @@ const TABLE: &[(&str, &str, u32, Native)] = &[
     ("redoubt", "budget_destroy", 1, system::budget_destroy),
     ("redoubt", "budget_usage", 1, system::budget_usage),
     ("redoubt", "labels", 0, system::labels),
+    ("redoubt", "identity", 0, system::identity),
     ("redoubt", "launch", 1, system::launch),
     ("inet", "gethostname", 0, info::gethostname),
     ("net_adm", "localhost", 0, info::localhost),

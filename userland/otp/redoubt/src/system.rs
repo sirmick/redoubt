@@ -19,7 +19,9 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::num::NonZeroU64;
 
-use beamlet_vm::platform::{BudgetSpec, Entry, Event, Launch, Message, Object, Refused, System, Usage};
+use beamlet_vm::platform::{
+    BudgetSpec, Entry, Event, Identity, Launch, Message, Object, Refused, System, Usage,
+};
 use redoubt_client::Error;
 use redoubt_client::file::Connection;
 use redoubt_rt::abi::{self, FOREVER, Handle, Labels};
@@ -119,6 +121,8 @@ pub(crate) struct Sys {
     /// The named handles, in block order: (name, handle).
     named: Vec<(String, Handle)>,
     labels: Vec<u64>,
+    /// What the steward told it of itself, if it is a session.
+    identity: Option<Identity>,
     events: VecDeque<(u64, Event)>,
     /// The typed calls' threads.
     pool: crate::pool::Pool,
@@ -140,6 +144,7 @@ impl Sys {
             known: Vec::new(),
             named: Vec::new(),
             labels,
+            identity: crate::identity(&startup.args().collect::<Vec<_>>()),
             events: VecDeque::new(),
             pool,
             served: crate::serve::Served::default(),
@@ -438,6 +443,8 @@ impl System for Redoubt {
     }
 
     fn labels(&mut self) -> Vec<u64> { self.sys.labels.clone() }
+
+    fn identity(&mut self) -> Option<Identity> { self.sys.identity.clone() }
 
     fn launch(&mut self, asker: u64, job: u64, launch: Launch) -> Result<(), Refused> {
         let resolved = crate::jobs::Resolved {

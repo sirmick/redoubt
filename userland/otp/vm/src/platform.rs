@@ -204,11 +204,26 @@ pub trait System {
     fn budget_usage(&mut self, budget: &Object) -> Result<Usage, Refused>;
     /// This VM's label set, fixed when its budget was made.
     fn labels(&mut self) -> Vec<u64>;
+    /// What this VM was told of itself when it was launched as a session, if it was one.
+    fn identity(&mut self) -> Option<Identity> { None }
     /// Starts `launch` for `asker`; its end arrives as [`Event::Exit`] naming `job`.
     fn launch(&mut self, asker: u64, job: u64, launch: Launch) -> Result<(), Refused>;
     /// The next event for a process, if one has come. Must not block; [`Platform::idle`] should
     /// return when one arrives.
     fn poll(&mut self) -> Option<(u64, Event)>;
+}
+
+/// What a session's VM is told of itself by the steward that launched it
+/// (docs/userland/sessions.md, "What a session is told"): information, not authority, since what
+/// it can reach is its handles whatever this says.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Identity {
+    /// The principal's name.
+    pub principal: String,
+    /// Each label of the session's set: its name and id.
+    pub labels: Vec<(String, u64)>,
+    /// The context's name; `None` for the principal's default context or the console's session.
+    pub context: Option<String>,
 }
 
 /// The result of a system module or application lookup. Refusal is terminal for this lookup;

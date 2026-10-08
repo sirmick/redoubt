@@ -2,13 +2,14 @@
 //! (docs/userland/beamlet.md, "beamlet on Redoubt").
 //!
 //!     beamlet budget_pages=N endpoint=NAME [report_memory] [report_io] [bind=PREFIX=HANDLE]...
-//!             MODULE [FUNCTION]
+//!             [principal=NAME [label=NAME:ID]... [context=NAME]] MODULE [FUNCTION]
 //!
 //! Its arguments, from its startup block, give its budget's pages, which size the VM's limits
 //! ([`beamlet_redoubt::limits`]), the handle its userland volume is reached by, ask for its memory
 //! breakdown at its first prompt ([`beamlet_redoubt::REPORT_MEMORY`]), say what its I/O cost when
 //! it ends ([`beamlet_redoubt::REPORT_IO`]), bind handles it was handed at prefixes of its
-//! namespace ([`beamlet_redoubt::BIND`]: its home volume, `bind=/home/alice=littlefsd:data`), and
+//! namespace ([`beamlet_redoubt::BIND`]: its home volume, `bind=/home/alice=littlefsd:data`), tell a
+//! session what it is ([`beamlet_redoubt::identity`], which `redoubt:identity/0` gives), and
 //! name the function it runs, `start` by default; it runs it as `fake-redoubt` does on a host
 //! (`beamlet_redoubt::run`), and exits with the code that returns. Its console is `/dev/cons` in
 //! its namespace; its threads are the runtime's. Its modules are the userland volume's files, each
@@ -80,6 +81,9 @@ fn start(startup: &Startup) -> u32 {
             && !arg.starts_with(beamlet_redoubt::BIND)
             && *arg != beamlet_redoubt::REPORT_MEMORY
             && *arg != beamlet_redoubt::REPORT_IO
+            && !arg.starts_with(beamlet_redoubt::PRINCIPAL)
+            && !arg.starts_with(beamlet_redoubt::LABEL)
+            && !arg.starts_with(beamlet_redoubt::CONTEXT)
     });
     let Some(module) = args.next() else {
         say(startup, "beamlet: no module to run in its arguments");
