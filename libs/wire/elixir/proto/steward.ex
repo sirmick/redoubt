@@ -24,7 +24,8 @@ defmodule Redoubt.Wire.Proto.Steward do
     9 => {:submit, :buffer, 0},
     10 => {:start_agent, :buffer, 0},
     11 => {:end_lease, :inline, 0},
-    12 => {:end_session, :inline, 0}
+    12 => {:end_session, :inline, 0},
+    13 => {:watch, :inline, 0}
   }
   @replies %{
     1 => {:login, :buffer, 0},
@@ -38,7 +39,8 @@ defmodule Redoubt.Wire.Proto.Steward do
     9 => {:submit, :buffer, 0},
     10 => {:start_agent, :buffer, 0},
     11 => {:end_lease, :inline, 0},
-    12 => {:end_session, :inline, 0}
+    12 => {:end_session, :inline, 0},
+    13 => {:watch, :inline, 0}
   }
   @errors %{
     1 => :malformed,
@@ -79,6 +81,7 @@ defmodule Redoubt.Wire.Proto.Steward do
   def layout(:start_agent), do: {10, :buffer, [{:lease, :u64}], [], {[{:lease, :u64}, {:name, :string}], []}}
   def layout(:end_lease), do: {11, :inline, [{:lease, :u64}], [], {[], []}}
   def layout(:end_session), do: {12, :inline, [], [], {[], []}}
+  def layout(:watch), do: {13, :inline, [], [], {[], []}}
   def layout(_), do: nil
 
   @doc "Encodes a request: `{:ok, words, buffer}` or `{:error, reason}`."
@@ -127,6 +130,8 @@ defmodule Redoubt.Wire.Proto.Steward do
   defp enc(:reply, :end_lease, %{} = f) when map_size(f) == 0, do: {11, []}
   defp enc(:request, :end_session, %{} = f) when map_size(f) == 0, do: {12, []}
   defp enc(:reply, :end_session, %{} = f) when map_size(f) == 0, do: {12, []}
+  defp enc(:request, :watch, %{} = f) when map_size(f) == 0, do: {13, []}
+  defp enc(:reply, :watch, %{} = f) when map_size(f) == 0, do: {13, []}
   defp enc(_, _, _), do: throw({:wire, :bad_message})
 
   defp read(:request, 1, <<n_principal::little-16, v_principal::binary-size(n_principal), n_label::little-16, v_label::binary-size(n_label), n_key::little-32, v_key::binary-size(n_key), rest::binary>>), do: W.utf8([v_principal, v_label], {:ok, :login, %{principal: v_principal, label: v_label, key: v_key}, rest})
@@ -153,5 +158,7 @@ defmodule Redoubt.Wire.Proto.Steward do
   defp read(:reply, 11, <<rest::binary>>), do: {:ok, :end_lease, %{}, rest}
   defp read(:request, 12, <<rest::binary>>), do: {:ok, :end_session, %{}, rest}
   defp read(:reply, 12, <<rest::binary>>), do: {:ok, :end_session, %{}, rest}
+  defp read(:request, 13, <<rest::binary>>), do: {:ok, :watch, %{}, rest}
+  defp read(:reply, 13, <<rest::binary>>), do: {:ok, :watch, %{}, rest}
   defp read(_, _, _), do: {:error, :short_fields}
 end

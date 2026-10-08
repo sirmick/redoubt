@@ -130,7 +130,7 @@ Miri both crates take their portable Rust paths. Those two assembly blocks are r
 
 ### Sessions over SSH
 
-<details><summary>Status: built · partly tested: a channel's window size reaches the session only once `consol`'s `size` and `resize` are served (consoled.md, "The `consol` protocol") · tested (13)</summary>
+<details><summary>Status: built · partly tested: a channel's window size reaches the session only once `consol`'s `size` and `resize` are served (consoled.md, "The `consol` protocol") · tested (14)</summary>
 
 - bench:steward-ssh-two-principals
 - bench:steward-vault-session
@@ -145,6 +145,7 @@ Miri both crates take their portable Rust paths. Those two assembly blocks are r
 - host:redoubt-sshd::the_console_is_one_file_carrying_the_channel_s_labels
 - host:redoubt-sshd::a_slot_returns_when_the_client_hangs_up_first
 - host:redoubt-sshd::a_slot_returns_when_the_server_ends_the_connection_first
+- bench:steward-restart-ssh
 
 </details>
 
@@ -197,6 +198,14 @@ Miri both crates take their portable Rust paths. Those two assembly blocks are r
   hands each read to the driver. A call to `keyd` or the steward holds up only its own
   connection; a fifth connection is closed when it arrives. A slot is free again once the
   reader's last call for its connection is taken, whichever side ended the connection first.
+- **The steward's end.** `sshd` keeps one `watch` call at the steward, which the steward holds
+  unanswered while it runs. When the steward ends, the call ends with it (`Dead`,
+  [R4b (a server dies)](../kernel/ipc.md#r4b-a-server-dies), or an answer as it exits), and
+  every session it ran is over: `sshd` ends each of their channels with status 1 and says
+  `sshd: session <id> ended: the steward is gone`, and calls `watch` again, which waits at the
+  steward's endpoint for its next instance (a second's pause first if the call ended at once).
+  A login, or a channel's close, waits at most 30 seconds for the steward's answer and is then
+  refused, so a steward that is slow to come back holds no slot.
 - **Ending.** A session's channel closes when the steward ends the session or its VM dies, which
   the steward tells `sshd` with `ended` on the channel's connection; a closed channel ends the
   session.
@@ -333,10 +342,6 @@ Status: planned · M1 (sessions over SSH, kept apart)
 
 ## Residual risks
 
-- **A channel outlives a session the steward did not end.** `sshd` closes a channel only on the
-  steward's `ended`. When the steward dies and `init` empties `users`, the sessions end with their
-  budgets and nobody says so: each channel stays open until its client closes it
-  ([steward](steward.md#residual-risks)).
 - **`approve@` shares `sshd` with the most hostile input.** A `sunset` bug reached from any channel,
   before or after login, controls every channel and the approval screen, and a network flood delays
   approvals. A separate `sshd` instance for `approve@`, or the physical console, is planned for

@@ -158,6 +158,14 @@ pub struct EndSession {}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EndSessionReply {}
 
+/// `watch`: opcode 13, inline; reply [`WatchReply`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Watch {}
+
+/// The reply to [`Watch`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WatchReply {}
+
 /// Requests by opcode.
 const REQUESTS: &[Layout] = &[
     Layout { opcode: 1, inline: false, handles: 1 },
@@ -172,6 +180,7 @@ const REQUESTS: &[Layout] = &[
     Layout { opcode: 10, inline: false, handles: 0 },
     Layout { opcode: 11, inline: true, handles: 0 },
     Layout { opcode: 12, inline: true, handles: 0 },
+    Layout { opcode: 13, inline: true, handles: 0 },
 ];
 
 /// Every request of the protocol.
@@ -189,6 +198,7 @@ pub enum Message<'a> {
     StartAgent(StartAgent),
     EndLease(EndLease),
     EndSession(EndSession),
+    Watch(Watch),
 }
 
 impl<'a> Message<'a> {
@@ -207,6 +217,7 @@ impl<'a> Message<'a> {
             Message::StartAgent(_) => &[],
             Message::EndLease(_) => &[],
             Message::EndSession(_) => &[],
+            Message::Watch(_) => &[],
         }
     }
 
@@ -225,6 +236,7 @@ impl<'a> Message<'a> {
             Message::StartAgent(_) => 10,
             Message::EndLease(_) => 11,
             Message::EndSession(_) => 12,
+            Message::Watch(_) => 13,
         }
     }
 
@@ -268,6 +280,7 @@ impl<'a> Message<'a> {
             Message::StartAgent(m) => w.u64(m.lease),
             Message::EndLease(m) => w.u64(m.lease),
             Message::EndSession(_) => Ok(()),
+            Message::Watch(_) => Ok(()),
         }
     }
 
@@ -277,6 +290,7 @@ impl<'a> Message<'a> {
             4 => Message::ApprovalClosed(ApprovalClosed { channel: r.u64()? }),
             11 => Message::EndLease(EndLease { lease: r.u64()? }),
             12 => Message::EndSession(EndSession {}),
+            13 => Message::Watch(Watch {}),
             _ => return Err(Error::BadOpcode),
         })
     }
@@ -295,6 +309,7 @@ impl<'a> Message<'a> {
             10 => Message::StartAgent(StartAgent { lease: r.u64()? }),
             11 => Message::EndLease(EndLease { lease: r.u64()? }),
             12 => Message::EndSession(EndSession {}),
+            13 => Message::Watch(Watch {}),
             _ => return Err(Error::BadOpcode),
         })
     }
@@ -338,6 +353,7 @@ const REPLIES: &[Layout] = &[
     Layout { opcode: 10, inline: false, handles: 0 },
     Layout { opcode: 11, inline: true, handles: 0 },
     Layout { opcode: 12, inline: true, handles: 0 },
+    Layout { opcode: 13, inline: true, handles: 0 },
 ];
 
 /// Every successful reply of the protocol, named after its request.
@@ -355,6 +371,7 @@ pub enum Reply<'a> {
     StartAgent(StartAgentReply<'a>),
     EndLease(EndLeaseReply),
     EndSession(EndSessionReply),
+    Watch(WatchReply),
 }
 
 impl<'a> Reply<'a> {
@@ -373,6 +390,7 @@ impl<'a> Reply<'a> {
             Reply::StartAgent(_) => &[],
             Reply::EndLease(_) => &[],
             Reply::EndSession(_) => &[],
+            Reply::Watch(_) => &[],
         }
     }
 
@@ -391,6 +409,7 @@ impl<'a> Reply<'a> {
             Reply::StartAgent(_) => 10,
             Reply::EndLease(_) => 11,
             Reply::EndSession(_) => 12,
+            Reply::Watch(_) => 13,
         }
     }
 
@@ -420,6 +439,7 @@ impl<'a> Reply<'a> {
             }
             Reply::EndLease(_) => Ok(()),
             Reply::EndSession(_) => Ok(()),
+            Reply::Watch(_) => Ok(()),
         }
     }
 
@@ -429,6 +449,7 @@ impl<'a> Reply<'a> {
             4 => Reply::ApprovalClosed(ApprovalClosedReply {}),
             11 => Reply::EndLease(EndLeaseReply {}),
             12 => Reply::EndSession(EndSessionReply {}),
+            13 => Reply::Watch(WatchReply {}),
             _ => return Err(Error::BadOpcode),
         })
     }
@@ -447,6 +468,7 @@ impl<'a> Reply<'a> {
             10 => Reply::StartAgent(StartAgentReply { lease: r.u64()?, name: r.string()? }),
             11 => Reply::EndLease(EndLeaseReply {}),
             12 => Reply::EndSession(EndSessionReply {}),
+            13 => Reply::Watch(WatchReply {}),
             _ => return Err(Error::BadOpcode),
         })
     }

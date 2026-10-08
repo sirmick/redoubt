@@ -1,0 +1,85 @@
+description = "An SSH session open across a steward restart ends with it, and its slot comes back (docs/servers/sshd.md, \"Sessions over SSH\"; docs/servers/steward.md, \"Failure and restart\"): sshd keeps a watch call parked at the steward, which holds it unanswered while it runs; the steward's test-only restart-probe ends it 14 s after it starts the console session, the watch ends with it, and sshd ends alice's channel with status 1, saying why, though her shell is still busy. bob then logs in to the restarted steward and leaves, and a third login, alice's vault, works too: the slots the earlier connections held came back. The verdicts are sshd's, init's and the steward's lines and each ssh's exit status (rule F)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The image's programs, the steward built with its test-only restart-probe (servers/steward,
+# src/bin/steward.rs, PROBE_EXIT): every instance serves, and exits 14 s after its console
+# session starts.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-bootfsd", bin = "bootfsd" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-verityd", bin = "verityd" },
+    { package = "redoubt-netd", bin = "netd" },
+    { package = "redoubt-ipd", bin = "ipd" },
+    { package = "redoubt-walfsd", bin = "walfsd" },
+    { package = "redoubt-erofsd", bin = "erofsd" },
+    { package = "beamlet-redoubt", bin = "beamlet", workspace = "userland/otp" },
+    { package = "redoubt-steward-server", bin = "steward", features = ["restart-probe"] },
+    { package = "redoubt-sshd", bin = "sshd" },
+]
+# The principals' budgets, each holding a shell VM's session, need 1 GiB (steward-session-ends).
+memory_mib = 1024
+# Three logins and the console session's VM at each start.
+timeout_secs = 1500
+expect = [
+    '^init: started sshd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
+    '^init: started steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] steward: carved users/alice account 1001: ',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+]
+# The sessions run once the lines above are in; what they cause follows, in order.
+expect_after = [
+    '^\[con [0-9a-f]{16}\] sshd: login alice: session [0-9a-f]{16}, labels \[\]$',
+    '^\[con [0-9a-f]{16}\] sshd: session [0-9a-f]{16} ended: the steward is gone$',
+    '^init: restarted steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] sshd: login bob: session [0-9a-f]{16}, labels \[\]$',
+    # The third connection: alice's and bob's slots came back, so it lands on one of the first two
+    # (a leaked slot would put it on slot 2).
+    '^\[con [0-9a-f]{16}\] sshd: connection [0-9]+ on slot [01]$',
+    '^\[con [0-9a-f]{16}\] sshd: login alice\+alice-secrets: session [0-9a-f]{16}, labels \[',
+]
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    'steward: users not empty',
+    'sshd: every slot is busy',
+]
+
+[[file]]
+name = "manifest"
+from = { path = "image/manifest.json" }
+verity = "image/userland.toml"
+
+# Alice's shell is busy when the steward goes, so closing her input does not end her session:
+# only the steward's end can, and sshd ends her channel with status 1.
+[[session]]
+user = "alice"
+steps = [
+    { expect = '\([0-9]+\)> ' },
+    { send = ":timer.sleep(120_000)\n" },
+    { exit = 1 },
+    { mark = "alice-ended" },
+]
+
+[[session]]
+user = "bob"
+steps = [{ wait = "alice-ended" }, { expect = '\([0-9]+\)> ' }, { exit = 0 }, { mark = "bob-done" }]
+
+# A third login after both: the earlier connections' slots came back.
+[[session]]
+user = "alice+alice-secrets"
+pty = true
+steps = [{ wait = "bob-done" }, { expect = '\([0-9]+\)> ' }, { exit = 0 }]
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]
+forward = [22]

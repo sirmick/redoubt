@@ -2,7 +2,7 @@ The steward's protocol's message and error tables, included by its owning page, 
 
 A label set travels as `bytes`: each label id as eight bytes, little-endian, in any order. Each
 message is accepted only on its badge class: `sshd`'s root badge (`login`, `channel_closed`,
-`approval_opened`, `approval_closed`), the approval channel's (`pending`, `approve`, `deny`),
+`approval_opened`, `approval_closed`, `watch`), the approval channel's (`pending`, `approve`, `deny`),
 `init`'s (`blame`), and a session's or an agent's minted badge (`submit`, `start_agent`,
 `end_lease`, `end_session`); on any other it is malformed, as an unknown opcode is.
 
@@ -22,6 +22,7 @@ message is accepted only on its badge class: `sshd`'s root badge (`login`, `chan
 | 10 | `start_agent` | `lease: u64` | `lease: u64`, `name: string` |
 | 11 | `end_lease` | `lease: u64` | - |
 | 12 | `end_session` | - | - |
+| 13 | `watch` | - | - |
 
 <!-- wire-errors: steward -->
 | Code | Error |

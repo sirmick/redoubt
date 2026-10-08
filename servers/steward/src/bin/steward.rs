@@ -41,7 +41,7 @@ mod machine {
     use redoubt_rt::abi::{BudgetSpec, Error, FOREVER, Handle};
     use redoubt_rt::client::{Connection as Nine, Lend};
     use redoubt_rt::handle::{Budget, Endpoint, close};
-    use redoubt_rt::ipc::{Buffer, Event};
+    use redoubt_rt::ipc::{Buffer, Event, Request};
     use redoubt_rt::server::ninep::mode;
     use redoubt_rt::server::typed::finish;
     use redoubt_rt::server::{close_delivery, own_args};
@@ -51,7 +51,7 @@ mod machine {
     use redoubt_steward::effect::Output;
     use redoubt_steward::event::EventKind;
     use redoubt_steward_server::own::{Bound, How, Own, SYSTEM, binding};
-    use redoubt_steward_server::protocol::{Serving, answer_with};
+    use redoubt_steward_server::protocol::{Serving, answer_with, watches as watches_call};
     use redoubt_steward_server::watchers::Watchers;
     use redoubt_steward_server::{Kernel, SLOTS, Steward, start};
 
@@ -65,13 +65,16 @@ mod machine {
     pub const NOT_STARTED: u32 = 3;
     /// The core exited on an event its embedder's guarantee excludes: `init` restarts the steward.
     pub const CORE_EXITED: u32 = 4;
-    /// Test-only, for the bench's `steward-restart` (feature `restart-probe`, off in every
-    /// default build, as `littlefsd`'s and `netd`'s are): every instance exits with this code
-    /// [`PROBE_DELAY`] µs after it starts its console session, so `init` empties `users` and
-    /// restarts it again and again, each restart far enough from the last to stay under the
-    /// reboot rule (more than 5 within 60 seconds).
+    /// Test-only, for the bench's `steward-restart` and `steward-restart-ssh` (feature
+    /// `restart-probe`, off in every default build, as `littlefsd`'s and `netd`'s are): every
+    /// instance serves as usual and exits with this code [`PROBE_DELAY`] µs after it starts its
+    /// console session, so `init` empties `users` and restarts it again and again, each restart
+    /// far enough from the last to stay under the reboot rule (more than 5 within 60 seconds).
     #[cfg(feature = "restart-probe")]
     pub const PROBE_EXIT: u32 = 9;
+    /// The `watch` calls held at once: one `sshd`'s, and a restarted `sshd`'s before the first's
+    /// abandonment notice arrives.
+    const WATCHES: usize = 2;
     #[cfg(feature = "restart-probe")]
     const PROBE_DELAY: u64 = 14_000_000;
 
@@ -552,11 +555,23 @@ mod machine {
             return core_exited(startup);
         }
         #[cfg(feature = "restart-probe")]
-        if redoubt_rt::handle::sleep(PROBE_DELAY).is_ok() {
-            return PROBE_EXIT;
-        }
+        let probe_at = redoubt_rt::handle::time_now().unwrap_or(0).saturating_add(PROBE_DELAY);
+        // `sshd`'s `watch` calls, held unanswered while this instance runs: its end fails each
+        // with `Dead` (R4b), and so tells `sshd` its sessions are over.
+        let mut watches: Vec<Request> = Vec::new();
         loop {
-            match own.receive(FOREVER, 0) {
+            #[cfg(feature = "restart-probe")]
+            let wait = probe_at.saturating_sub(redoubt_rt::handle::time_now().unwrap_or(probe_at));
+            #[cfg(not(feature = "restart-probe"))]
+            let wait = FOREVER;
+            match own.receive(wait, 0) {
+                Ok(Event::Call(request)) if watches_call(&request.caller, &request.words) => {
+                    // One per `sshd` instance; a restarted `sshd`'s comes before the abandoned
+                    // one's notice. More is a fault of `sshd`'s, refused as it arrives.
+                    if watches.len() < WATCHES {
+                        watches.push(request);
+                    }
+                }
                 Ok(Event::Call(mut request)) => {
                     let (caller, words, handles) = (request.caller, request.words, request.handles);
                     let mut serving = Serving::new(&mut steward, &mut machine);
@@ -585,7 +600,11 @@ mod machine {
                     }
                 }
                 Ok(Event::Send(delivery)) => close_delivery(&delivery),
+                // A held `watch` whose caller is gone (an `sshd` that ended).
+                Ok(Event::Abandoned(id)) => watches.retain(|w| w.id() != id),
                 Ok(_) => {}
+                #[cfg(feature = "restart-probe")]
+                Err(Error::Timeout) => return PROBE_EXIT,
                 Err(Error::Dead) => return redoubt_rt::exit::OK,
                 Err(_) => return redoubt_rt::exit::RECEIVE_FAILED,
             }

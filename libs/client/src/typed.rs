@@ -49,12 +49,25 @@ pub fn call<P: Protocol, T>(
     handles: &[Handle],
     read: impl FnOnce(P::Reply<'_>, &mut Received) -> T,
 ) -> Result<T, Error> {
+    call_within::<P, T>(to, lend, message, handles, FOREVER, read)
+}
+
+/// [`call`], waiting at most `timeout` µs for the reply ([`FOREVER`] never gives up): a call no
+/// server takes in time is the kernel's `Timeout`.
+pub fn call_within<P: Protocol, T>(
+    to: &Endpoint,
+    lend: &mut Lend,
+    message: &P::Message<'_>,
+    handles: &[Handle],
+    timeout: u64,
+    read: impl FnOnce(P::Reply<'_>, &mut Received) -> T,
+) -> Result<T, Error> {
     let layout = P::layout(message)?;
     let outcome = if layout.inline {
-        to.call(&P::encode(message, &mut [])?, handles, None, FOREVER)
+        to.call(&P::encode(message, &mut [])?, handles, None, timeout)
     } else {
         let words = P::encode(message, lend.pages()?)?;
-        lend.call(to, &words, handles, FOREVER)
+        lend.call(to, &words, handles, timeout)
     };
     // A failed call's reply, if one came, is dropped here with its handles (R13).
     let (reply, _) = outcome.into_result()?;
