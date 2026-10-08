@@ -285,9 +285,12 @@ that measures with the host's clock is a verdict only alone: the rule asks that 
 invocation and no build run beside it. Those are a `host-tests` case whose crates' tests assert
 a wall-clock bound (`redoubt-rt`, `redoubt-client`, `redoubt-keyd` and `redoubt-consoled` do;
 `redoubt-ipd`, `redoubt-model` and `testbench` only read the clock), which no tolerance would
-make load-proof; and a case whose expectation is a timeout (`bench-ssh-guest`, and
-`bench-ssh-loopback-deadlock`, whose `must_fail` is the mark it never gets). A
-`host-tests` case whose crates assert no bound measures nothing with the host's clock; it may
+make load-proof; a case whose expectation is a timeout (`bench-ssh-guest`, and
+`bench-ssh-loopback-deadlock`, whose `must_fail` is the mark it never gets); and a host-clock
+case with a VM session whose console goes through the hub's hold and which must still be alive
+after a hold boundary (the steward's SSH session cases): a stall of the guest of a second or
+more at the boundary reads, inside the guest, as the server's silence past its promise, so the
+session's completion call times out and the session ends as at Ctrl-D. A `host-tests` case whose crates assert no bound measures nothing with the host's clock; it may
 run beside other work, and the rule asks that its test threads be bounded then
 (`RUST_TEST_THREADS`), so that it cannot oversubscribe the host by itself. The kinds that boot
 nothing (`build`, `fmt`, `no-cruft`, the size and `unsafe` budgets, the docs checker, the Elixir
