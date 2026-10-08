@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 425
+revision = 436
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -583,9 +583,10 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M2"
   needs = ["SMP3"]
-  body = "Several harts: R12's shares and the targets across harts. Starting list from SMP3's --smp 2 sweep: the share and oracle cases that fail at 2 harts (see .wash/local/SMP3-smp2-findings.md), plus expiry-deadline-then-timeout and scan-bounds (measurements disturbed by a second hart). Later scheduling work noted here: wake affinity (no IPI when the waker blocks next) for the icount IPC cost SMP3 records on scheduling.md."
-  state = "todo"
-  revision = 385
+  body = "Several harts: R12's shares and the targets across harts. Starting list, from SMP3's --smp 2 sweep (.wash/local/SMP3-smp2-findings.md) and K30: the share and oracle cases that fail at 2 harts; the measurements expiry-deadline-then-timeout and scan-bounds; budget-deadline's 1 ms lateness bound (keep_smp until restated); boot-profile and boot-profile-unverified (the boot completes, but the first console read is at ~51 s against the 20 s bound at 2 harts); and kernel-containment (slow, not stalled: ~1.2 terminations a minute at 2 harts, ~95 min against its 1800 s timeout). The common cost is harts spinning on the one kernel lock under icount: QEMU runs one hart at a time, and a spinning hart spends its quantum. Decide per case: restate the target across harts, keep the case one-hart, or cut the spin cost (e.g. wfi or yield while waiting for the lock under icount, the ticket lock M2 plans, or wake affinity: no IPI when the waker blocks next). Size L."
+  state = "active"
+  revision = 429
+  overrides = ["2026-10-08: started by Orchestrator before M1 (reported): The owner started the M2 smp track early; SMP3 is merged."]
 
 [[node]]
   id = "RT2"
@@ -1352,8 +1353,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "shell-host"
   needs = ["SHELL3"]
   body = "M2 host step 4: docs/userland/shell.md#full-screen-programs. Size M."
-  state = "todo"
-  revision = 323
+  state = "active"
+  revision = 433
+  overrides = ["2026-10-08: started by Orchestrator before M1 (reported): The owner started M2's host shell track early; shell UI work now runs on the `shell` branch."]
 
 [[node]]
   id = "SHELL6"
@@ -1372,8 +1374,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "shell-host"
   needs = ["SHELL2"]
   body = "M2 host step 6: docs/userland/shell.md#resource-use. Size S-M. Also, from B32's measurement (.wash/local/B32-measure.md): the shell is built with unconsolidated protocols, so Protocol, Enumerable and Enumerable.Range (83K) load only for Redoubt.Term's Enum.chunk_while. Build the shell with consolidated protocols, keep Term off Enumerable, and measure the session's peak against B32's 5,902 pages (rv64); lower the session size if the margin allows."
-  state = "todo"
-  revision = 384
+  state = "active"
+  revision = 434
+  overrides = ["2026-10-08: started by Orchestrator before M1 (reported): Shell track on the `shell` branch; owner asked to fill the bandwidth (2026-10-08)."]
 
 [[node]]
   id = "shell-host"
@@ -1458,8 +1461,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   needs = ["SHELL3"]
   body = "Found by SHELL3. Use Ctx::new_resource_sized (SHELL3's commit 1) so atomics and zlib streams count toward their holder's max_heap_size. Add a test that a process past its limit by atomics or zlib is killed as for any heap growth. Size S."
-  state = "reported"
-  revision = 400
+  state = "done"
+  revision = 436
   overrides = ["2026-10-08: started by Orchestrator before M1 (reported): An M2 beamlet hardening package, independent of M1's remaining work; SHELL3's sized resources are on main."]
 
 [[node]]
@@ -1537,8 +1540,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "shell-host"
   body = "Found by SHELL4. With a prompt over about 256 columns (a long cwd, say), the text typed after it is not shown. Find whether Redoubt.Term's model or edlin's redraw is at fault, fix it, and add a test with a 300-column prompt on a 120-column terminal. Size S."
-  state = "todo"
-  revision = 410
+  state = "active"
+  revision = 435
+  overrides = ["2026-10-08: started by Orchestrator before M1 (reported): Shell track on the `shell` branch; owner asked to fill the bandwidth (2026-10-08)."]
 
 [[node]]
   id = "B35"
@@ -1558,3 +1562,32 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "userland/otp/redoubt's fake fixture includes servers/littlefsd/src/bin/littlefsd.rs by #[path] (fixture.rs:478). SRV1's program commit made that bin use redoubt_fileserver, which beamlet-redoubt doesn't depend on, so `cargo test -p beamlet-redoubt --features fake` fails and setup.sh aborts ./test-shell. Fix: redoubt-fileserver as an optional dependency enabled by `fake`. Size S."
   state = "done"
   revision = 423
+
+[[node]]
+  id = "B37"
+  title = "Userland test time: a timing pass over a shell change's gate list, then a parallel difftest with a per-module oracle cache"
+  template = "package"
+  parent = "M2"
+  body = "Owner's ask: get userland test times right down. Step 1, measure. Take a typical shell change and a typical beamlet change. Time every step of each gate list (./test-shell's stages, the beamlet build, the ExUnit runs on both VMs, the pty stage, the difftest per suite, prebuilt, the machine shell cases) and say where the time goes, in a table in the report. Step 2, the difftest: run modules in parallel under q's lease (each has its own scratch root), and cache the BEAM oracle per module keyed on that module's source hash (plus .stdin/.args), not one stamp per suite. Target: the full difftest, every suite, in about 20 s with a warm cache. Step 3: propose, with the measured numbers, the next cuts (for example no beamlet rebuild for Elixir-only changes; machine shell cases only when the driver or beamlet changes), as a checkpoint before doing them. Size M."
+  state = "reported"
+  revision = 431
+  overrides = ["2026-10-08: started by Orchestrator before M1 (reported): The owner asked for this now (2026-10-08): userland test times down."]
+
+[[node]]
+  id = "SMP4"
+  title = "Destruction work outside the kernel lock: one budget's kernel sections stop costing other harts their time"
+  template = "package"
+  parent = "smp"
+  needs = ["SMP2"]
+  body = "M2's several-harts step 5. Found by SMP2: at 2 harts, deadline-flood-billed's victim hart waits about 1000 ms of a 2 s window for the one kernel lock, behind the creator's deadline destructions (billed to its parent) on the other hart. R78 bounds a lock wait by count, not by share, so one budget's kernel work costs up to H harts' time. SMP2 judges cross-hart shares net of lock waits, and names the residual on scheduling.md. This package moves destruction work (and other long kernel sections, measured first) outside the lock, or makes it preemptible, until deadline-flood-billed and sched-sleep-gaming pass at 2 harts without the net-of-waits judgement. Size L."
+  state = "todo"
+  revision = 430
+
+[[node]]
+  id = "B38"
+  title = "beamlet-redoubt's console.rs test an_end_of_input_already_waiting… races: the fixture can answer EOF before take_completed, so Eof (correct) arrives where the test assumes Nothing"
+  template = "package"
+  parent = "M2"
+  body = "Found by B37. A race in the test, not a clock bound: console_read sends the first read and then takes what has completed; with empty input, the fixture thread can answer EOF before take_completed. Hold the end back until after the first read (a channel-gated Read). Show it gone with 50 runs at 8 cores beside other work. Size S."
+  state = "todo"
+  revision = 432

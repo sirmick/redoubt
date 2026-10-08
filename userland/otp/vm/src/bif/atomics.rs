@@ -2,7 +2,9 @@
 //!
 //! The VM runs one process at a time, so a `RefCell` gives every operation the atomicity the
 //! Erlang API promises. Values wrap around at 64 bits, as BEAM's do; an array is either signed
-//! (`-2^63..2^63-1`) or unsigned (`0..2^64-1`), and `counters` are always signed.
+//! (`-2^63..2^63-1`) or unsigned (`0..2^64-1`), and `counters` are always signed. An array's cells
+//! count as the memory of each process that holds it, toward its heap limit
+//! (docs/userland/beamlet.md, "Limits inside one VM").
 
 use alloc::vec::Vec;
 
@@ -33,9 +35,9 @@ fn new(c: &mut Ctx, size: &Term, signed: bool) -> R {
         }
         _ => return Err(c.badarg()),
     };
-    let id = c.sys().make_ref().0;
+    // Its cells are its holders' memory, toward each one's heap limit (up to 128 MiB for 2^24).
     let a = Atomics { signed, cells: Lock::new(alloc::vec![0; n]) };
-    Ok(c.heap_mut().resource(Resource::new(id, alloc::boxed::Box::new(a))))
+    Ok(c.new_resource_sized(a, n * 8))
 }
 
 /// `erts_internal:atomics_new(Arity, EncodedOpts)`: bit 0 of the options is `signed`.

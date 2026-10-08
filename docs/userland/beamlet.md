@@ -72,7 +72,7 @@ The VM crate (`beamlet-vm`) is `#![forbid(unsafe_code)]`, and so are `beamlet-re
 
 ### Limits inside one VM
 
-<details><summary>Status: built · partly tested: in a boot, only the process heap limit and the budget's backstop are attacked · tested (17)</summary>
+<details><summary>Status: built · partly tested: in a boot, only the process heap limit and the budget's backstop are attacked · tested (26)</summary>
 
 - host:beamlet-vm::full_mailbox_kills_the_receiver
 - host:beamlet-vm::full_own_mailbox_kills_the_sender
@@ -86,6 +86,15 @@ The VM crate (`beamlet-vm`) is `#![forbid(unsafe_code)]`, and so are `beamlet-re
 - host:beamlet-vm::jump_loops_are_preempted
 - host:beamlet-vm::garbage_is_collected_and_live_data_survives
 - host:beamlet-vm::unreferenced_binaries_are_freed
+- host:beamlet-vm::an_atomics_array_within_the_limit_is_held
+- host:beamlet-vm::an_atomics_array_past_a_processs_own_heap_limit_ends_it
+- host:beamlet-vm::counters_arrays_past_the_limit_together_end_their_holder
+- host:beamlet-vm::a_zlib_stream_within_the_limit_is_held
+- host:beamlet-vm::a_zlib_streams_queue_past_the_limit_ends_its_holder
+- host:beamlet-vm::zlib_codecs_past_the_limit_together_end_their_holder
+- host:beamlet-vm::a_zlib_streams_stash_past_the_limit_ends_its_holder
+- host:beamlet-vm::a_deflaters_boxed_state_is_the_constant
+- host:beamlet-vm::an_inflater_holds_nothing_beyond_its_own_box
 - bench:beamlet-heap-flood
 - bench:beamlet-budget-flood
 - host:beamlet-vm::the_footprint_is_reported_at_the_first_wait_for_input
@@ -102,11 +111,19 @@ VM down. Every limit fails closed: the offender ends, and nothing is lost silent
   silently, like a TCP stream with a hole in it.
 - **Process memory** (`max_heap_words`, 2^27 words, and `max_heap_size`, which a process can only
   lower): checked at the end of each slice; a process over it is collected first and killed only
-  if what is live is still over. A resource whose native declares its size, a
-  [screen buffer](#screen-natives), counts that size as its holder's own memory, toward
-  `max_heap_size` as heap words do. Only a heap counts it, not a queued message or an ETS table
-  holding it: the screen buffer's limit of four a process and the mailbox's limit bound those,
-  and any other sized resource needs a bound of its own.
+  if what is live is still over. A resource whose native declares its size counts that size as
+  the memory of each process whose heap holds it, toward `max_heap_size` as heap words do: a
+  [screen buffer](#screen-natives); an `atomics` or `counters` array, its cells at 8 bytes each,
+  up to 2^24 of them; and a `zlib` stream, its queued input (at most 256 MB), the output it
+  has not handed out, its codec's state (a deflater's includes the tables its library keeps
+  behind boxes of its own, measured against the library by a test) and the term stashed in it,
+  declared afresh by every native that changes them. A process past its limit
+  through any of them is ended as for heap growth. Only a process's heap counts one: a resource
+  in a message not yet received, in an ETS table or in `persistent_term` counts toward no
+  process's limit, and a holder that is not the one resizing it counts the new size from its next
+  collection. The screen buffer's limit of four a process and the mailbox's limit bound a buffer
+  held elsewhere; an atomics array or a zlib stream put in ETS or `persistent_term`, its holder's
+  own references dropped, is bounded only by the budget's page limit, below.
 - **ETS** (`max_ets_words`, 2^27 words for all tables together): an insert past it raises
   `system_limit`.
 - **CPU:** reductions preempt every process, including a loop of plain jumps with no calls.
@@ -314,7 +331,8 @@ checks it: each test runs on BEAM and on beamlet and the printed results must be
 - **Compression** is OTP's `zlib`, whose natives run on `miniz_oxide`: deflate and inflate in raw,
   zlib and gzip formats, so `:zlib`, `:zip` and compressed external terms work unchanged. Each
   stream bounds what it holds queued, so a hostile archive cannot make one call allocate without
-  limit.
+  limit, and what it holds counts toward its holder's heap limit
+  ([limits inside one VM](#limits-inside-one-vm)).
 - **Not supported:** NIFs and port drivers (foreign code runs as a separate program), distribution,
   hot code upgrade, and any OTP version but the pinned one.
 
