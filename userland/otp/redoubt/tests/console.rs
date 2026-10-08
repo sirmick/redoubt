@@ -217,13 +217,17 @@ fn a_write_answered_busy_goes_again_after_the_retry_interval() {
 
 /// The input's end that reaches the VM's endpoint before the VM idles is handed over by that idle,
 /// as input is: the VM is not left waiting until its deadline, or for ever while it serves, with
-/// the end already taken.
+/// the end already taken. The end is held back until the first read has gone out and come back
+/// empty: an input already at its end could be answered before that read looks.
 #[test]
 fn an_end_of_input_already_waiting_ends_the_idle_that_takes_it() {
-    with_platform(std::io::empty(), |p| {
-        // The first read goes out; with no input ever, its answer is the end, queued at the VM's
-        // endpoint while the VM is away.
+    let (keyboard, keys) = std::io::pipe().unwrap();
+    with_platform(keyboard, move |p| {
+        // The first read goes out and is parked: nothing is typed.
         assert_eq!(p.console_read(), ConsoleInput::Nothing);
+        // The keyboard goes away: the read's answer is the end, queued at the VM's endpoint while
+        // the VM is away.
+        drop(keys);
         std::thread::sleep(std::time::Duration::from_millis(300));
         let deadline = p.monotonic_us() + 10_000_000;
         p.idle(Some(deadline));
