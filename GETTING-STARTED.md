@@ -181,6 +181,8 @@ OTP and Elixir as above; `./shell` puts them on the path itself.
                               # BEAM at once, the entry point, the platform built for the
                               # machine and run on the fake kernel
 ./test-shell test/redoubt/util_test.exs   # some test files only (in userland/shell)
+scripts/shell-cases           # the machine cases your change must pass, from git diff;
+                              # make -k -f scripts/jobs.mk set CASES="$(scripts/shell-cases)"
 ```
 
 A test that passes on BEAM and fails on beamlet is a beamlet bug. For the quickest loop,
