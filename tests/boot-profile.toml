@@ -28,10 +28,10 @@ expect = [
     '^init: started erofsd:system, console [0-9a-f]{16} \[t=[0-9]+\]$',
     # The steward starts the shell as the console principal's session.
     '^init: started steward, console [0-9a-f]{16} \[t=[0-9]+\]$',
-    '^\[con [0-9a-f]{16}\] beamlet: boot pack read [0-9]+ bytes, 94 entries \[t=[0-9]+\]$',
+    '^\[con [0-9a-f]{16}\] beamlet: boot pack read [0-9]+ bytes, 78 entries \[t=[0-9]+\]$',
     '^\[con [0-9a-f]{16}\] beamlet: Elixir.Redoubt.Shell read from (erofsd:system|the boot pack) \[t=[0-9]+\]$',
     # The shell's driver reads the console before the shell draws its banner and prompt.
-    # The boot-time target: the prompt within 20 s: the 16.3 s measured on rv32 (14.7 s on rv64)
+    # The boot-time target: the prompt within 20 s: the 14.7 s measured on rv32 (13.1 s on rv64)
     # to the first prompt drawn, and a tenth, rounded up to 5 s (docs/userland/beamlet.md).
     '^\[con [0-9a-f]{16}\] beamlet: first console read \[t=[0-9]+\]$',
     '^\[con [0-9a-f]{16}\] beamlet: boot-stats: loads [0-9]+ ',

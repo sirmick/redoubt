@@ -187,7 +187,9 @@ with `Redoubt.Term` drawing for it, line editing and the session's history, the 
 a line, and hostile text drawn visibly on every path the host has
 ([the shell](../userland/shell.md#line-editing-and-history)); and screens on beamlet:
 the screen buffer's natives, `Redoubt.Screen` with its layout, and `pick`
-([the shell](../userland/shell.md#full-screen-programs)). On Redoubt it runs only on the fake kernel (`./shell --fake`). What the milestone builds on: the serving
+([the shell](../userland/shell.md#full-screen-programs)); and resource use, `free`, `uptime`, `ps`
+and `top`, over the session's own budget and its VM, `df` not yet
+([the shell](../userland/shell.md#resource-use)). On Redoubt it runs only on the fake kernel (`./shell --fake`). What the milestone builds on: the serving
 library's parked calls ([serving](../servers/serving.md#parked-calls)), `consoled`'s 9P console
 ([consoled](../servers/consoled.md)), and budget destruction as the only way to end a process
 ([budgets](../kernel/budgets.md#r10-destruction)). For several harts: every hart runs user code under one FIFO kernel lock, and a destruction's
