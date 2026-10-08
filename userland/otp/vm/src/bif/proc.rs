@@ -787,22 +787,12 @@ pub fn time_unit(_c: &mut Ctx, _a: &[Term]) -> R { Ok(Term::Int(1_000_000_000)) 
 
 // ---- persistent_term ----
 
-/// Most keys `persistent_term` may hold; it is VM-wide state any process can grow.
-const MAX_PERSISTENT_TERMS: usize = 1 << 16;
-
+/// `put(Key, Value)`: `system_limit` past `Limits::max_persistent_words` or
+/// `MAX_PERSISTENT_TERMS` keys ([`crate::vm::System::persist`]).
 pub fn pt_put(c: &mut Ctx, a: &[Term]) -> R {
     let key = c.own(a[0]);
-    let full = {
-        let sys = c.sys();
-        !sys.persistent.contains_key(&key) && sys.persistent.len() >= MAX_PERSISTENT_TERMS
-    };
-    if full {
-        return Err(c.system_limit());
-    }
-    // The value becomes a literal, as in BEAM: reading it copies nothing. (A value replaced is
-    // not freed; BEAM frees it once no process refers to it.)
-    let value = c.sys().make_literal(&c.p.heap, a[1]);
-    c.sys().persistent.insert(key, value);
+    let stored = c.sys().persist(key, &c.p.heap, a[1]);
+    stored.map_err(|()| c.system_limit())?;
     Ok(c.ok())
 }
 
@@ -835,7 +825,7 @@ pub fn pt_get_all(c: &mut Ctx, _a: &[Term]) -> R {
 
 pub fn pt_erase(c: &mut Ctx, a: &[Term]) -> R {
     let key = c.own(a[0]);
-    let existed = c.sys().persistent.remove(&key).is_some();
+    let existed = c.sys().unpersist(&key);
     Ok(c.bool(existed))
 }
 
@@ -1208,9 +1198,11 @@ pub fn pt_put_new(c: &mut Ctx, a: &[Term]) -> R {
 
 /// `persistent_term:info()`: `#{count, memory}`.
 pub fn pt_info(c: &mut Ctx, _a: &[Term]) -> R {
-    let count = c.sys().persistent.len() as i64;
-    // Keys, and values (literals: counted by their own chunks, a cell each at least).
-    let words: u64 = c.sys().persistent.keys().map(|k| k.words() + 2).sum();
+    // What counts toward `max_persistent_words`: values replaced or erased included.
+    let (count, words) = {
+        let sys = c.sys();
+        (sys.persistent.len() as i64, sys.persistent_words())
+    };
     let (count_k, memory_k) = (c.atom("count"), c.atom("memory"));
     Ok(c.map_from([(count_k, Term::Int(count)), (memory_k, Term::Int((words * 8) as i64))]))
 }

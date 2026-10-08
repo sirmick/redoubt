@@ -6,7 +6,7 @@
 
 use beamlet_vm::bif::{Ctx, NativeSpec};
 use beamlet_vm::platform::{Lookup, Platform, PlatformError};
-use beamlet_vm::vm::Config;
+use beamlet_vm::vm::{Config, Limits};
 use beamlet_vm::{Exception, Term, Vm};
 
 /// `probe:sized(Bytes)`: a resource declaring `Bytes`.
@@ -56,8 +56,15 @@ impl Platform for Bare {
 }
 
 /// Runs `sized:f()` and returns its result as text.
-fn run(f: &str) -> String {
-    let config = Config { natives: NATIVES, ..Default::default() };
+fn run(f: &str) -> String { run_with(f, Limits::default()) }
+
+/// Runs `sized:f()` with ETS and persistent_term each limited to 2^20 words (8 MB).
+fn run_stores_limited(f: &str) -> String {
+    run_with(f, Limits { max_ets_words: 1 << 20, max_persistent_words: 1 << 20, ..Limits::default() })
+}
+
+fn run_with(f: &str, limits: Limits) -> String {
+    let config = Config { natives: NATIVES, limits, ..Default::default() };
     let mut vm = Vm::with_config(Box::new(Bare { now: 0 }), config);
     let pid = vm.spawn("sized", f, |_| Vec::new()).unwrap();
     vm.run_bounded(pid, 100_000_000).expect("finished").unwrap().unwrap().to_string()
@@ -111,4 +118,44 @@ fn zlib_codecs_past_the_limit_together_end_their_holder() {
 #[test]
 fn a_zlib_streams_stash_past_the_limit_ends_its_holder() {
     assert_eq!(run("zlib_stash_past"), "killed");
+}
+
+#[test]
+fn a_128_mb_atomics_array_in_persistent_term_past_the_limit_is_refused() {
+    assert_eq!(run_stores_limited("pt_atomics_past"), "{system_limit,none}");
+}
+
+#[test]
+fn a_replaced_persistent_value_still_counts() {
+    assert_eq!(run_stores_limited("pt_replaced"), "10");
+}
+
+#[test]
+fn a_zlib_stream_grown_in_persistent_term_past_the_limit_refuses_the_next_put() {
+    assert_eq!(run_stores_limited("pt_zlib_grown"), "system_limit");
+}
+
+#[test]
+fn a_zlib_stream_grown_in_ets_past_the_limit_refuses_the_next_insert() {
+    assert_eq!(run_stores_limited("ets_zlib_grown"), "{system_limit,true}");
+}
+
+#[test]
+fn deleting_the_table_holding_a_grown_stream_makes_room() {
+    assert_eq!(run_stores_limited("ets_table_deleted"), "{system_limit,true}");
+}
+
+#[test]
+fn an_update_element_past_the_ets_limit_is_refused() {
+    assert_eq!(run_stores_limited("ets_update_element_past"), "{system_limit,[{k,none}]}");
+}
+
+#[test]
+fn heir_data_past_the_ets_limit_is_refused() {
+    assert_eq!(run_stores_limited("ets_heir_past"), "{system_limit,system_limit}");
+}
+
+#[test]
+fn heir_data_counts_toward_the_ets_limit() {
+    assert_eq!(run_stores_limited("ets_heir_counts"), "{system_limit,true}");
 }
