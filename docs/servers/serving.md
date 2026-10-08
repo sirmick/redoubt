@@ -381,8 +381,16 @@ of the protocol (`Blkd`), which checks every reply before it is believed, splits
 refuses a read of part of a sector as a fault
 (host:redoubt-fileserver::reads_split_at_the_lend_and_part_of_a_sector_is_a_fault). The
 servers' host tests drive the client against a fake `blkd`, and their files against one range in
-memory, the crate's `Memory` (feature `test-support`, never in a target build). What a format
-needs of its medium stays with its server: how a range is mounted as its blocks, and the files.
+memory, the crate's `Memory` (feature `test-support`, never in a target build). `littlefsd` and
+`walfsd` share the quota ledger too ([littlefsd](littlefsd.md#quotas)): what each live root holds
+and keeps in reserve, told every change by its server, which counts a root when it goes live
+(host:redoubt-fileserver::a_mint_at_a_new_root_counts_it_and_charges_the_root_above,
+host:redoubt-fileserver::a_mint_past_the_room_above_is_refused,
+host:redoubt-fileserver::a_quota_at_the_granters_own_root_is_refused,
+host:redoubt-fileserver::connections_at_one_root_sum_and_the_last_disconnect_returns_its_bytes,
+host:redoubt-fileserver::a_root_over_its_quota_after_a_disconnect_grows_no_further); the
+servers' quota tests drive it through their 9P. What a format needs of its medium stays with its
+server: how a range is mounted as its blocks, and the files.
 
 **On the wire.** A request whose word 0 is 0 is 9P: a `call` whose words are all zero, with the
 T-message at the start of its lend; the R-message is written over it ([wire](wire.md)). Any other
@@ -738,8 +746,8 @@ its `Rflush`, never after.
   counts against its own account and label set, never another's.
 - **Rollback ends at provisional state.** A client that abandons a request after the server
   performed a non-provisional effect (a file write) keeps the effect without learning of it.
-- **Admission counts objects, not bytes.** Bytes are the file server's to meter (`littlefsd`'s quotas);
-  every other server keeps no byte count.
+- **Admission counts objects, not bytes.** Bytes are the file server's to meter (`littlefsd`'s and
+  `walfsd`'s quotas); every other server keeps no byte count.
 - **A share of two pages is one page.** At a server whose cap is 2 `Pages` (`consoled`, `erofsd`,
   `bootfsd`) a badge of a non-zero account may hold one page at a time
   ([R26](#r26-admission-fairness): less than half, and at least one), so of two requests too long

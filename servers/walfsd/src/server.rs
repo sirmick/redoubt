@@ -3,6 +3,7 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
+use redoubt_fileserver::quota::{Ledger, Refusal};
 use redoubt_rt::abi::PAGE_SIZE;
 use redoubt_rt::ipc::Caller;
 use redoubt_rt::path;
@@ -13,7 +14,6 @@ use redoubt_rt::server::{Cost, Limits};
 use redoubt_rt::wire::proto::littlefsd::ErrorCode;
 use walfs::{Error as FsError, FileHandle, FileType, Filesystem, Metadata, OpenOptions};
 
-use crate::quota::{Ledger, Refusal};
 use crate::volume::{BLOCK, Blocks, Mounted, Range};
 
 /// What admission lets each of `buckets` buckets hold (servers/serving.md R26); the count is the
@@ -205,7 +205,7 @@ impl<R: Range> Walfsd<R> {
             labels,
             attr: Vec::new(),
             share,
-            ledger: Ledger::new(room, held),
+            ledger: Ledger::new(room, held, walfs::ROOT as u64),
             changes: 0,
             window: Window::default(),
             #[cfg(test)]
@@ -714,3 +714,7 @@ impl<R: Range> FileServer for Walfsd<R> {
 #[cfg(test)]
 #[path = "server_tests.rs"]
 pub(crate) mod tests;
+
+#[cfg(test)]
+#[path = "quota_tests.rs"]
+mod quota_tests;

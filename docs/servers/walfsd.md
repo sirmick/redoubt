@@ -483,10 +483,11 @@ typed operations, so a client names no format:
 </details>
 
 A quota is in **bytes**, carved at `new_connection` from the room of the live root above, and
-kept by `littlefsd`'s ledger, rules and refusals: a root's quota is the sum of its connections',
-a change is charged to the nearest live root above it, a root minted over more than its quota
-can read and remove only, nothing is stored on the medium, and a rename or remove never ends a
-live root ([littlefsd](littlefsd.md#quotas)). What walfs counts:
+kept under `littlefsd`'s rules and refusals, by the one ledger the two servers share
+(`redoubt-fileserver`'s): a root's quota is the sum of its connections', a change is charged to
+the nearest live root above it, a root minted over more than its quota can read and remove only,
+nothing is stored on the medium, and a rename or remove never ends a live root
+([littlefsd](littlefsd.md#quotas)). What walfs counts:
 
 - **The volume root's room** is the data region's bytes: its blocks times 4096.
 - **An entry holds** its share, ⌈room / (`inode_count` − 2)⌉ bytes (inodes 0 and 1 are never an
@@ -617,8 +618,8 @@ Status: built · tested: bench:walfsd-power-loss, bench:walfsd-corrupt-volume, b
   `walfsd`.
 - **A shared `walfsd` is shared state,** as a shared `littlefsd` is
   ([littlefsd](littlefsd.md#residual-risks)).
-- **`walfsd` copies `littlefsd`'s quota ledger and one-volume probe,** so a change to one must
-  reach both ([a follow-up](../todo/file-server-arguments-and-range-client.md)).
+- **`walfsd` copies `littlefsd`'s one-volume probe,** so a change to one must reach both
+  ([a follow-up](../todo/file-server-arguments-and-range-client.md)).
 
 ## Why
 

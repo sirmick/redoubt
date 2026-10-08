@@ -1,17 +1,16 @@
 //! The byte quotas per attach root (servers/littlefsd.md, "Quotas"; R48): what each live root holds
-//! and keeps in reserve, in bytes. Nothing here reads the medium: the server counts a root's
-//! directory when it first goes live and tells the ledger every change, and nothing is stored.
+//! and keeps in reserve, in bytes, for `littlefsd` and `walfsd`. Nothing here reads the medium:
+//! the server counts a root's directory when it first goes live and tells the ledger every change,
+//! and nothing is stored.
 
 use alloc::string::String;
 use alloc::vec::Vec;
 
-/// The volume root's id (the server's `ROOT_ID`).
-const VOLUME: u64 = 0;
-
 /// A live root: a directory with a connection minted at it and not yet disconnected, or the
 /// volume's root, which is always live.
 struct Root {
-    /// The directory's id.
+    /// The directory's id: `littlefsd`'s file id, `walfsd`'s inode. No other entry has it while
+    /// the root is live, since a live root's directory is never removed.
     id: u64,
     /// Its path from the volume's root. It cannot change while the root is live: a rename or
     /// remove that would move or end a live root is refused.
@@ -29,7 +28,7 @@ struct Conn {
 
 /// Why a mint was not recorded.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum Refusal<E> {
+pub enum Refusal<E> {
     /// The root's parent has no room for the quota, or a quota was asked at the granter's own
     /// root, or there was no memory for the record.
     Refused,
@@ -38,7 +37,7 @@ pub(crate) enum Refusal<E> {
 }
 
 /// Whether `path` is the directory `dir` or lies under it.
-pub(crate) fn under(path: &str, dir: &str) -> bool {
+fn under(path: &str, dir: &str) -> bool {
     dir.is_empty() || path.strip_prefix(dir).is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
 }
 
@@ -51,25 +50,30 @@ fn filled<T: Clone>(n: usize, v: T) -> Option<Vec<T>> {
 }
 
 /// The live roots. The first is the volume's.
-pub(crate) struct Ledger {
+pub struct Ledger {
     /// The volume root's quota.
     room: u64,
+    /// The volume root's id.
+    volume: u64,
     roots: Vec<Root>,
     conns: Vec<Conn>,
 }
 
 impl Ledger {
-    /// The volume root alone, with `room` bytes and holding `held`.
-    pub fn new(room: u64, held: u64) -> Ledger {
-        let volume = Root { id: VOLUME, path: String::new(), held };
-        Ledger { room, roots: alloc::vec![volume], conns: Vec::new() }
+    /// The volume root alone, the directory `volume`, with `room` bytes and holding `held`.
+    pub fn new(room: u64, held: u64, volume: u64) -> Ledger {
+        let root = Root { id: volume, path: String::new(), held };
+        Ledger { room, volume, roots: alloc::vec![root], conns: Vec::new() }
     }
 
     /// Root `i`'s quota: the sum of its connections' quotas; the volume root's is the volume's
     /// room.
     fn quota(&self, i: usize) -> u64 {
+        if i == 0 {
+            return self.room;
+        }
         let at = self.conns.iter().filter(|c| c.root == self.roots[i].id);
-        if i == 0 { self.room } else { at.fold(0, |n, c| n.saturating_add(c.quota)) }
+        at.fold(0, |n, c| n.saturating_add(c.quota))
     }
 
     /// What root `i` keeps in reserve: the charges of the live roots nearest below it; `None`
@@ -143,10 +147,10 @@ impl Ledger {
         Some(totals)
     }
 
-    /// Every live root: id, path, quota, held and reserve.
-    #[cfg(test)]
+    /// Every live root: id, path, quota, held and reserve, for an audit that counts them afresh.
+    /// It panics with no memory for the list, so serving never calls it.
     pub fn roots(&self) -> Vec<(u64, String, u64, u64, u64)> {
-        let totals = self.totals().unwrap();
+        let totals = self.totals().expect("memory for an audit");
         let root = |(i, r): (usize, &Root)| (r.id, r.path.clone(), self.quota(i), r.held, totals[i].0);
         self.roots.iter().enumerate().map(root).collect()
     }
@@ -154,7 +158,7 @@ impl Ledger {
     /// The root of the connection with `badge`: a minted one's, or the volume's for one that
     /// attached.
     fn root_of(&self, badge: u64) -> u64 {
-        self.conns.iter().find(|c| c.badge == badge).map_or(VOLUME, |c| c.root)
+        self.conns.iter().find(|c| c.badge == badge).map_or(self.volume, |c| c.root)
     }
 
     /// Records the connection `badge`, minted through `granter`'s at the directory `id` at

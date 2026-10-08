@@ -5,6 +5,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use littlefs::{BlockDevice, DirRef, Error as FsError, FileHandle, FileType, Filesystem, OpenOptions};
+use redoubt_fileserver::quota::{Ledger, Refusal};
 use redoubt_rt::abi::PAGE_SIZE;
 use redoubt_rt::ipc::Caller;
 use redoubt_rt::path;
@@ -14,7 +15,6 @@ use redoubt_rt::server::ninep::{
 use redoubt_rt::server::{Cost, Limits};
 use redoubt_rt::wire::proto::littlefsd::ErrorCode;
 
-use crate::quota::{Ledger, Refusal};
 use crate::volume::{BLOCK, Blocks, Mounted, Range};
 
 /// What admission lets each of `buckets` buckets hold (servers/serving.md R26); the count is the
@@ -263,7 +263,7 @@ impl<R: Range> Littlefsd<R> {
             labels,
             attr: Vec::new(),
             blocks,
-            ledger: Ledger::new(room, held),
+            ledger: Ledger::new(room, held, ROOT_ID),
             changes: 0,
             window: Window::default(),
             #[cfg(test)]
@@ -996,3 +996,7 @@ impl<R: Range> FileServer for Littlefsd<R> {
 #[cfg(test)]
 #[path = "server_tests.rs"]
 pub(crate) mod tests;
+
+#[cfg(test)]
+#[path = "quota_tests.rs"]
+mod quota_tests;
