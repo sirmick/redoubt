@@ -5,7 +5,8 @@
 //!
 //! - **Input** is what the client typed, held for the session's reads up to [`MAX_INPUT`]; a read with none
 //!   waits ([`Read::Wait`]), and the core is told how much was taken, so the rest stays in SSH's window. An
-//!   interrupt is the 0x03 byte a terminal sends.
+//!   interrupt is the session's own key, Ctrl+\ (0x1C), which the shell never forwards, so a full-screen
+//!   program that takes Ctrl+C as a key cannot take the interrupt too.
 //! - **Output** is what the session wrote, held for the channel up to [`MAX_OUTPUT`]; a write with no room
 //!   waits ([`Write::Wait`]) until the channel has taken some.
 //! - **The end.** Once the session has ended ([`Chan::end`]), a read finds the end of the file and a write is
@@ -29,8 +30,9 @@ use crate::{Session, Window};
 pub const MAX_INPUT: usize = 4096;
 /// Output bytes held for the channel.
 pub const MAX_OUTPUT: usize = 16 * 1024;
-/// The byte a terminal sends for an interrupt.
-const INTERRUPT: u8 = 0x03;
+/// The session's own key, Ctrl+\: the interrupt the shell keeps whatever is in front
+/// (userland/shell.md, "Interrupting and killing jobs").
+const INTERRUPT: u8 = 0x1C;
 
 /// One channel's console, shared by its file and its session.
 #[derive(Debug, Default)]
@@ -197,8 +199,8 @@ impl Session for Console {
 
     fn window(&mut self, w: Window) { self.chan.borrow_mut().window = Some(w); }
 
-    /// The interrupt reaches the session as the byte a terminal sends for it; with no room for it
-    /// the input is full, and the session is not reading.
+    /// The interrupt reaches the session as its own key's byte; with no room for it the input is
+    /// full, and the session is not reading.
     fn interrupt(&mut self) { let _ = self.input(&[INTERRUPT]); }
 
     /// The core sends the status once the output held here has gone.

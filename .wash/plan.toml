@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 462
+revision = 463
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1639,8 +1639,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "shell-host"
   body = "Owner's ruling, 2026-10-08: the session key is Ctrl+\\ (0x1C). Settle shell.md's Open item (Widgets, focus, themes: 'The session's own key'). The driver never forwards Ctrl+\\ and ends the foreground screen or job on it, as Ctrl+C does now. At the prompt and with a line or native job in front, Ctrl+C keeps its meaning. A screen program may declare that it takes Ctrl+C as a key; then Ctrl+C reaches it and Ctrl+\\ is the only interrupt. sshd's INT/break requests stay the interrupt. Per-principal configuration is not in this package; the page says so. Strict track (driver/session authority): main, Tier A (the red reviews), host tests (no screen can swallow Ctrl+\\; Ctrl+C reaches a screen that takes it; a pasted 0x1C ends the screen), the shell set of machine cases on both widths, ./test-shell, footprint. Pages: shell.md (interrupt key, What a job cannot do, the Open item), help pages that name Ctrl+C for screens. Size S."
-  state = "todo"
-  revision = 460
+  state = "done"
+  revision = 463
 
 [[node]]
   id = "B40"
