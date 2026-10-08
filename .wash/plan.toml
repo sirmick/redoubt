@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 419
+revision = 423
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1419,8 +1419,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "shell-host"
   needs = ["SHELL2"]
   body = "SHELL2 residual, named on docs/userland/shell.md. A crash report from a process spawned at the prompt is written via `user`, not through Redoubt.Term's Text.visible. Add a logger handler, or a formatter, so every byte drawn goes through the escaping. Add a test with a hostile crash reason. Size S."
-  state = "todo"
-  revision = 354
+  state = "reported"
+  revision = 422
+  overrides = ["2026-10-08: started by Orchestrator before M1 (reported): An M2 host-shell hardening package; independent of M1's remaining work."]
 
 [[node]]
   id = "B29"
@@ -1548,3 +1549,12 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   state = "done"
   revision = 416
   overrides = ["2026-10-08: started by Orchestrator before M1 (reported): Found by BOOT2; small."]
+
+[[node]]
+  id = "B36"
+  title = "SRV1 broke ./test-shell: beamlet-redoubt's fake fixture includes littlefsd's bin by #[path], which now needs redoubt-fileserver"
+  template = "package"
+  parent = "M2"
+  body = "userland/otp/redoubt's fake fixture includes servers/littlefsd/src/bin/littlefsd.rs by #[path] (fixture.rs:478). SRV1's program commit made that bin use redoubt_fileserver, which beamlet-redoubt doesn't depend on, so `cargo test -p beamlet-redoubt --features fake` fails and setup.sh aborts ./test-shell. Fix: redoubt-fileserver as an optional dependency enabled by `fake`. Size S."
+  state = "done"
+  revision = 423

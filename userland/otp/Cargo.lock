@@ -116,6 +116,7 @@ dependencies = [
  "beamlet-vm",
  "redoubt-client",
  "redoubt-fake-kernel",
+ "redoubt-fileserver",
  "redoubt-littlefsd",
  "redoubt-rt",
 ]
