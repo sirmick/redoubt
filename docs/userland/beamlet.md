@@ -493,8 +493,9 @@ The timer's counter frequency is not needed: `time_now`'s microseconds serve the
 
 ### Natives
 
-<details><summary>Status: built · partly tested: the machine's cases run the VM under a tester in the steward's place, not under the steward itself · tested (31)</summary>
+<details><summary>Status: built · partly tested: the machine's cases run the VM under a tester in the steward's place, but for budgets and launching, which also run in the steward's own sessions over SSH, a vault session's among them · tested (32)</summary>
 
+- bench:steward-vault-launch
 - bench:beamlet-natives
 - bench:beamlet-serve
 - bench:beamlet-launch
@@ -655,7 +656,10 @@ and `beamlet-natives-attack` on the machine, where a VM offers every native a ha
 wrote out, which it reads back as a plain reference, and asks the kernel for a child budget that
 adds a label (`class_denied`: a `user`-class caller may not); a VM in a labelled session runs
 nothing there, since the console carries no labels and its write-open of `/dev/cons` is refused
-([consoled](../servers/consoled.md)). The cases' tester carves each session as the steward does
+([consoled](../servers/consoled.md)). Over SSH a vault session's channel carries its labels, and
+there `steward-vault-launch` carves with labels left out, launches a program the vault's channel
+shows, and has fewer and more labels refused, in the steward's own session
+([sshd](../servers/sshd.md#sessions-over-ssh)). The cases' tester carves each session as the steward does
 ([steward](../servers/steward.md#fixed-sub-budgets-per-label-set)): the principal's account, a
 sub-budget per label set, the session from it; what it hands beyond a session's own is said in
 each case.

@@ -63,7 +63,8 @@ page.
    ([beamlet](../userland/beamlet.md#asynchronous-underneath-synchronous-on-top),
    [files](../userland/files.md#files-over-9p)), and its system natives (the namespace, typed
    calls, serving, budgets, labels and launching) run on the machine in a session a tester starts
-   in the steward's place ([beamlet](../userland/beamlet.md#natives)); Elixir's `File` in a
+   in the steward's place, and budgets and launching in the steward's own sessions over SSH, a
+   vault session's among them ([beamlet](../userland/beamlet.md#natives)); Elixir's `File` in a
    steward's session waits for the session's namespace to reach its VM.
 - **The steward.** Principals from the manifest, fixed sub-budgets per label set, and sessions
    on the console and over SSH run ([the steward](../servers/steward.md#principals),
