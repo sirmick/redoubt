@@ -234,8 +234,8 @@ pub fn reply(c: &mut Ctx, a: &[Term]) -> R {
 }
 
 /// `budget_create(#{pages, processes, weight, labels, account, deadline})`: `{ok, Budget}`, carved
-/// from this VM's own budget. `labels` (default `[]`), `account` (default 0) and `deadline` (the
-/// clock's microseconds, default none) may be left out.
+/// from this VM's own budget. `labels` (default this VM's own), `account` (default 0) and
+/// `deadline` (the clock's microseconds, default none) may be left out.
 pub fn budget_create(c: &mut Ctx, a: &[Term]) -> R {
     let f = fields(c, a[0], &["pages", "processes", "weight", "labels", "account", "deadline"])?;
     let need = |c: &Ctx, t: Option<Term>| t.ok_or_else(|| c.badarg()).and_then(|t| unsigned(c, t));
@@ -243,12 +243,9 @@ pub fn budget_create(c: &mut Ctx, a: &[Term]) -> R {
         pages: need(c, f[0])?,
         processes: need(c, f[1])?,
         weight: need(c, f[2])?,
-        labels: match f[3] {
-            Some(t) => {
-                list(c, t, MAX_LABELS)?.into_iter().map(|l| unsigned(c, l)).collect::<Result<_, _>>()?
-            }
-            None => Vec::new(),
-        },
+        labels: f[3]
+            .map(|t| list(c, t, MAX_LABELS)?.into_iter().map(|l| unsigned(c, l)).collect())
+            .transpose()?,
         account: f[4].map(|t| unsigned(c, t)).transpose()?.unwrap_or(0),
         deadline: f[5].map(|t| unsigned(c, t)).transpose()?,
     };

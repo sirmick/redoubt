@@ -25,7 +25,9 @@ defmodule Redoubt.Budget do
 
   @doc """
   A child carved from the session's own budget. `deadline_ms`, if given, is how long it may live,
-  from now.
+  from now. Its labels, left out, are the session's own, the only set the kernel lets a session's
+  child carry: labels given are the kernel's to refuse, fewer as `:label_denied` and more as
+  `:class_denied`.
   """
   @spec carve(spec() | keyword()) :: {:ok, reference()} | {:error, atom()}
   def carve(spec) do

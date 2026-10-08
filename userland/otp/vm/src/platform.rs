@@ -118,7 +118,9 @@ pub struct BudgetSpec {
     pub pages: u64,
     pub processes: u64,
     pub weight: u64,
-    pub labels: Vec<u64>,
+    /// `None` when left out: the VM's own label set, the only one a user-class caller's child may
+    /// carry (docs/kernel/budgets.md, "Labels on budgets").
+    pub labels: Option<Vec<u64>>,
     pub account: u64,
     pub deadline: Option<u64>,
 }
@@ -190,7 +192,7 @@ pub trait System {
     fn serve(&mut self, asker: u64, endpoint: &Object) -> Result<(), Refused>;
     /// Answers `request` with `reply`.
     fn reply(&mut self, request: &Object, reply: Message) -> Result<(), Refused>;
-    /// Carves a child from this VM's own budget.
+    /// Carves a child from this VM's own budget, with this VM's labels if `spec` leaves them out.
     fn budget_create(&mut self, spec: &BudgetSpec) -> Result<Object, Refused>;
     /// Destroys `budget` and everything in it.
     fn budget_destroy(&mut self, budget: &Object) -> Result<(), Refused>;

@@ -9,7 +9,9 @@ use std::sync::{Arc, Mutex};
 
 use beamlet_redoubt::Redoubt;
 use beamlet_redoubt::fixture::{self, Dirs, Volume};
-use beamlet_vm::platform::{Event, FileError, Files, Launch, Message, Object, Platform, Refused, System};
+use beamlet_vm::platform::{
+    BudgetSpec, Event, FileError, Files, Launch, Message, Object, Platform, Refused, System,
+};
 use redoubt_fake_kernel::fake;
 use redoubt_rt::abi::{FOREVER, Handle};
 use redoubt_rt::handle::Endpoint;
@@ -126,6 +128,57 @@ fn the_labels_are_the_kernels_stamp_on_the_vms_own_send() {
             platform.labels().iter().fold(0, |n, l| n * 100 + *l as u32)
         });
         assert_eq!(read.join().unwrap(), if labels.is_empty() { 0 } else { 509 });
+        f.destroy(console.pid, console.endpoint);
+        let _ = console.thread.join();
+    }
+}
+
+#[test]
+fn a_labelled_sessions_child_takes_its_labels_and_runs() {
+    let f = fake();
+    for labels in [&[][..], &[5, 9]] {
+        let console =
+            fixture::console_labelled(Box::new(std::io::empty()), Box::new(Screen::default()), labels);
+        let (pid, block) =
+            fixture::session_built(&console, &[], &[], labels, move |pid| vec![("budget", f.budget(pid))]);
+        let session = f.run(pid, move || {
+            let startup = fixture::startup(&block);
+            let mut p = Redoubt::new(&startup, Box::new(Dirs(Vec::new()))).expect("a platform");
+            let spec = |labels: Option<Vec<u64>>| BudgetSpec {
+                pages: 64,
+                processes: 1,
+                weight: 1,
+                labels,
+                ..Default::default()
+            };
+            // Labels left out: the session's own, so the kernel's rule for a user-class caller holds.
+            let child = p.budget_create(&spec(None)).expect("a child");
+            // Never fewer than the session's, never more: the kernel refuses each by its name. An
+            // empty set given is not left out: it goes to the kernel as it is.
+            if !labels.is_empty() {
+                for fewer in [vec![9], vec![]] {
+                    assert_eq!(p.budget_create(&spec(Some(fewer))).err(), Some(Refused("label_denied")));
+                }
+            }
+            let more = Some([labels, &[11]].concat());
+            assert_eq!(p.budget_create(&spec(more)).err(), Some(Refused("class_denied")));
+            let launch = Launch {
+                image: b"\x7fELF".to_vec(),
+                budget: child.clone(),
+                namespace: vec![],
+                handles: vec![],
+                args: vec![],
+                stack_pages: None,
+                heap_pages: None,
+            };
+            p.launch(ME, 1, launch).unwrap();
+            p.budget_destroy(&child).unwrap();
+            let (asker, event) = next(&mut p);
+            let Event::Exit { job, cause, .. } = event else { panic!("not an exit") };
+            assert_eq!((asker, job, cause), (ME, 1, "killed"));
+            0
+        });
+        assert_eq!(session.join().unwrap(), 0);
         f.destroy(console.pid, console.endpoint);
         let _ = console.thread.join();
     }
