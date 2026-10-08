@@ -680,7 +680,10 @@ stand-ins for `application`, `gen_tcp` and `ram_file`
 stand-in runs no kernel application; when the first application with a callback module starts,
 it starts the kernel's servers that other code calls, as BEAM starts them at boot:
 `erl_signal_server`, `global_name_server`, and `kernel_safe_sup`, which OTP's `group` waits for
-before it serves a line.
+before it serves a line. With no C library to ask a character's width, `prim_tty:wcwidth/1`
+answers `{error, enotsup}` and OTP measures with its own table, which agrees with BEAM's libc on
+ASCII and wide East Asian characters and parts from it on a combining mark: libc gives it no
+column, the table one.
 
 ### Screen natives
 
