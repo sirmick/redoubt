@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 456
+revision = 462
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1354,8 +1354,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["SHELL3"]
   body = "M2 host step 4: docs/userland/shell.md#full-screen-programs. Size M."
   state = "reported"
-  revision = 441
-  overrides = ["2026-10-08: started by Orchestrator before M1 (reported): The owner started M2's host shell track early; shell UI work now runs on the `shell` branch."]
+  revision = 459
+  overrides = ["2026-10-08: started by Orchestrator before M1 (reported): The owner started M2's host shell track early; shell UI work now runs on the `shell` branch.", "2026-10-08: started by Orchestrator before M1 (reported): shell track (owner ruling 2026-10-08): shell UI packages run ahead of M1's report"]
 
 [[node]]
   id = "SHELL6"
@@ -1374,8 +1374,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "shell-host"
   needs = ["SHELL2"]
   body = "M2 host step 6: docs/userland/shell.md#resource-use. Size S-M. Also, from B32's measurement (.wash/local/B32-measure.md): the shell is built with unconsolidated protocols, so Protocol, Enumerable and Enumerable.Range (83K) load only for Redoubt.Term's Enum.chunk_while. Build the shell with consolidated protocols, keep Term off Enumerable, and measure the session's peak against B32's 5,902 pages (rv64); lower the session size if the margin allows."
-  state = "reported"
-  revision = 443
+  state = "done"
+  revision = 457
   overrides = ["2026-10-08: started by Orchestrator before M1 (reported): Shell track on the `shell` branch; owner asked to fill the bandwidth (2026-10-08)."]
 
 [[node]]
@@ -1632,3 +1632,21 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   state = "done"
   revision = 453
   overrides = ["2026-10-08: started by Orchestrator before M1 (reported): A test build broken on main; tiny."]
+
+[[node]]
+  id = "SHELL10"
+  title = "The session's own key is Ctrl+\\: it ends the screen or job in front, and a full-screen program may take Ctrl+C as a key"
+  template = "package"
+  parent = "shell-host"
+  body = "Owner's ruling, 2026-10-08: the session key is Ctrl+\\ (0x1C). Settle shell.md's Open item (Widgets, focus, themes: 'The session's own key'). The driver never forwards Ctrl+\\ and ends the foreground screen or job on it, as Ctrl+C does now. At the prompt and with a line or native job in front, Ctrl+C keeps its meaning. A screen program may declare that it takes Ctrl+C as a key; then Ctrl+C reaches it and Ctrl+\\ is the only interrupt. sshd's INT/break requests stay the interrupt. Per-principal configuration is not in this package; the page says so. Strict track (driver/session authority): main, Tier A (the red reviews), host tests (no screen can swallow Ctrl+\\; Ctrl+C reaches a screen that takes it; a pasted 0x1C ends the screen), the shell set of machine cases on both widths, ./test-shell, footprint. Pages: shell.md (interrupt key, What a job cannot do, the Open item), help pages that name Ctrl+C for screens. Size S."
+  state = "todo"
+  revision = 460
+
+[[node]]
+  id = "B40"
+  title = "./test-shell fails on the BEAM on main: driver_test's hostile-text case (and sometimes the crash-report case) reads row 1 as `F\")`"
+  template = "package"
+  parent = "shell-host"
+  body = "Found by SHELL6 on main 415c86ad6: the full ./test-shell fails on the BEAM 152/153, reproducing 4/4: driver_test \"hostile text a line writes to the console itself never reaches...\" (sometimes also \"a crash report...\"); row 1 reads `F\")`. beamlet passes. Suspect SHELL8 (the logger's output through the guard). Find the cause, fix it (test or code; if code is at fault it is the escaping path, so Tier A), and say why SHELL8's gate passed. Also: scripts/shell-cases run by absolute path from a worktree reads the root checkout's git; make it use the caller's tree (or its own), with --check covering it. Size S."
+  state = "done"
+  revision = 462
