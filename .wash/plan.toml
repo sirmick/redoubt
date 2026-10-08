@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 481
+revision = 487
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1581,9 +1581,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "smp"
   needs = ["SMP2"]
-  body = "M2's several-harts step 5. Found by SMP2: at 2 harts, deadline-flood-billed's victim hart waits about 1000 ms of a 2 s window for the one kernel lock, behind the creator's deadline destructions (billed to its parent) on the other hart. R78 bounds a lock wait by count, not by share, so one budget's kernel work costs up to H harts' time. SMP2 judges cross-hart shares net of lock waits, and names the residual on scheduling.md. This package moves destruction work (and other long kernel sections, measured first) outside the lock, or makes it preemptible, until deadline-flood-billed and sched-sleep-gaming pass at 2 harts without the net-of-waits judgement. Size L."
+  body = "Destruction work outside the kernel lock: one budget's kernel sections stop costing other harts their time. From SMP2: the lock-wait residual (a budget's create/destroy loop holding the lock while another hart's victim waits) keeps these cases at one hart; SMP4 un-keeps each and judges it at 2 harts on both widths: sched-budget-churn-shell, deadline-flood-billed-traced, sched-wake-no-preempt (and budget-deadline if SMP2 keeps it). SMP2's coverage table on scheduling.md is the list of record."
   state = "todo"
-  revision = 430
+  revision = 482
 
 [[node]]
   id = "B38"
@@ -1706,3 +1706,13 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "Found by RCMD1's probe: the steward mints every home and vault connection with quota 0 (servers/steward steward.rs:190), and walfsd lets a quota-0 root read and remove only, so mkdir/write/cp/mv in a session's home fail with enospc. No case writes in a home. Add a byte quota per principal's home and per vault label set to the manifest; init's check refuses quotas that together exceed the volume's room; the steward's `home ... quota=N` line is parsed and written by libs/steward manifest.rs and passed to new_connection. Image values: 8 MiB each (alice, bob, alice-secrets) on ~32 MiB volumes. Cases on both widths: a session writes, reads back and fills its home to the quota (enospc at the bound, the volume's other homes untouched); init refuses an over-committed manifest. Pages: sessions.md, steward.md, init.md, walfsd.md, the manifest reference. Tier A: the steward red."
   state = "todo"
   revision = 480
+
+[[node]]
+  id = "B43"
+  title = "redoubt-client's tests/file.rs hangs 4 of 9 tests on main until the fake kernel's 60 s guard"
+  template = "package"
+  parent = "M2"
+  body = "Found by CONS1 on origin/main 6a684f2cb, deterministic, alone on quiet cores: threads_share_a_connection, a_refusal_is_the_servers_and_costs_no_fid, a_gone_server_is_disconnected_every_time, a_session_reads_boot_through_the_library all hit \"a FOREVER wait saw no change in the fake kernel\". Bisect (first-parent) to the merge that broke it, find the cause (code or test), fix it, and say why that merge's gate missed it (client-host-tests not in its gate?). Gates: client host tests 3 runs, the crates the fix touches, and whatever the bisected merge's gate should have included. Size S."
+  state = "done"
+  revision = 487
+  overrides = ["2026-10-08: started by Orchestrator before M1 (reported): a main break found during M2 work; fix ahead of M1's report"]
