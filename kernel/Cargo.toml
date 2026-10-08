@@ -45,6 +45,11 @@ walk-trace = ["sched-trace"]
 # Debug only, never in a bench build but one recorded negative run: rank wakers behind queued
 # budgets of equal pass (the model's R12TieQueuedFirst), to show the oracle catches it.
 sched-inject-tie-fault = ["sched-trace"]
+# Debug only, never in a bench build but its negative case: the queue's floor counts the budgets
+# capped at their threads (the stride crate's `capped-holds-floor`, the model's
+# R12CappedHoldsFloor), so a waker enters behind a capped budget's lag; `sched-capped-holds-floor`
+# must fail on the share it costs.
+sched-capped-holds-floor = ["test-only", "redoubt-stride/capped-holds-floor"]
 # Debug only, never in a bench build but one recorded negative run: the kernel lock is
 # test-and-set instead of a ticket lock (cell.rs), so `smp-boot`'s FIFO check must fail (R78).
 sched-test-and-set-entry = ["test-only"]

@@ -134,6 +134,9 @@ pub enum Role {
     ClusterDriver = 29,
     /// Cluster fixture: 200 timeout waits with the same programmed offsets.
     ClusterTimer = 30,
+    /// p0 threads counting until the window ends, and p1 more that sleep until p2 ticks first;
+    /// report the total.
+    SpinThreads = 31,
 }
 
 impl Role {
@@ -170,6 +173,7 @@ impl Role {
             ClusterServer,
             ClusterDriver,
             ClusterTimer,
+            SpinThreads,
         ]
         .into_iter()
         .find(|r| *r as u8 == x)
@@ -297,6 +301,18 @@ extern "C" fn gamer_thread(_: usize) -> ! {
         n += spin_until(ticks() + burst);
         let _ = rd::receive(None, nap, 0);
     }
+    TOTAL.fetch_add(n as usize, SeqCst);
+    DONE.fetch_add(1, SeqCst);
+    rd::thread_exit().ok();
+    crate::park()
+}
+
+/// Count until the window ends, a `late` one ([`Role::SpinThreads`]'s p1) from p2 ticks.
+extern "C" fn spin_thread(late: usize) -> ! {
+    if late == 1 {
+        sleep_until(param(2), tpu());
+    }
+    let n = spin_until(end_ticks());
     TOTAL.fetch_add(n as usize, SeqCst);
     DONE.fetch_add(1, SeqCst);
     rd::thread_exit().ok();
@@ -757,6 +773,18 @@ fn run_child(arg: usize, more: Option<fn(Option<Role>, bool)>) -> ! {
             let _ =
                 rd::send(1, &rd::body([rd::time_now().unwrap_or(0) as usize, 0, 0, 0]), None, rd::FOREVER);
             rd::process_exit(0)
+        }
+        Some(Role::SpinThreads) => {
+            let (first, more) = (param(0).max(1) as usize, param(1) as usize);
+            for _ in 1..first {
+                thread(spin_thread, 0);
+            }
+            for _ in 0..more {
+                thread(spin_thread, 1);
+            }
+            let n = spin_until(end);
+            await_done(first - 1 + more);
+            n + TOTAL.load(SeqCst) as u64
         }
         Some(Role::Gamer) => {
             let threads = param(2).max(1) as usize;

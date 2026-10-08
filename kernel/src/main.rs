@@ -97,6 +97,10 @@ pub unsafe extern "C" fn init(
         // lost the checks fails instead of passing quietly (`bench-debug-assertions`).
         println!("kernel: checks on (debug assertions, overflow checks)");
     }
+    // Debug only: the negative case's broken floor (the stride crate's `capped-holds-floor`) says
+    // so, and `sched-capped-holds-floor` expects the line, so its failure is this kernel's.
+    #[cfg(feature = "sched-capped-holds-floor")]
+    println!("kernel: sched-capped-holds-floor: the floor counts the capped budgets");
     // Test builds only: a print, then a panic, inside `print!` (debug/console.rs).
     #[cfg(feature = "panic-in-print")]
     {

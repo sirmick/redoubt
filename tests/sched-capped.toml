@@ -1,0 +1,35 @@
+description = "R12 across harts, the capped budgets (kernel/scheduling.md, \"The current minimum and ties\"): the model's four scenarios on the machine (late join, second cap, uncap, spread), each budget's share after a budget wakes or gains a thread judged by the post-check on the kernel's charges net of lock waits against water-filling at the harts the trace states, within 50 per thousand (virtual time, checked build, two, three and four harts)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+icount = "shift=3,sleep=off"
+programs = ["sched-capped"]
+# At one hart no budget is ever capped. Late join and uncap are judged at two harts, second cap at
+# three and spread at two and four (`@` on each line); every run reports all four.
+smp = [2, 3, 4]
+keep_smp = true
+# Test builds only: the trace ring (never in a default kernel). Under icount a count is the
+# machine's instructions, not a hart's time, so the shares are the kernel's charges (`HART-SHARE`).
+kernel_features = ["sched-trace"]
+post_check = "sched_oracle"
+timeout_secs = 1200
+expect = [
+    '^HART-SHARE late-a \d+ \d+ 50@2 2:1 100:1 100:1$',
+    '^HART-SHARE late-b \d+ \d+ 50@2 3:1 900:1 100:1$',
+    '^HART-SHARE late-c \d+ \d+ 50@2 4:1 900:1 100:1$',
+    '^HART-SHARE second-a \d+ \d+ 50@3 5:1 100:1 10:5 10:5 10:1$',
+    '^HART-SHARE second-b \d+ \d+ 50@3 6:1 1000:1 10:5 10:5 10:1$',
+    '^HART-SHARE second-c \d+ \d+ 50@3 7:5 1000:1 100:1 10:5 10:1$',
+    '^HART-SHARE second-e \d+ \d+ 50@3 9:1 1000:1 100:1 10:5 10:5$',
+    '^HART-SHARE uncap-a \d+ \d+ 50@2 10:2 100:1 100:1$',
+    '^HART-SHARE uncap-b \d+ \d+ 50@2 11:1 900:2 100:1$',
+    '^HART-SHARE uncap-c \d+ \d+ 50@2 12:1 900:2 100:1$',
+    '^HART-SHARE spread-a \d+ \d+ 50@2 13:4 100:1$',
+    '^HART-SHARE spread-b \d+ \d+ 50@2 14:1 100:4$',
+    '^HART-SHARE spread-a-4 \d+ \d+ 50@4 13:4 100:1$',
+    '^HART-SHARE spread-b-4 \d+ \d+ 50@4 14:1 100:4$',
+    '^SCHED-CAPPED TEST PASSED$',
+    '^SCHED-TRACE-END \d+ dropped 0$',
+]
+forbid = ['\[capped\] FAIL']
+poweroff = true

@@ -311,7 +311,8 @@ impl<B: Copy + PartialEq, const N: usize> Queue<B, N> {
         self.pending = false;
         let capped = &self.capped[..self.len];
         let ranks = &self.ranks[..self.len];
-        if let Some(min) = ranks.iter().zip(capped).filter(|(_, c)| !**c).map(|(r, _)| r.pass).min() {
+        let counts = |c: &bool| !*c || cfg!(feature = "capped-holds-floor");
+        if let Some(min) = ranks.iter().zip(capped).filter(|(_, c)| counts(c)).map(|(r, _)| r.pass).min() {
             self.floor = self.floor.max(min);
         } else if let Some(max) = ranks.iter().map(|r| r.pass).max() {
             // Every queued budget capped: the highest of them, so uncontested time banks for no one.
@@ -593,7 +594,10 @@ impl<B: Copy + PartialEq, const N: usize> Queue<B, N> {
             if !s.queued || (s.pass, s.tie, bs.id(b)) != (r.pass, r.tie, r.id) {
                 return Err(b);
             }
-            if !self.capped[i] && min.map_or(true, |(p, _)| r.pass < p) {
+            // `capped-holds-floor` breaks the rule here as well, so its kernel passes its own audit
+            // and only the bench's shares can see it.
+            let counts = !self.capped[i] || cfg!(feature = "capped-holds-floor");
+            if counts && min.map_or(true, |(p, _)| r.pass < p) {
                 min = Some((r.pass, b));
             }
         }

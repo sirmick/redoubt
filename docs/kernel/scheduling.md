@@ -899,10 +899,12 @@ Status: built · tested: bench:sched-carve-inflation, bench:legacy-gone, host:re
 
 ### R12 (scheduling)
 
-<details><summary>Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search, `map_fixed`'s range, `process_create` and, after RAM fills, a one-page `map_anon`, `budget_create` and a rolled-back `process_create` (with a recorded negative run, `alloc-first-fit`); and at full occupancy, every PID in use with every thread, for a delivery, a timer expiry ending 250 waits at once and the reconcile that wakes their 250 budgets (7.1 ms on rv64, 8.1 ms on rv32) and a destruction (at most 17.1 ms on rv64, 18.2 ms on rv32) (`bench:worst-walk`) · tested (57)</summary>
+<details><summary>Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search, `map_fixed`'s range, `process_create` and, after RAM fills, a one-page `map_anon`, `budget_create` and a rolled-back `process_create` (with a recorded negative run, `alloc-first-fit`); and at full occupancy, every PID in use with every thread, for a delivery, a timer expiry ending 250 waits at once and the reconcile that wakes their 250 budgets (7.1 ms on rv64, 8.1 ms on rv32) and a destruction (at most 17.1 ms on rv64, 18.2 ms on rv32) (`bench:worst-walk`) · tested (59)</summary>
 
 - bench:sched-share
 - bench:sched-share-release
+- bench:sched-capped
+- bench:sched-capped-holds-floor
 - bench:sched-sleep-gaming
 - bench:sched-idle-gap
 - bench:sched-exit-churn
@@ -1015,7 +1017,14 @@ It is attacked three ways:
   300; near-slice, 20 µs and long-sleep bursts; a sleeper waking into an idle gap; threads and
   processes that exit or fault just before their slice ends; budget churn; carving; 30 sleepers a
   microsecond apart, 64 staggered deadlines, and waits ended before their timeouts; a system
-  server flooded by one user; a weight-1000 server among eight users of 100.
+  server flooded by one user; a weight-1000 server among eight users of 100. On two, three and
+  four harts, `sched-capped` runs the model's scenarios: a heavy budget with one thread on two
+  harts while others join, a second cap at three, a capped budget gaining a thread, and one
+  budget spread over four harts. A kernel whose floor counts the capped budgets
+  (`sched-capped-holds-floor`, a debug-only feature whose queue audit reads the same broken rule)
+  passes every rank the oracle checks, and fails late join's shares at two harts, on both widths:
+  B gets 52 of 1000 (rv64) and 56 (rv32) against 250 while C takes its hart
+  (`bench:sched-capped-holds-floor`, a case that must fail).
 - **The differential** drives `libs/stride`, wired as the kernel wires it, and the model's
   scheduler through 3,000 random sequences of creations, destructions (leaf, on a hart, and
   whole subtrees), wakes, blocks, runs and preemptions, at 1, 2 and 4 harts, and requires every
@@ -1102,7 +1111,8 @@ tells whoever reads the console who runs when. It exists only under the Cargo fe
 The other diagnostic features are off by default in the same way: `walk-trace`, which implies
 the trace and brackets each receive's pump, timer expiry and reconcile in it, for `worst-walk`
 alone; `sched-inject-tie-fault`, a debug-only break of the tie rule that implies the trace;
-`sched-test-and-set-entry`, which replaces the kernel lock by test-and-set, and
+`sched-capped-holds-floor`, whose floor counts the capped budgets, for R12's negative case at two
+harts; `sched-test-and-set-entry`, which replaces the kernel lock by test-and-set, and
 `sched-spin-entry`, which makes a hart wait for it spinning, each for one of
 [R78](#r78-fair-kernel-entry)'s recorded negative runs;
 `audit-unstamped`, which leaves the audit
@@ -1245,7 +1255,8 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   keeps 448 of 1000 on rv32 against at least 450 (482 on rv64); against processes that exit or
   fault it is judged at two. Work moving out of the lock (step 5) is what lets both shares be
   judged at two.
-  `bench-poweroff-missing` keeps one hart too, a bound of the bench's own.
+  `bench-poweroff-missing` keeps one hart too, a bound of the bench's own. `sched-capped` keeps
+  the two, three and four harts it is about.
 - **A call within one budget crosses harts.** A wake sends an idle hart the reschedule interrupt
   even when the woken thread's budget runs elsewhere, so a server and its client in one budget
   hand each call and reply across two harts, each hand-off an interrupt and a wait for the lock,

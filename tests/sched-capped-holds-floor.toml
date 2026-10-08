@@ -1,0 +1,23 @@
+description = "self-check of the share judge across harts: a kernel whose floor counts the budgets capped at their threads (`sched-capped-holds-floor`, the model's R12CappedHoldsFloor) runs sched-capped at two harts, and the post-check must fail it on a late-join share, where the waker enters behind the capped budget's lag and takes the other budget's hart (kernel/scheduling.md, R12)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+icount = "shift=3,sleep=off"
+programs = ["sched-capped"]
+# Late join is judged at two harts. The oracle's own floor is the lowest queued pass, capped or
+# not, so every wake of this kernel is at or above it: only the shares can see the break.
+smp = [2]
+keep_smp = true
+# Test builds only: the trace ring and the broken floor (never in a default kernel).
+kernel_features = ["sched-trace", "sched-capped-holds-floor"]
+post_check = "sched_oracle"
+timeout_secs = 1200
+must_fail = '(?s)hart share late-[bc]: \d+ of 1000 .*?target missed'
+expect = [
+    '^kernel: sched-capped-holds-floor: the floor counts the capped budgets$',
+    '^HART-SHARE late-b \d+ \d+ 50@2 3:1 900:1 100:1$',
+    '^SCHED-CAPPED TEST PASSED$',
+    '^SCHED-TRACE-END \d+ dropped 0$',
+]
+forbid = ['\[capped\] FAIL']
+poweroff = true
