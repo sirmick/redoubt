@@ -249,7 +249,7 @@ The interrupt key:
   both are OTP's `user_drv`, which the shell's driver replaces
   ([line editing](#line-editing-and-history)). A session ends only by `exit` or Ctrl+D.
 - **With a full-screen program in front**, Ctrl+C may be the program's key; the key the session
-  keeps for itself is [a screen's](#widgets-focus-themes-and-a-native-programs-screen).
+  keeps for itself is [a screen's](#a-native-programs-screen-and-the-sessions-key).
 - **Over SSH**, `sshd` turns the channel's `signal` request (INT) and `break` request into the same
   interrupt a 0x03 byte gives. It is a protocol message, not a Unix signal; nothing inside Redoubt
   has signals ([sshd](../servers/sshd.md)).
@@ -389,7 +389,7 @@ is refused, never repaired. One file of vectors holds the two decoders to the sa
 
 ### Full-screen programs
 
-<details><summary>Status: built · partly tested: the host only, on beamlet alone (the BEAM has no screen buffer), with the three widgets `pick` uses; its tests are the shell's own ExUnit suite (`test/redoubt/screen_test.exs`, `test/redoubt/screen/layout_test.exs`), judged on a model of the terminal, and a pseudo-terminal test of the real binary, both of which `./test-shell` runs and no bench case does · tested (1)</summary>
+<details><summary>Status: built · partly tested: the host only, on beamlet alone (the BEAM has no screen buffer); its tests are the shell's own ExUnit suite (`test/redoubt/screen_test.exs`, `test/redoubt/screen/layout_test.exs`), judged on a model of the terminal, and a pseudo-terminal test of the real binary, both of which `./test-shell` runs and no bench case does · tested (1)</summary>
 
 - host:beamlet::pick_on_a_terminal_takes_the_screen_and_gives_it_back_with_the_choice
 
@@ -424,8 +424,8 @@ own. It draws into a **screen buffer**, a grid of cells beamlet holds natively
 - **Layout** is rectangles only: split into rows or columns by fixed size, percentage or what is
   left; centre; inset. A screen lays out in fixed rectangles.
 - **Widgets are functions, not processes:** each draws into a rectangle of the buffer from what it
-  is given, every text made visible first. Built are the three `pick` uses: a box with a title and
-  a shadow, a list with a selection, and a status line.
+  is given, every text made visible first: a box with a title and a shadow, a status line, and
+  those that take keys ([widgets](#widgets-focus-and-themes)).
 - **A screen's life.** A line starts a screen with `Redoubt.Screen.run(module, args)`, which
   returns when the screen ends, with the value its `update` ended it with. While it is in front,
   the driver shows the alternate screen with the cursor hidden, sends it every key as
@@ -446,17 +446,49 @@ What a full-screen program cannot do:
 - **Keep the interrupt from the session.** Ctrl+C ends the screen in front, as it ends a line at
   the prompt.
 
-### Widgets, focus, themes and a native program's screen
+### Widgets, focus and themes
+
+Status: built · partly tested: the host only; the keys of every widget, the focus ring and the dialog stack on beamlet and on the BEAM, and what they draw on beamlet alone (the BEAM has no screen buffer); its tests are the shell's own ExUnit suite (`test/redoubt/screen/widget_test.exs`, `test/redoubt/screen/drawing_test.exs`, `test/redoubt/screen_test.exs`), judged on a model of the terminal, which `./test-shell` runs and no bench case does
+
+A screen program is built of widgets
+([`userland/shell/lib/redoubt/screen/`](../../userland/shell/lib/redoubt/screen/)), which are
+plain data and functions, never processes. One that takes keys is a struct with `key`, which
+answers a key with the widget changed, with the value it ended with (Enter on a list, a button
+pressed), or with `:pass` for a key it does not take; and `draw`, which draws it into a
+rectangle of the buffer, with the focus or without. The screen's `update` stays the one place
+its state changes. The widgets' code is not held at the prompt: they declare no commands,
+so nothing loads them until a screen first draws with them.
+- **The widgets:** a list, which is also the radio list and the checklist (Space marks); a row
+  of buttons; a one-line text input whose cursor is a cell drawn in its own style, the
+  terminal's cursor staying hidden; a menu bar with drop-downs, opened by F10 or Alt and a
+  menu's first letter, modal while open; a table with a header, its columns sized as
+  [`table`](#files-and-text) sizes them; a Braille canvas of dots, two across and four down in
+  each cell, drawn with the buffer's `plot`; and the completion pop-up, a list placed below a
+  cell, or above it with no room below. The prompt's own completion is `group`'s list
+  ([completion](#completion)), not the pop-up.
+- **A stack of modal dialogs:** a message, a yes or no, and an input with OK and Cancel. Keys go
+  to the top dialog, which keeps those it does not take, or to the screen when there is none;
+  Esc closes the top dialog with `nil`. The stack is laid out in `view` from the size the screen
+  has, top to bottom, so a screen of a new size draws it again at that size.
+- **Focus:** inside a dialog or a screen, Tab and Shift+Tab move along a focus ring, and every
+  other key goes to the widget with the focus.
+- **A theme** is a map from roles (the text, the selection, a border, the menu, a button, the
+  input, its cursor) to styles. Three are built: the terminal's own colours, the default;
+  QBasic's blue; and `menuconfig`'s.
+- **Every style is the code's.** A widget draws each part in its role's style, and its text
+  through the visible-text rule: a label, an item, a cell, a title or what was typed sets no
+  colour, and a control character in it is drawn as `^[` in the role's style
+  ([hostile text](#hostile-text-never-drives-the-terminal)). A theme is chosen by name from the
+  three, never read from text.
+
+What is not built: a `plot(values)` command drawing a series on the canvas, and the delivery of
+a change of size to a screen in front, which waits for the console's `resize`
+([below](#paste-scrolling-a-plainer-terminal-and-the-consoles-size)).
+
+### A native program's screen and the session's key
 
 Status: planned · M2 (usable shell)
 
-- **The rest of the widgets:** a menu bar with drop-downs, a checklist and a radio list, buttons,
-  a text input with a cursor, a completion pop-up, a stack of modal dialogs (a message, yes or no,
-  an input), a table, and a Braille canvas.
-- **Focus:** keys go to the top dialog of the stack, or to the screen when there is none; inside
-  either, Tab and Shift+Tab move along a focus ring. On a resize the stack is laid out again, top
-  to bottom, at the new size, and the screen gets `{:resize, cols, rows}`.
-- **A theme** is a map from roles to styles; QBasic's blue and `menuconfig`'s are two maps.
 - **A native program with a screen**, a package's own TUI, sends `cells` frames on its standard
   output, and the session draws them through the same decoder and encoder. It holds its pipes and
   its budget, no `/dev/cons`, and a cell cannot carry a control sequence, so a hijacked one can

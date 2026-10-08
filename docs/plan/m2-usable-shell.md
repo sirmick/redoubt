@@ -108,7 +108,7 @@ step is one a person can use, in this order:
    ([the shell](../userland/shell.md#session-commands-and-the-pager),
    [the shell](../userland/shell.md#completion)).
 4. **The widgets:** the menu bar, dialogs, the input, the lists, the table and the canvas
-   ([the shell](../userland/shell.md#widgets-focus-themes-and-a-native-programs-screen)).
+   ([the shell](../userland/shell.md#widgets-focus-and-themes)).
 5. **The editor**, then **the file manager** ([the shell](../userland/shell.md#the-editor)).
 6. **Resource use** ([the shell](../userland/shell.md#resource-use)).
 
@@ -127,7 +127,7 @@ On Redoubt, after M1 (sessions over SSH, kept apart), in this order:
    ([native programs](../userland/native.md#killing-a-job),
    [the shell](../userland/shell.md#interrupting-and-killing-jobs)).
 5. **A native program's screen:** its `cells` frames read and drawn by the session
-   ([the shell](../userland/shell.md#widgets-focus-themes-and-a-native-programs-screen)).
+   ([the shell](../userland/shell.md#a-native-programs-screen-and-the-sessions-key)).
 
 ### Several harts
 
@@ -187,8 +187,10 @@ with `Redoubt.Term` drawing for it, line editing and the session's history, the 
 a line, and hostile text drawn visibly on every path the host has
 ([the shell](../userland/shell.md#line-editing-and-history)); and screens on beamlet:
 the screen buffer's natives, `Redoubt.Screen` with its layout, and `pick`
-([the shell](../userland/shell.md#full-screen-programs)); and resource use, `free`, `uptime`, `ps`
-and `top`, over the session's own budget and its VM, `df` not yet
+([the shell](../userland/shell.md#full-screen-programs)); the widgets: the menu bar, dialogs,
+the input, the lists, the table, the Braille canvas, focus and themes
+([the shell](../userland/shell.md#widgets-focus-and-themes)); and resource use, `free`, `uptime`,
+`ps` and `top`, over the session's own budget and its VM, `df` not yet
 ([the shell](../userland/shell.md#resource-use)). On Redoubt it runs only on the fake kernel (`./shell --fake`). What the milestone builds on: the serving
 library's parked calls ([serving](../servers/serving.md#parked-calls)), `consoled`'s 9P console
 ([consoled](../servers/consoled.md)), and budget destruction as the only way to end a process

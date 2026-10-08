@@ -9,7 +9,8 @@ defmodule Redoubt.Screen.Pick do
 
   @behaviour Redoubt.Screen
 
-  alias Redoubt.Screen.{Layout, Widgets}
+  alias Redoubt.Screen.{Layout, Widget, Widgets}
+  alias Redoubt.Screen.Widget.Theme
 
   @hint "↑↓ move · Enter choose · Esc leave"
 
@@ -33,55 +34,37 @@ defmodule Redoubt.Screen.Pick do
   end
 
   @impl Redoubt.Screen
-  def init({items, title}) do
-    # As drawn: any control character in an item is drawn visibly, and measured so.
-    labels = Enum.map(items, &(&1 |> label() |> Redoubt.Term.Text.visible()))
-    %{items: List.to_tuple(items), labels: labels, title: title, selected: 0, page: 1}
-  end
-
-  defp label(item) when is_binary(item), do: item
-  defp label(item), do: inspect(item)
+  def init({items, title}), do: %{list: Widget.List.new(items), title: title}
 
   @impl Redoubt.Screen
+  # A key counts with any modifiers held: Alt+Esc leaves, Shift+Down moves.
+  def update({:key, :esc, _mods}, _state), do: {:halt, nil}
+
   def update({:key, key, _mods}, state) do
-    case key do
-      :enter -> {:halt, elem(state.items, state.selected)}
-      :esc -> {:halt, nil}
-      :up -> move(state, -1)
-      :down -> move(state, 1)
-      :page_up -> move(state, -state.page)
-      :page_down -> move(state, state.page)
-      :home -> move(state, -state.selected)
-      :end -> move(state, tuple_size(state.items))
-      _other -> {:cont, state}
+    case Widget.List.key(state.list, {:key, key, []}) do
+      {:done, value, _list} -> {:halt, value}
+      {:cont, list} -> {:cont, %{state | list: list}}
+      :pass -> {:cont, state}
     end
   end
 
   # The list's rows on a screen of this size: the screen less the status line, a margin and the
   # box's borders. Page Up and Down move by them.
-  def update({:resize, _cols, rows}, state), do: {:cont, %{state | page: max(rows - 5, 1)}}
+  def update({:resize, _cols, rows}, state),
+    do: {:cont, %{state | list: Widget.List.page(state.list, rows - 5)}}
 
   def update(_message, state), do: {:cont, state}
-
-  defp move(state, delta) do
-    last = tuple_size(state.items) - 1
-    {:cont, %{state | selected: (state.selected + delta) |> max(0) |> min(last)}}
-  end
 
   @impl Redoubt.Screen
   def view(state, buffer, {cols, rows}) do
     [body, status] = Layout.split({0, 0, cols, rows}, :rows, [:rest, {:fixed, 1}])
-    widest = state.labels |> Enum.map(&Redoubt.Term.Width.columns/1) |> Enum.max()
     title = state.title || ""
-    w = max(widest, Redoubt.Term.Width.columns(title) + 2) + 4
-    h = length(state.labels) + 2
+    w = max(Widget.List.width(state.list), Redoubt.Term.Width.columns(title) + 2) + 4
+    h = Widget.List.count(state.list) + 2
     # Room for the shadow, a cell right and below.
-    {x, y, w, h} = Layout.centre(Layout.inset(body, 1), w, h)
-    Widgets.box(buffer, {x, y, w, h}, title: state.title)
-    {_, _, _, ih} = inner = Layout.inset({x, y, w, h}, 1)
-    offset = if state.selected < ih, do: 0, else: state.selected - ih + 1
-    Widgets.list(buffer, inner, state.labels, state.selected, offset)
-
+    rect = Layout.centre(Layout.inset(body, 1), w, h)
+    Widgets.box(buffer, rect, title: state.title)
+    Widget.List.draw(state.list, buffer, Layout.inset(rect, 1), Theme.plain(), true)
     Widgets.status(buffer, status, @hint)
   end
 end

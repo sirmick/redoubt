@@ -24,7 +24,7 @@ defmodule Redoubt.Shell.Table do
   ]
   defcommand table(rows :: lines, opts :: flags(header: boolean, title: string)) do
     rows = Enum.map(rows, &cells/1)
-    widths = columns(rows)
+    widths = widths(rows)
     # A header is laid out as the first row: in text, nothing sets it apart until screens do.
     body = Enum.map(rows, &row(&1, widths))
     terminal = terminal_width()
@@ -48,8 +48,9 @@ defmodule Redoubt.Shell.Table do
     [top | Enum.map(body, &("│" <> pad(clip(&1, inner), inner, " ") <> "│"))] ++ [bottom]
   end
 
-  # A row's cells, each padded to its column's width, one space between them.
-  defp row(cells, widths) do
+  @doc "A row's cells as one line, each padded to its column's width, one space between them."
+  @spec row([String.t()], [non_neg_integer()]) :: String.t()
+  def row(cells, widths) do
     widths
     |> Enum.with_index()
     |> Enum.map_join(" ", fn {width, c} -> pad(Enum.at(cells, c, ""), width, " ") end)
@@ -76,17 +77,22 @@ defmodule Redoubt.Shell.Table do
     |> IO.iodata_to_binary()
   end
 
-  # A row's cells, as text as it will be shown.
-  defp cells(row) when is_list(row), do: Enum.map(row, &cell/1)
-  defp cells(row) when is_tuple(row), do: row |> Tuple.to_list() |> cells()
-  defp cells(value), do: [cell(value)]
+  @doc """
+  A row's cells, as text as it will be shown: a list's or a tuple's elements, or the one value;
+  a string as it is, an atom or a number as text, anything else inspected, each made visible.
+  """
+  @spec cells(term()) :: [String.t()]
+  def cells(row) when is_list(row), do: Enum.map(row, &cell/1)
+  def cells(row) when is_tuple(row), do: row |> Tuple.to_list() |> cells()
+  def cells(value), do: [cell(value)]
 
   defp cell(text) when is_binary(text), do: Text.visible(text)
   defp cell(value) when is_atom(value) or is_number(value), do: value |> to_string() |> Text.visible()
   defp cell(value), do: value |> inspect() |> Text.visible()
 
-  # Each column's width: its widest cell's.
-  defp columns(rows) do
+  @doc "Each column's width, of rows of cells: its widest cell's."
+  @spec widths([[String.t()]]) :: [non_neg_integer()]
+  def widths(rows) do
     count = rows |> Enum.map(&length/1) |> Enum.max(fn -> 0 end)
 
     for c <- 0..(count - 1)//1,
