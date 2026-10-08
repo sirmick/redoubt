@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 405
+revision = 407
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1495,8 +1495,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "smp"
   body = "Found by SMP3's --smp 2 sweep (rv64) on main 0b1ddf839 plus the bench option. Both also fail without SMP3's kernel commits, so the cause is under SMP1's one big lock. budget-deadline: after four terminations no [deadline] line comes in 120 s. redoubt-ipc-attack: the attacker stops after its buffers step (20 s). Read SMP3's findings (.wash/local/SMP3-smp2-findings.md). Find out whether these are lost wakeups or IPIs, or a wrong result, and fix them. Coordinate with SMP3, which changes the pick and running state; rebase onto it if it merges first. Size M."
-  state = "active"
-  revision = 386
+  state = "done"
+  revision = 407
   overrides = ["2026-10-08: started by Orchestrator before M1 (reported): Two-hart stalls on main under SMP1's lock; SMP3, already in flight for M2, needs these understood."]
 
 [[node]]

@@ -28,6 +28,8 @@ use uart_16550::MmioSerialPort;
 /// The most a deadline's notices may arrive after it, in virtual time, beyond what destroying
 /// the same budget by hand costs (R10's own work: its sweeps are the same either way).
 const LATE_US: u64 = 1_000;
+/// A lease's term: room for its two spawns before it ends, on two harts too.
+const LEASE_US: u64 = 500_000;
 /// Words of a report on the `rep` endpoint.
 const TAKEN: usize = 1;
 const VERDICT: usize = 2;
@@ -155,16 +157,19 @@ pub extern "C" fn _start() -> ! {
 
     // A lease of the same shape, destroyed by its deadline while its spinner is on the CPU (the
     // process the timer interrupts is itself destroyed, last): its notices come no later than
-    // doing it by hand would take, plus the timer's latency.
-    let deadline = now() + 100_000;
+    // doing it by hand would take, plus the timer's latency. The deadline leaves room for the
+    // two spawns, which take tens of ms of guest time on two harts (every kernel entry that
+    // meets the other hart in the kernel costs it a vCPU quantum under icount), and the go is
+    // sent with a timeout: a send that could outlive its receiver would wait for ever if the
+    // lease died first, and a FAIL line says more than silence.
+    let deadline = now() + LEASE_US;
     let timed = rd::create(rd::SYSTEM, &spec(700, 2, 10, deadline)).unwrap();
     rd::create(timed, &rd::spec(10, 0, 0)).unwrap();
     spawn::spawn(&image, timed, exit, child as *const () as usize, &[5], &[]).unwrap();
     spawn::spawn(&image, timed, exit, child as *const () as usize, &[1], &[go]).unwrap();
     let _ = rd::receive(None, 10_000, 0);
-    rd::send(go_client, &rd::body([0; 4]), None, rd::FOREVER).unwrap();
+    let mut good = rd::send(go_client, &rd::body([0; 4]), None, 2_000_000).is_ok();
     let mut late = 0;
-    let mut good = true;
     for _ in 0..2 {
         match rd::receive(Some(exit), 2_000_000, 0) {
             Ok(Received::Exit(n)) => {
@@ -189,7 +194,7 @@ pub extern "C" fn _start() -> ! {
 
     // The lease, its child with a later deadline, and a handle stamped with it.
     let before = rd::usage(rd::SYSTEM).unwrap();
-    let deadline = now() + 100_000;
+    let deadline = now() + LEASE_US;
     let lease = rd::create(rd::SYSTEM, &spec(700, 2, 10, deadline)).unwrap();
     let child_budget = rd::create(lease, &spec(10, 0, 0, deadline + 200_000)).unwrap();
     let stamped = rd::mint_from_handle(q, 7, Some(lease)).unwrap();
