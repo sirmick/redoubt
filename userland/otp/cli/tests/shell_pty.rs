@@ -1,7 +1,7 @@
 //! The shell on a real terminal: beamlet's binary on a pseudo-terminal, running Redoubt's shell,
-//! with a screen in front of it (docs/userland/shell.md, "Full-screen programs") and the pager. It
-//! needs the shell built and the code path ./test-shell gives it in `SHELL_PTY_ARGS` (beamlet's
-//! arguments, one a line), so cargo runs it only when asked: `./test-shell` does.
+//! with a screen in front of it (docs/userland/shell.md, "Full-screen programs"), the pager and
+//! Tab. It needs the shell built and the code path ./test-shell gives it in `SHELL_PTY_ARGS`
+//! (beamlet's arguments, one a line), so cargo runs it only when asked: `./test-shell` does.
 
 use std::io::{Read, Write};
 use std::process::{Child, Command, Stdio};
@@ -136,4 +136,23 @@ fn help_longer_than_the_terminal_is_paged_and_q_gives_the_screen_back() {
     let status = s.child.wait().unwrap();
     assert!(status.success(), "{status:?}");
     assert_eq!(modes(&slave), before, "the terminal's settings are back");
+}
+
+#[test]
+#[ignore = "needs the shell built: ./test-shell runs it"]
+fn tab_completes_a_command_on_a_terminal() {
+    let (master, slave) = pty();
+    tcsetwinsize(&slave, Winsize { ws_row: 12, ws_col: 70, ws_xpixel: 0, ws_ypixel: 0 }).unwrap();
+    let mut s = Session::start(&slave, &master);
+
+    // Tab after a command's start: its name and the parenthesis.
+    let at = s.wait_for(b"(1)> ", 0);
+    s.typed(b"hexd\t");
+    let at = s.wait_for(b"hexdump(", at);
+    s.typed(b"\x03");
+    s.wait_for(b"(1)> ", at);
+
+    s.typed(b"exit\r");
+    let status = s.child.wait().unwrap();
+    assert!(status.success(), "{status:?}");
 }

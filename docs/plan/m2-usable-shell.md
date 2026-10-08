@@ -191,7 +191,8 @@ the screen buffer's natives, `Redoubt.Screen` with its layout, and `pick`
 ([the shell](../userland/shell.md#full-screen-programs)); the widgets: the menu bar, dialogs,
 the input, the lists, the table, the Braille canvas, focus and themes
 ([the shell](../userland/shell.md#widgets-focus-and-themes)); the pager, with help drawn in it
-([the shell](../userland/shell.md#the-pager)); and resource use, `free`, `uptime`,
+([the shell](../userland/shell.md#the-pager)); Tab completion of commands, variables, modules and
+paths ([the shell](../userland/shell.md#completion)); and resource use, `free`, `uptime`,
 `ps` and `top`, over the session's own budget and its VM, `df` not yet
 ([the shell](../userland/shell.md#resource-use)). On Redoubt it runs only on the fake kernel (`./shell --fake`). What the milestone builds on: the serving
 library's parked calls ([serving](../servers/serving.md#parked-calls)), `consoled`'s 9P console

@@ -562,13 +562,12 @@ Status: built · partly tested: the host only; its tests are the shell's own ExU
 flowchart BT
     C["the console: raw bytes, no echo"] --> D["the shell's driver: keys to group, drawing through Redoubt.Term"]
     D --> G["OTP's group and edlin, unchanged: editing, history, Ctrl+R"]
-    G -.->|"expand_fun"| CO["completion"]
+    G -->|"expand_fun"| CO["completion"]
     G --> S["Redoubt.Shell: the loop"]
-    R["the registry (defcommand)"] -.-> CO
+    R["the registry (defcommand)"] --> CO
     R --> HE["help"]
 ```
-*Figure: the shell's layers, bottom up. Solid is built; completion is planned (dashed). One
-registry feeds completion and help.*
+*Figure: the shell's layers, bottom up. One registry feeds completion and help.*
 
 On the BEAM, line editing is OTP's `edlin` under `group`, plain Erlang; only the driver under
 them (`user_drv` and `prim_tty`) needs the operating system. So the shell keeps `group` and
@@ -607,26 +606,40 @@ Status: planned · M2 (usable shell)
 
 ### Completion
 
-Status: planned · M2 (usable shell)
+Status: built · partly tested: the host only, for the parameter types the host has (paths, commands and help's names); its tests are the shell's own ExUnit suite (`test/redoubt/shell/completer_test.exs`, `test/redoubt/shell/driver_test.exs`) and a pseudo-terminal test of the real binary, which `./test-shell` runs and no bench case does · tested: host:beamlet::tab_completes_a_command_on_a_terminal
 
-The shell's completer (`group`'s `expand_fun`) looks at the line before the cursor with
-`Code.Fragment`:
+The shell's completer
+([`Redoubt.Shell.Completer`](../../userland/shell/lib/redoubt/shell/completer.ex)) is `group`'s
+`expand_fun`, which the shell sets before each read over the names the prompt then has; its
+module is loaded at the first Tab, and a command's name is completed from the commands' index,
+loading no command. It looks at the line before the cursor with `Code.Fragment`:
 
 | Line so far | Completes from |
 | --- | --- |
-| `c⇥` (a name being typed) | commands, then Elixir's modules, functions and variables in scope |
-| `cp("no⇥` (inside a string argument of a command) | the type that parameter is declared with: a path, a command's name, a principal, a budget or a label |
-| `File.re⇥` | the functions of the module |
+| `c⇥` (a name being typed) | the commands and functions imported at the prompt, and its variables; a function alone gets its `(` |
+| `cp("no⇥` (inside a string argument of a command) | the type that parameter is declared with: a path, or a command's or help's name (`help(:gr⇥` too) |
+| `File.re⇥`, `:lists.re⇥` | the functions of the module |
+| `Fi⇥` | aliases and modules, a segment at a time |
 
-- **Paths** resolve through the session's namespace and read the directory over 9P, one read per
-  Tab. The file server lists only entries the caller's labels may read, so completion cannot
-  reveal a name the session could not `ls`.
-- The first Tab inserts the longest common prefix; the second lists the candidates in columns,
-  through the pager when they exceed a screen. Directories complete with a trailing `/`.
-- A completer never launches a process and never writes. A slow server bounds it with a short
-  timeout, after which Tab does nothing.
-
-**Open:** none.
+- **Paths** resolve against the session's working directory and read the directory once per
+  Tab, with the session's own authority, as `ls` does; whether a name is a directory is asked
+  of the names that match only. So completion cannot show a name the session could not `ls`:
+  on Redoubt the file server lists only entries the caller's labels may read. A name starting
+  with a dot is offered once its dot is typed.
+- The first Tab inserts what every candidate shares; the second lists them below the line, in
+  columns, a few rows of them, and a third lists them all. Directories complete with a trailing
+  `/`. The list is `group`'s, drawn by the encoder under the visible-text rule, with the line
+  kept on the screen.
+- **Nothing typed becomes an atom.** No typed text is parsed: the command a string or an atom
+  is given to, and which of its arguments that is, are found from the brackets and commas before
+  the cursor, and the command is looked up by its name as a string. `Mod.fu⇥` names a module only
+  if its atom exists already, and loads that module from the code path if it is not loaded yet,
+  as calling it would.
+- A completer never launches a program and never writes. Reading a directory or the code path's
+  modules runs in a process of its own with 300 ms; past that it is stopped, and Tab inserts and
+  lists nothing.
+- A parameter declared as a principal, a budget or a label completes on Redoubt, where the shell
+  has those types.
 
 ### Help
 

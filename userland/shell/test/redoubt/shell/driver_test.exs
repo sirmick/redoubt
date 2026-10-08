@@ -64,6 +64,44 @@ defmodule Redoubt.Shell.DriverTest do
     assert_receive {:DOWN, ^ref, :process, ^driver, :normal}, 5_000
   end
 
+  # What Tab completes from is the prompt as it is: a variable bound before, a command, a path;
+  # a second Tab lists. (The name is short: the test's directory, named for it, is the prompt.)
+  test "Tab completes", %{tmp_dir: dir} do
+    File.write!(Path.join(dir, "alpha.txt"), "")
+    File.write!(Path.join(dir, "alps.txt"), "")
+    here = File.cwd!()
+    on_exit(fn -> File.cd!(here) end)
+
+    # Wide, so the prompt's directory never wraps a row.
+    {driver, _terminal} = start(size: fn -> {200, @rows} end)
+    terminal = Terminal.new(200, @rows)
+    text = fn terminal, pattern -> Terminal.text(terminal) =~ pattern end
+
+    type(driver, ~s|cd("#{dir}")\r|)
+    type(driver, "abcdef = 41\r")
+    terminal = screen(terminal, &text.(&1, ~r/^41$/m))
+
+    type(driver, "abc\t")
+    terminal = screen(terminal, &text.(&1, ~r/\(3\)> abcdef$/m))
+    type(driver, " + 1\r")
+    terminal = screen(terminal, &text.(&1, ~r/^42$/m))
+    assert text.(terminal, ~r/\(3\)> abcdef \+ 1$/m)
+
+    type(driver, "hexd\t")
+    terminal = screen(terminal, &text.(&1, ~r/\(4\)> hexdump\($/m))
+    assert text.(terminal, ~r/\(4\)> hexdump\($/m)
+    type(driver, "\x03")
+
+    type(driver, ~s|cat("al\t|)
+    terminal = screen(terminal, &text.(&1, ~r/> cat\("alp$/m))
+    type(driver, "\t")
+    terminal = screen(terminal, &text.(&1, ~r/alps\.txt/))
+    assert text.(terminal, ~r/alpha\.txt +alps\.txt/)
+    type(driver, "\x03")
+    type(driver, "exit\r")
+    ends(driver)
+  end
+
   test "a line typed and entered runs, its value is printed below it, and the next prompt follows" do
     {driver, terminal} = start()
     type(driver, "1 + 1\r")

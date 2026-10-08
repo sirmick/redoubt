@@ -16,11 +16,12 @@ defmodule Redoubt.Shell do
   under the shell's own driver (`Redoubt.Shell.Driver`): the line is edited by `edlin`, with
   history, and drawn by `Redoubt.Term`, so everything the console shows, what a line writes to
   it itself with `IO.puts/1` included, passes the same guard. The interrupt, Ctrl+C or Ctrl+\\,
-  ends the line being read, not the shell.
+  ends the line being read, not the shell. Tab completes (`Redoubt.Shell.Completer`), from the
+  prompt's names as they are at each read.
   """
 
   alias Redoubt.Commandlet.Registry
-  alias Redoubt.Shell.{Driver, Evaluator, Printer}
+  alias Redoubt.Shell.{Completer, Driver, Evaluator, Printer}
   alias Redoubt.Term.Text
 
   @doc """
@@ -76,6 +77,14 @@ defmodule Redoubt.Shell do
   end
 
   defp read(state, sofar) do
+    # Tab completes from what the prompt has now; on a console that is not OTP's group, the
+    # option is refused and there is no completion.
+    # The completer's module is loaded at the first Tab, not at the prompt: the closure holds the
+    # prompt's names alone.
+    vars = for {name, _value} <- state.binding, is_atom(name), do: name
+    {imports, aliases} = {state.env.functions ++ state.env.macros, state.env.aliases}
+    _ = :io.setopts(expand_fun: fn before -> Completer.tab(before, vars, imports, aliases) end)
+
     case IO.gets(prompt(state, sofar)) do
       :eof ->
         :done

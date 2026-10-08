@@ -478,6 +478,7 @@ defmodule Redoubt.Shell.Driver do
     end
   end
 
-  # Completion comes with the commands' registry; until then a Tab is a beep.
+  # The shell sets its completer before each read (`Redoubt.Shell.Completer`); until it does, a
+  # Tab is a beep.
   defp expand(_before), do: {:no, ~c"", []}
 end
