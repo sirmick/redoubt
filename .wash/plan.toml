@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 413
+revision = 416
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1545,5 +1545,6 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M2"
   body = "Found by BOOT2. bootfsd's entry Vec doubles from the first add, so its realloc peak (old + new) depends on the chunk size and on where the image falls against a power of two: an image just over 4 MiB doubles to 8 MiB and needs about 3,000 pages at the peak, near bootfsd's 3,080-page cap. Reserve once: a `begin(name, len)` in the bootfs table, or sizes from the manifest. Add a test with an image just over a power of two. Size S."
-  state = "todo"
-  revision = 412
+  state = "done"
+  revision = 416
+  overrides = ["2026-10-08: started by Orchestrator before M1 (reported): Found by BOOT2; small."]

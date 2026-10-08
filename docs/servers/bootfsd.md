@@ -68,15 +68,25 @@ endpoint also serves `ninep_common` ([wire](wire.md#ninep_common)).
 
 </details>
 
-- **The list.** `bootfsd`'s arguments are the `public` list, one name per argument, in the
-  manifest's order. Each must be one 9P path component (not empty, `.` or `..`, no `/` or NUL),
-  named once, at most `MAX_ENTRIES` (64). A list breaking any of that stops the server before it
-  serves anything: a `/boot` that is not what the manifest named is worse than none.
+- **The list.** `bootfsd`'s arguments are the `public` list, one entry per argument, in the
+  manifest's order, each `LENGTH:NAME`: the entry's length in bytes as its launcher read it from
+  the bundle, a canonical number (no leading zero, `0` itself allowed), then a colon, then the name, split at the
+  first colon so a name may hold one. Each name must be one 9P path component (not empty, `.` or
+  `..`, no `/` or NUL), named once, at most `MAX_ENTRIES` (64), and the lengths together at most
+  `MAX_BYTES` (8 MiB). Each entry's buffer is reserved for its length once, here, so the server's
+  heap holds the entries and never a growth step: before, an entry grew by doubling from its
+  first chunk, and its peak (the old and the new buffer together) depended on the pusher's chunk
+  size and on where the image fell against a power of two. A list breaking any of that, or one
+  the heap cannot hold, stops the server before it serves anything: a `/boot` that is not what
+  the manifest named is worse than none.
 - **`add(name, offset, data)`** appends `data` to a listed name. `offset` must be exactly what has
-  been added to that name so far, so a chunk cannot be lost, repeated or reordered. All entries
-  together hold at most `MAX_BYTES` (8 MiB).
+  been added to that name so far, so a chunk cannot be lost, repeated or reordered, and the
+  chunk must end within the entry's declared length.
 - **`seal`** ends setup. Before it the directory is empty and every walk is "does not exist", so no
-  client sees a half-written entry; after it `add` and `seal` are refused for good.
+  client sees a half-written entry; after it `add` and `seal` are refused for good. A seal while
+  an entry is short of its declared length is refused and `/boot` stays empty: the launcher,
+  which cannot finish the boot without it, says so, rather than a file that is not what the
+  manifest named being served.
 - **Only the founding handle fills it.** Both messages are refused (`refused`) from badge 0 and
   from any connection `new_connection` minted (a badge at or above `FIRST_MINTED_BADGE`), so only a
   holder of a root badge, handed out when the server was set up, can publish.
@@ -90,7 +100,8 @@ The table: [libs/wire/tables/bootfs.md](../../libs/wire/tables/bootfs.md).
 Status: built · partly tested: no session's launcher is started, so no fresh connection is rooted at `/boot` for one · tested: bench:init-servers, bench:init-boot, bench:init-refuses-public-manifest
 
 `init` starts `bootfsd` from the bundle's pages with the manifest's `public` list as its
-arguments, reads the bundle itself, pushes each public entry's bytes with `add`, and sends `seal`
+arguments, each entry with its length from the bundle, reads the bundle itself, pushes each
+public entry's bytes with `add`, and sends `seal`
 ([init](init.md#starting-the-servers)). `init` refuses a manifest whose `public` list names an
 entry the bundle does not hold, or the manifest itself. Sessions get fresh connections to
 `bootfsd`, rooted at `/boot`, from their launcher.

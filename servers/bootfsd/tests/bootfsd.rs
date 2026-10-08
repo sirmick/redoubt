@@ -20,8 +20,9 @@ use redoubt_rt::wire::proto::bootfs::{Add, ErrorCode, Message, Reply, Seal};
 #[path = "../src/bin/bootfsd.rs"]
 mod bootfsd;
 
-/// The entries the milestone 1 manifest would mark public, and one name it must never mark.
-const PUBLIC: [&str; 3] = ["keyd", "beamlet", "iex.beam"];
+/// The entries the milestone 1 manifest would mark public, with the lengths `fill` pushes, and one
+/// name it must never mark.
+const PUBLIC: [(&str, usize); 3] = [("keyd", 9), ("beamlet", 5000), ("iex.beam", 4)];
 const MANIFEST: &str = "manifest.json";
 
 /// Runs `main` as `pid` with a startup block naming `handles`.
@@ -33,12 +34,13 @@ fn launch(pid: usize, block: Vec<u8>, main: fn(&Startup) -> u32) -> std::thread:
 }
 
 /// The block `init` writes for `bootfsd`: the endpoint it receives on, its bucket count, and the
-/// `public` list.
-fn block(receive: Handle, public: &[&str]) -> Vec<u8> {
+/// `public` list, each entry `LENGTH:NAME`.
+fn block(receive: Handle, public: &[(&str, usize)]) -> Vec<u8> {
     let mut builder = StartupBuilder::new(receive.index());
     builder.handle("bootfsd", receive).arg("buckets=4");
-    for name in public {
-        builder.arg(name);
+    let sized: Vec<String> = public.iter().map(|(name, len)| format!("{len}:{name}")).collect();
+    for entry in &sized {
+        builder.arg(entry);
     }
     builder.finish().expect("the block")
 }
@@ -139,7 +141,7 @@ fn a_session_reads_the_public_entries_and_sees_nothing_else() {
         assert_eq!(c.walk(&mut lend, 0, 30, "kernel").unwrap_err(), never);
         assert_eq!(never, ClientError::Rerror(ErrorName::NotFound));
         // And the directory lists exactly the public list, in the manifest's order.
-        assert_eq!(names(&c, &mut lend, 0), PUBLIC.map(String::from).to_vec());
+        assert_eq!(names(&c, &mut lend, 0), PUBLIC.map(|(name, _)| String::from(name)).to_vec());
     });
 
     f.destroy(server, receive);
@@ -175,7 +177,8 @@ fn a_client_cannot_publish_into_boot() {
     let receive = f.endpoint(server);
     let init = f.process(0, &[]);
     let founding = f.grant(server, receive, init, 1);
-    let server_thread = launch(server, block(receive, &PUBLIC), bootfsd::serve);
+    let server_thread =
+        launch(server, block(receive, &[("keyd", 4), ("beamlet", 0), ("iex.beam", 0)]), bootfsd::serve);
 
     f.as_process(init, || {
         add(founding, "keyd", 0, b"good").expect("init may add");
@@ -234,7 +237,7 @@ fn a_bad_public_list_stops_the_server() {
     let f = fake();
     let server = f.process(0, &[]);
     let receive = f.endpoint(server);
-    let thread = launch(server, block(receive, &["keyd", "keyd"]), bootfsd::serve);
+    let thread = launch(server, block(receive, &[("keyd", 1), ("keyd", 1)]), bootfsd::serve);
     assert_eq!(thread.join().unwrap(), bootfsd::BAD_PUBLIC_LIST);
 
     // And a block with no endpoint at all.

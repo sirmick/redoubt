@@ -26,9 +26,10 @@ pub const NO_ENDPOINT: u32 = 2;
 /// the open-call headroom: the manifest sized this server wrongly, and it does not guess.
 pub const BAD_LIMITS: u32 = 4;
 /// The `public` list in the arguments was refused
-/// ([`redoubt_bootfsd::SetupError`]): too many names, a name that is not one path component, or
-/// the same name twice. `bootfsd` does not start on any of them, because a `/boot` that is not
-/// what the manifest named is worse than none (TENETS.md 2, fail closed and loudly).
+/// ([`redoubt_bootfsd::SetupError`]): too many entries, one without a canonical `LENGTH:` before
+/// its name, a name that is not one path component, the same name twice, lengths past
+/// `MAX_BYTES` together, or no memory for them. `bootfsd` does not start on any of them, because a `/boot`
+/// that is not what the manifest named is worse than none (TENETS.md 2, fail closed and loudly).
 pub const BAD_PUBLIC_LIST: u32 = 5;
 /// The kernel would not give a random word, and a server's first minted badge must be
 /// unpredictable (servers/serving.md R27). A server that cannot get one does not start.

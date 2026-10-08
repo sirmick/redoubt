@@ -760,8 +760,9 @@ fn fit(m: &Manifest, system: &Usage) -> Result<(), Refusal> {
 }
 
 /// The arguments `init` gives server `s`: its entry's own, then, for `bootfsd`, the `public` list,
-/// which `bootfsd` builds its table from (servers/bootfsd.md, "Started by `init`"); for a
-/// volume's server, `labels=` its volume's label ids, absent when the set is empty; and for a
+/// each entry `LENGTH:NAME` with its length among `entries`, the bundle's, which `bootfsd` builds
+/// its table from and reserves each entry's buffer by, once (servers/bootfsd.md, "Filling it"); for
+/// a volume's server, `labels=` its volume's label ids, absent when the set is empty; and for a
 /// `blkd`, `labels.P=` the ids of each labelled volume on its disk, P its GPT entry
 /// (servers/blkd.md, "Ranges and badges"); for a volume's `verityd`, `endpoint=` its first
 /// endpoint, `labels=` its volume's ids as its server's, and `root=` and `blocks=`, or `key=`
@@ -769,7 +770,7 @@ fn fit(m: &Manifest, system: &Usage) -> Result<(), Refusal> {
 /// (servers/verityd.md, "Arguments"); for the steward's entry, the manifest lines
 /// ([`steward_lines`]). A label the manifest does not define is left out: the check refused it
 /// before.
-pub fn args(m: &Manifest, s: &Server, bundle_key: &[u8; KEY_LEN]) -> Vec<String> {
+pub fn args(m: &Manifest, s: &Server, bundle_key: &[u8; KEY_LEN], entries: &[(&str, usize)]) -> Vec<String> {
     let ids = |names: &[String]| {
         let ids: Vec<String> = names
             .iter()
@@ -780,7 +781,9 @@ pub fn args(m: &Manifest, s: &Server, bundle_key: &[u8; KEY_LEN]) -> Vec<String>
     };
     let mut args = s.args.clone();
     if s.program == BOOTFSD {
-        args.extend(m.public.iter().cloned());
+        // Every public name is in the bundle (`public` refused the manifest otherwise): 0 is never written.
+        let len = |name: &str| entries.iter().find(|(e, _)| *e == name).map_or(0, |(_, len)| *len);
+        args.extend(m.public.iter().map(|name| format!("{}:{name}", len(name))));
     }
     if let Some(v) = s.volume.as_ref().and_then(|n| m.volumes.iter().find(|v| &v.name == n)) {
         if !v.labels.is_empty() {
@@ -1005,7 +1008,7 @@ fn blocks(m: &Manifest, machine: &Machine, bundle_key: &[u8; KEY_LEN]) -> Result
             block.handle(name, handle(n + 1)?);
         }
         block.namespace("/dev/cons", handle(count)?);
-        for a in args(m, s, bundle_key) {
+        for a in args(m, s, bundle_key, machine.entries) {
             block.arg(&a);
         }
         let len = machine.entries.iter().find(|(e, _)| *e == s.program).map_or(0, |(_, len)| *len);

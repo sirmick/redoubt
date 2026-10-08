@@ -50,19 +50,41 @@ pub const BUDGET: u64 = 1024 * 1024;
 pub enum SetupError {
     /// More than [`MAX_ENTRIES`] names.
     TooMany,
+    /// An entry without the `LENGTH:` its launcher writes before its name, or a length that is
+    /// not a canonical number (empty, a leading zero, a digit that is not one, or past `usize`).
+    BadLength,
     /// A name that is not one 9P path component ([`path::valid_name`]): empty, `.`, `..`, or
     /// holding a `/` or a NUL.
     BadName,
     /// The same name twice; `/boot` is flat, so two entries could not be told apart.
     Duplicate,
-    /// No memory for the table.
+    /// The entries' lengths together pass [`MAX_BYTES`].
+    TooLarge,
+    /// No memory for the table, or for an entry's declared bytes.
     NoMemory,
 }
 
-/// One published entry: its name and the bytes `init` has handed over so far.
+/// One published entry: its name, its declared length, and the bytes `init` has handed over so
+/// far, in a buffer reserved once for the whole, so the server's heap holds the entries and no
+/// growth step (docs/servers/bootfsd.md, "Filling it").
 struct Entry {
     name: String,
+    length: usize,
     data: Vec<u8>,
+}
+
+/// `LENGTH:NAME`, split at the first colon: the length canonical (digits, no leading zero but
+/// `0` itself), the name as [`path::valid_name`] has it, a colon of its own and all.
+fn parse_entry(arg: &str) -> Result<(usize, &str), SetupError> {
+    let (length, name) = arg.split_once(':').ok_or(SetupError::BadLength)?;
+    let canonical = !length.is_empty()
+        && length.bytes().all(|b| b.is_ascii_digit())
+        && (length == "0" || !length.starts_with('0'));
+    let length: usize = length.parse().ok().filter(|_| canonical).ok_or(SetupError::BadLength)?;
+    if !path::valid_name(name) {
+        return Err(SetupError::BadName);
+    }
+    Ok((length, name))
 }
 
 /// What a fid rests on. `/boot` is flat: the root, or one entry by its index, which never moves
@@ -77,30 +99,39 @@ pub enum Node {
 pub struct BootFs {
     entries: Vec<Entry>,
     sealed: bool,
-    bytes: usize,
 }
 
 impl BootFs {
-    /// The server for the `public` list `names`, in the manifest's order, with no bytes yet.
-    pub fn new<'a>(names: impl Iterator<Item = &'a str>) -> Result<BootFs, SetupError> {
+    /// The server for the `public` list, each entry `LENGTH:NAME` as its launcher writes it
+    /// ([`parse_entry`]), in the manifest's order, with no bytes yet: each entry's buffer is
+    /// reserved for its declared length here, once, and the lengths together are held to
+    /// [`MAX_BYTES`].
+    pub fn new<'a>(list: impl Iterator<Item = &'a str>) -> Result<BootFs, SetupError> {
         let mut entries: Vec<Entry> = Vec::new();
-        for name in names {
+        let mut total = 0usize;
+        for arg in list {
             if entries.len() >= MAX_ENTRIES {
                 return Err(SetupError::TooMany);
             }
-            if !path::valid_name(name) {
-                return Err(SetupError::BadName);
-            }
+            let (length, name) = parse_entry(arg)?;
             if entries.iter().any(|e| e.name == name) {
                 return Err(SetupError::Duplicate);
             }
+            total = total.checked_add(length).filter(|b| *b <= MAX_BYTES).ok_or(SetupError::TooLarge)?;
             entries.try_reserve(1).map_err(|_| SetupError::NoMemory)?;
             let mut owned = String::new();
             owned.try_reserve(name.len()).map_err(|_| SetupError::NoMemory)?;
             owned.push_str(name);
-            entries.push(Entry { name: owned, data: Vec::new() });
+            let mut data = Vec::new();
+            data.try_reserve_exact(length).map_err(|_| SetupError::NoMemory)?;
+            entries.push(Entry { name: owned, length, data });
         }
-        Ok(BootFs { entries, sealed: false, bytes: 0 })
+        Ok(BootFs { entries, sealed: false })
+    }
+
+    /// The buffer an entry holds for its bytes, for tests: its declared length, from the start.
+    pub fn reserved(&self, name: &str) -> Option<usize> {
+        self.entries.iter().find(|e| e.name == name).map(|e| e.data.capacity())
     }
 
     /// Whether setup has ended. Until it has, `/boot` is empty.
@@ -117,27 +148,25 @@ impl BootFs {
     }
 
     /// `add`: appends `data` to `name` at `offset`, which must be exactly what has been added to
-    /// it so far, so a chunk cannot be lost, repeated or reordered.
+    /// it so far, so a chunk cannot be lost, repeated or reordered, and within the entry's declared
+    /// length, so the buffer reserved at the start is never grown.
     fn add(&mut self, name: &str, offset: u64, data: &[u8]) -> Result<(), ErrorCode> {
         if self.sealed {
             return Err(ErrorCode::Refused);
         }
-        if self.bytes.saturating_add(data.len()) > MAX_BYTES {
-            return Err(ErrorCode::Refused);
-        }
         let entry = self.entries.iter_mut().find(|e| e.name == name).ok_or(ErrorCode::Refused)?;
-        if offset != entry.data.len() as u64 {
+        if offset != entry.data.len() as u64 || entry.data.len().saturating_add(data.len()) > entry.length {
             return Err(ErrorCode::Refused);
         }
-        entry.data.try_reserve(data.len()).map_err(|_| ErrorCode::Refused)?;
         entry.data.extend_from_slice(data);
-        self.bytes += data.len();
         Ok(())
     }
 
-    /// `seal`: ends setup. After it `/boot` answers walks, and nothing can change an entry.
+    /// `seal`: ends setup. After it `/boot` answers walks, and nothing can change an entry. An
+    /// entry short of its declared length refuses the seal: `/boot` stays empty rather than serve
+    /// a file that is not what the manifest named, and the launcher, which cannot go on, says so.
     fn seal(&mut self) -> Result<(), ErrorCode> {
-        if self.sealed {
+        if self.sealed || self.entries.iter().any(|e| e.data.len() != e.length) {
             return Err(ErrorCode::Refused);
         }
         self.sealed = true;

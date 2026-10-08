@@ -15,7 +15,9 @@ const ENTRIES: [(&str, &[u8]); 2] = [("keyd", b"\x7fELF keyd"), ("beamlet", b"\x
 
 fn sealed() -> BootFs {
     let founder = Caller { badge: 1, account: 0, labels: Labels::from_slice(&[]).unwrap() };
-    let mut fs = BootFs::new(ENTRIES.iter().map(|(name, _)| *name)).unwrap();
+    // Each entry with its length, as init's list has it, so its buffer is reserved once.
+    let list: Vec<String> = ENTRIES.iter().map(|(name, data)| format!("{}:{name}", data.len())).collect();
+    let mut fs = BootFs::new(list.iter().map(String::as_str)).unwrap();
     for (name, data) in ENTRIES {
         fs.handle(&founder, Message::Add(Add { name, offset: 0, data }), &[]).unwrap();
     }
