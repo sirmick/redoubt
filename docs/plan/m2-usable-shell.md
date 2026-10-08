@@ -201,7 +201,10 @@ paths ([the shell](../userland/shell.md#completion)); and resource use, `free`, 
 `ps` and `top`, over the session's own budget and its VM, `df` not yet
 ([the shell](../userland/shell.md#resource-use)); and the editor, `ed`, with syntax
 highlighting, and the file manager, `fm`, host-tested ([the shell](../userland/shell.md#the-editor)).
-On Redoubt it runs only on the fake kernel (`./shell --fake`). What the milestone builds on: the serving
+On Redoubt the shell runs in each session over SSH, and so do its commands: files through
+beamlet's platform in the session's home and vault, binds, and `whoami` and `labels`, as the
+steward told the session (`bench:shell-commands`; [the shell](../userland/shell.md#session-commands)).
+What the milestone builds on: the serving
 library's parked calls ([serving](../servers/serving.md#parked-calls)), `consoled`'s 9P console
 ([consoled](../servers/consoled.md)), and budget destruction as the only way to end a process
 ([budgets](../kernel/budgets.md#r10-destruction)). For several harts: every hart runs user code under one FIFO kernel lock, and a destruction's

@@ -1,0 +1,165 @@
+description = "The shell's file and session commands in real sessions over SSH (docs/userland/shell.md, \"Files and text\" and \"Session commands\"; docs/userland/files.md, \"Copying, moving, removing and binds\"; docs/userland/sessions.md, \"What a session is told\"): alice's plain session makes (by File.mkdir_p, a nested path), writes, reads, copies (within her home by the file server, whose count of bytes comes back; across volumes from /boot through the VM, checked by checksum), renames, lists, stats, touches and removes files in her home; touch in a missing directory is enoent; she binds her home at /h, writes through it and reads the file at its own path; a path no entry holds is enoent; a budget is no connection, a relative prefix a bad name, and binds past the namespace's 64 entries are system_limit; whoami() and labels() are what the steward told her session. Her vault session, alice+alice-secrets, is told its label, copies a file up from her home into the vault and renames it there, and a write down into her home and a copy out of the vault are refused by walfsd's label check; the plain session then finds neither file in her home. The verdicts are the values the shell prints, the file servers' answers and counts, and the plain session's reading of the home after the vault session tried (rule F)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The image's bundle with beamlet-hello public in /boot, as steward-vault-launch's.
+recipe = "tests/data/steward/vault-launch.boot.toml"
+# Two sessions open together, each booting a shell VM, as steward-vault-launch.
+memory_mib = 1024
+timeout_secs = 150
+expect = [
+    '^init: started sshd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
+    '^init: started steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+]
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    '^init: .* (exited|faulted|was killed)',
+    'init: restarted',
+    'EXCEPTION',
+    'steward: a step failed',
+    'sshd: login .*: refused',
+]
+
+# Each answer is tagged, so a pattern matches what the shell printed and never the echo of the
+# line typed: the echo holds the expression, not its value.
+[[session]]
+user = "alice"
+pty = true
+steps = [
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:mk, File.mkdir_p(\"/home/alice/rc/d\")}\n" },
+    { expect = '\{:mk, :ok\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:w, w([\"one\", \"two\"], \"/home/alice/rc/x.txt\")}\n" },
+    { expect = '\{:w, :ok\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:cat, cat(\"/home/alice/rc/x.txt\") |> Enum.to_list()}\n" },
+    { expect = '\{:cat, \["one", "two"\]\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:srv, Redoubt.File.copy_file(\"/home/alice/rc/x.txt\", \"/home/alice/rc/c.txt\")}\n" },
+    { expect = '\{:srv, \{:ok, 8\}\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:cp, cp(\"/home/alice/rc/x.txt\", \"/home/alice/rc/y.txt\")}\n" },
+    { expect = '\{:cp, :ok\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:mv, mv(\"/home/alice/rc/y.txt\", \"/home/alice/rc/z.txt\")}\n" },
+    { expect = '\{:mv, :ok\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:ls, ls(\"/home/alice/rc\") |> Enum.to_list()}\n" },
+    { expect = '\{:ls, \["c.txt", "d", "x.txt", "z.txt"\]\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:cpx, cp(\"/boot/beamlet-hello\", \"/home/alice/rc\")}\n" },
+    { expect = '\{:cpx, :ok\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:sum, checksum(\"/boot/beamlet-hello\") == checksum(\"/home/alice/rc/beamlet-hello\")}\n" },
+    { expect = '\{:sum, true\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:size, stat(\"/home/alice/rc/x.txt\").size}\n" },
+    { expect = '\{:size, 8\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:touch, touch(\"/home/alice/rc/t\")}\n" },
+    { expect = '\{:touch, :ok\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:tmiss, File.touch(\"/home/alice/none/t\")}\n" },
+    { expect = '\{:tmiss, \{:error, :enoent\}\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:chmod, File.chmod(\"/home/alice/rc/x.txt\", 0o600)}\n" },
+    { expect = '\{:chmod, :ok\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:cd, cd(\"/home/alice/rc\")}\n" },
+    { expect = '\{:cd, "/home/alice/rc"\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:rel, cat(\"x.txt\") |> count()}\n" },
+    { expect = '\{:rel, 2\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:glob, glob(\"*.txt\") |> Enum.to_list()}\n" },
+    { expect = '\{:glob, \["c.txt", "x.txt", "z.txt"\]\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:bind, bind(\"/h\", elem(ns_lookup(\"/home/alice\"), 0))}\n" },
+    { expect = '\{:bind, :ok\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:hw, w([\"via h\"], \"/h/rc/h.txt\")}\n" },
+    { expect = '\{:hw, :ok\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:hr, cat(\"/home/alice/rc/h.txt\") |> Enum.to_list()}\n" },
+    { expect = '\{:hr, \["via h"\]\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:bob, File.read(\"/home/bob/x\")}\n" },
+    { expect = '\{:bob, \{:error, :enoent\}\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:bbud, bind(\"/b\", elem(ns_lookup(\"budget\"), 0))}\n" },
+    { expect = '\{:bbud, \{:error, :not_a_connection\}\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:brel, bind(\"rel\", elem(ns_lookup(\"/home/alice\"), 0))}\n" },
+    { expect = '\{:brel, \{:error, :bad_name\}\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:cap, Enum.map(1..64, &bind(\"/c#{&1}\", elem(ns_lookup(\"/home/alice\"), 0))) |> Enum.frequencies()}\n" },
+    { expect = '\{:cap, %\{:ok => 59, \{:error, :system_limit\} => 5\}\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:who, whoami()}\n" },
+    { expect = '\{:who, "alice"\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:lab, labels()}\n" },
+    { expect = '\{:lab, \[\]\}' },
+    { expect = '\([0-9]+\)> ' },
+    { mark = "plain-ready" },
+    { wait = "vault-done" },
+    { send = "{:noleak, Enum.map([\"/home/alice/rc/leak.txt\", \"/home/alice/rc/out.txt\"], &File.exists?/1)}\n" },
+    { expect = '\{:noleak, \[false, false\]\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:rmrf, rm_rf(\"/home/alice/rc\")}\n" },
+    { expect = '\{:rmrf, :ok\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:gone, File.exists?(\"/home/alice/rc\")}\n" },
+    { expect = '\{:gone, false\}' },
+    { expect = '\([0-9]+\)> ' },
+    { exit = 0 },
+]
+
+# The vault session reads up and is refused writing down; the plain session judges the home
+# after it.
+[[session]]
+user = "alice+alice-secrets"
+pty = true
+steps = [
+    { wait = "plain-ready" },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:who, whoami()}\n" },
+    { expect = '\{:who, "alice"\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:lab, labels()}\n" },
+    { expect = '\{:lab, \["alice-secrets"\]\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:up, cp(\"/home/alice/rc/x.txt\", \"/vault/x.txt\")}\n" },
+    { expect = '\{:up, :ok\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:vcat, cat(\"/vault/x.txt\") |> Enum.to_list()}\n" },
+    { expect = '\{:vcat, \["one", "two"\]\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:vmv, mv(\"/vault/x.txt\", \"/vault/z.txt\")}\n" },
+    { expect = '\{:vmv, :ok\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:down, File.write(\"/home/alice/rc/leak.txt\", \"leak\")}\n" },
+    { expect = '\{:down, \{:error, :eacces\}\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:out, File.cp(\"/vault/z.txt\", \"/home/alice/rc/out.txt\")}\n" },
+    { expect = '\{:out, \{:error, :eacces\}\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:vrm, rm(\"/vault/z.txt\")}\n" },
+    { expect = '\{:vrm, :ok\}' },
+    { expect = '\([0-9]+\)> ' },
+    { mark = "vault-done" },
+    { exit = 0 },
+]
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]
+forward = [22]
