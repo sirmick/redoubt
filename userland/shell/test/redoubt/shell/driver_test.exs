@@ -11,6 +11,15 @@ defmodule Redoubt.Shell.DriverTest do
   @cols 120
   @rows 12
 
+  # The prompt shows the working directory, and the rows asserted assume it fits a row with the
+  # line typed: the shell runs in /, as beamlet's tests do, not in the checkout, whose path would
+  # wrap a long line on the BEAM in a deep enough checkout.
+  setup do
+    here = File.cwd!()
+    File.cd!("/")
+    on_exit(fn -> File.cd!(here) end)
+  end
+
   defp start(opts \\ [], rows \\ @rows) do
     test = self()
 
