@@ -329,7 +329,11 @@ the class for it: a boot takes one core per guest hart, a `host-tests` case or a
 `fanout` two for its build while each of its jobs asks `q` for its own, and the host-clock cases
 go quiet. A case target runs that case alone (`--exact`), from `target/prebuilt` when its width
 is there ([building once](#building-once)), else through `cargo testbench`. A case with no `arch`
-boots nothing, so it runs under `rv64/<case>` alone, and `rv32/<case>` does nothing. `q ls` shows
+boots nothing, so it runs under `rv64/<case>` alone, and `rv32/<case>` does nothing. Case
+targets may run at once (`set CASES="..."` runs a set on both widths) only while each still
+takes its own lease, the quiet ones run alone on the quiet set and the `[net]` ones keep the
+`net` lock, as every case target does: the leases, not make, keep the host from being
+oversubscribed. `q ls` shows
 the core map and the queue; `q log` the recent jobs with the time each waited and ran.
 `cargo testbench --smp N` boots every boot case once at `N` harts instead of its own counts, but
 a case that keeps them (`keep_smp`), and bounds it by `timeout_secs_smp` where a case gives one;
