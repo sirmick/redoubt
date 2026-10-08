@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 342
+revision = 344
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -645,8 +645,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "beamlet-redoubt"
   needs = ["BEAM3"]
   body = "docs/userland/beamlet.md#natives: ns_lookup/bind/ns, call/send, serve/reply, budget_create/destroy/usage, labels, launch; handles as resource terms that no term format carries; generated clients from wire tables (docs/servers/wire.md#generated-clients) and Redoubt.Namespace/Budget/Process/Keys. The M1 shell's launch (docs/userland/shell.md#the-shell-in-a-session). Attacks: hostile native arguments, a decoded handle grants nothing. Brief to come."
-  state = "reported"
-  revision = 303
+  state = "done"
+  revision = 344
 
 [[node]]
   id = "BEAM5"
@@ -1387,5 +1387,5 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   body = "Found by the BEAM4 cases branch's gate on STEWARD2's final tip (rv32): beamlet-files failed once with badmatch {error,eexist} at prim_file:make_dir(\"/home/alice/d\") after every earlier line passed, then passed 2/2 alone. Ruled out by BEAM4's red (from the code): BEAM11's busy retry cannot duplicate a mkdir: a `busy` always means not served (ninep_mux.rs:585, produced only by take() before the message is decoded; littlefsd, walfsd and consoled return no BUSY from a handler). Likely cause: init restarts an exited program (servers/init/src/restarts.rs, up to MOST times) on the same walfsd volume, and beamlet-files forbids only servers' exits, so a first beamlet run that ended early replays make_dir on a volume already holding d. Check the failing log (BEAM4 cases implementer's run logs) for a second beamlet start or an earlier beamlet exit line; then (a) the case forbids a beamlet restart (its verdict then names the early exit), and (b) find why beamlet ended early, if it did. Tier B (the case) unless (b) finds a defect. Size S."
-  state = "active"
-  revision = 339
+  state = "reported"
+  revision = 343

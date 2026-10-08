@@ -272,7 +272,7 @@ fixture protocol `example`, which no server speaks.
 
 ### Generated clients
 
-Status: built · partly tested: against a stand-in for beamlet's natives on the BEAM; a client's call on the machine is beamlet's natives' cases' · tested: host:redoubt-wire-gen::the_elixir_client_has_one_function_per_message, host:redoubt-wire-gen::generated_files_are_current, bench:elixir-oracles
+Status: built · tested: bench:beamlet-natives, host:redoubt-wire-gen::the_elixir_client_has_one_function_per_message, host:redoubt-wire-gen::generated_files_are_current, bench:elixir-oracles
 
 The generator writes, beside each protocol's Elixir codec in `libs/wire/elixir`, an Elixir client,
 `libs/wire/elixir/client/NAME.ex` (`Redoubt.Wire.Client.Keyd`): one function per message, taking

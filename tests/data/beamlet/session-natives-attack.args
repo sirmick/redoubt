@@ -1,0 +1,2 @@
+vm=beamlet_natives_attack:write vm=beamlet_natives_attack:read
+labels=7 vm=beamlet_natives_attack:labelled

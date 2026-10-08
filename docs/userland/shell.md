@@ -51,7 +51,7 @@ file with `ed("notes.txt")`; browse and copy files in two panes with `fm("projec
 
 ### The shell in a session
 
-Status: built · partly tested: the steward starts it as the console principal's session on the UART and as each SSH login's session; launching a program is tested on the host only, and a session's files wait for its namespace to reach the VM · tested: bench:userland-boot, bench:steward-ssh-two-principals, host:beamlet-redoubt::a_launch_takes_what_it_is_given_and_its_end_is_an_event
+Status: built · partly tested: the steward starts it as the console principal's session on the UART and as each SSH login's session; launching a program is tested under a tester in the steward's place, and a session's files wait for its namespace to reach the VM · tested: bench:userland-boot, bench:steward-ssh-two-principals, bench:beamlet-launch, host:beamlet-redoubt::a_launch_takes_what_it_is_given_and_its_end_is_an_event
 
 Every session starts `Redoubt.Shell` over the session's console connection, `/dev/cons`
 ([consoled](../servers/consoled.md) on the UART, [sshd](../servers/sshd.md) for an SSH channel).

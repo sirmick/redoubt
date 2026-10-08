@@ -1,0 +1,55 @@
+description = "Serving from a VM (docs/userland/beamlet.md, \"Natives\": serve/1, reply/2): the session's VM serves an endpoint the tester handed it; a second program, beamlet-caller, in a budget of its own with account 2002, calls it twice. The first request reaches the VM with the caller's badge, account and labels and its answer reaches the caller; the second is never answered, and the serve thread answers it malformed at its deadline while the VM runs on"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# As beamlet-natives, with `serve`: the tester also launches beamlet-caller with a badge-9 handle
+# to the endpoint. The verdicts on badge, account and labels are the kernel's stamps.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-bootfsd", bin = "bootfsd" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-erofsd", bin = "erofsd" },
+    { package = "redoubt-littlefsd", bin = "littlefsd" },
+    { package = "beamlet-redoubt", bin = "beamlet", workspace = "userland/otp" },
+    { package = "redoubt-beamlet-programs", bin = "beamlet-session" },
+    { package = "redoubt-beamlet-programs", bin = "beamlet-hello" },
+    { package = "redoubt-beamlet-programs", bin = "beamlet-caller" },
+]
+timeout_secs = 180
+expect = [
+    '^\[con [0-9a-f]{16}\] \[beamlet-session\] started beamlet beamlet_serve:start, labels \[\]$',
+    '^\[con [0-9a-f]{16}\] serve: serve: ok$',
+    '^\[con [0-9a-f]{16}\] serve: request: badge 9, account 2002, labels \[\]$',
+    '^\[con [0-9a-f]{16}\] beamlet-caller: 41 answered 0 42$',
+    '^\[con [0-9a-f]{16}\] serve: second request held, never answered$',
+    '^\[con [0-9a-f]{16}\] beamlet-caller: 42 answered 1 0$',
+    '^\[con [0-9a-f]{16}\] serve: still serving after the deadline$',
+    '^\[con [0-9a-f]{16}\] \[beamlet-session\] beamlet beamlet_serve:start ended: Exited, code 0$',
+    '^\[con [0-9a-f]{16}\] \[beamlet-session\] beamlet-caller ended: Exited, code 0$',
+]
+forbid = [
+    'init: refused the boot',
+    '^init: (keyd|consoled|bootfsd|blkd|erofsd|littlefsd|beamlet-session)\S* .*(exited|faulted|was killed)',
+    'init: rebooting',
+    'EXCEPTION',
+    'FAIL',
+    'beamlet: .* not loaded',
+]
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/beamlet/serve.json" }
+
+# What the tester runs: one `vm=MODULE:FUNCTION` a line, and `serve` for the serving case, read
+# from /boot, since `init` passes the steward no arguments of a manifest's.
+[[file]]
+name = "beamlet-session.args"
+from = { path = "tests/data/beamlet/session-serve.args" }
+
+[disk]
+size_kib = 4096
+partitions = 1
+
+[userland]
+recipe = "tests/data/beamlet/natives-userland.toml"

@@ -1,0 +1,19 @@
+# The userland disk of beamlet's natives' cases (docs/userland/beamlet.md, "Natives"): the shell's
+# application and what it runs on, with the wire's codecs and generated clients the shell compiles
+# in, and the cases' own modules. Unverified, as the other beamlet cases' disks are: the cases are
+# about the natives, not the system volume.
+size_kib = 16384
+
+[objects]
+applications = ["erts", "kernel", "stdlib", "compiler", "crypto", "elixir", "logger", "redoubt_shell"]
+mix = ["userland/shell"]
+erlang = [
+    "userland/otp/redoubt/tests/erlang/beamlet_natives.erl",
+    "userland/otp/redoubt/tests/erlang/beamlet_serve.erl",
+    "userland/otp/redoubt/tests/erlang/beamlet_launch.erl",
+    "userland/otp/redoubt/tests/erlang/beamlet_natives_attack.erl",
+]
+
+[[partition]]
+name = "system"
+fs = "erofs"

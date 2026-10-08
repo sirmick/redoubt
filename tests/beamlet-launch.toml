@@ -1,0 +1,50 @@
+description = "Launching from a session (docs/userland/native.md, \"Launching from a session\"): the shell's exec runs /boot/beamlet-hello in a budget carved from the session's, with a connection of its own to the console; its line reaches the console, its exit arrives as a message, and its budget's use comes back"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# As beamlet-natives; the session's VM calls the shell's exec commandlet.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-bootfsd", bin = "bootfsd" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-erofsd", bin = "erofsd" },
+    { package = "redoubt-littlefsd", bin = "littlefsd" },
+    { package = "beamlet-redoubt", bin = "beamlet", workspace = "userland/otp" },
+    { package = "redoubt-beamlet-programs", bin = "beamlet-session" },
+    { package = "redoubt-beamlet-programs", bin = "beamlet-hello" },
+    { package = "redoubt-beamlet-programs", bin = "beamlet-caller" },
+]
+timeout_secs = 180
+expect = [
+    '^\[con [0-9a-f]{16}\] \[beamlet-session\] started beamlet beamlet_launch:start, labels \[\]$',
+    '^\[con [0-9a-f]{16}\] beamlet-hello: from the session$',
+    '^\[con [0-9a-f]{16}\] launch: ended: \{exited,3\}$',
+    '^\[con [0-9a-f]{16}\] launch: its budget: 256 pages, processes \{1,[01]\}$',
+    '^\[con [0-9a-f]{16}\] \[beamlet-session\] beamlet beamlet_launch:start ended: Exited, code 0$',
+]
+forbid = [
+    'init: refused the boot',
+    '^init: (keyd|consoled|bootfsd|blkd|erofsd|littlefsd|beamlet-session)\S* .*(exited|faulted|was killed)',
+    'init: rebooting',
+    'EXCEPTION',
+    'FAIL',
+    'beamlet: .* not loaded',
+]
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/beamlet/launch.json" }
+
+# What the tester runs: one `vm=MODULE:FUNCTION` a line, and `serve` for the serving case, read
+# from /boot, since `init` passes the steward no arguments of a manifest's.
+[[file]]
+name = "beamlet-session.args"
+from = { path = "tests/data/beamlet/session-launch.args" }
+
+[disk]
+size_kib = 4096
+partitions = 1
+
+[userland]
+recipe = "tests/data/beamlet/natives-userland.toml"
