@@ -5,8 +5,13 @@
 
 start() ->
     ok = file:write_file("a.txt", <<"data">>),
+    %% The access time is set ahead of the modification time and of now: under relatime a read
+    %% bumps an access time at or before the modification or change time, and a host's file
+    %% watcher reads a new file within milliseconds, so an access time equal to the modification
+    %% time read back as now once in a few runs. A future one stays.
     T = {{2020, 1, 2}, {3, 4, 5}},
-    ok = file:change_time("a.txt", T, T),
+    A0 = {{2030, 6, 7}, {8, 9, 10}},
+    ok = file:change_time("a.txt", A0, T),
     {ok, #file_info{mtime = M, atime = A}} = file:read_file_info("a.txt", [{time, universal}]),
     ok = file:change_mode("a.txt", 8#600),
     {ok, #file_info{mode = Mode}} = file:read_file_info("a.txt"),
