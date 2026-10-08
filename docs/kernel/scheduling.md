@@ -522,7 +522,7 @@ The run's 49,535 audits total 12.7 s (rv64), and its 50,037 total 15.3 s (rv32),
 itself has none inside it, which the oracle asserts. Beside each destruction's R10 time the oracle
 reports its threads' time: the processes' threads ending inside it, their pumps included (the
 trace's `T` and `t` records), at seed 3 a p99 of 54 µs on rv64 and 60 µs on rv32. In the containment gate, with two
-full leases live at a deadline's end (its pinned seed 13), the deadline notice's p99 is 25,794 µs
+full leases live at a deadline's end (seed 13, at one hart), the deadline notice's p99 is 25,794 µs
 net and 95,579 µs gross on rv64, with 1,158,114 µs of audit inside its windows, and 26,197 µs net
 and 97,703 µs gross on rv32; the sweep is on [containment](README.md#containment). With the audit
 after a destruction left unstamped (`audit-unstamped`, the recorded negative run), it is 84,710 µs
@@ -1236,6 +1236,15 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   | `sched-carve-return` | one queue's rounds | V is capped at two budgets on two harts, so U alone sets the floor and never leads it | `sched-carve-inflation` |
   | `sched-cluster`, `sched-cluster-old-control` | one queue's rounds | the envelope is calibrated against one runner's slice period | `sched-latency`'s targets |
 
+  `kernel-containment` runs at two harts but judges its bystander's share at one (`@1`), for the
+  lock waits and audits too: the bystander's hart, the one waiting longer for the lock and taking
+  the audits or the other, puts it at 445 or 543 to 546 of 1000 on rv32 against 450 to 550; every
+  other verdict and target of the gate holds at two harts ([containment](README.md#containment)).
+  `sched-exit-churn` judges its victim against threads that exit at one hart too (`@1`): at two,
+  the victim's hart takes 4.6M of the 8.4M ticks of lock waits the attacker's exits cause, and it
+  keeps 448 of 1000 on rv32 against at least 450 (482 on rv64); against processes that exit or
+  fault it is judged at two. Work moving out of the lock (step 5) is what lets both shares be
+  judged at two.
   `bench-poweroff-missing` keeps one hart too, a bound of the bench's own.
 - **A call within one budget crosses harts.** A wake sends an idle hart the reschedule interrupt
   even when the woken thread's budget runs elsewhere, so a server and its client in one budget

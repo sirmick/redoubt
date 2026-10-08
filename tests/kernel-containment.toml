@@ -1,27 +1,30 @@
-description = "The kernel containment gate (kernel/README.md, \"Containment\"): one composite boot of hostile leases under `users`, two live at a time (slot D ended by its deadline, slot H by the steward's decision), each agent spinning, entering the kernel in a tight loop, parking lend calls and blocked sends at a victim through lease-stamped handles, running a sub-agent with a later deadline, and filling its lease and handle table; verdicts from the kernel's exit notices and trace, the victims, budget_usage and the oracle, never from a hostile agent. Targets are responsiveness's own (sched-latency), judged by the post-check net of the checked build's audits, and the gate adds none; the bystander's share (R12) is the oracle's, of the CPU the kernel charged under `users` under both slots' leases (virtual time, checked build, one hart, tracing kernel)"
+description = "The kernel containment gate (kernel/README.md, \"Containment\"): one composite boot of hostile leases under `users`, two live at a time (slot D ended by its deadline, slot H by the steward's decision), each agent spinning, entering the kernel in a tight loop, parking lend calls and blocked sends at a victim through lease-stamped handles, running a sub-agent with a later deadline, and filling its lease and handle table; verdicts from the kernel's exit notices and trace, the victims, budget_usage and the oracle, never from a hostile agent. Targets are responsiveness's own (sched-latency), judged by the post-check net of the checked build's audits, and the gate adds none; the bystander's share (R12) is the oracle's, of the CPU the kernel charged under `users` under both slots' leases (virtual time, checked build, tracing kernel)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true
 icount = "shift=3,sleep=off"
 # The gate runs one pinned seed from the sweep (kernel/scheduling.md, "Responsiveness"); the
-# 16-seed sweep is recorded on docs/kernel/README.md#containment.
-qemu_seed = 13
+# 16-seed sweeps at one hart and two are recorded on docs/kernel/README.md#containment. Seed 4 is
+# the worst at two harts, or within a millisecond of it, on both widths.
+qemu_seed = 4
 programs = ["kernel-containment"]
 # Test builds only: the trace ring and its dump (never in a default or production kernel), at
-# 192 MiB: at the 1 ms slice the run writes about ten records a slice, twice what 64 MiB holds.
+# 256 MiB: at the 1 ms slice the run writes about ten records a slice, and at two harts each
+# hart's picks, waiting counts and lock waits too, some 7.1 million, past 192 MiB's 6.3 million.
 kernel_features = ["sched-trace-large"]
-memory_mib = 512
+# 512 MiB for the leases' tables, and the ring's 64 MiB more.
+memory_mib = 576
 # The rank oracle; R10's kernel time from the trace's X/Y records, p99 <= 30 ms; a lease's end (the
 # worst net decision-wake p99 plus R10's), <= 125 ms; and every latency target, judged on the
 # program's sample windows net of the checked build's audit time inside each (kernel/scheduling.md,
 # "Responsiveness"; the bounds are tests/sched-latency.toml's, and the gate adds none); and the
 # bystander's share of the CPU the kernel charged under `users`, in the window the steward opens
 # once both slots' leases run (the program's `CHARGED-SHARE`), against its water-filling share among
-# the budgets charged in it (it counts on one thread, so at most a hart), within R12's 50. The
-# targets are gated at one hart and two and recorded at more (`gate_harts`).
+# the budgets charged in it (it counts on one thread, so at most a hart), within R12's 50, judged at
+# one hart (`@1`): at two, the hart it lands on, the one waiting longer for the lock and taking
+# the audits or the other, puts it at 445 or 545 on rv32 (kernel/scheduling.md, "Residual risks").
+# The targets are gated at one hart and two and recorded at more (`gate_harts`).
 post_check = "sched_oracle gate_harts=2 r10_p99_us=30000 lease_end_p99_us=125000 driver_wake_p50_us=15000 driver_wake_p99_us=50000 timer_wake_p50_us=15000 timer_wake_p99_us=50000 decision_wake_p50_us=25000 decision_wake_p99_us=95000 deadline_notice_p99_us=40000"
-# One hart: at two harts the trace's per-hart records (J, H, Q) overflow even the large ring.
-keep_smp = true
 timeout_secs = 1800
 expect = [
     "^\\[containment\\] the RTC keeps virtual time: met",
@@ -41,7 +44,7 @@ expect = [
     "^\\[containment\\] ok: every held call was abandoned once, its lend intact and its reply discarded \\(",
     "^\\[containment\\] ok: nothing sent through a lease's handles outlived it, and no queued message did",
     "^\\[containment\\] ok: the victim's usage returned to its start",
-    "^CHARGED-SHARE bystander \\d+ \\d+ 50 2:1 3$",
+    "^CHARGED-SHARE bystander \\d+ \\d+ 50@1 2:1 3$",
     "^\\[containment\\] the bystander's count under both slots' leases: \\d+ of 1000 of the window \\(\\d+ µs\\), gross: its useful work; its share of the CPU charged under users is the post-check's",
     "^KERNEL-CONTAINMENT TEST PASSED$",
     "^SCHED-TRACE-END \\d+ dropped 0$",

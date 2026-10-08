@@ -176,7 +176,7 @@ ended.
 | Nothing sent through a lease's handles, its blocked sends' included, is received after the lease ends: the victim finds the lease's send endpoint empty. That each blocked send returns failed is seen only by the agent, so no verdict rests on it. The bystander's queued message arrives with the stamped handle as 0 | R10, [R9 (stamps)](objects.md#r9-stamps), [I2 (revocation is complete)](invariants.md#i2-revocation-is-complete) | the victim server |
 | Every handle the steward stand-in holds to a lease is closed. Once the lease's notices are taken, the sessions budget's usage is what it was before the lease was made. The sub-agent's later deadline never fires | R10, I2, [I10 (create-destroy leaves the parent unchanged)](invariants.md#i10-create-destroy-leaves-the-parent-unchanged) | the steward stand-in, from `budget_usage` and the results of its calls |
 | The victims stay responsive: the driver wake, the steward's timer and decision wakes, the deadline notice, R10's kernel time and a lease's end are all within the targets in [responsiveness](scheduling.md#responsiveness) | [R12 (scheduling)](scheduling.md#r12-scheduling), R10 | the RTC (driver), `time_now` (steward), the kernel's trace (R10) and the bench's post-check |
-| Every pick is in rank order, and the bystander keeps its weight's share of the CPU the kernel charged under `users` under both slots' leases, net of the checked build's audits; its own count is printed beside as its useful work | R12 | the scheduler oracle over the kernel's trace; the program prints the count |
+| Every pick is in rank order, and the bystander keeps its share of the CPU the kernel charged under `users` under both slots' leases (its weight's at one hart, judged there; at two, a hart for its one thread, reported), net of the checked build's audits; its own count is printed beside as its useful work | R12 | the scheduler oracle over the kernel's trace; the program prints the count |
 | The kernel does not panic, and no assertion of a checked build fails | [I14 (no call panics the kernel)](invariants.md#i14-no-call-panics-the-kernel) | the kernel |
 
 The program's lines are trusted ([rule F](../testbench.md#rule-f-trusted-verdicts)) because it
@@ -184,16 +184,19 @@ owns the console and holds the reset. Its children hold no device and have no pa
 console, so no line on it can come from a hostile agent. Each victim reports through a handle the
 program badged for it, and the program never counts a hostile agent's report as a verdict.
 
-**The run.** The boot runs on rv64 and rv32, on one hart, in a checked build with the tracing
-kernel ([R23 (no test channels)](scheduling.md#r23-no-test-channels)). Its trace ring is
-192 MiB (`sched-trace-large`, at 512 MiB of RAM), not the usual 64: at the 1 ms slice the run
-writes about ten records a slice, some four million, and a trace that drops one fails the gate.
-It uses the latency workload's virtual time and one pinned seed. A sweep of 16 seeds on both
-widths sets which seed the gate runs, and this page records the sweep. The targets are the ones in
+**The run.** The boot runs on rv64 and rv32, at the bench's hart count, one and two in the gate,
+in a checked build with the tracing kernel
+([R23 (no test channels)](scheduling.md#r23-no-test-channels)). Its trace ring is 256 MiB
+(`sched-trace-large`, at 576 MiB of RAM), not the usual 64: at the 1 ms slice the run writes about
+ten records a slice, some four million at one hart and seven million at two, and a trace that
+drops one fails the gate. It uses the latency workload's virtual time and one pinned seed. Sweeps
+of 16 seeds on both widths, at one hart and at two, set which seed the gate runs, and this page
+records them. The targets are the ones in
 [responsiveness](scheduling.md#responsiveness), and the gate adds none. If the gate misses one of
 them, that is a finding against the kernel, not a reason to set a new target.
 
-The sweep ran all 16 seeds on both widths, and every run passed. The table gives each run's net
+The sweep at one hart (with the 192 MiB ring then) ran all 16 seeds on both widths, and every run
+passed. The table gives each run's net
 p99 of the deadline notice, R10's p99 and a lease's end (the decision wake's net p99 plus R10's),
 in µs, against targets of 40000, 30000 and 125000:
 
@@ -221,9 +224,41 @@ lands within 1.5 ms of the others. An earlier version of the gate showed a secon
 10 ms higher on some seeds. The steward stand-in then polled for its notices in 200 ms waits, and
 when one ran out just before a deadline, the stand-in was runnable rather than waiting when the
 notice came, so another party ran a slice first. It now waits in one receive bounded by the
-deadline. The case file pins one seed for both widths: the gate runs seed 13, the worst on both
-widths for the deadline notice (26197 µs on rv32, 25794 µs on rv64) and a lease's end, and on rv32
-for R10; rv64's worst R10 is seed 16, at 22385 µs.
+deadline. At one hart seed 13 is the worst on both widths for the deadline notice (26197 µs on
+rv32, 25794 µs on rv64) and a lease's end, and on rv32 for R10; rv64's worst R10 is seed 16, at
+22385 µs.
+
+At two harts every target is met on all 16 seeds on both widths; the deadline notice's p99 is 4
+to 7 ms above its one-hart value, and R10's 1 to 1.5 ms. The
+bystander's share of the charges (its one thread is owed a hart, 500 of 1000) falls in two modes
+by the hart it lands on: the one that waits longer for the lock and takes the audits, or the
+other. On rv32 that is 445 or 543 to 546, so at two harts the share is reported, not judged
+(`@1`; [scheduling](scheduling.md#residual-risks)). In µs, against the same targets:
+
+| Seed | rv32 notice | rv32 R10 | rv32 lease end | rv32 bystander | rv64 notice | rv64 R10 | rv64 lease end | rv64 bystander |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | 32181 | 23882 | 27863 | 445 | 30324 | 23219 | 26111 | 480 |
+| 2 | 32343 | 23894 | 27608 | 445 | 30474 | 23220 | 27020 | 481 |
+| 3 | 32587 | 23903 | 28242 | 445 | 30351 | 23219 | 26983 | 512 |
+| 4 | 32584 | 23908 | 28252 | 445 | 31641 | 23221 | 26942 | 479 |
+| 5 | 32180 | 23765 | 27721 | 544 | 30293 | 23219 | 26403 | 478 |
+| 6 | 32573 | 23908 | 28043 | 445 | 30259 | 23217 | 26981 | 480 |
+| 7 | 32240 | 23847 | 27972 | 445 | 30585 | 23100 | 26528 | 480 |
+| 8 | 31836 | 23901 | 28194 | 445 | 30409 | 23101 | 26865 | 515 |
+| 9 | 32371 | 23881 | 28156 | 445 | 31283 | 23197 | 27090 | 480 |
+| 10 | 31827 | 23892 | 28013 | 445 | 30549 | 23219 | 26984 | 480 |
+| 11 | 32574 | 23853 | 27552 | 545 | 30289 | 23219 | 27034 | 515 |
+| 12 | 32053 | 23850 | 28174 | 445 | 30070 | 23096 | 26886 | 513 |
+| 13 | 32294 | 23888 | 28179 | 546 | 30372 | 23217 | 26240 | 480 |
+| 14 | 32557 | 23883 | 27833 | 445 | 30331 | 23218 | 26972 | 480 |
+| 15 | 32123 | 23883 | 27563 | 445 | 30396 | 23100 | 26863 | 481 |
+| 16 | 32282 | 23904 | 28212 | 543 | 30072 | 23216 | 26979 | 481 |
+
+The case file pins one seed for both widths and both hart counts: the gate runs seed 4, the worst
+at two harts or within a millisecond of it on both widths: the deadline notice on rv64 (31641
+µs; rv32's worst is seed 3, 3 µs above), R10 on both (23221 and 23908 µs) and a lease's end on
+rv32 (28252 µs; rv64's is seed 9, 27090 µs). At one hart it is 25939 µs on rv32 and 25258 µs on
+rv64 for the deadline notice, within 0.6 ms of seed 13.
 
 The gate replaces none of the focused cases. `budget-deadline`, `redoubt-revoke`,
 `uaf-lent-page`, `endpoint-destroy-open-calls` and `sched-latency` each attack one clause alone,
@@ -336,8 +371,8 @@ two, where a file serves two mechanisms).
   between harts are not attacked by a case ([IPC](ipc.md#residual-risks)). Finer locking is
   M2 (usable shell)'s later step ([several harts](../plan/m2-usable-shell.md#several-harts)).
 - **The containment gate is one workload.** [Containment](#containment) runs hostile leases of
-  one size, against stand-ins for the steward and a driver, on one hart and under one pinned
-  seed. It shows that the kernel's primitives hold together for that workload. It does not bound
+  one size, against stand-ins for the steward and a driver, at one hart and two and under one
+  pinned seed. It shows that the kernel's primitives hold together for that workload. It does not bound
   every workload, and it says nothing about the real steward. The steward reruns the
   responsiveness measures with its real servers
   ([M3 (agents, approvals and the attack suite)](../plan/m3-agents.md#remaining-work)).

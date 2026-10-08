@@ -1891,8 +1891,9 @@ fn check_lift_delay(log: &str, records: &[Record], floor: &[u128]) -> Result<Str
 }
 
 /// A share of the CPU the kernel charged, judged on the trace alone: `CHARGED-SHARE <name>
-/// <start> <end> <tolerance> <mark>...`, a window `[start, end]` on `time_now` in µs, how far in
-/// thousandths the share may lie from its weight's, and the weights of the marks. A mark is an
+/// <start> <end> <tolerance>[@<harts>] <mark>...`, a window `[start, end]` on `time_now` in µs, how
+/// far in thousandths the share may lie from what it is owed (with `@`, judged only on a trace of
+/// that many harts and reported on any other), and the weights of the marks. A mark is an
 /// empty budget of that weight the program carves from a budget and destroys, so the trace names
 /// the budget (its lift's parent). The first mark's budget is the one judged; it and every marked
 /// budget, with all the budgets lifted into them, are the whole it is judged of. A mark may name
@@ -1902,6 +1903,8 @@ struct ChargedShare<'a> {
     name: &'a str,
     window: (u64, u64),
     tolerance: u64,
+    /// The harts the share is judged at, if only at some (`@`).
+    at: Option<u64>,
     marks: Vec<u64>,
     threads: Vec<Option<u64>>,
 }
@@ -1943,13 +1946,35 @@ fn expected_share(judged: u64, weights: &BTreeMap<u64, u64>) -> u64 {
     judged * 1000 / weights.values().sum::<u64>().max(1)
 }
 
+/// A share's tolerance, `<tolerance>[+|-][@<harts>]`, and the harts after its `@`, if it names
+/// some: the share is judged only on a trace of that many harts. `None` if they are not a count.
+fn judged_harts(tolerance: &str) -> Option<(&str, Option<u64>)> {
+    match tolerance.split_once('@') {
+        Some((t, h)) => h.parse().ok().filter(|h| *h > 0).map(|h| (t, Some(h))),
+        None => Some((tolerance, None)),
+    }
+}
+
+/// A share's line and verdict on a trace of `harts` harts: one judged only at other harts is
+/// reported, not judged.
+fn judged_at((line, met): (String, bool), at: Option<u64>, harts: u64) -> (String, bool) {
+    match at {
+        Some(h) if h != harts => (format!("{line}, judged at {h} harts only: not judged"), true),
+        _ => (line, met),
+    }
+}
+
 /// The charged shares the program printed, in order.
 fn charged_shares(log: &str) -> Result<Vec<ChargedShare<'_>>, String> {
     let mut out = Vec::new();
     for line in log.lines().map(|line| line.trim_end_matches('\r')) {
         let Some(rest) = line.strip_prefix("CHARGED-SHARE ") else { continue };
         let bad = || format!("malformed {line:?}");
-        let f: Vec<&str> = rest.split_whitespace().collect();
+        let mut f: Vec<&str> = rest.split_whitespace().collect();
+        let mut at = None;
+        if let Some(tolerance) = f.get_mut(3) {
+            (*tolerance, at) = judged_harts(tolerance).ok_or_else(bad)?;
+        }
         let mut nums = Vec::new();
         let mut threads = Vec::new();
         for v in f.iter().skip(1) {
@@ -1972,6 +1997,7 @@ fn charged_shares(log: &str) -> Result<Vec<ChargedShare<'_>>, String> {
             name: f[0],
             window: (start, end),
             tolerance,
+            at,
             marks: marks.to_vec(),
             threads: threads[3..].to_vec(),
         });
@@ -2309,9 +2335,10 @@ fn judge_across_harts(
 }
 
 /// A share across harts of the CPU the kernel charged, judged on the trace alone: `HART-SHARE
-/// <name> <start> <end> <tolerance>[+|-] <mark>[:<threads>] <weight>[:<threads>]...`, a window
-/// `[start, end]` on `time_now` in µs, how far in thousandths the share may lie from what it is
-/// owed (with `+` only below it, so it may be any more; with `-` only above it), the weight of the mark
+/// <name> <start> <end> <tolerance>[+|-][@<harts>] <mark>[:<threads>] <weight>[:<threads>]...`, a
+/// window `[start, end]` on `time_now` in µs, how far in thousandths the share may lie from what it
+/// is owed (with `+` only below it, so it may be any more; with `-` only above it; with `@`, judged
+/// only on a trace of that many harts and reported on any other), the weight of the mark
 /// naming the budget judged ([`ChargedShare`]), and the weight of each budget the program runs against it.
 /// Each may name its runnable threads, which its share across harts is capped at ([`water_fill`]); one that
 /// does not is never capped.
@@ -2322,6 +2349,8 @@ struct HartShare<'a> {
     /// `+` (at least the want less the tolerance), `-` (at most the want and the tolerance), or
     /// neither.
     side: Option<char>,
+    /// The harts the share is judged at, if only at some.
+    at: Option<u64>,
     mark: (u64, Option<u64>),
     others: Vec<(u64, Option<u64>)>,
 }
@@ -2342,6 +2371,7 @@ fn hart_shares(log: &str) -> Result<Vec<HartShare<'_>>, String> {
         };
         let f: Vec<&str> = rest.split_whitespace().collect();
         let [name, start, end, tolerance, judged, ref others @ ..] = f[..] else { return Err(bad()) };
+        let (tolerance, at) = judged_harts(tolerance).ok_or_else(bad)?;
         let (tolerance, side) = match tolerance.strip_suffix(['+', '-']) {
             Some(t) => (t, tolerance.chars().last()),
             None => (tolerance, None),
@@ -2355,6 +2385,7 @@ fn hart_shares(log: &str) -> Result<Vec<HartShare<'_>>, String> {
             window: (start, end),
             tolerance,
             side,
+            at,
             mark: budget(judged)?,
             others: others.iter().map(|v| budget(v)).collect::<Result<_, _>>()?,
         });
@@ -2736,7 +2767,7 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
     }
     // Each share of the charged CPU, of the kernel's charges alone.
     for s in charged_shares(log)? {
-        let (line, met) = check_charged_share(&records, &s)?;
+        let (line, met) = judged_at(check_charged_share(&records, &s)?, s.at, harts);
         missed |= !met;
         lines.push(line);
     }
@@ -2746,7 +2777,7 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
         return Err(format!("stale_waits_in names {name}, but the log holds no such share"));
     }
     for s in hart_shares {
-        let (line, met) = check_hart_share(&records, &s)?;
+        let (line, met) = judged_at(check_hart_share(&records, &s)?, s.at, harts);
         let inside = |t: &&u64| (s.window.0..s.window.1).contains(*t);
         let stale = sum.timer_stale_foreign.iter().filter(inside).count();
         let stale_missed = stale_in.contains(&s.name) && stale == 0;
@@ -4490,6 +4521,22 @@ mod tests {
             net.as_ref().is_err_and(|e| e.contains("lock waits taken out, ticks {44: 10800}")),
             "{net:?}"
         );
+        // Judged at one hart only (`@1`), the miss at two is reported, not judged.
+        let share = |tolerance: &str| {
+            let log = at(&log, &[]);
+            let line = log.lines().find(|l| l.starts_with("CHARGED-SHARE")).unwrap().to_string();
+            let mut f: Vec<&str> = line.split(' ').collect();
+            f[4] = tolerance;
+            log.replace(&line, &f.join(" "))
+        };
+        let reported = run(&share("50@1"), "");
+        assert!(
+            reported.as_ref().is_ok_and(|s| s.contains("target missed (450 <= share <= 550)")
+                && s.contains("judged at 1 harts only: not judged")),
+            "{reported:?}"
+        );
+        assert!(run(&share("50@2"), "").is_err_and(|e| !e.contains("not judged")));
+        assert!(run(&share("50@0"), "").is_err_and(|e| e.contains("malformed")));
     }
 
     /// Budget 44 (weight 100) marked 2, then one hart's picks by stride over `budgets` (id,
@@ -4584,6 +4631,26 @@ mod tests {
                 && e.contains("target missed (470 <= share <= 530)")),
             "{missed:?}"
         );
+        // Judged at two harts only, it misses there and is only reported at one.
+        let missed = run(&(two.clone() + &format!("HART-SHARE v 100 {end} 30@2 2:1 300:1\n")), "");
+        assert!(
+            missed.as_ref().is_err_and(
+                |e| e.contains("target missed (470 <= share <= 530)") && !e.contains("not judged")
+            ),
+            "{missed:?}"
+        );
+        let ok = run(&(on_harts(&t, &[], 1) + &format!("HART-SHARE v 100 {end} 30@2 2:1 900:1\n")), "");
+        assert!(
+            ok.as_ref().is_ok_and(
+                |s| s.contains("target missed (70 <= share <= 130), judged at 2 harts only: not judged")
+            ),
+            "{ok:?}"
+        );
+        for bad in ["30@0", "30@", "30@x"] {
+            let malformed =
+                run(&(on_harts(&t, &[], 1) + &format!("HART-SHARE v 100 {end} {bad} 2:1 300:1\n")), "");
+            assert!(malformed.is_err_and(|e| e.contains("malformed")), "{bad}");
+        }
         // With two threads the heavier budget is not capped: by weight again.
         let ok = run(&(two + &format!("HART-SHARE v 100 {end} 30 2:1 300:2\n")), "");
         assert!(ok.as_ref().is_ok_and(|s| s.contains("[100:1 500, 300:2 1500], expected 250")), "{ok:?}");

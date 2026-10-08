@@ -637,8 +637,8 @@ charges, never a count: under `icount` a count is the machine's instructions, no
 ([R12 (scheduling)](kernel/scheduling.md#r12-scheduling)). The program prints its window, marks the budget it
 judges (an empty child of the mark's weight, carved and destroyed, so the trace's lift names the
 parent), and names by weight and runnable threads each budget it runs against it (`HART-SHARE
-<name> <start> <end> <tolerance>[+|-] <mark>:<threads> <weight>:<threads>...`; `+` for
-at least, `-` for at most).
+<name> <start> <end> <tolerance>[+|-][@<harts>] <mark>:<threads> <weight>:<threads>...`; `+` for
+at least, `-` for at most, `@` judged only at that many harts and reported at any other).
 `sched_oracle` sums what the kernel charged each budget in the window, its pass's rises times its
 weight as the trace states it (each hart's runner, `H`, carries its weight), less each hart's
 waits for the kernel lock, which bill the waiting hart's runner though no thread of it ran; a lift
@@ -710,9 +710,11 @@ CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS=true CARGO_PROFILE_RELEASE_OVERFLOW_CHECK
 That run fails `bench-debug-assertions-off`, as it should; everything else must pass.
 
 `sched-trace` keeps the trace in a 64 MiB ring, and a trace that drops a record fails its case;
-`sched-trace-large` is the same ring at 192 MiB, and two cases build it. The containment gate
-does, at 512 MiB of RAM, since at the 1 ms slice its run of nine leases a slot writes about ten
-records a slice, twice what 64 MiB holds. So does `worst-walk`, whose run at full occupancy
+`sched-trace-large` is the same ring at 256 MiB, and two cases build it. The containment gate
+does, at 576 MiB of RAM, since at the 1 ms slice its run of nine leases a slot writes about ten
+records a slice, and at two harts each hart's picks, waiting counts and lock waits besides, some
+7.1 million, past 192 MiB's 6.3 million. The ring's frames are kept as 32-bit page numbers, so its
+table fits the kernel's RAM region. So does `worst-walk`, whose run at full occupancy
 writes about 2.6 million records on rv64 and 2.9 million on rv32, past the 64 MiB ring's 2.1
 million.
 

@@ -8,7 +8,7 @@ debug_assertions = true
 icount = "shift=3,sleep=off"
 qemu_seed = 3
 # The most rv32's physmap maps (kernel/memory-layout.md), and enough on both widths: 509 holders
-# of ~540 pages each, the trace ring's 192 MiB and the boot's own.
+# of ~540 pages each, the trace ring's 256 MiB and the boot's own.
 memory_mib = 2032
 # init alone; what it checks is that the threads all existed. The numbers are the trace's.
 programs = ["worst-walk"]

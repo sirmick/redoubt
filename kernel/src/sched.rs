@@ -843,13 +843,21 @@ pub mod trace {
     /// the `P` that sets it. The rise is no charge.
     pub const UNCAPPED: u8 = b'u';
 
-    /// Frames the ring takes (64 MiB, 192 MiB with `sched-trace-large`), and the records they hold.
-    const PAGES: usize = if cfg!(feature = "sched-trace-large") { 49152 } else { 16384 };
+    /// Frames the ring takes (64 MiB, 256 MiB with `sched-trace-large`), and the records they hold.
+    const PAGES: usize = if cfg!(feature = "sched-trace-large") { 65536 } else { 16384 };
     const PER_PAGE: usize = redoubt_sys::PAGE_SIZE / 32;
     const CAP: usize = PAGES * PER_PAGE;
+    // The ring keeps each frame as its 32-bit page number (`Ring::pages`): every frame the kernel
+    // takes is in the physmap, whose last page's number fits (kernel/memory.md, "Backing and
+    // zeroing").
+    const _: () = assert!(
+        (redoubt_layout::PHYSMAP_PHYS_BASE + redoubt_layout::PHYSMAP_SIZE - 1) / redoubt_sys::PAGE_SIZE
+            <= u32::MAX as usize
+    );
 
     struct Ring {
-        pages: [usize; PAGES],
+        /// Each frame's page number, so the large ring's table fits in the kernel's RAM region.
+        pages: [u32; PAGES],
         n: usize,
         dropped: u64,
         entry: u64,
@@ -867,11 +875,15 @@ pub mod trace {
     pub fn init(mm: &mut MemoryManager) {
         RING.with(|r| {
             for page in r.pages.iter_mut() {
-                *page = mm.kernel_frame().expect("sched-trace: no RAM for the trace ring");
-                crate::kframe::zero(*page);
+                let frame = mm.kernel_frame().expect("sched-trace: no RAM for the trace ring");
+                crate::kframe::zero(frame);
+                *page = (frame / redoubt_sys::PAGE_SIZE) as u32;
             }
         });
     }
+
+    /// The address of the frame that holds record `seq`.
+    fn frame(r: &Ring, seq: usize) -> usize { r.pages[seq / PER_PAGE] as usize * redoubt_sys::PAGE_SIZE }
 
     /// A reconcile begins: the records that follow belong to a new kernel entry.
     pub fn entry() { RING.with(|r| r.entry += 1); }
@@ -889,7 +901,7 @@ pub mod trace {
         let kind = u64::from(kind) | (crate::arch::hart::index() as u64) << 8;
         RING.with(|r| {
             if r.n < CAP && r.pages[0] != 0 {
-                let (page, at) = (r.pages[r.n / PER_PAGE], (r.n % PER_PAGE) * 32);
+                let (page, at) = (frame(r, r.n), (r.n % PER_PAGE) * 32);
                 for (k, word) in [pass, entry, id, kind].iter().enumerate() {
                     crate::kframe::write(page, at + k * 8, *word);
                 }
@@ -1167,7 +1179,7 @@ pub mod trace {
         put(KERNEL_TIME, audits, ticks, charged);
         RING.with(|r| {
             for seq in 0..r.n {
-                let (page, at) = (r.pages[seq / PER_PAGE], (seq % PER_PAGE) * 32);
+                let (page, at) = (frame(r, seq), (seq % PER_PAGE) * 32);
                 let w = |k: usize| crate::kframe::read(page, at + k * 8);
                 let kind = w(3);
                 println!(

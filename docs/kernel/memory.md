@@ -98,6 +98,15 @@ turns a supervisor `cbo.inval` into a flush, so no mode below M can discard a li
 requires privileged architecture 1.12, where `senvcfg` first appears: on an older hart the write
 traps and the boot stops.
 
+A test kernel's trace ring (`sched-trace`, never in a release build;
+[R23 (no test channels)](scheduling.md#r23-no-test-channels)) takes its frames at boot, the highest free ones, before
+the budget tree counts what the kernel keeps, and holds each as its page number in 32 bits, so the
+256 MiB ring's table of 65,536 frames fits the kernel's 1 MiB RAM region. Every frame the kernel
+takes lies in the [physmap](memory-layout.md#the-direct-physical-map), which ends at 128 GiB on
+rv64 and below 4 GiB on rv32: page numbers to 2^25, where 32 bits reach 16 TiB of physical
+address. A compile-time assertion in `kernel/src/sched.rs` holds the physmap's last page number
+within 32 bits.
+
 ### Page tables
 
 Status: built · tested: bench:page-table-reclaim, mutation:R6EmptyTableKept

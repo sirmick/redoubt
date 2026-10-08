@@ -2443,20 +2443,20 @@ impl Bench {
     }
 
     /// A share of the CPU the kernel charged, which the bench's post-check (`sched_oracle`) reads
-    /// from the trace alone: printed as `CHARGED-SHARE <name> <start> <end> <tolerance>
+    /// from the trace alone: printed as `CHARGED-SHARE <name> <start> <end> <tolerance>[@<harts>]
     /// <mark>[:<threads>]...`, the window in µs, how far in thousandths the share may lie from what
-    /// it is owed among the budgets charged beside it, and the weights of the empty budgets the
-    /// program carved and destroyed to mark the budget judged (the first) and the budgets it is
-    /// judged among (each mark's, and those under it), each with its runnable threads if it has
-    /// fewer than the harts (its water-filling share is capped at them).
+    /// it is owed among the budgets charged beside it (`@` judged only at that many harts), and the
+    /// weights of the empty budgets the program carved and destroyed to mark the budget judged (the
+    /// first) and the budgets it is judged among (each mark's, and those under it), each with its
+    /// runnable threads if it has fewer than the harts (its water-filling share is capped at them).
     pub fn charged_share(
         &self,
         name: &str,
         (start, end): (u64, u64),
-        tolerance: u64,
+        (tolerance, at): (u64, &str),
         marks: &[(u32, Option<u32>)],
     ) {
-        let _ = write!(Console, "CHARGED-SHARE {} {} {} {}", name, start, end, tolerance);
+        let _ = write!(Console, "CHARGED-SHARE {} {} {} {}{}", name, start, end, tolerance, at);
         for (m, k) in marks {
             let _ = match k {
                 Some(k) => write!(Console, " {}:{}", m, k),
@@ -2468,11 +2468,11 @@ impl Bench {
 
     /// A share across harts of the CPU the kernel charged, which the bench's post-check
     /// (`sched_oracle`) reads from the trace alone: printed as `HART-SHARE <name> <start> <end>
-    /// <tolerance>[+|-] <mark>:<threads> <weight>:<threads>...`, the window in µs, how far in
-    /// thousandths the share may lie from what it is owed (`+` only below it, `-` only above), the
-    /// weight of the empty budget the program carved and destroyed to mark the budget judged
-    /// ([`mark`]) with its runnable threads, and the weight and runnable threads of each budget it
-    /// runs against it.
+    /// <tolerance>[+|-][@<harts>] <mark>:<threads> <weight>:<threads>...`, the window in µs, how far
+    /// in thousandths the share may lie from what it is owed (`+` only below it, `-` only above,
+    /// `@` judged only at that many harts), the weight of the empty budget the program carved and
+    /// destroyed to mark the budget judged ([`mark`]) with its runnable threads, and the weight and
+    /// runnable threads of each budget it runs against it.
     pub fn hart_share(
         &self,
         name: &str,

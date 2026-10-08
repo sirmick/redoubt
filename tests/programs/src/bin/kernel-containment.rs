@@ -276,7 +276,9 @@ pub extern "C" fn _start() -> ! {
             b.charged_share(
                 "bystander",
                 (start, start + length),
-                TOLERANCE,
+                // At one hart: across harts the hart it lands on decides it (kernel/scheduling.md,
+                // "Residual risks").
+                (TOLERANCE, "@1"),
                 // The bystander counts on one thread; the sessions' leases run many.
                 &[(BYSTANDER_MARK, Some(1)), (SESSIONS_MARK, None)],
             );
