@@ -117,18 +117,17 @@ defmodule Redoubt.Screen do
   """
   @spec terminal_size() :: {:ok, {pos_integer(), pos_integer()}} | :none
   def terminal_size do
-    # OTP's group, the shell's own console, has completion among its options; anything else
-    # (a captured output, a file) has not, and has no driver to ask.
-    with opts when is_list(opts) <- :io.getopts(Process.group_leader()),
-         true <- Keyword.has_key?(opts, :expand_fun) do
-      send(driver!(), {:redoubt_screen, :size, self()})
+    case Redoubt.Shell.Driver.of_group() do
+      nil ->
+        :none
 
-      receive do
-        {:redoubt_screen, :size, {cols, rows}} -> {:ok, {cols, rows}}
-        {:redoubt_screen, :size, :unknown} -> :none
-      end
-    else
-      _not_a_terminal -> :none
+      driver ->
+        send(driver, {:redoubt_screen, :size, self()})
+
+        receive do
+          {:redoubt_screen, :size, {cols, rows}} -> {:ok, {cols, rows}}
+          {:redoubt_screen, :size, :unknown} -> :none
+        end
     end
   end
 
@@ -142,14 +141,8 @@ defmodule Redoubt.Screen do
 
   # The shell's driver: the group leader, OTP's group, knows it.
   defp driver! do
-    group = Process.group_leader()
-    send(group, {:driver_id, self()})
-
-    receive do
-      {^group, :driver_id, driver} -> driver
-    after
-      1000 -> raise ArgumentError, "a screen needs the shell's terminal: this line's output is not it"
-    end
+    Redoubt.Shell.Driver.of_group() ||
+      raise ArgumentError, "a screen needs the shell's terminal: this line's output is not it"
   end
 
   # ---- the screen's process ----

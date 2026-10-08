@@ -2,10 +2,10 @@
 %% bound at /home/alice, through OTP's own prim_file, whose natives are beamlet's. It writes a
 %% file, reads it back, lists the directory, removes the file, reads one larger than one 9P answer
 %% with eight processes at once, renames a directory into itself, which the volume refuses, reads
-%% a path no binding holds, and removes what it made. init restarts a server entry that exits,
-%% this VM included, and the restarted VM replays this module on the same volume: so the module
-%% removes any leftover of an earlier run at its start too, and every run finds the volume as the
-%% first did, or its make_dir would be eexist.
+%% a path no binding holds, writes a file's info back and to a missing file, and removes what it
+%% made. init restarts a server entry that exits, this VM included, and the restarted VM replays
+%% this module on the same volume: so the module removes any leftover of an earlier run at its
+%% start too, and every run finds the volume as the first did, or its make_dir would be eexist.
 -module(beamlet_files).
 -export([start/0]).
 
@@ -37,6 +37,12 @@ start() ->
     say("directory into itself: ~s", [prim_file:rename("/home/alice/d", "/home/alice/d/inner/d")]),
     say("bob's file: ~s", [prim_file:read_file("/home/bob/x")]),
     say("mode: ~s", [element(8, element(2, prim_file:read_file_info("/home/alice/big")))]),
+    % A file's own info written back, as Elixir's File.cp does after a copy: there is no owner,
+    % mode or time to set, which OTP takes as done; on a file that is not there it is enoent, so
+    % File.touch of a file in a missing directory fails.
+    {ok, Info} = prim_file:read_file_info("/home/alice/big"),
+    say("its info written back: ~s", [prim_file:write_file_info("/home/alice/big", Info)]),
+    say("info written to a missing file: ~s", [prim_file:write_file_info("/home/alice/none/x", Info)]),
     say("cleaned: ~s", [[P || P <- Made, remove(P) =:= ok]]),
     done.
 

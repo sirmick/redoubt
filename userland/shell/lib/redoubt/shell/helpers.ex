@@ -104,6 +104,8 @@ defmodule Redoubt.Shell.Helpers do
   @summary "Copy a file"
   @help """
   Copies src to dst. When dst is an existing directory, the copy goes into it and keeps its name.
+  Within one volume the file server makes the copy itself; across volumes, or over a file that is
+  there, the bytes pass through the session.
   """
   @args src: "the file to copy", dst: "where the copy goes: a file, or a directory to put it in"
   @examples [
@@ -111,7 +113,12 @@ defmodule Redoubt.Shell.Helpers do
     {~S'cp("a.txt", "backup")', "copy a.txt into backup, as backup/a.txt"}
   ]
   defcommand cp(src :: path, dst :: path) do
-    File.cp!(src, target(src, dst))
+    dst = target(src, dst)
+
+    case Redoubt.File.copy_file(src, dst) do
+      {:ok, _bytes} -> :ok
+      {:error, _cannot} -> File.cp!(src, dst)
+    end
   end
 
   @summary "Move or rename a file"

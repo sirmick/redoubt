@@ -2,7 +2,7 @@
 %% `System`. Only natives are used: the tests load no OTP modules. Rebuild:
 %% erlc +deterministic -o vm/tests/fixtures vm/tests/src/natives.erl
 -module(natives).
--export([lookup/0, bind/0, table/0, call/0, send/0, budgets/0, labels/0, launch/0, serve/0,
+-export([lookup/0, bind/0, table/0, call/0, send/0, budgets/0, labels/0, identity/0, launch/0, serve/0,
          decoded/0, wrong_types/0, oversize/0, wrong_kind/0, dropped/0, unsupported/0]).
 
 %% The longest prefix's connection and the rest; a named handle; refusals by name.
@@ -43,6 +43,9 @@ budgets() ->
 
 %% Fixed: asked twice, the same.
 labels() -> {redoubt:labels(), redoubt:labels()}.
+
+%% What the session was told of itself, as the platform has it.
+identity() -> redoubt:identity().
 
 %% A launch, and its end as a message naming the job.
 launch() ->

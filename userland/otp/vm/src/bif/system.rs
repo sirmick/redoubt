@@ -292,6 +292,36 @@ pub fn labels(c: &mut Ctx, _a: &[Term]) -> R {
     Ok(c.list(terms))
 }
 
+/// `identity()`: `{ok, #{principal => Name, labels => [{Name, Id}], context => Name | nil}}`, what
+/// the steward told this VM of itself when it launched it as a session; `{error, not_found}` for a
+/// VM that is no session.
+pub fn identity(c: &mut Ctx, _a: &[Term]) -> R {
+    Ok(match with_system(c, |s| Ok(s.identity())) {
+        Ok(Some(i)) => {
+            let principal = c.binary(i.principal.as_bytes());
+            let labels: Vec<Term> = i
+                .labels
+                .iter()
+                .map(|(name, id)| {
+                    let name = c.binary(name.as_bytes());
+                    let id = c.heap_mut().from_u64(*id);
+                    c.tuple(&[name, id])
+                })
+                .collect();
+            let labels = c.list(labels);
+            let context = match &i.context {
+                Some(name) => c.binary(name.as_bytes()),
+                None => c.atom("nil"),
+            };
+            let keys = [c.atom("principal"), c.atom("labels"), c.atom("context")];
+            let m = c.map_from(keys.into_iter().zip([principal, labels, context]));
+            c.ok_tuple(m)
+        }
+        Ok(None) => refused(c, Refused("not_found")),
+        Err(e) => refused(c, e),
+    })
+}
+
 /// `launch(#{image, budget, namespace, handles, args, stack_pages, heap_pages})`: `{ok, Job}`, and
 /// the job's end arrives as `{exit, Job, Cause, Code}`. `image` is the program's bytes and `budget`
 /// one the caller carved; `namespace` is `[{Path, Connection}]` and `handles` `[{Name, Handle}]`, at

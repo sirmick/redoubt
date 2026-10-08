@@ -116,7 +116,7 @@ max_lines = 1219
 [[crate]]
 name = "servers/steward"
 paths = ["servers/steward/src"]
-max_lines = 1212
+max_lines = 1224
 
 [[crate]]
 name = "servers/bootfsd"

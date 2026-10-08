@@ -19,7 +19,9 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::num::NonZeroU64;
 
-use beamlet_vm::platform::{BudgetSpec, Entry, Event, Launch, Message, Object, Refused, System, Usage};
+use beamlet_vm::platform::{
+    BudgetSpec, Entry, Event, Identity, Launch, Message, Object, Refused, System, Usage,
+};
 use redoubt_client::Error;
 use redoubt_client::file::Connection;
 use redoubt_rt::abi::{self, FOREVER, Handle, Labels};
@@ -44,6 +46,10 @@ pub const HAND_US: u64 = 1_000_000;
 /// How long a bind waits for a server to answer each of the attach's two calls (µs), on the VM's
 /// thread: one short call a live server answers at once, as a launcher's release is.
 pub const ATTACH_US: u64 = 1_000_000;
+/// How many entries a VM's namespace holds at most, those it started with included: a bind of a
+/// new prefix past it is `system_limit`, so a loop of binds fails visibly, never on the VM's heap
+/// (docs/userland/files.md, "Copying, moving, removing and binds").
+pub const MAX_BINDINGS: usize = 64;
 
 /// A handle the VM holds: one it was given since its start is closed when its last [`Cap`] goes;
 /// one it was started with is the process's for its life, and the namespace's, so never.
@@ -115,6 +121,8 @@ pub(crate) struct Sys {
     /// The named handles, in block order: (name, handle).
     named: Vec<(String, Handle)>,
     labels: Vec<u64>,
+    /// What the steward told it of itself, if it is a session.
+    identity: Option<Identity>,
     events: VecDeque<(u64, Event)>,
     /// The typed calls' threads.
     pool: crate::pool::Pool,
@@ -136,6 +144,7 @@ impl Sys {
             known: Vec::new(),
             named: Vec::new(),
             labels,
+            identity: crate::identity(&startup.args().collect::<Vec<_>>()),
             events: VecDeque::new(),
             pool,
             served: crate::serve::Served::default(),
@@ -300,6 +309,12 @@ impl System for Redoubt {
         if !path::is_clean_absolute(prefix) {
             return Err(Refused("bad_name"));
         }
+        // A new prefix past the cap is refused before anything is attached; one already bound
+        // is replaced, which adds nothing.
+        let entries = self.files.ns.list().count();
+        if entries >= MAX_BINDINGS && !self.files.ns.list().any(|(p, _)| p == prefix) {
+            return Err(Refused("system_limit"));
+        }
         let cap = cap(handle)?;
         let conn = match &cap.kind {
             Kind::Connection(conn) => conn.clone(),
@@ -428,6 +443,8 @@ impl System for Redoubt {
     }
 
     fn labels(&mut self) -> Vec<u64> { self.sys.labels.clone() }
+
+    fn identity(&mut self) -> Option<Identity> { self.sys.identity.clone() }
 
     fn launch(&mut self, asker: u64, job: u64, launch: Launch) -> Result<(), Refused> {
         let resolved = crate::jobs::Resolved {

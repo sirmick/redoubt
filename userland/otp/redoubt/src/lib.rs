@@ -42,12 +42,13 @@ pub mod userland;
 use alloc::boxed::Box;
 use alloc::collections::VecDeque;
 use alloc::format;
+use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use beamlet_vm::bif::NativeSpec;
 use beamlet_vm::memory::HeapPages;
-use beamlet_vm::platform::{ConsoleInput, Files, Lookup, Platform, PlatformError, System};
+use beamlet_vm::platform::{ConsoleInput, Files, Identity, Lookup, Platform, PlatformError, System};
 use beamlet_vm::vm::{Config, Limits};
 use beamlet_vm::{Class, Vm};
 pub use files::posix;
@@ -571,6 +572,34 @@ pub fn binds<'a>(startup: &Startup<'a>) -> Result<Vec<(&'a str, Handle)>, &'a st
         out.push(bound.ok_or(arg)?);
     }
     Ok(out)
+}
+
+/// The arguments a steward gives a session's VM to tell it what it is
+/// (docs/userland/sessions.md, "What a session is told"): `principal=NAME`, `label=NAME:ID` for each
+/// label of its set, and `context=NAME` for a named context.
+pub const PRINCIPAL: &str = "principal=";
+pub const LABEL: &str = "label=";
+pub const CONTEXT: &str = "context=";
+
+/// The identity `args` tell: none without exactly one `principal=`, or with a `label=` that is not
+/// `NAME:ID` or a second `context=`.
+pub fn identity(args: &[&str]) -> Option<Identity> {
+    let mut principals = args.iter().filter_map(|arg| arg.strip_prefix(PRINCIPAL));
+    let principal = principals.next()?.to_string();
+    if principals.next().is_some() {
+        return None;
+    }
+    let mut labels = Vec::new();
+    for label in args.iter().filter_map(|arg| arg.strip_prefix(LABEL)) {
+        let (name, id) = label.rsplit_once(':')?;
+        labels.push((name.to_string(), id.parse().ok()?));
+    }
+    let mut contexts = args.iter().filter_map(|arg| arg.strip_prefix(CONTEXT));
+    let context = contexts.next().map(str::to_string);
+    if contexts.next().is_some() {
+        return None;
+    }
+    Some(Identity { principal, labels, context })
 }
 
 /// The argument that gives the VM its budget's pages, required on the machine: a program cannot

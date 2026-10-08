@@ -1,4 +1,4 @@
-description = "Files over 9P from a VM (docs/userland/files.md, \"Files over 9P\"): under init, beamlet is handed a home volume (walfsd:data) and binds it at /home/alice; through OTP's prim_file it writes a file, reads it back, lists the directory, removes the file, reads a file larger than one 9P answer from eight processes at once, gets eacces for a directory renamed into itself (the volume's not_permitted, not econnrefused), finds /home/bob/x is enoent (no binding holds it), sees an undefined mode, and removes what it made. Its report_io line shows every request went through the hub on the scheduler and two waiter threads, the console's and the volume's: no thread per read"
+description = "Files over 9P from a VM (docs/userland/files.md, \"Files over 9P\"): under init, beamlet is handed a home volume (walfsd:data) and binds it at /home/alice; through OTP's prim_file it writes a file, reads it back, lists the directory, removes the file, reads a file larger than one 9P answer from eight processes at once, gets eacces for a directory renamed into itself (the volume's not_permitted, not econnrefused), finds /home/bob/x is enoent (no binding holds it), sees an undefined mode, writes a file's info back as Elixir's File.cp does (ok: no owner, mode or time to set, which OTP takes as done) and to a missing file (enoent, so File.touch in a missing directory fails), and removes what it made. Its report_io line shows every request went through the hub on the scheduler and two waiter threads, the console's and the volume's: no thread per read"
 arch = ["rv64", "rv32"]
 kind = "boot"
 # As beamlet-console, with a second disk for the home volume, its blkd and walfsd, and the
@@ -30,6 +30,8 @@ expect = [
     '^\[con [0-9a-f]{16}\] files: directory into itself: \{error,eacces\}$',
     '^\[con [0-9a-f]{16}\] files: bob.s file: \{error,enoent\}$',
     '^\[con [0-9a-f]{16}\] files: mode: undefined$',
+    '^\[con [0-9a-f]{16}\] files: its info written back: ok$',
+    '^\[con [0-9a-f]{16}\] files: info written to a missing file: \{error,enoent\}$',
     '^\[con [0-9a-f]{16}\] files: cleaned: \["/home/alice/big","/home/alice/d/inner","/home/alice/d"\]$',
     '^\[con [0-9a-f]{16}\] beamlet: io: [0-9]+ requests through the hub; threads: 1 scheduler, 2 waiters$',
     '^init: beamlet \(PID [0-9]+\) exited, code 0$',

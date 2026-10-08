@@ -358,11 +358,40 @@ fn what_has_no_9p_field_is_refused_visibly() {
     with_home(|p| {
         put(p, "/home/alice/f", b"x");
         assert_eq!(p.set_permissions("/home/alice/f", 0o600), Err(FileError::Enotsup));
+        assert_eq!(p.set_owner("/home/alice/f", -1, -1), Err(FileError::Enotsup));
+        assert_eq!(p.set_times("/home/alice/f", 0, 0), Err(FileError::Enotsup));
         assert_eq!(p.make_symlink(b"f", "/home/alice/l"), Err(FileError::Enotsup));
         assert_eq!(p.make_link("/home/alice/f", "/home/alice/l"), Err(FileError::Enotsup));
         let h = ask(p, |p| p.open("/home/alice/f", create(OpenMode::default()))).unwrap();
         assert_eq!(p.truncate(h), Err(FileError::Enotsup));
         p.close(h);
+    });
+}
+
+/// Within one volume the server copies: the bytes never cross into the VM. A copy onto a name
+/// that is there is `eexist`, across two connections `exdev` (the caller copies through the VM),
+/// and onto the namespace's own directory `eacces`.
+#[test]
+fn a_copy_within_one_volume_is_the_servers() {
+    with_home(|p| {
+        put(p, "/home/alice/a", b"buy milk\n");
+        assert_eq!(ask(p, |p| p.copy_file("/home/alice/a", "/home/alice/b")), Ok(9));
+        assert_eq!(ask(p, |p| p.read_file("/home/alice/b", 64)).unwrap(), b"buy milk\n");
+        assert_eq!(ask(p, |p| p.copy_file("/home/alice/a", "/home/alice/b")), Err(FileError::Eexist));
+        assert_eq!(ask(p, |p| p.copy_file("/home/alice/a", "/dev/cons/a")), Err(FileError::Exdev));
+        assert_eq!(ask(p, |p| p.copy_file("/home/alice/a", "/home")), Err(FileError::Eacces));
+        assert_eq!(ask(p, |p| p.copy_file("/home/alice/none", "/home/alice/c")), Err(FileError::Enoent));
+    });
+}
+
+/// A field set on a file that is not there is what looking it up finds, never `enotsup`, which
+/// OTP's `write_file_info` takes as done: so `File.touch` in a missing directory is not `ok`.
+#[test]
+fn a_field_set_on_a_missing_file_is_enoent() {
+    with_home(|p| {
+        assert_eq!(ask(p, |p| p.set_times("/home/alice/none/f", 0, 0)), Err(FileError::Enoent));
+        assert_eq!(ask(p, |p| p.set_owner("/home/alice/none", -1, -1)), Err(FileError::Enoent));
+        assert_eq!(ask(p, |p| p.set_permissions("/home/bob/f", 0o600)), Err(FileError::Enoent));
     });
 }
 

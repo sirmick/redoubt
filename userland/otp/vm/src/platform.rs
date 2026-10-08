@@ -204,11 +204,26 @@ pub trait System {
     fn budget_usage(&mut self, budget: &Object) -> Result<Usage, Refused>;
     /// This VM's label set, fixed when its budget was made.
     fn labels(&mut self) -> Vec<u64>;
+    /// What this VM was told of itself when it was launched as a session, if it was one.
+    fn identity(&mut self) -> Option<Identity> { None }
     /// Starts `launch` for `asker`; its end arrives as [`Event::Exit`] naming `job`.
     fn launch(&mut self, asker: u64, job: u64, launch: Launch) -> Result<(), Refused>;
     /// The next event for a process, if one has come. Must not block; [`Platform::idle`] should
     /// return when one arrives.
     fn poll(&mut self) -> Option<(u64, Event)>;
+}
+
+/// What a session's VM is told of itself by the steward that launched it
+/// (docs/userland/sessions.md, "What a session is told"): information, not authority, since what
+/// it can reach is its handles whatever this says.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Identity {
+    /// The principal's name.
+    pub principal: String,
+    /// Each label of the session's set: its name and id.
+    pub labels: Vec<(String, u64)>,
+    /// The context's name; `None` for the principal's default context or the console's session.
+    pub context: Option<String>,
 }
 
 /// The result of a system module or application lookup. Refusal is terminal for this lookup;
@@ -312,19 +327,41 @@ pub trait Files {
     fn delete(&mut self, path: &str) -> Result<(), FileError>;
     fn del_dir(&mut self, path: &str) -> Result<(), FileError>;
     fn rename(&mut self, from: &str, to: &str) -> Result<(), FileError>;
+    /// Copies the file `from` to the new file `to` within one file server, which copies it itself:
+    /// the bytes copied. `exdev` when the two are on different servers, and by default `enotsup`:
+    /// the caller copies through the VM instead.
+    fn copy_file(&mut self, from: &str, to: &str) -> Result<u64, FileError> {
+        let _ = (from, to);
+        Err(FileError::Enotsup)
+    }
     /// The target of a symbolic link.
     fn read_link(&mut self, path: &str) -> Result<Vec<u8>, FileError> {
         let _ = path;
         Err(FileError::Einval)
     }
-    /// Set access and modification times (seconds since the Unix epoch).
+    /// Set access and modification times (seconds since the Unix epoch). By default there are
+    /// none to set: [`unsettable`](Files::unsettable).
     fn set_times(&mut self, path: &str, atime: i64, mtime: i64) -> Result<(), FileError> {
-        let _ = (path, atime, mtime);
-        Err(FileError::Enotsup)
+        let _ = (atime, mtime);
+        self.unsettable(path)
     }
-    /// Set the permission bits.
+    /// Set the permission bits. By default there are none: [`unsettable`](Files::unsettable).
     fn set_permissions(&mut self, path: &str, mode: u32) -> Result<(), FileError> {
-        let _ = (path, mode);
+        let _ = mode;
+        self.unsettable(path)
+    }
+    /// Set the owner and group, either `-1` for unchanged. By default there are none:
+    /// [`unsettable`](Files::unsettable).
+    fn set_owner(&mut self, path: &str, uid: i64, gid: i64) -> Result<(), FileError> {
+        let _ = (uid, gid);
+        self.unsettable(path)
+    }
+    /// The answer to setting a field the file system does not have: `enotsup` for a file that is
+    /// there, and what looking it up finds otherwise (`enoent`). OTP's `write_file_info` takes
+    /// `enotsup` as done, so without the look a change to a file that is not there, as
+    /// `File.touch` of one in a missing directory, would be `ok`.
+    fn unsettable(&mut self, path: &str) -> Result<(), FileError> {
+        self.info(path, true)?;
         Err(FileError::Enotsup)
     }
     /// Make a symbolic link at `link` whose target is `target`, stored as given (not resolved:

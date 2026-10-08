@@ -1,7 +1,7 @@
 //! The steward's own lines (servers/steward.md, "The manifest lines"): what `init` appends after
 //! the core's, parsed strictly, and a network scope encoded as `ipd`'s `grant` takes it.
 
-use redoubt_steward_server::own::{Bound, Home, How, Own, SYSTEM, Vault, binding, is_own};
+use redoubt_steward_server::own::{Bound, Home, How, Own, SYSTEM, Vault, binding, is_own, session_args};
 
 fn read(lines: &[&str]) -> Result<Own, String> {
     let mut own = Own::default();
@@ -110,4 +110,17 @@ fn the_binding_table_binds_each_slot_as_the_page_says() {
     );
     assert_eq!(table(&[7], "alice"), [boot.clone(), home, vault, None, cons.clone(), system.clone(), None]);
     assert_eq!(table(&[], "bob"), [boot, None, None, None, cons, system, None]);
+}
+
+/// What a session's VM is told of itself: its principal, each label of its set by name and id,
+/// and a named context; nothing for the default context or the console's session.
+#[test]
+fn a_sessions_arguments_name_its_principal_labels_and_context() {
+    let own = read(&["label \"alice-secrets\" id=7"]).unwrap();
+    assert_eq!(
+        session_args(&own, "alice", &[7], Some("work")),
+        ["principal=alice", "label=alice-secrets:7", "context=work"]
+    );
+    assert_eq!(session_args(&own, "alice", &[], Some("")), ["principal=alice"]);
+    assert_eq!(session_args(&own, "bob", &[], None), ["principal=bob"]);
 }

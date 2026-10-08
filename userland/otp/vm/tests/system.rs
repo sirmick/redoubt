@@ -10,8 +10,8 @@ use std::sync::{Arc, Mutex};
 
 use beamlet_vm::Vm;
 use beamlet_vm::platform::{
-    BudgetSpec, Entry, Event, Launch, Lookup, Message, Object, Platform, PlatformError, Refused, System,
-    Usage,
+    BudgetSpec, Entry, Event, Identity, Launch, Lookup, Message, Object, Platform, PlatformError, Refused,
+    System, Usage,
 };
 
 /// A handle of the test platform: its kind and name, counted when it is dropped.
@@ -206,6 +206,11 @@ impl System for Test {
 
     fn labels(&mut self) -> Vec<u64> { vec![7, 9] }
 
+    fn identity(&mut self) -> Option<Identity> {
+        let labels = vec![("alice-secrets".into(), 7)];
+        Some(Identity { principal: "alice".into(), labels, context: Some("work".into()) })
+    }
+
     fn launch(&mut self, asker: u64, job: u64, launch: Launch) -> Result<(), Refused> {
         let ns: Vec<(&str, &str)> =
             launch.namespace.iter().map(|(p, h)| (p.as_str(), mock(h).name)).collect();
@@ -310,6 +315,21 @@ fn budgets_are_carved_read_and_destroyed() {
 #[test]
 fn labels_are_fixed() {
     assert_eq!(run("labels").0, "{[7,9],[7,9]}");
+}
+
+#[test]
+fn the_identity_is_the_platforms_and_without_a_system_is_not_supported() {
+    let (result, _) = run("identity");
+    assert_eq!(
+        result,
+        format!(
+            "{{ok,#{{context => {},labels => [{{{},7}}],principal => {}}}}}",
+            text("work"),
+            text("alice-secrets"),
+            text("alice")
+        )
+    );
+    assert_eq!(run_on("identity", false).0, "{error,not_supported}");
 }
 
 #[test]

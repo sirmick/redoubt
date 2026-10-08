@@ -226,6 +226,20 @@ defmodule Redoubt.Shell.DriverTest do
     ends(driver)
   end
 
+  test "clear() clears the screen, and the next prompt is drawn at its top" do
+    {driver, terminal} = start()
+    type(driver, "IO.puts(\"before\")\r")
+    terminal = screen(terminal, &(Terminal.text(&1) =~ "before"))
+    type(driver, "clear()\r")
+    terminal = screen(terminal, &(not (Terminal.text(&1) =~ "before")))
+
+    refute Terminal.text(terminal) =~ "before"
+    assert row(terminal, 0) =~ ~r/^:ok$/
+    assert row(terminal, 1) =~ ~r/\(3\)>$/
+    type(driver, "exit\r")
+    ends(driver)
+  end
+
   test "Ctrl+C in the middle of an unfinished expression drops all of it" do
     {driver, terminal} = start()
     type(driver, "[1,\r")

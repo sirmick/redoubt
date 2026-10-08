@@ -224,6 +224,21 @@ server and creates no authority. A namespace is the session's own: binding in it
 for any other process, and a child sees only the table its launcher wrote for it
 ([files and binds](files.md)).
 
+### What a session is told
+
+Status: built · partly tested: the steward's arguments and beamlet's reading of them are host-tested apart, and no case yet reads them in a session · tested: host:beamlet-redoubt::a_sessions_identity_is_read_from_its_arguments, host:beamlet-redoubt::the_platform_tells_a_session_its_identity, host:beamlet-vm::the_identity_is_the_platforms_and_without_a_system_is_not_supported, host:redoubt-steward-server::a_sessions_arguments_name_its_principal_labels_and_context, host:redoubt-steward-server::a_sessions_launch_is_told_its_context
+
+A session's VM learns what it is from its launch arguments, which the launcher writes into its
+startup block, as the steward does for every session it launches
+([the steward](../servers/steward.md#authentication-and-sessions)): `principal=NAME`; `label=NAME:ID`, one for each label of its set, in the set's
+order; and `context=NAME` for a named context, none for the principal's default one or the
+console's session. beamlet reads them once at its start and gives them to Elixir as
+`redoubt:identity/0` ([beamlet](beamlet.md#natives)); a VM started without `principal=` is no
+session and gets `not_found`. They are fixed for the VM's life, and they are information, not
+authority: the label set the kernel stamps is `redoubt:labels/0`, and what the session can reach
+is its handles, whatever the arguments say. A session that could rewrite them would lie only to
+itself.
+
 ### How a program reads its namespace
 
 <details><summary>Status: built · tested (6)</summary>

@@ -65,12 +65,14 @@ pub trait Kernel {
     /// Gives a connection back: closed here, and disconnected at its server.
     fn release(&mut self, handle: Self::Handle);
     /// Starts a child of `domain` in `budget` through the loader stub, with the connections the
-    /// batch made in slot order (the steward's first); returns its process id.
+    /// batch made in slot order (the steward's first), told the session's `context` (`None` for
+    /// the console's session or an agent); returns its process id.
     fn launch(
         &mut self,
         domain: &Domain,
         budget: Self::Budget,
         connections: &[Option<Self::Handle>],
+        context: Option<&str>,
     ) -> Result<u64, Error>;
     /// A word from the kernel's generator.
     fn random(&mut self) -> Result<u64, Error>;

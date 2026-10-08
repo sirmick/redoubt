@@ -445,7 +445,11 @@ start failure, and the box has no users.
   for ([init](init.md#fresh-connections-per-child)), and launches it through the loader stub,
   streaming the session's image from `bootfsd` through a 16-page lend, the most a call may lend,
   so the console session's VM is running within a second of the steward's start
-  ([beamlet on Redoubt](../userland/beamlet.md#beamlet-on-redoubt)). Each
+  ([beamlet on Redoubt](../userland/beamlet.md#beamlet-on-redoubt)). Its arguments tell it what
+  it is (`own::session_args`): `principal=NAME`, `label=NAME:ID` for each label of its set, and
+  `context=NAME` for a named context, none for the default context or the console's session
+  ([sessions](../userland/sessions.md#what-a-session-is-told)); they are the steward's word to the
+  session and grant nothing. Each
   session's process has an exit endpoint of its own, which a watcher thread of the steward's waits
   on and reports on the steward's endpoint when the process ends. A thread's stack is never given
   back, so a watcher that has reported waits for the next session, and a new one starts only when

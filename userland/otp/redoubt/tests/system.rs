@@ -9,8 +9,9 @@ use std::sync::{Arc, Mutex};
 
 use beamlet_redoubt::Redoubt;
 use beamlet_redoubt::fixture::{self, Dirs, Volume};
+use beamlet_redoubt::system::MAX_BINDINGS;
 use beamlet_vm::platform::{
-    BudgetSpec, Event, FileError, Files, Launch, Message, Object, Platform, Refused, System,
+    BudgetSpec, Event, FileError, Files, Identity, Launch, Message, Object, Platform, Refused, System,
 };
 use redoubt_fake_kernel::fake;
 use redoubt_rt::abi::{FOREVER, Handle};
@@ -211,6 +212,27 @@ fn a_bind_is_the_files_namespace_and_one_connection() {
             let table: Vec<String> = p.table().into_iter().map(|e| e.path).collect();
             assert_eq!(table, ["/dev/cons", "/home/alice", "/h"]);
             assert_eq!(p.bind("/x/../y", &home).err(), Some(Refused("bad_name")));
+        },
+    );
+}
+
+/// The namespace holds at most `MAX_BINDINGS` entries, its first ones included: a new prefix past
+/// them is `system_limit`, and a prefix already bound is still replaced.
+#[test]
+fn binds_past_the_cap_are_refused_and_a_bound_prefix_is_still_replaced() {
+    with_session(
+        |_| Vec::new(),
+        |p, _| {
+            let (home, _) = p.lookup("/home/alice").unwrap();
+            let paths = |p: &mut Redoubt| p.table().into_iter().filter(|e| e.path.starts_with('/')).count();
+            let first = paths(p);
+            for i in first..MAX_BINDINGS {
+                p.bind(&format!("/b{i}"), &home).unwrap();
+            }
+            assert_eq!(p.bind("/one-more", &home).err(), Some(Refused("system_limit")));
+            p.bind("/b63", &home).unwrap();
+            p.bind("/home/alice", &home).unwrap();
+            assert_eq!(paths(p), MAX_BINDINGS);
         },
     );
 }
@@ -479,4 +501,49 @@ fn a_launch_takes_what_it_is_given_and_its_end_is_an_event() {
             assert_eq!((asker, job, cause, code), (ME, 2, "killed", 0));
         },
     );
+}
+
+/// What a session is told of itself is read from its arguments, and anything malformed tells
+/// nothing: no principal, two of them or two contexts, a label that is not `NAME:ID`.
+#[test]
+fn a_sessions_identity_is_read_from_its_arguments() {
+    let told = beamlet_redoubt::identity;
+    let labels = vec![("alice-secrets".to_string(), 7)];
+    assert_eq!(
+        told(&["budget_pages=9", "principal=alice", "label=alice-secrets:7", "context=work", "Elixir.M"]),
+        Some(Identity { principal: "alice".into(), labels, context: Some("work".into()) })
+    );
+    assert_eq!(told(&["principal=bob"]), Some(Identity { principal: "bob".into(), ..Identity::default() }));
+    for bad in [
+        &["budget_pages=9"][..],
+        &["principal=a", "principal=b"],
+        &["principal=a", "label=x"],
+        &["principal=a", "label=x:y"],
+        &["principal=a", "context=x", "context=y"],
+    ] {
+        assert_eq!(told(bad), None, "{bad:?}");
+    }
+}
+
+/// The platform tells a session what its startup block's arguments say, and a VM started with
+/// none, as one under `init`, that it is no session.
+#[test]
+fn the_platform_tells_a_session_its_identity() {
+    let f = fake();
+    let console = fixture::console(Box::new(std::io::empty()), Box::new(std::io::sink()));
+    let volume = fixture::volume(2048, &["buckets=4"]);
+    let args = ["principal=alice", "label=alice-secrets:7"];
+    let (pid, block) = fixture::session_with(&console, &[("littlefsd:data", &volume)], &args);
+    let session = f.run(pid, move || {
+        let startup = fixture::startup(&block);
+        let mut p = Redoubt::new(&startup, Box::new(Dirs(Vec::new()))).expect("a platform");
+        let labels = vec![("alice-secrets".to_string(), 7)];
+        assert_eq!(p.identity(), Some(Identity { principal: "alice".into(), labels, context: None }));
+        0
+    });
+    assert_eq!(session.join().unwrap(), 0);
+    assert_eq!(volume.stop(), redoubt_rt::exit::OK);
+    f.destroy(console.pid, console.endpoint);
+    let _ = console.thread.join();
+    with_session(|_| Vec::new(), |p, _| assert_eq!(p.identity(), None));
 }

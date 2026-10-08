@@ -345,6 +345,22 @@ pub fn rename(c: &mut Ctx, a: &[Term]) -> R {
     done(c, r)
 }
 
+/// `redoubt:copy_file(From, To)`: `{ok, Bytes}`, the file server having copied `From` to the new
+/// file `To` itself, or `{error, Reason}`: `exdev` across servers, `enotsup` on a platform whose
+/// servers do not copy.
+pub fn copy_file(c: &mut Ctx, a: &[Term]) -> R {
+    let (from, to) = (path(c, &a[0])?, path(c, &a[1])?);
+    let r = from.and_then(|from| to.and_then(|to| with_files(c, |f| f.copy_file(&from, &to))));
+    Ok(match r {
+        Ok(n) => {
+            let ok = c.ok();
+            let n = c.big(n.into());
+            c.tuple(&[ok, n])
+        }
+        Err(e) => error(c, e),
+    })
+}
+
 pub fn read_link(c: &mut Ctx, a: &[Term]) -> R {
     with_path(c, &a[0], |c, p| {
         Ok(match with_files(c, |f| f.read_link(p)) {
@@ -406,6 +422,18 @@ pub fn set_permissions(c: &mut Ctx, a: &[Term]) -> R {
     };
     with_path(c, &a[0], |c, p| {
         let r = with_files(c, |f| f.set_permissions(p, mode & 0o7777));
+        done(c, r)
+    })
+}
+
+/// `set_owner_nif(Path, Uid, Gid)`, either `-1` for unchanged.
+pub fn set_owner(c: &mut Ctx, a: &[Term]) -> R {
+    let (Term::Int(uid), Term::Int(gid)) = (&a[1], &a[2]) else {
+        return Err(c.badarg());
+    };
+    let (uid, gid) = (*uid, *gid);
+    with_path(c, &a[0], |c, p| {
+        let r = with_files(c, |f| f.set_owner(p, uid, gid));
         done(c, r)
     })
 }

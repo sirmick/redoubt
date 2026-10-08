@@ -184,7 +184,10 @@ impl<B: Copy, H: Copy> Steward<B, H> {
                         _ => return Err(Error::BadHandle),
                     }
                 }
-                let pid = kernel.launch(&owner.domain, b, &held)?;
+                let session = self.store.domain(&owner.domain).and_then(|d| d.sessions.get(&owner.id));
+                let context =
+                    session.filter(|_| owner.kind == Kind::Session).and_then(|s| s.context.as_deref());
+                let pid = kernel.launch(&owner.domain, b, &held, context)?;
                 self.made.insert(token.clone(), Made::Process(pid));
                 self.pids.insert(pid, owner.clone());
                 Ok(Produced::Process(pid))
