@@ -104,6 +104,19 @@ defmodule Redoubt.ShellTest do
     assert out =~ "(3)> 7\n"
   end
 
+  test "a receive typed at the prompt takes a message, waits for one, or times out" do
+    out =
+      session(~S"""
+      send(self(), {:ping, 21}); receive do {:ping, n} -> n * 2 end
+      receive do :never -> :got after 10 -> :waited end
+      me = self(); spawn(fn -> send(me, :woke) end); receive do :woke -> :woken end
+      """)
+
+    assert out =~ "(1)> 42\n"
+    assert out =~ "(2)> :waited\n"
+    assert out =~ "(3)> :woken\n"
+  end
+
   test "an exit typed at the prompt ends only that line" do
     out = session("y = :kept\nexit(:bye)\ny\n")
     assert out =~ "** (exit) :bye"

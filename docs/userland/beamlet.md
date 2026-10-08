@@ -261,7 +261,7 @@ Everything the VM gets from outside comes through the `Platform` trait
 
 ### What runs on it
 
-<details><summary>Status: built · partly tested: beamlet boots the shell on Redoubt; the differential suites against the real BEAM need OTP 28 and Elixir installed and are not run by the bench, and linear-time matching, crypto's refusal without randomness, the cofactored Ed25519 check and the bound on a zlib stream are not attacked by a named test · tested (15)</summary>
+<details><summary>Status: built · partly tested: beamlet boots the shell on Redoubt; the differential suites against the real BEAM need OTP 28 and Elixir installed and are not run by the bench, and linear-time matching, crypto's refusal without randomness, the cofactored Ed25519 check and the bound on a zlib stream are not attacked by a named test · tested (16)</summary>
 
 - host:beamlet-vm::decodes_otp_output
 - host:beamlet-vm::encodes_like_otp
@@ -278,6 +278,7 @@ Everything the VM gets from outside comes through the `Platform` trait
 - host:beamlet-crypto::x25519_refuses_a_low_order_point
 - host:beamlet-vm::compressed_terms_round_trip
 - bench:userland-boot
+- bench:userland-read-only
 
 </details>
 
@@ -287,6 +288,12 @@ checks it: each test runs on BEAM and on beamlet and the printed results must be
   `ssh` run unmodified, and so do Elixir's standard library, its compiler, OTP's Erlang compiler
   and IEx, whose transcript matches BEAM's. Every live OTP 28 opcode is implemented except
   `on_load`.
+- **erts's Erlang where it is code.** Of BEAM's preloaded modules, those whose Erlang is
+  useful load from erts like any other: `erlang`, `erts_internal`, `persistent_term`, `atomics`
+  and `counters`, their NIF stubs answered by natives, and `prim_eval`, whose `receive` is BEAM
+  assembly: it runs a `receive` that `erl_eval` evaluates, such as one typed at the shell's
+  prompt. The rest stand on BEAM's C runtime (the boot process, ports, sockets, tracing) and
+  never load; a call to one is `undef` unless a native answers.
 - **Processes as on BEAM.** Links, monitors, aliases, exit signals, registered names, timers and
   ETS, on one or more scheduler threads with per-process heaps and copying garbage collection.
 - **Regular expressions** (`beamlet-re`) run in linear time for every pattern, so a hostile

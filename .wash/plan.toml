@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 396
+revision = 397
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1445,8 +1445,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M2"
   body = "Found by SHELL3. prim_eval is listed in vm/src/vm.rs RUNTIME_MODULES but never loaded, and no native answers it, so any `receive` typed at the prompt fails. Load prim_eval's receive, or provide it, with a beamlet test of `receive` at the prompt and in erl_eval with an after clause. Size S."
-  state = "reported"
-  revision = 395
+  state = "done"
+  revision = 397
   overrides = ["2026-10-08: started by Orchestrator before M1 (reported): An M2 shell gap that is independent of M1's remaining work."]
 
 [[node]]
