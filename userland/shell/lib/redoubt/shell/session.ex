@@ -101,10 +101,12 @@ defmodule Redoubt.Shell.Session do
 
   @summary "Run a native program and wait for it"
   @help """
-  Runs the program /boot/name with args, in a budget carved from the session's, with the
-  session's console as its own, and waits for it to end. Returns how it ended, `{:exited, code}`,
-  `{:faulted, cause}` or `{:killed, 0}`, and what its budget held as it ended; the budget is then
-  destroyed, and everything in it ends.
+  Runs the program /boot/name with args, in a budget carved from the session's, and waits for it
+  to end. It reads the lines you type, until Ctrl+D on an empty line, and what it writes, its
+  standard output and its standard error, is drawn as the line's own output: a control character
+  in it shows as itself, never acts. It never holds the console. Returns how it ended,
+  `{:exited, code}`, `{:faulted, cause}` or `{:killed, 0}`, and what its budget held as it ended;
+  the budget is then destroyed, and everything in it ends.
   """
   @args name: "the program's name in /boot", args: "its arguments"
   @examples [{~S'exec("hello", ["world"])', "run /boot/hello world"}]

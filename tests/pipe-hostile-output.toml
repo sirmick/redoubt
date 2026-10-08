@@ -1,0 +1,49 @@
+description = "A native program's output never drives the terminal (docs/plan/m2-usable-shell.md, attack suite, \"Hostile text never drives the terminal\"; docs/userland/native.md, \"Standard input and output, and pipes\"): the image's shell, on the UART in the console principal's session, runs exec of /boot/pipe-stage hostile, which writes a clipboard write (OSC 52), a hyperlink (OSC 8), a title, a title report, a bare ESC and DEL to its standard output and to its standard error. The program holds no console: both streams are pipes the session reads and draws through the shell's driver and Redoubt.Term, so each sequence reaches /dev/cons as visible characters, twice, and the case judges the bytes the session wrote, forbidding every sequence raw (docs/testbench.md, rule F)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The image's bundle with pipe-stage public in /boot, for this case alone.
+recipe = "tests/data/pipe/boot.toml"
+# As userland-boot: the principals' budgets, each holding the shell VM's session, need 1 GiB.
+memory_mib = 1024
+timeout_secs = 450
+# A kernel line between the console's chunks can take a drawn line's prefix: the visible text is
+# matched at the line's start or after its prefix.
+expect = [
+    '^init: started steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+    '^\[con [0-9a-f]{16}\] / \([0-9]+\)> exec\("pipe-stage", \["hostile"\]\)$',
+    '(^|\] )\^\[\]52;c;aGk=\^G\^\[\]8;;http://x\^Glink\^\[\]8;;\^G\^\[\]0;pwned\^G\^\[\[21t\^\[X\^\?$',
+    '(^|\] )\^\[\]52;c;aGk=\^G\^\[\]8;;http://x\^Glink\^\[\]8;;\^G\^\[\]0;pwned\^G\^\[\[21t\^\[X\^\?$',
+    '\{:exited, 0\}',
+    '^\[con [0-9a-f]{16}\] / \([0-9]+\)> 1 \+ 1$',
+    '^\[con [0-9a-f]{16}\] 2$',
+]
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    'init: restarted',
+    'EXCEPTION',
+    # Each sequence raw: an OSC, the title report, and ESC X. Redoubt.Term writes only CSI.
+    '\x1b\]',
+    '\x1b\[21t',
+    '\x1bX',
+    '\x07',
+]
+
+[[input]]
+after = 'Redoubt shell, on Elixir '
+send = "exec(\"pipe-stage\", [\"hostile\"])\n"
+
+# Typed once the program has ended: while it runs, what is typed is its input.
+[[input]]
+after = '\{:exited, 0\}'
+send = "1 + 1\n"
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]

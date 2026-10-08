@@ -204,11 +204,10 @@ Miri both crates take their portable Rust paths. Those two assembly blocks are r
   that bucket's fixed slots, not memory beyond them. The
   console's parked completion call is answered at the end of each hold
   ([multiplexed connections](serving.md#multiplexed-connections)), so a session stays however
-  long its channel is quiet. A program the session launches
-  gets a connection of its own to the same console, which the session mints with `new_connection`
-  ([the serving library](serving.md#the-9p-server-skeleton)); its writes meet the channel's label
-  check like the session's, so on a vault channel only a program carrying the channel's labels
-  is shown.
+  long its channel is quiet. A program the session launches gets no connection to the console:
+  its standard streams are pipes the session serves through its `piped`, and what it writes
+  reaches the channel only as the session draws it
+  ([native programs](../userland/native.md#standard-input-and-output-and-pipes)).
 - **Randomness.** The program provides `getrandom`'s `__getrandom_v03_custom`, the only source
   `getrandom` has on bare metal, and it writes all of the buffer it is given before it returns
   `Ok`: `getrandom` then reads every byte as initialised

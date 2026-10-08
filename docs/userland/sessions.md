@@ -147,8 +147,11 @@ A **vault session** carries one of its principal's labels: `ssh alice+tax@box` s
 whose budget has Alice's `tax` label. A budget's labels are fixed when it is created and only grow
 downward (I6 (labels only grow downward)), so nothing started inside a vault session can shed the
 label. A program the session launches runs in a budget carved from the session's with the same
-labels, which are the only ones the kernel lets a session's child carry: it writes to the
-session's own channel, and to nothing unlabelled ([native programs](native.md#launching-from-a-session)).
+labels, which are the only ones the kernel lets a session's child carry: it writes its standard
+output and error to pipes of the session's, which the session draws on its own channel, and to
+nothing unlabelled ([native programs](native.md#standard-input-and-output-and-pipes)). It holds no
+console of its own: the M1 (sessions over SSH, kept apart) residual, a launched program reading and writing the session's console
+past the shell, is closed.
 
 What the label changes, per the label rule of the servers ([labels](../servers/README.md#labels)):
 - **It can read** unlabelled data and data carrying `tax`: reading needs the caller's labels to

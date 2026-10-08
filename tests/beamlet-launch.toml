@@ -1,4 +1,4 @@
-description = "Launching from a session (docs/userland/native.md, \"Launching from a session\"): the shell's exec runs /boot/beamlet-hello in a budget carved from the session's, with a connection of its own to the console; its line reaches the console, its exit arrives as a message, and its budget's use comes back"
+description = "Launching from a session (docs/userland/native.md, \"Launching from a session\"): the shell's exec runs /boot/beamlet-hello in a budget carved from the session's, with its standard streams pipes of the session's piped and no console of its own (docs/userland/native.md, \"Standard input and output, and pipes\"); the line it writes to its standard output reaches the console as the session draws it, its exit arrives as a message, and its budget's use comes back"
 arch = ["rv64", "rv32"]
 kind = "boot"
 # As beamlet-natives; the session's VM calls the shell's exec commandlet.
@@ -12,6 +12,7 @@ programs = [
     { package = "redoubt-littlefsd", bin = "littlefsd" },
     { package = "beamlet-redoubt", bin = "beamlet", workspace = "userland/otp" },
     { package = "redoubt-beamlet-programs", bin = "beamlet-session" },
+    { package = "redoubt-piped", bin = "piped" },
     { package = "redoubt-beamlet-programs", bin = "beamlet-hello" },
     { package = "redoubt-beamlet-programs", bin = "beamlet-caller" },
 ]
