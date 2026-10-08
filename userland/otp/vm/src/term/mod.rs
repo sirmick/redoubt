@@ -89,6 +89,10 @@ pub enum Kind {
     Bits,
     /// `[module, index, arity, uniq, name, env...]`.
     FunLocal,
+    /// A fun decoded from the external format whose identity is not this VM's code as loaded
+    /// when it was decoded: `[module, index, arity, uniq, name, md5 high, md5 low, old index,
+    /// env...]`, the two halves of the module checksum it was encoded with as integers.
+    FunDecoded,
     /// `[module, function, arity]`.
     FunExport,
     /// `[OffHeap(bignum)]`.
@@ -280,6 +284,16 @@ impl Bits {
     }
 }
 
+/// The identity a fun was encoded with, kept when it is not the loaded code's: it is written
+/// back as it came, and the fun runs only if its module's checksum is this one.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct External {
+    /// The checksum of the module the fun was made by.
+    pub md5: [u8; 16],
+    /// The external format's `OldIndex`.
+    pub old_index: u32,
+}
+
 /// A fun read off a heap.
 #[derive(Clone, Copy)]
 pub enum FunView<'h> {
@@ -294,6 +308,10 @@ pub enum FunView<'h> {
         /// The name of the function implementing it (`'-f/1-fun-0-'`), kept so `fun_info/2`
         /// can still name a fun whose module has since been reloaded or deleted, as BEAM can.
         name: Atom,
+        /// For a fun decoded from the external format with an identity other than the code
+        /// loaded when it was decoded: the identity it was encoded with. `None` for a fun of
+        /// the loaded code, whose module's checksum is its own.
+        external: Option<External>,
         /// The captured free variables.
         env: &'h [Term],
     },
@@ -590,6 +608,10 @@ impl Heap {
             Term::Int(i) => i as u32,
             _ => unreachable!("an integer"),
         };
+        let half = |t: Term| match t {
+            Term::Int(i) => (i as u64).to_be_bytes(),
+            _ => unreachable!("an integer"),
+        };
         Some(match h.kind {
             Kind::FunLocal => FunView::Local {
                 module: atom(cells[0]),
@@ -597,8 +619,23 @@ impl Heap {
                 arity: int(cells[2]),
                 uniq: int(cells[3]),
                 name: atom(cells[4]),
+                external: None,
                 env: &cells[5..],
             },
+            Kind::FunDecoded => {
+                let mut md5 = [0; 16];
+                md5[..8].copy_from_slice(&half(cells[5]));
+                md5[8..].copy_from_slice(&half(cells[6]));
+                FunView::Local {
+                    module: atom(cells[0]),
+                    index: int(cells[1]),
+                    arity: int(cells[2]),
+                    uniq: int(cells[3]),
+                    name: atom(cells[4]),
+                    external: Some(External { md5, old_index: int(cells[7]) }),
+                    env: &cells[8..],
+                }
+            }
             _ => FunView::Export { module: atom(cells[0]), function: atom(cells[1]), arity: int(cells[2]) },
         })
     }
@@ -783,6 +820,33 @@ impl Heap {
         ];
         cells.extend_from_slice(env);
         Term::Fun(self.push_object(Kind::FunLocal, &cells))
+    }
+
+    /// A fun decoded with an identity other than the loaded code's (see [`External`]).
+    #[allow(clippy::too_many_arguments)]
+    pub fn fun_decoded(
+        &mut self,
+        module: Atom,
+        index: u32,
+        arity: u32,
+        uniq: u32,
+        name: Atom,
+        external: External,
+        env: &[Term],
+    ) -> Term {
+        let half = |b: &[u8]| Term::Int(u64::from_be_bytes(b.try_into().expect("eight bytes")) as i64);
+        let mut cells = alloc::vec![
+            Term::Atom(module),
+            Term::Int(index as i64),
+            Term::Int(arity as i64),
+            Term::Int(uniq as i64),
+            Term::Atom(name),
+            half(&external.md5[..8]),
+            half(&external.md5[8..]),
+            Term::Int(external.old_index as i64),
+        ];
+        cells.extend_from_slice(env);
+        Term::Fun(self.push_object(Kind::FunDecoded, &cells))
     }
 
     pub fn fun_export(&mut self, module: Atom, function: Atom, arity: u32) -> Term {

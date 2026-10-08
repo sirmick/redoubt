@@ -1330,8 +1330,8 @@ pub fn fun_info(c: &mut Ctx, a: &[Term]) -> R {
     let (arity, local) = (
         f.arity(),
         match f {
-            FunView::Local { module, index, uniq, name, env, .. } => {
-                Some((module, index, uniq, name, env.to_vec()))
+            FunView::Local { module, index, uniq, name, env, external, .. } => {
+                Some((module, index, uniq, name, env.to_vec(), external))
             }
             FunView::Export { .. } => None,
         },
@@ -1344,7 +1344,7 @@ pub fn fun_info(c: &mut Ctx, a: &[Term]) -> R {
         (_, "module") => Term::Atom(module),
         (_, "arity") => Term::Int(arity as i64),
         (None, "name") => Term::Atom(function.expect("an export fun")),
-        (Some((module, index, uniq, name, _)), "name") => {
+        (Some((module, index, uniq, name, ..)), "name") => {
             // From the module's fun table when this is still its fun (decoded funs do not
             // carry a name), else the name recorded when the fun was made.
             let current = c
@@ -1356,11 +1356,18 @@ pub fn fun_info(c: &mut Ctx, a: &[Term]) -> R {
         (None, "type") => c.atom("external"),
         (Some(_), "type") => c.atom("local"),
         (None, "env") => Term::Nil,
-        (Some((_, _, _, _, env)), "env") => c.list(env),
-        (Some((_, index, ..)), "index" | "new_index") => Term::Int(index as i64),
+        (Some((_, _, _, _, env, _)), "env") => c.list(env),
+        (Some((_, index, ..)), "new_index") => Term::Int(index as i64),
+        // A decoded fun's own identity, as it was encoded (see `External`).
+        (Some((_, index, _, _, _, external)), "index") => {
+            Term::Int(external.map_or(index, |e| e.old_index) as i64)
+        }
         (Some((_, _, uniq, ..)), "uniq") => Term::Int(uniq as i64),
-        (Some((module, ..)), "new_uniq") => {
-            let md5 = c.sys().loaded_md5(&module).unwrap_or([0; 16]);
+        (Some((module, _, _, _, _, external)), "new_uniq") => {
+            let md5 = match external {
+                Some(e) => e.md5,
+                None => c.sys().loaded_md5(&module).unwrap_or([0; 16]),
+            };
             c.binary(&md5)
         }
         // Funs do not record their creator; BEAM reports the same for funs it did not track.

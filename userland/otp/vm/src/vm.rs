@@ -856,14 +856,20 @@ impl System {
         if RUNTIME_MODULES.contains(&name.as_str()) {
             return None;
         }
-        let bytes = match self.locate_module(name.as_str())? {
-            Found::Path(_, bytes) | Found::Platform(bytes) => bytes,
+        let (path, bytes) = match self.locate_module(name.as_str())? {
+            Found::Path(path, bytes) => (Some(path), bytes),
+            Found::Platform(bytes) => (None, bytes),
         };
         let loaded = self.load(&bytes).ok()?;
         if &loaded != name {
             // A file that claims to be a different module than the one asked for.
             self.modules.remove(loaded.as_str());
             return None;
+        }
+        // A file of the code path is what `code:which/1` and the rest say it was loaded from.
+        if let Some(path) = path {
+            let file = OwnedTerm::build(&self.literals, |h| h.string(&path));
+            self.module_files.insert(String::from(name.as_str()), file);
         }
         self.modules.get(name.as_str()).cloned()
     }
@@ -920,6 +926,21 @@ impl System {
             }
         }
         None
+    }
+
+    /// What decoding a term needs of the system at once: the atom table, and a view of the
+    /// loaded code (a module's checksum, whether a function is exported), loading nothing.
+    pub(crate) fn term_decoding(
+        &mut self,
+    ) -> (&mut AtomTable, impl Fn(&Atom) -> Option<[u8; 16]> + '_, impl Fn(&Atom, &Atom, u32) -> bool + '_)
+    {
+        let (modules, natives) = (&self.modules, &self.natives);
+        let md5_of = move |m: &Atom| modules.get(m.as_str()).map(|m| m.md5);
+        let exported = move |m: &Atom, f: &Atom, a: u32| {
+            natives.get(m, f, a).is_some()
+                || modules.get(m.as_str()).is_some_and(|md| md.export(f, a).is_some())
+        };
+        (&mut self.atom_table, md5_of, exported)
     }
 
     /// The checksum of a loaded module (without loading it).

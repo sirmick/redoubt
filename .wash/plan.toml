@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 438
+revision = 440
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1520,8 +1520,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M2"
   body = "Found by BEAM16 on 2e3057e64: the difftest's full run is 517/523; all 6 failures are in the atomvm suite and fail the same way without BEAM16. Find when each began (bisect against the last full difftest run) and fix them, or record each as a known VM difference with its reason. Then the full difftest, not only the erlang suite, joins the gate list for any change under userland/otp. Size S-M."
-  state = "reported"
-  revision = 417
+  state = "done"
+  revision = 440
   overrides = ["2026-10-08: started by Orchestrator before M1 (reported): Failing difftest cases on main; small."]
 
 [[node]]
@@ -1541,8 +1541,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "shell-host"
   body = "Found by SHELL4. With a prompt over about 256 columns (a long cwd, say), the text typed after it is not shown. Find whether Redoubt.Term's model or edlin's redraw is at fault, fix it, and add a test with a 300-column prompt on a 120-column terminal. Size S."
-  state = "active"
-  revision = 435
+  state = "reported"
+  revision = 439
   overrides = ["2026-10-08: started by Orchestrator before M1 (reported): Shell track on the `shell` branch; owner asked to fill the bandwidth (2026-10-08)."]
 
 [[node]]
