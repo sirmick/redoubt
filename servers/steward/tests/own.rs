@@ -16,7 +16,7 @@ fn read(lines: &[&str]) -> Result<Own, String> {
 fn each_line_reads_as_what_it_binds() {
     let own = read(&[
         "label \"alice-secrets\" id=7",
-        "home \"alice\" handle=walfsd:data path=/home/alice",
+        "home \"alice\" handle=walfsd:data path=/home/alice quota=8388608",
         "vault \"alice\" labels=[9,7] handle=walfsd:alice-secrets",
         "net \"alice\" 0.0.0.0/0:22,443 10.0.0.0/8:*",
     ])
@@ -24,7 +24,12 @@ fn each_line_reads_as_what_it_binds() {
     assert_eq!(own.labels, [("alice-secrets".to_string(), 7)]);
     assert_eq!(
         own.home("alice"),
-        Some(&Home { principal: "alice".into(), handle: "walfsd:data".into(), path: "/home/alice".into() })
+        Some(&Home {
+            principal: "alice".into(),
+            handle: "walfsd:data".into(),
+            path: "/home/alice".into(),
+            quota: 8 << 20,
+        })
     );
     assert_eq!(
         own.vault("alice", &[7, 9]),
@@ -59,7 +64,10 @@ fn a_malformed_line_is_refused() {
         "home \"alice\" handle=walfsd:data path=/home/../etc",
         "home \"alice\" handle=walfsd:data",
         "home \"alice\" handle=Fsd!data path=/home/alice",
-        "home \"alice\" handle=walfsd:data path=/home/alice extra=1",
+        "home \"alice\" handle=walfsd:data path=/home/alice quota=1 extra=1",
+        "home \"alice\" handle=walfsd:data path=/home/alice",
+        "home \"alice\" handle=walfsd:data path=/home/alice quota=0",
+        "home \"alice\" handle=walfsd:data path=/home/alice quota=-1",
         "vault \"alice\" labels=[] handle=walfsd:alice-secrets",
         "vault \"alice\" labels=7 handle=walfsd:alice-secrets",
         "net \"alice\"",
@@ -74,7 +82,7 @@ fn a_malformed_line_is_refused() {
         assert!(read(&[l]).is_err(), "{l}");
     }
     for twice in
-        ["label \"a\" id=1", "home \"alice\" handle=walfsd:data path=/a", "net \"alice\" 0.0.0.0/0:*"]
+        ["label \"a\" id=1", "home \"alice\" handle=walfsd:data path=/a quota=1", "net \"alice\" 0.0.0.0/0:*"]
     {
         assert!(read(&[twice, twice]).is_err(), "{twice}");
     }
@@ -89,7 +97,7 @@ fn a_malformed_line_is_refused() {
 fn the_binding_table_binds_each_slot_as_the_page_says() {
     let own = read(&[
         "label \"alice-secrets\" id=7",
-        "home \"alice\" handle=walfsd:data path=/home/alice",
+        "home \"alice\" handle=walfsd:data path=/home/alice quota=8388608",
         "vault \"alice\" labels=[7] handle=walfsd:alice-secrets",
         "net \"alice\" 0.0.0.0/0:22",
     ])
@@ -97,7 +105,14 @@ fn the_binding_table_binds_each_slot_as_the_page_says() {
     let fresh = |server: &str, root: &str| How::Fresh { server: server.into(), root: root.into() };
     let at = |p: &str| Some(p.to_string());
     let boot = Some(Bound { how: fresh("bootfsd", ""), at: at("/boot"), name: Some("bootfsd") });
-    let home = Some(Bound { how: fresh("walfsd:data", "/home/alice"), at: at("/home/alice"), name: None });
+    // The home is minted through the one connection the steward keeps for alice, carved with her quota.
+    let carved = How::Carved {
+        key: "home alice".into(),
+        server: "walfsd:data".into(),
+        root: "/home/alice".into(),
+        quota: 8 << 20,
+    };
+    let home = Some(Bound { how: carved, at: at("/home/alice"), name: None });
     let cons = Some(Bound { how: How::Console, at: at("/dev/cons"), name: None });
     let system = Some(Bound { how: fresh(SYSTEM, ""), at: None, name: Some(SYSTEM) });
     let scope = own.net("alice").unwrap().scope.clone();

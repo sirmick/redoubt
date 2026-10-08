@@ -18,9 +18,10 @@ that one file and no ELF, so the most privileged process after the kernel has th
 
 ### The boot manifest
 
-<details><summary>Status: built · tested (29)</summary>
+<details><summary>Status: built · tested (34)</summary>
 
 - bench:init-boot
+- bench:init-refuses-overcommit
 - bench:init-refuses-public-manifest
 - bench:init-refuses-device-dma
 - bench:init-refuses-stack
@@ -49,6 +50,10 @@ that one file and no ELF, so the most privileged process after the kernel has th
 - host:redoubt-init::the_steward_s_sizes_fit_every_principal_s_smallest_share
 - host:redoubt-init::a_key_in_two_roles_across_principals_is_refused
 - host:redoubt-init::the_steward_s_own_lines_bind_homes_vaults_and_scopes
+- host:redoubt-init::home_quotas_are_checked_against_their_volume
+- host:redoubt-init::the_over_committed_case_is_refused_at_its_volume
+- host:redoubt-init::a_vault_is_one_principals
+- host:redoubt-init::no_home_is_another_s_or_inside_it
 
 </details>
 
@@ -59,10 +64,10 @@ and `init`'s only input. Its entries:
 | --- | --- |
 | `devices` | each device's name, its register base and its interrupt number (either may be absent, not both), and whether it may do DMA |
 | `labels` | each label's name, owner principal and 64-bit id |
-| `volumes` | each volume's name, `blkd` partition, label set and disk (the `servers` entry of the `blkd` serving it), and for a verified volume `verity`: its verifier (the `servers` entry of a [`verityd`](verityd.md)) and one mode, pinned, the root and data blocks it pins, `{ "server", "root": 64 lowercase hex digits, "blocks": a decimal string }`, or signed, the key its root block is signed under and the lowest version it may carry, `{ "server", "key": 64 lowercase hex digits or "bundle", "floor": a decimal string }` |
+| `volumes` | each volume's name, `blkd` partition, label set and disk (the `servers` entry of the `blkd` serving it), and for a verified volume `verity`: its verifier (the `servers` entry of a [`verityd`](verityd.md)) and one mode, pinned, the root and data blocks it pins, `{ "server", "root": 64 lowercase hex digits, "blocks": a decimal string }`, or signed, the key its root block is signed under and the lowest version it may carry, `{ "server", "key": 64 lowercase hex digits or "bundle", "floor": a decimal string }`; and `bytes`, its size, a decimal string: its partition's, required where homes are carved from it ([home quotas](#home-quotas)) |
 | `servers` | each server's name, program (a bundle entry), budget (pages, processes, weight), the devices it gets (each a `devices` name and the name the program looks it up by), volume (its range badge, minted by `init`, and its label ids as `labels=`; a volume's server has `program` `walfsd` or `littlefsd` for a writable volume, or `erofsd` for a read-only one, and no other key says the format), the endpoints it receives on, the endpoints it is handed (each an endpoint name and the root badge `init` mints for it: a decimal string below `FIRST_MINTED_BADGE`, never used twice at one endpoint), arguments, and its stack in pages (`stack_pages`, 16 if absent, at most 128), and its heap cap in pages (`heap_pages`, none if absent) |
 | `public` | the bundle entries `bootfsd` serves at `/boot`, by exact name |
-| `principals` | each principal's name, SSH public keys (`ssh-ed25519` only, each once across every principal's login and approval lists) for login and approval, budget, account, owned labels, the label sets it works under (each a fixed, equal share of the principal's budget), home (volume and path), and network scope (IP prefixes and ports) |
+| `principals` | each principal's name, SSH public keys (`ssh-ed25519` only, each once across every principal's login and approval lists) for login and approval, budget, account, owned labels, the label sets it works under (each a fixed, equal share of the principal's budget), home (volume and path) and its quota (`home_quota`, bytes as a decimal string, required with a home), and network scope (IP prefixes and ports) |
 | `steward` | optional; the `servers` entry that is the steward, which alone `init` hands `users` at step 6, and the sizes it carves (`sizes`: `session`, `agent`, `sub_agent` and `crossing`, each a budget, and `cost`, a budget object's own pages). `init` checks every limit nonzero and each size within every principal's smallest share, and hands the steward the principals and sizes as the manifest lines, then its own lines: label names, and each principal's home, labelled volumes and network scope, whose servers the steward's entry must be handed ([steward](steward.md#the-manifest-lines)) |
 | `console` | optional; the principal whose unlabelled session the steward opens on the UART console ([steward](steward.md#authentication-and-sessions)); it needs a `steward`, and a name that is not a `principals` entry refuses the boot |
 | `confined` | optional; a boolean at the top level ([confinement](#the-confinement-check)) |
@@ -179,6 +184,7 @@ and `init`'s only input. Its entries:
                  "receives": ["walfsd:data"], "args": ["endpoint=walfsd:data", "buckets=4"] } ],
   "principals": [ { "name": "alice", "account": "1001", "labels": ["alice-secrets"],
                     "ssh_keys": ["ssh-ed25519 AAAA..."], "home": "data:/home/alice",
+                    "home_quota": "8388608",
                     "net": [ { "prefix": "0.0.0.0/0", "ports": [22, 443] } ] } ] }
 ```
 *A fragment: one file server and one principal.*
@@ -188,6 +194,26 @@ in `-irq`, is refused; a manifest giving a server fewer buckets than it serves r
 
 Sizing a server when principals are added at run time is the steward's, in
 M6 (persist, install, share).
+
+#### Home quotas
+
+A principal's home holds at most its `home_quota` bytes, all its sessions together: the steward
+carves one connection per principal with it and mints each session's home through that one
+([steward](steward.md#home-quotas-and-vaults)). `init` refuses, naming the field:
+- a home without a `home_quota`, a `home_quota` of 0, or one with no home;
+- a home equal to another principal's on the same volume, inside it or holding it: the volume's
+  server would count one under the other's root, so each would spend the other's room;
+- a volume homes are carved from that gives no `bytes`, or whose homes' quotas sum past its
+  `bytes`: so the steward can carve every principal's home at once;
+- a labelled volume that two principals' label sets name: a vault is one principal's, and has no
+  quota of its own, bounded by its volume's room.
+
+`bytes` is a promise about the disk that `init` cannot read: it never sees a partition table. So
+the disk's packer refuses a recipe whose manifest gives a volume `bytes` other than its
+partition's size, and the bench refuses a case whose disk and manifest disagree the same way
+([the test bench](../testbench.md#disks-and-network-cards)). The volume's server bounds what a
+carve may take all the same: it refuses a quota its room cannot hold
+([walfsd](walfsd.md#quotas)), and a session then has no home.
 
 ### The confinement check
 

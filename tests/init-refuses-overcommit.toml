@@ -1,0 +1,25 @@
+description = "init refuses home quotas that together pass their volume's bytes: two homes of 10 MiB on a 16 MiB volume, one line saying where and why, then a power-off reporting a system failure (system_reset kind 3, status 255), before any server runs (servers/init.md, \"Home quotas\")"
+arch = ["rv64", "rv32"]
+kind = "boot"
+icount = "shift=3,sleep=off"
+# The real init, the images its manifest names, and the manifest: tests/data/init/device-dma.json
+# with its flags right, a volume of 16 MiB and two principals whose homes on it ask 10 MiB each.
+# The verdict is init's line and the firmware's status, which only system_reset kind 3 gives.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-bootfsd", bin = "bootfsd" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-netd", bin = "netd" },
+    { package = "redoubt-ipd", bin = "ipd" },
+]
+timeout_secs = 10
+expect = ["^init: refused the boot: volumes\\[0\\]\\.bytes: a volume's home quotas sum to at most its bytes, which it gives$"]
+forbid = ['^init: started']
+poweroff = true
+poweroff_status = 255
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/init/overcommit.json" }

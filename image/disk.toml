@@ -8,6 +8,9 @@
 
 # Whole disk, in KiB (a whole number of 512-byte sectors).
 size_kib = 65536
+# The manifest whose volumes' `bytes` the partitions are held to: a pack whose partition differs
+# from its volume's `bytes` is refused (servers/init.md, "Home quotas").
+manifest = "image/manifest.json"
 
 [[partition]]
 name = "data"

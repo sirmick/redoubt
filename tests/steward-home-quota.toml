@@ -1,0 +1,76 @@
+description = "A principal's home holds what its quota says, shared by all its sessions (docs/servers/steward.md, \"Home quotas and vaults\"; docs/userland/sessions.md, \"A session is a VM in a budget\"): the image gives alice and bob 8 MiB homes on the 32 MiB data volume. Alice's console session writes 5 MiB in 64 KiB writes, stats it and reads it back; her SSH session, open beside it, gets enospc partway through 5 MiB more, since the steward minted both through the one connection it carved with her quota; bob, on the same volume, then writes his 5 MiB whole; alice's SSH session removes the first file and writes 4 MiB, as the quota frees with it. The verdicts are walfsd's refusals as the shell prints them, and the sizes it reports (rule F)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+recipe = "image/boot.toml"
+# The image needs 1 GiB: the principals' budgets, each holding a shell VM's session, do not fit
+# the users budget 256 MiB leaves (docs/kernel/budgets.md).
+memory_mib = 1024
+# The console session and two logins, each a shell VM, and about 17 MiB written through walfsd:
+# passes took 242 to 304 s on either width, the slowest beside other work; twice that.
+timeout_secs = 610
+expect = [
+    '^init: started sshd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
+    '^init: started steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+    # Alice's console session, typed below: 5 MiB in her home, its size, its first 64 KiB.
+    '\{:wrote, 5120\}',
+    '\{:size, 5242880\}',
+    '\{:read, 65536\}',
+]
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    '^init: .* (exited|faulted|was killed)',
+    'init: restarted',
+    'EXCEPTION',
+    'sshd: login .*: refused',
+    'sshd: every slot is busy',
+]
+
+# Alice over SSH, beside her console session: the same home, the same quota.
+[[session]]
+user = "alice"
+steps = [
+    { expect = '\([0-9]+\)> ' },
+    { send = "fill = fn path, kib -> {:ok, f} = File.open(path, [:write, :binary]); c = :binary.copy(<<0>>, 65536); r = Enum.reduce_while(1..div(kib, 64), 0, fn _, n -> case :file.write(f, c) do :ok -> {:cont, n + 64}; e -> {:halt, {n, e}} end end); File.close(f); r end\n" },
+    { expect = '#Function<' },
+    { send = "{:second, fill.(\"/home/alice/b\", 5120)}\n" },
+    { expect = '\{:second, \{[0-9]+, \{:error, :enospc\}\}\}' },
+    { mark = "second-full" },
+    { wait = "bob-done" },
+    { send = "{:rm, File.rm(\"/home/alice/a\")}\n" },
+    { expect = '\{:rm, :ok\}' },
+    { send = "{:after_rm, fill.(\"/home/alice/c\", 4096)}\n" },
+    { expect = '\{:after_rm, 4096\}' },
+    { exit = 0 },
+]
+
+# Bob, on the same volume: alice's full home leaves his whole.
+[[session]]
+user = "bob"
+steps = [
+    { wait = "second-full" },
+    { expect = '\([0-9]+\)> ' },
+    { send = "fill = fn path, kib -> {:ok, f} = File.open(path, [:write, :binary]); c = :binary.copy(<<0>>, 65536); r = Enum.reduce_while(1..div(kib, 64), 0, fn _, n -> case :file.write(f, c) do :ok -> {:cont, n + 64}; e -> {:halt, {n, e}} end end); File.close(f); r end\n" },
+    { expect = '#Function<' },
+    { send = "{:bob, fill.(\"/home/bob/x\", 5120)}\n" },
+    { expect = '\{:bob, 5120\}' },
+    { mark = "bob-done" },
+    { exit = 0 },
+]
+
+# Alice's console session, once its banner is out: typed ahead of its prompt.
+[[input]]
+after = 'Redoubt shell, on Elixir'
+send = "fill = fn path, kib -> {:ok, f} = File.open(path, [:write, :binary]); c = :binary.copy(<<0>>, 65536); r = Enum.reduce_while(1..div(kib, 64), 0, fn _, n -> case :file.write(f, c) do :ok -> {:cont, n + 64}; e -> {:halt, {n, e}} end end); File.close(f); r end\n{:wrote, fill.(\"/home/alice/a\", 5120)}\n{:size, File.stat!(\"/home/alice/a\").size}\n{:read, (fn -> {:ok, f} = File.open(\"/home/alice/a\", [:read, :binary]); n = byte_size(IO.binread(f, 65536)); File.close(f); n end).()}\n"
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]
+forward = [22]

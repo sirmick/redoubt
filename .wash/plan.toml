@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 502
+revision = 505
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1581,9 +1581,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "smp"
   needs = ["SMP2"]
-  body = "Destruction work outside the kernel lock: one budget's kernel sections stop costing other harts their time. From SMP2: the lock-wait residual keeps these judged at one hart; SMP4 un-keeps each and judges it at 2 harts on both widths: sched-budget-churn-shell, deadline-flood-billed-traced, sched-wake-no-preempt, and kernel-containment's bystander CHARGED-SHARE (judged `@1` today; rv32 445 against 450 at 2 harts). SMP2's coverage table on scheduling.md is the list of record."
+  body = "Destruction work outside the kernel lock: one budget's kernel sections stop costing other harts their time. From SMP2: the lock-wait residual keeps these judged at one hart; SMP4 un-keeps each and judges it at 2 harts on both widths: sched-budget-churn-shell, deadline-flood-billed-traced, sched-wake-no-preempt, kernel-containment's bystander CHARGED-SHARE (judged `@1`; rv32 445 against 450 at 2 harts), and sched-exit-churn's threads-exit victim (judged `@1`; rv32 448 against 450). SMP2's coverage table on scheduling.md is the list of record."
   state = "todo"
-  revision = 500
+  revision = 503
 
 [[node]]
   id = "B38"
@@ -1613,7 +1613,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "Second of three; brief .wash/local/CTX1-brief.md, design .wash/local/CTX1-design.md. A relay program in the context's own budget serves the VM's /dev/cons; the steward hands it each channel's console. 64 KiB buffer, newest kept, a dropped-count line, cut at line boundaries, resize on reattach. Takeover is told on both terminals, with the remote address. Tier A."
   state = "active"
   revision = 479
-  overrides = ["2026-10-08: started by Orchestrator before CTX1 (reported), M1 (reported): CTX1 is reported and under its last fold; CTX2 is stacked on it by the orchestrator's ruling"]
+  overrides = ["2026-10-08: started by Orchestrator before CTX1 (reported), M1 (reported): CTX1 is reported and under its last fold; CTX2 is stacked on it by the orchestrator's ruling", "2026-10-08: started by Orchestrator before M1 (reported): named contexts run ahead of M1's acceptance (owner request 2026-10-08)"]
 
 [[node]]
   id = "CTX3"
@@ -1686,8 +1686,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M2"
   body = "M2 page, 'On Redoubt' step 1 (docs/plan/m2-usable-shell.md): serving.md#parking-a-typed-call, consoled.md#the-consol-protocol. Design checkpoint first (a note in .wash/local/CONS1-design.md: what is built already per the pages' status lines, the protocol, who may park, bounds, the cases), sent to the orchestrator before code. Tier A (servers): the steward red reviews. The shell's driver gets the real terminal size on Redoubt and a resize event, replacing any fixed size."
-  state = "active"
-  revision = 499
+  state = "reported"
+  revision = 504
   overrides = ["2026-10-08: started by Orchestrator before M1 (reported): M2 'On Redoubt' step 1, ahead of M1's acceptance"]
 
 [[node]]
@@ -1705,8 +1705,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M2"
   body = "Found by RCMD1's probe: the steward minted home connections with quota 0, so a session couldn't write in its home. The steward holds one home connection per principal, carved with the manifest's home_quota (required with home), and each session shares it; volumes[].bytes lets init refuse over-committed quotas, and the packer and bench hold it to the partition. No vault quota: a vault is its own labelled volume, bounded by its room; init refuses two principals sharing one. Lines parsed in servers/steward/src/own.rs, written by init check.rs steward_own_lines. Tier A: the steward red."
-  state = "reported"
-  revision = 498
+  state = "done"
+  revision = 505
   overrides = ["2026-10-08: started by Orchestrator before M1 (reported): M2 work found by RCMD1's probe; runs ahead of M1's report"]
 
 [[node]]

@@ -899,6 +899,36 @@ impl Case {
                             ensure!(!disk.flip_version, "a flipped version needs a disk recipe");
                         }
                     }
+                    // The manifest's volume sizes are the disk's partitions (servers/init.md, "Home
+                    // quotas"); a recipe holds its own manifest when it packs.
+                    let manifest =
+                        boot.file.iter().find(|f| f.name == "manifest").and_then(|f| match &f.from {
+                            Program::Path { path } => Some(path),
+                            _ => None,
+                        });
+                    if let Some(path) = manifest {
+                        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+                        let text = std::fs::read(root.join(path))
+                            .with_context(|| format!("reading {}", path.display()))?;
+                        // A refusal case's manifest need not be JSON: `init` says so.
+                        if let Ok(json) = serde_json::from_slice(&text) {
+                            let held = match &disk.recipe {
+                                Some(recipe) => {
+                                    let recipe = crate::disk::Recipe::load(&root.join(recipe))?;
+                                    let names: Vec<&str> =
+                                        recipe.partition.iter().map(|p| p.name.as_str()).collect();
+                                    let sizes =
+                                        crate::disk::partition_bytes(recipe.size_kib, names.len() as u64);
+                                    crate::disk::hold(&json, &sizes, Some(&names))
+                                }
+                                None => {
+                                    let sizes = crate::disk::partition_bytes(disk.size_kib, disk.partitions);
+                                    crate::disk::hold(&json, &sizes, None)
+                                }
+                            };
+                            held.with_context(|| format!("{} against the case's disk", path.display()))?;
+                        }
+                    }
                 }
                 if let Some(net) = &boot.net {
                     check_net(net)?;
@@ -1240,6 +1270,33 @@ mod tests {
         assert!(case("{ path = \"m.json\" }").check().is_ok());
         let err = case("\"tester\"").check().unwrap_err().to_string();
         assert!(err.contains("only into a manifest read from a path"), "{err}");
+    }
+
+    /// A case's manifest gives a volume with `bytes` its disk's partition size: one that does not
+    /// is refused at load, before anything boots.
+    #[test]
+    fn a_case_s_manifest_is_held_to_its_disk() {
+        let dir = std::env::temp_dir().join(format!("testbench-case-held-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("manifest.json");
+        let case = |bytes: u64| -> Case {
+            let json = serde_json::json!({ "volumes": [
+                { "name": "data", "partition": 0, "bytes": bytes.to_string() },
+            ] });
+            std::fs::write(&path, json.to_string()).unwrap();
+            let text = format!(
+                "description = \"d\"\nkind = \"boot\"\nprograms = [\"tester\"]\nexpect = []\n\
+                 [disk]\nsize_kib = 4096\npartitions = 1\n\
+                 [[file]]\nname = \"manifest\"\nfrom = {{ path = {:?} }}\n",
+                path.display().to_string()
+            );
+            toml::from_str(&text).unwrap()
+        };
+        let size = crate::disk::partition_bytes(4096, 1)[0];
+        assert!(case(size).check().is_ok());
+        let err = format!("{:#}", case(size + 512).check().unwrap_err());
+        assert!(err.contains("partition 0 holds"), "{err}");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     /// `resize` works only on a session's terminal, so a session without one is refused at load.

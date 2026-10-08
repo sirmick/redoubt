@@ -11,10 +11,10 @@
 //! | `confined` | a boolean, optional |
 //! | `devices[]` | `name`; `base` (string), `irq` (number), either may be absent, not both; `dma` (boolean) |
 //! | `labels[]` | `name`, `owner` (a principal), `id` (string) |
-//! | `volumes[]` | `name`, `partition` (number), then optional `labels` (label names), `disk` (the `servers` entry of its `blkd`), `verity` (`server`, the `servers` entry of its `verityd`; pinned, `root` (64 lowercase hex digits) and `blocks` (string), or signed, `key` (64 lowercase hex digits or `bundle`) and `floor` (string)) |
+//! | `volumes[]` | `name`, `partition` (number), then optional `labels` (label names), `disk` (the `servers` entry of its `blkd`), `verity` (`server`, the `servers` entry of its `verityd`; pinned, `root` (64 lowercase hex digits) and `blocks` (string), or signed, `key` (64 lowercase hex digits or `bundle`) and `floor` (string)), `bytes` (string) |
 //! | `servers[]` | `name`, `program` (a bundle entry), `budget`, then optional `stack_pages` (string), `heap_pages` (string), `labels`, `devices[]` (`device`, `as`), `volume`, `receives` (endpoint names), `handed[]` (`endpoint`, `badge` (string)), `args` |
 //! | `public` | bundle entry names |
-//! | `principals[]` | `name`, `account` (string), `budget`, then optional `ssh_keys`, `approval_keys`, `labels` (owned), `label_sets[]` (`labels`), `home` (`VOLUME:/PATH`), `net[]` (`prefix`, `ports`) |
+//! | `principals[]` | `name`, `account` (string), `budget`, then optional `ssh_keys`, `approval_keys`, `labels` (owned), `label_sets[]` (`labels`), `home` (`VOLUME:/PATH`), `home_quota` (string), `net[]` (`prefix`, `ports`) |
 //! | `steward` | `server` (the `servers` entry of the steward), `sizes` (`session`, `agent`, `sub_agent`, `crossing`: each a `budget`; `cost` (string)), optional |
 //! | `console` | a principal's name, optional |
 //!
@@ -86,6 +86,9 @@ pub struct Volume {
     pub disk: Option<String>,
     /// For a verified volume (servers/verityd.md), its verifier and what it checks against.
     pub verity: Option<Verity>,
+    /// The volume's size in bytes: its partition's, which the disk's packer is held to. Required
+    /// on a volume homes' quotas are carved from, which may not sum past it.
+    pub bytes: Option<u64>,
 }
 
 /// A verified volume's `verity` key: the `servers` entry of the `verityd` that checks it, and
@@ -168,6 +171,9 @@ pub struct Principal {
     pub labels: Vec<String>,
     pub label_sets: Vec<LabelSet>,
     pub home: Option<String>,
+    /// The bytes the principal may hold in its home, whatever its sessions: required with
+    /// `home`.
+    pub home_quota: Option<u64>,
     pub net: Vec<Net>,
 }
 
@@ -243,6 +249,7 @@ fn volume(v: &Value) -> Result<Volume, SchemaError> {
             labels: list(m, "labels", string)?,
             disk: m.optional("disk", string)?,
             verity: m.optional("verity", verity)?,
+            bytes: m.optional("bytes", Value::u64_string)?,
         })
     })
 }
@@ -338,6 +345,7 @@ fn principal(v: &Value) -> Result<Principal, SchemaError> {
             labels: list(m, "labels", string)?,
             label_sets: list(m, "label_sets", label_set)?,
             home: m.optional("home", string)?,
+            home_quota: m.optional("home_quota", Value::u64_string)?,
             net: list(m, "net", net)?,
         })
     })

@@ -13,7 +13,7 @@
 //! | Slot | Server | Unlabelled session | Vault session |
 //! | --- | --- | --- | --- |
 //! | 0 | `bootfsd` | `/boot` and handle `bootfsd` | the same |
-//! | 1 | the home volume's server, rooted at the home | at the home's path | the same; the server refuses its writes (R25) |
+//! | 1 | the home volume's server, rooted at the home, through the principal's one carve with its quota | at the home's path | the same; the server refuses its writes (R25) |
 //! | 2 | the label set's volume's server | nothing | `/vault` |
 //! | 3 | `ipd`, granted the principal's scope | `/net` | nothing |
 //! | 4 | the console: `sshd`'s channel, or `consoled` for the UART's session | `/dev/cons` | the same |
@@ -134,9 +134,16 @@ mod machine {
         }
     }
 
-    /// The server a connection the steward holds for a child came from, by handle name, and the
-    /// id it is disconnected by; none for one the steward did not make (a badge, a console).
-    type Held = Option<(String, u64)>;
+    /// What a connection the steward holds for a child was minted through: a server it was
+    /// handed, by handle name, or a connection it carved and keeps, by its key.
+    enum Via {
+        Server(String),
+        Carved(String),
+    }
+
+    /// What a connection the steward holds for a child was minted through, and the id it is
+    /// disconnected by there; none for one the steward did not make (a badge, a console).
+    type Held = Option<(Via, u64)>;
 
     struct Machine<'s> {
         startup: &'s Startup<'s>,
@@ -149,6 +156,10 @@ mod machine {
         /// The next login's console: `sshd`'s channel connection.
         console: Option<Handle>,
         held: BTreeMap<u32, Held>,
+        /// The connections carved once with a quota and kept for the steward's life, by key (a
+        /// principal's home): every session's is minted through one with no quota of its own, so
+        /// they share it. `init` disconnects them at the steward's exit, with all minted below.
+        carved: BTreeMap<String, Handle>,
         /// The held handles that are a session's console, told `ended` when they are released.
         consoles: BTreeSet<u32>,
         /// Each principal's account and name.
@@ -188,7 +199,35 @@ mod machine {
             let server = self.unattached(name)?;
             let (endpoint, id) =
                 server.new_connection(&mut self.lend, root, 0).map_err(|_| Error::Refused)?;
-            self.held.insert(endpoint.handle().index(), Some((name.into(), id)));
+            self.held.insert(endpoint.handle().index(), Some((Via::Server(name.into()), id)));
+            Ok(Some(endpoint.handle()))
+        }
+
+        /// The connection kept for `key`, carved at `name`'s server rooted at `root` with `quota`
+        /// bytes the first time it is needed.
+        fn carve(&mut self, key: &str, name: &str, root: &str, quota: u64) -> Result<Nine, Error> {
+            if let Some(handle) = self.carved.get(key) {
+                return Ok(Nine::new(Endpoint::from_handle(*handle)));
+            }
+            let server = self.unattached(name)?;
+            let (endpoint, _) =
+                server.new_connection(&mut self.lend, root, quota).map_err(|_| Error::Refused)?;
+            self.carved.insert(key.into(), endpoint.handle());
+            Ok(Nine::new(endpoint))
+        }
+
+        /// A fresh connection at the root of the one kept for `key`, sharing its quota, held
+        /// until released.
+        fn fresh_carved(
+            &mut self,
+            key: &str,
+            name: &str,
+            root: &str,
+            quota: u64,
+        ) -> Result<Option<Handle>, Error> {
+            let kept = self.carve(key, name, root, quota)?;
+            let (endpoint, id) = kept.new_connection(&mut self.lend, "", 0).map_err(|_| Error::Refused)?;
+            self.held.insert(endpoint.handle().index(), Some((Via::Carved(key.into()), id)));
             Ok(Some(endpoint.handle()))
         }
 
@@ -250,6 +289,7 @@ mod machine {
             };
             match bound.how {
                 How::Fresh { server, root } => self.fresh(&server, &root),
+                How::Carved { key, server, root, quota } => self.fresh_carved(&key, &server, &root, quota),
                 How::Grant { scope } => {
                     let conn = self.server("ipd")?;
                     let grant = ipd::Message::Grant(ipd::Grant { scope: &scope });
@@ -264,7 +304,7 @@ mod machine {
                         },
                     );
                     let (handle, id) = made.ok().flatten().ok_or(Error::Refused)?;
-                    self.held.insert(handle.index(), Some((String::from("ipd"), id)));
+                    self.held.insert(handle.index(), Some((Via::Server(String::from("ipd")), id)));
                     Ok(Some(handle))
                 }
                 How::Console => {
@@ -297,9 +337,13 @@ mod machine {
                     let _ = Endpoint::from_handle(handle).send(&ended, &[], None, RELEASE_TIMEOUT);
                 }
             }
-            if let Some(Some((name, id))) = self.held.remove(&handle.index()) {
-                if let Ok(server) = self.unattached(&name) {
-                    let _ = server.disconnect(id, RELEASE_TIMEOUT);
+            if let Some(Some((via, id))) = self.held.remove(&handle.index()) {
+                let through = match via {
+                    Via::Server(name) => self.unattached(&name).ok(),
+                    Via::Carved(key) => self.carved.get(&key).map(|h| Nine::new(Endpoint::from_handle(*h))),
+                };
+                if let Some(through) = through {
+                    let _ = through.disconnect(id, RELEASE_TIMEOUT);
                 }
             }
             let _ = close(handle);
@@ -503,6 +547,7 @@ mod machine {
             consoled: None,
             console: None,
             held: BTreeMap::new(),
+            carved: BTreeMap::new(),
             consoles: BTreeSet::new(),
             accounts: Vec::new(),
             own_lines: Own::default(),

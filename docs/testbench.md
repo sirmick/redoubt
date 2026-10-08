@@ -803,7 +803,7 @@ a program reads it again through `/boot` once the manifest's `public` list names
 
 ### Disks and network cards
 
-<details><summary>Status: built · tested (27)</summary>
+<details><summary>Status: built · tested (30)</summary>
 
 - bench:bench-virtio-devices
 - bench:bench-virtio-legacy-off
@@ -832,6 +832,9 @@ a program reads it again through `/boot` once the manifest's `public` list names
 - host:testbench::the_manifest_pins_the_packs_root
 - host:testbench::a_signed_partition_ends_in_its_root_block_signed_deterministically
 - host:testbench::the_cases_volume_seed_is_the_development_seed
+- host:testbench::a_volume_s_bytes_are_held_to_its_partition
+- host:testbench::the_image_s_volumes_are_its_disk_s_partitions
+- host:testbench::a_case_s_manifest_is_held_to_its_disk
 
 </details>
 
@@ -861,6 +864,13 @@ says, holding its stage's tree: `littlefs`, a writable volume written through `l
 code; `erofs`, a read-only volume written by `libs/erofs`'s writer
 ([erofsd](servers/erofsd.md#the-packer)); or `walfs`, a writable volume written by `libs/walfs`
 itself ([walfsd](servers/walfsd.md#the-packer)), so a case boots the disk the image ships.
+
+A manifest's volume that gives `bytes` ([init](servers/init.md#home-quotas)) must be exactly
+its partition's size, which `init` never reads. A recipe names the manifest its disk serves
+(`manifest = "image/manifest.json"`), and the pack is refused if a volume's `bytes` differs from
+its partition's, or the partition at its index has another name; at load the bench refuses a case
+whose `manifest` file gives a volume `bytes` its disk's partition does not have, whether the disk
+is a recipe or `size_kib` and `partitions`.
 
 A recipe's volume may also generate files, for a case that needs many and not their
 contents: `generated = { files = 600, read = "f000" }` makes `f000` to `f599` in the volume's root
@@ -1364,7 +1374,7 @@ additional client from the merged manifest.
 | `blkd:system` | 4,520 | 3 | 17 | 34 |
 | `verity:system` | 8,264 | 5 | 50 | 100 |
 | `erofsd:system` | 9,704 | 5 | 13 | 26 |
-| `steward` | 13,224 | 7 | 14 | 28 |
+| `steward` | 14,856 | 8 | 14 | 28 |
 | `sshd` | 5,256 | 4 | 56 | 384 |
 
 The read-only client's largest stack peak is 6,616 bytes and its heap's 31 pages; its case uses

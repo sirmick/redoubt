@@ -136,6 +136,7 @@ pub fn check(m: &Manifest, machine: &Machine, bundle_key: [u8; KEY_LEN]) -> Resu
     references(m, machine)?;
     init_calls(m)?;
     volumes(m)?;
+    quotas(m)?;
     verifiers(m)?;
     let placements = devices(m, machine)?;
     budgets(m)?;
@@ -902,16 +903,76 @@ fn volume_handle<'m>(m: &'m Manifest, name: &str) -> Option<&'m str> {
     s.receives.first().map(String::as_str)
 }
 
-/// The labelled volume whose label set is `set` (names, any order), by its server's handle.
-fn vault_handle<'m>(m: &'m Manifest, set: &[String]) -> Option<&'m str> {
+/// The labelled volume whose label set is `set` (names, any order): the set's vault.
+fn vault_volume(m: &Manifest, set: &[String]) -> Option<usize> {
     let mut want: Vec<&str> = set.iter().map(String::as_str).collect();
     want.sort_unstable();
-    let v = m.volumes.iter().find(|v| {
+    m.volumes.iter().position(|v| {
         let mut have: Vec<&str> = v.labels.iter().map(String::as_str).collect();
         have.sort_unstable();
         !have.is_empty() && have == want
-    })?;
-    volume_handle(m, &v.name)
+    })
+}
+
+/// The labelled volume whose label set is `set` (names, any order), by its server's handle.
+fn vault_handle<'m>(m: &'m Manifest, set: &[String]) -> Option<&'m str> {
+    volume_handle(m, &m.volumes[vault_volume(m, set)?].name)
+}
+
+/// Every home has a quota of at least a byte and every quota a home; no home is another's or
+/// inside it, since the volume's server would count one under the other's root; a volume homes
+/// are carved from gives its `bytes`, and their quotas sum to at most them, so the steward can
+/// carve every principal's home at once (servers/init.md, "Home quotas"). The volume's server
+/// refuses a carve its room cannot hold all the same: what `bytes` promises, the disk's packer
+/// holds the partition to. A vault has no quota of its own: it is its labelled volume, bounded by
+/// its room.
+fn quotas(m: &Manifest) -> Result<(), Refusal> {
+    // A clean absolute path at or below a directory: only past a `/`.
+    let under = |path: &str, dir: &str| {
+        dir == "/" || path.strip_prefix(dir).is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+    };
+    fn home(p: &crate::manifest::Principal) -> Option<(&str, &str)> {
+        p.home.as_deref().and_then(|h| h.split_once(':'))
+    }
+    // The principal whose label set names each labelled volume first: a vault is one
+    // principal's, as principals are kept apart (servers/steward.md, "Home quotas and vaults").
+    let mut vaults: Vec<(usize, usize)> = Vec::new();
+    for (i, p) in m.principals.iter().enumerate() {
+        if p.home.is_some() != p.home_quota.is_some() || p.home_quota == Some(0) {
+            return Err(at(format!("principals[{i}].home_quota"), Why::Quota));
+        }
+        if let Some((v, path)) = home(p) {
+            let shared = m.principals[..i]
+                .iter()
+                .filter_map(home)
+                .any(|(w, other)| w == v && (under(path, other) || under(other, path)));
+            if shared {
+                return Err(at(format!("principals[{i}].home"), Why::SharedHome));
+            }
+        }
+        for (j, set) in p.label_sets.iter().enumerate() {
+            let Some(v) = vault_volume(m, &set.labels) else { continue };
+            match vaults.iter().find(|(w, _)| *w == v) {
+                Some((_, owner)) if *owner != i => {
+                    return Err(at(format!("principals[{i}].label_sets[{j}]"), Why::SharedVault));
+                }
+                Some(_) => {}
+                None => vaults.push((v, i)),
+            }
+        }
+    }
+    for (i, v) in m.volumes.iter().enumerate() {
+        let homes = m.principals.iter().filter(|p| home(p).is_some_and(|(w, _)| w == v.name));
+        let quotas: Vec<u64> = homes.filter_map(|p| p.home_quota).collect();
+        if quotas.is_empty() {
+            continue;
+        }
+        let sum = quotas.iter().try_fold(0u64, |s, q| s.checked_add(*q));
+        if v.bytes.is_none_or(|b| sum.is_none_or(|s| s > b)) {
+            return Err(at(format!("volumes[{i}].bytes"), Why::OverCommitted));
+        }
+    }
+    Ok(())
 }
 
 /// The ids of the labels `names` names, sorted, each once; a name no label has is left out (the
@@ -935,7 +996,8 @@ pub fn steward_own_lines(m: &Manifest) -> Vec<String> {
     for p in &m.principals {
         let home = p.home.as_deref().and_then(|h| h.split_once(':'));
         if let Some((handle, path)) = home.and_then(|(v, path)| Some((volume_handle(m, v)?, path))) {
-            out.push(format!("home {} handle={handle} path={path}", q(&p.name)));
+            let quota = p.home_quota.unwrap_or(0);
+            out.push(format!("home {} handle={handle} path={path} quota={quota}", q(&p.name)));
         }
         let mut seen: Vec<Vec<u64>> = Vec::new();
         for set in &p.label_sets {

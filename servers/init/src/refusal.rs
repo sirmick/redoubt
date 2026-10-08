@@ -132,6 +132,15 @@ pub enum Why {
     /// A principal's budget whose equal share per domain, less a budget's own cost, is smaller
     /// than the steward's size of this name in some limit: the steward could not carve it.
     Sizes(&'static str),
+    /// A home without its quota, a quota of 0, or a quota with no home.
+    Quota,
+    /// A labelled volume that two principals' label sets name: a vault is one principal's.
+    SharedVault,
+    /// A home that is another principal's, or inside it, or holds it, on one volume.
+    SharedHome,
+    /// A volume homes are carved from that does not give its `bytes`, or whose homes' quotas sum
+    /// past them.
+    OverCommitted,
 }
 
 /// What two label sets would share under `confined` (servers/init.md, "The confinement check").
@@ -154,6 +163,10 @@ impl fmt::Display for Why {
             Why::NotAName => "not a name",
             Why::AccountName => "a principal's or a label's name holds no : or +",
             Why::Reserved => "a reserved name",
+            Why::Quota => "a home has a quota of at least 1 byte, and a quota has a home",
+            Why::SharedVault => "a labelled volume is one principal's vault, and another's label set names it",
+            Why::SharedHome => "a home is one principal's: no other home is it, holds it or is inside it",
+            Why::OverCommitted => "a volume's home quotas sum to at most its bytes, which it gives",
             Why::Twice => "named twice",
             Why::Unknown => "names nothing the manifest or the bundle holds",
             Why::DeviceName => "a device name is at most 60 bytes and does not end in -irq",

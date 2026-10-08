@@ -103,3 +103,30 @@ fn a_root_over_its_quota_after_a_disconnect_grows_no_further() {
     ledger.change(1, 0, 1);
     assert!(ledger.fits(1, 1));
 }
+
+/// The steward's home (servers/steward.md, "Home quotas and vaults"): one connection carved at the home with
+/// the principal's quota, and each session's minted through it with none, at its root: they share
+/// the one quota, however many there are. When the steward dies its connections go, the home's
+/// record with them and what it holds returns to the root above; the restarted steward's carve
+/// counts the home afresh, so what the dead one's sessions wrote counts once against the quota.
+#[test]
+fn sessions_minted_through_one_carve_share_its_quota_across_a_restart() {
+    let mut ledger = Ledger::new(1000, 0, 7);
+    assert_eq!(ledger.mint(0, 1, 5, "home/alice", 300, found(0, 0)), Ok(()));
+    assert_eq!(ledger.mint(1, 2, 5, "home/alice", 0, uncounted), Ok(()));
+    assert_eq!(ledger.mint(1, 3, 5, "home/alice", 0, uncounted), Ok(()));
+    let home = ledger.holder("home/alice");
+    assert_eq!(ledger.roots()[home].2, 300, "two sessions, one quota");
+    ledger.change(home, 200, 0);
+    assert!(ledger.fits(home, 100) && !ledger.fits(home, 101), "the second session stops at the quota");
+    for badge in [2, 3, 1] {
+        ledger.disconnect(badge);
+    }
+    assert_eq!(ledger.roots().len(), 1, "the dead steward's carve is gone");
+    // The restarted steward carves again: the count finds the 200 bytes on the volume.
+    assert_eq!(ledger.mint(0, 4, 5, "home/alice", 300, found(200, 0)), Ok(()));
+    assert_eq!(ledger.mint(4, 5, 5, "home/alice", 0, uncounted), Ok(()));
+    let home = ledger.holder("home/alice");
+    assert_eq!(ledger.roots()[home].2, 300);
+    assert_eq!(ledger.spare(home), 100, "what was written counts once");
+}
