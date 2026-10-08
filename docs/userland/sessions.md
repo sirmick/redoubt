@@ -208,7 +208,8 @@ What follows from a table of capabilities:
   a permission error: there is nothing there to refuse.
 - **Above the entries is a directory the namespace answers itself.** `/` or `/home`, above an
   entry and inside none, lists the next name of each entry below it, and nothing in it can be
-  made, removed or written (`:eacces`); `/home/bob`, beside `/home/alice`, is still `:enoent`.
+  removed or written (`:eacces`); making it is `:eexist`, as it is there, so `File.mkdir_p` passes
+  through it; `/home/bob`, beside `/home/alice`, is still `:enoent`.
 - **`..` never climbs out.** Paths are cleaned lexically before lookup, in the client and again
   in the server, so `/../../etc` is `/etc` on the same connection.
 - **Different prefixes are usually different servers.** `/home/alice` and a vault's volume are

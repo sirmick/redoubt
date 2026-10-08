@@ -186,10 +186,10 @@ fn a_path_above_a_binding_is_a_directory_the_namespace_answers() {
         assert_eq!(ask(p, |p| p.list_dir("/home")).unwrap(), [b"alice".to_vec()]);
         assert_eq!(ask(p, |p| p.list_dir("/home/.")).unwrap(), [b"alice".to_vec()]);
         assert!(ask(p, |p| p.list_dir("/")).unwrap().contains(&b"home".to_vec()));
-        // Nothing in it changes.
+        // Nothing in it changes; making it is eexist, as it is there.
         let write = create(OpenMode::default());
         assert_eq!(ask(p, |p| p.open("/home", write)), Err(FileError::Eacces));
-        assert_eq!(ask(p, |p| p.make_dir("/home")), Err(FileError::Eacces));
+        assert_eq!(ask(p, |p| p.make_dir("/home")), Err(FileError::Eexist));
         assert_eq!(ask(p, |p| p.del_dir("/home")), Err(FileError::Eacces));
         assert_eq!(ask(p, |p| p.delete("/home")), Err(FileError::Eacces));
         assert_eq!(ask(p, |p| p.rename("/home", "/house")), Err(FileError::Eacces));
@@ -381,6 +381,38 @@ fn a_copy_within_one_volume_is_the_servers() {
         assert_eq!(ask(p, |p| p.copy_file("/home/alice/a", "/dev/cons/a")), Err(FileError::Exdev));
         assert_eq!(ask(p, |p| p.copy_file("/home/alice/a", "/home")), Err(FileError::Eacces));
         assert_eq!(ask(p, |p| p.copy_file("/home/alice/none", "/home/alice/c")), Err(FileError::Enoent));
+    });
+}
+
+/// A directory that is there is `eexist` to make, the namespace's own above the bindings and a
+/// binding's root included, never `eacces`: Elixir's `File.mkdir_p` makes each directory from the
+/// root down and takes only `eexist` for one that is there.
+#[test]
+fn a_directory_that_is_there_is_eexist_to_make() {
+    with_home(|p| {
+        for path in ["/", "/home", "/home/alice"] {
+            assert_eq!(ask(p, |p| p.make_dir(path)), Err(FileError::Eexist), "{path}");
+        }
+        assert_eq!(ask(p, |p| p.make_dir("/home/alice/d")), Ok(()));
+        assert_eq!(ask(p, |p| p.make_dir("/home/alice/d")), Err(FileError::Eexist));
+    });
+}
+
+/// `File.mkdir_p` of a nested new path under a binding, as Elixir 1.20 makes it: each directory
+/// from the root down, taking `eexist` for one that is there; the new ones are made, and are
+/// directories.
+#[test]
+fn mkdir_p_of_a_nested_new_path_makes_it() {
+    with_home(|p| {
+        for path in ["/home", "/home/alice", "/home/alice/a", "/home/alice/a/b", "/home/alice/a/b/c"] {
+            match ask(p, |p| p.make_dir(path)) {
+                Ok(()) | Err(FileError::Eexist) => {}
+                other => panic!("{path}: {other:?}"),
+            }
+        }
+        let info = ask(p, |p| p.info("/home/alice/a/b/c", true)).unwrap();
+        assert_eq!(info.kind, FileKind::Directory);
+        assert_eq!(ask(p, |p| p.list_dir("/home/alice/a")).unwrap(), [b"b".to_vec()]);
     });
 }
 
