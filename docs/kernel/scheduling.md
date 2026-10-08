@@ -945,7 +945,7 @@ It is attacked three ways:
   whole subtrees), wakes, blocks, runs and preemptions, and requires every pass, entry,
   remainder, tie, queue membership, floor and pick to agree after every step. A model with any of
   18 scheduling rules broken must disagree.
-- **The model's mutations**: each `R12*` variant breaks one part, and `scheduler_fairness` (ten
+- **The model's mutations**: each `R12*` variant breaks one part, and `scheduler_fairness` (eleven
   scenarios, each with an independent check) or the scheduler contracts must catch it
   ([model](model.md)).
 

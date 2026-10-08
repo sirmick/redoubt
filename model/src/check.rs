@@ -630,10 +630,11 @@ pub fn flood(seed: u64, mutation: Option<Mutation>) -> Result<(), Failure> {
 /// | idempotence | (j) create then destroy with no run moves nothing; (l) a weight change folds first |
 /// | rank | (a) all four rank clauses against an independent oracle; (b) wakes never preempt |
 /// | shell | (k) a parent giving each short command a heavy child keeps its share |
+/// | harts | (m) on several harts each budget gets its water-filling share: late join, second cap, uncap, spread and idle harts ([`smp_scenario`]) |
 pub fn scheduler_fairness(seed: u64, mutation: Option<Mutation>) -> Result<(), Failure> {
     let fail = |message: String| Failure { family: "scheduler_fairness", seed, message, ops: Vec::new() };
     let mut rng = Rng::new(seed);
-    let r = match seed % 10 {
+    let r = match seed % 11 {
         0 => fairness_run(seed, mutation).map(|_| ()).map_err(Err1::from),
         1 => sched_gaming(&mut rng, mutation),
         2 => sched_idle_gap(&mut rng, mutation),
@@ -643,7 +644,8 @@ pub fn scheduler_fairness(seed: u64, mutation: Option<Mutation>) -> Result<(), F
         6 => sched_debt_lift(&mut rng, mutation),
         7 => sched_idempotence(&mut rng, mutation),
         8 => sched_rank(&mut rng, mutation),
-        _ => sched_shell(&mut rng, mutation),
+        9 => sched_shell(&mut rng, mutation),
+        _ => sched_harts(mutation),
     };
     r.map_err(|m| match m {
         Err1::Msg(m) => fail(m),
@@ -710,6 +712,143 @@ impl Sim {
 }
 
 const ROOT_B: u64 = 1_000_000;
+
+/// (m) The five scenarios of R12 across harts, each at its harts (spread at 2 and at 4).
+fn sched_harts(mutation: Option<Mutation>) -> Sr {
+    let all =
+        [("late join", 2), ("second cap", 3), ("uncap", 2), ("spread", 2), ("spread", 4), ("idle harts", 2)];
+    for (name, harts) in all {
+        smp_scenario(name, harts, mutation)?;
+    }
+    Ok(())
+}
+
+/// The scheduler on several harts, driven through time in whole slices: at each step every idle
+/// hart picks, in hart order, every hart runs a slice, and each slice ends.
+struct Harts {
+    s: Scheduler,
+    ran: alloc::collections::BTreeMap<u64, u64>,
+}
+
+impl Harts {
+    fn new(harts: usize, mutation: Option<Mutation>) -> Harts {
+        let mut s = Scheduler { mutation, ..Scheduler::default() };
+        s.set_harts(harts);
+        s.add_budget(ROOT_B, None, 1 << 31);
+        Harts { s, ran: alloc::collections::BTreeMap::new() }
+    }
+
+    /// A budget of weight `weight` with `threads` runnable threads.
+    fn budget(&mut self, id: u64, weight: u64, threads: u64) {
+        self.s.add_budget(id, Some(ROOT_B), weight);
+        self.threads(id, 0, threads);
+    }
+
+    /// Threads `from..to` of `b` become runnable.
+    fn threads(&mut self, b: u64, from: u64, to: u64) {
+        for t in from..to {
+            self.s.thread_runnable(b, (b, t));
+        }
+        self.s.reconcile();
+    }
+
+    /// `n` slices on every hart.
+    fn run(&mut self, n: u64) {
+        for _ in 0..n {
+            for h in 0..self.s.harts() {
+                self.s.pick_on(h);
+            }
+            for h in 0..self.s.harts() {
+                if let Some(c) = self.s.on(h) {
+                    self.s.run_on(h, SLICE);
+                    *self.ran.entry(c.budget).or_default() += SLICE;
+                }
+            }
+            for h in 0..self.s.harts() {
+                self.s.slice_end_on(h);
+            }
+            self.s.reconcile();
+        }
+    }
+}
+
+/// One scenario of R12 across harts (kernel/scheduling.md, R12): each budget's
+/// hart time over a window, in thousandths of a hart, against its water-filling share, computed
+/// here from the scenario's weights and threads. `Err` names the first budget more than 50 per
+/// thousand of the machine away from its share; `Ok` lists every budget's (id, got, want).
+pub fn smp_scenario(
+    name: &str,
+    harts: usize,
+    mutation: Option<Mutation>,
+) -> Result<Vec<(u64, u64, u64)>, String> {
+    let mut m = Harts::new(harts, mutation);
+    // (budgets before, the event, the shares after in thousandths of a hart)
+    let (lead, window) = (400, 400);
+    let want: Vec<(u64, u64)> = match name {
+        // A (900, 1) and B (100, 1) run long; C (100, 1) wakes.
+        "late join" => {
+            m.budget(1, 900, 1);
+            m.budget(2, 100, 1);
+            m.run(lead);
+            m.budget(3, 100, 1);
+            alloc::vec![(1, 1000), (2, 500), (3, 500)]
+        }
+        // A (1000, 1), B (100, 1), C (10, 5), D (10, 5) run long; E (10, 1) wakes.
+        "second cap" => {
+            m.budget(1, 1000, 1);
+            m.budget(2, 100, 1);
+            m.budget(3, 10, 5);
+            m.budget(4, 10, 5);
+            m.run(lead);
+            m.budget(5, 10, 1);
+            alloc::vec![(1, 1000), (2, 1000), (3, 333), (4, 333), (5, 333)]
+        }
+        // A (900, 1), B (100, 1) and C (100, 1) run long; A gains a second thread.
+        "uncap" => {
+            m.budget(1, 900, 1);
+            m.budget(2, 100, 1);
+            m.budget(3, 100, 1);
+            m.run(lead);
+            m.threads(1, 1, 2);
+            alloc::vec![(1, 1636), (2, 182), (3, 182)]
+        }
+        // A (100, 4) and B (100, 1).
+        "spread" => {
+            m.budget(1, 100, 4);
+            m.budget(2, 100, 1);
+            if harts >= 4 { alloc::vec![(1, 3000), (2, 1000)] } else { alloc::vec![(1, 1000), (2, 1000)] }
+        }
+        // A (100, 1) runs alone on two harts, then B (100, 1) wakes and runs beside it, then C
+        // (100, 1) wakes: three budgets on two harts, two thirds of a hart each.
+        "idle harts" => {
+            m.budget(1, 100, 1);
+            m.run(lead);
+            m.budget(2, 100, 1);
+            m.run(lead);
+            m.budget(3, 100, 1);
+            alloc::vec![(1, 667), (2, 667), (3, 667)]
+        }
+        _ => return Err(format!("no scenario {name:?}")),
+    };
+    // From one slice after the event.
+    m.run(1);
+    let before = m.ran.clone();
+    m.run(window);
+    let mut out = Vec::new();
+    for (b, w) in want {
+        let got = (m.ran.get(&b).copied().unwrap_or(0) - before.get(&b).copied().unwrap_or(0)) * 1000
+            / (window * SLICE);
+        out.push((b, got, w));
+    }
+    // 50 per thousand of the machine is 50 x harts thousandths of a hart.
+    let slack = 50 * harts as u64;
+    match out.iter().find(|(_, got, w)| got.abs_diff(*w) > slack) {
+        Some((b, got, w)) => Err(format!(
+            "R12 across harts, {name} at {harts} harts: budget {b} got {got} of 1000 of a hart, its share is {w} ({out:?})"
+        )),
+        None => Ok(out),
+    }
+}
 
 fn share_at_least(what: &str, got: u64, total: u64, num: u64, den: u64, slack: u64) -> Result<(), String> {
     // got/total >= num/den − slack/total  <=>  got·den + slack·den >= num·total

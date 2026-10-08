@@ -587,6 +587,30 @@ pub fn sched_contracts(mutation: Option<Mutation>) -> Result<(), String> {
         w.op(Op::Tick { dt: 1 })?;
         expect(w.k.sched.current.is_some_and(|c| c.thread == (pb, tb)), "the woken sleeper runs next")?;
     }
+    // On several harts each hart picks a runnable thread no hart runs: a budget with two threads
+    // runs on two harts, never one thread on two, and the third hart takes the other budget.
+    {
+        let mut s = redoubt_model::sched::Scheduler { mutation, ..Default::default() };
+        s.set_harts(3);
+        s.add_budget(1, None, 100);
+        s.add_budget(2, None, 100);
+        for t in [(1, 0), (1, 1)] {
+            s.thread_runnable(1, t);
+        }
+        s.thread_runnable(2, (2, 0));
+        let picks: Vec<_> = (0..3).filter_map(|h| s.pick_on(h)).map(|c| c.thread).collect();
+        let mut distinct = picks.clone();
+        distinct.sort();
+        distinct.dedup();
+        expect(
+            picks.len() == 3 && distinct.len() == 3,
+            "no thread runs on two harts, and every hart runs one",
+        )?;
+        expect(
+            s.pick_on(0).is_some() && (0..3).filter_map(|h| s.on(h)).filter(|c| c.budget == 1).count() == 2,
+            "the budget with two threads runs on two harts",
+        )?;
+    }
     // A slice is user time: the kernel's work between a pick and the thread's return to user
     // mode, here three slices of it, comes out of none of it, so the picked thread still runs a
     // whole slice rather than being preempted at its first instruction (R12).
