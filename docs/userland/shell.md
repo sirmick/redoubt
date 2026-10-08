@@ -367,7 +367,10 @@ What the line editor and the screens built so far do not need:
   `{:console_resize, cols, rows}`, and the library calls again for the next change. On a UART,
   where nothing resizes, the call waits for ever ([consoled](../servers/consoled.md)).
 
-**Open:** `await_resize` needs a server to park a typed call, an open question of
+**Open:** until bracketed paste is built, a paste reaches a full-screen program as keys, so a
+pasted control character is a key: the editor asks before one saves, closes or opens a file
+([the editor](#the-editor)), and the gap closes with paste as one event. `await_resize` needs a
+server to park a typed call, an open question of
 [the serving library](../servers/serving.md); and whether the shell sends a terminal
 query at login and adapts, or assumes the VT102 and xterm target (the recommendation: assume,
 because a query on a UART that never answers costs a timeout at every login).
@@ -528,8 +531,9 @@ so nothing loads them until a screen first draws with them.
 - **Focus:** inside a dialog or a screen, Tab and Shift+Tab move along a focus ring, and every
   other key goes to the widget with the focus.
 - **A theme** is a map from roles (the text, the selection, a border, the menu, a button, the
-  input, its cursor) to styles. Three are built: the terminal's own colours, the default;
-  QBasic's blue; and `menuconfig`'s.
+  input, its cursor, and the parts of code the editor highlights) to styles. Three are built:
+  the terminal's own colours, the default, with code in bold, dim and italic; QBasic's blue; and
+  `menuconfig`'s.
 - **Every style is the code's.** A widget draws each part in its role's style, and its text
   through the visible-text rule: a label, an item, a cell, a title or what was typed sets no
   colour, and a control character in it is drawn as `^[` in the role's style
@@ -693,21 +697,80 @@ Not built:
 
 ### The editor
 
-Status: planned · M2 (usable shell)
+Status: built · partly tested: the host only; the editor, its highlighting and the file manager; their keys, files and highlighting on beamlet and on the BEAM, their drawing on beamlet alone; their tests are the shell's own ExUnit suite (`test/redoubt/editor_test.exs`, `test/redoubt/editor/buffer_test.exs`, `test/redoubt/editor/syntax_test.exs`, `test/redoubt/editor/manager_test.exs`), judged on the files and on a model of the terminal, which `./test-shell` runs and no bench case does
 
-The editor and the file manager are one screen program with two views, in the manner of Midnight
-Commander: `ed("notes.txt")` opens the editor on a file, and `fm("project")` opens two panes on a
-directory, from which F4 edits the selected file and closing the editor returns to the panes.
+The editor and the file manager work as one, in the manner of Midnight Commander:
+`ed("notes.txt")` opens the editor on a file, and `fm("project")` opens two panes on a directory,
+from which F4 edits the selected file in the editor and closing the editor returns to the panes.
 - **Modeless, with the keys people expect.** The editor keeps micro's keys: Ctrl+S saves, Ctrl+Q
   quits, Ctrl+F finds, Ctrl+Z undoes, Ctrl+C and Ctrl+V copy and paste, and the mouse is not used.
-  The panes keep Midnight Commander's: F3 views, F4 edits, F5 copies, F6 moves, F7 makes a
-  directory, F8 removes.
+  The editor takes Ctrl+C as a key, and the session's own key, Ctrl+\, ends it, as it ends any
+  screen ([the session's key](#a-native-programs-screen-and-the-sessions-key)).
+  The panes keep Midnight Commander's: Tab changes pane, Enter goes into a directory, F3 views,
+  F4 edits, F5 copies, F6 moves, F7 makes a directory, F8 removes, F10 leaves.
 - **What it edits well:** search and replace by regular expression, in linear time for every
   pattern ([beamlet](beamlet.md#what-runs-on-it)); syntax highlighting for the languages of the
   box (Elixir, Erlang, Rust, Markdown, TOML, JSON); undo and redo; several files open at once. A
   file is held as lines, and as a rope only if a large file is measured to need one.
 - **Scripted edits are the commands'.** A script changes a file with `cat |> sub |> w`
   ([files and text](#files-and-text)), not by driving the editor.
+
+The editor is `ed(path)` ([`Redoubt.Editor`](../../userland/shell/lib/redoubt/editor.ex)); its
+text is lines around a cursor ([`Redoubt.Editor.Buffer`](../../userland/shell/lib/redoubt/editor/buffer.ex)),
+which a file read and saved unedited gives back byte for byte, a missing final newline and `\r`
+included. A file that is not UTF-8 opens read only, each byte that is not text drawn as `<FF>`.
+A pattern between slashes is a regular expression, matched within a line. A tab is drawn to the
+next stop of four, and any other control or bidirectional character visibly, in the style of
+the part of the line it is in; the cursor and the selection are styles of the theme, drawn over
+the highlighting. A line is read only as far as the window's right edge when it is drawn, so a
+line of a megabyte costs a draw what the window shows of it. Like every command, its code is
+loaded when it is first called. A key that would save, close or open a file asks first when it
+comes in a burst: with more keys already waiting behind it, as a paste does, or within 300 ms of
+a key that had, as a paste's last key does. The keys arriving with the question are dropped,
+until 300 ms after the last of them however long the paste, so a pasted Enter cannot answer it.
+The 300 ms are measured between the editor's handling of two keys, not their arrival, so a
+paste whose keys each take the editor longer than that (an edit to a line of megabytes) could
+outrun the window; what such a paste can do is bounded by the screen's heap limit, which ends
+the editor.
+
+The highlighting ([`Redoubt.Editor.Syntax`](../../userland/shell/lib/redoubt/editor/syntax.ex))
+is chosen by the file's extension (`.ex` and `.exs`, `.erl` and `.hrl`, `.rs`, `.md`, `.toml`,
+`.json`; any other file is plain text), and a language's module is loaded when a file of it first
+opens. A language cuts each line into parts, each a role of the theme: a keyword, a string, a
+comment, a number, a constant or a heading. The parts are the line's own bytes, so a file chooses
+a role and nothing more: what a role looks like is the theme's, and an escape sequence in a
+string is drawn visibly in the string's style. A line starts from the state the line above left
+(inside a string or a comment that runs on, or not); the editor keeps that state every 128
+lines down to the window, and drops what an edit may have changed, from the edited line down,
+and all of it on an undo, a redo or a replace through the file. So the first jump to the end of
+a large file scans every line once, and an edit costs only the lines from it to the window. Only
+a line's first 4 KiB are read, the rest drawn plain, so a window costs a bounded scan whatever
+its lines hold; a scan costs time in a line's length (a 1 MiB line in some 7 s on beamlet, on
+the host, were it read whole).
+
+The file manager is `fm(dir)` ([`Redoubt.Editor.Manager`](../../userland/shell/lib/redoubt/editor/manager.ex)),
+a screen program of two panes, each listing one directory through
+[the editor's files](#the-editors-files): a directory is drawn `/name`, and a name those refuse
+`!name`, which every key refuses in turn. Enter goes into a listed directory, or up on `..`
+through the pane's own path, never through a listed name, and on a file edits it. F3 opens the
+editor read only, F4 to edit, and closing it comes back to the panes, listed again. F5 copies
+and F6 moves the selected name into the other pane's directory, F7 makes a directory by a name
+typed, and F8 removes a file or a directory and all it holds. Copy, move and remove ask first,
+naming what and where, and a question is deaf for its first 300 ms and, while keys arrive with
+more queued behind them, until 300 ms after the last: so no paste, however long, answers it with
+its Enter. A failure is said in a dialog.
+
+Undo keeps at most 500 steps, and holds at most a million lines between them. A step holds a
+new copy of the list of lines the cursor crossed since the step before (the lines' bytes are
+shared), so 500 steps each taken after a jump between the top and the bottom of a 2 MiB file
+held, unbounded, about 350 MiB of heap with 64-byte lines and 2.6 GiB with 8-byte lines on the
+BEAM, past the 16M words a screen may grow to. A step also holds its own copy of the cursor's
+line, so 500 keys typed into a file of one 1 MiB line, the cursor moved between them, would keep
+500 MiB. Each step counts the lines it crossed or inserted, never more than the file's, and a
+line for every 16 bytes of the cursor's line; once the steps hold more than a million the oldest
+go, and the newest is always kept. After 500 edits across a 2 MiB file of 15-byte lines, the
+buffer, undo and all, fits in half a screen's heap; after 500 on one 1 MiB line, the copies kept
+come to some 16 MiB (`buffer_test.exs`).
 
 It is an Erlang process in the session's VM, drawn through the screen buffer
 ([full-screen programs](#full-screen-programs)), and it runs with the session's authority, as
@@ -721,11 +784,9 @@ contents into an action:
   holds a NUL is shown and refused, and every copy, move and removal is made on the listed
   directory, so a server that lists a crafted name cannot make the file manager act outside it.
 
-**Open:** none.
-
 ### The editor's files
 
-Status: built · partly tested: the host only, on beamlet and on the BEAM; the editor and the file manager that use it are not built; its tests are the shell's own ExUnit suite (`test/redoubt/editor/files_test.exs`), each verdict read from the file system afterwards, which `./test-shell` runs and no bench case does
+Status: built · partly tested: the host only, on beamlet and on the BEAM; the editor and the file manager use it; its tests are the shell's own ExUnit suite (`test/redoubt/editor/files_test.exs`), each verdict read from the file system afterwards, which `./test-shell` runs and no bench case does
 
 What the editor and the file manager do to files is one module,
 [`Redoubt.Editor.Files`](../../userland/shell/lib/redoubt/editor/files.ex), over `File`, with
@@ -801,9 +862,9 @@ anything outside Elixir; what needs speed on an interpreter is the loop over cel
 is native ([beamlet](beamlet.md#screen-natives)).
 
 **The editor is Elixir.** It is a screen program like the pager, so it reads a file with the same
-memory-safe code every tool of the session uses and costs no process of its own. Its search and
-highlighting are `Regex`, which costs linear time in every pattern, as it does wherever Redoubt
-matches one.
+memory-safe code every tool of the session uses and costs no process of its own. Its search is
+`Regex`, which costs linear time in every pattern, as it does wherever Redoubt matches one; its
+highlighting reads each line once, from left to right.
 
 **One VM per session.** Every tool of a session, the shell, the editor, `top`, the pager, runs in
 the session's one VM. A VM is not a wall inside one principal: code that takes one over holds the

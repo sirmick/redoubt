@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 487
+revision = 491
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -586,7 +586,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "Several harts: R12's shares and the targets across harts. Starting list, from SMP3's --smp 2 sweep (.wash/local/SMP3-smp2-findings.md) and K30: the share and oracle cases that fail at 2 harts; the measurements expiry-deadline-then-timeout and scan-bounds; budget-deadline's 1 ms lateness bound (keep_smp until restated); boot-profile and boot-profile-unverified (the boot completes, but the first console read is at ~51 s against the 20 s bound at 2 harts); and kernel-containment (slow, not stalled: ~1.2 terminations a minute at 2 harts, ~95 min against its 1800 s timeout). The common cost is harts spinning on the one kernel lock under icount: QEMU runs one hart at a time, and a spinning hart spends its quantum. Decide per case: restate the target across harts, keep the case one-hart, or cut the spin cost (e.g. wfi or yield while waiting for the lock under icount, the ticket lock M2 plans, or wake affinity: no IPI when the waker blocks next). Size L."
   state = "active"
   revision = 429
-  overrides = ["2026-10-08: started by Orchestrator before M1 (reported): The owner started the M2 smp track early; SMP3 is merged."]
+  overrides = ["2026-10-08: started by Orchestrator before M1 (reported): The owner started the M2 smp track early; SMP3 is merged.", "2026-10-08: started by Orchestrator before M1 (reported): several-harts track runs ahead of M1's report (milestone split, owner 2026-10-07)"]
 
 [[node]]
   id = "RT2"
@@ -1364,8 +1364,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "shell-host"
   needs = ["SHELL5"]
   body = "M2 host step 5: docs/userland/shell.md#the-editor (an Erlang process with session authority: never turns file content into action). Size L."
-  state = "active"
-  revision = 469
+  state = "done"
+  revision = 491
   overrides = ["2026-10-08: started by Orchestrator before SHELL5 (reported), M1 (reported): shell track (owner ruling 2026-10-08): shell UI packages run ahead of M1's report"]
 
 [[node]]
@@ -1704,8 +1704,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M2"
   body = "Found by RCMD1's probe: the steward mints every home and vault connection with quota 0 (servers/steward steward.rs:190), and walfsd lets a quota-0 root read and remove only, so mkdir/write/cp/mv in a session's home fail with enospc. No case writes in a home. Add a byte quota per principal's home and per vault label set to the manifest; init's check refuses quotas that together exceed the volume's room; the steward's `home ... quota=N` line is parsed and written by libs/steward manifest.rs and passed to new_connection. Image values: 8 MiB each (alice, bob, alice-secrets) on ~32 MiB volumes. Cases on both widths: a session writes, reads back and fills its home to the quota (enospc at the bound, the volume's other homes untouched); init refuses an over-committed manifest. Pages: sessions.md, steward.md, init.md, walfsd.md, the manifest reference. Tier A: the steward red."
-  state = "todo"
-  revision = 480
+  state = "active"
+  revision = 489
+  overrides = ["2026-10-08: started by Orchestrator before M1 (reported): M2 work found by RCMD1's probe; runs ahead of M1's report"]
 
 [[node]]
   id = "B43"
@@ -1716,3 +1717,13 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   state = "done"
   revision = 487
   overrides = ["2026-10-08: started by Orchestrator before M1 (reported): a main break found during M2 work; fix ahead of M1's report"]
+
+[[node]]
+  id = "BEAM18"
+  title = "A beamlet VM runs its schedulers on several harts: throughput at 2 harts against 1"
+  template = "package"
+  parent = "smp"
+  needs = ["SMP2"]
+  body = "Cut from SMP2: beamlet on the machine runs one scheduler thread (docs/userland/beamlet.md); give a session's VM N schedulers on N harts and a case measuring a parallel Elixir workload's throughput at 2 harts against 1 on both widths, with the VM's heap and the session budget unchanged. Design checkpoint first (scheduler threads vs the I/O hub, locks in the VM, budgets per thread)."
+  state = "todo"
+  revision = 488
