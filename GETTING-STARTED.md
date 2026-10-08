@@ -187,8 +187,9 @@ Elixir's own documentation. The commands work on files (`cd`, `ls`, `ls_r`, `fin
 `w` and more): `cat("app.log") |> grep("error", ignore_case: true) |> count()`. `table` lays rows
 out in columns: `ls_r() |> Enum.map(&[&1, stat(&1).size]) |> table(title: "sizes")`. Everything it
 prints shows control characters as visible text (`^[` for ESC), so a hostile file cannot drive
-the terminal; `hexdump` shows a file's bytes. Lines are read whole, so there is no line editing,
-history, completion or Ctrl+C yet; `exit` or Ctrl+D ends it.
+the terminal; `hexdump` shows a file's bytes. Lines are edited with OTP's `edlin` under the
+shell's own driver, with Emacs keys, the session's history (arrows, Ctrl+R) and Ctrl+C ending
+the line; there is no completion. `exit` or Ctrl+D ends it.
 
 Each command is a commandlet, declared once with `defcommand` in any module of
 `userland/shell` that uses `Redoubt.Commandlet`: typed parameters, and help that a command does

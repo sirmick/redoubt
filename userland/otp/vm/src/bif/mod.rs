@@ -433,6 +433,10 @@ const TABLE: &[(&str, &str, u32, Native)] = &[
     ("file", "native_name_encoding", 0, file::native_name_encoding),
     // The console is not a terminal (no line editing, no ANSI colours) until a platform says so.
     ("prim_tty", "isatty", 1, proc::false_1),
+    // There is no C library to ask a character's width: `{error, enotsup}`, on which OTP's
+    // prim_tty:npwcwidth/2 measures with its own table (unicode_util:is_wide/1), as the line
+    // editor under the shell's driver does.
+    ("prim_tty", "wcwidth", 1, file::not_supported),
     // Dynamic-trace tags, as BEAM built without VM probes has them.
     ("erlang", "dt_spread_tag", 1, erlang::dt_true),
     ("erlang", "dt_restore_tag", 1, erlang::dt_true),
@@ -621,6 +625,7 @@ const TABLE: &[(&str, &str, u32, Native)] = &[
     ("erlang", "crc32", 2, info::crc32),
     ("beamlet", "app_spec", 1, info::app_spec),
     ("beamlet", "console_subscribe", 0, info::console_subscribe),
+    ("beamlet", "console_size", 0, info::console_size),
     // The system's natives, over the platform's `System` (docs/userland/beamlet.md, "Natives").
     ("redoubt", "ns_lookup", 1, system::ns_lookup),
     ("redoubt", "bind", 2, system::bind),

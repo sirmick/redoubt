@@ -305,17 +305,30 @@ checks it: each test runs on BEAM and on beamlet and the printed results must be
 
 ### The console on a host
 
-Status: planned · M2 (usable shell)
+<details><summary>Status: built · partly tested: host only; a change of the terminal's size is not delivered · tested (8)</summary>
 
-On a host, beamlet's command line puts the terminal in raw mode for as long as the VM runs and
-restores it on every exit, a panic included. `console_size` is the terminal's size, and a change
-of size reaches the shell as the message `{:console_resize, cols, rows}`, as the console's parked
-`resize` delivers it on Redoubt ([the shell](shell.md#the-terminal-library)). Console input goes
-to one Erlang process, the shell's driver, which takes it with `beamlet:console_subscribe/0`; a
-second subscription is refused, so no code run at the prompt can take the keyboard, or the
-interrupt key with it, from the driver.
+- host:beamlet::the_terminal_is_raw_while_the_vm_reads_it_and_restored_at_a_normal_end
+- host:beamlet::the_terminal_is_restored_when_the_run_ends_in_an_exception
+- host:beamlet::the_terminal_is_restored_when_the_vm_halts
+- host:beamlet::the_terminal_is_restored_when_a_signal_ends_beamlet
+- host:beamlet::a_panic_restores_the_terminal
+- host:beamlet-vm::a_second_console_subscription_is_refused_and_the_first_reader_keeps_the_console
+- host:beamlet-vm::the_console_is_free_once_its_reader_has_exited
+- host:beamlet-vm::the_console_size_is_the_platforms_answer_asked_at_each_call
 
-**Open:** none.
+</details>
+
+On a host, beamlet's command line puts the terminal in raw mode from the moment a process of the
+VM first reads the console, so that every byte typed reaches the VM as it is (Ctrl+C included),
+and restores it on every exit: a result, an exception, a halt, a signal, a panic included
+([`userland/otp/cli/src/tty.rs`](../../userland/otp/cli/src/tty.rs)). Output processing stays
+on, so a line written past the shell's encoder still lands where a line does on a host; the
+encoder ends its lines with CR LF itself, as it must on Redoubt. `console_size` is the
+terminal's size, read afresh at each call. A change of size is not delivered; the shell reads the
+size at each prompt ([the shell](shell.md#screens-keys-and-the-consoles-size)).
+Console input goes to one Erlang process, the shell's driver, which takes it with
+`beamlet:console_subscribe/0`; a second subscription is refused, so no code run at the prompt
+can take the keyboard, or the interrupt key with it, from the driver.
 
 ### The console, the clock and randomness
 
@@ -662,7 +675,14 @@ signed manifest pins ([R75](../kernel/boot.md#r75-verified-userland)); only what
 before it can read the disk is embedded in it: its own console server, code and kernel modules
 (`beamlet_io`, `beamlet_code`, `beamlet_kernel`, `beamlet_port`, `beamlet_tcp`) and its
 stand-ins for `application`, `gen_tcp` and `ram_file`
-([`userland/otp/vm/src/vm.rs`](../../userland/otp/vm/src/vm.rs), `EMBEDDED`).
+([`userland/otp/vm/src/vm.rs`](../../userland/otp/vm/src/vm.rs), `EMBEDDED`). The `application`
+stand-in runs no kernel application; when the first application with a callback module starts,
+it starts the kernel's servers that other code calls, as BEAM starts them at boot:
+`erl_signal_server`, `global_name_server`, and `kernel_safe_sup`, which OTP's `group` waits for
+before it serves a line. With no C library to ask a character's width, `prim_tty:wcwidth/1`
+answers `{error, enotsup}` and OTP measures with its own table, which agrees with BEAM's libc on
+ASCII and wide East Asian characters and parts from it on a combining mark: libc gives it no
+column, the table one.
 
 ### Screen natives
 
@@ -697,7 +717,8 @@ over cells; widgets, layout and focus are Elixir ([the shell](shell.md#full-scre
 - **One width table**, generated from one pinned Unicode version and held to vectors: `width/1`
   is `put`'s own, and the terminal library measures with it, so what is measured is what is drawn.
 - **The diff speaks the cell protocol**, so a screen drawn in the session and a native program's
-  frames reach the encoder by one decoder ([the shell](shell.md#the-terminal-library)).
+  frames reach the encoder by one decoder
+  ([the shell](shell.md#screens-keys-and-the-consoles-size)).
 
 **Open:** none.
 

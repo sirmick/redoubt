@@ -9,10 +9,10 @@
 #   ./shell --fake               the shell on Redoubt's platform, on the fake kernel: the
 #                                console through the client library, no files or programs yet
 #
-# The shell is Redoubt.Shell, a loop of Redoubt's own, not IEx (docs/userland/shell.md). Lines
-# are read whole, so there is no line editing, history, completion or Ctrl+C until the shell's
-# driver exists; `exit` or Ctrl+D ends it. --root wins over the default because beamlet takes
-# the last one.
+# The shell is Redoubt.Shell, a loop of Redoubt's own, not IEx (docs/userland/shell.md). It
+# edits lines with OTP's edlin under its own driver: Emacs keys, history and Ctrl+R in the
+# session, Ctrl+C ending the line; `exit` or Ctrl+D ends it. --root wins over the default
+# because beamlet takes the last one.
 #
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"

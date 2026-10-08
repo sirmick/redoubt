@@ -12,24 +12,30 @@ defmodule Redoubt.Shell do
   `exit` or the end of the input ends the shell. Nothing is read or run at start but the shell
   itself.
 
-  Lines are read whole from the group leader with `IO.gets/1`. Line editing, history and the
-  interrupt key come with the shell's own driver under OTP's `group` (docs/userland/shell.md),
-  and until then the one path to the terminal that `Redoubt.Term.Text` does not guard is code
-  typed at the prompt that writes to it itself, as `IO.puts/1` does.
+  Lines are read from the group leader with `IO.gets/1`. On a console that is OTP's `group`,
+  under the shell's own driver (`Redoubt.Shell.Driver`): the line is edited by `edlin`, with
+  history, and drawn by `Redoubt.Term`, so everything the console shows, what a line writes to
+  it itself with `IO.puts/1` included, passes the same guard. Ctrl+C ends the line being read,
+  not the shell.
   """
 
   alias Redoubt.Commandlet.Registry
-  alias Redoubt.Shell.{Evaluator, Printer}
+  alias Redoubt.Shell.{Driver, Evaluator, Printer}
   alias Redoubt.Term.Text
 
   @doc """
   beamlet's entry point (`beamlet ... Elixir.Redoubt.Shell`): starts the shell's application,
-  and so `:elixir`, whose tables compiling a module at the prompt needs, then runs the shell.
+  and so `:elixir`, whose tables compiling a module at the prompt needs, then runs the driver
+  with the shell on it until the shell ends.
   """
   def start do
     {:ok, _started} = Application.ensure_all_started(:redoubt_shell)
-    run()
+    Driver.run()
   end
+
+  @doc "Starts the shell in a process of its own, as `group` asks of its shell, and returns its pid."
+  @spec start_link(keyword()) :: pid()
+  def start_link(opts \\ []), do: spawn_link(fn -> run(opts) end)
 
   @doc """
   Runs the shell on the group leader until `exit` or the end of the input, and returns `:ok`.
@@ -73,6 +79,15 @@ defmodule Redoubt.Shell do
     case IO.gets(prompt(state, sofar)) do
       :eof ->
         :done
+
+      # The driver's end of input, Ctrl+D on an empty line or the console's end, which group
+      # can carry only as an error to the read (`Redoubt.Shell.Driver`).
+      {:error, :eof} ->
+        :done
+
+      # Ctrl+C: the line is dropped, whatever of it was read, and the next is read.
+      {:error, :interrupted} ->
+        :blank
 
       {:error, reason} ->
         Printer.text("** the console could not be read (#{inspect(reason)}), so the shell ends")

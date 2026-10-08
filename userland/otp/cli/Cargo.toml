@@ -11,6 +11,14 @@ beamlet-crypto = { path = "../crypto" }
 beamlet-re = { path = "../re" }
 cap-std = "3"
 fs-set-times = "0.20"
+# The terminal: raw mode and its restoration (`tty.rs`); `libc` for `sigaction` alone, which
+# rustix has no safe wrapper for.
+libc = "0.2"
+rustix = { version = "1", features = ["stdio", "termios"] }
+
+[dev-dependencies]
+# The tests run the binary on a pseudo-terminal and signal it.
+rustix = { version = "1", features = ["process", "pty", "stdio", "termios"] }
 
 [features]
 default = ["threads"]

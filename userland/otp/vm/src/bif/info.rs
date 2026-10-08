@@ -895,10 +895,32 @@ pub fn referenced_byte_size(c: &mut Ctx, a: &[Term]) -> R {
 
 /// `beamlet:console_subscribe()`: make the caller the receiver of console input, as
 /// `{beamlet_console, Bytes}` messages and finally `{beamlet_console, eof}`. For the `user` I/O
-/// server; there is one reader per VM, and the last caller wins.
+/// server, or the shell's driver. There is one reader per VM: while it lives, another caller is
+/// refused with `{error, busy}`, so no code run at the prompt can take the keyboard from the
+/// driver (docs/userland/beamlet.md, "The console on a host"); its exit frees the console.
 pub fn console_subscribe(c: &mut Ctx, _a: &[Term]) -> R {
-    c.sys().set_console_reader(Some(c.p.pid));
-    Ok(c.ok())
+    let reader = c.sys().console_reader;
+    match reader {
+        Some(reader) if reader != c.p.pid => {
+            let busy = c.atom("busy");
+            Ok(c.error_tuple(busy))
+        }
+        _ => {
+            c.sys().set_console_reader(Some(c.p.pid));
+            Ok(c.ok())
+        }
+    }
+}
+
+/// `beamlet:console_size()`: the console's size as `{Cols, Rows}`, asked of the platform afresh
+/// at each call, or `unknown`, when layout assumes 80 columns (docs/userland/shell.md, "The
+/// terminal library").
+pub fn console_size(c: &mut Ctx, _a: &[Term]) -> R {
+    let size = c.platform().console_size();
+    Ok(match size {
+        Some((cols, rows)) => c.tuple(&[Term::Int(cols as i64), Term::Int(rows as i64)]),
+        None => c.atom("unknown"),
+    })
 }
 
 // ---- erlang:memory ----

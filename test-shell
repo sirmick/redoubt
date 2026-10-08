@@ -56,14 +56,16 @@ on_beamlet() {
 }
 
 # Starts the shell as ./shell does, defines a module at its prompt, which needs everything the
-# shell must start for itself, and lays out a table.
+# shell must start for itself, and lays out a table. The console is a pipe, so the driver
+# echoes each line as it is entered, through the encoder, and prints each value on a line of
+# its own; the carriage returns the encoder ends its lines with are dropped before the checks.
 entry_point() {
     local out
     out="$(printf 'defmodule Smoke do\n  def ok, do: :smoke_ok\nend\nSmoke.ok()\ntable([["smoke", 1]])\n"a\xffb"\n1 + 1\n' |
-        "$beamlet" --root "$sandbox" "${path[@]}" Elixir.Redoubt.Shell 2>&1)"
-    # A byte that is not UTF-8, straight from the console, is a wrong line, not the shell's end.
-    grep -q '(2)> :smoke_ok' <<<"$out" && grep -q '(3)> smoke 1' <<<"$out" &&
-        grep -q 'not UTF-8: "a<FF>b"' <<<"$out" && grep -q '(5)> 2' <<<"$out" || { printf '%s\n' "$out"; return 1; }
+        "$beamlet" --root "$sandbox" "${path[@]}" Elixir.Redoubt.Shell 2>&1 | tr -d '\r')"
+    # A byte that is not UTF-8, straight from the console, is read as the Latin-1 character it is.
+    grep -qx ':smoke_ok' <<<"$out" && grep -qx 'smoke 1' <<<"$out" &&
+        grep -qx '"aÿb"' <<<"$out" && grep -qx '2' <<<"$out" || { printf '%s\n' "$out"; return 1; }
 }
 
 # beamlet's Redoubt platform (userland/otp/redoubt): built for the machine, without the fake
@@ -73,8 +75,8 @@ on_fake_kernel() {
     local out
     (cd "$otp" && cargo build -q -p beamlet-redoubt --target riscv64imac-unknown-none-elf) || return 1
     (cd "$otp" && cargo test -q -p beamlet-redoubt --features fake) || return 1
-    out="$(printf 'x = Enum.map([1, 2], &(&1 * 10))\nEnum.sum(x)\n' | "$fake" "${path[@]}" Elixir.Redoubt.Shell 2>&1)"
-    grep -q '(1)> \[10, 20\]' <<<"$out" && grep -q '(2)> 30' <<<"$out" || { printf '%s\n' "$out"; return 1; }
+    out="$(printf 'x = Enum.map([1, 2], &(&1 * 10))\nEnum.sum(x)\n' | "$fake" "${path[@]}" Elixir.Redoubt.Shell 2>&1 | tr -d '\r')"
+    grep -qx '\[10, 20\]' <<<"$out" && grep -qx '30' <<<"$out" || { printf '%s\n' "$out"; return 1; }
 }
 
 set +e

@@ -104,8 +104,13 @@ start_loaded(App) ->
 
 %% The kernel application's servers that other applications call, started the first time an
 %% application with a callback module starts (BEAM starts them at boot): erl_signal_server,
-%% the event manager for OS signals (there are none here, but Elixir registers handlers), and
-%% global_name_server, for {global, Name} registration within this one node.
+%% the event manager for OS signals (there are none here, but Elixir registers handlers),
+%% global_name_server, for {global, Name} registration within this one node, and
+%% kernel_safe_sup, kernel's supervisor for what may fail without ending the node, which OTP's
+%% group waits for before it serves a line. Under the kernel's default environment
+%% kernel_safe_sup supervises nothing (its boot server, disk_log and pg start only when the
+%% environment asks for them); it is started as kernel starts it, then unlinked, so it outlives
+%% the process that started it.
 kernel_services() ->
     case whereis(erl_signal_server) of
         undefined -> {ok, _} = gen_event:start({local, erl_signal_server}), ok;
@@ -113,6 +118,13 @@ kernel_services() ->
     end,
     case whereis(global_name_server) of
         undefined -> {ok, _} = global:start(), ok;
+        _ -> ok
+    end,
+    case whereis(kernel_safe_sup) of
+        undefined ->
+            {ok, Safe} = supervisor:start_link({local, kernel_safe_sup}, kernel, safe),
+            unlink(Safe),
+            ok;
         _ -> ok
     end.
 

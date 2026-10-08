@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 348
+revision = 355
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1318,8 +1318,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "shell-host"
   body = "M2 host step 1 (docs/plan/m2-usable-shell.md#the-shell): docs/userland/beamlet.md#the-console-on-a-host; docs/userland/shell.md#the-terminal-library, #line-editing-and-history, #hostile-text-never-drives-the-terminal; shell plan phases G1 (the CLI puts the tty in raw mode and restores it on every exit) and G2 (group's requests drawn through the encoder; Redoubt.Term). Host only; ./test-shell on beamlet and the BEAM; the pages' status lines move from planned to built, host-tested. Size M-L."
-  state = "active"
-  revision = 325
+  state = "done"
+  revision = 355
   overrides = ["2026-10-07: started by Orchestrator before M1 (reported): Owner (2026-10-07): M2 is the near-term goal; its host shell track starts now, ahead of M1. SHELL2 is host-only (userland/shell, beamlet's host CLI), touches no kernel, server or machine path, and is tested by the shell's own suite."]
 
 [[node]]
@@ -1389,3 +1389,31 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "Found by the BEAM4 cases branch's gate on STEWARD2's final tip (rv32): beamlet-files failed once with badmatch {error,eexist} at prim_file:make_dir(\"/home/alice/d\") after every earlier line passed, then passed 2/2 alone. Ruled out by BEAM4's red (from the code): BEAM11's busy retry cannot duplicate a mkdir: a `busy` always means not served (ninep_mux.rs:585, produced only by take() before the message is decoded; littlefsd, walfsd and consoled return no BUSY from a handler). Likely cause: init restarts an exited program (servers/init/src/restarts.rs, up to MOST times) on the same walfsd volume, and beamlet-files forbids only servers' exits, so a first beamlet run that ended early replays make_dir on a volume already holding d. Check the failing log (BEAM4 cases implementer's run logs) for a second beamlet start or an earlier beamlet exit line; then (a) the case forbids a beamlet restart (its verdict then names the early exit), and (b) find why beamlet ended early, if it did. Tier B (the case) unless (b) finds a defect. Size S."
   state = "done"
   revision = 345
+
+[[node]]
+  id = "B27"
+  title = "K23 against the BEAM4 and verity cases: init refuses the boot when it cannot make the steward slot's fresh connection, so 12 case runs fail on main"
+  template = "package"
+  parent = "M1"
+  body = "Found by BEAM12's gate on main 91256b4d0. beamlet-launch fails on rv64 and rv32 at 1.0 s with 'init: refused the boot: beamlet-session: could not make a fresh connection for' (servers/init/src/bin/init.rs, the is_steward branch). beamlet-natives, beamlet-serve and beamlet-natives-attack fail the same way on rv64. It is deterministic. K23 (4a240738f) makes init hand the steward a fresh connection made through each handed badge. The BEAM4 cases (tests/data/beamlet/*.json) put the beamlet-session tester in the steward's place, with handed endpoints that answer no new_connection, or not yet. Fix it in whichever of init's rule and the case manifests is wrong, and say why in the commit. Gates: the four cases on both widths, steward-restart and init-restart on both widths, init host tests, docs and size-budget. Size S."
+  state = "reported"
+  revision = 353
+
+[[node]]
+  id = "B28"
+  title = "difftest erlang/files2 fails about one run in three on main: 2.1.1-2.1.3 read the host's clock and file times (want 2020 got 2026)"
+  template = "package"
+  parent = "M2"
+  body = "Found during SHELL2's review. On main 91256b4d0, erlang/files2 failed 2 in 5 runs; on SHELL2's head it failed 1 in 5. Every failure is in 2.1.1-2.1.3: 2.1.1 wants 2020 and gets 2026, 2.1.2 wants 1 and gets 10, 2.1.3 wants 2 and gets 8. One earlier run failed 2.2.3 (want 38, got 5). Find the race in the test or in beamlet's file times, and fix that one. erlang/ports always fails because /bin/echo is a uutils symlink outside the sandbox's /bin; handle it in the same package. Size S."
+  state = "todo"
+  revision = 354
+
+[[node]]
+  id = "SHELL8"
+  title = "The logger's crash reports go through the shell's escaping: no unguarded text from a process spawned at the prompt"
+  template = "package"
+  parent = "shell-host"
+  needs = ["SHELL2"]
+  body = "SHELL2 residual, named on docs/userland/shell.md. A crash report from a process spawned at the prompt is written via `user`, not through Redoubt.Term's Text.visible. Add a logger handler, or a formatter, so every byte drawn goes through the escaping. Add a test with a hostile crash reason. Size S."
+  state = "todo"
+  revision = 354

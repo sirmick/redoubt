@@ -18,9 +18,13 @@
 //! `System.cmd/3`). They are not sandboxed: see `programs.rs`. `--env NAME[=VALUE]` sets a
 //! variable in the VM's environment, which starts with only `HOME` (the host's value when no
 //! value is given, e.g. `--env PATH` for programs to be found).
+//!
+//! On a terminal, the tty is in raw mode for as long as a process of the VM reads the console,
+//! and its settings are restored on every way out (`tty.rs`).
 
 mod files;
 mod programs;
+mod tty;
 
 use std::collections::VecDeque;
 use std::io::Write;
@@ -50,8 +54,8 @@ impl Posix {
     }
 }
 
-/// The POSIX platform: a monotonic clock, stdout as the console, `getrandom` via `/dev/urandom`,
-/// and `.beam` files from a search path.
+/// The POSIX platform: a monotonic clock, stdout as the console (a tty in raw mode while the VM
+/// reads it), `getrandom` via `/dev/urandom`, and `.beam` files from a search path.
 struct Posix {
     start: Instant,
     code_path: Vec<PathBuf>,
@@ -175,6 +179,15 @@ impl Platform for Posix {
         }
     }
 
+    fn console_size(&mut self) -> Option<(u16, u16)> { tty::size() }
+
+    /// The first reader puts the terminal in raw mode; it stays so until beamlet ends.
+    fn console_listening(&mut self, listening: bool) {
+        if listening {
+            tty::enter();
+        }
+    }
+
     fn random(&mut self, buf: &mut [u8]) -> Result<(), PlatformError> {
         use std::io::Read;
         std::fs::File::open("/dev/urandom")
@@ -258,6 +271,8 @@ fn check(files: &[String]) -> ExitCode {
 }
 
 fn main() -> ExitCode {
+    // Dropped as main returns, whichever way: the terminal gets its settings back.
+    let _terminal = tty::Guard;
     let all: Vec<String> = std::env::args().skip(1).collect();
     if all.first().map(String::as_str) == Some("--check") {
         return check(&all[1..]);
