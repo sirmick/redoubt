@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 473
+revision = 476
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1620,9 +1620,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M2"
   needs = ["CTX2"]
-  body = "Part c of named SSH contexts (brief .wash/local/CTX1-brief.md): the cap of live contexts per (principal, label set), never evicting; idle expiry of detached contexts, configurable per principal with a default; the shell's contexts()/detach()/end_context within the label set; the generation (or end-with-steward) rule on steward restart, chosen at its design checkpoint with costs. Also from CTX1's red: measure rule 3's timing (unknown principal or label set vs wrong key on a known principal) at the SSH client, and equalize it if it is distinguishable above jitter."
+  body = "Part c of named SSH contexts (brief .wash/local/CTX1-brief.md): the cap of live contexts per (principal, label set), never evicting; idle expiry of detached contexts, configurable per principal with a default; the shell's contexts()/detach()/end_context within the label set; the generation (or end-with-steward) rule on steward restart, chosen at its design checkpoint with costs. Also from CTX1's red: measure rule 3's timing (an unknown principal, label set or non-name is refused before any machine runs; a wrong key on a known principal runs the blame and session machines before login_key refuses it, counting nothing) at the SSH client, and equalize it if it is distinguishable above jitter."
   state = "todo"
-  revision = 466
+  revision = 474
 
 [[node]]
   id = "B39"
@@ -1669,3 +1669,12 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "From the steward red's handoff (.wash/local/handoffs/steward2-red.md, 'Open / renewals owed'). (1) K26: the case claims slots came back with 4 slots and 3 logins; make it judge that (a fourth login, or expect `sshd: connection N on slot [01]` for the third). (2) B34: a fun decoded by binary_to_term whose module is later loaded with its checksum compares unequal to that code's funs (equal on the BEAM): state it in beamlet.md's known differences, or fix it. (3) B35: the four BEAM4 manifests (tests/data/beamlet/{launch,natives,serve,natives-attack}.json) give bootfsd a cap of 2,048 against about 1,050 pages peak on rv32, under B32's twice-the-peak rule (2,176): raise the cap in each, or show the peak. Check first whether any is already fixed on main. Size S."
   state = "done"
   revision = 471
+
+[[node]]
+  id = "SHELL6F"
+  title = "The editor's files on main: read capped, save by temp and rename, listing with shown names, pane operations only on listed names"
+  template = "package"
+  parent = "shell-host"
+  body = "Split from SHELL6 (strict track: acts with the session's authority). Redoubt.Editor.Files: read capped at max_bytes, save via an exclusive temp in the file's directory and rename with a changed-on-disk check, list with names shown through Text.visible and refused names never joined, copy/move/mkdir/remove only on listed names. Tier A, the steward red."
+  state = "done"
+  revision = 476
