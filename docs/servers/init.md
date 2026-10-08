@@ -513,12 +513,17 @@ launcher disconnects it when the child exits ([releasing grants](wire.md#a-launc
 A copied connection would share the launcher's fids and admission with the child, and the
 launcher could not free the child's state without losing its own.
 
-The steward, which launches sessions, is handed a fresh connection at each server its manifest
-entry names in place of the root badge: `init` mints the badge, makes the connection through it
-with `new_connection` at the badge's own root, hands the connection and closes the badge. At the
+The steward, which launches sessions, is handed a fresh connection in place of the root badge at
+each server its manifest entry names: `init` mints the badge, makes the connection through it with
+`new_connection` at the badge's own root, hands the connection and closes the badge. At the
 steward's exit `init` mints the badge again for one call, disconnects the connection, and closes
 it, so every connection the steward minted under it for its sessions goes too
-([steward](steward.md#failure-and-restart)). `init` holds none of these between the calls.
+([steward](steward.md#failure-and-restart)). `init` holds none of these between the calls. A server
+that makes no connection, because it mints none (`keyd`), refuses (a file server whose volume is
+corrupt) or does not answer within a second, is handed the badge instead, as every server is, and
+`init` says so (`init: <endpoint> made the steward no fresh connection: the badge is handed`): the
+steward starts and meets that server's own answers. Only then can a dead steward's session
+connections outlive it at that server, if it serves sessions later.
 
 ### Restarts and reboots
 

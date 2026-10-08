@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 355
+revision = 357
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1329,8 +1329,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "shell-host"
   needs = ["SHELL2"]
   body = "M2 host step 2: docs/userland/beamlet.md#screen-natives; docs/userland/shell.md#full-screen-programs; shell plan section 4 (natives are primitives over cells, never widgets; one Erlang process per screen). Size M."
-  state = "todo"
-  revision = 323
+  state = "active"
+  revision = 356
+  overrides = ["2026-10-08: started by Orchestrator before M1 (reported): The owner started M2's host shell track early (2026-10-07); M1's remaining work does not touch the host shell."]
 
 [[node]]
   id = "SHELL4"
@@ -1396,8 +1397,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   body = "Found by BEAM12's gate on main 91256b4d0. beamlet-launch fails on rv64 and rv32 at 1.0 s with 'init: refused the boot: beamlet-session: could not make a fresh connection for' (servers/init/src/bin/init.rs, the is_steward branch). beamlet-natives, beamlet-serve and beamlet-natives-attack fail the same way on rv64. It is deterministic. K23 (4a240738f) makes init hand the steward a fresh connection made through each handed badge. The BEAM4 cases (tests/data/beamlet/*.json) put the beamlet-session tester in the steward's place, with handed endpoints that answer no new_connection, or not yet. Fix it in whichever of init's rule and the case manifests is wrong, and say why in the commit. Gates: the four cases on both widths, steward-restart and init-restart on both widths, init host tests, docs and size-budget. Size S."
-  state = "reported"
-  revision = 353
+  state = "done"
+  revision = 357
 
 [[node]]
   id = "B28"

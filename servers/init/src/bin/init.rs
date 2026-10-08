@@ -477,13 +477,26 @@ mod machine {
                 // The steward is handed a fresh connection made through the badge, not the
                 // badge: every connection it mints for a session hangs under it, and `init`
                 // disconnecting it at the steward's exit frees them all at that server
-                // ([`Boot::release_fresh`]). The badge itself goes once it is made.
+                // ([`Boot::release_fresh`]). A server that makes none (one that mints no
+                // connections, as `keyd`, one refusing, as a file server whose volume is
+                // corrupt, or one that does not answer within a second) is handed the badge as
+                // every server is, and `init` says so: the steward starts, and meets that
+                // server's own answers, as it would have.
                 let server = Nine::within(Endpoint::from_handle(minted.handle()), RELEASE_TIMEOUT);
-                let made = server.new_connection(&mut self.lend, "", 0);
-                let _ = redoubt_rt::handle::close(minted.handle());
-                let Ok((connection, id)) = made else { self.failed(&s.name, "make a fresh connection for") };
-                fresh.push((item.endpoint.clone(), badge, id));
-                handed.push((item.endpoint.as_str(), connection.handle()));
+                match server.new_connection(&mut self.lend, "", 0) {
+                    Ok((connection, id)) => {
+                        let _ = redoubt_rt::handle::close(minted.handle());
+                        fresh.push((item.endpoint.clone(), badge, id));
+                        handed.push((item.endpoint.as_str(), connection.handle()));
+                    }
+                    Err(_) => {
+                        self.say(format_args!(
+                            "init: {} made the steward no fresh connection: the badge is handed",
+                            item.endpoint
+                        ));
+                        handed.push((item.endpoint.as_str(), minted.handle()));
+                    }
+                }
             }
             // A volume's range ([`range`]): at its disk's `blkd`, or at its verifier's endpoint
             // for a verified volume's server, minted again at every start, stamped as the handed
