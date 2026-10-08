@@ -50,6 +50,7 @@ mod machine {
     use redoubt_rt::wire::proto::{consol, keyd, net_ctl, steward};
     use redoubt_sshd::console::{Chan, Cons, Console, File, LIMITS, Shared, qid};
     use redoubt_sshd::listener::{Again, again, status};
+    use redoubt_sshd::slot::{DATA, EOF, Read, Reader};
     use redoubt_sshd::{
         Connection, ExchangeTranscript, Login, Platform, Progress, PublicKey, Refusal, Refused, Signature,
     };
@@ -85,8 +86,6 @@ mod machine {
     const READER: u64 = 2;
     /// Word 0 of a call or send on a slot's endpoint that is no 9P (whose word 0 is 0).
     const ACCEPT: u64 = 1;
-    const DATA: u64 = 2;
-    const EOF: u64 = 3;
 
     /// Fids at `ipd`, which every thread's calls share through the one scope badge: the root,
     /// the main thread's two, and each slot's three from [`slot_fids`].
@@ -382,17 +381,15 @@ mod machine {
             && open_at(&ipd, &mut lend, out, &format!("tcp/{sock}/data"));
         let started = opened && wake.send(&[ACCEPT, 0, 0, 0], &[], None, FOREVER).is_ok();
         if started {
-            drive(handed, endpoint, &ipd, &mut lend, out);
+            let mut reader = drive(handed, endpoint, &ipd, &mut lend, out);
             close_socket(&ipd, &mut lend, ctl);
-            // The reader ends with the socket; its last call says so.
-            loop {
+            // The reader ends with the socket; its last call says so, unless the driver took it
+            // already (a client that hung up first): the slot is free once it is taken.
+            while reader.waits() {
                 match endpoint.receive(FOREVER, MAX_LEND_PAGES) {
                     Ok(Event::Call(r)) if r.caller.badge == READER => {
-                        let eof = r.words[0] == EOF;
+                        reader.took(r.words[0]);
                         let _ = finish(r, &done());
-                        if eof {
-                            break;
-                        }
                     }
                     Ok(Event::Call(r)) => {
                         let _ = refuse(r, NineError::NO_CONNECTION);
@@ -413,8 +410,10 @@ mod machine {
         }
     }
 
-    /// Runs the core over the socket until the connection is over.
-    fn drive(handed: Handed, endpoint: &Endpoint, ipd: &Nine, ipd_lend: &mut Lend, out: u32) {
+    /// Runs the core over the socket until the connection is over. Returns the reader as the
+    /// driver heard it: whether its last call was taken already.
+    fn drive(handed: Handed, endpoint: &Endpoint, ipd: &Nine, ipd_lend: &mut Lend, out: u32) -> Reader {
+        let mut reader = Reader::default();
         let chan: Shared = Rc::new(RefCell::new(Chan::default()));
         let made = redoubt_rt::handle::random_u64().ok().and_then(|random| {
             let nine = NineServer::new(Cons { chan: chan.clone(), labels: Vec::new() }, LIMITS, random);
@@ -422,7 +421,7 @@ mod machine {
         });
         let Some((nine, lend)) = made else {
             say(handed.console, "sshd: a connection's console could not be made\n");
-            return;
+            return reader;
         };
         let mut slot = Slot { handed, endpoint, lend, nine, parked: Parked::new(FOREVER), console: None };
         slot.nine.requests_wait(FOREVER);
@@ -492,8 +491,8 @@ mod machine {
                 break;
             }
             match endpoint.receive(FOREVER, MAX_LEND_PAGES) {
-                Ok(Event::Call(mut r)) if r.caller.badge == READER => match r.words[0] {
-                    DATA => {
+                Ok(Event::Call(mut r)) if r.caller.badge == READER => match reader.took(r.words[0]) {
+                    Read::Data => {
                         let n = (r.words[1] as usize).min(READ);
                         let bytes = r.lend();
                         let n = n.min(bytes.len());
@@ -502,7 +501,7 @@ mod machine {
                         }
                         held = Some(r);
                     }
-                    _ => {
+                    Read::End => {
                         let _ = finish(r, &done());
                         slot.say("sshd: a connection's input ended\n");
                         conn.close_input();
@@ -535,6 +534,7 @@ mod machine {
         if let Some(r) = held.take() {
             let _ = finish(r, &done());
         }
+        reader
     }
 
     /// A slot's driver: waits for a connection on `endpoint`, serves it, and waits again.

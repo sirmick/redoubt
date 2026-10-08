@@ -977,8 +977,7 @@ restarts it thirteen times, each time with that session and its connections live
   steward's death, every session's VM ends with its budget, but `sshd` ends a channel only on the
   steward's `ended`, which a dead steward never sends; the channel stays open, its input going
   nowhere, until its client closes it. Until the restarted steward tells `sshd` that every earlier
-  session is over, the restart logs every session out but leaves their SSH connections open,
-  and a login the dying steward never answered keeps its `sshd` slot
+  session is over, the restart logs every session out but leaves their SSH connections open
   ([sshd](sshd.md#residual-risks)).
 - **An approved text can carry a hidden message.** Text an agent wrote and a person approved for
   declassification can still hide one; no rule on the item's form prevents that.

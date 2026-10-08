@@ -37,6 +37,7 @@ extern crate alloc;
 
 pub mod console;
 pub mod listener;
+pub mod slot;
 
 use sunset::ed25519_compact::PublicKey as Ed25519Public;
 pub use sunset::event::ExchangeTranscript;

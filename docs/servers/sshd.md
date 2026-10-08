@@ -130,7 +130,7 @@ Miri both crates take their portable Rust paths. Those two assembly blocks are r
 
 ### Sessions over SSH
 
-<details><summary>Status: built · partly tested: a channel's window size reaches the session only once `consol`'s `size` and `resize` are served (consoled.md, "The `consol` protocol") · tested (11)</summary>
+<details><summary>Status: built · partly tested: a channel's window size reaches the session only once `consol`'s `size` and `resize` are served (consoled.md, "The `consol` protocol") · tested (13)</summary>
 
 - bench:steward-ssh-two-principals
 - bench:steward-vault-session
@@ -143,6 +143,8 @@ Miri both crates take their portable Rust paths. Those two assembly blocks are r
 - host:redoubt-sshd::a_data_call_refused_too_many_is_asked_again_a_bounded_number_of_times
 - host:redoubt-sshd::an_ended_session_reads_the_end_and_cannot_write
 - host:redoubt-sshd::the_console_is_one_file_carrying_the_channel_s_labels
+- host:redoubt-sshd::a_slot_returns_when_the_client_hangs_up_first
+- host:redoubt-sshd::a_slot_returns_when_the_server_ends_the_connection_first
 
 </details>
 
@@ -193,7 +195,8 @@ Miri both crates take their portable Rust paths. Those two assembly blocks are r
   driver that runs the core, serves the channel's `/dev/cons` and makes the connection's calls
   to `keyd`, the steward and `ipd`, and a reader that waits in `ipd` for the client's bytes and
   hands each read to the driver. A call to `keyd` or the steward holds up only its own
-  connection; a fifth connection is closed when it arrives.
+  connection; a fifth connection is closed when it arrives. A slot is free again once the
+  reader's last call for its connection is taken, whichever side ended the connection first.
 - **Ending.** A session's channel closes when the steward ends the session or its VM dies, which
   the steward tells `sshd` with `ended` on the channel's connection; a closed channel ends the
   session.
@@ -333,8 +336,7 @@ Status: planned · M1 (sessions over SSH, kept apart)
 - **A channel outlives a session the steward did not end.** `sshd` closes a channel only on the
   steward's `ended`. When the steward dies and `init` empties `users`, the sessions end with their
   budgets and nobody says so: each channel stays open until its client closes it
-  ([steward](steward.md#residual-risks)). A connection whose login the dying steward never
-  answered keeps its slot as well, so four such logins leave every slot busy.
+  ([steward](steward.md#residual-risks)).
 - **`approve@` shares `sshd` with the most hostile input.** A `sunset` bug reached from any channel,
   before or after login, controls every channel and the approval screen, and a network flood delays
   approvals. A separate `sshd` instance for `approve@`, or the physical console, is planned for
