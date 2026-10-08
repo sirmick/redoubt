@@ -10,10 +10,11 @@
 //! fake kernel's device is a page of plain memory: nothing clears "data ready" when a byte is
 //! read, or tells a writer when the transmitter has taken one, so the real driver cannot be fed
 //! a person's typing through it. This server keeps `consoled`'s protocol exactly (one file,
-//! `/dev/cons`, served over 9P, a read with nothing to read parked until input comes, and its
-//! admission) with a byte stream for its device: the host's terminal, or a pipe in a test. What
-//! runs over it, the platform and the client library, is what runs on Redoubt; `consoled`'s own
-//! device handling is its host tests' and the machine's.
+//! `/dev/cons`, served over 9P, a read with nothing to read parked until input comes, `consol`'s
+//! `size` and a `resize` parked until the test changes the size, and its admission) with a byte
+//! stream for its device: the host's terminal, or a pipe in a test. What runs over it, the
+//! platform and the client library, is what runs on Redoubt; `consoled`'s own device handling is
+//! its host tests' and the machine's.
 
 use std::collections::VecDeque;
 use std::io::{Read as _, Write};
@@ -27,12 +28,12 @@ use redoubt_fake_kernel::fake;
 use redoubt_rt::abi::{Error, FOREVER, Handle};
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::ipc::{Caller, Event, Request, Words};
-use redoubt_rt::server::Limits;
 use redoubt_rt::server::ninep::{
     Around, FileServer, FileStat, NineError, NineServer, Qid, Read, WORDS_9P, mode, refuse, refuse_malformed,
 };
 use redoubt_rt::server::parked::{NotParked, Parked};
 use redoubt_rt::server::typed::{Answer, Protocol, TypedServer, serve_call};
+use redoubt_rt::server::{Limits, consol as consol_server};
 use redoubt_rt::startup::{Startup, StartupBuilder};
 use redoubt_rt::wire::Error as WireError;
 use redoubt_rt::wire::proto::blkd::{
@@ -53,6 +54,40 @@ pub struct ConsoleServer {
     /// When each write reached it (`time_now`, µs), answered or refused: how a test sees a
     /// client's retries spaced.
     pub writes: Arc<Mutex<Vec<u64>>>,
+    window: Arc<Mutex<Window>>,
+}
+
+/// The console's size, 80 by 24 at first, and how many times it has changed.
+#[derive(Clone, Copy)]
+struct Window {
+    size: (u16, u16),
+    changes: u64,
+    /// The `resize` calls parked now.
+    waiting: usize,
+    /// The server's own wake-up endpoint, once it is serving.
+    wake: Option<Handle>,
+}
+
+impl ConsoleServer {
+    /// How many `resize` calls the server holds now: a change before one is parked is not one it
+    /// waits for.
+    pub fn resizes_waiting(&self) -> usize { self.window.lock().expect("the window").waiting }
+
+    /// The window changes to `cols` by `rows`, as a terminal's does: every `resize` waiting is
+    /// answered with it.
+    pub fn resize(&self, cols: u16, rows: u16) {
+        let wake = {
+            let mut w = self.window.lock().expect("the window");
+            w.size = (cols, rows);
+            w.changes += 1;
+            w.wake
+        };
+        if let Some(wake) = wake {
+            fake().as_process(self.pid, || {
+                let _ = Endpoint::from_handle(wake).send(&[0; 4], &[], None, FOREVER);
+            });
+        }
+    }
 }
 
 /// Starts the console server, with `input` as what is typed and `output` as the screen.
@@ -67,7 +102,7 @@ pub fn console_labelled(
     output: Box<dyn Write + Send>,
     labels: &[u64],
 ) -> ConsoleServer {
-    console_built(input, output, labels, 0)
+    console_built(input, output, labels, 0, CONSOLED_IN_FLIGHT)
 }
 
 /// As [`console`], answering the first `busy` writes `busy`, as a server over its share does,
@@ -77,23 +112,43 @@ pub fn console_busy(
     output: Box<dyn Write + Send>,
     busy: u32,
 ) -> ConsoleServer {
-    console_built(input, output, &[], busy)
+    console_built(input, output, &[], busy, CONSOLED_IN_FLIGHT)
 }
+
+/// As [`console`], with an SSH channel's parked calls, `sshd`'s 4 a bucket rather than
+/// `consoled`'s 2: a session's completion call and a waiting `resize` both fit one connection's
+/// share, so its VM learns of a change of size (servers/sshd.md, "Sessions over SSH").
+pub fn console_channel(input: Box<dyn std::io::Read + Send>, output: Box<dyn Write + Send>) -> ConsoleServer {
+    console_built(input, output, &[], 0, 4)
+}
+
+/// `consoled`'s parked calls a bucket: a lone connection's share is one, which a multiplexed
+/// session's completion call takes.
+const CONSOLED_IN_FLIGHT: u32 = 2;
 
 fn console_built(
     input: Box<dyn std::io::Read + Send>,
     output: Box<dyn Write + Send>,
     labels: &[u64],
     busy: u32,
+    in_flight: u32,
 ) -> ConsoleServer {
     let f = fake();
     let pid = f.process(0, labels);
     let endpoint = f.endpoint(pid);
-    let labels = labels.to_vec();
     let writes = Arc::new(Mutex::new(Vec::new()));
-    let stamps = Arc::clone(&writes);
-    let thread = f.run(pid, move || serve(endpoint, pid, input, output, labels, busy, stamps));
-    ConsoleServer { pid, endpoint, thread, writes }
+    let window = Arc::new(Mutex::new(Window { size: (80, 24), changes: 0, waiting: 0, wake: None }));
+    let stream = Stream {
+        input: Arc::new(Mutex::new(Input::default())),
+        output,
+        labels: labels.to_vec(),
+        busy,
+        writes: Arc::clone(&writes),
+        window: Arc::clone(&window),
+        in_flight,
+    };
+    let thread = f.run(pid, move || serve(endpoint, pid, input, stream));
+    ConsoleServer { pid, endpoint, thread, writes, window }
 }
 
 /// A new session process, with a connection to `console` bound at `/dev/cons`, and its startup
@@ -173,6 +228,9 @@ struct Stream {
     labels: Vec<u64>,
     busy: u32,
     writes: Arc<Mutex<Vec<u64>>>,
+    window: Arc<Mutex<Window>>,
+    /// Its parked calls a bucket.
+    in_flight: u32,
 }
 
 impl Stream {
@@ -388,25 +446,19 @@ impl FileServer for Sink {
 /// Serves `/dev/cons` on `endpoint` until the endpoint is destroyed, as `consoled` does: calls
 /// and multiplexed sessions on the skeleton's loop, with an input thread in place of its interrupt
 /// thread.
-fn serve(
-    endpoint: Handle,
-    pid: usize,
-    input: Box<dyn std::io::Read + Send>,
-    output: Box<dyn Write + Send>,
-    labels: Vec<u64>,
-    busy: u32,
-    writes: Arc<Mutex<Vec<u64>>>,
-) -> u32 {
+fn serve(endpoint: Handle, pid: usize, input: Box<dyn std::io::Read + Send>, stream: Stream) -> u32 {
     let endpoint = Endpoint::from_handle(endpoint);
     // `consoled`'s shares: a page a badge for writes, and requests to spare for a parked read.
-    let limits = Limits { buckets: 4, in_flight: 2, files: 4, state: 4, requests: 80, pages: 2 };
+    let limits =
+        Limits { buckets: 4, in_flight: stream.in_flight, files: 4, state: 4, requests: 80, pages: 2 };
     let random = redoubt_rt::handle::random_u64().unwrap_or(1);
-    let typed = Arc::new(Mutex::new(Input::default()));
-    let stream = Stream { input: Arc::clone(&typed), output, labels, busy, writes };
+    let (typed, window) = (Arc::clone(&stream.input), Arc::clone(&stream.window));
     let Ok(mut server) = NineServer::new(stream, limits, random) else { return 1 };
     // A console read waits on a person, so it has no deadline.
     server.requests_wait(FOREVER);
     let Ok(wake) = endpoint.mint(NonZeroU64::new(INPUT).expect("non-zero"), None) else { return 2 };
+    let Ok(resized) = endpoint.mint(NonZeroU64::new(INPUT).expect("non-zero"), None) else { return 2 };
+    window.lock().expect("the window").wake = Some(resized.handle());
     std::thread::spawn(move || fake().as_process(pid, move || feed(input, &typed, &wake)));
     server.run_around(&endpoint, Readers(Parked::new(FOREVER)))
 }
@@ -429,35 +481,68 @@ fn feed(mut input: Box<dyn std::io::Read + Send>, typed: &Mutex<Input>, wake: &E
     let _ = wake.send(&[0; 4], &[], None, FOREVER);
 }
 
+/// What a parked call waits for: input, or a change of size since the count it saw.
+#[derive(Clone, Copy, PartialEq)]
+enum Waiting {
+    Read,
+    Resize(u64),
+}
+
 fn serve_or_park(
     server: &mut NineServer<Stream>,
-    parked: &mut Parked<()>,
+    parked: &mut Parked<Waiting>,
     request: Request,
     now: u64,
 ) -> Result<(), Error> {
-    let held = server.serve_parking(request, |_, request| refuse_malformed(request).map(|()| None))?;
+    let window = *server.fs.window.lock().expect("the window");
+    let held = server.serve_parking(request, |_, request| {
+        if consol_server::asks(&request.words) {
+            consol_server::serve(window.size, request)
+        } else {
+            refuse_malformed(request).map(|()| None)
+        }
+    })?;
     let Some(request) = held else { return Ok(()) };
+    let waiting =
+        if consol_server::asks(&request.words) { Waiting::Resize(window.changes) } else { Waiting::Read };
     let charge = server.charge_of(&request.caller);
-    match parked.park(server.admission_mut(), request, charge, (), now) {
-        Ok(()) => Ok(()),
-        Err(NotParked(request)) => refuse(request, NineError::TOO_MANY),
+    match parked.park(server.admission_mut(), request, charge, waiting, now) {
+        Ok(()) => {
+            if waiting != Waiting::Read {
+                server.fs.window.lock().expect("the window").waiting += 1;
+            }
+            Ok(())
+        }
+        Err(NotParked(request)) if waiting == Waiting::Read => refuse(request, NineError::TOO_MANY),
+        Err(NotParked(request)) => refuse_malformed(request),
     }
 }
 
-/// The parked console reads beside the skeleton's loop, as `consoled`'s: an input thread's
-/// wake-up is a send the skeleton drops, and the turn after it answers what the input satisfies.
-struct Readers(Parked<()>);
+/// The parked console calls beside the skeleton's loop, as `consoled`'s: an input thread's
+/// wake-up is a send the skeleton drops, and the turn after it answers what the input satisfies,
+/// and every `resize` the window's change satisfies.
+struct Readers(Parked<Waiting>);
 
 impl Around<Stream> for Readers {
     fn call(&mut self, server: &mut NineServer<Stream>, request: Request, now: u64) {
         let _ = serve_or_park(server, &mut self.0, request, now);
     }
 
-    /// Answers the parked calls the input satisfies, then the multiplexed reads waiting for it.
+    /// Answers the `resize` calls the window's change satisfies and the parked reads the input
+    /// satisfies, then the multiplexed reads waiting for it.
     fn turn(&mut self, server: &mut NineServer<Stream>, now: u64) {
+        let window = *server.fs.window.lock().expect("the window");
+        let due = |w: &Waiting| matches!(w, Waiting::Resize(from) if *from != window.changes);
+        while let Some(call) = self.0.resume_first(server.admission_mut(), due) {
+            server.fs.window.lock().expect("the window").waiting -= 1;
+            if let Ok((request, _)) = call {
+                let _ = consol_server::reply_resize(request, window.size);
+            }
+        }
         while server.fs.has_input() {
-            let Some(call) = self.0.resume_first(server.admission_mut(), |_| true) else { break };
-            let Ok((request, ())) = call else { continue };
+            let read = |w: &Waiting| *w == Waiting::Read;
+            let Some(call) = self.0.resume_first(server.admission_mut(), read) else { break };
+            let Ok((request, _)) = call else { continue };
             let _ = serve_or_park(server, &mut self.0, request, now);
         }
         if server.fs.has_input() {
@@ -466,7 +551,9 @@ impl Around<Stream> for Readers {
     }
 
     fn abandoned(&mut self, server: &mut NineServer<Stream>, id: NonZeroU64) {
-        self.0.abandoned(server.admission_mut(), id, &WORDS_9P);
+        if let Some(Waiting::Resize(_)) = self.0.abandoned(server.admission_mut(), id, &WORDS_9P) {
+            server.fs.window.lock().expect("the window").waiting -= 1;
+        }
     }
 }
 

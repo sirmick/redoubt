@@ -1364,13 +1364,25 @@ impl System {
     }
 
     /// End process `p`: tell its links and monitors, then free its slot.
-    /// Pass console input, if any has arrived, to the process reading it.
+    /// Pass console input, if any has arrived, to the process reading it, after the console's new
+    /// size if it has changed: `{beamlet_console_resize, {Cols, Rows}}`.
     fn poll_console(&mut self) {
         let Some(reader) = self.console_reader else {
             return;
         };
         // The platform's lock goes before the match: an end tells the platform nobody listens.
-        let read = self.platform.lock().console_read();
+        let (read, resized) = {
+            let mut platform = self.platform.lock();
+            let read = platform.console_read();
+            (read, platform.console_resized())
+        };
+        if let Some((cols, rows)) = resized {
+            let tag = Term::Atom(self.atom("beamlet_console_resize"));
+            self.send_with(reader, |h| {
+                let size = h.tuple(&[Term::Int(i64::from(cols)), Term::Int(i64::from(rows))]);
+                h.tuple(&[tag, size])
+            });
+        }
         let input = match read {
             ConsoleInput::Nothing => return,
             ConsoleInput::Data(bytes) => Some(bytes),
