@@ -1,0 +1,285 @@
+defmodule Redoubt.Shell.DriverTest do
+  # The shell's helpers include cd, which moves the VM's working directory: run alone.
+  use ExUnit.Case, async: false
+
+  alias Redoubt.Test.Terminal
+
+  @moduletag :tmp_dir
+
+  # The whole stack on a terminal of this size: the driver, group and edlin, the shell. Keys
+  # are typed with `type/2` and the screen read with `screen/1`.
+  @cols 120
+  @rows 12
+
+  defp start(opts \\ []) do
+    test = self()
+
+    driver =
+      spawn_link(fn ->
+        Redoubt.Shell.Driver.run(
+          [
+            input: :messages,
+            output: fn bytes -> send(test, {:drawn, IO.iodata_to_binary(bytes)}) end,
+            size: fn -> {@cols, @rows} end,
+            shell: {Redoubt.Shell, :start_link, [[banner: false]]}
+          ] ++ opts
+        )
+      end)
+
+    {driver, Terminal.new(@cols, @rows)}
+  end
+
+  defp type(driver, bytes), do: send(driver, {:beamlet_console, bytes})
+
+  # The screen once the shell has stopped drawing: what it wrote so far, fed to the model. With
+  # `done`, drawing is waited for until the screen is done (10 s at most), however long the VM
+  # takes to start it: beamlet's edlin handles a long read before it draws any of it.
+  defp screen(terminal, done \\ fn _terminal -> true end) do
+    receive do
+      {:drawn, bytes} -> terminal |> Terminal.feed(bytes) |> screen(done)
+    after
+      if(done.(terminal), do: 300, else: 10_000) -> terminal
+    end
+  end
+
+  # A row's text, by its index from the top.
+  defp row(terminal, i), do: terminal |> Terminal.lines() |> Enum.at(i, "")
+
+  defp ends(driver) do
+    ref = Process.monitor(driver)
+    assert_receive {:DOWN, ^ref, :process, ^driver, :normal}, 5_000
+  end
+
+  test "a line typed and entered runs, its value is printed below it, and the next prompt follows" do
+    {driver, terminal} = start()
+    type(driver, "1 + 1\r")
+    terminal = screen(terminal)
+
+    assert row(terminal, 0) =~ ~r/ \(1\)> 1 \+ 1$/
+    assert row(terminal, 1) == "2"
+    assert row(terminal, 2) =~ ~r/ \(2\)>$/
+    # The cursor is after the prompt's space, which the rows' text trims.
+    {2, col} = Terminal.cursor(terminal)
+    assert col == String.length(row(terminal, 2)) + 1
+    type(driver, "exit\r")
+    ends(driver)
+  end
+
+  test "the line is edited in place: moving left, inserting, backspace and delete" do
+    {driver, terminal} = start()
+    # Ctrl+B is left; DEL is backspace; ESC [ 3 ~ is delete.
+    type(driver, "1 +3")
+    type(driver, "\x02 ")
+    type(driver, "\r")
+    type(driver, "99\x7F8\r")
+    type(driver, "ab\x02\x02\e[3~\r")
+    terminal = screen(terminal)
+
+    assert row(terminal, 0) =~ ~r/\(1\)> 1 \+ 3$/
+    assert row(terminal, 1) == "4"
+    assert row(terminal, 2) =~ ~r/\(2\)> 98$/
+    assert row(terminal, 3) == "98"
+    assert row(terminal, 4) =~ ~r/\(3\)> b$/
+    assert row(terminal, 5) =~ ~r/undefined variable "b"/
+    type(driver, "exit\r")
+    ends(driver)
+  end
+
+  test "history is in the session: the up arrow brings earlier lines back, Ctrl+R searches them" do
+    {driver, terminal} = start()
+    type(driver, "apple = 1\r")
+    type(driver, "banana = 2\r")
+    # Up twice is the first line again; Enter runs it. Each key is its own read: group drops
+    # what follows a history key in the same read.
+    terminal = screen(terminal)
+    type(driver, "\e[A")
+    terminal = screen(terminal)
+    type(driver, "\e[A")
+    terminal = screen(terminal)
+    type(driver, "\r")
+    terminal = screen(terminal)
+    assert row(terminal, 4) =~ ~r/\(3\)> apple = 1$/
+    assert row(terminal, 5) == "1"
+
+    # Ctrl+R, part of a line, Enter to take it, Enter to run it.
+    type(driver, "\x12ban")
+    terminal = screen(terminal)
+    assert row(terminal, 6) =~ ~r/^search: ban/
+    type(driver, "\r")
+    terminal = screen(terminal)
+    assert row(terminal, 6) =~ ~r/\(4\)> banana = 2$/
+    type(driver, "\r")
+    terminal = screen(terminal)
+    assert row(terminal, 7) == "2"
+    type(driver, "exit\r")
+    ends(driver)
+  end
+
+  test "history keeps the newest lines only, as many as the driver is told" do
+    {driver, terminal} = start(history_lines: 2)
+    type(driver, "apple = 1\r")
+    terminal = screen(terminal)
+    type(driver, "banana = 2\r")
+    terminal = screen(terminal)
+    type(driver, "cherry = 3\r")
+    terminal = screen(terminal)
+
+    # Up three times: banana is as far back as history goes, and the third is a beep.
+    terminal =
+      Enum.reduce(1..3, terminal, fn _, terminal ->
+        type(driver, "\e[A")
+        screen(terminal)
+      end)
+
+    assert row(terminal, 6) =~ ~r/\(4\)> banana = 2$/
+    assert terminal.bells == 1
+    type(driver, "\x03")
+    type(driver, "exit\r")
+    ends(driver)
+  end
+
+  test "Ctrl+C ends the line being typed, not the session, and the bindings before it stay" do
+    {driver, terminal} = start()
+    type(driver, "kept = :yes\r")
+    type(driver, "1 +")
+    terminal = screen(terminal)
+    type(driver, "\x03")
+    type(driver, "kept\r")
+    terminal = screen(terminal)
+
+    assert row(terminal, 2) =~ ~r/\(2\)> 1 \+\^C$/
+    assert row(terminal, 3) =~ ~r/\(2\)> kept$/
+    assert row(terminal, 4) == ":yes"
+    assert Process.alive?(driver)
+    type(driver, "exit\r")
+    ends(driver)
+  end
+
+  test "Ctrl+C in the middle of an unfinished expression drops all of it" do
+    {driver, terminal} = start()
+    type(driver, "[1,\r")
+    type(driver, "2,")
+    terminal = screen(terminal)
+    type(driver, "\x03")
+    type(driver, "3\r")
+    terminal = screen(terminal)
+
+    assert row(terminal, 0) =~ ~r/\(1\)> \[1,$/
+    assert row(terminal, 1) =~ ~r/^\.\.\.\(1\)> 2,\^C$/
+    assert row(terminal, 2) =~ ~r/\(1\)> 3$/
+    assert row(terminal, 3) == "3"
+    type(driver, "exit\r")
+    ends(driver)
+  end
+
+  test "Ctrl+C while a line is evaluated draws nothing and ends nothing: the evaluation finishes" do
+    {driver, terminal} = start()
+    type(driver, "Process.sleep(500); :slept\r")
+    Process.sleep(100)
+    type(driver, "\x03")
+    Process.sleep(600)
+    terminal = screen(terminal)
+    assert row(terminal, 1) == ":slept"
+    refute Terminal.text(terminal) =~ "^C"
+    type(driver, "exit\r")
+    ends(driver)
+  end
+
+  test "Ctrl+D on an empty line ends the shell; with text on the line it deletes forward" do
+    {driver, terminal} = start()
+    type(driver, "ab\x02")
+    terminal = screen(terminal)
+    type(driver, "\x04\r")
+    terminal = screen(terminal)
+    assert row(terminal, 0) =~ ~r/\(1\)> a$/
+    assert Process.alive?(driver)
+
+    type(driver, "\x04")
+    ends(driver)
+  end
+
+  test "keys after a Ctrl+D in the same read are kept, in order, when it deletes forward" do
+    {driver, terminal} = start()
+    # At the prompt: a, b, left, Ctrl+D deletes the b, c, Enter, all in one read.
+    terminal = screen(terminal)
+    type(driver, "ab\x02\x04c\r")
+    terminal = screen(terminal)
+    assert row(terminal, 0) =~ ~r/\(1\)> ac$/
+    assert row(terminal, 1) =~ ~r/undefined variable "ac"/
+    type(driver, "exit\r")
+    ends(driver)
+  end
+
+  test "the end of the input ends the shell, after the lines before it have run" do
+    {driver, terminal} = start()
+    type(driver, "x = 1\r")
+    type(driver, "x + 1")
+    type(driver, :eof)
+    ends(driver)
+    terminal = screen(terminal)
+    assert row(terminal, 1) == "1"
+    assert row(terminal, 3) == "2"
+  end
+
+  test "hostile text a line writes to the console itself never reaches the terminal as a control sequence" do
+    {driver, terminal} = start()
+    # Written by the line's own code, not through the printer: the one path the printer did
+    # not guard. A clipboard write, a title, a status query, a bidirectional override, DEL.
+    type(driver, ~S|IO.puts("\e]52;c;aGk=\a\e]0;pwned\a\e[6n\u202Eevil\x7F")| <> "\r")
+    type(driver, ~S|IO.write("partial\e[2J")| <> "\r")
+    terminal = screen(terminal)
+
+    assert row(terminal, 1) == "^[]52;c;aGk=^G^[]0;pwned^G^[[6n<U+202E>evil^?"
+    assert row(terminal, 2) =~ ~r/^:ok$/
+    assert row(terminal, 4) == "partial^[[2J:ok"
+    type(driver, "exit\r")
+    ends(driver)
+  end
+
+  test "hostile text typed or pasted is edited as text: a key sequence edlin does not know is dropped, the rest shown" do
+    {driver, terminal} = start()
+    type(driver, "\e]52;c;x\a\"ok\"\r")
+    terminal = screen(terminal)
+    assert row(terminal, 0) =~ ~r/\(1\)> .*"ok"$/
+    refute Terminal.text(terminal) =~ "\e"
+    type(driver, "exit\r")
+    ends(driver)
+  end
+
+  test "a wide character typed takes two columns and the cursor follows it" do
+    {driver, terminal} = start()
+    type(driver, "\"世\"")
+    terminal = screen(terminal)
+    {0, col} = Terminal.cursor(terminal)
+    assert col == String.length(row(terminal, 0)) + 1
+    type(driver, "\r")
+    terminal = screen(terminal)
+    assert row(terminal, 1) == "\"世\""
+    type(driver, "exit\r")
+    ends(driver)
+  end
+
+  test "a UTF-8 sequence cut by the read's end is read whole, and a byte that is not UTF-8 as Latin-1" do
+    {driver, terminal} = start()
+    type(driver, "\"" <> <<0xE4, 0xB8>>)
+    type(driver, <<0x96>> <> "\"\r")
+    type(driver, <<"\"a", 0xFF, "b\"\r">>)
+    terminal = screen(terminal)
+    assert row(terminal, 1) == "\"世\""
+    assert row(terminal, 3) == "\"aÿb\""
+    type(driver, "exit\r")
+    ends(driver)
+  end
+
+  test "a long line wraps at the terminal's width and the result starts on its own row" do
+    {driver, terminal} = start()
+    digits = String.duplicate("1", 130)
+    type(driver, "String.length(\"#{digits}\")\r")
+    terminal = screen(terminal, &(row(&1, 2) == "130"))
+    assert String.length(row(terminal, 0)) == @cols
+    assert row(terminal, 1) =~ ~r/1+"\)$/
+    assert row(terminal, 2) == "130"
+    type(driver, "exit\r")
+    ends(driver)
+  end
+end

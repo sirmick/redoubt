@@ -32,8 +32,8 @@ agents follow ([M3 (agents, approvals and the attack suite)](docs/plan/m3-agents
   login's session through `sshd`, Alice's and Bob's apart. A session's files and a steward
   restart without a reboot are still planned.
 - [M2 (usable shell)](docs/plan/m2-usable-shell.md), **planned**: the Elixir shell is a working
-  environment, with a command mode, file operations, native programs and pipes, jobs, line editing
-  and the editor. Its host shell track starts ahead of M1 (sessions over SSH, kept apart).
+  environment, with commands, file operations, native programs and pipes, jobs, line editing and
+  the editor. Its host shell track starts ahead of M1 (sessions over SSH, kept apart).
 - [M3 (agents, approvals and the attack suite)](docs/plan/m3-agents.md), **planned**: Alice's
   agent runs contained under a lease, approvals come only from `approve@box`, and the attack
   suite of a scripted hostile agent and user passes.

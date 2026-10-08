@@ -181,7 +181,9 @@ contention), as the [platform page](../beyond/fpga-platform.md#measurement-gates
 On the host, ahead of the milestone: the shell's loop, its commands (the file and text commands
 and `table`), and help, tested by the shell's own suite on beamlet and on the BEAM
 ([the shell](../userland/shell.md#the-loop)); the cell protocol, in Rust and in Elixir, held to
-one set of vectors. On Redoubt it runs only on the fake kernel (`./shell --fake`). What the milestone builds on: the serving
+one set of vectors; and beamlet's raw terminal, the shell's driver under `group` and `edlin`
+with `Redoubt.Term` drawing for it, line editing and the session's history, the interrupt ending
+a line, and hostile text drawn visibly on every path the host has ([the shell](../userland/shell.md#line-editing-and-history)). On Redoubt it runs only on the fake kernel (`./shell --fake`). What the milestone builds on: the serving
 library's parked calls ([serving](../servers/serving.md#parked-calls)), `consoled`'s 9P console
 ([consoled](../servers/consoled.md)), and budget destruction as the only way to end a process
 ([budgets](../kernel/budgets.md#r10-destruction)). For several harts: every hart runs user code under one FIFO kernel lock, and a destruction's

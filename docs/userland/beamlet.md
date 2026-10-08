@@ -324,9 +324,8 @@ and restores it on every exit: a result, an exception, a halt, a signal, a panic
 ([`userland/otp/cli/src/tty.rs`](../../userland/otp/cli/src/tty.rs)). Output processing stays
 on, so a line written past the shell's encoder still lands where a line does on a host; the
 encoder ends its lines with CR LF itself, as it must on Redoubt. `console_size` is the
-terminal's size, read afresh at each call. A change of size is to reach the shell as the message
-`{:console_resize, cols, rows}`, as the console's parked `resize` delivers it on Redoubt
-([the shell](shell.md#the-terminal-library)); until then the shell reads the size at each prompt.
+terminal's size, read afresh at each call. A change of size is not delivered; the shell reads the
+size at each prompt ([the shell](shell.md#screens-keys-and-the-consoles-size)).
 Console input goes to one Erlang process, the shell's driver, which takes it with
 `beamlet:console_subscribe/0`; a second subscription is refused, so no code run at the prompt
 can take the keyboard, or the interrupt key with it, from the driver.
@@ -718,7 +717,8 @@ over cells; widgets, layout and focus are Elixir ([the shell](shell.md#full-scre
 - **One width table**, generated from one pinned Unicode version and held to vectors: `width/1`
   is `put`'s own, and the terminal library measures with it, so what is measured is what is drawn.
 - **The diff speaks the cell protocol**, so a screen drawn in the session and a native program's
-  frames reach the encoder by one decoder ([the shell](shell.md#the-terminal-library)).
+  frames reach the encoder by one decoder
+  ([the shell](shell.md#screens-keys-and-the-consoles-size)).
 
 **Open:** none.
 

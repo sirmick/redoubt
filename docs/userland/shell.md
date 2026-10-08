@@ -102,10 +102,10 @@ What the loop does not have:
   reads itself, and ends the shell as `exit()` does.
 - **Pry, remote shells, or a break menu.**
 
-Not guarded yet, until the shell's driver holds the console
-([line editing](#line-editing-and-history)): code a line runs that writes to the console itself,
-as `IO.puts/1` does, and the crash reports of processes a line spawned, which OTP's logger
-writes.
+What a line writes to the console itself, as `IO.puts/1` does, reaches the console through the
+shell's driver and its encoder too ([line editing](#line-editing-and-history)), so it is guarded
+the same. Not guarded: the crash reports of processes a line spawned, which OTP's logger
+writes to `standard_error`, past the driver.
 
 ### Commands
 
@@ -268,18 +268,34 @@ in a `Job`.
 
 ### The terminal library
 
-Status: planned · M2 (usable shell)
+Status: built · partly tested: the host only, where it draws the line editor; its tests are the shell's own ExUnit suite (`test/redoubt/term_test.exs`, `test/redoubt/shell/driver_test.exs`), which `./test-shell` runs on beamlet and on the BEAM against a model of the terminal that takes only the encoder's sequences, and no bench case runs
 
 Nothing between the keyboard and the shell edits a line: `consoled` and `sshd` serve `/dev/cons`
 as a raw byte stream with no echo. So the shell owns the terminal, through one library,
-`Redoubt.Term`, that everything drawn on it goes through: the line editor, the pager, `top`, the
-agent's output, and every [full-screen program](#full-screen-programs).
+`Redoubt.Term` ([`userland/shell/lib/redoubt/term.ex`](../../userland/shell/lib/redoubt/term.ex)),
+that everything drawn on it goes through: the line editor, the pager, `top`, the agent's output,
+and every [full-screen program](#full-screen-programs).
 - **The only writer of control sequences.** `Redoubt.Term`'s encoder, in the shell's driver,
   which alone holds the session's connection to `/dev/cons`, is the one code that emits escape
   sequences for what the session draws, and what it draws is cells: a grapheme with a colour and
   attributes, never bytes passed through. A control character in any text is drawn visibly
   ([hostile text](#hostile-text-never-drives-the-terminal)).
-  There is no raw pass-through.
+  There is no raw pass-through. The encoder ends every line with CR LF itself, since the console
+  does no output processing; a host terminal that does so too draws the same.
+- **One target:** VT102 plus the common xterm extensions every current emulator speaks, with no
+  terminfo.
+- **The line editor's drawing:** `group`'s requests, drawn by going back to the line's start,
+  erasing below it and drawing the line again, which needs nothing of the terminal but relative
+  cursor movement, CR, LF, erasing below and bold; typing at the end of the line draws only what
+  was typed. The terminal's size is read at the start and at each prompt: until a change of size
+  is delivered ([below](#screens-keys-and-the-consoles-size)), a window resized while a line is
+  edited is laid out afresh at the next prompt.
+
+### Screens, keys and the console's size
+
+Status: planned · M2 (usable shell)
+
+What the line editor does not need, the library has for screens and the pager:
 - **Frames are the cell protocol** ([the cell protocol](#the-cell-protocol)): the screen buffer's
   diff speaks it ([beamlet](beamlet.md#screen-natives)), and so does a native program with a
   screen, and the encoder reads both through one decoder.
@@ -298,8 +314,6 @@ agent's output, and every [full-screen program](#full-screen-programs).
   the session measures is what it draws. The person's terminal has a table of its own, which may
   disagree on a wide or ambiguous grapheme, so after one the encoder places the cursor absolutely
   again, and a disagreement costs a cell's misplacement, never the rest of the line.
-- **One target:** VT102 plus the common xterm extensions every current emulator speaks, with no
-  terminfo.
 - **Size:** `Console.size/0` asks `/dev/cons` afresh on every call and returns `{cols, rows}` or
   `{:error, :unknown}`; layout then assumes 80 columns.
 - **Resize:** there is no callback. `Console.await_resize(pid)` makes a `resize` call the console
@@ -314,7 +328,7 @@ because a query on a UART that never answers costs a timeout at every login).
 
 ### Hostile text never drives the terminal
 
-Status: planned · M2 (usable shell)
+Status: built · partly tested: the host only, and the paths that exist there: the printer, a line's own writes to the console, the prompt and the typed line; the screen buffer's and a native program's frames are not built, and the attack case is the shell's own ExUnit suite (`test/redoubt/shell/driver_test.exs`, `test/redoubt/term_test.exs`), judged by a model of the terminal that refuses any sequence but the encoder's own, which `./test-shell` runs on beamlet and on the BEAM and no bench case does
 
 Text the session draws, from a file's contents, a file name, a program's output or a model's reply,
 reaches `/dev/cons` only as visible characters: every control character in it (the ASCII and 8-bit
@@ -324,7 +338,10 @@ controls, DEL, and the bidirectional embedding, override and isolate controls) i
 answer as if typed. It holds because the encoder is the one writer of what the session draws, and
 because nothing reaches the encoder but cells, whose symbols cannot hold a control character: from
 the shell's printer, from a screen program through the buffer's natives, which refuse one, and
-from a native program only as `cells` frames.
+from a native program only as `cells` frames. The line editor is the one path that hands the
+encoder text rather than cells: `group`'s requests, which the encoder makes visible grapheme by
+grapheme under the same rule. One path still passes the encoder: OTP's logger writes the crash
+reports of processes a line spawned to `standard_error` ([the loop](#the-loop)).
 
 What it does not cover: code the person runs holds the session's authority, and can write to its
 own console as it can do anything else the session can; and the bidirectional marks (U+200E,
@@ -336,8 +353,6 @@ the terminal nor reach the approval channel, which only the steward draws
 ([sessions](sessions.md#approve)), and drawing them as `<U+XXXX>` is
 [a follow-up](../todo/shell-invisible-format.md). The attack case writes hostile text through
 every path above and judges the bytes the session wrote to `/dev/cons`.
-
-**Open:** none.
 
 ### The cell protocol
 
@@ -418,38 +433,53 @@ What a full-screen program cannot do:
 
 ### Line editing and history
 
-Status: planned · M2 (usable shell)
+Status: built · partly tested: the host only; its tests are the shell's own ExUnit suite (`test/redoubt/shell/driver_test.exs`: typing, editing keys, history and Ctrl+R, the interrupt, Ctrl+D, the input's end), which `./test-shell` runs on beamlet and on the BEAM and no bench case does
 
 ```mermaid
 flowchart BT
-    C["/dev/cons: raw bytes, no echo"] -.-> D["the shell's driver: keys in through Redoubt.Term, drawing out through it"]
-    D -.-> G["OTP's group and edlin, unchanged: editing, history, Ctrl+R"]
+    C["the console: raw bytes, no echo"] --> D["the shell's driver: keys to group, drawing through Redoubt.Term"]
+    D --> G["OTP's group and edlin, unchanged: editing, history, Ctrl+R"]
     G -.->|"expand_fun"| CO["completion"]
-    G -.-> S["Redoubt.Shell: the loop"]
+    G --> S["Redoubt.Shell: the loop"]
     R["the registry (defcommand)"] -.-> CO
-    R -.-> HE["help"]
+    R --> HE["help"]
 ```
-*Figure: the shell's layers, bottom up. Every part is planned (dashed). One registry feeds
-completion and help.*
+*Figure: the shell's layers, bottom up. Solid is built; completion is planned (dashed). One
+registry feeds completion and help.*
 
 On the BEAM, line editing is OTP's `edlin` under `group`, plain Erlang; only the driver under
 them (`user_drv` and `prim_tty`) needs the operating system. So the shell keeps `group` and
-`edlin` unchanged and replaces the driver with its own, which reads keys through `Redoubt.Term`
-and draws `group`'s requests through its encoder. `group`'s driver protocol is small: requests to
-draw (`put_chars_sync`, `move_rel`, `insert_chars`, `delete_chars`, `beep`, `redraw_prompt`,
-`put_expand` and a few more), input as `{data, Chars}` and `eof`, the geometry and terminal-state
-queries, and the interrupt as an exit signal. That gives Emacs keys, a kill ring, multi-line
-input and history with Ctrl+R search. `group` writes a few escape sequences itself, for the Ctrl+R
-prompt; the driver recognises only those, at the requests that carry them, and draws every other
-byte through the guard.
+`edlin` unchanged and replaces the driver with its own
+([`userland/shell/lib/redoubt/shell/driver.ex`](../../userland/shell/lib/redoubt/shell/driver.ex)),
+the one process holding the console, which hands the bytes typed to `group` and draws `group`'s
+requests through `Redoubt.Term`'s encoder. `group`'s driver protocol is small: requests to draw
+(`put_chars_sync`, `move_rel`, `insert_chars`, `delete_chars`, `beep`, `redraw_prompt`,
+`put_expand` and a few more), input as `{data, Chars}`, the geometry and terminal-state queries,
+and the interrupt as an exit signal. That gives Emacs keys, a kill ring, multi-line input and
+history with Ctrl+R search. `group` writes one escape sequence itself, its bold Ctrl+R prompt;
+the encoder recognises exactly that, at the head of the request that carries it, and draws every
+other byte through the guard. The driver reads two keys itself: Ctrl+C ends the line being edited
+and nothing else ([interrupting](#interrupting-and-killing-jobs)); Ctrl+D on an empty line, like
+the console's end, ends the input and so the shell. `group` has no way to hand its reader an end
+of input (`edlin` takes `eof` for a line's end), so the driver answers the pending read with the
+error `eof`, which `group` keeps in order behind the keys before it, and the shell reads as its
+end. A byte that is not UTF-8 is read as the Latin-1 character it is.
+- **History** is `group`'s, kept for the session; the driver cuts it to the newest 1000 lines at
+  each prompt.
+
+### Saved history, secret reads and pasting
+
+Status: planned · M2 (usable shell)
+
 - **History** persists per principal in the principal's home volume, capped in lines. A vault
   session keeps its history in memory only: its label forbids writing to the unlabelled home
   volume, so there is nowhere to save it.
 - **Echo is the editor's job**, so a password prompt is a call that reads with echo off
   (`Redoubt.Term.read_secret/1`), not a terminal mode.
+- **A paste is one event**, so a pasted Tab does not complete and a pasted newline does not run
+  a line before the person presses Enter.
 
-**Open:** how a paste becomes one event inside `edlin`, which has no bracketed paste: a pasted
-Tab must not complete, and a pasted newline must not run a line before the person presses Enter.
+**Open:** how a paste becomes one event inside `edlin`, which has no bracketed paste.
 
 ### Completion
 
