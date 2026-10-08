@@ -1,6 +1,7 @@
 //! Audit records (servers/steward.md, "The audit log"). A record has one constructor, which
 //! takes the domain it is read under, so no record can lack the labels it must be read under.
 
+use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::domain::Domain;
@@ -11,6 +12,8 @@ pub enum Record {
         session: u64,
         principal: usize,
         key: u64,
+        /// The context, `None` for the console's session.
+        context: Option<String>,
     },
     AgentStarted {
         lease: u64,

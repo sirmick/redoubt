@@ -48,6 +48,10 @@ impl Refusal {
 pub enum Why {
     /// Outside the manifest's name rule (servers/init.md, Names).
     NotAName,
+    /// A principal's or a label's name holding `:` or `+` (servers/init.md, Names).
+    AccountName,
+    /// A principal's name that is reserved (servers/init.md, Names).
+    Reserved,
     /// A name given twice where names must differ.
     Twice,
     /// A reference to nothing the manifest or the bundle holds.
@@ -148,6 +152,8 @@ impl fmt::Display for Why {
                 return write!(f, "a share per label set is smaller than the steward's {size} size");
             }
             Why::NotAName => "not a name",
+            Why::AccountName => "a principal's or a label's name holds no : or +",
+            Why::Reserved => "a reserved name",
             Why::Twice => "named twice",
             Why::Unknown => "names nothing the manifest or the bundle holds",
             Why::DeviceName => "a device name is at most 60 bytes and does not end in -irq",

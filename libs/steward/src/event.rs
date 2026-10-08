@@ -34,9 +34,11 @@ pub struct Event {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EventKind {
     // From `sshd`.
+    /// `context` is the context's name, empty for the principal's default one.
     Login {
         principal: String,
         labels: Vec<u64>,
+        context: String,
         key: u64,
     },
     /// The console principal's session on the UART: the steward's own event, at its start and

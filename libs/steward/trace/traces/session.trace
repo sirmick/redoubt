@@ -6,8 +6,8 @@ keyd [31]
 servers 1
 sizes session=10,2,5 agent=10,2,5 sub_agent=5,1,2 crossing=2,1,1 cost=1
 
-# Refused: a key that is not a login key, one keyd holds, a label set not owned, one the
-# manifest does not give, an unknown principal.
+# Refused, each as a wrong key is: a key that is not a login key, one keyd holds, a label set not
+# owned, one the manifest does not give, an unknown principal.
 event now=1 random=[101,102] reply=1 Login principal="alice" labels=[] key=21
 event now=1 random=[101,102] reply=2 Login principal="alice" labels=[] key=31
 event now=1 random=[101,102] reply=3 Login principal="alice" labels=[8] key=11
@@ -33,6 +33,12 @@ event now=13 reply=11 ChannelClosed session=999
 event now=13 reply=12 EndSession badge=999
 event now=13 Exited object=session@1/#999
 event now=13 Done object=session@1/#999 ok=[]
+# Contexts: alice's `work` starts; a second login to it while it lives is refused in use, and
+# one naming a context that is not a name is refused as a wrong key is.
+event now=13 random=[601,602,603] reply=15 Login principal="alice" labels=[] context="work" key=11
+event now=13 Done object=session@1/#601 ok=[budget(903),scope,connection,connection,process(79)]
+event now=13 random=[701,702,703] reply=16 Login principal="alice" labels=[] context="work" key=11
+event now=13 random=[701,702,703] reply=17 Login principal="alice" labels=[] context="Work" key=11
 # Bob again, and an exit while he is starting: the guarantee is broken, the steward exits, and
 # decides nothing more.
 event now=14 random=[401,402,403] reply=13 Login principal="bob" labels=[] key=12

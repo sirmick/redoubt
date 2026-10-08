@@ -124,7 +124,12 @@ defmodule Redoubt.Steward.Trace do
   defp hash("shown"), do: :shown
   defp hash(h), do: Base.decode16!(h, case: :mixed)
 
-  defp kind("Login", f), do: {:login, unquote_(f["principal"]), list(f["labels"]), num(f["key"])}
+  # `context=` may be left out: the default context, the empty name.
+  defp kind("Login", f) do
+    context = if f["context"], do: unquote_(f["context"]), else: ""
+    {:login, unquote_(f["principal"]), list(f["labels"]), context, num(f["key"])}
+  end
+
   defp kind("Console", f), do: {:console, unquote_(f["principal"])}
   defp kind("ChannelClosed", f), do: {:channel_closed, num(f["session"])}
 
@@ -302,7 +307,7 @@ defmodule Redoubt.Steward.Trace do
   defp answer({:request, id}), do: "request id=#{id}"
   defp answer({:refused, why}), do: "refused #{why}"
 
-  defp record({:login, s, p, k}), do: "Login session=#{s} principal=#{p} key=#{k}"
+  defp record({:login, s, p, k, c}), do: "Login session=#{s} principal=#{p} key=#{k} context=#{context_of(c)}"
 
   defp record({:agent_started, l, s, p, d}),
     do: "AgentStarted lease=#{l} sponsor=#{s} parent=#{opt(p)} deadline=#{d}"
@@ -321,6 +326,9 @@ defmodule Redoubt.Steward.Trace do
   defp record({:push_failed, r}), do: "PushFailed request=#{r}"
   defp record(:blamed), do: "Blamed"
   defp record({:locked_out, u}), do: "LockedOut until=#{u}"
+
+  defp context_of(nil), do: "none"
+  defp context_of(c), do: qs(c)
 
   defp to({:session, b}), do: "session #{b}"
   defp to({:channel, c}), do: "channel #{c}"
@@ -398,7 +406,7 @@ defmodule Redoubt.Steward.Trace do
             "blame=#{camel(b.state)} times=#{list_(b.times)} until=#{b.until}\n",
           for x <- sorted(st.sessions) do
             "  session id=#{x.id} state=#{camel(x.state)} principal=#{x.principal} key=#{x.key} " <>
-              "badge=#{x.badge} number=#{x.number} reply=#{x.reply}\n"
+              "context=#{context_of(x.context)} badge=#{x.badge} number=#{x.number} reply=#{x.reply}\n"
           end,
           for x <- sorted(st.leases) do
             "  lease id=#{x.id} state=#{camel(x.state)} principal=#{x.principal} badge=#{x.badge} " <>

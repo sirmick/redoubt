@@ -40,6 +40,7 @@ const GUARDS: &[(&str, bool)] = &[
     ("approval_key", true),
     ("blame_window", true),
     ("caller_unlabelled", true),
+    ("context_free", true),
     ("copying", false),
     ("declassifies", false),
     ("exact_labels", true),

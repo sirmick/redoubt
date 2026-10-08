@@ -148,7 +148,7 @@ defmodule Redoubt.Steward.Effects do
   def audit_login(cx) do
     case Guards.session(cx) do
       nil -> cx
-      s -> audit(cx, {:login, s.id, s.principal, s.key})
+      s -> audit(cx, {:login, s.id, s.principal, s.key, s.context})
     end
   end
 

@@ -4,5 +4,5 @@ packages = ["redoubt-model"]
 tests = ["properties", "steward_reach"]
 filter = ["steward_policy", "steward_noninterference", "the_reach_table_is_reproduced"]
 fanout = { each = "test", cores = 4, vars = { MODEL_THREADS = "{cores}" } }
-# steward_noninterference is the longer job: 70 s on four cores measured, and a third.
-timeout_secs = 94
+# steward_policy is the longest job: 26 s on four cores measured, and a third.
+timeout_secs = 35

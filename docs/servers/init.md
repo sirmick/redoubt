@@ -18,7 +18,7 @@ that one file and no ELF, so the most privileged process after the kernel has th
 
 ### The boot manifest
 
-<details><summary>Status: built · tested (28)</summary>
+<details><summary>Status: built · tested (29)</summary>
 
 - bench:init-boot
 - bench:init-refuses-public-manifest
@@ -26,6 +26,7 @@ that one file and no ELF, so the most privileged process after the kernel has th
 - bench:init-refuses-stack
 - host:redoubt-init::what_is_not_strict_json_is_refused_with_where
 - host:redoubt-init::names_follow_the_rule_and_differ
+- host:redoubt-init::principal_and_label_names_hold_no_separator_and_none_is_reserved
 - host:redoubt-init::references_name_what_the_manifest_and_bundle_hold
 - host:redoubt-init::a_handed_badge_is_a_root_badge_given_once_at_its_endpoint
 - host:redoubt-init::principals_values_are_checked
@@ -74,7 +75,10 @@ and `init`'s only input. Its entries:
 - **Names.** Every name (device, label, volume, server, endpoint, principal) is 1 to 64 bytes of
   `[a-z0-9_:+-]`, starting with a letter (`walfsd:data`, `alice+secrets`), compared byte for byte.
   Names become endpoint names, volume names and 9P paths, so no empty name, NUL, U+FEFF or control
-  character may reach them. The startup block applies the same rule (`valid_name`).
+  character may reach them. The startup block applies the same rule (`valid_name`). A
+  principal's and a label's name hold no `:` or `+` either, so that a login's user name,
+  `principal[+label][.context]`, splits one way only, and no principal is named `approve`, the
+  approval terminal's user name ([contexts](../userland/sessions.md#contexts)).
 - **Stacks.** A server's `stack_pages` is the size of its first thread's stack, charged to its
   budget. `init` refuses zero, more than 128 pages, or a stack not smaller than its budget's pages,
   before it starts any server. A budget that holds the stack but not the image beside it makes that

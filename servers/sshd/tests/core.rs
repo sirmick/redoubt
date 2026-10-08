@@ -27,7 +27,8 @@ fn held() -> KeyPair { KeyPair::from_seed(Seed::new([11; 32])) }
 #[derive(Default)]
 struct Log {
     holds: usize,
-    logins: Vec<(String, Option<String>)>,
+    /// Each login the steward was asked: principal, label and context.
+    logins: Vec<(String, Option<String>, Option<String>)>,
     started: Option<Option<Window>>,
     input: Vec<u8>,
     windows: Vec<Window>,
@@ -61,7 +62,11 @@ impl Platform for Fake {
     }
 
     fn login(&mut self, who: &Login<'_>, key: &PublicKey) -> Result<Console, Refused> {
-        self.log.borrow_mut().logins.push((who.principal.into(), who.label.map(Into::into)));
+        self.log.borrow_mut().logins.push((
+            who.principal.into(),
+            who.label.map(Into::into),
+            who.context.map(Into::into),
+        ));
         if who.principal != "alice" || *key != *alice().pk {
             return Err(Refused);
         }
@@ -322,7 +327,7 @@ fn a_login_runs_a_session_and_ends_with_its_status() {
     let r = run(Script { data: b"hello!", ..Script::default() });
     let log = r.log.borrow();
     assert!(r.seen.authenticated);
-    assert_eq!(log.logins, [("alice".to_string(), None)]);
+    assert_eq!(log.logins, [("alice".to_string(), None, None)]);
     assert_eq!(log.started, Some(Some(Window { cols: 80, rows: 24 })));
     assert_eq!(log.input, b"hello!");
     assert_eq!(r.seen.output, b"hello");
@@ -354,35 +359,85 @@ fn a_key_keyd_holds_is_refused_before_the_steward() {
 fn the_stewards_refusal_is_a_refused_login() {
     let r = run(Script { user: "bob", ..Script::default() });
     assert!(!r.seen.authenticated);
-    assert_eq!(r.log.borrow().logins, [("bob".to_string(), None)]);
+    assert_eq!(r.log.borrow().logins, [("bob".to_string(), None, None)]);
     assert!(r.log.borrow().started.is_none());
 }
 
+/// A user name that is not a login is still asked of the steward, as nobody, once its signature
+/// has verified: every refusal after the signature takes the one path (no enumeration).
 #[test]
-fn a_user_name_outside_the_grammar_never_reaches_the_steward() {
-    for user in ["Alice", "1alice", "alice+", "+x", "alice+b+c", "alice+Secrets", "al ice", ""] {
+fn a_user_name_outside_the_grammar_reaches_the_steward_as_nobody() {
+    for user in [
+        "Alice",
+        "1alice",
+        "alice+",
+        "+x",
+        "alice+b+c",
+        "alice.work+tax",
+        "alice:x",
+        "approve.x",
+        "al ice",
+        "",
+    ] {
         let r = run(Script { user, ..Script::default() });
         assert!(!r.seen.authenticated, "{user:?}");
-        assert!(r.log.borrow().logins.is_empty(), "{user:?}");
+        assert_eq!(r.log.borrow().logins, [(String::new(), None, None)], "{user:?}");
     }
+}
+
+#[test]
+fn a_context_reaches_the_steward_with_its_principal_and_label() {
+    let r = run(Script { user: "alice.work", ..Script::default() });
+    assert_eq!(r.log.borrow().logins, [("alice".to_string(), None, Some("work".to_string()))]);
+    let r = run(Script { user: "alice+secrets.work", ..Script::default() });
+    let want = ("alice".to_string(), Some("secrets".to_string()), Some("work".to_string()));
+    assert_eq!(r.log.borrow().logins, [want]);
 }
 
 #[test]
 fn the_login_grammar() {
-    assert_eq!(Login::parse("alice"), Some(Login { principal: "alice", label: None }));
-    assert_eq!(Login::parse("alice+secrets"), Some(Login { principal: "alice", label: Some("secrets") }));
-    assert_eq!(Login::parse("a1_:-+b2"), Some(Login { principal: "a1_:-", label: Some("b2") }));
-    for bad in ["", "Alice", "1a", "a+", "+a", "a+b+c", "a+1", "a.b", "a b", "é"] {
+    let login = |principal, label, context| Some(Login { principal, label, context });
+    assert_eq!(Login::parse("alice"), login("alice", None, None));
+    assert_eq!(Login::parse("approve"), login("approve", None, None), "a reserved name, bare");
+    assert_eq!(Login::parse("alice+secrets"), login("alice", Some("secrets"), None));
+    assert_eq!(Login::parse("alice.work"), login("alice", None, Some("work")));
+    assert_eq!(Login::parse("alice+tax.work"), login("alice", Some("tax"), Some("work")));
+    assert_eq!(Login::parse("a1_-+b2.c3_-"), login("a1_-", Some("b2"), Some("c3_-")));
+    // One order only, one of each, no `:` (scp's separator), no case folding.
+    for bad in [
+        "",
+        "Alice",
+        "1a",
+        "a+",
+        "+a",
+        "a+b+c",
+        "a+1",
+        "a.",
+        ".a",
+        "a.b.c",
+        "a.b+c",
+        "a.B",
+        "a:b",
+        "a+b:c",
+        "a b",
+        "é",
+        "approve+x",
+        "approve.x",
+        "approve+x.y",
+    ] {
         assert_eq!(Login::parse(bad), None, "{bad:?}");
     }
-    assert!(Login::parse(&"a".repeat(64)).is_some());
-    assert!(Login::parse(&"a".repeat(65)).is_none());
+    let long = "a".repeat(64);
+    assert!(Login::parse(&format!("{long}+{long}.{long}")).is_some());
+    for over in [format!("{long}a"), format!("a+{long}a"), format!("a.{long}a")] {
+        assert!(Login::parse(&over).is_none(), "{over}");
+    }
 }
 
 #[test]
 fn a_labelled_login_reaches_its_shell_only_with_a_pty() {
     let r = run(Script { user: "alice+secrets", ..Script::default() });
-    assert_eq!(r.log.borrow().logins, [("alice".to_string(), Some("secrets".to_string()))]);
+    assert_eq!(r.log.borrow().logins, [("alice".to_string(), Some("secrets".to_string()), None)]);
     assert!(r.log.borrow().started.is_some());
 
     // R67: without a pty, the shell is refused and nothing the client sends reaches the session.

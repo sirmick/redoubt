@@ -1,4 +1,4 @@
-description = "Logins the steward refuses (docs/servers/steward.md, \"Authentication and sessions\" and \"The steward's protocol\"; docs/servers/sshd.md, \"Sessions over SSH\"): bob's key, which the manifest lists for bob, used as alice is refused by the steward as a key not alice's (bad_key), and bob asking for alice's label is refused as a label bob does not own (not_owner); each ssh is told Permission denied and no session starts. The verdict is the steward's typed refusal, as sshd's core reads it and says it on its console (rule F); that a session's badge cannot send login is the badge-class table's host test"
+description = "Logins the steward refuses (docs/servers/steward.md, \"Authentication and sessions\" and \"The steward's protocol\"; docs/servers/sshd.md, \"Sessions over SSH\"): bob's key, which the manifest lists for bob, used as alice is refused by the steward as a key not alice's (bad_key), and bob asking for alice's label, which he does not own, is refused alike (bad_key), so a label set's existence is not told; each ssh is told Permission denied and no session starts. The verdict is the steward's typed refusal, as sshd's core reads it and says it on its console (rule F); that a session's badge cannot send login is the badge-class table's host test"
 arch = ["rv64", "rv32"]
 kind = "boot"
 recipe = "image/boot.toml"
@@ -25,7 +25,7 @@ forbid = [
 ]
 expect_after = [
     '^\[con [0-9a-f]{16}\] sshd: login alice: refused \(BadKey\)$',
-    '^\[con [0-9a-f]{16}\] sshd: login bob\+alice-secrets: refused \(NotOwner\)$',
+    '^\[con [0-9a-f]{16}\] sshd: login bob\+alice-secrets: refused \(BadKey\)$',
 ]
 
 [[session]]

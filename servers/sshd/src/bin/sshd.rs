@@ -315,10 +315,13 @@ mod machine {
         }
 
         fn login(&mut self, who: &Login<'_>, key: &PublicKey) -> Result<Console, Refused> {
-            let name = match who.label {
+            let mut name = match who.label {
                 Some(label) => format!("{}+{label}", who.principal),
                 None => String::from(who.principal),
             };
+            if let Some(context) = who.context {
+                name = format!("{name}.{context}");
+            }
             let made = self.nine.mint_rooted(&me(), (File, qid()), &mut Own(self.endpoint));
             let Ok((console, _, badge)) = made else {
                 self.say(&format!("sshd: login {name}: no console\n"));
@@ -327,6 +330,7 @@ mod machine {
             let m = steward::Message::Login(steward::Login {
                 principal: who.principal,
                 label: who.label.unwrap_or(""),
+                context: who.context.unwrap_or(""),
                 key,
             });
             let steward = Endpoint::from_handle(self.handed.steward);

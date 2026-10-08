@@ -5,7 +5,7 @@
 #
 # Values: a domain is {account, labels} with labels sorted and without repeats; an object is
 # {domain, kind, id}; a token is {object, slot}. An event is %{now, random, reply, kind}, its
-# kind a tuple named for the page's event ({:login, principal, labels, key}, ...).
+# kind a tuple named for the page's event ({:login, principal, labels, context, key}, ...).
 defmodule Redoubt.Steward do
   alias Redoubt.Steward.{Effects, Guards}
   alias Redoubt.Steward.Gen
@@ -365,6 +365,12 @@ defmodule Redoubt.Steward do
 
   defp done({_, store, out}), do: {store, out}
 
+  # A principal's, a label's or a context's name: 1 to 64 bytes of [a-z0-9_-], a letter first.
+  def name?(<<c, _::binary>> = s) when c in ?a..?z and byte_size(s) <= 64,
+    do: for(<<c <- s>>, reduce: true, do: (ok -> ok and (c in ?a..?z or c in ?0..?9 or c in [?_, ?-])))
+
+  def name?(_), do: false
+
   def principal(fixed, name), do: Enum.find_index(fixed.principals, &(&1.name == name))
   def by_account(fixed, account), do: Enum.find_index(fixed.principals, &(&1.account == account))
 
@@ -385,20 +391,32 @@ defmodule Redoubt.Steward do
 
   # ---- Events from outside the core ------------------------------------------------------
 
-  defp external(store, %{kind: {:login, name, l, key}} = e, out) do
+  # Before the key is checked, every refusal is the bad key's: an unknown principal, a label set
+  # the manifest does not give it and a context that is not a name.
+  defp external(store, %{kind: {:login, name, l, context, key}} = e, out) do
     with p when p != nil <- principal(store.fixed, name),
          account = Enum.at(store.fixed.principals, p).account,
-         {:domain, d} when d != nil <- {:domain, find(store, account, l)} do
+         d when d != nil <- find(store, account, l),
+         true <- context == "" or name?(context) do
       {_, store, out} = run(store, out, e, d, :blame, 0, :login)
       {id, out} = fresh(store, e, out)
       {badge, out} = fresh(store, e, out)
 
-      s = %{id: id, state: :starting, principal: p, key: key, badge: badge, number: 0, reply: e.reply}
+      s = %{
+        id: id,
+        state: :starting,
+        principal: p,
+        key: key,
+        context: context,
+        badge: badge,
+        number: 0,
+        reply: e.reply
+      }
+
       {_, store} = insert(store, d, :session, id, s)
       done(run(store, out, e, d, :session, id, :login, %{created: true}))
     else
-      nil -> unknown(store, e, out)
-      {:domain, nil} -> {store, reply(out, e, {:refused, :NotOwner})}
+      _ -> {store, reply(out, e, {:refused, :BadKey})}
     end
   end
 
@@ -412,7 +430,7 @@ defmodule Redoubt.Steward do
       {id, out} = fresh(store, e, out)
       {badge, out} = fresh(store, e, out)
 
-      s = %{id: id, state: :starting, principal: p, key: 0, badge: badge, number: 0, reply: e.reply}
+      s = %{id: id, state: :starting, principal: p, key: 0, context: nil, badge: badge, number: 0, reply: e.reply}
       {_, store} = insert(store, d, :session, id, s)
       done(run(store, out, e, d, :session, id, :console, %{created: true}))
     else

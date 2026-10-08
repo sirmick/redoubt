@@ -14,8 +14,8 @@ use redoubt_model::mutation::Mutation;
 const CAP: u64 = 20_000;
 
 /// Seeds tried in each steward family: a mutation these catch only past it is caught too late,
-/// and fails as not caught. The random search catches every one by seed 345 but
-/// `PolicyDeclassifyUnfit` (`steward_policy`'s seed 4709), which its scenario catches first
+/// and fails as not caught. The random search catches every one by seed 488 but
+/// `PolicyDeclassifyUnfit` (`steward_policy`'s seed 575), which its scenario catches first
 /// (`steward_scenario`), as it does `R2OneCursor` and `PolicyAgentOtherSet`. With
 /// `TESTBENCH_LATE` set, the bench's word that the mutation is known to be late, the steward
 /// families get `CAP` too, and one caught within the caps after all fails, so that its entry is

@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 477
+revision = 481
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1600,8 +1600,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M2"
   body = "Owner's request (2026-10-08). The brief is .wash/local/CTX1-brief.md: syntax principal[+label][.context] (`.`, not `:`, which scp, sftp and rsync split on); nine rules, each an acceptance test (canonical parsing; auth on the principal alone; no enumeration before auth; identity is (principal, label set, name); one attachment, with takeover told to both terminals; a cap per label set, refusing rather than evicting; reserved names take no suffix; the steward-restart rule; a bounded detached console); the lifecycle; three shell commandlets. Work in sshd, the steward, init's manifest check, the shell and the pages. Tier A. Size M-L."
-  state = "reported"
-  revision = 470
+  state = "done"
+  revision = 481
   overrides = ["2026-10-08: started by Orchestrator before M1 (reported): The owner asked for this now (2026-10-08).", "2026-10-08: started by Orchestrator before M1 (reported): The owner asked for named SSH contexts (2026-10-08).", "2026-10-08: started by Orchestrator before M1 (reported): reviewer for the shell track and CTX, ahead of M1's report (owner ruling 2026-10-08)"]
 
 [[node]]
@@ -1611,8 +1611,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   needs = ["CTX1"]
   body = "Second of three; brief .wash/local/CTX1-brief.md, design .wash/local/CTX1-design.md. A relay program in the context's own budget serves the VM's /dev/cons; the steward hands it each channel's console. 64 KiB buffer, newest kept, a dropped-count line, cut at line boundaries, resize on reattach. Takeover is told on both terminals, with the remote address. Tier A."
-  state = "todo"
-  revision = 446
+  state = "active"
+  revision = 479
+  overrides = ["2026-10-08: started by Orchestrator before CTX1 (reported), M1 (reported): CTX1 is reported and under its last fold; CTX2 is stacked on it by the orchestrator's ruling"]
 
 [[node]]
   id = "CTX3"
@@ -1678,3 +1679,30 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "Split from SHELL6 (strict track: acts with the session's authority). Redoubt.Editor.Files: read capped at max_bytes, save via an exclusive temp in the file's directory and rename with a changed-on-disk check, list with names shown through Text.visible and refused names never joined, copy/move/mkdir/remove only on listed names. Tier A, the steward red."
   state = "done"
   revision = 476
+
+[[node]]
+  id = "CONS1"
+  title = "Parking a typed call in the serving library, then consoled's consol protocol (size, resize) on it"
+  template = "package"
+  parent = "M2"
+  body = "M2 page, 'On Redoubt' step 1 (docs/plan/m2-usable-shell.md): serving.md#parking-a-typed-call, consoled.md#the-consol-protocol. Design checkpoint first (a note in .wash/local/CONS1-design.md: what is built already per the pages' status lines, the protocol, who may park, bounds, the cases), sent to the orchestrator before code. Tier A (servers): the steward red reviews. The shell's driver gets the real terminal size on Redoubt and a resize event, replacing any fixed size."
+  state = "todo"
+  revision = 478
+
+[[node]]
+  id = "RCMD1"
+  title = "The shell's commands on Redoubt: files through beamlet's platform, the session's own commands, binds"
+  template = "package"
+  parent = "M2"
+  body = "M2 page, 'On Redoubt' step 2: shell.md#session-commands, files.md#copying-moving-removing-and-binds. Design checkpoint first (.wash/local/RCMD1-design.md: which commands already work on the machine per status lines and cases, what is missing, binds' authority model, cases on both widths), sent to the orchestrator before code. Session authority: strict track, Tier A, the steward red reviews."
+  state = "todo"
+  revision = 478
+
+[[node]]
+  id = "HOME1"
+  title = "A session can write in its home: a byte quota per principal's home and per vault label set, from the manifest"
+  template = "package"
+  parent = "M2"
+  body = "Found by RCMD1's probe: the steward mints every home and vault connection with quota 0 (servers/steward steward.rs:190), and walfsd lets a quota-0 root read and remove only, so mkdir/write/cp/mv in a session's home fail with enospc. No case writes in a home. Add a byte quota per principal's home and per vault label set to the manifest; init's check refuses quotas that together exceed the volume's room; the steward's `home ... quota=N` line is parsed and written by libs/steward manifest.rs and passed to new_connection. Image values: 8 MiB each (alice, bob, alice-secrets) on ~32 MiB volumes. Cases on both widths: a session writes, reads back and fills its home to the quota (enospc at the bound, the volume's other homes untouched); init refuses an over-committed manifest. Pages: sessions.md, steward.md, init.md, walfsd.md, the manifest reference. Tier A: the steward red."
+  state = "todo"
+  revision = 480

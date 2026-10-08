@@ -125,13 +125,13 @@ reached it.
 | `kernel_sequences` | 20,000, up to 150 steps each | every check of the checker, after every step |
 | `budget_lifecycles` | 20,000 | I10 (create-destroy leaves the parent unchanged): a child created, used only from inside its subtree and destroyed leaves every other budget's counters as they were |
 | `scheduler_fairness` | 20,000 | R12 (scheduling), as the scenarios below |
-| `steward_policy`, `steward_noninterference` | 5,000 and 7,000 | [the steward model](#the-steward-model) |
+| `steward_policy`, `steward_noninterference` | 14,000 and 2,000 | [the steward model](#the-steward-model) |
 | `flood` | 20 scenarios of up to 10,000 senders | R2 (fair waiting), I11 (fair turns) and R4a (open calls) under a flood |
 
-A default run is 72,020 sequences. The bench case `model-host-tests` runs it but for the steward
+A default run is 76,020 sequences. The bench case `model-host-tests` runs it but for the steward
 families, in under two minutes, the build included; `steward-model-host-tests` runs those
 two, each a job of its own on four threads ([fanout](../testbench.md#the-case-file)), with the
-check below, in under four minutes, the build included.
+check below, in under two minutes, the build included.
 `REDOUBT_MODEL_SEQUENCES` sets the count per family. A bound on cargo's test threads is a bound
 on the whole binary: each test's runner spawns `MODEL_THREADS` threads if it is set (a positive
 integer; anything else fails the test, naming it), else one if `RUST_TEST_THREADS` is set, else
@@ -146,24 +146,24 @@ release:
 
 | Family | A seed, slice by slice | A seed, batched | Count | One core |
 | --- | --- | --- | --- | --- |
-| `steward_policy` | 0.43 s | 0.011 s | 5,000 | about a minute |
-| `steward_noninterference` | 0.73 s | 0.025 s | 7,000 | about three minutes |
+| `steward_policy` | 0.43 s | 0.011 s | 14,000 | about three minutes |
+| `steward_noninterference` | 0.73 s | 0.025 s | 2,000 | under a minute |
 
 The counts come from what the seeds reach, not from habit. `model/tests/steward_reach.rs`
 records, per seed, each rule of the core's `Policy` table that held and each that refused, each
 effect that ran, each filter's answers, and each property's first instance (a session's budget
 checked, a declassification copied out, a blame, a lockout, a lease ended, an observation after
-vault work left out). Searched to 20,000 and 10,000 seeds, `steward_policy` reaches 113 of these,
-its last new one at seed 655, and `steward_noninterference` 116, its last at seed 1,295. A
+vault work left out). Searched to 20,000 and 10,000 seeds, `steward_policy` reaches 118 of these,
+its last new one at seed 3,470, and `steward_noninterference` 120, its last at seed 405. A
 family's count comes from that measured seed of its last new coverage: four times it, rounded up
 to a thousand, but never below a seed at which the family's random search catches a mutation
-(`PolicyDeclassifyUnfit`, at 4,709 and 6,333), so 5,000 and 7,000. The counts are for coverage:
-the three mutations the random search catches only after many seeds are held by their named
+(`PolicyDeclassifyUnfit`, at 575 and 737), so 14,000 and 2,000. The counts are for coverage:
+the three mutations whose state the random search builds only by chance are held by their named
 scenarios ([mutations](#mutations)), whatever the counts.
-`the_reach_table_is_reproduced` checks what the first seeds reach: seeds 0 to 655 of
-`steward_policy` reach 113 items and 0 to 1,295 of `steward_noninterference` 116, the last of
+`the_reach_table_is_reproduced` checks what the first seeds reach: seeds 0 to 3,470 of
+`steward_policy` reach 118 items and 0 to 405 of `steward_noninterference` 120, the last of
 them first at that seed, so a change to the generator, the core or the checks that moves either
-fails. That no later seed reaches a new item, and the catch floor of 4,709 and 6,333, come from
+fails. That no later seed reaches a new item, and the catch floor of 575 and 737, come from
 the ignored runs (`reach_table`, `catch_table` in `model/tests/steward_reach.rs`): they are
 recorded here and checked by no test. Three of the core's effects are reached by neither family
 ([residual risks](#residual-risks)).
@@ -288,7 +288,7 @@ A **mutation** is one deliberate break planted in the model. Each variant of `en
 `self.broken(Mutation::...)`: one site for most variants, two or three where the rule is kept in
 more than one place, and a direct comparison with the mutation for `AbandonNoticeMissing` and
 `R11LendStaysMapped`. With no mutation, the model is the specified kernel.
-`Mutation::ALL` lists all 153 variants. `Mutation::rule()` returns the ID each one breaks, as in
+`Mutation::ALL` lists all 155 variants. `Mutation::rule()` returns the ID each one breaks, as in
 the table below; the steward's variants, named `Policy...`, break the server rules the steward
 model checks. Each of those but four is one broken entry of the core's `Policy` table
 (`mutation::policy`), since the crate that ships has no mutation switch; the other four break the
@@ -309,22 +309,22 @@ model's embedder: its entropy, its admission, a volume's write check and the ser
   in release, the names coming from `cargo run --example mutations`
   ([fanout](../testbench.md#the-case-file)); `model-host-tests` skips it. Every variant is
   caught within the caps, each job in under 20 seconds on one core.
-- Three variants the steward families' random search catches only after many seeds have a
+- Three variants whose state the steward families' random search builds only by chance have a
   **directed scenario** each (`model/tests/common/contracts.rs`), a few operations that build
   the state the break needs, tried before any family. Each is a named test that holds on the
   specified model and catches its variant with the property it names, so these catches are
   deterministic and the random search is the backstop:
   - `declassify_unfit_scenario`: a {7} session writes an item one byte over `DECLASSIFY_MAX`, or
     one with a control character, asks to declassify it and its owner approves; without the
-    item's check, P6 sees it copied out. The random search: `steward_policy`'s seed 4709.
+    item's check, P6 sees it copied out. The random search: `steward_policy`'s seed 575.
   - `one_cursor_scenario`: alice's and bob's unlabelled sessions and bob's {9} session call the
     server, which takes alice's call, then the {9} call, then bob's and alice's next; with one
     cursor over every group the last round starts after the {9} group with the vault's work and
     after alice's without, so P10 sees the unlabelled calls taken in another order. The random
-    search: `steward_noninterference`'s seed 345.
+    search: `steward_noninterference`'s seed 14.
   - `agent_other_set_scenario`: a {7} session asks for an unlabelled agent and its owner
     approves; without the own-set check, P10 sees the request in the unlabelled audit view. The
-    random search: `steward_noninterference`'s seed 96.
+    random search: `steward_noninterference`'s seed 162.
 
 | ID | Variants | What they break |
 | --- | --- | --- |
@@ -362,6 +362,7 @@ model's embedder: its entropy, its admission, a volume's write check and the ser
 | [R39 (leases end)](../servers/steward.md#r39-leases-end) | `PolicyUnboundedLease`, `PolicySubAgentOutlivesAgent`, `PolicyEndLeaseAdmitted`, `PolicyEndLeaseFromVault`, `PolicyNoFairShare` | bounded leases, sub-agents ending with them, ending always admitted and only from the sponsor's unlabelled session, a fair share |
 | [R40 (blame by label set)](../servers/steward.md#r40-blame-by-label-set) | `PolicyBlameNoWindow`, `PolicyNoLockout` | the blame window and the lockout |
 | [R42 (one approved item)](../servers/steward.md#r42-one-approved-item) | `PolicyDeclassifyLive`, `PolicyDeclassifyWithoutReader`, `PolicyDeclassifyFromUnlabelled`, `PolicyDeclassifyUnfit` | a snapshot, through a reader or writer with the labelled side's labels, from a session with them, of printable text within `DECLASSIFY_MAX` |
+| [R79 (one session per context)](../servers/steward.md#r79-one-session-per-context) | `PolicyContextTwice` | a second login to a live context of the same name in its domain |
 
 Five of the steward's former variants are retired, because the core's types or another rule's
 keeper keep their rules and they cannot be written: blame or a pending cap counted per account and
@@ -617,8 +618,8 @@ Replay is what turns the model from a reference into evidence about the kernel.
   model and no property is checked on their outcome; `steward_policy` never calls the audit filter
   (`audit_visible`), which only `steward_noninterference`'s audit view reaches. The counts are set
   from what the families reach ([property families](#property-families)), which bounds what a
-  lower count gives up, not what the generator never builds. The three breaks the random search
-  catches only after many seeds (`PolicyDeclassifyUnfit` at the policy family's seed 4709) are
+  lower count gives up, not what the generator never builds. The three breaks whose state the
+  random search builds only by chance (`PolicyDeclassifyUnfit` at the policy family's seed 575) are
   caught first by directed scenarios, which pin the state each break needs rather than show that
   the generator finds it.
 - **Rules outside the model** (R15, R16, R17, R19, R23, R24) have no model check at all; their

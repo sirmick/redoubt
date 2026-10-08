@@ -186,6 +186,8 @@ pub enum Refusal {
     NotSponsor,
     /// A step of the batch failed.
     Failed,
+    /// The context a login names is already live in its domain.
+    InUse,
 }
 
 /// The answer to a call.

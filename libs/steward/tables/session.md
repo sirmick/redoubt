@@ -1,6 +1,7 @@
-The steward's `session` machine: a login session, `ssh alice@box` or `ssh alice+secrets@box`, or
-the console principal's on the UART (`Console`, the steward's own, with no key), in the domain of
-its principal's account and its label set. Included by
+The steward's `session` machine: a login session, `ssh alice@box`, `ssh alice+secrets@box` or
+a named context of either (`ssh alice.work@box`), or the console principal's on the UART
+(`Console`, the steward's own, with no key and no context), in the domain of its principal's
+account and its label set. Included by
 [the steward's page](../../../docs/servers/steward.md#machines); the notation is in
 [README.md](README.md).
 
@@ -11,6 +12,7 @@ its principal's account and its label set. Included by
 | - | `Login` | `!login_key` | - | `refuse` |
 | - | `Login` | `!owns_labels` | - | `refuse` |
 | - | `Login` | `!not_locked` | - | `refuse` |
+| - | `Login` | `!context_free` | - | `refuse` |
 | - | `Login` | - | `Starting` | `carve_session`, `create_scope`, `connect`, `launch` |
 | - | `Console` | `!not_locked` | - | `refuse` |
 | - | `Console` | - | `Starting` | `carve_session`, `create_scope`, `connect`, `launch` |

@@ -131,9 +131,11 @@ fn content(f: &Fields<'_>) -> Result<Content, String> {
 fn event_kind(name: &str, f: &Fields<'_>) -> Result<(EventKind, bool), String> {
     let mut shown = false;
     let kind = match name {
+        // `context=` may be left out: the default context, the empty name.
         "Login" => EventKind::Login {
             principal: string(f.get("principal")?)?,
             labels: f.list("labels")?,
+            context: f.opt("context").map(string).transpose()?.unwrap_or_default(),
             key: f.u64("key")?,
         },
         "Console" => EventKind::Console { principal: string(f.get("principal")?)? },

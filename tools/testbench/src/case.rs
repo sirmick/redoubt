@@ -559,9 +559,12 @@ pub struct Dial {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Session {
-    /// The login name, e.g. `alice+secrets`. Unique within a case; it also names the log.
+    /// The login name, e.g. `alice+secrets` or `alice.work`.
     pub user: String,
-    /// The test key to log in with. Defaults to `user` up to any `+`.
+    /// The session's name, unique within a case, naming its log; defaults to `user`. Two sessions
+    /// that log in as one user differ by it.
+    pub name: Option<String>,
+    /// The test key to log in with. Defaults to `user` up to any `+` or `.`: its principal.
     pub key: Option<String>,
     /// Ask the server for a terminal, as an interactive user's ssh does.
     #[serde(default)]
@@ -578,7 +581,11 @@ pub struct Session {
 }
 
 impl Session {
-    pub fn key(&self) -> &str { self.key.as_deref().unwrap_or_else(|| self.user.split('+').next().unwrap()) }
+    pub fn name(&self) -> &str { self.name.as_deref().unwrap_or(&self.user) }
+
+    pub fn key(&self) -> &str {
+        self.key.as_deref().unwrap_or_else(|| self.user.split(['+', '.']).next().unwrap())
+    }
 }
 
 /// One step of a session. A session runs its steps in order; without an `exit`, the bench then
@@ -1029,7 +1036,8 @@ fn check_net(net: &Net) -> Result<()> {
     Ok(())
 }
 
-/// Session users name log files, so they are unique and plain; every mark waited for is set.
+/// Session names name log files, so they are unique and plain, as users are; every mark waited
+/// for is set.
 fn check_sessions(sessions: &[Session]) -> Result<()> {
     let mut users = HashSet::new();
     let marks: HashSet<&str> = sessions
@@ -1038,12 +1046,16 @@ fn check_sessions(sessions: &[Session]) -> Result<()> {
         .filter_map(|step| if let Step::Mark(mark) = step { Some(mark.as_str()) } else { None })
         .collect();
     for session in sessions {
-        let user = session.user.as_str();
+        let plain =
+            |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_alphanumeric() || b"_+.-".contains(&b));
         ensure!(
-            !user.is_empty() && user.bytes().all(|b| b.is_ascii_alphanumeric() || b"_+-".contains(&b)),
-            "session user {user:?}: use letters, digits, '_', '+' and '-'"
+            plain(&session.user),
+            "session user {:?}: use letters, digits, '_', '+', '.' and '-'",
+            session.user
         );
-        ensure!(users.insert(user), "two sessions log in as {user:?}");
+        let user = session.name();
+        ensure!(plain(user), "session name {user:?}: use letters, digits, '_', '+', '.' and '-'");
+        ensure!(users.insert(user), "two sessions are named {user:?}");
         for (number, step) in session.steps.iter().enumerate() {
             match step {
                 Step::Wait(mark) => {
@@ -1251,6 +1263,19 @@ mod tests {
         assert!(check_sessions(&[session("{ exit = 0 }, { mark = \"gone\" }")]).is_ok());
         let err = check_sessions(&[session("{ exit = 0 }, { send = \"x\" }")]).unwrap_err().to_string();
         assert!(err.contains("only `mark` may follow `exit`"), "{err}");
+    }
+
+    /// Two sessions may log in as one user, a context's name included, when their names differ;
+    /// the key is the user's principal.
+    #[test]
+    fn sessions_are_unique_by_name() {
+        let session = |extra: &str| -> Session {
+            toml::from_str(&format!("user = \"bob.work\"\n{extra}steps = []\n")).unwrap()
+        };
+        assert_eq!(session("").key(), "bob");
+        assert!(check_sessions(&[session(""), session("name = \"again\"\n")]).is_ok());
+        let err = check_sessions(&[session(""), session("")]).unwrap_err().to_string();
+        assert!(err.contains("two sessions are named \"bob.work\""), "{err}");
     }
 
     /// A package's program takes `features`, none unless named.

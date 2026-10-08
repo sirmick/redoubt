@@ -51,7 +51,9 @@ pub fn approval_key(cx: &Cx<'_>) -> Verdict {
 }
 
 /// A vault login, a labelled agent, a declassification or a push needs the labels' owner, read
-/// from the manifest's owned labels, never from a domain's existence.
+/// from the manifest's owned labels, never from a domain's existence. A login is refused as a
+/// wrong key is, so that a label set's existence is not told apart (servers/steward.md,
+/// "Contexts").
 pub fn owns_labels(cx: &Cx<'_>) -> Verdict {
     let (principal, wanted) = match cx.kind {
         Kind::Session => (session(cx).ok_or(Refusal::Unknown)?.principal, Labels::empty()),
@@ -62,7 +64,20 @@ pub fn owns_labels(cx: &Cx<'_>) -> Verdict {
         _ => return Err(Refusal::Unknown),
     };
     let owned = &cx.fixed.principals[principal].owned;
-    ok_if(owned.includes(cx.domain.labels()) && owned.includes(&wanted), Refusal::NotOwner)
+    let refusal = if cx.kind == Kind::Session { Refusal::BadKey } else { Refusal::NotOwner };
+    ok_if(owned.includes(cx.domain.labels()) && owned.includes(&wanted), refusal)
+}
+
+/// R79: a context is one session at a time: a login names one no other session of its domain is,
+/// unless that one is already ending. The identity is (account, label set, name), and a handler
+/// sees only its own domain, so the same name in another label set is never looked at (R37).
+pub fn context_free(cx: &Cx<'_>) -> Verdict {
+    let s = session(cx).ok_or(Refusal::Unknown)?;
+    let Some(name) = &s.context else { return Ok(()) };
+    let taken = cx.state.sessions.values().any(|o| {
+        o.id != s.id && o.state != crate::gen::session::State::Ending && o.context.as_ref() == Some(name)
+    });
+    ok_if(!taken, Refusal::InUse)
 }
 
 /// A labelled session or agent starts nothing: the lease is asked for from the unlabelled

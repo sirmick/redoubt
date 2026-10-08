@@ -359,6 +359,8 @@ pub enum Mutation {
     PolicyServerHoldsSystemBudget,
     /// Audit records are read without their labels (`audit_visible`).
     PolicyAuditUnfiltered,
+    /// A login to a live context makes a second session of it (`context_free`).
+    PolicyContextTwice,
     // kernel/devices.md, I16: DMA device reset and frame quarantine.
     /// A dying process's DMA frames are pooled even when a device in its reset set did not
     /// confirm: the acceptance mutation.
@@ -381,7 +383,7 @@ pub enum Mutation {
 }
 
 impl Mutation {
-    pub const ALL: [Mutation; 154] = {
+    pub const ALL: [Mutation; 155] = {
         use Mutation::*;
         [
             R1SkipLabelCheck,
@@ -532,6 +534,7 @@ impl Mutation {
             PolicyWriteUp,
             PolicyServerHoldsSystemBudget,
             PolicyAuditUnfiltered,
+            PolicyContextTwice,
             DmaFreeBeforeReset,
             DmaQuarantinedSlotCountsAsReset,
             DmaUnmapFrees,
@@ -678,6 +681,7 @@ impl Mutation {
             | PolicyEndLeaseFromVault
             | PolicyNoFairShare => "R39",
             PolicyBlameNoWindow | PolicyNoLockout => "R40",
+            PolicyContextTwice => "R79",
             PolicyDeclassifyLive
             | PolicyDeclassifyWithoutReader
             | PolicyDeclassifyFromUnlabelled
@@ -715,6 +719,7 @@ pub fn policy(m: Option<Mutation>) -> Policy {
         Some(Mutation::PolicyDeclassifyLive) => p.copy_out = copy_out,
         Some(Mutation::PolicyEndLeaseFromVault) => p.sponsor_session = sponsor_session,
         Some(Mutation::PolicyAuditUnfiltered) => p.audit_visible = |_, _| true,
+        Some(Mutation::PolicyContextTwice) => p.context_free = pass,
         _ => {}
     }
     p

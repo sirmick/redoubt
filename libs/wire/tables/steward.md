@@ -10,7 +10,7 @@ message is accepted only on its badge class: `sshd`'s root badge (`login`, `chan
 <!-- wire: steward -->
 | Opcode | Message | Fields | Reply |
 | --- | --- | --- | --- |
-| 1 | `login` | `principal: string`, `label: string`, `key: bytes`, `console: handle[0] endpoint` | `session: u64`, `name: string`, `labels: bytes` |
+| 1 | `login` | `principal: string`, `label: string`, `context: string`, `key: bytes`, `console: handle[0] endpoint` | `session: u64`, `name: string`, `labels: bytes` |
 | 2 | `channel_closed` | `session: u64` | - |
 | 3 | `approval_opened` | `principal: string`, `key: bytes` | `channel: u64` |
 | 4 | `approval_closed` | `channel: u64` | - |
@@ -40,5 +40,6 @@ message is accepted only on its badge class: `sshd`'s root badge (`login`, `chan
 | 12 | `locked_out` |
 | 13 | `not_sponsor` |
 | 14 | `failed` |
+| 15 | `in_use` |
 
 <!-- ANCHOR_END: tables -->

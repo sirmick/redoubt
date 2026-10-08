@@ -800,7 +800,7 @@ pub const UNFIT: [&[u8]; 2] = [&[b'a'; DECLASSIFY_MAX + 1], b"ring\x07"];
 /// [`declassify_unfit`] for one item.
 pub fn declassify_unfit_item(mutation: Option<Mutation>, item: &[u8]) -> Result<(), String> {
     let mut run = Run::new(mutation, 0);
-    run.apply(&PolicyOp::Login { principal: 0, labels: vec![7], key: 11 })?;
+    run.apply(&PolicyOp::Login { principal: 0, labels: vec![7], context: String::new(), key: 11 })?;
     let session = session_of(&run, 0, &[7]);
     run.apply(&PolicyOp::WriteItem { session, labels: vec![7], item: 0, bytes: item.to_vec() })?;
     let content = Content::Declassify { labels: vec![7], item: 0 };
@@ -824,9 +824,9 @@ pub fn one_cursor(mutation: Option<Mutation>) -> Result<(), String> {
         let (alice, bob, vault) =
             (session_of(run, 0, &[]), session_of(run, 1, &[]), session_of(run, 1, &[9]));
         Some(match step {
-            1 => PolicyOp::Login { principal: 0, labels: vec![], key: 11 },
-            2 => PolicyOp::Login { principal: 1, labels: vec![], key: 21 },
-            3 => PolicyOp::Login { principal: 1, labels: vec![9], key: 21 },
+            1 => PolicyOp::Login { principal: 0, labels: vec![], context: String::new(), key: 11 },
+            2 => PolicyOp::Login { principal: 1, labels: vec![], context: String::new(), key: 21 },
+            3 => PolicyOp::Login { principal: 1, labels: vec![9], context: String::new(), key: 21 },
             4 => PolicyOp::Work { session: alice },
             5 | 7 | 10 => PolicyOp::Serve,
             6 => PolicyOp::Work { session: vault },
@@ -847,8 +847,8 @@ pub fn agent_other_set(mutation: Option<Mutation>) -> Result<(), String> {
         step += 1;
         let vault = session_of(run, 0, &[7]);
         Some(match step {
-            1 => PolicyOp::Login { principal: 0, labels: vec![], key: 11 },
-            2 => PolicyOp::Login { principal: 0, labels: vec![7], key: 11 },
+            1 => PolicyOp::Login { principal: 0, labels: vec![], context: String::new(), key: 11 },
+            2 => PolicyOp::Login { principal: 0, labels: vec![7], context: String::new(), key: 11 },
             3 => PolicyOp::Open { principal: 0, key: 12 },
             4 => PolicyOp::Submit {
                 session: vault,

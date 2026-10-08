@@ -138,6 +138,12 @@ keyed to it (for 9P, its fid table). Copies of the handle share the connection; 
 each child a fresh one. Unix: an open socket or file description. Defined in
 [the servers](servers/README.md#connections).
 
+### context
+
+A named session of one principal in one label set, chosen by the SSH user name:
+`ssh alice.work@box` is Alice's context `work`, `ssh alice@box` her default one. One session at a
+time. Defined in [sessions and namespaces](userland/sessions.md#contexts).
+
 ### crash blame
 
 When a server crashes while working on a call, the exit notice names the account and labels of

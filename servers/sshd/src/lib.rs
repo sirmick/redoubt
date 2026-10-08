@@ -5,7 +5,7 @@
 //!   [`Connection::output_buf`]) and calls [`Connection::progress`] until it is idle.
 //! - [`Platform`]: what the core asks for: `keyd`'s signature over an exchange and its `holds`, the steward's
 //!   login, and a session's console, [`Session`].
-//! - [`Login`]: the user name's grammar, `principal` or `principal+label`.
+//! - [`Login`]: the user name's grammar, `principal[+label][.context]`.
 //! - [`listener`]: the reads the program's threads ask `ipd` again when its wait runs out.
 //!
 //! What the core decides, so that no platform has to:
@@ -109,31 +109,48 @@ impl Refusal {
     }
 }
 
-/// Who a login is for: the SSH user name `principal` or `principal+label`, each part a name as
-/// servers/init.md "Names" has it, without `+`.
+/// Who a login is for: the SSH user name `principal[+label][.context]`, in that order only, each
+/// part a name (servers/sshd.md, "Login"). The steward checks every part again.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Login<'a> {
     pub principal: &'a str,
     pub label: Option<&'a str>,
+    /// The context; `None` is the principal's default one.
+    pub context: Option<&'a str>,
 }
 
 impl<'a> Login<'a> {
-    /// The login a user name asks for, or `None` if it is not one.
+    /// What a user name that is not a login is sent as: no principal has the empty name, so the
+    /// steward refuses it as it refuses an unknown one, on the same path (no enumeration).
+    pub const NOBODY: Login<'static> = Login { principal: "", label: None, context: None };
+    /// User names that are a terminal's own (`approve@box`): they take no label and no context.
+    pub const RESERVED: [&'static str; 1] = ["approve"];
+
+    /// The login a user name asks for, or `None` if it is not one. `alice.work+tax` is not: the
+    /// context comes last, and a name holds no `+`. Nor is `approve.x` or `approve+x`.
     pub fn parse(user: &'a str) -> Option<Login<'a>> {
-        let (principal, label) = match user.split_once('+') {
-            Some((principal, label)) => (principal, Some(label)),
+        let (rest, context) = match user.split_once('.') {
+            Some((rest, context)) => (rest, Some(context)),
             None => (user, None),
         };
-        (name(principal) && label.is_none_or(name)).then_some(Login { principal, label })
+        let (principal, label) = match rest.split_once('+') {
+            Some((principal, label)) => (principal, Some(label)),
+            None => (rest, None),
+        };
+        let suffixed = label.is_some() || context.is_some();
+        let reserved = suffixed && Self::RESERVED.contains(&principal);
+        (name(principal) && label.is_none_or(name) && context.is_none_or(name) && !reserved)
+            .then_some(Login { principal, label, context })
     }
 }
 
-/// 1 to 64 bytes of `[a-z0-9_:-]`, starting with a letter.
-fn name(s: &str) -> bool {
+/// 1 to 64 bytes of `[a-z0-9_-]`, starting with a letter: a principal's, a label's or a
+/// context's name.
+pub fn name(s: &str) -> bool {
     let b = s.as_bytes();
     b.len() <= 64
         && b.first().is_some_and(u8::is_ascii_lowercase)
-        && b.iter().all(|&c| matches!(c, b'a'..=b'z' | b'0'..=b'9' | b'_' | b':' | b'-'))
+        && b.iter().all(|&c| matches!(c, b'a'..=b'z' | b'0'..=b'9' | b'_' | b'-'))
 }
 
 /// What the core asks of the machine it runs on (servers/sshd.md, "The core and its platforms").
@@ -518,7 +535,9 @@ fn pubkey<P: Platform>(
     if !a.signed() {
         return true;
     }
-    let Some(who) = a.username().ok().and_then(Login::parse) else { return false };
+    // A user name that is not a login still asks the steward, as nobody: every refusal after a
+    // verified signature takes the one path (servers/sshd.md, "Login").
+    let who = a.username().ok().and_then(Login::parse).unwrap_or(Login::NOBODY);
     match platform.login(&who, &key) {
         Ok(s) => {
             *session = Some(s);

@@ -22,7 +22,7 @@ standing labelled reader.
 
 ### The policy core
 
-<details><summary>Status: built · tested (56)</summary>
+<details><summary>Status: built · tested (58)</summary>
 
 - host:redoubt-steward::a_manifest_with_a_key_in_two_roles_is_refused
 - host:redoubt-steward::the_lines_read_as_the_manifest_and_write_back_the_same
@@ -34,6 +34,8 @@ standing labelled reader.
 - host:redoubt-steward::boot_carves_a_fixed_sub_budget_per_label_set
 - host:redoubt-steward::login_key
 - host:redoubt-steward::owns_labels_reads_the_manifest_not_the_domains
+- host:redoubt-steward::a_login_s_refusals_tell_nothing_apart
+- host:redoubt-steward::context_free_holds_one_session_per_name
 - host:redoubt-steward::a_session_is_carved_from_its_domain_with_a_scope_for_its_connections
 - host:redoubt-steward::the_batch_steps_for_a_session
 - host:redoubt-steward::approval_key
@@ -223,7 +225,8 @@ default. The model swaps one entry for a broken one.
 | Guard or effect | Rule | Mutation |
 | --- | --- | --- |
 | `login_key`, `approval_key` | a login uses only one of the principal's login keys and an approval channel only one of its approval keys; the boot manifest fixes both sets and `keyd`'s keys, and keeps all three apart ([R35 (key separation)](init.md#r35-key-separation)). The mutations widen a guard to the key an attacker could sign with: one `keyd` holds, or a login key | `PolicyLoginWithKeydKey`, `PolicyApproveWithLoginKey` |
-| `owns_labels` | a vault login, a labelled agent, a declassification or a push needs the labels' owner, read from the manifest's owned labels, never from a domain's existence | `PolicyVaultWithoutOwnership` |
+| `owns_labels` | a vault login, a labelled agent, a declassification or a push needs the labels' owner, read from the manifest's owned labels, never from a domain's existence; a login it refuses is answered as a wrong key is ([contexts](#contexts)) | `PolicyVaultWithoutOwnership` |
+| `context_free` | [R79 (one session per context)](#r79-one-session-per-context) | `PolicyContextTwice` |
 | `caller_unlabelled` | a labelled session or agent starts nothing; it only submits requests | `PolicyLabelledStartsAgent` |
 | `agent_own_set` | an agent request names a labelled agent: a labelled caller's, exactly its own label set, so its lease and records stay in its domain (R37); an unlabelled agent is `StartAgent`'s | `PolicyAgentOtherSet` |
 | `not_locked`, `blame_window` | R40 | `PolicyNoLockout`, `PolicyBlameNoWindow` |
@@ -350,7 +353,7 @@ event per line:
   object is `kind@account/labels#id` (`session@1/7#101`). A string is quoted, with the escapes
   `\"`, `\\`, `\n` and `\xNN`. A `Done` carries `ok=[..]`, what each step made in order
   (`budget(N)`, `scope`, `connection`, `process(N)`, `bytes("..")` or `done`), or
-  `failed=STEP,ERROR`.
+  `failed=STEP,ERROR`. A `Login` without `context=` names the default context, `""`.
 - `hash=shown` in an `Approve` stands for the hash the last screen of that request showed, as an
   approver copies it, so a hand-written trace names no SHA-256. Both sides substitute it alike.
 
@@ -495,6 +498,39 @@ sequenceDiagram
 ```
 *Figure: a vault login.*
 
+### Contexts
+
+Status: built · tested: bench:steward-context-login, bench:steward-login-refused, host:redoubt-steward::a_login_s_refusals_tell_nothing_apart, host:redoubt-steward::context_free_holds_one_session_per_name, host:redoubt-steward-server::a_refused_login_makes_nothing, host:redoubt-steward-server::a_live_context_is_refused_in_use, host:redoubt-init::principal_and_label_names_hold_no_separator_and_none_is_reserved
+
+A login's session is a **context** of its principal: `ssh alice@box` the default one, whose name
+is empty, `ssh alice.work@box` the context `work` ([sessions](../userland/sessions.md#contexts)).
+`sshd` splits the user name and sends each part; the steward trusts none of its parse.
+- **Names.** A principal's, a label's and a context's name is 1 to 64 bytes of `[a-z0-9_-]`,
+  starting with a letter (`manifest::name`). `init` holds principals and labels to it and
+  refuses a principal named `approve`, the approval terminal's user name; the steward holds a
+  login's context to it.
+- **The key first, then the rest.** A login's key is checked against the principal alone
+  (`login_key`); the label set and the context are looked at only after it, and each is a table
+  lookup. A key that is not the principal's, a principal the manifest does not name, a label the
+  manifest does not hold or the principal does not own, and a context that is not a name are all
+  refused `bad_key`, so a login cannot tell them apart by the answer. The model checks that every
+  such login gets that answer (its P17). The answers are uniform in content, not in time: an
+  unknown principal or label set is refused before any machine runs, and a wrong key for a known
+  principal runs the blame and session machines before `login_key` refuses it; nothing is counted
+  ([R40](#r40-blame-by-label-set) counts server crashes). The difference lies inside one steward
+  call, and how far it shows through SSH is not yet measured ([residual risks](#residual-risks)).
+- **Identity.** A context is (account, label set, name): its sessions are numbered and carved in
+  its domain, as every session is, so the same name in another label set is another context, and
+  nothing about it crosses the label sets ([R37](#r37-vault-non-interference)).
+- **One session at a time.** A login naming a context whose session lives, and is not already
+  ending, is refused `in_use` ([R79](#r79-one-session-per-context)). The console's session is no
+  context. The audit record of a login carries its context.
+
+A context that outlives its SSH connection (detached, then reattached or taken over), its
+console's output kept while detached, a cap on live contexts per label set and an idle expiry are
+planned with a per-context console relay ([M2 (usable shell)](../plan/m2-usable-shell.md#the-shell)); until then
+a context's session ends as every session does.
+
 ### The steward's protocol
 
 Status: built · tested: bench:steward-login-refused, host:redoubt-steward-server::every_operation_on_another_badge_class_is_malformed, host:redoubt-steward-server::closing_the_channel_destroys_the_session_and_its_exit_is_late
@@ -509,10 +545,12 @@ the manifest), and sessions get minted badges. An operation on any other badge i
 same answer as an unknown one, so a session cannot send `login`, `approve` or `blame`.
 
 - **`login`** carries the principal's name, the label's name (empty for an unlabelled session),
-  the raw key and the channel's console connection, which `sshd` made for the session and which
-  becomes its `/dev/cons`. The steward checks the label's name against the manifest's and derives
-  the key's id ([the manifest lines](#the-manifest-lines)); a name the manifest does not hold is
-  `not_owner`. The reply is the session's id, its name and the channel's labels.
+  the context's name (empty for the default one), the raw key and the channel's console
+  connection, which `sshd` made for the session and which becomes its `/dev/cons`. The steward
+  derives the key's id ([the manifest lines](#the-manifest-lines)), then checks the label's name
+  against the manifest's; a name the manifest does not hold is `bad_key`, as every refusal before
+  the session is but a live context's `in_use` ([contexts](#contexts)). The reply is the session's
+  id, its name and the channel's labels.
 - **`channel_closed`** ends the session the channel carried.
 - **Not yet bound:** `submit`, `start_agent`, `end_lease`, `approve`, `deny`, `pending`,
   `approval_opened`, `approval_closed` and `blame` are in the table and accepted only on their
@@ -942,6 +980,16 @@ item's labels.
 
 **Open:** none.
 
+### R79 (one session per context)
+
+Status: built · tested: bench:steward-context-login, host:redoubt-steward::context_free_holds_one_session_per_name, host:redoubt-steward-server::a_live_context_is_refused_in_use, host:redoubt-model::steward_policy
+
+A domain holds at most one live session of a context's name: a login naming a context whose
+session is starting or running is refused `in_use`, and nothing is carved for it. The guard
+`context_free` keeps it, reading only the login's own domain, so a name in another label set or
+of another principal is never looked at. The model checks it after every operation (its P17;
+`PolicyContextTwice`).
+
 ## Failure and restart
 
 Status: built · partly tested: `steward-restart` proves the release of a dead steward's connections by count at `bootfsd`, `erofsd:system`, `walfsd:data` and `ipd`, and at `littlefsd:alice-secrets` only by the code they share, since it opens no vault session · tested: bench:steward-restart, bench:steward-restart-ssh, bench:steward-restart-reboot, bench:steward-session-ends, host:redoubt-steward-server::users_not_empty_is_a_start_failure_before_any_carve, host:redoubt-steward-server::watch_is_held_only_from_sshd_and_malformed_on_any_other_badge
@@ -983,6 +1031,11 @@ so the case restarts it thirteen times, each time with that session and its conn
 
 ## Residual risks
 
+- **A login's refusals are uniform in content, not in time.** An unknown principal or label set
+  is refused before any machine runs; a wrong key for a known principal runs the blame and session
+  machines before `login_key` refuses it, and nothing is counted. The difference is inside one
+  steward call, behind SSH's key exchange and signature check, and is not yet measured
+  ([contexts](#contexts)).
 - **An approved text can carry a hidden message.** Text an agent wrote and a person approved for
   declassification can still hide one; no rule on the item's form prevents that.
 - **A push is one human action,** so a confined domain's input rate is a person's approval rate.

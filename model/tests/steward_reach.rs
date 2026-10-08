@@ -95,7 +95,7 @@ macro_rules! instrumented {
 }
 
 instrumented! {
-    guards: agent_own_set, approval_key, blame_window, caller_unlabelled, copying, declassifies,
+    guards: agent_own_set, approval_key, blame_window, caller_unlabelled, context_free, copying, declassifies,
         exact_labels, fair_share, grants_lease, granted, hash_matches, item_fits, lease_bounded,
         login_key, not_locked, owns_labels, pending_cap, pushes, reading, rendered_here,
         sponsor_session;
@@ -120,7 +120,7 @@ const STEWARD: [(&str, Reach, u64); 2] = [
 
 /// Each family's last new item and how many it reaches, as kernel/model.md's table states them
 /// ("Property families"), for this generator.
-const LAST: [(u64, usize); 2] = [(655, 113), (1295, 116)];
+const LAST: [(u64, usize); 2] = [(3470, 118), (405, 120)];
 
 /// Seeds `0..n` of `f`, unmutated, on the instrument's table: the lowest seed reaching each rule
 /// and property. Every seed must hold.

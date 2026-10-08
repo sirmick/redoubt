@@ -292,6 +292,26 @@ fn names_follow_the_rule_and_differ() {
     refused_at(&m, "servers[4].handed[1].endpoint", Why::Twice);
 }
 
+/// A principal's and a label's name split a login's user name one way only: no `:` or `+`, and no
+/// principal takes a reserved name (servers/init.md, Names).
+#[test]
+fn principal_and_label_names_hold_no_separator_and_none_is_reserved() {
+    for bad in ["al:ice", "al+ice"] {
+        let mut m = full_image();
+        m.principals[1].name = bad.into();
+        refused_at(&m, "principals[1].name", Why::AccountName);
+        let mut m = full_image();
+        m.labels[0].name = bad.into();
+        refused_at(&m, "labels[0].name", Why::AccountName);
+    }
+    let mut m = full_image();
+    m.principals[1].name = "al.ice".into();
+    refused_at(&m, "principals[1].name", Why::NotAName);
+    let mut m = full_image();
+    m.principals[1].name = "approve".into();
+    refused_at(&m, "principals[1].name", Why::Reserved);
+}
+
 #[test]
 fn references_name_what_the_manifest_and_bundle_hold() {
     let mut m = image();
