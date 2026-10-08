@@ -29,7 +29,8 @@ expect = [
     '^\[con [0-9a-f]{16}\] littlefsd-client: a create and a write to Elixir.Version.beam refused$',
     '^\[con [0-9a-f]{16}\] littlefsd-client TEST PASSED$',
     '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
-    '^\[con [0-9a-f]{16}\] / \(1\)> "1\.2\.3"$',
+    '^\[con [0-9a-f]{16}\] / \(1\)> Version\.parse!\("1\.2\.3"\) \|> to_string\(\)$',
+    '^\[con [0-9a-f]{16}\] "1\.2\.3"$',
 ]
 forbid = [
     'init: refused the boot',

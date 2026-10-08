@@ -417,8 +417,11 @@ runtime's `thread::spawn`.
 
 In a `boot-stats` build ([checked builds](../testbench.md#checked-builds)) beamlet says `beamlet:
 first console read [t=N]` at the VM's first console read, with `time_now` in µs. For the shell that
-read is its prompt, drawn and waiting, so the line is the boot's time to its prompt; the line
-follows the prompt on the console's line. `boot-profile` and `boot-profile-unverified` measure it.
+read is its line driver's, made when it takes the console and before the shell draws its banner and
+prompt: the line comes before the banner, and the boot's time to its prompt is the line's time and
+the shell's own start after it, which the line does not count. `boot-profile` and
+`boot-profile-unverified` measure it. The rows below were taken when the read was the prompt's,
+drawn and waiting; the line driver's earlier read is not measured yet.
 Measured in that build under `icount` (`shift=3`, sleep on) with seed 1, in guest time
 (bench:boot-profile, bench:boot-profile-unverified):
 
