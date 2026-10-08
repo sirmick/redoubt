@@ -213,6 +213,88 @@ defmodule Redoubt.ScreenTest do
     ends(driver)
   end
 
+  test "a screen of widgets: the menu bar opens a prompt, Tab moves to its buttons, a confirm ends it" do
+    {driver, t} = start()
+    type(driver, ~S|Redoubt.Screen.run(Redoubt.ScreenTest.Demo, [])| <> "\r")
+    t = screen(t, &shows?(&1, "name: none"))
+    assert shows?(t, " File")
+
+    # F10 opens the first menu; Enter chooses its first item, which opens a prompt.
+    type(driver, "\e[21~")
+    t = screen(t, &shows?(&1, "Rename"))
+    type(driver, "\r")
+    t = screen(t, &shows?(&1, "< Cancel >"))
+    type(driver, "abc\t\r")
+    t = screen(t, &shows?(&1, "name: abc"))
+    refute shows?(t, "< Cancel >")
+
+    # Alt+F opens the same menu; Quit asks, and Yes ends the screen with the name.
+    type(driver, "\ef")
+    t = screen(t, &shows?(&1, "Quit"))
+    type(driver, "\e[B\r")
+    t = screen(t, &shows?(&1, "< No >"))
+    type(driver, "\r")
+    t = screen(t, &(not Terminal.alternate?(&1)))
+    assert shows?(t, ~s("abc"))
+    ends(driver)
+  end
+
+  defmodule Demo do
+    # A screen of widgets: a menu bar over a line of text, and dialogs it opens.
+    @behaviour Redoubt.Screen
+
+    alias Redoubt.Screen.{Widget, Widgets}
+    alias Redoubt.Screen.Widget.{Dialogs, Theme}
+
+    @impl true
+    def init(_args) do
+      bar = Widget.MenuBar.new([{"File", [{"Rename", :rename}, :separator, {"Quit", :quit}]}])
+      %{bar: bar, dialogs: Dialogs.new(), name: "none"}
+    end
+
+    @impl true
+    def update({:key, _key, _mods} = key, state) do
+      with :pass <- Dialogs.key(state.dialogs, key), :pass <- Widget.MenuBar.key(state.bar, key) do
+        {:cont, state}
+      else
+        {:cont, %Dialogs{} = dialogs} ->
+          {:cont, %{state | dialogs: dialogs}}
+
+        {:closed, :quit, true, _dialogs} ->
+          {:halt, state.name}
+
+        {:closed, :rename, name, dialogs} when is_binary(name) ->
+          {:cont, %{state | dialogs: dialogs, name: name}}
+
+        {:closed, _id, _value, dialogs} ->
+          {:cont, %{state | dialogs: dialogs}}
+
+        {:cont, bar} ->
+          {:cont, %{state | bar: bar}}
+
+        {:done, :rename, bar} ->
+          open(state, bar, Dialogs.prompt(:rename, "rename", "a new name?", ""))
+
+        {:done, :quit, bar} ->
+          open(state, bar, Dialogs.confirm(:quit, "quit", "leave?"))
+      end
+    end
+
+    def update(_event, state), do: {:cont, state}
+
+    defp open(state, bar, dialog),
+      do: {:cont, %{state | bar: bar, dialogs: Dialogs.push(state.dialogs, dialog)}}
+
+    @impl true
+    def view(state, buffer, {cols, rows}) do
+      theme = Theme.qbasic()
+      Redoubt.Term.Buffer.fill(buffer, {0, 0, cols, rows}, " ", Theme.style(theme, :normal))
+      Widgets.label(buffer, {1, 2, cols - 2, 1}, "name: " <> state.name, Theme.style(theme, :normal))
+      Dialogs.draw(state.dialogs, buffer, {0, 1, cols, rows - 1}, theme)
+      Widget.MenuBar.draw(state.bar, buffer, {0, 0, cols, rows}, theme)
+    end
+  end
+
   defmodule Trapping do
     # A screen that traps exits, as a screen may.
     @behaviour Redoubt.Screen

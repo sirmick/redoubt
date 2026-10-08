@@ -140,7 +140,10 @@ end
   or an example that calls it does not compile. The same declaration becomes the function's
   `@doc`, its page in `help`, and what completion offers for each argument.
 - **Nothing else to wire.** The registry finds every module of the shell's application that
-  declares commands; they are imported at the prompt and listed by `help`, grouped by area.
+  declares commands; they are imported at the prompt and listed by `help`, grouped by area. The
+  finding is done when the shell is built, which writes an index of the commands, each a function
+  that calls its own; the prompt imports the index, so a command's module is loaded when the
+  command is first called, not at the shell's start.
 
 A command's arguments are Elixir values the person wrote, evaluated as Elixir evaluates them
 anywhere. There are no bare words for the shell to quote, so there is no quoting to get wrong and
@@ -411,7 +414,7 @@ is refused, never repaired. One file of vectors holds the two decoders to the sa
 
 ### Full-screen programs
 
-<details><summary>Status: built · partly tested: the host only, on beamlet alone (the BEAM has no screen buffer), with the three widgets `pick` uses; its tests are the shell's own ExUnit suite (`test/redoubt/screen_test.exs`, `test/redoubt/screen/layout_test.exs`), judged on a model of the terminal, and a pseudo-terminal test of the real binary, both of which `./test-shell` runs and no bench case does · tested (1)</summary>
+<details><summary>Status: built · partly tested: the host only, on beamlet alone (the BEAM has no screen buffer); its tests are the shell's own ExUnit suite (`test/redoubt/screen_test.exs`, `test/redoubt/screen/layout_test.exs`), judged on a model of the terminal, and a pseudo-terminal test of the real binary, both of which `./test-shell` runs and no bench case does · tested (1)</summary>
 
 - host:beamlet::pick_on_a_terminal_takes_the_screen_and_gives_it_back_with_the_choice
 
@@ -446,8 +449,8 @@ own. It draws into a **screen buffer**, a grid of cells beamlet holds natively
 - **Layout** is rectangles only: split into rows or columns by fixed size, percentage or what is
   left; centre; inset. A screen lays out in fixed rectangles.
 - **Widgets are functions, not processes:** each draws into a rectangle of the buffer from what it
-  is given, every text made visible first. Built are the three `pick` uses: a box with a title and
-  a shadow, a list with a selection, and a status line.
+  is given, every text made visible first: a box with a title and a shadow, a status line, and
+  those that take keys ([widgets](#widgets-focus-and-themes)).
 - **A screen's life.** A line starts a screen with `Redoubt.Screen.run(module, args, opts)`,
   which returns when the screen ends, with the value its `update` ended it with. While it is in
   front, the driver shows the alternate screen with the cursor hidden, sends it every key as
@@ -471,17 +474,49 @@ What a full-screen program cannot do:
   the prompt, and so does Ctrl+C unless the screen takes it as a key
   ([interrupting](#interrupting-and-killing-jobs)).
 
-### Widgets, focus, themes and a native program's screen
+### Widgets, focus and themes
+
+Status: built · partly tested: the host only; the keys of every widget, the focus ring and the dialog stack on beamlet and on the BEAM, and what they draw on beamlet alone (the BEAM has no screen buffer); its tests are the shell's own ExUnit suite (`test/redoubt/screen/widget_test.exs`, `test/redoubt/screen/drawing_test.exs`, `test/redoubt/screen_test.exs`), judged on a model of the terminal, which `./test-shell` runs and no bench case does
+
+A screen program is built of widgets
+([`userland/shell/lib/redoubt/screen/`](../../userland/shell/lib/redoubt/screen/)), which are
+plain data and functions, never processes. One that takes keys is a struct with `key`, which
+answers a key with the widget changed, with the value it ended with (Enter on a list, a button
+pressed), or with `:pass` for a key it does not take; and `draw`, which draws it into a
+rectangle of the buffer, with the focus or without. The screen's `update` stays the one place
+its state changes. The widgets' code is not held at the prompt: they declare no commands,
+so nothing loads them until a screen first draws with them.
+- **The widgets:** a list, which is also the radio list and the checklist (Space marks); a row
+  of buttons; a one-line text input whose cursor is a cell drawn in its own style, the
+  terminal's cursor staying hidden; a menu bar with drop-downs, opened by F10 or Alt and a
+  menu's first letter, modal while open; a table with a header, its columns sized as
+  [`table`](#files-and-text) sizes them; a Braille canvas of dots, two across and four down in
+  each cell, drawn with the buffer's `plot`; and the completion pop-up, a list placed below a
+  cell, or above it with no room below. The prompt's own completion is `group`'s list
+  ([completion](#completion)), not the pop-up.
+- **A stack of modal dialogs:** a message, a yes or no, and an input with OK and Cancel. Keys go
+  to the top dialog, which keeps those it does not take, or to the screen when there is none;
+  Esc closes the top dialog with `nil`. The stack is laid out in `view` from the size the screen
+  has, top to bottom, so a screen of a new size draws it again at that size.
+- **Focus:** inside a dialog or a screen, Tab and Shift+Tab move along a focus ring, and every
+  other key goes to the widget with the focus.
+- **A theme** is a map from roles (the text, the selection, a border, the menu, a button, the
+  input, its cursor) to styles. Three are built: the terminal's own colours, the default;
+  QBasic's blue; and `menuconfig`'s.
+- **Every style is the code's.** A widget draws each part in its role's style, and its text
+  through the visible-text rule: a label, an item, a cell, a title or what was typed sets no
+  colour, and a control character in it is drawn as `^[` in the role's style
+  ([hostile text](#hostile-text-never-drives-the-terminal)). A theme is chosen by name from the
+  three, never read from text.
+
+What is not built: a `plot(values)` command drawing a series on the canvas, and the delivery of
+a change of size to a screen in front, which waits for the console's `resize`
+([below](#paste-scrolling-a-plainer-terminal-and-the-consoles-size)).
+
+### A native program's screen and the session's key
 
 Status: planned · M2 (usable shell)
 
-- **The rest of the widgets:** a menu bar with drop-downs, a checklist and a radio list, buttons,
-  a text input with a cursor, a completion pop-up, a stack of modal dialogs (a message, yes or no,
-  an input), a table, and a Braille canvas.
-- **Focus:** keys go to the top dialog of the stack, or to the screen when there is none; inside
-  either, Tab and Shift+Tab move along a focus ring. On a resize the stack is laid out again, top
-  to bottom, at the new size, and the screen gets `{:resize, cols, rows}`.
-- **A theme** is a map from roles to styles; QBasic's blue and `menuconfig`'s are two maps.
 - **A native program with a screen**, a package's own TUI, sends `cells` frames on its standard
   output, and the session draws them through the same decoder and encoder. It holds its pipes and
   its budget, no `/dev/cons`, and a cell cannot carry a control sequence, so a hijacked one can
@@ -583,16 +618,34 @@ reads the documentation chunks of the module's `.beam` file.
 
 ### Resource use
 
-Status: planned · M2 (usable shell)
+Status: built · partly tested: runs on the host only, where there are no budgets but the fake kernel's; its tests are the shell's own ExUnit suite, which `./test-shell` runs and no bench case does
 
-`top()` shows the session's budgets, their weights and usage, and their processes; `ps()`,
-`df()`, `free()` and `uptime()` show a part of that. They read the budgets the session holds
-(`budget_usage`: [budgets](../kernel/budgets.md#budget_usage)), so they show only what is the
-caller's own: its (account, label set). Another principal's processes, and a vault session's
-from an ordinary one, are not listed, because a count of someone else's work is a channel. PIDs
-are drawn at random for the same reason ([processes](../kernel/processes.md#processes-and-pids)).
+```text
+free()      # the session's pages: limit, used, free; what the VM's processes, binaries, atoms, ETS hold
+uptime()    # since the box booted, by the kernel's clock, and since the session started
+ps()        # the session's budget, then the VM's Erlang processes, the largest first
+top()       # all of it on a screen, refreshed each second, the busiest process first; q leaves
+```
 
-**Open:** none.
+They read and change nothing ([`Redoubt.Shell.Resources`](../../userland/shell/lib/redoubt/shell/resources.ex);
+`top`'s screen, [`Redoubt.Screen.Top`](../../userland/shell/lib/redoubt/screen/top.ex), is loaded only when it is called).
+The session's budget is read through `budget_usage` on the named handle `budget`
+([budgets](../kernel/budgets.md#budget_usage)), so they show only what is the caller's own: its
+(account, label set). Another principal's processes, and a vault session's from an ordinary one,
+are not listed, because a count of someone else's work is a channel. PIDs are drawn at random for
+the same reason ([processes](../kernel/processes.md#processes-and-pids)). The processes listed are
+the VM's own, Erlang processes; a native program the session runs is counted in the session's
+pages and processes, in a budget carved from its own. A platform with no budgets, the host's,
+shows the VM's part and says so.
+
+Not built:
+- **`df()`**, the session's volumes' space: no file server answers a call for it yet, neither the
+  free space of a volume nor what is left of a byte quota
+  ([walfsd](../servers/walfsd.md#quotas), [littlefsd](../servers/littlefsd.md#quotas)); that call
+  comes first.
+- **The session's jobs in `ps()` and `top()`**, each native stage and its budget, with jobs
+  ([interrupting and killing jobs](#interrupting-and-killing-jobs)): a launch gives the session a
+  job, not a PID.
 
 ### The editor
 
