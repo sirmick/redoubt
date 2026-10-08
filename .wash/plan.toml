@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 442
+revision = 453
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1374,8 +1374,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "shell-host"
   needs = ["SHELL2"]
   body = "M2 host step 6: docs/userland/shell.md#resource-use. Size S-M. Also, from B32's measurement (.wash/local/B32-measure.md): the shell is built with unconsolidated protocols, so Protocol, Enumerable and Enumerable.Range (83K) load only for Redoubt.Term's Enum.chunk_while. Build the shell with consolidated protocols, keep Term off Enumerable, and measure the session's peak against B32's 5,902 pages (rv64); lower the session size if the margin allows."
-  state = "active"
-  revision = 434
+  state = "reported"
+  revision = 443
   overrides = ["2026-10-08: started by Orchestrator before M1 (reported): Shell track on the `shell` branch; owner asked to fill the bandwidth (2026-10-08)."]
 
 [[node]]
@@ -1531,8 +1531,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   needs = ["BEAM16"]
   body = "From BEAM16's review. Sized resources (SHELL3, BEAM16) count toward their holder's max_heap_size, but one stored in ETS or persistent_term and dropped counts for nobody, and max_ets_words (1 GiB) is larger than a session's budget. Count a sized resource's declared bytes in max_ets_words and persistent_term's limit, or lower those limits to fit the session, and test both. Size S."
-  state = "active"
-  revision = 437
+  state = "reported"
+  revision = 447
   overrides = ["2026-10-08: started by Orchestrator before M1 (reported): Strict beamlet hardening; BEAM16 is merged."]
 
 [[node]]
@@ -1592,3 +1592,43 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "Found by B37. A race in the test, not a clock bound: console_read sends the first read and then takes what has completed; with empty input, the fixture thread can answer EOF before take_completed. Hold the end back until after the first read (a channel-gated Read). Show it gone with 50 runs at 8 cores beside other work. Size S."
   state = "done"
   revision = 442
+
+[[node]]
+  id = "CTX1"
+  title = "Named session contexts over SSH, part a: names, parsing, init's checks, the steward's context table, refusals without enumeration"
+  template = "package"
+  parent = "M2"
+  body = "Owner's request (2026-10-08). The brief is .wash/local/CTX1-brief.md: syntax principal[+label][.context] (`.`, not `:`, which scp, sftp and rsync split on); nine rules, each an acceptance test (canonical parsing; auth on the principal alone; no enumeration before auth; identity is (principal, label set, name); one attachment, with takeover told to both terminals; a cap per label set, refusing rather than evicting; reserved names take no suffix; the steward-restart rule; a bounded detached console); the lifecycle; three shell commandlets. Work in sshd, the steward, init's manifest check, the shell and the pages. Tier A. Size M-L."
+  state = "active"
+  revision = 449
+  overrides = ["2026-10-08: started by Orchestrator before M1 (reported): The owner asked for this now (2026-10-08).", "2026-10-08: started by Orchestrator before M1 (reported): The owner asked for named SSH contexts (2026-10-08)."]
+
+[[node]]
+  id = "CTX2"
+  title = "Named session contexts, part b: the per-context console relay, detach on disconnect, reattach, takeover, the bounded detached buffer"
+  template = "package"
+  parent = "M2"
+  needs = ["CTX1"]
+  body = "Second of three; brief .wash/local/CTX1-brief.md, design .wash/local/CTX1-design.md. A relay program in the context's own budget serves the VM's /dev/cons; the steward hands it each channel's console. 64 KiB buffer, newest kept, a dropped-count line, cut at line boundaries, resize on reattach. Takeover is told on both terminals, with the remote address. Tier A."
+  state = "todo"
+  revision = 446
+
+[[node]]
+  id = "CTX3"
+  title = "Named session contexts, part c: the cap per label set, idle expiry, contexts/detach/end_context, the generation on steward restart"
+  template = "package"
+  parent = "M2"
+  needs = ["CTX2"]
+  body = "Third of three; brief .wash/local/CTX1-brief.md, design .wash/local/CTX1-design.md. The manifest gets principals[].contexts {max, detached_secs}. The cap must fit the label set's sub-budget, checked by init. The cap is checked after auth and before any carve, and never evicts. Idle expiry ends a detached context. Commandlets on the session's own steward badge. Contexts end with the steward, plus a per-instance generation. Tier A."
+  state = "todo"
+  revision = 446
+
+[[node]]
+  id = "B39"
+  title = "servers/steward/tests/steward.rs does not compile on main: B35 gave init::check::args a fourth argument (entries) that the test's call lacks"
+  template = "package"
+  parent = "M2"
+  body = "Found by CTX1's predecessor. B35 (b95d0fda2) added an `entries` argument to init::check::args; servers/steward/tests/steward.rs still calls it with three, so `cargo test -p redoubt-steward-server` fails to build on main. Fix the call, run the steward server's tests, and say why B35's gates missed it (its gate list ran init's host tests, not the steward server's). Size XS."
+  state = "done"
+  revision = 453
+  overrides = ["2026-10-08: started by Orchestrator before M1 (reported): A test build broken on main; tiny."]
