@@ -72,4 +72,9 @@ defmodule Redoubt.Wire.Client.Steward do
   def end_session(conn, timeout \\ C.timeout()) do
     C.call(conn, P, {:end_session, %{}}, [], timeout)
   end
+
+  @doc "Calls `watch`, waiting at most `timeout` ms."
+  def watch(conn, timeout \\ C.timeout()) do
+    C.call(conn, P, {:watch, %{}}, [], timeout)
+  end
 end

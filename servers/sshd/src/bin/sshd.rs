@@ -33,7 +33,7 @@ mod machine {
     use alloc::vec::Vec;
     use core::cell::RefCell;
     use core::num::NonZeroU64;
-    use core::sync::atomic::{AtomicBool, Ordering};
+    use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
     use redoubt_client::file::Connection as File9;
     use redoubt_client::typed;
@@ -50,6 +50,7 @@ mod machine {
     use redoubt_rt::wire::proto::{consol, keyd, net_ctl, steward};
     use redoubt_sshd::console::{Chan, Cons, Console, File, LIMITS, Shared, qid};
     use redoubt_sshd::listener::{Again, again, status};
+    use redoubt_sshd::slot::{DATA, EOF, Read, Reader};
     use redoubt_sshd::{
         Connection, ExchangeTranscript, Login, Platform, Progress, PublicKey, Refusal, Refused, Signature,
     };
@@ -77,6 +78,7 @@ mod machine {
     /// guard page between them, so one too small overwrites its neighbour's.
     const DRIVER_STACK_PAGES: usize = 48;
     const READER_STACK_PAGES: usize = 4;
+    const WATCHER_STACK_PAGES: usize = 4;
     /// One read from `ipd`, and the lend it travels to the driver in.
     const READ: usize = 4096;
 
@@ -85,8 +87,15 @@ mod machine {
     const READER: u64 = 2;
     /// Word 0 of a call or send on a slot's endpoint that is no 9P (whose word 0 is 0).
     const ACCEPT: u64 = 1;
-    const DATA: u64 = 2;
-    const EOF: u64 = 3;
+    /// The watcher's word: the steward that ran every session logged in before this generation
+    /// (word 1) is gone.
+    const GONE: u64 = 4;
+    /// How long the watcher waits before it calls `watch` again, when the last call ended at
+    /// once: it never spins on a steward endpoint that answers nothing else.
+    const WATCH_PAUSE_US: u64 = 1_000_000;
+    /// The longest a login, or a channel's close, waits for the steward's answer: a restart's
+    /// gap is a few seconds.
+    const LOGIN_WAIT_US: u64 = 30_000_000;
 
     /// Fids at `ipd`, which every thread's calls share through the one scope badge: the root,
     /// the main thread's two, and each slot's three from [`slot_fids`].
@@ -108,6 +117,9 @@ mod machine {
     /// Which slots serve a connection: set by the main thread when it hands one over, cleared by
     /// the slot's driver when the connection is over.
     static BUSY: [AtomicBool; SLOTS] = [const { AtomicBool::new(false) }; SLOTS];
+    /// The steward's generation: how many of its `watch` calls have ended. A session logged in
+    /// at an earlier one ran under a steward that is gone.
+    static GENERATION: AtomicU32 = AtomicU32::new(0);
 
     /// Held while a thread says a line: every thread's lines go through the one console
     /// connection, whose attach resets its fids, so two at once would lose both.
@@ -221,6 +233,8 @@ mod machine {
         parked: Parked<()>,
         /// The console the last login minted, by badge, while its session runs.
         console: Option<u64>,
+        /// The session the login made, and the steward's generation then.
+        session: Option<(u64, u32)>,
     }
 
     /// The driver's own caller, through which it mints the console.
@@ -316,11 +330,14 @@ mod machine {
                 key,
             });
             let steward = Endpoint::from_handle(self.handed.steward);
-            let answer = typed::call::<steward::Protocol, _>(
+            // A steward that is gone and not yet back holds the login at its endpoint; past
+            // `LOGIN_WAIT_US` it is refused, as any login with no answer, and the slot is free.
+            let answer = typed::call_within::<steward::Protocol, _>(
                 &steward,
                 &mut self.lend,
                 &m,
                 &[console],
+                LOGIN_WAIT_US,
                 |r, _| match r {
                     steward::Reply::Login(l) => {
                         let mut labels: Vec<u64> = redoubt_rt::wire::labels::decode(l.labels).collect();
@@ -339,6 +356,7 @@ mod machine {
                     let labelled = !labels.is_empty();
                     self.nine.fs.labels = labels;
                     self.console = Some(badge);
+                    self.session = Some((id, GENERATION.load(Ordering::Acquire)));
                     Ok(Console::new(self.nine.fs.chan.clone(), id, labelled))
                 }
                 refused => {
@@ -357,7 +375,15 @@ mod machine {
         fn end(&mut self, session: Console) {
             let m = steward::Message::ChannelClosed(steward::ChannelClosed { session: session.id });
             let steward = Endpoint::from_handle(self.handed.steward);
-            let _ = typed::call::<steward::Protocol, _>(&steward, &mut self.lend, &m, &[], |_, _| ());
+            // Bounded as a login is: a steward that is gone has nothing of this session left.
+            let _ = typed::call_within::<steward::Protocol, _>(
+                &steward,
+                &mut self.lend,
+                &m,
+                &[],
+                LOGIN_WAIT_US,
+                |_, _| (),
+            );
             session.chan.borrow_mut().end(0);
             self.say(&format!("sshd: session {:016x} ended\n", session.id));
         }
@@ -382,17 +408,15 @@ mod machine {
             && open_at(&ipd, &mut lend, out, &format!("tcp/{sock}/data"));
         let started = opened && wake.send(&[ACCEPT, 0, 0, 0], &[], None, FOREVER).is_ok();
         if started {
-            drive(handed, endpoint, &ipd, &mut lend, out);
+            let mut reader = drive(handed, endpoint, &ipd, &mut lend, out);
             close_socket(&ipd, &mut lend, ctl);
-            // The reader ends with the socket; its last call says so.
-            loop {
+            // The reader ends with the socket; its last call says so, unless the driver took it
+            // already (a client that hung up first): the slot is free once it is taken.
+            while reader.waits() {
                 match endpoint.receive(FOREVER, MAX_LEND_PAGES) {
                     Ok(Event::Call(r)) if r.caller.badge == READER => {
-                        let eof = r.words[0] == EOF;
+                        reader.took(r.words[0]);
                         let _ = finish(r, &done());
-                        if eof {
-                            break;
-                        }
                     }
                     Ok(Event::Call(r)) => {
                         let _ = refuse(r, NineError::NO_CONNECTION);
@@ -413,8 +437,10 @@ mod machine {
         }
     }
 
-    /// Runs the core over the socket until the connection is over.
-    fn drive(handed: Handed, endpoint: &Endpoint, ipd: &Nine, ipd_lend: &mut Lend, out: u32) {
+    /// Runs the core over the socket until the connection is over. Returns the reader as the
+    /// driver heard it: whether its last call was taken already.
+    fn drive(handed: Handed, endpoint: &Endpoint, ipd: &Nine, ipd_lend: &mut Lend, out: u32) -> Reader {
+        let mut reader = Reader::default();
         let chan: Shared = Rc::new(RefCell::new(Chan::default()));
         let made = redoubt_rt::handle::random_u64().ok().and_then(|random| {
             let nine = NineServer::new(Cons { chan: chan.clone(), labels: Vec::new() }, LIMITS, random);
@@ -422,9 +448,10 @@ mod machine {
         });
         let Some((nine, lend)) = made else {
             say(handed.console, "sshd: a connection's console could not be made\n");
-            return;
+            return reader;
         };
-        let mut slot = Slot { handed, endpoint, lend, nine, parked: Parked::new(FOREVER), console: None };
+        let mut slot =
+            Slot { handed, endpoint, lend, nine, parked: Parked::new(FOREVER), console: None, session: None };
         slot.nine.requests_wait(FOREVER);
         let (mut inbuf, mut outbuf) = (vec![0u8; BUF], vec![0u8; BUF]);
         let mut conn = Box::new(Connection::new(&mut inbuf, &mut outbuf, &handed.host));
@@ -492,8 +519,8 @@ mod machine {
                 break;
             }
             match endpoint.receive(FOREVER, MAX_LEND_PAGES) {
-                Ok(Event::Call(mut r)) if r.caller.badge == READER => match r.words[0] {
-                    DATA => {
+                Ok(Event::Call(mut r)) if r.caller.badge == READER => match reader.took(r.words[0]) {
+                    Read::Data => {
                         let n = (r.words[1] as usize).min(READ);
                         let bytes = r.lend();
                         let n = n.min(bytes.len());
@@ -502,7 +529,7 @@ mod machine {
                         }
                         held = Some(r);
                     }
-                    _ => {
+                    Read::End => {
                         let _ = finish(r, &done());
                         slot.say("sshd: a connection's input ended\n");
                         conn.close_input();
@@ -510,6 +537,16 @@ mod machine {
                 },
                 Ok(Event::Call(r)) => slot.serve(r, now),
                 // The steward's `ended`, on the console it was given: the session is over.
+                // The watcher's: the steward this session ran under is gone, and its session with
+                // it. The channel ends with status 1, not a clean end's 0.
+                Ok(Event::Send(d)) if d.caller.badge == MAIN && d.words[0] == GONE => {
+                    close_delivery(&d);
+                    if let Some((id, _)) = slot.session.filter(|&(_, at)| u64::from(at) < d.words[1]) {
+                        slot.say(&format!("sshd: session {id:016x} ended: the steward is gone\n"));
+                        chan.borrow_mut().end(1);
+                        slot.session = None;
+                    }
+                }
                 Ok(Event::Send(d)) if Some(d.caller.badge) == slot.console && ended(&d) => {
                     close_delivery(&d);
                     chan.borrow_mut().end(0);
@@ -534,6 +571,34 @@ mod machine {
         slot.turn(now);
         if let Some(r) = held.take() {
             let _ = finish(r, &done());
+        }
+        reader
+    }
+
+    /// The watcher: keeps one `watch` call at the steward, which the steward holds and never
+    /// answers while it runs (servers/steward.md, "Failure and restart"). However the call ends
+    /// (`Dead` when the steward dies, R4b, or an answer as it exits), that steward and every
+    /// session it ran are gone: the watcher moves the generation on and tells every slot, whose
+    /// sessions from before end. It calls again at once after a call the steward held, so the
+    /// next `watch` waits at the endpoint ahead of later logins; after one that ended at once, it
+    /// waits [`WATCH_PAUSE_US`] first, so it never spins. If `init` reboots the machine, the
+    /// watcher ends with it.
+    fn watcher(steward: Handle, slots: Vec<Handle>) {
+        let steward = Endpoint::from_handle(steward);
+        let Ok(mut lend) = Lend::new(1) else { return };
+        let watch = steward::Message::Watch(steward::Watch {});
+        loop {
+            let asked = redoubt_rt::handle::time_now().unwrap_or(0);
+            let _ = typed::call::<steward::Protocol, _>(&steward, &mut lend, &watch, &[], |_, _| ());
+            let generation = GENERATION.fetch_add(1, Ordering::AcqRel).wrapping_add(1);
+            for s in &slots {
+                let _ =
+                    Endpoint::from_handle(*s).send(&[GONE, u64::from(generation), 0, 0], &[], None, FOREVER);
+            }
+            let held = redoubt_rt::handle::time_now().unwrap_or(asked).saturating_sub(asked);
+            if held < WATCH_PAUSE_US {
+                let _ = redoubt_rt::handle::sleep(WATCH_PAUSE_US);
+            }
         }
     }
 
@@ -634,6 +699,12 @@ mod machine {
                 return NOT_STARTED;
             }
             slots.push(main);
+        }
+        let watched: Vec<Handle> = slots.iter().map(|e: &Endpoint| e.handle()).collect();
+        if redoubt_rt::thread::spawn(Box::new(move || watcher(steward, watched)), WATCHER_STACK_PAGES)
+            .is_err()
+        {
+            return NOT_STARTED;
         }
         say(console, "sshd: listening on port 22\n");
         loop {

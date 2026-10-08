@@ -6,13 +6,13 @@
 use redoubt_rt::abi::{BudgetSpec, Error, FOREVER, Handle, ReceivedHandles};
 use redoubt_rt::ipc::Caller;
 use redoubt_rt::wire::proto::steward::{
-    ChannelClosed, EndSession, ErrorCode, Login, LoginReply, Message, Reply, StartAgent,
+    ChannelClosed, EndSession, ErrorCode, Login, LoginReply, Message, Reply, StartAgent, Watch,
 };
 use redoubt_steward::domain::Domain;
 use redoubt_steward::effect::Step;
 use redoubt_steward::hash::key_id;
 use redoubt_steward_server::drive::MINTED;
-use redoubt_steward_server::protocol::{APPROVAL, INIT, SSHD, Serving, answer_with};
+use redoubt_steward_server::protocol::{APPROVAL, INIT, SSHD, Serving, answer_with, watches};
 use redoubt_steward_server::{Kernel, StartError, Steward, start};
 
 const USERS: usize = 0;
@@ -285,6 +285,7 @@ fn call(
             | Message::ApprovalClosed(_)
             | Message::EndLease(_)
             | Message::EndSession(_)
+            | Message::Watch(_)
     );
     let mut buf = if inline { Vec::new() } else { vec![0u8; 4096] };
     let words = m.encode(&mut buf).unwrap();
@@ -430,6 +431,28 @@ fn every_operation_on_another_badge_class_is_malformed() {
     // On its own class, an operation the server binds no batch for yet is the core's unknown.
     let e = call(&mut s, &mut k, session, Message::StartAgent(StartAgent { lease: 1 })).unwrap_err();
     assert_eq!(e, ErrorCode::Unknown);
+}
+
+/// `watch` is `sshd`'s alone: the program holds it only from `sshd`'s root badge
+/// (`protocol::watches`), and on any other badge it is malformed, so nobody else can learn of
+/// the steward's end through it, nor hold its calls open.
+#[test]
+fn watch_is_held_only_from_sshd_and_malformed_on_any_other_badge() {
+    let mut k = Recorder::default();
+    let mut s = started(&mut k);
+    let watch = Message::Watch(Watch {});
+    let words = watch.encode(&mut []).unwrap();
+    let caller = |badge| Caller { badge, account: 0, labels: Default::default() };
+    assert!(watches(&caller(SSHD), &words));
+    for badge in [MINTED | 5, APPROVAL, INIT, 0, 4, MINTED - 1] {
+        assert!(!watches(&caller(badge), &words), "held on {badge:#x}");
+        let e = call(&mut s, &mut k, badge, Message::Watch(Watch {})).unwrap_err();
+        assert_eq!(e, ErrorCode::Malformed, "watch on {badge:#x}");
+    }
+    // Another message on `sshd`'s badge is not a watch.
+    let closed = Message::ChannelClosed(ChannelClosed { session: 1 }).encode(&mut []).unwrap();
+    assert!(!watches(&caller(SSHD), &closed));
+    assert!(k.creates().is_empty());
 }
 
 /// The batch stops at the first step that fails: the launch refused, the login is refused as

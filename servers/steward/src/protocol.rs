@@ -61,7 +61,8 @@ impl Class {
             Message::Login(_)
             | Message::ChannelClosed(_)
             | Message::ApprovalOpened(_)
-            | Message::ApprovalClosed(_) => Class::Sshd,
+            | Message::ApprovalClosed(_)
+            | Message::Watch(_) => Class::Sshd,
             Message::Pending(_) | Message::Approve(_) | Message::Deny(_) => Class::Approval,
             Message::Blame(_) => Class::Init,
             Message::Submit(_) | Message::StartAgent(_) | Message::EndLease(_) | Message::EndSession(_) => {
@@ -69,6 +70,14 @@ impl Class {
             }
         }
     }
+}
+
+/// Whether a call is `sshd`'s `watch` on its root badge: the program holds it, unanswered, for
+/// as long as it runs, so its end (R4b: `Dead` when the steward dies) is how `sshd` learns every
+/// session it knew is over (servers/steward.md, "Failure and restart"). On any other badge it is
+/// malformed, as every message on the wrong class is ([`answer_with`]).
+pub fn watches(caller: &Caller, words: &Words) -> bool {
+    Class::of(caller.badge) == Class::Sshd && matches!(Message::decode(words, &[], 0), Ok(Message::Watch(_)))
 }
 
 /// A label set as the protocol carries it ([`redoubt_rt::wire::labels`]).

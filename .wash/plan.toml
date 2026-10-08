@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 369
+revision = 379
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1163,8 +1163,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["STEWARD2"]
   body = "Measured by STEWARD2 after its rebase (2026-10-07): with the steward starting the shell, the first console read is at 15.1 s on rv64 against main's 12.4 s: init pushes beamlet's 4 MB public entry to bootfsd (0.6 to 3.0 s; the steward starts after it), the steward carves and streams the session's image from /boot in 64-page batches (3.0 to 7.6 s), then the shell starts as on main (7.6 to 15.1 s). STEWARD2 restates the boot-profile targets from that path (17 s verified by the cases' rule) with the breakdown on the page. Tier A, size S: stream the public entry once (the steward launches from bootfsd's copy, or init hands the steward what it already read) without the 64-page batches; measure the three spans again; the targets return to 15 s / the unverified figure by the same rule; beamlet.md and steward.md carry the new breakdown. Not here: the shell's own start (PACK1's pack already covers it)."
-  state = "todo"
-  revision = 240
+  state = "active"
+  revision = 370
 
 [[node]]
   id = "SRV1"
@@ -1183,8 +1183,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["K23", "STEWARD2"]
   body = "A restarted steward leaves sshd with state for sessions the new steward never knew. (1) Channels: sshd's open channels for earlier sessions stay open; its ChannelClosed for ids the new steward never knew are answered Unknown and ignored. (2) Slots (found by K23): sshd keeps a slot for each login the dying steward never answered, and has 4 slots, so a few steward restarts with logins in flight leave sshd unable to take new logins. Fix both from one signal: the restarted steward (or init at the restart) tells sshd every earlier session is over; sshd ends their channels and frees every slot held for an unanswered login. A case: logins in flight across a steward restart, then a fresh login succeeds and the old channels are closed. Needs K23 and STEWARD2."
-  state = "active"
-  revision = 364
+  state = "done"
+  revision = 379
 
 [[node]]
   id = "K27"
@@ -1329,8 +1329,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "shell-host"
   needs = ["SHELL2"]
   body = "M2 host step 2: docs/userland/beamlet.md#screen-natives; docs/userland/shell.md#full-screen-programs; shell plan section 4 (natives are primitives over cells, never widgets; one Erlang process per screen). Size M."
-  state = "active"
-  revision = 356
+  state = "reported"
+  revision = 372
   overrides = ["2026-10-08: started by Orchestrator before M1 (reported): The owner started M2's host shell track early (2026-10-07); M1's remaining work does not touch the host shell."]
 
 [[node]]
@@ -1435,5 +1435,42 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "beamlet-redoubt"
   body = "BEAM12's follow-up. On the fake kernel, a labelled session's child budget takes the session's labels. No machine case shows it, because a labelled session cannot write-open the UART console (R69). Give the beamlet-session tester a console of the session's labels, or run the session over SSH, and add `labels=N` before vm=beamlet_launch:start in a labelled variant of beamlet-launch. The child carves, runs and is destroyed, and a narrower or wider carve is refused as the kernel says. Size S."
+  state = "reported"
+  revision = 371
+
+[[node]]
+  id = "BEAM15"
+  title = "A `receive` typed at the shell prompt fails on beamlet: erl_eval calls prim_eval:receive/2, which is never loaded and has no native"
+  template = "package"
+  parent = "M2"
+  body = "Found by SHELL3. prim_eval is listed in vm/src/vm.rs RUNTIME_MODULES but never loaded, and no native answers it, so any `receive` typed at the prompt fails. Load prim_eval's receive, or provide it, with a beamlet test of `receive` at the prompt and in erl_eval with an after clause. Size S."
+  state = "todo"
+  revision = 373
+
+[[node]]
+  id = "BEAM16"
+  title = "atomics (up to 2^24 cells) and zlib streams (up to 256 MB queued) are resources counted toward no heap limit"
+  template = "package"
+  parent = "M2"
+  needs = ["SHELL3"]
+  body = "Found by SHELL3. Use Ctx::new_resource_sized (SHELL3's commit 1) so atomics and zlib streams count toward their holder's max_heap_size. Add a test that a process past its limit by atomics or zlib is killed as for any heap growth. Size S."
+  state = "todo"
+  revision = 373
+
+[[node]]
+  id = "B30"
+  title = "SHELL2's driver draws the machine console's prompt and result differently: six cases that expect '/ (N)> 55' on the prompt line fail on main"
+  template = "package"
+  parent = "M1"
+  body = "SHELL2 (c144f28fc) put the shell's line editing under its own driver, which redraws the line with CR and CSI J/A/C, and prints a result on its own line ('\\r55'). Its gates ran on the host only. On main 3b049cacc, rv64 userland-boot fails 'timed out waiting for /\\(N\\)> 55/'. Cases with a '\\)> ' pattern: userland-boot, userland-read-only, steward-vault-session, steward-sub-budget-flood, steward-session-ends and steward-ssh-two-principals. Decide whether the bench reads console lines with terminal control sequences stripped (one rule for every case), or the cases match the new output. Then fix, and rerun every case that types at a shell prompt on both widths. Size S."
   state = "active"
-  revision = 367
+  revision = 376
+
+[[node]]
+  id = "B31"
+  title = "An SSH session with no console traffic for 12 to 15 s ends as at Ctrl+D: its shell reads end of input and exits"
+  template = "package"
+  parent = "M1"
+  body = "Found by BEAM14 on main abd3fcd6d. An SSH session (steward + sshd; pty or not; labelled or not) that is quiet for 12-15 s ends: its shell reads the input's end, prints 'ok' and exits; the steward logs 'users/<p>/{} holds 0 pages', sshd 'session ... ended'. Probes on rv64, quiet class: sleeps of 4-12 s survive, 15 s ends; bob idle at his prompt for about 17 s dies 6 of 6. Suspect (unread): the session VM's hub connection to sshd's channel console holds its completion call no longer than the session bound, and the hold boundary is read as the server's silence (K27's mechanism, with no load). A user who stops typing for 15 s loses the session. Check the UART console session too. Fix, and add a case where a session stays idle past several hold boundaries, on both widths. Size S-M."
+  state = "active"
+  revision = 378

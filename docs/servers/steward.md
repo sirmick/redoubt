@@ -941,7 +941,7 @@ item's labels.
 
 ## Failure and restart
 
-Status: built · partly tested: `steward-restart` proves the release of a dead steward's connections by count at `bootfsd`, `erofsd:system`, `walfsd:data` and `ipd`, and at `littlefsd:alice-secrets` only by the code they share, since it opens no vault session · tested: bench:steward-restart, bench:steward-restart-reboot, bench:steward-session-ends, host:redoubt-steward-server::users_not_empty_is_a_start_failure_before_any_carve
+Status: built · partly tested: `steward-restart` proves the release of a dead steward's connections by count at `bootfsd`, `erofsd:system`, `walfsd:data` and `ipd`, and at `littlefsd:alice-secrets` only by the code they share, since it opens no vault session · tested: bench:steward-restart, bench:steward-restart-ssh, bench:steward-restart-reboot, bench:steward-session-ends, host:redoubt-steward-server::users_not_empty_is_a_start_failure_before_any_carve, host:redoubt-steward-server::watch_is_held_only_from_sshd_and_malformed_on_any_other_badge
 
 - **The steward is part of the trusted base; its crash is a bug.** If it dies, `init` reaps
   `users`, which logs every session out and ends every lease, and restarts the steward; the
@@ -965,21 +965,21 @@ and over leaves no session's connections holding the servers' admission. Revokin
 alone would not do it: a server tracks no exits and keeps a connection whose holders are gone
 until it is disconnected.
 
+**`sshd` learns of the steward's end from the kernel.** It keeps one `watch` call at the steward,
+accepted on its root badge only and held, unanswered, for as long as the steward runs; a dying
+steward fails it (`Dead`, [R4b (a server dies)](../kernel/ipc.md#r4b-a-server-dies)) and one
+that exits answers it, so either way `sshd` ends the channels of every session the steward ran
+([sshd](sshd.md#sessions-over-ssh)). The steward holds two at most: a restarted `sshd`'s, and
+the last one's until the kernel says its caller is gone.
+
 **The restart probe** is a test-only feature, `restart-probe` (`src/bin/steward.rs`,
 `PROBE_EXIT`), off in every default build; the bench's `steward-restart` builds the steward with
-it. Every instance then exits 14 seconds after it starts the console session, so the case
-restarts it thirteen times, each time with that session and its connections live, without meeting
+it. Every instance then serves as usual and exits 14 seconds after it starts the console session,
+so the case restarts it thirteen times, each time with that session and its connections live, without meeting
 `init`'s reboot rule.
 
 ## Residual risks
 
-- **An `sshd` channel outlives its reaped session.** When `init` empties `users` after the
-  steward's death, every session's VM ends with its budget, but `sshd` ends a channel only on the
-  steward's `ended`, which a dead steward never sends; the channel stays open, its input going
-  nowhere, until its client closes it. Until the restarted steward tells `sshd` that every earlier
-  session is over, the restart logs every session out but leaves their SSH connections open,
-  and a login the dying steward never answered keeps its `sshd` slot
-  ([sshd](sshd.md#residual-risks)).
 - **An approved text can carry a hidden message.** Text an agent wrote and a person approved for
   declassification can still hide one; no rule on the item's form prevents that.
 - **A push is one human action,** so a confined domain's input rate is a person's approval rate.
