@@ -148,19 +148,19 @@ own:
 
 | What | rv64 | rv32 |
 | --- | ---: | ---: |
-| Decoded code: instructions | 518 | 518 |
-| Decoded code: operands | 2,095 | 2,095 |
-| Literals: each module's | 37 | 37 |
-| Literals: the shared table | 771 | 767 |
-| Module tables | 231 | 201 |
-| Atoms | 94 | 65 |
-| Processes (19): heaps, collected | 46 | 46 |
-| Processes: the rest | 100 | 95 |
+| Decoded code: instructions | 573 | 573 |
+| Decoded code: operands | 2,315 | 2,315 |
+| Literals: each module's | 38 | 38 |
+| Literals: the shared table | 852 | 848 |
+| Module tables | 255 | 221 |
+| Atoms | 101 | 70 |
+| Processes (23): heaps, collected | 56 | 56 |
+| Processes: the rest | 121 | 115 |
 | ETS and binaries | 1 | 1 |
-| Accounted | 3,897 | 3,830 |
-| Runtime heap at the prompt: held, peak | 4,119, 4,584 | 3,948, 4,415 |
-| Not accounted (held less accounted) | 222 | 118 |
-| The scan's peak, after one command | 5,287 | 5,108 |
+| Accounted | 4,317 | 4,242 |
+| Runtime heap at the prompt: held, peak | 4,559, 4,998 | 4,371, 4,816 |
+| Not accounted (held less accounted) | 242 | 129 |
+| The scan's peak, after one command | 5,904 | 5,705 |
 
 A module's instructions are 8-byte entries over one array of its operands, 16 bytes each on either
 width, a list operand's items in the same array, so decoded code is the same size on both widths
@@ -178,12 +178,16 @@ the first command loads more modules.
   the ones evaluating any line needs, so loading them on first call would move their pages to the
   first command, not save them.
 
-The image budgets the VM twice the largest peak the scan finds across its memory cases, 5,475
-pages on rv64 after the `Version` call `userland-read-only` types, and with that budget, 11,008
-pages, the image boots in 512 MiB ([budgets](../kernel/budgets.md#the-tree-from-the-boot-manifest)).
-The session's commands over the natives, `ns`, `bind` and `exec` with the four modules under them,
-are loaded at the prompt like every module of the shell's, and the 45 pages the peak grew by, 39
-of them in the rows above, moved it from 5,430 and the budget up its step from 10,880.
+The image budgets the VM twice the largest peak the scan finds across its memory cases, 5,904
+pages on rv64 in `beamlet-footprint`, the one case that scans a shell's VM now that the steward
+starts the others' shells, and with that budget, 11,904 pages, the single VM boots in 512 MiB
+([budgets](../kernel/budgets.md#the-tree-from-the-boot-manifest)). The line editor under the
+shell's driver is loaded at the prompt like every module of the shell's: OTP's `group`, `edlin`,
+`edlin_key`, `group_history`, `prim_tty`, `shell`, `gen_statem`, `sys` and `kernel`, with
+`Redoubt.Term` and the driver, and Elixir's `Protocol`, `Enumerable` and `Enumerable.Range`, which
+load only because the shell's protocols are not consolidated. With them and the screen's modules,
+the rows above grew by 420 pages and the scan's peak by 617, from 5,287, which moved the budget up
+seven steps from 11,008.
 
 Residual: QEMU's default 256 MiB is out of reach. Its `system` budget leaves the VM about 2,700
 pages beside the other servers, and the VM holds more than that at its prompt (the table above),
