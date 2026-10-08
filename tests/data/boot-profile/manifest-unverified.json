@@ -100,7 +100,7 @@
       "home": "data:/home/bob" }
   ],
   "steward": { "server": "steward",
-    "sizes": { "session": { "pages": "11904", "processes": 2, "weight": 100 },
+    "sizes": { "session": { "pages": "11008", "processes": 2, "weight": 100 },
                "agent": { "pages": "4096", "processes": 1, "weight": 50 },
                "sub_agent": { "pages": "1024", "processes": 1, "weight": 10 },
                "crossing": { "pages": "64", "processes": 1, "weight": 1 },

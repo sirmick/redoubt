@@ -215,14 +215,13 @@ and its kernel objects.
   budget and its own page. The shell's VMs are not among them: the steward carves each session
   from its principal's sub-budget under `users`, from the top budgets the manifest names, 47,624
   pages for Alice and 32,768 for Bob ([the steward](../servers/steward.md#fixed-sub-budgets-per-label-set)).
-  A session is 11,904 pages: a heap cap of twice the largest peak of beamlet's runtime heap
+  A session is 11,008 pages: a heap cap of twice the largest peak of beamlet's runtime heap
   across the memory cases plus its stack, rounded up to 128
-  ([beamlet](../userland/beamlet.md#what-the-vm-holds-at-its-prompt)), set when that peak was
-  5,904 pages on rv64; it moved seven steps from 11,008 when the shell's line editor took the peak
-  there. The peak is 5,432 on rv64 and 5,253 on rv32 since the shell's commands are loaded when
-  first called, so the rule gives 11,008 (residual: the size is not lowered yet). The scan's cap
-  rule bounds it from below: an rv64 peak above 5,942 pages puts the cap under twice the peak, and
-  the size then moves up a step of 128. The bench and
+  ([beamlet](../userland/beamlet.md#what-the-vm-holds-at-its-prompt)), from a peak of 5,459 pages
+  on rv64 and 5,277 on rv32. It was 11,904 while the shell loaded every command's module at its
+  start, when the peak was 5,904. The scan's cap rule bounds it from below: an rv64 peak above
+  5,494 pages puts the cap, 10,989 pages, under twice the peak, and the size then moves up a step
+  of 128. The bench and
   `mkimage`'s instructions give the image 1 GiB ([the image](../../image/README.md)). The bound
   is a fixed count, not a share
   of RAM, because `init`'s needs do not grow with the machine, nor with the size of a program it
