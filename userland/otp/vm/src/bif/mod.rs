@@ -478,7 +478,7 @@ const TABLE: &[(&str, &str, u32, Native)] = &[
     ("prim_file", "get_device_cwd_nif", 1, file::not_supported),
     ("prim_file", "make_hard_link_nif", 2, file::make_link),
     ("prim_file", "make_soft_link_nif", 2, file::make_symlink),
-    ("prim_file", "set_owner_nif", 3, file::not_supported),
+    ("prim_file", "set_owner_nif", 3, file::set_owner),
     ("prim_file", "set_permissions_nif", 2, file::set_permissions),
     ("prim_file", "set_time_nif", 4, file::set_time),
     ("prim_file", "altname_nif", 1, file::not_supported),
@@ -633,6 +633,7 @@ const TABLE: &[(&str, &str, u32, Native)] = &[
     // The system's natives, over the platform's `System` (docs/userland/beamlet.md, "Natives").
     ("redoubt", "ns_lookup", 1, system::ns_lookup),
     ("redoubt", "bind", 2, system::bind),
+    ("redoubt", "copy_file", 2, file::copy_file),
     ("redoubt", "ns", 0, system::ns),
     ("redoubt", "call", 3, system::call),
     ("redoubt", "send", 2, system::send),

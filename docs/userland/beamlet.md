@@ -589,7 +589,7 @@ The timer's counter frequency is not needed: `time_now`'s microseconds serve the
 
 ### Natives
 
-<details><summary>Status: built · partly tested: the machine's cases run the VM under a tester in the steward's place, but for budgets and launching, which also run in the steward's own sessions over SSH, a vault session's among them · tested (32)</summary>
+<details><summary>Status: built · partly tested: the machine's cases run the VM under a tester in the steward's place, but for budgets and launching, which also run in the steward's own sessions over SSH, a vault session's among them · tested (34)</summary>
 
 - bench:steward-vault-launch
 - bench:beamlet-natives
@@ -616,6 +616,8 @@ The timer's counter frequency is not needed: `time_now`'s microseconds serve the
 - host:beamlet-redoubt::a_bind_is_the_files_namespace_and_one_connection
 - host:beamlet-redoubt::a_budget_is_no_connection_and_no_endpoint
 - host:beamlet-redoubt::a_bind_to_a_server_that_never_answers_is_refused_within_its_bound
+- host:beamlet-redoubt::binds_past_the_cap_are_refused_and_a_bound_prefix_is_still_replaced
+- host:beamlet-redoubt::a_copy_within_one_volume_is_the_servers
 - host:beamlet-redoubt::a_typed_call_goes_out_on_a_pool_thread_and_its_reply_is_an_event
 - host:beamlet-redoubt::requests_arrive_with_badge_account_and_labels_and_an_answer_reaches_the_caller
 - host:beamlet-redoubt::a_request_never_answered_is_answered_by_the_serve_thread_at_its_deadline
@@ -647,6 +649,7 @@ every server binding is pure Elixir over them:
 | Native | Shape |
 | --- | --- |
 | `ns_lookup/1`, `bind/2`, `ns/0` | the namespace table: the longest matching prefix and the rest of the path |
+| `copy_file/2` | a copy the file server makes itself, within one server |
 | `call/3` | submit a call; the reply arrives as a message to the calling Erlang process |
 | `send/2` | one-way |
 | `serve/1`, `reply/2` | serve an endpoint: requests arrive as messages carrying badge, account and labels |
@@ -667,9 +670,18 @@ with no `System`, the host CLI's, answers each `{error, not_supported}`; the hos
   at a clean absolute prefix of the files' own namespace: a path under an existing prefix shadows
   it for longer matches only. A handle that is not a 9P connection is attached once, then and
   there, each of the attach's two calls waiting at most `ATTACH_US` on the VM's thread; one whose
-  server does not answer or does not speak 9P, or a budget, is `not_a_connection`.
+  server does not answer or does not speak 9P, or a budget, is `not_a_connection`. A bind at a
+  prefix already bound replaces it; the table holds at most `MAX_BINDINGS` (64) entries, those the
+  VM started with included, and a new prefix past them is `system_limit`, so a loop of binds fails
+  visibly and never on the VM's heap.
   **`ns()`** is `[{Path, Name | nil, Handle}]`, the namespace's entries in binding order, then the
   named handles.
+- **`copy_file(From, To)`** is `{ok, Bytes}`: the file server copies the file `From` to the new
+  file `To` itself, by its typed `copy_file`, so no byte crosses into the VM. Both paths resolve as
+  `File`'s do, against the working directory; on two connections it is `{error, exdev}`, and the
+  caller copies through the VM; onto a name that is there, `eexist`. It is a typed call, which no
+  hub carries, made on the VM's thread as a rename is, so the VM waits while the server copies. A
+  platform whose servers do not copy, the host CLI's, answers `enotsup`.
 - **`call(Handle, {Words, Buffer, Handles}, TimeoutMs)`** is `{ok, Ref}`, and the reply arrives as
   `{reply, Ref, {ok, {Words, Buffer, Handles}} | {error, Name}}`. A buffer is a binary for a message
   that lends one and `nil` for an inline one; the reply's buffer is the bytes its word 1 says at

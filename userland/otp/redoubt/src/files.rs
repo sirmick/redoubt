@@ -789,6 +789,36 @@ impl Redoubt {
         let _ = new.close(lend);
         renamed.map_err(refusal)
     }
+
+    /// Copies `from` to the new file `to` by `littlefsd`'s typed `copy_file`, which names the
+    /// file's fid and the new one's directory: both must be on one connection, else `exdev`. Made
+    /// on the VM's thread, as `rename_on` is, so the VM waits while the server copies.
+    fn copy_on(&mut self, from: &str, to: &str) -> Result<u64, FileError> {
+        if below(&self.files.ns, from).is_some() || below(&self.files.ns, to).is_some() {
+            return Err(FileError::Eacces);
+        }
+        let (a, a_rest) = self.files.ns.lookup(from).ok_or(FileError::Enoent)?;
+        let (b, b_rest) = self.files.ns.lookup(to).ok_or(FileError::Enoent)?;
+        if !a.same(b) {
+            return Err(FileError::Exdev);
+        }
+        let conn = a.clone();
+        let a_rest = a_rest.to_string();
+        let (b_dir, b_name) = split(b_rest)?;
+        let lend: &mut Lend = &mut self.lend;
+        let src = conn.open(lend, &a_rest, mode::OREAD).map_err(refusal)?;
+        let dir = match conn.open(lend, b_dir, mode::OREAD) {
+            Ok(dir) => dir,
+            Err(e) => {
+                let _ = src.close(lend);
+                return Err(refusal(e));
+            }
+        };
+        let copied = littlefsd::copy_file(lend, &src, &dir, b_name);
+        let _ = src.close(lend);
+        let _ = dir.close(lend);
+        copied.map_err(refusal)
+    }
 }
 
 /// `rest`'s directory and last name; the root has none.
@@ -967,6 +997,8 @@ impl Files for Redoubt {
     }
 
     fn rename(&mut self, from: &str, to: &str) -> Result<(), FileError> { self.rename_on(from, to) }
+
+    fn copy_file(&mut self, from: &str, to: &str) -> Result<u64, FileError> { self.copy_on(from, to) }
 
     fn read_file(&mut self, path: &str, max: usize) -> Result<Vec<u8>, FileError> {
         match self.path_op(path, Kind::ReadFile { max, data: Vec::new() }, false)? {

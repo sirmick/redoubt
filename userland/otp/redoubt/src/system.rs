@@ -44,6 +44,10 @@ pub const HAND_US: u64 = 1_000_000;
 /// How long a bind waits for a server to answer each of the attach's two calls (µs), on the VM's
 /// thread: one short call a live server answers at once, as a launcher's release is.
 pub const ATTACH_US: u64 = 1_000_000;
+/// How many entries a VM's namespace holds at most, those it started with included: a bind of a
+/// new prefix past it is `system_limit`, so a loop of binds fails visibly, never on the VM's heap
+/// (docs/userland/files.md, "Copying, moving, removing and binds").
+pub const MAX_BINDINGS: usize = 64;
 
 /// A handle the VM holds: one it was given since its start is closed when its last [`Cap`] goes;
 /// one it was started with is the process's for its life, and the namespace's, so never.
@@ -299,6 +303,12 @@ impl System for Redoubt {
     fn bind(&mut self, prefix: &str, handle: &Object) -> Result<(), Refused> {
         if !path::is_clean_absolute(prefix) {
             return Err(Refused("bad_name"));
+        }
+        // A new prefix past the cap is refused before anything is attached; one already bound
+        // is replaced, which adds nothing.
+        let entries = self.files.ns.list().count();
+        if entries >= MAX_BINDINGS && !self.files.ns.list().any(|(p, _)| p == prefix) {
+            return Err(Refused("system_limit"));
         }
         let cap = cap(handle)?;
         let conn = match &cap.kind {

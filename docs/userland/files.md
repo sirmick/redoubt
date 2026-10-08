@@ -45,7 +45,7 @@ per-file metadata.
 
 ### Files over 9P
 
-<details><summary>Status: built · partly tested: the host tests run beamlet's platform against the real `littlefsd` on the fake kernel, and OTP's `prim_file` over the natives runs in a boot in bench:beamlet-files; Elixir's `File` over them runs in a session once the steward's sessions do · tested (22)</summary>
+<details><summary>Status: built · partly tested: the host tests run beamlet's platform against the real `littlefsd` on the fake kernel, and OTP's `prim_file` over the natives runs in a boot in bench:beamlet-files; Elixir's `File` over them runs in a session once the steward's sessions do · tested (23)</summary>
 
 - host:beamlet-redoubt::files_are_written_read_listed_renamed_and_removed
 - host:beamlet-redoubt::a_rename_the_volume_refuses_is_eacces
@@ -63,6 +63,7 @@ per-file metadata.
 - host:beamlet-redoubt::a_close_answered_busy_is_retried_and_its_fid_is_kept_until_the_clunk_is_served
 - host:beamlet-redoubt::a_stat_reports_only_what_9p_has
 - host:beamlet-redoubt::what_has_no_9p_field_is_refused_visibly
+- host:beamlet-redoubt::a_field_set_on_a_missing_file_is_enoent
 - host:beamlet-redoubt::every_row_of_the_error_table_maps_to_its_posix_error
 - host:beamlet-redoubt::a_bind_argument_puts_a_handed_volume_in_the_namespace
 - host:beamlet-vm::a_completion_reaches_the_process_that_asked_and_no_other
@@ -117,26 +118,28 @@ neither inside nor above one is `:enoent` ([sessions](sessions.md#namespaces)).
 | `File.stat`, `:file.read_file_info` | what 9P and the file server have: the type (from the qid), the size and the modification time (0 until the file server keeps one: the residual below); `access`, `mode`, `uid`, `gid`, `links`, `inode` and `major_device` are `:undefined`, since no server says what a connection may do; attributes through `get_attr` |
 | `File.ls` | a read of a directory fid; entries the caller may not read are left out |
 | `File.rm` of an open file | succeeds: an "in use" refusal would tell one client about another |
-| `File.chmod`, `File.chown` | `{:error, :enotsup}`: there are no mode or owner bits, and access is by capability |
+| `File.chmod`, `File.chown`, `File.write_stat`, `File.touch` of a file that is there | `:ok`, and nothing changes: there are no mode or owner bits, access is by capability, and no time is kept (the residual below). Each native refuses `enotsup`, which OTP's `write_file_info` takes as done; on a path that is not there each is `{:error, :enoent}`, so `File.touch` in a missing directory fails |
 | `File.ln_s`, `File.ln` | `{:error, :enotsup}`: 9P2000 has no links, and binds do their job |
-| `File.write_stat` | applies the modification and access times only; `{:error, :enotsup}` if it carries a mode, a user or a group (times are refused for now: the residual below) |
 
 **Refuse visibly; report only real fields.** The `File` API does not emulate POSIX: no program
 should rely on a permission bit that no server enforces, because authority on Redoubt is the
 capability, never a mode bit. `:undefined` is within OTP's own `file_info` type for exactly these
 fields, so nothing is invented. This is the one statement of the rule; file transfer follows it
-([file transfer](transfer.md#confined-to-the-sessions-files)). Standard-library code that does
-arithmetic on a mode (the mode preservation in `File.cp` and `File.cp_r`, Mix's check that a file
-is executable) is adjusted in beamlet's platform layer to skip the mode, never fed a fake one; the
-M5 (self-hosted development) case that compiles a Mix project on the box catches any caller that
-breaks. The host tests above hold the undefined fields and the four `:enotsup`s, and
-bench:beamlet-files sees `mode` undefined in a boot.
+([file transfer](transfer.md#confined-to-the-sessions-files)). Below `File` the refusal is
+visible: each native that would set a mode, an owner or a time answers `enotsup` for a file that
+is there. OTP's own `write_file_info` takes that answer as done, as it does on a system without
+the field, so standard-library code that writes a file's info back (the mode preservation in
+`File.cp` and `File.cp_r`, `File.touch`) succeeds and sets nothing, and is never fed a fake
+value; the M5 (self-hosted development) case that compiles a Mix project on the box catches any
+caller that breaks. The host tests above hold the undefined fields, the natives' `enotsup`s and a
+missing path's `enoent`, and bench:beamlet-files sees `mode` undefined in a boot, a file's info
+written back as `ok` and written to a missing file as `enoent`.
 
 Residuals, each a departure from the table, until the file server serves what it needs:
-- **No times are set and none is stored.** The 9P skeleton refuses `Twstat`, so `File.write_stat`
-  with times, and a cut at a position (`:file.truncate/1`) other than an open's, are
-  `{:error, :enotsup}`; and no file server has a clock to keep a modification time by, so it
-  reads as 0 (1970).
+- **No times are set and none is stored.** The 9P skeleton refuses `Twstat`, so a time given to
+  `File.write_stat` or `File.touch` is not kept, though the call is `:ok`, and a cut at a
+  position (`:file.truncate/1`) other than an open's is `{:error, :enotsup}`; and no file server
+  has a clock to keep a modification time by, so it reads as 0 (1970).
 
 ### Copying, moving, removing and binds
 
@@ -155,7 +158,9 @@ another's files. So what an operation costs depends on where its two ends are:
 **Binds.** `bind(prefix, conn)` adds an entry to the session's own namespace: the connection
 `conn`, already held, appears at `prefix`. It changes nothing on any server and creates no
 authority, and no other process sees it. It replaces what Unix does with symbolic links, hard
-links and bind mounts: giving something a second name. A child gets only what its launcher writes
+links and bind mounts: giving something a second name. A bind at a prefix already bound replaces
+what was there, and the table holds at most 64 entries, so a bind of a new prefix past them is
+`{:error, :system_limit}` ([beamlet](beamlet.md#natives)). A child gets only what its launcher writes
 into its startup block, so a session's binds reach a child only if the session passes them on
 ([native programs](native.md)).
 
