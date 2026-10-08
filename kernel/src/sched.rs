@@ -239,7 +239,8 @@ fn ready_now(ss: &ProcessTable, mm: &MemoryManager, i: usize) -> (u32, Option<Bu
 /// The checked build's full walk, at most once a slice after a reconcile that visited a budget,
 /// and before the hart idles ([`Marks::audit_due`]): every process's ready threads are counted as a walk of
 /// the process table finds them, each budget's count is the sum of its processes', and the queue holds
-/// exactly the budgets with a ready thread, and the running one if it is queued.
+/// exactly the budgets with a ready thread, and the running one if it is queued; and the harts'
+/// blocks agree with the process table ([`audit_harts`]).
 #[cfg(debug_assertions)]
 fn audit_marks(ss: &ProcessTable, mm: &MemoryManager) {
     audit(AUDIT_MARKS, || {
@@ -254,7 +255,51 @@ fn audit_marks(ss: &ProcessTable, mm: &MemoryManager) {
             if let Err(b) = cpu.q.audit(mm) {
                 panic!("the scheduler's ranks: budget {} is out of step with its frame", b.id);
             }
-        })
+        });
+        audit_harts(ss, mm);
+        // The other half of [`audit_harts`]: a process on the CPU is on some hart.
+        for pid in mm.live_pids() {
+            let p = &ss.processes[usize::from(pid.get()) - 1];
+            assert!(
+                p.free() || !p.running() || crate::arch::hart::running().any(|(_, on, _)| on == pid),
+                "the harts: PID {} is running and no hart runs it",
+                pid
+            );
+        }
+    });
+}
+
+/// The checked build's check, with the marks' audit ([`audit_marks`], so its time is billed to no
+/// budget), that the harts' blocks, the one record of what each hart runs, agree with the process
+/// table and the runners: a hart's process is running, its thread is not among the ready ones, and
+/// its runner is that process's budget; a hart in `kmain` has no runner. The marks' audit then
+/// checks the other way.
+#[cfg(debug_assertions)]
+fn audit_harts(ss: &ProcessTable, mm: &MemoryManager) {
+    SCHED.with(|s| {
+        for (i, pid, tid) in crate::arch::hart::running() {
+            let cur = s.cpu.cur(i).map(|b| b.id);
+            if pid == KERNEL_PID {
+                assert!(cur.is_none(), "the harts: hart {} runs kmain with budget {:?} its runner", i, cur);
+                continue;
+            }
+            let p = ss.get_process(pid).expect("the harts: a hart runs a process that is gone");
+            let ready = p.ready_threads().unwrap_or(TidMask::EMPTY);
+            assert!(
+                p.running() && !ready.contains(tid),
+                "the harts: hart {} runs PID {} thread {}, which is not on the CPU",
+                i,
+                pid,
+                tid
+            );
+            assert!(
+                cur == mm.budget_of(pid).map(|f| mm.budget_id(f)),
+                "the harts: hart {} runs PID {}, but its runner is budget {:?}",
+                i,
+                pid,
+                cur
+            );
+        }
     });
 }
 
@@ -466,11 +511,21 @@ pub fn leave(pid: Pid) {
                     }
                 }
                 s.reconcile(mm);
-                // A budget no hart runs is waiting: an idle hart picks it (the one this hart leaves
-                // for `kmain` to pick does not count).
-                let waiting = s.cpu.q.queued().filter(|b| !s.cpu.running(*b)).count();
-                if waiting > usize::from(next.is_none()) {
-                    crate::arch::hart::wake_idle();
+                // Work no hart runs is waiting: a queued budget no hart runs, and a ready thread of a
+                // budget harts run. An idle hart picks it (the one this hart leaves for `kmain` to
+                // pick does not count). On one hart there is no other to wake.
+                if crate::arch::hart::started() > 1 {
+                    let unrun = s.cpu.q.queued().filter(|b| !s.cpu.running(*b)).count();
+                    let runners = &s.cpu.runners;
+                    let beside: u32 = runners
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(i, r)| r.cur.filter(|b| runners[..i].iter().all(|o| o.cur != Some(*b))))
+                        .map(|b| mm.ready(b))
+                        .sum();
+                    if unrun + beside as usize > usize::from(next.is_none()) {
+                        crate::arch::hart::wake_idle();
+                    }
                 }
                 next.is_some()
             })
@@ -503,8 +558,9 @@ pub fn leave(pid: Pid) {
     trace::returned(to_user);
 }
 
-/// What `kmain` runs next: the lowest-ranked queued budget's next thread after its cursor. Its
-/// slice starts when it returns to user mode ([`leave`]). `None` when nothing is runnable.
+/// What `kmain` runs next: the lowest-ranked queued budget with a runnable thread no hart is
+/// running, and that thread, the next after its cursor. Its slice starts when it returns to user
+/// mode ([`leave`]). `None` when nothing is runnable.
 pub fn pick(ss: &ProcessTable, mm: &mut MemoryManager) -> Option<(Pid, TID)> {
     SCHED.with(|s| {
         #[cfg(feature = "walk-trace")]
@@ -512,7 +568,7 @@ pub fn pick(ss: &ProcessTable, mm: &mut MemoryManager) -> Option<(Pid, TID)> {
         s.settle(ss, mm);
         s.reconcile(mm);
     });
-    let chosen = SCHED.with(|s| s.cpu.pick(here(), mm, |mm, b| next_thread(ss, mm, b)));
+    let chosen = SCHED.with(|s| s.cpu.pick(mm, |mm, b| next_thread(ss, mm, b)));
     #[cfg(debug_assertions)]
     if SCHED.with(|s| s.marks.audit_due(crate::time::now_us(), SLICE_US, chosen.is_none())) {
         audit_marks(ss, mm);
@@ -528,14 +584,15 @@ pub fn pick(ss: &ProcessTable, mm: &mut MemoryManager) -> Option<(Pid, TID)> {
 
 /// The next runnable thread of budget `b` after its cursor, in (pid, tid) order, wrapping; a tid
 /// of 0 leaves the choice to `activate_process_thread` (a process being set up or handling an
-/// exception).
+/// exception). A process's ready threads never include one a hart runs (`ptable.rs`), so this is
+/// a thread no hart is running.
 fn next_thread(ss: &ProcessTable, mm: &MemoryManager, b: BudgetRef) -> Option<(Pid, TID)> {
     let cursor = mm.budget(b.frame).cursor;
     let mut first: Option<(Pid, TID)> = None;
     let mut after: Option<(Pid, TID)> = None;
     for pid in mm.live_pids() {
         let p = &ss.processes[usize::from(pid.get()) - 1];
-        if p.free() || p.running() || mm.budget_of(pid) != Some(b.frame) {
+        if p.free() || mm.budget_of(pid) != Some(b.frame) {
             continue;
         }
         let tids = p.ready_threads().unwrap_or(TidMask::of(0));
@@ -666,8 +723,8 @@ pub fn switch(ss: &mut ProcessTable, tag: usize, pid: usize, tid: TID) {
 /// have). A bounded ring in frames the kernel takes for itself at boot, before the budget tree
 /// counts what is left ([`trace::init`]), printed at `system_reset`. It records what the queue
 /// did, never why: no tie key. Each record: its sequence number, the kernel entry (reconcile) it
-/// belongs to, the event, the budget's id, and the low 64 bits of its pass after the event (a pass
-/// reaches 2^64 only after centuries of slices).
+/// belongs to, the event, the budget's id, the low 64 bits of its pass after the event (a pass
+/// reaches 2^64 only after centuries of slices), and the boot index of the hart that wrote it.
 #[cfg(feature = "sched-trace")]
 pub mod trace {
     use crate::cell::KernelCell;
@@ -833,6 +890,17 @@ pub mod trace {
     /// A destruction begins or ends (`budget::destroy_subtree`).
     pub fn r10(kind: u8, top: u64) { record(kind, top, u128::from(crate::time::now_us())); }
 
+    /// A shootdown that asked another hart (`S`, `arch::hart::shootdown`): the target PID, and in
+    /// the pass field the harts asked in bits 0 to 15 and those that acknowledged in bits 16 to 31,
+    /// a bit each by boot index, and why in bits 32 and up (`Shot`: 1 a removal, 2 a page made
+    /// executable, 3 an ending); the record's hart is the one that shot. The oracle's rank checks
+    /// pass it over; `smp-fence` reads it (kernel/memory.md, "Instruction fetch after mapping").
+    pub const SHOOTDOWN: u8 = b'S';
+
+    pub fn shootdown(pid: u64, why: u8, asked: usize, acked: usize) {
+        record(SHOOTDOWN, pid, (asked as u128) | (acked as u128) << 16 | u128::from(why) << 32);
+    }
+
     /// The object frames a destruction walks (after its `X`).
     pub const R10_FRAMES: u8 = b'Z';
 
@@ -991,7 +1059,16 @@ pub mod trace {
             for seq in 0..r.n {
                 let (page, at) = (r.pages[seq / PER_PAGE], (seq % PER_PAGE) * 32);
                 let w = |k: usize| crate::kframe::read(page, at + k * 8);
-                println!("SCHED-TRACE {} {} {} {} {:x}", seq, w(1), w(3) as u8 as char, w(2), w(0));
+                let kind = w(3);
+                println!(
+                    "SCHED-TRACE {} {} {} {} {:x} {}",
+                    seq,
+                    w(1),
+                    kind as u8 as char,
+                    w(2),
+                    w(0),
+                    kind >> 8
+                );
             }
             println!("SCHED-TRACE-END {} dropped {}", r.n, r.dropped);
         });

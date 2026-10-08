@@ -26,9 +26,10 @@
 //!
 //! [`Harts`] is the wiring itself: one [`Runner`] per hart, the budget whose runtime is accruing
 //! there, when it is folded, and the order of the steps at a deschedule, a pick, a creation, a
-//! weight change and a destruction. A budget runs on at most one hart at a time. The kernel's
-//! `sched.rs` drives it with its trap-boundary accounting and the budgets' frames; [`Cpu`] is the
-//! same wiring for one hart, and the differential drives it against the model.
+//! weight change and a destruction. A budget runs on as many harts as it has runnable threads,
+//! each hart charging its own runner to the budget's one pass. The kernel's `sched.rs` drives it
+//! with its trap-boundary accounting and the budgets' frames; [`Cpu`] is the same wiring for one
+//! hart, and the differential drives it against the model.
 
 #![no_std]
 #![forbid(unsafe_code)]
@@ -392,13 +393,12 @@ impl<B: Copy + PartialEq, const N: usize> Queue<B, N> {
         self.raise_floor();
     }
 
-    /// The queued budget with the lowest rank, of those `elsewhere` does not rule out: a budget
-    /// running on another hart, so that a budget runs on at most one hart at a time and its stride
-    /// state has one runner (`kernel/scheduling.md`, "One flat stride queue"). A compare of the
-    /// ranks beside the slots: no frame is read.
-    pub fn pick(&self, elsewhere: impl Fn(B) -> bool) -> Option<B> {
+    /// The queued budget with the lowest rank, of those `passed` does not rule out: budgets whose
+    /// runnable threads all run on harts already (`kernel/scheduling.md`, "One flat stride
+    /// queue"). A compare of the ranks beside the slots: no frame is read.
+    pub fn pick(&self, passed: impl Fn(B) -> bool) -> Option<B> {
         (0..self.len)
-            .filter(|i| self.slots[*i].is_some_and(|b| !elsewhere(b)))
+            .filter(|i| self.slots[*i].is_some_and(|b| !passed(b)))
             .min_by_key(|i| self.ranks[*i])
             .and_then(|i| self.slots[i])
     }
@@ -498,8 +498,8 @@ impl<B> Default for Runner<B> {
 /// steps at a deschedule, a pick, a creation, a weight change and a destruction. Runtime is folded
 /// into a pass only here: at a deschedule ([`Wiring::switch`], at least [`MIN_CHARGE`]), before a
 /// weight change or a creation under the budget ([`Wiring::settle`]), at a destruction, and for
-/// work billed to a budget that runs on no hart ([`Wiring::bill`]). A budget is some runner's
-/// `cur` on at most one hart at a time: a pick skips budgets other harts run.
+/// work billed to a budget that runs on no hart ([`Wiring::bill`]). A budget may be the `cur` of
+/// several runners, one per hart running one of its threads; it stays queued while any runs it.
 struct Wiring<'a, B, const N: usize> {
     q: &'a mut Queue<B, N>,
     runners: &'a mut [Runner<B>],
@@ -517,11 +517,14 @@ impl<B: Copy + PartialEq, const N: usize> Wiring<'_, B, N> {
         }
     }
 
+    /// Every runner of `b` folds what it ran into `b`'s one pass.
     fn settle(&mut self, bs: &mut impl Budgets<B>, b: B) {
-        if let Some(h) = self.runner_of(b) {
-            let run = core::mem::take(&mut self.runners[h].pending);
-            if bs.live(b) {
-                self.q.fold(bs, b, run);
+        for h in 0..self.runners.len() {
+            if self.runners[h].cur == Some(b) {
+                let run = core::mem::take(&mut self.runners[h].pending);
+                if bs.live(b) {
+                    self.q.fold(bs, b, run);
+                }
             }
         }
     }
@@ -550,7 +553,8 @@ impl<B: Copy + PartialEq, const N: usize> Wiring<'_, B, N> {
         r.cur = next;
         if let Some(c) = left.filter(|c| bs.live(*c)) {
             self.q.fold(bs, c, run);
-            let still = still_runnable(bs, c);
+            // A budget another hart still runs stays queued, requeued behind its equals.
+            let still = self.runner_of(c).is_some() || still_runnable(bs, c);
             self.q.deschedule(bs, c, still);
         }
         left
@@ -567,20 +571,28 @@ impl<B: Copy + PartialEq, const N: usize> Wiring<'_, B, N> {
         self.q.reconcile(bs, |b| runners.iter().any(|r| r.cur == Some(b)), lost, gained, runnable);
     }
 
+    /// The lowest-ranked queued budget with a thread `next` can run. One with none whose threads
+    /// all run on harts is passed over, and stays queued; one with none that no hart runs (never
+    /// expected: reconciles keep the queue in step) is taken out.
     fn pick<S: Budgets<B>, T>(
         &mut self,
-        h: usize,
         bs: &mut S,
         mut next: impl FnMut(&S, B) -> Option<T>,
     ) -> Option<(B, T)> {
-        let runners = &*self.runners;
-        let elsewhere = |b| runners.iter().enumerate().any(|(i, r)| i != h && r.cur == Some(b));
+        // The runners whose budget was passed over, a bit each: at most every hart's.
+        let mut passed = 0u64;
         loop {
-            let b = self.q.pick(elsewhere)?;
+            let runners = &*self.runners;
+            let b = self.q.pick(|b| {
+                runners.iter().enumerate().any(|(i, r)| passed >> i & 1 != 0 && r.cur == Some(b))
+            })?;
             if let Some(t) = next(bs, b) {
                 return Some((b, t));
             }
-            self.q.deschedule(bs, b, false);
+            match self.runner_of(b) {
+                Some(h) => passed |= 1 << h,
+                None => self.q.deschedule(bs, b, false),
+            }
         }
     }
 
@@ -685,7 +697,7 @@ impl<B: Copy + PartialEq, const N: usize> Cpu<B, N> {
         bs: &mut S,
         next: impl FnMut(&S, B) -> Option<T>,
     ) -> Option<(B, T)> {
-        self.wired(|w| w.pick(0, bs, next))
+        self.wired(|w| w.pick(bs, next))
     }
 
     /// A new budget `child` under `parent`: a running parent is charged first, then the child
@@ -709,9 +721,9 @@ impl<B: Copy + PartialEq, const N: usize> Cpu<B, N> {
 }
 
 /// `H` harts wired to one queue, a [`Runner`] each, indexed by the hart's boot index: what
-/// [`Cpu`] is for one. A switch, an accrual and a pick act for one hart; a bill, a settle and a
-/// destruction find the budget's runner on whichever hart runs it; a reconcile keeps a budget
-/// queued while any hart runs it.
+/// [`Cpu`] is for one. A switch and an accrual act for one hart; a bill joins one runner of the
+/// budget's, and a settle and a destruction take every one; a reconcile and a deschedule keep a
+/// budget queued while any hart runs it.
 #[derive(Clone, Debug)]
 pub struct Harts<B, const N: usize, const H: usize> {
     pub q: Queue<B, N>,
@@ -770,14 +782,14 @@ impl<B: Copy + PartialEq, const N: usize, const H: usize> Harts<B, N, H> {
         self.wiring().reconcile(bs, lost, gained, runnable)
     }
 
-    /// Hart `h`'s pick: [`Cpu::pick`] over the budgets no other hart runs.
+    /// A hart's pick: [`Cpu::pick`], passing over a budget whose runnable threads all run on
+    /// harts already. `next` chooses a thread no hart runs.
     pub fn pick<S: Budgets<B>, T>(
         &mut self,
-        h: usize,
         bs: &mut S,
         next: impl FnMut(&S, B) -> Option<T>,
     ) -> Option<(B, T)> {
-        self.wiring().pick(h, bs, next)
+        self.wiring().pick(bs, next)
     }
 
     /// [`Cpu::create`], the parent's runner on whichever hart runs it.

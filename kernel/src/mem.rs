@@ -1057,7 +1057,7 @@ impl MemoryManager {
             return Err(bad);
         }
         let at = self.map_run(pid, len / PAGE_SIZE, flags, None)?;
-        sync_if_executable(flags);
+        sync_if_executable(pid, flags);
         Ok(at)
     }
 
@@ -1114,6 +1114,8 @@ impl MemoryManager {
         }
         // One page past `done`: the failed page's table may exist though nothing in it is mapped.
         crate::arch::mem::free_empty_tables(self, &MemoryMapping::current(), at, at + done + PAGE_SIZE);
+        // Another hart running the caller may have touched a page in the moment it was mapped.
+        shoot(pid);
         redoubt_sys::Error::OutOfMemory
     }
 
@@ -1136,6 +1138,7 @@ impl MemoryManager {
             }
         }
         crate::arch::mem::free_empty_tables(self, &MemoryMapping::current(), addr, end);
+        shoot(pid);
         Ok(())
     }
 
@@ -1162,10 +1165,16 @@ impl MemoryManager {
                 return Err(bad);
             }
         }
+        // A page that loses a permission is shot down on the other harts running the caller.
+        let mut narrowed = false;
         for page in (addr..end).step_by(PAGE_SIZE) {
+            narrowed |= crate::arch::mem::page_flags(page).is_some_and(|old| !flags.contains(old));
             crate::arch::mem::set_user_page_flags(page, flags).map_err(|_| bad)?;
         }
-        sync_if_executable(flags);
+        if narrowed && !flags.contains(MemFlags::EXECUTE) {
+            shoot(pid);
+        }
+        sync_if_executable(pid, flags);
         Ok(())
     }
 
@@ -1236,7 +1245,7 @@ impl MemoryManager {
             crate::arch::mem::map_page_inner(self, pid, frame, addr + offset, flags, true)
                 .expect("map_fixed: prepare_map already made this slot ready");
         }
-        sync_if_executable(flags);
+        sync_if_executable(pid, flags);
         Ok(())
     }
 
@@ -1257,12 +1266,30 @@ impl MemoryManager {
     }
 }
 
-/// Pages just mapped or remapped with `flags` may be fetched from: if they are executable, make
-/// this hart's instruction fetches see what was stored in them (`fence.i`; the pages were zeroed,
-/// or written by their owner before becoming executable, since W^X forbids both at once).
-pub(crate) fn sync_if_executable(flags: MemFlags) {
+/// Pages of `pid` just mapped or remapped with `flags` may be fetched from: if they are
+/// executable, make this hart's instruction fetches see what was stored in them (`fence.i`; the
+/// pages were zeroed, or written by their owner before becoming executable, since W^X forbids both
+/// at once), and every other hart's that runs `pid` ([`shoot`]).
+pub(crate) fn sync_if_executable(pid: Pid, flags: MemFlags) {
     if flags.contains(MemFlags::EXECUTE) {
         crate::arch::mem::sync_icache();
+        shoot_for(pid, crate::arch::hart::Shot::Fetch);
+    }
+}
+
+/// One of `pid`'s entries was cleared or narrowed, or made executable: shoot `pid` down on every
+/// other hart running it, which flushes its ASID and runs `fence.i` before it acknowledges
+/// (`arch::hart::shootdown`), so the call returns only once no hart can use the old entry or
+/// fetch the old code (kernel/memory.md, "Residual risks"). A frame the call freed or moved is
+/// reused only under the kernel lock, which the call holds until then. With no other hart running
+/// `pid`, it costs a look at each hart's block.
+pub(crate) fn shoot(pid: Pid) { shoot_for(pid, crate::arch::hart::Shot::Flush) }
+
+fn shoot_for(pid: Pid, why: crate::arch::hart::Shot) {
+    // Debug only, never in a bench build but one recorded negative run: these shootdowns are
+    // skipped (a destruction's are not), so `smp-shootdown` and `smp-fence` must fail.
+    if !cfg!(feature = "smp-no-shootdown") {
+        crate::arch::hart::shootdown(pid, why);
     }
 }
 

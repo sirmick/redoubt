@@ -20,7 +20,7 @@ serves the steward.
 
 ### One flat stride queue
 
-<details><summary>Status: built · partly tested: round-robin among one budget's threads is not attacked by a case · tested (11)</summary>
+<details><summary>Status: built · partly tested: round-robin among one budget's threads is not attacked by a case · tested (12)</summary>
 
 - bench:sched-share
 - bench:sched-large-weight
@@ -28,7 +28,8 @@ serves the steward.
 - bench:sched-carve-inflation
 - bench:smp-boot
 - host:redoubt-stride::the_crate_and_the_model_agree
-- host:redoubt-stride::a_pick_skips_budgets_running_on_other_harts
+- host:redoubt-stride::a_pick_passes_over_a_budget_whose_threads_all_run_on_harts
+- host:redoubt-stride::a_budget_with_two_runnable_threads_runs_on_two_harts_at_one_pass
 - host:redoubt-stride::a_budget_running_on_another_hart_stays_queued_through_this_harts_reconcile
 - mutation:R12PriorityById
 - mutation:R12IgnoreWeight

@@ -117,6 +117,13 @@ impl Space {
     /// Flush this whole ASID: a PID given out, or a space that is ending.
     fn flush_asid(self) { flush(Flush::Asid(self.asid)) }
 
+    /// One of this space's entries was cleared or narrowed, or a table of it freed: the checked
+    /// build holds the call to a shootdown of its process before the kernel returns ([`audit`]).
+    fn removed(self) {
+        #[cfg(debug_assertions)]
+        audit::removed(self.asid);
+    }
+
     /// Write `pte` at `slot`, the leaf for `virt`, without its flush.
     fn write_leaf(self, slot: Slot, virt: usize, pte: Pte) {
         slot.set(pte);
@@ -165,6 +172,13 @@ pub fn enter_kernel_asid() {
 /// fetches. It reads no kernel cell.
 pub fn shot_down(asid: usize) {
     write_satp(KERNEL_SATP.load(Ordering::Relaxed));
+    shot_flush(asid);
+}
+
+/// A hart serving a shootdown of `asid` that stays in its space (`hart.rs`), before it takes the
+/// kernel lock: it drops `asid`'s translations and fences its instruction fetches, so it sees the
+/// tables and the code as the call that asked left them. It reads no kernel cell.
+pub fn shot_flush(asid: usize) {
     flush_here(Flush::Asid(asid));
     sync_icache();
 }
@@ -279,11 +293,43 @@ pub mod audit {
 
     pub(super) fn flushed(flush: Flush) { LOG.with(|log| log[hart::index()].flushed(flush)) }
 
+    /// The ASIDs (PIDs) this hart cleared or narrowed an entry of, or freed a table of, in this
+    /// entry and has not shot down since, 0 for a free place.
+    static REMOVED: KernelCell<[[usize; 8]; MAX_HARTS]> = KernelCell::new([[0; 8]; MAX_HARTS]);
+
+    /// A removal from `asid`'s space ([`super::Space::removed`]).
+    pub(super) fn removed(asid: usize) {
+        REMOVED.with(|r| {
+            let list = &mut r[hart::index()];
+            if list.contains(&asid) {
+                return;
+            }
+            let free = list.iter_mut().find(|a| **a == 0);
+            *free.expect("ASID audit: more processes lost entries in one entry than the record holds") = asid;
+        })
+    }
+
+    /// `asid`'s process was shot down on the other harts running it (`hart::shootdown`).
+    pub fn shot(asid: usize) {
+        REMOVED.with(|r| r[hart::index()].iter_mut().filter(|a| **a == asid).for_each(|a| *a = 0))
+    }
+
     /// At every return from the trap handler, to user mode or to `kmain`: every write this hart
-    /// made is flushed, or the kernel stops naming one.
+    /// made is flushed, or the kernel stops naming one; and no process that lost an entry in this
+    /// entry runs on another hart unless it was shot down there (kernel/memory.md, "Residual
+    /// risks"). On QEMU, which empties a hart's TLB at every `satp` write, this is what sees a
+    /// shootdown missed.
     pub fn returning() {
         if let Some(stale) = LOG.with(|log| log[hart::index()].first()) {
             panic!("ASID audit: a page-table write is unflushed at a return from the kernel: {}", stale);
+        }
+        let removed = REMOVED.with(|r| core::mem::take(&mut r[hart::index()]));
+        for pid in removed.iter().filter_map(|a| redoubt_layout::Pid::new(*a as u16)) {
+            assert!(
+                !hart::runs_elsewhere(pid),
+                "ASID audit: PID {} lost an entry while another hart ran it, and was not shot down there",
+                pid
+            );
         }
     }
 
@@ -323,9 +369,10 @@ pub mod audit {
 /// Make this hart's instruction fetches see every store it made before (RISC-V `fence.i`,
 /// Zifencei). Called after anything that makes memory executable for userspace: an image moved in
 /// by `process_map`, and `map_anon`, `map_fixed`, `set_flags` or a demand-paged fault installing
-/// X, and once at boot before the first user dispatch. It acts on this hart only: a hart also runs
-/// it before it runs a process after the kernel's own thread (`sched.rs`), and a hart shot down
-/// before it acknowledges ([`shot_down`]).
+/// X, and once at boot before the first user dispatch. It acts on this hart only: each of the
+/// calls also shoots the process down on the other harts running it, which run it before they
+/// acknowledge ([`shot_flush`]); a fault backs a zeroed page, which no hart has fetched from; and a
+/// hart runs it before it runs a process after the kernel's own thread (`sched.rs`).
 pub fn sync_icache() {
     // SAFETY: `fence.i` takes no operands, touches no memory the compiler tracks and changes no
     // register; it only orders this hart's later instruction fetches after its earlier stores.
@@ -784,6 +831,7 @@ pub fn unmap_page_inner(_mm: &mut MemoryManager, virt: usize) -> Result<usize, P
     } else {
         space.set_leaf(slot, virt, Pte::EMPTY);
     }
+    space.removed();
     Ok(phys)
 }
 
@@ -810,6 +858,7 @@ pub fn return_page_inner(
         return Err(PageError::Lent);
     }
     src_space.set_leaf(src, src_addr, Pte::EMPTY);
+    src_space.removed();
     dest_space.set_leaf(dest, dest_addr, dest.get().without(PteFlags::S | PteFlags::P).with(PteFlags::VALID));
     Ok(phys)
 }
@@ -827,6 +876,7 @@ pub fn lend_out(space: &MemoryMapping, virt: usize) -> Result<usize, PageError> 
         return Err(PageError::Lent);
     }
     space.set_leaf(slot, virt, pte.without(PteFlags::VALID).with(PteFlags::S));
+    space.removed();
     Ok(pte.phys())
 }
 
@@ -1016,6 +1066,7 @@ pub fn free_empty_tables(mm: &mut MemoryManager, space: &MemoryMapping, start: u
             slot.set(Pte::EMPTY);
             wrote(space.tables(virt));
             space.flush_tables(virt);
+            space.removed();
             mm.free_frame_of(frame, owner).expect("the owner just read releases its frame");
         }
         virt += leaf_span;
@@ -1031,6 +1082,7 @@ pub fn unmap_from(space: &MemoryMapping, virt: usize) -> Result<usize, PageError
         return Err(PageError::Lent);
     }
     space.set_leaf(slot, virt, Pte::EMPTY);
+    space.removed();
     Ok(pte.phys())
 }
 
@@ -1134,6 +1186,9 @@ pub fn set_user_page_flags(virt: usize, flags: MemFlags) -> Result<(), PageError
     }
     let keep = pte.flags() - (PteFlags::R | PteFlags::W | PteFlags::X);
     space.set_leaf(slot, virt, Pte::leaf(pte.phys(), keep | wanted));
+    if !wanted.contains(pte.flags() & (PteFlags::R | PteFlags::W | PteFlags::X)) {
+        space.removed();
+    }
     Ok(())
 }
 

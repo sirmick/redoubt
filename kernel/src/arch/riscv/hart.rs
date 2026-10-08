@@ -212,59 +212,108 @@ pub fn wake_idle() {
     }
 }
 
-/// Shoot `pid` down on every other hart running it, before any of its frames is freed
-/// (kernel/memory.md, "Residual risks"): each is asked to flush its ASID and sent the interrupt,
-/// and the caller, holding the kernel lock, waits for every acknowledgement. No hart needs the
-/// lock to acknowledge ([`serve`]), so there is no deadlock. The set is the harts whose block names
-/// `pid` as the process they run, which is exact: it changes only under the lock. SMP1's one
-/// caller is a destruction (`ptable.rs`, `kill_process`), and the set has at most one hart, which
-/// this does not assume.
-pub fn shootdown(pid: Pid) {
-    // Debug only, never in a bench build but one recorded negative run: no hart is shot down.
-    if cfg!(feature = "smp-no-evict") {
-        return;
-    }
+/// Whether a hart other than this one runs `pid` now: its block names `pid`, and no destruction
+/// has made it leave `pid`'s space ([`serve`]). Exact under the kernel lock, as the blocks change
+/// only under it but for that leaving.
+pub fn runs_elsewhere(pid: Pid) -> bool {
+    let (me, target) = (index(), usize::from(pid.get()));
+    HART_BLOCKS[..started()].iter().enumerate().any(|(i, block)| {
+        i != me && block.pid.load(Ordering::Relaxed) == target && block.left.load(Ordering::Relaxed) != target
+    })
+}
+
+/// Why a process is shot down, and so what a hart asked does with it ([`shootdown`]). The trace's
+/// record of it carries the number.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Shot {
+    /// One of the process's entries was cleared or narrowed: the hart flushes its ASID, fences its
+    /// instruction fetches, and runs on.
+    Flush = 1,
+    /// One of its pages was made executable: the same, for the fence.
+    Fetch = 2,
+    /// The process is ending: the hart also leaves its space for the kernel's, never to resume it.
+    Leave = 3,
+}
+
+/// The bit of a block's `shoot` word that asks the hart to leave the space ([`Shot::Leave`]).
+const SHOOT_LEAVE: usize = 1 << (usize::BITS - 1);
+
+/// Shoot `pid` down on every other hart running it (kernel/memory.md, "Residual risks"), before
+/// the call that changed its tables returns and before any frame it freed or moved is reused: each
+/// is asked to flush its ASID, and for [`Shot::Leave`] to leave the space, and sent the interrupt;
+/// the caller, holding the kernel lock, waits for every acknowledgement. No hart needs the lock to
+/// acknowledge ([`serve`]), so there is no deadlock. The set is the harts that run `pid` now
+/// ([`runs_elsewhere`]), which is exact: it changes only under the lock. With none, it costs a
+/// look at each block. The harts it asked, a bit each by boot index.
+pub fn shootdown(pid: Pid, shot: Shot) -> usize {
     let me = index();
     let target = usize::from(pid.get());
+    let word = (target + 1) | if shot == Shot::Leave { SHOOT_LEAVE } else { 0 };
     let mut asked = 0usize;
     for (i, block) in HART_BLOCKS[..started()].iter().enumerate() {
-        if i != me && block.pid.load(Ordering::Relaxed) == target {
-            block.shoot.store(target + 1, Ordering::Release);
+        if i != me
+            && block.pid.load(Ordering::Relaxed) == target
+            && block.left.load(Ordering::Relaxed) != target
+        {
+            block.shoot.store(word, Ordering::Release);
             let _ = sbi_rt::send_ipi(sbi_rt::HartMask::from_mask_base(1, block.id.load(Ordering::Relaxed)));
             asked |= 1 << i;
         }
     }
-    for (_, block) in HART_BLOCKS.iter().enumerate().filter(|(i, _)| asked & 1 << i != 0) {
+    let mut acked = 0usize;
+    for (i, block) in HART_BLOCKS.iter().enumerate().filter(|(i, _)| asked & 1 << i != 0) {
         while block.shoot.load(Ordering::Acquire) != 0 {
             crate::cell::pause();
         }
+        acked |= 1 << i;
     }
-    // The checked build's word for `smp-evict`: every hart running it has left it.
-    #[cfg(debug_assertions)]
+    // The trace's record of it, for `smp-fence`: the target, why, and the harts asked and
+    // acknowledged.
+    #[cfg(feature = "sched-trace")]
     if asked != 0 {
-        println!(
-            "shootdown: PID {} stopped on hart(s) {:#b} before any of its frames is freed",
-            target, asked
-        );
+        crate::sched::trace::shootdown(target as u64, shot as u8, asked, acked);
     }
+    let _ = acked;
+    #[cfg(debug_assertions)]
+    super::mem::audit::shot(target);
+    asked
 }
 
 /// Serve this hart's shootdown request, if there is one: at a trap from user mode before the
-/// kernel lock is taken, and on every turn of the wait for it. The hart leaves for the kernel's
-/// own space, flushes the ASID, fences its instruction fetches and acknowledges; it reads no
-/// kernel cell. Its block still names the process, which the kernel finds dead once the hart
-/// holds the lock (`irq.rs`).
+/// kernel lock is taken, and on every turn of the wait for it. The hart flushes the ASID, fences
+/// its instruction fetches and acknowledges; asked to leave, it first leaves for the kernel's own
+/// space. It reads no kernel cell. A hart that left still names the process in its block, which the
+/// kernel finds dead once the hart holds the lock (`irq.rs`).
 pub fn serve() {
     let block = this();
     let asked = block.shoot.load(Ordering::Acquire);
     if asked != 0 {
-        super::mem::shot_down(asked - 1);
-        block.left.store(asked - 1, Ordering::Relaxed);
+        let asid = (asked & !SHOOT_LEAVE) - 1;
+        if asked & SHOOT_LEAVE != 0 {
+            super::mem::shot_down(asid);
+            block.left.store(asid, Ordering::Relaxed);
+        } else {
+            super::mem::shot_flush(asid);
+        }
         // Served by polling or by its interrupt: either way the interrupt has done its work, and a
         // hart running a process is never idle, so no reschedule interrupt is pending to lose.
         ack_ipi();
         block.shoot.store(0, Ordering::Release);
     }
+}
+
+/// What each started hart runs, by boot index: its PID and thread, for the checked build's audit
+/// at every pick (`sched.rs`). A hart a destruction made leave its process is left out: it names a
+/// process that is gone.
+#[cfg(debug_assertions)]
+pub fn running() -> impl Iterator<Item = (usize, Pid, usize)> {
+    HART_BLOCKS[..started()].iter().enumerate().filter_map(|(i, block)| {
+        let pid = block.pid.load(Ordering::Relaxed);
+        if pid != 0 && block.left.load(Ordering::Relaxed) == pid {
+            return None;
+        }
+        Some((i, Pid::new(pid as u16).unwrap_or(KERNEL_PID), block.tid.load(Ordering::Relaxed)))
+    })
 }
 
 /// Whether this hart's process was shot down since it was switched to: its block names the PID

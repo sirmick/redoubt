@@ -955,11 +955,15 @@ fn check_buffer(mm: &mut MemoryManager, pid: Pid, pages: Pages, lend: bool) -> R
 }
 
 /// Take the buffer out of the sender's address space (I9: a lent page is unmapped from its
-/// lender until the call ends). Every page was checked by [`check_buffer`], so nothing fails.
+/// lender until the call ends). Every page was checked by [`check_buffer`], so nothing fails. No
+/// other hart running the sender keeps its entries for them, before any receiver can take them.
 fn take_buffer(ss: &ProcessTable, pid: Pid, addr: usize, npages: usize) {
     let space = ss.mapping_of(pid).expect("the sending process is alive");
     for i in 0..npages {
         crate::arch::mem::lend_out(&space, addr + i * PAGE_SIZE).expect("a checked range lends");
+    }
+    if npages > 0 {
+        crate::mem::shoot(pid);
     }
 }
 
@@ -1589,6 +1593,9 @@ fn move_buffer(ss: &ProcessTable, mm: &mut MemoryManager, m: &Msg, spid: Pid, rp
     if m.kind == MsgKind::Send {
         let end = m.buf_addr + m.buf_pages * PAGE_SIZE;
         crate::arch::mem::free_empty_tables(mm, &sender_space, m.buf_addr, end);
+        // The sender's entries were invalid already, but a table they emptied may be freed: no
+        // other hart running the sender keeps a cached pointer to it.
+        crate::mem::shoot(spid);
     }
 }
 
@@ -1700,6 +1707,8 @@ fn return_lend(ss: &ProcessTable, mm: &mut MemoryManager, call: &OpenCall) {
     }
     let end = call.lend_server + call.lend_pages * PAGE_SIZE;
     crate::arch::mem::free_empty_tables(mm, &server, call.lend_server, end);
+    // No other hart running the server keeps its entries for them once the lender has them back.
+    crate::mem::shoot(call.server.0);
 }
 
 /// The lend of an abandoned call: its pages are the server's alone, so replying frees them.
@@ -1715,6 +1724,8 @@ fn free_abandoned_lend(ss: &ProcessTable, mm: &mut MemoryManager, call: &OpenCal
     }
     let end = call.lend_server + call.lend_pages * PAGE_SIZE;
     crate::arch::mem::free_empty_tables(mm, &space, call.lend_server, end);
+    // No other hart running the server keeps its entries for the frames just freed.
+    crate::mem::shoot(call.server.0);
 }
 
 /// Free an open call's page and the charges it carried (R4a).
@@ -1763,6 +1774,8 @@ fn abandon(ss: &ProcessTable, mm: &mut MemoryManager, frame: u32) {
     }
     let end = call.lend_caller + call.lend_pages * PAGE_SIZE;
     crate::arch::mem::free_empty_tables(mm, &space, call.lend_caller, end);
+    // As at a transfer's delivery: a table the caller's invalid entries emptied may be freed.
+    crate::mem::shoot(call.caller.0);
 }
 
 // --- Teardown: R4b, R10, and timeouts --------------------------------------------------------------

@@ -136,8 +136,10 @@ pub extern "C" fn trap_handler(
         // Shot down while it ran here (`hart::shootdown`): its process was destroyed from another
         // hart, and its thread and context are gone. The hart's own mark says so, not the process
         // table, which may already hold a new process under the same PID. Nothing of the trap is
-        // handled: the hart goes to `kmain`.
+        // handled: the hart goes to `kmain`. What it ran is its budget's, if that lives on (a
+        // sibling's exit ended the process, not a destruction of the budget).
         if crate::arch::hart::shot_down() {
+            crate::sched::from_user();
             ProcessTable::with_mut(|ss| ss.switch_to_thread(KERNEL_PID, None)).expect("kmain exists");
             resume_current();
         }
