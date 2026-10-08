@@ -490,7 +490,7 @@ The timer's counter frequency is not needed: `time_now`'s microseconds serve the
 
 ### Natives
 
-<details><summary>Status: built · partly tested: the machine's cases run the VM under a tester in the steward's place, not under the steward itself · tested (30)</summary>
+<details><summary>Status: built · partly tested: the machine's cases run the VM under a tester in the steward's place, not under the steward itself · tested (31)</summary>
 
 - bench:beamlet-natives
 - bench:beamlet-serve
@@ -522,6 +522,7 @@ The timer's counter frequency is not needed: `time_now`'s microseconds serve the
 - host:beamlet-redoubt::a_request_already_waiting_ends_the_idle_that_takes_it
 - host:beamlet-redoubt::an_endpoint_served_stays_open_when_its_term_is_dropped
 - host:beamlet-redoubt::a_launch_takes_what_it_is_given_and_its_end_is_an_event
+- host:beamlet-redoubt::a_labelled_sessions_child_takes_its_labels_and_runs
 
 </details>
 
@@ -595,7 +596,11 @@ with no `System`, the host CLI's, answers each `{error, not_supported}`; the hos
 - **`budget_create(#{pages, processes, weight, labels, account, deadline})`** carves a child from
   the VM's own budget, the named handle `budget` (`no_budget` without one); `labels`, `account`
   and `deadline` may be left out, and a deadline, in the clock's microseconds, makes it a lease
-  ([deadlines](../kernel/budgets.md#deadlines)). **`budget_destroy(Budget)`** destroys it and
+  ([deadlines](../kernel/budgets.md#deadlines)). Labels left out are the VM's own, the set
+  `labels()` reads: a session is `user`-class, and the kernel gives a `user`-class caller's child
+  exactly its parent's labels, so in a labelled session that default is what lets it carve, and
+  launch, at all. Labels given go to the kernel as they are: fewer than the session's are
+  `label_denied`, more `class_denied` ([labels on budgets](../kernel/budgets.md#labels-on-budgets)). **`budget_destroy(Budget)`** destroys it and
   everything in it; **`budget_usage(Budget)`** is `{ok, #{pages => {Limit, Used}, processes =>
   {Limit, Used}, weight => {Limit, Carved}}}`. A handle of another kind is `wrong_object` before
   the kernel is asked.

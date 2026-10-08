@@ -402,7 +402,11 @@ impl System for Redoubt {
             pages: spec.pages,
             processes: u32::try_from(spec.processes).map_err(too_large)?,
             weight: u32::try_from(spec.weight).map_err(too_large)?,
-            labels: Labels::from_slice(&spec.labels).map_err(|_| Refused("too_large"))?,
+            // Left out, the VM's own: what the kernel stamps on its sends, so its own budget's
+            // set, which a user-class caller's child must carry exactly (docs/kernel/budgets.md,
+            // "Labels on budgets"). Given, they go to the kernel as they are, for its verdict.
+            labels: Labels::from_slice(spec.labels.as_deref().unwrap_or(&self.sys.labels))
+                .map_err(|_| Refused("too_large"))?,
             account: spec.account,
             deadline: spec.deadline.unwrap_or(FOREVER),
         };

@@ -97,7 +97,7 @@ and a well-formed child still runs afterwards.
 
 ### Launching from a session
 
-Status: built · partly tested: the session is a tester's in the steward's place · tested: bench:beamlet-launch, host:beamlet-redoubt::a_launch_takes_what_it_is_given_and_its_end_is_an_event, host:beamlet-vm::a_launch_takes_everything_from_its_caller_and_its_end_arrives_as_a_message, host:redoubt-client::a_bad_launch_is_refused_before_any_kernel_call
+Status: built · partly tested: the session is a tester's in the steward's place · tested: bench:beamlet-launch, host:beamlet-redoubt::a_launch_takes_what_it_is_given_and_its_end_is_an_event, host:beamlet-redoubt::a_labelled_sessions_child_takes_its_labels_and_runs, host:beamlet-vm::a_launch_takes_everything_from_its_caller_and_its_end_arrives_as_a_message, host:redoubt-client::a_bad_launch_is_refused_before_any_kernel_call
 
 A session launches a native program through beamlet's launch native
 ([beamlet](beamlet.md#natives)), and its end arrives as a message to the process that launched

@@ -181,7 +181,12 @@ impl System for Test {
 
     fn budget_create(&mut self, spec: &BudgetSpec) -> Result<Object, Refused> {
         self.saw(format!("budget_create {spec:?}"));
-        if spec.labels.is_empty() { Ok(self.make("budget", "child")) } else { Err(Refused("label_denied")) }
+        // Left out, the VM's own; given, the kernel's verdict on a set that is not exactly the VM's.
+        if spec.labels.as_ref().is_none_or(|l| *l == self.labels()) {
+            Ok(self.make("budget", "child"))
+        } else {
+            Err(Refused("label_denied"))
+        }
     }
 
     fn budget_destroy(&mut self, budget: &Object) -> Result<(), Refused> {
@@ -297,7 +302,7 @@ fn budgets_are_carved_read_and_destroyed() {
     assert_eq!(result, "{#{pages => {64,3},processes => {1,0},weight => {10,0}},ok,{error,label_denied}}");
     assert!(
         calls[0]
-            .contains("pages: 64, processes: 1, weight: 10, labels: [], account: 0, deadline: Some(5000)")
+            .contains("pages: 64, processes: 1, weight: 10, labels: None, account: 0, deadline: Some(5000)")
     );
     assert_eq!(calls[1], "budget_destroy child");
 }

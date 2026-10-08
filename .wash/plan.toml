@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 362
+revision = 365
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1183,8 +1183,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["K23", "STEWARD2"]
   body = "A restarted steward leaves sshd with state for sessions the new steward never knew. (1) Channels: sshd's open channels for earlier sessions stay open; its ChannelClosed for ids the new steward never knew are answered Unknown and ignored. (2) Slots (found by K23): sshd keeps a slot for each login the dying steward never answered, and has 4 slots, so a few steward restarts with logins in flight leave sshd unable to take new logins. Fix both from one signal: the restarted steward (or init at the restart) tells sshd every earlier session is over; sshd ends their channels and frees every slot held for an unanswered login. A case: logins in flight across a steward restart, then a fresh login succeeds and the old channels are closed. Needs K23 and STEWARD2."
-  state = "todo"
-  revision = 318
+  state = "active"
+  revision = 364
 
 [[node]]
   id = "K27"
@@ -1273,8 +1273,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   body = "Found by BEAM4's cases branch once the tester carved sessions as the steward does (a sub-budget per label set with its labels): beamlet's budget_create without `labels` passes an empty set to the kernel, and a labelled session's every child carve is refused label_denied, so a labelled principal's shell can launch nothing. Decide the rule with the Architect's page (budgets.md / labels): a child carve defaults to the parent's labels (narrowing allowed, widening refused) or the VM must always pass labels; implement in userland/otp's natives (Budget module, budget_create path), a host test on the fake kernel and the beamlet-launch case under a labelled session. Tier B unless the kernel's carve rule changes (it should not). Size S."
-  state = "reported"
-  revision = 342
+  state = "done"
+  revision = 365
 
 [[node]]
   id = "BEAM13"
@@ -1406,8 +1406,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M2"
   body = "Found during SHELL2's review. On main 91256b4d0, erlang/files2 failed 2 in 5 runs; on SHELL2's head it failed 1 in 5. Every failure is in 2.1.1-2.1.3: 2.1.1 wants 2020 and gets 2026, 2.1.2 wants 1 and gets 10, 2.1.3 wants 2 and gets 8. One earlier run failed 2.2.3 (want 38, got 5). Find the race in the test or in beamlet's file times, and fix that one. erlang/ports always fails because /bin/echo is a uutils symlink outside the sandbox's /bin; handle it in the same package. Size S."
-  state = "todo"
-  revision = 354
+  state = "active"
+  revision = 363
+  overrides = ["2026-10-08: started by Orchestrator before M1 (reported): A host-side test flake on main, independent of M1's remaining work."]
 
 [[node]]
   id = "SHELL8"
