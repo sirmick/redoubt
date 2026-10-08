@@ -367,6 +367,13 @@ replies with the encoded reply or the error's status.
 what the files are. A `FileServer` supplies the files: `attach`, `walk`, `open`, `read`, `write`,
 `create`, `remove`, `stat`, and `labels` for each node.
 
+**Beside the skeleton,** the volume servers (`littlefsd`, `walfsd`, `erofsd`, and `verityd` on
+`blkd`'s protocol) share `redoubt-fileserver` (`libs/fileserver`): the arguments `init` passes
+them, `endpoint=NAME` and `labels=ID[,ID...]`, parsed once under the manifest's rules
+(host:redoubt-fileserver::arguments_it_does_not_understand_stop_it_before_serving,
+host:redoubt-fileserver::a_number_and_a_label_set_follow_the_manifests_rules). What a format
+needs of its medium stays with its server: how a range is mounted as its blocks, and the files.
+
 **On the wire.** A request whose word 0 is 0 is 9P: a `call` whose words are all zero, with the
 T-message at the start of its lend; the R-message is written over it ([wire](wire.md)). Any other
 word 0 is a typed opcode: 1 to 15 belong to `ninep_common`, which the skeleton serves itself, and

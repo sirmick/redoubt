@@ -156,7 +156,7 @@ R76 (verified volumes).
 
 ## Failure and restart
 
-Status: built · partly tested: a restart is `init`'s, as for every server, and no case restarts an `erofsd` · tested: bench:erofs-corrupt, host:redoubt-erofsd::a_range_that_cannot_be_sized_is_no_volume, host:redoubt-erofsd::a_range_that_fails_makes_the_volume_corrupt_until_erofsd_starts_again, host:redoubt-erofsd::a_volume_of_noise_or_a_failing_range_is_served_as_corrupt, host:redoubt-erofsd::arguments_it_does_not_understand_or_no_range_stop_it_before_serving, host:redoubt-erofsd::arguments_it_does_not_understand_stop_it_before_serving
+Status: built · partly tested: a restart is `init`'s, as for every server, and no case restarts an `erofsd` · tested: bench:erofs-corrupt, host:redoubt-erofsd::a_range_that_cannot_be_sized_is_no_volume, host:redoubt-erofsd::a_range_that_fails_makes_the_volume_corrupt_until_erofsd_starts_again, host:redoubt-erofsd::a_volume_of_noise_or_a_failing_range_is_served_as_corrupt, host:redoubt-erofsd::arguments_it_does_not_understand_or_no_range_stop_it_before_serving, host:redoubt-fileserver::arguments_it_does_not_understand_stop_it_before_serving
 
 A bad argument or a missing range handle is an exit at start; a corrupt volume is served as
 corrupt, not an exit. `init` restarts `erofsd` on the same endpoint as any server, and a
@@ -179,9 +179,8 @@ no state to lose.
   not one block's against the next; a walk binary-searches the blocks by their first and last
   names, so a volume whose blocks are out of order makes a listed name walk to `not_found`. It is
   a wrong answer, not an unsafe one, and a verified volume's blocks are the ones its builder wrote.
-- **Its arguments and its range client are copies.** `erofsd` parses `endpoint=` and `labels=`
-  and calls its range as `littlefsd` and `verityd` do, each with its own copy
-  ([a follow-up](../todo/file-server-arguments-and-range-client.md)).
+- **Its range client is a copy.** `erofsd` calls its range as `littlefsd` and `verityd` do, each
+  with its own copy ([a follow-up](../todo/file-server-arguments-and-range-client.md)).
 - **Extended attributes are skipped, not parsed.** Their count and size are bounds-checked so
   that skipping them cannot leave the inode area; their content is never read.
 

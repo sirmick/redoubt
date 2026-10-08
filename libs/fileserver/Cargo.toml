@@ -1,0 +1,11 @@
+[package]
+name = "redoubt-fileserver"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "What the volume servers share beside the 9P skeleton: their arguments, their client of blkd's range, the quota ledger and the one-volume probe"
+
+# The runtime alone: the pieces here are the volume servers' (littlefsd, walfsd, erofsd and
+# verityd), not every server's, so they live beside the runtime, not in it.
+[dependencies]
+redoubt-rt = { path = "../rt" }

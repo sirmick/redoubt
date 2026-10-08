@@ -1,0 +1,5 @@
+description = "What the volume servers share (redoubt-fileserver): the arguments init passes them under the manifest's rules, their client of blkd's range, the quota ledger and the one-volume probe, each tested once for the servers that take it"
+kind = "host-tests"
+# The servers' own host tests (littlefsd-, walfsd-, erofsd-host-tests) drive these pieces again
+# through each server; this case is the pieces alone.
+packages = ["redoubt-fileserver"]

@@ -14,7 +14,7 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
-use redoubt_rt::abi::MAX_LABELS;
+use redoubt_fileserver::args::{label_set, number};
 use redoubt_rt::startup::valid_name;
 use redoubt_verity::{Geometry, Hash};
 
@@ -72,16 +72,9 @@ pub struct Args<'a> {
     pub mode: Mode,
 }
 
-/// A decimal number without leading zeros, the form `init` writes.
-fn number(s: &str) -> Result<u64, BadArgs> {
-    let canonical =
-        !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()) && (s == "0" || !s.starts_with('0'));
-    s.parse().ok().filter(|_| canonical).ok_or(BadArgs)
-}
-
 /// The arguments: `endpoint=NAME` exactly once; one mode, pinned (`root=<64 lowercase hex>` and
 /// `blocks=N`) or signed (`key=<64 lowercase hex>` and `floor=N`), each of its two exactly once;
-/// and `labels=ID[,ID...]` at most once, its IDs distinct and at most [`MAX_LABELS`]. Anything
+/// and `labels=ID[,ID...]` at most once, its IDs distinct and at most `MAX_LABELS`. Anything
 /// else, both modes or a part of one, a block count of 0 or one whose tree does not count in
 /// sectors, is refused whole.
 pub fn parse_args<'a>(args: impl Iterator<Item = &'a str>) -> Result<Args<'a>, BadArgs> {
@@ -97,16 +90,7 @@ pub fn parse_args<'a>(args: impl Iterator<Item = &'a str>) -> Result<Args<'a>, B
             }
             "labels" => {
                 once(labels.is_some())?;
-                let mut set = Vec::new();
-                for id in value.split(',') {
-                    let id = number(id)?;
-                    if set.contains(&id) || set.len() >= MAX_LABELS {
-                        return Err(BadArgs);
-                    }
-                    set.try_reserve(1).map_err(|_| BadArgs)?;
-                    set.push(id);
-                }
-                labels = Some(set);
+                labels = Some(label_set(value).map_err(|_| BadArgs)?);
             }
             "root" => {
                 once(root.is_some())?;
@@ -114,7 +98,7 @@ pub fn parse_args<'a>(args: impl Iterator<Item = &'a str>) -> Result<Args<'a>, B
             }
             "blocks" => {
                 once(blocks.is_some())?;
-                blocks = Some(Geometry::new(number(value)?).ok_or(BadArgs)?);
+                blocks = Some(Geometry::new(number(value).map_err(|_| BadArgs)?).ok_or(BadArgs)?);
             }
             "key" => {
                 once(public.is_some())?;
@@ -122,7 +106,7 @@ pub fn parse_args<'a>(args: impl Iterator<Item = &'a str>) -> Result<Args<'a>, B
             }
             "floor" => {
                 once(floor.is_some())?;
-                floor = Some(number(value)?);
+                floor = Some(number(value).map_err(|_| BadArgs)?);
             }
             _ => return Err(BadArgs),
         }

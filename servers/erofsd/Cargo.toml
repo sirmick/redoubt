@@ -13,6 +13,7 @@ path = "src/bin/erofsd.rs"
 # (TENETS.md 5).
 [dependencies]
 redoubt-rt = { path = "../../libs/rt" }
+redoubt-fileserver = { path = "../../libs/fileserver" }
 erofs = { path = "../../libs/erofs" }
 
 [features]

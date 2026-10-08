@@ -208,6 +208,14 @@ max_unsafe = 0
 max_undocumented = 0
 
 [[budget]]
+# What the volume servers share beside the serving library, linked into each.
+# `#![forbid(unsafe_code)]`, so this can only stay at 0.
+name = "redoubt-fileserver (what the volume servers share)"
+paths = ["libs/fileserver/src"]
+max_unsafe = 0
+max_undocumented = 0
+
+[[budget]]
 # Both crates forbid unsafe code. consoled uses the runtime's Registers for MMIO.
 name = "bootfsd and consoled (the first two 9P servers)"
 paths = ["servers/bootfsd/src", "servers/consoled/src"]

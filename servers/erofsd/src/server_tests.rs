@@ -420,25 +420,6 @@ fn a_minted_connection_sees_only_below_its_root() {
 }
 
 #[test]
-fn arguments_it_does_not_understand_stop_it_before_serving() {
-    fn ok<'a>(args: &[&'a str]) -> Result<Args<'a>, BadArgs> { parse_args(args.iter().copied()) }
-    assert_eq!(ok(&["endpoint=erofsd:system"]), Ok(Args { endpoint: "erofsd:system", labels: Vec::new() }));
-    assert_eq!(ok(&["endpoint=e", "labels=3,1"]).map(|a| a.labels), Ok(vec![3, 1]));
-    for bad in [
-        &[][..],
-        &["endpoint=e", "endpoint=f"],
-        &["endpoint="],
-        &["endpoint=e", "labels=01"],
-        &["endpoint=e", "labels=1,1"],
-        &["endpoint=e", "labels="],
-        &["endpoint=e", "labels=1", "labels=2"],
-        &["endpoint=e", "volume=x"],
-    ] {
-        assert_eq!(ok(bad), Err(BadArgs), "{bad:?}");
-    }
-}
-
-#[test]
 fn the_conformance_vectors_run_against_erofsd() {
     let tree = tree();
     let disk = Memory::holding(image(&tree));

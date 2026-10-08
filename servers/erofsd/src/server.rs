@@ -56,54 +56,6 @@ pub trait Range {
     fn read(&mut self, at: u64, out: &mut [u8]) -> Result<(), Fault>;
 }
 
-/// Why the arguments were refused.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct BadArgs;
-
-/// What `erofsd`'s arguments other than `buckets=` say.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Args<'a> {
-    /// The manifest name of the endpoint it receives on (`erofsd:system`): its startup block
-    /// holds that endpoint under this name.
-    pub endpoint: &'a str,
-    /// The volume's label set; empty when `labels=` is absent.
-    pub labels: Vec<u64>,
-}
-
-/// The arguments other than `buckets=`, as `littlefsd` takes them: `endpoint=NAME` exactly once,
-/// a name under the manifest's rule; and `labels=ID[,ID...]` at most once, each ID decimal
-/// without leading zeros, at most `MAX_LABELS`, absent for an empty set. Anything else is refused.
-pub fn parse_args<'a>(args: impl Iterator<Item = &'a str>) -> Result<Args<'a>, BadArgs> {
-    let (mut endpoint, mut labels) = (None, None);
-    for arg in args {
-        if let Some(name) = arg.strip_prefix("endpoint=") {
-            if endpoint.is_some() || !redoubt_rt::startup::valid_name(name) {
-                return Err(BadArgs);
-            }
-            endpoint = Some(name);
-            continue;
-        }
-        let list = arg.strip_prefix("labels=").ok_or(BadArgs)?;
-        if labels.is_some() {
-            return Err(BadArgs);
-        }
-        let mut set = Vec::new();
-        for id in list.split(',') {
-            let canonical = !id.is_empty()
-                && id.bytes().all(|b| b.is_ascii_digit())
-                && (id == "0" || !id.starts_with('0'));
-            let id: u64 = id.parse().ok().filter(|_| canonical).ok_or(BadArgs)?;
-            if set.contains(&id) || set.len() >= redoubt_rt::abi::MAX_LABELS {
-                return Err(BadArgs);
-            }
-            set.try_reserve(1).map_err(|_| BadArgs)?;
-            set.push(id);
-        }
-        labels = Some(set);
-    }
-    Ok(Args { endpoint: endpoint.ok_or(BadArgs)?, labels: labels.unwrap_or_default() })
-}
-
 /// What a fid rests on: the inode it was walked to, read and checked then, and the name it was
 /// walked by (`/` for the root). Nothing on the volume changes, so the inode stays true.
 #[derive(Clone, Debug, PartialEq, Eq)]
