@@ -215,7 +215,7 @@ impl Sched {
         #[cfg(feature = "sched-trace")]
         trace::entry();
         let (lost, gained) = self.marks.changed();
-        self.cpu.reconcile(mm, lost, gained, |mm, b| mm.ready(b) > 0);
+        self.cpu.reconcile(mm, lost, gained, |mm, b| mm.ready(b));
         #[cfg(debug_assertions)]
         {
             let cpu = &self.cpu;

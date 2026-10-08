@@ -646,9 +646,12 @@ impl Scheduler {
     }
 
     /// A budget deadline fired: the running thread is preempted (re-pick).
-    pub fn preempt(&mut self) {
-        if self.current.is_some() {
-            self.deschedule();
+    pub fn preempt(&mut self) { self.preempt_on(0) }
+
+    /// A budget deadline fired: hart `h`'s thread is preempted.
+    pub fn preempt_on(&mut self, h: usize) {
+        if self.on(h).is_some() {
+            self.deschedule_on(h);
         }
     }
 

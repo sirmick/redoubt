@@ -941,10 +941,10 @@ It is attacked three ways:
   64 staggered deadlines, and waits ended before their timeouts; a system server flooded by one
   user; a weight-1000 server among eight users of 100.
 - **The differential** drives `libs/stride`, wired as the kernel wires it, and the model's
-  scheduler through 3,000 random sequences of creations, destructions (leaf, on the CPU, and
-  whole subtrees), wakes, blocks, runs and preemptions, and requires every pass, entry,
-  remainder, tie, queue membership, floor and pick to agree after every step. A model with any of
-  18 scheduling rules broken must disagree.
+  scheduler through 3,000 random sequences of creations, destructions (leaf, on a hart, and
+  whole subtrees), wakes, blocks, runs and preemptions, at 1, 2 and 4 harts, and requires every
+  pass, entry, remainder, tie, queue membership, floor, cap set and pick to agree after every
+  step. A model with any of 26 scheduling rules broken must disagree.
 - **The model's mutations**: each `R12*` variant breaks one part, and `scheduler_fairness` (eleven
   scenarios, each with an independent check) or the scheduler contracts must catch it
   ([model](model.md)).

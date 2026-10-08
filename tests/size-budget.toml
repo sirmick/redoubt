@@ -36,7 +36,7 @@ max_lines = 257
 [[crate]]
 name = "libs/stride"
 paths = ["libs/stride/src"]
-max_lines = 699
+max_lines = 837
 
 [[crate]]
 name = "libs/verity"
@@ -101,7 +101,7 @@ max_lines = 1691
 [[crate]]
 name = "model"
 paths = ["model/src"]
-max_lines = 10777
+max_lines = 10778
 
 [[crate]]
 name = "servers/keyd"

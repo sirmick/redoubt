@@ -558,10 +558,12 @@ Status: built · tested: host:redoubt-stride::the_crate_and_the_model_agree, hos
 differential test drives the crate, wired as the kernel's `sched.rs` calls it, and the model's
 `Scheduler` through the same random sequences: budget creations and destructions (a leaf whose
 threads blocked first, the budget on the CPU, a whole subtree bottom-up), wakes, blocks, runs,
-slice ends and preemptions. Over 3,000 seeds every pass, entry, remainder, tie, queue
-membership, the floor, the tie counters and the running thread must agree after every step.
-`a_broken_model_disagrees` shows the comparison bites: with any of 20 of the 25 R12 variants
-planted in the model, some sequence disagrees. It leaves out `R12TimeoutWakePreempts`, whose
+slice ends and preemptions, each on a hart drawn at random. Over 3,000 seeds at each of 1, 2 and
+4 harts every pass, entry, remainder, tie, queue membership, the floor, the tie counters, the cap
+set and each hart's running thread must agree after every step; at 4 harts some 360,000 of the
+steps hold two capped budgets or more. `a_broken_model_disagrees` shows the comparison bites:
+with any of 26 of the 31 R12 variants planted in the model, some sequence disagrees (the six of
+several harts at 2 or 4 harts). It leaves out `R12TimeoutWakePreempts`, whose
 site is the kernel model's timer path, not the scheduler, and `R12SliceCountsExitWork`,
 `R12DeadlineWorkUnbilled`, `R12TimerWorkUnbilled` and `R12SwitchBilledToPrevious`, kernel work
 around a run (the exit work before a slice starts, a deadline's destruction, a timer's expiry, the
