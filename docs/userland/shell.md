@@ -679,6 +679,41 @@ contents into an action:
 
 **Open:** none.
 
+### The editor's files
+
+Status: built · partly tested: the host only, on beamlet and on the BEAM; the editor and the file manager that use it are not built; its tests are the shell's own ExUnit suite (`test/redoubt/editor/files_test.exs`), each verdict read from the file system afterwards, which `./test-shell` runs and no bench case does
+
+What the editor and the file manager do to files is one module,
+[`Redoubt.Editor.Files`](../../userland/shell/lib/redoubt/editor/files.ex), over `File`, with
+the session's own authority and no more:
+- **Reading.** A file is read whole, up to 2 MiB (`max_bytes/0`), and comes back as its bytes,
+  whether they are UTF-8, and a digest. A larger file, or a path that is not a regular file, is
+  refused by name, with the size and the limit. At most one byte past the limit is read, so a
+  file that grew past it since its size was looked at is refused without being read whole.
+- **Saving.** A save writes a new file in the same directory, under a name the module makes
+  (`.NAME.saving-` and random hex), and renames it over the path; a write, close or rename that
+  fails (a full disk, a read-only volume) removes the new file and is returned as an error, never
+  raised. So a save reaches its own path and nothing else, and a reader never sees half a file.
+  A file changed on disk since it was read (its digest differs, or it appeared or went) is
+  `changed` and left as it is, unless the caller asks to overwrite it; the check reads at most
+  one byte past the limit.
+- **Listing.** A directory's entries come back by name, each with its name as shown, every
+  control or bidirectional character drawn visibly ([hostile text](#hostile-text-never-drives-the-terminal)),
+  and whether it may be acted on. A name that holds `/` or NUL, or is empty, `.` or `..`, is
+  refused: it is not looked at, and no operation joins it to a directory.
+- **The panes' operations:** copy, move (a rename, or a copy and a removal across volumes, as
+  `mv`), make a directory and remove, each on a name in its listed directory, to the same name
+  in the other pane's. Nothing is overwritten, and a directory is never copied or moved into
+  itself.
+- **Contents are data.** Nothing here takes a path, a name or an action from what a file holds:
+  a modeline or an escape sequence in a file comes back as the bytes it is.
+
+Residual: a move across volumes is a copy and a removal, so a removal that fails leaves the
+copy beside the source. A directory is kept out of itself by its path as written, not with
+links resolved: on a volume with symbolic links, copying a directory into a link that points
+inside it copies into its source. Both cost only the session's own files; follow-ups for the
+file manager.
+
 ## Why
 
 **Elixir is the shell, and the loop is Redoubt's.** No shell in the Elixir world replaces bash,
