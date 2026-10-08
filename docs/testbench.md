@@ -45,13 +45,16 @@ whole path, as two recipes may share a file name.
 
 ### Building once
 
-Status: built · tested: host:testbench::an_index_survives_its_rename_and_names_its_tree, host:testbench::the_fingerprint_follows_the_trees_changes, host:testbench::an_exact_filter_runs_one_case, host:testbench::userland_recipes_of_one_name_stage_apart
+Status: built · tested: host:testbench::an_index_survives_its_rename_and_names_its_tree, host:testbench::the_fingerprint_follows_the_trees_changes, host:testbench::an_exact_filter_runs_one_case, host:testbench::userland_recipes_of_one_name_stage_apart, host:testbench::a_build_asked_for_again_in_a_run_is_not_run_again
 
 A run builds what it boots: `cargo run` of the bench, then a cargo build of the kernel, the loader
 and each program, a check that costs about 30 ms when nothing changed and waits on the build
 directory's lock while another run compiles, then the bundle and any userland disk. Alone that is
 a quarter of a second before QEMU starts; beside a train of other runs, each waiting on the
-others' compiles, it was most of a case's time. `--prebuild DIR` does it once for every case:
+others' compiles, it was most of a case's time. A run makes each distinct build once, and a case
+asking for one already made takes its binary without running cargo, since a run takes the tree
+as it was when it began: the kernel and the loader are built once per profile and target, not
+once per case. `--prebuild DIR` does it once for every case:
 
 ```text
 DIR/testbench            the bench, copied from the --prebuild that made the directory

@@ -21,7 +21,15 @@ pub struct Builder {
     pub verbose: bool,
     /// Each userland disk staged in this run, by its recipe ([`Builder::userland`]).
     pub staged: Mutex<Vec<(PathBuf, Staged)>>,
+    /// Each cargo build this run made, by its directory and arguments, and the binary it
+    /// reported ([`Builder::cargo`]). A run takes the tree as it was when it began, so a build
+    /// asked for again is answered from here, not run again: a prebuild asks for the kernel and
+    /// the loader once per case.
+    pub built: Mutex<Vec<(Request, Option<PathBuf>)>>,
 }
+
+/// One cargo build: the directory it runs in and its arguments.
+pub type Request = (PathBuf, Vec<std::ffi::OsString>);
 
 /// Runs `command` with the pinned Erlang toolchain on the path (`userland/otp/tools/env.sh`),
 /// from `workspace`, and returns what it printed. A VM that crashes writes no `erl_crash.dump`
@@ -163,6 +171,10 @@ impl Builder {
         if !self.verbose {
             cargo.arg("--quiet").stderr(Stdio::piped());
         }
+        let request: Request = (root.clone(), cargo.get_args().map(Into::into).collect());
+        if let Some((_, built)) = self.built.lock().unwrap().iter().find(|(r, _)| *r == request) {
+            return Ok(built.clone());
+        }
         let output = cargo.output().context("running cargo")?;
         if !output.status.success() {
             let what = bin.map_or(package.to_string(), |bin| format!("{package}:{bin}"));
@@ -180,6 +192,7 @@ impl Builder {
                 executable = message.executable.or(executable);
             }
         }
+        self.built.lock().unwrap().push((request, executable.clone()));
         Ok(executable)
     }
 
@@ -671,6 +684,7 @@ mod tests {
             run: PathBuf::from("/w/run"),
             verbose: false,
             staged: Default::default(),
+            built: Default::default(),
         };
         let args = |host: &HostTests| {
             let cargo = builder.test_command(host, &builder.workspace, &host.tests, &["--quiet"]);
@@ -729,6 +743,7 @@ mod tests {
             run: PathBuf::new(),
             verbose: false,
             staged: Default::default(),
+            built: Default::default(),
         };
         let root = builder.host_test_workspace(None).unwrap();
         assert_eq!(root, builder.workspace.canonicalize().unwrap());
@@ -762,6 +777,7 @@ mod tests {
             run: PathBuf::from("/w/run"),
             verbose: false,
             staged: Default::default(),
+            built: Default::default(),
         };
         let image = builder.userland_dir(Path::new("image/userland.toml"));
         let pack = builder.userland_dir(Path::new("tests/data/pack/userland.toml"));
@@ -779,6 +795,7 @@ mod tests {
             run: run.clone(),
             verbose: false,
             staged: Default::default(),
+            built: Default::default(),
         };
         let (name, path) = builder.zeros(5000).unwrap();
         assert_eq!(name, "zeros-5000");
@@ -892,36 +909,18 @@ mod tests {
     }
 
     /// Two runs build one package with different features in one build cache, interleaved:
-    /// A builds, B builds, then A packs, and builds A again. A packs the binary of its own
-    /// features though B's build came between, each binary is in its own run's directory and
-    /// none in the cache's shared output directory, and A's second build compiles nothing.
+    /// A builds, B builds, then A packs, and A's directory is built again. A packs the binary of
+    /// its own features though B's build came between, each binary is in its own run's directory
+    /// and none in the cache's shared output directory, and the second build compiles nothing.
     #[test]
     fn interleaved_builds_each_pack_their_own_binary() {
-        let workspace = std::env::temp_dir().join(format!("testbench-fixture-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&workspace);
-        std::fs::create_dir_all(workspace.join("src")).unwrap();
-        std::fs::write(
-            workspace.join("Cargo.toml"),
-            "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[workspace]\n\n\
-             [features]\na = []\nb = []\n",
-        )
-        .unwrap();
-        std::fs::write(
-            workspace.join("src/main.rs"),
-            "fn main() { println!(\"built with {}\", if cfg!(feature = \"a\") { \"a\" } else { \"b\" }) }\n",
-        )
-        .unwrap();
-        let rustc = Command::new("rustc").arg("-vV").output().unwrap().stdout;
-        let host = String::from_utf8(rustc)
-            .unwrap()
-            .lines()
-            .find_map(|l| Some(l.strip_prefix("host: ")?.to_string()));
-        let target = Target { name: "host", triple: host.unwrap().leak(), machine: Err("a fixture") };
+        let (workspace, target) = fixture("interleaved");
         let run = |name: &str| Builder {
             workspace: workspace.clone(),
             run: workspace.join(name),
             verbose: false,
             staged: Default::default(),
+            built: Default::default(),
         };
         let (a, b) = (run("run-a"), run("run-b"));
         let build = |builder: &Builder, feature: &str| {
@@ -949,7 +948,8 @@ mod tests {
         assert!(built_a.starts_with(&a.run) && built_b.starts_with(&b.run), "{built_a:?} {built_b:?}");
         assert!(!cache.join("fixture").exists(), "a binary was copied into the shared cache");
         let before = compiled();
-        assert_eq!(build(&a, "a"), built_a);
+        // A later run in A's directory: this one would answer from its own record of the build.
+        assert_eq!(build(&run("run-a"), "a"), built_a);
         assert_eq!(compiled(), before, "a build of features already in the cache compiled again");
         // In one run, the binary built without features and with them land apart, so neither
         // replaces the other (`netd`, and `netd` with `restart-probe`).
@@ -958,6 +958,55 @@ mod tests {
         assert_eq!(printed(&plain), "built with b\n");
         assert_eq!(printed(&built_a), "built with a\n");
         std::fs::remove_dir_all(&workspace).unwrap();
+    }
+
+    /// A run builds each request once. Asked for the same build again, it answers with the
+    /// first's binary and runs no cargo: the fixture's manifest, broken in between, would fail
+    /// it, as it fails a request that differs only in its features.
+    #[test]
+    fn a_build_asked_for_again_in_a_run_is_not_run_again() {
+        let (workspace, target) = fixture("again");
+        let builder = Builder {
+            workspace: workspace.clone(),
+            run: workspace.join("run"),
+            verbose: false,
+            staged: Default::default(),
+            built: Default::default(),
+        };
+        let build = |feature: &str| {
+            builder.binary(&target, "fixture", None, &[feature.to_string()], Profile::Release)
+        };
+        let first = build("a").unwrap();
+        std::fs::write(workspace.join("Cargo.toml"), "not a manifest\n").unwrap();
+        assert_eq!(build("a").unwrap(), first);
+        assert!(build("b").is_err(), "a request that differs was answered without cargo");
+        assert_eq!(builder.built.lock().unwrap().len(), 1, "a failed build was kept as built");
+        std::fs::remove_dir_all(&workspace).unwrap();
+    }
+
+    /// A crate of one binary, with features `a` and `b`, in a workspace of its own under the
+    /// temporary directory, and the host as a target to build it for.
+    fn fixture(name: &str) -> (PathBuf, Target) {
+        let workspace = std::env::temp_dir().join(format!("testbench-fixture-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&workspace);
+        std::fs::create_dir_all(workspace.join("src")).unwrap();
+        std::fs::write(
+            workspace.join("Cargo.toml"),
+            "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[workspace]\n\n\
+             [features]\na = []\nb = []\n",
+        )
+        .unwrap();
+        std::fs::write(
+            workspace.join("src/main.rs"),
+            "fn main() { println!(\"built with {}\", if cfg!(feature = \"a\") { \"a\" } else { \"b\" }) }\n",
+        )
+        .unwrap();
+        let rustc = Command::new("rustc").arg("-vV").output().unwrap().stdout;
+        let host = String::from_utf8(rustc)
+            .unwrap()
+            .lines()
+            .find_map(|l| Some(l.strip_prefix("host: ")?.to_string()));
+        (workspace, Target { name: "host", triple: host.unwrap().leak(), machine: Err("a fixture") })
     }
 
     const GOLDEN_SIGNATURE: &str = "c5807e8b49de09f4a03ed502f87a867aded52a6f0badeca8db993d425d3d457fbf75559b65473006d1355efc665fd79952e5c16b7a9582c5f40dccc432310a04";
