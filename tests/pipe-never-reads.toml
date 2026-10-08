@@ -1,0 +1,48 @@
+description = "A stage that never reads, and one that never ends, hold a pipeline no longer than its last stage (docs/userland/native.md, \"Standard input and output, and pipes\"): yes writes into wait, which never reads and never ends, and the last stage says done and exits. The pipeline returns the last stage's output, the other two stages are ended by their budgets' destruction, and piped's budget goes with the last pipeline, so the weight the session's children hold is what it was before the pipeline. The verdict is the session's budget, read from the kernel"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# As beamlet-launch, with piped and pipe-stage in /boot.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-bootfsd", bin = "bootfsd" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-erofsd", bin = "erofsd" },
+    { package = "redoubt-littlefsd", bin = "littlefsd" },
+    { package = "beamlet-redoubt", bin = "beamlet", workspace = "userland/otp" },
+    { package = "redoubt-beamlet-programs", bin = "beamlet-session" },
+    { package = "redoubt-piped", bin = "piped" },
+    { package = "redoubt-beamlet-programs", bin = "pipe-stage" },
+]
+timeout_secs = 300
+expect = [
+    '^\[con [0-9a-f]{16}\] \[beamlet-session\] started beamlet beamlet_pipe:never_reads, labels \[\]$',
+    '^\[con [0-9a-f]{16}\] pipe: yes\|wait\|say: <<"done\\n">> \[\{killed,0\},\{killed,0\},\{exited,0\}\]$',
+    '^\[con [0-9a-f]{16}\] pipe: never reads: carved before [0-9]+, after [0-9]+, the same: true$',
+    '^\[con [0-9a-f]{16}\] \[beamlet-session\] beamlet beamlet_pipe:never_reads ended: Exited, code 0$',
+]
+forbid = [
+    'init: refused the boot',
+    '^init: (keyd|consoled|bootfsd|blkd|erofsd|littlefsd|beamlet-session)\S* .*(exited|faulted|was killed)',
+    'init: rebooting',
+    'EXCEPTION',
+    'FAIL',
+    'beamlet: .* not loaded',
+]
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/beamlet/pipe.json" }
+
+# What the tester runs; its sessions hold 10 processes, as the image's do, unless it says.
+[[file]]
+name = "beamlet-session.args"
+from = { path = "tests/data/beamlet/session-pipe-never-reads.args" }
+
+[disk]
+size_kib = 4096
+partitions = 1
+
+[userland]
+recipe = "tests/data/beamlet/natives-userland.toml"

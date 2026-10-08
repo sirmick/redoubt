@@ -283,6 +283,50 @@ defmodule Redoubt.Shell.DriverTest do
     ends(driver)
   end
 
+  # A line holding the feed, as a native program's input does (Redoubt.Pipeline): what it gets.
+  @feed_line ~S"(fn -> :ok = Redoubt.Shell.Driver.open_feed(); f = fn f, acc -> receive do {:redoubt_feed, :data, t} -> f.(f, [t | acc]); {:redoubt_feed, :eof} -> Enum.reverse(acc) end end; f.(f, []) end).()"
+
+  test "a line holding the feed gets the lines typed, edited and echoed, until Ctrl+D, and the shell goes on" do
+    {driver, terminal} = start()
+    type(driver, @feed_line <> "\r")
+    Process.sleep(300)
+    # A backspace takes a character back; the interrupt keys are never fed, nor any other control.
+    type(driver, "hello\r")
+    type(driver, "wor\x7Fld\x03\x1C\e\r")
+    type(driver, "\x04")
+    terminal = screen(terminal, &(Terminal.text(&1) =~ ~s|["hello\\n", "wold\\n"]|))
+    text = Terminal.text(terminal)
+    assert text =~ ~r/^hello$/m
+    assert text =~ ~r/^wold$/m
+    assert text =~ ~s|["hello\\n", "wold\\n"]|
+    refute text =~ "^C"
+    # The Ctrl+D ended the feed, not the shell: the next line runs.
+    type(driver, "1 + 1\r")
+    terminal = screen(terminal, &(Terminal.text(&1) =~ ~r/^2$/m))
+    assert Terminal.text(terminal) =~ ~r/^2$/m
+    type(driver, "exit\r")
+    ends(driver)
+  end
+
+  test "a feed's end leaves what is typed after it to the shell" do
+    {driver, terminal} = start()
+    # The line takes one fed line and ends, holding the feed no more.
+    type(
+      driver,
+      ~S|(fn -> :ok = Redoubt.Shell.Driver.open_feed(); receive do {:redoubt_feed, :data, t} -> t end end).()| <>
+        "\r"
+    )
+
+    Process.sleep(300)
+    type(driver, "only\r")
+    terminal = screen(terminal, &(Terminal.text(&1) =~ ~s|"only\\n"|))
+    type(driver, "40 + 2\r")
+    terminal = screen(terminal, &(Terminal.text(&1) =~ ~r/^42$/m))
+    assert Terminal.text(terminal) =~ ~r/^42$/m
+    type(driver, "exit\r")
+    ends(driver)
+  end
+
   test "keys after a Ctrl+D in the same read are kept, in order, when it deletes forward" do
     {driver, terminal} = start()
     # At the prompt: a, b, left, Ctrl+D deletes the b, c, Enter, all in one read.

@@ -1,0 +1,50 @@
+description = "A pipe carries no authority (docs/plan/m2-usable-shell.md, attack suite; docs/userland/native.md, \"Standard input and output, and pipes\"): a hostile stage, pipe-stage attack, runs between the session's pipes while the session holds a canary pipe of its own open with bytes in it. It looks up every other name, writes through every handle it was given and every handle number up to 64 it was not, opens its input for writing and its output for reading, walks above and across its ends, makes files beside them, and mints connections at the other end, another pipe and the canary, writing through any it gets. The verdict is the session's, never the attacker's: the next stage passed on exactly attack-out, the canary holds exactly what the session wrote, and the session's home holds no file the attacker named"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# As beamlet-launch, with piped and pipe-stage in /boot.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-bootfsd", bin = "bootfsd" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-erofsd", bin = "erofsd" },
+    { package = "redoubt-littlefsd", bin = "littlefsd" },
+    { package = "beamlet-redoubt", bin = "beamlet", workspace = "userland/otp" },
+    { package = "redoubt-beamlet-programs", bin = "beamlet-session" },
+    { package = "redoubt-piped", bin = "piped" },
+    { package = "redoubt-beamlet-programs", bin = "pipe-stage" },
+]
+timeout_secs = 300
+expect = [
+    '^\[con [0-9a-f]{16}\] \[beamlet-session\] started beamlet beamlet_pipe:no_authority, labels \[\]$',
+    '^\[con [0-9a-f]{16}\] pipe: attack\|cat: <<"attack-out\\n">> \[\{exited,0\},\{exited,0\}\]$',
+    '^\[con [0-9a-f]{16}\] pipe: no authority: the canary holds <<"canary">>$',
+    '^\[con [0-9a-f]{16}\] pipe: no authority: a file the attacker named in the home: \{error,enoent\}$',
+    '^\[con [0-9a-f]{16}\] \[beamlet-session\] beamlet beamlet_pipe:no_authority ended: Exited, code 0$',
+]
+forbid = [
+    'init: refused the boot',
+    '^init: (keyd|consoled|bootfsd|blkd|erofsd|littlefsd|beamlet-session)\S* .*(exited|faulted|was killed)',
+    'init: rebooting',
+    'EXCEPTION',
+    'FAIL',
+    'beamlet: .* not loaded',
+    'pwned',
+]
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/beamlet/pipe.json" }
+
+# What the tester runs; its sessions hold 10 processes, as the image's do, unless it says.
+[[file]]
+name = "beamlet-session.args"
+from = { path = "tests/data/beamlet/session-pipe-no-authority.args" }
+
+[disk]
+size_kib = 4096
+partitions = 1
+
+[userland]
+recipe = "tests/data/beamlet/natives-userland.toml"

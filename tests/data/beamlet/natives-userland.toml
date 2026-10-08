@@ -12,6 +12,7 @@ erlang = [
     "userland/otp/redoubt/tests/erlang/beamlet_serve.erl",
     "userland/otp/redoubt/tests/erlang/beamlet_launch.erl",
     "userland/otp/redoubt/tests/erlang/beamlet_natives_attack.erl",
+    "userland/otp/redoubt/tests/erlang/beamlet_pipe.erl",
 ]
 
 [[partition]]

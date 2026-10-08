@@ -1,7 +1,8 @@
 # piped
 
-`piped` serves one session's pipes. A session starts it the first time a pipeline needs it, in a
-budget carved from its own, and it lives as long as the session does. Through the one connection
+`piped` serves one session's pipes. A session starts it when a pipeline needs it and none is
+running, in a budget carved from its own, and destroys that budget when its last pipeline ends, so
+its pages are the session's again between pipelines. Through the one connection
 it was given the session makes a directory per pipe, holding its two ends, and mints each native
 stage a connection rooted at exactly one end: that stage's standard input, output or error
 ([native programs](../userland/native.md#standard-input-and-output-and-pipes)).
@@ -75,8 +76,10 @@ is already built and attacked.
 
 ### Started by a session
 
-<details><summary>Status: built · tested (2)</summary>
+<details><summary>Status: built · tested (4)</summary>
 
+- bench:pipe-carries
+- bench:pipe-no-authority
 - host:redoubt-piped::only_the_sessions_own_badge_makes_and_removes_pipes
 - host:redoubt-piped::a_stage_reaches_only_the_end_it_was_given
 
@@ -103,7 +106,14 @@ admission allows.
   holds 8 parked calls: 7 stages each parked on one stream, a stage reading or writing one at a
   time, and the session's completion call. A parked call holds its caller's lend, 64 KiB at
   worst, so two buckets at their caps are 2,260,992 bytes, which the program checks against its
-  allowance (`BUDGET`) before it serves; the buffers, 32 pages at most, are beside it.
+  allowance (`BUDGET`) before it serves; the buffers, 32 pages at most, are beside it. The session
+  carves `piped` 768 pages for all of it: the lends at worst are 552 pages, the buffers 32, and
+  its image, stack, heap and records the rest; 512 would not hold the two buckets admission needs
+  at the least. After `pipe-carries`' pipelines it holds 86 pages on rv64 and 83 on rv32: the
+  rest of the carve is what its clients' parked calls may lend it at worst. The carve is held
+  only while a pipeline runs: `Redoubt.Pipes` destroys it when the last process holding `piped`
+  lets go or ends, and starts another at the next pipeline, which `pipe-carries` times at about
+  60 ms under QEMU (about 200 ms for the session's first, which loads the shell's modules too).
 - **Labels.** `piped` runs in a budget carved from the session's, so it carries the session's
   labels, and the kernel lets no other set's message reach a server with no exemption
   ([R1 (flow)](../kernel/ipc.md#r1-flow)): its files carry the label set of the session's first
@@ -137,7 +147,8 @@ Status: built · partly tested: a `piped` that ends while a pipeline runs is arg
 - **No `buckets=N`, or one its allowance cannot hold**, and `piped` exits before it serves.
 - **`piped` ends** (its budget destroyed, a fault): its endpoint dies, and every stage's call on it
   fails, as a read or write error; the session sees the exit notice, and starts another `piped` at
-  its next pipeline.
+  its next pipeline. The session destroys its budget itself when no pipeline holds it
+  (bench:pipe-carries, bench:pipe-never-reads, bench:pipe-interrupted).
 - **A connection whose reply is lost** is rolled back ([replies and rollback](serving.md#replies-and-rollback)).
 
 ## Residual risks

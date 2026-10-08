@@ -1,0 +1,48 @@
+description = "A pipeline's stages end with the line that ran it (docs/userland/native.md, \"Standard input and output, and pipes\"; docs/userland/shell.md, \"Interrupting and killing jobs\"): a process runs a pipeline whose stage never ends, and is killed while the stage runs, as an interrupted line's evaluation is. The pipeline's owner sees it go and destroys the stage's budget: and no other pipeline holds piped, so piped's goes too: the weight the session's children hold, read from the kernel, is back to what it was before the line"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# As beamlet-launch, with piped and pipe-stage in /boot.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-bootfsd", bin = "bootfsd" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-erofsd", bin = "erofsd" },
+    { package = "redoubt-littlefsd", bin = "littlefsd" },
+    { package = "beamlet-redoubt", bin = "beamlet", workspace = "userland/otp" },
+    { package = "redoubt-beamlet-programs", bin = "beamlet-session" },
+    { package = "redoubt-piped", bin = "piped" },
+    { package = "redoubt-beamlet-programs", bin = "pipe-stage" },
+]
+timeout_secs = 300
+expect = [
+    '^\[con [0-9a-f]{16}\] \[beamlet-session\] started beamlet beamlet_pipe:interrupted, labels \[\]$',
+    '^\[con [0-9a-f]{16}\] pipe: interrupted: a stage runs: true$',
+    '^\[con [0-9a-f]{16}\] pipe: interrupted: carved again as before: true$',
+    '^\[con [0-9a-f]{16}\] \[beamlet-session\] beamlet beamlet_pipe:interrupted ended: Exited, code 0$',
+]
+forbid = [
+    'init: refused the boot',
+    '^init: (keyd|consoled|bootfsd|blkd|erofsd|littlefsd|beamlet-session)\S* .*(exited|faulted|was killed)',
+    'init: rebooting',
+    'EXCEPTION',
+    'FAIL',
+    'beamlet: .* not loaded',
+]
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/beamlet/pipe.json" }
+
+# What the tester runs; its sessions hold 10 processes, as the image's do, unless it says.
+[[file]]
+name = "beamlet-session.args"
+from = { path = "tests/data/beamlet/session-pipe-interrupted.args" }
+
+[disk]
+size_kib = 4096
+partitions = 1
+
+[userland]
+recipe = "tests/data/beamlet/natives-userland.toml"

@@ -9,8 +9,9 @@
 //! generated client's call, and for the serving case an endpoint as `service`. What it runs is
 //! `/boot/beamlet-session.args`, since `init` passes a steward no arguments of the manifest's: each
 //! `vm=MODULE:FUNCTION` word is one VM, run to its end before the next; `labels=N[,N]` is the label
-//! set of the VMs after it; with `serve`, it also launches `/boot/beamlet-caller` with a badged
-//! handle to the served endpoint. Then it parks, as a steward must not exit.
+//! set of the VMs after it, and `processes=N` how many processes their sessions may hold (ten, as
+//! the image's sessions, unless it says); with `serve`, it also launches `/boot/beamlet-caller` with
+//! a badged handle to the served endpoint. Then it parks, as a steward must not exit.
 
 #![cfg_attr(target_os = "none", no_std, no_main)]
 // On the host the program is only built, never run (`redoubt_rt::entry!`).
@@ -44,13 +45,13 @@ static STUB: &[u8] = b"stub";
 /// The principal, as the cases' manifests name alice: her account and her top budget's limits.
 const PRINCIPAL_ACCOUNT: u64 = 1001;
 const PRINCIPAL_PAGES: u64 = 32_768;
-const PRINCIPAL_PROCESSES: u32 = 8;
+const PRINCIPAL_PROCESSES: u32 = 40;
 const PRINCIPAL_WEIGHT: u32 = 1000;
 /// A budget object's own pages, the steward's `cost`.
 const COST: u64 = 1;
 /// A session's budget, as the steward's manifest sizes it, and the VM's stack.
 const SESSION_PAGES: u64 = 10_880;
-const SESSION_PROCESSES: u32 = 2;
+const SESSION_PROCESSES: u32 = 10;
 const SESSION_WEIGHT: u32 = 100;
 const SESSION_STACK_PAGES: usize = 17;
 /// The home volume's path in a session's namespace; the cases' volume's root is the home.
@@ -72,11 +73,12 @@ struct Child<'a> {
     pages: Option<(usize, u32)>,
 }
 
-/// One VM to run: its module and function, and its session's label set.
+/// One VM to run: its module and function, its session's label set and its processes.
 struct Vm {
     module: String,
     function: String,
     labels: Vec<u64>,
+    processes: u32,
 }
 
 struct Session {
@@ -141,8 +143,8 @@ impl Session {
     }
 
     /// A session's budget from its label set's sub-budget: the set's exact labels.
-    fn session(&self, sub: &Budget, labels: &[u64]) -> Result<Budget, SysError> {
-        self.carve(sub, SESSION_PAGES, SESSION_PROCESSES, SESSION_WEIGHT, labels, PRINCIPAL_ACCOUNT)
+    fn session(&self, sub: &Budget, labels: &[u64], processes: u32) -> Result<Budget, SysError> {
+        self.carve(sub, SESSION_PAGES, processes, SESSION_WEIGHT, labels, PRINCIPAL_ACCOUNT)
     }
 
     /// A fresh connection to `server`, as the steward gives a session its own.
@@ -183,19 +185,23 @@ impl Session {
     }
 }
 
-/// The VMs the args name, each with the label set of the last `labels=` word before it.
+/// The VMs the args name, each with the label set of the last `labels=` word before it and the
+/// processes of the last `processes=` word.
 fn vms(args: &str) -> Vec<Vm> {
     let mut labels: Vec<u64> = Vec::new();
+    let mut processes = SESSION_PROCESSES;
     let mut vms = Vec::new();
     for word in args.split_whitespace() {
         if let Some(set) = word.strip_prefix("labels=") {
             labels = set.split(',').filter_map(|l| l.parse().ok()).collect();
+        } else if let Some(n) = word.strip_prefix("processes=") {
+            processes = n.parse().unwrap_or(SESSION_PROCESSES);
         } else if let Some(spec) = word.strip_prefix("vm=") {
             let (module, function) = match spec.split_once(':') {
                 Some((m, f)) => (m.into(), f.into()),
                 None => (spec.into(), "start".into()),
             };
-            vms.push(Vm { module, function, labels: labels.clone() });
+            vms.push(Vm { module, function, labels: labels.clone(), processes });
         }
     }
     vms
@@ -246,9 +252,9 @@ fn run(startup: &Startup) -> u32 {
         };
         subs.push((labels.clone(), sub));
     }
-    for Vm { module, function, labels } in &vms {
+    for Vm { module, function, labels, processes } in &vms {
         let Some((_, sub)) = subs.iter().find(|(l, _)| l == labels) else { park() };
-        let Ok(budget) = s.session(sub, labels) else {
+        let Ok(budget) = s.session(sub, labels, *processes) else {
             s.say("FAIL: no session budget");
             park();
         };

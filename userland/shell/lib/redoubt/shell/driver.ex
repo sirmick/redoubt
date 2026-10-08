@@ -22,6 +22,13 @@ defmodule Redoubt.Shell.Driver do
   it as a key (`Redoubt.Screen.run/3`'s `ctrl_c: :key`). When the screen ends, the main screen is
   shown again, as it was, and what was held is drawn.
 
+  While a line runs a native program that reads the console (docs/userland/native.md, "Standard
+  input and output, and pipes"), the process feeding it holds the driver's **feed**
+  (`open_feed/0`): the lines typed go to it, edited as they are typed (a backspace takes back a
+  character) and echoed through `Redoubt.Term`, and Ctrl+D on an empty line is the end of its
+  input, not the shell's. The interrupt keys are never fed: they stay the shell's. The feed ends
+  when its process does, and what is typed after goes to `group` again.
+
   While the driver runs, the logger writes through it too (`Redoubt.Shell.Log`): its `default`
   handler, which writes to the console past the guard, is put back when the driver ends.
 
@@ -99,6 +106,9 @@ defmodule Redoubt.Shell.Driver do
       # (newest first), bytes that may begin a key, the timer that ends their wait, and the
       # bytes that interrupt it.
       screen: nil,
+      # The process fed the lines typed, if any: its pid, its monitor, the line typed so far, and
+      # whether the last key was a CR (so that an LF after it ends no second line).
+      feed: nil,
       esc_timeout: Keyword.get(opts, :esc_timeout, @esc_timeout)
     }
 
@@ -147,6 +157,12 @@ defmodule Redoubt.Shell.Driver do
 
       {:redoubt_screen, :open, pid, ctrl_c} when ctrl_c in [:interrupt, :key] ->
         loop(open_screen(state, pid, ctrl_c))
+
+      {:redoubt_feed, :open, pid} ->
+        loop(open_feed(state, pid))
+
+      {:DOWN, ref, :process, _pid, _reason} when state.feed != nil and state.feed.ref == ref ->
+        loop(close_feed(state))
 
       {:redoubt_screen, :size, pid} ->
         send(pid, {:redoubt_screen, :size, state.size.()})
@@ -335,6 +351,8 @@ defmodule Redoubt.Shell.Driver do
 
   defp keys(state, <<>>), do: state
 
+  defp keys(%{feed: %{}} = state, text), do: feed_keys(state, text)
+
   defp keys(state, text) do
     case :binary.match(text, [<<3>>, <<4>>, <<@session_key>>]) do
       :nomatch ->
@@ -370,6 +388,116 @@ defmodule Redoubt.Shell.Driver do
     ref = make_ref()
     send(state.group, {:io_request, self(), ref, {:setopts, []}})
     %{state | eof_check: {ref, rest, []}}
+  end
+
+  # ---- the feed ----
+
+  @doc """
+  Takes the lines the person types for the calling process, until it ends: each line arrives as
+  `{:redoubt_feed, :data, text}`, and the end of the input, Ctrl+D on an empty line, as
+  `{:redoubt_feed, :eof}`. `:none` when the line's output is not the shell's terminal, or a screen
+  or another feed holds the keys.
+  """
+  @spec open_feed() :: :ok | :none
+  def open_feed do
+    group = Process.group_leader()
+
+    # OTP's group, the shell's own console, has completion among its options; anything else
+    # (a captured output, a file) has no driver to ask.
+    with opts when is_list(opts) <- :io.getopts(group),
+         true <- Keyword.has_key?(opts, :expand_fun),
+         driver when is_pid(driver) <- driver_of(group) do
+      send(driver, {:redoubt_feed, :open, self()})
+
+      receive do
+        {:redoubt_feed, :opened} -> :ok
+        {:redoubt_feed, :refused} -> :none
+      end
+    else
+      _not_a_terminal -> :none
+    end
+  end
+
+  defp driver_of(group) do
+    send(group, {:driver_id, self()})
+
+    receive do
+      {^group, :driver_id, driver} -> driver
+    after
+      1000 -> nil
+    end
+  end
+
+  defp open_feed(%{feed: nil, screen: nil} = state, pid) do
+    send(pid, {:redoubt_feed, :opened})
+    %{state | feed: %{pid: pid, ref: Process.monitor(pid), line: "", cr: false}}
+  end
+
+  defp open_feed(state, pid) do
+    send(pid, {:redoubt_feed, :refused})
+    state
+  end
+
+  # The feed's process has ended: a line it left half typed is ended on the screen, and an empty
+  # one taken away, so the shell's next output starts on a line of its own.
+  defp close_feed(%{feed: feed} = state) do
+    Process.demonitor(feed.ref, [:flush])
+
+    state =
+      cond do
+        not Term.line_open?(state.term) -> state
+        feed.line == "" -> echo(state, :delete_line)
+        true -> state |> echo({:insert_chars, :unicode, "\n"}) |> echo(:new_prompt)
+      end
+
+    %{state | feed: nil}
+  end
+
+  defp feed_keys(state, text), do: text |> String.graphemes() |> Enum.reduce(state, &feed_key(&2, &1))
+
+  # Enter, as CR, LF or both: the line goes to the feed with a newline.
+  defp feed_key(%{feed: %{cr: true}} = state, "\n"), do: put_in(state.feed.cr, false)
+  defp feed_key(state, enter) when enter in ["\r", "\r\n", "\n"], do: feed_line(state, "\n", enter == "\r")
+
+  # Ctrl+D: on an empty line, the end of the feed's input, and the feed ends; with text on the
+  # line, the text goes as it is, without a newline.
+  defp feed_key(%{feed: %{line: ""} = feed} = state, <<4>>) do
+    send(feed.pid, {:redoubt_feed, :eof})
+    close_feed(state)
+  end
+
+  defp feed_key(state, <<4>>), do: feed_line(state, "", false)
+
+  defp feed_key(%{feed: %{line: ""}} = state, backspace) when backspace in ["\d", "\b"], do: state
+
+  defp feed_key(state, backspace) when backspace in ["\d", "\b"] do
+    state = put_in(state.feed.line, String.slice(state.feed.line, 0..-2//1))
+    echo(state, {:delete_chars, -1})
+  end
+
+  # Any other control character, the interrupt keys among them, goes nowhere.
+  defp feed_key(state, <<c, _::binary>>) when c < 0x20 and c != ?\t, do: state
+
+  defp feed_key(state, key) do
+    state = if Term.line_open?(state.term), do: state, else: open_line(state)
+    state = %{state | feed: %{state.feed | line: state.feed.line <> key, cr: false}}
+    echo(state, {:insert_chars, :unicode, key})
+  end
+
+  # A line of the feed's begins as a line with an empty prompt.
+  defp open_line(state), do: state |> echo(:new_prompt) |> echo({:insert_chars, :unicode, ""})
+
+  defp feed_line(%{feed: feed} = state, ending, cr) do
+    send(feed.pid, {:redoubt_feed, :data, feed.line <> ending})
+    state = if Term.line_open?(state.term), do: state, else: open_line(state)
+    state = state |> echo({:insert_chars, :unicode, "\n"}) |> echo(:new_prompt)
+    %{state | feed: %{feed | line: "", cr: cr}}
+  end
+
+  defp echo(state, request) do
+    {out, term} = Term.request(state.term, request)
+    write(state, out)
+    %{state | term: term}
   end
 
   # ---- a screen in front ----
