@@ -29,6 +29,10 @@ pub struct Recipe {
     /// For the userland disk, the objects its one partition's stage holds, staged before the
     /// pack (`userland.rs`).
     pub objects: Option<crate::userland::Objects>,
+    /// The manifest that serves the disk, relative to the workspace root: each of its volumes
+    /// that gives `bytes` is held to its partition's size, and the pack is refused if they differ
+    /// ([`hold`]).
+    pub manifest: Option<PathBuf>,
     pub partition: Vec<Partition>,
 }
 
@@ -205,6 +209,33 @@ fn shares(sectors: u64, count: u64) -> Vec<Entry> {
         .collect()
 }
 
+/// Each partition's size in bytes, in table order, on a disk of `size_kib` KiB holding `count`
+/// equal partitions.
+pub fn partition_bytes(size_kib: u64, count: u64) -> Vec<u64> {
+    shares(size_kib * 1024 / SECTOR, count).iter().map(|e| (e.last_lba - e.first_lba + 1) * SECTOR).collect()
+}
+
+/// Every volume of `manifest` that gives `bytes`, a volume home quotas are carved from
+/// (servers/init.md, "Home quotas"), holds exactly its partition's size on the disk
+/// whose partitions are `sizes` (and, where `names` is given, is the partition of its name):
+/// `init` refuses quotas past `bytes`, so `bytes` may not promise more than the partition holds,
+/// nor drift from it.
+pub fn hold(manifest: &serde_json::Value, sizes: &[u64], names: Option<&[&str]>) -> Result<()> {
+    for v in manifest["volumes"].as_array().into_iter().flatten() {
+        let Some(bytes) = v.get("bytes") else { continue };
+        let name = v["name"].as_str().unwrap_or("?");
+        let bytes: u64 =
+            bytes.as_str().and_then(|b| b.parse().ok()).with_context(|| format!("volume {name}: bytes"))?;
+        let i = v["partition"].as_u64().with_context(|| format!("volume {name}: partition"))? as usize;
+        let size = *sizes.get(i).with_context(|| format!("volume {name}: no partition {i} on the disk"))?;
+        if let Some(names) = names {
+            ensure!(names.get(i) == Some(&name), "volume {name}: partition {i} is {:?}", names.get(i));
+        }
+        ensure!(bytes == size, "volume {name}: bytes {bytes}, but partition {i} holds {size}");
+    }
+    Ok(())
+}
+
 /// A disk of `sectors` sectors holding a GPT with `partitions` equal, empty partitions.
 pub fn gpt_disk(sectors: u64, partitions: u64) -> Vec<u8> {
     Image::new(sectors, &shares(sectors, partitions)).bytes
@@ -260,6 +291,14 @@ pub fn pack(recipe: &Recipe, root: &Path, stage: Option<&Path>) -> Result<(Vec<u
     ensure!(recipe.size_kib > 0, "a disk of no size");
     let sectors = recipe.size_kib * 1024 / SECTOR;
     let parts = shares(sectors, recipe.partition.len() as u64);
+    if let Some(path) = &recipe.manifest {
+        let text = std::fs::read(root.join(path)).with_context(|| format!("reading {}", path.display()))?;
+        let manifest =
+            serde_json::from_slice(&text).with_context(|| format!("{} is not JSON", path.display()))?;
+        let names: Vec<&str> = recipe.partition.iter().map(|p| p.name.as_str()).collect();
+        hold(&manifest, &partition_bytes(recipe.size_kib, names.len() as u64), Some(&names))
+            .with_context(|| format!("{} against the recipe's partitions", path.display()))?;
+    }
     let mut disk = Image::new(sectors, &parts).bytes;
     let mut verified = Vec::new();
     for (p, at) in recipe.partition.iter().zip(&parts) {
@@ -605,6 +644,52 @@ mod tests {
             toml::from_str("size_kib = 1024\n[[partition]]\nname = \"system\"\nfs = \"littlefs\"\n").unwrap();
         assert_eq!(pack_disk(&bare, Path::new("/"), Some(&dir)).unwrap().len(), 1024 * 1024);
         assert!(pack_disk(&bare, Path::new("/"), None).is_err(), "nothing to pack");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A volume that gives `bytes` is its partition's size, by index (and by name, for a recipe):
+    /// one byte off, a partition the disk lacks, or another partition's name is refused; a volume
+    /// without `bytes` is not held.
+    #[test]
+    fn a_volume_s_bytes_are_held_to_its_partition() {
+        let sizes = partition_bytes(1024, 2);
+        let manifest = |bytes: u64, partition: u64| {
+            serde_json::json!({ "volumes": [
+                { "name": "data", "partition": partition, "bytes": bytes.to_string() },
+                { "name": "other", "partition": 7 },
+            ] })
+        };
+        assert!(hold(&manifest(sizes[0], 0), &sizes, Some(&["data", "vault"])).is_ok());
+        assert!(hold(&manifest(sizes[1], 1), &sizes, None).is_ok());
+        assert!(hold(&manifest(sizes[0] + 1, 0), &sizes, None).is_err());
+        assert!(hold(&manifest(sizes[0] - 1, 0), &sizes, None).is_err());
+        assert!(hold(&manifest(sizes[0], 2), &sizes, None).is_err());
+        assert!(hold(&manifest(sizes[1], 1), &sizes, Some(&["data", "vault"])).is_err());
+    }
+
+    /// The image's manifest gives its writable volumes their partitions' sizes on the image's
+    /// disk, and a recipe that names a manifest whose `bytes` differ is not packed.
+    #[test]
+    fn the_image_s_volumes_are_its_disk_s_partitions() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let recipe = Recipe::load(&root.join("image/disk.toml")).unwrap();
+        assert_eq!(recipe.manifest.as_deref(), Some(Path::new("image/manifest.json")));
+        let image: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(root.join("image/manifest.json")).unwrap()).unwrap();
+        let names: Vec<&str> = recipe.partition.iter().map(|p| p.name.as_str()).collect();
+        let sizes = partition_bytes(recipe.size_kib, names.len() as u64);
+        hold(&image, &sizes, Some(&names)).unwrap();
+        let dir = stage("held");
+        let wrong = serde_json::json!({ "volumes": [
+            { "name": "data", "partition": 0, "bytes": (partition_bytes(1024, 1)[0] + 4096).to_string() },
+        ] });
+        std::fs::write(dir.join("manifest.json"), wrong.to_string()).unwrap();
+        let text = format!(
+            "size_kib = 1024\nmanifest = \"{}\"\n[[partition]]\nname = \"data\"\nfs = \"littlefs\"\n",
+            dir.join("manifest.json").display()
+        );
+        let recipe: Recipe = toml::from_str(&text).unwrap();
+        assert!(pack_disk(&recipe, Path::new("/"), Some(&dir)).is_err(), "bytes past the partition");
         std::fs::remove_dir_all(dir).unwrap();
     }
 
