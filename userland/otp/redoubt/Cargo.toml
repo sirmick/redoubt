@@ -18,9 +18,11 @@ beamlet-screen = { path = "../screen" }
 redoubt-fake-kernel = { path = "../../../libs/rt/fake", optional = true }
 # The host fixture's home volume: the real `littlefsd`, on the fake kernel. Host only, as above.
 redoubt-littlefsd = { path = "../../../servers/littlefsd", optional = true }
+# What littlefsd's program starts through, which the fixture builds from its source.
+redoubt-fileserver = { path = "../../../libs/fileserver", optional = true }
 
 [features]
-fake = ["dep:redoubt-fake-kernel", "dep:redoubt-littlefsd"]
+fake = ["dep:redoubt-fake-kernel", "dep:redoubt-littlefsd", "dep:redoubt-fileserver"]
 # Test-only, for the bench's boot-profile cases, and off in every default build: the start
 # module's line carries `[t=N]`, and the VM's lookups are counted and said at the prompt.
 boot-stats = []
