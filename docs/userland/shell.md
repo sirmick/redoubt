@@ -726,8 +726,8 @@ the highlighting. A line is read only as far as the window's right edge when it 
 line of a megabyte costs a draw what the window shows of it. Like every command, its code is
 loaded when it is first called. A key that would save, close or open a file asks first when it
 comes in a burst: with more keys already waiting behind it, as a paste does, or within 300 ms of
-a key that had, as a paste's last key does. The keys arriving with the question are dropped, so
-a pasted Enter cannot answer it. The 300 ms are measured between the editor's handling of two
+a key that had, as a paste's last key does. The keys arriving with the question are dropped,
+until 300 ms after the last of them however long the paste, so a pasted Enter cannot answer it. The 300 ms are measured between the editor's handling of two
 keys, not their arrival, so a paste whose keys each take the editor longer than that (an edit to
 a line of megabytes) could outrun the window; what such a paste can do is bounded by the
 screen's heap limit, which ends the editor.

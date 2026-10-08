@@ -95,6 +95,34 @@ defmodule Redoubt.EditorTest do
     assert [%{id: {:guard, :close}}] = state.dialogs.stack
   end
 
+  test "a paste longer than the deaf moment cannot answer either: the question stays deaf to it",
+       %{tmp_dir: dir} do
+    path = Path.join(dir, "notes.txt")
+    File.write!(path, "kept\n")
+    state = start(path) |> typed("edit ")
+
+    send(self(), :more_keys_behind)
+    {:cont, state} = Editor.update(key("s", [:ctrl]), state)
+    assert_received :more_keys_behind
+    assert [%{id: {:guard, :save}}] = state.dialogs.stack
+
+    # 5,000 keys, each with the rest still queued behind it, arriving over more than 300 ms;
+    # then the Enter that ends the paste, with nothing behind it.
+    for _ <- 1..5_000, do: send(self(), :queued_key)
+
+    state =
+      Enum.reduce(1..5_000, state, fn i, state ->
+        receive do: (:queued_key -> :ok)
+        if rem(i, 50) == 0, do: Process.sleep(4)
+        {:cont, state} = Editor.update(key("x"), state)
+        state
+      end)
+
+    state = keys(state, [key(:enter)])
+    assert File.read!(path) == "kept\n"
+    assert [%{id: {:guard, :save}}] = state.dialogs.stack
+  end
+
   test "a paste that ends in Ctrl+S, Ctrl+Q or Ctrl+O asks too, though nothing waits behind its last key",
        %{tmp_dir: dir} do
     path = Path.join(dir, "notes.txt")

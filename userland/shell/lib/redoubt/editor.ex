@@ -13,10 +13,11 @@ defmodule Redoubt.Editor do
   session's own key, Ctrl+\\, ends it, unsaved changes and all, as it ends any screen.
 
   Nothing a key does reaches a file without the person: a save, a close, or an open that arrives
-  in a burst of keys asks first, and the keys that arrive with that question are dropped, so a
-  pasted Enter cannot answer it. A key is in a burst when more keys are already waiting behind it
-  (a paste, which the terminal sends all at once), or when it comes within 300 ms of one that
-  had: so a paste that ends in Ctrl+S, with nothing behind its last key, asks too.
+  in a burst of keys asks first, and the keys that arrive with that question are dropped, until
+  300 ms after the burst's last, so a pasted Enter cannot answer it however long the paste. A key
+  is in a burst when more keys are already waiting behind it (a paste, which the terminal sends
+  all at once), or when it comes within 300 ms of one that had: so a paste that ends in Ctrl+S,
+  with nothing behind its last key, asks too.
   """
 
   use Redoubt.Commandlet, area: "Screens"
@@ -29,7 +30,8 @@ defmodule Redoubt.Editor do
   alias Redoubt.Term.Buffer, as: Cells
   alias Redoubt.Term.Text
 
-  # Keys arriving this long after a question a burst of keys raised are dropped with it.
+  # Keys arriving this long after a question a burst of keys raised are dropped with it, and
+  # this long after the last of the burst's keys.
   @deaf_ms 300
 
   # A key this soon after one that had more keys waiting behind it is of the same burst: the last
@@ -180,7 +182,14 @@ defmodule Redoubt.Editor do
     queued = queued?()
     burst = queued or (state.burst_at != nil and now - state.burst_at < @burst_ms)
     state = if queued, do: %{state | burst_at: now}, else: state
-    if deaf?(state, now), do: {:cont, state}, else: key(state, key, burst)
+
+    cond do
+      # Dropped with more queued behind it: the burst is still arriving, so the question stays
+      # deaf until 300 ms after its last key, however long the burst.
+      deaf?(state, now) and queued -> {:cont, %{state | deaf_until: now + @deaf_ms}}
+      deaf?(state, now) -> {:cont, state}
+      true -> key(state, key, burst)
+    end
   end
 
   defp handle(_message, state), do: {:cont, state}
