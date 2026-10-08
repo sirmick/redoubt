@@ -79,7 +79,7 @@ The VM crate (`beamlet-vm`) is `#![forbid(unsafe_code)]`, and so are `beamlet-re
 
 ### Limits inside one VM
 
-<details><summary>Status: built · partly tested: in a boot, only the process heap limit and the budget's backstop are attacked · tested (26)</summary>
+<details><summary>Status: built · partly tested: in a boot, only the process heap limit and the budget's backstop are attacked · tested (34)</summary>
 
 - host:beamlet-vm::full_mailbox_kills_the_receiver
 - host:beamlet-vm::full_own_mailbox_kills_the_sender
@@ -107,6 +107,14 @@ The VM crate (`beamlet-vm`) is `#![forbid(unsafe_code)]`, and so are `beamlet-re
 - host:beamlet-vm::the_footprint_is_reported_at_the_first_wait_for_input
 - host:beamlet-vm::held_bytes_follow_the_runtime_heap
 - bench:beamlet-footprint
+- host:beamlet-vm::a_128_mb_atomics_array_in_persistent_term_past_the_limit_is_refused
+- host:beamlet-vm::a_replaced_persistent_value_still_counts
+- host:beamlet-vm::a_zlib_stream_grown_in_persistent_term_past_the_limit_refuses_the_next_put
+- host:beamlet-vm::a_zlib_stream_grown_in_ets_past_the_limit_refuses_the_next_insert
+- host:beamlet-vm::deleting_the_table_holding_a_grown_stream_makes_room
+- host:beamlet-vm::an_update_element_past_the_ets_limit_is_refused
+- host:beamlet-vm::heir_data_past_the_ets_limit_is_refused
+- host:beamlet-vm::heir_data_counts_toward_the_ets_limit
 
 </details>
 
@@ -125,14 +133,29 @@ VM down. Every limit fails closed: the offender ends, and nothing is lost silent
   has not handed out, its codec's state (a deflater's includes the tables its library keeps
   behind boxes of its own, measured against the library by a test) and the term stashed in it,
   declared afresh by every native that changes them. A process past its limit
-  through any of them is ended as for heap growth. Only a process's heap counts one: a resource
-  in a message not yet received, in an ETS table or in `persistent_term` counts toward no
-  process's limit, and a holder that is not the one resizing it counts the new size from its next
-  collection. The screen buffer's limit of four a process and the mailbox's limit bound a buffer
-  held elsewhere; an atomics array or a zlib stream put in ETS or `persistent_term`, its holder's
-  own references dropped, is bounded only by the budget's page limit, below.
+  through any of them is ended as for heap growth. Only a process's heap counts one toward its
+  limit, and a holder that is not the one resizing it counts the new size from its next
+  collection. A resource in ETS or `persistent_term` counts toward their limits, below. One in a
+  message not yet received counts toward nobody's: the screen buffer's limit of four a process
+  and the mailbox's limit bound a buffer there, but an atomics array or a zlib stream sent and
+  dropped by its sender is bounded only by the budget's page limit, below.
 - **ETS** (`max_ets_words`, 2^27 words for all tables together): an insert past it raises
-  `system_limit`.
+  `system_limit`, as does an `update_counter` or `update_element` that would take it there. A
+  table's heir data (`{heir, Pid, Data}`) is kept with the table and counts as an object does: an
+  `ets:new` or `ets:setopts` that would take ETS past the limit with it raises `system_limit`. A
+  resource an object holds counts at its live size, once for each object holding it: a zlib
+  stream that grows after its insert counts its growth at once, so the next insert past the limit
+  is refused (the growth itself is bounded by the grower's own heap limit). ETS keeps its total
+  as objects enter and leave and resources resize, never by scanning: an insert, delete or
+  replacement costs one step for each resource on the objects it adds or removes, a resize one
+  step, and deleting a table one step for each resource its objects hold.
+- **`persistent_term`** (`max_persistent_words`, 2^27 words): its keys, and every value ever put,
+  each resource at its live size as in ETS. A put past it raises `system_limit`, as does a put of
+  a new key past 2^16 keys. A value replaced or erased is never freed: it stays in its literal
+  chunk, where BEAM frees it once no process refers to it, so its words count for good. An erased
+  key's own words are released. A value's parts that are already literals (another persistent
+  value, a module's constant) are not copied, and count only where they were first put.
+  `persistent_term:info()` reports the count as its `memory`.
 - **CPU:** reductions preempt every process, including a loop of plain jumps with no calls.
   Residual: a native is not preempted, and `crypto:mod_pow` and finite-field Diffie-Hellman run
   `modpow` on operands only the bignum limit bounds, so one call can hold its scheduler for
@@ -145,13 +168,16 @@ afterwards. The hard backstop is the embedder's allocator, and on Redoubt the se
 limit ([R6 (charging)](../kernel/budgets.md#r6-charging)). The image also caps `beamlet`'s heap
 ([init](../servers/init.md#the-boot-manifest)), but at the budget's edge, where the budget binds
 first: that cap is there for the bench's measurement. On Redoubt the platform lowers
-`max_heap_words` and `max_ets_words` to a sixteenth of the VM's budget each, which it takes from its
+`max_heap_words`, `max_ets_words` and `max_persistent_words` to a sixteenth of the VM's budget
+each, which it takes from its
 required argument `budget_pages=N`, the budget's pages
 ([todo](../todo/beamlet-budget-from-startup.md)). Each counts the VM's own 8-byte words, as the VM
 counts a process (two for a 16-byte term), so a limit is the same bytes on rv32 as on rv64. A flooding process peaks at about four times its
 heap limit, the old heap, the collector's copy and its growth, so the budget must be at least twice
-what the VM uses with no Erlang process running; then one flooding process, or the tables, meets its
-limit while the VM still has pages. Several flooding at once, or a native's single large allocation,
+what the VM uses with no Erlang process running; then one flooding process, the tables or
+`persistent_term` meets its limit while the VM still has pages. A session's sixteenth is 744
+pages, 3,047,424 bytes; the shell at its prompt holds 3,696 bytes in ETS and 36,112 counted in
+`persistent_term`, about a thousandth and a hundredth of it. Several flooding at once, or a native's single large allocation,
 reach the backstop instead, which ends the VM, and `init` restarts it. It is a server like any other
 under `init`'s restart rule: a VM that cannot stay up (a start module that fails every time, a
 manifest without `budget_pages`) is restarted until the limit, and then the machine reboots

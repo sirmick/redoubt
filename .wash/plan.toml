@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 453
+revision = 454
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1531,8 +1531,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   needs = ["BEAM16"]
   body = "From BEAM16's review. Sized resources (SHELL3, BEAM16) count toward their holder's max_heap_size, but one stored in ETS or persistent_term and dropped counts for nobody, and max_ets_words (1 GiB) is larger than a session's budget. Count a sized resource's declared bytes in max_ets_words and persistent_term's limit, or lower those limits to fit the session, and test both. Size S."
-  state = "reported"
-  revision = 447
+  state = "done"
+  revision = 454
   overrides = ["2026-10-08: started by Orchestrator before M1 (reported): Strict beamlet hardening; BEAM16 is merged."]
 
 [[node]]

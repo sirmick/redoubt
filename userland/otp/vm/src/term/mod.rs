@@ -198,11 +198,16 @@ impl OffHeap {
 /// A resource whose value holds memory of a size its caller chose (a screen buffer) declares
 /// that size, `bytes`, and every heap that holds it counts those bytes as its own memory, as heap
 /// words are counted, not as a shared binary's: so they count toward a process's own
-/// `max_heap_size`. A native that changes the size says so with [`Resource::set_bytes`].
+/// `max_heap_size`. A native that changes the size says so through
+/// [`crate::bif::Ctx::resize_resource`], which also keeps the stores outside any process that
+/// hold it ([`Holdings`]) up to date.
 pub struct Resource {
     pub id: u64,
     pub value: Box<crate::sync::AnyShared>,
     bytes: core::sync::atomic::AtomicUsize,
+    /// How many terms of each [`Store`] hold it: ETS objects, and `persistent_term` keys and
+    /// values. Changed only under the system lock.
+    stored: [core::sync::atomic::AtomicUsize; 2],
 }
 
 impl Resource {
@@ -211,7 +216,7 @@ impl Resource {
 
     /// A resource holding `bytes` its holders count as their own.
     pub fn sized(id: u64, value: Box<crate::sync::AnyShared>, bytes: usize) -> Resource {
-        Resource { id, value, bytes: core::sync::atomic::AtomicUsize::new(bytes) }
+        Resource { id, value, bytes: core::sync::atomic::AtomicUsize::new(bytes), stored: Default::default() }
     }
 
     /// The value, if it is a `T`.
@@ -221,9 +226,66 @@ impl Resource {
     pub fn bytes(&self) -> usize { self.bytes.load(core::sync::atomic::Ordering::Relaxed) }
 
     /// Declares a new size, and returns the old one. A heap counts the new size from its next
-    /// collection, or at once through [`Heap::resized`].
-    pub fn set_bytes(&self, bytes: usize) -> usize {
+    /// collection, or at once through [`Heap::resized`]; each [`Holdings`] through [`Holdings::resized`].
+    pub(crate) fn set_bytes(&self, bytes: usize) -> usize {
         self.bytes.swap(bytes, core::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// How many terms of `store` hold this resource.
+    fn stored(&self, store: Store) -> &core::sync::atomic::AtomicUsize { &self.stored[store as usize] }
+}
+
+/// A store that keeps terms outside any process.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Store {
+    Ets = 0,
+    Persistent = 1,
+}
+
+/// The declared sizes of the resources the terms of one [`Store`] hold, kept up to date as terms
+/// enter and leave it and as the resources resize, so the store's total is read without a scan.
+/// A resource counts once for each term of the store that holds it, as it counts once for each
+/// process. Each term's entry and exit cost one step per resource on its own heap, a resize one
+/// step. Changed only under the system lock, as resources resize only under it.
+pub struct Holdings {
+    store: Store,
+    bytes: u64,
+}
+
+impl Holdings {
+    pub fn new(store: Store) -> Holdings { Holdings { store, bytes: 0 } }
+
+    /// The bytes held.
+    pub fn bytes(&self) -> u64 { self.bytes }
+
+    /// The bytes held, in 8-byte words.
+    pub fn words(&self) -> u64 { self.bytes.div_ceil(8) }
+
+    /// The bytes the resources on `heap` (its own, not its literals') would add.
+    pub fn weigh(heap: &Heap) -> u64 { heap.resources().map(|r| r.bytes() as u64).sum() }
+
+    /// A term on `heap` enters the store.
+    pub fn enter(&mut self, heap: &Heap) {
+        use core::sync::atomic::Ordering::Relaxed;
+        for r in heap.resources() {
+            r.stored(self.store).fetch_add(1, Relaxed);
+            self.bytes += r.bytes() as u64;
+        }
+    }
+
+    /// A term on `heap`, which entered the store, leaves it.
+    pub fn leave(&mut self, heap: &Heap) {
+        use core::sync::atomic::Ordering::Relaxed;
+        for r in heap.resources() {
+            r.stored(self.store).fetch_sub(1, Relaxed);
+            self.bytes = self.bytes.saturating_sub(r.bytes() as u64);
+        }
+    }
+
+    /// Resource `r` changed its declared size from `old` bytes to `new`.
+    pub fn resized(&mut self, r: &Resource, old: usize, new: usize) {
+        let n = r.stored(self.store).load(core::sync::atomic::Ordering::Relaxed) as u64;
+        self.bytes = self.bytes.saturating_sub(old as u64 * n) + new as u64 * n;
     }
 }
 
@@ -515,10 +577,25 @@ impl Heap {
         self.held_bytes = self.held_bytes.saturating_sub(old) + new;
     }
 
-    /// Memory in 8-byte words: two per cell, the off-heap bytes and the resources' sizes.
-    pub fn words(&self) -> u64 {
-        (self.terms.len() * 2 + self.offheap_bytes.div_ceil(8) + self.held_bytes.div_ceil(8)) as u64
+    /// Whether this heap's own table holds `r` (so counts its size), not only its literals.
+    pub fn holds(&self, r: &Arc<Resource>) -> bool {
+        self.offheap_index.contains_key(&(Arc::as_ptr(r) as *const u8 as usize))
     }
+
+    /// The resources this heap's own table holds, each once.
+    pub fn resources(&self) -> impl Iterator<Item = &Arc<Resource>> {
+        self.offheap.iter().filter_map(|o| match o {
+            OffHeap::Resource(r) => Some(r),
+            _ => None,
+        })
+    }
+
+    /// Memory in 8-byte words: two per cell, the off-heap bytes and the resources' sizes.
+    pub fn words(&self) -> u64 { self.term_words() + self.held_bytes.div_ceil(8) as u64 }
+
+    /// Memory in 8-byte words but for the resources' declared sizes: two per cell, and the
+    /// off-heap bytes.
+    pub fn term_words(&self) -> u64 { (self.terms.len() * 2 + self.offheap_bytes.div_ceil(8)) as u64 }
 
     pub fn literals(&self) -> &Literals { &self.lits }
 

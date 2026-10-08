@@ -1,7 +1,7 @@
 //! The VM's limits from its budget (docs/userland/beamlet.md, "Limits inside one VM"): one
-//! process's heap and all ETS tables each get a sixteenth of the budget, in the VM's 8-byte words, so a
-//! flood meets its limit in Erlang before the budget ends the VM; `budget_pages=N` gives the
-//! budget, and `run` builds its VM with these limits.
+//! process's heap, all ETS tables and `persistent_term` each get a sixteenth of the budget, in the
+//! VM's 8-byte words, so a flood meets its limit in Erlang before the budget ends the VM;
+//! `budget_pages=N` gives the budget, and `run` builds its VM with these limits.
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -20,6 +20,7 @@ fn a_sixteenth_of_the_budget_goes_to_each_limit() {
     assert_eq!(VM_WORD_BYTES, 8);
     assert_eq!(got.max_heap_words, sixteenth);
     assert_eq!(got.max_ets_words, sixteenth);
+    assert_eq!(got.max_persistent_words, sixteenth);
     // The rest are the VM's own.
     assert_eq!(got.max_mailbox, Limits::default().max_mailbox);
 }
@@ -27,7 +28,10 @@ fn a_sixteenth_of_the_budget_goes_to_each_limit() {
 #[test]
 fn without_a_budget_the_defaults_stand() {
     let (got, default) = (limits(None), Limits::default());
-    assert_eq!((got.max_heap_words, got.max_ets_words), (default.max_heap_words, default.max_ets_words));
+    assert_eq!(
+        (got.max_heap_words, got.max_ets_words, got.max_persistent_words),
+        (default.max_heap_words, default.max_ets_words, default.max_persistent_words)
+    );
 }
 
 #[test]
