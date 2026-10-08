@@ -195,7 +195,7 @@ fn each_principal_gets_a_top_budget_under_users_and_a_sub_budget_per_label_set()
 
 #[test]
 fn a_malformed_line_is_a_start_failure_before_any_carve() {
-    for bad in ["servers 4 5", "label alice-secrets id=7", "home \"alice\" handle=littlefsd:data path=home"] {
+    for bad in ["servers 4 5", "label alice-secrets id=7", "home \"alice\" handle=walfsd:data path=home"] {
         let mut k = Recorder::default();
         let l = [alice(), bad.into(), SERVERS.into(), SIZES.into()];
         let l: Vec<&str> = l.iter().map(String::as_str).collect();

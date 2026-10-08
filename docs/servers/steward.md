@@ -476,7 +476,7 @@ sequenceDiagram
     participant SH as sshd
     participant KD as keyd
     participant ST as steward
-    participant F as littlefsd, ipd, consoled
+    participant F as walfsd, ipd, consoled
     participant S as session
     C->>SH: SSH, user alice+secrets, key K
     SH->>KD: sign the exchange (host key)
@@ -823,7 +823,7 @@ The steward keeps each principal's package records and never parses a package
 Status: planned · M6 (persist, install, share)
 
 A **project** is a principal sponsored by several members, with its own budget, volume
-(`littlefsd:project-x`), package directory and profile, and optionally a label. Membership is
+(`walfsd:project-x`), package directory and profile, and optionally a label. Membership is
 capabilities minted into a revocation scope per member; removing a member destroys the scope. A
 labelled project is worked on in project vault sessions (`ssh alice+project-x@box`), and
 declassifying one of its items needs a project owner's approval. No kernel mechanism is involved.

@@ -27,7 +27,7 @@ expect = [
     '^init: started erofsd:system, console [0-9a-f]{16}$',
     '^init: 1 public entries pushed to bootfsd, and sealed$',
     '^init: started steward, console [0-9a-f]{16}$',
-    # The manifest's handed items, its volume ranges (walfsd:data's and littlefsd:alice-secrets's
+    # The manifest's handed items, its volume ranges (walfsd:data's and walfsd:alice-secrets's
     # on the data disk, erofsd:system's at verity:system and verity:system's at blkd:system), and
     # the consoles of every server after consoled, each found gone.
     '^init: holds none of the 14 badges and 11 console connections it handed$',

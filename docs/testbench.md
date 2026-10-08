@@ -1313,7 +1313,7 @@ rounded up to pages, each heap cap in pages. `sshd` is sized for its four slots 
 heap held 8 pages at boot, 54 with one login (rv32, before the boot pack) and 56 with two at once,
 so at most 46 a connection, and its cap is twice 8 pages and four connections, 384. Its declared
 stack is a page over twice its peak. `consoled`'s row is from the runs once it serves each
-session's console as a multiplexed session. `walfsd:data`'s row is from six runs of
+session's console as a multiplexed session. The two `walfsd` rows are one server's, from six runs of
 `walfsd-quota`, three on each width, which writes through it, as the image's memory cases do not
 (their boots peak at 16,040 bytes of stack and 9 heap pages); its heap cap is also above what a
 transaction of the format's 32 blocks adds to that case's peak, 32 pages, since no case writes
@@ -1329,7 +1329,7 @@ additional client from the merged manifest.
 | `netd` | 4,296 | 3 | 2 | 4 |
 | `ipd` | 13,672 | 7 | 37 | 74 |
 | `walfsd:data` | 28,616 | 14 | 15 | 64 |
-| `littlefsd:alice-secrets` | 8,536 | 5 | 9 | 18 |
+| `walfsd:alice-secrets` | 28,616 | 14 | 15 | 64 |
 | `blkd:system` | 4,520 | 3 | 17 | 34 |
 | `verity:system` | 8,264 | 5 | 50 | 100 |
 | `erofsd:system` | 9,704 | 5 | 13 | 26 |

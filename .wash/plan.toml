@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 347
+revision = 348
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1079,8 +1079,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["WFS1", "STEWARD2"]
   body = "servers/walfsd on the file-server skeleton serving walfs volumes one instance per volume (R47, R48, R49, R50 rows); the image's data volume on walfs (merged); the labelled vault volume, init's volumes and the steward's home and vault lines on walfsd: handles; machine cases: power loss before-or-after, hostile medium corrupt, quota, the steward's session cases on the new volumes. littlefs stays in the image (owner's decision 4e1539fe: kept for a flash medium); littlefsd keeps its cases and pages, serving no volume of the default image unless a case asks. Tier A, size M. Commits 1-4 merged (the server, init, the data volume, the cases); commit 5 (the vault on walfs, the steward's lines) is on branch wfs2-on-steward2 and lands after STEWARD2 with its own short review; the node closes then."
-  state = "reported"
-  revision = 246
+  state = "done"
+  revision = 348
   overrides = ["2026-10-07: started by Orchestrator before STEWARD2 (reported): STEWARD2 is rebasing onto main and lands within hours; WFS2's commits 1-4 (walfsd, init, the data volume, walfsd's own cases) need only WFS1, which is merged; commit 5 (the labelled volume, home/vault names, the steward's session cases) is written against wp-STEWARD2 and rebased at its merge, as the brief says"]
 
 [[node]]

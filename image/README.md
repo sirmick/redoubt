@@ -8,7 +8,7 @@ The sources of the signed boot bundle and the disk images; what they produce goe
   the `init-boot` case boots the same bundle. The builder writes the userland volume's root and
   block count into the manifest it packs, from its own pack of `userland.toml`.
 - `manifest.json`: the boot manifest `init` reads, with thirteen servers, including `walfsd:data`
-  for the disk's `data` volume, `littlefsd:alice-secrets` for alice's labelled one, the userland
+  for the disk's `data` volume, `walfsd:alice-secrets` for alice's labelled one, the userland
   disk's `blkd:system`, `verity:system` and `erofsd:system`, the steward and `sshd`. Its principals
   are alice (who owns `alice-secrets` and works under `{}` and `{alice-secrets}`) and bob, with
   their test keys from `tests/keys/`, so it must never ship. Alice's 44,040 pages give each of her
@@ -25,9 +25,10 @@ The sources of the signed boot bundle and the disk images; what they produce goe
 - `disk.toml`: the disk image. `./mkimage` packs it into `target/image/disk.img`: a GPT, then the
   `data` partition as a walfs volume holding `target/image/stage/` (with the principals' homes,
   `home/alice` and `home/bob`, which `./mkimage` makes), written by `libs/walfs` itself
-  ([walfsd](../docs/servers/walfsd.md#the-packer)), and the `alice-secrets` partition as a littlefs
-  volume holding `target/image/vault/`, written through `littlefsd`'s own code; the `image-disk`
-  case boots a disk packed the same way.
+  ([walfsd](../docs/servers/walfsd.md#the-packer)), and the `alice-secrets` partition, a walfs
+  volume too, holding `target/image/vault/`; the `image-disk` case boots a disk packed the same way.
+  The image holds no littlefs volume; `littlefsd` stays in the bundle for a flash medium and the
+  cases that ask for one.
 - `userland.toml`: the userland disk, attached read-only. `./mkimage` packs it with the same
   packer into `target/image/userland.img`: each module of the applications it names, compiled by
   the pinned toolchain and stripped, as a plain file under its own name (`Elixir.Enum.beam`,

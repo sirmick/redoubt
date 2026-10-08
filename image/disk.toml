@@ -1,11 +1,10 @@
-# The virtio-blk disk image: a partition table, the `data` volume on walfs served by `walfsd`, and
-# Alice's labelled volume on littlefs served by `littlefsd`.
+# The virtio-blk disk image: a partition table, the `data` volume and Alice's labelled volume, each
+# on walfs served by its own `walfsd`.
 #
 # `./mkimage` packs it into target/image/disk.img with the bench's packer (`testbench --pack-disk`):
-# a GPT of equal partitions in this order, by `blkd`'s builder, then each partition as its `fs`
-# says, holding its stage's tree: walfs written by libs/walfs itself (servers/walfsd.md, "The
-# packer"), littlefs through `littlefsd`'s own code so that every entry carries its id
-# (servers/littlefsd.md). Partition i is GPT entry i, the manifest's `volumes` partition.
+# a GPT of equal partitions in this order, by `blkd`'s builder, then each partition as a walfs
+# volume holding its stage's tree, written by libs/walfs itself (servers/walfsd.md, "The packer").
+# Partition i is GPT entry i, the manifest's `volumes` partition.
 
 # Whole disk, in KiB (a whole number of 512-byte sectors).
 size_kib = 65536
@@ -16,8 +15,8 @@ fs = "walfs"
 # Where the partition's contents come from; built artifacts are copied in first.
 stage = "target/image/stage"
 
-# Alice's labelled volume, {alice-secrets}, served by its own littlefsd (image/manifest.json).
+# Alice's labelled volume, {alice-secrets}, served by its own walfsd (image/manifest.json).
 [[partition]]
 name = "alice-secrets"
-fs = "littlefs"
+fs = "walfs"
 stage = "target/image/vault"
