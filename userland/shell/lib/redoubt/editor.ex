@@ -1,8 +1,9 @@
 defmodule Redoubt.Editor do
   @moduledoc """
   The editor (docs/userland/shell.md, "The editor"): `ed(path)`, a screen program in the session's
-  VM. Its text is `Redoubt.Editor.Buffer`, what it does to files is `Redoubt.Editor.Files`, and
-  each line is drawn as `Redoubt.Editor.View` lays it out.
+  VM. Its text is `Redoubt.Editor.Buffer`, what it does to files is `Redoubt.Editor.Files`, each
+  line is drawn as `Redoubt.Editor.View` lays it out, in the roles `Redoubt.Editor.Syntax` gives
+  its parts when the file's extension names a language.
 
   The keys are micro's where a terminal lets them be: Ctrl+S saves, Ctrl+Q closes, Ctrl+F finds
   and Ctrl+N finds the next, Ctrl+R replaces, Ctrl+L goes to a line, Ctrl+Z undoes and Ctrl+Y
@@ -22,7 +23,7 @@ defmodule Redoubt.Editor do
 
   @behaviour Redoubt.Screen
 
-  alias Redoubt.Editor.{Buffer, Files, View}
+  alias Redoubt.Editor.{Buffer, Files, Syntax, View}
   alias Redoubt.Screen.{Layout, Widgets}
   alias Redoubt.Screen.Widget.{Dialogs, MenuBar, Theme}
   alias Redoubt.Term.Buffer, as: Cells
@@ -34,6 +35,10 @@ defmodule Redoubt.Editor do
   # A key this soon after one that had more keys waiting behind it is of the same burst: the last
   # key of a paste meets an empty queue. A person's next key comes later than this.
   @burst_ms 300
+
+  # Lines between the highlighting's start states that a file keeps: a window is highlighted
+  # from the one at or above its top.
+  @every 128
 
   @hint "^S save · ^Q close · ^F find · ^C copy · ^V paste · ^Z undo · F10 menu"
 
@@ -113,8 +118,19 @@ defmodule Redoubt.Editor do
     end
   end
 
-  defp doc(path, buffer, digest, readonly),
-    do: %{path: path, buffer: buffer, digest: digest, readonly: readonly, top: 0, left: 0}
+  defp doc(path, buffer, digest, readonly) do
+    %{
+      path: path,
+      buffer: buffer,
+      digest: digest,
+      readonly: readonly,
+      top: 0,
+      left: 0,
+      lang: Syntax.language(path),
+      marks: %{0 => Syntax.start()},
+      seen: {buffer.version, 0}
+    }
+  end
 
   # Bytes that are not all UTF-8, as text: each byte outside it as <FF>.
   defp shown(bytes) do
@@ -148,9 +164,16 @@ defmodule Redoubt.Editor do
   end
 
   @impl Redoubt.Screen
-  def update({:resize, cols, rows}, state), do: {:cont, %{state | size: {cols, rows}} |> follow()}
+  def update(event, state) do
+    case handle(event, state) do
+      {:cont, state} -> {:cont, highlighted(state)}
+      {:halt, _value} = halt -> halt
+    end
+  end
 
-  def update({:key, _, _} = key, state) do
+  defp handle({:resize, cols, rows}, state), do: {:cont, %{state | size: {cols, rows}} |> follow()}
+
+  defp handle({:key, _, _} = key, state) do
     now = System.monotonic_time(:millisecond)
     queued = queued?()
     burst = queued or (state.burst_at != nil and now - state.burst_at < @burst_ms)
@@ -158,7 +181,7 @@ defmodule Redoubt.Editor do
     if deaf?(state, now), do: {:cont, state}, else: key(state, key, burst)
   end
 
-  def update(_message, state), do: {:cont, state}
+  defp handle(_message, state), do: {:cont, state}
 
   # More keys waiting behind this one: what a paste is, since the terminal sends it all at once.
   defp queued? do
@@ -302,8 +325,8 @@ defmodule Redoubt.Editor do
        ask(state, Dialogs.prompt(:replace, "Replace", "Replace every match of:", source(state.pattern)))}
 
   defp command(state, :go_to, _burst), do: {:cont, ask(state, Dialogs.prompt(:go_to, "Go to", "Line:", ""))}
-  defp command(state, :undo, _burst), do: {:cont, change(state, &Buffer.undo/1) |> follow()}
-  defp command(state, :redo, _burst), do: {:cont, change(state, &Buffer.redo/1) |> follow()}
+  defp command(state, :undo, _burst), do: {:cont, change(state, &Buffer.undo/1) |> unmarked() |> follow()}
+  defp command(state, :redo, _burst), do: {:cont, change(state, &Buffer.redo/1) |> unmarked() |> follow()}
 
   defp command(state, :copy, _burst) do
     case Buffer.selected(current(state).buffer) do
@@ -353,7 +376,7 @@ defmodule Redoubt.Editor do
 
   defp answered(state, :replacement, text) when is_binary(text) do
     {buffer, lines} = Buffer.replace_all(current(state).buffer, state.pattern, text)
-    state = put_doc(%{state | replacement: text}, %{current(state) | buffer: buffer})
+    state = put_doc(%{state | replacement: text}, %{current(state) | buffer: buffer}) |> unmarked()
     {:cont, %{state | message: "replaced on #{lines} line(s)"} |> follow()}
   end
 
@@ -474,6 +497,54 @@ defmodule Redoubt.Editor do
     put_doc(state, %{doc | top: top, left: left})
   end
 
+  # ---- highlighting ----
+
+  # The current file's start states, kept down to the window's top. An edit changes lines from
+  # the cursor's, before it or after, whichever is higher up, so the states below that go. A
+  # replace through the whole file, an undo and a redo (whose cursor is where it was, not where
+  # the step changed the text) drop them all, with `unmarked/1`.
+  defp highlighted(state) do
+    doc = current(state)
+    if doc.lang == nil, do: state, else: put_doc(state, marked(doc))
+  end
+
+  defp marked(doc) do
+    {row, _col} = Buffer.cursor(doc.buffer)
+    {version, seen} = doc.seen
+    stale = fn {k, _start} -> k * @every > min(row, seen) end
+    marks = if doc.buffer.version == version, do: doc.marks, else: Map.reject(doc.marks, stale)
+    last = marks |> Map.keys() |> Enum.max()
+    want = div(doc.top, @every)
+
+    marks =
+      if want > last do
+        doc.buffer
+        |> Buffer.slice(last * @every, (want - last) * @every)
+        |> Enum.chunk_every(@every)
+        |> Enum.with_index(last + 1)
+        |> Enum.reduce(marks, fn {lines, k}, marks ->
+          Map.put(marks, k, Syntax.after_lines(doc.lang, lines, marks[k - 1]))
+        end)
+      else
+        marks
+      end
+
+    %{doc | marks: marks, seen: {doc.buffer.version, row}}
+  end
+
+  defp unmarked(state), do: put_doc(state, %{current(state) | marks: %{0 => Syntax.start()}})
+
+  # Each of the window's lines cut into its parts, from the start state at or above its top.
+  defp pieces(%{lang: nil}, lines), do: Enum.map(lines, fn _ -> nil end)
+
+  defp pieces(doc, lines) do
+    k = min(div(doc.top, @every), doc.marks |> Map.keys() |> Enum.max())
+    above = Buffer.slice(doc.buffer, k * @every, doc.top - k * @every)
+    start = Syntax.after_lines(doc.lang, above, doc.marks[k])
+    {pieces, _state} = Enum.map_reduce(lines, start, &Syntax.line(doc.lang, &1, &2))
+    pieces
+  end
+
   # ---- drawing ----
 
   @impl Redoubt.Screen
@@ -482,22 +553,26 @@ defmodule Redoubt.Editor do
     doc = current(state)
     {_x, y, w, h} = body
 
-    doc.buffer
-    |> Buffer.slice(doc.top, h)
+    lines = Buffer.slice(doc.buffer, doc.top, h)
+
+    lines
+    |> Enum.zip(pieces(doc, lines))
     |> Enum.with_index(doc.top)
-    |> Enum.each(fn {line, row} -> draw_line(buffer, state, doc, line, row, y + row - doc.top, w) end)
+    |> Enum.each(fn {{line, pieces}, row} ->
+      draw_line(buffer, state, doc, {line, pieces}, row, y + row - doc.top, w)
+    end)
 
     Widgets.status(buffer, status, status_text(state, doc), Theme.style(state.theme, :status))
     MenuBar.draw(state.bar, buffer, {0, 0, cols, rows - 1}, state.theme)
     Dialogs.draw(state.dialogs, buffer, {0, 0, cols, rows}, state.theme)
   end
 
-  defp draw_line(buffer, state, doc, line, row, y, w) do
+  defp draw_line(buffer, state, doc, {line, pieces}, row, y, w) do
     {crow, ccol} = Buffer.cursor(doc.buffer)
     cursor = if row == crow, do: ccol
     {selected, to_end} = selected_on(Buffer.selection(doc.buffer), row, String.length(line))
 
-    for {x, text, role} <- View.runs(line, doc.left, w, selected, cursor, to_end) do
+    for {x, text, role} <- View.runs(line, doc.left, w, selected, cursor, to_end, pieces) do
       Cells.put(buffer, x, y, text, Theme.style(state.theme, role))
     end
   end

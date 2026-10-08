@@ -531,8 +531,9 @@ so nothing loads them until a screen first draws with them.
 - **Focus:** inside a dialog or a screen, Tab and Shift+Tab move along a focus ring, and every
   other key goes to the widget with the focus.
 - **A theme** is a map from roles (the text, the selection, a border, the menu, a button, the
-  input, its cursor) to styles. Three are built: the terminal's own colours, the default;
-  QBasic's blue; and `menuconfig`'s.
+  input, its cursor, and the parts of code the editor highlights) to styles. Three are built:
+  the terminal's own colours, the default, with code in bold, dim and italic; QBasic's blue; and
+  `menuconfig`'s.
 - **Every style is the code's.** A widget draws each part in its role's style, and its text
   through the visible-text rule: a label, an item, a cell, a title or what was typed sets no
   colour, and a control character in it is drawn as `^[` in the role's style
@@ -696,7 +697,7 @@ Not built:
 
 ### The editor
 
-Status: built · partly tested: the host only; the editor without syntax highlighting, and not the file manager; its keys and files on beamlet and on the BEAM, its drawing on beamlet alone; its tests are the shell's own ExUnit suite (`test/redoubt/editor_test.exs`, `test/redoubt/editor/buffer_test.exs`), judged on the files and on a model of the terminal, which `./test-shell` runs and no bench case does
+Status: built · partly tested: the host only; the editor and its highlighting, not the file manager; its keys, files and highlighting on beamlet and on the BEAM, its drawing on beamlet alone; its tests are the shell's own ExUnit suite (`test/redoubt/editor_test.exs`, `test/redoubt/editor/buffer_test.exs`, `test/redoubt/editor/syntax_test.exs`), judged on the files and on a model of the terminal, which `./test-shell` runs and no bench case does
 
 The editor and the file manager are one screen program with two views, in the manner of Midnight
 Commander: `ed("notes.txt")` opens the editor on a file, and `fm("project")` opens two panes on a
@@ -719,17 +720,33 @@ text is lines around a cursor ([`Redoubt.Editor.Buffer`](../../userland/shell/li
 which a file read and saved unedited gives back byte for byte, a missing final newline and `\r`
 included. A file that is not UTF-8 opens read only, each byte that is not text drawn as `<FF>`.
 A pattern between slashes is a regular expression, matched within a line. A tab is drawn to the
-next stop of four, and any other control or bidirectional character visibly, in the text's style;
-the cursor and the selection are styles of the theme. Like every command, its code is loaded when
-it is first called. A key that would save, close or open a file asks first when it comes in a
-burst: with more keys already waiting behind it, as a paste does, or within 300 ms of a key that
-had, as a paste's last key does. The keys arriving with the question are dropped, so a pasted
-Enter cannot answer it. The 300 ms are measured between the editor's handling of two keys, not
-their arrival, so a paste whose keys each take the editor longer than that (an edit to a line
-of megabytes) could outrun the window; what such a paste can do is bounded by the screen's heap
-limit, which ends the editor.
+next stop of four, and any other control or bidirectional character visibly, in the style of
+the part of the line it is in; the cursor and the selection are styles of the theme, drawn over
+the highlighting. Like every command, its code is loaded when it is first called. A key that
+would save, close or open a file asks first when it comes in a burst: with more keys already
+waiting behind it, as a paste does, or within 300 ms of a key that had, as a paste's last key
+does. The keys arriving with the question are dropped, so a pasted Enter cannot answer it. The
+300 ms are measured between the editor's handling of two keys, not their arrival, so a paste
+whose keys each take the editor longer than that (an edit to a line of megabytes) could outrun
+the window; what such a paste can do is bounded by the screen's heap limit, which ends the
+editor.
 
-What is not built: syntax highlighting, and the file manager (`fm`) with its panes.
+The highlighting ([`Redoubt.Editor.Syntax`](../../userland/shell/lib/redoubt/editor/syntax.ex))
+is chosen by the file's extension (`.ex` and `.exs`, `.erl` and `.hrl`, `.rs`, `.md`, `.toml`,
+`.json`; any other file is plain text), and a language's module is loaded when a file of it first
+opens. A language cuts each line into parts, each a role of the theme: a keyword, a string, a
+comment, a number, a constant or a heading. The parts are the line's own bytes, so a file chooses
+a role and nothing more: what a role looks like is the theme's, and an escape sequence in a
+string is drawn visibly in the string's style. A line starts from the state the line above left
+(inside a string or a comment that runs on, or not); the editor keeps that state every 128
+lines down to the window, and drops what an edit may have changed, from the edited line down,
+and all of it on an undo, a redo or a replace through the file. So the first jump to the end of
+a large file scans every line once, and an edit costs only the lines from it to the window. Only
+a line's first 4 KiB are read, the rest drawn plain, so a window costs a bounded scan whatever
+its lines hold; a scan costs time in a line's length (a 1 MiB line in some 7 s on beamlet, on
+the host, were it read whole).
+
+What is not built: the file manager (`fm`) with its panes.
 
 Undo keeps at most 500 steps, and holds at most a million lines between them. A step holds a
 new copy of the list of lines the cursor crossed since the step before (the lines' bytes are
@@ -833,9 +850,9 @@ anything outside Elixir; what needs speed on an interpreter is the loop over cel
 is native ([beamlet](beamlet.md#screen-natives)).
 
 **The editor is Elixir.** It is a screen program like the pager, so it reads a file with the same
-memory-safe code every tool of the session uses and costs no process of its own. Its search and
-highlighting are `Regex`, which costs linear time in every pattern, as it does wherever Redoubt
-matches one.
+memory-safe code every tool of the session uses and costs no process of its own. Its search is
+`Regex`, which costs linear time in every pattern, as it does wherever Redoubt matches one; its
+highlighting reads each line once, from left to right.
 
 **One VM per session.** Every tool of a session, the shell, the editor, `top`, the pager, runs in
 the session's one VM. A VM is not a wall inside one principal: code that takes one over holds the
