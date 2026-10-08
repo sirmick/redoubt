@@ -13,6 +13,11 @@ path = "src/bin/boot-reader.rs"
 test = false
 
 [[bin]]
+name = "consol-client"
+path = "src/bin/consol-client.rs"
+test = false
+
+[[bin]]
 name = "con-forger"
 path = "src/bin/con-forger.rs"
 test = false

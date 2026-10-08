@@ -130,8 +130,9 @@ Miri both crates take their portable Rust paths. Those two assembly blocks are r
 
 ### Sessions over SSH
 
-<details><summary>Status: built · partly tested: `consol` on a channel is tested on the host only · tested (20)</summary>
+<details><summary>Status: built · tested (21)</summary>
 
+- bench:steward-ssh-resize
 - bench:steward-ssh-two-principals
 - bench:steward-context-login
 - host:redoubt-sshd::the_login_grammar

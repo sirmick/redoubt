@@ -86,9 +86,12 @@ Status: built · tested: host:redoubt-consoled::a_device_stuck_on_data_ready_doe
 
 ### The `consol` protocol
 
-<details><summary>Status: built · partly tested: on the host only · tested (5)</summary>
+<details><summary>Status: built · tested (8)</summary>
 
+- bench:consol-size
+- bench:steward-ssh-resize
 - host:redoubt-consoled::consol_size_is_the_argument_and_a_resize_waits_until_its_caller_gives_up
+- host:redoubt-consoled::a_console_with_no_size_refuses_consol
 - host:redoubt-consoled::a_refused_typed_request_leaves_no_handle_behind
 - host:redoubt-consoled::a_console_with_no_device_does_not_start
 - host:redoubt-sshd::consol_size_is_the_pty_s_and_a_resize_is_due_when_it_changes

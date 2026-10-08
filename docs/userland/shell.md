@@ -353,8 +353,9 @@ and every [full-screen program](#full-screen-programs).
 
 ### The console's size
 
-<details><summary>Status: built · partly tested: a change of size is delivered on Redoubt, and on the host only to the driver's tests: beamlet's command line does not deliver a host terminal's change; the driver's part is the shell's own ExUnit suite, which `./test-shell` runs · tested (4)</summary>
+<details><summary>Status: built · partly tested: on a host a change of the terminal's size reaches only the driver's tests, since beamlet's command line does not deliver one; the driver's part is the shell's own ExUnit suite, which `./test-shell` runs · tested (5)</summary>
 
+- bench:steward-ssh-resize
 - host:beamlet-vm::a_change_of_the_console_s_size_reaches_its_reader_once
 - host:beamlet-redoubt::a_change_of_the_console_s_size_reaches_the_vm_once_reading_has_begun
 - host:redoubt-consoled::consol_size_is_the_argument_and_a_resize_waits_until_its_caller_gives_up

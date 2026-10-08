@@ -507,8 +507,9 @@ stateDiagram-v2
 
 ### Parking a typed call
 
-<details><summary>Status: built · tested (3)</summary>
+<details><summary>Status: built · tested (4)</summary>
 
+- bench:consol-size
 - host:redoubt-rt::a_waiting_request_comes_back_unanswered_with_its_lend_as_it_came
 - host:redoubt-rt::a_waiting_request_that_carries_handles_is_malformed_and_they_close
 - host:redoubt-rt::a_waiting_typed_call_is_parked_answered_later_and_freed_when_abandoned
