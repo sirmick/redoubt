@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 392
+revision = 396
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1445,8 +1445,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M2"
   body = "Found by SHELL3. prim_eval is listed in vm/src/vm.rs RUNTIME_MODULES but never loaded, and no native answers it, so any `receive` typed at the prompt fails. Load prim_eval's receive, or provide it, with a beamlet test of `receive` at the prompt and in erl_eval with an after clause. Size S."
-  state = "active"
-  revision = 389
+  state = "reported"
+  revision = 395
   overrides = ["2026-10-08: started by Orchestrator before M1 (reported): An M2 shell gap that is independent of M1's remaining work."]
 
 [[node]]
@@ -1456,8 +1456,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   needs = ["SHELL3"]
   body = "Found by SHELL3. Use Ctx::new_resource_sized (SHELL3's commit 1) so atomics and zlib streams count toward their holder's max_heap_size. Add a test that a process past its limit by atomics or zlib is killed as for any heap growth. Size S."
-  state = "todo"
-  revision = 373
+  state = "active"
+  revision = 393
+  overrides = ["2026-10-08: started by Orchestrator before M1 (reported): An M2 beamlet hardening package, independent of M1's remaining work; SHELL3's sized resources are on main."]
 
 [[node]]
   id = "B30"
@@ -1484,8 +1485,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   needs = ["B30"]
   body = "Found by B30. Once B30 fixes beamlet-footprint's result match, the memory check behind it fails on both widths: heap 2x peak 11,804/11,406 > cap 10,989. SHELL2's driver (group, edlin, Redoubt.Term, history) raised the shell VM's heap. Measure what grew. Then cut it, or raise the cap with a measured reason, under B23's rule (the peak stays under half the cap). Size S."
-  state = "active"
-  revision = 383
+  state = "done"
+  revision = 396
   overrides = ["2026-10-08: started by Orchestrator before M1 (reported): A case failing on main since SHELL2's merge; fixing main's failures goes first."]
 
 [[node]]

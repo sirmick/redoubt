@@ -55,7 +55,7 @@ verity = "image/userland.toml"
 
 [[file.servers]]
 name = "beamlet"
-args = ["budget_pages=11008", "endpoint=erofsd:system", "report_memory", "Elixir.Redoubt.Shell"]
+args = ["budget_pages=11904", "endpoint=erofsd:system", "report_memory", "Elixir.Redoubt.Shell"]
 
 [userland]
 recipe = "image/userland.toml"
