@@ -9,7 +9,11 @@ defmodule Redoubt.Shell.MixProject do
       deps: [],
       # The wire's Elixir codecs and their generated clients (docs/servers/wire.md, "Generated
       # clients") are part of the shell's application: a session binds every server through them.
-      elixirc_paths: ["lib" | Enum.map(~w(lib proto client), &Path.expand("../../libs/wire/elixir/" <> &1, __DIR__))],
+      elixirc_paths: [
+        "lib" | Enum.map(~w(lib proto client), &Path.expand("../../libs/wire/elixir/" <> &1, __DIR__))
+      ],
+      # test/support holds what the tests share (the terminal model); test_helper requires it.
+      test_ignore_filters: [~r"^test/support/"],
       # beamlet looks a module up in the system's code before any other directory, so a
       # protocol consolidated here would never be the one used on Redoubt. Build as it runs.
       consolidate_protocols: false

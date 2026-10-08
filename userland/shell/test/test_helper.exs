@@ -45,4 +45,7 @@ defmodule Redoubt.Test.Seed do
   end
 end
 
+# The terminal the encoder's tests draw on.
+Code.require_file("support/terminal.exs", __DIR__)
+
 ExUnit.start()
