@@ -21,6 +21,7 @@
 //! | P14 audit | every audit record is signed through `keyd`'s audit purpose | servers/steward.md, "The audit log" |
 //! | P15 shares | a chain of self-mints spends one admission share (`connection_lineage`) | servers/serving.md R26 |
 //! | P16 confined reads | a confined labelled caller reads no shared unlabelled volume (`confined_read_observation`) | servers/init.md, "The confinement check" |
+//! | P17 contexts | a domain holds at most one live session of a context's name; a login with a name that is not one starts nothing; a wrong key, a label set not the principal's and a context that is not a name are refused alike | servers/steward.md R79 |
 
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::format;
@@ -32,7 +33,7 @@ use redoubt_steward::Policy;
 use redoubt_steward::audit::Record;
 use redoubt_steward::consts::{BLAME_COUNT, BLAME_WINDOW, DECLASSIFY_MAX, FIELD_CAP, MAX_LEASE, PENDING_CAP};
 use redoubt_steward::domain::Labels;
-use redoubt_steward::effect::{Answer, Kind, Notice, Notified, Output};
+use redoubt_steward::effect::{Answer, Kind, Notice, Notified, Output, Refusal};
 use redoubt_steward::event::{Content, Event};
 use redoubt_steward::inspect;
 use redoubt_steward::manifest::{Limits, Manifest, PrincipalSpec, Sizes};
@@ -70,6 +71,8 @@ pub enum PolicyOp {
     Login {
         principal: usize,
         labels: Vec<u64>,
+        /// The context's name, empty for the default one.
+        context: String,
         key: u64,
     },
     EndSession {
@@ -171,6 +174,9 @@ pub fn manifest() -> Manifest {
 }
 
 const ALL_KEYS: [u64; 8] = [11, 12, 21, 22, 31, 32, 100, 101];
+/// The contexts a login names: mostly a few good names, so a domain holds several sessions, now
+/// and then one that is not a name.
+const CONTEXTS: [&str; 8] = ["", "", "a", "b", "c", "work", "Work", "a.b"];
 const LABEL_SETS: [&[u64]; 4] = [&[], &[7], &[8], &[9]];
 
 fn text(rng: &mut Rng, max: u64) -> String {
@@ -263,7 +269,8 @@ pub fn random_op(run: &Run, rng: &mut Rng) -> PolicyOp {
             };
             let good = fixed.principals[principal].login_keys[0];
             let key = if rng.pct(80) { good } else { rng.pick(&ALL_KEYS).unwrap() };
-            PolicyOp::Login { principal, labels, key }
+            let context = String::from(rng.pick(&CONTEXTS).unwrap());
+            PolicyOp::Login { principal, labels, context, key }
         }
         12..=14 => PolicyOp::EndSession { session: session(rng) },
         15..=21 => PolicyOp::StartAgent { session: session(rng), lease: lease(rng) },
@@ -429,9 +436,33 @@ impl Run {
         let now = self.st.k.now;
         let fixed = inspect::fixed(&self.st.store).clone();
         let obs = match op {
-            PolicyOp::Login { principal, labels, key } => {
+            PolicyOp::Login { principal, labels, context, key } => {
                 let name = fixed.principals[*principal].name.clone();
-                format!("{:?}", self.st.login(&name, labels, *key))
+                let r = self.st.login(&name, labels, context, *key);
+                let named = context.is_empty() || redoubt_steward::manifest::name(context);
+                if matches!(r, Some(Answer::Session { .. })) && !named {
+                    return Err(format!("P17: a login named the context {context:?}, which is not a name"));
+                }
+                if r == Some(Answer::Refused(Refusal::InUse)) {
+                    self.reached.insert("P17 a login to a live context");
+                }
+                // No enumeration: a wrong key, a label set not the principal's to log in under and
+                // a context that is not a name are all refused alike.
+                let p = &fixed.principals[*principal];
+                let owned = Labels::new(labels)
+                    .is_some_and(|l| p.owned.includes(&l) && p.domains.iter().any(|d| *d.labels() == l));
+                let key_right = p.login_keys.contains(key) && !fixed.keyd.contains(key);
+                if !(key_right && owned && named) {
+                    if r != Some(Answer::Refused(Refusal::BadKey)) {
+                        return Err(format!(
+                            "P17: a wrong login {op:?} was answered {r:?}, not as a bad key"
+                        ));
+                    }
+                    if key_right {
+                        self.reached.insert("P17 a wrong label set or context refused as a bad key");
+                    }
+                }
+                format!("{r:?}")
             }
             PolicyOp::EndSession { session } => format!("{:?}", self.st.end_session(*session)),
             PolicyOp::StartAgent { session, lease } => {
@@ -817,6 +848,19 @@ impl Run {
                     ));
                 }
                 self.reached.insert("P12 a session's connection");
+            }
+        }
+        // P17: one live session of a context's name per domain.
+        for (d, s) in inspect::domains(&st.store) {
+            let mut names: BTreeSet<&str> = BTreeSet::new();
+            for x in s.sessions.values().filter(|x| x.state != redoubt_steward::gen::session::State::Ending) {
+                let Some(name) = x.context.as_deref() else { continue };
+                if !names.insert(name) {
+                    return Err(format!("P17: {d:?} holds two live sessions of context {name:?}"));
+                }
+                if !name.is_empty() {
+                    self.reached.insert("P17 a named context");
+                }
             }
         }
         // P5: the cap per domain, and no request of an ended session or agent.

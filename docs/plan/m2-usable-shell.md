@@ -130,6 +130,11 @@ On Redoubt, after M1 (sessions over SSH, kept apart), in this order:
 5. **A native program's screen:** its `cells` frames read and drawn by the session
    ([the shell](../userland/shell.md#a-native-programs-screen-and-the-sessions-key)).
 
+Beside them, **named contexts** ([sessions](../userland/sessions.md#contexts)): a context that
+outlives its SSH connection, reattached or taken over, its console kept while detached by a relay
+in its own budget, a cap per label set and an idle expiry; then the shell's commands to list,
+detach and end contexts.
+
 ### Several harts
 
 A second hart changes every rule that assumes one running thread in the kernel: completions, TLB
@@ -200,4 +205,6 @@ library's parked calls ([serving](../servers/serving.md#parked-calls)), `console
 ([budgets](../kernel/budgets.md#r10-destruction)). For several harts: every hart runs user code under one FIFO kernel lock, and a destruction's
 shootdown is attacked (`bench:smp-boot`, `bench:smp-evict`). One process's threads run on
 several harts at once, and every unmap, lend and return shoots the process down on the others
-(`smp-shootdown`, `smp-fence`).
+(`smp-shootdown`, `smp-fence`). For named contexts: a login names its context, `ssh alice.work@box`, the
+steward holds one session per context at a time, and every refusal before a session reads the same
+([sessions](../userland/sessions.md#contexts)).

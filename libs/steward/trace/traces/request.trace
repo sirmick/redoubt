@@ -6,10 +6,10 @@ principal "alice" account=1 login=[11] approval=[21,23] owned=[7] sets=[[],[7],[
 principal "bob" account=2 login=[12] approval=[22] owned=[] sets=[[]] top=1000,30,300
 sizes session=10,2,5 agent=10,2,5 sub_agent=5,1,2 crossing=2,1,1 cost=1
 
-# Two unlabelled sessions (badges 102, 112), a vault session (202), two approval channels.
+# Two unlabelled sessions (badges 102, 112, the second the context `b`), a vault session (202), two approval channels.
 event now=1 random=[101,102] reply=1 Login principal="alice" labels=[] key=11
 event now=1 Done object=session@1/#101 ok=[budget(901),scope,connection,process(71)]
-event now=1 random=[111,112] reply=2 Login principal="alice" labels=[] key=11
+event now=1 random=[111,112] reply=2 Login principal="alice" labels=[] context="b" key=11
 event now=1 Done object=session@1/#111 ok=[budget(902),scope,connection,process(72)]
 event now=1 random=[201,202] reply=3 Login principal="alice" labels=[7] key=11
 event now=1 Done object=session@1/7#201 ok=[budget(903),scope,connection,process(73)]

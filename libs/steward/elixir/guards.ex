@@ -59,7 +59,7 @@ defmodule Redoubt.Steward.Guards do
   end
 
   # A vault login, a labelled agent, a declassification or a push needs the labels' owner, from
-  # the manifest's owned labels.
+  # the manifest's owned labels. A login is refused as a wrong key is: no enumeration.
   def owns_labels(cx) do
     who =
       case cx.kind do
@@ -91,7 +91,28 @@ defmodule Redoubt.Steward.Guards do
 
       {p, wanted} ->
         owned = principal(cx, p).owned
-        ok_if(Steward.includes?(owned, labels(cx)) and Steward.includes?(owned, wanted), :NotOwner)
+        refusal = if cx.kind == :session, do: :BadKey, else: :NotOwner
+        ok_if(Steward.includes?(owned, labels(cx)) and Steward.includes?(owned, wanted), refusal)
+    end
+  end
+
+  # R79: a context is one session at a time: the name a login gives is no other session's of its
+  # domain, unless that one is already ending. The console's session (context nil) is no context.
+  def context_free(cx) do
+    case session(cx) do
+      nil ->
+        {:error, :Unknown}
+
+      %{context: nil} ->
+        :ok
+
+      s ->
+        taken =
+          state(cx).sessions
+          |> Map.values()
+          |> Enum.any?(&(&1.id != s.id and &1.state != :ending and &1.context == s.context))
+
+        ok_if(not taken, :InUse)
     end
   end
 

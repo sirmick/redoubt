@@ -70,6 +70,8 @@ struct Rig {
     /// Owners whose next batch fails at its first step.
     fail: Vec<Kind>,
     exited: bool,
+    /// The contexts `login` has named, so that each of its logins is a context of its own.
+    contexts: u64,
 }
 
 fn d(account: u64, labels: &[u64]) -> Domain {
@@ -96,6 +98,7 @@ impl Rig {
             reads: Vec::new(),
             fail: Vec::new(),
             exited: false,
+            contexts: 0,
         }
     }
 
@@ -194,8 +197,27 @@ impl Rig {
         Ok(done)
     }
 
+    /// A login as a context no other login of the rig has named.
     fn login(&mut self, name: &str, labels: &[u64], key: u64) -> Result<(u64, u64), Answer> {
-        match self.call(EventKind::Login { principal: name.into(), labels: labels.to_vec(), key }) {
+        self.contexts += 1;
+        let context = format!("c{}", self.contexts);
+        self.login_as(name, labels, &context, key)
+    }
+
+    fn login_as(
+        &mut self,
+        name: &str,
+        labels: &[u64],
+        context: &str,
+        key: u64,
+    ) -> Result<(u64, u64), Answer> {
+        let kind = EventKind::Login {
+            principal: name.into(),
+            labels: labels.to_vec(),
+            context: context.into(),
+            key,
+        };
+        match self.call(kind) {
             Some(Answer::Session { id, .. }) => Ok((id, self.badge(id))),
             other => Err(other.unwrap_or(Answer::Ok)),
         }
@@ -317,10 +339,7 @@ fn login_key() {
     assert_eq!(refused(r.login("alice", &[], 12)), Refusal::BadKey, "an approval key");
     assert_eq!(refused(r.login("alice", &[], 21)), Refusal::BadKey, "bob's key");
     assert_eq!(refused(r.login("alice", &[], 100)), Refusal::BadKey, "a key keyd holds");
-    assert_eq!(
-        refusal(r.call(EventKind::Login { principal: "dave".into(), labels: vec![], key: 11 })),
-        Refusal::Unknown
-    );
+    assert_eq!(refused(r.login("dave", &[], 11)), Refusal::BadKey, "a principal the manifest does not name");
     assert_eq!(r.records(|x| matches!(x, Record::Login { .. })).len(), 1);
 }
 
@@ -328,11 +347,68 @@ fn login_key() {
 fn owns_labels_reads_the_manifest_not_the_domains() {
     let mut r = Rig::new();
     r.login("alice", &[7], 11).unwrap();
-    // A label set the manifest does not give alice: no domain, the same answer.
-    assert_eq!(refused(r.login("alice", &[9], 11)), Refusal::NotOwner);
-    // Bob works under {7} but does not own it: the domain exists, the guard refuses.
-    assert_eq!(refused(r.login("bob", &[7], 21)), Refusal::NotOwner);
+    // A label set the manifest does not give alice: no domain, the same answer as a wrong key.
+    assert_eq!(refused(r.login("alice", &[9], 11)), Refusal::BadKey);
+    // Bob works under {7} but does not own it: the domain exists, the guard refuses, alike.
+    assert_eq!(refused(r.login("bob", &[7], 21)), Refusal::BadKey);
     assert_eq!(r.sessions_in(&d(1002, &[7])), 0);
+}
+
+/// R79's refusals before a session: whatever a login names wrongly, the answer is the wrong key's,
+/// and nothing is carved or recorded.
+#[test]
+fn a_login_s_refusals_tell_nothing_apart() {
+    let mut r = Rig::new();
+    let bad = [
+        ("alice", &[][..], "c", 12, "a wrong key"),
+        ("dave", &[][..], "c", 11, "an unknown principal"),
+        ("alice", &[9][..], "c", 11, "a label set not given"),
+        ("bob", &[7][..], "c", 21, "a label set not owned"),
+        ("alice", &[][..], "Work", 11, "a context with upper case"),
+        ("alice", &[][..], "a.b", 11, "a context with a dot"),
+        ("alice", &[][..], "a:b", 11, "a context with a colon"),
+        ("alice", &[][..], "1a", 11, "a context starting with a digit"),
+        ("approve", &[][..], "", 11, "a reserved name"),
+        ("", &[][..], "", 11, "a user name that is not a login"),
+    ];
+    let long = "a".repeat(65);
+    for (who, labels, context, key, what) in
+        bad.iter().copied().chain([("alice", &[][..], &*long, 11, "65 bytes")])
+    {
+        assert_eq!(refused(r.login_as(who, labels, context, key)), Refusal::BadKey, "{what}");
+    }
+    assert!(r.budgets.is_empty());
+    assert!(r.records(|x| matches!(x, Record::Login { .. })).is_empty());
+    r.login_as("alice", &[], &"a".repeat(64), 11).unwrap();
+}
+
+/// R79: one session per context name in a domain; the name is the domain's, so the same name in
+/// another label set, or of another principal, is another context.
+#[test]
+fn context_free_holds_one_session_per_name() {
+    let mut r = Rig::new();
+    let (work, _) = r.login_as("alice", &[], "work", 11).unwrap();
+    r.login_as("alice", &[], "", 11).unwrap();
+    assert_eq!(refused(r.login_as("alice", &[], "work", 11)), Refusal::InUse);
+    assert_eq!(refused(r.login_as("alice", &[], "", 11)), Refusal::InUse, "the default context");
+    let budgets = r.budgets.len();
+    // Another label set's `work`, and bob's, are not alice's unlabelled `work`.
+    r.login_as("alice", &[7], "work", 11).unwrap();
+    r.login_as("bob", &[], "work", 21).unwrap();
+    assert_eq!(r.budgets.len(), budgets + 2);
+    // Once the session has ended, the name is free again.
+    r.call(EventKind::ChannelClosed { session: work });
+    let (again, _) = r.login_as("alice", &[], "work", 11).unwrap();
+    assert_ne!(again, work);
+    let contexts: Vec<_> = r
+        .records(|x| matches!(x, Record::Login { .. }))
+        .into_iter()
+        .filter_map(|a| match a.record() {
+            Record::Login { context, .. } => context.clone(),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(contexts, ["work", "", "work", "work", "work"]);
 }
 
 #[test]
@@ -349,7 +425,8 @@ fn a_session_is_carved_from_its_domain_with_a_scope_for_its_connections() {
 #[test]
 fn the_batch_steps_for_a_session() {
     let (mut store, _) = Store::boot(&manifest(), Policy::SHIPPED).unwrap();
-    let kind = EventKind::Login { principal: "alice".into(), labels: vec![7], key: 11 };
+    let kind =
+        EventKind::Login { principal: "alice".into(), labels: vec![7], context: String::new(), key: 11 };
     let e = decide(&mut store, Event { now: 1, random: [5, 6, 7, 8, 9, 10, 11, 12], reply: 1, kind });
     assert_eq!(e.batches.len(), 1);
     let steps = &e.batches[0].steps;

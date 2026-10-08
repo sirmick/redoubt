@@ -24,6 +24,9 @@ pub struct Session {
     pub principal: usize,
     /// The key it logged in with.
     pub key: u64,
+    /// The context it is (servers/steward.md, "Contexts"): empty for the principal's default one;
+    /// `None` for the console's session, which is no context.
+    pub context: Option<String>,
     /// Its badge on the steward's endpoint, which routes its events.
     pub badge: u64,
     /// Numbered per domain (`session-3`), from 1 when it starts running; 0 before.

@@ -1,0 +1,101 @@
+description = "Named contexts over SSH (docs/servers/steward.md, \"Contexts\" and R79; docs/servers/sshd.md, \"Login\"; docs/userland/sessions.md, \"How to use it\"): bob.work@box gets a prompt in a session of its own, the context work; a second bob.work login while it lives is refused in_use; bob.work+x, outside the grammar, reaches the steward as nobody and is refused as a wrong key is; bob+alice-secrets.work, a label set bob does not own, is refused alike; bob@box, his default context, logs in beside bob.work with a VM of its own, and neither session's marker reaches the other's channel. The verdicts are the steward's records, which carry each session's context, and its typed refusals as sshd's core reads them (rule F)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+recipe = "image/boot.toml"
+# The image needs 1 GiB: the principals' budgets, each holding a shell VM's session, do not fit
+# the users budget 256 MiB leaves (docs/kernel/budgets.md).
+memory_mib = 1024
+# Two logins that boot a shell VM, one after the other, and three refused between them.
+timeout_secs = 1500
+expect = [
+    '^init: started sshd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
+    '^init: started steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{\} at [0-9]+: Login ',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+]
+distinct = ['steward: audit 1002/\{\} at [0-9]+: Login \{ session: ([0-9]+)']
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    '^init: .* (exited|faulted|was killed)',
+    'init: restarted',
+    'EXCEPTION',
+    'steward: the core exited',
+    'steward: a step failed',
+    'sshd: login bob\.work\+x',
+    'sshd: login bob\+alice-secrets\.work: session',
+]
+# Each login follows the last one's verdict, and the steward says a login's lines before it
+# answers sshd, so the lines come in one order.
+expect_after = [
+    '^\[con [0-9a-f]{16}\] steward: audit 1002/\{\} at [0-9]+: Login \{ session: [0-9]+, principal: 1, key: [1-9][0-9]*, context: Some\("work"\) \}',
+    '^\[con [0-9a-f]{16}\] sshd: login bob\.work: session [0-9a-f]{16}, labels \[\]$',
+    '^\[con [0-9a-f]{16}\] sshd: login bob\.work: refused \(InUse\)$',
+    '^\[con [0-9a-f]{16}\] sshd: login : refused \(BadKey\)$',
+    '^\[con [0-9a-f]{16}\] sshd: login bob\+alice-secrets\.work: refused \(BadKey\)$',
+    '^\[con [0-9a-f]{16}\] steward: audit 1002/\{\} at [0-9]+: Login \{ session: [0-9]+, principal: 1, key: [1-9][0-9]*, context: Some\(""\) \}',
+    '^\[con [0-9a-f]{16}\] sshd: login bob: session [0-9a-f]{16}, labels \[\]$',
+]
+
+[[session]]
+user = "bob.work"
+forbid = ['default-marker']
+steps = [
+    { expect = '\([0-9]+\)> ' },
+    { mark = "work-up" },
+    { send = "\"work-\" <> \"marker\"\n" },
+    { expect = '"work-marker"' },
+    { wait = "default-done" },
+    { exit = 0 },
+]
+
+[[session]]
+user = "bob.work"
+name = "bob.work-again"
+steps = [
+    { wait = "work-up" },
+    { expect = 'Permission denied \(publickey\)' },
+    { exit = 255 },
+    { mark = "again-refused" },
+]
+
+[[session]]
+user = "bob.work+x"
+steps = [
+    { wait = "again-refused" },
+    { expect = 'Permission denied \(publickey\)' },
+    { exit = 255 },
+    { mark = "malformed-refused" },
+]
+
+[[session]]
+user = "bob+alice-secrets.work"
+steps = [
+    { wait = "malformed-refused" },
+    { expect = 'Permission denied \(publickey\)' },
+    { exit = 255 },
+    { mark = "unowned-refused" },
+]
+
+[[session]]
+user = "bob"
+forbid = ['work-marker']
+steps = [
+    { wait = "unowned-refused" },
+    { expect = '\([0-9]+\)> ' },
+    { send = "\"default-\" <> \"marker\"\n" },
+    { expect = '"default-marker"' },
+    { mark = "default-done" },
+    { exit = 0 },
+]
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]
+forward = [22]

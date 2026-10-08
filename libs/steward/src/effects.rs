@@ -186,7 +186,8 @@ pub fn drop_requests(cx: &mut Cx<'_>) {
 
 pub fn audit_login(cx: &mut Cx<'_>) {
     let Some(s) = session(cx) else { return };
-    let record = Record::Login { session: s.id, principal: s.principal, key: s.key };
+    let record =
+        Record::Login { session: s.id, principal: s.principal, key: s.key, context: s.context.clone() };
     cx.audit(record);
 }
 

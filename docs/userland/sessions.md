@@ -22,6 +22,8 @@ Log in with your own SSH key. The user name picks the session:
 ```text
 $ ssh alice@box            # an ordinary session: Alice's unlabelled data
 $ ssh alice+tax@box        # a vault session carrying Alice's `tax` label
+$ ssh alice.work@box       # a second ordinary session beside the first: Alice's context `work`
+$ ssh alice+tax.work@box   # the context `work` of the `tax` vault, another context again
 $ ssh approve@box          # the approval terminal: only the steward talks here
 ```
 
@@ -59,13 +61,14 @@ authority, only a name:
 ```
 
 Leaving the session (`exit`, or closing the SSH connection) ends it: the steward destroys the
-session's budget, and every process in it ends with it.
+session's budget, and every process in it ends with it. A context is one session at a time: a
+second `ssh alice.work@box` while the first is open is refused.
 
 ## What it can and cannot do
 
 ### Logging in
 
-Status: built · tested: bench:steward-ssh-two-principals, bench:steward-login-refused, bench:userland-boot
+Status: built · tested: bench:steward-ssh-two-principals, bench:steward-login-refused, bench:steward-context-login, bench:userland-boot
 
 `sshd` (the SSH server) accepts a connection, and `sshd` and the steward authenticate the person
 with the principal's login key. In M1 (sessions over SSH, kept apart) the principals and their keys
@@ -79,6 +82,37 @@ builds its namespace from the principal's capabilities, and launches a beamlet V
 ([the steward](../servers/steward.md)). Each principal has one fixed sub-budget per label set,
 and sessions are carved from the one that matches their labels, so a flood of sessions in one
 label set cannot starve another.
+
+### Contexts
+
+Status: built · tested: bench:steward-context-login, host:redoubt-sshd::the_login_grammar, host:redoubt-steward::context_free_holds_one_session_per_name
+
+A **context** is a named session of one principal in one label set. The SSH user name is
+`principal[+label][.context]`, in that order only: `alice` is Alice's default context,
+`alice.work` her context `work`, `alice+tax.work` the context `work` of her `tax` vault. Each part
+is 1 to 64 bytes of lower-case ASCII letters, digits, `_` and `-`, starting with a letter, with no
+case folding; `.` is the separator, not `:`, which `scp`, `sftp` and `rsync` read as the start of
+a path. Contexts are not declared: a login names one, and the first login makes it.
+- **Its identity is (principal, label set, name).** `alice.work` and `alice+tax.work` are two
+  contexts, each carved from its own label set's sub-budget, so a context never crosses from
+  one label set to another.
+- **One session at a time.** While a context's session lives, a second login naming it is
+  refused ([the steward](../servers/steward.md#r79-one-session-per-context)); once it has
+  ended, the name is free again.
+- **No enumeration.** A key that is not the principal's, a principal or a label set the manifest
+  does not give, and a name outside the grammar all get the same refusal, so its content says
+  nothing about which names exist. Its timing is not made equal: inside the steward's one call,
+  an unknown principal or label set, or a name outside the grammar, is refused before any of its
+  machines runs, and a wrong key for a known principal runs the blame and session machines before
+  the key check refuses it; nothing is counted. How far that difference shows through SSH is not
+  yet measured.
+- **Reserved names take no suffix.** `approve` is the approval terminal's name: no principal
+  takes it, and `approve+x` and `approve.x` are not logins.
+
+A context that keeps running when its SSH connection closes, reattaching to it, taking over an
+attached one, a cap on live contexts per label set, and an idle expiry for detached ones are
+planned with the console relay ([M2 (usable shell)](../plan/m2-usable-shell.md#the-shell)); until then closing
+SSH ends the context's session, as above.
 
 ### A session is a VM in a budget
 

@@ -316,7 +316,7 @@ fn call(
 }
 
 fn login<'a>(principal: &'a str, label: &'a str, key: &'a [u8]) -> Message<'a> {
-    Message::Login(Login { principal, label, key })
+    Message::Login(Login { principal, label, context: "", key })
 }
 
 /// A login is the core's session batch, run in order: the session's budget from its domain's
@@ -387,29 +387,49 @@ fn a_vault_login_carves_from_the_vault_s_sub_budget_and_has_no_network() {
     assert!(connections[3].is_some(), "slot 2, the vault, is bound");
 }
 
-/// The steward's typed refusals: a key the manifest lists for bob used as alice, a label the
-/// principal does not own, a label no manifest names, and a key that is not 32 bytes; none
-/// carves anything.
+/// The steward's refusals of a login, alike whatever is wrong (servers/steward.md, "Contexts"): a
+/// key the manifest lists for bob used as alice, a label the principal does not own, a label no
+/// manifest names, a principal it does not name, a context that is not a name, and a key that is
+/// not 32 bytes; none carves anything.
 #[test]
 fn a_refused_login_makes_nothing() {
     let mut k = Recorder::default();
     let mut s = started(&mut k);
-    let cases: [(&str, &str, &[u8], ErrorCode); 5] = [
-        ("alice", "", &BOB_KEY, ErrorCode::BadKey),
-        ("bob", "alice-secrets", &BOB_KEY, ErrorCode::NotOwner),
-        ("alice", "carol-secrets", &ALICE_KEY, ErrorCode::NotOwner),
-        ("alice", "not a name!", &ALICE_KEY, ErrorCode::NotOwner),
-        ("alice", "", &ALICE_KEY[..31], ErrorCode::BadKey),
+    let cases: [(&str, &str, &str, &[u8]); 10] = [
+        ("alice", "", "", &BOB_KEY),
+        ("bob", "alice-secrets", "", &BOB_KEY),
+        ("alice", "carol-secrets", "", &ALICE_KEY),
+        ("alice", "not a name!", "", &ALICE_KEY),
+        ("carol", "", "", &ALICE_KEY),
+        ("", "", "", &ALICE_KEY),
+        ("alice", "", "Work", &ALICE_KEY),
+        ("alice", "", "a.b", &ALICE_KEY),
+        ("alice", "", "a:b", &ALICE_KEY),
+        ("alice", "", "", &ALICE_KEY[..31]),
     ];
-    for (principal, label, key, want) in cases {
+    for (principal, label, context, key) in cases {
+        let m = Message::Login(Login { principal, label, context, key });
         assert_eq!(
-            call(&mut s, &mut k, SSHD, login(principal, label, key)).unwrap_err(),
-            want,
-            "{principal} {label}"
+            call(&mut s, &mut k, SSHD, m).unwrap_err(),
+            ErrorCode::BadKey,
+            "{principal} {label} {context}"
         );
     }
     assert!(k.creates().is_empty());
-    assert_eq!(call(&mut s, &mut k, SSHD, login("carol", "", &ALICE_KEY)).unwrap_err(), ErrorCode::Unknown);
+}
+
+/// R79 through the server: a second login of a live context is `in_use`, and makes nothing.
+#[test]
+fn a_live_context_is_refused_in_use() {
+    let mut k = Recorder::default();
+    let mut s = started(&mut k);
+    let work = Message::Login(Login { principal: "alice", label: "", context: "work", key: &ALICE_KEY });
+    call(&mut s, &mut k, SSHD, work).unwrap();
+    let creates = k.creates().len();
+    let again = Message::Login(Login { principal: "alice", label: "", context: "work", key: &ALICE_KEY });
+    assert_eq!(call(&mut s, &mut k, SSHD, again).unwrap_err(), ErrorCode::InUse);
+    assert_eq!(k.creates().len(), creates);
+    call(&mut s, &mut k, SSHD, login("alice", "", &ALICE_KEY)).unwrap();
 }
 
 /// Each operation only on its badge class: on any other it is malformed, as an unknown opcode

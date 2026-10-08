@@ -98,6 +98,7 @@ fn error(r: Refusal) -> ErrorCode {
         Refusal::LockedOut => ErrorCode::LockedOut,
         Refusal::NotSponsor => ErrorCode::NotSponsor,
         Refusal::Failed => ErrorCode::Failed,
+        Refusal::InUse => ErrorCode::InUse,
     }
 }
 
@@ -165,15 +166,19 @@ where
         let mut login_labels = Vec::new();
         let (kind, ok) = match request {
             Message::Login(m) => {
-                // A label the manifest does not name is one the principal does not own.
-                login_labels = self.steward.label(m.label).ok_or(ErrorCode::NotOwner)?;
+                // The key's id first, whatever else the login names; a label the manifest does
+                // not name is then refused as a wrong key is, as the core refuses an unknown
+                // principal or context (servers/steward.md, "Contexts").
                 let key = <[u8; 32]>::try_from(m.key).map_err(|_| ErrorCode::BadKey)?;
+                let key = key_id(&key);
+                login_labels = self.steward.label(m.label).ok_or(ErrorCode::BadKey)?;
                 // The channel's console, which the session's console slot binds to.
                 self.kernel.console(handles.first().copied());
                 let kind = EventKind::Login {
                     principal: m.principal.into(),
                     labels: login_labels.clone(),
-                    key: key_id(&key),
+                    context: m.context.into(),
+                    key,
                 };
                 (kind, None)
             }

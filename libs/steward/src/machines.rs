@@ -5,6 +5,7 @@
 //! routing index, and the domain a principal and label set name. An event that names nothing is
 //! refused with the same answer whatever it names (`Unknown`), or, raised by the core, dropped.
 
+use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::cx::{Cx, Next, Out, Raised};
@@ -298,9 +299,10 @@ pub(crate) fn release(store: &mut Store, domain: &Domain, kind: Kind, id: u64) {
 /// The route of a session's or lease's badge.
 pub(crate) fn route(store: &Store, badge: u64) -> Option<Route> { store.index.routes.get(&badge).cloned() }
 
-/// A session of principal `p` in `domain`, opened by a login with `key` or as the console
-/// principal's (key 0): the login is counted against the domain's blame, the session made, and its
-/// machine started on `opened`.
+/// A session of principal `p` in `domain`, opened by a login with `key` as `context`, or as the
+/// console principal's (key 0, no context): the domain's blame machine sees the login (a lockout
+/// window that has passed ends; nothing is counted), the session is made, and its machine started
+/// on `opened`.
 #[allow(clippy::too_many_arguments)]
 fn open_session(
     store: &mut Store,
@@ -310,6 +312,7 @@ fn open_session(
     p: usize,
     domain: &Domain,
     key: u64,
+    context: Option<String>,
     opened: gen::session::Event,
 ) {
     run::<BlameM>(store, call, out, domain, 0, gen::blame::Event::Login);
@@ -319,6 +322,7 @@ fn open_session(
         state: gen::session::State::Starting,
         principal: p,
         key,
+        context,
         badge,
         number: 0,
         reply: event.reply,
@@ -334,21 +338,28 @@ fn open_session(
 pub(crate) fn external(store: &mut Store, event: &Event, out: &mut Out) {
     let call = Call::of(event);
     match &event.kind {
-        EventKind::Login { principal, labels, key } => {
-            let Some(p) = store.fixed.principal(principal) else { return unknown(event, out) };
-            let account = store.fixed.principals[p].account.get();
-            // A label set the manifest does not give the principal: the same answer as
-            // `owns_labels`.
-            let Some(domain) = store.find(account, labels) else {
-                return refuse(event, out, Refusal::NotOwner);
+        EventKind::Login { principal, labels, context, key } => {
+            // Before the key is checked, every refusal is the bad key's: an unknown principal, a
+            // label set the manifest does not give it and a context that is not a name are told
+            // apart from a wrong key by nobody (servers/steward.md, "Contexts").
+            let Some(p) = store.fixed.principal(principal) else {
+                return refuse(event, out, Refusal::BadKey);
             };
-            open_session(store, &call, event, out, p, &domain, *key, gen::session::Event::Login);
+            let account = store.fixed.principals[p].account.get();
+            let Some(domain) = store.find(account, labels) else {
+                return refuse(event, out, Refusal::BadKey);
+            };
+            if !context.is_empty() && !crate::manifest::name(context) {
+                return refuse(event, out, Refusal::BadKey);
+            }
+            let context = Some(context.clone());
+            open_session(store, &call, event, out, p, &domain, *key, context, gen::session::Event::Login);
         }
         EventKind::Console { principal } => {
             let Some(p) = store.fixed.principal(principal) else { return unknown(event, out) };
             let account = store.fixed.principals[p].account.get();
             let Some(domain) = store.find(account, &[]) else { return unknown(event, out) };
-            open_session(store, &call, event, out, p, &domain, 0, gen::session::Event::Console);
+            open_session(store, &call, event, out, p, &domain, 0, None, gen::session::Event::Console);
         }
         EventKind::ChannelClosed { session } => {
             let Some((domain, Kind::Session)) = store.index.ids.get(session).cloned() else {

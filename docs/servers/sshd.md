@@ -130,9 +130,12 @@ Miri both crates take their portable Rust paths. Those two assembly blocks are r
 
 ### Sessions over SSH
 
-<details><summary>Status: built · partly tested: a channel's window size reaches the session only once `consol`'s `size` and `resize` are served (consoled.md, "The `consol` protocol") · tested (16)</summary>
+<details><summary>Status: built · partly tested: a channel's window size reaches the session only once `consol`'s `size` and `resize` are served (consoled.md, "The `consol` protocol") · tested (19)</summary>
 
 - bench:steward-ssh-two-principals
+- bench:steward-context-login
+- host:redoubt-sshd::the_login_grammar
+- host:redoubt-sshd::a_user_name_outside_the_grammar_reaches_the_steward_as_nobody
 - bench:steward-ssh-idle
 - bench:steward-vault-session
 - bench:steward-vault-launch
@@ -161,11 +164,17 @@ Miri both crates take their portable Rust paths. Those two assembly blocks are r
   asks `keyd` to sign each key exchange; `keyd` builds the exchange hash itself
   ([keyd](keyd.md#messages)). The host key is never in `sshd`'s memory, and the steward never holds
   its badge.
-- **Login.** A user name is `principal` or `principal+label`. `sshd` rejects a login key that `keyd`
-  holds (`holds`), then asks the steward whose key it is with the typed call `login(principal,
-  label, key, console)`; the steward answers with a session, or refuses
-  ([steward](steward.md#authentication-and-sessions)). Login keys are the person's own and never
-  live in `keyd` ([R35 (key separation)](init.md#r35-key-separation)).
+- **Login.** A user name is `principal[+label][.context]`, in that order only, each part 1 to 64
+  bytes of `[a-z0-9_-]` starting with a letter (`alice`, `alice+secrets`, `alice.work`,
+  `alice+secrets.work`); `approve` takes no label and no context
+  ([contexts](../userland/sessions.md#contexts)). `sshd` rejects a login key that `keyd` holds
+  (`holds`), then asks the steward whose key it is with the typed call `login(principal, label,
+  context, key, console)`; the steward checks every part again and answers with a session, or
+  refuses ([steward](steward.md#contexts)). `sshd` parses the name only to split it and refuses
+  nothing on it: a user name outside the grammar goes to the steward as the empty principal,
+  which no manifest names, so every refusal after a verified signature takes the one path and
+  says nothing about which names exist. Login keys are the person's own and never live in `keyd`
+  ([R35 (key separation)](init.md#r35-key-separation)).
 - **A key is tried twice.** A client first asks whether a key would do, then sends a signature
   with it. `sshd` answers the question with `holds` alone: a key `keyd` holds is refused, any other
   may be tried. It asks the steward only once the signature has verified. So the steward never

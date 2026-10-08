@@ -72,6 +72,14 @@ pub fn dispatch(p: &Policy, cx: &mut Cx<'_>, from: Option<State>, event: Event) 
                 (p.refuse)(cx);
                 return Next::Nothing;
             }
+            'row: {
+                match (p.context_free)(cx) {
+                    Ok(()) => break 'row,
+                    Err(r) => cx.refused(r),
+                }
+                (p.refuse)(cx);
+                return Next::Nothing;
+            }
             (p.carve_session)(cx);
             (p.create_scope)(cx);
             (p.connect)(cx);

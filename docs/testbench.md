@@ -350,7 +350,7 @@ such a sweep runs as `q run --cores M -- cargo testbench --smp N`, `M` at least 
 | --- | --- | --- |
 | `model-mutations` | 153 jobs, one per mutation, in release, one core each; a mutation's steward families stop at 500 seeds, and the three they catch only after many seeds are caught first by directed scenarios ([mutations](kernel/model.md#mutations)). About two and a half minutes of wall, the build included; the longest job `R2NoWaitCap`'s, 18.7 s | per job, 25 |
 | `model-host-tests` | one `cargo test` on four cores, every model test but the mutations, the steward families and their coverage check: under two minutes, the build included | none |
-| `steward-model-host-tests` | the two steward families at their counts and the check that their coverage table is reproduced ([property families](kernel/model.md#property-families)), each a job on four cores and threads: under four minutes of wall, the build included; the longest job `steward_noninterference`'s, 70 s | per job, 94 |
+| `steward-model-host-tests` | the two steward families at their counts and the check that their coverage table is reproduced ([property families](kernel/model.md#property-families)), each a job on four cores and threads: under two minutes of wall, the build included; the longest job `steward_policy`'s, 26 s | per job, 35 |
 | `rt-miri` | 12 jobs, one per file, about 100 s of wall: `heap`'s 60 to 96 s; `connection` 25 s; the rest under 10 s | per job, 128 |
 | `elixir-oracles`, `bench-elixir-oracles-broken-guard` | 33 to 35 s each from a cold build on four cores, both at once; the oracles themselves run in under a second | 46 |
 

@@ -317,6 +317,20 @@ pub fn limits(s: &str) -> Result<Limits, String> {
     }
 }
 
+/// Names no principal takes: each is a terminal's own user name (`ssh approve@box`), which takes no
+/// label and no context (servers/steward.md, "Contexts").
+pub const RESERVED: [&str; 1] = ["approve"];
+
+/// A principal's, a label's or a context's name: 1 to 64 bytes of `[a-z0-9_-]`, starting with a
+/// letter (servers/steward.md, "Contexts"). `init` holds principals and labels to it; the steward
+/// holds a login's context to it, whatever `sshd` parsed.
+pub fn name(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() <= 64
+        && b.first().is_some_and(u8::is_ascii_lowercase)
+        && b.iter().all(|&c| matches!(c, b'a'..=b'z' | b'0'..=b'9' | b'_' | b'-'))
+}
+
 // The lexical layer the trace encoding shares (servers/steward.md, "The trace encoding").
 
 /// The tokens of a line, split at spaces outside a quoted string. `#` outside a string starts a

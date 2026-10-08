@@ -25,6 +25,8 @@ pub struct Policy {
     pub blame_window: Guard,
     /// Guard (a rule), in `lease`.
     pub caller_unlabelled: Guard,
+    /// Guard (a rule), in `session`.
+    pub context_free: Guard,
     /// Guard (an object's kind only, no rule), in `crossing`.
     pub copying: Guard,
     /// Guard (an object's kind only, no rule), in `request`.
@@ -166,6 +168,7 @@ impl Policy {
         approval_key: crate::guards::approval_key,
         blame_window: crate::guards::blame_window,
         caller_unlabelled: crate::guards::caller_unlabelled,
+        context_free: crate::guards::context_free,
         copying: crate::guards::copying,
         declassifies: crate::guards::declassifies,
         exact_labels: crate::guards::exact_labels,

@@ -31,9 +31,9 @@ event now=600000018 random=[701,702] reply=9 Login principal="alice" labels=[7] 
 event now=600000019 Done object=session@1/7#701 ok=[budget(903),scope,connection,process(73)]
 
 # The unlabelled domain, its sessions and leases in every state when it is locked out: a session
-# running (101), one starting (111), one ending (121); a lease starting (301), one ending (401).
-event now=700000000 random=[111,112] reply=10 Login principal="alice" labels=[] key=11
-event now=700000000 random=[121,122] reply=11 Login principal="alice" labels=[] key=11
+# running (101), one starting (111, the context `b`), one ending (121, `c`); a lease starting (301), one ending (401).
+event now=700000000 random=[111,112] reply=10 Login principal="alice" labels=[] context="b" key=11
+event now=700000000 random=[121,122] reply=11 Login principal="alice" labels=[] context="c" key=11
 event now=700000000 Done object=session@1/#121 ok=[budget(904),scope,connection,process(74)]
 event now=700000000 reply=12 EndSession badge=122
 event now=700000000 random=[301,302] reply=13 StartAgent badge=102 lease=1000000

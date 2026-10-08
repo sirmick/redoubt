@@ -13,16 +13,17 @@ defmodule Redoubt.Steward.Gen.Session do
   # table gives no row is `:no_row`.
   def rows(nil, :login) do
     [
-      {11, [{:not, :login_key}], [:refuse], :nothing},
-      {12, [{:not, :owns_labels}], [:refuse], :nothing},
-      {13, [{:not, :not_locked}], [:refuse], :nothing},
-      {14, [], [:carve_session, :create_scope, :connect, :launch], {:to, :starting}},
+      {12, [{:not, :login_key}], [:refuse], :nothing},
+      {13, [{:not, :owns_labels}], [:refuse], :nothing},
+      {14, [{:not, :not_locked}], [:refuse], :nothing},
+      {15, [{:not, :context_free}], [:refuse], :nothing},
+      {16, [], [:carve_session, :create_scope, :connect, :launch], {:to, :starting}},
     ]
   end
   def rows(nil, :console) do
     [
-      {15, [{:not, :not_locked}], [:refuse], :nothing},
-      {16, [], [:carve_session, :create_scope, :connect, :launch], {:to, :starting}},
+      {17, [{:not, :not_locked}], [:refuse], :nothing},
+      {18, [], [:carve_session, :create_scope, :connect, :launch], {:to, :starting}},
     ]
   end
   def rows(nil, :done), do: :no_row
@@ -36,33 +37,33 @@ defmodule Redoubt.Steward.Gen.Session do
   def rows(:starting, :console), do: :no_row
   def rows(:starting, :done) do
     [
-      {17, [{:not, :not_locked}], [:refuse, :destroy_budget], {:to, :ending}},
-      {18, [], [:route, :audit_login, :reply_login], {:to, :running}},
+      {19, [{:not, :not_locked}], [:refuse, :destroy_budget], {:to, :ending}},
+      {20, [], [:route, :audit_login, :reply_login], {:to, :running}},
     ]
   end
   def rows(:starting, :failed) do
     [
-      {19, [], [:refuse, :destroy_partial], {:to, :ending}},
+      {21, [], [:refuse, :destroy_partial], {:to, :ending}},
     ]
   end
   def rows(:starting, :end_session) do
     [
-      {20, [], :unreachable, :stay},
+      {22, [], :unreachable, :stay},
     ]
   end
   def rows(:starting, :channel_closed) do
     [
-      {20, [], :unreachable, :stay},
+      {22, [], :unreachable, :stay},
     ]
   end
   def rows(:starting, :exited) do
     [
-      {20, [], :unreachable, :stay},
+      {22, [], :unreachable, :stay},
     ]
   end
   def rows(:starting, :locked_out) do
     [
-      {21, [], [], :stay},
+      {23, [], [], :stay},
     ]
   end
 
@@ -70,32 +71,32 @@ defmodule Redoubt.Steward.Gen.Session do
   def rows(:ending, :console), do: :no_row
   def rows(:ending, :done) do
     [
-      {25, [], [:forget], {:to, :ended}},
+      {27, [], [:forget], {:to, :ended}},
     ]
   end
   def rows(:ending, :failed) do
     [
-      {25, [], [:forget], {:to, :ended}},
+      {27, [], [:forget], {:to, :ended}},
     ]
   end
   def rows(:ending, :end_session) do
     [
-      {26, [], :unreachable, :stay},
+      {28, [], :unreachable, :stay},
     ]
   end
   def rows(:ending, :channel_closed) do
     [
-      {26, [], :unreachable, :stay},
+      {28, [], :unreachable, :stay},
     ]
   end
   def rows(:ending, :exited) do
     [
-      {26, [], :unreachable, :stay},
+      {28, [], :unreachable, :stay},
     ]
   end
   def rows(:ending, :locked_out) do
     [
-      {27, [], [], :stay},
+      {29, [], [], :stay},
     ]
   end
 
@@ -103,32 +104,32 @@ defmodule Redoubt.Steward.Gen.Session do
   def rows(:running, :console), do: :no_row
   def rows(:running, :done) do
     [
-      {24, [], :unreachable, :stay},
+      {26, [], :unreachable, :stay},
     ]
   end
   def rows(:running, :failed) do
     [
-      {24, [], :unreachable, :stay},
+      {26, [], :unreachable, :stay},
     ]
   end
   def rows(:running, :end_session) do
     [
-      {22, [], [:unroute, :drop_requests, :reply_ok, :destroy_budget], {:to, :ending}},
+      {24, [], [:unroute, :drop_requests, :reply_ok, :destroy_budget], {:to, :ending}},
     ]
   end
   def rows(:running, :channel_closed) do
     [
-      {23, [], [:unroute, :drop_requests, :destroy_budget], {:to, :ending}},
+      {25, [], [:unroute, :drop_requests, :destroy_budget], {:to, :ending}},
     ]
   end
   def rows(:running, :exited) do
     [
-      {23, [], [:unroute, :drop_requests, :destroy_budget], {:to, :ending}},
+      {25, [], [:unroute, :drop_requests, :destroy_budget], {:to, :ending}},
     ]
   end
   def rows(:running, :locked_out) do
     [
-      {23, [], [:unroute, :drop_requests, :destroy_budget], {:to, :ending}},
+      {25, [], [:unroute, :drop_requests, :destroy_budget], {:to, :ending}},
     ]
   end
 

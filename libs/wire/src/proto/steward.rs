@@ -15,6 +15,7 @@ use crate::typed::{self, Layout, Words};
 pub struct Login<'a> {
     pub principal: &'a str,
     pub label: &'a str,
+    pub context: &'a str,
     pub key: &'a [u8],
 }
 
@@ -245,6 +246,7 @@ impl<'a> Message<'a> {
             Message::Login(m) => {
                 w.string(m.principal)?;
                 w.string(m.label)?;
+                w.string(m.context)?;
                 w.bytes(m.key)
             }
             Message::ChannelClosed(m) => w.u64(m.session),
@@ -297,7 +299,7 @@ impl<'a> Message<'a> {
 
     fn read_buffer(opcode: u32, r: &mut Reader<'a>) -> Result<Self, Error> {
         Ok(match opcode {
-            1 => Message::Login(Login { principal: r.string()?, label: r.string()?, key: r.bytes()? }),
+            1 => Message::Login(Login { principal: r.string()?, label: r.string()?, context: r.string()?, key: r.bytes()? }),
             2 => Message::ChannelClosed(ChannelClosed { session: r.u64()? }),
             3 => Message::ApprovalOpened(ApprovalOpened { principal: r.string()?, key: r.bytes()? }),
             4 => Message::ApprovalClosed(ApprovalClosed { channel: r.u64()? }),
@@ -509,6 +511,7 @@ pub enum ErrorCode {
     LockedOut,
     NotSponsor,
     Failed,
+    InUse,
 }
 
 impl ErrorCode {
@@ -528,6 +531,7 @@ impl ErrorCode {
             ErrorCode::LockedOut => 12,
             ErrorCode::NotSponsor => 13,
             ErrorCode::Failed => 14,
+            ErrorCode::InUse => 15,
         }
     }
 
@@ -547,6 +551,7 @@ impl ErrorCode {
             12 => Some(ErrorCode::LockedOut),
             13 => Some(ErrorCode::NotSponsor),
             14 => Some(ErrorCode::Failed),
+            15 => Some(ErrorCode::InUse),
             _ => None,
         }
     }

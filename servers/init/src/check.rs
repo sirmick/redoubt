@@ -15,7 +15,8 @@ use redoubt_rt::server::minted::FIRST_MINTED_BADGE;
 use redoubt_rt::startup::{StartupBuilder, valid_name};
 use redoubt_steward::hash::key_id;
 use redoubt_steward::manifest::{
-    Limits, Manifest as StewardManifest, PrincipalSpec, Sizes, lines as manifest_lines, quote, show_list,
+    Limits, Manifest as StewardManifest, PrincipalSpec, RESERVED, Sizes, lines as manifest_lines, quote,
+    show_list,
 };
 use redoubt_sys::DeviceInfo;
 use stub::MAX_STACK_PAGES;
@@ -168,7 +169,7 @@ fn names(m: &Manifest) -> Result<(), Refusal> {
         seen.add(&d.name, "devices", || format!("devices[{i}].name"))?;
     }
     for (i, l) in m.labels.iter().enumerate() {
-        name(&l.name, || format!("labels[{i}].name"))?;
+        account_name(&l.name, || format!("labels[{i}].name"))?;
         seen.add(&l.name, "labels", || format!("labels[{i}].name"))?;
     }
     let ids: Vec<u64> = m.labels.iter().map(|l| l.id).collect();
@@ -180,7 +181,10 @@ fn names(m: &Manifest) -> Result<(), Refusal> {
         seen.add(&v.name, "volumes", || format!("volumes[{i}].name"))?;
     }
     for (i, p) in m.principals.iter().enumerate() {
-        name(&p.name, || format!("principals[{i}].name"))?;
+        account_name(&p.name, || format!("principals[{i}].name"))?;
+        if RESERVED.contains(&p.name.as_str()) {
+            return Err(at(format!("principals[{i}].name"), Why::Reserved));
+        }
         seen.add(&p.name, "principals", || format!("principals[{i}].name"))?;
     }
     for (i, s) in m.servers.iter().enumerate() {
@@ -230,6 +234,16 @@ fn endpoint_name(e: &str, path: impl Fn() -> String) -> Result<(), Refusal> {
 
 fn name(n: &str, path: impl Fn() -> String) -> Result<(), Refusal> {
     if valid_name(n) { Ok(()) } else { Err(at(path(), Why::NotAName)) }
+}
+
+/// A principal's or a label's name: a name without `:` or `+`, so that a login's user name,
+/// `principal[+label][.context]`, splits one way only.
+fn account_name(n: &str, path: impl Fn() -> String) -> Result<(), Refusal> {
+    name(n, &path)?;
+    if !redoubt_steward::manifest::name(n) {
+        return Err(at(path(), Why::AccountName));
+    }
+    Ok(())
 }
 
 fn device_name(n: &str, path: String) -> Result<(), Refusal> {

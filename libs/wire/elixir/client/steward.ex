@@ -14,8 +14,8 @@ defmodule Redoubt.Wire.Client.Steward do
   alias Redoubt.Wire.Proto.Steward, as: P
 
   @doc "Calls `login`, waiting at most `timeout` ms."
-  def login(conn, v_principal, v_label, v_key, h_console, timeout \\ C.timeout()) do
-    C.call(conn, P, {:login, %{principal: v_principal, label: v_label, key: v_key}}, [h_console], timeout)
+  def login(conn, v_principal, v_label, v_context, v_key, h_console, timeout \\ C.timeout()) do
+    C.call(conn, P, {:login, %{principal: v_principal, label: v_label, context: v_context, key: v_key}}, [h_console], timeout)
   end
 
   @doc "Calls `channel_closed`, waiting at most `timeout` ms."

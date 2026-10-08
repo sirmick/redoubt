@@ -610,9 +610,11 @@ impl Steward {
 
     pub fn principal(&self, name: &str) -> Option<usize> { inspect::fixed(&self.store).principal(name) }
 
-    /// `ssh name@box`, or with a label set `ssh name+X@box`.
-    pub fn login(&mut self, principal: &str, labels: &[u64], key: u64) -> Option<Answer> {
-        self.call(EventKind::Login { principal: String::from(principal), labels: labels.to_vec(), key })
+    /// `ssh name@box`, with a label set `ssh name+X@box`, and as a named context `ssh name.C@box`
+    /// (`context` empty for the default one).
+    pub fn login(&mut self, principal: &str, labels: &[u64], context: &str, key: u64) -> Option<Answer> {
+        let (principal, context) = (String::from(principal), String::from(context));
+        self.call(EventKind::Login { principal, labels: labels.to_vec(), context, key })
     }
 
     pub fn end_session(&mut self, session: u64) -> Option<Answer> {

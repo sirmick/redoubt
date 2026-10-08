@@ -9,10 +9,12 @@ use redoubt_steward::inspect;
 
 fn steward() -> Steward { Steward::new(&manifest(), 17, None).unwrap() }
 
-/// A session's id from its login.
+/// A session's id from its login, each in a context of its own, so a test may hold several.
 fn login(st: &mut Steward, name: &str, labels: &[u64]) -> u64 {
+    static CONTEXTS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let context = format!("c{}", CONTEXTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
     let key = if name == "alice" { 11 } else { 21 };
-    match st.login(name, labels, key) {
+    match st.login(name, labels, &context, key) {
         Some(Answer::Session { id, .. }) => id,
         other => panic!("login {name} {labels:?}: {other:?}"),
     }

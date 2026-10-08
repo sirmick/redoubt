@@ -39,6 +39,9 @@ fn limits(l: &Limits) -> String { format!("{},{},{}", l.pages, l.processes, l.we
 
 fn opt(o: Option<u64>) -> String { o.map_or("none".into(), |x| x.to_string()) }
 
+/// A session's context: `none` for the console's, else its quoted name.
+fn context_of(c: &Option<String>) -> String { c.as_ref().map_or("none".into(), |c| quote(c.as_bytes())) }
+
 fn answer(a: &Answer) -> String {
     match a {
         Answer::Ok => "ok".into(),
@@ -51,8 +54,8 @@ fn answer(a: &Answer) -> String {
 
 fn record(r: &Record) -> String {
     match r {
-        Record::Login { session, principal, key } => {
-            format!("Login session={session} principal={principal} key={key}")
+        Record::Login { session, principal, key, context } => {
+            format!("Login session={session} principal={principal} key={key} context={}", context_of(context))
         }
         Record::AgentStarted { lease, sponsor, parent, deadline } => {
             format!(
@@ -240,8 +243,15 @@ pub fn store(s: &mut String, store: &Store) {
         for x in st.sessions.values() {
             let _ = writeln!(
                 s,
-                "  session id={} state={:?} principal={} key={} badge={} number={} reply={}",
-                x.id, x.state, x.principal, x.key, x.badge, x.number, x.reply
+                "  session id={} state={:?} principal={} key={} context={} badge={} number={} reply={}",
+                x.id,
+                x.state,
+                x.principal,
+                x.key,
+                context_of(&x.context),
+                x.badge,
+                x.number,
+                x.reply
             );
         }
         for x in st.leases.values() {
