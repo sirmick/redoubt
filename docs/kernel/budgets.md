@@ -753,14 +753,15 @@ without preemption.*
      owed on it is dropped, those abandonments' included. Then it empties every dying budget's
      chain of queued messages, and then each one's chain of taken calls. Each fails in list order.
      No pump runs inside a destruction: each endpoint that may have something to deliver is put
-     once on a to-pump list, linked through the endpoints' own frames, a dying one leaves it as the
-     owner walk meets it, and the destruction's last act pumps each survivor on it once. The cost
-     follows the subtree's own parked messages and calls, never the threads that exist or its
-     endpoint count. `process::endpoint_dying` drops the exit notices owed on a dying endpoint
-     from its own exits and reporters. Freeing an
-     endpoint's frame touches only the frame, once its handles are closed (item 2), not the dying
-     budget that owns it: the budget's whole object list is going with it, and its endpoints' pages
-     come back in one write.
+     once on a to-pump list, linked through the endpoints' own frames; when nothing more can be
+     listed, one walk of that list takes the subtree's own endpoints off it (a read per listed
+     endpoint, never a read per endpoint the subtree owns), and the destruction's last act pumps
+     each survivor on it once. The cost follows the subtree's own parked messages and calls, never
+     the threads that exist or its endpoint count. `process::endpoint_dying` drops the exit
+     notices owed on a dying endpoint from its own exits and reporters. Freeing an endpoint's
+     frame touches only the frame, once its handles are closed (item 2), not the dying budget that
+     owns it: the budget's whole object list is going with it, and its endpoints' pages come back
+     in one write.
   5. **A process's frames are found from the process.** Ending a process releases the frames it
      owns by walking its own page tables: the tables themselves, the user half's pages and the
      process area's saved registers, each freed if the ownership table still credits it to the
@@ -805,7 +806,7 @@ without preemption.*
   costs cut: a table freed whole instead of slot by slot, an endpoint released in a few words, and
   the notice walk joined to a thread walk the destruction already makes. The budget was 25 ms at
   the full fill on rv32, the slower width. Built, the gate's full fill measures an R10 p50 of
-  18.7 ms and a p99 of 22.5 ms on rv32, and 18.6 and 22.4 ms on rv64, over its 18 destructions with
+  22.9 ms and a p99 of 23.5 ms on rv32, and 22.1 and 22.9 ms on rv64, over its 20 destructions with
   both leases live at each deadline's end (its pinned seed 13; the sweep is on
   [containment](README.md#containment)). An ending process pumps each endpoint once, after its
   threads; pumping after each thread instead, the same kernel measures 24.5 and 21.2 ms on rv32. A
@@ -829,10 +830,10 @@ without preemption.*
   Those are the gate's fill. At full occupancy, every PID in use and each holder's budget
   holding `MAX_THREADS` threads (129,796 live threads across 510 processes), one holder's
   destruction stays within R10's 30 ms (`bench:worst-walk`, net of the checked build's audits, at
-  the 1 ms slice): the run's two destructions, one near empty and one at full occupancy, take 16.4
-  and 17.1 ms on rv64 and 17.4 and 18.2 ms on rv32. Their threads' teardown is 13.1 and 13.8 ms
-  of each, and the rest, about 4.0 and 4.4 ms at most, follows the dying subtree's own chains
-  (item 2).
+  the 1 ms slice): the run's two destructions, one near empty and one at full occupancy, take
+  16.35 and 16.35 ms on rv64 and 17.35 and 17.38 ms on rv32. Their threads' teardown is 13.1 and
+  13.8 ms of each, and the rest, about 3.3 and 3.6 ms at most, follows the dying subtree's own
+  chains (item 2).
 - **A `system`-class budget handle is a lot of authority.** The kernel lets any holder create
   `system`-class children with added labels and any account the parent allows, and run processes
   in them. The wall is policy: only `init` and the steward hold one ([init](../servers/init.md)).

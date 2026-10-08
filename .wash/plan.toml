@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 330
+revision = 335
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -604,8 +604,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   needs = ["SMP1"]
   body = "The owner's goal (QA SMP1-design): a beamlet VM's schedulers run on several harts at once. Brief: .wash/local/SMP3-implementer.md (design: .wash/local/SMP1-multihart.md). Tier A, size M.\n\n- The pick: a hart takes the lowest-pass budget with a runnable thread no hart is running (SMP1's one-runner predicate replaced). Stride arithmetic per budget unchanged; each hart charges its runner under the lock; the floor counts a budget with several runners once.\n- SMP1's shootdown gains its callers, before the call returns or the frame is reused: unmap, a narrowing set_flags, process_map's source, a lend or transfer sent, a reply returning a lend. Every site that clears or narrows a VALID user entry is listed.\n- fence.i: any call installing an executable entry shoots the process down (the shootdown fences). A thread that moves needs no fence of its own (Architect: one user entry per frame plus W^X).\n- Cases: smp-shootdown (unmap, lend returned, lend within one process; recorded negative smp-no-shootdown), smp-fence (verdict from a trace shootdown record), the whole bench at --smp 2.\n- Pages: scheduling.md's pick, cursor, floor and charging lines; memory.md's fence paragraph, lending status, several-harts residual (lend-within-one-process residual deleted); memory-layout.md's flush residual; m2 step 4 and Progress.\n\nR12 across harts is SMP2's, after this."
-  state = "todo"
-  revision = 2
+  state = "active"
+  revision = 334
+  overrides = ["2026-10-08: started by Orchestrator before M1 (reported): Owner (2026-10-07): M2 is the near-term goal and its several-harts track begins first (m2-usable-shell.md); SMP3's only need, SMP1, is merged; it touches the kernel's pick and shootdown callers, not the M1 work in flight."]
 
 [[node]]
   id = "BEAM1"
@@ -1187,12 +1188,12 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
 
 [[node]]
   id = "K27"
-  title = "The shell VM ends silently when a budget carve is refused; the kernel's refusal is right and the VM's handling is not"
+  title = "Bob's SSH session ends when Alice opens her vault session: bob's console connection's server stalls for more than a second around the vault session's carve and launch"
   template = "package"
   parent = "M1"
-  body = "BEAM4's Q6: the shell VM ends silently when a budget carve is refused; the kernel's refusal (budget.rs) is right and the VM's handling is not. Confirmed by STEWARD2's red from the code on the rv32 steward-sub-budget-flood intermittency (1 pass of 3): 'terminate_process: 509' is printed only on the self-end path (kernel process.rs:746-757, died -> end_process with the current pid); the steward's budget_destroy goes through kill_process, which prints nothing; no 'a step failed' line; alice's carve is from users/alice/{7}; the steward then reaped bob's budget (0 pages, 0 processes). So bob's idle VM ended itself around alice's vault flood: the VM/console side, not the steward's carve. Make the refusal (or whatever the VM meets under a neighbour's flood: a refused carve, a refused page, a busy share) surface to the session as an error with the VM alive; the shell's exec returns {:error, :invalid_argument} today and stays; a case (or sub-budget-flood's R37 verdict on rv32, deterministic) proves a refused carve or a neighbour's flood leaves bob's prompt usable. Tier B unless libs/client changes. Size S-M. Evidence: /tmp/s2runs rv32 flood log (STEWARD2's red), .wash/local/STEWARD2-report.md."
+  body = "Reproduced 3 of 100 on STEWARD2's tip 47a830958 (rv32 steward-sub-budget-flood, 6 at a time on a loaded pool; .wash/local/K27-checkpoint.md): in each failure and in no passing run, the hub's completion call on bob's console connection (sshd's channel for bob's slot) times out at hold 10 s + 1 s margin (took 11,001-11,002 ms); the read ends Ended, ConsoleIo takes it as EOF, bob's shell exits, ssh exits 0, the steward reaps bob. The missed window opens within 0.4 s of alice's vault login (audit 1001/{7}, carve users/alice/{7} 11,009 pages, launch), before her flood. Bob's console is served by bob's slot's own sshd driver thread, so a thread unrelated to alice did not run for over a second: a system-wide stall, likely one long kernel entry during the vault session's carve or launch (image push/stream; cf. BOOT2). Next: a local probe timing the steward's vault-login calls and logging any kernel entry over 100 ms (60 runs), then the fix where the stall is (bounded kernel work per entry, or the launch split into bounded steps). The client's 1 s rule stays (owner's call if ever). Tier A if kernel or steward changes. Blocks M1."
   state = "active"
-  revision = 307
+  revision = 331
 
 [[node]]
   id = "B22"
@@ -1245,8 +1246,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   body = "Found by K28 (its audit fix made the oracle judge R10 again): kernel-containment's R10 p99 over 20 destructions (~9,338 object frames) was rv64 23,394 / rv32 24,104 µs on main bdb38430e before K19 and is rv64 29,500 / rv32 30,576 µs with K19 + K28's audit fix; rv32 fails the 30,000 µs bound. Threads' ending fell 3.5 -> 2.5 ms, so the growth (~+7 ms) is at the destruction's end: the pumps and frees K19 moved after the walk, inside the D..Y window. K19's gates never ran kernel-containment (its 21 cases + worst-walk, where R10 is 16-18 ms). Measure from the trace where the ~7 ms goes (pump_listed over the listed endpoints? the frees? the index moves?), then cut it within K19's rule (deliveries at the boundary, none inside) and K9/K12's (destruction's cost follows the dying subtree; R10 within 30 ms for a full lease). Tier A kernel, size S-M. Gates: kernel-containment both widths (seed 13 and default) with R10 p99 back near 24 ms, worst-walk both, the 21 K19 cases + budget-reap, sched-latency(-tcg), model unchanged or following, both builds, host tests, mutations, docs, formatting, budgets."
-  state = "active"
-  revision = 310
+  state = "done"
+  revision = 335
 
 [[node]]
   id = "BEAM11"
@@ -1272,8 +1273,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M1"
   body = "Found by BEAM4's cases branch once the tester carved sessions as the steward does (a sub-budget per label set with its labels): beamlet's budget_create without `labels` passes an empty set to the kernel, and a labelled session's every child carve is refused label_denied, so a labelled principal's shell can launch nothing. Decide the rule with the Architect's page (budgets.md / labels): a child carve defaults to the parent's labels (narrowing allowed, widening refused) or the VM must always pass labels; implement in userland/otp's natives (Budget module, budget_create path), a host test on the fake kernel and the beamlet-launch case under a labelled session. Tier B unless the kernel's carve rule changes (it should not). Size S."
-  state = "todo"
-  revision = 305
+  state = "active"
+  revision = 333
 
 [[node]]
   id = "BEAM13"
