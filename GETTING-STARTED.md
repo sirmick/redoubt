@@ -158,6 +158,12 @@ tools/difftest                # differential tests against the real BEAM
 tools/elixir-tests            # Elixir's own suite on beamlet
 ```
 
+`tools/difftest` runs its tests in parallel, one per core it may use: under `scripts/q run --cores
+N`, N. The BEAM's results are cached per module in `build/difftest/<suite>/cache`, each from a
+BEAM of its own, so a run after a beamlet change runs only beamlet, and a test edited is the only
+one compiled again, its suite's the only results the BEAM gives again; `DIFFTEST_FRESH=1` starts
+from nothing.
+
 ## The shell
 
 Redoubt's shell, `Redoubt.Shell` in `userland/shell`, is a read-eval-print loop over Elixir of

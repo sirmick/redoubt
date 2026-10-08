@@ -9,6 +9,15 @@
 # tests/<suite>/SKIP.<engine> those that only hold with one regex engine (RE_ENGINE).
 # tests/<suite>/<Module>.stdin, if present, is the console input for that module, on both VMs;
 # tests/<suite>/<Module>.args, extra beamlet options for it (such as --exec).
+#
+# Tests run in parallel, every suite's at once, as many as this process may use cores (`nproc`:
+# under `scripts/q run --cores N`, N; DIFFTEST_JOBS sets it), each with its own root. What the
+# oracle needs is cached under build/difftest/<suite>/cache, so only what changed is compiled and
+# run on the BEAM again: a source file's compiled modules, keyed on its bytes, the suite's .hrl
+# files and the toolchain; a module's result on the BEAM, keyed on those, its .stdin and .args,
+# and every source of its suite, since a test may call any module beside it. Each module's result
+# comes from a BEAM of its own, so no test sees what another left, whatever the count of cores.
+# DIFFTEST_FRESH=1 empties the cache first.
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 . "$root/tools/env.sh"
@@ -23,64 +32,167 @@ elixir_ebin="$elixir_lib/elixir/ebin -pa $elixir_lib/logger/ebin -pa $elixir_lib
 "$root/tools/build-lib" --check
 beamlet="${BEAMLET:-$("$root/tools/build-beamlet")}"   # RE_ENGINE=rust: see tools/build-beamlet
 timeout_s="${DIFFTEST_TIMEOUT:-20}"
+jobs="${DIFFTEST_JOBS:-$(nproc)}"
+# For the jobs xargs starts, which take no arrays.
+stdlib0="${stdlib[0]}" crypto0="${cryptolib[0]}" publickey0="${publickeylib[0]}" asn10="${asn1lib[0]}"
+export root elixir_lib beamlet timeout_s stdlib0 crypto0 publickey0 asn10 sslpath elixir_ebin
+
+# What every cached result depends on beyond the suite's sources: the toolchain and the oracle.
+toolchain="$(printf '%s\n' "$(command -v erl)" "$(command -v elixir)" | cat - "$root/tools/expect.escript" | sha256sum | cut -c1-16)"
 
 suites=("$@")
 if [ ${#suites[@]} -eq 0 ]; then
     for d in "$root"/tests/*/; do suites+=("$(basename "$d")"); done
 fi
 
+# The SHA-256 of each file, its first 16 digits, into the associative array named first.
+sums() {
+    local -n into=$1; shift
+    [ $# -gt 0 ] || return 0
+    local h f
+    while read -r h f; do into[$f]=${h:0:16}; done < <(sha256sum "$@")
+}
+
+# The SHA-256 of the files together, its first 16 digits.
+together() { cat /dev/null "$@" | sha256sum | cut -c1-16; }
+
+# Compiles one source file into its cache entry; a failure is recorded beside it.
+compile_one() {
+    local f="$1" dir="$2" tmp="$2.tmp.$$"
+    rm -rf "$tmp"; mkdir -p "$tmp"
+    case "$f" in
+        *.erl) erlc -o "$tmp" "$f" > "$tmp/compile.log" 2>&1 || echo "erlc failed: $f" >> "$tmp/compile.log" ;;
+        *.ex) elixirc -o "$tmp" "$f" > "$tmp/compile.log" 2>&1 || echo "elixirc failed: $f" >> "$tmp/compile.log" ;;
+    esac
+    rm -rf "$dir"; mv "$tmp" "$dir"
+}
+
+# The oracle for a test that reads the console: alone, with its input.
+console_oracle() {
+    local suite="$1" m="$2" src="$root/tests/$1" out="$root/build/difftest/$1"
+    rm -rf "$out/root/$m"; mkdir -p "$out/root/$m"
+    (cd "$out/root/$m" && TZ=UTC ERL_LIBS="$elixir_lib" erl -noshell -pa "$out" \
+        -eval "R = try '$m':start() catch C:E -> {'EXCEPTION', C, E} end, io:format(\"~n~kw~n\", [R]), halt()." \
+        < "$src/$m.stdin" | tail -n 1 > "$out/$m.expected")
+}
+
+# Runs one test on beamlet, keeps what it printed, and its verdict: the result is the last line,
+# and anything before it is the program's own console output.
+run_one() {
+    local suite="$1" m="$2" src="$root/tests/$1" out="$root/build/difftest/$1"
+    rm -rf "$out/root/$m"; mkdir -p "$out/root/$m"
+    local input=/dev/null; [ -f "$src/$m.stdin" ] && input="$src/$m.stdin"
+    local extra=(); [ -f "$src/$m.args" ] && read -r -a extra < "$src/$m.args"
+    local got
+    got="$(timeout "$timeout_s" "$beamlet" --root "$out/root/$m" "${extra[@]}" -pa "$out" -pa "$stdlib0" -pa "$crypto0" -pa "$publickey0" -pa "$asn10" $sslpath -pa $elixir_ebin "$m" < "$input" 2>&1 || echo "EXIT $?")"
+    printf '%s\n' "$got" > "$out/$m.got"
+    if [ "${got##*$'\n'}" == "$(< "$out/$m.expected")" ]; then echo pass; else echo fail; fi > "$out/$m.verdict"
+}
+export -f compile_one console_oracle run_one
+
 total=0; pass=0; fail=0; skip=0; failed=(); broken=()
+declare -A tests_of=() broken_of=()
+pairs=()
 for suite in "${suites[@]}"; do
-    src="$root/tests/$suite"; out="$root/build/difftest/$suite"
-    mkdir -p "$out"
-    # Recompile (and re-run the oracle) only when sources changed.
-    stamp="$out/.stamp"
-    if [ ! -f "$stamp" ] || [ -n "$(find "$src" \( -name '*.erl' -o -name '*.ex' -o -name 'SKIP*' -o -name '*.stdin' -o -name '*.args' \) -newer "$stamp" -print -quit)" ]; then
-        rm -f "$out"/*.beam "$out"/*.expected
-        : > "$out/erlc.log"
-        shopt -s nullglob
-        for f in "$src"/*.erl; do erlc -o "$out" "$f" 2>> "$out/erlc.log" || echo "erlc failed: $f" >> "$out/erlc.log"; done
-        for f in "$src"/*.ex; do elixirc -o "$out" "$f" >> "$out/erlc.log" 2>&1 || echo "elixirc failed: $f" >> "$out/erlc.log"; done
-        # Only top-level test modules have start/0; nested modules (structs) are not tests.
-        # UTC: beamlet has no time zone, so localtime() is universaltime().
-        TZ=UTC ERL_LIBS="$elixir_lib" escript "$root/tools/expect.escript" "$out"
-        # Tests that read the console run alone on the oracle, with their input.
-        for input in "$src"/*.stdin; do
-            m="$(basename "$input" .stdin)"
-            rm -rf "$out/root/$m"; mkdir -p "$out/root/$m"
-            (cd "$out/root/$m" && TZ=UTC ERL_LIBS="$elixir_lib" erl -noshell -pa "$out" \
-                -eval "R = try '$m':start() catch C:E -> {'EXCEPTION', C, E} end, io:format(\"~n~kw~n\", [R]), halt()." \
-                < "$input" | tail -n 1 > "$out/$m.expected")
-        done
-        touch "$stamp"
-    fi
+    src="$root/tests/$suite"; out="$root/build/difftest/$suite"; cache="$out/cache"
+    [ "${DIFFTEST_FRESH:-0}" = 1 ] && rm -rf "$cache"
+    mkdir -p "$cache/file" "$cache/oracle"
     shopt -s nullglob
-    for exp in "$out"/*.expected; do
-        m="$(basename "$exp" .expected)"
-        if grep -qsE "^$m[[:space:]]" "$src/SKIP" "$src/SKIP.${RE_ENGINE:-pcre2}"; then
-            skip=$((skip + 1)); continue
-        fi
-        total=$((total + 1))
-        rm -rf "$out/root/$m"; mkdir -p "$out/root/$m"
-        input=/dev/null; [ -f "$src/$m.stdin" ] && input="$src/$m.stdin"
-        extra=(); [ -f "$src/$m.args" ] && read -r -a extra < "$src/$m.args"
-        got="$(timeout "$timeout_s" "$beamlet" --root "$out/root/$m" "${extra[@]}" -pa "$out" -pa "${stdlib[0]}" -pa "${cryptolib[0]}" -pa "${publickeylib[0]}" -pa "${asn1lib[0]}" $sslpath -pa $elixir_ebin "$m" < "$input" 2>&1 || echo "EXIT $?")"
-        printf '%s\n' "$got" > "$out/$m.got"
-        # The result is the last line; anything before it is the program's own console output.
-        if [ "$(printf '%s\n' "$got" | tail -n 1)" == "$(cat "$exp")" ]; then
-            pass=$((pass + 1))
-        else
-            fail=$((fail + 1)); failed+=("$suite/$m")
-        fi
+    sources=( "$src"/*.erl "$src"/*.ex )
+    declare -A fh=() ih=() fkey=() okey=() skips=() used=()
+    sums fh "${sources[@]}"
+    sums ih "$src"/*.stdin "$src"/*.args
+    hrl="$(together "$src"/*.hrl)"
+    every="$(together "${sources[@]}")"
+    while IFS= read -r line; do
+        [[ $line =~ ^([^[:space:]]+)[[:space:]] ]] && skips[${BASH_REMATCH[1]}]=1
+    done < <(cat "$src/SKIP" "$src/SKIP.${RE_ENGINE:-pcre2}" 2>/dev/null || true)
+
+    # 1. Compile the files whose cache entry is missing, in parallel.
+    misses=()
+    for f in "${sources[@]}"; do
+        fkey[$f]="${fh[$f]}-$hrl-$toolchain"
+        [ -d "$cache/file/${fkey[$f]}" ] || misses+=("$f" "$cache/file/${fkey[$f]}")
     done
-    # A test that did not compile (or has no expected result) must not vanish from the count.
+    if [ ${#misses[@]} -gt 0 ]; then
+        printf '%s\0' "${misses[@]}" | xargs -0 -n 2 -P "$jobs" bash -c 'compile_one "$@"' _
+    fi
+
+    # 2. The suite's code path: every file's modules, in one directory.
+    rm -f "$out"/*.beam "$out"/*.expected "$out"/*.got "$out"/*.verdict
+    beams=(); logs=(); modules=()
+    for f in "${sources[@]}"; do
+        d="$cache/file/${fkey[$f]}"; used[${fkey[$f]}]=1; logs+=("$d/compile.log")
+        for b in "$d"/*.beam; do
+            m="${b##*/}"; m="${m%.beam}"; beams+=("$b"); modules+=("$m")
+            okey[$m]="$m-${fkey[$f]}-$every-${ih[$src/$m.stdin]:-0}-${ih[$src/$m.args]:-0}"
+            used[${okey[$m]}]=1
+        done
+    done
+    cat /dev/null "${logs[@]}" > "$out/erlc.log"
+    [ ${#beams[@]} -eq 0 ] || ln -f -t "$out" "${beams[@]}"
+
+    # 3. The oracle for the modules whose result is not cached, in parallel, each on a BEAM of its
+    # own: expect.escript for most, and the console tests with their input.
+    batch=(); console=()
+    for m in "${modules[@]}"; do
+        [ -e "$cache/oracle/${okey[$m]}" ] && continue
+        if [ -f "$src/$m.stdin" ]; then console+=("$m"); else batch+=("$m"); fi
+    done
+    if [ ${#batch[@]} -gt 0 ]; then
+        printf '%s\n' "${batch[@]}" | xargs -n 1 -P "$jobs" \
+            env TZ=UTC ERL_LIBS="$elixir_lib" escript "$root/tools/expect.escript" "$out"
+    fi
+    if [ ${#console[@]} -gt 0 ]; then
+        printf '%s\n' "${console[@]}" | xargs -I{} -P "$jobs" bash -c 'console_oracle "$@"' _ "$suite" {}
+    fi
+    # What the oracle said is kept, or that a module is not a test (it has no start/0).
+    for m in "${batch[@]}" "${console[@]}"; do
+        e="$cache/oracle/${okey[$m]}"
+        mkdir -p "$e.tmp"
+        [ -f "$out/$m.expected" ] && cp "$out/$m.expected" "$e.tmp/"
+        rm -rf "$e"; mv "$e.tmp" "$e"
+    done
+    expected=()
+    for m in "${modules[@]}"; do
+        e="$cache/oracle/${okey[$m]}/$m.expected"
+        [ -f "$e" ] && expected+=("$e")
+    done
+    [ ${#expected[@]} -eq 0 ] || ln -f -t "$out" "${expected[@]}"
+    # Entries nothing in the tree names any more go.
+    for e in "$cache"/file/* "$cache"/oracle/*; do [ -n "${used[${e##*/}]:-}" ] || rm -rf "$e"; done
+
+    # 4. The tests, every suite's to run at once below; what did not compile (or has no expected
+    # result) must not vanish from the count.
+    list=()
+    for exp in "$out"/*.expected; do
+        m="${exp##*/}"; m="${m%.expected}"
+        if [ -n "${skips[$m]:-}" ]; then skip=$((skip + 1)); continue; fi
+        list+=("$m"); pairs+=("$suite" "$m")
+    done
+    tests_of[$suite]="${list[*]}"
+    list=()
     while IFS= read -r f; do
-        m="$(basename "$f" | sed 's/\.[^.]*$//')"
-        if grep -qsE "^$m[[:space:]]" "$src/SKIP" "$src/SKIP.${RE_ENGINE:-pcre2}"; then
-            skip=$((skip + 1)); continue
-        fi
-        total=$((total + 1)); fail=$((fail + 1)); broken+=("$suite: $f")
+        m="${f##*/}"; m="${m%.*}"
+        if [ -n "${skips[$m]:-}" ]; then skip=$((skip + 1)); continue; fi
+        list+=("$f")
     done < <(sed -n 's/^erlc failed: //p; s/^elixirc failed: //p' "$out/erlc.log")
+    broken_of[$suite]="${list[*]}"
+    unset fh ih fkey okey skips used
+done
+
+# Every test on beamlet, every suite's at once; then the verdicts, in the serial order.
+if [ ${#pairs[@]} -gt 0 ]; then
+    printf '%s\n' "${pairs[@]}" | xargs -d '\n' -n 2 -P "$jobs" bash -c 'run_one "$@"' _
+fi
+for suite in "${suites[@]}"; do
+    out="$root/build/difftest/$suite"
+    for m in ${tests_of[$suite]}; do
+        total=$((total + 1))
+        read -r verdict < "$out/$m.verdict"
+        if [ "$verdict" = pass ]; then pass=$((pass + 1)); else fail=$((fail + 1)); failed+=("$suite/$m"); fi
+    done
+    for f in ${broken_of[$suite]}; do total=$((total + 1)); fail=$((fail + 1)); broken+=("$suite: $f"); done
 done
 for b in "${broken[@]}"; do printf 'FAIL %s (did not compile, see build/difftest/*/erlc.log)\n' "$b"; done
 for f in "${failed[@]}"; do
