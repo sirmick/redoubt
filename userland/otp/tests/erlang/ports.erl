@@ -1,5 +1,9 @@
 %% Ports to programs: open_port/2 (spawn, spawn_executable), the messages a port sends and
 %% takes, framing, exit status, port_info, links and monitors, and os:cmd/1.
+%% The one executable named by path is /bin/sh: beamlet's sandbox mounts the host's /bin and /usr
+%% read-only, and on a host whose coreutils are symlinks into ../lib (uutils), /bin/echo and
+%% /bin/cat resolve, relative to the sandbox's /bin, to a /lib it has no mount for; sh -c runs
+%% them on the host side, whatever its layout.
 -module(ports).
 -export([start/0]).
 
@@ -40,13 +44,13 @@ spawned() ->
     {A, B, C, D, collect(F)}.
 
 executable() ->
-    P = open_port({spawn_executable, "/bin/echo"}, [{args, ["a b", <<"c">>]}, binary, exit_status]),
+    P = open_port({spawn_executable, "/bin/sh"}, [{args, ["-c", "echo \"$@\"", "sh", "a b", <<"c">>]}, binary, exit_status]),
     A = collect(P),
     Q = open_port({spawn_executable, "/bin/sh"}, [{args, ["-c", "echo $0"]}, {arg0, "zero"}, exit_status]),
     {A, collect(Q)}.
 
 packets() ->
-    P = open_port({spawn_executable, "/bin/cat"}, [{packet, 2}, binary]),
+    P = open_port({spawn_executable, "/bin/sh"}, [{args, ["-c", "cat"]}, {packet, 2}, binary]),
     port_command(P, <<"one">>),
     port_command(P, ["t", [<<"w">>], $o]),
     A = [receive {P, {data, D}} -> D after 3000 -> timeout end || _ <- [1, 2]],
@@ -65,7 +69,7 @@ eof() ->
     {A, B, erlang:port_info(P)}.
 
 commands() ->
-    P = open_port({spawn_executable, "/bin/cat"}, [binary]),
+    P = open_port({spawn_executable, "/bin/sh"}, [{args, ["-c", "cat"]}, binary]),
     P ! {self(), {command, <<"via message">>}},
     A = receive {P, {data, D}} -> D after 3000 -> timeout end,
     P ! {self(), close},
@@ -84,7 +88,7 @@ errors() ->
      Try(fun() -> erlang:port_info(self()) end)].
 
 monitors() ->
-    P = open_port({spawn_executable, "/bin/cat"}, []),
+    P = open_port({spawn_executable, "/bin/sh"}, [{args, ["-c", "cat"]}]),
     Ref = erlang:monitor(port, P),
     A = try erlang:monitor(process, P) catch error:badarg -> badarg end,
     port_close(P),
@@ -95,27 +99,27 @@ monitors() ->
 
 links() ->
     process_flag(trap_exit, true),
-    P = open_port({spawn_executable, "/bin/cat"}, []),
+    P = open_port({spawn_executable, "/bin/sh"}, [{args, ["-c", "cat"]}]),
     {links, [Me]} = erlang:port_info(P, links),
     A = Me =:= self(),
     port_close(P),
     B = receive {'EXIT', P, R} -> R after 3000 -> timeout end,
     %% A port whose owner exits closes.
     Self = self(),
-    Owner = spawn(fun() -> Q = open_port({spawn_executable, "/bin/cat"}, []), Self ! {port, Q}, receive stop -> ok end end),
+    Owner = spawn(fun() -> Q = open_port({spawn_executable, "/bin/sh"}, [{args, ["-c", "cat"]}]), Self ! {port, Q}, receive stop -> ok end end),
     Q = receive {port, Q0} -> Q0 end,
     M = erlang:monitor(port, Q),
     Owner ! stop,
     C = receive {'DOWN', M, port, Q, R2} -> R2 after 3000 -> timeout end,
     %% exit/2 with a reason other than normal ends it.
-    S = open_port({spawn_executable, "/bin/cat"}, []),
+    S = open_port({spawn_executable, "/bin/sh"}, [{args, ["-c", "cat"]}]),
     exit(S, bye),
     D = receive {'EXIT', S, R3} -> R3 after 3000 -> timeout end,
     process_flag(trap_exit, false),
     {A, B, C, D}.
 
 info() ->
-    P = open_port({spawn_executable, "/bin/cat"}, [binary]),
+    P = open_port({spawn_executable, "/bin/sh"}, [{args, ["-c", "cat"]}, binary]),
     true = register(my_port, P),
     port_command(my_port, <<"12345">>),
     receive {P, {data, _}} -> ok after 3000 -> timeout end,

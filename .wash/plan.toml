@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 365
+revision = 369
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1406,8 +1406,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M2"
   body = "Found during SHELL2's review. On main 91256b4d0, erlang/files2 failed 2 in 5 runs; on SHELL2's head it failed 1 in 5. Every failure is in 2.1.1-2.1.3: 2.1.1 wants 2020 and gets 2026, 2.1.2 wants 1 and gets 10, 2.1.3 wants 2 and gets 8. One earlier run failed 2.2.3 (want 38, got 5). Find the race in the test or in beamlet's file times, and fix that one. erlang/ports always fails because /bin/echo is a uutils symlink outside the sandbox's /bin; handle it in the same package. Size S."
-  state = "active"
-  revision = 363
+  state = "done"
+  revision = 369
   overrides = ["2026-10-08: started by Orchestrator before M1 (reported): A host-side test flake on main, independent of M1's remaining work."]
 
 [[node]]
@@ -1428,3 +1428,12 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "Found closing train 13 on main 7743587e2. rv64 beamlet-serve timed out 4 of 4 beside other work, and passes 2 of 2 alone. The kept console logs hold every line, but the caller's '41 answered 0 42' comes before the server's 'serve: request' and 'serve: reply: ok', and the case's expect list orders them the other way. The order across two processes' consoles is not guaranteed. Neither SHELL2 nor B27 is at fault. Fix the case: no line of one process is ordered after another's. Size S."
   state = "done"
   revision = 362
+
+[[node]]
+  id = "BEAM14"
+  title = "A labelled session's VM launches a child on the machine: beamlet-launch under a labelled console"
+  template = "package"
+  parent = "beamlet-redoubt"
+  body = "BEAM12's follow-up. On the fake kernel, a labelled session's child budget takes the session's labels. No machine case shows it, because a labelled session cannot write-open the UART console (R69). Give the beamlet-session tester a console of the session's labels, or run the session over SSH, and add `labels=N` before vm=beamlet_launch:start in a labelled variant of beamlet-launch. The child carves, runs and is destroyed, and a narrower or wider carve is refused as the kernel says. Size S."
+  state = "active"
+  revision = 367
