@@ -519,9 +519,12 @@ parks when it is done, unless its exit is the point of its case.
 
 ### The scheduler oracle
 
-<details><summary>Status: built · tested (13)</summary>
+<details><summary>Status: built · tested (16)</summary>
 
 - bench:sched-ties
+- host:testbench::a_pick_passes_over_only_a_budget_that_other_harts_run
+- host:testbench::lock_waits_are_reported_per_mille_of_the_harts_time
+- host:testbench::a_shootdown_record_is_passed_over
 - host:testbench::a_trace_that_keeps_every_clause_passes
 - host:testbench::each_broken_clause_is_caught
 - host:testbench::a_broken_trace_is_rejected
@@ -541,8 +544,11 @@ The oracle is independent of the kernel's code: it reads what the queue did (wok
 pass changed, picked), never why, and rebuilds the order from the events alone: the lowest pass
 first; at an equal pass a budget that woke ahead of one requeued; of two that woke, the later
 kernel entry's first, and within one entry the lower id; requeued ones in the order they were
-requeued. It recomputes each lift and each weight change from the rule, and lets a pass fall only
-at a weight change. It is itself checked against the model's ranks and against traces broken one clause at a
+requeued. On several harts it also reads which budget each hart runs (`H`) and how many of each
+budget's threads wait for a hart (`J`, those no hart runs): a pick takes the first budget in that
+order with a thread waiting, and passes over one ranked ahead only if another hart runs it and
+none of its threads waits, never one it runs itself. It recomputes each lift and each weight
+change from the rule, and lets a pass fall only at a weight change. It is itself checked against the model's ranks and against traces broken one clause at a
 time. The tracing kernel is a test build only
 ([R23 (no test channels)](kernel/scheduling.md#r23-no-test-channels)).
 
@@ -673,7 +679,10 @@ to the return to user mode or the idle, in its id; the ticks charged to budgets 
 in its entry field, which it alone uses so, the ticks the checked build's audits took.
 `sched_oracle` reports `nobody N of 1000 (kernel K ticks, audits A, charged C)`, the share of
 the kernel's time net of audits that no budget was charged, and judges nothing by it
-([residual risks](kernel/scheduling.md#residual-risks)). The counters read the billing's clock
+([residual risks](kernel/scheduling.md#residual-risks)). Ahead of it, one record (`F`) holds the
+ticks since boot and the harts started, and each wait for the kernel lock from user mode, the lock
+held by another hart, is a record (`Q`: its start and end in ticks); `sched_oracle` reports
+`lock waits N of 1000`, the waits as a share of the harts' time, judging nothing by it either. The counters read the billing's clock
 and move no schedule, and a kernel without `sched-trace` compiles none of them. A kernel built with
 `alloc-first-fit`, which takes each frame by the first-fit scan of RAM the bitmap replaced,
 fails `scan-bounds` on both widths in a recorded negative run

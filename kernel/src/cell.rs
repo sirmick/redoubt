@@ -98,30 +98,33 @@ impl TicketLock {
         }
     }
 
-    /// Take the lock, waiting in turn.
-    pub fn acquire(&self) {
+    /// Take the lock, waiting in turn. Whether it was held when this hart came (a trace's record of
+    /// the wait, `sched.rs`).
+    pub fn acquire(&self) -> bool {
         #[cfg(not(feature = "sched-test-and-set-entry"))]
-        let waited = {
+        let (waited, held) = {
             let ticket = self.next.fetch_add(1, DRAW);
             // The checked build's count: the tickets ahead, read after the draw. The draw, this
             // read and every release are sequentially consistent there, so the read sees `serving`
             // at or after the draw: it can count fewer sections than were ahead, never more, and a
             // count above the bound is a real one.
             let waited = ticket.wrapping_sub(self.serving.load(DRAW));
+            let held = self.serving.load(Ordering::Acquire) != ticket;
             while self.serving.load(Ordering::Acquire) != ticket {
                 crate::arch::hart::serve();
                 self.wait_for_turn(ticket);
             }
-            waited
+            (waited, held)
         };
         #[cfg(feature = "sched-test-and-set-entry")]
-        let waited = {
+        let (waited, held) = {
             let drawn = self.serving.load(Ordering::Relaxed);
+            let held = self.taken.load(Ordering::Relaxed) != 0;
             while self.taken.compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed).is_err() {
                 crate::arch::hart::serve();
                 pause();
             }
-            self.serving.load(Ordering::Relaxed).wrapping_sub(drawn)
+            (self.serving.load(Ordering::Relaxed).wrapping_sub(drawn), held)
         };
         #[cfg(debug_assertions)]
         {
@@ -139,6 +142,7 @@ impl TicketLock {
         }
         #[cfg(not(debug_assertions))]
         let _ = waited;
+        held
     }
 
     /// Give the lock to the next ticket. The caller holds it.

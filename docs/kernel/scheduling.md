@@ -1119,7 +1119,17 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
 - **Fair kernel entry is bounded by count, not time.** On several harts, R78 bounds the wait
   for the kernel lock by `MAX_HARTS` - 1 kernel sections, each as long as the call or
   destruction holding it: a long section delays every waiting hart by its length, which is one
-  more reason R12 bounds a call's kernel time.
+  more reason R12 bounds a call's kernel time. So one budget's kernel work under the one lock costs
+  the other harts up to its own length, bounded by count, not by share: the wait is the waiting
+  hart's runner's time, billed to it and counted against its slice, and no billing gives it back.
+  A traced kernel records each wait from user mode and the oracle reports them as a share of the
+  harts' time, `lock waits N of 1000`, beside `nobody`. At two harts in `sched-exit-churn`, whose
+  attacker makes and ends processes, they are 292 of 1000 (rv64); in `deadline-flood-billed`, whose
+  creator's deadlines end in destructions, one hart waited about 1000 ms of a 2 s window, and the
+  victim keeps 390 (rv64) and 358 (rv32) of 1000 where it keeps more than 450 at one hart.
+  Destruction's work
+  moving outside the lock ([several harts](../plan/m2-usable-shell.md#several-harts), step 5) is
+  what shortens them.
 - **A call within one budget crosses harts.** A wake sends an idle hart the reschedule interrupt
   even when the woken thread's budget runs elsewhere, so a server and its client in one budget
   hand each call and reply across two harts, each hand-off an interrupt and a wait for the lock,

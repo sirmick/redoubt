@@ -162,7 +162,11 @@ impl Budgets<BudgetRef> for MemoryManager {
 impl Ready<BudgetRef> for MemoryManager {
     fn ready(&self, b: BudgetRef) -> u32 { self.sched_ready(b.frame) }
 
-    fn set_ready(&mut self, b: BudgetRef, n: u32) { self.set_sched_ready(b.frame, n) }
+    fn set_ready(&mut self, b: BudgetRef, n: u32) {
+        #[cfg(feature = "sched-trace")]
+        trace::record(trace::READY, b.id, u128::from(n));
+        self.set_sched_ready(b.frame, n)
+    }
 }
 
 fn budget_ref(mm: &MemoryManager, frame: BudgetFrame) -> BudgetRef {
@@ -480,6 +484,8 @@ pub fn leave(pid: Pid) {
                 s.settle(ss, mm);
                 if next != s.cpu.cur(here()) {
                     s.cpu.switch(here(), mm, next, |mm, b| mm.ready(b) > 0);
+                    #[cfg(feature = "sched-trace")]
+                    trace::record(trace::RUNS, next.map_or(0, |b| b.id), 0);
                     s.b().user_since = None;
                     // The budget picked pays what it owes for getting here (below).
                     if let Some(b) = next {
@@ -740,6 +746,17 @@ pub mod trace {
     /// A destruction (R10) began and ended: the top's id, and the time in µs in the pass field.
     pub const R10_BEGIN: u8 = b'X';
     pub const R10_END: u8 = b'Y';
+    /// A budget's threads waiting for a hart, those no hart runs, changed: the count in the pass
+    /// field. The queue passes over a budget with none, whose threads all run on harts.
+    pub const READY: u8 = b'J';
+    /// The writing hart's runner changed: the budget it runs now, 0 for none.
+    pub const RUNS: u8 = b'H';
+    /// A trap from user mode waited for the kernel lock another hart held: the wait's start in
+    /// ticks in the id, its end in the pass field. The hart's runner loses that time (R78).
+    pub const LOCK_WAIT: u8 = b'Q';
+    /// Just before `C`: the ticks since boot, and the harts started in the pass field, so the
+    /// oracle can state the lock waits as a share of the harts' time.
+    pub const HART_TIME: u8 = b'F';
 
     /// Frames the ring takes (64 MiB, 192 MiB with `sched-trace-large`), and the records they hold.
     const PAGES: usize = if cfg!(feature = "sched-trace-large") { 49152 } else { 16384 };
@@ -862,6 +879,13 @@ pub mod trace {
                 k.ticks += now.saturating_sub(since);
             }
         });
+    }
+
+    /// This hart came to the kernel at raw `time` `came`, found the lock held, and holds it now.
+    pub fn lock_wait(came: u64) {
+        let now = super::ticks();
+        let start = now.saturating_sub(riscv::register::time::read64().saturating_sub(came));
+        record(LOCK_WAIT, start, u128::from(now));
     }
 
     /// A checked build's audit took `ticks`.
@@ -1054,6 +1078,7 @@ pub mod trace {
             }
             (k.ticks, k.charged, k.audits)
         });
+        record(HART_TIME, super::ticks(), crate::arch::hart::started() as u128);
         put(KERNEL_TIME, audits, ticks, charged);
         RING.with(|r| {
             for seq in 0..r.n {

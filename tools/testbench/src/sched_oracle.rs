@@ -97,6 +97,15 @@
 //! lifted must wait the rounds the lift's own records predict, to within a round, with the lift
 //! still fresh at its wake.
 //!
+//! **Several harts.** Each budget's threads waiting for a hart (`J`, the count in the pass field:
+//! those no hart runs) and each hart's runner (`H`, the budget it runs, 0 for none) are recorded. A
+//! pick takes the first budget in rank order with a thread waiting (a budget with no `J` yet counts
+//! as having one); it may pass over a budget ranked ahead only if another hart runs it and none of
+//! its threads waits. Each wait for the kernel lock from user mode, another hart holding it, is a
+//! `Q` (its start and end in ticks), and an `F` before the `C` holds the ticks since boot and the
+//! harts: the summary reports the waits as a share of the harts' time, `lock waits N of 1000`, and
+//! judges nothing by it (kernel/scheduling.md, "Residual risks").
+//!
 //! A trace that is malformed, incomplete, lost records or holds no pick is rejected: a check that
 //! saw nothing proves nothing.
 
@@ -144,7 +153,7 @@ pub fn parse(log: &str) -> Result<Vec<Record>, String> {
             return Err(bad());
         }
         let kind = f[2].chars().next().ok_or_else(bad)?;
-        if f[2].len() != 1 || !"WRDPKLlefrqwAaGgvNnXYZUVTtIBEOMmCS".contains(kind) {
+        if f[2].len() != 1 || !"WRDPKLlefrqwAaGgvNnXYZUVTtIBEOMmCSJHQF".contains(kind) {
             return Err(bad());
         }
         records.push(Record {
@@ -285,6 +294,12 @@ pub struct Summary {
     pub r10_pumps: Vec<(usize, u64)>,
     /// The floor as each record found it, by record.
     pub floor: Vec<u128>,
+    /// Picks that passed over a budget ranked ahead, whose threads all ran on other harts.
+    pub passed_over: usize,
+    /// Each wait for the kernel lock from user mode, in ticks (`Q`), and the hart that waited.
+    pub lock_waits: Vec<(u64, u64, u64)>,
+    /// The run's ticks and its harts (`F`): the harts' time the lock waits are a share of.
+    pub hart_time: Option<(u64, u64)>,
 }
 
 /// A timer interrupt from user mode, from its `I` to its `O`.
@@ -369,6 +384,10 @@ pub fn check(records: &[Record]) -> Result<Summary, String> {
     let mut threads_us = 0;
     let mut pumps = (0, 0);
     let mut requeues: i128 = 0;
+    // Each budget's threads waiting for a hart (`J`; a budget with no record yet counts as having
+    // one, as every budget has on one hart when it is picked), and each hart's runner (`H`).
+    let mut ready: BTreeMap<u64, u128> = BTreeMap::new();
+    let mut runs: BTreeMap<u64, u64> = BTreeMap::new();
     let mut sum = Summary::default();
     let mut i = 0;
     while i < records.len() {
@@ -524,6 +543,25 @@ pub fn check(records: &[Record]) -> Result<Summary, String> {
                     q.0 = r.pass;
                 }
             }
+            'J' => {
+                ready.insert(r.id, r.pass);
+            }
+            'H' => {
+                if r.id == 0 {
+                    runs.remove(&r.hart);
+                } else {
+                    runs.insert(r.hart, r.id);
+                }
+            }
+            'Q' => {
+                if r.pass < u128::from(r.id) {
+                    return Err(format!("record {}: a lock wait that ends before it starts", r.seq));
+                }
+                sum.lock_waits.push((r.id, r.pass as u64, r.hart));
+            }
+            'F' => sum.hart_time = Some((r.id, r.pass as u64)),
+            // A shootdown is `fence`'s: no rank or floor follows from it.
+            'S' => {}
             'K' => {
                 let Some(&(pass, _)) = queued.get(&r.id) else {
                     return Err(format!("record {}: picked budget {}, which is not queued", r.seq, r.id));
@@ -534,7 +572,27 @@ pub fn check(records: &[Record]) -> Result<Summary, String> {
                         r.seq, r.id, r.pass
                     ));
                 }
-                let want = queued.iter().map(|(id, (pass, key))| (*pass, *key, *id)).min().map(|x| x.2);
+                // Across harts a pick passes over a budget with no thread waiting for a hart: one
+                // whose threads all run on harts, which must be other harts than the picker.
+                let waiting = |id: &u64| ready.get(id).is_none_or(|n| *n > 0);
+                if !waiting(&r.id) {
+                    return Err(format!(
+                        "record {}: picked budget {}, which has no thread waiting",
+                        r.seq, r.id
+                    ));
+                }
+                let mut ahead: Vec<_> = queued.iter().map(|(id, (pass, key))| (*pass, *key, *id)).collect();
+                ahead.sort_unstable();
+                let want = ahead.iter().find(|x| waiting(&x.2)).map(|x| x.2);
+                for &(_, _, id) in ahead.iter().take_while(|x| Some(x.2) != want) {
+                    if !runs.iter().any(|(h, b)| *b == id && *h != r.hart) {
+                        return Err(format!(
+                            "record {}: hart {} passed over budget {}, which no other hart runs",
+                            r.seq, r.hart, id
+                        ));
+                    }
+                    sum.passed_over += 1;
+                }
                 if want != Some(r.id) {
                     let rank = |id: u64| queued.get(&id).map(|(p, k)| (*p, *k));
                     return Err(format!(
@@ -2112,6 +2170,18 @@ fn nobody(r: &Record) -> String {
     format!("nobody {per_mille} of 1000 (kernel {kernel} ticks, audits {audits}, charged {charged})")
 }
 
+/// The waits for the kernel lock from user mode (`Q`) as a share of the harts' time (`F`): the
+/// time one hart's runner lost to another hart's kernel section, which no budget is charged for and
+/// R78 bounds by count, not by share (kernel/scheduling.md, "Residual risks"). Report-only.
+fn lock_waits(waits: &[(u64, u64, u64)], (ticks, harts): (u64, u64)) -> String {
+    let waited: u64 = waits.iter().map(|(from, to, _)| to - from).sum();
+    let per_mille = waited.saturating_mul(1000) / ticks.saturating_mul(harts).max(1);
+    format!(
+        "lock waits {per_mille} of 1000 ({} waits, {waited} ticks, over {harts} hart(s) x {ticks} ticks)",
+        waits.len()
+    )
+}
+
 /// The bench's post-check: parse the case's console log and check it. `args` may bound the p99
 /// of R10's durations, `r10_p99_us=N`; each measure's p50 and p99 net of audits,
 /// `<measure>_p50_us=N` and `<measure>_p99_us=N`, in each group the program printed; and a
@@ -2369,12 +2439,18 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
         );
     }
     let audit_total: u64 = sum.audits.iter().map(|(b, e)| e - b).sum();
-    let kernel_time =
-        records.last().filter(|r| r.kind == 'C').map_or(String::new(), |r| format!("; {}", nobody(r)));
+    let kernel_time = records.last().filter(|r| r.kind == 'C').map_or(String::new(), |r| {
+        format!(
+            "; {}{}",
+            nobody(r),
+            sum.hart_time.map_or(String::new(), |t| format!("; {}", lock_waits(&sum.lock_waits, t)))
+        )
+    });
     let head = format!(
-        "sched_oracle: {} records, {} picks in rank order, every wake at or above the floor, no pass falling but by a weight change; {} lifts by the rule ({} with a leading parent and work to move); {} weight changes by the rule; R10 {n} destructions over up to {} object frames, µs p50/p99/max {p50}/{p99}/{max}, their threads' ending {t50}/{t99}/{tmax}, no audit inside one; {} audits, {audit_total} µs; {} timer interrupts billed by the rule ({} expiring, {} finding a wait ended early, {} ticks after expiry to the budget billed last; {} ending a slice, {} nobody's){kernel_time}{lease_end}",
+        "sched_oracle: {} records, {} picks in rank order, every wake at or above the floor, no pass falling but by a weight change; {} passing over a budget whose threads all ran on other harts; {} lifts by the rule ({} with a leading parent and work to move); {} weight changes by the rule; R10 {n} destructions over up to {} object frames, µs p50/p99/max {p50}/{p99}/{max}, their threads' ending {t50}/{t99}/{tmax}, no audit inside one; {} audits, {audit_total} µs; {} timer interrupts billed by the rule ({} expiring, {} finding a wait ended early, {} ticks after expiry to the budget billed last; {} ending a slice, {} nobody's){kernel_time}{lease_end}",
         records.len(),
         sum.picks,
+        sum.passed_over,
         sum.lifts,
         sum.telling,
         sum.reweighs,
@@ -3327,6 +3403,78 @@ mod tests {
     }
 
     fn verdict(records: &[(u64, char, u64, u128)]) -> Result<String, String> { run(&trace(records), "") }
+
+    /// A trace whose records name the hart that wrote them: `(entry, kind, id, pass, hart)`.
+    fn verdict_on(records: &[(u64, char, u64, u128, u64)]) -> Result<String, String> {
+        let mut s = String::from("boot noise\n");
+        for (i, (entry, kind, id, pass, hart)) in records.iter().enumerate() {
+            s += &format!("SCHED-TRACE {i} {entry} {kind} {id} {pass:x} {hart}\n");
+        }
+        s += &format!("SCHED-TRACE-END {} dropped 0\n", records.len());
+        run(&s, "")
+    }
+
+    /// Across harts a pick passes over a budget ranked ahead only if no thread of it waits for a
+    /// hart (`J`) and another hart runs it (`H`); it never picks a budget with no thread waiting.
+    #[test]
+    fn a_pick_passes_over_only_a_budget_that_other_harts_run() {
+        // Budget 5 ranks first; hart 0 runs it, its one thread, so hart 1 takes 6.
+        let base = [
+            (1, 'W', 5, 0x10, 0),
+            (1, 'W', 6, 0x20, 0),
+            (1, 'J', 5, 1, 0),
+            (1, 'J', 6, 1, 0),
+            (1, 'K', 5, 0x10, 0),
+            (2, 'J', 5, 0, 0),
+            (2, 'H', 5, 0, 0),
+        ];
+        let ok = verdict_on(&[base.as_slice(), &[(3, 'K', 6, 0x20, 1)]].concat()).unwrap();
+        assert!(ok.contains("2 picks in rank order") && ok.contains("1 passing over"), "{ok}");
+        // The hart that runs it cannot pass it over itself.
+        let own = verdict_on(&[base.as_slice(), &[(3, 'K', 6, 0x20, 0)]].concat()).unwrap_err();
+        assert!(own.contains("hart 0 passed over budget 5, which no other hart runs"), "{own}");
+        // Nor can any hart once no hart runs it.
+        let left = verdict_on(&[base.as_slice(), &[(3, 'H', 0, 0, 0), (3, 'K', 6, 0x20, 1)]].concat());
+        assert!(left.unwrap_err().contains("hart 1 passed over budget 5, which no other hart runs"));
+        // A thread of it waits again: it is first.
+        let waits = verdict_on(&[base.as_slice(), &[(3, 'J', 5, 1, 0), (3, 'K', 6, 0x20, 1)]].concat());
+        assert!(waits.unwrap_err().contains("the rank clauses put budget 5"));
+        // A budget with no thread waiting is never picked.
+        let none = verdict_on(&[base.as_slice(), &[(3, 'K', 5, 0x10, 1)]].concat()).unwrap_err();
+        assert!(none.contains("picked budget 5, which has no thread waiting"), "{none}");
+    }
+
+    /// A shootdown (`S`) among the queue's records changes no rank: the check passes over it.
+    #[test]
+    fn a_shootdown_record_is_passed_over() {
+        let ok = verdict_on(&[
+            (1, 'W', 5, 0x10, 0),
+            (1, 'S', 7, 1 << 32 | 0b10 << 16 | 0b10, 0),
+            (1, 'K', 5, 0x10, 0),
+        ]);
+        assert!(ok.is_ok_and(|s| s.contains("1 picks in rank order")));
+    }
+
+    /// The waits for the lock (`Q`) are reported as a share of the harts' time (`F`), judging nothing;
+    /// a wait that ends before it starts is malformed.
+    #[test]
+    fn lock_waits_are_reported_per_mille_of_the_harts_time() {
+        let ok = verdict_on(&[
+            (1, 'W', 5, 0x10, 0),
+            (1, 'K', 5, 0x10, 0),
+            (2, 'Q', 100, 300, 1),
+            (3, 'Q', 400, 500, 0),
+            (3, 'F', 1000, 2, 0),
+            (300, 'C', 10_300, 9_900, 0),
+        ])
+        .unwrap();
+        assert!(
+            ok.contains("; lock waits 150 of 1000 (2 waits, 300 ticks, over 2 hart(s) x 1000 ticks)"),
+            "{ok}"
+        );
+        let bad = verdict_on(&[(1, 'W', 5, 0x10, 0), (1, 'K', 5, 0x10, 0), (2, 'Q', 300, 100, 1)]);
+        assert!(bad.unwrap_err().contains("a lock wait that ends before it starts"));
+    }
 
     /// The kernel's time closes the trace (`C`): the share of it, net of audits, charged to no
     /// budget is reported with the numbers it divides, whatever its entry field, and judges nothing.
