@@ -1,4 +1,4 @@
-description = "An SSH session open across a steward restart ends with it, and its slot comes back (docs/servers/sshd.md, \"Sessions over SSH\"; docs/servers/steward.md, \"Failure and restart\"): sshd keeps a watch call parked at the steward, which holds it unanswered while it runs; the steward's test-only restart-probe ends it 14 s after it starts the console session, the watch ends with it, and sshd ends alice's channel with status 1, saying why, though her shell is still busy. bob then logs in to the restarted steward and leaves, and a third login, alice's vault, works too: the slots the earlier connections held came back. The verdicts are sshd's, init's and the steward's lines and each ssh's exit status (rule F)"
+description = "An SSH session open across a steward restart ends with it, and its slot comes back (docs/servers/sshd.md, \"Sessions over SSH\"; docs/servers/steward.md, \"Failure and restart\"): sshd keeps a watch call parked at the steward, which holds it unanswered while it runs; the steward's test-only restart-probe ends it 14 s after it starts the console session, the watch ends with it, and sshd ends alice's channel with status 1, saying why, though her shell is still busy. bob then logs in to the restarted steward and, while he is still in, a third login, alice's vault, lands on slot 0 or 1: alice's slot came back, since sshd takes the lowest free slot and with hers held, bob's and the third connection would take slots 1 and 2. The verdicts are sshd's, init's and the steward's lines and each ssh's exit status (rule F)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 # The image's programs, the steward built with its test-only restart-probe (servers/steward,
@@ -36,8 +36,8 @@ expect_after = [
     '^\[con [0-9a-f]{16}\] sshd: session [0-9a-f]{16} ended: the steward is gone$',
     '^init: restarted steward, console [0-9a-f]{16}$',
     '^\[con [0-9a-f]{16}\] sshd: login bob: session [0-9a-f]{16}, labels \[\]$',
-    # The third connection: alice's and bob's slots came back, so it lands on one of the first two
-    # (a leaked slot would put it on slot 2).
+    # The third connection, made while bob's holds a slot: alice's slot came back, so the two take
+    # slots 0 and 1 (with hers leaked, bob's would be on 1 and this one on 2).
     '^\[con [0-9a-f]{16}\] sshd: connection [0-9]+ on slot [01]$',
     '^\[con [0-9a-f]{16}\] sshd: login alice\+alice-secrets: session [0-9a-f]{16}, labels \[',
 ]
@@ -66,13 +66,20 @@ steps = [
 
 [[session]]
 user = "bob"
-steps = [{ wait = "alice-ended" }, { expect = '\([0-9]+\)> ' }, { exit = 0 }, { mark = "bob-done" }]
+# bob stays in until the third login is: two connections at once after alice's ended.
+steps = [
+    { wait = "alice-ended" },
+    { expect = '\([0-9]+\)> ' },
+    { mark = "bob-in" },
+    { wait = "third-in" },
+    { exit = 0 },
+]
 
-# A third login after both: the earlier connections' slots came back.
+# A third login while bob is in: alice's slot came back.
 [[session]]
 user = "alice+alice-secrets"
 pty = true
-steps = [{ wait = "bob-done" }, { expect = '\([0-9]+\)> ' }, { exit = 0 }]
+steps = [{ wait = "bob-in" }, { expect = '\([0-9]+\)> ' }, { mark = "third-in" }, { exit = 0 }]
 
 [userland]
 recipe = "image/userland.toml"

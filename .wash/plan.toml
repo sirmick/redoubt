@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 463
+revision = 471
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1364,8 +1364,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "shell-host"
   needs = ["SHELL5"]
   body = "M2 host step 5: docs/userland/shell.md#the-editor (an Erlang process with session authority: never turns file content into action). Size L."
-  state = "todo"
-  revision = 323
+  state = "active"
+  revision = 469
+  overrides = ["2026-10-08: started by Orchestrator before SHELL5 (reported), M1 (reported): shell track (owner ruling 2026-10-08): shell UI packages run ahead of M1's report"]
 
 [[node]]
   id = "SHELL7"
@@ -1599,9 +1600,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M2"
   body = "Owner's request (2026-10-08). The brief is .wash/local/CTX1-brief.md: syntax principal[+label][.context] (`.`, not `:`, which scp, sftp and rsync split on); nine rules, each an acceptance test (canonical parsing; auth on the principal alone; no enumeration before auth; identity is (principal, label set, name); one attachment, with takeover told to both terminals; a cap per label set, refusing rather than evicting; reserved names take no suffix; the steward-restart rule; a bounded detached console); the lifecycle; three shell commandlets. Work in sshd, the steward, init's manifest check, the shell and the pages. Tier A. Size M-L."
-  state = "active"
-  revision = 449
-  overrides = ["2026-10-08: started by Orchestrator before M1 (reported): The owner asked for this now (2026-10-08).", "2026-10-08: started by Orchestrator before M1 (reported): The owner asked for named SSH contexts (2026-10-08)."]
+  state = "reported"
+  revision = 470
+  overrides = ["2026-10-08: started by Orchestrator before M1 (reported): The owner asked for this now (2026-10-08).", "2026-10-08: started by Orchestrator before M1 (reported): The owner asked for named SSH contexts (2026-10-08).", "2026-10-08: started by Orchestrator before M1 (reported): reviewer for the shell track and CTX, ahead of M1's report (owner ruling 2026-10-08)"]
 
 [[node]]
   id = "CTX2"
@@ -1619,9 +1620,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M2"
   needs = ["CTX2"]
-  body = "Third of three; brief .wash/local/CTX1-brief.md, design .wash/local/CTX1-design.md. The manifest gets principals[].contexts {max, detached_secs}. The cap must fit the label set's sub-budget, checked by init. The cap is checked after auth and before any carve, and never evicts. Idle expiry ends a detached context. Commandlets on the session's own steward badge. Contexts end with the steward, plus a per-instance generation. Tier A."
+  body = "Part c of named SSH contexts (brief .wash/local/CTX1-brief.md): the cap of live contexts per (principal, label set), never evicting; idle expiry of detached contexts, configurable per principal with a default; the shell's contexts()/detach()/end_context within the label set; the generation (or end-with-steward) rule on steward restart, chosen at its design checkpoint with costs. Also from CTX1's red: measure rule 3's timing (unknown principal or label set vs wrong key on a known principal) at the SSH client, and equalize it if it is distinguishable above jitter."
   state = "todo"
-  revision = 446
+  revision = 466
 
 [[node]]
   id = "B39"
@@ -1650,3 +1651,21 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "Found by SHELL6 on main 415c86ad6: the full ./test-shell fails on the BEAM 152/153, reproducing 4/4: driver_test \"hostile text a line writes to the console itself never reaches...\" (sometimes also \"a crash report...\"); row 1 reads `F\")`. beamlet passes. Suspect SHELL8 (the logger's output through the guard). Find the cause, fix it (test or code; if code is at fault it is the escaping path, so Tier A), and say why SHELL8's gate passed. Also: scripts/shell-cases run by absolute path from a worktree reads the root checkout's git; make it use the caller's tree (or its own), with --check covering it. Size S."
   state = "done"
   revision = 462
+
+[[node]]
+  id = "B41"
+  title = "init-refuses-bound fails on main on both widths: it prints 1061 pages where the case expects 1047"
+  template = "package"
+  parent = "M2"
+  body = "Found by CTX1's gate: init-refuses-bound fails on origin/main (415c86ad6, alone too) on rv64 and rv32, printing 1061 pages against an expected 1047. Bisect which merge moved it (candidates: B35, BOOT2, BEAM17, SRV1, B39), decide whether the case's number or the code is wrong, and fix it with the reason in the commit. If a bound itself moved, the page that states it moves too. Size S."
+  state = "todo"
+  revision = 465
+
+[[node]]
+  id = "B42"
+  title = "Review notes left open on merged packages: K26's slots-came-back claim, B34's third known difference, B35's bootfsd cap under the BEAM4 manifests"
+  template = "package"
+  parent = "M2"
+  body = "From the steward red's handoff (.wash/local/handoffs/steward2-red.md, 'Open / renewals owed'). (1) K26: the case claims slots came back with 4 slots and 3 logins; make it judge that (a fourth login, or expect `sshd: connection N on slot [01]` for the third). (2) B34: a fun decoded by binary_to_term whose module is later loaded with its checksum compares unequal to that code's funs (equal on the BEAM): state it in beamlet.md's known differences, or fix it. (3) B35: the four BEAM4 manifests (tests/data/beamlet/{launch,natives,serve,natives-attack}.json) give bootfsd a cap of 2,048 against about 1,050 pages peak on rv32, under B32's twice-the-peak rule (2,176): raise the cap in each, or show the peak. Check first whether any is already fixed on main. Size S."
+  state = "done"
+  revision = 471
