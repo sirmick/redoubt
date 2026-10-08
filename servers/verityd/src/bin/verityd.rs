@@ -21,10 +21,7 @@ use redoubt_verityd::{Args, Verityd, parse_args};
 
 redoubt_rt::entry!(serve);
 
-/// An argument `verityd` does not take, one missing, or no handle by the name `endpoint=` gives.
-pub const BAD_ARGS: u32 = 4;
-/// No `volume` handle, or no memory to call it with.
-pub const NO_VOLUME: u32 = 5;
+pub use redoubt_fileserver::program::{BAD_ARGS, NO_VOLUME};
 
 /// The startup-block name of the range at `blkd`.
 const VOLUME: &str = "volume";

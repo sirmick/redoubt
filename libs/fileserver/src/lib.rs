@@ -9,7 +9,8 @@
 //!   protocol;
 //! - [`quota`]: the byte quotas per attach root that `littlefsd` and `walfsd` carve, a ledger their servers
 //!   keep counted;
-//! - `probe`, test-only (feature `one-volume-probe`): R47 tried from inside a volume server before it serves.
+//! - `probe`, test-only (feature `one-volume-probe`): R47 tried from inside a volume server before it serves;
+//! - [`program`]: what the servers' programs share before they serve, their exit codes and their start.
 //!
 //! **No `unsafe`.** The crate forbids it outright.
 
@@ -21,5 +22,6 @@ extern crate alloc;
 pub mod args;
 #[cfg(feature = "one-volume-probe")]
 pub mod probe;
+pub mod program;
 pub mod quota;
 pub mod range;

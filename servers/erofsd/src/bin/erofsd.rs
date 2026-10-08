@@ -8,44 +8,28 @@
 
 extern crate alloc;
 
-use alloc::vec::Vec;
-
-use redoubt_erofsd::{Args, BUDGET, COST, Erofsd, limits, parse_args};
-use redoubt_fileserver::range::Blkd;
-use redoubt_rt::handle::Endpoint;
+use redoubt_erofsd::{BUDGET, COST, Erofsd, limits};
+use redoubt_fileserver::program::{Started, start};
 use redoubt_rt::server::ninep::{NineServer, refuse_malformed};
-use redoubt_rt::server::own_args;
 use redoubt_rt::start::say;
 use redoubt_rt::startup::Startup;
 
 redoubt_rt::entry!(serve);
 
-/// No `buckets=N`, one whose buckets at their caps do not fit the budget, no `endpoint=NAME` or
-/// none the startup block holds a handle by, or an argument `erofsd` does not understand
-/// (`labels=` malformed, or anything else): it does not guess.
-pub const BAD_ARGS: u32 = 4;
-/// No `volume` handle, or a range that would not say its size.
-pub const NO_VOLUME: u32 = 5;
-/// The kernel would not give a random word, and a server's first minted badge must be
-/// unpredictable (servers/serving.md R27).
-pub const NO_RANDOM: u32 = 6;
+pub use redoubt_fileserver::program::{BAD_ARGS, NO_RANDOM, NO_VOLUME};
 
 /// The line `erofsd` says when it serves its volume as corrupt.
 pub const CORRUPT: &str = "erofsd: the volume does not read as EROFS, and is served as corrupt\n";
 
 /// Serves until the endpoint is destroyed.
 pub fn serve(startup: &Startup) -> u32 {
-    let args: Vec<&str> = startup.args().collect();
-    let Ok(buckets) = redoubt_rt::server::buckets(&args) else { return BAD_ARGS };
-    let Ok(Args { endpoint: name, labels }) = parse_args(own_args(&args)) else { return BAD_ARGS };
-    let Some(endpoint) = startup.handle(name).map(Endpoint::from_handle) else { return BAD_ARGS };
-    let limits = limits(buckets);
-    if !limits.fits(&COST, BUDGET) {
-        return BAD_ARGS;
-    }
-    let Some(volume) = startup.handle("volume") else { return NO_VOLUME };
     // Nine pages lent to each call: the most sectors one read carries, and the message around them.
-    let Ok(range) = Blkd::new(Endpoint::from_handle(volume), 9) else { return NO_VOLUME };
+    let fits = |buckets| limits(buckets).fits(&COST, BUDGET);
+    let Started { endpoint, labels, buckets, range } = match start(startup, 9, fits) {
+        Ok(started) => started,
+        Err(code) => return code,
+    };
+    let limits = limits(buckets);
     // A volume that does not parse is served as corrupt, not exited on: a damaged medium must
     // not become a restart loop.
     let Ok(erofsd) = Erofsd::new(range, labels) else { return NO_VOLUME };

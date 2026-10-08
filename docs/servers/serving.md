@@ -389,7 +389,9 @@ host:redoubt-fileserver::a_mint_past_the_room_above_is_refused,
 host:redoubt-fileserver::a_quota_at_the_granters_own_root_is_refused,
 host:redoubt-fileserver::connections_at_one_root_sum_and_the_last_disconnect_returns_its_bytes,
 host:redoubt-fileserver::a_root_over_its_quota_after_a_disconnect_grows_no_further); the
-servers' quota tests drive it through their 9P. What a format needs of its medium stays with its
+servers' quota tests drive it through their 9P. The three volume servers' programs start
+through the crate too (`program::start`: the arguments, the endpoint, the admission's fit and the
+range, in that order), with one set of exit codes. What a format needs of its medium stays with its
 server: how a range is mounted as its blocks, and the files.
 
 **On the wire.** A request whose word 0 is 0 is 9P: a `call` whose words are all zero, with the
