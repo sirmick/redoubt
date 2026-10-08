@@ -1012,8 +1012,9 @@ those lines, since the sessions start only once it has all matched.
 
 ```toml
 [[session]]
-user = "alice+secrets"       # the login name, unique in the case
-key = "alice"                # optional; defaults to `user` up to any '+'
+user = "alice+secrets"       # the login name
+name = "vault"               # optional; unique in the case, names its log; defaults to `user`
+key = "alice"                # optional; defaults to `user` up to any '+' or '.'
 pty = false                  # true asks for a terminal
 forbid = ['bob-secret']      # never in this session's output, until ssh exits
 steps = [

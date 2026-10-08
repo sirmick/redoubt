@@ -479,7 +479,7 @@ pub fn run(
             }
         }
         ssh.args(&session.command);
-        let log = logs.join(format!("{log_prefix}-{}.ssh.log", session.user));
+        let log = logs.join(format!("{log_prefix}-{}.ssh.log", session.name()));
         commands.push((session, ssh, log));
     }
 
@@ -507,9 +507,9 @@ pub fn run(
     let mut failure = None;
     for (session, stop) in sessions.iter().zip(stops) {
         match stop {
-            Err(Stop::Broken(why)) => bail!("session {}: {why}", session.user),
+            Err(Stop::Broken(why)) => bail!("session {}: {why}", session.name()),
             Err(Stop::Failed(why)) => {
-                failure.get_or_insert(format!("session {}: {why}", session.user));
+                failure.get_or_insert(format!("session {}: {why}", session.name()));
             }
             Ok(()) | Err(Stop::Aborted) => {}
         }
