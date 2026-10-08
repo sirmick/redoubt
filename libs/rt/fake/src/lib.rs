@@ -13,10 +13,11 @@
 //! prevented only by the runtime's types. The executable model (`model/`) should replace it. Calls it does
 //! not model panic, so a test cannot rely on them by accident.
 //!
-//! For launchers it models budgets as handles (`Fake::budget`), `process_create`, `process_map`,
-//! `process_start` and `budget_destroy`, and keeps what each child was given for a test to read
-//! back (`Fake::launched`); a child runs nothing, and a test ends it (`Fake::exit`), which sends
-//! its one exit notice. Every call is logged by name (`Fake::calls`), a test can have the next
+//! For launchers it models budgets as handles with labels (`Fake::budget`, which carries its
+//! owner's), `budget_create` (the kernel's label rule for a user-class caller, nothing charged),
+//! `process_create`, `process_map`, `process_start` and `budget_destroy`, and keeps what each child was given
+//! for a test to read back (`Fake::launched`); a child runs nothing, and a test ends it (`Fake::exit`), which
+//! sends its one exit notice. Every call is logged by name (`Fake::calls`), a test can have the next
 //! call of a name refused (`Fake::refuse`), or a later one (`Fake::refuse_after`), and it can read
 //! the most pages a process held at once (`Fake::held_peak`).
 //!
@@ -41,9 +42,9 @@ use std::sync::{Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use redoubt_rt::abi::{
-    BODY_SLOTS, Body, Call, CallOutcome, Cause, Error, ExitNotice, FOREVER, Handle, Handles, Labels,
-    LendDisposition, MAX_START_HANDLES, MemFlags, Message, MessageKind, MintSource, PAGE_SIZE, Pages,
-    RECEIVED_SLOTS, Received, ReceivedBody, ReceivedHandles, ReplyOutcome, Return,
+    BODY_SLOTS, BUDGET_SPEC_SLOTS, Body, BudgetSpec, Call, CallOutcome, Cause, Error, ExitNotice, FOREVER,
+    Handle, Handles, Labels, LendDisposition, MAX_START_HANDLES, MemFlags, Message, MessageKind, MintSource,
+    PAGE_SIZE, Pages, RECEIVED_SLOTS, Received, ReceivedBody, ReceivedHandles, ReplyOutcome, Return,
 };
 use redoubt_rt::ipc::{Request, Words};
 use redoubt_rt::server::typed::{Outcome, finish};
@@ -56,7 +57,7 @@ enum Object {
     Mmio(usize),
     /// A device's interrupt: the index of a [`State::devices`] entry.
     Irq(usize),
-    /// A budget: the index of a [`State::budgets`] entry (true once destroyed).
+    /// A budget: the index of a [`State::budgets`] entry.
     Budget(usize),
     /// A launched process: the index of a [`State::launched`] entry.
     Process(usize),
@@ -79,6 +80,13 @@ struct Device {
     len: usize,
     fired: bool,
     masked: bool,
+}
+
+/// One budget: its labels, fixed when it was made, and whether it was destroyed.
+#[derive(Clone, Copy, Default)]
+struct Budget {
+    labels: Labels,
+    destroyed: bool,
 }
 
 /// What a launcher gave one child, as `process_map` and `process_start` received it.
@@ -169,8 +177,8 @@ struct State {
     log: Vec<(usize, &'static str, u64)>,
     /// Device objects, by the index their handles carry.
     devices: Vec<Device>,
-    /// Budgets, by the index their handles carry: true once destroyed.
-    budgets: Vec<bool>,
+    /// Budgets, by the index their handles carry.
+    budgets: Vec<Budget>,
     /// The pointer `MapAnon` or `device` allocated at each address, so memory nothing frees (a
     /// heap's pages, a device's registers) stays reachable from here and Miri does not report it
     /// leaked. An entry is replaced when its address is allocated again; after an `Unmap` it is
@@ -228,10 +236,11 @@ fn current() -> usize {
 impl Fake {
     fn lock(&self) -> MutexGuard<'_, State> { self.state.lock().unwrap_or_else(|e| e.into_inner()) }
 
-    /// A new process (no handles yet).
+    /// A new process (no handles yet), whose labels are the set `labels` names: sorted and without
+    /// repeats, as the kernel keeps a budget's.
     pub fn process(&self, account: u64, labels: &[u64]) -> usize {
         let mut s = self.lock();
-        let labels = Labels::from_slice(labels).unwrap();
+        let labels = Labels::from_slice(&set(labels)).unwrap();
         s.processes.push(Process { account, labels, handles: vec![None], mappings: HashMap::new(), peak: 0 });
         s.processes.len() - 1
     }
@@ -346,10 +355,12 @@ impl Fake {
         self.lock().open.values().filter(|(p, _)| *p == pid).count()
     }
 
-    /// A new budget whose handle goes into `owner`'s table: what a launcher carves for a child.
+    /// A new budget whose handle goes into `owner`'s table: what a launcher carves for a child. It
+    /// carries `owner`'s labels, as the budget a process runs in does.
     pub fn budget(&self, owner: usize) -> Handle {
         let mut s = self.lock();
-        s.budgets.push(false);
+        let labels = s.processes[owner].labels;
+        s.budgets.push(Budget { labels, destroyed: false });
         let index = s.budgets.len() - 1;
         install(&mut s, owner, Object::Budget(index))
     }
@@ -358,7 +369,7 @@ impl Fake {
     pub fn destroyed(&self, owner: usize, budget: Handle) -> bool {
         let s = self.lock();
         let Ok(Object::Budget(index)) = lookup(&s, owner, budget) else { panic!("not a budget handle") };
-        s.budgets[index]
+        s.budgets[index].destroyed
     }
 
     /// What `owner`'s child `process` was given.
@@ -488,6 +499,14 @@ fn install(s: &mut State, pid: usize, ep: Object) -> Handle {
     };
     table[index] = Some(ep);
     Handle::new(index as u32).unwrap()
+}
+
+/// The set `labels` names, as the kernel keeps one: sorted, without repeats.
+fn set(labels: &[u64]) -> Vec<u64> {
+    let mut set = labels.to_vec();
+    set.sort_unstable();
+    set.dedup();
+    set
 }
 
 fn lookup(s: &State, pid: usize, h: Handle) -> Result<Object, Error> {
@@ -754,7 +773,7 @@ unsafe impl redoubt_rt::Transport for Fake {
             Call::ProcessCreate { budget, exit_endpoint } => {
                 let mut s = self.lock();
                 let Object::Budget(budget) = lookup(&s, pid, budget)? else { return Err(Error::WrongObject) };
-                if s.budgets[budget] {
+                if s.budgets[budget].destroyed {
                     return Err(Error::BadHandle);
                 }
                 let exit = as_endpoint(&s, pid, exit_endpoint)?;
@@ -808,10 +827,36 @@ unsafe impl redoubt_rt::Transport for Fake {
                 child.start = Some((entry, sp, arg));
                 Ok(Return::Nothing)
             }
+            Call::BudgetCreate { parent, spec_rec } => {
+                let mut s = self.lock();
+                not_given_up(&s, pid, spec_rec, BUDGET_SPEC_SLOTS * 8)?;
+                // SAFETY: the runtime passes the address of a live, 8-aligned
+                // `[u64; BUDGET_SPEC_SLOTS]` record it owns for the call (`Budget::create_child`).
+                let slots = unsafe { (spec_rec as *const [u64; BUDGET_SPEC_SLOTS]).read() };
+                let spec = BudgetSpec::decode(&slots)?;
+                let Object::Budget(index) = lookup(&s, pid, parent)? else { return Err(Error::WrongObject) };
+                let parent = s.budgets[index];
+                if parent.destroyed {
+                    return Err(Error::BadHandle);
+                }
+                // The kernel's label rule (kernel/budgets.md, "Labels on budgets"), on the set the
+                // spec names: every parent label kept, and none added, since every fake process is
+                // user-class. Nothing is charged or carved.
+                let labels = set(spec.labels.as_slice());
+                if !parent.labels.as_slice().iter().all(|l| labels.contains(l)) {
+                    return Err(Error::LabelDenied);
+                }
+                if labels != parent.labels.as_slice() {
+                    return Err(Error::ClassDenied);
+                }
+                s.budgets.push(Budget { labels: parent.labels, destroyed: false });
+                let child = s.budgets.len() - 1;
+                Ok(Return::Handle(install(&mut s, pid, Object::Budget(child))))
+            }
             Call::BudgetDestroy { budget } => {
                 let mut s = self.lock();
                 let Object::Budget(index) = lookup(&s, pid, budget)? else { return Err(Error::WrongObject) };
-                s.budgets[index] = true;
+                s.budgets[index].destroyed = true;
                 let children: Vec<usize> =
                     (0..s.launched.len()).filter(|&i| s.launched[i].budget == index).collect();
                 for child in children {

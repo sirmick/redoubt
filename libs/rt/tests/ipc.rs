@@ -21,9 +21,9 @@ fn call_lend_and_reply() {
     let server_thread = f.run(server, move || {
         let ep = Endpoint::from_handle(receive);
         let Ok(Event::Call(mut request)) = ep.receive(FOREVER, 0) else { return 1 };
-        // What the kernel attaches: badge, account, labels.
+        // What the kernel attaches: badge, account, labels, the last as the set it keeps, sorted.
         assert_eq!((request.caller.badge, request.caller.account), (42, 1001));
-        assert_eq!(request.caller.labels.as_slice(), &[3, 1]);
+        assert_eq!(request.caller.labels.as_slice(), &[1, 3]);
         assert_eq!(request.words, [7, 8, 9, 10]);
         // The handle it brought is ours now; the lend is readable and writable.
         let brought = request.handles.as_slice()[0].unwrap();
