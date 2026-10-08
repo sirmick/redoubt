@@ -12,6 +12,7 @@ redoubt-rt = { path = "../../../libs/rt" }
 # The natives the shell's modules need, which `run` gives every VM.
 beamlet-crypto = { path = "../crypto" }
 beamlet-re = { path = "../re" }
+beamlet-screen = { path = "../screen" }
 # The host launcher, `fake-redoubt`: the platform run on the fake kernel. Host only; nothing that
 # runs on the machine has this feature.
 redoubt-fake-kernel = { path = "../../../libs/rt/fake", optional = true }

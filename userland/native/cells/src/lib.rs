@@ -97,6 +97,8 @@ impl Modifiers {
     pub const DIM: u16 = 1 << 1;
     pub const HIDDEN: u16 = 1 << 7;
     pub const ITALIC: u16 = 1 << 2;
+    /// No attribute.
+    pub const NONE: Modifiers = Modifiers(0);
     pub const RAPID_BLINK: u16 = 1 << 5;
     pub const REVERSED: u16 = 1 << 6;
     pub const SLOW_BLINK: u16 = 1 << 4;

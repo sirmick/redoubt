@@ -32,7 +32,12 @@ fi
 
 formatting() { (cd "$app" && mix format --check-formatted); }
 
-native() { (cd "$native" && cargo test -q); }
+# The cell protocol, and the screen buffer's natives with the width table they share with OTP,
+# held to the pinned OTP that generated it.
+native() {
+    (cd "$native" && cargo test -q) &&
+        (cd "$otp" && cargo test -q -p beamlet-screen && escript tools/gen-width.escript --check)
+}
 
 on_beam() { (cd "$app" && mix test "${files[@]}"); }
 

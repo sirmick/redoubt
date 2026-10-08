@@ -104,7 +104,9 @@ VM down. Every limit fails closed: the offender ends, and nothing is lost silent
   lower): checked at the end of each slice; a process over it is collected first and killed only
   if what is live is still over. A resource whose native declares its size, a
   [screen buffer](#screen-natives), counts that size as its holder's own memory, toward
-  `max_heap_size` as heap words do.
+  `max_heap_size` as heap words do. Only a heap counts it, not a queued message or an ETS table
+  holding it: the screen buffer's limit of four a process and the mailbox's limit bound those,
+  and any other sized resource needs a bound of its own.
 - **ETS** (`max_ets_words`, 2^27 words for all tables together): an insert past it raises
   `system_limit`.
 - **CPU:** reductions preempt every process, including a loop of plain jumps with no calls.
@@ -696,41 +698,72 @@ column, the table one.
 
 ### Screen natives
 
-Status: planned · M2 (usable shell)
+<details><summary>Status: built · partly tested: host only; no boot draws a screen · tested (16)</summary>
 
-The screen buffer is `beamlet-screen`, a crate of the VM's with no `unsafe` and no dependency but
-the VM and the `cells` crate. Its natives, in the Erlang module `redoubt_screen`, are primitives
-over cells; widgets, layout and focus are Elixir ([the shell](shell.md#full-screen-programs)).
+- host:beamlet-screen::a_buffer_is_at_most_1024_a_side_and_65536_cells
+- host:beamlet-screen::the_first_frame_clears_and_sends_what_is_not_blank
+- host:beamlet-screen::a_frame_sends_only_what_changed
+- host:beamlet-screen::a_resize_is_blank_and_its_frame_clears_and_sends_it_all
+- host:beamlet-screen::put_reads_no_more_graphemes_than_the_row_has_cells
+- host:beamlet-screen::a_wide_grapheme_takes_two_cells_and_the_edge_cutting_one_leaves_a_space
+- host:beamlet-screen::overwriting_half_of_a_wide_grapheme_leaves_a_space_in_the_other
+- host:beamlet-screen::a_control_character_is_refused_and_nothing_of_the_call_is_written
+- host:beamlet-screen::widths_are_otps
+- host:beamlet-screen::a_control_character_is_badarg_and_nothing_is_drawn
+- host:beamlet-screen::only_the_process_that_made_a_buffer_draws_into_it
+- host:beamlet-screen::a_process_holds_at_most_four_buffers
+- host:beamlet-screen::a_buffer_nothing_holds_is_given_back
+- host:beamlet-screen::a_large_buffer_ends_its_owner_at_its_heap_limit
+- host:beamlet-screen::a_buffer_resized_past_the_heap_limit_ends_its_owner
+- host:beamlet-vm::sized_resources_past_a_processs_own_heap_limit_end_it
+
+</details>
+
+The screen buffer is `beamlet-screen`
+([`userland/otp/screen`](../../userland/otp/screen/src/lib.rs)), a crate of the VM's with no
+`unsafe` and no dependency but the VM and the `cells` crate. Its natives, in the Erlang module
+`redoubt_screen`, are primitives over cells; widgets, layout and focus are Elixir
+([the shell](shell.md#full-screen-programs)).
 
 | Native | What it does |
 | --- | --- |
 | `new(W, H)` | a buffer: a resource, every cell blank, owned by the calling Erlang process |
 | `resize(B, W, H)` | a new size, blank; the next `diff` clears the screen and sends it all |
-| `put(B, X, Y, Text, Style)` | writes `Text` along the row from `(X, Y)`, one grapheme a cell and a wide one two, clipped at the edge (a wide grapheme cut by it becomes a space, and a grapheme longer than a cell's symbol may be, U+FFFD); returns the columns written |
-| `fill(B, Rect, Symbol, Style)` | one symbol and style over a rectangle, clipped |
-| `plot(B, Rect, Bits, Style)` | a bitmap of 2×4 dots a cell, drawn in Braille (U+2800 to U+28FF) |
-| `width(Text)` | the columns `Text`, of at most 64 KiB, takes, by the table `put` uses |
+| `put(B, X, Y, Graphemes, Style)` | writes `Graphemes`, a list of binaries, along the row from `(X, Y)`, one a cell and a wide one two, clipped at the edge (a wide grapheme cut by it becomes a space, and a grapheme longer than a cell's symbol may be, U+FFFD); returns the columns written |
+| `fill(B, Rect, Symbol, Style)` | one symbol, one code point of one column, and one style over a rectangle, clipped |
+| `plot(B, Rect, Dots, Style)` | a bitmap, one byte a cell holding its 2×4 dots in Braille's own order, drawn as U+2800 plus the byte |
 | `diff(B)` | the cells changed since the last `diff`, as a `cells` frame, which then becomes what is shown |
 
+A `Style` is `{Fg, Bg, Modifiers}`, each colour `reset`, `{indexed, I}` or `{rgb, R, G, B}` and the
+modifiers the cell protocol's bits; a `Rect` is `{X, Y, W, H}`.
 - **A control character is refused, not drawn.** `put` and `fill` raise `badarg` on one (the
   ASCII and 8-bit controls, DEL, and the bidirectional embedding, override and isolate controls:
-  the `cells` crate's own rule), so a caller that forgot to make text visible fails loudly, and
-  nothing reaches the encoder that the cell protocol would not carry.
-- **Bounded.** A buffer is at most 1024 cells on a side and 65,536 cells in all; `put` reads no
-  more of its text than the row has cells, and `width/1` takes at most 64 KiB; no native does
+  the `cells` crate's own rule) and write nothing of that call, so a caller that forgot to make
+  text visible fails loudly, and nothing reaches the encoder that the cell protocol would not
+  carry.
+- **Bounded.** A buffer is at most 1024 cells on a side and 65,536 cells in all (larger is
+  `system_limit`); `put` reads no more of its graphemes than the row has cells; no native does
   more than one pass over a buffer. So every call has a ceiling on its time and its allocation,
-  and it is charged in reductions by the cells and bytes it touched.
-- **Counted.** A process holds at most four buffers, and each counts toward its owner's heap
-  limit, so a loop of `new/2` is ended by the limit that ends any runaway allocation.
+  and it is charged in reductions by the cells it touched.
+- **Counted.** A process holds at most four buffers (a fifth is `system_limit`; one nothing holds
+  any more is given back), counted in its process dictionary, and each buffer declares the bytes
+  of its two grids, which count as its holder's own memory, toward its own heap limit
+  ([limits](#limits-inside-one-vm)), from `new` and from `resize`. So a loop of `new/2` is ended
+  by the limit that ends any runaway allocation. Code that erases the dictionary's count starts a
+  new one; the heap limit still holds.
 - **One writer.** A buffer answers only the Erlang process that made it; any other gets `badarg`.
   It sits behind a lock only because a resource may move between schedulers.
-- **One width table**, generated from one pinned Unicode version and held to vectors: `width/1`
-  is `put`'s own, and the terminal library measures with it, so what is measured is what is drawn.
+- **One segmentation and one width table, OTP's.** Text arrives split into graphemes by OTP's own
+  segmentation (`String.graphemes/1`), and a grapheme's columns come from a table generated from
+  OTP's `unicode_util:is_wide/1` (`tools/gen-width.escript`, which fails the build's check when the
+  table is not current): wide if a presentation selector follows its first code point or any of its
+  code points is wide. The shell measures with the same `is_wide/1`, so what is measured is what
+  the buffer lays out, at the pinned OTP's Unicode version. The buffer does not segment text itself,
+  so `fill` takes a single code point, and a caller that hands `put` two characters as one
+  grapheme draws them in one cell, misplacing what follows, and nothing more.
 - **The diff speaks the cell protocol**, so a screen drawn in the session and a native program's
   frames reach the encoder by one decoder
   ([the shell](shell.md#screens-keys-and-the-consoles-size)).
-
-**Open:** none.
 
 ### Asynchronous underneath, synchronous on top
 
