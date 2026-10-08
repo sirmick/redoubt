@@ -71,9 +71,10 @@ struct Args {
     /// are printed: the ones the bundle's manifest pins, or a signed volume's root block carries.
     #[arg(long, num_args = 2, value_names = ["RECIPE", "OUT"])]
     pack_disk: Option<Vec<PathBuf>>,
-    /// Hart count for --run.
-    #[arg(long, default_value_t = 1)]
-    smp: u32,
+    /// Hart count: for --run (1 without it), or for every boot case instead of its own counts,
+    /// but a case that keeps them (`keep_smp`).
+    #[arg(long)]
+    smp: Option<u32>,
     /// With --run, print the exact QEMU command line before booting.
     #[arg(long)]
     print_qemu: bool,
@@ -268,7 +269,7 @@ fn main() -> Result<()> {
             firmware: &firmware,
             loader: &loader,
             bundle: &bundle,
-            smp: args.smp,
+            smp: args.smp.unwrap_or(1),
             memory_mib: target::DEFAULT_MEMORY_MIB,
             devices: &[],
         };
@@ -288,7 +289,12 @@ fn main() -> Result<()> {
         .filter(|p| p.extension().is_some_and(|e| e == "toml"))
         .collect();
     paths.sort();
-    let cases = paths.iter().map(|p| Case::load(p)).collect::<Result<Vec<_>>>()?;
+    let mut cases = paths.iter().map(|p| Case::load(p)).collect::<Result<Vec<_>>>()?;
+    for case in &mut cases {
+        if let Kind::Boot(boot) = &mut case.kind {
+            boot.with_harts(args.smp);
+        }
+    }
     let filter = args.filter.as_deref();
     if args.exact && !cases.iter().any(|case| Some(case.name.as_str()) == filter) {
         bail!("no case is named {:?}", filter.unwrap_or(""));

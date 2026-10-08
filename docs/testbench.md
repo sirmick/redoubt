@@ -214,6 +214,8 @@ programs = [                 # the first in init's place, the rest started by it
     { zeros = 6291456 },                           # that many zero bytes, an entry only its length matters for (a bundle file's)
 ]
 smp = [1, 4]                 # one boot per hart count (default [1])
+keep_smp = true              # the counts stand under `--smp N` (a comment says why)
+timeout_secs_smp = 90        # the bound under `--smp N` instead (a comment says why)
 memory_mib = 32              # guest RAM (default 256)
 memory = false               # true: stop an init guest and measure its servers' painted stacks
 timeout_secs = 60            # default 60; fractions allowed
@@ -329,6 +331,10 @@ go quiet. A case target runs that case alone (`--exact`), from `target/prebuilt`
 is there ([building once](#building-once)), else through `cargo testbench`. A case with no `arch`
 boots nothing, so it runs under `rv64/<case>` alone, and `rv32/<case>` does nothing. `q ls` shows
 the core map and the queue; `q log` the recent jobs with the time each waited and ran.
+`cargo testbench --smp N` boots every boot case once at `N` harts instead of its own counts, but
+a case that keeps them (`keep_smp`), and bounds it by `timeout_secs_smp` where a case gives one;
+since `jobs.mk` leases a case's cores from its own counts,
+such a sweep runs as `q run --cores M -- cargo testbench --smp N`, `M` at least `N`.
 
 **The heavy host cases.** What each costs on the 24-core build host, and the deadline it has
 (each a measured run and a third):
