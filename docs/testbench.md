@@ -214,6 +214,8 @@ programs = [                 # the first in init's place, the rest started by it
     { zeros = 6291456 },                           # that many zero bytes, an entry only its length matters for (a bundle file's)
 ]
 smp = [1, 4]                 # one boot per hart count (default [1])
+keep_smp = true              # the counts stand under `--smp N` (a comment says why)
+timeout_secs_smp = 90        # the bound under `--smp N` instead (a comment says why)
 memory_mib = 32              # guest RAM (default 256)
 memory = false               # true: stop an init guest and measure its servers' painted stacks
 timeout_secs = 60            # default 60; fractions allowed
@@ -265,8 +267,8 @@ the rv32 UART lost a burst of it); several harts that spin, since under `icount`
 harts in turn on one host thread and a hart spinning on the kernel's lock spends its whole turn
 (3: `all-together` at 2 harts and `ipc` at 4 take from three to ten times as long, and
 `smp-boot` at 4 sees a hart that never ran user code); and a run whose purpose is the host's
-time (`asid-cost-host`, `sched-latency-tcg`, `timeouts-tcg`, and `smp-evict-mttcg`, which needs
-QEMU's multi-threaded TCG). One case reads no host clock and stays on it for now: `redoubt-ipc`
+time (`asid-cost-host`, `sched-latency-tcg`, `timeouts-tcg`, and `smp-evict-mttcg` and
+`smp-shootdown-mttcg`, which need QEMU's multi-threaded TCG). One case reads no host clock and stays on it for now: `redoubt-ipc`
 fails under `icount` on both widths (189 calls abandoned of the 256 it wants), until that is
 understood. A `timeout_secs` is the bench's bound, never a measurement: a case in guest time
 is given at least four times its slowest pass alone on either width, rounded up to 10 s, and
@@ -329,6 +331,10 @@ go quiet. A case target runs that case alone (`--exact`), from `target/prebuilt`
 is there ([building once](#building-once)), else through `cargo testbench`. A case with no `arch`
 boots nothing, so it runs under `rv64/<case>` alone, and `rv32/<case>` does nothing. `q ls` shows
 the core map and the queue; `q log` the recent jobs with the time each waited and ran.
+`cargo testbench --smp N` boots every boot case once at `N` harts instead of its own counts, but
+a case that keeps them (`keep_smp`), and bounds it by `timeout_secs_smp` where a case gives one;
+since `jobs.mk` leases a case's cores from its own counts,
+such a sweep runs as `q run --cores M -- cargo testbench --smp N`, `M` at least `N`.
 
 **The heavy host cases.** What each costs on the 24-core build host, and the deadline it has
 (each a measured run and a third):
@@ -404,6 +410,8 @@ any other budget is picked twice, and `lift-delay`, that it comes within a round
 on its parent predicts. A `walk-trace` kernel's walks are bounded by their longest, net of the
 audits inside them (`pump_max_us`, `expiry_max_us`, `reconcile_max_us`), judged before
 `r10_p99_us`, so a run whose destruction is over its bound still has its walks judged.
+`smp_fence` reads only the same trace's shootdown records: a page made executable was shot down
+on another hart running its process, which acknowledged ([memory](kernel/memory.md#instruction-fetch-after-mapping)).
 
 ### Starting a case's programs
 

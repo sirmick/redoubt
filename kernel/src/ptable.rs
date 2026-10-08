@@ -46,8 +46,8 @@ pub enum ProcessState {
     /// that are ready.
     Ready(TidMask),
 
-    /// This is the current active process.  The context bitmask describes
-    /// contexts that are ready, excluding the currently-executing context.
+    /// One hart or more runs one of its threads. The bitmask is the threads that are ready and
+    /// that no hart runs; each hart's thread is in its block (`arch::hart`).
     Running(TidMask),
 
     /// This process is waiting for an event, such as as message or an
@@ -90,7 +90,8 @@ pub struct Process {
     /// a slot never used, so that the table's starting value is all zeros and it is `.bss`.
     pid: Option<Pid>,
 
-    /// The current thread ID
+    /// The thread last switched to, where the turn among its ready threads goes on from. The
+    /// thread each hart runs is in that hart's block.
     pub current_thread: TID,
 }
 
@@ -155,7 +156,9 @@ impl Process {
         }
     }
 
-    /// Whether the process is on the CPU.
+    /// Whether the process is on the CPU: a hart runs one of its threads (the checked build's
+    /// audit of the harts, `sched.rs`).
+    #[cfg(debug_assertions)]
     pub fn running(&self) -> bool { matches!(self.state, ProcessState::Running(_)) }
 
     /// This process's PID; a slot is given one before it is first used.
@@ -422,34 +425,18 @@ impl ProcessTable {
             ProcessState::Ready(TidMask::EMPTY) => {
                 panic!("ProcessState was `Ready` with no thread, which is invalid!");
             }
-            ProcessState::Ready(ready_threads) => {
+            // `Running`: another hart runs another of its threads. Either way the thread is one of
+            // the ready ones, which no hart runs.
+            ProcessState::Ready(ready_threads) | ProcessState::Running(ready_threads) => {
                 let new_thread =
                     tid.unwrap_or_else(|| Self::find_next_thread(ready_threads, process.current_thread));
 
-                if !ready_threads.contains(new_thread) {
-                    panic!("invalid thread ID");
-                }
-
-                process.activate();
-
-                ArchProcess::current().set_tid(new_thread);
-                process.current_thread = new_thread as _;
-                ProcessState::Running(ready_threads.without(new_thread))
-            }
-            ProcessState::Running(ready_threads) => {
-                // Ensure we can switch back to this thread, if necessary
-                let ready_threads = ready_threads.with(process.current_thread);
-
-                let new_thread =
-                    tid.unwrap_or_else(|| Self::find_next_thread(ready_threads, process.current_thread));
-
-                // Ensure the specified context is ready to run, or is
-                // currently running.
                 if !ready_threads.contains(new_thread) {
                     return Err(ProcessError::NotReady);
                 }
 
-                // Activate this process on this CPU
+                process.activate();
+
                 ArchProcess::current().set_tid(new_thread);
                 process.current_thread = new_thread as _;
                 ProcessState::Running(ready_threads.without(new_thread))
@@ -475,8 +462,7 @@ impl ProcessTable {
                 "PID {} thread {} was already queued for running when `unschedule_thread()` was called",
                 pid, tid
             ),
-            ProcessState::Running(TidMask::EMPTY) => ProcessState::Sleeping,
-            ProcessState::Running(x) => ProcessState::Ready(x),
+            ProcessState::Running(x) => off_hart(pid, x),
             other => {
                 panic!("PID {} TID {} was not in a state to be switched from: {:?}", pid, tid, other);
             }
@@ -525,34 +511,12 @@ impl ProcessTable {
     fn leave_previous(&mut self, previous_pid: Pid, previous_tid: TID, can_resume: bool) {
         let previous = self.get_process_mut(previous_pid).expect("couldn't get previous pid");
         let _oldstate = previous.state; // for tracking state in the debug print after the following closure
-        if previous.current_thread != previous_tid {
-            println!(
-                "WARNING: previous.current_thread {} != previous_tid {}",
-                previous.current_thread, previous_tid
-            );
-        }
         previous.current_thread = previous_tid;
         previous.set_state(match previous.state {
-            // If the previous process had exactly one thread that can be
-            // run, then the Running thread list will be 0.  In that case,
-            // we will either need to Sleep this process, or mark it as
-            // being Ready to run.
-            ProcessState::Running(x) if x.is_empty() => {
-                if can_resume {
-                    ProcessState::Ready(TidMask::of(previous_tid))
-                } else {
-                    ProcessState::Sleeping
-                }
-            }
-            // Otherwise, there are additional threads that can be run.
-            // Convert the previous process into "Ready", and include the
-            // current context number only if `can_resume` is `true`.
+            // The thread joins the ready ones only if `can_resume`; the process stays on the CPU
+            // while another hart runs it.
             ProcessState::Running(x) => {
-                if can_resume {
-                    ProcessState::Ready(x.with(previous_tid))
-                } else {
-                    ProcessState::Ready(x)
-                }
+                off_hart(previous_pid, if can_resume { x.with(previous_tid) } else { x })
             }
             other => panic!(
                 "previous process PID {} was in an invalid state (not Running): {:?}",
@@ -603,7 +567,11 @@ impl ProcessTable {
                         return Err(ProcessError::NotFound);
                     }
                     ProcessState::Setup { .. } | ProcessState::Allocated => new_tid = INITIAL_TID,
-                    ProcessState::Ready(x) => {
+                    ProcessState::Running(_) if !crate::arch::hart::runs_elsewhere(new_pid) => {
+                        panic!("process was running even though no hart runs it")
+                    }
+                    // `Running`: another hart runs another of its threads, and this one joins it.
+                    ProcessState::Ready(x) | ProcessState::Running(x) => {
                         // If no new context is specified, take the previous
                         // context.  If that is not runnable, do a round-robin
                         // search for the next available context.
@@ -619,9 +587,6 @@ impl ProcessTable {
                             return Err(ProcessError::NotFound);
                         }
                         new.current_thread = new_tid as _;
-                    }
-                    ProcessState::Running(_) => {
-                        panic!("process was running even though the pid was different")
                     }
                     ProcessState::Sleeping => {
                         return Err(ProcessError::NotFound);
@@ -677,18 +642,20 @@ impl ProcessTable {
             }
 
             // Transition to the new state.
+            // The thread this hart ran is `previous_tid`; other harts may run others of the
+            // process, none of them among the ready ones.
             let state = if let ProcessState::Running(x) = new.state {
-                assert!(!x.contains(new.current_thread));
+                assert!(!x.contains(previous_tid));
 
                 // If the current process can be resumed, add it to the list
                 // of potential threads
-                let x = if can_resume { x.with(new.current_thread) } else { x };
+                let x = if can_resume { x.with(previous_tid) } else { x };
 
                 // If no new thread is specified, take the previous
                 // thread.  If that is not runnable, do a round-robin
                 // search for the next available thread.
                 if new_tid == 0 {
-                    new_tid = Self::find_next_thread(x, new.current_thread);
+                    new_tid = Self::find_next_thread(x, previous_tid);
                 }
 
                 if !x.contains(new_tid) {
@@ -741,18 +708,10 @@ impl ProcessTable {
             crate::mem::MemoryManager::with_mut(|mm| mm.thread_ended(pid, tid));
         }
 
-        // Mark this process as `Ready` if there are waiting threads, or `Sleeping` if
-        // there are no waiting threads.
-        let mut new_pid = pid;
-        {
-            let process = self.get_process_mut(pid)?;
-            process.set_state(if waiting_threads.is_empty() {
-                new_pid = KERNEL_PID;
-                ProcessState::Sleeping
-            } else {
-                ProcessState::Ready(waiting_threads)
-            });
-        }
+        // Off this hart: `Ready` with waiting threads, `Sleeping` without, and still `Running`
+        // while another hart runs it. With none waiting, this hart goes to `kmain`.
+        let new_pid = if waiting_threads.is_empty() { KERNEL_PID } else { pid };
+        self.get_process_mut(pid)?.set_state(off_hart(pid, waiting_threads));
 
         // Switch to the next available TID. This moves the process back to a `Running` state.
         self.switch_to_thread(new_pid, None)?;
@@ -763,6 +722,9 @@ impl ProcessTable {
     /// Terminate the given process, the running one; the CPU goes to `kmain`.
     pub fn terminate_process(&mut self, target_pid: Pid) -> Result<(), ProcessError> {
         println!("terminate_process: {:?}", target_pid);
+        // Another hart may be running another of its threads: shoot it down there before any of
+        // its memory goes.
+        evict(target_pid);
         // R4b: every call its threads hold open fails its caller with `Dead`, and every message
         // they were sending is withdrawn, before its memory goes.
         crate::mem::MemoryManager::with_mut(|mm| crate::message::process_ending(self, mm, target_pid));
@@ -785,9 +747,7 @@ impl ProcessTable {
         let current = self.current_pid();
         assert!(target != current, "kill_process on the running process");
         // Another hart may be running it: shoot it down there before any of its memory goes.
-        crate::arch::hart::shootdown(target);
-        #[cfg(debug_assertions)]
-        crate::arch::hart::audit_left(target);
+        evict(target);
         crate::mem::MemoryManager::with_mut(|mm| crate::message::process_ending(self, mm, target));
         // `terminate` needs no address space: it names the target's mapping itself.
         self.get_process_mut(target)?.terminate()?;
@@ -795,4 +755,35 @@ impl ProcessTable {
         self.get_process(current)?.activate();
         Ok(())
     }
+}
+
+/// The state of a running process that one of its threads just left a hart in, `ready` its ready
+/// threads now: still `Running` while another hart runs it, else `Ready`, or `Sleeping` with none.
+fn off_hart(pid: Pid, ready: TidMask) -> ProcessState {
+    if crate::arch::hart::runs_elsewhere(pid) {
+        ProcessState::Running(ready)
+    } else if ready.is_empty() {
+        ProcessState::Sleeping
+    } else {
+        ProcessState::Ready(ready)
+    }
+}
+
+/// Process `pid` is ending: shoot it down on every other hart running it, which leaves its space,
+/// before any of its memory goes (kernel/memory.md, "Residual risks").
+fn evict(pid: Pid) {
+    // Debug only, never in a bench build but one recorded negative run: no hart is shot down.
+    if !cfg!(feature = "smp-no-evict") {
+        let _asked = crate::arch::hart::shootdown(pid, crate::arch::hart::Shot::Leave);
+        // The checked build's word for `smp-evict`: every hart running it has left it.
+        #[cfg(debug_assertions)]
+        if _asked != 0 {
+            println!(
+                "shootdown: PID {} stopped on hart(s) {:#b} before any of its frames is freed",
+                pid, _asked
+            );
+        }
+    }
+    #[cfg(debug_assertions)]
+    crate::arch::hart::audit_left(pid);
 }

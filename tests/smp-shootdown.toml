@@ -1,0 +1,17 @@
+description = "One process on several harts loses no page to a stale translation: a sibling's unmap, a reply returning a lend, and a lend within one process each shoot the process down on the hart where its writer runs, whose next store faults (checked build, 2 harts, icount: the harts round-robin in one host thread)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The program's own checks (the checker's pages, the judge's page, A's page) hold on QEMU even
+# without the shootdowns: QEMU empties a hart's TLB at every `satp` write, and the writer's hart
+# writes it at its slice's end. So the verdict of the recorded negative (`smp-no-shootdown`) is the
+# checked kernel's audit: a process that lost an entry while another hart ran it, and was not shot
+# down there.
+# Built with the checks on (docs/testbench.md, "Checked builds"): the audit is the checked kernel's.
+debug_assertions = true
+icount = "shift=3,sleep=off"
+programs = ["smp-shootdown"]
+smp = [2]
+timeout_secs = 300
+expect = ['^SMP-SHOOTDOWN TEST PASSED$']
+forbid = ['\[smp-shootdown\] FAIL', 'ASID audit']
+poweroff = true

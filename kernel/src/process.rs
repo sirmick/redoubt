@@ -552,8 +552,10 @@ pub fn process_map(
     }
     // The source's tables that now map nothing are the caller's to be freed of.
     crate::arch::mem::free_empty_tables(mm, &crate::mem::MemoryMapping::current(), src, src + len);
-    // The caller wrote these pages; the child may fetch from them (on this hart, the only one).
-    crate::mem::sync_if_executable(flags);
+    // The pages left the caller: no other hart running it keeps its entries for them.
+    crate::mem::shoot(pid);
+    // The caller wrote these pages; the child may fetch from them.
+    crate::mem::sync_if_executable(child, flags);
     Ok(())
 }
 

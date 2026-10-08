@@ -304,8 +304,15 @@ pub struct Boot {
     /// Hart counts to run with. One run per entry.
     #[serde(default = "default_smp")]
     pub smp: Vec<u32>,
+    /// The hart counts stand under `--smp`: a case that can judge what it is about only at its own
+    /// counts says so, and why, in a comment beside the key.
+    #[serde(default)]
+    pub keep_smp: bool,
     #[serde(default = "default_timeout")]
     pub timeout_secs: f64,
+    /// The bound instead of `timeout_secs` when `--smp` replaces the counts: for a case whose
+    /// work takes longer on several harts, with the reason in a comment beside the key.
+    pub timeout_secs_smp: Option<f64>,
     /// Guest RAM in MiB (QEMU `-m`); default `target::DEFAULT_MEMORY_MIB`. Small for cases
     /// that exhaust RAM on purpose, so they take milliseconds.
     pub memory_mib: Option<u32>,
@@ -400,8 +407,9 @@ pub struct Boot {
     /// expression: self-checks proving that a bench feature can fail (TENETS.md, tenet 6).
     pub must_fail: Option<String>,
     /// A check the bench runs on the console log once everything else passed, by name, then its
-    /// arguments. The one there is: `sched_oracle`, the stride queue's ranks, floor and lifts over
-    /// a `sched-trace` kernel's trace (`sched_oracle.rs`); `r10_p99_us=N` bounds destructions.
+    /// arguments. `sched_oracle`: the stride queue's ranks, floor and lifts over a `sched-trace`
+    /// kernel's trace (`sched_oracle.rs`); `r10_p99_us=N` bounds destructions. `smp_fence`: the same
+    /// trace's shootdowns for a page made executable reached the other harts running the process.
     pub post_check: Option<String>,
 }
 
@@ -772,6 +780,15 @@ fn default_timeout() -> f64 { 60.0 }
 fn default_whole_run() -> bool { true }
 
 impl Boot {
+    /// `--smp N`: one boot at `N` harts instead of the case's counts, unless it keeps its own,
+    /// bounded by `timeout_secs_smp` where the case gives one.
+    pub fn with_harts(&mut self, harts: Option<u32>) {
+        if let Some(n) = harts.filter(|_| !self.keep_smp) {
+            self.smp = vec![n];
+            self.timeout_secs = self.timeout_secs_smp.unwrap_or(self.timeout_secs);
+        }
+    }
+
     /// Whether the real `init` is in the first program's place: then the other programs are only
     /// bundle entries, which `init` starts as its manifest says.
     pub fn under_init(&self) -> bool { self.programs.first().is_some_and(Program::is_init) }
@@ -1063,6 +1080,34 @@ mod tests {
         assert_eq!(otp.workspace.as_deref(), Some(Path::new("userland/otp")));
         assert_eq!(otp.features, ["beamlet-redoubt/fake"]);
         assert!(toml::from_str::<HostTests>("packages = ['p']\nworkspcae = 'userland/otp'").is_err());
+    }
+
+    /// `--smp N` replaces a boot case's hart counts with `[N]`, but not a case that keeps its own.
+    #[test]
+    fn smp_replaces_a_cases_hart_counts_unless_it_keeps_them() {
+        let boot = |fields: &str| {
+            let text =
+                format!("description = \"d\"\nkind = \"boot\"\nprograms = ['p']\nexpect = []\n{fields}");
+            let Kind::Boot(boot) = toml::from_str::<Case>(&text).unwrap().kind else { panic!("a boot case") };
+            boot
+        };
+        let mut plain = boot("smp = [1, 4]");
+        plain.with_harts(None);
+        assert_eq!(plain.smp, [1, 4]);
+        plain.with_harts(Some(2));
+        assert_eq!(plain.smp, [2]);
+        let mut default = boot("");
+        default.with_harts(Some(2));
+        assert_eq!(default.smp, [2]);
+        let mut kept = boot("smp = [1]\nkeep_smp = true\ntimeout_secs_smp = 90");
+        kept.with_harts(Some(2));
+        assert_eq!((kept.smp.as_slice(), kept.timeout_secs), ([1].as_slice(), 60.0));
+        // A case slower on several harts takes its own bound under `--smp`, and only then.
+        let mut slow = boot("timeout_secs = 20\ntimeout_secs_smp = 90");
+        slow.with_harts(None);
+        assert_eq!(slow.timeout_secs, 20.0);
+        slow.with_harts(Some(2));
+        assert_eq!(slow.timeout_secs, 90.0);
     }
 
     /// A fanout's jobs are values in a variable over one test file, the test files, or the tests;

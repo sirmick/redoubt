@@ -8,6 +8,9 @@ debug_assertions = true
 # the boot endpoint's receive right; PID 4 redoubt-attack, badged 4.
 programs = ["log-server", "redoubt-victim", "redoubt-attack"]
 timeout_secs = 20
+# At two harts the buffers step's 2,000 polls each wake the victim on the other hart, whose reply
+# crosses back: about 33 s under icount, where a hart spinning on the kernel lock spends its turn.
+timeout_secs_smp = 90
 # Each attempt's error is pinned as progress, so a refusal for the wrong reason fails. The verdict
 # is the victim's -- it is still receiving on a right nobody took -- and log-server's DONE line
 # naming it, and the clean power-off, which a panicked kernel never reaches. `log-server` prefixes

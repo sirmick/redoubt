@@ -319,14 +319,16 @@ fn a_deschedule_charges_at_least_one_unit_and_a_destroy_only_what_ran() {
     assert_eq!((cpu.cur, cpu.pending), (None, 0));
 }
 
-/// Two harts on one queue: budgets 1 and 2 runnable, hart 1 running 1 and hart 0 running 2.
+/// Two harts on one queue: budgets 1 and 2 runnable with one thread each, hart 1 running 1 and
+/// hart 0 running 2.
 fn two_harts_running() -> (Map, Harts<u64, 4, 2>) {
     let mut bs = map(&[1, 2, 3]);
     let mut harts: Harts<u64, 4, 2> = Harts::new();
     harts.reconcile(&mut bs, &[], &mut [1, 2], |_, b| b != 3);
-    assert_eq!(harts.pick(1, &mut bs, |_, b| Some(b)), Some((1, 1)));
+    assert_eq!(harts.pick(&mut bs, |_, b| Some(b)), Some((1, 1)));
     harts.switch(1, &mut bs, Some(1), |_, _| true);
-    assert_eq!(harts.pick(0, &mut bs, |_, b| Some(b)), Some((2, 2)));
+    // 1's one thread runs on hart 1: hart 0 is offered nothing of it.
+    assert_eq!(harts.pick(&mut bs, |_, b| (b != 1).then_some(b)), Some((2, 2)));
     harts.switch(0, &mut bs, Some(2), |_, _| true);
     (bs, harts)
 }
@@ -344,22 +346,55 @@ fn a_budget_running_on_another_hart_stays_queued_through_this_harts_reconcile() 
 }
 
 #[test]
-fn a_pick_skips_budgets_running_on_other_harts() {
+fn a_pick_passes_over_a_budget_whose_threads_all_run_on_harts() {
     let (mut bs, mut harts) = two_harts_running();
-    // Hart 0 leaves 2 and picks again: 1 is lower (it ran nothing) but runs on hart 1.
+    // Hart 0 leaves 2 and picks again: 1 is lower (it ran nothing), but its one thread runs on
+    // hart 1, so 2 is picked and 1 stays queued.
     harts.switch(0, &mut bs, None, |_, _| true);
-    assert_eq!(harts.pick(0, &mut bs, |_, b| Some(b)), Some((2, 2)));
+    assert_eq!(harts.pick(&mut bs, |_, b| (b != 1).then_some(b)), Some((2, 2)));
+    assert!(harts.q.contains(1) && bs.state(1).queued);
     // With 3 runnable it is still never 1.
     harts.reconcile(&mut bs, &[], &mut [3], |_, _| true);
     for _ in 0..4 {
-        let (b, _) = harts.pick(0, &mut bs, |_, b| Some(b)).unwrap();
+        let (b, _) = harts.pick(&mut bs, |_, b| (b != 1).then_some(b)).unwrap();
         assert_ne!(b, 1);
         harts.switch(0, &mut bs, Some(b), |_, _| true);
         harts.switch(0, &mut bs, None, |_, _| true);
     }
-    // Hart 1 itself may pick it again.
+    assert!(harts.q.contains(1));
+    // Once hart 1 leaves it, its thread can be picked again.
     harts.switch(1, &mut bs, None, |_, _| true);
-    assert!(harts.pick(1, &mut bs, |_, b| Some(b)).is_some());
+    assert!(harts.pick(&mut bs, |_, b| Some(b)).is_some());
+}
+
+#[test]
+fn a_budget_with_two_runnable_threads_runs_on_two_harts_at_one_pass() {
+    let mut bs = map(&[1, 2]);
+    let mut harts: Harts<u64, 4, 2> = Harts::new();
+    harts.reconcile(&mut bs, &[], &mut [1, 2], |_, _| true);
+    // 1 has threads 10 and 11: each hart takes one, 1 ranking lowest both times.
+    assert_eq!(harts.pick(&mut bs, |_, b| Some(b * 10)), Some((1, 10)));
+    harts.switch(0, &mut bs, Some(1), |_, _| true);
+    assert_eq!(harts.pick(&mut bs, |_, b| Some(b * 10 + 1)), Some((1, 11)));
+    harts.switch(1, &mut bs, Some(1), |_, _| true);
+    // Queued once, however many harts run it.
+    assert_eq!(harts.q.queued().filter(|b| *b == 1).count(), 1);
+    // Both runners charge the one pass: a settle folds both.
+    let before = bs.state(1).pass;
+    harts.accrue(0, 4);
+    harts.accrue(1, 6);
+    harts.settle(&mut bs, 1);
+    assert_eq!(bs.state(1).pass, before + u128::from(STRIDE));
+    assert_eq!((harts.runners[0].pending, harts.runners[1].pending), (0, 0));
+    // Hart 0 leaves with nothing of 1 runnable: 1 stays queued (hart 1 runs it), requeued behind
+    // its equals and charged its minimum.
+    let (pass, back) = (bs.state(1).pass, harts.q.back);
+    harts.switch(0, &mut bs, None, |_, _| false);
+    assert!(harts.q.contains(1));
+    assert_eq!((bs.state(1).pass, bs.state(1).tie), (pass + u128::from(MIN_CHARGE * STRIDE / 10), back + 1));
+    // Hart 1 leaves too: now it goes.
+    harts.switch(1, &mut bs, None, |_, _| false);
+    assert!(!harts.q.contains(1));
 }
 
 #[test]

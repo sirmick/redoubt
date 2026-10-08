@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 423
+revision = 425
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -604,8 +604,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   needs = ["SMP1"]
   body = "The owner's goal (QA SMP1-design): a beamlet VM's schedulers run on several harts at once. Brief: .wash/local/SMP3-implementer.md (design: .wash/local/SMP1-multihart.md). Tier A, size M.\n\n- The pick: a hart takes the lowest-pass budget with a runnable thread no hart is running (SMP1's one-runner predicate replaced). Stride arithmetic per budget unchanged; each hart charges its runner under the lock; the floor counts a budget with several runners once.\n- SMP1's shootdown gains its callers, before the call returns or the frame is reused: unmap, a narrowing set_flags, process_map's source, a lend or transfer sent, a reply returning a lend. Every site that clears or narrows a VALID user entry is listed.\n- fence.i: any call installing an executable entry shoots the process down (the shootdown fences). A thread that moves needs no fence of its own (Architect: one user entry per frame plus W^X).\n- Cases: smp-shootdown (unmap, lend returned, lend within one process; recorded negative smp-no-shootdown), smp-fence (verdict from a trace shootdown record), the whole bench at --smp 2.\n- Pages: scheduling.md's pick, cursor, floor and charging lines; memory.md's fence paragraph, lending status, several-harts residual (lend-within-one-process residual deleted); memory-layout.md's flush residual; m2 step 4 and Progress.\n\nR12 across harts is SMP2's, after this."
-  state = "active"
-  revision = 334
+  state = "done"
+  revision = 425
   overrides = ["2026-10-08: started by Orchestrator before M1 (reported): Owner (2026-10-07): M2 is the near-term goal and its several-harts track begins first (m2-usable-shell.md); SMP3's only need, SMP1, is merged; it touches the kernel's pick and shootdown callers, not the M1 work in flight."]
 
 [[node]]

@@ -16,8 +16,9 @@ use test_programs::rd::{self, Call, Error, Received};
 use test_programs::sched::{Bench, rtc};
 
 const FOREVER: u64 = u64::MAX;
-/// How long the caller waits before its call is abandoned, in µs.
-const CALL_TIMEOUT: u64 = 40_000;
+/// How long the caller waits before its call is abandoned, in µs: long enough that the record
+/// page goes first however the program's threads share the harts and the kernel lock.
+const CALL_TIMEOUT: u64 = 200_000;
 /// How long the RTC alarm is set ahead of the unmap, in ns.
 const ALARM_AHEAD: u64 = 20_000_000;
 /// The least a first `receive` must have waited to have been blocked when its record went.

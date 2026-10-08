@@ -53,6 +53,10 @@ sched-test-and-set-entry = ["test-only"]
 # it owes an ASID flush without making it (`smp-no-stale-mask`), so `smp-evict` must fail.
 smp-no-evict = ["test-only"]
 smp-no-stale-mask = ["test-only"]
+# Debug only, never in a bench build but one recorded negative run: no shootdown at an unmap, a
+# narrowing or executable `set_flags`, a `process_map`, a lend, a transfer or a return (a
+# destruction's stays), so `smp-shootdown` and `smp-fence` must fail.
+smp-no-shootdown = ["test-only"]
 # Debug only, never in a bench build but one recorded negative run: the audit after a destruction
 # runs unstamped, so the oracle cannot subtract it and the deadline notice must miss.
 audit-unstamped = ["sched-trace"]
