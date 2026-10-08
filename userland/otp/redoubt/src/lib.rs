@@ -605,19 +605,20 @@ pub fn budget_pages<'a>(args: impl Iterator<Item = &'a str>) -> Option<u64> {
     n.parse().ok().filter(|&pages| pages > 0)
 }
 
-/// The VM's limits for a budget of `budget_pages` pages: one process's heap (`max_heap_words`) and
-/// all ETS tables together (`max_ets_words`) each get a sixteenth of it ([`LIMIT_SHARE`]), in
-/// the VM's words ([`VM_WORD_BYTES`]): the same bytes at either width. A flooding process peaks
-/// at about four times its heap limit (the old heap, the collector's copy and its growth), so with
-/// a budget at least twice what the VM uses on its own, one flooding process or table meets its
-/// limit, and is killed or refused in Erlang, while the VM still has pages. Without a budget, the
-/// VM's defaults.
+/// The VM's limits for a budget of `budget_pages` pages: one process's heap (`max_heap_words`),
+/// all ETS tables together (`max_ets_words`) and `persistent_term` (`max_persistent_words`) each
+/// get a sixteenth of it ([`LIMIT_SHARE`]), in the VM's words ([`VM_WORD_BYTES`]): the same bytes
+/// at either width. A flooding process peaks at about four times its heap limit (the old heap,
+/// the collector's copy and its growth), so with a budget at least twice what the VM uses on its
+/// own, one flooding process, table or `persistent_term` meets its limit, and is killed or refused
+/// in Erlang, while the VM still has pages. Without a budget, the VM's defaults.
 pub fn limits(budget_pages: Option<u64>) -> Limits {
     let mut limits = Limits::default();
     if let Some(pages) = budget_pages {
         let share = pages.saturating_mul(PAGE_SIZE as u64) / LIMIT_SHARE / VM_WORD_BYTES;
         limits.max_heap_words = share;
         limits.max_ets_words = share;
+        limits.max_persistent_words = share;
     }
     limits
 }

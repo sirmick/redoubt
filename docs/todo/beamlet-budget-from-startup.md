@@ -2,9 +2,9 @@
 
 ## What
 
-`beamlet` sizes its heap and ETS limits from `budget_pages=N`, a manifest argument
-([limits](../userland/beamlet.md#limits-inside-one-vm)). Nothing checks that N is the budget
-`init` gives it: arguments are opaque to `init` ([init](../servers/init.md)). A session's
+`beamlet` sizes its heap, ETS and `persistent_term` limits from `budget_pages=N`, a manifest
+argument ([limits](../userland/beamlet.md#limits-inside-one-vm)). Nothing checks that N is the
+budget `init` gives it: arguments are opaque to `init` ([init](../servers/init.md)). A session's
 `beamlet` is the steward's to start, which writes N from the same `sizes` limit it creates the
 session's budget with ([the steward](../servers/steward.md#authentication-and-sessions)); a
 manifest that starts `beamlet` itself still keeps the two equal by hand.

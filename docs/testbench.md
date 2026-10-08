@@ -1374,8 +1374,8 @@ of what its budget holds beside the stack, 11,885 pages of the 11,904 `sizes` gi
 ([the steward](servers/steward.md#authentication-and-sessions)): 77 pages over twice its heap's
 largest peak across the memory cases on each width, 5,904 pages, above what its prompt
 holds ([beamlet](userland/beamlet.md#what-the-vm-holds-at-its-prompt)). `beamlet-footprint` scans
-the VM alone, under its own copy of the single-VM manifest. Its cap leaves its process heap
-and ETS limits, a sixteenth of its budget each (744 pages), reachable: a flooding process, about
+the VM alone, under its own copy of the single-VM manifest. Its cap leaves its process heap,
+ETS and `persistent_term` limits, a sixteenth of its budget each (744 pages), reachable: a flooding process, about
 four times its limit, still fits under the cap ([beamlet](userland/beamlet.md#limits-inside-one-vm)).
 
 This is a measurement of the paths the case drove. Other requests or deeper call paths may

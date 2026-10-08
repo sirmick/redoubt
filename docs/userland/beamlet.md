@@ -168,13 +168,16 @@ afterwards. The hard backstop is the embedder's allocator, and on Redoubt the se
 limit ([R6 (charging)](../kernel/budgets.md#r6-charging)). The image also caps `beamlet`'s heap
 ([init](../servers/init.md#the-boot-manifest)), but at the budget's edge, where the budget binds
 first: that cap is there for the bench's measurement. On Redoubt the platform lowers
-`max_heap_words` and `max_ets_words` to a sixteenth of the VM's budget each, which it takes from its
+`max_heap_words`, `max_ets_words` and `max_persistent_words` to a sixteenth of the VM's budget
+each, which it takes from its
 required argument `budget_pages=N`, the budget's pages
 ([todo](../todo/beamlet-budget-from-startup.md)). Each counts the VM's own 8-byte words, as the VM
 counts a process (two for a 16-byte term), so a limit is the same bytes on rv32 as on rv64. A flooding process peaks at about four times its
 heap limit, the old heap, the collector's copy and its growth, so the budget must be at least twice
-what the VM uses with no Erlang process running; then one flooding process, or the tables, meets its
-limit while the VM still has pages. Several flooding at once, or a native's single large allocation,
+what the VM uses with no Erlang process running; then one flooding process, the tables or
+`persistent_term` meets its limit while the VM still has pages. A session's sixteenth is 744
+pages, 3,047,424 bytes; the shell at its prompt holds 3,696 bytes in ETS and 36,112 counted in
+`persistent_term`, about a thousandth and a hundredth of it. Several flooding at once, or a native's single large allocation,
 reach the backstop instead, which ends the VM, and `init` restarts it. It is a server like any other
 under `init`'s restart rule: a VM that cannot stay up (a start module that fails every time, a
 manifest without `budget_pages`) is restarted until the limit, and then the machine reboots
