@@ -11,18 +11,23 @@ defmodule Redoubt.Shell.DriverTest do
   @cols 120
   @rows 12
 
+  # `opts` replace these (the driver takes an option's first value): a `size` of its own is the
+  # driver's size, and the test's model must be made at it.
   defp start(opts \\ []) do
     test = self()
 
     driver =
       spawn_link(fn ->
         Redoubt.Shell.Driver.run(
-          [
-            input: :messages,
-            output: fn bytes -> send(test, {:drawn, IO.iodata_to_binary(bytes)}) end,
-            size: fn -> {@cols, @rows} end,
-            shell: {Redoubt.Shell, :start_link, [[banner: false]]}
-          ] ++ opts
+          Keyword.merge(
+            [
+              input: :messages,
+              output: fn bytes -> send(test, {:drawn, IO.iodata_to_binary(bytes)}) end,
+              size: fn -> {@cols, @rows} end,
+              shell: {Redoubt.Shell, :start_link, [[banner: false]]}
+            ],
+            opts
+          )
         )
       end)
 
@@ -279,6 +284,37 @@ defmodule Redoubt.Shell.DriverTest do
     assert String.length(row(terminal, 0)) == @cols
     assert row(terminal, 1) =~ ~r/1+"\)$/
     assert row(terminal, 2) == "130"
+    type(driver, "exit\r")
+    ends(driver)
+  end
+
+  test "a prompt wider than the terminal wraps, and what is typed after it is shown", %{tmp_dir: tmp_dir} do
+    # A working directory long enough that the prompt, `<dir> (1)> `, is 300 columns.
+    {:ok, home} = File.cwd()
+    on_exit(fn -> File.cd!(home) end)
+    base = Path.join(tmp_dir, "d")
+    dir = base <> String.duplicate("x", 300 - String.length(base <> " (1)> "))
+    File.mkdir_p!(dir)
+    File.cd!(dir)
+
+    {driver, terminal} = start()
+    type(driver, "1 + 1")
+    terminal = screen(terminal, &(Terminal.text(&1) =~ "1 + 1"))
+    # 300 columns: two full rows and 60 columns of a third, where the typing follows.
+    assert row(terminal, 0) == String.slice(dir, 0, @cols)
+    assert row(terminal, 2) == String.slice(dir, 2 * @cols, @cols) <> " (1)> 1 + 1"
+    assert Terminal.cursor(terminal) == {2, 60 + String.length("1 + 1")}
+
+    # Ctrl+A goes back to the line's start, just after the prompt, and an insertion there redraws
+    # the whole line.
+    type(driver, "\x012")
+    terminal = screen(terminal)
+    assert row(terminal, 2) =~ ~r/ \(1\)> 21 \+ 1$/
+    assert Terminal.cursor(terminal) == {2, 61}
+
+    type(driver, "\r")
+    terminal = screen(terminal)
+    assert row(terminal, 3) == "22"
     type(driver, "exit\r")
     ends(driver)
   end
