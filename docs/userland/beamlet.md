@@ -294,6 +294,15 @@ checks it: each test runs on BEAM and on beamlet and the printed results must be
   assembly: it runs a `receive` that `erl_eval` evaluates, such as one typed at the shell's
   prompt. The rest stand on BEAM's C runtime (the boot process, ports, sockets, tracing) and
   never load; a call to one is `undef` unless a native answers.
+- **A fun's identity is its module's checksum.** A fun read from the external format with the
+  loaded module's checksum is that code's fun; one with any other checksum keeps the identity it
+  came with, is written back byte for byte, and a call to it is `badfun`, as on BEAM. Three
+  artifacts of BEAM's fun table are not reproduced: the order of two funs that differ only in
+  their checksum (here the loaded code's sorts first, then by checksum); the `OldIndex` a
+  second decode of one unknown checksum is written back with (BEAM keeps the first decode's;
+  here each fun keeps its own); and a fun decoded before its code is loaded, which stays apart
+  from that code once it loads with the fun's checksum (BEAM's table then makes the two equal;
+  here they compare unequal).
 - **Processes as on BEAM.** Links, monitors, aliases, exit signals, registered names, timers and
   ETS, on one or more scheduler threads with per-process heaps and copying garbage collection.
 - **Regular expressions** (`beamlet-re`) run in linear time for every pattern, so a hostile

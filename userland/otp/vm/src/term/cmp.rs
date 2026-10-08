@@ -213,10 +213,17 @@ fn compare_fun_heads(x: &FunView, y: &FunView) -> Ordering {
         ) => m1.as_str().cmp(m2.as_str()).then_with(|| f1.as_str().cmp(f2.as_str())).then(a1.cmp(a2)),
         (FunView::Local { .. }, FunView::Export { .. }) => Ordering::Less,
         (FunView::Export { .. }, FunView::Local { .. }) => Ordering::Greater,
+        // A decoded fun of other code than the loaded code's, by its checksum, is another fun (as
+        // on BEAM, where their order is the runtime's own: here the loaded code's first).
         (
-            FunView::Local { module: m1, index: i1, env: e1, .. },
-            FunView::Local { module: m2, index: i2, env: e2, .. },
-        ) => m1.as_str().cmp(m2.as_str()).then(i1.cmp(i2)).then(e1.len().cmp(&e2.len())),
+            FunView::Local { module: m1, index: i1, env: e1, external: x1, .. },
+            FunView::Local { module: m2, index: i2, env: e2, external: x2, .. },
+        ) => m1
+            .as_str()
+            .cmp(m2.as_str())
+            .then(i1.cmp(i2))
+            .then(e1.len().cmp(&e2.len()))
+            .then_with(|| x1.map(|e| e.md5).cmp(&x2.map(|e| e.md5))),
     }
 }
 
