@@ -17,8 +17,18 @@ fn founder() -> Caller { caller(1) }
 /// A client's connection, as `new_connection` mints it.
 fn client() -> Caller { caller(FIRST_MINTED_BADGE + 3) }
 
+/// The list as `init` writes it: each entry's length, a colon and its name.
+fn sized(entries: &[(&str, usize)]) -> Vec<String> {
+    entries.iter().map(|(name, len)| alloc::format!("{len}:{name}")).collect()
+}
+
+fn listed(entries: &[(&str, usize)]) -> Result<BootFs, SetupError> {
+    BootFs::new(sized(entries).iter().map(String::as_str))
+}
+
 fn filled(entries: &[(&str, &[u8])]) -> BootFs {
-    let mut fs = BootFs::new(entries.iter().map(|(name, _)| *name)).expect("the public list");
+    let list: Vec<(&str, usize)> = entries.iter().map(|(name, data)| (*name, data.len())).collect();
+    let mut fs = listed(&list).expect("the public list");
     for (name, data) in entries {
         fs.handle(&founder(), Message::Add(Add { name, offset: 0, data }), &[]).expect("add");
     }
@@ -28,12 +38,13 @@ fn filled(entries: &[(&str, &[u8])]) -> BootFs {
 
 #[test]
 fn the_public_list_is_checked_before_anything_is_served() {
-    assert_eq!(BootFs::new(["a", "b"].into_iter()).map(|fs| fs.len()), Ok(2));
-    assert_eq!(BootFs::new(["a", "a"].into_iter()).err(), Some(SetupError::Duplicate));
+    assert_eq!(listed(&[("a", 1), ("b", 2)]).map(|fs| fs.len()), Ok(2));
+    assert_eq!(listed(&[("a", 1), ("a", 1)]).err(), Some(SetupError::Duplicate));
     for bad in ["", ".", "..", "a/b", "a\0b"] {
-        assert_eq!(BootFs::new([bad].into_iter()).err(), Some(SetupError::BadName), "{bad:?}");
+        assert_eq!(listed(&[(bad, 1)]).err(), Some(SetupError::BadName), "{bad:?}");
     }
-    let many: Vec<String> = (0..=MAX_ENTRIES).map(|i| alloc::format!("e{i}")).collect();
+    let many: Vec<(&str, usize)> = (0..=MAX_ENTRIES).map(|_| ("e", 1)).collect();
+    let many: Vec<String> = many.iter().enumerate().map(|(i, (_, l))| alloc::format!("{l}:e{i}")).collect();
     assert_eq!(
         BootFs::new(many.iter().map(String::as_str)).err(),
         Some(SetupError::TooMany),
@@ -41,11 +52,72 @@ fn the_public_list_is_checked_before_anything_is_served() {
     );
 }
 
+/// Each entry is `LENGTH:NAME`: the length canonical, the name split off at the first colon and
+/// checked as before, and the lengths together within the bound, all before anything is served.
+#[test]
+fn an_entry_is_a_canonical_length_a_colon_and_a_name() {
+    let one = |arg: &str| BootFs::new([arg].into_iter());
+    assert_eq!(one("0:empty").map(|fs| fs.reserved("empty")), Ok(Some(0)));
+    assert_eq!(one("65537:a").map(|fs| fs.reserved("a")), Ok(Some(65537)));
+    // A name may hold a colon: the split is at the first.
+    assert_eq!(one("3:erofsd:system").map(|fs| fs.entry("erofsd:system").is_some()), Ok(true));
+    for bad in ["keyd", ":keyd", "007:keyd", "00:keyd", "1a:keyd", "-1:keyd", "99999999999999999999999:keyd"]
+    {
+        assert_eq!(one(bad).err(), Some(SetupError::BadLength), "{bad:?}");
+    }
+    for bad in ["1:", "1:.", "1:..", "1:a/b", "1:a\0b"] {
+        assert_eq!(one(bad).err(), Some(SetupError::BadName), "{bad:?}");
+    }
+    assert_eq!(listed(&[("a", MAX_BYTES), ("b", 1)]).err(), Some(SetupError::TooLarge));
+    assert_eq!(listed(&[("a", usize::MAX), ("b", 1)]).err(), Some(SetupError::TooLarge), "no overflow");
+    assert_eq!(listed(&[("a", MAX_BYTES)]).map(|fs| fs.len()), Ok(1), "exactly the bound is fine");
+}
+
+/// An entry's buffer is reserved for its declared length at the start and never grown: the
+/// server's heap holds the entries, whatever chunks the launcher pushes and wherever an image
+/// falls against a power of two (doubling from a 60 KiB first chunk once put a 3.76 MiB image in
+/// a 7.5 MiB buffer, with the old one live beside it).
+#[test]
+fn an_entry_is_reserved_once_for_its_length() {
+    let len = (1 << 16) + 1;
+    for chunk in [32 * 1024usize, 60 * 1024] {
+        let mut fs = listed(&[("image", len)]).unwrap();
+        assert_eq!(fs.reserved("image"), Some(len));
+        let bytes = vec![7u8; len];
+        for (i, part) in bytes.chunks(chunk).enumerate() {
+            let add = Message::Add(Add { name: "image", offset: (i * chunk) as u64, data: part });
+            fs.handle(&founder(), add, &[]).expect("add");
+        }
+        fs.handle(&founder(), Message::Seal(Seal {}), &[]).expect("seal");
+        assert_eq!(fs.reserved("image"), Some(len), "chunks of {chunk}: grown");
+        assert_eq!(fs.entry("image").map(<[u8]>::len), Some(len));
+    }
+}
+
+/// A chunk that would pass the declared length is refused, and the entry stays as it was; a seal
+/// while an entry is short of its length is refused, and `/boot` stays empty.
+#[test]
+fn a_chunk_past_the_length_and_a_seal_before_it_are_refused() {
+    let mut fs = listed(&[("keyd", 5)]).unwrap();
+    let add = |fs: &mut BootFs, offset, data: &[u8]| {
+        fs.handle(&founder(), Message::Add(Add { name: "keyd", offset, data }), &[]).err()
+    };
+    assert_eq!(add(&mut fs, 0, b"abc"), None);
+    assert_eq!(add(&mut fs, 3, b"def"), Some(ErrorCode::Refused), "past the length");
+    assert_eq!(fs.entry("keyd"), Some(&b"abc"[..]));
+    assert_eq!(fs.handle(&founder(), Message::Seal(Seal {}), &[]).err(), Some(ErrorCode::Refused), "short");
+    assert!(!fs.sealed());
+    assert_eq!(fs.walk(&client(), &Node::Root, "keyd").err(), Some(NineError::NOT_FOUND));
+    assert_eq!(add(&mut fs, 3, b"de"), None);
+    assert!(fs.handle(&founder(), Message::Seal(Seal {}), &[]).is_ok());
+    assert!(fs.walk(&client(), &Node::Root, "keyd").is_ok());
+}
+
 /// `add` names an entry the list already holds, at exactly the offset reached so far, so a
 /// chunk cannot be lost, repeated or reordered; anything else is refused.
 #[test]
 fn add_only_appends_to_a_listed_name_in_order() {
-    let mut fs = BootFs::new(["keyd", "beamlet"].into_iter()).unwrap();
+    let mut fs = listed(&[("keyd", 7), ("beamlet", 2)]).unwrap();
     let add = |fs: &mut BootFs, name, offset, data: &[u8]| {
         fs.handle(&founder(), Message::Add(Add { name, offset, data }), &[]).err()
     };
@@ -64,7 +136,7 @@ fn add_only_appends_to_a_listed_name_in_order() {
 /// Only the founding connection may fill `/boot`, and only before `seal`.
 #[test]
 fn setup_is_refused_after_seal_and_from_every_minted_connection() {
-    let mut fs = BootFs::new(["keyd"].into_iter()).unwrap();
+    let mut fs = listed(&[("keyd", 1)]).unwrap();
     let add = Message::Add(Add { name: "keyd", offset: 0, data: b"x" });
     assert_eq!(fs.handle(&client(), add, &[]).err(), Some(ErrorCode::Refused));
     assert_eq!(fs.handle(&client(), Message::Seal(Seal {}), &[]).err(), Some(ErrorCode::Refused));
@@ -80,7 +152,7 @@ fn setup_is_refused_after_seal_and_from_every_minted_connection() {
 /// so a client that gets there early cannot see a half-written entry.
 #[test]
 fn nothing_is_visible_before_seal() {
-    let mut fs = BootFs::new(["keyd"].into_iter()).unwrap();
+    let mut fs = listed(&[("keyd", 1)]).unwrap();
     fs.handle(&founder(), Message::Add(Add { name: "keyd", offset: 0, data: b"E" }), &[]).unwrap();
     assert_eq!(fs.walk(&client(), &Node::Root, "keyd").err(), Some(NineError::NOT_FOUND));
     assert_eq!(fs.dir_entry(&client(), &Node::Root, 0), Ok(None));
@@ -156,21 +228,19 @@ fn the_directory_lists_exactly_the_public_list_in_order() {
     assert_eq!((root.name.as_str(), root.mode), ("/", DMDIR | 0o555));
 }
 
-/// The total is bounded, so a launcher cannot make this server eat the machine's memory.
+/// The total is bounded at the list, so a launcher cannot make this server eat the machine's
+/// memory, and no add passes an entry's declared length.
 #[test]
 fn the_published_bytes_are_bounded() {
-    let mut fs = BootFs::new(["big"].into_iter()).unwrap();
+    assert_eq!(listed(&[("big", MAX_BYTES + 1)]).err(), Some(SetupError::TooLarge));
+    let mut fs = listed(&[("big", 1 << 16)]).unwrap();
     let chunk = vec![0u8; 1 << 16];
-    let mut offset = 0u64;
-    loop {
-        let add = Message::Add(Add { name: "big", offset, data: &chunk });
-        if fs.handle(&founder(), add, &[]).is_err() {
-            break;
-        }
-        offset += chunk.len() as u64;
-        assert!(offset <= MAX_BYTES as u64 + chunk.len() as u64, "unbounded");
-    }
-    assert!(offset > 0 && offset <= MAX_BYTES as u64);
+    let add = |fs: &mut BootFs, offset, data: &[u8]| {
+        fs.handle(&founder(), Message::Add(Add { name: "big", offset, data }), &[]).err()
+    };
+    assert_eq!(add(&mut fs, 0, &chunk), None);
+    assert_eq!(add(&mut fs, 1 << 16, &chunk[..1]), Some(ErrorCode::Refused));
+    assert_eq!(fs.entry("big").map(<[u8]>::len), Some(1 << 16));
 }
 
 /// Every bucket at its cap fits the budget the manifest gives this server (servers/serving.md R26):

@@ -302,7 +302,8 @@ Reset right. The loader maps the bundle into it, read-only
    `init` holds one. Without a `consoled` entry, `init` keeps the UART;
 5. starts the rest of the drivers and the servers below the steward: `bootfsd`, `blkd`, each
    volume's `walfsd`, `littlefsd` or `erofsd`, `netd`, `ipd` and `sshd`, then pushes the `public`
-   entries to `bootfsd`;
+   entries to `bootfsd`, whose arguments named each with its length from the bundle
+   ([bootfsd](bootfsd.md#filling-it));
 6. starts the steward, the entry `steward.server` names, after the public entries, since it
    starts sessions from `/boot`: handing it the `users` budget (that entry alone, by name in its
    startup block; no `handed` item names a budget), its `handed` badges at `bootfsd`, each

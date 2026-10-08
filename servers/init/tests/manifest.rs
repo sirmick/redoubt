@@ -508,8 +508,13 @@ fn bootfsd_is_given_the_public_list_after_its_buckets() {
     let mut m = image();
     m.public = vec!["trace".into()];
     let bootfsd = &m.servers[2];
-    assert_eq!(redoubt_init::check::args(&m, bootfsd, &BUNDLE_KEY), ["buckets=5", "trace"]);
-    assert_eq!(redoubt_init::check::args(&m, &m.servers[0], &BUNDLE_KEY).len(), 3, "only bootfsd gets it");
+    // Each public entry with its length from the bundle, so bootfsd reserves it once.
+    assert_eq!(redoubt_init::check::args(&m, bootfsd, &BUNDLE_KEY, &ENTRIES), ["buckets=5", "100:trace"]);
+    assert_eq!(
+        redoubt_init::check::args(&m, &m.servers[0], &BUNDLE_KEY, &ENTRIES).len(),
+        3,
+        "only bootfsd gets it"
+    );
     // The names bootfsd serves come from public alone.
     server(&mut m, "bootfsd").args.push("trace".into());
     refused_at(&m, "servers[2].args[1]", Why::Argument);
@@ -547,10 +552,15 @@ fn a_volume_s_labels_go_to_its_server_and_to_blkd() {
     server(&mut m, "bootfsd").volume = Some("scratch".into());
     assert!(on_virt(&m).is_ok());
     let args = |m: &Manifest, name: &str| {
-        redoubt_init::check::args(m, m.servers.iter().find(|s| s.name == name).unwrap(), &BUNDLE_KEY)
+        redoubt_init::check::args(
+            m,
+            m.servers.iter().find(|s| s.name == name).unwrap(),
+            &BUNDLE_KEY,
+            &ENTRIES,
+        )
     };
     assert_eq!(args(&m, "keyd").last().unwrap(), "labels=7");
-    assert_eq!(args(&m, "bootfsd"), ["buckets=5", "beamlet"]);
+    assert_eq!(args(&m, "bootfsd"), ["buckets=5", "4000000:beamlet"]);
     assert_eq!(args(&m, "blkd"), ["endpoint=blkd", "labels.2=7"]);
 }
 
@@ -670,7 +680,12 @@ fn each_volume_s_range_is_minted_at_its_own_disk_s_blkd() {
     assert_eq!(at(&m, "data").as_deref(), Some("blkd"));
     assert_eq!(at(&m, "system").as_deref(), Some("blkd:system"));
     let args = |m: &Manifest, name: &str| {
-        redoubt_init::check::args(m, m.servers.iter().find(|s| s.name == name).unwrap(), &BUNDLE_KEY)
+        redoubt_init::check::args(
+            m,
+            m.servers.iter().find(|s| s.name == name).unwrap(),
+            &BUNDLE_KEY,
+            &ENTRIES,
+        )
     };
     assert_eq!(args(&m, "blkd"), ["endpoint=blkd"]);
     assert_eq!(args(&m, "blkd:system"), ["endpoint=blkd:system", "labels.0=7"]);
@@ -1112,7 +1127,7 @@ fn the_steward_s_entry_alone_is_given_the_manifest_lines() {
     let id = redoubt_steward::hash::key_id(&key);
     let steward = m.servers.iter().find(|s| s.name == "steward").unwrap();
     assert_eq!(
-        args(&m, steward, &BUNDLE_KEY),
+        args(&m, steward, &BUNDLE_KEY, &ENTRIES),
         [
             format!(
                 "principal \"alice\" account=1001 login=[{id}] approval=[] owned=[7] sets=[[],[7]] top=4096,4,100"
@@ -1125,13 +1140,17 @@ fn the_steward_s_entry_alone_is_given_the_manifest_lines() {
         ]
     );
     // The policy core reads its own back as the manifest they came from.
-    let lines = args(&m, steward, &BUNDLE_KEY);
+    let lines = args(&m, steward, &BUNDLE_KEY, &ENTRIES);
     let core = lines.iter().map(String::as_str).filter(|l| !l.starts_with("label "));
     let read = redoubt_steward::manifest::parse_lines(core).unwrap();
     assert_eq!(read.principals[0].login_keys, [id]);
     for s in m.servers.iter().filter(|s| s.name != "steward") {
         assert!(!is_steward(&m, s));
-        assert!(!args(&m, s, &BUNDLE_KEY).iter().any(|a| a.starts_with("principal ")), "{}", s.name);
+        assert!(
+            !args(&m, s, &BUNDLE_KEY, &ENTRIES).iter().any(|a| a.starts_with("principal ")),
+            "{}",
+            s.name
+        );
     }
     assert!(is_steward(&m, steward));
 }
@@ -1193,7 +1212,7 @@ fn the_steward_s_own_lines_bind_homes_vaults_and_scopes() {
     }
     on_virt(&m).unwrap();
     let steward = m.servers.iter().find(|s| s.name == "steward").unwrap();
-    let lines = args(&m, steward, &BUNDLE_KEY);
+    let lines = args(&m, steward, &BUNDLE_KEY, &ENTRIES);
     let own: Vec<&str> = lines.iter().map(String::as_str).skip_while(|l| !l.starts_with("label ")).collect();
     assert_eq!(
         own,
@@ -1380,7 +1399,7 @@ fn named<'m>(m: &'m Manifest, name: &str) -> &'m Server { m.servers.iter().find(
 #[test]
 fn a_verified_volume_s_server_reads_through_its_verifier() {
     use redoubt_init::check::range;
-    let args = |m: &Manifest, s: &Server| redoubt_init::check::args(m, s, &BUNDLE_KEY);
+    let args = |m: &Manifest, s: &Server| redoubt_init::check::args(m, s, &BUNDLE_KEY, &ENTRIES);
     let mut m = without_volumes();
     verified_volume(&mut m, "data", 2, vec![], None);
     assert!(on_virt(&m).is_ok());
@@ -1483,7 +1502,7 @@ fn a_verified_volume_s_key_and_verifier_are_refused_naming_the_field() {
 /// (servers/init.md, Volumes; servers/verityd.md, "The root block, and the two modes").
 #[test]
 fn a_verified_volume_is_pinned_or_signed_and_never_both() {
-    let args = |m: &Manifest, s: &Server| redoubt_init::check::args(m, s, &BUNDLE_KEY);
+    let args = |m: &Manifest, s: &Server| redoubt_init::check::args(m, s, &BUNDLE_KEY, &ENTRIES);
     let signed = |key: &str| {
         let mut m = without_volumes();
         verified_volume(&mut m, "data", 0, vec![], None);
@@ -1609,7 +1628,7 @@ fn confined_gives_each_label_set_its_own_verifier() {
 #[test]
 fn an_erofsd_entry_is_a_volume_server_as_a_littlefsd_one_is() {
     use redoubt_init::check::range;
-    let args = |m: &Manifest, s: &Server| redoubt_init::check::args(m, s, &BUNDLE_KEY);
+    let args = |m: &Manifest, s: &Server| redoubt_init::check::args(m, s, &BUNDLE_KEY, &ENTRIES);
     let mut m = without_volumes();
     m.confined = true;
     secrets(&mut m);
@@ -1658,7 +1677,7 @@ fn an_erofsd_entry_is_a_volume_server_as_a_littlefsd_one_is() {
 #[test]
 fn a_walfsd_entry_is_a_volume_server_as_a_littlefsd_one_is() {
     use redoubt_init::check::range;
-    let args = |m: &Manifest, s: &Server| redoubt_init::check::args(m, s, &BUNDLE_KEY);
+    let args = |m: &Manifest, s: &Server| redoubt_init::check::args(m, s, &BUNDLE_KEY, &ENTRIES);
     let walfs = image();
     let mut littlefs = image();
     server(&mut littlefs, "walfsd:data").program = "littlefsd".into();
