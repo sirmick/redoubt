@@ -32,9 +32,10 @@ party's own output.
   ([R10 (destruction)](../kernel/budgets.md#r10-destruction),
   [the shell](../userland/shell.md#interrupting-and-killing-jobs)).
 - **No program swallows the interrupt.** A foreground native stage never holds the raw console, so
-  Ctrl+C reaches the shell whatever the stage does; a runaway allocation on the heap, by a line,
-  anything it spawns or a screen program, is ended by that process's heap limit, and the
-  session's processes together by its budget, which ends the session and nothing else.
+  the interrupt reaches the shell whatever the stage does, and Ctrl+\ whatever a screen takes; a
+  runaway allocation on the heap, by a line, anything it spawns or a screen program, is ended by
+  that process's heap limit, and the session's processes together by its budget, which ends the
+  session and nothing else.
 - **A pipe carries no authority.** A native stage reaches only what its launcher bound into its
   namespace; its standard streams are served files, and nothing is inherited
   ([native programs](../userland/native.md#standard-input-and-output-and-pipes)).

@@ -175,13 +175,14 @@ Miri both crates take their portable Rust paths. Those two assembly blocks are r
 - **A pty session.** A session gets one channel with a pty, on which `sshd` serves its `/dev/cons`
   ([consoled](consoled.md#the-consol-protocol) has the same protocol): input from the channel,
   output to it, and the window's size and its changes. The channel's `signal` request (INT) and
-  `break` request reach the session as the interrupt a 0x03 byte gives: protocol messages, not
-  signals, since nothing in Redoubt has signals. The core checks what arrives raw before the
-  session sees it: any other signal is refused, a break's length is not passed on, and a window
-  size over 1,024 columns or rows reaches the session cut to 1,024. A zero means no size, as
-  RFC 4254 says (a client whose input is not a terminal sends zeros): a `window-change` carrying
-  one is refused, and a pty asked for with one starts at 80 by 24. The console's parked
-  completion call is answered at the end of each hold
+  `break` request reach the session as its own interrupt key, the 0x1C byte (Ctrl+\\), which no
+  full-screen program can take ([the shell](../userland/shell.md#interrupting-and-killing-jobs)):
+  protocol messages, not signals, since nothing in Redoubt has signals. The core checks what
+  arrives raw before the session sees it: any other signal is refused, a break's length is not
+  passed on, and a window size over 1,024 columns or rows reaches the session cut to 1,024. A
+  zero means no size, as RFC 4254 says (a client whose input is not a terminal sends zeros): a
+  `window-change` carrying one is refused, and a pty asked for with one starts at 80 by 24. The
+  console's parked completion call is answered at the end of each hold
   ([multiplexed connections](serving.md#multiplexed-connections)), so a session stays however
   long its channel is quiet. A program the session launches
   gets a connection of its own to the same console, which the session mints with `new_connection`

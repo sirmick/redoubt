@@ -45,13 +45,16 @@ whole path, as two recipes may share a file name.
 
 ### Building once
 
-Status: built · tested: host:testbench::an_index_survives_its_rename_and_names_its_tree, host:testbench::the_fingerprint_follows_the_trees_changes, host:testbench::an_exact_filter_runs_one_case, host:testbench::userland_recipes_of_one_name_stage_apart
+Status: built · tested: host:testbench::an_index_survives_its_rename_and_names_its_tree, host:testbench::the_fingerprint_follows_the_trees_changes, host:testbench::an_exact_filter_runs_one_case, host:testbench::userland_recipes_of_one_name_stage_apart, host:testbench::a_build_asked_for_again_in_a_run_is_not_run_again
 
 A run builds what it boots: `cargo run` of the bench, then a cargo build of the kernel, the loader
 and each program, a check that costs about 30 ms when nothing changed and waits on the build
 directory's lock while another run compiles, then the bundle and any userland disk. Alone that is
 a quarter of a second before QEMU starts; beside a train of other runs, each waiting on the
-others' compiles, it was most of a case's time. `--prebuild DIR` does it once for every case:
+others' compiles, it was most of a case's time. A run makes each distinct build once, and a case
+asking for one already made takes its binary without running cargo, since a run takes the tree
+as it was when it began: the kernel and the loader are built once per profile and target, not
+once per case. `--prebuild DIR` does it once for every case:
 
 ```text
 DIR/testbench            the bench, copied from the --prebuild that made the directory
@@ -329,7 +332,11 @@ the class for it: a boot takes one core per guest hart, a `host-tests` case or a
 `fanout` two for its build while each of its jobs asks `q` for its own, and the host-clock cases
 go quiet. A case target runs that case alone (`--exact`), from `target/prebuilt` when its width
 is there ([building once](#building-once)), else through `cargo testbench`. A case with no `arch`
-boots nothing, so it runs under `rv64/<case>` alone, and `rv32/<case>` does nothing. `q ls` shows
+boots nothing, so it runs under `rv64/<case>` alone, and `rv32/<case>` does nothing. Case
+targets may run at once (`set CASES="..."` runs a set on both widths) only while each still
+takes its own lease, the quiet ones run alone on the quiet set and the `[net]` ones keep the
+`net` lock, as every case target does: the leases, not make, keep the host from being
+oversubscribed. `q ls` shows
 the core map and the queue; `q log` the recent jobs with the time each waited and ran.
 `cargo testbench --smp N` boots every boot case once at `N` harts instead of its own counts, but
 a case that keeps them (`keep_smp`), and bounds it by `timeout_secs_smp` where a case gives one;
@@ -1367,8 +1374,8 @@ of what its budget holds beside the stack, 11,885 pages of the 11,904 `sizes` gi
 ([the steward](servers/steward.md#authentication-and-sessions)): 1,021 pages over twice its heap's
 largest peak across the memory cases on each width, 5,432 pages, above what its prompt
 holds ([beamlet](userland/beamlet.md#what-the-vm-holds-at-its-prompt)). `beamlet-footprint` scans
-the VM alone, under its own copy of the single-VM manifest. Its cap leaves its process heap
-and ETS limits, a sixteenth of its budget each (744 pages), reachable: a flooding process, about
+the VM alone, under its own copy of the single-VM manifest. Its cap leaves its process heap,
+ETS and `persistent_term` limits, a sixteenth of its budget each (744 pages), reachable: a flooding process, about
 four times its limit, still fits under the cap ([beamlet](userland/beamlet.md#limits-inside-one-vm)).
 
 This is a measurement of the paths the case drove. Other requests or deeper call paths may

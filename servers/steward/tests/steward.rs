@@ -542,8 +542,9 @@ fn the_image_s_lines_round_trip_from_init_to_the_steward() {
     let image = include_str!("../../../image/manifest.json");
     let m = redoubt_init::read(image.as_bytes(), redoubt_init::ARENA_PAGES).unwrap();
     let entry = m.servers.iter().find(|s| s.name == "steward").unwrap();
-    // The bundle key reaches only a signed volume's server; the steward's lines do not use it.
-    let args = redoubt_init::check::args(&m, entry, &[0; 32]);
+    // The bundle key reaches only a signed volume's server and the entries' lengths only bootfsd;
+    // the steward's lines use neither.
+    let args = redoubt_init::check::args(&m, entry, &[0; 32], &[]);
     let lines: Vec<&str> = args.iter().map(String::as_str).filter(|a| !a.starts_with("buckets=")).collect();
     let mut k = Recorder::default();
     let s = start(&lines, USERS, &mut k).unwrap();

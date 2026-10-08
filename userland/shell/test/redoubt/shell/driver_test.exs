@@ -11,9 +11,18 @@ defmodule Redoubt.Shell.DriverTest do
   @cols 120
   @rows 12
 
+  # The prompt shows the working directory, and the rows asserted assume it fits a row with the
+  # line typed: the shell runs in /, as beamlet's tests do, not in the checkout, whose path would
+  # wrap a long line on the BEAM in a deep enough checkout.
+  setup do
+    here = File.cwd!()
+    File.cd!("/")
+    on_exit(fn -> File.cd!(here) end)
+  end
+
   # `opts` replace these (the driver takes an option's first value): a `size` of its own is the
   # driver's size, and the test's model must be made at it.
-  defp start(opts \\ []) do
+  defp start(opts \\ [], rows \\ @rows) do
     test = self()
 
     driver =
@@ -23,7 +32,7 @@ defmodule Redoubt.Shell.DriverTest do
             [
               input: :messages,
               output: fn bytes -> send(test, {:drawn, IO.iodata_to_binary(bytes)}) end,
-              size: fn -> {@cols, @rows} end,
+              size: fn -> {@cols, rows} end,
               shell: {Redoubt.Shell, :start_link, [[banner: false]]}
             ],
             opts
@@ -31,7 +40,7 @@ defmodule Redoubt.Shell.DriverTest do
         )
       end)
 
-    {driver, Terminal.new(@cols, @rows)}
+    {driver, Terminal.new(@cols, rows)}
   end
 
   defp type(driver, bytes), do: send(driver, {:beamlet_console, bytes})
@@ -160,6 +169,25 @@ defmodule Redoubt.Shell.DriverTest do
     ends(driver)
   end
 
+  test "Ctrl+\\ at the prompt is the interrupt too, and never reaches the line" do
+    {driver, terminal} = start()
+    type(driver, "1 +")
+    terminal = screen(terminal)
+    type(driver, "\x1C")
+    type(driver, "\"a")
+    terminal = screen(terminal)
+    # What follows it in the same read goes with the line.
+    type(driver, "\x1Cb\"\r")
+    terminal = screen(terminal)
+
+    assert row(terminal, 0) =~ ~r/\(1\)> 1 \+\^C$/
+    assert row(terminal, 1) =~ ~r/\(1\)> "a\^C$/
+    assert row(terminal, 2) =~ ~r/\(1\)>$/
+    refute Terminal.text(terminal) =~ "^\\"
+    type(driver, "exit\r")
+    ends(driver)
+  end
+
   test "Ctrl+C in the middle of an unfinished expression drops all of it" do
     {driver, terminal} = start()
     type(driver, "[1,\r")
@@ -239,6 +267,82 @@ defmodule Redoubt.Shell.DriverTest do
     assert row(terminal, 4) == "partial^[[2J:ok"
     type(driver, "exit\r")
     ends(driver)
+  end
+
+  # Waits for the screen to hold `text`.
+  defp shows(terminal, text), do: screen(terminal, &(Terminal.text(&1) =~ text))
+
+  test "a crash report of a process a line spawned reaches the terminal as visible text" do
+    # Tall enough to hold the three reports, stack traces and all.
+    {driver, terminal} = start([], 200)
+    # Through the emulator's report, through proc_lib's, and with a reason that is not UTF-8.
+    type(driver, ~S|spawn(fn -> raise "\e]52;c;aGk=\a\e]0;pwned\a\u202Eevil\e[2J" end); :ok| <> "\r")
+    terminal = shows(terminal, "evil")
+    type(driver, ~S|Task.start(fn -> raise "task\e[6n\x9B" end); :ok| <> "\r")
+    terminal = shows(terminal, "task")
+    type(driver, ~S|spawn(fn -> :erlang.error({:boom, <<0xFF, 0xFE, 27, "[2J">>}) end); :ok| <> "\r")
+    terminal = shows(terminal, "boom")
+    # An event whose text is the controls themselves, unescaped by any formatter.
+    type(driver, ~S|spawn(fn -> :logger.error("raw \e]52;c;aGk=\a\u202E\x9B<\xFF>") end); :ok| <> "\r")
+    terminal = shows(terminal, "raw ")
+    # The model raises on any sequence but the encoder's own; each report is drawn, in the words
+    # of whichever formatter the VM's logger has (the BEAM's escapes the reasons itself).
+    text = Terminal.text(terminal)
+    assert text =~ ~r/pwned.*evil/
+    assert text =~ ~r/Task #PID<[\d.]+> .*terminating/
+    assert text =~ "boom"
+    assert text =~ "raw ^[]52;c;aGk=^G<U+202E><9B><<FF>>"
+    type(driver, "1 + 1\r")
+    terminal = shows(terminal, ~r/^2$/m)
+    assert Terminal.text(terminal) =~ ~r/^2$/m
+    type(driver, "exit\r")
+    ends(driver)
+  end
+
+  test "an event logged by group itself waits on nothing and is drawn as the fixed line" do
+    {driver, terminal} = start()
+    # Inside group's own process, while the line that asked waits on group.
+    log = ~S|:logger.error("from group \e[2J")|
+    type(driver, ~s|:sys.replace_state(Process.group_leader(), fn s -> #{log}; s end); :done| <> "\r")
+    terminal = shows(terminal, "not shown")
+    assert Terminal.text(terminal) =~ "[a log event from the shell's terminal, not shown]"
+    refute Terminal.text(terminal) =~ "from group ^["
+    type(driver, "1 + 1\r")
+    terminal = shows(terminal, ~r/^2$/m)
+    assert Terminal.text(terminal) =~ ":done"
+    type(driver, "exit\r")
+    ends(driver)
+  end
+
+  test "a process that logs as fast as it can holds a bounded backlog, and what was dropped is counted" do
+    {driver, terminal} = start()
+    # group's mailbox, sampled while the flood runs, kept in `deepest` and shown once the flood is
+    # drawn; and the count of what was dropped.
+    type(
+      driver,
+      ~S|spawn(fn -> for _ <- 1..2000, do: :logger.error("flood") end); deepest = Enum.max(for _ <- 1..20, do: (Process.sleep(5); elem(Process.info(Process.group_leader(), :message_queue_len), 1))); :sampled| <>
+        "\r"
+    )
+
+    terminal = shows(terminal, "log events dropped")
+    terminal = screen(terminal)
+    type(driver, "{:deepest, deepest}\r")
+    terminal = shows(terminal, ~r/^\{:deepest, \d+\}$/m)
+    [_, deepest] = Regex.run(~r/^\{:deepest, (\d+)\}$/m, Terminal.text(terminal))
+    assert String.to_integer(deepest) <= 4
+    type(driver, "exit\r")
+    ends(driver)
+  end
+
+  test "the logger's default handler is put back when the driver ends" do
+    before = :logger.get_handler_ids()
+    {driver, _terminal} = start()
+    Process.sleep(100)
+    assert :redoubt_shell in :logger.get_handler_ids()
+    refute :default in :logger.get_handler_ids()
+    type(driver, "exit\r")
+    ends(driver)
+    assert Enum.sort(:logger.get_handler_ids()) == Enum.sort(before)
   end
 
   test "hostile text typed or pasted is edited as text: a key sequence edlin does not know is dropped, the rest shown" do

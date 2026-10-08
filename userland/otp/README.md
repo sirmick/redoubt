@@ -14,5 +14,6 @@ layout.
 
     . tools/env.sh                  # the pinned OTP 28 / Elixir 1.20 toolchain
     cargo test                      # unit tests and hostile-input tests
-    tools/difftest                  # differential tests against the real BEAM
+    tools/difftest                  # differential tests against the real BEAM, in parallel,
+                                    # the BEAM's results cached per module
     beamlet -pa DIR MODULE [FUNCTION]

@@ -158,6 +158,12 @@ tools/difftest                # differential tests against the real BEAM
 tools/elixir-tests            # Elixir's own suite on beamlet
 ```
 
+`tools/difftest` runs its tests in parallel, one per core it may use: under `scripts/q run --cores
+N`, N. The BEAM's results are cached per module in `build/difftest/<suite>/cache`, each from a
+BEAM of its own, so a run after a beamlet change runs only beamlet, and a test edited is the only
+one compiled again, its suite's the only results the BEAM gives again; `DIFFTEST_FRESH=1` starts
+from nothing.
+
 ## The shell
 
 Redoubt's shell, `Redoubt.Shell` in `userland/shell`, is a read-eval-print loop over Elixir of
@@ -171,10 +177,12 @@ OTP and Elixir as above; `./shell` puts them on the path itself.
 ./shell                       # the shell, the VM's / at userland/shell/_build/sandbox
 ./shell --root ~/scratch      # another directory as the VM's /
 ./shell --fake                # the shell on Redoubt's platform, on the fake kernel
-./test-shell                  # formatting, the cell protocol, the tests on BEAM then on
-                              # beamlet, the entry point, the platform built for the
+./test-shell                  # formatting, the cell protocol, the tests on beamlet and on
+                              # BEAM at once, the entry point, the platform built for the
                               # machine and run on the fake kernel
 ./test-shell test/redoubt/util_test.exs   # some test files only (in userland/shell)
+scripts/shell-cases           # the machine cases your change must pass, from git diff;
+                              # make -k -f scripts/jobs.mk set CASES="$(scripts/shell-cases)"
 ```
 
 A test that passes on BEAM and fails on beamlet is a beamlet bug. For the quickest loop,
@@ -188,10 +196,11 @@ Elixir's own documentation. The commands work on files (`cd`, `ls`, `ls_r`, `fin
 out in columns: `ls_r() |> Enum.map(&[&1, stat(&1).size]) |> table(title: "sizes")`. Everything it
 prints shows control characters as visible text (`^[` for ESC), so a hostile file cannot drive
 the terminal; `hexdump` shows a file's bytes. Lines are edited with OTP's `edlin` under the
-shell's own driver, with Emacs keys, the session's history (arrows, Ctrl+R) and Ctrl+C ending
-the line; there is no completion. `pick(items)` chooses one on a screen of its own, on beamlet
-only: the BEAM has no screen buffer. A screen program of your own is built of the widgets in
-`Redoubt.Screen.Widget`, with dialogs, focus and themes beside them. `exit` or Ctrl+D ends it.
+shell's own driver, with Emacs keys, the session's history (arrows, Ctrl+R) and Ctrl+C or
+Ctrl+\ ending the line; there is no completion. `pick(items)` chooses one on a screen of its own,
+on beamlet only: the BEAM has no screen buffer. A screen program of your own is built of the
+widgets in `Redoubt.Screen.Widget`, with dialogs, focus and themes beside them. `exit` or Ctrl+D
+ends it.
 
 Each command is a commandlet, declared once with `defcommand` in any module of
 `userland/shell` that uses `Redoubt.Commandlet`: typed parameters, and help that a command does

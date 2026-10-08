@@ -42,7 +42,7 @@ in the VM sees is ordinary Elixir: `File.read!/1`, `IO.puts/1`, `:gen_tcp.connec
 
 ### Loading hostile code
 
-<details><summary>Status: built · partly tested: hostile loader tests run on the host; checked modules boot on Redoubt, but the refusal of other OTP versions' opcodes and atom tables is not attacked by a named test · tested (10)</summary>
+<details><summary>Status: built · partly tested: hostile loader tests run on the host; checked modules boot on Redoubt, but the refusal of other OTP versions' opcodes and atom tables is not attacked by a named test · tested (12)</summary>
 
 - host:beamlet-vm::fixtures_load
 - host:beamlet-vm::every_truncation_is_rejected
@@ -51,6 +51,8 @@ in the VM sees is ordinary Elixir: `File.read!/1`, `IO.puts/1`, `:gen_tcp.connec
 - host:beamlet-vm::empty_frames_count_against_the_stack
 - host:beamlet-vm::rejects_hostile_input
 - host:beamlet-vm::safe_mode_creates_no_atoms
+- host:beamlet-vm::safe_mode_refuses_an_export_fun_of_code_not_exported
+- host:beamlet-vm::safe_mode_decodes_no_local_fun
 - host:beamlet-vm::nesting_is_bounded
 - host:beamlet-vm::deep_terms_are_handled_iteratively
 - bench:userland-boot
@@ -68,11 +70,16 @@ The VM crate (`beamlet-vm`) is `#![forbid(unsafe_code)]`, and so are `beamlet-re
   refused, and 20,000 mutated modules per run load or fail without a panic or a hang.
 - **Deep terms do not recurse.** Copying, comparing, printing and collecting use work lists, never
   Rust recursion, so a million-level nested term is fine. The external term format limits
-  nesting to 256 and, in safe mode, creates no atoms.
+  nesting to 256.
+- **Safe decoding names no code.** `binary_to_term(Bin, [safe])` creates no atoms, decodes an
+  export fun only of a function exported now (a loaded module's export, or a BIF), as BEAM does,
+  and decodes no local fun at all, where BEAM decodes one whose atoms exist: a fun is code to run,
+  with free variables the sender chose, and safe mode is for data from outside
+  ([`userland/otp/vm/src/etf.rs`](../../userland/otp/vm/src/etf.rs)).
 
 ### Limits inside one VM
 
-<details><summary>Status: built · partly tested: in a boot, only the process heap limit and the budget's backstop are attacked · tested (17)</summary>
+<details><summary>Status: built · partly tested: in a boot, only the process heap limit and the budget's backstop are attacked · tested (34)</summary>
 
 - host:beamlet-vm::full_mailbox_kills_the_receiver
 - host:beamlet-vm::full_own_mailbox_kills_the_sender
@@ -86,11 +93,28 @@ The VM crate (`beamlet-vm`) is `#![forbid(unsafe_code)]`, and so are `beamlet-re
 - host:beamlet-vm::jump_loops_are_preempted
 - host:beamlet-vm::garbage_is_collected_and_live_data_survives
 - host:beamlet-vm::unreferenced_binaries_are_freed
+- host:beamlet-vm::an_atomics_array_within_the_limit_is_held
+- host:beamlet-vm::an_atomics_array_past_a_processs_own_heap_limit_ends_it
+- host:beamlet-vm::counters_arrays_past_the_limit_together_end_their_holder
+- host:beamlet-vm::a_zlib_stream_within_the_limit_is_held
+- host:beamlet-vm::a_zlib_streams_queue_past_the_limit_ends_its_holder
+- host:beamlet-vm::zlib_codecs_past_the_limit_together_end_their_holder
+- host:beamlet-vm::a_zlib_streams_stash_past_the_limit_ends_its_holder
+- host:beamlet-vm::a_deflaters_boxed_state_is_the_constant
+- host:beamlet-vm::an_inflater_holds_nothing_beyond_its_own_box
 - bench:beamlet-heap-flood
 - bench:beamlet-budget-flood
 - host:beamlet-vm::the_footprint_is_reported_at_the_first_wait_for_input
 - host:beamlet-vm::held_bytes_follow_the_runtime_heap
 - bench:beamlet-footprint
+- host:beamlet-vm::a_128_mb_atomics_array_in_persistent_term_past_the_limit_is_refused
+- host:beamlet-vm::a_replaced_persistent_value_still_counts
+- host:beamlet-vm::a_zlib_stream_grown_in_persistent_term_past_the_limit_refuses_the_next_put
+- host:beamlet-vm::a_zlib_stream_grown_in_ets_past_the_limit_refuses_the_next_insert
+- host:beamlet-vm::deleting_the_table_holding_a_grown_stream_makes_room
+- host:beamlet-vm::an_update_element_past_the_ets_limit_is_refused
+- host:beamlet-vm::heir_data_past_the_ets_limit_is_refused
+- host:beamlet-vm::heir_data_counts_toward_the_ets_limit
 
 </details>
 
@@ -102,13 +126,36 @@ VM down. Every limit fails closed: the offender ends, and nothing is lost silent
   silently, like a TCP stream with a hole in it.
 - **Process memory** (`max_heap_words`, 2^27 words, and `max_heap_size`, which a process can only
   lower): checked at the end of each slice; a process over it is collected first and killed only
-  if what is live is still over. A resource whose native declares its size, a
-  [screen buffer](#screen-natives), counts that size as its holder's own memory, toward
-  `max_heap_size` as heap words do. Only a heap counts it, not a queued message or an ETS table
-  holding it: the screen buffer's limit of four a process and the mailbox's limit bound those,
-  and any other sized resource needs a bound of its own.
+  if what is live is still over. A resource whose native declares its size counts that size as
+  the memory of each process whose heap holds it, toward `max_heap_size` as heap words do: a
+  [screen buffer](#screen-natives); an `atomics` or `counters` array, its cells at 8 bytes each,
+  up to 2^24 of them; and a `zlib` stream, its queued input (at most 256 MB), the output it
+  has not handed out, its codec's state (a deflater's includes the tables its library keeps
+  behind boxes of its own, measured against the library by a test) and the term stashed in it,
+  declared afresh by every native that changes them. A process past its limit
+  through any of them is ended as for heap growth. Only a process's heap counts one toward its
+  limit, and a holder that is not the one resizing it counts the new size from its next
+  collection. A resource in ETS or `persistent_term` counts toward their limits, below. One in a
+  message not yet received counts toward nobody's: the screen buffer's limit of four a process
+  and the mailbox's limit bound a buffer there, but an atomics array or a zlib stream sent and
+  dropped by its sender is bounded only by the budget's page limit, below.
 - **ETS** (`max_ets_words`, 2^27 words for all tables together): an insert past it raises
-  `system_limit`.
+  `system_limit`, as does an `update_counter` or `update_element` that would take it there. A
+  table's heir data (`{heir, Pid, Data}`) is kept with the table and counts as an object does: an
+  `ets:new` or `ets:setopts` that would take ETS past the limit with it raises `system_limit`. A
+  resource an object holds counts at its live size, once for each object holding it: a zlib
+  stream that grows after its insert counts its growth at once, so the next insert past the limit
+  is refused (the growth itself is bounded by the grower's own heap limit). ETS keeps its total
+  as objects enter and leave and resources resize, never by scanning: an insert, delete or
+  replacement costs one step for each resource on the objects it adds or removes, a resize one
+  step, and deleting a table one step for each resource its objects hold.
+- **`persistent_term`** (`max_persistent_words`, 2^27 words): its keys, and every value ever put,
+  each resource at its live size as in ETS. A put past it raises `system_limit`, as does a put of
+  a new key past 2^16 keys. A value replaced or erased is never freed: it stays in its literal
+  chunk, where BEAM frees it once no process refers to it, so its words count for good. An erased
+  key's own words are released. A value's parts that are already literals (another persistent
+  value, a module's constant) are not copied, and count only where they were first put.
+  `persistent_term:info()` reports the count as its `memory`.
 - **CPU:** reductions preempt every process, including a loop of plain jumps with no calls.
   Residual: a native is not preempted, and `crypto:mod_pow` and finite-field Diffie-Hellman run
   `modpow` on operands only the bignum limit bounds, so one call can hold its scheduler for
@@ -121,13 +168,16 @@ afterwards. The hard backstop is the embedder's allocator, and on Redoubt the se
 limit ([R6 (charging)](../kernel/budgets.md#r6-charging)). The image also caps `beamlet`'s heap
 ([init](../servers/init.md#the-boot-manifest)), but at the budget's edge, where the budget binds
 first: that cap is there for the bench's measurement. On Redoubt the platform lowers
-`max_heap_words` and `max_ets_words` to a sixteenth of the VM's budget each, which it takes from its
+`max_heap_words`, `max_ets_words` and `max_persistent_words` to a sixteenth of the VM's budget
+each, which it takes from its
 required argument `budget_pages=N`, the budget's pages
 ([todo](../todo/beamlet-budget-from-startup.md)). Each counts the VM's own 8-byte words, as the VM
 counts a process (two for a 16-byte term), so a limit is the same bytes on rv32 as on rv64. A flooding process peaks at about four times its
 heap limit, the old heap, the collector's copy and its growth, so the budget must be at least twice
-what the VM uses with no Erlang process running; then one flooding process, or the tables, meets its
-limit while the VM still has pages. Several flooding at once, or a native's single large allocation,
+what the VM uses with no Erlang process running; then one flooding process, the tables or
+`persistent_term` meets its limit while the VM still has pages. A session's sixteenth is 744
+pages, 3,047,424 bytes; the shell at its prompt holds 3,696 bytes in ETS and 36,112 counted in
+`persistent_term`, about a thousandth and a hundredth of it. Several flooding at once, or a native's single large allocation,
 reach the backstop instead, which ends the VM, and `init` restarts it. It is a server like any other
 under `init`'s restart rule: a VM that cannot stay up (a start module that fails every time, a
 manifest without `budget_pages`) is restarted until the limit, and then the machine reboots
@@ -299,6 +349,15 @@ checks it: each test runs on BEAM and on beamlet and the printed results must be
   assembly: it runs a `receive` that `erl_eval` evaluates, such as one typed at the shell's
   prompt. The rest stand on BEAM's C runtime (the boot process, ports, sockets, tracing) and
   never load; a call to one is `undef` unless a native answers.
+- **A fun's identity is its module's checksum.** A fun read from the external format with the
+  loaded module's checksum is that code's fun; one with any other checksum keeps the identity it
+  came with, is written back byte for byte, and a call to it is `badfun`, as on BEAM. Three
+  artifacts of BEAM's fun table are not reproduced: the order of two funs that differ only in
+  their checksum (here the loaded code's sorts first, then by checksum); the `OldIndex` a
+  second decode of one unknown checksum is written back with (BEAM keeps the first decode's;
+  here each fun keeps its own); and a fun decoded before its code is loaded, which stays apart
+  from that code once it loads with the fun's checksum (BEAM's table then makes the two equal;
+  here they compare unequal).
 - **Processes as on BEAM.** Links, monitors, aliases, exit signals, registered names, timers and
   ETS, on one or more scheduler threads with per-process heaps and copying garbage collection.
 - **Regular expressions** (`beamlet-re`) run in linear time for every pattern, so a hostile
@@ -319,7 +378,8 @@ checks it: each test runs on BEAM and on beamlet and the printed results must be
 - **Compression** is OTP's `zlib`, whose natives run on `miniz_oxide`: deflate and inflate in raw,
   zlib and gzip formats, so `:zlib`, `:zip` and compressed external terms work unchanged. Each
   stream bounds what it holds queued, so a hostile archive cannot make one call allocate without
-  limit.
+  limit, and what it holds counts toward its holder's heap limit
+  ([limits inside one VM](#limits-inside-one-vm)).
 - **Not supported:** NIFs and port drivers (foreign code runs as a separate program), distribution,
   hot code upgrade, and any OTP version but the pinned one.
 

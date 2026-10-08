@@ -15,8 +15,8 @@ defmodule Redoubt.Shell do
   Lines are read from the group leader with `IO.gets/1`. On a console that is OTP's `group`,
   under the shell's own driver (`Redoubt.Shell.Driver`): the line is edited by `edlin`, with
   history, and drawn by `Redoubt.Term`, so everything the console shows, what a line writes to
-  it itself with `IO.puts/1` included, passes the same guard. Ctrl+C ends the line being read,
-  not the shell.
+  it itself with `IO.puts/1` included, passes the same guard. The interrupt, Ctrl+C or Ctrl+\\,
+  ends the line being read, not the shell.
   """
 
   alias Redoubt.Commandlet.Registry
@@ -85,7 +85,7 @@ defmodule Redoubt.Shell do
       {:error, :eof} ->
         :done
 
-      # Ctrl+C: the line is dropped, whatever of it was read, and the next is read.
+      # The interrupt: the line is dropped, whatever of it was read, and the next is read.
       {:error, :interrupted} ->
         :blank
 

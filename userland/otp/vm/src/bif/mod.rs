@@ -33,6 +33,9 @@ mod unicode;
 mod zlib;
 
 pub use proc::send;
+/// What a deflater holds behind `miniz_oxide`'s own boxes, which a stream counts as its holder's
+/// memory; a test measures it against the crate.
+pub use zlib::DEFLATE_BOXED;
 
 /// A resource a native holds while it works: the `Arc` keeps it alive, so the caller's heap is
 /// free for building the result.
@@ -816,11 +819,20 @@ impl Ctx<'_> {
         self.p.heap.resource(crate::term::Resource::sized(id, alloc::boxed::Box::new(value), bytes))
     }
 
-    /// Resource `t`, on the calling process's heap, now holds `bytes`: the caller's memory counts
-    /// the new size at once, any other holder's from its next collection.
+    /// Resource `t`, a term of the calling process, now holds `bytes`: the caller's memory counts
+    /// the new size at once, as do ETS and `persistent_term`, any other holder's from its next
+    /// collection. The size changes under the system lock, so a store's count of it does not
+    /// interleave with the change.
     pub fn resize_resource(&mut self, t: Term, bytes: usize) {
-        if let Some(r) = self.p.heap.as_resource(t) {
+        let Some(r) = self.p.heap.as_resource(t).cloned() else { return };
+        let old = {
+            let mut sys = self.sys();
             let old = r.set_bytes(bytes);
+            sys.resized(&r, old, bytes);
+            old
+        };
+        // `t` may be a literal (a `persistent_term` value) the process's own heap does not hold.
+        if self.p.heap.holds(&r) {
             self.p.heap.resized(old, bytes);
         }
     }

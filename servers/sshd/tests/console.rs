@@ -33,10 +33,10 @@ fn a_read_waits_for_input_and_takes_what_was_typed() {
     assert!(cons.chan.borrow().readable());
     assert_eq!(cons.read(&caller(), &File, 0, &mut out), Ok(Read::Done(3)));
     assert_eq!(&out[..3], b"ls\n");
-    // The interrupt is the byte a terminal sends for it.
+    // The interrupt is the session's own key, Ctrl+\, which no screen can take.
     session.interrupt();
     assert_eq!(cons.read(&caller(), &File, 0, &mut out), Ok(Read::Done(1)));
-    assert_eq!(out[0], 0x03);
+    assert_eq!(out[0], 0x1C);
 }
 
 #[test]

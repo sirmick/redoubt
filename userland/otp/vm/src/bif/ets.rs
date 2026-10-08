@@ -6,7 +6,7 @@ use alloc::vec::Vec;
 use super::Ctx;
 use crate::ets::{self, Access, Bindings, Clause, Key, Kind, Table};
 use crate::process::Exception;
-use crate::term::{OwnedTerm, Pid, Ref, Term};
+use crate::term::{Holdings, OwnedTerm, Pid, Ref, Term};
 use crate::vm::System;
 
 type R = Result<Term, Exception>;
@@ -96,6 +96,10 @@ pub fn new(c: &mut Ctx, a: &[Term]) -> R {
         }
     }
     let mut sys = c.sys();
+    // The heir's data is kept with the table, and counts as an object does.
+    if let Some((_, data)) = &heir {
+        room_for(c, &sys, core::iter::once(data))?;
+    }
     let tid = sys.make_ref().0;
     let t = Table::new(tid, c.p.pid, ets::Options { name, named, kind, access, keypos, heir });
     let id = table_term(&t);
@@ -122,16 +126,15 @@ fn objects(c: &Ctx, sys: &System, t: &Table, arg: &Term) -> Result<Vec<(Key, Own
     Ok(out)
 }
 
-/// `system_limit` unless ETS has room for `objs` besides what it holds. Objects they would
-/// replace are not credited: near the limit, an overwrite may be refused.
+/// `system_limit` unless ETS has room for `objs` besides what it holds, the resources they hold
+/// at their sizes now. Objects they would replace are not credited: near the limit, an overwrite
+/// may be refused. ETS already past its limit, a resource in it having grown, refuses even an
+/// object that costs nothing (a literal).
 fn room_for<'t>(c: &Ctx, sys: &System, objs: impl Iterator<Item = &'t OwnedTerm>) -> Result<(), Exception> {
-    let room = sys.limits.max_ets_words.saturating_sub(sys.ets.words());
-    let mut need: u64 = 0;
-    for o in objs {
-        need = need.saturating_add(ets::weigh(o));
-        if need > room {
-            return Err(c.system_limit());
-        }
+    let need =
+        objs.fold(0u64, |n, o| n.saturating_add(ets::weigh(o) + Holdings::weigh(o.heap()).div_ceil(8)));
+    if sys.ets.words().saturating_add(need) > sys.limits.max_ets_words {
+        return Err(c.system_limit());
     }
     Ok(())
 }
@@ -314,6 +317,7 @@ pub fn update_counter(c: &mut Ctx, a: &[Term]) -> R {
         results.push(v);
     }
     let obj = c.own(obj);
+    room_for(c, &sys, core::iter::once(&obj))?;
     let t = sys.ets.get_mut(tid).expect("resolved");
     if t.contains(&key) {
         t.replace(&key, obj);
@@ -352,6 +356,7 @@ pub fn update_element(c: &mut Ctx, a: &[Term]) -> R {
     }
     let new = c.tuple(&e);
     let new = c.own(new);
+    room_for(c, &sys, core::iter::once(&new))?;
     sys.ets.get_mut(tid).expect("resolved").replace(&key, new);
     Ok(Term::Atom(c.atoms.true_))
 }
@@ -751,7 +756,7 @@ fn info_value(c: &mut Ctx, t_id: u64, item: &str) -> Option<Term> {
     let t = sys.ets.get(t_id)?;
     let (name, named, kind, access, keypos, owner, size) =
         (t.name, t.named, t.kind, t.access, t.keypos, t.owner, t.size());
-    let heir = t.heir.as_ref().map(|(p, _)| *p);
+    let heir = t.heir().map(|(p, _)| *p);
     let tid = t.tid;
     drop(sys);
     Some(match item {
@@ -880,7 +885,11 @@ pub fn setopts(c: &mut Ctx, a: &[Term]) -> R {
             Some(&[Term::Atom(k), Term::Pid(p), data]) if k.as_str() == "heir" => Some((p, c.own(data))),
             _ => return Err(c.badarg()),
         };
-        c.sys().ets.get_mut(tid).expect("resolved").heir = heir;
+        let mut sys = c.sys();
+        if let Some((_, data)) = &heir {
+            room_for(c, &sys, core::iter::once(data))?;
+        }
+        sys.ets.get_mut(tid).expect("resolved").set_heir(heir);
     }
     Ok(Term::Atom(c.atoms.true_))
 }

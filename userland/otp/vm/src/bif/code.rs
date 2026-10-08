@@ -8,6 +8,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use super::Ctx;
+use crate::atom::Atom;
 use crate::platform::FileKind;
 use crate::process::Exception;
 use crate::term::Term;
@@ -120,6 +121,21 @@ pub fn set_path(c: &mut Ctx, a: &[Term]) -> R {
     Ok(c.bool(true))
 }
 
+/// The file loaded module `m` came from, as `which/1`, `is_loaded/1`, `all_loaded/0` and
+/// `all_available/0` all say it: the file it was loaded from by name, else the platform's file
+/// for it, else `preloaded` (the VM's own modules, and a platform's with no file to name).
+pub(crate) fn loaded_file(c: &mut Ctx, m: &Atom) -> Term {
+    let recorded = c.sys().module_files.get(m.as_str()).cloned();
+    if let Some(file) = recorded {
+        return c.copy_in(&file);
+    }
+    let file = c.platform().module_file(m.as_str());
+    match file {
+        Some(path) => c.string(&path),
+        None => c.atom("preloaded"),
+    }
+}
+
 /// `which(Module)`: the file it is (or would be) loaded from in the VM's file system,
 /// `preloaded` for modules the platform supplies, or `non_existing`.
 pub fn which(c: &mut Ctx, a: &[Term]) -> R {
@@ -130,10 +146,7 @@ pub fn which(c: &mut Ctx, a: &[Term]) -> R {
         return Ok(c.atom("non_existing"));
     }
     if c.sys().is_loaded(m) {
-        let found = c.sys().module_files.get(m.as_str()).cloned();
-        if let Some(file) = found {
-            return Ok(c.copy_in(&file));
-        }
+        return Ok(loaded_file(c, m));
     }
     let name = String::from(m.as_str());
     let found = c.sys().locate_module(&name);
@@ -160,7 +173,7 @@ pub fn all_available(c: &mut Ctx, _a: &[Term]) -> R {
     for m in loaded {
         seen.insert(String::from(m.as_str()));
         out.push({
-            let e = [c.string(m.as_str()), c.atom("preloaded"), c.bool(true)];
+            let e = [c.string(m.as_str()), loaded_file(c, &m), c.bool(true)];
             c.tuple(&e)
         });
     }

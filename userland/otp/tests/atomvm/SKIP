@@ -1,10 +1,14 @@
 # Tests that exercise features beamlet leaves out by design. One module per line, then why.
 # Anything not listed here must pass (or is a bug to fix).
 
-# Ports to programs run (with --exec, see <Module>.args); these three differ by design.
+# Ports to programs run (with --exec, see <Module>.args); these two differ by design.
 echo                          prints a port's number, which BEAM counts apart from pids
 test_close_console_driver     opens AtomVM's "console" driver: on a host, a missing program whose error output races the result
-test_ets                      decodes pids and ports of other nodes (there is no distribution)
+
+# There is no distribution: another node's pids, refs and ports do not decode.
+test_ets                      decodes pids and ports of other nodes
+test_node                     decodes a pid, a ref and a port of another node; its local checks are erlang/node_local
+test_binary_to_term           decodes other nodes' pids, refs and ports, wants BEAM's <0.1.0> alive, opens a port and a socket; the rest is erlang/binary_to_term_local
 
 # Need files AtomVM's build generates (packs, .hrl data, the JIT target macro); to_hrl is a build script.
 test_add_avm_pack_binary      AtomVM build output
@@ -25,3 +29,6 @@ test_gc                       heap sizes
 test_min_heap_size            heap sizes
 test_refc_binaries            heap sizes
 test_throw_call_ext_last      heap sizes
+
+# OTP's code server's internals: beamlet's code server is its own (beamlet_code), with no code_server table.
+test_code_server_nifs         calls code_server:is_loaded/1, which reads the code_server ETS table

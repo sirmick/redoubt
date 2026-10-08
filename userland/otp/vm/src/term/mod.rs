@@ -89,6 +89,10 @@ pub enum Kind {
     Bits,
     /// `[module, index, arity, uniq, name, env...]`.
     FunLocal,
+    /// A fun decoded from the external format whose identity is not this VM's code as loaded
+    /// when it was decoded: `[module, index, arity, uniq, name, md5 high, md5 low, old index,
+    /// env...]`, the two halves of the module checksum it was encoded with as integers.
+    FunDecoded,
     /// `[module, function, arity]`.
     FunExport,
     /// `[OffHeap(bignum)]`.
@@ -194,11 +198,16 @@ impl OffHeap {
 /// A resource whose value holds memory of a size its caller chose (a screen buffer) declares
 /// that size, `bytes`, and every heap that holds it counts those bytes as its own memory, as heap
 /// words are counted, not as a shared binary's: so they count toward a process's own
-/// `max_heap_size`. A native that changes the size says so with [`Resource::set_bytes`].
+/// `max_heap_size`. A native that changes the size says so through
+/// [`crate::bif::Ctx::resize_resource`], which also keeps the stores outside any process that
+/// hold it ([`Holdings`]) up to date.
 pub struct Resource {
     pub id: u64,
     pub value: Box<crate::sync::AnyShared>,
     bytes: core::sync::atomic::AtomicUsize,
+    /// How many terms of each [`Store`] hold it: ETS objects, and `persistent_term` keys and
+    /// values. Changed only under the system lock.
+    stored: [core::sync::atomic::AtomicUsize; 2],
 }
 
 impl Resource {
@@ -207,7 +216,7 @@ impl Resource {
 
     /// A resource holding `bytes` its holders count as their own.
     pub fn sized(id: u64, value: Box<crate::sync::AnyShared>, bytes: usize) -> Resource {
-        Resource { id, value, bytes: core::sync::atomic::AtomicUsize::new(bytes) }
+        Resource { id, value, bytes: core::sync::atomic::AtomicUsize::new(bytes), stored: Default::default() }
     }
 
     /// The value, if it is a `T`.
@@ -217,9 +226,66 @@ impl Resource {
     pub fn bytes(&self) -> usize { self.bytes.load(core::sync::atomic::Ordering::Relaxed) }
 
     /// Declares a new size, and returns the old one. A heap counts the new size from its next
-    /// collection, or at once through [`Heap::resized`].
-    pub fn set_bytes(&self, bytes: usize) -> usize {
+    /// collection, or at once through [`Heap::resized`]; each [`Holdings`] through [`Holdings::resized`].
+    pub(crate) fn set_bytes(&self, bytes: usize) -> usize {
         self.bytes.swap(bytes, core::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// How many terms of `store` hold this resource.
+    fn stored(&self, store: Store) -> &core::sync::atomic::AtomicUsize { &self.stored[store as usize] }
+}
+
+/// A store that keeps terms outside any process.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Store {
+    Ets = 0,
+    Persistent = 1,
+}
+
+/// The declared sizes of the resources the terms of one [`Store`] hold, kept up to date as terms
+/// enter and leave it and as the resources resize, so the store's total is read without a scan.
+/// A resource counts once for each term of the store that holds it, as it counts once for each
+/// process. Each term's entry and exit cost one step per resource on its own heap, a resize one
+/// step. Changed only under the system lock, as resources resize only under it.
+pub struct Holdings {
+    store: Store,
+    bytes: u64,
+}
+
+impl Holdings {
+    pub fn new(store: Store) -> Holdings { Holdings { store, bytes: 0 } }
+
+    /// The bytes held.
+    pub fn bytes(&self) -> u64 { self.bytes }
+
+    /// The bytes held, in 8-byte words.
+    pub fn words(&self) -> u64 { self.bytes.div_ceil(8) }
+
+    /// The bytes the resources on `heap` (its own, not its literals') would add.
+    pub fn weigh(heap: &Heap) -> u64 { heap.resources().map(|r| r.bytes() as u64).sum() }
+
+    /// A term on `heap` enters the store.
+    pub fn enter(&mut self, heap: &Heap) {
+        use core::sync::atomic::Ordering::Relaxed;
+        for r in heap.resources() {
+            r.stored(self.store).fetch_add(1, Relaxed);
+            self.bytes += r.bytes() as u64;
+        }
+    }
+
+    /// A term on `heap`, which entered the store, leaves it.
+    pub fn leave(&mut self, heap: &Heap) {
+        use core::sync::atomic::Ordering::Relaxed;
+        for r in heap.resources() {
+            r.stored(self.store).fetch_sub(1, Relaxed);
+            self.bytes = self.bytes.saturating_sub(r.bytes() as u64);
+        }
+    }
+
+    /// Resource `r` changed its declared size from `old` bytes to `new`.
+    pub fn resized(&mut self, r: &Resource, old: usize, new: usize) {
+        let n = r.stored(self.store).load(core::sync::atomic::Ordering::Relaxed) as u64;
+        self.bytes = self.bytes.saturating_sub(old as u64 * n) + new as u64 * n;
     }
 }
 
@@ -280,6 +346,16 @@ impl Bits {
     }
 }
 
+/// The identity a fun was encoded with, kept when it is not the loaded code's: it is written
+/// back as it came, and the fun runs only if its module's checksum is this one.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct External {
+    /// The checksum of the module the fun was made by.
+    pub md5: [u8; 16],
+    /// The external format's `OldIndex`.
+    pub old_index: u32,
+}
+
 /// A fun read off a heap.
 #[derive(Clone, Copy)]
 pub enum FunView<'h> {
@@ -294,6 +370,10 @@ pub enum FunView<'h> {
         /// The name of the function implementing it (`'-f/1-fun-0-'`), kept so `fun_info/2`
         /// can still name a fun whose module has since been reloaded or deleted, as BEAM can.
         name: Atom,
+        /// For a fun decoded from the external format with an identity other than the code
+        /// loaded when it was decoded: the identity it was encoded with. `None` for a fun of
+        /// the loaded code, whose module's checksum is its own.
+        external: Option<External>,
         /// The captured free variables.
         env: &'h [Term],
     },
@@ -497,10 +577,25 @@ impl Heap {
         self.held_bytes = self.held_bytes.saturating_sub(old) + new;
     }
 
-    /// Memory in 8-byte words: two per cell, the off-heap bytes and the resources' sizes.
-    pub fn words(&self) -> u64 {
-        (self.terms.len() * 2 + self.offheap_bytes.div_ceil(8) + self.held_bytes.div_ceil(8)) as u64
+    /// Whether this heap's own table holds `r` (so counts its size), not only its literals.
+    pub fn holds(&self, r: &Arc<Resource>) -> bool {
+        self.offheap_index.contains_key(&(Arc::as_ptr(r) as *const u8 as usize))
     }
+
+    /// The resources this heap's own table holds, each once.
+    pub fn resources(&self) -> impl Iterator<Item = &Arc<Resource>> {
+        self.offheap.iter().filter_map(|o| match o {
+            OffHeap::Resource(r) => Some(r),
+            _ => None,
+        })
+    }
+
+    /// Memory in 8-byte words: two per cell, the off-heap bytes and the resources' sizes.
+    pub fn words(&self) -> u64 { self.term_words() + self.held_bytes.div_ceil(8) as u64 }
+
+    /// Memory in 8-byte words but for the resources' declared sizes: two per cell, and the
+    /// off-heap bytes.
+    pub fn term_words(&self) -> u64 { (self.terms.len() * 2 + self.offheap_bytes.div_ceil(8)) as u64 }
 
     pub fn literals(&self) -> &Literals { &self.lits }
 
@@ -590,6 +685,10 @@ impl Heap {
             Term::Int(i) => i as u32,
             _ => unreachable!("an integer"),
         };
+        let half = |t: Term| match t {
+            Term::Int(i) => (i as u64).to_be_bytes(),
+            _ => unreachable!("an integer"),
+        };
         Some(match h.kind {
             Kind::FunLocal => FunView::Local {
                 module: atom(cells[0]),
@@ -597,8 +696,23 @@ impl Heap {
                 arity: int(cells[2]),
                 uniq: int(cells[3]),
                 name: atom(cells[4]),
+                external: None,
                 env: &cells[5..],
             },
+            Kind::FunDecoded => {
+                let mut md5 = [0; 16];
+                md5[..8].copy_from_slice(&half(cells[5]));
+                md5[8..].copy_from_slice(&half(cells[6]));
+                FunView::Local {
+                    module: atom(cells[0]),
+                    index: int(cells[1]),
+                    arity: int(cells[2]),
+                    uniq: int(cells[3]),
+                    name: atom(cells[4]),
+                    external: Some(External { md5, old_index: int(cells[7]) }),
+                    env: &cells[8..],
+                }
+            }
             _ => FunView::Export { module: atom(cells[0]), function: atom(cells[1]), arity: int(cells[2]) },
         })
     }
@@ -783,6 +897,33 @@ impl Heap {
         ];
         cells.extend_from_slice(env);
         Term::Fun(self.push_object(Kind::FunLocal, &cells))
+    }
+
+    /// A fun decoded with an identity other than the loaded code's (see [`External`]).
+    #[allow(clippy::too_many_arguments)]
+    pub fn fun_decoded(
+        &mut self,
+        module: Atom,
+        index: u32,
+        arity: u32,
+        uniq: u32,
+        name: Atom,
+        external: External,
+        env: &[Term],
+    ) -> Term {
+        let half = |b: &[u8]| Term::Int(u64::from_be_bytes(b.try_into().expect("eight bytes")) as i64);
+        let mut cells = alloc::vec![
+            Term::Atom(module),
+            Term::Int(index as i64),
+            Term::Int(arity as i64),
+            Term::Int(uniq as i64),
+            Term::Atom(name),
+            half(&external.md5[..8]),
+            half(&external.md5[8..]),
+            Term::Int(external.old_index as i64),
+        ];
+        cells.extend_from_slice(env);
+        Term::Fun(self.push_object(Kind::FunDecoded, &cells))
     }
 
     pub fn fun_export(&mut self, module: Atom, function: Atom, arity: u32) -> Term {

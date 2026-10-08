@@ -104,8 +104,8 @@ What the loop does not have:
 
 What a line writes to the console itself, as `IO.puts/1` does, reaches the console through the
 shell's driver and its encoder too ([line editing](#line-editing-and-history)), so it is guarded
-the same. Not guarded: the crash reports of processes a line spawned, which OTP's logger
-writes to `standard_error`, past the driver.
+the same, and so is what the VM logs, the crash reports of processes a line spawned among it
+([hostile text](#hostile-text-never-drives-the-terminal)).
 
 ### Commands
 
@@ -239,25 +239,31 @@ else. `Job.status(job)` is `:running`, `:exited`, `:faulted` or `:killed`, read 
 notice ([processes](../kernel/processes.md#exit-notices)). A job's budget is carved from the
 session's, so ending it can never touch the session.
 
-The interrupt key:
-- **Ctrl+C with a job in the foreground** destroys the budget of every native stage of that job.
+The interrupt is Ctrl+C or the session's own key, Ctrl+\ (0x1C), which no full-screen program
+can take and the driver never forwards:
+- **The interrupt with a job in the foreground** destroys the budget of every native stage of that job.
   Elixir work, a line's evaluation or a screen program, is ended by killing its Erlang process
   with an untrappable exit (`:kill`); a screen's process is sent the exit `:interrupt` first, so
   its line tells the interrupt from a failure. The session and its VM survive, and the shell
   keeps the bindings of every line before the interrupted one.
-- **Ctrl+C at an idle prompt** clears the line. There is no break menu and no job-control menu:
+- **The interrupt at an idle prompt** clears the line, drawing `^C` after it whichever key it was. There is no break menu and no job-control menu:
   both are OTP's `user_drv`, which the shell's driver replaces
   ([line editing](#line-editing-and-history)). A session ends only by `exit` or Ctrl+D.
-- **With a full-screen program in front**, Ctrl+C may be the program's key; the key the session
-  keeps for itself is [a screen's](#a-native-programs-screen-and-the-sessions-key).
-- **Over SSH**, `sshd` turns the channel's `signal` request (INT) and `break` request into the same
-  interrupt a 0x03 byte gives. It is a protocol message, not a Unix signal; nothing inside Redoubt
+- **With a full-screen program in front**, Ctrl+\ ends it. So does Ctrl+C, unless the program
+  declared that it takes Ctrl+C as a key ([a screen's life](#full-screen-programs)): then Ctrl+C
+  reaches it and Ctrl+\ is the only interrupt.
+- **Over SSH**, `sshd` turns the channel's `signal` request (INT) and `break` request into the
+  session's own key, the 0x1C byte, so they interrupt whatever is in front. It is a protocol message, not a Unix signal; nothing inside Redoubt
   has signals ([sshd](../servers/sshd.md)).
 
 What a job cannot do:
 - **Swallow the interrupt.** The session's driver reads `/dev/cons` all the time, not only while
   a line is requested, and a native stage never gets the raw console: its standard input is a
-  pipe the session feeds. So no foreground program can hide Ctrl+C from the shell.
+  pipe the session feeds. So no foreground program can hide the interrupt from the shell, and a
+  screen that takes Ctrl+C still cannot take Ctrl+\\: the driver finds that byte in what was read
+  before decoding any key, so neither an escape sequence begun before it nor a paste carries it
+  to the screen. Under a screen that does not take Ctrl+C, the 0x03 byte is found the same way:
+  ESC then Ctrl+C is the interrupt, never the key Alt+Ctrl+C.
 - **Take the session's memory on the heap.** Every Erlang process the session starts, the
   evaluator, what a line spawns and every screen program, runs with Erlang's `max_heap_size` flag
   (killing), set to a fixed share of the session's budget, so a runaway allocation kills that
@@ -344,7 +350,7 @@ because a query on a UART that never answers costs a timeout at every login).
 
 ### Hostile text never drives the terminal
 
-<details><summary>Status: built · partly tested: the host only, and the paths that exist there: the printer, a line's own writes to the console, the prompt and the typed line, and a screen program's text through the screen buffer (on beamlet alone); a native program's frames are not built; the attack case is the shell's own ExUnit suite (`test/redoubt/shell/driver_test.exs`, `test/redoubt/term_test.exs`, `test/redoubt/screen_test.exs`), judged by a model of the terminal that refuses any sequence but the encoder's own, which `./test-shell` runs and no bench case does, and the buffer's own refusals · tested (2)</summary>
+<details><summary>Status: built · partly tested: the host only, and the paths that exist there: the printer, a line's own writes to the console, what the VM logs, the prompt and the typed line, and a screen program's text through the screen buffer (on beamlet alone); a native program's frames are not built; the attack case is the shell's own ExUnit suite (`test/redoubt/shell/driver_test.exs`, `test/redoubt/term_test.exs`, `test/redoubt/screen_test.exs`), judged by a model of the terminal that refuses any sequence but the encoder's own, which `./test-shell` runs and no bench case does, and the buffer's own refusals · tested (2)</summary>
 
 - host:beamlet-screen::a_control_character_is_badarg_and_nothing_is_drawn
 - host:beamlet-screen::a_control_character_is_refused_and_nothing_of_the_call_is_written
@@ -361,11 +367,30 @@ because nothing reaches the encoder but cells, whose symbols cannot hold a contr
 the shell's printer, from a screen program through the buffer's natives, which refuse one, and
 from a native program only as `cells` frames. The line editor is the one path that hands the
 encoder text rather than cells: `group`'s requests, which the encoder makes visible grapheme by
-grapheme under the same rule. One path still passes the encoder: OTP's logger writes the crash
-reports of processes a line spawned to `standard_error` ([the loop](#the-loop)).
+grapheme under the same rule.
+
+**What the VM logs goes through `group` too.** OTP's logger writes through its `default` handler
+to `user`, the VM's own console server, past the driver. While the driver holds the console, the
+logger's handler is the shell's instead
+([`Redoubt.Shell.Log`](../../userland/shell/lib/redoubt/shell/log.ex)): every event, the crash
+report of a process a line spawned, the emulator's report of one that died, an `error_logger` or
+`Logger` call, is formatted as the `default` handler would have (OTP's formatter bounded to 4 KiB
+an event), and written to `group` like any other output, so the encoder draws it visibly and
+`group` draws the line being edited again after it. A byte that is not UTF-8 is written as
+`<FF>`.
+- **It never waits.** A handler runs in the process that logs, which may be one the console's own
+  path waits on, so it only formats and sends; a relay process writes to `group` and is the only
+  one that waits. An event logged by `group` or the driver themselves is drawn as one fixed line,
+  `[a log event from the shell's terminal, not shown]`, by the driver, never through `group`.
+- **It is bounded.** At most 32 events wait in the relay; a process that logs faster loses the
+  rest, and their count is drawn with the next event shown (`[N log events dropped]`).
+- **It ends with the driver,** which puts the `default` handler back as it was.
 
 What it does not cover: code the person runs holds the session's authority, and can write to its
-own console as it can do anything else the session can; and the bidirectional marks (U+200E,
+own console as it can do anything else the session can, `user` and `standard_error` among them;
+a VM without OTP's logger in its code (the host's beamlet run with no system path) loads beamlet's
+small stand-in, which prints to `standard_error` past the driver, though Redoubt's userland volume
+holds OTP's; and the bidirectional marks (U+200E,
 U+200F, U+061C) are drawn, since they only settle the direction of the weak and neutral characters
 next to them. The invisible format characters (U+00AD, U+200B to U+200D, U+2060 to U+2064,
 U+FEFF, the tag characters of plane 14) and the line and paragraph separators (U+2028, U+2029)
@@ -426,12 +451,14 @@ own. It draws into a **screen buffer**, a grid of cells beamlet holds natively
 - **Widgets are functions, not processes:** each draws into a rectangle of the buffer from what it
   is given, every text made visible first: a box with a title and a shadow, a status line, and
   those that take keys ([widgets](#widgets-focus-and-themes)).
-- **A screen's life.** A line starts a screen with `Redoubt.Screen.run(module, args)`, which
-  returns when the screen ends, with the value its `update` ended it with. While it is in front,
-  the driver shows the alternate screen with the cursor hidden, sends it every key as
-  `{:key, key, modifiers}`, and holds other processes' output, answering them at once so none
-  waits on the screen; then it shows the main screen again, as it was, and draws what it held.
-  The interrupt ends it with `nil`. One screen is in front at a time.
+- **A screen's life.** A line starts a screen with `Redoubt.Screen.run(module, args, opts)`,
+  which returns when the screen ends, with the value its `update` ended it with. While it is in
+  front, the driver shows the alternate screen with the cursor hidden, sends it every key as
+  `{:key, key, modifiers}` but the interrupt, and holds other processes' output, answering them
+  at once so none waits on the screen; then it shows the main screen again, as it was, and draws
+  what it held. The interrupt ends it with `nil`: Ctrl+\\, and Ctrl+C unless it was started with
+  `ctrl_c: :key`, which makes Ctrl+C a key it is sent (the editor copies with it). One screen is
+  in front at a time.
 - **`pick(items)`** is a screen, `menuconfig`'s chooser: a list in a box, the arrows,
   Page Up and Down, Home and End to move, Enter to choose, Esc to leave. It returns the chosen
   item, or `nil`.
@@ -443,8 +470,9 @@ What a full-screen program cannot do:
   buffer's natives, which refuse a control character, and through the one decoder, which refuses
   a frame that is not exactly cells; the driver ends a screen whose frame it refuses
   ([hostile text](#hostile-text-never-drives-the-terminal)).
-- **Keep the interrupt from the session.** Ctrl+C ends the screen in front, as it ends a line at
-  the prompt.
+- **Keep the interrupt from the session.** Ctrl+\ ends the screen in front, as it ends a line at
+  the prompt, and so does Ctrl+C unless the screen takes it as a key
+  ([interrupting](#interrupting-and-killing-jobs)).
 
 ### Widgets, focus and themes
 
@@ -493,13 +521,11 @@ Status: planned · M2 (usable shell)
   output, and the session draws them through the same decoder and encoder. It holds its pipes and
   its budget, no `/dev/cons`, and a cell cannot carry a control sequence, so a hijacked one can
   draw wrong cells, or crash and have its budget reclaimed, and nothing more.
-- **The session's own key.** A full-screen program may take Ctrl+C as a key (the editor copies
-  with it), so the session keeps one other key for itself, never forwards it, and ends the
-  foreground screen or job on it, as Ctrl+C does at the prompt. The key is configurable per
-  principal. Until a screen takes Ctrl+C, Ctrl+C is that key.
+- **A key per principal.** The session's own key, Ctrl+\\
+  ([interrupting](#interrupting-and-killing-jobs)), is the same for every session; a principal
+  choosing another is planned here and not built.
 
-**Open:** the default interrupt key for full-screen programs; the candidate is Ctrl+\ (0x1C),
-which neither `edlin` nor the common full-screen programs take.
+**Open:** none.
 
 ### Line editing and history
 
@@ -528,8 +554,9 @@ requests through `Redoubt.Term`'s encoder. `group`'s driver protocol is small: r
 and the interrupt as an exit signal. That gives Emacs keys, a kill ring, multi-line input and
 history with Ctrl+R search. `group` writes one escape sequence itself, its bold Ctrl+R prompt;
 the encoder recognises exactly that, at the head of the request that carries it, and draws every
-other byte through the guard. The driver reads two keys itself: Ctrl+C ends the line being edited
-and nothing else ([interrupting](#interrupting-and-killing-jobs)); Ctrl+D on an empty line, like
+other byte through the guard. The driver reads three keys itself: Ctrl+C and Ctrl+\ end the line
+being edited and nothing else ([interrupting](#interrupting-and-killing-jobs)), and Ctrl+\ never
+reaches `group`; Ctrl+D on an empty line, like
 the console's end, ends the input and so the shell. `group` has no way to hand its reader an end
 of input (`edlin` takes `eof` for a line's end), so the driver answers the pending read with the
 error `eof`, which `group` keeps in order behind the keys before it, and the shell reads as its

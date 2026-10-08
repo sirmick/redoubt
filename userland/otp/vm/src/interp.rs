@@ -373,15 +373,20 @@ pub(crate) fn fun_entry(
         return Err(error_tuple(heap, &sys.atoms().badarity, info));
     }
     match f {
-        FunView::Local { module, index, env, uniq, arity, .. } => {
+        FunView::Local { module, index, env, uniq, arity, external, .. } => {
             let env = env.to_vec();
             let Some(m) = sys.module(&module) else {
                 return Err(Exception::error(Term::Atom(sys.atoms().undef)));
             };
             // A fun from another version of the module (or decoded from a binary) must match
-            // this version's fun table, or it is a bad fun.
+            // this version's fun table, and a decoded one this version's checksum, or it is a
+            // bad fun.
+            let same_code = external.is_none_or(|e| e.md5 == m.md5);
             let entry = m.funs.get(index as usize).filter(|e| {
-                e.uniq == uniq && e.num_free as usize == env.len() && e.arity == arity + e.num_free
+                same_code
+                    && e.uniq == uniq
+                    && e.num_free as usize == env.len()
+                    && e.arity == arity + e.num_free
             });
             let Some(entry) = entry.map(|e| e.entry) else {
                 return Err(error_tuple(heap, &sys.atoms().badfun, fun));

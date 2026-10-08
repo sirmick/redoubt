@@ -14,11 +14,13 @@
 
 use alloc::collections::BTreeMap;
 use alloc::string::String;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::cmp::Ordering;
 
 use crate::atom::Atom;
-use crate::term::{Heap, OwnedTerm, Pid, Term, compare};
+use crate::sync::Lock;
+use crate::term::{Heap, Holdings, OwnedTerm, Pid, Store, Term, compare};
 
 /// Most tables one VM may have (as BEAM's default `ERL_MAX_ETS_TABLES`, roughly).
 pub const MAX_TABLES: usize = 8192;
@@ -68,15 +70,22 @@ pub struct Table {
     /// 1-based position of the key in each object.
     pub keypos: usize,
     pub owner: Pid,
-    pub heir: Option<(Pid, OwnedTerm)>,
+    /// Who inherits the table, and the data it is sent then: kept with the table, so counted
+    /// as its objects are ([`Table::set_heir`]).
+    heir: Option<(Pid, OwnedTerm)>,
     objects: BTreeMap<Key, Vec<OwnedTerm>>,
     count: usize,
-    /// Memory the objects hold, in words (see [`weigh`]).
+    /// Memory the objects and the heir's data hold, in words (see [`weigh`]), but for the
+    /// resources they hold.
     words: u64,
+    /// The resources the objects and heir data of every table hold, at their live sizes
+    /// ([`Tables::words`]).
+    held: Arc<Lock<Holdings>>,
 }
 
-/// The words an object costs a table.
-pub fn weigh(obj: &OwnedTerm) -> u64 { obj.words() }
+/// The words an object costs a table, but for the declared sizes of the resources it holds,
+/// which count in [`Tables`]'s [`Holdings`] at their live sizes.
+pub fn weigh(obj: &OwnedTerm) -> u64 { obj.heap().term_words() }
 
 fn weigh_all(objs: &[OwnedTerm]) -> u64 { objs.iter().map(weigh).sum() }
 
@@ -94,8 +103,26 @@ impl Table {
 
     pub fn size(&self) -> usize { self.count }
 
-    /// Memory the objects hold, in words.
+    /// Memory the objects and the heir's data hold, in words.
     pub fn words(&self) -> u64 { self.words }
+
+    /// The heir and the data it is sent, if the table has one.
+    pub fn heir(&self) -> Option<&(Pid, OwnedTerm)> { self.heir.as_ref() }
+
+    /// Set the heir: the old data leaves the count, the new data enters it.
+    pub fn set_heir(&mut self, heir: Option<(Pid, OwnedTerm)>) {
+        let mut held = self.held.lock();
+        if let Some((_, old)) = &self.heir {
+            self.words = self.words.saturating_sub(weigh(old));
+            held.leave(old.heap());
+        }
+        if let Some((_, new)) = &heir {
+            self.words += weigh(new);
+            held.enter(new.heap());
+        }
+        drop(held);
+        self.heir = heir;
+    }
 
     pub fn may_read(&self, who: Pid) -> bool { self.access != Access::Private || who == self.owner }
 
@@ -105,20 +132,25 @@ impl Table {
     pub fn insert(&mut self, key: Key, obj: OwnedTerm) {
         let slot = self.objects.entry(key).or_default();
         let w = weigh(&obj);
+        let mut held = self.held.lock();
         match self.kind {
             Kind::Set | Kind::OrderedSet => {
                 self.count += 1 - slot.len();
                 self.words = self.words.saturating_sub(weigh_all(slot)) + w;
+                slot.iter().for_each(|o| held.leave(o.heap()));
+                held.enter(obj.heap());
                 *slot = alloc::vec![obj];
             }
             Kind::Bag => {
                 if !slot.contains(&obj) {
+                    held.enter(obj.heap());
                     slot.push(obj);
                     self.count += 1;
                     self.words += w;
                 }
             }
             Kind::DuplicateBag => {
+                held.enter(obj.heap());
                 slot.push(obj);
                 self.count += 1;
                 self.words += w;
@@ -134,6 +166,8 @@ impl Table {
         let removed = self.objects.remove(key).unwrap_or_default();
         self.count -= removed.len();
         self.words = self.words.saturating_sub(weigh_all(&removed));
+        let mut held = self.held.lock();
+        removed.iter().for_each(|o| held.leave(o.heap()));
         removed
     }
 
@@ -144,10 +178,12 @@ impl Table {
         };
         let before = slot.len();
         let mut freed = 0;
+        let mut held = self.held.lock();
         slot.retain(|o| {
             let keep = o != obj;
             if !keep {
                 freed += weigh(o);
+                held.leave(o.heap());
             }
             keep
         });
@@ -164,15 +200,21 @@ impl Table {
     pub fn replace(&mut self, key: &Key, obj: OwnedTerm) {
         if let Some(slot) = self.objects.get_mut(key) {
             self.words = self.words.saturating_sub(weigh_all(slot)) + weigh(&obj);
+            let mut held = self.held.lock();
+            slot.iter().for_each(|o| held.leave(o.heap()));
+            held.enter(obj.heap());
             *slot = alloc::vec![obj];
         }
     }
 
     pub fn clear(&mut self) -> usize {
         let n = self.count;
+        let mut held = self.held.lock();
+        self.all().for_each(|o| held.leave(o.heap()));
+        drop(held);
         self.objects.clear();
         self.count = 0;
-        self.words = 0;
+        self.words = self.heir.as_ref().map_or(0, |(_, d)| weigh(d));
         n
     }
 
@@ -190,13 +232,37 @@ impl Table {
     }
 
     pub fn prev(&self, key: &Key) -> Option<&Key> { self.objects.range(..key).next_back().map(|(k, _)| k) }
+
+    /// The heaps of every term the table holds: its objects, and its heir's data.
+    fn heaps(&self) -> impl Iterator<Item = &Heap> {
+        self.all().chain(self.heir.as_ref().map(|(_, d)| d)).map(OwnedTerm::heap)
+    }
+}
+
+/// A table deleted, or its owner gone, takes its resources out of the count.
+impl Drop for Table {
+    fn drop(&mut self) {
+        let mut held = self.held.lock();
+        self.heaps().for_each(|h| held.leave(h));
+    }
 }
 
 /// All the tables of one VM.
-#[derive(Default)]
 pub struct Tables {
     by_tid: BTreeMap<u64, Table>,
     by_name: BTreeMap<String, u64>,
+    /// The resources the objects of every table hold, shared with each table.
+    held: Arc<Lock<Holdings>>,
+}
+
+impl Default for Tables {
+    fn default() -> Tables {
+        Tables {
+            by_tid: BTreeMap::new(),
+            by_name: BTreeMap::new(),
+            held: Arc::new(Lock::new(Holdings::new(Store::Ets))),
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -206,7 +272,17 @@ pub enum TableError {
 }
 
 impl Tables {
-    pub fn create(&mut self, t: Table) -> Result<(), TableError> {
+    /// Add table `t`. What it already holds moves from its own count to these tables', so a
+    /// table refused here leaves the count as it was when it is dropped.
+    pub fn create(&mut self, mut t: Table) -> Result<(), TableError> {
+        let own = core::mem::replace(&mut t.held, self.held.clone());
+        {
+            let (mut own, mut shared) = (own.lock(), self.held.lock());
+            for h in t.heaps() {
+                own.leave(h);
+                shared.enter(h);
+            }
+        }
         if self.by_tid.len() >= MAX_TABLES {
             return Err(TableError::TooMany);
         }
@@ -261,8 +337,16 @@ impl Tables {
 
     pub fn tids(&self) -> Vec<u64> { self.by_tid.keys().copied().collect() }
 
-    /// Memory all tables hold, in words.
-    pub fn words(&self) -> u64 { self.by_tid.values().map(Table::words).sum() }
+    /// Memory all tables hold, in words: their objects, and the resources those hold at their
+    /// live sizes.
+    pub fn words(&self) -> u64 {
+        self.by_tid.values().map(Table::words).sum::<u64>() + self.held.lock().words()
+    }
+
+    /// Resource `r`, which objects of these tables may hold, changed its declared size.
+    pub fn resized(&self, r: &crate::term::Resource, old: usize, new: usize) {
+        self.held.lock().resized(r, old, new);
+    }
 }
 
 /// What `ets:new/2` was asked for.
@@ -277,7 +361,7 @@ pub struct Options {
 
 impl Table {
     pub fn new(tid: u64, owner: Pid, o: Options) -> Table {
-        Table {
+        let mut t = Table {
             tid,
             name: o.name,
             named: o.named,
@@ -285,11 +369,14 @@ impl Table {
             access: o.access,
             keypos: o.keypos,
             owner,
-            heir: o.heir,
+            heir: None,
             objects: BTreeMap::new(),
             count: 0,
             words: 0,
-        }
+            held: Arc::new(Lock::new(Holdings::new(Store::Ets))),
+        };
+        t.set_heir(o.heir);
+        t
     }
 }
 

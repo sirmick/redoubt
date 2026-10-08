@@ -787,22 +787,12 @@ pub fn time_unit(_c: &mut Ctx, _a: &[Term]) -> R { Ok(Term::Int(1_000_000_000)) 
 
 // ---- persistent_term ----
 
-/// Most keys `persistent_term` may hold; it is VM-wide state any process can grow.
-const MAX_PERSISTENT_TERMS: usize = 1 << 16;
-
+/// `put(Key, Value)`: `system_limit` past `Limits::max_persistent_words` or
+/// `MAX_PERSISTENT_TERMS` keys ([`crate::vm::System::persist`]).
 pub fn pt_put(c: &mut Ctx, a: &[Term]) -> R {
     let key = c.own(a[0]);
-    let full = {
-        let sys = c.sys();
-        !sys.persistent.contains_key(&key) && sys.persistent.len() >= MAX_PERSISTENT_TERMS
-    };
-    if full {
-        return Err(c.system_limit());
-    }
-    // The value becomes a literal, as in BEAM: reading it copies nothing. (A value replaced is
-    // not freed; BEAM frees it once no process refers to it.)
-    let value = c.sys().make_literal(&c.p.heap, a[1]);
-    c.sys().persistent.insert(key, value);
+    let stored = c.sys().persist(key, &c.p.heap, a[1]);
+    stored.map_err(|()| c.system_limit())?;
     Ok(c.ok())
 }
 
@@ -835,7 +825,7 @@ pub fn pt_get_all(c: &mut Ctx, _a: &[Term]) -> R {
 
 pub fn pt_erase(c: &mut Ctx, a: &[Term]) -> R {
     let key = c.own(a[0]);
-    let existed = c.sys().persistent.remove(&key).is_some();
+    let existed = c.sys().unpersist(&key);
     Ok(c.bool(existed))
 }
 
@@ -1208,9 +1198,11 @@ pub fn pt_put_new(c: &mut Ctx, a: &[Term]) -> R {
 
 /// `persistent_term:info()`: `#{count, memory}`.
 pub fn pt_info(c: &mut Ctx, _a: &[Term]) -> R {
-    let count = c.sys().persistent.len() as i64;
-    // Keys, and values (literals: counted by their own chunks, a cell each at least).
-    let words: u64 = c.sys().persistent.keys().map(|k| k.words() + 2).sum();
+    // What counts toward `max_persistent_words`: values replaced or erased included.
+    let (count, words) = {
+        let sys = c.sys();
+        (sys.persistent.len() as i64, sys.persistent_words())
+    };
     let (count_k, memory_k) = (c.atom("count"), c.atom("memory"));
     Ok(c.map_from([(count_k, Term::Int(count)), (memory_k, Term::Int((words * 8) as i64))]))
 }
@@ -1330,8 +1322,8 @@ pub fn fun_info(c: &mut Ctx, a: &[Term]) -> R {
     let (arity, local) = (
         f.arity(),
         match f {
-            FunView::Local { module, index, uniq, name, env, .. } => {
-                Some((module, index, uniq, name, env.to_vec()))
+            FunView::Local { module, index, uniq, name, env, external, .. } => {
+                Some((module, index, uniq, name, env.to_vec(), external))
             }
             FunView::Export { .. } => None,
         },
@@ -1344,7 +1336,7 @@ pub fn fun_info(c: &mut Ctx, a: &[Term]) -> R {
         (_, "module") => Term::Atom(module),
         (_, "arity") => Term::Int(arity as i64),
         (None, "name") => Term::Atom(function.expect("an export fun")),
-        (Some((module, index, uniq, name, _)), "name") => {
+        (Some((module, index, uniq, name, ..)), "name") => {
             // From the module's fun table when this is still its fun (decoded funs do not
             // carry a name), else the name recorded when the fun was made.
             let current = c
@@ -1356,11 +1348,18 @@ pub fn fun_info(c: &mut Ctx, a: &[Term]) -> R {
         (None, "type") => c.atom("external"),
         (Some(_), "type") => c.atom("local"),
         (None, "env") => Term::Nil,
-        (Some((_, _, _, _, env)), "env") => c.list(env),
-        (Some((_, index, ..)), "index" | "new_index") => Term::Int(index as i64),
+        (Some((_, _, _, _, env, _)), "env") => c.list(env),
+        (Some((_, index, ..)), "new_index") => Term::Int(index as i64),
+        // A decoded fun's own identity, as it was encoded (see `External`).
+        (Some((_, index, _, _, _, external)), "index") => {
+            Term::Int(external.map_or(index, |e| e.old_index) as i64)
+        }
         (Some((_, _, uniq, ..)), "uniq") => Term::Int(uniq as i64),
-        (Some((module, ..)), "new_uniq") => {
-            let md5 = c.sys().loaded_md5(&module).unwrap_or([0; 16]);
+        (Some((module, _, _, _, _, external)), "new_uniq") => {
+            let md5 = match external {
+                Some(e) => e.md5,
+                None => c.sys().loaded_md5(&module).unwrap_or([0; 16]),
+            };
             c.binary(&md5)
         }
         // Funs do not record their creator; BEAM reports the same for funs it did not track.

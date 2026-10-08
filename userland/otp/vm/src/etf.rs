@@ -12,8 +12,8 @@ use alloc::vec::Vec;
 
 use num_bigint::{BigInt, Sign};
 
-use crate::atom::{AtomError, AtomTable};
-use crate::term::{FunView, Heap, Term};
+use crate::atom::{Atom, AtomError, AtomTable};
+use crate::term::{External, FunView, Heap, Term};
 
 /// How deeply tuples, maps and list heads may nest. Lists nest along the tail without limit.
 pub const MAX_DEPTH: usize = 256;
@@ -32,6 +32,8 @@ pub enum EtfError {
     BadFloat,
     /// A malformed value (bad bit count, a fun arity that is not an integer, ...).
     Malformed,
+    /// In safe mode, an export fun of a function this VM does not export now.
+    NotExported,
     /// Bytes left over after the term.
     TrailingBytes,
 }
@@ -49,9 +51,25 @@ const COMPRESSED: u8 = 80;
 /// 1032:1, so a size is also refused if the input is too short to produce it.
 const MAX_INFLATED: usize = 1 << 27;
 
+/// What decoding sees of the loaded code.
+#[derive(Clone, Copy)]
+pub struct Loaded<'f> {
+    /// The checksum of a loaded module, or `None` if it is not loaded.
+    pub md5_of: &'f dyn Fn(&Atom) -> Option<[u8; 16]>,
+    /// Whether `Module:Function/Arity` is exported now: a loaded module's export, or a native.
+    pub exported: &'f dyn Fn(&Atom, &Atom, u32) -> bool,
+}
+
+impl Loaded<'_> {
+    /// No code at all: a fun keeps the identity it was encoded with, and safe mode refuses
+    /// every export fun.
+    pub const NONE: Loaded<'static> = Loaded { md5_of: &|_| None, exported: &|_, _, _| false };
+}
+
 /// Decode one complete term (with its version byte) that must fill all of `bytes`, onto `heap`.
+/// No module counts as loaded, so a fun keeps the identity it was encoded with.
 pub fn decode(bytes: &[u8], atoms: &mut AtomTable, heap: &mut Heap) -> Result<Term, EtfError> {
-    let (t, used) = decode_prefix(bytes, atoms, heap, false)?;
+    let (t, used) = decode_prefix(bytes, atoms, heap, false, Loaded::NONE)?;
     if used != bytes.len() {
         return Err(EtfError::TrailingBytes);
     }
@@ -59,14 +77,17 @@ pub fn decode(bytes: &[u8], atoms: &mut AtomTable, heap: &mut Heap) -> Result<Te
 }
 
 /// Decode the term at the start of `bytes`; also return how many bytes it used. With `safe`,
-/// an atom that does not already exist is an error rather than a new atom.
+/// an atom that does not already exist is an error rather than a new atom, and an export fun
+/// of a function not exported now is refused, as on BEAM. A fun encoded with a loaded module's
+/// checksum is that code's fun, and any other keeps the identity it came with ([`External`]).
 pub fn decode_prefix(
     bytes: &[u8],
     atoms: &mut AtomTable,
     heap: &mut Heap,
     safe: bool,
+    loaded: Loaded<'_>,
 ) -> Result<(Term, usize), EtfError> {
-    let mut r = Reader { bytes, pos: 0, atoms, heap, safe };
+    let mut r = Reader { bytes, pos: 0, atoms, heap, safe, loaded };
     if r.u8()? != VERSION {
         return Err(EtfError::BadTag(bytes[0]));
     }
@@ -74,7 +95,7 @@ pub fn decode_prefix(
         r.pos = 2;
         let size = r.u32()?;
         let (inflated, used) = inflate(&bytes[r.pos..], size)?;
-        let mut inner = Reader { bytes: &inflated, pos: 0, atoms: r.atoms, heap: r.heap, safe };
+        let mut inner = Reader { bytes: &inflated, pos: 0, atoms: r.atoms, heap: r.heap, safe, loaded };
         let t = inner.term(0)?;
         if inner.pos != inflated.len() {
             return Err(EtfError::Malformed);
@@ -134,6 +155,7 @@ struct Reader<'a, 'b> {
     atoms: &'b mut AtomTable,
     heap: &'b mut Heap,
     safe: bool,
+    loaded: Loaded<'b>,
 }
 
 impl<'a> Reader<'a, '_> {
@@ -274,6 +296,10 @@ impl<'a> Reader<'a, '_> {
                     Term::Int(a) if (0..=255).contains(&a) => a as u32,
                     _ => return Err(EtfError::Malformed),
                 };
+                // In safe mode a fun names only code that is there: no module is loaded for it.
+                if self.safe && !(self.loaded.exported)(&module, &function, arity) {
+                    return Err(EtfError::NotExported);
+                }
                 self.heap.fun_export(module, function, arity)
             }
             // NEW_PID_EXT and PID_EXT: only this node's pids (there is no distribution).
@@ -313,38 +339,62 @@ impl<'a> Reader<'a, '_> {
                 }
                 Term::Ref(crate::term::Ref((ids[0] & 0x3ffff) | (ids[1] << 18) | (ids[2] << 50)))
             }
-            // NEW_FUN_EXT. In safe mode a fun is refused: it names code to run.
-            112 if !self.safe => {
-                let start = self.pos;
-                let size = self.u32()?;
-                let arity = self.u8()? as u32;
-                self.take(16)?; // the module's MD5; the fun is checked against the module when called
-                let index = self.u32()? as u32;
-                let num_free = self.u32()?;
-                self.check_count(num_free, 1)?;
-                let module = self.atom(depth)?;
-                let (Term::Int(_), Term::Int(uniq)) = (self.term(depth + 1)?, self.term(depth + 1)?) else {
-                    return Err(EtfError::Malformed);
-                };
-                if !matches!(self.term(depth + 1)?, Term::Pid(_)) {
-                    return Err(EtfError::Malformed);
-                }
-                let mut env = Vec::with_capacity(num_free);
-                for _ in 0..num_free {
-                    env.push(self.term(depth + 1)?);
-                }
-                if self.pos - start != size {
-                    return Err(EtfError::Malformed);
-                }
-                let uniq = u32::try_from(uniq).map_err(|_| EtfError::Malformed)?;
-                // The name is not in the external format; the module's fun table has it, if
-                // the module is loaded now (and matches), else it is left unknown.
-                let name = self.atoms.intern("-unknown-fun-").map_err(|_| EtfError::BadAtom)?;
-                self.heap.fun_local(module, index, arity, uniq, name, &env)
-            }
+            // NEW_FUN_EXT. In safe mode a fun is refused: it names code to run, with free
+            // variables the sender chose. Stricter than BEAM, by design (docs/userland/beamlet.md,
+            // "Loading hostile code").
+            112 if !self.safe => self.new_fun(depth)?,
             // Ports, the old float format and distribution headers are not accepted.
             other => return Err(EtfError::BadTag(other)),
         })
+    }
+
+    /// NEW_FUN_EXT, its tag read. Apart from `term` and never inlined into it: its locals (the
+    /// checksum, the free variables, the identity a decoded fun keeps) would otherwise be in
+    /// every frame of `term`'s recursion, nested lists and tuples' as much as a fun's.
+    #[inline(never)]
+    fn new_fun(&mut self, depth: usize) -> Result<Term, EtfError> {
+        let start = self.pos;
+        let size = self.u32()?;
+        let arity = self.u8()? as u32;
+        let md5: [u8; 16] = self.take(16)?.try_into().map_err(|_| EtfError::Truncated)?;
+        let index = self.u32()? as u32;
+        let num_free = self.u32()?;
+        self.check_count(num_free, 1)?;
+        let module = self.atom(depth)?;
+        let (Term::Int(old_index), Term::Int(uniq)) = (self.term(depth + 1)?, self.term(depth + 1)?) else {
+            return Err(EtfError::Malformed);
+        };
+        let old_index = u32::try_from(old_index).map_err(|_| EtfError::Malformed)?;
+        self.creator(depth)?;
+        let mut env = Vec::with_capacity(num_free);
+        for _ in 0..num_free {
+            env.push(self.term(depth + 1)?);
+        }
+        if self.pos - start != size {
+            return Err(EtfError::Malformed);
+        }
+        let uniq = u32::try_from(uniq).map_err(|_| EtfError::Malformed)?;
+        // The name is not in the external format; the module's fun table has it, if
+        // the module is loaded now (and matches), else it is left unknown.
+        let name = self.atoms.intern("-unknown-fun-").map_err(|_| EtfError::BadAtom)?;
+        Ok(if (self.loaded.md5_of)(&module) == Some(md5) {
+            self.heap.fun_local(module, index, arity, uniq, name, &env)
+        } else {
+            let external = External { md5, old_index };
+            self.heap.fun_decoded(module, index, arity, uniq, name, external, &env)
+        })
+    }
+
+    /// A fun's creator: a pid of any node, as BEAM reads it, since the fun does not keep it (in
+    /// safe mode its node must be an atom that exists, as any atom).
+    fn creator(&mut self, depth: usize) -> Result<(), EtfError> {
+        let tag = self.u8()?;
+        if tag != 88 && tag != 103 {
+            return Err(EtfError::Malformed);
+        }
+        self.atom(depth)?;
+        self.take(if tag == 88 { 12 } else { 9 })?;
+        Ok(())
     }
 
     /// A node name that must be this VM's own ([`NODE`]).
@@ -474,16 +524,21 @@ pub fn encode_with(
                 }
                 // NEW_FUN_EXT: Size, Arity, Uniq (module MD5), Index, NumFree, Module,
                 // OldIndex, OldUniq, Pid (the creator; not tracked here), then the free variables.
-                FunView::Local { module, index, arity, env, uniq, .. } => {
+                // A decoded fun is written with the identity it came with.
+                FunView::Local { module, index, arity, env, uniq, external, .. } => {
                     out.push(112);
                     let at = out.len();
                     out.extend_from_slice(&[0; 4]);
                     out.push(u8::try_from(arity).map_err(|_| EncodeError::Unsupported)?);
-                    out.extend_from_slice(&md5_of(&module).unwrap_or([0; 16]));
+                    let (md5, old_index) = match external {
+                        Some(e) => (e.md5, e.old_index),
+                        None => (md5_of(&module).unwrap_or([0; 16]), index),
+                    };
+                    out.extend_from_slice(&md5);
                     out.extend_from_slice(&index.to_be_bytes());
                     out.extend_from_slice(&(env.len() as u32).to_be_bytes());
                     encode_atom(&mut out, module.as_str());
-                    encode_int(&mut out, index as i64);
+                    encode_int(&mut out, old_index as i64);
                     encode_int(&mut out, uniq as i64);
                     out.push(88);
                     encode_atom(&mut out, NODE);
@@ -630,10 +685,61 @@ mod tests {
         let mut atoms = AtomTable::new();
         let mut h = heap();
         let bytes = [131, 119, 3, 110, 101, 119];
-        assert_eq!(decode_prefix(&bytes, &mut atoms, &mut h, true).err(), Some(EtfError::BadAtom));
+        assert_eq!(
+            decode_prefix(&bytes, &mut atoms, &mut h, true, Loaded::NONE).err(),
+            Some(EtfError::BadAtom)
+        );
         assert!(atoms.existing("new").is_none());
-        assert!(decode_prefix(&bytes, &mut atoms, &mut h, false).is_ok());
-        assert!(decode_prefix(&bytes, &mut atoms, &mut h, true).is_ok());
+        assert!(decode_prefix(&bytes, &mut atoms, &mut h, false, Loaded::NONE).is_ok());
+        assert!(decode_prefix(&bytes, &mut atoms, &mut h, true, Loaded::NONE).is_ok());
+    }
+
+    /// In safe mode an export fun decodes only if it names a function exported now; without
+    /// safe mode, any.
+    #[test]
+    fn safe_mode_refuses_an_export_fun_of_code_not_exported() {
+        let mut atoms = AtomTable::new();
+        let mut h = heap();
+        let exported = |m: &Atom, f: &Atom, a: u32| (m.as_str(), f.as_str(), a) == ("lists", "map", 2);
+        let code = Loaded { md5_of: &|_| None, exported: &exported };
+        let fun = |f: &[u8], a: u8| {
+            let mut b = alloc::vec![131, 113, 119, 5];
+            b.extend_from_slice(b"lists");
+            b.extend_from_slice(&[119, f.len() as u8]);
+            b.extend_from_slice(f);
+            b.extend_from_slice(&[97, a]);
+            b
+        };
+        let (map2, map3, nope) = (fun(b"map", 2), fun(b"map", 3), fun(b"nope", 2));
+        assert!(decode_prefix(&map2, &mut atoms, &mut h, false, code).is_ok());
+        assert!(decode_prefix(&map2, &mut atoms, &mut h, true, code).is_ok());
+        assert!(decode_prefix(&nope, &mut atoms, &mut h, false, code).is_ok());
+        for refused in [&map3, &nope] {
+            assert_eq!(
+                decode_prefix(refused, &mut atoms, &mut h, true, code).err(),
+                Some(EtfError::NotExported)
+            );
+        }
+        assert_eq!(
+            decode_prefix(&map2, &mut atoms, &mut h, true, Loaded::NONE).err(),
+            Some(EtfError::NotExported)
+        );
+    }
+
+    /// Safe mode decodes no local fun, not even one of the loaded code with its atoms all
+    /// existing: a fun is code to run with free variables the sender chose (stricter than BEAM).
+    #[test]
+    fn safe_mode_decodes_no_local_fun() {
+        let mut atoms = AtomTable::new();
+        let mut h = heap();
+        let module = atoms.intern("m").unwrap();
+        let name = atoms.intern("-f/1-fun-0-").unwrap();
+        let md5_of = |m: &Atom| (m.as_str() == "m").then_some([7u8; 16]);
+        let code = Loaded { md5_of: &md5_of, exported: &|_, _, _| true };
+        let fun = h.fun_local(module, 0, 1, 5, name, &[Term::Int(1)]);
+        let bytes = encode_with(&h, fun, &md5_of).unwrap();
+        assert!(decode_prefix(&bytes, &mut atoms, &mut h, false, code).is_ok());
+        assert_eq!(decode_prefix(&bytes, &mut atoms, &mut h, true, code).err(), Some(EtfError::BadTag(112)));
     }
 
     #[test]
@@ -671,6 +777,45 @@ mod tests {
         other.extend_from_slice(b"a@b.c");
         other.extend_from_slice(&[0; 12]);
         assert!(decode(&other, &mut atoms, &mut h).is_err());
+    }
+
+    /// A fun encoded with a checksum the loaded code does not have keeps the identity it came
+    /// with, and is written back byte for byte; one encoded with the loaded module's checksum is
+    /// that code's fun, written back with the loaded code's fields (`OldIndex` as `Index`).
+    #[test]
+    fn a_decoded_fun_keeps_an_identity_the_loaded_code_does_not_have() {
+        let mut atoms = AtomTable::new();
+        let mut h = heap();
+        let module = atoms.intern("m").unwrap();
+        let name = atoms.intern("-f/1-fun-0-").unwrap();
+        let loaded = [7u8; 16];
+        let md5_of = |m: &Atom| (m.as_str() == "m").then_some(loaded);
+        let code = Loaded { md5_of: &md5_of, exported: &|_, _, _| false };
+        let fun = h.fun_local(module, 2, 1, 99, name, &[Term::Int(5)]);
+        let bytes = encode_with(&h, fun, &md5_of).unwrap();
+        // The checksum is bytes 7 to 22; OldIndex is the small integer after the module's name.
+        let old_index = bytes.windows(3).position(|w| w == [119, 1, b'm']).unwrap() + 4;
+        let other = |sum: u8, old: u8| {
+            let mut b = bytes.clone();
+            b[7..23].fill(sum);
+            b[old_index] = old;
+            b
+        };
+        for (sum, old) in [(0, 2), (0, 40), (9, 2)] {
+            let encoded = other(sum, old);
+            let (t, _) = decode_prefix(&encoded, &mut atoms, &mut h, false, code).unwrap();
+            let Some(FunView::Local { external: Some(e), .. }) = h.as_fun(t) else { panic!("kept") };
+            assert_eq!((e.md5, e.old_index), ([sum; 16], old as u32));
+            assert_eq!(encode_with(&h, t, &md5_of).unwrap(), encoded);
+        }
+        // The loaded code's checksum, whatever its OldIndex: that code's fun.
+        let encoded = other(7, 40);
+        let (t, _) = decode_prefix(&encoded, &mut atoms, &mut h, false, code).unwrap();
+        assert!(matches!(h.as_fun(t), Some(FunView::Local { external: None, index: 2, .. })));
+        assert_eq!(encode_with(&h, t, &md5_of).unwrap(), bytes);
+        assert_eq!(h.cmp_exact(t, fun), core::cmp::Ordering::Equal);
+        let kept = decode_prefix(&other(0, 2), &mut atoms, &mut h, false, code).unwrap().0;
+        assert_ne!(h.cmp_exact(kept, fun), core::cmp::Ordering::Equal);
     }
 
     #[test]

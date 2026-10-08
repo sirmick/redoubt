@@ -773,8 +773,15 @@ pub fn binary_to_term(c: &mut Ctx, a: &[Term]) -> R {
             }
         }
     }
-    let (t, n) = crate::etf::decode_prefix(&bytes, &mut c.sys().atom_table, &mut c.p.heap, safe)
-        .map_err(|_| c.badarg())?;
+    // A fun names its module's code by checksum: one of the loaded code's is that code's fun;
+    // and in safe mode an export fun must name a function exported now.
+    let decoded = {
+        let mut guard = c.sys();
+        let (atoms, md5_of, exported) = guard.term_decoding();
+        let loaded = crate::etf::Loaded { md5_of: &md5_of, exported: &exported };
+        crate::etf::decode_prefix(&bytes, atoms, &mut c.p.heap, safe, loaded)
+    };
+    let (t, n) = decoded.map_err(|_| c.badarg())?;
     if used {
         return Ok(c.tuple(&[t, Term::Int(n as i64)]));
     }

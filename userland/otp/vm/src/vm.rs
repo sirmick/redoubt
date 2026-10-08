@@ -18,12 +18,15 @@ use crate::platform::{ConsoleInput, Lookup, Platform};
 use crate::process::{Class, Cp, Exception, Io, Process, State};
 use crate::sched::Sched;
 use crate::sync::{Lock, Sendable, Wakeup};
-use crate::term::{Heap, Literals, OwnedTerm, Pid, Ref, Term, copy};
+use crate::term::{Heap, Holdings, Literals, OwnedTerm, Pid, Ref, Resource, Store, Term, copy};
 
 /// Reductions (calls) a process may run before it is preempted.
 pub const TIME_SLICE: usize = 2000;
 /// Most processes alive at once. Spawning more raises `system_limit`.
 pub const MAX_PROCESSES: usize = 1 << 16;
+
+/// Most keys `persistent_term` may hold; it is VM-wide state any process can grow.
+pub const MAX_PERSISTENT_TERMS: usize = 1 << 16;
 
 /// Resource limits for one VM, set by the embedder. Exceeding one raises `system_limit`.
 #[derive(Clone, Copy, Debug)]
@@ -40,6 +43,9 @@ pub struct Limits {
     /// Most words all ETS tables of the VM may hold together. Inserts beyond it raise
     /// `system_limit`.
     pub max_ets_words: u64,
+    /// Most words `persistent_term` may hold: its keys, and every value ever put, since a value
+    /// replaced or erased is never freed. A put beyond it raises `system_limit`.
+    pub max_persistent_words: u64,
     /// Largest binary or bitstring any one operation may build, in bits.
     pub max_binary_bits: usize,
     /// Most stack slots (Y registers plus one per frame) one process may use. Body recursion
@@ -54,6 +60,7 @@ impl Default for Limits {
             max_mailbox: 1 << 20,
             max_heap_words: 1 << 27, // 1 GiB
             max_ets_words: 1 << 27,
+            max_persistent_words: 1 << 27,
             max_binary_bits: 1 << 30,
             max_stack_slots: 1 << 24,
         }
@@ -89,6 +96,11 @@ pub struct System {
     /// `persistent_term`: VM-wide terms, written rarely and read often. The values are literals
     /// (each put makes a chunk), so reading one copies nothing, as in BEAM.
     pub persistent: BTreeMap<OwnedTerm, Term>,
+    /// What `persistent_term` holds toward `Limits::max_persistent_words` ([`System::persist`]),
+    /// but for resources: its keys' words, and the words of every value ever put.
+    persistent_words: u64,
+    /// The resources `persistent_term`'s keys and values hold, at their live sizes.
+    persistent_held: Holdings,
     /// The literal chunks: modules' constants and persistent terms.
     pub literals: Literals,
     /// What schedulers check their caches against: bumped as code and literals change.
@@ -532,6 +544,8 @@ impl Vm {
                 limits,
                 ets: crate::ets::Tables::default(),
                 persistent: BTreeMap::new(),
+                persistent_words: 0,
+                persistent_held: Holdings::new(Store::Persistent),
                 literals: Literals::default(),
                 generations: Default::default(),
                 env: BTreeMap::new(),
@@ -856,14 +870,20 @@ impl System {
         if RUNTIME_MODULES.contains(&name.as_str()) {
             return None;
         }
-        let bytes = match self.locate_module(name.as_str())? {
-            Found::Path(_, bytes) | Found::Platform(bytes) => bytes,
+        let (path, bytes) = match self.locate_module(name.as_str())? {
+            Found::Path(path, bytes) => (Some(path), bytes),
+            Found::Platform(bytes) => (None, bytes),
         };
         let loaded = self.load(&bytes).ok()?;
         if &loaded != name {
             // A file that claims to be a different module than the one asked for.
             self.modules.remove(loaded.as_str());
             return None;
+        }
+        // A file of the code path is what `code:which/1` and the rest say it was loaded from.
+        if let Some(path) = path {
+            let file = OwnedTerm::build(&self.literals, |h| h.string(&path));
+            self.module_files.insert(String::from(name.as_str()), file);
         }
         self.modules.get(name.as_str()).cloned()
     }
@@ -920,6 +940,21 @@ impl System {
             }
         }
         None
+    }
+
+    /// What decoding a term needs of the system at once: the atom table, and a view of the
+    /// loaded code (a module's checksum, whether a function is exported), loading nothing.
+    pub(crate) fn term_decoding(
+        &mut self,
+    ) -> (&mut AtomTable, impl Fn(&Atom) -> Option<[u8; 16]> + '_, impl Fn(&Atom, &Atom, u32) -> bool + '_)
+    {
+        let (modules, natives) = (&self.modules, &self.natives);
+        let md5_of = move |m: &Atom| modules.get(m.as_str()).map(|m| m.md5);
+        let exported = move |m: &Atom, f: &Atom, a: u32| {
+            natives.get(m, f, a).is_some()
+                || modules.get(m.as_str()).is_some_and(|md| md.export(f, a).is_some())
+        };
+        (&mut self.atom_table, md5_of, exported)
     }
 
     /// The checksum of a loaded module (without loading it).
@@ -1063,6 +1098,54 @@ impl System {
                 forced: true,
             });
         }
+    }
+
+    /// Put `t`, a term of `src`, in `persistent_term` under `key`, as a literal: reading it copies
+    /// nothing, as in BEAM. Refused, with nothing changed, if it would take `persistent_term` past
+    /// `Limits::max_persistent_words` or `MAX_PERSISTENT_TERMS` keys. A value replaced or erased
+    /// stays in its chunk (BEAM frees it once no process refers to it), so each put counts for
+    /// good; a key counts while it is there. Literals `t` refers to are not copied, and not
+    /// counted again.
+    pub fn persist(&mut self, key: OwnedTerm, src: &Heap, t: Term) -> Result<(), ()> {
+        let new_key = !self.persistent.contains_key(&key);
+        if new_key && self.persistent.len() >= MAX_PERSISTENT_TERMS {
+            return Err(());
+        }
+        let mut heap = Heap::new(&Literals::default());
+        let root = copy(src, t, &mut heap);
+        let heaps: &[&Heap] = if new_key { &[&heap, key.heap()] } else { &[&heap] };
+        let words: u64 = heaps.iter().map(|h| h.term_words()).sum();
+        let held: u64 = heaps.iter().map(|h| Holdings::weigh(h)).sum();
+        let total = self.persistent_words + words + (self.persistent_held.bytes() + held).div_ceil(8);
+        if total > self.limits.max_persistent_words {
+            return Err(());
+        }
+        self.persistent_words += words;
+        heaps.iter().for_each(|h| self.persistent_held.enter(h));
+        let mut roots = [root];
+        self.literals.add(heap, &mut roots);
+        self.literals_changed();
+        // An existing key keeps the entry it was counted with.
+        self.persistent.insert(key, roots[0]);
+        Ok(())
+    }
+
+    /// Erase `key` from `persistent_term`: its key no longer counts; its value stays.
+    pub fn unpersist(&mut self, key: &OwnedTerm) -> bool {
+        let Some((k, _)) = self.persistent.remove_entry(key) else { return false };
+        self.persistent_words = self.persistent_words.saturating_sub(k.heap().term_words());
+        self.persistent_held.leave(k.heap());
+        true
+    }
+
+    /// Memory `persistent_term` holds, in words: what counts toward `max_persistent_words`.
+    pub fn persistent_words(&self) -> u64 { self.persistent_words + self.persistent_held.words() }
+
+    /// Resource `r` changed its declared size from `old` bytes to `new`: the stores outside any
+    /// process that hold it count the new size.
+    pub fn resized(&mut self, r: &Resource, old: usize, new: usize) {
+        self.ets.resized(r, old, new);
+        self.persistent_held.resized(r, old, new);
     }
 
     /// A copy of `t` (a term of `src`) as a literal: in a chunk of its own, never freed.
@@ -1444,7 +1527,7 @@ impl System {
         }
         // Its ETS tables go to their heirs, or are deleted.
         for tid in self.ets.owned_by(pid) {
-            let heir = self.ets.get(tid).and_then(|t| t.heir.clone());
+            let heir = self.ets.get(tid).and_then(|t| t.heir().cloned());
             match heir {
                 Some((to, data)) if to != pid && self.procs.is_alive(to) => {
                     let t = self.ets.get_mut(tid).expect("listed");

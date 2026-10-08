@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+#
+# shell-cases -- the machine cases a change to the shell or beamlet must pass, from what it changed.
+#
+# Usage: scripts/shell-cases [BASE]
+#        scripts/shell-cases --check     checks the placing below on paths whose set is known,
+#                                        and which tree is read
+#   BASE defaults to the merge-base with main. The change is `git diff --name-only BASE` (the
+#   commits since BASE and the uncommitted edits) and the untracked files git does not ignore,
+#   in the checkout it is run in, whichever checkout's copy of the script is run.
+#   It prints the cases on one line, for jobs.mk's set target, and on stderr each path that
+#   chose them:
+#
+#   make -k -f scripts/jobs.mk set CASES="$(scripts/shell-cases)"
+#
+# Two sets of boot cases:
+#   the shell's   those that run the shell: a case naming Redoubt.Shell or waiting for its prompt
+#                 (`(N)> `), and three that reach it otherwise: beamlet-footprint, whose heap is
+#                 every module loaded at the prompt, and beamlet-launch and steward-vault-launch,
+#                 which type exec and a carve
+#   beamlet's     every case naming beamlet, and the shell's
+# A path chooses, by the first rule it meets
+#   userland/shell/test/                        none: the shell's tests
+#   the rest of userland/shell/                 the shell's set: its code, mix.exs, its config,
+#                                               and help/*.md, which Redoubt.Shell.Topics compiles
+#   docs/, *.md, .wash/                         none: pages and the record of the work
+#   userland/otp/, servers/, any other path     beamlet's set: what no rule here places is taken
+#                                               to reach the machine
+set -euo pipefail
+# This script's own tree, before anything moves the working directory.
+self="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+
+# The tree a change is read from: the git checkout the command is run in, when it is a Redoubt
+# tree (it has this script), whichever checkout's copy of the script was run; else the script's
+# own. A worktree's change is then its own, and not its main checkout's.
+tree() {
+    local here
+    here="$(git rev-parse --show-toplevel 2>/dev/null)" || here=""
+    if [ -n "$here" ] && [ -f "$here/scripts/shell-cases" ]; then
+        (cd "$here" && pwd -P)
+    else
+        echo "$self"
+    fi
+}
+cd "$(tree)"
+
+# The set a path chooses: none, shell or beamlet.
+place() {
+    case "$1" in
+    userland/shell/test/*) echo none ;;
+    userland/shell/*) echo shell ;;
+    docs/* | *.md | .wash/*) echo none ;;
+    *) echo beamlet ;;
+    esac
+}
+
+if [ "${1:-}" = --check ]; then
+    failed=0
+    while read -r path want; do
+        got="$(place "$path")"
+        [ "$got" = "$want" ] || { echo "shell-cases: $path chose $got, not $want" >&2; failed=1; }
+    done <<'KNOWN'
+userland/shell/help/terminal.md shell
+userland/shell/lib/redoubt/shell/printer.ex shell
+userland/shell/mix.exs shell
+userland/shell/test/redoubt/util_test.exs none
+userland/shell/test/fixtures/tree/notes.txt none
+docs/userland/shell.md none
+README.md none
+.wash/plan.toml none
+userland/otp/vm/src/lib.rs beamlet
+userland/otp/README.md none
+servers/steward/src/main.rs beamlet
+tests/userland-boot.toml beamlet
+KNOWN
+    # The tree: run from inside another Redoubt tree, that tree; from a git tree without this
+    # script, this script's own. Scratch trees, under REDOUBT_TMP.
+    mkdir -p "${REDOUBT_TMP:-$PWD/.tmp}"
+    scratch="$(mktemp -d "${REDOUBT_TMP:-$PWD/.tmp}/shell-cases.XXXXXX")"
+    trap 'rm -rf "$scratch"' EXIT
+    git init -q "$scratch/redoubt" && mkdir -p "$scratch/redoubt/scripts"
+    touch "$scratch/redoubt/scripts/shell-cases"
+    git init -q "$scratch/other"
+    for dir in redoubt/scripts:"$scratch/redoubt" other:"$self"; do
+        got="$(cd "$scratch/${dir%%:*}" && tree)"
+        [ "$got" = "$(cd "${dir#*:}" && pwd -P)" ] ||
+            { echo "shell-cases: run in $scratch/${dir%%:*}, read $got" >&2; failed=1; }
+    done
+    [ "$failed" = 0 ] && echo "shell-cases: every known path chooses its set, from the caller's tree"
+    exit "$failed"
+fi
+
+base="${1:-$(git merge-base main HEAD)}"
+shell=() beamlet=()
+while IFS= read -r path; do
+    case "$(place "$path")" in
+    shell) shell+=("$path") ;;
+    beamlet) beamlet+=("$path") ;;
+    esac
+done < <(git diff --name-only "$base"; git ls-files --others --exclude-standard)
+
+if [ ${#beamlet[@]} -gt 0 ]; then
+    printf 'shell-cases: %s (beamlet'"'"'s set)\n' "${beamlet[@]}" >&2
+    pattern='Redoubt\.Shell|\\\)> |beamlet'
+elif [ ${#shell[@]} -gt 0 ]; then
+    printf 'shell-cases: %s (the shell'"'"'s set)\n' "${shell[@]}" >&2
+    pattern='Redoubt\.Shell|\\\)> '
+else
+    echo "shell-cases: no path reaches the machine cases" >&2
+    exit 0
+fi
+cases=()
+for f in tests/*.toml; do
+    grep -qE '^kind *= *"boot"' "$f" || continue
+    name="$(basename "$f" .toml)"
+    case " beamlet-footprint beamlet-launch steward-vault-launch " in
+    *" $name "*) cases+=("$name") ;;
+    *) if grep -qE "$pattern" "$f"; then cases+=("$name"); fi ;;
+    esac
+done
+echo "${cases[*]}"

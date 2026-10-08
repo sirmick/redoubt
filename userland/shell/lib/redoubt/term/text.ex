@@ -53,7 +53,28 @@ defmodule Redoubt.Term.Text do
     do: scan(rest, col + 8, [["<U+", hex(c), ">"] | acc])
 
   defp scan(<<c::utf8, rest::binary>>, col, acc), do: scan(rest, col + 1, [<<c::utf8>> | acc])
-  defp scan(<<b, rest::binary>>, col, acc), do: scan(rest, col + 4, [["<", hex(b), ">"] | acc])
+  defp scan(<<b, rest::binary>>, col, acc), do: scan(rest, col + 4, [byte(b) | acc])
+
+  @doc """
+  Returns `chardata` as UTF-8, each byte in it that is not UTF-8 written as `visible/1` draws
+  one (`<FF>`); control characters stay as they are. For text that must be UTF-8 on its way to
+  the encoder, as `io` requires, and is made visible there.
+  """
+  @spec utf8(IO.chardata()) :: binary()
+  def utf8(chardata), do: chardata |> lossy() |> IO.iodata_to_binary()
+
+  defp lossy(list) when is_list(list), do: Enum.map(list, &lossy/1)
+  defp lossy(c) when is_integer(c), do: <<c::utf8>>
+
+  defp lossy(bytes) when is_binary(bytes) do
+    case :unicode.characters_to_binary(bytes) do
+      text when is_binary(text) -> text
+      {_error, good, <<b, rest::binary>>} -> [good, byte(b) | lossy(rest)]
+    end
+  end
+
+  # A byte that is not UTF-8, in hex.
+  defp byte(b), do: ["<", hex(b), ">"]
 
   defp hex(n), do: n |> Integer.to_string(16) |> String.pad_leading(2, "0")
 end
