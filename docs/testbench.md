@@ -267,8 +267,8 @@ the rv32 UART lost a burst of it); several harts that spin, since under `icount`
 harts in turn on one host thread and a hart spinning on the kernel's lock spends its whole turn
 (3: `all-together` at 2 harts and `ipc` at 4 take from three to ten times as long, and
 `smp-boot` at 4 sees a hart that never ran user code); and a run whose purpose is the host's
-time (`asid-cost-host`, `sched-latency-tcg`, `timeouts-tcg`, and `smp-evict-mttcg`, which needs
-QEMU's multi-threaded TCG). One case reads no host clock and stays on it for now: `redoubt-ipc`
+time (`asid-cost-host`, `sched-latency-tcg`, `timeouts-tcg`, and `smp-evict-mttcg` and
+`smp-shootdown-mttcg`, which need QEMU's multi-threaded TCG). One case reads no host clock and stays on it for now: `redoubt-ipc`
 fails under `icount` on both widths (189 calls abandoned of the 256 it wants), until that is
 understood. A `timeout_secs` is the bench's bound, never a measurement: a case in guest time
 is given at least four times its slowest pass alone on either width, rounded up to 10 s, and
@@ -410,6 +410,8 @@ any other budget is picked twice, and `lift-delay`, that it comes within a round
 on its parent predicts. A `walk-trace` kernel's walks are bounded by their longest, net of the
 audits inside them (`pump_max_us`, `expiry_max_us`, `reconcile_max_us`), judged before
 `r10_p99_us`, so a run whose destruction is over its bound still has its walks judged.
+`smp_fence` reads only the same trace's shootdown records: a page made executable was shot down
+on another hart running its process, which acknowledged ([memory](kernel/memory.md#instruction-fetch-after-mapping)).
 
 ### Starting a case's programs
 

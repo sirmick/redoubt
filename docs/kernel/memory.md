@@ -173,7 +173,7 @@ was asked or nothing, and a refused one charges nothing.
 
 ### Instruction fetch after mapping
 
-Status: built · partly tested: no case can see a missing `fence.i`, because QEMU keeps instruction fetch coherent with stores
+Status: built · partly tested: no case can see a missing `fence.i`, because QEMU keeps instruction fetch coherent with stores; `smp-fence` shows from the trace that the other hart fenced · tested: bench:smp-fence
 
 A hart may fetch stale instructions from a page just written unless it fences. After any call
 that installs an executable mapping (`map_anon`, `map_fixed`, `set_flags` or `process_map`
@@ -181,13 +181,15 @@ with `EXECUTE`), the kernel runs `fence.i`, so the hart's later fetches see ever
 before. It runs one more at boot, before the first process, for the images the loader wrote.
 
 W^X makes one fence per call enough: a page is written while it is writable and not
-executable, and becomes executable only through one of these calls. The fence covers the one
-hart the kernel runs on. A kernel on several harts must also fence the others, and fence when a
-thread moves (M2 (usable shell): [several harts](../plan/m2-usable-shell.md#several-harts)).
+executable, and becomes executable only through one of these calls. On several harts the call
+also shoots the process down on every other hart running it, and that hart runs `fence.i` before
+it acknowledges; a hart also runs `fence.i` before it runs a process. A thread that moves between
+harts needs no fence of its own: a RAM frame has at most one user entry, so a process's code
+changes only through these calls.
 
 ### Lending at the page-table level
 
-<details><summary>Status: built · partly tested: a lend within one process is not attacked across harts · tested (8)</summary>
+<details><summary>Status: built · tested (9)</summary>
 
 - bench:process-lifecycle
 - bench:return-lent-unmapped
@@ -196,6 +198,7 @@ thread moves (M2 (usable shell): [several harts](../plan/m2-usable-shell.md#seve
 - bench:move-borrowed-page
 - bench:uaf-lent-page
 - bench:lend-untouched-page
+- bench:smp-shootdown
 - mutation:R11LendStaysMapped
 
 </details>
@@ -429,15 +432,15 @@ kernel, running the call to its end with interrupts off, would stall every other
 - **Several harts.** `fence.i` and the TLB flush act on the hart that runs the call. A
   process's translations carry its ASID, and a hart that ran it may keep them; it flushes
   that ASID before it next runs the process if any of its mappings were removed meanwhile or
-  its PID was given out again. A budget runs on one hart at a time, so a process's own unmap,
-  lend or reply needs no other hart's flush. A destruction first shoots the process down on
-  any other hart running it, which flushes its ASID and acknowledges before any of its frames
-  is freed, so a stale translation never reaches the frame's next owner. One process on several
-  harts at once needs that shootdown at every unmap, lend
-  and reply (M2 (usable shell): [several harts](../plan/m2-usable-shell.md#several-harts)).
-- **A lend within one process** (a thread calling an endpoint its own process receives on) is
-  argued from the code, not attacked, when its threads run on several harts. `process-lifecycle`
-  attacks it on one hart, the process ending with the call open included.
+  its PID was given out again. Every call that clears or narrows one of a process's entries,
+  frees one of its tables or makes one executable first shoots the process down on each other
+  hart running it now, which flushes its ASID, runs `fence.i` and acknowledges before the call
+  returns; a destruction's shootdown also makes the hart leave the process's space before any of
+  its frames is freed. So no stale translation reaches a page unmapped, lent or returned, or a
+  frame's next owner. A missed shootdown cannot be seen on QEMU, which empties a hart's TLB at
+  every `satp` write: the checked build stops when a process loses an entry while another hart
+  runs it and is not shot down there (`bench:smp-shootdown`, the case's recorded negative), and
+  `smp-fence` checks from the trace that the fence was taken.
 - **The physmap maps every user frame writable for the kernel,** code included. Only the
   kernel can use that alias ([memory layout](memory-layout.md#residual-risks)).
 - **A freed frame may still be mapped on another hart.** A free writes nothing into the
@@ -446,8 +449,9 @@ kernel, running the call to its end with interrupts off, would stall every other
   process's frames or a refused `process_create`'s, whose cached translations carry that
   process's ASID, which nothing runs under again until the PID is given out, and that flushes it
   first ([`satp`](memory-layout.md#satp)); on one hart that leaves no stale mapping. On several,
-  a destruction shoots the process down on any other hart running it before the free
-  (above, `bench:smp-evict`).
+  the call shoots the process down on any other hart running it before the frame can be given
+  out again, and a destruction before the free (above, `bench:smp-evict`,
+  `bench:smp-shootdown`).
 
 ## Why
 

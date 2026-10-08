@@ -155,7 +155,8 @@ attacked before the next, in this order:
    at every unmap, lend and return, once one process's threads run on several harts at once, as
    a beamlet VM's schedulers do.
    An instruction fence goes to the harts running a process when a page of it becomes
-   executable, and when a thread moves ([memory](../kernel/memory.md#residual-risks),
+   executable, and a hart fences before it runs a process; a thread that moves needs no fence of
+   its own ([memory](../kernel/memory.md#residual-risks),
    [memory layout](../kernel/memory-layout.md#residual-risks)).
 5. **Lock to decide, unlock to do.** Frame zeroing, large copies and the wait for shootdown
    acknowledgements move outside the lock, on frames no other hart can name: a frame leaves the
@@ -190,4 +191,6 @@ the screen buffer's natives, `Redoubt.Screen` with its layout, and `pick`
 library's parked calls ([serving](../servers/serving.md#parked-calls)), `consoled`'s 9P console
 ([consoled](../servers/consoled.md)), and budget destruction as the only way to end a process
 ([budgets](../kernel/budgets.md#r10-destruction)). For several harts: every hart runs user code under one FIFO kernel lock, and a destruction's
-shootdown is attacked (`bench:smp-boot`, `bench:smp-evict`).
+shootdown is attacked (`bench:smp-boot`, `bench:smp-evict`). One process's threads run on
+several harts at once, and every unmap, lend and return shoots the process down on the others
+(`smp-shootdown`, `smp-fence`).

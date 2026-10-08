@@ -20,13 +20,14 @@ serves the steward.
 
 ### One flat stride queue
 
-<details><summary>Status: built · partly tested: round-robin among one budget's threads is not attacked by a case · tested (12)</summary>
+<details><summary>Status: built · partly tested: round-robin among one budget's threads is not attacked by a case · tested (13)</summary>
 
 - bench:sched-share
 - bench:sched-large-weight
 - bench:sched-server-busy
 - bench:sched-carve-inflation
 - bench:smp-boot
+- bench:smp-shootdown
 - host:redoubt-stride::the_crate_and_the_model_agree
 - host:redoubt-stride::a_pick_passes_over_a_budget_whose_threads_all_run_on_harts
 - host:redoubt-stride::a_budget_with_two_runnable_threads_runs_on_two_harts_at_one_pass
@@ -41,9 +42,10 @@ Every budget with a runnable thread is in one queue, whatever its class. There i
 no second queue and no flag that jumps it. The kernel runs the queued budget with the lowest
 pass, and running raises its pass by its runtime times `STRIDE` (2^20) divided by its weight. So
 over any stretch in which budgets stay runnable, each gets CPU in proportion to its weight.
-On several harts each hart picks the lowest-pass budget not running on another, so a budget
-runs on at most one hart at a time and its stride state has one runner. A reconcile keeps a
-budget queued while any hart runs it.
+On several harts each hart picks the lowest-pass budget that has a runnable thread no hart is
+running, so a budget runs on as many harts as it has runnable threads. Its stride state stays one
+per budget: each hart charges its own runner, under the kernel lock, to the budget's one pass. A
+reconcile keeps a budget queued while any hart runs it.
 
 The weight the queue uses is the budget's **free weight**: its weight limit less what its
 children carved ([R7 (carving)](budgets.md#r7-carving)). Carving moves share to the child and
@@ -55,8 +57,8 @@ kernel gives `root` 1,000,000; `system` gets a quarter (250,000) and `users` the
 Class (`system` or `user`) decides trust, never order ([budgets](budgets.md)). A system-class
 server doing a user's work waits its turn like the user.
 
-Within a budget, threads take turns. Each pick runs the budget's next runnable thread after the
-one it ran last, in (pid, tid) order, wrapping. The code is `kernel/src/sched.rs`, which keeps
+Within a budget, threads take turns. Each pick runs the budget's next runnable thread that no
+hart is running, after the one it last picked, in (pid, tid) order, wrapping. The code is `kernel/src/sched.rs`, which keeps
 each budget's scheduling state in the budget's own frame, and `libs/stride`, which holds the
 arithmetic, the ranks and the order of steps. `libs/stride` is `#![forbid(unsafe_code)]` and has
 no dependencies.
@@ -114,7 +116,7 @@ context as it saves a thread's.
 
 A budget **wakes** when it goes from no runnable thread to one. Its pass becomes
 `max(own pass, floor)`. The **floor** is the current minimum: the lowest pass among queued
-budgets, the running one included at the pass it was last charged. The floor only rises, and it
+budgets, the running ones included, each once, at the pass it was last charged. The floor only rises, and it
 holds while the queue is empty. So a budget that slept while others ran, or through an idle gap,
 comes back at the floor and not with credit it banked while away. The floor is raised only when it
 can have moved (a budget at it was charged or left, or wakes filled an empty queue), from ranks the
@@ -193,8 +195,8 @@ flowchart TD
 
 Runtime is counted in timebase ticks at the trap boundary. There are two ways into user mode
 (resuming a thread, returning from a call) and one way out (the trap handler). On every trap from
-user mode the kernel adds the user time since the last return to the running budget's pending
-runtime. So no path runs user code unaccounted, whatever ends the run.
+user mode the kernel adds the user time since that hart's last return to the pending runtime of
+the budget whose thread it ran. So no path runs user code unaccounted, whatever ends the run.
 
 Pending runtime is folded into the pass at a deschedule, before a weight change, at a
 destruction, and when work is billed to a budget that is not running:
@@ -1094,7 +1096,12 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   for the kernel lock by `MAX_HARTS` - 1 kernel sections, each as long as the call or
   destruction holding it: a long section delays every waiting hart by its length, which is one
   more reason R12 bounds a call's kernel time.
-- **The kernel is not preemptible.** A call's or a destruction's kernel time delays every wake
+- **A call within one budget crosses harts.** A wake sends an idle hart the reschedule interrupt
+  even when the woken thread's budget runs elsewhere, so a server and its client in one budget
+  hand each call and reply across two harts, each hand-off an interrupt and a wait for the lock,
+  where one hart would run them in turn. `ipc-client`'s run against `log-server` in `system` at
+  two harts takes 2.5 s as at one without `icount`, and 8.2 s against 1.3 s under it, where a hart
+  spinning on the lock spends its whole turn. No rule keeps a woken thread on its waker's hart. A call's or a destruction's kernel time delays every wake
   on the machine, which is why R12 bounds a call's kernel time whoever pays for it. R10's time
   dominates lease termination and follows the dying subtree and the handles that depend on it, so its target
   and the deadline notice's are 30 and 40 ms, not the 39 and 54 ms a whole-frame scan had

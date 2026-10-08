@@ -4,6 +4,10 @@ kind = "boot"
 icount = "shift=3,sleep=off"
 programs = ["log-server", "ipc-client"]
 timeout_secs = 3
+# A self-check of the bench's poweroff rule, not of the kernel: its 3 s are the guest's at one hart
+# under icount. At two, log-server and ipc-client, one budget, hand each call across the harts,
+# and under icount the run takes 8.2 s against 1.3 s (kernel/scheduling.md, "Residual risks").
+keep_smp = true
 expect = ['IPC TEST PASSED']
 poweroff = true
 must_fail = '^timed out waiting for the guest to power off$'

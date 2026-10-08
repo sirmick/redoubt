@@ -1,0 +1,16 @@
+description = "New code reaches a hart already running its process: a set_flags that makes a page executable shoots the process down on the hart where its sibling polls, which runs fence.i and acknowledges, as the trace records (checked trace build, 2 harts)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# QEMU keeps instruction fetch coherent with stores, so no run sees a missing fence.i: the verdict
+# is the trace's shootdown record (`smp_fence`), which the recorded negative (`smp-no-shootdown`)
+# never writes.
+debug_assertions = true
+kernel_features = ["sched-trace"]
+icount = "shift=3,sleep=off"
+programs = ["smp-fence"]
+smp = [2]
+timeout_secs = 300
+expect = ['^SMP-FENCE TEST PASSED$']
+forbid = ['\[smp-fence\] FAIL', 'ASID audit']
+poweroff = true
+post_check = "smp_fence"

@@ -439,8 +439,8 @@ user address, and the load faults as a kernel failure.
   addresses, but a stray write through them reaches a device.
 - **A flush acts on this hart only.** Each change flushes its address or its ASID on the hart
   that makes it. Another hart that ran the process flushes that ASID before it runs the
-  process again, and one running it now is shot down first at a destruction
-  ([memory](memory.md#residual-risks)).
+  process again, and one running it now is shot down first, at every removal from the process
+  and at its destruction ([memory](memory.md#residual-risks)).
 - **QEMU cannot show a missing flush.** Its TLB is not tagged by ASID, and it empties it on every
   `sfence.vma`, whatever its operands, and every `satp` change, so the bench finds a missing
   flush only through the checked build's audit.

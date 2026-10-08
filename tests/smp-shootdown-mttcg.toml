@@ -1,0 +1,12 @@
+description = "smp-shootdown without icount (multi-threaded TCG: the harts run in parallel host threads): a sibling's unmap, a reply returning a lend, and a lend within one process each shoot the process down on the hart where its writer runs (checked build, 2 harts)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# As `smp-shootdown`: the recorded negative's verdict is the checked kernel's audit, as QEMU
+# empties a hart's TLB at every `satp` write.
+debug_assertions = true
+programs = ["smp-shootdown"]
+smp = [2]
+timeout_secs = 300
+expect = ['^SMP-SHOOTDOWN TEST PASSED$']
+forbid = ['\[smp-shootdown\] FAIL', 'ASID audit']
+poweroff = true

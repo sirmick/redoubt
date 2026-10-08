@@ -331,10 +331,10 @@ two, where a file serves two mechanisms).
 - **The table's inclusive line counts are snapshots.** The size budget has separate ceilings
   for shipped code lines, excluding comments and tests, and fails if a trusted crate grows past
   its ceiling ([the size budget](../testbench.md#the-size-budget)).
-- **Several harts, one lock.** Every hart runs user code, a budget on one hart at a time, under
-  one kernel lock (`bench:smp-boot`); completion races between harts are not attacked by a case
-  ([IPC](ipc.md#residual-risks)). One process on several harts at once, and finer locking, are
-  M2 (usable shell)'s later steps ([several harts](../plan/m2-usable-shell.md#several-harts)).
+- **Several harts, one lock.** Every hart runs user code, one process's threads on several harts
+  at once, under one kernel lock (`bench:smp-boot`, `bench:smp-shootdown`); completion races
+  between harts are not attacked by a case ([IPC](ipc.md#residual-risks)). Finer locking is
+  M2 (usable shell)'s later step ([several harts](../plan/m2-usable-shell.md#several-harts)).
 - **The containment gate is one workload.** [Containment](#containment) runs hostile leases of
   one size, against stand-ins for the steward and a driver, on one hart and under one pinned
   seed. It shows that the kernel's primitives hold together for that workload. It does not bound

@@ -25,6 +25,20 @@ const LATE_US: u64 = 1_000;
 
 fn now() -> u64 { rd::time_now().expect("time_now") }
 
+/// `rdtime` and `time_now` read together. The call may wait for the kernel lock while another hart
+/// holds it, so `rdtime` is read on both sides of it, and the tightest of a few tries is kept, at
+/// its midpoint.
+fn paired() -> (u64, u64) {
+    let mut best = (u64::MAX, 0, 0);
+    for _ in 0..16 {
+        let (before, u, after) = (test_programs::read_time(), now(), test_programs::read_time());
+        if after - before < best.0 {
+            best = (after - before, before + (after - before) / 2, u);
+        }
+    }
+    (best.1, best.2)
+}
+
 fn random(below: u64) -> u64 { rd::random().expect("random") % below.max(1) }
 
 fn ok(b: bool) -> &'static str { if b { "ok" } else { "FAIL" } }
@@ -219,7 +233,7 @@ pub extern "C" fn _start() -> ! {
     }
 
     // rdtime from user mode: monotonic, and in step with time_now.
-    let (t0, u0) = (test_programs::read_time(), now());
+    let (t0, u0) = paired();
     let mut last = t0;
     let mut monotonic = true;
     for _ in 0..1000 {
@@ -228,9 +242,9 @@ pub extern "C" fn _start() -> ! {
         last = t;
     }
     let _ = rd::receive(None, 20_000, 0);
-    let (t1, u1) = (test_programs::read_time(), now());
+    let (t1, u1) = paired();
     let _ = rd::receive(None, 20_000, 0);
-    let (t2, u2) = (test_programs::read_time(), now());
+    let (t2, u2) = paired();
     // Ticks per ms over two intervals agree within 1%.
     let (r1, r2) = ((t1 - t0) * 1000 / (u1 - u0).max(1), (t2 - t1) * 1000 / (u2 - u1).max(1));
     let linear = r1.abs_diff(r2) * 100 <= r1.max(1);
