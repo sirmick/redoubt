@@ -1,12 +1,20 @@
 %% beamlet-files (docs/userland/files.md, "Files over 9P"): files over 9P on the home volume
 %% bound at /home/alice, through OTP's own prim_file, whose natives are beamlet's. It writes a
 %% file, reads it back, lists the directory, removes the file, reads one larger than one 9P answer
-%% with eight processes at once, renames a directory into itself, which the volume refuses, and
-%% reads a path no binding holds.
+%% with eight processes at once, renames a directory into itself, which the volume refuses, reads
+%% a path no binding holds, and removes what it made. init restarts a server entry that exits,
+%% this VM included, and the restarted VM replays this module on the same volume: so the module
+%% removes any leftover of an earlier run at its start too, and every run finds the volume as the
+%% first did, or its make_dir would be eexist.
 -module(beamlet_files).
 -export([start/0]).
 
 start() ->
+    Made = ["/home/alice/big", "/home/alice/d/inner", "/home/alice/d"],
+    case [P || P <- Made, remove(P) =:= ok] of
+        [] -> ok;
+        Leftover -> say("removed an earlier run's: ~s", [Leftover])
+    end,
     Notes = "/home/alice/notes.txt",
     say("wrote: ~s", [prim_file:write_file(Notes, <<"buy milk\n">>)]),
     {ok, Read} = prim_file:read_file(Notes),
@@ -29,7 +37,15 @@ start() ->
     say("directory into itself: ~s", [prim_file:rename("/home/alice/d", "/home/alice/d/inner/d")]),
     say("bob's file: ~s", [prim_file:read_file("/home/bob/x")]),
     say("mode: ~s", [element(8, element(2, prim_file:read_file_info("/home/alice/big")))]),
+    say("cleaned: ~s", [[P || P <- Made, remove(P) =:= ok]]),
     done.
+
+%% Removes a file or a directory, whichever `Path` is: `ok`, or the second try's error.
+remove(Path) ->
+    case prim_file:delete(Path) of
+        ok -> ok;
+        _ -> prim_file:del_dir(Path)
+    end.
 
 %% Printed with ~s alone, as io_lib's ~p would need modules this disk does not carry. Each line
 %% is what ~p would print for these shapes: atoms, integers, binaries of text, lists of strings,
