@@ -41,11 +41,11 @@ mod machine {
     use redoubt_rt::client::{Connection as Nine, Lend};
     use redoubt_rt::handle::{Endpoint, close};
     use redoubt_rt::ipc::{Caller, Delivery, Event, Request};
-    use redoubt_rt::server::close_delivery;
     use redoubt_rt::server::minted::Minter;
     use redoubt_rt::server::ninep::{NineError, NineServer, WORDS_9P, mode, refuse, refuse_malformed};
     use redoubt_rt::server::parked::{NotParked, Parked};
     use redoubt_rt::server::typed::{Outcome, finish};
+    use redoubt_rt::server::{close_delivery, consol as consol_server};
     use redoubt_rt::startup::Startup;
     use redoubt_rt::wire::proto::{consol, keyd, net_ctl, steward};
     use redoubt_sshd::console::{Chan, Cons, Console, File, LIMITS, Shared, qid};
@@ -230,11 +230,19 @@ mod machine {
         endpoint: &'e Endpoint,
         lend: Lend,
         nine: NineServer<Cons>,
-        parked: Parked<()>,
+        parked: Parked<Waiting>,
         /// The console the last login minted, by badge, while its session runs.
         console: Option<u64>,
         /// The session the login made, and the steward's generation then.
         session: Option<(u64, u32)>,
+    }
+
+    /// What a parked call waits for: input or room on the channel, or a change of its window's
+    /// size since the count it saw.
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Waiting {
+        Io,
+        Resize(u64),
     }
 
     /// The driver's own caller, through which it mints the console.
@@ -252,26 +260,46 @@ mod machine {
             typed::call::<keyd::Protocol, _>(&keyd, &mut self.lend, m, &[], |r, _| read(r)).ok().flatten()
         }
 
-        /// Answers `request`, or parks it if the console asked to wait.
+        /// Answers `request`, or parks it if it must wait: a read or write the console cannot
+        /// answer yet, or `consol`'s `resize`, which waits for the window to change size. A
+        /// `consol` call on a channel whose session has ended is refused (`Chan::consol_size`).
         fn serve(&mut self, request: Request, now: u64) {
-            let Ok(Some(request)) =
-                self.nine.serve_parking(request, |_, r| refuse_malformed(r).map(|()| None))
-            else {
-                return;
+            let size = self.nine.fs.chan.borrow().consol_size();
+            let held = self.nine.serve_parking(request, |_, r| match size {
+                Some(size) if consol_server::asks(&r.words) => consol_server::serve(size, r),
+                _ => refuse_malformed(r).map(|()| None),
+            });
+            let Ok(Some(request)) = held else { return };
+            let waiting = if consol_server::asks(&request.words) {
+                Waiting::Resize(self.nine.fs.chan.borrow().resized)
+            } else {
+                Waiting::Io
             };
             let charge = self.nine.charge_of(&request.caller);
             if let Err(NotParked(request)) =
-                self.parked.park(self.nine.admission_mut(), request, charge, (), now)
+                self.parked.park(self.nine.admission_mut(), request, charge, waiting, now)
             {
-                let _ = refuse(request, NineError::TOO_MANY);
+                let _ = match waiting {
+                    Waiting::Io => refuse(request, NineError::TOO_MANY),
+                    Waiting::Resize(_) => refuse_malformed(request),
+                };
             }
         }
 
-        /// Serves every parked call again: input or room may have come.
+        /// Answers each parked `resize` whose window has changed since it parked, with the size
+        /// now, then serves every parked read and write again: input or room may have come.
         fn turn(&mut self, now: u64) {
+            let (size, chan) = (self.nine.fs.chan.borrow().size(), self.nine.fs.chan.clone());
+            let due = |w: &Waiting| matches!(w, Waiting::Resize(from) if chan.borrow().resize_due(*from));
+            while let Some(call) = self.parked.resume_first(self.nine.admission_mut(), due) {
+                if let Ok((request, _)) = call {
+                    let _ = consol_server::reply_resize(request, size);
+                }
+            }
             for _ in 0..self.parked.len() {
-                let Some(call) = self.parked.resume_first(self.nine.admission_mut(), |_| true) else { break };
-                let Ok((request, ())) = call else { continue };
+                let io = |w: &Waiting| *w == Waiting::Io;
+                let Some(call) = self.parked.resume_first(self.nine.admission_mut(), io) else { break };
+                let Ok((request, _)) = call else { continue };
                 self.serve(request, now);
             }
             self.nine.wake(now);

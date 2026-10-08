@@ -181,16 +181,17 @@ What each file operation does underneath, and why a rename across volumes cannot
 
 ### The pager
 
-Status: built · partly tested: the host only, on beamlet alone (the BEAM has no screen buffer, and prints instead); its tests are the shell's own ExUnit suite (`test/redoubt/screen/pager_test.exs`, `test/redoubt/screen/pager/doc_test.exs`), judged on a model of the terminal, and a pseudo-terminal test of the real binary, both of which `./test-shell` runs; on the machine, whose console does not say its size, a bench case shows a long value printed whole · tested: host:beamlet::help_longer_than_the_terminal_is_paged_and_q_gives_the_screen_back, bench:userland-read-only
+Status: built · partly tested: the host only, on beamlet alone (the BEAM has no screen buffer, and prints instead); its tests are the shell's own ExUnit suite (`test/redoubt/screen/pager_test.exs`, `test/redoubt/screen/pager/doc_test.exs`), judged on a model of the terminal, and a pseudo-terminal test of the real binary, both of which `./test-shell` runs; on the machine, only the UART's console, which does not say its size, is tested: a bench case shows a long value printed whole there, and no case pages over SSH · tested: host:beamlet::help_longer_than_the_terminal_is_paged_and_q_gives_the_screen_back, bench:userland-read-only
 
 The **pager** ([`Redoubt.Screen.Pager`](../../userland/shell/lib/redoubt/screen/pager.ex)) shows a
 `%Lines{}` that is the value at the prompt a screen at a time, when it is longer than the screen;
 `help`'s pages and topics are drawn in it with their headings bold. It is a screen program
 ([full-screen programs](#full-screen-programs)).
-- **When it takes the screen.** Only on the shell's own terminal, of a size the console says:
-  lines that fit the screen, and any lines on a console of unknown size (the machine's UART and
-  an SSH channel, whose console does not say its size: [consoled](../servers/consoled.md)) or
-  printed elsewhere, are printed as they are. `out(value)` prints without it.
+- **When it takes the screen.** Only on the shell's own terminal, of a size the console says, as
+  an SSH channel's does: lines that fit the screen, and any lines on a console of unknown size
+  (the machine's UART, whose `consoled` the image does not size:
+  [consoled](../servers/consoled.md#the-consol-protocol)) or printed elsewhere, are printed as
+  they are. `out(value)` prints without it.
 - **Keys:** Space, `f` or Page Down a page on, `b` or Page Up a page back; Down, `j` or Enter a
   row on, Up or `k` a row back; `g` or Home the top, `G` or End the end; `/`, a text and Enter
   search forward, `n` and `N` the next and the one before, each match drawn reversed; `q` or Esc

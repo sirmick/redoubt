@@ -1,7 +1,8 @@
 //! `consoled`, the program: two threads over one UART.
 //!
-//! - **The serving thread** owns the UART and the 9P skeleton. It answers writes by sending the bytes out; it
-//!   answers a read from the input it holds, and when it holds none it **parks the call**
+//! - **The serving thread** owns the UART and the 9P skeleton, and answers `consol`'s `size` from its
+//!   arguments' `size=COLS,ROWS`, refusing it when they name none. It answers writes by sending the bytes
+//!   out; it answers a read from the input it holds, and when it holds none it **parks the call**
 //!   ([`redoubt_rt::server::parked`]) instead of blocking, so every other client is still served. Nothing of
 //!   a parked read is kept but the call itself: serving it again reads its T-message out of its own lend
 //!   afresh (`NineServer::serve_parking`). A multiplexed connection's reads wait the same way, as requests in
@@ -29,16 +30,16 @@ use alloc::vec::Vec;
 use core::num::NonZeroU64;
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use redoubt_consoled::server::{BUDGET, COST, Console, limits};
+use redoubt_consoled::server::{BUDGET, COST, Console, limits, size_arg};
 use redoubt_consoled::uart::Uart;
 use redoubt_rt::abi::{Error, FOREVER, Handle};
 use redoubt_rt::handle::{Endpoint, Irq, Mmio};
 use redoubt_rt::ipc::{Buffer, Delivery, Request};
-use redoubt_rt::server::close_delivery;
 use redoubt_rt::server::ninep::{
     Around, FIRST_MINTED_BADGE, NineError, NineServer, WORDS_9P, refuse, refuse_malformed,
 };
 use redoubt_rt::server::parked::{NotParked, Parked};
+use redoubt_rt::server::{close_delivery, consol as consol_server};
 use redoubt_rt::startup::Startup;
 use redoubt_rt::wire::proto::consol;
 
@@ -56,7 +57,8 @@ pub const UART_IRQ: &str = "uart-irq";
 /// The startup block named no endpoint to receive on.
 pub const NO_ENDPOINT: u32 = 2;
 /// No `buckets=N` in the arguments, or one whose buckets at their caps do not fit the budget or
-/// the open-call headroom: the manifest sized this server wrongly, and it does not guess.
+/// the open-call headroom, or a malformed `size=COLS,ROWS`: the manifest sized this server
+/// wrongly, and it does not guess.
 pub const BAD_LIMITS: u32 = 4;
 /// The startup block named no UART, or `map_device` refused it, or the mapping is too short to
 /// be an ns16550. A console driver with no console does not start (TENETS.md 2, fail closed).
@@ -111,29 +113,42 @@ fn start_irq_thread(irq: Irq, wake: Endpoint) -> Result<(), Error> {
     redoubt_rt::handle::thread_create(irq_thread, stack, irq.handle().index() as usize).map(|_| ())
 }
 
-/// Answers `request`, or parks it if the file server asked to wait. The one place a console
-/// read is held.
+/// What a parked call waits for: input, or a change of size (which a UART never makes).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Waiting {
+    Read,
+    Resize,
+}
+
+/// Answers `request`, or parks it if it must wait: a read with no input, or `consol`'s `resize`.
+/// The one place a console call is held.
 fn serve_or_park(
     server: &mut NineServer<Console>,
-    parked: &mut Parked<()>,
+    parked: &mut Parked<Waiting>,
     request: Request,
     now: u64,
 ) -> Result<(), Error> {
-    // `consoled` serves no typed protocol of its own: only 9P and `ninep_common`.
-    let held = server.serve_parking(request, |_, request| refuse_malformed(request).map(|()| None))?;
+    // Beside 9P and `ninep_common`, `consol`'s `size` and `resize` on a console the manifest sized;
+    // any other typed opcode is malformed, and so is `consol` on a console of unknown size.
+    let held = server.serve_parking(request, |server, request| match server.fs.size {
+        Some(size) if consol_server::asks(&request.words) => consol_server::serve(size, request),
+        _ => refuse_malformed(request).map(|()| None),
+    })?;
     let Some(request) = held else { return Ok(()) };
+    let waiting = if consol_server::asks(&request.words) { Waiting::Resize } else { Waiting::Read };
     let charge = server.charge_of(&request.caller);
-    match parked.park(server.admission_mut(), request, charge, (), now) {
+    match parked.park(server.admission_mut(), request, charge, waiting, now) {
         Ok(()) => Ok(()),
-        // The caller's bucket or share is full of waiting reads, or there is no memory for one
+        // The caller's bucket or share is full of waiting calls, or there is no memory for one
         // more: it is told so, rather than being left to wait on a call the server cannot hold.
-        Err(NotParked(request)) => refuse(request, NineError::TOO_MANY),
+        Err(NotParked(request)) if waiting == Waiting::Read => refuse(request, NineError::TOO_MANY),
+        Err(NotParked(request)) => refuse_malformed(request),
     }
 }
 
-/// The parked console reads, beside the skeleton's loop. A wake-up from the interrupt thread is a
+/// The parked console calls, beside the skeleton's loop. A wake-up from the interrupt thread is a
 /// send the skeleton drops: the turn after it is what answers it.
-struct Readers(Parked<()>);
+struct Readers(Parked<Waiting>);
 
 impl Around<Console> for Readers {
     fn call(&mut self, server: &mut NineServer<Console>, request: Request, now: u64) {
@@ -146,9 +161,11 @@ impl Around<Console> for Readers {
     fn turn(&mut self, server: &mut NineServer<Console>, now: u64) {
         server.fs.drain();
         while server.fs.has_input() {
-            let Some(call) = self.0.resume_first(server.admission_mut(), |_| true) else { break };
+            let Some(call) = self.0.resume_first(server.admission_mut(), |w| *w == Waiting::Read) else {
+                break;
+            };
             // A call this thread cannot serve is a server bug; it is gone either way.
-            let Ok((request, ())) = call else { continue };
+            let Ok((request, _)) = call else { continue };
             let _ = serve_or_park(server, &mut self.0, request, now);
         }
         if server.fs.has_input() {
@@ -194,10 +211,13 @@ pub fn serve(startup: &Startup) -> u32 {
         return BAD_LIMITS;
     }
     let Ok(random) = redoubt_rt::handle::random_u64() else { return NO_RANDOM };
-    let Ok(mut server) = NineServer::new(Console::new(uart), limits, random) else { return BAD_LIMITS };
-    // A console read waits on a person, so it has no deadline: what reclaims it is its caller
-    // giving up, which arrives as an abandoned-call notice.
-    let parked: Parked<()> = Parked::new(FOREVER);
+    let Ok(size) = size_arg(&args) else { return BAD_LIMITS };
+    let mut console = Console::new(uart);
+    console.size = size;
+    let Ok(mut server) = NineServer::new(console, limits, random) else { return BAD_LIMITS };
+    // A console read, and a `resize`, wait on a person, so they have no deadline: what reclaims
+    // one is its caller giving up, which arrives as an abandoned-call notice.
+    let parked: Parked<Waiting> = Parked::new(FOREVER);
     server.requests_wait(FOREVER);
     // The interrupt thread, started before any client can be served, so no key press is missed.
     let wake_badge = match NonZeroU64::new(WAKE_BADGE).ok_or(Error::InvalidArgument) {

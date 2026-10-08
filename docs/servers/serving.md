@@ -532,7 +532,8 @@ changes) parks like a 9P read. Its admission, deadline, `serve` and abandonment 
   `typed::reply`, which writes the reply into the call's own lend.
 - **A request that carries handles never waits.** It is answered malformed and its handles are
   closed, so a parked call holds none of its caller's handles.
-- **Which operations wait** is each protocol's to say on its owning page.
+- **Which operations wait** is each protocol's to say on its owning page: only `consol`'s `resize`
+  does ([consoled](consoled.md#the-consol-protocol)).
 
 ## Authority
 

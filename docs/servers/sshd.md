@@ -130,7 +130,7 @@ Miri both crates take their portable Rust paths. Those two assembly blocks are r
 
 ### Sessions over SSH
 
-<details><summary>Status: built · partly tested: a channel's window size reaches the session only once `consol`'s `size` and `resize` are served (consoled.md, "The `consol` protocol") · tested (19)</summary>
+<details><summary>Status: built · partly tested: `consol` on a channel is tested on the host only · tested (20)</summary>
 
 - bench:steward-ssh-two-principals
 - bench:steward-context-login
@@ -148,6 +148,7 @@ Miri both crates take their portable Rust paths. Those two assembly blocks are r
 - host:redoubt-sshd::a_data_call_refused_too_many_is_asked_again_a_bounded_number_of_times
 - host:redoubt-sshd::an_ended_session_reads_the_end_and_cannot_write
 - host:redoubt-sshd::the_console_is_one_file_carrying_the_channel_s_labels
+- host:redoubt-sshd::consol_size_is_the_pty_s_and_a_resize_is_due_when_it_changes
 - host:redoubt-sshd::a_slot_returns_when_the_client_hangs_up_first
 - host:redoubt-sshd::a_slot_returns_when_the_server_ends_the_connection_first
 - bench:steward-restart-ssh
@@ -190,7 +191,16 @@ Miri both crates take their portable Rust paths. Those two assembly blocks are r
   arrives raw before the session sees it: any other signal is refused, a break's length is not
   passed on, and a window size over 1,024 columns or rows reaches the session cut to 1,024. A
   zero means no size, as RFC 4254 says (a client whose input is not a terminal sends zeros): a
-  `window-change` carrying one is refused, and a pty asked for with one starts at 80 by 24. The
+  `window-change` carrying one is refused, and a pty asked for with one starts at 80 by 24. On the
+  console's endpoint `sshd` serves `consol`: `size` answers the window's size (80 by 24 on a
+  channel without a pty), and a `resize` is parked until the window changes to another size, then
+  answered with it; a `window-change` to the size it already has wakes nothing, and the session's
+  end answers every one still waiting, for the last time: after the end a `consol` call is
+  refused (malformed), so a VM still running after its channel has ended stops asking rather than
+  being answered at once for ever. A waiting `resize` is one of the channel's parked calls,
+  in its caller's share of the 4 a bucket holds, beside its waiting reads and writes: a client
+  that parks more is refused at once (malformed), and what any number of waiters costs `sshd` is
+  that bucket's fixed slots, not memory beyond them. The
   console's parked completion call is answered at the end of each hold
   ([multiplexed connections](serving.md#multiplexed-connections)), so a session stays however
   long its channel is quiet. A program the session launches

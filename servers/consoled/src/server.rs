@@ -16,6 +16,23 @@ use crate::uart::Uart;
 /// drops what it takes, so a flood keeps what was typed first.
 pub const MAX_INPUT: usize = 1024;
 
+/// The most columns or rows a size may name, as `sshd` cuts a window to (servers/sshd.md).
+pub const MAX_SIDE: u16 = 1024;
+
+/// The console's size from the arguments: `size=COLS,ROWS`, each from 1 to [`MAX_SIDE`], or
+/// `None` when there is none: a UART cannot know the size of the terminal at its far end, so only
+/// the manifest can say it. A malformed one, or a second, is refused: the manifest sized the
+/// console wrongly, and `consoled` does not guess.
+pub fn size_arg(args: &[&str]) -> Result<Option<(u16, u16)>, ()> {
+    let mut named = args.iter().filter_map(|a| a.strip_prefix("size="));
+    let Some(arg) = named.next() else { return Ok(None) };
+    let side = |s: &str| s.parse::<u16>().ok().filter(|n| (1..=MAX_SIDE).contains(n));
+    match (named.next(), arg.split_once(',')) {
+        (None, Some((cols, rows))) => side(cols).zip(side(rows)).map(Some).ok_or(()),
+        _ => Err(()),
+    }
+}
+
 /// What admission lets each of `buckets` buckets hold (servers/serving.md R26); the count is the
 /// manifest's `buckets=N` ([`redoubt_rt::server::buckets`]). The program refuses a count whose
 /// buckets at their caps would not fit [`BUDGET`], or whose parked reads together would not stay
@@ -154,11 +171,22 @@ pub struct Console {
     minted: Vec<(u64, u64)>,
     /// Who is writing the current line.
     lines: Lines,
+    /// The size `consol`'s `size` answers, the manifest's; with none, `size` and `resize` are
+    /// refused. A UART has no window, so it never changes, and a parked `resize` waits until its
+    /// caller gives up.
+    pub size: Option<(u16, u16)>,
 }
 
 impl Console {
     pub fn new(uart: Uart) -> Console {
-        Console { uart, input: VecDeque::new(), dropped: 0, minted: Vec::new(), lines: Lines::new() }
+        Console {
+            uart,
+            input: VecDeque::new(),
+            dropped: 0,
+            minted: Vec::new(),
+            lines: Lines::new(),
+            size: None,
+        }
     }
 
     /// Takes what the UART has, up to [`crate::uart::FIFO`] bytes, and keeps each one unless the

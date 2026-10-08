@@ -7,8 +7,8 @@ use std::rc::Rc;
 use redoubt_rt::abi::Labels;
 use redoubt_rt::ipc::Caller;
 use redoubt_rt::server::ninep::{FileServer, NineError, NineServer, Read, Write, mode};
-use redoubt_sshd::Session;
 use redoubt_sshd::console::{Chan, Cons, Console, File, LIMITS, MAX_INPUT, MAX_OUTPUT};
+use redoubt_sshd::{Session, Window};
 
 fn caller() -> Caller { Caller { badge: 1 << 63, account: 1001, labels: Labels::new() } }
 
@@ -87,4 +87,31 @@ fn the_console_is_one_file_carrying_the_channel_s_labels() {
     assert_eq!(cons.walk(&caller(), &File, "x").err(), Some(NineError::NOT_DIR));
     assert_eq!(cons.open(&caller(), &File, mode::OTRUNC | mode::OWRITE).err(), Some(NineError::BAD_MODE));
     assert!(cons.open(&caller(), &File, mode::ORDWR).is_ok());
+}
+
+/// `consol` on a channel: `size` is the pty's, 80 by 24 without one; a parked `resize` is due
+/// when the window changes size, not when it is told the same size again, and when the session
+/// ends, which is its last answer: a `consol` call after the end is refused. Each channel has its
+/// own count, so another channel's change wakes nothing here.
+#[test]
+fn consol_size_is_the_pty_s_and_a_resize_is_due_when_it_changes() {
+    let (cons, mut session) = pair();
+    assert_eq!(cons.chan.borrow().size(), (80, 24));
+    session.start(Some(Window { cols: 100, rows: 30 }));
+    let chan = cons.chan.clone();
+    assert_eq!((chan.borrow().size(), chan.borrow().resized), ((100, 30), 0));
+    assert!(!chan.borrow().resize_due(0));
+    session.window(Window { cols: 100, rows: 30 });
+    assert!(!chan.borrow().resize_due(0), "the same size is no change");
+    session.window(Window { cols: 132, rows: 43 });
+    assert_eq!(chan.borrow().size(), (132, 43));
+    assert!(chan.borrow().resize_due(0));
+    assert!(!chan.borrow().resize_due(1));
+    let (other, _) = pair();
+    assert!(!other.chan.borrow().resize_due(0), "another channel's count is its own");
+    assert_eq!(chan.borrow().consol_size(), Some((132, 43)));
+    chan.borrow_mut().end(0);
+    assert!(chan.borrow().resize_due(1), "an ended session answers every waiter");
+    // That answer is the last: the next call, the VM's resize thread calling again, is refused.
+    assert_eq!(chan.borrow().consol_size(), None);
 }

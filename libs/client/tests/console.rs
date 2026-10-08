@@ -1,5 +1,5 @@
-//! `console` and `ns`, against the real `consoled` on a fake ns16550 and an in-test `consol`
-//! server (until `consoled` serves `consol`, in M2), on the fake kernel.
+//! `console` and `ns`, against the real `consoled` on a fake ns16550, and an in-test `consol`
+//! server for a console whose size changes (a UART's never does), on the fake kernel.
 
 mod common;
 
@@ -87,8 +87,8 @@ fn wait_until(what: &str, mut done: impl FnMut() -> bool) {
 }
 
 /// A session's namespace from its startup block reaches the UART both ways: a write goes out,
-/// and a read waits in the server until a key is typed. `consoled` serves no `consol` yet, so
-/// `size` is `None`.
+/// and a read waits in the server until a key is typed. `consoled` started with no `size=` does
+/// not say its size, so the console's is unknown.
 #[test]
 fn a_session_writes_and_reads_the_console() {
     let uart = Uart::start();
@@ -135,7 +135,7 @@ fn a_labelled_session_cannot_write_the_console() {
     uart.stop();
 }
 
-/// `size` and `resize` through `consol`, from a server that serves it.
+/// `size` and `resize` through `consol`, from a server that answers a `resize`.
 #[test]
 fn size_and_resize_come_from_the_server() {
     let served = Served::start(|_, mut request| {

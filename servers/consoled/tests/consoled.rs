@@ -22,6 +22,7 @@ use redoubt_rt::ipc::Buffer;
 use redoubt_rt::server::ninep::{COLLECT_WAIT, IN_WORDS, OPENED, collect_words, mode};
 use redoubt_rt::startup::{Startup, StartupBuilder};
 use redoubt_rt::wire::ninep::{Body, ErrorName, Message};
+use redoubt_rt::wire::proto::consol;
 
 #[path = "../src/bin/consoled.rs"]
 mod consoled;
@@ -46,8 +47,8 @@ fn launch(pid: usize, block: Vec<u8>, main: fn(&Startup) -> u32) -> std::thread:
 }
 
 /// The block `init` writes for `consoled`: the endpoint it receives on, and its two device
-/// handles.
-fn block(receive: Handle, mmio: Handle, irq: Handle) -> Vec<u8> {
+/// handles, with `extra` arguments after `buckets=4`.
+fn block(receive: Handle, mmio: Handle, irq: Handle, extra: &[&str]) -> Vec<u8> {
     let highest = [receive, mmio, irq].iter().map(|h| h.index()).max().unwrap();
     let mut builder = StartupBuilder::new(highest);
     builder
@@ -55,6 +56,9 @@ fn block(receive: Handle, mmio: Handle, irq: Handle) -> Vec<u8> {
         .handle(consoled::UART_MMIO, mmio)
         .handle(consoled::UART_IRQ, irq)
         .arg("buckets=4");
+    for arg in extra {
+        builder.arg(arg);
+    }
     builder.finish().expect("the block")
 }
 
@@ -68,14 +72,17 @@ struct Box_ {
     thread: std::thread::JoinHandle<u32>,
 }
 
-fn boot() -> Box_ {
+fn boot() -> Box_ { boot_with(&[]) }
+
+/// [`boot`], with `extra` arguments.
+fn boot_with(extra: &[&str]) -> Box_ {
     let f = fake();
     let server = f.process(0, &[]);
     let receive = f.endpoint(server);
     let (mmio, irq) = f.device(server, REGISTERS);
     // The transmitter has room from the start; nothing else is set.
     f.registers(server, mmio)[LSR] = LSR_THR_EMPTY;
-    let thread = launch(server, block(receive, mmio, irq), consoled::serve);
+    let thread = launch(server, block(receive, mmio, irq, extra), consoled::serve);
     let b = Box_ { server, receive, mmio, irq, thread };
     // `init()` ran before anything else: 8N1, the FIFOs on, OUT2 (without which no byte ever
     // raises an interrupt) and the receive interrupt enabled.
@@ -473,20 +480,26 @@ fn every_console_init_mints_attaches_and_opens_in_its_one_bucket() {
     assert_eq!(b.shut_down(), redoubt_rt::exit::OK);
 }
 
-/// `consoled` serves no typed protocol of its own, so it refuses every typed opcode, and the
-/// handles such a request carries are closed with the refusal: a client repeating them cannot
-/// grow the server's handle table (servers/serving.md, "Authority").
+/// Beyond 9P, `ninep_common` and `consol`'s `size` and `resize`, `consoled` refuses every typed
+/// opcode, `ended` as a call among them, and the handles such a request carries are closed with
+/// the refusal: a client repeating them cannot grow the server's handle table
+/// (servers/serving.md, "Authority"). So are a `consol` call's, which takes none.
 #[test]
 fn a_refused_typed_request_leaves_no_handle_behind() {
     let b = boot();
     let f = fake();
     let (client, conn) = b.client();
     let server = Endpoint::from_handle(conn);
-    // The first opcode above ninep_common's: the console's own protocol, which it does not serve.
-    // It answers malformed (status 1).
+    // `ended` (18) as a call, an opcode past `consol`'s, and `size` (16) carrying handles: each is
+    // answered malformed (status 1).
     let refused = |carried: &[Handle]| {
-        let (reply, _) = server.call(&[16, 0, 0, 0], carried, None, FOREVER).into_result().unwrap();
-        assert_eq!(reply.words[0], 1);
+        for opcode in [16, 18, 19] {
+            if opcode == 16 && carried.is_empty() {
+                continue;
+            }
+            let (reply, _) = server.call(&[opcode, 0, 0, 0], carried, None, FOREVER).into_result().unwrap();
+            assert_eq!(reply.words[0], 1, "opcode {opcode}");
+        }
     };
     // Counted once the server has answered a call, so its own start-up (the badge it mints for
     // its interrupt thread's wake-ups) is behind it.
@@ -523,8 +536,17 @@ fn a_console_with_no_device_does_not_start() {
     assert_eq!(thread.join().unwrap(), consoled::NO_IRQ);
 
     // A console its block does not size, or sizes at nothing, or for more than its budget holds:
-    // it does not guess a count (servers/serving.md R26).
-    for sizing in [&[][..], &["buckets=0"], &["buckets=4", "buckets=4"], &["buckets=32"]] {
+    // it does not guess a count (servers/serving.md R26). Nor a window size it cannot read: a
+    // side of nothing or past 1,024, one side alone, or two sizes.
+    let bad_sizes: [&[&str]; 5] = [
+        &["buckets=4", "size=0,24"],
+        &["buckets=4", "size=80,1025"],
+        &["buckets=4", "size=80"],
+        &["buckets=4", "size=80,24,1"],
+        &["buckets=4", "size=80,24", "size=80,24"],
+    ];
+    let bad_buckets: [&[&str]; 4] = [&[], &["buckets=0"], &["buckets=4", "buckets=4"], &["buckets=32"]];
+    for sizing in bad_buckets.into_iter().chain(bad_sizes) {
         let unsized_ = f.process(0, &[]);
         let receive = f.endpoint(unsized_);
         let (mmio, irq) = f.device(unsized_, REGISTERS);
@@ -544,7 +566,67 @@ fn a_console_with_no_device_does_not_start() {
     let short = f.process(0, &[]);
     let short_receive = f.endpoint(short);
     let (short_mmio, short_irq) = f.device(short, 4);
-    let thread = launch(short, block(short_receive, short_mmio, short_irq), consoled::serve);
+    let thread = launch(short, block(short_receive, short_mmio, short_irq, &[]), consoled::serve);
     assert_eq!(thread.join().unwrap(), consoled::NO_UART);
     let _ = irq;
+}
+
+/// `consol` on the physical console: `size` is the manifest's `size=COLS,ROWS`; `resize` waits,
+/// since a UART has no window, until its caller gives up, which frees it; and it is a parked call
+/// in its caller's share, so a second one beside it is refused at once rather than held
+/// (servers/consoled.md, "The `consol` protocol").
+#[test]
+fn consol_size_is_the_argument_and_a_resize_waits_until_its_caller_gives_up() {
+    let size = |conn: Handle| {
+        let words = consol::Message::Size(consol::Size {}).encode(&mut []).unwrap();
+        let (reply, _) = Endpoint::from_handle(conn).call(&words, &[], None, FOREVER).into_result().unwrap();
+        match consol::Reply::decode(16, &reply.words, &[], 0) {
+            Ok(Ok(consol::Reply::Size(r))) => (r.cols, r.rows),
+            other => panic!("not a size: {other:?}"),
+        }
+    };
+    let resize = |conn: Handle, timeout: u64| {
+        let words = consol::Message::Resize(consol::Resize {}).encode(&mut []).unwrap();
+        Endpoint::from_handle(conn).call(&words, &[], None, timeout).into_result().map(|(r, _)| r.words[0])
+    };
+
+    let f = fake();
+    let b = boot_with(&["size=132,43"]);
+    let (client, conn) = b.client();
+    f.as_process(client, || assert_eq!(size(conn), (132, 43)));
+    // It waits: the wait is the client's own timeout, and giving up frees the call (R3).
+    f.as_process(client, || assert_eq!(resize(conn, 150_000), Err(redoubt_rt::abi::Error::Timeout)));
+    wait_until("the abandoned resize to be freed", || f.open_calls(b.server) == 0);
+    // Parked again, it holds its caller's one parked call: a second is refused at once.
+    let waiter = f.run(client, move || u32::from(resize(conn, FOREVER) != Ok(0)));
+    wait_until("the server to hold the resize", || f.open_calls(b.server) == 1);
+    f.as_process(client, || assert_eq!(resize(conn, FOREVER), Ok(1), "over the caller's share"));
+    // The console still serves while it waits.
+    f.as_process(client, || assert_eq!(size(conn), (132, 43)));
+    assert_eq!(f.open_calls(b.server), 1);
+    assert_eq!(b.shut_down(), redoubt_rt::exit::OK);
+    // The server is gone, and the waiting call with it: refused or dead, never answered a size.
+    assert_eq!(waiter.join().unwrap(), 1);
+}
+
+/// A console the manifest does not size does not guess one: a UART cannot know its far end's
+/// size, so `size` and `resize` are both refused as malformed, at once, and nothing is held; the
+/// caller's console is then of unknown size (servers/consoled.md, "The `consol` protocol").
+#[test]
+fn a_console_with_no_size_refuses_consol() {
+    let call = |conn: Handle, message: consol::Message| {
+        let words = message.encode(&mut []).unwrap();
+        let (reply, _) = Endpoint::from_handle(conn).call(&words, &[], None, FOREVER).into_result().unwrap();
+        reply.words[0]
+    };
+
+    let b = boot();
+    let f = fake();
+    let (client, conn) = b.client();
+    f.as_process(client, || {
+        assert_eq!(call(conn, consol::Message::Size(consol::Size {})), 1, "size, malformed");
+        assert_eq!(call(conn, consol::Message::Resize(consol::Resize {})), 1, "resize, malformed");
+    });
+    assert_eq!(f.open_calls(b.server), 0);
+    assert_eq!(b.shut_down(), redoubt_rt::exit::OK);
 }
