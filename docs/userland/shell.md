@@ -367,7 +367,10 @@ What the line editor and the screens built so far do not need:
   `{:console_resize, cols, rows}`, and the library calls again for the next change. On a UART,
   where nothing resizes, the call waits for ever ([consoled](../servers/consoled.md)).
 
-**Open:** `await_resize` needs a server to park a typed call, an open question of
+**Open:** until bracketed paste is built, a paste reaches a full-screen program as keys, so a
+pasted control character is a key: the editor asks before one saves, closes or opens a file
+([the editor](#the-editor)), and the gap closes with paste as one event. `await_resize` needs a
+server to park a typed call, an open question of
 [the serving library](../servers/serving.md); and whether the shell sends a terminal
 query at login and adapts, or assumes the VT102 and xterm target (the recommendation: assume,
 because a query on a UART that never answers costs a timeout at every login).
@@ -693,13 +696,15 @@ Not built:
 
 ### The editor
 
-Status: planned · M2 (usable shell)
+Status: built · partly tested: the host only; the editor without syntax highlighting, and not the file manager; its keys and files on beamlet and on the BEAM, its drawing on beamlet alone; its tests are the shell's own ExUnit suite (`test/redoubt/editor_test.exs`, `test/redoubt/editor/buffer_test.exs`), judged on the files and on a model of the terminal, which `./test-shell` runs and no bench case does
 
 The editor and the file manager are one screen program with two views, in the manner of Midnight
 Commander: `ed("notes.txt")` opens the editor on a file, and `fm("project")` opens two panes on a
 directory, from which F4 edits the selected file and closing the editor returns to the panes.
 - **Modeless, with the keys people expect.** The editor keeps micro's keys: Ctrl+S saves, Ctrl+Q
   quits, Ctrl+F finds, Ctrl+Z undoes, Ctrl+C and Ctrl+V copy and paste, and the mouse is not used.
+  The editor takes Ctrl+C as a key, and the session's own key, Ctrl+\, ends it, as it ends any
+  screen ([the session's key](#a-native-programs-screen-and-the-sessions-key)).
   The panes keep Midnight Commander's: F3 views, F4 edits, F5 copies, F6 moves, F7 makes a
   directory, F8 removes.
 - **What it edits well:** search and replace by regular expression, in linear time for every
@@ -708,6 +713,35 @@ directory, from which F4 edits the selected file and closing the editor returns 
   file is held as lines, and as a rope only if a large file is measured to need one.
 - **Scripted edits are the commands'.** A script changes a file with `cat |> sub |> w`
   ([files and text](#files-and-text)), not by driving the editor.
+
+The editor is `ed(path)` ([`Redoubt.Editor`](../../userland/shell/lib/redoubt/editor.ex)); its
+text is lines around a cursor ([`Redoubt.Editor.Buffer`](../../userland/shell/lib/redoubt/editor/buffer.ex)),
+which a file read and saved unedited gives back byte for byte, a missing final newline and `\r`
+included. A file that is not UTF-8 opens read only, each byte that is not text drawn as `<FF>`.
+A pattern between slashes is a regular expression, matched within a line. A tab is drawn to the
+next stop of four, and any other control or bidirectional character visibly, in the text's style;
+the cursor and the selection are styles of the theme. Like every command, its code is loaded when
+it is first called. A key that would save, close or open a file asks first when it comes in a
+burst: with more keys already waiting behind it, as a paste does, or within 300 ms of a key that
+had, as a paste's last key does. The keys arriving with the question are dropped, so a pasted
+Enter cannot answer it. The 300 ms are measured between the editor's handling of two keys, not
+their arrival, so a paste whose keys each take the editor longer than that (an edit to a line
+of megabytes) could outrun the window; what such a paste can do is bounded by the screen's heap
+limit, which ends the editor.
+
+What is not built: syntax highlighting, and the file manager (`fm`) with its panes.
+
+Undo keeps at most 500 steps, and holds at most a million lines between them. A step holds a
+new copy of the list of lines the cursor crossed since the step before (the lines' bytes are
+shared), so 500 steps each taken after a jump between the top and the bottom of a 2 MiB file
+held, unbounded, about 350 MiB of heap with 64-byte lines and 2.6 GiB with 8-byte lines on the
+BEAM, past the 16M words a screen may grow to. A step also holds its own copy of the cursor's
+line, so 500 keys typed into a file of one 1 MiB line, the cursor moved between them, would keep
+500 MiB. Each step counts the lines it crossed or inserted, never more than the file's, and a
+line for every 16 bytes of the cursor's line; once the steps hold more than a million the oldest
+go, and the newest is always kept. After 500 edits across a 2 MiB file of 15-byte lines, the
+buffer, undo and all, fits in half a screen's heap; after 500 on one 1 MiB line, the copies kept
+come to some 16 MiB (`buffer_test.exs`).
 
 It is an Erlang process in the session's VM, drawn through the screen buffer
 ([full-screen programs](#full-screen-programs)), and it runs with the session's authority, as
@@ -721,11 +755,9 @@ contents into an action:
   holds a NUL is shown and refused, and every copy, move and removal is made on the listed
   directory, so a server that lists a crafted name cannot make the file manager act outside it.
 
-**Open:** none.
-
 ### The editor's files
 
-Status: built · partly tested: the host only, on beamlet and on the BEAM; the editor and the file manager that use it are not built; its tests are the shell's own ExUnit suite (`test/redoubt/editor/files_test.exs`), each verdict read from the file system afterwards, which `./test-shell` runs and no bench case does
+Status: built · partly tested: the host only, on beamlet and on the BEAM; the file manager that will use its listing and its pane operations is not built; its tests are the shell's own ExUnit suite (`test/redoubt/editor/files_test.exs`), each verdict read from the file system afterwards, which `./test-shell` runs and no bench case does
 
 What the editor and the file manager do to files is one module,
 [`Redoubt.Editor.Files`](../../userland/shell/lib/redoubt/editor/files.ex), over `File`, with
