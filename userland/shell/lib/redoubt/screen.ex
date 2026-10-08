@@ -8,7 +8,8 @@ defmodule Redoubt.Screen do
   - `init(args)`: its first state;
   - `update(event, state)`: `{:cont, state}`, or `{:halt, value}` to end with `value`. An event
     is `{:key, key, modifiers}` (`Redoubt.Term.Keys`), `{:resize, cols, rows}` (the first event,
-    with the screen's size), or any other message the process gets;
+    with the screen's size, and again whenever the terminal changes size), or any other message
+    the process gets;
   - `view(state, buffer, {cols, rows})`: draws the whole screen into the buffer, which starts
     blank each time; only what changed since the last frame is sent.
 
@@ -163,7 +164,18 @@ defmodule Redoubt.Screen do
     handle(screen, module.init(args), {:resize, cols, rows})
   end
 
-  defp loop(screen, state), do: handle(screen, state, receive(do: (event -> event)))
+  # A change of the terminal's size makes the buffer that size, blank, before the screen lays
+  # itself out again: the next frame clears the terminal and sends it all.
+  defp loop(screen, state) do
+    receive do
+      {:resize, cols, rows} = event when is_integer(cols) and is_integer(rows) ->
+        Buffer.resize(screen.buffer, cols, rows)
+        handle(%{screen | size: {cols, rows}}, state, event)
+
+      event ->
+        handle(screen, state, event)
+    end
+  end
 
   defp handle(screen, state, event) do
     case screen.module.update(event, state) do

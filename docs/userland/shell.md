@@ -330,9 +330,8 @@ and every [full-screen program](#full-screen-programs).
 - **The line editor's drawing:** `group`'s requests, drawn by going back to the line's start,
   erasing below it and drawing the line again, which needs nothing of the terminal but relative
   cursor movement, CR, LF, erasing below and bold; typing at the end of the line draws only what
-  was typed. The terminal's size is read at the start and at each prompt: until a change of size
-  is delivered ([below](#paste-scrolling-a-plainer-terminal-and-the-consoles-size)), a window
-  resized while a line is edited is laid out afresh at the next prompt.
+  was typed. The terminal's size is read at the start and at each prompt, and a change of size
+  lays the line being edited out again at once ([below](#the-consoles-size)).
 - **Frames are the cell protocol** ([the cell protocol](#the-cell-protocol)): the screen buffer's
   diff speaks it ([beamlet](beamlet.md#screen-natives)), and the encoder reads it through the one
   decoder (`Redoubt.Term.Cells`) and draws it
@@ -352,7 +351,35 @@ and every [full-screen program](#full-screen-programs).
   the encoder places the cursor absolutely again, and a disagreement costs a cell's misplacement,
   never the rest of the line.
 
-### Paste, scrolling, a plainer terminal and the console's size
+### The console's size
+
+<details><summary>Status: built · partly tested: a change of size is delivered on Redoubt, and on the host only to the driver's tests: beamlet's command line does not deliver a host terminal's change; the driver's part is the shell's own ExUnit suite, which `./test-shell` runs · tested (4)</summary>
+
+- host:beamlet-vm::a_change_of_the_console_s_size_reaches_its_reader_once
+- host:beamlet-redoubt::a_change_of_the_console_s_size_reaches_the_vm_once_reading_has_begun
+- host:redoubt-consoled::consol_size_is_the_argument_and_a_resize_waits_until_its_caller_gives_up
+- host:redoubt-sshd::consol_size_is_the_pty_s_and_a_resize_is_due_when_it_changes
+
+</details>
+
+- **Size:** `:beamlet.console_size/0` asks the console's server afresh on every call, through
+  `consol`'s `size` ([consoled](../servers/consoled.md#the-consol-protocol)), and gives
+  `{cols, rows}` or `:unknown`; the driver reads it at the start and at each prompt, and lays out
+  an unknown size as 80 by 24.
+- **A change of size** is the server's answer to a `resize` call the VM keeps parked there, made
+  again after each answer ([beamlet](beamlet.md#beamlet-on-redoubt)); nothing calls the session
+  back. The VM hands it to the console's reader, the driver, as
+  `{:beamlet_console_resize, {cols, rows}}`, and that size is the console's from then on. A
+  screen in front is sent `{:resize, cols, rows}`: its buffer takes the new size, blank, and the
+  screen lays itself out again, so its next frame clears the terminal and draws it all. With no
+  screen in front, the line being edited is drawn again at the new width. On an SSH channel a
+  change of the window arrives so ([sshd](../servers/sshd.md#sessions-over-ssh)). On the UART
+  nothing resizes: the image names `consoled` no size, so it refuses `size` and `resize` and the
+  shell's console there is of unknown size; a `consoled` given one refuses the `resize` a
+  multiplexed session would make, since the session's own call already fills the connection's one
+  parked call there, so the console keeps that size.
+
+### Paste, scrolling and a plainer terminal
 
 Status: planned · M2 (usable shell)
 
@@ -365,20 +392,12 @@ What the line editor and the screens built so far do not need:
   without box drawing, blocks or Braille.
 - **Input:** bracketed paste as one event, so a paste can never trigger completion; a mouse
   report, if one is ever taken, is SGR only and decoded under the same rules.
-- **Size:** `Console.size/0` asks `/dev/cons` afresh on every call and returns `{cols, rows}` or
-  `{:error, :unknown}`; layout then assumes 80 columns.
-- **Resize:** there is no callback. `Console.await_resize(pid)` makes a `resize` call the console
-  server parks and answers when the window changes; the new size arrives at `pid` as the message
-  `{:console_resize, cols, rows}`, and the library calls again for the next change. On a UART,
-  where nothing resizes, the call waits for ever ([consoled](../servers/consoled.md)).
 
 **Open:** until bracketed paste is built, a paste reaches a full-screen program as keys, so a
-pasted control character is a key: the editor asks before one saves, closes or opens a file
-([the editor](#the-editor)), and the gap closes with paste as one event. `await_resize` needs a
-server to park a typed call, an open question of
-[the serving library](../servers/serving.md); and whether the shell sends a terminal
-query at login and adapts, or assumes the VT102 and xterm target (the recommendation: assume,
-because a query on a UART that never answers costs a timeout at every login).
+pasted control character is a key: the editor asks before one saves, closes or opens a file ([the
+editor](#the-editor)), and the gap closes with paste as one event; and whether the shell sends a
+terminal query at login and adapts, or assumes the VT102 and xterm target (the recommendation:
+assume, because a query on a UART that never answers costs a timeout at every login).
 
 ### Hostile text never drives the terminal
 
@@ -545,9 +564,7 @@ so nothing loads them until a screen first draws with them.
   ([hostile text](#hostile-text-never-drives-the-terminal)). A theme is chosen by name from the
   three, never read from text.
 
-What is not built: a `plot(values)` command drawing a series on the canvas, and the delivery of
-a change of size to a screen in front, which waits for the console's `resize`
-([below](#paste-scrolling-a-plainer-terminal-and-the-consoles-size)).
+What is not built: a `plot(values)` command drawing a series on the canvas.
 
 ### A native program's screen and the session's key
 

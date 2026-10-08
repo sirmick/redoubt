@@ -408,7 +408,7 @@ encoder ends its lines with CR LF itself, as it must on Redoubt. `console_size` 
 terminal's size, read afresh at each call. A change of the terminal's size is not delivered on a
 host (`console_resized` answers nothing there); the VM hands a platform's change to the console's
 reader, as on Redoubt, and the shell reads the size at each prompt
-([the shell](shell.md#paste-scrolling-a-plainer-terminal-and-the-consoles-size)).
+([the shell](shell.md#the-consoles-size)).
 Console input goes to one Erlang process, the shell's driver, which takes it with
 `beamlet:console_subscribe/0`; a second subscription is refused, so no code run at the prompt
 can take the keyboard, or the interrupt key with it, from the driver.

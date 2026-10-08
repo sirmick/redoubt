@@ -204,7 +204,11 @@ highlighting, and the file manager, `fm`, host-tested ([the shell](../userland/s
 On Redoubt it runs only on the fake kernel (`./shell --fake`). What the milestone builds on: the serving
 library's parked calls ([serving](../servers/serving.md#parked-calls)), `consoled`'s 9P console
 ([consoled](../servers/consoled.md)), and budget destruction as the only way to end a process
-([budgets](../kernel/budgets.md#r10-destruction)). For several harts: every hart runs user code under one FIFO kernel lock, and a destruction's
+([budgets](../kernel/budgets.md#r10-destruction)). The first step on Redoubt is built: a typed call
+parks as a 9P read does ([serving](../servers/serving.md#parking-a-typed-call)), `consoled` and
+`sshd` serve `consol`'s `size` and `resize` ([consoled](../servers/consoled.md#the-consol-protocol)),
+and a change of an SSH channel's window reaches the shell's driver, which lays the line or the
+screen in front out again ([the shell](../userland/shell.md#the-consoles-size)). For several harts: every hart runs user code under one FIFO kernel lock, and a destruction's
 shootdown is attacked (`bench:smp-boot`, `bench:smp-evict`). One process's threads run on
 several harts at once, and every unmap, lend and return shoots the process down on the others
 (`smp-shootdown`, `smp-fence`). For named contexts: a login names its context, `ssh alice.work@box`, the

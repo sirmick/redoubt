@@ -86,6 +86,24 @@ defmodule Redoubt.ScreenTest do
     ends(driver)
   end
 
+  test "a screen in front lays itself out again when the console changes size" do
+    {driver, t} = start()
+    type(driver, ~S|pick(["red", "green"], title: "colour")| <> "\r")
+    t = screen(t, &shows?(&1, "green"))
+    {_, col} = find(t, "colour")
+    # Narrower: the next frame clears the terminal and draws the box again, centred at 40.
+    send(driver, {:beamlet_console_resize, {40, @rows}})
+    t = screen(t, &(find(&1, "colour") not in [nil, {elem(find(&1, "colour"), 0), col}]))
+    assert Terminal.alternate?(t)
+    assert shows?(t, "│ green")
+    {_, narrower} = find(t, "colour")
+    assert narrower < col
+    type(driver, "\r")
+    t = screen(t, &(not Terminal.alternate?(&1)))
+    assert shows?(t, ~s("red"))
+    ends(driver)
+  end
+
   test "Ctrl+C ends the screen with nil, and the session goes on" do
     {driver, t} = start()
     type(driver, "kept = 1\r")

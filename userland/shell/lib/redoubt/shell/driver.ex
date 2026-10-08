@@ -24,6 +24,11 @@ defmodule Redoubt.Shell.Driver do
 
   While the driver runs, the logger writes through it too (`Redoubt.Shell.Log`): its `default`
   handler, which writes to the console past the guard, is put back when the driver ends.
+
+  A change of the console's size arrives as `{:beamlet_console_resize, {cols, rows}}`, from the
+  VM (`:beamlet` hands its platform's change to the console's reader). The size is the console's
+  from then on; a screen in front is sent `{:resize, cols, rows}` and lays itself out again, and
+  with none the line being edited is laid out again at the new width.
   """
 
   alias Redoubt.Term
@@ -136,6 +141,9 @@ defmodule Redoubt.Shell.Driver do
 
       {:beamlet_console, input} ->
         loop(input(state, input))
+
+      {:beamlet_console_resize, {cols, rows}} when is_integer(cols) and is_integer(rows) ->
+        loop(resized(state, cols, rows))
 
       {:redoubt_screen, :open, pid, ctrl_c} when ctrl_c in [:interrupt, :key] ->
         loop(open_screen(state, pid, ctrl_c))
@@ -271,6 +279,27 @@ defmodule Redoubt.Shell.Driver do
   defp write(state, out) do
     if IO.iodata_length(out) > 0, do: state.output.(out)
     :ok
+  end
+
+  # The console's new size is its size from now. A screen in front lays itself out again; with
+  # none, the line being edited is drawn again at the new width, and an evaluation's output takes
+  # the new width at its next prompt.
+  defp resized(state, cols, rows) do
+    state = %{state | size: fn -> {cols, rows} end, term: Term.resize(state.term, cols, rows)}
+
+    cond do
+      state.screen != nil ->
+        send(state.screen.pid, {:resize, cols, rows})
+        state
+
+      Term.line_open?(state.term) ->
+        {out, term} = Term.request(state.term, :redraw_prompt)
+        write(state, out)
+        %{state | term: term}
+
+      true ->
+        state
+    end
   end
 
   # ---- keys ----
