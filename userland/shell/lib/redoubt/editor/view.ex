@@ -4,7 +4,8 @@ defmodule Redoubt.Editor.View do
   one role of the theme, to draw from a column of the window. A tab is the spaces to the next
   stop; any other control or bidirectional character is drawn visibly, as `^[` or `<U+202E>`
   (`Redoubt.Term.Text`), and is as wide as that. What the file holds sets no style: the role
-  of each run is the selection's, the cursor's or the text's.
+  of each run is the cursor's, the selection's, or the one its language's highlighting gave that
+  part of the line (`Redoubt.Editor.Syntax`), one of the theme's.
   """
 
   alias Redoubt.Term.{Text, Width}
@@ -12,7 +13,7 @@ defmodule Redoubt.Editor.View do
   @tab 4
 
   @typedoc "A run: its column in the window, its text, and its role."
-  @type run :: {non_neg_integer(), String.t(), :normal | :selected | :cursor}
+  @type run :: {non_neg_integer(), String.t(), :selected | :cursor | Redoubt.Editor.Syntax.role()}
 
   @doc "The columns a tab stop is apart."
   @spec tab() :: pos_integer()
@@ -29,6 +30,7 @@ defmodule Redoubt.Editor.View do
   column `left`. `selected` is the range of graphemes selected on this line, `first..last` or
   `nil`; `cursor` is the grapheme the cursor is on, or `nil`. The cursor at the line's end is a
   blank cell; a selection that runs on to the next line shows a blank cell at this one's end.
+  `pieces` is the line cut by its highlighting, each piece with its role, or `nil` for plain text.
   """
   @spec runs(
           String.t(),
@@ -36,17 +38,21 @@ defmodule Redoubt.Editor.View do
           pos_integer(),
           Range.t() | nil,
           non_neg_integer() | nil,
-          boolean()
+          boolean(),
+          [Redoubt.Editor.Syntax.piece()] | nil
         ) ::
           [run()]
-  def runs(line, left, width, selected, cursor, selected_end? \\ false) do
+  def runs(line, left, width, selected, cursor, selected_end? \\ false, pieces \\ nil) do
     graphemes = String.graphemes(line)
     count = length(graphemes)
 
-    {pieces, at} =
-      Enum.reduce(Enum.with_index(graphemes), {[], 0}, fn {g, i}, {acc, at} ->
+    {drawn, at} =
+      graphemes
+      |> Enum.zip(roles(graphemes, pieces))
+      |> Enum.with_index()
+      |> Enum.reduce({[], 0}, fn {{g, base}, i}, {acc, at} ->
         text = piece(g, at)
-        {[{at, text, role(i, selected, cursor)} | acc], at + Width.columns(text)}
+        {[{at, text, role(i, selected, cursor, base)} | acc], at + Width.columns(text)}
       end)
 
     tail =
@@ -56,7 +62,7 @@ defmodule Redoubt.Editor.View do
         true -> []
       end
 
-    (Enum.reverse(pieces) ++ tail)
+    (Enum.reverse(drawn) ++ tail)
     |> Enum.flat_map(&clip(&1, left, width))
     |> merge()
   end
@@ -65,9 +71,28 @@ defmodule Redoubt.Editor.View do
   defp piece("\t", at), do: String.duplicate(" ", @tab - rem(at, @tab))
   defp piece(g, _at), do: Text.visible(g)
 
-  defp role(i, _selected, i), do: :cursor
-  defp role(i, %Range{} = selected, _cursor), do: if(i in selected, do: :selected, else: :normal)
-  defp role(_i, nil, _cursor), do: :normal
+  defp role(i, _selected, i, _base), do: :cursor
+  defp role(i, %Range{} = selected, _cursor, base), do: if(i in selected, do: :selected, else: base)
+  defp role(_i, nil, _cursor, base), do: base
+
+  # Each grapheme's role from the highlighting: the role of the piece the grapheme starts in.
+  defp roles(graphemes, nil), do: Enum.map(graphemes, fn _ -> :normal end)
+
+  defp roles(graphemes, pieces) do
+    {ends, _at} =
+      Enum.map_reduce(pieces, 0, fn {text, role}, at ->
+        {{at + byte_size(text), role}, at + byte_size(text)}
+      end)
+
+    {roles, _} =
+      Enum.map_reduce(graphemes, {0, ends}, fn g, {at, ends} ->
+        ends = Enum.drop_while(ends, fn {stop, _role} -> stop <= at end)
+        role = with [{_stop, role} | _] <- ends, do: role, else: (_ -> :normal)
+        {role, {at + byte_size(g), ends}}
+      end)
+
+    roles
+  end
 
   # A piece as it falls in the window: whole, or as blanks where only part of it shows.
   defp clip({at, text, role}, left, width) do

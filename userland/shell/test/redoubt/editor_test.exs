@@ -191,6 +191,41 @@ defmodule Redoubt.EditorTest do
     assert length(state.docs) == 1 and text(state) == "A"
   end
 
+  test "highlighting keeps start states down the file, and drops those below an edit", %{tmp_dir: dir} do
+    path = Path.join(dir, "long.rs")
+    File.write!(path, Enum.map_join(1..400, "\n", &"let x#{&1} = 1;"))
+    state = start(path) |> keys([key(:end, [:ctrl])])
+    assert doc(state).lang == Redoubt.Editor.Syntax.Rust and doc(state).top > 256
+    assert doc(state).marks[2] == :code
+
+    # A comment opened on the first line runs on through the file: what was kept below it goes.
+    state = state |> keys([key(:home, [:ctrl])]) |> typed("/*")
+    assert Map.keys(doc(state).marks) == [0]
+    state = keys(state, [key(:end, [:ctrl])])
+    assert doc(state).marks[2] == {:comment, 1}
+
+    assert start(Path.join(dir, "notes.txt")) |> doc() |> Map.get(:lang) == nil
+  end
+
+  test "undo and redo drop the highlighting's states: their cursor is not where the text changed",
+       %{tmp_dir: dir} do
+    path = Path.join(dir, "long.rs")
+    File.write!(path, Enum.map_join(1..400, "\n", &"let x#{&1} = 1;"))
+
+    # Lines opening a comment pasted at the top; then to the end, where the comment runs on.
+    state = %{start(path) | clipboard: "/*\nopen\n"} |> keys([key("v", [:ctrl]), key(:end, [:ctrl])])
+    assert doc(state).marks[2] == {:comment, 1}
+
+    # Undone, and down to the end again: the states are code.
+    state = keys(state, [key("z", [:ctrl]), key(:end, [:ctrl])])
+    assert doc(state).marks[2] == :code
+
+    # Redone with the cursor at the end, far below the lines it puts back: the comment again.
+    state = keys(state, [key("y", [:ctrl])])
+    assert Buffer.cursor(doc(state).buffer) |> elem(0) > 256
+    assert doc(state).marks[2] == {:comment, 1}
+  end
+
   test "a line is drawn with tabs to the stop, control characters visible, clipped to the window" do
     assert View.runs("a\tb", 0, 20, nil, nil) == [{0, "a   b", :normal}]
     assert View.runs("\e[31mx", 0, 20, nil, nil) == [{0, "^[[31mx", :normal}]

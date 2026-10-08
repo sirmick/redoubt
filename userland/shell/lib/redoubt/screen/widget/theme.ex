@@ -10,7 +10,9 @@ defmodule Redoubt.Screen.Widget.Theme do
   - `:menu`, `:menu_selected`, `:hotkey`: the menu bar and its drop-downs, the open menu or the
     item under the selection, and the letter that opens a menu;
   - `:dialog`, `:button`, `:button_focused`, `:input`, `:cursor`: a dialog's body, its buttons, a
-    text input and the cell its cursor is on.
+    text input and the cell its cursor is on;
+  - `:keyword`, `:string`, `:comment`, `:number`, `:constant`, `:heading`: what the editor's
+    highlighting finds in a file (`Redoubt.Editor.Syntax`).
 
   Three are built: `plain` (the terminal's own colours, reversed for what is selected; the
   default), `qbasic` (QBasic's blue) and `menuconfig` (the kernel's `menuconfig`).
@@ -33,6 +35,12 @@ defmodule Redoubt.Screen.Widget.Theme do
           | :button_focused
           | :input
           | :cursor
+          | :keyword
+          | :string
+          | :comment
+          | :number
+          | :constant
+          | :heading
   @type t :: %{role() => Buffer.style()}
 
   @names [:plain, :qbasic, :menuconfig]
@@ -48,7 +56,7 @@ defmodule Redoubt.Screen.Widget.Theme do
   @spec style(t(), role()) :: Buffer.style()
   def style(theme, role), do: Map.fetch!(theme, role)
 
-  @doc "The terminal's own colours; what is selected or focused is reversed."
+  @doc "The terminal's own colours; what is selected or focused is reversed, and code is in bold, dim or italic."
   @spec plain() :: t()
   def plain do
     normal = Buffer.plain()
@@ -68,7 +76,13 @@ defmodule Redoubt.Screen.Widget.Theme do
       button: normal,
       button_focused: reversed,
       input: Buffer.style(underlined: true),
-      cursor: reversed
+      cursor: reversed,
+      keyword: Buffer.style(bold: true),
+      string: Buffer.style(italic: true),
+      comment: Buffer.style(dim: true),
+      number: normal,
+      constant: normal,
+      heading: Buffer.style(bold: true, underlined: true)
     }
   end
 
@@ -93,7 +107,13 @@ defmodule Redoubt.Screen.Widget.Theme do
       button: on_grey,
       button_focused: inverse,
       input: Buffer.style(fg: {:indexed, 7}, bg: {:indexed, 0}),
-      cursor: on_grey
+      cursor: on_grey,
+      keyword: Buffer.style(fg: {:indexed, 15}, bg: {:indexed, 4}, bold: true),
+      string: Buffer.style(fg: {:indexed, 11}, bg: {:indexed, 4}),
+      comment: Buffer.style(fg: {:indexed, 10}, bg: {:indexed, 4}),
+      number: Buffer.style(fg: {:indexed, 14}, bg: {:indexed, 4}),
+      constant: Buffer.style(fg: {:indexed, 14}, bg: {:indexed, 4}),
+      heading: Buffer.style(fg: {:indexed, 15}, bg: {:indexed, 4}, bold: true)
     }
   end
 
@@ -117,7 +137,13 @@ defmodule Redoubt.Screen.Widget.Theme do
       button: on_grey,
       button_focused: selected,
       input: Buffer.style(fg: {:indexed, 15}, bg: {:indexed, 4}),
-      cursor: on_grey
+      cursor: on_grey,
+      keyword: Buffer.style(fg: {:indexed, 4}, bg: {:indexed, 7}, bold: true),
+      string: Buffer.style(fg: {:indexed, 1}, bg: {:indexed, 7}),
+      comment: Buffer.style(fg: {:indexed, 8}, bg: {:indexed, 7}),
+      number: Buffer.style(fg: {:indexed, 5}, bg: {:indexed, 7}),
+      constant: Buffer.style(fg: {:indexed, 6}, bg: {:indexed, 7}),
+      heading: Buffer.style(fg: {:indexed, 0}, bg: {:indexed, 7}, bold: true)
     }
   end
 end
