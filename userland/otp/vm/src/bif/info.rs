@@ -236,17 +236,14 @@ pub fn ensure_loaded(c: &mut Ctx, a: &[Term]) -> R {
     })
 }
 
-/// `code:is_loaded(M)`: `{file, Where}` or `false`. Modules come from the platform, so there is
-/// no file name to report.
+/// `code:is_loaded(M)`: `{file, File}`, `File` as `which/1` says it, or `false`.
 pub fn is_loaded(c: &mut Ctx, a: &[Term]) -> R {
     let Term::Atom(m) = &a[0] else {
         return Err(c.badarg());
     };
     Ok(if c.sys().is_loaded(m) {
-        {
-            let e = [Term::Atom(c.atoms.file), c.atom("loaded")];
-            c.tuple(&e)
-        }
+        let (tag, file) = (Term::Atom(c.atoms.file), super::code::loaded_file(c, m));
+        c.tuple(&[tag, file])
     } else {
         c.bool(false)
     })
@@ -358,10 +355,16 @@ pub fn get_object_code(c: &mut Ctx, a: &[Term]) -> R {
     })
 }
 
+/// `code:all_loaded()`: `{Module, File}` for every loaded module, `File` as `which/1` says it.
 pub fn all_loaded(c: &mut Ctx, _a: &[Term]) -> R {
-    let file = c.atom("loaded");
     let mods = c.sys().loaded_modules();
-    let v: Vec<Term> = mods.into_iter().map(|m| c.tuple(&[Term::Atom(m), file])).collect();
+    let v: Vec<Term> = mods
+        .into_iter()
+        .map(|m| {
+            let file = super::code::loaded_file(c, &m);
+            c.tuple(&[Term::Atom(m), file])
+        })
+        .collect();
     Ok(c.list(v))
 }
 

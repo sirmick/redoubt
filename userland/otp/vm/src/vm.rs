@@ -856,14 +856,20 @@ impl System {
         if RUNTIME_MODULES.contains(&name.as_str()) {
             return None;
         }
-        let bytes = match self.locate_module(name.as_str())? {
-            Found::Path(_, bytes) | Found::Platform(bytes) => bytes,
+        let (path, bytes) = match self.locate_module(name.as_str())? {
+            Found::Path(path, bytes) => (Some(path), bytes),
+            Found::Platform(bytes) => (None, bytes),
         };
         let loaded = self.load(&bytes).ok()?;
         if &loaded != name {
             // A file that claims to be a different module than the one asked for.
             self.modules.remove(loaded.as_str());
             return None;
+        }
+        // A file of the code path is what `code:which/1` and the rest say it was loaded from.
+        if let Some(path) = path {
+            let file = OwnedTerm::build(&self.literals, |h| h.string(&path));
+            self.module_files.insert(String::from(name.as_str()), file);
         }
         self.modules.get(name.as_str()).cloned()
     }
