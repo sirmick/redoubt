@@ -35,7 +35,7 @@ fn new(c: &mut Ctx, size: &Term, signed: bool) -> R {
     };
     let id = c.sys().make_ref().0;
     let a = Atomics { signed, cells: Lock::new(alloc::vec![0; n]) };
-    Ok(c.heap_mut().resource(Resource { id, value: alloc::boxed::Box::new(a) }))
+    Ok(c.heap_mut().resource(Resource::new(id, alloc::boxed::Box::new(a))))
 }
 
 /// `erts_internal:atomics_new(Arity, EncodedOpts)`: bit 0 of the options is `signed`.

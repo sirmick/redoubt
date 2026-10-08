@@ -1,0 +1,12 @@
+[package]
+name = "beamlet-screen"
+description = "The screen buffer's natives for beamlet: primitives over cells, never widgets"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+# The VM and the cell protocol only: the buffer's diff is a `cells` frame, and its width table is
+# generated from OTP (tools/gen-width.escript). See docs/userland/beamlet.md, "Screen natives".
+[dependencies]
+beamlet-vm = { path = "../vm" }
+cells = { path = "../../native/cells" }

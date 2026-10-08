@@ -12,9 +12,9 @@ defmodule Redoubt.Term.Text do
   `less` does. A tab is expanded to spaces. What counts as a control character is `control?/1`,
   the `cells` crate's rule too.
 
-  This is the one rule of `Redoubt.Term`'s encoder that holds today; the encoder that draws cells
-  keeps it (docs/userland/shell.md). Tab stops count code points, not display width, until the
-  width tables arrive.
+  `Redoubt.Term`'s encoder draws every grapheme through this rule, and a screen program's text
+  passes it before the buffer's natives, which refuse a control character (docs/userland/shell.md,
+  "Hostile text never drives the terminal"). Tab stops count code points, not display width.
   """
 
   @tab 8

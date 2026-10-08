@@ -631,8 +631,9 @@ pub fn run(
     // Without a console there is nowhere to say why.
     let Ok(platform) = Redoubt::new(startup, modules) else { return 1 };
     let console = Arc::clone(&platform.console);
-    let natives: &'static [NativeSpec] =
-        Box::leak([beamlet_crypto::NATIVES, beamlet_re::NATIVES].concat().into_boxed_slice());
+    let natives: &'static [NativeSpec] = Box::leak(
+        [beamlet_crypto::NATIVES, beamlet_re::NATIVES, beamlet_screen::NATIVES].concat().into_boxed_slice(),
+    );
     let mut vm =
         Vm::with_config(Box::new(platform), Config { natives, limits: limits(budget_pages), report_memory });
     let (line, code) = match vm.spawn(module, function, |_| Vec::new()) {

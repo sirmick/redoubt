@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 388
+revision = 390
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1329,8 +1329,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "shell-host"
   needs = ["SHELL2"]
   body = "M2 host step 2: docs/userland/beamlet.md#screen-natives; docs/userland/shell.md#full-screen-programs; shell plan section 4 (natives are primitives over cells, never widgets; one Erlang process per screen). Size M."
-  state = "reported"
-  revision = 372
+  state = "done"
+  revision = 390
   overrides = ["2026-10-08: started by Orchestrator before M1 (reported): The owner started M2's host shell track early (2026-10-07); M1's remaining work does not touch the host shell."]
 
 [[node]]
@@ -1444,8 +1444,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M2"
   body = "Found by SHELL3. prim_eval is listed in vm/src/vm.rs RUNTIME_MODULES but never loaded, and no native answers it, so any `receive` typed at the prompt fails. Load prim_eval's receive, or provide it, with a beamlet test of `receive` at the prompt and in erl_eval with an after clause. Size S."
-  state = "todo"
-  revision = 373
+  state = "active"
+  revision = 389
+  overrides = ["2026-10-08: started by Orchestrator before M1 (reported): An M2 shell gap that is independent of M1's remaining work."]
 
 [[node]]
   id = "BEAM16"

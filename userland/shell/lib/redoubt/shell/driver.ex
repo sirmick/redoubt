@@ -12,9 +12,17 @@ defmodule Redoubt.Shell.Driver do
 
   History is `group`'s own, in the session's memory only. `group` keeps every line, so the
   driver cuts its list to the newest lines at each prompt.
+
+  A screen (`Redoubt.Screen`) takes the terminal while it is in front: the driver shows the
+  alternate screen, decodes the bytes typed into keys (`Redoubt.Term.Keys`) and sends them to the
+  screen's process, draws each frame it sends through the one decoder (`Redoubt.Term.Cells`) and
+  `Redoubt.Term.Frame`, and holds what `group` asks to draw, answering it at once so a writer
+  never waits on the screen. Ctrl+C ends the screen. When the screen ends, the main screen is
+  shown again, as it was, and what was held is drawn.
   """
 
   alias Redoubt.Term
+  alias Redoubt.Term.{Cells, Frame, Keys}
 
   require Record
 
@@ -23,6 +31,7 @@ defmodule Redoubt.Shell.Driver do
   Record.defrecordp(:group_state, :state, Record.extract(:state, from_lib: "kernel/src/group.erl"))
 
   @history_lines 1000
+  @esc_timeout 50
 
   @doc """
   Runs the driver in the calling process until the shell ends, and returns `:ok`.
@@ -37,6 +46,8 @@ defmodule Redoubt.Shell.Driver do
   - `:size`: a function giving the terminal's size as `{cols, rows}`; the console's by default,
     80 by 24 when it is unknown. It is asked at each prompt.
   - `:history_lines` (#{@history_lines}): how many of the newest lines history keeps.
+  - `:esc_timeout` (#{@esc_timeout}): with a screen in front, how many milliseconds a lone ESC
+    waits for more before it is the Esc key.
   """
   @spec run(keyword()) :: :ok
   def run(opts \\ []) do
@@ -68,14 +79,46 @@ defmodule Redoubt.Shell.Driver do
       dropping: false,
       # A Ctrl+D waiting for group to catch up: its reference, the rest of its read, and the
       # input that came after it, newest first.
-      eof_check: nil
+      eof_check: nil,
+      # The screen in front, if any: its process, monitor, what group asked to draw meanwhile
+      # (newest first), bytes that may begin a key, and the timer that ends their wait.
+      screen: nil,
+      esc_timeout: Keyword.get(opts, :esc_timeout, @esc_timeout)
     })
   end
 
   defp loop(%{group: group} = state) do
     receive do
+      {:beamlet_console, input} when state.screen != nil ->
+        loop(screen_input(state, input))
+
       {:beamlet_console, input} ->
         loop(input(state, input))
+
+      {:redoubt_screen, :open, pid} ->
+        loop(open_screen(state, pid))
+
+      {:redoubt_screen, :frame, pid, bytes} when state.screen != nil and state.screen.pid == pid ->
+        loop(frame(state, bytes))
+
+      {:redoubt_screen, :close, pid} when state.screen != nil and state.screen.pid == pid ->
+        loop(close_screen(state))
+
+      {:DOWN, ref, :process, _pid, _reason} when state.screen != nil and state.screen.ref == ref ->
+        loop(close_screen(state))
+
+      {:timeout, timer, :keys_flush} when state.screen != nil and state.screen.timer == timer ->
+        loop(flush_keys(state))
+
+      # What a screen that has ended still sent, and a timer that was overtaken: nothing now.
+      {:timeout, _stale, :keys_flush} ->
+        loop(state)
+
+      {:redoubt_screen, _what, _pid} ->
+        loop(state)
+
+      {:redoubt_screen, _what, _pid, _detail} ->
+        loop(state)
 
       {:io_reply, ref, _reply} when elem(state.eof_check, 0) == ref ->
         loop(eof_checked(state))
@@ -112,7 +155,9 @@ defmodule Redoubt.Shell.Driver do
       {^group, request} ->
         loop(draw(state, request))
 
+      # The shell has ended, even under a screen: the main screen is shown again.
       {:EXIT, ^group, _reason} ->
+        if state.screen != nil, do: write(state, Frame.leave())
         :ok
 
       {:EXIT, _other, _reason} ->
@@ -121,6 +166,10 @@ defmodule Redoubt.Shell.Driver do
   end
 
   # ---- drawing ----
+
+  # With a screen in front, what group asks to draw waits for it to end.
+  defp draw(%{screen: %{} = screen} = state, request),
+    do: %{state | screen: %{screen | held: [request | screen.held]}}
 
   # After an interrupt, what group asks to draw until the next prompt is the dropped line's:
   # the keys typed just before Ctrl+C, which group was still editing when the driver drew the
@@ -234,6 +283,92 @@ defmodule Redoubt.Shell.Driver do
     ref = make_ref()
     send(state.group, {:io_request, self(), ref, {:setopts, []}})
     %{state | eof_check: {ref, rest, []}}
+  end
+
+  # ---- a screen in front ----
+
+  # One screen at a time: a second is refused, and its process ends, before it has run any of
+  # its module's code.
+  defp open_screen(%{screen: nil} = state, pid) do
+    {cols, rows} = state.size.()
+    write(state, Frame.enter())
+    send(pid, {:redoubt_screen, :opened, cols, rows})
+    screen = %{pid: pid, ref: Process.monitor(pid), held: [], pending: <<>>, timer: nil}
+    %{state | screen: screen}
+  end
+
+  defp open_screen(state, pid) do
+    Process.exit(pid, :another_screen_in_front)
+    state
+  end
+
+  # A frame the decoder refuses ends the screen: nothing reaches the terminal but cells.
+  defp frame(state, bytes) do
+    case Cells.decode(bytes) do
+      {:ok, frame} ->
+        write(state, Frame.draw(frame))
+        state
+
+      {:error, _why} ->
+        end_screen(state, :refused_frame)
+    end
+  end
+
+  # The main screen as it was, and then what group asked to draw meanwhile.
+  defp close_screen(%{screen: screen} = state) do
+    Process.demonitor(screen.ref, [:flush])
+    cancel(screen.timer)
+    write(state, Frame.leave())
+    screen.held |> Enum.reverse() |> Enum.reduce(%{state | screen: nil}, &draw(&2, &1))
+  end
+
+  # Keys for the screen; Ctrl+C ends it, and the input's end ends it before ending the input.
+  defp screen_input(state, :eof), do: state |> interrupt_screen() |> input(:eof)
+
+  defp screen_input(%{screen: screen} = state, bytes) do
+    cancel(screen.timer)
+    {keys, pending} = Keys.decode(screen.pending <> bytes)
+    state = send_keys(%{state | screen: %{screen | pending: pending, timer: nil}}, keys)
+
+    case state.screen do
+      %{pending: <<_, _::binary>>} = screen ->
+        timer = :erlang.start_timer(state.esc_timeout, self(), :keys_flush)
+        %{state | screen: %{screen | timer: timer}}
+
+      _done_or_none ->
+        state
+    end
+  end
+
+  defp cancel(nil), do: :ok
+  defp cancel(timer), do: Process.cancel_timer(timer)
+
+  # Nothing more came after what may have begun a key: what it is, it is now.
+  defp flush_keys(%{screen: screen} = state) do
+    keys = Keys.flush(screen.pending)
+    send_keys(%{state | screen: %{screen | pending: <<>>, timer: nil}}, keys)
+  end
+
+  defp send_keys(state, []), do: state
+  defp send_keys(%{screen: nil} = state, _keys), do: state
+  defp send_keys(state, [{:key, "c", [:ctrl]} | _rest]), do: interrupt_screen(state)
+
+  defp send_keys(state, [key | rest]) do
+    send(state.screen.pid, key)
+    send_keys(state, rest)
+  end
+
+  # The interrupt ends the screen: its process exits with the reason `:interrupt`, which is how
+  # its line's process tells the interrupt from a failure.
+  defp interrupt_screen(%{screen: nil} = state), do: state
+  defp interrupt_screen(state), do: end_screen(state, :interrupt)
+
+  # The screen's process exits with `reason`; one that traps exits is killed by the second
+  # signal, which arrives after the first, as signals between two processes do.
+  defp end_screen(%{screen: screen} = state, reason) do
+    Process.exit(screen.pid, reason)
+    Process.exit(screen.pid, :kill)
+    close_screen(state)
   end
 
   # ---- the end of the input ----

@@ -179,6 +179,42 @@ fn slices_share_one_offheap_entry() {
     assert_eq!(dst.list_iter(root).count(), 1002);
 }
 
+/// A resource's declared size is its holders' own memory: counted once however many terms refer
+/// to it, kept by a copy and a collection, changed at once on the heap that resizes it, and
+/// dropped when no term holds it.
+#[test]
+fn a_resources_declared_size_counts_as_its_holders_memory() {
+    let mut h = heap();
+    let r = Arc::new(Resource::sized(1, Box::new(0u8), 100_000));
+    let a = h.resource_shared(r.clone());
+    let b = h.resource_shared(r.clone());
+    let pair = h.tuple(&[a, b]);
+    assert_eq!(h.held_bytes(), 100_000);
+    assert!(h.words() >= 100_000 / 8, "counted in the heap's words");
+
+    let mut dst = heap();
+    let mut root = copy(&h, pair, &mut dst);
+    assert_eq!(dst.held_bytes(), 100_000, "a copy holds it too");
+
+    let old = r.set_bytes(400_000);
+    dst.resized(old, 400_000);
+    assert_eq!(dst.held_bytes(), 400_000);
+    assert_eq!(h.held_bytes(), 100_000, "another holder counts the new size from its next collection");
+    let mut gc = h.collect(0);
+    let mut kept = pair;
+    gc.root(&mut kept);
+    gc.finish();
+    assert_eq!(h.held_bytes(), 400_000);
+
+    let mut gc = dst.collect(0);
+    gc.root(&mut root);
+    gc.finish();
+    assert_eq!(dst.held_bytes(), 400_000);
+    let gc = dst.collect(0);
+    gc.finish();
+    assert_eq!(dst.held_bytes(), 0, "nothing holds it");
+}
+
 /// A fragment moved onto a heap that already holds terms reads the same, shares its binary
 /// entries with the heap's, and keeps its sharing.
 #[test]

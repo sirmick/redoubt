@@ -57,6 +57,7 @@ version = "0.1.0"
 dependencies = [
  "beamlet-crypto",
  "beamlet-re",
+ "beamlet-screen",
  "beamlet-vm",
  "cap-std",
  "fs-set-times",
@@ -111,11 +112,20 @@ version = "0.1.0"
 dependencies = [
  "beamlet-crypto",
  "beamlet-re",
+ "beamlet-screen",
  "beamlet-vm",
  "redoubt-client",
  "redoubt-fake-kernel",
  "redoubt-littlefsd",
  "redoubt-rt",
+]
+
+[[package]]
+name = "beamlet-screen"
+version = "0.1.0"
+dependencies = [
+ "beamlet-vm",
+ "cells",
 ]
 
 [[package]]
@@ -192,6 +202,10 @@ dependencies = [
  "libc",
  "shlex",
 ]
+
+[[package]]
+name = "cells"
+version = "0.1.0"
 
 [[package]]
 name = "cfg-if"

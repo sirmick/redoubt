@@ -9,6 +9,7 @@ version.workspace = true
 beamlet-vm = { path = "../vm" }
 beamlet-crypto = { path = "../crypto" }
 beamlet-re = { path = "../re" }
+beamlet-screen = { path = "../screen" }
 cap-std = "3"
 fs-set-times = "0.20"
 # The terminal: raw mode and its restoration (`tty.rs`); `libc` for `sigaction` alone, which

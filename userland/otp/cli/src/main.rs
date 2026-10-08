@@ -366,8 +366,9 @@ fn main() -> ExitCode {
         mid_line: mid_line.clone(),
     };
     // Natives are 'static slices; join the crates' tables once.
-    let natives: &'static [beamlet_vm::bif::NativeSpec] =
-        Box::leak([beamlet_crypto::NATIVES, beamlet_re::NATIVES].concat().into_boxed_slice());
+    let natives: &'static [beamlet_vm::bif::NativeSpec] = Box::leak(
+        [beamlet_crypto::NATIVES, beamlet_re::NATIVES, beamlet_screen::NATIVES].concat().into_boxed_slice(),
+    );
     let config = beamlet_vm::vm::Config { natives, ..Default::default() };
     let mut vm = Vm::with_config(Box::new(platform), config);
     #[cfg(feature = "threads")]
