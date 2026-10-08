@@ -50,7 +50,7 @@ mod machine {
     use redoubt_steward::domain::Domain;
     use redoubt_steward::effect::Output;
     use redoubt_steward::event::EventKind;
-    use redoubt_steward_server::own::{Bound, How, Own, SYSTEM, binding};
+    use redoubt_steward_server::own::{Bound, How, Own, SYSTEM, binding, session_args};
     use redoubt_steward_server::protocol::{Serving, answer_with, watches as watches_call};
     use redoubt_steward_server::watchers::Watchers;
     use redoubt_steward_server::{Kernel, SLOTS, Steward, start};
@@ -310,6 +310,7 @@ mod machine {
             domain: &Domain,
             budget: Handle,
             connections: &[Option<Handle>],
+            context: Option<&str>,
         ) -> Result<u64, Error> {
             let principal = self.principal(domain).ok_or(Error::BadHandle)?;
             let labels = domain.labels().as_slice();
@@ -318,6 +319,7 @@ mod machine {
             let exit = Endpoint::create()?;
             let exit_handle = exit.handle();
             let pages = format!("budget_pages={}", self.session_pages);
+            let told = session_args(&self.own_lines, &principal, labels, context);
             let endpoint = format!("endpoint={SYSTEM}");
             let len = self.program_len;
             // The heap capped at what the session's budget holds beside the stack and the
@@ -343,7 +345,7 @@ mod machine {
                     }
                 }
                 launch.stack_pages(SESSION_STACK_PAGES).heap_pages(u32::try_from(heap).unwrap_or(u32::MAX));
-                launch.arg(&pages).arg(&endpoint).arg(SHELL);
+                told.iter().fold(launch.arg(&pages).arg(&endpoint), |l, arg| l.arg(arg)).arg(SHELL);
                 launch.start()
             };
             let job = started.map_err(|failed| {

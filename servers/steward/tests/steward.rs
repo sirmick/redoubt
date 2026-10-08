@@ -46,7 +46,7 @@ enum Call {
     Connect { labels: Vec<u64>, slot: u16 },
     Console(Option<u32>),
     Release(usize),
-    Launch { budget: usize, connections: Vec<Option<usize>> },
+    Launch { budget: usize, connections: Vec<Option<usize>>, context: Option<String> },
 }
 
 /// Budget and handle `i` are the `i`th the kernel made; `USERS` is the one the steward holds.
@@ -126,9 +126,11 @@ impl Kernel for Recorder {
         _domain: &Domain,
         budget: usize,
         connections: &[Option<usize>],
+        context: Option<&str>,
     ) -> Result<u64, Error> {
         let pid = self.make()? as u64;
-        self.calls.push(Call::Launch { budget, connections: connections.to_vec() });
+        let context = context.map(String::from);
+        self.calls.push(Call::Launch { budget, connections: connections.to_vec(), context });
         Ok(pid)
     }
 
@@ -352,8 +354,9 @@ fn a_login_runs_the_session_batch_and_answers_the_session() {
     );
     assert_eq!(&k.calls[4..10], &connects[..]);
     match &k.calls[10] {
-        Call::Launch { budget, connections } => {
+        Call::Launch { budget, connections, context } => {
             assert_eq!(*budget, session_budget);
+            assert_eq!(context.as_deref(), Some(""), "the principal's default context");
             assert_eq!(connections.len(), 7, "the steward's, then six slots");
             assert_eq!(connections[3], None, "slot 2, the vault, binds to nothing unlabelled");
             assert!(connections.iter().enumerate().all(|(i, c)| i == 3 || c.is_some()));
@@ -430,6 +433,25 @@ fn a_live_context_is_refused_in_use() {
     assert_eq!(call(&mut s, &mut k, SSHD, again).unwrap_err(), ErrorCode::InUse);
     assert_eq!(k.creates().len(), creates);
     call(&mut s, &mut k, SSHD, login("alice", "", &ALICE_KEY)).unwrap();
+}
+
+/// A session's launch is told its context, for its arguments (servers/steward.md,
+/// "Authentication and sessions").
+#[test]
+fn a_sessions_launch_is_told_its_context() {
+    let mut k = Recorder::default();
+    let mut s = started(&mut k);
+    let work = Message::Login(Login { principal: "alice", label: "", context: "work", key: &ALICE_KEY });
+    call(&mut s, &mut k, SSHD, work).unwrap();
+    let contexts: Vec<Option<String>> = k
+        .calls
+        .iter()
+        .filter_map(|c| match c {
+            Call::Launch { context, .. } => Some(context.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(contexts.last(), Some(&Some("work".to_string())), "{contexts:?}");
 }
 
 /// Each operation only on its badge class: on any other it is malformed, as an unknown opcode
