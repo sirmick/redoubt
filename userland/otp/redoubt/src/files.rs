@@ -1050,14 +1050,15 @@ fn below(ns: &Namespace, path: &str) -> Option<Vec<Vec<u8>>> {
 }
 
 impl Redoubt {
-    /// A path above the bindings is answered here: its info and its names; anything that would
-    /// change it is `eacces`.
+    /// A path above the bindings is answered here: its info and its names; making it is `eexist`,
+    /// as it is there, and anything else that would change it is `eacces`.
     fn path_op(&mut self, path: &str, kind: Kind, parent: bool) -> Result<Answer, FileError> {
         if let Some(names) = below(&self.files.ns, path) {
             return match kind {
                 Kind::Info => Ok(Answer::Info(plain(FileKind::Directory, 0, 0, 0))),
                 Kind::ListDir { .. } => Ok(Answer::Names(names)),
                 Kind::ReadFile { .. } => Err(FileError::Eisdir),
+                Kind::MakeDir { .. } => Err(FileError::Eexist),
                 _ => Err(FileError::Eacces),
             };
         }
