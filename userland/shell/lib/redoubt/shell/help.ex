@@ -42,7 +42,7 @@ defmodule Redoubt.Shell.Help do
               "help: there is no command or topic named #{subject}; help() lists them\nusage: help(subject \\\\ nil)"
       end
 
-    Lines.new(lines)
+    Lines.new(lines, :help)
   end
 
   @summary "Show Elixir's documentation of a module or a function"
@@ -60,6 +60,27 @@ defmodule Redoubt.Shell.Help do
   defcommand h(target :: ref) do
     target |> docs() |> Lines.new()
   end
+
+  @doc """
+  How the pager draws a line of help (`Redoubt.Util.Lines`, style `:help`): `{text, bold,
+  indent}`. A Markdown heading is bold without its hashes; so is a line of one capitalized word
+  (an area of the index, a page's "Examples") and a page's usage line, `name(params)`. A list
+  item's further rows are indented under its text, any other line's under its first character.
+  Only the shell's own help is drawn so: nothing else makes lines of this style.
+  """
+  @spec styled(String.t()) :: {String.t(), boolean(), non_neg_integer()}
+  def styled(line) do
+    case Regex.run(~r/^\#{1,6} (.*)$/, line, capture: :all_but_first) do
+      [heading] -> {heading, true, 0}
+      nil -> {line, heading?(line), indent(line)}
+    end
+  end
+
+  # One capitalized word, or `name(params)`.
+  defp heading?(line), do: Regex.match?(~r/^([A-Z][a-z]*|[a-z_]\w*[?!]?\(.*\))$/, line)
+
+  # The leading spaces, and a list item's marker.
+  defp indent(line), do: ~r/^ *([-*] )?/ |> Regex.run(line) |> hd() |> byte_size()
 
   defp footer do
     topics = Enum.map_join(Topics.all(), ", ", fn {name, _title} -> "help(:#{name})" end)

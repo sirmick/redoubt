@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 476
+revision = 477
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1342,8 +1342,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "shell-host"
   needs = ["SHELL3"]
   body = "M2 host step 3: docs/userland/shell.md#session-commands-and-the-pager, #completion, #help. Size M."
-  state = "reported"
-  revision = 409
+  state = "done"
+  revision = 477
   overrides = ["2026-10-08: started by Orchestrator before M1 (reported): The owner started M2's host shell track early; it does not touch M1's remaining work."]
 
 [[node]]

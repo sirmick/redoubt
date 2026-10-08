@@ -20,6 +20,10 @@ defmodule Redoubt.Commandlet.Registry do
   @spec all() :: [Commandlet.t()]
   def all, do: modules() |> Enum.flat_map(& &1.__commandlets__()) |> Enum.sort_by(&Atom.to_string(&1.name))
 
+  @doc "Every command's name, in order, from the index: no command's module is loaded."
+  @spec names() :: [String.t()]
+  def names, do: @index.__commands__() |> Map.keys() |> Enum.sort()
+
   @doc "The modules that declare commandlets, in order."
   @spec modules() :: [module()]
   def modules, do: @index.__modules__()

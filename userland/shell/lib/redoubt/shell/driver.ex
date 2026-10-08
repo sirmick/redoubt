@@ -50,8 +50,9 @@ defmodule Redoubt.Shell.Driver do
     `:beamlet.console_subscribe/0`; with `:messages`, whoever runs the driver sends it
     `{:beamlet_console, bytes}` and `{:beamlet_console, :eof}` itself, as the tests do.
   - `:output`: a function writing bytes to the terminal; the console by default.
-  - `:size`: a function giving the terminal's size as `{cols, rows}`; the console's by default,
-    80 by 24 when it is unknown. It is asked at each prompt.
+  - `:size`: a function giving the terminal's size as `{cols, rows}`, or `:unknown`; the
+    console's by default. It is asked at each prompt. An unknown size is laid out as 80 by 24,
+    and a screen asking whether the size is known (`Redoubt.Screen.terminal_size/0`) is told no.
   - `:history_lines` (#{@history_lines}): how many of the newest lines history keeps.
   - `:esc_timeout` (#{@esc_timeout}): with a screen in front, how many milliseconds a lone ESC
     waits for more before it is the Esc key.
@@ -68,7 +69,7 @@ defmodule Redoubt.Shell.Driver do
     console? = Keyword.get(opts, :input, :console) == :console
     if console?, do: :ok = apply(:beamlet, :console_subscribe, [])
 
-    {cols, rows} = size.()
+    {cols, rows} = geometry(size)
     group = :group.start(self(), shell, echo: true, expand_below: true, expand_fun: &expand/1)
 
     state = %{
@@ -116,6 +117,10 @@ defmodule Redoubt.Shell.Driver do
       {:redoubt_screen, :open, pid, ctrl_c} when ctrl_c in [:interrupt, :key] ->
         loop(open_screen(state, pid, ctrl_c))
 
+      {:redoubt_screen, :size, pid} ->
+        send(pid, {:redoubt_screen, :size, state.size.()})
+        loop(state)
+
       {:redoubt_screen, :frame, pid, bytes} when state.screen != nil and state.screen.pid == pid ->
         loop(frame(state, bytes))
 
@@ -150,7 +155,7 @@ defmodule Redoubt.Shell.Driver do
         loop(state)
 
       {^group, :tty_geometry} ->
-        {cols, rows} = state.size.()
+        {cols, rows} = geometry(state.size)
         send(group, {self(), :tty_geometry, {cols, rows}})
         loop(%{state | term: Term.resize(state.term, cols, rows)})
 
@@ -230,7 +235,7 @@ defmodule Redoubt.Shell.Driver do
   defp prompting?(_request), do: false
 
   defp sized(state) do
-    {cols, rows} = state.size.()
+    {cols, rows} = geometry(state.size)
     Term.resize(state.term, cols, rows)
   end
 
@@ -315,7 +320,7 @@ defmodule Redoubt.Shell.Driver do
   # its module's code. The bytes that interrupt a screen are the session's key, and Ctrl+C
   # unless the screen takes it as a key.
   defp open_screen(%{screen: nil} = state, pid, ctrl_c) do
-    {cols, rows} = state.size.()
+    {cols, rows} = geometry(state.size)
     write(state, Frame.enter())
     send(pid, {:redoubt_screen, :opened, cols, rows})
     interrupts = if ctrl_c == :key, do: [<<@session_key>>], else: [<<@session_key>>, <<3>>]
@@ -461,10 +466,19 @@ defmodule Redoubt.Shell.Driver do
   defp console_size do
     case apply(:beamlet, :console_size, []) do
       {cols, rows} when is_integer(cols) and is_integer(rows) -> {cols, rows}
+      :unknown -> :unknown
+    end
+  end
+
+  # The size to lay out at: an unknown one is taken as 80 by 24.
+  defp geometry(size) do
+    case size.() do
+      {cols, rows} -> {cols, rows}
       :unknown -> {80, 24}
     end
   end
 
-  # Completion comes with the commands' registry; until then a Tab is a beep.
+  # The shell sets its completer before each read (`Redoubt.Shell.Completer`); until it does, a
+  # Tab is a beep.
   defp expand(_before), do: {:no, ~c"", []}
 end

@@ -14,6 +14,7 @@ defmodule Redoubt.Commandlet.Param do
   | `command` | a commandlet's name, as an atom or a string; the parameter holds the commandlet |
   | `name` | a name, as an atom or a string; the parameter holds the string, so a command can look it up without making an atom |
   | `ref` | a module, or a function reference such as `&File.cp/2`; the parameter holds `{:module, m}` or `{:function, m, f, arity}` |
+  | `term` | any value |
   | `handle` | a handle the session holds, as `ns_lookup/1` gives one: a resource term, which is a reference to Erlang code (a reference that is not a handle is refused by the native it reaches) |
   | `many(type)` | one `type`, or a list of them; the parameter holds a list. Only the last parameter, or the one before `flags` |
   | `flags(name: type, ...)` | options, as a keyword list: `sort(lines, reverse: true)`. The parameter holds a map with every flag, a flag not given being `false` if it is a boolean and `nil` if not. Only the last parameter; its default is `[]` |
@@ -36,7 +37,7 @@ defmodule Redoubt.Commandlet.Param do
           default: :none | {:default, String.t()}
         }
 
-  @types [:path, :string, :integer, :boolean, :pattern, :lines, :command, :name, :ref, :handle]
+  @types [:path, :string, :integer, :boolean, :pattern, :lines, :command, :name, :ref, :handle, :term]
   @options %{integer: [:min, :max]}
 
   @doc false
@@ -184,6 +185,7 @@ defmodule Redoubt.Commandlet.Param do
       else: {:error, "there is no module #{inspect(value)}"}
   end
 
+  defp accept({:term, _opts}, value), do: {:ok, value}
   defp accept(_type, _value), do: {:error, nil}
 
   # Every flag, from what was given or its default, into a map; or the first thing wrong.
@@ -268,6 +270,7 @@ defmodule Redoubt.Commandlet.Param do
   def describe({:command, _opts}), do: "a command's name"
   def describe({:name, _opts}), do: "a name, as an atom or a string"
   def describe({:ref, _opts}), do: "a module, or a function reference such as &File.cp/2"
+  def describe({:term, _opts}), do: "any value"
 
   def describe({:flags, flags}),
     do: "options: " <> Enum.map_join(flags, ", ", &"#{&1.name}: #{name(&1.type)}")
