@@ -1154,8 +1154,10 @@ tells whoever reads the console who runs when. It exists only under the Cargo fe
 The other diagnostic features are off by default in the same way: `walk-trace`, which implies
 the trace and brackets each receive's pump, timer expiry and reconcile in it, for `worst-walk`
 alone; `lock-trace`, which implies the trace and records after each wait for the kernel lock its
-ticket and the sections ahead of it when drawn (`k`), for `sched-lock-contention`,
-`sched-lock-contention-4` and `irq-boot-hart-only`; `irq-boot-hart-only`, whose boot hart alone
+ticket and the sections ahead of it when drawn (`k`), for `irq-boot-hart-only`; `hold-trace`,
+which implies `lock-trace` and records each section of the kernel lock at its release, its ticks,
+cause and audits (`h`, `j`), for `sched-lock-contention` and `sched-lock-contention-4`;
+`irq-boot-hart-only`, whose boot hart alone
 takes device interrupts, for R78's negative case at two harts; `sched-inject-tie-fault`, a debug-only break of the tie rule that implies the trace;
 `sched-capped-holds-floor`, whose floor counts the capped budgets, for R12's negative case at two
 harts; `sched-test-and-set-entry`, which replaces the kernel lock by test-and-set, and

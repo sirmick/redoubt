@@ -565,7 +565,13 @@ carries neither the feature nor the record. The records are written holding the 
 appear in the order they took it, and the oracle requires that order to be the tickets', each
 drawn behind fewer sections than the harts: no wait outlasts the sections queued ahead of it
 ([R78 (fair kernel entry)](kernel/scheduling.md#r78-fair-kernel-entry); `sched-lock-contention` at
-two harts, `sched-lock-contention-4` at four). `sched-capped` runs the model's capped scenarios
+two harts, `sched-lock-contention-4` at four). A kernel built with `hold-trace`, which implies
+`lock-trace`, also records each section of the lock as it is released (`h`: its first and last
+tick; then `j`: its cause, a system call's number, an interrupt's or an exception's code, and the
+ticks of audits inside it). The oracle reports the sections' lengths net of their audits, the
+longest by cause, and splits the lock waits into the part another hart's section covered (its
+audits pro rata) and the part with the lock free, the hand-off to the halted waiter. Both
+contention cases carry it; it judges nothing. `sched-capped` runs the model's capped scenarios
 ([model](kernel/model.md#scheduler-scenarios)) on the machine at two, three and four harts, each
 budget's share judged as below. It is itself checked against the model's ranks and against traces broken one clause at a
 time. The tracing kernel is a test build only

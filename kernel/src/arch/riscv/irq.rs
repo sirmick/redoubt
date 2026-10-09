@@ -175,6 +175,13 @@ pub extern "C" fn trap_handler(
         crate::sched::trace::kernel_from(crate::sched::now_ticks());
     }
     let sc = scause::read();
+    #[cfg(feature = "hold-trace")]
+    crate::sched::trace::hold_cause(match (sc.is_interrupt(), from_user) {
+        (true, _) => 0x200 + sc.code() as u64,
+        (false, true) if sc.code() == 8 && (0x100..0x200).contains(&a0) => a0 as u64,
+        (false, true) if sc.code() == 8 => 0x1ff,
+        (false, _) => 0x300 + sc.code() as u64,
+    });
 
     // If we were previously in Supervisor mode and we've just tried to write to
     // invalid memory, then we likely blew out the stack.

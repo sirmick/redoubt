@@ -384,7 +384,7 @@ two, where a file serves two mechanisms).
   first process runs ([R19 (kernel W^X)](memory.md#r19-kernel-wx)). The loader is TCB for the
   rest ([boot](boot.md)).
 - **Test builds carry more.** The kernel source has features only some bench cases turn on:
-  `sched-trace`, `walk-trace`, `lock-trace`, `dma-reset-deaf`, `sum-probe`, `panic-in-print` and `smp`, and `sched-inject-tie-fault` for a recorded negative
+  `sched-trace`, `walk-trace`, `lock-trace`, `hold-trace`, `dma-reset-deaf`, `sum-probe`, `panic-in-print` and `smp`, and `sched-inject-tie-fault` for a recorded negative
   run. A production build leaves them off
   ([R23 (no test channels)](scheduling.md#r23-no-test-channels)); a kernel built with them is
   not the kernel this page measures.

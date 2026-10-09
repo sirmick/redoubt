@@ -851,6 +851,11 @@ pub mod trace {
     /// With `lock-trace`, just after a `Q`: the wait's ticket in the id, and the sections ahead of
     /// it when it was drawn in the pass field, so the oracle can check the waits end in ticket order.
     pub const LOCK_TICKET: u8 = b'k';
+    /// With `hold-trace`, as the kernel lock is released: the section's first tick in the id and
+    /// its last in the pass field, then `j` with its cause in the id ([`hold_cause`]) and the
+    /// ticks of audits it ran in the pass field.
+    pub const HELD: u8 = b'h';
+    pub const HELD_CAUSE: u8 = b'j';
 
     /// Frames the ring takes (64 MiB, 256 MiB with `sched-trace-large`), and the records they hold.
     const PAGES: usize = if cfg!(feature = "sched-trace-large") { 65536 } else { 16384 };
@@ -1018,6 +1023,50 @@ pub mod trace {
         record(LOCK_TICKET, u64::from(ticket), u128::from(ahead));
         #[cfg(not(feature = "lock-trace"))]
         let _ = (ticket, ahead);
+    }
+
+    /// The section holding the kernel lock now (`hold-trace`): when it took it, why, and the
+    /// audit ticks counted before it.
+    #[cfg(feature = "hold-trace")]
+    struct Hold {
+        since: u64,
+        cause: u64,
+        audits: u64,
+    }
+
+    #[cfg(feature = "hold-trace")]
+    static HOLD: KernelCell<Hold> = KernelCell::new(Hold { since: 0, cause: 0, audits: 0 });
+
+    /// This hart has just taken the kernel lock (`cell.rs`).
+    #[cfg(feature = "hold-trace")]
+    pub fn hold_begin() {
+        let (since, audits) = (super::ticks(), KERNEL.with(|k| k.audits));
+        HOLD.with(|h| *h = Hold { since, cause: 0, audits });
+    }
+
+    /// What the section is for, the first cause given: a system call's number, `0x200` plus an
+    /// interrupt's code, `0x300` plus an exception's; 0, `kmain`'s, if none is.
+    #[cfg(feature = "hold-trace")]
+    pub fn hold_cause(cause: u64) {
+        HOLD.with(|h| {
+            if h.cause == 0 {
+                h.cause = cause;
+            }
+        });
+    }
+
+    /// This hart is about to release the kernel lock: the section's records (`h`, `j`), once the
+    /// ring has its frames. The boot's first section began before the clock's zero was set, and
+    /// is not recorded.
+    #[cfg(feature = "hold-trace")]
+    pub fn hold_end() {
+        let (now, audits) = (super::ticks(), KERNEL.with(|k| k.audits));
+        let (since, cause, before) = HOLD.with(|h| (h.since, h.cause, h.audits));
+        if RING.with(|r| r.pages[0] == 0) || since > now {
+            return;
+        }
+        record(HELD, since, u128::from(now));
+        record(HELD_CAUSE, cause, u128::from(audits.saturating_sub(before)));
     }
 
     /// A checked build's audit took `ticks`.
