@@ -6,6 +6,10 @@ programs = ["sched-latency"]
 kernel_features = ["sched-trace"]
 # Order only: R10's time is host time here, so no bound.
 post_check = "sched_oracle"
+# One hart: without icount the harts run at once, and the kernel's console lines (the kill line
+# `[!] Terminating process`, which budget-destroy-kills reads) land inside the program's lines on
+# another hart, so a sample or count line arrives broken (kernel/scheduling.md, "Residual risks").
+keep_smp = true
 timeout_secs = 1800
 expect = [
     '^\[latency\] the RTC keeps virtual time: (met|missed)',
