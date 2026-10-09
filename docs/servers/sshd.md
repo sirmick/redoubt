@@ -364,7 +364,12 @@ so such a session still cannot authenticate there with a `keyd` key.
 Status: planned · M1 (sessions over SSH, kept apart)
 
 - **`sshd` crashes:** every SSH connection drops; sessions lose their channel and are ended by the
-  steward. `init` restarts `sshd` ([init](init.md#restarts-and-reboots)).
+  steward. `init` restarts `sshd` ([init](init.md#restarts-and-reboots)). The restarted instance
+  is handed its predecessor's badge at `ipd`, and with it that one's sockets, which outlive their
+  owner until they are closed or aborted ([ipd](ipd.md#the-net-tree)): its listener on port 22
+  would take every new connection and never accept it. So at its start `sshd` reads `/tcp` and
+  aborts every socket the badge holds, then sends `Tversion`, which clunks every fid the
+  predecessor left ([serving](serving.md#the-9p-server-skeleton)), before it attaches and listens.
 - **`keyd` fails a signature:** the key exchange fails and the client sees a closed connection.
 
 **Open:** none. A closed channel ends its session (above); there is no reattaching.

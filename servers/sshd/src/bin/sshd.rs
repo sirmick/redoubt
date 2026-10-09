@@ -165,6 +165,32 @@ mod machine {
         let _ = ipd.write(lend, ctl, 0, &bytes[..len]);
     }
 
+    /// Aborts every socket this badge holds at `ipd`. A restarted instance is handed its
+    /// predecessor's badge, and a socket belongs to the badge until it is closed or aborted
+    /// (servers/ipd.md, "A socket lives"): without this, the old listener on port 22 would take
+    /// the connections nobody accepts any more, and the old channels' sockets would linger.
+    fn abort_leftovers(ipd: Handle, lend: &mut Lend) {
+        let Ok(net) = File9::attach(Endpoint::from_handle(ipd), lend) else { return };
+        let Ok(dir) = net.open(lend, "tcp", mode::OREAD) else { return };
+        let mut names = Vec::new();
+        let mut at = 0;
+        while let Ok((entries, next)) = dir.read_dir(lend, at) {
+            if entries.is_empty() {
+                break;
+            }
+            names.extend(entries.into_iter().map(|e| e.name));
+            at = next;
+        }
+        let _ = dir.close(lend);
+        let (bytes, len) = ctl_op(net_ctl::Message::Abort(net_ctl::Abort {}));
+        for name in names {
+            if let Ok(ctl) = net.open(lend, &format!("tcp/{name}/ctl"), mode::ORDWR) {
+                let _ = ctl.write_at(lend, 0, &bytes[..len]);
+                let _ = ctl.close(lend);
+            }
+        }
+    }
+
     fn open_at(ipd: &Nine, lend: &mut Lend, fid: u32, path: &str) -> bool {
         ipd.walk(lend, ROOT, fid, path).is_ok() && ipd.open(lend, fid, mode::ORDWR).is_ok()
     }
@@ -703,7 +729,11 @@ mod machine {
         };
         let handed = Handed { ipd, keyd, steward, console, host };
         let net = Nine::new(Endpoint::from_handle(ipd));
-        if net.attach(&mut lend, ROOT, "").is_err() {
+        // A restarted instance holds the same badge as the one before it: its sockets are
+        // aborted, and `Tversion` clunks every fid it left at `ipd` (servers/serving.md, "The 9P
+        // server skeleton"), before this one attaches.
+        abort_leftovers(ipd, &mut lend);
+        if net.version(&mut lend).is_err() || net.attach(&mut lend, ROOT, "").is_err() {
             say(console, "sshd: ipd would not attach\n");
             return NOT_STARTED;
         }
