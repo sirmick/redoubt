@@ -406,7 +406,7 @@ kernel, running the call to its end with interrupts off, would stall every other
 
 ## Failure and restart
 
-<details><summary>Status: built · tested (7)</summary>
+<details><summary>Status: built · tested (8)</summary>
 
 - bench:touch-beyond-ram
 - bench:lend-untouched-page
@@ -415,6 +415,7 @@ kernel, running the call to its end with interrupts off, would stall every other
 - bench:map-fixed-attack
 - bench:process-map-untouched-attack
 - bench:return-lent-unmapped
+- bench:fault-report-bound
 
 </details>
 
@@ -425,7 +426,12 @@ kernel, running the call to its end with interrupts off, would stall every other
 - **A permission fault ends the process.** A store to a page that is not writable, or a fetch
   from one that is not executable, is never mistaken for a page to back. The process faults,
   and its exit notice carries the RISC-V cause (12 for an instruction page fault, 15 for a store
-  page fault; [processes](processes.md#exit-notices)).
+  page fault; [processes](processes.md#exit-notices)). The console gets one line,
+  `PROGRAM HALT: CPU Exception on PID n: <cause> of <address> at <pc>`, printed holding the
+  kernel lock; the thread's registers and the address space's map, a line a mapped page, are
+  printed only for a fault in the kernel and in a `debug-print` build. Printed for every fault,
+  they held the lock for as long as the process was large: 837 ms on rv64 for a process of 4096
+  pages, against 7.5 ms for its teardown now (`bench:fault-report-bound`, under `icount`).
 - **A process ends:** every frame it owns returns to the pool and its charge to its budget. A
   page it had lent is its server's until the server replies (R3), and is never reused while the
   server has it mapped. Its `dma_alloc` pages wait for the device reset (R11).

@@ -393,13 +393,20 @@ pub extern "C" fn trap_handler(
         pid,
         ex
     );
-    ArchProcess::with_current(|process| {
-        println!("Current thread {}:", process.current_tid());
-        process.print_current_thread();
-    });
+    // The thread's registers and the address space's map are a kernel failure's diagnosis, and a
+    // debug build's. A program's fault prints its one line: the report is printed holding the
+    // kernel lock, and the map is a line a mapped page, so it would hold every other hart for as
+    // long as the faulting process is large (R12: a call's kernel time follows what it may cost;
+    // kernel/scheduling.md, "Fair kernel entry is bounded by count").
+    if is_kernel_failure || cfg!(feature = "debug-print") {
+        ArchProcess::with_current(|process| {
+            println!("Current thread {}:", process.current_tid());
+            process.print_current_thread();
+        });
+        MemoryMapping::current().print_map();
+    }
 
     // If this is a failure in the kernel, go into an infinite loop
-    MemoryMapping::current().print_map();
     if is_kernel_failure {
         #[allow(clippy::empty_loop)]
         loop {}

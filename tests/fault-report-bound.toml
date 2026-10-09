@@ -1,0 +1,21 @@
+description = "A program's fault costs what its handling needs, not what the program holds (kernel/scheduling.md, \"Fair kernel entry is bounded by count\"): a process with 4096 pages mapped faults, and the kernel's lock section for the fault, net of the checked build's audits, is bounded by the oracle from the trace (`hold-trace`); the fault's report is its one line, where it once printed the process's map, a line a page, holding the lock (virtual time, checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+icount = "shift=3,sleep=off"
+programs = ["log-server", "fault-report-witness", "fault-report-big"]
+kernel_features = ["hold-trace"]
+# The fault's section is its process's teardown, 7.5 ms for 4096 pages on both widths; printing
+# the map, a line a page, held the lock 837 ms on rv64 and 865 ms on rv32 (a recorded negative
+# run). Ticks are tenths of a microsecond on QEMU's virt board.
+post_check = "sched_oracle fault_section_max_ticks=150000"
+timeout_secs = 60
+expect = [
+    '^\[pid 4\] \[big\] mapped 4096 pages; faulting$',
+    '^PROGRAM HALT: CPU Exception on PID \d+: Store page fault of 0x00001000 ',
+    '^\[pid 3\] \[witness\] the big process.s fault ended it$',
+    '^SCHED-TRACE-END \d+ dropped 0$',
+]
+forbid = ['^Memory Maps for', '^Current thread']
+poweroff = true
+reporter = "fault-report-witness"

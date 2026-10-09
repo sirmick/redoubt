@@ -2719,6 +2719,10 @@ fn lock_order(tickets: &[(u64, u64)], waits: &[(u64, u64, u64)], harts: u64) -> 
     ))
 }
 
+/// The causes of a section a page fault began (`hold-trace`): an instruction, load or store page
+/// fault, `0x300` plus its exception code.
+const PAGE_FAULTS: [u64; 3] = [0x30c, 0x30d, 0x30f];
+
 /// A section's cause by name: a system call's, an interrupt's or an exception's code, or `kmain`.
 fn cause_name(cause: u64) -> String {
     match cause {
@@ -2784,8 +2788,9 @@ fn sections(sections: &[Section], waits: &[(u64, u64, u64)]) -> String {
 /// `gate_harts=N`, those targets are judged on a trace of at most N harts (`F`) and only reported
 /// on more: the targets are gated at one hart and two and recorded at four. A `walk-trace`
 /// kernel's walks may each be bounded, `pump_max_us=N`, `expiry_max_us=N` and
-/// `reconcile_max_us=N`, the longest net of audits, judged before R10's p99. Every window a target
-/// judges has the checked build's audit time inside it subtracted; R10's has none. Each charged
+/// `reconcile_max_us=N`, the longest net of audits, judged before R10's p99; a `hold-trace`
+/// kernel's longest section a page fault caused, `fault_section_max_ticks=N`, net of audits. Every window a
+/// target judges has the checked build's audit time inside it subtracted; R10's has none. Each charged
 /// share the program printed is judged on the kernel's charges in the trace
 /// ([`check_charged_share`]), and each share across harts on the same charges net of lock waits
 /// ([`check_hart_share`]), with the timer interrupts inside its window nobody paid for and those
@@ -2865,7 +2870,7 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
             .ok_or_else(|| format!("unknown sched_oracle argument {arg:?}"))?;
         let measure = name.strip_suffix("_p50_us").or_else(|| name.strip_suffix("_p99_us"));
         let walk = name.strip_suffix("_max_us");
-        if !(["r10_p99_us", "lease_end_p99_us", "gate_harts"].contains(&name)
+        if !(["r10_p99_us", "lease_end_p99_us", "gate_harts", "fault_section_max_ticks"].contains(&name)
             || measure.is_some_and(|m| MEASURES.contains(&m))
             || walk.is_some_and(|w| WALKS.contains(&w)))
         {
@@ -2909,6 +2914,22 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
             net.iter().max().ok_or(format!("a {name} bound is set, but the trace holds no {name} walk"))?;
         if max > bound {
             return Err(format!("the {name} walk's max is {max} µs net of audits, above {bound}"));
+        }
+    }
+    // With `hold-trace`, the longest kernel section a page fault from user mode caused, net of
+    // audits: a fault's handling may not cost what the faulting process holds.
+    if let Some(bound) = bounds.get("fault_section_max_ticks") {
+        let max = sum
+            .sections
+            .iter()
+            .filter(|s| PAGE_FAULTS.contains(&s.cause))
+            .map(|s| s.to - s.from - s.audits)
+            .max()
+            .ok_or("a fault section bound is set, but the trace holds no section a page fault caused")?;
+        if max > *bound {
+            return Err(format!(
+                "a page fault's kernel section held the lock {max} ticks net of audits, above {bound}"
+            ));
         }
     }
     if n == 0 && (bounds.contains_key("r10_p99_us") || bounds.contains_key("lease_end_p99_us")) {
@@ -4033,12 +4054,16 @@ mod tests {
 
     /// A trace whose records name the hart that wrote them: `(entry, kind, id, pass, hart)`.
     fn verdict_on(records: &[(u64, char, u64, u128, u64)]) -> Result<String, String> {
+        run(&verdict_log(records), "")
+    }
+
+    /// The log of `records`, each `(entry, kind, id, pass, hart)`, numbered in order.
+    fn verdict_log(records: &[(u64, char, u64, u128, u64)]) -> String {
         let mut s = String::from("boot noise\n");
         for (i, (entry, kind, id, pass, hart)) in records.iter().enumerate() {
             s += &format!("SCHED-TRACE {i} {entry} {kind} {id} {pass:x} {hart}\n");
         }
-        s += &format!("SCHED-TRACE-END {} dropped 0\n", records.len());
-        run(&s, "")
+        s + &format!("SCHED-TRACE-END {} dropped 0\n", records.len())
     }
 
     /// Across harts a pick passes over a budget ranked ahead only if no thread of it waits for a
@@ -4186,6 +4211,25 @@ mod tests {
             ),
             "{ok}"
         );
+        // A page fault's section is bounded net of its audits.
+        let fault = |bound: &str| {
+            let records = [
+                (1, 'W', 5, 0x10, 0),
+                (1, 'K', 5, 0x10, 0),
+                (2, 'h', 100, 300, 0),
+                (2, 'j', 0x30f, 50, 0),
+                (2, 'h', 300, 900, 0),
+                (2, 'j', 0x115, 0, 0),
+            ];
+            run(&verdict_log(&records), bound)
+        };
+        assert!(fault("fault_section_max_ticks=150").is_ok());
+        assert!(fault("fault_section_max_ticks=149").is_err_and(|e| {
+            e.contains("a page fault's kernel section held the lock 150 ticks net of audits, above 149")
+        }));
+        let none =
+            run(&verdict_log(&[(1, 'W', 5, 0x10, 0), (1, 'K', 5, 0x10, 0)]), "fault_section_max_ticks=1");
+        assert!(none.as_ref().is_err_and(|e| e.contains("no section a page fault caused")), "{none:?}");
         let orphan = verdict_on(&[(1, 'W', 5, 0x10, 0), (2, 'h', 100, 300, 0), (2, 'j', 0x115, 0, 1)]);
         assert!(orphan.unwrap_err().contains("a kernel section's cause after no section of its hart"));
         let over = verdict_on(&[(1, 'W', 5, 0x10, 0), (2, 'h', 100, 300, 0), (2, 'j', 0x115, 201, 0)]);
