@@ -1,0 +1,62 @@
+description = "The launched system at rest (GETTING-STARTED.md, \"Try the system\"): the machine `./launch --system` boots, at four harts, with alice logged in over SSH at a terminal and her prompt left alone for 60 s, beside her console session's. Over that window the bench counts, from QEMU's own log, the interrupts each hart takes and the system calls from user mode, and QEMU's host CPU time, each per second against a ceiling: what an idle Redoubt costs the host. The prompt still answers after it. The measures are QEMU's and the host's, not the guest's"
+arch = ["rv64", "rv32"]
+kind = "boot"
+recipe = "image/boot.toml"
+# Boot launch's own command line; the bench reaches QEMU's log through its monitor.
+launch = true
+smp = [4]
+# The machine launch boots: four harts, launch's default.
+keep_smp = true
+# The image needs 1 GiB: the principals' budgets, each holding a shell VM's session, do not fit
+# the users budget 256 MiB leaves (docs/kernel/budgets.md).
+memory_mib = 1024
+# One login, then a minute at rest.
+timeout_secs = 900
+expect = [
+    '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+]
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    '^init: .* (exited|faulted|was killed)',
+    'init: restarted',
+    'EXCEPTION',
+    'sshd: login .*: refused',
+]
+expect_after = [
+    '^\[con [0-9a-f]{16}\] sshd: login alice: session [0-9a-f]{16}, labels \[\]$',
+]
+
+[[session]]
+user = "alice"
+pty = true
+steps = [
+    { expect = '\([0-9]+\)> ' },
+    { idle = 60 },
+    { send = "\"still-\" <> \"here\"\n" },
+    { expect = '"still-here"' },
+]
+
+# About twice the most of nine 60 s windows measured on 2026-10-09, five rv64 and four rv32, on
+# two bases (main 3206c43b4 with TRY1, and main 311ca9b48): 4.3 interrupts a second on the
+# busiest hart (rv32; rv64 3.8), 8.7 system calls from user mode (rv32; rv64 6.5), and 0.004 host
+# cores (rv32; rv64 0.002 to 0.003). Every hart took timer interrupts in every window. Those
+# windows were measured before the session's next step waited for `log none`, so that step's
+# command fell in them. Since, one window on each width measured 4.1 system calls a second, so
+# `user_ecalls` is about four times the measurement, loose by about 2x, until the kernel's lock
+# wake-ups at rest are cut and the ceilings set again.
+[idle]
+interrupts_per_hart = 9.0
+user_ecalls = 18.0
+host_cores = 0.01
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+
+[net]
+forward = [22]
+host_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINBKsjJ0K7SrOhNovUYV5ObQIkq3GgFrr4UgozLJd4c3"

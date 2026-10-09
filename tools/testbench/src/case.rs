@@ -402,6 +402,10 @@ pub struct Boot {
     /// Alice's login key for this pack, set by `--run --system`, not by a case.
     #[serde(skip)]
     pub login_key: Option<String>,
+    /// Measure the guest over a session's `idle` step: its interrupts and exceptions from QEMU's
+    /// log, which the bench turns on through the monitor for that step alone, and QEMU's host CPU
+    /// time; each rate is held to its ceiling.
+    pub idle: Option<Idle>,
     /// SSH sessions to the guest's port 22, run once every `expect` has matched, while the
     /// console is still watched.
     #[serde(default)]
@@ -464,6 +468,19 @@ impl BundleFile {
         }
         Ok(serde_json::to_vec_pretty(&manifest)?)
     }
+}
+
+/// The ceilings of an idle window ([`Boot::idle`]), each per second of it. None: measured and
+/// printed, not judged.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Idle {
+    /// Interrupts any one hart takes.
+    pub interrupts_per_hart: Option<f64>,
+    /// System calls from user mode, every hart's.
+    pub user_ecalls: Option<f64>,
+    /// QEMU's host CPU time, in host cores.
+    pub host_cores: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -617,6 +634,9 @@ pub enum Step {
     /// Set a `pty = true` session's terminal to `[cols, rows]`, which makes ssh send a
     /// `window-change` if the size changed.
     Resize([u16; 2]),
+    /// Type nothing for this many seconds, still reading the output, while the bench measures the
+    /// guest at rest ([`Boot::idle`]).
+    Idle(f64),
 }
 
 #[derive(Debug, Deserialize)]
@@ -1007,9 +1027,21 @@ impl Case {
                     }
                     None => {}
                 }
+                // The bench reaches QEMU's log through the monitor launch's line multiplexes on
+                // the console (`-nographic`): one window per boot.
+                let idles = boot.session.iter().flat_map(|s| &s.steps).filter(|s| matches!(s, Step::Idle(_)));
+                ensure!(
+                    idles.count() == usize::from(boot.idle.is_some()),
+                    "[idle] takes exactly one session step `idle`, and an `idle` step needs [idle]"
+                );
+                ensure!(boot.idle.is_none() || boot.launch, "[idle] needs launch = true");
                 check_sessions(&boot.session)
             }
-            Kind::SshLoopback(loopback) => check_sessions(&loopback.session),
+            Kind::SshLoopback(loopback) => {
+                let idle = loopback.session.iter().flat_map(|s| &s.steps).any(|s| matches!(s, Step::Idle(_)));
+                ensure!(!idle, "`idle` is a step of a boot case's sessions");
+                check_sessions(&loopback.session)
+            }
             Kind::HostTests(host) => {
                 ensure!(host.timeout_secs.is_none() || host.fanout.is_some(), "timeout_secs needs a fanout");
                 // `timeout 0` is no deadline at all.
@@ -1119,6 +1151,9 @@ fn check_sessions(sessions: &[Session]) -> Result<()> {
                     "session {user}: only `mark` may follow `exit`"
                 ),
                 Step::Resize(_) => ensure!(session.pty, "session {user}: `resize` needs `pty = true`"),
+                Step::Idle(seconds) => {
+                    ensure!(*seconds > 0.0 && seconds.is_finite(), "session {user}: `idle` takes seconds")
+                }
                 _ => {}
             }
         }
@@ -1291,6 +1326,32 @@ mod tests {
         assert!(case("{ path = \"m.json\" }").check().is_ok());
         let err = case("\"tester\"").check().unwrap_err().to_string();
         assert!(err.contains("only into a manifest read from a path"), "{err}");
+    }
+
+    /// An `idle` step needs `[idle]` and `[idle]` one `idle` step, in a launch case; a loopback
+    /// case takes none.
+    #[test]
+    fn an_idle_step_needs_idle_and_launch() {
+        let case = |launch: bool, idle: bool, steps: &str| -> Result<()> {
+            let text = format!(
+                "description = \"d\"\nkind = \"boot\"\nprograms = [\"tester\"]\nexpect = []\nlaunch = {launch}\n\
+                 [[session]]\nuser = \"alice\"\nsteps = [{steps}]\n{}[net]\nforward = [22]\n",
+                if idle { "[idle]\n" } else { "" }
+            );
+            let case: Case = toml::from_str(&text).unwrap();
+            case.check()
+        };
+        // A launch case needs a recipe, which this fixture lacks: the count is checked without one.
+        let err = |r: Result<()>| r.unwrap_err().to_string();
+        assert!(err(case(false, false, "{ idle = 1 }")).contains("exactly one session step"));
+        assert!(err(case(false, true, "")).contains("exactly one session step"));
+        assert!(err(case(false, true, "{ idle = 1 }, { idle = 1 }")).contains("exactly one session step"));
+        assert!(err(case(false, true, "{ idle = 1 }")).contains("[idle] needs launch = true"));
+        assert!(case(false, false, "{ expect = 'x' }").is_ok());
+        let loopback = "description = \"d\"\nkind = \"ssh-loopback\"\nauthorized = [\"alice\"]\n\
+                        [[session]]\nuser = \"alice\"\nsteps = [{ idle = 1 }]\n";
+        let loopback: Case = toml::from_str(loopback).unwrap();
+        assert!(loopback.check().unwrap_err().to_string().contains("a boot case's sessions"));
     }
 
     /// A case's manifest gives a volume with `bytes` its disk's partition size: one that does not

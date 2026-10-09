@@ -13,6 +13,7 @@ mod disk;
 mod elixir;
 mod fanout;
 mod fmt;
+mod idle;
 mod launch;
 mod memory;
 mod peer;
@@ -1166,7 +1167,7 @@ fn ssh_loopback(
         LoopbackServer::Openssh => ssh::loopback(workspace, dir, &case.name, authorized, host_key)?,
     };
     let abort = std::sync::atomic::AtomicBool::new(false);
-    let sessions = ssh::run(workspace, &loopback.session, &server, logs, &case.name, deadline, &abort)?;
+    let sessions = ssh::run(workspace, &loopback.session, &server, logs, &case.name, deadline, &abort, None)?;
     // What the server saw comes first: a case that fails as its `must_fail` expects still fails if
     // the server did not see it that way.
     let server_log = ssh::loopback_log(&logs.join("ssh"), &case.name);

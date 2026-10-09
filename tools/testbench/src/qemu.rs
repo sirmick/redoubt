@@ -16,6 +16,7 @@ use regex::Regex;
 use serde_json::{Value, json};
 
 use crate::case::{ALWAYS_FORBIDDEN, Boot, PASSED};
+use crate::idle;
 use crate::memory;
 use crate::peer;
 use crate::ssh;
@@ -677,7 +678,16 @@ pub fn run(
         }
     }
     if !boot.session.is_empty() {
-        if let Some(why) = run_sessions(&mut console, boot, workspace, forwards, identity, log, deadline)? {
+        if let Some(why) = run_sessions(
+            &mut console,
+            (guest.0.id(), image.smp),
+            boot,
+            workspace,
+            forwards,
+            identity,
+            log,
+            deadline,
+        )? {
             return Ok(Verdict::Fail(why));
         }
     }
@@ -851,9 +861,12 @@ impl After {
 
 /// Run the case's SSH sessions while still watching the console, so that a panic or the guest
 /// dying during a session fails the case, then read on until every `expect_after` pattern has
-/// matched or the deadline passes. Returns why it failed, if it did.
+/// matched or the deadline passes. Returns why it failed, if it did. With `[idle]`, a session's
+/// `idle` step is measured on `guest`, QEMU's pid and the harts it runs, and judged.
+#[allow(clippy::too_many_arguments)]
 fn run_sessions(
     watched: &mut Console,
+    guest: (u32, u32),
     boot: &Boot,
     workspace: &Path,
     forwards: &[Forward],
@@ -867,11 +880,38 @@ fn run_sessions(
     let server = ssh::Server::Guest { forwards, host_key, identity };
     let abort = AtomicBool::new(false);
     let mut after = After::new(&boot.expect_after)?;
+    let (idle_tx, idle_rx) = mpsc::channel::<ssh::IdleEdge>();
+    let (pid, harts) = guest;
+    let mut window = boot
+        .idle
+        .as_ref()
+        .map(|_| idle::Window::new(pid, harts, log.with_extension("int.log")))
+        .transpose()?;
+    // The idle step's edges, as the session told them: the window starts or ends on the console,
+    // and the session, waiting, is told it has.
+    let mut idle_edges = |watched: &mut Console| -> Result<()> {
+        while let Ok((on, done)) = idle_rx.try_recv() {
+            if let Some(window) = window.as_mut() {
+                match on {
+                    true => window.start(&mut watched.stdin)?,
+                    false => window.end(&mut watched.stdin)?,
+                }
+            }
+            done.send(()).ok();
+        }
+        Ok(())
+    };
     let failed: Option<String> = std::thread::scope(|scope| -> Result<Option<String>> {
-        let sessions =
-            scope.spawn(|| ssh::run(workspace, &boot.session, &server, logs, &prefix, deadline, &abort));
+        let (server, prefix, abort) = (&server, &prefix, &abort);
+        let idle = boot.idle.is_some().then_some(idle_tx);
+        let sessions = scope
+            .spawn(move || ssh::run(workspace, &boot.session, server, logs, prefix, deadline, abort, idle));
         let mut console: Result<Option<String>> = Ok(None);
         while !sessions.is_finished() && matches!(console, Ok(None)) {
+            if let Err(e) = idle_edges(watched) {
+                console = Err(e);
+                break;
+            }
             console = match watched.next(Instant::now() + Duration::from_millis(50)) {
                 Ok(Line::Text(line)) => {
                     after.see(&line);
@@ -889,8 +929,16 @@ fn run_sessions(
         let session_failure = sessions.join().expect("session runner panicked")?;
         Ok(console?.or(session_failure))
     })?;
+    // A failed session can leave QEMU's `log int` on: harmless, as QEMU ends with the case.
     if failed.is_some() {
         return Ok(failed);
+    }
+    if let (Some(window), Some(ceilings)) = (&window, &boot.idle) {
+        let (summary, over) = window.judge(ceilings)?;
+        writeln!(watched.log, "{summary}")?;
+        if over.is_some() {
+            return Ok(over);
+        }
     }
     while let Some(pattern) = after.missing() {
         let pattern = pattern.to_string();
