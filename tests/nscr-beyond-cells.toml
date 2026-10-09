@@ -1,0 +1,63 @@
+description = "A native program draws nothing beyond its cells (docs/plan/m2-usable-shell.md, attack suite, \"A screen writes no control sequence\"; docs/userland/shell.md, \"A native program's screen and the session's key\"): the console session, whose screen is 80 by 24 (the UART says no size), runs /boot/screen-stage with screen four ways, each sending one record after its size: a frame of 200 by 100, a cell one column past the screen, one cell of 32 Xs at the last column, and a wide symbol in the last column. Each is refused for its reason before anything of it is drawn, and the program ends, its budget destroyed: the session's budget, read from the kernel, holds what it held before. The case judges the line's values and the bytes the session wrote: no cursor placed past row 24 or column 80, no run of Xs, no wide symbol drawn (docs/testbench.md, rule F)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The image's bundle with pipe-stage and screen-stage public in /boot.
+recipe = "tests/data/pipe/boot.toml"
+# As userland-boot: the principals' budgets, each holding the shell VM's session, need 1 GiB.
+memory_mib = 1024
+timeout_secs = 450
+# At most four screens a session: a session's fifth pipeline is refused today (B47), a bound
+# of the bench's sessions until it is fixed, not of the design.
+expect = [
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+    '(^|\] )\{:base, \{[0-9]+, [0-9]+\}\}$',
+    '\{:big, \{:error, \{:refused, :size\}\}\}$',
+    '\{:outside, \{:error, \{:refused, :position\}\}\}$',
+    '\{:long, \{:error, \{:refused, :cell\}\}\}$',
+    '\{:wide_edge, \{:error, \{:refused, :cell\}\}\}$',
+    '(^|\] )\{:after_all, true, \{:error, :not_running\}\}$',
+]
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    'init: restarted',
+    'EXCEPTION',
+    'still ending',
+    # A cursor placed past the 24th row or the 80th column, a run of the long cell's Xs, the
+    # wide symbol.
+    '\x1b\[(2[5-9]|[3-9][0-9]|[0-9]{3,});[0-9]+H',
+    '\x1b\[[0-9]+;(8[1-9]|9[0-9]|[0-9]{3,})H',
+    'XXXXXXXX',
+    '界',
+]
+
+[[input]]
+after = 'Redoubt shell, on Elixir '
+send = "c = fn -> {:ok, o} = Redoubt.Budget.own(); {:ok, u} = Redoubt.Budget.usage(o); {elem(u.weight, 1), elem(u.processes, 1)} end; {:base, before = c.()}\n"
+
+[[input]]
+after = '(^|\] )\{:base, \{'
+send = "{:big, screen(\"screen-stage\", [\"big\"])}\n"
+
+[[input]]
+after = '\{:big, \{'
+send = "{:outside, screen(\"screen-stage\", [\"outside\"])}\n"
+
+[[input]]
+after = '\{:outside, \{'
+send = "{:long, screen(\"screen-stage\", [\"long\"])}\n"
+
+[[input]]
+after = '\{:long, \{'
+send = "{:wide_edge, screen(\"screen-stage\", [\"wide-edge\"])}\n"
+
+[[input]]
+after = '\{:wide_edge, \{'
+send = "{:after_all, c.() == before, Redoubt.Pipes.usage()}\n"
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"

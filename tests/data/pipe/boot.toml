@@ -1,7 +1,8 @@
-# The image's bundle (image/boot.toml) with one test program added, for pipe-hostile-output alone:
-# `pipe-stage`, which the console session's `exec` launches from `/boot`, and the image's manifest
-# with that entry public (tests/data/pipe/manifest.json: image/manifest.json with "public" naming
-# pipe-stage too). The shipped image's /boot holds no test program.
+# The image's bundle (image/boot.toml) with two test programs added, for the pipe, job and screen
+# cases: `pipe-stage`, which the console session's `exec` and `pipe` launch from `/boot`, and
+# `screen-stage`, which its `screen` launches; and the image's manifest with those entries public
+# (tests/data/pipe/manifest.json: image/manifest.json with "public" naming them too). The shipped
+# image's /boot holds no test program.
 
 [[entry]]
 name = "kernel"
@@ -72,6 +73,10 @@ package = "redoubt-piped"
 [[entry]]
 name = "pipe-stage"
 package = "redoubt-beamlet-programs"
+
+[[entry]]
+name = "screen-stage"
+package = "test-programs"
 
 [[entry]]
 name = "manifest"

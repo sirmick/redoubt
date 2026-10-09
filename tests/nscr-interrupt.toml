@@ -1,0 +1,104 @@
+description = "A native program's screen is drawn by the session, and no program swallows the interrupt (docs/plan/m2-usable-shell.md, attack suite, \"No program swallows the interrupt\" and \"A screen writes no control sequence\"; docs/userland/shell.md, \"A native program's screen and the session's key\"): the console session runs /boot/screen-stage with screen; its frame is drawn by the session's encoder on the alternate screen, and a key typed reaches it; then Ctrl+\\\\ sent inside an escape sequence ends it, and the rest of the sequence reaches nothing. A screen program that floods the session with frames as fast as its pipe takes them, reading nothing, is ended by Ctrl+\\\\ inside a bracketed paste; one given Ctrl+C as a key gets it, and Ctrl+\\\\ still ends it; one drawing the session's key as a symbol is refused. Each line's value is the session's, the session's budget, read from the kernel, holds what it held before, and piped is gone. Every verdict is the session's"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The image's bundle with pipe-stage and screen-stage public in /boot.
+recipe = "tests/data/pipe/boot.toml"
+# As userland-boot: the principals' budgets, each holding the shell VM's session, need 1 GiB.
+memory_mib = 1024
+timeout_secs = 450
+# At most four screens a session: a session's fifth pipeline is refused today (B47), a bound
+# of the bench's sessions until it is fixed, not of the design.
+expect = [
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+    '(^|\] )\{:base, \{[0-9]+, [0-9]+\}\}$',
+    '(^|\] )\{:helper, :ok\}$',
+    '\{:draw, nil\}$',
+    '(^|\] )\{:after_draw, true, \{:error, :not_running\}\}$',
+    '\{:flood, nil\}$',
+    '\{:ctrl_c, nil\}$',
+    '\{:key_symbol, \{:error, \{:refused, :symbol\}\}\}$',
+    '(^|\] )\{:after_all, true, \{:error, :not_running\}\}$',
+]
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    'init: restarted',
+    'EXCEPTION',
+    'still ending',
+    # The session's key drawn, or what followed it reaching the program.
+    '\x1c',
+    'key:(A|ctrl\+Up|d)',
+    # The alternate screen is entered and left by the session alone; a cell draws no other
+    # sequence than the encoder's CSI.
+    '\x1b\]',
+]
+
+[[input]]
+after = 'Redoubt shell, on Elixir '
+send = "c = fn -> {:ok, o} = Redoubt.Budget.own(); {:ok, u} = Redoubt.Budget.usage(o); {elem(u.weight, 1), elem(u.processes, 1)} end; {:base, before = c.()}\n"
+
+# A screen's frames end no line on the console, and the bench reads only whole lines: so a helper
+# the case's own line spawns writes a line of its own, a tag, to the console port every half
+# second while a job runs, ending the line the frames are on. A tag also says the screen is in
+# front: keys typed after it wait for the program.
+[[input]]
+after = '(^|\] )\{:base, \{'
+send = '''up = fn tag -> spawn(fn -> w = :erlang.open_port({:fd, 0, 2}, [:out, :binary]); r = fn -> Enum.any?(Redoubt.Jobs.list(), &(&1.state == :running)) end; Enum.find(Stream.repeatedly(fn -> Process.sleep(50); r.() end), & &1); Enum.find(Stream.repeatedly(fn -> Port.command(w, "\n" <> tag <> "\n"); Process.sleep(500); r.() end), &(!&1)) end) end; {:helper, :ok}
+'''
+
+[[input]]
+after = '(^|\] )\{:helper, :ok\}$'
+send = "{:draw, (up.(\"up-draw\"); screen(\"screen-stage\", [\"draw\"]))}\n"
+
+# The frames are judged by the chain: each key is typed only once the session has drawn what the
+# last one asked for, so a frame not drawn ends the case at its timeout.
+[[input]]
+after = 'screen-stage-ready'
+send = "x"
+
+# Ctrl+\ after the start of a Ctrl+Up the key decoder is still waiting on: the A after it is no
+# one's.
+[[input]]
+after = 'key:x'
+send = "\u001b[1;5\u001cA"
+
+[[input]]
+after = '\{:draw, nil\}$'
+send = "{:after_draw, c.() == before, Redoubt.Pipes.usage()}\n"
+
+[[input]]
+after = '\{:after_draw, (true|false)'
+send = "{:flood, (up.(\"up-flood\"); screen(\"screen-stage\", [\"flood\"]))}\n"
+
+# A paste holding the session's key, to a program that reads nothing and floods the session with
+# frames: the host is busy decoding them, and the driver still ends it.
+[[input]]
+after = 'screen-stage-flooding'
+send = "\u001b[200~dd\u001cdd\u001b[201~"
+
+[[input]]
+after = '\{:flood, nil\}$'
+send = "{:ctrl_c, (up.(\"up-ctrl-c\"); Redoubt.Screen.Native.run(\"screen-stage\", [\"draw\"], ctrl_c: :key))}\n"
+
+[[input]]
+after = '(^|\] )up-ctrl-c$'
+send = "\u0003"
+
+[[input]]
+after = 'key:ctrl\+c'
+send = "\u001c"
+
+[[input]]
+after = '\{:ctrl_c, nil\}$'
+send = "{:key_symbol, screen(\"screen-stage\", [\"key-symbol\"])}\n"
+
+[[input]]
+after = '\{:key_symbol, \{'
+send = "{:after_all, c.() == before, Redoubt.Pipes.usage()}\n"
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"

@@ -89,6 +89,7 @@ bin = [
     { name = "return-lent-borrower", test = false },
     { name = "rng-test", test = false },
     { name = "scan-bounds", test = false },
+    { name = "screen-stage", test = false },
     { name = "sched-budget-churn", test = false },
     { name = "sched-budget-churn-shell", test = false },
     { name = "sched-capped", test = false },
@@ -154,3 +155,5 @@ redoubt-client = { path = "../../libs/client" }
 # The requests `launcher-orphan` and the programs it starts send each other.
 redoubt-init-programs = { path = "../init-programs" }
 stub = { path = "../../stub" }
+# Only for `screen-stage`: the cell protocol it draws and reads its keys in.
+cells = { path = "../../userland/native/cells" }
