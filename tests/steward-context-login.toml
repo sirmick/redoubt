@@ -1,4 +1,4 @@
-description = "Named contexts over SSH (docs/servers/steward.md, \"Contexts\" and R79; docs/servers/sshd.md, \"Login\"; docs/userland/sessions.md, \"How to use it\"): bob.work@box gets a prompt in a session of its own, the context work; a second bob.work login while it lives is refused in_use; bob.work+x, outside the grammar, reaches the steward as nobody and is refused as a wrong key is; bob+alice-secrets.work, a label set bob does not own, is refused alike; bob@box, his default context, logs in beside bob.work with a VM of its own, and neither session's marker reaches the other's channel. The verdicts are the steward's records, which carry each session's context, and its typed refusals as sshd's core reads them (rule F)"
+description = "Named contexts over SSH (docs/servers/steward.md, \"Contexts\", R79 and R80; docs/servers/sshd.md, \"Login\"; docs/userland/sessions.md, \"How to use it\"): bob.work@box gets a prompt in a session of its own, the context work; a second bob.work login while it is attached takes it over: the first terminal is told who took it, from which address, and its channel ends with status 0, and the second is told where it was taken from and reaches the same VM, which still holds what the first bound, after that VM has sent `ended` on its console, which ends nothing; bob.work+x, outside the grammar, reaches the steward as nobody and is refused as a wrong key is; bob+alice-secrets.work, a label set bob does not own, is refused alike; bob@box, his default context, logs in beside bob.work with a VM of its own, and neither session's marker reaches the other's channel. The verdicts are the steward's records, which carry each session's context, and its typed refusals as sshd's core reads them (rule F)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 recipe = "image/boot.toml"
@@ -31,7 +31,8 @@ forbid = [
 expect_after = [
     '^\[con [0-9a-f]{16}\] steward: audit 1002/\{\} at [0-9]+: Login \{ session: [0-9]+, principal: 1, key: [1-9][0-9]*, context: Some\("work"\) \}',
     '^\[con [0-9a-f]{16}\] sshd: login bob\.work: session [0-9a-f]{16}, labels \[\]$',
-    '^\[con [0-9a-f]{16}\] sshd: login bob\.work: refused \(InUse\)$',
+    '^\[con [0-9a-f]{16}\] steward: audit 1002/\{\} at [0-9]+: Attached \{ session: [0-9]+, key: [1-9][0-9]*, from: "[0-9.]+:[0-9]+", took_over: true \}',
+    '^\[con [0-9a-f]{16}\] sshd: login bob\.work: session [0-9a-f]{16}, labels \[\]$',
     '^\[con [0-9a-f]{16}\] sshd: login : refused \(BadKey\)$',
     '^\[con [0-9a-f]{16}\] sshd: login bob\+alice-secrets\.work: refused \(BadKey\)$',
     '^\[con [0-9a-f]{16}\] steward: audit 1002/\{\} at [0-9]+: Login \{ session: [0-9]+, principal: 1, key: [1-9][0-9]*, context: Some\(""\) \}',
@@ -43,27 +44,35 @@ user = "bob.work"
 forbid = ['default-marker']
 steps = [
     { expect = '\([0-9]+\)> ' },
-    { mark = "work-up" },
-    { send = "\"work-\" <> \"marker\"\n" },
+    { send = "work = \"work-\" <> \"marker\"\n" },
     { expect = '"work-marker"' },
-    { wait = "default-done" },
+    { mark = "work-up" },
+    { expect = '\[context work taken over from [0-9.]+:[0-9]+ at up [0-9]+h[0-9]{2}m\]' },
     { exit = 0 },
 ]
 
 [[session]]
 user = "bob.work"
 name = "bob.work-again"
+forbid = ['default-marker']
 steps = [
     { wait = "work-up" },
-    { expect = 'Permission denied \(publickey\)' },
-    { exit = 255 },
-    { mark = "again-refused" },
+    { expect = '\[context work: reattached; taken over from [0-9.]+:[0-9]+\]' },
+    # The VM tries to end its channel with `consol`'s `ended` (opcode 18) on its console: only
+    # the steward's connection can, so the session stays and answers below.
+    { send = "{:ended, :redoubt.send(elem(:redoubt.ns_lookup(\"/dev/cons\"), 1), {[18, 0, 0, 0], nil, []})}\n" },
+    { expect = '\{:ended, :ok\}' },
+    { send = "String.upcase(work)\n" },
+    { expect = '"WORK-MARKER"' },
+    { mark = "again-in" },
+    { wait = "default-done" },
+    { exit = 0 },
 ]
 
 [[session]]
 user = "bob.work+x"
 steps = [
-    { wait = "again-refused" },
+    { wait = "again-in" },
     { expect = 'Permission denied \(publickey\)' },
     { exit = 255 },
     { mark = "malformed-refused" },

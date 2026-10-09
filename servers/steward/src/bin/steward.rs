@@ -46,7 +46,7 @@ mod machine {
     use redoubt_rt::server::typed::finish;
     use redoubt_rt::server::{close_delivery, own_args};
     use redoubt_rt::startup::Startup;
-    use redoubt_rt::wire::proto::{consol, ipd};
+    use redoubt_rt::wire::proto::{consol, consrelay, ipd};
     use redoubt_steward::domain::Domain;
     use redoubt_steward::effect::Output;
     use redoubt_steward::event::EventKind;
@@ -80,6 +80,27 @@ mod machine {
 
     /// The program a session runs, on `/boot`, and its start module.
     const PROGRAM: &str = "beamlet";
+    /// A context's console relay, on `/boot` (servers/consrelay.md).
+    const RELAY: &str = "consrelay";
+    /// The name the relay finds its hello badge under (servers/consrelay.md).
+    const RELAY_HELLO: &str = "hello";
+    /// The relay's first-thread stack and its heap cap, in pages: twice what `consrelay-footprint`
+    /// measured, 8,360 bytes of stack and a 22-page heap, which holds its buffers from its start.
+    const RELAY_STACK_PAGES: usize = 5;
+    const RELAY_HEAP_PAGES: u32 = 44;
+    /// What a session's budget holds for its relay, and so what its VM is not given: the relay's
+    /// image, its four stacks, its heap cap and what the kernel charges for the process, rounded
+    /// up to 128 (docs/kernel/budgets.md). The console session has no relay and gets no more.
+    const RELAY_PAGES: u64 = 128;
+    /// How long a relay has to say hello after its launch, and to answer `attach` or `detach`
+    /// (µs): the steward never waits without bound on code in a context's budget.
+    const HELLO_US: u64 = 2_000_000;
+    const RELAY_US: u64 = 1_000_000;
+    /// `label-probe` only: how long after an attach the probe hands the channel's console to
+    /// another relay (µs): `sshd` is free again once the login is answered, and the channel's own
+    /// relay has opened its console by then.
+    #[cfg(feature = "label-probe")]
+    const PROBE_SETTLE_US: u64 = 3_000_000;
     const SHELL: &str = "Elixir.Redoubt.Shell";
     /// A session VM's first-thread stack, in pages: twice beamlet's measured peak, 35,288 bytes
     /// (servers/init.md, "Stacks"; docs/testbench.md, "The memory budget").
@@ -153,8 +174,10 @@ mod machine {
         servers: BTreeMap<String, Connection>,
         /// The steward's own console, from which the UART session's console is minted.
         consoled: Option<Connection>,
-        /// The next login's console: `sshd`'s channel connection.
+        /// The next login's consoles: `sshd`'s channel connection, the steward's, and the one its
+        /// relay is given.
         console: Option<Handle>,
+        relay_console: Option<Handle>,
         held: BTreeMap<u32, Held>,
         /// The connections carved once with a quota and kept for the steward's life, by key (a
         /// principal's home): every session's is minted through one with no quota of its own, so
@@ -165,10 +188,23 @@ mod machine {
         /// Each principal's account and name.
         accounts: Vec<(u64, String)>,
         own_lines: Own,
-        /// `budget_pages=` for a session's VM: the session's pages.
+        /// A session's pages, the manifest's `sizes`: its VM's and its relay's.
         session_pages: u64,
-        /// The program's length on `/boot`.
+        /// The program's length on `/boot`, and the relay's.
         program_len: usize,
+        relay_len: usize,
+        /// The endpoint relays say hello on, and the badge the last one was given.
+        hello: Option<Endpoint>,
+        hellos: u64,
+        /// The VM's console the last relay served, for the next console slot.
+        relay_vm: Option<Handle>,
+        /// `label-probe` only: the first labelled context's relay, which every later attach of
+        /// another relay hands its channel's console too.
+        #[cfg(feature = "label-probe")]
+        probe_victim: Option<Handle>,
+        /// `label-probe` only: the hand-over due, at this time, of this channel console.
+        #[cfg(feature = "label-probe")]
+        probe_due: Option<(u64, Handle)>,
         /// The watchers' work endpoint, and the badge the steward sends them work on.
         work: Endpoint,
         work_send: Endpoint,
@@ -176,6 +212,44 @@ mod machine {
     }
 
     impl Machine<'_> {
+        /// Test-only, for the bench's `steward-context-labels` (feature `label-probe`, off in
+        /// every default build): a broken embedder that also hands the labelled context's relay
+        /// the console of every other context's channel, here the steward's own connection,
+        /// [`PROBE_SETTLE_US`] after the attach, from the serving loop, once `sshd` has served
+        /// the channel's own relay. `sshd` refuses the labelled relay's calls there, by admission
+        /// (the channel's console admits the platform and one account and label set) or by its
+        /// label check (R25), so nothing it keeps reaches that channel, and the channel's own
+        /// context still reaches it.
+        #[cfg(feature = "label-probe")]
+        fn probe_cross(&mut self, relay: Handle, console: Handle) {
+            if self.probe_victim.is_some_and(|v| v != relay) {
+                let now = redoubt_rt::handle::time_now().unwrap_or(0);
+                self.probe_due = Some((now.saturating_add(PROBE_SETTLE_US), console));
+            }
+        }
+
+        /// The hand-over [`Machine::probe_cross`] set, now that it is due.
+        #[cfg(feature = "label-probe")]
+        fn probe_hand(&mut self) {
+            let (Some(victim), Some((_, console))) = (self.probe_victim, self.probe_due.take()) else {
+                return;
+            };
+            let m = consrelay::Message::Attach(consrelay::Attach { note: "" });
+            let told = typed::call_within::<consrelay::Protocol, _>(
+                &Endpoint::from_handle(victim),
+                &mut self.lend,
+                &m,
+                &[console],
+                RELAY_US,
+                |_, _| (),
+            );
+            let line = format!(
+                "steward: label-probe: the labelled relay was handed another channel: {}\n",
+                told.is_ok()
+            );
+            say(self.startup, &line);
+        }
+
         fn server(&mut self, name: &str) -> Result<Connection, Error> {
             if let Some(conn) = self.servers.get(name) {
                 return Ok(conn.clone());
@@ -236,10 +310,10 @@ mod machine {
             self.accounts.iter().find(|(acc, _)| *acc == a).map(|(_, n)| n.clone())
         }
 
-        /// Reads `buf.len()` bytes of the program at `at`, through `bootfsd`.
-        fn read_program(&mut self, at: usize, buf: &mut [u8]) -> Result<(), Error> {
+        /// Reads `buf.len()` bytes of the program `path` at `at`, through `bootfsd`.
+        fn read_program(&mut self, path: &str, at: usize, buf: &mut [u8]) -> Result<(), Error> {
             let conn = self.server("bootfsd")?;
-            let file = conn.open(&mut self.lend, PROGRAM, mode::OREAD).map_err(|_| Error::Refused)?;
+            let file = conn.open(&mut self.lend, path, mode::OREAD).map_err(|_| Error::Refused)?;
             let mut done = 0;
             while done < buf.len() {
                 let read = file.read_at(&mut self.lend, (at + done) as u64, &mut buf[done..]);
@@ -257,13 +331,67 @@ mod machine {
             self.held.insert(handle.index(), None);
             handle
         }
+
+        /// Has a watcher wait for the one exit notice on `exit`: an idle one, or a new one when
+        /// every watcher is watching. Unwatched, the notice would never be read, so a launch
+        /// that cannot be watched is a failed step, as a refused one is.
+        fn watch_exit(&mut self, exit: Handle) -> Result<(), Error> {
+            let new = self.watchers.watch();
+            let watched = if new {
+                Buffer::new(WATCH_STACK_PAGES)
+                    .and_then(|stack| {
+                        redoubt_rt::handle::thread_create(watch, stack, self.work.handle().index() as usize)
+                    })
+                    .map(|_| ())
+            } else {
+                Ok(())
+            }
+            .and_then(|()| {
+                self.work_send
+                    .send(&[u64::from(exit.index()), 0, 0, 0], &[], None, FOREVER)
+                    .map_err(|(e, _)| e)
+            });
+            if watched.is_err() {
+                self.watchers.unwatch(new);
+            }
+            watched
+        }
+
+        /// The relay launched last says hello on `badge`: the VM's console and the control
+        /// connection, or nothing within [`HELLO_US`].
+        fn hello(&mut self, badge: u64) -> Result<(Handle, Handle), Error> {
+            let hello = self.hello.as_ref().ok_or(Error::BadHandle)?;
+            let deadline = redoubt_rt::handle::time_now()?.saturating_add(HELLO_US);
+            loop {
+                let wait = deadline.saturating_sub(redoubt_rt::handle::time_now()?);
+                if wait == 0 {
+                    return Err(Error::Timeout);
+                }
+                let Event::Send(d) = hello.receive(wait, 0)? else { continue };
+                let said =
+                    matches!(consrelay::Message::decode(&d.words, &[], 2), Ok(consrelay::Message::Hello(_)));
+                let handles = d.handles.as_slice();
+                if let (true, true, [Some(vm), Some(control)]) = (d.caller.badge == badge, said, handles) {
+                    return Ok((*vm, *control));
+                }
+                // An earlier relay's hello, too late: what it brought is closed.
+                close_delivery(&d);
+            }
+        }
     }
 
     impl Kernel for Machine<'_> {
         type Budget = Handle;
         type Handle = Handle;
 
+        /// A relay's VM console not taken by its own batch's console slot, because a step between
+        /// failed, is closed here: every batch that launches a VM creates its budget and scope
+        /// before its relay, so it never reaches another session's console slot, the UART
+        /// session's included.
         fn create(&mut self, parent: Handle, spec: &BudgetSpec) -> Result<Handle, Error> {
+            if let Some(stale) = self.relay_vm.take() {
+                let _ = close(stale);
+            }
             Budget::from_handle(parent).create_child(spec).map(|b| b.handle())
         }
 
@@ -308,6 +436,11 @@ mod machine {
                     Ok(Some(handle))
                 }
                 How::Console => {
+                    // A context's VM gets the console its relay serves; the relay holds the
+                    // channel's.
+                    if let Some(vm) = self.relay_vm.take() {
+                        return Ok(Some(self.keep(vm)));
+                    }
                     let console = match (self.console.take(), self.consoled.clone()) {
                         (Some(handle), _) => handle,
                         (None, Some(cons)) => {
@@ -323,8 +456,14 @@ mod machine {
             }
         }
 
-        fn console(&mut self, handle: Option<Handle>) {
-            if let Some(old) = core::mem::replace(&mut self.console, handle) {
+        fn console(&mut self, handle: Option<Handle>, relay: Option<Handle>) {
+            for old in [
+                core::mem::replace(&mut self.console, handle),
+                core::mem::replace(&mut self.relay_console, relay),
+            ]
+            .into_iter()
+            .flatten()
+            {
                 let _ = close(old);
             }
         }
@@ -362,17 +501,19 @@ mod machine {
                 (0..SLOTS).map(|s| binding(&self.own_lines, &principal, labels, s)).collect();
             let exit = Endpoint::create()?;
             let exit_handle = exit.handle();
-            let pages = format!("budget_pages={}", self.session_pages);
+            // The VM's share: the session's pages less its relay's.
+            let vm_pages = self.session_pages.saturating_sub(RELAY_PAGES);
+            let pages = format!("budget_pages={vm_pages}");
             let told = session_args(&self.own_lines, &principal, labels, context);
             let endpoint = format!("endpoint={SYSTEM}");
             let len = self.program_len;
-            // The heap capped at what the session's budget holds beside the stack and the
-            // process's own page (servers/init.md, "Heaps").
-            let heap = self.session_pages.saturating_sub(SESSION_STACK_PAGES as u64 + 1);
+            // The heap capped at what the VM's share holds beside the stack and the process's
+            // own page (servers/init.md, "Heaps").
+            let heap = vm_pages.saturating_sub(SESSION_STACK_PAGES as u64 + 1);
             // The steward's badge first, then the shared slots in order.
             let slot = |i: usize| connections.get(i + 1).copied().flatten();
             let started = {
-                let mut read = |at: usize, buf: &mut [u8]| self.read_program(at, buf);
+                let mut read = |at: usize, buf: &mut [u8]| self.read_program(PROGRAM, at, buf);
                 let mut launch =
                     Launch::streamed(STUB_BIN, len, &mut read, Budget::from_handle(budget), exit);
                 if let Some(steward) = connections.first().copied().flatten() {
@@ -399,32 +540,111 @@ mod machine {
                     _ => Error::Refused,
                 }
             })?;
-            // The process ends with its budget; its notice comes to the exit endpoint, which an
-            // idle watcher takes, or a new one when every watcher is watching.
+            // The process ends with its budget; its notice comes to the exit endpoint.
             let _ = close(job.process().handle());
-            let new = self.watchers.watch();
-            let watched = if new {
-                Buffer::new(WATCH_STACK_PAGES)
-                    .and_then(|stack| {
-                        redoubt_rt::handle::thread_create(watch, stack, self.work.handle().index() as usize)
-                    })
-                    .map(|_| ())
-            } else {
-                Ok(())
-            }
-            .and_then(|()| {
-                self.work_send
-                    .send(&[u64::from(exit_handle.index()), 0, 0, 0], &[], None, FOREVER)
-                    .map_err(|(e, _)| e)
-            });
-            // Unwatched, the session's notice would never be read: the launch is a failed step, as
-            // a refused one is.
-            if let Err(e) = watched {
-                self.watchers.unwatch(new);
+            if let Err(e) = self.watch_exit(exit_handle) {
                 let _ = close(exit_handle);
                 return Err(e);
             }
             Ok(u64::from(exit_handle.index()))
+        }
+
+        /// The relay is launched from `/boot` in the context's budget with a hello badge of its
+        /// own, and the launch waits for its hello: the VM's console, kept for the next console
+        /// slot, and the control connection. Its exit is watched as a session's, so a relay that
+        /// dies ends its context. The badge carries the steward's stamp, not the context's: the
+        /// kernel stamps a mint only at or below the endpoint's own (kernel/abi.md, `mint`), and
+        /// the relay's copy goes with the relay's process.
+        fn launch_relay(&mut self, domain: &Domain, budget: Handle) -> Result<(u64, Handle), Error> {
+            self.hellos += 1;
+            let badge = NonZeroU64::new(self.hellos).ok_or(Error::InvalidArgument)?;
+            let hello = self.hello.as_ref().ok_or(Error::BadHandle)?.mint(badge, None)?;
+            let exit = Endpoint::create()?;
+            let exit_handle = exit.handle();
+            let len = self.relay_len;
+            let started = {
+                let mut read = |at: usize, buf: &mut [u8]| self.read_program(RELAY, at, buf);
+                let mut launch =
+                    Launch::streamed(STUB_BIN, len, &mut read, Budget::from_handle(budget), exit);
+                launch.handle(RELAY_HELLO, hello.handle());
+                launch.stack_pages(RELAY_STACK_PAGES).heap_pages(RELAY_HEAP_PAGES);
+                launch.start()
+            };
+            let _ = close(hello.handle());
+            let job = started.map_err(|failed| {
+                let _ = close(exit_handle);
+                match failed.error {
+                    redoubt_client::Error::Sys(e) => e,
+                    _ => Error::Refused,
+                }
+            })?;
+            let _ = close(job.process().handle());
+            if let Err(e) = self.watch_exit(exit_handle) {
+                let _ = close(exit_handle);
+                return Err(e);
+            }
+            // A relay that does not say hello is ended with its budget, which the failed step
+            // destroys; its exit is watched already.
+            let (vm, control) = self.hello(self.hellos)?;
+            if let Some(old) = self.relay_vm.replace(vm) {
+                let _ = close(old);
+            }
+            let control = self.keep(control);
+            #[cfg(feature = "label-probe")]
+            if !domain.labels().is_empty() && self.probe_victim.is_none() {
+                self.probe_victim = Some(control);
+            }
+            #[cfg(not(feature = "label-probe"))]
+            let _ = domain;
+            Ok((u64::from(exit_handle.index()), control))
+        }
+
+        /// The login's channel console is kept, told `ended` when it is released, and the relay
+        /// is given the channel's other connection, `sshd`'s for it, with `note`. Only the kept
+        /// one can end the channel (servers/sshd.md, "A pty session").
+        fn attach(&mut self, relay: Handle, note: &str) -> Result<Handle, Error> {
+            let (Some(console), Some(theirs)) = (self.console.take(), self.relay_console.take()) else {
+                self.console(None, None);
+                return Err(Error::BadHandle);
+            };
+            self.consoles.insert(console.index());
+            let console = self.keep(console);
+            let m = consrelay::Message::Attach(consrelay::Attach { note });
+            let told = typed::call_within::<consrelay::Protocol, _>(
+                &Endpoint::from_handle(relay),
+                &mut self.lend,
+                &m,
+                &[theirs],
+                RELAY_US,
+                |_, _| (),
+            );
+            // The relay holds its copy now, or none: the steward keeps only its own.
+            let _ = close(theirs);
+            if told.is_err() {
+                self.release(console);
+                return Err(Error::Refused);
+            }
+            #[cfg(feature = "label-probe")]
+            self.probe_cross(relay, console);
+            Ok(console)
+        }
+
+        /// The relay writes `note` to its channel and lets it go, within [`RELAY_US`]: past it,
+        /// `Timeout`, which the core's driver counts as detached.
+        fn detach(&mut self, relay: Handle, note: &str) -> Result<(), Error> {
+            let m = consrelay::Message::Detach(consrelay::Detach { note });
+            typed::call_within::<consrelay::Protocol, _>(
+                &Endpoint::from_handle(relay),
+                &mut self.lend,
+                &m,
+                &[],
+                RELAY_US,
+                |_, _| (),
+            )
+            .map_err(|e| match e {
+                redoubt_client::Error::Sys(Error::Timeout) => Error::Timeout,
+                _ => Error::Refused,
+            })
         }
 
         fn random(&mut self) -> Result<u64, Error> { redoubt_rt::handle::random_u64() }
@@ -546,6 +766,7 @@ mod machine {
             servers: BTreeMap::new(),
             consoled: None,
             console: None,
+            relay_console: None,
             held: BTreeMap::new(),
             carved: BTreeMap::new(),
             consoles: BTreeSet::new(),
@@ -553,6 +774,14 @@ mod machine {
             own_lines: Own::default(),
             session_pages: 0,
             program_len: 0,
+            relay_len: 0,
+            hello: Endpoint::create().ok(),
+            hellos: 0,
+            relay_vm: None,
+            #[cfg(feature = "label-probe")]
+            probe_victim: None,
+            #[cfg(feature = "label-probe")]
+            probe_due: None,
             work,
             work_send,
             watchers: Watchers::default(),
@@ -590,6 +819,9 @@ mod machine {
             if let Ok(stat) = conn.stat(&mut machine.lend, PROGRAM) {
                 machine.program_len = stat.length as usize;
             }
+            if let Ok(stat) = conn.stat(&mut machine.lend, RELAY) {
+                machine.relay_len = stat.length as usize;
+            }
         }
         let Ok(report) = own.mint(NonZeroU64::new(EXITS).expect("EXITS is not 0"), None) else {
             say(startup, "steward: cannot mint its exit reports' badge\n");
@@ -612,6 +844,13 @@ mod machine {
             let wait = probe_at.saturating_sub(redoubt_rt::handle::time_now().unwrap_or(probe_at));
             #[cfg(not(feature = "restart-probe"))]
             let wait = FOREVER;
+            #[cfg(feature = "label-probe")]
+            let wait = match machine.probe_due {
+                Some((due, _)) => {
+                    wait.min(due.saturating_sub(redoubt_rt::handle::time_now().unwrap_or(due)).max(1))
+                }
+                None => wait,
+            };
             match own.receive(wait, 0) {
                 Ok(Event::Call(request)) if watches_call(&request.caller, &request.words) => {
                     // One per `sshd` instance; a restarted `sshd`'s comes before the abandoned
@@ -630,7 +869,7 @@ mod machine {
                     after(startup, &mut steward, &mut usage, Some(outputs));
                     let _ = finish(request, &outcome);
                     // A console a refused login brought is not kept.
-                    machine.console(None);
+                    machine.console(None, None);
                     if exited {
                         return core_exited(startup);
                     }
@@ -648,9 +887,21 @@ mod machine {
                     }
                 }
                 Ok(Event::Send(delivery)) => close_delivery(&delivery),
-                // A held `watch` whose caller is gone (an `sshd` that ended).
-                Ok(Event::Abandoned(id)) => watches.retain(|w| w.id() != id),
+                // A held `watch` whose caller is gone: an `sshd` that ended, and every channel
+                // with it, so every attached context is detached (servers/steward.md, R80).
+                Ok(Event::Abandoned(id)) => {
+                    let before = watches.len();
+                    watches.retain(|w| w.id() != id);
+                    if watches.len() < before {
+                        let outputs = steward.event(&mut machine, EventKind::SshdGone, 0).ok();
+                        if !after(startup, &mut steward, &mut usage, outputs) {
+                            return core_exited(startup);
+                        }
+                    }
+                }
                 Ok(_) => {}
+                #[cfg(feature = "label-probe")]
+                Err(Error::Timeout) if machine.probe_due.is_some() => machine.probe_hand(),
                 #[cfg(feature = "restart-probe")]
                 Err(Error::Timeout) => return PROBE_EXIT,
                 Err(Error::Dead) => return redoubt_rt::exit::OK,

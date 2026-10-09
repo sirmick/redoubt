@@ -48,7 +48,7 @@ mod machine {
     use redoubt_rt::server::{close_delivery, consol as consol_server};
     use redoubt_rt::startup::Startup;
     use redoubt_rt::wire::proto::{consol, keyd, net_ctl, steward};
-    use redoubt_sshd::console::{Chan, Cons, Console, File, LIMITS, Shared, qid};
+    use redoubt_sshd::console::{Chan, Cons, Console, Consoles, File, LIMITS, Shared, qid};
     use redoubt_sshd::listener::{Again, again, status};
     use redoubt_sshd::slot::{DATA, EOF, Read, Reader};
     use redoubt_sshd::{
@@ -63,6 +63,14 @@ mod machine {
     /// `keyd` gave no host key, or `ipd` would not listen, or stopped answering the listener. A
     /// server's own codes start at 4, past the runtime's (`redoubt_rt::exit`).
     pub const NOT_STARTED: u32 = 4;
+    /// Test-only, for the bench's `sshd-restart-detaches` (feature `restart-probe`, off in every
+    /// default build, as the steward's, `littlefsd`'s and `netd`'s are): a login to the context
+    /// [`PROBE_CONTEXT`], once its key has verified, ends this instance with this code, every
+    /// channel with it, and `init` restarts it.
+    #[cfg(feature = "restart-probe")]
+    pub const PROBE_EXIT: u32 = 9;
+    #[cfg(feature = "restart-probe")]
+    const PROBE_CONTEXT: &str = "restart-sshd";
 
     /// The port SSH listens on, and how many connections `ipd` may hold for an accept.
     const PORT: u16 = 22;
@@ -98,7 +106,8 @@ mod machine {
     const LOGIN_WAIT_US: u64 = 30_000_000;
 
     /// Fids at `ipd`, which every thread's calls share through the one scope badge: the root,
-    /// the main thread's two, and each slot's three from [`slot_fids`].
+    /// the main thread's two, and each slot's three from [`slot_fids`], and its fourth, which
+    /// reads the connection's remote address once.
     const ROOT: u32 = 1;
     const CLONE: u32 = 2;
     const LISTEN_CTL: u32 = 3;
@@ -191,6 +200,21 @@ mod machine {
         }
     }
 
+    /// The connection's remote address, `a.b.c.d:port`, read from `ipd`'s `/tcp/N/remote`
+    /// (servers/ipd.md, "The `/net` tree"); empty if it cannot be read.
+    fn remote(ipd: &Nine, lend: &mut Lend, fid: u32, sock: u32) -> String {
+        let mut buf = [0u8; 6];
+        let read = ipd.walk(lend, ROOT, fid, &format!("tcp/{sock}/remote")).is_ok()
+            && ipd.open(lend, fid, mode::OREAD).is_ok()
+            && ipd.read(lend, fid, 0, &mut buf) == Ok(6);
+        let _ = ipd.clunk(lend, fid);
+        if !read {
+            return String::new();
+        }
+        let port = u16::from_le_bytes([buf[4], buf[5]]);
+        format!("{}.{}.{}.{}:{port}", buf[0], buf[1], buf[2], buf[3])
+    }
+
     fn open_at(ipd: &Nine, lend: &mut Lend, fid: u32, path: &str) -> bool {
         ipd.walk(lend, ROOT, fid, path).is_ok() && ipd.open(lend, fid, mode::ORDWR).is_ok()
     }
@@ -257,10 +281,13 @@ mod machine {
         lend: Lend,
         nine: NineServer<Cons>,
         parked: Parked<Waiting>,
-        /// The console the last login minted, by badge, while its session runs.
-        console: Option<u64>,
+        /// The consoles the last login minted, by badge, while its session runs.
+        console: Option<Consoles>,
         /// The session the login made, and the steward's generation then.
         session: Option<(u64, u32)>,
+        /// The client's address, `a.b.c.d:port`, or empty if `ipd` did not say: only the
+        /// steward's notes of a context's takeover show it.
+        from: String,
     }
 
     /// What a parked call waits for: input or room on the channel, or a change of its window's
@@ -370,6 +397,11 @@ mod machine {
         }
 
         fn login(&mut self, who: &Login<'_>, key: &PublicKey) -> Result<Console, Refused> {
+            #[cfg(feature = "restart-probe")]
+            if who.context == Some(PROBE_CONTEXT) {
+                self.say("sshd: restart-probe: exiting\n");
+                redoubt_rt::handle::process_exit(PROBE_EXIT);
+            }
             let mut name = match who.label {
                 Some(label) => format!("{}+{label}", who.principal),
                 None => String::from(who.principal),
@@ -377,15 +409,25 @@ mod machine {
             if let Some(context) = who.context {
                 name = format!("{name}.{context}");
             }
+            // Two connections to the channel: the steward's, and its context's relay's.
             let made = self.nine.mint_rooted(&me(), (File, qid()), &mut Own(self.endpoint));
             let Ok((console, _, badge)) = made else {
                 self.say(&format!("sshd: login {name}: no console\n"));
                 return Err(Refused);
             };
+            let made = self.nine.mint_rooted(&me(), (File, qid()), &mut Own(self.endpoint));
+            let Ok((relay, _, relay_badge)) = made else {
+                let _ = close(console);
+                self.nine.unmint(badge);
+                self.say(&format!("sshd: login {name}: no console\n"));
+                return Err(Refused);
+            };
+            let consoles = Consoles { steward: badge, relay: relay_badge };
             let m = steward::Message::Login(steward::Login {
                 principal: who.principal,
                 label: who.label.unwrap_or(""),
                 context: who.context.unwrap_or(""),
+                from: &self.from,
                 key,
             });
             let steward = Endpoint::from_handle(self.handed.steward);
@@ -395,7 +437,7 @@ mod machine {
                 &steward,
                 &mut self.lend,
                 &m,
-                &[console],
+                &[console, relay],
                 LOGIN_WAIT_US,
                 |r, _| match r {
                     steward::Reply::Login(l) => {
@@ -407,14 +449,15 @@ mod machine {
                     _ => None,
                 },
             );
-            // The steward keeps its own copy for the session's `/dev/cons`.
+            // The steward keeps its own copies.
             let _ = close(console);
+            let _ = close(relay);
             match answer {
                 Ok(Some((id, labels))) => {
                     self.say(&format!("sshd: login {name}: session {id:016x}, labels {labels:?}\n"));
                     let labelled = !labels.is_empty();
                     self.nine.fs.labels = labels;
-                    self.console = Some(badge);
+                    self.console = Some(consoles);
                     self.session = Some((id, GENERATION.load(Ordering::Acquire)));
                     Ok(Console::new(self.nine.fs.chan.clone(), id, labelled))
                 }
@@ -426,13 +469,31 @@ mod machine {
                     };
                     self.say(&format!("sshd: login {name}: refused ({why})\n"));
                     self.nine.unmint(badge);
+                    self.nine.unmint(relay_badge);
                     Err(Refused)
                 }
             }
         }
 
         fn end(&mut self, session: Console) {
-            let m = steward::Message::ChannelClosed(steward::ChannelClosed { session: session.id });
+            self.closed(session.id);
+            session.chan.borrow_mut().end(0);
+            self.say(&format!("sshd: session {:016x} ended\n", session.id));
+        }
+
+        fn refused(&mut self, request: Refusal) {
+            self.say(&format!("sshd: request {} refused\n", request.name()))
+        }
+    }
+
+    impl Slot<'_> {
+        /// Tells the steward the channel of session `id` has closed, once: the steward detaches its
+        /// context (servers/steward.md, R80). Nothing is told after the steward's end.
+        fn closed(&mut self, id: u64) {
+            if self.session.take().is_none() {
+                return;
+            }
+            let m = steward::Message::ChannelClosed(steward::ChannelClosed { session: id });
             let steward = Endpoint::from_handle(self.handed.steward);
             // Bounded as a login is: a steward that is gone has nothing of this session left.
             let _ = typed::call_within::<steward::Protocol, _>(
@@ -443,12 +504,6 @@ mod machine {
                 LOGIN_WAIT_US,
                 |_, _| (),
             );
-            session.chan.borrow_mut().end(0);
-            self.say(&format!("sshd: session {:016x} ended\n", session.id));
-        }
-
-        fn refused(&mut self, request: Refusal) {
-            self.say(&format!("sshd: request {} refused\n", request.name()))
         }
     }
 
@@ -462,12 +517,13 @@ mod machine {
         let ipd = Nine::new(Endpoint::from_handle(handed.ipd));
         let Ok(mut lend) = Lend::new(1) else { return };
         let (ctl, data, out) = slot_fids(s);
+        let from = remote(&ipd, &mut lend, ctl + 3, sock);
         let opened = open_at(&ipd, &mut lend, ctl, &format!("tcp/{sock}/ctl"))
             && open_at(&ipd, &mut lend, data, &format!("tcp/{sock}/data"))
             && open_at(&ipd, &mut lend, out, &format!("tcp/{sock}/data"));
         let started = opened && wake.send(&[ACCEPT, 0, 0, 0], &[], None, FOREVER).is_ok();
         if started {
-            let mut reader = drive(handed, endpoint, &ipd, &mut lend, out);
+            let mut reader = drive(handed, endpoint, &ipd, &mut lend, out, from);
             close_socket(&ipd, &mut lend, ctl);
             // The reader ends with the socket; its last call says so, unless the driver took it
             // already (a client that hung up first): the slot is free once it is taken.
@@ -498,7 +554,14 @@ mod machine {
 
     /// Runs the core over the socket until the connection is over. Returns the reader as the
     /// driver heard it: whether its last call was taken already.
-    fn drive(handed: Handed, endpoint: &Endpoint, ipd: &Nine, ipd_lend: &mut Lend, out: u32) -> Reader {
+    fn drive(
+        handed: Handed,
+        endpoint: &Endpoint,
+        ipd: &Nine,
+        ipd_lend: &mut Lend,
+        out: u32,
+        from: String,
+    ) -> Reader {
         let mut reader = Reader::default();
         let chan: Shared = Rc::new(RefCell::new(Chan::default()));
         let made = redoubt_rt::handle::random_u64().ok().and_then(|random| {
@@ -509,8 +572,16 @@ mod machine {
             say(handed.console, "sshd: a connection's console could not be made\n");
             return reader;
         };
-        let mut slot =
-            Slot { handed, endpoint, lend, nine, parked: Parked::new(FOREVER), console: None, session: None };
+        let mut slot = Slot {
+            handed,
+            endpoint,
+            lend,
+            nine,
+            parked: Parked::new(FOREVER),
+            console: None,
+            session: None,
+            from,
+        };
         slot.nine.requests_wait(FOREVER);
         let (mut inbuf, mut outbuf) = (vec![0u8; BUF], vec![0u8; BUF]);
         let mut conn = Box::new(Connection::new(&mut inbuf, &mut outbuf, &handed.host));
@@ -562,6 +633,15 @@ mod machine {
                     break true;
                 }
                 slot.turn(now);
+                // The person closed the terminal: the context is detached, not ended
+                // (servers/steward.md, R80): the steward is told, and the channel ends with
+                // status 0. A channel without a pty keeps its session to the input's end.
+                if chan.borrow().terminal_closed() {
+                    if let Some((id, _)) = slot.session {
+                        slot.closed(id);
+                        chan.borrow_mut().end(0);
+                    }
+                }
                 match progress {
                     Progress::Busy => continue,
                     Progress::Idle if n > 0 && !pending.is_empty() => continue,
@@ -614,7 +694,10 @@ mod machine {
                         slot.session = None;
                     }
                 }
-                Ok(Event::Send(d)) if Some(d.caller.badge) == slot.console && ended(&d) => {
+                // Only the steward's console ends the channel: the relay's `ended` is dropped below.
+                Ok(Event::Send(d))
+                    if slot.console.is_some_and(|c| c.may_end(d.caller.badge)) && ended(&d) =>
+                {
                     close_delivery(&d);
                     chan.borrow_mut().end(0);
                 }

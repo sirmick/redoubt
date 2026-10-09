@@ -1,4 +1,4 @@
-description = "A session ends with its channel, and its channel with the session (docs/servers/steward.md, \"Authentication and sessions\"; docs/servers/sshd.md, \"Sessions over SSH\"): alice's SSH session runs beside her console session, both carved from users/alice/{}; the end of her channel's input ends her shell, the steward ends the session, destroys its budget and tells sshd, which closes the channel with status 0; bob's VM halting from inside (:erlang.halt) ends his session the same way. The kernel's view, through the steward's lines, shows each sub-budget back to what it held before; every login has a fresh id; init never restarts the steward or reboots. The verdicts are the kernel's usage, sshd's and the steward's lines (rule F)"
+description = "Closing SSH detaches a context and `exit` ends it; a session's end ends its channel (docs/servers/steward.md, \"Contexts\" and R80; docs/servers/sshd.md, \"Sessions over SSH\"): alice's SSH session runs beside her console session, both carved from users/alice/{}; closing her terminal, the end of her pty channel's input, detaches her context, and sshd closes the channel with status 0 while her VM runs on, its budget kept; output her VM writes while detached is kept up to 64 KiB, the rest dropped and counted; her next login reattaches to the same VM, told so and told how many bytes were dropped, and finds what she bound there; `exit` at its prompt ends the session, and the steward destroys its budget; bob's VM halting from inside (:erlang.halt) ends his session the same way. The kernel's view, through the steward's lines, shows each sub-budget back to what it held before; every login has a fresh id; init never restarts the steward or reboots. The verdicts are the kernel's usage, sshd's and the steward's lines (rule F)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 recipe = "image/boot.toml"
@@ -29,15 +29,50 @@ forbid = [
 expect_after = [
     '^\[con [0-9a-f]{16}\] steward: users/alice/\{\} holds [0-9]+ pages, 20 processes$',
     '^\[con [0-9a-f]{16}\] sshd: login alice: session [0-9a-f]{16}, labels \[\]$',
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{\} at [0-9]+: Attached \{ session: [0-9]+, key: [1-9][0-9]*, from: "[0-9.]+:[0-9]+", took_over: false \}',
+    '^\[con [0-9a-f]{16}\] sshd: login alice: session [0-9a-f]{16}, labels \[\]$',
     '^\[con [0-9a-f]{16}\] steward: users/alice/\{\} holds [0-9]+ pages, 10 processes$',
     '^\[con [0-9a-f]{16}\] steward: users/bob/\{\} holds [0-9]+ pages, 10 processes$',
     '^\[con [0-9a-f]{16}\] steward: users/bob/\{\} holds 0 pages, 0 processes$',
 ]
 
-# Bob logs in once alice's ssh is gone, so the steward's lines come in one order.
+# Each login waits for the last one's end, so the steward's lines come in one order. Closing the
+# first terminal, a pty's, detaches the context: nothing of alice's budget is given back until
+# `exit`.
 [[session]]
 user = "alice"
-steps = [{ expect = '\([0-9]+\)> ' }, { exit = 0 }, { mark = "alice-gone" }]
+pty = true
+steps = [
+    { expect = '\([0-9]+\)> ' },
+    { send = "kept = 41\n" },
+    { expect = '41' },
+    # Typed last, run once the terminal has closed: more output than the relay keeps, 70 lines of
+    # 1,000 bytes: one IO.puts of 70 KB kills the shell itself, a beamlet limit apart from this case.
+    { send = "Process.sleep(2000); Enum.each(1..70, fn _ -> IO.puts(String.duplicate(\"z\", 999)) end)\n" },
+    # The shell's echo: the VM has the line before the terminal closes.
+    { expect = 'Enum\.each\(1\.\.70' },
+    { exit = 0 },
+    { mark = "alice-detached" },
+]
+
+[[session]]
+user = "alice"
+name = "alice-again"
+# Her ssh reaches the box 40 s after the first closed, past the detached VM's 70,000 bytes,
+# which it writes a line at a time.
+ssh_args = ["-o", "ProxyCommand=sh -c 'sleep 40; exec nc %h %p'"]
+forbid = ['taken over']
+steps = [
+    { wait = "alice-detached" },
+    { expect = '\[context default: reattached\]' },
+    # The relay kept the newest 64 KiB, cut to a line: at least 4,464 bytes dropped.
+    { expect = '\[[0-9]{4,} bytes of output dropped while detached\]' },
+    { send = "kept + 1\n" },
+    { expect = '42' },
+    { send = "exit\n" },
+    { exit = 0 },
+    { mark = "alice-gone" },
+]
 
 [[session]]
 user = "bob"

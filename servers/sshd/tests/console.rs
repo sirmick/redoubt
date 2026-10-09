@@ -7,7 +7,7 @@ use std::rc::Rc;
 use redoubt_rt::abi::Labels;
 use redoubt_rt::ipc::Caller;
 use redoubt_rt::server::ninep::{FileServer, NineError, NineServer, Read, Write, mode};
-use redoubt_sshd::console::{Chan, Cons, Console, File, LIMITS, MAX_INPUT, MAX_OUTPUT};
+use redoubt_sshd::console::{Chan, Cons, Console, Consoles, File, LIMITS, MAX_INPUT, MAX_OUTPUT};
 use redoubt_sshd::{Session, Window};
 
 fn caller() -> Caller { Caller { badge: 1 << 63, account: 1001, labels: Labels::new() } }
@@ -77,6 +77,33 @@ fn an_ended_session_reads_the_end_and_cannot_write() {
     assert_eq!(cons.read(&caller(), &File, 0, &mut out), Ok(Read::Done(0)));
 }
 
+/// Only a pty channel's end of input is a closed terminal, which detaches its context, and only
+/// once the session has read all that was typed; its reads find no end of file until the channel
+/// ends. Without a pty (`ssh alice@box < file`) it is the input's end, which the session reads as
+/// the end of the file, and its channel stays.
+#[test]
+fn only_a_pty_channel_s_end_of_input_closes_the_terminal() {
+    let (mut cons, mut session) = pair();
+    session.start(None);
+    assert_eq!(session.input(b"exit\n"), 5);
+    session.input_ended();
+    let mut out = [0u8; 8];
+    assert_eq!(cons.read(&caller(), &File, 0, &mut out), Ok(Read::Done(5)));
+    assert_eq!(cons.read(&caller(), &File, 0, &mut out), Ok(Read::Done(0)));
+    assert!(!cons.chan.borrow().terminal_closed(), "a channel without a pty");
+    let (mut cons, mut session) = pair();
+    session.start(Some(Window { cols: 80, rows: 24 }));
+    assert_eq!(session.input(b"exit\n"), 5);
+    session.input_ended();
+    assert!(!cons.chan.borrow().terminal_closed(), "the session has not read all that was typed");
+    assert_eq!(cons.read(&caller(), &File, 0, &mut out), Ok(Read::Done(5)));
+    assert!(cons.chan.borrow().terminal_closed());
+    // No end of file before the channel's end, which follows the steward's detach.
+    assert_eq!(cons.read(&caller(), &File, 0, &mut out), Ok(Read::Wait));
+    cons.chan.borrow_mut().end(0);
+    assert_eq!(cons.read(&caller(), &File, 0, &mut out), Ok(Read::Done(0)));
+}
+
 #[test]
 fn the_console_is_one_file_carrying_the_channel_s_labels() {
     let chan = Rc::new(RefCell::new(Chan::default()));
@@ -114,4 +141,40 @@ fn consol_size_is_the_pty_s_and_a_resize_is_due_when_it_changes() {
     assert!(chan.borrow().resize_due(1), "an ended session answers every waiter");
     // That answer is the last: the next call, the VM's resize thread calling again, is refused.
     assert_eq!(chan.borrow().consol_size(), None);
+}
+
+/// Hands out handle numbers in place of the kernel's mints.
+struct Mints(u32);
+
+impl redoubt_rt::server::minted::Minter for Mints {
+    fn mint(&mut self, _: std::num::NonZeroU64) -> Result<redoubt_rt::abi::Handle, redoubt_rt::abi::Error> {
+        self.0 += 1;
+        Ok(redoubt_rt::abi::Handle::new(self.0).unwrap())
+    }
+
+    fn random(&mut self) -> Result<u64, redoubt_rt::abi::Error> { Ok(0x5eed + u64::from(self.0)) }
+}
+
+/// A login mints two consoles, the steward's and its relay's, within the channel's limits; only
+/// the steward's ends the channel, so the relay's `ended` and a session's do nothing. Once the
+/// steward's has, a holder of the relay's reads the end and cannot write.
+#[test]
+fn a_login_s_two_consoles_and_only_the_steward_s_ends_the_channel() {
+    let (cons, _session) = pair();
+    let mut nine = NineServer::new(cons, LIMITS, 1).unwrap();
+    let me = Caller { badge: 1, account: 0, labels: Labels::new() };
+    let root = || (File, redoubt_sshd::console::qid());
+    let (_, _, steward) = nine.mint_rooted(&me, root(), &mut Mints(10)).unwrap();
+    let (_, _, relay) = nine.mint_rooted(&me, root(), &mut Mints(20)).unwrap();
+    assert_ne!(steward, relay);
+    let consoles = Consoles { steward, relay };
+    assert!(consoles.may_end(steward));
+    assert!(!consoles.may_end(relay), "the relay's console cannot end the channel");
+    assert!(!consoles.may_end(caller().badge), "nor any other connection");
+    // The steward's `ended` ends the channel: what the relay holds reads the end and cannot write.
+    nine.fs.chan.borrow_mut().end(0);
+    let relay_caller = Caller { badge: relay, account: 1001, labels: Labels::new() };
+    let mut out = [0u8; 8];
+    assert_eq!(nine.fs.read(&relay_caller, &File, 0, &mut out), Ok(Read::Done(0)));
+    assert_eq!(nine.fs.write_or_wait(&relay_caller, &File, 0, b"x"), Err(NineError::NO_CONNECTION));
 }

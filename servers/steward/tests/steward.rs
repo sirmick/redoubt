@@ -40,13 +40,44 @@ fn bob() -> String {
 /// What the kernel was asked, in order.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Call {
-    Create { parent: usize, pages: u64, processes: u32, labels: Vec<u64>, account: u64 },
+    Create {
+        parent: usize,
+        pages: u64,
+        processes: u32,
+        labels: Vec<u64>,
+        account: u64,
+    },
     Destroy(usize),
-    Mint { badge: u64, stamp: usize },
-    Connect { labels: Vec<u64>, slot: u16 },
+    Mint {
+        badge: u64,
+        stamp: usize,
+    },
+    Connect {
+        labels: Vec<u64>,
+        slot: u16,
+    },
     Console(Option<u32>),
     Release(usize),
-    Launch { budget: usize, connections: Vec<Option<usize>>, context: Option<String> },
+    Launch {
+        budget: usize,
+        connections: Vec<Option<usize>>,
+        context: Option<String>,
+    },
+    /// A context's relay started in `budget`; its control connection is the handle made.
+    LaunchRelay {
+        budget: usize,
+        control: usize,
+    },
+    /// The login's console given to the relay with a note; the console kept is the handle made.
+    Attach {
+        relay: usize,
+        note: String,
+        kept: usize,
+    },
+    Detach {
+        relay: usize,
+        note: String,
+    },
 }
 
 /// Budget and handle `i` are the `i`th the kernel made; `USERS` is the one the steward holds.
@@ -58,6 +89,8 @@ struct Recorder {
     /// Fail the `n`th kernel call that makes something.
     fail_at: Option<usize>,
     users_busy: bool,
+    /// What every relay's `detach` answers, once recorded: `Ok` unless a test says.
+    detach: Option<Error>,
 }
 
 impl Recorder {
@@ -115,7 +148,8 @@ impl Kernel for Recorder {
         if binds { self.make().map(Some) } else { Ok(None) }
     }
 
-    fn console(&mut self, handle: Option<Handle>) {
+    fn console(&mut self, handle: Option<Handle>, relay: Option<Handle>) {
+        assert_eq!(handle.is_some(), relay.is_some(), "a login brings both consoles or none");
         self.calls.push(Call::Console(handle.map(|h| h.index())));
     }
 
@@ -132,6 +166,23 @@ impl Kernel for Recorder {
         let context = context.map(String::from);
         self.calls.push(Call::Launch { budget, connections: connections.to_vec(), context });
         Ok(pid)
+    }
+
+    fn launch_relay(&mut self, _domain: &Domain, budget: usize) -> Result<(u64, usize), Error> {
+        let control = self.make()?;
+        self.calls.push(Call::LaunchRelay { budget, control });
+        Ok((control as u64, control))
+    }
+
+    fn attach(&mut self, relay: usize, note: &str) -> Result<usize, Error> {
+        let kept = self.make()?;
+        self.calls.push(Call::Attach { relay, note: note.into(), kept });
+        Ok(kept)
+    }
+
+    fn detach(&mut self, relay: usize, note: &str) -> Result<(), Error> {
+        self.calls.push(Call::Detach { relay, note: note.into() });
+        self.detach.map_or(Ok(()), Err)
     }
 
     fn random(&mut self) -> Result<u64, Error> {
@@ -293,10 +344,11 @@ fn call(
     let words = m.encode(&mut buf).unwrap();
     let opcode = words[0] as u32;
     let caller = Caller { badge, account: 0, labels: Default::default() };
-    // A login brings the channel's console connection: here handle 9.
+    // A login brings the channel's two console connections: here handles 9 and 10.
     let mut handles = ReceivedHandles::new();
     if matches!(m, Message::Login(_)) {
         handles.push(Handle::new(CONSOLE)).unwrap();
+        handles.push(Handle::new(CONSOLE + 1)).unwrap();
     }
     let mut serving = Serving::new(s, k);
     let outcome = answer_with(&mut serving, &caller, &words, &handles, &mut buf);
@@ -318,12 +370,13 @@ fn call(
 }
 
 fn login<'a>(principal: &'a str, label: &'a str, key: &'a [u8]) -> Message<'a> {
-    Message::Login(Login { principal, label, context: "", key })
+    Message::Login(Login { principal, label, context: "", from: "", key })
 }
 
 /// A login is the core's session batch, run in order: the session's budget from its domain's
-/// sub-budget, a zero-limit scope inside it, the steward's badge on its own endpoint stamped
-/// with the scope (in the minted range, never a root badge), a connection per shared slot (the
+/// sub-budget, a zero-limit scope inside it, the context's console relay in the session's budget
+/// and the login's console attached to it, the steward's badge on its own endpoint stamped with
+/// the scope (in the minted range, never a root badge), a connection per shared slot (the
 /// vault's bound to nothing for an unlabelled session), and the launch with them all; then the
 /// reply carries the session's id and its labels.
 #[test]
@@ -335,7 +388,8 @@ fn a_login_runs_the_session_batch_and_answers_the_session() {
     let alice_unlabelled = 2;
     let session_budget = 6;
     let scope = 7;
-    let badge = match &k.calls[3] {
+    let relay = 8;
+    let badge = match &k.calls[5] {
         Call::Mint { badge, stamp } => {
             assert_eq!(*stamp, scope);
             *badge
@@ -352,8 +406,16 @@ fn a_login_runs_the_session_batch_and_answers_the_session() {
             Call::Create { parent: session_budget, pages: 0, processes: 0, labels: vec![], account: 0 },
         ]
     );
-    assert_eq!(&k.calls[4..10], &connects[..]);
-    match &k.calls[10] {
+    // A new context's first attach has no note.
+    assert_eq!(
+        k.calls[3..5],
+        [
+            Call::LaunchRelay { budget: session_budget, control: relay },
+            Call::Attach { relay, note: String::new(), kept: 9 },
+        ]
+    );
+    assert_eq!(&k.calls[6..12], &connects[..]);
+    match &k.calls[12] {
         Call::Launch { budget, connections, context } => {
             assert_eq!(*budget, session_budget);
             assert_eq!(context.as_deref(), Some(""), "the principal's default context");
@@ -411,7 +473,7 @@ fn a_refused_login_makes_nothing() {
         ("alice", "", "", &ALICE_KEY[..31]),
     ];
     for (principal, label, context, key) in cases {
-        let m = Message::Login(Login { principal, label, context, key });
+        let m = Message::Login(Login { principal, label, context, from: "", key });
         assert_eq!(
             call(&mut s, &mut k, SSHD, m).unwrap_err(),
             ErrorCode::BadKey,
@@ -421,18 +483,72 @@ fn a_refused_login_makes_nothing() {
     assert!(k.creates().is_empty());
 }
 
-/// R79 through the server: a second login of a live context is `in_use`, and makes nothing.
+fn work(from: &str) -> Message<'_> {
+    Message::Login(Login { principal: "alice", label: "", context: "work", from, key: &ALICE_KEY })
+}
+
+/// R80 through the server: a second login of an attached context takes it over and makes
+/// nothing. The old channel is told who took it and let go, its console given back, which tells
+/// `sshd` its channel is over; the new one is told where it was taken from; the reply names a
+/// new attachment, and a close of the old one changes nothing.
 #[test]
-fn a_live_context_is_refused_in_use() {
+fn a_login_to_an_attached_context_takes_it_over() {
     let mut k = Recorder::default();
     let mut s = started(&mut k);
-    let work = Message::Login(Login { principal: "alice", label: "", context: "work", key: &ALICE_KEY });
-    call(&mut s, &mut k, SSHD, work).unwrap();
-    let creates = k.creates().len();
-    let again = Message::Login(Login { principal: "alice", label: "", context: "work", key: &ALICE_KEY });
-    assert_eq!(call(&mut s, &mut k, SSHD, again).unwrap_err(), ErrorCode::InUse);
-    assert_eq!(k.creates().len(), creates);
+    let Ok(Reply::Login(first)) = call(&mut s, &mut k, SSHD, work("198.51.100.2:51234")) else { panic!() };
+    let (relay, kept) = (8, 9);
+    k.calls.clear();
+    let Ok(Reply::Login(second)) = call(&mut s, &mut k, SSHD, work("203.0.113.7:40022")) else { panic!() };
+    assert_ne!(second.session, first.session);
+    assert!(k.creates().is_empty());
+    assert_eq!(
+        k.calls,
+        [
+            Call::Console(Some(CONSOLE)),
+            Call::Detach {
+                relay,
+                note: "[context work taken over from 203.0.113.7:40022 at up 0h00m]\r\n".into()
+            },
+            Call::Release(kept),
+            Call::Attach {
+                relay,
+                note: "[context work: reattached; taken over from 198.51.100.2:51234]\r\n".into(),
+                kept: 17
+            },
+        ]
+    );
+    k.calls.clear();
+    let stale = call(&mut s, &mut k, SSHD, Message::ChannelClosed(ChannelClosed { session: first.session }));
+    assert_eq!(stale.unwrap_err(), ErrorCode::Unknown);
+    assert!(k.calls.is_empty(), "the old channel's close changes nothing: {:?}", k.calls);
+    // Another context of the same principal is its own.
     call(&mut s, &mut k, SSHD, login("alice", "", &ALICE_KEY)).unwrap();
+    assert_eq!(k.creates().len(), 2);
+}
+
+/// A takeover from a channel that has stopped reading: the relay's writer is stuck on the old
+/// channel, so its note is never written and the detach runs past its bound. That is still a
+/// detach: the old console is given back, the new channel attached, and the context runs on.
+/// Any other failure of the detach ends the context, as a failed step does.
+#[test]
+fn a_takeover_from_a_stalled_channel_still_takes_it_over() {
+    let mut k = Recorder::default();
+    let mut s = started(&mut k);
+    let Ok(Reply::Login(first)) = call(&mut s, &mut k, SSHD, work("198.51.100.2:51234")) else { panic!() };
+    let (relay, kept, pid) = (8, 9, k.made as u64);
+    k.calls.clear();
+    k.detach = Some(Error::Timeout);
+    let Ok(Reply::Login(second)) = call(&mut s, &mut k, SSHD, work("203.0.113.7:40022")) else { panic!() };
+    assert_ne!(second.session, first.session);
+    assert!(k.calls.contains(&Call::Release(kept)), "{:?}", k.calls);
+    assert!(matches!(k.calls.last(), Some(Call::Attach { relay: r, .. }) if *r == relay), "{:?}", k.calls);
+    assert!(!k.calls.iter().any(|c| matches!(c, Call::Destroy(_))), "{:?}", k.calls);
+    assert!(s.exited(pid).is_some(), "the VM runs on");
+    // A relay that refuses the detach outright is broken: the context ends.
+    k.calls.clear();
+    k.detach = Some(Error::Refused);
+    assert!(call(&mut s, &mut k, SSHD, work("203.0.113.9:40023")).is_err());
+    assert!(k.calls.iter().any(|c| matches!(c, Call::Destroy(_))), "{:?}", k.calls);
 }
 
 /// A session's launch is told its context, for its arguments (servers/steward.md,
@@ -441,7 +557,8 @@ fn a_live_context_is_refused_in_use() {
 fn a_sessions_launch_is_told_its_context() {
     let mut k = Recorder::default();
     let mut s = started(&mut k);
-    let work = Message::Login(Login { principal: "alice", label: "", context: "work", key: &ALICE_KEY });
+    let work =
+        Message::Login(Login { principal: "alice", label: "", context: "work", from: "", key: &ALICE_KEY });
     call(&mut s, &mut k, SSHD, work).unwrap();
     let contexts: Vec<Option<String>> = k
         .calls
@@ -504,33 +621,61 @@ fn watch_is_held_only_from_sshd_and_malformed_on_any_other_badge() {
 fn a_failed_step_stops_the_batch_and_destroys_what_it_made() {
     let mut k = Recorder::default();
     let mut s = started(&mut k);
-    // Made so far by the start: 5 budgets. The session's budget, scope, badge and five
-    // connections are the next 8; the launch is the ninth.
-    k.fail_at = Some(5 + 8);
+    // Made so far by the start: 5 budgets. The session's budget, scope, relay, console kept,
+    // badge and five connections are the next 10; the launch is the eleventh.
+    k.fail_at = Some(5 + 10);
     assert_eq!(call(&mut s, &mut k, SSHD, login("alice", "", &ALICE_KEY)).unwrap_err(), ErrorCode::Failed);
     assert!(!k.calls.iter().any(|c| matches!(c, Call::Launch { .. })));
     assert!(k.calls.contains(&Call::Destroy(6)), "{:?}", k.calls);
     assert!(matches!(s.failed.as_slice(), [(Step::Launch { .. }, _)]), "{:?}", s.failed);
 }
 
-/// The channel's close ends the session: its process's route goes before its budget does, so the
-/// exit notice that follows is late and dropped, and its connections are given back.
+/// The channel's close detaches the context (R80): the relay lets the channel go and its console
+/// is given back, nothing is destroyed, and the VM runs on. The next login reattaches, told so.
 #[test]
-fn closing_the_channel_destroys_the_session_and_its_exit_is_late() {
+fn closing_the_channel_detaches_the_context_and_a_login_reattaches() {
     let mut k = Recorder::default();
     let mut s = started(&mut k);
     let Ok(Reply::Login(r)) = call(&mut s, &mut k, SSHD, login("bob", "", &BOB_KEY)) else { panic!() };
     let pid = k.made as u64;
-    assert!(s.exited(pid).is_some());
+    let (relay, kept) = (8, 9);
     k.calls.clear();
     let closed = call(&mut s, &mut k, SSHD, Message::ChannelClosed(ChannelClosed { session: r.session }));
     assert!(closed.is_ok(), "{closed:?} {:?}", k.calls);
-    assert!(s.exited(pid).is_none());
-    assert!(k.calls.iter().any(|c| matches!(c, Call::Destroy(_))));
-    assert_eq!(k.calls.iter().filter(|c| matches!(c, Call::Release(_))).count(), 6, "{:?}", k.calls);
-    // Again: the session is gone.
+    assert_eq!(k.calls, [Call::Detach { relay, note: String::new() }, Call::Release(kept)]);
+    assert!(s.exited(pid).is_some(), "the VM runs on");
+    // Again: the attachment is gone.
     let again = call(&mut s, &mut k, SSHD, Message::ChannelClosed(ChannelClosed { session: r.session }));
     assert_eq!(again.unwrap_err(), ErrorCode::Unknown);
+    k.calls.clear();
+    let Ok(Reply::Login(back)) = call(&mut s, &mut k, SSHD, login("bob", "", &BOB_KEY)) else { panic!() };
+    assert_ne!(back.session, r.session);
+    assert_eq!(
+        k.calls,
+        [
+            Call::Console(Some(CONSOLE)),
+            Call::Attach { relay, note: "[context default: reattached]\r\n".into(), kept: 17 },
+        ]
+    );
+}
+
+/// `sshd`'s end takes every channel with it: each attached context is detached and runs on
+/// (servers/steward.md, R80), and the next login reattaches.
+#[test]
+fn sshd_gone_detaches_every_attached_context() {
+    let mut k = Recorder::default();
+    let mut s = started(&mut k);
+    call(&mut s, &mut k, SSHD, login("bob", "", &BOB_KEY)).unwrap();
+    let pid = k.made as u64;
+    k.calls.clear();
+    s.event(&mut k, redoubt_steward::event::EventKind::SshdGone, 0).unwrap();
+    assert_eq!(k.calls, [Call::Detach { relay: 8, note: String::new() }, Call::Release(9)]);
+    assert!(s.exited(pid).is_some());
+    k.calls.clear();
+    s.event(&mut k, redoubt_steward::event::EventKind::SshdGone, 0).unwrap();
+    assert!(k.calls.is_empty(), "nothing is attached");
+    call(&mut s, &mut k, SSHD, login("bob", "", &BOB_KEY)).unwrap();
+    assert!(k.calls.iter().any(|c| matches!(c, Call::Attach { .. })));
 }
 
 /// A VM that dies ends its session: the exit is the core's `Exited`, which destroys the budget.

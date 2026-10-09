@@ -1507,7 +1507,7 @@ additional client from the merged manifest.
 | --- | ---: | ---: | ---: | ---: |
 | `keyd` | 7,368 | 4 | 4 | 8 |
 | `consoled` | 10,384 | 6 | 11 | 22 |
-| `bootfsd` | 7,320 | 4 | 1,037 | 2,176 (the image publishes `beamlet` and `piped`, and the cap follows each manifest's own published total) |
+| `bootfsd` | 7,320 | 4 | 1,089 | 2,304 (the image publishes `beamlet`, `piped` and `consrelay`, and the cap follows each manifest's own published total) |
 | `blkd` | 4,520 | 3 | 19 | 38 |
 | `netd` | 4,296 | 3 | 2 | 4 |
 | `ipd` | 13,672 | 7 | 37 | 74 |
@@ -1516,20 +1516,26 @@ additional client from the merged manifest.
 | `blkd:system` | 4,520 | 3 | 17 | 34 |
 | `verity:system` | 8,264 | 5 | 50 | 100 |
 | `erofsd:system` | 9,704 | 5 | 13 | 26 |
-| `steward` | 14,856 | 8 | 14 | 28 |
+| `steward` | 16,392 | 9 | 15 | 30 |
 | `sshd` | 5,256 | 4 | 56 | 384 |
 
 The read-only client's largest stack peak is 6,616 bytes and its heap's 31 pages; its case uses
 the 16-page stack default and no cap. A session's beamlet is no manifest server: the steward
 launches it with an 18-page stack, twice beamlet's stack peak of 36,136 bytes (`beamlet-footprint`
 on rv64, with the boot pack read before its VM starts and its console on the hub), and a heap cap
-of what its budget holds beside the stack, 10,989 pages of the 11,008 `sizes` gives a session
-([the steward](servers/steward.md#authentication-and-sessions)): 71 pages over twice its heap's
+of what its share holds beside the stack, 10,989 pages of the 11,008 the steward gives it of the
+11,136 `sizes` gives a session, the rest its console relay's
+([budgets](kernel/budgets.md), [the steward](servers/steward.md#authentication-and-sessions)): 71 pages over twice its heap's
 largest peak across the memory cases on each width, 5,459 pages, above what its prompt
 holds ([beamlet](userland/beamlet.md#what-the-vm-holds-at-its-prompt)). `beamlet-footprint` scans
 the VM alone, under its own copy of the single-VM manifest. Its cap leaves its process heap,
 ETS and `persistent_term` limits, a sixteenth of its budget each (688 pages), reachable: a flooding process, about
 four times its limit, still fits under the cap ([beamlet](userland/beamlet.md#limits-inside-one-vm)).
+A context's console relay is no manifest server either: `consrelay-footprint` has `init` start it
+under a manifest of its own, beside a stand-in that takes its hello, and scans it once it says it
+serves, since it reserves every buffer before then. Its first thread's stack peaked at 8,360 bytes
+on rv64 and 7,392 on rv32, its heap at 22 pages on both; the steward launches it with a 5-page
+stack and a 44-page heap cap ([consrelay](servers/consrelay.md#the-bound)).
 
 This is a measurement of the paths the case drove. Other requests or deeper call paths may
 need more stack or heap, and any guest, including another server, can forge the public paint

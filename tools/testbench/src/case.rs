@@ -1276,13 +1276,14 @@ mod tests {
                 "walfsd",
                 "steward",
                 "sshd",
+                "consrelay",
                 "beamlet",
                 "piped"
             ]
         );
         assert!(programs[0].is_init());
         let otp = Path::new("userland/otp");
-        assert!(matches!(&programs[13], Program::Package { workspace: Some(w), .. } if w == otp));
+        assert!(matches!(&programs[14], Program::Package { workspace: Some(w), .. } if w == otp));
         assert!(matches!(&programs[9], Program::Package { workspace: None, .. }));
         // The manifest, with the userland disk's root pinned in it from the run's pack.
         assert_eq!(files.len(), 1);

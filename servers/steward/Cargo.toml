@@ -21,6 +21,10 @@ redoubt-steward = { path = "../../libs/steward" }
 # and netd's restart-probe are: every instance exits 14 s after it starts its console session
 # (src/bin/steward.rs, PROBE_EXIT).
 restart-probe = []
+# Test-only, for the bench's steward-context-labels case, and off in every default build: a broken
+# embedder that hands the first labelled context's relay every other context's channel too
+# (src/bin/steward.rs, probe_cross).
+label-probe = []
 
 [dev-dependencies]
 # init's manifest reading and its writer of the steward's lines, for the round trip over the image's

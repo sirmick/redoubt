@@ -60,6 +60,10 @@ name = "sshd"
 package = "redoubt-sshd"
 
 [[entry]]
+name = "consrelay"
+package = "redoubt-consrelay"
+
+[[entry]]
 name = "beamlet"
 # The Erlang VM, the shell's, in a workspace of its own.
 package = "beamlet-redoubt"

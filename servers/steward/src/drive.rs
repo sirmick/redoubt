@@ -34,6 +34,8 @@ pub enum Made<B, H> {
     /// A connection the session's namespace holds, or none for a slot bound to nothing.
     Connection(Option<H>),
     Process(u64),
+    /// A context's relay: its process, and the steward's control connection to it.
+    Relay(u64, H),
 }
 
 /// The steward exited: the core met an event its embedder's guarantee excludes, and the server
@@ -192,6 +194,39 @@ impl<B: Copy, H: Copy> Steward<B, H> {
                 self.pids.insert(pid, owner.clone());
                 Ok(Produced::Process(pid))
             }
+            Step::LaunchRelay { token, budget } => {
+                let b = self.budget(budget)?;
+                let (pid, control) = kernel.launch_relay(&owner.domain, b)?;
+                self.made.insert(token.clone(), Made::Relay(pid, control));
+                self.pids.insert(pid, owner.clone());
+                Ok(Produced::Process(pid))
+            }
+            Step::Attach { relay, console, note } => {
+                let Some(Made::Relay(_, control)) = self.made.get(relay) else {
+                    return Err(Error::BadHandle);
+                };
+                let kept = kernel.attach(*control, note)?;
+                self.made.insert(console.clone(), Made::Connection(Some(kept)));
+                Ok(Produced::Done)
+            }
+            // The console is given back whatever the relay did: that is what tells `sshd` the
+            // channel's session is over, and it never waits on code in the context's budget. A
+            // detach past its bound is a detach: the relay lets the channel go as it takes the
+            // call, and only the note, best effort, was still to be written to a channel that has
+            // stopped reading (servers/consrelay.md, "The `consrelay` protocol").
+            Step::Detach { relay, console, note } => {
+                let told = match self.made.get(relay) {
+                    Some(Made::Relay(_, control)) => kernel.detach(*control, note),
+                    _ => Err(Error::BadHandle),
+                };
+                if let Some(Made::Connection(Some(h))) = self.made.remove(console) {
+                    kernel.release(h);
+                }
+                match told {
+                    Ok(()) | Err(Error::Timeout) => Ok(Produced::Done),
+                    Err(e) => Err(e),
+                }
+            }
             // The owner's process is ending: its exit notice is late from here on.
             Step::DestroyBudget { budget } => {
                 let b = self.budget(budget)?;
@@ -213,7 +248,7 @@ impl<B: Copy, H: Copy> Steward<B, H> {
         let mut budgets = Vec::new();
         for t in mine {
             match self.made.remove(&t) {
-                Some(Made::Connection(Some(h))) => kernel.release(h),
+                Some(Made::Connection(Some(h)) | Made::Relay(_, h)) => kernel.release(h),
                 Some(Made::Budget(b)) => budgets.push(b),
                 _ => {}
             }

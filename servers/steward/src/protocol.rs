@@ -172,13 +172,14 @@ where
                 let key = <[u8; 32]>::try_from(m.key).map_err(|_| ErrorCode::BadKey)?;
                 let key = key_id(&key);
                 login_labels = self.steward.label(m.label).ok_or(ErrorCode::BadKey)?;
-                // The channel's console, which the session's console slot binds to.
-                self.kernel.console(handles.first().copied());
+                // The channel's two consoles: the steward's, and the one its relay is given.
+                self.kernel.console(handles.first().copied(), handles.get(1).copied());
                 let kind = EventKind::Login {
                     principal: m.principal.into(),
                     labels: login_labels.clone(),
                     context: m.context.into(),
                     key,
+                    from: m.from.into(),
                 };
                 (kind, None)
             }

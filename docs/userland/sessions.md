@@ -60,9 +60,10 @@ authority, only a name:
 /home/alice (6)> File.ls!("/h/src")                  # the same files as /home/alice/src
 ```
 
-Leaving the session (`exit`, or closing the SSH connection) ends it: the steward destroys the
-session's budget, and every process in it ends with it. A context is one session at a time: a
-second `ssh alice.work@box` while the first is open is refused.
+Leaving the session with `exit` ends it: the steward destroys the session's budget, and every
+process in it ends with it. Closing the SSH terminal instead detaches it, and the next login of the
+same context reattaches it; a context is one session at a time, so a second `ssh alice.work@box`
+while the first is open takes it over ([contexts](#contexts)).
 
 ## What it can and cannot do
 
@@ -85,7 +86,7 @@ label set cannot starve another.
 
 ### Contexts
 
-Status: built · tested: bench:steward-context-login, host:redoubt-sshd::the_login_grammar, host:redoubt-steward::context_free_holds_one_session_per_name
+Status: built · tested: bench:steward-context-login, host:redoubt-sshd::the_login_grammar, host:redoubt-sshd::only_a_pty_channel_s_end_of_input_closes_the_terminal, host:redoubt-steward::context_free_holds_one_session_per_name, bench:steward-session-ends, bench:steward-context-labels, bench:sshd-restart-detaches, host:redoubt-consrelay::an_attach_cuts_to_a_line_says_what_was_dropped_and_replays, host:redoubt-consrelay::the_vm_s_size_is_the_channel_s_and_an_attach_redraws
 
 A **context** is a named session of one principal in one label set. The SSH user name is
 `principal[+label][.context]`, in that order only: `alice` is Alice's default context,
@@ -96,9 +97,21 @@ a path. Contexts are not declared: a login names one, and the first login makes 
 - **Its identity is (principal, label set, name).** `alice.work` and `alice+tax.work` are two
   contexts, each carved from its own label set's sub-budget, so a context never crosses from
   one label set to another.
-- **One session at a time.** While a context's session lives, a second login naming it is
-  refused ([the steward](../servers/steward.md#r79-one-session-per-context)); once it has
-  ended, the name is free again.
+- **One session at a time** ([the steward](../servers/steward.md#r79-one-session-per-context)).
+  A second login naming a context reaches its session rather than making another; while that
+  session is still starting, the login is refused. Once the session has ended, the name is free
+  again.
+- **Closing SSH detaches.** Closing the terminal of a session with a pty (an interactive `ssh`)
+  leaves the context's VM running; what it writes
+  meanwhile is kept, the newest 64 KiB ([consrelay](../servers/consrelay.md#the-bound)). The next
+  `ssh alice.work@box` reattaches: `[context work: reattached]`, a line saying how many bytes were
+  dropped if any were, then the kept output; the relay answers the VM's waiting `resize` with the
+  new terminal's size. `exit` at the prompt ends the context. If `sshd` itself restarts, every
+  attached context is detached the same way. Without a pty (`ssh alice@box < file`) the end of the
+  input is the end of the file the shell reads, as before, not a closed terminal.
+- **A second terminal takes over.** A login to a context attached elsewhere takes it: the old
+  terminal is told `[context work taken over from ADDRESS at up 2h13m]` and closed (one that has
+  stopped reading may be closed untold), and the new one is told where it was taken from ([R80 (one channel per context)](../servers/steward.md#r80-one-channel-per-context)).
 - **No enumeration.** A key that is not the principal's, a principal or a label set the manifest
   does not give, and a name outside the grammar all get the same refusal, so its content says
   nothing about which names exist. Its timing is not made equal: inside the steward's one call,
@@ -109,10 +122,8 @@ a path. Contexts are not declared: a login names one, and the first login makes 
 - **Reserved names take no suffix.** `approve` is the approval terminal's name: no principal
   takes it, and `approve+x` and `approve.x` are not logins.
 
-A context that keeps running when its SSH connection closes, reattaching to it, taking over an
-attached one, a cap on live contexts per label set, and an idle expiry for detached ones are
-planned with the console relay ([M2 (usable shell)](../plan/m2-usable-shell.md#the-shell)); until then closing
-SSH ends the context's session, as above.
+A cap on live contexts per label set, and an idle expiry for detached ones, are planned
+([M2 (usable shell)](../plan/m2-usable-shell.md#the-shell)).
 
 ### A session is a VM in a budget
 
