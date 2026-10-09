@@ -7,14 +7,12 @@ programs = ["sched-exit-churn"]
 # Test builds only: the trace ring (never in a default kernel). The oracle checks every pick, and
 # judges the victim's share of what the kernel charged in the window the program prints
 # (`HART-SHARE`), net of lock waits; audits are charged to no one, and so is a wait behind another
-# hart's audit. Against threads that exit it is judged at one hart and reported at more: at two the
-# victim keeps 502 of 1000 on rv64 and 465 on rv32, and 441 on rv64 in a build with `hold-trace`'s
-# extra records, too near 450 for a gate.
+# hart's audit. Each variant is judged at whatever harts the run has.
 kernel_features = ["sched-trace"]
 post_check = "sched_oracle"
 timeout_secs = 600
 expect = [
-    '^HART-SHARE threads-exit \d+ \d+ 50\+@1 2:1 100:2$',
+    '^HART-SHARE threads-exit \d+ \d+ 50\+ 2:1 100:2$',
     '^HART-SHARE processes-exit \d+ \d+ 50\+ 3:1 100:2$',
     '^HART-SHARE processes-fault \d+ \d+ 50\+ 4:1 100:2$',
     '^SCHED-EXIT-CHURN TEST PASSED$',

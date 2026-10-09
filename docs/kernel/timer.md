@@ -261,6 +261,24 @@ own handling between two intervals, nobody's; a deadline's destruction still doe
 microsecond apart, or creates many budgets with staggered deadlines, spends its own CPU share, not
 a neighbour's.
 
+On several harts the bill is right but the hart may not be the payer's. Every hart's timer comes
+by the earliest timeout and the earliest deadline, so the hart that answers one is often running
+another budget, and that budget's thread waits out the payer's work. A pick repays it only where
+it can: a budget with one thread, beside a payer with one, on two harts, cannot take a second
+hart, and denying the payer its own would leave that hart idle. The traced kernel's oracle reports
+the timer interrupts that charged a budget other than the one they interrupted, and those ticks
+([the scheduler oracle](../testbench.md#the-scheduler-oracle)). At two harts: in
+`sched-exit-churn` against threads that exit, the attacker's poll timeouts, 27 such interrupts and
+70,232 ticks on rv64 (0.23 % of the window's charges), 8 and 17,035 on rv32; in
+`deadline-flood-billed-traced` with 16 deadlines, where the destructions land decides the victim's
+share: mostly on the creator's hart, 3 such interrupts and 34,046 ticks (rv32) and the victim keeps
+872 of 1000; mostly on the victim's (87 of 96, rv64), 89 and 833,543 ticks, 17 % of the window's
+charges, and it keeps 482, against at least 450. Arming each hart's timer only for the items its
+runner pays for, or that no hart's runner pays for, is the known remedy; it moved no gate's share
+in the runs that had the creator's placement, and it is not built. The deadline notice at two harts
+as built: net p99 4.6, 4.6 and 5.1 ms at N = 1, 4 and 16 on rv64, 6.2, 5.2 and 6.1 ms on rv32
+(`sched-latency`).
+
 ## Failure and restart
 
 Status: built · partly tested: a boot with no `Time` tag is not attacked by a case · tested: bench:budget-deadline, bench:timeouts

@@ -293,6 +293,12 @@ pub struct Summary {
     pub timer_slice_ends: usize,
     /// Ticks charged after expiry to the budget billed last, over every timer interrupt.
     pub timer_tail_ticks: u64,
+    /// Timer interrupts that charged a budget other than the one they interrupted, and those
+    /// ticks: another budget's timer work in the interrupted budget's time on its hart, which no
+    /// pick can repay a budget with one thread per hart (kernel/timer.md, "R12 (scheduling) for
+    /// timer work"). Report-only.
+    pub timer_foreign: usize,
+    pub timer_foreign_ticks: u64,
     /// When each timer interrupt that found neither and ended no slice came, µs, in trace order.
     pub timer_empty: Vec<u64>,
     /// When each timer interrupt that found another budget's wait ended early came, µs.
@@ -360,6 +366,11 @@ struct TimerEntry {
 fn check_timer_entry(e: &TimerEntry, to_user: bool, sum: &mut Summary) -> Result<(), String> {
     sum.timer_entries += 1;
     let charged = e.charges.iter().filter(|c| c.1 > 0);
+    let foreign: u64 = charged.clone().filter(|c| Some(c.0) != e.interrupted).map(|c| c.1).sum();
+    if foreign > 0 {
+        sum.timer_foreign += 1;
+        sum.timer_foreign_ticks += foreign;
+    }
     match e.expired {
         Some((last, what @ (1 | 2))) => {
             if what == 1 {
@@ -3234,7 +3245,7 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
         )
     });
     let head = format!(
-        "sched_oracle: {} records, {} picks in rank order, every wake at or above the floor, no pass falling but by a weight change; {} passing over a budget whose threads all ran on other harts; {} lifted out of the cap set, at most to the floor; {} lifts by the rule ({} with a leading parent and work to move); {} weight changes by the rule; R10 {n} destructions over up to {} object frames, µs p50/p99/max {p50}/{p99}/{max}, their threads' ending {t50}/{t99}/{tmax}, no audit inside one; {} audits, {audit_total} µs; {} timer interrupts billed by the rule ({} expiring, {} finding a wait ended early, {} ticks after expiry to the budget billed last; {} ending a slice, {} nobody's); {} device interrupts from user mode billed by the rule ({} claiming nothing){kernel_time}{lease_end}",
+        "sched_oracle: {} records, {} picks in rank order, every wake at or above the floor, no pass falling but by a weight change; {} passing over a budget whose threads all ran on other harts; {} lifted out of the cap set, at most to the floor; {} lifts by the rule ({} with a leading parent and work to move); {} weight changes by the rule; R10 {n} destructions over up to {} object frames, µs p50/p99/max {p50}/{p99}/{max}, their threads' ending {t50}/{t99}/{tmax}, no audit inside one; {} audits, {audit_total} µs; {} timer interrupts billed by the rule ({} expiring, {} finding a wait ended early, {} ticks after expiry to the budget billed last; {} ending a slice, {} nobody's; {} charging another budget than the one interrupted, {} ticks); {} device interrupts from user mode billed by the rule ({} claiming nothing){kernel_time}{lease_end}",
         records.len(),
         sum.picks,
         sum.passed_over,
@@ -3250,6 +3261,8 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
         sum.timer_tail_ticks,
         sum.timer_slice_ends,
         sum.timer_empty.len(),
+        sum.timer_foreign,
+        sum.timer_foreign_ticks,
         sum.external_entries,
         sum.external_empty
     );
@@ -5535,10 +5548,18 @@ mod tests {
             vec![(1, 'I', 1, 100), (1, 'E', 0, 0), (1, 'O', 0, 1)],
             vec![(1, 'I', 1, 100), (1, 'B', 1, 0), (1, 'O', 0, 1)],
         ];
-        for head in good {
+        // Each that bills 2 in 1's time is reported, with the ticks 2 was billed.
+        let foreign = [Some(79), None, Some(39), None, None, None];
+        for (head, foreign) in good.into_iter().zip(foreign) {
             let v = verdict(&[head.clone(), pick.to_vec()].concat());
+            let counted = match foreign {
+                Some(t) => format!("1 charging another budget than the one interrupted, {t} ticks"),
+                None => "0 charging another budget than the one interrupted, 0 ticks".into(),
+            };
             assert!(
-                v.as_ref().is_ok_and(|s| s.contains("1 timer interrupts billed by the rule")),
+                v.as_ref().is_ok_and(
+                    |s| s.contains("1 timer interrupts billed by the rule") && s.contains(&counted)
+                ),
                 "{head:?}: {v:?}"
             );
         }

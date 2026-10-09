@@ -11,11 +11,6 @@ programs = ["sched-budget-churn-shell"]
 # in the window the program prints (`HART-SHARE`), net of lock waits; audits are charged to no one.
 kernel_features = ["sched-trace"]
 post_check = "sched_oracle"
-# One hart until destruction's work leaves the kernel lock (kernel/scheduling.md, "Fair kernel
-# entry is bounded by count"): at two harts the shell's create and destroy calls hold the lock and
-# the victim's hart waits for it, 848 ms of 2 s, so even net of the waits it keeps a third (326
-# rv64, 406 rv32). sched-budget-churn judges the other variants at two.
-keep_smp = true
 timeout_secs = 600
 expect = [
     '^HART-SHARE shell \d+ \d+ 50\+ 2:1 100:2$',

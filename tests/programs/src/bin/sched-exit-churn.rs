@@ -21,7 +21,7 @@ pub extern "C" fn _start() -> ! {
     let run = (SLICE_US - SLICE_US / 10) * b.tpu;
     // (role, fault?, name, what, the victim's mark, the harts it is judged at)
     for (role, fault, name, what, m, at) in [
-        (Role::ThreadChurn, 0, "threads-exit", "threads that exit", 2, "+@1"),
+        (Role::ThreadChurn, 0, "threads-exit", "threads that exit", 2, "+"),
         (Role::ProcessChurn, 0, "processes-exit", "processes that exit", 3, "+"),
         (Role::ProcessChurn, 1, "processes-fault", "processes that fault", 4, "+"),
     ] {

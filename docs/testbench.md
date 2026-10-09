@@ -728,7 +728,9 @@ the old billing, fails that check in a recorded negative run. It records each de
 from user mode the same way (`x`), with its claim (`c`: the source, or 0 when another hart claimed
 it first), and checks that one that claims nothing is billed as a timer interrupt that ends no
 slice: after its expiry, to the budget the expiry billed last or to nobody, never to the budget it
-interrupted. An
+interrupted. It reports, judging nothing by them, the timer interrupts that charged a budget other
+than the one they interrupted and those ticks: another budget's timer work in the interrupted
+budget's time on its hart ([timer](kernel/timer.md#r12-scheduling-for-timer-work)). An
 interrupt's return (`O`) says where it goes: 1 to user mode, 0 to `kmain` with the interrupted
 runner's slice over at the entry, 2 to `kmain` before it, a preemption. With
 `wake_no_preempt=N` the oracle proves a timeout only wakes: at one hart N naps each against the
