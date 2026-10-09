@@ -195,4 +195,64 @@ defmodule Redoubt.UtilTest do
       checksum(notes, :md5)
     end
   end
+
+  # follow prints into its process's group leader; here a StringIO stands in for the console.
+  defp following(path) do
+    {:ok, out} = StringIO.open("")
+    test = self()
+
+    pid =
+      spawn(fn ->
+        Process.group_leader(self(), out)
+        send(test, {:followed, follow(path)})
+      end)
+
+    {pid, out}
+  end
+
+  defp printed(out), do: out |> StringIO.contents() |> elem(1)
+
+  test "follow prints the lines added from now on, a line not yet ended once it is, until killed",
+       %{tmp_dir: dir} do
+    path = write(dir, "app.log", "before\n")
+    {pid, out} = following(path)
+    Process.sleep(100)
+    File.write!(path, "one\ntw", [:append])
+    Process.sleep(1_200)
+    assert printed(out) == "one\n"
+    File.write!(path, "o\nthree\n", [:append])
+    Process.sleep(1_200)
+    assert printed(out) == "one\ntwo\nthree\n"
+    # The interrupt kills the line's process: nothing is left of follow.
+    Process.exit(pid, :kill)
+    refute_receive {:followed, _}
+  end
+
+  test "follow prints a line not yet ended as it stands once it passes 4 KiB", %{tmp_dir: dir} do
+    path = write(dir, "app.log", "")
+    {pid, out} = following(path)
+    Process.sleep(100)
+    long = String.duplicate("x", 4097)
+    File.write!(path, long, [:append])
+    Process.sleep(1_200)
+    assert printed(out) == long <> "\n"
+    File.write!(path, "y\n", [:append])
+    Process.sleep(1_200)
+    assert printed(out) == long <> "\ny\n"
+    Process.exit(pid, :kill)
+  end
+
+  test "follow ends by itself when its file gets shorter or goes away", %{tmp_dir: dir} do
+    path = write(dir, "a.log", "some text\n")
+    {_pid, _out} = following(path)
+    Process.sleep(100)
+    File.write!(path, "")
+    assert_receive {:followed, :truncated}, 2_000
+
+    {_pid, _out} = following(path)
+    Process.sleep(100)
+    File.rm!(path)
+    assert_receive {:followed, :removed}, 2_000
+    assert_raise File.Error, fn -> follow(at(dir, "missing.log")) end
+  end
 end
