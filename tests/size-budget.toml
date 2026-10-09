@@ -6,7 +6,7 @@ kind = "size-budget"
 [[crate]]
 name = "kernel"
 paths = ["kernel/src"]
-max_lines = 9739
+max_lines = 9827
 
 [[crate]]
 name = "loader"
@@ -21,7 +21,7 @@ max_lines = 362
 [[crate]]
 name = "libs/sys"
 paths = ["libs/sys/src"]
-max_lines = 1021
+max_lines = 1033
 
 [[crate]]
 name = "libs/layout"
@@ -42,6 +42,11 @@ max_lines = 841
 name = "libs/verity"
 paths = ["libs/verity/src"]
 max_lines = 173
+
+[[crate]]
+name = "libs/conhold"
+paths = ["libs/conhold/src"]
+max_lines = 70
 
 [[crate]]
 name = "libs/ipclist"
@@ -66,7 +71,7 @@ max_lines = 1088
 [[crate]]
 name = "libs/rt"
 paths = ["libs/rt/src"]
-max_lines = 3618
+max_lines = 3629
 
 [[crate]]
 name = "libs/wire"
@@ -101,7 +106,7 @@ max_lines = 1691
 [[crate]]
 name = "model"
 paths = ["model/src"]
-max_lines = 10778
+max_lines = 10825
 
 [[crate]]
 name = "servers/keyd"
@@ -126,7 +131,7 @@ max_lines = 244
 [[crate]]
 name = "servers/consoled"
 paths = ["servers/consoled/src"]
-max_lines = 388
+max_lines = 395
 
 [[crate]]
 name = "servers/blkd"

@@ -301,7 +301,7 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
 ///
 /// | Kind | a | b | flags |
 /// | --- | --- | --- | --- |
-/// | 1 MMIO | physical base | size in bytes, whole pages | bit 0: the device does DMA |
+/// | 1 MMIO | physical base | size in bytes, whole pages | bit 0: the device does DMA; bit 1: it is the console (`/chosen/stdout-path`) |
 /// | 2 IRQ | interrupt number | 0 | 0 |
 /// | 3 Reset | 0 | 0 | 0 |
 ///
@@ -333,7 +333,7 @@ fn emit_devices(args: &mut args::ArgsBuilder, platform: &Platform) {
     }
     fn mmio(args: &mut args::ArgsBuilder, r: &dt::MmioRegion) {
         let size = r.range.len().next_multiple_of(PAGE_SIZE) as u64;
-        entry(args, MMIO, r.range.start as u64, size, r.dma.into());
+        entry(args, MMIO, r.range.start as u64, size, u32::from(r.dma) | u32::from(r.console) << 1);
     }
     // The controllers, so the kernel can refuse to make a device object of either.
     args.begin(b"Ctrl");

@@ -37,7 +37,9 @@ firmware, and only a holder of the Reset device object can call it.
 
 The kernel holds nothing else:
 - **No drivers.** Its own console is the SBI debug console. Every real device (UART, virtio
-  block, virtio net) belongs to a userspace server that holds its device object.
+  block, virtio net) belongs to a userspace server that holds its device object. The console's
+  UART is shared: its holder takes the console's hold around each write, and the kernel's lines
+  wait, whole, for it ([the console's one writer](devices.md#the-consoles-one-writer)).
 - **No names.** The kernel knows handles, never paths, file names or server names. A process
   reaches only what its own handle table holds.
 - **No program loading.** The loader places the kernel and `init` at boot. After

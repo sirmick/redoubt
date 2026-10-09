@@ -158,6 +158,8 @@ impl Number {
             Number::SystemReset => set(&[BadHandle, InvalidArgument, WrongObject]),
             Number::MapFixed => set(&[InvalidArgument, OutOfMemory]),
             Number::DeviceInfo => set(&[BadHandle, WrongObject]),
+            // `WrongObject`: not the console's MMIO device. `Busy`: another process holds it.
+            Number::ConsoleHold => set(&[BadHandle, WrongObject, Busy]),
         };
         row.with(DECODING)
     }

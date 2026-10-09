@@ -175,6 +175,10 @@ impl Process {
         }
 
         let pid = self.pid();
+        // A process that dies holding the console gives the hold back first, so this line and
+        // the kernel's that waited for it start a line of their own (kernel/devices.md, "The
+        // console's one writer").
+        crate::debug::console::died(u32::from(pid.get()));
         println!("[!] Terminating process with PID {}", pid);
 
         // Free all associated memory pages, and give its budget back what the process had

@@ -7,8 +7,8 @@
 //! copies, and an implicit close would be an easy use-after-close. Close them with `close`.
 
 use redoubt_sys::{
-    BUDGET_SPEC_SLOTS, BudgetSpec, Call, DeviceInfo, Error, Handle, MAX_START_HANDLES, MemFlags, PAGE_SIZE,
-    ResetKind, Return, USAGE_SLOTS, Usage,
+    BUDGET_SPEC_SLOTS, BudgetSpec, Call, DeviceInfo, Error, Handle, Hold, MAX_START_HANDLES, MemFlags,
+    PAGE_SIZE, ResetKind, Return, USAGE_SLOTS, Usage,
 };
 
 use crate::ipc::Buffer;
@@ -262,6 +262,26 @@ impl Mmio {
         let (base, len) = self.map()?;
         // The kernel maps whole pages, so a non-zero length is at least one page.
         Ok(Registers { base, len, _not_sync: core::marker::PhantomData })
+    }
+
+    /// Takes or gives back the console's hold, on the console's registers (kernel/devices.md,
+    /// "The console's one writer"): while it is held the kernel's lines wait, whole, and they go
+    /// out when it is given back. `WrongObject` on any other device; `Busy` if another process
+    /// holds it.
+    pub fn console_hold(&self, hold: Hold) -> Result<(), Error> {
+        syscall(&Call::ConsoleHold { device: self.0, hold }).map(|_| ())
+    }
+
+    /// Runs `write`, a write of the console's registers, inside the console's hold, so no kernel
+    /// line lands inside it. A hold refused, or a call the kernel lacks, is a write as before:
+    /// the hold only keeps lines whole, and nothing waits on it.
+    pub fn console_held<R>(&self, write: impl FnOnce() -> R) -> R {
+        let held = self.console_hold(Hold::Take).is_ok();
+        let result = write();
+        if held {
+            let _ = self.console_hold(Hold::Release);
+        }
+        result
     }
 
     /// `npages` contiguous zeroed pages the device may DMA to, held by a [`Dma`].

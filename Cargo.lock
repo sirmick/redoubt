@@ -641,6 +641,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "redoubt-conhold"
+version = "0.1.0"
+
+[[package]]
 name = "redoubt-consoled"
 version = "0.1.0"
 dependencies = [
@@ -728,6 +732,7 @@ dependencies = [
  "paging",
  "plic",
  "rand_chacha",
+ "redoubt-conhold",
  "redoubt-ipclist",
  "redoubt-layout",
  "redoubt-stride",

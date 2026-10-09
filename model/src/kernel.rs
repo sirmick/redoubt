@@ -559,6 +559,11 @@ pub struct Kernel {
     pub free_frames: BTreeMap<u64, u64>,
     pub msgs: BTreeMap<u64, Msg>,
     pub halted: Option<u64>,
+    /// The console's MMIO device: the first MMIO device at boot, as the loader puts it
+    /// (kernel/boot.md).
+    pub console: Option<u64>,
+    /// The process holding the console's hold (kernel/devices.md, "The console's one writer").
+    pub console_holder: Option<u64>,
     pub sched: Scheduler,
     pub ghost: Ghost,
     next_budget: u64,
@@ -671,6 +676,8 @@ impl Kernel {
             free_frames: BTreeMap::new(),
             msgs: BTreeMap::new(),
             halted: None,
+            console: None,
+            console_holder: None,
             sched: Scheduler { mutation, ..Scheduler::default() },
             ghost: Ghost::default(),
             next_budget: ROOT,
@@ -738,6 +745,9 @@ impl Kernel {
                 DeviceSpec::Irq { n } => DeviceKind::Irq { n, fired: false, masked: true, pending: false },
                 DeviceSpec::Reset => DeviceKind::Reset,
             };
+            if k.console.is_none() && matches!(kind, DeviceKind::Mmio { .. }) {
+                k.console = Some(id);
+            }
             k.devices.insert(id, Device { id, kind, waiters: VecDeque::new() });
             hs.push(Handle { object: Object::Device(id), badge: 0, stamp: root, origin: Origin::Boot });
         }
@@ -1945,6 +1955,10 @@ impl Kernel {
         // Ghost: what the notice must report: a kill, unless the process began to die by an exit
         // or a fault (`Ghost::exiting`).
         let want = self.ghost.exit_expect.remove(&pid).unwrap_or_else(Blame::killed);
+        // A process that dies holding the console gives its hold back.
+        if self.console_holder == Some(pid) {
+            self.console_holder = None;
+        }
         let tids: Vec<u64> = p.threads.iter().copied().collect();
         for tid in tids {
             self.end_thread(tid);
@@ -2693,6 +2707,7 @@ impl Kernel {
                 self.ghost.flows.push(Flow::DeviceInfo { pid, h: *h, got: got.clone() });
                 done(got)
             }
+            S::ConsoleHold { h, hold } => done(self.console_hold(pid, *h, *hold).map(|_| Ret::Unit)),
         }
     }
 
@@ -3901,6 +3916,30 @@ impl Kernel {
             }
             DeviceKind::Reset => Ret::Device { kind: 3, a: 0, b: 0, flags: 0 },
         })
+    }
+
+    /// `console_hold(h(MMIO), hold)`: the console's hold, through the console's registers'
+    /// handle (kernel/devices.md, "The console's one writer"). Decoding checks the handle, then
+    /// the hold (1 take, 2 give back); then `BadHandle`, `WrongObject` for any device but the
+    /// console's registers, and `Busy` for a take while another process holds it. Giving back a
+    /// hold the caller does not have changes nothing. The kernel's lines, which the hold makes
+    /// wait, are not modelled.
+    pub fn console_hold(&mut self, pid: u64, h: u64, hold: u64) -> R<()> {
+        let h = decode_handle(h)?;
+        if hold != 1 && hold != 2 {
+            return Err(Error::InvalidArgument);
+        }
+        let d = self.lookup_device(pid, h)?;
+        if self.console != Some(d) {
+            return Err(Error::WrongObject);
+        }
+        match (hold, self.console_holder) {
+            (1, None) => self.console_holder = Some(pid),
+            (1, Some(holder)) if holder != pid => return Err(Error::Busy),
+            (2, Some(holder)) if holder == pid => self.console_holder = None,
+            _ => {}
+        }
+        Ok(())
     }
 
     /// `system_reset(h(Reset), kind)`: Reset device handle. The machine stops.

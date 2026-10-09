@@ -201,7 +201,7 @@ title one Devs entry, six words
 
 | `Devs` kind | a | b | flags |
 | --- | --- | --- | --- |
-| 1, MMIO | physical base | size in bytes, whole pages | bit 0: the device does DMA |
+| 1, MMIO | physical base | size in bytes, whole pages | bit 0: the device does DMA; bit 1: it is the console `/chosen/stdout-path` names, whose hold the kernel's lines wait on ([the console's one writer](devices.md#the-consoles-one-writer)); a second entry with bit 1 stops the boot |
 | 2, IRQ | interrupt number | 0 | 0 |
 | 3, Reset | 0 | 0 | 0 |
 

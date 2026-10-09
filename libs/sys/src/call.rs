@@ -110,6 +110,16 @@ pub enum ResetKind {
     PowerOffFailure = 3,
 }
 
+/// What `console_hold` does with the console's hold (kernel/devices.md, "The console's one writer").
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Hold {
+    /// The caller is about to write the console: the kernel's lines wait until it gives the hold
+    /// back.
+    Take = 1,
+    /// The caller has written: the kernel's lines that waited go out before this call returns.
+    Release = 2,
+}
+
 /// How each kind of argument travels in registers (the table in the crate docs).
 trait Arg: Sized {
     fn write(&self, w: &mut Writer);
@@ -198,6 +208,12 @@ impl Arg for ResetKind {
     fn read(r: &mut Reader) -> Result<Self, Error> {
         r.tag(&[ResetKind::PowerOff, ResetKind::Reboot, ResetKind::PowerOffFailure])
     }
+}
+
+impl Arg for Hold {
+    fn write(&self, w: &mut Writer) { w.u32(*self as u32) }
+
+    fn read(r: &mut Reader) -> Result<Self, Error> { r.tag(&[Hold::Take, Hold::Release]) }
 }
 
 /// Added to every call's number in the table below. Every `a0` outside the table, this one and
@@ -338,4 +354,8 @@ calls! {
     /// budget (kernel/budgets.md, R10); the count is the children it still has. Does not return
     /// if the caller runs in that child's subtree or its process object is charged there.
     BudgetReap = 28 "budget_reap" { budget: Handle };
+    /// Takes or gives back the console's hold, through the console's MMIO device handle: while the
+    /// caller holds it, the kernel's lines wait, whole, and go out when it is given back
+    /// (kernel/devices.md, "The console's one writer").
+    ConsoleHold = 29 "console_hold" { device: Handle, hold: Hold };
 }

@@ -54,6 +54,11 @@ impl Checker {
             return Err(v.clone());
         }
         structure(k)?;
+        // The console's hold is a live process's: one that dies holding it gives it back
+        // (kernel/devices.md, "The console's one writer").
+        if let Some(pid) = k.console_holder {
+            ensure!(k.processes.contains_key(&pid), "Console: process {pid} holds the console after its end");
+        }
         serving(k)?;
         i1_i2_i3_i4_handles(k)?;
         i5_charging(k)?;

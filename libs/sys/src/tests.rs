@@ -80,6 +80,8 @@ fn sample_calls() -> Vec<Call> {
         Call::MapFixed { addr: 0x2000_0000, len: 0x1000, flags: rw },
         Call::DeviceInfo { device: h(5) },
         Call::BudgetReap { budget: h(13) },
+        Call::ConsoleHold { device: h(5), hold: Hold::Take },
+        Call::ConsoleHold { device: h(5), hold: Hold::Release },
     ]
 }
 
@@ -524,6 +526,15 @@ fn malformed_calls_are_refused() {
     assert_eq!(decode([reap, wide, 0, 0, 0, 0, 0, 0]), Err(Error::BadHandle), "reap wide handle");
     assert_eq!(decode([reap, 1, 1, 0, 0, 0, 0, 0]), Err(Error::InvalidArgument), "reap, a2");
     assert_eq!(decode([reap, 1, 0, 0, 0, 0, 0, 0]), Ok(Call::BudgetReap { budget: h(1) }));
+    let hold = Number::ConsoleHold as u64;
+    assert_eq!(decode([hold, 5, 0, 0, 0, 0, 0, 0]), Err(Error::InvalidArgument), "hold 0");
+    assert_eq!(decode([hold, 5, 3, 0, 0, 0, 0, 0]), Err(Error::InvalidArgument), "unknown hold");
+    assert_eq!(decode([hold, 0, 1, 0, 0, 0, 0, 0]), Err(Error::BadHandle), "hold, handle 0");
+    assert_eq!(decode([hold, 5, 1, 1, 0, 0, 0, 0]), Err(Error::InvalidArgument), "hold, a3");
+    assert_eq!(
+        decode([hold, 5, 2, 0, 0, 0, 0, 0]),
+        Ok(Call::ConsoleHold { device: h(5), hold: Hold::Release })
+    );
 }
 
 #[test]
@@ -781,6 +792,9 @@ fn error_rows() {
     // `budget_reap` fails only on its handle, as `budget_destroy` (kernel/budgets.md).
     assert!(has(Number::BudgetReap, &[BadHandle, WrongObject]));
     assert!(lacks(Number::BudgetReap, &[OutOfMemory, NotPermitted, LabelDenied, ClassDenied]));
+    // `console_hold` fails only on its handle, or on another process's hold (kernel/devices.md).
+    assert!(has(Number::ConsoleHold, &[BadHandle, WrongObject, Busy]));
+    assert!(lacks(Number::ConsoleHold, &[OutOfMemory, NotPermitted, TooLarge, Timeout]));
     // Every call that adds a handle to its caller's table (`MAX_HANDLES`).
     for n in [Number::ProcessCreate, Number::EndpointCreate, Number::Mint, Number::BudgetCreate] {
         assert!(has(n, &[OutOfMemory, TooLarge]), "{n:?}");

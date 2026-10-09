@@ -40,6 +40,7 @@
 //! one to an untrusted process by accident; the kernel enforces only the flag.
 
 use core::convert::TryFrom;
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 use redoubt_layout::Pid;
 use redoubt_sys::{Error, PAGE_SIZE};
@@ -55,6 +56,10 @@ pub const DEVICE_PAGES: u64 = 1;
 /// Interrupt numbers a `Devs` entry may name: the PLIC numbers its sources 1 to 1023. The IRQ
 /// index (`Objects::irqs`) has one slot each, and an entry at or above it stops the boot.
 pub const MAX_IRQS: usize = 1024;
+
+/// The console's first register page (its base over `PAGE_SIZE`; a Sv32 address over a page fits
+/// a `usize`), from the MMIO `Devs` entry the loader marks as the console; `usize::MAX` if none.
+static CONSOLE_PAGE: AtomicUsize = AtomicUsize::new(usize::MAX);
 
 /// First word of every device frame, so that a frame read as a device that is not one is
 /// caught. Distinct from every other object's magic.
@@ -263,6 +268,12 @@ impl MemoryManager {
         let n = entries.len();
         for words in entries {
             let d = self.decode_entry(words);
+            // The entry the loader marks as the console's registers (kernel/boot.md); a second
+            // stops the boot (R17), and with none no process can take the console's hold.
+            if d.kind == Kind::Mmio && words[5] & DEVS_CONSOLE != 0 {
+                assert!(CONSOLE_PAGE.load(Ordering::Relaxed) == usize::MAX, "Devs: two consoles");
+                CONSOLE_PAGE.store((d.base / PAGE_SIZE as u64) as usize, Ordering::Relaxed);
+            }
             // A DMA device the kernel cannot reset gets no object at all (fail closed).
             if d.kind == Kind::Mmio && d.dma && !self.dma_register(d.base) {
                 println!("Devices: no DMA slot for {:x}; it gets no device object", d.base);
@@ -336,6 +347,9 @@ impl MemoryManager {
 const ENTRY_WORDS: usize = 6;
 /// An MMIO `Devs` entry's flag: the device is a bus master (kernel/boot.md).
 const DEVS_DMA: u32 = 1;
+/// An MMIO `Devs` entry's flag: the console's registers, which the kernel's lines share
+/// (kernel/devices.md, "The console's one writer").
+const DEVS_CONSOLE: u32 = 2;
 
 /// The loader's `Devs` entries (kernel/boot.md), or `None` if it reported none.
 fn devs() -> Option<core::slice::ChunksExact<'static, u32>> {
@@ -445,6 +459,18 @@ impl MemoryManager {
             Kind::Irq => redoubt_sys::DeviceInfo::Irq(d.irq),
             Kind::Reset => redoubt_sys::DeviceInfo::Reset,
         })
+    }
+
+    /// The `console_hold(h, hold)` handle check: an MMIO device object for the console's
+    /// registers, the one the kernel's lines share (kernel/devices.md, "The console's one
+    /// writer"). Another device is `WrongObject`.
+    pub fn check_console(&self, pid: Pid, h: u32) -> Result<(), Error> {
+        let d = self.device_of_kind(pid, h, Kind::Mmio)?;
+        if d.base / PAGE_SIZE as u64 == CONSOLE_PAGE.load(Ordering::Relaxed) as u64 {
+            Ok(())
+        } else {
+            Err(Error::WrongObject)
+        }
     }
 
     /// The `system_reset(h(Reset), kind)` handle check. It only checks: the reset itself is
