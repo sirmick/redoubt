@@ -1,0 +1,59 @@
+description = "The console's one writer at 2 harts in real time (kernel/devices.md, \"The console's one writer\"): a thread writes long lines without a pause on one hart, each inside the console's hold, while the main thread starts and kills 40 children on the other. Each kill's kernel line waits, whole, for the writer's line to end: all 40 come out whole, and no writer line has anything inside it"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# No icount: the harts must run at once, as they do in every killing run under plain TCG, which
+# is where the two writers used to interleave byte by byte (kernel/scheduling.md, "Residual
+# risks", until this).
+programs = ["console-one-writer"]
+smp = [2]
+timeout_secs = 300
+# The kills' lines are the kernel's own (no `[pid` prefix, so no process prints them), one pattern
+# for each of the 40. A writer line is `[console] line N #...#`: a `#` next to anything but a `#`,
+# a space or the end is a line broken into.
+expect = [
+    '^\[!\] Terminating process with PID \d+$',
+    '^\[!\] Terminating process with PID \d+$',
+    '^\[!\] Terminating process with PID \d+$',
+    '^\[!\] Terminating process with PID \d+$',
+    '^\[!\] Terminating process with PID \d+$',
+    '^\[!\] Terminating process with PID \d+$',
+    '^\[!\] Terminating process with PID \d+$',
+    '^\[!\] Terminating process with PID \d+$',
+    '^\[!\] Terminating process with PID \d+$',
+    '^\[!\] Terminating process with PID \d+$',
+    '^\[!\] Terminating process with PID \d+$',
+    '^\[!\] Terminating process with PID \d+$',
+    '^\[!\] Terminating process with PID \d+$',
+    '^\[!\] Terminating process with PID \d+$',
+    '^\[!\] Terminating process with PID \d+$',
+    '^\[!\] Terminating process with PID \d+$',
+    '^\[!\] Terminating process with PID \d+$',
+    '^\[!\] Terminating process with PID \d+$',
+    '^\[!\] Terminating process with PID \d+$',
+    '^\[!\] Terminating process with PID \d+$',
+    '^\[!\] Terminating process with PID \d+$',
+    '^\[!\] Terminating process with PID \d+$',
+    '^\[!\] Terminating process with PID \d+$',
+    '^\[!\] Terminating process with PID \d+$',
+    '^\[!\] Terminating process with PID \d+$',
+    '^\[!\] Terminating process with PID \d+$',
+    '^\[!\] Terminating process with PID \d+$',
+    '^\[!\] Terminating process with PID \d+$',
+    '^\[!\] Terminating process with PID \d+$',
+    '^\[!\] Terminating process with PID \d+$',
+    '^\[!\] Terminating process with PID \d+$',
+    '^\[!\] Terminating process with PID \d+$',
+    '^\[!\] Terminating process with PID \d+$',
+    '^\[!\] Terminating process with PID \d+$',
+    '^\[!\] Terminating process with PID \d+$',
+    '^\[!\] Terminating process with PID \d+$',
+    '^\[!\] Terminating process with PID \d+$',
+    '^\[!\] Terminating process with PID \d+$',
+    '^\[!\] Terminating process with PID \d+$',
+    '^\[!\] Terminating process with PID \d+$',
+    '^\[console\] ok: 40 of 40 children killed$',
+    '^\[console\] ok: the writer wrote \d+ lines beside the kills$',
+    '^CONSOLE-ONE-WRITER TEST PASSED$',
+]
+forbid = ['\[console\] FAIL', '#[^#\s]', '^#', '\S\[!\]']
+poweroff = true
