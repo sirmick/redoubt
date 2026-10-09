@@ -465,7 +465,7 @@ reaping by one timeout, no more.
 
 ### Many requests at once
 
-<details><summary>Status: built · partly tested: on the machine only in `aio-many-reads` and `aio-many-reads-two` · tested (12)</summary>
+<details><summary>Status: built · partly tested: on the machine only in `aio-many-reads` and `aio-many-reads-two` · tested (13)</summary>
 
 - bench:aio-many-reads
 - bench:aio-many-reads-two
@@ -474,6 +474,7 @@ reaping by one timeout, no more.
 - host:redoubt-client::buffers_come_back_to_their_submitter_by_value_in_any_order
 - host:redoubt-client::a_flushed_requests_buffer_is_returned_exactly_once
 - host:redoubt-client::a_tag_a_flush_names_is_not_reused_before_its_rflush
+- host:redoubt-client::a_tag_is_not_reused_before_its_completion_is_taken
 - host:redoubt-client::a_batch_goes_a_page_at_a_time
 - host:redoubt-client::a_write_is_at_most_one_page
 - host:redoubt-client::two_connections_have_a_waiter_each_and_the_caller_idles_in_receive
@@ -538,6 +539,10 @@ schedulers submit, and a waiter per connection wakes it
   own end does, and every request outstanding comes back ended, with its buffer, its fate
   unknown. A request flushed before it was sent comes back flushed at once; one already sent
   comes back with its answer, or flushed with the `Rflush`.
+- **A tag names one request until its completion is taken**, not only until its answer is read:
+  one completion buffer carries several answers, a server answers out of order, and a request
+  the caller sends on taking the first must not take the tag of one still to come, so a caller
+  may match completions to its requests by tag (beamlet's VM does).
 
 ### Dropped files, calls by path and generated calls
 
