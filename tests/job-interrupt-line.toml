@@ -1,0 +1,52 @@
+description = "An interrupted line loses only itself (docs/plan/m2-usable-shell.md, attack suite; docs/userland/shell.md, \"Interrupting and killing jobs\"): the console session binds x, runs a line that loops forever in Elixir and is sent Ctrl+C, then another sent Ctrl+\\\\ (the session's own key). Each loop is ended, the session goes on, and each next line still sees x. Every verdict is the session's own output. The next line is typed while the loop runs, before the interrupt: typed with it, in one read, it would go with the interrupt"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The image's bundle with pipe-stage public in /boot, as pipe-hostile-output's.
+recipe = "tests/data/pipe/boot.toml"
+# As userland-boot: the principals' budgets, each holding the shell VM's session, need 1 GiB.
+memory_mib = 1024
+timeout_secs = 450
+expect = [
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+    '(^|\] )\{:x, 1\}$',
+    '(^|\] )loop one$',
+    '(^|\] )\^C$',
+    '(^|\] )\{:after_one, 2\}$',
+    '(^|\] )loop two$',
+    '(^|\] )\^C$',
+    '(^|\] )\{:after_two, 3\}$',
+]
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    'init: restarted',
+    'EXCEPTION',
+    'still ending',
+]
+
+[[input]]
+after = 'Redoubt shell, on Elixir '
+send = "{:x, x = 1}\n"
+
+[[input]]
+after = '(^|\] )\{:x, 1\}$'
+send = "IO.puts(\"loop one\"); Stream.cycle([1]) |> Stream.run()\n"
+
+[[input]]
+after = '(^|\] )loop one$'
+send = "{:after_one, x + 1}\n\u0003"
+
+[[input]]
+after = '(^|\] )\{:after_one, 2\}$'
+send = "IO.puts(\"loop two\"); Stream.cycle([1]) |> Stream.run()\n"
+
+[[input]]
+after = '(^|\] )loop two$'
+send = "{:after_two, x + 2}\n\u001c"
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"

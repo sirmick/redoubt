@@ -1,0 +1,56 @@
+description = "A job ends, and only it (docs/plan/m2-usable-shell.md, attack suite; docs/userland/shell.md, \"Interrupting and killing jobs\"): the console session starts two background jobs, yes into count and a stage that never ends, kills the first, then runs a foreground stage and interrupts it with Ctrl+C. The killed job's stages end killed, the other runs on through the kill and the interrupt, and once it is killed too the session's budget, read from the kernel, holds what it held before the jobs, piped's gone. Every verdict is the session's"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The image's bundle with pipe-stage public in /boot, as pipe-hostile-output's.
+recipe = "tests/data/pipe/boot.toml"
+# As userland-boot: the principals' budgets, each holding the shell VM's session, need 1 GiB.
+memory_mib = 1024
+timeout_secs = 450
+expect = [
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+    '(^|\] )\{:base, \{[0-9]+, [0-9]+\}\}$',
+    '(^|\] )\{:started, :running, :running\}$',
+    '(^|\] )\{:killed, \[killed: 0, killed: 0\], :running\}$',
+    '(^|\] )spinning f$',
+    '(^|\] )\^C$',
+    '(^|\] )\{:after_fg, :running, 1\}$',
+    '(^|\] )\{:end, \[killed: 0\], true, \{:error, :not_running\}, 0\}$',
+]
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    'init: restarted',
+    'EXCEPTION',
+    'still ending',
+]
+
+[[input]]
+after = 'Redoubt shell, on Elixir '
+send = "c = fn -> {:ok, o} = Redoubt.Budget.own(); {:ok, u} = Redoubt.Budget.usage(o); {elem(u.weight, 1), elem(u.processes, 1)} end; {:base, before = c.()}\n"
+
+[[input]]
+after = '(^|\] )\{:base, \{'
+send = "a = bg(~w(pipe-stage yes | pipe-stage count)); b = bg(~w(pipe-stage wait)); {:started, Job.status(a), Job.status(b)}\n"
+
+[[input]]
+after = '(^|\] )\{:started, :'
+send = "{:killed, Job.kill(a).endings, Job.status(b)}\n"
+
+[[input]]
+after = '(^|\] )\{:killed, \['
+send = "pipe(~w(pipe-stage spin f))\n"
+
+[[input]]
+after = '(^|\] )spinning f$'
+send = "{:after_fg, Job.status(b), Enum.count(jobs())}\n\u0003"
+
+[[input]]
+after = '(^|\] )\{:after_fg, :'
+send = "{:end, Job.kill(b).endings, c.() == before, Redoubt.Pipes.usage(), Enum.count(jobs())}\n"
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"

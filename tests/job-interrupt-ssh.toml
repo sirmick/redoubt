@@ -1,0 +1,60 @@
+description = "The interrupt over SSH (docs/userland/shell.md, \"Interrupting and killing jobs\"; docs/servers/sshd.md, \"A pty session\"): in alice's session over SSH, a pipeline of three stages that spin without yielding, and then follow() of a file a process the line spawned appends to, are each ended by a break the bench's ssh client sends (its ~B escape), which sshd hands the session as its own key, 0x1C. The session goes on; after the pipeline its piped is gone with its budget, and follow() printed the lines added before the break. Every verdict is the session's output"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The image's bundle with pipe-stage public in /boot, as pipe-hostile-output's.
+recipe = "tests/data/pipe/boot.toml"
+# As userland-boot: the principals' budgets, each holding the shell VM's session, need 1 GiB.
+memory_mib = 1024
+timeout_secs = 450
+expect = [
+    '^init: started sshd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
+    '^init: started steward, console [0-9a-f]{16}$',
+]
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    '^init: .* (exited|faulted|was killed)',
+    'init: restarted',
+    'EXCEPTION',
+    'sshd: login .*: refused',
+]
+
+# Each answer is tagged, so a pattern matches what the shell printed and never the echo of the
+# line typed. ~B is the client's escape: it sends a break when it follows a newline it sent.
+[[session]]
+user = "alice"
+pty = true
+steps = [
+    { expect = '\([0-9]+\)> ' },
+    { send = "pipe(~w(pipe-stage spin s | pipe-stage spin s | pipe-stage spin s))\n" },
+    { expect = 'spinning s' },
+    { send = "~B" },
+    { expect = '\^C' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:after_break, Redoubt.Pipes.usage()}\n" },
+    { expect = '\{:after_break, \{:error, :not_running\}\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "p = \"/home/alice/follow.log\"; File.write!(p, \"before\\n\"); spawn(fn -> for i <- 1..3, do: (Process.sleep(700); File.write!(p, \"added #{i}\\n\", [:append])) end); follow(p)\n" },
+    { expect = 'added 1' },
+    { expect = 'added 2' },
+    { expect = 'added 3' },
+    { send = "~B" },
+    { expect = '\^C' },
+    { expect = '\([0-9]+\)> ' },
+    # p went with the interrupted line that bound it.
+    { send = "{:after_follow, File.read!(\"/home/alice/follow.log\"), File.rm!(\"/home/alice/follow.log\")}\n" },
+    { expect = '\{:after_follow, "before\\nadded 1\\nadded 2\\nadded 3\\n", :ok\}' },
+    { expect = '\([0-9]+\)> ' },
+    { exit = 0 },
+]
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]
+forward = [22]

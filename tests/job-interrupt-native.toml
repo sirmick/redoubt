@@ -1,0 +1,57 @@
+description = "No program swallows the interrupt (docs/plan/m2-usable-shell.md, attack suite; docs/userland/shell.md, \"Interrupting and killing jobs\"): the console session execs a stage that spins without yielding while it holds the session's feed of what is typed, and sends Ctrl+C; then runs three spinning stages in a pipeline and sends Ctrl+\\\\. Each time the line ends, and the session's budget, read from the kernel, holds what it held before the line, its children's weight and processes, piped's gone with the last pipeline. Every verdict is the session's"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The image's bundle with pipe-stage public in /boot, as pipe-hostile-output's.
+recipe = "tests/data/pipe/boot.toml"
+# As userland-boot: the principals' budgets, each holding the shell VM's session, need 1 GiB.
+memory_mib = 1024
+timeout_secs = 450
+expect = [
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+    '(^|\] )\{:base, \{[0-9]+, [0-9]+\}\}$',
+    '(^|\] )spinning$',
+    '(^|\] )\^C$',
+    '(^|\] )\{:after_exec, true, \{:error, :not_running\}\}$',
+    '(^|\] )spinning p$',
+    '(^|\] )\^C$',
+    '(^|\] )\{:after_pipe, true, \{:error, :not_running\}\}$',
+]
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    'init: restarted',
+    'EXCEPTION',
+    'still ending',
+]
+
+[[input]]
+after = 'Redoubt shell, on Elixir '
+send = "c = fn -> {:ok, o} = Redoubt.Budget.own(); {:ok, u} = Redoubt.Budget.usage(o); {elem(u.weight, 1), elem(u.processes, 1)} end; {:base, before = c.()}\n"
+
+# exec holds the feed: what is typed is the stage's, so nothing is typed ahead of the interrupt.
+[[input]]
+after = '(^|\] )\{:base, \{'
+send = "exec(\"pipe-stage\", [\"spin\"])\n"
+
+[[input]]
+after = '(^|\] )spinning$'
+send = "\u0003"
+
+[[input]]
+after = '(^|\] )\^C$'
+send = "{:after_exec, c.() == before, Redoubt.Pipes.usage()}\n"
+
+[[input]]
+after = '(^|\] )\{:after_exec, (true|false)'
+send = "pipe(~w(pipe-stage spin p | pipe-stage spin p | pipe-stage spin p))\n"
+
+[[input]]
+after = '(^|\] )spinning p$'
+send = "{:after_pipe, c.() == before, Redoubt.Pipes.usage()}\n\u001c"
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"

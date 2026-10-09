@@ -168,6 +168,7 @@ Files come in through `cat` and go out through `w`; everything between takes lin
 | `w(lines, path)`, `append(lines, path)` | write or add lines to a file |
 | `table(rows)` | rows laid out in columns, with a header and a titled border if asked |
 | `hexdump(path)`, `checksum(path)` | a file's bytes, and its hash |
+| `follow(path)` | the lines added to a file from now on, printed as they come, until the interrupt; it looks at the file's size twice a second, since no file server says when a file grows, prints a line not yet ended as it stands once it passes 4 KiB, and ends by itself if the file gets shorter or goes away |
 
 - `cat` returns `%Lines{}`: enumerable and lazy, so `cat("big.log") |> head(5)` reads only the
   start of the file, and a consumer that stops early closes it. It checks every file when called,
@@ -222,9 +223,6 @@ Status: built · partly tested: `clear()` runs on the host only, in the shell's 
 | `clear()` | clear the screen; the next prompt is drawn at its top |
 
 Not built:
-- **`follow(path)`**, the lines added to a file as they come until the interrupt, waits for
-  [interrupting a line](#interrupting-and-killing-jobs): until then the interrupt ends no line
-  being evaluated, so nothing would end it.
 - **`now()`, `today()`, `ago(time)`**, wall-clock time, which a session has from
   M6 (persist, install, share).
 
@@ -236,13 +234,16 @@ A native stage is a program in a budget of its own, joined to the next by a serv
 `pipe(~w(grep error log.txt | wc -l))` is the short form, and its value is the lines of the last
 stage's standard output, or, if a stage did not exit 0, those lines and every stage's ending;
 `cat("log.txt") |> pipe(~w(grep error))` gives the first stage lines to read. The stages' standard
-error is drawn as it comes, through the guard. `Redoubt.Cmd` is the explicit form, which comes with
-jobs:
+error is drawn as it comes, through the guard. `bg` runs one in the background and gives its job
+([jobs](#interrupting-and-killing-jobs)):
 
 ```elixir
-{:ok, [job]} = Cmd.new() |> Cmd.source("log.txt") |> Cmd.pipe({"grep", ["error"]}) |> Cmd.run()
+job = cat("log.txt") |> bg(~w(grep error))
 Job.await(job).stdout
 ```
+
+`Redoubt.Cmd`, an explicit builder over the same (`Cmd.new() |> Cmd.source("log.txt") |>
+Cmd.pipe({"grep", ["error"]}) |> Cmd.run()`), is not built.
 
 A native stage is for what should not run with the session's authority (an untrusted parser) or
 needs its own address space; everything else is Elixir. How programs are launched, how their
@@ -260,22 +261,41 @@ harness's grant kinds ([agents](agents.md#the-agent-harness)): `read:`, `write:`
 
 ### Interrupting and killing jobs
 
-Status: planned · M2 (usable shell)
+Status: built · partly tested: the bound on what a background job keeps of its output is the shell's ExUnit suite's (`test/redoubt/jobs_test.exs` keeps the job table's own rules), not attacked on the machine; the interrupt's path in the driver and the evaluator runs in that suite on both VMs too · tested: bench:job-interrupt-line, bench:job-interrupt-native, bench:job-kill, bench:job-interrupt-ssh
 
-There are no signals and no per-process kill. A job is killed by destroying its budget
+There are no signals and no per-process kill. A job is one pipeline, an `exec` or a `pipe/1`, and
+it is killed by destroying its stages' budgets
 ([R10 (destruction)](../kernel/budgets.md#r10-destruction)): the shell carves one budget per native
-stage from the session's, so `Job.kill(job)` ends that stage, everything it started, and nothing
-else. `Job.status(job)` is `:running`, `:exited`, `:faulted` or `:killed`, read from the exit
-notice ([processes](../kernel/processes.md#exit-notices)). A job's budget is carved from the
-session's, so ending it can never touch the session.
+stage from the session's, so `Job.kill(job)` ends the job's stages, everything they started, and
+nothing else. `Job.status(job)` is `:running`, `:exited`, `:faulted` or `:killed`, read from the
+exit notices ([processes](../kernel/processes.md#exit-notices)). A job's budgets are carved from
+the session's, so ending it can never touch the session.
+
+- **The session's jobs** (`Redoubt.Jobs`, started at the first job, never at the prompt) are each
+  pipeline's owner process, the one that launched its stages and gets their exit notices. `jobs()`
+  lists them: number, foreground or background, state and command. Killing a job is asking its
+  owner to destroy every stage's budget, which it does at once; it holds no other job's.
+- **In the background**, `bg(words)` (or `Job.start(stages, opts)`) starts a pipeline and gives its
+  `Job` at once. It reads only the lines it is given, never what is typed, and neither the
+  interrupt nor the line that started it ends it. What it writes, and its stages' standard error,
+  is kept, 64 KiB each, what comes past that counted, until `Job.await(job)` takes it; until then
+  `jobs()` lists it. A job ends by itself, by `Job.kill`, or with the session, whose budget its
+  budgets were carved from. The session keeps the results of 16 ended background jobs nobody has
+  awaited: past them the earliest started is dropped, and `jobs()` counts the jobs dropped.
+  There is no `fg` or `bg` to move a running job, and no suspending:
+  there are no process groups and no stop state. `Redoubt.Cmd`, the explicit builder, is not
+  built ([native programs and pipes](#native-programs-and-pipes)).
 
 The interrupt is Ctrl+C or the session's own key, Ctrl+\ (0x1C), which no full-screen program
 can take and the driver never forwards:
-- **The interrupt with a job in the foreground** destroys the budget of every native stage of that job.
-  Elixir work, a line's evaluation or a screen program, is ended by killing its Erlang process
-  with an untrappable exit (`:kill`); a screen's process is sent the exit `:interrupt` first, so
-  its line tells the interrupt from a failure. The session and its VM survive, and the shell
-  keeps the bindings of every line before the interrupted one.
+- **The interrupt while a line is evaluated** ends the line: the driver draws `^C` and tells the
+  shell, which kills the line's Erlang process with an untrappable exit (`:kill`), and the
+  processes linked to it go with it. Every pipeline the line runs in the foreground watches it,
+  so their stages' budgets are destroyed; the shell waits for that, at most 2 s, saying so in a
+  line if it is still under way, before the next prompt. A screen's process is sent the exit
+  `:interrupt` first, so its line tells the interrupt from a failure. The session and its VM
+  survive, and the shell keeps the bindings of every line before the interrupted one; a binding
+  the interrupted line made is gone with it.
 - **The interrupt at an idle prompt** clears the line, drawing `^C` after it whichever key it was. There is no break menu and no job-control menu:
   both are OTP's `user_drv`, which the shell's driver replaces
   ([line editing](#line-editing-and-history)). A session ends only by `exit` or Ctrl+D.
@@ -303,8 +323,6 @@ What a job cannot do:
 
 Processes an expression spawned without a link are not killed by Ctrl+C; background work belongs
 in a `Job`.
-
-**Open:** none.
 
 ### The terminal library
 

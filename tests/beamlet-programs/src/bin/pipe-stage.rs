@@ -10,6 +10,8 @@
 //! - `yes`: writes `y` lines until a write is refused, then exits [`REFUSED`].
 //! - `exit`: exits at once, reading nothing.
 //! - `wait`: reads nothing and never ends.
+//! - `spin [TAG]`: writes `spinning`, the tag and a newline to its standard error, then runs without end and
+//!   without yielding, reading nothing: a stage that holds its CPU share and never calls.
 //! - `hostile`: writes control sequences to its output and its standard error.
 //! - `attack`: tries every way past its three streams (below), then writes `attack-out` and a newline: its
 //!   output is the only thing it can reach, so that is all the next stage gets.
@@ -124,6 +126,9 @@ fn run(startup: &Startup) -> u32 {
         ["yes"] => Ok(yes(&mut s)),
         ["exit"] => Ok(0),
         ["wait"] => redoubt_init_programs::park(),
+        ["spin", tag @ ..] => {
+            s.err(format!("{}\n", [&["spinning"], tag].concat().join(" ")).as_bytes()).map(|()| spin())
+        }
         ["hostile"] => hostile(&mut s),
         ["attack"] => s.out(b"attack-out\n").map(|()| 0),
         _ => Ok(BAD_ARGS),
@@ -173,6 +178,12 @@ fn generate(s: &mut Streams, mut n: usize) -> Result<u32, Error> {
         n -= take;
     }
     Ok(0)
+}
+
+fn spin() -> u32 {
+    loop {
+        core::hint::spin_loop();
+    }
 }
 
 fn yes(s: &mut Streams) -> u32 {

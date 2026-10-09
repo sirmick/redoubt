@@ -210,7 +210,11 @@ and native programs and pipes: a native stage's standard streams are pipes the s
 through a `piped` of its own, `pipe/1` runs pipelines of stages, each in a budget of its own, and
 `exec` a stage that reads what is typed and holds no console; a stage reaches only its three
 streams, and its output reaches the console only through the shell's guard
-([native programs](../userland/native.md#standard-input-and-output-and-pipes)). What the milestone builds on: the serving
+([native programs](../userland/native.md#standard-input-and-output-and-pipes)); and jobs: the
+interrupt, Ctrl+C, the session's own key, or an INT or break over SSH, ends the line being
+evaluated and every native stage it runs in the foreground, never the session, `bg` runs a
+pipeline in the background, and `Job.kill` destroys one job's stage budgets and nothing else
+([the shell](../userland/shell.md#interrupting-and-killing-jobs)). What the milestone builds on: the serving
 library's parked calls ([serving](../servers/serving.md#parked-calls)), `consoled`'s 9P console
 ([consoled](../servers/consoled.md)), and budget destruction as the only way to end a process
 ([budgets](../kernel/budgets.md#r10-destruction)). The first step on Redoubt is built: a typed call
