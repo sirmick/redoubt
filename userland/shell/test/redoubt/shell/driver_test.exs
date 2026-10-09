@@ -21,12 +21,24 @@ defmodule Redoubt.Shell.DriverTest do
   end
 
   # `opts` replace these (the driver takes an option's first value): a `size` of its own is the
-  # driver's size, and the test's model must be made at it.
+  # driver's size, and the test's model must be made at it. `heap_words` is not the driver's: it
+  # limits the driver's process as a session's VM does, the binaries it holds counted with its
+  # heap.
   defp start(opts \\ [], rows \\ @rows) do
     test = self()
+    {heap, opts} = Keyword.pop(opts, :heap_words)
 
     driver =
       spawn_link(fn ->
+        if heap,
+          do:
+            Process.flag(:max_heap_size, %{
+              size: heap,
+              kill: true,
+              error_logger: false,
+              include_shared_binaries: true
+            })
+
         Redoubt.Shell.Driver.run(
           Keyword.merge(
             [
@@ -53,6 +65,26 @@ defmodule Redoubt.Shell.DriverTest do
       {:drawn, bytes} -> terminal |> Terminal.feed(bytes) |> screen(done)
     after
       if(done.(terminal), do: 300, else: 10_000) -> terminal
+    end
+  end
+
+  # The bytes drawn until `pattern` matches the end of what was drawn (60 s at most), counted,
+  # without a model: their count, and that end.
+  defp drawn_until(pattern, bytes \\ 0, tail \\ "") do
+    receive do
+      {:drawn, drawn} ->
+        tail =
+          binary_part(
+            tail <> drawn,
+            max(byte_size(tail <> drawn) - 4096, 0),
+            min(byte_size(tail <> drawn), 4096)
+          )
+
+        if tail =~ pattern,
+          do: {bytes + byte_size(drawn), tail},
+          else: drawn_until(pattern, bytes + byte_size(drawn), tail)
+    after
+      60_000 -> {bytes, tail}
     end
   end
 
@@ -236,6 +268,39 @@ defmodule Redoubt.Shell.DriverTest do
     refute Terminal.text(terminal) =~ "before"
     assert row(terminal, 0) =~ ~r/^:ok$/
     assert row(terminal, 1) =~ ~r/\(3\)>$/
+    type(driver, "exit\r")
+    ends(driver)
+  end
+
+  # A session's VM gives each process a sixteenth of its budget's bytes, in 8-byte words: for the
+  # image's 11,008-page session, the driver's limit on the machine.
+  @session_heap_words div(11_008 * 4096, 16 * 8)
+
+  test "a printed line of 70,000 bytes is drawn within a session's heap limit, and the session goes on" do
+    {driver, terminal} = start(heap_words: @session_heap_words)
+    type(driver, "IO.puts(String.duplicate(\"z\", 70_000)); :seventy\r")
+    terminal = screen(terminal, &(Terminal.text(&1) =~ ~r/^:seventy$/m))
+
+    assert Terminal.text(terminal) =~ ~r/^z{#{@cols}}$/m
+    assert Terminal.text(terminal) =~ ~r/^:seventy$/m
+    type(driver, "exit\r")
+    ends(driver)
+  end
+
+  test "a printed line of 1 MiB, of text and of control characters, is drawn within a session's heap limit" do
+    {driver, _terminal} = start(heap_words: @session_heap_words)
+    type(driver, "IO.puts(String.duplicate(\"z\", 1_048_576)); :mib\r")
+    {bytes, tail} = drawn_until(~r/\r\n:mib\r\n/)
+    assert bytes > 1_048_576
+    assert tail =~ ~r/\r\n:mib\r\n/
+
+    # Each ESC is drawn as two characters, ^[.
+    type(driver, "IO.puts(String.duplicate(<<27>>, 1_048_576)); :escapes\r")
+    {bytes, tail} = drawn_until(~r/\r\n:escapes\r\n/)
+    assert bytes > 2 * 1_048_576
+    assert tail =~ ~r/\r\n:escapes\r\n/
+    refute tail =~ "\e"
+    assert Process.alive?(driver)
     type(driver, "exit\r")
     ends(driver)
   end

@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 542
+revision = 545
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1828,8 +1828,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M2"
   body = "Found by CTX2's case work on rv64 (on CTX2's tree; check main first): IO.puts(String.duplicate(\"z\", 70_000)) at the prompt kills the shell and the VM exits. Likely a heap limit (max_heap_size, killing) hit in the driver/printer or the console path while escaping or chunking one long write, or a console write bound. Find the process and the limit, fix it so a long output line is written in bounded pieces (or refused with a message) without killing the session, and add a host test and a machine case on both widths (a 1 MiB line too). Strict track if the fix is in the escaping/drawing path: the steward red reviews."
-  state = "active"
-  revision = 533
+  state = "done"
+  revision = 545
   overrides = ["2026-10-09: started by Orchestrator before M1 (reported): M2 shell bug found by CTX2"]
 
 [[node]]
@@ -1871,8 +1871,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   needs = ["TRY1"]
   body = "Owner's question (does it properly idle?). Boot launch's machine with 4 harts, log in, leave the prompt idle for 60 s; count from outside (QEMU -d int over the window's file offsets) interrupts per second per hart by cause and user ecalls, and QEMU's host CPU from /proc/<pid>/stat; measure first, then ceilings at ~2x; a hot spot found becomes a follow-up (a test-only kernel per-budget wake count). Quiet class. Tier B unless the kernel changes."
-  state = "todo"
-  revision = 528
+  state = "reported"
+  revision = 543
 
 [[node]]
   id = "B46"
@@ -1883,3 +1883,12 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "From B45: on the machine, printing a 1 MiB line takes about 2 minutes (Text.visible plus the encoder). Profile on beamlet (which of grapheme walking, escaping, measuring, encoding dominates), make the common case (printable ASCII/UTF-8 with no controls) a fast path, and set a throughput target with a case. Escaping path: Tier A."
   state = "todo"
   revision = 532
+
+[[node]]
+  id = "TRY2"
+  title = "./launch --system --keep-disk: the machine's writable volumes survive a relaunch, so a hand session's files are there next time"
+  template = "package"
+  parent = "M2"
+  body = "Follows TRY1 and IDLE1. `./launch --system --keep-disk` keeps the disk image under .tmp per arch (reuses it if its layout matches the image's manifest; otherwise refuses with the reason and the flag to start fresh, never silently reformats). Without the flag, a fresh disk as now. The read-only system volume still comes from the build, so a rebuilt system boots against kept home/vault volumes. GETTING-STARTED's 'Try the system' says so. A bench case: launch with --keep-disk, write a file at the prompt, relaunch, read it back. Tier B tooling."
+  state = "todo"
+  revision = 543

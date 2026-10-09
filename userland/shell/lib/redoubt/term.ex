@@ -17,7 +17,10 @@ defmodule Redoubt.Term do
   That costs a line's length per key and asks nothing of the terminal but VT102: relative cursor
   movement, CR, LF, erasing to the end of the screen, and the bold and underline attributes. A
   line taller than the screen is drawn, but its start has scrolled off and its editing is not
-  exact.
+  exact. Printed text is made visible and measured a piece at a time, so drawing a line needs
+  memory beyond the line only for a piece. The line itself is not bounded: `group` delivers it
+  whole, so one line larger than the driver's heap limit (about 2.75 MiB on rv64) still ends the
+  session.
   """
 
   alias Redoubt.Term.{Text, Width}
@@ -29,6 +32,9 @@ defmodule Redoubt.Term do
   @styled String.length("search:")
 
   @csi "\e["
+
+  # The most bytes of printed text made visible and measured at once (`draw_text/3`).
+  @piece 4096
 
   defstruct cols: 80,
             rows: 24,
@@ -45,6 +51,9 @@ defmodule Redoubt.Term do
             fresh: true,
             # The column the line begins at: not 0 after text printed without a final newline.
             origin: 0,
+            # The code points printed since the last newline, so a tab printed next stops where
+            # it would in the whole line, however the line was printed.
+            tab: 0,
             # Text shown below the line (completions, help), its first shown row and its row limit.
             expand: nil,
             expand_row: 1,
@@ -59,6 +68,35 @@ defmodule Redoubt.Term do
   @doc "The terminal's size now; the line is laid out at the new width from its next redraw."
   @spec resize(t(), pos_integer(), pos_integer()) :: t()
   def resize(term, cols, rows), do: %{term | cols: max(cols, 1), rows: max(rows, 1)}
+
+  @doc """
+  `request` as the requests to draw one after another, so that no drawing is held whole: text
+  printed with no line open, past `size` bytes, as pieces of it of at most `size` bytes, each cut
+  where a character starts, which draw exactly as the whole would; any other request as itself.
+  A driver writes each one's bytes before it draws the next, since the VM counts the binaries a
+  process holds toward its heap limit.
+  """
+  @spec slices(t(), term(), pos_integer()) :: Enumerable.t()
+  def slices(%__MODULE__{before: [], after: []}, request, size) do
+    case printed(request) do
+      {:ok, text} when byte_size(text) > size ->
+        text
+        |> Stream.unfold(fn
+          <<>> -> nil
+          text -> cut(text, size)
+        end)
+        |> Stream.map(&{:put_chars, :unicode, &1})
+
+      _short_or_none ->
+        [request]
+    end
+  end
+
+  def slices(_term, request, _size), do: [request]
+
+  defp printed({:put_chars_sync, encoding, chars, _reply}), do: {:ok, text(chars, encoding)}
+  defp printed({:put_chars, encoding, chars}), do: {:ok, text(chars, encoding)}
+  defp printed(_request), do: :error
 
   @doc "Whether a line is being edited and holds nothing but its prompt."
   @spec line_empty?(t()) :: boolean()
@@ -183,15 +221,15 @@ defmodule Redoubt.Term do
   # Text printed by the shell or anything else on the group: above the line being edited, if
   # one is, which is drawn again below it.
   defp put_chars(%{before: [], after: []} = term, text) do
-    {drawn, end_} = draw_text(text, {0, term.origin}, term.cols)
+    {drawn, end_, tab} = draw_text(text, term.tab, {0, term.origin}, term.cols)
     {_row, origin} = norm(end_, term.cols)
-    {[drawn, margin(end_, term.cols)], %{term | origin: origin}}
+    {[drawn, margin(end_, term.cols)], %{term | origin: origin, tab: tab}}
   end
 
   defp put_chars(term, text) do
     text = if String.ends_with?(text, "\n"), do: text, else: text <> "\n"
-    {drawn, {_row, col}} = draw_text(text, {0, term.origin}, term.cols)
-    moved = %{term | origin: col}
+    {drawn, {_row, col}, tab} = draw_text(text, term.tab, {0, term.origin}, term.cols)
+    moved = %{term | origin: col, tab: tab}
     {[to_origin(term), erase_below(), drawn, draw(moved)], moved}
   end
 
@@ -292,21 +330,62 @@ defmodule Redoubt.Term do
     {out, pos}
   end
 
-  # Printed text: visible, with CR LF for each newline.
-  defp draw_text(text, pos, cols) do
-    text
-    |> String.split("\n")
-    |> Enum.map(&Text.visible/1)
-    |> Enum.intersperse("\n")
-    |> Enum.reduce({[], pos}, fn
-      "\n", {out, {row, _col}} -> {[out, "\r\n"], {row + 1, 0}}
-      line, {out, pos} -> {[out, line], advance_text(pos, line, cols)}
-    end)
+  # Printed text: visible, with CR LF for each newline, a piece at a time, each at most `@piece`
+  # bytes and cut before a newline or where a character starts, its tab stops counted on from
+  # `tab`, the code points its line holds already. So a line of anything is made visible and
+  # measured in memory beyond it bounded by the piece, not the line (one process's heap is a
+  # sixteenth of a session's budget). A grapheme cut between two pieces is measured as its parts.
+  # The drawing, where it ends, and the code points its last line holds.
+  defp draw_text(text, tab, pos, cols), do: draw_text(text, tab, pos, cols, [])
+
+  defp draw_text(<<>>, tab, pos, _cols, out), do: {out, pos, tab}
+
+  defp draw_text(<<?\n, rest::binary>>, _tab, {row, _col}, cols, out),
+    do: draw_text(rest, 0, {row + 1, 0}, cols, [out, "\r\n"])
+
+  defp draw_text(text, tab, pos, cols, out) do
+    {piece, rest} = piece(text)
+    {visible, tab} = Text.visible(piece, tab)
+    draw_text(rest, tab, advance_text(pos, visible, cols), cols, [out, visible])
   end
 
-  # Where text already made visible ends, wrapped at the width.
-  defp advance_text(pos, line, cols),
-    do: line |> String.graphemes() |> Enum.reduce(pos, &advance(&2, &1, cols))
+  # The text up to its first newline, at most `@piece` bytes of it, cut where a character starts.
+  defp piece(text) do
+    case :binary.match(text, "\n", scope: {0, min(byte_size(text), @piece)}) do
+      {at, 1} -> split(text, at)
+      :nomatch -> cut(text, @piece)
+    end
+  end
+
+  # The text cut at most `size` bytes in, where a character starts: the head and the rest.
+  defp cut(text, size) do
+    size = min(byte_size(text), size)
+    split(text, char_start(text, size, size))
+  end
+
+  defp split(text, at) do
+    <<head::binary-size(^at), rest::binary>> = text
+    {head, rest}
+  end
+
+  # `size`, moved back to the start of the UTF-8 sequence the cut falls in; `size` itself if the
+  # cut is at the end, or the bytes there are no sequence, which are drawn as bytes anyway.
+  defp char_start(text, at, size) when at > 0 and at < byte_size(text) and size - at <= 3 do
+    case :binary.at(text, at) do
+      b when b in 0x80..0xBF -> char_start(text, at - 1, size)
+      _start -> at
+    end
+  end
+
+  defp char_start(_text, _at, size), do: size
+
+  # Where text already made visible ends, wrapped at the width, a grapheme at a time.
+  defp advance_text(pos, text, cols) do
+    case String.next_grapheme(text) do
+      {g, rest} -> advance_text(advance(pos, g, cols), rest, cols)
+      nil -> pos
+    end
+  end
 
   # The text below the line: at most the rows the limit and the screen allow, from the row
   # paged to, with a line saying so when there is more.
@@ -326,7 +405,7 @@ defmodule Redoubt.Term do
 
     # Each row below the line starts a row of its own; the last leaves the cursor at its end.
     Enum.reduce(page, {[], {row, 0}}, fn line, {out, {row, _col}} ->
-      {drawn, pos} = draw_text(line, {row + 1, 0}, term.cols)
+      {drawn, pos, _tab} = draw_text(line, 0, {row + 1, 0}, term.cols)
       {[out, "\r\n", drawn], pos}
     end)
   end
@@ -398,7 +477,11 @@ defmodule Redoubt.Term do
       |> Enum.intersperse(["\n"])
       |> List.flatten()
 
-  # group's characters as a string: unicode, or latin1 when it says so.
+  # group's characters as a string: unicode, or latin1 when it says so. A binary in unicode is
+  # the string already, valid or not (the bytes that are not UTF-8 are drawn as bytes): not
+  # copied, which for a long line would double what the driver holds.
+  defp text(chars, encoding) when is_binary(chars) and encoding != :latin1, do: chars
+
   defp text(chars, encoding) do
     case :unicode.characters_to_binary(chars, if(encoding == :latin1, do: :latin1, else: :unicode)) do
       binary when is_binary(binary) -> binary

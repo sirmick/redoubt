@@ -99,6 +99,35 @@ defmodule Redoubt.TermTest do
     assert Terminal.cursor(screen) == {2, 0}
   end
 
+  # Printed text is drawn 4096 bytes at a time: a character the cut would fall in is not split
+  # into bytes, and a tab after the cut stops where the whole line's would.
+  test "a printed line longer than a piece is drawn as one line, whatever falls at the cut" do
+    line = String.duplicate("a", 4095) <> "é" <> "\tx\n"
+    {screen, _term} = draw([{:put_chars, :unicode, line}])
+    # 4096 columns of letters, a tab to 4104 and the x: the last row starts at column 4080.
+    assert List.last(Terminal.lines(screen)) ==
+             String.duplicate("a", 15) <> "é" <> String.duplicate(" ", 8) <> "x"
+
+    refute Terminal.text(screen) =~ "<"
+    assert Terminal.cursor(screen) == {7, 0}
+  end
+
+  test "printed text drawn as its slices draws exactly what it would whole, and a line open is not sliced" do
+    text = String.duplicate("ab\té", 30) <> "\n" <> String.duplicate("x", 150)
+    whole = {:put_chars, :unicode, text}
+    slices = Enum.to_list(Term.slices(Term.new(40, 8), whole, 100))
+    assert length(slices) > 2
+    assert Enum.all?(slices, fn {:put_chars, :unicode, s} -> String.valid?(s) and byte_size(s) <= 100 end)
+    {by_slices, term} = draw(slices)
+    {at_once, _term} = draw([whole])
+    assert Terminal.lines(by_slices) == Terminal.lines(at_once)
+    assert Terminal.cursor(by_slices) == Terminal.cursor(at_once)
+
+    {_screen, open} = draw(prompt() ++ [insert("c")])
+    assert Term.slices(open, whole, 100) == [whole]
+    assert Term.slices(term, {:insert_chars, :unicode, text}, 100) == [{:insert_chars, :unicode, text}]
+  end
+
   test "a control character in a prompt, in typed text or in printed text is drawn visibly" do
     {screen, _term} =
       draw([:new_prompt, insert("\e]0;x\a> "), insert("\u009Bq"), {:put_chars, :unicode, "\e[2J\u202Ez\n"}])

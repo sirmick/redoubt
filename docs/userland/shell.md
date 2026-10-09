@@ -308,9 +308,10 @@ in a `Job`.
 
 ### The terminal library
 
-<details><summary>Status: built · partly tested: the host only, for the line editor and screens, and screens on beamlet alone (the BEAM has no screen buffer); its tests are the shell's own ExUnit suite (`test/redoubt/term_test.exs`, `test/redoubt/term/frame_test.exs`, `test/redoubt/term/keys_test.exs`, `test/redoubt/term/width_test.exs`, `test/redoubt/shell/driver_test.exs`, `test/redoubt/screen_test.exs`), judged on a model of the terminal that takes only the encoder's sequences, and a pseudo-terminal test of the real binary, both of which `./test-shell` runs and no bench case does · tested (1)</summary>
+<details><summary>Status: built · partly tested: the host only, for the line editor and screens, and screens on beamlet alone (the BEAM has no screen buffer); its tests are the shell's own ExUnit suite (`test/redoubt/term_test.exs`, `test/redoubt/term/frame_test.exs`, `test/redoubt/term/keys_test.exs`, `test/redoubt/term/width_test.exs`, `test/redoubt/shell/driver_test.exs`, `test/redoubt/screen_test.exs`), judged on a model of the terminal that takes only the encoder's sequences, and a pseudo-terminal test of the real binary, both of which `./test-shell` runs and no bench case does · tested (2)</summary>
 
 - host:beamlet::pick_on_a_terminal_takes_the_screen_and_gives_it_back_with_the_choice
+- bench:shell-long-output
 
 </details>
 
@@ -333,6 +334,17 @@ and every [full-screen program](#full-screen-programs).
   cursor movement, CR, LF, erasing below and bold; typing at the end of the line draws only what
   was typed. The terminal's size is read at the start and at each prompt, and a change of size
   lays the line being edited out again at once ([below](#the-consoles-size)).
+- **Printed text a piece at a time:** the driver's process has the session's per-process heap
+  limit, a sixteenth of its budget, and the VM counts the binaries a process holds toward it, so
+  a line drawn whole beside itself would pass it (one `IO.puts` of 70,000 bytes did, and the
+  session ended). Text printed with no line open is drawn and written 64 KiB at a time
+  (`Term.slices/3`), and each slice made visible and measured 4096 bytes at a time, every cut
+  before a newline or where a character starts, so a line of any content is drawn in memory
+  beyond it bounded by the slice: the driver holds the text and one slice's drawing. The line
+  itself is not bounded: `group` delivers it whole, so one line larger than the heap limit
+  (about 2.75 MiB on rv64) still ends the session. Tab stops count on from the code points the
+  printed line already holds, across cuts and across prints. A grapheme a cut falls inside is
+  measured as its parts.
 - **Frames are the cell protocol** ([the cell protocol](#the-cell-protocol)): the screen buffer's
   diff speaks it ([beamlet](beamlet.md#screen-natives)), and the encoder reads it through the one
   decoder (`Redoubt.Term.Cells`) and draws it
