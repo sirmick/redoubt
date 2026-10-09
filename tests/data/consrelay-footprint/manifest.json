@@ -1,0 +1,28 @@
+{
+  "devices": [
+    { "name": "uart0", "base": "268435456", "irq": 10, "dma": false }
+  ],
+  "servers": [
+    { "name": "keyd", "program": "keyd",
+      "stack_pages": "4", "heap_pages": "8",
+      "budget": { "pages": "256", "processes": 1, "weight": 100 },
+      "receives": ["keyd"],
+      "args": ["host,ssh_host,1111111111111111111111111111111111111111111111111111111111111111",
+               "audit,audit,2222222222222222222222222222222222222222222222222222222222222222",
+               "buckets=4"] },
+    { "name": "consoled", "program": "consoled",
+      "stack_pages": "6", "heap_pages": "22",
+      "budget": { "pages": "1024", "processes": 1, "weight": 1000 },
+      "devices": [ { "device": "uart0", "as": "uart" } ],
+      "receives": ["consoled"],
+      "args": ["buckets=4"] },
+    { "name": "consrelay", "program": "consrelay",
+      "stack_pages": "5", "heap_pages": "44",
+      "budget": { "pages": "512", "processes": 1, "weight": 100 },
+      "handed": [ { "endpoint": "hello", "badge": "1" } ] },
+    { "name": "hello-sink", "program": "hello-sink",
+      "stack_pages": "4", "heap_pages": "8",
+      "budget": { "pages": "256", "processes": 1, "weight": 100 },
+      "receives": ["hello"] }
+  ]
+}

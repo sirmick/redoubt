@@ -1,0 +1,26 @@
+description = "A context's console relay, measured (docs/servers/consrelay.md, \"The bound\"; docs/kernel/budgets.md): init starts consrelay as a server under a manifest of its own, its hello sent to a stand-in for the steward (tests/init-programs, hello-sink) that lets it go; it reserves every buffer before its hello, so once it says it is serving, its heap holds what it holds in a session, where nothing it does allocates more. The verdict is the bench's memory scan of its first thread's stack and its heap's peak against its cap (docs/testbench.md, \"The memory budget\")"
+arch = ["rv64", "rv32"]
+kind = "boot"
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-consrelay", bin = "consrelay" },
+    { package = "redoubt-init-programs", bin = "hello-sink" },
+]
+memory = true
+timeout_secs = 60
+expect = [
+    '^init: started consrelay, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] consrelay: serving$',
+]
+forbid = [
+    'init: refused the boot',
+    '^init: .* (exited|faulted|was killed)',
+    'init: restarted',
+    'init: rebooting',
+]
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/consrelay-footprint/manifest.json" }

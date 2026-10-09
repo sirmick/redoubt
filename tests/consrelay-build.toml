@@ -1,0 +1,5 @@
+description = "consrelay builds for both widths (rv32 keeps compiling)"
+arch = ["rv64", "rv32"]
+kind = "build"
+# Builds the library and the `consrelay` binary; `consrelay-host-tests` covers what it does.
+package = "redoubt-consrelay"
