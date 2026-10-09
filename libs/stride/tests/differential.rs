@@ -99,10 +99,13 @@ impl Kernel {
 
     fn deschedule(&mut self, h: usize) {
         let Some(b) = self.cpu.cur(h) else { return };
-        self.thread[h] = None;
+        // Its thread is requeued if still runnable (a slice end or a preemption), not if it blocked
+        // or ended.
+        let requeued =
+            self.thread[h].take().is_some_and(|t| self.bs.0.get(&b).is_some_and(|x| x.threads.contains(&t)));
         self.settle(b);
         let runnable = |bs: &Store, b: u64| !bs.0[&b].threads.is_empty();
-        self.cpu.switch(h, &mut self.bs, None, runnable);
+        self.cpu.switch(h, &mut self.bs, None, requeued, runnable);
     }
 
     fn reconcile(&mut self) {
@@ -207,7 +210,7 @@ impl Kernel {
         })?;
         self.bs.0.get_mut(&b).unwrap().cursor = Some(t);
         self.thread[h] = Some(t);
-        self.cpu.switch(h, &mut self.bs, Some(b), |_, _| true);
+        self.cpu.switch(h, &mut self.bs, Some(b), false, |_, _| true);
         self.settle(b);
         self.slice_left[h] = SLICE;
         self.current(h)
@@ -460,6 +463,10 @@ fn a_broken_model_disagrees() {
         Mutation::R12CapOnce,
         Mutation::R12AllCappedHoldsFloor,
         Mutation::R12UncapBanksCredit,
+        Mutation::R12UncapForfeitsWait,
+        Mutation::R12EmptyHoldsFloor,
+        Mutation::R12RequeueWaitsForCap,
+        Mutation::R12BlockLeavesAsRequeued,
         Mutation::R12OneRunnerPerBudget,
         Mutation::R12SpreadChargesOnce,
     ] {

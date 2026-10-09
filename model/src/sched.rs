@@ -32,9 +32,13 @@
 //!   charging its own runner to the budget's one pass. The floor leaves out a **capped** budget, one whose
 //!   weight's share of the harts is more than its runnable threads: found here by water-filling, capping
 //!   every budget whose share of the harts left exceeds its threads until none does. When every queued budget
-//!   is capped the floor rises to the highest of their passes: uncontested time banks for no one. A budget
-//!   that stops being capped is lifted to `max(own pass, floor)`, as a waker is. At one hart no budget is
-//!   capped.
+//!   is capped the floor rises to the highest of their passes: uncontested time banks for no one. A queued
+//!   budget whose last thread just ended counts for neither. Only a budget capped already, or one every
+//!   runnable thread of which is on a hart (a thread its own slice end or preemption requeues counts as on
+//!   one; a sibling waiting after a block does not), becomes capped: one waiting for a hart is not taking the
+//!   harts its weight would give it, and a capped budget's threads always fit on the harts. A budget that
+//!   stops being capped is lifted to its lift target, `min(pass, floor)` when capped and rising with the
+//!   floor after, so a lag it had when capped it keeps. At one hart no budget is capped.
 //!
 //! Time is whatever unit the caller uses (the model's microseconds); the kernel charges timebase
 //! ticks with the same arithmetic.
@@ -75,6 +79,9 @@ pub struct Entry {
     /// Its carve is back with its parent already ([`Scheduler::return_carve`]: the top of a
     /// destruction, at its start).
     pub returned: bool,
+    /// Where it is lifted if it stops being capped (module docs): the floor while it is not capped,
+    /// and from there it rises with the floor at every raise after the one that capped it.
+    pub lift_to: u128,
 }
 
 /// The thread on the CPU.
@@ -101,6 +108,10 @@ pub struct Scheduler {
     pub others: alloc::vec::Vec<Option<Current>>,
     /// The budgets capped at the last floor raise (module docs).
     pub capped: BTreeSet<u64>,
+    /// The budget a deschedule just took off a hart with its own thread requeued (a slice end or a
+    /// preemption, not a block or an end), while its floor raises run: that thread counts as
+    /// running for whether the budget may be capped (module docs).
+    pub leaving: Option<u64>,
 }
 
 impl Scheduler {
@@ -137,12 +148,22 @@ impl Scheduler {
     /// The capped budgets, by water-filling over every queued budget (module docs): with `H` the
     /// harts and `W` the weight of the budgets not capped yet, every budget not capped whose
     /// `w x H` is more than `k x W` (`k` its runnable threads) is capped, and its threads and
-    /// weight leave `H` and `W`, until no budget is.
+    /// weight leave `H` and `W`, until no budget is. Only a budget capped at the last raise, or one
+    /// every runnable thread of which is on a hart, may be capped; one with a thread waiting for a
+    /// hart keeps its weight in `W`. A budget a deschedule is taking off its hart with its own thread
+    /// requeued counts that thread as on a hart: its own requeue is no wait, a sibling's is.
     pub fn cap_set(&self) -> BTreeSet<u64> {
-        let queued: alloc::vec::Vec<(u64, u128, u128)> = self
+        let busy = self.busy();
+        let any = self.broken(Mutation::R12UncapForfeitsWait);
+        let leaving = self.leaving.filter(|_| !self.broken(Mutation::R12RequeueWaitsForCap));
+        let queued: alloc::vec::Vec<(u64, u128, u128, bool)> = self
             .queued()
-            .map(|(id, e)| (*id, u128::from(self.weight(*id)), e.runnable.len() as u128))
-            .filter(|(_, w, k)| *w > 0 && *k > 0)
+            .map(|(id, e)| {
+                let waiting = e.runnable.iter().filter(|t| !busy.contains(t)).count();
+                let may = any || self.capped.contains(id) || waiting <= usize::from(leaving == Some(*id));
+                (*id, u128::from(self.weight(*id)), e.runnable.len() as u128, may)
+            })
+            .filter(|(_, w, k, _)| *w > 0 && *k > 0)
             .collect();
         let mut capped = BTreeSet::new();
         loop {
@@ -151,7 +172,7 @@ impl Scheduler {
             let w: u128 = queued.iter().filter(|(id, ..)| !capped.contains(id)).map(|x| x.1).sum();
             let over: alloc::vec::Vec<u64> = queued
                 .iter()
-                .filter(|(id, wb, k)| !capped.contains(id) && wb * h > k * w)
+                .filter(|(id, wb, k, may)| *may && !capped.contains(id) && wb * h > k * w)
                 .map(|x| x.0)
                 .collect();
             if over.is_empty() {
@@ -182,26 +203,51 @@ impl Scheduler {
 
     /// Raise the floor to the lowest pass of the queued budgets that are not capped, or, when
     /// every queued budget is capped, to the highest (it never falls, and holds while none is
-    /// queued). A budget no longer capped is first lifted to the floor, as a waker is.
+    /// queued). On several harts a queued budget with no runnable thread (its last one just ended)
+    /// counts for neither, as it counts for no weight in the cap set, unless no queued budget has
+    /// one: then the floor rises to the lowest pass, as at one hart. A budget no longer capped is
+    /// first lifted to its lift target, the floor less the lag it had when it was capped. Then each
+    /// queued budget's lift target follows the floor: the floor if not capped, unchanged by the
+    /// raise that caps it, and rising with the floor at every raise after.
     fn raise_floor(&mut self) {
         let capped = self.cap_set();
         if !self.broken(Mutation::R12UncapBanksCredit) {
-            let floor = self.floor;
+            let (floor, forfeit) = (self.floor, self.broken(Mutation::R12UncapForfeitsWait));
             for b in self.capped.difference(&capped) {
-                if let Some(e) = self.budgets.get_mut(b).filter(|e| e.queued) {
-                    e.pass = e.pass.max(floor);
+                if let Some(e) = self.budgets.get_mut(b).filter(|e| e.queued && !e.runnable.is_empty()) {
+                    e.pass = e.pass.max(if forfeit { floor } else { e.lift_to });
                 }
             }
         }
-        self.capped = capped;
+        let was = core::mem::replace(&mut self.capped, capped);
+        let several = self.harts() > 1;
+        let empty_holds = self.broken(Mutation::R12EmptyHoldsFloor);
+        let has_thread = |e: &Entry| !several || empty_holds || !e.runnable.is_empty();
         let counts = |id: &u64| self.broken(Mutation::R12CappedHoldsFloor) || !self.capped.contains(id);
-        if let Some(min) = self.queued().filter(|(id, _)| counts(id)).map(|(_, e)| e.pass).min() {
+        let before = self.floor;
+        if let Some(min) =
+            self.queued().filter(|(id, e)| has_thread(e) && counts(id)).map(|(_, e)| e.pass).min()
+        {
             self.floor = self.floor.max(min);
         } else if !self.broken(Mutation::R12AllCappedHoldsFloor) {
             // Every queued budget capped (fewer runnable threads than harts): the floor rises to
             // the highest of them, so uncontested time banks for no one.
-            if let Some(max) = self.queued().map(|(_, e)| e.pass).max() {
+            if let Some(max) = self.queued().filter(|(_, e)| has_thread(e)).map(|(_, e)| e.pass).max() {
                 self.floor = self.floor.max(max);
+            } else if let Some(min) = self.queued().map(|(_, e)| e.pass).min() {
+                // Only budgets whose last thread ended, about to leave: the lowest, as at one hart.
+                self.floor = self.floor.max(min);
+            }
+        }
+        if several {
+            let (floor, rise) = (self.floor, self.floor - before);
+            for (id, e) in self.budgets.iter_mut().filter(|(_, e)| e.queued) {
+                if !self.capped.contains(id) {
+                    e.lift_to = floor.min(e.pass);
+                } else if was.contains(id) {
+                    // Capped since before this raise: the floor's rise is no lag it is owed.
+                    e.lift_to += rise;
+                }
             }
         }
     }
@@ -304,6 +350,7 @@ impl Scheduler {
                 runnable: BTreeSet::new(),
                 cursor: None,
                 returned: false,
+                lift_to: 0,
             },
         );
     }
@@ -493,8 +540,17 @@ impl Scheduler {
                 c.pending = c.pending.max(MIN_CHARGE);
             }
         }
-        self.fold_on(h);
+        // Off its hart before the charge, as the kernel's switch does: the floor raise counts a
+        // thread still runnable as waiting for a hart.
+        let beside = self.on(h).is_some_and(|c| self.harts_of(c.budget).len() > 1);
         let Some(c) = self.on_mut(h).take() else { return };
+        // Requeued if its thread is still runnable: a block or an end is no requeue (broken: it is).
+        let requeued = self.budgets.get(&c.budget).is_some_and(|e| e.runnable.contains(&c.thread));
+        self.leaving = Some(c.budget).filter(|_| requeued || self.broken(Mutation::R12BlockLeavesAsRequeued));
+        if !(self.broken(Mutation::R12SpreadChargesOnce) && beside) {
+            self.charge(c.budget, c.pending);
+        }
+        self.raise_floor();
         let still = self.budgets.get(&c.budget).is_some_and(|e| !e.runnable.is_empty());
         if still {
             // Requeued behind its equals.
@@ -510,6 +566,7 @@ impl Scheduler {
             e.queued = false;
         }
         self.raise_floor();
+        self.leaving = None;
         if !self.budgets.values().any(|e| e.queued) {
             self.front = 0;
             self.back = 0;
@@ -557,6 +614,7 @@ impl Scheduler {
             }
             e.tie = tie;
             e.queued = true;
+            e.lift_to = floor;
         }
         self.raise_floor();
         if self.broken(Mutation::R12PreemptOnWake) {

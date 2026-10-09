@@ -161,6 +161,9 @@ pub fn expire_due(ss: &mut ProcessTable) -> Expired {
         }
     };
     let mut destroyed = false;
+    // Debug only, never in a bench build but one recorded negative run (feature `wake-preempts`):
+    // a timeout's wake preempts the entering thread, as a deadline does.
+    let mut woke = false;
     let mut expired = false;
     let mut last = None;
     loop {
@@ -177,6 +180,7 @@ pub fn expire_due(ss: &mut ProcessTable) -> Expired {
             let billed = MemoryManager::with_mut(|mm| {
                 if crate::message::pop_due(mm, pid, tid) {
                     crate::message::time_out(ss, mm, pid, tid);
+                    woke = true;
                 }
                 let take = (share + core::mem::take(&mut first)).min(pool);
                 pool -= take;
@@ -234,7 +238,7 @@ pub fn expire_due(ss: &mut ProcessTable) -> Expired {
     if destroyed {
         crate::budget::audit_destruction();
     }
-    Expired { destroyed, last }
+    Expired { destroyed: destroyed || (woke && cfg!(feature = "wake-preempts")), last }
 }
 
 /// A timer interrupt arrived. The trap handler has already expired what is due at its entry;

@@ -110,6 +110,7 @@ bin = [
     { name = "sched-ties", test = false },
     { name = "sched-timer-flood", test = false },
     { name = "sched-wake-no-preempt", test = false },
+    { name = "sched-wake-no-preempt-harts", test = false },
     { name = "smp-boot", test = false },
     { name = "smp-evict", test = false },
     { name = "smp-fence", test = false },

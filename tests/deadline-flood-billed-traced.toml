@@ -10,10 +10,12 @@ programs = ["deadline-flood-billed"]
 # release twin's.
 kernel_features = ["sched-trace"]
 post_check = "sched_oracle"
-# One hart until destruction's work leaves the kernel lock (kernel/scheduling.md, "Fair kernel
-# entry is bounded by count"): at two harts the creator's destructions hold the lock and the waits
-# nearly fill a hart, so the share net of them swings (victim 407 to 884 of 1000).
-keep_smp = true
+# Judged at the bench's harts. At two the destructions run on whichever hart's timer comes first,
+# and the victim's share follows where they land: mostly on the creator's hart (91 of 96 on rv64
+# and 77 of 80 on rv32 with 16 deadlines, 124 and 125 of 128 with 64) it keeps about 870 of 1000;
+# mostly on its own (87 of 96, rv64, 16 deadlines, in one build) it keeps 482, near the bound. A
+# failure here with the destructions on the victim's hart is that placement, which no pick can
+# repay a one-thread victim (kernel/timer.md, "R12 (scheduling) for timer work").
 timeout_secs = 600
 expect = [
     '^HART-SHARE 16-deadlines \d+ \d+ 50\+ 2:1 100:1$',

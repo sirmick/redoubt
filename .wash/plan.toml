@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 28
+revision = 41
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1768,8 +1768,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   needs = ["JOB1"]
   body = "M2 page 'On Redoubt' step 5: shell.md#a-native-programs-screen-and-the-sessions-key. A native program sends cells frames on stdout; the session decodes them through the one decoder and draws through the encoder; Ctrl+\\ stays the session's. Attack: a frame or key sequence smuggling 0x1C, a native program's text reaching the terminal unescaped, a hijacked program drawing beyond its cells. Tier A (drawing path)."
-  state = "todo"
-  revision = 2
+  state = "active"
+  revision = 29
+  overrides = ["2026-10-09: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the userland track runs ahead of its acceptance"]
 
 [[node]]
   id = "PIPE1"
@@ -1860,8 +1861,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "smp"
   needs = ["SMP4"]
   body = "From SMP4's measurements: with audits excused, the remaining 2-hart misses are in the picks: budget-churn-shell rv64 404 and deadline-flood rv64 ~410 (want 450+), containment's bystander rv32 442, and sched-exit-churn's threads-exit near its bound (rv32 465 vs 450; kept @1); a creator carving and destroying children reweighs ~240 times and lifts the victim out of the cap set ~80 times (rv32 45) while holding both harts ~60% outside audits; and an audit-excused waiter keeps its slice (SMP4's P2), which moved deadline-flood rv64 875 -> 413. Find whether the cap-set lift/reweigh rules give the victim less than R12 promises on several harts, fix the rule or restate the target with the model, and judge those lines at 2 harts. Also restate sched-wake-no-preempt's proof for several harts (a timeout answered at the first entry on any hart is not a preemption) and judge it at 2. Kernel: Tier A."
-  state = "active"
-  revision = 2
+  state = "done"
+  revision = 41
   overrides = ["2026-10-09: started by Orchestrator before M1 (reported): several-harts track runs ahead of M1's acceptance", "2026-10-09: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; the several-harts track runs ahead of M1's acceptance"]
 
 [[node]]
@@ -1912,6 +1913,26 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "smp"
   needs = ["SCHED3"]
-  body = "SCHED3's B1 (a hart arms a deadline or timeout only if it runs the item's payer, or if no hart does) was dropped by ruling (.wash/qa/sched3-b1-evidence.md; .wash/local/architect-questions.md 'SCHED3 B1') with a trigger: it returns if the oracle's report-only count of timer entries billed to a budget other than the one interrupted reaches 1 % of a victim's charged pool in a gate case. Met on wp-SCHED3 before merge: deadline-flood-billed-traced rv64 at 2 harts, 16 deadlines, 87 of 96 destructions on hart 0 under the victim, 89 entries, 833,543 ticks, ~17 % of 4.99M charged; victim 482 of 1000 (passes). Placement depends on timing alone. Do B1 in the ruling's form (the global earliest item and its payer; the arming recomputed at each switch from a per-budget cached minimum, no scan on the switch path), build the failing negative from this placement (`timer-any-hart` must fail where the count is gated), gate the count in deadline-flood-billed-traced and sched-exit-churn at 2 harts, measure deadline-notice latency before and after on both widths (within one section), timer.md and scheduling.md say the rule. B1's earlier code: wp-SCHED3's WIP 33eaaf326. Kernel: Tier A, the kernel red; model rule and mutation if a rule changes."
+  body = "SCHED3's B1 was dropped by ruling (.wash/qa/sched3-b1-evidence.md; .wash/local/architect-questions.md 'SCHED3 B1') with a trigger: it returns if the oracle's report-only count of timer entries billed to a budget other than the one interrupted reaches 1 % of a victim's charged pool in a gate case. Met on wp-SCHED3 before merge: deadline-flood-billed-traced rv64 at 2 harts, 16 deadlines, 87 of 96 destructions on hart 0 under the victim, 89 entries, 833,543 ticks, ~17 % of 4.99M charged; victim 482 of 1000 (passes). Placement depends on timing alone. Form, as the Architect amended the ruling: the branch's (the global earliest item and its payer, None on a tie; rearm reads runner_ids(), O(harts); no scan of the deadlines on the switch path), NOT a per-budget cached minimum. Code: .wash/local/SCHED3-B1-33eaaf326.patch (wp-SCHED3's WIP 33eaaf326). Build the failing negative from this placement (`timer-any-hart` must fail where the count is gated), gate the count in deadline-flood-billed-traced and sched-exit-churn at 2 harts, measure deadline-notice latency before and after on both widths (baseline p99 4.6/5.1/4.6 ms rv64, 6.2/6.1/5.2 ms rv32; within one section), timer.md and scheduling.md say the rule; device interrupts stay IRQ1's residual. Kernel: Tier A, the kernel red; model rule and mutation if a rule changes."
   state = "todo"
-  revision = 24
+  revision = 34
+
+[[node]]
+  id = "B47"
+  title = "The fifth pipeline in one session is refused, and every one after it: Redoubt.Pipeline.run returns {:error, :refused} from the fifth start on"
+  template = "package"
+  parent = "M2"
+  body = "Found by NSCR1 on main a72e774b8 (PIPE1 + JOB1 code). In one console session, Pipeline.run([{\"pipe-stage\", [\"say\",\"hi\"]}]) typed once per line: runs 1-4 return ok and the session's processes go back to {10,1}; runs 5 and on return {:error, :refused}. Ports, VM processes and the namespace (9 entries) stay flat; a direct Redoubt.Pipes.open(1) after four pipelines succeeds, so the refusal is later in the fifth start (make_pipes, connect or launch). A one-process weight-1 budget stays for good after the first pipeline (processes {10,2}, weight {100,1}): piped's own, which is by design if piped is the session's long-lived server; say so on the page or fix it. Today's cases run at most four pipelines, which is why they pass. Repro: .wash/local/B47-repro.md. Find the bound (a handle table, a served-file slot, piped's pipe table, launch's MAX_JOBS, a budget not returned), fix it, and add a case that runs eight pipelines in one session on both widths. Acts with the session's authority: main, Tier A, the steward red."
+  state = "active"
+  revision = 35
+  overrides = ["2026-10-09: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the userland track runs ahead of its acceptance"]
+
+[[node]]
+  id = "BEAM19"
+  title = "beamlet runs compiled Erlang at ~87 us a reduction on the machine, about 10,000 guest instructions a step: find the per-step cost and remove it"
+  template = "package"
+  parent = "M2"
+  body = "Found by B46 on main (rv64, smp 1, icount shift=3, alice's console session): Enum.reduce(1..262144, 0, &+/2) takes 22.7 s and a tail-recursive byte match over 256 KiB 17.2 s, about 87 us of guest time per loop step; native BIFs over the same 256 KiB are fast (:binary.match 0.13 s, :re.run 0.15 s, :binary.copy 0.05 s); on host beamlet the same loops take ~10 ms. 87 us is ~10,000 guest instructions a reduction, far beyond TCG's slowdown, so something per reduction (a kernel call, a clock read, a scheduler-yield to the I/O hub, an atomic the hub thread spins on, a reductions check that traps) or another VM thread spinning. Measure first (the kernel's trace of the session's calls per second during the loop: ecalls, timer, the hub thread's share; then perf on host beamlet with the platform's clock/yield hooks stubbed), find the cost, remove it, and gate a reductions-per-second floor on the machine with a case on both widths (the shell's interactive feel depends on it: B46's 8 KB/s was one symptom). userland/otp: Tier A, the beamlet/steward red; kernel changes, if any, the kernel red."
+  state = "active"
+  revision = 39
+  overrides = ["2026-10-09: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the userland track runs ahead of its acceptance"]

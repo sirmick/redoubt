@@ -611,6 +611,63 @@ pub fn sched_contracts(mutation: Option<Mutation>) -> Result<(), String> {
             "the budget with two threads runs on two harts",
         )?;
     }
+    // On two harts, a budget whose last thread ends on its hart, ahead of one still running, does
+    // not hold the floor at its own pass while the reconcile that takes it out is still to come:
+    // it has no thread, so it counts for the floor no more than for the cap set's weight.
+    {
+        let mut s = redoubt_model::sched::Scheduler { mutation, ..Default::default() };
+        s.set_harts(2);
+        s.add_budget(1, None, 100);
+        s.add_budget(2, None, 100);
+        s.thread_runnable(1, (1, 0));
+        s.thread_runnable(2, (2, 0));
+        expect(s.pick_on(0).is_some() && s.pick_on(1).is_some(), "each budget runs on a hart")?;
+        let ahead = if s.on(0).is_some_and(|c| c.budget == 2) { 0 } else { 1 };
+        s.run_on(ahead, SLICE);
+        s.run_on(1 - ahead, 1);
+        s.thread_exited(2, (2, 0));
+        let still = s.budgets[&1].pass;
+        expect(s.floor <= still, "a budget with no thread left raises the floor to no pass of its own")?;
+    }
+    // On two harts a budget's own requeue at its slice end is no wait for a hart: a heavy budget
+    // whose slice ends before any other floor raise saw it run is capped as it leaves, and the
+    // floor follows the light budget's pass, not its own.
+    {
+        let mut s = redoubt_model::sched::Scheduler { mutation, ..Default::default() };
+        s.set_harts(2);
+        s.add_budget(1, None, 900);
+        s.add_budget(2, None, 100);
+        s.thread_runnable(1, (1, 0));
+        s.thread_runnable(2, (2, 0));
+        expect(s.pick_on(0).is_some_and(|c| c.budget == 1), "the heavy budget runs first")?;
+        s.run_on(0, SLICE);
+        s.slice_end_on(0);
+        expect(s.capped.contains(&1), "the heavy budget is capped as its own slice ends")?;
+    }
+    // A block is no requeue: a heavy budget whose running thread blocks while its sibling waits
+    // for a hart is not capped by it, and the waiting sibling holds the floor at its budget's pass,
+    // so the wait is not forfeited to a later lift.
+    {
+        let mut s = redoubt_model::sched::Scheduler { mutation, ..Default::default() };
+        s.set_harts(2);
+        s.add_budget(1, None, 100);
+        s.add_budget(2, None, 900);
+        s.thread_runnable(1, (1, 0));
+        s.thread_runnable(2, (2, 0));
+        s.thread_runnable(2, (2, 1));
+        expect(s.pick_on(0).is_some_and(|c| c.budget == 1), "the light budget runs on hart 0")?;
+        expect(s.pick_on(1).is_some_and(|c| c.budget == 2), "the heavy budget runs on hart 1")?;
+        s.run_on(1, SLICE / 2);
+        let blocked = s.on(1).expect("hart 1 runs").thread;
+        s.thread_blocked(2, blocked);
+        expect(
+            !s.capped.contains(&2),
+            "a budget whose thread blocked is not capped while its sibling waits",
+        )?;
+        s.run_on(0, SLICE);
+        s.slice_end_on(0);
+        expect(s.floor <= s.budgets[&2].pass, "the waiting sibling's budget holds the floor")?;
+    }
     // A slice is user time: the kernel's work between a pick and the thread's return to user
     // mode, here three slices of it, comes out of none of it, so the picked thread still runs a
     // whole slice rather than being preempted at its first instruction (R12).

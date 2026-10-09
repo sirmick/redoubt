@@ -6,10 +6,9 @@ icount = "shift=3,sleep=off"
 programs = ["sched-wake-no-preempt"]
 kernel_features = ["sched-trace"]
 post_check = "sched_oracle wake_no_preempt=20"
-# One hart until the lock waits shorten (kernel/scheduling.md, "Fair kernel entry is bounded by
-# count"): at two harts no nap of twenty ended mid-slice, since the hart taking the timeout had
-# waited for the lock past its own slice's end and handled both in one entry (shortest delay
-# 955 µs); the oracle's proof reads each hart apart and holds on one.
+# One hart: the oracle proves each of the twenty naps against the spinner's slice that follows
+# it, which needs every timeout answered by a timer interrupt mid-slice. At two harts a timeout is
+# answered at whichever entry comes first, on any hart; sched-wake-no-preempt-harts judges that.
 keep_smp = true
 timeout_secs = 120
 expect = [

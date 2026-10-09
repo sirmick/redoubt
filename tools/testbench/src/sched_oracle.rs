@@ -97,8 +97,9 @@
 //!
 //! **Several harts.** Each budget's threads waiting for a hart (`J`, the count in the pass field:
 //! those no hart runs) and each hart's runner (`H`, the budget it runs, 0 for none, and its weight)
-//! are recorded, and so is a budget lifted to the floor as it stops being capped (`u`, the pass it
-//! is lifted to, ahead of the `P` that sets it), so no share reads the lift as a charge. A pick
+//! are recorded, and so is a budget lifted as it stops being capped (`u`, the pass it is lifted to,
+//! at most the floor, ahead of the `P` that sets it, then `z` with the floor), so no share reads
+//! the lift as a charge. A pick
 //! takes the first budget in rank order with a thread waiting (a budget with no `J` yet counts as
 //! having one); it may pass over a budget ranked ahead only if another hart runs it and none of
 //! its threads waits. Each wait for the kernel lock from user mode, another hart holding it, is a
@@ -161,7 +162,7 @@ pub fn parse(log: &str) -> Result<Vec<Record>, String> {
             return Err(bad());
         }
         let kind = f[2].chars().next().ok_or_else(bad)?;
-        if f[2].len() != 1 || !"WRDPKLlefrqwAaGgvNnXYZUVTtIBEOMmCSJHQFukxchjy".contains(kind) {
+        if f[2].len() != 1 || !"WRDPKLlefrqwAaGgvNnXYZUVTtIBEOMmCSJHQFukzxchjy".contains(kind) {
             return Err(bad());
         }
         records.push(Record {
@@ -267,7 +268,7 @@ fn check_reweigh(records: &[Record]) -> Result<(usize, u128), String> {
 #[derive(Debug, Default)]
 pub struct Summary {
     pub picks: usize,
-    /// Budgets lifted to the floor as they stopped being capped (`u`).
+    /// Budgets lifted, at most to the floor, as they stopped being capped (`u`).
     pub uncaps: usize,
     pub lifts: usize,
     /// Weight changes recomputed.
@@ -292,6 +293,12 @@ pub struct Summary {
     pub timer_slice_ends: usize,
     /// Ticks charged after expiry to the budget billed last, over every timer interrupt.
     pub timer_tail_ticks: u64,
+    /// Timer interrupts that charged a budget other than the one they interrupted, and those
+    /// ticks: another budget's timer work in the interrupted budget's time on its hart, which no
+    /// pick can repay a budget with one thread per hart (kernel/timer.md, "R12 (scheduling) for
+    /// timer work"). Report-only.
+    pub timer_foreign: usize,
+    pub timer_foreign_ticks: u64,
     /// When each timer interrupt that found neither and ended no slice came, µs, in trace order.
     pub timer_empty: Vec<u64>,
     /// When each timer interrupt that found another budget's wait ended early came, µs.
@@ -359,6 +366,11 @@ struct TimerEntry {
 fn check_timer_entry(e: &TimerEntry, to_user: bool, sum: &mut Summary) -> Result<(), String> {
     sum.timer_entries += 1;
     let charged = e.charges.iter().filter(|c| c.1 > 0);
+    let foreign: u64 = charged.clone().filter(|c| Some(c.0) != e.interrupted).map(|c| c.1).sum();
+    if foreign > 0 {
+        sum.timer_foreign += 1;
+        sum.timer_foreign_ticks += foreign;
+    }
     match e.expired {
         Some((last, what @ (1 | 2))) => {
             if what == 1 {
@@ -608,11 +620,12 @@ pub fn check(records: &[Record]) -> Result<Summary, String> {
                     return Err(format!("record {}: a timer interrupt's second or malformed expiry", r.seq));
                 }
             }
+            'O' if r.pass > 2 => return Err(format!("record {}: a malformed return", r.seq)),
             'O' => {
                 let e = open_timer.take().expect("checked above");
                 match e.external {
                     Some(claim) => check_external_entry(&e, claim, &mut sum)?,
-                    None => check_timer_entry(&e, r.pass != 0, &mut sum)?,
+                    None => check_timer_entry(&e, r.pass == 1, &mut sum)?,
                 }
             }
             'L' => {
@@ -656,8 +669,25 @@ pub fn check(records: &[Record]) -> Result<Summary, String> {
                         r.seq, r.id
                     ));
                 }
+                // Its `z`: the kernel's floor, which a lift out of the cap set never passes.
+                let Some(floor) =
+                    records.get(i).filter(|z| z.kind == 'z' && z.id == r.id && z.hart == r.hart)
+                else {
+                    return Err(format!(
+                        "record {}: budget {}'s lift out of the cap set states no floor",
+                        r.seq, r.id
+                    ));
+                };
+                if r.pass > floor.pass {
+                    return Err(format!(
+                        "record {}: budget {} lifted out of the cap set to {:#x}, above the floor {:#x}",
+                        r.seq, r.id, r.pass, floor.pass
+                    ));
+                }
+                i += 1;
                 sum.uncaps += 1;
             }
+            'z' => return Err(format!("record {}: a lift's floor after no lift", r.seq)),
             'H' => {
                 if r.id == 0 {
                     runs.remove(&r.hart);
@@ -881,6 +911,111 @@ fn check_wake_no_preempt(records: &[Record], expected: usize) -> Result<String, 
     let (sleeper, by) = matches[0];
     Ok(format!(
         "wake-no-preempt: {expected} timeout wakes of budget {sleeper} each continued the spinner its hart ran to that slice's end (by spinner {by:?})"
+    ))
+}
+
+/// **A wake never preempts, on several harts** (kernel/scheduling.md, "Preemption points"). A
+/// timeout is answered at whichever kernel entry first comes after it is due, on any hart: a timer
+/// interrupt, another budget's call, or `kmain`'s own. The sleeper is the one budget that woke at
+/// least `expected` times; each of its wakes is judged on the hart that recorded it:
+/// - inside a timer or device interrupt (`I` or `x` to `O`): returning to user mode (`O` 1), the runner it
+///   interrupted continued: a witness; returning to `kmain` with the runner's slice over at the entry (`O`
+///   0), the slice ended there: not judged; returning to `kmain` before it (`O` 2), the entry took the hart,
+///   and the check fails unless it destroyed a budget (`X`), as a deadline does;
+/// - at another entry while the hart runs a budget (a call): that budget is not requeued (`R`) before the
+///   hart's next interrupt, pick or switch: a witness;
+/// - in `kmain`, after the hart's runner left: if it left still runnable (`R`) outside an interrupt, with no
+///   destruction (`X`), that entry took its hart, and the check fails; if it blocked, ended, or its slice
+///   ended, nothing ran to preempt.
+///
+/// At least `witnesses` of the wakes must be witnesses, so the check cannot pass for want of
+/// wakes that could have preempted.
+fn check_wake_no_preempt_harts(
+    records: &[Record],
+    expected: usize,
+    witnesses: usize,
+) -> Result<String, String> {
+    let mut wakes = BTreeMap::<u64, Vec<usize>>::new();
+    for (i, r) in records.iter().enumerate().filter(|(_, r)| r.kind == 'W') {
+        wakes.entry(r.id).or_default().push(i);
+    }
+    let sleepers: Vec<_> = wakes.iter().filter(|(_, w)| w.len() >= expected).collect();
+    let [(&sleeper, at)] = sleepers[..] else {
+        let counts: BTreeMap<u64, usize> = wakes.iter().map(|(b, w)| (*b, w.len())).collect();
+        return Err(format!(
+            "wake-no-preempt: wanted one budget with at least {expected} wakes; wakes by budget {counts:?}"
+        ));
+    };
+    let took = |w: &Record, r: &Record, runner: u64| {
+        Err(format!(
+            "wake-no-preempt: record {}: budget {sleeper}'s wake at record {} took hart {} from budget {runner}",
+            r.seq, w.seq, w.hart
+        ))
+    };
+    let (mut mid_slice, mut at_call, mut at_end, mut in_kmain) = (0, 0, 0, 0);
+    for &i in at {
+        let w = &records[i];
+        let own = |r: &&Record| r.hart == w.hart;
+        // The interrupt the wake is in, if any: its opening record and its return.
+        let opened = records[..i]
+            .iter()
+            .enumerate()
+            .rev()
+            .filter(|(_, r)| own(r))
+            .find(|(_, r)| "IxO".contains(r.kind));
+        if let Some((b, open)) = opened.filter(|(_, r)| r.kind != 'O') {
+            let Some((e, ret)) =
+                records.iter().enumerate().skip(i).filter(|(_, r)| own(r)).find(|(_, r)| r.kind == 'O')
+            else {
+                return Err(format!("record {}: a wake inside an interrupt that never returns", w.seq));
+            };
+            match ret.pass {
+                1 => mid_slice += 1,
+                0 => at_end += 1,
+                _ if records[b..e].iter().filter(own).any(|r| r.kind == 'X') => at_end += 1,
+                _ => return took(w, ret, open.id),
+            }
+            continue;
+        }
+        let Some((h, runs)) =
+            records[..i].iter().enumerate().rev().filter(|(_, r)| own(r)).find(|(_, r)| r.kind == 'H')
+        else {
+            in_kmain += 1;
+            continue;
+        };
+        if runs.id != 0 {
+            let after = records[i + 1..]
+                .iter()
+                .filter(own)
+                .find(|r| "IxKHR".contains(r.kind) && (r.kind != 'R' || r.id == runs.id));
+            if let Some(r) = after.filter(|r| r.kind == 'R') {
+                return took(w, r, runs.id);
+            }
+            at_call += 1;
+            continue;
+        }
+        // In `kmain`: how the hart's last runner left it, since the hart last picked it.
+        let since = records[..h].iter().rev().filter(own).take_while(|r| r.kind != 'H').collect::<Vec<_>>();
+        if let Some(k) = since.iter().position(|r| "RD".contains(r.kind)).filter(|k| since[*k].kind == 'R') {
+            // Requeued: inside an interrupt (its slice's end), or after a destruction in its
+            // section, it is excused.
+            let section = || since[k + 1..].iter().take_while(|r| r.kind != 'O');
+            let in_interrupt = section().any(|r| "Ix".contains(r.kind));
+            if !in_interrupt && !since[..k].iter().chain(section()).any(|r| r.kind == 'X') {
+                return took(w, since[k], since[k].id);
+            }
+        }
+        in_kmain += 1;
+    }
+    if mid_slice + at_call < witnesses {
+        return Err(format!(
+            "wake-no-preempt: budget {sleeper}'s {} wakes: {mid_slice} mid-slice, {at_call} at another entry, {at_end} at a slice's end, {in_kmain} in `kmain`; fewer than {witnesses} could have preempted",
+            at.len()
+        ));
+    }
+    Ok(format!(
+        "wake-no-preempt: budget {sleeper}'s {} wakes took no hart: {mid_slice} mid-slice, {at_call} at another entry, each runner continuing; {at_end} at a slice's end, {in_kmain} in `kmain`",
+        at.len()
     ))
 }
 
@@ -1864,7 +1999,7 @@ fn check_carve_return(log: &str, records: &[Record]) -> Result<String, String> {
         ));
     }
     if let Some(r) = records[pick + 1..finish].iter().find(|r| {
-        r.kind == 'K' || (r.id == parent && "RD".contains(r.kind)) || (r.kind == 'O' && r.pass == 0)
+        r.kind == 'K' || (r.id == parent && "RD".contains(r.kind)) || (r.kind == 'O' && r.pass != 1)
     }) {
         return Err(format!(
             "carve-return: parent {parent} lost its running turn at record {} ({})",
@@ -2263,7 +2398,7 @@ fn charges(
         // whether the budget is out of the queue after it).
         let passes = match r.kind {
             'W' => vec![(r.id, r.pass, false, false)],
-            // Out of the cap set, lifted to the floor ahead of the `P` that sets it: no charge.
+            // Out of the cap set, lifted at most to the floor ahead of the `P` that sets it: no charge.
             'u' => vec![(r.id, r.pass, false, out_of_queue)],
             'D' => vec![(r.id, r.pass, true, true)],
             'K' | 'R' => vec![(r.id, r.pass, true, false)],
@@ -2885,6 +3020,7 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
             "fault_section_max_ticks",
             "driver_wake_p50_searches",
             "driver_wake_p99_searches",
+            "wake_witnesses",
         ]
         .contains(&name)
             || measure.is_some_and(|m| MEASURES.contains(&m))
@@ -2894,7 +3030,17 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
         }
         bounds.insert(name, bound);
     }
-    let wake_proof = wake_no_preempt.map(|count| check_wake_no_preempt(&records, count)).transpose()?;
+    // One hart proves each wake against the slice that follows it; several judge the entry that
+    // answered each wake, and need witnesses (`wake_witnesses`).
+    let several = records.iter().any(|r| r.hart != 0);
+    let wake_proof = match (wake_no_preempt, several) {
+        (Some(count), false) => Some(check_wake_no_preempt(&records, count)?),
+        (Some(count), true) => {
+            let witnesses = bounds.get("wake_witnesses").copied().unwrap_or(0) as usize;
+            Some(check_wake_no_preempt_harts(&records, count, witnesses)?)
+        }
+        (None, _) => None,
+    };
     if cluster_old_control && !cluster {
         return Err("cluster_old_control requires cluster".into());
     }
@@ -3099,7 +3245,7 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
         )
     });
     let head = format!(
-        "sched_oracle: {} records, {} picks in rank order, every wake at or above the floor, no pass falling but by a weight change; {} passing over a budget whose threads all ran on other harts; {} lifted to the floor leaving the cap set; {} lifts by the rule ({} with a leading parent and work to move); {} weight changes by the rule; R10 {n} destructions over up to {} object frames, µs p50/p99/max {p50}/{p99}/{max}, their threads' ending {t50}/{t99}/{tmax}, no audit inside one; {} audits, {audit_total} µs; {} timer interrupts billed by the rule ({} expiring, {} finding a wait ended early, {} ticks after expiry to the budget billed last; {} ending a slice, {} nobody's); {} device interrupts from user mode billed by the rule ({} claiming nothing){kernel_time}{lease_end}",
+        "sched_oracle: {} records, {} picks in rank order, every wake at or above the floor, no pass falling but by a weight change; {} passing over a budget whose threads all ran on other harts; {} lifted out of the cap set, at most to the floor; {} lifts by the rule ({} with a leading parent and work to move); {} weight changes by the rule; R10 {n} destructions over up to {} object frames, µs p50/p99/max {p50}/{p99}/{max}, their threads' ending {t50}/{t99}/{tmax}, no audit inside one; {} audits, {audit_total} µs; {} timer interrupts billed by the rule ({} expiring, {} finding a wait ended early, {} ticks after expiry to the budget billed last; {} ending a slice, {} nobody's; {} charging another budget than the one interrupted, {} ticks); {} device interrupts from user mode billed by the rule ({} claiming nothing){kernel_time}{lease_end}",
         records.len(),
         sum.picks,
         sum.passed_over,
@@ -3115,6 +3261,8 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
         sum.timer_tail_ticks,
         sum.timer_slice_ends,
         sum.timer_empty.len(),
+        sum.timer_foreign,
+        sum.timer_foreign_ticks,
         sum.external_entries,
         sum.external_empty
     );
@@ -3860,6 +4008,69 @@ mod tests {
         assert!(check_wake_no_preempt(&on(&two), 1).is_ok_and(|s| s.contains("by spinner {7: 1}")));
         two.insert(6, ('K', 9, 5, 0));
         assert!(check_wake_no_preempt(&on(&two), 1).is_err());
+        // Several harts: sleeper 8 wakes three times. Mid-slice on hart 0 (spinner 7 resumes),
+        // at a call on hart 1 (runner 9 goes on), and at a slice's end on hart 0.
+        let harts = [
+            ('H', 7, 100, 0),
+            ('H', 9, 100, 1),
+            ('I', 7, 300, 0),
+            ('E', 8, 1, 0),
+            ('W', 8, 10, 0),
+            ('O', 0, 1, 0),
+            ('W', 8, 20, 1),
+            ('I', 9, 900, 1),
+            ('R', 9, 40, 1),
+            ('O', 0, 0, 1),
+            ('I', 7, 1000, 0),
+            ('E', 8, 1, 0),
+            ('W', 8, 30, 0),
+            ('R', 7, 50, 0),
+            ('O', 0, 0, 0),
+        ];
+        let judged = check_wake_no_preempt_harts(&on(&harts), 3, 2);
+        assert!(
+            judged.as_ref().is_ok_and(
+                |s| s.contains("1 mid-slice, 1 at another entry") && s.contains("1 at a slice's end")
+            ),
+            "{judged:?}"
+        );
+        // Two witnesses are not three.
+        assert!(check_wake_no_preempt_harts(&on(&harts), 3, 3).is_err_and(|e| e.contains("fewer than 3")));
+        // The call's wake requeues hart 1's runner before its next interrupt: it took the hart.
+        let mut took = harts.to_vec();
+        took.insert(7, ('R', 9, 25, 1));
+        assert!(
+            check_wake_no_preempt_harts(&on(&took), 3, 0)
+                .is_err_and(|e| e.contains("took hart 1 from budget 9"))
+        );
+        // The last wake's interrupt came before spinner 7's slice was over (`O` 2): it took the
+        // hart; with a destruction in it, a deadline did, which may.
+        let mut early = harts.to_vec();
+        early[14].2 = 2;
+        assert!(
+            check_wake_no_preempt_harts(&on(&early), 3, 0)
+                .is_err_and(|e| e.contains("took hart 0 from budget 7"))
+        );
+        early.insert(12, ('X', 11, 0, 0));
+        assert!(check_wake_no_preempt_harts(&on(&early), 3, 0).is_ok());
+        // The call on hart 1 requeues runner 9 and leaves for `kmain`, which records the wake:
+        // it took the hart. Had runner 9 blocked (`D`), nothing ran to preempt.
+        let mut left = harts.to_vec();
+        left.splice(6..7, [('R', 9, 25, 1), ('H', 0, 0, 1), ('W', 8, 20, 1)]);
+        assert!(
+            check_wake_no_preempt_harts(&on(&left), 3, 0)
+                .is_err_and(|e| e.contains("took hart 1 from budget 9"))
+        );
+        left[6].0 = 'D';
+        assert!(
+            check_wake_no_preempt_harts(&on(&left), 3, 0).is_ok_and(|s| s.contains("1 in `kmain`")),
+            "{:?}",
+            check_wake_no_preempt_harts(&on(&left), 3, 0)
+        );
+        // No budget woke three times.
+        assert!(
+            check_wake_no_preempt_harts(&on(&harts), 4, 0).is_err_and(|e| e.contains("at least 4 wakes"))
+        );
     }
 
     #[test]
@@ -5039,7 +5250,7 @@ mod tests {
             queue.insert(b, (after, (1, i128::from(n as u32))));
             if let Some((_, l, rise)) = lift.filter(|l| l.0 == n) {
                 let pass = queue[&l].0 + rise;
-                t.extend([(e, 'u', l, pass), (e, 'P', l, pass)]);
+                t.extend([(e, 'u', l, pass), (e, 'z', l, pass), (e, 'P', l, pass)]);
                 queue.get_mut(&l).unwrap().0 = pass;
             }
             now += 10;
@@ -5139,9 +5350,28 @@ mod tests {
         let (t, end) = round_robin(&[(44, 100), (9, 300)], 40, true, Some((20, 9, 1 << 40)));
         let lifted = run(&(on_harts(&t, &[], 1) + &format!("HART-SHARE v 100 {end} 30 2 300\n")), "");
         assert!(
-            lifted.as_ref().is_err_and(|e| e.contains("1 lifted to the floor leaving the cap set")
+            lifted.as_ref().is_err_and(|e| e.contains("1 lifted out of the cap set, at most to the floor")
                 && e.contains("budget 44 23000 ticks of 38999,")),
             "{lifted:?}"
+        );
+        // The lift states the floor (`z`) and never passes it: with the floor below the lift, or
+        // with no floor, the check fails.
+        let at = t.iter().position(|r| r.1 == 'z').expect("the lift's floor");
+        let mut above = t.clone();
+        above[at].3 -= 1;
+        let above = run(&(on_harts(&above, &[], 1) + &format!("HART-SHARE v 100 {end} 30 2 300\n")), "");
+        assert!(
+            above
+                .as_ref()
+                .is_err_and(|e| e.contains("lifted out of the cap set to") && e.contains("above the floor")),
+            "{above:?}"
+        );
+        let mut none = t.clone();
+        none.remove(at);
+        let none = run(&(on_harts(&none, &[], 1) + &format!("HART-SHARE v 100 {end} 30 2 300\n")), "");
+        assert!(
+            none.as_ref().is_err_and(|e| e.contains("lift out of the cap set states no floor")),
+            "{none:?}"
         );
         // A budget charged whose weight the trace does not state fails the check.
         let (t, end) = round_robin(&[(44, 100), (9, 300)], 40, false, None);
@@ -5318,10 +5548,18 @@ mod tests {
             vec![(1, 'I', 1, 100), (1, 'E', 0, 0), (1, 'O', 0, 1)],
             vec![(1, 'I', 1, 100), (1, 'B', 1, 0), (1, 'O', 0, 1)],
         ];
-        for head in good {
+        // Each that bills 2 in 1's time is reported, with the ticks 2 was billed.
+        let foreign = [Some(79), None, Some(39), None, None, None];
+        for (head, foreign) in good.into_iter().zip(foreign) {
             let v = verdict(&[head.clone(), pick.to_vec()].concat());
+            let counted = match foreign {
+                Some(t) => format!("1 charging another budget than the one interrupted, {t} ticks"),
+                None => "0 charging another budget than the one interrupted, 0 ticks".into(),
+            };
             assert!(
-                v.as_ref().is_ok_and(|s| s.contains("1 timer interrupts billed by the rule")),
+                v.as_ref().is_ok_and(
+                    |s| s.contains("1 timer interrupts billed by the rule") && s.contains(&counted)
+                ),
                 "{head:?}: {v:?}"
             );
         }
