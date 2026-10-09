@@ -111,6 +111,8 @@ wires the guest's serial console to your terminal.
 ./launch --system --arch rv32      # the same system on the 32-bit machine
 ./launch --system --ssh-port 2200  # another host port for the guest's SSH
 ./launch --system --key ~/.ssh/id_ed25519.pub   # log in with your own key
+./launch --system --keep-disk      # keep your files from one launch to the next
+./launch --system --keep-disk --fresh-disk   # start the kept disk over from the image's
 ./launch --system --print-only     # build, print the QEMU command and the ssh line, and stop
 ```
 
@@ -131,7 +133,16 @@ printed: it is the image's development host key, the same at every launch.
   (git ignores it) and gives alice its public half, in the manifest of this boot's bundle only.
   `image/manifest.json` is not changed, and alice's test key does not work on a launched system.
   bob keeps his test key from `tests/keys/`: `ssh -p 2222 -i tests/keys/bob bob@localhost`.
-- **The disk is new at every launch.** Your files are gone at the next launch.
+- **The disk is new at every launch,** and your files are gone at the next, unless you launch with
+  `--keep-disk`: the data disk, alice's and bob's homes and alice's vault, is then
+  `.tmp/launch/disk-<arch>.img`, made from the image the first time and booted as the last launch
+  left it after that. The read-only system volume still comes from the build, so a rebuilt system
+  boots against your kept files. If the image's disk is laid out otherwise since (another size or
+  partition table), launch refuses the kept disk and says why; it never reformats it.
+  `--keep-disk --fresh-disk` starts it over from the image's. Launch locks the kept disk from the
+  build to QEMU's end, so a second launch with `--keep-disk` while one runs is refused before it
+  touches the first one's files. The `launch-keep-disk` case writes a file, relaunches and reads
+  it back.
 - **The port** is on 127.0.0.1 only, and the guest reaches nothing outside QEMU.
 - **The build and the boot** each run under a lease of the machine scheduler, `scripts/q`, when its
   daemon runs: the boot holds a core per hart.
@@ -140,8 +151,10 @@ Things to try once you have a prompt:
 
 - `help()` lists the shell's commands; `help(:cp)` shows one. Long pages open in the pager; `q`
   leaves it.
-- `ed("notes.txt")` opens the editor on a file in your home, and `fm(".")` opens the file manager's
-  two panes. Both are tested on the host only; this is where they first run on the machine.
+- A session starts at `/`, which nothing writes; alice's home is `/home/alice`.
+  `ed("/home/alice/notes.txt")` opens the editor on a file there, and `fm("/home/alice")` opens the
+  file manager's two panes. Both are tested on the host only; this is where they first run on the
+  machine.
 - Resize the terminal: the shell lays its prompt and screens out again at the new size.
 - Ctrl+\\ ends the screen or job in front of you; Ctrl+D or `exit` ends the session.
 - A named context is a session of its own: log out, then `ssh -p 2222 -i .tmp/launch/id_ed25519

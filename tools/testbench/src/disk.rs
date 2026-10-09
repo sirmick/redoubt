@@ -20,6 +20,10 @@ use serde::Deserialize;
 /// A disk sector, in bytes.
 pub const SECTOR: u64 = 512;
 
+/// The bytes a GPT takes at the disk's start, as `blkd`'s builder writes it: the protective
+/// sector, the header and the entry array, up to the first usable sector.
+pub const TABLE_BYTES: usize = (FIRST_USABLE * SECTOR) as usize;
+
 /// A disk recipe: its size and its partitions, in table order.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -236,6 +240,18 @@ pub fn hold(manifest: &serde_json::Value, sizes: &[u64], names: Option<&[&str]>)
     Ok(())
 }
 
+/// The manifest `recipe` names, read under `root`, held to the recipe's partitions ([`hold`]):
+/// by every pack, and by a kept disk before it is attached as it is.
+pub fn hold_recipe(recipe: &Recipe, root: &Path) -> Result<()> {
+    let Some(path) = &recipe.manifest else { return Ok(()) };
+    let text = std::fs::read(root.join(path)).with_context(|| format!("reading {}", path.display()))?;
+    let manifest =
+        serde_json::from_slice(&text).with_context(|| format!("{} is not JSON", path.display()))?;
+    let names: Vec<&str> = recipe.partition.iter().map(|p| p.name.as_str()).collect();
+    hold(&manifest, &partition_bytes(recipe.size_kib, names.len() as u64), Some(&names))
+        .with_context(|| format!("{} against the recipe's partitions", path.display()))
+}
+
 /// A disk of `sectors` sectors holding a GPT with `partitions` equal, empty partitions.
 pub fn gpt_disk(sectors: u64, partitions: u64) -> Vec<u8> {
     Image::new(sectors, &shares(sectors, partitions)).bytes
@@ -291,14 +307,7 @@ pub fn pack(recipe: &Recipe, root: &Path, stage: Option<&Path>) -> Result<(Vec<u
     ensure!(recipe.size_kib > 0, "a disk of no size");
     let sectors = recipe.size_kib * 1024 / SECTOR;
     let parts = shares(sectors, recipe.partition.len() as u64);
-    if let Some(path) = &recipe.manifest {
-        let text = std::fs::read(root.join(path)).with_context(|| format!("reading {}", path.display()))?;
-        let manifest =
-            serde_json::from_slice(&text).with_context(|| format!("{} is not JSON", path.display()))?;
-        let names: Vec<&str> = recipe.partition.iter().map(|p| p.name.as_str()).collect();
-        hold(&manifest, &partition_bytes(recipe.size_kib, names.len() as u64), Some(&names))
-            .with_context(|| format!("{} against the recipe's partitions", path.display()))?;
-    }
+    hold_recipe(recipe, root)?;
     let mut disk = Image::new(sectors, &parts).bytes;
     let mut verified = Vec::new();
     for (p, at) in recipe.partition.iter().zip(&parts) {

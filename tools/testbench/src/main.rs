@@ -99,6 +99,14 @@ struct Args {
     /// With --system, write the QEMU command here, each argument ended by a NUL.
     #[arg(long, value_name = "FILE", requires = "system")]
     qemu_argv: Option<PathBuf>,
+    /// With --system, keep the data disk under $REDOUBT_TMP/launch across launches: made from the
+    /// image the first time, then booted as the last launch left it.
+    #[arg(long, requires = "system")]
+    keep_disk: bool,
+    /// With --keep-disk, start the kept disk over from the image's: what a kept disk laid out
+    /// otherwise than the image's disk needs.
+    #[arg(long, requires = "keep_disk")]
+    fresh_disk: bool,
     /// Report a case whose firmware, QEMU or OpenSSH is missing or too old as SKIP instead of FAIL.
     #[arg(long)]
     allow_skip: bool,
@@ -253,6 +261,8 @@ fn main() -> Result<()> {
             key: args.key.as_deref(),
             print_only: args.print_only,
             argv: args.qemu_argv.as_deref(),
+            keep_disk: args.keep_disk,
+            fresh_disk: args.fresh_disk,
         };
         return launch::system(&builder, &workspace, &logs, &ask);
     }
@@ -999,8 +1009,10 @@ fn boot_case(
         let run_started = Instant::now();
         let log = boot_log(logs, name, target.name, *smp);
         // Every boot gets fresh devices: a new disk, new host ports.
+        // A kept disk is the first boot's, which the second boot finds as the first left it.
+        let kept = boot.disk.as_ref().is_some_and(|d| d.keep).then(|| log.with_extension("img"));
         let boot_once = |log: &Path| -> Result<Verdict> {
-            let disk = log.with_extension("img");
+            let disk = kept.clone().unwrap_or_else(|| log.with_extension("img"));
             // The launch machine boots launch's own command line, which brings its devices and
             // takes nothing added: no guest seed either.
             anyhow::ensure!(
