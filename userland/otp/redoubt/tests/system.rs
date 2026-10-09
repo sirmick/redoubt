@@ -238,6 +238,60 @@ fn binds_past_the_cap_are_refused_and_a_bound_prefix_is_still_replaced() {
     );
 }
 
+/// A server bound at one prefix after another, each ended before the next is bound, as a session's
+/// `piped` is at every pipeline (docs/servers/piped.md): each ended server's waiter hands over its
+/// end and gives its place up, with the handle it woke the VM through, so the ninth is served as
+/// the first was, past the VM's `MAX_WAITERS` (a session's fifth pipeline's was once `eio`).
+#[test]
+fn servers_bound_and_ended_one_after_another_never_run_out_of_waiters() {
+    const SERVERS: [&str; 9] = ["s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8"];
+    let f = fake();
+    let volumes: Arc<Mutex<Vec<Volume>>> = Arc::default();
+    let made = Arc::clone(&volumes);
+    with_session(
+        move |pid| {
+            let mut made = made.lock().unwrap();
+            SERVERS
+                .iter()
+                .map(|name| {
+                    let volume = fixture::volume(2048, &["buckets=4"]);
+                    let handle = f.grant(volume.littlefsd, volume.endpoint, pid, 0x60);
+                    made.push(volume);
+                    (*name, handle)
+                })
+                .collect()
+        },
+        move |p, pid| {
+            let (mut made, mut handles) = (Vec::new(), Vec::new());
+            let before = p.waiters();
+            for name in SERVERS {
+                let (server, _) = p.lookup(name).unwrap();
+                p.bind("/dev/pipe", &server).unwrap();
+                made.push(ask(p, |p| p.make_dir("/dev/pipe/p")));
+                let waiters = p.waiters();
+                assert_eq!(volumes.lock().unwrap().remove(0).stop(), redoubt_rt::exit::OK);
+                // As a session idles between pipelines: the ended server's waiter hands over its end.
+                let until = p.monotonic_us() + 1_000_000;
+                while p.waiters() == waiters && p.monotonic_us() < until {
+                    let soon = p.monotonic_us() + 10_000;
+                    p.idle(Some(soon));
+                }
+                // The waiter closes its handle as it returns, just after its last wake-up.
+                let until = std::time::Instant::now() + std::time::Duration::from_secs(1);
+                while handles.first().is_some_and(|first| f.held(pid).0 != *first)
+                    && std::time::Instant::now() < until
+                {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+                handles.push(f.held(pid).0);
+            }
+            assert_eq!(made, [Ok(()); SERVERS.len()]);
+            assert_eq!(p.waiters(), before);
+            assert!(handles.iter().all(|h| *h == handles[0]), "the VM's handles: {handles:?}");
+        },
+    );
+}
+
 #[test]
 fn a_bind_to_a_server_that_never_answers_is_refused_within_its_bound() {
     let f = fake();

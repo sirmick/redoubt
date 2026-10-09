@@ -978,7 +978,12 @@ a file operation's request alike; the answers are counted, and said with the I/O
 **Threads.** A process has at most 255 threads ([processes](../kernel/processes.md)). The VM's are
 its schedulers (one until several harts) and its waiters, one per connection it uses, at most 6:
 a session's bindings (`bootfsd`, the home volume, a labelled volume, `ipd`, the console, the system
-volume), a bind being one of them again. No call holds a thread while it waits: a console read,
+volume), a bind being one of them again. A server that ends takes its session with it: its waiter
+hands the end over and returns, closing the handle it woke the VM through, and the connection
+gives its place up when the next one needs it. A session's `piped` is a new server at every
+pipeline, so a session runs any number of pipelines, each taking one place while it runs
+(`servers_bound_and_ended_one_after_another_never_run_out_of_waiters`; `pipe-eight`, eight in one
+session). No call holds a thread while it waits: a console read,
 a file read and a read on a `/net` connection's data file are each one request on the hub, so
 what a person or a peer takes to answer costs nothing but the request. Every 9P server in the
 image serves multiplexed sessions, so no call needs a thread of its own. What the scheduler's

@@ -30,7 +30,9 @@
 //!     [`COMPLETION_PAGES`], and the caller hands it to the hub ([`Hub::deliver`]). A waiter talks to no
 //!     other server. A caller busy elsewhere does not cost its sessions: a hand-over not taken within
 //!     [`HAND_OVER_US`] is held, in its answers' own pages, while the waiter keeps calling, up to
-//!     [`MAX_HELD`] of them.
+//!     [`MAX_HELD`] of them. A waiter returns once it has handed over its connection's end; the connection is
+//!     then the caller's to let go ([`Hub::release`]), so a caller that bounds its waiters gets the place
+//!     back when a server ends.
 //! - **An `Rerror` keeps its name** ([`Outcome::Rerror`]), read by the one table's decoder as the blocking
 //!   client reads it; `busy`, over the connection's share, is [`Outcome::Busy`].
 //! - **The server is not trusted.** An answer must frame, decode and carry a tag outstanding on its
@@ -136,7 +138,8 @@ struct Connection {
     queue: VecDeque<Queued>,
     /// The completion call's buffer, while no call is out with it.
     lend: Option<Buffer>,
-    /// The badge of its waiter's wake-ups, if it has a waiter.
+    /// The badge of its waiter's wake-ups, while it has a waiter: from its start until its last
+    /// wake-up is taken, after which the waiter returns.
     waiter: Option<u64>,
     ended: bool,
 }
@@ -276,8 +279,25 @@ impl Hub {
     /// How many requests are not yet taken by their servers.
     pub fn queued(&self) -> usize { self.conns.iter().map(|c| c.queue.len()).sum() }
 
-    /// How many waiter threads the hub has started.
+    /// How many waiter threads the hub has started that have not yet handed over their last
+    /// wake-up.
     pub fn waiters(&self) -> usize { self.conns.iter().filter(|c| c.waiter.is_some()).count() }
+
+    /// Lets go of `conn` if it is over and no thread of the hub's is left in it: it ended, and its
+    /// waiter, if it had one, has handed over its last wake-up and returned. What its record held
+    /// (its tags, its queue, its completion buffer) is freed, and `true` comes back; `conn` itself
+    /// stays its own, never another connection's, and is refused `Disconnected`. A connection
+    /// still running, or whose waiter has yet to hand over its end, is kept: `false`.
+    pub fn release(&mut self, conn: Conn) -> bool {
+        let c = &mut self.conns[conn.0];
+        if !c.ended || c.waiter.is_some() {
+            return false;
+        }
+        c.slots = Vec::new();
+        c.queue = VecDeque::new();
+        c.lend = None;
+        true
+    }
 
     /// The next completion, if any.
     pub fn completed(&mut self) -> Option<Done> { self.done.pop_front() }
@@ -335,6 +355,11 @@ impl Hub {
         let ours = conn.filter(|c| self.conns[*c].waiter == Some(delivery.caller.badge));
         let (true, Some(c)) = (delivery.words[0] == WAKE, ours) else { return Some(delivery) };
         let reply = (delivery.words[2] != FAILED).then_some([delivery.words[2], delivery.words[3], 0]);
+        // Any first word but 0 is the waiter's last hand-over: the connection is over, and the
+        // waiter returns once this is sent.
+        if delivery.words[2] != 0 {
+            self.conns[c].waiter = None;
+        }
         self.collected(c, reply, delivery.transfer.take());
         self.poll();
         None
@@ -470,8 +495,14 @@ fn in_words(message: &[u8]) -> Words {
 /// caller with a wake-up, until the connection or the caller is gone. A hand-over the caller does
 /// not take within [`HAND_OVER_US`] is held, in its answers' own pages, while the waiter calls
 /// again with a hold of 0, which keeps the session and takes what is ready; at [`MAX_HELD`] it
-/// waits for the caller without bound.
+/// waits for the caller without bound. Its wake-up handle, minted for it alone, is closed when it
+/// returns.
 fn waiter(endpoint: Endpoint, wake: Endpoint, index: u64, lend: Buffer) {
+    hand_over(&endpoint, &wake, index, lend);
+    let _ = redoubt_rt::handle::close(wake.handle());
+}
+
+fn hand_over(endpoint: &Endpoint, wake: &Endpoint, index: u64, lend: Buffer) {
     let mut lend = Some(lend);
     // Hand-overs not yet taken, oldest first: the reply's words 0 and 1, and the answers.
     let mut held: VecDeque<([u64; 2], Option<Buffer>)> = VecDeque::new();
