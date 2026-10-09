@@ -541,7 +541,13 @@ and a hostile budget run a slice each before it takes the second.
 A share is judged from the same trace: what the kernel charged the budget in the window, against
 what it charged every budget, never a count, since under `icount` a count is the machine's
 instructions ([checked builds](../testbench.md#checked-builds)). An audit is charged to no budget,
-so every share is net of the audits, and on several harts net of the lock waits too. Each is
+so every share is net of the audits, and on several harts net of the lock waits too. In a checked
+build only, a hart's wait for the kernel lock behind another hart's audit is billed to no one
+either, and the waiter's slice's end moves by it (the trace's `y`). That changes the schedule as
+well as the bill: an excused waiter keeps its slice, stays on its hart and meets the next audit.
+At two harts `deadline-flood-billed-traced`'s victim, whose creator's destructions each run a
+20 ms audit, moved from 875 to 413 of 1000 on rv64 with it, from one mode of its share to the
+other; it keeps one hart ([residual risks](#residual-risks)). Each is
 owed its water-filling share, which at one hart is its weight's; the victims of churn, floods and
 gaming are owed at least theirs. Measured at 1 ms in the checked build, of 1000, rv64 / rv32:
 

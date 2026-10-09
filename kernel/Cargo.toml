@@ -83,6 +83,10 @@ audit-unstamped = ["sched-trace"]
 # Debug only, never in a bench build but one recorded negative run: an audit's time stays billed
 # to the budget that ran it and counts against its slice, so the deadline notice must miss.
 audit-billed = ["test-only"]
+# Debug only, never in a bench build but one recorded negative run: a hart waiting for the kernel
+# lock behind another hart's audit stays billed for the wait, so sched-budget-churn-shell's victim
+# must miss its share at two harts (kernel/scheduling.md, "Fair kernel entry is bounded by count").
+audit-wait-billed = ["test-only"]
 # Debug only, never in a bench build but one recorded negative run: the rest of a timer interrupt
 # after its expiry, and the return's own walk, are billed as before the fix to the budget it
 # interrupted, so the oracle's timer-entry check must fail.

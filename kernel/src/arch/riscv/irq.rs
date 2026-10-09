@@ -146,11 +146,17 @@ pub extern "C" fn trap_handler(
     // switch, or an interrupt in its idle window) holds it already (cell.rs, `KERNEL_LOCK`).
     let from_user = sstatus::read().spp() == sstatus::SPP::User;
     if from_user {
-        // The wait for the lock is the trace's (`Q`): from here, if another hart held it.
-        #[cfg(feature = "sched-trace")]
+        // The wait for the lock is the trace's (`Q`): from here, if another hart held it. A checked
+        // build marks it, so that another hart's audit it waits through is not billed to it
+        // (`sched::audit`).
+        #[cfg(debug_assertions)]
         let came = riscv::register::time::read64();
+        #[cfg(debug_assertions)]
+        crate::sched::waiting(came);
         crate::arch::hart::serve();
         let (held, ticket, ahead) = crate::cell::KERNEL_LOCK.acquire_ticket();
+        #[cfg(debug_assertions)]
+        crate::sched::waited(held, came);
         #[cfg(feature = "sched-trace")]
         if held {
             crate::sched::trace::lock_wait(came, ticket, ahead);

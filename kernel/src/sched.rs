@@ -93,6 +93,10 @@ struct Billing {
     /// which its bill leaves out ([`bill_irq`]).
     #[cfg(debug_assertions)]
     irq_audits: Option<u64>,
+    /// A checked build's audit time on other harts that this hart's wait for the kernel lock
+    /// waited through ([`audit`]), which the user time it closes leaves out ([`from_user`]).
+    #[cfg(debug_assertions)]
+    excused: u64,
 }
 
 /// Who kernel time is billed to.
@@ -112,6 +116,8 @@ static SCHED: KernelCell<Sched> = KernelCell::new(Sched {
         owed: 0,
         #[cfg(debug_assertions)]
         irq_audits: None,
+        #[cfg(debug_assertions)]
+        excused: 0,
     }; MAX_HARTS],
     marks: Marks::new(BudgetRef { frame: 0, id: 0 }),
     online: 1,
@@ -385,14 +391,74 @@ fn audit_harts(ss: &ProcessTable, mm: &MemoryManager) {
     });
 }
 
-/// A trap from user mode: the user time since the last return is `cur`'s.
+/// A trap from user mode: the user time since the last return is `cur`'s, but for the audits on
+/// other harts that its wait for the kernel lock waited through, which are nobody's: those move the
+/// running slice's end forward as the hart's own audits do ([`audit`]).
 pub fn from_user() {
     let now = ticks();
     #[cfg(feature = "sched-trace")]
     trace::kernel_from(now);
+    #[cfg(debug_assertions)]
+    let excused = SCHED.with(|s| core::mem::take(&mut s.b().excused));
+    #[cfg(not(debug_assertions))]
+    let excused = 0;
     SCHED.with(|s| {
         if let Some(since) = s.b().user_since.take() {
-            s.cpu.accrue(here(), now.saturating_sub(since));
+            s.cpu.accrue(here(), now.saturating_sub(since).saturating_sub(excused));
+        }
+    });
+    #[cfg(debug_assertions)]
+    if excused > 0 {
+        #[cfg(feature = "sched-trace")]
+        trace::record(trace::EXCUSED, excused, 0);
+        let length = crate::arch::irq::timer::ticks_to_us(now)
+            - crate::arch::irq::timer::ticks_to_us(now.saturating_sub(excused));
+        crate::time::set_slice_end(crate::time::slice_end().saturating_add(length));
+    }
+}
+
+/// Each hart's wait for the kernel lock from user mode, in a checked build: the raw `time` it came
+/// at plus one, 0 while it does not wait. Written by the hart without the lock, read by the hart
+/// holding it at the end of each audit ([`audit`]).
+#[cfg(debug_assertions)]
+static WAITING: [core::sync::atomic::AtomicUsize; MAX_HARTS] =
+    [const { core::sync::atomic::AtomicUsize::new(0) }; MAX_HARTS];
+
+/// This hart came from user mode at raw `time` `came` and is about to take the kernel lock. Raw
+/// time, since the clock's zero is read under the lock; its low bits, which wrap every 429 s on
+/// rv32, far beyond any wait.
+#[cfg(debug_assertions)]
+pub fn waiting(came: u64) {
+    let word = (came as usize).wrapping_add(1).max(1);
+    WAITING[here()].store(word, core::sync::atomic::Ordering::SeqCst);
+}
+
+/// This hart, come at raw `time` `came`, has taken the kernel lock, having waited for it (`held`)
+/// or not. An audit that ended between its coming and its draw excused it nothing: it found the
+/// lock free. Nor is it excused more than it waited by its own clock: harts' clocks may differ by
+/// a few ticks, and the audit's end was read on another hart's.
+#[cfg(debug_assertions)]
+pub fn waited(held: bool, came: u64) {
+    WAITING[here()].store(0, core::sync::atomic::Ordering::SeqCst);
+    let waited = if held { riscv::register::time::read64().saturating_sub(came) } else { 0 };
+    SCHED.with(|s| s.b().excused = s.b().excused.min(waited));
+}
+
+/// An audit that took `length` ticks just ended on this hart: each other hart waiting for the lock
+/// is excused the part of it that it waited through, the whole audit or, if it came during it, the
+/// time since it came. A hart whose mark this does not see yet came after the audit's end, or so
+/// close to it that its wait is billed to it, as it was before.
+#[cfg(debug_assertions)]
+fn excuse_waiters(length: u64) {
+    let now = riscv::register::time::read64() as usize;
+    let me = here();
+    SCHED.with(|s| {
+        for (hart, mark) in WAITING.iter().enumerate().filter(|(hart, _)| *hart != me) {
+            let came = mark.load(core::sync::atomic::Ordering::SeqCst);
+            if came != 0 {
+                let waited = now.wrapping_sub(came - 1) as u64;
+                s.harts[hart].excused += length.min(waited);
+            }
         }
     });
 }
@@ -558,6 +624,10 @@ pub fn audit(which: u64, check: impl FnOnce()) {
         let length =
             crate::arch::irq::timer::ticks_to_us(ended) - crate::arch::irq::timer::ticks_to_us(started);
         crate::time::set_slice_end(crate::time::slice_end().saturating_add(length));
+        // Debug only, never in a bench build but one recorded negative run (feature
+        // `audit-wait-billed`): a hart waiting behind the audit stays billed for the wait.
+        #[cfg(not(feature = "audit-wait-billed"))]
+        excuse_waiters(ended.saturating_sub(started));
     }
 }
 
@@ -867,6 +937,9 @@ pub mod trace {
     /// ticks of audits it ran in the pass field.
     pub const HELD: u8 = b'h';
     pub const HELD_CAUSE: u8 = b'j';
+    /// A checked build's wait for the kernel lock, just after its `Q`: the ticks of other harts'
+    /// audits it waited through in the id, which are not billed to the hart's runner.
+    pub const EXCUSED: u8 = b'y';
 
     /// Frames the ring takes (64 MiB, 256 MiB with `sched-trace-large`), and the records they hold.
     const PAGES: usize = if cfg!(feature = "sched-trace-large") { 65536 } else { 16384 };

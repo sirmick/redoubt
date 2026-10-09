@@ -161,7 +161,7 @@ pub fn parse(log: &str) -> Result<Vec<Record>, String> {
             return Err(bad());
         }
         let kind = f[2].chars().next().ok_or_else(bad)?;
-        if f[2].len() != 1 || !"WRDPKLlefrqwAaGgvNnXYZUVTtIBEOMmCSJHQFukxchj".contains(kind) {
+        if f[2].len() != 1 || !"WRDPKLlefrqwAaGgvNnXYZUVTtIBEOMmCSJHQFukxchjy".contains(kind) {
             return Err(bad());
         }
         records.push(Record {
@@ -320,6 +320,8 @@ pub struct Summary {
     /// With `hold-trace`, each kernel lock section (`h`, then its `j`), in the order they released
     /// the lock.
     pub sections: Vec<Section>,
+    /// The ticks of other harts' audits the lock waits waited through (`y`), not billed to anyone.
+    pub excused: u64,
 }
 
 /// One kernel lock section (`hold-trace`): held from tick `from` to `to` by `hart`, for `cause`
@@ -667,6 +669,20 @@ pub fn check(records: &[Record]) -> Result<Summary, String> {
                     return Err(format!("record {}: a lock wait's ticket after no wait of its hart", r.seq));
                 }
                 sum.lock_tickets.push((r.id, r.pass as u64));
+            }
+            'y' => {
+                let back = |k: usize| i.checked_sub(k).map(|j| records[j]);
+                let wait = match back(2) {
+                    Some(k) if k.kind == 'k' => back(3),
+                    other => other,
+                };
+                let Some(q) = wait.filter(|q| q.kind == 'Q' && q.hart == r.hart) else {
+                    return Err(format!("record {}: audits excused after no lock wait of its hart", r.seq));
+                };
+                if u128::from(r.id) > q.pass - u128::from(q.id) {
+                    return Err(format!("record {}: a lock wait excused more than it waited", r.seq));
+                }
+                sum.excused += r.id;
             }
             'h' => {
                 if r.pass < u128::from(r.id) {
@@ -2225,6 +2241,13 @@ fn charges(
                     *out.waited.entry(b).or_default() += r.pass.saturating_sub(u128::from(r.id));
                 }
             }
+            // The other harts' audits the wait waited through were billed to nobody.
+            'y' if inside => {
+                if let Some(&b) = runs.get(&r.hart).filter(|b| **b != 0 && counted(**b)) {
+                    let w = out.waited.entry(b).or_default();
+                    *w = w.saturating_sub(u128::from(r.id));
+                }
+            }
             _ => {}
         }
         let out_of_queue = seen.get(&r.id).is_none_or(|s| s.1);
@@ -2654,12 +2677,14 @@ fn nobody(r: &Record) -> String {
 
 /// The waits for the kernel lock from user mode (`Q`) as a share of the harts' time (`F`): the
 /// time one hart's runner lost to another hart's kernel section, which no budget is charged for and
-/// R78 bounds by count, not by share (kernel/scheduling.md, "Residual risks"). Report-only.
-fn lock_waits(waits: &[(u64, u64, u64)], (ticks, harts): (u64, u64)) -> String {
+/// R78 bounds by count, not by share (kernel/scheduling.md, "Residual risks"); and of them, the
+/// ticks behind other harts' audits, which a checked build bills to nobody (`y`). Report-only.
+fn lock_waits(waits: &[(u64, u64, u64)], excused: u64, (ticks, harts): (u64, u64)) -> String {
     let waited: u64 = waits.iter().map(|(from, to, _)| to - from).sum();
     let per_mille = waited.saturating_mul(1000) / ticks.saturating_mul(harts).max(1);
     format!(
-        "lock waits {per_mille} of 1000 ({} waits, {waited} ticks, over {harts} hart(s) x {ticks} ticks)",
+        "lock waits {per_mille} of 1000 ({} waits, {waited} ticks, {excused} of them behind other harts' \
+         audits and billed to nobody, over {harts} hart(s) x {ticks} ticks)",
         waits.len()
     )
 }
@@ -3011,7 +3036,8 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
         format!(
             "; {}{}",
             nobody(r),
-            sum.hart_time.map_or(String::new(), |t| format!("; {}", lock_waits(&sum.lock_waits, t)))
+            sum.hart_time
+                .map_or(String::new(), |t| format!("; {}", lock_waits(&sum.lock_waits, sum.excused, t)))
         )
     });
     let head = format!(
@@ -4056,25 +4082,44 @@ mod tests {
         assert!(ok.is_ok_and(|s| s.contains("1 picks in rank order")));
     }
 
-    /// The waits for the lock (`Q`) are reported as a share of the harts' time (`F`), judging nothing;
-    /// a wait that ends before it starts is malformed.
+    /// The waits for the lock (`Q`) are reported as a share of the harts' time (`F`), judging nothing,
+    /// with the ticks of other harts' audits they waited through (`y`, just after its hart's `Q`, or
+    /// its `k`); a wait that ends before it starts is malformed, and so is an excuse after no wait
+    /// of its hart or for more than the wait.
     #[test]
     fn lock_waits_are_reported_per_mille_of_the_harts_time() {
         let ok = verdict_on(&[
             (1, 'W', 5, 0x10, 0),
             (1, 'K', 5, 0x10, 0),
             (2, 'Q', 100, 300, 1),
+            (2, 'y', 150, 0, 1),
             (3, 'Q', 400, 500, 0),
+            (3, 'k', 7, 1, 0),
+            (3, 'y', 20, 0, 0),
             (3, 'F', 1000, 2, 0),
             (300, 'C', 10_300, 9_900, 0),
         ])
         .unwrap();
         assert!(
-            ok.contains("; lock waits 150 of 1000 (2 waits, 300 ticks, over 2 hart(s) x 1000 ticks)"),
+            ok.contains(
+                "; lock waits 150 of 1000 (2 waits, 300 ticks, 170 of them behind other harts' audits and \
+                 billed to nobody, over 2 hart(s) x 1000 ticks)"
+            ),
             "{ok}"
         );
         let bad = verdict_on(&[(1, 'W', 5, 0x10, 0), (1, 'K', 5, 0x10, 0), (2, 'Q', 300, 100, 1)]);
         assert!(bad.unwrap_err().contains("a lock wait that ends before it starts"));
+        let excuse = |records: &[(u64, char, u64, u128, u64)]| verdict_on(records).unwrap_err();
+        let w = (1, 'W', 5, 0x10, 0);
+        assert!(excuse(&[w, (2, 'y', 10, 0, 1)]).contains("audits excused after no lock wait of its hart"));
+        assert!(
+            excuse(&[w, (2, 'Q', 100, 300, 0), (2, 'y', 10, 0, 1)])
+                .contains("audits excused after no lock wait of its hart")
+        );
+        assert!(
+            excuse(&[w, (2, 'Q', 100, 300, 1), (2, 'y', 201, 0, 1)])
+                .contains("a lock wait excused more than it waited")
+        );
     }
 
     /// With `lock-trace`, the waits' tickets (`k`, each just after its hart's `Q`) must rise in the
@@ -4801,11 +4846,18 @@ mod tests {
                 && e.contains("target missed (450 <= share <= 550)")),
             "{missed:?}"
         );
-        // Lock waits of the hart running the bystander come out of its charge.
+        // Lock waits of the hart running the bystander come out of its charge, but for the audits
+        // on other harts they waited through, which were billed to nobody.
         let waits = [('H', 44, 0, 1), ('Q', 0, 10_800, 1)];
         let net = run(&at(&log, &waits), "");
         assert!(
             net.as_ref().is_err_and(|e| e.contains("lock waits taken out, ticks {44: 10800}")),
+            "{net:?}"
+        );
+        let excused = [('H', 44, 0, 1), ('Q', 0, 10_800, 1), ('y', 800, 0, 1)];
+        let net = run(&at(&log, &excused), "");
+        assert!(
+            net.as_ref().is_err_and(|e| e.contains("lock waits taken out, ticks {44: 10000}")),
             "{net:?}"
         );
         // Judged at one hart only (`@1`), the miss at two is reported, not judged.
