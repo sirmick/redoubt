@@ -2,10 +2,10 @@
 //! the client library and the runtime's kernel calls.
 //!
 //! - **A handle is a [`Cap`]**, the value behind its resource term: the handle, owned once (closed when its
-//!   last copy goes, the namespace's and the named handles' never while the VM runs), and what kind it is,
-//!   which each call checks before the kernel is asked. The kind is the platform's knowledge: a namespace
-//!   entry is a 9P connection, the named handle `budget` is the VM's own budget, a budget made here is a
-//!   budget, and any other handle is an endpoint.
+//!   last copy goes, unless it went with a budget the VM destroyed ([`Life`]); the namespace's and the named
+//!   handles' never while the VM runs), and what kind it is, which each call checks before the kernel is
+//!   asked. The kind is the platform's knowledge: a namespace entry is a 9P connection, the named handle
+//!   `budget` is the VM's own budget, a budget made here is a budget, and any other handle is an endpoint.
 //! - **The namespace is the files' own** ([`crate::files`]): a bind here is a bind there. A handle is
 //!   attached as a 9P connection at most once (a second `Tversion` on one handle would end the first's fids),
 //!   so a handle bound twice is one connection.
@@ -18,6 +18,7 @@ use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::num::NonZeroU64;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 use beamlet_vm::platform::{
     BudgetSpec, Entry, Event, Identity, Launch, Message, Object, Refused, System, Usage,
@@ -51,24 +52,43 @@ pub const ATTACH_US: u64 = 1_000_000;
 /// (docs/userland/files.md, "Copying, moving, removing and binds").
 pub const MAX_BINDINGS: usize = 64;
 
-/// A handle the VM holds: one it was given since its start is closed when its last [`Cap`] goes;
-/// one it was started with is the process's for its life, and the namespace's, so never.
+/// A budget the VM carved, as the handles that die with it see it: gone once the VM has destroyed
+/// it. The kernel then frees the slot of every handle that names it or that it stamped, and may
+/// give the index to the next handle the VM gets, so a handle gone with it is never closed again
+/// (docs/userland/beamlet.md, "Handles are resource terms").
+#[derive(Default)]
+pub(crate) struct Life(AtomicBool);
+
+impl Life {
+    fn end(&self) { self.0.store(true, Ordering::SeqCst) }
+
+    fn gone(&self) -> bool { self.0.load(Ordering::SeqCst) }
+}
+
+/// A handle the VM holds: one it was given since its start is closed when its last [`Cap`] goes,
+/// unless it has gone with the budget it came through; one it was started with is the process's for
+/// its life, and the namespace's, so never.
 pub(crate) struct Owned {
     pub(crate) handle: Handle,
     close: bool,
+    /// The budget it dies with, if it is one the VM carved.
+    life: Option<Arc<Life>>,
 }
 
 impl Owned {
     /// A handle a reply, a request or a carve brought: closed when its last copy goes.
-    pub(crate) fn new(handle: Handle) -> Owned { Owned { handle, close: true } }
+    pub(crate) fn new(handle: Handle) -> Owned { Owned::under(handle, None) }
+
+    /// As [`Owned::new`], for a handle that dies with `life`.
+    fn under(handle: Handle, life: Option<Arc<Life>>) -> Owned { Owned { handle, close: true, life } }
 
     /// A handle of the startup block: kept as long as the process runs.
-    fn kept(handle: Handle) -> Owned { Owned { handle, close: false } }
+    fn kept(handle: Handle) -> Owned { Owned { handle, close: false, life: None } }
 }
 
 impl Drop for Owned {
     fn drop(&mut self) {
-        if self.close {
+        if self.close && !self.life.as_ref().is_some_and(|life| life.gone()) {
             let _ = redoubt_rt::handle::close(self.handle);
         }
     }
@@ -89,14 +109,30 @@ pub(crate) enum Kind {
 pub(crate) struct Cap {
     pub(crate) owned: Arc<Owned>,
     pub(crate) kind: Kind,
+    /// For a connection to a server the VM launched with `serve`, and every handle calls on it
+    /// returned: the budget the server runs in, which stamps what it mints, so what calls on it
+    /// return dies with it. A handle it forwarded rather than minted is marked gone with it too, and
+    /// so never closed: the VM cannot tell the two apart.
+    pub(crate) returns: Option<Arc<Life>>,
 }
 
 impl Cap {
-    fn object(owned: Arc<Owned>, kind: Kind) -> Object { Arc::new(Cap { owned, kind }) }
+    fn object(owned: Arc<Owned>, kind: Kind) -> Object { Cap::serving(owned, kind, None) }
 
-    /// A handle a reply or a request brought: an endpoint, closed when its last copy goes.
-    pub(crate) fn received(handle: Handle) -> Object {
-        Cap::object(Arc::new(Owned::new(handle)), Kind::Endpoint)
+    fn serving(owned: Arc<Owned>, kind: Kind, returns: Option<Arc<Life>>) -> Object {
+        Arc::new(Cap { owned, kind, returns })
+    }
+
+    /// A handle a request brought: an endpoint, closed when its last copy goes. It dies with no
+    /// budget the VM knows: a receiver is told its sender's badge, account and labels, never its
+    /// budget, and a budget the VM carved carries the session's account and labels
+    /// (docs/userland/beamlet.md, "Handles are resource terms", the residuals).
+    pub(crate) fn received(handle: Handle) -> Object { Cap::returned(handle, None) }
+
+    /// A handle a reply brought, on a connection whose returns die with `returns`: an endpoint,
+    /// closed when its last copy goes unless it has gone with them.
+    pub(crate) fn returned(handle: Handle, returns: Option<Arc<Life>>) -> Object {
+        Cap::serving(Arc::new(Owned::under(handle, returns.clone())), Kind::Endpoint, returns)
     }
 
     pub(crate) fn handle(&self) -> Handle { self.owned.handle }
@@ -113,6 +149,8 @@ struct Known {
     /// Its name, if it came as a named handle.
     name: Option<String>,
     kind: Kind,
+    /// As its [`Cap`]'s.
+    returns: Option<Arc<Life>>,
 }
 
 /// The system calls' state.
@@ -157,6 +195,7 @@ impl Sys {
                     owned: Arc::new(Owned::kept(handle)),
                     name: None,
                     kind: Kind::Connection(conn.clone()),
+                    returns: None,
                 });
             }
         }
@@ -168,6 +207,7 @@ impl Sys {
                     owned: Arc::new(Owned::kept(handle)),
                     name: Some(name.to_string()),
                     kind: if name == BUDGET { Kind::Budget } else { Kind::Endpoint },
+                    returns: None,
                 }),
             }
         }
@@ -212,7 +252,8 @@ impl Sys {
 
     /// The resource value for the known handle `i`.
     fn object(&self, i: usize) -> Object {
-        Cap::object(Arc::clone(&self.known[i].owned), self.known[i].kind.clone())
+        let known = &self.known[i];
+        Cap::serving(Arc::clone(&known.owned), known.kind.clone(), known.returns.clone())
     }
 }
 
@@ -338,6 +379,7 @@ impl System for Redoubt {
                             owned: Arc::clone(&cap.owned),
                             name: None,
                             kind: Kind::Connection(conn.clone()),
+                            returns: cap.returns.clone(),
                         }),
                     }
                     conn
@@ -375,11 +417,21 @@ impl System for Redoubt {
         timeout_us: u64,
     ) -> Result<(), Refused> {
         let target = endpoint(to)?;
+        let returns = cap(to)?.returns.clone();
         let carried = handles(&message.handles)?;
         let Message { words, buffer, handles: mut held } = message;
         held.push(Object::clone(to));
-        let call =
-            crate::pool::Call { asker, id: call, to: target, carried, words, buffer, timeout_us, held };
+        let call = crate::pool::Call {
+            asker,
+            id: call,
+            to: target,
+            carried,
+            words,
+            buffer,
+            timeout_us,
+            held,
+            returns,
+        };
         self.sys.pool.call(self.io.wake(), call)?;
         self.sys.collect();
         Ok(())
@@ -426,11 +478,19 @@ impl System for Redoubt {
             deadline: spec.deadline.unwrap_or(FOREVER),
         };
         let child = Budget::from_handle(parent).create_child(&spec).map_err(|e| name(e.into()))?;
-        Ok(Cap::object(Arc::new(Owned::new(child.handle())), Kind::Budget))
+        let life = Some(Arc::new(Life::default()));
+        Ok(Cap::object(Arc::new(Owned::under(child.handle(), life)), Kind::Budget))
     }
 
+    /// Destroyed, a budget the VM carved takes its handle with it, and the handles its servers
+    /// minted: they are marked gone, so no collection closes their indices. The VM carves only
+    /// from its own budget, so no budget it carved is below another.
     fn budget_destroy(&mut self, b: &Object) -> Result<(), Refused> {
-        Budget::from_handle(budget(b)?).destroy().map_err(|e| name(e.into()))
+        Budget::from_handle(budget(b)?).destroy().map_err(|e| name(e.into()))?;
+        if let Some(life) = &cap(b)?.owned.life {
+            life.end();
+        }
+        Ok(())
     }
 
     fn budget_usage(&mut self, b: &Object) -> Result<Usage, Refused> {
@@ -452,8 +512,10 @@ impl System for Redoubt {
             namespace: launch.namespace.iter().map(|(_, o)| endpoint(o)).collect::<Result<_, _>>()?,
             handles: launch.handles.iter().map(|(_, o)| cap(o).map(Cap::handle)).collect::<Result<_, _>>()?,
         };
+        // What calls on the server return dies with the budget it runs in.
+        let returns = cap(&launch.budget)?.owned.life.clone();
         let served = self.sys.jobs.launch(self.io.wake(), asker, job, launch, resolved)?;
-        Ok(served.map(|send| Cap::object(Arc::new(Owned::new(send.handle())), Kind::Endpoint)))
+        Ok(served.map(|send| Cap::serving(Arc::new(Owned::new(send.handle())), Kind::Endpoint, returns)))
     }
 
     fn poll(&mut self) -> Option<(u64, Event)> { self.sys.events.pop_front() }

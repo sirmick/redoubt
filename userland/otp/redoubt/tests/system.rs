@@ -642,6 +642,85 @@ fn a_launch_that_serves_gives_the_child_the_receive_right_and_its_caller_a_send_
     );
 }
 
+/// Budgets carved to take the indices a destruction freed: as many as the VM's table could have free.
+const REFILLS: usize = 16;
+
+/// A budget the VM destroyed takes its handle with it, and the kernel gives the index to the next
+/// handle: collecting the old term closes nothing, so the budgets carved after are still held (once,
+/// a later `piped`'s budget lost its handle so, and its carve stayed out of the session for good).
+#[test]
+fn a_destroyed_budgets_index_is_not_closed_when_its_term_is_collected() {
+    let f = fake();
+    with_session(
+        move |pid| vec![("budget", f.budget(pid))],
+        |p, _| {
+            let spec = BudgetSpec { pages: 8, ..Default::default() };
+            let first = p.budget_create(&spec).unwrap();
+            p.budget_destroy(&first).unwrap();
+            let carved: Vec<Object> = (0..REFILLS).map(|_| p.budget_create(&spec).unwrap()).collect();
+            drop(first);
+            for budget in &carved {
+                assert_eq!(p.budget_destroy(budget), Ok(()));
+            }
+        },
+    );
+}
+
+/// What calls on a server the VM launched with `serve` return is stamped with the server's budget,
+/// so it goes when the VM destroys that budget, index and all: collecting its terms closes nothing,
+/// so the budgets carved after are still held (a pipeline's stage connections, which `piped`
+/// mints).
+#[test]
+fn what_a_served_server_returned_goes_with_its_budget_and_is_not_closed_again() {
+    let f = fake();
+    with_session(
+        move |pid| vec![("budget", f.budget(pid))],
+        move |p, _| {
+            let spec = BudgetSpec { pages: 8, processes: 1, weight: 1, ..Default::default() };
+            let budget = p.budget_create(&spec).unwrap();
+            let launch = Launch {
+                image: b"\x7fELF".to_vec(),
+                budget: budget.clone(),
+                namespace: vec![],
+                handles: vec![],
+                args: vec![],
+                stack_pages: None,
+                heap_pages: None,
+                serve: Some("serve".into()),
+            };
+            let conn = p.launch(ME, 1, launch).unwrap().expect("a send right");
+            // The test plays the server, in its budget: every call is answered with a connection
+            // it mints.
+            let server = f.process(0, &[]);
+            let receive = f.play(&f.last_launched().unwrap(), server)[0];
+            f.run(server, move || {
+                let e = Endpoint::from_handle(receive);
+                while let Ok(event) = e.receive(FOREVER, 0) {
+                    if let IpcEvent::Call(request) = event {
+                        let minted = e.mint(core::num::NonZeroU64::new(77).unwrap(), None).unwrap().handle();
+                        let mut send = redoubt_rt::abi::Handles::new();
+                        let _ = send.push(minted);
+                        let _ = finish(request, &Outcome { words: [0; 4], send, close: send });
+                    }
+                }
+                0
+            });
+            p.call(ME, 2, &conn, message([1, 0, 0, 0], None), 1_000_000).unwrap();
+            let (_, Event::Reply { result, .. }) = next(p) else { panic!("not a reply") };
+            let returned = result.unwrap().handles;
+            assert_eq!(returned.len(), 1);
+            p.budget_destroy(&budget).unwrap();
+            let (_, event) = next(p);
+            assert!(matches!(event, Event::Exit { job: 1, cause: "killed", .. }));
+            let carved: Vec<Object> = (0..REFILLS).map(|_| p.budget_create(&spec).unwrap()).collect();
+            drop(returned);
+            for budget in &carved {
+                assert_eq!(p.budget_destroy(budget), Ok(()));
+            }
+        },
+    );
+}
+
 #[test]
 fn a_launch_past_its_jobs_is_refused_and_a_serves_endpoint_with_it() {
     let f = fake();

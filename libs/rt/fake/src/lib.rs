@@ -15,9 +15,11 @@
 //!
 //! For launchers it models budgets as handles with labels (`Fake::budget`, which carries its
 //! owner's), `budget_create` (the kernel's label rule for a user-class caller, nothing charged),
-//! `process_create`, `process_map`, `process_start` and `budget_destroy`, and keeps what each child was given
-//! for a test to read back (`Fake::launched`); a child runs nothing, and a test ends it (`Fake::exit`), which
-//! sends its one exit notice. Every call is logged by name (`Fake::calls`), a test can have the next
+//! `process_create`, `process_map`, `process_start` and `budget_destroy`, which frees every handle to the
+//! budget and to those below it, and every handle a process running in one made (`Fake::play`), so an
+//! index is reused as the kernel's is. It keeps what each child was given for a test to read back
+//! (`Fake::launched`); a child runs nothing, and a test ends it (`Fake::exit`), which sends its one exit
+//! notice. Every call is logged by name (`Fake::calls`), a test can have the next
 //! call of a name refused (`Fake::refuse`), or a later one (`Fake::refuse_after`), and it can read
 //! the most pages a process held at once (`Fake::held_peak`).
 //!
@@ -82,10 +84,12 @@ struct Device {
     masked: bool,
 }
 
-/// One budget: its labels, fixed when it was made, and whether it was destroyed.
+/// One budget: its labels, fixed when it was made, the budget it was carved from, and whether it
+/// was destroyed.
 #[derive(Clone, Copy, Default)]
 struct Budget {
     labels: Labels,
+    parent: Option<usize>,
     destroyed: bool,
 }
 
@@ -106,16 +110,20 @@ pub struct Launched {
     ended: bool,
 }
 
-/// What a handle names. Only endpoints are modelled.
+/// What a handle names. Only endpoints are modelled. Its stamp is the budget the process that made
+/// it runs in ([`Fake::play`]), if it was given one: destroying that budget revokes it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Endpoint {
     id: usize,
     badge: u64,
+    stamp: Option<usize>,
 }
 
 struct Process {
     account: u64,
     labels: Labels,
+    /// The budget it runs in, if a test said so ([`Fake::play`]): what stamps the handles it makes.
+    runs_in: Option<usize>,
     /// Index 0 is never a handle.
     handles: Vec<Option<Object>>,
     /// Mapped ranges: address -> length.
@@ -179,6 +187,9 @@ struct State {
     devices: Vec<Device>,
     /// Budgets, by the index their handles carry.
     budgets: Vec<Budget>,
+    /// The handles to budgets a destruction freed, by (process, index): the budget each named,
+    /// for [`Fake::destroyed`] to read after its slot has gone.
+    freed: HashMap<(usize, usize), usize>,
     /// The pointer `MapAnon` or `device` allocated at each address, so memory nothing frees (a
     /// heap's pages, a device's registers) stays reachable from here and Miri does not report it
     /// leaked. An entry is replaced when its address is allocated again; after an `Unmap` it is
@@ -241,7 +252,14 @@ impl Fake {
     pub fn process(&self, account: u64, labels: &[u64]) -> usize {
         let mut s = self.lock();
         let labels = Labels::from_slice(&set(labels)).unwrap();
-        s.processes.push(Process { account, labels, handles: vec![None], mappings: HashMap::new(), peak: 0 });
+        s.processes.push(Process {
+            account,
+            labels,
+            runs_in: None,
+            handles: vec![None],
+            mappings: HashMap::new(),
+            peak: 0,
+        });
         s.processes.len() - 1
     }
 
@@ -250,7 +268,8 @@ impl Fake {
         let mut s = self.lock();
         s.endpoints.push(EndpointState::default());
         let id = s.endpoints.len() - 1;
-        install(&mut s, owner, Object::Endpoint(Endpoint { id, badge: 0 }))
+        let stamp = s.processes[owner].runs_in;
+        install(&mut s, owner, Object::Endpoint(Endpoint { id, badge: 0, stamp }))
     }
 
     /// A new device object whose two handles (registers, interrupt) go into `owner`'s table,
@@ -303,7 +322,8 @@ impl Fake {
     pub fn grant(&self, from: usize, from_handle: Handle, to: usize, badge: u64) -> Handle {
         let mut s = self.lock();
         let ep = as_endpoint(&s, from, from_handle).expect("grant from an endpoint that exists");
-        install(&mut s, to, Object::Endpoint(Endpoint { badge, ..ep }))
+        let stamp = s.processes[from].runs_in;
+        install(&mut s, to, Object::Endpoint(Endpoint { badge, stamp, ..ep }))
     }
 
     /// Copies `from`'s handle `from_handle` into `to`, badge and all: what `process_start` does
@@ -360,17 +380,35 @@ impl Fake {
     pub fn budget(&self, owner: usize) -> Handle {
         let mut s = self.lock();
         let labels = s.processes[owner].labels;
-        s.budgets.push(Budget { labels, destroyed: false });
+        s.budgets.push(Budget { labels, parent: None, destroyed: false });
         let index = s.budgets.len() - 1;
         install(&mut s, owner, Object::Budget(index))
     }
 
-    /// Whether the budget `owner` holds as `budget` was destroyed.
+    /// Whether the budget `owner` holds as `budget` was destroyed (its handle is then gone, as the
+    /// kernel's is).
     pub fn destroyed(&self, owner: usize, budget: Handle) -> bool {
         let s = self.lock();
+        if let Some(index) = s.freed.get(&(owner, budget.index() as usize)) {
+            return s.budgets[*index].destroyed;
+        }
         let Ok(Object::Budget(index)) = lookup(&s, owner, budget) else { panic!("not a budget handle") };
         s.budgets[index].destroyed
     }
+
+    /// A test plays `child`, which the fake does not run, as the process `pid`: `pid` runs in the
+    /// child's budget, so the handles it makes from now on are stamped with it and go when it is
+    /// destroyed (kernel/objects.md R9), and it holds a copy of each handle the child was started
+    /// with, returned in the child's order.
+    pub fn play(&self, child: &Launched, pid: usize) -> Vec<Handle> {
+        let mut s = self.lock();
+        s.processes[pid].runs_in = Some(child.budget);
+        child.handles.iter().map(|object| install(&mut s, pid, *object)).collect()
+    }
+
+    /// What the child launched last, by any launcher, was given: for a launcher whose handles the
+    /// test cannot name, as a VM's.
+    pub fn last_launched(&self) -> Option<Launched> { self.lock().launched.last().cloned() }
 
     /// What `owner`'s child `process` was given.
     pub fn launched(&self, owner: usize, process: Handle) -> Launched {
@@ -380,10 +418,18 @@ impl Fake {
     }
 
     /// What each child made in the budget `owner` holds as `budget` was given, oldest first: read
-    /// even after the launcher closed the child's handle.
+    /// even after the launcher closed the child's handle, or destroyed the budget.
     pub fn launched_in(&self, owner: usize, budget: Handle) -> Vec<Launched> {
         let s = self.lock();
-        let Ok(Object::Budget(index)) = lookup(&s, owner, budget) else { panic!("not a budget handle") };
+        let index = match s.freed.get(&(owner, budget.index() as usize)) {
+            Some(index) => *index,
+            None => {
+                let Ok(Object::Budget(index)) = lookup(&s, owner, budget) else {
+                    panic!("not a budget handle")
+                };
+                index
+            }
+        };
         s.launched.iter().filter(|child| child.budget == index).cloned().collect()
     }
 
@@ -510,6 +556,7 @@ fn install(s: &mut State, pid: usize, ep: Object) -> Handle {
         }
     };
     table[index] = Some(ep);
+    s.freed.remove(&(pid, index));
     Handle::new(index as u32).unwrap()
 }
 
@@ -657,7 +704,8 @@ unsafe impl redoubt_rt::Transport for Fake {
                 let mut s = self.lock();
                 s.endpoints.push(EndpointState::default());
                 let id = s.endpoints.len() - 1;
-                Ok(Return::Handle(install(&mut s, pid, Object::Endpoint(Endpoint { id, badge: 0 }))))
+                let stamp = s.processes[pid].runs_in;
+                Ok(Return::Handle(install(&mut s, pid, Object::Endpoint(Endpoint { id, badge: 0, stamp }))))
             }
             Call::MapDevice { device } => {
                 let s = self.lock();
@@ -695,10 +743,11 @@ unsafe impl redoubt_rt::Transport for Fake {
                         _ => return Err(Error::InvalidArgument),
                     },
                 };
+                let stamp = s.processes[pid].runs_in;
                 Ok(Return::Handle(install(
                     &mut s,
                     pid,
-                    Object::Endpoint(Endpoint { id: ep, badge: badge.get() }),
+                    Object::Endpoint(Endpoint { id: ep, badge: badge.get(), stamp }),
                 )))
             }
             Call::HandleClose { handle } => {
@@ -861,18 +910,49 @@ unsafe impl redoubt_rt::Transport for Fake {
                 if labels != parent.labels.as_slice() {
                     return Err(Error::ClassDenied);
                 }
-                s.budgets.push(Budget { labels: parent.labels, destroyed: false });
+                s.budgets.push(Budget { labels: parent.labels, parent: Some(index), destroyed: false });
                 let child = s.budgets.len() - 1;
                 Ok(Return::Handle(install(&mut s, pid, Object::Budget(child))))
             }
             Call::BudgetDestroy { budget } => {
                 let mut s = self.lock();
                 let Object::Budget(index) = lookup(&s, pid, budget)? else { return Err(Error::WrongObject) };
-                s.budgets[index].destroyed = true;
+                // It and every budget below it.
+                let below = |s: &State, mut b: usize| loop {
+                    if b == index {
+                        return true;
+                    }
+                    match s.budgets[b].parent {
+                        Some(parent) => b = parent,
+                        None => return false,
+                    }
+                };
+                let gone: Vec<usize> = (0..s.budgets.len()).filter(|&b| below(&s, b)).collect();
+                for &b in &gone {
+                    s.budgets[b].destroyed = true;
+                }
                 let children: Vec<usize> =
-                    (0..s.launched.len()).filter(|&i| s.launched[i].budget == index).collect();
+                    (0..s.launched.len()).filter(|&i| gone.contains(&s.launched[i].budget)).collect();
                 for child in children {
                     end(&mut s, child, Cause::Killed, 0);
+                }
+                // As the kernel does (kernel/budgets.md R10, objects.md R9): every handle to a
+                // budget destroyed, and every handle one stamped, is gone from every table, its
+                // index free for the next handle installed there.
+                let State { processes, freed, .. } = &mut *s;
+                for (p, process) in processes.iter_mut().enumerate() {
+                    for (i, slot) in process.handles.iter_mut().enumerate() {
+                        match *slot {
+                            Some(Object::Budget(b)) if gone.contains(&b) => {
+                                freed.insert((p, i), b);
+                                *slot = None;
+                            }
+                            Some(Object::Endpoint(Endpoint { stamp: Some(b), .. })) if gone.contains(&b) => {
+                                *slot = None;
+                            }
+                            _ => {}
+                        }
+                    }
                 }
                 self.changed.notify_all();
                 Ok(Return::Nothing)
