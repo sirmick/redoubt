@@ -123,9 +123,10 @@ from the Elixir caller, and Rust makes the calls and writes the startup block
 
 ### Standard input and output, and pipes
 
-<details><summary>Status: built · partly tested: in a boot the stages run under a tester in the steward's place, but for `exec`, which also runs in the steward's sessions over SSH, and for hostile output, drawn by the console principal's shell; a stage's console input is host-tested only · tested (10)</summary>
+<details><summary>Status: built · partly tested: in a boot the stages run under a tester in the steward's place, but for `exec`, which also runs in the steward's sessions over SSH, and for hostile output, drawn by the console principal's shell; a stage's console input is host-tested only · tested (11)</summary>
 
 - bench:pipe-carries
+- bench:pipe-eight
 - bench:pipe-never-reads
 - bench:pipe-no-authority
 - bench:pipe-interrupted
@@ -213,7 +214,8 @@ holding it ends: nothing of it exists at the prompt.
 - **Pages.** `piped`'s budget and each stage's are carved from the session's own pages, so they
   compete with the VM's headroom while a pipeline runs: the session's budget is the bound.
   `piped`'s is 768 pages, carved when a pipeline starts it and destroyed when the last pipeline
-  holding it ends, so a session that is not piping holds none of it. It holds 86 pages on rv64 and
+  holding it ends, so a session that is not piping holds none of it, after any number of pipelines
+  (`pipe-eight` runs eight in one session). It holds 86 pages on rv64 and
   83 on rv32 after `pipe-carries`' pipelines; the rest is what its clients' parked calls may lend
   it at worst, 552 pages for the two buckets admission needs at the least, which is why 512 would
   not do ([piped](../servers/piped.md#serving-pipes)). Starting it again costs about 60 ms under
