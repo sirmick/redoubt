@@ -15,8 +15,10 @@ const CAP: u64 = 20_000;
 
 /// Seeds tried in each steward family: a mutation these catch only past it is caught too late,
 /// and fails as not caught. The random search catches every one by seed 488 but
-/// `PolicyDeclassifyUnfit` (`steward_policy`'s seed 575), which its scenario catches first
-/// (`steward_scenario`), as it does `R2OneCursor` and `PolicyAgentOtherSet`. With
+/// `PolicyDeclassifyUnfit` (`steward_policy`'s seed 1,418), which its scenario catches first
+/// (`steward_scenario`), as it does `R2OneCursor`, `PolicyAgentOtherSet` and
+/// `PolicyEndLeaseAdmitted`, which `steward_policy` misses within the cap and
+/// `steward_noninterference` catches at seed 126, too slowly for the bench's deadline. With
 /// `TESTBENCH_LATE` set, the bench's word that the mutation is known to be late, the steward
 /// families get `CAP` too, and one caught within the caps after all fails, so that its entry is
 /// removed.
@@ -56,7 +58,17 @@ fn declassify_unfit_scenario() {
 }
 
 #[test]
+fn declassify_live_scenario() {
+    scenario(common::contracts::declassify_live, Mutation::PolicyDeclassifyLive, "P6:")
+}
+
+#[test]
 fn one_cursor_scenario() { scenario(common::contracts::one_cursor, Mutation::R2OneCursor, "P10:") }
+
+#[test]
+fn end_lease_admitted_scenario() {
+    scenario(common::contracts::end_lease_admitted, Mutation::PolicyEndLeaseAdmitted, "P13:")
+}
 
 #[test]
 fn agent_other_set_scenario() {

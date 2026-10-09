@@ -1,0 +1,67 @@
+# Contexts: a context's relay launched and attached as it starts; a login while it starts; a
+# takeover, both channels told; a close of the channel taken from; a detach, a reattachment and
+# sshd's end; and each way an attached or a detached context ends.
+principal "alice" account=1 login=[11] approval=[21] owned=[7] sets=[[],[7]] top=1000,30,300
+keyd [31]
+servers 1
+sizes session=10,2,5 agent=10,2,5 sub_agent=5,1,2 crossing=2,1,1 cost=1
+
+# `work` starts: its relay, the channel attached, then the session's own process.
+event now=1 random=[101,102,103] reply=1 Login principal="alice" labels=[] context="work" key=11 from="198.51.100.2:51234"
+# A second login while it starts: in use.
+event now=1 random=[111,112,113] reply=2 Login principal="alice" labels=[] context="work" key=11 from="203.0.113.7:40022"
+event now=2 Done object=session@1/#101 ok=[budget(901),scope,process(70),done,connection,connection,process(71)]
+# A wrong key never reaches it.
+event now=3 random=[121,122,123] reply=3 Login principal="alice" labels=[] context="work" key=21 from="203.0.113.7:40022"
+# Taken over at 2h13m: the old channel told and let go, the new one told; answered once done.
+event now=7980000000 random=[201,202,203] reply=4 Login principal="alice" labels=[] context="work" key=11 from="203.0.113.7:40022"
+event now=7980000001 Done object=session@1/#101 ok=[done,done]
+# The channel it was taken from closes: its id names nothing.
+event now=7980000002 reply=5 ChannelClosed session=101
+# A hostile address is never shown as it is.
+event now=7980000003 random=[211,212,213] reply=6 Login principal="alice" labels=[] context="work" key=11 from="\x1b[2J"
+event now=7980000004 Done object=session@1/#101 ok=[done,done]
+# The attached channel closes: detached, and the batch's outcome changes nothing.
+event now=7980000005 reply=7 ChannelClosed session=213
+event now=7980000006 Done object=session@1/#101 ok=[done]
+# Reattached.
+event now=7980000007 random=[301,302,303] reply=8 Login principal="alice" labels=[] context="work" key=11 from="10.0.2.2:3"
+event now=7980000008 Done object=session@1/#101 ok=[done]
+# sshd is gone: every attached context detaches.
+event now=7980000009 SshdGone
+event now=7980000010 Done object=session@1/#101 ok=[done]
+# Detached, its process exits: it ends.
+event now=7980000011 Exited object=session@1/#101
+event now=7980000012 Done object=session@1/#101 ok=[done]
+
+# `b`: a takeover whose attach fails ends the context.
+event now=8000000000 random=[401,402,403] reply=9 Login principal="alice" labels=[] context="b" key=11 from="198.51.100.2:51234"
+event now=8000000001 Done object=session@1/#401 ok=[budget(902),scope,process(72),done,connection,connection,process(73)]
+event now=8000000002 random=[411,412,413] reply=10 Login principal="alice" labels=[] context="b" key=11 from="203.0.113.7:40022"
+event now=8000000003 Done object=session@1/#401 failed=1,2
+event now=8000000004 Done object=session@1/#401 ok=[done]
+
+# `c`: detached, its relay's detach fails: it ends.
+event now=8100000000 random=[501,502,503] reply=11 Login principal="alice" labels=[] context="c" key=11 from="198.51.100.2:51234"
+event now=8100000001 Done object=session@1/#501 ok=[budget(903),scope,process(74),done,connection,connection,process(75)]
+event now=8100000002 reply=12 ChannelClosed session=501
+event now=8100000003 Done object=session@1/#501 failed=0,2
+event now=8100000004 Done object=session@1/#501 ok=[done]
+
+# `d`: detached, it ends itself.
+event now=8200000000 random=[601,602,603] reply=13 Login principal="alice" labels=[] context="d" key=11 from="198.51.100.2:51234"
+event now=8200000001 Done object=session@1/#601 ok=[budget(904),scope,process(76),done,connection,connection,process(77)]
+event now=8200000002 reply=14 ChannelClosed session=601
+event now=8200000003 Done object=session@1/#601 ok=[done]
+event now=8200000004 reply=15 EndSession badge=602
+event now=8200000005 Done object=session@1/#601 ok=[done]
+
+# The vault's `work`, detached, is locked out with its domain.
+event now=8300000000 random=[701,702,703] reply=16 Login principal="alice" labels=[7] context="work" key=11 from="198.51.100.2:51234"
+event now=8300000001 Done object=session@1/7#701 ok=[budget(905),scope,process(78),done,connection,connection,process(79)]
+event now=8300000002 reply=17 ChannelClosed session=701
+event now=8300000003 Done object=session@1/7#701 ok=[done]
+event now=8300000004 Blame account=1 labels=[7]
+event now=8300000005 Blame account=1 labels=[7]
+event now=8300000006 Blame account=1 labels=[7]
+event now=8300000007 Done object=session@1/7#701 ok=[done]

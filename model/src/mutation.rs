@@ -389,6 +389,13 @@ pub enum Mutation {
     PolicyAuditUnfiltered,
     /// A login to a live context makes a second session of it (`context_free`).
     PolicyContextTwice,
+    /// A login to a live context attaches to it before its key is checked (`login_key`).
+    PolicyTakeoverBeforeAuth,
+    /// A takeover gives the relay the new channel without letting the old one go (`detach_relay`).
+    PolicyBothAttached,
+    /// A detached channel's id still names its context, so its late close detaches the channel
+    /// attached since (`detach_relay`).
+    PolicyStaleCloseDetaches,
     // kernel/devices.md, I16: DMA device reset and frame quarantine.
     /// A dying process's DMA frames are pooled even when a device in its reset set did not
     /// confirm: the acceptance mutation.
@@ -411,7 +418,7 @@ pub enum Mutation {
 }
 
 impl Mutation {
-    pub const ALL: [Mutation; 165] = {
+    pub const ALL: [Mutation; 168] = {
         use Mutation::*;
         [
             R1SkipLabelCheck,
@@ -573,6 +580,9 @@ impl Mutation {
             PolicyServerHoldsSystemBudget,
             PolicyAuditUnfiltered,
             PolicyContextTwice,
+            PolicyTakeoverBeforeAuth,
+            PolicyBothAttached,
+            PolicyStaleCloseDetaches,
             DmaFreeBeforeReset,
             DmaQuarantinedSlotCountsAsReset,
             DmaUnmapFrees,
@@ -730,6 +740,7 @@ impl Mutation {
             | PolicyNoFairShare => "R39",
             PolicyBlameNoWindow | PolicyNoLockout => "R40",
             PolicyContextTwice => "R79",
+            PolicyTakeoverBeforeAuth | PolicyBothAttached | PolicyStaleCloseDetaches => "R80",
             PolicyDeclassifyLive
             | PolicyDeclassifyWithoutReader
             | PolicyDeclassifyFromUnlabelled
@@ -768,6 +779,11 @@ pub fn policy(m: Option<Mutation>) -> Policy {
         Some(Mutation::PolicyEndLeaseFromVault) => p.sponsor_session = sponsor_session,
         Some(Mutation::PolicyAuditUnfiltered) => p.audit_visible = |_, _| true,
         Some(Mutation::PolicyContextTwice) => p.context_free = pass,
+        Some(Mutation::PolicyTakeoverBeforeAuth) => p.login_key = login_key_or_live,
+        Some(Mutation::PolicyBothAttached) => p.detach_relay = nothing,
+        Some(Mutation::PolicyStaleCloseDetaches) => {
+            p.detach_relay = |cx| redoubt_steward::effects::detach_with(cx, false)
+        }
         _ => {}
     }
     p
@@ -778,6 +794,7 @@ mod broken {
     use alloc::string::String;
     use alloc::vec::Vec;
 
+    use redoubt_steward::Policy;
     use redoubt_steward::consts::BLAME_COUNT;
     use redoubt_steward::cx::Cx;
     use redoubt_steward::domain::Labels;
@@ -803,6 +820,18 @@ mod broken {
         } else {
             Err(Refusal::BadKey)
         }
+    }
+
+    /// Any key at all for a login naming a live context: the takeover is decided before the key.
+    pub fn login_key_or_live(cx: &Cx<'_>) -> Verdict {
+        let s = session(cx).ok_or(Refusal::Unknown)?;
+        let live = cx.state().sessions.values().any(|o| {
+            o.id != s.id
+                && o.state != redoubt_steward::gen::session::State::Ending
+                && o.context.is_some()
+                && o.context == s.context
+        });
+        if live { Ok(()) } else { (Policy::SHIPPED.login_key)(cx) }
     }
 
     /// An approval key, or one of the principal's login keys.

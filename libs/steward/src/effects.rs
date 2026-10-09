@@ -3,6 +3,7 @@
 //! emits outputs and raised events. None branches on an object's kind behind its name.
 
 use alloc::format;
+use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::audit::Record;
@@ -12,7 +13,7 @@ use crate::domain::Labels;
 use crate::effect::{
     Answer, Bytes, Kind, Notice, Notified, Object, Output, Parent, Refusal, Scope, Server, Step, Token,
 };
-use crate::event::Content;
+use crate::event::{Content, EventKind};
 use crate::guards::{lease, request, session};
 use crate::store::{Crossing, CrossingKind, Route};
 
@@ -22,6 +23,9 @@ const SCOPE: u8 = 1;
 const PROCESS: u8 = 2;
 /// The connection to the steward; the shared servers' follow, one each.
 const CONNECTIONS: u8 = 3;
+/// A context's console relay, and the channel console it holds while attached.
+const RELAY: u8 = 200;
+const CONSOLE: u8 = 201;
 /// What a read makes, in a crossing's or a request's batch.
 const READ: u8 = 1;
 
@@ -131,6 +135,116 @@ pub fn launch(cx: &mut Cx<'_>) {
     cx.step(step);
 }
 
+/// A context's console relay, in the session's budget, before the process whose `/dev/cons` it
+/// serves (servers/steward.md, "Contexts"). The console's session is no context and has none.
+pub fn launch_relay(cx: &mut Cx<'_>) {
+    if session(cx).is_some_and(|s| s.context.is_some()) {
+        let step = Step::LaunchRelay { token: cx.token(RELAY), budget: cx.token(BUDGET) };
+        cx.step(step);
+    }
+}
+
+/// The login's address, as a channel note shows it: `a.b.c.d:port` as `sshd` gave it, or
+/// `an unknown address` for anything else, so no byte of it can drive a terminal.
+fn login_from(cx: &Cx<'_>) -> String {
+    let EventKind::Login { from, .. } = &cx.event.kind else { return String::new() };
+    let ok = !from.is_empty()
+        && from.len() <= 21
+        && from.bytes().all(|b| b.is_ascii_digit() || b == b'.' || b == b':');
+    if ok { from.clone() } else { String::from("an unknown address") }
+}
+
+/// The context's name as a note shows it: its own, or `default`.
+fn context_name(cx: &Cx<'_>) -> String {
+    match session(cx).and_then(|s| s.context.as_deref()) {
+        Some("") | None => String::from("default"),
+        Some(name) => String::from(name),
+    }
+}
+
+/// R80: the context's console goes to the login's channel, with a note saying how: none for a
+/// new context, a reattachment, or a takeover naming the channel it was taken from. A fresh
+/// attachment id names the channel from here; a new context's first is its session's id.
+pub fn attach_relay(cx: &mut Cx<'_>) {
+    let (from, name, reply) = (login_from(cx), context_name(cx), cx.reply);
+    let key = match &cx.event.kind {
+        EventKind::Login { key, .. } => *key,
+        _ => return,
+    };
+    let fresh = if session(cx).is_some_and(|s| s.attachment == 0) { cx.fresh() } else { 0 };
+    let domain = cx.domain.clone();
+    let Some(s) = cx.state.sessions.get_mut(&cx.id) else { return };
+    let note = match (s.number, s.from.as_str()) {
+        (0, _) => String::new(),
+        (_, "") => format!("[context {name}: reattached]\r\n"),
+        (_, old) => format!("[context {name}: reattached; taken over from {old}]\r\n"),
+    };
+    if s.attachment == 0 {
+        s.attachment = fresh;
+    }
+    s.from = from;
+    s.key = key;
+    s.reply = reply;
+    let attachment = s.attachment;
+    cx.index.attachments.insert(attachment, (domain, cx.id));
+    let step = Step::Attach { relay: cx.token(RELAY), console: cx.token(CONSOLE), note };
+    cx.step(step);
+}
+
+/// R80: the channel the context is attached to lets it go, told why if a login took it over;
+/// its attachment id names nothing from here, so a close of that channel changes nothing.
+pub fn detach_relay(cx: &mut Cx<'_>) { detach_with(cx, true); }
+
+/// The detach, and whether the channel's attachment id is forgotten: always, but in the model's
+/// broken entry.
+pub fn detach_with(cx: &mut Cx<'_>, forget: bool) {
+    let now = cx.now() / 1_000_000;
+    let note = match &cx.event.kind {
+        EventKind::Login { .. } => {
+            let (from, name) = (login_from(cx), context_name(cx));
+            format!(
+                "[context {name} taken over from {from} at up {}h{:02}m]\r\n",
+                now / 3600,
+                now % 3600 / 60
+            )
+        }
+        _ => String::new(),
+    };
+    let Some(s) = cx.state.sessions.get_mut(&cx.id) else { return };
+    let attachment = core::mem::take(&mut s.attachment);
+    if note.is_empty() {
+        s.from.clear();
+    }
+    if forget {
+        cx.index.attachments.remove(&attachment);
+    }
+    let step = Step::Detach { relay: cx.token(RELAY), console: cx.token(CONSOLE), note };
+    cx.step(step);
+}
+
+/// A login, authenticated, names a context whose session lives: that session takes the login,
+/// and this one, never started, ends here.
+pub fn take_over(cx: &mut Cx<'_>) {
+    let Some(name) = session(cx).and_then(|s| s.context.clone()) else { return };
+    let live = cx.state.sessions.values().find(|o| {
+        o.id != cx.id && o.state != crate::gen::session::State::Ending && o.context.as_ref() == Some(&name)
+    });
+    if let Some(o) = live {
+        let object = Object { domain: cx.domain.clone(), kind: Kind::Session, id: o.id };
+        cx.out.raised.push_back(Raised::Attach { object });
+    }
+}
+
+/// A login to a context still starting is refused: it is in use, and nothing is attached.
+pub fn refuse_in_use(cx: &mut Cx<'_>) { cx.reply(Answer::Refused(Refusal::InUse)); }
+
+pub fn audit_attached(cx: &mut Cx<'_>) {
+    let Some(s) = session(cx) else { return };
+    let took_over = s.state == crate::gen::session::State::Running;
+    let record = Record::Attached { session: s.id, key: s.key, from: s.from.clone(), took_over };
+    cx.audit(record);
+}
+
 pub fn destroy_budget(cx: &mut Cx<'_>) {
     let step = Step::DestroyBudget { budget: cx.token(BUDGET) };
     cx.step(step);
@@ -193,7 +307,7 @@ pub fn audit_login(cx: &mut Cx<'_>) {
 
 pub fn reply_login(cx: &mut Cx<'_>) {
     let Some(s) = session(cx) else { return };
-    let answer = Answer::Session { id: s.id, name: format!("session-{}", s.number) };
+    let answer = Answer::Session { id: s.attachment, name: format!("session-{}", s.number) };
     cx.reply(answer);
 }
 

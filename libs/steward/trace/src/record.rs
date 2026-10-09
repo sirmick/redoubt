@@ -24,16 +24,18 @@ fn produced(p: &Produced) -> String {
 fn kind(k: &EventKind) -> String {
     let q = |s: &str| quote(s.as_bytes());
     match k {
-        EventKind::Login { principal, labels, context, key } => {
+        EventKind::Login { principal, labels, context, key, from } => {
             format!(
-                "Login principal={} labels={} context={} key={key}",
+                "Login principal={} labels={} context={} key={key} from={}",
                 q(principal),
                 show_list(labels),
-                q(context)
+                q(context),
+                q(from)
             )
         }
         EventKind::Console { principal } => format!("Console principal={}", q(principal)),
         EventKind::ChannelClosed { session } => format!("ChannelClosed session={session}"),
+        EventKind::SshdGone => "SshdGone".into(),
         EventKind::ApprovalOpened { channel, principal, key } => {
             format!("ApprovalOpened channel={channel} principal={} key={key}", q(principal))
         }

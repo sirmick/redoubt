@@ -7,8 +7,13 @@ stateDiagram-v2
     Starting --> Ending: Done [not not_locked]
     Starting --> Running: Done
     Starting --> Ending: Failed
+    Running --> Detached: ChannelClosed, Detach
     Running --> Ending: EndSession
-    Running --> Ending: ChannelClosed, Exited, LockedOut
+    Running --> Ending: Exited, LockedOut
+    Running --> Ending: Failed
+    Detached --> Running: Attach
+    Detached --> Ending: EndSession
+    Detached --> Ending: Exited, LockedOut, Failed
     Ending --> Ended: Done, Failed
     Ended --> [*]
 ```

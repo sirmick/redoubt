@@ -33,6 +33,11 @@ pub struct Session {
     pub number: u64,
     /// The call a batch's outcome answers.
     pub reply: ReplyTo,
+    /// A context's current attachment: the id its channel is named by, 0 while it is detached
+    /// (servers/steward.md, "Contexts"). A login's first is the session's own id.
+    pub attachment: u64,
+    /// The client address of the current attachment, as `sshd` gave it, checked.
+    pub from: String,
 }
 
 /// An agent on a lease.
@@ -190,6 +195,8 @@ pub struct Index {
     /// A session's or lease's id, to its domain.
     pub ids: BTreeMap<u64, (Domain, Kind)>,
     pub channels: BTreeMap<u64, Channel>,
+    /// A context's current attachment id, to its session's domain and id.
+    pub attachments: BTreeMap<u64, (Domain, u64)>,
 }
 
 impl Index {
@@ -199,6 +206,7 @@ impl Index {
             && !self.ids.contains_key(&id)
             && !self.routes.contains_key(&id)
             && !self.channels.contains_key(&id)
+            && !self.attachments.contains_key(&id)
     }
 }
 

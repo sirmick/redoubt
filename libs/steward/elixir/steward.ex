@@ -5,7 +5,7 @@
 #
 # Values: a domain is {account, labels} with labels sorted and without repeats; an object is
 # {domain, kind, id}; a token is {object, slot}. An event is %{now, random, reply, kind}, its
-# kind a tuple named for the page's event ({:login, principal, labels, context, key}, ...).
+# kind a tuple named for the page's event ({:login, principal, labels, context, key, from}, ...).
 defmodule Redoubt.Steward do
   alias Redoubt.Steward.{Effects, Guards}
   alias Redoubt.Steward.Gen
@@ -16,6 +16,7 @@ defmodule Redoubt.Steward do
             routes: %{},
             ids: %{},
             channels: %{},
+            attachments: %{},
             order: [],
             domains: %{},
             used: %{},
@@ -284,7 +285,11 @@ defmodule Redoubt.Steward do
     {next, store, out}
   end
 
-  defp forget_id(store, id), do: %{store | ids: Map.delete(store.ids, id)}
+  # The object is gone: its id, and any attachment naming it, name nothing from here.
+  defp forget_id(store, id) do
+    attachments = store.attachments |> Enum.reject(fn {_, {_, s}} -> s == id end) |> Map.new()
+    %{store | ids: Map.delete(store.ids, id), attachments: attachments}
+  end
 
   defp field(:session), do: :sessions
   defp field(:lease), do: :leases
@@ -346,7 +351,8 @@ defmodule Redoubt.Steward do
     w =
       Enum.find(event.random, fn w ->
         w != 0 and not Map.has_key?(store.ids, w) and not Map.has_key?(store.routes, w) and
-          not Map.has_key?(store.channels, w) and not Map.has_key?(store.used, w) and w not in out.drawn
+          not Map.has_key?(store.channels, w) and not Map.has_key?(store.used, w) and
+          not Map.has_key?(store.attachments, w) and w not in out.drawn
       end)
 
     case w do
@@ -393,7 +399,7 @@ defmodule Redoubt.Steward do
 
   # Before the key is checked, every refusal is the bad key's: an unknown principal, a label set
   # the manifest does not give it and a context that is not a name.
-  defp external(store, %{kind: {:login, name, l, context, key}} = e, out) do
+  defp external(store, %{kind: {:login, name, l, context, key, _from}} = e, out) do
     with p when p != nil <- principal(store.fixed, name),
          account = Enum.at(store.fixed.principals, p).account,
          d when d != nil <- find(store, account, l),
@@ -410,7 +416,9 @@ defmodule Redoubt.Steward do
         context: context,
         badge: badge,
         number: 0,
-        reply: e.reply
+        reply: e.reply,
+        attachment: id,
+        from: ""
       }
 
       {_, store} = insert(store, d, :session, id, s)
@@ -430,7 +438,19 @@ defmodule Redoubt.Steward do
       {id, out} = fresh(store, e, out)
       {badge, out} = fresh(store, e, out)
 
-      s = %{id: id, state: :starting, principal: p, key: 0, context: nil, badge: badge, number: 0, reply: e.reply}
+      s = %{
+        id: id,
+        state: :starting,
+        principal: p,
+        key: 0,
+        context: nil,
+        badge: badge,
+        number: 0,
+        reply: e.reply,
+        attachment: id,
+        from: ""
+      }
+
       {_, store} = insert(store, d, :session, id, s)
       done(run(store, out, e, d, :session, id, :console, %{created: true}))
     else
@@ -438,11 +458,22 @@ defmodule Redoubt.Steward do
     end
   end
 
-  defp external(store, %{kind: {:channel_closed, session}} = e, out) do
-    case store.ids[session] do
-      {d, :session} -> answered(run(store, out, e, d, :session, session, :channel_closed), e)
+  # A channel is named by its attachment; one no context holds now names nothing.
+  defp external(store, %{kind: {:channel_closed, attachment}} = e, out) do
+    case store.attachments[attachment] do
+      {d, id} -> answered(run(store, out, e, d, :session, id, :channel_closed), e)
       _ -> unknown(store, e, out)
     end
+  end
+
+  # Every channel went with `sshd`: each attached context is detached, in attachment order.
+  defp external(store, %{kind: :sshd_gone} = e, out) do
+    store.attachments
+    |> Enum.sort()
+    |> Enum.reduce({store, out}, fn {_, {d, id}}, {store, out} ->
+      {_, store, out} = run(store, out, e, d, :session, id, :detach)
+      {store, out}
+    end)
   end
 
   defp external(store, %{kind: {:approval_opened, _, _, _}} = e, out), do: channel(store, e, out)
@@ -633,6 +664,8 @@ defmodule Redoubt.Steward do
 
   defp internal(store, e, {:locked_out, {d, kind, id}}, out) when kind in [:session, :lease],
     do: done(run(store, out, e, d, kind, id, :locked_out))
+
+  defp internal(store, e, {:attach, {d, :session, id}}, out), do: done(run(store, out, e, d, :session, id, :attach))
 
   defp internal(store, e, {:session_ended, {d, :request, id}}, out) do
     {_, store, out} = run(store, out, e, d, :request, id, :session_ended)

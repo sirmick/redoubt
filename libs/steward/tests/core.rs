@@ -70,6 +70,10 @@ struct Rig {
     /// Owners whose next batch fails at its first step.
     fail: Vec<Kind>,
     exited: bool,
+    /// What each relay was told, in order: (the session, attached or not, the note).
+    relayed: Vec<(u64, bool, String)>,
+    /// The attachment the last login's answer named.
+    attachment: u64,
     /// The contexts `login` has named, so that each of its logins is a context of its own.
     contexts: u64,
 }
@@ -98,6 +102,8 @@ impl Rig {
             reads: Vec::new(),
             fail: Vec::new(),
             exited: false,
+            relayed: Vec::new(),
+            attachment: 0,
             contexts: 0,
         }
     }
@@ -166,7 +172,15 @@ impl Rig {
                 }
                 Step::CreateScope { .. } => Produced::Scope,
                 Step::Connect { .. } => Produced::Connection,
-                Step::Launch { .. } => Produced::Process(1),
+                Step::Launch { .. } | Step::LaunchRelay { .. } => Produced::Process(1),
+                Step::Attach { note, .. } => {
+                    self.relayed.push((owner.id, true, note.clone()));
+                    Produced::Done
+                }
+                Step::Detach { note, .. } => {
+                    self.relayed.push((owner.id, false, note.clone()));
+                    Produced::Done
+                }
                 Step::DestroyBudget { budget } => {
                     if self.budgets.remove(budget).is_none() {
                         return Err(StepFailed { step: i, error: 2 });
@@ -216,9 +230,15 @@ impl Rig {
             labels: labels.to_vec(),
             context: context.into(),
             key,
+            from: String::from("198.51.100.2:51234"),
         };
         match self.call(kind) {
-            Some(Answer::Session { id, .. }) => Ok((id, self.badge(id))),
+            Some(Answer::Session { id, .. }) => {
+                // A takeover's or a reattachment's id is a fresh attachment of the live session.
+                self.attachment = id;
+                let session = inspect::index(&self.store).attachments.get(&id).map_or(id, |(_, s)| *s);
+                Ok((session, self.badge(session)))
+            }
             other => Err(other.unwrap_or(Answer::Ok)),
         }
     }
@@ -383,21 +403,24 @@ fn a_login_s_refusals_tell_nothing_apart() {
 }
 
 /// R79: one session per context name in a domain; the name is the domain's, so the same name in
-/// another label set, or of another principal, is another context.
+/// another label set, or of another principal, is another context. A login naming a live one
+/// attaches to it instead of starting a second.
 #[test]
 fn context_free_holds_one_session_per_name() {
     let mut r = Rig::new();
     let (work, _) = r.login_as("alice", &[], "work", 11).unwrap();
-    r.login_as("alice", &[], "", 11).unwrap();
-    assert_eq!(refused(r.login_as("alice", &[], "work", 11)), Refusal::InUse);
-    assert_eq!(refused(r.login_as("alice", &[], "", 11)), Refusal::InUse, "the default context");
+    let (default, _) = r.login_as("alice", &[], "", 11).unwrap();
     let budgets = r.budgets.len();
+    assert_eq!(r.login_as("alice", &[], "work", 11).unwrap().0, work, "the same session");
+    assert_eq!(r.login_as("alice", &[], "", 11).unwrap().0, default, "the default context too");
+    assert_eq!(r.budgets.len(), budgets, "nothing carved");
     // Another label set's `work`, and bob's, are not alice's unlabelled `work`.
     r.login_as("alice", &[7], "work", 11).unwrap();
     r.login_as("bob", &[], "work", 21).unwrap();
     assert_eq!(r.budgets.len(), budgets + 2);
-    // Once the session has ended, the name is free again.
-    r.call(EventKind::ChannelClosed { session: work });
+    // Once the session has ended, the name is free again: a new session.
+    let badge = r.badge(work);
+    r.call(EventKind::EndSession { badge });
     let (again, _) = r.login_as("alice", &[], "work", 11).unwrap();
     assert_ne!(again, work);
     let contexts: Vec<_> = r
@@ -409,6 +432,53 @@ fn context_free_holds_one_session_per_name() {
         })
         .collect();
     assert_eq!(contexts, ["work", "", "work", "work", "work"]);
+}
+
+/// R80: a login to an attached context takes it over, both channels told; the channel it was
+/// taken from closes and changes nothing; the attached one's close detaches it; the next login
+/// reattaches; `sshd`'s end detaches every context, never the console's session.
+#[test]
+fn a_context_is_attached_to_one_channel_at_a_time() {
+    let mut r = Rig::new();
+    let (work, _) = r.login_as("alice", &[], "work", 11).unwrap();
+    let first = r.attachment;
+    assert_eq!(first, work, "a new context's first attachment is its session's id");
+    assert_eq!(r.relayed, [(work, true, String::new())]);
+    r.now = 7_980 * SECOND;
+    assert_eq!(r.login_as("alice", &[], "work", 11).unwrap().0, work);
+    let second = r.attachment;
+    assert_ne!(second, first);
+    assert_eq!(
+        r.relayed[1..],
+        [
+            (work, false, String::from("[context work taken over from 198.51.100.2:51234 at up 2h13m]\r\n")),
+            (work, true, String::from("[context work: reattached; taken over from 198.51.100.2:51234]\r\n")),
+        ]
+    );
+    let took: Vec<_> =
+        r.records(|x| matches!(x, Record::Attached { took_over: true, .. })).into_iter().collect();
+    assert_eq!(took.len(), 1);
+    // The channel taken from closes: nothing changes.
+    r.relayed.clear();
+    assert_eq!(r.call(EventKind::ChannelClosed { session: first }), Some(Answer::Refused(Refusal::Unknown)));
+    assert!(r.relayed.is_empty());
+    assert_eq!(inspect::domain(&r.store, &d(1001, &[])).unwrap().sessions[&work].attachment, second);
+    // A wrong key never reaches the context.
+    assert_eq!(refused(r.login_as("alice", &[], "work", 12)), Refusal::BadKey);
+    assert!(r.relayed.is_empty());
+    // The attached channel closes: detached, and its id names nothing from here.
+    r.call(EventKind::ChannelClosed { session: second });
+    assert_eq!(r.relayed, [(work, false, String::new())]);
+    assert_eq!(r.call(EventKind::ChannelClosed { session: second }), Some(Answer::Refused(Refusal::Unknown)));
+    r.login_as("alice", &[], "work", 11).unwrap();
+    assert_eq!(r.relayed[1..], [(work, true, String::from("[context work: reattached]\r\n"))]);
+    // `sshd` is gone: every context detaches, and the console's session stays as it is.
+    r.relayed.clear();
+    r.login_as("bob", &[], "", 21).unwrap();
+    r.call(EventKind::SshdGone);
+    let detached = r.relayed.iter().filter(|x| !x.1).count();
+    assert_eq!(detached, 2);
+    assert!(inspect::index(&r.store).attachments.is_empty());
 }
 
 #[test]
@@ -425,8 +495,13 @@ fn a_session_is_carved_from_its_domain_with_a_scope_for_its_connections() {
 #[test]
 fn the_batch_steps_for_a_session() {
     let (mut store, _) = Store::boot(&manifest(), Policy::SHIPPED).unwrap();
-    let kind =
-        EventKind::Login { principal: "alice".into(), labels: vec![7], context: String::new(), key: 11 };
+    let kind = EventKind::Login {
+        principal: "alice".into(),
+        labels: vec![7],
+        context: String::new(),
+        key: 11,
+        from: String::new(),
+    };
     let e = decide(&mut store, Event { now: 1, random: [5, 6, 7, 8, 9, 10, 11, 12], reply: 1, kind });
     assert_eq!(e.batches.len(), 1);
     let steps = &e.batches[0].steps;
@@ -549,7 +624,7 @@ fn drop_requests() {
     let (s, b) = r.login("carol", &[], 31).unwrap();
     r.submit(b, Content::Note { what: "x".into() }, "").unwrap();
     assert_eq!(r.pending_in(&d(1003, &[])), 1);
-    r.call(EventKind::ChannelClosed { session: s });
+    r.call(EventKind::EndSession { badge: b });
     assert_eq!(r.pending_in(&d(1003, &[])), 0);
     assert_eq!(r.sessions_in(&d(1003, &[])), 0);
     // Its badge routes nothing any more.
@@ -855,8 +930,9 @@ fn a_failed_start_ends_the_session() {
 #[test]
 fn an_excluded_event_makes_the_steward_exit() {
     let mut r = Rig::new();
-    let (s, _) = r.login("alice", &[], 11).unwrap();
-    let object = Object { domain: d(1001, &[]), kind: Kind::Session, id: s };
+    let (_, b) = r.login("alice", &[], 11).unwrap();
+    let (l, _) = r.agent(b, SECOND).unwrap();
+    let object = Object { domain: d(1001, &[]), kind: Kind::Lease, id: l };
     r.feed(0, EventKind::Done { object, result: Ok(vec![]) });
     assert!(r.exited && inspect::exited(&r.store));
     let e = decide(

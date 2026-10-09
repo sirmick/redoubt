@@ -98,6 +98,10 @@ enum Made {
     Process(u64),
 }
 
+/// The token slot of the process a session's or a lease's batch launches (`redoubt_steward`'s
+/// effects).
+const PROCESS: u8 = 2;
+
 /// One write to a volume, as the model records it for the families (P6, P11).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Write {
@@ -168,6 +172,14 @@ pub struct Steward {
     /// When set, every event the core decides, in order: a trace for the Elixir reference
     /// (servers/steward.md, "Two embedders and a reference").
     pub recorded: Option<Vec<Event>>,
+    /// Each context's relay, by its token, and the channel console attached to it now (P18).
+    pub attached: BTreeMap<Token, u64>,
+    /// Channel consoles handed out so far: each attach's is a new one.
+    consoles: u64,
+    /// A relay given a channel while it held another: two channels attached at once (P18).
+    pub both_attached: Option<Object>,
+    /// Every note a relay was given to write, by the batch's owner, in order (P18).
+    pub notes: Vec<(Object, String)>,
 }
 
 /// splitmix64's finaliser: the model's stand-in for a keyed random function.
@@ -253,6 +265,10 @@ impl Steward {
             counter: 0,
             replies: 0,
             recorded: None,
+            attached: BTreeMap::new(),
+            consoles: 0,
+            both_attached: None,
+            notes: Vec::new(),
         };
         st.exits = handle(st.sys(Syscall::EndpointCreate)?)?;
         st.start_server()?;
@@ -462,6 +478,7 @@ impl Steward {
             }
         }
         self.procs.retain(|_, o| o != object);
+        self.attached.retain(|t, _| t.owner != *object);
     }
 
     /// Runs a batch on the kernel model, in order, stopping at the first failure.
@@ -542,6 +559,36 @@ impl Steward {
                 self.made.insert(token.clone(), Made::Process(pid));
                 Ok(Produced::Process(pid))
             }
+            // The relay is a process of the context's own budget; what it serves is the server's,
+            // not the model's: the model keeps which channel each relay holds.
+            Step::LaunchRelay { token, budget } => {
+                let (_, h) = self.budget(budget)?;
+                let ph = handle(self.sys(Syscall::ProcessCreate { budget: h, exit_endpoint: self.exits })?)?;
+                let start =
+                    Syscall::ProcessStart { process: ph, entry: 0, sp: 0, arg: 0, handles: Vec::new() };
+                let pid = run(&mut self.k, self.me, start).and_then(|(_, n)| started(n)).map(|p| p.pid);
+                let _ = self.sys(Syscall::HandleClose { h: ph });
+                let pid = pid?;
+                self.procs.insert(pid, owner.clone());
+                self.made.insert(token.clone(), Made::Process(pid));
+                Ok(Produced::Process(pid))
+            }
+            Step::Attach { relay, note, .. } => {
+                if !matches!(self.made.get(relay), Some(Made::Process(_))) {
+                    return Err(bad);
+                }
+                self.consoles += 1;
+                if self.attached.insert(relay.clone(), self.consoles).is_some() {
+                    self.both_attached.get_or_insert_with(|| owner.clone());
+                }
+                self.notes.push((owner.clone(), note.clone()));
+                Ok(Produced::Done)
+            }
+            Step::Detach { relay, note, .. } => {
+                self.attached.remove(relay);
+                self.notes.push((owner.clone(), note.clone()));
+                Ok(Produced::Done)
+            }
             Step::DestroyBudget { budget } => {
                 let (_, h) = self.budget(budget)?;
                 self.made.remove(budget);
@@ -611,11 +658,26 @@ impl Steward {
     pub fn principal(&self, name: &str) -> Option<usize> { inspect::fixed(&self.store).principal(name) }
 
     /// `ssh name@box`, with a label set `ssh name+X@box`, and as a named context `ssh name.C@box`
-    /// (`context` empty for the default one).
-    pub fn login(&mut self, principal: &str, labels: &[u64], context: &str, key: u64) -> Option<Answer> {
-        let (principal, context) = (String::from(principal), String::from(context));
-        self.call(EventKind::Login { principal, labels: labels.to_vec(), context, key })
+    /// (`context` empty for the default one), from the client address `from`.
+    pub fn login(
+        &mut self,
+        principal: &str,
+        labels: &[u64],
+        context: &str,
+        key: u64,
+        from: &str,
+    ) -> Option<Answer> {
+        let (principal, context, from) = (String::from(principal), String::from(context), String::from(from));
+        self.call(EventKind::Login { principal, labels: labels.to_vec(), context, key, from })
     }
+
+    /// `sshd` says the channel of attachment `attachment` closed.
+    pub fn channel_closed(&mut self, attachment: u64) -> Option<Answer> {
+        self.call(EventKind::ChannelClosed { session: attachment })
+    }
+
+    /// `sshd` is gone: every channel with it.
+    pub fn sshd_gone(&mut self) { self.call(EventKind::SshdGone); }
 
     pub fn end_session(&mut self, session: u64) -> Option<Answer> {
         let badge = self.badge(session);
@@ -711,7 +773,12 @@ impl Steward {
     /// thread so it can call again while this call waits. The result is what the calling thread
     /// got now.
     pub fn work(&mut self, session: u64) -> Res<Outcome> {
-        let pid = *self.procs.iter().find(|(_, o)| o.id == session).ok_or(Denied::UnknownSession)?.0;
+        // The object's own process, never its context's relay: the one its batch's `Launch` made.
+        let owner = self.procs.values().find(|o| o.id == session).cloned().ok_or(Denied::UnknownSession)?;
+        let pid = match self.made.get(&Token { owner, slot: PROCESS }) {
+            Some(Made::Process(pid)) => *pid,
+            _ => return Err(Denied::UnknownSession),
+        };
         let Some(tid) = self.k.runnable().into_iter().find(|(p, _)| *p == pid).map(|x| x.1) else {
             return Ok(Outcome::Blocked);
         };

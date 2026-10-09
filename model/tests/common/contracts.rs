@@ -846,8 +846,10 @@ pub fn expiry_order_trace() -> String {
 pub fn steward_scenario(m: Mutation) -> Option<Result<(), String>> {
     let scenario: fn(Option<Mutation>) -> Result<(), String> = match m {
         Mutation::PolicyDeclassifyUnfit => declassify_unfit,
+        Mutation::PolicyDeclassifyLive => declassify_live,
         Mutation::R2OneCursor => one_cursor,
         Mutation::PolicyAgentOtherSet => agent_other_set,
+        Mutation::PolicyEndLeaseAdmitted => end_lease_admitted,
         _ => return None,
     };
     Some(std::panic::catch_unwind(|| scenario(Some(m))).unwrap_or_else(|p| {
@@ -855,6 +857,31 @@ pub fn steward_scenario(m: Mutation) -> Option<Result<(), String>> {
             p.downcast_ref::<String>().cloned().or_else(|| p.downcast_ref::<&str>().map(|s| s.to_string()));
         Err(format!("I14: the model panicked: {}", what.unwrap_or_default()))
     }))
+}
+
+/// R39 (`PolicyEndLeaseAdmitted`): alice's session starts an agent, and the two fill her
+/// domain's pending requests, two each, their fair share. The session then ends the agent, which
+/// the tables mark ahead of admission; with the embedder ignoring the mark, the full domain
+/// refuses it, and P13 sees a sponsor that could not end its agent. The random search reaches
+/// this rarely since contexts' attach and detach joined its operations.
+pub fn end_lease_admitted(mutation: Option<Mutation>) -> Result<(), String> {
+    let mut run = Run::new(mutation, 0);
+    run.apply(&PolicyOp::Login {
+        principal: 0,
+        labels: vec![],
+        context: String::new(),
+        key: 11,
+        from: String::new(),
+    })?;
+    let session = session_of(&run, 0, &[]);
+    run.apply(&PolicyOp::StartAgent { session, lease: 100 * SLICE })?;
+    let agent = run.st.callers().iter().find(|c| c.principal == 0 && c.id != session).map_or(0, |c| c.id);
+    for (by, what) in [(session, "a"), (session, "b"), (agent, "c"), (agent, "d")] {
+        let content = Content::Note { what: String::from(what) };
+        run.apply(&PolicyOp::Submit { session: by, content, reason: String::from("full") })?;
+    }
+    run.apply(&PolicyOp::EndLease { by: session, lease: agent })?;
+    Ok(())
 }
 
 /// The session or agent of `principal` with exactly `labels` (the scenarios start one of each).
@@ -881,11 +908,41 @@ pub const UNFIT: [&[u8]; 2] = [&[b'a'; DECLASSIFY_MAX + 1], b"ring\x07"];
 /// [`declassify_unfit`] for one item.
 pub fn declassify_unfit_item(mutation: Option<Mutation>, item: &[u8]) -> Result<(), String> {
     let mut run = Run::new(mutation, 0);
-    run.apply(&PolicyOp::Login { principal: 0, labels: vec![7], context: String::new(), key: 11 })?;
+    run.apply(&PolicyOp::Login {
+        principal: 0,
+        labels: vec![7],
+        context: String::new(),
+        key: 11,
+        from: String::new(),
+    })?;
     let session = session_of(&run, 0, &[7]);
     run.apply(&PolicyOp::WriteItem { session, labels: vec![7], item: 0, bytes: item.to_vec() })?;
     let content = Content::Declassify { labels: vec![7], item: 0 };
     run.apply(&PolicyOp::Submit { session, content, reason: String::from("report") })?;
+    run.apply(&PolicyOp::Open { principal: 0, key: 12 })?;
+    run.apply(&PolicyOp::Pending { channel: 0 })?;
+    let request = ReqRef { session, nth: 0 };
+    run.apply(&PolicyOp::Approve { channel: 0, request, hash: HashRef::Own })?;
+    Ok(())
+}
+
+/// R42 (`PolicyDeclassifyLive`): alice's {7} session writes an item, asks to declassify it, then
+/// writes the item again, and alice approves. The copy out writes the snapshot taken at
+/// submission; with the copy reading the item live, P6 sees the later bytes copied out.
+pub fn declassify_live(mutation: Option<Mutation>) -> Result<(), String> {
+    let mut run = Run::new(mutation, 0);
+    run.apply(&PolicyOp::Login {
+        principal: 0,
+        labels: vec![7],
+        context: String::new(),
+        key: 11,
+        from: String::new(),
+    })?;
+    let session = session_of(&run, 0, &[7]);
+    run.apply(&PolicyOp::WriteItem { session, labels: vec![7], item: 0, bytes: b"first".to_vec() })?;
+    let content = Content::Declassify { labels: vec![7], item: 0 };
+    run.apply(&PolicyOp::Submit { session, content, reason: String::from("report") })?;
+    run.apply(&PolicyOp::WriteItem { session, labels: vec![7], item: 0, bytes: b"later".to_vec() })?;
     run.apply(&PolicyOp::Open { principal: 0, key: 12 })?;
     run.apply(&PolicyOp::Pending { channel: 0 })?;
     let request = ReqRef { session, nth: 0 };
@@ -905,9 +962,27 @@ pub fn one_cursor(mutation: Option<Mutation>) -> Result<(), String> {
         let (alice, bob, vault) =
             (session_of(run, 0, &[]), session_of(run, 1, &[]), session_of(run, 1, &[9]));
         Some(match step {
-            1 => PolicyOp::Login { principal: 0, labels: vec![], context: String::new(), key: 11 },
-            2 => PolicyOp::Login { principal: 1, labels: vec![], context: String::new(), key: 21 },
-            3 => PolicyOp::Login { principal: 1, labels: vec![9], context: String::new(), key: 21 },
+            1 => PolicyOp::Login {
+                principal: 0,
+                labels: vec![],
+                context: String::new(),
+                key: 11,
+                from: String::new(),
+            },
+            2 => PolicyOp::Login {
+                principal: 1,
+                labels: vec![],
+                context: String::new(),
+                key: 21,
+                from: String::new(),
+            },
+            3 => PolicyOp::Login {
+                principal: 1,
+                labels: vec![9],
+                context: String::new(),
+                key: 21,
+                from: String::new(),
+            },
             4 => PolicyOp::Work { session: alice },
             5 | 7 | 10 => PolicyOp::Serve,
             6 => PolicyOp::Work { session: vault },
@@ -928,8 +1003,20 @@ pub fn agent_other_set(mutation: Option<Mutation>) -> Result<(), String> {
         step += 1;
         let vault = session_of(run, 0, &[7]);
         Some(match step {
-            1 => PolicyOp::Login { principal: 0, labels: vec![], context: String::new(), key: 11 },
-            2 => PolicyOp::Login { principal: 0, labels: vec![7], context: String::new(), key: 11 },
+            1 => PolicyOp::Login {
+                principal: 0,
+                labels: vec![],
+                context: String::new(),
+                key: 11,
+                from: String::new(),
+            },
+            2 => PolicyOp::Login {
+                principal: 0,
+                labels: vec![7],
+                context: String::new(),
+                key: 11,
+                from: String::new(),
+            },
             3 => PolicyOp::Open { principal: 0, key: 12 },
             4 => PolicyOp::Submit {
                 session: vault,

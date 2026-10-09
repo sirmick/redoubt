@@ -13,17 +13,17 @@ defmodule Redoubt.Steward.Gen.Session do
   # table gives no row is `:no_row`.
   def rows(nil, :login) do
     [
-      {12, [{:not, :login_key}], [:refuse], :nothing},
-      {13, [{:not, :owns_labels}], [:refuse], :nothing},
-      {14, [{:not, :not_locked}], [:refuse], :nothing},
-      {15, [{:not, :context_free}], [:refuse], :nothing},
-      {16, [], [:carve_session, :create_scope, :connect, :launch], {:to, :starting}},
+      {14, [{:not, :login_key}], [:refuse], :nothing},
+      {15, [{:not, :owns_labels}], [:refuse], :nothing},
+      {16, [{:not, :not_locked}], [:refuse], :nothing},
+      {17, [{:not, :context_free}], [:take_over], :nothing},
+      {18, [], [:carve_session, :create_scope, :launch_relay, :attach_relay, :connect, :launch], {:to, :starting}},
     ]
   end
   def rows(nil, :console) do
     [
-      {17, [{:not, :not_locked}], [:refuse], :nothing},
-      {18, [], [:carve_session, :create_scope, :connect, :launch], {:to, :starting}},
+      {19, [{:not, :not_locked}], [:refuse], :nothing},
+      {20, [], [:carve_session, :create_scope, :connect, :launch], {:to, :starting}},
     ]
   end
   def rows(nil, :done), do: :no_row
@@ -31,39 +31,51 @@ defmodule Redoubt.Steward.Gen.Session do
   def rows(nil, :end_session), do: :no_row
   def rows(nil, :channel_closed), do: :no_row
   def rows(nil, :exited), do: :no_row
+  def rows(nil, :detach), do: :no_row
+  def rows(nil, :attach), do: :no_row
   def rows(nil, :locked_out), do: :no_row
 
   def rows(:starting, :login), do: :no_row
   def rows(:starting, :console), do: :no_row
   def rows(:starting, :done) do
     [
-      {19, [{:not, :not_locked}], [:refuse, :destroy_budget], {:to, :ending}},
-      {20, [], [:route, :audit_login, :reply_login], {:to, :running}},
+      {21, [{:not, :not_locked}], [:refuse, :destroy_budget], {:to, :ending}},
+      {22, [], [:route, :audit_login, :reply_login], {:to, :running}},
     ]
   end
   def rows(:starting, :failed) do
     [
-      {21, [], [:refuse, :destroy_partial], {:to, :ending}},
+      {23, [], [:refuse, :destroy_partial], {:to, :ending}},
     ]
   end
   def rows(:starting, :end_session) do
     [
-      {22, [], :unreachable, :stay},
+      {24, [], :unreachable, :stay},
     ]
   end
   def rows(:starting, :channel_closed) do
     [
-      {22, [], :unreachable, :stay},
+      {24, [], :unreachable, :stay},
     ]
   end
   def rows(:starting, :exited) do
     [
-      {22, [], :unreachable, :stay},
+      {24, [], :unreachable, :stay},
+    ]
+  end
+  def rows(:starting, :detach) do
+    [
+      {24, [], :unreachable, :stay},
+    ]
+  end
+  def rows(:starting, :attach) do
+    [
+      {25, [], [:refuse_in_use], :stay},
     ]
   end
   def rows(:starting, :locked_out) do
     [
-      {23, [], [], :stay},
+      {26, [], [], :stay},
     ]
   end
 
@@ -71,32 +83,42 @@ defmodule Redoubt.Steward.Gen.Session do
   def rows(:ending, :console), do: :no_row
   def rows(:ending, :done) do
     [
-      {27, [], [:forget], {:to, :ended}},
+      {37, [], [:forget], {:to, :ended}},
     ]
   end
   def rows(:ending, :failed) do
     [
-      {27, [], [:forget], {:to, :ended}},
+      {37, [], [:forget], {:to, :ended}},
     ]
   end
   def rows(:ending, :end_session) do
     [
-      {28, [], :unreachable, :stay},
+      {38, [], :unreachable, :stay},
     ]
   end
   def rows(:ending, :channel_closed) do
     [
-      {28, [], :unreachable, :stay},
+      {38, [], :unreachable, :stay},
     ]
   end
   def rows(:ending, :exited) do
     [
-      {28, [], :unreachable, :stay},
+      {38, [], :unreachable, :stay},
+    ]
+  end
+  def rows(:ending, :detach) do
+    [
+      {38, [], :unreachable, :stay},
+    ]
+  end
+  def rows(:ending, :attach) do
+    [
+      {38, [], :unreachable, :stay},
     ]
   end
   def rows(:ending, :locked_out) do
     [
-      {29, [], [], :stay},
+      {39, [], [], :stay},
     ]
   end
 
@@ -104,32 +126,85 @@ defmodule Redoubt.Steward.Gen.Session do
   def rows(:running, :console), do: :no_row
   def rows(:running, :done) do
     [
-      {26, [], :unreachable, :stay},
+      {31, [], [:reply_login], :stay},
     ]
   end
   def rows(:running, :failed) do
     [
-      {26, [], :unreachable, :stay},
+      {32, [], [:refuse, :unroute, :drop_requests, :destroy_budget], {:to, :ending}},
     ]
   end
   def rows(:running, :end_session) do
     [
-      {24, [], [:unroute, :drop_requests, :reply_ok, :destroy_budget], {:to, :ending}},
+      {29, [], [:unroute, :drop_requests, :reply_ok, :destroy_budget], {:to, :ending}},
     ]
   end
   def rows(:running, :channel_closed) do
     [
-      {25, [], [:unroute, :drop_requests, :destroy_budget], {:to, :ending}},
+      {28, [], [:detach_relay], {:to, :detached}},
     ]
   end
   def rows(:running, :exited) do
     [
-      {25, [], [:unroute, :drop_requests, :destroy_budget], {:to, :ending}},
+      {30, [], [:unroute, :drop_requests, :destroy_budget], {:to, :ending}},
+    ]
+  end
+  def rows(:running, :detach) do
+    [
+      {28, [], [:detach_relay], {:to, :detached}},
+    ]
+  end
+  def rows(:running, :attach) do
+    [
+      {27, [], [:detach_relay, :attach_relay, :audit_attached], :stay},
     ]
   end
   def rows(:running, :locked_out) do
     [
-      {25, [], [:unroute, :drop_requests, :destroy_budget], {:to, :ending}},
+      {30, [], [:unroute, :drop_requests, :destroy_budget], {:to, :ending}},
+    ]
+  end
+
+  def rows(:detached, :login), do: :no_row
+  def rows(:detached, :console), do: :no_row
+  def rows(:detached, :done) do
+    [
+      {34, [], [], :stay},
+    ]
+  end
+  def rows(:detached, :failed) do
+    [
+      {36, [], [:unroute, :drop_requests, :destroy_budget], {:to, :ending}},
+    ]
+  end
+  def rows(:detached, :end_session) do
+    [
+      {35, [], [:unroute, :drop_requests, :reply_ok, :destroy_budget], {:to, :ending}},
+    ]
+  end
+  def rows(:detached, :channel_closed) do
+    [
+      {34, [], [], :stay},
+    ]
+  end
+  def rows(:detached, :exited) do
+    [
+      {36, [], [:unroute, :drop_requests, :destroy_budget], {:to, :ending}},
+    ]
+  end
+  def rows(:detached, :detach) do
+    [
+      {34, [], [], :stay},
+    ]
+  end
+  def rows(:detached, :attach) do
+    [
+      {33, [], [:attach_relay, :audit_attached], {:to, :running}},
+    ]
+  end
+  def rows(:detached, :locked_out) do
+    [
+      {36, [], [:unroute, :drop_requests, :destroy_budget], {:to, :ending}},
     ]
   end
 
@@ -140,5 +215,7 @@ defmodule Redoubt.Steward.Gen.Session do
   def rows(:ended, :end_session), do: :no_row
   def rows(:ended, :channel_closed), do: :no_row
   def rows(:ended, :exited), do: :no_row
+  def rows(:ended, :detach), do: :no_row
+  def rows(:ended, :attach), do: :no_row
   def rows(:ended, :locked_out), do: :no_row
 end
