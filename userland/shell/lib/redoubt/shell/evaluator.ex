@@ -7,9 +7,19 @@ defmodule Redoubt.Shell.Evaluator do
   or a kill ends only that line: the shell keeps the bindings and environment it had before it.
   The result is printed by the evaluator, so printing (reading a large file for a `%Lines{}`, a
   hostile `Inspect`) runs under the same limit.
+
+  **The interrupt** (docs/userland/shell.md, "Interrupting and killing jobs"): while the line runs,
+  the shell's driver knows it (`{:redoubt_eval, :running, ...}`), and the interrupt arrives
+  here. The line's process is killed with `:kill`, which it cannot trap, and the processes linked
+  to it go with it. Every pipeline it ran in the foreground watches it, so their stages' budgets are
+  destroyed; the shell waits for that, at most 2 s, before the next prompt, and says so if
+  it is still under way.
   """
 
   alias Redoubt.Shell.Printer
+
+  # How long an interrupted line's foreground jobs are given to end before the next prompt.
+  @settle_ms 2_000
 
   # A fixed share, until the session's budget is known: 16 Mi words, 128 MiB on a 64-bit VM.
   @max_heap_words 16 * 1024 * 1024
@@ -19,7 +29,8 @@ defmodule Redoubt.Shell.Evaluator do
   new binding and environment, `:error` when the line failed and they are unchanged, or `:exit`
   when the line called `exit()`.
 
-  `limits` may set `:max_heap_words`.
+  `limits` may set `:max_heap_words`, and `:driver`, the shell's driver, which the interrupt
+  comes from (`Redoubt.Shell.Driver.of_group/0`); with none, the line cannot be interrupted.
   """
   @spec eval(Macro.t(), Code.binding(), Macro.Env.t(), keyword()) ::
           {:ok, Code.binding(), Macro.Env.t()} | :error | :exit
@@ -30,15 +41,52 @@ defmodule Redoubt.Shell.Evaluator do
     {pid, ref} =
       Process.spawn(fn -> evaluate(shell, quoted, binding, env) end, [:monitor, max_heap_size: heap])
 
-    receive do
-      {^pid, result} ->
-        Process.demonitor(ref, [:flush])
-        result
+    token = make_ref()
+    driver = Keyword.get(limits, :driver)
+    if driver, do: send(driver, {:redoubt_eval, :running, self(), token})
 
-      {:DOWN, ^ref, :process, ^pid, reason} ->
-        Printer.text("** (EXIT) the evaluation ended: #{describe(reason)}. The bindings are as they were.")
-        :error
+    try do
+      receive do
+        {^pid, result} ->
+          Process.demonitor(ref, [:flush])
+          result
+
+        {:DOWN, ^ref, :process, ^pid, reason} ->
+          Printer.text("** (EXIT) the evaluation ended: #{describe(reason)}. The bindings are as they were.")
+          :error
+
+        {:redoubt_interrupt, ^token} ->
+          interrupted(pid, ref)
+      end
+    after
+      if driver, do: send(driver, {:redoubt_eval, :done, self(), token})
+
+      # An interrupt that crossed the line's end is for no line now.
+      receive do
+        {:redoubt_interrupt, ^token} -> :ok
+      after
+        0 -> :ok
+      end
     end
+  end
+
+  # The line is ended, and the foreground pipelines it ran with it; the driver has drawn the ^C.
+  defp interrupted(pid, ref) do
+    Process.exit(pid, :kill)
+
+    receive do
+      {:DOWN, ^ref, :process, ^pid, _reason} -> :ok
+    end
+
+    case Redoubt.Jobs.settle(@settle_ms) do
+      :ok ->
+        :ok
+
+      {:running, n} ->
+        Printer.text("** #{n} of the line's pipelines are still ending: their budgets are being destroyed.")
+    end
+
+    :error
   end
 
   # An exit reason is the ended line's own term, and inspecting it may run the line's own code

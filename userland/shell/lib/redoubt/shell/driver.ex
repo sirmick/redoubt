@@ -29,6 +29,12 @@ defmodule Redoubt.Shell.Driver do
   input, not the shell's. The interrupt keys are never fed: they stay the shell's. The feed ends
   when its process does, and what is typed after goes to `group` again.
 
+  While a line is evaluated, the shell tells the driver (`Redoubt.Shell.Evaluator`), and the
+  interrupt, with no line being edited and no screen in front, ends that line: the driver draws
+  `^C` and tells the shell, which kills the line's process (docs/userland/shell.md, "Interrupting
+  and killing jobs"). Under a feed the interrupt does the same, so a native program reading what
+  is typed cannot keep it from the shell.
+
   While the driver runs, the logger writes through it too (`Redoubt.Shell.Log`): its `default`
   handler, which writes to the console past the guard, is put back when the driver ends.
 
@@ -111,6 +117,9 @@ defmodule Redoubt.Shell.Driver do
       # The process fed the lines typed, if any: its pid, its monitor, the line typed so far, and
       # whether the last key was a CR (so that an LF after it ends no second line).
       feed: nil,
+      # The line being evaluated, if any: the shell's pid, the token it named it by, and its
+      # monitor.
+      evaluating: nil,
       esc_timeout: Keyword.get(opts, :esc_timeout, @esc_timeout)
     }
 
@@ -165,6 +174,15 @@ defmodule Redoubt.Shell.Driver do
 
       {:DOWN, ref, :process, _pid, _reason} when state.feed != nil and state.feed.ref == ref ->
         loop(close_feed(state))
+
+      {:redoubt_eval, :running, pid, token} ->
+        loop(evaluating(state, pid, token))
+
+      {:redoubt_eval, :done, pid, token} ->
+        loop(evaluated(state, pid, token))
+
+      {:DOWN, ref, :process, _pid, _reason} when state.evaluating != nil and state.evaluating.ref == ref ->
+        loop(%{state | evaluating: nil})
 
       {:redoubt_screen, :size, pid} ->
         send(pid, {:redoubt_screen, :size, state.size.()})
@@ -361,7 +379,14 @@ defmodule Redoubt.Shell.Driver do
 
   defp keys(state, <<>>), do: state
 
-  defp keys(%{feed: %{}} = state, text), do: feed_keys(state, text)
+  # Under a feed, the interrupt is found before the keys are fed: what was typed before it goes
+  # to the feed, and what came after goes with the line.
+  defp keys(%{feed: %{}} = state, text) do
+    case :binary.match(text, [<<3>>, <<@session_key>>]) do
+      :nomatch -> feed_keys(state, text)
+      {at, 1} -> state |> feed_keys(binary_part(text, 0, at)) |> interrupt_line()
+    end
+  end
 
   defp keys(state, text) do
     case :binary.match(text, [<<3>>, <<4>>, <<@session_key>>]) do
@@ -376,8 +401,7 @@ defmodule Redoubt.Shell.Driver do
 
   # The interrupt, Ctrl+C or Ctrl+\: the line being edited is dropped and the session stays.
   # What was typed with it in the same read goes with the line, as user_drv drops it too. With
-  # no line open, a line is being evaluated, and ending that is not the driver's yet
-  # (docs/userland/shell.md, "Interrupting and killing jobs"): the key is dropped.
+  # no line open, a line is being evaluated, and the interrupt ends it.
   defp key(state, interrupt, _rest) when interrupt in [3, @session_key] do
     if Term.line_open?(state.term) do
       {out, term} = Term.interrupt(state.term)
@@ -385,7 +409,7 @@ defmodule Redoubt.Shell.Driver do
       Process.exit(state.group, :interrupt)
       %{state | term: term, dropping: true}
     else
-      state
+      interrupt_line(state)
     end
   end
 
@@ -398,6 +422,46 @@ defmodule Redoubt.Shell.Driver do
     ref = make_ref()
     send(state.group, {:io_request, self(), ref, {:setopts, []}})
     %{state | eof_check: {ref, rest, []}}
+  end
+
+  # ---- the line being evaluated ----
+
+  # The shell evaluates a line (`{:redoubt_eval, :running, shell, token}`) until it says it is done;
+  # a newer line replaces an older one the driver was not told the end of.
+  defp evaluating(state, pid, token) do
+    if state.evaluating, do: Process.demonitor(state.evaluating.ref, [:flush])
+    %{state | evaluating: %{pid: pid, token: token, ref: Process.monitor(pid)}}
+  end
+
+  defp evaluated(%{evaluating: %{pid: pid, token: token, ref: ref}} = state, pid, token) do
+    Process.demonitor(ref, [:flush])
+    %{state | evaluating: nil}
+  end
+
+  defp evaluated(state, _pid, _token), do: state
+
+  # The interrupt with no line being edited: `^C` is drawn, and the line being evaluated, if
+  # there is one, is told; with none, the key is dropped. A feed open for the line goes with the
+  # line's processes.
+  defp interrupt_line(%{evaluating: nil} = state), do: state
+
+  defp interrupt_line(%{evaluating: line} = state) do
+    send(line.pid, {:redoubt_interrupt, line.token})
+    Process.demonitor(line.ref, [:flush])
+    state = %{state | evaluating: nil}
+
+    # A feed's line being typed ends with the ^C after it, as a line being edited does, and the
+    # feed goes with the line: what is typed next is the shell's.
+    state =
+      if Term.line_open?(state.term) do
+        {out, term} = Term.interrupt(state.term)
+        write(state, out)
+        %{state | term: term}
+      else
+        echo(state, {:put_chars, :unicode, "^C\n"})
+      end
+
+    if state.feed, do: close_feed(state), else: state
   end
 
   # ---- the feed ----

@@ -149,6 +149,54 @@ defmodule Redoubt.Shell.Session do
     end
   end
 
+  @summary "Run a pipeline in the background"
+  @help """
+  Starts a pipeline as pipe does, and gives its job at once: the line goes on, and so does the
+  job, which neither the interrupt nor the line's end touches. It reads only the lines it is
+  given, never what is typed. What it writes, and its stages' standard error, is kept, up to
+  64 KiB each, for Job.await(job). Job.kill(job) ends it: its stages' budgets are destroyed, and
+  nothing else.
+  """
+  @args input: "the lines the first stage reads, or the pipeline's words when given alone",
+        words: "the pipeline: names and arguments, with \"|\" between stages"
+  @examples [
+    {~S'job = bg(~w(build --all))', "start it, and go on; Job.await(job) gives what it wrote"},
+    {~S'cat("urls.txt") |> bg(~w(fetch))', "a background stage reading the given lines"}
+  ]
+  defcommand bg(input :: term, words :: many(string) \\ []) do
+    {input, words} = if words == [], do: {nil, input}, else: {input, words}
+
+    with true <- (is_list(words) and Enum.all?(words, &is_binary/1)) or {:error, :not_words},
+         {:ok, stages} <- Redoubt.Pipeline.stages(words),
+         {:ok, job} <- Redoubt.Job.start(stages, input: input) do
+      job
+    end
+  end
+
+  @summary "List the session's jobs"
+  @help """
+  The session's pipelines, one line each: the job's number, whether it runs in the background,
+  how it stands (running, or how its last stage ended) and its command. A background job is
+  listed until Job.await takes what it wrote, or until 16 newer background jobs have ended
+  unread too: past those the earliest is dropped, and a last line counts the jobs dropped.
+  """
+  @examples [{"jobs()", "what is running, and what has ended unread"}]
+  defcommand jobs() do
+    listed =
+      Enum.map(Redoubt.Jobs.list(), fn job ->
+        where = if job.background, do: "bg", else: "fg"
+        "#{job.id}  #{where}  #{String.pad_trailing(to_string(job.state), 8)}  #{job.command}"
+      end)
+
+    dropped =
+      case Redoubt.Jobs.dropped() do
+        0 -> []
+        n -> ["(#{n} ended background jobs dropped unread)"]
+      end
+
+    Lines.new(listed ++ dropped)
+  end
+
   defp lines(output) do
     output
     |> String.split("\n")

@@ -322,15 +322,38 @@ defmodule Redoubt.Shell.DriverTest do
     ends(driver)
   end
 
-  test "Ctrl+C while a line is evaluated draws nothing and ends nothing: the evaluation finishes" do
+  # An interrupted line loses only itself (docs/plan/m2-usable-shell.md, the attack suite).
+  test "Ctrl+C or Ctrl+\\ while a line is evaluated ends it, and the bindings before it stay" do
     {driver, terminal} = start()
-    type(driver, "Process.sleep(500); :slept\r")
-    Process.sleep(100)
+    type(driver, "x = 1\r")
+    type(driver, "Stream.cycle([1]) |> Stream.run()\r")
+    Process.sleep(300)
     type(driver, "\x03")
-    Process.sleep(600)
-    terminal = screen(terminal)
-    assert row(terminal, 1) == ":slept"
-    refute Terminal.text(terminal) =~ "^C"
+    type(driver, "x + 1\r")
+    terminal = screen(terminal, &(Terminal.text(&1) =~ ~r/^2$/m))
+    type(driver, "Stream.cycle([1]) |> Stream.run()\r")
+    Process.sleep(300)
+    type(driver, "\x1C")
+    type(driver, "x + 2\r")
+    terminal = screen(terminal, &(Terminal.text(&1) =~ ~r/^3$/m))
+
+    text = Terminal.text(terminal)
+    assert text =~ ~r/Stream\.run\(\)\n\^C$/m
+    assert text =~ ~r/^2$/m
+    assert text =~ ~r/^3$/m
+    assert Process.alive?(driver)
+    type(driver, "exit\r")
+    ends(driver)
+  end
+
+  test "the interrupt at the prompt after a line has ended ends no later line" do
+    {driver, terminal} = start()
+    type(driver, ":done\r")
+    terminal = screen(terminal, &(Terminal.text(&1) =~ ":done"))
+    type(driver, "\x03")
+    type(driver, "Process.sleep(300); :slept\r")
+    terminal = screen(terminal, &(Terminal.text(&1) =~ ~r/^:slept$/m))
+    assert Terminal.text(terminal) =~ ~r/^:slept$/m
     type(driver, "exit\r")
     ends(driver)
   end
@@ -355,9 +378,9 @@ defmodule Redoubt.Shell.DriverTest do
     {driver, terminal} = start()
     type(driver, @feed_line <> "\r")
     Process.sleep(300)
-    # A backspace takes a character back; the interrupt keys are never fed, nor any other control.
+    # A backspace takes a character back; no other control is fed.
     type(driver, "hello\r")
-    type(driver, "wor\x7Fld\x03\x1C\e\r")
+    type(driver, "wor\x7Fld\e\r")
     type(driver, "\x04")
     terminal = screen(terminal, &(Terminal.text(&1) =~ ~s|["hello\\n", "wold\\n"]|))
     text = Terminal.text(terminal)
@@ -369,6 +392,25 @@ defmodule Redoubt.Shell.DriverTest do
     type(driver, "1 + 1\r")
     terminal = screen(terminal, &(Terminal.text(&1) =~ ~r/^2$/m))
     assert Terminal.text(terminal) =~ ~r/^2$/m
+    type(driver, "exit\r")
+    ends(driver)
+  end
+
+  # No program swallows the interrupt: a line holding the feed, as a native program reading what
+  # is typed does, is ended by it, and the keys typed with it are not fed.
+  test "the interrupt under a feed ends the line that holds it, and nothing is fed" do
+    {driver, terminal} = start()
+    type(driver, "x = 1\r")
+    type(driver, @feed_line <> "\r")
+    Process.sleep(300)
+    type(driver, "abc\x03def\r")
+    type(driver, "x + 1\r")
+    terminal = screen(terminal, &(Terminal.text(&1) =~ ~r/^2$/m))
+
+    text = Terminal.text(terminal)
+    assert text =~ ~r/^abc\^C$/m
+    refute text =~ "def"
+    assert text =~ ~r/^2$/m
     type(driver, "exit\r")
     ends(driver)
   end

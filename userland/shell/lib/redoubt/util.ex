@@ -17,6 +17,11 @@ defmodule Redoubt.Util do
 
   # Lines written to a file in one request.
   @batch 256
+  # How often follow/1 looks at its file, and the most it reads at once.
+  @follow_ms 500
+  @follow_read 64 * 1024
+  # The most of a line not yet ended follow/1 holds: past it, what it holds is printed as a line.
+  @follow_held 4096
 
   @summary "Read files as lines"
   @help """
@@ -87,6 +92,21 @@ defmodule Redoubt.Util do
   @examples [{~S'cat("app.log") |> tail(5)', "the last five lines of app.log"}]
   defcommand tail(lines :: lines, count :: integer(min: 0) \\ 10) do
     lines |> Enum.take(-count) |> Lines.new()
+  end
+
+  @summary "Print the lines added to a file as they come"
+  @help """
+  Prints each line added to the file from now on, as it is written, until the interrupt (Ctrl+C)
+  ends the line; what was there before is not printed. The file is looked at twice a second. A
+  line not yet ended is printed once it is, or as it stands once it passes 4 KiB. Ends by itself,
+  with :truncated or :removed, if the file gets shorter or goes away.
+  """
+  @args path: "the file to follow"
+  @examples [{~S'follow("app.log")', "app.log's new lines, until Ctrl+C"}]
+  defcommand follow(path :: path) do
+    readable!(path)
+    {:ok, %File.Stat{size: size}} = File.stat(path)
+    follow_from(path, size, "")
   end
 
   @summary "Count lines"
@@ -326,6 +346,53 @@ defmodule Redoubt.Util do
   end
 
   defp file_lines(path), do: path |> File.stream!() |> Stream.map(&chomp/1)
+
+  # A 9P read past a file's end answers nothing at once, and no file server says when a file
+  # grows, so follow/1 looks at its size: what is past `at` is new. A line not yet ended waits in
+  # `held` for the rest, up to @follow_held bytes, so each look splits a bounded text.
+  defp follow_from(path, at, held) do
+    Process.sleep(@follow_ms)
+
+    case File.stat(path) do
+      {:error, :enoent} ->
+        :removed
+
+      {:ok, %File.Stat{size: size}} when size < at ->
+        :truncated
+
+      {:ok, %File.Stat{size: size}} when size == at ->
+        follow_from(path, at, held)
+
+      {:ok, %File.Stat{size: size}} ->
+        added = read_at(path, at, min(size - at, @follow_read))
+        [rest | whole] = (held <> added) |> String.split("\n") |> Enum.reverse()
+        whole |> Enum.reverse() |> Enum.each(&IO.puts(chomp(&1)))
+
+        if byte_size(rest) > @follow_held do
+          IO.puts(rest)
+          follow_from(path, at + byte_size(added), "")
+        else
+          follow_from(path, at + byte_size(added), rest)
+        end
+
+      {:error, reason} ->
+        raise File.Error, reason: reason, action: "follow file", path: path
+    end
+  end
+
+  defp read_at(path, at, count) do
+    {:ok, file} = File.open(path, [:read, :binary, :raw])
+
+    try do
+      case :file.pread(file, at, count) do
+        {:ok, data} -> data
+        :eof -> ""
+        {:error, reason} -> raise File.Error, reason: reason, action: "follow file", path: path
+      end
+    after
+      File.close(file)
+    end
+  end
 
   defp chomp(line) do
     cond do

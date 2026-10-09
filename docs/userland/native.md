@@ -228,7 +228,7 @@ Residuals:
 
 ### Killing a job
 
-Status: planned · M2 (usable shell)
+Status: built · tested: bench:job-kill, bench:job-interrupt-native, bench:job-interrupt-ssh
 
 There is no per-process kill and no signal. Killing is destroying a budget
 ([R10 (destruction)](../kernel/budgets.md#r10-destruction)): every process in it ends, every handle
@@ -243,14 +243,14 @@ with the fault's cause, or `killed` when its budget was destroyed
 `:faulted` and `:killed`. When the notice arrives, the launcher disconnects the child's
 connections and releases what typed servers granted it.
 
-Ctrl+C destroys the budgets of every native stage of the foreground job
-([the shell](shell.md#interrupting-and-killing-jobs)).
+Ctrl+C, the session's own key, and over SSH a channel's INT or break end the line being
+evaluated, and with it every native stage of the pipelines it runs in the foreground; a job in the
+background runs on ([the shell](shell.md#interrupting-and-killing-jobs)).
 
-Built: beamlet's `budget_destroy/1` is the kill, and the launch native's `{exit, Job, Cause,
+Underneath: beamlet's `budget_destroy/1` is the kill, and the launch native's `{exit, Job, Cause,
 Code}` message is the exit notice, with `exited`, `faulted` or `killed`
-([beamlet](beamlet.md#natives)); `Job` and Ctrl+C come in M2 (usable shell).
-
-**Open:** none.
+([beamlet](beamlet.md#natives)); each pipeline's owner process (`Redoubt.Pipeline`) is the job,
+and `Redoubt.Job` and `Redoubt.Jobs` the shell's handle on it.
 
 ### `redoubt-rt`, the native runtime
 

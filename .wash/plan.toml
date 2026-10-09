@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 23
+revision = 28
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1757,8 +1757,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   needs = ["PIPE1"]
   body = "M2 page 'On Redoubt' step 4: native.md#killing-a-job, shell.md#interrupting-and-killing-jobs. Each native stage in its own budget; Job.kill and Ctrl+C/Ctrl+\\ destroy the job's budgets and everything they started, never the session; follow() stops on the interrupt. Attack cases: a job ends and only it; no program swallows the interrupt; an interrupted line loses only itself. Design checkpoint first. Tier A."
-  state = "active"
-  revision = 16
+  state = "done"
+  revision = 28
   overrides = ["2026-10-09: started by Orchestrator before M1 (reported): M2 'On Redoubt' step 4, ahead of M1's acceptance", "2026-10-09: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the userland track runs ahead of its acceptance"]
 
 [[node]]
@@ -1898,10 +1898,20 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
 
 [[node]]
   id = "IDLE2"
-  title = "The kernel at rest: a lock release wakes every halted hart and the timer is re-armed 2.5x per interrupt; the idle ceilings come down"
+  title = "The kernel at rest: the lock changes hands ~10/s with every hart halted and the timer is re-armed 2.5x per interrupt; the idle ceilings come down"
   template = "package"
   parent = "smp"
   needs = ["IDLE1"]
   body = "From IDLE1's measurement (.wash/local/IDLE1-report.md; the red's reading of it): at rest m_software is 2.9 of 3.9 interrupts/s per hart; 559 of 625 land with epc in TicketLock::acquire_ticket against 602 release wake_halted ecalls, so about 1.04 harts woken per release: one waiter per hand-off, not every hart. The question is why the lock changes hands ~10/s on a machine at rest, with every hart halted: who takes it (timer entries re-arming? the idle loop?), and rearm's 501 set_timer against ~200 s_timer interrupts (2.5x re-arming per interrupt; a shared earliest timeout armed on every hart is the suspect, to be confirmed). Find the cause, remove the needless hand-offs and re-arms, then lower launch-idle's per-hart ceiling toward the measurement. Kernel: Tier A, the kernel red; nothing changes at one hart unless rearm does."
   state = "todo"
-  revision = 12
+  revision = 24
+
+[[node]]
+  id = "SCHED4"
+  title = "Several harts: a timeout or deadline is armed on the hart running its payer, so billed timer work no longer lands on a victim's hart (B1), with a failing negative from the placement SCHED3 recorded"
+  template = "package"
+  parent = "smp"
+  needs = ["SCHED3"]
+  body = "SCHED3's B1 (a hart arms a deadline or timeout only if it runs the item's payer, or if no hart does) was dropped by ruling (.wash/qa/sched3-b1-evidence.md; .wash/local/architect-questions.md 'SCHED3 B1') with a trigger: it returns if the oracle's report-only count of timer entries billed to a budget other than the one interrupted reaches 1 % of a victim's charged pool in a gate case. Met on wp-SCHED3 before merge: deadline-flood-billed-traced rv64 at 2 harts, 16 deadlines, 87 of 96 destructions on hart 0 under the victim, 89 entries, 833,543 ticks, ~17 % of 4.99M charged; victim 482 of 1000 (passes). Placement depends on timing alone. Do B1 in the ruling's form (the global earliest item and its payer; the arming recomputed at each switch from a per-budget cached minimum, no scan on the switch path), build the failing negative from this placement (`timer-any-hart` must fail where the count is gated), gate the count in deadline-flood-billed-traced and sched-exit-churn at 2 harts, measure deadline-notice latency before and after on both widths (within one section), timer.md and scheduling.md say the rule. B1's earlier code: wp-SCHED3's WIP 33eaaf326. Kernel: Tier A, the kernel red; model rule and mutation if a rule changes."
+  state = "todo"
+  revision = 24
