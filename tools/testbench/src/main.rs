@@ -13,6 +13,7 @@ mod disk;
 mod elixir;
 mod fanout;
 mod fmt;
+mod launch;
 mod memory;
 mod peer;
 mod prebuilt;
@@ -71,8 +72,8 @@ struct Args {
     /// are printed: the ones the bundle's manifest pins, or a signed volume's root block carries.
     #[arg(long, num_args = 2, value_names = ["RECIPE", "OUT"])]
     pack_disk: Option<Vec<PathBuf>>,
-    /// Hart count: for --run (1 without it), or for every boot case instead of its own counts,
-    /// but a case that keeps them (`keep_smp`).
+    /// Hart count: for --run (1 without it, 4 with --system), or for every boot case instead of
+    /// its own counts, but a case that keeps them (`keep_smp`).
     #[arg(long)]
     smp: Option<u32>,
     /// With --run, print the exact QEMU command line before booting.
@@ -84,6 +85,20 @@ struct Args {
     /// With --run, start QEMU paused with a gdb stub on :1234.
     #[arg(long)]
     debug: bool,
+    /// With --run, boot the whole image instead (`./launch --system`): the machine of
+    /// tests/launch-system.toml, its disks and network, alice's login key and the ssh line.
+    #[arg(long, requires = "run", conflicts_with_all = ["programs", "recipe", "debug"])]
+    system: bool,
+    /// With --system, the host port forwarded to the guest's SSH port.
+    #[arg(long, default_value_t = 2222, requires = "system")]
+    ssh_port: u16,
+    /// With --system, alice's login key: an Ed25519 public key file, instead of the checkout's
+    /// development key under $REDOUBT_TMP/launch.
+    #[arg(long, value_name = "PUB", requires = "system")]
+    key: Option<PathBuf>,
+    /// With --system, write the QEMU command here, each argument ended by a NUL.
+    #[arg(long, value_name = "FILE", requires = "system")]
+    qemu_argv: Option<PathBuf>,
     /// Report a case whose firmware, QEMU or OpenSSH is missing or too old as SKIP instead of FAIL.
     #[arg(long)]
     allow_skip: bool,
@@ -230,6 +245,17 @@ fn main() -> Result<()> {
         built: Default::default(),
     };
 
+    if args.run && args.system {
+        let ask = launch::System {
+            arch: args.arch.as_deref().unwrap_or("rv64"),
+            smp: args.smp.unwrap_or(4),
+            ssh_port: args.ssh_port,
+            key: args.key.as_deref(),
+            print_only: args.print_only,
+            argv: args.qemu_argv.as_deref(),
+        };
+        return launch::system(&builder, &workspace, &logs, &ask);
+    }
     if args.run {
         let target = target::find(args.arch.as_deref().unwrap_or("rv64")).context("unknown arch")?;
         let machine =
@@ -262,6 +288,7 @@ fn main() -> Result<()> {
             false,
             false,
             Profile::Release,
+            None,
             &logs.join("interactive.tar"),
         )?;
         let firmware = rustsbi_prototyper(target).map_err(|why| anyhow::anyhow!(why))?;
@@ -644,7 +671,8 @@ fn rustsbi_prototyper(target: &Target) -> Result<String, String> {
 /// Build the kernel, the loader, `programs` and `files` for `target`, pack them into `bundle`, and
 /// return the bundle and the loader. A manifest file pins its userland disk's roots, one digit
 /// off if the case's `userland` asks for a wrong root. `profile` applies to the kernel and the
-/// loader (the trusted base); programs are always release.
+/// loader (the trusted base); programs are always release. With `login`, the manifest gives alice
+/// that login key alone (`launch::give_key`).
 #[allow(clippy::too_many_arguments)]
 fn prepare(
     builder: &Builder,
@@ -657,6 +685,7 @@ fn prepare(
     tamper: bool,
     bare_archive: bool,
     profile: Profile,
+    login: Option<&str>,
     bundle: &Path,
 ) -> Result<(PathBuf, PathBuf)> {
     let mut features: Vec<String> = machine.kernel_features.iter().map(|f| f.to_string()).collect();
@@ -670,10 +699,14 @@ fn prepare(
         .iter()
         .map(|file| {
             let path = builder.program(target, &file.from)?.1;
-            if file.servers.is_empty() && file.verity.is_none() {
+            let login = login.filter(|_| file.name == "manifest");
+            if file.servers.is_empty() && file.verity.is_none() && login.is_none() {
                 return Ok((file.name.clone(), path));
             }
             let mut bytes = file.merged(&std::fs::read(&path)?)?;
+            if let Some(key) = login {
+                bytes = launch::give_key(&bytes, key)?;
+            }
             if let Some(recipe) = &file.verity {
                 let wrong = userland.is_some_and(|u| u.wrong_root && &u.recipe == recipe);
                 bytes = build::pin_roots(&bytes, &builder.userland(recipe)?.verified, wrong)?;
@@ -843,6 +876,18 @@ fn pack_case(
     // or the code's problem, never what a `must_fail` is waiting for, so it is not judged.
     let bundle = logs.join(format!("{}-{}.tar", case.name, target.name));
     let profile = if boot.debug_assertions { Profile::Checked } else { Profile::Release };
+    // The launch machine's login key: the one `--run --system` was given, or one made beside the
+    // bundle, which its sessions log in with.
+    let login = match (&boot.login_key, boot.launch) {
+        (Some(key), _) => Some(key.clone()),
+        (None, true) => match launch::case_key(&bundle) {
+            Ok(key) => Some(key),
+            Err(e) => {
+                return Ok(Err(vec![(String::new(), Outcome::Fail(format!("{e:#}")), elapsed(started))]));
+            }
+        },
+        (None, false) => None,
+    };
     let (bundle, loader) = match prepare(
         builder,
         target,
@@ -854,6 +899,7 @@ fn pack_case(
         boot.tamper_bundle,
         boot.sign_bare_archive,
         profile,
+        login.as_deref(),
         &bundle,
     ) {
         Ok(built) => built,
@@ -955,7 +1001,16 @@ fn boot_case(
         // Every boot gets fresh devices: a new disk, new host ports.
         let boot_once = |log: &Path| -> Result<Verdict> {
             let disk = log.with_extension("img");
-            let (mut devices, forwards) = qemu::virtio_devices(boot, &disk, userland.as_ref())?;
+            // The launch machine boots launch's own command line, which brings its devices and
+            // takes nothing added: no guest seed either.
+            anyhow::ensure!(
+                !boot.launch || seed.is_none(),
+                "a launch case boots launch's line, with no seed"
+            );
+            let (mut devices, forwards) = match boot.launch {
+                true => (Vec::new(), vec![(22, qemu::free_ports(1)?[0])]),
+                false => qemu::virtio_devices(boot, &disk, userland.as_ref(), &[])?,
+            };
             if let Some(icount) = &boot.icount {
                 devices.extend(["-icount".into(), icount.clone(), "-rtc".into(), "clock=vm".into()]);
             }
@@ -976,7 +1031,16 @@ fn boot_case(
             let deadline = Instant::now() + std::time::Duration::from_secs_f64(boot.timeout_secs);
             let dials =
                 boot.net.as_ref().map(|net| peer::Dials::start(net, &forwards, deadline)).transpose()?;
-            let verdict = qemu::run(&image, boot, &builder.workspace, &forwards, log)?;
+            let identity = launch::case_identity(bundle);
+            let launched = match boot.launch {
+                true => {
+                    let qemu =
+                        launch::command(machine, firmware, &built.packed, boot, &disk, *smp, forwards[0].1)?;
+                    Some((qemu, identity.as_path()))
+                }
+                false => None,
+            };
+            let verdict = qemu::run(&image, launched, boot, &builder.workspace, &forwards, log)?;
             Ok(peer::finish_dials(verdict, dials))
         };
         let outcome = match boot_once(&log)? {

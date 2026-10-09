@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 529
+revision = 531
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1757,8 +1757,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   needs = ["PIPE1"]
   body = "M2 page 'On Redoubt' step 4: native.md#killing-a-job, shell.md#interrupting-and-killing-jobs. Each native stage in its own budget; Job.kill and Ctrl+C/Ctrl+\\ destroy the job's budgets and everything they started, never the session; follow() stops on the interrupt. Attack cases: a job ends and only it; no program swallows the interrupt; an interrupted line loses only itself. Design checkpoint first. Tier A."
-  state = "todo"
-  revision = 495
+  state = "active"
+  revision = 530
+  overrides = ["2026-10-09: started by Orchestrator before M1 (reported): M2 'On Redoubt' step 4, ahead of M1's acceptance"]
 
 [[node]]
   id = "NSCR1"
@@ -1846,8 +1847,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M2"
   body = "Owner request 2026-10-08. `./launch --system [--arch rv64|rv32] [--smp N]` boots the same signed image the bench's userland cases use (init, servers, steward, sshd, the shell's VM), with its disk (virtio-blk) and network (QEMU user net, host port forwarded to the guest's 22; default 2222, --ssh-port to change), keeps the serial console on the terminal, and prints the exact `ssh -p PORT -i KEY alice@localhost` line plus the host key's fingerprint. A dev key pair is generated per checkout under .tmp (or the user's own public key with --key), and the manifest's principals get it for this boot only; nothing secret is committed. --print-only prints the QEMU command. Reuse testbench's image and disk assembly (no second packer). Runs through scripts/q (a lease for the cores QEMU uses). Docs: GETTING-STARTED.md 'Run' gains 'Try the system' with a short walk-through (log in, help(), ed, fm, alice.work@, resize, Ctrl+\\). A bench case that boots `launch --system --print-only`'s exact command line and logs in once, so it can't rot. Second part: an idle case: boot with 4 harts, log in, leave the prompt idle for 60 s, judge wakeups per second from the kernel's trace and the QEMU process's host CPU time against stated ceilings; idle is what the owner asked about. Tier B tooling, except any manifest/steward change (Tier A: the steward red)."
-  state = "reported"
-  revision = 528
+  state = "done"
+  revision = 531
   overrides = ["2026-10-09: started by Orchestrator before M1 (reported): owner request: try the system by hand during M2"]
 
 [[node]]

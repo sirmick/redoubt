@@ -111,7 +111,8 @@ fn key_file(workspace: &Path, dir: &Path, name: &str) -> Result<PathBuf> {
 /// Where sessions connect.
 pub enum Server<'a> {
     /// A booted guest, through the port QEMU forwards to its port 22. `host_key`: see `Net`.
-    Guest { forwards: &'a [Forward], host_key: Option<&'a str> },
+    /// `identity`: the private key every session logs in with instead of its test key (`launch`).
+    Guest { forwards: &'a [Forward], host_key: Option<&'a str>, identity: Option<&'a Path> },
     /// OpenSSH's sshd, in a QEMU guest that ssh itself starts for each session through
     /// `ProxyCommand`, in inetd mode (`sshd -i`) and with no network: it never listens on a port,
     /// so nobody else on the machine can reach it. `case_dir` names the case's guests.
@@ -438,8 +439,12 @@ pub fn run(
             Server::Guest { .. } | Server::Redoubt { .. } => session.user.as_str(),
             Server::Loopback { .. } => REFERENCE_USER,
         };
+        let key = match server {
+            Server::Guest { identity: Some(identity), .. } => identity.to_path_buf(),
+            _ => key_file(workspace, &dir, session.key())?,
+        };
         ssh.args(["-F", "/dev/null", if session.pty { "-tt" } else { "-T" }, "-l", login, "-i"])
-            .arg(key_file(workspace, &dir, session.key())?)
+            .arg(key)
             .args([
                 "-o",
                 "IdentitiesOnly=yes",
