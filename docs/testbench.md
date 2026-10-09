@@ -728,7 +728,16 @@ the old billing, fails that check in a recorded negative run. It records each de
 from user mode the same way (`x`), with its claim (`c`: the source, or 0 when another hart claimed
 it first), and checks that one that claims nothing is billed as a timer interrupt that ends no
 slice: after its expiry, to the budget the expiry billed last or to nobody, never to the budget it
-interrupted. The trace ends with one record of
+interrupted. An
+interrupt's return (`O`) says where it goes: 1 to user mode, 0 to `kmain` with the interrupted
+runner's slice over at the entry, 2 to `kmain` before it, a preemption. With
+`wake_no_preempt=N` the oracle proves a timeout only wakes: at one hart N naps each against the
+slice that follows it; on several, each wake of the one budget that woke N times or more at the
+entry that made it, a return to user mode or a call its runner goes on from counting as a witness
+and a preemption (`O` 2, or the runner requeued outside an interrupt, with no destruction) failing
+it, with at least `wake_witnesses=K` witnesses. A kernel built with `wake-preempts`, whose timeout
+wake preempts as a deadline does, fails `sched-wake-no-preempt-harts` on both widths in a recorded
+negative run. The trace ends with one record of
 the kernel's time (`C`): every hart's ticks in the kernel, from a trap's entry or `kmain`'s loop
 to the return to user mode or the idle, in its id; the ticks charged to budgets in its pass; and
 in its entry field, which it alone uses so, the ticks the checked build's audits took.

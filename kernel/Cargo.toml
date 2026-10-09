@@ -87,6 +87,10 @@ audit-billed = ["test-only"]
 # lock behind another hart's audit stays billed for the wait, so sched-budget-churn-shell's victim
 # must miss its share at two harts (kernel/scheduling.md, "Fair kernel entry is bounded by count").
 audit-wait-billed = ["test-only"]
+# Debug only, never in a bench build but one recorded negative run: a timeout's wake preempts the
+# thread whose kernel entry answered it, as a deadline does, so sched-wake-no-preempt-harts must
+# fail (kernel/scheduling.md, "Preemption points").
+wake-preempts = ["test-only"]
 # Debug only, never in a bench build but one recorded negative run: the rest of a timer interrupt
 # after its expiry, and the return's own walk, are billed as before the fix to the budget it
 # interrupted, so the oracle's timer-entry check must fail.

@@ -141,6 +141,9 @@ pub enum Role {
     /// ends, each request refused after a search of the whole area, R12's costliest call
     /// (`map-anon-search-bound`); report the refusals.
     SearchHammer = 32,
+    /// Count until the window ends, entering the kernel with `time_now` each p0 µs; report the
+    /// count.
+    SpinCalling = 33,
 }
 
 impl Role {
@@ -179,6 +182,7 @@ impl Role {
             ClusterTimer,
             SpinThreads,
             SearchHammer,
+            SpinCalling,
         ]
         .into_iter()
         .find(|r| *r as u8 == x)
@@ -768,6 +772,15 @@ fn run_child(arg: usize, more: Option<fn(Option<Role>, bool)>) -> ! {
     }
     let total = match role {
         Some(Role::Spin) => spin_until(end),
+        Some(Role::SpinCalling) => {
+            let (every, mut n) = (param(0) * tpu, 0);
+            while ticks() < end {
+                let next = ticks() + every;
+                n += spin_until(next.min(end));
+                let _ = rd::time_now();
+            }
+            n
+        }
         Some(Role::SpinFrom) => {
             sleep_until(param(0), tpu);
             spin_until(end)

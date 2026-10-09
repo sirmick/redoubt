@@ -67,9 +67,10 @@ no dependencies.
 
 ### Preemption points
 
-<details><summary>Status: built · partly tested: that an interrupt's wake does not preempt, and that another budget's deadline does, are not attacked by a case · tested (6)</summary>
+<details><summary>Status: built · partly tested: that an interrupt's wake does not preempt, and that another budget's deadline does, are not attacked by a case · tested (7)</summary>
 
 - bench:sched-wake-no-preempt
+- bench:sched-wake-no-preempt-harts
 - bench:budget-deadline
 - host:redoubt-model::scheduler_contracts_hold
 - mutation:R12PreemptOnWake
@@ -86,6 +87,17 @@ The running thread keeps the CPU until one of these:
 Nothing else takes the CPU. A timeout expiring or an interrupt firing only makes a thread
 runnable; it runs when the queue next picks it. The hart timer is always armed for the earliest
 of the slice end, the next timeout and the next budget deadline ([timer](timer.md)).
+
+On several harts a timeout is answered at whichever kernel entry first comes after it is due, on
+any hart: a timer interrupt, another budget's call, or `kmain`'s own. That entry deschedules no
+runner whose slice has not ended for its own reason (its slice's end, a block, an exit, a fault or
+a deadline): the woken thread first runs at a pick, an idle hart's or one after a runner left for
+such a reason. `sched-wake-no-preempt` proves it at one hart nap by nap, each against the slice
+that follows it; `sched-wake-no-preempt-harts` judges it at two, each wake at the entry that made
+it, and needs at least five of its sixty wakes answered where they could have preempted, mid-slice
+or at another budget's call (17 to 27 in the runs so far). A kernel built with `wake-preempts`,
+whose timeout wake preempts the entering thread as a deadline does, fails it on both widths, in a
+recorded negative run.
 
 A budget deadline preempts whatever runs, because the destruction lifts passes and removes
 budgets, so the queue must be picked again. A thread that entered the kernel just as the deadline
@@ -1199,7 +1211,8 @@ tells whoever reads the console who runs when. It exists only under the Cargo fe
   `sched-large-weight`, `sched-idle-gap`, `sched-sleep-gaming`, `sched-capped`,
   `sched-budget-churn`, `sched-budget-churn-shell`, `sched-exit-churn`, `sched-timer-flood`,
   `sched-carve-return`, `sched-carve-inflation`, `deadline-flood-billed-traced`), `sched-ties`,
-  `sched-debt-lift`, `sched-lift-delay`, `sched-wake-no-preempt`, `sched-cluster`,
+  `sched-debt-lift`, `sched-lift-delay`, `sched-wake-no-preempt`,
+  `sched-wake-no-preempt-harts`, `sched-cluster`,
   `sched-cluster-old-control`, `sched-latency`, `sched-latency-tcg`, `sched-lock-contention`,
   `sched-lock-contention-4`, `irq-boot-hart-only`, `kernel-containment`, `endpoint-destroy-full`, `smp-fence` and
   `worst-walk`.

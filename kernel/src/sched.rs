@@ -975,12 +975,22 @@ pub mod trace {
         /// Inside a timer or device interrupt from user mode, until it returns: its charges are
         /// recorded.
         interrupt: bool,
+        /// That interrupt came after its runner's slice had ended, so a return to `kmain` is the
+        /// slice's end, not a preemption.
+        slice_over: bool,
         /// The walk measured now (`walk-trace`), 0 for none.
         walk: u64,
     }
 
-    static RING: KernelCell<Ring> =
-        KernelCell::new(Ring { pages: [0; PAGES], n: 0, dropped: 0, entry: 0, interrupt: false, walk: 0 });
+    static RING: KernelCell<Ring> = KernelCell::new(Ring {
+        pages: [0; PAGES],
+        n: 0,
+        dropped: 0,
+        entry: 0,
+        interrupt: false,
+        slice_over: false,
+        walk: 0,
+    });
 
     /// Take the ring's frames, zeroed (at boot, before `boot_budgets` counts what the kernel
     /// keeps).
@@ -1025,8 +1035,9 @@ pub mod trace {
     }
 
     /// A timer interrupt from user mode began (`I`): the budget it interrupted (id 0 for none; no
-    /// object has id 0), and the time in µs in the pass field. Until it returns (`O`: 1 in the pass
-    /// field to user mode, 0 to `kmain`), each charge is recorded (`B`: the payer and the ticks),
+    /// object has id 0), and the time in µs in the pass field. Until it returns (`O`: in the pass
+    /// field 1 to user mode, 0 to `kmain` with the runner's slice over at the entry, 2 to `kmain`
+    /// before it, a preemption), each charge is recorded (`B`: the payer and the ticks),
     /// and the end of its expiry (`E`: the budget billed last, and in the pass field 1 for an
     /// expired item's, 2 for a wait's that ended before its timeout, 0 for none). The oracle
     /// checks that the budget it interrupted pays only for its own items, or for its slice's end
@@ -1045,15 +1056,19 @@ pub mod trace {
     /// A timer interrupt from user mode began (after its user time was accrued).
     pub fn timer_entry() {
         let cur = super::SCHED.with(|s| s.cpu.cur(super::here()));
-        RING.with(|r| r.interrupt = true);
-        record(TIMER_ENTRY, cur.map_or(0, |b| b.id), u128::from(crate::time::now_us()));
+        let now = crate::time::now_us();
+        let over = crate::time::slice_end() <= now;
+        RING.with(|r| (r.interrupt, r.slice_over) = (true, over));
+        record(TIMER_ENTRY, cur.map_or(0, |b| b.id), u128::from(now));
     }
 
     /// A device interrupt from user mode began (after its user time was accrued).
     pub fn external_entry() {
         let cur = super::SCHED.with(|s| s.cpu.cur(super::here()));
-        RING.with(|r| r.interrupt = true);
-        record(EXTERNAL_ENTRY, cur.map_or(0, |b| b.id), u128::from(crate::time::now_us()));
+        let now = crate::time::now_us();
+        let over = crate::time::slice_end() <= now;
+        RING.with(|r| (r.interrupt, r.slice_over) = (true, over));
+        record(EXTERNAL_ENTRY, cur.map_or(0, |b| b.id), u128::from(now));
     }
 
     /// A device interrupt from user mode claimed `irq`, or nothing.
@@ -1184,8 +1199,13 @@ pub mod trace {
 
     /// The kernel returns, to user mode or to `kmain`.
     pub fn returned(to_user: bool) {
-        if RING.with(|r| core::mem::take(&mut r.interrupt)) {
-            record(RETURN, 0, u128::from(to_user));
+        if let (true, over) = RING.with(|r| (core::mem::take(&mut r.interrupt), r.slice_over)) {
+            let why = match (to_user, over) {
+                (true, _) => 1,
+                (false, true) => 0,
+                (false, false) => 2,
+            };
+            record(RETURN, 0, why);
         }
     }
 

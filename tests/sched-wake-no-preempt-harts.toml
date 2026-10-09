@@ -1,0 +1,21 @@
+description = "A timeout only wakes, on several harts (kernel/scheduling.md, \"Preemption points\"): a sleeper's sixty timeouts, answered at whichever kernel entry comes first on two harts (a timer interrupt, or a spinner's call), take no hart from the thread whose entry answered them; at least five could have (virtual time, checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+icount = "shift=3,sleep=off"
+programs = ["sched-wake-no-preempt-harts"]
+kernel_features = ["sched-trace"]
+post_check = "sched_oracle wake_no_preempt=60 wake_witnesses=5"
+smp = [2]
+# The oracle judges each wake at the entry that answered it and needs at least five that could have
+# preempted: answered mid-slice or at another budget's call (kernel/scheduling.md, "Preemption
+# points"). Two harts: at one, sched-wake-no-preempt proves each nap against a slice.
+keep_smp = true
+timeout_secs = 120
+expect = [
+    '^\[wake\] the shortest delay from a nap.s start to the sleeper.s run was \d+ µs$',
+    '^SCHED-WAKE-NO-PREEMPT TEST PASSED$',
+    '^SCHED-TRACE-END \d+ dropped 0$',
+]
+forbid = ['PROGRAM HALT']
+poweroff = true
