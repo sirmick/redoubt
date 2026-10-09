@@ -178,6 +178,11 @@ What follows from pipes being served files:
   and its standard error, reaches the console only as the session draws it, through the shell's
   guard, so a control sequence in it shows as text
   ([the shell](shell.md#hostile-text-never-drives-the-terminal)).
+- **A stage can draw a screen.** Run with the shell's `screen`, a stage writes `cells` frames,
+  each a length and its bytes, and reads its keys and its screen's size as events; the session
+  checks each frame and draws it, and ends the stage, its budget destroyed, at the first it
+  refuses ([the shell](shell.md#a-native-programs-screen-and-the-sessions-key)). It holds the same
+  three streams and nothing else.
 - **A pipe is readable as a file.** A zero-copy alternative, stages sending pages to each other
   over an endpoint, is not 9P, so a program could not read its input as a file; it is not taken.
 

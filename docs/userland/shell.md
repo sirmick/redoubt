@@ -245,6 +245,9 @@ Job.await(job).stdout
 `Redoubt.Cmd`, an explicit builder over the same (`Cmd.new() |> Cmd.source("log.txt") |>
 Cmd.pipe({"grep", ["error"]}) |> Cmd.run()`), is not built.
 
+`screen(name, args)` runs one program as a stage that draws a screen of cells rather than writing
+text ([a native program's screen](#a-native-programs-screen-and-the-sessions-key)).
+
 A native stage is for what should not run with the session's authority (an untrusted parser) or
 needs its own address space; everything else is Elixir. How programs are launched, how their
 standard streams are named and who serves a pipe are [native programs](native.md)'s.
@@ -416,8 +419,6 @@ and every [full-screen program](#full-screen-programs).
 Status: planned · M2 (usable shell)
 
 What the line editor and the screens built so far do not need:
-- **A native program's frames:** a native program with a screen sends `cells` frames, and the
-  encoder reads them through the same decoder as the buffer's.
 - **Output:** scroll regions, bracketed paste, and synchronized update so a redraw does not
   flicker.
 - **Glyphs:** a 16-colour ASCII fallback a session can choose, for a UART or a console font
@@ -433,8 +434,9 @@ assume, because a query on a UART that never answers costs a timeout at every lo
 
 ### Hostile text never drives the terminal
 
-<details><summary>Status: built · partly tested: the host only, and the paths that exist there: the printer, a line's own writes to the console, what the VM logs, the prompt and the typed line, and a screen program's text, the pager's included, through the screen buffer (on beamlet alone); a native program's frames are not built; the attack case is the shell's own ExUnit suite (`test/redoubt/shell/driver_test.exs`, `test/redoubt/term_test.exs`, `test/redoubt/screen_test.exs`, `test/redoubt/screen/pager_test.exs`), judged by a model of the terminal that refuses any sequence but the encoder's own, which `./test-shell` runs and no bench case does, and the buffer's own refusals · tested (2)</summary>
+<details><summary>Status: built · partly tested: the host only, and the paths that exist there: the printer, a line's own writes to the console, what the VM logs, the prompt and the typed line, and a screen program's text, the pager's included, through the screen buffer (on beamlet alone); a native program's frames and standard error on the machine too (bench:nscr-hostile-text); the attack case is the shell's own ExUnit suite (`test/redoubt/shell/driver_test.exs`, `test/redoubt/term_test.exs`, `test/redoubt/screen_test.exs`, `test/redoubt/screen/pager_test.exs`), judged by a model of the terminal that refuses any sequence but the encoder's own, which `./test-shell` runs and no bench case does, and the buffer's own refusals · tested (3)</summary>
 
+- bench:nscr-hostile-text
 - host:beamlet-screen::a_control_character_is_badarg_and_nothing_is_drawn
 - host:beamlet-screen::a_control_character_is_refused_and_nothing_of_the_call_is_written
 
@@ -485,7 +487,7 @@ every path above and judges the bytes the session wrote to `/dev/cons`.
 
 ### The cell protocol
 
-Status: built · partly tested: the Elixir decoder is held to the Rust one by the shared vectors in the shell's ExUnit suite, which no bench case runs · tested: host:cells::good_frames_decode_and_encode_back_to_their_bytes, host:cells::no_control_character_is_ever_a_symbol, host:cells::vectors_are_current
+Status: built · partly tested: the Elixir decoder is held to the Rust one, and the Elixir event encoder to the Rust event decoder, by the shared vectors in the shell's ExUnit suite, which no bench case runs · tested: host:cells::good_frames_decode_and_encode_back_to_their_bytes, host:cells::no_control_character_is_ever_a_symbol, host:cells::vectors_are_current, host:cells::events_are_current
 
 A frame of changed cells, `cells` ([`userland/native/cells`](../../userland/native/cells/src/lib.rs))
 in Rust and `Redoubt.Term.Cells` in Elixir, is everything anything may hand the session to draw: a
@@ -494,6 +496,14 @@ string of at most 32 bytes, one cell's worth as the session lays it out, that ho
 character, a cell cannot fall outside its
 screen or be given twice, and a frame that decodes re-encodes to exactly its bytes; anything else
 is refused, never repaired. One file of vectors holds the two decoders to the same answers.
+
+A native program with a screen and the session exchange **records** on its standard streams: a
+`u32` length, then exactly that many bytes. On its output each record is one frame; on its input
+each is one **event**, its screen's size (each side 1 to 1024) or a key (a symbol under the same
+rule as a cell's, or a named key: Enter, Tab, Backspace, Esc, the arrows, Home, End, Page Up and
+Down, Insert, Delete, F1 to F24) with Shift, Alt and Ctrl. The session writes events, and the
+crate decodes them for programs, as strictly as frames; a second file of vectors, `events.json`,
+holds the two to the same bytes ([a native program's screen](#a-native-programs-screen-and-the-sessions-key)).
 
 ### Full-screen programs
 
@@ -508,15 +518,15 @@ flowchart LR
     APP["screen program: an Erlang process<br/>init, update, view"] -->|"widgets draw"| W["Redoubt.Screen: layout, widgets"]
     W -->|"put, fill, plot"| B["the screen buffer<br/>(beamlet natives)"]
     B -->|"diff: a cells frame"| E["Redoubt.Term's encoder"]
-    NP["a native program with a screen"] -.->|"cells frames on a pipe"| E
+    NP["a native program with a screen"] -->|"cells frames on a pipe, through its host's buffer"| B
     E -->|"escape sequences"| C["/dev/cons"]
     C -->|"raw bytes"| K["the session's key decoder"]
     K -->|"key events"| APP
-    K -.->|"key events"| NP
+    K -->|"key events on a pipe"| NP
 ```
-*Figure: how a full-screen program reaches the terminal. Solid is built; a native program's
-screen is planned (dashed). Only the session's encoder writes to `/dev/cons`; everything else
-hands it cells.*
+*Figure: how a full-screen program reaches the terminal. Only the session's encoder writes to
+`/dev/cons`; everything else hands it cells. A native program's frames are decoded and put into a
+buffer its host holds ([a native program's screen](#a-native-programs-screen-and-the-sessions-key)).*
 
 A full-screen program (the pager, `help`'s pages, `top`, the editor, a `menuconfig`-style form, a
 QBasic-style menu bar and dialogs) is an Erlang process in the session's VM, not a program of its
@@ -600,17 +610,79 @@ What is not built: a `plot(values)` command drawing a series on the canvas.
 
 ### A native program's screen and the session's key
 
-Status: planned · M2 (usable shell)
+<details><summary>Status: built · partly tested: a change of size reaches a native program's screen in the shell's ExUnit suite only (`test/redoubt/screen/native_test.exs`, which `./test-shell` runs on beamlet), since the UART names no size; so do the read and draw bounds; a key per principal is not built · tested (7)</summary>
 
-- **A native program with a screen**, a package's own TUI, sends `cells` frames on its standard
-  output, and the session draws them through the same decoder and encoder. It holds its pipes and
-  its budget, no `/dev/cons`, and a cell cannot carry a control sequence, so a hijacked one can
-  draw wrong cells, or crash and have its budget reclaimed, and nothing more.
+- bench:nscr-interrupt
+- bench:nscr-hostile-text
+- bench:nscr-beyond-cells
+- host:cells::good_events_decode_and_encode_back_to_their_bytes
+- host:cells::bad_events_are_refused_for_their_reason
+- host:cells::a_record_is_its_length_and_its_bytes_and_a_long_one_is_refused_unread
+- host:cells::events_are_current
+
+</details>
+
+A native program with a screen, a package's own TUI, draws by sending `cells` frames on its
+standard output, and reads its keys and its size as events on its standard input. The line asks
+for it: `screen("menu", args)` runs `/boot/menu` as a one-stage pipeline
+([native programs and pipes](#native-programs-and-pipes)), in a budget of its own, with its three
+streams and nothing else; the same program run with `exec` or `pipe` has its output drawn as text
+through the guard. The program never chooses how its output is read. `screen` returns how the
+program ended (`{:exited, code}`, `{:faulted, cause}`), `{:error, {:refused, why}}` when the
+session refused what it sent, or `nil` when the interrupt ended it; the value is drawn like any
+other, through the guard. `Redoubt.Screen.Native.run/3` takes `ctrl_c: :key`, as
+`Redoubt.Screen.run/3` does.
+
+While it runs, one Erlang process, the **host**
+([`Redoubt.Screen.Native`](../../userland/shell/lib/redoubt/screen/native.ex)), is the screen in
+front for the shell's driver, as a screen program's process is, with its line's heap limit:
+- **Records.** Each way, a stream is records: a `u32` length, then exactly that many bytes
+  ([the cell protocol](#the-cell-protocol)). A record on the program's output is one frame, and
+  one longer than a frame of its screen can take is refused before any of it is held: at most
+  10 + 47 bytes a cell (the header, then each cell with the longest symbol), so 90,250 bytes on
+  80 by 24, and a header claiming 4 GiB costs nothing.
+- **Frames.** Each record is decoded by the one decoder a cell at a time, so a whole screen's
+  frame is never held as one term, and refused if the decoder refuses it; a
+  frame of any size but the one the session gave the program is refused, but a frame of a size it
+  gave before the terminal last changed size is dropped, since it was on its way; and a cell must
+  be one cell's worth as the session lays it out: one grapheme, and a wide one not in the last
+  column, or one cell could draw past its neighbours and the screen's edge. Its cells go into a
+  screen buffer the host holds ([beamlet](beamlet.md#screen-natives)), and the driver is handed
+  the buffer's diff at most 30 times a second, decoded again and drawn by the one encoder. A
+  program sending frames faster costs at most 30 drawn a second: the rest are applied to the
+  buffer as they come.
+- **Pace.** The host asks for the program's next 4 KiB of output only once it has decoded what it
+  holds, and for at most 1 MiB a second: until then the program's next write waits, parked at
+  `piped`, its pipe holding one page. So the host holds at most one record's bound and one read
+  however fast the program writes. Decoding is the session's own work, on its VM: under QEMU a
+  whole 80 by 24 frame of 30 KB takes about 0.5 s on either width, so there the decoder, not the
+  1 MiB, holds a flooding program back. The host then takes the share of the VM any busy process
+  takes, and the driver, which ends it, keeps its own (`nscr-interrupt` floods one and ends it).
+  The 1 MiB bounds a machine that decodes faster.
+- **Keys and size.** The program's first event is its size, and it is sent again when the
+  terminal's size changes; each key the driver sends the screen is sent as an event, never the
+  session's key, nor Ctrl+C unless the line gave it (the driver finds both in the bytes read
+  before decoding any key; the event encoder refuses them too, Ctrl+\\ with any modifiers and
+  Ctrl+C unless the screen was given it, and a key's symbol cannot hold a control character).
+  Past 64 KiB of events not yet written into the program's input pipe, keys are dropped, so a
+  paste cannot grow the session; the program may also have the pipe's one page of events
+  written and not yet read.
+- **Its end.** A refusal ends the program at once, its budget destroyed by its pipeline's owner,
+  and the screen with it; nothing of the refused record is drawn. The interrupt, Ctrl+\\ or
+  Ctrl+C, ends the host, which ends the pipeline as an interrupted line's pipelines end; the
+  line waits for its budget to be destroyed, as after an interrupt. When the program exits or
+  faults, the screen ends. Its standard error is kept, 64 KiB, and drawn as the line's own
+  output after the screen, through the guard.
+
+So a hijacked program can draw wrong cells inside its own screen, draw nothing, send frames at
+the pace above, read the keys typed while it is in front, and end or spin in its own budget. It
+holds its pipes and its budget, no `/dev/cons`, and nothing reaches the terminal from it but cells
+of the size it was given: it cannot write a control sequence, place a cell outside its screen,
+take the interrupt, or outlive its screen.
+
 - **A key per principal.** The session's own key, Ctrl+\\
   ([interrupting](#interrupting-and-killing-jobs)), is the same for every session; a principal
   choosing another is planned here and not built.
-
-**Open:** none.
 
 ### Line editing and history
 
