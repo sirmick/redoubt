@@ -683,7 +683,8 @@ at least, `-` for at most, `@` judged only at that many harts and reported at an
 weight as the trace states it (each hart's runner, `H`, carries its weight), less the part of each
 hart's waits for the kernel lock billed to the waiting hart's runner though no thread of it ran
 (a `Q` less its `y`); a lift
-out of the cap set (`u`) is no charge. The part is the marked budget's and what was lifted into
+out of the cap set (`u`, followed by `z` with the floor then, which the lift may not pass) is no
+charge. The part is the marked budget's and what was lifted into
 it, the whole every budget's, and what the budget is owed is its water-filling share of the
 trace's harts (`F`) among the budgets the program names, which on one hart is its weight's share;
 every want is stated in the result. An audit is charged to no budget, so the share is net of the

@@ -99,7 +99,7 @@ context as it saves a thread's.
 
 ### The current minimum and ties
 
-<details><summary>Status: built · partly tested: wakers ahead of requeued budgets, and requeues in order, are checked on the target only when a run happens to produce such a tie; the host tests and the model attack them · tested (18)</summary>
+<details><summary>Status: built · partly tested: wakers ahead of requeued budgets, and requeues in order, are checked on the target only when a run happens to produce such a tie; the host tests and the model attack them · tested (22)</summary>
 
 - bench:sched-ties
 - bench:sched-idle-gap
@@ -114,6 +114,10 @@ context as it saves a thread's.
 - mutation:R12CapOnce
 - mutation:R12AllCappedHoldsFloor
 - mutation:R12UncapBanksCredit
+- mutation:R12UncapForfeitsWait
+- mutation:R12EmptyHoldsFloor
+- mutation:R12RequeueWaitsForCap
+- mutation:R12BlockLeavesAsRequeued
 - mutation:R12WakeBanksCredit
 - mutation:R12NoFloorWhenIdle
 - mutation:R12TieQueuedFirst
@@ -140,15 +144,36 @@ would hold the floor below the budgets that share the other harts, so a waker wo
 behind them and take their harts until it caught up. The cap is found as the shares are: in
 descending weight per runnable thread, a budget is capped if `w x H > k x W` (`H` the harts, `k`
 its runnable threads, waiting or on a hart, `W` the queued budgets' free weight), and the next is
-tested with the capped one's harts and weight taken out. At one hart no budget is ever capped. When
-every queued budget is capped, fewer runnable threads than harts, the floor rises to the highest
-of their passes instead of holding: uncontested time banks for no one, so a budget waking then
-cannot take the others' harts later for time no budget wanted. A budget that stops being capped
-is lifted to `max(own pass, floor)`, as a waker is: it cannot bank what it had no thread to run.
+tested with the capped one's harts and weight taken out. Only a budget capped already, or one every
+thread of which runs on a hart, is tested: a budget with a thread waiting for a hart is not taking
+the harts its weight would give it, so it stays in the floor and its weight in `W`. A budget a
+switch takes off its hart with its own thread requeued (its slice ended or it was preempted)
+counts that thread as running: its own requeue is no wait, but a sibling still waiting after a
+block is. A queued budget
+whose last thread just ended, which the entry's reconcile takes out, counts for neither, unless
+no queued budget has a thread: then the floor rises to the lowest pass, as at one hart. At one
+hart no budget is ever capped. When every queued budget is capped, fewer runnable threads than
+harts, the floor rises to the highest of their passes instead of holding: uncontested time banks
+for no one, so a budget waking then cannot take the others' harts later for time no budget wanted.
+A budget that stops being capped is lifted by what the floor rose while it was capped: it cannot
+bank what it had no thread to run. Its lift target starts at `min(own pass, floor)` when it is
+capped and follows the floor from there, so a lag it had then it keeps, and the target needs no
+hold while a thread of it waits: the capped budgets' threads total at most `H - 1`, so they all
+run at once and a capped thread never waits long enough to be owed, and one lagging below the
+floor outranks every budget that is not capped. Without these limits a carve could cap an equal-weight victim
+while its thread waited behind the carver's two on both harts, and the carve's return lifted it to
+the carver's pass, erasing what it had waited: 82 times in `sched-budget-churn-shell`'s window at
+two harts on rv64, 7.4 ms of its hart time each, and the victim kept 398 of 1000 (568 with them).
+The model's `carve waiter` scenario is that pattern (`R12UncapForfeitsWait`); `heavy capped` has a
+capped budget whose own slice ends fall inside the others' and gain it nothing; contracts hold
+that a budget with no thread raises the floor to no pass of its own (`R12EmptyHoldsFloor`) and that
+a heavy budget is capped by the raise its own slice end makes (`R12RequeueWaitsForCap`), but not by
+a block while its sibling waits (`R12BlockLeavesAsRequeued`).
 With more than one hart online the queue keeps each budget's free weight, its threads no hart runs
-(as the kernel's settle counts them) and its harts beside its slot, counted afresh as a hart comes
-online and kept by no scan at one hart, so every floor raise finds the cap set in one scan, keeping the top `H - 1` by `w / k`, linear in the queue, with no frame read
-but a lifted budget's. A checked kernel audits the set, with the marks' audit, against
+(as the kernel's settle counts them), its harts and the pass a lift would take it to beside its
+slot, counted afresh as a hart comes online and kept by no scan at one hart, so every floor raise
+finds the cap set in one scan, keeping the top `H - 1` by `w / k`, linear in the queue, with no
+frame read but a lifted budget's. A checked kernel audits the set, with the marks' audit, against
 water-filling done its own way over every queued budget.
 
 A pick takes the lowest **rank**, `(pass, tie, id)`. At an equal pass:
@@ -916,7 +941,7 @@ Status: built · tested: bench:sched-carve-inflation, bench:legacy-gone, host:re
 
 ### R12 (scheduling)
 
-<details><summary>Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search, `map_fixed`'s range, `process_create` and, after RAM fills, a one-page `map_anon`, `budget_create` and a rolled-back `process_create` (with a recorded negative run, `alloc-first-fit`); and at full occupancy, every PID in use with every thread, for a delivery, a timer expiry ending 250 waits at once and the reconcile that wakes their 250 budgets (over 8-seed sweeps, 7.8 ms on rv64 and 6.8 to 9.1 ms on rv32, bounded at 10 ms: the sweeps' worst and a tenth) and a destruction (at most 17.1 ms on rv64, 18.2 ms on rv32) (`bench:worst-walk`) · tested (59)</summary>
+<details><summary>Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search, `map_fixed`'s range, `process_create` and, after RAM fills, a one-page `map_anon`, `budget_create` and a rolled-back `process_create` (with a recorded negative run, `alloc-first-fit`); and at full occupancy, every PID in use with every thread, for a delivery, a timer expiry ending 250 waits at once and the reconcile that wakes their 250 budgets (over 8-seed sweeps, 7.8 ms on rv64 and 6.8 to 9.1 ms on rv32, bounded at 10 ms: the sweeps' worst and a tenth) and a destruction (at most 17.1 ms on rv64, 18.2 ms on rv32) (`bench:worst-walk`) · tested (63)</summary>
 
 - bench:sched-share
 - bench:sched-share-release
@@ -975,6 +1000,10 @@ Status: built · tested: bench:sched-carve-inflation, bench:legacy-gone, host:re
 - mutation:R12CapOnce
 - mutation:R12AllCappedHoldsFloor
 - mutation:R12UncapBanksCredit
+- mutation:R12UncapForfeitsWait
+- mutation:R12EmptyHoldsFloor
+- mutation:R12RequeueWaitsForCap
+- mutation:R12BlockLeavesAsRequeued
 - mutation:R12OneRunnerPerBudget
 - mutation:R12SpreadChargesOnce
 
@@ -1046,7 +1075,7 @@ It is attacked three ways:
   scheduler through 3,000 random sequences of creations, destructions (leaf, on a hart, and
   whole subtrees), wakes, blocks, runs and preemptions, at 1, 2 and 4 harts, and requires every
   pass, entry, remainder, tie, queue membership, floor, cap set and pick to agree after every
-  step. A model with any of 26 scheduling rules broken must disagree.
+  step. A model with any of 30 scheduling rules broken must disagree.
 - **The model's mutations**: each `R12*` variant breaks one part, and `scheduler_fairness` (eleven
   scenarios, each with an independent check) or the scheduler contracts must catch it
   ([model](model.md)).

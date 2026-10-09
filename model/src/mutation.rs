@@ -249,6 +249,18 @@ pub enum Mutation {
     R12AllCappedHoldsFloor,
     /// A budget that stops being capped keeps its lagging pass, not lifted to the floor.
     R12UncapBanksCredit,
+    /// A budget with a thread waiting for a hart may be capped, and one that stops being capped is
+    /// lifted to the floor: it forfeits a lag it had when capped, or gained waiting for a hart.
+    R12UncapForfeitsWait,
+    /// On several harts a queued budget whose last thread just ended still counts for the floor,
+    /// though it counts for no weight in the cap set.
+    R12EmptyHoldsFloor,
+    /// A budget's own requeue counts its thread as waiting for a hart, so the floor raises its
+    /// slice end makes cannot newly cap it.
+    R12RequeueWaitsForCap,
+    /// A budget whose thread blocks counts a sibling thread waiting for a hart as running, as if its
+    /// own thread were requeued, so it may be capped while that sibling waits.
+    R12BlockLeavesAsRequeued,
     /// A budget runs on at most one hart at a time (the one-runner predicate before threads of one
     /// process ran on several harts).
     R12OneRunnerPerBudget,
@@ -399,7 +411,7 @@ pub enum Mutation {
 }
 
 impl Mutation {
-    pub const ALL: [Mutation; 161] = {
+    pub const ALL: [Mutation; 165] = {
         use Mutation::*;
         [
             R1SkipLabelCheck,
@@ -503,6 +515,10 @@ impl Mutation {
             R12CapOnce,
             R12AllCappedHoldsFloor,
             R12UncapBanksCredit,
+            R12UncapForfeitsWait,
+            R12EmptyHoldsFloor,
+            R12RequeueWaitsForCap,
+            R12BlockLeavesAsRequeued,
             R12OneRunnerPerBudget,
             R12SpreadChargesOnce,
             MsgNoLabels,
@@ -664,6 +680,10 @@ impl Mutation {
             | R12CapOnce
             | R12AllCappedHoldsFloor
             | R12UncapBanksCredit
+            | R12UncapForfeitsWait
+            | R12EmptyHoldsFloor
+            | R12RequeueWaitsForCap
+            | R12BlockLeavesAsRequeued
             | R12OneRunnerPerBudget
             | R12SpreadChargesOnce => "R12",
             IpcWrongLend | IpcDropPartial | IpcFalseDelivery | IpcSkipOutputCheck | IpcLeakRollback => "R13",

@@ -97,6 +97,9 @@ struct Billing {
     /// waited through ([`audit`]), which the user time it closes leaves out ([`from_user`]).
     #[cfg(debug_assertions)]
     excused: u64,
+    /// The hart's running thread was preempted ([`preempt`]) and stays ready: the switch that takes
+    /// its budget off requeues its own thread, no wait for the cap set; a block is not.
+    preempted: bool,
 }
 
 /// Who kernel time is billed to.
@@ -118,6 +121,7 @@ static SCHED: KernelCell<Sched> = KernelCell::new(Sched {
         irq_audits: None,
         #[cfg(debug_assertions)]
         excused: 0,
+        preempted: false,
     }; MAX_HARTS],
     marks: Marks::new(BudgetRef { frame: 0, id: 0 }),
     online: 1,
@@ -170,7 +174,10 @@ impl Budgets<BudgetRef> for MemoryManager {
     fn reweighed(&mut self, b: BudgetRef, r: &redoubt_stride::Reweigh) { trace::reweigh(b.id, r) }
 
     #[cfg(feature = "sched-trace")]
-    fn uncapped(&mut self, b: BudgetRef, pass: u128) { trace::record(trace::UNCAPPED, b.id, pass) }
+    fn uncapped(&mut self, b: BudgetRef, pass: u128, floor: u128) {
+        trace::record(trace::UNCAPPED, b.id, pass);
+        trace::record(trace::UNCAPPED_FLOOR, b.id, floor);
+    }
 }
 
 impl Ready<BudgetRef> for MemoryManager {
@@ -310,8 +317,10 @@ fn audit_marks(ss: &ProcessTable, mm: &MemoryManager) {
 /// keeps against water-filling over every queued budget, done its own way: every budget not capped
 /// whose `w x H` is more than `k x W` (its threads `k`, waiting or on a hart; `H` the harts and `W`
 /// the weight of the budgets not capped yet) is capped, and its threads and weight leave `H` and
-/// `W`, until none is. The queue's set was found at its last floor raise, after the reconcile that
-/// precedes this audit, with the counts it holds now.
+/// `W`, until none is. Only a budget the queue held capped, or one with no thread waiting for a
+/// hart, may be capped; another keeps its weight in `W`. The queue's set was found at its last
+/// floor raise, after the reconcile that precedes this audit, with the counts it holds now: one it
+/// held capped before that raise and holds still is a budget it holds capped.
 #[cfg(debug_assertions)]
 fn audit_caps(cpu: &Harts<BudgetRef, MAX_PROCESS_COUNT, MAX_HARTS>, mm: &MemoryManager, harts: u32) {
     let threads = |b: BudgetRef| {
@@ -333,7 +342,8 @@ fn audit_caps(cpu: &Harts<BudgetRef, MAX_PROCESS_COUNT, MAX_HARTS>, mm: &MemoryM
                 .sum();
             let mut over = [None; MAX_HARTS];
             let mut m = 0;
-            for b in cpu.q.queued().filter(|b| counted(b) && !is_capped(&capped[..n], *b)) {
+            let may = |b: &BudgetRef| cpu.q.capped().any(|c| c == *b) || mm.ready(*b) == 0;
+            for b in cpu.q.queued().filter(|b| counted(b) && may(b) && !is_capped(&capped[..n], *b)) {
                 if u128::from(mm.weight(b)) * h > threads(b) * w {
                     assert!(n + m < MAX_HARTS, "the cap set: more budgets capped than harts");
                     over[m] = Some(b);
@@ -645,8 +655,9 @@ pub fn leave(pid: Pid) {
                 #[cfg(feature = "walk-trace")]
                 let _walk = trace::walk(trace::RECONCILE);
                 s.settle(ss, mm);
+                let requeued = core::mem::take(&mut s.b().preempted);
                 if next != s.cpu.cur(here()) {
-                    s.cpu.switch(here(), mm, next, |mm, b| mm.ready(b) > 0);
+                    s.cpu.switch(here(), mm, next, requeued, |mm, b| mm.ready(b) > 0);
                     #[cfg(feature = "sched-trace")]
                     trace::record(
                         trace::RUNS,
@@ -844,6 +855,7 @@ pub fn slice_over() -> bool { crate::time::slice_end() <= crate::time::now_us() 
 /// and the CPU goes to `kmain`, which picks again. Its budget is descheduled as the kernel leaves
 /// for `kmain` ([`leave`]).
 pub fn preempt(ss: &mut ProcessTable, tid: TID) {
+    SCHED.with(|s| s.b().preempted = true);
     ss.activate_process_thread(tid, KERNEL_PID, 0, true).expect("the kernel can always run");
 }
 
@@ -926,9 +938,10 @@ pub mod trace {
     /// Just before `C`: the ticks since boot, and the harts started in the pass field, so the
     /// oracle can state the lock waits as a share of the harts' time.
     pub const HART_TIME: u8 = b'F';
-    /// A budget stopped being capped and is lifted to the floor: the pass it is lifted to, ahead of
-    /// the `P` that sets it. The rise is no charge.
+    /// A budget stopped being capped and is lifted: the pass it is lifted to, ahead of the `P` that
+    /// sets it, then `z` with the floor then, which the lift may not pass. The rise is no charge.
     pub const UNCAPPED: u8 = b'u';
+    pub const UNCAPPED_FLOOR: u8 = b'z';
     /// With `lock-trace`, just after a `Q`: the wait's ticket in the id, and the sections ahead of
     /// it when it was drawn in the pass field, so the oracle can check the waits end in ticket order.
     pub const LOCK_TICKET: u8 = b'k';

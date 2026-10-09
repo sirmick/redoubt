@@ -326,10 +326,10 @@ fn two_harts_running() -> (Map, Harts<u64, 4, 2>) {
     let mut harts: Harts<u64, 4, 2> = Harts::new();
     harts.reconcile(&mut bs, &[], &mut [1, 2], |_, b| u32::from(b != 3));
     assert_eq!(harts.pick(&mut bs, |_, b| Some(b)), Some((1, 1)));
-    harts.switch(1, &mut bs, Some(1), |_, _| true);
+    harts.switch(1, &mut bs, Some(1), true, |_, _| true);
     // 1's one thread runs on hart 1: hart 0 is offered nothing of it.
     assert_eq!(harts.pick(&mut bs, |_, b| (b != 1).then_some(b)), Some((2, 2)));
-    harts.switch(0, &mut bs, Some(2), |_, _| true);
+    harts.switch(0, &mut bs, Some(2), true, |_, _| true);
     (bs, harts)
 }
 
@@ -340,7 +340,7 @@ fn a_budget_running_on_another_hart_stays_queued_through_this_harts_reconcile() 
     harts.reconcile(&mut bs, &[1], &mut [], |_, b| u32::from(b == 2));
     assert!(harts.q.contains(1) && bs.state(1).queued);
     // Once no hart runs it, the same reconcile takes it out.
-    harts.switch(1, &mut bs, None, |_, _| false);
+    harts.switch(1, &mut bs, None, false, |_, _| false);
     harts.reconcile(&mut bs, &[1], &mut [], |_, b| u32::from(b == 2));
     assert!(!harts.q.contains(1));
 }
@@ -350,7 +350,7 @@ fn a_pick_passes_over_a_budget_whose_threads_all_run_on_harts() {
     let (mut bs, mut harts) = two_harts_running();
     // Hart 0 leaves 2 and picks again: 1 is lower (it ran nothing), but its one thread runs on
     // hart 1, so 2 is picked and 1 stays queued.
-    harts.switch(0, &mut bs, None, |_, _| true);
+    harts.switch(0, &mut bs, None, true, |_, _| true);
     assert_eq!(harts.pick(&mut bs, |_, b| (b != 1).then_some(b)), Some((2, 2)));
     assert!(harts.q.contains(1) && bs.state(1).queued);
     // With 3 runnable it is still never 1.
@@ -358,12 +358,12 @@ fn a_pick_passes_over_a_budget_whose_threads_all_run_on_harts() {
     for _ in 0..4 {
         let (b, _) = harts.pick(&mut bs, |_, b| (b != 1).then_some(b)).unwrap();
         assert_ne!(b, 1);
-        harts.switch(0, &mut bs, Some(b), |_, _| true);
-        harts.switch(0, &mut bs, None, |_, _| true);
+        harts.switch(0, &mut bs, Some(b), true, |_, _| true);
+        harts.switch(0, &mut bs, None, true, |_, _| true);
     }
     assert!(harts.q.contains(1));
     // Once hart 1 leaves it, its thread can be picked again.
-    harts.switch(1, &mut bs, None, |_, _| true);
+    harts.switch(1, &mut bs, None, true, |_, _| true);
     assert!(harts.pick(&mut bs, |_, b| Some(b)).is_some());
 }
 
@@ -374,9 +374,9 @@ fn a_budget_with_two_runnable_threads_runs_on_two_harts_at_one_pass() {
     harts.reconcile(&mut bs, &[], &mut [1, 2], |_, _| 1);
     // 1 has threads 10 and 11: each hart takes one, 1 ranking lowest both times.
     assert_eq!(harts.pick(&mut bs, |_, b| Some(b * 10)), Some((1, 10)));
-    harts.switch(0, &mut bs, Some(1), |_, _| true);
+    harts.switch(0, &mut bs, Some(1), true, |_, _| true);
     assert_eq!(harts.pick(&mut bs, |_, b| Some(b * 10 + 1)), Some((1, 11)));
-    harts.switch(1, &mut bs, Some(1), |_, _| true);
+    harts.switch(1, &mut bs, Some(1), true, |_, _| true);
     // Queued once, however many harts run it.
     assert_eq!(harts.q.queued().filter(|b| *b == 1).count(), 1);
     // Both runners charge the one pass: a settle folds both.
@@ -389,11 +389,11 @@ fn a_budget_with_two_runnable_threads_runs_on_two_harts_at_one_pass() {
     // Hart 0 leaves with nothing of 1 runnable: 1 stays queued (hart 1 runs it), requeued behind
     // its equals and charged its minimum.
     let (pass, back) = (bs.state(1).pass, harts.q.back);
-    harts.switch(0, &mut bs, None, |_, _| false);
+    harts.switch(0, &mut bs, None, false, |_, _| false);
     assert!(harts.q.contains(1));
     assert_eq!((bs.state(1).pass, bs.state(1).tie), (pass + u128::from(MIN_CHARGE * STRIDE / 10), back + 1));
     // Hart 1 leaves too: now it goes.
-    harts.switch(1, &mut bs, None, |_, _| false);
+    harts.switch(1, &mut bs, None, false, |_, _| false);
     assert!(!harts.q.contains(1));
 }
 
@@ -404,7 +404,7 @@ fn a_switch_on_one_hart_leaves_the_others_runner_alone_and_charges_its_minimum()
     let before = (bs.state(1).pass, bs.state(2).pass);
     // Hart 0 leaves 2 having accrued nothing: MIN_CHARGE for 2 (at the fixture's weight, 10),
     // nothing for 1.
-    harts.switch(0, &mut bs, None, |_, _| true);
+    harts.switch(0, &mut bs, None, true, |_, _| true);
     assert_eq!(bs.state(2).pass, before.1 + u128::from(MIN_CHARGE * STRIDE / 10));
     assert_eq!(bs.state(1).pass, before.0);
     assert_eq!(harts.runners[1], Runner { cur: Some(1), pending: 7 });
@@ -765,7 +765,7 @@ fn a_budget_capped_at_its_threads_is_left_out_of_the_floor() {
     // Each budget's one thread on a hart of its own: 1 on hart 0, 2 on hart 1.
     for (h, b) in [(0, 1), (1, 2)] {
         assert_eq!(harts.pick(&mut bs, |_, x| (x == b).then_some(x)), Some((b, b)));
-        harts.switch(h, &mut bs, Some(b), |_, _| true);
+        harts.switch(h, &mut bs, Some(b), true, |_, _| true);
         harts.set_waiting(b, 0);
     }
     for _ in 0..10 {
@@ -794,16 +794,16 @@ fn a_budget_no_longer_capped_is_lifted_to_the_floor() {
     harts.reconcile(&mut bs, &[], &mut [1, 2, 3], |_, _| 1);
     let (b, _) = harts.pick(&mut bs, |_, b| Some(b)).unwrap();
     assert_eq!(b, 1);
-    harts.switch(0, &mut bs, Some(1), |_, _| true);
+    harts.switch(0, &mut bs, Some(1), true, |_, _| true);
     harts.set_waiting(1, 0);
     for _ in 0..10 {
         harts.accrue(0, 1000);
         harts.settle(&mut bs, 1);
         // 2 and 3 take turns on hart 1; 1's one thread runs on hart 0.
         let (b, _) = harts.pick(&mut bs, |_, b| (b != 1).then_some(b)).unwrap();
-        harts.switch(1, &mut bs, Some(b), |_, _| true);
+        harts.switch(1, &mut bs, Some(b), true, |_, _| true);
         harts.accrue(1, 1000);
-        harts.switch(1, &mut bs, None, |_, _| true);
+        harts.switch(1, &mut bs, None, true, |_, _| true);
     }
     assert_eq!(harts.q.capped().collect::<Vec<_>>(), [1]);
     assert!(bs.state(1).pass < harts.q.floor);
@@ -822,7 +822,7 @@ fn a_hart_coming_online_counts_the_queued_budgets_afresh() {
     let mut harts: Harts<u64, 4, 2> = Harts::new();
     harts.reconcile(&mut bs, &[], &mut [1, 2], |_, _| 1);
     assert_eq!(harts.pick(&mut bs, |_, b| Some(b)), Some((1, 1)));
-    harts.switch(0, &mut bs, Some(1), |_, _| true);
+    harts.switch(0, &mut bs, Some(1), true, |_, _| true);
     // 1's one thread runs on hart 0; 2's waits.
     harts.set_harts(2, |b| u32::from(b == 2), |b| bs.0[&b].1);
     harts.accrue(0, 1000);

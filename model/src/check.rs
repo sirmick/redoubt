@@ -630,7 +630,7 @@ pub fn flood(seed: u64, mutation: Option<Mutation>) -> Result<(), Failure> {
 /// | idempotence | (j) create then destroy with no run moves nothing; (l) a weight change folds first |
 /// | rank | (a) all four rank clauses against an independent oracle; (b) wakes never preempt |
 /// | shell | (k) a parent giving each short command a heavy child keeps its share |
-/// | harts | (m) on several harts each budget gets its water-filling share: late join, second cap, uncap, spread and idle harts ([`smp_scenario`]) |
+/// | harts | (m) on several harts each budget gets its water-filling share: late join, second cap, uncap, carve waiter, heavy capped, spread and idle harts ([`smp_scenario`]) |
 pub fn scheduler_fairness(seed: u64, mutation: Option<Mutation>) -> Result<(), Failure> {
     let fail = |message: String| Failure { family: "scheduler_fairness", seed, message, ops: Vec::new() };
     let mut rng = Rng::new(seed);
@@ -713,10 +713,18 @@ impl Sim {
 
 const ROOT_B: u64 = 1_000_000;
 
-/// (m) The five scenarios of R12 across harts, each at its harts (spread at 2 and at 4).
+/// (m) The seven scenarios of R12 across harts, each at its harts (spread at 2 and at 4).
 fn sched_harts(mutation: Option<Mutation>) -> Sr {
-    let all =
-        [("late join", 2), ("second cap", 3), ("uncap", 2), ("spread", 2), ("spread", 4), ("idle harts", 2)];
+    let all = [
+        ("late join", 2),
+        ("second cap", 3),
+        ("uncap", 2),
+        ("carve waiter", 2),
+        ("heavy capped", 2),
+        ("spread", 2),
+        ("spread", 4),
+        ("idle harts", 2),
+    ];
     for (name, harts) in all {
         smp_scenario(name, harts, mutation)?;
     }
@@ -728,6 +736,14 @@ fn sched_harts(mutation: Option<Mutation>) -> Sr {
 struct Harts {
     s: Scheduler,
     ran: alloc::collections::BTreeMap<u64, u64>,
+    /// A budget that carves this weight to an empty child before each slice and destroys it
+    /// after.
+    carver: Option<(u64, u64)>,
+    /// Ids for the carver's children.
+    next: u64,
+    /// Half-slice steps, each hart's slice ending a half-slice after the one before it, so one
+    /// hart's slice end falls inside the others' slices, as on harts that run apart.
+    stagger: bool,
 }
 
 impl Harts {
@@ -735,7 +751,7 @@ impl Harts {
         let mut s = Scheduler { mutation, ..Scheduler::default() };
         s.set_harts(harts);
         s.add_budget(ROOT_B, None, 1 << 31);
-        Harts { s, ran: alloc::collections::BTreeMap::new() }
+        Harts { s, ran: alloc::collections::BTreeMap::new(), carver: None, next: 1 << 20, stagger: false }
     }
 
     /// A budget of weight `weight` with `threads` runnable threads.
@@ -752,20 +768,36 @@ impl Harts {
         self.s.reconcile();
     }
 
-    /// `n` slices on every hart.
+    /// `n` slices on every hart; a carver carves before each step and destroys the child after.
     fn run(&mut self, n: u64) {
-        for _ in 0..n {
+        let (steps, step) = if self.stagger { (2 * n, SLICE / 2) } else { (n, SLICE) };
+        let fresh = self.ran.is_empty();
+        for i in 0..steps {
+            let child = self.next;
+            if let Some((b, w)) = self.carver {
+                self.next += 1;
+                self.s.add_budget(child, Some(b), w);
+                self.s.reconcile();
+            }
             for h in 0..self.s.harts() {
-                self.s.pick_on(h);
+                // Staggered, hart h first picks h half-slices in.
+                if !(self.stagger && fresh && (i as usize) < h) {
+                    self.s.pick_on(h);
+                }
             }
             for h in 0..self.s.harts() {
                 if let Some(c) = self.s.on(h) {
-                    self.s.run_on(h, SLICE);
-                    *self.ran.entry(c.budget).or_default() += SLICE;
+                    let r = step.min(c.slice_left);
+                    self.s.run_on(h, r);
+                    *self.ran.entry(c.budget).or_default() += r;
                 }
             }
             for h in 0..self.s.harts() {
                 self.s.slice_end_on(h);
+            }
+            if self.carver.is_some() {
+                self.s.return_carve(child);
+                self.s.destroy_budget(child);
             }
             self.s.reconcile();
         }
@@ -817,6 +849,27 @@ pub fn smp_scenario(
             m.budget(1, 100, 4);
             m.budget(2, 100, 1);
             if harts >= 4 { alloc::vec![(1, 3000), (2, 1000)] } else { alloc::vec![(1, 1000), (2, 1000)] }
+        }
+        // A (100, 1) beside B (100, 2), which before each half-slice carves half its weight to an
+        // empty child and takes it back after: while B is carved its weight would cap A, which
+        // often waits for a hart while B's two threads hold both, and is owed what it waited.
+        "carve waiter" => {
+            m.budget(1, 100, 1);
+            m.budget(2, 100, 2);
+            (m.carver, m.stagger) = (Some((2, 50)), true);
+            m.run(lead);
+            alloc::vec![(1, 1000), (2, 1000)]
+        }
+        // A (900, 1) beside B and C (100, 1 each), the harts' slices apart: A is capped, its own
+        // slice ends inside B's and C's, and it gains nothing by them (no lift), while B and C
+        // share the other hart.
+        "heavy capped" => {
+            m.budget(1, 900, 1);
+            m.budget(2, 100, 1);
+            m.budget(3, 100, 1);
+            m.stagger = true;
+            m.run(lead);
+            alloc::vec![(1, 1000), (2, 500), (3, 500)]
         }
         // A (100, 1) runs alone on two harts, then B (100, 1) wakes and runs beside it, then C
         // (100, 1) wakes: three budgets on two harts, two thirds of a hart each.

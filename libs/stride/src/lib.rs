@@ -15,7 +15,9 @@
 //!   the queue is empty. A waking budget's pass is `max(own, floor)`. On several harts the minimum leaves out
 //!   a **capped** budget, one whose weight's share of the harts is more than its runnable threads
 //!   ([`Queue::set_harts`]), and with every queued budget capped it is their maximum, so uncontested time
-//!   banks for no one; a budget that stops being capped is lifted to `max(own, floor)`.
+//!   banks for no one; a budget with no thread left counts for neither. Only a budget capped already, or one
+//!   every thread of which runs on a hart (its own requeue counting as running), becomes capped; one that
+//!   stops being capped is lifted by what the floor rose while it was capped, and keeps a lag it had before.
 //! - **Rank** ([`Rank`]): `(pass, tie, id)`. Wakes take `front -= 1` (same-reconcile wakes processed in
 //!   descending id, so the lowest id is frontmost), every deschedule of a still-runnable budget takes `back
 //!   += 1`; both reset when the queue empties. So at an equal pass: wakers before requeued budgets; a later
@@ -181,9 +183,10 @@ pub trait Budgets<B> {
     /// `b`'s weight changed and its state was converted (called before its new state is set, so
     /// the conversion is recorded ahead of the pass it may lower).
     fn reweighed(&mut self, _b: B, _r: &Reweigh) {}
-    /// `b` stopped being capped and is lifted to `pass`, the floor (called before its new state
-    /// is set, so the lift is recorded ahead of the pass it sets, and is not read as a charge).
-    fn uncapped(&mut self, _b: B, _pass: u128) {}
+    /// `b` stopped being capped and is lifted to `pass`, at most `floor` (called before its new
+    /// state is set, so the lift is recorded ahead of the pass it sets, and is not read as a
+    /// charge).
+    fn uncapped(&mut self, _b: B, _pass: u128, _floor: u128) {}
 }
 
 /// The queue: every budget with a runnable thread (or running on a hart), at most `N` of them,
@@ -209,6 +212,14 @@ pub struct Queue<B, const N: usize> {
     waiting: [u32; N],
     running: [u32; N],
     capped: [bool; N],
+    /// Beside each slot, where the budget is lifted if it stops being capped: the floor while it
+    /// is not capped, and from there it rises with the floor at every raise after the one that
+    /// capped it, so the lift takes back only that rise, never a lag it had first ([`Self::cap`]).
+    lift_to: [u128; N],
+    /// The budget a switch is taking off its hart with its own thread requeued (its slice ended or
+    /// it was preempted, not blocked or ended), while the floor raises its charge and deschedule
+    /// make: that thread counts as running for whether it may be capped ([`Self::cap`]).
+    leaving: Option<B>,
     /// The harts online: 1 caps nothing.
     harts: u32,
     len: usize,
@@ -235,6 +246,8 @@ impl<B: Copy + PartialEq, const N: usize> Queue<B, N> {
             waiting: [0; N],
             running: [0; N],
             capped: [false; N],
+            lift_to: [0; N],
+            leaving: None,
             harts: 1,
             len: 0,
             pending: false,
@@ -265,6 +278,7 @@ impl<B: Copy + PartialEq, const N: usize> Queue<B, N> {
         self.slots[i] = Some(b);
         self.ranks[i] = Rank { pass: 0, tie: 0, id };
         (self.weights[i], self.waiting[i], self.running[i], self.capped[i]) = (weight, 0, 0, false);
+        self.lift_to[i] = self.floor;
         self.len += 1;
         Some(i)
     }
@@ -282,6 +296,7 @@ impl<B: Copy + PartialEq, const N: usize> Queue<B, N> {
         self.waiting[i] = self.waiting[self.len];
         self.running[i] = self.running[self.len];
         self.capped[i] = self.capped[self.len];
+        self.lift_to[i] = self.lift_to[self.len];
         self.slots[self.len] = None;
     }
 
@@ -301,32 +316,66 @@ impl<B: Copy + PartialEq, const N: usize> Queue<B, N> {
     /// since it was last raised. It never falls. A slice end at which no budget at the floor left
     /// or was charged compares nothing. On several harts the cap set is found first ([`Self::cap`]),
     /// every time, and the minimum leaves the capped out; with every queued budget capped, the floor
-    /// rises to the highest pass.
+    /// rises to the highest pass. A budget with no thread at all (its last one just ended, the
+    /// reconcile that takes it out still to come) counts for neither, as it counts for no weight in
+    /// the cap set, unless no queued budget has a thread: then the floor rises to the lowest pass,
+    /// as at one hart. Each budget's lift target then follows the floor (`lift_to`).
     fn raise_floor(&mut self, bs: &mut impl Budgets<B>) {
-        if self.harts > 1 {
-            self.cap(bs);
+        let was = if self.harts > 1 {
+            Some(self.cap(bs))
         } else if !self.pending {
             return;
-        }
+        } else {
+            None
+        };
         self.pending = false;
-        let capped = &self.capped[..self.len];
-        let ranks = &self.ranks[..self.len];
-        let counts = |c: &bool| !*c || cfg!(feature = "capped-holds-floor");
-        if let Some(min) = ranks.iter().zip(capped).filter(|(_, c)| counts(c)).map(|(r, _)| r.pass).min() {
+        let before = self.floor;
+        if let Some(min) = (0..self.len).filter(|i| self.holds_floor(*i)).map(|i| self.ranks[i].pass).min() {
             self.floor = self.floor.max(min);
-        } else if let Some(max) = ranks.iter().map(|r| r.pass).max() {
+        } else if let Some(max) =
+            (0..self.len).filter(|i| self.has_thread(*i)).map(|i| self.ranks[i].pass).max()
+        {
             // Every queued budget capped: the highest of them, so uncontested time banks for no one.
             self.floor = self.floor.max(max);
+        } else if let Some(min) = self.ranks[..self.len].iter().map(|r| r.pass).min() {
+            // Only budgets whose last thread ended, about to leave: the lowest, as at one hart.
+            self.floor = self.floor.max(min);
         }
+        if let Some(was) = was {
+            let rise = self.floor - before;
+            for i in 0..self.len {
+                if !self.capped[i] {
+                    self.lift_to[i] = self.floor.min(self.ranks[i].pass);
+                } else if was[i] {
+                    // Capped since before this raise: the floor's rise is no lag it is owed. One
+                    // capped by this raise keeps what it lagged before it.
+                    self.lift_to[i] += rise;
+                }
+            }
+        }
+    }
+
+    /// Whether the budget at `slots[i]` has a thread, waiting or on a hart: at one hart, which
+    /// keeps no counts, every queued budget does.
+    fn has_thread(&self, i: usize) -> bool { self.harts == 1 || self.waiting[i] + self.running[i] > 0 }
+
+    /// Whether the budget at `slots[i]` counts for the floor's minimum: it has a thread and is not
+    /// capped.
+    fn holds_floor(&self, i: usize) -> bool {
+        self.has_thread(i) && (!self.capped[i] || cfg!(feature = "capped-holds-floor"))
     }
 
     /// The cap set across harts (`kernel/scheduling.md`, "The current minimum and ties"): in
     /// descending weight per runnable thread `w / k`, a budget is capped if `w x H > k x W` (`H` the
     /// harts left, `W` the weight of the queued budgets not capped yet), and its threads and weight
-    /// leave `H` and `W` before the next is tested; the first that is not capped ends it. At most
+    /// leave `H` and `W` before the next is tested; the first that is not capped ends it. Only a
+    /// budget capped already, or one every thread of which runs on a hart, is tested: one with a
+    /// thread waiting for a hart is not taking the harts its weight would give it, so it stays in
+    /// the floor (its weight stays in `W`); a thread its own switch requeues counts as running. At most
     /// `H - 1` can be capped, so one scan keeps the top `H - 1` by `w / k`. A budget that stops being
-    /// capped is lifted to `max(own pass, floor)`, as a waker is.
-    fn cap(&mut self, bs: &mut impl Budgets<B>) {
+    /// capped is lifted to `max(own pass, lift_to)`: by what the floor rose while it was capped, never by
+    /// a lag it had before. Returns who was capped before.
+    fn cap(&mut self, bs: &mut impl Budgets<B>) -> [bool; N] {
         // The candidates, by slot: at most `MAX_CAPPED`, harts less one.
         let mut top = [usize::MAX; MAX_CAPPED];
         let n = (self.harts as usize - 1).min(MAX_CAPPED);
@@ -338,6 +387,10 @@ impl<B: Copy + PartialEq, const N: usize> Queue<B, N> {
                 continue;
             }
             weight += w;
+            let leaving = u32::from(self.leaving.is_some() && self.slots[i] == self.leaving);
+            if !self.capped[i] && self.waiting[i] > leaving {
+                continue;
+            }
             // Insert into the descending list by w / k, compared as w x k' against w' x k.
             let mut at = n;
             while at > 0
@@ -366,15 +419,16 @@ impl<B: Copy + PartialEq, const N: usize> Queue<B, N> {
             weight -= w;
         }
         for i in 0..self.len {
-            if was[i] && !self.capped[i] && self.ranks[i].pass < self.floor {
+            if was[i] && !self.capped[i] && self.has_thread(i) && self.ranks[i].pass < self.lift_to[i] {
                 let b = self.slots[i].expect("a queued slot");
                 let mut s = bs.state(b);
-                s.pass = self.floor;
-                bs.uncapped(b, s.pass);
+                s.pass = self.lift_to[i];
+                bs.uncapped(b, s.pass, self.floor);
                 bs.set_state(b, s);
                 self.ranks[i].pass = s.pass;
             }
         }
+        was
     }
 
     /// `b`'s stride weight for the cap set: none read at one hart, which keeps no counts.
@@ -404,9 +458,15 @@ impl<B: Copy + PartialEq, const N: usize> Queue<B, N> {
             return;
         }
         if let Some(i) = self.slot_of(b) {
+            let had = self.has_thread(i);
             self.waiting[i] = n;
+            self.recounted(i, had);
         }
     }
+
+    /// The budget at `slots[i]` had a thread (`had`) before its counts changed: if that changed, it
+    /// joins or leaves those the floor counts, and the floor is raised at the end of the operation.
+    fn recounted(&mut self, i: usize, had: bool) { self.pending |= had != self.has_thread(i); }
 
     /// One more hart runs `b` (`more`), or one fewer.
     fn ran_by(&mut self, b: B, more: bool) {
@@ -414,7 +474,9 @@ impl<B: Copy + PartialEq, const N: usize> Queue<B, N> {
             return;
         }
         if let Some(i) = self.slot_of(b) {
+            let had = self.has_thread(i);
             self.running[i] = if more { self.running[i] + 1 } else { self.running[i].saturating_sub(1) };
+            self.recounted(i, had);
         }
     }
 
@@ -594,10 +656,9 @@ impl<B: Copy + PartialEq, const N: usize> Queue<B, N> {
             if !s.queued || (s.pass, s.tie, bs.id(b)) != (r.pass, r.tie, r.id) {
                 return Err(b);
             }
-            // `capped-holds-floor` breaks the rule here as well, so its kernel passes its own audit
-            // and only the bench's shares can see it.
-            let counts = !self.capped[i] || cfg!(feature = "capped-holds-floor");
-            if counts && min.map_or(true, |(p, _)| r.pass < p) {
+            // `capped-holds-floor` breaks the rule here as well (`holds_floor`), so its kernel
+            // passes its own audit and only the bench's shares can see it.
+            if self.holds_floor(i) && min.map_or(true, |(p, _)| r.pass < p) {
                 min = Some((r.pass, b));
             }
         }
@@ -712,6 +773,7 @@ impl<B: Copy + PartialEq, const N: usize> Wiring<'_, B, N> {
         h: usize,
         bs: &mut S,
         next: Option<B>,
+        requeued: bool,
         still_runnable: impl FnOnce(&S, B) -> bool,
     ) -> Option<B> {
         let r = &mut self.runners[h];
@@ -720,18 +782,25 @@ impl<B: Copy + PartialEq, const N: usize> Wiring<'_, B, N> {
         }
         let left = r.cur.take();
         let run = core::mem::take(&mut r.pending).max(MIN_CHARGE);
-        r.cur = next;
-        if let Some(n) = next {
-            self.q.ran_by(n, true);
-        }
+        // Off this hart before its charge, as the settle counted its threads: one still runnable is
+        // waiting, one that ended is gone. `next` runs once the deschedule is done, so the floor
+        // raises it makes count `next`'s thread once, as waiting.
         if let Some(c) = left {
             self.q.ran_by(c, false);
         }
         if let Some(c) = left.filter(|c| bs.live(*c)) {
+            // Its own requeue is no wait for a hart: it may be capped as it leaves. A block is no
+            // requeue, and a sibling thread waiting then is a wait.
+            self.q.leaving = Some(c).filter(|_| requeued);
             self.q.fold(bs, c, run);
             // A budget another hart still runs stays queued, requeued behind its equals.
             let still = self.runner_of(c).is_some() || still_runnable(bs, c);
             self.q.deschedule(bs, c, still);
+            self.q.leaving = None;
+        }
+        self.runners[h].cur = next;
+        if let Some(n) = next {
+            self.q.ran_by(n, true);
         }
         left
     }
@@ -852,7 +921,7 @@ impl<B: Copy + PartialEq, const N: usize> Cpu<B, N> {
         next: Option<B>,
         still_runnable: impl FnOnce(&S, B) -> bool,
     ) -> Option<B> {
-        self.wired(|w| w.switch(0, bs, next, still_runnable))
+        self.wired(|w| w.switch(0, bs, next, false, still_runnable))
     }
 
     /// The end of a kernel entry: [`Queue::reconcile`] with `cur` running.
@@ -937,14 +1006,17 @@ impl<B: Copy + PartialEq, const N: usize, const H: usize> Harts<B, N, H> {
     }
 
     /// Hart `h` goes to `next`: [`Cpu::switch`] on its runner. Other harts' runners are untouched.
+    /// `requeued`: the runner's own thread is still runnable (its slice ended or it was
+    /// preempted), so it is no wait for the cap set as its budget leaves.
     pub fn switch<S: Budgets<B>>(
         &mut self,
         h: usize,
         bs: &mut S,
         next: Option<B>,
+        requeued: bool,
         still_runnable: impl FnOnce(&S, B) -> bool,
     ) -> Option<B> {
-        self.wiring().switch(h, bs, next, still_runnable)
+        self.wiring().switch(h, bs, next, requeued, still_runnable)
     }
 
     /// The end of a kernel entry: [`Queue::reconcile_counted`] with every hart's `cur` running;
@@ -969,6 +1041,7 @@ impl<B: Copy + PartialEq, const N: usize, const H: usize> Harts<B, N, H> {
             self.q.waiting[i] = waiting(b);
             self.q.running[i] = self.runners.iter().filter(|r| r.cur == Some(b)).count() as u32;
             self.q.weights[i] = weight(b);
+            self.q.lift_to[i] = self.q.floor;
         }
     }
 

@@ -97,8 +97,9 @@
 //!
 //! **Several harts.** Each budget's threads waiting for a hart (`J`, the count in the pass field:
 //! those no hart runs) and each hart's runner (`H`, the budget it runs, 0 for none, and its weight)
-//! are recorded, and so is a budget lifted to the floor as it stops being capped (`u`, the pass it
-//! is lifted to, ahead of the `P` that sets it), so no share reads the lift as a charge. A pick
+//! are recorded, and so is a budget lifted as it stops being capped (`u`, the pass it is lifted to,
+//! at most the floor, ahead of the `P` that sets it, then `z` with the floor), so no share reads
+//! the lift as a charge. A pick
 //! takes the first budget in rank order with a thread waiting (a budget with no `J` yet counts as
 //! having one); it may pass over a budget ranked ahead only if another hart runs it and none of
 //! its threads waits. Each wait for the kernel lock from user mode, another hart holding it, is a
@@ -161,7 +162,7 @@ pub fn parse(log: &str) -> Result<Vec<Record>, String> {
             return Err(bad());
         }
         let kind = f[2].chars().next().ok_or_else(bad)?;
-        if f[2].len() != 1 || !"WRDPKLlefrqwAaGgvNnXYZUVTtIBEOMmCSJHQFukxchjy".contains(kind) {
+        if f[2].len() != 1 || !"WRDPKLlefrqwAaGgvNnXYZUVTtIBEOMmCSJHQFukzxchjy".contains(kind) {
             return Err(bad());
         }
         records.push(Record {
@@ -267,7 +268,7 @@ fn check_reweigh(records: &[Record]) -> Result<(usize, u128), String> {
 #[derive(Debug, Default)]
 pub struct Summary {
     pub picks: usize,
-    /// Budgets lifted to the floor as they stopped being capped (`u`).
+    /// Budgets lifted, at most to the floor, as they stopped being capped (`u`).
     pub uncaps: usize,
     pub lifts: usize,
     /// Weight changes recomputed.
@@ -656,8 +657,25 @@ pub fn check(records: &[Record]) -> Result<Summary, String> {
                         r.seq, r.id
                     ));
                 }
+                // Its `z`: the kernel's floor, which a lift out of the cap set never passes.
+                let Some(floor) =
+                    records.get(i).filter(|z| z.kind == 'z' && z.id == r.id && z.hart == r.hart)
+                else {
+                    return Err(format!(
+                        "record {}: budget {}'s lift out of the cap set states no floor",
+                        r.seq, r.id
+                    ));
+                };
+                if r.pass > floor.pass {
+                    return Err(format!(
+                        "record {}: budget {} lifted out of the cap set to {:#x}, above the floor {:#x}",
+                        r.seq, r.id, r.pass, floor.pass
+                    ));
+                }
+                i += 1;
                 sum.uncaps += 1;
             }
+            'z' => return Err(format!("record {}: a lift's floor after no lift", r.seq)),
             'H' => {
                 if r.id == 0 {
                     runs.remove(&r.hart);
@@ -2263,7 +2281,7 @@ fn charges(
         // whether the budget is out of the queue after it).
         let passes = match r.kind {
             'W' => vec![(r.id, r.pass, false, false)],
-            // Out of the cap set, lifted to the floor ahead of the `P` that sets it: no charge.
+            // Out of the cap set, lifted at most to the floor ahead of the `P` that sets it: no charge.
             'u' => vec![(r.id, r.pass, false, out_of_queue)],
             'D' => vec![(r.id, r.pass, true, true)],
             'K' | 'R' => vec![(r.id, r.pass, true, false)],
@@ -3099,7 +3117,7 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
         )
     });
     let head = format!(
-        "sched_oracle: {} records, {} picks in rank order, every wake at or above the floor, no pass falling but by a weight change; {} passing over a budget whose threads all ran on other harts; {} lifted to the floor leaving the cap set; {} lifts by the rule ({} with a leading parent and work to move); {} weight changes by the rule; R10 {n} destructions over up to {} object frames, µs p50/p99/max {p50}/{p99}/{max}, their threads' ending {t50}/{t99}/{tmax}, no audit inside one; {} audits, {audit_total} µs; {} timer interrupts billed by the rule ({} expiring, {} finding a wait ended early, {} ticks after expiry to the budget billed last; {} ending a slice, {} nobody's); {} device interrupts from user mode billed by the rule ({} claiming nothing){kernel_time}{lease_end}",
+        "sched_oracle: {} records, {} picks in rank order, every wake at or above the floor, no pass falling but by a weight change; {} passing over a budget whose threads all ran on other harts; {} lifted out of the cap set, at most to the floor; {} lifts by the rule ({} with a leading parent and work to move); {} weight changes by the rule; R10 {n} destructions over up to {} object frames, µs p50/p99/max {p50}/{p99}/{max}, their threads' ending {t50}/{t99}/{tmax}, no audit inside one; {} audits, {audit_total} µs; {} timer interrupts billed by the rule ({} expiring, {} finding a wait ended early, {} ticks after expiry to the budget billed last; {} ending a slice, {} nobody's); {} device interrupts from user mode billed by the rule ({} claiming nothing){kernel_time}{lease_end}",
         records.len(),
         sum.picks,
         sum.passed_over,
@@ -5039,7 +5057,7 @@ mod tests {
             queue.insert(b, (after, (1, i128::from(n as u32))));
             if let Some((_, l, rise)) = lift.filter(|l| l.0 == n) {
                 let pass = queue[&l].0 + rise;
-                t.extend([(e, 'u', l, pass), (e, 'P', l, pass)]);
+                t.extend([(e, 'u', l, pass), (e, 'z', l, pass), (e, 'P', l, pass)]);
                 queue.get_mut(&l).unwrap().0 = pass;
             }
             now += 10;
@@ -5139,9 +5157,28 @@ mod tests {
         let (t, end) = round_robin(&[(44, 100), (9, 300)], 40, true, Some((20, 9, 1 << 40)));
         let lifted = run(&(on_harts(&t, &[], 1) + &format!("HART-SHARE v 100 {end} 30 2 300\n")), "");
         assert!(
-            lifted.as_ref().is_err_and(|e| e.contains("1 lifted to the floor leaving the cap set")
+            lifted.as_ref().is_err_and(|e| e.contains("1 lifted out of the cap set, at most to the floor")
                 && e.contains("budget 44 23000 ticks of 38999,")),
             "{lifted:?}"
+        );
+        // The lift states the floor (`z`) and never passes it: with the floor below the lift, or
+        // with no floor, the check fails.
+        let at = t.iter().position(|r| r.1 == 'z').expect("the lift's floor");
+        let mut above = t.clone();
+        above[at].3 -= 1;
+        let above = run(&(on_harts(&above, &[], 1) + &format!("HART-SHARE v 100 {end} 30 2 300\n")), "");
+        assert!(
+            above
+                .as_ref()
+                .is_err_and(|e| e.contains("lifted out of the cap set to") && e.contains("above the floor")),
+            "{above:?}"
+        );
+        let mut none = t.clone();
+        none.remove(at);
+        let none = run(&(on_harts(&none, &[], 1) + &format!("HART-SHARE v 100 {end} 30 2 300\n")), "");
+        assert!(
+            none.as_ref().is_err_and(|e| e.contains("lift out of the cap set states no floor")),
+            "{none:?}"
         );
         // A budget charged whose weight the trace does not state fails the check.
         let (t, end) = round_robin(&[(44, 100), (9, 300)], 40, false, None);
