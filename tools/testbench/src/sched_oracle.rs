@@ -161,7 +161,7 @@ pub fn parse(log: &str) -> Result<Vec<Record>, String> {
             return Err(bad());
         }
         let kind = f[2].chars().next().ok_or_else(bad)?;
-        if f[2].len() != 1 || !"WRDPKLlefrqwAaGgvNnXYZUVTtIBEOMmCSJHQFuk".contains(kind) {
+        if f[2].len() != 1 || !"WRDPKLlefrqwAaGgvNnXYZUVTtIBEOMmCSJHQFukxc".contains(kind) {
             return Err(bad());
         }
         records.push(Record {
@@ -296,6 +296,10 @@ pub struct Summary {
     pub timer_empty: Vec<u64>,
     /// When each timer interrupt that found another budget's wait ended early came, µs.
     pub timer_stale_foreign: Vec<u64>,
+    /// Device interrupts from user mode checked, and those that claimed nothing (another hart
+    /// claimed the source first).
+    pub external_entries: usize,
+    pub external_empty: usize,
     /// Each walk's span, µs (`M` to `m`, a `walk-trace` kernel's): a receive's pump, a timer
     /// interrupt's expiry and a reconcile, in trace order.
     pub walks: [Vec<(u64, u64)>; 3],
@@ -315,9 +319,11 @@ pub struct Summary {
     pub hart_time: Option<(u64, u64)>,
 }
 
-/// A timer interrupt from user mode, from its `I` to its `O`.
+/// A timer interrupt from user mode, from its `I` to its `O`; or a device interrupt, from its `x`.
 struct TimerEntry {
     seq: u64,
+    /// A device interrupt's: its claim (`c`), the source or 0, once made.
+    external: Option<Option<u64>>,
     /// The budget it interrupted.
     interrupted: Option<u64>,
     /// When it came, µs.
@@ -381,6 +387,39 @@ fn check_timer_entry(e: &TimerEntry, to_user: bool, sum: &mut Summary) -> Result
         }
     }
     Ok(())
+}
+
+/// Judge a device interrupt from user mode at its return: one that claimed nothing is billed as a
+/// timer interrupt that ends no slice, its expiry's last budget's after its expiry or nobody's,
+/// never the interrupted budget's for the claim (kernel/scheduling.md, "Charging"). One that
+/// claimed a source is counted: its handling is its device's owner's, which the trace does not
+/// name.
+fn check_external_entry(e: &TimerEntry, claim: Option<u64>, sum: &mut Summary) -> Result<(), String> {
+    sum.external_entries += 1;
+    match claim {
+        None => Err(format!("record {}: a device interrupt returned without its claim", e.seq)),
+        Some(irq) if irq != 0 => Ok(()),
+        Some(_) => {
+            sum.external_empty += 1;
+            // As a timer interrupt's: an expired item's own bills come before its expiry's end.
+            let last = e.expired.and_then(|(last, what)| (what != 0).then_some((last, what)));
+            for &(payer, ticks, after) in e.charges.iter().filter(|c| c.1 > 0) {
+                if last.is_some_and(|(_, what)| what == 1 && !after) {
+                    continue;
+                }
+                if last.map(|l| l.0) != Some(payer) {
+                    return Err(format!(
+                        "record {}: a device interrupt that claimed nothing charged {ticks} ticks to budget {payer} \
+                         (it interrupted {:?}, its expiry billed {:?} last)",
+                        e.seq,
+                        e.interrupted,
+                        last.map(|l| l.0)
+                    ));
+                }
+            }
+            Ok(())
+        }
+    }
 }
 
 /// Check every pick in `records` against the four clauses, the floor and every pass's
@@ -502,12 +541,35 @@ pub fn check(records: &[Record]) -> Result<Summary, String> {
                 let interrupted = (r.id != 0).then_some(r.id);
                 open_timer = Some(TimerEntry {
                     seq: r.seq,
+                    external: None,
                     interrupted,
                     at: r.pass as u64,
                     expired: None,
                     charges: Vec::new(),
                 });
             }
+            'x' => {
+                if open_timer.is_some() {
+                    return Err(format!("record {}: a device interrupt began inside another", r.seq));
+                }
+                open_timer = Some(TimerEntry {
+                    seq: r.seq,
+                    external: Some(None),
+                    interrupted: (r.id != 0).then_some(r.id),
+                    at: r.pass as u64,
+                    expired: None,
+                    charges: Vec::new(),
+                });
+            }
+            'c' => match open_timer.as_mut().and_then(|e| e.external.as_mut()) {
+                Some(claim @ None) => *claim = Some(r.id),
+                _ => {
+                    return Err(format!(
+                        "record {}: a claim outside a device interrupt, or its second",
+                        r.seq
+                    ));
+                }
+            },
             'B' | 'E' | 'O' if open_timer.is_none() => {
                 return Err(format!("record {}: a timer interrupt's record outside one", r.seq));
             }
@@ -523,7 +585,10 @@ pub fn check(records: &[Record]) -> Result<Summary, String> {
             }
             'O' => {
                 let e = open_timer.take().expect("checked above");
-                check_timer_entry(&e, r.pass != 0, &mut sum)?;
+                match e.external {
+                    Some(claim) => check_external_entry(&e, claim, &mut sum)?,
+                    None => check_timer_entry(&e, r.pass != 0, &mut sum)?,
+                }
             }
             'L' => {
                 let (used, tells) = check_lift(&records[i - 1..])?;
@@ -684,7 +749,7 @@ fn check_wake_no_preempt(records: &[Record], expected: usize) -> Result<String, 
     let mut begin = BTreeMap::new();
     for (i, r) in records.iter().enumerate() {
         match r.kind {
-            'I' => {
+            'I' | 'x' => {
                 if begin.insert(r.hart, i).is_some() {
                     return Err(format!("record {}: nested timer interval", r.seq));
                 }
@@ -693,7 +758,10 @@ fn check_wake_no_preempt(records: &[Record], expected: usize) -> Result<String, 
                 let b = begin
                     .remove(&r.hart)
                     .ok_or_else(|| format!("record {}: unmatched timer return", r.seq))?;
-                intervals.entry(r.hart).or_default().push((b, i));
+                // A device interrupt's interval proves nothing about the timer's.
+                if records[b].kind == 'I' {
+                    intervals.entry(r.hart).or_default().push((b, i));
+                }
             }
             _ => {}
         }
@@ -2849,7 +2917,7 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
         )
     });
     let head = format!(
-        "sched_oracle: {} records, {} picks in rank order, every wake at or above the floor, no pass falling but by a weight change; {} passing over a budget whose threads all ran on other harts; {} lifted to the floor leaving the cap set; {} lifts by the rule ({} with a leading parent and work to move); {} weight changes by the rule; R10 {n} destructions over up to {} object frames, µs p50/p99/max {p50}/{p99}/{max}, their threads' ending {t50}/{t99}/{tmax}, no audit inside one; {} audits, {audit_total} µs; {} timer interrupts billed by the rule ({} expiring, {} finding a wait ended early, {} ticks after expiry to the budget billed last; {} ending a slice, {} nobody's){kernel_time}{lease_end}",
+        "sched_oracle: {} records, {} picks in rank order, every wake at or above the floor, no pass falling but by a weight change; {} passing over a budget whose threads all ran on other harts; {} lifted to the floor leaving the cap set; {} lifts by the rule ({} with a leading parent and work to move); {} weight changes by the rule; R10 {n} destructions over up to {} object frames, µs p50/p99/max {p50}/{p99}/{max}, their threads' ending {t50}/{t99}/{tmax}, no audit inside one; {} audits, {audit_total} µs; {} timer interrupts billed by the rule ({} expiring, {} finding a wait ended early, {} ticks after expiry to the budget billed last; {} ending a slice, {} nobody's); {} device interrupts from user mode billed by the rule ({} claiming nothing){kernel_time}{lease_end}",
         records.len(),
         sum.picks,
         sum.passed_over,
@@ -2864,7 +2932,9 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
         sum.timer_stale,
         sum.timer_tail_ticks,
         sum.timer_slice_ends,
-        sum.timer_empty.len()
+        sum.timer_empty.len(),
+        sum.external_entries,
+        sum.external_empty
     );
     let mut report = Vec::new();
     if let Some(proof) = wake_proof {
@@ -4855,6 +4925,63 @@ mod tests {
             assert!(v.as_ref().is_err_and(|e| e.contains("audit")), "{what}: {v:?}");
         }
         assert!(verdict(&[vec![(1, 'U', 1, 130), (1, 'V', 1, 154)], pick.to_vec()].concat()).is_ok());
+    }
+
+    #[test]
+    fn a_device_interrupt_that_claims_nothing_bills_nobody() {
+        let pick = [(2, 'W', 1, 5), (2, 'K', 1, 5)];
+        // Budget 1 is interrupted at 100 µs by a device interrupt.
+        let good = [
+            // It claimed nothing: nobody pays.
+            vec![(1, 'x', 1, 100), (1, 'E', 0, 0), (1, 'c', 0, 0), (1, 'O', 0, 1)],
+            vec![(1, 'x', 1, 100), (1, 'c', 0, 0), (1, 'B', 1, 0), (1, 'O', 0, 1)],
+            // It claimed nothing, after expiring 2's item: the rest is 2's.
+            vec![
+                (1, 'x', 1, 100),
+                (1, 'B', 3, 40),
+                (1, 'E', 2, 1),
+                (1, 'c', 0, 0),
+                (1, 'B', 2, 9),
+                (1, 'O', 0, 1),
+            ],
+            // It claimed source 7: the handling is the owner's (3), the rest the interrupted budget's.
+            vec![
+                (1, 'x', 1, 100),
+                (1, 'E', 0, 0),
+                (1, 'c', 7, 0),
+                (1, 'B', 3, 20),
+                (1, 'B', 1, 9),
+                (1, 'O', 0, 1),
+            ],
+        ];
+        for (n, head) in good.iter().enumerate() {
+            let v = verdict(&[head.clone(), pick.to_vec()].concat());
+            let empty = if n < 3 { "(1 claiming nothing)" } else { "(0 claiming nothing)" };
+            assert!(
+                v.as_ref()
+                    .is_ok_and(|s| s
+                        .contains(&format!("1 device interrupts from user mode billed by the rule {empty}"))),
+                "{head:?}: {v:?}"
+            );
+        }
+        for (what, head) in [
+            // The defect: the interrupted budget pays for a claim another hart won.
+            (
+                "claimed nothing, billed",
+                vec![(1, 'x', 1, 100), (1, 'c', 0, 0), (1, 'B', 1, 30), (1, 'O', 0, 1)],
+            ),
+            (
+                "claimed nothing, the tail not the expiry's",
+                vec![(1, 'x', 1, 100), (1, 'E', 2, 1), (1, 'c', 0, 0), (1, 'B', 1, 9), (1, 'O', 0, 1)],
+            ),
+            ("no claim", vec![(1, 'x', 1, 100), (1, 'O', 0, 1)]),
+            ("two claims", vec![(1, 'x', 1, 100), (1, 'c', 0, 0), (1, 'c', 7, 0), (1, 'O', 0, 1)]),
+            ("a claim in a timer interrupt", vec![(1, 'I', 1, 100), (1, 'c', 0, 0), (1, 'O', 0, 1)]),
+            ("nested", vec![(1, 'x', 1, 100), (1, 'x', 1, 100), (1, 'O', 0, 1), (1, 'O', 0, 1)]),
+        ] {
+            let v = verdict(&[head, pick.to_vec()].concat());
+            assert!(v.as_ref().is_err_and(|e| e.contains("device interrupt")), "{what}: {v:?}");
+        }
     }
 
     #[test]

@@ -152,7 +152,9 @@ attacked before the next, in this order:
    only under it; the one-hart kernel is its uncontended case. The run queue stays global at
    every step below: each hart picks from the one stride queue, so a budget's share is judged
    across harts as on one.
-4. **Cross-hart interrupts, shootdowns and fences.** Inter-processor interrupts to reschedule.
+4. **Cross-hart interrupts, shootdowns and fences.** Inter-processor interrupts to reschedule,
+   and device interrupts taken on every hart's PLIC context, so an idle hart takes them rather
+   than waiting for the boot hart's kernel section ([boot](../kernel/boot.md#hardware-abstraction)).
    A process's translations carry its PID as their ASID, and a hart keeps them across switches.
    A hart running the process when its tables lose a mapping is sent a shootdown, flushes that
    ASID and acknowledges before the page is reused; any other hart that ran it flushes that ASID

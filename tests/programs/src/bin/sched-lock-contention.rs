@@ -5,10 +5,11 @@
 //!
 //! The kernel's trace (`lock-trace`) records each wait for the kernel lock with its ticket, and the
 //! post-check requires the waits to take the lock in ticket order, so none outlasts the sections
-//! queued ahead of it. The driver's wakes are recorded by the post-check net of the checked build's
-//! audits against the responsiveness targets: the alarm's interrupt reaches the boot hart only, so
-//! at two harts a wake waits out two of the searches (kernel/scheduling.md, "Residual risks").
-//! `sched-lock-contention-4` runs three at four harts.
+//! queued ahead of it. The driver's wakes are judged by the post-check net of the checked build's
+//! audits against the responsiveness targets: the alarm's interrupt reaches the idle hart too, so a
+//! wake waits out at most the search in progress (kernel/scheduling.md, R78).
+//! `sched-lock-contention-4` runs three at four harts, and `irq-boot-hart-only` this one on a
+//! kernel whose boot hart alone takes the alarm, which must miss.
 
 #![no_std]
 #![no_main]

@@ -358,6 +358,20 @@ fn devs() -> Option<core::slice::ChunksExact<'static, u32>> {
     Some(tag.data.chunks_exact(ENTRY_WORDS))
 }
 
+/// The interrupt sources the loader's `Devs` names, the only ones the interrupt controller
+/// enables (`arch/riscv/intc_plic.rs`). One out of range is left out here; `decode_entry` stops
+/// the boot on it.
+#[cfg(feature = "plic")]
+pub fn irq_sources() -> impl Iterator<Item = usize> {
+    devs()
+        .into_iter()
+        .flatten()
+        .filter(|words| words[0] == 2)
+        .map(|words| entry_value(words, 1))
+        .filter(|&irq| irq != 0 && irq < MAX_IRQS as u64)
+        .map(|irq| irq as usize)
+}
+
 /// The 64-bit value at word `i` of a `Devs` entry, low word first.
 fn entry_value(words: &[u32], i: usize) -> u64 { u64::from(words[i]) | u64::from(words[i + 1]) << 32 }
 

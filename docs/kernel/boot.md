@@ -195,7 +195,7 @@ title one Devs entry, six words
 | `Ctrl` | the PLIC and CLINT ranges, four words each: base (2), size (2) | `device.rs` | no controller check |
 | `Devs` | one entry per device object, six words each (below) | `device.rs` | no device objects |
 | `Plic` | PLIC base (2), size (2), the PLIC's S-mode context of the boot hart (the hart ID the firmware passes in `a0`), matched to the cpu node whose `reg` is that ID, 0; a device tree with a PLIC but no S-mode context for the boot hart stops the boot (R17). | `arch/riscv/intc_plic.rs` | no external interrupts |
-| `Hart` | the cpu nodes in the tree, the harts listed, then each listed hart's id (2), then each listed hart's PLIC S-mode context (0 without a PLIC), the boot hart first: by boot index, at most `MAX_HARTS` (8), in tree order. A hart past the eighth, or whose PLIC S-mode context is not inside the PLIC's window, is left out and stays parked; the loader maps each listed hart's kernel and trap stacks in `HART_STACKS` ([memory layout](memory-layout.md)), and a boot hart whose context is past the window stops the boot (R17). | `arch/riscv/hart.rs` | the boot hart runs alone |
+| `Hart` | the cpu nodes in the tree, the harts listed, then each listed hart's id (2), then each listed hart's PLIC S-mode context (0 without a PLIC), the boot hart first: by boot index, at most `MAX_HARTS` (8), in tree order. A hart past the eighth, or whose PLIC S-mode context is not inside the PLIC's window, is left out and stays parked; the loader maps each listed hart's kernel and trap stacks in `HART_STACKS` ([memory layout](memory-layout.md)), and a boot hart whose context is past the window stops the boot (R17). | `arch/riscv/hart.rs`, `arch/riscv/intc_plic.rs` | the boot hart runs alone |
 | `Seed` | `/chosen/rng-seed`: 16 to 64 bytes, zero-padded to words | `platform/sbi/rand.rs` | the boot stops ([R17](#r17-fail-closed)) |
 | `Time` | the timebase: ticks of the `time` counter per second (2) | `arch/riscv/timer_sbi.rs` | the boot stops (R17) |
 
@@ -221,7 +221,15 @@ the loader's exclusion of them is a reading of a device tree the kernel does not
 
 ### Hardware abstraction
 
-Status: built · tested: bench:rustsbi-boot, bench:uart-irq, host:loader::each_listed_hart_carries_its_s_mode_context_by_boot_index
+<details><summary>Status: built · tested (5)</summary>
+
+- bench:rustsbi-boot
+- bench:uart-irq
+- bench:sched-lock-contention
+- bench:irq-boot-hart-only
+- host:loader::each_listed_hart_carries_its_s_mode_context_by_boot_index
+
+</details>
 
 Machines differ in ways unrelated to the register width, so code never uses `target_arch` to
 mean "has a PLIC" or "runs under SBI".
@@ -236,11 +244,21 @@ mean "has a PLIC" or "runs under SBI".
   assembly key on the pointer width ([memory layout](memory-layout.md)).
 
 The **interrupt controller contract** (`kernel/src/arch/riscv/irq.rs`): a backend provides
-`init`, `enable_irq`, `disable_irq`, `pending` (claim at most one interrupt) and `complete`.
-The PLIC backend maps the controller at `KERNEL_PLIC_BASE` for the kernel alone, from the
-`Plic` tag. The trap handler claims a source, completes it while it is still enabled (a PLIC
-ignores a completion for a disabled source), then masks it until the holder's next `receive`
-([R5 (interrupts)](devices.md#r5-interrupts)). Interrupt 0 is never a device: no PLIC has a
+`init`, `online` (a started hart takes device interrupts), `enable_irq`, `disable_irq`, `pending`
+(claim at most one interrupt, on the calling hart) and `complete`. The PLIC backend maps the
+controller at `KERNEL_PLIC_BASE` for the kernel alone, from the `Plic` tag, and every started hart
+takes device interrupts: each enables every source `Devs` names on its own S-mode context (from
+`Hart`), threshold 0, once it holds the kernel lock, and sets the external interrupt in `sie`. Any
+hart in user mode or idle takes a raised source; the first to hold the kernel lock claims it on its
+own context, and another hart that trapped for it claims nothing. The trap handler claims a source,
+completes it, then masks it until the holder's next `receive`, in one kernel section
+([R5 (interrupts)](devices.md#r5-interrupts)). A source is masked and unmasked by its priority (0,
+then 1), not by its enable bits: one write reaches every hart's context, so a hart started later
+needs no copy of the masks; a completion is never ignored, as a PLIC ignores one for a source not
+enabled on the completing context; and a priority write is what makes QEMU's PLIC look at its
+pending sources again, which an enable write does not, so a source that went pending while masked
+is delivered at its unmask. `init` writes priority 0 to every source `Devs` names, since a
+priority's reset value is the PLIC's to choose. Interrupt 0 is never a device: no PLIC has a
 source 0, and the hart timer is the kernel's, arriving as a supervisor timer trap and not
 through the PLIC ([timer](timer.md)). The loader drops an interrupt 0 that a device asks for.
 

@@ -2,14 +2,20 @@
 
 //! Interrupt controller backend for standard RISC-V platforms: a PLIC.
 //!
-//! The loader finds the PLIC and this hart's S-mode context in the device tree and
-//! reports them in the `Plic` kernel argument. The kernel maps the PLIC for itself, so
-//! no userspace process can claim it.
+//! The loader finds the PLIC in the device tree and reports it in the `Plic` kernel argument, and
+//! each started hart's S-mode context in `Hart`. The kernel maps the PLIC for itself, so no
+//! userspace process can claim it.
+//!
+//! Every started hart takes device interrupts: each enables every source the loader's `Devs`
+//! names on its own context, threshold 0, when it comes online (`online`). A source is masked and
+//! unmasked by its priority, one write that reaches every context, never by its enable bits
+//! (kernel/boot.md, "The interrupt controller contract").
 //!
 //! The PLIC's claim/complete protocol maps onto Redoubt's interrupt flow like this: the
-//! trap handler calls `pending()`, which claims the highest-priority interrupt. The
-//! PLIC will not raise that source again until it is completed (`complete()`), which the
-//! trap handler does before it masks the source (`device.rs`, R5).
+//! trap handler calls `pending()`, which claims the highest-priority interrupt on this hart's
+//! context. The PLIC will not raise that source again until it is completed (`complete()`), which
+//! the trap handler does in the same kernel section, before it masks the source (`device.rs`,
+//! R5). A hart that trapped for a source another hart claimed first claims nothing.
 
 use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
@@ -18,14 +24,16 @@ use redoubt_layout::KERNEL_PLIC_BASE;
 use redoubt_layout::Pid;
 use redoubt_sys::MemFlags;
 
+use crate::arch::hart::{self, MAX_HARTS};
 use crate::mem::MemoryType;
 
-/// Sources are enabled at this priority. The context threshold is 0, so any non-zero
-/// priority is delivered.
+/// An unmasked source's priority. Every context's threshold is 0, so it is delivered.
 const PRIORITY: u32 = 1;
 
-static CONTEXT: AtomicUsize = AtomicUsize::new(0);
-/// The interrupt claimed by `pending()` and not yet completed, or 0.
+/// Each started hart's S-mode context, by boot index.
+static CONTEXTS: [AtomicUsize; MAX_HARTS] = [const { AtomicUsize::new(0) }; MAX_HARTS];
+/// The interrupt claimed by `pending()` and not yet completed, or 0. One word for every hart: a
+/// claim and its completion are in one kernel section, under the kernel lock.
 static CLAIMED: AtomicU32 = AtomicU32::new(0);
 
 fn plic() -> &'static Plic {
@@ -35,9 +43,11 @@ fn plic() -> &'static Plic {
     unsafe { &*(KERNEL_PLIC_BASE as *const Plic) }
 }
 
-fn context() -> usize { CONTEXT.load(Ordering::Relaxed) }
+/// This hart's S-mode context.
+fn context() -> usize { CONTEXTS[hart::index()].load(Ordering::Relaxed) }
 
-/// Map the PLIC described by the `Plic` kernel argument, if there is one.
+/// Map the PLIC described by the `Plic` kernel argument, if there is one, mask every source the
+/// loader's `Devs` names, and bring the boot hart's context online.
 pub fn init() {
     let Some(arg) =
         crate::args::KernelArguments::get().iter().find(|a| a.name == u32::from_le_bytes(*b"Plic"))
@@ -48,7 +58,15 @@ pub fn init() {
     // The loader stores addresses as two 32-bit words; `args::wide` narrows them.
     let base = crate::args::wide(arg.data, 0);
     let size = crate::args::wide(arg.data, 2);
-    CONTEXT.store(arg.data[4] as usize, Ordering::Relaxed);
+    CONTEXTS[0].store(arg.data[4] as usize, Ordering::Relaxed);
+    // The other harts' from `Hart`, by boot index; the boot hart's there is the same.
+    for (i, context) in hart::contexts().enumerate() {
+        assert!(
+            i > 0 || context == arg.data[4] as usize,
+            "Hart and Plic disagree on the boot hart's context"
+        );
+        CONTEXTS[i].store(context, Ordering::Relaxed);
+    }
     // The DMA register window follows the PLIC's mapping.
     assert!(size <= redoubt_layout::KERNEL_DMA_REGS - KERNEL_PLIC_BASE, "the PLIC runs into the DMA window");
 
@@ -63,25 +81,38 @@ pub fn init() {
         )
         .expect("unable to map the PLIC")
     });
-    plic().set_threshold(context(), 0);
+    // Masked until someone receives on it (R5): a priority's reset value is the PLIC's to choose.
+    for irq in crate::device::irq_sources() {
+        disable_irq(irq);
+    }
+    online();
 }
 
-/// Enable a source, then set its priority. The order matters on QEMU's PLIC, which re-evaluates
-/// its output when a priority, a pending bit or a claim changes but not when an enable bit does:
-/// a source that became pending while masked would stay undelivered after its unmask until some
-/// other source changed. Writing the priority after the enable makes the PLIC look again. This is
-/// the only enable write, so every unmask (the re-arm after a claim is `receive`'s) goes through
-/// it.
-pub fn enable_irq(irq_no: usize) {
-    plic().enable(irq_no as u32, context());
-    plic().set_priority(irq_no as u32, PRIORITY);
+/// This hart takes device interrupts from now on: every source the loader's `Devs` names enabled
+/// on its context, threshold 0. Each source is still masked by its priority until a `receive`
+/// unmasks it. The boot hart at `init`; every other hart once it first holds the kernel lock
+/// (`hart::hart_main`). It writes only this hart's context.
+pub fn online() {
+    let context = context();
+    for irq in crate::device::irq_sources() {
+        plic().enable(irq as u32, context);
+    }
+    plic().set_threshold(context, 0);
 }
 
-/// Mask a source: clear its enable bit. Its priority stays, so `enable_irq` rewrites the same
-/// value.
-pub fn disable_irq(irq_no: usize) { plic().disable(irq_no as u32, context()); }
+/// Unmask a source: its priority, which every context sees. A priority write is also what makes
+/// QEMU's PLIC look at its sources again (it re-evaluates its output when a priority, a pending
+/// bit or a claim changes, not when an enable bit does), so a source that became pending while
+/// masked is delivered at its unmask. This is the only unmask, so every re-arm after a claim
+/// (`receive`'s) goes through it.
+pub fn enable_irq(irq_no: usize) { plic().set_priority(irq_no as u32, PRIORITY); }
 
-/// Complete the interrupt `pending()` claimed, if any.
+/// Mask a source: priority 0, which the PLIC never delivers, on any context. Its enable bits stay,
+/// so a completion for it is never ignored (a PLIC ignores one for a source not enabled on the
+/// completing context).
+pub fn disable_irq(irq_no: usize) { plic().set_priority(irq_no as u32, 0); }
+
+/// Complete the interrupt `pending()` claimed, if any, on this hart's context.
 pub fn complete() {
     let claimed = CLAIMED.swap(0, Ordering::Relaxed);
     if claimed != 0 {
@@ -89,11 +120,38 @@ pub fn complete() {
     }
 }
 
-/// Claim the highest-priority pending interrupt. Returned as a bitmask with at most one
-/// bit set, which is what the generic IRQ dispatcher expects.
+/// Claim the highest-priority pending interrupt on this hart's context: its source number, or
+/// `None` when nothing is pending there (another hart claimed it first, or it was masked).
 pub fn pending() -> Option<usize> {
-    plic().claim(context()).map(|irq| {
+    #[cfg(debug_assertions)]
+    assert_eq!(CLAIMED.load(Ordering::Relaxed), 0, "a claim before the last one was completed");
+    let claimed = plic().claim(context()).map(|irq| {
         CLAIMED.store(irq.get(), Ordering::Relaxed);
         irq.get() as usize
-    })
+    });
+    #[cfg(debug_assertions)]
+    match claimed {
+        Some(_) => CLAIMS[hart::index()].fetch_add(1, Ordering::Relaxed),
+        None => EMPTY.fetch_add(1, Ordering::Relaxed),
+    };
+    claimed
+}
+
+/// A checked build's count of the sources each hart claimed, by boot index, and of the claims
+/// that found nothing, for `irq-any-hart` ([`report`]).
+#[cfg(debug_assertions)]
+static CLAIMS: [AtomicU32; MAX_HARTS] = [const { AtomicU32::new(0) }; MAX_HARTS];
+#[cfg(debug_assertions)]
+static EMPTY: AtomicU32 = AtomicU32::new(0);
+
+/// A checked build's account at `system_reset` (`hart::report`): the claims by hart, the started
+/// harts only.
+#[cfg(debug_assertions)]
+pub fn report() {
+    let counts = CLAIMS.each_ref().map(|count| count.load(Ordering::Relaxed));
+    println!(
+        "external interrupts: claimed by hart {:?}, {} found nothing",
+        &counts[..hart::started()],
+        EMPTY.load(Ordering::Relaxed)
+    );
 }

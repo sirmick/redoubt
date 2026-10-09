@@ -414,10 +414,10 @@ receives, and a driver that is busy, stuck or dead cannot be stormed by its own 
 level-triggered source still asserted when the driver receives fires again at once, and that
 `receive` returns straight away.
 
-- The kernel completes the controller's claim first, while the source is still enabled, and
-  masks it straight after. The PLIC (the RISC-V platform interrupt controller) ignores a
-  completion for a source that is not enabled, and would never raise that source again. Nothing
-  can be delivered in between: the hart takes no interrupt in supervisor mode.
+- The kernel completes the controller's claim first, then masks the source, in the same kernel
+  section. Nothing can be delivered in between: the hart takes no interrupt in supervisor mode,
+  and another hart that traps for the source claims it only once it holds the kernel lock, by
+  which time the source is masked and its claim finds nothing.
 - An interrupt no IRQ object owns is completed and masked, and stays masked.
 - Every IRQ object starts masked, so a source nobody receives on cannot storm the kernel.
 - An interrupt that fires with no thread waiting keeps `fired` set; the next `receive` returns
@@ -428,10 +428,10 @@ level-triggered source still asserted when the driver receives fires again at on
 
 An interrupt raised while its object is masked stays pending in the controller, and the unmask
 at the next `receive`, the first after a handle is handed over included, delivers it. Masking
-clears the source's enable bit and leaves its priority. Every unmask, the re-arm after a claim
-included, is that `receive`'s, and it enables the source before it writes the source's priority,
-last, because QEMU's PLIC looks at its pending sources again when a priority changes but not when
-an enable bit does.
+writes the source's priority 0, which the PLIC (the RISC-V platform interrupt controller) never
+delivers on any hart's context; unmasking writes it back to 1. Every unmask, the re-arm after a
+claim included, is that `receive`'s. Why a priority and not the enable bits is on
+[boot](boot.md#hardware-abstraction).
 
 ```mermaid
 sequenceDiagram

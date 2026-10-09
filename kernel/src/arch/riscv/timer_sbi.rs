@@ -32,17 +32,20 @@ pub fn init() {
 }
 
 /// This hart's timer, at boot and on each hart started (`hart::hart_main`, before its first wait
-/// for the kernel lock, which the reschedule interrupt ends): nothing due yet, the timer and the
-/// reschedule interrupt on, and `time` readable from U-mode. It reaches no kernel global.
+/// for the kernel lock, which the reschedule interrupt ends): nothing due yet; the timer, the
+/// reschedule interrupt and device interrupts on (a device's once its PLIC context is,
+/// `irq::online`); and `time` readable from U-mode. It reaches no kernel global.
 pub fn init_hart() {
     sbi_rt::set_timer(u64::MAX);
     // SAFETY: these only choose which interrupts reach the trap handler. The kernel itself runs
-    // with `sstatus.SIE` clear, so the timer and the reschedule interrupt (`hart.rs`) are taken
-    // from U-mode or in `idle`, where the trap handler is ready for them; `scounteren.TM` exposes
+    // with `sstatus.SIE` clear, so the timer, the reschedule interrupt (`hart.rs`) and a device's
+    // are taken from U-mode or in `idle`, where the trap handler is ready for them, and a wait
+    // halts for the reschedule interrupt alone (`hart::halt_for_lock`); `scounteren.TM` exposes
     // the read-only `time` counter to U-mode (`rdtime`), with no memory effect.
     unsafe {
         sie::set_stimer();
         sie::set_ssoft();
+        sie::set_sext();
         scounteren::set_tm();
     }
 }

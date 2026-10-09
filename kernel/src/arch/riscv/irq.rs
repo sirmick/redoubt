@@ -48,6 +48,21 @@ pub fn init() {
     timer::init();
 }
 
+/// A hart started after boot takes device interrupts on its PLIC context from now on (the
+/// supervisor external interrupt is on in its `sie` since `timer::init_hart`).
+pub fn online() {
+    // Debug only, its negative case's: the other harts' contexts stay off.
+    #[cfg(all(feature = "plic", not(feature = "irq-boot-hart-only")))]
+    intc::online();
+}
+
+/// A checked build's account of the claims at `system_reset` (`hart::report`).
+#[cfg(debug_assertions)]
+pub fn report() {
+    #[cfg(feature = "plic")]
+    intc::report();
+}
+
 pub fn enable_irq(irq_no: usize) { intc::enable_irq(irq_no); }
 
 pub fn disable_irq(irq_no: usize) { intc::disable_irq(irq_no); }
@@ -183,11 +198,17 @@ pub extern "C" fn trap_handler(
 
     // The user time since the last return is the running budget's (`sched.rs`).
     let timer = matches!(ex, RiscvException::SupervisorTimerInterrupt(_));
+    let external = matches!(
+        ex,
+        RiscvException::UserExternalInterrupt(_) | RiscvException::SupervisorExternalInterrupt(_)
+    );
     if from_user {
         crate::sched::from_user();
         #[cfg(feature = "sched-trace")]
         if timer {
             crate::sched::trace::timer_entry();
+        } else if external {
+            crate::sched::trace::external_entry();
         }
     }
     // Every entry but `kmain`'s switch answers the deadlines that have passed first
@@ -217,8 +238,11 @@ pub extern "C" fn trap_handler(
     }
     // From here, kernel time is the running budget's: a system call's is its caller's. A timer
     // interrupt's is not (below). Debug only, never in a bench build but one recorded negative run
-    // (feature `timer-tail-billed`): it is, as it was before the fix.
-    if from_user && (!timer || cfg!(feature = "timer-tail-billed")) {
+    // (feature `timer-tail-billed`): it is, as it was before the fix. A device interrupt's is from
+    // here once it claims a source; until then, and if another hart claimed it first, it is as a
+    // timer interrupt's that ends no slice (below).
+    let expiry_end = if external { crate::sched::now_ticks() } else { 0 };
+    if from_user && !external && (!timer || cfg!(feature = "timer-tail-billed")) {
         crate::sched::begin_billing();
     }
     #[cfg(any(feature = "debug-print"))] // , feature = "debug-swap-verbose"
@@ -258,13 +282,19 @@ pub extern "C" fn trap_handler(
         }
         // Hardware interrupt
         RiscvException::UserExternalInterrupt(_) | RiscvException::SupervisorExternalInterrupt(_) => {
-            // The controller claims one interrupt; `None` is a spurious trap with nothing
-            // pending, which we ignore and just resume from. Handling it is its device owner's
-            // work, not the interrupted budget's (`sched::bill_irq`).
+            // The controller claims one interrupt on this hart's context; `None` is a trap with
+            // nothing pending here (another hart claimed it first), which we ignore and just
+            // resume from, billing the interrupted budget nothing. Handling it is its device
+            // owner's work, not the interrupted budget's (`sched::bill_irq`).
             let started = crate::sched::now_ticks();
             let pending = intc::pending();
+            #[cfg(feature = "sched-trace")]
+            crate::sched::trace::claimed(pending);
 
             if let Some(irq) = pending {
+                if from_user {
+                    crate::sched::begin_billing_from(expiry_end);
+                }
                 #[cfg(debug_assertions)]
                 crate::sched::irq_audits_open();
                 // R5: an interrupt with a device object is the kernel's to record: it masks the

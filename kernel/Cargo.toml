@@ -54,6 +54,10 @@ sched-inject-tie-fault = ["sched-trace"]
 # R12CappedHoldsFloor), so a waker enters behind a capped budget's lag; `sched-capped-holds-floor`
 # must fail on the share it costs.
 sched-capped-holds-floor = ["test-only", "redoubt-stride/capped-holds-floor"]
+# Debug only, never in a bench build but its negative case: device interrupts reach only the boot
+# hart's PLIC context, as before every hart's was enabled, so `irq-boot-hart-only` must miss the
+# driver wake's targets at two harts (kernel/scheduling.md, R78).
+irq-boot-hart-only = ["test-only"]
 # Debug only, never in a bench build but one recorded negative run: the kernel lock is
 # test-and-set instead of a ticket lock (cell.rs), so `smp-boot`'s FIFO check must fail (R78).
 sched-test-and-set-entry = ["test-only"]

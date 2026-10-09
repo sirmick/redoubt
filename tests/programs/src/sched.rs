@@ -1336,6 +1336,28 @@ pub mod rtc {
 
     pub fn clear(base: usize) { write(base, CLEAR_INTERRUPT, 1); }
 
+    /// The RTC's time (ns) and `time_now` (µs) read together, and how far apart, µs: `time_now`
+    /// between two reads of the RTC, which is taken at their midpoint. A kernel entry between the
+    /// reads (a device interrupt this hart takes, or a wait for the kernel lock) widens the
+    /// bracket, so it is read again, up to eight times, while it is wider than 50 µs, and the
+    /// narrowest is kept.
+    pub fn with_time_now(base: usize) -> (u64, u64, u64) {
+        let mut best = (0, 0, u64::MAX);
+        for _ in 0..8 {
+            let before = now_ns(base);
+            let us = rd::time_now().unwrap_or(0);
+            let after = now_ns(base);
+            let width = (after - before) / 1000;
+            if width < best.2 {
+                best = (before + (after - before) / 2, us, width);
+            }
+            if width <= 50 {
+                break;
+            }
+        }
+        best
+    }
+
     /// Among `devices` (read with [`rd::first_free`] before any handle is made): the RTC's MMIO
     /// handle and where it is mapped here, and its interrupt handle. The MMIO is the one-page
     /// device that is not virtio and whose first word (its time's low half, in ns) moves by half

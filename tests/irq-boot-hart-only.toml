@@ -1,0 +1,29 @@
+description = "self-check of IRQ1's gate: `sched-lock-contention` at two harts on a kernel whose boot hart alone takes device interrupts (`irq-boot-hart-only`, as before every hart's PLIC context was enabled); the RTC's interrupt waits for the hammer's search on the boot hart and the woken hart then draws behind its next one, so the post-check must fail the driver wake's targets (kernel/scheduling.md, R78) (virtual time, checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+icount = "shift=3,sleep=off"
+programs = ["sched-lock-contention"]
+# The driver wake is gated at two harts. The miss depends on the hammer landing on the boot hart,
+# which follows the boot's timing (it does in this kernel's run); if it lands on the other hart the
+# idle boot hart takes the alarm, the targets are met, and the case fails loud, "passed, but must
+# fail", rather than passing quietly.
+smp = [2]
+keep_smp = true
+# Test builds only: the trace ring with each lock wait's ticket, and the boot hart alone taking
+# device interrupts (never in a default kernel).
+kernel_features = ["lock-trace", "irq-boot-hart-only"]
+post_check = "sched_oracle driver_wake_p50_us=15000 driver_wake_p99_us=50000"
+timeout_secs = 1200
+must_fail = '(?s)driver_wake \(\d+\): net .*?target missed'
+expect = [
+    '^kernel: irq-boot-hart-only: device interrupts reach the boot hart alone$',
+    '^\[lock-contention\] 1 hammers. searches refused: \d+$',
+    '^LATENCY-SAMPLE contention driver_wake \d+ \d+$',
+    '^SCHED-LOCK-CONTENTION TEST PASSED$',
+    # The kernel's count: the boot hart claimed every device interrupt.
+    '^external interrupts: claimed by hart \[\d+, 0\], \d+ found nothing$',
+    '^SCHED-TRACE-END \d+ dropped 0$',
+]
+forbid = ['\[lock-contention\] FAIL']
+poweroff = true

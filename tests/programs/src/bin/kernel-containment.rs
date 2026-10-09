@@ -62,15 +62,17 @@ pub extern "C" fn _start() -> ! {
         b.finish("KERNEL-CONTAINMENT")
     };
     // The RTC must run on the virtual clock (`-rtc clock=vm`) for its column to be virtual time.
-    let (r0, u0) = (rtc::now_ns(rtc_base), b.now_us());
+    let (r0, u0, w0) = rtc::with_time_now(rtc_base);
     let _ = rd::receive(None, 100_000, 0);
-    let (r1, u1) = (rtc::now_ns(rtc_base), b.now_us());
+    let (r1, u1, w1) = rtc::with_time_now(rtc_base);
     let (rtc_us, us) = ((r1 - r0) / 1000, u1 - u0);
     b.note(format_args!(
-        "the RTC keeps virtual time: {} ({} µs of RTC over {} µs of time_now)",
+        "the RTC keeps virtual time: {} ({} µs of RTC over {} µs of time_now, read within {} and {} µs)",
         verdict(rtc_us.abs_diff(us) * 100 <= us),
         rtc_us,
-        us
+        us,
+        w0,
+        w1
     ));
 
     // The endpoint maker, once, in `users` itself: it makes the victim's endpoints and the

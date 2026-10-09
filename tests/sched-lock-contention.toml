@@ -1,4 +1,4 @@
-description = "Fair kernel entry under contention (R78, kernel/scheduling.md), at two harts: one budget refused a `map_anon` after a search of the whole area in a loop, R12's costliest call, beside the latency workload's driver stand-in on the goldfish RTC's alarm; every wait for the kernel lock takes it in ticket order (the trace's tickets, `lock-trace`), and the driver wake is recorded against its targets, p50 <= 15 ms and p99 <= 50 ms net of the checked build's audits: behind R12's costliest call a wake waits two of its sections at two harts (kernel/scheduling.md, \"Residual risks\") (virtual time, checked build)"
+description = "Fair kernel entry under contention (R78, kernel/scheduling.md), at two harts: one budget refused a `map_anon` after a search of the whole area in a loop, R12's costliest call, beside the latency workload's driver stand-in on the goldfish RTC's alarm; every wait for the kernel lock takes it in ticket order (the trace's tickets, `lock-trace`), and the driver wake meets its targets, p50 <= 15 ms and p99 <= 50 ms net of the checked build's audits: the RTC's interrupt reaches the idle hart, which draws its ticket behind at most the search in progress (virtual time, checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true
@@ -10,17 +10,23 @@ smp = [2]
 keep_smp = true
 # Test builds only: the trace ring with each lock wait's ticket (never in a default kernel).
 kernel_features = ["lock-trace"]
-# The oracle checks the waits' ticket order. The driver wake is recorded against sched-latency's
-# targets, not gated (`gate_harts=1`): the RTC's interrupt reaches the boot hart only, so a wake
-# waits out the hammer's search there and then its next call, one section ahead of the woken hart's
-# ticket (kernel/scheduling.md, "Fair kernel entry is bounded by count, not time").
-post_check = "sched_oracle gate_harts=1 driver_wake_p50_us=15000 driver_wake_p99_us=50000"
+# The oracle checks the waits' ticket order, and gates the driver wake on sched-latency's targets:
+# every hart's PLIC context takes the RTC's interrupt, so the idle hart wakes, draws its ticket
+# behind the hammer's search in progress and runs the driver itself (kernel/scheduling.md, R78).
+# `irq-boot-hart-only` is the same run on a kernel whose boot hart alone takes it, which must miss.
+post_check = "sched_oracle driver_wake_p50_us=15000 driver_wake_p99_us=50000"
 timeout_secs = 1200
 expect = [
     '^\[lock-contention\] 1 hammers. searches refused: \d+$',
     '^\[lock-contention\] driver wake: .*: gross, audits included; net in the post-check',
     '^LATENCY-SAMPLE contention driver_wake \d+ \d+$',
     '^SCHED-LOCK-CONTENTION TEST PASSED$',
+    # The kernel's count of claims at power-off. Which hart idles follows the boot's timing (the
+    # boot hart, in this kernel's run), so `sched-lock-contention-4` requires another hart's.
+    '^external interrupts: claimed by hart \[\d+, \d+\], \d+ found nothing$',
+    # A checked build's count: idle and lock-wait halts that found the interrupt they wait for
+    # pending ran no `wfi` (kernel/scheduling.md, R78).
+    '^halts: [1-9]\d* skipped, an awaited interrupt pending$',
     '^SCHED-TRACE-END \d+ dropped 0$',
 ]
 forbid = ['\[lock-contention\] FAIL']

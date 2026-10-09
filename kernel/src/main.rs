@@ -101,6 +101,9 @@ pub unsafe extern "C" fn init(
     // so, and `sched-capped-holds-floor` expects the line, so its failure is this kernel's.
     #[cfg(feature = "sched-capped-holds-floor")]
     println!("kernel: sched-capped-holds-floor: the floor counts the capped budgets");
+    // Debug only: the negative case's kernel says so, as above (`irq-boot-hart-only`).
+    #[cfg(feature = "irq-boot-hart-only")]
+    println!("kernel: irq-boot-hart-only: device interrupts reach the boot hart alone");
     // Test builds only: a print, then a panic, inside `print!` (debug/console.rs).
     #[cfg(feature = "panic-in-print")]
     {
