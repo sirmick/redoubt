@@ -921,6 +921,11 @@ recipe = "image/userland.toml"
 [net]                        # a virtio-net card on QEMU's user-mode network
 forward = [22]               # guest TCP ports reachable from the host (default: none)
 host_key = "ssh-ed25519 AAAA..."   # optional: the only SSH host key sessions accept
+
+[idle]                       # with launch = true: measure a session's `idle` step (one)
+interrupts_per_hart = 9.0    # optional ceilings, each per second of the window
+user_ecalls = 18.0
+host_cores = 0.01
 ```
 
 A disk `recipe` (`image/disk.toml`) is packed by the code `./mkimage` runs (`testbench
@@ -1098,6 +1103,7 @@ steps = [
     { mark = "alice-ready" },    # tell other sessions this one got here
     { wait = "bob-ready" },      # wait for another session's mark
     { resize = [132, 43] },      # with `pty = true`: resize ssh's terminal
+    { idle = 60 },               # with [idle]: type nothing for 60 s while the bench measures
     { exit = 0 },                # close input, read until ssh exits, require this status
     { mark = "alice-gone" },     # only marks follow `exit`: this session's ssh is gone
 ]
@@ -1174,6 +1180,51 @@ boots QEMU's own OpenSBI: the rule that only RustSBI boots is Redoubt's.
   case. The check connects directly: on a host whose only way out is an HTTP(S) proxy that `curl`
   uses, a fetch that fails there finds the snapshot silent, and is a host lack that `--allow-skip`
   skips.
+
+### The machine at rest
+
+<details><summary>Status: built · tested (6)</summary>
+
+- bench:launch-idle
+- host:testbench::the_log_is_counted_by_hart_and_name
+- host:testbench::a_rate_over_its_ceiling_fails
+- host:testbench::a_window_that_measured_nothing_fails
+- host:testbench::the_monitor_is_reached_and_left_by_the_mux_escape
+- host:testbench::an_idle_step_needs_idle_and_launch
+
+</details>
+
+What an idle Redoubt costs its host is measured from outside the guest. A `launch = true` case
+with an `[idle]` table and one session step `{ idle = N }` boots `./launch --system`'s command
+line; when the session reaches the step, it types nothing for N seconds, still reading its output,
+and the bench measures that window:
+- **Traps, from QEMU's own log.** `-nographic` multiplexes QEMU's monitor on the console, so the
+  bench types Ctrl-A c, `logfile <case>.int.log` and `log int`, and Ctrl-A c back, when the window
+  starts, and `log none` when it ends: QEMU logs each trap a hart takes (`riscv_cpu_do_interrupt:
+  hart:H, async:A, … desc=NAME`) for the window alone, and the command line stays launch's. The
+  session's quiet starts once the bench has typed `log int`, and its next step waits until the
+  bench has typed `log none`, so no other step's work falls in the window. Logged from the boot
+  on, every system call would be a line. The bench counts each hart's interrupts per
+  second by name (timers, software interrupts the firmware and the kernel send between harts,
+  devices) and the exceptions per second by name, every hart's (`user_ecall`, the system calls;
+  `supervisor_ecall`, the kernel's calls to the firmware).
+- **QEMU's host CPU time,** its user and system time from `/proc/<pid>/stat` at both ends, per
+  second of the window: the host cores the idle machine takes. The kernel counts that time in
+  clock ticks (`getconf CLK_TCK`, 100 a second here), so a 60 s window reads it to 1/6000 of a
+  core: 0.002 cores is about 12 ticks, and a 0.01 ceiling is 60.
+
+The case log gets one `[idle]` line with every rate, and a rate over its ceiling fails the case;
+a ceiling left out is measured and printed only. A window that measured nothing fails too, never
+passing under its ceilings for want of data: no log, a hart with no timer interrupt, no system
+call from user mode, or no host CPU time. `launch-idle`'s ceilings are about twice the most that
+nine 60 s windows measured, five on rv64 and four on rv32 (the case's comment gives each), so a
+ceiling catches a cost that doubles, not the window-to-window spread. Those windows were
+measured before the session's next step waited for `log none`, so that step's command fell in
+them. One window on each width since measured 4.1 system calls a second, so `user_ecalls`, at
+18, is loose by about 2x until the kernel's lock wake-ups at rest are cut and the ceilings set
+again. The measures are the hardware's view: they say how often the guest wakes, not which
+budget woke it; that would take the kernel's own trace, which prints only at a reset.
+`launch-idle` is a host-clock case, run in the quiet class.
 
 ### Against Redoubt's sshd
 

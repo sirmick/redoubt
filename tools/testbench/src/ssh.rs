@@ -368,10 +368,40 @@ struct Shared<'a> {
     marks: Mutex<HashSet<String>>,
     changed: Condvar,
     abort: &'a AtomicBool,
+    /// Told when a session's `idle` step starts and ends ([`IdleEdge`]).
+    idle: Option<mpsc::Sender<IdleEdge>>,
 }
+
+/// An `idle` step's edge: `true` when it starts, `false` when it ends, and where to say the bench
+/// has turned QEMU's log on or off.
+pub type IdleEdge = (bool, mpsc::Sender<()>);
 
 impl Shared<'_> {
     fn aborted(&self) -> bool { self.abort.load(Ordering::Relaxed) }
+
+    /// Tell the bench an `idle` step starts (`on`) or ends, and wait until it has turned QEMU's
+    /// log on or off, so that no other step's work falls in the window.
+    fn idle_edge(&self, on: bool, deadline: Instant) -> Result<(), Stop> {
+        let Some(idle) = &self.idle else { return Ok(()) };
+        let (done, typed) = mpsc::channel();
+        // A bench gone without an answer has failed the case, or is failing it.
+        idle.send((on, done)).map_err(|_| Stop::Aborted)?;
+        loop {
+            if self.aborted() {
+                return Err(Stop::Aborted);
+            }
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                let edge = if on { "start" } else { "end" };
+                return Err(Stop::Failed(format!("timed out waiting for the idle window to {edge}")));
+            }
+            match typed.recv_timeout(left.min(Duration::from_millis(50))) {
+                Ok(()) => return Ok(()),
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => return Err(Stop::Aborted),
+            }
+        }
+    }
 
     /// Waits until some session sets `mark`.
     fn wait(&self, mark: &str, deadline: Instant) -> Result<(), Stop> {
@@ -397,7 +427,9 @@ impl Shared<'_> {
 }
 
 /// Run `sessions` concurrently until each has done its steps and its ssh has exited. Returns
-/// why the first failing session failed, or None. Setting `abort` makes them all give up.
+/// why the first failing session failed, or None. Setting `abort` makes them all give up. `idle`
+/// is told when an `idle` step starts and ends, and answers each edge once QEMU's log is on or off.
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     workspace: &Path,
     sessions: &[Session],
@@ -406,6 +438,7 @@ pub fn run(
     log_prefix: &str,
     deadline: Instant,
     abort: &AtomicBool,
+    idle: Option<mpsc::Sender<IdleEdge>>,
 ) -> Result<Option<String>> {
     let dir = logs.join("ssh");
     std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
@@ -430,7 +463,7 @@ pub fn run(
             .extend(["StrictHostKeyChecking=no".into(), "UserKnownHostsFile=/dev/null".into()]),
     }
 
-    let shared = Shared { marks: Mutex::new(HashSet::new()), changed: Condvar::new(), abort };
+    let shared = Shared { marks: Mutex::new(HashSet::new()), changed: Condvar::new(), abort, idle };
     let mut commands = Vec::new();
     for session in sessions {
         let mut ssh = Command::new(SSH);
@@ -721,6 +754,30 @@ impl Driver<'_> {
                 Ok(())
             }
             Step::Wait(mark) => self.shared.wait(mark, self.deadline),
+            Step::Idle(seconds) => {
+                // The quiet starts once the log is on, and the next step once it is off.
+                self.shared.idle_edge(true, self.deadline)?;
+                let end = Instant::now() + Duration::from_secs_f64(*seconds);
+                // Read on, so the output still passes `forbid`, until the window ends.
+                let mut quiet = Ok(true);
+                while self.status.is_none() && matches!(quiet, Ok(true)) {
+                    quiet = self.pump_until(end.min(self.deadline));
+                }
+                let ended = self.shared.idle_edge(false, self.deadline);
+                quiet?;
+                ended?;
+                if let Some(status) = self.status {
+                    return Err(Stop::Failed(format!(
+                        "ssh exited ({}) while idle{}",
+                        describe(status),
+                        self.last()
+                    )));
+                }
+                match Instant::now() < end {
+                    true => Err(Stop::Failed("timed out while idle".into())),
+                    false => Ok(()),
+                }
+            }
             Step::Expect(pattern) => {
                 // Multi-line mode: the unmatched output may span lines, and `^`/`$` should
                 // still mean the start and end of a line, as they do everywhere else here.
@@ -768,17 +825,26 @@ impl Driver<'_> {
 
     /// Take in the next piece of output, or ssh's exit, whichever comes first.
     fn pump(&mut self, waiting_for: &str) -> Result<(), Stop> {
+        match self.pump_until(self.deadline)? {
+            true => Ok(()),
+            false => Err(Stop::Failed(format!("timed out waiting for {waiting_for}"))),
+        }
+    }
+
+    /// Take in the next piece of output, or ssh's exit, if one comes before `until`: false if
+    /// neither did.
+    fn pump_until(&mut self, until: Instant) -> Result<bool, Stop> {
         loop {
             if self.shared.aborted() {
                 return Err(Stop::Aborted);
             }
-            let left = self.deadline.saturating_duration_since(Instant::now());
+            let left = until.saturating_duration_since(Instant::now());
             if left.is_zero() {
-                return Err(Stop::Failed(format!("timed out waiting for {waiting_for}")));
+                return Ok(false);
             }
             // Wake up now and then to notice another session failing.
             match self.events.recv_timeout(left.min(Duration::from_millis(50))) {
-                Ok(Event::Output(bytes)) => return self.take(&bytes),
+                Ok(Event::Output(bytes)) => return self.take(&bytes).map(|()| true),
                 Ok(Event::Closed) => {
                     self.open_streams -= 1;
                     if self.open_streams == 0 {
@@ -787,7 +853,7 @@ impl Driver<'_> {
                         // Only in the log: an exit marker in the output could be forged.
                         writeln!(self.log, "[ssh exited ({})]", describe(status))?;
                     }
-                    return Ok(());
+                    return Ok(true);
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
