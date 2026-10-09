@@ -65,6 +65,8 @@ pub struct Platform {
     /// order, at most `MAX_HARTS`. A hart past it, or whose PLIC S-mode context is not inside
     /// the PLIC's window, is left out and stays parked (kernel/boot.md, `Hart`).
     pub harts: [usize; MAX_HARTS],
+    /// Each listed hart's PLIC S-mode context, by boot index; 0 for all without a PLIC.
+    pub contexts: [usize; MAX_HARTS],
     pub harts_len: usize,
     pub plic: Option<Plic>,
     /// The hart's local interrupt controller (timer and software interrupts), found on its
@@ -166,6 +168,7 @@ impl Platform {
             timebase_hz: 0,
             cpu_count: 0,
             harts: [0; MAX_HARTS],
+            contexts: [0; MAX_HARTS],
             harts_len: 0,
             plic: None,
             clint: None,
@@ -282,6 +285,7 @@ impl Platform {
 
         platform.plic = read_plic(&idx, &root, ac, sc, hart);
         platform.harts[0] = hart;
+        platform.contexts[0] = platform.plic.as_ref().map_or(0, |plic| plic.context);
         platform.harts_len = 1;
         let plic_node = plic_node(&idx);
         let cpus = root.children().find(|n| n.name() == Ok("cpus"));
@@ -293,13 +297,15 @@ impl Platform {
                 continue;
             }
             // Every hart started has an S-mode context the kernel's PLIC window reaches.
+            let mut context = 0;
             if let (Some(plic), Some(node)) = (&platform.plic, &plic_node) {
                 match s_context(node, &root, id) {
-                    Some(c) if context_in_window(c, plic.range.len()) => {}
+                    Some(c) if context_in_window(c, plic.range.len()) => context = c,
                     _ => continue,
                 }
             }
             platform.harts[platform.harts_len] = id as usize;
+            platform.contexts[platform.harts_len] = context;
             platform.harts_len += 1;
         }
         platform.clint = idx.nodes().find(|n| compatible_has(n, b"clint")).and_then(|n| {
@@ -315,6 +321,9 @@ impl Platform {
     pub fn rng_seed(&self) -> &[u8] { &self.rng_seed[..self.rng_seed_len] }
 
     pub fn harts(&self) -> &[usize] { &self.harts[..self.harts_len] }
+
+    /// The listed harts' PLIC S-mode contexts, by boot index ([`Self::harts`]).
+    pub fn contexts(&self) -> &[usize] { &self.contexts[..self.harts_len] }
 }
 
 /// Whether PLIC context `context`'s registers lie inside a PLIC window of `size` bytes.
@@ -517,6 +526,16 @@ mod tests {
         // Sparse and wide ids, the boot hart in the middle: it is index 0, the rest in tree order.
         let platform = tree(&[0, 5, 1000], &wired(3), 5, 0x60_0000, 0, 0);
         assert_eq!(platform.harts(), &[5, 0, 1000]);
+    }
+
+    #[test]
+    fn each_listed_hart_carries_its_s_mode_context_by_boot_index() {
+        // Hart 5 boots: its context (3) first, then hart 0's (1) and hart 1000's (5).
+        let platform = tree(&[0, 5, 1000], &wired(3), 5, 0x60_0000, 0, 0);
+        assert_eq!(platform.contexts(), &[3, 1, 5]);
+        // Only S-mode contexts, in any wiring order: hart 1's is 0 here, hart 0's is 2.
+        let platform = machine(&[2, S, 1, M, 1, S], 0);
+        assert_eq!(platform.contexts(), &[2, 0]);
     }
 
     #[test]

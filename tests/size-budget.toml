@@ -6,12 +6,12 @@ kind = "size-budget"
 [[crate]]
 name = "kernel"
 paths = ["kernel/src"]
-max_lines = 9827
+max_lines = 9938
 
 [[crate]]
 name = "loader"
 paths = ["loader/src"]
-max_lines = 913
+max_lines = 922
 
 [[crate]]
 name = "stub"

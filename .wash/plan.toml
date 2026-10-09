@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 520
+revision = 525
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1746,8 +1746,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "smp"
   needs = ["SMP2"]
   body = "From SMP2's sched-lock-contention: external interrupts are enabled only in the boot hart's PLIC context (intc_plic.rs, one CONTEXT), so a device interrupt waits for that hart's current kernel section, and a hammer re-entering first makes the wake wait a second section: at 2 harts the driver wake misses its 1-hart p50 target (rv64 18.5 ms against 15 ms behind a 9.6 ms section). Enable every hart's context (or route to an idle one), claim/complete per hart, and gate sched-lock-contention's driver wake on the 1-hart targets at 2 and 4 harts. Kernel: Tier A, the kernel red; model and mutation if a rule changes."
-  state = "active"
-  revision = 512
+  state = "done"
+  revision = 525
   overrides = ["2026-10-09: started by Orchestrator before M1 (reported): several-harts track runs ahead of M1's acceptance"]
 
 [[node]]
@@ -1776,8 +1776,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M2"
   body = "M2 page 'On Redoubt' step 3: native.md#standard-input-and-output-and-pipes, shell.md#native-programs-and-pipes. A native stage's stdin/stdout/stderr are files the session serves; a pipeline of stages joined by the session; nothing inherited, a stage reaches only what its launcher bound. Attack case: a pipe carries no authority. Design checkpoint first (.wash/local/PIPE1-design.md). Tier A: the steward red."
-  state = "active"
-  revision = 496
+  state = "reported"
+  revision = 521
   overrides = ["2026-10-08: started by Orchestrator before M1 (reported): M2 'On Redoubt' steps run ahead of M1's acceptance (owner: fill the bandwidth)"]
 
 [[node]]
@@ -1835,9 +1835,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "smp"
   needs = ["IRQ1"]
-  body = "From IRQ1's instrumented runs: after IRQ1, sched-lock-contention-4's driver wake p99 is 49.7 ms rv64 / 40.6 rv32 against 50 (too close to gate); the remaining long halts begin with nothing pending: the RTC line rises on time, but under -icount QEMU's single-threaded round-robin runs the woken hart only when the running hart's turn ends, and a hart in a kernel section keeps its turn to the section's end. The kernel cannot shorten another hart's QEMU turn; on hardware the hart wakes at once. Find a way to judge the 4-hart tail that reflects parallel harts (a non-icount MTTCG run with a statistical bound, or shorter kernel sections after SMP4/SMP6), and gate p99 at 4 harts. Detail: .worktrees/IRQ1/.tmp/IRQ1-numbers-2.md (copy it to .wash/local/)."
+  body = "From IRQ1's instrumented runs: after IRQ1, sched-lock-contention-4's driver wake p99 is ~59 ms against 50 (recorded, not gated). Two contributors: (1) under -icount QEMU's single-threaded round-robin runs a woken hart only when the running hart's turn ends, and a hart in a kernel section keeps its turn to the section's end; (2) IRQ1's priority masking raises SEIP on every hart's context, so each device interrupt traps every user-mode or idle hart, N-1 to an empty claim, each a lock acquisition (kernel red's note). Find a way to judge the 4-hart tail that reflects parallel harts (a non-icount MTTCG run with a statistical bound), consider routing a source to one idle hart instead of all, and gate p99 at 4 harts. Detail: .wash/local/IRQ1-numbers-2.md."
   state = "todo"
-  revision = 516
+  revision = 524
 
 [[node]]
   id = "TRY1"
@@ -1848,3 +1848,13 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   state = "active"
   revision = 518
   overrides = ["2026-10-09: started by Orchestrator before M1 (reported): owner request: try the system by hand during M2"]
+
+[[node]]
+  id = "SCHED3"
+  title = "Several harts: a capped victim beside a creator that reweighs and lifts it keeps its share, and wake-no-preempt's proof is restated for several harts"
+  template = "package"
+  parent = "smp"
+  needs = ["SMP4"]
+  body = "From SMP4's measurements: with audits excused, the remaining 2-hart misses are in the picks: budget-churn-shell rv64 404 and deadline-flood rv64 ~410 (want 450+), containment's bystander rv32 442; a creator carving and destroying children reweighs ~240 times and lifts the victim out of the cap set ~80 times (rv32 45) while holding both harts ~60% outside audits. Find whether the cap-set lift/reweigh rules give the victim less than R12 promises on several harts, fix the rule or restate the target with the model, and judge those lines at 2 harts. Also restate sched-wake-no-preempt's proof for several harts (a timeout answered at the first entry on any hart is not a preemption) and judge it at 2. Kernel: Tier A."
+  state = "todo"
+  revision = 522

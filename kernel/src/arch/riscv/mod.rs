@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2020 Sean Cross <sean@xobs.io>
 // SPDX-License-Identifier: Apache-2.0
 
-use riscv::register::{senvcfg, sie, sstatus};
+use riscv::register::{senvcfg, sstatus};
 
 mod asm;
 pub mod exception;
@@ -29,22 +29,50 @@ pub fn init() {
         "W^X verified: {} executable kernel pages, none writable under any alias",
         mem::verify_kernel_wx()
     );
-
-    // SAFETY: enabling supervisor software and external interrupts. The kernel runs with
-    // sstatus.SIE clear, so these are only actually taken once execution returns to
-    // userspace, where the trap handler is ready for them.
-    unsafe {
-        sie::set_ssoft();
-        sie::set_sext();
-    }
 }
 
 /// Halt the hart (`wfi`) until an interrupt enabled in `sie` is pending, taken or not: with
 /// `sstatus.SIE` clear it is not, and the hart goes on after the halt.
-pub fn halt() {
-    // SAFETY: `wfi` has no memory effect.
-    unsafe { core::arch::asm!("wfi", options(nomem, nostack)) };
+pub fn halt() { halt_masking(0) }
+
+/// [`halt`] until the reschedule interrupt alone is pending: a wait (for the kernel lock, or for a
+/// shootdown's acknowledgement) that a pending timer or device interrupt would end at once, every
+/// turn, since a hart without the lock cannot take it. Such a wait would spin, not halt (R78).
+pub fn halt_for_ipi() { halt_masking(STIE | SEIE) }
+
+/// `sie`'s timer and external interrupt enables.
+const STIE: usize = 1 << 5;
+const SEIE: usize = 1 << 9;
+
+/// `wfi` with the `sie` bits in `mask` cleared, and `sie` restored after; no `wfi` at all if an
+/// interrupt it waits for is pending already. The architecture lets `wfi` return at once then, but
+/// QEMU halts the hart regardless and, under `-icount`, gives the host thread to every other hart's
+/// turn before it looks again: up to a kernel section each (`sched-lock-contention-4`).
+fn halt_masking(mask: usize) {
+    if riscv::register::sip::read().bits() & riscv::register::sie::read().bits() & !mask != 0 {
+        #[cfg(debug_assertions)]
+        SKIPPED.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        return;
+    }
+    // SAFETY: `sie` only chooses which pending interrupts end the halt (and, with `sstatus.SIE`
+    // set, which are taken; it is clear in the kernel); it is restored before this returns, and
+    // `wfi` has no memory effect.
+    unsafe {
+        core::arch::asm!(
+            "csrrc {saved}, sie, {mask}",
+            "wfi",
+            "csrw sie, {saved}",
+            mask = in(reg) mask,
+            saved = out(reg) _,
+            options(nomem, nostack)
+        )
+    };
 }
+
+/// A checked build's count of the halts skipped because an awaited interrupt was pending, which
+/// `sched-lock-contention` requires above 0 (`hart::report`).
+#[cfg(debug_assertions)]
+pub static SKIPPED: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
 
 /// Put the core to sleep until an interrupt hits. Returns `true` to indicate the kernel
 /// should not exit.

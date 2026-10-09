@@ -19,7 +19,9 @@
 //! - [`begin_billing`] (after the entry's expiry) starts billing kernel time to `cur`: a system call's time
 //!   is its caller's. A timer interrupt's is not: the rest of an entry that found something is the budget's
 //!   billed last ([`bill_from_now`]), and of one that found nothing, `cur`'s if it ends its slice and
-//!   nobody's otherwise (`arch::irq`).
+//!   nobody's otherwise (`arch::irq`). A device interrupt's is as a timer interrupt's that ends no slice
+//!   until it claims: once it has, `cur`'s ([`begin_billing_from`]) but for the handling, its owner's
+//!   ([`bill_irq`]); if another hart claimed first, the rest stays the expiry's or nobody's.
 //! - [`leave`] (on every return, to user mode or to `kmain`) closes the billing and, if the budget that runs
 //!   next is not `cur`, deschedules `cur`: its pending runtime is folded into its pass (at least one tick)
 //!   and it is requeued behind its equals if it still has a runnable thread. It then reconciles the queue
@@ -398,6 +400,10 @@ pub fn from_user() {
 /// The entry's expiry is done: from here, kernel time is `cur`'s (a system call's is its
 /// caller's).
 pub fn begin_billing() { bill_from_now(SCHED.with(|s| s.cpu.cur(here()))); }
+
+/// [`begin_billing`] as of tick `since`, the entry's expiry's end: a device interrupt from user
+/// mode that claimed a source (`arch::irq`), whose claim nothing billed.
+pub fn begin_billing_from(since: u64) { bill_from(SCHED.with(|s| s.cpu.cur(here())), since) }
 
 /// From here, kernel time is `payer`'s (nobody's for `None`): the rest of an entry whose expiry
 /// billed `payer` last (`time::Expired`). Kernel time being billed is charged first: the expiry's
@@ -864,14 +870,15 @@ pub mod trace {
         n: usize,
         dropped: u64,
         entry: u64,
-        /// Inside a timer interrupt from user mode, until it returns: its charges are recorded.
-        timer: bool,
+        /// Inside a timer or device interrupt from user mode, until it returns: its charges are
+        /// recorded.
+        interrupt: bool,
         /// The walk measured now (`walk-trace`), 0 for none.
         walk: u64,
     }
 
     static RING: KernelCell<Ring> =
-        KernelCell::new(Ring { pages: [0; PAGES], n: 0, dropped: 0, entry: 0, timer: false, walk: 0 });
+        KernelCell::new(Ring { pages: [0; PAGES], n: 0, dropped: 0, entry: 0, interrupt: false, walk: 0 });
 
     /// Take the ring's frames, zeroed (at boot, before `boot_budgets` counts what the kernel
     /// keeps).
@@ -926,19 +933,39 @@ pub mod trace {
     pub const CHARGE: u8 = b'B';
     pub const EXPIRED: u8 = b'E';
     pub const RETURN: u8 = b'O';
+    /// A device interrupt from user mode began (`x`), recorded as `I` is and followed by the same
+    /// records, and its claim (`c`: the source in the id field, 0 if another hart claimed it
+    /// first). The oracle checks that one that claims nothing is billed as a timer interrupt that
+    /// ends no slice: its expiry's, or nobody's.
+    pub const EXTERNAL_ENTRY: u8 = b'x';
+    pub const CLAIM: u8 = b'c';
 
     /// A timer interrupt from user mode began (after its user time was accrued).
     pub fn timer_entry() {
         let cur = super::SCHED.with(|s| s.cpu.cur(super::here()));
-        RING.with(|r| r.timer = true);
+        RING.with(|r| r.interrupt = true);
         record(TIMER_ENTRY, cur.map_or(0, |b| b.id), u128::from(crate::time::now_us()));
+    }
+
+    /// A device interrupt from user mode began (after its user time was accrued).
+    pub fn external_entry() {
+        let cur = super::SCHED.with(|s| s.cpu.cur(super::here()));
+        RING.with(|r| r.interrupt = true);
+        record(EXTERNAL_ENTRY, cur.map_or(0, |b| b.id), u128::from(crate::time::now_us()));
+    }
+
+    /// A device interrupt from user mode claimed `irq`, or nothing.
+    pub fn claimed(irq: Option<usize>) {
+        if RING.with(|r| r.interrupt) {
+            record(CLAIM, irq.map_or(0, |irq| irq as u64), 0);
+        }
     }
 
     /// `ticks` of kernel time were charged to budget `id`: counted always, recorded (`B`) inside
     /// a timer interrupt from user mode.
     pub fn charge(id: u64, ticks: u64) {
         KERNEL.with(|k| k.charged += ticks);
-        if RING.with(|r| r.timer) {
+        if RING.with(|r| r.interrupt) {
             record(CHARGE, id, u128::from(ticks));
         }
     }
@@ -999,7 +1026,7 @@ pub mod trace {
     /// The entry's expiry is done; `last` was billed last, for a wait that ended before its
     /// timeout if `stale`.
     pub fn expired(last: Option<crate::handle::BudgetRef>, stale: bool) {
-        if RING.with(|r| r.timer) {
+        if RING.with(|r| r.interrupt) {
             let what = match (last, stale) {
                 (None, _) => 0,
                 (Some(_), false) => 1,
@@ -1011,7 +1038,7 @@ pub mod trace {
 
     /// The kernel returns, to user mode or to `kmain`.
     pub fn returned(to_user: bool) {
-        if RING.with(|r| core::mem::take(&mut r.timer)) {
+        if RING.with(|r| core::mem::take(&mut r.interrupt)) {
             record(RETURN, 0, u128::from(to_user));
         }
     }

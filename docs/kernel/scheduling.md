@@ -195,7 +195,7 @@ flowchart TD
 
 ### Charging
 
-<details><summary>Status: built · partly tested: interrupt handling billed to the device's owner is not attacked by a case · tested (18)</summary>
+<details><summary>Status: built · partly tested: interrupt handling billed to the device's owner is not attacked by a case · tested (19)</summary>
 
 - bench:sched-sleep-gaming
 - bench:sched-exit-churn
@@ -207,6 +207,7 @@ flowchart TD
 - host:redoubt-stride::every_charge_counts_at_any_weight
 - host:redoubt-stride::a_deschedule_charges_at_least_one_unit_and_a_destroy_only_what_ran
 - host:testbench::a_timer_interrupt_bills_the_budgets_whose_items_it_expired
+- host:testbench::a_device_interrupt_that_claims_nothing_bills_nobody
 - mutation:R12ShortRunsFree
 - mutation:R12DropRemainder
 - mutation:R12ExitRunsFree
@@ -253,7 +254,10 @@ Kernel time is billed as well:
   timer interrupt that found neither is the budget's its hart runs when it ends that budget's slice,
   and nobody's otherwise;
 - an interrupt's handling is billed to the owner of its device object
-  ([R5 (interrupts)](devices.md#r5-interrupts)); one with no device object, to nobody;
+  ([R5 (interrupts)](devices.md#r5-interrupts)); one with no device object, to nobody; a device
+  interrupt that claims nothing, its source claimed first by another hart, is billed as a timer
+  interrupt that ends no slice: the rest of it after its expiry is the budget its expiry billed
+  last, or nobody's, never the budget it interrupted;
 - `kmain`'s pick and switch into a budget are paid by the budget picked, whatever ended the run
   before: a block or an exit is paid by its actor, a timer entry's handling by the budget it
   served, and the pick that follows by the budget it picks (a pick that cannot run leaves the
@@ -614,7 +618,8 @@ and 12.0 ms for the deadline notice, and a lease's end at most 9.8 and 16.6 ms; 
 rv32's driver wake at N = 16, 17.2 ms against 15 ms; rv64's is 12.6 ms. At four harts a wake can
 wait for the kernel lock behind three sections ([residual risks](#residual-risks)).
 `sched-lock-contention` holds the lock's order under R12's costliest call at two and four harts,
-and records the driver's wake there ([R78](#r78-fair-kernel-entry)).
+and gates the driver's wake there, both targets at two harts and the p50 at four
+([R78](#r78-fair-kernel-entry)).
 
 A slice end adds its own kernel time ([charging](#charging)). In the release build that is about
 15,000 instructions on rv64 and 22,000 on rv32, so a 1 ms slice takes about 1.12 ms and 1.17 ms
@@ -1040,7 +1045,7 @@ It is attacked three ways:
 
 ### R78 (fair kernel entry)
 
-Status: built · tested: bench:smp-boot, bench:smp-lock-wait, bench:sched-lock-contention, bench:sched-lock-contention-4, host:testbench::lock_waits_take_the_lock_in_ticket_order
+Status: built · tested: bench:smp-boot, bench:smp-lock-wait, bench:sched-lock-contention, bench:sched-lock-contention-4, bench:irq-boot-hart-only, host:testbench::lock_waits_take_the_lock_in_ticket_order
 
 On several harts, kernel entry is fair across them: the one kernel lock is a FIFO ticket lock,
 so a hart that arrives at the kernel waits behind at most `MAX_HARTS` - 1 kernel sections, never
@@ -1055,6 +1060,14 @@ until `serving` reads it (acquire), and releases by `serving + 1`. A hart waits 
 spinning: it marks itself in the lock's `halted` set, reads `serving` again and, if its turn has
 not come, halts (`wfi`) until an interrupt is pending; the release sends each marked hart the
 reschedule interrupt (through the firmware, SBI), and the woken hart reads `serving` again. The
+halt waits for the reschedule interrupt alone: the timer's and a device's are masked in `sie` for
+it (`arch::halt_for_ipi`), since a hart without the lock cannot take them, and one pending would
+end every halt at once and turn the wait into a spin. A hart whose awaited interrupt is already
+pending runs no `wfi` at all: the architecture lets `wfi` return at once then, but QEMU halts the
+hart regardless and, under `icount`, runs it again only after every other hart's turn
+(`arch::halt_masking`), which cost an idle hart woken by `sched-lock-contention-4`'s alarm
+28.5 ms. A checked build counts the halts it skips, and `sched-lock-contention` requires some at
+two and at four harts (95 to 182 a run). The
 mark, the read, the release's store and its read of the set are sequentially consistent, so either
 the release sees the mark or the waiter sees the new ticket: no hart halts past its turn. Under
 QEMU's `icount`, where the harts take turns on one host thread and the clock counts every running
@@ -1095,14 +1108,24 @@ but one a budget asks in a loop for a `map_anon` refused after a search of the w
 `sched-latency`'s driver stand-in. A kernel built with `lock-trace` records each wait's ticket,
 and the oracle requires the waits to take the lock in ticket order, each drawn behind fewer
 sections than harts ([the scheduler oracle](../testbench.md#the-scheduler-oracle)): at two harts
-1696 waits on rv64 and 1702 on rv32, each behind at most one section; at four harts
-(`sched-lock-contention-4`, three such budgets) 2306 and 2362, behind at most three. The driver's
-wake is recorded against the [responsiveness](#responsiveness) targets, not gated: net of the
-audits its p50/p99 is 18.5/19.2 ms on rv64 and 18.3/19.1 ms on rv32 at two harts, against 15 and
-50 ms, and 4.3/59.3 ms and 7.1/86.9 ms at four. At two harts each wake waits about two searches: the
-alarm's interrupt reaches only the boot hart, so it waits out that hart's search, and the woken
-hart, halted for its turn, draws its ticket after the searcher's next call
-([residual risks](#residual-risks)).
+1433 waits on rv64 and 1436 on rv32, each behind at most one section; at four harts
+(`sched-lock-contention-4`, three such budgets) 2240 and 2548, behind at most three. The driver's
+wake is gated on the [responsiveness](#responsiveness) targets at two harts, and on its p50 at
+four. Every started hart takes device interrupts ([boot](boot.md#hardware-abstraction)), so the
+alarm reaches the idle hart, which draws its ticket behind the search in progress and runs the
+driver itself: net of the audits its p50/p99 is 8.5/10.6 ms on rv64 and 8.5/10.4 ms on rv32 at two
+harts, against 15 and 50 ms. The wakes are bimodal, under 2 ms when the alarm falls between two
+searches and about 10 ms inside one, and the p50 is whichever mode holds half of them (another run
+read 1.5 and 1.7 ms). With the boot hart alone taking device interrupts they were 18.5/19.2 and
+18.3/19.1 ms: the alarm waited out the boot hart's search, and the woken hart drew its ticket after
+the searcher's next call. `bench:irq-boot-hart-only` is that kernel (`irq-boot-hart-only`, a
+debug-only feature) under the same targets, which the post-check must fail (20.2 ms gross p50 on
+both widths: its hammer lands on the boot hart); a checked build's count of claims by hart at power-off shows its boot hart claiming
+all 201. Which hart idles at two harts follows the boot's timing, and in `sched-lock-contention`
+it is the boot hart (claims 200 and 1), so the count that shows other harts claiming is
+`sched-lock-contention-4`'s, which requires one of them to claim ten or more (59, 3, 137 and 2 on
+rv64; 36, 140, 23 and 2 on rv32). At four harts the p50 is 4.3 ms on rv64 and 5.3 ms on rv32,
+gated; the p99, 59.1 and 58.7 ms, is recorded, not gated ([residual risks](#residual-risks)).
 
 ### R23 (no test channels)
 
@@ -1125,14 +1148,15 @@ tells whoever reads the console who runs when. It exists only under the Cargo fe
   `sched-carve-return`, `sched-carve-inflation`, `deadline-flood-billed-traced`), `sched-ties`,
   `sched-debt-lift`, `sched-lift-delay`, `sched-wake-no-preempt`, `sched-cluster`,
   `sched-cluster-old-control`, `sched-latency`, `sched-latency-tcg`, `sched-lock-contention`,
-  `sched-lock-contention-4`, `kernel-containment`, `endpoint-destroy-full`, `smp-fence` and
+  `sched-lock-contention-4`, `irq-boot-hart-only`, `kernel-containment`, `endpoint-destroy-full`, `smp-fence` and
   `worst-walk`.
 
 The other diagnostic features are off by default in the same way: `walk-trace`, which implies
 the trace and brackets each receive's pump, timer expiry and reconcile in it, for `worst-walk`
 alone; `lock-trace`, which implies the trace and records after each wait for the kernel lock its
-ticket and the sections ahead of it when drawn (`k`), for `sched-lock-contention` and
-`sched-lock-contention-4`; `sched-inject-tie-fault`, a debug-only break of the tie rule that implies the trace;
+ticket and the sections ahead of it when drawn (`k`), for `sched-lock-contention`,
+`sched-lock-contention-4` and `irq-boot-hart-only`; `irq-boot-hart-only`, whose boot hart alone
+takes device interrupts, for R78's negative case at two harts; `sched-inject-tie-fault`, a debug-only break of the tie rule that implies the trace;
 `sched-capped-holds-floor`, whose floor counts the capped budgets, for R12's negative case at two
 harts; `sched-test-and-set-entry`, which replaces the kernel lock by test-and-set, and
 `sched-spin-entry`, which makes a hart wait for it spinning, each for one of
@@ -1244,14 +1268,26 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   `sched-budget-churn` 131 and 125, `sched-share` 130 and 195) and 229 and 280 in the containment
   gate. In
   `deadline-flood-billed-traced`, whose creator's deadlines end in destructions, one hart waited
-  about 1000 ms of a 2 s window. A wake behind R12's costliest call waits about two of its
-  sections at two harts (`sched-lock-contention`, [R78](#r78-fair-kernel-entry)): a device's
-  interrupt reaches only the boot hart, which finishes its section first, and the hart the wake
-  goes to, halted for its turn, draws its ticket after that caller's next call. Destruction's work
-  moving outside the lock ([several harts](../plan/m2-usable-shell.md#several-harts), step 5) is
-  what shortens the waits. Enabling device interrupts in every hart's interrupt-controller
-  context, so an idle hart takes them, is what removes the second section; the driver's wake is
-  then gated on the one-hart targets at two and four harts.
+  about 1000 ms of a 2 s window. A wake behind R12's costliest call waits at most the section in
+  progress at two harts (`sched-lock-contention`, [R78](#r78-fair-kernel-entry)): the idle hart
+  takes the device's interrupt and draws its ticket behind it. Destruction's work moving outside
+  the lock ([several harts](../plan/m2-usable-shell.md#several-harts), step 5) is what shortens
+  the waits.
+- **A woken hart waits for QEMU's turns at four harts.** Under `icount` the harts take turns on one
+  host thread, and a hart in a kernel section keeps its turn to the section's end. A device's
+  line that rises while the idle hart is halted wakes it on time in virtual time, but the hart runs
+  only when the running hart's turn ends, and then draws its ticket behind up to three sections. In
+  `sched-lock-contention-4` that leaves the driver wake's p99 at 59.1 ms on rv64 and 58.7 ms on
+  rv32 (other runs read 49.7 and 40.6), so it is recorded, not gated: every long idle halt there began
+  with nothing pending, and the kernel cannot shorten another hart's turn. On harts that run at
+  once the woken hart draws its ticket at the rise. A run under QEMU's multi-threaded TCG, or on
+  hardware, would measure the four-hart wake without the turns. Beside the turns, every hart pays
+  for each device interrupt: an unmasked source raises the external interrupt on every hart's
+  context, so each hart in user mode or idle when it rises traps, and all but one of them take the
+  kernel lock for a claim that finds nothing (1 to 149 such entries a run at four harts, 77 to 88
+  at two). Each is a short section, but it is a turn and a ticket ahead of the woken hart. Routing
+  each source to one idle hart (a busy hart's threshold above the sources' priority while one
+  idles) is the remedy if it matters.
 - **Some cases keep one hart.** A case that does not keep its hart count runs at the count the
   bench is given (`--smp`); these keep theirs (`keep_smp`), each for one of four reasons: the lock
   waits above, which destruction's work leaving the lock removes (step 5 of

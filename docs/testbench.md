@@ -598,7 +598,7 @@ starts and the oracles run in under a second, so nothing else is shared between 
 
 ## Checked builds
 
-<details><summary>Status: built · tested (15)</summary>
+<details><summary>Status: built · tested (16)</summary>
 
 - bench:bench-debug-assertions
 - bench:bench-debug-assertions-off
@@ -615,6 +615,7 @@ starts and the oracles run in under a second, so nothing else is shared between 
 - host:testbench::an_unmatched_audit_fails
 - host:testbench::cluster_credit_is_the_certified_interior_only
 - host:testbench::cluster_lower_witness_counts_the_union_of_outer_bins
+- host:testbench::a_device_interrupt_that_claims_nothing_bills_nobody
 
 </details>
 
@@ -695,7 +696,11 @@ envelope. The other cases keep the whole-stamp subtraction above. The same trace
 timer interrupt from user mode with every charge inside it, and `sched_oracle` checks that the
 budget it interrupted pays only for its own items or its slice's end
 ([charging](kernel/scheduling.md#charging)); a kernel built with `timer-tail-billed`, which keeps
-the old billing, fails that check in a recorded negative run. The trace ends with one record of
+the old billing, fails that check in a recorded negative run. It records each device interrupt
+from user mode the same way (`x`), with its claim (`c`: the source, or 0 when another hart claimed
+it first), and checks that one that claims nothing is billed as a timer interrupt that ends no
+slice: after its expiry, to the budget the expiry billed last or to nobody, never to the budget it
+interrupted. The trace ends with one record of
 the kernel's time (`C`): every hart's ticks in the kernel, from a trap's entry or `kmain`'s loop
 to the return to user mode or the idle, in its id; the ticks charged to budgets in its pass; and
 in its entry field, which it alone uses so, the ticks the checked build's audits took.

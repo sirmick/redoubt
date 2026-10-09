@@ -1,4 +1,4 @@
-description = "Fair kernel entry under contention (R78, kernel/scheduling.md), at four harts: three budgets refused a `map_anon` after a search of the whole area in a loop, one on every hart but one, beside the latency workload's driver stand-in; every wait for the kernel lock takes it in ticket order (`lock-trace`), and the driver wake's numbers are recorded against the targets, not gated (virtual time, checked build)"
+description = "Fair kernel entry under contention (R78, kernel/scheduling.md), at four harts: three budgets refused a `map_anon` after a search of the whole area in a loop, one on every hart but one, beside the latency workload's driver stand-in; every wait for the kernel lock takes it in ticket order (`lock-trace`), and the driver wake's p50 meets its 15 ms target; its p99 is recorded, not gated (QEMU's turns, kernel/scheduling.md, \"Residual risks\") (virtual time, checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true
@@ -9,15 +9,23 @@ smp = [4]
 keep_smp = true
 # Test builds only: the trace ring with each lock wait's ticket (never in a default kernel).
 kernel_features = ["lock-trace"]
-# The oracle checks the waits' ticket order; the driver wake is recorded against the targets at
-# four harts (`gate_harts`; kernel/scheduling.md, "Responsiveness").
-post_check = "sched_oracle gate_harts=2 driver_wake_p50_us=15000 driver_wake_p99_us=50000"
+# The oracle checks the waits' ticket order, and gates the driver wake's p50. Its p99 is printed
+# beside, with no target: under `-icount` a hart woken while another is in a search runs only when
+# that hart's QEMU turn ends, and then draws its ticket behind up to three searches
+# (kernel/scheduling.md, "Residual risks").
+post_check = "sched_oracle driver_wake_p50_us=15000"
 timeout_secs = 1200
 expect = [
     '^\[lock-contention\] 3 hammers. searches refused: \d+$',
     '^\[lock-contention\] driver wake: .*: gross, audits included; net in the post-check',
     '^LATENCY-SAMPLE contention driver_wake \d+ \d+$',
     '^SCHED-LOCK-CONTENTION TEST PASSED$',
+    # The kernel's count of claims at power-off: a hart other than the boot hart claimed at least
+    # ten of the alarms (one of three hammers' harts, or the idle one, takes each).
+    '^external interrupts: claimed by hart \[\d+(, \d+)*, [1-9]\d+(, \d+)*\], \d+ found nothing$',
+    # A checked build's count: idle and lock-wait halts that found the interrupt they wait for
+    # pending ran no `wfi` (kernel/scheduling.md, R78).
+    '^halts: [1-9]\d* skipped, an awaited interrupt pending$',
     '^SCHED-TRACE-END \d+ dropped 0$',
 ]
 forbid = ['\[lock-contention\] FAIL']

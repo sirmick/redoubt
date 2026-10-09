@@ -150,9 +150,11 @@ static RAN_USER: AtomicUsize = AtomicUsize::new(0);
 
 /// A checked build's account at `system_reset`, for `smp-boot`: whether every hart in the device
 /// tree was started and ran a process, and the kernel lock's FIFO evidence, the most kernel
-/// sections any acquisition waited behind (cell.rs; at most the harts less one, R78). A short
-/// count is a fact, not a failure: a boot with fewer runnable processes than harts leaves some
-/// idle, and only `smp-boot`, whose work fills every hart, judges it.
+/// sections any acquisition waited behind (cell.rs; at most the harts less one, R78), and the
+/// device interrupts each hart claimed (`irq::report`), and the halts skipped because an awaited
+/// interrupt was pending (`arch::halt_masking`). A short count is a fact, not a failure: a boot
+/// with fewer runnable processes than harts leaves some idle, and only `smp-boot`, whose work
+/// fills every hart, judges it.
 #[cfg(debug_assertions)]
 pub fn report() {
     let (ran, started, found) =
@@ -167,6 +169,8 @@ pub fn report() {
         crate::cell::KERNEL_LOCK.most_waited(),
         started
     );
+    super::irq::report();
+    println!("halts: {} skipped, an awaited interrupt pending", super::SKIPPED.load(Ordering::Relaxed));
 }
 
 /// The thread this hart runs, 0 for none.
@@ -222,15 +226,17 @@ pub fn wake_halted(mask: usize) {
     }
 }
 
-/// Halt this hart in its wait for the kernel lock until an interrupt is pending: the release's
-/// ([`wake_halted`]), a shootdown's or the timer's, all enabled in `sie` on every hart before its
-/// first wait ([`hart_main`]). With `sstatus.SIE` clear none is taken: the halt ends and the wait
-/// goes on. The pending reschedule interrupt is cleared, so that it does not end the next halt at
-/// once. That loses nothing: a shootdown is asked in the block's `shoot` word, which the wait
-/// serves on its next turn, and a reschedule interrupt goes only to a hart marked idle, which picks
-/// once it holds the lock.
+/// Halt this hart in its wait for the kernel lock until the reschedule interrupt is pending: the
+/// release's ([`wake_halted`]) or a shootdown's, enabled in `sie` on every hart before its first
+/// wait ([`hart_main`]). With `sstatus.SIE` clear it is not taken: the halt ends and the wait goes
+/// on. A pending timer or device interrupt does not end it (`arch::halt_for_ipi`): the hart takes
+/// those once it holds the lock, and they would end every halt until then. The pending
+/// reschedule interrupt is cleared, so that it does not end the next halt at once. That loses
+/// nothing: a shootdown is asked in the block's `shoot` word, which the wait serves on its next
+/// turn, and a reschedule interrupt goes only to a hart marked idle, which picks once it holds the
+/// lock.
 pub fn halt_for_lock() {
-    super::halt();
+    super::halt_for_ipi();
     ack_ipi();
 }
 
@@ -289,7 +295,7 @@ pub fn shootdown(pid: Pid, shot: Shot) -> usize {
         // one the interrupt after it clears its word ([`serve`]), and the pending interrupt ends a
         // halt begun after it came, so none is lost.
         while block.shoot.load(Ordering::Acquire) != 0 {
-            super::halt();
+            super::halt_for_ipi();
             ack_ipi();
         }
         acked |= 1 << i;
@@ -401,6 +407,18 @@ fn listed() -> Option<(usize, impl Iterator<Item = usize>)> {
     Some((found, (0..listed).map(move |i| crate::args::wide(arg.data, 2 + 2 * i))))
 }
 
+/// Each listed hart's PLIC S-mode context, by boot index: the words after the ids in `Hart`.
+/// Empty without the argument (the boot hart runs alone, on `Plic`'s context).
+pub fn contexts() -> impl Iterator<Item = usize> {
+    let arg = crate::args::KernelArguments::get().iter().find(|a| a.name == u32::from_le_bytes(*b"Hart"));
+    let words = arg.map_or(&[][..], |arg| {
+        let listed = arg.data[1] as usize;
+        assert!(arg.data.len() >= 2 + 3 * listed, "a Hart argument without its harts' contexts");
+        &arg.data[2 + 2 * listed..2 + 3 * listed]
+    });
+    words.iter().map(|&context| context as usize)
+}
+
 /// Back the stack slots of the harts the loader listed, but the boot hart's, which the loader
 /// mapped (`HART_STACKS`, kernel/memory-layout.md): frames the kernel keeps, taken at boot before
 /// `boot_budgets` counts what is left. The guard pages stay unmapped.
@@ -476,6 +494,9 @@ extern "C" fn hart_main(id: usize) -> ! {
     // for the lock wakes it with that interrupt (`halt_for_lock`).
     super::irq::timer::init_hart();
     crate::cell::KERNEL_LOCK.acquire();
+    // Device interrupts on its own PLIC context, taken from user mode and in `idle` as on the boot
+    // hart (`intc_plic.rs`).
+    super::irq::online();
     // R11 and R24: `_hart_land` wrote them as `_start` does on the boot hart.
     assert_eq!(riscv::register::senvcfg::read().bits(), 0, "senvcfg is not 0 on hart {} (R11)", id);
     let status = riscv::register::sstatus::read();

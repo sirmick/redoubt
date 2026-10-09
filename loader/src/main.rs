@@ -185,6 +185,10 @@ extern "C" fn rust_entry(hart_id: usize, dtb: usize) -> ! {
     for id in platform.harts() {
         args.word64(*id as u64);
     }
+    // Then each listed hart's PLIC S-mode context, by boot index (0 without a PLIC).
+    for context in platform.contexts() {
+        args.word(*context as u32);
+    }
     args.end();
 
     // Entropy for the kernel's RNG. Server IDs are drawn from it, so it must not be guessable.
