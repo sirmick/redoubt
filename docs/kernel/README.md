@@ -232,10 +232,12 @@ rv32, 25794 µs on rv64) and a lease's end, and on rv32 for R10; rv64's worst R1
 
 At two harts every target is met on all 16 seeds on both widths; the deadline notice's p99 is 4
 to 7 ms above its one-hart value, and R10's 1 to 1.5 ms. The
-bystander's share of the charges (its one thread is owed a hart, 500 of 1000) falls in two modes
-by the hart it lands on: the one that waits longer for the lock and takes the audits, or the
-other. On rv32 that is 445 or 543 to 546, so at two harts the share is reported, not judged
-(`@1`; [scheduling](scheduling.md#residual-risks)). In µs, against the same targets:
+bystander's share of the charges (its one thread is owed a hart, 500 of 1000) fell in two modes
+by the hart it landed on: the one that waited longer for the lock and took the audits, or the
+other, 445 or 543 to 546 on rv32. With a wait behind another hart's audit billed to no one it
+reads 464 on rv64 and 442 on rv32 on the default seed, so at two harts the share is still
+reported, not judged (`@1`; [scheduling](scheduling.md#residual-risks)). In µs, against the same
+targets, before that change:
 
 | Seed | rv32 notice | rv32 R10 | rv32 lease end | rv32 bystander | rv64 notice | rv64 R10 | rv64 lease end | rv64 bystander |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
