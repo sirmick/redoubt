@@ -137,6 +137,10 @@ pub enum Role {
     /// p0 threads counting until the window ends, and p1 more that sleep until p2 ticks first;
     /// report the total.
     SpinThreads = 31,
+    /// Take a page in every 2 MiB span of the `map_anon` area, then ask for 2 MiB until the window
+    /// ends, each request refused after a search of the whole area, R12's costliest call
+    /// (`map-anon-search-bound`); report the refusals.
+    SearchHammer = 32,
 }
 
 impl Role {
@@ -174,6 +178,7 @@ impl Role {
             ClusterDriver,
             ClusterTimer,
             SpinThreads,
+            SearchHammer,
         ]
         .into_iter()
         .find(|r| *r as u8 == x)
@@ -305,6 +310,27 @@ extern "C" fn gamer_thread(_: usize) -> ! {
     DONE.fetch_add(1, SeqCst);
     rd::thread_exit().ok();
     crate::park()
+}
+
+/// [`Role::SearchHammer`]: the `map_anon` area (memory-layout.md, "Regions") with a page taken in
+/// every 2 MiB span, so no request of a span fits and each refusal reads every page table of the
+/// area; the requests refused until `end`.
+fn search_hammer(end: u64) -> u64 {
+    const AREA: core::ops::Range<usize> = 0x6000_0000..0x7000_0000;
+    const SPAN: usize = 2 << 20;
+    for span in AREA.step_by(SPAN) {
+        // A page of this process's may be there already.
+        let _ = rd::map_fixed(span, rd::PAGE_SIZE, rd::rw());
+    }
+    let mut refused = 0;
+    while ticks() < end {
+        match rd::map_anon(SPAN, rd::rw()) {
+            Err(Error::OutOfMemory) => refused += 1,
+            Ok(at) => rd::unmap(at, SPAN).expect("unmap"),
+            Err(_) => {}
+        }
+    }
+    refused
 }
 
 /// Count until the window ends, a `late` one ([`Role::SpinThreads`]'s p1) from p2 ticks.
@@ -774,6 +800,7 @@ fn run_child(arg: usize, more: Option<fn(Option<Role>, bool)>) -> ! {
                 rd::send(1, &rd::body([rd::time_now().unwrap_or(0) as usize, 0, 0, 0]), None, rd::FOREVER);
             rd::process_exit(0)
         }
+        Some(Role::SearchHammer) => search_hammer(end),
         Some(Role::SpinThreads) => {
             let (first, more) = (param(0).max(1) as usize, param(1) as usize);
             for _ in 1..first {
@@ -2541,6 +2568,50 @@ impl Bench {
     pub fn exit_endpoint(&self) -> u32 { self.exit }
 
     pub fn image(&self) -> &Image { &self.image }
+}
+
+/// `sched-lock-contention`: `hammers` budgets (100, from `users`) each refused a `map_anon` after a
+/// search of the whole area in a loop ([`Role::SearchHammer`]), R12's costliest call, one on every
+/// hart but one, beside `sched-latency`'s driver stand-in (1000, from `system`) on the goldfish
+/// RTC's alarm. The trace's lock-wait tickets and the driver's wakes are the post-check's.
+pub fn lock_contention(hammers: usize) -> ! {
+    /// Long enough for the driver's samples under the hammers.
+    const WINDOW: u64 = 4_000_000;
+    let devices = rd::OTHER_DEVICES..rd::first_free();
+    let mut b = Bench::new("lock-contention");
+    let Some((rtc_mmio, _, rtc_irq)) = rtc::find(devices) else {
+        b.check(false, format_args!("no goldfish RTC among the device handles"));
+        b.finish("SCHED-LOCK-CONTENTION")
+    };
+    let driver = b.budget(rd::SYSTEM, 1000, 1, rd::FOREVER);
+    // It holds its samples' windows until asked, below.
+    let d = b.start(driver, Role::Driver, &[K, 1], &[rtc_mmio, rtc_irq]);
+    let mut started = [0usize; 3];
+    let hammers = &mut started[..hammers.min(3)];
+    for h in hammers.iter_mut() {
+        // Room for a page and its page tables in every span of the area.
+        let budget = b.budget(rd::USERS, 100, 4, rd::FOREVER);
+        *h = b.start(budget, Role::SearchHammer, &[], &[]);
+    }
+    b.go(50_000, WINDOW);
+    // The hammers' refusals and the driver's two reports.
+    let words = b.collect_words(hammers.len() + 2);
+    let refused: u64 = hammers.iter().map(|&i| join(words[i][0][0], words[i][0][1])).sum();
+    b.note(format_args!("{} hammers' searches refused: {}", hammers.len(), refused));
+    let stat = |tag: usize| words[d].iter().find(|w| w[3] & 0xff == tag && w[3] >> 8 > 0).copied();
+    match stat(Stats::DRIVER_WAKE) {
+        Some(w) => b.note(format_args!(
+            "driver wake: {} / {} / {} ({}): gross, audits included; net in the post-check",
+            w[0],
+            w[1],
+            w[2],
+            w[3] >> 8
+        )),
+        None => b.check(false, format_args!("driver wake: no samples")),
+    }
+    b.check(refused > 0, format_args!("the hammers made their searches"));
+    b.samples(d, &words[d], format_args!("contention"));
+    b.finish("SCHED-LOCK-CONTENTION")
 }
 
 /// Budget churn against an equal-weight victim (`sched-budget-churn` and its shell's case): each

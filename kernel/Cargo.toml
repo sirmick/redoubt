@@ -42,6 +42,9 @@ sched-trace-large = ["sched-trace"]
 # the worst-walk case's numbers (kernel/ipc.md, kernel/timer.md, "Residual risks"). Not in the
 # gate: a record pair at every kernel entry would fill its ring.
 walk-trace = ["sched-trace"]
+# Test builds only: also record each lock wait's ticket after its `Q`, so the oracle can check the
+# waits end in ticket order (`sched-lock-contention`; kernel/scheduling.md, R78).
+lock-trace = ["sched-trace"]
 # Debug only, never in a bench build but one recorded negative run: rank wakers behind queued
 # budgets of equal pass (the model's R12TieQueuedFirst), to show the oracle catches it.
 sched-inject-tie-fault = ["sched-trace"]

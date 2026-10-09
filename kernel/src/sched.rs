@@ -842,6 +842,9 @@ pub mod trace {
     /// A budget stopped being capped and is lifted to the floor: the pass it is lifted to, ahead of
     /// the `P` that sets it. The rise is no charge.
     pub const UNCAPPED: u8 = b'u';
+    /// With `lock-trace`, just after a `Q`: the wait's ticket in the id, and the sections ahead of
+    /// it when it was drawn in the pass field, so the oracle can check the waits end in ticket order.
+    pub const LOCK_TICKET: u8 = b'k';
 
     /// Frames the ring takes (64 MiB, 256 MiB with `sched-trace-large`), and the records they hold.
     const PAGES: usize = if cfg!(feature = "sched-trace-large") { 65536 } else { 16384 };
@@ -978,11 +981,16 @@ pub mod trace {
         });
     }
 
-    /// This hart came to the kernel at raw `time` `came`, found the lock held, and holds it now.
-    pub fn lock_wait(came: u64) {
+    /// This hart came to the kernel at raw `time` `came`, found the lock held, and holds it now,
+    /// on `ticket`, drawn with `ahead` sections ahead of it.
+    pub fn lock_wait(came: u64, ticket: u32, ahead: u32) {
         let now = super::ticks();
         let start = now.saturating_sub(riscv::register::time::read64().saturating_sub(came));
         record(LOCK_WAIT, start, u128::from(now));
+        #[cfg(feature = "lock-trace")]
+        record(LOCK_TICKET, u64::from(ticket), u128::from(ahead));
+        #[cfg(not(feature = "lock-trace"))]
+        let _ = (ticket, ahead);
     }
 
     /// A checked build's audit took `ticks`.

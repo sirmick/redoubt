@@ -100,9 +100,13 @@ impl TicketLock {
 
     /// Take the lock, waiting in turn. Whether it was held when this hart came (a trace's record of
     /// the wait, `sched.rs`).
-    pub fn acquire(&self) -> bool {
+    pub fn acquire(&self) -> bool { self.acquire_ticket().0 }
+
+    /// [`Self::acquire`], with the ticket drawn (under test-and-set, the sections served before)
+    /// and how many sections were ahead of it, for the trace's record of a wait.
+    pub fn acquire_ticket(&self) -> (bool, u32, u32) {
         #[cfg(not(feature = "sched-test-and-set-entry"))]
-        let (waited, held) = {
+        let (waited, held, ticket) = {
             let ticket = self.next.fetch_add(1, DRAW);
             // The checked build's count: the tickets ahead, read after the draw. The draw, this
             // read and every release are sequentially consistent there, so the read sees `serving`
@@ -114,17 +118,17 @@ impl TicketLock {
                 crate::arch::hart::serve();
                 self.wait_for_turn(ticket);
             }
-            (waited, held)
+            (waited, held, ticket)
         };
         #[cfg(feature = "sched-test-and-set-entry")]
-        let (waited, held) = {
+        let (waited, held, ticket) = {
             let drawn = self.serving.load(Ordering::Relaxed);
             let held = self.taken.load(Ordering::Relaxed) != 0;
             while self.taken.compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed).is_err() {
                 crate::arch::hart::serve();
                 pause();
             }
-            (self.serving.load(Ordering::Relaxed).wrapping_sub(drawn), held)
+            (self.serving.load(Ordering::Relaxed).wrapping_sub(drawn), held, drawn)
         };
         #[cfg(debug_assertions)]
         {
@@ -140,9 +144,7 @@ impl TicketLock {
                 harts
             );
         }
-        #[cfg(not(debug_assertions))]
-        let _ = waited;
-        held
+        (held, ticket, waited)
     }
 
     /// Give the lock to the next ticket. The caller holds it.

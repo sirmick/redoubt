@@ -522,12 +522,15 @@ parks when it is done, unless its exit is the point of its case.
 
 ### The scheduler oracle
 
-<details><summary>Status: built · tested (19)</summary>
+<details><summary>Status: built · tested (22)</summary>
 
 - bench:sched-ties
 - bench:sched-capped
+- bench:sched-lock-contention
+- bench:sched-lock-contention-4
 - host:testbench::a_pick_passes_over_only_a_budget_that_other_harts_run
 - host:testbench::lock_waits_are_reported_per_mille_of_the_harts_time
+- host:testbench::lock_waits_take_the_lock_in_ticket_order
 - host:testbench::a_shootdown_record_is_passed_over
 - host:testbench::a_trace_that_keeps_every_clause_passes
 - host:testbench::each_broken_clause_is_caught
@@ -554,7 +557,14 @@ requeued. On several harts it also reads which budget each hart runs (`H`) and h
 budget's threads wait for a hart (`J`, those no hart runs): a pick takes the first budget in that
 order with a thread waiting, and passes over one ranked ahead only if another hart runs it and
 none of its threads waits, never one it runs itself. It recomputes each lift and each weight
-change from the rule, and lets a pass fall only at a weight change. `sched-capped` runs the model's capped scenarios
+change from the rule, and lets a pass fall only at a weight change. A kernel built with
+`lock-trace`, a test feature that implies the trace, also records each wait for the kernel lock's
+ticket after the wait (`k`: the ticket and the sections ahead of it when drawn); a release build
+carries neither the feature nor the record. The records are written holding the lock, so the waits
+appear in the order they took it, and the oracle requires that order to be the tickets', each
+drawn behind fewer sections than the harts: no wait outlasts the sections queued ahead of it
+([R78 (fair kernel entry)](kernel/scheduling.md#r78-fair-kernel-entry); `sched-lock-contention` at
+two harts, `sched-lock-contention-4` at four). `sched-capped` runs the model's capped scenarios
 ([model](kernel/model.md#scheduler-scenarios)) on the machine at two, three and four harts, each
 budget's share judged as below. It is itself checked against the model's ranks and against traces broken one clause at a
 time. The tracing kernel is a test build only

@@ -161,7 +161,7 @@ pub fn parse(log: &str) -> Result<Vec<Record>, String> {
             return Err(bad());
         }
         let kind = f[2].chars().next().ok_or_else(bad)?;
-        if f[2].len() != 1 || !"WRDPKLlefrqwAaGgvNnXYZUVTtIBEOMmCSJHQFu".contains(kind) {
+        if f[2].len() != 1 || !"WRDPKLlefrqwAaGgvNnXYZUVTtIBEOMmCSJHQFuk".contains(kind) {
             return Err(bad());
         }
         records.push(Record {
@@ -308,6 +308,9 @@ pub struct Summary {
     pub passed_over: usize,
     /// Each wait for the kernel lock from user mode, in ticks (`Q`), and the hart that waited.
     pub lock_waits: Vec<(u64, u64, u64)>,
+    /// With `lock-trace`, each wait's ticket and the sections ahead of it (`k`), in the order the
+    /// waits took the lock.
+    pub lock_tickets: Vec<(u64, u64)>,
     /// The run's ticks and its harts (`F`): the harts' time the lock waits are a share of.
     pub hart_time: Option<(u64, u64)>,
 }
@@ -577,6 +580,13 @@ pub fn check(records: &[Record]) -> Result<Summary, String> {
                     return Err(format!("record {}: a lock wait that ends before it starts", r.seq));
                 }
                 sum.lock_waits.push((r.id, r.pass as u64, r.hart));
+            }
+            'k' => {
+                let wait = i.checked_sub(2).map(|j| &records[j]);
+                if !wait.is_some_and(|q| q.kind == 'Q' && q.hart == r.hart) {
+                    return Err(format!("record {}: a lock wait's ticket after no wait of its hart", r.seq));
+                }
+                sum.lock_tickets.push((r.id, r.pass as u64));
             }
             'F' => sum.hart_time = Some((r.id, r.pass as u64)),
             // A shootdown is `fence`'s: no rank or floor follows from it.
@@ -2545,6 +2555,36 @@ fn lock_waits(waits: &[(u64, u64, u64)], (ticks, harts): (u64, u64)) -> String {
     )
 }
 
+/// With `lock-trace`, FIFO kernel entry (R78) from the waits' tickets (`k`): each record is written
+/// holding the lock, so the waits appear in the order they took it, and that order must be the
+/// tickets' (modulo the counter's wrap), each drawn behind fewer sections than the harts (`F`). So
+/// no wait outlasts the sections queued ahead of it. Its lengths in ticks are reported beside.
+fn lock_order(tickets: &[(u64, u64)], waits: &[(u64, u64, u64)], harts: u64) -> Result<String, String> {
+    for (k, w) in tickets.windows(2).enumerate() {
+        let step = (w[1].0 as u32).wrapping_sub(w[0].0 as u32);
+        if step == 0 || step > u32::MAX / 2 {
+            return Err(format!(
+                "lock wait {} took the kernel lock on ticket {}, after ticket {}: not in ticket order (R78)",
+                k + 1,
+                w[1].0,
+                w[0].0
+            ));
+        }
+    }
+    let most = tickets.iter().map(|t| t.1).max().unwrap_or(0);
+    if most >= harts {
+        return Err(format!("a lock wait was drawn behind {most} sections, {harts} hart(s) (R78)"));
+    }
+    let mut lengths: Vec<u64> = waits.iter().map(|(from, to, _)| to - from).collect();
+    let (p50, p99) = (percentile(&mut lengths, 50), percentile(&mut lengths, 99));
+    Ok(format!(
+        "lock order: {} waits took the kernel lock in ticket order, at most {most} section(s) ahead of one \
+         ({harts} harts); waits in ticks p50/p99/max {p50}/{p99}/{}",
+        tickets.len(),
+        lengths.last().copied().unwrap_or(0)
+    ))
+}
+
 /// The bench's post-check: parse the case's console log and check it. `args` may bound the p99
 /// of R10's durations, `r10_p99_us=N`; each measure's p50 and p99 net of audits,
 /// `<measure>_p50_us=N` and `<measure>_p99_us=N`, in each group the program printed; and a
@@ -2875,6 +2915,10 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
             report.join("; "),
             inside.join(", ")
         ));
+    }
+    if !sum.lock_tickets.is_empty() {
+        let harts = sum.hart_time.ok_or("lock wait tickets, but no record of the harts (F)")?.1;
+        lines.push(lock_order(&sum.lock_tickets, &sum.lock_waits, harts)?);
     }
     let out = std::iter::once(head).chain(lines).collect::<Vec<_>>().join("\n      ");
     if missed { Err(out) } else { Ok(out) }
@@ -3860,6 +3904,43 @@ mod tests {
         );
         let bad = verdict_on(&[(1, 'W', 5, 0x10, 0), (1, 'K', 5, 0x10, 0), (2, 'Q', 300, 100, 1)]);
         assert!(bad.unwrap_err().contains("a lock wait that ends before it starts"));
+    }
+
+    /// With `lock-trace`, the waits' tickets (`k`, each just after its hart's `Q`) must rise in the
+    /// order the waits took the lock, each drawn behind fewer sections than harts (R78).
+    #[test]
+    fn lock_waits_take_the_lock_in_ticket_order() {
+        let trace = |tickets: [(u64, u128); 2]| {
+            verdict_on(&[
+                (1, 'W', 5, 0x10, 0),
+                (1, 'K', 5, 0x10, 0),
+                (2, 'Q', 100, 300, 1),
+                (2, 'k', tickets[0].0, tickets[0].1, 1),
+                (3, 'Q', 400, 500, 0),
+                (3, 'k', tickets[1].0, tickets[1].1, 0),
+                (3, 'F', 1000, 2, 0),
+                (300, 'C', 10_300, 9_900, 0),
+            ])
+        };
+        let ok = trace([(7, 1), (8, 0)]).unwrap();
+        assert!(
+            ok.contains(
+                "lock order: 2 waits took the kernel lock in ticket order, at most 1 section(s) ahead of \
+                 one (2 harts); waits in ticks p50/p99/max 100/200/200"
+            ),
+            "{ok}"
+        );
+        // The counter wraps.
+        assert!(trace([(u64::from(u32::MAX), 1), (0, 1)]).is_ok());
+        assert!(
+            trace([(8, 1), (7, 1)]).unwrap_err().contains("on ticket 7, after ticket 8: not in ticket order")
+        );
+        assert!(trace([(7, 1), (7, 1)]).unwrap_err().contains("not in ticket order"));
+        assert!(trace([(7, 2), (8, 0)]).unwrap_err().contains("drawn behind 2 sections, 2 hart(s)"));
+        let alone = verdict_on(&[(1, 'W', 5, 0x10, 0), (1, 'K', 5, 0x10, 0), (2, 'k', 7, 0, 1)]);
+        assert!(alone.unwrap_err().contains("a lock wait's ticket after no wait of its hart"));
+        let other = verdict_on(&[(1, 'W', 5, 0x10, 0), (2, 'Q', 100, 300, 1), (2, 'k', 7, 0, 0)]);
+        assert!(other.unwrap_err().contains("a lock wait's ticket after no wait of its hart"));
     }
 
     /// The kernel's time closes the trace (`C`): the share of it, net of audits, charged to no
