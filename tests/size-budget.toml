@@ -6,7 +6,7 @@ kind = "size-budget"
 [[crate]]
 name = "kernel"
 paths = ["kernel/src"]
-max_lines = 9983
+max_lines = 9995
 
 [[crate]]
 name = "loader"

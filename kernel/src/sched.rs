@@ -514,6 +514,11 @@ pub const AUDIT_IPC_LISTS: u64 = 3;
 /// The scheduler's marks' audit after a reconcile ([`audit_marks`]).
 #[cfg(debug_assertions)]
 pub const AUDIT_MARKS: u64 = 4;
+/// An index's audit at its change, outside a destruction: the live PIDs at an account's making and
+/// end, the frame owners at a process's end (a scan of all of RAM), the IRQ index at an interrupt
+/// object's change (a scan of every object frame).
+#[cfg(debug_assertions)]
+pub const AUDIT_INDEXES: u64 = 5;
 
 /// A checked build runs the audit `which`: `check`, which a release build does not have. Its time
 /// is charged to no budget, and the running slice's end and the start of the kernel time being
@@ -522,6 +527,12 @@ pub const AUDIT_MARKS: u64 = 4;
 /// every window (kernel/scheduling.md, "Responsiveness").
 #[cfg(debug_assertions)]
 pub fn audit(which: u64, check: impl FnOnce()) {
+    // At boot the budget tree is built before the timer runs (`kmain`): there is no clock to stamp
+    // the audit by and no schedule to keep it out of.
+    if crate::arch::irq::timer::timebase() == 0 {
+        check();
+        return;
+    }
     #[cfg(feature = "sched-trace")]
     let _stamp = trace::audit(which);
     #[cfg(not(feature = "sched-trace"))]

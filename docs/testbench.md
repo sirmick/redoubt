@@ -640,7 +640,10 @@ then panic, and every case forbids `PANIC`:
   operation on purpose.
 
 A checked build also runs the kernel's audits, full scans that check the indexes, frame owners and
-handle chains after a destruction and when a process object is freed. They hold the hart while
+handle chains after a destruction and when a process object is freed, and the live PIDs, the
+frame owners and the IRQ index when one of them changes outside a destruction (a process's end
+scans all of RAM, about 7 ms under `icount`). Every scan of a whole table is an audit; the checks a
+return to user mode or a shootdown makes, a few entries each, are not. They hold the hart while
 they run, and a release build has none of them. So a latency target or a share, which is measured
 in a checked build because the scheduler trace needs one, excludes them: an audit neither fills a
 window nor moves the schedule. The scheduler charges an audit's time to no budget and moves the
