@@ -18,7 +18,11 @@ defmodule Redoubt.Pipeline do
   - **The owner.** One process owns the job: it launches the stages, so their exit notices come
     to it, and it watches the process that asked. If that process ends first (its line was
     interrupted, or crashed), the owner destroys every stage's budget and lets everything go, so
-    no stage outlives the line that ran it.
+    no stage outlives the line that ran it. The owner is the job the session lists
+    (`Redoubt.Jobs`), and killing the job is asking it to destroy every stage's budget now.
+  - **In the background** (`start/2`, which `Redoubt.Job.start/2` calls), the owner watches no
+    line: the job runs until it ends or is killed, reads no console, and keeps what it writes,
+    bounded, for `Redoubt.Job.await/2`.
   - **What reaches the console** passes the shell's guard (docs/userland/shell.md, "Hostile text
     never drives the terminal"): a stage's output and standard error are written as the line's
     own output, so through the shell's driver and `Redoubt.Term`.
@@ -27,7 +31,7 @@ defmodule Redoubt.Pipeline do
   # beamlet's natives (docs/userland/beamlet.md, "Natives"): no module, so nothing to check at compile time.
   @compile {:no_warn_undefined, :redoubt}
 
-  alias Redoubt.{Budget, Pipes}
+  alias Redoubt.{Budget, Jobs, Pipes}
   alias Redoubt.Wire.Client.NinepCommon
 
   @default_budget %{pages: 256, processes: 1, weight: 1}
@@ -39,6 +43,8 @@ defmodule Redoubt.Pipeline do
   @read_bytes 4096
   # How long the stages destroyed at the job's end are given to send their exit notices.
   @notice_wait_ms 5_000
+  # What a background job keeps of its output, and of its standard error, each.
+  @kept_bytes 64 * 1024
 
   @typedoc "How a stage ended: `{:exited, code}`, `{:faulted, cause}` or `{:killed, 0}`."
   @type ending :: {:exited | :faulted | :killed | :ended, non_neg_integer()}
@@ -79,8 +85,10 @@ defmodule Redoubt.Pipeline do
     draw it as it comes.
   - `:budget`: each stage's budget spec, `#{inspect(@default_budget)}` when left out.
 
-  Returns `{:ok, %{output: bytes | nil, endings: [ending], usage: [usage]}}`, a stage's usage being
-  what its budget held as it ended, or `{:error, name}` when it could not start.
+  Returns `{:ok, %{output: bytes | nil, errors: nil, killed: bool, endings: [ending], usage:
+  [usage]}}`, a stage's usage being what its budget held as it ended and `killed` whether the job
+  was killed (`Redoubt.Job.kill/1`), or `{:error, name}` when it could not start. The job is the
+  session's (`Redoubt.Jobs`) while it runs.
   """
   @spec run([stage()], keyword()) ::
           {:ok, %{output: binary() | nil, endings: [ending()], usage: [map() | nil]}} | {:error, atom()}
@@ -105,10 +113,44 @@ defmodule Redoubt.Pipeline do
     end
   end
 
+  @doc """
+  Starts `stages` in the background and returns once every stage is launched: `{:ok, job}`
+  (`Redoubt.Job`), or `{:error, name}` as `run/2`. Its first stage reads `:input`, lines, or
+  nothing; what the last stage writes and every stage's standard error are kept, up to
+  #{@kept_bytes} bytes each, for `Redoubt.Job.await/2`.
+  """
+  @spec start([stage()], keyword()) :: {:ok, Redoubt.Job.t()} | {:error, atom()}
+  def start(stages, opts \\ []) do
+    starter = self()
+    ref = make_ref()
+    leader = Process.group_leader()
+    opts = Keyword.merge(opts, started: {starter, ref}, output: {:kept, @kept_bytes})
+
+    {owner, monitor} =
+      spawn_monitor(fn ->
+        Process.group_leader(self(), leader)
+        send(starter, {__MODULE__, ref, :ended, own(nil, stages, opts)})
+      end)
+
+    receive do
+      {__MODULE__, ^ref, :started, job} ->
+        Process.demonitor(monitor, [:flush])
+        {:ok, job}
+
+      {__MODULE__, ^ref, :ended, {:error, _} = refused} ->
+        Process.demonitor(monitor, [:flush])
+        refused
+
+      {:DOWN, ^monitor, :process, ^owner, _reason} ->
+        {:error, :crashed}
+    end
+  end
+
   # ---- the owner ----
 
+  # `caller` is the line a foreground job runs for, `nil` for a background job.
   defp own(caller, stages, opts) do
-    watch = Process.monitor(caller)
+    watch = if caller, do: Process.monitor(caller)
     Process.flag(:trap_exit, true)
     spec = Keyword.get(opts, :budget, @default_budget)
 
@@ -116,14 +158,33 @@ defmodule Redoubt.Pipeline do
          {:ok, images} <- images(stages),
          {:ok, root, names} <- Pipes.open(length(stages) + 2) do
       {pipes, [err]} = Enum.split(names, length(stages) + 1)
-      job = %{root: root, pipes: pipes, err: err, conns: [], jobs: %{}, made: [], endings: %{}, read: %{}}
+
+      job = %{
+        root: root,
+        pipes: pipes,
+        err: err,
+        conns: [],
+        jobs: %{},
+        made: [],
+        endings: %{},
+        read: %{},
+        killed: false
+      }
 
       try do
         with :ok <- room(length(stages)),
              {:ok, job} <- make_pipes(job),
              {:ok, job} <- connect(job, length(stages)),
              {:ok, job} <- launch(job, stages, images, spec) do
-          readers = start_readers(job, Keyword.get(opts, :input), Keyword.get(opts, :output, :capture))
+          command = command(stages)
+          id = Jobs.add(self(), caller, command)
+          Process.put(:redoubt_job, id)
+
+          with {starter, ref} <- Keyword.get(opts, :started),
+               do: send(starter, {__MODULE__, ref, :started, %Redoubt.Job{id: id, command: command}})
+
+          output = Keyword.get(opts, :output, :capture)
+          readers = start_readers(job, Keyword.get(opts, :input), output)
           wait(job, readers, watch, length(stages))
         else
           {:error, name, job} ->
@@ -138,8 +199,39 @@ defmodule Redoubt.Pipeline do
         # The last job to let go of piped ends it, so its pages are the session's again.
         Pipes.release()
       end
+      |> ended(caller)
     end
   end
+
+  # The job's end, told to the session's jobs once every budget of it is destroyed and piped let
+  # go: what an interrupted line waits for (`Redoubt.Jobs.settle/1`).
+  defp ended(result, caller) do
+    if id = Process.get(:redoubt_job), do: Jobs.ended(id, summary(result, caller))
+    result
+  end
+
+  # The pipeline as it would be typed: its stages' words, with "|" between.
+  defp command(stages) do
+    stages |> Enum.map_join(" | ", fn {name, args} -> Enum.join([name | args], " ") end)
+  end
+
+  # What the session's jobs keep of a job's end: a background job's output and standard error,
+  # for its await; a foreground job's went to its line.
+  defp summary({:ok, result}, nil) do
+    {stdout, out_dropped} = result.output || {"", 0}
+    {stderr, err_dropped} = result.errors || {"", 0}
+
+    %{
+      stdout: stdout,
+      stderr: stderr,
+      dropped: {out_dropped, err_dropped},
+      endings: result.endings,
+      killed: result.killed
+    }
+  end
+
+  defp summary({:ok, result}, _caller), do: %{endings: result.endings, killed: result.killed}
+  defp summary({:error, name}, _caller), do: %{endings: [], error: name}
 
   defp count(stages) when stages == [], do: {:error, :empty_stage}
   defp count(stages) when length(stages) > @max_stages, do: {:error, :too_many}
@@ -257,14 +349,16 @@ defmodule Redoubt.Pipeline do
 
   # ---- the session's ends ----
 
+  # A background job's standard error is kept as its output is; a foreground job's is drawn.
   defp start_readers(job, input, output) do
     source = Enum.at(job.pipes, 0)
     sink = List.last(job.pipes)
+    errors = if match?({:kept, _}, output), do: output, else: :console
 
     %{
       feeder: spawn_link(fn -> feed(path(source, "w"), input) end),
       sink: spawn_link(fn -> exit({:read, drain(path(sink, "r"), output)}) end),
-      err: spawn_link(fn -> exit({:read, drain(path(job.err, "r"), :console)}) end)
+      err: spawn_link(fn -> exit({:read, drain(path(job.err, "r"), errors)}) end)
     }
   end
 
@@ -307,14 +401,31 @@ defmodule Redoubt.Pipeline do
     end
   end
 
-  # What a pipe holds until the end of its stream: returned, or written as the line's own output.
+  # What a pipe holds until the end of its stream: returned; kept up to a bound, with the count of
+  # the bytes past it, `{bytes, dropped}`; or written as the line's own output.
   defp drain(path, output) do
     {:ok, file} = File.open(path, [:read, :binary, :raw])
 
     try do
-      drain_loop(file, output, [], <<>>)
+      case output do
+        {:kept, max} -> keep_loop(file, max, [], 0)
+        output -> drain_loop(file, output, [], <<>>)
+      end
     after
       File.close(file)
+    end
+  end
+
+  # The stream to its end, past the bound too, so its writer is never held: what is past it is
+  # counted, not kept.
+  defp keep_loop(file, room, acc, dropped) do
+    case IO.binread(file, @read_bytes) do
+      data when is_binary(data) ->
+        kept = binary_part(data, 0, min(room, byte_size(data)))
+        keep_loop(file, room - byte_size(kept), [acc | kept], dropped + byte_size(data) - byte_size(kept))
+
+      _eof_or_error ->
+        {IO.iodata_to_binary(acc), dropped}
     end
   end
 
@@ -370,6 +481,10 @@ defmodule Redoubt.Pipeline do
           wait(job, readers, watch, n)
         end
 
+      # Killed (`Redoubt.Job.kill/1`): every stage's budget is destroyed now, as at the job's end.
+      {:redoubt_job, :kill} ->
+        complete(%{job | killed: true}, readers, n)
+
       # The line that ran the job has ended: so does the job.
       {:DOWN, ^watch, :process, _caller, _reason} ->
         Process.exit(readers.feeder, :kill)
@@ -410,11 +525,19 @@ defmodule Redoubt.Pipeline do
     job = collect_notices(job)
     let_go_all(job)
     output = reader_result(job, readers.sink)
-    _ = reader_result(job, readers.err)
+    errors = reader_result(job, readers.err)
     Process.exit(readers.feeder, :kill)
     remove_pipes(job)
     endings = Enum.map(0..(n - 1)//1, fn i -> Map.get(job.endings, i, {{:killed, 0}, nil}) end)
-    {:ok, %{output: output, endings: Enum.map(endings, &elem(&1, 0)), usage: Enum.map(endings, &elem(&1, 1))}}
+
+    {:ok,
+     %{
+       output: output,
+       errors: errors,
+       killed: job.killed,
+       endings: Enum.map(endings, &elem(&1, 0)),
+       usage: Enum.map(endings, &elem(&1, 1))
+     }}
   end
 
   defp collect_notices(%{jobs: jobs} = job) when map_size(jobs) == 0, do: job

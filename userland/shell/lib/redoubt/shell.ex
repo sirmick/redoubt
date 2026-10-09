@@ -16,7 +16,8 @@ defmodule Redoubt.Shell do
   under the shell's own driver (`Redoubt.Shell.Driver`): the line is edited by `edlin`, with
   history, and drawn by `Redoubt.Term`, so everything the console shows, what a line writes to
   it itself with `IO.puts/1` included, passes the same guard. The interrupt, Ctrl+C or Ctrl+\\,
-  ends the line being read, not the shell. Tab completes (`Redoubt.Shell.Completer`), from the
+  ends the line being read, or the line being evaluated, with the pipelines it runs, and never the
+  shell. Tab completes (`Redoubt.Shell.Completer`), from the
   prompt's names as they are at each read.
   """
 
@@ -51,7 +52,8 @@ defmodule Redoubt.Shell do
       Printer.text("Redoubt shell, on Elixir #{System.version()}. `exit` or Ctrl+D ends it.")
     end
 
-    limits = Keyword.take(opts, [:max_heap_words])
+    # The driver the interrupt comes from, if the shell runs on its console.
+    limits = Keyword.take(opts, [:max_heap_words]) ++ [driver: Driver.of_group()]
     loop(%{counter: 1, binding: [], env: prompt_env(), limits: limits})
   end
 
@@ -178,10 +180,13 @@ defmodule Redoubt.Shell do
 
   # The environment every line is evaluated in: every commandlet imported, as a user's own
   # `import`, `alias` or `require` at the prompt then adds to it.
+  # Every commandlet imported, and `Job` (`Redoubt.Job`), as the pages write it: each its own form,
+  # since a form of several would be evaluated by erl_eval, which nothing else loads at the prompt.
   defp prompt_env do
-    {_value, _binding, env} =
-      Code.eval_quoted_with_env(Registry.imports(), [], Code.env_for_eval(file: "shell"))
-
-    env
+    [Registry.imports(), quote(do: alias(Redoubt.Job))]
+    |> Enum.reduce(Code.env_for_eval(file: "shell"), fn form, env ->
+      {_value, _binding, env} = Code.eval_quoted_with_env(form, [], env)
+      env
+    end)
   end
 end
