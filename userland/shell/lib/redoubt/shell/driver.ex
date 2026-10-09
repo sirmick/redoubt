@@ -48,6 +48,8 @@ defmodule Redoubt.Shell.Driver do
   Record.defrecordp(:group_state, :state, Record.extract(:state, from_lib: "kernel/src/group.erl"))
 
   @history_lines 1000
+  # Printed text past this many bytes is drawn and written a slice at a time (`Term.slices/3`).
+  @slice 65_536
   # The session's own key, Ctrl+\: the interrupt no screen can take.
   @session_key 0x1C
   @esc_timeout 50
@@ -262,8 +264,16 @@ defmodule Redoubt.Shell.Driver do
     prompting = prompting?(request)
     if prompting, do: trim_history(state)
     term = if prompting, do: sized(state), else: state.term
-    {out, term} = Term.request(term, request)
-    write(state, out)
+
+    term =
+      term
+      |> Term.slices(request, @slice)
+      |> Enum.reduce(term, fn request, term ->
+        {out, term} = Term.request(term, request)
+        write(state, out)
+        term
+      end)
+
     first_prompt = state.first_prompt and not prompting
     if state.first_prompt and prompting, do: :ok = apply(:beamlet, :prompt_drawn, [])
     %{state | term: term, first_prompt: first_prompt}

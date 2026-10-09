@@ -1,0 +1,50 @@
+description = "A long printed line is drawn and the session goes on (docs/userland/shell.md, \"The terminal library\"): in alice's session over SSH, IO.puts of a 70,000-byte line and of a 256 KiB line, each followed by a value on the same line typed; the shell's driver, whose heap is a sixteenth of the session's budget, draws the text a piece at a time, so neither kills it, and each value and the next prompt follow. The verdicts are what the session draws and that the VM never exits (rule F)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+recipe = "image/boot.toml"
+memory_mib = 1024
+# A boot, a login and 330 KB through the console, which the encoder draws at about 8 KB/s. The
+# 1 MiB line is the driver's host test's, under the same heap limit.
+timeout_secs = 240
+expect = [
+    '^init: started sshd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
+    '^init: started steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+]
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    '^init: .* (exited|faulted|was killed)',
+    'EXCEPTION',
+    'steward: a step failed',
+]
+
+# Each value is tagged and alone on its line, so a pattern matches what the shell printed and
+# never the echo of the line typed.
+[[session]]
+user = "alice"
+pty = true
+forbid = ['EXCEPTION', 'killed']
+steps = [
+    { expect = '\([0-9]+\)> ' },
+    { send = "IO.puts(String.duplicate(\"z\", 70_000)); :seventy_thousand\n" },
+    { expect = '^:seventy_thousand' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "IO.puts(String.duplicate(\"z\", 262_144)); :quarter_mebibyte\n" },
+    { expect = '^:quarter_mebibyte' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:still, 1 + 1}\n" },
+    { expect = '\{:still, 2\}' },
+    { exit = 0 },
+]
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]
+forward = [22]

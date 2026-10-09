@@ -31,9 +31,20 @@ defmodule Redoubt.Term.Text do
   visible characters. A newline is a control character too: split text into lines first.
   """
   @spec visible(binary()) :: binary()
-  def visible(text) when is_binary(text), do: text |> scan(0, []) |> IO.iodata_to_binary()
+  def visible(text) when is_binary(text), do: text |> visible(0) |> elem(0)
 
-  defp scan(<<>>, _col, acc), do: Enum.reverse(acc)
+  @doc """
+  As `visible/1`, for text that goes on a line already `col` code points in, so its tabs stop
+  where the whole line's would: the visible text, and the column it ends at. Drawing a long line
+  a piece at a time keeps the work of each piece to the piece.
+  """
+  @spec visible(binary(), non_neg_integer()) :: {binary(), non_neg_integer()}
+  def visible(text, col) when is_binary(text) do
+    {acc, col} = scan(text, col, [])
+    {IO.iodata_to_binary(acc), col}
+  end
+
+  defp scan(<<>>, col, acc), do: {Enum.reverse(acc), col}
 
   defp scan(<<c, rest::binary>>, col, acc) when c in 0x20..0x7E,
     do: scan(rest, col + 1, [c | acc])
