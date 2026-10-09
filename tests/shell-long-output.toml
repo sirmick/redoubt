@@ -3,8 +3,9 @@ arch = ["rv64", "rv32"]
 kind = "boot"
 recipe = "image/boot.toml"
 memory_mib = 1024
-# A boot, a login and 330 KB through the console, which the encoder draws at about 8 KB/s. The
-# 1 MiB line is the driver's host test's, under the same heap limit.
+# A boot, a login and 330 KB through the session: about 8 s alone on either width, 170 s and more
+# before the encoder drew in runs (shell-output-rate holds its rate). The 1 MiB line is the driver's
+# host test's, under the same heap limit.
 timeout_secs = 240
 expect = [
     '^init: started sshd, console [0-9a-f]{16}$',

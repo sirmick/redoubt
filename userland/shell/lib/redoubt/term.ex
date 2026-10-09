@@ -57,7 +57,10 @@ defmodule Redoubt.Term do
             # Text shown below the line (completions, help), its first shown row and its row limit.
             expand: nil,
             expand_row: 1,
-            expand_limit: 0
+            expand_limit: 0,
+            # Where the cursor is, raw, kept by a key typed at the line's end for the next request
+            # (`request/2`): a key typed there costs the key, not the line (`cursor/1`).
+            at: nil
 
   @type t :: %__MODULE__{}
 
@@ -67,7 +70,7 @@ defmodule Redoubt.Term do
 
   @doc "The terminal's size now; the line is laid out at the new width from its next redraw."
   @spec resize(t(), pos_integer(), pos_integer()) :: t()
-  def resize(term, cols, rows), do: %{term | cols: max(cols, 1), rows: max(rows, 1)}
+  def resize(term, cols, rows), do: %{term | cols: max(cols, 1), rows: max(rows, 1), at: nil}
 
   @doc """
   `request` as the requests to draw one after another, so that no drawing is held whole: text
@@ -124,69 +127,80 @@ defmodule Redoubt.Term do
   after it. A request this encoder does not draw (`open_editor`, say) draws nothing.
   """
   @spec request(t(), term()) :: {iodata(), t()}
-  def request(%__MODULE__{expand: expand} = term, request)
-      when expand != nil and
-             not (is_tuple(request) and elem(request, 0) in [:move_expand, :put_expand, :requests]) do
+  def request(term, request) do
+    {out, model} = handle(term, request)
+    {out, %{model | at: kept(model.at, term.at)}}
+  end
+
+  # The cursor a request typed at the line's end is kept for the next; one kept by a request
+  # within this one stays; one this request did not touch goes, since the line may have changed.
+  defp kept({:typed, pos}, _entry), do: {:kept, pos}
+  defp kept(at, entry) when at == entry, do: nil
+  defp kept(at, _entry), do: at
+
+  defp handle(%__MODULE__{expand: expand} = term, request)
+       when expand != nil and
+              not (is_tuple(request) and elem(request, 0) in [:move_expand, :put_expand, :requests]) do
     # Anything but paging the text below the line takes it away first, as prim_tty does.
     {cleared, term} = repaint(term, %{term | expand: nil, expand_row: 1, expand_limit: 0})
     {drawn, term} = request(term, request)
     {[cleared, drawn], term}
   end
 
-  def request(term, {:requests, requests}) do
+  defp handle(term, {:requests, requests}) do
     Enum.reduce(requests, {[], term}, fn request, {out, term} ->
       {drawn, term} = request(term, request)
       {[out, drawn], term}
     end)
   end
 
-  def request(term, {:put_chars_sync, encoding, chars, _reply}), do: put_chars(term, text(chars, encoding))
-  def request(term, {:put_chars, encoding, chars}), do: put_chars(term, text(chars, encoding))
-  def request(term, {:insert_chars, encoding, chars}), do: insert(term, text(chars, encoding), false)
-  def request(term, {:insert_chars_over, encoding, chars}), do: insert(term, text(chars, encoding), true)
-  def request(term, {:delete_chars, 0}), do: {[], term}
+  defp handle(term, {:put_chars_sync, encoding, chars, _reply}), do: put_chars(term, text(chars, encoding))
+  defp handle(term, {:put_chars, encoding, chars}), do: put_chars(term, text(chars, encoding))
+  defp handle(term, {:insert_chars, encoding, chars}), do: insert(term, text(chars, encoding), false)
+  defp handle(term, {:insert_chars_over, encoding, chars}), do: insert(term, text(chars, encoding), true)
+  defp handle(term, {:delete_chars, 0}), do: {[], term}
 
-  def request(term, {:delete_chars, n}) when n > 0,
+  defp handle(term, {:delete_chars, n}) when n > 0,
     do: repaint(term, %{term | after: Enum.drop(term.after, n)})
 
-  def request(term, {:delete_chars, n}) when n < 0 do
+  defp handle(term, {:delete_chars, n}) when n < 0 do
     # Never into the prompt, which edlin never asks; the cap keeps a wrong count from it.
     kept = max(length(term.before) + n, term.prompt)
     repaint(term, %{term | before: Enum.take(term.before, -kept)})
   end
 
-  def request(term, {:move_rel, 0}), do: {[], term}
+  defp handle(term, {:move_rel, 0}), do: {[], term}
 
-  def request(term, {:move_rel, n}) when n < 0 do
+  defp handle(term, {:move_rel, n}) when n < 0 do
     {moved, before} = Enum.split(term.before, -n)
     repaint(term, %{term | before: before, after: Enum.reverse(moved, term.after)})
   end
 
-  def request(term, {:move_rel, n}) when n > 0 do
+  defp handle(term, {:move_rel, n}) when n > 0 do
     {moved, rest} = Enum.split(term.after, n)
     repaint(term, %{term | before: Enum.reverse(moved, term.before), after: rest})
   end
 
-  def request(term, {:move_line, 0}), do: {[], term}
-  def request(term, {:move_line, n}), do: repaint(term, move_line(term, n))
+  defp handle(term, {:move_line, 0}), do: {[], term}
+  defp handle(term, {:move_line, n}), do: repaint(term, move_line(term, n))
 
-  def request(term, {:move_combo, before, lines, after_}) do
+  defp handle(term, {:move_combo, before, lines, after_}) do
     request(term, {:requests, [{:move_rel, before}, {:move_line, lines}, {:move_rel, after_}]})
   end
 
-  def request(term, {:put_expand, encoding, chars, limit}) do
+  defp handle(term, {:put_expand, encoding, chars, limit}) do
     repaint(term, %{term | expand: text(chars, encoding), expand_row: 1, expand_limit: limit})
   end
 
-  def request(%{expand: nil} = term, {:move_expand, _n}), do: {[], term}
+  defp handle(%{expand: nil} = term, {:move_expand, _n}), do: {[], term}
 
-  def request(term, {:move_expand, n}) do
-    shown = expand_rows(term)
+  defp handle(term, {:move_expand, n}) do
+    shown = expand_rows(term, term |> line_end() |> norm(term.cols) |> elem(0))
     last_first = max(length(expand_lines(term)) - shown + 1, 1)
     repaint(term, %{term | expand_row: term.expand_row |> Kernel.+(n) |> max(1) |> min(last_first)})
   end
 
-  def request(term, {:redraw_prompt, prompt, continuation, {lines_before, {before, after_}, lines_after}}) do
+  defp handle(term, {:redraw_prompt, prompt, continuation, {lines_before, {before, after_}, lines_after}}) do
     continuation = graphemes(text(continuation, :unicode))
     line = fn chars -> graphemes(text(chars, :unicode)) end
     earlier = lines_before |> Enum.reverse() |> Enum.flat_map(&(line.(&1) ++ ["\n" | continuation]))
@@ -199,22 +213,22 @@ defmodule Redoubt.Term do
     )
   end
 
-  def request(term, :redraw_prompt), do: repaint(term, term)
+  defp handle(term, :redraw_prompt), do: repaint(term, term)
 
-  def request(term, :new_prompt) do
+  defp handle(term, :new_prompt) do
     # The line is over, and the next begins where the cursor is, which the ended line's end
     # settles: after its newline, column 0.
     origin = norm(line_end(term), term.cols) |> elem(1)
     {[], %{reset(term) | origin: origin}}
   end
 
-  def request(term, :delete_line),
+  defp handle(term, :delete_line),
     do: {[to_origin(term), erase_below()], %{reset(term) | origin: term.origin}}
 
-  def request(term, :delete_after_cursor), do: {erase_below(), %{term | after: []}}
-  def request(term, :beep), do: {"\a", term}
-  def request(term, :clear), do: {[@csi, "H", @csi, "2J"], %{reset(term) | origin: 0}}
-  def request(term, _other), do: {[], term}
+  defp handle(term, :delete_after_cursor), do: {erase_below(), %{term | after: []}}
+  defp handle(term, :beep), do: {"\a", term}
+  defp handle(term, :clear), do: {[@csi, "H", @csi, "2J"], %{reset(term) | origin: 0}}
+  defp handle(term, _other), do: {[], term}
 
   # ---- the requests' work ----
 
@@ -241,9 +255,10 @@ defmodule Redoubt.Term do
     model = %{term | before: Enum.reverse(inserted, term.before), after: after_}
 
     if term.after == [] and term.expand == nil and "\n" not in inserted do
-      # Typing at the end of the line: the characters alone, as a terminal echoes.
+      # Typing at the end of the line: the characters alone, as a terminal echoes, and the cursor
+      # kept where they end.
       {drawn, end_} = draw_graphemes(inserted, cursor(term), term.cols, 0)
-      {[drawn, margin(end_, term.cols)], model}
+      {[drawn, margin(end_, term.cols)], %{model | at: {:typed, end_}}}
     else
       repaint(term, model)
     end
@@ -309,25 +324,42 @@ defmodule Redoubt.Term do
   # cursor.
   defp repaint(old, new), do: {[to_origin(old), erase_below(), draw(new)], new}
 
-  # The line, the text below it, and the cursor placed, from the line's origin.
+  # The line, the text below it, and the cursor placed, from the line's origin: the line drawn in
+  # one pass, which finds the cursor on its way.
   defp draw(term) do
-    all = Enum.reverse(term.before, term.after)
-    {line, line_end} = draw_graphemes(all, {0, term.origin}, term.cols, term.styled)
+    before = Enum.reverse(term.before)
+    {head, cursor} = draw_graphemes(before, {0, term.origin}, term.cols, term.styled)
+    {tail, line_end} = draw_graphemes(term.after, cursor, term.cols, max(term.styled - length(before), 0))
     {below, end_} = draw_expand(term, norm(line_end, term.cols))
-    cursor = norm(cursor(term), term.cols)
-    [line, margin(line_end, term.cols), below, margin(end_, term.cols), move(norm(end_, term.cols), cursor)]
+    cursor = norm(cursor, term.cols)
+
+    [
+      head,
+      tail,
+      margin(line_end, term.cols),
+      below,
+      margin(end_, term.cols),
+      move(norm(end_, term.cols), cursor)
+    ]
   end
 
   # Graphemes from `pos`, the first `styled` of them in bold and underline: the bytes and the
-  # raw end position (a column equal to the width is the margin, pending a wrap).
-  defp draw_graphemes(graphemes, pos, cols, styled) do
-    {out, pos, _} =
-      Enum.reduce(graphemes, {[], pos, styled}, fn g, {out, pos, styled} ->
-        drawn = if styled > 0, do: [@csi, "1;4m", visible(g), @csi, "0m"], else: visible(g)
-        {[out, drawn], advance(pos, g, cols), max(styled - 1, 0)}
-      end)
+  # raw end position (a column equal to the width is the margin, pending a wrap). A redraw takes
+  # every grapheme of the line, so each is a few steps: on the machine a step costs about 87 µs.
+  defp draw_graphemes(graphemes, pos, cols, styled), do: draw_graphemes(graphemes, pos, cols, styled, [])
 
-    {out, pos}
+  defp draw_graphemes([], pos, _cols, _styled, out), do: {out, pos}
+
+  # A printable ASCII byte that fits on the row, most of any line: one step.
+  defp draw_graphemes([<<c>> = g | rest], {row, col}, cols, 0, out) when c in 0x20..0x7E and col < cols,
+    do: draw_graphemes(rest, {row, col + 1}, cols, 0, [out | g])
+
+  defp draw_graphemes([g | rest], pos, cols, 0, out),
+    do: draw_graphemes(rest, advance(pos, g, cols), cols, 0, [out | visible(g)])
+
+  defp draw_graphemes([g | rest], pos, cols, styled, out) do
+    drawn = [@csi, "1;4m", visible(g), @csi, "0m"]
+    draw_graphemes(rest, advance(pos, g, cols), cols, styled - 1, [out | drawn])
   end
 
   # Printed text: visible, with CR LF for each newline, a piece at a time, each at most `@piece`
@@ -379,11 +411,42 @@ defmodule Redoubt.Term do
 
   defp char_start(_text, _at, size), do: size
 
-  # Where text already made visible ends, wrapped at the width, a grapheme at a time.
-  defp advance_text(pos, text, cols) do
+  # Where text already made visible ends, wrapped at the width, a grapheme at a time, each
+  # measured as it is, being visible already. A run of code points each a grapheme one column
+  # wide (`Width.run/1`) is taken at once, but for its last when more follows: a combining mark
+  # after it would join it. A run starts only on a byte of printable ASCII or the lead byte of a
+  # code point below U+0540, so any other byte starts a grapheme taken alone, without asking.
+  defp advance_text(pos, <<b, _::binary>> = text, cols) when b in 0x20..0x7E or b in 0xC2..0xD4 do
+    case Width.run(text) do
+      {bytes, points} when bytes == byte_size(text) ->
+        advance_columns(pos, points, cols)
+
+      {bytes, points} when points > 1 ->
+        run = bytes - if :binary.at(text, bytes - 1) < 0x80, do: 1, else: 2
+        <<_::binary-size(^run), rest::binary>> = text
+        advance_text(advance_columns(pos, points - 1, cols), rest, cols)
+
+      _one_or_none ->
+        advance_grapheme(pos, text, cols)
+    end
+  end
+
+  defp advance_text(pos, text, cols), do: advance_grapheme(pos, text, cols)
+
+  defp advance_grapheme(pos, text, cols) do
     case String.next_grapheme(text) do
-      {g, rest} -> advance_text(advance(pos, g, cols), rest, cols)
+      {g, rest} -> advance_text(step(pos, Width.grapheme(g), cols), rest, cols)
       nil -> pos
+    end
+  end
+
+  # `step/3` for `n` graphemes each one column wide: those that fit on the row, then whole rows.
+  defp advance_columns(pos, 0, _cols), do: pos
+
+  defp advance_columns({row, col}, n, cols) do
+    case n - max(cols - col, 0) do
+      left when left <= 0 -> {row, col + n}
+      left -> {row + div(left - 1, cols) + 1, rem(left - 1, cols) + 1}
     end
   end
 
@@ -393,7 +456,7 @@ defmodule Redoubt.Term do
 
   defp draw_expand(term, {row, _col}) do
     lines = expand_lines(term)
-    shown = expand_rows(term)
+    shown = expand_rows(term, row)
     page = lines |> Enum.drop(term.expand_row - 1) |> Enum.take(shown)
 
     page =
@@ -412,29 +475,38 @@ defmodule Redoubt.Term do
 
   defp expand_lines(%{expand: expand}), do: String.split(expand, "\n")
 
-  # Rows of text below the line the limit and the screen allow: the screen less the line's rows
-  # and one for the status line.
-  defp expand_rows(term) do
-    {row, _col} = norm(line_end(term), term.cols)
+  # Rows of text below the line the limit and the screen allow: the screen less the line's rows,
+  # to `row`, where it ends, and one for the status line.
+  defp expand_rows(term, row) do
     free = max(term.rows - row - 2, 1)
     if term.expand_limit > 0, do: min(term.expand_limit, free), else: free
   end
 
   # ---- positions ----
 
-  # Where the cursor is, from the line's origin, raw.
-  defp cursor(term),
-    do: term.before |> Enum.reverse() |> Enum.reduce({0, term.origin}, &advance(&2, &1, term.cols))
+  # Where the cursor is, from the line's origin, raw: as kept by the key typed last, else found by
+  # walking the line from its start. Only the model a request was given has a kept cursor that is
+  # its own, so this is asked of that model alone: a model a request makes is drawn in one pass
+  # that finds its cursor and its end (`draw/1`).
+  defp cursor(%{at: {:kept, pos}}), do: pos
+  defp cursor(term), do: term.before |> Enum.reverse() |> advance_all({0, term.origin}, term.cols)
 
   # Where the line ends, raw.
-  defp line_end(term), do: Enum.reduce(term.after, cursor(term), &advance(&2, &1, term.cols))
+  defp line_end(term), do: advance_all(term.after, cursor(term), term.cols)
+
+  defp advance_all([], pos, _cols), do: pos
+
+  defp advance_all([<<c>> | rest], {row, col}, cols) when c in 0x20..0x7E and col < cols,
+    do: advance_all(rest, {row, col + 1}, cols)
+
+  defp advance_all([g | rest], pos, cols), do: advance_all(rest, advance(pos, g, cols), cols)
 
   defp advance({row, _col}, "\n", _cols), do: {row + 1, 0}
+  defp advance(pos, g, cols), do: step(pos, width(g), cols)
 
-  defp advance({row, col}, g, cols) do
-    w = width(g)
-    if col + w > cols, do: {row + 1, w}, else: {row, col + w}
-  end
+  # A grapheme `w` columns wide drawn at `pos`: on the row if it fits, else at the next row's start.
+  defp step({row, col}, w, cols) when col + w > cols, do: {row + 1, w}
+  defp step({row, col}, w, _cols), do: {row, col + w}
 
   # A position at the margin, pending a wrap, is the next row's start.
   defp norm({row, col}, cols) when col >= cols, do: {row + 1, 0}
@@ -445,9 +517,12 @@ defmodule Redoubt.Term do
   defp margin({_row, col}, cols) when col >= cols, do: " \b"
   defp margin(_pos, _cols), do: []
 
+  # A grapheme of one printable ASCII byte, most of any line, is itself and one column wide.
+  defp width(<<c>>) when c in 0x20..0x7E, do: 1
   defp width(g), do: Width.columns(visible(g))
 
   defp visible("\n"), do: "\r\n"
+  defp visible(<<c>> = g) when c in 0x20..0x7E, do: g
   defp visible(g), do: Text.visible(g)
 
   # ---- the sequences ----

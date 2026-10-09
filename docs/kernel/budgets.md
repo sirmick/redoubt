@@ -218,7 +218,7 @@ and its kernel objects.
   A session is 11,136 pages, its VM's share and its console relay's. The VM's is 11,008 pages: a
   heap cap of twice the largest peak of beamlet's runtime heap across the memory cases plus its
   stack, rounded up to 128 ([beamlet](../userland/beamlet.md#what-the-vm-holds-at-its-prompt)),
-  from a peak of 5,459 pages on rv64 and 5,277 on rv32. It was 11,904 while the shell loaded every
+  from a peak of 5,491 pages on rv64 and 5,308 on rv32. It was 11,904 while the shell loaded every
   command's module at its start, when the peak was 5,904. The scan's cap rule bounds it from
   below: an rv64 peak above 5,494 pages puts the cap, 10,989 pages, under twice the peak, and the
   share then moves up a step of 128. The relay's is 128 pages: its image (about 21 pages on
