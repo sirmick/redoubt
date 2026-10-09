@@ -208,7 +208,8 @@ What follows from a table of capabilities:
   a permission error: there is nothing there to refuse.
 - **Above the entries is a directory the namespace answers itself.** `/` or `/home`, above an
   entry and inside none, lists the next name of each entry below it, and nothing in it can be
-  made, removed or written (`:eacces`); `/home/bob`, beside `/home/alice`, is still `:enoent`.
+  removed or written (`:eacces`); making it is `:eexist`, as it is there, so `File.mkdir_p` passes
+  through it; `/home/bob`, beside `/home/alice`, is still `:enoent`.
 - **`..` never climbs out.** Paths are cleaned lexically before lookup, in the client and again
   in the server, so `/../../etc` is `/etc` on the same connection.
 - **Different prefixes are usually different servers.** `/home/alice` and a vault's volume are
@@ -232,7 +233,7 @@ for any other process, and a child sees only the table its launcher wrote for it
 
 ### What a session is told
 
-Status: built · partly tested: the steward's arguments and beamlet's reading of them are host-tested apart, and no case yet reads them in a session · tested: host:beamlet-redoubt::a_sessions_identity_is_read_from_its_arguments, host:beamlet-redoubt::the_platform_tells_a_session_its_identity, host:beamlet-vm::the_identity_is_the_platforms_and_without_a_system_is_not_supported, host:redoubt-steward-server::a_sessions_arguments_name_its_principal_labels_and_context, host:redoubt-steward-server::a_sessions_launch_is_told_its_context
+Status: built · partly tested: a plain session and a vault session read theirs on the machine; a named context's is host-tested only · tested: bench:shell-commands, host:beamlet-redoubt::a_sessions_identity_is_read_from_its_arguments, host:beamlet-redoubt::the_platform_tells_a_session_its_identity, host:beamlet-vm::the_identity_is_the_platforms_and_without_a_system_is_not_supported, host:redoubt-steward-server::a_sessions_arguments_name_its_principal_labels_and_context, host:redoubt-steward-server::a_sessions_launch_is_told_its_context
 
 A session's VM learns what it is from its launch arguments, which the launcher writes into its
 startup block, as the steward does for every session it launches

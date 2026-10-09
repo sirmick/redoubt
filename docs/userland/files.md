@@ -45,7 +45,7 @@ of it; per-file metadata through the server's `set_attr` and `get_attr` is plann
 
 ### Files over 9P
 
-<details><summary>Status: built · partly tested: the host tests run beamlet's platform against the real `littlefsd` on the fake kernel, and OTP's `prim_file` over the natives runs in a boot in bench:beamlet-files; Elixir's `File` over them runs in a session once the steward's sessions do · tested (23)</summary>
+<details><summary>Status: built · partly tested: the host tests run beamlet's platform against the real `littlefsd` on the fake kernel, and OTP's `prim_file` over the natives runs in a boot in bench:beamlet-files; Elixir's `File` over them runs in a session once the steward's sessions do · tested (26)</summary>
 
 - host:beamlet-redoubt::files_are_written_read_listed_renamed_and_removed
 - host:beamlet-redoubt::a_rename_the_volume_refuses_is_eacces
@@ -64,6 +64,9 @@ of it; per-file metadata through the server's `set_attr` and `get_attr` is plann
 - host:beamlet-redoubt::a_stat_reports_only_what_9p_has
 - host:beamlet-redoubt::what_has_no_9p_field_is_refused_visibly
 - host:beamlet-redoubt::a_field_set_on_a_missing_file_is_enoent
+- host:beamlet-redoubt::a_directory_that_is_there_is_eexist_to_make
+- host:beamlet-redoubt::mkdir_p_of_a_nested_new_path_makes_it
+- host:beamlet-redoubt::a_create_refused_is_its_refusal
 - host:beamlet-redoubt::every_row_of_the_error_table_maps_to_its_posix_error
 - host:beamlet-redoubt::a_bind_argument_puts_a_handed_volume_in_the_namespace
 - host:beamlet-vm::a_completion_reaches_the_process_that_asked_and_no_other
@@ -143,8 +146,9 @@ Residuals, each a departure from the table, until the file server serves what it
 
 ### Copying, moving, removing and binds
 
-<details><summary>Status: built · partly tested: beamlet's server copy and binds are host-tested on the fake kernel, the shell's commands run on the host only, and no case runs them in a session yet, since a session's home is not yet writable · tested (4)</summary>
+<details><summary>Status: built · partly tested: in a session on the machine a copy across volumes is shown only from a read-only volume and into a vault, and a move between two writable volumes, which no session holds, runs on the host only · tested (5)</summary>
 
+- bench:shell-commands
 - host:beamlet-redoubt::a_copy_within_one_volume_is_the_servers
 - host:beamlet-redoubt::a_bind_is_the_files_namespace_and_one_connection
 - host:beamlet-redoubt::binds_past_the_cap_are_refused_and_a_bound_prefix_is_still_replaced
@@ -157,7 +161,7 @@ another's files. So what an operation costs depends on where its two ends are:
 
 | Operation | Within one volume | Across volumes |
 | --- | --- | --- |
-| copy (`cp`, `Redoubt.File.copy_file`) | the file server's `copy_file`: no bytes cross into the VM; `cp` over a file that is there copies through the VM | a read and write loop in the VM (`File.cp` and `File.cp_r` always loop) |
+| copy (`cp`, `Redoubt.File.copy_file`) | the file server's `copy_file`: no bytes cross into the VM, though the VM's thread waits while the server copies, at most the home's quota (8 MiB in the image) or a vault's room; `cp` over a file that is there copies through the VM | a read and write loop in the VM (`File.cp` and `File.cp_r` always loop) |
 | rename or move (`File.rename`, `mv`) | the file server's `rename`, atomic, within one directory or between two | `File.rename` returns `{:error, :exdev}`; a move is the caller's copy and remove (`mv` does both), not atomic |
 | remove (`rm`, `rm_rf`) | a 9P `remove`, recursively for `rm_rf` | |
 | make a directory (`mkdir`, `mkdir_p`) | a 9P `create` with the directory bit | |

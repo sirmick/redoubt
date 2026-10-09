@@ -100,10 +100,12 @@ enum Kind {
     },
     /// Opens the file `names` walks to; when `create` names the last, creates it first in the
     /// directory before it, and opens it as it is if it was there already (unless `exclusive`).
+    /// `refused` is the create's refusal, which stands if the file is not there either.
     Open {
         names: Vec<String>,
         how: OpenMode,
         create: Option<String>,
+        refused: Option<FileError>,
     },
     MakeDir {
         name: String,
@@ -310,19 +312,32 @@ impl Table {
             // The clunk after the end: the result stands.
             return;
         }
-        // A create refused, for an open that may find the file there: the file is opened instead,
-        // walked afresh once the directory's fid is clunked.
-        if let (Ask::Create(..), Reply::Refused(_), Kind::Open { create: create @ Some(_), how, .. }) =
-            (&ask, &reply, &mut op.kind)
+        // A create refused, for an open that may find the file there (a served file a server does
+        // not create, as `/dev/cons`): the file is opened instead, walked afresh once the
+        // directory's fid is clunked. If it is not there either, the create's refusal stands (a
+        // label check, a quota), not the walk's `enoent`.
+        if let (
+            Ask::Create(..),
+            Reply::Refused(e),
+            Kind::Open { create: create @ Some(_), how, refused, .. },
+        ) = (&ask, &reply, &mut op.kind)
         {
             if !how.exclusive {
                 *create = None;
+                *refused = Some(*e);
                 op.out = Some((Ask::Clunk, 0));
                 return;
             }
         }
         match (ask, reply) {
-            (_, Reply::Refused(e)) => op.result = Some(Err(e)),
+            (_, Reply::Refused(e)) => {
+                // An open's second try that finds no file: the create's refusal.
+                let e = match (&op.kind, e) {
+                    (Kind::Open { refused: Some(first), .. }, FileError::Enoent) => *first,
+                    _ => e,
+                };
+                op.result = Some(Err(e));
+            }
             (Ask::Walk(_), Reply::Walked(qid)) => {
                 op.walked = true;
                 // A walk of no names is the binding's root, a directory.
@@ -894,7 +909,7 @@ impl Files for Redoubt {
         }
         let path = path.to_string();
         let answer = self.run(|t, io, asker| {
-            let kind = |create| Kind::Open { names: Vec::new(), how, create };
+            let kind = |create| Kind::Open { names: Vec::new(), how, create, refused: None };
             if how.create {
                 let name = path.rsplit('/').next().unwrap_or("").to_string();
                 t.begin(io, asker, &path, kind(Some(name)), true)?;
@@ -1050,14 +1065,15 @@ fn below(ns: &Namespace, path: &str) -> Option<Vec<Vec<u8>>> {
 }
 
 impl Redoubt {
-    /// A path above the bindings is answered here: its info and its names; anything that would
-    /// change it is `eacces`.
+    /// A path above the bindings is answered here: its info and its names; making it is `eexist`,
+    /// as it is there, and anything else that would change it is `eacces`.
     fn path_op(&mut self, path: &str, kind: Kind, parent: bool) -> Result<Answer, FileError> {
         if let Some(names) = below(&self.files.ns, path) {
             return match kind {
                 Kind::Info => Ok(Answer::Info(plain(FileKind::Directory, 0, 0, 0))),
                 Kind::ListDir { .. } => Ok(Answer::Names(names)),
                 Kind::ReadFile { .. } => Err(FileError::Eisdir),
+                Kind::MakeDir { .. } => Err(FileError::Eexist),
                 _ => Err(FileError::Eacces),
             };
         }

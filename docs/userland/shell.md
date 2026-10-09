@@ -151,7 +151,7 @@ no second meaning a line can have.
 
 ### Files and text
 
-Status: built · partly tested: runs on the host only, over files beamlet's host platform serves; its tests are the shell's own ExUnit suite, which runs every command against a seeded tree of real files and no bench case runs
+Status: built · partly tested: every command runs on the host, over files beamlet's host platform serves, in the shell's own ExUnit suite against a seeded tree of real files; on the machine a session over SSH runs the commonest (`mkdir_p`, `w`, `cat`, `cp` within and across volumes, `mv`, `ls`, `stat`, `touch`, `cd`, `glob`, `checksum`, `rm_rf`), not every one · tested: bench:shell-commands
 
 Files come in through `cat` and go out through `w`; everything between takes lines and chains with
 `|>`. Relative paths resolve against the session's current directory.
@@ -210,7 +210,7 @@ The **pager** ([`Redoubt.Screen.Pager`](../../userland/shell/lib/redoubt/screen/
 
 ### Session commands
 
-Status: built · partly tested: runs on the host only, where a VM is no session; its tests are the shell's own ExUnit suite (`test/redoubt/shell/session_test.exs`, `test/redoubt/shell/driver_test.exs`), which `./test-shell` runs and no bench case does, and beamlet's natives under them are host-tested ([beamlet](beamlet.md#natives))
+Status: built · partly tested: `clear()` runs on the host only, in the shell's own ExUnit suite (`test/redoubt/shell/driver_test.exs`); `ns`, `ns_lookup`, `bind` with its refusals and its cap, `whoami` and `labels` run in sessions over SSH on the machine, a vault session's among them, and on the host, where a VM is no session (`test/redoubt/shell/session_test.exs`) · tested: bench:shell-commands
 
 | Command | What it does |
 | --- | --- |
