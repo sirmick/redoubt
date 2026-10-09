@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 509
+revision = 510
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -584,8 +584,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   needs = ["SMP3"]
   body = "Several harts: R12's shares and the targets across harts. Starting list, from SMP3's --smp 2 sweep (.wash/local/SMP3-smp2-findings.md) and K30: the share and oracle cases that fail at 2 harts; the measurements expiry-deadline-then-timeout and scan-bounds; budget-deadline's 1 ms lateness bound (keep_smp until restated); boot-profile and boot-profile-unverified (the boot completes, but the first console read is at ~51 s against the 20 s bound at 2 harts); and kernel-containment (slow, not stalled: ~1.2 terminations a minute at 2 harts, ~95 min against its 1800 s timeout). The common cost is harts spinning on the one kernel lock under icount: QEMU runs one hart at a time, and a spinning hart spends its quantum. Decide per case: restate the target across harts, keep the case one-hart, or cut the spin cost (e.g. wfi or yield while waiting for the lock under icount, the ticket lock M2 plans, or wake affinity: no IPI when the waker blocks next). Size L."
-  state = "reported"
-  revision = 507
+  state = "done"
+  revision = 510
   overrides = ["2026-10-08: started by Orchestrator before M1 (reported): The owner started the M2 smp track early; SMP3 is merged.", "2026-10-08: started by Orchestrator before M1 (reported): several-harts track runs ahead of M1's report (milestone split, owner 2026-10-07)"]
 
 [[node]]

@@ -1,10 +1,14 @@
-description = "A large-weight server's useful work in the release build (R12): the same program and checks as sched-large-weight with no audits, trace or checks, so the kernel time a slice end costs is read from the useful work the nine spinners count of the window (virtual time, release build)"
+description = "A large-weight server's useful work in the release build (R12): the same program as sched-large-weight with no audits, trace or checks, so the kernel time a slice end costs is read from the useful work the nine spinners count of the window, and the server's count of all nine within 50 per thousand of 1000/1800 (virtual time, release build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = false
 icount = "shift=3,sleep=off"
 programs = ["sched-large-weight"]
 timeout_secs = 600
+# One hart: with no trace the server's share is a count, and at several harts under icount a count
+# is the machine's instructions, not a hart's time; sched-large-weight judges it across harts from
+# the kernel's charges.
+keep_smp = true
 # The nine spinners' useful work at the 1 ms slice is at least 0.85 of the 10 ms build's, the
 # fixed part of a slice end (traps, two SBI timer calls: 100 to 155 µs a slice) being the rest.
 # Useful work is the printed share times the calibrated rate, so the bound on the printed share is
@@ -13,7 +17,7 @@ timeout_secs = 600
 # 0.85 x 979 x 8773 / 7756 = 942. One expectation serves both widths, so it is rv32's; measured
 # 979 on rv64 (0.91 of the 10 ms build) and 964 on rv32 (0.87).
 expect = [
-    '^\[large-weight\] ok: the weight-1000 server got',
+    '^\[large-weight\] the weight-1000 server counted (50[5-9]|5[1-9]\d|60[0-5]) of 1000 of all counts$',
     '^\[large-weight\] ok: the least user got',
     '^\[large-weight\] useful work: the server \d+ and all nine (94[2-9]|9[5-9]\d|1000) of 1000 of the window$',
     '^SCHED-LARGE-WEIGHT TEST PASSED$',

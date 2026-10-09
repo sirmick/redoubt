@@ -1,14 +1,16 @@
 //! The kernel's stride rules against the executable model: the same random sequence of budget
 //! creations and destructions, thread wakes and blocks, runs, slice ends and preemptions, driven
-//! through `redoubt_model::sched::Scheduler` and through this crate's [`Cpu`], the wiring the
+//! through `redoubt_model::sched::Scheduler` and through this crate's [`Harts`], the wiring the
 //! kernel's `sched.rs` calls (a deschedule, a pick, a creation, a weight change, a destruction; the
-//! budgets' state in a store). Only the thread bookkeeping and the clock are this harness's own; a
-//! reconcile visits only the budgets whose threads changed since the last, as the kernel's does.
-//! Every pass, entry, remainder, tie, queue membership, the floor, the tie counters and the running
-//! thread must agree after every step.
+//! budgets' state in a store), at 1, 2 and 4 harts. Only the thread bookkeeping and the clock are
+//! this harness's own; a reconcile visits only the budgets whose threads changed since the last,
+//! as the kernel's does, and each budget's threads no hart runs are counted at every change, as the
+//! kernel's settle counts them before a switch or a reconcile. Every pass, entry, remainder, tie,
+//! queue membership, the floor, the tie counters, the cap set and each hart's running thread must
+//! agree after every step.
 //!
-//! Destructions come in the kernel's shapes too: a leaf whose threads were blocked first; the
-//! budget on the CPU, destroyed with its threads (a deadline: nothing deschedules it first); and a
+//! Destructions come in the kernel's shapes too: a leaf whose threads were blocked first; a
+//! budget on a hart, destroyed with its threads (a deadline: nothing deschedules it first); and a
 //! whole subtree at once, bottom-up (R10's order), the top's carve returned first (the kernel's
 //! `mark_dying`).
 
@@ -17,9 +19,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use redoubt_model::mutation::Mutation;
 use redoubt_model::sched::{Current, Scheduler};
 use redoubt_model::spec::SLICE;
-use redoubt_stride::{Budgets, Cpu, State};
+use redoubt_stride::{Budgets, Harts, State};
 
 type Thread = (u64, u64);
+
+/// The most harts a run drives.
+const HARTS: usize = 4;
 
 struct Budget {
     state: State,
@@ -45,13 +50,13 @@ impl Budgets<u64> for Store {
     fn live(&self, b: u64) -> bool { self.0.contains_key(&b) }
 }
 
-/// The kernel's wiring ([`Cpu`]) over a store, with the thread on the CPU and its slice.
-#[derive(Default)]
+/// The kernel's wiring ([`Harts`]) over a store, with each hart's thread and its slice.
 struct Kernel {
-    cpu: Cpu<u64, 64>,
+    cpu: Harts<u64, 64, HARTS>,
+    harts: usize,
     bs: Store,
-    thread: Option<Thread>,
-    slice_left: u64,
+    thread: [Option<Thread>; HARTS],
+    slice_left: [u64; HARTS],
     /// Destructions begun: their carves are back with their parents.
     returned: BTreeSet<u64>,
     /// The budgets whose threads changed since the last reconcile, as the kernel marks them: the
@@ -60,20 +65,53 @@ struct Kernel {
 }
 
 impl Kernel {
-    fn current(&self) -> Option<Current> {
-        let budget = self.cpu.cur?;
-        Some(Current { budget, thread: self.thread?, pending: self.cpu.pending, slice_left: self.slice_left })
+    fn new(harts: usize) -> Kernel {
+        let mut cpu = Harts::new();
+        cpu.set_harts(harts as u32, |_| 0, |_| 0);
+        Kernel {
+            cpu,
+            harts,
+            bs: Store::default(),
+            thread: [None; HARTS],
+            slice_left: [0; HARTS],
+            returned: BTreeSet::new(),
+            marked: Vec::new(),
+        }
     }
 
-    fn deschedule(&mut self) {
-        self.cpu.switch(&mut self.bs, None, |bs, b| !bs.0[&b].threads.is_empty());
-        self.thread = None;
+    fn current(&self, h: usize) -> Option<Current> {
+        let budget = self.cpu.cur(h)?;
+        let pending = self.cpu.runners[h].pending;
+        Some(Current { budget, thread: self.thread[h]?, pending, slice_left: self.slice_left[h] })
+    }
+
+    /// `b`'s threads no hart runs.
+    fn waiting(&self, b: u64) -> u32 {
+        let busy: BTreeSet<Thread> = self.thread.iter().flatten().copied().collect();
+        self.bs.0.get(&b).map_or(0, |x| x.threads.difference(&busy).count() as u32)
+    }
+
+    /// The kernel's settle for `b`: its threads no hart runs, counted.
+    fn settle(&mut self, b: u64) {
+        let n = self.waiting(b);
+        self.cpu.set_waiting(b, n);
+    }
+
+    fn deschedule(&mut self, h: usize) {
+        let Some(b) = self.cpu.cur(h) else { return };
+        self.thread[h] = None;
+        self.settle(b);
+        let runnable = |bs: &Store, b: u64| !bs.0[&b].threads.is_empty();
+        self.cpu.switch(h, &mut self.bs, None, runnable);
     }
 
     fn reconcile(&mut self) {
         let mut marked = std::mem::take(&mut self.marked);
         let lost = marked.clone();
-        self.cpu.reconcile(&mut self.bs, &lost, &mut marked, |bs, b| !bs.0[&b].threads.is_empty());
+        let busy: BTreeSet<Thread> = self.thread.iter().flatten().copied().collect();
+        self.cpu.reconcile(&mut self.bs, &lost, &mut marked, |bs, b| {
+            bs.0[&b].threads.difference(&busy).count() as u32
+        });
     }
 
     fn add_budget(&mut self, id: u64, parent: Option<u64>, limit: u64) {
@@ -114,8 +152,10 @@ impl Kernel {
                 bs.0.get_mut(&p).unwrap().carved -= limit;
             }
         });
-        if self.cpu.cur.is_none() {
-            self.thread = None;
+        for h in 0..self.harts {
+            if self.cpu.cur(h).is_none() {
+                self.thread[h] = None;
+            }
         }
         self.bs.0.remove(&b);
     }
@@ -137,54 +177,59 @@ impl Kernel {
     fn thread_runnable(&mut self, b: u64, t: Thread) {
         self.bs.0.get_mut(&b).unwrap().threads.insert(t);
         self.marked.push(b);
+        self.settle(b);
     }
 
     fn thread_blocked(&mut self, b: u64, t: Thread) {
         self.bs.0.get_mut(&b).unwrap().threads.remove(&t);
         self.marked.push(b);
-        if self.cpu.cur == Some(b) && self.thread == Some(t) {
-            self.deschedule();
+        match (0..self.harts).find(|h| self.cpu.cur(*h) == Some(b) && self.thread[*h] == Some(t)) {
+            Some(h) => self.deschedule(h),
+            None => self.settle(b),
         }
     }
 
-    fn pick(&mut self) -> Option<Current> {
+    fn pick(&mut self, h: usize) -> Option<Current> {
         self.reconcile();
-        if self.cpu.cur.is_some() {
-            return self.current();
+        if self.cpu.cur(h).is_some() {
+            return self.current(h);
         }
+        let busy: BTreeSet<Thread> = self.thread.iter().flatten().copied().collect();
         let (b, t) = self.cpu.pick(&mut self.bs, |bs, b| {
             let x = &bs.0[&b];
+            let free = |t: &&Thread| !busy.contains(*t);
             x.cursor
                 .and_then(|c| {
-                    x.threads.range((std::ops::Bound::Excluded(c), std::ops::Bound::Unbounded)).next()
+                    x.threads.range((std::ops::Bound::Excluded(c), std::ops::Bound::Unbounded)).find(free)
                 })
-                .or_else(|| x.threads.iter().next())
+                .or_else(|| x.threads.iter().find(free))
                 .copied()
         })?;
         self.bs.0.get_mut(&b).unwrap().cursor = Some(t);
-        self.cpu.switch(&mut self.bs, Some(b), |_, _| true);
-        self.thread = Some(t);
-        self.slice_left = SLICE;
-        self.current()
+        self.thread[h] = Some(t);
+        self.cpu.switch(h, &mut self.bs, Some(b), |_, _| true);
+        self.settle(b);
+        self.slice_left[h] = SLICE;
+        self.current(h)
     }
 
-    fn run(&mut self, dt: u64) {
-        if self.cpu.cur.is_some() {
-            let dt = dt.min(self.slice_left);
-            self.cpu.accrue(dt);
-            self.slice_left -= dt;
+    fn run(&mut self, h: usize, dt: u64) {
+        if self.cpu.cur(h).is_some() {
+            let dt = dt.min(self.slice_left[h]);
+            self.cpu.accrue(h, dt);
+            self.slice_left[h] -= dt;
         }
     }
 
-    fn slice_end(&mut self) {
-        if self.cpu.cur.is_some() && self.slice_left == 0 {
-            self.deschedule();
+    fn slice_end(&mut self, h: usize) {
+        if self.cpu.cur(h).is_some() && self.slice_left[h] == 0 {
+            self.deschedule(h);
         }
     }
 
-    fn preempt(&mut self) {
-        if self.cpu.cur.is_some() {
-            self.deschedule();
+    fn preempt(&mut self, h: usize) {
+        if self.cpu.cur(h).is_some() {
+            self.deschedule(h);
         }
     }
 }
@@ -207,7 +252,7 @@ impl Rng {
 }
 
 fn compare(m: &Scheduler, k: &Kernel, step: usize, seed: u64) {
-    let at = || format!("seed {seed} step {step}");
+    let at = || format!("seed {seed} step {step} at {} harts", k.harts);
     assert_eq!(m.budgets.keys().collect::<Vec<_>>(), k.bs.0.keys().collect::<Vec<_>>(), "{} budgets", at());
     for (id, e) in &m.budgets {
         let s = k.bs.0[id].state;
@@ -221,23 +266,28 @@ fn compare(m: &Scheduler, k: &Kernel, step: usize, seed: u64) {
     }
     let q = &k.cpu.q;
     assert_eq!((m.floor, m.front, m.back), (q.floor, q.front, q.back), "{} floor and counters", at());
+    assert_eq!(m.capped, q.capped().collect::<BTreeSet<_>>(), "{} cap set", at());
     // The ranks the queue keeps beside its slots are the stored states' after every step.
     assert_eq!(q.audit(&k.bs), Ok(()), "{} ranks", at());
-    assert_eq!(m.current, k.current(), "{} running thread", at());
+    for h in 0..k.harts {
+        assert_eq!(m.on(h), k.current(h), "{} hart {h}'s running thread", at());
+    }
 }
 
-fn run(seed: u64) { run_with(seed, None) }
+fn run(seed: u64, harts: usize) { run_with(seed, harts, None) }
 
-fn run_with(seed: u64, mutation: Option<Mutation>) {
+fn run_with(seed: u64, harts: usize, mutation: Option<Mutation>) {
     let mut rng = Rng(seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1);
     let mut m = Scheduler { mutation, ..Scheduler::default() };
-    let mut k = Kernel::default();
+    m.set_harts(harts);
+    let mut k = Kernel::new(harts);
     const ROOT: u64 = 1;
     m.add_budget(ROOT, None, 1 << 31);
     k.add_budget(ROOT, None, 1 << 31);
     let mut next_id = 2;
     for step in 0..400 {
         let ids: Vec<u64> = m.budgets.keys().copied().collect();
+        let h = rng.below(harts as u64) as usize;
         match rng.below(12) {
             // Create a budget under any budget, carving what the rules allow.
             0 | 1 => {
@@ -284,10 +334,10 @@ fn run_with(seed: u64, mutation: Option<Mutation>) {
                 m.thread_runnable(b, t);
                 k.thread_runnable(b, t);
             }
-            // A runnable thread blocks (the running one, often).
+            // A runnable thread blocks (one a hart runs, often).
             5 => {
                 let t = if rng.below(2) == 0 {
-                    m.current.map(|c| (c.budget, c.thread))
+                    m.on(h).map(|c| (c.budget, c.thread))
                 } else {
                     let all: Vec<(u64, Thread)> = m
                         .budgets
@@ -304,28 +354,28 @@ fn run_with(seed: u64, mutation: Option<Mutation>) {
                 m.reconcile();
                 k.reconcile();
             }
-            // Time passes for whatever runs.
+            // Time passes for whatever a hart runs.
             7..=9 => {
-                assert_eq!(m.pick(), k.pick(), "seed {seed} step {step} pick");
+                assert_eq!(m.pick_on(h), k.pick(h), "seed {seed} step {step} hart {h}'s pick");
                 let dt = match rng.below(3) {
                     0 => SLICE,
                     1 => 1 + rng.below(SLICE),
                     _ => 1 + rng.below(20),
                 };
-                m.run(dt);
-                k.run(dt);
-                m.slice_end();
-                k.slice_end();
+                m.run_on(h, dt);
+                k.run(h, dt);
+                m.slice_end_on(h);
+                k.slice_end(h);
             }
-            // A budget deadline elsewhere: the running thread is preempted.
+            // A budget deadline elsewhere: a hart's thread is preempted.
             10 => {
-                m.preempt();
-                k.preempt();
+                m.preempt_on(h);
+                k.preempt(h);
             }
-            // A deadline (or a destroy) takes a whole subtree, the running budget perhaps in it:
+            // A deadline (or a destroy) takes a whole subtree, a budget a hart runs perhaps in it:
             // its threads die with it, nothing descheduled first, bottom-up.
             11 if rng.below(2) == 0 => {
-                let top = match m.current {
+                let top = match m.on(h) {
                     Some(c) if c.budget != ROOT && rng.below(2) == 0 => c.budget,
                     _ => {
                         let others: Vec<u64> = ids.iter().copied().filter(|b| *b != ROOT).collect();
@@ -349,7 +399,7 @@ fn run_with(seed: u64, mutation: Option<Mutation>) {
                 k.destroy_subtree(top, &subtree);
             }
             _ => {
-                assert_eq!(m.pick(), k.pick(), "seed {seed} step {step} pick");
+                assert_eq!(m.pick_on(h), k.pick(h), "seed {seed} step {step} hart {h}'s pick");
             }
         }
         compare(&m, &k, step, seed);
@@ -358,8 +408,10 @@ fn run_with(seed: u64, mutation: Option<Mutation>) {
 
 #[test]
 fn the_crate_and_the_model_agree() {
-    for seed in 0..3000 {
-        run(seed);
+    for harts in [1, 2, 4] {
+        for seed in 0..3000 {
+            run(seed, harts);
+        }
     }
 }
 
@@ -397,7 +449,23 @@ fn a_broken_model_disagrees() {
         Mutation::R12ExitRunsFree,
         Mutation::R12RescaleOnlyOnReturn,
     ] {
-        let seen = (0..3000).any(|seed| std::panic::catch_unwind(|| run_with(seed, Some(m))).is_err());
+        let seen = (0..3000).any(|seed| std::panic::catch_unwind(|| run_with(seed, 1, Some(m))).is_err());
+        if !seen {
+            missed.push(m);
+        }
+    }
+    // The rules of several harts, at two and at four.
+    for m in [
+        Mutation::R12CappedHoldsFloor,
+        Mutation::R12CapOnce,
+        Mutation::R12AllCappedHoldsFloor,
+        Mutation::R12UncapBanksCredit,
+        Mutation::R12OneRunnerPerBudget,
+        Mutation::R12SpreadChargesOnce,
+    ] {
+        let seen = [2, 4].iter().any(|harts| {
+            (0..3000).any(|seed| std::panic::catch_unwind(|| run_with(seed, *harts, Some(m))).is_err())
+        });
         if !seen {
             missed.push(m);
         }

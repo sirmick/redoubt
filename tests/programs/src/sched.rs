@@ -134,6 +134,13 @@ pub enum Role {
     ClusterDriver = 29,
     /// Cluster fixture: 200 timeout waits with the same programmed offsets.
     ClusterTimer = 30,
+    /// p0 threads counting until the window ends, and p1 more that sleep until p2 ticks first;
+    /// report the total.
+    SpinThreads = 31,
+    /// Take a page in every 2 MiB span of the `map_anon` area, then ask for 2 MiB until the window
+    /// ends, each request refused after a search of the whole area, R12's costliest call
+    /// (`map-anon-search-bound`); report the refusals.
+    SearchHammer = 32,
 }
 
 impl Role {
@@ -170,6 +177,8 @@ impl Role {
             ClusterServer,
             ClusterDriver,
             ClusterTimer,
+            SpinThreads,
+            SearchHammer,
         ]
         .into_iter()
         .find(|r| *r as u8 == x)
@@ -178,6 +187,13 @@ impl Role {
 
 /// `rdtime`.
 pub fn ticks() -> u64 { crate::read_time() }
+
+/// Mark `budget` in the kernel's trace: carve an empty child of weight `weight` and destroy it, so
+/// the trace's lift names `budget` as its parent.
+pub fn mark(budget: u32, weight: u32) {
+    let child = rd::create(budget, &rd::spec(0, 0, weight)).expect("a mark");
+    rd::destroy(child).expect("a mark's destruction");
+}
 
 /// Count until `rdtime` reaches `end`; the count.
 #[inline(never)]
@@ -290,6 +306,39 @@ extern "C" fn gamer_thread(_: usize) -> ! {
         n += spin_until(ticks() + burst);
         let _ = rd::receive(None, nap, 0);
     }
+    TOTAL.fetch_add(n as usize, SeqCst);
+    DONE.fetch_add(1, SeqCst);
+    rd::thread_exit().ok();
+    crate::park()
+}
+
+/// [`Role::SearchHammer`]: the `map_anon` area (memory-layout.md, "Regions") with a page taken in
+/// every 2 MiB span, so no request of a span fits and each refusal reads every page table of the
+/// area; the requests refused until `end`.
+fn search_hammer(end: u64) -> u64 {
+    const AREA: core::ops::Range<usize> = 0x6000_0000..0x7000_0000;
+    const SPAN: usize = 2 << 20;
+    for span in AREA.step_by(SPAN) {
+        // A page of this process's may be there already.
+        let _ = rd::map_fixed(span, rd::PAGE_SIZE, rd::rw());
+    }
+    let mut refused = 0;
+    while ticks() < end {
+        match rd::map_anon(SPAN, rd::rw()) {
+            Err(Error::OutOfMemory) => refused += 1,
+            Ok(at) => rd::unmap(at, SPAN).expect("unmap"),
+            Err(_) => {}
+        }
+    }
+    refused
+}
+
+/// Count until the window ends, a `late` one ([`Role::SpinThreads`]'s p1) from p2 ticks.
+extern "C" fn spin_thread(late: usize) -> ! {
+    if late == 1 {
+        sleep_until(param(2), tpu());
+    }
+    let n = spin_until(end_ticks());
     TOTAL.fetch_add(n as usize, SeqCst);
     DONE.fetch_add(1, SeqCst);
     rd::thread_exit().ok();
@@ -751,6 +800,19 @@ fn run_child(arg: usize, more: Option<fn(Option<Role>, bool)>) -> ! {
                 rd::send(1, &rd::body([rd::time_now().unwrap_or(0) as usize, 0, 0, 0]), None, rd::FOREVER);
             rd::process_exit(0)
         }
+        Some(Role::SearchHammer) => search_hammer(end),
+        Some(Role::SpinThreads) => {
+            let (first, more) = (param(0).max(1) as usize, param(1) as usize);
+            for _ in 1..first {
+                thread(spin_thread, 0);
+            }
+            for _ in 0..more {
+                thread(spin_thread, 1);
+            }
+            let n = spin_until(end);
+            await_done(first - 1 + more);
+            n + TOTAL.load(SeqCst) as u64
+        }
         Some(Role::Gamer) => {
             let threads = param(2).max(1) as usize;
             for _ in 1..threads {
@@ -1192,13 +1254,14 @@ fn steward(k: usize, leases: usize, hold: bool) {
     }
     // By deadline: a budget's deadline is fixed when it is created, before the spawn, so it
     // leaves room for the spawn under load; a lease whose deadline came first is retried. The
-    // steward's spawn at N = 16 takes about 150 ms, so the lead is twice that: at 150 ms every
-    // retry on one seed lost the race and took no sample.
+    // steward's spawn at N = 16 takes about 150 ms on one hart: at a lead of 150 ms every retry on
+    // one seed lost the race and took no sample. On two, the spawn waits for the lock behind the
+    // sessions' kernel entries too, and at 300 ms rv64 took 19 of 50, so the lead is 600 ms.
     for _ in 0..leases * 2 {
         if nn == leases {
             break;
         }
-        let deadline = now() + 300_000;
+        let deadline = now() + 600_000;
         let Ok(lease) = rd::create(3, &rd::BudgetSpec { deadline, ..rd::spec(pages, 1, 10) }) else {
             continue;
         };
@@ -2434,32 +2497,52 @@ impl Bench {
         count * 1000 / (self.rate * window_us / 1000).max(1)
     }
 
-    /// A share the bench's post-check (`sched_oracle`) judges, net of the checked build's audits
-    /// inside its window, as it judges the latency targets: printed as `SHARE <name> <start> <end>
-    /// <cpu> <min> <max>`, the window (from [`Bench::go`]) and the CPU `count` stands for in µs,
-    /// and the share's bounds in thousandths. The share gross of audits, for the program's note.
-    pub fn judged_share(
+    /// A share of the CPU the kernel charged, which the bench's post-check (`sched_oracle`) reads
+    /// from the trace alone: printed as `CHARGED-SHARE <name> <start> <end> <tolerance>[@<harts>]
+    /// <mark>[:<threads>]...`, the window in µs, how far in thousandths the share may lie from what
+    /// it is owed among the budgets charged beside it (`@` judged only at that many harts), and the
+    /// weights of the empty budgets the program carved and destroyed to mark the budget judged (the
+    /// first) and the budgets it is judged among (each mark's, and those under it), each with its
+    /// runnable threads if it has fewer than the harts (its water-filling share is capped at them).
+    pub fn charged_share(
         &self,
         name: &str,
-        count: u64,
         (start, end): (u64, u64),
-        (min, max): (u64, u64),
-    ) -> u64 {
-        let cpu = count * 1000 / self.rate.max(1);
-        let _ = writeln!(Console, "SHARE {} {} {} {} {} {}", name, start, end, cpu, min, max);
-        self.share(count, end - start)
+        (tolerance, at): (u64, &str),
+        marks: &[(u32, Option<u32>)],
+    ) {
+        let _ = write!(Console, "CHARGED-SHARE {} {} {} {}{}", name, start, end, tolerance, at);
+        for (m, k) in marks {
+            let _ = match k {
+                Some(k) => write!(Console, " {}:{}", m, k),
+                None => write!(Console, " {}", m),
+            };
+        }
+        let _ = writeln!(Console);
     }
 
-    /// A share of the CPU the kernel charged, which the bench's post-check (`sched_oracle`) reads
-    /// from the trace alone: printed as `CHARGED-SHARE <name> <start> <end> <tolerance>
-    /// <mark>...`, the window in µs, how far in thousandths the share may lie from what its weight
-    /// is owed among the budgets charged beside it, and the weights of the empty budgets the
-    /// program carved and destroyed to mark the budget judged (the first) and the budgets it is
-    /// judged among (each mark's, and those under it).
-    pub fn charged_share(&self, name: &str, (start, end): (u64, u64), tolerance: u64, marks: &[u32]) {
-        let _ = write!(Console, "CHARGED-SHARE {} {} {} {}", name, start, end, tolerance);
-        for m in marks {
-            let _ = write!(Console, " {}", m);
+    /// A share across harts of the CPU the kernel charged, which the bench's post-check
+    /// (`sched_oracle`) reads from the trace alone: printed as `HART-SHARE <name> <start> <end>
+    /// <tolerance>[+|-][@<harts>] <mark>:<threads> <weight>:<threads>...`, the window in µs, how far
+    /// in thousandths the share may lie from what it is owed (`+` only below it, `-` only above,
+    /// `@` judged only at that many harts), the weight of the empty budget the program carved and
+    /// destroyed to mark the budget judged ([`mark`]) with its runnable threads, and the weight and
+    /// runnable threads of each budget it runs against it.
+    pub fn hart_share(
+        &self,
+        name: &str,
+        (start, end): (u64, u64),
+        (tolerance, side): (u64, &str),
+        (mark, threads): (u32, u32),
+        others: &[(u32, u32)],
+    ) {
+        let _ = write!(
+            Console,
+            "HART-SHARE {} {} {} {}{} {}:{}",
+            name, start, end, tolerance, side, mark, threads
+        );
+        for (w, k) in others {
+            let _ = write!(Console, " {}:{}", w, k);
         }
         let _ = writeln!(Console);
     }
@@ -2485,6 +2568,84 @@ impl Bench {
     pub fn exit_endpoint(&self) -> u32 { self.exit }
 
     pub fn image(&self) -> &Image { &self.image }
+}
+
+/// `sched-lock-contention`: `hammers` budgets (100, from `users`) each refused a `map_anon` after a
+/// search of the whole area in a loop ([`Role::SearchHammer`]), R12's costliest call, one on every
+/// hart but one, beside `sched-latency`'s driver stand-in (1000, from `system`) on the goldfish
+/// RTC's alarm. The trace's lock-wait tickets and the driver's wakes are the post-check's.
+pub fn lock_contention(hammers: usize) -> ! {
+    /// Long enough for the driver's samples under the hammers.
+    const WINDOW: u64 = 4_000_000;
+    let devices = rd::OTHER_DEVICES..rd::first_free();
+    let mut b = Bench::new("lock-contention");
+    let Some((rtc_mmio, _, rtc_irq)) = rtc::find(devices) else {
+        b.check(false, format_args!("no goldfish RTC among the device handles"));
+        b.finish("SCHED-LOCK-CONTENTION")
+    };
+    let driver = b.budget(rd::SYSTEM, 1000, 1, rd::FOREVER);
+    // It holds its samples' windows until asked, below.
+    let d = b.start(driver, Role::Driver, &[K, 1], &[rtc_mmio, rtc_irq]);
+    let mut started = [0usize; 3];
+    let hammers = &mut started[..hammers.min(3)];
+    for h in hammers.iter_mut() {
+        // Room for a page and its page tables in every span of the area.
+        let budget = b.budget(rd::USERS, 100, 4, rd::FOREVER);
+        *h = b.start(budget, Role::SearchHammer, &[], &[]);
+    }
+    b.go(50_000, WINDOW);
+    // The hammers' refusals and the driver's two reports.
+    let words = b.collect_words(hammers.len() + 2);
+    let refused: u64 = hammers.iter().map(|&i| join(words[i][0][0], words[i][0][1])).sum();
+    b.note(format_args!("{} hammers' searches refused: {}", hammers.len(), refused));
+    let stat = |tag: usize| words[d].iter().find(|w| w[3] & 0xff == tag && w[3] >> 8 > 0).copied();
+    match stat(Stats::DRIVER_WAKE) {
+        Some(w) => b.note(format_args!(
+            "driver wake: {} / {} / {} ({}): gross, audits included; net in the post-check",
+            w[0],
+            w[1],
+            w[2],
+            w[3] >> 8
+        )),
+        None => b.check(false, format_args!("driver wake: no samples")),
+    }
+    b.check(refused > 0, format_args!("the hammers made their searches"));
+    b.samples(d, &words[d], format_args!("contention"));
+    b.finish("SCHED-LOCK-CONTENTION")
+}
+
+/// Budget churn against an equal-weight victim (`sched-budget-churn` and its shell's case): each
+/// phase is `(variant, the child's weight, name, what, the victim's mark)`, the attacker running
+/// [`Role::BudgetChurn`] and the victim spinning, and the victim's share printed for the
+/// post-check (`HART-SHARE`) with the counts noted beside.
+pub fn churn_against_victim(b: &mut Bench, phases: &[(u64, u64, &str, &str, u32)]) {
+    // The window, and how far below its share the victim may get, thousandths (R12's 50).
+    const WINDOW: u64 = 2_000_000;
+    const TOL: u64 = 50;
+    for &(variant, weight, name, what, m) in phases {
+        // Room for the attacker, its children and (variant 3) intermediates.
+        let attacker = b.budget(rd::USERS, 100, 3, rd::FOREVER);
+        let victim = b.budget(rd::USERS, 100, 1, rd::FOREVER);
+        mark(victim, m);
+        let a = b.start(attacker, Role::BudgetChurn, &[variant, weight], &[attacker]);
+        let v = b.start(victim, Role::Spin, &[], &[]);
+        let window = b.go(50_000, WINDOW);
+        let counts = b.collect(2);
+        // Every variant is judged by the victim, who keeps at least half; the shell's own share
+        // pays for its calls at its halved weight, so the victim may get more (no ceiling). The
+        // post-check judges the victim's share of the kernel's charges, which bill the checked
+        // build's audits to no one, and recomputes every lift. The attacker's subtree runs at
+        // most two threads, its own and a child's.
+        b.hart_share(name, window, (TOL, "+"), (m, 1), &[(100, 2)]);
+        b.note(format_args!(
+            "{}: the victim counted {} of 1000 of the window, the attacker's subtree {}",
+            what,
+            b.share(counts[v], window.1 - window.0),
+            b.share(counts[a], window.1 - window.0)
+        ));
+        rd::destroy(attacker).unwrap();
+        rd::destroy(victim).unwrap();
+    }
 }
 
 /// `Error` re-exported for the cases.

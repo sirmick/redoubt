@@ -3,6 +3,7 @@ arch = ["rv64", "rv32"]
 kind = "boot"
 # Built with the checks on (docs/testbench.md, "Checked builds").
 debug_assertions = true
+icount = "shift=3,sleep=off"
 programs = ["log-server", "ipc-client"]
 smp = [1, 4]
 expect = [

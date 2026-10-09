@@ -263,15 +263,15 @@ result under it is worth is the shared-host rule below. A timing gate runs one p
 states its target from a sweep of seeds ([responsiveness](kernel/scheduling.md#responsiveness)).
 
 **Which cases run in guest time.** A boot case runs under `icount = "shift=3,sleep=off"` unless
-something in it waits on the host, and 137 of the 205 do. What keeps a case on the host's clock:
+something in it waits on the host, and 145 of the 226 do. What keeps a case on the host's clock:
 a disk or a userland disk (38 cases; the rule for a disk is above); host sockets, a `forward`, a
 `poke`, a peer or a dial (8); input the host types on the console, `[[input]]` (4; under `icount`
-the rv32 UART lost a burst of it); several harts that spin, since under `icount` QEMU runs the
-harts in turn on one host thread and a hart spinning on the kernel's lock spends its whole turn
-(3: `all-together` at 2 harts and `ipc` at 4 take from three to ten times as long, and
-`smp-boot` at 4 sees a hart that never ran user code); and a run whose purpose is the host's
+the rv32 UART lost a burst of it); and a run whose purpose is the host's
 time (`asid-cost-host`, `sched-latency-tcg`, `timeouts-tcg`, and `smp-evict-mttcg` and
-`smp-shootdown-mttcg`, which need QEMU's multi-threaded TCG). One case reads no host clock and stays on it for now: `redoubt-ipc`
+`smp-shootdown-mttcg`, which need QEMU's multi-threaded TCG). Several harts do not keep a case
+on the host's clock: under `icount` QEMU runs the harts in turn on one host thread, and a hart
+waiting for the kernel lock halts rather than spending its turn
+([R78 (fair kernel entry)](kernel/scheduling.md#r78-fair-kernel-entry)). One case reads no host clock and stays on it for now: `redoubt-ipc`
 fails under `icount` on both widths (189 calls abandoned of the 256 it wants), until that is
 understood. A `timeout_secs` is the bench's bound, never a measurement: a case in guest time
 is given at least four times its slowest pass alone on either width, rounded up to 10 s, and
@@ -417,6 +417,9 @@ any other budget is picked twice, and `lift-delay`, that it comes within a round
 on its parent predicts. A `walk-trace` kernel's walks are bounded by their longest, net of the
 audits inside them (`pump_max_us`, `expiry_max_us`, `reconcile_max_us`), judged before
 `r10_p99_us`, so a run whose destruction is over its bound still has its walks judged.
+`gate_harts=2` judges the latency targets on a trace of at most two harts (its `F` record) and
+only reports them on more, marked `recorded at N harts, not gated`: the targets are gated at one
+hart and two and recorded at four ([responsiveness](kernel/scheduling.md#responsiveness)).
 `smp_fence` reads only the same trace's shootdown records: a page made executable was shot down
 on another hart running its process, which acknowledged ([memory](kernel/memory.md#instruction-fetch-after-mapping)).
 
@@ -519,9 +522,16 @@ parks when it is done, unless its exit is the point of its case.
 
 ### The scheduler oracle
 
-<details><summary>Status: built · tested (13)</summary>
+<details><summary>Status: built · tested (22)</summary>
 
 - bench:sched-ties
+- bench:sched-capped
+- bench:sched-lock-contention
+- bench:sched-lock-contention-4
+- host:testbench::a_pick_passes_over_only_a_budget_that_other_harts_run
+- host:testbench::lock_waits_are_reported_per_mille_of_the_harts_time
+- host:testbench::lock_waits_take_the_lock_in_ticket_order
+- host:testbench::a_shootdown_record_is_passed_over
 - host:testbench::a_trace_that_keeps_every_clause_passes
 - host:testbench::each_broken_clause_is_caught
 - host:testbench::a_broken_trace_is_rejected
@@ -532,7 +542,9 @@ parks when it is done, unless its exit is the point of its case.
 - host:testbench::the_floor_and_the_passes_are_checked_on_their_own
 - host:testbench::destructions_are_timed_and_bounded
 - host:testbench::audits_are_subtracted_inside_each_window
-- host:testbench::shares_are_judged_net_of_audits
+- host:testbench::water_filling_caps_a_budget_at_its_threads
+- host:testbench::a_charged_share_across_harts_is_judged_by_water_filling_net_of_lock_waits
+- host:testbench::a_hart_share_is_judged_of_every_charge_against_water_filling
 - host:testbench::an_unmatched_audit_fails
 
 </details>
@@ -541,8 +553,20 @@ The oracle is independent of the kernel's code: it reads what the queue did (wok
 pass changed, picked), never why, and rebuilds the order from the events alone: the lowest pass
 first; at an equal pass a budget that woke ahead of one requeued; of two that woke, the later
 kernel entry's first, and within one entry the lower id; requeued ones in the order they were
-requeued. It recomputes each lift and each weight change from the rule, and lets a pass fall only
-at a weight change. It is itself checked against the model's ranks and against traces broken one clause at a
+requeued. On several harts it also reads which budget each hart runs (`H`) and how many of each
+budget's threads wait for a hart (`J`, those no hart runs): a pick takes the first budget in that
+order with a thread waiting, and passes over one ranked ahead only if another hart runs it and
+none of its threads waits, never one it runs itself. It recomputes each lift and each weight
+change from the rule, and lets a pass fall only at a weight change. A kernel built with
+`lock-trace`, a test feature that implies the trace, also records each wait for the kernel lock's
+ticket after the wait (`k`: the ticket and the sections ahead of it when drawn); a release build
+carries neither the feature nor the record. The records are written holding the lock, so the waits
+appear in the order they took it, and the oracle requires that order to be the tickets', each
+drawn behind fewer sections than the harts: no wait outlasts the sections queued ahead of it
+([R78 (fair kernel entry)](kernel/scheduling.md#r78-fair-kernel-entry); `sched-lock-contention` at
+two harts, `sched-lock-contention-4` at four). `sched-capped` runs the model's capped scenarios
+([model](kernel/model.md#scheduler-scenarios)) on the machine at two, three and four harts, each
+budget's share judged as below. It is itself checked against the model's ranks and against traces broken one clause at a
 time. The tracing kernel is a test build only
 ([R23 (no test channels)](kernel/scheduling.md#r23-no-test-channels)).
 
@@ -574,7 +598,7 @@ starts and the oracles run in under a second, so nothing else is shared between 
 
 ## Checked builds
 
-<details><summary>Status: built · tested (14)</summary>
+<details><summary>Status: built · tested (15)</summary>
 
 - bench:bench-debug-assertions
 - bench:bench-debug-assertions-off
@@ -585,8 +609,9 @@ starts and the oracles run in under a second, so nothing else is shared between 
 - bench:sched-exit-churn
 - bench:sched-timer-flood
 - bench:sched-carve-return
+- bench:deadline-flood-billed-traced
 - host:testbench::audits_are_subtracted_inside_each_window
-- host:testbench::shares_are_judged_net_of_audits
+- host:testbench::a_hart_share_is_judged_of_every_charge_against_water_filling
 - host:testbench::an_unmatched_audit_fails
 - host:testbench::cluster_credit_is_the_certified_interior_only
 - host:testbench::cluster_lower_witness_counts_the_union_of_outer_bins
@@ -620,33 +645,36 @@ sample's window, its end on `time_now` and its length (`LATENCY-SAMPLE <group> <
 judges none of them. `sched_oracle` subtracts the audit time inside each window,
 counting only the part of an audit that falls in it, and then applies the case's bounds
 (`deadline_notice_p99_us=40000`). It reports the gross, the net and the audit time beside each
-target ([responsiveness](kernel/scheduling.md#responsiveness)). A share is judged the same way:
-the program prints its window, the CPU its count stands for and its bounds in thousandths
-(`SHARE <name> <start> <end> <cpu> <min> <max>`), and `sched_oracle` judges it of the window net of
-the audit time inside it (`sched-budget-churn`'s victim, whose attacker destroys a budget each
-slice; `sched-exit-churn`'s, whose attacker's processes start and end; `sched-timer-flood`'s,
-beside deadlines; `sched-carve-return`'s, from the return of a carve). An audit runs beside the
-work a share counts, never inside it, so the credit stops at the window less the share's CPU and
-a net share is never past the whole (`sched-budget-churn`'s deadline victim, which counted
-1,960,657 µs of a 2 s window holding 49,077 µs of audits, read 1004 before the cap). The residual:
-the program's calibrated CPU count runs at least 0.3% (rv64) and 0.65% (rv32) over the work it
-measures, a bias in every share's CPU that the cap now hides behind its `credited` note; the
-calibration is the likely source, and it is a follow-up. A case that judges a share
-in its program still has audits inside its window: the scheduler's marks are audited about once
-a slice. They, and the kernel time of a slice end that switches budgets, fall on every budget
-per slice it runs, so `sched-share` and `sched-server-busy` judge a ratio of counts, which is net
-of both; the cases that judge a count of the window carry them in their tolerance. So
-`sched-share`'s share is relative, as the scheduler promises it, and what the three counted of
-the calibrated rate, the efficiency the slice ends leave, is reported beside it with no verdict
-(`counted <n> of the calibrated 1000`). Where the budgets a share is judged among run hostile
-agents, no count of theirs may decide it, so the share is the kernel's charges alone
-(`CHARGED-SHARE <name> <start> <end> <tolerance> <mark>...`, the containment gate's bystander).
-The program prints its window and marks the budgets it means, each by carving an empty child of
+target ([responsiveness](kernel/scheduling.md#responsiveness)). A share is the kernel's
+charges, never a count: under `icount` a count is the machine's instructions, not a hart's time
+([R12 (scheduling)](kernel/scheduling.md#r12-scheduling)). The program prints its window, marks the budget it
+judges (an empty child of the mark's weight, carved and destroyed, so the trace's lift names the
+parent), and names by weight and runnable threads each budget it runs against it (`HART-SHARE
+<name> <start> <end> <tolerance>[+|-][@<harts>] <mark>:<threads> <weight>:<threads>...`; `+` for
+at least, `-` for at most, `@` judged only at that many harts and reported at any other).
+`sched_oracle` sums what the kernel charged each budget in the window, its pass's rises times its
+weight as the trace states it (each hart's runner, `H`, carries its weight), less each hart's
+waits for the kernel lock, which bill the waiting hart's runner though no thread of it ran; a lift
+out of the cap set (`u`) is no charge. The part is the marked budget's and what was lifted into
+it, the whole every budget's, and what the budget is owed is its water-filling share of the
+trace's harts (`F`) among the budgets the program names, which on one hart is its weight's share;
+every want is stated in the result. An audit is charged to no budget, so the share is net of the
+audits; on several harts they fall mostly on the hart that switches budgets each slice, so
+`sched-large-weight` keeps one hart. Each program notes its counts beside with no verdict, and
+`sched-share` reports what the three counted of the calibrated rate (`counted <n> of the
+calibrated 1000`), the efficiency the slice ends leave. The release twins (`sched-share-release`,
+`sched-large-weight-release`, `deadline-flood-billed`) have no trace and judge their counts at one
+hart, in their expect lines; `deadline-flood-billed-traced` judges the same run's share across
+harts. Where the budgets a share is judged among are hostile agents the program cannot name one
+by one, the share is of the charges under marks (`CHARGED-SHARE <name> <start> <end> <tolerance>
+<mark>[:<threads>]...`, the containment gate's bystander against the leases under `users`). The
+program prints its window and marks the budgets it means, each by carving an empty child of
 the mark's weight and destroying it, so the trace's lift names the parent; `sched_oracle` sums
 each budget's pass rises in the window times its weight as the trace states it, for the first
 mark's budget against every marked budget and those lifted into them. What the budget is owed is
-its weight over the weights of those the kernel charged in the window, its competitors, and the
-share must lie within the tolerance of it; a window in which a budget under the marks is
+its weight over the weights of those the kernel charged in the window, its competitors, at one
+hart, and on several its water-filling share of the harts among them, net of their harts' lock
+waits as above, a mark naming its runnable threads; the share must lie within the tolerance of it; a window in which a budget under the marks is
 reweighed or ended is refused, since its competitors changed. The audits are charged to no
 budget, so the share is net of them by construction; what a budget is charged out of the queue
 shows only under its next wake's floor lift and is not counted, so the wakes in the window are
@@ -673,7 +701,10 @@ to the return to user mode or the idle, in its id; the ticks charged to budgets 
 in its entry field, which it alone uses so, the ticks the checked build's audits took.
 `sched_oracle` reports `nobody N of 1000 (kernel K ticks, audits A, charged C)`, the share of
 the kernel's time net of audits that no budget was charged, and judges nothing by it
-([residual risks](kernel/scheduling.md#residual-risks)). The counters read the billing's clock
+([residual risks](kernel/scheduling.md#residual-risks)). Ahead of it, one record (`F`) holds the
+ticks since boot and the harts started, and each wait for the kernel lock from user mode, the lock
+held by another hart, is a record (`Q`: its start and end in ticks); `sched_oracle` reports
+`lock waits N of 1000`, the waits as a share of the harts' time, judging nothing by it either. The counters read the billing's clock
 and move no schedule, and a kernel without `sched-trace` compiles none of them. A kernel built with
 `alloc-first-fit`, which takes each frame by the first-fit scan of RAM the bitmap replaced,
 fails `scan-bounds` on both widths in a recorded negative run
@@ -692,9 +723,11 @@ CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS=true CARGO_PROFILE_RELEASE_OVERFLOW_CHECK
 That run fails `bench-debug-assertions-off`, as it should; everything else must pass.
 
 `sched-trace` keeps the trace in a 64 MiB ring, and a trace that drops a record fails its case;
-`sched-trace-large` is the same ring at 192 MiB, and two cases build it. The containment gate
-does, at 512 MiB of RAM, since at the 1 ms slice its run of nine leases a slot writes about ten
-records a slice, twice what 64 MiB holds. So does `worst-walk`, whose run at full occupancy
+`sched-trace-large` is the same ring at 256 MiB, and two cases build it. The containment gate
+does, at 576 MiB of RAM, since at the 1 ms slice its run of nine leases a slot writes about ten
+records a slice, and at two harts each hart's picks, waiting counts and lock waits besides, some
+7.1 million, past 192 MiB's 6.3 million. The ring's frames are kept as 32-bit page numbers, so its
+table fits the kernel's RAM region. So does `worst-walk`, whose run at full occupancy
 writes about 2.6 million records on rv64 and 2.9 million on rv32, past the 64 MiB ring's 2.1
 million.
 

@@ -26,11 +26,13 @@
 //! timer wakes p50 <= 15 ms and p99 <= 50 ms; the steward's decision wake p50 <= 25 ms and p99 <=
 //! 95 ms (from the fourth seed sweep); deadline notice p99 <= 40 ms and R10 kernel time p99 <=
 //! 30 ms; a lease's termination from the steward's decision, decision wake + R10, p99 <= 125 ms;
-//! the 1000-weight server's share of the spinning CPU at N = 16 at least its weight's less
-//! 30/1000. The latency targets count the kernel a release build runs, so the program judges
-//! none of them: it prints each sample's window (`LATENCY-SAMPLE`), and the bench's post-check
-//! subtracts the checked build's audit time inside each window and judges the rest (the bounds
-//! are tests/sched-latency.toml's). The share is printed as `met` or `missed`. Destruction follows
+//! the 1000-weight server's count of the spinning CPU at N = 16 is noted beside its weight's 384,
+//! with no verdict: under `icount` a count is the machine's instructions, and the steward, which
+//! pays for the deadlines' destructions, runs in bursts no weight's share describes;
+//! `sched-share` and `sched-large-weight` judge weighted shares from the kernel's charges. The latency
+//! targets count the kernel a release build runs, so the program judges none of them: it prints each sample's
+//! window (`LATENCY-SAMPLE`), and the bench's post-check subtracts the checked build's audit time inside each
+//! window and judges the rest (the bounds are tests/sched-latency.toml's). Destruction follows
 //! the dying subtree, so adding objects to another budget moves no R10 term
 //! (docs/kernel/budgets.md, "Residual risks").
 //!
@@ -45,7 +47,7 @@
 #![no_main]
 
 use test_programs::rd::{self, MAX_START_HANDLES, ResetKind};
-use test_programs::sched::{Bench, K, LEASES, R10_P99, Role, SLICE_US, Stats, TOL, WINDOW_US, join, rtc};
+use test_programs::sched::{Bench, K, LEASES, R10_P99, Role, SLICE_US, Stats, WINDOW_US, join, rtc};
 use test_programs::spawn;
 
 /// The measurer's weight: about what it had when it ran in `system` itself, `system`'s 250,000
@@ -170,12 +172,9 @@ extern "C" fn measure(_: usize) -> ! {
         b.samples(s, &words[s], format_args!("N={}", n));
         if let Some(sv) = server {
             let total: u64 = spinners[..n as usize].iter().map(|i| count(*i)).sum::<u64>() + count(sv);
-            let share = count(sv) * 1000 / total.max(1);
             b.note(format_args!(
-                "N=16: the 1000-weight server got {} of 1000 of the spinning CPU: target {} (weight share 384, less {})",
-                share,
-                verdict(share + TOL >= 1000 * 1000 / 2600),
-                TOL
+                "N=16: the 1000-weight server counted {} of 1000 of the spinning CPU (its weight's 384)",
+                count(sv) * 1000 / total.max(1)
             ));
         }
         for bud in budgets[..nb].iter().chain([driver, steward, leases].iter()) {

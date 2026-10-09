@@ -721,6 +721,7 @@ impl ProcessTable {
 
     /// Terminate the given process, the running one; the CPU goes to `kmain`.
     pub fn terminate_process(&mut self, target_pid: Pid) -> Result<(), ProcessError> {
+        #[cfg(feature = "debug-print")]
         println!("terminate_process: {:?}", target_pid);
         // Another hart may be running another of its threads: shoot it down there before any of
         // its memory goes.

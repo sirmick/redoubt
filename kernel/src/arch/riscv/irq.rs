@@ -131,8 +131,17 @@ pub extern "C" fn trap_handler(
     // switch, or an interrupt in its idle window) holds it already (cell.rs, `KERNEL_LOCK`).
     let from_user = sstatus::read().spp() == sstatus::SPP::User;
     if from_user {
+        // The wait for the lock is the trace's (`Q`): from here, if another hart held it.
+        #[cfg(feature = "sched-trace")]
+        let came = riscv::register::time::read64();
         crate::arch::hart::serve();
-        crate::cell::KERNEL_LOCK.acquire();
+        let (held, ticket, ahead) = crate::cell::KERNEL_LOCK.acquire_ticket();
+        #[cfg(feature = "sched-trace")]
+        if held {
+            crate::sched::trace::lock_wait(came, ticket, ahead);
+        }
+        #[cfg(not(feature = "sched-trace"))]
+        let _ = (held, ticket, ahead);
         // Shot down while it ran here (`hart::shootdown`): its process was destroyed from another
         // hart, and its thread and context are gone. The hart's own mark says so, not the process
         // table, which may already hold a new process under the same PID. Nothing of the trap is

@@ -324,7 +324,7 @@ fn a_deschedule_charges_at_least_one_unit_and_a_destroy_only_what_ran() {
 fn two_harts_running() -> (Map, Harts<u64, 4, 2>) {
     let mut bs = map(&[1, 2, 3]);
     let mut harts: Harts<u64, 4, 2> = Harts::new();
-    harts.reconcile(&mut bs, &[], &mut [1, 2], |_, b| b != 3);
+    harts.reconcile(&mut bs, &[], &mut [1, 2], |_, b| u32::from(b != 3));
     assert_eq!(harts.pick(&mut bs, |_, b| Some(b)), Some((1, 1)));
     harts.switch(1, &mut bs, Some(1), |_, _| true);
     // 1's one thread runs on hart 1: hart 0 is offered nothing of it.
@@ -337,11 +337,11 @@ fn two_harts_running() -> (Map, Harts<u64, 4, 2>) {
 fn a_budget_running_on_another_hart_stays_queued_through_this_harts_reconcile() {
     let (mut bs, mut harts) = two_harts_running();
     // Hart 0's reconcile lists 1 as lost (its one thread is the one running on hart 1): it stays.
-    harts.reconcile(&mut bs, &[1], &mut [], |_, b| b == 2);
+    harts.reconcile(&mut bs, &[1], &mut [], |_, b| u32::from(b == 2));
     assert!(harts.q.contains(1) && bs.state(1).queued);
     // Once no hart runs it, the same reconcile takes it out.
     harts.switch(1, &mut bs, None, |_, _| false);
-    harts.reconcile(&mut bs, &[1], &mut [], |_, b| b == 2);
+    harts.reconcile(&mut bs, &[1], &mut [], |_, b| u32::from(b == 2));
     assert!(!harts.q.contains(1));
 }
 
@@ -354,7 +354,7 @@ fn a_pick_passes_over_a_budget_whose_threads_all_run_on_harts() {
     assert_eq!(harts.pick(&mut bs, |_, b| (b != 1).then_some(b)), Some((2, 2)));
     assert!(harts.q.contains(1) && bs.state(1).queued);
     // With 3 runnable it is still never 1.
-    harts.reconcile(&mut bs, &[], &mut [3], |_, _| true);
+    harts.reconcile(&mut bs, &[], &mut [3], |_, _| 1);
     for _ in 0..4 {
         let (b, _) = harts.pick(&mut bs, |_, b| (b != 1).then_some(b)).unwrap();
         assert_ne!(b, 1);
@@ -371,7 +371,7 @@ fn a_pick_passes_over_a_budget_whose_threads_all_run_on_harts() {
 fn a_budget_with_two_runnable_threads_runs_on_two_harts_at_one_pass() {
     let mut bs = map(&[1, 2]);
     let mut harts: Harts<u64, 4, 2> = Harts::new();
-    harts.reconcile(&mut bs, &[], &mut [1, 2], |_, _| true);
+    harts.reconcile(&mut bs, &[], &mut [1, 2], |_, _| 1);
     // 1 has threads 10 and 11: each hart takes one, 1 ranking lowest both times.
     assert_eq!(harts.pick(&mut bs, |_, b| Some(b * 10)), Some((1, 10)));
     harts.switch(0, &mut bs, Some(1), |_, _| true);
@@ -748,4 +748,84 @@ fn the_marked_reconcile_matches_a_full_one() {
             }
         }
     }
+}
+
+/// Two harts: a heavy budget with one thread runs on one, and its pass lags the light one's on
+/// the other. It is capped (900 x 2 > 1 x 1000), so the floor follows the light budget, and a
+/// waker enters there, not far behind it.
+#[test]
+fn a_budget_capped_at_its_threads_is_left_out_of_the_floor() {
+    let mut bs = Map::default();
+    bs.0.insert(1, (State::default(), 900));
+    bs.0.insert(2, (State::default(), 100));
+    bs.0.insert(3, (State::default(), 100));
+    let mut harts: Harts<u64, 4, 2> = Harts::new();
+    harts.set_harts(2, |_| 0, |_| 0);
+    harts.reconcile(&mut bs, &[], &mut [1, 2], |_, b| u32::from(b != 3));
+    // Each budget's one thread on a hart of its own: 1 on hart 0, 2 on hart 1.
+    for (h, b) in [(0, 1), (1, 2)] {
+        assert_eq!(harts.pick(&mut bs, |_, x| (x == b).then_some(x)), Some((b, b)));
+        harts.switch(h, &mut bs, Some(b), |_, _| true);
+        harts.set_waiting(b, 0);
+    }
+    for _ in 0..10 {
+        for h in 0..2 {
+            harts.accrue(h, 1000);
+            harts.settle(&mut bs, harts.cur(h).unwrap());
+        }
+    }
+    assert_eq!(harts.q.capped().collect::<Vec<_>>(), [1]);
+    assert!(bs.state(1).pass < bs.state(2).pass);
+    assert_eq!(harts.q.floor, bs.state(2).pass, "the floor is the light budget's pass");
+    harts.reconcile(&mut bs, &[], &mut [3], |_, b| u32::from(b == 3));
+    assert_eq!(bs.state(3).pass, bs.state(2).pass, "the waker enters at the floor");
+}
+
+/// A capped budget that gains a thread is no longer capped (900 x 2 < 2 x 1100), and is lifted to
+/// the floor: it cannot bank what it had no thread to run.
+#[test]
+fn a_budget_no_longer_capped_is_lifted_to_the_floor() {
+    let mut bs = Map::default();
+    bs.0.insert(1, (State::default(), 900));
+    bs.0.insert(2, (State::default(), 100));
+    bs.0.insert(3, (State::default(), 100));
+    let mut harts: Harts<u64, 4, 2> = Harts::new();
+    harts.set_harts(2, |_| 0, |_| 0);
+    harts.reconcile(&mut bs, &[], &mut [1, 2, 3], |_, _| 1);
+    let (b, _) = harts.pick(&mut bs, |_, b| Some(b)).unwrap();
+    assert_eq!(b, 1);
+    harts.switch(0, &mut bs, Some(1), |_, _| true);
+    harts.set_waiting(1, 0);
+    for _ in 0..10 {
+        harts.accrue(0, 1000);
+        harts.settle(&mut bs, 1);
+        // 2 and 3 take turns on hart 1; 1's one thread runs on hart 0.
+        let (b, _) = harts.pick(&mut bs, |_, b| (b != 1).then_some(b)).unwrap();
+        harts.switch(1, &mut bs, Some(b), |_, _| true);
+        harts.accrue(1, 1000);
+        harts.switch(1, &mut bs, None, |_, _| true);
+    }
+    assert_eq!(harts.q.capped().collect::<Vec<_>>(), [1]);
+    assert!(bs.state(1).pass < harts.q.floor);
+    harts.reconcile(&mut bs, &[1], &mut [1], |_, b| if b == 1 { 1 } else { 0 });
+    assert_eq!(harts.q.capped().count(), 0);
+    assert_eq!(bs.state(1).pass, harts.q.floor, "lifted to the floor");
+}
+
+/// One hart keeps no counts; a second hart coming online counts each queued budget's waiting
+/// threads and runners afresh, so the next floor raise finds the cap set as if they had been kept.
+#[test]
+fn a_hart_coming_online_counts_the_queued_budgets_afresh() {
+    let mut bs = Map::default();
+    bs.0.insert(1, (State::default(), 900));
+    bs.0.insert(2, (State::default(), 100));
+    let mut harts: Harts<u64, 4, 2> = Harts::new();
+    harts.reconcile(&mut bs, &[], &mut [1, 2], |_, _| 1);
+    assert_eq!(harts.pick(&mut bs, |_, b| Some(b)), Some((1, 1)));
+    harts.switch(0, &mut bs, Some(1), |_, _| true);
+    // 1's one thread runs on hart 0; 2's waits.
+    harts.set_harts(2, |b| u32::from(b == 2), |b| bs.0[&b].1);
+    harts.accrue(0, 1000);
+    harts.settle(&mut bs, 1);
+    assert_eq!(harts.q.capped().collect::<Vec<_>>(), [1], "900 x 2 > 1 x 1000: 1 is capped");
 }

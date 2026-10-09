@@ -1,0 +1,27 @@
+description = "Fair kernel entry under contention (R78, kernel/scheduling.md), at two harts: one budget refused a `map_anon` after a search of the whole area in a loop, R12's costliest call, beside the latency workload's driver stand-in on the goldfish RTC's alarm; every wait for the kernel lock takes it in ticket order (the trace's tickets, `lock-trace`), and the driver wake is recorded against its targets, p50 <= 15 ms and p99 <= 50 ms net of the checked build's audits: behind R12's costliest call a wake waits two of its sections at two harts (kernel/scheduling.md, \"Residual risks\") (virtual time, checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+icount = "shift=3,sleep=off"
+programs = ["sched-lock-contention"]
+# A hammer on every hart but one: one hart has no lock to wait for, and four are
+# `sched-lock-contention-4`'s.
+smp = [2]
+keep_smp = true
+# Test builds only: the trace ring with each lock wait's ticket (never in a default kernel).
+kernel_features = ["lock-trace"]
+# The oracle checks the waits' ticket order. The driver wake is recorded against sched-latency's
+# targets, not gated (`gate_harts=1`): the RTC's interrupt reaches the boot hart only, so a wake
+# waits out the hammer's search there and then its next call, one section ahead of the woken hart's
+# ticket (kernel/scheduling.md, "Fair kernel entry is bounded by count, not time").
+post_check = "sched_oracle gate_harts=1 driver_wake_p50_us=15000 driver_wake_p99_us=50000"
+timeout_secs = 1200
+expect = [
+    '^\[lock-contention\] 1 hammers. searches refused: \d+$',
+    '^\[lock-contention\] driver wake: .*: gross, audits included; net in the post-check',
+    '^LATENCY-SAMPLE contention driver_wake \d+ \d+$',
+    '^SCHED-LOCK-CONTENTION TEST PASSED$',
+    '^SCHED-TRACE-END \d+ dropped 0$',
+]
+forbid = ['\[lock-contention\] FAIL']
+poweroff = true

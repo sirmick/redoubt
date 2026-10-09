@@ -11,10 +11,6 @@ programs = ["log-server", "map-anon-search-bound"]
 memory_mib = 1536
 icount = "shift=3,sleep=off"
 timeout_secs = 120
-# The bounds are one hart's search in guest instructions under icount. At two harts the sleeper
-# waits on the other, whose timer fires mid-search and spins on the kernel lock, and under icount
-# that hart's spinning advances the same clock the search is timed by.
-keep_smp = true
 expect = [
     '^\[pid 3\] \[search\] ok: a request for the whole empty area is placed at its start$',
     '^\[pid 3\] \[search\] ok: a run that fits only at the area.s end is placed there$',

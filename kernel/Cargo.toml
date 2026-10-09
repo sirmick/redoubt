@@ -35,19 +35,30 @@ test-only = []
 # Test builds only: record the stride queue's raw events in a bounded ring and print it at
 # `system_reset`, for the bench's independent rank oracle (tools/testbench, sched_oracle).
 sched-trace = ["test-only"]
-# Test builds only: the same ring at 192 MiB rather than 64, for a run too long for it (the
-# containment gate, at 512 MiB of RAM).
+# Test builds only: the same ring at 256 MiB rather than 64, for a run too long for it (the
+# containment gate, at 576 MiB of RAM, and `worst-walk`).
 sched-trace-large = ["sched-trace"]
 # Test builds only: also bracket each receive's pump, timer expiry and reconcile in the trace, for
 # the worst-walk case's numbers (kernel/ipc.md, kernel/timer.md, "Residual risks"). Not in the
 # gate: a record pair at every kernel entry would fill its ring.
 walk-trace = ["sched-trace"]
+# Test builds only: also record each lock wait's ticket after its `Q`, so the oracle can check the
+# waits end in ticket order (`sched-lock-contention`; kernel/scheduling.md, R78).
+lock-trace = ["sched-trace"]
 # Debug only, never in a bench build but one recorded negative run: rank wakers behind queued
 # budgets of equal pass (the model's R12TieQueuedFirst), to show the oracle catches it.
 sched-inject-tie-fault = ["sched-trace"]
+# Debug only, never in a bench build but its negative case: the queue's floor counts the budgets
+# capped at their threads (the stride crate's `capped-holds-floor`, the model's
+# R12CappedHoldsFloor), so a waker enters behind a capped budget's lag; `sched-capped-holds-floor`
+# must fail on the share it costs.
+sched-capped-holds-floor = ["test-only", "redoubt-stride/capped-holds-floor"]
 # Debug only, never in a bench build but one recorded negative run: the kernel lock is
 # test-and-set instead of a ticket lock (cell.rs), so `smp-boot`'s FIFO check must fail (R78).
 sched-test-and-set-entry = ["test-only"]
+# Debug only, never in a bench build but one recorded negative run: a hart waiting for the kernel
+# lock spins instead of halting (cell.rs), so `smp-lock-wait` must fail (R78).
+sched-spin-entry = ["test-only"]
 # Debug only, never in a bench build but one recorded negative run each: a destruction does not
 # shoot its process down on another hart running it (`smp-no-evict`), or a hart installs a process
 # it owes an ASID flush without making it (`smp-no-stale-mask`), so `smp-evict` must fail.

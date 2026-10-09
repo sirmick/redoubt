@@ -7,6 +7,9 @@ qemu_seed = 3
 programs = ["sched-cluster"]
 kernel_features = ["sched-trace"]
 post_check = "sched_oracle cluster driver_wake_p50_us=15000 driver_wake_p99_us=50000 timer_wake_p50_us=15000 timer_wake_p99_us=50000"
+# One hart: the envelope calibrates the retained-debt cluster of one queue against a one-runner
+# slice period; across harts the oracle checks the rank of every pick in the other cases.
+keep_smp = true
 timeout_secs = 600
 expect = [
     '^CLUSTER-PLAN v3-kernel-envelope 100 300 600 850 200 80000 50000$',

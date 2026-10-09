@@ -8,6 +8,8 @@ qemu_seed = 3
 programs = ["sched-cluster"]
 kernel_features = ["sched-trace", "slice-10ms"]
 post_check = "sched_oracle cluster cluster_old_control driver_wake_p50_us=15000 driver_wake_p99_us=50000 timer_wake_p50_us=15000 timer_wake_p99_us=50000"
+# One hart: sched-cluster's control, calibrated as it is against a one-runner slice period.
+keep_smp = true
 timeout_secs = 600
 # No TEST PASSED expect: a control whose stand-in cannot reach its slot fails in the guest, and
 # its verdict is the oracle's classification of that failure from the console and the trace. The

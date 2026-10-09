@@ -228,6 +228,17 @@ second healthy DMA device exists so the generator can build the co-holder shape;
 | idempotence | creating and destroying a child with no run leaves the parent's pass unchanged and its remainder unchanged or smaller by rounding (exactly 0 if it was 0), because the carve rescales the remainder; a carve under a running parent first charges the pending runtime at the weight it ran at |
 | rank | every pick among equal passes follows the rank rules, checked by an independent oracle; a wake never preempts |
 | shell | a parent that gives each short command a heavy child keeps its share |
+| late join | at two harts, A (900, one thread) and B (100, one) run long, then C (100, one) wakes: from a slice after, A gets a hart and B and C half each; the floor that counts a capped budget gives C B's hart (`R12CappedHoldsFloor`) |
+| second cap | at three harts, A (1000, one), B (100, one), C and D (10, five each) run long, then E (10, one) wakes: A and B a hart each, C, D and E a third each; a cap test that stops at the first capped budget gives E more (`R12CapOnce`) |
+| uncap | at two harts, A (900, one), B and C (100, one each) run long, then A gains a second thread: A 1.64 harts, B and C 0.18 each; an uncapped budget not lifted to the floor takes both harts (`R12UncapBanksCredit`), and so does one whose second runner is not charged (`R12SpreadChargesOnce`) |
+| spread | A (100, four threads) and B (100, one): at two harts a hart each, at four A three and B one; a budget limited to one hart at a time gets one (`R12OneRunnerPerBudget`) |
+| idle harts | at two harts, A (100, one) runs alone, then B (100, one) beside it, then C (100, one) wakes: two thirds of a hart each; a floor that holds while every queued budget is capped lets B enter at a stale pass and starve A (`R12AllCappedHoldsFloor`) |
+
+The shares in the last five are water-filling's, computed by the scenario from its weights and
+threads, in thousandths of a hart over 400 slices from one slice after the event, within 50 per
+thousand of the machine. The scheduler runs any number of harts (`Scheduler::set_harts`); each
+pick is one hart's, of the lowest-ranked budget with a runnable thread no hart runs, and the cap
+set is found its own way, by water-filling to a fixed point over every queued budget.
 
 The rules themselves are on [scheduling](scheduling.md).
 
@@ -288,7 +299,7 @@ A **mutation** is one deliberate break planted in the model. Each variant of `en
 `self.broken(Mutation::...)`: one site for most variants, two or three where the rule is kept in
 more than one place, and a direct comparison with the mutation for `AbandonNoticeMissing` and
 `R11LendStaysMapped`. With no mutation, the model is the specified kernel.
-`Mutation::ALL` lists all 155 variants. `Mutation::rule()` returns the ID each one breaks, as in
+`Mutation::ALL` lists all 161 variants. `Mutation::rule()` returns the ID each one breaks, as in
 the table below; the steward's variants, named `Policy...`, break the server rules the steward
 model checks. Each of those but four is one broken entry of the core's `Policy` table
 (`mutation::policy`), since the crate that ships has no mutation switch; the other four break the
@@ -341,7 +352,7 @@ model's embedder: its entropy, its admission, a volume's write check and the ser
 | [R9 (stamps)](objects.md#r9-stamps) | `R9ReceivedHandleRestamped`, `R9MintStampsCaller`, `R9MsgStampIsSenderBudget` | which budget a handle is stamped with |
 | [R10 (destruction)](budgets.md#r10-destruction) | `R10KeepForeignHandles`, `R10KeepCarvedLimits`, `R10SpareDescendantProcesses`, `R10ExitNoticesOutlivePayer`, `R10RevokedMessageDelivered`, `R10RevokedCallAnswered`, `R10SweptHandlesDropped`, `R10CreatorDeathSparesProcess`, `R10HeldPidsDropped`, `R10ReapDestroysParent`, `R10ReapKeepsCarve`, `R10ReapSkipsGrandchildren`, `R10DeliveredMidDestruction`, `BudgetDeadlineIgnored` | everything a destruction reaches, nothing delivered before its end, a deadline destroying the budget, and a reap destroying one child and keeping the budget |
 | [R11 (memory)](memory.md#r11-memory) | `R11NoZeroing`, `R11SetFlagsAllowsWx`, `R11SetFlagsAllowsWriteOnly`, `R11LendStaysMapped`, `R11MapFixedSkipsOverlap`, `R11ExecOnDeviceMemory`, `R11ProcessMapSkipsFlags` | zeroing, W^X per mapping and per frame, write without read, lends unmapped, `map_fixed` never replacing, `process_map`'s own flag check |
-| [R12 (scheduling)](scheduling.md#r12-scheduling) | `R12PriorityById`, `R12IgnoreWeight`, `R12WakeBanksCredit`, `R12TieQueuedFirst`, `R12RequeueAhead`, `R12RequeueLifo`, `R12PreemptOnWake`, `R12TimeoutWakePreempts`, `R12NoFloorWhenIdle`, `R12ShortRunsFree`, `R12DropRemainder`, `R12ExitRunsFree`, `R12DestroyDropsDebt`, `R12CreateAtFloorOnly`, `R12LiftByMax`, `R12StrideWeightIsLimit`, `R12UnnormalizedLift`, `R12LiftCountsEntryWait`, `R12FoldAtNewWeight`, `R12NoMinimumCharge`, `R12DeadlineWorkUnbilled`, `R12RescaleOnlyOnReturn`, `R12SliceCountsExitWork`, `R12TimerWorkUnbilled`, `R12SwitchBilledToPrevious` | one flat queue, charging, the floor, ranks, preemption, the slice as user time, inheritance at create and destroy |
+| [R12 (scheduling)](scheduling.md#r12-scheduling) | `R12PriorityById`, `R12IgnoreWeight`, `R12WakeBanksCredit`, `R12TieQueuedFirst`, `R12RequeueAhead`, `R12RequeueLifo`, `R12PreemptOnWake`, `R12TimeoutWakePreempts`, `R12NoFloorWhenIdle`, `R12ShortRunsFree`, `R12DropRemainder`, `R12ExitRunsFree`, `R12DestroyDropsDebt`, `R12CreateAtFloorOnly`, `R12LiftByMax`, `R12StrideWeightIsLimit`, `R12UnnormalizedLift`, `R12LiftCountsEntryWait`, `R12FoldAtNewWeight`, `R12NoMinimumCharge`, `R12DeadlineWorkUnbilled`, `R12RescaleOnlyOnReturn`, `R12SliceCountsExitWork`, `R12TimerWorkUnbilled`, `R12SwitchBilledToPrevious`, `R12CappedHoldsFloor`, `R12CapOnce`, `R12AllCappedHoldsFloor`, `R12UncapBanksCredit`, `R12OneRunnerPerBudget`, `R12SpreadChargesOnce` | one flat queue, charging, the floor, ranks, preemption, the slice as user time, inheritance at create and destroy, the capped floor and the uncap lift across harts, a budget on several harts at once and each of its runners charged |
 | [R13 (one outcome per call)](ipc.md#r13-one-outcome-per-call) | `IpcWrongLend`, `IpcDropPartial`, `IpcFalseDelivery`, `IpcSkipOutputCheck`, `IpcLeakRollback` | the lend disposition, a partial reply, `delivered`, the completion-time record check, rollback |
 | [R14 (unforgeable sender)](ipc.md#r14-unforgeable-sender) | `MsgNoLabels`, `MsgBadgeZero`, `MsgAccountZero`, `MsgIdsGlobal` | the attached labels, badge and account; message ids per receiving process |
 | [R18 (device authority)](devices.md#r18-device-authority) | `R18DeviceByNumber`, `DeviceInfoWrongKind` | a device reached only through a handle to it; `device_info` naming the device the handle names |
@@ -547,10 +558,12 @@ Status: built · tested: host:redoubt-stride::the_crate_and_the_model_agree, hos
 differential test drives the crate, wired as the kernel's `sched.rs` calls it, and the model's
 `Scheduler` through the same random sequences: budget creations and destructions (a leaf whose
 threads blocked first, the budget on the CPU, a whole subtree bottom-up), wakes, blocks, runs,
-slice ends and preemptions. Over 3,000 seeds every pass, entry, remainder, tie, queue
-membership, the floor, the tie counters and the running thread must agree after every step.
-`a_broken_model_disagrees` shows the comparison bites: with any of 20 of the 25 R12 variants
-planted in the model, some sequence disagrees. It leaves out `R12TimeoutWakePreempts`, whose
+slice ends and preemptions, each on a hart drawn at random. Over 3,000 seeds at each of 1, 2 and
+4 harts every pass, entry, remainder, tie, queue membership, the floor, the tie counters, the cap
+set and each hart's running thread must agree after every step; at 4 harts some 360,000 of the
+steps hold two capped budgets or more. `a_broken_model_disagrees` shows the comparison bites:
+with any of 26 of the 31 R12 variants planted in the model, some sequence disagrees (the six of
+several harts at 2 or 4 harts). It leaves out `R12TimeoutWakePreempts`, whose
 site is the kernel model's timer path, not the scheduler, and `R12SliceCountsExitWork`,
 `R12DeadlineWorkUnbilled`, `R12TimerWorkUnbilled` and `R12SwitchBilledToPrevious`, kernel work
 around a run (the exit work before a slice starts, a deadline's destruction, a timer's expiry, the

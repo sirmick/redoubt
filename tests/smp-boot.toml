@@ -4,6 +4,7 @@ kind = "boot"
 # Built with the checks on (docs/testbench.md, "Checked builds"): the lock's FIFO check and the
 # harts' account at `system_reset` are the checked kernel's.
 debug_assertions = true
+icount = "shift=3,sleep=off"
 programs = ["smp-boot"]
 smp = [2, 4]
 timeout_secs = 300

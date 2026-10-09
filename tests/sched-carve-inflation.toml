@@ -1,16 +1,21 @@
-description = "Carving moves share, never duplicates it (free weight): a carving subtree gets at most half by ratio of counts, nested too, with the victim's useful work over the window printed beside; carving a process-holding budget to zero and a process in a fully carved budget are refused (virtual time, checked build)"
+description = "Carving moves share, never duplicates it (free weight): a carving subtree leaves an equal victim at least its share of the harts by the kernel's charges net of lock waits, nested too, with the victim's useful work over the window printed beside; carving a process-holding budget to zero and a process in a fully carved budget are refused (virtual time, checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true
 icount = "shift=3,sleep=off"
 programs = ["sched-carve-inflation"]
+# Test builds only: the trace ring (never in a default kernel). Under icount a count is the
+# machine's instructions, not a hart's time, so the victim's share is the kernel's charges.
+kernel_features = ["sched-trace"]
+post_check = "sched_oracle"
 timeout_secs = 600
 expect = [
-    '^\[carve\] ok: a chain of 1 carves',
-    '^\[carve\] ok: a chain of 4 carves',
+    '^HART-SHARE chain-1 \d+ \d+ 50\+ 3:1 100:1 100:1$',
+    '^HART-SHARE chain-4 \d+ \d+ 50\+ 7:1 100:1 50:1 25:1 13:1 12:1$',
     '^\[carve\] ok: carving all of a process-holding',
     '^\[carve\] ok: a process in a budget with no free weight',
     '^SCHED-CARVE-INFLATION TEST PASSED$',
+    '^SCHED-TRACE-END \d+ dropped 0$',
 ]
 forbid = ['\[carve\] FAIL']
 poweroff = true

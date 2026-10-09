@@ -1,0 +1,25 @@
+description = "A deadline's whole destruction is billed to the dying budget's parent across harts (R10, R12): deadline-flood-billed's creator and victim with the trace in a checked build, the victim keeping at least its share of the harts by the kernel's charges net of lock waits (virtual time)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+icount = "shift=3,sleep=off"
+programs = ["deadline-flood-billed"]
+# Test builds only: the trace ring (never in a default kernel), which needs a checked build; its
+# audits are charged to no one. Under icount a count is the machine's instructions, not a hart's
+# time, so the victim's share is the kernel's charges (`HART-SHARE`); the counts' bounds are the
+# release twin's.
+kernel_features = ["sched-trace"]
+post_check = "sched_oracle"
+# One hart until destruction's work leaves the kernel lock (kernel/scheduling.md, "Fair kernel
+# entry is bounded by count"): at two harts the creator's destructions hold the lock and the waits
+# nearly fill a hart, so the share net of them swings (victim 407 to 884 of 1000).
+keep_smp = true
+timeout_secs = 600
+expect = [
+    '^HART-SHARE 16-deadlines \d+ \d+ 50\+ 2:1 100:1$',
+    '^HART-SHARE 64-deadlines \d+ \d+ 50\+ 3:1 100:1$',
+    '^DEADLINE-FLOOD-BILLED TEST PASSED$',
+    '^SCHED-TRACE-END \d+ dropped 0$',
+]
+forbid = ['PANIC']
+poweroff = true

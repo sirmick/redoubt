@@ -1,14 +1,18 @@
-description = "A sleeper cannot bank credit across an idle gap (the floor): B keeps half after A wakes into an empty queue; a budget created in the gap enters at the floor (virtual time, checked build)"
+description = "A sleeper cannot bank credit across an idle gap (the floor): B keeps at least its share of the harts after A wakes into an empty queue; a budget created in the gap enters at the floor and gets at most its share; both by the kernel's charges net of lock waits (virtual time, checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true
 icount = "shift=3,sleep=off"
 programs = ["sched-idle-gap"]
+# Test builds only: the trace ring (never in a default kernel). Under icount a count is the
+# machine's instructions, not a hart's time, so the shares are the kernel's charges.
+kernel_features = ["sched-trace"]
+post_check = "sched_oracle"
 timeout_secs = 600
 expect = [
-    '^\[idle-gap\] ok: B after the gap got',
-    '^\[idle-gap\] ok: a budget created in the gap got',
+    '^HART-SHARE b-after-gap \d+ \d+ 50\+ 2:1 100:1 100:1$',
+    '^HART-SHARE c-from-gap \d+ \d+ 50- 3:1 100:1 100:1$',
     '^SCHED-IDLE-GAP TEST PASSED$',
+    '^SCHED-TRACE-END \d+ dropped 0$',
 ]
-forbid = ['\[idle-gap\] FAIL']
 poweroff = true

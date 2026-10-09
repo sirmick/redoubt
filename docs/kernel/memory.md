@@ -98,6 +98,15 @@ turns a supervisor `cbo.inval` into a flush, so no mode below M can discard a li
 requires privileged architecture 1.12, where `senvcfg` first appears: on an older hart the write
 traps and the boot stops.
 
+A test kernel's trace ring (`sched-trace`, never in a release build;
+[R23 (no test channels)](scheduling.md#r23-no-test-channels)) takes its frames at boot, the highest free ones, before
+the budget tree counts what the kernel keeps, and holds each as its page number in 32 bits, so the
+256 MiB ring's table of 65,536 frames fits the kernel's 1 MiB RAM region. Every frame the kernel
+takes lies in the [physmap](memory-layout.md#the-direct-physical-map), which ends at 128 GiB on
+rv64 and below 4 GiB on rv32: page numbers to 2^25, where 32 bits reach 16 TiB of physical
+address. A compile-time assertion in `kernel/src/sched.rs` holds the physmap's last page number
+within 32 bits.
+
 ### Page tables
 
 Status: built · tested: bench:page-table-reclaim, mutation:R6EmptyTableKept
@@ -436,8 +445,13 @@ kernel, running the call to its end with interrupts off, would stall every other
   frees one of its tables or makes one executable first shoots the process down on each other
   hart running it now, which flushes its ASID, runs `fence.i` and acknowledges before the call
   returns; a destruction's shootdown also makes the hart leave the process's space before any of
-  its frames is freed. So no stale translation reaches a page unmapped, lent or returned, or a
-  frame's next owner. A missed shootdown cannot be seen on QEMU, which empties a hart's TLB at
+  its frames is freed. The asking hart waits for the acknowledgements halted, and each hart
+  sends it an interrupt as it acknowledges, as a hart waits for the kernel lock
+  ([R78 (fair kernel entry)](scheduling.md#r78-fair-kernel-entry)): spinning, under QEMU's `icount`
+  it spent the turns the other hart needed to acknowledge, and the p99 of a destruction's kernel
+  time ([R10 (destruction)](budgets.md#r10-destruction)) in `sched-latency` at two harts was
+  51.9 ms on rv64 against 3.0 ms halted. So no stale translation reaches a page
+  unmapped, lent or returned, or a frame's next owner. A missed shootdown cannot be seen on QEMU, which empties a hart's TLB at
   every `satp` write: the checked build stops when a process loses an entry while another hart
   runs it and is not shot down there (`bench:smp-shootdown`, the case's recorded negative), and
   `smp-fence` checks from the trace that the fence was taken.

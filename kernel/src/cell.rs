@@ -58,11 +58,19 @@ pub static KERNEL_LOCK: TicketLock = TicketLock::new();
 /// The test-only `sched-test-and-set-entry` swaps in test-and-set, which `smp-boot`'s FIFO check
 /// must catch. A hart waiting for it serves any shootdown asked of it on every turn
 /// (`arch::hart::serve`), so the holder's wait for its acknowledgement cannot deadlock.
+///
+/// A hart waits for its turn halted (`wfi`), not spinning, and the release sends each waiting hart
+/// the interrupt that ends its halt ([`TicketLock::release`]). Under QEMU's `-icount` the harts
+/// take turns on one host thread and its clock counts every running hart's instructions, so a
+/// spinning hart would take its turn, and the guest's time, from the hart doing the work; a halted
+/// one gives it up (kernel/scheduling.md, R78).
 pub struct TicketLock {
     /// The next ticket to draw.
     next: AtomicU32,
     /// The ticket being served; under test-and-set, the count of sections served.
     serving: AtomicU32,
+    /// The harts halted waiting for their turn, a bit each by boot index: the release wakes them.
+    halted: AtomicU32,
     /// Test-and-set only: 1 while held.
     #[cfg(feature = "sched-test-and-set-entry")]
     taken: AtomicU32,
@@ -80,6 +88,7 @@ impl TicketLock {
         TicketLock {
             next: AtomicU32::new(0),
             serving: AtomicU32::new(0),
+            halted: AtomicU32::new(0),
             #[cfg(feature = "sched-test-and-set-entry")]
             taken: AtomicU32::new(0),
             #[cfg(debug_assertions)]
@@ -89,30 +98,37 @@ impl TicketLock {
         }
     }
 
-    /// Take the lock, waiting in turn.
-    pub fn acquire(&self) {
+    /// Take the lock, waiting in turn. Whether it was held when this hart came (a trace's record of
+    /// the wait, `sched.rs`).
+    pub fn acquire(&self) -> bool { self.acquire_ticket().0 }
+
+    /// [`Self::acquire`], with the ticket drawn (under test-and-set, the sections served before)
+    /// and how many sections were ahead of it, for the trace's record of a wait.
+    pub fn acquire_ticket(&self) -> (bool, u32, u32) {
         #[cfg(not(feature = "sched-test-and-set-entry"))]
-        let waited = {
+        let (waited, held, ticket) = {
             let ticket = self.next.fetch_add(1, DRAW);
             // The checked build's count: the tickets ahead, read after the draw. The draw, this
             // read and every release are sequentially consistent there, so the read sees `serving`
             // at or after the draw: it can count fewer sections than were ahead, never more, and a
             // count above the bound is a real one.
             let waited = ticket.wrapping_sub(self.serving.load(DRAW));
+            let held = self.serving.load(Ordering::Acquire) != ticket;
             while self.serving.load(Ordering::Acquire) != ticket {
                 crate::arch::hart::serve();
-                wait_for_change(&self.serving);
+                self.wait_for_turn(ticket);
             }
-            waited
+            (waited, held, ticket)
         };
         #[cfg(feature = "sched-test-and-set-entry")]
-        let waited = {
+        let (waited, held, ticket) = {
             let drawn = self.serving.load(Ordering::Relaxed);
+            let held = self.taken.load(Ordering::Relaxed) != 0;
             while self.taken.compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed).is_err() {
                 crate::arch::hart::serve();
                 pause();
             }
-            self.serving.load(Ordering::Relaxed).wrapping_sub(drawn)
+            (self.serving.load(Ordering::Relaxed).wrapping_sub(drawn), held, drawn)
         };
         #[cfg(debug_assertions)]
         {
@@ -128,8 +144,7 @@ impl TicketLock {
                 harts
             );
         }
-        #[cfg(not(debug_assertions))]
-        let _ = waited;
+        (held, ticket, waited)
     }
 
     /// Give the lock to the next ticket. The caller holds it.
@@ -141,12 +156,40 @@ impl TicketLock {
         }
         let serving = self.serving.load(Ordering::Relaxed);
         #[cfg(not(feature = "sched-test-and-set-entry"))]
-        self.serving.store(serving.wrapping_add(1), SERVE);
+        {
+            // Sequentially consistent against the waiter's mark and re-read ([`Self::wait_for_turn`]):
+            // either this load sees its bit, or its re-read sees the new ticket, so no hart halts
+            // past its turn.
+            self.serving.store(serving.wrapping_add(1), Ordering::SeqCst);
+            let halted = self.halted.load(Ordering::SeqCst);
+            if halted != 0 {
+                crate::arch::hart::wake_halted(halted as usize);
+            }
+        }
         #[cfg(feature = "sched-test-and-set-entry")]
         {
             self.serving.store(serving.wrapping_add(1), Ordering::Relaxed);
             self.taken.store(0, Ordering::Release);
         }
+    }
+
+    /// One turn of the wait for `ticket`'s turn: mark this hart halted, and halt unless the turn
+    /// came meanwhile; the next release wakes it ([`Self::release`]), and it reads again. Also the
+    /// Zawrs hook: a `wrs.nto` reservation wait on `serving` stalls the hart until another hart
+    /// writes it, with no interrupt, but QEMU runs `wrs.nto` (as it does `pause`) as a no-op that
+    /// keeps the hart's turn, so none is emitted.
+    fn wait_for_turn(&self, ticket: u32) {
+        // The recorded negative: spin, the pause hint each turn.
+        if cfg!(feature = "sched-spin-entry") {
+            pause();
+            return;
+        }
+        let bit = 1 << crate::arch::hart::index();
+        self.halted.fetch_or(bit, Ordering::SeqCst);
+        if self.serving.load(Ordering::SeqCst) != ticket {
+            crate::arch::hart::halt_for_lock();
+        }
+        self.halted.fetch_and(!bit, Ordering::SeqCst);
     }
 
     /// Whether this hart holds the lock (a checked build's record).
@@ -163,20 +206,9 @@ impl TicketLock {
 /// The draw's ordering: Relaxed, as the lock needs; sequentially consistent in a checked build,
 /// for its FIFO count ([`TicketLock::acquire`]).
 const DRAW: Ordering = if cfg!(debug_assertions) { Ordering::SeqCst } else { Ordering::Relaxed };
-/// The release's ordering: Release, as the lock needs; sequentially consistent in a checked build.
-const SERVE: Ordering = if cfg!(debug_assertions) { Ordering::SeqCst } else { Ordering::Release };
 
 /// One turn of a spin: the pause hint (`zihintpause`; a FENCE hint, which a core without the
 /// extension runs as a no-op), which on a core whose harts share issue slots gives them to the
 /// sibling.
 #[inline(always)]
 pub fn pause() { core::hint::spin_loop(); }
-
-/// One turn of the wait for the lock word `word` to change: the Zawrs hook. On a core with Zawrs
-/// this becomes a `wrs.nto` reservation wait on `word`, which stalls the hart until another hart
-/// writes it; none is emitted now, so it is one [`pause`].
-#[inline(always)]
-fn wait_for_change(word: &AtomicU32) {
-    let _ = word;
-    pause();
-}

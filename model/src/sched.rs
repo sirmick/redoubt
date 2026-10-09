@@ -27,6 +27,15 @@
 //!   parent's lead: `parent = max(parent.pass, floor) + W / w_parent` (remainder carried), `w_parent` taken
 //!   after the child's weight returns.
 //!
+//! - **Several harts** ([`Scheduler::set_harts`]): each hart picks for itself the lowest-ranked budget with a
+//!   runnable thread no hart runs, so a budget runs on as many harts as it has runnable threads, each hart
+//!   charging its own runner to the budget's one pass. The floor leaves out a **capped** budget, one whose
+//!   weight's share of the harts is more than its runnable threads: found here by water-filling, capping
+//!   every budget whose share of the harts left exceeds its threads until none does. When every queued budget
+//!   is capped the floor rises to the highest of their passes: uncontested time banks for no one. A budget
+//!   that stops being capped is lifted to `max(own pass, floor)`, as a waker is. At one hart no budget is
+//!   capped.
+//!
 //! Time is whatever unit the caller uses (the model's microseconds); the kernel charges timebase
 //! ticks with the same arithmetic.
 
@@ -86,11 +95,77 @@ pub struct Scheduler {
     pub floor: u128,
     pub front: i64,
     pub back: i64,
+    /// What hart 0 runs; the one hart unless [`Scheduler::set_harts`] adds more.
     pub current: Option<Current>,
+    /// What harts 1 and up run.
+    pub others: alloc::vec::Vec<Option<Current>>,
+    /// The budgets capped at the last floor raise (module docs).
+    pub capped: BTreeSet<u64>,
 }
 
 impl Scheduler {
     fn broken(&self, m: Mutation) -> bool { self.mutation == Some(m) }
+
+    /// Run `n` harts (at least one).
+    pub fn set_harts(&mut self, n: usize) { self.others.resize(n.max(1) - 1, None); }
+
+    /// How many harts run.
+    pub fn harts(&self) -> usize { 1 + self.others.len() }
+
+    /// What hart `h` runs.
+    pub fn on(&self, h: usize) -> Option<Current> { if h == 0 { self.current } else { self.others[h - 1] } }
+
+    fn on_mut(&mut self, h: usize) -> &mut Option<Current> {
+        if h == 0 { &mut self.current } else { &mut self.others[h - 1] }
+    }
+
+    /// The harts running a thread of `b`.
+    fn harts_of(&self, b: u64) -> alloc::vec::Vec<usize> {
+        (0..self.harts()).filter(|h| self.on(*h).is_some_and(|c| c.budget == b)).collect()
+    }
+
+    /// The hart running thread `t` of `b`, if any.
+    fn hart_running(&self, b: u64, t: ThreadId) -> Option<usize> {
+        (0..self.harts()).find(|h| self.on(*h).is_some_and(|c| c.budget == b && c.thread == t))
+    }
+
+    /// The threads a hart runs now.
+    fn busy(&self) -> BTreeSet<ThreadId> {
+        (0..self.harts()).filter_map(|h| self.on(h).map(|c| c.thread)).collect()
+    }
+
+    /// The capped budgets, by water-filling over every queued budget (module docs): with `H` the
+    /// harts and `W` the weight of the budgets not capped yet, every budget not capped whose
+    /// `w x H` is more than `k x W` (`k` its runnable threads) is capped, and its threads and
+    /// weight leave `H` and `W`, until no budget is.
+    pub fn cap_set(&self) -> BTreeSet<u64> {
+        let queued: alloc::vec::Vec<(u64, u128, u128)> = self
+            .queued()
+            .map(|(id, e)| (*id, u128::from(self.weight(*id)), e.runnable.len() as u128))
+            .filter(|(_, w, k)| *w > 0 && *k > 0)
+            .collect();
+        let mut capped = BTreeSet::new();
+        loop {
+            let threads: u128 = queued.iter().filter(|(id, ..)| capped.contains(id)).map(|x| x.2).sum();
+            let Some(h) = (self.harts() as u128).checked_sub(threads) else { break };
+            let w: u128 = queued.iter().filter(|(id, ..)| !capped.contains(id)).map(|x| x.1).sum();
+            let over: alloc::vec::Vec<u64> = queued
+                .iter()
+                .filter(|(id, wb, k)| !capped.contains(id) && wb * h > k * w)
+                .map(|x| x.0)
+                .collect();
+            if over.is_empty() {
+                break;
+            }
+            // Broken: the first capped budget is the only one.
+            if self.broken(Mutation::R12CapOnce) {
+                capped.insert(over[0]);
+                break;
+            }
+            capped.extend(over);
+        }
+        capped
+    }
 
     /// A budget's stride weight: its free weight (or, broken, its limit).
     pub fn weight(&self, b: u64) -> u64 {
@@ -105,11 +180,29 @@ impl Scheduler {
 
     fn queued(&self) -> impl Iterator<Item = (&u64, &Entry)> { self.budgets.iter().filter(|(_, e)| e.queued) }
 
-    /// Raise the floor to the queue's minimum pass (it never falls, and holds while the queue is
-    /// empty).
+    /// Raise the floor to the lowest pass of the queued budgets that are not capped, or, when
+    /// every queued budget is capped, to the highest (it never falls, and holds while none is
+    /// queued). A budget no longer capped is first lifted to the floor, as a waker is.
     fn raise_floor(&mut self) {
-        if let Some(min) = self.queued().map(|(_, e)| e.pass).min() {
+        let capped = self.cap_set();
+        if !self.broken(Mutation::R12UncapBanksCredit) {
+            let floor = self.floor;
+            for b in self.capped.difference(&capped) {
+                if let Some(e) = self.budgets.get_mut(b).filter(|e| e.queued) {
+                    e.pass = e.pass.max(floor);
+                }
+            }
+        }
+        self.capped = capped;
+        let counts = |id: &u64| self.broken(Mutation::R12CappedHoldsFloor) || !self.capped.contains(id);
+        if let Some(min) = self.queued().filter(|(id, _)| counts(id)).map(|(_, e)| e.pass).min() {
             self.floor = self.floor.max(min);
+        } else if !self.broken(Mutation::R12AllCappedHoldsFloor) {
+            // Every queued budget capped (fewer runnable threads than harts): the floor rises to
+            // the highest of them, so uncontested time banks for no one.
+            if let Some(max) = self.queued().map(|(_, e)| e.pass).max() {
+                self.floor = self.floor.max(max);
+            }
         }
     }
 
@@ -129,21 +222,30 @@ impl Scheduler {
         e.rem = if drop_rem { 0 } else { t % w };
     }
 
-    /// Fold the running thread's pending runtime into its budget.
-    pub fn fold(&mut self) {
-        if let Some(c) = self.current.as_mut() {
+    /// Fold hart 0's running thread's pending runtime into its budget.
+    pub fn fold(&mut self) { self.fold_on(0) }
+
+    /// Fold hart `h`'s pending runtime into its budget.
+    fn fold_on(&mut self, h: usize) {
+        // Broken: a budget's runtime goes uncharged while another hart runs it too, so of runners
+        // folded in turn only the last is charged.
+        let beside = self.on(h).is_some_and(|c| self.harts_of(c.budget).len() > 1);
+        let free = self.broken(Mutation::R12SpreadChargesOnce) && beside;
+        if let Some(c) = self.on_mut(h).as_mut() {
             let (b, run) = (c.budget, c.pending);
             c.pending = 0;
-            self.charge(b, run);
+            if !free {
+                self.charge(b, run);
+            }
             self.raise_floor();
         }
     }
 
-    /// Fold if `b` is running (a weight change or a creation under it is about to read or change
-    /// what its runtime is worth).
+    /// Fold every hart running `b` (a weight change or a creation under it is about to read or
+    /// change what its runtime is worth).
     fn fold_if_running(&mut self, b: u64) {
-        if self.current.is_some_and(|c| c.budget == b) {
-            self.fold();
+        for h in self.harts_of(b) {
+            self.fold_on(h);
         }
     }
 
@@ -270,9 +372,12 @@ impl Scheduler {
     /// Kernel `work` done for `payer`, as runtime at its weight now: the running budget's joins
     /// its pending runtime.
     fn bill_work(&mut self, payer: u64, work: u64) {
-        match self.current.as_mut() {
-            Some(c) if c.budget == payer => c.pending = c.pending.saturating_add(work),
-            _ => {
+        match self.harts_of(payer).first().copied() {
+            Some(h) => {
+                let c = self.on_mut(h).as_mut().expect("a hart running the payer");
+                c.pending = c.pending.saturating_add(work);
+            }
+            None => {
                 self.charge(payer, work);
                 self.raise_floor();
             }
@@ -283,10 +388,10 @@ impl Scheduler {
     /// thread in it has already been blocked or removed. Its work since entry moves to its parent,
     /// and its carved weight returns there.
     pub fn destroy_budget(&mut self, b: u64) {
-        if self.current.is_some_and(|c| c.budget == b) {
+        for h in self.harts_of(b) {
             // Its threads are gone; whatever ran is charged here before it moves up.
-            self.fold();
-            self.current = None;
+            self.fold_on(h);
+            *self.on_mut(h) = None;
         }
         let Some(child) = self.budgets.get(&b).cloned() else { return };
         let w_child = self.weight(b);
@@ -358,8 +463,8 @@ impl Scheduler {
     /// deschedule like any other: its partial slice is charged.
     pub fn thread_exited(&mut self, b: u64, t: ThreadId) {
         if self.broken(Mutation::R12ExitRunsFree) {
-            if let Some(c) = self.current.as_mut().filter(|c| c.budget == b && c.thread == t) {
-                c.pending = 0;
+            if let Some(h) = self.hart_running(b, t) {
+                self.on_mut(h).as_mut().expect("the hart running it").pending = 0;
             }
         }
         self.thread_blocked(b, t);
@@ -371,21 +476,25 @@ impl Scheduler {
         if let Some(e) = self.budgets.get_mut(&b) {
             e.runnable.remove(&t);
         }
-        if self.current.is_some_and(|c| c.budget == b && c.thread == t) {
-            self.deschedule();
+        if let Some(h) = self.hart_running(b, t) {
+            self.deschedule_on(h);
         }
     }
 
     /// Take the running thread off the CPU: fold, and requeue its budget if it still has a
     /// runnable thread, or take it out of the queue.
-    fn deschedule(&mut self) {
+    fn deschedule(&mut self) { self.deschedule_on(0) }
+
+    /// Take hart `h`'s thread off it. Its budget stays queued while it has a runnable thread,
+    /// which a thread another hart runs is.
+    fn deschedule_on(&mut self, h: usize) {
         if !self.broken(Mutation::R12NoMinimumCharge) {
-            if let Some(c) = self.current.as_mut() {
+            if let Some(c) = self.on_mut(h).as_mut() {
                 c.pending = c.pending.max(MIN_CHARGE);
             }
         }
-        self.fold();
-        let Some(c) = self.current.take() else { return };
+        self.fold_on(h);
+        let Some(c) = self.on_mut(h).take() else { return };
         let still = self.budgets.get(&c.budget).is_some_and(|e| !e.runnable.is_empty());
         if still {
             // Requeued behind its equals.
@@ -411,9 +520,9 @@ impl Scheduler {
     /// their last runnable thread leave the queue, and budgets that gained one wake, in
     /// descending id so that the lowest id ranks first.
     pub fn reconcile(&mut self) {
-        let running = self.current.map(|c| c.budget);
+        let running: BTreeSet<u64> = (0..self.harts()).filter_map(|h| self.on(h).map(|c| c.budget)).collect();
         for (id, e) in self.budgets.iter_mut() {
-            if e.queued && e.runnable.is_empty() && running != Some(*id) {
+            if e.queued && e.runnable.is_empty() && !running.contains(id) {
                 e.queued = false;
             }
         }
@@ -470,27 +579,46 @@ impl Scheduler {
     /// What runs: the current thread, or (after a reconcile) the lowest-ranked queued budget's next
     /// thread after its cursor. A new pick has a whole slice when it reaches user mode
     /// ([`Scheduler::exit_work`]).
-    pub fn pick(&mut self) -> Option<Current> {
+    pub fn pick(&mut self) -> Option<Current> { self.pick_on(0) }
+
+    /// Hart `h`'s pick: what it runs, or the lowest-ranked queued budget with a runnable thread no
+    /// hart runs, and that budget's next such thread after its cursor.
+    pub fn pick_on(&mut self, h: usize) -> Option<Current> {
         self.reconcile();
-        if self.current.is_some() {
-            return self.current;
+        if self.on(h).is_some() {
+            return self.on(h);
         }
-        let (id, _) = self.queued().map(|(id, e)| (self.key(*id, e), *id)).min().map(|(k, id)| (id, k))?;
+        let busy = self.busy();
+        let one_runner = self.broken(Mutation::R12OneRunnerPerBudget);
+        let running: BTreeSet<u64> = (0..self.harts()).filter_map(|x| self.on(x).map(|c| c.budget)).collect();
+        let (_, id) = self
+            .queued()
+            .filter(|(id, e)| {
+                e.runnable.iter().any(|t| !busy.contains(t)) && !(one_runner && running.contains(id))
+            })
+            .map(|(id, e)| (self.key(*id, e), *id))
+            .min()?;
         let e = self.budgets.get_mut(&id).unwrap();
+        let free = |t: &&ThreadId| !busy.contains(*t);
         let next = match e.cursor {
-            Some(c) => e.runnable.range((core::ops::Bound::Excluded(c), core::ops::Bound::Unbounded)).next(),
+            Some(c) => {
+                e.runnable.range((core::ops::Bound::Excluded(c), core::ops::Bound::Unbounded)).find(free)
+            }
             None => None,
         }
-        .or_else(|| e.runnable.iter().next())
+        .or_else(|| e.runnable.iter().find(free))
         .copied()?;
         e.cursor = Some(next);
-        self.current = Some(Current { budget: id, thread: next, pending: 0, slice_left: SLICE });
-        self.current
+        *self.on_mut(h) = Some(Current { budget: id, thread: next, pending: 0, slice_left: SLICE });
+        self.on(h)
     }
 
     /// The running thread ran for `dt` (at most what is left of its slice).
-    pub fn run(&mut self, dt: u64) {
-        if let Some(c) = self.current.as_mut() {
+    pub fn run(&mut self, dt: u64) { self.run_on(0, dt) }
+
+    /// Hart `h`'s thread ran for `dt` (at most what is left of its slice).
+    pub fn run_on(&mut self, h: usize, dt: u64) {
+        if let Some(c) = self.on_mut(h).as_mut() {
             let dt = dt.min(c.slice_left);
             c.pending += dt;
             c.slice_left -= dt;
@@ -508,16 +636,22 @@ impl Scheduler {
     }
 
     /// The running thread's slice ended: deschedule it (it is requeued if still runnable).
-    pub fn slice_end(&mut self) {
-        if self.current.is_some_and(|c| c.slice_left == 0) {
-            self.deschedule();
+    pub fn slice_end(&mut self) { self.slice_end_on(0) }
+
+    /// Hart `h`'s thread's slice ended: deschedule it.
+    pub fn slice_end_on(&mut self, h: usize) {
+        if self.on(h).is_some_and(|c| c.slice_left == 0) {
+            self.deschedule_on(h);
         }
     }
 
     /// A budget deadline fired: the running thread is preempted (re-pick).
-    pub fn preempt(&mut self) {
-        if self.current.is_some() {
-            self.deschedule();
+    pub fn preempt(&mut self) { self.preempt_on(0) }
+
+    /// A budget deadline fired: hart `h`'s thread is preempted.
+    pub fn preempt_on(&mut self, h: usize) {
+        if self.on(h).is_some() {
+            self.deschedule_on(h);
         }
     }
 

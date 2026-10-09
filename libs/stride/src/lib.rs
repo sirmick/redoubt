@@ -12,7 +12,10 @@
 //!   [`RUNTIME_CAP`] per charge, so `t < 2^61` fits in 64 bits on both widths; the pass is a `u128` that is
 //!   only added to and compared, so it never wraps.
 //! - **Floor**: a monotone lower bound, raised to the queue's minimum pass whenever that rises and kept while
-//!   the queue is empty. A waking budget's pass is `max(own, floor)`.
+//!   the queue is empty. A waking budget's pass is `max(own, floor)`. On several harts the minimum leaves out
+//!   a **capped** budget, one whose weight's share of the harts is more than its runnable threads
+//!   ([`Queue::set_harts`]), and with every queued budget capped it is their maximum, so uncontested time
+//!   banks for no one; a budget that stops being capped is lifted to `max(own, floor)`.
 //! - **Rank** ([`Rank`]): `(pass, tie, id)`. Wakes take `front -= 1` (same-reconcile wakes processed in
 //!   descending id, so the lowest id is frontmost), every deschedule of a still-runnable budget takes `back
 //!   += 1`; both reset when the queue empties. So at an equal pass: wakers before requeued budgets; a later
@@ -50,6 +53,9 @@ pub const MIN_CHARGE: u64 = 1;
 
 /// The largest stride weight: the ABI's weights are 32-bit, and the arithmetic relies on it.
 pub const MAX_WEIGHT: u64 = u32::MAX as u64;
+
+/// The most budgets the cap set holds: the harts less one, for up to 16 harts.
+pub const MAX_CAPPED: usize = 15;
 
 /// A budget's scheduling state, as the kernel keeps it in the budget's frame.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -175,6 +181,9 @@ pub trait Budgets<B> {
     /// `b`'s weight changed and its state was converted (called before its new state is set, so
     /// the conversion is recorded ahead of the pass it may lower).
     fn reweighed(&mut self, _b: B, _r: &Reweigh) {}
+    /// `b` stopped being capped and is lifted to `pass`, the floor (called before its new state
+    /// is set, so the lift is recorded ahead of the pass it sets, and is not read as a charge).
+    fn uncapped(&mut self, _b: B, _pass: u128) {}
 }
 
 /// The queue: every budget with a runnable thread (or running on a hart), at most `N` of them,
@@ -193,6 +202,15 @@ pub struct Queue<B, const N: usize> {
     /// (a charge, a requeue, a wake, a rescale, a lift). The frame stays the authority: a checked
     /// kernel audits the ranks against it ([`Queue::audit`]).
     ranks: [Rank; N],
+    /// Beside each slot, for the cap set across harts: the budget's stride weight, its threads
+    /// waiting for a hart (as last settled, [`Queue::set_waiting`]), how many harts run it, and
+    /// whether it was capped at the last floor raise.
+    weights: [u64; N],
+    waiting: [u32; N],
+    running: [u32; N],
+    capped: [bool; N],
+    /// The harts online: 1 caps nothing.
+    harts: u32,
     len: usize,
     /// Whether the minimum queued pass may have risen above the floor since it was last raised: a
     /// budget at the floor left or its pass rose. The floor is raised at the end of the next
@@ -213,6 +231,11 @@ impl<B: Copy + PartialEq, const N: usize> Queue<B, N> {
             back: 0,
             slots: [None; N],
             ranks: [Rank { pass: 0, tie: 0, id: 0 }; N],
+            weights: [0; N],
+            waiting: [0; N],
+            running: [0; N],
+            capped: [false; N],
+            harts: 1,
             len: 0,
             pending: false,
         }
@@ -233,7 +256,7 @@ impl<B: Copy + PartialEq, const N: usize> Queue<B, N> {
     /// runnable thread, so there are never more than there are processes, and `N` is the process
     /// count: a full queue is a broken invariant, and `b` is then left out (`None`) rather than
     /// anything stopping.
-    fn push(&mut self, b: B, id: u64) -> Option<usize> {
+    fn push(&mut self, b: B, id: u64, weight: u64) -> Option<usize> {
         if self.len == N {
             debug_assert!(false, "stride queue full");
             return None;
@@ -241,6 +264,7 @@ impl<B: Copy + PartialEq, const N: usize> Queue<B, N> {
         let i = self.len;
         self.slots[i] = Some(b);
         self.ranks[i] = Rank { pass: 0, tie: 0, id };
+        (self.weights[i], self.waiting[i], self.running[i], self.capped[i]) = (weight, 0, 0, false);
         self.len += 1;
         Some(i)
     }
@@ -254,6 +278,10 @@ impl<B: Copy + PartialEq, const N: usize> Queue<B, N> {
         self.len -= 1;
         self.slots[i] = self.slots[self.len];
         self.ranks[i] = self.ranks[self.len];
+        self.weights[i] = self.weights[self.len];
+        self.waiting[i] = self.waiting[self.len];
+        self.running[i] = self.running[self.len];
+        self.capped[i] = self.capped[self.len];
         self.slots[self.len] = None;
     }
 
@@ -271,14 +299,122 @@ impl<B: Copy + PartialEq, const N: usize> Queue<B, N> {
 
     /// Raise the floor to the queue's minimum pass, from the ranks, if the minimum may have risen
     /// since it was last raised. It never falls. A slice end at which no budget at the floor left
-    /// or was charged compares nothing.
-    fn raise_floor(&mut self) {
-        if !self.pending {
+    /// or was charged compares nothing. On several harts the cap set is found first ([`Self::cap`]),
+    /// every time, and the minimum leaves the capped out; with every queued budget capped, the floor
+    /// rises to the highest pass.
+    fn raise_floor(&mut self, bs: &mut impl Budgets<B>) {
+        if self.harts > 1 {
+            self.cap(bs);
+        } else if !self.pending {
             return;
         }
         self.pending = false;
-        if let Some(min) = self.ranks[..self.len].iter().map(|r| r.pass).min() {
+        let capped = &self.capped[..self.len];
+        let ranks = &self.ranks[..self.len];
+        let counts = |c: &bool| !*c || cfg!(feature = "capped-holds-floor");
+        if let Some(min) = ranks.iter().zip(capped).filter(|(_, c)| counts(c)).map(|(r, _)| r.pass).min() {
             self.floor = self.floor.max(min);
+        } else if let Some(max) = ranks.iter().map(|r| r.pass).max() {
+            // Every queued budget capped: the highest of them, so uncontested time banks for no one.
+            self.floor = self.floor.max(max);
+        }
+    }
+
+    /// The cap set across harts (`kernel/scheduling.md`, "The current minimum and ties"): in
+    /// descending weight per runnable thread `w / k`, a budget is capped if `w x H > k x W` (`H` the
+    /// harts left, `W` the weight of the queued budgets not capped yet), and its threads and weight
+    /// leave `H` and `W` before the next is tested; the first that is not capped ends it. At most
+    /// `H - 1` can be capped, so one scan keeps the top `H - 1` by `w / k`. A budget that stops being
+    /// capped is lifted to `max(own pass, floor)`, as a waker is.
+    fn cap(&mut self, bs: &mut impl Budgets<B>) {
+        // The candidates, by slot: at most `MAX_CAPPED`, harts less one.
+        let mut top = [usize::MAX; MAX_CAPPED];
+        let n = (self.harts as usize - 1).min(MAX_CAPPED);
+        let mut weight: u128 = 0;
+        let ratio = |q: &Self, i: usize| (u128::from(q.weights[i]), u128::from(q.waiting[i] + q.running[i]));
+        for i in 0..self.len {
+            let (w, k) = ratio(self, i);
+            if w == 0 || k == 0 {
+                continue;
+            }
+            weight += w;
+            // Insert into the descending list by w / k, compared as w x k' against w' x k.
+            let mut at = n;
+            while at > 0
+                && (top[at - 1] == usize::MAX || {
+                    let (w2, k2) = ratio(self, top[at - 1]);
+                    w * k2 > w2 * k
+                })
+            {
+                at -= 1;
+            }
+            if at < n {
+                top.copy_within(at..n - 1, at + 1);
+                top[at] = i;
+            }
+        }
+        let was = self.capped;
+        self.capped[..self.len].fill(false);
+        let mut harts = u128::from(self.harts);
+        for &i in top[..n].iter().take_while(|i| **i != usize::MAX) {
+            let (w, k) = ratio(self, i);
+            if w * harts <= k * weight {
+                break;
+            }
+            self.capped[i] = true;
+            harts -= k;
+            weight -= w;
+        }
+        for i in 0..self.len {
+            if was[i] && !self.capped[i] && self.ranks[i].pass < self.floor {
+                let b = self.slots[i].expect("a queued slot");
+                let mut s = bs.state(b);
+                s.pass = self.floor;
+                bs.uncapped(b, s.pass);
+                bs.set_state(b, s);
+                self.ranks[i].pass = s.pass;
+            }
+        }
+    }
+
+    /// `b`'s stride weight for the cap set: none read at one hart, which keeps no counts.
+    fn weight_for_caps(&self, bs: &impl Budgets<B>, b: B) -> u64 {
+        if self.harts > 1 { bs.weight(b) } else { 0 }
+    }
+
+    /// The harts online, for the cap set; 1 caps nothing, and keeps no count ([`Harts::set_harts`]
+    /// counts them again).
+    pub fn set_harts(&mut self, harts: u32) { self.harts = harts.max(1); }
+
+    /// The budgets capped at the last floor raise.
+    pub fn capped(&self) -> impl Iterator<Item = B> + '_ {
+        self.slots[..self.len]
+            .iter()
+            .zip(&self.capped[..self.len])
+            .filter(|(_, c)| **c)
+            .filter_map(|(b, _)| *b)
+    }
+
+    /// `b`'s threads waiting for a hart, as the kernel's settle counted them (those no hart runs);
+    /// nothing for a budget not queued, whose count is read when it wakes.
+    /// At one hart nothing is capped and nothing is counted: a reconcile visiting many budgets
+    /// costs no scan for each.
+    pub fn set_waiting(&mut self, b: B, n: u32) {
+        if self.harts == 1 {
+            return;
+        }
+        if let Some(i) = self.slot_of(b) {
+            self.waiting[i] = n;
+        }
+    }
+
+    /// One more hart runs `b` (`more`), or one fewer.
+    fn ran_by(&mut self, b: B, more: bool) {
+        if self.harts == 1 {
+            return;
+        }
+        if let Some(i) = self.slot_of(b) {
+            self.running[i] = if more { self.running[i] + 1 } else { self.running[i].saturating_sub(1) };
         }
     }
 
@@ -302,7 +438,7 @@ impl<B: Copy + PartialEq, const N: usize> Queue<B, N> {
         charge(&mut s, bs.weight(b), runtime);
         bs.set_state(b, s);
         self.recorded(b, &s);
-        self.raise_floor();
+        self.raise_floor(bs);
     }
 
     /// `b` was taken off the CPU (its runtime already folded). Still runnable, it is requeued
@@ -310,7 +446,11 @@ impl<B: Copy + PartialEq, const N: usize> Queue<B, N> {
     pub fn deschedule(&mut self, bs: &mut impl Budgets<B>, b: B, still_runnable: bool) {
         let mut s = bs.state(b);
         let was = self.slot_of(b);
-        let requeued = if still_runnable { was.or_else(|| self.push(b, bs.id(b))) } else { None };
+        let requeued = if still_runnable {
+            was.or_else(|| self.push(b, bs.id(b), self.weight_for_caps(bs, b)))
+        } else {
+            None
+        };
         if let Some(i) = requeued {
             self.back = self.back.saturating_add(1);
             s.tie = self.back;
@@ -328,7 +468,7 @@ impl<B: Copy + PartialEq, const N: usize> Queue<B, N> {
         } else if was.is_some() {
             bs.left(b);
         }
-        self.raise_floor();
+        self.raise_floor(bs);
         self.reset_if_empty();
     }
 
@@ -348,6 +488,28 @@ impl<B: Copy + PartialEq, const N: usize> Queue<B, N> {
         gained: &mut [B],
         runnable: impl Fn(&S, B) -> bool,
     ) {
+        self.reconcile_counted(bs, running, lost, gained, |bs, b| u32::from(runnable(bs, b)))
+    }
+
+    /// [`Queue::reconcile`], with `waiting` the threads of a budget no hart runs: the visited
+    /// budgets' counts are taken for the cap set ([`Queue::set_waiting`]), and a budget is runnable
+    /// with one.
+    pub fn reconcile_counted<S: Budgets<B>>(
+        &mut self,
+        bs: &mut S,
+        running: impl Fn(B) -> bool,
+        lost: &[B],
+        gained: &mut [B],
+        waiting: impl Fn(&S, B) -> u32,
+    ) {
+        let counted = self.harts > 1;
+        for &b in lost.iter().chain(gained.iter()).filter(|_| counted) {
+            if bs.live(b) {
+                let n = waiting(bs, b);
+                self.set_waiting(b, n);
+            }
+        }
+        let runnable = |bs: &S, b: B| waiting(bs, b) > 0;
         for &b in lost {
             if running(b) || !bs.live(b) {
                 continue;
@@ -365,7 +527,7 @@ impl<B: Copy + PartialEq, const N: usize> Queue<B, N> {
                 self.remove_at(i);
             }
         }
-        self.raise_floor();
+        self.raise_floor(bs);
         self.reset_if_empty();
         // A wake into a non-empty queue is at or above the floor, the minimum: the floor can rise
         // only when the wakes fill an empty queue.
@@ -380,7 +542,8 @@ impl<B: Copy + PartialEq, const N: usize> Queue<B, N> {
                 continue;
             }
             // A full queue (never expected) ends it.
-            let Some(i) = self.push(b, bs.id(b)) else { break };
+            let Some(i) = self.push(b, bs.id(b), self.weight_for_caps(bs, b)) else { break };
+            self.waiting[i] = waiting(bs, b);
             self.front = self.front.saturating_sub(1);
             s.pass = s.pass.max(self.floor);
             s.tie = self.front;
@@ -390,7 +553,7 @@ impl<B: Copy + PartialEq, const N: usize> Queue<B, N> {
             bs.set_state(b, s);
             bs.woke(b);
         }
-        self.raise_floor();
+        self.raise_floor(bs);
     }
 
     /// The queued budget with the lowest rank, of those `passed` does not rule out: budgets whose
@@ -412,22 +575,29 @@ impl<B: Copy + PartialEq, const N: usize> Queue<B, N> {
         bs.reweighed(b, &Reweigh { before, after: s, old, new, floor: self.floor });
         bs.set_state(b, s);
         self.recorded(b, &s);
+        if let Some(i) = self.slot_of(b).filter(|_| self.harts > 1) {
+            self.weights[i] = new;
+        }
     }
 
     /// The checked kernel's audit of the ranks against the frames: each queued budget's cached
     /// pass and tie are its state's and its state says queued, and the floor is not below the
-    /// minimum queued pass unless a raise is pending (a raise missed would leave it there).
+    /// minimum pass of the queued budgets not capped unless a raise is pending (a raise missed would
+    /// leave it there).
     /// Returns the budget out of step: one whose rank is not its frame's, or the one holding a
     /// minimum above the floor. A walk of the queue, off the exit path.
     pub fn audit(&self, bs: &impl Budgets<B>) -> Result<(), B> {
         let mut min: Option<(u128, B)> = None;
-        for (b, r) in self.slots[..self.len].iter().zip(&self.ranks[..self.len]) {
+        for (i, (b, r)) in self.slots[..self.len].iter().zip(&self.ranks[..self.len]).enumerate() {
             let Some(b) = *b else { continue };
             let s = bs.state(b);
             if !s.queued || (s.pass, s.tie, bs.id(b)) != (r.pass, r.tie, r.id) {
                 return Err(b);
             }
-            if min.map_or(true, |(p, _)| r.pass < p) {
+            // `capped-holds-floor` breaks the rule here as well, so its kernel passes its own audit
+            // and only the bench's shares can see it.
+            let counts = !self.capped[i] || cfg!(feature = "capped-holds-floor");
+            if counts && min.map_or(true, |(p, _)| r.pass < p) {
                 min = Some((r.pass, b));
             }
         }
@@ -470,7 +640,7 @@ impl<B: Copy + PartialEq, const N: usize> Queue<B, N> {
             self.remove_at(i);
             bs.left(child);
         }
-        self.raise_floor();
+        self.raise_floor(bs);
         self.reset_if_empty();
     }
 }
@@ -551,6 +721,12 @@ impl<B: Copy + PartialEq, const N: usize> Wiring<'_, B, N> {
         let left = r.cur.take();
         let run = core::mem::take(&mut r.pending).max(MIN_CHARGE);
         r.cur = next;
+        if let Some(n) = next {
+            self.q.ran_by(n, true);
+        }
+        if let Some(c) = left {
+            self.q.ran_by(c, false);
+        }
         if let Some(c) = left.filter(|c| bs.live(*c)) {
             self.q.fold(bs, c, run);
             // A budget another hart still runs stays queued, requeued behind its equals.
@@ -565,10 +741,10 @@ impl<B: Copy + PartialEq, const N: usize> Wiring<'_, B, N> {
         bs: &mut S,
         lost: &[B],
         gained: &mut [B],
-        runnable: impl Fn(&S, B) -> bool,
+        waiting: impl Fn(&S, B) -> u32,
     ) {
         let runners = &*self.runners;
-        self.q.reconcile(bs, |b| runners.iter().any(|r| r.cur == Some(b)), lost, gained, runnable);
+        self.q.reconcile_counted(bs, |b| runners.iter().any(|r| r.cur == Some(b)), lost, gained, waiting);
     }
 
     /// The lowest-ranked queued budget with a thread `next` can run. One with none whose threads
@@ -687,7 +863,7 @@ impl<B: Copy + PartialEq, const N: usize> Cpu<B, N> {
         gained: &mut [B],
         runnable: impl Fn(&S, B) -> bool,
     ) {
-        self.wired(|w| w.reconcile(bs, lost, gained, runnable))
+        self.wired(|w| w.reconcile(bs, lost, gained, |bs, b| u32::from(runnable(bs, b))))
     }
 
     /// The lowest-ranked queued budget and what `next` chooses to run of it. A queued budget with
@@ -771,16 +947,33 @@ impl<B: Copy + PartialEq, const N: usize, const H: usize> Harts<B, N, H> {
         self.wiring().switch(h, bs, next, still_runnable)
     }
 
-    /// The end of a kernel entry: [`Queue::reconcile`] with every hart's `cur` running.
+    /// The end of a kernel entry: [`Queue::reconcile_counted`] with every hart's `cur` running;
+    /// `waiting` is a budget's threads no hart runs.
     pub fn reconcile<S: Budgets<B>>(
         &mut self,
         bs: &mut S,
         lost: &[B],
         gained: &mut [B],
-        runnable: impl Fn(&S, B) -> bool,
+        waiting: impl Fn(&S, B) -> u32,
     ) {
-        self.wiring().reconcile(bs, lost, gained, runnable)
+        self.wiring().reconcile(bs, lost, gained, waiting)
     }
+
+    /// The harts online, for the cap set ([`Queue::set_harts`]). One hart keeps no counts, so each
+    /// queued budget's threads no hart runs (`waiting`), its stride weight and the harts running it
+    /// are counted afresh.
+    pub fn set_harts(&mut self, harts: u32, waiting: impl Fn(B) -> u32, weight: impl Fn(B) -> u64) {
+        self.q.set_harts(harts);
+        for i in 0..self.q.len {
+            let b = self.q.slots[i].expect("a queued slot");
+            self.q.waiting[i] = waiting(b);
+            self.q.running[i] = self.runners.iter().filter(|r| r.cur == Some(b)).count() as u32;
+            self.q.weights[i] = weight(b);
+        }
+    }
+
+    /// `b`'s threads no hart runs, as a settle counted them ([`Queue::set_waiting`]).
+    pub fn set_waiting(&mut self, b: B, n: u32) { self.q.set_waiting(b, n) }
 
     /// A hart's pick: [`Cpu::pick`], passing over a budget whose runnable threads all run on
     /// harts already. `next` chooses a thread no hart runs.

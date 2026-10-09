@@ -6,6 +6,10 @@ programs = ["sched-latency"]
 kernel_features = ["sched-trace"]
 # Order only: R10's time is host time here, so no bound.
 post_check = "sched_oracle"
+# One hart: without icount the harts run at once, and the kernel's console lines (the kill line
+# `[!] Terminating process`, which budget-destroy-kills reads) land inside the program's lines on
+# another hart, so a sample or count line arrives broken (kernel/scheduling.md, "Residual risks").
+keep_smp = true
 timeout_secs = 1800
 expect = [
     '^\[latency\] the RTC keeps virtual time: (met|missed)',
@@ -24,7 +28,7 @@ expect = [
     '^\[latency\] N=16 steward decision wake: .*: gross, audits included; net in the post-check',
     '^\[latency\] N=16 deadline notice: .*: gross, audits included; net in the post-check',
     '^\[latency\] N=16 budget_destroy, call to return: ',
-    '^\[latency\] N=16: the 1000-weight server got \d+ of 1000 of the spinning CPU: target (met|missed)',
+    '^\[latency\] N=16: the 1000-weight server counted \d+ of 1000 of the spinning CPU \(its weight.s 384\)$',
     '^SCHED-LATENCY TEST PASSED$',
     '^SCHED-TRACE-END \d+ dropped 0$',
 ]

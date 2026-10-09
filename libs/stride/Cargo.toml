@@ -9,5 +9,11 @@ description = "The kernel's stride queue arithmetic and ranks (docs/kernel/sched
 # the differential test; the model itself depends on nothing of the kernel's.
 [dependencies]
 
+[features]
+# Never in a default build: the floor counts the capped budgets (the model's R12CappedHoldsFloor),
+# and so does the queue's audit of it, for the kernel's `sched-capped-holds-floor` and the bench's
+# negative case, which only the shares must catch.
+capped-holds-floor = []
+
 [dev-dependencies]
 redoubt-model = { path = "../../model" }

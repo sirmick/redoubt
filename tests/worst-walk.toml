@@ -8,7 +8,7 @@ debug_assertions = true
 icount = "shift=3,sleep=off"
 qemu_seed = 3
 # The most rv32's physmap maps (kernel/memory-layout.md), and enough on both widths: 509 holders
-# of ~540 pages each, the trace ring's 192 MiB and the boot's own.
+# of ~540 pages each, the trace ring's 256 MiB and the boot's own.
 memory_mib = 2032
 # init alone; what it checks is that the threads all existed. The numbers are the trace's.
 programs = ["worst-walk"]
@@ -20,10 +20,11 @@ kernel_features = ["sched-trace-large", "walk-trace"]
 # expiry's own walk is within R12's 30 ms (about 27 ms on rv64 and 29 ms on rv32); a destruction
 # at full occupancy is within R10's 30 ms (about 17 ms on rv64 and 18 ms on rv32). The reconcile
 # that wakes the 250 budgets reads and writes each one's frame (its wake, and in this traced build
-# the trace's reads and the check of every budget visited): 7.1 ms on rv64 and 8.1 ms on rv32,
-# measured with the queue's floor and pick off the frames (kernel/scheduling.md, R12's status);
-# the bound is rv32's plus a tenth.
-post_check = "sched_oracle pump_max_us=2000 expiry_max_us=30000 reconcile_max_us=8900 r10_p99_us=30000"
+# the trace's reads and the check of every budget visited). Its length moves with where the
+# walk lands against the run's other events: two 8-seed sweeps, at this tree and the one before it,
+# measured 7.8 ms on rv64 (7814 to 7840 µs) and 6.8 to 9.1 ms on rv32 (kernel/scheduling.md, R12's
+# status); the bound is the sweeps' worst, rv32's 9058 µs, plus a tenth.
+post_check = "sched_oracle pump_max_us=2000 expiry_max_us=30000 reconcile_max_us=10000 r10_p99_us=30000"
 timeout_secs = 3600
 expect = [
     '^\[worst-walk\] 509 holders of \d+ pages, 129796 threads live$',

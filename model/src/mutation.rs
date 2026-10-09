@@ -239,6 +239,22 @@ pub enum Mutation {
     /// The pick and switch into a budget are billed to the budget that ran before it, not the
     /// one picked.
     R12SwitchBilledToPrevious,
+    /// On several harts the floor counts the capped budgets, those whose weight's share of the
+    /// harts is more than their runnable threads, as one hart's floor does every budget.
+    R12CappedHoldsFloor,
+    /// The cap test stops after the first capped budget: a second is never capped.
+    R12CapOnce,
+    /// With every queued budget capped the floor holds, so a budget waking then banks the idle
+    /// harts' time.
+    R12AllCappedHoldsFloor,
+    /// A budget that stops being capped keeps its lagging pass, not lifted to the floor.
+    R12UncapBanksCredit,
+    /// A budget runs on at most one hart at a time (the one-runner predicate before threads of one
+    /// process ran on several harts).
+    R12OneRunnerPerBudget,
+    /// A budget's runtime on a hart is not charged while another hart runs it too: of its
+    /// runners on several harts, only one is charged.
+    R12SpreadChargesOnce,
     // kernel/ipc.md, Messages: what the kernel attaches, and notices.
     /// Messages carry no labels.
     MsgNoLabels,
@@ -383,7 +399,7 @@ pub enum Mutation {
 }
 
 impl Mutation {
-    pub const ALL: [Mutation; 155] = {
+    pub const ALL: [Mutation; 161] = {
         use Mutation::*;
         [
             R1SkipLabelCheck,
@@ -483,6 +499,12 @@ impl Mutation {
             R12SliceCountsExitWork,
             R12TimerWorkUnbilled,
             R12SwitchBilledToPrevious,
+            R12CappedHoldsFloor,
+            R12CapOnce,
+            R12AllCappedHoldsFloor,
+            R12UncapBanksCredit,
+            R12OneRunnerPerBudget,
+            R12SpreadChargesOnce,
             MsgNoLabels,
             MsgBadgeZero,
             MsgAccountZero,
@@ -637,7 +659,13 @@ impl Mutation {
             | R12DeadlineWorkUnbilled
             | R12SliceCountsExitWork
             | R12TimerWorkUnbilled
-            | R12SwitchBilledToPrevious => "R12",
+            | R12SwitchBilledToPrevious
+            | R12CappedHoldsFloor
+            | R12CapOnce
+            | R12AllCappedHoldsFloor
+            | R12UncapBanksCredit
+            | R12OneRunnerPerBudget
+            | R12SpreadChargesOnce => "R12",
             IpcWrongLend | IpcDropPartial | IpcFalseDelivery | IpcSkipOutputCheck | IpcLeakRollback => "R13",
             MsgNoLabels | MsgBadgeZero | MsgAccountZero | MsgIdsGlobal => "R14",
             BlameNobody

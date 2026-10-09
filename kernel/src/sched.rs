@@ -72,6 +72,8 @@ struct Sched {
     /// The processes whose ready threads changed since the last reconcile, and what each was
     /// counted as: a reconcile visits only the budgets they moved.
     marks: Marks<BudgetRef, MAX_PROCESS_COUNT>,
+    /// The harts that have reached the scheduler, the boot hart first ([`hart_online`]).
+    online: u32,
 }
 
 /// One hart's side of the accounting at the trap boundary.
@@ -110,6 +112,7 @@ static SCHED: KernelCell<Sched> = KernelCell::new(Sched {
         irq_audits: None,
     }; MAX_HARTS],
     marks: Marks::new(BudgetRef { frame: 0, id: 0 }),
+    online: 1,
 });
 
 /// This hart's boot index: its runner in the queue's wiring, and its [`Billing`].
@@ -157,12 +160,19 @@ impl Budgets<BudgetRef> for MemoryManager {
 
     #[cfg(feature = "sched-trace")]
     fn reweighed(&mut self, b: BudgetRef, r: &redoubt_stride::Reweigh) { trace::reweigh(b.id, r) }
+
+    #[cfg(feature = "sched-trace")]
+    fn uncapped(&mut self, b: BudgetRef, pass: u128) { trace::record(trace::UNCAPPED, b.id, pass) }
 }
 
 impl Ready<BudgetRef> for MemoryManager {
     fn ready(&self, b: BudgetRef) -> u32 { self.sched_ready(b.frame) }
 
-    fn set_ready(&mut self, b: BudgetRef, n: u32) { self.set_sched_ready(b.frame, n) }
+    fn set_ready(&mut self, b: BudgetRef, n: u32) {
+        #[cfg(feature = "sched-trace")]
+        trace::record(trace::READY, b.id, u128::from(n));
+        self.set_sched_ready(b.frame, n)
+    }
 }
 
 fn budget_ref(mm: &MemoryManager, frame: BudgetFrame) -> BudgetRef {
@@ -204,6 +214,13 @@ impl Sched {
     /// is one read ([`Ready`]); before a deschedule asks it, and before the reconcile.
     fn settle(&mut self, ss: &ProcessTable, mm: &mut MemoryManager) {
         self.marks.settle(mm, |mm, i| ready_now(ss, mm, i));
+        // The budgets they moved: each one's threads no hart runs, for the cap set across harts.
+        if self.online > 1 {
+            let (lost, gained) = self.marks.changed();
+            for &b in lost.iter().chain(gained.iter()) {
+                self.cpu.set_waiting(b, mm.ready(b));
+            }
+        }
     }
 
     /// The end of a kernel entry: the queue takes in the budgets the settle moved.
@@ -211,7 +228,7 @@ impl Sched {
         #[cfg(feature = "sched-trace")]
         trace::entry();
         let (lost, gained) = self.marks.changed();
-        self.cpu.reconcile(mm, lost, gained, |mm, b| mm.ready(b) > 0);
+        self.cpu.reconcile(mm, lost, gained, |mm, b| mm.ready(b));
         #[cfg(debug_assertions)]
         {
             let cpu = &self.cpu;
@@ -221,6 +238,17 @@ impl Sched {
         }
         self.marks.clear();
     }
+}
+
+/// A hart came online (`hart_main`, holding the kernel lock): the cap set counts it from here
+/// (kernel/scheduling.md, "The current minimum and ties").
+pub fn hart_online() {
+    MemoryManager::with(|mm| {
+        SCHED.with(|s| {
+            s.online += 1;
+            s.cpu.set_harts(s.online, |b| mm.ready(b), |b| mm.weight(b));
+        })
+    })
 }
 
 /// Process `pid`'s ready threads changed (`ptable.rs`, at every change of its state that changes
@@ -247,7 +275,7 @@ fn audit_marks(ss: &ProcessTable, mm: &MemoryManager) {
         SCHED.with(|s| {
             // A process with no account is in no budget, so has nothing counted.
             let live = mm.live_pids().map(|pid| usize::from(pid.get()) - 1);
-            let Sched { cpu, marks, .. } = s;
+            let Sched { cpu, marks, online, .. } = s;
             if let Err(e) = marks.audit(mm, &cpu.q, |b| cpu.running(b), live, |mm, i| ready_now(ss, mm, i)) {
                 panic!("the scheduler's marks: {:?}", e);
             }
@@ -255,6 +283,7 @@ fn audit_marks(ss: &ProcessTable, mm: &MemoryManager) {
             if let Err(b) = cpu.q.audit(mm) {
                 panic!("the scheduler's ranks: budget {} is out of step with its frame", b.id);
             }
+            audit_caps(cpu, mm, *online);
         });
         audit_harts(ss, mm);
         // The other half of [`audit_harts`]: a process on the CPU is on some hart.
@@ -267,6 +296,57 @@ fn audit_marks(ss: &ProcessTable, mm: &MemoryManager) {
             );
         }
     });
+}
+
+/// The checked build's check, with the marks' audit ([`audit_marks`]), of the cap set the queue
+/// keeps against water-filling over every queued budget, done its own way: every budget not capped
+/// whose `w x H` is more than `k x W` (its threads `k`, waiting or on a hart; `H` the harts and `W`
+/// the weight of the budgets not capped yet) is capped, and its threads and weight leave `H` and
+/// `W`, until none is. The queue's set was found at its last floor raise, after the reconcile that
+/// precedes this audit, with the counts it holds now.
+#[cfg(debug_assertions)]
+fn audit_caps(cpu: &Harts<BudgetRef, MAX_PROCESS_COUNT, MAX_HARTS>, mm: &MemoryManager, harts: u32) {
+    let threads = |b: BudgetRef| {
+        u128::from(mm.ready(b)) + cpu.runners.iter().filter(|r| r.cur == Some(b)).count() as u128
+    };
+    let counted = |b: &BudgetRef| mm.weight(*b) > 0 && threads(*b) > 0;
+    let mut capped = [None; MAX_HARTS];
+    let mut n = 0;
+    let is_capped = |capped: &[Option<BudgetRef>], b: BudgetRef| capped.iter().any(|c| *c == Some(b));
+    if harts > 1 {
+        loop {
+            let held: u128 = capped[..n].iter().flatten().map(|b| threads(*b)).sum();
+            let Some(h) = u128::from(harts).checked_sub(held) else { break };
+            let w: u128 = cpu
+                .q
+                .queued()
+                .filter(|b| counted(b) && !is_capped(&capped[..n], *b))
+                .map(|b| u128::from(mm.weight(b)))
+                .sum();
+            let mut over = [None; MAX_HARTS];
+            let mut m = 0;
+            for b in cpu.q.queued().filter(|b| counted(b) && !is_capped(&capped[..n], *b)) {
+                if u128::from(mm.weight(b)) * h > threads(b) * w {
+                    assert!(n + m < MAX_HARTS, "the cap set: more budgets capped than harts");
+                    over[m] = Some(b);
+                    m += 1;
+                }
+            }
+            if m == 0 {
+                break;
+            }
+            capped[n..n + m].copy_from_slice(&over[..m]);
+            n += m;
+        }
+    }
+    let kept = cpu.q.capped().count();
+    assert!(
+        kept == n && cpu.q.capped().all(|b| is_capped(&capped[..n], b)),
+        "the cap set: the queue holds {} capped, water-filling {} ({} harts)",
+        kept,
+        n,
+        harts
+    );
 }
 
 /// The checked build's check, with the marks' audit ([`audit_marks`], so its time is billed to no
@@ -480,6 +560,12 @@ pub fn leave(pid: Pid) {
                 s.settle(ss, mm);
                 if next != s.cpu.cur(here()) {
                     s.cpu.switch(here(), mm, next, |mm, b| mm.ready(b) > 0);
+                    #[cfg(feature = "sched-trace")]
+                    trace::record(
+                        trace::RUNS,
+                        next.map_or(0, |b| b.id),
+                        next.map_or(0, |b| mm.weight(b).into()),
+                    );
                     s.b().user_since = None;
                     // The budget picked pays what it owes for getting here (below).
                     if let Some(b) = next {
@@ -740,14 +826,41 @@ pub mod trace {
     /// A destruction (R10) began and ended: the top's id, and the time in µs in the pass field.
     pub const R10_BEGIN: u8 = b'X';
     pub const R10_END: u8 = b'Y';
+    /// A budget's threads waiting for a hart, those no hart runs, changed: the count in the pass
+    /// field. The queue passes over a budget with none, whose threads all run on harts.
+    pub const READY: u8 = b'J';
+    /// The writing hart's runner changed: the budget it runs now, 0 for none, and its stride
+    /// weight in the pass field, so the oracle can weigh the charges of a budget it never saw
+    /// carve.
+    pub const RUNS: u8 = b'H';
+    /// A trap from user mode waited for the kernel lock another hart held: the wait's start in
+    /// ticks in the id, its end in the pass field. The hart's runner loses that time (R78).
+    pub const LOCK_WAIT: u8 = b'Q';
+    /// Just before `C`: the ticks since boot, and the harts started in the pass field, so the
+    /// oracle can state the lock waits as a share of the harts' time.
+    pub const HART_TIME: u8 = b'F';
+    /// A budget stopped being capped and is lifted to the floor: the pass it is lifted to, ahead of
+    /// the `P` that sets it. The rise is no charge.
+    pub const UNCAPPED: u8 = b'u';
+    /// With `lock-trace`, just after a `Q`: the wait's ticket in the id, and the sections ahead of
+    /// it when it was drawn in the pass field, so the oracle can check the waits end in ticket order.
+    pub const LOCK_TICKET: u8 = b'k';
 
-    /// Frames the ring takes (64 MiB, 192 MiB with `sched-trace-large`), and the records they hold.
-    const PAGES: usize = if cfg!(feature = "sched-trace-large") { 49152 } else { 16384 };
+    /// Frames the ring takes (64 MiB, 256 MiB with `sched-trace-large`), and the records they hold.
+    const PAGES: usize = if cfg!(feature = "sched-trace-large") { 65536 } else { 16384 };
     const PER_PAGE: usize = redoubt_sys::PAGE_SIZE / 32;
     const CAP: usize = PAGES * PER_PAGE;
+    // The ring keeps each frame as its 32-bit page number (`Ring::pages`): every frame the kernel
+    // takes is in the physmap, whose last page's number fits (kernel/memory.md, "Backing and
+    // zeroing").
+    const _: () = assert!(
+        (redoubt_layout::PHYSMAP_PHYS_BASE + redoubt_layout::PHYSMAP_SIZE - 1) / redoubt_sys::PAGE_SIZE
+            <= u32::MAX as usize
+    );
 
     struct Ring {
-        pages: [usize; PAGES],
+        /// Each frame's page number, so the large ring's table fits in the kernel's RAM region.
+        pages: [u32; PAGES],
         n: usize,
         dropped: u64,
         entry: u64,
@@ -765,11 +878,15 @@ pub mod trace {
     pub fn init(mm: &mut MemoryManager) {
         RING.with(|r| {
             for page in r.pages.iter_mut() {
-                *page = mm.kernel_frame().expect("sched-trace: no RAM for the trace ring");
-                crate::kframe::zero(*page);
+                let frame = mm.kernel_frame().expect("sched-trace: no RAM for the trace ring");
+                crate::kframe::zero(frame);
+                *page = (frame / redoubt_sys::PAGE_SIZE) as u32;
             }
         });
     }
+
+    /// The address of the frame that holds record `seq`.
+    fn frame(r: &Ring, seq: usize) -> usize { r.pages[seq / PER_PAGE] as usize * redoubt_sys::PAGE_SIZE }
 
     /// A reconcile begins: the records that follow belong to a new kernel entry.
     pub fn entry() { RING.with(|r| r.entry += 1); }
@@ -787,7 +904,7 @@ pub mod trace {
         let kind = u64::from(kind) | (crate::arch::hart::index() as u64) << 8;
         RING.with(|r| {
             if r.n < CAP && r.pages[0] != 0 {
-                let (page, at) = (r.pages[r.n / PER_PAGE], (r.n % PER_PAGE) * 32);
+                let (page, at) = (frame(r, r.n), (r.n % PER_PAGE) * 32);
                 for (k, word) in [pass, entry, id, kind].iter().enumerate() {
                     crate::kframe::write(page, at + k * 8, *word);
                 }
@@ -862,6 +979,18 @@ pub mod trace {
                 k.ticks += now.saturating_sub(since);
             }
         });
+    }
+
+    /// This hart came to the kernel at raw `time` `came`, found the lock held, and holds it now,
+    /// on `ticket`, drawn with `ahead` sections ahead of it.
+    pub fn lock_wait(came: u64, ticket: u32, ahead: u32) {
+        let now = super::ticks();
+        let start = now.saturating_sub(riscv::register::time::read64().saturating_sub(came));
+        record(LOCK_WAIT, start, u128::from(now));
+        #[cfg(feature = "lock-trace")]
+        record(LOCK_TICKET, u64::from(ticket), u128::from(ahead));
+        #[cfg(not(feature = "lock-trace"))]
+        let _ = (ticket, ahead);
     }
 
     /// A checked build's audit took `ticks`.
@@ -1054,10 +1183,11 @@ pub mod trace {
             }
             (k.ticks, k.charged, k.audits)
         });
+        record(HART_TIME, super::ticks(), crate::arch::hart::started() as u128);
         put(KERNEL_TIME, audits, ticks, charged);
         RING.with(|r| {
             for seq in 0..r.n {
-                let (page, at) = (r.pages[seq / PER_PAGE], (seq % PER_PAGE) * 32);
+                let (page, at) = (frame(r, seq), (seq % PER_PAGE) * 32);
                 let w = |k: usize| crate::kframe::read(page, at + k * 8);
                 let kind = w(3);
                 println!(

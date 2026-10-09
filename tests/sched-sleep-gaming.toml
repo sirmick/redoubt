@@ -1,15 +1,22 @@
-description = "Sleeping and waking cannot buy more than a budget's weight (R12): near-slice and 20 us bursts with 1 us naps, and long sleeps with bursts, against an equal-weight spinner (virtual time, checked build)"
+description = "Sleeping and waking cannot buy more than a budget's weight (R12): near-slice and 20 us bursts with 1 us naps, and long sleeps with bursts, against an equal-weight spinner: the gamer gets at most its share of the harts and the victim at least its share, by the kernel's charges net of lock waits (virtual time, checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true
 icount = "shift=3,sleep=off"
 programs = ["sched-sleep-gaming"]
+# Test builds only: the trace ring (never in a default kernel). Under icount a count is the
+# machine's instructions, not a hart's time, so the shares are the kernel's charges.
+kernel_features = ["sched-trace"]
+post_check = "sched_oracle"
 timeout_secs = 600
 expect = [
-    '^\[gaming\] ok: near-slice bursts',
-    '^\[gaming\] ok: 20 us bursts',
-    '^\[gaming\] ok: 100 ms bursts',
+    '^HART-SHARE near-slice-victim \d+ \d+ 50\+ 2:1 100:2$',
+    '^HART-SHARE near-slice-gamer \d+ \d+ 50- 5:2 100:1$',
+    '^HART-SHARE 20us-victim \d+ \d+ 50\+ 3:1 100:2$',
+    '^HART-SHARE 20us-gamer \d+ \d+ 50- 6:2 100:1$',
+    '^HART-SHARE 100ms-victim \d+ \d+ 50\+ 4:1 100:1$',
+    '^HART-SHARE 100ms-gamer \d+ \d+ 50- 7:1 100:1$',
     '^SCHED-SLEEP-GAMING TEST PASSED$',
+    '^SCHED-TRACE-END \d+ dropped 0$',
 ]
-forbid = ['\[gaming\] FAIL']
 poweroff = true
