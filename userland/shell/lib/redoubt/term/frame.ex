@@ -32,26 +32,44 @@ defmodule Redoubt.Term.Frame do
   @doc "The escape sequences that draw `frame`."
   @spec draw(Redoubt.Term.Cells.frame()) :: iodata()
   def draw(%{clear: clear, cells: cells}) do
-    start = if clear, do: [@csi, "0m", @csi, "2J"], else: [@csi, "0m"]
-
-    {out, _cursor, _style} =
-      Enum.reduce(cells, {[start], nil, Buffer.plain()}, fn cell, {out, cursor, style} ->
-        at = {cell.y, cell.x}
-
-        place =
-          if cursor == at,
-            do: [],
-            else: [@csi, Integer.to_string(cell.y + 1), ";", Integer.to_string(cell.x + 1), "H"]
-
-        new_style = {cell.fg, cell.bg, cell.modifiers}
-        set = if new_style == style, do: [], else: sgr(new_style)
-        w = Width.columns(cell.symbol)
-        # After a wide symbol, where the cursor is is the terminal's to say: placed again.
-        next = if w == 1, do: {cell.y, cell.x + 1}, else: nil
-        {[out, place, set, Text.visible(cell.symbol)], next, new_style}
-      end)
-
+    {out, _cursor, _style} = Enum.reduce(cells, start(clear), &cell/2)
     [out, @csi, "0m"]
+  end
+
+  @doc """
+  The escape sequences that draw the frame in `bytes`, read through the one decoder a cell at a
+  time (`Redoubt.Term.Cells.reduce/3`), so a whole screen's frame is never held as a list of cells;
+  or why the decoder refuses it, and then nothing.
+  """
+  @spec draw_bytes(binary()) :: {:ok, iodata()} | {:error, Redoubt.Term.Cells.error()}
+  def draw_bytes(bytes) do
+    step = fn
+      {:frame, %{clear: clear}}, nil -> {:cont, start(clear)}
+      {:cell, c}, acc -> {:cont, cell(c, acc)}
+    end
+
+    case Redoubt.Term.Cells.reduce(bytes, nil, step) do
+      {:ok, {out, _cursor, _style}} -> {:ok, [out, @csi, "0m"]}
+      {:error, _} = error -> error
+    end
+  end
+
+  defp start(clear), do: {[if(clear, do: [@csi, "0m", @csi, "2J"], else: [@csi, "0m"])], nil, Buffer.plain()}
+
+  defp cell(cell, {out, cursor, style}) do
+    at = {cell.y, cell.x}
+
+    place =
+      if cursor == at,
+        do: [],
+        else: [@csi, Integer.to_string(cell.y + 1), ";", Integer.to_string(cell.x + 1), "H"]
+
+    new_style = {cell.fg, cell.bg, cell.modifiers}
+    set = if new_style == style, do: [], else: sgr(new_style)
+    w = Width.columns(cell.symbol)
+    # After a wide symbol, where the cursor is is the terminal's to say: placed again.
+    next = if w == 1, do: {cell.y, cell.x + 1}, else: nil
+    {[out, place, set, Text.visible(cell.symbol)], next, new_style}
   end
 
   # The whole style, from a reset: the attributes, then the colours.

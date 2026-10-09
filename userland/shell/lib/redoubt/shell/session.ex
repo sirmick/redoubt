@@ -117,6 +117,22 @@ defmodule Redoubt.Shell.Session do
     end
   end
 
+  @summary "Run a native program that draws a screen"
+  @help """
+  Runs the program /boot/name with args as a full-screen program, in a budget carved from the
+  session's. It draws by sending frames of cells on its standard output, which the session
+  checks and draws; anything else it sends ends it. It reads the keys you type and the screen's
+  size as events on its standard input. Ctrl+\\ ends it, and so does Ctrl+C. It never holds the
+  console. Returns how it ended, `{:exited, code}` or `{:faulted, cause}`, `{:error, {:refused,
+  why}}` when the session refused what it sent, or nil when you ended it; its standard error is
+  drawn after the screen ends.
+  """
+  @args name: "the program's name in /boot", args: "its arguments"
+  @examples [{~S'screen("menu")', "run /boot/menu on the whole screen"}]
+  defcommand screen(name :: string, args :: many(string) \\ []) do
+    Redoubt.Screen.Native.run(name, args)
+  end
+
   @summary "Run a pipeline of native programs"
   @help """
   Runs native programs from /boot joined by pipes: words is the pipeline, its stages split at

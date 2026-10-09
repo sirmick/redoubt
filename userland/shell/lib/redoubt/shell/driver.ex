@@ -45,7 +45,7 @@ defmodule Redoubt.Shell.Driver do
   """
 
   alias Redoubt.Term
-  alias Redoubt.Term.{Cells, Frame, Keys}
+  alias Redoubt.Term.{Frame, Keys}
 
   require Record
 
@@ -602,11 +602,12 @@ defmodule Redoubt.Shell.Driver do
     state
   end
 
-  # A frame the decoder refuses ends the screen: nothing reaches the terminal but cells.
+  # A frame the decoder refuses ends the screen: nothing reaches the terminal but cells. It is
+  # drawn as it is decoded, a cell at a time, so a whole screen's frame is never one large term.
   defp frame(state, bytes) do
-    case Cells.decode(bytes) do
-      {:ok, frame} ->
-        write(state, Frame.draw(frame))
+    case Frame.draw_bytes(bytes) do
+      {:ok, out} ->
+        write(state, out)
         state
 
       {:error, _why} ->
