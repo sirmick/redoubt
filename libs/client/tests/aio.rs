@@ -396,6 +396,37 @@ fn a_tag_a_flush_names_is_not_reused_before_its_rflush() {
     w.end();
 }
 
+/// A tag stays its request's until the caller takes the completion, not only until the hub reads
+/// the answer: a server answers out of order (a waiting read after a later one), so an answer read
+/// but not taken can hold the lowest tag, and a request sent meanwhile would share it, and the
+/// caller would give one request's answer to the other.
+#[test]
+fn a_tag_is_not_reused_before_its_completion_is_taken() {
+    let w = World::new();
+    let ep = w.connection(9);
+    let open = w.open.clone();
+    fake().as_process(w.client, || {
+        let mut hub = Hub::new();
+        let conn = hub.connect(Endpoint::from_handle(ep)).unwrap();
+        // The gate's read waits; the later read is answered first, and taken.
+        let gate = hub.read(conn, GATE_FID, 0, buffer().0).unwrap();
+        let now = hub.read(conn, NOW_FID, 0, buffer().0).unwrap();
+        sent(&mut hub);
+        let done = next(&mut hub, conn);
+        assert_eq!((done.tag, data(&done)), (now, &b"hello"[..]));
+        // The gate's answer is read, and not taken, when the next request goes.
+        open.store(true, Ordering::Release);
+        hub.wait(conn, 1_000_000).unwrap();
+        let again = hub.read(conn, NOW_FID, 0, buffer().0).unwrap();
+        assert_ne!(again, gate, "the gate's tag reused before its completion was taken");
+        let done = next(&mut hub, conn);
+        assert_eq!((done.tag, data(&done)), (gate, &b"opened"[..]));
+        let done = next(&mut hub, conn);
+        assert_eq!((done.tag, data(&done)), (again, &b"hello"[..]));
+    });
+    w.end();
+}
+
 /// Requests batched past a page go a page at a time, so no send needs more of a server's `Pages`
 /// than one.
 #[test]

@@ -597,7 +597,7 @@ fn a_volume_s_labels_go_to_its_server_and_to_blkd() {
         )
     };
     assert_eq!(args(&m, "keyd").last().unwrap(), "labels=7");
-    assert_eq!(args(&m, "bootfsd"), ["buckets=5", "4000000:beamlet"]);
+    assert_eq!(args(&m, "bootfsd"), ["buckets=5", "4000000:beamlet", "220000:piped"]);
     assert_eq!(args(&m, "blkd"), ["endpoint=blkd", "labels.2=7"]);
 }
 

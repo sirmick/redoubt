@@ -55,6 +55,7 @@ use beamlet_vm::platform::{ConsoleInput, Files, Identity, Lookup, Platform, Plat
 use beamlet_vm::vm::{Config, Limits};
 use beamlet_vm::{Class, Vm};
 pub use files::posix;
+pub use jobs::MAX_JOBS;
 use redoubt_client::aio::{Conn, Done, MAX_WRITE, Outcome, RETRY_US};
 use redoubt_client::console::Console;
 use redoubt_client::ns::Namespace;

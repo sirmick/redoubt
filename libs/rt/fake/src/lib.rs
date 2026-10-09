@@ -395,6 +395,18 @@ impl Fake {
         lookup(&s, owner, handle).ok() == s.launched[index].handles.get(slot).copied()
     }
 
+    /// If the `slot`th handle (from 0) `child` was started with is an endpoint's receive right (badge
+    /// 0): the badges of the handles to that endpoint `owner` holds, 0 for a receive right of its own.
+    pub fn served(&self, owner: usize, child: &Launched, slot: usize) -> Option<Vec<u64>> {
+        let s = self.lock();
+        let Some(Object::Endpoint(ep)) = child.handles.get(slot).copied() else { return None };
+        if ep.badge != 0 {
+            return None;
+        }
+        let held = s.processes[owner].handles.iter().flatten();
+        Some(held.filter_map(|o| o.endpoint().ok()).filter(|e| e.id == ep.id).map(|e| e.badge).collect())
+    }
+
     /// `owner`'s child `process` exits with `code`: its exit notice goes to its exit endpoint.
     pub fn exit(&self, owner: usize, process: Handle, code: u32) {
         let mut s = self.lock();

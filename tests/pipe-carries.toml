@@ -1,0 +1,58 @@
+description = "Pipes carry a pipeline's bytes (docs/userland/native.md, \"Standard input and output, and pipes\"; docs/servers/piped.md): a session runs pipelines of pipe-stage through Redoubt.Pipeline, each stage in a budget of its own with its three streams. say|cat|count gives the session 6; 20000 bytes through a pipe of one page, so the writer waits on its reader again and again, give 20000; lines the session feeds come back through cat; and a reader that ends early leaves its writer refused or ended with the job. The session holds piped across these, and when it lets go piped's budget is destroyed: Pipes.usage is not_running, and the next open starts another. How long a start takes, and what piped's budget holds, are printed as evidence. Then a session of 4 processes, its VM and piped among them, runs two stages and has three refused out_of_processes before any starts. Every judged line is the session's: what reached it through the last pipe, and each stage's ending from its exit notice"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# As beamlet-launch, with piped and pipe-stage in /boot.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-bootfsd", bin = "bootfsd" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-erofsd", bin = "erofsd" },
+    { package = "redoubt-littlefsd", bin = "littlefsd" },
+    { package = "beamlet-redoubt", bin = "beamlet", workspace = "userland/otp" },
+    { package = "redoubt-beamlet-programs", bin = "beamlet-session" },
+    { package = "redoubt-piped", bin = "piped" },
+    { package = "redoubt-beamlet-programs", bin = "pipe-stage" },
+]
+timeout_secs = 300
+expect = [
+    '^\[con [0-9a-f]{16}\] \[beamlet-session\] started beamlet beamlet_pipe:carries, labels \[\]$',
+    '^\[con [0-9a-f]{16}\] pipe: piped started in [0-9]+ ms$',
+    '^\[con [0-9a-f]{16}\] pipe: say\|cat\|count: <<"6\\n">> \[\{exited,0\},\{exited,0\},\{exited,0\}\]$',
+    '^\[con [0-9a-f]{16}\] pipe: gen\|count: <<"20000\\n">> \[\{exited,0\},\{exited,0\}\]$',
+    '^\[con [0-9a-f]{16}\] pipe: lines\|cat: <<"a\\nb\\n">> \[\{exited,0\}\]$',
+    '^\[con [0-9a-f]{16}\] pipe: yes\|head: <<"y\\n">> \[\{(killed,0|exited,4)\},\{exited,0\}\]$',
+    "^\\[con [0-9a-f]{16}\\] pipe: piped's budget holds [0-9]+ of 768 pages$",
+    '^\[con [0-9a-f]{16}\] pipe: piped after its last holder let go: \{error,not_running\}$',
+    '^\[con [0-9a-f]{16}\] pipe: piped started again in [0-9]+ ms$',
+    '^\[con [0-9a-f]{16}\] \[beamlet-session\] beamlet beamlet_pipe:carries ended: Exited, code 0$',
+    '^\[con [0-9a-f]{16}\] \[beamlet-session\] started beamlet beamlet_pipe:out_of_processes, labels \[\]$',
+    '^\[con [0-9a-f]{16}\] pipe: cat\|cat\|cat: \{error,out_of_processes\}$',
+    '^\[con [0-9a-f]{16}\] pipe: cat\|cat: <<>> \[\{exited,0\},\{exited,0\}\]$',
+    '^\[con [0-9a-f]{16}\] \[beamlet-session\] beamlet beamlet_pipe:out_of_processes ended: Exited, code 0$',
+]
+forbid = [
+    'init: refused the boot',
+    '^init: (keyd|consoled|bootfsd|blkd|erofsd|littlefsd|beamlet-session)\S* .*(exited|faulted|was killed)',
+    'init: rebooting',
+    'EXCEPTION',
+    'FAIL',
+    'beamlet: .* not loaded',
+]
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/beamlet/pipe.json" }
+
+# What the tester runs; its sessions hold 10 processes, as the image's do, unless it says.
+[[file]]
+name = "beamlet-session.args"
+from = { path = "tests/data/beamlet/session-pipe-carries.args" }
+
+[disk]
+size_kib = 4096
+partitions = 1
+
+[userland]
+recipe = "tests/data/beamlet/natives-userland.toml"

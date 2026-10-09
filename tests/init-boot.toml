@@ -25,7 +25,7 @@ expect = [
     '^init: started blkd:system, console [0-9a-f]{16}$',
     '^init: started verity:system, console [0-9a-f]{16}$',
     '^init: started erofsd:system, console [0-9a-f]{16}$',
-    '^init: 1 public entries pushed to bootfsd, and sealed$',
+    '^init: 2 public entries pushed to bootfsd, and sealed$',
     '^init: started steward, console [0-9a-f]{16}$',
     # The manifest's handed items, its volume ranges (walfsd:data's and walfsd:alice-secrets's
     # on the data disk, erofsd:system's at verity:system and verity:system's at blkd:system), and

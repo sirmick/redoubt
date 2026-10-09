@@ -1,0 +1,17 @@
+[package]
+name = "redoubt-piped"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "piped: serves one session's pipes over 9P, each end a file a native stage is given as a standard stream"
+
+[[bin]]
+name = "piped"
+path = "src/bin/piped.rs"
+
+# Only the runtime: nothing here parses a format of its own (TENETS.md 5).
+[dependencies]
+redoubt-rt = { path = "../../libs/rt" }
+
+[dev-dependencies]
+redoubt-fake-kernel = { path = "../../libs/rt/fake" }

@@ -231,6 +231,13 @@ max_unsafe = 0
 max_undocumented = 0
 
 [[budget]]
+# A session's pipes' server forbids unsafe code.
+name = "piped (a session's pipes)"
+paths = ["servers/piped/src"]
+max_unsafe = 0
+max_undocumented = 0
+
+[[budget]]
 # The wire codecs are linked into the runtime, so they run on target. The crate says
 # `#![forbid(unsafe_code)]`, so this can only stay at 0.
 name = "redoubt-wire (protocol codecs)"

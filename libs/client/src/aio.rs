@@ -39,6 +39,8 @@
 //! - **Flush.** A request flushed before it was sent comes back [`Outcome::Flushed`] at once. One already
 //!   sent comes back with its answer, if the server gave one before its `Rflush`, or `Flushed` with the
 //!   `Rflush`: once either way, with its buffer.
+//! - **A tag names one request until its completion is taken**, not only until its answer is read: a caller
+//!   may match completions to its requests by tag.
 
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
@@ -216,15 +218,21 @@ impl Hub {
         Ok(tag)
     }
 
-    /// A tag free on `conn`: not outstanding (a queued request holds its slot too), and not named
-    /// by a flush still outstanding, whose `Rflush` would take a new request's slot for its target's
-    /// when the target's own answer came first.
+    /// A tag free on `conn`: not outstanding (a queued request holds its slot too), not named by a
+    /// flush still outstanding, whose `Rflush` would take a new request's slot for its target's
+    /// when the target's own answer came first, and not a completion's the caller has yet to take.
+    /// A completion's slot is free once its answer is read, and one completion buffer may carry
+    /// several answers: a request the caller sends on taking the first must not share a tag with
+    /// one still to come, or the caller, matching completions to requests by tag, gives one
+    /// request's answer to the other.
     fn free_tag(&self, conn: Conn) -> Result<u16, Error> {
         let c = &self.conns[conn.0];
         if c.ended {
             return Err(Error::Disconnected);
         }
         let mut taken = [false; MAX_TAGS];
+        // A completion's tag is one of its connection's slots, so below `MAX_TAGS`.
+        self.done.iter().filter(|d| d.conn == conn).for_each(|d| taken[usize::from(d.tag)] = true);
         for (tag, slot) in c.slots.iter().enumerate() {
             let Some(slot) = slot else { continue };
             taken[tag] = true;

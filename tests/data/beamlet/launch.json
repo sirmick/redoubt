@@ -195,6 +195,7 @@
   ],
   "public": [
     "beamlet",
+    "piped",
     "beamlet-hello",
     "beamlet-caller",
     "beamlet-session.args"

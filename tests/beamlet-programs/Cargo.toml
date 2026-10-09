@@ -7,7 +7,8 @@ description = "The native programs beamlet's system natives' cases start (docs/u
 
 # `beamlet-session`, in the steward's place, starts each case's session; a session launches
 # `beamlet-hello` from /boot; the serving case's second program calls the endpoint the VM serves.
-# Each says its lines through the /dev/cons connection its launcher gave it.
+# Each says its lines through the /dev/cons connection its launcher gave it. The pipe cases' stages
+# are `pipe-stage`, which has its three standard streams and nothing else.
 [[bin]]
 name = "beamlet-session"
 path = "src/bin/beamlet-session.rs"
@@ -21,6 +22,11 @@ test = false
 [[bin]]
 name = "beamlet-caller"
 path = "src/bin/beamlet-caller.rs"
+test = false
+
+[[bin]]
+name = "pipe-stage"
+path = "src/bin/pipe-stage.rs"
 test = false
 
 [dependencies]

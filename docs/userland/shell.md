@@ -51,16 +51,17 @@ file with `ed("notes.txt")`; browse and copy files in two panes with `fm("projec
 
 ### The shell in a session
 
-Status: built · partly tested: the steward starts it as the console principal's session on the UART and as each SSH login's session; launching a program is tested in the steward's sessions over SSH, a vault session and a plain one, and on the UART under a tester in the steward's place, and a session's files wait for its namespace to reach the VM · tested: bench:userland-boot, bench:steward-ssh-two-principals, bench:steward-vault-launch, bench:beamlet-launch, host:beamlet-redoubt::a_launch_takes_what_it_is_given_and_its_end_is_an_event
+Status: built · partly tested: the steward starts it as the console principal's session on the UART and as each SSH login's session; launching a program is tested in the steward's sessions over SSH, a vault session and a plain one, and on the UART under a tester in the steward's place and in the console principal's session, and a session's files wait for its namespace to reach the VM · tested: bench:userland-boot, bench:steward-ssh-two-principals, bench:steward-vault-launch, bench:beamlet-launch, bench:pipe-hostile-output, host:beamlet-redoubt::a_launch_takes_what_it_is_given_and_its_end_is_an_event
 
 Every session starts `Redoubt.Shell` over the session's console connection, `/dev/cons`
 ([consoled](../servers/consoled.md) on the UART, [sshd](../servers/sshd.md) for an SSH channel).
 In M1 (sessions over SSH, kept apart) the shell is what the milestone's sessions need and no more:
 the console, reading and writing files through OTP's `File`, and launching a native program
 through the launch natives ([beamlet](beamlet.md#natives)): `exec("name", args)` runs `/boot/name`
-in a budget carved from the session's, with a connection of its own to the session's console,
-waits for it to end, and returns how it ended and what its budget held
-([native programs](native.md#launching-from-a-session)). `ns()`, `ns_lookup/1` and `bind/2` are the
+in a budget carved from the session's, as a pipeline of one stage: it reads the lines typed, until
+Ctrl+D on an empty line, and what it writes is drawn as the line's own output; it holds no console
+of its own. `exec` waits for it to end, and returns how it ended and what its budget held
+([native programs](native.md#standard-input-and-output-and-pipes)). `ns()`, `ns_lookup/1` and `bind/2` are the
 session's namespace ([sessions](sessions.md#namespaces)). The shell's modules come from the userland
 disk, checked against the signed bundle
 ([R75 (verified userland)](../kernel/boot.md#r75-verified-userland)).
@@ -229,11 +230,14 @@ Not built:
 
 ### Native programs and pipes
 
-Status: planned · M2 (usable shell)
+Status: built · partly tested: `Redoubt.Pipeline`, which `pipe/1` and `exec` run, runs in the bench under a tester in the steward's place, and `exec` in the console principal's session too; `pipe/1`'s own splitting and refusals are the shell's ExUnit suite's, which no bench case runs; `Redoubt.Cmd`, the explicit form, and `run/2` are not built · tested: bench:pipe-carries, bench:pipe-never-reads, bench:pipe-no-authority, bench:pipe-interrupted, bench:pipe-hostile-output
 
 A native stage is a program in a budget of its own, joined to the next by a served pipe file.
 `pipe(~w(grep error log.txt | wc -l))` is the short form, and its value is the lines of the last
-stage's standard output; `Redoubt.Cmd` is the explicit form:
+stage's standard output, or, if a stage did not exit 0, those lines and every stage's ending;
+`cat("log.txt") |> pipe(~w(grep error))` gives the first stage lines to read. The stages' standard
+error is drawn as it comes, through the guard. `Redoubt.Cmd` is the explicit form, which comes with
+jobs:
 
 ```elixir
 {:ok, [job]} = Cmd.new() |> Cmd.source("log.txt") |> Cmd.pipe({"grep", ["error"]}) |> Cmd.run()
@@ -253,9 +257,6 @@ from the session's (bounded CPU and memory, ended by destroying it), a read-only
 current directory and no network. More is granted with options that map one to one onto the agent
 harness's grant kinds ([agents](agents.md#the-agent-harness)): `read:`, `write:`, `gateway:`,
 `git:` and `launch:`.
-
-**Open:** none here; the stream names and who serves a pipe are open on
-[native programs](native.md).
 
 ### Interrupting and killing jobs
 

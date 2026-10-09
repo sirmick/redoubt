@@ -74,6 +74,12 @@ package = "beamlet-redoubt"
 workspace = "userland/otp"
 
 [[entry]]
+# The server of a session's pipes, which the session starts from /boot when a pipeline needs
+# it.
+name = "piped"
+package = "redoubt-piped"
+
+[[entry]]
 name = "manifest"
 path = "image/manifest.json"
 # The userland volume's root and data blocks, from the pack of image/userland.toml: the signed

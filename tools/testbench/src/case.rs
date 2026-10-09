@@ -1211,7 +1211,8 @@ mod tests {
                 "walfsd",
                 "steward",
                 "sshd",
-                "beamlet"
+                "beamlet",
+                "piped"
             ]
         );
         assert!(programs[0].is_init());

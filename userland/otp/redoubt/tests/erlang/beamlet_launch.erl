@@ -1,6 +1,7 @@
 %% beamlet-launch (docs/userland/native.md, "Launching from a session"): the shell's `exec` runs
-%% /boot/beamlet-hello in a budget carved from the session's, with a connection of its own to the
-%% session's console; its line reaches the console, and its end and its budget's use come back.
+%% /boot/beamlet-hello in a budget carved from the session's, its standard streams pipes the
+%% session serves through piped; the line it writes reaches the console as the session draws it,
+%% and its end and its budget's use come back.
 -module(beamlet_launch).
 -export([start/0]).
 

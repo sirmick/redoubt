@@ -29,10 +29,10 @@ forbid = [
 # it answers sshd, so the lines come in this order.
 expect_after = [
     '^\[con [0-9a-f]{16}\] steward: audit 1001/\{7\} at [0-9]+: Login \{ session: [0-9]+, principal: 0, key: [1-9]',
-    '^\[con [0-9a-f]{16}\] steward: users/alice/\{7\} holds [0-9]+ pages, 2 processes$',
+    '^\[con [0-9a-f]{16}\] steward: users/alice/\{7\} holds [0-9]+ pages, 10 processes$',
     '^\[con [0-9a-f]{16}\] sshd: login alice\+alice-secrets: session [0-9a-f]{16}, labels \[7\]$',
     '^\[con [0-9a-f]{16}\] steward: audit 1002/\{\} at [0-9]+: Login \{ session: [0-9]+, principal: 1, key: [1-9]',
-    '^\[con [0-9a-f]{16}\] steward: users/bob/\{\} holds [0-9]+ pages, 2 processes$',
+    '^\[con [0-9a-f]{16}\] steward: users/bob/\{\} holds [0-9]+ pages, 10 processes$',
     '^\[con [0-9a-f]{16}\] sshd: login bob: session [0-9a-f]{16}, labels \[\]$',
 ]
 

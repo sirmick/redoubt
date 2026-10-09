@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 525
+revision = 529
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1776,8 +1776,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M2"
   body = "M2 page 'On Redoubt' step 3: native.md#standard-input-and-output-and-pipes, shell.md#native-programs-and-pipes. A native stage's stdin/stdout/stderr are files the session serves; a pipeline of stages joined by the session; nothing inherited, a stage reaches only what its launcher bound. Attack case: a pipe carries no authority. Design checkpoint first (.wash/local/PIPE1-design.md). Tier A: the steward red."
-  state = "reported"
-  revision = 521
+  state = "done"
+  revision = 529
   overrides = ["2026-10-08: started by Orchestrator before M1 (reported): M2 'On Redoubt' steps run ahead of M1's acceptance (owner: fill the bandwidth)"]
 
 [[node]]
@@ -1836,8 +1836,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "smp"
   needs = ["IRQ1"]
   body = "From IRQ1's instrumented runs: after IRQ1, sched-lock-contention-4's driver wake p99 is ~59 ms against 50 (recorded, not gated). Two contributors: (1) under -icount QEMU's single-threaded round-robin runs a woken hart only when the running hart's turn ends, and a hart in a kernel section keeps its turn to the section's end; (2) IRQ1's priority masking raises SEIP on every hart's context, so each device interrupt traps every user-mode or idle hart, N-1 to an empty claim, each a lock acquisition (kernel red's note). Find a way to judge the 4-hart tail that reflects parallel harts (a non-icount MTTCG run with a statistical bound), consider routing a source to one idle hart instead of all, and gate p99 at 4 harts. Detail: .wash/local/IRQ1-numbers-2.md."
-  state = "todo"
-  revision = 524
+  state = "active"
+  revision = 526
+  overrides = ["2026-10-09: started by Orchestrator before M1 (reported): several-harts track runs ahead of M1's acceptance"]
 
 [[node]]
   id = "TRY1"
@@ -1845,8 +1846,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M2"
   body = "Owner request 2026-10-08. `./launch --system [--arch rv64|rv32] [--smp N]` boots the same signed image the bench's userland cases use (init, servers, steward, sshd, the shell's VM), with its disk (virtio-blk) and network (QEMU user net, host port forwarded to the guest's 22; default 2222, --ssh-port to change), keeps the serial console on the terminal, and prints the exact `ssh -p PORT -i KEY alice@localhost` line plus the host key's fingerprint. A dev key pair is generated per checkout under .tmp (or the user's own public key with --key), and the manifest's principals get it for this boot only; nothing secret is committed. --print-only prints the QEMU command. Reuse testbench's image and disk assembly (no second packer). Runs through scripts/q (a lease for the cores QEMU uses). Docs: GETTING-STARTED.md 'Run' gains 'Try the system' with a short walk-through (log in, help(), ed, fm, alice.work@, resize, Ctrl+\\). A bench case that boots `launch --system --print-only`'s exact command line and logs in once, so it can't rot. Second part: an idle case: boot with 4 harts, log in, leave the prompt idle for 60 s, judge wakeups per second from the kernel's trace and the QEMU process's host CPU time against stated ceilings; idle is what the owner asked about. Tier B tooling, except any manifest/steward change (Tier A: the steward red)."
-  state = "active"
-  revision = 518
+  state = "reported"
+  revision = 528
   overrides = ["2026-10-09: started by Orchestrator before M1 (reported): owner request: try the system by hand during M2"]
 
 [[node]]
@@ -1858,3 +1859,13 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "From SMP4's measurements: with audits excused, the remaining 2-hart misses are in the picks: budget-churn-shell rv64 404 and deadline-flood rv64 ~410 (want 450+), containment's bystander rv32 442; a creator carving and destroying children reweighs ~240 times and lifts the victim out of the cap set ~80 times (rv32 45) while holding both harts ~60% outside audits. Find whether the cap-set lift/reweigh rules give the victim less than R12 promises on several harts, fix the rule or restate the target with the model, and judge those lines at 2 harts. Also restate sched-wake-no-preempt's proof for several harts (a timeout answered at the first entry on any hart is not a preemption) and judge it at 2. Kernel: Tier A."
   state = "todo"
   revision = 522
+
+[[node]]
+  id = "IDLE1"
+  title = "A system left at the prompt idles: interrupts per second per hart and QEMU's host CPU stay under stated ceilings"
+  template = "package"
+  parent = "M2"
+  needs = ["TRY1"]
+  body = "Owner's question (does it properly idle?). Boot launch's machine with 4 harts, log in, leave the prompt idle for 60 s; count from outside (QEMU -d int over the window's file offsets) interrupts per second per hart by cause and user ecalls, and QEMU's host CPU from /proc/<pid>/stat; measure first, then ceilings at ~2x; a hot spot found becomes a follow-up (a test-only kernel per-budget wake count). Quiet class. Tier B unless the kernel changes."
+  state = "todo"
+  revision = 528

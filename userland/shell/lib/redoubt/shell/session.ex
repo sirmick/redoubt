@@ -2,9 +2,10 @@ defmodule Redoubt.Shell.Session do
   @moduledoc """
   The session's own commands, imported at the prompt: its namespace (docs/userland/sessions.md,
   "Namespaces"), who it is and its labels ("What a session is told"), printing without the pager,
-  and running a native program (docs/userland/shell.md, "The shell in a session").
-  Each is a thin layer over `Redoubt.Namespace`, `Redoubt.Process` and beamlet's natives, and adds
-  no authority.
+  and running native programs and pipelines of them (docs/userland/shell.md, "The shell in a
+  session", "Native programs and pipes").
+  Each is a thin layer over `Redoubt.Namespace`, `Redoubt.Process`, `Redoubt.Pipeline` and beamlet's
+  natives, and adds no authority.
   """
 
   use Redoubt.Commandlet, area: "Session"
@@ -100,10 +101,12 @@ defmodule Redoubt.Shell.Session do
 
   @summary "Run a native program and wait for it"
   @help """
-  Runs the program /boot/name with args, in a budget carved from the session's, with the
-  session's console as its own, and waits for it to end. Returns how it ended, `{:exited, code}`,
-  `{:faulted, cause}` or `{:killed, 0}`, and what its budget held as it ended; the budget is then
-  destroyed, and everything in it ends.
+  Runs the program /boot/name with args, in a budget carved from the session's, and waits for it
+  to end. It reads the lines you type, until Ctrl+D on an empty line, and what it writes, its
+  standard output and its standard error, is drawn as the line's own output: a control character
+  in it shows as itself, never acts. It never holds the console. Returns how it ended,
+  `{:exited, code}`, `{:faulted, cause}` or `{:killed, 0}`, and what its budget held as it ended;
+  the budget is then destroyed, and everything in it ends.
   """
   @args name: "the program's name in /boot", args: "its arguments"
   @examples [{~S'exec("hello", ["world"])', "run /boot/hello world"}]
@@ -112,6 +115,45 @@ defmodule Redoubt.Shell.Session do
       {:ok, ending, usage} -> {ending, usage}
       {:error, _} = error -> error
     end
+  end
+
+  @summary "Run a pipeline of native programs"
+  @help """
+  Runs native programs from /boot joined by pipes: words is the pipeline, its stages split at
+  each "|", each a program's name and its arguments. Each stage runs in a budget of its own carved
+  from the session's, with its standard input, output and error and nothing else: no file, no
+  console, nothing of the session's. Stage i's output is stage i + 1's input. Given lines first,
+  as from cat(path) |> pipe(...), the first stage reads them; otherwise it reads nothing.
+
+  The value is the last stage's output, as lines; the stages' standard error is drawn as it comes.
+  The pipeline is done when its last stage ends: any stage still running then is ended, and
+  every budget destroyed. At most #{Redoubt.Pipeline.max_stages()} stages, and no more than the
+  session's processes allow.
+  """
+  @args input: "the lines the first stage reads, or the pipeline's words when given alone",
+        words: "the pipeline: names and arguments, with \"|\" between stages"
+  @examples [
+    {~S'pipe(~w(sort | uniq))', "an empty sort's output, uniq'd"},
+    {~S'cat("dump.bin") |> pipe(~w(parse --json))', "an untrusted parser as one stage"}
+  ]
+  defcommand pipe(input :: term, words :: many(string) \\ []) do
+    {input, words} = if words == [], do: {nil, input}, else: {input, words}
+
+    with true <- (is_list(words) and Enum.all?(words, &is_binary/1)) or {:error, :not_words},
+         {:ok, stages} <- Redoubt.Pipeline.stages(words),
+         {:ok, %{output: output, endings: endings}} <- Redoubt.Pipeline.run(stages, input: input) do
+      case Enum.reject(endings, &match?({:exited, 0}, &1)) do
+        [] -> lines(output || "")
+        _failed -> {lines(output || ""), endings}
+      end
+    end
+  end
+
+  defp lines(output) do
+    output
+    |> String.split("\n")
+    |> then(fn lines -> if List.last(lines) == "", do: Enum.drop(lines, -1), else: lines end)
+    |> Lines.new()
   end
 
   # What the steward told the session of itself (`redoubt:identity/0`), or nil for a VM that is

@@ -1,8 +1,8 @@
 description = "The image's disk serves its staged files (image/README.md): the disk is packed from image/disk.toml as ./mkimage packs it, its data partition a walfs volume written by libs/walfs, here holding the steward cases' stage (the littlefsd cases' files and the principals' homes, which the console session's home needs); init boots the image's manifest, whose walfsd:data mounts that volume without formatting it, and a client handed a root badge at walfsd:data (littlefsd-client, a client of either writable server) reads each staged file back"
 arch = ["rv64", "rv32"]
 kind = "boot"
-# The real init, the image's servers, the steward, sshd and beamlet, and littlefsd-client; the
-# manifest is the image's with the client added.
+# The real init, the image's servers, the steward, sshd, beamlet and piped, and littlefsd-client;
+# the manifest is the image's with the client added.
 programs = [
     { package = "redoubt-init", bin = "init" },
     { package = "redoubt-keyd", bin = "keyd" },
@@ -15,6 +15,7 @@ programs = [
     { package = "redoubt-walfsd", bin = "walfsd" },
     { package = "redoubt-erofsd", bin = "erofsd" },
     { package = "beamlet-redoubt", bin = "beamlet", workspace = "userland/otp" },
+    { package = "redoubt-piped", bin = "piped" },
     { package = "redoubt-steward-server", bin = "steward" },
     { package = "redoubt-sshd", bin = "sshd" },
     { package = "redoubt-littlefsd-programs", bin = "littlefsd-client" },

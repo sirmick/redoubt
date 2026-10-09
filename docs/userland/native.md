@@ -101,7 +101,8 @@ Status: built · partly tested: over SSH a steward's session launches, a vault s
 
 A session launches a native program through beamlet's launch native
 ([beamlet](beamlet.md#natives)), and its end arrives as a message to the process that launched
-it; the shell's `exec` is one launch and its wait ([the shell](shell.md#the-shell-in-a-session)).
+it; the shell's `exec` is a pipeline of one stage and its wait
+([the shell](shell.md#the-shell-in-a-session), [pipes](#standard-input-and-output-and-pipes)).
 The namespace, the handles and the budget come from the Elixir caller, so every authority the
 child gets is on that one call.
 - **The launcher reads the program.** There is no kernel path lookup: a session that cannot read
@@ -122,58 +123,108 @@ from the Elixir caller, and Rust makes the calls and writes the startup block
 
 ### Standard input and output, and pipes
 
-Status: planned · M2 (usable shell)
+<details><summary>Status: built · partly tested: in a boot the stages run under a tester in the steward's place, but for `exec`, which also runs in the steward's sessions over SSH, and for hostile output, drawn by the console principal's shell; a stage's console input is host-tested only · tested (10)</summary>
+
+- bench:pipe-carries
+- bench:pipe-never-reads
+- bench:pipe-no-authority
+- bench:pipe-interrupted
+- bench:pipe-hostile-output
+- bench:beamlet-launch
+- bench:steward-vault-launch
+- bench:piped-host-tests
+- host:redoubt-piped::a_stage_reaches_only_the_end_it_was_given
+- host:redoubt-piped::a_pipe_carries_one_stages_bytes_to_the_next_and_ends_when_its_writer_goes
+
+</details>
 
 There is no pipe object, no file-descriptor table and no inheritance. A program's standard
-streams are names in its namespace, and a pipe is a 9P file that somebody serves: a pipeline is
-the shell binding names in each child's namespace before starting it. The names used here
-(`/dev/stdin`, `/dev/stdout`) and the session's VM as the pipes' server are the recommended answers
-to the two choices open at the end of this section. One part is decided: an interactive stage's
-standard input is a pipe the session feeds from the console.
+streams are names in its namespace, `/dev/stdin`, `/dev/stdout` and `/dev/stderr`, and a pipe is
+a 9P file that the session's [`piped`](../servers/piped.md) serves: a pipeline is the session
+minting each stage a connection at one end of one pipe for each of its streams, and binding those
+three in its namespace before starting it ([`Redoubt.Pipeline`](../../userland/shell/lib/redoubt/pipeline.ex)).
+A stage gets those three entries and nothing else: no other file, no console, no handle of the
+session's.
 
 ```mermaid
 flowchart LR
-    Z["zcat<br/>budget 1"] -.->|"its /dev/stdout"| P1["pipe 1"]
-    P1 -.->|"its /dev/stdin"| SO["sort<br/>budget 2"]
-    SO -.->|"its /dev/stdout"| P2["pipe 2"]
-    P2 -.->|"its /dev/stdin"| U["uniq<br/>budget 3"]
-    subgraph VM["the session's VM serves the pipes (recommended)"]
+    Z["zcat<br/>budget 1"] -->|"its /dev/stdout"| P1["pipe 1"]
+    P1 -->|"its /dev/stdin"| SO["sort<br/>budget 2"]
+    SO -->|"its /dev/stdout"| P2["pipe 2"]
+    P2 -->|"its /dev/stdin"| U["uniq<br/>budget 3"]
+    subgraph PD["the session's piped, in a budget of its own"]
         P1
         P2
     end
 ```
-*Figure: a pipeline, with the recommended names and server. Every part is planned (dashed). Each
-stage runs in its own budget; each pipe is a served file, bound as one stage's standard output and
-the next stage's standard input.*
+*Figure: a pipeline. Each stage runs in its own budget; each pipe is a served file, bound as one
+stage's standard output and the next stage's standard input. Pipe 0, before the first stage, and
+the last pipe are the session's to feed and read, and every stage's standard error is one more
+pipe the session draws.*
 
 What follows from pipes being served files:
-- **Backpressure is free.** A write is a `call`, and the server replies when there is room.
+- **Backpressure is free.** A pipe holds one page; a write takes what fits and its call waits,
+  parked, while nothing does ([piped](../servers/piped.md#serving-pipes)).
 - **End of file falls out of the exit notice.** When a stage exits, the launcher disconnects its
-  connections, and the pipe's server sees its last writer go; the next stage reads end of file.
-- **Labels work out.** Whoever serves a pipe is a user-level server with no label exemption,
-  serving one session's stages, so a pipe between two label sets fails, as it should
-  ([R1 (flow)](../kernel/ipc.md#r1-flow)).
-- **No stage holds the console.** A native stage never gets the raw `/dev/cons`: an interactive
-  stage's standard input is a pipe the session feeds from the console, so the shell always sees
-  the interrupt key ([the shell](shell.md#interrupting-and-killing-jobs)).
+  connections, and `piped` sees its writer go; the next stage reads what is left and then the end
+  of its input. Its writer's next write is refused (`state`, `enotconn`) once it is gone.
+- **Labels work out.** `piped` is a user-level server with no label exemption, carved from the
+  session's budget and serving that session alone, so a pipe between two label sets fails, as it
+  should ([R1 (flow)](../kernel/ipc.md#r1-flow)).
+- **No stage holds the console.** A native stage never gets `/dev/cons`. A stage the person runs
+  with `exec` reads the lines they type, which the shell's driver hands the session while the
+  stage runs, and Ctrl+D on an empty line is the end of its input; the interrupt keys stay the
+  shell's ([the shell](shell.md#interrupting-and-killing-jobs)). What a stage writes, its output
+  and its standard error, reaches the console only as the session draws it, through the shell's
+  guard, so a control sequence in it shows as text
+  ([the shell](shell.md#hostile-text-never-drives-the-terminal)).
 - **A pipe is readable as a file.** A zero-copy alternative, stages sending pages to each other
   over an endpoint, is not 9P, so a program could not read its input as a file; it is not taken.
 
-**What is built in M1 (sessions over SSH, kept apart):** a program the shell's `exec` launches gets
-one stream, a connection of its own to the session's console as `/dev/cons`, which the console
-mints for it with `new_connection` and which is disconnected when the program ends; its lines
-carry that connection's id. It reads that console as well as writes it, so until pipes exist a
-launched program can take typing the shell would have read, and the rule above that no stage
-holds the console waits for them (M2 (usable shell)).
+**Who serves a pipe: `piped`, not the session's VM.** The VM could serve them only through natives
+that make endpoints and mint badges, with a serve thread that ends every request at 5 s
+(`REQUEST_WAIT_US`) while a reader waits on its writer for as long as the writer takes, and with
+the multiplexed protocol a native client speaks written again in Elixir, every byte then going
+through the interpreter. `piped` is the serving library's 9P skeleton with one small file server,
+started from `/boot` when a pipeline needs it and none is running, with the launch native's
+`serve` ([beamlet](beamlet.md#natives)), and ended, its budget destroyed, when the last pipeline
+holding it ends: nothing of it exists at the prompt.
 
-**Open:** two choices.
-- The names of the three streams: with no descriptors to duplicate, each child needs distinct
-  names. Recommended: `/dev/stdin`, `/dev/stdout` and `/dev/stderr` namespace entries.
-  Alternative: `/fd/0`, `/fd/1`, `/fd/2`.
-- Who serves a pipe. Recommended: the session's VM, which needs `serve` and `reply` natives and a
-  9P server codec in beamlet (also needed to capture `System.cmd` output). Alternative: a small
-  `piped` server per session, which keeps bulk bytes out of the session's VM at the cost of one
-  more server.
+**A pipeline** (`Redoubt.Pipeline.run/2`, and the shell's `pipe/1` and `exec`):
+- **One budget per stage,** carved from the session's (256 pages, 1 process, weight 1, unless the
+  caller says), and the stages started last first.
+- **The job is complete when its last stage ends.** Nothing more can reach its output, so every
+  other stage's budget is destroyed then, a stage that never reads and one that never ends among
+  them, and every budget of the job is destroyed before the pipeline returns.
+- **Its owner.** One Erlang process launches the stages, so their exit notices come to it, and
+  watches the line that asked: if the line ends first, interrupted or crashed, the owner destroys
+  every stage's budget, so no stage outlives the line that ran it.
+- **Bounds.** At most 7 stages, and no more than the session's budget has processes for: a
+  pipeline the budget cannot hold is refused `out_of_processes` before any stage starts. The
+  image's session holds 10 processes, its VM and `piped` among them, and its console's relay once
+  a session has one. `piped` lets the session and its stages park 8 calls between them, a stage's
+  one and the session's own, which is what bounds a pipeline at 7. The VM runs 16 jobs at once
+  (`MAX_JOBS`), so that never binds first.
+- **Pages.** `piped`'s budget and each stage's are carved from the session's own pages, so they
+  compete with the VM's headroom while a pipeline runs: the session's budget is the bound.
+  `piped`'s is 768 pages, carved when a pipeline starts it and destroyed when the last pipeline
+  holding it ends, so a session that is not piping holds none of it. It holds 86 pages on rv64 and
+  83 on rv32 after `pipe-carries`' pipelines; the rest is what its clients' parked calls may lend
+  it at worst, 552 pages for the two buckets admission needs at the least, which is why 512 would
+  not do ([piped](../servers/piped.md#serving-pipes)). Starting it again costs about 60 ms under
+  QEMU, which `pipe-carries` prints.
+
+**The M1 (sessions over SSH, kept apart) residual is closed.** Until pipes, a program the shell's `exec` launched held a connection
+of its own to the session's console, read what the shell would have read, and wrote to the
+terminal past the shell's guard. It now holds neither.
+
+Residuals:
+- **A stage cannot end its output before it exits.** Its clunk is not the end of the stream, so a
+  stage that closes its standard output and runs on leaves its reader waiting until it exits
+  ([piped](../servers/piped.md#residual-risks)).
+- **The stages of one session share one admission bucket** at `piped`, so one that parks calls on
+  many connections of its own can make another's wait refused `too_many`; every stage is the same
+  session's.
 
 ### Killing a job
 
@@ -465,7 +516,7 @@ reaping by one timeout, no more.
 
 ### Many requests at once
 
-<details><summary>Status: built · partly tested: on the machine only in `aio-many-reads` and `aio-many-reads-two` · tested (12)</summary>
+<details><summary>Status: built · partly tested: on the machine only in `aio-many-reads` and `aio-many-reads-two` · tested (13)</summary>
 
 - bench:aio-many-reads
 - bench:aio-many-reads-two
@@ -474,6 +525,7 @@ reaping by one timeout, no more.
 - host:redoubt-client::buffers_come_back_to_their_submitter_by_value_in_any_order
 - host:redoubt-client::a_flushed_requests_buffer_is_returned_exactly_once
 - host:redoubt-client::a_tag_a_flush_names_is_not_reused_before_its_rflush
+- host:redoubt-client::a_tag_is_not_reused_before_its_completion_is_taken
 - host:redoubt-client::a_batch_goes_a_page_at_a_time
 - host:redoubt-client::a_write_is_at_most_one_page
 - host:redoubt-client::two_connections_have_a_waiter_each_and_the_caller_idles_in_receive
@@ -538,6 +590,10 @@ schedulers submit, and a waiter per connection wakes it
   own end does, and every request outstanding comes back ended, with its buffer, its fate
   unknown. A request flushed before it was sent comes back flushed at once; one already sent
   comes back with its answer, or flushed with the `Rflush`.
+- **A tag names one request until its completion is taken**, not only until its answer is read:
+  one completion buffer carries several answers, a server answers out of order, and a request
+  the caller sends on taking the first must not take the tag of one still to come, so a caller
+  may match completions to its requests by tag (beamlet's VM does).
 
 ### Dropped files, calls by path and generated calls
 

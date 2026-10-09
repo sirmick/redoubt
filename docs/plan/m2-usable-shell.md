@@ -205,8 +205,12 @@ paths ([the shell](../userland/shell.md#completion)); and resource use, `free`, 
 highlighting, and the file manager, `fm`, host-tested ([the shell](../userland/shell.md#the-editor)).
 On Redoubt the shell runs in each session over SSH, and so do its commands: files through
 beamlet's platform in the session's home and vault, binds, and `whoami` and `labels`, as the
-steward told the session (`bench:shell-commands`; [the shell](../userland/shell.md#session-commands)).
-What the milestone builds on: the serving
+steward told the session (`bench:shell-commands`; [the shell](../userland/shell.md#session-commands));
+and native programs and pipes: a native stage's standard streams are pipes the session serves
+through a `piped` of its own, `pipe/1` runs pipelines of stages, each in a budget of its own, and
+`exec` a stage that reads what is typed and holds no console; a stage reaches only its three
+streams, and its output reaches the console only through the shell's guard
+([native programs](../userland/native.md#standard-input-and-output-and-pipes)). What the milestone builds on: the serving
 library's parked calls ([serving](../servers/serving.md#parked-calls)), `consoled`'s 9P console
 ([consoled](../servers/consoled.md)), and budget destruction as the only way to end a process
 ([budgets](../kernel/budgets.md#r10-destruction)). The first step on Redoubt is built: a typed call

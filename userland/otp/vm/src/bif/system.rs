@@ -322,13 +322,18 @@ pub fn identity(c: &mut Ctx, _a: &[Term]) -> R {
     })
 }
 
-/// `launch(#{image, budget, namespace, handles, args, stack_pages, heap_pages})`: `{ok, Job}`, and
-/// the job's end arrives as `{exit, Job, Cause, Code}`. `image` is the program's bytes and `budget`
-/// one the caller carved; `namespace` is `[{Path, Connection}]` and `handles` `[{Name, Handle}]`, at
-/// most [`MAX_START_HANDLES`] together; `args` is `[Binary]`.
+/// `launch(#{image, budget, namespace, handles, args, stack_pages, heap_pages, serve})`: `{ok, Job}`,
+/// and the job's end arrives as `{exit, Job, Cause, Code}`. `image` is the program's bytes and
+/// `budget` one the caller carved; `namespace` is `[{Path, Connection}]` and `handles` `[{Name,
+/// Handle}]`, at most [`MAX_START_HANDLES`] together with `serve`'s; `args` is `[Binary]`. With
+/// `serve => Name`, the child is given a new endpoint's receive right as the named handle `Name`, and
+/// the answer is `{ok, Job, Connection}`, the caller's send right to it.
 pub fn launch(c: &mut Ctx, a: &[Term]) -> R {
-    let f =
-        fields(c, a[0], &["image", "budget", "namespace", "handles", "args", "stack_pages", "heap_pages"])?;
+    let f = fields(
+        c,
+        a[0],
+        &["image", "budget", "namespace", "handles", "args", "stack_pages", "heap_pages", "serve"],
+    )?;
     let image = bytes(c, f[0].ok_or_else(|| c.badarg())?, MAX_IMAGE)?;
     let budget = handle(c, f[1].ok_or_else(|| c.badarg())?)?;
     let pairs = |c: &Ctx, t: Option<Term>| -> Result<Vec<(String, Object)>, Exception> {
@@ -343,23 +348,31 @@ pub fn launch(c: &mut Ctx, a: &[Term]) -> R {
     };
     let namespace = pairs(c, f[2])?;
     let handles = pairs(c, f[3])?;
-    if namespace.len() + handles.len() > MAX_START_HANDLES {
-        return Ok(refused(c, Refused("too_many")));
-    }
     let args = match f[4] {
         Some(t) => list(c, t, MAX_ARGS)?.into_iter().map(|t| text(c, t)).collect::<Result<_, _>>()?,
         None => Vec::new(),
     };
     let stack_pages = f[5].map(|t| unsigned(c, t)).transpose()?;
     let heap_pages = f[6].map(|t| unsigned(c, t)).transpose()?;
-    let launch = Launch { image, budget, namespace, handles, args, stack_pages, heap_pages };
+    let serve = f[7].map(|t| text(c, t)).transpose()?;
+    if namespace.len() + handles.len() + usize::from(serve.is_some()) > MAX_START_HANDLES {
+        return Ok(refused(c, Refused("too_many")));
+    }
+    let launch = Launch { image, budget, namespace, handles, args, stack_pages, heap_pages, serve };
     let asker = super::asker(c.p.pid);
     let job = c.sys().make_ref();
     let r = with_system(c, |s| s.launch(asker, job.0, launch));
     Ok(match r {
-        Ok(()) => {
+        Ok(served) => {
             c.sys().system_waits += 1;
-            c.ok_tuple(Term::Ref(job))
+            let ok = c.ok();
+            match served {
+                Some(conn) => {
+                    let conn = c.new_resource(conn);
+                    c.tuple(&[ok, Term::Ref(job), conn])
+                }
+                None => c.tuple(&[ok, Term::Ref(job)]),
+            }
         }
         Err(e) => refused(c, e),
     })

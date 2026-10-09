@@ -158,6 +158,9 @@ pub struct Launch {
     pub args: Vec<String>,
     pub stack_pages: Option<u64>,
     pub heap_pages: Option<u64>,
+    /// The name under which it is given a new endpoint's receive right to serve, if it is a server:
+    /// the caller gets a send right to it, and nothing else holds the receive right.
+    pub serve: Option<String>,
 }
 
 /// Something that happened for an Erlang process: [`System::poll`] names the process (the number
@@ -211,8 +214,9 @@ pub trait System {
     fn labels(&mut self) -> Vec<u64>;
     /// What this VM was told of itself when it was launched as a session, if it was one.
     fn identity(&mut self) -> Option<Identity> { None }
-    /// Starts `launch` for `asker`; its end arrives as [`Event::Exit`] naming `job`.
-    fn launch(&mut self, asker: u64, job: u64, launch: Launch) -> Result<(), Refused>;
+    /// Starts `launch` for `asker`; its end arrives as [`Event::Exit`] naming `job`. With
+    /// [`Launch::serve`], the send right to the endpoint the child serves comes back.
+    fn launch(&mut self, asker: u64, job: u64, launch: Launch) -> Result<Option<Object>, Refused>;
     /// The next event for a process, if one has come. Must not block; [`Platform::idle`] should
     /// return when one arrives.
     fn poll(&mut self) -> Option<(u64, Event)>;

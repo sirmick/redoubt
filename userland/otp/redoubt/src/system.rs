@@ -446,13 +446,14 @@ impl System for Redoubt {
 
     fn identity(&mut self) -> Option<Identity> { self.sys.identity.clone() }
 
-    fn launch(&mut self, asker: u64, job: u64, launch: Launch) -> Result<(), Refused> {
+    fn launch(&mut self, asker: u64, job: u64, launch: Launch) -> Result<Option<Object>, Refused> {
         let resolved = crate::jobs::Resolved {
             budget: budget(&launch.budget)?,
             namespace: launch.namespace.iter().map(|(_, o)| endpoint(o)).collect::<Result<_, _>>()?,
             handles: launch.handles.iter().map(|(_, o)| cap(o).map(Cap::handle)).collect::<Result<_, _>>()?,
         };
-        self.sys.jobs.launch(self.io.wake(), asker, job, launch, resolved)
+        let served = self.sys.jobs.launch(self.io.wake(), asker, job, launch, resolved)?;
+        Ok(served.map(|send| Cap::object(Arc::new(Owned::new(send.handle())), Kind::Endpoint)))
     }
 
     fn poll(&mut self) -> Option<(u64, Event)> { self.sys.events.pop_front() }
