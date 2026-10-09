@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 537
+revision = 542
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1612,8 +1612,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   needs = ["CTX1"]
   body = "Second of three; brief .wash/local/CTX1-brief.md, design .wash/local/CTX1-design.md. A relay program in the context's own budget serves the VM's /dev/cons; the steward hands it each channel's console. 64 KiB buffer, newest kept, a dropped-count line, cut at line boundaries, resize on reattach. Takeover is told on both terminals, with the remote address. Tier A."
-  state = "active"
-  revision = 479
+  state = "reported"
+  revision = 540
   overrides = ["2026-10-08: started by Orchestrator before CTX1 (reported), M1 (reported): CTX1 is reported and under its last fold; CTX2 is stacked on it by the orchestrator's ruling", "2026-10-08: started by Orchestrator before M1 (reported): named contexts run ahead of M1's acceptance (owner request 2026-10-08)"]
 
 [[node]]
@@ -1818,8 +1818,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "smp"
   needs = ["SMP4"]
   body = "M2 page 'Several harts' step 5, reworded by measurement: zero on reclaim (freed frame -> in flight -> zeroed outside the lock by the freeing hart -> bitmap; allocation zeroes nothing), not zero on allocate. The in-flight invariant as a rule beside R11, with the model's rule and a mutation, and an attack case (a second hart racing to allocate, map or free an in-flight frame). Shootdown waits stay under the lock (measured ~0), a residual. Kernel: Tier A."
-  state = "todo"
-  revision = 514
+  state = "active"
+  revision = 539
+  overrides = ["2026-10-09: started by Orchestrator before M1 (reported): several-harts track runs ahead of M1's acceptance"]
 
 [[node]]
   id = "B45"
@@ -1838,8 +1839,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "smp"
   needs = ["IRQ1"]
   body = "From IRQ1's instrumented runs: after IRQ1, sched-lock-contention-4's driver wake p99 is ~59 ms against 50 (recorded, not gated). Two contributors: (1) under -icount QEMU's single-threaded round-robin runs a woken hart only when the running hart's turn ends, and a hart in a kernel section keeps its turn to the section's end; (2) IRQ1's priority masking raises SEIP on every hart's context, so each device interrupt traps every user-mode or idle hart, N-1 to an empty claim, each a lock acquisition (kernel red's note). Find a way to judge the 4-hart tail that reflects parallel harts (a non-icount MTTCG run with a statistical bound), consider routing a source to one idle hart instead of all, and gate p99 at 4 harts. Detail: .wash/local/IRQ1-numbers-2.md."
-  state = "reported"
-  revision = 534
+  state = "done"
+  revision = 542
   overrides = ["2026-10-09: started by Orchestrator before M1 (reported): several-harts track runs ahead of M1's acceptance"]
 
 [[node]]
@@ -1859,8 +1860,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "smp"
   needs = ["SMP4"]
   body = "From SMP4's measurements: with audits excused, the remaining 2-hart misses are in the picks: budget-churn-shell rv64 404 and deadline-flood rv64 ~410 (want 450+), containment's bystander rv32 442, and sched-exit-churn's threads-exit near its bound (rv32 465 vs 450; kept @1); a creator carving and destroying children reweighs ~240 times and lifts the victim out of the cap set ~80 times (rv32 45) while holding both harts ~60% outside audits; and an audit-excused waiter keeps its slice (SMP4's P2), which moved deadline-flood rv64 875 -> 413. Find whether the cap-set lift/reweigh rules give the victim less than R12 promises on several harts, fix the rule or restate the target with the model, and judge those lines at 2 harts. Also restate sched-wake-no-preempt's proof for several harts (a timeout answered at the first entry on any hart is not a preemption) and judge it at 2. Kernel: Tier A."
-  state = "todo"
-  revision = 536
+  state = "active"
+  revision = 538
+  overrides = ["2026-10-09: started by Orchestrator before M1 (reported): several-harts track runs ahead of M1's acceptance"]
 
 [[node]]
   id = "IDLE1"

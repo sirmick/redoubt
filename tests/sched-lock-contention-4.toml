@@ -12,7 +12,8 @@ kernel_features = ["hold-trace"]
 # The oracle checks the waits' ticket order, and gates the driver wake's p50. Its p99 is printed
 # beside, with no target: under `-icount` a hart woken while another is in a search runs only when
 # that hart's QEMU turn ends, and then draws its ticket behind up to three searches
-# (kernel/scheduling.md, "Residual risks").
+# (kernel/scheduling.md, "Residual risks"); `sched-lock-contention-4-mttcg` judges it where the
+# harts run at once.
 post_check = "sched_oracle driver_wake_p50_us=15000"
 timeout_secs = 1200
 expect = [

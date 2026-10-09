@@ -1,0 +1,31 @@
+description = "sched-lock-contention-4 where the harts run at once (multi-threaded TCG, no icount): three budgets refused a `map_anon` after a search of the whole area in a loop beside the driver stand-in; every wait for the kernel lock takes it in ticket order, and the driver wake's p50 and p99 are at most three and eight searches of the same run alone, since host time moves both, and within the 15 and 50 ms targets (kernel/scheduling.md, R78) (host time, checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+programs = ["sched-lock-contention-4"]
+smp = [4]
+keep_smp = true
+# Test builds only: the trace ring with each lock wait's ticket (never in a default kernel).
+kernel_features = ["lock-trace"]
+# The oracle checks the waits' ticket order and judges the driver wake's net p50 and p99 in
+# searches of this run, alone (`one search alone`): host time moves both. A wake waits behind at
+# most three searches and the one in progress (R78). On q's quiet cores twenty runs read a p50 of
+# 1.6 to 1.9 searches and a p99 of 2.0 to 3.0, one run a width at 6.1 and 5.1: so 3 and 8. The p99
+# bound cannot see a wake a search or two longer; the p50 bound does (the irq-boot-hart-only kernel
+# reads 3.7 to 4.9 there). The absolute targets, 15 and 50 ms, are gated beside them; on this host
+# a search is a fifth of its virtual 9.6 ms, so they bound only a slow baseline
+# (kernel/scheduling.md, R78). Host time: a verdict only alone, on q's quiet cores
+# (scripts/jobs.mk; docs/testbench.md, "On a shared host"). That set is four cores for four vCPU
+# threads and QEMU's main thread: if the case flakes, look there first.
+post_check = "sched_oracle driver_wake_p50_us=15000 driver_wake_p99_us=50000 driver_wake_p50_searches=3 driver_wake_p99_searches=8"
+timeout_secs = 600
+expect = [
+    '^\[lock-contention\] one search alone: p50 \d+ µs, max \d+ µs \(21 searches\)$',
+    '^\[lock-contention\] 3 hammers. searches refused: \d+$',
+    '^\[lock-contention\] driver wake: .*: gross, audits included; net in the post-check',
+    '^LATENCY-SAMPLE contention driver_wake \d+ \d+$',
+    '^SCHED-LOCK-CONTENTION TEST PASSED$',
+    '^SCHED-TRACE-END \d+ dropped 0$',
+]
+forbid = ['\[lock-contention\] FAIL']
+poweroff = true

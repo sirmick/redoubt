@@ -316,12 +316,7 @@ extern "C" fn gamer_thread(_: usize) -> ! {
 /// every 2 MiB span, so no request of a span fits and each refusal reads every page table of the
 /// area; the requests refused until `end`.
 fn search_hammer(end: u64) -> u64 {
-    const AREA: core::ops::Range<usize> = 0x6000_0000..0x7000_0000;
-    const SPAN: usize = 2 << 20;
-    for span in AREA.step_by(SPAN) {
-        // A page of this process's may be there already.
-        let _ = rd::map_fixed(span, rd::PAGE_SIZE, rd::rw());
-    }
+    let _ = fill_search_area();
     let mut refused = 0;
     while ticks() < end {
         match rd::map_anon(SPAN, rd::rw()) {
@@ -331,6 +326,40 @@ fn search_hammer(end: u64) -> u64 {
         }
     }
     refused
+}
+
+/// The `map_anon` area and the span [`search_hammer`] asks for.
+const SEARCH_AREA: core::ops::Range<usize> = 0x6000_0000..0x7000_0000;
+const SPAN: usize = 2 << 20;
+
+/// A page of this process's in every span of the area, so no request of a span fits. The spans
+/// it mapped a page in, a bit each (a page of this process's may be there already).
+fn fill_search_area() -> u128 {
+    let mut mapped = 0;
+    for (i, span) in SEARCH_AREA.step_by(SPAN).enumerate() {
+        if rd::map_fixed(span, rd::PAGE_SIZE, rd::rw()).is_ok() {
+            mapped |= 1 << i;
+        }
+    }
+    mapped
+}
+
+/// The search's own length, alone: `n` of [`search_hammer`]'s refused requests from this process
+/// before anything else runs, each timed on `time_now`, µs, sorted. Its pages are given back.
+fn search_alone(samples: &mut [u64]) {
+    let mapped = fill_search_area();
+    for s in samples.iter_mut() {
+        let t0 = rd::time_now().unwrap_or(0);
+        let got = rd::map_anon(SPAN, rd::rw());
+        *s = rd::time_now().unwrap_or(0).saturating_sub(t0);
+        if let Ok(at) = got {
+            let _ = rd::unmap(at, SPAN);
+        }
+    }
+    for (_, span) in SEARCH_AREA.step_by(SPAN).enumerate().filter(|(i, _)| mapped & 1 << i != 0) {
+        let _ = rd::unmap(span, rd::PAGE_SIZE);
+    }
+    samples.sort_unstable();
 }
 
 /// Count until the window ends, a `late` one ([`Role::SpinThreads`]'s p1) from p2 ticks.
@@ -2605,6 +2634,16 @@ pub fn lock_contention(hammers: usize) -> ! {
         b.check(false, format_args!("no goldfish RTC among the device handles"));
         b.finish("SCHED-LOCK-CONTENTION")
     };
+    // One search's length, alone, before any child runs: the unit a wake's wait is counted in
+    // where the clock is the host's (`sched-lock-contention-4-mttcg`).
+    let mut alone = [0u64; 21];
+    search_alone(&mut alone);
+    b.note(format_args!(
+        "one search alone: p50 {} µs, max {} µs ({} searches)",
+        alone[alone.len() / 2],
+        alone[alone.len() - 1],
+        alone.len()
+    ));
     let driver = b.budget(rd::SYSTEM, 1000, 1, rd::FOREVER);
     // It holds its samples' windows until asked, below.
     let d = b.start(driver, Role::Driver, &[K, 1], &[rtc_mmio, rtc_irq]);

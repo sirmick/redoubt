@@ -452,11 +452,12 @@ got 0.
 
 ### Responsiveness
 
-<details><summary>Status: built · tested (18)</summary>
+<details><summary>Status: built · tested (20)</summary>
 
 - bench:sched-latency
 - bench:sched-lock-contention
 - bench:sched-lock-contention-4
+- bench:sched-lock-contention-4-mttcg
 - bench:sched-cluster
 - bench:sched-cluster-old-control
 - bench:budget-destroy-growth
@@ -468,6 +469,7 @@ got 0.
 - host:testbench::audits_are_subtracted_inside_each_window
 - host:testbench::a_hart_share_is_judged_of_every_charge_against_water_filling
 - host:testbench::latency_targets_are_gated_up_to_gate_harts
+- host:testbench::the_driver_wake_is_judged_in_searches_of_its_own_run
 - host:testbench::an_unmatched_audit_fails
 - host:testbench::cluster_envelope_qualifies_where_the_old_rtc_interval_did_not
 - host:testbench::the_old_control_must_fail_on_its_lower_witness
@@ -1051,7 +1053,7 @@ It is attacked three ways:
 
 ### R78 (fair kernel entry)
 
-Status: built · tested: bench:smp-boot, bench:smp-lock-wait, bench:sched-lock-contention, bench:sched-lock-contention-4, bench:irq-boot-hart-only, host:testbench::lock_waits_take_the_lock_in_ticket_order
+Status: built · tested: bench:smp-boot, bench:smp-lock-wait, bench:sched-lock-contention, bench:sched-lock-contention-4, bench:sched-lock-contention-4-mttcg, bench:irq-boot-hart-only, host:testbench::lock_waits_take_the_lock_in_ticket_order
 
 On several harts, kernel entry is fair across them: the one kernel lock is a FIFO ticket lock,
 so a hart that arrives at the kernel waits behind at most `MAX_HARTS` - 1 kernel sections, never
@@ -1131,7 +1133,23 @@ all 201. Which hart idles at two harts follows the boot's timing, and in `sched-
 it is the boot hart (claims 200 and 1), so the count that shows other harts claiming is
 `sched-lock-contention-4`'s, which requires one of them to claim ten or more (59, 3, 137 and 2 on
 rv64; 36, 140, 23 and 2 on rv32). At four harts the p50 is 4.3 ms on rv64 and 5.3 ms on rv32,
-gated; the p99, 59.1 and 58.7 ms, is recorded, not gated ([residual risks](#residual-risks)).
+gated; the p99, 59.1 and 58.7 ms, waits for QEMU's turns under `icount` and is recorded there
+([residual risks](#residual-risks)). It is judged where the harts run at once:
+`bench:sched-lock-contention-4-mttcg` runs the same program under QEMU's multi-threaded TCG, in
+host time, and judges the driver wake's net p50 and p99 in searches of the same run alone, which
+the program times before its children start (`one search alone`): at most three at p50 and eight
+at p99. A ratio, because the host's speed moves both sides, and a wake waits behind at most three
+searches and the one in progress. Twenty runs alone on q's quiet cores read a p50 of 1.6 to 1.9
+searches and a p99 of 2.0 to 3.0, but for one run of each width at 6.1 (rv64) and 5.1 (rv32);
+twenty on the general cores read p99s of 3.8 to 6.2 and 3.2 to 5.1 (a search alone about 1.5 to
+1.9 ms and 1.3 ms). The p99 bound, at twice the four-search claim, cannot see a wake one or two
+searches longer: the `irq-boot-hart-only` kernel under the same case reads p99s of 5.4 to 7.1
+searches and passes it. Its p50, 3.7 to 4.9 searches against IRQ1's 1.6 to 1.9, fails the p50
+bound in all four recorded runs, so the p50 is the gate that sees that regression. The 15 and 50 ms
+targets are gated too, but on this host's TCG a search takes a fifth of its 9.6 ms of virtual
+time, so they hold for the twin as well (p99 7.5 to 10.9 ms); on hardware, where a search is its
+virtual length, the same count holds 50 ms while R12's costliest call stays under about 12 ms, and
+the twin's would not.
 
 ### R23 (no test channels)
 
@@ -1300,16 +1318,18 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   line that rises while the idle hart is halted wakes it on time in virtual time, but the hart runs
   only when the running hart's turn ends, and then draws its ticket behind up to three sections. In
   `sched-lock-contention-4` that leaves the driver wake's p99 at 59.1 ms on rv64 and 58.7 ms on
-  rv32 (other runs read 49.7 and 40.6), so it is recorded, not gated: every long idle halt there began
-  with nothing pending, and the kernel cannot shorten another hart's turn. On harts that run at
-  once the woken hart draws its ticket at the rise. A run under QEMU's multi-threaded TCG, or on
-  hardware, would measure the four-hart wake without the turns. Beside the turns, every hart pays
-  for each device interrupt: an unmasked source raises the external interrupt on every hart's
-  context, so each hart in user mode or idle when it rises traps, and all but one of them take the
-  kernel lock for a claim that finds nothing (1 to 149 such entries a run at four harts, 77 to 88
-  at two). Each is a short section, but it is a turn and a ticket ahead of the woken hart. Routing
-  each source to one idle hart (a busy hart's threshold above the sources' priority while one
-  idles) is the remedy if it matters.
+  rv32 (other runs read 49.7 and 40.6), so it is recorded there, not gated: every long idle halt
+  began with nothing pending, and the kernel cannot shorten another hart's turn. On harts that run
+  at once the woken hart draws its ticket at the rise, and the four-hart p99 is judged there, under
+  QEMU's multi-threaded TCG ([R78](#r78-fair-kernel-entry)).
+- **Every hart pays for each device interrupt.** An unmasked source raises the external interrupt
+  on every hart's context, so each hart in user mode or idle when it rises traps, and all but one
+  take the kernel lock for a claim that finds nothing. Under multi-threaded TCG at four harts every
+  alarm traps the other three (518 to 577 such entries in a run of 200 alarms, twenty runs), each
+  holding the lock about 31 µs (p50; 50 µs at p90): at most three are ahead of a wake, about
+  0.15 ms of a p99 of 4 to 12 ms. So it is not routed: sending each source to one idle hart (a busy
+  hart's threshold above the sources' priority while one idles) is the remedy if it comes to
+  matter.
 - **Some cases keep one hart.** A case that does not keep its hart count runs at the count the
   bench is given (`--smp`); these keep theirs (`keep_smp`), each for one of five reasons: the
   cap set's lifts under a creator that carves and destroys without pause; a timeout answered at

@@ -269,7 +269,8 @@ a disk or a userland disk (38 cases; the rule for a disk is above); host sockets
 `poke`, a peer or a dial (8); input the host types on the console, `[[input]]` (4; under `icount`
 the rv32 UART lost a burst of it); and a run whose purpose is the host's
 time (`asid-cost-host`, `sched-latency-tcg`, `timeouts-tcg`, and `smp-evict-mttcg`,
-`smp-shootdown-mttcg` and `console-one-writer`, which need QEMU's multi-threaded TCG). Several harts do not keep a case
+`smp-shootdown-mttcg`, `console-one-writer` and `sched-lock-contention-4-mttcg`, which need QEMU's
+multi-threaded TCG). Several harts do not keep a case
 on the host's clock: under `icount` QEMU runs the harts in turn on one host thread, and a hart
 waiting for the kernel lock halts rather than spending its turn
 ([R78 (fair kernel entry)](kernel/scheduling.md#r78-fair-kernel-entry)). One case reads no host clock and stays on it for now: `redoubt-ipc`
@@ -305,7 +306,8 @@ that measures with the host's clock is a verdict only alone: the rule asks that 
 invocation and no build run beside it. Those are a `host-tests` case whose crates' tests assert
 a wall-clock bound (`redoubt-rt`, `redoubt-client`, `redoubt-keyd` and `redoubt-consoled` do;
 `redoubt-ipd`, `redoubt-model` and `testbench` only read the clock), which no tolerance would
-make load-proof; a case whose expectation is a timeout (`bench-ssh-guest`, and
+make load-proof; a boot case whose bound is a ratio of two host times (`sched-lock-contention-4-mttcg`:
+a stalled vCPU thread lengthens a wake but not the search it is counted in); a case whose expectation is a timeout (`bench-ssh-guest`, and
 `bench-ssh-loopback-deadlock`, whose `must_fail` is the mark it never gets); and a host-clock
 case with a VM session whose console goes through the hub's hold and which must still be alive
 after a hold boundary (the steward's SSH session cases): a stall of the guest of a second or
@@ -523,12 +525,14 @@ parks when it is done, unless its exit is the point of its case.
 
 ### The scheduler oracle
 
-<details><summary>Status: built · tested (22)</summary>
+<details><summary>Status: built · tested (24)</summary>
 
 - bench:sched-ties
 - bench:sched-capped
 - bench:sched-lock-contention
 - bench:sched-lock-contention-4
+- bench:sched-lock-contention-4-mttcg
+- host:testbench::the_driver_wake_is_judged_in_searches_of_its_own_run
 - host:testbench::a_pick_passes_over_only_a_budget_that_other_harts_run
 - host:testbench::lock_waits_are_reported_per_mille_of_the_harts_time
 - host:testbench::lock_waits_take_the_lock_in_ticket_order
@@ -571,7 +575,10 @@ tick; then `j`: its cause, a system call's number, an interrupt's or an exceptio
 ticks of audits inside it). The oracle reports the sections' lengths net of their audits, the
 longest by cause, and splits the lock waits into the part another hart's section covered (its
 audits pro rata) and the part with the lock free, the hand-off to the halted waiter. Both
-contention cases carry it; it judges nothing. `sched-capped` runs the model's capped scenarios
+contention cases carry it; it judges nothing. Where the clock is the host's,
+`driver_wake_p50_searches=K` and `driver_wake_p99_searches=K` judge the driver wake's net p50 and
+p99 against K searches of the same run alone, from the program's `one search alone` line, at any
+hart count (`sched-lock-contention-4-mttcg`). `sched-capped` runs the model's capped scenarios
 ([model](kernel/model.md#scheduler-scenarios)) on the machine at two, three and four harts, each
 budget's share judged as below. It is itself checked against the model's ranks and against traces broken one clause at a
 time. The tracing kernel is a test build only

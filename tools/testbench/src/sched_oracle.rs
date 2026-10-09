@@ -439,6 +439,14 @@ fn check_external_entry(e: &TimerEntry, claim: Option<u64>, sum: &mut Summary) -
     }
 }
 
+/// One search's length alone, µs, as `sched-lock-contention` prints it before its children run.
+fn search_alone(log: &str) -> Option<u64> {
+    log.lines().find_map(|l| {
+        let (_, rest) = l.split_once("] one search alone: p50 ")?;
+        rest.split_once(" µs")?.0.parse().ok()
+    })
+}
+
 /// Check every pick in `records` against the four clauses, the floor and every pass's
 /// monotonicity, and every lift against the rule.
 pub fn check(records: &[Record]) -> Result<Summary, String> {
@@ -2870,7 +2878,15 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
             .ok_or_else(|| format!("unknown sched_oracle argument {arg:?}"))?;
         let measure = name.strip_suffix("_p50_us").or_else(|| name.strip_suffix("_p99_us"));
         let walk = name.strip_suffix("_max_us");
-        if !(["r10_p99_us", "lease_end_p99_us", "gate_harts", "fault_section_max_ticks"].contains(&name)
+        if !([
+            "r10_p99_us",
+            "lease_end_p99_us",
+            "gate_harts",
+            "fault_section_max_ticks",
+            "driver_wake_p50_searches",
+            "driver_wake_p99_searches",
+        ]
+        .contains(&name)
             || measure.is_some_and(|m| MEASURES.contains(&m))
             || walk.is_some_and(|w| WALKS.contains(&w)))
         {
@@ -3004,6 +3020,27 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
                     if gated { String::new() } else { format!(", recorded at {harts} harts, not gated") };
                 format!("target {} ({}){recorded}", if met { "met" } else { "missed" }, texts.join(", "))
             };
+            // Where the clock is the host's, the driver wake's p99 in units of one search of the
+            // same run, alone: the host's speed moves both (kernel/scheduling.md, R78). Gated at any
+            // hart count, beside targets `gate_harts` may only record.
+            let mut target = target;
+            for (q, n) in [("p50", n50), ("p99", n99)] {
+                let Some(k) =
+                    bounds.get(&*format!("driver_wake_{q}_searches")).filter(|_| *measure == "driver_wake")
+                else {
+                    continue;
+                };
+                let alone = search_alone(log).ok_or_else(|| {
+                    format!("driver_wake_{q}_searches is set, but the log holds no 'one search alone' line")
+                })?;
+                let ok = n <= k * alone;
+                missed |= !ok;
+                target = format!(
+                    "{target}; {} ({q} <= {k} searches of {alone} µs alone, {:.1})",
+                    if ok { "searches met" } else { "searches missed" },
+                    n as f64 / alone.max(1) as f64
+                );
+            }
             // A cluster window is the conservative envelope, net of certified audit interiors.
             let (kind, credit) = if cluster_metrics.is_some() {
                 ("envelope ", "certified audit credit")
@@ -4579,6 +4616,47 @@ mod tests {
         );
         assert!(run(&on(4), "driver_wake_p99_us=50").is_err());
         assert!(run(&on(1), "gate_harts=x").is_err_and(|e| e.contains("unknown sched_oracle argument")));
+    }
+
+    /// `driver_wake_p50_searches=K` and `driver_wake_p99_searches=K` judge the driver wake's net
+    /// p50 and p99 against K of the run's own searches alone, read from its `one search alone` line.
+    #[test]
+    fn the_driver_wake_is_judged_in_searches_of_its_own_run() {
+        let log = |p99: u64| {
+            trace(&[(1, 'W', 1, 5), (1, 'K', 1, 5)])
+                + "[lock-contention] one search alone: p50 100 µs, max 120 µs (21 searches)\n"
+                + &format!(
+                    "LATENCY-SAMPLE contention driver_wake 1000 {p99}\nLATENCY-COUNT contention driver_wake 1\n"
+                )
+        };
+        let met = run(&log(700), "driver_wake_p99_searches=7");
+        assert!(
+            met.as_ref().is_ok_and(|s| s.contains("searches met (p99 <= 7 searches of 100 µs alone, 7.0)")),
+            "{met:?}"
+        );
+        let missed = run(&log(701), "driver_wake_p99_searches=7");
+        assert!(
+            missed
+                .as_ref()
+                .is_err_and(|e| e.contains("searches missed (p99 <= 7 searches of 100 µs alone, 7.0)")),
+            "{missed:?}"
+        );
+        // `gate_harts` records the absolute targets above its count, never this one.
+        let ungated = run(&log(701), "gate_harts=0 driver_wake_p99_us=50 driver_wake_p99_searches=7");
+        assert!(ungated.as_ref().is_err_and(|e| e.contains("not gated; searches missed")), "{ungated:?}");
+        // The p50 alone: one sample is both its p50 and its p99.
+        let p50 = run(&log(301), "driver_wake_p50_searches=3");
+        assert!(
+            p50.as_ref()
+                .is_err_and(|e| e.contains("searches missed (p50 <= 3 searches of 100 µs alone, 3.0)")),
+            "{p50:?}"
+        );
+        let no_line = trace(&[(1, 'W', 1, 5), (1, 'K', 1, 5)])
+            + "LATENCY-SAMPLE contention driver_wake 1000 5\nLATENCY-COUNT contention driver_wake 1\n";
+        assert!(
+            run(&no_line, "driver_wake_p99_searches=7")
+                .is_err_and(|e| e.contains("no 'one search alone' line"))
+        );
     }
 
     #[test]
