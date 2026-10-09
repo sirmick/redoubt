@@ -394,6 +394,14 @@ pub struct Boot {
     pub userland: Option<Userland>,
     /// A virtio-net device on QEMU's user-mode network.
     pub net: Option<Net>,
+    /// The machine `./launch --system` boots (`launch.rs`): the bench boots launch's own QEMU
+    /// command line, and alice's login key is one made beside the bundle when it is packed, which
+    /// the sessions log in with.
+    #[serde(default)]
+    pub launch: bool,
+    /// Alice's login key for this pack, set by `--run --system`, not by a case.
+    #[serde(skip)]
+    pub login_key: Option<String>,
     /// SSH sessions to the guest's port 22, run once every `expect` has matched, while the
     /// console is still watched.
     #[serde(default)]
@@ -878,6 +886,18 @@ impl Case {
                     ensure!(
                         boot.net.as_ref().is_some_and(|n| n.forward.contains(&22)),
                         "sessions need net.forward = [22]"
+                    );
+                }
+                if boot.launch {
+                    // launch's command line is booted as it is: nothing a case adds to QEMU's.
+                    let net = boot.net.as_ref().filter(|n| n.forward == [22] && n.peer.is_empty());
+                    ensure!(net.is_some_and(|n| n.poke.is_none()), "launch needs net.forward = [22] alone");
+                    ensure!(
+                        boot.recipe.is_some()
+                            && boot.icount.is_none()
+                            && boot.qemu_seed.is_none()
+                            && !boot.memory,
+                        "launch boots launch's command line: a recipe, no icount, qemu_seed or memory"
                     );
                 }
                 ensure!(

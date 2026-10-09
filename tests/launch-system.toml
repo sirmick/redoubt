@@ -1,0 +1,56 @@
+description = "The machine `./launch --system` boots (GETTING-STARTED.md, \"Try the system\"): the image's bundle, packed from image/boot.toml, on the image's own disk and its read-only userland disk, with the network and port 22 forwarded, at four harts; alice logs in over SSH and gets a prompt from her own VM, which evaluates a marker. launch reads this case for its machine, so what a person boots is what this case boots. The verdicts are init's, sshd's and the steward's lines (rule F)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+recipe = "image/boot.toml"
+# Boot launch's own command line, alice logging in with a key made when the bundle is packed.
+launch = true
+# The machine launch boots: four harts, launch's default.
+smp = [4]
+keep_smp = true
+# The image needs 1 GiB: the principals' budgets, each holding a shell VM's session, do not fit
+# the users budget 256 MiB leaves (docs/kernel/budgets.md).
+memory_mib = 1024
+# One login that boots a shell VM, beside the console session's.
+timeout_secs = 900
+expect = [
+    '^init: started sshd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
+    '^init: started steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{\} at [0-9]+: Login ',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+]
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    '^init: .* (exited|faulted|was killed)',
+    'init: restarted',
+    'EXCEPTION',
+    'sshd: login .*: refused',
+]
+expect_after = [
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{\} at [0-9]+: Login \{ session: [0-9]+, principal: 0, key: [1-9]',
+    '^\[con [0-9a-f]{16}\] sshd: login alice: session [0-9a-f]{16}, labels \[\]$',
+]
+
+[[session]]
+user = "alice"
+steps = [
+    { expect = '\([0-9]+\)> ' },
+    { send = "\"alice-\" <> \"marker\"\n" },
+    { expect = '"alice-marker"' },
+    { exit = 0 },
+]
+
+[userland]
+recipe = "image/userland.toml"
+
+# The image's own disk: the recipe's stages, target/image/stage and target/image/vault, which
+# launch and ./mkimage make with the principals' homes.
+[disk]
+recipe = "image/disk.toml"
+
+[net]
+forward = [22]
+# The image's development host key (keyd's ssh_host seed in image/manifest.json), whose
+# fingerprint launch prints: the sessions refuse any other.
+host_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINBKsjJ0K7SrOhNovUYV5ObQIkq3GgFrr4UgozLJd4c3"

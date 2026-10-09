@@ -230,6 +230,7 @@ expect = ['regex 1', 'regex 2']   # each must match a console line, in this orde
 forbid = ['regex']                # must never match
 poweroff = false             # true: the guest must power off after the last expect
 reporter = "checker"         # the program whose done() is the verdict (rule F)
+launch = false               # true: boot `./launch --system`'s own QEMU command line (one case)
 post_check = "sched_oracle"  # a host-side check of the console after a passing boot
 
 [[input]]                    # typed on the console once a line matches `after`
@@ -1085,7 +1086,10 @@ opens at 80x24, so that `ssh` reports a size change as OpenSSH does for a user; 
 pipes. `resize` sets that terminal's size and signals `ssh` (`SIGWINCH`), which then sends a
 `window-change` if the size changed. The terminal is the client's input and never a verdict. With `net.host_key` set, `ssh` refuses any other host key. Test keys live in
 `tests/keys/`; they are public and marked not for production, and a boot manifest that lists one
-must never ship. The `ssh-loopback` kind runs sessions against a server that `ssh` starts itself
+must never ship. A `launch = true` case (`launch-system`) boots the command line `./launch
+--system` builds, unchanged, and its sessions log in with a key made beside the bundle when it is
+packed, which alice alone holds in that bundle's manifest, as `launch` gives her the checkout's key
+([try the system](../GETTING-STARTED.md#try-the-system)). The `ssh-loopback` kind runs sessions against a server that `ssh` starts itself
 for each session as its `ProxyCommand`, so nothing listens on a port: Redoubt's `sshd` on its host
 platform ([against Redoubt's sshd](#against-redoubts-sshd)), or with `server = "openssh"`
 OpenSSH's server in inetd mode, in a QEMU guest. Its log goes to a file beside the transcripts,

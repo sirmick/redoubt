@@ -148,6 +148,19 @@ impl Image<'_> {
     /// paused with QEMU's gdb stub on :1234 so a host gdb can attach with our symbols.
     /// `print_qemu` echoes the exact command line first; `print_only` stops after printing.
     pub fn run_interactive(&self, debug: bool, print_qemu: bool, print_only: bool) -> Result<()> {
+        let qemu = self.interactive(debug);
+        if print_qemu || print_only {
+            eprintln!("+ {}", shell_line(&qemu));
+            if print_only {
+                return Ok(());
+            }
+        }
+        run_to_end(qemu, self.machine.qemu)
+    }
+
+    /// The command that boots with the console on this terminal, and with `debug`, paused with
+    /// the gdb stub (whose instructions it prints).
+    pub fn interactive(&self, debug: bool) -> Command {
         let mut qemu = self.qemu();
         qemu.arg("-nographic");
         if debug {
@@ -157,20 +170,19 @@ impl Image<'_> {
                 self.loader.display()
             );
         }
-        if print_qemu || print_only {
-            eprintln!("+ {}", shell_line(&qemu));
-            if print_only {
-                return Ok(());
-            }
-        }
-        let status = qemu.status().with_context(|| format!("starting {}", self.machine.qemu))?;
-        anyhow::ensure!(status.success(), "{} exited with {status}", self.machine.qemu);
-        Ok(())
+        qemu
     }
 }
 
+/// Run `qemu` to its end, with this terminal's stdio; it fails if QEMU does.
+pub fn run_to_end(mut qemu: Command, binary: &str) -> Result<()> {
+    let status = qemu.status().with_context(|| format!("starting {binary}"))?;
+    ensure!(status.success(), "{binary} exited with {status}");
+    Ok(())
+}
+
 /// Render a command as a copy-pasteable shell line.
-fn shell_line(cmd: &Command) -> String {
+pub fn shell_line(cmd: &Command) -> String {
     let mut line = shell_quote(&cmd.get_program().to_string_lossy());
     for arg in cmd.get_args() {
         line.push(' ');
@@ -195,7 +207,7 @@ pub type Forward = (u16, u16);
 /// here and QEMU binding them another process could take one; QEMU then fails to start and
 /// the boot fails. That needs a second program asking for ports at that instant; it is not
 /// retried, so it would show as a failure rather than hide.
-fn free_ports(count: usize) -> Result<Vec<u16>> {
+pub fn free_ports(count: usize) -> Result<Vec<u16>> {
     // Hold every listener until all are chosen, so the OS cannot hand out one port twice.
     let listeners =
         (0..count).map(|_| TcpListener::bind("127.0.0.1:0")).collect::<std::io::Result<Vec<_>>>()?;
@@ -219,13 +231,15 @@ pub const DISK_BUS: &str = "virtio-mmio-bus.7";
 pub const USERLAND_BUS: &str = "virtio-mmio-bus.5";
 
 /// QEMU arguments for a case's virtio devices, for one boot: creates the disk afresh at
-/// `disk`, so no boot sees another's writes, and picks free host ports for the forwards. The
-/// userland disk is copied beside it from `userland`, the run's one pack
-/// ([`crate::build::Builder::userland`]), with the case's damage, and attached read-only.
+/// `disk`, so no boot sees another's writes, and forwards from `ports`, the host ports in the
+/// forwards' order, or with none given from free ones. The userland disk is copied beside it from
+/// `userland`, the run's one pack ([`crate::build::Builder::userland`]), with the case's damage,
+/// and attached read-only.
 pub fn virtio_devices(
     boot: &Boot,
     disk: &Path,
     userland: Option<&Staged>,
+    ports: &[u16],
 ) -> Result<(Vec<String>, Vec<Forward>)> {
     let mut args = Vec::new();
     if boot.disk.is_some() || boot.net.is_some() || boot.userland.is_some() {
@@ -296,7 +310,19 @@ pub fn virtio_devices(
         // reach it. A case that needs an outside peer must add one deliberately. ipv6=off: the
         // guest speaks only IPv4, and slirp would otherwise advertise itself as an IPv6 router.
         let mut netdev = "user,id=net0,restrict=on,ipv6=off".to_string();
-        for (guest, host) in net.forward.iter().zip(free_ports(net.forward.len())?) {
+        let hosts = match ports {
+            [] => free_ports(net.forward.len())?,
+            given => {
+                ensure!(
+                    given.len() == net.forward.len(),
+                    "{} host ports for {} forwards",
+                    given.len(),
+                    net.forward.len()
+                );
+                given.to_vec()
+            }
+        };
+        for (guest, host) in net.forward.iter().zip(hosts) {
             netdev += &format!(",hostfwd=tcp:127.0.0.1:{host}-:{guest}");
             forwards.push((*guest, host));
         }
@@ -546,8 +572,11 @@ impl Console {
 }
 
 /// Boot `image` and judge it by `boot`. `forwards` are the host ports from `virtio_devices`.
+/// `launched`: launch's command line for `image`, booted as it is, and the key its sessions log
+/// in with (`launch.rs`).
 pub fn run(
     image: &Image,
+    launched: Option<(Command, &Path)>,
     boot: &Boot,
     workspace: &Path,
     forwards: &[Forward],
@@ -578,17 +607,21 @@ pub fn run(
         .map(|pid| Regex::new(&format!(r"^\[server\] done: reported by pid {pid};")))
         .transpose()?;
 
-    let mut qemu = image.qemu();
+    let (mut qemu, identity) = match launched {
+        Some((qemu, identity)) => (qemu, Some(identity)),
+        None => (image.qemu(), None),
+    };
     let qmp_path = qmp_socket();
     // Declared before the guest, so dropped after QEMU is reaped.
     let _qmp = boot.memory.then(|| Removed(qmp_path.clone()));
     if boot.memory {
         qemu.args(["-qmp", &format!("unix:{},server=on,wait=off", qmp_path.display())]);
     }
-    qemu.args(["-display", "none", "-monitor", "none", "-serial", "stdio"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    // launch's line has the console on stdio already (`-nographic`).
+    if identity.is_none() {
+        qemu.args(["-display", "none", "-monitor", "none", "-serial", "stdio"]);
+    }
+    qemu.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut guest = Reaped(qemu.spawn().with_context(|| format!("starting {}", machine.qemu))?);
     let stdin = guest.0.stdin.take().unwrap();
     let stdout = guest.0.stdout.take().unwrap();
@@ -644,7 +677,7 @@ pub fn run(
         }
     }
     if !boot.session.is_empty() {
-        if let Some(why) = run_sessions(&mut console, boot, workspace, forwards, log, deadline)? {
+        if let Some(why) = run_sessions(&mut console, boot, workspace, forwards, identity, log, deadline)? {
             return Ok(Verdict::Fail(why));
         }
     }
@@ -824,13 +857,14 @@ fn run_sessions(
     boot: &Boot,
     workspace: &Path,
     forwards: &[Forward],
+    identity: Option<&Path>,
     log: &Path,
     deadline: Instant,
 ) -> Result<Option<String>> {
     let logs = log.parent().context("log has no directory")?;
     let prefix = log.file_stem().context("log has no name")?.to_string_lossy();
     let host_key = boot.net.as_ref().and_then(|net| net.host_key.as_deref());
-    let server = ssh::Server::Guest { forwards, host_key };
+    let server = ssh::Server::Guest { forwards, host_key, identity };
     let abort = AtomicBool::new(false);
     let mut after = After::new(&boot.expect_after)?;
     let failed: Option<String> = std::thread::scope(|scope| -> Result<Option<String>> {
@@ -944,7 +978,7 @@ mod tests {
         let call = CALLS.fetch_add(1, Ordering::Relaxed);
         let disk =
             std::env::temp_dir().join(format!("testbench-qemu-test-{}-{call}.img", std::process::id()));
-        let (args, _) = virtio_devices(&boot(devices), &disk, None).expect("device arguments");
+        let (args, _) = virtio_devices(&boot(devices), &disk, None, &[]).expect("device arguments");
         std::fs::remove_file(&disk).ok();
         std::fs::remove_dir_all(disk.with_extension("peers")).ok();
         args
@@ -1134,7 +1168,7 @@ mod tests {
         let staged = Staged { objects: stage, image: image.clone(), verified };
         let disk = dir.join("boot.img");
         let case = "[disk]\nsize_kib = 64\n[userland]\nrecipe = \"image/userland.toml\"\nflip = \"Elixir.Version.beam\"\n";
-        let (args, _) = virtio_devices(&boot(case), &disk, Some(&staged)).unwrap();
+        let (args, _) = virtio_devices(&boot(case), &disk, Some(&staged), &[]).unwrap();
         let drive = format!(
             "if=none,format=raw,id=disk1,readonly=on,file={}",
             disk.with_extension("userland.img").display()
@@ -1161,7 +1195,7 @@ mod tests {
     fn a_poke_gets_a_udp_forward() {
         let case = "[net]\nforward = [8000]\n[net.poke]\nport = 47000\npayload = 'x'\nafter = 'go'\n";
         let disk = std::env::temp_dir().join(format!("testbench-qemu-poke-{}.img", std::process::id()));
-        let (args, forwards) = virtio_devices(&boot(case), &disk, None).expect("device arguments");
+        let (args, forwards) = virtio_devices(&boot(case), &disk, None, &[]).expect("device arguments");
         let netdev = args.iter().find(|a| a.starts_with("user,")).expect("a user-mode netdev");
         let (guest, host) = forwards[1];
         assert_eq!((forwards.len(), forwards[0].0, guest), (2, 8000, 47000));
