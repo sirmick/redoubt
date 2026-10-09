@@ -110,7 +110,7 @@ struct Publish {
 impl Around<Files> for Publish {
     fn call(&mut self, nine: &mut NineServer<Files>, request: Request, _: u64) {
         self.keys.entry(request.caller.account).or_insert(nine.charge_of(&request.caller).0);
-        let _ = nine.serve_with(request, |_, r| refuse_malformed(r));
+        let _ = nine.serve_with(request, |_, r| refuse_malformed(r).map(|()| None));
     }
 
     /// Published before each wait, after the deadlines, so what the last event or deadline did is

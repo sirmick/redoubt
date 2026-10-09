@@ -16,6 +16,8 @@
 //!   time, parked by the server until there is typing, and one write: the bytes the VM writes wait here, in
 //!   order, for the write before them, since the console's share is a page a badge and a write is a page. A
 //!   write the console answers `busy` goes again `RETRY_US` later, not at once.
+//! - **The console's size** is asked of its server afresh each time ([`Platform::console_size`]), and its
+//!   changes come from one thread that keeps a `resize` call out there ([`resize`]).
 //! - **Time** is the kernel's microseconds since boot, and `system_time_us` is `None`: there is no wall clock
 //!   until M6 (persist, install, share) brings one. **Randomness** is the kernel's.
 //!
@@ -35,6 +37,7 @@ pub mod io;
 mod jobs;
 pub mod pack;
 mod pool;
+mod resize;
 mod serve;
 pub mod system;
 pub mod userland;
@@ -96,6 +99,8 @@ pub struct Redoubt {
     console: Arc<Console>,
     io: Io,
     cons: ConsoleIo,
+    /// The console's changes of size, once reading has begun.
+    resizes: resize::Resizes,
     /// The namespace's files, open files and file operations.
     files: files::Table,
     /// The system calls' handles and events ([`system`]).
@@ -307,6 +312,7 @@ impl Redoubt {
             console,
             io,
             cons,
+            resizes: resize::Resizes::default(),
             files: files::Table::new(ns),
             sys,
             report_io: startup.args().any(|arg| arg == REPORT_IO),
@@ -343,6 +349,8 @@ impl Redoubt {
         }
         self.cons.started = true;
         self.cons.read(&mut self.io);
+        let console = self.console.file().connection().endpoint().handle();
+        self.resizes.start(self.io.wake(), console);
     }
 
     /// `file` from the module source, for `name`: one the source refuses is said on the console,
@@ -388,6 +396,7 @@ impl Redoubt {
         self.cons.write(&mut self.io);
         self.files.pump(&mut self.io);
         while let Some(delivery) = self.io.other() {
+            let Some(delivery) = self.resizes.deliver(delivery) else { continue };
             // A wake-up of no thread of the platform's: what it brought is closed.
             if let Some(other) = self.sys.deliver(self.io.wake(), delivery) {
                 for handle in other.handles.as_slice().iter().flatten() {
@@ -469,7 +478,8 @@ impl Platform for Redoubt {
         // Anything that arrived before this idle is handed over now: a wait would sleep on it
         // until some other wake-up came, if one ever did. Console input counts only while a
         // process reads it: with none, the VM would spin on what nobody takes.
-        let console = self.cons.listening && (!self.cons.input.is_empty() || self.cons.eof_pending);
+        let console = self.cons.listening
+            && (!self.cons.input.is_empty() || self.cons.eof_pending || self.resizes.pending());
         if console || self.files.has_finished() || self.sys.has_events() {
             return;
         }
@@ -507,6 +517,9 @@ impl Platform for Redoubt {
 
     /// Asked afresh each time, never cached: the console's size can change.
     fn console_size(&mut self) -> Option<(u16, u16)> { self.console.size(&mut self.lend).ok().flatten() }
+
+    /// The newest size the console changed to since the VM last asked: the resize thread's word.
+    fn console_resized(&mut self) -> Option<(u16, u16)> { self.resizes.take() }
 
     /// The shell's first prompt is drawn: where a user sees the box ready, the end of the span the
     /// boot profile times (`boot-stats`, docs/userland/beamlet.md, "beamlet on Redoubt").

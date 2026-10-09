@@ -271,6 +271,7 @@ Everything the VM gets from outside comes through the `Platform` trait
 | `system_time_us` | wall-clock time | required; may answer `None` |
 | `console_write`, `console_read`, `console_size`, `prompt_drawn` | the `user` I/O device; input never blocks; the shell's driver says when its first prompt is drawn | no input; size unknown; nothing |
 | `console_listening` | told whether a process reads the console; with none, input held is no reason for `idle` to return | holds nothing |
+| `console_resized` | the console's new size since the last call, the newest only; the VM sends it to the console's reader as `{beamlet_console_resize, {Cols, Rows}}` ahead of input | never changes |
 | `random` | random bytes from a cryptographic source; on failure the VM raises rather than use a weaker source | required |
 | `load_module`, `load_app`, `module_file` | a system `.beam` or `.app` lookup answers found bytes, an absent name or a refused object; `module_file` names a loaded module | applications absent |
 | `files` | a file system, as `prim_file` sees it | none: `file` calls fail with `enotsup` |
@@ -384,7 +385,7 @@ checks it: each test runs on BEAM and on beamlet and the printed results must be
 
 ### The console on a host
 
-<details><summary>Status: built · partly tested: host only; a change of the terminal's size is not delivered · tested (8)</summary>
+<details><summary>Status: built · partly tested: host only; a change of the terminal's size is not delivered on a host · tested (9)</summary>
 
 - host:beamlet::the_terminal_is_raw_while_the_vm_reads_it_and_restored_at_a_normal_end
 - host:beamlet::the_terminal_is_restored_when_the_run_ends_in_an_exception
@@ -394,6 +395,7 @@ checks it: each test runs on BEAM and on beamlet and the printed results must be
 - host:beamlet-vm::a_second_console_subscription_is_refused_and_the_first_reader_keeps_the_console
 - host:beamlet-vm::the_console_is_free_once_its_reader_has_exited
 - host:beamlet-vm::the_console_size_is_the_platforms_answer_asked_at_each_call
+- host:beamlet-vm::a_change_of_the_console_s_size_reaches_its_reader_once
 
 </details>
 
@@ -403,16 +405,17 @@ and restores it on every exit: a result, an exception, a halt, a signal, a panic
 ([`userland/otp/cli/src/tty.rs`](../../userland/otp/cli/src/tty.rs)). Output processing stays
 on, so a line written past the shell's encoder still lands where a line does on a host; the
 encoder ends its lines with CR LF itself, as it must on Redoubt. `console_size` is the
-terminal's size, read afresh at each call. A change of size is not delivered; the shell reads the
-size at each prompt
-([the shell](shell.md#paste-scrolling-a-plainer-terminal-and-the-consoles-size)).
+terminal's size, read afresh at each call. A change of the terminal's size is not delivered on a
+host (`console_resized` answers nothing there); the VM hands a platform's change to the console's
+reader, as on Redoubt, and the shell reads the size at each prompt
+([the shell](shell.md#the-consoles-size)).
 Console input goes to one Erlang process, the shell's driver, which takes it with
 `beamlet:console_subscribe/0`; a second subscription is refused, so no code run at the prompt
 can take the keyboard, or the interrupt key with it, from the driver.
 
 ### The console, the clock and randomness
 
-<details><summary>Status: built · partly tested: its tests run on the host, on the fake kernel, against a console server that keeps `consoled`'s protocol with a host terminal for its device; it runs in a boot in bench:beamlet-boot and bench:beamlet-console · tested (13)</summary>
+<details><summary>Status: built · partly tested: its tests run on the host, on the fake kernel, against a console server that keeps `consoled`'s protocol with a host terminal for its device; it runs in a boot in bench:beamlet-boot and bench:beamlet-console · tested (14)</summary>
 
 - host:beamlet-redoubt::writes_reach_the_screen
 - host:beamlet-redoubt::a_long_write_reaches_the_screen_whole_and_in_order
@@ -421,7 +424,8 @@ can take the keyboard, or the interrupt key with it, from the driver.
 - host:beamlet-redoubt::typing_reaches_the_vm_then_its_end
 - host:beamlet-redoubt::a_read_waits_for_typing_without_holding_the_vm
 - host:beamlet-redoubt::an_end_of_input_already_waiting_ends_the_idle_that_takes_it
-- host:beamlet-redoubt::a_console_without_consol_has_no_size
+- host:beamlet-redoubt::the_console_s_size_is_its_server_s
+- host:beamlet-redoubt::a_change_of_the_console_s_size_reaches_the_vm_once_reading_has_begun
 - host:beamlet-redoubt::idling_with_a_deadline_returns_by_it
 - host:beamlet-redoubt::after_the_console_ends_idling_still_waits_for_its_deadline
 - host:beamlet-redoubt::there_is_no_wall_clock
@@ -443,7 +447,9 @@ reaches the console before its last line, waiting at most 2 s. After the console
 still sleeps until its deadline. When the process reading the console exits, the VM says so
 (`console_listening`) and no read goes out until another process reads it: typing waits at the
 console, what came in before is held for the next reader, and `idle` does not return for it, so a
-VM with nobody at the console sleeps rather than spins. There is no wall clock, so
+VM with nobody at the console sleeps rather than spins. The console's size is asked of its server
+at each call, and from the first read one thread keeps a `resize` out there and hands each change
+to the VM (`console_resized`), whose `idle` returns for it. There is no wall clock, so
 `system_time_us` is `None`.
 `./shell --fake` runs the shell on it.
 - **The size is still the VM's own call.** It is a typed call, which no hub carries, so a console
@@ -465,7 +471,8 @@ program adapters remain planned.
 | `monotonic_us`, `idle` | the kernel's `time_now` (microseconds since boot); `idle` is a `receive` with a timeout ([timer](../kernel/timer.md)) |
 | `system_time_us` | `None` until wall-clock time and time sync exist, in M6 (persist, install, share); the VM then counts system time from the Unix epoch at boot, so the logger and anything else that stamps a time works and a date says 1970. A check that a date has begun (a certificate's `notBefore`) then fails, a check only that one has not passed (a token's expiry) passes, and times from two boots cannot be ordered |
 | `console_write`, `console_read` | the client library's `console`: writes and reads on the `/dev/cons` connection; a read with nothing to read is parked by the server, so input arrives as a completion and `Eof` means the connection ended ([consoled](../servers/consoled.md)) |
-| `console_size` | a fresh `consol` `size` call on every query, never cached; a server that does not serve it refuses the call and the answer is `None` |
+| `console_size` | a fresh `consol` `size` call on every query, never cached; a server that does not serve it, or a `consoled` its manifest does not size, refuses the call and the answer is `None` |
+| `console_resized` | one thread, started by the first console read, keeps a `consol` `resize` call out at the console's server and calls again for each change; it stores the newest size and wakes the VM, whose `idle` returns for it. On `sshd`'s channels a change of the window's size arrives so, until the channel ends: `sshd` answers a waiting call then and refuses the next, and the thread ends; `consoled` refuses the call, since a multiplexed session's completion call fills a connection's one parked call there, and its UART never resizes anyway: the thread ends, and the console never changes size |
 | `prompt_drawn` | nothing, but in a `boot-stats` build the line `beamlet: first prompt drawn [t=N]`, the end of the span the boot profile times |
 | `random` | the kernel's `random` call |
 | `load_module`, `load_app` | takes the requested file from the boot pack, if the pack holds it (below); otherwise reads the requested file (`Elixir.Enum.beam`, `elixir.app`) whole from the root of the verified userland volume, through its `erofsd` (`erofsd:system`), which reads it through its `verityd`; a reader of the volume trusts that `erofsd` and `verityd` ([R76 (verified volumes)](../servers/verityd.md#r76-verified-volumes)) in place of checking each object itself. A name `erofsd` answers `not_found` to at the open is `Absent`; any other refusal at the open or on the read is `Refused`, with one console diagnostic naming the file and the error's name and no other source tried; the bytes read whole are `Found` ([R75 (verified userland)](../kernel/boot.md#r75-verified-userland)). From M6 (persist, install, share), the principal's profile joins the lookup ([packages](packages.md)), never the session's writable namespace. This decides which module a name finds, not what code may run |

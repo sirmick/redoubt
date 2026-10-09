@@ -34,6 +34,8 @@ impl Protocol for Example {
 struct Store {
     stored: Vec<u8>,
     kept: Vec<Handle>,
+    /// Whether a `grant`, a request that carries handles, waits.
+    grants_wait: bool,
 }
 
 impl TypedServer<Example> for Store {
@@ -67,6 +69,15 @@ impl TypedServer<Example> for Store {
                 Ok(Answer { reply: Reply::Grant(GrantReply {}), handles, close_after_reply: true })
             }
             _ => Err(ErrorCode::NotFound),
+        }
+    }
+
+    /// A `named` called "wait" waits, and so does a `grant` when `grants_wait`.
+    fn waits(&mut self, _: &Caller, request: &Message<'_>) -> bool {
+        match request {
+            Message::Named(Named { name, .. }) => *name == "wait",
+            Message::Grant(_) => self.grants_wait,
+            _ => false,
         }
     }
 }
@@ -190,4 +201,37 @@ fn random_words_never_panic() {
         let handles = ReceivedHandles::from_slice(&all[..(x >> 40) as usize % 4]).unwrap();
         let _ = answer::<Example, Store>(&mut store, &caller(), &words, &handles, &mut buf);
     }
+}
+
+#[test]
+fn a_waiting_request_comes_back_unanswered_with_its_lend_as_it_came() {
+    let mut store = Store::default();
+    let mut buf = vec![0u8; 64];
+    let words = Message::Named(Named { id: 7, name: "wait" }).encode(&mut buf).unwrap();
+    let before = buf.clone();
+    let none = ReceivedHandles::new();
+    let waited = answer_or_wait::<Example, Store>(&mut store, &caller(), &words, &none, &mut buf);
+    assert!(waited.is_none(), "a waiting request is not answered");
+    assert_eq!(buf, before, "its lend is as it came");
+    assert_eq!(Message::decode(&words, &buf, 0), Ok(Message::Named(Named { id: 7, name: "wait" })));
+    // On a path that cannot hold it, it is answered malformed rather than left hanging.
+    let outcome = answer::<Example, Store>(&mut store, &caller(), &words, &none, &mut buf);
+    assert_eq!(outcome.words, crate::server::MALFORMED);
+    // Any other request is answered as before.
+    let (buf, words, _, _) = round_trip(&mut store, Message::Named(Named { id: 0x100, name: "x" }), &[], 64);
+    assert_eq!(Reply::decode(5, &words, &buf, 0), Ok(Ok(Reply::Named(NamedReply { id: 0x1ff }))));
+}
+
+#[test]
+fn a_waiting_request_that_carries_handles_is_malformed_and_they_close() {
+    let mut store = Store { grants_wait: true, ..Store::default() };
+    let mut buf = vec![0u8; 64];
+    let words = Message::Grant(Grant { pages: 1 }).encode(&mut buf).unwrap();
+    let handles = ReceivedHandles::from_slice(&[Some(h(5)), Some(h(6))]).unwrap();
+    let outcome = answer_or_wait::<Example, Store>(&mut store, &caller(), &words, &handles, &mut buf)
+        .expect("answered, not held");
+    assert_eq!(outcome.words, crate::server::MALFORMED);
+    assert!(outcome.send.as_slice().is_empty());
+    assert_eq!(outcome.close.as_slice(), &[h(5), h(6)], "a parked call never holds the caller's handles");
+    assert!(store.kept.is_empty(), "the server never saw them");
 }

@@ -165,7 +165,7 @@ impl<N: Netif, E: Entropy> Ipd<N, E> {
     fn serve(&mut self, request: Request, now: u64) {
         let _ = self.nine.fs.take_wait();
         open_sockets(&mut self.nine, &request.caller, &request.words);
-        let served = self.nine.serve_parking(request, serve_own);
+        let served = self.nine.serve_parking(request, |n, r| serve_own(n, r).map(|()| None));
         close_sockets(&mut self.nine);
         match served {
             Ok(None) | Err(_) => self.current = None,

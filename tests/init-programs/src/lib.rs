@@ -127,7 +127,8 @@ pub fn park() -> ! {
 /// The console `init` gave the program, and the lend its calls use.
 pub struct Out {
     pub lend: Lend,
-    console: Console,
+    /// For the console's other calls.
+    pub console: Console,
 }
 
 impl Out {

@@ -36,6 +36,11 @@ pub trait Platform: crate::sync::Sendable {
     /// (docs/USERLAND-API.md, "The console and the `Platform` contract"; answer 162).
     fn console_size(&mut self) -> Option<(u16, u16)> { None }
 
+    /// The console's new size, if it has changed since the last call: the newest only, as
+    /// `(cols, rows)`. Must not block, as [`Platform::console_read`]; the VM hands it to the
+    /// console's reader with its input. The default is a console that never changes size.
+    fn console_resized(&mut self) -> Option<(u16, u16)> { None }
+
     /// The shell's driver has drawn its first prompt: the console is read, the banner is up, and
     /// a line is waited for. A platform that times a boot says so (`beamlet:prompt_drawn/0`); the
     /// default is nothing.

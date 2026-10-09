@@ -18,6 +18,7 @@ use crate::handle::Endpoint;
 use crate::ipc::{Delivery, Event, Request};
 
 pub mod admit;
+pub mod consol;
 pub mod label;
 pub mod minted;
 pub mod ninep;

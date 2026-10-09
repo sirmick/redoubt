@@ -1,0 +1,38 @@
+description = "consoled serves consol beside /dev/cons (servers/consoled.md, \"The consol protocol\"; servers/serving.md, \"Parking a typed call\"): its size is the manifest's size=132,43, and a resize, which a UART never answers, is held until its caller gives up, then freed: three in turn from one connection, whose share of consoled's parked calls holds one, are each held rather than refused, and size still answers after them. The values are the server's answers, which consol-client reports with its verdict"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The real init, the six servers, consol-client, and the image's six servers with consoled sized
+# 132 by 43 and consol-client added.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-bootfsd", bin = "bootfsd" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-netd", bin = "netd" },
+    { package = "redoubt-ipd", bin = "ipd" },
+    { package = "redoubt-init-programs", bin = "consol-client" },
+]
+timeout_secs = 60
+expect = [
+    '^init: started consol-client, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] consol-client: size 132 by 43$',
+    '^\[con [0-9a-f]{16}\] consol-client: 3 resize calls waited and were freed$',
+    '^\[con [0-9a-f]{16}\] consol-client TEST PASSED$',
+]
+forbid = [
+    'init: refused the boot',
+    '^init: .* (exited|faulted|was killed)',
+    'init: restarted',
+]
+reporter = "consol-client"
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/init/consol.json" }
+
+[disk]
+size_kib = 4096
+partitions = 1
+
+[net]

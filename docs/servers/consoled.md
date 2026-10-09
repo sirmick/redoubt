@@ -17,7 +17,7 @@ channel by [`sshd`](sshd.md), not here.
 
 ### `/dev/cons`
 
-<details><summary>Status: built · partly tested: attacked with a fake UART against the runtime's fake kernel, and in a boot only written to; a `consol` opcode is only sent to see it refused, and no test writes as a labelled caller · tested (12)</summary>
+<details><summary>Status: built · partly tested: attacked with a fake UART against the runtime's fake kernel, and in a boot only written to; no test writes as a labelled caller · tested (12)</summary>
 
 - bench:r4-host-tests
 - bench:consoled-build
@@ -52,11 +52,11 @@ with nothing below it.
 - **What it refuses:** opening with `OEXEC` or `OTRUNC`, walking, creating and removing, and a
   write from a labelled caller, through the label check against the console's empty label set
   ([R69 (no write down onto the console)](#r69-no-write-down-onto-the-console)).
-- **No typed protocol of its own.** `consoled` serves 9P and `ninep_common` only; the `consol`
-  opcodes, and any other typed opcode, are answered `malformed` ([below](#the-consol-protocol)).
-  That reply does not close the handles the request carried, a departure from the serving
-  library's rule that unasked handles are closed (Residual risks).
-- **Admission:** at most 2 parked calls, `MAX_THREADS` consoles' fids, `MAX_THREADS` connections,
+- **Beside 9P and `ninep_common`, `consol`'s `size` and `resize`** ([below](#the-consol-protocol)).
+  Any other typed opcode, `ended` sent as a call among them, is answered `malformed`, and the
+  handles it carried are closed.
+- **Admission:** at most 2 parked calls (waiting reads and `resize` calls together),
+  `MAX_THREADS` consoles' fids, `MAX_THREADS` connections,
   and 80 multiplexed requests and 2 pages they brought
   ([serving](serving.md#multiplexed-connections)) per (account, label set), across at most
   `buckets=N` of those, sized to fit its 2 MiB budget; a block with no `buckets=N`, or one the
@@ -86,22 +86,48 @@ Status: built · tested: host:redoubt-consoled::a_device_stuck_on_data_ready_doe
 
 ### The `consol` protocol
 
-Status: planned · M2 (usable shell)
+<details><summary>Status: built · tested (8)</summary>
+
+- bench:consol-size
+- bench:steward-ssh-resize
+- host:redoubt-consoled::consol_size_is_the_argument_and_a_resize_waits_until_its_caller_gives_up
+- host:redoubt-consoled::a_console_with_no_size_refuses_consol
+- host:redoubt-consoled::a_refused_typed_request_leaves_no_handle_behind
+- host:redoubt-consoled::a_console_with_no_device_does_not_start
+- host:redoubt-sshd::consol_size_is_the_pty_s_and_a_resize_is_due_when_it_changes
+- host:redoubt-client::a_session_writes_and_reads_the_console
+
+</details>
 
 Every server of a `/dev/cons` (`consoled`, and `sshd` for each channel) also serves `consol` on
-the same endpoint:
+the same endpoint, through the runtime's `server::consol`:
 
-- **`size`** answers the console's columns and rows at once. `consoled` takes its size as an argument
-  (`cols,rows`, default 80 by 24); `sshd` answers from the channel's pty request.
+- **`size`** answers the console's columns and rows at once. `consoled` takes its size from its
+  arguments, `size=COLS,ROWS`, each from 1 to 1,024; a malformed size, or two, and it does not
+  start. A UART cannot know the size of the terminal at its far end, so when the manifest names
+  none `consoled` does not guess: it refuses `size` and `resize` (`malformed`), and its clients'
+  console is of unknown size, as the image's is. `sshd` answers from the channel's pty request
+  ([sshd](sshd.md#sessions-over-ssh)).
 - **`resize`** answers the size when it next changes: it parks like a read, with no deadline, and is
-  freed when its caller gives up ([parking a typed call](serving.md#parking-a-typed-call)). A client
-  learns the size of its own console only; another channel's waiter stays parked and learns nothing.
+  freed when its caller gives up ([parking a typed call](serving.md#parking-a-typed-call)). A UART
+  has no window, so on `consoled` a `resize` waits until its caller gives up. A client learns the
+  size of its own console only; another channel's waiter stays parked and learns nothing.
+- **What a waiter costs.** A waiting `resize` is a parked call of its caller's, in its bucket and
+  share, beside its waiting reads and, on a multiplexed connection, its session, which holds one
+  of the share too ([multiplexed connections](serving.md#multiplexed-connections)). On
+  `consoled` a lone connection's share is one of the bucket's 2: a connection with a `resize`
+  waiting has no room for a waiting read, and one with a multiplexed session, as the shell's VM
+  has, has no room for a `resize`, so the VM's is refused. On `sshd` the share is two, the
+  session's and one waiter's, and the VM's reads and writes wait inside its session, so its
+  `resize` starves nothing of its own. One more is refused at once (`malformed`), so however many
+  waiters a client asks for, what they cost the server is the bucket's fixed slots and their
+  admitted cost, never memory beyond them.
+- **`ended`** is the steward's word that a minted console's session is over
+  ([started by `init`](#started-by-init)); sent as a call it is malformed.
 
 The table: [libs/wire/tables/consol.md](../../libs/wire/tables/consol.md).
 
 {{#include ../../libs/wire/tables/consol.md:tables}}
-
-**Open:** how a typed server says "wait" (open on [the serving library](serving.md#parking-a-typed-call)).
 
 ### Started by `init`
 
@@ -182,15 +208,16 @@ Status: built · partly tested: the restart claims are read from the code, not a
 
 - **No UART or interrupt handle:** `consoled` exits with a code before serving.
 - **A reader gives up:** its parked read is answered and freed at once.
-- **`consoled` restarts:** held input is lost, parked reads get `Dead`, and clients ask for fresh
-  connections.
+- **`consoled` restarts:** held input is lost, parked reads and `resize` calls get `Dead`, and
+  clients ask for fresh connections.
 
 ## Residual risks
 
 - **One keyboard, one queue.** A client reading `/dev/cons` takes input another was waiting for; a
   session that must not share a console gets its own from `sshd`.
-- **A parked read has no deadline.** It holds one of its caller's open calls and one of `consoled`'s
-  admission slots until a key arrives or its caller gives up.
+- **A parked read, or `resize`, has no deadline.** It holds one of its caller's open calls and one
+  of `consoled`'s admission slots until a key arrives (for a `resize`, never) or its caller gives
+  up.
 - **Anyone with a connection reads the console.** What is typed on the physical console is visible to
   every holder of a `consoled` connection.
 

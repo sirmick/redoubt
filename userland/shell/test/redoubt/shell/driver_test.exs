@@ -474,4 +474,38 @@ defmodule Redoubt.Shell.DriverTest do
     type(driver, "exit\r")
     ends(driver)
   end
+
+  test "a resize with no screen in front lays the line out again and is the console's size from then" do
+    {driver, terminal} = start()
+    type(driver, "1 + 1")
+    terminal = screen(terminal, &(Terminal.text(&1) =~ "1 + 1"))
+    send(driver, {:beamlet_console_resize, {100, 30}})
+    # The line is drawn again, where it was.
+    assert_receive {:drawn, redraw}, 5_000
+    assert redraw =~ "1 + 1"
+    terminal = terminal |> Terminal.feed(redraw) |> screen()
+    assert row(terminal, 0) =~ ~r/\(1\)> 1 \+ 1$/
+    # The size a screen would be given is the new one.
+    send(driver, {:redoubt_screen, :size, self()})
+    assert_receive {:redoubt_screen, :size, {100, 30}}, 5_000
+    refute_received {:resize, _, _}
+    type(driver, "\r")
+    terminal = screen(terminal)
+    assert row(terminal, 1) == "2"
+    type(driver, "exit\r")
+    ends(driver)
+  end
+
+  test "a resize with a screen in front is the screen's, as {:resize, cols, rows}" do
+    {driver, terminal} = start()
+    _terminal = screen(terminal)
+    # This test's process is the screen.
+    send(driver, {:redoubt_screen, :open, self(), :interrupt})
+    assert_receive {:redoubt_screen, :opened, @cols, @rows}, 5_000
+    send(driver, {:beamlet_console_resize, {100, 30}})
+    assert_receive {:resize, 100, 30}, 5_000
+    send(driver, {:redoubt_screen, :close, self()})
+    type(driver, "exit\r")
+    ends(driver)
+  end
 end

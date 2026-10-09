@@ -4,7 +4,9 @@
 //! The generated modules share a shape (`Message::decode`, `Reply::encode`, `ErrorCode::encode`)
 //! but no trait, so a server names its protocol by implementing [`Protocol`], a few lines.
 //! Typed messages are served as calls; a protocol's one-way messages (`send`) are few enough that
-//! each server decodes them itself.
+//! each server decodes them itself. A call the server says waits ([`TypedServer::waits`]) is
+//! handed back by [`serve_parking`] to be parked and answered later with [`reply`]
+//! (servers/serving.md, "Parking a typed call").
 //!
 //! ```
 //! use redoubt_rt::abi::{Handle, Handles, ReceivedHandles};
@@ -117,6 +119,12 @@ pub trait TypedServer<P: Protocol> {
         request: P::Request<'_>,
         handles: &[Handle],
     ) -> Result<Answer<P::Reply<'s>>, P::Error>;
+
+    /// Whether `request` waits rather than being answered now (servers/serving.md, "Parking a
+    /// typed call"): [`serve_parking`] hands such a request back unanswered, for the server to
+    /// park and answer later with [`reply`]. Only a request that carries no handles may wait.
+    /// None does by default.
+    fn waits(&mut self, _caller: &Caller, _request: &P::Request<'_>) -> bool { false }
 }
 
 /// What to do with one request: reply with `words` and `send`, then close `close`.
@@ -150,7 +158,8 @@ pub(crate) fn carried(request: &Request) -> Handles {
 }
 
 /// The outcome of a request; a buffer-shaped reply's fields are written into `buf`. Makes no
-/// system call: [`serve_call`] wraps it.
+/// system call: [`serve_call`] wraps it. A request the server says waits is answered malformed:
+/// this path cannot hold it ([`answer_or_wait`] can).
 pub fn answer<P: Protocol, S: TypedServer<P>>(
     server: &mut S,
     caller: &Caller,
@@ -158,18 +167,42 @@ pub fn answer<P: Protocol, S: TypedServer<P>>(
     handles: &ReceivedHandles,
     buf: &mut [u8],
 ) -> Outcome {
+    answer_or_wait::<P, S>(server, caller, words, handles, buf).unwrap_or(Outcome {
+        words: super::MALFORMED,
+        send: Handles::new(),
+        close: Handles::new(),
+    })
+}
+
+/// [`answer`], except that a request the server says [`TypedServer::waits`] is not answered:
+/// `None`, with `buf` as it came, so the request decodes the same when it is served again. One
+/// that waits while carrying handles is malformed instead, its handles closed, so a parked call
+/// never holds a handle of its caller's.
+pub fn answer_or_wait<P: Protocol, S: TypedServer<P>>(
+    server: &mut S,
+    caller: &Caller,
+    words: &Words,
+    handles: &ReceivedHandles,
+    buf: &mut [u8],
+) -> Option<Outcome> {
     let none = Handles::new();
     // A request that does not decode, whose reply does not fit the lend, or missing a handle
     // (revoked on its way: R10) is malformed: status 1 in every protocol (servers/wire.md).
     let malformed = super::MALFORMED;
     let handles = match present(handles) {
         Ok(handles) => handles,
-        Err(present) => return Outcome { words: malformed, send: none, close: present },
+        Err(present) => return Some(Outcome { words: malformed, send: none, close: present }),
     };
     let Ok(request) = P::decode(words, buf, handles.as_slice().len()) else {
-        return Outcome { words: malformed, send: none, close: handles };
+        return Some(Outcome { words: malformed, send: none, close: handles });
     };
-    match server.handle(caller, request, handles.as_slice()) {
+    if server.waits(caller, &request) {
+        if handles.as_slice().is_empty() {
+            return None;
+        }
+        return Some(Outcome { words: malformed, send: none, close: handles });
+    }
+    Some(match server.handle(caller, request, handles.as_slice()) {
         Ok(answer) => match P::encode_reply(&answer.reply, buf) {
             Ok(words) => {
                 let close = if answer.close_after_reply { answer.handles } else { none };
@@ -178,7 +211,7 @@ pub fn answer<P: Protocol, S: TypedServer<P>>(
             Err(_) => Outcome { words: malformed, send: none, close: answer.handles },
         },
         Err(code) => Outcome { words: P::error_words(code), send: none, close: none },
-    }
+    })
 }
 
 /// Answers a `call` of protocol `P`, replies, and closes what the outcome says to close.
@@ -186,6 +219,27 @@ pub fn serve_call<P: Protocol, S: TypedServer<P>>(server: &mut S, mut request: R
     let (caller, words, handles) = (request.caller, request.words, request.handles);
     let outcome = answer::<P, S>(server, &caller, &words, &handles, request.lend());
     finish(request, &outcome).map(|_| ())
+}
+
+/// [`serve_call`], except that a request the server says [`TypedServer::waits`] is not answered:
+/// it comes back with its words and lend as they came, for the server to park
+/// ([`super::parked::Parked`]) and answer later with [`reply`].
+pub fn serve_parking<P: Protocol, S: TypedServer<P>>(
+    server: &mut S,
+    mut request: Request,
+) -> Result<Option<Request>, Error> {
+    let (caller, words, handles) = (request.caller, request.words, request.handles);
+    match answer_or_wait::<P, S>(server, &caller, &words, &handles, request.lend()) {
+        Some(outcome) => finish(request, &outcome).map(|_| None),
+        None => Ok(Some(request)),
+    }
+}
+
+/// Answers a call [`serve_parking`] handed back, and the server parked since, with `reply`,
+/// written into the call's own lend. A reply that does not fit the lend is malformed.
+pub fn reply<P: Protocol>(mut request: Request, reply: &P::Reply<'_>) -> Result<ReplyOutcome, Error> {
+    let words = P::encode_reply(reply, request.lend()).unwrap_or(super::MALFORMED);
+    finish(request, &Outcome { words, send: Handles::new(), close: Handles::new() })
 }
 
 /// Replies to `request` as `outcome` says, and closes what it says to close: handles that do not

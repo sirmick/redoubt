@@ -589,7 +589,7 @@ fn multiplexed(
         let words = collect_words(hold).map(|w| w as usize);
         queue(caller, words, true, Some(pages), id);
         let Event::Call(request) = receive() else { panic!("not the call queued") };
-        let _ = server.serve_with(request, |_, r| refuse_malformed(r));
+        let _ = server.serve_with(request, |_, r| refuse_malformed(r).map(|()| None));
     } else if arg & 0x4000_0000 != 0 {
         let n = server.collect_into(caller, lend, now);
         client.answered(server, caller, &lend[..n]);

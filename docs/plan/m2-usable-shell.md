@@ -207,7 +207,11 @@ steward told the session (`bench:shell-commands`; [the shell](../userland/shell.
 What the milestone builds on: the serving
 library's parked calls ([serving](../servers/serving.md#parked-calls)), `consoled`'s 9P console
 ([consoled](../servers/consoled.md)), and budget destruction as the only way to end a process
-([budgets](../kernel/budgets.md#r10-destruction)). For several harts: every hart runs user code under one FIFO kernel lock, for which a waiting
+([budgets](../kernel/budgets.md#r10-destruction)). The first step on Redoubt is built: a typed call
+parks as a 9P read does ([serving](../servers/serving.md#parking-a-typed-call)), `consoled` and
+`sshd` serve `consol`'s `size` and `resize` ([consoled](../servers/consoled.md#the-consol-protocol)),
+and a change of an SSH channel's window reaches the shell's driver, which lays the line or the
+screen in front out again ([the shell](../userland/shell.md#the-consoles-size)). For several harts: every hart runs user code under one FIFO kernel lock, for which a waiting
 hart halts rather than spins (`bench:smp-lock-wait`), and a destruction's
 shootdown is attacked (`bench:smp-boot`, `bench:smp-evict`). One process's threads run on
 several harts at once, and every unmap, lend and return shoots the process down on the others

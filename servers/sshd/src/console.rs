@@ -45,6 +45,8 @@ pub struct Chan {
     ended: Option<u32>,
     /// The pty's size, if the client asked for one.
     pub window: Option<Window>,
+    /// How many times the window has changed size: a parked `resize` waits from the count it saw.
+    pub resized: u64,
 }
 
 impl Chan {
@@ -60,6 +62,23 @@ impl Chan {
 
     /// Whether a write waiting now could be answered.
     pub fn writable(&self) -> bool { self.output.len() < MAX_OUTPUT || self.ended.is_some() }
+
+    /// The size `consol`'s `size` answers: the pty's, or 80 by 24 for a channel without one.
+    pub fn size(&self) -> (u16, u16) {
+        let w = self.window.unwrap_or(Window::DEFAULT);
+        // Each side is at most Window::MAX, 1,024.
+        (w.cols as u16, w.rows as u16)
+    }
+
+    /// Whether a `resize` parked when the count was `from` is answered now: the window has changed
+    /// size since, or the session has ended and nothing will change it again.
+    pub fn resize_due(&self, from: u64) -> bool { self.resized != from || self.ended.is_some() }
+
+    /// The size a new `consol` call is answered with, or `None` once the session has ended: a
+    /// waiter parked then has had its last answer, and nothing will change the window again, so a
+    /// call is refused (`malformed`) rather than parked and answered at once, for ever, to a VM
+    /// that outlived its channel.
+    pub fn consol_size(&self) -> Option<(u16, u16)> { self.ended.is_none().then(|| self.size()) }
 }
 
 /// What the file and the session hold of the channel.
@@ -197,7 +216,15 @@ impl Session for Console {
         n
     }
 
-    fn window(&mut self, w: Window) { self.chan.borrow_mut().window = Some(w); }
+    /// A new size counts as a change only if it differs: a `window-change` to the same size wakes
+    /// no `resize`.
+    fn window(&mut self, w: Window) {
+        let mut chan = self.chan.borrow_mut();
+        if chan.window != Some(w) {
+            chan.window = Some(w);
+            chan.resized += 1;
+        }
+    }
 
     /// The interrupt reaches the session as its own key's byte; with no room for it the input is
     /// full, and the session is not reading.

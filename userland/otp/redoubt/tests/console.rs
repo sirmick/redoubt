@@ -244,8 +244,44 @@ fn an_end_of_input_already_waiting_ends_the_idle_that_takes_it() {
 }
 
 #[test]
-fn a_console_without_consol_has_no_size() {
-    with_platform(std::io::empty(), |p| assert_eq!(p.console_size(), None));
+fn the_console_s_size_is_its_server_s() {
+    with_platform(std::io::empty(), |p| assert_eq!(p.console_size(), Some((80, 24))));
+}
+
+/// Once reading has begun, the platform keeps a `resize` out at the console's server, an SSH
+/// channel's, whose share holds it beside the session's completion call; a change of the window's
+/// size reaches the VM through `console_resized`, once, and an idle returns for it.
+#[test]
+fn a_change_of_the_console_s_size_reaches_the_vm_once_reading_has_begun() {
+    let f = fake();
+    let (keyboard, keys) = std::io::pipe().unwrap();
+    let console = fixture::console_channel(Box::new(keyboard), Box::new(Screen::default()));
+    let (pid, block) = fixture::session(&console);
+    let session = f.run(pid, move || {
+        let startup = fixture::startup(&block);
+        let mut p = Redoubt::new(&startup, Box::new(Dirs(Vec::new()))).expect("a platform");
+        assert_eq!(p.console_resized(), None, "no change before reading");
+        assert_eq!(p.console_read(), ConsoleInput::Nothing);
+        let (cols, rows) = loop {
+            p.idle(None);
+            if let Some(size) = p.console_resized() {
+                break size;
+            }
+        };
+        assert_eq!(p.console_resized(), None, "a change is taken once");
+        u32::from(cols) << 16 | u32::from(rows)
+    });
+    // A change counts only once the platform's `resize` is parked at the server.
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while console.resizes_waiting() != 1 {
+        assert!(std::time::Instant::now() < until, "the resize was never parked");
+        std::thread::yield_now();
+    }
+    console.resize(132, 43);
+    assert_eq!(session.join().unwrap(), 132 << 16 | 43);
+    drop(keys);
+    f.destroy(console.pid, console.endpoint);
+    assert_eq!(console.thread.join().unwrap(), redoubt_rt::exit::OK);
 }
 
 #[test]

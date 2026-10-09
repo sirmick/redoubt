@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 510
+revision = 513
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1582,8 +1582,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "smp"
   needs = ["SMP2"]
   body = "Destruction work outside the kernel lock: one budget's kernel sections stop costing other harts their time. From SMP2: the lock-wait residual keeps these judged at one hart; SMP4 un-keeps each and judges it at 2 harts on both widths: sched-budget-churn-shell, deadline-flood-billed-traced, sched-wake-no-preempt, kernel-containment's bystander CHARGED-SHARE (judged `@1`; rv32 445 against 450 at 2 harts), and sched-exit-churn's threads-exit victim (judged `@1`; rv32 448 against 450). SMP2's coverage table on scheduling.md is the list of record."
-  state = "todo"
-  revision = 503
+  state = "active"
+  revision = 511
+  overrides = ["2026-10-09: started by Orchestrator before M1 (reported): several-harts track runs ahead of M1's acceptance (milestone split, owner 2026-10-07)"]
 
 [[node]]
   id = "B38"
@@ -1686,8 +1687,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M2"
   body = "M2 page, 'On Redoubt' step 1 (docs/plan/m2-usable-shell.md): serving.md#parking-a-typed-call, consoled.md#the-consol-protocol. Design checkpoint first (a note in .wash/local/CONS1-design.md: what is built already per the pages' status lines, the protocol, who may park, bounds, the cases), sent to the orchestrator before code. Tier A (servers): the steward red reviews. The shell's driver gets the real terminal size on Redoubt and a resize event, replacing any fixed size."
-  state = "reported"
-  revision = 504
+  state = "done"
+  revision = 513
   overrides = ["2026-10-08: started by Orchestrator before M1 (reported): M2 'On Redoubt' step 1, ahead of M1's acceptance"]
 
 [[node]]
@@ -1745,8 +1746,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "smp"
   needs = ["SMP2"]
   body = "From SMP2's sched-lock-contention: external interrupts are enabled only in the boot hart's PLIC context (intc_plic.rs, one CONTEXT), so a device interrupt waits for that hart's current kernel section, and a hammer re-entering first makes the wake wait a second section: at 2 harts the driver wake misses its 1-hart p50 target (rv64 18.5 ms against 15 ms behind a 9.6 ms section). Enable every hart's context (or route to an idle one), claim/complete per hart, and gate sched-lock-contention's driver wake on the 1-hart targets at 2 and 4 harts. Kernel: Tier A, the kernel red; model and mutation if a rule changes."
-  state = "todo"
-  revision = 494
+  state = "active"
+  revision = 512
+  overrides = ["2026-10-09: started by Orchestrator before M1 (reported): several-harts track runs ahead of M1's acceptance"]
 
 [[node]]
   id = "JOB1"

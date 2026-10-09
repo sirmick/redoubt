@@ -1,0 +1,71 @@
+description = "A change of an SSH channel's window reaches its session and no other (docs/servers/sshd.md, \"Sessions over SSH\"; docs/servers/consoled.md, \"The consol protocol\"; docs/userland/shell.md, \"The console's size\"): alice and bob log in with ptys at 80 by 24, and each session's :beamlet.console_size() is its channel's. Alice opens pick with a title, and her terminal is resized to 100 by 40: ssh sends a window-change, sshd answers the resize call her VM keeps parked, the VM hands the size to the shell's driver, and the screen in front lays itself out again, its title drawn a second time by a frame that clears the terminal; her size is then 100 by 40. Bob's, asked after, is still 80 by 24. The sizes are the servers' answers, printed by each session's shell"
+arch = ["rv64", "rv32"]
+kind = "boot"
+recipe = "image/boot.toml"
+# The image needs 1 GiB: the principals' budgets, each holding a shell VM's session, do not fit
+# the users budget 256 MiB leaves (docs/kernel/budgets.md).
+memory_mib = 1024
+# Two logins, one after the other, each booting a shell VM.
+timeout_secs = 1500
+expect = [
+    '^init: started sshd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
+    '^init: started steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+]
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    '^init: .* (exited|faulted|was killed)',
+    'init: restarted',
+    'EXCEPTION',
+    'sshd: login .*: refused',
+    'sshd: request .* refused',
+]
+
+[[session]]
+user = "alice"
+pty = true
+steps = [
+    { expect = '\([0-9]+\)> ' },
+    { send = ":beamlet.console_size()\n" },
+    { expect = '\{80, 24\}' },
+    # Only a frame holds the screen's help line; the typed line's echo does not.
+    { send = "pick([\"one\", \"two\"], title: \"sized\")\n" },
+    { expect = 'Enter choose' },
+    { resize = [100, 40] },
+    # Drawn again: the frame after the resize clears the terminal and sends it all, and nothing
+    # else would draw the idle screen.
+    { expect = 'Enter choose' },
+    { send = "\r" },
+    { expect = '"one"$' },
+    { send = ":beamlet.console_size()\n" },
+    { expect = '\{100, 40\}$' },
+    { mark = "alice-resized" },
+    { wait = "bob-done" },
+    { send = "exit\n" },
+    { exit = 0 },
+]
+
+[[session]]
+user = "bob"
+pty = true
+steps = [
+    { wait = "alice-resized" },
+    { expect = '\([0-9]+\)> ' },
+    { send = ":beamlet.console_size()\n" },
+    { expect = '\{80, 24\}$' },
+    { mark = "bob-done" },
+    { send = "exit\n" },
+    { exit = 0 },
+]
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]
+forward = [22]

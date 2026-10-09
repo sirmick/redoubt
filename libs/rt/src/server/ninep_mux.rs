@@ -105,7 +105,9 @@ struct Own<G>(G);
 
 impl<S: FileServer, G: FnMut(&mut NineServer<S>, Request) -> Result<(), Error>> Around<S> for Own<G> {
     fn call(&mut self, server: &mut NineServer<S>, request: Request, _: u64) {
-        let _ = server.serve_with(request, &mut self.0);
+        // A server served through `run` has no parked calls, so its own requests never wait.
+        let own = &mut self.0;
+        let _ = server.serve_with(request, |server, request| own(server, request).map(|()| None));
     }
 }
 
