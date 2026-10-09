@@ -406,7 +406,7 @@ kernel, running the call to its end with interrupts off, would stall every other
 
 ## Failure and restart
 
-<details><summary>Status: built · tested (7)</summary>
+<details><summary>Status: built · tested (8)</summary>
 
 - bench:touch-beyond-ram
 - bench:lend-untouched-page
@@ -415,6 +415,7 @@ kernel, running the call to its end with interrupts off, would stall every other
 - bench:map-fixed-attack
 - bench:process-map-untouched-attack
 - bench:return-lent-unmapped
+- bench:fault-report-bound
 
 </details>
 
@@ -425,7 +426,12 @@ kernel, running the call to its end with interrupts off, would stall every other
 - **A permission fault ends the process.** A store to a page that is not writable, or a fetch
   from one that is not executable, is never mistaken for a page to back. The process faults,
   and its exit notice carries the RISC-V cause (12 for an instruction page fault, 15 for a store
-  page fault; [processes](processes.md#exit-notices)).
+  page fault; [processes](processes.md#exit-notices)). The console gets one line,
+  `PROGRAM HALT: CPU Exception on PID n: <cause> of <address> at <pc>`, printed holding the
+  kernel lock; the thread's registers and the address space's map, a line a mapped page, are
+  printed only for a fault in the kernel and in a `debug-print` build. Printed for every fault,
+  they held the lock for as long as the process was large: 837 ms on rv64 for a process of 4096
+  pages, against 7.5 ms for its teardown now (`bench:fault-report-bound`, under `icount`).
 - **A process ends:** every frame it owns returns to the pool and its charge to its budget. A
   page it had lent is its server's until the server replies (R3), and is never reused while the
   server has it mapped. Its `dma_alloc` pages wait for the device reset (R11).
@@ -450,7 +456,9 @@ kernel, running the call to its end with interrupts off, would stall every other
   ([R78 (fair kernel entry)](scheduling.md#r78-fair-kernel-entry)): spinning, under QEMU's `icount`
   it spent the turns the other hart needed to acknowledge, and the p99 of a destruction's kernel
   time ([R10 (destruction)](budgets.md#r10-destruction)) in `sched-latency` at two harts was
-  51.9 ms on rv64 against 3.0 ms halted. So no stale translation reaches a page
+  51.9 ms on rv64 against 3.0 ms halted. The asking hart holds the kernel lock while it waits:
+  measured under `icount` the waits total 0.9 ms over the whole containment gate at two harts, so
+  they stay under it, where the asker is the lock's one holder. So no stale translation reaches a page
   unmapped, lent or returned, or a frame's next owner. A missed shootdown cannot be seen on QEMU, which empties a hart's TLB at
   every `satp` write: the checked build stops when a process loses an entry while another hart
   runs it and is not shot down there (`bench:smp-shootdown`, the case's recorded negative), and

@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 531
+revision = 537
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1582,8 +1582,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "smp"
   needs = ["SMP2"]
   body = "From SMP4's measurements (.wash/local/SMP4-design.md): the kept cases' lock waits are behind checked-build audits (the destruction audit, an unstamped whole-RAM check_frame_owners), a fault report printing print_map under the lock, and icount's hand-off, not zeroing, copies or shootdowns. P1: stamp every audit as an audit; P2: a hart's wait behind another hart's audit is not billed to it (checked builds only); P3: the fault report out of the lock. Then un-keep and judge at 2 harts on both widths: sched-budget-churn-shell, deadline-flood-billed-traced, sched-wake-no-preempt, kernel-containment's bystander CHARGED-SHARE and sched-exit-churn's threads-exit (drop @1), and remove the wrong-budget-wait blind spot. Kernel: Tier A, the kernel red."
-  state = "active"
-  revision = 514
+  state = "done"
+  revision = 537
   overrides = ["2026-10-09: started by Orchestrator before M1 (reported): several-harts track runs ahead of M1's acceptance (milestone split, owner 2026-10-07)"]
 
 [[node]]
@@ -1827,8 +1827,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M2"
   body = "Found by CTX2's case work on rv64 (on CTX2's tree; check main first): IO.puts(String.duplicate(\"z\", 70_000)) at the prompt kills the shell and the VM exits. Likely a heap limit (max_heap_size, killing) hit in the driver/printer or the console path while escaping or chunking one long write, or a console write bound. Find the process and the limit, fix it so a long output line is written in bounded pieces (or refused with a message) without killing the session, and add a host test and a machine case on both widths (a 1 MiB line too). Strict track if the fix is in the escaping/drawing path: the steward red reviews."
-  state = "todo"
-  revision = 515
+  state = "active"
+  revision = 533
+  overrides = ["2026-10-09: started by Orchestrator before M1 (reported): M2 shell bug found by CTX2"]
 
 [[node]]
   id = "LAT4"
@@ -1837,8 +1838,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "smp"
   needs = ["IRQ1"]
   body = "From IRQ1's instrumented runs: after IRQ1, sched-lock-contention-4's driver wake p99 is ~59 ms against 50 (recorded, not gated). Two contributors: (1) under -icount QEMU's single-threaded round-robin runs a woken hart only when the running hart's turn ends, and a hart in a kernel section keeps its turn to the section's end; (2) IRQ1's priority masking raises SEIP on every hart's context, so each device interrupt traps every user-mode or idle hart, N-1 to an empty claim, each a lock acquisition (kernel red's note). Find a way to judge the 4-hart tail that reflects parallel harts (a non-icount MTTCG run with a statistical bound), consider routing a source to one idle hart instead of all, and gate p99 at 4 harts. Detail: .wash/local/IRQ1-numbers-2.md."
-  state = "active"
-  revision = 526
+  state = "reported"
+  revision = 534
   overrides = ["2026-10-09: started by Orchestrator before M1 (reported): several-harts track runs ahead of M1's acceptance"]
 
 [[node]]
@@ -1857,9 +1858,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "smp"
   needs = ["SMP4"]
-  body = "From SMP4's measurements: with audits excused, the remaining 2-hart misses are in the picks: budget-churn-shell rv64 404 and deadline-flood rv64 ~410 (want 450+), containment's bystander rv32 442; a creator carving and destroying children reweighs ~240 times and lifts the victim out of the cap set ~80 times (rv32 45) while holding both harts ~60% outside audits. Find whether the cap-set lift/reweigh rules give the victim less than R12 promises on several harts, fix the rule or restate the target with the model, and judge those lines at 2 harts. Also restate sched-wake-no-preempt's proof for several harts (a timeout answered at the first entry on any hart is not a preemption) and judge it at 2. Kernel: Tier A."
+  body = "From SMP4's measurements: with audits excused, the remaining 2-hart misses are in the picks: budget-churn-shell rv64 404 and deadline-flood rv64 ~410 (want 450+), containment's bystander rv32 442, and sched-exit-churn's threads-exit near its bound (rv32 465 vs 450; kept @1); a creator carving and destroying children reweighs ~240 times and lifts the victim out of the cap set ~80 times (rv32 45) while holding both harts ~60% outside audits; and an audit-excused waiter keeps its slice (SMP4's P2), which moved deadline-flood rv64 875 -> 413. Find whether the cap-set lift/reweigh rules give the victim less than R12 promises on several harts, fix the rule or restate the target with the model, and judge those lines at 2 harts. Also restate sched-wake-no-preempt's proof for several harts (a timeout answered at the first entry on any hart is not a preemption) and judge it at 2. Kernel: Tier A."
   state = "todo"
-  revision = 522
+  revision = 536
 
 [[node]]
   id = "IDLE1"
@@ -1870,3 +1871,13 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "Owner's question (does it properly idle?). Boot launch's machine with 4 harts, log in, leave the prompt idle for 60 s; count from outside (QEMU -d int over the window's file offsets) interrupts per second per hart by cause and user ecalls, and QEMU's host CPU from /proc/<pid>/stat; measure first, then ceilings at ~2x; a hot spot found becomes a follow-up (a test-only kernel per-budget wake count). Quiet class. Tier B unless the kernel changes."
   state = "todo"
   revision = 528
+
+[[node]]
+  id = "B46"
+  title = "The shell draws about 8 KB/s on the machine: making text visible and encoding it costs a second per 8 KB of output"
+  template = "package"
+  parent = "M2"
+  needs = ["B45"]
+  body = "From B45: on the machine, printing a 1 MiB line takes about 2 minutes (Text.visible plus the encoder). Profile on beamlet (which of grapheme walking, escaping, measuring, encoding dominates), make the common case (printable ASCII/UTF-8 with no controls) a fast path, and set a throughput target with a case. Escaping path: Tier A."
+  state = "todo"
+  revision = 532

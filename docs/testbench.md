@@ -565,7 +565,13 @@ carries neither the feature nor the record. The records are written holding the 
 appear in the order they took it, and the oracle requires that order to be the tickets', each
 drawn behind fewer sections than the harts: no wait outlasts the sections queued ahead of it
 ([R78 (fair kernel entry)](kernel/scheduling.md#r78-fair-kernel-entry); `sched-lock-contention` at
-two harts, `sched-lock-contention-4` at four). `sched-capped` runs the model's capped scenarios
+two harts, `sched-lock-contention-4` at four). A kernel built with `hold-trace`, which implies
+`lock-trace`, also records each section of the lock as it is released (`h`: its first and last
+tick; then `j`: its cause, a system call's number, an interrupt's or an exception's code, and the
+ticks of audits inside it). The oracle reports the sections' lengths net of their audits, the
+longest by cause, and splits the lock waits into the part another hart's section covered (its
+audits pro rata) and the part with the lock free, the hand-off to the halted waiter. Both
+contention cases carry it; it judges nothing. `sched-capped` runs the model's capped scenarios
 ([model](kernel/model.md#scheduler-scenarios)) on the machine at two, three and four harts, each
 budget's share judged as below. It is itself checked against the model's ranks and against traces broken one clause at a
 time. The tracing kernel is a test build only
@@ -634,13 +640,25 @@ then panic, and every case forbids `PANIC`:
   operation on purpose.
 
 A checked build also runs the kernel's audits, full scans that check the indexes, frame owners and
-handle chains after a destruction and when a process object is freed. They hold the hart while
+handle chains after a destruction and when a process object is freed, and the live PIDs, the
+frame owners and the IRQ index when one of them changes outside a destruction (a process's end
+scans all of RAM, about 7 ms under `icount`). Every scan of a whole table is an audit; the checks a
+return to user mode or a shootdown makes, a few entries each, are not. They hold the hart while
 they run, and a release build has none of them. So a latency target or a share, which is measured
 in a checked build because the scheduler trace needs one, excludes them: an audit neither fills a
 window nor moves the schedule. The scheduler charges an audit's time to no budget and moves the
 running slice's end past it, so the thread that ran it is picked and preempted as in a release
 build; a kernel built with `audit-billed`, which keeps the old charge, misses the containment
-gate's deadline notice, in a recorded negative run. The traced kernel stamps each audit's start
+gate's deadline notice, in a recorded negative run. On several harts an audit also holds every
+hart that waits for the kernel lock behind it, and that wait is the audit's too: each hart marks
+when it came from user mode, each audit's end gives every marked hart the part of the audit it
+waited through, and the waiter, once it holds the lock having waited, bills its runner none of it
+and moves its slice's end by it, as the auditor does. The trace records it after the wait (`y`:
+the ticks), never more than the wait by the waiter's own clock (harts' clocks differ by a few
+ticks under `icount`), and the oracle takes out of a share only the part of a wait that was
+billed. A kernel built with `audit-wait-billed` bills the whole wait as before:
+`sched-budget-churn-shell` at two harts reads 329 and 339 of 1000 on rv64 and rv32 against 404
+and 509, in a recorded negative run. The traced kernel stamps each audit's start
 and end (records `U` and `V`: which audit, and the time). The program prints each latency
 sample's window, its end on `time_now` and its length (`LATENCY-SAMPLE <group> <measure> <end>
 <gross>`) and how many it took of each, so a window lost on the way fails the check, and it
@@ -655,8 +673,9 @@ parent), and names by weight and runnable threads each budget it runs against it
 <name> <start> <end> <tolerance>[+|-][@<harts>] <mark>:<threads> <weight>:<threads>...`; `+` for
 at least, `-` for at most, `@` judged only at that many harts and reported at any other).
 `sched_oracle` sums what the kernel charged each budget in the window, its pass's rises times its
-weight as the trace states it (each hart's runner, `H`, carries its weight), less each hart's
-waits for the kernel lock, which bill the waiting hart's runner though no thread of it ran; a lift
+weight as the trace states it (each hart's runner, `H`, carries its weight), less the part of each
+hart's waits for the kernel lock billed to the waiting hart's runner though no thread of it ran
+(a `Q` less its `y`); a lift
 out of the cap set (`u`) is no charge. The part is the marked budget's and what was lifted into
 it, the whole every budget's, and what the budget is owed is its water-filling share of the
 trace's harts (`F`) among the budgets the program names, which on one hart is its weight's share;

@@ -46,6 +46,10 @@ walk-trace = ["sched-trace"]
 # Test builds only: also record each lock wait's ticket after its `Q`, so the oracle can check the
 # waits end in ticket order (`sched-lock-contention`; kernel/scheduling.md, R78).
 lock-trace = ["sched-trace"]
+# Test builds only: also record each kernel lock section as the lock is released, its start, end,
+# cause and the audits inside it, so the oracle can say what each lock wait waited behind
+# (`sched-lock-contention`; kernel/scheduling.md, "Fair kernel entry is bounded by count").
+hold-trace = ["lock-trace"]
 # Debug only, never in a bench build but one recorded negative run: rank wakers behind queued
 # budgets of equal pass (the model's R12TieQueuedFirst), to show the oracle catches it.
 sched-inject-tie-fault = ["sched-trace"]
@@ -79,6 +83,10 @@ audit-unstamped = ["sched-trace"]
 # Debug only, never in a bench build but one recorded negative run: an audit's time stays billed
 # to the budget that ran it and counts against its slice, so the deadline notice must miss.
 audit-billed = ["test-only"]
+# Debug only, never in a bench build but one recorded negative run: a hart waiting for the kernel
+# lock behind another hart's audit stays billed for the wait, so sched-budget-churn-shell's victim
+# must miss its share at two harts (kernel/scheduling.md, "Fair kernel entry is bounded by count").
+audit-wait-billed = ["test-only"]
 # Debug only, never in a bench build but one recorded negative run: the rest of a timer interrupt
 # after its expiry, and the return's own walk, are billed as before the fix to the budget it
 # interrupted, so the oracle's timer-entry check must fail.

@@ -40,18 +40,26 @@ pub fn read(phys: usize, offset: usize) -> u64 {
 }
 
 /// Writes the word at byte `offset` (a multiple of 8) of the frame at `phys`.
-pub fn write(phys: usize, offset: usize, value: u64) {
-    let virt = at(phys, offset, 8);
-    // SAFETY: as in `read`, and the write cannot reach the kernel's own code or data: every
-    // `phys` passed here is a frame the ownership table handed out (a kernel object's, or a page
-    // of the calling process's that the caller checked is its own and writable), never the kernel
-    // image, whose physmap alias is read-only anyway. The caller owns what the word means.
-    unsafe { (virt as *mut u64).write_volatile(value) }
-}
+pub fn write(phys: usize, offset: usize, value: u64) { fill(phys, offset, 8, value) }
 
-/// Zeroes the whole frame at `phys`. Every page a process first sees goes through here (R11).
-pub fn zero(phys: usize) {
-    for offset in (0..redoubt_sys::PAGE_SIZE).step_by(8) {
-        write(phys, offset, 0);
+/// Zeroes the whole frame at `phys`. Every page a process first sees goes through here (R11). The
+/// frame is checked once, not word by word: a frame's zeroing is kernel time under the kernel
+/// lock, and a check a word made it five times as long (kernel/scheduling.md, "Fair kernel entry
+/// is bounded by count").
+pub fn zero(phys: usize) { fill(phys, 0, PAGE_SIZE, 0) }
+
+/// Writes `value` to each word of the `size` bytes at byte `offset` of the frame at `phys`, both
+/// multiples of 8, the bytes inside the frame and `offset` aligned to `size`.
+fn fill(phys: usize, offset: usize, size: usize, value: u64) {
+    let virt = at(phys, offset, size);
+    // SAFETY: as in `read`, for every word of the checked range, and the writes cannot reach the
+    // kernel's own code or data: every `phys` passed here is a frame the ownership table handed
+    // out (a kernel object's, or a page of the calling process's that the caller checked is its
+    // own and writable, or a free frame being zeroed for its next owner), never the kernel image,
+    // whose physmap alias is read-only anyway. The caller owns what the words mean.
+    unsafe {
+        for word in 0..size / 8 {
+            (virt as *mut u64).add(word).write_volatile(value);
+        }
     }
 }

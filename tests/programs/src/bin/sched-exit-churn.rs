@@ -2,8 +2,8 @@
 //! threads, or child processes, each run nearly a slice and then exit (or fault) gets at most
 //! its weight against an equal-weight victim: the victim keeps at least its share of the harts,
 //! judged by the post-check on the kernel's charges net of lock waits (`HART-SHARE`). Against
-//! threads that exit it is judged at one hart and reported at more: the attacker's exits hold the
-//! kernel lock, and the victim's hart takes most of the waits (kernel/scheduling.md, "Residual
+//! threads that exit it is judged at one hart and reported at more: at two it sits within a few
+//! tens per thousand of its bound, and below it in some builds (kernel/scheduling.md, "Residual
 //! risks").
 
 #![no_std]

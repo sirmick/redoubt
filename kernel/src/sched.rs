@@ -93,6 +93,10 @@ struct Billing {
     /// which its bill leaves out ([`bill_irq`]).
     #[cfg(debug_assertions)]
     irq_audits: Option<u64>,
+    /// A checked build's audit time on other harts that this hart's wait for the kernel lock
+    /// waited through ([`audit`]), which the user time it closes leaves out ([`from_user`]).
+    #[cfg(debug_assertions)]
+    excused: u64,
 }
 
 /// Who kernel time is billed to.
@@ -112,6 +116,8 @@ static SCHED: KernelCell<Sched> = KernelCell::new(Sched {
         owed: 0,
         #[cfg(debug_assertions)]
         irq_audits: None,
+        #[cfg(debug_assertions)]
+        excused: 0,
     }; MAX_HARTS],
     marks: Marks::new(BudgetRef { frame: 0, id: 0 }),
     online: 1,
@@ -385,14 +391,74 @@ fn audit_harts(ss: &ProcessTable, mm: &MemoryManager) {
     });
 }
 
-/// A trap from user mode: the user time since the last return is `cur`'s.
+/// A trap from user mode: the user time since the last return is `cur`'s, but for the audits on
+/// other harts that its wait for the kernel lock waited through, which are nobody's: those move the
+/// running slice's end forward as the hart's own audits do ([`audit`]).
 pub fn from_user() {
     let now = ticks();
     #[cfg(feature = "sched-trace")]
     trace::kernel_from(now);
+    #[cfg(debug_assertions)]
+    let excused = SCHED.with(|s| core::mem::take(&mut s.b().excused));
+    #[cfg(not(debug_assertions))]
+    let excused = 0;
     SCHED.with(|s| {
         if let Some(since) = s.b().user_since.take() {
-            s.cpu.accrue(here(), now.saturating_sub(since));
+            s.cpu.accrue(here(), now.saturating_sub(since).saturating_sub(excused));
+        }
+    });
+    #[cfg(debug_assertions)]
+    if excused > 0 {
+        #[cfg(feature = "sched-trace")]
+        trace::record(trace::EXCUSED, excused, 0);
+        let length = crate::arch::irq::timer::ticks_to_us(now)
+            - crate::arch::irq::timer::ticks_to_us(now.saturating_sub(excused));
+        crate::time::set_slice_end(crate::time::slice_end().saturating_add(length));
+    }
+}
+
+/// Each hart's wait for the kernel lock from user mode, in a checked build: the raw `time` it came
+/// at plus one, 0 while it does not wait. Written by the hart without the lock, read by the hart
+/// holding it at the end of each audit ([`audit`]).
+#[cfg(debug_assertions)]
+static WAITING: [core::sync::atomic::AtomicUsize; MAX_HARTS] =
+    [const { core::sync::atomic::AtomicUsize::new(0) }; MAX_HARTS];
+
+/// This hart came from user mode at raw `time` `came` and is about to take the kernel lock. Raw
+/// time, since the clock's zero is read under the lock; its low bits, which wrap every 429 s on
+/// rv32, far beyond any wait.
+#[cfg(debug_assertions)]
+pub fn waiting(came: u64) {
+    let word = (came as usize).wrapping_add(1).max(1);
+    WAITING[here()].store(word, core::sync::atomic::Ordering::SeqCst);
+}
+
+/// This hart, come at raw `time` `came`, has taken the kernel lock, having waited for it (`held`)
+/// or not. An audit that ended between its coming and its draw excused it nothing: it found the
+/// lock free. Nor is it excused more than it waited by its own clock: harts' clocks may differ by
+/// a few ticks, and the audit's end was read on another hart's.
+#[cfg(debug_assertions)]
+pub fn waited(held: bool, came: u64) {
+    WAITING[here()].store(0, core::sync::atomic::Ordering::SeqCst);
+    let waited = if held { riscv::register::time::read64().saturating_sub(came) } else { 0 };
+    SCHED.with(|s| s.b().excused = s.b().excused.min(waited));
+}
+
+/// An audit that took `length` ticks just ended on this hart: each other hart waiting for the lock
+/// is excused the part of it that it waited through, the whole audit or, if it came during it, the
+/// time since it came. A hart whose mark this does not see yet came after the audit's end, or so
+/// close to it that its wait is billed to it, as it was before.
+#[cfg(debug_assertions)]
+fn excuse_waiters(length: u64) {
+    let now = riscv::register::time::read64() as usize;
+    let me = here();
+    SCHED.with(|s| {
+        for (hart, mark) in WAITING.iter().enumerate().filter(|(hart, _)| *hart != me) {
+            let came = mark.load(core::sync::atomic::Ordering::SeqCst);
+            if came != 0 {
+                let waited = now.wrapping_sub(came - 1) as u64;
+                s.harts[hart].excused += length.min(waited);
+            }
         }
     });
 }
@@ -514,6 +580,11 @@ pub const AUDIT_IPC_LISTS: u64 = 3;
 /// The scheduler's marks' audit after a reconcile ([`audit_marks`]).
 #[cfg(debug_assertions)]
 pub const AUDIT_MARKS: u64 = 4;
+/// An index's audit at its change, outside a destruction: the live PIDs at an account's making and
+/// end, the frame owners at a process's end (a scan of all of RAM), the IRQ index at an interrupt
+/// object's change (a scan of every object frame).
+#[cfg(debug_assertions)]
+pub const AUDIT_INDEXES: u64 = 5;
 
 /// A checked build runs the audit `which`: `check`, which a release build does not have. Its time
 /// is charged to no budget, and the running slice's end and the start of the kernel time being
@@ -522,6 +593,12 @@ pub const AUDIT_MARKS: u64 = 4;
 /// every window (kernel/scheduling.md, "Responsiveness").
 #[cfg(debug_assertions)]
 pub fn audit(which: u64, check: impl FnOnce()) {
+    // At boot the budget tree is built before the timer runs (`kmain`): there is no clock to stamp
+    // the audit by and no schedule to keep it out of.
+    if crate::arch::irq::timer::timebase() == 0 {
+        check();
+        return;
+    }
     #[cfg(feature = "sched-trace")]
     let _stamp = trace::audit(which);
     #[cfg(not(feature = "sched-trace"))]
@@ -547,6 +624,10 @@ pub fn audit(which: u64, check: impl FnOnce()) {
         let length =
             crate::arch::irq::timer::ticks_to_us(ended) - crate::arch::irq::timer::ticks_to_us(started);
         crate::time::set_slice_end(crate::time::slice_end().saturating_add(length));
+        // Debug only, never in a bench build but one recorded negative run (feature
+        // `audit-wait-billed`): a hart waiting behind the audit stays billed for the wait.
+        #[cfg(not(feature = "audit-wait-billed"))]
+        excuse_waiters(ended.saturating_sub(started));
     }
 }
 
@@ -851,6 +932,14 @@ pub mod trace {
     /// With `lock-trace`, just after a `Q`: the wait's ticket in the id, and the sections ahead of
     /// it when it was drawn in the pass field, so the oracle can check the waits end in ticket order.
     pub const LOCK_TICKET: u8 = b'k';
+    /// With `hold-trace`, as the kernel lock is released: the section's first tick in the id and
+    /// its last in the pass field, then `j` with its cause in the id ([`hold_cause`]) and the
+    /// ticks of audits it ran in the pass field.
+    pub const HELD: u8 = b'h';
+    pub const HELD_CAUSE: u8 = b'j';
+    /// A checked build's wait for the kernel lock, just after its `Q`: the ticks of other harts'
+    /// audits it waited through in the id, which are not billed to the hart's runner.
+    pub const EXCUSED: u8 = b'y';
 
     /// Frames the ring takes (64 MiB, 256 MiB with `sched-trace-large`), and the records they hold.
     const PAGES: usize = if cfg!(feature = "sched-trace-large") { 65536 } else { 16384 };
@@ -1018,6 +1107,50 @@ pub mod trace {
         record(LOCK_TICKET, u64::from(ticket), u128::from(ahead));
         #[cfg(not(feature = "lock-trace"))]
         let _ = (ticket, ahead);
+    }
+
+    /// The section holding the kernel lock now (`hold-trace`): when it took it, why, and the
+    /// audit ticks counted before it.
+    #[cfg(feature = "hold-trace")]
+    struct Hold {
+        since: u64,
+        cause: u64,
+        audits: u64,
+    }
+
+    #[cfg(feature = "hold-trace")]
+    static HOLD: KernelCell<Hold> = KernelCell::new(Hold { since: 0, cause: 0, audits: 0 });
+
+    /// This hart has just taken the kernel lock (`cell.rs`).
+    #[cfg(feature = "hold-trace")]
+    pub fn hold_begin() {
+        let (since, audits) = (super::ticks(), KERNEL.with(|k| k.audits));
+        HOLD.with(|h| *h = Hold { since, cause: 0, audits });
+    }
+
+    /// What the section is for, the first cause given: a system call's number, `0x200` plus an
+    /// interrupt's code, `0x300` plus an exception's; 0, `kmain`'s, if none is.
+    #[cfg(feature = "hold-trace")]
+    pub fn hold_cause(cause: u64) {
+        HOLD.with(|h| {
+            if h.cause == 0 {
+                h.cause = cause;
+            }
+        });
+    }
+
+    /// This hart is about to release the kernel lock: the section's records (`h`, `j`), once the
+    /// ring has its frames. The boot's first section began before the clock's zero was set, and
+    /// is not recorded.
+    #[cfg(feature = "hold-trace")]
+    pub fn hold_end() {
+        let (now, audits) = (super::ticks(), KERNEL.with(|k| k.audits));
+        let (since, cause, before) = HOLD.with(|h| (h.since, h.cause, h.audits));
+        if RING.with(|r| r.pages[0] == 0) || since > now {
+            return;
+        }
+        record(HELD, since, u128::from(now));
+        record(HELD_CAUSE, cause, u128::from(audits.saturating_sub(before)));
     }
 
     /// A checked build's audit took `ticks`.

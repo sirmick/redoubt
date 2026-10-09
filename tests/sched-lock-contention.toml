@@ -1,4 +1,4 @@
-description = "Fair kernel entry under contention (R78, kernel/scheduling.md), at two harts: one budget refused a `map_anon` after a search of the whole area in a loop, R12's costliest call, beside the latency workload's driver stand-in on the goldfish RTC's alarm; every wait for the kernel lock takes it in ticket order (the trace's tickets, `lock-trace`), and the driver wake meets its targets, p50 <= 15 ms and p99 <= 50 ms net of the checked build's audits: the RTC's interrupt reaches the idle hart, which draws its ticket behind at most the search in progress (virtual time, checked build)"
+description = "Fair kernel entry under contention (R78, kernel/scheduling.md), at two harts: one budget refused a `map_anon` after a search of the whole area in a loop, R12's costliest call, beside the latency workload's driver stand-in on the goldfish RTC's alarm; every wait for the kernel lock takes it in ticket order (the trace's tickets, `lock-trace`; each section's length and cause beside, `hold-trace`), and the driver wake meets its targets, p50 <= 15 ms and p99 <= 50 ms net of the checked build's audits: the RTC's interrupt reaches the idle hart, which draws its ticket behind at most the search in progress (virtual time, checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true
@@ -9,7 +9,7 @@ programs = ["sched-lock-contention"]
 smp = [2]
 keep_smp = true
 # Test builds only: the trace ring with each lock wait's ticket (never in a default kernel).
-kernel_features = ["lock-trace"]
+kernel_features = ["hold-trace"]
 # The oracle checks the waits' ticket order, and gates the driver wake on sched-latency's targets:
 # every hart's PLIC context takes the RTC's interrupt, so the idle hart wakes, draws its ticket
 # behind the hammer's search in progress and runs the driver itself (kernel/scheduling.md, R78).

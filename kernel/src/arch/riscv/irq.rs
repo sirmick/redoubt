@@ -146,11 +146,17 @@ pub extern "C" fn trap_handler(
     // switch, or an interrupt in its idle window) holds it already (cell.rs, `KERNEL_LOCK`).
     let from_user = sstatus::read().spp() == sstatus::SPP::User;
     if from_user {
-        // The wait for the lock is the trace's (`Q`): from here, if another hart held it.
-        #[cfg(feature = "sched-trace")]
+        // The wait for the lock is the trace's (`Q`): from here, if another hart held it. A checked
+        // build marks it, so that another hart's audit it waits through is not billed to it
+        // (`sched::audit`).
+        #[cfg(debug_assertions)]
         let came = riscv::register::time::read64();
+        #[cfg(debug_assertions)]
+        crate::sched::waiting(came);
         crate::arch::hart::serve();
         let (held, ticket, ahead) = crate::cell::KERNEL_LOCK.acquire_ticket();
+        #[cfg(debug_assertions)]
+        crate::sched::waited(held, came);
         #[cfg(feature = "sched-trace")]
         if held {
             crate::sched::trace::lock_wait(came, ticket, ahead);
@@ -175,6 +181,13 @@ pub extern "C" fn trap_handler(
         crate::sched::trace::kernel_from(crate::sched::now_ticks());
     }
     let sc = scause::read();
+    #[cfg(feature = "hold-trace")]
+    crate::sched::trace::hold_cause(match (sc.is_interrupt(), from_user) {
+        (true, _) => 0x200 + sc.code() as u64,
+        (false, true) if sc.code() == 8 && (0x100..0x200).contains(&a0) => a0 as u64,
+        (false, true) if sc.code() == 8 => 0x1ff,
+        (false, _) => 0x300 + sc.code() as u64,
+    });
 
     // If we were previously in Supervisor mode and we've just tried to write to
     // invalid memory, then we likely blew out the stack.
@@ -380,13 +393,20 @@ pub extern "C" fn trap_handler(
         pid,
         ex
     );
-    ArchProcess::with_current(|process| {
-        println!("Current thread {}:", process.current_tid());
-        process.print_current_thread();
-    });
+    // The thread's registers and the address space's map are a kernel failure's diagnosis, and a
+    // debug build's. A program's fault prints its one line: the report is printed holding the
+    // kernel lock, and the map is a line a mapped page, so it would hold every other hart for as
+    // long as the faulting process is large (R12: a call's kernel time follows what it may cost;
+    // kernel/scheduling.md, "Fair kernel entry is bounded by count").
+    if is_kernel_failure || cfg!(feature = "debug-print") {
+        ArchProcess::with_current(|process| {
+            println!("Current thread {}:", process.current_tid());
+            process.print_current_thread();
+        });
+        MemoryMapping::current().print_map();
+    }
 
     // If this is a failure in the kernel, go into an infinite loop
-    MemoryMapping::current().print_map();
     if is_kernel_failure {
         #[allow(clippy::empty_loop)]
         loop {}

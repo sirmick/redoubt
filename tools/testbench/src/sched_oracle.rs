@@ -161,7 +161,7 @@ pub fn parse(log: &str) -> Result<Vec<Record>, String> {
             return Err(bad());
         }
         let kind = f[2].chars().next().ok_or_else(bad)?;
-        if f[2].len() != 1 || !"WRDPKLlefrqwAaGgvNnXYZUVTtIBEOMmCSJHQFukxc".contains(kind) {
+        if f[2].len() != 1 || !"WRDPKLlefrqwAaGgvNnXYZUVTtIBEOMmCSJHQFukxchjy".contains(kind) {
             return Err(bad());
         }
         records.push(Record {
@@ -317,6 +317,23 @@ pub struct Summary {
     pub lock_tickets: Vec<(u64, u64)>,
     /// The run's ticks and its harts (`F`): the harts' time the lock waits are a share of.
     pub hart_time: Option<(u64, u64)>,
+    /// With `hold-trace`, each kernel lock section (`h`, then its `j`), in the order they released
+    /// the lock.
+    pub sections: Vec<Section>,
+    /// The ticks of other harts' audits the lock waits waited through (`y`), not billed to anyone.
+    pub excused: u64,
+}
+
+/// One kernel lock section (`hold-trace`): held from tick `from` to `to` by `hart`, for `cause`
+/// (a system call's number, `0x200` plus an interrupt's code, `0x300` plus an exception's, 0 for
+/// `kmain`'s), of which `audits` ticks were the checked build's audits.
+#[derive(Clone, Copy, Debug)]
+pub struct Section {
+    pub from: u64,
+    pub to: u64,
+    pub hart: u64,
+    pub cause: u64,
+    pub audits: u64,
 }
 
 /// A timer interrupt from user mode, from its `I` to its `O`; or a device interrupt, from its `x`.
@@ -652,6 +669,46 @@ pub fn check(records: &[Record]) -> Result<Summary, String> {
                     return Err(format!("record {}: a lock wait's ticket after no wait of its hart", r.seq));
                 }
                 sum.lock_tickets.push((r.id, r.pass as u64));
+            }
+            'y' => {
+                let back = |k: usize| i.checked_sub(k).map(|j| records[j]);
+                let wait = match back(2) {
+                    Some(k) if k.kind == 'k' => back(3),
+                    other => other,
+                };
+                let Some(q) = wait.filter(|q| q.kind == 'Q' && q.hart == r.hart) else {
+                    return Err(format!("record {}: audits excused after no lock wait of its hart", r.seq));
+                };
+                if u128::from(r.id) > q.pass - u128::from(q.id) {
+                    return Err(format!("record {}: a lock wait excused more than it waited", r.seq));
+                }
+                sum.excused += r.id;
+            }
+            'h' => {
+                if r.pass < u128::from(r.id) {
+                    return Err(format!("record {}: a kernel section that ends before it starts", r.seq));
+                }
+                sum.sections.push(Section {
+                    from: r.id,
+                    to: r.pass as u64,
+                    hart: r.hart,
+                    cause: 0,
+                    audits: 0,
+                });
+            }
+            'j' => {
+                let held = i.checked_sub(2).map(|j| &records[j]);
+                if !held.is_some_and(|h| h.kind == 'h' && h.hart == r.hart) {
+                    return Err(format!(
+                        "record {}: a kernel section's cause after no section of its hart",
+                        r.seq
+                    ));
+                }
+                let section = sum.sections.last_mut().expect("its h was pushed");
+                if r.pass > u128::from(section.to - section.from) {
+                    return Err(format!("record {}: a kernel section's audits outlast it", r.seq));
+                }
+                (section.cause, section.audits) = (r.id, r.pass as u64);
             }
             'F' => sum.hart_time = Some((r.id, r.pass as u64)),
             // A shootdown is `fence`'s: no rank or floor follows from it.
@@ -2184,6 +2241,13 @@ fn charges(
                     *out.waited.entry(b).or_default() += r.pass.saturating_sub(u128::from(r.id));
                 }
             }
+            // The other harts' audits the wait waited through were billed to nobody.
+            'y' if inside => {
+                if let Some(&b) = runs.get(&r.hart).filter(|b| **b != 0 && counted(**b)) {
+                    let w = out.waited.entry(b).or_default();
+                    *w = w.saturating_sub(u128::from(r.id));
+                }
+            }
             _ => {}
         }
         let out_of_queue = seen.get(&r.id).is_none_or(|s| s.1);
@@ -2613,12 +2677,14 @@ fn nobody(r: &Record) -> String {
 
 /// The waits for the kernel lock from user mode (`Q`) as a share of the harts' time (`F`): the
 /// time one hart's runner lost to another hart's kernel section, which no budget is charged for and
-/// R78 bounds by count, not by share (kernel/scheduling.md, "Residual risks"). Report-only.
-fn lock_waits(waits: &[(u64, u64, u64)], (ticks, harts): (u64, u64)) -> String {
+/// R78 bounds by count, not by share (kernel/scheduling.md, "Residual risks"); and of them, the
+/// ticks behind other harts' audits, which a checked build bills to nobody (`y`). Report-only.
+fn lock_waits(waits: &[(u64, u64, u64)], excused: u64, (ticks, harts): (u64, u64)) -> String {
     let waited: u64 = waits.iter().map(|(from, to, _)| to - from).sum();
     let per_mille = waited.saturating_mul(1000) / ticks.saturating_mul(harts).max(1);
     format!(
-        "lock waits {per_mille} of 1000 ({} waits, {waited} ticks, over {harts} hart(s) x {ticks} ticks)",
+        "lock waits {per_mille} of 1000 ({} waits, {waited} ticks, {excused} of them behind other harts' \
+         audits and billed to nobody, over {harts} hart(s) x {ticks} ticks)",
         waits.len()
     )
 }
@@ -2653,6 +2719,67 @@ fn lock_order(tickets: &[(u64, u64)], waits: &[(u64, u64, u64)], harts: u64) -> 
     ))
 }
 
+/// The causes of a section a page fault began (`hold-trace`): an instruction, load or store page
+/// fault, `0x300` plus its exception code.
+const PAGE_FAULTS: [u64; 3] = [0x30c, 0x30d, 0x30f];
+
+/// A section's cause by name: a system call's, an interrupt's or an exception's code, or `kmain`.
+fn cause_name(cause: u64) -> String {
+    match cause {
+        0 => "kmain".into(),
+        0x200.. if cause < 0x300 => format!("interrupt {}", cause - 0x200),
+        0x300.. => format!("exception {}", cause - 0x300),
+        _ => redoubt_sys::Number::from_raw(cause).map_or("an unknown call".into(), |n| n.name().into()),
+    }
+}
+
+/// With `hold-trace`, the kernel lock's sections (kernel/scheduling.md, "Fair kernel entry is
+/// bounded by count"): their lengths net of the audits inside them, the longest by cause, and
+/// what the lock waits (`Q`) waited behind: the part of each wait that another hart's section
+/// covers (its audits pro rata) and the part with the lock free, the hand-off to the waiting hart.
+/// Report-only.
+fn sections(sections: &[Section], waits: &[(u64, u64, u64)]) -> String {
+    let net = |s: &Section| s.to - s.from - s.audits;
+    let mut lengths: Vec<u64> = sections.iter().map(net).collect();
+    let (p50, p99) = (percentile(&mut lengths, 50), percentile(&mut lengths, 99));
+    let mut by_cause: BTreeMap<u64, (usize, u64, u64)> = BTreeMap::new();
+    for s in sections {
+        let c = by_cause.entry(s.cause).or_default();
+        *c = (c.0 + 1, c.1 + net(s), c.2.max(net(s)));
+    }
+    let mut longest: Vec<_> = by_cause.into_iter().collect();
+    longest.sort_by_key(|(_, (_, _, max))| std::cmp::Reverse(*max));
+    let longest: Vec<String> = longest
+        .iter()
+        .take(5)
+        .map(|(cause, (n, total, max))| format!("{} {max} ({n}, {total} in all)", cause_name(*cause)))
+        .collect();
+    // Sections by start, to find the ones each wait overlaps.
+    let mut by_start: Vec<&Section> = sections.iter().collect();
+    by_start.sort_by_key(|s| s.from);
+    let longest_section = sections.iter().map(|s| s.to - s.from).max().unwrap_or(0);
+    let (mut waited, mut behind, mut audits) = (0u64, 0u64, 0u64);
+    for &(from, to, hart) in waits {
+        waited += to - from;
+        let first = by_start.partition_point(|s| s.from + longest_section < from);
+        for s in by_start[first..].iter().take_while(|s| s.from < to).filter(|s| s.hart != hart) {
+            let overlap = s.to.min(to).saturating_sub(s.from.max(from));
+            behind += overlap;
+            audits +=
+                (u128::from(overlap) * u128::from(s.audits) / u128::from((s.to - s.from).max(1))) as u64;
+        }
+    }
+    format!(
+        "kernel sections: {} held, ticks net of audits p50/p99/max {p50}/{p99}/{}; longest by cause: {}; \
+         lock waits {waited} ticks: behind other harts' sections {behind} (their audits {audits}), the lock \
+         free {}",
+        sections.len(),
+        lengths.last().copied().unwrap_or(0),
+        longest.join(", "),
+        waited.saturating_sub(behind)
+    )
+}
+
 /// The bench's post-check: parse the case's console log and check it. `args` may bound the p99
 /// of R10's durations, `r10_p99_us=N`; each measure's p50 and p99 net of audits,
 /// `<measure>_p50_us=N` and `<measure>_p99_us=N`, in each group the program printed; and a
@@ -2661,8 +2788,9 @@ fn lock_order(tickets: &[(u64, u64)], waits: &[(u64, u64, u64)], harts: u64) -> 
 /// `gate_harts=N`, those targets are judged on a trace of at most N harts (`F`) and only reported
 /// on more: the targets are gated at one hart and two and recorded at four. A `walk-trace`
 /// kernel's walks may each be bounded, `pump_max_us=N`, `expiry_max_us=N` and
-/// `reconcile_max_us=N`, the longest net of audits, judged before R10's p99. Every window a target
-/// judges has the checked build's audit time inside it subtracted; R10's has none. Each charged
+/// `reconcile_max_us=N`, the longest net of audits, judged before R10's p99; a `hold-trace`
+/// kernel's longest section a page fault caused, `fault_section_max_ticks=N`, net of audits. Every window a
+/// target judges has the checked build's audit time inside it subtracted; R10's has none. Each charged
 /// share the program printed is judged on the kernel's charges in the trace
 /// ([`check_charged_share`]), and each share across harts on the same charges net of lock waits
 /// ([`check_hart_share`]), with the timer interrupts inside its window nobody paid for and those
@@ -2742,7 +2870,7 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
             .ok_or_else(|| format!("unknown sched_oracle argument {arg:?}"))?;
         let measure = name.strip_suffix("_p50_us").or_else(|| name.strip_suffix("_p99_us"));
         let walk = name.strip_suffix("_max_us");
-        if !(["r10_p99_us", "lease_end_p99_us", "gate_harts"].contains(&name)
+        if !(["r10_p99_us", "lease_end_p99_us", "gate_harts", "fault_section_max_ticks"].contains(&name)
             || measure.is_some_and(|m| MEASURES.contains(&m))
             || walk.is_some_and(|w| WALKS.contains(&w)))
         {
@@ -2786,6 +2914,22 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
             net.iter().max().ok_or(format!("a {name} bound is set, but the trace holds no {name} walk"))?;
         if max > bound {
             return Err(format!("the {name} walk's max is {max} µs net of audits, above {bound}"));
+        }
+    }
+    // With `hold-trace`, the longest kernel section a page fault from user mode caused, net of
+    // audits: a fault's handling may not cost what the faulting process holds.
+    if let Some(bound) = bounds.get("fault_section_max_ticks") {
+        let max = sum
+            .sections
+            .iter()
+            .filter(|s| PAGE_FAULTS.contains(&s.cause))
+            .map(|s| s.to - s.from - s.audits)
+            .max()
+            .ok_or("a fault section bound is set, but the trace holds no section a page fault caused")?;
+        if max > *bound {
+            return Err(format!(
+                "a page fault's kernel section held the lock {max} ticks net of audits, above {bound}"
+            ));
         }
     }
     if n == 0 && (bounds.contains_key("r10_p99_us") || bounds.contains_key("lease_end_p99_us")) {
@@ -2913,7 +3057,8 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
         format!(
             "; {}{}",
             nobody(r),
-            sum.hart_time.map_or(String::new(), |t| format!("; {}", lock_waits(&sum.lock_waits, t)))
+            sum.hart_time
+                .map_or(String::new(), |t| format!("; {}", lock_waits(&sum.lock_waits, sum.excused, t)))
         )
     });
     let head = format!(
@@ -2989,6 +3134,9 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
     if !sum.lock_tickets.is_empty() {
         let harts = sum.hart_time.ok_or("lock wait tickets, but no record of the harts (F)")?.1;
         lines.push(lock_order(&sum.lock_tickets, &sum.lock_waits, harts)?);
+    }
+    if !sum.sections.is_empty() {
+        lines.push(sections(&sum.sections, &sum.lock_waits));
     }
     let out = std::iter::once(head).chain(lines).collect::<Vec<_>>().join("\n      ");
     if missed { Err(out) } else { Ok(out) }
@@ -3906,12 +4054,16 @@ mod tests {
 
     /// A trace whose records name the hart that wrote them: `(entry, kind, id, pass, hart)`.
     fn verdict_on(records: &[(u64, char, u64, u128, u64)]) -> Result<String, String> {
+        run(&verdict_log(records), "")
+    }
+
+    /// The log of `records`, each `(entry, kind, id, pass, hart)`, numbered in order.
+    fn verdict_log(records: &[(u64, char, u64, u128, u64)]) -> String {
         let mut s = String::from("boot noise\n");
         for (i, (entry, kind, id, pass, hart)) in records.iter().enumerate() {
             s += &format!("SCHED-TRACE {i} {entry} {kind} {id} {pass:x} {hart}\n");
         }
-        s += &format!("SCHED-TRACE-END {} dropped 0\n", records.len());
-        run(&s, "")
+        s + &format!("SCHED-TRACE-END {} dropped 0\n", records.len())
     }
 
     /// Across harts a pick passes over a budget ranked ahead only if no thread of it waits for a
@@ -3955,25 +4107,44 @@ mod tests {
         assert!(ok.is_ok_and(|s| s.contains("1 picks in rank order")));
     }
 
-    /// The waits for the lock (`Q`) are reported as a share of the harts' time (`F`), judging nothing;
-    /// a wait that ends before it starts is malformed.
+    /// The waits for the lock (`Q`) are reported as a share of the harts' time (`F`), judging nothing,
+    /// with the ticks of other harts' audits they waited through (`y`, just after its hart's `Q`, or
+    /// its `k`); a wait that ends before it starts is malformed, and so is an excuse after no wait
+    /// of its hart or for more than the wait.
     #[test]
     fn lock_waits_are_reported_per_mille_of_the_harts_time() {
         let ok = verdict_on(&[
             (1, 'W', 5, 0x10, 0),
             (1, 'K', 5, 0x10, 0),
             (2, 'Q', 100, 300, 1),
+            (2, 'y', 150, 0, 1),
             (3, 'Q', 400, 500, 0),
+            (3, 'k', 7, 1, 0),
+            (3, 'y', 20, 0, 0),
             (3, 'F', 1000, 2, 0),
             (300, 'C', 10_300, 9_900, 0),
         ])
         .unwrap();
         assert!(
-            ok.contains("; lock waits 150 of 1000 (2 waits, 300 ticks, over 2 hart(s) x 1000 ticks)"),
+            ok.contains(
+                "; lock waits 150 of 1000 (2 waits, 300 ticks, 170 of them behind other harts' audits and \
+                 billed to nobody, over 2 hart(s) x 1000 ticks)"
+            ),
             "{ok}"
         );
         let bad = verdict_on(&[(1, 'W', 5, 0x10, 0), (1, 'K', 5, 0x10, 0), (2, 'Q', 300, 100, 1)]);
         assert!(bad.unwrap_err().contains("a lock wait that ends before it starts"));
+        let excuse = |records: &[(u64, char, u64, u128, u64)]| verdict_on(records).unwrap_err();
+        let w = (1, 'W', 5, 0x10, 0);
+        assert!(excuse(&[w, (2, 'y', 10, 0, 1)]).contains("audits excused after no lock wait of its hart"));
+        assert!(
+            excuse(&[w, (2, 'Q', 100, 300, 0), (2, 'y', 10, 0, 1)])
+                .contains("audits excused after no lock wait of its hart")
+        );
+        assert!(
+            excuse(&[w, (2, 'Q', 100, 300, 1), (2, 'y', 201, 0, 1)])
+                .contains("a lock wait excused more than it waited")
+        );
     }
 
     /// With `lock-trace`, the waits' tickets (`k`, each just after its hart's `Q`) must rise in the
@@ -4011,6 +4182,60 @@ mod tests {
         assert!(alone.unwrap_err().contains("a lock wait's ticket after no wait of its hart"));
         let other = verdict_on(&[(1, 'W', 5, 0x10, 0), (2, 'Q', 100, 300, 1), (2, 'k', 7, 0, 0)]);
         assert!(other.unwrap_err().contains("a lock wait's ticket after no wait of its hart"));
+    }
+
+    /// With `hold-trace` the kernel's sections are reported by cause net of their audits, and each
+    /// lock wait is split into what other harts' sections covered (their audits pro rata) and the
+    /// time the lock stood free; a section's cause must follow it, on its hart, and its audits fit.
+    #[test]
+    fn kernel_sections_say_what_the_lock_waits_waited_behind() {
+        let ok = verdict_on(&[
+            (1, 'W', 5, 0x10, 0),
+            (1, 'K', 5, 0x10, 0),
+            // Hart 0 holds [100, 300] for budget_destroy (0x115), 100 ticks of it an audit; hart 1
+            // waits [150, 350]: 150 behind it, 75 of them its audit, 50 with the lock free.
+            (2, 'h', 100, 300, 0),
+            (2, 'j', 0x115, 100, 0),
+            (2, 'Q', 150, 350, 1),
+            (2, 'h', 350, 360, 1),
+            (2, 'j', 0x205, 0, 1),
+            (3, 'F', 1000, 2, 0),
+            (300, 'C', 10_300, 9_900, 0),
+        ])
+        .unwrap();
+        assert!(
+            ok.contains(
+                "kernel sections: 2 held, ticks net of audits p50/p99/max 10/100/100; longest by cause: \
+                 budget_destroy 100 (1, 100 in all), interrupt 5 10 (1, 10 in all); lock waits 200 ticks: \
+                 behind other harts' sections 150 (their audits 75), the lock free 50"
+            ),
+            "{ok}"
+        );
+        // A page fault's section is bounded net of its audits.
+        let fault = |bound: &str| {
+            let records = [
+                (1, 'W', 5, 0x10, 0),
+                (1, 'K', 5, 0x10, 0),
+                (2, 'h', 100, 300, 0),
+                (2, 'j', 0x30f, 50, 0),
+                (2, 'h', 300, 900, 0),
+                (2, 'j', 0x115, 0, 0),
+            ];
+            run(&verdict_log(&records), bound)
+        };
+        assert!(fault("fault_section_max_ticks=150").is_ok());
+        assert!(fault("fault_section_max_ticks=149").is_err_and(|e| {
+            e.contains("a page fault's kernel section held the lock 150 ticks net of audits, above 149")
+        }));
+        let none =
+            run(&verdict_log(&[(1, 'W', 5, 0x10, 0), (1, 'K', 5, 0x10, 0)]), "fault_section_max_ticks=1");
+        assert!(none.as_ref().is_err_and(|e| e.contains("no section a page fault caused")), "{none:?}");
+        let orphan = verdict_on(&[(1, 'W', 5, 0x10, 0), (2, 'h', 100, 300, 0), (2, 'j', 0x115, 0, 1)]);
+        assert!(orphan.unwrap_err().contains("a kernel section's cause after no section of its hart"));
+        let over = verdict_on(&[(1, 'W', 5, 0x10, 0), (2, 'h', 100, 300, 0), (2, 'j', 0x115, 201, 0)]);
+        assert!(over.unwrap_err().contains("a kernel section's audits outlast it"));
+        let back = verdict_on(&[(1, 'W', 5, 0x10, 0), (2, 'h', 300, 100, 0)]);
+        assert!(back.unwrap_err().contains("a kernel section that ends before it starts"));
     }
 
     /// The kernel's time closes the trace (`C`): the share of it, net of audits, charged to no
@@ -4665,11 +4890,18 @@ mod tests {
                 && e.contains("target missed (450 <= share <= 550)")),
             "{missed:?}"
         );
-        // Lock waits of the hart running the bystander come out of its charge.
+        // Lock waits of the hart running the bystander come out of its charge, but for the audits
+        // on other harts they waited through, which were billed to nobody.
         let waits = [('H', 44, 0, 1), ('Q', 0, 10_800, 1)];
         let net = run(&at(&log, &waits), "");
         assert!(
             net.as_ref().is_err_and(|e| e.contains("lock waits taken out, ticks {44: 10800}")),
+            "{net:?}"
+        );
+        let excused = [('H', 44, 0, 1), ('Q', 0, 10_800, 1), ('y', 800, 0, 1)];
+        let net = run(&at(&log, &excused), "");
+        assert!(
+            net.as_ref().is_err_and(|e| e.contains("lock waits taken out, ticks {44: 10000}")),
             "{net:?}"
         );
         // Judged at one hart only (`@1`), the miss at two is reported, not judged.

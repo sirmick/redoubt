@@ -144,11 +144,15 @@ impl TicketLock {
                 harts
             );
         }
+        #[cfg(feature = "hold-trace")]
+        crate::sched::trace::hold_begin();
         (held, ticket, waited)
     }
 
     /// Give the lock to the next ticket. The caller holds it.
     pub fn release(&self) {
+        #[cfg(feature = "hold-trace")]
+        crate::sched::trace::hold_end();
         #[cfg(debug_assertions)]
         {
             assert!(self.held_here(), "the kernel lock released by a hart that does not hold it");

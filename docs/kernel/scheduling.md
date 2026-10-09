@@ -541,7 +541,13 @@ and a hostile budget run a slice each before it takes the second.
 A share is judged from the same trace: what the kernel charged the budget in the window, against
 what it charged every budget, never a count, since under `icount` a count is the machine's
 instructions ([checked builds](../testbench.md#checked-builds)). An audit is charged to no budget,
-so every share is net of the audits, and on several harts net of the lock waits too. Each is
+so every share is net of the audits, and on several harts net of the lock waits too. In a checked
+build only, a hart's wait for the kernel lock behind another hart's audit is billed to no one
+either, and the waiter's slice's end moves by it (the trace's `y`). That changes the schedule as
+well as the bill: an excused waiter keeps its slice, stays on its hart and meets the next audit.
+At two harts `deadline-flood-billed-traced`'s victim, whose creator's destructions each run a
+20 ms audit, moved from 875 to 413 of 1000 on rv64 with it, from one mode of its share to the
+other; it keeps one hart ([residual risks](#residual-risks)). Each is
 owed its water-filling share, which at one hart is its weight's; the victims of churn, floods and
 gaming are owed at least theirs. Measured at 1 ms in the checked build, of 1000, rv64 / rv32:
 
@@ -1154,8 +1160,10 @@ tells whoever reads the console who runs when. It exists only under the Cargo fe
 The other diagnostic features are off by default in the same way: `walk-trace`, which implies
 the trace and brackets each receive's pump, timer expiry and reconcile in it, for `worst-walk`
 alone; `lock-trace`, which implies the trace and records after each wait for the kernel lock its
-ticket and the sections ahead of it when drawn (`k`), for `sched-lock-contention`,
-`sched-lock-contention-4` and `irq-boot-hart-only`; `irq-boot-hart-only`, whose boot hart alone
+ticket and the sections ahead of it when drawn (`k`), for `irq-boot-hart-only`; `hold-trace`,
+which implies `lock-trace` and records each section of the kernel lock at its release, its ticks,
+cause and audits (`h`, `j`), for `sched-lock-contention` and `sched-lock-contention-4`;
+`irq-boot-hart-only`, whose boot hart alone
 takes device interrupts, for R78's negative case at two harts; `sched-inject-tie-fault`, a debug-only break of the tie rule that implies the trace;
 `sched-capped-holds-floor`, whose floor counts the capped budgets, for R12's negative case at two
 harts; `sched-test-and-set-entry`, which replaces the kernel lock by test-and-set, and
@@ -1164,7 +1172,9 @@ harts; `sched-test-and-set-entry`, which replaces the kernel lock by test-and-se
 `audit-unstamped`, which leaves the audit
 after a destruction out of the trace, and `audit-billed`, which bills each audit's time to the
 budget that ran it and counts it against its slice, each for one recorded negative run
-([responsiveness](#responsiveness)); `timer-tail-billed`, which bills the rest of a timer
+([responsiveness](#responsiveness)); `audit-wait-billed`, which bills a hart's wait behind
+another hart's audit to its runner, for one recorded negative run ([residual
+risks](#residual-risks)); `timer-tail-billed`, which bills the rest of a timer
 interrupt after its expiry, and its return, to the budget it interrupted, for one recorded
 negative run ([charging](#charging)); `alloc-first-fit`, the first-fit frame scan, for one
 recorded negative run ([R12](#r12-scheduling)); `slice-10ms`, the old 10 ms slice, for the
@@ -1256,23 +1266,35 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   more reason R12 bounds a call's kernel time. So one budget's kernel work under the one lock costs
   the other harts up to its own length, bounded by count, not by share: the wait is the waiting
   hart's runner's time, billed to it and counted against its slice, and no billing gives it back.
-  A traced kernel records each wait from user mode and the oracle reports them as a share of the
-  harts' time, `lock waits N of 1000`, beside `nobody`. Shares across harts are judged net of
-  these waits ([checked builds](../testbench.md#checked-builds)), and the cases whose waits decide
-  the share keep one hart (below). Taking them out has a blind spot: the judge subtracts each wait
-  from the budget the hart's runner record names, so a kernel that billed a wait to the wrong
-  budget, or to none, would pass it, and no case checks the billing of a wait itself. Once the
-  waits are short (step 5 below), the shares can be judged without taking them out, which closes
-  it. At two harts they are 84 to 210 of 1000 in the share cases
-  (rv64 then rv32: `sched-exit-churn` 146 and 139, `sched-timer-flood` 185 and 194,
-  `sched-budget-churn` 131 and 125, `sched-share` 130 and 195) and 229 and 280 in the containment
-  gate. In
-  `deadline-flood-billed-traced`, whose creator's deadlines end in destructions, one hart waited
-  about 1000 ms of a 2 s window. A wake behind R12's costliest call waits at most the section in
+  A checked build's audit is the one exception: like the audit's own hart, a hart waiting behind
+  it is billed none of the part it waited through, and its slice's end moves by it
+  ([checked builds](../testbench.md#checked-builds)). A traced kernel records each wait from user
+  mode and the oracle reports them as a share of the harts' time, `lock waits N of 1000`, beside
+  `nobody`, with the ticks behind audits. Shares across harts are judged net of the billed waits,
+  and the cases whose share the lock decided keep one hart (below). Taking them out has a blind
+  spot: the judge subtracts each wait from the budget the hart's runner record names, so a kernel
+  that billed a wait to the wrong budget, or to none, would pass it, and no case checks the billing
+  of a wait itself. Judged gross, with the billed waits counted as the waiter's, every share that
+  passes net passes too but one: `sched-exit-churn`'s victim against threads that exit reads 403
+  on rv64 and 445 on rv32, against 441 to 505 and 463 to 483 net over this page's builds, and at
+  least 450, so the shares stay net and the blind spot stays. Gross sits nearer water-filling where the waits are short:
+  `sched-timer-flood`'s three shares read 498 to 500 gross against 522 to 586 net.
+  At two harts the waits are 103 to 228 of 1000 in the share cases (rv64 then rv32:
+  `sched-exit-churn` 228 and 216, `sched-timer-flood` 213 and 207, `sched-budget-churn` 110 and
+  103, `sched-share` 140 and 196) and 234 and 286 in the containment gate; behind audits are 85 to
+  89 % of the waits in `sched-budget-churn-shell` and `deadline-flood-billed-traced`, whose
+  creators' destructions each run a 20 ms audit, and 6 to 48 % in the other share cases. With `hold-trace` the
+  oracle splits them by what they waited behind ([the scheduler
+  oracle](../testbench.md#the-scheduler-oracle)): a wait in `sched-share` is mostly the lock
+  standing free, about 0.5 ms each, while the woken waiter, halted, takes its turn under `icount`.
+  What made the sections long, measured at two harts: the destruction's audit; a scan of all of
+  RAM at every process's end, 7 ms, billed as work until it became an audit; a fault's report,
+  which printed the process's map a line a page holding the lock (837 ms for 4096 pages); and
+  zeroing a frame a checked word at a time, five times a plain store loop. The wait for a
+  shootdown's acknowledgements stays under the lock: it totals 0.9 ms over the whole containment
+  gate at two harts ([memory](memory.md#residual-risks)). A wake behind R12's costliest call waits at most the section in
   progress at two harts (`sched-lock-contention`, [R78](#r78-fair-kernel-entry)): the idle hart
-  takes the device's interrupt and draws its ticket behind it. Destruction's work moving outside
-  the lock ([several harts](../plan/m2-usable-shell.md#several-harts), step 5) is what shortens
-  the waits.
+  takes the device's interrupt and draws its ticket behind it.
 - **A woken hart waits for QEMU's turns at four harts.** Under `icount` the harts take turns on one
   host thread, and a hart in a kernel section keeps its turn to the section's end. A device's
   line that rises while the idle hart is halted wakes it on time in virtual time, but the hart runs
@@ -1289,18 +1311,20 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   each source to one idle hart (a busy hart's threshold above the sources' priority while one
   idles) is the remedy if it matters.
 - **Some cases keep one hart.** A case that does not keep its hart count runs at the count the
-  bench is given (`--smp`); these keep theirs (`keep_smp`), each for one of four reasons: the lock
-  waits above, which destruction's work leaving the lock removes (step 5 of
-  [several harts](../plan/m2-usable-shell.md#several-harts) un-keeps them); where a
-  checked build's audits fall; a count with no trace, which under `icount` is the machine's
-  instructions, not a hart's time; or a scenario that measures one queue's rounds. Each kept
-  property has a case at two harts that covers it, or says none:
+  bench is given (`--smp`); these keep theirs (`keep_smp`), each for one of five reasons: the
+  cap set's lifts under a creator that carves and destroys without pause; a timeout answered at
+  whichever entry comes first after it is due; where a checked build's audits fall; a count with
+  no trace, which under `icount` is the machine's instructions, not a hart's time; or a scenario
+  that measures one queue's rounds. The lock waits once decided three of them; with the waits
+  behind other harts' audits billed to no one (above) they no longer do, and what decides those
+  shares now is in the trace's picks. Each kept property has a case at two harts that covers it,
+  or says none:
 
   | Case | Class | Why | At two harts |
   | --- | --- | --- | --- |
-  | `sched-budget-churn-shell` | lock waits | the shell's create and destroy calls hold the lock; the victim waits 848 ms of 2 s and keeps 326 (rv64) and 406 (rv32) of 1000 net of its waits | `sched-budget-churn`'s other variants |
-  | `deadline-flood-billed-traced` | lock waits | the creator's deadline destructions hold the lock; the victim's share net of the waits swings from 407 to 884 | `sched-timer-flood`'s staggered budget deadlines |
-  | `sched-wake-no-preempt` | lock waits | the hart taking the timeout waited for the lock past its own slice's end, so no nap of twenty ended mid-slice | none |
+  | `sched-budget-churn-shell` | the cap set's lifts | the shell carves and destroys a child without pause; with 85 to 89 % of the victim's waits behind the shell's audits billed to no one, it keeps 404 (rv64) and 509 (rv32) of 1000. On rv64 the shell holds both harts about 60 % of the time outside the audits, and the victim leaves the cap set 80 times, each a lift to the floor with no charge (45 on rv32), while the shell is reweighed 240 times and lifted 80 | `sched-budget-churn`'s other variants |
+  | `deadline-flood-billed-traced` | the cap set's lifts | the creator's deadline destructions reweigh and lift it as the shell's do; with the waits behind audits billed to no one the victim keeps 413 and 404 of 1000 on rv64, 513 and 515 on rv32 | `sched-timer-flood`'s staggered budget deadlines |
+  | `sched-wake-no-preempt` | a timeout at the first entry | at two harts a nap's timeout is answered at whichever entry comes first after it is due: of twenty, eleven at another hart's call or entry and seven at a slice's end, so too few end mid-slice by the timer; no wait for the lock is in any of them, and a 700 µs nap gives two of twenty | none |
   | `sched-large-weight` | audits | its users' hart switches budgets each slice and takes most audits, charged to no one, so the server reads 572 of 1000 on rv32 against 450 to 550 | `sched-share` (its 300 holds a hart) |
   | `deadline-flood-billed` | a count | a release build with no trace | `deadline-flood-billed-traced` (kept itself) and `sched-timer-flood` |
   | `sched-share-release` | a count | a release build with no trace | `sched-share` |
@@ -1309,15 +1333,14 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   | `sched-carve-return` | one queue's rounds | V is capped at two budgets on two harts, so U alone sets the floor and never leads it | `sched-carve-inflation` |
   | `sched-cluster`, `sched-cluster-old-control` | one queue's rounds | the envelope is calibrated against one runner's slice period | `sched-latency`'s targets |
 
-  `kernel-containment` runs at two harts but judges its bystander's share at one (`@1`), for the
-  lock waits and audits too: the bystander's hart, the one waiting longer for the lock and taking
-  the audits or the other, puts it at 445 or 543 to 546 of 1000 on rv32 against 450 to 550; every
-  other verdict and target of the gate holds at two harts ([containment](README.md#containment)).
+  `kernel-containment` runs at two harts but judges its bystander's share at one (`@1`): with the
+  waits behind audits billed to no one it reads 464 of 1000 on rv64 and 442 on rv32 at two, against
+  450 to 550; every other verdict and target of the gate holds at two harts
+  ([containment](README.md#containment)).
   `sched-exit-churn` judges its victim against threads that exit at one hart too (`@1`): at two,
-  the victim's hart takes 4.6M of the 8.4M ticks of lock waits the attacker's exits cause, and it
-  keeps 448 of 1000 on rv32 against at least 450 (482 on rv64); against processes that exit or
-  fault it is judged at two. Work moving out of the lock (step 5) is what lets both shares be
-  judged at two.
+  with the waits behind audits billed to no one, it keeps 502 of 1000 on rv64 and 465 on rv32
+  against at least 450, and 441 on rv64 in a build with `hold-trace`'s extra records, too near the
+  bound to gate; against processes that exit or fault it is judged at two.
   `bench-poweroff-missing` keeps one hart too, a bound of the bench's own.
   `sched-latency-tcg` runs at two harts: the kernel's lines wait, whole, for a program's line in
   progress ([the console's one writer](devices.md#the-consoles-one-writer)).

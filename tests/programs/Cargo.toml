@@ -37,6 +37,8 @@ bin = [
     { name = "endpoint-destroy-full", test = false },
     { name = "endpoint-destroy-open-calls", test = false },
     { name = "expiry-deadline-then-timeout", test = false },
+    { name = "fault-report-big", test = false },
+    { name = "fault-report-witness", test = false },
     { name = "forger", test = false },
     { name = "handle-chain-attack", test = false },
     { name = "heap-cap", test = false },

@@ -528,7 +528,7 @@ impl MemoryManager {
 
     /// R12's index rule for the live set: it holds exactly the PIDs with an account.
     #[cfg(debug_assertions)]
-    fn check_live_pids(&self) {
+    pub(crate) fn check_live_pids(&self) {
         for (index, account) in self.objects.accounts.iter().enumerate() {
             assert_eq!(
                 self.objects.live_pids.contains(index),
@@ -650,8 +650,10 @@ impl MemoryManager {
         self.objects.accounts[index] =
             Account { budget: Some(budget), earliest_timeout: u64::MAX, ..Account::NONE };
         self.objects.live_pids = self.objects.live_pids.with(index);
+        // An audit (`sched::audit`): it neither moves the schedule nor counts in a latency target.
+        // No account is made inside a destruction.
         #[cfg(debug_assertions)]
-        self.check_live_pids();
+        crate::sched::audit(crate::sched::AUDIT_INDEXES, || self.check_live_pids());
         Ok(())
     }
 
@@ -668,14 +670,20 @@ impl MemoryManager {
         *account = Account::NONE;
         self.objects.live_pids =
             self.objects.live_pids.without(account_index(pid).expect("an account's PID"));
-        #[cfg(debug_assertions)]
-        self.check_live_pids();
         self.uncharge(budget, pages);
         if crate::process::object_of(self, pid).is_none() {
             self.uncount_process(budget);
         }
+        // An audit, as at an account's creation; the frame owners' is a scan of all of RAM. Inside
+        // a destruction it does nothing: the destruction audits both once, after its end record
+        // (`check_object_indexes`).
         #[cfg(debug_assertions)]
-        self.check_frame_owners();
+        if !self.objects.destroying {
+            crate::sched::audit(crate::sched::AUDIT_INDEXES, || {
+                self.check_live_pids();
+                self.check_frame_owners();
+            });
+        }
     }
 
     /// A process is ending: its threads' IPC pages go back, while its header page, which names

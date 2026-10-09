@@ -21,8 +21,8 @@ memory_mib = 576
 # bystander's share of the CPU the kernel charged under `users`, in the window the steward opens
 # once both slots' leases run (the program's `CHARGED-SHARE`), against its water-filling share among
 # the budgets charged in it (it counts on one thread, so at most a hart), within R12's 50, judged at
-# one hart (`@1`): at two, the hart it lands on, the one waiting longer for the lock and taking
-# the audits or the other, puts it at 445 or 545 on rv32 (kernel/scheduling.md, "Residual risks").
+# one hart (`@1`): at two, with a wait behind another hart's audit billed to no one, it reads 464
+# on rv64 and 442 on rv32 (kernel/scheduling.md, "Residual risks").
 # The targets are gated at one hart and two and recorded at more (`gate_harts`).
 post_check = "sched_oracle gate_harts=2 r10_p99_us=30000 lease_end_p99_us=125000 driver_wake_p50_us=15000 driver_wake_p99_us=50000 timer_wake_p50_us=15000 timer_wake_p99_us=50000 decision_wake_p50_us=25000 decision_wake_p99_us=95000 deadline_notice_p99_us=40000"
 timeout_secs = 1800

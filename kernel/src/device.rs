@@ -198,8 +198,12 @@ impl MemoryManager {
     /// Interrupt `irq`'s object is now `frame` (`None`: freed), in the IRQ index.
     fn index_irq(&mut self, irq: u32, frame: Option<u32>) {
         self.objects.irqs[irq as usize] = frame;
+        // An audit, a scan of every object frame; inside a destruction the destruction's audit has
+        // it (`check_object_indexes`).
         #[cfg(debug_assertions)]
-        self.check_irq_index();
+        if !self.objects.destroying {
+            crate::sched::audit(crate::sched::AUDIT_INDEXES, || self.check_irq_index());
+        }
     }
 
     /// A checked build's proof that the IRQ index is what a scan of every object frame finds.
