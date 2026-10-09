@@ -195,14 +195,8 @@ impl Around<Console> for Readers {
 pub fn serve(startup: &Startup) -> u32 {
     let Some(handle) = startup.handle(ENDPOINT) else { return NO_ENDPOINT };
     let endpoint = Endpoint::from_handle(handle);
-    let Some(uart) = startup
-        .handle(UART_MMIO)
-        .map(Mmio::from_handle)
-        .and_then(|mmio| mmio.registers().ok())
-        .and_then(Uart::new)
-    else {
-        return NO_UART;
-    };
+    let Some(mmio) = startup.handle(UART_MMIO).map(Mmio::from_handle) else { return NO_UART };
+    let Some(uart) = mmio.registers().ok().and_then(Uart::new) else { return NO_UART };
     uart.init();
     let args: Vec<&str> = startup.args().collect();
     let Ok(buckets) = redoubt_rt::server::buckets(&args) else { return BAD_LIMITS };
@@ -214,6 +208,7 @@ pub fn serve(startup: &Startup) -> u32 {
     let Ok(size) = size_arg(&args) else { return BAD_LIMITS };
     let mut console = Console::new(uart);
     console.size = size;
+    console.hold = Some(mmio);
     let Ok(mut server) = NineServer::new(console, limits, random) else { return BAD_LIMITS };
     // A console read, and a `resize`, wait on a person, so they have no deadline: what reclaims
     // one is its caller giving up, which arrives as an abandoned-call notice.

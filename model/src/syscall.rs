@@ -153,11 +153,17 @@ pub enum Syscall {
     BudgetReap {
         h: u64,
     },
+    /// Takes (1) or gives back (2) the console's hold, through the console's MMIO device handle
+    /// (kernel/devices.md, "The console's one writer").
+    ConsoleHold {
+        h: u64,
+        hold: u64,
+    },
 }
 
 /// The calls' names, in kernel/abi.md's table order (the order of `redoubt-sys`'s numbers, from 1).
 /// The one list of them: [`Syscall::name`], the trace and the tests use it.
-pub const CALL_NAMES: [&str; 28] = [
+pub const CALL_NAMES: [&str; 29] = [
     "map_anon",
     "unmap",
     "set_flags",
@@ -186,6 +192,7 @@ pub const CALL_NAMES: [&str; 28] = [
     "map_fixed",
     "device_info",
     "budget_reap",
+    "console_hold",
 ];
 
 impl Syscall {
@@ -220,6 +227,7 @@ impl Syscall {
             Syscall::MapFixed { .. } => 26,
             Syscall::DeviceInfo { .. } => 27,
             Syscall::BudgetReap { .. } => 28,
+            Syscall::ConsoleHold { .. } => 29,
         }
     }
 

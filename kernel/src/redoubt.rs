@@ -17,7 +17,7 @@
 
 use redoubt_layout::Pid;
 use redoubt_sys::{
-    BUDGET_SPEC_SLOTS, BudgetSpec, Call, CallOutcome, Error, LendDisposition, Number, REGS, Return,
+    BUDGET_SPEC_SLOTS, BudgetSpec, Call, CallOutcome, Error, Hold, LendDisposition, Number, REGS, Return,
     USAGE_SLOTS, encode_result,
 };
 
@@ -149,6 +149,8 @@ fn dispatch(pid: Pid, tid: TID, call: Call) -> Result<Option<Return>, Error> {
         // The memory manager is let go of first: the firmware call never comes back.
         Call::SystemReset { device, kind } => {
             MemoryManager::with(|mm| mm.check_reset(pid, device.index()))?;
+            // The kernel's lines a holder kept waiting go out before the machine stops.
+            crate::debug::console::flush_held();
             println!("system_reset: {:?} asked for by PID {}", kind, pid.get());
             #[cfg(debug_assertions)]
             crate::arch::hart::report();
@@ -161,6 +163,13 @@ fn dispatch(pid: Pid, tid: TID, call: Call) -> Result<Option<Return>, Error> {
         }
         Call::DeviceInfo { device } => MemoryManager::with(|mm| mm.device_info(pid, device.index()))
             .map(|info| Some(Return::Device(info))),
+        Call::ConsoleHold { device, hold } => {
+            MemoryManager::with(|mm| mm.check_console(pid, device.index()))?;
+            // Outside the memory manager: a release prints the kernel's lines that waited.
+            crate::debug::console::hold(pid.get().into(), hold == Hold::Take)
+                .map_err(|_| Error::Busy)
+                .map(done)
+        }
         Call::TimeNow => Ok(Some(Return::Time(crate::time::now_us()))),
         Call::Random => {
             let mut bytes = [0u8; 8];

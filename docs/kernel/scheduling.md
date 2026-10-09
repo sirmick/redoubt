@@ -1252,14 +1252,6 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   what shortens the waits. Enabling device interrupts in every hart's interrupt-controller
   context, so an idle hart takes them, is what removes the second section; the driver's wake is
   then gated on the one-hart targets at two and four harts.
-- **The console has two writers on several harts.** The kernel prints its lines (a process's
-  kill, which `budget-destroy-kills` reads) holding its lock, and a program writes the UART from
-  user mode, so on two harts a kernel line can land inside a program's. Under `icount` the harts
-  take turns and it is rare, and every latency target and share is judged under it:
-  `sched-latency`'s sweep at two harts passed every seed. Without it
-  they run at once and it is every run, so `sched-latency-tcg`, the real-time reference, keeps one
-  hart. One writer for the console, the programs' lines and the kernel's under one lock, is what
-  removes it.
 - **Some cases keep one hart.** A case that does not keep its hart count runs at the count the
   bench is given (`--smp`); these keep theirs (`keep_smp`), each for one of four reasons: the lock
   waits above, which destruction's work leaving the lock removes (step 5 of
@@ -1290,8 +1282,9 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   keeps 448 of 1000 on rv32 against at least 450 (482 on rv64); against processes that exit or
   fault it is judged at two. Work moving out of the lock (step 5) is what lets both shares be
   judged at two.
-  `bench-poweroff-missing` keeps one hart too, a bound of the bench's own, and
-  `sched-latency-tcg` for the console's two writers (above); `sched-latency` covers it at two.
+  `bench-poweroff-missing` keeps one hart too, a bound of the bench's own.
+  `sched-latency-tcg` runs at two harts: the kernel's lines wait, whole, for a program's line in
+  progress ([the console's one writer](devices.md#the-consoles-one-writer)).
   `sched-capped` (two, three and four harts), `sched-lock-contention` (two) and
   `sched-lock-contention-4` (four) keep the counts they are about.
 - **A call within one budget crosses harts.** A wake sends an idle hart the reschedule interrupt

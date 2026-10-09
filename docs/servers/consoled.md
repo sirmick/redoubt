@@ -17,7 +17,7 @@ channel by [`sshd`](sshd.md), not here.
 
 ### `/dev/cons`
 
-<details><summary>Status: built · partly tested: attacked with a fake UART against the runtime's fake kernel, and in a boot only written to; no test writes as a labelled caller · tested (12)</summary>
+<details><summary>Status: built · partly tested: attacked with a fake UART against the runtime's fake kernel, and in a boot only written to; no test writes as a labelled caller · tested (13)</summary>
 
 - bench:r4-host-tests
 - bench:consoled-build
@@ -28,6 +28,7 @@ channel by [`sshd`](sshd.md), not here.
 - host:redoubt-consoled::a_read_with_no_input_waits_and_is_freed_when_its_caller_gives_up
 - host:redoubt-consoled::a_multiplexed_read_waits_for_input
 - host:redoubt-consoled::writes_go_out_of_the_uart_in_order
+- host:redoubt-consoled::writes_go_out_inside_the_console_s_hold_a_chunk_at_a_time
 - host:redoubt-consoled::a_flood_of_input_keeps_what_was_typed_first
 - host:redoubt-consoled::the_console_refuses_what_it_is_not
 - host:redoubt-consoled::the_conformance_vectors_run_against_consoled
@@ -38,7 +39,10 @@ channel by [`sshd`](sshd.md), not here.
 with nothing below it.
 
 - **A write** sends its bytes out of the UART, in order, each line saying who wrote it
-  ([started by `init`](#started-by-init)).
+  ([started by `init`](#started-by-init)), inside the console's hold 256 bytes at a time, so the
+  kernel's lines land between those chunks and never inside one
+  ([the console's one writer](../kernel/devices.md#the-consoles-one-writer)). A hold the kernel
+  refuses is a write as before.
 - **A read** returns the input held, from the start of the queue; the offset is ignored, since a
   console is a stream. With no input it **parks** its call with no deadline, because it waits on a
   person, and is served again, unchanged, when a key arrives; a caller that gives up abandons it

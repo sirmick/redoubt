@@ -254,6 +254,60 @@ success it does not return. Errors: `InvalidArgument` (an unknown kind, refused 
 decoded), `BadHandle`, `WrongObject` (not the Reset right). The kernel lets go of its memory lock
 before it calls the firmware, because that call never returns.
 
+### The console's one writer
+
+<details><summary>Status: built · tested (10)</summary>
+
+- bench:console-one-writer
+- bench:console-hold-stuck
+- host:redoubt-conhold::lines_wait_whole_while_held_and_go_out_in_order_at_release
+- host:redoubt-conhold::a_line_that_does_not_fit_goes_out_after_the_queue_and_leaves_nothing_behind
+- host:redoubt-conhold::one_holder_at_a_time
+- host:redoubt-conhold::a_holder_that_dies_gives_the_hold_back_and_only_it_does
+- host:redoubt-conhold::a_line_with_nobody_holding_goes_out_at_once
+- host:redoubt-consoled::writes_go_out_inside_the_console_s_hold_a_chunk_at_a_time
+- host:redoubt-sys::every_result_and_error_round_trips
+- host:redoubt-sys::malformed_results_are_refused
+
+</details>
+
+The console's UART has two writers. The kernel prints its lines through the firmware's debug
+console, which writes the same UART, and the process that holds the console's MMIO device writes
+its registers: `init` until `consoled` starts, then `consoled`, or in a kernel case the first
+program. On several harts the two would interleave byte by byte, so a kill line
+(`[!] Terminating process with PID n`) could land inside a program's line and break both.
+
+`console_hold(h(MMIO), hold)` keeps each writer's lines whole. The holder takes the hold (`hold`
+1) before it writes and gives it back (2) after. While it holds it, a kernel line waits, whole,
+in a queue of 4 KiB (about 107 kill lines, a containment-sized destruction's), and the lines that waited go out when the hold is
+given back, before the call returns, so they come before the holder's next write.
+- **The kernel never waits for user mode.** A line with nobody holding goes out at once. A line
+  that does not fit the queue goes out at once too, after everything queued: a holder that keeps
+  the hold, or writes for long, then sees a kernel line inside its own write. That is the bound:
+  a holder delays the kernel's lines by one queue's worth at most, and never loses or stops one.
+  A holder's write is meant to be short: `consoled` holds it a chunk of 256 bytes at a time
+  ([consoled](../servers/consoled.md)).
+- **Who may hold it.** Only through a handle to the console's MMIO device: the `Devs` entry the
+  loader marks as the console, the one the device tree's `/chosen/stdout-path` names
+  ([boot](boot.md#the-argument-block)). A second marked entry stops the boot, and with none
+  every hold is `WrongObject`. Any other device or object is `WrongObject`. One process holds it at a time: another's take is
+  `Busy`, and writes as before. Taking it again, or giving back a hold the caller does not have,
+  changes nothing. A writer that never takes it writes as before.
+- **A holder that dies** holding it was cut off inside a write. The kernel gives the hold back
+  for it as the process ends, ends that line (`\r\n`), then prints the lines that waited and the
+  kill's own. The hold is the process's: a thread that exits holding it leaves it to the
+  process's other threads, and the last thread's exit ends the process.
+- **When the machine stops** (`system_reset`), the hold ends and the lines that waited go out
+  first. A panic's text goes out after them and never waits.
+
+Errors, in order: decoding (`hold` neither 1 nor 2 is `InvalidArgument`), `BadHandle`,
+`WrongObject`, `Busy`. With no kernel console (a build without printing) the hold has nothing to
+make wait. The rules and the queue are `redoubt-conhold`, host-tested; the queue sits beside the
+kernel's console under the lock its prints already take, one hart at a time
+(`kernel/src/debug/console.rs`). The [executable model](model.md) has the call, with the first MMIO
+device as the console (the loader's order), and checks that the holder is a live process after
+every step; the lines themselves are not modelled.
+
 ### Devices handed to the first program
 
 Status: built · partly tested: the loader's refusal of a device tree that names no console, or a console with no interrupt, is not attacked by a case · tested: bench:device, bench:irq-attack

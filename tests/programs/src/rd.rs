@@ -4,7 +4,7 @@
 use core::num::{NonZeroU64, NonZeroUsize};
 
 pub use redoubt_sys::{
-    Body, BudgetSpec, Call, Cause, DeviceInfo, Error, ExitNotice, FOREVER, Handle, Handles, Labels,
+    Body, BudgetSpec, Call, Cause, DeviceInfo, Error, ExitNotice, FOREVER, Handle, Handles, Hold, Labels,
     MAX_HANDLES, MAX_LEND_PAGES, MAX_MSG_HANDLES, MAX_OPEN_CALLS, MAX_START_HANDLES, MemFlags, Message,
     MessageKind, MintSource, Number, PAGE_SIZE, Pages, Received, ReceivedBody, ResetKind, Return,
     USER_AREA_END, Usage, WAIT_CAP, WORDS,
@@ -72,6 +72,12 @@ pub fn device_info(device: u32) -> Result<DeviceInfo, Error> {
         Return::Device(info) => Ok(info),
         _ => Err(Error::InvalidArgument),
     }
+}
+
+/// `console_hold(h(MMIO), hold)`: the console's hold, on its registers' handle (kernel/devices.md,
+/// "The console's one writer").
+pub fn console_hold(device: u32, hold: Hold) -> Result<(), Error> {
+    redoubt_sys::syscall(&Call::ConsoleHold { device: h(device), hold }).map(|_| ())
 }
 
 /// `system_reset(h(Reset), kind)`. Returns only if the kernel refused.

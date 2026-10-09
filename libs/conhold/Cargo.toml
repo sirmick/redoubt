@@ -1,0 +1,9 @@
+[package]
+name = "redoubt-conhold"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "The console's one writer (docs/kernel/devices.md, \"The console's one writer\"): the hold a UART's writer takes, and the kernel's lines queued whole while it is held, host-tested"
+
+# No dependencies: the kernel links this, so it is TCB.
+[dependencies]

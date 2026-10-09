@@ -6,6 +6,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use redoubt_rt::abi::PAGE_SIZE;
+use redoubt_rt::handle::Mmio;
 use redoubt_rt::ipc::Caller;
 use redoubt_rt::server::ninep::{FileServer, FileStat, NineError, Qid, REQUEST_STATE, Read, mode};
 use redoubt_rt::server::{Cost, Limits};
@@ -18,6 +19,11 @@ pub const MAX_INPUT: usize = 1024;
 
 /// The most columns or rows a size may name, as `sshd` cuts a window to (servers/sshd.md).
 pub const MAX_SIDE: u16 = 1024;
+
+/// The most bytes written inside one console hold (kernel/devices.md, "The console's one
+/// writer"). A longer write is held a chunk at a time, so a kernel line waits at most one
+/// chunk's time at the UART.
+pub const HOLD_CHUNK: usize = 256;
 
 /// The console's size from the arguments: `size=COLS,ROWS`, each from 1 to [`MAX_SIDE`], or
 /// `None` when there is none: a UART cannot know the size of the terminal at its far end, so only
@@ -175,6 +181,9 @@ pub struct Console {
     /// refused. A UART has no window, so it never changes, and a parked `resize` waits until its
     /// caller gives up.
     pub size: Option<(u16, u16)>,
+    /// The UART's registers, as the device handle the console's hold is taken through; `None`
+    /// writes without it.
+    pub hold: Option<Mmio>,
 }
 
 impl Console {
@@ -186,6 +195,7 @@ impl Console {
             minted: Vec::new(),
             lines: Lines::new(),
             size: None,
+            hold: None,
         }
     }
 
@@ -287,13 +297,26 @@ impl FileServer for Console {
         Ok(Read::Done(n))
     }
 
-    /// Output, every line of it saying who wrote it ([`Lines`]). The offset is ignored, as for
-    /// a read. A byte the transmitter would not take is a short write, which 9P allows, rather
-    /// than a server that spins.
+    /// Output, every line of it saying who wrote it ([`Lines`]), inside the console's hold a
+    /// [`HOLD_CHUNK`] at a time, so the kernel's lines land between chunks and never inside one.
+    /// The offset is ignored, as for a read. A byte the transmitter would not take is a short
+    /// write, which 9P allows, rather than a server that spins.
     fn write(&mut self, caller: &Caller, _: &Cons, _offset: u64, data: &[u8]) -> Result<usize, NineError> {
         let id = self.minted.iter().find(|(b, _)| *b == caller.badge).map(|(_, id)| *id);
-        let uart = &self.uart;
-        Ok(self.lines.write(caller.badge, id, data, &mut |bytes| uart.put_all(bytes)))
+        let (uart, lines) = (&self.uart, &mut self.lines);
+        let mut done = 0;
+        for chunk in data.chunks(HOLD_CHUNK) {
+            let mut write = || lines.write(caller.badge, id, chunk, &mut |bytes| uart.put_all(bytes));
+            let n = match &self.hold {
+                Some(registers) => registers.console_held(write),
+                None => write(),
+            };
+            done += n;
+            if n < chunk.len() {
+                break;
+            }
+        }
+        Ok(done)
     }
 
     /// Length 0: a console has no size, and a client that believed one would read the wrong

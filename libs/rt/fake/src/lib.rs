@@ -865,6 +865,15 @@ unsafe impl redoubt_rt::Transport for Fake {
                 self.changed.notify_all();
                 Ok(Return::Nothing)
             }
+            // The fake prints no kernel lines, so a hold has nothing to make wait: the handle is
+            // checked as the kernel checks it, a device's registers, and nothing else happens.
+            Call::ConsoleHold { device, .. } => {
+                let s = self.lock();
+                let Object::Mmio(_) = lookup(&s, pid, device)? else {
+                    return Err(Error::WrongObject);
+                };
+                Ok(Return::Nothing)
+            }
             other => panic!("the fake kernel does not model {:?}", other.number().name()),
         }
     }

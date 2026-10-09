@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 513
+revision = 520
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1577,13 +1577,13 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
 
 [[node]]
   id = "SMP4"
-  title = "Destruction work outside the kernel lock: one budget's kernel sections stop costing other harts their time"
+  title = "Several harts: checked-build audits and fault reports stop holding other harts; the kept cases judged at two harts"
   template = "package"
   parent = "smp"
   needs = ["SMP2"]
-  body = "Destruction work outside the kernel lock: one budget's kernel sections stop costing other harts their time. From SMP2: the lock-wait residual keeps these judged at one hart; SMP4 un-keeps each and judges it at 2 harts on both widths: sched-budget-churn-shell, deadline-flood-billed-traced, sched-wake-no-preempt, kernel-containment's bystander CHARGED-SHARE (judged `@1`; rv32 445 against 450 at 2 harts), and sched-exit-churn's threads-exit victim (judged `@1`; rv32 448 against 450). SMP2's coverage table on scheduling.md is the list of record."
+  body = "From SMP4's measurements (.wash/local/SMP4-design.md): the kept cases' lock waits are behind checked-build audits (the destruction audit, an unstamped whole-RAM check_frame_owners), a fault report printing print_map under the lock, and icount's hand-off, not zeroing, copies or shootdowns. P1: stamp every audit as an audit; P2: a hart's wait behind another hart's audit is not billed to it (checked builds only); P3: the fault report out of the lock. Then un-keep and judge at 2 harts on both widths: sched-budget-churn-shell, deadline-flood-billed-traced, sched-wake-no-preempt, kernel-containment's bystander CHARGED-SHARE and sched-exit-churn's threads-exit (drop @1), and remove the wrong-budget-wait blind spot. Kernel: Tier A, the kernel red."
   state = "active"
-  revision = 511
+  revision = 514
   overrides = ["2026-10-09: started by Orchestrator before M1 (reported): several-harts track runs ahead of M1's acceptance (milestone split, owner 2026-10-07)"]
 
 [[node]]
@@ -1785,10 +1785,10 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   title = "Per-hart frame magazines: a hart's common allocation takes no lock"
   template = "package"
   parent = "smp"
-  needs = ["SMP4"]
+  needs = ["SMP6"]
   body = "M2 page 'Several harts' step 6: per-hart magazines refilled from the bitmap under the lock and drawn from with interrupts off; frames zeroed as they enter a magazine, by step 5's in-flight rule. Attack case: a hart racing to allocate, map or free a frame in a magazine. Tier A: the kernel red."
   state = "todo"
-  revision = 495
+  revision = 514
 
 [[node]]
   id = "RCMD2"
@@ -1807,5 +1807,44 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "smp"
   needs = ["SMP2"]
   body = "From SMP2: on several harts the kernel's console lines (e.g. '[!] Terminating process with PID n', which budget-destroy-kills reads) interleave with a program's UART line written on another hart, garbling both; under TCG every killing run risks it (sched-latency-tcg is kept at one hart for it), under icount it is rare. Make one writer per line: the kernel's lines and programs' writes go through one lock or one path, line-atomic, without changing what budget-destroy-kills judges. Then un-keep sched-latency-tcg at 2 harts. Kernel: Tier A, the kernel red."
+  state = "done"
+  revision = 520
+
+[[node]]
+  id = "SMP6"
+  title = "Lock to decide, unlock to do: a freed frame is zeroed outside the lock by the hart that freed it, in an in-flight state no other hart can name"
+  template = "package"
+  parent = "smp"
+  needs = ["SMP4"]
+  body = "M2 page 'Several harts' step 5, reworded by measurement: zero on reclaim (freed frame -> in flight -> zeroed outside the lock by the freeing hart -> bitmap; allocation zeroes nothing), not zero on allocate. The in-flight invariant as a rule beside R11, with the model's rule and a mutation, and an attack case (a second hart racing to allocate, map or free an in-flight frame). Shootdown waits stay under the lock (measured ~0), a residual. Kernel: Tier A."
   state = "todo"
-  revision = 506
+  revision = 514
+
+[[node]]
+  id = "B45"
+  title = "One IO.puts of a 70,000-byte string kills the shell: the session's VM exits ({'EXCEPTION',exit,killed})"
+  template = "package"
+  parent = "M2"
+  body = "Found by CTX2's case work on rv64 (on CTX2's tree; check main first): IO.puts(String.duplicate(\"z\", 70_000)) at the prompt kills the shell and the VM exits. Likely a heap limit (max_heap_size, killing) hit in the driver/printer or the console path while escaping or chunking one long write, or a console write bound. Find the process and the limit, fix it so a long output line is written in bounded pieces (or refused with a message) without killing the session, and add a host test and a machine case on both widths (a 1 MiB line too). Strict track if the fix is in the escaping/drawing path: the steward red reviews."
+  state = "todo"
+  revision = 515
+
+[[node]]
+  id = "LAT4"
+  title = "The 4-hart driver-wake p99 is judged where harts run in parallel: QEMU's icount round-robin keeps a woken hart waiting for the running hart's turn"
+  template = "package"
+  parent = "smp"
+  needs = ["IRQ1"]
+  body = "From IRQ1's instrumented runs: after IRQ1, sched-lock-contention-4's driver wake p99 is 49.7 ms rv64 / 40.6 rv32 against 50 (too close to gate); the remaining long halts begin with nothing pending: the RTC line rises on time, but under -icount QEMU's single-threaded round-robin runs the woken hart only when the running hart's turn ends, and a hart in a kernel section keeps its turn to the section's end. The kernel cannot shorten another hart's QEMU turn; on hardware the hart wakes at once. Find a way to judge the 4-hart tail that reflects parallel harts (a non-icount MTTCG run with a statistical bound, or shorter kernel sections after SMP4/SMP6), and gate p99 at 4 harts. Detail: .worktrees/IRQ1/.tmp/IRQ1-numbers-2.md (copy it to .wash/local/)."
+  state = "todo"
+  revision = 516
+
+[[node]]
+  id = "TRY1"
+  title = "Try it by hand: ./launch --system boots the whole image with its disk and network, and prints the ssh line to log in"
+  template = "package"
+  parent = "M2"
+  body = "Owner request 2026-10-08. `./launch --system [--arch rv64|rv32] [--smp N]` boots the same signed image the bench's userland cases use (init, servers, steward, sshd, the shell's VM), with its disk (virtio-blk) and network (QEMU user net, host port forwarded to the guest's 22; default 2222, --ssh-port to change), keeps the serial console on the terminal, and prints the exact `ssh -p PORT -i KEY alice@localhost` line plus the host key's fingerprint. A dev key pair is generated per checkout under .tmp (or the user's own public key with --key), and the manifest's principals get it for this boot only; nothing secret is committed. --print-only prints the QEMU command. Reuse testbench's image and disk assembly (no second packer). Runs through scripts/q (a lease for the cores QEMU uses). Docs: GETTING-STARTED.md 'Run' gains 'Try the system' with a short walk-through (log in, help(), ed, fm, alice.work@, resize, Ctrl+\\). A bench case that boots `launch --system --print-only`'s exact command line and logs in once, so it can't rot. Second part: an idle case: boot with 4 harts, log in, leave the prompt idle for 60 s, judge wakeups per second from the kernel's trace and the QEMU process's host CPU time against stated ceilings; idle is what the owner asked about. Tier B tooling, except any manifest/steward change (Tier A: the steward red)."
+  state = "active"
+  revision = 518
+  overrides = ["2026-10-09: started by Orchestrator before M1 (reported): owner request: try the system by hand during M2"]

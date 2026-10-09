@@ -267,8 +267,8 @@ something in it waits on the host, and 145 of the 226 do. What keeps a case on t
 a disk or a userland disk (38 cases; the rule for a disk is above); host sockets, a `forward`, a
 `poke`, a peer or a dial (8); input the host types on the console, `[[input]]` (4; under `icount`
 the rv32 UART lost a burst of it); and a run whose purpose is the host's
-time (`asid-cost-host`, `sched-latency-tcg`, `timeouts-tcg`, and `smp-evict-mttcg` and
-`smp-shootdown-mttcg`, which need QEMU's multi-threaded TCG). Several harts do not keep a case
+time (`asid-cost-host`, `sched-latency-tcg`, `timeouts-tcg`, and `smp-evict-mttcg`,
+`smp-shootdown-mttcg` and `console-one-writer`, which need QEMU's multi-threaded TCG). Several harts do not keep a case
 on the host's clock: under `icount` QEMU runs the harts in turn on one host thread, and a hart
 waiting for the kernel lock halts rather than spending its turn
 ([R78 (fair kernel entry)](kernel/scheduling.md#r78-fair-kernel-entry)). One case reads no host clock and stays on it for now: `redoubt-ipc`

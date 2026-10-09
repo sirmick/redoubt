@@ -247,6 +247,7 @@ pub fn decode_result(number: Number, regs: &[u64; REGS]) -> Result<Return, Error
         | Number::BudgetDestroy
         | Number::BudgetUsage
         | Number::SystemReset
+        | Number::ConsoleHold
         | Number::MapFixed => Return::Nothing,
         Number::Call => unreachable!(),
     };

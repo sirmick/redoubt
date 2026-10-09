@@ -116,7 +116,7 @@ mod ret;
 #[cfg(test)]
 mod tests;
 
-pub use call::{Call, Handle, MemFlags, MintSource, NUMBER_BASE, Number, Pages, ResetKind};
+pub use call::{Call, Handle, Hold, MemFlags, MintSource, NUMBER_BASE, Number, Pages, ResetKind};
 #[cfg(any(target_arch = "riscv32", target_arch = "riscv64"))]
 pub use ecall::{Ecall, syscall};
 pub use error::Error;

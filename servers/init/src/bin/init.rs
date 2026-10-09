@@ -123,12 +123,14 @@ mod machine {
         /// `lend` carries the line to `consoled`; the UART needs none.
         fn write(&self, lend: Option<&mut Lend>, line: &str) {
             match self {
-                Out::Uart(registers) => {
+                // Inside the console's hold, so no kernel line lands inside it (kernel/devices.md,
+                // "The console's one writer").
+                Out::Uart(registers) => Mmio::from_handle(h(CONSOLE_MMIO)).console_held(|| {
                     for byte in line.bytes() {
                         while registers.read_u8(LSR).is_some_and(|lsr| lsr & LSR_THR_EMPTY == 0) {}
                         registers.write_u8(THR, byte);
                     }
-                }
+                }),
                 Out::Console(file) => {
                     if let Some(lend) = lend {
                         let _ = file.write_at(lend, 0, line.as_bytes());

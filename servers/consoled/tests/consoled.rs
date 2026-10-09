@@ -12,8 +12,8 @@
 
 use std::time::{Duration, Instant};
 
-use redoubt_consoled::MAX_INPUT;
 use redoubt_consoled::uart::FIFO;
+use redoubt_consoled::{HOLD_CHUNK, MAX_INPUT};
 use redoubt_fake_kernel::fake;
 use redoubt_rt::abi::{FOREVER, Handle, MAX_THREADS};
 use redoubt_rt::client::{ClientError, Connection, Lend};
@@ -309,6 +309,32 @@ fn writes_go_out_of_the_uart_in_order() {
             assert_eq!(b.printed(), *byte, "byte {i}");
         }
     });
+    assert_eq!(b.shut_down(), redoubt_rt::exit::OK);
+}
+
+/// Every write goes out inside the console's hold, a [`HOLD_CHUNK`] at a time, so the kernel's
+/// lines land between chunks and never inside one (kernel/devices.md, "The console's one
+/// writer"); and a hold the kernel refuses is a write as before, never a lost one.
+#[test]
+fn writes_go_out_inside_the_console_s_hold_a_chunk_at_a_time() {
+    let b = boot();
+    let f = fake();
+    let (writer, conn) = b.client();
+    let holds = || f.calls(b.server).iter().filter(|c| **c == "console_hold").count();
+    let long = vec![b'x'; 2 * HOLD_CHUNK + 1];
+    f.as_process(writer, || {
+        let c = Connection::new(Endpoint::from_handle(conn));
+        let mut lend = Lend::new(4).unwrap();
+        c.attach(&mut lend, 0, "").unwrap();
+        c.open(&mut lend, 0, mode::OWRITE).unwrap();
+        let before = holds();
+        assert_eq!(c.write(&mut lend, 0, 0, &long).unwrap(), long.len());
+        // Three chunks, each taken and given back.
+        assert_eq!(holds() - before, 6);
+        f.refuse(b.server, "console_hold", redoubt_rt::abi::Error::Busy);
+        assert_eq!(c.write(&mut lend, 0, 0, b"!").unwrap(), 1, "a refused hold still writes");
+    });
+    assert_eq!(b.printed(), b'!');
     assert_eq!(b.shut_down(), redoubt_rt::exit::OK);
 }
 

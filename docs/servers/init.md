@@ -313,7 +313,8 @@ Reset right. The loader maps the bundle into it, read-only
    will cost `init` does not fit in what `root` keeps for it
    ([budgets](../kernel/budgets.md#the-tree-from-the-boot-manifest)), or if it names more servers
    than `init` can watch, one thread each beside its own: at most `MAX_THREADS` - 1. Until
-   `consoled` starts, `init` writes its own lines to the UART, which it maps for itself. A refusal
+   `consoled` starts, `init` writes its own lines to the UART, which it maps for itself, each
+   inside the console's hold ([the console's one writer](../kernel/devices.md#the-consoles-one-writer)). A refusal
    is printed there, and the machine powers off with a system-failure status, before any other
    process has run;
 2. creates every endpoint the manifest's servers receive on. Each is owned by and charged to

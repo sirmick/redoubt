@@ -218,6 +218,9 @@ several harts at once, and every unmap, lend and return shoots the process down 
 (`smp-shootdown`, `smp-fence`). R12 holds across harts: each budget gets its water-filling share
 of the harts, judged from the kernel's charges by the oracle and by the model at 1, 2 and 4 harts
 ([R12](../kernel/scheduling.md#r12-scheduling)), and the latency targets are gated at 2 harts and
-recorded at 4 ([responsiveness](../kernel/scheduling.md#responsiveness)). For named contexts: a login names its context, `ssh alice.work@box`, the
+recorded at 4 ([responsiveness](../kernel/scheduling.md#responsiveness)). The console has one
+writer at a time: the kernel's lines wait, whole, while a program holds the UART for a write
+(`bench:console-one-writer`, `bench:console-hold-stuck`), so the real-time reference
+`sched-latency-tcg` runs at 2 harts ([devices](../kernel/devices.md#the-consoles-one-writer)). For named contexts: a login names its context, `ssh alice.work@box`, the
 steward holds one session per context at a time, and every refusal before a session reads the same
 ([sessions](../userland/sessions.md#contexts)).

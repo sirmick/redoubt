@@ -171,7 +171,8 @@ recorded here and checked by no test. Three of the core's effects are reached by
 ### The checker
 
 After every step, `Checker::check` (`model/src/invariants.rs`) runs its checks in a fixed order:
-- the objects' structure and serving state;
+- the objects' structure; the console's holder is a live process
+  ([the console's one writer](devices.md#the-consoles-one-writer)); serving state;
 - handles: I1 (handles name live objects), I2 (revocation is complete),
   I3 (minted badges are non-zero and narrow) and I4 (only badge-0 handles receive);
 - charging: I5 (usage within limits), and R6 (charging)'s backing: `root`'s limit and its own

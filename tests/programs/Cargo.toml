@@ -21,6 +21,8 @@ bin = [
     { name = "bundle-file", test = false },
     { name = "bundle-mapped", test = false },
     { name = "cbo-user-fault", test = false },
+    { name = "console-hold-stuck", test = false },
+    { name = "console-one-writer", test = false },
     { name = "deadline-flood-billed", test = false },
     { name = "destroy-keeps-notices", test = false },
     { name = "destroy-keeps-notices-creator", test = false },

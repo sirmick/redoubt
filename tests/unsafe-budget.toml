@@ -34,6 +34,13 @@ max_unsafe = 0
 max_undocumented = 0
 
 [[budget]]
+# The console's hold, linked into the kernel. `#![forbid(unsafe_code)]`.
+name = "redoubt-conhold (the console's hold)"
+paths = ["libs/conhold/src"]
+max_unsafe = 0
+max_undocumented = 0
+
+[[budget]]
 # The kernel's IPC lists, linked into the kernel. `#![forbid(unsafe_code)]`.
 name = "redoubt-ipclist (IPC lists)"
 paths = ["libs/ipclist/src"]

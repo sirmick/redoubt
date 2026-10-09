@@ -14,6 +14,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use uart_16550::MmioSerialPort;
 
 use crate::logsrv::Sender;
+use crate::rd;
 
 struct Port {
     busy: AtomicBool,
@@ -25,6 +26,9 @@ struct Port {
 unsafe impl Sync for Port {}
 
 static PORT: Port = Port { busy: AtomicBool::new(false), port: UnsafeCell::new(None) };
+
+/// [`Console`] holds the console's hold for a line it has begun and not yet ended.
+static LINE_HELD: AtomicBool = AtomicBool::new(false);
 
 fn locked<R>(f: impl FnOnce(&mut Option<MmioSerialPort>) -> R) -> R {
     while PORT.busy.compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed).is_err() {
@@ -40,22 +44,37 @@ fn with<R>(f: impl FnOnce(&mut MmioSerialPort) -> R) -> R {
     locked(|port| f(port.as_mut().expect("console::init first")))
 }
 
+/// Runs `write` inside the console's hold (kernel/devices.md, "The console's one writer"), so no
+/// kernel line lands inside what it writes. A hold refused is a write as before.
+fn held<R>(write: impl FnOnce() -> R) -> R {
+    let taken = rd::console_hold(rd::CONSOLE_MMIO, rd::Hold::Take).is_ok();
+    let result = write();
+    if taken {
+        let _ = rd::console_hold(rd::CONSOLE_MMIO, rd::Hold::Release);
+    }
+    result
+}
+
 /// Take the UART mapped at `base` (the console's MMIO handle, mapped by the caller).
 pub fn init(base: usize) {
     // SAFETY: `base` is the UART's register page, mapped for this process by the kernel.
     let mut port = unsafe { MmioSerialPort::new(base) };
-    port.init();
-    // `init` leaves a byte of its own on the wire: a newline puts it on a line of its own, so the
-    // first real line matches an anchored pattern.
-    writeln!(port).ok();
+    held(|| {
+        port.init();
+        // `init` leaves a byte of its own on the wire: a newline puts it on a line of its own, so
+        // the first real line matches an anchored pattern.
+        writeln!(port).ok();
+    });
     locked(|slot| *slot = Some(port));
 }
 
 /// One line of the owner's own (`logsrv::Line`).
 pub(crate) fn line(args: fmt::Arguments) {
     with(|port| {
-        port.write_fmt(args).ok();
-        writeln!(port).ok();
+        held(|| {
+            port.write_fmt(args).ok();
+            writeln!(port).ok();
+        })
     });
 }
 
@@ -66,11 +85,13 @@ pub(crate) fn line(args: fmt::Arguments) {
 pub(crate) fn relay(badge: u64, text: &str) {
     for line in text.split('\n') {
         with(|port| {
-            write!(port, "[{}] ", Sender(badge)).ok();
-            for c in line.chars() {
-                port.write_char(if c.is_control() && c != '\t' { '?' } else { c }).ok();
-            }
-            writeln!(port).ok();
+            held(|| {
+                write!(port, "[{}] ", Sender(badge)).ok();
+                for c in line.chars() {
+                    port.write_char(if c.is_control() && c != '\t' { '?' } else { c }).ok();
+                }
+                writeln!(port).ok();
+            })
         });
     }
 }
@@ -81,7 +102,21 @@ pub struct Console;
 
 impl Write for Console {
     fn write_str(&mut self, s: &str) -> fmt::Result {
-        locked(|port| port.as_mut().map_or(Ok(()), |port| port.write_str(s)))
+        // A line comes in pieces (`writeln!` writes each argument on its own), so the hold is
+        // taken at a line's first piece and given back after its newline: no kernel line lands
+        // between its pieces.
+        locked(|port| {
+            let Some(port) = port.as_mut() else { return Ok(()) };
+            if !LINE_HELD.load(Ordering::Relaxed) {
+                let taken = rd::console_hold(rd::CONSOLE_MMIO, rd::Hold::Take).is_ok();
+                LINE_HELD.store(taken, Ordering::Relaxed);
+            }
+            let written = port.write_str(s);
+            if s.ends_with('\n') && LINE_HELD.swap(false, Ordering::Relaxed) {
+                let _ = rd::console_hold(rd::CONSOLE_MMIO, rd::Hold::Release);
+            }
+            written
+        })
     }
 }
 

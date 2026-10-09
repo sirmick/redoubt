@@ -317,7 +317,12 @@ impl Gen {
             22 => S::Random,
             23 => S::MapFixed { addr: self.any(), len: self.any(), flags: self.any() },
             24 => S::DeviceInfo { h: self.any() },
-            _ => S::BudgetReap { h: self.any() },
+            // One draw, as before `console_hold` was: the value picks the call, so every seed's
+            // sequence is what it was.
+            _ => {
+                let h = self.any();
+                if h & 1 == 0 { S::BudgetReap { h } } else { S::ConsoleHold { h, hold: h >> 1 & 3 } }
+            }
         }
     }
 
@@ -938,14 +943,22 @@ impl Gen {
                 let n = if self.rng.pct(90) { self.rng.range(1, 4) } else { self.rng.range(0, 40) };
                 Syscall::MapFixed { addr, len: n * PAGE_SIZE, flags: self.flags() }
             }
-            // Mostly a device handle; now and then any other handle, for `WrongObject`.
-            99 => Syscall::DeviceInfo {
-                h: if self.rng.pct(80) {
+            // Mostly a device handle; now and then any other handle, for `WrongObject`. At an even
+            // time it asks which device it is, at an odd one it takes or gives back the console's
+            // hold: the draws are the ones `device_info` alone made, so every seed's sequence is
+            // what it was. A hold that is neither comes from the hostile calls.
+            99 => {
+                let h = if self.rng.pct(80) {
                     self.handle(k, pid, |h| matches!(h.object, Object::Device(_)))
                 } else {
                     self.handle(k, pid, |_| true)
-                },
-            },
+                };
+                if k.now & 1 == 0 {
+                    Syscall::DeviceInfo { h }
+                } else {
+                    Syscall::ConsoleHold { h, hold: 1 + (k.now >> 1 & 1) }
+                }
+            }
             _ => Syscall::TimeNow,
         }
     }
