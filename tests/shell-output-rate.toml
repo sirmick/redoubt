@@ -1,0 +1,50 @@
+description = "The shell's encoder draws printed text, and a long line being edited, at a stated rate on the machine (docs/userland/shell.md, \"The terminal library\"): at alice's console prompt, Redoubt.Term draws a 256 KiB line of ASCII and one of Cyrillic as it draws IO.puts, made visible, measured and encoded, and then draws again a line of 400 characters wrapped over six rows as one typed in its middle does, each timed by the session's own clock in guest time with no output in the timing. The shell prints the two rates and whether each is at or above 12,000 bytes a second, under half what either width draws (rv32 the slower: 25,727 ASCII, 29,627 UTF-8; main's encoder drew 599 and 1,207), and the least of three redraws' time and whether it is within 250 ms (65 ms at most, on rv32; main's took 1.84 s). The verdicts are the shell's lines on the console (rule F)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+recipe = "image/boot.toml"
+# The image needs 1 GiB: the principals' budgets, each holding a shell VM's session, do not fit
+# the users budget 256 MiB leaves (docs/kernel/budgets.md).
+memory_mib = 1024
+# Guest time, so a rate is the machine's instructions, not the loaded host's: sleep on, for the
+# disk. Nothing timed waits on a device.
+icount = "shift=3"
+# The slowest pass alone, rv32, takes 12 s.
+timeout_secs = 50
+expect = [
+    '^init: the boot is done: ',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+    '^\[con [0-9a-f]{16}\] rates: ascii [0-9]+ B/s, utf8 [0-9]+ B/s: at the floors$',
+    '^\[con [0-9a-f]{16}\] redraw: [0-9]+ us: within the bound$',
+]
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    '^init: .* (exited|faulted|was killed)',
+    'init: restarted',
+    'EXCEPTION',
+    'below the floors',
+    'over the bound',
+]
+
+# One line, ASCII as typed: d draws a text as the console's driver draws a print, slice by slice,
+# and returns its rate in bytes a second of the session's clock. The echo holds the verdict's
+# words apart, which the patterns do not match.
+[[input]]
+after = '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir '
+send = "d = fn s -> t = System.monotonic_time(:microsecond); term = Redoubt.Term.new(80, 24); Enum.reduce(Redoubt.Term.slices(term, {:put_chars, :unicode, s}, 65_536), term, fn r, term -> elem(Redoubt.Term.request(term, r), 1) end); div(byte_size(s) * 1_000_000, max(System.monotonic_time(:microsecond) - t, 1)) end; a = d.(String.duplicate(\"z\", 262_144)); u = d.(String.duplicate(\"\\u043f\\u0440\\u0438\\u0432\\u0435\\u0442 \", 20_165)); IO.puts(\"rates: ascii #{a} B/s, utf8 #{u} B/s: \" <> if(a >= 12_000 and u >= 12_000, do: \"at\", else: \"below\") <> \" the floors\")\n"
+
+# Then a line being edited: 400 characters after the prompt, wrapped over six rows of 80, the
+# cursor in its middle, and one character typed there, which draws the whole line again: the least
+# of three, so a collection of the garbage building the line left is not timed as the redraw.
+[[input]]
+after = '^\[con [0-9a-f]{16}\] rates: '
+send = "l = Enum.reduce([:new_prompt, {:insert_chars, :unicode, \"/ (2)> \"}, {:insert_chars, :unicode, String.duplicate(\"x\", 400)}, {:move_rel, -200}], Redoubt.Term.new(80, 24), fn r, m -> elem(Redoubt.Term.request(m, r), 1) end); r = fn -> t = System.monotonic_time(:microsecond); Redoubt.Term.request(l, {:insert_chars, :unicode, \"y\"}); System.monotonic_time(:microsecond) - t end; k = Enum.min([r.(), r.(), r.()]); IO.puts(\"redraw: #{k} us: \" <> if(k <= 250_000, do: \"within\", else: \"over\") <> \" the bound\")\n"
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]

@@ -60,6 +60,37 @@ defmodule Redoubt.TermTest do
     assert Terminal.cursor(screen) == {1, 0}
   end
 
+  # Typing at the end of the line costs the key, not the line: the encoder keeps the cursor, so a
+  # key 180 characters in costs about what one at the start did, not ten times as much.
+  test "a key typed at the end of a long line costs the key, not the line" do
+    {_screen, term} = draw(prompt())
+
+    type = fn term, keys ->
+      {:reductions, before} = Process.info(self(), :reductions)
+      term = Enum.reduce(1..keys, term, fn _key, term -> elem(Term.request(term, insert("x")), 1) end)
+      {:reductions, after_} = Process.info(self(), :reductions)
+      {term, after_ - before}
+    end
+
+    {term, early} = type.(term, 20)
+    {term, _} = type.(term, 160)
+    {_term, late} = type.(term, 20)
+    assert late <= 2 * early, "20 keys: #{early} reductions at the start, #{late} 180 characters in"
+  end
+
+  # The cursor kept by typing is the one a walk of the line finds: typed key by key across the
+  # margin, then moved and typed into, the line is drawn as typed whole.
+  test "a line typed key by key across the margin is drawn as one typed at once" do
+    keys = Enum.map(1..12, fn _ -> insert("x") end)
+    {screen, _term} = draw(prompt() ++ keys ++ [{:move_rel, -5}, insert("Y")], 10)
+    assert Terminal.lines(screen) == ["> xxxxxxxY", "xxxxx"]
+    assert Terminal.cursor(screen) == {1, 0}
+
+    {screen, _term} = draw(prompt() ++ keys ++ [insert("y")], 10)
+    assert Terminal.lines(screen) == ["> xxxxxxxx", "xxxxy"]
+    assert Terminal.cursor(screen) == {1, 5}
+  end
+
   test "a line exactly as wide as the terminal leaves the cursor at the next row's start" do
     {screen, _term} = draw(prompt() ++ [insert(String.duplicate("x", 8))], 10)
     assert Terminal.lines(screen) == ["> xxxxxxxx"]
@@ -128,6 +159,23 @@ defmodule Redoubt.TermTest do
     assert Term.slices(term, {:insert_chars, :unicode, text}, 100) == [{:insert_chars, :unicode, text}]
   end
 
+  # The encoder measures a run of ASCII or Cyrillic at once, and other text a grapheme at a time:
+  # where it ends, at the margin, on the rows it fills, with a wide character past the margin or
+  # with a combining mark joined to its last letter, is where the terminal's cursor is, so the
+  # prompt is drawn just where the text would have left it.
+  test "printed text of any length ends where the terminal's cursor does, and the prompt follows it" do
+    # Past 64 code points a run is measured by the VM's matcher, in windows up to 512 bytes.
+    for n <- Enum.concat(0..31, [70, 130, 600]),
+        letter <- ["x", "я", "日"],
+        tail <- ["", "e\u0301", "e\u0301z", "\t", "日"],
+        from <- ["", "> "] do
+      text = from <> String.duplicate(letter, n) <> tail
+      {printed, _term} = draw([{:put_chars, :unicode, text}], 10, 8)
+      {screen, _term} = draw([{:put_chars, :unicode, text}] ++ prompt() ++ [insert("c")], 10, 8)
+      assert Terminal.lines(screen) == Terminal.lines(Terminal.feed(printed, "> c")), inspect(text)
+    end
+  end
+
   test "a control character in a prompt, in typed text or in printed text is drawn visibly" do
     {screen, _term} =
       draw([:new_prompt, insert("\e]0;x\a> "), insert("\u009Bq"), {:put_chars, :unicode, "\e[2J\u202Ez\n"}])
@@ -159,6 +207,17 @@ defmodule Redoubt.TermTest do
     {screen, _term} = draw(prompt() ++ [insert("ab"), expand, insert("c")], 20, 6)
     assert Terminal.lines(screen) == ["> abc"]
     assert Terminal.cursor(screen) == {0, 5}
+  end
+
+  # A row of text below the line that wraps, ending in the margin or short of it, and the cursor is
+  # back on the line.
+  test "text below the line that wraps leaves the cursor on the line" do
+    for n <- [39, 40, 41, 59, 60, 61] do
+      expand = {:put_expand, :unicode, String.duplicate("x", n) <> "\nend", 0}
+      {screen, _term} = draw([{:put_chars, :unicode, "1\n2\n"}] ++ prompt() ++ [insert("ab"), expand], 20, 10)
+      assert Terminal.cursor(screen) == {2, 4}, "#{n}"
+      assert Enum.take(Terminal.lines(screen), -1) == ["end"], "#{n}"
+    end
   end
 
   test "a wide character takes two columns" do

@@ -1525,8 +1525,8 @@ launches it with an 18-page stack, twice beamlet's stack peak of 36,136 bytes (`
 on rv64, with the boot pack read before its VM starts and its console on the hub), and a heap cap
 of what its share holds beside the stack, 10,989 pages of the 11,008 the steward gives it of the
 11,136 `sizes` gives a session, the rest its console relay's
-([budgets](kernel/budgets.md), [the steward](servers/steward.md#authentication-and-sessions)): 71 pages over twice its heap's
-largest peak across the memory cases on each width, 5,459 pages, above what its prompt
+([budgets](kernel/budgets.md), [the steward](servers/steward.md#authentication-and-sessions)): 7 pages over twice its heap's
+largest peak across the memory cases on each width, 5,491 pages, above what its prompt
 holds ([beamlet](userland/beamlet.md#what-the-vm-holds-at-its-prompt)). `beamlet-footprint` scans
 the VM alone, under its own copy of the single-VM manifest. Its cap leaves its process heap,
 ETS and `persistent_term` limits, a sixteenth of its budget each (688 pages), reachable: a flooding process, about

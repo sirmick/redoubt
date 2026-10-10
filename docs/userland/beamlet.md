@@ -198,19 +198,19 @@ own:
 
 | What | rv64 | rv32 |
 | --- | ---: | ---: |
-| Decoded code: instructions | 526 | 526 |
-| Decoded code: operands | 2,131 | 2,131 |
+| Decoded code: instructions | 532 | 532 |
+| Decoded code: operands | 2,152 | 2,152 |
 | Literals: each module's | 37 | 37 |
-| Literals: the shared table | 690 | 688 |
-| Module tables | 233 | 204 |
-| Atoms | 95 | 66 |
+| Literals: the shared table | 695 | 692 |
+| Module tables | 236 | 206 |
+| Atoms | 96 | 67 |
 | Processes (22): heaps, collected | 57 | 57 |
 | Processes: the rest | 117 | 111 |
 | ETS and binaries | 1 | 1 |
-| Accounted | 3,887 | 3,821 |
-| Runtime heap at the prompt: held, peak | 4,110, 4,510 | 3,939, 4,343 |
-| Not accounted (held less accounted) | 223 | 118 |
-| The scan's peak, after one command | 5,459 | 5,277 |
+| Accounted | 3,923 | 3,857 |
+| Runtime heap at the prompt: held, peak | 4,145, 4,563 | 3,975, 4,394 |
+| Not accounted (held less accounted) | 222 | 118 |
+| The scan's peak, after one command | 5,491 | 5,308 |
 
 A module's instructions are 8-byte entries over one array of its operands, 16 bytes each on either
 width, a list operand's items in the same array, so decoded code is the same size on both widths
@@ -232,7 +232,7 @@ the first command loads more modules.
 
 The image budgets the VM twice the largest peak the scan finds across its memory cases, in
 `beamlet-footprint`, the one case that scans a shell's VM now that the steward starts the others'
-shells, and with that budget, 11,008 pages from a peak of 5,459 on rv64, the single VM boots in
+shells, and with that budget, 11,008 pages from a peak of 5,491 on rv64, the single VM boots in
 512 MiB ([budgets](../kernel/budgets.md#the-tree-from-the-boot-manifest)). The budget was 11,904
 pages while every module of the shell's was loaded at its start, the commands' among them, and
 the peak was 5,904. The line editor under the shell's driver is loaded at

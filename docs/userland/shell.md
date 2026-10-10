@@ -329,10 +329,11 @@ in a `Job`.
 
 ### The terminal library
 
-<details><summary>Status: built · partly tested: the host only, for the line editor and screens, and screens on beamlet alone (the BEAM has no screen buffer); its tests are the shell's own ExUnit suite (`test/redoubt/term_test.exs`, `test/redoubt/term/frame_test.exs`, `test/redoubt/term/keys_test.exs`, `test/redoubt/term/width_test.exs`, `test/redoubt/shell/driver_test.exs`, `test/redoubt/screen_test.exs`), judged on a model of the terminal that takes only the encoder's sequences, and a pseudo-terminal test of the real binary, both of which `./test-shell` runs and no bench case does · tested (2)</summary>
+<details><summary>Status: built · partly tested: the line editor and screens on the host only, and screens on beamlet alone (the BEAM has no screen buffer); printed text is drawn on the machine, a long line over SSH and the encoder's rate at the console; its tests are the shell's own ExUnit suite (`test/redoubt/term_test.exs`, `test/redoubt/term/frame_test.exs`, `test/redoubt/term/keys_test.exs`, `test/redoubt/term/width_test.exs`, `test/redoubt/shell/driver_test.exs`, `test/redoubt/screen_test.exs`), judged on a model of the terminal that takes only the encoder's sequences, and a pseudo-terminal test of the real binary, both of which `./test-shell` runs · tested (3)</summary>
 
 - host:beamlet::pick_on_a_terminal_takes_the_screen_and_gives_it_back_with_the_choice
 - bench:shell-long-output
+- bench:shell-output-rate
 
 </details>
 
@@ -366,6 +367,34 @@ and every [full-screen program](#full-screen-programs).
   (about 2.75 MiB on rv64) still ends the session. Tab stops count on from the code points the
   printed line already holds, across cuts and across prints. A grapheme a cut falls inside is
   measured as its parts.
+- **Printed text in runs:** printable text, UTF-8 with no control character, is made visible a run
+  at a time, kept whole, and measured likewise: a run of code points each a grapheme one column wide
+  whatever stands beside it (printable ASCII, and the Latin, IPA, Greek and Cyrillic letters below
+  U+0530 that no mark is part of) takes a column a code point at once, but for its last when more
+  follows, which a combining mark may join; other text is measured a grapheme at a time, and a run
+  of ASCII control characters is drawn in caret notation into one binary. A run's first 64 code
+  points are taken in Erlang and the rest by the VM's own matchers (`:binary.match`, `:unicode`,
+  `:re`), a window of up to 512 bytes at a time: on the machine a step of an Erlang loop costs
+  thousands of guest instructions ([beamlet](beamlet.md#beamlet-on-redoubt), about 3,600 on rv64),
+  as much as a matcher spends on hundreds of bytes, while on the host the two are near. A window is
+  small so that the lists a matcher's answer makes do not grow the driver's heap toward its limit.
+  What is drawn is the same, byte for byte.
+- **The line being edited** is drawn again in one pass over its graphemes, which places the cursor
+  on its way, and a printable ASCII grapheme that fits on its row costs one step of it. A key
+  typed at the line's end draws itself alone and moves the cursor the encoder keeps, so it costs
+  the key, not the line: the 200th character typed costs what the 10th did.
+- **The rate:** on the machine, timed in guest time (`icount`, `shift=3`), the encoder draws 256 KiB
+  of ASCII at about 28,500 bytes a second on rv64 and 25,800 on rv32, and of Cyrillic at 31,900 and
+  29,600, where the encoder before runs draws about 620 and 1,240 (rv64, on the same interpreter);
+  text of short runs between tabs, controls and wide characters at about 4,200, where it draws
+  1,150. A keystroke in the middle of a line of 400 characters, wrapped over six rows of 80, draws
+  the line again in about 57 ms on rv64 and 65 ms on rv32, where it took 1.64 and 1.84 s.
+  `shell-output-rate` holds both widths to 12,000 bytes a second for each text, a margin of 2.1 on
+  the slowest (rv32's ASCII), and the least of three redraws to 250 ms, a margin of 3.8. It times
+  the encoder alone: what reaches the person also passes the driver's writes and `consoled` or
+  `sshd`, and a keystroke `group` and `edlin`'s own work. The numbers are measured on beamlet's
+  faster interpreter, which moved them little: the encoder's time is now mostly the VM's matchers
+  and the few steps a run takes.
 - **Frames are the cell protocol** ([the cell protocol](#the-cell-protocol)): the screen buffer's
   diff speaks it ([beamlet](beamlet.md#screen-natives)), and the encoder reads it through the one
   decoder (`Redoubt.Term.Cells`) and draws it
@@ -451,8 +480,8 @@ answer as if typed. It holds because the encoder is the one writer of what the s
 because nothing reaches the encoder but cells, whose symbols cannot hold a control character: from
 the shell's printer, from a screen program through the buffer's natives, which refuse one, and
 from a native program only as `cells` frames. The line editor is the one path that hands the
-encoder text rather than cells: `group`'s requests, which the encoder makes visible grapheme by
-grapheme under the same rule.
+encoder text rather than cells: `group`'s requests, which the encoder makes visible under the same
+rule, a run of printable text or one control character at a time.
 
 **What the VM logs goes through `group` too.** OTP's logger writes through its `default` handler
 to `user`, the VM's own console server, past the driver. While the driver holds the console, the
