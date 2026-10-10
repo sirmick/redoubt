@@ -147,7 +147,7 @@ pub enum Mutation {
     /// so a receiver the destruction has yet to end takes what was owed to a survivor.
     R10DeliveredMidDestruction,
     // R11. Memory.
-    /// Reused pages are not zeroed.
+    /// A frame free since boot is not zeroed at its first allocation.
     R11NoZeroing,
     /// `set_flags` accepts writable and executable together (the decoder's refusal included).
     R11SetFlagsAllowsWx,
@@ -161,6 +161,11 @@ pub enum Mutation {
     R11ExecOnDeviceMemory,
     /// `process_map` skips its own flag check (empty flags, and writable without readable).
     R11ProcessMapSkipsFlags,
+    // R81. Frames in flight.
+    /// A freed frame stays allocatable while in flight, before it is zeroed.
+    R81InFlightAllocatable,
+    /// A frame in flight is given back to the free frames without being zeroed.
+    R81CommitUnzeroed,
     // R18. Device authority.
     /// A device call through a number that is not one of the caller's handles reaches the device
     /// object of that number.
@@ -430,7 +435,7 @@ pub enum Mutation {
 }
 
 impl Mutation {
-    pub const ALL: [Mutation; 173] = {
+    pub const ALL: [Mutation; 175] = {
         use Mutation::*;
         [
             R1SkipLabelCheck,
@@ -496,6 +501,8 @@ impl Mutation {
             R11MapFixedSkipsOverlap,
             R11ExecOnDeviceMemory,
             R11ProcessMapSkipsFlags,
+            R81InFlightAllocatable,
+            R81CommitUnzeroed,
             R18DeviceByNumber,
             DeviceInfoWrongKind,
             R20NoticePidReused,
@@ -675,6 +682,7 @@ impl Mutation {
             | R11MapFixedSkipsOverlap
             | R11ExecOnDeviceMemory
             | R11ProcessMapSkipsFlags => "R11",
+            R81InFlightAllocatable | R81CommitUnzeroed => "R81",
             R18DeviceByNumber | DeviceInfoWrongKind => "R18",
             R20NoticePidReused => "R20",
             R22MapFixedWalksFirst => "R22",
