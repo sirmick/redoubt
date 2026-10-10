@@ -254,6 +254,9 @@ impl Area {
 
 /// Physical address of frame 0; `dma_alloc` returns physical addresses from here.
 pub const RAM_BASE: u64 = 0x8000_0000;
+/// What a frame free since boot may hold before its first allocation zeroes it (R11): whatever the
+/// loader or the firmware left there.
+const BOOT_CONTENT: u64 = 0xb007;
 /// The longest `Op::Tick` the model accepts (one hour): a replay of hostile input must finish.
 pub const MAX_TICK: u64 = 3_600_000_000;
 
@@ -555,8 +558,12 @@ pub struct Kernel {
     pub endpoints: BTreeMap<u64, Endpoint>,
     pub devices: BTreeMap<u64, Device>,
     pub frames: BTreeMap<u64, Frame>,
-    /// Freed frames and the contents they still hold, reused lowest first (R11 zeroes them then).
+    /// Free frames, reused lowest first: each zero (R81), and what it holds, which a broken model
+    /// may leave stale.
     pub free_frames: BTreeMap<u64, u64>,
+    /// Freed frames not yet zeroed and given back, and the contents they still hold (R81): no
+    /// process's and not free, until time passes ([`Kernel::commit`]).
+    pub in_flight: BTreeMap<u64, u64>,
     pub msgs: BTreeMap<u64, Msg>,
     pub halted: Option<u64>,
     /// The console's MMIO device: the first MMIO device at boot, as the loader puts it
@@ -674,6 +681,7 @@ impl Kernel {
             devices: BTreeMap::new(),
             frames: BTreeMap::new(),
             free_frames: BTreeMap::new(),
+            in_flight: BTreeMap::new(),
             msgs: BTreeMap::new(),
             halted: None,
             console: None,
@@ -1084,26 +1092,47 @@ impl Kernel {
     // ---------------------------------------------------------------------------------------
     // Memory.
 
-    /// A frame for a new mapping: a freed one if there is one, else a fresh one. R11: zeroed
-    /// before any process sees it.
+    /// A frame for a new mapping: a free one if there is one, zero already (R81), else one free
+    /// since boot, which may hold anything and is zeroed now. R11: zero before any process sees it.
     fn alloc_frame(&mut self, payer: u64) -> u64 {
-        let (f, stale) = match self.free_frames.pop_first() {
+        let (f, content) = match self.free_frames.pop_first() {
             Some(x) => x,
             None => {
                 self.next_frame += 1;
-                (self.next_frame - 1, 0)
+                let zeroed = !self.broken(Mutation::R11NoZeroing);
+                (self.next_frame - 1, if zeroed { 0 } else { BOOT_CONTENT })
             }
         };
-        let content = if self.broken(Mutation::R11NoZeroing) { stale } else { 0 };
         self.frames.insert(f, Frame { payer, content, dma: None, quarantined: false });
         f
     }
 
-    /// Free a frame and uncharge its payer. Its contents stay in RAM until it is reused.
+    /// Free a frame and uncharge its payer: in flight (R81), its contents still in RAM until the
+    /// hart that freed it zeroes it and gives it back ([`Self::commit`]).
     fn free_frame(&mut self, f: u64) {
         if let Some(fr) = self.frames.remove(&f) {
             self.uncharge(fr.payer, 1);
-            self.free_frames.insert(f, fr.content);
+            self.in_flight.insert(f, fr.content);
+            if self.broken(Mutation::R81InFlightAllocatable) {
+                self.free_frames.insert(f, fr.content);
+            }
+        }
+    }
+
+    /// Time passes: every frame in flight has been zeroed by the hart that freed it, outside the
+    /// kernel lock, and the lock's next holder gives it back to the free frames (R81). The one
+    /// hart the model runs does it here, between calls, as several harts do it between sections.
+    fn commit(&mut self) {
+        for (f, stale) in core::mem::take(&mut self.in_flight) {
+            let content = if self.broken(Mutation::R81CommitUnzeroed) { stale } else { 0 };
+            match self.frames.get_mut(&f) {
+                // Only a broken model hands out a frame in flight: the zeroing lands in the page
+                // of its new owner.
+                Some(fr) => fr.content = content,
+                None => {
+                    self.free_frames.insert(f, content);
+                }
+            }
         }
     }
 
@@ -2548,6 +2577,7 @@ impl Kernel {
                 Outcome::Done(Ok(Ret::Unit))
             }
             Op::Tick { dt } => {
+                self.commit();
                 self.tick(*dt);
                 Outcome::Done(Ok(Ret::Unit))
             }

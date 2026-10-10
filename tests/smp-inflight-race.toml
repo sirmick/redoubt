@@ -1,0 +1,23 @@
+description = "A frame in flight is no one's (R81): while one hart unmaps a run its sibling is writing on the other, and the process ends, a witness in another budget maps, checks and frees pages without end, and every page it gets is zero and keeps its markers; the trace shows every frame pending only after its process's shootdown, given back only once zeroed, and never taken in flight (checked trace build, 2 harts, icount)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The witness, the victim, inspects its own pages (rule F); the checked kernel samples every frame
+# it takes from the bitmap and checks every frame it gives back is zero, and its destruction audit
+# counts the frames in flight (I1). QEMU drops a hart's TLB at its next `satp` write, so a stale
+# store may never land: the order the trace records (`smp_inflight`) is the verdict a recorded
+# negative fails on, `inflight-zero-unshot` (pending before the shootdown) and
+# `inflight-early-commit` (given back unzeroed) alike.
+# RAM is the default 256 MiB, 64 of them the trace ring, and the program fills nearly all of the
+# rest before the race (the judge holds `root`'s free pages, a filler `users`' and `system`'s), so
+# the race's allocations empty the bitmap and take frames in flight back on demand, any hart's:
+# with RAM to spare, a frame comes back only when every hart idles, and none is reused.
+debug_assertions = true
+kernel_features = ["inflight-trace"]
+icount = "shift=3,sleep=off"
+programs = ["smp-inflight-race"]
+smp = [2]
+timeout_secs = 300
+expect = ['^SMP-INFLIGHT-RACE TEST PASSED$']
+forbid = ['\[smp-inflight-race\] FAIL', 'R81:', 'I1:']
+poweroff = true
+post_check = "smp_inflight"

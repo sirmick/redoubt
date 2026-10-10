@@ -98,6 +98,20 @@ timer-tail-billed = ["sched-trace"]
 # Debug only, never in a bench build but one recorded negative run: a frame is taken by the
 # first-fit scan of the ownership table the bitmap replaced, so `scan-bounds` must fail.
 alloc-first-fit = ["test-only"]
+# Test builds only: record each RAM frame's way through R81 (retired, pending, given back, taken)
+# and each shootdown in the trace, and check every frame given back is zero (a stamped audit), so
+# the oracle can check the order (`smp-inflight-race`; kernel/memory.md, R81).
+inflight-trace = ["sched-trace"]
+# Debug only, never in a bench build but one recorded negative run each: a retired frame goes
+# straight back to the bitmap, never zeroed (`inflight-early-commit`), or is pending and zeroed
+# before the shootdown of the process whose entry for it was cleared (`inflight-zero-unshot`), so
+# `smp-inflight-race` must fail.
+inflight-early-commit = ["test-only"]
+inflight-zero-unshot = ["test-only"]
+# Debug only, never in a bench build but one recorded negative run: a destruction leaves the
+# zeroing still to bill to the budgets it ends where it is, so the checked kernel's bill names a
+# budget that is gone (kernel/budgets.md, R10).
+zeroing-unlifted = ["test-only"]
 # Debug only, never in a bench build but one recorded negative run each: a PID given out keeps its
 # last holder's ASID unflushed (`MemoryMapping::allocate`), or an unmap skips its flush, so the
 # checked build's flush audit must stop `asid-reuse-stale`.

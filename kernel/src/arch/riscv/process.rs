@@ -40,6 +40,10 @@ static RAM_START: AtomicUsize = AtomicUsize::new(0);
 
 pub fn set_ram_start(start: usize) { RAM_START.store(start, Ordering::Relaxed) }
 
+/// RAM's first frame (`set_ram_start`), for the frames in flight a hart zeroes without the kernel
+/// lock (`reclaim.rs`).
+pub fn ram_start() -> usize { RAM_START.load(Ordering::Relaxed) }
+
 /// Where a thread's saved context lies in its IPC page: the page's last bytes, after every word
 /// of IPC state (`message.rs` asserts that its words end before it).
 pub const CONTEXT_OFFSET: usize = PAGE_SIZE - mem::size_of::<Thread>();

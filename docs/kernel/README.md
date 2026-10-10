@@ -282,7 +282,7 @@ programs DMA without hardware to confine it ([devices](devices.md)). Lines are e
 | --- | --- | --- | --- |
 | RustSBI Prototyper, the M-mode firmware | `bios/firmware/prototyper/src` and its `bios/library` crates | 11,843 in the Prototyper | not counted: vendored at a pinned commit |
 | loader | `loader/src` | 1,576 | 18 |
-| kernel | `kernel/src` | 15,899 | 39 |
+| kernel | `kernel/src` | 15,899 | 37 |
 | `redoubt-sys`, the call ABI both sides share | `libs/sys/src` | 2,464 (843 of them host tests) | 3 |
 | `paging`, the Sv32/Sv39 page-table types | `libs/paging/src` | 625 | 12 |
 | `redoubt-layout`, the kernel-half map and PIDs | `libs/layout/src` | 225 | 0 |
@@ -296,7 +296,7 @@ three ways in the ratchet:
 
 | Ratchet budget | What its `unsafe` does | `unsafe` (pinned) |
 | --- | --- | --- |
-| kernel: Sv39, SBI and PLIC backends | `sfence.vma`, the `satp` write and `fence.i`; the page-table walks through the physmap (a root table, a new child table, and an address space built from the loader's); the PLIC; the timer and reschedule interrupt enables; the console; the physmap window | 13 |
+| kernel: Sv39, SBI and PLIC backends | `sfence.vma`, the `satp` write and `fence.i`; the page-table walks through the physmap (a root table, a new child table, and an address space built from the loader's); the PLIC; the timer and reschedule interrupt enables; the console; the physmap window | 11 |
 | kernel: RISC-V arch (shared with rv32) | returning to user mode and `kmain`'s switch; the current process's bookkeeping; the interrupt window and `wfi`; clearing a hart's reschedule interrupt; the `sum-probe` load (test builds only) | 10 |
 | kernel: core | the physmap word access in `kframe.rs`; what the loader handed over (the kernel's entry, the argument block, the ownership tables and the process list); the free-frame bitmap; the lock; the console; DMA register access | 16 |
 

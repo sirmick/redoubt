@@ -353,7 +353,7 @@ such a sweep runs as `q run --cores M -- cargo testbench --smp N`, `M` at least 
 
 | Case | Its cost | `timeout_secs` |
 | --- | --- | --- |
-| `model-mutations` | 173 jobs, one per mutation, in release, one core each; a mutation's steward families stop at 500 seeds, and the three they catch only after many seeds are caught first by directed scenarios ([mutations](kernel/model.md#mutations)). About two and a half minutes of wall, the build included; the longest job `R2NoWaitCap`'s, 18.7 s | per job, 25 |
+| `model-mutations` | 175 jobs, one per mutation, in release, one core each; a mutation's steward families stop at 500 seeds, and the three they catch only after many seeds are caught first by directed scenarios ([mutations](kernel/model.md#mutations)). About two and a half minutes of wall, the build included; the longest job `R2NoWaitCap`'s, 18.7 s | per job, 25 |
 | `model-host-tests` | one `cargo test` on four cores, every model test but the mutations, the steward families and their coverage check: under two minutes, the build included | none |
 | `steward-model-host-tests` | the two steward families at their counts and the check that their coverage table is reproduced ([property families](kernel/model.md#property-families)), each a job on four cores and threads: under two minutes of wall, the build included; the longest job `steward_policy`'s, 26 s | per job, 35 |
 | `rt-miri` | 12 jobs, one per file, about 100 s of wall: `heap`'s 60 to 96 s; `connection` 25 s; the rest under 10 s | per job, 128 |
@@ -427,6 +427,13 @@ only reports them on more, marked `recorded at N harts, not gated`: the targets 
 hart and two and recorded at four ([responsiveness](kernel/scheduling.md#responsiveness)).
 `smp_fence` reads only the same trace's shootdown records: a page made executable was shot down
 on another hart running its process, which acknowledged ([memory](kernel/memory.md#instruction-fetch-after-mapping)).
+`smp_inflight` reads only an `inflight-trace` kernel's records of each RAM frame's way through
+[R81 (frames in flight)](kernel/memory.md#r81-frames-in-flight): retired (`i`, the frame and the process whose entry
+for it was cleared), each shootdown (`s`), pending (`d`), given back to the bitmap (`b`) and taken
+from it (`o`). Each frame is pending only on the hart that retired it and, if it was mapped, only
+after that hart shot its process down; given back only once pending, so its hart has zeroed it;
+and never taken in between. A run where no frame from a live space was retired, given back and
+taken again fails as racing nothing.
 
 ### Starting a case's programs
 
@@ -665,7 +672,13 @@ waited through, and the waiter, once it holds the lock having waited, bills its 
 and moves its slice's end by it, as the auditor does. The trace records it after the wait (`y`:
 the ticks), never more than the wait by the waiter's own clock (harts' clocks differ by a few
 ticks under `icount`), and the oracle takes out of a share only the part of a wait that was
-billed. A kernel built with `audit-wait-billed` bills the whole wait as before:
+billed. A hart's zeroing, idle, of the frames it freed
+([frames in flight](kernel/memory.md#frames-in-flight)) is billed when it takes the lock back, to
+the budgets that freed them; the trace records it (`0`: the ticks, the frames), and the oracle
+reports the total. A destruction gives any hart's zeroing still to bill to a budget it ends to
+its own payer, lifted with the rest of that budget's debt (`p`: the payer, the entries), which
+the oracle counts and refuses outside a destruction; the checked kernel stops if a bill names a
+budget that is gone. A kernel built with `audit-wait-billed` bills the whole wait as before:
 `sched-budget-churn-shell` at two harts reads 329 and 339 of 1000 on rv64 and rv32 against 404
 and 509, in a recorded negative run. The traced kernel stamps each audit's start
 and end (records `U` and `V`: which audit, and the time). The program prints each latency
@@ -1247,9 +1260,14 @@ ceiling catches a cost that doubles, not the window-to-window spread. Those wind
 measured before the session's next step waited for `log none`, so that step's command fell in
 them. One window on each width since measured 4.1 system calls a second, so `user_ecalls`, at
 18, is loose by about 2x until the kernel's lock wake-ups at rest are cut and the ceilings set
-again. The measures are the hardware's view: they say how often the guest wakes, not which
-budget woke it; that would take the kernel's own trace, which prints only at a reset.
-`launch-idle` is a host-clock case, run in the quiet class.
+again. The window opens as the frames a login freed are zeroed, once every hart idles
+([frames in flight](kernel/memory.md#frames-in-flight)); one hart zeroes them at a time, about
+35,000 frames in 0.25 s on rv64 and 0.32 s on rv32, so they cost host time, not interrupts.
+Before R81 the busiest hart took 3.1 interrupts a second on rv64 and 2.8 on rv32, at 0.002
+cores; with it, five windows each, 3.1 to 4.2 and 2.7 to 3.7, at 0.005 to 0.008 cores. The
+measures are the hardware's view: they say how often the guest wakes, not which budget woke it;
+that would take the kernel's own trace, which prints only at a reset. `launch-idle` is a
+host-clock case, run in the quiet class.
 
 ### Against Redoubt's sshd
 

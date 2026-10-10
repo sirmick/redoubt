@@ -56,7 +56,10 @@ Status: built · partly tested: independence from the kernel's source and the em
 ### What it abstracts
 
 - **Memory** is page frames with one word of content each. Loads, stores and fetches check the
-  mapping's permissions. A process's own mapping, a server's view of a lend and the lender's
+  mapping's permissions. A freed frame is in flight, still holding its word, until a `tick`, when
+  the one hart the model runs zeroes it and frees it, as several harts do between sections
+  ([R81 (frames in flight)](memory.md#r81-frames-in-flight)); a frame never used since boot holds a word of its own
+  until its first allocation zeroes it. A process's own mapping, a server's view of a lend and the lender's
   reservation are separate states. Page tables follow Sv39's layout as a placement rule, even
   when the cost table is rv32's.
 - **Threads** have no registers. A call is instantaneous and atomic; time is logical and
@@ -308,7 +311,7 @@ A **mutation** is one deliberate break planted in the model. Each variant of `en
 `self.broken(Mutation::...)`: one site for most variants, two or three where the rule is kept in
 more than one place, and a direct comparison with the mutation for `AbandonNoticeMissing` and
 `R11LendStaysMapped`. With no mutation, the model is the specified kernel.
-`Mutation::ALL` lists all 173 variants. `Mutation::rule()` returns the ID each one breaks, as in
+`Mutation::ALL` lists all 175 variants. `Mutation::rule()` returns the ID each one breaks, as in
 the table below; the steward's variants, named `Policy...`, break the server rules the steward
 model checks. Each of those but four is one broken entry of the core's `Policy` table
 (`mutation::policy`), since the crate that ships has no mutation switch; the other four break the
@@ -366,7 +369,8 @@ model's embedder: its entropy, its admission, a volume's write check and the ser
 | [R8 (accounts)](budgets.md#r8-accounts) | `R8AccountFromArgument` | inheriting the parent's account |
 | [R9 (stamps)](objects.md#r9-stamps) | `R9ReceivedHandleRestamped`, `R9MintStampsCaller`, `R9MsgStampIsSenderBudget` | which budget a handle is stamped with |
 | [R10 (destruction)](budgets.md#r10-destruction) | `R10KeepForeignHandles`, `R10KeepCarvedLimits`, `R10SpareDescendantProcesses`, `R10ExitNoticesOutlivePayer`, `R10RevokedMessageDelivered`, `R10RevokedCallAnswered`, `R10SweptHandlesDropped`, `R10CreatorDeathSparesProcess`, `R10HeldPidsDropped`, `R10ReapDestroysParent`, `R10ReapKeepsCarve`, `R10ReapSkipsGrandchildren`, `R10DeliveredMidDestruction`, `BudgetDeadlineIgnored` | everything a destruction reaches, nothing delivered before its end, a deadline destroying the budget, and a reap destroying one child and keeping the budget |
-| [R11 (memory)](memory.md#r11-memory) | `R11NoZeroing`, `R11SetFlagsAllowsWx`, `R11SetFlagsAllowsWriteOnly`, `R11LendStaysMapped`, `R11MapFixedSkipsOverlap`, `R11ExecOnDeviceMemory`, `R11ProcessMapSkipsFlags` | zeroing, W^X per mapping and per frame, write without read, lends unmapped, `map_fixed` never replacing, `process_map`'s own flag check |
+| [R11 (memory)](memory.md#r11-memory) | `R11NoZeroing`, `R11SetFlagsAllowsWx`, `R11SetFlagsAllowsWriteOnly`, `R11LendStaysMapped`, `R11MapFixedSkipsOverlap`, `R11ExecOnDeviceMemory`, `R11ProcessMapSkipsFlags` | zeroing a frame free since boot, W^X per mapping and per frame, write without read, lends unmapped, `map_fixed` never replacing, `process_map`'s own flag check |
+| [R81 (frames in flight)](memory.md#r81-frames-in-flight) | `R81InFlightAllocatable`, `R81CommitUnzeroed` | no allocation of a frame in flight, caught by the frames' own check (a free frame not zero, or also in flight), not by a page read stale; a frame freed only zero |
 | [R12 (scheduling)](scheduling.md#r12-scheduling) | `R12PriorityById`, `R12IgnoreWeight`, `R12WakeBanksCredit`, `R12TieQueuedFirst`, `R12RequeueAhead`, `R12RequeueLifo`, `R12PreemptOnWake`, `R12TimeoutWakePreempts`, `R12NoFloorWhenIdle`, `R12ShortRunsFree`, `R12DropRemainder`, `R12ExitRunsFree`, `R12DestroyDropsDebt`, `R12CreateAtFloorOnly`, `R12LiftByMax`, `R12StrideWeightIsLimit`, `R12UnnormalizedLift`, `R12LiftCountsEntryWait`, `R12FoldAtNewWeight`, `R12NoMinimumCharge`, `R12DeadlineWorkUnbilled`, `R12RescaleOnlyOnReturn`, `R12SliceCountsExitWork`, `R12TimerWorkUnbilled`, `R12SwitchBilledToPrevious`, `R12CappedHoldsFloor`, `R12CapOnce`, `R12AllCappedHoldsFloor`, `R12UncapBanksCredit`, `R12UncapForfeitsWait`, `R12EmptyHoldsFloor`, `R12RequeueWaitsForCap`, `R12BlockLeavesAsRequeued`, `R12OneRunnerPerBudget`, `R12SpreadChargesOnce` | one flat queue, charging, the floor, ranks, preemption, the slice as user time, inheritance at create and destroy, the capped floor and the uncap lift across harts, a budget on several harts at once and each of its runners charged |
 | [R13 (one outcome per call)](ipc.md#r13-one-outcome-per-call) | `IpcWrongLend`, `IpcDropPartial`, `IpcFalseDelivery`, `IpcSkipOutputCheck`, `IpcLeakRollback` | the lend disposition, a partial reply, `delivered`, the completion-time record check, rollback |
 | [R14 (unforgeable sender)](ipc.md#r14-unforgeable-sender) | `MsgNoLabels`, `MsgBadgeZero`, `MsgAccountZero`, `MsgIdsGlobal` | the attached labels, badge and account; message ids per receiving process |

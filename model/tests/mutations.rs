@@ -25,10 +25,10 @@ const CAP: u64 = 20_000;
 const STEWARD_CAP: u64 = 500;
 
 /// Every kernel rule the model holds, and I16: all of R1 to R24 but the six outside the model
-/// (kernel/model.md, "Mutations"), with R4a and R4b beside R4.
-const MODELLED: [&str; 21] = [
+/// (kernel/model.md, "Mutations"), with R4a and R4b beside R4, and R81 beside R11.
+const MODELLED: [&str; 22] = [
     "R1", "R2", "R3", "R4", "R4a", "R4b", "R5", "R6", "R7", "R8", "R9", "R10", "R11", "R12", "R13", "R14",
-    "R18", "R20", "R21", "R22", "I16",
+    "R18", "R20", "R21", "R22", "R81", "I16",
 ];
 
 #[test]

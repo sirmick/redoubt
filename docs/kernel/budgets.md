@@ -345,10 +345,8 @@ off. So a deadline always destroys its budget, at the first kernel entry at or a
 - The processes it kills get exit notices with cause `killed`, blaming nobody
   ([processes](processes.md#exit-notices)).
 - The destruction's whole cost is billed to the budget's parent, after its carve returns, or to
-  the nearest ancestor with free weight above 0 ([R10](#r10-destruction)). The kernel departs
-  from this: it bills the dying budget only up to the lift, which moves up with its debt, and
-  bills the rest, and all of a weight-0 budget's, to nobody ([Residual risks](#residual-risks)).
-  A deadline is a preemption point.
+  the nearest ancestor with free weight above 0 ([R10](#r10-destruction)). A deadline is a
+  preemption point.
 - A child may have its own, earlier deadline. A later one never fires, because the child dies with
   its parent. So a sub-budget (a sub-agent's lease inside an agent's) never outlives its parent.
 
@@ -656,7 +654,13 @@ is the caller, as the call's own kernel time. For a deadline it is B's parent, a
 returns, or the nearest ancestor with free weight above 0 if the parent has none; `root` always
 has. No part of a destruction is billed to nobody. On a deadline the kernel names the payer once
 step 1 has returned B's carve, and after step 9 bills it for everything from the expiry walk that
-found the deadline on, whatever B's own free weight (`bench:deadline-flood-billed`).
+found the deadline on, whatever B's own free weight (`bench:deadline-flood-billed`). The frames a
+destruction frees are zeroed outside the kernel lock by the hart that freed them while every hart
+idles ([frames in flight](memory.md#frames-in-flight)); that time is billed to the same payer
+([scheduling](scheduling.md)). Zeroing any hart still has to bill to a budget the destruction ends is lifted to its payer with the rest of that budget's debt, between
+marking the subtree dying and freeing it, so no bill names a budget that is gone. The one
+exception is `root`'s destruction, which has no payer and leaves nothing to run: its zeroing is
+billed to nobody.
 
 ```mermaid
 stateDiagram-v2
@@ -701,10 +705,13 @@ without preemption.*
 
 - **Destruction costs time nobody can interrupt.** Destroying a budget runs with interrupts off and
   is not preemptible; every interrupt, wake and timeout on the machine waits for it, and it
-  dominates lease termination, R39 (leases end). The cost must follow the objects the dying subtree
-  holds, not every object page in the system and not every live table. Destruction gives three
-  indexes, handle chains, the dying endpoints' and stamps' own lists, and a walk of each dying
-  process's own frames:
+  dominates lease termination, R39 (leases end). The frames it frees are not zeroed on the way
+  back to user mode: zeroing runs on an idle hart while every hart is idle, one frame a pass
+  (about 30 µs, interrupts off), and on demand, one frame under the lock when an allocation finds
+  the bitmap empty ([frames in flight](memory.md#frames-in-flight)), so the destroyer's caller and
+  whatever runs next wait only for the walk. The cost must follow the objects the dying subtree
+  holds, not every object page in the system and not every live table. Destruction gives three indexes, handle chains, the dying endpoints' and
+  stamps' own lists, and a walk of each dying process's own frames:
 
   1. **The budget tree is linked downward.** Each budget keeps a `first_child` and a `next_sibling`
      beside its `parent`, so `mark_dying`, `lift_dying` and the final free walk the subtree

@@ -36,6 +36,7 @@ mod message;
 mod platform;
 mod process;
 mod ptable;
+mod reclaim;
 mod redoubt;
 mod sched;
 mod time;

@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 150
+revision = 153
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1822,8 +1822,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "smp"
   needs = ["SMP4"]
   body = "M2 page 'Several harts' step 5, reworded by measurement: zero on reclaim (freed frame -> in flight -> zeroed outside the lock by the freeing hart -> bitmap; allocation zeroes nothing), not zero on allocate. The in-flight invariant as a rule beside R11, with the model's rule and a mutation, and an attack case (a second hart racing to allocate, map or free an in-flight frame). Shootdown waits stay under the lock (measured ~0), a residual. Kernel: Tier A."
-  state = "reported"
-  revision = 147
+  state = "done"
+  revision = 151
   overrides = ["2026-10-09: started by Orchestrator before M1 (reported): several-harts track runs ahead of M1's acceptance", "2026-10-09: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; the several-harts track runs ahead of M1's acceptance", "2026-10-10: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; the several-harts track runs ahead of M1's acceptance"]
 
 [[node]]
@@ -2063,5 +2063,15 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "smp"
   body = "Found by train 18's whole bench on 4b84112f2: launch-idle fails on both widths, interrupts per hart 119.1/s (rv64) and 161.2/s (rv32) against the ceiling of 9, host CPU over too; IDLE1 measured ~3/s on 6b46c8c86. Attributed by first-parent bisect to SMP6 (191.1/s at its merge 58326f13c alone); SMP6 dropped from train 18 (rebuilt as K32 + BEAM18), fix on wp-SMP6 (8fb11dc37 on 98b866854). CAUSE (measured on 8fb11dc37, .wash/local/SMP6-report.md): the rate is a 60 s average of a 1-2 s burst at the window's start. The login frees ~33k frames (~130 MiB) that sit in flight; when every hart goes idle together, all four drain their own pending lists at once, each frame a lock round trip (A1), the drainers contend, and nearly every re-acquire halts and is woken by the releaser's IPI (m_software at acquire_ticket's wfi paired 1:1 with wake_halted): ~32,900 of 33,160 IPIs fall in those two seconds; afterwards the rest is IDLE1-like (~3/s). The idle loop does halt when its list is empty; no timer storm; user ecalls as IDLE1. FIX: one hart drains at a time under the lock; a hart idle while another drains halts as before; when the drainer's list empties it wakes one idle hart with frames pending (one IPI per hart per drain). Then measure the single drainer's time (~33k x ~30 us) and its host-cores cost over the window; if the drain pushes host cores over 0.01, launch-idle waits for the system to settle before its window (frames in flight at zero via the trace, or a stated settle time) rather than moving the ceiling, and testbench.md and memory.md say that after a large free the idle harts spend about a second zeroing before the machine is quiet. Keep A1, A3 and the drain. Gate: launch-idle both widths at 4 harts under the ceilings; the per-cause table before/after in the report. Kernel: Tier A, kernel-red. Blocks SMP6's merge."
+  state = "done"
+  revision = 152
+
+[[node]]
+  id = "B57"
+  title = "launch-idle's window opens on a host clock while R81's login drain may still run (rv32 read 0.008 of 0.01 cores): open it once frames in flight reach 0, and print the drain beside it"
+  template = "package"
+  parent = "M2"
+  needs = ["M1"]
+  body = "kernel-red's remedy named at SMP6's merge (train 20): the idle window is a host-clock measurement, and about half of rv32's 0.005-0.008 cores is the login drain (35k frames, 0.25-0.32 s) falling inside it, so a busy host can push one window over the 0.01 ceiling. Fix: the case opens its window once the kernel's frames-in-flight count reaches 0 (the kernel already counts them; a fixed settle time could hide a drain that never ends), and prints the drain's length and host cost beside the window's numbers. The ceiling stays 0.01. Pages: docs/kernel/memory.md (Frames in flight), docs/testbench.md (the machine at rest). Not a merge blocker; it is the home of the flake if the train bench fails launch-idle on host cores."
   state = "todo"
-  revision = 145
+  revision = 153

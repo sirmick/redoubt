@@ -303,9 +303,10 @@ impl Checker {
 
     /// I9 (R11): no mapping is writable and executable, or writable without being readable, and
     /// none of device registers or a DMA frame is executable; a frame read zero when first
-    /// handed out; a page is accessible in at most one address space, so a lent page is not the
-    /// lender's until the call ends. R6 and R3: each frame is charged to whoever holds it (the
-    /// lender while its call lasts, the server once the call is abandoned).
+    /// handed out, and (R81) every free frame zero, apart from those held and in flight; a page is accessible
+    /// in at most one address space, so a lent page is not the lender's until the call ends. R6 and R3:
+    /// each frame is charged to whoever holds it (the lender while its call lasts, the server once the
+    /// call is abandoned).
     fn i9_memory(&mut self, k: &Kernel) -> Check {
         #[derive(Default)]
         struct Seen {
@@ -321,12 +322,24 @@ impl Checker {
         // I16: a frame waiting in the free pool for reuse (by any path, DMA or not) is never one a
         // device could still write: `dma_alloc`'s own frames are armed in the same step they are
         // created, so this checks the pool, not creation.
-        for f in k.free_frames.keys() {
+        for f in k.free_frames.keys().chain(k.in_flight.keys()) {
             ensure!(
                 k.ghost.armed.get(f).is_none_or(BTreeSet::is_empty),
                 "I16: free frame {f} is still armed against {:?}",
                 k.ghost.armed.get(f)
             );
+        }
+        // R81: a frame is a process's, in flight or free, never two of them, and a free frame is
+        // zero, so allocation zeroes nothing.
+        for (f, content) in &k.free_frames {
+            ensure!(*content == 0, "R81: free frame {f} holds {content:#x}");
+            ensure!(
+                !k.frames.contains_key(f) && !k.in_flight.contains_key(f),
+                "R81: free frame {f} is also held or in flight"
+            );
+        }
+        for f in k.in_flight.keys() {
+            ensure!(!k.frames.contains_key(f), "R81: frame {f} in flight is also held");
         }
         let mut seen: BTreeMap<u64, Seen> = BTreeMap::new();
         for p in k.processes.values() {
