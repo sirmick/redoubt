@@ -203,6 +203,10 @@ pub fn init_boot() {
 /// This hart is about to idle (`true`) or has stopped idling.
 pub fn set_idle(idle: bool) { this().idle.store(usize::from(idle), Ordering::Relaxed) }
 
+/// Whether every started hart is idle, none woken since ([`wake_idle`] clears the mark): only then
+/// does an idle hart zero frames in flight (R81, `arch::idle`).
+pub fn all_idle() -> bool { HART_BLOCKS[..started()].iter().all(|b| b.idle.load(Ordering::Relaxed) != 0) }
+
 /// A wake made a budget runnable: send the reschedule interrupt to one idle hart, if any, so it
 /// picks. Called holding the kernel lock; the hart takes it once it holds the lock itself.
 pub fn wake_idle() {

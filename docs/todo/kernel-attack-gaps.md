@@ -60,7 +60,8 @@ gap: the page's section, the claim, and what no case attacks.
 - R21 (crash blame): blame after the blamed sender's budget is destroyed has no case; a thread holding a parked call that receives a send and then faults (blames nobody) is covered only in parts.
 
 ### memory.md
-- Backing and zeroing: that a frame freed with data comes back zero is attacked only in the model (`R11NoZeroing`); no case can tell which frames it was handed.
+- Backing and zeroing: that a frame freed with data comes back zero is attacked by `smp-inflight-race`'s witness, but no case can tell which frames it was handed; a frame free since boot zeroed at its first allocation cannot be told from one QEMU left zero.
+- Frames in flight, R81 (frames in flight): no case lands a stale store in a frame being zeroed (QEMU drops a hart's TLB at its next `satp` write); the order is the trace's.
 - Instruction fetch after mapping: no case can see a missing `fence.i` (QEMU keeps fetch coherent).
 - Lending at the page-table level: a lend within one process is not attacked across harts.
 - R11 (memory): the absence of any physical-address argument is argued from the call table.

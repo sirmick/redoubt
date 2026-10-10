@@ -107,6 +107,12 @@
 //! harts: the summary reports the waits as a share of the harts' time, `lock waits N of 1000`, and
 //! judges nothing by it (kernel/scheduling.md, "Residual risks").
 //!
+//! **Frames in flight** (kernel/memory.md, R81). A hart zeroes the frames it freed after it gives
+//! up the kernel lock, and at its next trap from user mode the kernel bills that time to the
+//! frames' payers, not to the runner: a `z` (the ticks, the frames) after the entry's wait records.
+//! The summary reports the total. An `inflight-trace` kernel also records each frame's way through
+//! the in-flight state, which [`inflight`] alone reads.
+//!
 //! **A share across harts** (`HART-SHARE`) is judged of everything the kernel charged in the
 //! program's window, each budget at the weight the trace states (its runner's `H`, or its weight
 //! changes), net of every lock wait: a wait is billed to the waiting hart's runner, though no
@@ -162,7 +168,7 @@ pub fn parse(log: &str) -> Result<Vec<Record>, String> {
             return Err(bad());
         }
         let kind = f[2].chars().next().ok_or_else(bad)?;
-        if f[2].len() != 1 || !"WRDPKLlefrqwAaGgvNnXYZUVTtIBEOMmCSJHQFukzxchjy".contains(kind) {
+        if f[2].len() != 1 || !"WRDPKLlefrqwAaGgvNnXYZUVTtIBEOMmCSJHQFukzxchjy0pidbos".contains(kind) {
             return Err(bad());
         }
         records.push(Record {
@@ -329,6 +335,13 @@ pub struct Summary {
     pub sections: Vec<Section>,
     /// The ticks of other harts' audits the lock waits waited through (`y`), not billed to anyone.
     pub excused: u64,
+    /// The ticks harts spent zeroing frames in flight outside the lock (`z`), billed to the frames'
+    /// payers and not to the runner they returned to, and the frames.
+    pub zeroed: u64,
+    pub zeroed_frames: u64,
+    /// The zeroing entries destructions lifted from the budgets they ended to their payers (`p`),
+    /// so no bill names a budget that is gone (R10).
+    pub zeroing_lifted: u64,
 }
 
 /// One kernel lock section (`hold-trace`): held from tick `from` to `to` by `hart`, for `cause`
@@ -751,6 +764,19 @@ pub fn check(records: &[Record]) -> Result<Summary, String> {
             'F' => sum.hart_time = Some((r.id, r.pass as u64)),
             // A shootdown is `fence`'s: no rank or floor follows from it.
             'S' => {}
+            '0' => {
+                if r.pass == 0 || r.id == 0 {
+                    return Err(format!("record {}: zeroing of no frames, or in no time", r.seq));
+                }
+                sum.zeroed += r.id;
+                sum.zeroed_frames += r.pass as u64;
+            }
+            'p' if open_r10.is_none() => {
+                return Err(format!("record {}: zeroing lifted outside a destruction", r.seq));
+            }
+            'p' => sum.zeroing_lifted += r.pass as u64,
+            // A frame's way through R81, and each shootdown, are `inflight`'s.
+            'i' | 'd' | 'b' | 'o' | 's' => {}
             'K' => {
                 let Some(&(pass, _)) = queued.get(&r.id) else {
                     return Err(format!("record {}: picked budget {}, which is not queued", r.seq, r.id));
@@ -3244,6 +3270,14 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
                 .map_or(String::new(), |t| format!("; {}", lock_waits(&sum.lock_waits, sum.excused, t)))
         )
     });
+    let kernel_time = if sum.zeroed_frames > 0 {
+        format!(
+            "{kernel_time}; {} frames zeroed outside the lock in {} ticks, billed to their payers ({} of destroyed payers lifted)",
+            sum.zeroed_frames, sum.zeroed, sum.zeroing_lifted
+        )
+    } else {
+        kernel_time
+    };
     let head = format!(
         "sched_oracle: {} records, {} picks in rank order, every wake at or above the floor, no pass falling but by a weight change; {} passing over a budget whose threads all ran on other harts; {} lifted out of the cap set, at most to the floor; {} lifts by the rule ({} with a leading parent and work to move); {} weight changes by the rule; R10 {n} destructions over up to {} object frames, µs p50/p99/max {p50}/{p99}/{max}, their threads' ending {t50}/{t99}/{tmax}, no audit inside one; {} audits, {audit_total} µs; {} timer interrupts billed by the rule ({} expiring, {} finding a wait ended early, {} ticks after expiry to the budget billed last; {} ending a slice, {} nobody's; {} charging another budget than the one interrupted, {} ticks); {} device interrupts from user mode billed by the rule ({} claiming nothing){kernel_time}{lease_end}",
         records.len(),
@@ -3357,9 +3391,130 @@ pub fn fence(log: &str) -> Result<String, String> {
     ))
 }
 
+/// `post_check = "smp_inflight"` (kernel/memory.md, R81): every RAM frame's way through the
+/// in-flight state, from an `inflight-trace` kernel's records, by frame. A frame retired (`i`) is
+/// pending (`d`) only on the hart that retired it, and, if an entry for it was cleared in a
+/// process's space (the PID in its pass field), only after that hart shot the process down (`s`);
+/// it is given back to the bitmap (`b`) only once pending, after which its hart zeroed it; and it
+/// is never taken (`o`) between its retiring and its giving back. The run must race: frames
+/// retired from a live process's space, given back and taken again.
+pub fn inflight(log: &str) -> Result<String, String> {
+    /// Where a frame is: retired by `hart` from `pid`'s space (0 for none), shot down since if
+    /// `shot`; or pending.
+    #[derive(Clone, Copy)]
+    enum Flight {
+        Retired { hart: u64, pid: u64, shot: bool },
+        Pending,
+    }
+    let records = parse(log)?;
+    let mut flying: BTreeMap<u64, Flight> = BTreeMap::new();
+    let mut given_back = BTreeSet::new();
+    let (mut retired, mut unmapped, mut back, mut taken, mut reused, mut most) = (0, 0, 0, 0, 0, 0);
+    for r in &records {
+        let frame = r.id;
+        match r.kind {
+            'i' => {
+                if flying.contains_key(&frame) {
+                    return Err(format!("record {}: frame {frame} retired while in flight", r.seq));
+                }
+                let pid = r.pass as u64;
+                flying.insert(frame, Flight::Retired { hart: r.hart, pid, shot: pid == 0 });
+                retired += 1;
+                unmapped += usize::from(pid != 0);
+                most = most.max(flying.len());
+            }
+            's' => {
+                for f in flying.values_mut() {
+                    if let Flight::Retired { hart, pid, shot } = f {
+                        if *hart == r.hart && *pid == r.id {
+                            *shot = true;
+                        }
+                    }
+                }
+            }
+            'd' => match flying.get(&frame) {
+                Some(Flight::Retired { hart, pid, shot }) => {
+                    if *hart != r.hart {
+                        return Err(format!(
+                            "record {}: frame {frame} pending on hart {}, retired on hart {hart}",
+                            r.seq, r.hart
+                        ));
+                    }
+                    if !shot {
+                        return Err(format!(
+                            "record {}: frame {frame} pending before PID {pid}, whose entry for it was cleared, was shot down",
+                            r.seq
+                        ));
+                    }
+                    flying.insert(frame, Flight::Pending);
+                }
+                _ => return Err(format!("record {}: frame {frame} pending, but not retired", r.seq)),
+            },
+            'b' => {
+                if !matches!(flying.remove(&frame), Some(Flight::Pending)) {
+                    return Err(format!(
+                        "record {}: frame {frame} given back to the bitmap before it was pending and zeroed",
+                        r.seq
+                    ));
+                }
+                given_back.insert(frame);
+                back += 1;
+            }
+            'o' => {
+                if flying.contains_key(&frame) {
+                    return Err(format!(
+                        "record {}: frame {frame} taken from the bitmap while in flight",
+                        r.seq
+                    ));
+                }
+                taken += 1;
+                reused += usize::from(given_back.remove(&frame));
+            }
+            _ => {}
+        }
+    }
+    if unmapped == 0 || back == 0 || reused == 0 {
+        return Err(format!(
+            "nothing raced: {retired} frames retired ({unmapped} from a live space), {back} given back, {reused} taken again"
+        ));
+    }
+    Ok(format!(
+        "R81: {retired} frames retired ({unmapped} from a live space, pending only after its shootdown), at most {most} in flight; {back} given back only once pending; {taken} taken, none in flight, {reused} of them given back before; {} still in flight at the end",
+        flying.len()
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_inflight_check_follows_each_frame_from_its_retiring_to_its_taking() {
+        // Frame 7 unmapped from PID 5 on hart 1, shot down, pending, given back, taken again.
+        let good = [('i', 7, 5, 1), ('s', 5, 0, 1), ('d', 7, 0, 1), ('b', 7, 0, 0), ('o', 7, 0, 0)];
+        assert!(inflight(&shot_trace(&good)).is_ok());
+        // Pending before the shootdown (`inflight-zero-unshot`).
+        let unshot = [('i', 7, 5, 1), ('d', 7, 0, 1), ('s', 5, 0, 1), ('b', 7, 0, 0), ('o', 7, 0, 0)];
+        assert!(inflight(&shot_trace(&unshot)).is_err_and(|e| e.contains("before PID 5")));
+        // Given back unzeroed (`inflight-early-commit`).
+        let early = [('i', 7, 5, 1), ('b', 7, 0, 1), ('o', 7, 0, 0)];
+        assert!(inflight(&shot_trace(&early)).is_err_and(|e| e.contains("before it was pending")));
+        // Taken while in flight.
+        let taken = [('i', 7, 5, 1), ('s', 5, 0, 1), ('d', 7, 0, 1), ('o', 7, 0, 0)];
+        assert!(
+            inflight(&shot_trace(&taken)).is_err_and(|e| e.contains("taken from the bitmap while in flight"))
+        );
+        // Pending on another hart, or never retired.
+        let moved = [('i', 7, 0, 1), ('d', 7, 0, 0)];
+        assert!(inflight(&shot_trace(&moved)).is_err_and(|e| e.contains("retired on hart 1")));
+        assert!(inflight(&shot_trace(&[('d', 7, 0, 0)])).is_err_and(|e| e.contains("not retired")));
+        // A shootdown of another process, or on another hart, does not count.
+        let other = [('i', 7, 5, 1), ('s', 6, 0, 1), ('s', 5, 0, 0), ('d', 7, 0, 1)];
+        assert!(inflight(&shot_trace(&other)).is_err_and(|e| e.contains("before PID 5")));
+        // No race at all.
+        let idle = [('i', 7, 0, 1), ('d', 7, 0, 1), ('b', 7, 0, 0)];
+        assert!(inflight(&shot_trace(&idle)).is_err_and(|e| e.contains("nothing raced")));
+    }
 
     /// A trace of `records` (kind, id, pass, hart), in one kernel entry, with its end line.
     fn shot_trace(records: &[(char, u64, u128, u64)]) -> String {

@@ -24,6 +24,7 @@ fn return_registers(args: &[usize; 8], context: &Thread) -> ! {
     #[cfg(debug_assertions)]
     assert!(!crate::arch::hart::shot_down(), "a hart shot down returns to user mode");
     // A system call returns to user mode: the last kernel work of this entry.
+    crate::reclaim::end_section();
     crate::cell::KERNEL_LOCK.release();
     // SAFETY: `_redoubt_syscall_return_result` (asm) writes `args` into the return registers
     // and resumes `context` with `sret`. Both point at valid, kernel-owned data and it
@@ -163,6 +164,8 @@ pub extern "C" fn trap_handler(
         }
         #[cfg(not(feature = "sched-trace"))]
         let _ = (held, ticket, ahead);
+        // The frames harts have zeroed go back to the bitmap (R81).
+        crate::mem::entered();
         // Shot down while it ran here (`hart::shootdown`): its process was destroyed from another
         // hart, and its thread and context are gone. The hart's own mark says so, not the process
         // table, which may already hold a new process under the same PID. Nothing of the trap is
