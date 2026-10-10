@@ -175,8 +175,8 @@ required argument `budget_pages=N`, the budget's pages
 counts a process (two for a 16-byte term), so a limit is the same bytes on rv32 as on rv64. A flooding process peaks at about four times its
 heap limit, the old heap, the collector's copy and its growth, so the budget must be at least twice
 what the VM uses with no Erlang process running; then one flooding process, the tables or
-`persistent_term` meets its limit while the VM still has pages. A session's sixteenth is 688
-pages, 2,818,048 bytes; the shell at its prompt holds 3,696 bytes in ETS and 36,112 counted in
+`persistent_term` meets its limit while the VM still has pages. A session's sixteenth is 696
+pages, 2,850,816 bytes; the shell at its prompt holds 3,696 bytes in ETS and 36,112 counted in
 `persistent_term`, about a thousandth and a hundredth of it. Several flooding at once, or a native's single large allocation,
 reach the backstop instead, which ends the VM, and `init` restarts it. It is a server like any other
 under `init`'s restart rule: a VM that cannot stay up (a start module that fails every time, a
@@ -232,10 +232,16 @@ the first command loads more modules.
 
 The image budgets the VM twice the largest peak the scan finds across its memory cases, in
 `beamlet-footprint`, the one case that scans a shell's VM now that the steward starts the others'
-shells, and with that budget, 11,008 pages from a peak of 5,491 on rv64, the single VM boots in
-512 MiB ([budgets](../kernel/budgets.md#the-tree-from-the-boot-manifest)). The budget was 11,904
-pages while every module of the shell's was loaded at its start, the commands' among them, and
-the peak was 5,904. The line editor under the shell's driver is loaded at
+shells, plus what the VM holds outside its heap, rounded up to 128 pages: 11,136 pages from a
+peak of 5,491 on rv64, with which the single VM boots in 512 MiB
+([budgets](../kernel/budgets.md#the-tree-from-the-boot-manifest)). Outside the heap are 44 pages:
+its two schedulers' 18-page stacks and thread pages, up to five pages of endpoints its locks
+make, and its process's own page. With one scheduler they were 19, and the share was 11,008
+pages, from which the rv64 peak, 5,491 pages, was 3 under the 5,494 at which the share moves up
+a step of 128; the second scheduler's 25 pages moved it up that step. The rv64 peak may now
+reach 5,546 pages before it moves again ([budgets](../kernel/budgets.md#the-tree-from-the-boot-manifest)).
+The budget was 11,904 pages while every module of the shell's was loaded at its start, the
+commands' among them, and the peak was 5,904. The line editor under the shell's driver is loaded at
 the prompt: OTP's `group`, `edlin`, `edlin_key`, `group_history`, `prim_tty`, `shell`,
 `gen_statem`, `sys` and `kernel`, with `Redoubt.Term` and the driver. The shell's protocols are not
 consolidated, but nothing at the prompt, nor a plain line, dispatches a protocol on a struct, so
@@ -459,7 +465,7 @@ to the VM (`console_resized`), whose `idle` returns for it. There is no wall clo
 
 ### beamlet on Redoubt
 
-Status: built · partly tested: programs and `/net` are not built · tested: bench:beamlet-natives, bench:beamlet-reduction-rate, bench:beamlet-boot, bench:beamlet-console, bench:beamlet-files, bench:boot-profile, bench:boot-profile-unverified, bench:pack-outside-module, bench:pack-bad-truncated, bench:pack-bad-wrong-length, bench:pack-bad-wrong-name, bench:beamlet-heap-flood, bench:beamlet-budget-flood, bench:userland-boot, bench:userland-bad-start, bench:userland-read-only, bench:verity-flipped-tree, bench:verity-wrong-root, host:beamlet-redoubt::a_module_is_its_file_and_a_failed_read_is_refused, host:beamlet-redoubt::not_found_at_the_open_is_absent_and_every_other_error_is_refused_by_name, host:beamlet-redoubt::verified_module_lookup_propagates_found_absent_and_refused, host:beamlet-redoubt::verified_application_lookup_propagates_found_absent_and_refused, host:beamlet-redoubt::a_packed_module_comes_from_the_pack_and_any_other_from_the_volume, host:beamlet-redoubt::a_pack_with_a_bad_entry_is_refused_whole, host:testbench::the_boot_pack_is_deterministic_sorted_and_only_of_the_objects
+Status: built · partly tested: programs and `/net` are not built · tested: bench:beamlet-natives, bench:beamlet-reduction-rate, bench:beamlet-schedulers-mttcg, bench:beamlet-schedulers-one-hart-mttcg, host:beamlet-vm::two_schedulers_lose_nothing_across_the_system_lock, host:beamlet-vm::schedulers_go_offline_and_online_again, host:beamlet-redoubt::two_schedulers_lose_nothing_across_the_system_lock, host:beamlet-redoubt::four_schedulers_lose_nothing_either, host:beamlet-redoubt::without_the_argument_the_vm_has_one_scheduler, host:beamlet-redoubt::the_count_is_one_decimal_argument_capped_and_one_otherwise, host:beamlet-redoubt::the_io_report_counts_the_schedulers, bench:beamlet-boot, bench:beamlet-console, bench:beamlet-files, bench:boot-profile, bench:boot-profile-unverified, bench:pack-outside-module, bench:pack-bad-truncated, bench:pack-bad-wrong-length, bench:pack-bad-wrong-name, bench:beamlet-heap-flood, bench:beamlet-budget-flood, bench:userland-boot, bench:userland-bad-start, bench:userland-read-only, bench:verity-flipped-tree, bench:verity-wrong-root, host:beamlet-redoubt::a_module_is_its_file_and_a_failed_read_is_refused, host:beamlet-redoubt::not_found_at_the_open_is_absent_and_every_other_error_is_refused_by_name, host:beamlet-redoubt::verified_module_lookup_propagates_found_absent_and_refused, host:beamlet-redoubt::verified_application_lookup_propagates_found_absent_and_refused, host:beamlet-redoubt::a_packed_module_comes_from_the_pack_and_any_other_from_the_volume, host:beamlet-redoubt::a_pack_with_a_bad_entry_is_refused_whole, host:testbench::the_boot_pack_is_deterministic_sorted_and_only_of_the_objects
 
 On Redoubt, beamlet is a native program. Its built `Platform` adapter uses the client library
 ([native programs](native.md#the-client-library)) for the console, files, verified code lookup
@@ -489,9 +495,14 @@ before the change; a caller that wants to be told of a change uses the parked `r
 
 On the machine, beamlet is the program `beamlet`, started like any other with a console, a
 budget, and a connection to the userland disk's `erofsd`, a named handle its argument
-`endpoint=` names (`erofsd:system`). It runs one scheduler thread until several harts
-([several harts](../plan/m2-usable-shell.md#several-harts)), and its waiter threads are the
-runtime's `thread::spawn`.
+`endpoint=` names (`erofsd:system`). Its waiter threads are the runtime's `thread::spawn`.
+- **`schedulers=N`** gives the VM N scheduler threads, at most 8; absent or malformed, one. The
+  count is the image's choice: the steward gives a session's VM two
+  ([the steward](../servers/steward.md#authentication-and-sessions)). The kernel does not tell a
+  program how many harts there are, so the VM cannot follow the machine; a call that says so is
+  a later package's, if an image ever needs one. The first scheduler is beamlet's own thread, and
+  each other is a thread of the runtime's `thread::scope` with an 18-page stack, the size of a
+  session VM's first. Several schedulers below.
 - **`bind=PREFIX=HANDLE`** puts a named handle beamlet was handed at a prefix of its namespace
   (`bind=/home/alice=walfsd:data`): the `bind/2` a session performs for itself
   ([namespaces](sessions.md#namespaces)), for a VM `init` launches alone, whose namespace holds
@@ -500,8 +511,8 @@ runtime's `thread::spawn`.
   not a clean absolute path, is refused before any server is asked anything, with one line on its
   console.
 - **`report_io`** has the platform say, when the VM ends, how many requests went through the hub
-  and how many threads it ran (`beamlet: io: N requests through the hub; threads: 1 scheduler, W
-  waiters`); bench:beamlet-files reads it.
+  and how many threads it ran (`beamlet: io: N requests through the hub; threads: S schedulers, W
+  waiters`, `1 scheduler` for one); bench:beamlet-files reads it.
 
 In a `boot-stats` build ([checked builds](../testbench.md#checked-builds)) beamlet says `beamlet:
 first console read [t=N]` at the VM's first console read, with `time_now` in µs, and `beamlet:
@@ -590,6 +601,76 @@ these changes is below it on both widths. A session where a line has just been t
 than this for a while: the shell's driver measures the line being edited again for each piece of
 input it echoes, which can take as much of the hart as the line's own code for seconds after a
 long line; the floor's run is the fastest of its 30 for that reason.
+
+**Several schedulers.** The VM's schedulers share one run queue, under the lock on the VM's
+shared state, and take its processes in turn ([`vm.rs`](../../userland/otp/vm/src/vm.rs)). A
+process runs on one scheduler at a time, its heap, stack and collections its own, and the lock is
+held between time slices and by the instructions and natives that touch what is shared: the atom
+table, the loaded modules and loading them, ETS, `persistent_term`, registered names, timers, and
+the mailbox of a process another scheduler runs, which takes its messages when its slice ends.
+Loaded code and the literal chunks are read without it: each scheduler keeps the calls it has
+resolved, checked against counters bumped when code changes. The platform, and the hub in it, is
+locked after it, never before, and only a scheduler with nothing running anywhere waits in the
+platform's `idle`. A process still yields after its 2,000 reductions or 200,000 instructions, on
+whichever scheduler runs it, and keeps that scheduler while nothing else waits: another is woken
+only for more work than the schedulers ending a slice take back themselves. The kernel's time
+slice preempts each scheduler's thread. On Redoubt the lock is the runtime's mutex and the wait
+for work its condvar, which sleep on endpoints ([native programs](native.md#redoubt-rt-the-native-runtime)).
+Their endpoints are made when the VM starts, five pages with two schedulers: the system's lock,
+the platform's, the wait for work's own, and one for each scheduler that waits; so schedulers
+contending allocate nothing, and a VM at its budget's limit does not end at its first contended
+lock. If the kernel refuses one, the VM runs on one scheduler. A resource's lock (an `atomics`
+array, a `zlib` stream, ETS's count of what its objects hold) makes its endpoint, a page, the
+first time two schedulers contend for it, and gives it back with the resource; one the kernel
+refuses leaves that lock's waiters polling.
+
+The schedulers are the session process's threads, in its one budget: the kernel charges each
+hart's runner to that budget's one pass ([scheduling](../kernel/scheduling.md#one-flat-stride-queue)),
+so the session's share among budgets is its weight's as before, and on a machine whose other harts
+are idle it runs on as many as it has schedulers busy. Nothing new is carved, and the heap, ETS and
+`persistent_term` limits are a sixteenth of the budget each as before; the second scheduler's
+stack and thread page and the locks' endpoints are 25 of the share's pages
+([above](#what-the-vm-holds-at-its-prompt)).
+
+In the console session of the image's boot, two `Task.async` loops of
+`Enum.reduce(1..65536, 0, &max/2)`, awaited, timed 10 times with one scheduler online and 10 with
+two, alternated; the fastest of each (bench:beamlet-schedulers-mttcg, and
+bench:beamlet-schedulers-one-hart-mttcg at 1 hart):
+
+| | rv64 | rv32 |
+| --- | ---: | ---: |
+| 2 harts, one scheduler online | 417,514 µs | 487,274 µs |
+| 2 harts, two schedulers | 234,728 µs | 257,310 µs |
+| the ratio, one over two | 1.77 | 1.89 |
+| 1 hart, the same ratio | 0.99 | 0.99 |
+
+Across runs alone the 2-hart ratio measured 1.77 to 2.14 on rv64 (7 runs) and 1.83 to 1.94 on rv32 (5). These are host times: the cases run
+without `icount`, in multi-threaded TCG, where the harts are host threads that run at once.
+Under `icount` QEMU runs the harts in turn on one host thread and guest time counts every hart's
+instructions, so a second hart cannot make a run faster in guest time
+([which cases run in guest time](../testbench.md#the-case-file)). Both times come from one boot,
+so the ratio holds beside a steady load but not beside a stalled vCPU thread, and is a verdict
+only alone. **The floor:** a ratio of 1.40 at 2 harts, a fifth under the lowest measured
+alone, since the train's bench runs the case beside other work, where it once measured 1.53; a VM
+whose schedulers ran one at a time would measure about 1.0. And 0.90 at 1 hart: two schedulers
+sharing one hart keep nine tenths of one's throughput. The case does not measure what the kernel
+charges for the two threads: by the kernel's rule each hart's run is charged to the session's one
+budget ([scheduling](../kernel/scheduling.md#one-flat-stride-queue)), which the scheduling cases
+judge, not this one. With two schedulers at 1 hart, `beamlet-reduction-rate` measures 52,936 (rv64) and
+46,959 (rv32) reductions a second, the table's rates within a fifth of a percent. The rate is
+judged at the 1 hart its floor was set at, under `--smp N` too: under `icount` a second hart's
+instructions count in guest time, so at 2 harts main measured 45,354 (rv64) and 37,157 (rv32),
+under the floor on rv32, as with two schedulers (45,778 and 36,967). Before a yielding
+process kept its scheduler it changed threads every slice, a kernel wake-up each, and measured
+43,511 on rv64.
+
+Residual: loading a module holds the lock, so while one scheduler loads, no other starts or ends
+a time slice. To the shell's first prompt, 116 loads hold it 8.2 s of guest time on rv64 (8.9 s
+on rv32), the longest `unicode_util`'s, 877 ms (969 ms). A typed call the platform makes in place
+(the console's `size`, `littlefsd`'s `rename`) holds the platform's lock. The runtime's heap is one
+spin lock ([native programs](native.md#redoubt-rt-the-native-runtime)): two schedulers allocating
+at once take turns there, and one waiting for a holder the kernel preempted spins. A native is
+still not preempted, but holds only its own scheduler.
 
 Before its VM starts, beamlet reads the volume's boot pack, `boot.pack`, whole: one open, one `stat`
 for its length, one allocation of that length charged to the VM, and reads of 16 KiB in order, the
@@ -998,7 +1079,7 @@ them, a request is answered `busy` and asked again `RETRY_US` (10 ms) later, a c
 a file operation's request alike; the answers are counted, and said with the I/O report.
 
 **Threads.** A process has at most 255 threads ([processes](../kernel/processes.md)). The VM's are
-its schedulers (one until several harts) and its waiters, one per connection it uses, at most 6:
+its schedulers (`schedulers=N`, two in a session) and its waiters, one per connection it uses, at most 6:
 a session's bindings (`bootfsd`, the home volume, a labelled volume, `ipd`, the console, the system
 volume), a bind being one of them again. A server that ends takes its session with it: its waiter
 hands the end over and returns, closing the handle it woke the VM through, and the connection

@@ -482,7 +482,12 @@ Status: built · tested: bench:steward-home-quota, bench:init-refuses-overcommit
   it is (`own::session_args`): `principal=NAME`, `label=NAME:ID` for each label of its set, and
   `context=NAME` for a named context, none for the default context or the console's session
   ([sessions](../userland/sessions.md#what-a-session-is-told)); they are the steward's word to the
-  session and grant nothing. Each
+  session and grant nothing. It tells the VM `schedulers=2`, two scheduler threads in the session's
+  process and budget: the count is the image's choice, since the kernel does not say how many harts
+  there are, and a call that does is a later package's if an image ever needs to follow the machine
+  ([beamlet](../userland/beamlet.md#beamlet-on-redoubt)). The VM's heap cap is its share less what
+  the two schedulers' stacks and thread pages, its locks' endpoints and its process's page take,
+  44 pages ([budgets](../kernel/budgets.md#the-tree-from-the-boot-manifest)). Each
   session's process has an exit endpoint of its own, which a watcher thread of the steward's waits
   on and reports on the steward's endpoint when the process ends. A thread's stack is never given
   back, so a watcher that has reported waits for the next session, and a new one starts only when

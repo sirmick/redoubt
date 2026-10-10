@@ -6,6 +6,9 @@ memory_mib = 1024
 # A disk keeps sleep on (docs/testbench.md, "Which cases run in guest time").
 icount = "shift=3"
 qemu_seed = 1
+# The floor was set at 1 hart: under icount a second hart's instructions count in guest time, so
+# at --smp 2 the rate falls under it on rv32 with one scheduler or two (docs/userland/beamlet.md).
+keep_smp = true
 # The boot, then 30 runs of about 2 s and a pause of 1 s each: 48.5 s (rv64) and 50.0 s (rv32)
 # alone, four times the slower.
 timeout_secs = 200

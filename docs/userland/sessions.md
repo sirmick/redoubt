@@ -133,7 +133,10 @@ One session is one beamlet VM, in one budget of class `user`, under the principa
 ([budgets](../kernel/budgets.md#root-system-and-users)). What that gives:
 - **Everything the session does is paid for there.** Every page, process and share of the CPU it
   uses is charged to the session's budget or to a budget carved from it
-  ([R6 (charging)](../kernel/budgets.md#r6-charging)). A session cannot spend Bob's pages.
+  ([R6 (charging)](../kernel/budgets.md#r6-charging)). A session cannot spend Bob's pages. Its
+  VM's two schedulers are threads of its one process: on several harts they run at once, and
+  the kernel charges each hart's run to the session's budget, so the session's share is its
+  weight's however many harts it uses ([beamlet](beamlet.md#beamlet-on-redoubt)).
 - **Every call it makes says who it is.** The kernel stamps each message with the budget's
   account (the principal it bills to) and label set; the session cannot choose either
   ([R14 (unforgeable sender)](../kernel/ipc.md#r14-unforgeable-sender)). Servers admit and check

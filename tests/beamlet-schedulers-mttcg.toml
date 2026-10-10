@@ -1,0 +1,49 @@
+description = "A session's VM runs its two schedulers on two harts at once (docs/userland/beamlet.md, \"beamlet on Redoubt\"): in the console session of the image's boot, at 2 harts, two Task.async loops of Enum.reduce(1..65536, 0, &max/2), awaited, are timed 10 times with one scheduler online and 10 with two, alternated, and the fastest of each gives the ratio, the time with one over the time with two, in hundredths. The case runs without icount, in multi-threaded TCG, so the harts are host threads that run at once: under icount QEMU runs the harts in turn on one host thread and guest time counts every hart's instructions, so a second hart cannot make a run faster in guest time (docs/testbench.md, \"Which cases run in guest time\"). Both times are taken in one boot, so the ratio of two host times holds beside a steady load, but not beside a stalled vCPU thread: a verdict only alone (the quiet class)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+recipe = "image/boot.toml"
+memory_mib = 1024
+smp = [2]
+# The ratio is of two schedulers on two harts against one: `--smp N` would judge it at N.
+keep_smp = true
+timeout_secs = 600
+expect = [
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+    '^\[con [0-9a-f]{16}\] :defined$',
+    '^\[con [0-9a-f]{16}\] :timed$',
+    # The floor, 1.40: two harts must beat one by more than serialized schedulers could. Alone
+    # the ratio measured 1.77 to 2.14 (rv64) and 1.83 to 1.94 (rv32), and once 1.53 beside other
+    # work, as the train's bench runs it; 1.40 is a fifth under the lowest alone
+    # (docs/userland/beamlet.md, "Several schedulers").
+    '^\[con [0-9a-f]{16}\] "ratio (1[4-9][0-9]|[2-9][0-9]{2}) one [0-9]+ two [0-9]+ schedulers 2"$',
+]
+forbid = [
+    '^\[con [0-9a-f]{16}\] "ratio ([0-9]{1,2}|1[0-3][0-9]) ',
+    'init: refused the boot',
+    'init: rebooting',
+    '^init: .* (exited|faulted|was killed)',
+    'EXCEPTION',
+    'steward: a step failed',
+]
+
+# Three short lines, each typed once the line before has answered, as beamlet-reduction-rate's.
+[[input]]
+after = 'Redoubt shell, on Elixir '
+send = "g = fn -> elem(:timer.tc(fn -> Enum.map(Enum.map(1..2, fn _ -> Task.async(fn -> Enum.reduce(1..65536, 0, &max/2) end) end), &Task.await(&1, :infinity)) end), 0) end; :defined\n"
+
+[[input]]
+after = '\] :defined$'
+send = "m = fn n -> :erlang.system_flag(:schedulers_online, n); Process.sleep(500); g.() end; ts = for _ <- 1..10, do: {m.(1), m.(2)}; :timed\n"
+
+[[input]]
+after = '\] :timed$'
+send = "a = Enum.min(Enum.map(ts, &elem(&1, 0))); b = Enum.min(Enum.map(ts, &elem(&1, 1))); \"ratio #{div(a * 100, b)} one #{a} two #{b} schedulers #{:erlang.system_info(:schedulers)}\"\n"
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]

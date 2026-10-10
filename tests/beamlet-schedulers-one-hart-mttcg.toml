@@ -1,0 +1,46 @@
+description = "A session's two schedulers cost little on one hart (docs/userland/beamlet.md, \"Several schedulers\"): beamlet-schedulers-mttcg's run at 1 hart, where the two scheduler threads share the hart. In the console session of the image's boot, two Task.async loops of Enum.reduce(1..65536, 0, &max/2), awaited, are timed 10 times with one scheduler online and 10 with two, alternated, and the fastest of each gives the ratio, the time with one over the time with two, in hundredths: at least 90, so two schedulers keep nine tenths of one's throughput. As its twin, the case runs without icount, in multi-threaded TCG, and both times are taken in one boot: a verdict only alone (the quiet class)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+recipe = "image/boot.toml"
+memory_mib = 1024
+smp = [1]
+# The ratio is of two schedulers on one hart against one: `--smp N` would judge it at N.
+keep_smp = true
+timeout_secs = 600
+expect = [
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+    '^\[con [0-9a-f]{16}\] :defined$',
+    '^\[con [0-9a-f]{16}\] :timed$',
+    # Two schedulers on one hart keep at least nine tenths of one's throughput.
+    '^\[con [0-9a-f]{16}\] "ratio (9[0-9]|[1-9][0-9]{2}) one [0-9]+ two [0-9]+ schedulers 2"$',
+]
+forbid = [
+    '^\[con [0-9a-f]{16}\] "ratio ([0-9]|[0-8][0-9]) ',
+    'init: refused the boot',
+    'init: rebooting',
+    '^init: .* (exited|faulted|was killed)',
+    'EXCEPTION',
+    'steward: a step failed',
+]
+
+# Three short lines, each typed once the line before has answered, as beamlet-reduction-rate's.
+[[input]]
+after = 'Redoubt shell, on Elixir '
+send = "g = fn -> elem(:timer.tc(fn -> Enum.map(Enum.map(1..2, fn _ -> Task.async(fn -> Enum.reduce(1..65536, 0, &max/2) end) end), &Task.await(&1, :infinity)) end), 0) end; :defined\n"
+
+[[input]]
+after = '\] :defined$'
+send = "m = fn n -> :erlang.system_flag(:schedulers_online, n); Process.sleep(500); g.() end; ts = for _ <- 1..10, do: {m.(1), m.(2)}; :timed\n"
+
+[[input]]
+after = '\] :timed$'
+send = "a = Enum.min(Enum.map(ts, &elem(&1, 0))); b = Enum.min(Enum.map(ts, &elem(&1, 1))); \"ratio #{div(a * 100, b)} one #{a} two #{b} schedulers #{:erlang.system_info(:schedulers)}\"\n"
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]
