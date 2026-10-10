@@ -3,7 +3,8 @@ arch = ["rv64", "rv32"]
 kind = "boot"
 # The image's programs; the manifest is the image's servers with beamlet started by init, as the
 # image was before the steward started the shell (tests/data/beamlet-footprint/manifest.json), with
-# beamlet's arguments given report_memory: the VM measured is the one a session runs.
+# beamlet's arguments given report_memory: the VM measured is the one a session runs, with the
+# steward's two schedulers and the heap cap it gives beside their stacks.
 programs = [
     { package = "redoubt-init", bin = "init" },
     { package = "redoubt-keyd", bin = "keyd" },
@@ -55,7 +56,7 @@ verity = "image/userland.toml"
 
 [[file.servers]]
 name = "beamlet"
-args = ["budget_pages=11008", "endpoint=erofsd:system", "report_memory", "Elixir.Redoubt.Shell"]
+args = ["budget_pages=11136", "endpoint=erofsd:system", "schedulers=2", "report_memory", "Elixir.Redoubt.Shell"]
 
 [userland]
 recipe = "image/userland.toml"

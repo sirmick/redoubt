@@ -273,8 +273,8 @@ defmodule Redoubt.Shell.DriverTest do
   end
 
   # A session's VM gives each process a sixteenth of its budget's bytes, in 8-byte words: for the
-  # image's 11,008-page session, the driver's limit on the machine.
-  @session_heap_words div(11_008 * 4096, 16 * 8)
+  # image's 11,136-page share of a session, the driver's limit on the machine.
+  @session_heap_words div(11_136 * 4096, 16 * 8)
 
   test "a printed line of 70,000 bytes is drawn within a session's heap limit, and the session goes on" do
     {driver, terminal} = start(heap_words: @session_heap_words)
