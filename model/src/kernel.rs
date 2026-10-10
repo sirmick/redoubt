@@ -257,6 +257,9 @@ pub const RAM_BASE: u64 = 0x8000_0000;
 /// What a frame free since boot may hold before its first allocation zeroes it (R11): whatever the
 /// loader or the firmware left there.
 const BOOT_CONTENT: u64 = 0xb007;
+/// The model's magazine (R84): two frames, not the kernel's sixteen, so that an allocation still
+/// reaches the free frames and the frames in flight, which R81's variants break, within a seed.
+pub const MAGAZINE: usize = 2;
 /// The longest `Op::Tick` the model accepts (one hour): a replay of hostile input must finish.
 pub const MAX_TICK: u64 = 3_600_000_000;
 
@@ -564,6 +567,9 @@ pub struct Kernel {
     /// Freed frames not yet zeroed and given back, and the contents they still hold (R81): no
     /// process's and not free, until time passes ([`Kernel::commit`]).
     pub in_flight: BTreeMap<u64, u64>,
+    /// The hart's frame magazine (R84): frames no process holds and not free, each zero, which
+    /// allocation draws first; filled as time passes ([`Kernel::commit`]).
+    pub magazine: BTreeMap<u64, u64>,
     pub msgs: BTreeMap<u64, Msg>,
     pub halted: Option<u64>,
     /// The console's MMIO device: the first MMIO device at boot, as the loader puts it
@@ -682,6 +688,7 @@ impl Kernel {
             frames: BTreeMap::new(),
             free_frames: BTreeMap::new(),
             in_flight: BTreeMap::new(),
+            magazine: BTreeMap::new(),
             msgs: BTreeMap::new(),
             halted: None,
             console: None,
@@ -1092,10 +1099,11 @@ impl Kernel {
     // ---------------------------------------------------------------------------------------
     // Memory.
 
-    /// A frame for a new mapping: a free one if there is one, zero already (R81), else one free
-    /// since boot, which may hold anything and is zeroed now. R11: zero before any process sees it.
+    /// A frame for a new mapping: one from the magazine if it holds one, zero already (R84), else a
+    /// free one, zero already (R81), else one free since boot, which may hold anything and is
+    /// zeroed now. R11: zero before any process sees it.
     fn alloc_frame(&mut self, payer: u64) -> u64 {
-        let (f, content) = match self.free_frames.pop_first() {
+        let (f, content) = match self.magazine.pop_first().or_else(|| self.free_frames.pop_first()) {
             Some(x) => x,
             None => {
                 self.next_frame += 1;
@@ -1119,10 +1127,28 @@ impl Kernel {
         }
     }
 
-    /// Time passes: every frame in flight has been zeroed by the hart that freed it, outside the
-    /// kernel lock, and the lock's next holder gives it back to the free frames (R81). The one
-    /// hart the model runs does it here, between calls, as several harts do it between sections.
+    /// Time passes: the magazine is refilled (R84), and every other frame in flight has been zeroed
+    /// by the hart that freed it, outside the kernel lock, and the lock's next holder gives it back
+    /// to the free frames (R81). The one hart the model runs does it here, between calls, as several
+    /// harts do it between sections.
     fn commit(&mut self) {
+        // R84: the magazine fills first, from the frames in flight, each zeroed as it enters, then
+        // from the free frames, zero already, up to `MAGAZINE` frames.
+        while self.magazine.len() < MAGAZINE {
+            let Some((f, stale)) = self.in_flight.pop_first() else { break };
+            let content = if self.broken(Mutation::R84MagazineUnzeroed) { stale } else { 0 };
+            self.magazine.insert(f, content);
+        }
+        while self.magazine.len() < MAGAZINE {
+            let Some((&f, &content)) = self.free_frames.iter().find(|(f, _)| !self.magazine.contains_key(f))
+            else {
+                break;
+            };
+            if !self.broken(Mutation::R84MagazineStillFree) {
+                self.free_frames.remove(&f);
+            }
+            self.magazine.insert(f, content);
+        }
         for (f, stale) in core::mem::take(&mut self.in_flight) {
             let content = if self.broken(Mutation::R81CommitUnzeroed) { stale } else { 0 };
             match self.frames.get_mut(&f) {

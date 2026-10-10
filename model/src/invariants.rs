@@ -322,7 +322,7 @@ impl Checker {
         // I16: a frame waiting in the free pool for reuse (by any path, DMA or not) is never one a
         // device could still write: `dma_alloc`'s own frames are armed in the same step they are
         // created, so this checks the pool, not creation.
-        for f in k.free_frames.keys().chain(k.in_flight.keys()) {
+        for f in k.free_frames.keys().chain(k.in_flight.keys()).chain(k.magazine.keys()) {
             ensure!(
                 k.ghost.armed.get(f).is_none_or(BTreeSet::is_empty),
                 "I16: free frame {f} is still armed against {:?}",
@@ -340,6 +340,14 @@ impl Checker {
         }
         for f in k.in_flight.keys() {
             ensure!(!k.frames.contains_key(f), "R81: frame {f} in flight is also held");
+        }
+        // R84: a frame in the magazine is no one's, not in flight and not free, and zero.
+        for (f, content) in &k.magazine {
+            ensure!(*content == 0, "R84: magazine frame {f} holds {content:#x}");
+            ensure!(
+                !k.frames.contains_key(f) && !k.in_flight.contains_key(f) && !k.free_frames.contains_key(f),
+                "R84: magazine frame {f} is also held, in flight or free"
+            );
         }
         let mut seen: BTreeMap<u64, Seen> = BTreeMap::new();
         for p in k.processes.values() {

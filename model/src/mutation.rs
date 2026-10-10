@@ -166,6 +166,11 @@ pub enum Mutation {
     R81InFlightAllocatable,
     /// A frame in flight is given back to the free frames without being zeroed.
     R81CommitUnzeroed,
+    // R84. Frame magazines.
+    /// A frame in flight enters the magazine without being zeroed.
+    R84MagazineUnzeroed,
+    /// A free frame enters the magazine and stays free as well.
+    R84MagazineStillFree,
     // R18. Device authority.
     /// A device call through a number that is not one of the caller's handles reaches the device
     /// object of that number.
@@ -423,7 +428,7 @@ pub enum Mutation {
 }
 
 impl Mutation {
-    pub const ALL: [Mutation; 170] = {
+    pub const ALL: [Mutation; 172] = {
         use Mutation::*;
         [
             R1SkipLabelCheck,
@@ -491,6 +496,8 @@ impl Mutation {
             R11ProcessMapSkipsFlags,
             R81InFlightAllocatable,
             R81CommitUnzeroed,
+            R84MagazineUnzeroed,
+            R84MagazineStillFree,
             R18DeviceByNumber,
             DeviceInfoWrongKind,
             R20NoticePidReused,
@@ -666,6 +673,7 @@ impl Mutation {
             | R11ExecOnDeviceMemory
             | R11ProcessMapSkipsFlags => "R11",
             R81InFlightAllocatable | R81CommitUnzeroed => "R81",
+            R84MagazineUnzeroed | R84MagazineStillFree => "R84",
             R18DeviceByNumber | DeviceInfoWrongKind => "R18",
             R20NoticePidReused => "R20",
             R22MapFixedWalksFirst => "R22",
