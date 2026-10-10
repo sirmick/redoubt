@@ -105,6 +105,15 @@ mod machine {
     /// A session VM's first-thread stack, in pages: twice beamlet's measured peak, 35,288 bytes
     /// (servers/init.md, "Stacks"; docs/testbench.md, "The memory budget").
     const SESSION_STACK_PAGES: usize = 18;
+    /// A session VM's schedulers (`schedulers=N`, docs/userland/beamlet.md, "beamlet on
+    /// Redoubt"): the image's choice, since the kernel does not tell a program how many harts
+    /// there are. Each after the first is a thread with a stack of `SESSION_STACK_PAGES`, as
+    /// beamlet sizes it, and its thread page.
+    const SESSION_SCHEDULERS: usize = 2;
+    /// The pages a session VM's locks may make endpoints of: one for each of its two locks and
+    /// its idle schedulers' wake-up, and one for each scheduler that waits (beamlet's runtime
+    /// makes a lock's endpoint the first time a thread must wait on it).
+    const SESSION_LOCK_PAGES: usize = 3 + SESSION_SCHEDULERS;
     /// A root badge of the steward's own, below the minted range and none of the protocol's
     /// roles: each session's watcher reports its exit on it.
     const EXITS: u64 = 4;
@@ -507,9 +516,12 @@ mod machine {
             let told = session_args(&self.own_lines, &principal, labels, context);
             let endpoint = format!("endpoint={SYSTEM}");
             let len = self.program_len;
-            // The heap capped at what the VM's share holds beside the stack and the process's
-            // own page (servers/init.md, "Heaps").
-            let heap = vm_pages.saturating_sub(SESSION_STACK_PAGES as u64 + 1);
+            let schedulers = format!("schedulers={SESSION_SCHEDULERS}");
+            // The heap capped at what the VM's share holds beside each scheduler's stack and
+            // thread page, its locks' endpoints and the process's own page (servers/init.md,
+            // "Heaps").
+            let threads = (SESSION_STACK_PAGES + 1) * SESSION_SCHEDULERS + SESSION_LOCK_PAGES;
+            let heap = vm_pages.saturating_sub(threads as u64 + 1);
             // The steward's badge first, then the shared slots in order.
             let slot = |i: usize| connections.get(i + 1).copied().flatten();
             let started = {
@@ -530,7 +542,9 @@ mod machine {
                     }
                 }
                 launch.stack_pages(SESSION_STACK_PAGES).heap_pages(u32::try_from(heap).unwrap_or(u32::MAX));
-                told.iter().fold(launch.arg(&pages).arg(&endpoint), |l, arg| l.arg(arg)).arg(SHELL);
+                told.iter()
+                    .fold(launch.arg(&pages).arg(&endpoint).arg(&schedulers), |l, arg| l.arg(arg))
+                    .arg(SHELL);
                 launch.start()
             };
             let job = started.map_err(|failed| {

@@ -227,7 +227,10 @@ screen in front out again ([the shell](../userland/shell.md#the-consoles-size)).
 hart halts rather than spins (`bench:smp-lock-wait`), and a destruction's
 shootdown is attacked (`bench:smp-boot`, `bench:smp-evict`). One process's threads run on
 several harts at once, and every unmap, lend and return shoots the process down on the others
-(`smp-shootdown`, `smp-fence`). R12 holds across harts: each budget gets its water-filling share
+(`smp-shootdown`, `smp-fence`), and a session's VM runs two schedulers on them: two Elixir tasks
+finish in 0.53 to 0.56 of the time on 2 harts as on one, measured in host time, and a session at 1
+hart keeps its single-scheduler rate ([beamlet](../userland/beamlet.md#beamlet-on-redoubt);
+`beamlet-schedulers-mttcg`). R12 holds across harts: each budget gets its water-filling share
 of the harts, judged from the kernel's charges by the oracle and by the model at 1, 2 and 4 harts
 ([R12](../kernel/scheduling.md#r12-scheduling)), and the latency targets are gated at 2 harts and
 recorded at 4 ([responsiveness](../kernel/scheduling.md#responsiveness)). The console has one

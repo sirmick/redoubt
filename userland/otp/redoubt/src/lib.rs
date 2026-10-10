@@ -108,6 +108,8 @@ pub struct Redoubt {
     sys: system::Sys,
     /// Say what the I/O cost when the VM ends ([`REPORT_IO`]).
     report_io: bool,
+    /// The schedulers asked for ([`schedulers`]), for that report.
+    schedulers: usize,
     modules: Box<dyn Modules>,
     /// What the lookups cost (`boot-stats`).
     #[cfg(feature = "boot-stats")]
@@ -317,6 +319,7 @@ impl Redoubt {
             files: files::Table::new(ns),
             sys,
             report_io: startup.args().any(|arg| arg == REPORT_IO),
+            schedulers: schedulers(startup.args()),
             modules,
             #[cfg(feature = "boot-stats")]
             loads: Loads { started: redoubt_rt::handle::time_now().unwrap_or(0), ..Loads::default() },
@@ -415,8 +418,10 @@ impl Drop for Redoubt {
     fn drop(&mut self) {
         if self.report_io {
             let line = format!(
-                "beamlet: io: {} requests through the hub; threads: 1 scheduler, {} waiters\n",
+                "beamlet: io: {} requests through the hub; threads: {} scheduler{}, {} waiters\n",
                 self.io.requests(),
+                self.schedulers,
+                if self.schedulers == 1 { "" } else { "s" },
                 self.io.waiters()
             );
             self.console_write(line.as_bytes());
@@ -625,6 +630,29 @@ pub const BUDGET_PAGES: &str = "budget_pages=";
 /// hub and how many threads it ran: the scheduler and the waiters, and no thread per request.
 pub const REPORT_IO: &str = "report_io";
 
+/// The argument that gives the VM its schedulers, `schedulers=N`: N threads, each running Erlang
+/// processes, on as many harts as the kernel gives the session's budget. The count is the
+/// image's choice: the kernel does not tell a program how many harts there are.
+pub const SCHEDULERS: &str = "schedulers=";
+
+/// The most schedulers a VM runs, whatever `schedulers=N` asks.
+pub const MAX_SCHEDULERS: usize = 8;
+
+/// The pages of each scheduler thread's stack after the first: as the steward gives a session
+/// VM's first thread, twice beamlet's measured peak.
+pub const SCHEDULER_STACK_PAGES: usize = 18;
+
+/// The schedulers `schedulers=N` among `args` asks for, at most [`MAX_SCHEDULERS`]: exactly one
+/// such argument, with N a decimal number above zero; otherwise, absent or malformed, one.
+pub fn schedulers<'a>(args: impl Iterator<Item = &'a str>) -> usize {
+    let mut given = args.filter_map(|arg| arg.strip_prefix(SCHEDULERS));
+    let (Some(n), None) = (given.next(), given.next()) else { return 1 };
+    if n.is_empty() || !n.bytes().all(|b| b.is_ascii_digit()) {
+        return 1;
+    }
+    n.parse::<usize>().ok().filter(|&n| n > 0).map_or(1, |n| n.min(MAX_SCHEDULERS))
+}
+
 /// The argument that has the VM print its memory breakdown at its first prompt
 /// ([`beamlet_vm::memory::footprint`]); absent, it prints none.
 pub const REPORT_MEMORY: &str = "report_memory";
@@ -688,6 +716,8 @@ pub fn run(
     );
     let mut vm =
         Vm::with_config(Box::new(platform), Config { natives, limits: limits(budget_pages), report_memory });
+    vm.set_schedulers(schedulers(startup.args()));
+    vm.set_helper_stack_pages(SCHEDULER_STACK_PAGES);
     let (line, code) = match vm.spawn(module, function, |_| Vec::new()) {
         Err(e) => (format!("beamlet: {module}:{function} did not start: {:?} {}", e.class, e.reason), 1),
         Ok(first) => match vm.run(first) {

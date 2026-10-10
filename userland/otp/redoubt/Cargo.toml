@@ -6,7 +6,8 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
-beamlet-vm = { path = "../vm" }
+# Several schedulers on the machine: the runtime's locks and threads (docs/userland/beamlet.md).
+beamlet-vm = { path = "../vm", features = ["redoubt"] }
 redoubt-client = { path = "../../../libs/client" }
 redoubt-rt = { path = "../../../libs/rt" }
 # The natives the shell's modules need, which `run` gives every VM.
@@ -50,4 +51,8 @@ required-features = ["fake"]
 
 [[test]]
 name = "system"
+required-features = ["fake"]
+
+[[test]]
+name = "schedulers"
 required-features = ["fake"]

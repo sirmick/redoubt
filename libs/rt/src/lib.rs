@@ -5,6 +5,8 @@
 //! - [`handle`]: typed handles and the system calls that are not IPC.
 //! - [`ipc`]: lends and transfers, `call`, `send`, `receive`, `reply`.
 //! - [`heap`]: the global allocator, over `map_anon`, or over one fixed arena.
+//! - [`thread`]: threads of this process; [`sync`]: a semaphore, mutex and condvar whose waiters sleep on an
+//!   endpoint.
 //! - [`start`]: the entry point ([`entry!`], and [`first_entry!`] for `init`), exit codes and the panic
 //!   handler.
 //! - [`path`]: lexical path cleaning, so `..` never climbs above a root.
@@ -43,6 +45,7 @@ pub mod path;
 pub mod server;
 pub mod start;
 pub mod startup;
+pub mod sync;
 mod sys;
 pub mod thread;
 

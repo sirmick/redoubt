@@ -52,6 +52,7 @@ quiet := rt-host-tests client-host-tests r4-host-tests bench-ssh-guest bench-ssh
 quiet += steward-sub-budget-flood steward-ssh-two-principals steward-vault-session steward-vault-launch steward-session-ends
 quiet += steward-ssh-idle launch-idle
 quiet += sched-lock-contention-4-mttcg smp-evict-mttcg smp-shootdown-mttcg
+quiet += beamlet-schedulers-mttcg beamlet-schedulers-one-hart-mttcg
 quiet := $(filter $(cases),$(quiet))
 net := $(filter-out $(quiet),$(sort $(basename $(notdir $(shell grep -lE '^(forward *=|\[\[?net\.(peer|dial|poke))' $$(grep -lE '^\[net\]' tests/*.toml))))))
 fanned := $(filter-out $(quiet) $(net),$(sort $(basename $(notdir $(shell grep -lE '^(fanout *=|\[fanout\])' tests/*.toml)))))

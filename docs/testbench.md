@@ -269,7 +269,8 @@ a disk or a userland disk (38 cases; the rule for a disk is above); host sockets
 `poke`, a peer or a dial (8); input the host types on the console, `[[input]]` (4; under `icount`
 the rv32 UART lost a burst of it); and a run whose purpose is the host's
 time (`asid-cost-host`, `sched-latency-tcg`, `timeouts-tcg`, and `smp-evict-mttcg`,
-`smp-shootdown-mttcg`, `console-one-writer` and `sched-lock-contention-4-mttcg`, which need QEMU's
+`smp-shootdown-mttcg`, `console-one-writer`, `sched-lock-contention-4-mttcg`,
+`beamlet-schedulers-mttcg` and `beamlet-schedulers-one-hart-mttcg`, which need QEMU's
 multi-threaded TCG). Several harts do not keep a case
 on the host's clock: under `icount` QEMU runs the harts in turn on one host thread, and a hart
 waiting for the kernel lock halts rather than spending its turn
@@ -307,7 +308,8 @@ invocation and no build run beside it. Those are a `host-tests` case whose crate
 a wall-clock bound (`redoubt-rt`, `redoubt-client`, `redoubt-keyd` and `redoubt-consoled` do;
 `redoubt-ipd`, `redoubt-model` and `testbench` only read the clock), which no tolerance would
 make load-proof; a boot case whose bound is a ratio of two host times (`sched-lock-contention-4-mttcg`:
-a stalled vCPU thread lengthens a wake but not the search it is counted in); a case whose expectation is a timeout (`bench-ssh-guest`, and
+a stalled vCPU thread lengthens a wake but not the search it is counted in; `beamlet-schedulers-mttcg`
+and its one-hart twin: a stalled vCPU thread lengthens one of the two runs it compares); a case whose expectation is a timeout (`bench-ssh-guest`, and
 `bench-ssh-loopback-deadlock`, whose `must_fail` is the mark it never gets); and a host-clock
 case with a VM session whose console goes through the hub's hold and which must still be alive
 after a hold boundary (the steward's SSH session cases): a stall of the guest of a second or
@@ -1525,14 +1527,15 @@ additional client from the merged manifest.
 The read-only client's largest stack peak is 6,616 bytes and its heap's 31 pages; its case uses
 the 16-page stack default and no cap. A session's beamlet is no manifest server: the steward
 launches it with an 18-page stack, twice beamlet's stack peak of 36,136 bytes (`beamlet-footprint`
-on rv64, with the boot pack read before its VM starts and its console on the hub), and a heap cap
-of what its share holds beside the stack, 10,989 pages of the 11,008 the steward gives it of the
-11,136 `sizes` gives a session, the rest its console relay's
-([budgets](kernel/budgets.md), [the steward](servers/steward.md#authentication-and-sessions)): 7 pages over twice its heap's
-largest peak across the memory cases on each width, 5,491 pages, above what its prompt
-holds ([beamlet](userland/beamlet.md#what-the-vm-holds-at-its-prompt)). `beamlet-footprint` scans
+on rv64, with the boot pack read before its VM starts and its console on the hub), its second
+scheduler's thread with a stack of the same size, and a heap cap of what its share holds beside
+its two schedulers' stacks and thread pages, its locks' endpoints and its process's page, 11,092
+pages of the 11,136 the steward gives it of the 11,264 `sizes` gives a session, the rest its
+console relay's ([budgets](kernel/budgets.md), [the steward](servers/steward.md#authentication-and-sessions)): 108 pages over twice its heap's
+largest peak across the memory cases on each width, 5,492 pages (rv64 at 2 harts; 5,491 at 1),
+above what its prompt holds ([beamlet](userland/beamlet.md#what-the-vm-holds-at-its-prompt)). `beamlet-footprint` scans
 the VM alone, under its own copy of the single-VM manifest. Its cap leaves its process heap,
-ETS and `persistent_term` limits, a sixteenth of its budget each (688 pages), reachable: a flooding process, about
+ETS and `persistent_term` limits, a sixteenth of its budget each (696 pages), reachable: a flooding process, about
 four times its limit, still fits under the cap ([beamlet](userland/beamlet.md#limits-inside-one-vm)).
 A context's console relay is no manifest server either: `consrelay-footprint` has `init` start it
 under a manifest of its own, beside a stand-in that takes its hello, and scans it once it says it

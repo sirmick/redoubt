@@ -1,11 +1,13 @@
 //! `beamlet`: the Elixir VM on Redoubt, a program `init` starts like any other
 //! (docs/userland/beamlet.md, "beamlet on Redoubt").
 //!
-//!     beamlet budget_pages=N endpoint=NAME [report_memory] [report_io] [bind=PREFIX=HANDLE]...
-//!             [principal=NAME [label=NAME:ID]... [context=NAME]] MODULE [FUNCTION]
+//!     beamlet budget_pages=N endpoint=NAME [schedulers=N] [report_memory] [report_io]
+//!             [bind=PREFIX=HANDLE]... [principal=NAME [label=NAME:ID]... [context=NAME]]
+//!             MODULE [FUNCTION]
 //!
 //! Its arguments, from its startup block, give its budget's pages, which size the VM's limits
-//! ([`beamlet_redoubt::limits`]), the handle its userland volume is reached by, ask for its memory
+//! ([`beamlet_redoubt::limits`]), the handle its userland volume is reached by, its schedulers
+//! ([`beamlet_redoubt::schedulers`], one unless it is told more), ask for its memory
 //! breakdown at its first prompt ([`beamlet_redoubt::REPORT_MEMORY`]), say what its I/O cost when
 //! it ends ([`beamlet_redoubt::REPORT_IO`]), bind handles it was handed at prefixes of its
 //! namespace ([`beamlet_redoubt::BIND`]: its home volume, `bind=/home/alice=littlefsd:data`), tell a
@@ -79,6 +81,7 @@ fn start(startup: &Startup) -> u32 {
         !arg.starts_with(beamlet_redoubt::BUDGET_PAGES)
             && !arg.starts_with(ENDPOINT)
             && !arg.starts_with(beamlet_redoubt::BIND)
+            && !arg.starts_with(beamlet_redoubt::SCHEDULERS)
             && *arg != beamlet_redoubt::REPORT_MEMORY
             && *arg != beamlet_redoubt::REPORT_IO
             && !arg.starts_with(beamlet_redoubt::PRINCIPAL)
