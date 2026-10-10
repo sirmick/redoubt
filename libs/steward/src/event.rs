@@ -81,6 +81,22 @@ pub enum EventKind {
     EndSession {
         badge: u64,
     },
+    /// The session lists its domain's contexts (servers/steward.md, "Contexts").
+    Contexts {
+        badge: u64,
+    },
+    /// The session's own context lets its channel go and runs on, detached.
+    Leave {
+        badge: u64,
+    },
+    /// The session ends the context `name` of its own domain, itself included.
+    EndContext {
+        badge: u64,
+        name: String,
+    },
+    // From the steward's timer, at `Store::next_idle`.
+    /// Every detached context past its principal's idle bound ends.
+    Idle,
     // From an approval channel.
     Pending {
         channel: u64,

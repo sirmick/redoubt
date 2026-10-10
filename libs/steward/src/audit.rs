@@ -22,6 +22,11 @@ pub enum Record {
         from: String,
         took_over: bool,
     },
+    /// A detached context ran past its principal's idle bound and ended; `idle` in seconds.
+    IdleEnded {
+        session: u64,
+        idle: u64,
+    },
     AgentStarted {
         lease: u64,
         sponsor: usize,

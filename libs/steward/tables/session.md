@@ -3,7 +3,10 @@ a named one of either (`ssh alice.work@box`), or the console principal's session
 (`Console`, the steward's own, with no key and no context), in the domain of its principal's
 account and its label set. A context is `Running` while a channel is attached to it and
 `Detached` while none is; a login naming a live context attaches to it (`Attach`, raised by
-`take_over` once the login is authenticated), taking it over from its channel if it has one.
+`take_over` once the login is authenticated), taking it over from its channel if it has one. A
+login that would make one more context than its principal's cap is refused (`under_cap`). The
+session's own `detach` is `Leave`; a detached context past its idle bound ends on the
+steward's timer (`Idle`).
 Included by [the steward's page](../../../docs/servers/steward.md#machines); the notation is in
 [README.md](README.md).
 
@@ -15,27 +18,35 @@ Included by [the steward's page](../../../docs/servers/steward.md#machines); the
 | - | `Login` | `!owns_labels` | - | `refuse` |
 | - | `Login` | `!not_locked` | - | `refuse` |
 | - | `Login` | `!context_free` | - | `take_over` |
+| - | `Login` | `!under_cap` | - | `refuse` |
 | - | `Login` | - | `Starting` | `carve_session`, `create_scope`, `launch_relay`, `attach_relay`, `connect`, `launch` |
 | - | `Console` | `!not_locked` | - | `refuse` |
 | - | `Console` | - | `Starting` | `carve_session`, `create_scope`, `connect`, `launch` |
 | `Starting` | `Done` | `!not_locked` | `Ending` | `refuse`, `destroy_budget` |
 | `Starting` | `Done` | - | `Running` | `route`, `audit_login`, `reply_login` |
 | `Starting` | `Failed` | - | `Ending` | `refuse`, `destroy_partial` |
-| `Starting` | `EndSession`, `ChannelClosed`, `Exited`, `Detach` | - | = | `unreachable` |
+| `Starting` | `EndSession`, `ChannelClosed`, `Exited`, `Detach`, `Leave` | - | = | `unreachable` |
+| `Starting` | `Idle` | - | = | - |
 | `Starting` | `Attach` | - | = | `refuse_in_use` |
 | `Starting` | `LockedOut` | - | = | - |
 | `Running` | `Attach` | - | = | `detach_relay`, `attach_relay`, `audit_attached` |
 | `Running` | `ChannelClosed`, `Detach` | - | `Detached` | `detach_relay` |
+| `Running` | `Leave` | `!is_context` | = | `refuse` |
+| `Running` | `Leave` | - | `Detached` | `detach_relay`, `reply_ok` |
+| `Running` | `Idle` | - | = | - |
 | `Running` | `EndSession` | - | `Ending` | `unroute`, `drop_requests`, `reply_ok`, `destroy_budget` |
 | `Running` | `Exited`, `LockedOut` | - | `Ending` | `unroute`, `drop_requests`, `destroy_budget` |
 | `Running` | `Done` | - | = | `reply_login` |
 | `Running` | `Failed` | - | `Ending` | `refuse`, `unroute`, `drop_requests`, `destroy_budget` |
 | `Detached` | `Attach` | - | `Running` | `attach_relay`, `audit_attached` |
 | `Detached` | `ChannelClosed`, `Detach`, `Done` | - | = | - |
+| `Detached` | `Leave` | - | = | `refuse` |
+| `Detached` | `Idle` | `!idle_due` | = | - |
+| `Detached` | `Idle` | - | `Ending` | `audit_idle`, `unroute`, `drop_requests`, `destroy_budget` |
 | `Detached` | `EndSession` | - | `Ending` | `unroute`, `drop_requests`, `reply_ok`, `destroy_budget` |
 | `Detached` | `Exited`, `LockedOut`, `Failed` | - | `Ending` | `unroute`, `drop_requests`, `destroy_budget` |
 | `Ending` | `Done`, `Failed` | - | `Ended` | `forget` |
-| `Ending` | `EndSession`, `ChannelClosed`, `Exited`, `Attach`, `Detach` | - | = | `unreachable` |
-| `Ending` | `LockedOut` | - | = | - |
+| `Ending` | `EndSession`, `ChannelClosed`, `Exited`, `Attach`, `Detach`, `Leave` | - | = | `unreachable` |
+| `Ending` | `LockedOut`, `Idle` | - | = | - |
 
 <!-- ANCHOR_END: table -->

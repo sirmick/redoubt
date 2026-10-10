@@ -1,7 +1,7 @@
 # Contexts: a context's relay launched and attached as it starts; a login while it starts; a
 # takeover, both channels told; a close of the channel taken from; a detach, a reattachment and
 # sshd's end; and each way an attached or a detached context ends.
-principal "alice" account=1 login=[11] approval=[21] owned=[7] sets=[[],[7]] top=1000,30,300
+principal "alice" account=1 login=[11] approval=[21] owned=[7] sets=[[],[7]] top=1000,30,300 contexts=2 idle=300
 keyd [31]
 servers 1
 sizes session=10,2,5 agent=10,2,5 sub_agent=5,1,2 crossing=2,1,1 cost=1

@@ -165,8 +165,11 @@ fn context_name(cx: &Cx<'_>) -> String {
 /// R80: the context's console goes to the login's channel, with a note saying how: none for a
 /// new context, a reattachment, or a takeover naming the channel it was taken from. A fresh
 /// attachment id names the channel from here; a new context's first is its session's id.
-pub fn attach_relay(cx: &mut Cx<'_>) {
-    let (from, name, reply) = (login_from(cx), context_name(cx), cx.reply);
+pub fn attach_relay(cx: &mut Cx<'_>) { attach_with(cx, true); }
+
+/// The attach, and whether it clears the idle clock: always, but in the model's broken entry.
+pub fn attach_with(cx: &mut Cx<'_>, clear_idle: bool) {
+    let (from, name, reply, now) = (login_from(cx), context_name(cx), cx.reply, cx.now());
     let key = match &cx.event.kind {
         EventKind::Login { key, .. } => *key,
         _ => return,
@@ -185,6 +188,10 @@ pub fn attach_relay(cx: &mut Cx<'_>) {
     s.from = from;
     s.key = key;
     s.reply = reply;
+    s.since = now;
+    if clear_idle {
+        s.idle = None;
+    }
     let attachment = s.attachment;
     cx.index.attachments.insert(attachment, (domain, cx.id));
     let step = Step::Attach { relay: cx.token(RELAY), console: cx.token(CONSOLE), note };
@@ -198,7 +205,8 @@ pub fn detach_relay(cx: &mut Cx<'_>) { detach_with(cx, true); }
 /// The detach, and whether the channel's attachment id is forgotten: always, but in the model's
 /// broken entry.
 pub fn detach_with(cx: &mut Cx<'_>, forget: bool) {
-    let now = cx.now() / 1_000_000;
+    let at = cx.now();
+    let now = at / 1_000_000;
     let note = match &cx.event.kind {
         EventKind::Login { .. } => {
             let (from, name) = (login_from(cx), context_name(cx));
@@ -212,6 +220,8 @@ pub fn detach_with(cx: &mut Cx<'_>, forget: bool) {
     };
     let Some(s) = cx.state.sessions.get_mut(&cx.id) else { return };
     let attachment = core::mem::take(&mut s.attachment);
+    s.since = at;
+    s.idle.get_or_insert(at);
     if note.is_empty() {
         s.from.clear();
     }
@@ -233,6 +243,15 @@ pub fn take_over(cx: &mut Cx<'_>) {
         let object = Object { domain: cx.domain.clone(), kind: Kind::Session, id: o.id };
         cx.out.raised.push_back(Raised::Attach { object });
     }
+}
+
+/// A detached context past its idle bound ends: recorded, with how long it was idle.
+pub fn audit_idle(cx: &mut Cx<'_>) {
+    let now = cx.now();
+    let Some(s) = session(cx) else { return };
+    let idle = now.saturating_sub(s.idle.unwrap_or(now)) / 1_000_000;
+    let record = Record::IdleEnded { session: s.id, idle };
+    cx.audit(record);
 }
 
 /// A login to a context still starting is refused: it is in use, and nothing is attached.

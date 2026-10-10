@@ -48,6 +48,8 @@ const GUARDS: &[(&str, bool)] = &[
     ("grants_lease", false),
     ("granted", false),
     ("hash_matches", true),
+    ("idle_due", true),
+    ("is_context", false),
     ("item_fits", true),
     ("lease_bounded", true),
     ("login_key", true),
@@ -58,11 +60,12 @@ const GUARDS: &[(&str, bool)] = &[
     ("reading", false),
     ("rendered_here", true),
     ("sponsor_session", true),
+    ("under_cap", true),
 ];
 
 /// Every effect the tables may name, and whether it carries a rule.
 const EFFECTS: &[(&str, bool)] = &[
-    ("attach_relay", false),
+    ("attach_relay", true),
     ("audit_agent_started", false),
     ("audit_approved", false),
     ("audit_attached", false),
@@ -70,6 +73,7 @@ const EFFECTS: &[(&str, bool)] = &[
     ("audit_copy_failed", false),
     ("audit_declassified", false),
     ("audit_denied", false),
+    ("audit_idle", false),
     ("audit_lease_ended", false),
     ("audit_locked_out", false),
     ("audit_login", false),
@@ -131,6 +135,12 @@ const OTHERS: &[(&str, &str, &str, &str)] = &[
         "crate::cx::Reach",
         "crate::guards::reaches",
         "The approval edge's routing: a channel's own account's requests, of owned labels (R38).",
+    ),
+    (
+        "sees",
+        "crate::cx::Sees",
+        "crate::guards::sees",
+        "Whose contexts a session lists and may end: its own domain's only (R37).",
     ),
 ];
 

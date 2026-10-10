@@ -19,6 +19,20 @@ pub struct Limits {
     pub weight: u64,
 }
 
+/// A principal's contexts (servers/steward.md, "Contexts"): at most `max` live in each of its
+/// label sets, and a detached one ends `idle_secs` after its last detach. `init` writes both,
+/// the default `max` being what the label set's sub-budget holds.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Contexts {
+    pub max: u64,
+    pub idle_secs: u64,
+}
+
+impl Contexts {
+    /// The idle bound in the kernel's microseconds.
+    pub fn idle_us(&self) -> u64 { self.idle_secs.saturating_mul(1_000_000) }
+}
+
 /// One principal as the manifest gives it. Keys are opaque ids.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PrincipalSpec {
@@ -33,6 +47,7 @@ pub struct PrincipalSpec {
     pub label_sets: Vec<Vec<u64>>,
     /// Its top budget, which boot splits into one fixed sub-budget per label set.
     pub top: Limits,
+    pub contexts: Contexts,
 }
 
 /// The sizes the steward carves, set by the system bundle.
@@ -68,6 +83,7 @@ pub struct Principal {
     pub owned: Labels,
     pub domains: Vec<Domain>,
     pub top: Limits,
+    pub contexts: Contexts,
 }
 
 /// The fixed part of the store.
@@ -89,7 +105,8 @@ pub struct Carve {
 
 impl Fixed {
     /// The manifest, checked: accounts non-zero and distinct, names distinct, label sets valid
-    /// and distinct, and no key in two roles or held by `keyd` (R35).
+    /// and distinct, a cap of at least one context, and no key in two roles or held by `keyd`
+    /// (R35).
     pub fn new(m: &Manifest) -> Option<Fixed> {
         let mut accounts = BTreeSet::new();
         let mut names = BTreeSet::new();
@@ -98,7 +115,7 @@ impl Fixed {
         let mut principals = Vec::new();
         for p in &m.principals {
             let account = NonZeroU64::new(p.account)?;
-            if !accounts.insert(account) || !names.insert(p.name.clone()) {
+            if p.contexts.max == 0 || !accounts.insert(account) || !names.insert(p.name.clone()) {
                 return None;
             }
             logins.extend(p.login_keys.iter().copied());
@@ -119,6 +136,7 @@ impl Fixed {
                 owned: Labels::new(&p.owned)?,
                 domains,
                 top: p.top,
+                contexts: p.contexts,
             };
             principals.push(principal);
         }
@@ -164,7 +182,7 @@ impl Fixed {
 }
 
 /// The manifest's lines, read one at a time: `principal "NAME" account=N login=[..]
-/// approval=[..] owned=[..] sets=[[..],..] top=P,N,W`, `keyd [..]`, `servers N` and `sizes
+/// approval=[..] owned=[..] sets=[[..],..] top=P,N,W contexts=N idle=S`, `keyd [..]`, `servers N` and `sizes
 /// session=P,N,W agent=.. sub_agent=.. crossing=.. cost=N`. Strict: every field once and no
 /// other, `keyd`, `servers` and `sizes` at most once, `sizes` required; `keyd` and `servers` are
 /// empty and 0 when absent. A line is refused whole, with why.
@@ -214,14 +232,16 @@ pub fn lines(m: &Manifest) -> Vec<String> {
         .map(|p| {
             let sets: Vec<String> = p.label_sets.iter().map(|l| show_list(l)).collect();
             format!(
-                "principal {} account={} login={} approval={} owned={} sets=[{}] top={}",
+                "principal {} account={} login={} approval={} owned={} sets=[{}] top={} contexts={} idle={}",
                 quote(p.name.as_bytes()),
                 p.account,
                 show_list(&p.login_keys),
                 show_list(&p.approval_keys),
                 show_list(&p.owned),
                 sets.join(","),
-                show(&p.top)
+                show(&p.top),
+                p.contexts.max,
+                p.contexts.idle_secs
             )
         })
         .collect();
@@ -281,8 +301,8 @@ fn fields<'a, const N: usize>(toks: &[&'a str], keys: [&str; N]) -> Result<[&'a 
 
 fn principal(toks: &[&str]) -> Result<PrincipalSpec, String> {
     let (name, rest) = toks.split_first().ok_or("a principal has a name")?;
-    let [account, login, approval, owned, sets, top] =
-        fields(rest, ["account", "login", "approval", "owned", "sets", "top"])?;
+    let [account, login, approval, owned, sets, top, contexts, idle] =
+        fields(rest, ["account", "login", "approval", "owned", "sets", "top", "contexts", "idle"])?;
     Ok(PrincipalSpec {
         name: string(name)?,
         account: u64_of(account)?,
@@ -291,6 +311,7 @@ fn principal(toks: &[&str]) -> Result<PrincipalSpec, String> {
         owned: list(owned)?,
         label_sets: lists(sets)?,
         top: limits(top)?,
+        contexts: Contexts { max: u64_of(contexts)?, idle_secs: u64_of(idle)? },
     })
 }
 

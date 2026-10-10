@@ -3,11 +3,10 @@
 //! key id both sides derive.
 
 use redoubt_steward::hash::key_id;
-use redoubt_steward::manifest::{Limits, Manifest, PrincipalSpec, Sizes, lines, parse_lines};
+use redoubt_steward::manifest::{Contexts, Limits, Manifest, PrincipalSpec, Sizes, lines, parse_lines};
 
 const SIZES: &str = "sizes session=10,2,5 agent=10,2,5 sub_agent=5,1,2 crossing=2,1,1 cost=1";
-const ALICE: &str =
-    "principal \"alice\" account=1 login=[11] approval=[21] owned=[7] sets=[[],[7]] top=1000,30,300";
+const ALICE: &str = "principal \"alice\" account=1 login=[11] approval=[21] owned=[7] sets=[[],[7]] top=1000,30,300 contexts=3 idle=3600";
 
 fn parse(text: &[&str]) -> Result<Manifest, String> { parse_lines(text.iter().copied()) }
 
@@ -24,6 +23,7 @@ fn the_lines_read_as_the_manifest_and_write_back_the_same() {
             owned: vec![7],
             label_sets: vec![vec![], vec![7]],
             top: l(1000, 30, 300),
+            contexts: Contexts { max: 3, idle_secs: 3600 },
         }],
         keyd_keys: vec![31],
         servers: 4,
@@ -49,7 +49,7 @@ fn keyd_and_servers_are_empty_when_absent_and_sizes_is_required() {
 #[test]
 fn a_malformed_line_is_refused_with_its_number() {
     let principal = |fields: &str| format!("principal \"alice\" {fields}");
-    let ok = "account=1 login=[11] approval=[21] owned=[7] sets=[[]] top=1,1,1";
+    let ok = "account=1 login=[11] approval=[21] owned=[7] sets=[[]] top=1,1,1 contexts=1 idle=60";
     let cases = [
         principal(&format!("{ok} account=2")),
         principal(&format!("{ok} extra=1")),
@@ -58,6 +58,9 @@ fn a_malformed_line_is_refused_with_its_number() {
         principal(&ok.replace("account=1", "account=")),
         principal(&ok.replace("top=1,1,1", "top=1,1,1,1")),
         principal(&ok.replace("top=1,1,1", "top=1,1")),
+        principal(&ok.replace(" contexts=1", "")),
+        principal(&ok.replace(" idle=60", "")),
+        principal(&ok.replace("contexts=1", "contexts=-1")),
         principal(&ok.replace("sets=[[]]", "sets=[[]][[7]]")),
         principal(&ok.replace("sets=[[]]", "sets=[[],]")),
         principal(&ok.replace("sets=[[]]", "sets=[[x]]")),

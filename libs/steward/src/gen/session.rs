@@ -32,6 +32,8 @@ pub enum Event {
     ChannelClosed,
     Exited,
     Detach,
+    Leave,
+    Idle,
     Attach,
     LockedOut,
 }
@@ -83,6 +85,14 @@ pub fn dispatch(p: &Policy, cx: &mut Cx<'_>, from: Option<State>, event: Event) 
                 (p.take_over)(cx);
                 return Next::Nothing;
             }
+            'row: {
+                match (p.under_cap)(cx) {
+                    Ok(()) => break 'row,
+                    Err(r) => cx.refused(r),
+                }
+                (p.refuse)(cx);
+                return Next::Nothing;
+            }
             (p.carve_session)(cx);
             (p.create_scope)(cx);
             (p.launch_relay)(cx);
@@ -106,7 +116,7 @@ pub fn dispatch(p: &Policy, cx: &mut Cx<'_>, from: Option<State>, event: Event) 
             (p.launch)(cx);
             Next::To(State::Starting)
         }
-        (None, Event::Done | Event::Failed | Event::EndSession | Event::ChannelClosed | Event::Exited | Event::Detach | Event::Attach | Event::LockedOut) => Next::NoRow,
+        (None, Event::Done | Event::Failed | Event::EndSession | Event::ChannelClosed | Event::Exited | Event::Detach | Event::Leave | Event::Idle | Event::Attach | Event::LockedOut) => Next::NoRow,
         (Some(State::Starting), Event::Done) => {
             'row: {
                 match (p.not_locked)(cx) {
@@ -139,6 +149,12 @@ pub fn dispatch(p: &Policy, cx: &mut Cx<'_>, from: Option<State>, event: Event) 
         (Some(State::Starting), Event::Detach) => {
             Next::Unreachable
         }
+        (Some(State::Starting), Event::Leave) => {
+            Next::Unreachable
+        }
+        (Some(State::Starting), Event::Idle) => {
+            Next::Stay
+        }
         (Some(State::Starting), Event::Attach) => {
             (p.refuse_in_use)(cx);
             Next::Stay
@@ -166,6 +182,12 @@ pub fn dispatch(p: &Policy, cx: &mut Cx<'_>, from: Option<State>, event: Event) 
         }
         (Some(State::Ending), Event::Detach) => {
             Next::Unreachable
+        }
+        (Some(State::Ending), Event::Leave) => {
+            Next::Unreachable
+        }
+        (Some(State::Ending), Event::Idle) => {
+            Next::Stay
         }
         (Some(State::Ending), Event::Attach) => {
             Next::Unreachable
@@ -205,6 +227,22 @@ pub fn dispatch(p: &Policy, cx: &mut Cx<'_>, from: Option<State>, event: Event) 
         (Some(State::Running), Event::Detach) => {
             (p.detach_relay)(cx);
             Next::To(State::Detached)
+        }
+        (Some(State::Running), Event::Leave) => {
+            'row: {
+                match (p.is_context)(cx) {
+                    Ok(()) => break 'row,
+                    Err(r) => cx.refused(r),
+                }
+                (p.refuse)(cx);
+                return Next::Stay;
+            }
+            (p.detach_relay)(cx);
+            (p.reply_ok)(cx);
+            Next::To(State::Detached)
+        }
+        (Some(State::Running), Event::Idle) => {
+            Next::Stay
         }
         (Some(State::Running), Event::Attach) => {
             (p.detach_relay)(cx);
@@ -247,6 +285,24 @@ pub fn dispatch(p: &Policy, cx: &mut Cx<'_>, from: Option<State>, event: Event) 
         (Some(State::Detached), Event::Detach) => {
             Next::Stay
         }
+        (Some(State::Detached), Event::Leave) => {
+            (p.refuse)(cx);
+            Next::Stay
+        }
+        (Some(State::Detached), Event::Idle) => {
+            'row: {
+                match (p.idle_due)(cx) {
+                    Ok(()) => break 'row,
+                    Err(r) => cx.refused(r),
+                }
+                return Next::Stay;
+            }
+            (p.audit_idle)(cx);
+            (p.unroute)(cx);
+            (p.drop_requests)(cx);
+            (p.destroy_budget)(cx);
+            Next::To(State::Ending)
+        }
         (Some(State::Detached), Event::Attach) => {
             (p.attach_relay)(cx);
             (p.audit_attached)(cx);
@@ -259,6 +315,6 @@ pub fn dispatch(p: &Policy, cx: &mut Cx<'_>, from: Option<State>, event: Event) 
             Next::To(State::Ending)
         }
         (Some(State::Detached), Event::Login | Event::Console) => Next::NoRow,
-        (Some(State::Ended), Event::Login | Event::Console | Event::Done | Event::Failed | Event::EndSession | Event::ChannelClosed | Event::Exited | Event::Detach | Event::Attach | Event::LockedOut) => Next::NoRow,
+        (Some(State::Ended), Event::Login | Event::Console | Event::Done | Event::Failed | Event::EndSession | Event::ChannelClosed | Event::Exited | Event::Detach | Event::Leave | Event::Idle | Event::Attach | Event::LockedOut) => Next::NoRow,
     }
 }

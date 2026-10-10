@@ -38,6 +38,11 @@ pub struct Session {
     pub attachment: u64,
     /// The client address of the current attachment, as `sshd` gave it, checked.
     pub from: String,
+    /// When it last started running, attached or detached: a listing's age.
+    pub since: u64,
+    /// While detached, when its idle clock started: at a detach that found it clear. An attach
+    /// clears it (servers/steward.md, "Contexts").
+    pub idle: Option<u64>,
 }
 
 /// An agent on a lease.
@@ -305,6 +310,16 @@ impl Store {
         };
         let parts = Parts { fixed: &self.fixed, index: &mut self.index, used: &self.used, domain, state };
         Some((&self.policy, parts, other))
+    }
+
+    /// When the next detached context runs past its principal's idle bound, if any is detached:
+    /// the embedder's next `Idle`.
+    pub fn next_idle(&self) -> Option<u64> {
+        let bound = |p: usize| self.fixed.principals.get(p).map_or(u64::MAX, |p| p.contexts.idle_us());
+        self.all()
+            .flat_map(|(_, s)| s.sessions.values())
+            .filter_map(|x| x.idle.map(|t| t.saturating_add(bound(x.principal))))
+            .min()
     }
 
     /// The domain of a label set of `account`, if the manifest names it.

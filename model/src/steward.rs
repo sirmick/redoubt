@@ -339,9 +339,14 @@ impl Steward {
         }
     }
 
+    /// Time passes; the steward's timer sends `Idle` once a detached context is past its bound,
+    /// as the server's receive loop wakes at `Store::next_idle`.
     pub fn tick(&mut self, dt: u64) {
         self.k.step(&Op::Tick { dt: dt.min(crate::kernel::MAX_TICK) });
         self.poll();
+        if self.store.next_idle().is_some_and(|t| t <= self.k.now) {
+            self.call(EventKind::Idle);
+        }
     }
 
     // -------------------------------------------------------------------------------------------
@@ -393,7 +398,10 @@ impl Steward {
         let badge = match kind {
             EventKind::StartAgent { badge, .. }
             | EventKind::EndLease { badge, .. }
-            | EventKind::EndSession { badge } => badge,
+            | EventKind::EndSession { badge }
+            | EventKind::Contexts { badge }
+            | EventKind::Leave { badge }
+            | EventKind::EndContext { badge, .. } => badge,
             _ => return true,
         };
         if kind.ahead() && !self.broken(Mutation::PolicyEndLeaseAdmitted) {
@@ -682,6 +690,24 @@ impl Steward {
     pub fn end_session(&mut self, session: u64) -> Option<Answer> {
         let badge = self.badge(session);
         self.call(EventKind::EndSession { badge })
+    }
+
+    /// The session lists its domain's contexts.
+    pub fn contexts(&mut self, session: u64) -> Option<Answer> {
+        let badge = self.badge(session);
+        self.call(EventKind::Contexts { badge })
+    }
+
+    /// The session's own context lets its channel go.
+    pub fn leave(&mut self, session: u64) -> Option<Answer> {
+        let badge = self.badge(session);
+        self.call(EventKind::Leave { badge })
+    }
+
+    /// The session ends the context `name` of its domain.
+    pub fn end_context(&mut self, session: u64, name: &str) -> Option<Answer> {
+        let badge = self.badge(session);
+        self.call(EventKind::EndContext { badge, name: String::from(name) })
     }
 
     pub fn start_agent(&mut self, session: u64, lease: u64) -> Option<Answer> {

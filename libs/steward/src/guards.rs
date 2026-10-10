@@ -80,6 +80,42 @@ pub fn context_free(cx: &Cx<'_>) -> Verdict {
     ok_if(!taken, Refusal::InUse)
 }
 
+/// A login that would make a context finds fewer than its principal's cap of live sessions in
+/// its domain, contexts attached or detached and the console's, which holds a session's budget
+/// too (servers/steward.md, "Contexts"); nothing is evicted. A login that reaches a live context
+/// never comes here: `take_over` took it.
+pub fn under_cap(cx: &Cx<'_>) -> Verdict {
+    let s = session(cx).ok_or(Refusal::Unknown)?;
+    if s.context.is_none() {
+        return Ok(());
+    }
+    let max = cx.fixed.principals[s.principal].contexts.max;
+    let live = cx
+        .state
+        .sessions
+        .values()
+        .filter(|o| o.id != s.id && o.state != crate::gen::session::State::Ending)
+        .count() as u64;
+    ok_if(live < max, Refusal::Cap)
+}
+
+/// A detached context has been idle for its principal's bound since its idle clock started.
+pub fn idle_due(cx: &Cx<'_>) -> Verdict {
+    let s = session(cx).ok_or(Refusal::Unknown)?;
+    let bound = cx.fixed.principals[s.principal].contexts.idle_us();
+    let due = s.idle.is_some_and(|t| cx.now().saturating_sub(t) >= bound);
+    ok_if(due, Refusal::Unknown)
+}
+
+/// The session is a context, not the console's.
+pub fn is_context(cx: &Cx<'_>) -> Verdict {
+    ok_if(session(cx).is_some_and(|s| s.context.is_some()), Refusal::Unknown)
+}
+
+/// Whose contexts a session's listing shows, and which `end_context` may end: its own domain's
+/// only, so nothing of one label set's contexts reaches another's sessions (R37).
+pub fn sees(caller: &Domain, other: &Domain) -> bool { caller == other }
+
 /// A labelled session or agent starts nothing: the lease is asked for from the unlabelled
 /// domain.
 pub fn caller_unlabelled(cx: &Cx<'_>) -> Verdict { ok_if(cx.domain.labels().is_empty(), Refusal::Labelled) }

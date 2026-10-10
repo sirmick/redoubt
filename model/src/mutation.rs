@@ -396,6 +396,18 @@ pub enum Mutation {
     /// A detached channel's id still names its context, so its late close detaches the channel
     /// attached since (`detach_relay`).
     PolicyStaleCloseDetaches,
+    /// No cap on live contexts per domain (`under_cap`).
+    PolicyNoContextCap,
+    /// The cap counts every session of the principal's account, in every label set: one label
+    /// set's contexts refuse another's logins (`under_cap`).
+    PolicyCapAcrossSets,
+    /// A detached context ends on the timer however briefly it has been idle (`idle_due`).
+    PolicyIdleNoBound,
+    /// An attach leaves the idle clock running, so a context detached again ends by its first
+    /// detach's clock (`attach_relay`).
+    PolicyIdleClockKept,
+    /// A session lists and ends the contexts of every label set of its principal (`sees`).
+    PolicyContextsAcrossSets,
     // kernel/devices.md, I16: DMA device reset and frame quarantine.
     /// A dying process's DMA frames are pooled even when a device in its reset set did not
     /// confirm: the acceptance mutation.
@@ -418,7 +430,7 @@ pub enum Mutation {
 }
 
 impl Mutation {
-    pub const ALL: [Mutation; 168] = {
+    pub const ALL: [Mutation; 173] = {
         use Mutation::*;
         [
             R1SkipLabelCheck,
@@ -583,6 +595,11 @@ impl Mutation {
             PolicyTakeoverBeforeAuth,
             PolicyBothAttached,
             PolicyStaleCloseDetaches,
+            PolicyNoContextCap,
+            PolicyCapAcrossSets,
+            PolicyIdleNoBound,
+            PolicyIdleClockKept,
+            PolicyContextsAcrossSets,
             DmaFreeBeforeReset,
             DmaQuarantinedSlotCountsAsReset,
             DmaUnmapFrees,
@@ -724,7 +741,8 @@ impl Mutation {
             | PolicyWriteUp
             | PolicyLabelledStartsAgent
             | PolicyAgentOtherSet
-            | PolicyAuditUnfiltered => "R37",
+            | PolicyAuditUnfiltered
+            | PolicyContextsAcrossSets => "R37",
             PolicyApproveIgnoresHash
             | PolicyShowLabelledToAll
             | PolicyRenderNotWhitelisted
@@ -741,6 +759,8 @@ impl Mutation {
             PolicyBlameNoWindow | PolicyNoLockout => "R40",
             PolicyContextTwice => "R79",
             PolicyTakeoverBeforeAuth | PolicyBothAttached | PolicyStaleCloseDetaches => "R80",
+            PolicyNoContextCap | PolicyCapAcrossSets => "R82",
+            PolicyIdleNoBound | PolicyIdleClockKept => "R83",
             PolicyDeclassifyLive
             | PolicyDeclassifyWithoutReader
             | PolicyDeclassifyFromUnlabelled
@@ -781,6 +801,13 @@ pub fn policy(m: Option<Mutation>) -> Policy {
         Some(Mutation::PolicyContextTwice) => p.context_free = pass,
         Some(Mutation::PolicyTakeoverBeforeAuth) => p.login_key = login_key_or_live,
         Some(Mutation::PolicyBothAttached) => p.detach_relay = nothing,
+        Some(Mutation::PolicyNoContextCap) => p.under_cap = pass,
+        Some(Mutation::PolicyCapAcrossSets) => p.under_cap = under_cap_across_sets,
+        Some(Mutation::PolicyIdleNoBound) => p.idle_due = pass,
+        Some(Mutation::PolicyIdleClockKept) => {
+            p.attach_relay = |cx| redoubt_steward::effects::attach_with(cx, false)
+        }
+        Some(Mutation::PolicyContextsAcrossSets) => p.sees = |a, b| a.account() == b.account(),
         Some(Mutation::PolicyStaleCloseDetaches) => {
             p.detach_relay = |cx| redoubt_steward::effects::detach_with(cx, false)
         }
@@ -807,6 +834,22 @@ mod broken {
 
     /// A guard that always holds.
     pub fn pass(_: &Cx<'_>) -> Verdict { Ok(()) }
+
+    /// The cap over every session of the account, every label set's and the console's.
+    pub fn under_cap_across_sets(cx: &Cx<'_>) -> Verdict {
+        let s = session(cx).ok_or(Refusal::Unknown)?;
+        if s.context.is_none() {
+            return Ok(());
+        }
+        let account = cx.domain().account();
+        let all = cx
+            .index()
+            .ids
+            .iter()
+            .filter(|(id, (d, k))| **id != s.id && *k == Kind::Session && d.account() == account)
+            .count() as u64;
+        if all < cx.fixed().principals[s.principal].contexts.max { Ok(()) } else { Err(Refusal::Cap) }
+    }
 
     /// An effect that does nothing.
     pub fn nothing(_: &mut Cx<'_>) {}

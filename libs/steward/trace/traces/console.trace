@@ -2,7 +2,7 @@
 # sessions"): the steward opens it with no key, in the principal's unlabelled domain, and opens it
 # again when it ends; a console for a principal the manifest does not name is unknown, and one in
 # a locked-out domain is refused.
-principal "alice" account=1 login=[11] approval=[21] owned=[7] sets=[[],[7]] top=1000,30,300
+principal "alice" account=1 login=[11] approval=[21] owned=[7] sets=[[],[7]] top=1000,30,300 contexts=2 idle=300
 sizes session=10,2,5 agent=10,2,5 sub_agent=5,1,2 crossing=2,1,1 cost=1
 
 # At boot: the session batch, as a login's.

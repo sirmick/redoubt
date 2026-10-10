@@ -156,6 +156,10 @@ fn event_kind(name: &str, f: &Fields<'_>) -> Result<(EventKind, bool), String> {
         },
         "EndLease" => EventKind::EndLease { badge: f.u64("badge")?, lease: f.u64("lease")? },
         "EndSession" => EventKind::EndSession { badge: f.u64("badge")? },
+        "Contexts" => EventKind::Contexts { badge: f.u64("badge")? },
+        "Leave" => EventKind::Leave { badge: f.u64("badge")? },
+        "EndContext" => EventKind::EndContext { badge: f.u64("badge")?, name: string(f.get("name")?)? },
+        "Idle" => EventKind::Idle,
         "Pending" => EventKind::Pending { channel: f.u64("channel")? },
         "Approve" => {
             let h = f.get("hash")?;

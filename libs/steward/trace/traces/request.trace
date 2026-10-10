@@ -2,8 +2,8 @@
 # (the channel that rendered it last, its hash, a closed channel's renders), the pending cap and
 # fair shares, a session's end dropping its requests, and approved agents: one in another domain
 # of the account, one in the requester's own, one that fails to start.
-principal "alice" account=1 login=[11] approval=[21,23] owned=[7] sets=[[],[7],[8]] top=1000,30,300
-principal "bob" account=2 login=[12] approval=[22] owned=[] sets=[[]] top=1000,30,300
+principal "alice" account=1 login=[11] approval=[21,23] owned=[7] sets=[[],[7],[8]] top=1000,30,300 contexts=2 idle=300
+principal "bob" account=2 login=[12] approval=[22] owned=[] sets=[[]] top=1000,30,300 contexts=2 idle=300
 sizes session=10,2,5 agent=10,2,5 sub_agent=5,1,2 crossing=2,1,1 cost=1
 
 # Two unlabelled sessions (badges 102, 112, the second the context `b`), a vault session (202), two approval channels.

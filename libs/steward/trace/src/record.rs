@@ -56,6 +56,10 @@ fn kind(k: &EventKind) -> String {
         }
         EventKind::EndLease { badge, lease } => format!("EndLease badge={badge} lease={lease}"),
         EventKind::EndSession { badge } => format!("EndSession badge={badge}"),
+        EventKind::Contexts { badge } => format!("Contexts badge={badge}"),
+        EventKind::Leave { badge } => format!("Leave badge={badge}"),
+        EventKind::EndContext { badge, name } => format!("EndContext badge={badge} name={}", q(name)),
+        EventKind::Idle => "Idle".into(),
         EventKind::Pending { channel } => format!("Pending channel={channel}"),
         EventKind::Approve { channel, request, hash } => {
             format!("Approve channel={channel} request={request} hash={}", hex(hash))

@@ -167,7 +167,10 @@ defmodule Redoubt.Steward.Effects do
           end
 
         attachment = if s.attachment == 0, do: fresh, else: s.attachment
-        cx = update(cx, :sessions, &%{&1 | attachment: attachment, from: from, key: key, reply: reply})
+        now = cx.event.now
+
+        cx =
+          update(cx, :sessions, &%{&1 | attachment: attachment, from: from, key: key, reply: reply, since: now, idle: nil})
         cx = put_in(cx.store.attachments[attachment], {cx.domain, cx.id})
         step(cx, {:attach, token(cx, @relay), token(cx, @console), note})
     end
@@ -198,7 +201,8 @@ defmodule Redoubt.Steward.Effects do
 
       s ->
         from = if note == "", do: "", else: s.from
-        cx = update(cx, :sessions, &%{&1 | attachment: 0, from: from})
+        at = cx.event.now
+        cx = update(cx, :sessions, &%{&1 | attachment: 0, from: from, since: at, idle: &1.idle || at})
 
         cx =
           if forget,
@@ -234,6 +238,14 @@ defmodule Redoubt.Steward.Effects do
     case Guards.session(cx) do
       nil -> cx
       s -> audit(cx, {:attached, s.id, s.key, s.from, s.state == :running})
+    end
+  end
+
+  # A detached context past its idle bound ends: recorded, with how long it was idle (seconds).
+  def audit_idle(cx) do
+    case Guards.session(cx) do
+      nil -> cx
+      s -> audit(cx, {:idle_ended, s.id, div(cx.event.now - (s.idle || cx.event.now), 1_000_000)})
     end
   end
 

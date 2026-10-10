@@ -1,7 +1,7 @@
 # Crash blame and lockout (R40), per domain: the third blame within ten minutes locks a domain
 # out, ending its sessions and leases in every state; nothing new starts in it, no grant starts a
 # lease in it, and a login after the window opens it again.
-principal "alice" account=1 login=[11] approval=[21] owned=[7] sets=[[],[7]] top=1000,30,300
+principal "alice" account=1 login=[11] approval=[21] owned=[7] sets=[[],[7]] top=1000,30,300 contexts=2 idle=300
 sizes session=10,2,5 agent=10,2,5 sub_agent=5,1,2 crossing=2,1,1 cost=1
 
 # The vault: an unlabelled session (badge 102) asks for two agents in it, both rendered.

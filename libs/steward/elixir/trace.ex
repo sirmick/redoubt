@@ -144,6 +144,10 @@ defmodule Redoubt.Steward.Trace do
   defp kind("Submit", f), do: {:submit, num(f["badge"]), content_of(f), unquote_(f["reason"])}
   defp kind("EndLease", f), do: {:end_lease, num(f["badge"]), num(f["lease"])}
   defp kind("EndSession", f), do: {:end_session, num(f["badge"])}
+  defp kind("Contexts", f), do: {:contexts, num(f["badge"])}
+  defp kind("Leave", f), do: {:leave, num(f["badge"])}
+  defp kind("EndContext", f), do: {:end_context, num(f["badge"]), unquote_(f["name"])}
+  defp kind("Idle", _), do: :idle
   defp kind("Pending", f), do: {:pending, num(f["channel"])}
   defp kind("Approve", f), do: {:approve, num(f["channel"]), num(f["request"]), hash(f["hash"])}
   defp kind("Deny", f), do: {:deny, num(f["channel"]), num(f["request"])}
@@ -182,7 +186,8 @@ defmodule Redoubt.Steward.Trace do
       approval_keys: list(f["approval"]),
       owned: list(f["owned"]),
       label_sets: lists(f["sets"]),
-      top: triple(f["top"])
+      top: triple(f["top"]),
+      contexts: %{max: num(f["contexts"]), idle_secs: num(f["idle"])}
     }
   end
 
@@ -287,7 +292,8 @@ defmodule Redoubt.Steward.Trace do
       |> Enum.map(fn {p, i} ->
         "principal #{i} #{qs(p.name)} account=#{p.account} login=#{list_(p.login_keys)} " <>
           "approval=#{list_(p.approval_keys)} owned=#{list_(p.owned)} " <>
-          "domains=[#{Enum.map_join(p.domains, ",", &dom/1)}] top=#{lim(p.top)}\n"
+          "domains=[#{Enum.map_join(p.domains, ",", &dom/1)}] top=#{lim(p.top)} " <>
+          "contexts=#{p.contexts.max} idle=#{p.contexts.idle_secs}\n"
       end)
 
     z = f.sizes
@@ -310,9 +316,15 @@ defmodule Redoubt.Steward.Trace do
   defp answer({:request, id}), do: "request id=#{id}"
   defp answer({:refused, why}), do: "refused #{why}"
 
+  defp answer({:contexts, list}) do
+    l = Enum.map_join(list, ",", fn {n, a, age} -> "#{qs(n)}:#{if a, do: "attached", else: "detached"}:#{age}" end)
+    "contexts [#{l}]"
+  end
+
   defp record({:login, s, p, k, c}), do: "Login session=#{s} principal=#{p} key=#{k} context=#{context_of(c)}"
 
   defp record({:attached, s, k, f, t}), do: "Attached session=#{s} key=#{k} from=#{qs(f)} took_over=#{t}"
+  defp record({:idle_ended, s, i}), do: "IdleEnded session=#{s} idle=#{i}"
 
   defp record({:agent_started, l, s, p, d}),
     do: "AgentStarted lease=#{l} sponsor=#{s} parent=#{opt(p)} deadline=#{d}"
