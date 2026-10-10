@@ -232,3 +232,97 @@ Every snapshot was a commit plus toml edits, so a rerun rebuilds it from the com
 | deadline-flood at 2 harts | drop `keep_smp` |
 
 None was kept.
+
+## B56: the idle regression (smp6-implementer-3, 2026-10-09)
+
+New head **833331cdb** (kernel, testbench) on **938a92b17** (model), base main **98b866854**. The model commit is unchanged. The fix is folded into the kernel commit by amend; the message now says what idle drain does and what it costs.
+
+### Measurement on 8fb11dc37 (before the fix)
+
+launch-idle at 4 harts, alone on the quiet cores:
+
+| | rv64 | rv32 |
+| --- | --- | --- |
+| Verdict | FAIL, 166.6/s busiest hart, 0.012 host cores | FAIL, 88.3/s, 0.010 host cores |
+| m_software | 165.5 / 163.7 / 89.3 / 137.6 per hart | 86.0 / 87.3 / 86.7 / 24.5 |
+| user_ecall | 3.9/s (IDLE1's) | 4.8/s |
+
+Where they come from (symbolised against the run's own kernel, nm/objdump):
+
+- m_software epc `0x…d02586` is the instruction after `wfi` in `TicketLock::acquire_ticket`: a hart waiting for the kernel lock.
+- supervisor_ecall `0x…d024ce` is in `hart::wake_halted`: the release's IPI to that waiter.
+- They pair 1:1 on every hart: lock hand-offs, IDLE1's cause, but ~50x as many.
+- They are a burst, not a rate. Using s_timer interrupts (one per hart per ~1 s, in clusters of four) as a clock:
+  - rv64: hart 0 took 9,802 of its 9,920 IPIs before its first s_timer, and ~32,900 of all 33,160 fell between the timer clusters ~2 s and ~3 s into the window.
+  - rv32: ~16,640 of 17,080 fell in one interval.
+  - After the burst: 0-9 IPIs per hart per timer period, ~2-3/s, IDLE1's level.
+- The burst is R81's idle drain. The login freed ~33k frames (~130 MiB). They wait pending until every hart idles, which is when the window opens. Then all four harts drain their own lists at once. A1 makes each frame a lock release plus a lock take. With four drainers, nearly every take found the lock held, so each take halted and each release sent an IPI.
+
+Ruled out:
+
+- A hart with an empty list halts as before: it is never in this loop.
+- No SIE-window timer storm: s_timer stays ~0.8/s per hart.
+- The WANT/done wake never fires at rest.
+- The user ecalls are IDLE1's.
+
+### Fix
+
+`reclaim::DRAINER`: one hart drains at a time, under the lock (`reclaim::take_one(all_idle)`).
+
+- A hart that idles while another drains halts, exactly as before.
+- The drainer finds the lock free on every take, so no halt and no IPI.
+- When its list is empty, the drainer clears the claim and wakes the next idle hart with frames pending: one `wake_halted`, so one IPI per hart per drain.
+- When a hart wakes to work, the drainer drops its claim at its next idle pass (`!all_idle`). The drain restarts when the system is next all idle.
+
+Unchanged: A1 (one frame a pass, back through kmain's SIE window), A3 (only while every started hart is idle), the on-demand path and billing.
+
+### Gates
+
+Formatting, size-budget, unsafe-budget, model-mutations, the smoke set and smp-inflight-race also ran on 833331cdb. launch-idle ran on f160bc4a8, whose code is identical; only docs/testbench.md and the message changed since.
+
+| Gate | Command | Result |
+| --- | --- | --- |
+| launch-idle rv64 | `q run --cores 4 --quiet -- target/prebuilt/testbench --prebuilt target/prebuilt --exact --arch rv64 launch-idle`, alone | rc 0, PASS |
+| launch-idle rv32 | same, `--arch rv32`, alone, after rv64 | rc 0, PASS |
+| formatting, size-budget, unsafe-budget, model-mutations | `make -f scripts/jobs.mk set CASES=…` | rc 0 each |
+| docs | `make -f scripts/jobs.mk set CASES=docs` | rc 0 |
+| host-tests, memory-host-tests, model-host-tests | `make -f scripts/jobs.mk set CASES=…` | rc 0 each |
+| Smoke set, both widths: userland-boot, init-boot, bench-net-peer, ipc-outcomes, sum-clear, lend-untouched-page | `make -f scripts/jobs.mk set` | rc 0 each |
+| smp-inflight-race, both widths | its declared 2 harts | rc 0 each |
+| kernel-containment rv64 | `q run --cores 2 -- … --smp 2 kernel-containment` | rc 0, PASS 635.5 s |
+| kernel-containment rv32 | same | rc 0, PASS 899.3 s |
+
+launch-idle per-hart detail on f160bc4a8:
+
+| | rv64 | rv32 | Ceiling |
+| --- | --- | --- | --- |
+| Busiest hart | 3.4/s (m_software 2.4, s_timer 0.8, s_software 0.1) | 2.9/s (m_software 2.0, s_timer 0.8) | 9 |
+| Host cores | 0.006 | 0.007 | 0.01 |
+| user_ecall | 5.3/s | 3.7/s | |
+| supervisor_ecall | 15.4/s | 13.7/s | |
+
+An earlier window on the pre-compaction fix (same logic): rv64 3.1/s at 0.005 host cores, rv32 2.7/s at 0.007.
+
+kernel-containment at 2 harts, notice and wakes (the case asserts R10 within its bound and passed):
+
+| | deadline_notice net p50 / p99 | driver_wake p99 | timer_wake p99 |
+| --- | --- | --- | --- |
+| rv64 | 28.0 / 35.7 ms (≤ 40) | 4.1 ms | 6.1 ms |
+| rv32 | 28.9 / 37.1 ms | 5.6 ms | 5.8 ms |
+
+Size: the kernel ceiling goes 10595 → 10608 (13 lines, `DRAINER` and the hand-on). The commit's Size budget line is updated. Unsafe is unchanged.
+
+### Pages and summaries checked
+
+- **docs/kernel/memory.md, "Frames in flight", Idle bullet:** now says one hart drains at a time, why (the ~33k interrupts), that the drainer wakes the next, and that a hart with nothing pending halts as before, so the system at rest takes IDLE1's interrupts. The R81 bullet's stale "the batch it cut off its own" is now "the frame it took off its own".
+- **docs/testbench.md, "The machine at rest":** restates IDLE1's numbers against the new ones (3.1/2.8 at 0.002 cores before R81; 3.1-3.4 / 2.7-2.9 at 0.005-0.007 with it), and that the window opens on the drain.
+- **Checked, no change:**
+  - docs/plan/m2-usable-shell.md step 5 ("only while every started hart is idle"): still true.
+  - docs/kernel/timer.md and scheduling.md: nothing about idle drain order.
+  - README.md, GETTING-STARTED.md: no idle-zeroing claims.
+  - The memory.md residual "Freed frames are not zeroed beside the work": still true.
+
+### Open risks
+
+- **Host cores at rest:** the drain's zeroing now falls inside launch-idle's window (0.005-0.007 against 0.002 before R81; ceiling 0.01). A login that frees much more could approach the ceiling. It is CPU spent zeroing, not wake-ups.
+- **The drain is serial:** ~33k frames by one hart, about a second or two under MTTCG. Pending frames on other harts wait their turn; an allocation still takes them on demand.

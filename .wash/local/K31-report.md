@@ -178,3 +178,67 @@ extended (bound met/missed, gated/recorded, no timer section).
 - README.md, GETTING-STARTED.md, docs/plan/m2-usable-shell.md: no claim about kernel entry cost;
   no change. docs/testbench.md "Which cases run in guest time" counts: stale before this branch
   (BEAM19 noted it), not updated.
+
+# K31 fix round (kernel-red P2, rebase onto main without SMP6)
+
+Base 04b7fa4d5 (main rebuilt without SMP6). Head b6c4b566c:
+- 5c6762009 kernel: a slice's end pays for its work, ... (code unchanged from a43c4b872's
+  parent commit 4c3f716e1 but for two comment rewraps in time.rs; message numbers re-measured;
+  kernel ceiling 10076 -> 10106, main's own ceiling plus the same 30 lines)
+- b6c4b566c tests, docs: sched-timer-entry bounds ... (P2: the p99 bound added; numbers)
+Range-diff: git range-diff 58326f13c..a43c4b872 04b7fa4d5..b6c4b566c
+(.tmp/K31/range-diff.txt).
+
+## Rebase: what differed without SMP6
+
+`git rebase --onto 90fe594b5 4b84112f2 wp-K31` (the branch had been rebased onto 4b84112f2 in
+this round), then `--onto 04b7fa4d5 90fe594b5` (README-only delta). One conflict: the kernel
+ceiling (main 10,076 without SMP6): set to 10,106, main's plus this branch's 30 code lines
+(size-budget passes). Every kernel hunk applied to identical code: `irq.rs`'s timer arm,
+`sched::leave`'s rearm, `kmain`'s idle, `time.rs`, `kframe`, the cursor. Main's pre-SMP6
+`arch::idle` has the same interrupt window (set_sie/clear_sie after the lock), so the
+idle-window re-arm (`on_interrupt(false)`) covers it as before. The only text difference: a doc
+comment in time.rs's `expire_due` the merge left over 100 columns, rewrapped.
+
+## Re-measured on the new base (release, smp 1, exec log; .tmp/K31/m64p,m32p,m64n,m32n)
+
+| per timer entry | rv64 | rv32 |
+| --- | ---: | ---: |
+| kernel instructions, main 90fe594b5 | 15,022 | 20,692 |
+| this branch | 8,846 | 12,869 |
+| SBI calls | 3 -> 1 | 3 -> 1 |
+
+beamlet-reduction-rate (main + test commit vs head): rv64 52,936 -> 55,674 (+5.2 %), rv32
+46,959 -> 49,928 (+6.3 %).
+
+## P2: the steady-state bound
+
+The trace has two cold timer sections at one hart, not one: the program's first preemption
+after its calibration and the window's first. So "max after the first" would still hold a cold
+one; the steady entry is bounded by the p99 instead, beside the max:
+`sched_oracle timer_section_p99_ticks=2000 timer_section_max_ticks=5000 gate_harts=1`. One p99
+bound on both widths, not 2,000/2,500: 2,500 would let the before-tree's rv64 (2,241) pass.
+
+| one hart, ticks net of audits | rv64 p99 | rv32 p99 | rv64 max | rv32 max |
+| --- | ---: | ---: | ---: | ---: |
+| head | 1,073 | 1,597 | 3,431 | 4,234 |
+| before-tree (main + test commit) | 2,241 | 3,006 | 5,807 | 6,831 |
+| bound | 2,000 | 2,000 | 5,000 | 5,000 |
+
+The before-tree run failed on both widths ("their p99 held the lock 2241 / 3006 ticks ...
+above 2000"); its max is over 5,000 too. Cold sections on the head: calibration 1,998 / 2,524,
+window 3,431 / 4,234. Margins: p99 rv32 20 %, max rv32 15 %. Oracle host tests: p99 met and
+missed, max met and missed, gated/recorded; 55 pass. testbench.md, scheduling.md and the case
+comment say both bounds and why the p99.
+
+## Gates
+
+On the identical code at 7508d7c90 (base 90fe594b5; differs from the head by README cells from
+main and comment/number rewrites only), `make -k set CASES="sched-timer-entry sched-latency
+sched-timer-flood beamlet-reduction-rate userland-boot init-boot bench-net-peer ipc-outcomes
+sum-clear lend-untouched-page docs size-budget formatting"`: every case PASS on both widths
+(sched-timer-entry at 1 and 2 harts, sched-latency at 1 and 2, lend-untouched-page at 1 and 4)
+but `docs`, which failed on main 90fe594b5's README TCB cell (C13), the one 04b7fa4d5 corrects.
+On 04b7fa4d5's head: `sched-timer-entry` both widths at 1 and 2 harts PASS,
+`rv64/beamlet-reduction-rate` PASS; final head b6c4b566c: `formatting`, `size-budget`, `docs`
+rc 0, PASS. `cargo test -p testbench sched_oracle`: 55 passed. No unsafe changed.
