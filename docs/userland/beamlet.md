@@ -459,7 +459,7 @@ to the VM (`console_resized`), whose `idle` returns for it. There is no wall clo
 
 ### beamlet on Redoubt
 
-Status: built · partly tested: programs and `/net` are not built · tested: bench:beamlet-natives, bench:beamlet-boot, bench:beamlet-console, bench:beamlet-files, bench:boot-profile, bench:boot-profile-unverified, bench:pack-outside-module, bench:pack-bad-truncated, bench:pack-bad-wrong-length, bench:pack-bad-wrong-name, bench:beamlet-heap-flood, bench:beamlet-budget-flood, bench:userland-boot, bench:userland-bad-start, bench:userland-read-only, bench:verity-flipped-tree, bench:verity-wrong-root, host:beamlet-redoubt::a_module_is_its_file_and_a_failed_read_is_refused, host:beamlet-redoubt::not_found_at_the_open_is_absent_and_every_other_error_is_refused_by_name, host:beamlet-redoubt::verified_module_lookup_propagates_found_absent_and_refused, host:beamlet-redoubt::verified_application_lookup_propagates_found_absent_and_refused, host:beamlet-redoubt::a_packed_module_comes_from_the_pack_and_any_other_from_the_volume, host:beamlet-redoubt::a_pack_with_a_bad_entry_is_refused_whole, host:testbench::the_boot_pack_is_deterministic_sorted_and_only_of_the_objects
+Status: built · partly tested: programs and `/net` are not built · tested: bench:beamlet-natives, bench:beamlet-reduction-rate, bench:beamlet-boot, bench:beamlet-console, bench:beamlet-files, bench:boot-profile, bench:boot-profile-unverified, bench:pack-outside-module, bench:pack-bad-truncated, bench:pack-bad-wrong-length, bench:pack-bad-wrong-name, bench:beamlet-heap-flood, bench:beamlet-budget-flood, bench:userland-boot, bench:userland-bad-start, bench:userland-read-only, bench:verity-flipped-tree, bench:verity-wrong-root, host:beamlet-redoubt::a_module_is_its_file_and_a_failed_read_is_refused, host:beamlet-redoubt::not_found_at_the_open_is_absent_and_every_other_error_is_refused_by_name, host:beamlet-redoubt::verified_module_lookup_propagates_found_absent_and_refused, host:beamlet-redoubt::verified_application_lookup_propagates_found_absent_and_refused, host:beamlet-redoubt::a_packed_module_comes_from_the_pack_and_any_other_from_the_volume, host:beamlet-redoubt::a_pack_with_a_bad_entry_is_refused_whole, host:testbench::the_boot_pack_is_deterministic_sorted_and_only_of_the_objects
 
 On Redoubt, beamlet is a native program. Its built `Platform` adapter uses the client library
 ([native programs](native.md#the-client-library)) for the console, files, verified code lookup
@@ -561,6 +561,35 @@ called, its start loads fewer modules: the driver reads at 11.3 s and the first 
 **The boot-time target:** in this build, the prompt within 20 s of guest time, verified and
 unverified, on both widths: the slowest measured prompt plus a tenth, rounded up to 5 s.
 `boot-profile` and `boot-profile-unverified` fail past it, and run in every whole run of the bench.
+
+**How fast compiled code runs.** In the console session of the image's boot, under `icount`
+(`shift=3`, so a microsecond is 125 guest instructions) with seed 1,
+`Enum.reduce(1..65536, 0, &max/2)`, compiled Elixir calling a native through a fun on every
+step, takes 98,723 reductions; its fastest of 30 runs a second apart, a run the shell's driver
+did not share the hart with, gives the rate (bench:beamlet-reduction-rate):
+
+| | rv64 | rv32 |
+| --- | ---: | ---: |
+| reductions a second | 52,647 | 47,052 |
+| guest instructions a reduction | 2,374 | 2,657 |
+| guest instructions a step of the loop | 3,577 | 4,002 |
+| before the changes below: reductions a second | 34,041 | 31,215 |
+| before: guest instructions a step of the loop | 5,531 | 6,033 |
+
+A native call no longer fills all 255 argument slots it could pass (765 instructions on rv64 for
+a native of two arguments), a fun's arguments stay in the x registers instead of going through a
+vector, and the interpreter's step is inlined into its loop, so the registers it saves are saved
+once a time slice rather than once an instruction. On the host, beamlet runs a tail-recursive
+loop and `lists:foldl/3` at 70-200 ns a step. Of what is left on rv64, about four fifths is the
+interpreter's own work, some 200 guest instructions a BEAM instruction, and a fifth the
+kernel's: about 12,000 instructions for each interrupt the running VM takes. No yield and no count changed: a process still yields after its
+2,000 reductions or 200,000 instructions, and the kernel's time slice still preempts the VM's
+thread whatever it runs. **The floor:** 42,000 reductions a second, the slower width's rate less
+a tenth, rounded down to a thousand; `beamlet-reduction-rate` fails below it, and the rate before
+these changes is below it on both widths. A session where a line has just been typed runs slower
+than this for a while: the shell's driver measures the line being edited again for each piece of
+input it echoes, which can take as much of the hart as the line's own code for seconds after a
+long line; the floor's run is the fastest of its 30 for that reason.
 
 Before its VM starts, beamlet reads the volume's boot pack, `boot.pack`, whole: one open, one `stat`
 for its length, one allocation of that length charged to the VM, and reads of 16 KiB in order, the
