@@ -17,7 +17,10 @@ use redoubt_sys::PAGE_SIZE;
 
 /// The physmap address of byte `offset` of the frame at `phys`, for an access of `size` bytes.
 /// Panics (a kernel bug, never input) unless the frame is one the physmap reaches and the access
-/// lies inside it, aligned to its size.
+/// lies inside it, aligned to its size. Inlined: every caller's offset and size are constants, so
+/// their check folds away and a word costs the frame's compare, not a call (a timer entry reads
+/// and writes nearly two hundred words).
+#[inline(always)]
 fn at(phys: usize, offset: usize, size: usize) -> usize {
     assert!(
         phys % PAGE_SIZE == 0 && phys >= PHYSMAP_PHYS_BASE && phys - PHYSMAP_PHYS_BASE < PHYSMAP_SIZE,
@@ -29,6 +32,7 @@ fn at(phys: usize, offset: usize, size: usize) -> usize {
 }
 
 /// The word at byte `offset` (a multiple of 8) of the frame at `phys`.
+#[inline(always)]
 pub fn read(phys: usize, offset: usize) -> u64 {
     let virt = at(phys, offset, 8);
     // SAFETY: `at` checked that this is an aligned word inside a RAM frame, and the loader maps all
@@ -40,6 +44,7 @@ pub fn read(phys: usize, offset: usize) -> u64 {
 }
 
 /// Writes the word at byte `offset` (a multiple of 8) of the frame at `phys`.
+#[inline(always)]
 pub fn write(phys: usize, offset: usize, value: u64) { fill(phys, offset, 8, value) }
 
 /// Zeroes the whole frame at `phys`. Every page a process first sees goes through here (R11). The
@@ -50,6 +55,7 @@ pub fn zero(phys: usize) { fill(phys, 0, PAGE_SIZE, 0) }
 
 /// Writes `value` to each word of the `size` bytes at byte `offset` of the frame at `phys`, both
 /// multiples of 8, the bytes inside the frame and `offset` aligned to `size`.
+#[inline(always)]
 fn fill(phys: usize, offset: usize, size: usize, value: u64) {
     let virt = at(phys, offset, size);
     // SAFETY: as in `read`, for every word of the checked range, and the writes cannot reach the

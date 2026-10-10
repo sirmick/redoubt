@@ -21,9 +21,13 @@ expect = [
     '^\[lock-contention\] driver wake: .*: gross, audits included; net in the post-check',
     '^LATENCY-SAMPLE contention driver_wake \d+ \d+$',
     '^SCHED-LOCK-CONTENTION TEST PASSED$',
-    # The kernel's count of claims at power-off. Which hart idles follows the boot's timing (the
-    # boot hart, in this kernel's run), so `sched-lock-contention-4` requires another hart's.
-    '^external interrupts: claimed by hart \[\d+, \d+\], \d+ found nothing$',
+    # The kernel's count at power-off: each hart's claims, its claims that found nothing, and the
+    # alarms its context took, their sum. The other hart took ten or more, whichever hart idles and
+    # wins the claims: its context is enabled (R78; `irq-boot-hart-only` reads 0 there). Recorded:
+    # taken by hart [200, 196] (rv64; claimed [200, 1], found nothing [0, 195]) and [199, 177]
+    # (rv32; claimed [24, 177], found nothing [175, 0]): the hammer's hart, when the boot hart
+    # idles, takes its alarms as claims that find nothing.
+    '^external interrupts: claimed by hart \[\d+, \d+\], found nothing by hart \[\d+, \d+\], taken by hart \[\d+, [1-9]\d+\]$',
     # A checked build's count: idle and lock-wait halts that found the interrupt they wait for
     # pending ran no `wfi` (kernel/scheduling.md, R78).
     '^halts: [1-9]\d* skipped, an awaited interrupt pending$',

@@ -6,6 +6,12 @@
 //! end (R12), a blocking call's timeout (I13) or a budget's deadline. Nothing in userspace programs it and
 //! there is no timer interrupt for userspace; user mode reads the counter directly (`rdtime`).
 //!
+//! A timer interrupt is taken only in user mode and while `kmain` idles; the kernel runs with
+//! interrupts off. So the timer is armed ([`rearm`]) only on the way to those two places, for the
+//! earliest target then: at the return to user mode (`sched::leave`), before `kmain` idles, and at
+//! a timer interrupt taken in the idle, which returns there. What changes the target in between (a
+//! timeout, a deadline, a slice end, an interrupt that fired) only records it.
+//!
 //! # Expiry
 //! [`expire_due`] handles everything due at or before now, earliest first: a timeout returns
 //! `Timeout` (`message.rs`); a deadline destroys its budget (`budget::destroy_subtree`, R10). At an
@@ -66,29 +72,21 @@ static TIMER: KernelCell<Timer> = KernelCell::new(Timer {
 pub fn now_us() -> u64 { timer::now_us() }
 
 /// A call blocked until `deadline`: make sure the timer comes by then.
-pub fn note_timeout(deadline: u64) {
-    TIMER.with(|t| t.threads = t.threads.min(deadline));
-    rearm();
-}
+pub fn note_timeout(deadline: u64) { TIMER.with(|t| t.threads = t.threads.min(deadline)); }
 
 /// A budget was created with `deadline`: make sure the timer comes by then (at once, for one
 /// already past).
-pub fn note_budget_deadline(deadline: u64) {
-    TIMER.with(|t| t.budgets = t.budgets.min(deadline));
-    rearm();
-}
+pub fn note_budget_deadline(deadline: u64) { TIMER.with(|t| t.budgets = t.budgets.min(deadline)); }
 
 /// This hart's running thread's slice ends at `at` (`NEVER` for none).
-pub fn set_slice_end(at: u64) {
-    TIMER.with(|t| t.slice[hart::index()] = at);
-    rearm();
-}
+pub fn set_slice_end(at: u64) { TIMER.with(|t| t.slice[hart::index()] = at); }
 
 /// When this hart's running thread's slice ends.
 pub fn slice_end() -> u64 { TIMER.with(|t| t.slice[hart::index()]) }
 
 /// Arm this hart's timer for the earliest thing due, if that changed: its own slice's end, or the
-/// earliest timeout or deadline, which every hart's timer comes by.
+/// earliest timeout or deadline, which every hart's timer comes by. At the return to user mode and
+/// before `kmain` idles (module docs).
 pub fn rearm() {
     let h = hart::index();
     TIMER.with(|t| {
@@ -122,7 +120,7 @@ pub struct Expired {
     pub last: Option<BudgetRef>,
 }
 
-/// Handle everything due (module docs), then re-arm for the next thing. Takes the scheduler only:
+/// Handle everything due (module docs), then recompute the hints. Takes the scheduler only:
 /// destroying a budget borrows the memory manager in phases (`process.rs`, Locks).
 ///
 /// One walk finds every wait due and orders it (`message::collect_due`), so ending R waits costs
@@ -132,13 +130,13 @@ pub struct Expired {
 /// R10). The walk and its ordering are billed in equal shares to the waits it found, the
 /// remainder to the first, each with its own ending, so a budget pays its share of a shared
 /// instant, not a neighbour's (R12); a wait found ended meanwhile is billed its share too. The
-/// re-arm, and any share left over (a wait whose thread a deadline's destruction ended), go to
-/// the budget billed last. With no wait due, the walk goes with the first deadline, or to the
-/// budget of a wait the walk found ended before its timeout (it left the timer early), or with
-/// neither to nobody. The intervals are contiguous: each bill closes at a tick that opens the
-/// next, so a bill's own handling is in the interval after it, and the last bill opens the budget
-/// billed last's billing (`sched::bill_from`), which the entry's next payer closes. No part of
-/// the expiry falls between two intervals, to nobody.
+/// hints' recomputation, and any share left over (a wait whose thread a deadline's destruction
+/// ended), go to the budget billed last. With no wait due, the walk goes with the first deadline,
+/// or to the budget of a wait the walk found ended before its timeout (it left the timer early),
+/// or with neither to nobody. The intervals are contiguous: each bill closes at a tick that opens
+/// the next, so a bill's own handling is in the interval after it, and the last bill opens the
+/// budget billed last's billing (`sched::bill_from`), which the entry's next payer closes. No part
+/// of the expiry falls between two intervals, to nobody.
 pub fn expire_due(ss: &mut ProcessTable) -> Expired {
     let now = now_us();
     if TIMER.with(|t| t.threads > now && t.budgets > now) {
@@ -220,10 +218,9 @@ pub fn expire_due(ss: &mut ProcessTable) -> Expired {
     TIMER.with(|t| {
         t.threads = walk.next;
         t.budgets = next_budget;
-        // This hart's timer fired (or will, for what just passed); arm afresh.
+        // This hart's timer fired (or will, for what just passed); armed afresh at the return.
         t.armed[hart::index()] = 0;
     });
-    rearm();
     let at = crate::sched::now_ticks();
     if let Some(b) = last {
         MemoryManager::with_mut(|mm| crate::sched::bill(mm, b, pool + at.saturating_sub(started)));
@@ -241,11 +238,15 @@ pub fn expire_due(ss: &mut ProcessTable) -> Expired {
     Expired { destroyed: destroyed || (woke && cfg!(feature = "wake-preempts")), last }
 }
 
-/// A timer interrupt arrived. The trap handler has already expired what is due at its entry;
-/// all that is left is to arm for the next thing (a stale early hint lands here too).
-pub fn on_interrupt() {
+/// A timer interrupt arrived, from user mode or in `kmain`'s idle. The trap handler has already
+/// expired what is due at its entry; all that is left is to arm for the next thing (a stale early
+/// hint lands here too). The return to user mode does that (a preemption's, once `kmain` has
+/// picked); one taken in the idle returns to it with the interrupt still pending, so it arms now.
+pub fn on_interrupt(from_user: bool) {
     TIMER.with(|t| t.armed[hart::index()] = 0);
-    rearm();
+    if !from_user {
+        rearm();
+    }
 }
 
 /// Expire at a kernel entry.

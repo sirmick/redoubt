@@ -27,6 +27,9 @@ impl<const W: usize> Bits<W> {
 
     pub fn is_empty(&self) -> bool { self.0.iter().all(|word| *word == 0) }
 
+    /// How many numbers the set holds.
+    pub fn count(&self) -> usize { self.0.iter().map(|word| word.count_ones() as usize).sum() }
+
     /// The numbers in the set, lowest first.
     pub fn iter(self) -> impl Iterator<Item = usize> {
         (0..W).flat_map(move |i| {

@@ -176,6 +176,9 @@ pub extern "C" fn kmain() {
                     crate::mem::MemoryManager::with(crate::message::check_all)
                 });
                 crate::sched::stop_billing();
+                // The timer is taken here and in user mode alone: arm it for the earliest thing
+                // due (`time.rs`).
+                crate::time::rearm();
                 if !arch::idle() {
                     return;
                 }

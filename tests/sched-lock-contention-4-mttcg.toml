@@ -25,6 +25,15 @@ expect = [
     '^\[lock-contention\] driver wake: .*: gross, audits included; net in the post-check',
     '^LATENCY-SAMPLE contention driver_wake \d+ \d+$',
     '^SCHED-LOCK-CONTENTION TEST PASSED$',
+    # The kernel's count at power-off: every hart's context took ten or more of the 200 alarms
+    # (claims and claims that found nothing). Where the harts run at once each one in user mode or
+    # idle when an alarm rises traps for it (kernel/scheduling.md, "Every hart pays for each device
+    # interrupt"): taken by hart [195, 201, 196, 197] (rv64) and [177, 176, 179, 198] (rv32).
+    # Under icount, `sched-lock-contention-4`, a hammer can be in the kernel at every rise. The same
+    # program on the `irq-boot-hart-only` kernel here fails it: claimed by hart [202, 0, 0, 0],
+    # found nothing by hart [0, 0, 0, 0], taken by hart [202, 0, 0, 0] (a recorded run, both
+    # widths).
+    '^external interrupts: claimed by hart \[\d+(, \d+){3}\], found nothing by hart \[\d+(, \d+){3}\], taken by hart \[[1-9]\d+(, [1-9]\d+){3}\]$',
     '^SCHED-TRACE-END \d+ dropped 0$',
 ]
 forbid = ['\[lock-contention\] FAIL']

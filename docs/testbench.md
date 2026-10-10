@@ -534,13 +534,15 @@ parks when it is done, unless its exit is the point of its case.
 
 ### The scheduler oracle
 
-<details><summary>Status: built · tested (24)</summary>
+<details><summary>Status: built · tested (26)</summary>
 
 - bench:sched-ties
 - bench:sched-capped
 - bench:sched-lock-contention
 - bench:sched-lock-contention-4
 - bench:sched-lock-contention-4-mttcg
+- bench:sched-timer-entry
+- host:testbench::kernel_sections_say_what_the_lock_waits_waited_behind
 - host:testbench::the_driver_wake_is_judged_in_searches_of_its_own_run
 - host:testbench::a_pick_passes_over_only_a_budget_that_other_harts_run
 - host:testbench::lock_waits_are_reported_per_mille_of_the_harts_time
@@ -583,13 +585,21 @@ two harts, `sched-lock-contention-4` at four). A kernel built with `hold-trace`,
 tick; then `j`: its cause, a system call's number, an interrupt's or an exception's code, and the
 ticks of audits inside it). The oracle reports the sections' lengths net of their audits, the
 longest by cause, and splits the lock waits into the part another hart's section covered (its
-audits pro rata) and the part with the lock free, the hand-off to the halted waiter. Both
-contention cases carry it; it judges nothing. Where the clock is the host's,
+audits pro rata) and the part with the lock free, the hand-off to the halted waiter. The
+contention cases carry it and judge nothing by it. `fault_section_max_ticks=N` bounds the
+longest section a page fault began, net of its audits (`fault-report-bound`), and
+`timer_section_max_ticks=N` the longest a timer interrupt began and `timer_section_p99_ticks=N`
+their p99, the steady entry's cost, which the few cold sections (a program's first preemptions)
+cannot hide a regression of; both are gated up to `gate_harts` as the latency targets are,
+since under `icount` a section on several harts counts the others' instructions too
+(`sched-timer-entry`, at one hart; recorded at two). Where the clock is the host's,
 `driver_wake_p50_searches=K` and `driver_wake_p99_searches=K` judge the driver wake's net p50 and
 p99 against K searches of the same run alone, from the program's `one search alone` line, at any
 hart count (`sched-lock-contention-4-mttcg`). `sched-capped` runs the model's capped scenarios
 ([model](kernel/model.md#scheduler-scenarios)) on the machine at two, three and four harts, each
-budget's share judged as below. It is itself checked against the model's ranks and against traces broken one clause at a
+budget's share judged as below; `hart_shares_from=3` records the shares on a trace of fewer harts,
+since under `icount` QEMU's turns move them, and `sched-capped-mttcg` judges the two-hart shares
+where the harts run at once ([QEMU's turns](kernel/scheduling.md#residual-risks)). It is itself checked against the model's ranks and against traces broken one clause at a
 time. The tracing kernel is a test build only
 ([R23 (no test channels)](kernel/scheduling.md#r23-no-test-channels)).
 

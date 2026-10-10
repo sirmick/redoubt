@@ -1,0 +1,30 @@
+description = "A timer interrupt costs the kernel what its work needs (kernel/scheduling.md, \"Fair kernel entry is bounded by count\"): two spinners in budgets of equal weight and nothing else, so every timer interrupt from user mode ends a slice, switching budgets on one hart and picking the same spinner again on two; the kernel's lock section for each, trap to return, is bounded by the oracle from the trace (`hold-trace`), net of the checked build's audits (virtual time, checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+icount = "shift=3,sleep=off"
+programs = ["sched-timer-entry"]
+smp = [1, 2]
+# Test builds only: the trace ring with each lock section's length and cause (never in a default
+# kernel).
+kernel_features = ["hold-trace"]
+# Ticks are tenths of a microsecond on QEMU's virt board, 12.5 instructions each at shift=3. At one
+# hart the steady sections are 1,071 ticks (rv64) and 1,575 (rv32), p99 1,073 and 1,597; two are
+# cold, the program's first preemption after its calibration (1,998 and 2,524) and the window's
+# first (3,431 and 4,234). The p99 bound, 2,000, is the slower width's p99 and a quarter; the
+# max, 5,000, the slower width's cold section and a sixth. Before the kernel stopped re-arming
+# the timer three times a preemption, decoding a whole budget to move its round-robin cursor and
+# calling out for every word of a kernel object, the same run's steady sections were 2,239 and
+# 2,978 (p99 2,241 and 3,006) and its max 5,807 and 6,831: it fails both bounds on both widths.
+# Gated at one hart: under icount the harts share one clock, so at two a section's ticks count the
+# other hart's instructions too, and are recorded. The p99 bound assumes the run holds enough
+# sections that its two cold ones (rv32 2,524 and 4,234) sit above the 99th percentile: under
+# 200 sections the p99 lands on a cold one and fails; this run's length gives 355 to 369.
+post_check = "sched_oracle timer_section_p99_ticks=2000 timer_section_max_ticks=5000 gate_harts=1"
+timeout_secs = 600
+expect = [
+    '^\[timer-entry\] the spinners counted \d+ and \d+$',
+    '^SCHED-TIMER-ENTRY TEST PASSED$',
+    '^SCHED-TRACE-END \d+ dropped 0$',
+]
+poweroff = true

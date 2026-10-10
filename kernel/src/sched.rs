@@ -869,7 +869,11 @@ pub fn leave(pid: Pid) {
         // so the exit work since the pick never uses it up; only a deadline due now preempts (R12).
         crate::time::set_slice_end(crate::time::now_us().saturating_add(SLICE_US));
     }
-    crate::time::rearm();
+    // The timer is armed at the return to user mode; `kmain` arms it only if it idles, so a
+    // preemption whose pick runs at once arms it once, not three times.
+    if pid.get() != 1 {
+        crate::time::rearm();
+    }
     if to_user && !cfg!(feature = "timer-tail-billed") {
         let back = ticks();
         MemoryManager::with_mut(|mm| {
@@ -903,9 +907,7 @@ pub fn pick(ss: &ProcessTable, mm: &mut MemoryManager) -> Option<(Pid, TID)> {
     let (b, (pid, tid)) = chosen?;
     #[cfg(feature = "sched-trace")]
     trace::record(trace::PICK, b.id, mm.sched_state(b.frame).pass);
-    let mut x = mm.budget(b.frame);
-    x.cursor = Some((pid, tid));
-    mm.store(b.frame, &x);
+    mm.set_sched_cursor(b.frame, Some((pid, tid)));
     Some((pid, tid))
 }
 
@@ -914,7 +916,7 @@ pub fn pick(ss: &ProcessTable, mm: &mut MemoryManager) -> Option<(Pid, TID)> {
 /// exception). A process's ready threads never include one a hart runs (`ptable.rs`), so this is
 /// a thread no hart is running.
 fn next_thread(ss: &ProcessTable, mm: &MemoryManager, b: BudgetRef) -> Option<(Pid, TID)> {
-    let cursor = mm.budget(b.frame).cursor;
+    let cursor = mm.sched_cursor(b.frame);
     let mut first: Option<(Pid, TID)> = None;
     let mut after: Option<(Pid, TID)> = None;
     for pid in mm.live_pids() {

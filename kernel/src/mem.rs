@@ -795,6 +795,7 @@ impl MemoryManager {
 
     /// The physical address of kernel-object frame `frame`. A frame that is not one means a
     /// stale reference to a freed object: a violated invariant (I1), so the kernel stops.
+    #[inline]
     pub fn object_phys(&self, frame: u32) -> usize {
         assert!(self.is_object_frame(frame), "I1: {} is no object frame", frame);
         self.ram_start + frame as usize * PAGE_SIZE

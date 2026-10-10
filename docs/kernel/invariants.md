@@ -495,10 +495,11 @@ timeout is a wake, and a wake alone never preempts ([scheduling](scheduling.md#r
 
 **Kept in** `expire_due` ([`kernel/src/time.rs`](../../kernel/src/time.rs)), which runs first at
 every kernel entry, before anything reads the entering process, and commits everything due,
-earliest first (at an equal instant timeouts before budget deadlines); `rearm`, which keeps the
-one hardware timer armed for the earliest of slice end, timeouts and deadlines, rounding up so it
-never fires early; `next_timeout` and `time_out` in `kernel/src/message.rs`, which unwind what the
-thread waited for (a queued message's buffer back, a taken call abandoned under R3).
+earliest first (at an equal instant timeouts before budget deadlines); `rearm`, which arms the
+one hardware timer for the earliest of slice end, timeouts and deadlines on the way to user mode
+or `kmain`'s idle, the only places it is taken, rounding up so it never fires early;
+`next_timeout` and `time_out` in `kernel/src/message.rs`, which unwind what the thread waited for
+(a queued message's buffer back, a taken call abandoned under R3).
 
 **Model check:** `i13_timeouts`: after every step, no thread is still blocked past its timeout.
 `TimeoutIgnoredWhileOthersRun` (timeouts fire only while nothing runs) fails here.

@@ -132,6 +132,8 @@ const W_FIRST_OWNED: usize = W_SCHED + 10;
 const WORDS: usize = W_SCHED + 11;
 /// Where the scheduling words start, after the labels.
 const W_SCHED: usize = 16 + MAX_LABELS;
+/// The scheduler's round-robin cursor, the last scheduling word.
+const W_CURSOR: usize = W_SCHED + 7;
 /// A scratch word in every object frame: the next frame in `Objects::deferred`. Above every
 /// object's own words. `None` while the frame is not deferred.
 pub(crate) const DEFER_WORD: usize = 100;
@@ -300,6 +302,15 @@ type PidMask = crate::bits::Bits<{ MAX_PROCESS_COUNT.div_ceil(64) }>;
 // A PID is 16 bits, and the scheduler's cursor keeps a TID plus one in the 16 bits below it.
 const _: () = assert!(MAX_PROCESS_COUNT <= u16::MAX as usize && MAX_THREADS < u16::MAX as usize);
 
+/// The cursor's word: the PID above the TID plus one in the low 16 bits, 0 for none.
+fn cursor_word(cursor: Option<(Pid, usize)>) -> u64 {
+    cursor.map_or(0, |(p, t)| u64::from(p.get()) << 16 | (t as u64 + 1))
+}
+
+fn cursor_from(word: u64) -> Option<(Pid, usize)> {
+    pid_from(word >> 16).map(|pid| (pid, (word & 0xffff) as usize - 1))
+}
+
 /// `a ⊇ b`, both sorted.
 fn superset(a: &[u64], b: &[u64]) -> bool { b.iter().all(|x| a.binary_search(x).is_ok()) }
 
@@ -344,8 +355,7 @@ impl MemoryManager {
                 tie: w(W_SCHED + 5) as i64,
                 queued: w(W_SCHED + 6) != 0,
             },
-            // The cursor: the PID above the TID plus one in the low 16 bits, 0 for none.
-            cursor: pid_from(w(W_SCHED + 7) >> 16).map(|pid| (pid, (w(W_SCHED + 7) & 0xffff) as usize - 1)),
+            cursor: cursor_from(w(W_CURSOR)),
             pages_limit: w(9),
             pages_used: w(10),
             processes_limit: w(11) as u32,
@@ -381,7 +391,7 @@ impl MemoryManager {
         words[W_SCHED + 4] = b.sched.rem;
         words[W_SCHED + 5] = b.sched.tie as u64;
         words[W_SCHED + 6] = u64::from(b.sched.queued);
-        words[W_SCHED + 7] = b.cursor.map_or(0, |(p, t)| u64::from(p.get()) << 16 | (t as u64 + 1));
+        words[W_CURSOR] = cursor_word(b.cursor);
         words[W_FIRST_CHILD] = frame_word(b.first_child);
         words[W_NEXT_SIBLING] = frame_word(b.next_sibling);
         words[W_FIRST_OWNED] = frame_word(b.first_owned);
@@ -422,6 +432,19 @@ impl MemoryManager {
         for (i, word) in words.iter().enumerate() {
             kframe::write(phys, (W_SCHED + i) * 8, *word);
         }
+    }
+
+    /// `frame`'s round-robin cursor: the thread `kmain` picked last (`sched::pick`).
+    pub fn sched_cursor(&self, frame: BudgetFrame) -> Option<(Pid, usize)> {
+        let phys = self.object_phys(frame);
+        debug_assert!(kframe::read(phys, 0) == MAGIC, "I1: frame {} holds no budget", frame);
+        cursor_from(kframe::read(phys, W_CURSOR * 8))
+    }
+
+    pub fn set_sched_cursor(&mut self, frame: BudgetFrame, cursor: Option<(Pid, usize)>) {
+        let phys = self.object_phys(frame);
+        assert!(kframe::read(phys, 0) == MAGIC, "I1: frame {} holds no budget", frame);
+        kframe::write(phys, W_CURSOR * 8, cursor_word(cursor));
     }
 
     /// The ready threads the scheduler counts in `frame`.

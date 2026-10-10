@@ -1,17 +1,23 @@
-description = "R12 across harts, the capped budgets (kernel/scheduling.md, \"The current minimum and ties\"): the model's four scenarios on the machine (late join, second cap, uncap, spread), each budget's share after a budget wakes or gains a thread judged by the post-check on the kernel's charges net of lock waits against water-filling at the harts the trace states, within 50 per thousand (virtual time, checked build, two, three and four harts)"
+description = "R12 across harts, the capped budgets (kernel/scheduling.md, \"The current minimum and ties\"): the model's four scenarios on the machine (late join, second cap, uncap, spread), each budget's share after a budget wakes or gains a thread judged by the post-check on the kernel's charges net of lock waits against water-filling at the harts the trace states, within 50 per thousand, at three and four harts and recorded at two, judged where the harts run at once (sched-capped-mttcg) (virtual time, checked build, two, three and four harts)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true
 icount = "shift=3,sleep=off"
 programs = ["sched-capped"]
 # At one hart no budget is ever capped. Late join and uncap are judged at two harts, second cap at
-# three and spread at two and four (`@` on each line); every run reports all four.
+# three and spread at two and four (`@` on each line); every run reports all four. At two harts
+# the shares are recorded here and judged in `sched-capped-mttcg` (`hart_shares_from=3`): under
+# icount the harts take turns on one clock, and on rv32 QEMU ends hart 0's turn inside its
+# audit at the return to `kmain` (327 µs against 81) or in `kmain`'s expiry walk at every slice
+# end, about 2,600 ticks a slice billed to nobody on the heavy budget's hart alone (nobody 71 of
+# 1000, against 30 before the slice end cost 12,869 instructions). Late-a there reads 449 (465
+# before; 434 at icount shift=4), and 502 where the harts run at once.
 smp = [2, 3, 4]
 keep_smp = true
 # Test builds only: the trace ring (never in a default kernel). Under icount a count is the
 # machine's instructions, not a hart's time, so the shares are the kernel's charges (`HART-SHARE`).
 kernel_features = ["sched-trace"]
-post_check = "sched_oracle"
+post_check = "sched_oracle hart_shares_from=3"
 timeout_secs = 1200
 expect = [
     '^HART-SHARE late-a \d+ \d+ 50@2 2:1 100:1 100:1$',

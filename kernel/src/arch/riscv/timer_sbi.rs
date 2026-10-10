@@ -61,17 +61,29 @@ pub fn now_us() -> u64 { ticks_to_us(now_ticks()) }
 
 /// Ticks since boot as microseconds, rounded down.
 pub fn ticks_to_us(ticks: u64) -> u64 {
-    // Whole seconds, then the remainder: no 128-bit arithmetic, and no overflow while the
-    // remainder (below the timebase, which fits in 32 bits) times 10^6 fits in 64 bits.
+    // One division while `ticks * 10^6` fits in 64 bits (three weeks since boot at QEMU virt's
+    // 10 MHz): rv32 has no 64-bit divide, and each is a library call of a hundred instructions,
+    // several an entry. Past that, whole seconds, then the remainder (below the timebase, which
+    // fits in 32 bits, so times 10^6 it fits too). Both are the floor of `ticks * 10^6 / hz`.
     let hz = timebase().max(1);
-    (ticks / hz).saturating_mul(1_000_000).saturating_add((ticks % hz) * 1_000_000 / hz)
+    if let Some(scaled) = ticks.checked_mul(1_000_000) {
+        return scaled / hz;
+    }
+    let secs = ticks / hz;
+    secs.saturating_mul(1_000_000).saturating_add((ticks - secs * hz) * 1_000_000 / hz)
 }
 
 /// The first tick at or after `us` microseconds since boot, rounded up, so that an interrupt
 /// armed for it never comes before `now_us() >= us`; `u64::MAX` for a time that never comes.
 pub fn us_to_ticks(us: u64) -> u64 {
     let hz = timebase().max(1);
-    let (secs, frac) = (us / 1_000_000, us % 1_000_000);
+    // One division while `us * hz` fits in 64 bits, as `ticks_to_us`; both are the ceiling of
+    // `us * hz / 10^6`.
+    if let Some(scaled) = us.checked_mul(hz) {
+        return scaled.div_ceil(1_000_000);
+    }
+    let secs = us / 1_000_000;
+    let frac = us - secs * 1_000_000;
     // frac < 10^6 and hz < 2^32: the product fits in 64 bits.
     secs.checked_mul(hz).and_then(|t| t.checked_add((frac * hz).div_ceil(1_000_000))).unwrap_or(u64::MAX)
 }

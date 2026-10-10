@@ -284,7 +284,7 @@ pub extern "C" fn trap_handler(
             if slice_over && expired_last.is_none() && !cfg!(feature = "timer-tail-billed") {
                 crate::sched::begin_billing();
             }
-            crate::time::on_interrupt();
+            crate::time::on_interrupt(from_user);
             if slice_over {
                 preempt();
             }

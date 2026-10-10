@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 153
+revision = 159
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1791,8 +1791,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "smp"
   needs = ["SMP6"]
   body = "M2 page 'Several harts' step 6: per-hart magazines refilled from the bitmap under the lock and drawn from with interrupts off; frames zeroed as they enter a magazine, by step 5's in-flight rule. Attack case: a hart racing to allocate, map or free a frame in a magazine. Tier A: the kernel red."
-  state = "active"
-  revision = 120
+  state = "reported"
+  revision = 155
   overrides = ["2026-10-10: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; the several-harts track runs ahead of M1's acceptance"]
 
 [[node]]
@@ -1967,9 +1967,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "smp"
   needs = ["SMP6"]
   body = "From BEAM19's exact instruction counts (.wash/local/BEAM19-report.md; QEMU exec log weighted by block length, icount shift=3, rv64 smp 1): while a session's VM runs a tight loop, each kernel entry (the timer interrupt at the slice, the scheduler's pick and return) costs about 12,000 kernel instructions, about 20 % of the hart. Measure the entry's parts with the kernel's trace and the exec log (trap save/restore, the lock, the pick, billing, reconcile marks, audits in a checked build vs none in release, the return), find what is proportional to nothing the entry does, and cut it; a reductions-per-second case already exists (beamlet-reduction-rate) and a kernel-side bound (instructions or ticks per entry, measured in the oracle net of audits) is the gate on both widths. Nothing changes in any rule; the scheduler's targets hold. Kernel: Tier A, the kernel red."
-  state = "active"
-  revision = 150
-  overrides = ["2026-10-10: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; the several-harts track runs ahead of M1's acceptance"]
+  state = "done"
+  revision = 158
+  overrides = ["2026-10-10: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; the several-harts track runs ahead of M1's acceptance", "2026-10-10: started by Orchestrator before M1 (reported): M1 is reported, not done, by the owner's milestone split (2026-10-07); M2's open kernel packages proceed on it, as K31's first implementer did"]
 
 [[node]]
   id = "B49"
@@ -2075,3 +2075,13 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "kernel-red's remedy named at SMP6's merge (train 20): the idle window is a host-clock measurement, and about half of rv32's 0.005-0.008 cores is the login drain (35k frames, 0.25-0.32 s) falling inside it, so a busy host can push one window over the 0.01 ceiling. Fix: the case opens its window once the kernel's frames-in-flight count reaches 0 (the kernel already counts them; a fixed settle time could hide a drain that never ends), and prints the drain's length and host cost beside the window's numbers. The ceiling stays 0.01. Pages: docs/kernel/memory.md (Frames in flight), docs/testbench.md (the machine at rest). Not a merge blocker; it is the home of the flake if the train bench fails launch-idle on host cores."
   state = "todo"
   revision = 153
+
+[[node]]
+  id = "B58"
+  title = "sched-trace records a slice as 'not over' when it ends inside a long kernel entry (slice_over sampled at entry, decided after the expiry); wake-no-preempt's nap waits on the fix"
+  template = "package"
+  parent = "M2"
+  needs = ["M1"]
+  body = "Found by K31's implementer (2026-10-10, .wash/local/K31-report.md 'sched-wake-no-preempt-harts'): with a 2,500 us nap, rv64 sched-wake-no-preempt-harts fails 'wake took hart' although the kernel rightly ended the slice: the trace record O carries slice_over as sampled when the entry began, not the decision irq.rs takes after the expiry walk, so a slice ending inside a long entry is recorded as not over (pass 2) and the oracle reads a wake that took a hart. sched-trace feature only, a few lines: record the kernel's own slice_over decision. Then lengthen the case's nap (2,500 us) so the sleeper's wake lands mid-slice and witnesses the wake-no-preempt property regardless of the call phase (K31 kept CALL_US 50 as the small fix; its toml quotes the counts). Pages: docs/kernel/scheduling.md (the trace record, wake-no-preempt), docs/testbench.md (the scheduler oracle). Gate: sched-wake-no-preempt-harts both widths with the long nap, >= 5 runs, mid-slice witnesses present; the recorded wake-preempts negative still fails. Tier B, kernel-red (trace only)."
+  state = "todo"
+  revision = 159

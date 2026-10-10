@@ -2,7 +2,7 @@
 //! entry that answers it, on whatever hart, takes no hart from the thread it entered from.
 //!
 //! A sleeper and three spinners, in budgets of equal weight. The sleeper sleeps 300 µs, sixty
-//! times. Each spinner enters the kernel with `time_now` every 100 µs, so some timeouts are
+//! times. Each spinner enters the kernel with `time_now` every 50 µs, so some timeouts are
 //! answered at another budget's call while that budget's slice runs; most come at a timer
 //! interrupt that ends a slice anyway, since a spinner waiting for the kernel lock at its call
 //! takes the pending timer late. The trace post-check judges each wake at the entry that made it,
@@ -17,8 +17,9 @@ use test_programs::sched::{Bench, Role};
 /// The sleeper's nap, and how many.
 const NAP_US: u64 = 300;
 const NAPS: u64 = 60;
-/// How often each spinner enters the kernel.
-const CALL_US: u64 = 100;
+/// How often each spinner enters the kernel: often enough that a call, not the slice's end, answers
+/// some timeouts whatever the slice's phase (the case's comment).
+const CALL_US: u64 = 50;
 /// The spinners: one more than two harts can run at once.
 const SPINNERS: usize = 3;
 
