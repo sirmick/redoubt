@@ -219,11 +219,12 @@ and its kernel objects.
   heap cap of twice the largest peak of beamlet's runtime heap across the memory cases plus what
   the VM holds outside its heap, 44 pages (its two schedulers' stacks and thread pages, its locks'
   endpoints and its process's page), rounded up to 128
-  ([beamlet](../userland/beamlet.md#what-the-vm-holds-at-its-prompt)), from a peak of 5,491 pages
-  on rv64 and 5,308 on rv32. It was 11,008 with one scheduler, 19 pages outside the heap, and
+  ([beamlet](../userland/beamlet.md#what-the-vm-holds-at-its-prompt)), from a largest peak of
+  5,492 pages on rv64 (at two harts; 5,491 at one) and 5,308 on rv32, which the cap, 11,092 pages,
+  holds twice with 108 to spare. It was 11,008 with one scheduler, 19 pages outside the heap, and
   11,904 while the shell loaded every command's module at its start, when the peak was 5,904. The
-  scan's cap rule bounds it from below: an rv64 peak above 5,546 pages puts the cap, 11,092 pages,
-  under twice the peak, and the share then moves up a step of 128. The relay's is 128 pages: its image (about 21 pages on
+  scan's cap rule bounds it from below: an rv64 peak above 5,546 pages puts the cap under twice
+  the peak, and the share then moves up a step of 128. The relay's is 128 pages: its image (about 21 pages on
   rv64), its four stacks (5, 4, 4 and 4 pages), a heap cap of twice its 22-page peak
   (`consrelay-footprint`), and what the kernel charges for a process, rounded up to 128
   ([consrelay](../servers/consrelay.md#the-bound)). The steward gives the VM the session's pages

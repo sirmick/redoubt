@@ -1,0 +1,120 @@
+description = "A session's contexts from the prompt (docs/userland/shell.md, \"Session commands\"; docs/userland/sessions.md, \"Contexts\"; docs/servers/steward.md, \"Contexts\" and R37): alice's vault context vaultctx and bob's bobwork run; from alice.home, contexts() lists home alone, attached, and neither alice's vault context nor bob's; end_context of either is unknown, as a name nobody holds; detach() closes the terminal with status 0 and leaves the context running, and her next login reattaches it; end_context(\"home\") from the context itself ends it, as exit: her unlabelled set's cap holds one SSH context beside the console, so her next login, alice.after, is let in only once home has ended, and lists itself alone; bob's listing after it still answers. The verdicts are the session's own output from the steward's answers, sshd's and the steward's lines, and each ssh's exit status (rule F)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+recipe = "image/boot.toml"
+# The image needs 1 GiB: the principals' budgets, each holding a shell VM's session, do not fit
+# the users budget 256 MiB leaves (docs/kernel/budgets.md).
+memory_mib = 1024
+timeout_secs = 1500
+expect = [
+    '^init: started sshd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
+    '^init: started steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+]
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    '^init: .* (exited|faulted|was killed)',
+    'init: restarted',
+    'EXCEPTION',
+    'steward: the core exited',
+    'steward: a step failed',
+]
+expect_after = [
+    '^\[con [0-9a-f]{16}\] sshd: login alice\+alice-secrets\.vaultctx: session [0-9a-f]{16}, labels \[7\]$',
+    '^\[con [0-9a-f]{16}\] sshd: login bob\.bobwork: session [0-9a-f]{16}, labels \[\]$',
+    '^\[con [0-9a-f]{16}\] sshd: login alice\.home: session [0-9a-f]{16}, labels \[\]$',
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{\} at [0-9]+: Attached \{ session: [0-9]+, key: [1-9][0-9]*, from: "[0-9.]+:[0-9]+", took_over: false \}',
+    # home ended: alice's unlabelled set holds the console's session alone.
+    '^\[con [0-9a-f]{16}\] steward: users/alice/\{\} holds [0-9]+ pages, 10 processes$',
+    '^\[con [0-9a-f]{16}\] sshd: login alice\.after: session [0-9a-f]{16}, labels \[\]$',
+]
+
+[[session]]
+user = "alice+alice-secrets.vaultctx"
+pty = true
+steps = [
+    { expect = '\([0-9]+\)> ' },
+    { mark = "vault-up" },
+    { wait = "after-done" },
+    { send = "exit\n" },
+    { exit = 0 },
+]
+
+[[session]]
+user = "bob.bobwork"
+pty = true
+steps = [
+    { wait = "vault-up" },
+    { expect = '\([0-9]+\)> ' },
+    { mark = "bob-up" },
+    { wait = "after-done" },
+    { send = "{:bob, contexts()}\n" },
+    { expect = '\{:bob, \[%\{age: [0-9]+, name: "bobwork", state: :attached\}\]\}' },
+    { send = "exit\n" },
+    { exit = 0 },
+]
+
+# Each answer is tagged, so a pattern matches what the shell printed, never the echo of the line.
+[[session]]
+user = "alice.home"
+pty = true
+forbid = ['name: "vaultctx"', 'name: "bobwork"']
+steps = [
+    { wait = "bob-up" },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:listed, contexts()}\n" },
+    { expect = '\{:listed, \[%\{age: [0-9]+, name: "home", state: :attached\}\]\}' },
+    { send = "{:vault, end_context(\"vaultctx\")}\n" },
+    { expect = '\{:vault, \{:error, :unknown\}\}' },
+    { send = "{:bob, end_context(\"bobwork\")}\n" },
+    { expect = '\{:bob, \{:error, :unknown\}\}' },
+    { send = "kept = 41\n" },
+    { expect = '41' },
+    { send = "detach()\n" },
+    { exit = 0 },
+    { mark = "home-detached" },
+]
+
+# Reattached: its value is there; ending itself by name ends it, as exit. The terminal stays open
+# until alice.after is in, so its close cannot detach the context before the line is read.
+[[session]]
+user = "alice.home"
+name = "alice.home-again"
+pty = true
+steps = [
+    { wait = "home-detached" },
+    { expect = '\[context home: reattached\]' },
+    { send = "{:kept, kept}\n" },
+    { expect = '\{:kept, 41\}' },
+    { send = "end_context(\"home\")\n" },
+    { mark = "home-done" },
+    { wait = "after-done" },
+    { exit = 0 },
+]
+
+# Let in only once home has ended: alice's unlabelled set holds one SSH context beside the console.
+[[session]]
+user = "alice.after"
+pty = true
+ssh_args = ["-o", "ProxyCommand=sh -c 'sleep 2; exec nc %h %p'"]
+steps = [
+    { wait = "home-done" },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:after, contexts()}\n" },
+    { expect = '\{:after, \[%\{age: [0-9]+, name: "after", state: :attached\}\]\}' },
+    { mark = "after-done" },
+    { send = "exit\n" },
+    { exit = 0 },
+]
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]
+forward = [22]

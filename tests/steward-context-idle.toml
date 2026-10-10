@@ -1,0 +1,102 @@
+description = "Idle contexts end (docs/servers/steward.md, \"Contexts\" and R83; docs/userland/sessions.md, \"Contexts\"): with bob's idle bound at 60 s in this case's manifest and alice's at the default day, bob.x and alice.y each close their terminal and run on detached; 60 s after bob.x's detach the steward's timer ends it, its budget given back, recorded IdleEnded; alice.y, detached as long, is not ended, and her next login reattaches it with its state; the console's session runs throughout. The verdicts are the steward's audit, its count of what users/bob/{} holds, sshd's lines, and the reattached session's own output (rule F)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The image's programs (steward-restart-ssh's list, the steward as shipped).
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-bootfsd", bin = "bootfsd" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-verityd", bin = "verityd" },
+    { package = "redoubt-netd", bin = "netd" },
+    { package = "redoubt-ipd", bin = "ipd" },
+    { package = "redoubt-walfsd", bin = "walfsd" },
+    { package = "redoubt-erofsd", bin = "erofsd" },
+    { package = "beamlet-redoubt", bin = "beamlet", workspace = "userland/otp" },
+    { package = "redoubt-piped", bin = "piped" },
+    { package = "redoubt-steward-server", bin = "steward" },
+    { package = "redoubt-sshd", bin = "sshd" },
+    { package = "redoubt-consrelay", bin = "consrelay" },
+]
+# The principals' budgets, each holding a shell VM's session, need 1 GiB (steward-session-ends).
+memory_mib = 1024
+# Two logins, a 60 s bound and the reattach 80 s after the first detach.
+timeout_secs = 1500
+expect = [
+    '^init: started sshd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
+    '^init: started steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+]
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    '^init: .* (exited|faulted|was killed)',
+    'init: restarted',
+    'EXCEPTION',
+    'steward: the core exited',
+    'steward: a step failed',
+    # Alice's bound is a day: nothing of hers ends idle.
+    'steward: audit 1001/.*IdleEnded',
+]
+expect_after = [
+    '^\[con [0-9a-f]{16}\] sshd: login bob\.x: session [0-9a-f]{16}, labels \[\]$',
+    '^\[con [0-9a-f]{16}\] sshd: login alice\.y: session [0-9a-f]{16}, labels \[\]$',
+    # 60 s after bob.x's detach, give or take the timer's wake.
+    '^\[con [0-9a-f]{16}\] steward: audit 1002/\{\} at [0-9]+: IdleEnded \{ session: [0-9]+, idle: 6[0-9] \}$',
+    '^\[con [0-9a-f]{16}\] steward: users/bob/\{\} holds 0 pages, 0 processes$',
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{\} at [0-9]+: Attached \{ session: [0-9]+, key: [1-9][0-9]*, from: "[0-9.]+:[0-9]+", took_over: false \}',
+]
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/steward/idle.manifest.json" }
+verity = "image/userland.toml"
+
+[[session]]
+user = "bob.x"
+pty = true
+steps = [
+    { expect = '\([0-9]+\)> ' },
+    { exit = 0 },
+    { mark = "x-detached" },
+]
+
+[[session]]
+user = "alice.y"
+pty = true
+steps = [
+    { wait = "x-detached" },
+    { expect = '\([0-9]+\)> ' },
+    { send = "kept = 41\n" },
+    { expect = '41' },
+    { exit = 0 },
+    { mark = "y-detached" },
+]
+
+# Alice again, 80 s after bob.x's detach: past bob.x's bound, and hers is a day.
+[[session]]
+user = "alice.y"
+name = "alice.y-again"
+pty = true
+ssh_args = ["-o", "ProxyCommand=sh -c 'sleep 80; exec nc %h %p'"]
+forbid = ['taken over']
+steps = [
+    { wait = "y-detached" },
+    { expect = '\[context y: reattached\]' },
+    { send = "kept + 1\n" },
+    { expect = '42' },
+    { send = "exit\n" },
+    { exit = 0 },
+]
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]
+forward = [22]

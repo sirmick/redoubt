@@ -1,0 +1,246 @@
+description = "Rule 3's refusals at the client (docs/servers/steward.md, \"Contexts\" and \"Residual risks\"; docs/userland/sessions.md, \"Contexts\"): thirty logins with alice's key, one after another, ten each of an unknown principal (carol), a known principal with a wrong key (bob) and a label set alice does not have (alice+nosuch), interleaved so drift falls on all three alike. Each is refused as the same Permission denied at the client and as BadKey at sshd, and each session's log notes how long after its ssh started the refusal came: the report compares the three kinds' medians against their spread. The verdicts are sshd's refusals and each ssh's exit status (rule F); the times are a measurement, not a verdict, and the case holds each refusal to the case's deadline only"
+arch = ["rv64", "rv32"]
+kind = "boot"
+recipe = "image/boot.toml"
+# The image needs 1 GiB: the principals' budgets, each holding a shell VM's session, do not fit
+# the users budget 256 MiB leaves (docs/kernel/budgets.md).
+memory_mib = 1024
+# Thirty refusals of about a second each, one after another: well inside this.
+timeout_secs = 600
+expect = [
+    '^init: started sshd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
+    '^init: started steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+]
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    '^init: .* (exited|faulted|was killed)',
+    'init: restarted',
+    'EXCEPTION',
+    'steward: the core exited',
+    'sshd: login (carol|bob|alice\+nosuch): session',
+]
+expect_after = [
+    '^\[con [0-9a-f]{16}\] sshd: login carol: refused \(BadKey\)$',
+    '^\[con [0-9a-f]{16}\] sshd: login bob: refused \(BadKey\)$',
+    '^\[con [0-9a-f]{16}\] sshd: login alice\+nosuch: refused \(BadKey\)$',
+    '^\[con [0-9a-f]{16}\] sshd: login carol: refused \(BadKey\)$',
+    '^\[con [0-9a-f]{16}\] sshd: login bob: refused \(BadKey\)$',
+    '^\[con [0-9a-f]{16}\] sshd: login alice\+nosuch: refused \(BadKey\)$',
+    '^\[con [0-9a-f]{16}\] sshd: login carol: refused \(BadKey\)$',
+    '^\[con [0-9a-f]{16}\] sshd: login bob: refused \(BadKey\)$',
+    '^\[con [0-9a-f]{16}\] sshd: login alice\+nosuch: refused \(BadKey\)$',
+    '^\[con [0-9a-f]{16}\] sshd: login carol: refused \(BadKey\)$',
+    '^\[con [0-9a-f]{16}\] sshd: login bob: refused \(BadKey\)$',
+    '^\[con [0-9a-f]{16}\] sshd: login alice\+nosuch: refused \(BadKey\)$',
+    '^\[con [0-9a-f]{16}\] sshd: login carol: refused \(BadKey\)$',
+    '^\[con [0-9a-f]{16}\] sshd: login bob: refused \(BadKey\)$',
+    '^\[con [0-9a-f]{16}\] sshd: login alice\+nosuch: refused \(BadKey\)$',
+    '^\[con [0-9a-f]{16}\] sshd: login carol: refused \(BadKey\)$',
+    '^\[con [0-9a-f]{16}\] sshd: login bob: refused \(BadKey\)$',
+    '^\[con [0-9a-f]{16}\] sshd: login alice\+nosuch: refused \(BadKey\)$',
+    '^\[con [0-9a-f]{16}\] sshd: login carol: refused \(BadKey\)$',
+    '^\[con [0-9a-f]{16}\] sshd: login bob: refused \(BadKey\)$',
+    '^\[con [0-9a-f]{16}\] sshd: login alice\+nosuch: refused \(BadKey\)$',
+    '^\[con [0-9a-f]{16}\] sshd: login carol: refused \(BadKey\)$',
+    '^\[con [0-9a-f]{16}\] sshd: login bob: refused \(BadKey\)$',
+    '^\[con [0-9a-f]{16}\] sshd: login alice\+nosuch: refused \(BadKey\)$',
+    '^\[con [0-9a-f]{16}\] sshd: login carol: refused \(BadKey\)$',
+    '^\[con [0-9a-f]{16}\] sshd: login bob: refused \(BadKey\)$',
+    '^\[con [0-9a-f]{16}\] sshd: login alice\+nosuch: refused \(BadKey\)$',
+    '^\[con [0-9a-f]{16}\] sshd: login carol: refused \(BadKey\)$',
+    '^\[con [0-9a-f]{16}\] sshd: login bob: refused \(BadKey\)$',
+    '^\[con [0-9a-f]{16}\] sshd: login alice\+nosuch: refused \(BadKey\)$',
+]
+
+[[session]]
+user = "carol"
+name = "t0"
+key = "alice"
+steps = [{ expect = 'Permission denied \(publickey\)' }, { exit = 255 }, { mark = "t0" }]
+
+[[session]]
+user = "bob"
+name = "t1"
+key = "alice"
+steps = [{ wait = "t0" }, { expect = 'Permission denied \(publickey\)' }, { exit = 255 }, { mark = "t1" }]
+
+[[session]]
+user = "alice+nosuch"
+name = "t2"
+key = "alice"
+steps = [{ wait = "t1" }, { expect = 'Permission denied \(publickey\)' }, { exit = 255 }, { mark = "t2" }]
+
+[[session]]
+user = "carol"
+name = "t3"
+key = "alice"
+steps = [{ wait = "t2" }, { expect = 'Permission denied \(publickey\)' }, { exit = 255 }, { mark = "t3" }]
+
+[[session]]
+user = "bob"
+name = "t4"
+key = "alice"
+steps = [{ wait = "t3" }, { expect = 'Permission denied \(publickey\)' }, { exit = 255 }, { mark = "t4" }]
+
+[[session]]
+user = "alice+nosuch"
+name = "t5"
+key = "alice"
+steps = [{ wait = "t4" }, { expect = 'Permission denied \(publickey\)' }, { exit = 255 }, { mark = "t5" }]
+
+[[session]]
+user = "carol"
+name = "t6"
+key = "alice"
+steps = [{ wait = "t5" }, { expect = 'Permission denied \(publickey\)' }, { exit = 255 }, { mark = "t6" }]
+
+[[session]]
+user = "bob"
+name = "t7"
+key = "alice"
+steps = [{ wait = "t6" }, { expect = 'Permission denied \(publickey\)' }, { exit = 255 }, { mark = "t7" }]
+
+[[session]]
+user = "alice+nosuch"
+name = "t8"
+key = "alice"
+steps = [{ wait = "t7" }, { expect = 'Permission denied \(publickey\)' }, { exit = 255 }, { mark = "t8" }]
+
+[[session]]
+user = "carol"
+name = "t9"
+key = "alice"
+steps = [{ wait = "t8" }, { expect = 'Permission denied \(publickey\)' }, { exit = 255 }, { mark = "t9" }]
+
+[[session]]
+user = "bob"
+name = "t10"
+key = "alice"
+steps = [{ wait = "t9" }, { expect = 'Permission denied \(publickey\)' }, { exit = 255 }, { mark = "t10" }]
+
+[[session]]
+user = "alice+nosuch"
+name = "t11"
+key = "alice"
+steps = [{ wait = "t10" }, { expect = 'Permission denied \(publickey\)' }, { exit = 255 }, { mark = "t11" }]
+
+[[session]]
+user = "carol"
+name = "t12"
+key = "alice"
+steps = [{ wait = "t11" }, { expect = 'Permission denied \(publickey\)' }, { exit = 255 }, { mark = "t12" }]
+
+[[session]]
+user = "bob"
+name = "t13"
+key = "alice"
+steps = [{ wait = "t12" }, { expect = 'Permission denied \(publickey\)' }, { exit = 255 }, { mark = "t13" }]
+
+[[session]]
+user = "alice+nosuch"
+name = "t14"
+key = "alice"
+steps = [{ wait = "t13" }, { expect = 'Permission denied \(publickey\)' }, { exit = 255 }, { mark = "t14" }]
+
+[[session]]
+user = "carol"
+name = "t15"
+key = "alice"
+steps = [{ wait = "t14" }, { expect = 'Permission denied \(publickey\)' }, { exit = 255 }, { mark = "t15" }]
+
+[[session]]
+user = "bob"
+name = "t16"
+key = "alice"
+steps = [{ wait = "t15" }, { expect = 'Permission denied \(publickey\)' }, { exit = 255 }, { mark = "t16" }]
+
+[[session]]
+user = "alice+nosuch"
+name = "t17"
+key = "alice"
+steps = [{ wait = "t16" }, { expect = 'Permission denied \(publickey\)' }, { exit = 255 }, { mark = "t17" }]
+
+[[session]]
+user = "carol"
+name = "t18"
+key = "alice"
+steps = [{ wait = "t17" }, { expect = 'Permission denied \(publickey\)' }, { exit = 255 }, { mark = "t18" }]
+
+[[session]]
+user = "bob"
+name = "t19"
+key = "alice"
+steps = [{ wait = "t18" }, { expect = 'Permission denied \(publickey\)' }, { exit = 255 }, { mark = "t19" }]
+
+[[session]]
+user = "alice+nosuch"
+name = "t20"
+key = "alice"
+steps = [{ wait = "t19" }, { expect = 'Permission denied \(publickey\)' }, { exit = 255 }, { mark = "t20" }]
+
+[[session]]
+user = "carol"
+name = "t21"
+key = "alice"
+steps = [{ wait = "t20" }, { expect = 'Permission denied \(publickey\)' }, { exit = 255 }, { mark = "t21" }]
+
+[[session]]
+user = "bob"
+name = "t22"
+key = "alice"
+steps = [{ wait = "t21" }, { expect = 'Permission denied \(publickey\)' }, { exit = 255 }, { mark = "t22" }]
+
+[[session]]
+user = "alice+nosuch"
+name = "t23"
+key = "alice"
+steps = [{ wait = "t22" }, { expect = 'Permission denied \(publickey\)' }, { exit = 255 }, { mark = "t23" }]
+
+[[session]]
+user = "carol"
+name = "t24"
+key = "alice"
+steps = [{ wait = "t23" }, { expect = 'Permission denied \(publickey\)' }, { exit = 255 }, { mark = "t24" }]
+
+[[session]]
+user = "bob"
+name = "t25"
+key = "alice"
+steps = [{ wait = "t24" }, { expect = 'Permission denied \(publickey\)' }, { exit = 255 }, { mark = "t25" }]
+
+[[session]]
+user = "alice+nosuch"
+name = "t26"
+key = "alice"
+steps = [{ wait = "t25" }, { expect = 'Permission denied \(publickey\)' }, { exit = 255 }, { mark = "t26" }]
+
+[[session]]
+user = "carol"
+name = "t27"
+key = "alice"
+steps = [{ wait = "t26" }, { expect = 'Permission denied \(publickey\)' }, { exit = 255 }, { mark = "t27" }]
+
+[[session]]
+user = "bob"
+name = "t28"
+key = "alice"
+steps = [{ wait = "t27" }, { expect = 'Permission denied \(publickey\)' }, { exit = 255 }, { mark = "t28" }]
+
+[[session]]
+user = "alice+nosuch"
+name = "t29"
+key = "alice"
+steps = [{ wait = "t28" }, { expect = 'Permission denied \(publickey\)' }, { exit = 255 }, { mark = "t29" }]
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]
+forward = [22]

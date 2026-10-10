@@ -313,9 +313,10 @@ so the steward still holds no key.
 The core's view of the boot manifest is a few text lines, which `init` hands the steward as its
 arguments, one line each after its entry's own ([init](init.md#starting-the-servers), step 6):
 the manifest is never public, so `/boot` cannot carry it. A trace begins with the same lines.
-- `principal "NAME" account=N login=[..] approval=[..] owned=[..] sets=[[..],..] top=P,N,W`: one
-  per principal, its keys by id, its owned labels and each label set by label ids, its unlabelled
-  set first, and its budget.
+- `principal "NAME" account=N login=[..] approval=[..] owned=[..] sets=[[..],..] top=P,N,W
+  contexts=N idle=S`: one per principal, its keys by id, its owned labels and each label set by
+  label ids, its unlabelled set first, its budget, and its cap of live contexts per label set and
+  their idle bound in seconds ([contexts](#contexts)).
 - `keyd [..]`, the ids of keys `keyd` holds; `init` writes `keyd []` (see
   [residual risks](#residual-risks)).
 - `servers N`, the shared servers' slots a session connects to.
@@ -542,7 +543,7 @@ sequenceDiagram
 
 ### Contexts
 
-Status: built · tested: bench:steward-context-login, bench:steward-login-refused, bench:steward-session-ends, host:redoubt-steward::a_login_s_refusals_tell_nothing_apart, host:redoubt-steward::context_free_holds_one_session_per_name, host:redoubt-steward::a_context_is_attached_to_one_channel_at_a_time, host:redoubt-steward-server::a_refused_login_makes_nothing, host:redoubt-steward-server::a_login_to_an_attached_context_takes_it_over, host:redoubt-steward-server::a_takeover_from_a_stalled_channel_still_takes_it_over, host:redoubt-steward-server::closing_the_channel_detaches_the_context_and_a_login_reattaches, host:redoubt-steward-server::sshd_gone_detaches_every_attached_context, host:redoubt-init::principal_and_label_names_hold_no_separator_and_none_is_reserved
+Status: built · tested: bench:steward-context-login, bench:steward-login-refused, bench:steward-session-ends, bench:steward-context-cap, bench:steward-context-idle, bench:shell-contexts, bench:steward-restart-context, bench:steward-login-timing, host:redoubt-steward::a_login_s_refusals_tell_nothing_apart, host:redoubt-steward::the_cap_refuses_a_new_context_and_keeps_the_oldest, host:redoubt-steward::idle_ends_a_detached_context_only, host:redoubt-steward-server::a_login_past_the_cap_is_refused_and_makes_nothing, host:redoubt-steward-server::a_session_lists_detaches_and_ends_its_own_domain_s_contexts, host:redoubt-steward::context_free_holds_one_session_per_name, host:redoubt-steward::a_context_is_attached_to_one_channel_at_a_time, host:redoubt-steward-server::a_refused_login_makes_nothing, host:redoubt-steward-server::a_login_to_an_attached_context_takes_it_over, host:redoubt-steward-server::a_takeover_from_a_stalled_channel_still_takes_it_over, host:redoubt-steward-server::closing_the_channel_detaches_the_context_and_a_login_reattaches, host:redoubt-steward-server::sshd_gone_detaches_every_attached_context, host:redoubt-init::principal_and_label_names_hold_no_separator_and_none_is_reserved
 
 A login's session is a **context** of its principal: `ssh alice@box` the default one, whose name
 is empty, `ssh alice.work@box` the context `work` ([sessions](../userland/sessions.md#contexts)).
@@ -560,7 +561,9 @@ is empty, `ssh alice.work@box` the context `work` ([sessions](../userland/sessio
   unknown principal or label set is refused before any machine runs, and a wrong key for a known
   principal runs the blame and session machines before `login_key` refuses it; nothing is counted
   ([R40](#r40-blame-by-label-set) counts server crashes). The difference lies inside one steward
-  call, and how far it shows through SSH is not yet measured ([residual risks](#residual-risks)).
+  call, and SSH's exchange hides it: `steward-login-timing` times thirty refused logins at the
+  client, ten of each kind, and their medians differ by less than their spread
+  ([residual risks](#residual-risks)).
 - **Identity.** A context is (account, label set, name): its sessions are numbered and carved in
   its domain, as every session is, so the same name in another label set is another context, and
   nothing about it crosses the label sets ([R37](#r37-vault-non-interference)).
@@ -592,9 +595,46 @@ is empty, `ssh alice.work@box` the context `work` ([sessions](../userland/sessio
   ([consrelay](consrelay.md#the-consrelay-protocol)).
 - **`sshd`'s end detaches every context.** When `sshd`'s `watch` call ends, every channel has
   gone with it, so the steward detaches each attached context, and the next login reattaches.
-
-A cap on live contexts per label set and an idle expiry for detached ones are planned
-([M2 (usable shell)](../plan/m2-usable-shell.md#the-shell)).
+- **A cap per label set** ([R82](#r82-the-context-cap)). A principal's manifest line carries
+  `contexts=N`: at most N live sessions in each of its label sets, attached or detached, the
+  console's session counted where it runs, since it holds a session's budget as a context does.
+  `init` writes the manifest's `contexts.max`, or by default what one label set's share holds:
+  the share's pages, less a budget's own cost, over a session's pages, or its processes over a
+  session's, whichever is fewer, and at most 16 ([init](init.md#contexts)); for the console's
+  principal `init` refuses a `max` below 2, which would leave it no SSH context. The image's
+  shares each hold two sessions, so alice has one SSH context beside the console in her
+  unlabelled set and two in her vault's, and bob two. A login that would make a context past the
+  cap is refused `cap` by the guard `under_cap`, after `login_key`, `owns_labels`, `not_locked`
+  and the context check, and before anything is carved; no context is evicted for it. A login
+  that reaches a live context, a reattach or a takeover, is never capped. At the client it is the
+  same failed authentication as every other refusal; `sshd` names the code on its console line
+  alone ([sshd](sshd.md#sessions-over-ssh)).
+- **Idle contexts end** ([R83](#r83-idle-contexts-end)). The line's `idle=S` bounds how long a
+  context stays detached: `init` writes the manifest's `contexts.idle_secs`, 60 to 604,800, or by
+  default a day. A detach that finds the context's clock clear starts it, and an attach clears it,
+  so an attached context never ends on it, however old its last detach. The steward runs the
+  timer itself, since a budget's kernel deadline cannot be cleared on a reattach: its receive
+  waits no longer than the next bound (`store::next_idle`), and the event `Idle` then ends each
+  detached context past its bound through `Ending`, its budget, relay and kept output with it,
+  recorded `IdleEnded` with the seconds it was idle. The image keeps the day; a production image
+  sets hours, and the 60 s floor is for the bench's case.
+- **From the session.** A session's own `steward` connection, the minted badge every session
+  holds, carries three operations whose domain is the kernel-stamped one of that badge, never a
+  claim: `contexts` lists the domain's live contexts, one line each of the name (empty for the
+  default context), `attached` or `detached`, and the seconds since its last attach or detach,
+  with no client address; `detach` lets the caller's own channel go, as its close would, and is
+  `unknown` for a session that is no context; `end_context` ends the domain's context of that
+  name as `end_session` ends a session, the caller's own included, which is `exit`. A name
+  outside the caller's domain, another label set's or another principal's, is `unknown`, the
+  answer a name nobody holds gets ([R37](#r37-vault-non-interference)). The shell's
+  `contexts()`, `detach()` and `end_context(name)` call them
+  ([the shell](../userland/shell.md#session-commands)).
+- **Contexts end with the steward.** A steward that dies takes every context with it: `init`
+  reaps `users` ([failure and restart](#failure-and-restart)), `sshd` ends each attached channel,
+  and the new steward starts on an empty table with fresh random ids, so a name never reattaches
+  to anything after a restart: the next login makes a new context. That is the rule for M2 (usable shell).
+  Re-adopting contexts across a restart needs a store that outlives the steward and a kernel
+  lookup of its child budgets, and is planned with [M6 (persist, install, share)](../plan/m6-persist.md).
 
 ### The steward's protocol
 
@@ -969,14 +1009,18 @@ The model found the leak with sequential ids and checks the rule (`PolicySequent
 
 ### R37 (vault non-interference)
 
-Status: built · tested: bench:steward-vault-session, bench:steward-sub-budget-flood, host:redoubt-steward-server::a_vault_login_carves_from_the_vault_s_sub_budget_and_has_no_network
+Status: built · tested: bench:steward-vault-session, bench:steward-sub-budget-flood, bench:shell-contexts, host:redoubt-steward-server::a_vault_login_carves_from_the_vault_s_sub_budget_and_has_no_network, host:redoubt-steward::a_session_sees_and_ends_its_own_domain_s_contexts_only, host:redoubt-steward-server::a_session_lists_detaches_and_ends_its_own_domain_s_contexts
 
 A vault session's work (item writes, requests, calls to a shared server) changes nothing an
 unlabelled session observes: its results, the usage of `users`, of every principal's budget and
 unlabelled sub-budget, and the audit records an unlabelled reader may read. No counter is shared
 across a principal's label sets: sessions and agents are numbered and named per (account, label
 set), as `users/alice/{alice-secrets}/session-1` is, so a vault agent started on approval does not
-move the number of its owner's next unlabelled session. The model checks this
+move the number of its owner's next unlabelled session. A session lists and ends only its own
+domain's contexts, and another label set's name is `unknown`, as a name nobody holds
+([contexts](#contexts)); the model checks it after every operation (its P21), and
+`PolicyContextsAcrossSets` lets a session list and end every label set's contexts of its
+principal. The model checks this
 on kernel results by replaying sequences with the vault's operations removed
 (`steward_noninterference`, its P10). It also checks the order a shared server takes unlabelled
 calls in, which [R2 (fair waiting)](../kernel/ipc.md#r2-fair-waiting) keeps the same whatever a
@@ -1076,6 +1120,33 @@ may show nothing at all: admission refusing a broken embedder, not a leak. The m
 `PolicyBothAttached` attaches the new channel without letting the old one go, and
 `PolicyStaleCloseDetaches` keeps the old id, so the old channel's close detaches the new one.
 
+### R82 (the context cap)
+
+Status: built · tested: bench:steward-context-cap, bench:shell-contexts, host:redoubt-steward::the_cap_refuses_a_new_context_and_keeps_the_oldest, host:redoubt-steward-server::a_login_past_the_cap_is_refused_and_makes_nothing, host:redoubt-init::the_steward_s_sizes_fit_every_principal_s_smallest_share, host:redoubt-model::steward_policy
+
+A principal holds at most its cap of live contexts per label set; a login past it is refused
+after the key and before anything is carved, and no context is evicted for it. The guard
+`under_cap` keeps it, counting only the login's own domain, so one label set's contexts never
+use up another's cap. `init` refuses a cap of 0, one above 16 and one the label set's share
+cannot hold, so the cap, not a failed carve, is what refuses
+([contexts](#contexts)). The model checks it after every operation (its P19): no domain holds
+more live sessions than its cap, and a login is refused `cap` only at it.
+`PolicyNoContextCap` lets every login past, and `PolicyCapAcrossSets` counts every session of
+the principal's account, in every label set, so a vault's contexts refuse an unlabelled login.
+
+### R83 (idle contexts end)
+
+Status: built · tested: bench:steward-context-idle, host:redoubt-steward::idle_ends_a_detached_context_only, host:redoubt-model::steward_policy
+
+A detached context ends at its principal's idle bound; an attached one never does; an attach
+clears the clock. The steward's own timer sends `Idle`, which only a detached context's row
+acts on, past `idle_due` ([contexts](#contexts)). The model sends `Idle` at every tick and
+checks after it (its P20): a detached context ends only once its bound has passed since its idle
+clock started, it has ended once the bound has passed, and an attached one never ends on the
+timer. `PolicyIdleNoBound` ends a detached context at the first tick, however briefly it has
+been idle, and `PolicyIdleClockKept` keeps the clock running across an attach, so a context
+detached again ends by its first detach's clock, before its bound.
+
 ## Failure and restart
 
 Status: built · partly tested: `steward-restart` proves the release of a dead steward's connections by count at `bootfsd`, `erofsd:system`, `walfsd:data` and `ipd`, and at `littlefsd:alice-secrets` only by the code they share, since it opens no vault session · tested: bench:steward-restart, bench:steward-restart-ssh, bench:steward-restart-reboot, bench:steward-session-ends, host:redoubt-steward-server::users_not_empty_is_a_start_failure_before_any_carve, host:redoubt-steward-server::watch_is_held_only_from_sshd_and_malformed_on_any_other_badge
@@ -1124,8 +1195,12 @@ so the case restarts it thirteen times, each time with that session and its conn
 - **A login's refusals are uniform in content, not in time.** An unknown principal or label set
   is refused before any machine runs; a wrong key for a known principal runs the blame and session
   machines before `login_key` refuses it, and nothing is counted. The difference is inside one
-  steward call, behind SSH's key exchange and signature check, and is not yet measured
-  ([contexts](#contexts)).
+  steward call, behind SSH's key exchange and signature check. Measured at the client by
+  `steward-login-timing` on rv64 under QEMU, thirty refusals interleaved, the medians are
+  0.104 s for an unknown principal, 0.105 s for a known one with a wrong key and 0.104 s for an
+  unknown label set, against an interquartile range of 0.103 to 0.105 s over all thirty: the
+  difference is below the jitter, so nothing equalizes it. A faster client link, or many more
+  samples, could still show it ([contexts](#contexts)).
 - **An approved text can carry a hidden message.** Text an agent wrote and a person approved for
   declassification can still hide one; no rule on the item's form prevents that.
 - **A push is one human action,** so a confined domain's input rate is a person's approval rate.

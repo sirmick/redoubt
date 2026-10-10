@@ -1,0 +1,95 @@
+description = "The cap of live contexts per label set (docs/servers/steward.md, \"Contexts\" and R82; docs/userland/sessions.md, \"Contexts\"): bob's share of the image's budget holds two sessions, so his cap is 2. bob.a binds a value and closes its terminal, detached; bob.b logs in and stays; bob.c, a third context, is refused after its key is checked, as Permission denied at the client and Cap at sshd, and nothing is carved for it; bob.a then reattaches, told so, and finds its value: the oldest is never evicted. The verdicts are the steward's audit and sshd's lines, and each session's own output and exit status (rule F)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+recipe = "image/boot.toml"
+# The image needs 1 GiB: the principals' budgets, each holding a shell VM's session, do not fit
+# the users budget 256 MiB leaves (docs/kernel/budgets.md).
+memory_mib = 1024
+# Three shell VMs booted one after another, and a refusal between them.
+timeout_secs = 1500
+expect = [
+    '^init: started sshd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
+    '^init: started steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+]
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    '^init: .* (exited|faulted|was killed)',
+    'init: restarted',
+    'EXCEPTION',
+    'steward: the core exited',
+    'steward: a step failed',
+    'sshd: login bob\.c: session',
+]
+# Each login follows the last one's verdict, so the lines come in one order.
+expect_after = [
+    '^\[con [0-9a-f]{16}\] steward: audit 1002/\{\} at [0-9]+: Login \{ session: [0-9]+, principal: 1, key: [1-9][0-9]*, context: Some\("a"\) \}',
+    '^\[con [0-9a-f]{16}\] sshd: login bob\.a: session [0-9a-f]{16}, labels \[\]$',
+    '^\[con [0-9a-f]{16}\] steward: audit 1002/\{\} at [0-9]+: Login \{ session: [0-9]+, principal: 1, key: [1-9][0-9]*, context: Some\("b"\) \}',
+    '^\[con [0-9a-f]{16}\] sshd: login bob\.b: session [0-9a-f]{16}, labels \[\]$',
+    '^\[con [0-9a-f]{16}\] sshd: login bob\.c: refused \(Cap\)$',
+    '^\[con [0-9a-f]{16}\] steward: audit 1002/\{\} at [0-9]+: Attached \{ session: [0-9]+, key: [1-9][0-9]*, from: "[0-9.]+:[0-9]+", took_over: false \}',
+    '^\[con [0-9a-f]{16}\] sshd: login bob\.a: session [0-9a-f]{16}, labels \[\]$',
+]
+
+# The oldest: binds a value, then closes its terminal and runs on, detached.
+[[session]]
+user = "bob.a"
+pty = true
+steps = [
+    { expect = '\([0-9]+\)> ' },
+    { send = "kept = 41\n" },
+    { expect = '41' },
+    { exit = 0 },
+    { mark = "a-detached" },
+]
+
+# The second: live, attached, until the third is refused.
+[[session]]
+user = "bob.b"
+pty = true
+steps = [
+    { wait = "a-detached" },
+    { expect = '\([0-9]+\)> ' },
+    { mark = "b-up" },
+    { wait = "c-refused" },
+    { exit = 0 },
+    { mark = "b-detached" },
+]
+
+# A third context: past the cap.
+[[session]]
+user = "bob.c"
+steps = [
+    { wait = "b-up" },
+    { expect = 'Permission denied \(publickey\)' },
+    { exit = 255 },
+    { mark = "c-refused" },
+]
+
+# The oldest again: reattached, its value still there.
+[[session]]
+user = "bob.a"
+name = "bob.a-again"
+pty = true
+forbid = ['taken over']
+steps = [
+    { wait = "b-detached" },
+    { expect = '\[context a: reattached\]' },
+    { send = "kept + 1\n" },
+    { expect = '42' },
+    { send = "exit\n" },
+    { exit = 0 },
+]
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]
+forward = [22]

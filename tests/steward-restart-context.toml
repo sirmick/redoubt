@@ -1,0 +1,91 @@
+description = "A context ends with the steward (docs/servers/steward.md, \"Contexts\" and \"Failure and restart\"; docs/userland/sessions.md, \"Contexts\"): alice.work binds a value; the steward, built with its test-only restart-probe, exits 14 s after its console session starts, and init reaps users and every context with it, so sshd ends alice's channel with status 1; her next alice.work login, to the restarted steward, makes a new context: no reattach note and no Attached record, a new session, and the value is not bound in it. A name never reattaches to something that merely reuses it. The verdicts are the steward's audit, init's and sshd's lines, and the session's own output (rule F)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The image's programs, the steward built with its test-only restart-probe (servers/steward,
+# src/bin/steward.rs, PROBE_EXIT): every instance serves, and exits 14 s after its console
+# session starts.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-bootfsd", bin = "bootfsd" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-verityd", bin = "verityd" },
+    { package = "redoubt-netd", bin = "netd" },
+    { package = "redoubt-ipd", bin = "ipd" },
+    { package = "redoubt-walfsd", bin = "walfsd" },
+    { package = "redoubt-erofsd", bin = "erofsd" },
+    { package = "beamlet-redoubt", bin = "beamlet", workspace = "userland/otp" },
+    { package = "redoubt-piped", bin = "piped" },
+    { package = "redoubt-steward-server", bin = "steward", features = ["restart-probe"] },
+    { package = "redoubt-sshd", bin = "sshd" },
+    { package = "redoubt-consrelay", bin = "consrelay" },
+]
+# The principals' budgets, each holding a shell VM's session, need 1 GiB (steward-session-ends).
+memory_mib = 1024
+timeout_secs = 1500
+expect = [
+    '^init: started sshd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
+    '^init: started steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] steward: carved users/alice account 1001: ',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+]
+# Two logins of alice.work, two sessions: the second is no reattach.
+distinct = ['steward: audit 1001/\{\} at [0-9]+: Login \{ session: ([0-9]+), principal: 0, key: [1-9][0-9]*, context: Some\("work"\)']
+expect_after = [
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{\} at [0-9]+: Login \{ session: [0-9]+, principal: 0, key: [1-9][0-9]*, context: Some\("work"\) \}',
+    '^\[con [0-9a-f]{16}\] sshd: session [0-9a-f]{16} ended: the steward is gone$',
+    '^init: restarted steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{\} at [0-9]+: Login \{ session: [0-9]+, principal: 0, key: [1-9][0-9]*, context: Some\("work"\) \}',
+]
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    'steward: users not empty',
+    'Attached \{',
+]
+
+[[file]]
+name = "manifest"
+from = { path = "image/manifest.json" }
+verity = "image/userland.toml"
+
+# The context, until the steward goes: sshd ends its channel with status 1. No terminal, and the
+# shell kept busy, so the input's end detaches nothing and ends nothing before the steward does.
+[[session]]
+user = "alice.work"
+steps = [
+    { expect = '\([0-9]+\)> ' },
+    { send = "kept = 41\n" },
+    { expect = '41' },
+    { send = ":timer.sleep(120_000)\n" },
+    { exit = 1 },
+    { mark = "steward-gone" },
+]
+
+# The same name, to the restarted steward: a new context, nothing of the old one's, until the
+# next restart ends it too.
+[[session]]
+user = "alice.work"
+name = "alice.work-again"
+ssh_args = ["-o", "ProxyCommand=sh -c 'sleep 2; exec nc %h %p'"]
+forbid = ['reattached']
+steps = [
+    { wait = "steward-gone" },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:kept, binding()[:kept]}\n" },
+    { expect = '\{:kept, nil\}' },
+    { send = ":timer.sleep(120_000)\n" },
+    { exit = 1 },
+]
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]
+forward = [22]

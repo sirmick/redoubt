@@ -232,12 +232,13 @@ the first command loads more modules.
 
 The image budgets the VM twice the largest peak the scan finds across its memory cases, in
 `beamlet-footprint`, the one case that scans a shell's VM now that the steward starts the others'
-shells, plus what the VM holds outside its heap, rounded up to 128 pages: 11,136 pages from a
-peak of 5,491 on rv64, with which the single VM boots in 512 MiB
+shells, plus what the VM holds outside its heap, rounded up to 128 pages: 11,136 pages from the
+largest peak, 5,492 on rv64 at two harts (5,491 at one), which its heap cap of 11,092 holds twice
+with 108 to spare, and with which the single VM boots in 512 MiB
 ([budgets](../kernel/budgets.md#the-tree-from-the-boot-manifest)). Outside the heap are 44 pages:
 its two schedulers' 18-page stacks and thread pages, up to five pages of endpoints its locks
 make, and its process's own page. With one scheduler they were 19, and the share was 11,008
-pages, from which the rv64 peak, 5,491 pages, was 3 under the 5,494 at which the share moves up
+pages, from which the rv64 peak then, 5,491 pages at one hart, was 3 under the 5,494 at which the share moves up
 a step of 128; the second scheduler's 25 pages moved it up that step. The rv64 peak may now
 reach 5,546 pages before it moves again ([budgets](../kernel/budgets.md#the-tree-from-the-boot-manifest)).
 The budget was 11,904 pages while every module of the shell's was loaded at its start, the

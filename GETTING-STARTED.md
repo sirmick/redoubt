@@ -158,7 +158,10 @@ Things to try once you have a prompt:
 - Resize the terminal: the shell lays its prompt and screens out again at the new size.
 - Ctrl+\\ ends the screen or job in front of you; Ctrl+D or `exit` ends the session.
 - A named context is a session of its own: log out, then `ssh -p 2222 -i .tmp/launch/id_ed25519
-  alice.work@localhost`. Alice's budget holds her console session and one session over SSH.
+  alice.work@localhost`. Alice's budget holds her console session and one context over SSH, so
+  a second is refused while one lives. Closing the terminal, or `detach()`, leaves the context
+  running for the next login of that name; `contexts()` lists them, and `exit` or
+  `end_context("work")` ends one.
 
 ## Test
 

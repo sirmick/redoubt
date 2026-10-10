@@ -130,10 +130,6 @@ On Redoubt, after M1 (sessions over SSH, kept apart), in this order:
 5. **A native program's screen:** its `cells` frames read and drawn by the session
    ([the shell](../userland/shell.md#a-native-programs-screen-and-the-sessions-key)).
 
-Beside them, **named contexts** ([sessions](../userland/sessions.md#contexts)): what is left is a
-cap per label set and an idle expiry for detached contexts; then the shell's commands to list,
-detach and end contexts.
-
 ### Several harts
 
 A second hart changes every rule that assumes one running thread in the kernel: completions, TLB
@@ -240,4 +236,8 @@ writer at a time: the kernel's lines wait, whole, while a program holds the UART
 steward holds one session per context at a time, and every refusal before a session reads the same
 ([sessions](../userland/sessions.md#contexts)); a context outlives its SSH connection, its console
 kept while detached by a relay in its own budget, and a later login reattaches or takes it over
-([consrelay](../servers/consrelay.md)).
+([consrelay](../servers/consrelay.md)). A principal holds at most its cap of live contexts per
+label set, and a detached context ends at its idle bound
+([R82 (the context cap)](../servers/steward.md#r82-the-context-cap), [R83 (idle contexts end)](../servers/steward.md#r83-idle-contexts-end));
+a session lists, detaches and ends its label set's contexts from the prompt
+([the shell](../userland/shell.md#session-commands)).

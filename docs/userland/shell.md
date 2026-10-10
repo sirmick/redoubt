@@ -213,13 +213,16 @@ The **pager** ([`Redoubt.Screen.Pager`](../../userland/shell/lib/redoubt/screen/
 
 ### Session commands
 
-Status: built · partly tested: `clear()` runs on the host only, in the shell's own ExUnit suite (`test/redoubt/shell/driver_test.exs`); `ns`, `ns_lookup`, `bind` with its refusals and its cap, `whoami` and `labels` run in sessions over SSH on the machine, a vault session's among them, and on the host, where a VM is no session (`test/redoubt/shell/session_test.exs`) · tested: bench:shell-commands
+Status: built · partly tested: `clear()` runs on the host only, in the shell's own ExUnit suite (`test/redoubt/shell/driver_test.exs`); `ns`, `ns_lookup`, `bind` with its refusals and its cap, `whoami` and `labels` run in sessions over SSH on the machine, a vault session's among them, and on the host, where a VM is no session (`test/redoubt/shell/session_test.exs`); `contexts()`, `detach()` and `end_context(name)` run in sessions over SSH on the machine, and on the host only the listing's parse (`test/redoubt/contexts_test.exs`) · tested: bench:shell-commands, bench:shell-contexts
 
 | Command | What it does |
 | --- | --- |
 | `ns()`, `ns_lookup(path)`, `bind(prefix, conn)` | show the namespace; the connection a path resolves to; bind a held connection at a prefix ([binds](files.md#copying-moving-removing-and-binds)) |
 | `whoami()` | the principal, with a named context after a dot (`alice.work`), as the steward told the session ([sessions](sessions.md#what-a-session-is-told)); `nil` for a VM that is no session |
 | `labels()` | the session's label set, the kernel's, by the names the steward gave |
+| `contexts()` | the live contexts of the session's principal in its label set, its own among them: each one's `name` (`""` for the default), `state` (`:attached` or `:detached`) and `age`, the seconds since it was last attached or detached ([contexts](sessions.md#contexts)); this and the two below are `{:error, :no_steward}` in a VM that is no session |
+| `detach()` | close the terminal and leave the context running; `{:error, :unknown}` in a session that is no context |
+| `end_context(name)` | end the context `name` of the session's label set, its own included, as `exit`; `{:error, :unknown}` for any other name, another label set's included |
 | `clear()` | clear the screen; the next prompt is drawn at its top |
 
 Not built:
