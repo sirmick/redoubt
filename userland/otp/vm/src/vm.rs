@@ -172,6 +172,9 @@ pub struct System {
     pub(crate) sleepers: usize,
     /// Helper schedulers parked while offline (`schedulers_online`).
     pub(crate) parked: usize,
+    /// Schedulers that have ended a time slice and not yet asked for their next process: each
+    /// takes one from the run queue itself, and no sleeper is woken for it.
+    pub(crate) taking: usize,
     /// Wake every sleeping scheduler when the lock is next released: a run's result arrived,
     /// the VM halted, or the run is over.
     pub(crate) wake_all: bool,
@@ -585,6 +588,7 @@ impl Vm {
                 running: 0,
                 sleepers: 0,
                 parked: 0,
+                taking: 0,
                 wake_all: false,
                 stopping: false,
                 stuck: false,
@@ -672,6 +676,8 @@ impl Vm {
         sys.watched.insert(pid);
         sys.stopping = false;
         sys.stuck = false;
+        // A helper that stopped at the end of the last run may have ended a slice unpaid.
+        sys.taking = 0;
         let helpers = sys.schedulers - 1;
         let (sys, wakeup) = (&self.sys, &self.wakeup);
         #[cfg(feature = "std")]
@@ -1682,7 +1688,13 @@ fn help(sys: &Lock<System>, wakeup: &Wakeup, index: usize) {
 /// Run one scheduling step: the next process's time slice, with the system unlocked while its
 /// instructions run. `false` when nothing can ever run again.
 fn schedule(sched: &mut Sched<'_>) -> bool {
-    let next = sched.lock().next();
+    let next = {
+        let mut sys = sched.lock();
+        if core::mem::take(&mut sched.owes) {
+            sys.taking = sys.taking.saturating_sub(1);
+        }
+        sys.next()
+    };
     match next {
         Next::Stuck => false,
         Next::Again => true,
@@ -1693,7 +1705,12 @@ fn schedule(sched: &mut Sched<'_>) -> bool {
         Next::Run(mut p) => {
             let before = p.reductions;
             let stop = interp::run(sched, &mut p);
-            sched.lock().finish(p, before, stop);
+            let mut sys = sched.lock();
+            sys.finish(p, before, stop);
+            // This scheduler takes its next process itself ([`Sched::owes`]).
+            sys.taking += 1;
+            drop(sys);
+            sched.owes = true;
             true
         }
     }

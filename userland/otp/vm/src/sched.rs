@@ -66,6 +66,9 @@ pub struct Sched<'v> {
     /// What calls resolved to, as of code generation `resolved_at`.
     resolved: BTreeMap<(usize, usize, u32), Target>,
     resolved_at: usize,
+    /// This scheduler ended a time slice and is counted in [`System::taking`] until it asks for
+    /// its next process, or parks.
+    pub(crate) owes: bool,
 }
 
 impl<'v> Sched<'v> {
@@ -81,6 +84,7 @@ impl<'v> Sched<'v> {
             literals: s.literals.clone(),
             resolved: BTreeMap::new(),
             resolved_at: s.generations.code.load(Ordering::Acquire),
+            owes: false,
         }
     }
 
@@ -93,9 +97,17 @@ impl<'v> Sched<'v> {
     }
 
     /// Wait while `parked` holds, checking it under the lock so no wakeup is missed.
-    pub fn park_while(&self, parked: impl Fn(&System) -> bool) {
+    pub fn park_while(&mut self, parked: impl Fn(&System) -> bool) {
         let mut sys = self.sys.lock();
         while parked(&sys) {
+            if core::mem::take(&mut self.owes) {
+                sys.taking = sys.taking.saturating_sub(1);
+            }
+            // A helper going offline leaves what it would have taken, and the timers and the
+            // platform if nobody else runs, to a sleeping scheduler.
+            if sys.sleepers > 0 && (sys.running == 0 || !sys.run_queue.is_empty()) {
+                self.wakeup.wake_all();
+            }
             sys.parked += 1;
             sys = self.wakeup.wait(sys);
             sys.parked -= 1;
@@ -182,7 +194,9 @@ impl Drop for SysGuard<'_> {
             if s.sleepers + s.parked > 0 {
                 self.wakeup.wake_all();
             }
-        } else if s.sleepers > 0 && !s.run_queue.is_empty() {
+        } else if s.sleepers > 0 && s.run_queue.len() > s.taking {
+            // More work than the schedulers ending a time slice take next themselves: a process
+            // that yields stays on its scheduler rather than waking another for each slice.
             // Parked schedulers wait on the same condvar and would swallow a single wakeup.
             if s.parked > 0 {
                 self.wakeup.wake_all();
