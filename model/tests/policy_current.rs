@@ -14,7 +14,7 @@ fn login(st: &mut Steward, name: &str, labels: &[u64]) -> u64 {
     static CONTEXTS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let context = format!("c{}", CONTEXTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
     let key = if name == "alice" { 11 } else { 21 };
-    match st.login(name, labels, &context, key) {
+    match st.login(name, labels, &context, key, "") {
         Some(Answer::Session { id, .. }) => id,
         other => panic!("login {name} {labels:?}: {other:?}"),
     }

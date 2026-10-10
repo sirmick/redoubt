@@ -215,13 +215,22 @@ and its kernel objects.
   budget and its own page. The shell's VMs are not among them: the steward carves each session
   from its principal's sub-budget under `users`, from the top budgets the manifest names, 47,624
   pages for Alice and 32,768 for Bob ([the steward](../servers/steward.md#fixed-sub-budgets-per-label-set)).
-  A session is 11,008 pages: a heap cap of twice the largest peak of beamlet's runtime heap
-  across the memory cases plus its stack, rounded up to 128
-  ([beamlet](../userland/beamlet.md#what-the-vm-holds-at-its-prompt)), from a peak of 5,459 pages
-  on rv64 and 5,277 on rv32. It was 11,904 while the shell loaded every command's module at its
-  start, when the peak was 5,904. The scan's cap rule bounds it from below: an rv64 peak above
-  5,494 pages puts the cap, 10,989 pages, under twice the peak, and the size then moves up a step
-  of 128. The bench and
+  A session is 11,136 pages, its VM's share and its console relay's. The VM's is 11,008 pages: a
+  heap cap of twice the largest peak of beamlet's runtime heap across the memory cases plus its
+  stack, rounded up to 128 ([beamlet](../userland/beamlet.md#what-the-vm-holds-at-its-prompt)),
+  from a peak of 5,459 pages on rv64 and 5,277 on rv32. It was 11,904 while the shell loaded every
+  command's module at its start, when the peak was 5,904. The scan's cap rule bounds it from
+  below: an rv64 peak above 5,494 pages puts the cap, 10,989 pages, under twice the peak, and the
+  share then moves up a step of 128. The relay's is 128 pages: its image (about 21 pages on
+  rv64), its four stacks (5, 4, 4 and 4 pages), a heap cap of twice its 22-page peak
+  (`consrelay-footprint`), and what the kernel charges for a process, rounded up to 128
+  ([consrelay](../servers/consrelay.md#the-bound)). The steward gives the VM the session's pages
+  less the relay's, as its `budget_pages` and its heap cap, so the relay's room is never the VM's.
+  The console session has no relay and its VM the same share. A session holds ten processes: its
+  VM, its relay, its pipe server `piped` and up to seven stages
+  ([native programs](../userland/native.md)). `piped` and the stages draw for now on the VM's
+  share, inside the headroom twice its peak leaves; they are to get their own measured share the
+  way the relay has. The bench and
   `mkimage`'s instructions give the image 1 GiB ([the image](../../image/README.md)). The bound
   is a fixed count, not a share
   of RAM, because `init`'s needs do not grow with the machine, nor with the size of a program it

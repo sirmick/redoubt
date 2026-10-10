@@ -8,7 +8,7 @@ use crate::typed::{self, Layout, Words};
 
 /// `login`: opcode 1, buffer; reply [`LoginReply`].
 ///
-/// Handle slots: `console` (slot 0, endpoint).
+/// Handle slots: `console` (slot 0, endpoint), `relay` (slot 1, endpoint).
 /// Kinds are documentation, checked by use: a handle of the wrong kind gets `WrongObject`
 /// on first use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -16,6 +16,7 @@ pub struct Login<'a> {
     pub principal: &'a str,
     pub label: &'a str,
     pub context: &'a str,
+    pub from: &'a str,
     pub key: &'a [u8],
 }
 
@@ -169,7 +170,7 @@ pub struct WatchReply {}
 
 /// Requests by opcode.
 const REQUESTS: &[Layout] = &[
-    Layout { opcode: 1, inline: false, handles: 1 },
+    Layout { opcode: 1, inline: false, handles: 2 },
     Layout { opcode: 2, inline: true, handles: 0 },
     Layout { opcode: 3, inline: false, handles: 0 },
     Layout { opcode: 4, inline: true, handles: 0 },
@@ -206,7 +207,7 @@ impl<'a> Message<'a> {
     /// The handles it carries, by slot.
     pub fn handle_names(&self) -> &'static [&'static str] {
         match self {
-            Message::Login(_) => &["console"],
+            Message::Login(_) => &["console", "relay"],
             Message::ChannelClosed(_) => &[],
             Message::ApprovalOpened(_) => &[],
             Message::ApprovalClosed(_) => &[],
@@ -247,6 +248,7 @@ impl<'a> Message<'a> {
                 w.string(m.principal)?;
                 w.string(m.label)?;
                 w.string(m.context)?;
+                w.string(m.from)?;
                 w.bytes(m.key)
             }
             Message::ChannelClosed(m) => w.u64(m.session),
@@ -299,7 +301,7 @@ impl<'a> Message<'a> {
 
     fn read_buffer(opcode: u32, r: &mut Reader<'a>) -> Result<Self, Error> {
         Ok(match opcode {
-            1 => Message::Login(Login { principal: r.string()?, label: r.string()?, context: r.string()?, key: r.bytes()? }),
+            1 => Message::Login(Login { principal: r.string()?, label: r.string()?, context: r.string()?, from: r.string()?, key: r.bytes()? }),
             2 => Message::ChannelClosed(ChannelClosed { session: r.u64()? }),
             3 => Message::ApprovalOpened(ApprovalOpened { principal: r.string()?, key: r.bytes()? }),
             4 => Message::ApprovalClosed(ApprovalClosed { channel: r.u64()? }),

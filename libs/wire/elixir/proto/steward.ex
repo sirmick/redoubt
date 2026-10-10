@@ -13,7 +13,7 @@ defmodule Redoubt.Wire.Proto.Steward do
 
   # opcode => {name, shape, handles}; replies are keyed by their request's opcode.
   @requests %{
-    1 => {:login, :buffer, 1},
+    1 => {:login, :buffer, 2},
     2 => {:channel_closed, :inline, 0},
     3 => {:approval_opened, :buffer, 0},
     4 => {:approval_closed, :inline, 0},
@@ -68,9 +68,9 @@ defmodule Redoubt.Wire.Proto.Steward do
   Handle kinds, from the table: documentation, checked by use (a handle of the wrong kind
   gets `WrongObject` on first use).
 
-  - `login`: `console` (slot 0, endpoint)
+  - `login`: `console` (slot 0, endpoint), `relay` (slot 1, endpoint)
   """
-  def layout(:login), do: {1, :buffer, [{:principal, :string}, {:label, :string}, {:context, :string}, {:key, :bytes}], [:console], {[{:session, :u64}, {:name, :string}, {:labels, :bytes}], []}}
+  def layout(:login), do: {1, :buffer, [{:principal, :string}, {:label, :string}, {:context, :string}, {:from, :string}, {:key, :bytes}], [:console, :relay], {[{:session, :u64}, {:name, :string}, {:labels, :bytes}], []}}
   def layout(:channel_closed), do: {2, :inline, [{:session, :u64}], [], {[], []}}
   def layout(:approval_opened), do: {3, :buffer, [{:principal, :string}, {:key, :bytes}], [], {[{:channel, :u64}], []}}
   def layout(:approval_closed), do: {4, :inline, [{:channel, :u64}], [], {[], []}}
@@ -107,7 +107,7 @@ defmodule Redoubt.Wire.Proto.Steward do
   @doc "Decodes a request written into a 9P file."
   def decode_file(bytes), do: W.decode_file(bytes, @requests, &read(:request, &1, &2))
 
-  defp enc(:request, :login, %{principal: v_principal, label: v_label, context: v_context, key: v_key} = f) when map_size(f) == 4, do: {1, [W.str(v_principal), W.str(v_label), W.str(v_context), W.bytes(v_key)]}
+  defp enc(:request, :login, %{principal: v_principal, label: v_label, context: v_context, from: v_from, key: v_key} = f) when map_size(f) == 5, do: {1, [W.str(v_principal), W.str(v_label), W.str(v_context), W.str(v_from), W.bytes(v_key)]}
   defp enc(:reply, :login, %{session: v_session, name: v_name, labels: v_labels} = f) when map_size(f) == 3, do: {1, [W.u(v_session, 64), W.str(v_name), W.bytes(v_labels)]}
   defp enc(:request, :channel_closed, %{session: v_session} = f) when map_size(f) == 1, do: {2, [W.u(v_session, 64)]}
   defp enc(:reply, :channel_closed, %{} = f) when map_size(f) == 0, do: {2, []}
@@ -135,7 +135,7 @@ defmodule Redoubt.Wire.Proto.Steward do
   defp enc(:reply, :watch, %{} = f) when map_size(f) == 0, do: {13, []}
   defp enc(_, _, _), do: throw({:wire, :bad_message})
 
-  defp read(:request, 1, <<n_principal::little-16, v_principal::binary-size(n_principal), n_label::little-16, v_label::binary-size(n_label), n_context::little-16, v_context::binary-size(n_context), n_key::little-32, v_key::binary-size(n_key), rest::binary>>), do: W.utf8([v_principal, v_label, v_context], {:ok, :login, %{principal: v_principal, label: v_label, context: v_context, key: v_key}, rest})
+  defp read(:request, 1, <<n_principal::little-16, v_principal::binary-size(n_principal), n_label::little-16, v_label::binary-size(n_label), n_context::little-16, v_context::binary-size(n_context), n_from::little-16, v_from::binary-size(n_from), n_key::little-32, v_key::binary-size(n_key), rest::binary>>), do: W.utf8([v_principal, v_label, v_context, v_from], {:ok, :login, %{principal: v_principal, label: v_label, context: v_context, from: v_from, key: v_key}, rest})
   defp read(:reply, 1, <<v_session::little-64, n_name::little-16, v_name::binary-size(n_name), n_labels::little-32, v_labels::binary-size(n_labels), rest::binary>>), do: W.utf8([v_name], {:ok, :login, %{session: v_session, name: v_name, labels: v_labels}, rest})
   defp read(:request, 2, <<v_session::little-64, rest::binary>>), do: {:ok, :channel_closed, %{session: v_session}, rest}
   defp read(:reply, 2, <<rest::binary>>), do: {:ok, :channel_closed, %{}, rest}

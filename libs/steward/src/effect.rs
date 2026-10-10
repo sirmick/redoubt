@@ -109,6 +109,26 @@ pub enum Step {
     DestroyBudget {
         budget: Token,
     },
+    /// A context's console relay, launched in `budget`: it serves the session's `/dev/cons`
+    /// (servers/steward.md, "Contexts").
+    LaunchRelay {
+        token: Token,
+        budget: Token,
+    },
+    /// The login's channel console, kept under `console`, given to `relay` after `note` is
+    /// written to it.
+    Attach {
+        relay: Token,
+        console: Token,
+        note: String,
+    },
+    /// `relay` writes `note` to the channel under `console` and lets it go; the console is given
+    /// back, which tells `sshd` the channel's session is over.
+    Detach {
+        relay: Token,
+        console: Token,
+        note: String,
+    },
     /// Read one item of the volume of `labels`, through a budget carrying them, or (`None`) the
     /// steward's own read.
     Read {

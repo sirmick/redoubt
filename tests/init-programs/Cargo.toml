@@ -82,6 +82,11 @@ name = "keeper"
 path = "src/bin/keeper.rs"
 test = false
 
+[[bin]]
+name = "hello-sink"
+path = "src/bin/hello-sink.rs"
+test = false
+
 [lib]
 test = false
 doctest = false

@@ -130,7 +130,7 @@ Miri both crates take their portable Rust paths. Those two assembly blocks are r
 
 ### Sessions over SSH
 
-<details><summary>Status: built · tested (21)</summary>
+<details><summary>Status: built · tested (23)</summary>
 
 - bench:steward-ssh-resize
 - bench:steward-ssh-two-principals
@@ -150,6 +150,8 @@ Miri both crates take their portable Rust paths. Those two assembly blocks are r
 - host:redoubt-sshd::an_ended_session_reads_the_end_and_cannot_write
 - host:redoubt-sshd::the_console_is_one_file_carrying_the_channel_s_labels
 - host:redoubt-sshd::consol_size_is_the_pty_s_and_a_resize_is_due_when_it_changes
+- host:redoubt-sshd::a_login_s_two_consoles_and_only_the_steward_s_ends_the_channel
+- host:redoubt-sshd::only_a_pty_channel_s_end_of_input_closes_the_terminal
 - host:redoubt-sshd::a_slot_returns_when_the_client_hangs_up_first
 - host:redoubt-sshd::a_slot_returns_when_the_server_ends_the_connection_first
 - bench:steward-restart-ssh
@@ -171,8 +173,10 @@ Miri both crates take their portable Rust paths. Those two assembly blocks are r
   `alice+secrets.work`); `approve` takes no label and no context
   ([contexts](../userland/sessions.md#contexts)). `sshd` rejects a login key that `keyd` holds
   (`holds`), then asks the steward whose key it is with the typed call `login(principal, label,
-  context, key, console)`; the steward checks every part again and answers with a session, or
-  refuses ([steward](steward.md#contexts)). `sshd` parses the name only to split it and refuses
+  context, from, key, console, relay)`; the steward checks every part again and answers with a
+  session, or refuses ([steward](steward.md#contexts)). `from` is the client's address,
+  `a.b.c.d:port`, which `sshd` reads from `ipd`'s `/tcp/N/remote` for the connection, or empty
+  if `ipd` does not say: only the steward's notes of a context's takeover show it. `sshd` parses the name only to split it and refuses
   nothing on it: a user name outside the grammar goes to the steward as the empty principal,
   which no manifest names, so every refusal after a verified signature takes the one path and
   says nothing about which names exist. Login keys are the person's own and never live in `keyd`
@@ -208,6 +212,15 @@ Miri both crates take their portable Rust paths. Those two assembly blocks are r
   its standard streams are pipes the session serves through its `piped`, and what it writes
   reaches the channel only as the session draws it
   ([native programs](../userland/native.md#standard-input-and-output-and-pipes)).
+- **Two connections to a channel's console.** A login mints two, and sends both to the steward:
+  the steward keeps the first and hands the second to the context's console relay
+  ([consrelay](consrelay.md)), which serves the session's own `/dev/cons` and forwards it here.
+  Both read and write the channel, under its label check; only `consol`'s `ended` through the
+  steward's ends it (`console::Consoles`), so neither the relay nor anything in the session can
+  end its channel, and once the steward has, the relay's reads find the end and its writes are
+  refused. The channel's skeleton is sized for this: two buckets, `sshd`'s own, through which it
+  mints, and the session's account; and two connections in the first, one login's, since a
+  channel has one login at a time.
 - **Randomness.** The program provides `getrandom`'s `__getrandom_v03_custom`, the only source
   `getrandom` has on bare metal, and it writes all of the buffer it is given before it returns
   `Ok`: `getrandom` then reads every byte as initialised
@@ -235,9 +248,16 @@ Miri both crates take their portable Rust paths. Those two assembly blocks are r
   steward's endpoint for its next instance (a second's pause first if the call ended at once).
   A login, or a channel's close, waits at most 30 seconds for the steward's answer and is then
   refused, so a steward that is slow to come back holds no slot.
-- **Ending.** A session's channel closes when the steward ends the session or its VM dies, which
-  the steward tells `sshd` with `ended` on the channel's connection; a closed channel ends the
-  session.
+- **Ending.** A channel closes when the steward lets it go: when its session ends or its VM
+  dies, or when a login takes its context over; the steward tells `sshd` with `ended` on its own
+  connection, and `sshd` closes the channel with status 0. A channel the client closes, or a pty
+  channel whose input it ends once the session has read it all (the person closed the terminal), is
+  reported to the steward (`channel_closed`), and in the second case closed with status 0; the
+  steward detaches the context: the session runs on, and the next login of the context reattaches
+  it ([steward](steward.md#contexts)); a read on that channel finds no end of file until the
+  channel ends, after the steward's detach. On a channel without a pty (`ssh alice@box < file`)
+  the end of input is the input's own end: the session reads it as the end of the file, through
+  its context's relay, and the channel stays until the session ends or the client closes it.
 
 ```mermaid
 sequenceDiagram
@@ -361,13 +381,17 @@ so such a session still cannot authenticate there with a `keyd` key.
 
 ## Failure and restart
 
-Status: planned · M1 (sessions over SSH, kept apart)
+Status: built · tested: bench:sshd-restart-detaches, host:redoubt-sshd::a_refused_signature_fails_the_exchange
 
-- **`sshd` crashes:** every SSH connection drops; sessions lose their channel and are ended by the
-  steward. `init` restarts `sshd` ([init](init.md#restarts-and-reboots)).
+- **`sshd` crashes:** every SSH connection drops; the steward sees its `watch` call end and
+  detaches every context, which runs on until a login reattaches it. `init` restarts `sshd`
+  ([init](init.md#restarts-and-reboots)). The restarted instance is handed its predecessor's badge
+  at `ipd`, and with it that one's sockets, which outlive their owner until they are closed or
+  aborted ([ipd](ipd.md#the-net-tree)): its listener on port 22 would take every new connection and
+  never accept it. So at its start `sshd` reads `/tcp` and aborts every socket the badge holds, then
+  sends `Tversion`, which clunks every fid the predecessor left
+  ([serving](serving.md#the-9p-server-skeleton)), before it attaches and listens.
 - **`keyd` fails a signature:** the key exchange fails and the client sees a closed connection.
-
-**Open:** none. A closed channel ends its session (above); there is no reattaching.
 
 ## Residual risks
 

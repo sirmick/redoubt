@@ -15,6 +15,13 @@ pub enum Record {
         /// The context, `None` for the console's session.
         context: Option<String>,
     },
+    /// A login attached to a live context, taking it over from another channel or not.
+    Attached {
+        session: u64,
+        key: u64,
+        from: String,
+        took_over: bool,
+    },
     AgentStarted {
         lease: u64,
         sponsor: usize,

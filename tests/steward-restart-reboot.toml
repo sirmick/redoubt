@@ -17,6 +17,7 @@ programs = [
     { package = "redoubt-piped", bin = "piped" },
     { package = "redoubt-steward-server", bin = "steward" },
     { package = "redoubt-sshd", bin = "sshd" },
+    { package = "redoubt-consrelay", bin = "consrelay" },
 ]
 memory_mib = 1024
 timeout_secs = 400

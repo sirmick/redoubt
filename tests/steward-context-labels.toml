@@ -1,0 +1,129 @@
+description = "A context is its label set's, and its relay writes only to channels of its labels (docs/servers/steward.md, \"Contexts\" and R80; docs/servers/consrelay.md, \"Authority\"; servers/serving.md R25): alice's vault context alice+alice-secrets.shared binds a value and closes her terminal with a line still running, whose result the VM writes while detached; her unlabelled login alice.shared, the same name in another label set, is a new context, not that one; a steward built with the test-only label-probe, a broken embedder, also hands the vault context's relay the unlabelled channel's console, and sshd refuses the relay's calls there (its console's admission, or its label check), so the vault's output never reaches that channel, which answers its own context before and after the vault VM's late write; the vault's next login reattaches and is replayed the output the relay kept. The verdicts are the steward's audit and probe lines, sshd's lines, the unlabelled channel's own answers and forbid from sshd, and the vault channel's replay from the relay (rule F)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The image's programs, the steward built with its test-only label-probe (servers/steward,
+# src/bin/steward.rs, probe_cross).
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-bootfsd", bin = "bootfsd" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-verityd", bin = "verityd" },
+    { package = "redoubt-netd", bin = "netd" },
+    { package = "redoubt-ipd", bin = "ipd" },
+    { package = "redoubt-walfsd", bin = "walfsd" },
+    { package = "redoubt-erofsd", bin = "erofsd" },
+    { package = "beamlet-redoubt", bin = "beamlet", workspace = "userland/otp" },
+    { package = "redoubt-piped", bin = "piped" },
+    { package = "redoubt-steward-server", bin = "steward", features = ["label-probe"] },
+    { package = "redoubt-sshd", bin = "sshd" },
+    { package = "redoubt-consrelay", bin = "consrelay" },
+]
+# The principals' budgets, each holding a shell VM's session, need 1 GiB (steward-session-ends).
+memory_mib = 1024
+# Two contexts' shell VMs, and the windows below.
+timeout_secs = 1500
+expect = [
+    '^init: started sshd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
+    '^init: started steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] steward: carved users/alice account 1001: ',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+]
+# The steward's steps run before it says a login's records, and both before it answers sshd.
+expect_after = [
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{7\} at [0-9]+: Login \{ session: [0-9]+, principal: 0, key: [1-9][0-9]*, context: Some\("shared"\) \}',
+    '^\[con [0-9a-f]{16}\] sshd: login alice\+alice-secrets\.shared: session [0-9a-f]{16}, labels \[7\]$',
+    # The unlabelled login of the same name: a new context, whose attach the probe follows 3 s
+    # later by handing the vault's relay the same channel.
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{\} at [0-9]+: Login \{ session: [0-9]+, principal: 0, key: [1-9][0-9]*, context: Some\("shared"\) \}',
+    '^\[con [0-9a-f]{16}\] sshd: login alice\.shared: session [0-9a-f]{16}, labels \[\]$',
+    '^\[con [0-9a-f]{16}\] steward: label-probe: the labelled relay was handed another channel: true$',
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{7\} at [0-9]+: Attached \{ session: [0-9]+, key: [1-9][0-9]*, from: "[0-9.]+:[0-9]+", took_over: false \}',
+    '^\[con [0-9a-f]{16}\] sshd: login alice\+alice-secrets\.shared: session [0-9a-f]{16}, labels \[7\]$',
+]
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    '^init: .* (exited|faulted|was killed)',
+    'init: restarted',
+    'EXCEPTION',
+    'steward: the core exited',
+]
+
+[[file]]
+name = "manifest"
+from = { path = "image/manifest.json" }
+verity = "image/userland.toml"
+
+# The vault context. Its last line runs once the terminal has closed: 30 s on, while the probe
+# has its relay on the unlabelled channel, the VM writes its result, which the relay keeps.
+[[session]]
+user = "alice+alice-secrets.shared"
+name = "vault"
+pty = true
+steps = [
+    { expect = '\([0-9]+\)> ' },
+    { send = "secret = 41\n" },
+    { expect = '41' },
+    { send = "Process.sleep(30_000); \"vault-\" <> \"late-\" <> \"41\"\n" },
+    # The shell's echo: the VM has the line before the terminal closes.
+    { expect = 'Process\.sleep\(30_000\)' },
+    { exit = 0 },
+    { mark = "vault-detached" },
+]
+
+# The same name unlabelled: its own context. The probe hands the vault's relay its channel too,
+# 3 s after its own relay was given it, and leaves it there across the vault VM's late write. `sshd`
+# refuses the vault relay's calls on that channel, so the channel stays its own context's: its
+# prompt and answers before the late write and after it, and nothing of the vault's.
+[[session]]
+user = "alice.shared"
+name = "plain"
+forbid = ['vault-late', 'reattached', 'secret']
+steps = [
+    { wait = "vault-detached" },
+    { expect = '\([0-9]+\)> ' },
+    { send = "\"plain-\" <> \"before\"\n" },
+    { expect = 'plain-before' },
+    { mark = "plain-in" },
+    { wait = "vault-replayed" },
+    { send = "\"plain-\" <> \"after\"\n" },
+    { expect = 'plain-after' },
+    { mark = "plain-done" },
+    { wait = "vault-again-done" },
+    { exit = 0 },
+]
+
+# The vault again, 45 s after the unlabelled login started: past the VM's late write, 30 s after
+# the detach. Reattached, told so, and replayed what the relay kept, which went nowhere else; its
+# attach takes the unlabelled channel from its relay.
+[[session]]
+user = "alice+alice-secrets.shared"
+name = "vault-again"
+pty = true
+ssh_args = ["-o", "ProxyCommand=sh -c 'sleep 45; exec nc %h %p'"]
+forbid = ['taken over']
+steps = [
+    { wait = "plain-in" },
+    { expect = '\[context shared: reattached\]' },
+    { expect = 'vault-late-41' },
+    { mark = "vault-replayed" },
+    { wait = "plain-done" },
+    { send = "secret + 1\n" },
+    { expect = '42' },
+    { send = "exit\n" },
+    { exit = 0 },
+    { mark = "vault-again-done" },
+]
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]
+forward = [22]

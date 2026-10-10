@@ -124,11 +124,14 @@ defmodule Redoubt.Steward.Trace do
   defp hash("shown"), do: :shown
   defp hash(h), do: Base.decode16!(h, case: :mixed)
 
-  # `context=` may be left out: the default context, the empty name.
+  # `context=` and `from=` may be left out: the default context, and no address.
   defp kind("Login", f) do
     context = if f["context"], do: unquote_(f["context"]), else: ""
-    {:login, unquote_(f["principal"]), list(f["labels"]), context, num(f["key"])}
+    from = if f["from"], do: unquote_(f["from"]), else: ""
+    {:login, unquote_(f["principal"]), list(f["labels"]), context, num(f["key"]), from}
   end
+
+  defp kind("SshdGone", _), do: :sshd_gone
 
   defp kind("Console", f), do: {:console, unquote_(f["principal"])}
   defp kind("ChannelClosed", f), do: {:channel_closed, num(f["session"])}
@@ -309,6 +312,8 @@ defmodule Redoubt.Steward.Trace do
 
   defp record({:login, s, p, k, c}), do: "Login session=#{s} principal=#{p} key=#{k} context=#{context_of(c)}"
 
+  defp record({:attached, s, k, f, t}), do: "Attached session=#{s} key=#{k} from=#{qs(f)} took_over=#{t}"
+
   defp record({:agent_started, l, s, p, d}),
     do: "AgentStarted lease=#{l} sponsor=#{s} parent=#{opt(p)} deadline=#{d}"
 
@@ -358,6 +363,9 @@ defmodule Redoubt.Steward.Trace do
     do: "launch token=#{tok(t)} budget=#{tok(b)} connections=[#{Enum.map_join(c, ",", &tok/1)}]"
 
   defp step({:destroy_budget, b}), do: "destroy-budget budget=#{tok(b)}"
+  defp step({:launch_relay, t, b}), do: "launch-relay token=#{tok(t)} budget=#{tok(b)}"
+  defp step({:attach, r, c, n}), do: "attach relay=#{tok(r)} console=#{tok(c)} note=#{qs(n)}"
+  defp step({:detach, r, c, n}), do: "detach relay=#{tok(r)} console=#{tok(c)} note=#{qs(n)}"
 
   defp step({:read, t, th, l, item}),
     do: "read token=#{tok(t)} through=#{through(th)} labels=#{list_(l)} item=#{item}"
@@ -406,7 +414,8 @@ defmodule Redoubt.Steward.Trace do
             "blame=#{camel(b.state)} times=#{list_(b.times)} until=#{b.until}\n",
           for x <- sorted(st.sessions) do
             "  session id=#{x.id} state=#{camel(x.state)} principal=#{x.principal} key=#{x.key} " <>
-              "context=#{context_of(x.context)} badge=#{x.badge} number=#{x.number} reply=#{x.reply}\n"
+              "context=#{context_of(x.context)} badge=#{x.badge} number=#{x.number} reply=#{x.reply} " <>
+              "attachment=#{x.attachment} from=#{qs(x.from)}\n"
           end,
           for x <- sorted(st.leases) do
             "  lease id=#{x.id} state=#{camel(x.state)} principal=#{x.principal} badge=#{x.badge} " <>
@@ -431,10 +440,13 @@ defmodule Redoubt.Steward.Trace do
     routes = for {b, {d, k, id}} <- Enum.sort(store.routes), do: "route #{b} #{k}@#{dom(d)}##{id}\n"
     ids = for {id, {d, k}} <- Enum.sort(store.ids), do: "id #{id} #{k}@#{dom(d)}\n"
 
+    attachments =
+      for {a, {d, id}} <- Enum.sort(store.attachments), do: "attachment #{a} session@#{dom(d)}##{id}\n"
+
     channels =
       for c <- sorted(store.channels),
           do: "channel id=#{c.id} state=#{camel(c.state)} principal=#{c.principal} key=#{c.key}\n"
 
-    [domains, routes, ids, channels, "exited #{store.exited}\n"]
+    [domains, routes, ids, attachments, channels, "exited #{store.exited}\n"]
   end
 end

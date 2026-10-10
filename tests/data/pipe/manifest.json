@@ -29,7 +29,7 @@
       "receives": ["consoled"],
       "args": ["buckets=4"] },
     { "name": "bootfsd", "program": "bootfsd",
-      "stack_pages": "4", "heap_pages": "2176",
+      "stack_pages": "4", "heap_pages": "2304",
       "budget": { "pages": "4096", "processes": 1, "weight": 100 },
       "receives": ["bootfsd"],
       "args": ["buckets=5"] },
@@ -80,7 +80,7 @@
       "receives": ["erofsd:system"],
       "args": ["endpoint=erofsd:system", "buckets=5"] },
     { "name": "steward", "program": "steward",
-      "stack_pages": "8", "heap_pages": "28",
+      "stack_pages": "9", "heap_pages": "30",
       "budget": { "pages": "1024", "processes": 1, "weight": 100 },
       "receives": ["steward"],
       "handed": [ { "endpoint": "bootfsd", "badge": "7" }, { "endpoint": "erofsd:system", "badge": "7" },
@@ -93,7 +93,7 @@
       "handed": [ { "endpoint": "ipd", "badge": "6" }, { "endpoint": "keyd", "badge": "1" },
                   { "endpoint": "steward", "badge": "1" } ] }
   ],
-  "public": ["beamlet", "piped", "pipe-stage", "screen-stage"],
+  "public": ["beamlet", "piped", "consrelay", "pipe-stage", "screen-stage"],
   "labels": [ { "name": "alice-secrets", "owner": "alice", "id": "7" } ],
   "principals": [
     { "name": "alice", "account": "1001",
@@ -108,7 +108,7 @@
       "home": "data:/home/bob", "home_quota": "8388608" }
   ],
   "steward": { "server": "steward",
-    "sizes": { "session": { "pages": "11008", "processes": 10, "weight": 100 },
+    "sizes": { "session": { "pages": "11136", "processes": 10, "weight": 100 },
                "agent": { "pages": "4096", "processes": 1, "weight": 50 },
                "sub_agent": { "pages": "1024", "processes": 1, "weight": 10 },
                "crossing": { "pages": "64", "processes": 1, "weight": 1 },

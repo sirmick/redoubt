@@ -12,6 +12,7 @@ pub enum State {
     Starting,
     Ending,
     Running,
+    Detached,
     Ended,
 }
 
@@ -30,6 +31,8 @@ pub enum Event {
     EndSession,
     ChannelClosed,
     Exited,
+    Detach,
+    Attach,
     LockedOut,
 }
 
@@ -77,11 +80,13 @@ pub fn dispatch(p: &Policy, cx: &mut Cx<'_>, from: Option<State>, event: Event) 
                     Ok(()) => break 'row,
                     Err(r) => cx.refused(r),
                 }
-                (p.refuse)(cx);
+                (p.take_over)(cx);
                 return Next::Nothing;
             }
             (p.carve_session)(cx);
             (p.create_scope)(cx);
+            (p.launch_relay)(cx);
+            (p.attach_relay)(cx);
             (p.connect)(cx);
             (p.launch)(cx);
             Next::To(State::Starting)
@@ -101,7 +106,7 @@ pub fn dispatch(p: &Policy, cx: &mut Cx<'_>, from: Option<State>, event: Event) 
             (p.launch)(cx);
             Next::To(State::Starting)
         }
-        (None, Event::Done | Event::Failed | Event::EndSession | Event::ChannelClosed | Event::Exited | Event::LockedOut) => Next::NoRow,
+        (None, Event::Done | Event::Failed | Event::EndSession | Event::ChannelClosed | Event::Exited | Event::Detach | Event::Attach | Event::LockedOut) => Next::NoRow,
         (Some(State::Starting), Event::Done) => {
             'row: {
                 match (p.not_locked)(cx) {
@@ -131,6 +136,13 @@ pub fn dispatch(p: &Policy, cx: &mut Cx<'_>, from: Option<State>, event: Event) 
         (Some(State::Starting), Event::Exited) => {
             Next::Unreachable
         }
+        (Some(State::Starting), Event::Detach) => {
+            Next::Unreachable
+        }
+        (Some(State::Starting), Event::Attach) => {
+            (p.refuse_in_use)(cx);
+            Next::Stay
+        }
         (Some(State::Starting), Event::LockedOut) => {
             Next::Stay
         }
@@ -152,15 +164,26 @@ pub fn dispatch(p: &Policy, cx: &mut Cx<'_>, from: Option<State>, event: Event) 
         (Some(State::Ending), Event::Exited) => {
             Next::Unreachable
         }
+        (Some(State::Ending), Event::Detach) => {
+            Next::Unreachable
+        }
+        (Some(State::Ending), Event::Attach) => {
+            Next::Unreachable
+        }
         (Some(State::Ending), Event::LockedOut) => {
             Next::Stay
         }
         (Some(State::Ending), Event::Login | Event::Console) => Next::NoRow,
         (Some(State::Running), Event::Done) => {
-            Next::Unreachable
+            (p.reply_login)(cx);
+            Next::Stay
         }
         (Some(State::Running), Event::Failed) => {
-            Next::Unreachable
+            (p.refuse)(cx);
+            (p.unroute)(cx);
+            (p.drop_requests)(cx);
+            (p.destroy_budget)(cx);
+            Next::To(State::Ending)
         }
         (Some(State::Running), Event::EndSession) => {
             (p.unroute)(cx);
@@ -170,16 +193,24 @@ pub fn dispatch(p: &Policy, cx: &mut Cx<'_>, from: Option<State>, event: Event) 
             Next::To(State::Ending)
         }
         (Some(State::Running), Event::ChannelClosed) => {
-            (p.unroute)(cx);
-            (p.drop_requests)(cx);
-            (p.destroy_budget)(cx);
-            Next::To(State::Ending)
+            (p.detach_relay)(cx);
+            Next::To(State::Detached)
         }
         (Some(State::Running), Event::Exited) => {
             (p.unroute)(cx);
             (p.drop_requests)(cx);
             (p.destroy_budget)(cx);
             Next::To(State::Ending)
+        }
+        (Some(State::Running), Event::Detach) => {
+            (p.detach_relay)(cx);
+            Next::To(State::Detached)
+        }
+        (Some(State::Running), Event::Attach) => {
+            (p.detach_relay)(cx);
+            (p.attach_relay)(cx);
+            (p.audit_attached)(cx);
+            Next::Stay
         }
         (Some(State::Running), Event::LockedOut) => {
             (p.unroute)(cx);
@@ -188,6 +219,46 @@ pub fn dispatch(p: &Policy, cx: &mut Cx<'_>, from: Option<State>, event: Event) 
             Next::To(State::Ending)
         }
         (Some(State::Running), Event::Login | Event::Console) => Next::NoRow,
-        (Some(State::Ended), Event::Login | Event::Console | Event::Done | Event::Failed | Event::EndSession | Event::ChannelClosed | Event::Exited | Event::LockedOut) => Next::NoRow,
+        (Some(State::Detached), Event::Done) => {
+            Next::Stay
+        }
+        (Some(State::Detached), Event::Failed) => {
+            (p.unroute)(cx);
+            (p.drop_requests)(cx);
+            (p.destroy_budget)(cx);
+            Next::To(State::Ending)
+        }
+        (Some(State::Detached), Event::EndSession) => {
+            (p.unroute)(cx);
+            (p.drop_requests)(cx);
+            (p.reply_ok)(cx);
+            (p.destroy_budget)(cx);
+            Next::To(State::Ending)
+        }
+        (Some(State::Detached), Event::ChannelClosed) => {
+            Next::Stay
+        }
+        (Some(State::Detached), Event::Exited) => {
+            (p.unroute)(cx);
+            (p.drop_requests)(cx);
+            (p.destroy_budget)(cx);
+            Next::To(State::Ending)
+        }
+        (Some(State::Detached), Event::Detach) => {
+            Next::Stay
+        }
+        (Some(State::Detached), Event::Attach) => {
+            (p.attach_relay)(cx);
+            (p.audit_attached)(cx);
+            Next::To(State::Running)
+        }
+        (Some(State::Detached), Event::LockedOut) => {
+            (p.unroute)(cx);
+            (p.drop_requests)(cx);
+            (p.destroy_budget)(cx);
+            Next::To(State::Ending)
+        }
+        (Some(State::Detached), Event::Login | Event::Console) => Next::NoRow,
+        (Some(State::Ended), Event::Login | Event::Console | Event::Done | Event::Failed | Event::EndSession | Event::ChannelClosed | Event::Exited | Event::Detach | Event::Attach | Event::LockedOut) => Next::NoRow,
     }
 }

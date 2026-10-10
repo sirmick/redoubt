@@ -34,12 +34,14 @@ pub struct Event {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EventKind {
     // From `sshd`.
-    /// `context` is the context's name, empty for the principal's default one.
+    /// `context` is the context's name, empty for the principal's default one; `from` the
+    /// client's address as `sshd` read it, which only a takeover's notes show.
     Login {
         principal: String,
         labels: Vec<u64>,
         context: String,
         key: u64,
+        from: String,
     },
     /// The console principal's session on the UART: the steward's own event, at its start and
     /// whenever that session ends. No key: the manifest named the principal for the console. In
@@ -47,10 +49,13 @@ pub enum EventKind {
     Console {
         principal: String,
     },
-    /// The SSH channel of session `session` closed.
+    /// The SSH channel of attachment `session` closed: the id a login's reply gave it.
     ChannelClosed {
         session: u64,
     },
+    /// `sshd` is gone (its `watch` ended): every channel it held is, so every attached context
+    /// is detached.
+    SshdGone,
     ApprovalOpened {
         channel: u64,
         principal: String,

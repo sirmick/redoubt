@@ -1,0 +1,17 @@
+[package]
+name = "redoubt-consrelay"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "consrelay: a context's console, kept across SSH channels (servers/consrelay.md)"
+
+[[bin]]
+name = "consrelay"
+path = "src/bin/consrelay.rs"
+
+[dependencies]
+redoubt-client = { path = "../../libs/client" }
+redoubt-rt = { path = "../../libs/rt" }
+
+[dev-dependencies]
+redoubt-fake-kernel = { path = "../../libs/rt/fake" }

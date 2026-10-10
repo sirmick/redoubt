@@ -1,0 +1,103 @@
+description = "sshd's end detaches every context, and the next login reattaches (docs/servers/steward.md, \"Contexts\" and R80; docs/servers/sshd.md, \"Failure and restart\"): alice logs in and binds a value in her context; a second login of hers, to the context restart-sshd, ends sshd (its test-only restart-probe), every channel with it; the steward sees its held watch call abandoned and detaches her context, whose VM runs on; init restarts sshd, and her next login reattaches without a takeover, told so, and finds the value; `exit` then ends the context. The verdicts are the steward's audit (took_over: false: the context was detached, not taken over from a dead channel), init's and sshd's lines and each ssh's exit status (rule F)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The image's programs, sshd built with its test-only restart-probe (servers/sshd,
+# src/bin/sshd.rs, PROBE_EXIT): a login to the context restart-sshd ends the instance.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-bootfsd", bin = "bootfsd" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-verityd", bin = "verityd" },
+    { package = "redoubt-netd", bin = "netd" },
+    { package = "redoubt-ipd", bin = "ipd" },
+    { package = "redoubt-walfsd", bin = "walfsd" },
+    { package = "redoubt-erofsd", bin = "erofsd" },
+    { package = "beamlet-redoubt", bin = "beamlet", workspace = "userland/otp" },
+    { package = "redoubt-piped", bin = "piped" },
+    { package = "redoubt-steward-server", bin = "steward" },
+    { package = "redoubt-sshd", bin = "sshd", features = ["restart-probe"] },
+    { package = "redoubt-consrelay", bin = "consrelay" },
+]
+# The principals' budgets, each holding a shell VM's session, need 1 GiB (steward-session-ends).
+memory_mib = 1024
+# Two shell VMs booted, and sshd's restart between them.
+timeout_secs = 1500
+expect = [
+    '^init: started sshd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
+    '^init: started steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] steward: carved users/alice account 1001: ',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+]
+# The sessions run once the lines above are in; what they cause follows, in order.
+expect_after = [
+    '^\[con [0-9a-f]{16}\] sshd: login alice: session [0-9a-f]{16}, labels \[\]$',
+    '^\[con [0-9a-f]{16}\] sshd: restart-probe: exiting$',
+    '^init: restarted sshd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{\} at [0-9]+: Attached \{ session: [0-9]+, key: [1-9][0-9]*, from: "[0-9.]+:[0-9]+", took_over: false \}',
+    '^\[con [0-9a-f]{16}\] sshd: login alice: session [0-9a-f]{16}, labels \[\]$',
+    # `exit` ends the context: only the console session's VM is left in her budget.
+    '^\[con [0-9a-f]{16}\] steward: users/alice/\{\} holds [0-9]+ pages, 10 processes$',
+]
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    'init: restarted steward',
+    'EXCEPTION',
+    'steward: the core exited',
+]
+
+[[file]]
+name = "manifest"
+from = { path = "image/manifest.json" }
+verity = "image/userland.toml"
+
+# Attached when sshd ends: her channel goes with it. Her ssh gives up on the dead connection
+# within seconds, should the box leave its TCP connection open.
+[[session]]
+user = "alice"
+ssh_args = ["-o", "ServerAliveInterval=2", "-o", "ServerAliveCountMax=3"]
+steps = [
+    { expect = '\([0-9]+\)> ' },
+    { send = "kept = 41\n" },
+    { expect = '41' },
+    { mark = "alice-up" },
+    { wait = "sshd-gone" },
+    { exit = 255 },
+    { mark = "alice-dropped" },
+]
+
+# The probe: authenticated as alice, its login ends sshd before any channel opens.
+[[session]]
+user = "alice.restart-sshd"
+name = "probe"
+steps = [{ wait = "alice-up" }, { exit = 255 }, { mark = "sshd-gone" }]
+
+# After the restart: her ssh reaches the box 15 s after the first one dropped, by then served
+# by the restarted sshd. Reattached, not taken over: the steward detached her context.
+[[session]]
+user = "alice"
+name = "alice-again"
+ssh_args = ["-o", "ProxyCommand=sh -c 'sleep 15; exec nc %h %p'"]
+forbid = ['taken over']
+steps = [
+    { wait = "alice-dropped" },
+    { expect = '\[context default: reattached\]' },
+    { send = "kept + 1\n" },
+    { expect = '42' },
+    { send = "exit\n" },
+    { exit = 0 },
+]
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]
+forward = [22]

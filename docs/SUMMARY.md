@@ -44,6 +44,7 @@
   - [sshd](servers/sshd.md)
   - [consoled](servers/consoled.md)
   - [piped](servers/piped.md)
+  - [consrelay](servers/consrelay.md)
   - [Packages](servers/pkg.md)
   - [The supervisor](servers/supervisor.md)
 

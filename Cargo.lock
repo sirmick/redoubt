@@ -657,6 +657,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "redoubt-consrelay"
+version = "0.1.0"
+dependencies = [
+ "redoubt-client",
+ "redoubt-fake-kernel",
+ "redoubt-rt",
+]
+
+[[package]]
 name = "redoubt-doccheck"
 version = "0.1.0"
 

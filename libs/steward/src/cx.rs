@@ -62,6 +62,11 @@ pub(crate) enum Raised {
     SessionEnded {
         request: Object,
     },
+    /// A login, fully authenticated, names a live context: it attaches to that session, taking
+    /// it over if it is attached. The login's key and address are in the event.
+    Attach {
+        object: Object,
+    },
 }
 
 /// What a `decide` emits, and the event's fresh words.

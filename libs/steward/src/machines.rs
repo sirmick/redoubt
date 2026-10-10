@@ -210,6 +210,7 @@ pub(crate) fn run_in<M: Machine>(
         Next::To(s) if M::is_final(s) => {
             M::remove(cx.state, id);
             cx.index.ids.remove(&id);
+            cx.index.attachments.retain(|_, (_, s)| *s != id);
         }
         Next::To(s) => M::set(cx.state, id, s),
         Next::Stay => {}
@@ -326,6 +327,8 @@ fn open_session(
         badge,
         number: 0,
         reply: event.reply,
+        attachment: id,
+        from: String::new(),
     };
     insert(store, domain, Kind::Session, id, |st| {
         st.sessions.insert(id, s);
@@ -338,7 +341,7 @@ fn open_session(
 pub(crate) fn external(store: &mut Store, event: &Event, out: &mut Out) {
     let call = Call::of(event);
     match &event.kind {
-        EventKind::Login { principal, labels, context, key } => {
+        EventKind::Login { principal, labels, context, key, .. } => {
             // Before the key is checked, every refusal is the bad key's: an unknown principal, a
             // label set the manifest does not give it and a context that is not a name are told
             // apart from a wrong key by nobody (servers/steward.md, "Contexts").
@@ -362,12 +365,19 @@ pub(crate) fn external(store: &mut Store, event: &Event, out: &mut Out) {
             open_session(store, &call, event, out, p, &domain, 0, None, gen::session::Event::Console);
         }
         EventKind::ChannelClosed { session } => {
-            let Some((domain, Kind::Session)) = store.index.ids.get(session).cloned() else {
+            // A channel is named by its attachment; one no context holds now names nothing.
+            let Some((domain, id)) = store.index.attachments.get(session).cloned() else {
                 return unknown(event, out);
             };
-            let next =
-                run::<SessionM>(store, &call, out, &domain, *session, gen::session::Event::ChannelClosed);
+            let next = run::<SessionM>(store, &call, out, &domain, id, gen::session::Event::ChannelClosed);
             answered(next, event, out);
+        }
+        EventKind::SshdGone => {
+            // Every channel went with `sshd`: each attached context is detached.
+            let attached: Vec<(Domain, u64)> = store.index.attachments.values().cloned().collect();
+            for (domain, id) in attached {
+                run::<SessionM>(store, &call, out, &domain, id, gen::session::Event::Detach);
+            }
         }
         EventKind::ApprovalOpened { .. } | EventKind::ApprovalClosed { .. } => channel(store, event, out),
         EventKind::StartAgent { badge, lease } => {
@@ -557,6 +567,9 @@ pub(crate) fn internal(store: &mut Store, event: &Event, raised: Raised, out: &m
             }
             _ => {}
         },
+        Raised::Attach { object } => {
+            run::<SessionM>(store, &call, out, &object.domain, object.id, gen::session::Event::Attach);
+        }
         Raised::SessionEnded { request } => {
             run::<RequestM>(
                 store,

@@ -57,8 +57,17 @@ impl Chan {
         }
     }
 
+    /// Whether the person closed the terminal: the channel has a pty, the client sends no more,
+    /// and the session has read all it sent. Without a pty the end of input is the input's own
+    /// end (`ssh alice@box < file`), which the session reads as the file's end.
+    pub fn terminal_closed(&self) -> bool {
+        self.window.is_some() && self.input_ended && self.input.is_empty()
+    }
+
     /// Whether a read waiting now could be answered.
-    pub fn readable(&self) -> bool { !self.input.is_empty() || self.input_ended || self.ended.is_some() }
+    pub fn readable(&self) -> bool {
+        !self.input.is_empty() || (self.input_ended && self.window.is_none()) || self.ended.is_some()
+    }
 
     /// Whether a write waiting now could be answered.
     pub fn writable(&self) -> bool { self.output.len() < MAX_OUTPUT || self.ended.is_some() }
@@ -84,10 +93,26 @@ impl Chan {
 /// What the file and the session hold of the channel.
 pub type Shared = Rc<RefCell<Chan>>;
 
-/// What one channel's skeleton holds: the session's console connection, its fids and its parked
-/// reads and writes. Two buckets: the platform's own (account 0, through which it mints the
-/// console) and the session's account and labels.
+/// What one channel's skeleton holds: the session's two console connections, their fids and
+/// their parked reads and writes. Two buckets: the platform's own (account 0, through which it
+/// mints the consoles) and the session's account and labels. `state` is 2 because a login mints
+/// two connections and a channel has one login at a time ([`Consoles`]).
 pub const LIMITS: Limits = Limits { buckets: 2, in_flight: 4, files: 8, state: 2, requests: 64, pages: 4 };
+
+/// The two connections a login mints to its channel's console (servers/sshd.md, "A pty
+/// session"): the steward's, which it keeps, and the one the steward hands the context's console
+/// relay. Both read and write the channel; only the steward's ends it with `consol`'s `ended`, so
+/// what runs in the context's budget can neither end its channel nor keep it past its end.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Consoles {
+    pub steward: u64,
+    pub relay: u64,
+}
+
+impl Consoles {
+    /// Whether an `ended` through `badge` ends the channel.
+    pub fn may_end(&self, badge: u64) -> bool { badge == self.steward }
+}
 
 /// The session's `/dev/cons`, one file. A connection reaches it only through the connection the
 /// platform minted for the session at its login; an attach through any other badge is refused.
@@ -123,14 +148,17 @@ impl FileServer for Cons {
         Ok(qid())
     }
 
-    /// Input, the end of the file once the session or the client has ended, or a wait.
+    /// Input, the end of the file once the session or the client's input has ended, or a wait. A
+    /// pty channel's input ending is a closed terminal, not the end of a file: its read waits for
+    /// the channel's end, which follows the steward's detach ([`Chan::terminal_closed`]).
     fn read(&mut self, _: &Caller, _: &File, _offset: u64, out: &mut [u8]) -> Result<Read, NineError> {
         let mut chan = self.chan.borrow_mut();
         if out.is_empty() {
             return Ok(Read::Done(0));
         }
         if chan.input.is_empty() {
-            return Ok(if chan.input_ended || chan.ended.is_some() { Read::Done(0) } else { Read::Wait });
+            let end = (chan.input_ended && chan.window.is_none()) || chan.ended.is_some();
+            return Ok(if end { Read::Done(0) } else { Read::Wait });
         }
         let n = out.len().min(chan.input.len());
         for (slot, byte) in out.iter_mut().zip(chan.input.drain(..n)) {

@@ -19,6 +19,7 @@ programs = [
     { package = "redoubt-piped", bin = "piped" },
     { package = "redoubt-steward-server", bin = "steward", features = ["restart-probe"] },
     { package = "redoubt-sshd", bin = "sshd" },
+    { package = "redoubt-consrelay", bin = "consrelay" },
 ]
 # The principals' budgets, each holding a shell VM's session, need 1 GiB (steward-session-ends).
 memory_mib = 1024
@@ -54,22 +55,28 @@ name = "manifest"
 from = { path = "image/manifest.json" }
 verity = "image/userland.toml"
 
-# Alice's shell is busy when the steward goes, so closing her input does not end her session:
-# only the steward's end can, and sshd ends her channel with status 1.
+# Alice stays attached, her shell busy, until the steward goes: she closes her input only once
+# bob is in, after the restart. Only the steward's end ends her channel, and sshd ends it with
+# status 1.
 [[session]]
 user = "alice"
 steps = [
     { expect = '\([0-9]+\)> ' },
     { send = ":timer.sleep(120_000)\n" },
+    { mark = "alice-up" },
+    { wait = "bob-in" },
     { exit = 1 },
-    { mark = "alice-ended" },
 ]
 
+# bob's ssh reaches the box 14 s after alice is up, past the first steward's end (14 s after the
+# console session, which comes before alice's login), so he logs in to the restarted one; a
+# login during the restart waits for it. He stays in until the third login is: two
+# connections at once after alice's ended.
 [[session]]
 user = "bob"
-# bob stays in until the third login is: two connections at once after alice's ended.
+ssh_args = ["-o", "ProxyCommand=sh -c 'sleep 14; exec nc %h %p'"]
 steps = [
-    { wait = "alice-ended" },
+    { wait = "alice-up" },
     { expect = '\([0-9]+\)> ' },
     { mark = "bob-in" },
     { wait = "third-in" },

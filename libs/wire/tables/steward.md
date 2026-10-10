@@ -10,7 +10,7 @@ message is accepted only on its badge class: `sshd`'s root badge (`login`, `chan
 <!-- wire: steward -->
 | Opcode | Message | Fields | Reply |
 | --- | --- | --- | --- |
-| 1 | `login` | `principal: string`, `label: string`, `context: string`, `key: bytes`, `console: handle[0] endpoint` | `session: u64`, `name: string`, `labels: bytes` |
+| 1 | `login` | `principal: string`, `label: string`, `context: string`, `from: string`, `key: bytes`, `console: handle[0] endpoint`, `relay: handle[1] endpoint` | `session: u64`, `name: string`, `labels: bytes` |
 | 2 | `channel_closed` | `session: u64` | - |
 | 3 | `approval_opened` | `principal: string`, `key: bytes` | `channel: u64` |
 | 4 | `approval_closed` | `channel: u64` | - |

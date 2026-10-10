@@ -130,9 +130,8 @@ On Redoubt, after M1 (sessions over SSH, kept apart), in this order:
 5. **A native program's screen:** its `cells` frames read and drawn by the session
    ([the shell](../userland/shell.md#a-native-programs-screen-and-the-sessions-key)).
 
-Beside them, **named contexts** ([sessions](../userland/sessions.md#contexts)): a context that
-outlives its SSH connection, reattached or taken over, its console kept while detached by a relay
-in its own budget, a cap per label set and an idle expiry; then the shell's commands to list,
+Beside them, **named contexts** ([sessions](../userland/sessions.md#contexts)): what is left is a
+cap per label set and an idle expiry for detached contexts; then the shell's commands to list,
 detach and end contexts.
 
 ### Several harts
@@ -236,4 +235,6 @@ writer at a time: the kernel's lines wait, whole, while a program holds the UART
 (`bench:console-one-writer`, `bench:console-hold-stuck`), so the real-time reference
 `sched-latency-tcg` runs at 2 harts ([devices](../kernel/devices.md#the-consoles-one-writer)). For named contexts: a login names its context, `ssh alice.work@box`, the
 steward holds one session per context at a time, and every refusal before a session reads the same
-([sessions](../userland/sessions.md#contexts)).
+([sessions](../userland/sessions.md#contexts)); a context outlives its SSH connection, its console
+kept while detached by a relay in its own budget, and a later login reattaches or takes it over
+([consrelay](../servers/consrelay.md)).

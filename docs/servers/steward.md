@@ -227,6 +227,7 @@ default. The model swaps one entry for a broken one.
 | `login_key`, `approval_key` | a login uses only one of the principal's login keys and an approval channel only one of its approval keys; the boot manifest fixes both sets and `keyd`'s keys, and keeps all three apart ([R35 (key separation)](init.md#r35-key-separation)). The mutations widen a guard to the key an attacker could sign with: one `keyd` holds, or a login key | `PolicyLoginWithKeydKey`, `PolicyApproveWithLoginKey` |
 | `owns_labels` | a vault login, a labelled agent, a declassification or a push needs the labels' owner, read from the manifest's owned labels, never from a domain's existence; a login it refuses is answered as a wrong key is ([contexts](#contexts)) | `PolicyVaultWithoutOwnership` |
 | `context_free` | [R79 (one session per context)](#r79-one-session-per-context) | `PolicyContextTwice` |
+| `take_over`, `detach_relay` | [R80 (one channel per context)](#r80-one-channel-per-context): a takeover only after every authentication guard; the channel taken over let go before the new one is attached; a channel's attachment id forgotten when it is let go | `PolicyTakeoverBeforeAuth`, `PolicyBothAttached`, `PolicyStaleCloseDetaches` |
 | `caller_unlabelled` | a labelled session or agent starts nothing; it only submits requests | `PolicyLabelledStartsAgent` |
 | `agent_own_set` | an agent request names a labelled agent: a labelled caller's, exactly its own label set, so its lease and records stay in its domain (R37); an unlabelled agent is `StartAgent`'s | `PolicyAgentOtherSet` |
 | `not_locked`, `blame_window` | R40 | `PolicyNoLockout`, `PolicyBlameNoWindow` |
@@ -293,7 +294,7 @@ so the steward still holds no key.
   kernel's error, and each sub-budget's usage when it changes, before it answers the call that
   caused them.
 - **The model** binds the same crate to the kernel model, in place of its own copy of the
-  policy, so the property families (P1 to P16) and the mutations attack the code that ships. The
+  policy, so the property families (P1 to P18) and the mutations attack the code that ships. The
   model's families drive events; its checks read the core's state through a read-only
   inspection API that the server does not use.
 - **The Elixir reference** (`libs/steward/elixir/`, its clause skeletons generated from the same
@@ -467,8 +468,10 @@ Status: built · tested: bench:steward-home-quota, bench:init-refuses-overcommit
 - **Login.** `sshd` runs SSH and asks the steward whose key a login used. The steward accepts only
   one of that principal's login keys, never a key `keyd` holds, and `sshd` itself refuses any key
   `keyd` holds ([keyd](keyd.md)). The model checks both (its P2; `PolicyLoginWithKeydKey`).
-  When the session ends, the steward tells its console with one `ended` message on the
-  connection the login carried, then releases it.
+  A login carries two connections to its channel's console: the steward keeps the first and
+  hands the second to the context's relay ([contexts](#contexts)). When the channel is let go,
+  the steward tells the first `ended`, then releases it; only that one ends the channel
+  ([sshd](sshd.md#sessions-over-ssh)).
 - **A session** is processes started with capabilities derived from the principal's set, never
   more. The steward carves the session budget from the right sub-budget, with the principal's
   account and the session's labels, gives it a namespace of fresh connections it asked each server
@@ -534,7 +537,7 @@ sequenceDiagram
 
 ### Contexts
 
-Status: built · tested: bench:steward-context-login, bench:steward-login-refused, host:redoubt-steward::a_login_s_refusals_tell_nothing_apart, host:redoubt-steward::context_free_holds_one_session_per_name, host:redoubt-steward-server::a_refused_login_makes_nothing, host:redoubt-steward-server::a_live_context_is_refused_in_use, host:redoubt-init::principal_and_label_names_hold_no_separator_and_none_is_reserved
+Status: built · tested: bench:steward-context-login, bench:steward-login-refused, bench:steward-session-ends, host:redoubt-steward::a_login_s_refusals_tell_nothing_apart, host:redoubt-steward::context_free_holds_one_session_per_name, host:redoubt-steward::a_context_is_attached_to_one_channel_at_a_time, host:redoubt-steward-server::a_refused_login_makes_nothing, host:redoubt-steward-server::a_login_to_an_attached_context_takes_it_over, host:redoubt-steward-server::a_takeover_from_a_stalled_channel_still_takes_it_over, host:redoubt-steward-server::closing_the_channel_detaches_the_context_and_a_login_reattaches, host:redoubt-steward-server::sshd_gone_detaches_every_attached_context, host:redoubt-init::principal_and_label_names_hold_no_separator_and_none_is_reserved
 
 A login's session is a **context** of its principal: `ssh alice@box` the default one, whose name
 is empty, `ssh alice.work@box` the context `work` ([sessions](../userland/sessions.md#contexts)).
@@ -556,18 +559,41 @@ is empty, `ssh alice.work@box` the context `work` ([sessions](../userland/sessio
 - **Identity.** A context is (account, label set, name): its sessions are numbered and carved in
   its domain, as every session is, so the same name in another label set is another context, and
   nothing about it crosses the label sets ([R37](#r37-vault-non-interference)).
-- **One session at a time.** A login naming a context whose session lives, and is not already
-  ending, is refused `in_use` ([R79](#r79-one-session-per-context)). The console's session is no
-  context. The audit record of a login carries its context.
+- **One session at a time.** A context has at most one session ([R79](#r79-one-session-per-context)).
+  A login naming a context whose session is still starting is refused `in_use`; one naming a
+  context that runs reaches that session, as below. The console's session is no context. The
+  audit record of a login carries its context, and each later attach is recorded `Attached`
+  with its key, the client's address and whether it took the context over.
+- **A context outlives its channel.** Its VM's `/dev/cons` is served by a console relay,
+  [`consrelay`](consrelay.md), that the steward launches in the session's budget beside the VM
+  and attaches to one SSH channel at a time ([R80](#r80-one-channel-per-context)). The session's
+  budget holds 128 pages for it, and the VM is told the rest as its `budget_pages` and capped
+  there ([budgets](../kernel/budgets.md#the-tree-from-the-boot-manifest)). Closing that
+  channel detaches the context: the relay lets the channel go, the steward gives its console back
+  (`sshd` closes the channel with status 0), and the VM runs on, its output kept by the relay.
+  `exit`, a VM that ends, and the steward's other ends still end the session.
+- **Reattach and takeover.** A login to a detached context attaches the new channel, which is
+  told `[context NAME: reattached]` before the kept output. A login to an attached context takes
+  it over, only after every authentication guard has passed: the old channel is told
+  `[context NAME taken over from ADDRESS at up XhYm]` and ended, and the new one is told
+  `[context NAME: reattached; taken over from OLD-ADDRESS]`. The addresses are the clients',
+  which `sshd` reads from `ipd`'s `/tcp/N/remote`; the steward builds both notes, so the relay
+  writes only text it was given. Each attach answers the login with a fresh attachment id, the
+  name `sshd` gives the channel's close: a close naming an id let go names nothing and changes
+  nothing. A takeover from a channel that has stopped reading still takes the context over, and
+  that channel may close untold: the relay gives up on the note after 150 ms, and a relay's
+  `detach` that runs past its 1 s bound is counted as done, since the relay lets the channel go
+  as it takes the call and only the old channel's note was late
+  ([consrelay](consrelay.md#the-consrelay-protocol)).
+- **`sshd`'s end detaches every context.** When `sshd`'s `watch` call ends, every channel has
+  gone with it, so the steward detaches each attached context, and the next login reattaches.
 
-A context that outlives its SSH connection (detached, then reattached or taken over), its
-console's output kept while detached, a cap on live contexts per label set and an idle expiry are
-planned with a per-context console relay ([M2 (usable shell)](../plan/m2-usable-shell.md#the-shell)); until then
-a context's session ends as every session does.
+A cap on live contexts per label set and an idle expiry for detached ones are planned
+([M2 (usable shell)](../plan/m2-usable-shell.md#the-shell)).
 
 ### The steward's protocol
 
-Status: built · tested: bench:steward-login-refused, host:redoubt-steward-server::every_operation_on_another_badge_class_is_malformed, host:redoubt-steward-server::closing_the_channel_destroys_the_session_and_its_exit_is_late
+Status: built · tested: bench:steward-login-refused, host:redoubt-steward-server::every_operation_on_another_badge_class_is_malformed, host:redoubt-steward-server::closing_the_channel_detaches_the_context_and_a_login_reattaches
 
 The steward serves one typed protocol, its table `libs/wire/tables/steward.md`, included by this
 page. Its sessions' operation is `login` (from `sshd`); the operations for leases, approvals and
@@ -1016,13 +1042,34 @@ item's labels.
 
 ### R79 (one session per context)
 
-Status: built · tested: bench:steward-context-login, host:redoubt-steward::context_free_holds_one_session_per_name, host:redoubt-steward-server::a_live_context_is_refused_in_use, host:redoubt-model::steward_policy
+Status: built · tested: bench:steward-context-login, host:redoubt-steward::context_free_holds_one_session_per_name, host:redoubt-steward-server::a_login_to_an_attached_context_takes_it_over, host:redoubt-model::steward_policy
 
 A domain holds at most one live session of a context's name: a login naming a context whose
-session is starting or running is refused `in_use`, and nothing is carved for it. The guard
-`context_free` keeps it, reading only the login's own domain, so a name in another label set or
-of another principal is never looked at. The model checks it after every operation (its P17;
-`PolicyContextTwice`).
+session lives carves nothing. While that session starts the login is refused `in_use`; once it
+runs, the login reaches it ([R80](#r80-one-channel-per-context)). The guard `context_free` keeps
+it, reading only the login's own domain, so a name in another label set or of another principal
+is never looked at. The model checks it after every operation (its P17; `PolicyContextTwice`).
+
+### R80 (one channel per context)
+
+Status: built · tested: bench:steward-context-login, bench:steward-session-ends, bench:steward-context-labels, bench:sshd-restart-detaches, host:redoubt-steward::a_context_is_attached_to_one_channel_at_a_time, host:redoubt-steward-server::a_login_to_an_attached_context_takes_it_over, host:redoubt-steward-server::closing_the_channel_detaches_the_context_and_a_login_reattaches, host:redoubt-steward-server::sshd_gone_detaches_every_attached_context, host:redoubt-sshd::a_login_s_two_consoles_and_only_the_steward_s_ends_the_channel, host:redoubt-model::steward_policy
+
+A context's console is attached to at most one SSH channel, and only to a channel of a login
+that passed every authentication guard for that context's own domain. A takeover lets the old
+channel go, told who took it, before the new one is attached, and the old channel's attachment
+id names nothing from then on, so its close cannot detach the new one. Only the steward's own
+connection ends a channel; the relay's, in the context's budget, can read and write it but not
+end it or keep it past its end ([sshd](sshd.md#sessions-over-ssh)). The relay runs in the context's
+budget, so every write it makes to a channel carries the context's labels and meets `sshd`'s
+label check (R25) a second time. `steward-context-labels` attacks that second check: a steward
+built with a test-only probe, a broken embedder, also hands a vault context's relay the console
+of an unlabelled login's channel; `sshd` refuses the relay's writes there, so the vault VM's
+output stays in the relay and only the vault's next login is shown it. The relay's calls may also
+take that channel's session bucket at `sshd`, whose console admits two, so the unlabelled channel
+may show nothing at all: admission refusing a broken embedder, not a leak. The model checks the attachment rules after every operation
+(its P18): `PolicyTakeoverBeforeAuth` takes over before the key is checked,
+`PolicyBothAttached` attaches the new channel without letting the old one go, and
+`PolicyStaleCloseDetaches` keeps the old id, so the old channel's close detaches the new one.
 
 ## Failure and restart
 
@@ -1049,6 +1096,10 @@ session's namespace hangs under one of these, so the disconnect frees them all, 
 and over leaves no session's connections holding the servers' admission. Revoking the handles
 alone would not do it: a server tracks no exits and keeps a connection whose holders are gone
 until it is disconnected.
+
+**The steward learns of `sshd`'s end the same way:** the held `watch` call is abandoned, and the
+steward detaches every attached context ([contexts](#contexts)); each runs on, detached, until a
+login reattaches it.
 
 **`sshd` learns of the steward's end from the kernel.** It keeps one `watch` call at the steward,
 accepted on its root badge only and held, unanswered, for as long as the steward runs; a dying
@@ -1083,6 +1134,12 @@ so the case restarts it thirteen times, each time with that session and its conn
   guard stays, exercised by the model and the traces.
 - **Steward work is paid by the steward.** A principal's requests cost the steward's budget and
   time, bounded by its caps and per-request work, not by the requester's budget.
+- **A context's relay holds the steward's one thread for a bounded time.** The steward waits up to
+  2 s for a relay's `hello` at each SSH login that starts a context, and up to 1 s for each
+  `attach` and `detach`, so a relay that never answers delays every other principal's call by that
+  much, outside [R26 (admission fairness)](serving.md#r26-admission-fairness), which orders calls
+  but cannot shorten one in service. The relay runs in the context's budget and shares the VM's
+  CPU, so a VM that keeps its harts busy slows its own relay's answers toward those bounds.
 - **Blame follows the current call.** A request that corrupts a server which crashes later, while
   serving someone else, blames the wrong account, and one that crashes an idle thread later blames
   nobody; the consequence is a logout or a restart, not data loss.

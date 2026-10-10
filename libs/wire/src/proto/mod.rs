@@ -6,6 +6,7 @@
 pub mod blkd;
 pub mod bootfs;
 pub mod consol;
+pub mod consrelay;
 pub mod example;
 pub mod ipd;
 pub mod keyd;

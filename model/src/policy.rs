@@ -22,6 +22,7 @@
 //! | P15 shares | a chain of self-mints spends one admission share (`connection_lineage`) | servers/serving.md R26 |
 //! | P16 confined reads | a confined labelled caller reads no shared unlabelled volume (`confined_read_observation`) | servers/init.md, "The confinement check" |
 //! | P17 contexts | a domain holds at most one live session of a context's name; a login with a name that is not one starts nothing; a wrong key, a label set not the principal's and a context that is not a name are refused alike | servers/steward.md R79 |
+//! | P18 attachments | a context's console is attached to at most one channel, exactly while it runs and under the one id that names it; a login attaches to a live context only with the principal's key; a close of a channel the context was taken from changes nothing; a note a relay writes is printable | servers/steward.md R80 |
 
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::format;
@@ -33,8 +34,9 @@ use redoubt_steward::Policy;
 use redoubt_steward::audit::Record;
 use redoubt_steward::consts::{BLAME_COUNT, BLAME_WINDOW, DECLASSIFY_MAX, FIELD_CAP, MAX_LEASE, PENDING_CAP};
 use redoubt_steward::domain::Labels;
-use redoubt_steward::effect::{Answer, Kind, Notice, Notified, Output, Refusal};
+use redoubt_steward::effect::{Answer, Kind, Notice, Notified, Object, Output, Refusal, Token};
 use redoubt_steward::event::{Content, Event};
+use redoubt_steward::gen::session::State;
 use redoubt_steward::inspect;
 use redoubt_steward::manifest::{Limits, Manifest, PrincipalSpec, Sizes};
 use redoubt_steward::render::{printable, sanitize};
@@ -74,7 +76,17 @@ pub enum PolicyOp {
         /// The context's name, empty for the default one.
         context: String,
         key: u64,
+        /// The client's address as `sshd` gives it: mostly an address, now and then hostile text.
+        from: String,
     },
+    /// `sshd` says a channel of `session` closed: its current one (`back` 0), or one a later login
+    /// took the context from (`back` 1, 2, ...), which must change nothing.
+    ChannelClosed {
+        session: u64,
+        back: usize,
+    },
+    /// `sshd` is gone, and every channel with it.
+    SshdGone,
     EndSession {
         session: u64,
     },
@@ -164,7 +176,7 @@ pub fn manifest() -> Manifest {
         keyd_keys: vec![100, 101],
         servers: 1,
         sizes: Sizes {
-            session: l(40, 1, 5),
+            session: l(40, 2, 5),
             agent: l(40, 2, 4),
             sub_agent: l(16, 1, 1),
             crossing: l(page, 0, 0),
@@ -178,6 +190,12 @@ const ALL_KEYS: [u64; 8] = [11, 12, 21, 22, 31, 32, 100, 101];
 /// and then one that is not a name.
 const CONTEXTS: [&str; 8] = ["", "", "a", "b", "c", "work", "Work", "a.b"];
 const LABEL_SETS: [&[u64]; 4] = [&[], &[7], &[8], &[9]];
+/// The token slot of a context's relay in its session's batch (`redoubt_steward`'s effects).
+const RELAY: u8 = 200;
+/// Client addresses `sshd` gives: mostly addresses, now and then text that must never reach a
+/// terminal as it is.
+const FROMS: [&str; 6] =
+    ["198.51.100.2:51234", "203.0.113.7:40022", "10.0.2.2:3", "", "\u{1b}[2J", "1.2.3.4:5\n"];
 
 fn text(rng: &mut Rng, max: u64) -> String {
     let n = rng.below(max + 1);
@@ -270,7 +288,8 @@ pub fn random_op(run: &Run, rng: &mut Rng) -> PolicyOp {
             let good = fixed.principals[principal].login_keys[0];
             let key = if rng.pct(80) { good } else { rng.pick(&ALL_KEYS).unwrap() };
             let context = String::from(rng.pick(&CONTEXTS).unwrap());
-            PolicyOp::Login { principal, labels, context, key }
+            let from = String::from(rng.pick(&FROMS).unwrap());
+            PolicyOp::Login { principal, labels, context, key, from }
         }
         12..=14 => PolicyOp::EndSession { session: session(rng) },
         15..=21 => PolicyOp::StartAgent { session: session(rng), lease: lease(rng) },
@@ -325,7 +344,9 @@ pub fn random_op(run: &Run, rng: &mut Rng) -> PolicyOp {
             PolicyOp::Deny { channel: answering(rng, r), request: r }
         }
         63..=64 => PolicyOp::Usage { principal },
-        65..=76 => PolicyOp::Work { session: session(rng) },
+        65..=73 => PolicyOp::Work { session: session(rng) },
+        74..=75 => PolicyOp::ChannelClosed { session: session(rng), back: rng.below(3) as usize },
+        76 => PolicyOp::SshdGone,
         77..=79 => PolicyOp::Serve,
         80..=81 => PolicyOp::Hold,
         82..=83 => PolicyOp::Crash,
@@ -379,6 +400,8 @@ pub struct Run {
     /// (account, label set)s locked out, and when their lockout ends (P7).
     pub ghost_locked: BTreeMap<(u64, Vec<u64>), u64>,
     pub per_session: BTreeMap<u64, u64>,
+    /// Every attachment id a login's answer gave, per session, oldest first (P18).
+    pub attachments: BTreeMap<u64, Vec<u64>>,
     /// The properties' instances the checks met: a check holds non-vacuously only from the first
     /// sequence that gives it one (the coverage instrument, model/tests/steward_reach.rs).
     pub reached: BTreeSet<&'static str>,
@@ -413,6 +436,7 @@ impl Run {
             ghost_locked: BTreeMap::new(),
             per_session: BTreeMap::new(),
             reached: BTreeSet::new(),
+            attachments: BTreeMap::new(),
         }
     }
 
@@ -423,6 +447,18 @@ impl Run {
             .unwrap_or(r.session.wrapping_mul(7919).wrapping_add(r.nth))
     }
 
+    /// Every context's session and state, its attachment, and the relays' channels: what a close
+    /// of a channel attached to nothing must leave as it was (P18).
+    fn contexts(&self) -> (Vec<(u64, State, u64)>, BTreeMap<Token, u64>) {
+        let mut all = Vec::new();
+        for (_, s) in inspect::domains(&self.st.store) {
+            all.extend(
+                s.sessions.values().filter(|x| x.context.is_some()).map(|x| (x.id, x.state, x.attachment)),
+            );
+        }
+        (all, self.st.attached.clone())
+    }
+
     /// The channel the family opened `n`th; its id is 0, which names none, if none was.
     fn channel(&self, n: usize) -> Chan {
         self.channels.get(n).copied().unwrap_or(Chan { id: 0, principal: 0, key: 0 })
@@ -431,20 +467,24 @@ impl Run {
     /// Apply one op, check the properties and the kernel invariants, and return what the caller
     /// saw.
     pub fn apply(&mut self, op: &PolicyOp) -> Result<Obs, String> {
-        let from = (self.st.audit.len(), self.st.outputs.len(), self.st.writes.len());
+        let from = (self.st.audit.len(), self.st.outputs.len(), self.st.writes.len(), self.st.notes.len());
         let before: Vec<Caller> = self.st.callers();
         let now = self.st.k.now;
         let fixed = inspect::fixed(&self.st.store).clone();
         let obs = match op {
-            PolicyOp::Login { principal, labels, context, key } => {
+            PolicyOp::Login { principal, labels, context, key, from } => {
                 let name = fixed.principals[*principal].name.clone();
-                let r = self.st.login(&name, labels, context, *key);
+                let r = self.st.login(&name, labels, context, *key, from);
+                if let Some(Answer::Session { id, .. }) = &r {
+                    let at = inspect::index(&self.st.store).attachments.get(id).map(|(_, s)| *s);
+                    self.attachments.entry(at.unwrap_or(*id)).or_default().push(*id);
+                }
                 let named = context.is_empty() || redoubt_steward::manifest::name(context);
                 if matches!(r, Some(Answer::Session { .. })) && !named {
                     return Err(format!("P17: a login named the context {context:?}, which is not a name"));
                 }
                 if r == Some(Answer::Refused(Refusal::InUse)) {
-                    self.reached.insert("P17 a login to a live context");
+                    self.reached.insert("P17 a login to a context still starting");
                 }
                 // No enumeration: a wrong key, a label set not the principal's to log in under and
                 // a context that is not a name are all refused alike.
@@ -463,6 +503,40 @@ impl Run {
                     }
                 }
                 format!("{r:?}")
+            }
+            PolicyOp::ChannelClosed { session, back } => {
+                let ids = self.attachments.get(session).cloned().unwrap_or_default();
+                let attachment = ids.len().checked_sub(1 + back).map_or(*session, |i| ids[i]);
+                // Current: the attachment a context holds now, whatever the index says.
+                let current = attachment != 0
+                    && inspect::domains(&self.st.store).any(|(_, s)| {
+                        s.sessions.values().any(|x| x.context.is_some() && x.attachment == attachment)
+                    });
+                let before = self.contexts();
+                let r = self.st.channel_closed(attachment);
+                // P18: a channel that is not the one attached now closes and changes nothing.
+                if !current {
+                    if self.contexts() != before {
+                        return Err(format!(
+                            "P18: closing channel {attachment}, attached to nothing, changed a context"
+                        ));
+                    }
+                    if ids.len() > 1 {
+                        self.reached.insert("P18 a close of a channel taken over");
+                    }
+                } else {
+                    self.reached.insert("P18 a context detached");
+                }
+                format!("{r:?}")
+            }
+            PolicyOp::SshdGone => {
+                self.st.sshd_gone();
+                // P18: no context is attached once `sshd` is gone.
+                if !self.st.attached.is_empty() || !inspect::index(&self.st.store).attachments.is_empty() {
+                    return Err(String::from("P18: a context is still attached after sshd is gone"));
+                }
+                self.reached.insert("P18 sshd gone");
+                String::new()
             }
             PolicyOp::EndSession { session } => format!("{:?}", self.st.end_session(*session)),
             PolicyOp::StartAgent { session, lease } => {
@@ -767,7 +841,7 @@ impl Run {
     /// the kernel's invariants on the kernel underneath.
     fn check(
         &mut self,
-        (audit_from, outputs_from, writes_from): (usize, usize, usize),
+        (audit_from, outputs_from, writes_from, notes_from): (usize, usize, usize, usize),
     ) -> Result<(), String> {
         if !self.st.audit_authentic() {
             return Err(String::from("P14: altered or unsigned audit record"));
@@ -863,6 +937,40 @@ impl Run {
                 }
             }
         }
+        // P18: one channel at a time. No relay was given a channel while it held another; a
+        // context is attached exactly while it runs, under the one attachment id that names it;
+        // every note a relay writes is printable.
+        if let Some(o) = &st.both_attached {
+            return Err(format!("P18: {o:?}'s relay held two channels at once"));
+        }
+        for (o, note) in &st.notes[notes_from..] {
+            if !note.bytes().all(|b| (0x20..0x7f).contains(&b) || b == b'\r' || b == b'\n') {
+                return Err(format!("P18: {o:?}'s relay was given the note {note:?}"));
+            }
+        }
+        let attachments = &inspect::index(&st.store).attachments;
+        for (d, s) in inspect::domains(&st.store) {
+            for x in s.sessions.values().filter(|x| x.context.is_some()) {
+                let relay =
+                    Token { owner: Object { domain: d.clone(), kind: Kind::Session, id: x.id }, slot: RELAY };
+                let named = x.attachment != 0 && attachments.get(&x.attachment) == Some(&(d.clone(), x.id));
+                let held = st.attached.contains_key(&relay);
+                let (want_named, want_held) = match x.state {
+                    State::Running => (true, true),
+                    State::Detached => (false, false),
+                    _ => continue,
+                };
+                if named != want_named || held != want_held {
+                    return Err(format!(
+                        "P18: {d:?} context {:?} is {:?} with attachment {} named {named} and a channel held {held}",
+                        x.context, x.state, x.attachment
+                    ));
+                }
+                if x.state == State::Detached {
+                    self.reached.insert("P18 a detached context");
+                }
+            }
+        }
         // P5: the cap per domain, and no request of an ended session or agent.
         for (d, s) in inspect::domains(&st.store) {
             if s.requests.len() > PENDING_CAP {
@@ -904,6 +1012,14 @@ impl Run {
                     if !fixed.principals[*principal].login_keys.contains(key) || fixed.keyd.contains(key) =>
                 {
                     return Err(format!("P2: login to principal {principal} with key {key}"));
+                }
+                // P18: a login attaches to a live context only once its key is the principal's.
+                Record::Attached { session, key, took_over, .. } => {
+                    let p = fixed.by_account(a.domain().account()).map(|p| &fixed.principals[p]);
+                    if !p.is_some_and(|p| p.login_keys.contains(key)) || fixed.keyd.contains(key) {
+                        return Err(format!("P18: session {session} attached with key {key}"));
+                    }
+                    self.reached.insert(if *took_over { "P18 a takeover" } else { "P18 a reattachment" });
                 }
                 Record::Approved { request, principal, key, .. } => {
                     let p = &fixed.principals[*principal];
@@ -1200,6 +1316,9 @@ fn paired_runs(
             PolicyOp::EndSession { session } | PolicyOp::StartAgent { session, .. } => {
                 vault_made.contains(session)
             }
+            PolicyOp::ChannelClosed { session, .. } => {
+                vault_sessions.contains(session) || vault_made.contains(session)
+            }
             PolicyOp::EndLease { by, lease } => vault_made.contains(by) || vault_made.contains(lease),
             // A crash at an instant blames whichever call is in service, which the vault's queued
             // calls decide, and a crash the vault's call causes moves when the server takes the
@@ -1242,7 +1361,8 @@ fn paired_runs(
             | PolicyOp::StartAgent { session, .. }
             | PolicyOp::WriteItem { session, .. }
             | PolicyOp::Submit { session, .. }
-            | PolicyOp::Work { session } => unlabelled(&with, session),
+            | PolicyOp::Work { session }
+            | PolicyOp::ChannelClosed { session, .. } => unlabelled(&with, session),
             PolicyOp::Login { labels, .. } => labels.is_empty(),
             PolicyOp::EndLease { by, .. } => unlabelled(&with, by),
             PolicyOp::Open { .. }
@@ -1332,6 +1452,7 @@ fn rename(op: &PolicyOp, to: &BTreeMap<u64, u64>) -> PolicyOp {
         | PolicyOp::WriteItem { session, .. }
         | PolicyOp::Submit { session, .. }
         | PolicyOp::Work { session }
+        | PolicyOp::ChannelClosed { session, .. }
         | PolicyOp::CrashServing { session } => *session = s(*session),
         PolicyOp::Approve { request, hash, .. } => {
             *request = r(request);

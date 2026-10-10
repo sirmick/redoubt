@@ -57,6 +57,12 @@ fn record(r: &Record) -> String {
         Record::Login { session, principal, key, context } => {
             format!("Login session={session} principal={principal} key={key} context={}", context_of(context))
         }
+        Record::Attached { session, key, from, took_over } => {
+            format!(
+                "Attached session={session} key={key} from={} took_over={took_over}",
+                quote(from.as_bytes())
+            )
+        }
         Record::AgentStarted { lease, sponsor, parent, deadline } => {
             format!(
                 "AgentStarted lease={lease} sponsor={sponsor} parent={} deadline={deadline}",
@@ -120,6 +126,25 @@ fn step(s: &Step) -> String {
             format!("launch token={} budget={} connections=[{}]", token(t), token(budget), c.join(","))
         }
         Step::DestroyBudget { budget } => format!("destroy-budget budget={}", token(budget)),
+        Step::LaunchRelay { token: t, budget } => {
+            format!("launch-relay token={} budget={}", token(t), token(budget))
+        }
+        Step::Attach { relay, console, note } => {
+            format!(
+                "attach relay={} console={} note={}",
+                token(relay),
+                token(console),
+                quote(note.as_bytes())
+            )
+        }
+        Step::Detach { relay, console, note } => {
+            format!(
+                "detach relay={} console={} note={}",
+                token(relay),
+                token(console),
+                quote(note.as_bytes())
+            )
+        }
         Step::Read { token: t, through: th, labels, item } => format!(
             "read token={} through={} labels={} item={item}",
             token(t),
@@ -243,7 +268,7 @@ pub fn store(s: &mut String, store: &Store) {
         for x in st.sessions.values() {
             let _ = writeln!(
                 s,
-                "  session id={} state={:?} principal={} key={} context={} badge={} number={} reply={}",
+                "  session id={} state={:?} principal={} key={} context={} badge={} number={} reply={} attachment={} from={}",
                 x.id,
                 x.state,
                 x.principal,
@@ -251,7 +276,9 @@ pub fn store(s: &mut String, store: &Store) {
                 context_of(&x.context),
                 x.badge,
                 x.number,
-                x.reply
+                x.reply,
+                x.attachment,
+                quote(x.from.as_bytes())
             );
         }
         for x in st.leases.values() {
@@ -314,6 +341,9 @@ pub fn store(s: &mut String, store: &Store) {
     }
     for (id, (d, k)) in &index.ids {
         let _ = writeln!(s, "id {id} {}@{}", kind(*k), domain(d));
+    }
+    for (id, (d, session)) in &index.attachments {
+        let _ = writeln!(s, "attachment {id} session@{}#{session}", domain(d));
     }
     for c in index.channels.values() {
         let _ =

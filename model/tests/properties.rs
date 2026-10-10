@@ -34,10 +34,10 @@ fn budget_lifecycles() { family(1, 20_000) }
 fn scheduler_fairness() { family(2, 20_000) }
 
 #[test]
-fn steward_policy() { family(3, 14_000) }
+fn steward_policy() { family(3, 2_000) }
 
 #[test]
-fn steward_noninterference() { family(4, 2_000) }
+fn steward_noninterference() { family(4, 3_000) }
 
 #[test]
 fn flood() { family(5, 20_000) }

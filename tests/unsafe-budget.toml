@@ -238,6 +238,13 @@ max_unsafe = 0
 max_undocumented = 0
 
 [[budget]]
+# The context's console relay forbids unsafe code: its threads share nothing but IPC.
+name = "consrelay"
+paths = ["servers/consrelay/src"]
+max_unsafe = 0
+max_undocumented = 0
+
+[[budget]]
 # The wire codecs are linked into the runtime, so they run on target. The crate says
 # `#![forbid(unsafe_code)]`, so this can only stay at 0.
 name = "redoubt-wire (protocol codecs)"

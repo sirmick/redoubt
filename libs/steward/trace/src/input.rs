@@ -131,15 +131,17 @@ fn content(f: &Fields<'_>) -> Result<Content, String> {
 fn event_kind(name: &str, f: &Fields<'_>) -> Result<(EventKind, bool), String> {
     let mut shown = false;
     let kind = match name {
-        // `context=` may be left out: the default context, the empty name.
+        // `context=` and `from=` may be left out: the default context, and no address.
         "Login" => EventKind::Login {
             principal: string(f.get("principal")?)?,
             labels: f.list("labels")?,
             context: f.opt("context").map(string).transpose()?.unwrap_or_default(),
             key: f.u64("key")?,
+            from: f.opt("from").map(string).transpose()?.unwrap_or_default(),
         },
         "Console" => EventKind::Console { principal: string(f.get("principal")?)? },
         "ChannelClosed" => EventKind::ChannelClosed { session: f.u64("session")? },
+        "SshdGone" => EventKind::SshdGone,
         "ApprovalOpened" => EventKind::ApprovalOpened {
             channel: f.u64("channel")?,
             principal: string(f.get("principal")?)?,

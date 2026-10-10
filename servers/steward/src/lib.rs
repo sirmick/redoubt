@@ -59,9 +59,10 @@ pub trait Kernel {
     /// A fresh connection for a child of `domain` at shared slot `slot`, or none where the slot
     /// binds to nothing for that domain.
     fn connect(&mut self, domain: &Domain, slot: u16) -> Result<Option<Self::Handle>, Error>;
-    /// The console of the next login's session: the channel's connection `sshd` sent with it,
-    /// which the console slot binds to; the steward owns it from here.
-    fn console(&mut self, handle: Option<redoubt_rt::abi::Handle>);
+    /// The consoles of the next login's session, the two connections to the channel `sshd` sent
+    /// with it: the steward's own, through which `ended` ends the channel, and the relay's, which
+    /// `attach` hands on; the steward owns both from here.
+    fn console(&mut self, console: Option<redoubt_rt::abi::Handle>, relay: Option<redoubt_rt::abi::Handle>);
     /// Gives a connection back: closed here, and disconnected at its server.
     fn release(&mut self, handle: Self::Handle);
     /// Starts a child of `domain` in `budget` through the loader stub, with the connections the
@@ -74,6 +75,15 @@ pub trait Kernel {
         connections: &[Option<Self::Handle>],
         context: Option<&str>,
     ) -> Result<u64, Error>;
+    /// A context's console relay, started in `budget` (servers/steward.md, "Contexts"): its
+    /// process id, and the steward's control connection to it. The next console connection of
+    /// `domain`'s namespace is the relay's, which it serves the session's `/dev/cons` on.
+    fn launch_relay(&mut self, domain: &Domain, budget: Self::Budget) -> Result<(u64, Self::Handle), Error>;
+    /// The login's channel console, kept, and the relay's connection to it given to `relay` with
+    /// `note`, which the relay writes there first; returns the console kept.
+    fn attach(&mut self, relay: Self::Handle, note: &str) -> Result<Self::Handle, Error>;
+    /// `relay` writes `note` to its channel and lets it go.
+    fn detach(&mut self, relay: Self::Handle, note: &str) -> Result<(), Error>;
     /// A word from the kernel's generator.
     fn random(&mut self) -> Result<u64, Error>;
     /// Microseconds since boot.

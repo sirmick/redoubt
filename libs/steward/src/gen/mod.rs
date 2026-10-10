@@ -61,10 +61,14 @@ pub struct Policy {
     pub rendered_here: Guard,
     /// Guard (a rule), in `lease`.
     pub sponsor_session: Guard,
+    /// Effect, in `session`.
+    pub attach_relay: Effect,
     /// Effect, in `lease`.
     pub audit_agent_started: Effect,
     /// Effect, in `request`.
     pub audit_approved: Effect,
+    /// Effect, in `session`.
+    pub audit_attached: Effect,
     /// Effect, in `blame`.
     pub audit_blamed: Effect,
     /// Effect, in `crossing`.
@@ -107,6 +111,8 @@ pub struct Policy {
     pub destroy_crossing: Effect,
     /// Effect, in `crossing`, `lease`, `session`.
     pub destroy_partial: Effect,
+    /// Effect carrying a rule, in `session`.
+    pub detach_relay: Effect,
     /// Effect carrying a rule, in `lease`, `session`.
     pub drop_requests: Effect,
     /// Effect, in `lease`, `session`.
@@ -117,6 +123,8 @@ pub struct Policy {
     pub grant_lease: Effect,
     /// Effect, in `lease`, `session`.
     pub launch: Effect,
+    /// Effect, in `session`.
+    pub launch_relay: Effect,
     /// Effect, in `blame`.
     pub lock_out: Effect,
     /// Effect carrying a rule, in `request`.
@@ -139,6 +147,8 @@ pub struct Policy {
     pub read_source: Effect,
     /// Effect, in `approval_channel`, `lease`, `request`, `session`.
     pub refuse: Effect,
+    /// Effect, in `session`.
+    pub refuse_in_use: Effect,
     /// Effect carrying a rule, in `request`.
     pub render: Effect,
     /// Effect, in `lease`.
@@ -151,6 +161,8 @@ pub struct Policy {
     pub reply_request: Effect,
     /// Effect, in `lease`, `session`.
     pub route: Effect,
+    /// Effect, in `session`.
+    pub take_over: Effect,
     /// Effect, in `lease`, `session`.
     pub unroute: Effect,
     /// Effect, in `crossing`.
@@ -186,8 +198,10 @@ impl Policy {
         reading: crate::guards::reading,
         rendered_here: crate::guards::rendered_here,
         sponsor_session: crate::guards::sponsor_session,
+        attach_relay: crate::effects::attach_relay,
         audit_agent_started: crate::effects::audit_agent_started,
         audit_approved: crate::effects::audit_approved,
+        audit_attached: crate::effects::audit_attached,
         audit_blamed: crate::effects::audit_blamed,
         audit_copy_failed: crate::effects::audit_copy_failed,
         audit_declassified: crate::effects::audit_declassified,
@@ -209,11 +223,13 @@ impl Policy {
         destroy_budget: crate::effects::destroy_budget,
         destroy_crossing: crate::effects::destroy_crossing,
         destroy_partial: crate::effects::destroy_partial,
+        detach_relay: crate::effects::detach_relay,
         drop_requests: crate::effects::drop_requests,
         forget: crate::effects::forget,
         freeze: crate::effects::freeze,
         grant_lease: crate::effects::grant_lease,
         launch: crate::effects::launch,
+        launch_relay: crate::effects::launch_relay,
         lock_out: crate::effects::lock_out,
         notify: crate::effects::notify,
         notify_sponsor: crate::effects::notify_sponsor,
@@ -225,12 +241,14 @@ impl Policy {
         read_item: crate::effects::read_item,
         read_source: crate::effects::read_source,
         refuse: crate::effects::refuse,
+        refuse_in_use: crate::effects::refuse_in_use,
         render: crate::effects::render,
         reply_agent: crate::effects::reply_agent,
         reply_login: crate::effects::reply_login,
         reply_ok: crate::effects::reply_ok,
         reply_request: crate::effects::reply_request,
         route: crate::effects::route,
+        take_over: crate::effects::take_over,
         unroute: crate::effects::unroute,
         write_item: crate::effects::write_item,
         audit_visible: crate::guards::audit_visible,

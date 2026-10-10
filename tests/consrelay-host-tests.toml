@@ -1,0 +1,10 @@
+description = "consrelay: the bound and the drop count, the line cut, the notes, the size, and the program's four threads"
+kind = "host-tests"
+# `servers/consrelay/tests/relay.rs` drives the relay's decisions alone: writes that never wait
+# while detached, the newest 64 KiB kept, the cut to a line and the drop count on attach, a
+# detach that waits for its note, the console's size and its changes, and which console each
+# helper thread is given and when it is closed. `tests/consrelay.rs` runs the whole program on the
+# rt fake kernel: its hello, a replay to a stand-in for sshd's console, input reaching the VM, a
+# flood while detached, the VM's size and resize, and the steward's control calls refused through
+# the VM's badge.
+packages = ["redoubt-consrelay"]

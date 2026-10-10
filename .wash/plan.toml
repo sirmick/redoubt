@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 80
+revision = 104
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1612,8 +1612,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   needs = ["CTX1"]
   body = "Second of three; brief .wash/local/CTX1-brief.md, design .wash/local/CTX1-design.md. A relay program in the context's own budget serves the VM's /dev/cons; the steward hands it each channel's console. 64 KiB buffer, newest kept, a dropped-count line, cut at line boundaries, resize on reattach. Takeover is told on both terminals, with the remote address. Tier A."
-  state = "active"
-  revision = 71
+  state = "done"
+  revision = 84
   overrides = ["2026-10-08: started by Orchestrator before CTX1 (reported), M1 (reported): CTX1 is reported and under its last fold; CTX2 is stacked on it by the orchestrator's ruling", "2026-10-08: started by Orchestrator before M1 (reported): named contexts run ahead of M1's acceptance (owner request 2026-10-08)", "2026-10-09: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the userland track runs ahead of its acceptance", "2026-10-10: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the userland track runs ahead of its acceptance"]
 
 [[node]]
@@ -1623,8 +1623,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   needs = ["CTX2"]
   body = "Part c of named SSH contexts (brief .wash/local/CTX1-brief.md): the cap of live contexts per (principal, label set), never evicting; idle expiry of detached contexts, configurable per principal with a default; the shell's contexts()/detach()/end_context within the label set; the generation (or end-with-steward) rule on steward restart, chosen at its design checkpoint with costs. Also from CTX1's red: measure rule 3's timing (an unknown principal, label set or non-name is refused before any machine runs; a wrong key on a known principal runs the blame and session machines before login_key refuses it, counting nothing) at the SSH client, and equalize it if it is distinguishable above jitter."
-  state = "todo"
-  revision = 2
+  state = "active"
+  revision = 85
+  overrides = ["2026-10-10: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the userland track runs ahead of its acceptance"]
 
 [[node]]
   id = "B39"
@@ -1727,8 +1728,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "smp"
   needs = ["SMP2"]
   body = "Cut from SMP2: beamlet on the machine runs one scheduler thread (docs/userland/beamlet.md); give a session's VM N schedulers on N harts and a case measuring a parallel Elixir workload's throughput at 2 harts against 1 on both widths, with the VM's heap and the session budget unchanged. Design checkpoint first (scheduler threads vs the I/O hub, locks in the VM, budgets per thread)."
-  state = "todo"
-  revision = 2
+  state = "active"
+  revision = 86
+  overrides = ["2026-10-10: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the several-harts track runs ahead of its acceptance"]
 
 [[node]]
   id = "B44"
@@ -1884,7 +1886,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["B45"]
   body = "From B45: on the machine, printing a 1 MiB line takes about 2 minutes (Text.visible plus the encoder). Profile on beamlet (which of grapheme walking, escaping, measuring, encoding dominates), make the common case (printable ASCII/UTF-8 with no controls) a fast path, and set a throughput target with a case. Escaping path: Tier A."
   state = "reported"
-  revision = 80
+  revision = 100
   overrides = ["2026-10-09: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the shell track runs ahead of its acceptance", "2026-10-10: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the shell track runs ahead of its acceptance"]
 
 [[node]]
@@ -1923,8 +1925,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M2"
   body = "Found by NSCR1 on main a72e774b8 (PIPE1 + JOB1 code). In one console session, Pipeline.run([{\"pipe-stage\", [\"say\",\"hi\"]}]) typed once per line: runs 1-4 return ok and the session's processes go back to {10,1}; runs 5 and on return {:error, :refused}. Ports, VM processes and the namespace (9 entries) stay flat; a direct Redoubt.Pipes.open(1) after four pipelines succeeds, so the refusal is later in the fifth start (make_pipes, connect or launch). A one-process weight-1 budget stays for good after the first pipeline (processes {10,2}, weight {100,1}): piped's own, which is by design if piped is the session's long-lived server; say so on the page or fix it. Today's cases run at most four pipelines, which is why they pass. Repro: .wash/local/B47-repro.md. Find the bound (a handle table, a served-file slot, piped's pipe table, launch's MAX_JOBS, a budget not returned), fix it, and add a case that runs eight pipelines in one session on both widths. Acts with the session's authority: main, Tier A, the steward red."
-  state = "active"
-  revision = 57
+  state = "done"
+  revision = 96
   overrides = ["2026-10-09: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the userland track runs ahead of its acceptance", "2026-10-10: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the userland track runs ahead of its acceptance"]
 
 [[node]]
@@ -1966,3 +1968,23 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "From BEAM19's exact instruction counts (.wash/local/BEAM19-report.md; QEMU exec log weighted by block length, icount shift=3, rv64 smp 1): while a session's VM runs a tight loop, each kernel entry (the timer interrupt at the slice, the scheduler's pick and return) costs about 12,000 kernel instructions, about 20 % of the hart. Measure the entry's parts with the kernel's trace and the exec log (trap save/restore, the lock, the pick, billing, reconcile marks, audits in a checked build vs none in release, the return), find what is proportional to nothing the entry does, and cut it; a reductions-per-second case already exists (beamlet-reduction-rate) and a kernel-side bound (instructions or ticks per entry, measured in the oracle net of audits) is the gate on both widths. Nothing changes in any rule; the scheduler's targets hold. Kernel: Tier A, the kernel red."
   state = "todo"
   revision = 76
+
+[[node]]
+  id = "B49"
+  title = "rv32 nscr-hostile-text fails on main: the console splits the ^[]52;c;... line in two, the expect never matches, and the case runs to its deadline"
+  template = "package"
+  parent = "M2"
+  body = "Found by B47's gates on main 8d0a19415 (NSCR1 merged): rv32/nscr-hostile-text fails 3 of 3 alone on main (rv64 passes; on wp-B47 1 of 2). The case waits for the line that shows the OSC 52 attempt made visible (^[]52;c;...) but the console emits it split in two, so the expect never matches; the session reaches its end, after_all is true, and the case times out. Find why the line splits on rv32 only (the UART write chunking, the relay's 2 KiB chunk, the shell's line width, or the case's own expect anchored to one line) and fix the right one: if the console legitimately splits long lines, the expect must match across the split (as B29/B30 handled ordering and prompt drawing), else the writer's chunking is the bug. Both widths, several runs each. Tests/tooling: Tier B, one reviewer (steward-red)."
+  state = "done"
+  revision = 104
+  overrides = ["2026-10-10: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the userland track runs ahead of its acceptance"]
+
+[[node]]
+  id = "B50"
+  title = "A carved-budget program's request handles go under its budget's Life: a badge per launch names the budget, so a hostile stage cannot close the session's other jobs by a stale index"
+  template = "package"
+  parent = "M2"
+  needs = ["B47"]
+  body = "From B47's review (steward-red, .wash/qa/B47-stale-close.md and the B47 renewal): B47's Life covers the handles the VM minted and those returned through servers launched under a budget, but a request's handles arrive with no Life because the kernel tells a receiver badge, account and labels, never the sender's budget. So a program in a VM-carved budget that holds a VM-served endpoint (Elixir can pass one in launch.handles; no shell path does today) and sends a handle it minted can, after its budget is destroyed, make a later collection close a reused index in the session's own table: not the startup handles (console, steward, namespace are Owned::kept, never freed), but a sibling job's budget (its destroy then fails, pages leak), a piped or stage connection, or the VM's internal endpoints (a waiter's wake, a serve thread's, a job's exit endpoint), which can hang or break the session. No widening beyond the session, but more than such a program is given. Guard: when launch.handles passes a served endpoint into a launch in a carved budget, mint a fresh badge on the receive right the VM holds (serve.rs mints there already) and map badge -> that budget's Life; a request's handles from that badge go under the Life, or are closed eagerly at the budget's end. Host test: a launched program sends a minted handle, its budget is destroyed, a collection closes nothing at that index; a machine case under pipe-eight's setup. beamlet.md's residual becomes the rule. userland/otp: Tier A, the steward red. The kernel handle generation (owner's decision pending) is the construction fix for the whole class; this is the VM's own guard either way."
+  state = "todo"
+  revision = 98

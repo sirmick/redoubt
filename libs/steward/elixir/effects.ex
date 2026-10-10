@@ -11,6 +11,9 @@ defmodule Redoubt.Steward.Effects do
   @scope 1
   @process 2
   @connections 3
+  # A context's console relay, and the channel console it holds while attached.
+  @relay 200
+  @console 201
   @read 1
   @crossing_life 1_000_000
   @u64 0xFFFF_FFFF_FFFF_FFFF
@@ -114,6 +117,126 @@ defmodule Redoubt.Steward.Effects do
     step(cx, {:launch, token(cx, @process), token(cx, @budget), conns})
   end
 
+  # A context's console relay, in the session's budget, before the process it serves; the
+  # console's session is no context and has none.
+  def launch_relay(cx) do
+    case Guards.session(cx) do
+      %{context: c} when c != nil -> step(cx, {:launch_relay, token(cx, @relay), token(cx, @budget)})
+      _ -> cx
+    end
+  end
+
+  # The login's address as a note shows it: `a.b.c.d:port`, or `an unknown address`.
+  defp login_from(%{event: %{kind: {:login, _, _, _, _, from}}}) do
+    ok =
+      from != "" and byte_size(from) <= 21 and
+        for(<<b <- from>>, reduce: true, do: (ok -> ok and (b in ?0..?9 or b in [?., ?:])))
+
+    if ok, do: from, else: "an unknown address"
+  end
+
+  defp login_from(_), do: ""
+
+  defp context_name(cx) do
+    case Guards.session(cx) do
+      %{context: c} when c not in [nil, ""] -> c
+      _ -> "default"
+    end
+  end
+
+  # R80: the context's console goes to the login's channel, with a note saying how.
+  def attach_relay(%{event: %{kind: {:login, _, _, _, key, _}}} = cx) do
+    {from, name, reply} = {login_from(cx), context_name(cx), cx.reply}
+
+    {fresh, cx} =
+      case Guards.session(cx) do
+        %{attachment: 0} -> fresh(cx)
+        _ -> {0, cx}
+      end
+
+    case Guards.session(cx) do
+      nil ->
+        cx
+
+      s ->
+        note =
+          cond do
+            s.number == 0 -> ""
+            s.from == "" -> "[context #{name}: reattached]\r\n"
+            true -> "[context #{name}: reattached; taken over from #{s.from}]\r\n"
+          end
+
+        attachment = if s.attachment == 0, do: fresh, else: s.attachment
+        cx = update(cx, :sessions, &%{&1 | attachment: attachment, from: from, key: key, reply: reply})
+        cx = put_in(cx.store.attachments[attachment], {cx.domain, cx.id})
+        step(cx, {:attach, token(cx, @relay), token(cx, @console), note})
+    end
+  end
+
+  def attach_relay(cx), do: cx
+
+  # R80: the attached channel lets it go, told why if a login took it over; its id names
+  # nothing from here.
+  def detach_relay(cx), do: detach_with(cx, true)
+
+  def detach_with(cx, forget) do
+    now = div(cx.event.now, 1_000_000)
+
+    note =
+      case cx.event.kind do
+        {:login, _, _, _, _, _} ->
+          m = String.pad_leading(Integer.to_string(div(rem(now, 3600), 60)), 2, "0")
+          "[context #{context_name(cx)} taken over from #{login_from(cx)} at up #{div(now, 3600)}h#{m}m]\r\n"
+
+        _ ->
+          ""
+      end
+
+    case Guards.session(cx) do
+      nil ->
+        cx
+
+      s ->
+        from = if note == "", do: "", else: s.from
+        cx = update(cx, :sessions, &%{&1 | attachment: 0, from: from})
+
+        cx =
+          if forget,
+            do: put_in(cx.store.attachments, Map.delete(cx.store.attachments, s.attachment)),
+            else: cx
+
+        step(cx, {:detach, token(cx, @relay), token(cx, @console), note})
+    end
+  end
+
+  # A login, authenticated, names a context whose session lives: that session takes the login.
+  def take_over(cx) do
+    case Guards.session(cx) do
+      %{context: name} when name != nil ->
+        live =
+          Guards.state(cx).sessions
+          |> Enum.sort()
+          |> Enum.find(fn {id, o} -> id != cx.id and o.state != :ending and o.context == name end)
+
+        case live do
+          {id, _} -> raise_(cx, {:attach, {cx.domain, :session, id}})
+          nil -> cx
+        end
+
+      _ ->
+        cx
+    end
+  end
+
+  def refuse_in_use(cx), do: reply(cx, {:refused, :InUse})
+
+  def audit_attached(cx) do
+    case Guards.session(cx) do
+      nil -> cx
+      s -> audit(cx, {:attached, s.id, s.key, s.from, s.state == :running})
+    end
+  end
+
   def destroy_budget(cx), do: step(cx, {:destroy_budget, token(cx, @budget)})
   def destroy_partial(cx), do: destroy_budget(cx)
 
@@ -155,7 +278,7 @@ defmodule Redoubt.Steward.Effects do
   def reply_login(cx) do
     case Guards.session(cx) do
       nil -> cx
-      s -> reply(cx, {:session, s.id, "session-#{s.number}"})
+      s -> reply(cx, {:session, s.attachment, "session-#{s.number}"})
     end
   end
 

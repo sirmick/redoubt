@@ -18,6 +18,7 @@ programs = [
     { package = "redoubt-piped", bin = "piped" },
     { package = "redoubt-steward-server", bin = "steward", features = ["restart-probe"] },
     { package = "redoubt-sshd", bin = "sshd" },
+    { package = "redoubt-consrelay", bin = "consrelay" },
 ]
 # The principals' budgets, each holding a shell VM's session, need 1 GiB (steward-session-ends).
 memory_mib = 1024

@@ -18,6 +18,7 @@ programs = [
     { package = "redoubt-piped", bin = "piped" },
     { package = "redoubt-steward-server", bin = "steward" },
     { package = "redoubt-sshd", bin = "sshd" },
+    { package = "redoubt-consrelay", bin = "consrelay" },
     { package = "redoubt-littlefsd-programs", bin = "littlefsd-client" },
 ]
 # The image needs 1 GiB: the principals' budgets, each holding the shell VM's session, do not fit

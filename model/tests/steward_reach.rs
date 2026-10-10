@@ -99,14 +99,14 @@ instrumented! {
         exact_labels, fair_share, grants_lease, granted, hash_matches, item_fits, lease_bounded,
         login_key, not_locked, owns_labels, pending_cap, pushes, reading, rendered_here,
         sponsor_session;
-    effects: audit_agent_started, audit_approved, audit_blamed, audit_copy_failed,
+    effects: attach_relay, audit_agent_started, audit_approved, audit_attached, audit_blamed, audit_copy_failed,
         audit_declassified, audit_denied, audit_lease_ended, audit_locked_out, audit_login,
         audit_push_failed, audit_pushed, audit_start_failed, audit_submitted, carve_crossing,
-        carve_lease, carve_session, connect, copy_out, count_blame, create_scope, destroy_budget,
+        carve_lease, carve_session, connect, copy_out, count_blame, create_scope, destroy_budget, detach_relay,
         destroy_crossing, destroy_partial, drop_requests, forget, freeze, grant_lease, launch,
-        lock_out, notify, notify_sponsor, open_copy_out, open_read, open_write, pass_failure,
+        launch_relay, lock_out, notify, notify_sponsor, open_copy_out, open_read, open_write, pass_failure,
         pass_snapshot, read_item, read_source, refuse, render, reply_agent, reply_login, reply_ok,
-        reply_request, route, unroute, write_item;
+        reply_request, refuse_in_use, route, take_over, unroute, write_item;
 }
 
 type Reach = fn(u64, Policy) -> Result<BTreeSet<&'static str>, Failure>;
@@ -120,7 +120,7 @@ const STEWARD: [(&str, Reach, u64); 2] = [
 
 /// Each family's last new item and how many it reaches, as kernel/model.md's table states them
 /// ("Property families"), for this generator.
-const LAST: [(u64, usize); 2] = [(3470, 118), (405, 120)];
+const LAST: [(u64, usize); 2] = [(114, 128), (675, 131)];
 
 /// Seeds `0..n` of `f`, unmutated, on the instrument's table: the lowest seed reaching each rule
 /// and property. Every seed must hold.
