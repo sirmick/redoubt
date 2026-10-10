@@ -261,7 +261,7 @@ and `Redoubt.Job` and `Redoubt.Jobs` the shell's handle on it.
 
 ### `redoubt-rt`, the native runtime
 
-<details><summary>Status: built · partly tested: the 9P client's walk limit and its checks of a reply's tag, type and counts are not attacked; only its closing of stray handles is · tested (21)</summary>
+<details><summary>Status: built · partly tested: the 9P client's walk limit and its checks of a reply's tag, type and counts are not attacked; only its closing of stray handles is · tested (30)</summary>
 
 - bench:rt-build
 - bench:net-tcp
@@ -284,6 +284,15 @@ and `Redoubt.Job` and `Redoubt.Jobs` the shell's handle on it.
 - host:redoubt-rt::a_consumed_lend_is_replaced_by_fresh_pages
 - host:redoubt-rt::a_spawned_thread_runs_its_closure_as_this_process
 - host:redoubt-rt::a_refused_thread_drops_its_closure_unrun
+- host:redoubt-rt::a_mutex_excludes_and_loses_nothing_under_contention
+- host:redoubt-rt::waiters_for_a_held_lock_sleep_and_each_gets_it
+- host:redoubt-rt::a_condvar_ping_pong_loses_no_wake_up
+- host:redoubt-rt::notify_one_wakes_each_waiter_once
+- host:redoubt-rt::semaphore_tokens_are_neither_lost_nor_doubled
+- host:redoubt-rt::scope_waits_for_its_threads
+- host:redoubt-rt::a_refused_thread_is_not_waited_for
+- host:redoubt-rt::prepared_locks_make_no_endpoint_when_contended
+- host:redoubt-rt::a_refused_endpoint_leaves_a_working_lock
 
 </details>
 
@@ -302,7 +311,8 @@ the loader stub.
 | `path` | lexical path cleaning, so `..` never climbs above a root |
 | `client` | a small synchronous 9P client |
 | `server` | the shared server library ([the serving library](../servers/serving.md)) |
-| `thread` | `spawn`: a closure on a thread of this process, with a stack from `map_anon` that outlives it |
+| `thread` | `spawn`: a closure on a thread of this process, with a stack from `map_anon` that outlives it; `scope`: threads that borrow from their caller, all ended before it returns |
+| `sync` | a semaphore, a mutex and a condvar for the threads of one process, whose waiters sleep on an endpoint |
 
 - **Start and end.** `entry!(run)` receives the startup page's address from the loader stub,
   parses the block, and calls `run`; its return value is the exit code. A block that does not
@@ -333,6 +343,22 @@ the loader stub.
   refused rather than split; a reply must decode, carry the request's tag and be the matching
   reply, and every count is checked against what was asked. A 9P reply carries no handles, so any
   that arrive are closed. For launchers it also has `new_connection` and `disconnect`.
+- **Locks sleep on endpoints.** The kernel has no futex and the runtime no thread-locals, so a
+  `sync` semaphore makes an endpoint the first time a thread must wait on it: a waiter that takes
+  its count below zero `receive`s there, and a release that raises it from below zero `send`s one
+  empty message, which one waiter takes. A `Mutex` spins a little, then sleeps on its semaphore,
+  and its unlock hands it to a sleeper, so a thread waiting for a holder the kernel preempted
+  sleeps rather than spins. A `Condvar` gives each waiter a semaphore of its own, so a later
+  waiter cannot take a wake-up meant for an earlier one. A semaphore's endpoint costs a page of
+  the process's budget and two handles, paid at its first contended wait and given back when it
+  is dropped; `prepare` pays it at once, for a program that must not allocate when its locks are
+  contended (beamlet's VM, for its schedulers' locks). An endpoint the kernel refuses ends
+  nothing: the lock's waiters poll every 100 µs for the hand-over instead of sleeping in the
+  kernel. A release that wakes a sleeper waits until that thread reaches its `receive`, so an
+  unlock can wait for the woken thread to be scheduled; the woken thread holds nothing then, so
+  it never deadlocks. Taking a lock its thread already holds deadlocks. Under Miri (`rt-miri`)
+  the locks run on host threads acting as one process, since `thread_create`'s closure crosses
+  the fake kernel as an integer Miri cannot follow; `scope` is tested natively only.
 - **Tested on the host against a fake kernel.** Every system call goes through one function, to
   a `Transport`: on the machine the `ecall`, on the host the fake kernel a test installs, and any
   other backend the same way, so the runtime and programs built on it (the echo client and

@@ -134,7 +134,9 @@ paths = ["libs/rt/src"]
 # `Mapping`): one unsafe fn behind both would count three, and a safe one cannot make a mutable
 # view from a shared borrow.
 # thread.rs: a closure crosses thread_create as its one usize argument; no lock exists to hold it in a table.
-max_unsafe = 11
+# sync.rs: a mutex's guard reaches its value two ways, shared and mutable, and the mutex is shared
+# between threads (`Sync`); thread.rs: `scope` lends a closure the borrows it waits out.
+max_unsafe = 15
 max_undocumented = 0
 
 [[budget]]

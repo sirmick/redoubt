@@ -1,7 +1,7 @@
-description = "The native runtime's host tests under Miri, which checks the unsafe in its heap, page buffers, lends and device registers that a native run only executes: the files that finish in seconds (ipc and echo take minutes and run by hand)"
+description = "The native runtime's host tests under Miri, which checks the unsafe in its heap, page buffers, lends, device registers, locks and scoped threads that a native run only executes: the files that finish in seconds (ipc and echo take minutes and run by hand)"
 kind = "host-tests"
 packages = ["redoubt-rt"]
-tests = ["connection", "heap", "mapping_views", "ninep_status", "outcomes", "panic", "parked", "parked_write", "refusals", "registers", "regressions", "vectors"]
+tests = ["connection", "heap", "mapping_views", "ninep_status", "outcomes", "panic", "parked", "parked_write", "refusals", "registers", "regressions", "sync", "vectors"]
 miri = true
 fanout = { each = "file" }
 # heap's file is the longest: 60 to 96 s measured, and a third.
