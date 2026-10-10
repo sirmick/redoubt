@@ -1176,20 +1176,23 @@ impl MemoryManager {
 
     /// Free the endpoints the dying subtree owns, the last left on its budgets' owner chains
     /// (`message::budgets_dying` destroyed the devices), each in a link read and a free, and give
-    /// each budget its endpoints' pages back in one write. Nothing reads them past this.
+    /// each budget its endpoints' pages back in one write. Nothing reads them past this. They go in
+    /// flight as one chain (R81): a lease owns thousands.
     fn free_owned_endpoints(&mut self, top: BudgetFrame) {
+        let mut chain = crate::mem::ObjectChain::default();
         let mut cur = Some(top);
         while let Some(frame) = cur {
             let mut owned = self.budget(frame).first_owned;
             let mut pages = 0;
             while let Some(o) = owned {
                 owned = self.owned_next(o);
-                self.free_object_frame(o);
+                self.retire_object(&mut chain, o);
                 pages += crate::endpoint::ENDPOINT_PAGES;
             }
             self.uncharge(frame, pages);
             cur = self.subtree_next(top, frame);
         }
+        self.pend_object_chain(chain);
     }
 
     /// Free the dying subtree `frame` heads: every descendant first, then the budget, unlinking
@@ -1328,6 +1331,17 @@ pub fn destroy_subtree(
 ) -> bool {
     // Named now, while `top` still links to its parent, and after `mark_dying` gave its carve back.
     let payer = deadline_since.and_then(|_| MemoryManager::with(|mm| mm.destruction_payer(top)));
+    // The zeroing of what it frees, once this hart has released the lock (R81), is R10's payer's
+    // too: a deadline's, or the caller's budget, or if that dies with the subtree, the top's
+    // parent, as the dying budgets' debt is lifted; nobody only for `root`'s. It also takes over
+    // every hart's zeroing still to bill to a dying budget, before any of them is freed.
+    let zeroing_payer = payer.or_else(|| {
+        MemoryManager::with(|mm| {
+            crate::sched::billing_budget()
+                .filter(|b| mm.is_live_budget(*b) && !mm.budget(b.frame).dying)
+                .or_else(|| mm.budget(top).parent.map(|p| BudgetRef { frame: p, id: mm.budget_id(p) }))
+        })
+    });
     #[cfg(feature = "sched-trace")]
     let top_id = MemoryManager::with(|mm| mm.budget_id(top));
     #[cfg(feature = "sched-trace")]
@@ -1338,6 +1352,8 @@ pub fn destroy_subtree(
         0,
         MemoryManager::with(|mm| u128::from(mm.objects.high_frame)),
     );
+    MemoryManager::with(|mm| crate::sched::lift_zeroing(mm, zeroing_payer));
+    crate::sched::zeroing_payer(zeroing_payer);
     // From here the destruction defers every object-frame free and folds the per-object sweeps
     // into `destroy_marked`'s single pass (I1, I2).
     MemoryManager::with_mut(|mm| mm.begin_destruction());
@@ -1414,6 +1430,7 @@ pub fn destroy_subtree(
         }
         mm.destroyed();
     });
+    crate::sched::zeroing_payer(None);
     #[cfg(feature = "sched-trace")]
     crate::sched::trace::r10(crate::sched::trace::R10_END, top_id);
     // The audit, off the measured walk. A deadline's is its expiry's, once the waits it still

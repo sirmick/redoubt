@@ -92,6 +92,11 @@ pub struct MemoryManager {
     allocations: LoaderTable<RamAllocation>,
     /// The table's free entries, one bit each, with their summaries ([`FreeFrames`]).
     free: FreeFrames,
+    /// The frames in flight (`IN_FLIGHT`'s in the table): retired, not yet back in the bitmap.
+    in_flight: usize,
+    /// Done frames taken from a hart's done list and not yet given back to the bitmap, linked
+    /// through `reclaim::LINK` (`reclaim::unlink`): the rest of a list one commit did not finish.
+    committing: Option<usize>,
     /// The frames `dma_alloc`'s runs come from ([`DmaPool`]).
     dma_pool: DmaPool,
     /// The same, for the pages of every region in `extra_regions`, back to back.
@@ -107,6 +112,17 @@ pub struct MemoryManager {
     /// DMA devices and the runs `dma_alloc` handed out through them (`dma.rs`). Here,
     /// beside the ownership table that names their frames' owner, `DMA_OWNER`.
     pub dma: crate::dma::Registry,
+}
+
+/// Object frames a destruction frees, linked through `reclaim::LINK` from `first` to `last`, to go
+/// onto a pending list whole (`MemoryManager::retire_object`); `frames` freed in all, `linked` of
+/// them in the chain.
+#[derive(Default)]
+pub struct ObjectChain {
+    first: Option<u32>,
+    last: Option<u32>,
+    frames: u32,
+    linked: usize,
 }
 
 /// Owner, in the ownership table, of frames that hold kernel objects (budgets, handle-table
@@ -125,6 +141,17 @@ pub const DMA_OWNER: Pid = match Pid::new(0xfffe) {
     None => unreachable!(),
 };
 const _: () = assert!(crate::arch::process::MAX_PROCESS_COUNT < 0xfffe);
+/// Owner, in the ownership table, of a RAM frame in flight (R81, `reclaim.rs`): freed, not yet
+/// zeroed and back in the bitmap. No process has this PID, so every owner check refuses the frame,
+/// and it is not free, so no allocation takes it.
+pub const IN_FLIGHT: Pid = match Pid::new(0xfffd) {
+    Some(pid) => pid,
+    None => unreachable!(),
+};
+const _: () = assert!(crate::arch::process::MAX_PROCESS_COUNT < 0xfffd);
+/// The most done frames one acquisition of the kernel lock gives back to the bitmap
+/// (`MemoryManager::commit`): a constant, so the commit adds a bounded step to every section (R12).
+pub const COMMIT_MAX: usize = 64;
 type RamAllocation = Option<Pid>;
 
 /// Every free RAM frame, a set bit in a bitmap the kernel keeps in frames of its own (owned by
@@ -138,6 +165,11 @@ type RamAllocation = Option<Pid>;
 struct FreeFrames {
     /// Every level's words, back to back, in the bitmap's frames.
     bits: LoaderTable<u64>,
+    /// A bit a frame, as level 0: set for a frame free since boot and never taken, which may hold
+    /// whatever was there before the kernel (R11). The first allocation zeroes it; every frame
+    /// given back since is zero (R81). Set at boot only, so it only shrinks; cleared whenever a
+    /// frame leaves the bitmap ([`MemoryManager::set_owner`]), so it names free frames only.
+    dirty: LoaderTable<u64>,
     /// The word each level starts at, level 0 (a bit a frame) first; the last entry is the total.
     level_start: [usize; LEVELS + 1],
 }
@@ -163,7 +195,7 @@ impl FreeFrames {
             level_start[level + 1] = level_start[level] + words;
         }
         assert!(words == 1, "mm: RAM is larger than the physmap reaches");
-        FreeFrames { bits: LoaderTable(None), level_start }
+        FreeFrames { bits: LoaderTable(None), dirty: LoaderTable(None), level_start }
     }
 
     fn words(&self, level: usize) -> usize { self.level_start[level + 1] - self.level_start[level] }
@@ -226,7 +258,13 @@ impl MemoryManager {
             ram_size: 0,
             ram_name: 0,
             allocations: LoaderTable(None),
-            free: FreeFrames { bits: LoaderTable(None), level_start: [0; LEVELS + 1] },
+            free: FreeFrames {
+                bits: LoaderTable(None),
+                dirty: LoaderTable(None),
+                level_start: [0; LEVELS + 1],
+            },
+            in_flight: 0,
+            committing: None,
             dma_pool: DmaPool { first: 0, held: [0; DMA_POOL_PAGES / 64] },
             extra_allocations: LoaderTable(None),
             extra_regions: None,
@@ -304,7 +342,9 @@ impl MemoryManager {
         // `set_owner`, made before there is a bitmap to keep. Then the one scan of the table
         // sets a bit for every frame the loader left free, and the summaries above them.
         self.free = FreeFrames::sized(self.allocations.len());
-        let frames = (self.free.level_start[LEVELS] * 8).div_ceil(PAGE_SIZE);
+        // The levels, then the dirty twin of level 0.
+        let words = self.free.level_start[LEVELS] + self.free.words(0);
+        let frames = (words * 8).div_ceil(PAGE_SIZE);
         let mut run = 0;
         let last = (0..self.allocations.len())
             .find(|index| {
@@ -315,19 +355,24 @@ impl MemoryManager {
         let first = last + 1 - frames;
         self.allocations[first..=last].fill(Some(redoubt_layout::KERNEL_PID));
         let virt = redoubt_layout::physmap_virt(self.ram_start + first * PAGE_SIZE);
-        // SAFETY: The bitmap's frames were taken from free RAM at boot, before anything else ran,
+        // SAFETY: The bitmap's frames (its levels and the dirty twin, `words` words, every bit
+        // pattern a valid `u64`) were taken from free RAM at boot, before anything else ran,
         // and are KERNEL_PID's for the kernel's whole life: never mapped into a process, never
         // freed and never handed to `kframe`. This is the one place that makes a slice of them,
         // once, at boot, so it is the only reference. The memory manager reaches it only through
         // `&mut self`, under the kernel's one lock.
-        self.free.bits.0 =
-            Some(unsafe { slice::from_raw_parts_mut(virt as *mut u64, self.free.level_start[LEVELS]) });
+        let (bits, dirty) = unsafe { slice::from_raw_parts_mut(virt as *mut u64, words) }
+            .split_at_mut(self.free.level_start[LEVELS]);
+        (self.free.bits.0, self.free.dirty.0) = (Some(bits), Some(dirty));
         for level in 0..LEVELS {
             for word in 0..self.free.words(level) {
                 let value = self.summary(level, word);
                 self.free.bits[self.free.level_start[level] + word] = value;
             }
         }
+        // Every frame free now may hold what the loader or the firmware left there.
+        let level0 = self.free.level_start[0]..self.free.level_start[1];
+        self.free.dirty.copy_from_slice(&self.free.bits[level0]);
         self.take_dma_pool();
         Ok(())
     }
@@ -351,8 +396,7 @@ impl MemoryManager {
     }
 
     /// Allocate a single page to the given process, charged to its budget (R6): `OutOfMemory` if
-    /// the budget cannot pay. DOES NOT ZERO THE PAGE!!! This function CANNOT zero the page, as
-    /// it hasn't been mapped yet.
+    /// the budget cannot pay. The page is zero: every frame the bitmap gives is (R81).
     pub fn alloc_page(&mut self, pid: Pid) -> Result<usize, PageError> {
         let index = self.alloc_frame(pid)?;
         if self.charge_frame(pid).is_err() {
@@ -370,8 +414,11 @@ impl MemoryManager {
     /// Take a free frame for `owner`, the lowest; its index in the ownership table.
     #[cfg(not(feature = "alloc-first-fit"))]
     fn alloc_frame(&mut self, owner: Pid) -> Result<usize, PageError> {
-        let index = self.find_free(false).ok_or(PageError::NoFrame)?;
-        self.set_owner(index, Some(owner));
+        let index = match self.find_free(false) {
+            Some(index) => index,
+            None => self.reclaim_wait()?,
+        };
+        self.take(index, owner);
         Ok(index)
     }
 
@@ -379,9 +426,147 @@ impl MemoryManager {
     /// table from frame 0 that the bitmap replaced, so the case's bound must fail.
     #[cfg(feature = "alloc-first-fit")]
     fn alloc_frame(&mut self, owner: Pid) -> Result<usize, PageError> {
-        let index = self.allocations.iter().position(Option::is_none).ok_or(PageError::NoFrame)?;
-        self.set_owner(index, Some(owner));
+        let index = match self.allocations.iter().position(Option::is_none) {
+            Some(index) => index,
+            None => self.reclaim_wait()?,
+        };
+        self.take(index, owner);
         Ok(index)
+    }
+
+    /// Free frame `index` goes to `owner`, zero: a frame free since boot is zeroed now, once
+    /// (`FreeFrames::dirty`); any other is zero already (R81), which a checked build samples.
+    fn take(&mut self, index: usize, owner: Pid) {
+        let phys = self.ram_start + index * PAGE_SIZE;
+        if self.free.dirty[index / 64] & 1 << (index % 64) != 0 {
+            crate::kframe::zero(phys);
+        }
+        #[cfg(debug_assertions)]
+        assert!(
+            crate::kframe::read(phys, 0) == 0 && crate::kframe::read(phys, PAGE_SIZE - 8) == 0,
+            "R81: free frame {:#x} is not zero",
+            phys
+        );
+        self.set_owner(index, Some(owner));
+        #[cfg(feature = "inflight-trace")]
+        crate::sched::trace::record(crate::sched::trace::TAKEN, index as u64, 0);
+    }
+
+    /// The bitmap is empty: wait for a frame in flight to come back, or `NoFrame` if none is in
+    /// flight. A budget that can pay always finds a frame (`map_fixed`): the frames in flight are
+    /// RAM that no budget is charged for. So the wait takes the done frames first, then a pending
+    /// one, this hart's or another's (shot down, then zeroed here), and only then waits, the lock
+    /// held, for another hart zeroing its list outside it to finish a frame: no lock is needed for
+    /// that, so it ends within one frame's zeroing. The free frame's index.
+    fn reclaim_wait(&mut self) -> Result<usize, PageError> {
+        loop {
+            self.commit(COMMIT_MAX);
+            if let Some(index) = self.find_free(false) {
+                return Ok(index);
+            }
+            if self.in_flight == 0 {
+                return Err(PageError::NoFrame);
+            }
+            // This hart's staged frames, shot down now, are its pending ones.
+            crate::reclaim::end_section();
+            if let Some((index, hart)) = crate::reclaim::pop_pending() {
+                crate::kframe::zero(self.ram_start + index * PAGE_SIZE);
+                // Zeroed in this section, as its own kernel time: off its payer's bill to come.
+                crate::sched::zeroed_here(hart);
+                self.give_back(index);
+            } else if self.committing.is_none() {
+                crate::reclaim::wait_done();
+            }
+        }
+    }
+
+    /// Give back to the bitmap up to `limit` done frames: the rest of a list a commit did not
+    /// finish first, then each hart's done list, taken whole. Each frame's link is cleared, so it
+    /// goes back all zero. At every acquisition of the kernel lock, and when an allocation finds
+    /// the bitmap empty. Constant work: `limit` frames and a swap a hart.
+    pub fn commit(&mut self, limit: usize) {
+        let mut hart = 0;
+        for _ in 0..limit {
+            while self.committing.is_none() && hart < crate::arch::hart::started() {
+                self.committing = crate::reclaim::take_done(hart);
+                hart += 1;
+            }
+            let Some(index) = self.committing else { return };
+            self.committing = crate::reclaim::unlink(index);
+            self.give_back(index);
+        }
+    }
+
+    /// Frame `index`, in flight and zero, goes back to the bitmap.
+    fn give_back(&mut self, index: usize) {
+        assert!(
+            self.allocations[index] == Some(IN_FLIGHT),
+            "I1: frame {} given back but not in flight",
+            index
+        );
+        #[cfg(feature = "inflight-trace")]
+        self.check_zero(index);
+        self.set_owner(index, None);
+        self.in_flight -= 1;
+        #[cfg(feature = "inflight-trace")]
+        crate::sched::trace::record(crate::sched::trace::COMMITTED, index as u64, 0);
+    }
+
+    /// The attack case's check (`smp-inflight-race`), a stamped audit: every word of a frame given
+    /// back to the bitmap is zero.
+    #[cfg(feature = "inflight-trace")]
+    fn check_zero(&self, index: usize) {
+        let phys = self.ram_start + index * PAGE_SIZE;
+        crate::sched::audit(crate::sched::AUDIT_INDEXES, || {
+            for offset in (0..PAGE_SIZE).step_by(8) {
+                assert!(crate::kframe::read(phys, offset) == 0, "R81: frame {:#x} given back not zero", phys);
+            }
+        });
+    }
+
+    /// A RAM frame its owner gives up (R81): in flight, owned by `IN_FLIGHT`, never free until it is
+    /// zeroed, by the hart that freed it idle or by an allocation that needs it, and given back
+    /// ([`Self::commit`]).
+    /// `shot` is the process whose entry for it was just cleared, if one was, which may still hold
+    /// a translation to it on another hart until it is shot down: the frame waits staged until
+    /// then (`reclaim::stage`). With none (an ended process, already shot down and left; an object
+    /// frame, never mapped) it is pending at once. Who pays for its zeroing the caller tells the
+    /// scheduler (`sched::retiring`), once for every frame a walk retires, not a frame at a time.
+    fn retire(&mut self, index: usize, shot: Option<Pid>) {
+        let owner = self.allocations[index];
+        assert!(
+            owner.is_some_and(|o| o != IN_FLIGHT && o != DMA_OWNER),
+            "I1: frame {} retired, owned by {:?}",
+            index,
+            owner
+        );
+        #[cfg(feature = "inflight-trace")]
+        crate::sched::trace::record(
+            crate::sched::trace::RETIRED,
+            index as u64,
+            shot.map_or(0, |p| u128::from(p.get())),
+        );
+        // Debug only, never in a bench build but one recorded negative run: the frame goes
+        // straight back to the bitmap, never zeroed, so `smp-inflight-race` must fail.
+        #[cfg(feature = "inflight-early-commit")]
+        {
+            self.set_owner(index, None);
+            #[cfg(feature = "inflight-trace")]
+            crate::sched::trace::record(crate::sched::trace::COMMITTED, index as u64, 0);
+            return;
+        }
+        #[allow(unreachable_code)]
+        {
+            self.set_owner(index, Some(IN_FLIGHT));
+            self.in_flight += 1;
+            match shot {
+                // Debug only, never in a bench build but one recorded negative run: pending (its
+                // link written, its zeroing due) before the shootdown, so `smp-inflight-race` must
+                // fail.
+                Some(pid) if !cfg!(feature = "inflight-zero-unshot") => crate::reclaim::stage(index, pid),
+                _ => crate::reclaim::pend(index),
+            }
+        }
     }
 
     /// A frame for the kernel itself (the other harts' stacks, the test-only trace ring), taken at
@@ -396,10 +581,15 @@ impl MemoryManager {
 
     /// Write the ownership table's entry for RAM frame `index`, keeping the free-frame bitmap's
     /// level 0 equal to the table's `None` entries: a frame that becomes owned has its bit
-    /// cleared, one that becomes free has it set. Every write of the table goes through here.
+    /// cleared, one that becomes free has it set. Every write of the table goes through here. A
+    /// frame that leaves the bitmap leaves the dirty set too: whoever takes it zeroes it first, or
+    /// is the kernel itself, at boot.
     fn set_owner(&mut self, index: usize, owner: Option<Pid>) {
         match (self.allocations[index], owner) {
-            (None, Some(_)) => self.mark_free(index, false),
+            (None, Some(_)) => {
+                self.mark_free(index, false);
+                self.free.dirty[index / 64] &= !(1 << (index % 64));
+            }
             (Some(_), None) => self.mark_free(index, true),
             _ => {}
         }
@@ -412,7 +602,7 @@ impl MemoryManager {
     /// Set (`free`) or clear frame `index`'s bit, then the summary bit above each word that
     /// changes between zero and non-zero: at most one word a level.
     fn mark_free(&mut self, index: usize, free: bool) {
-        let FreeFrames { bits, level_start } = &mut self.free;
+        let FreeFrames { bits, level_start, .. } = &mut self.free;
         let mut entry = index;
         for start in &level_start[..LEVELS] {
             let word = &mut bits[start + entry / 64];
@@ -477,20 +667,46 @@ impl MemoryManager {
             self.allocations[pool].iter().all(|owner| *owner == Some(DMA_OWNER)),
             "I1: a DMA pool frame left the pool"
         );
+        // R81: only a free frame may be dirty, and the frames in flight are the ones counted.
+        for (word, dirty) in self.free.dirty.iter().enumerate() {
+            assert!(
+                dirty & !self.word(0, word) == 0,
+                "I1: word {} of the dirty set names a frame not free",
+                word
+            );
+        }
+        let in_flight = self.allocations.iter().filter(|owner| **owner == Some(IN_FLIGHT)).count();
+        assert!(
+            in_flight == self.in_flight,
+            "I1: {} frames in flight, {} counted",
+            in_flight,
+            self.in_flight
+        );
+        // And each is on exactly one list, or in one hart's batch: none lost, none on two.
+        let committing = crate::reclaim::length(self.committing, in_flight);
+        let (least, most) = crate::reclaim::counted(in_flight);
+        assert!(
+            least + committing <= in_flight && in_flight <= most + committing,
+            "I1: {} frames in flight, {} to {} on the lists",
+            in_flight,
+            least + committing,
+            most + committing
+        );
     }
 
     /// A zeroed frame for a kernel object, owned by `OBJECT_OWNER`. The caller charges it to the
     /// budget the cost table names. `OutOfMemory` only if RAM itself is exhausted.
     pub fn alloc_object_frame(&mut self) -> Result<u32, redoubt_sys::Error> {
         let index = self.alloc_frame(OBJECT_OWNER).map_err(|_| redoubt_sys::Error::OutOfMemory)?;
-        crate::kframe::zero(self.ram_start + index * PAGE_SIZE);
         self.objects.high_frame = self.objects.high_frame.max(index as u32);
         Ok(index as u32)
     }
 
+    /// An object frame is freed: in flight at once, since no process ever mapped it (R81).
     pub fn free_object_frame(&mut self, frame: u32) {
         self.object_phys(frame);
-        self.set_owner(frame as usize, None);
+        self.retire(frame as usize, None);
+        crate::sched::retiring(1);
     }
 
     /// A dying object's frame is due to be freed. Inside a destruction the free is deferred past
@@ -511,14 +727,65 @@ impl MemoryManager {
         self.objects.deferred = Some(frame);
     }
 
-    /// Free every frame a destruction deferred (after its sweep).
+    /// Free every frame a destruction deferred (after its sweep). The deferred list is linked
+    /// through the word the frames in flight are (`reclaim::LINK`), so each frame needs only its
+    /// owner changed, and the list goes onto the pending list whole: a destruction may free
+    /// thousands.
     pub(crate) fn free_deferred_frames(&mut self) {
+        let mut chain = ObjectChain { first: self.objects.deferred, ..ObjectChain::default() };
         while let Some(frame) = self.objects.deferred {
             let phys = self.object_phys(frame);
-            let next = (crate::kframe::read(phys, crate::budget::DEFER_WORD * 8) as u32).checked_sub(1);
-            self.objects.deferred = next;
-            self.free_object_frame(frame);
+            self.objects.deferred = (crate::kframe::read(phys, crate::reclaim::LINK) as u32).checked_sub(1);
+            if cfg!(feature = "inflight-early-commit") {
+                self.retire(frame as usize, None);
+                chain.first = None;
+            } else {
+                self.in_flight_linked(&mut chain, frame);
+                chain.last = Some(frame);
+            }
+            chain.frames += 1;
         }
+        self.pend_object_chain(chain);
+    }
+
+    /// A destruction frees kernel-object frame `frame`, past its sweep (`destroy_marked`): in
+    /// flight at once, since it was never mapped, and linked onto the front of `chain` through
+    /// `reclaim::LINK`; [`Self::pend_object_chain`] then pends the chain whole. One owner change and
+    /// one link write a frame, no more than a free to the bitmap cost: a lease's destruction frees
+    /// thousands.
+    pub(crate) fn retire_object(&mut self, chain: &mut ObjectChain, frame: u32) {
+        let phys = self.object_phys(frame);
+        if cfg!(feature = "inflight-early-commit") {
+            self.retire(frame as usize, None);
+        } else {
+            crate::kframe::write(phys, crate::reclaim::LINK, crate::budget::frame_word(chain.first));
+            self.in_flight_linked(chain, frame);
+            chain.last.get_or_insert(frame);
+            chain.first = Some(frame);
+        }
+        chain.frames += 1;
+    }
+
+    /// Object frame `frame`, linked into `chain`, goes in flight; owned to owned, so its bit, clear
+    /// already, stays so.
+    fn in_flight_linked(&mut self, chain: &mut ObjectChain, frame: u32) {
+        #[cfg(feature = "inflight-trace")]
+        {
+            crate::sched::trace::record(crate::sched::trace::RETIRED, u64::from(frame), 0);
+            crate::sched::trace::record(crate::sched::trace::PENDED, u64::from(frame), 0);
+        }
+        self.set_owner(frame as usize, Some(IN_FLIGHT));
+        chain.linked += 1;
+    }
+
+    /// The end of a destruction's object frees: `chain` onto this hart's pending list whole, and its
+    /// frames' zeroing on the destruction's payer (`sched::retiring`).
+    pub(crate) fn pend_object_chain(&mut self, chain: ObjectChain) {
+        if let (Some(first), Some(last)) = (chain.first, chain.last) {
+            crate::reclaim::pend_chain(first as usize, last as usize);
+        }
+        self.in_flight += chain.linked;
+        crate::sched::retiring(chain.frames);
     }
 
     /// Whether RAM frame `frame` holds a kernel object.
@@ -888,7 +1155,14 @@ impl MemoryManager {
                         return Err(PageError::NoFrame);
                     }
                 }
-                self.set_owner(offset, after);
+                if after.is_none() {
+                    // Released: in flight until zeroed (R81). `pid`'s entry for it was just
+                    // cleared, and `pid` is shot down before the call returns.
+                    self.retire(offset, Some(pid));
+                    crate::sched::retiring(1);
+                } else {
+                    self.set_owner(offset, after);
+                }
             }
             return Ok(());
         }
@@ -957,6 +1231,12 @@ impl MemoryManager {
         // Off the dying space, and its ASID flushed, before any of its frames is free
         // (kernel/memory-layout.md, "`satp`").
         crate::arch::mem::leave(space);
+        #[cfg(debug_assertions)]
+        assert!(
+            !crate::arch::hart::runs_elsewhere(pid),
+            "R81: PID {} still runs on another hart at its end",
+            pid
+        );
         let kernel = Pid::new(1).unwrap();
         // One walk of the process's own tables, never of every frame of RAM (R12;
         // kernel/budgets.md, "Residual risks"). A frame it has lent out is still mapped in the
@@ -964,8 +1244,10 @@ impl MemoryManager {
         // it, and freed when the borrower returns it (the caller's charge ends here; the lend
         // stays charged to the server that holds it, kernel/ipc.md R3). Every other frame its
         // tables name that is still credited to it goes back; a borrowed page is its lender's. A
-        // page lent to itself ends the kernel's whichever of its two entries the walk meets first.
+        // page lent to itself has two entries: met at the lender's first, it is the kernel's and
+        // the alias leaves it; met at the alias first, it is in flight and the lender's leaves it.
         // A process that never ran has lent nothing.
+        let mut retired = 0;
         space.for_each_owned_frame(|phys, lent| {
             // The frame's entry: in RAM's table (`true`), or else in the extra regions'.
             let entry = if self.is_main_memory(phys as *mut u8) {
@@ -977,19 +1259,25 @@ impl MemoryManager {
             let owner = if ram { self.allocations[index] } else { self.extra_allocations[index] };
             // A DMA frame is never lent (kernel/devices.md), and stays `DMA_OWNER`'s whatever
             // happens: only `dma_release` pools it.
-            let owner = if lent && owner != Some(DMA_OWNER) {
+            let owner = if lent && owner != Some(DMA_OWNER) && owner != Some(IN_FLIGHT) {
                 Some(kernel)
             } else if !lent && owner == Some(pid) {
                 None
             } else {
                 return;
             };
-            if ram {
+            if ram && owner.is_none() {
+                // No hart runs `pid` any more (it was shot down and left, or never ran), so the
+                // frame can take no store: pending at once (R81).
+                self.retire(index, None);
+                retired += 1;
+            } else if ram {
                 self.set_owner(index, owner);
             } else {
                 self.extra_allocations[index] = owner;
             }
         });
+        crate::sched::retiring(retired);
         self.uncharge_all_frames(pid);
     }
 
@@ -1082,12 +1370,9 @@ impl MemoryManager {
         for offset in (0..len).step_by(PAGE_SIZE) {
             let frame = match phys {
                 Some(base) => base + offset,
+                // Zero already, as every frame the bitmap gives (R11, R81).
                 None => match self.alloc_page(pid) {
-                    // Zeroed through the physmap, before the mapping exists at all (R11).
-                    Ok(frame) => {
-                        crate::kframe::zero(frame);
-                        frame
-                    }
+                    Ok(frame) => frame,
                     Err(_) => return Err(self.undo_run(pid, at, offset, ours)),
                 },
             };
@@ -1231,17 +1516,17 @@ impl MemoryManager {
             "map_fixed: tables_needed miscounted"
         );
         for offset in (0..len).step_by(PAGE_SIZE) {
-            // Zeroed through the physmap, before the mapping exists at all (R11). The charge
-            // check above guarantees the budget can pay for `npages` pages. That a free frame
-            // exists for each is an assumption: a budget's free_pages is backed by free
-            // physical frames. It holds because `boot_budgets` gives `root` only the RAM frames
-            // the kernel did not keep, every child carves its limit out of its parent's, and
-            // nothing is held back. `process_map` relies on the same thing for its page tables
-            // (its `prepare_map` `.expect`, which allocates through `walk`) and for the untouched
-            // source pages it backs (its `ensure_range_exists` `.expect`). `map_run` instead treats a
-            // failed `alloc_page` as live and unwinds (`undo_run`).
+            // Zero already, as every frame the bitmap gives (R11, R81). The charge check above
+            // guarantees the budget can pay for `npages` pages. That a free frame exists for each
+            // is an assumption: a budget's free_pages is backed by free physical frames, or by
+            // frames in flight, which the allocation waits for (`reclaim_wait`). It holds because
+            // `boot_budgets` gives `root` only the RAM frames the kernel did not keep, every child
+            // carves its limit out of its parent's, and nothing is held back. `process_map`
+            // relies on the same thing for its page tables (its `prepare_map` `.expect`, which
+            // allocates through `walk`) and for the untouched source pages it backs (its
+            // `ensure_range_exists` `.expect`). `map_run` instead treats a failed `alloc_page` as
+            // live and unwinds (`undo_run`).
             let frame = self.alloc_page(pid).expect("map_fixed: charged for above");
-            crate::kframe::zero(frame);
             crate::arch::mem::map_page_inner(self, pid, frame, addr + offset, flags, true)
                 .expect("map_fixed: prepare_map already made this slot ready");
         }
@@ -1280,10 +1565,15 @@ pub(crate) fn sync_if_executable(pid: Pid, flags: MemFlags) {
 /// One of `pid`'s entries was cleared or narrowed, or made executable: shoot `pid` down on every
 /// other hart running it, which flushes its ASID and runs `fence.i` before it acknowledges
 /// (`arch::hart::shootdown`), so the call returns only once no hart can use the old entry or
-/// fetch the old code (kernel/memory.md, "Residual risks"). A frame the call freed or moved is
-/// reused only under the kernel lock, which the call holds until then. With no other hart running
-/// `pid`, it costs a look at each hart's block.
+/// fetch the old code (kernel/memory.md, "Residual risks"). A frame the call moved is reused only
+/// under the kernel lock, which the call holds until then; one it freed is staged until here, and
+/// zeroed only after it (R81). With no other hart running `pid`, it costs a look at each hart's
+/// block.
 pub(crate) fn shoot(pid: Pid) { shoot_for(pid, crate::arch::hart::Shot::Flush) }
+
+/// The kernel lock was just taken (a trap from user mode, `kmain` back from an idle halt): the
+/// frames harts have zeroed since go back to the bitmap, at most [`COMMIT_MAX`] (R81).
+pub fn entered() { MemoryManager::with_mut(|mm| mm.commit(COMMIT_MAX)) }
 
 fn shoot_for(pid: Pid, why: crate::arch::hart::Shot) {
     // Debug only, never in a bench build but one recorded negative run: these shootdowns are
@@ -1291,6 +1581,11 @@ fn shoot_for(pid: Pid, why: crate::arch::hart::Shot) {
     if !cfg!(feature = "smp-no-shootdown") {
         crate::arch::hart::shootdown(pid, why);
     }
+    #[cfg(feature = "inflight-trace")]
+    crate::sched::trace::record(crate::sched::trace::SHOT, u64::from(pid.get()), 0);
+    // Every hart it asked has acknowledged: the frames freed from `pid`'s space so far can take no
+    // store, and go to be zeroed (R81).
+    crate::reclaim::shot(pid);
 }
 
 /// R11 for a caller that maps with `.expect` afterwards (`map_fixed`, `process_map`): refuse

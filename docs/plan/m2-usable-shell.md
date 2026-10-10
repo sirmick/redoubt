@@ -161,15 +161,26 @@ attacked before the next, in this order:
    executable, and a hart fences before it runs a process; a thread that moves needs no fence of
    its own ([memory](../kernel/memory.md#residual-risks),
    [memory layout](../kernel/memory-layout.md#residual-risks)).
-5. **Lock to decide, unlock to do.** Frame zeroing, large copies and the wait for shootdown
-   acknowledgements move outside the lock, on frames no other hart can name: a frame leaves the
-   free-frame bitmap into an in-flight state before the lock is dropped, and enters a process
-   only after the work is done and the lock is taken again. That invariant is a rule beside
-   [R11 (memory)](../kernel/memory.md#r11-memory), with an attack case (a second hart racing to
-   allocate, map or free the in-flight frame) before any work relies on it.
+5. **Lock to decide, unlock to do.** A freed frame is zeroed outside the lock by the hart that
+   freed it, only while every started hart is idle: it passes from its owner into an in-flight
+   state no other hart can name, is zeroed only after the shootdown of its last mapping has been
+   acknowledged by every hart asked, and enters the free-frame bitmap zero, under the lock again;
+   an allocation from the bitmap writes nothing unless the frame was never used since boot, and
+   one that finds the bitmap empty zeroes a frame in flight itself
+   ([R81 (frames in flight)](../kernel/memory.md#r81-frames-in-flight)), with an attack case (a
+   second hart racing to allocate, map or free the in-flight frame). Measured at two harts under
+   `icount`, zeroing was the only frame work long enough to move: 220 µs a page while
+   `kframe::zero` checked every word, about a fifth of that after, and 15 s of zeroing in the
+   68,218 endpoint creations of the containment gate. That gate, busy on every hart, saves none
+   of it: allocations there still zero frames never used since boot, as before
+   ([memory](../kernel/memory.md#residual-risks)). The wait for shootdown acknowledgements
+   totalled 0.9 ms over that whole gate, and the kernel makes no large copies (messages are words,
+   pages move by remapping), so both stay under the lock
+   ([memory](../kernel/memory.md#residual-risks)).
 6. **Per-hart frame magazines,** each refilled from the bitmap under the lock and drawn from
-   with interrupts off, so a hart's common allocation takes no lock at all; frames are zeroed as
-   they enter a magazine, by step 5's rule.
+   with interrupts off, so a hart's common allocation takes no lock at all; a magazine is filled
+   from the bitmap, whose frames are zero (step 5) but for those never used since boot, which the
+   fill must zero.
 7. **Finer locking:** one trap-entry lock whose guard owns a token, so that the kernel's globals
    become token-guarded cells and a compile-time lock order exists if the lock is ever split;
    the per-process thread-context pages first, and anything finer only once the steps above are
@@ -226,7 +237,10 @@ several harts at once, and every unmap, lend and return shoots the process down 
 (`smp-shootdown`, `smp-fence`), and a session's VM runs two schedulers on them: two Elixir tasks
 finish in 0.53 to 0.56 of the time on 2 harts as on one, measured in host time, and a session at 1
 hart keeps its single-scheduler rate ([beamlet](../userland/beamlet.md#beamlet-on-redoubt);
-`beamlet-schedulers-mttcg`). R12 holds across harts: each budget gets its water-filling share
+`beamlet-schedulers-mttcg`). A freed frame is in flight where no other hart can name it until it
+is zeroed, by the hart that freed it when idle or by an allocation that finds no free frame, and
+allocation from the bitmap zeroes nothing (step 5; `bench:smp-inflight-race`,
+[R81](../kernel/memory.md#r81-frames-in-flight)). R12 holds across harts: each budget gets its water-filling share
 of the harts, judged from the kernel's charges by the oracle and by the model at 1, 2 and 4 harts
 ([R12](../kernel/scheduling.md#r12-scheduling)), and the latency targets are gated at 2 harts and
 recorded at 4 ([responsiveness](../kernel/scheduling.md#responsiveness)). The console has one

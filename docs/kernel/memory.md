@@ -57,7 +57,7 @@ the kernel and the [model](model.md), is in the
 
 ### Backing and zeroing
 
-<details><summary>Status: built · partly tested: that a frame freed with data in it comes back zero is attacked only in the model: `mem-attack` cannot tell which frames it was handed, and `dma-reset-reuse`, which proves reuse by physical address, never reads the reused frames; QEMU models no cache, so `cbo-user-fault` shows that user cache-block operations trap, not that zeroes could be lost, and the firmware's flush is read from the code · tested (8)</summary>
+<details><summary>Status: built · partly tested: that a frame freed with data in it comes back zero is attacked by `smp-inflight-race`, whose witness reads every page it is handed while the trace shows most frames handed out were given back since, but no case ties a page it read to the frame another process filled: `mem-attack` cannot tell which frames it was handed, and `dma-reset-reuse`, which proves reuse by physical address, never reads the reused frames; a frame free since boot is zeroed at its first allocation, which no case can tell from a frame QEMU left zero; QEMU models no cache, so `cbo-user-fault` shows that user cache-block operations trap, not that zeroes could be lost, and the firmware's flush is read from the code · tested (10)</summary>
 
 - bench:device
 - bench:mem-attack
@@ -66,16 +66,21 @@ the kernel and the [model](model.md), is in the
 - bench:touch-beyond-ram
 - bench:cbo-user-fault
 - bench:scan-bounds
+- bench:smp-inflight-race
 - mutation:R11NoZeroing
+- mutation:R81CommitUnzeroed
 
 </details>
 
 `map_anon` and `map_fixed` back every page when they map it. Each takes a free frame, charges it
-to the caller's budget ([R6 (charging)](budgets.md#r6-charging)), zeroes it through the
-[physmap](memory-layout.md#the-direct-physical-map), and only then writes the entry that maps
-it. So a page is zero the first time its process can see it, whoever held the frame before. The
-page tables a mapping needs are allocated, zeroed and charged as it goes, to the budget of the
-process they map into. A free frame is a set bit in a bitmap the kernel keeps, with a summary bit
+to the caller's budget ([R6 (charging)](budgets.md#r6-charging)), and only then writes the entry
+that maps it. Every free frame is already zero: a frame given up is zeroed before it is free again
+([below](#frames-in-flight)), and a frame free since boot, which may hold whatever the loader or
+the firmware left there, is zeroed through the
+[physmap](memory-layout.md#the-direct-physical-map) the first time it is taken. So a page is zero
+the first time its process can see it, whoever held the frame before, and backing a page writes
+nothing to it. The page tables a mapping needs are allocated and charged as it goes, to the
+budget of the process they map into. A free frame is a set bit in a bitmap the kernel keeps, with a summary bit
 for every word of it, level above level, to a fixed depth set by the most RAM the kernel can map.
 Taking the lowest free frame reads one word a level, and giving one back sets its bit and at most
 one word a level, so neither searches RAM, however much of it is in use (`bench:scan-bounds`). A
@@ -106,6 +111,96 @@ takes lies in the [physmap](memory-layout.md#the-direct-physical-map), which end
 rv64 and below 4 GiB on rv32: page numbers to 2^25, where 32 bits reach 16 TiB of physical
 address. A compile-time assertion in `kernel/src/sched.rs` holds the physmap's last page number
 within 32 bits.
+
+### Frames in flight
+
+<details><summary>Status: built · partly tested: QEMU drops a hart's TLB at its next `satp` write, so no case lands a stale store in a frame being zeroed; the order that keeps one out is the trace's, and a stale store cannot be told apart from the recorded negative's · tested (4)</summary>
+
+- bench:smp-inflight-race
+- bench:smp-shootdown
+- mutation:R81InFlightAllocatable
+- mutation:R81CommitUnzeroed
+
+</details>
+
+A frame its owner gives up, by `unmap`, a process's end, a page table emptied, an abandoned lend
+or a kernel object freed, is not free at once. Under the kernel lock it goes **in flight**: the
+ownership table names it as `IN_FLIGHT`'s, a reserved owner no process has, so every call that
+checks who owns a frame refuses it, and its bit in the bitmap stays clear, so no allocation takes
+it. Its budget is uncharged then, as before. It is zeroed later, outside the lock by the hart that
+freed it when that hart idles, or under the lock by an allocation that finds the bitmap empty, and
+the lock's next holder, on any hart, gives it back to the bitmap ([R81](#r81-frames-in-flight)).
+So zeroing, the one piece of a frame's work long enough to matter, leaves the calls that free and
+the calls that allocate whenever a hart has idle time to do it, and a call never pays for frames
+it did not free or take.
+
+A frame waits for its zeroing on one of two lists the freeing hart keeps:
+
+1. **Staged,** while another hart may still hold a translation to it: the call cleared its entry
+   in a process's space and has yet to shoot that process down. The list holds the frame's number,
+   never anything in the frame, since a store through a stale translation could still change it.
+   The call's shootdown ([residual risks](#residual-risks)) moves the process's staged frames on;
+   a call that frees more than the 64 a hart stages shoots the process down early, once for every
+   64.
+2. **Pending,** once no hart can store to it: an ended process's frames (its harts left its space
+   before its frames were freed), a kernel object's (never mapped), and the staged ones after
+   their shootdown. The list is linked through one word of each frame, the word a destruction
+   already links the object frames it frees through, so that chain joins the list whole.
+
+Pending frames are zeroed in one of two places, and never in a third:
+
+- **Idle, when every hart is idle.** A hart with nothing to run, when every started hart is idle
+  too, takes one frame off its pending list while it still holds the lock, gives the lock up,
+  zeroes it and pushes it onto its done list, the link still in that word. With more left it does
+  not halt, but goes back through `kmain`'s interrupt-enabled top, where an interrupt that came
+  meanwhile is taken and anything woken runs first, and then takes the next. So an idle hart
+  answers an interrupt within one frame's zeroing, about 30 µs under `icount`. One hart drains at
+  a time: each frame costs its drainer a release and a take of the lock, and two drainers would
+  find it held at nearly every take, each take a halt and each release the other's interrupt. At
+  rest after a login on launch's four harts that was about 33,000 interrupts in two seconds,
+  where alone a drainer finds the lock free. A hart that idles while another drains halts; the
+  drainer, its list empty, wakes the next hart with frames pending once it gives the lock up, and
+  so does a hart that idles last with none of its own, for a hart that halted with frames while
+  another worked. A drainer woken to work drains no more until every hart is idle again, and
+  gives the drain up at its next idle pass if one is not. While any hart is busy, an
+  idle hart halts instead, as before, and a hart with nothing pending halts as it always did. So
+  the system at rest, once drained, takes the interrupts it took before R81
+  ([the machine at rest](../testbench.md#the-machine-at-rest)).
+- **On demand.** An allocation that finds the bitmap empty with frames in flight gives back the
+  done frames first, then takes one frame off any hart's pending list and zeroes it under the
+  lock, as every allocation once did: one frame for each allocation, main's cost. Only when every
+  frame in flight is one an idle hart is zeroing does it wait, still holding the lock, and then
+  for one frame at most: that hart needs no lock to finish it, and its push wakes the waiter. So a
+  budget can always pay for the frames it can buy, and they always exist, because the frames in
+  flight are RAM no budget is charged for.
+- **Never at an exit to user mode.** The thread a hart returns to did not free those frames, and
+  the caller of a destruction waits for the walk of
+  [R10 (destruction)](budgets.md#r10-destruction), not for the zeroing of the lease it freed: a
+  lease's 4,300 frames, zeroed there, put 140 ms into the steward's deadline notice in the
+  containment gate.
+
+Why only when every hart is idle: under `icount` the harts share one virtual clock, so a hart that
+zeroes while another works slows that one's time as surely as if the work were its own; a refused
+search in `map-anon-search-bound` took 406 µs instead of 116 at two harts while the other hart
+zeroed. On a real machine that zeroing would run beside the work for free; that is forgone for now
+([residual risks](#residual-risks)).
+
+A pending list is read and written only under the lock, and the frame an idle hart zeroes only by
+that hart, so a frame in flight is in exactly one place: staged, pending, being zeroed, done or
+being given back. The kernel's checked build counts them, list by list, against the ownership
+table at each destruction's audit, so a list lost or linked twice stops the boot. Every
+acquisition of the lock gives back up to 64 done frames from every hart's list, clearing each
+link, so a frame enters the bitmap all zero and the step adds a bounded piece to each kernel
+section. Pending frames are bounded only by RAM.
+
+The zeroing an idle hart does is the work of whoever freed the frames, so it is billed to them: the
+budget paying for the kernel time when the frame was retired (the caller, a destroyer, or a
+deadline's payer ([R10 (destruction)](budgets.md#r10-destruction))), when the hart takes the lock
+back, for the frames it zeroed, the newest first as the list gives them; the hart keeps at most
+four such payers, and what it has not zeroed stays theirs until it does. A frame zeroed on demand
+is the allocation's own kernel time, as on every allocation before: it comes off the freeing
+hart's payers unbilled, the newest first by count, since a frame does not record its payer, so the
+split among those payers is by counts, not by frame.
 
 ### Page tables
 
@@ -259,9 +354,11 @@ DMA pool instead, a fixed 1024 pages ([devices](devices.md#dma_alloc)).
 ```mermaid
 stateDiagram-v2
     state "DMA-held" as DMA
-    [*] --> Free
-    Free --> Mapped: map_anon, map_fixed,<br/>first touch of a reservation<br/>(zeroed first)
-    Mapped --> Free: unmap, a reply to an<br/>abandoned call, or the process ends
+    state "In flight" as Flight
+    [*] --> Free: free at boot<br/>(zeroed when first taken)
+    Free --> Mapped: map_anon, map_fixed,<br/>first touch of a reservation
+    Mapped --> Flight: unmap, a reply to an<br/>abandoned call, or the process ends
+    Flight --> Free: zeroed (its hart idle, or an<br/>allocation), then given back
     Mapped --> Mapped: process_map<br/>(moves to the child)
     Mapped --> Lent: call with a lend<br/>(unmapped from the caller)
     Lent --> Mapped: reply, or the call fails<br/>(back to the caller)
@@ -274,8 +371,10 @@ stateDiagram-v2
     DMA --> Pool: its process ended and every<br/>device that could hold it was reset
 ```
 *Figure: the states of a RAM frame. A frame is mapped by at most one process at a time, and
-is zeroed whenever it leaves Free or the DMA pool. A pool frame is never Free, and a Free
-frame is never DMA-held.*
+is zero whenever it leaves Free or the DMA pool: zeroed in flight, on its way back, or at its
+first allocation if it has been free since boot. A frame in flight is no one's and not free
+([R81](#r81-frames-in-flight)). A pool frame is never Free, and a Free frame is never
+DMA-held.*
 
 ## Authority
 
@@ -303,7 +402,7 @@ frame is never DMA-held.*
 
 ### R11 (memory)
 
-<details><summary>Status: built · partly tested: that a frame freed with data in it comes back zero is attacked only in the model; the absence of any physical-address argument is argued from the call table, not attacked; that the zeroes stay is shown only as user cache-block operations trapping, since QEMU models no cache · tested (18)</summary>
+<details><summary>Status: built · partly tested: that a frame freed with data in it comes back zero is attacked by `smp-inflight-race`'s witness, which no case ties to the frame another process filled ([above](#backing-and-zeroing)); the absence of any physical-address argument is argued from the call table, not attacked; that the zeroes stay is shown only as user cache-block operations trapping, since QEMU models no cache · tested (19)</summary>
 
 - bench:wx
 - bench:write-only-attack
@@ -316,6 +415,7 @@ frame is never DMA-held.*
 - bench:dma-reset-reuse
 - bench:device-exec-refused
 - bench:cbo-user-fault
+- bench:smp-inflight-race
 - mutation:R11NoZeroing
 - mutation:R11SetFlagsAllowsWx
 - mutation:R11SetFlagsAllowsWriteOnly
@@ -343,9 +443,11 @@ frame is never DMA-held.*
 - **Flags are checked before anything is charged or moved** for the new mapping, so a step
   that cannot fail never meets bad flags. `process_map` checks them before it backs any page
   of its source.
-- **Every page is zeroed** before a process first sees it: anonymous and fixed pages, backed
-  reservations, page tables, and `dma_alloc` pages. Pages moved by lend, transfer or
-  `process_map` carry their contents, because moving them is the point.
+- **Every page is zero** before a process first sees it: anonymous and fixed pages, backed
+  reservations, page tables, and `dma_alloc` pages. Every free frame is zero, by
+  [R81](#r81-frames-in-flight), and a frame free since boot is zeroed when first taken, so backing
+  a page writes nothing to it; `dma_alloc` pages are zeroed as they leave the pool. Pages moved by
+  lend, transfer or `process_map` carry their contents, because moving them is the point.
 - **The zeroes stay.** `senvcfg` is 0 on every hart and the firmware turns supervisor
   `cbo.inval` into a flush, so no process can discard the zeroes the kernel wrote to its page and
   read what the frame held before ([above](#backing-and-zeroing)).
@@ -364,6 +466,41 @@ frame is never DMA-held.*
 
 Together these are I9 (pages W^X, zeroed, lends unmapped) of the
 [invariants](invariants.md#i9-pages-wx-zeroed-lends-unmapped).
+
+### R81 (frames in flight)
+
+<details><summary>Status: built · partly tested: QEMU drops a hart's TLB at its next `satp` write, so the order that keeps a stale store out of a zeroed frame is checked from the trace, not seen as a store landing; an allocation that finds the bitmap empty while frames are in flight (it gives back the done ones, zeroes a pending one or waits for the hart zeroing its list) runs in no case, since no case fills RAM while it frees · tested (3)</summary>
+
+- bench:smp-inflight-race
+- mutation:R81InFlightAllocatable
+- mutation:R81CommitUnzeroed
+
+</details>
+
+**A freed RAM frame is in flight until it is zero: it belongs to no process and is not free.**
+
+- **No one can name it.** Its owner in the ownership table is `IN_FLIGHT`, which no process is, so
+  every call that frees, lends, transfers or `process_map`s a frame refuses it, as it refuses a
+  frame of another process's; and no call names a physical frame ([authority](#authority)).
+- **No allocation takes it.** Its bit in the free-frame bitmap is clear until it is given back,
+  and every frame a mapping, a page table or an object gets comes from the bitmap.
+- **One hart writes it at a time, and only once no other can.** Its number is staged until the
+  shootdown of the process whose entry for it was cleared has been acknowledged by every hart
+  asked; only then is it linked through a word of its own, and later zeroed, by the hart that
+  freed it while that hart idles, or under the lock by an allocation that took it off that hart's
+  list. Pending lists change only under the lock, and an idle hart zeroes only the frame it took
+  off its own, so no two harts hold one frame. A frame of an ended process, whose harts left its
+  space first, or of a kernel object, never mapped, is linked at once.
+- **It is given back only zero, and only under the lock,** by the lock's next holder, which
+  clears the link it held.
+
+So every free frame is zero and allocation writes nothing. The kernel's checked build samples
+every frame it takes from the bitmap and counts the frames in flight against the ownership table
+in its destruction audit (I1 (handles name live objects)); `smp-inflight-race`'s kernel checks each frame it gives back word
+by word, and its trace shows the order above for every frame
+([the frames in flight](#frames-in-flight)). In the model, a free puts the frame in flight with
+what it held, and time passing zeroes and frees it; a frame is held, in flight or free, never two,
+and a free frame is zero ([the model](model.md)).
 
 ### R19 (kernel W^X)
 
@@ -466,7 +603,10 @@ kernel, running the call to its end with interrupts off, would stall every other
 - **The physmap maps every user frame writable for the kernel,** code included. Only the
   kernel can use that alias ([memory layout](memory-layout.md#residual-risks)).
 - **A freed frame may still be mapped on another hart.** A free writes nothing into the
-  frame, so a stale mapping could reach only its next owner's data, never the kernel. Every
+  frame until the shootdown that clears its last translation is acknowledged: the frame waits
+  staged by number, and is linked through a word of its own, then zeroed, only after
+  ([R81](#r81-frames-in-flight)). So a stale mapping could reach only a frame no one has written
+  since, never the kernel's link nor its next owner's data. Every
   path that frees a mapped frame unmaps it and flushes the TLB first, or frees an ended
   process's frames or a refused `process_create`'s, whose cached translations carry that
   process's ASID, which nothing runs under again until the PID is given out, and that flushes it
@@ -474,6 +614,19 @@ kernel, running the call to its end with interrupts off, would stall every other
   the call shoots the process down on any other hart running it before the frame can be given
   out again, and a destruction before the free (above, `bench:smp-evict`,
   `bench:smp-shootdown`).
+- **Freed frames are not zeroed beside the work.** An idle hart zeroes frames in flight only when
+  every hart is idle ([frames in flight](#frames-in-flight)), because the bench runs harts under
+  `icount`, whose one virtual clock bills a working hart for another's zeroing. On a real machine
+  an idle hart could zero while others work, at no cost to them; while any hart is busy, frames are
+  zeroed on demand instead, one per allocation under the lock, as before R81. To revisit when the
+  bench can judge an idle hart's work without that shared clock, as `sched-lock-contention-4-mttcg`
+  judges the four-hart tail without `icount`. So R81 saves nothing on a busy machine: in the
+  containment gate, at two harts, no hart is idle while another works and 576 MiB never runs
+  short, so allocations zero never-used frames at their first allocation, as before, and frames
+  in flight reach about 79,500 (about 310 MiB), nearly all held to the end of the run, the longest
+  given back 113 s after it was freed. A process that keeps one hart busy keeps every allocation
+  at that cost, never worse than before R81. Meanwhile a freed frame's old contents stay in RAM,
+  though no call names the frame and no process maps it.
 
 ## Why
 
@@ -481,9 +634,22 @@ kernel, running the call to its end with interrupts off, would stall every other
   want of it, has been told a lie. `map_anon` charges and backs every page before it returns,
   so a process's memory is its own the moment it has the address. Only the loader-started
   stacks are reserved, because their programs have no parent to map them.
-- **Zero on allocation, through the physmap.** Every path that hands a frame to a process
-  zeroes it before the entry exists, so no path can forget and no process ever sees a page
-  before it is zero. Freeing costs only the frame's bit: no zeroing, and no search.
+- **Zero on reclaim, when the harts are idle.** A freed frame is zeroed outside the kernel lock by
+  the hart that freed it when every hart idles, or under the lock by an allocation that needs it,
+  and the bitmap holds only zero frames, so no path that hands a frame to a process can forget to
+  zero it. An allocation writes nothing when idle time has zeroed ahead of it; under load, with no
+  idle time, it zeroes its own frame under the lock as before R81 (a frame never used since boot,
+  or one in flight), so it is never worse than before. No hart zeroes on its way back to user
+  mode: that taxes whatever runs next for frames someone else freed, and a lease's 4,300 frames,
+  zeroed there, put 140 ms into the steward's deadline notice in the containment gate. Measured at
+  two harts under `icount` before R81, zeroing was the one piece of a frame's work long enough to
+  matter: 220 µs a page while it checked every word, about a fifth of that after, and 15 s of the
+  containment gate went to zeroing in 68,218 endpoint creations. The other way, zeroing at
+  allocation outside the lock, splits every mapping call in two around a second wait for the lock,
+  and the second must find its process alive and its range still free; zeroing on reclaim needs
+  neither, since a freed frame is already no one's. Frames free since boot are zeroed at their
+  first allocation, under the lock, rather than all at boot, which would cost seconds of boot
+  under `icount` for the RAM the cases give.
 - **The kernel chooses addresses,** so no program depends on a layout and no call lands on
   another mapping. `map_fixed` exists because a program's segments must sit at their link
   addresses and the loader stub, running inside the new process, is the only code that parses

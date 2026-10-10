@@ -80,9 +80,23 @@ pub fn idle() -> bool {
     // Park the hart until an interrupt is pending, without the kernel lock: another hart's wake
     // sends this one the reschedule interrupt while it is marked idle (`hart::wake_idle`).
     hart::set_idle(true);
+    crate::reclaim::end_section();
+    // With every hart idle, this one zeroes a frame it freed before it halts (R81), unless another
+    // hart is draining; with more left it does not halt, but comes back here through `kmain`'s
+    // interrupt-enabled top for the next. Only then: under `icount` the harts share one virtual
+    // clock, and a hart that zeroes while another works slows that one's time.
+    let (frame, more, wake) = crate::reclaim::take_one(hart::all_idle());
     crate::cell::KERNEL_LOCK.release();
-    halt();
+    hart::wake_halted(wake);
+    if frame != 0 {
+        crate::reclaim::zero_taken(frame);
+    }
+    if frame == 0 || !more {
+        halt();
+    }
     crate::cell::KERNEL_LOCK.acquire();
+    crate::mem::entered();
+    crate::sched::zeroed_idle();
     hart::set_idle(false);
 
     // Briefly enable interrupts in Supervisor mode so any pending one drains into its

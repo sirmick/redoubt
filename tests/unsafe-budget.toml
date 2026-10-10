@@ -73,7 +73,7 @@ paths = [
 # Includes physmap.rs's `Window::new` over the loader's physmap, and mem.rs's `sync_icache`,
 # the one `fence.i`: executable pages must be fetched as written, and inline asm is the only way
 # to issue the instruction.
-max_unsafe = 13
+max_unsafe = 11
 max_undocumented = 0
 
 [[budget]]
@@ -100,8 +100,10 @@ paths = [
     "kernel/src/device.rs", "kernel/src/message.rs", "kernel/src/process.rs", "kernel/src/cell.rs",
     "kernel/src/debug", "kernel/src/endpoint.rs",
     "kernel/src/time.rs", "kernel/src/sched.rs", "kernel/src/dma.rs", "kernel/src/bits.rs",
+    "kernel/src/reclaim.rs",
 ]
-# time.rs, sched.rs and bits.rs (the kernel's timer, scheduler and bit sets) have no unsafe, and
+# time.rs, sched.rs, bits.rs and reclaim.rs (the kernel's timer, scheduler, bit sets and frames in
+# flight, which reach frames through kframe.rs) have no unsafe, and
 # device.rs none of its own (it reaches frames through kframe.rs and the page tables through
 # arch::mem). Among the 16: kframe.rs's three (words of kernel-object frames and of records, through
 # the physmap); mem.rs's slice of the free-frame bitmap, made once at boot over kernel-owned frames

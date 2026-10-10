@@ -334,6 +334,15 @@ deadline. In `bench:deadline-flood-billed` a creator floods its own budget with 
 budgets on short deadlines: its count falls as the flood grows from 16 to 64 a round, and an
 equal-weight victim keeps its half. With the bill planted out, the victim fell to 137 of 1000.
 
+The frames a call or a destruction frees are zeroed outside the kernel lock by the hart that freed
+them while every hart is idle ([memory](memory.md#frames-in-flight)), and that time is part of the work: when
+the hart takes the lock back it is billed to the budgets that were paying when the frames were
+freed (the caller, the destroyer, a deadline's payer), split by frames. No thread's slice pays
+for it, since no hart zeroes on its way to user mode; a frame an allocation zeroes because it
+found no free one is that allocation's own kernel time. A payer destroyed before the bill does not
+take its share to nobody: its destruction lifts the share to its own payer with the rest of the
+dying budget's debt ([R10](budgets.md#r10-destruction)), `root`'s alone excepted.
+
 The trace checks every timer interrupt from user mode (`bench:sched-timer-flood`): after its
 expiry it charges only the budget it found last, an expired item's or a wait's that ended before
 its timeout, and with neither, only the budget it interrupted, when it ends that budget's slice.
