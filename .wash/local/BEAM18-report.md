@@ -95,3 +95,36 @@ head `a528fede7` (gates on `86f1a102d`; the head differs only in one sentence of
 - beamlet-reduction-rate is not judged at 2 harts under icount (main fails rv32 too).
 - CTX3 (wp-CTX3) derives per-principal context caps from the session size: rebase onto whichever
   merges first (orchestrator informed it).
+
+## Fix round 1 (kernel-red part 1, steward-red part 2): head f2f70034f on main 23d8ce412
+
+Range-diff from a528fede7: `.wash/local/BEAM18-range-diff-round1.txt` (commits 1, 3, 5 changed;
+2 and 4 unchanged but rebased; commit 5 also carries the m2-usable-shell.md conflict resolution
+against main's step-5 text).
+
+- P2-1 (kernel-red): `Semaphore::prepare`, `Mutex::prepare`, `Condvar::prepare(n)` make the
+  endpoints now. `Vm::run` prepares the system lock, the platform lock and the wake-up (its queue
+  lock + one semaphore per scheduler): 5 endpoints at 2 schedulers, inside the 44 pages; if the
+  kernel refuses any, the VM runs on one scheduler. Any other lock (a resource's) makes its
+  endpoint at first contention; one the kernel refuses no longer ends the process: the semaphore
+  goes to a refused state and its waiters poll a posted-token count every 100 us. Tests:
+  prepared_locks_make_no_endpoint_when_contended (process handles unchanged),
+  a_refused_endpoint_leaves_a_working_lock. Cost stated on native.md and beamlet.md.
+- P2-2: native.md and the module docs say a release can wait for the woken thread to reach its
+  receive. Checked: the offline-helper wake (park_while) and SysGuard::drop's wake both happen
+  with the System lock held, and the woken scheduler released it before registering on its own
+  semaphore, so it reaches its receive needing nothing the waker holds; no deadlock.
+- P3: a thread needing an endpoint another is making spins SPIN times then sleeps 100 us between
+  looks (no spinning a whole slice); scope's conservative InvalidArgument wait and its absence
+  from Miri stay documented.
+- P2 (steward-red): floor 1.55 -> 1.40 (a fifth under the lowest alone; 1.53 seen beside other
+  work; serialized schedulers ~1.0), stated on the page and in the case.
+- P3 (steward-red): billing not measured by this case: the page says each hart's run is charged
+  to the session's one budget by the kernel's rule, judged by the scheduling cases.
+- rt size ceiling 3861 -> 3924 (same commit, its Size budget line); unsafe count unchanged (15).
+
+Gates on 1eaf683be (rt/VM code identical at f2f70034f): rt sync 9/9, Miri 7 + 2 ignored; VM std
+schedulers 2/2; fake schedulers 6/6; footprint rv64 5,491 (smp1) / 5,492 (smp2) of 11,092,
+rv32 5,310 / 5,309, all PASS; reduction-rate rv64 52,880, rv32 46,917; mttcg rv64 1.91, rv32 1.86.
+On f2f70034f: mttcg alone rv64 1.81, rv32 1.84; one-hart 0.97 / 0.98; docs, size-budget,
+unsafe-budget, formatting PASS (no-cruft PASS on 1eaf683be).
