@@ -280,27 +280,31 @@ programs DMA without hardware to confine it ([devices](devices.md)). Lines are e
 
 | Part | Where | Lines | `unsafe` (pinned) |
 | --- | --- | --- | --- |
-| RustSBI Prototyper, the M-mode firmware | `bios/firmware/prototyper/src` and its `bios/library` crates | 11,773 in the Prototyper | not counted: vendored at a pinned commit |
-| loader | `loader/src` | 1,201 | 17 |
-| kernel | `kernel/src` | 10,403 | 44 |
-| `redoubt-sys`, the call ABI both sides share | `libs/sys/src` | 2,278 (786 of them host tests) | 1 |
-| `paging`, the Sv32/Sv39 page-table types | `libs/paging/src` | 290 | 12 |
-| `redoubt-layout`, the kernel-half map and PIDs | `libs/layout/src` | 98 | 0 |
-| `redoubt-stride`, the scheduling rules | `libs/stride/src` | 714 (243 of them host tests) | 0 |
-| `redoubt-signing`, the bundle signature preimage | `libs/signing/src` | 82 | 0 |
+| RustSBI Prototyper, the M-mode firmware | `bios/firmware/prototyper/src` and its `bios/library` crates | 11,843 in the Prototyper | not counted: vendored at a pinned commit |
+| loader | `loader/src` | 1,576 | 18 |
+| kernel | `kernel/src` | 15,899 | 39 |
+| `redoubt-sys`, the call ABI both sides share | `libs/sys/src` | 2,464 (843 of them host tests) | 3 |
+| `paging`, the Sv32/Sv39 page-table types | `libs/paging/src` | 625 | 12 |
+| `redoubt-layout`, the kernel-half map and PIDs | `libs/layout/src` | 225 | 0 |
+| `redoubt-stride`, the scheduling rules | `libs/stride/src` | 2,143 (831 of them host tests) | 0 |
+| `redoubt-signing`, the bundle signature preimage | `libs/signing/src` | 149 | 0 |
+| `blkd`, the virtio-blk driver (DMA) | `servers/blkd/src` | 3,410 | 4 |
+| `netd`, the virtio-net driver (DMA) | `servers/netd/src` | 2,430 | 8 |
 
-Without the firmware, the TCB Redoubt writes is 15,066 lines with 74 uses of `unsafe`. The
-kernel's 44 are split three ways in the ratchet: 13 in the Sv39, SBI and PLIC backends (the
-page-table walks and frame zeroing, `sfence.vma`, `fence.i` and the `satp` write, the PLIC, the
-timer, the console and the physmap window), 12 in the RISC-V arch layer (returning to user mode
-and `kmain`'s switch, the current process's bookkeeping, the interrupt enables and `wfi`, and
-three in the two-hart spike) and 19 in the core (the physmap word access in `kframe.rs`, what
-the loader handed over (the argument block, its ownership tables and its process list),
-releasing a process's memory, the lock, the console and DMA register access). Trap entry and
-context restore are `global_asm!` in `arch/riscv/asm.rs`, which the ratchet lists but which holds
-no `unsafe` keyword. `redoubt-sys`'s one use is the `ecall` itself. `redoubt-layout`,
-`redoubt-stride` and `redoubt-signing` say `#![forbid(unsafe_code)]`, so their budgets can only
-stay at 0. The two DMA drivers are TCB too: `blkd` (4) and `netd` (7).
+Without the firmware, the TCB Redoubt writes is 28,921 lines. The kernel's `unsafe` is split
+three ways in the ratchet:
+
+| Ratchet budget | What its `unsafe` does | `unsafe` (pinned) |
+| --- | --- | --- |
+| kernel: Sv39, SBI and PLIC backends | `sfence.vma`, the `satp` write and `fence.i`; the page-table walks through the physmap (a root table, a new child table, and an address space built from the loader's); the PLIC; the timer and reschedule interrupt enables; the console; the physmap window | 13 |
+| kernel: RISC-V arch (shared with rv32) | returning to user mode and `kmain`'s switch; the current process's bookkeeping; the interrupt window and `wfi`; clearing a hart's reschedule interrupt; the `sum-probe` load (test builds only) | 10 |
+| kernel: core | the physmap word access in `kframe.rs`; what the loader handed over (the kernel's entry, the argument block, the ownership tables and the process list); the free-frame bitmap; the lock; the console; DMA register access | 16 |
+
+Trap entry and context restore are `global_asm!` in `arch/riscv/asm.rs`, which the ratchet lists
+but which holds no `unsafe` keyword. `redoubt-sys`'s three are the `ecall` itself, the
+`unsafe trait Transport` whose contract the runtime's `unsafe` rests on, and `Ecall`'s
+implementation of it. `redoubt-layout`, `redoubt-stride` and `redoubt-signing` say
+`#![forbid(unsafe_code)]`, so their budgets can only stay at 0.
 
 `bench:unsafe-budget` does not boot. It counts every use of the word `unsafe` outside a `//`
 comment in each budget's paths, and fails if a count is over its ceiling, or if any use lacks a
