@@ -242,3 +242,47 @@ but `docs`, which failed on main 90fe594b5's README TCB cell (C13), the one 04b7
 On 04b7fa4d5's head: `sched-timer-entry` both widths at 1 and 2 harts PASS,
 `rv64/beamlet-reduction-rate` PASS; final head b6c4b566c: `formatting`, `size-budget`, `docs`
 rc 0, PASS. `cargo test -p testbench sched_oracle`: 55 passed. No unsafe changed.
+
+# Train 20: rv32 sched-capped smp=2 fails on K31 (2026-10-10, k31-implementer-2)
+
+Finding only; nothing changed in the branch (head bab03e8de). Traces and scripts:
+.tmp/K31/an (fail-k31-rv32-smp2.log = K31 rerun, deterministic, same 449; pass-smp6-rv32-smp2.log
+= SMP6 f590f70c8; mttcg.log, shift4.log = probes), oracle replay .tmp/K31/replay.
+
+Clause: HART-SHARE late-a, 449 < 450 (expected 500). late-b 275, late-c 274 met. SMP6: 465.
+
+Not a hand-over: in the window budget 31 (w 900) is picked on hart 0 at 836/836 of its slice
+ends, no light budget ever runs there (SMP6: 724/724). b and c alternate on hart 1 (418/418).
+
+Per-slice accounting, hart 0 (period between its I's = charge to 31 + nobody's time):
+- K31: period 23,880 ticks = charge ~19,770 + audit + y + ~2,600 unbilled every slice.
+- hart 1 (K31) and both harts (SMP6): unbilled ~0.
+- Audit spans (U..V, µs): K31 hart 0 bimodal 81/327; every hart-0 audit run in leave() to kmain
+  is long (456/458), none on hart 1 are; SMP6 118-123 on both. Between hart 0's U and V there
+  are no hart-1 records: hart 1 runs user code (~30k instr = ~250 µs) inside hart 0's audit.
+  When hart 0's audit falls instead at leave() to user (376 slices), the same ~2,600 ticks land in
+  another nobody's span (kmain's expiry walk, pause_billing).
+- Whole run: nobody 71/1000 (SMP6 30), lock waits 216 (220).
+
+Mechanism: under icount the harts take turns on one host thread, and time_now counts both. Each
+slice end on hart 0, QEMU ends hart 0's turn at the same point, right after leave() to kmain
+begins, and hart 1 runs ~250 µs. That span is billed to nobody on hart 0 (audit, or kmain's
+expiry walk), while every hart-1 span holding hart 0's turns is billed to b/c. So 31 loses ~10%
+of its hart's clock, b+c ~3%. K31 moves where the turn ends: the timer is no longer re-armed in
+the timer entry (expire_due/on_interrupt) or in leave() to kmain (no SBI set_timer before the
+pick), and the entry is ~8k instructions shorter. On SMP6 the turn landed in billed time on both
+harts. Rules for billing are unchanged by K31 (audits and kmain's expiry walk are nobody's on
+both).
+
+Probes (rv32 smp=2, K31 kernel, temporary tomls, deleted):
+- no icount (harts at once, quiet): late-a 502, late-b 249, late-c 248, uncap 818/90/90,
+  spread 500/499: PASS.
+- icount shift=4: late-a 434, spread-a 561, spread-b 438: FAIL. Moving the turns swings the
+  shares ~60/1000 either way.
+
+Proposal (needs kernel-red's agreement, LAT4's precedent): the 2-hart shares are judged where the
+harts run at once, a sched-capped-mttcg case (smp 2, quiet, both widths, same program and
+oracle; measured late-a 502); the icount case keeps its 3- and 4-hart judgements and records the
+2-hart ones; scheduling.md's "A woken hart waits for QEMU's turns" residual gets the share case.
+Not the tolerance. No kernel change: K31 bills and arms by rule; re-adding an early re-arm would
+only move QEMU's turn back. Risk: mttcg is host time; one run so far, repeat runs needed.

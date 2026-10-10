@@ -536,3 +536,54 @@ The rest of the list ran earlier, all rc 0:
 - **On c3eaec9d7 itself:** docs (C13 with 37 / 11) and formatting.
 
 The range-diff is as in the section above.
+
+### Rebase onto train 19's tip 2afa4e38d (04b7fa4d5 + CTX3) → head f590f70c8
+
+- **Command:** `git rebase --onto 2afa4e38d 04b7fa4d5 wp-SMP6`, from c3eaec9d7.
+- **New head:** **f590f70c8** (kernel, testbench) on **4dce2abe5** (model). Two commits.
+
+Conflicts, all count or ceiling only:
+
+| Commit | File | Resolution |
+| --- | --- | --- |
+| model | model/src/mutation.rs | `ALL: [Mutation; 175]` (CTX3's 173 + 2) |
+| model | tests/size-budget.toml | model `max_lines = 11387` (CTX3's 11354 + 33); the commit's Size budget line reads "model: 11354 to 11387" |
+| kernel | docs/kernel/model.md | "lists all 175 variants" |
+
+Not a conflict:
+
+- testbench.md's `model-mutations` cost row said 173 jobs (CTX3's figure). The kernel commit now says 175; it had never carried SMP6's +2.
+- README 37/11 and kernel 10,608 are unchanged.
+
+**After the gates**, one text-only amend (testbench.md and the message). The fifth launch-idle window read rv32 0.008 host cores, so the page and message now say five windows each: rv64 3.1–4.2, rv32 2.7–3.7, 0.005–0.008 cores.
+
+**Range-diff** `04b7fa4d5..c3eaec9d7` vs `2afa4e38d..f590f70c8`:
+
+1. model `!`:
+   - the Size budget line, 11092→11125 now 11354→11387;
+   - `ALL` 170 now 175;
+   - the model ceiling, 11125 now 11387.
+
+   All three are CTX3's counts plus SMP6's.
+2. kernel `!`:
+   - model.md 170 now 175 variants (CTX3);
+   - testbench.md's `model-mutations` row: 173 jobs now 175;
+   - testbench.md and the commit message: the launch-idle range, now five windows and 0.005–0.008 cores.
+
+   No code differs.
+
+Gates on 0c950b074 (same code as f590f70c8), all rc 0:
+
+| Gate | Result |
+| --- | --- |
+| prebuilt | 287 / 273 cases built |
+| docs, size-budget, unsafe-budget, formatting | rc 0 |
+| launch-idle rv64, 4 harts, alone, quiet | PASS: busiest 4.0/s (m_software 3.1, s_timer 0.8, s_software 0.2), 0.006 cores |
+| launch-idle rv32, same | PASS: busiest 3.5/s (m_software 2.5, s_timer 0.8, s_software 0.1), 0.008 cores (ceiling 0.01) |
+| smoke set, both widths: userland-boot, init-boot, bench-net-peer, ipc-outcomes, sum-clear, lend-untouched-page | rc 0 |
+| model-host-tests | rc 0 |
+| model-mutations | rc 0, 175 jobs |
+
+docs and formatting were rerun on f590f70c8 after the text amend: rc 0.
+
+**Note:** rv32 host cores, 0.008, is the highest window yet, against 0.01. It includes the ~0.3 s login drain (0.004–0.005 cores of it).
