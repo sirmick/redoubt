@@ -23,7 +23,7 @@ use redoubt_rt::abi::{FOREVER, Handle, MAX_LEND_PAGES, MAX_MSG_HANDLES};
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::ipc::{Buffer, Delivery, Event};
 
-use crate::system::{Cap, HAND_US, kernel, worker};
+use crate::system::{Cap, HAND_US, Life, kernel, worker};
 
 /// The most threads making typed calls at once: a stated constant beside the hub's `MAX_WAITERS`.
 pub const CALL_THREADS: usize = 2;
@@ -87,13 +87,15 @@ pub(crate) struct Call {
     pub(crate) buffer: Option<Vec<u8>>,
     pub(crate) timeout_us: u64,
     pub(crate) held: Vec<Object>,
+    /// What the handles its reply brings die with: its target's (`crate::system::Cap`).
+    pub(crate) returns: Option<Arc<Life>>,
 }
 
 /// One call thread: its slot, where the VM sends it, and the call it is making.
 struct Thread {
     slot: Arc<Slot>,
     go: Endpoint,
-    out: Option<(u64, u64, Vec<Object>, bool)>,
+    out: Option<(u64, u64, Vec<Object>, bool, Option<Arc<Life>>)>,
     /// It did not take a call in time: it has ended, and takes no more.
     gone: bool,
 }
@@ -147,7 +149,7 @@ impl Pool {
             return Some(delivery);
         }
         let thread = &mut self.threads[i];
-        let Some((asker, id, held, lent)) = thread.out.take() else { return Some(delivery) };
+        let Some((asker, id, held, lent, returns)) = thread.out.take() else { return Some(delivery) };
         let slot = &thread.slot;
         let status = slot.get(STATUS);
         let result = if status != 0 {
@@ -155,8 +157,10 @@ impl Pool {
         } else {
             let words = core::array::from_fn(|w| slot.get64(REPLY + 2 * w));
             let got = (slot.get(GOT_COUNT) as usize).min(MAX_MSG_HANDLES);
-            let handles =
-                (0..got).filter_map(|h| Handle::new(slot.get(GOT + h))).map(Cap::received).collect();
+            let handles = (0..got)
+                .filter_map(|h| Handle::new(slot.get(GOT + h)))
+                .map(|h| Cap::returned(h, returns.clone()))
+                .collect();
             // A lent call's reply is the bytes its word 1 says, at the front of the lend; an error
             // reply has none.
             let buffer = lent.then(|| {
@@ -231,7 +235,7 @@ impl Pool {
             thread.gone = true;
             return Err((who, Refused("protocol")));
         }
-        thread.out = Some((call.asker, call.id, call.held, lent));
+        thread.out = Some((call.asker, call.id, call.held, lent, call.returns));
         Ok(())
     }
 }

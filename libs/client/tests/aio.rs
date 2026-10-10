@@ -146,9 +146,12 @@ impl World {
     }
 
     /// A connection on its own badge, its files open by one-call 9P.
-    fn connection(&self, badge: u64) -> Handle {
-        let ep = fake().grant(self.server, self.receive, self.client, badge);
-        fake().as_process(self.client, || {
+    fn connection(&self, badge: u64) -> Handle { self.connection_for(self.client, badge) }
+
+    /// As [`World::connection`], for the process `client`.
+    fn connection_for(&self, client: usize, badge: u64) -> Handle {
+        let ep = fake().grant(self.server, self.receive, client, badge);
+        fake().as_process(client, || {
             let c = Connection::new(Endpoint::from_handle(ep));
             let mut lend = Lend::new(1).unwrap();
             c.attach(&mut lend, 0, "").unwrap();
@@ -528,6 +531,53 @@ fn two_connections_have_a_waiter_each_and_the_caller_idles_in_receive() {
         assert_eq!(sender.join().unwrap(), 1);
     });
     w.end();
+}
+
+/// A server that ends takes its connection with it: the waiter hands over the end and returns,
+/// closing the handle it woke the caller through, and only then does the caller get the
+/// connection's place back with `release`; the other connection runs on.
+#[test]
+fn an_ended_connection_is_released_once_its_waiter_has_returned() {
+    let (w, other) = (World::new(), World::new());
+    let (a, b) = (w.connection(5), other.connection_for(w.client, 6));
+    let client = w.client;
+    fake().as_process(client, || {
+        let mut hub = Hub::new();
+        let receive = Endpoint::create().unwrap();
+        let before = fake().held(client).0;
+        let conns =
+            [hub.connect(Endpoint::from_handle(a)).unwrap(), hub.connect(Endpoint::from_handle(b)).unwrap()];
+        for (i, conn) in conns.iter().enumerate() {
+            hub.spawn_waiter(*conn, &receive, NonZeroU64::new(100 + i as u64).unwrap()).unwrap();
+        }
+        assert_eq!((hub.waiters(), hub.release(conns[0]), hub.release(conns[1])), (2, false, false));
+        w.end();
+        let Event::Send(last) = receive.receive(10_000_000, MAX_LEND_PAGES).unwrap() else { panic!() };
+        assert!(hub.deliver(last).is_none(), "a wake-up the hub did not take");
+        assert_eq!((hub.waiters(), hub.release(conns[0]), hub.release(conns[1])), (1, true, false));
+        assert_eq!(
+            hub.read(conns[0], NOW_FID, 0, buffer().0).err(),
+            Some(redoubt_client::Error::Disconnected)
+        );
+        hub.read(conns[1], NOW_FID, 0, buffer().0).unwrap();
+        sent(&mut hub);
+        while hub.completed().is_none() {
+            let Event::Send(delivery) = receive.receive(10_000_000, MAX_LEND_PAGES).unwrap() else {
+                panic!()
+            };
+            assert!(hub.deliver(delivery).is_none(), "a wake-up the hub did not take");
+        }
+        // The ended waiter's wake-up handle, closed as it returns: one waiter's left of the two.
+        let started = Instant::now();
+        while fake().held(client).0 != before + 1 {
+            assert!(
+                started.elapsed() < Duration::from_secs(20),
+                "the ended waiter's handle was never closed"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    });
+    other.end();
 }
 
 /// A caller away from its endpoint for longer than the session bound keeps its session: the

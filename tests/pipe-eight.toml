@@ -1,0 +1,49 @@
+description = "Eight pipelines in one session (docs/servers/piped.md, \"Started by a session\"; docs/userland/beamlet.md, \"Handles are resource terms\" and \"Threads\"): the console session runs pipe-stage say hi through Redoubt.Pipeline eight times, each with a new piped on a new connection. Each gives hi and its stage's ending, and leaves the session's budget, read from the kernel, with the weight and processes it held before the first, piped's gone. The fifth was once refused: the VM's waiter table kept every ended piped's connection, and a destroyed budget's handle index, given by the kernel to a later piped's budget, was closed when its old term was collected, so that piped's carve stayed out of the session for good. Then the session carves a budget, destroys it, carves another and collects the first's term: the second is still held. Every judged line is the session's"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The image's bundle with pipe-stage public in /boot, as job-kill's.
+recipe = "tests/data/pipe/boot.toml"
+# As userland-boot: the principals' budgets, each holding the shell VM's session, need 1 GiB.
+memory_mib = 1024
+timeout_secs = 450
+expect = [
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+    '(^|\] )\{:base, \{\{[0-9]+, [0-9]+\}, \{[0-9]+, [0-9]+\}\}\}$',
+    '(^|\] )\{:run, 1, "hi\\n", \[exited: 0\], true, true\}$',
+    '(^|\] )\{:run, 2, "hi\\n", \[exited: 0\], true, true\}$',
+    '(^|\] )\{:run, 3, "hi\\n", \[exited: 0\], true, true\}$',
+    '(^|\] )\{:run, 4, "hi\\n", \[exited: 0\], true, true\}$',
+    '(^|\] )\{:run, 5, "hi\\n", \[exited: 0\], true, true\}$',
+    '(^|\] )\{:run, 6, "hi\\n", \[exited: 0\], true, true\}$',
+    '(^|\] )\{:run, 7, "hi\\n", \[exited: 0\], true, true\}$',
+    '(^|\] )\{:run, 8, "hi\\n", \[exited: 0\], true, true\}$',
+    '(^|\] )\{:collected, :ok, :ok\}$',
+]
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    'init: restarted',
+    'EXCEPTION',
+    '\{:run, [0-9], \{:error',
+]
+
+[[input]]
+after = 'Redoubt shell, on Elixir '
+send = "c = fn -> {:ok, o} = Redoubt.Budget.own(); {:ok, u} = Redoubt.Budget.usage(o); {u.weight, u.processes} end; {:base, before = c.()}\n"
+
+[[input]]
+after = '(^|\] )\{:base, \{\{'
+send = "for i <- 1..8 do IO.inspect(case Redoubt.Pipeline.run([{\"pipe-stage\", [\"say\", \"hi\"]}]) do {:ok, r} -> {:run, i, r.output, r.endings, c.() == before, Redoubt.Pipes.usage() == {:error, :not_running}}; refused -> {:run, i, refused} end) end; :ran\n"
+
+# The first budget's term lives only in the closure's frame, so the collection after it returns
+# drops it: once that closed the index the second budget's handle had taken.
+[[input]]
+after = '(^|\] )\{:run, 8, '
+send = "spec = %{pages: 8, processes: 0, weight: 0}; f = fn -> {:ok, first} = Redoubt.Budget.carve(spec); :ok = Redoubt.Budget.destroy(first); {:ok, second} = Redoubt.Budget.carve(spec); second end; second = f.(); :erlang.garbage_collect(); {:collected, elem(Redoubt.Budget.usage(second), 0), Redoubt.Budget.destroy(second)}\n"
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"

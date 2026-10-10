@@ -807,7 +807,29 @@ walked past its cap, and no binary is copied past its own:
 Handles are resource terms: unforgeable, collected, and never serialisable. A copy of a handle
 inside the VM is the same connection (one badge, one client), so passing one to another Erlang
 process is sharing it. A handle no process holds is closed at the next collection; a budget's is
-closed and the budget lives on, since destruction is a call. It cannot reach another VM in a
+closed and the budget lives on, since destruction is a call. A handle dies with the object it names
+or the budget that stamped it ([objects](../kernel/objects.md#r9-stamps)), and the kernel gives
+its index to the next handle the VM gets, so the VM marks a handle gone when it destroys the
+budget it came through, and a collection closes nothing at a gone handle's index. That covers the
+budget's own handle, and every handle the server launched with `serve` in that budget minted and
+returned to calls on it, since its mints are stamped with that budget (a pipeline's stage
+connections, which `piped` mints). The VM cannot tell a handle such a server minted from one it
+forwards, so a forwarded handle is marked gone too and is never closed: it stays in the VM's table
+until the VM ends, the price of never closing a reused index. The VM carves only from its own
+budget, so no budget it carved is below another. Tested:
+`a_destroyed_budgets_index_is_not_closed_when_its_term_is_collected` and
+`what_a_served_server_returned_goes_with_its_budget_and_is_not_closed_again` on the host, against
+a fake kernel that frees those indices as the kernel does, and `pipe-eight` on the machine. The
+residuals: a handle whose stamp the VM does not know may be revoked, and its index reused,
+before its term is collected, and collecting it then closes the handle that took the index. Such a
+handle is one revoked outside the VM, such as a grant whose stamp the steward destroys while the VM
+lives. Or it is one a request brought to an endpoint the VM serves, from a program in a budget the
+VM carved that holds a connection to that endpoint (given in `launch`'s `handles`) and sends a
+handle it minted: the kernel tells a receiver the sender's badge, account and labels, never its
+budget, and a carved budget carries the session's account and labels, so the VM cannot know which
+budget stamped it. What such a close reaches is the session's own table, so a program that
+arranges one harms only the session that launched it. A generation in the handle word would guard
+both, and is the owner's to decide. A handle cannot reach another VM in a
 message: the term format writes a resource as a plain reference, with no state behind it, so a
 decoded copy grants nothing, and a handle crosses between processes only in a kernel call that
 names it. Delegation is always `new_connection`, a typed call on a connection, not a native
@@ -978,7 +1000,12 @@ a file operation's request alike; the answers are counted, and said with the I/O
 **Threads.** A process has at most 255 threads ([processes](../kernel/processes.md)). The VM's are
 its schedulers (one until several harts) and its waiters, one per connection it uses, at most 6:
 a session's bindings (`bootfsd`, the home volume, a labelled volume, `ipd`, the console, the system
-volume), a bind being one of them again. No call holds a thread while it waits: a console read,
+volume), a bind being one of them again. A server that ends takes its session with it: its waiter
+hands the end over and returns, closing the handle it woke the VM through, and the connection
+gives its place up when the next one needs it. A session's `piped` is a new server at every
+pipeline, so a session runs any number of pipelines, each taking one place while it runs
+(`servers_bound_and_ended_one_after_another_never_run_out_of_waiters`; `pipe-eight`, eight in one
+session). No call holds a thread while it waits: a console read,
 a file read and a read on a `/net` connection's data file are each one request on the hub, so
 what a person or a peer takes to answer costs nothing but the request. Every 9P server in the
 image serves multiplexed sessions, so no call needs a thread of its own. What the scheduler's
