@@ -338,8 +338,12 @@ The frames a call or a destruction frees are zeroed outside the kernel lock by t
 them while every hart is idle ([memory](memory.md#frames-in-flight)), and that time is part of the work: when
 the hart takes the lock back it is billed to the budgets that were paying when the frames were
 freed (the caller, the destroyer, a deadline's payer), split by frames. No thread's slice pays
-for it, since no hart zeroes on its way to user mode; a frame an allocation zeroes because it
-found no free one is that allocation's own kernel time. A payer destroyed before the bill does not
+for it, since no hart zeroes those frames on its way to user mode; a frame an allocation zeroes
+because it found no free one is that allocation's own kernel time. The one zeroing on the way to
+user mode is a magazine's refill, at most two frames that replace those the returning call drew
+([frame magazines](memory.md#frame-magazines)): it runs after the return closed the kernel's bill,
+so it is the caller's own time, on its slice, and the freeing payers' bills lose those frames
+unbilled, as for an allocation's. A payer destroyed before the bill does not
 take its share to nobody: its destruction lifts the share to its own payer with the rest of the
 dying budget's debt ([R10](budgets.md#r10-destruction)), `root`'s alone excepted.
 

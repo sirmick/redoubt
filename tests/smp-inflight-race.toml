@@ -18,6 +18,6 @@ programs = ["smp-inflight-race"]
 smp = [2]
 timeout_secs = 300
 expect = ['^SMP-INFLIGHT-RACE TEST PASSED$']
-forbid = ['\[smp-inflight-race\] FAIL', 'R81:', 'I1:']
+forbid = ['\[smp-inflight-race\] FAIL', 'R81:', 'R84:', 'I1:']
 poweroff = true
 post_check = "smp_inflight"

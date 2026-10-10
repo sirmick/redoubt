@@ -430,8 +430,15 @@ on another hart running its process, which acknowledged ([memory](kernel/memory.
 for it was cleared), each shootdown (`s`), pending (`d`), given back to the bitmap (`b`) and taken
 from it (`o`). Each frame is pending only on the hart that retired it and, if it was mapped, only
 after that hart shot its process down; given back only once pending, so its hart has zeroed it;
-and never taken in between. A run where no frame from a live space was retired, given back and
-taken again fails as racing nothing.
+and never taken in between. A run where no frame from a live space was retired, given back (or
+refilled into a magazine) and taken again fails as racing nothing. The same records follow each
+frame through a hart's magazine ([R84 (frame magazines)](kernel/memory.md#r84-frame-magazines)):
+taken for a refill (`1`, from its hart's pending list or the bitmap), into the magazine zero (`2`),
+out of a refill unzeroed or taken by an allocation that found the bitmap empty (`3`), and drawn
+(`o` with 1 in its pass field). A frame enters a refill only from its own hart's pending list or
+free, is drawn only by its own hart, and is never taken from the bitmap, retired or given back
+while a magazine holds it. `smp_magazine` reads the same, and also requires that frames were
+refilled from pending, drawn, and taken from another hart's magazine for an empty bitmap.
 
 ### Starting a case's programs
 
@@ -580,7 +587,9 @@ two harts, `sched-lock-contention-4` at four). A kernel built with `hold-trace`,
 `lock-trace`, also records each section of the lock as it is released (`h`: its first and last
 tick; then `j`: its cause, a system call's number, an interrupt's or an exception's code, and the
 ticks of audits inside it). The oracle reports the sections' lengths net of their audits, the
-longest by cause, and splits the lock waits into the part another hart's section covered (its
+longest by cause, each allocating cause's total and mean (the calls that map or create frames, and
+the page faults that back a reservation: what the frame magazines take out of the lock), and splits
+the lock waits into the part another hart's section covered (its
 audits pro rata) and the part with the lock free, the hand-off to the halted waiter. Both
 contention cases carry it; it judges nothing. Where the clock is the host's,
 `driver_wake_p50_searches=K` and `driver_wake_p99_searches=K` judge the driver wake's net p50 and

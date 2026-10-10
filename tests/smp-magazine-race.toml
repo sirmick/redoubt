@@ -1,0 +1,21 @@
+description = "A frame in a hart's magazine is no one's (R84): while each hart draws its one-page allocations from a magazine of zero frames and refills it at each call's return from its own freed frames, an attacker's run is unmapped under its writer and RAM is nearly full, a witness in another budget maps, checks and frees single pages on both harts without end, and every page it gets is zero and keeps its markers; the trace shows every frame entering a magazine from its own hart's pending list or the bitmap, drawn only by its hart, taken by another only for an empty bitmap, and never taken from the bitmap, retired or given back while held (checked trace build, 2 harts, icount)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The witness, the victim, inspects its own pages (rule F); the checked kernel samples every frame
+# drawn from a magazine, checks every frame entering one is zero, and its destruction audit counts
+# the frames in magazines and in flight against the ownership table (I1). The order the trace
+# records (`smp_magazine`) is the verdict a recorded negative fails on too: `magazine-unzeroed` (a
+# refill enters the magazine with what its last owner wrote) and `magazine-still-free` (a frame taken
+# for a magazine stays free in the bitmap).
+# RAM as `smp-inflight-race`: nearly all of it held before the race, so the allocations empty the
+# bitmap and take from another hart's magazine.
+debug_assertions = true
+kernel_features = ["inflight-trace"]
+icount = "shift=3,sleep=off"
+programs = ["smp-magazine-race"]
+smp = [2]
+timeout_secs = 300
+expect = ['^SMP-MAGAZINE-RACE TEST PASSED$']
+forbid = ['\[smp-magazine-race\] FAIL', 'R81:', 'R84:', 'I1:']
+poweroff = true
+post_check = "smp_magazine"

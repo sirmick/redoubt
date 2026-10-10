@@ -1136,6 +1136,13 @@ fn post_check(boot: &case::Boot, log: &Path, out: &mut dyn FnMut(String)) -> Res
             }
             Err(why) => Outcome::Fail(format!("smp_inflight: {why}")),
         },
+        Some("smp_magazine") => match sched_oracle::magazine(&text) {
+            Ok(summary) => {
+                out(format!("      {summary}"));
+                Outcome::Pass
+            }
+            Err(why) => Outcome::Fail(format!("smp_magazine: {why}")),
+        },
         Some(other) => bail!("unknown post_check {other:?}"),
         None => Outcome::Pass,
     })

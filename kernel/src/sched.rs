@@ -1116,6 +1116,17 @@ pub mod trace {
     pub const TAKEN: u8 = b'o';
     #[cfg(feature = "inflight-trace")]
     pub const SHOT: u8 = b's';
+    /// With `inflight-trace`, each frame's way through a hart's magazine (R84), by its index: taken
+    /// for the refill or the magazine, from the pending list (1 in the pass field) or the bitmap
+    /// (0); into the magazine, zero; out of the refill unzeroed, back to the pending list (1) or the
+    /// bitmap (0), or taken from a magazine by an allocation that found the bitmap empty (2). A
+    /// frame drawn from the magazine is taken (`o`) with 1 in the pass field.
+    #[cfg(feature = "inflight-trace")]
+    pub const MAGAZINE_FILL: u8 = b'1';
+    #[cfg(feature = "inflight-trace")]
+    pub const MAGAZINE_IN: u8 = b'2';
+    #[cfg(feature = "inflight-trace")]
+    pub const MAGAZINE_OUT: u8 = b'3';
 
     /// Frames the ring takes (64 MiB, 256 MiB with `sched-trace-large`), and the records they hold.
     const PAGES: usize = if cfg!(feature = "sched-trace-large") { 65536 } else { 16384 };

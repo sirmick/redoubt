@@ -149,6 +149,14 @@ pub const IN_FLIGHT: Pid = match Pid::new(0xfffd) {
     None => unreachable!(),
 };
 const _: () = assert!(crate::arch::process::MAX_PROCESS_COUNT < 0xfffd);
+/// Owner, in the ownership table, of a RAM frame in a hart's magazine or its refill (R84,
+/// `reclaim.rs`), which hart's they say. No process has this PID, so every owner check refuses the
+/// frame, and it is not free, so no allocation takes it from the bitmap.
+pub const MAGAZINE: Pid = match Pid::new(0xfffc) {
+    Some(pid) => pid,
+    None => unreachable!(),
+};
+const _: () = assert!(crate::arch::process::MAX_PROCESS_COUNT < 0xfffc);
 /// The most done frames one acquisition of the kernel lock gives back to the bitmap
 /// (`MemoryManager::commit`): a constant, so the commit adds a bounded step to every section (R12).
 pub const COMMIT_MAX: usize = 64;
@@ -411,15 +419,123 @@ impl MemoryManager {
     /// charges what a process really costs instead of holding it back from `root` at boot).
     pub fn alloc_context_page(&mut self, pid: Pid) -> Result<usize, PageError> { self.alloc_page(pid) }
 
-    /// Take a free frame for `owner`, the lowest; its index in the ownership table.
+    /// Take a frame for `owner`: this hart's magazine's, zero, writing nothing; else the lowest
+    /// free one. Then one more for the refill (R84). Its index in the ownership table.
     #[cfg(not(feature = "alloc-first-fit"))]
     fn alloc_frame(&mut self, owner: Pid) -> Result<usize, PageError> {
-        let index = match self.find_free(false) {
-            Some(index) => index,
-            None => self.reclaim_wait()?,
+        let index = match crate::reclaim::draw() {
+            Some(index) => {
+                self.drawn(index, owner);
+                index
+            }
+            None => {
+                let index = match self.find_free(false) {
+                    Some(index) => index,
+                    None => self.reclaim_wait()?,
+                };
+                self.take(index, owner);
+                index
+            }
         };
-        self.take(index, owner);
+        self.gather();
         Ok(index)
+    }
+
+    /// Frame `index`, drawn from this hart's magazine, goes to `owner`: zero already (R84), which a
+    /// checked build samples.
+    fn drawn(&mut self, index: usize, owner: Pid) {
+        assert!(self.allocations[index] == Some(MAGAZINE), "I1: frame {} drawn, not in a magazine", index);
+        #[cfg(debug_assertions)]
+        {
+            let phys = self.ram_start + index * PAGE_SIZE;
+            assert!(
+                crate::kframe::read(phys, 0) == 0 && crate::kframe::read(phys, PAGE_SIZE - 8) == 0,
+                "R84: magazine frame {:#x} is not zero",
+                phys
+            );
+        }
+        self.set_owner(index, Some(owner));
+        #[cfg(feature = "inflight-trace")]
+        crate::sched::trace::record(crate::sched::trace::TAKEN, index as u64, 1);
+    }
+
+    /// A frame was drawn: one to replace it, if this section's refill has room (R84). This hart's
+    /// own pending frame first, shot down already, for its refill; else the lowest free frame, into
+    /// the magazine at once if it is zero, or into the refill if it was never used since boot. The
+    /// refill is zeroed at the system call's return, outside the lock. Constant work.
+    fn gather(&mut self) {
+        // Debug only, never in a bench build but one recorded negative run: the frame is left free
+        // in the bitmap as well, so `smp-magazine-race` must fail.
+        let still_free = cfg!(feature = "magazine-still-free");
+        if !crate::reclaim::wants_refill() {
+            return;
+        }
+        if let Some(index) = crate::reclaim::pop_own() {
+            self.set_owner(index, Some(MAGAZINE));
+            self.in_flight -= 1;
+            #[cfg(feature = "inflight-trace")]
+            crate::sched::trace::record(crate::sched::trace::MAGAZINE_FILL, index as u64, 1);
+            crate::reclaim::put_fill(index, true);
+            return;
+        }
+        let Some(index) = self.find_free(false) else { return };
+        let dirty = self.free.dirty[index / 64] & 1 << (index % 64) != 0;
+        if !still_free {
+            self.set_owner(index, Some(MAGAZINE));
+        }
+        #[cfg(feature = "inflight-trace")]
+        crate::sched::trace::record(crate::sched::trace::MAGAZINE_FILL, index as u64, 0);
+        if dirty {
+            crate::reclaim::put_fill(index, false);
+        } else {
+            crate::reclaim::put_zero(index);
+        }
+    }
+
+    /// The lock is taken: the refill this hart's last section took goes into its magazine if its
+    /// return zeroed it, or back where it came from if that section did not end in a system call's
+    /// return (R84), each frame as it was: a pending frame pending again, a frame never used since
+    /// boot free and dirty again. Constant work: [`crate::reclaim::REFILL_MAX`] frames.
+    fn refill_found(&mut self) {
+        let found = crate::reclaim::entered();
+        for slot in &found.slots[..found.n] {
+            let (index, from_pending) = (
+                (slot & !crate::reclaim::FROM_PENDING) as usize - 1,
+                slot & crate::reclaim::FROM_PENDING != 0,
+            );
+            if !found.zeroed {
+                self.unfill(index, from_pending);
+                continue;
+            }
+            #[cfg(feature = "inflight-trace")]
+            self.check_zero(index, "R84", "entered a magazine");
+            crate::reclaim::put_zero(index);
+            // Zeroed in the caller's own time: off the freeing hart's payers, unbilled, as a frame an
+            // allocation zeroes under the lock is.
+            if from_pending {
+                crate::sched::zeroed_here(crate::arch::hart::index());
+            }
+        }
+    }
+
+    /// Refill frame `index`, never zeroed, back where it came from: pending again (in flight), or
+    /// free and dirty again.
+    fn unfill(&mut self, index: usize, from_pending: bool) {
+        assert!(self.allocations[index] == Some(MAGAZINE), "I1: refill frame {} not in a magazine", index);
+        #[cfg(feature = "inflight-trace")]
+        crate::sched::trace::record(
+            crate::sched::trace::MAGAZINE_OUT,
+            index as u64,
+            u128::from(from_pending),
+        );
+        if from_pending {
+            self.set_owner(index, Some(IN_FLIGHT));
+            self.in_flight += 1;
+            crate::reclaim::pend(index);
+        } else {
+            self.set_owner(index, None);
+            self.free.dirty[index / 64] |= 1 << (index % 64);
+        }
     }
 
     /// Debug only, one recorded negative run (`scan-bounds`): the first-fit scan of the ownership
@@ -452,19 +568,37 @@ impl MemoryManager {
         crate::sched::trace::record(crate::sched::trace::TAKEN, index as u64, 0);
     }
 
-    /// The bitmap is empty: wait for a frame in flight to come back, or `NoFrame` if none is in
-    /// flight. A budget that can pay always finds a frame (`map_fixed`): the frames in flight are
-    /// RAM that no budget is charged for. So the wait takes the done frames first, then a pending
-    /// one, this hart's or another's (shot down, then zeroed here), and only then waits, the lock
-    /// held, for another hart zeroing its list outside it to finish a frame: no lock is needed for
-    /// that, so it ends within one frame's zeroing. The free frame's index.
+    /// The bitmap is empty: wait for a frame in flight or in a magazine to come back, or `NoFrame` if
+    /// there is none. A budget that can pay always finds a frame (`map_fixed`): the frames in flight
+    /// and in magazines are RAM that no budget is charged for. So the wait takes the done frames
+    /// first, then a frame in any hart's magazine or refill (R84), then a pending one, this hart's
+    /// or another's (shot down, then zeroed here), and only then waits, the lock held, for another
+    /// hart zeroing its list or its refill outside it to finish: no lock is needed for that, so it
+    /// ends within one refill's zeroing. The free frame's index.
     fn reclaim_wait(&mut self) -> Result<usize, PageError> {
         loop {
             self.commit(COMMIT_MAX);
             if let Some(index) = self.find_free(false) {
                 return Ok(index);
             }
-            if self.in_flight == 0 {
+            if let Some((index, hart, from_pending, zero)) = crate::reclaim::steal() {
+                assert!(
+                    self.allocations[index] == Some(MAGAZINE),
+                    "I1: frame {} stolen, not in a magazine",
+                    index
+                );
+                if !zero {
+                    crate::kframe::zero(self.ram_start + index * PAGE_SIZE);
+                }
+                if from_pending {
+                    crate::sched::zeroed_here(hart);
+                }
+                #[cfg(feature = "inflight-trace")]
+                crate::sched::trace::record(crate::sched::trace::MAGAZINE_OUT, index as u64, 2);
+                self.set_owner(index, None);
+                return Ok(index);
+            }
+            if self.in_flight == 0 && !crate::reclaim::refilling() {
                 return Err(PageError::NoFrame);
             }
             // This hart's staged frames, shot down now, are its pending ones.
@@ -505,21 +639,27 @@ impl MemoryManager {
             index
         );
         #[cfg(feature = "inflight-trace")]
-        self.check_zero(index);
+        self.check_zero(index, "R81", "given back");
         self.set_owner(index, None);
         self.in_flight -= 1;
         #[cfg(feature = "inflight-trace")]
         crate::sched::trace::record(crate::sched::trace::COMMITTED, index as u64, 0);
     }
 
-    /// The attack case's check (`smp-inflight-race`), a stamped audit: every word of a frame given
-    /// back to the bitmap is zero.
+    /// The attack cases' check (`smp-inflight-race`, `smp-magazine-race`), a stamped audit: every
+    /// word of a frame given back to the bitmap (R81), or entering a magazine (R84), is zero.
     #[cfg(feature = "inflight-trace")]
-    fn check_zero(&self, index: usize) {
+    fn check_zero(&self, index: usize, rule: &str, how: &str) {
         let phys = self.ram_start + index * PAGE_SIZE;
         crate::sched::audit(crate::sched::AUDIT_INDEXES, || {
             for offset in (0..PAGE_SIZE).step_by(8) {
-                assert!(crate::kframe::read(phys, offset) == 0, "R81: frame {:#x} given back not zero", phys);
+                assert!(
+                    crate::kframe::read(phys, offset) == 0,
+                    "{}: frame {:#x} {} not zero",
+                    rule,
+                    phys,
+                    how
+                );
             }
         });
     }
@@ -681,6 +821,16 @@ impl MemoryManager {
             "I1: {} frames in flight, {} counted",
             in_flight,
             self.in_flight
+        );
+        // R84: the frames in magazines and refills are the ones the harts hold, none lost, none
+        // twice; a magazine that another hart's allocation took from was taken under the lock, so
+        // the count holds across it.
+        let magazines = self.allocations.iter().filter(|owner| **owner == Some(MAGAZINE)).count();
+        assert!(
+            magazines == crate::reclaim::magazines(),
+            "I1: {} frames in magazines, {} held by the harts",
+            magazines,
+            crate::reclaim::magazines()
         );
         // And each is on exactly one list, or in one hart's batch: none lost, none on two.
         let committing = crate::reclaim::length(self.committing, in_flight);
@@ -1571,9 +1721,15 @@ pub(crate) fn sync_if_executable(pid: Pid, flags: MemFlags) {
 /// block.
 pub(crate) fn shoot(pid: Pid) { shoot_for(pid, crate::arch::hart::Shot::Flush) }
 
-/// The kernel lock was just taken (a trap from user mode, `kmain` back from an idle halt): the
-/// frames harts have zeroed since go back to the bitmap, at most [`COMMIT_MAX`] (R81).
-pub fn entered() { MemoryManager::with_mut(|mm| mm.commit(COMMIT_MAX)) }
+/// The kernel lock was just taken (a trap from user mode, `kmain` back from an idle halt): this
+/// hart's refill goes into its magazine or back (R84), and the frames harts have zeroed since go
+/// back to the bitmap, at most [`COMMIT_MAX`] (R81).
+pub fn entered() {
+    MemoryManager::with_mut(|mm| {
+        mm.refill_found();
+        mm.commit(COMMIT_MAX);
+    })
+}
 
 fn shoot_for(pid: Pid, why: crate::arch::hart::Shot) {
     // Debug only, never in a bench build but one recorded negative run: these shootdowns are

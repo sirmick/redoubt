@@ -181,10 +181,20 @@ attacked before the next, in this order:
    totalled 0.9 ms over that whole gate, and the kernel makes no large copies (messages are words,
    pages move by remapping), so both stay under the lock
    ([memory](../kernel/memory.md#residual-risks)).
-6. **Per-hart frame magazines,** each refilled from the bitmap under the lock and drawn from
-   with interrupts off, so a hart's common allocation takes no lock at all; a magazine is filled
-   from the bitmap, whose frames are zero (step 5) but for those never used since boot, which the
-   fill must zero.
+6. **Per-hart frame magazines.** Each hart draws its allocations from a magazine of zero frames,
+   refilled under the lock as it draws, its own pending frames first, then the bitmap's, which are
+   zero (step 5) but for those never used since boot. The refill's frames that are not zero are
+   zeroed after the system call's return releases the lock, by that hart, at most two, in the
+   caller's own time: the caller drew the frames they replace, so the exit's cost never falls on
+   whoever runs next ([R84 (frame magazines)](../kernel/memory.md#r84-frame-magazines)), with an
+   attack case (a hart racing to allocate, map or free a frame in another hart's magazine). Under
+   step 3's one lock every allocation runs inside a section that holds it, so a magazine saves
+   the bitmap's walk and takes the zeroing out of the lock, but no allocation takes no lock yet:
+   that waits for the lock's split, a later package after step 7. Measured in the containment gate
+   at two harts under `icount`, endpoint creation's sections held the lock 8 % less (about 27 µs
+   each, a frame's zeroing), under 1 % of all the gate's lock time, and the lock waits did not fall;
+   the frames in flight peaked at 24,396 rather than 80,734
+   ([memory](../kernel/memory.md#residual-risks)).
 7. **Finer locking:** one trap-entry lock whose guard owns a token, so that the kernel's globals
    become token-guarded cells and a compile-time lock order exists if the lock is ever split;
    the per-process thread-context pages first, and anything finer only once the steps above are
@@ -241,7 +251,10 @@ several harts at once, and every unmap, lend and return shoots the process down 
 (`smp-shootdown`, `smp-fence`). A freed frame is in flight where no other hart can name it until it is
 zeroed, by the hart that freed it when idle or by an allocation that finds no free frame, and
 allocation from the bitmap zeroes nothing (step 5;
-`bench:smp-inflight-race`, [R81](../kernel/memory.md#r81-frames-in-flight)). R12 holds across harts: each budget gets its water-filling share
+`bench:smp-inflight-race`, [R81](../kernel/memory.md#r81-frames-in-flight)). Each hart draws from
+a magazine of zero frames, refilled from its own pending frames and zeroed at the drawing call's
+return, outside the lock (step 6; `bench:smp-magazine-race`,
+[R84](../kernel/memory.md#r84-frame-magazines)). R12 holds across harts: each budget gets its water-filling share
 of the harts, judged from the kernel's charges by the oracle and by the model at 1, 2 and 4 harts
 ([R12](../kernel/scheduling.md#r12-scheduling)), and the latency targets are gated at 2 harts and
 recorded at 4 ([responsiveness](../kernel/scheduling.md#responsiveness)). The console has one

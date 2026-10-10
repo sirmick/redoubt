@@ -26,6 +26,7 @@ fn return_registers(args: &[usize; 8], context: &Thread) -> ! {
     // A system call returns to user mode: the last kernel work of this entry.
     crate::reclaim::end_section();
     crate::cell::KERNEL_LOCK.release();
+    crate::reclaim::refill();
     // SAFETY: `_redoubt_syscall_return_result` (asm) writes `args` into the return registers
     // and resumes `context` with `sret`. Both point at valid, kernel-owned data and it
     // does not return.

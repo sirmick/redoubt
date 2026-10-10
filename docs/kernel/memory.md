@@ -72,10 +72,11 @@ the kernel and the [model](model.md), is in the
 
 </details>
 
-`map_anon` and `map_fixed` back every page when they map it. Each takes a free frame, charges it
-to the caller's budget ([R6 (charging)](budgets.md#r6-charging)), and only then writes the entry
-that maps it. Every free frame is already zero: a frame given up is zeroed before it is free again
-([below](#frames-in-flight)), and a frame free since boot, which may hold whatever the loader or
+`map_anon` and `map_fixed` back every page when they map it. Each takes a frame from its hart's
+magazine ([below](#frame-magazines)) or a free frame, charges it to the caller's budget
+([R6 (charging)](budgets.md#r6-charging)), and only then writes the entry that maps it. Every
+magazine frame and every free frame is already zero: a frame given up is zeroed before it is free
+again or in a magazine ([below](#frames-in-flight)), and a frame free since boot, which may hold whatever the loader or
 the firmware left there, is zeroed through the
 [physmap](memory-layout.md#the-direct-physical-map) the first time it is taken. So a page is zero
 the first time its process can see it, whoever held the frame before, and backing a page writes
@@ -147,7 +148,7 @@ A frame waits for its zeroing on one of two lists the freeing hart keeps:
    their shootdown. The list is linked through one word of each frame, the word a destruction
    already links the object frames it frees through, so that chain joins the list whole.
 
-Pending frames are zeroed in one of two places, and never in a third:
+Pending frames are zeroed in one of three places, and never in a fourth:
 
 - **Idle, when every hart is idle.** A hart with nothing to run, when every started hart is idle
   too, takes one frame off its pending list while it still holds the lock, gives the lock up,
@@ -163,11 +164,14 @@ Pending frames are zeroed in one of two places, and never in a third:
   for one frame at most: that hart needs no lock to finish it, and its push wakes the waiter. So a
   budget can always pay for the frames it can buy, and they always exist, because the frames in
   flight are RAM no budget is charged for.
-- **Never at an exit to user mode.** The thread a hart returns to did not free those frames, and
-  the caller of a destruction waits for the walk of
+- **In a refill.** A hart's allocation takes one of its own pending frames for its magazine, and
+  zeroes it at the system call's return, outside the lock ([frame magazines](#frame-magazines)).
+- **Never at an exit to user mode, as frames someone freed.** The thread a hart returns to did not
+  free those frames, and the caller of a destruction waits for the walk of
   [R10 (destruction)](budgets.md#r10-destruction), not for the zeroing of the lease it freed: a
   lease's 4,300 frames, zeroed there, put 140 ms into the steward's deadline notice in the
-  containment gate.
+  containment gate. The one zeroing at an exit is a magazine's refill, at most two frames that
+  replace the frames the returning call itself drew ([below](#frame-magazines)).
 
 Why only when every hart is idle: under `icount` the harts share one virtual clock, so a hart that
 zeroes while another works slows that one's time as surely as if the work were its own; a refused
@@ -191,6 +195,60 @@ four such payers, and what it has not zeroed stays theirs until it does. A frame
 is the allocation's own kernel time, as on every allocation before: it comes off the freeing
 hart's payers unbilled, the newest first by count, since a frame does not record its payer, so the
 split among those payers is by counts, not by frame.
+
+### Frame magazines
+
+<details><summary>Status: built · partly tested: under one kernel lock a magazine saves only the bitmap's walk at a draw; what it takes out of the lock is the zeroing at a system call's return, measured in the containment gate (below); QEMU drops a hart's TLB at its next `satp` write, so the order that keeps a stale store out of a refill is the trace's · tested (4)</summary>
+
+- bench:smp-magazine-race
+- bench:smp-inflight-race
+- mutation:R84MagazineUnzeroed
+- mutation:R84MagazineStillFree
+
+</details>
+
+Each hart keeps a **magazine** of up to 16 zero frames (`MAG_MAX`), and an allocation on that hart
+draws from it first, writing nothing. A frame in a magazine belongs to no process and is not free:
+the ownership table names it `MAGAZINE`'s, a reserved owner no process has, and its bit in the
+bitmap is clear, so every call that checks who owns a frame refuses it and no allocation takes it
+from the bitmap ([R84](#r84-frame-magazines)). Which hart holds it, the hart's own list says.
+
+A hart refills its magazine as it draws from it. Each frame a section draws, from the magazine or
+the bitmap, lets it take one more, up to two a section (`REFILL_MAX`) and as long as the magazine
+has room, under the lock:
+
+1. **This hart's own pending frame,** shot down already ([above](#frames-in-flight)), into the
+   section's refill; so frames in flight come back under load, by the hart that freed them.
+2. **Else the lowest free frame:** into the magazine at once if it is zero, as every frame given
+   back is; into the refill if it was never used since boot.
+
+The refill is zeroed when the section is a system call that returns to its caller: after the
+return gives the lock up and starts the caller's user time, the hart zeroes those frames, at most
+two, about 60 to 90 µs under `icount` with interrupts off, and they enter the magazine, zero, under
+the lock at the hart's next entry. The caller drew the frames it replaces, so it pays for the
+zeroing, in its own time; the exit's cost never falls on whoever runs next. A section that ends
+any other way (a fault, a block, a switch, an idle hart) zeroes nothing: its refill goes back where
+it came from at the next entry, a pending frame pending again, a frame free since boot free again.
+This is the one zeroing at an exit to user mode, and it is the exception to the rule
+[above](#frames-in-flight): the frames are not someone else's, but the caller's replacements.
+
+A magazine is never given back. An allocation that finds the bitmap empty takes a frame from any
+hart's magazine, then any hart's refill that hart is not zeroing (zeroing it under the lock), before
+it zeroes a pending frame, and waits only for a refill being zeroed, which needs no lock. So the
+magazines are RAM no budget is charged for, like the frames in flight, and a budget that can pay
+still always finds a frame. Every magazine changes only under the lock, so the checked build's
+destruction audit counts the frames `MAGAZINE` owns against the harts' lists, across any such
+take: none lost, none on two.
+
+Under the one kernel lock ([several harts](../plan/m2-usable-shell.md#several-harts)), every
+allocation runs inside a section that holds it, so a magazine does not yet make an allocation take
+no lock: it saves the bitmap's walk, and takes the zeroing of frames in flight and frames never used
+since boot out of the lock, into the caller's return. An allocation that takes no lock waits for
+the lock to be split ([residual risks](#residual-risks)). Measured in the containment gate at two
+harts under `icount`, against R81 alone: its 73,691 endpoint creations held the lock 229 million
+ticks in all rather than 250 million, 3,113 ticks a section rather than 3,386 (8 % less, about
+27 µs, a frame's zeroing); about 78,000 frames were refilled, 56,000 of them from pending frames,
+and the frames in flight peaked at 24,396 rather than 80,734.
 
 ### Page tables
 
@@ -349,6 +407,10 @@ stateDiagram-v2
     Free --> Mapped: map_anon, map_fixed,<br/>first touch of a reservation
     Mapped --> Flight: unmap, a reply to an<br/>abandoned call, or the process ends
     Flight --> Free: zeroed (its hart idle, or an<br/>allocation), then given back
+    state "In a magazine" as Mag
+    Free --> Mag: an allocation's refill<br/>(zeroed at the call's return if not zero)
+    Flight --> Mag: a refill from its hart's pending<br/>list, zeroed at the call's return
+    Mag --> Mapped: drawn by its hart, or by an<br/>allocation that found nothing free
     Mapped --> Mapped: process_map<br/>(moves to the child)
     Mapped --> Lent: call with a lend<br/>(unmapped from the caller)
     Lent --> Mapped: reply, or the call fails<br/>(back to the caller)
@@ -361,9 +423,9 @@ stateDiagram-v2
     DMA --> Pool: its process ended and every<br/>device that could hold it was reset
 ```
 *Figure: the states of a RAM frame. A frame is mapped by at most one process at a time, and
-is zero whenever it leaves Free or the DMA pool: zeroed in flight, on its way back, or at its
-first allocation if it has been free since boot. A frame in flight is no one's and not free
-([R81](#r81-frames-in-flight)). A pool frame is never Free, and a Free frame is never
+is zero whenever it leaves Free, a magazine or the DMA pool: zeroed in flight, on its way back or
+into a magazine, or at its first allocation if it has been free since boot. A frame in flight or in
+a magazine is no one's and not free ([R81](#r81-frames-in-flight), [R84](#r84-frame-magazines)). A pool frame is never Free, and a Free frame is never
 DMA-held.*
 
 ## Authority
@@ -493,6 +555,38 @@ by word, and its trace shows the order above for every frame
 what it held, and time passing zeroes and frees it; a frame is held, in flight or free, never two,
 and a free frame is zero ([the model](model.md)).
 
+### R84 (frame magazines)
+
+<details><summary>Status: built · partly tested: QEMU drops a hart's TLB at its next `satp` write, so a refill's frames are shown shot down by the trace's order, not by a store failing to land · tested (4)</summary>
+
+- bench:smp-magazine-race
+- bench:smp-inflight-race
+- mutation:R84MagazineUnzeroed
+- mutation:R84MagazineStillFree
+
+</details>
+
+**A frame in a hart's magazine belongs to no process and is not free, and it is zero.**
+
+- **No one can name it.** Its owner in the ownership table is `MAGAZINE`, which no process is, so
+  every call that frees, lends, transfers or `process_map`s a frame refuses it; and no call names a
+  physical frame ([authority](#authority)).
+- **No allocation takes it from the bitmap.** Its bit is clear while a magazine holds it. Only its
+  hart draws it, but for an allocation that finds the bitmap empty, which takes it under the lock.
+- **It enters the magazine only zero, and only under the lock:** a frame given back to the bitmap
+  (zero by R81), or one zeroed at the return of the system call whose section took it, outside the
+  lock by that hart alone, then moved in at the hart's next entry. A pending frame is taken only
+  off the hart's own list, after its shootdown.
+- **A magazine holds at most `MAG_MAX` frames,** and a section takes at most `REFILL_MAX` for it.
+
+The kernel's checked build samples every frame drawn from a magazine, and counts the frames
+`MAGAZINE` owns against the harts' lists in its destruction audit (I1 (handles name live
+objects)); `smp-magazine-race`'s kernel checks each frame entering a magazine word by word, and its
+trace shows the order above for every frame ([frame magazines](#frame-magazines)). In the model,
+time passing fills the magazine from the frames in flight, zeroing them, then from the free
+frames, and allocation draws from it first; a frame is held, in flight, free or in the magazine,
+never two, and a magazine frame is zero ([the model](model.md)).
+
 ### R19 (kernel W^X)
 
 Status: built · partly tested: no case plants a writable kernel code page to show that the check stops the boot · tested: bench:kernel-wx
@@ -605,6 +699,14 @@ kernel, running the call to its end with interrupts off, would stall every other
   the call shoots the process down on any other hart running it before the frame can be given
   out again, and a destruction before the free (above, `bench:smp-evict`,
   `bench:smp-shootdown`).
+- **Every allocation still holds the kernel lock.** A magazine is drawn inside a section that
+  holds the one lock ([frame magazines](#frame-magazines)), so it saves only the bitmap's walk and
+  the zeroing, which it moves to the caller's return; an allocation that takes no lock waits for
+  the lock to be split, a later package after the finer locking of
+  [several harts](../plan/m2-usable-shell.md#several-harts)' step 7. In the containment gate at
+  two harts the allocating sections lost about 20 million ticks (8 % of endpoint creation's), under
+  1 % of the gate's 2,550 million ticks of sections net of audits, and the gate's lock waits did not
+  fall with it: they are the lock's hand-off to a halted waiter and the sections' other work.
 - **Freed frames are not zeroed beside the work.** An idle hart zeroes frames in flight only when
   every hart is idle ([frames in flight](#frames-in-flight)), because the bench runs harts under
   `icount`, whose one virtual clock bills a working hart for another's zeroing. On a real machine
@@ -616,8 +718,12 @@ kernel, running the call to its end with interrupts off, would stall every other
   short, so allocations zero never-used frames at their first allocation, as before, and frames
   in flight reach about 79,500 (about 310 MiB), nearly all held to the end of the run, the longest
   given back 113 s after it was freed. A process that keeps one hart busy keeps every allocation
-  at that cost, never worse than before R81. Meanwhile a freed frame's old contents stay in RAM,
-  though no call names the frame and no process maps it.
+  at that cost, never worse than before R81. Since R84 a hart's refills take its own pending
+  frames back, zeroed at its calls' returns ([frame magazines](#frame-magazines)): in the same gate
+  the frames in flight peak at 24,396 rather than 80,734; nearly all the frames retired there are
+  destructions' object frames, thousands at once on one hart, which refills, two a call at most,
+  take back more slowly than a lease's end frees them. Meanwhile a freed frame's old
+  contents stay in RAM, though no call names the frame and no process maps it.
 
 ## Why
 
@@ -641,6 +747,15 @@ kernel, running the call to its end with interrupts off, would stall every other
   neither, since a freed frame is already no one's. Frames free since boot are zeroed at their
   first allocation, under the lock, rather than all at boot, which would cost seconds of boot
   under `icount` for the RAM the cases give.
+- **Refill a magazine at the caller's return.** Zeroing is the one piece of a frame's work long
+  enough to matter, and under the one lock a magazine refilled and zeroed under the lock would
+  only move it from the allocation to the refill. Zeroed after the return releases the lock, it
+  leaves the lock, and the caller that drew the frames pays for their replacements in its own time,
+  at most two a call, so the exit's cost never falls on whoever runs next, which is why frames
+  someone freed are never zeroed there. A refill takes the hart's own pending frames first, so
+  frames in flight come back under load, not only when every hart idles. The magazine stays with
+  its hart and is never given back: an allocation that finds no free frame takes from it under the
+  lock, so the frames it holds are never out of a budget's reach.
 - **The kernel chooses addresses,** so no program depends on a layout and no call lands on
   another mapping. `map_fixed` exists because a program's segments must sit at their link
   addresses and the loader stub, running inside the new process, is the only code that parses

@@ -108,6 +108,12 @@ inflight-trace = ["sched-trace"]
 # `smp-inflight-race` must fail.
 inflight-early-commit = ["test-only"]
 inflight-zero-unshot = ["test-only"]
+# Debug only, never in a bench build but one recorded negative run each: a refill enters its hart's
+# magazine unzeroed, a pending frame with what its last owner wrote (`magazine-unzeroed`), or a
+# frame taken from the bitmap for a magazine stays free in it as well (`magazine-still-free`), so
+# `smp-magazine-race` must fail (kernel/memory.md, R84).
+magazine-unzeroed = ["test-only"]
+magazine-still-free = ["test-only"]
 # Debug only, never in a bench build but one recorded negative run: a destruction leaves the
 # zeroing still to bill to the budgets it ends where it is, so the checked kernel's bill names a
 # budget that is gone (kernel/budgets.md, R10).

@@ -381,7 +381,9 @@ every user mapping; decoding refuses W+X flags before that); `set_flags`'s refus
 on a frame that is not RAM or is a `dma_alloc` frame; zeroing a freed frame before it is free
 again ([R81 (frames in flight)](memory.md#r81-frames-in-flight), `zero_taken` in
 [`kernel/src/reclaim.rs`](../../kernel/src/reclaim.rs) and `reclaim_wait` in
-[`kernel/src/mem.rs`](../../kernel/src/mem.rs)), a frame free since boot when first taken
+[`kernel/src/mem.rs`](../../kernel/src/mem.rs)) or in a hart's magazine
+([R84 (frame magazines)](memory.md#r84-frame-magazines), `refill` in
+[`kernel/src/reclaim.rs`](../../kernel/src/reclaim.rs)), a frame free since boot when first taken
 (`take` in [`kernel/src/mem.rs`](../../kernel/src/mem.rs)), and a DMA pool frame as it leaves the
 pool (`dma_pool_take`);
 `lend_out`, which clears the lender's valid bit and
@@ -390,8 +392,9 @@ remap it until `reply` or a failed call gives it back.
 
 **Model check:** `Checker::i9_memory`: no mapping is W+X or write-only, every frame that appears
 since the last step reads zero, every free frame is zero and none is also held or in flight
-(R81), and no frame is reachable from two address spaces. The four listed R11 mutations fail
-here, and so do R81's.
+(R81), every magazine frame is zero and none is also held, in flight or free (R84), and no frame is
+reachable from two address spaces. The four listed R11 mutations fail here, and so do R81's and
+R84's.
 
 **Attacks:** `wx` runs children that make a writable page executable and write to their code, and
 the kernel must end them with the matching fault; `write-only-attack` asks for W without R through

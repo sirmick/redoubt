@@ -224,17 +224,236 @@ pub fn unlink(index: usize) -> Option<usize> {
     (next != 0).then(|| next as usize - 1)
 }
 
-/// The lock's holder needs a frame and found none free, none done and none pending: the frames in
-/// flight are the frames idle harts are zeroing outside the lock, one each. Halt until one is pushed
-/// done: that needs no lock, so the wait is at most one frame's zeroing. Like the wait for a
-/// shootdown's acknowledgement.
+/// The lock's holder needs a frame and found none free, none done, none pending and none in a
+/// magazine: the frames in flight are the frames idle harts are zeroing outside the lock, one each,
+/// and the frames left are in refills their harts are zeroing. Halt until a frame is pushed done or
+/// a refill is zeroed: that needs no lock, so the wait is at most one refill's zeroing. Like the
+/// wait for a shootdown's acknowledgement.
 pub fn wait_done() {
     WANT.store(crate::arch::hart::index() + 1, Ordering::SeqCst);
     let started = crate::arch::hart::started();
-    while LISTS[..started].iter().all(|l| l.done.load(Ordering::SeqCst) == 0) {
+    while LISTS[..started].iter().all(|l| l.done.load(Ordering::SeqCst) == 0)
+        && MAGAZINES[..started].iter().all(|m| m.fill_state.load(Ordering::SeqCst) != ZEROED)
+    {
         crate::arch::hart::halt_for_lock();
     }
     WANT.store(0, Ordering::SeqCst);
+}
+
+/// The most frames a hart's magazine holds (kernel/memory.md, R84): 64 KiB a hart, 512 KiB over
+/// `MAX_HARTS`, RAM no budget is charged for, like the frames in flight. Enough for a hart's run of
+/// small calls, each drawing a frame or two, to draw from it; a larger mapping empties it and
+/// takes the bitmap's frames, as before.
+pub const MAG_MAX: usize = 16;
+
+/// The most frames a hart zeroes for its magazine at a system call's return, outside the lock:
+/// replacements for the frames that call drew, up to this many. At 30 to 45 µs a frame under
+/// `icount`, it bounds what a return adds with interrupts off to about 90 µs; two covers an
+/// endpoint's frame, or a page and its table.
+pub const REFILL_MAX: usize = 2;
+
+/// A frame in a refill was taken off its hart's pending list, not from the bitmap: its bit in a
+/// refill's slot, above any frame number (RAM's frames fit in 25 bits; `mem.rs`).
+pub const FROM_PENDING: u32 = 1 << 31;
+
+/// A refill's frames are taken, not yet zeroed; being zeroed, by their hart outside the lock or by
+/// an allocation that takes one back; zeroed, to enter the magazine at the hart's next entry.
+const TAKEN: u32 = 0;
+const ZEROING: u32 = 1;
+const ZEROED: u32 = 2;
+
+/// One hart's frame magazine (R84): frames owned by `mem::MAGAZINE`, each zero, which only this
+/// hart draws, but for an allocation that finds the bitmap empty. Frames are named as in [`Lists`].
+struct Magazine {
+    /// The magazine, `n` frames, each zero. Under the lock.
+    frames: [AtomicU32; MAG_MAX],
+    n: AtomicUsize,
+    /// The refill, `fill_n` frames, each with [`FROM_PENDING`] if it came off the pending list,
+    /// taken under the lock in the section numbered `fill_entry` and zeroed at its return outside
+    /// it, in the state `fill_state`; a section that does not end in a system call's return leaves
+    /// them to the next entry, which gives them back.
+    fill: [AtomicU32; REFILL_MAX],
+    fill_n: AtomicUsize,
+    fill_entry: AtomicUsize,
+    fill_state: AtomicU32,
+    /// This hart's sections, counted at each entry ([`entered`]).
+    entry: AtomicUsize,
+}
+
+impl Magazine {
+    const fn new() -> Self {
+        Magazine {
+            frames: [const { AtomicU32::new(0) }; MAG_MAX],
+            n: AtomicUsize::new(0),
+            fill: [const { AtomicU32::new(0) }; REFILL_MAX],
+            fill_n: AtomicUsize::new(0),
+            fill_entry: AtomicUsize::new(0),
+            fill_state: AtomicU32::new(TAKEN),
+            entry: AtomicUsize::new(0),
+        }
+    }
+
+    fn push(&self, frame: u32) {
+        let n = self.n.load(Ordering::Relaxed);
+        self.frames[n].store(frame, Ordering::Relaxed);
+        self.n.store(n + 1, Ordering::Relaxed);
+    }
+
+    fn pop(&self) -> Option<u32> {
+        let n = self.n.load(Ordering::Relaxed).checked_sub(1)?;
+        self.n.store(n, Ordering::Relaxed);
+        Some(self.frames[n].load(Ordering::Relaxed))
+    }
+
+    /// One refill frame, its slot's word, taken back from a refill this caller holds in `ZEROING`.
+    fn pop_fill(&self) -> Option<u32> {
+        let n = self.fill_n.load(Ordering::Relaxed).checked_sub(1)?;
+        self.fill_n.store(n, Ordering::Relaxed);
+        Some(self.fill[n].load(Ordering::Relaxed))
+    }
+}
+
+static MAGAZINES: [Magazine; MAX_HARTS] = [const { Magazine::new() }; MAX_HARTS];
+
+fn magazine() -> &'static Magazine { &MAGAZINES[crate::arch::hart::index()] }
+
+/// What this hart's entry finds of the refill its last section took, `n` slots' words (each a
+/// frame, with [`FROM_PENDING`] if it came off the pending list), now out of the refill: zeroed at
+/// that section's return, for the magazine ([`put_zero`]); or never zeroed, since that section did
+/// not end in a system call's return, for the caller to give back.
+pub struct Found {
+    pub slots: [u32; REFILL_MAX],
+    pub n: usize,
+    pub zeroed: bool,
+}
+
+/// The lock is taken: a new section on this hart, and what it finds of the last one's refill.
+/// Under the lock.
+pub fn entered() -> Found {
+    let m = magazine();
+    m.entry.fetch_add(1, Ordering::Relaxed);
+    let n = m.fill_n.swap(0, Ordering::Relaxed);
+    let slots = core::array::from_fn(|i| m.fill[i].load(Ordering::Relaxed));
+    let zeroed = n > 0 && m.fill_state.swap(TAKEN, Ordering::Acquire) == ZEROED;
+    Found { slots, n, zeroed }
+}
+
+/// A zero frame from this hart's magazine, its index. Under the lock.
+pub fn draw() -> Option<usize> { magazine().pop().map(|frame| frame as usize - 1) }
+
+/// Whether this section may take one more frame for the refill: fewer than [`REFILL_MAX`] taken in
+/// it, and room in the magazine for them. Under the lock.
+pub fn wants_refill() -> bool {
+    let m = magazine();
+    let n = m.fill_n.load(Ordering::Relaxed);
+    n < REFILL_MAX
+        && m.n.load(Ordering::Relaxed) + n < MAG_MAX
+        && (n == 0 || m.fill_entry.load(Ordering::Relaxed) == m.entry.load(Ordering::Relaxed))
+}
+
+/// Frame `index`, `MAGAZINE`'s now and zero (a frame of the bitmap's never used since boot is not),
+/// straight into this hart's magazine. Under the lock.
+pub fn put_zero(index: usize) {
+    magazine().push(index as u32 + 1);
+    #[cfg(feature = "inflight-trace")]
+    crate::sched::trace::record(crate::sched::trace::MAGAZINE_IN, index as u64, 0);
+}
+
+/// Frame `index`, `MAGAZINE`'s now, into this section's refill, to be zeroed at its return
+/// ([`refill`]). Under the lock.
+pub fn put_fill(index: usize, from_pending: bool) {
+    let m = magazine();
+    let n = m.fill_n.load(Ordering::Relaxed);
+    m.fill[n].store((index as u32 + 1) | if from_pending { FROM_PENDING } else { 0 }, Ordering::Relaxed);
+    m.fill_n.store(n + 1, Ordering::Relaxed);
+    m.fill_entry.store(m.entry.load(Ordering::Relaxed), Ordering::Relaxed);
+}
+
+/// Take the first frame off this hart's own pending list, for its refill. Under the lock.
+pub fn pop_own() -> Option<usize> {
+    let lists = here();
+    let frame = lists.pending.load(Ordering::Relaxed);
+    if frame == 0 {
+        return None;
+    }
+    lists.pending.store(crate::kframe::read(phys(frame), LINK) as u32, Ordering::Relaxed);
+    Some(frame as usize - 1)
+}
+
+/// A system call returns to its caller, the kernel lock given up: zero the refill the call's
+/// section took, the replacements for the frames it drew, at most [`REFILL_MAX`], and leave them
+/// for the magazine at the hart's next entry. After the return closed the kernel's bill and
+/// started the caller's user time, so the caller pays for them; never the frames of a section that
+/// ended otherwise, whose next runner did not draw them. The hart is outside the lock with
+/// interrupts off: an interrupt, or a shootdown asking this hart, waits two frames' zeroing at most.
+pub fn refill() {
+    let m = magazine();
+    if m.fill_n.load(Ordering::Relaxed) == 0
+        || m.fill_entry.load(Ordering::Relaxed) != m.entry.load(Ordering::Relaxed)
+        || m.fill_state.compare_exchange(TAKEN, ZEROING, Ordering::Acquire, Ordering::Relaxed).is_err()
+    {
+        return;
+    }
+    // Debug only, never in a bench build but one recorded negative run: the refill enters the
+    // magazine as it is, a pending frame with what its last owner wrote, so `smp-magazine-race`
+    // must fail.
+    if !cfg!(feature = "magazine-unzeroed") {
+        for slot in &m.fill[..m.fill_n.load(Ordering::Relaxed)] {
+            crate::kframe::zero(phys(slot.load(Ordering::Relaxed) & !FROM_PENDING));
+        }
+    }
+    m.fill_state.store(ZEROED, Ordering::Release);
+    let want = WANT.load(Ordering::SeqCst);
+    if want != 0 {
+        crate::arch::hart::wake_halted(1 << (want - 1));
+    }
+}
+
+/// The bitmap is empty: a frame from any hart's magazine, then from any hart's refill that is not
+/// being zeroed, for an allocation (`MemoryManager::reclaim_wait`). Its index, the hart whose it
+/// was, whether it came off that hart's pending list, and whether it is zero. Under the lock, so no
+/// magazine changes meanwhile; a refill is taken from only while its hart is not zeroing it.
+pub fn steal() -> Option<(usize, usize, bool, bool)> {
+    let started = crate::arch::hart::started();
+    for (hart, m) in MAGAZINES[..started].iter().enumerate() {
+        if let Some(frame) = m.pop() {
+            return Some((frame as usize - 1, hart, false, true));
+        }
+    }
+    for (hart, m) in MAGAZINES[..started].iter().enumerate() {
+        for state in [ZEROED, TAKEN] {
+            if m.fill_state.compare_exchange(state, ZEROING, Ordering::Acquire, Ordering::Relaxed).is_ok() {
+                let slot = m.pop_fill();
+                // An emptied refill is taken again, so the hart's next one starts unzeroed.
+                let left = m.fill_n.load(Ordering::Relaxed) > 0;
+                m.fill_state.store(if left { state } else { TAKEN }, Ordering::Release);
+                if let Some(slot) = slot {
+                    let index = (slot & !FROM_PENDING) as usize - 1;
+                    return Some((index, hart, slot & FROM_PENDING != 0, state == ZEROED));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Whether some hart is zeroing its refill outside the lock: an allocation that found nothing else
+/// may wait for it ([`wait_done`]), one refill's zeroing at most.
+pub fn refilling() -> bool {
+    MAGAZINES[..crate::arch::hart::started()]
+        .iter()
+        .any(|m| m.fill_n.load(Ordering::Relaxed) > 0 && m.fill_state.load(Ordering::Acquire) == ZEROING)
+}
+
+/// The checked build's count of the frames in magazines and refills, against the ownership table's
+/// `MAGAZINE` entries (`MemoryManager::check_free_frames`). Under the lock: no magazine or refill
+/// changes then, as a hart zeroing its refill only writes the frames and the state.
+#[cfg(debug_assertions)]
+pub fn magazines() -> usize {
+    MAGAZINES[..crate::arch::hart::started()]
+        .iter()
+        .map(|m| m.n.load(Ordering::Relaxed) + m.fill_n.load(Ordering::Relaxed))
+        .sum()
 }
 
 /// The checked build's count of the frames in flight on the lists, against the ownership table

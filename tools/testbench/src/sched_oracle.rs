@@ -111,7 +111,8 @@
 //! up the kernel lock, and at its next trap from user mode the kernel bills that time to the
 //! frames' payers, not to the runner: a `z` (the ticks, the frames) after the entry's wait records.
 //! The summary reports the total. An `inflight-trace` kernel also records each frame's way through
-//! the in-flight state, which [`inflight`] alone reads.
+//! the in-flight state and the harts' magazines (R84), which [`inflight`] and [`magazine`] alone
+//! read.
 //!
 //! **A share across harts** (`HART-SHARE`) is judged of everything the kernel charged in the
 //! program's window, each budget at the weight the trace states (its runner's `H`, or its weight
@@ -168,7 +169,7 @@ pub fn parse(log: &str) -> Result<Vec<Record>, String> {
             return Err(bad());
         }
         let kind = f[2].chars().next().ok_or_else(bad)?;
-        if f[2].len() != 1 || !"WRDPKLlefrqwAaGgvNnXYZUVTtIBEOMmCSJHQFukzxchjy0pidbos".contains(kind) {
+        if f[2].len() != 1 || !"WRDPKLlefrqwAaGgvNnXYZUVTtIBEOMmCSJHQFukzxchjy0pidbos123".contains(kind) {
             return Err(bad());
         }
         records.push(Record {
@@ -775,8 +776,8 @@ pub fn check(records: &[Record]) -> Result<Summary, String> {
                 return Err(format!("record {}: zeroing lifted outside a destruction", r.seq));
             }
             'p' => sum.zeroing_lifted += r.pass as u64,
-            // A frame's way through R81, and each shootdown, are `inflight`'s.
-            'i' | 'd' | 'b' | 'o' | 's' => {}
+            // A frame's way through R81 and R84, and each shootdown, are `inflight`'s.
+            'i' | 'd' | 'b' | 'o' | 's' | '1' | '2' | '3' => {}
             'K' => {
                 let Some(&(pass, _)) = queued.get(&r.id) else {
                     return Err(format!("record {}: picked budget {}, which is not queued", r.seq, r.id));
@@ -2892,6 +2893,18 @@ fn lock_order(tickets: &[(u64, u64)], waits: &[(u64, u64, u64)], harts: u64) -> 
 /// fault, `0x300` plus its exception code.
 const PAGE_FAULTS: [u64; 3] = [0x30c, 0x30d, 0x30f];
 
+/// The causes whose sections allocate frames, by name: the calls that map or create, and the page
+/// faults (exceptions 12, 13 and 15) that back a reservation on first touch.
+const ALLOCATING: [&str; 7] = [
+    "endpoint_create",
+    "map_anon",
+    "map_fixed",
+    "process_map",
+    "exception 12",
+    "exception 13",
+    "exception 15",
+];
+
 /// A section's cause by name: a system call's, an interrupt's or an exception's code, or `kmain`.
 fn cause_name(cause: u64) -> String {
     match cause {
@@ -2918,6 +2931,15 @@ fn sections(sections: &[Section], waits: &[(u64, u64, u64)]) -> String {
     }
     let mut longest: Vec<_> = by_cause.into_iter().collect();
     longest.sort_by_key(|(_, (_, _, max))| std::cmp::Reverse(*max));
+    // The causes that allocate frames, each in all, whatever its longest: what the frame
+    // magazines (R84) take out of the lock shows here.
+    let allocating: Vec<String> = longest
+        .iter()
+        .filter(|(cause, _)| ALLOCATING.contains(&cause_name(*cause).as_str()))
+        .map(|(cause, (n, total, _))| {
+            format!("{} {n}, {total} in all, {} each", cause_name(*cause), total / *n as u64)
+        })
+        .collect();
     let longest: Vec<String> = longest
         .iter()
         .take(5)
@@ -2940,11 +2962,12 @@ fn sections(sections: &[Section], waits: &[(u64, u64, u64)]) -> String {
     }
     format!(
         "kernel sections: {} held, ticks net of audits p50/p99/max {p50}/{p99}/{}; longest by cause: {}; \
-         lock waits {waited} ticks: behind other harts' sections {behind} (their audits {audits}), the lock \
-         free {}",
+         allocating, net of audits: {}; lock waits {waited} ticks: behind other harts' sections {behind} (their \
+         audits {audits}), the lock free {}",
         sections.len(),
         lengths.last().copied().unwrap_or(0),
         longest.join(", "),
+        if allocating.is_empty() { "none".into() } else { allocating.join(", ") },
         waited.saturating_sub(behind)
     )
 }
@@ -3397,31 +3420,52 @@ pub fn fence(log: &str) -> Result<String, String> {
 /// process's space (the PID in its pass field), only after that hart shot the process down (`s`);
 /// it is given back to the bitmap (`b`) only once pending, after which its hart zeroed it; and it
 /// is never taken (`o`) between its retiring and its giving back. The run must race: frames
-/// retired from a live process's space, given back and taken again.
-pub fn inflight(log: &str) -> Result<String, String> {
+/// retired from a live process's space, given back and taken again. With `magazines`
+/// (`smp_magazine`, R84) the run must also refill magazines from pending frames, draw from them,
+/// and take from another hart's when the bitmap empties; either way, a frame in a hart's magazine
+/// or refill is followed too (below).
+pub fn inflight(log: &str) -> Result<String, String> { flights(log, false) }
+
+/// `post_check = "smp_magazine"` (kernel/memory.md, R84): [`inflight`]'s checks, and every frame's
+/// way through a hart's magazine. A frame enters a refill (`1`) from its hart's own pending list
+/// (pass 1) or from the bitmap (pass 0), never while it is in flight otherwise or in another
+/// magazine; it enters the magazine (`2`) only on its hart; it leaves a refill unzeroed (`3`) back
+/// to its hart's pending list (pass 1) or the bitmap (pass 0), and any magazine for an allocation
+/// that found the bitmap empty (pass 2); it is drawn (`o`, pass 1) only from its own hart's
+/// magazine, never taken from the bitmap (`o`, pass 0) while a magazine holds it, and never
+/// retired or given back while one does.
+pub fn magazine(log: &str) -> Result<String, String> { flights(log, true) }
+
+fn flights(log: &str, magazines: bool) -> Result<String, String> {
     /// Where a frame is: retired by `hart` from `pid`'s space (0 for none), shot down since if
-    /// `shot`; or pending.
+    /// `shot`; pending on `hart`; or held by `hart` for its magazine, in it once `zero`.
     #[derive(Clone, Copy)]
     enum Flight {
         Retired { hart: u64, pid: u64, shot: bool },
-        Pending,
+        Pending { hart: u64 },
+        Held { hart: u64, zero: bool },
     }
     let records = parse(log)?;
     let mut flying: BTreeMap<u64, Flight> = BTreeMap::new();
     let mut given_back = BTreeSet::new();
     let (mut retired, mut unmapped, mut back, mut taken, mut reused, mut most) = (0, 0, 0, 0, 0, 0);
+    let (mut refilled, mut from_pending, mut drawn, mut stolen, mut unfilled) = (0, 0, 0, 0, 0);
+    let in_flight =
+        |f: &BTreeMap<u64, Flight>| f.values().filter(|f| !matches!(f, Flight::Held { .. })).count();
     for r in &records {
         let frame = r.id;
+        let held = matches!(flying.get(&frame), Some(Flight::Held { .. }));
         match r.kind {
             'i' => {
                 if flying.contains_key(&frame) {
-                    return Err(format!("record {}: frame {frame} retired while in flight", r.seq));
+                    let how = if held { "in a magazine" } else { "in flight" };
+                    return Err(format!("record {}: frame {frame} retired while {how}", r.seq));
                 }
                 let pid = r.pass as u64;
                 flying.insert(frame, Flight::Retired { hart: r.hart, pid, shot: pid == 0 });
                 retired += 1;
                 unmapped += usize::from(pid != 0);
-                most = most.max(flying.len());
+                most = most.max(in_flight(&flying));
             }
             's' => {
                 for f in flying.values_mut() {
@@ -3446,12 +3490,12 @@ pub fn inflight(log: &str) -> Result<String, String> {
                             r.seq
                         ));
                     }
-                    flying.insert(frame, Flight::Pending);
+                    flying.insert(frame, Flight::Pending { hart: r.hart });
                 }
                 _ => return Err(format!("record {}: frame {frame} pending, but not retired", r.seq)),
             },
             'b' => {
-                if !matches!(flying.remove(&frame), Some(Flight::Pending)) {
+                if !matches!(flying.remove(&frame), Some(Flight::Pending { .. })) {
                     return Err(format!(
                         "record {}: frame {frame} given back to the bitmap before it was pending and zeroed",
                         r.seq
@@ -3460,27 +3504,86 @@ pub fn inflight(log: &str) -> Result<String, String> {
                 given_back.insert(frame);
                 back += 1;
             }
+            'o' if r.pass == 1 => match flying.remove(&frame) {
+                Some(Flight::Held { hart, zero: true }) if hart == r.hart => {
+                    taken += 1;
+                    drawn += 1;
+                    reused += usize::from(given_back.remove(&frame));
+                }
+                _ => {
+                    return Err(format!(
+                        "record {}: frame {frame} drawn on hart {}, not in its magazine",
+                        r.seq, r.hart
+                    ));
+                }
+            },
             'o' => {
                 if flying.contains_key(&frame) {
-                    return Err(format!(
-                        "record {}: frame {frame} taken from the bitmap while in flight",
-                        r.seq
-                    ));
+                    let how = if held { "in a magazine" } else { "in flight" };
+                    return Err(format!("record {}: frame {frame} taken from the bitmap while {how}", r.seq));
                 }
                 taken += 1;
                 reused += usize::from(given_back.remove(&frame));
             }
+            '1' => {
+                match (r.pass, flying.get(&frame)) {
+                    (1, Some(Flight::Pending { hart })) if *hart == r.hart => {
+                        // Reused, once drawn, as a frame given back to the bitmap is once taken.
+                        given_back.insert(frame);
+                        from_pending += 1;
+                    }
+                    (0, None) => {}
+                    _ => {
+                        return Err(format!(
+                            "record {}: frame {frame} taken for hart {}'s magazine, not pending there nor free",
+                            r.seq, r.hart
+                        ));
+                    }
+                }
+                flying.insert(frame, Flight::Held { hart: r.hart, zero: false });
+                refilled += 1;
+            }
+            '2' => match flying.get_mut(&frame) {
+                Some(Flight::Held { hart, zero }) if *hart == r.hart && !*zero => *zero = true,
+                _ => {
+                    return Err(format!(
+                        "record {}: frame {frame} into hart {}'s magazine, not taken for it",
+                        r.seq, r.hart
+                    ));
+                }
+            },
+            '3' => match (r.pass, flying.remove(&frame)) {
+                (2, Some(Flight::Held { .. })) => stolen += 1,
+                (1, Some(Flight::Held { hart, zero: false })) if hart == r.hart => {
+                    // Pending again: retired once, shot down long since.
+                    flying.insert(frame, Flight::Retired { hart, pid: 0, shot: true });
+                    unfilled += 1;
+                }
+                (0, Some(Flight::Held { hart, zero: false })) if hart == r.hart => unfilled += 1,
+                _ => {
+                    return Err(format!(
+                        "record {}: frame {frame} out of hart {}'s refill, not in it unzeroed",
+                        r.seq, r.hart
+                    ));
+                }
+            },
             _ => {}
         }
     }
-    if unmapped == 0 || back == 0 || reused == 0 {
+    if unmapped == 0 || back + from_pending == 0 || reused == 0 {
         return Err(format!(
-            "nothing raced: {retired} frames retired ({unmapped} from a live space), {back} given back, {reused} taken again"
+            "nothing raced: {retired} frames retired ({unmapped} from a live space), {back} given back, {from_pending} refilled from pending, {reused} taken again"
         ));
     }
+    if magazines && (from_pending == 0 || drawn == 0 || stolen == 0) {
+        return Err(format!(
+            "no magazine raced: {refilled} frames refilled ({from_pending} from pending), {drawn} drawn, {stolen} taken from a magazine by an allocation that found the bitmap empty"
+        ));
+    }
+    let held = flying.len() - in_flight(&flying);
     Ok(format!(
-        "R81: {retired} frames retired ({unmapped} from a live space, pending only after its shootdown), at most {most} in flight; {back} given back only once pending; {taken} taken, none in flight, {reused} of them given back before; {} still in flight at the end",
-        flying.len()
+        "R81: {retired} frames retired ({unmapped} from a live space, pending only after its shootdown), at most {most} in flight; {back} given back only once pending; {taken} taken, none in flight, {reused} of them given back before; {} still in flight at the end. R84: {refilled} refilled ({from_pending} from pending), {drawn} drawn from their own hart's magazine, {stolen} taken from one for an empty bitmap, {unfilled} given back unzeroed, none taken, retired or given back while held; {held} held at the end",
+        flying.len() - held
     ))
 }
 
@@ -3514,6 +3617,49 @@ mod tests {
         // No race at all.
         let idle = [('i', 7, 0, 1), ('d', 7, 0, 1), ('b', 7, 0, 0)];
         assert!(inflight(&shot_trace(&idle)).is_err_and(|e| e.contains("nothing raced")));
+    }
+
+    #[test]
+    fn the_magazine_check_follows_each_frame_through_its_harts_magazine() {
+        // Frame 7 retired and pending on hart 1, refilled there, into its magazine and drawn; frame 8
+        // from the bitmap into hart 0's, then taken by hart 1 for an empty bitmap, and from it.
+        let race = [('i', 7, 5, 1), ('s', 5, 0, 1), ('d', 7, 0, 1), ('1', 7, 1, 1), ('2', 7, 0, 1)];
+        let good: Vec<_> = race
+            .iter()
+            .copied()
+            .chain([('o', 7, 1, 1), ('1', 8, 0, 0), ('2', 8, 0, 0), ('3', 8, 2, 1), ('o', 8, 0, 1)])
+            .collect();
+        assert!(magazine(&shot_trace(&good)).is_ok());
+        // `smp_inflight` asks for no magazine; `smp_magazine` for a refill from pending, a draw and
+        // a steal.
+        assert!(inflight(&shot_trace(&good[..6])).is_ok());
+        assert!(magazine(&shot_trace(&good[..6])).is_err_and(|e| e.contains("no magazine raced")));
+        // Taken from the bitmap while in a magazine (`magazine-still-free`).
+        let free = [('1', 8, 0, 0), ('2', 8, 0, 0), ('o', 8, 0, 1)];
+        assert!(
+            magazine(&shot_trace(&free)).is_err_and(|e| e.contains("from the bitmap while in a magazine"))
+        );
+        // Drawn on another hart, or drawn before it was zeroed into the magazine.
+        let other = [('1', 8, 0, 0), ('2', 8, 0, 0), ('o', 8, 1, 1)];
+        assert!(magazine(&shot_trace(&other)).is_err_and(|e| e.contains("not in its magazine")));
+        let unzeroed = [('1', 8, 0, 0), ('o', 8, 1, 0)];
+        assert!(magazine(&shot_trace(&unzeroed)).is_err_and(|e| e.contains("not in its magazine")));
+        // Refilled from another hart's pending list, or from a frame in flight but not pending.
+        let foreign = [('i', 7, 0, 1), ('d', 7, 0, 1), ('1', 7, 1, 0)];
+        assert!(magazine(&shot_trace(&foreign)).is_err_and(|e| e.contains("not pending there")));
+        let unshot = [('i', 7, 5, 1), ('1', 7, 1, 1)];
+        assert!(magazine(&shot_trace(&unshot)).is_err_and(|e| e.contains("not pending there")));
+        // Retired or given back while held.
+        let retired = [('1', 8, 0, 0), ('i', 8, 0, 0)];
+        assert!(magazine(&shot_trace(&retired)).is_err_and(|e| e.contains("retired while in a magazine")));
+        let back = [('1', 8, 0, 0), ('b', 8, 0, 0)];
+        assert!(magazine(&shot_trace(&back)).is_err_and(|e| e.contains("before it was pending")));
+        // An unzeroed refill goes back pending, and is pending again only on its hart.
+        let unfill =
+            [('i', 7, 0, 1), ('d', 7, 0, 1), ('1', 7, 1, 1), ('3', 7, 1, 1), ('d', 7, 0, 1), ('b', 7, 0, 0)];
+        assert!(flights(&shot_trace(&unfill), false).is_err_and(|e| e.contains("nothing raced")));
+        let zeroed_out = [('1', 8, 0, 0), ('2', 8, 0, 0), ('3', 8, 0, 0)];
+        assert!(magazine(&shot_trace(&zeroed_out)).is_err_and(|e| e.contains("not in it unzeroed")));
     }
 
     /// A trace of `records` (kind, id, pass, hart), in one kernel entry, with its end line.
@@ -4609,8 +4755,8 @@ mod tests {
         assert!(
             ok.contains(
                 "kernel sections: 2 held, ticks net of audits p50/p99/max 10/100/100; longest by cause: \
-                 budget_destroy 100 (1, 100 in all), interrupt 5 10 (1, 10 in all); lock waits 200 ticks: \
-                 behind other harts' sections 150 (their audits 75), the lock free 50"
+                 budget_destroy 100 (1, 100 in all), interrupt 5 10 (1, 10 in all); allocating, net of audits: none; \
+                 lock waits 200 ticks: behind other harts' sections 150 (their audits 75), the lock free 50"
             ),
             "{ok}"
         );

@@ -651,7 +651,10 @@ step 1 has returned B's carve, and after step 9 bills it for everything from the
 found the deadline on, whatever B's own free weight (`bench:deadline-flood-billed`). The frames a
 destruction frees are zeroed outside the kernel lock by the hart that freed them while every hart
 idles ([frames in flight](memory.md#frames-in-flight)); that time is billed to the same payer
-([scheduling](scheduling.md)). Zeroing any hart still has to bill to a budget the destruction ends is lifted to its payer with the rest of that budget's debt, between
+([scheduling](scheduling.md)). A frame a destruction freed that a hart's magazine refill takes
+instead is zeroed at the return of the call that drew from the magazine, and that caller pays for
+it ([frame magazines](memory.md#frame-magazines)): a destruction's payer is never billed for
+another's refill, nor the refilling caller for more than the two frames it drew. Zeroing any hart still has to bill to a budget the destruction ends is lifted to its payer with the rest of that budget's debt, between
 marking the subtree dying and freeing it, so no bill names a budget that is gone. The one
 exception is `root`'s destruction, which has no payer and leaves nothing to run: its zeroing is
 billed to nobody.
@@ -701,8 +704,9 @@ without preemption.*
   is not preemptible; every interrupt, wake and timeout on the machine waits for it, and it
   dominates lease termination, R39 (leases end). The frames it frees are not zeroed on the way
   back to user mode: zeroing runs on an idle hart while every hart is idle, one frame a pass
-  (about 30 µs, interrupts off), and on demand, one frame under the lock when an allocation finds
-  the bitmap empty ([frames in flight](memory.md#frames-in-flight)), so the destroyer's caller and
+  (about 30 µs, interrupts off), on demand, one frame under the lock when an allocation finds
+  the bitmap empty, and two at most at the return of a call on that hart that drew from its magazine
+  ([frames in flight](memory.md#frames-in-flight)), so the destroyer's caller and
   whatever runs next wait only for the walk. The cost must follow the objects the dying subtree
   holds, not every object page in the system and not every live table. Destruction gives three indexes, handle chains, the dying endpoints' and
   stamps' own lists, and a walk of each dying process's own frames:
