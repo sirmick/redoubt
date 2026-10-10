@@ -1,4 +1,0 @@
-sudo: unable to resolve host d1b65e1bf243: Temporary failure in name resolution
-sudo: unable to resolve host d1b65e1bf243: Temporary failure in name resolution
-PASS  beamlet-budget-flood [rv64, smp=1]   0.9s
-PASS  beamlet-budget-flood [rv32, smp=1]   1.3s

@@ -1,3 +1,0 @@
-      qemu seed 3 (TESTBENCH_QEMU_SEED=3 replays it)
-FAIL  sched-cluster-old-control [rv32, smp=1]   7.2s  sched_oracle: control: no net miss above its p99 target: control: stand-in driver_wake could not take attempt 2 (zero intent, offset 600): B exceeded its target by 20953 µs, 387 µs of audits inside, net 20566 µs <= 50000; control: stand-in timer_wake could not take attempt 1 (zero intent, offset 300): B exceeded its target by 39993 µs, 1518 µs of audits inside, net 38475 µs <= 50000
-Error: 1 test(s) failed; console logs are in /home/mcloonan/redoubt/.worktrees/bisect-673be7afc/target/testbench/run-2319944-1791328379478795403

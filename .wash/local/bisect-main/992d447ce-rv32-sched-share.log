@@ -1,2 +1,0 @@
-FAIL  sched-share [rv32, smp=1]          0.8s  forbidden output /\[share\] FAIL/: [share] FAIL: weight 300 got 543 of 1000, want 600 +- 50
-Error: 1 test(s) failed; console logs are in /home/mcloonan/redoubt/.worktrees/bisect-992d447ce/target/testbench/run-2323786-1791328454920995928

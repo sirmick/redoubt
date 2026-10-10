@@ -1,7 +1,0 @@
-      qemu seed 8 (TESTBENCH_QEMU_SEED=8 replays it)
-      sched_oracle: 578117 records, 115186 picks in rank order, every wake at or above the floor, no pass falling but by a weight change; 36 lifts by the rule (15 with a leading parent and work to move); 97 weight changes by the rule; R10 18 destructions over up to 17501 object frames, µs p50/p99/max 18710/22387/22387, their threads' ending 3046/3672/3672, no audit inside one; 230 audits, 2482601 µs; lease end p99, net decision wake 8350 + R10 22387 = 30737 µs: target met (<= 125000)
-      gate driver_wake (200): net p50/p99/max 9110/10967/30855 µs, gross 9110/10967/34003, audits 3148 µs: target met (p50 <= 15000, p99 <= 50000)
-      gate timer_wake (64): net p50/p99/max 8419/9908/9908 µs, gross 8419/9908/9908, audits 0 µs: target met (p50 <= 15000, p99 <= 50000)
-      gate decision_wake (9): net p50/p99/max 8270/8350/8350 µs, gross 8270/8350/8350, audits 0 µs: target met (p50 <= 25000, p99 <= 95000)
-      gate deadline_notice (18): net p50/p99/max 23385/26045/26045 µs, gross 84290/97548/97548, audits 1191606 µs: target met (p99 <= 40000)
-PASS  kernel-containment [rv32, smp=1] 168.4s

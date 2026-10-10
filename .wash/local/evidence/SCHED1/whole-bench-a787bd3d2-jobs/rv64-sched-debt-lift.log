@@ -1,2 +1,0 @@
-FAIL  sched-debt-lift [rv64, smp=1]      1.5s  forbidden output /\[debt-lift\] FAIL/: [debt-lift] FAIL: the sibling first ran 31724 us after creation (one round is 19000 us)
-Error: 1 test(s) failed; console logs are in /home/mcloonan/redoubt/.worktrees/SCHED1/target/testbench/run-3476316-1791264747808777645

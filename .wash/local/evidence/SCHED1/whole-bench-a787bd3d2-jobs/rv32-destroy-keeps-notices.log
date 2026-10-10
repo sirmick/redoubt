@@ -1,2 +1,0 @@
-PASS  destroy-keeps-notices-creator [rv32, smp=1]   1.7s
-PASS  destroy-keeps-notices [rv32, smp=1]   0.6s

@@ -1,3 +1,0 @@
-      sched_oracle: 2418 records, 216 picks in rank order, every wake at or above the floor, no pass falling but by a weight change; 1 lifts by the rule (0 with a leading parent and work to move); 7 weight changes by the rule; R10 1 destructions over up to 614 object frames, µs p50/p99/max 702/702/702, their threads' ending 0/0/0, no audit inside one; 234 audits, 37481 µs; 205 timer interrupts billed by the rule (1 expiring, 0 finding a wait ended early, 814 ticks after expiry to the budget billed last; 204 ending a slice, 0 nobody's)
-      share u-after-return: net 499, gross 497 of 1000, audits 6991 µs, 0 timer interrupts nobody's, 0 finding another budget's wait ended early: target met (450 <= share <= 1000)
-PASS  sched-carve-return [rv32, smp=1]   1.5s

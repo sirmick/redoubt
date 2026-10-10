@@ -1,2 +1,0 @@
-hart 1 (boot index 1) runs the scheduler
-PANIC in PID 190: panicked at kernel/src/cell.rs:124:13:

@@ -1,0 +1,154 @@
+diff --git a/libs/client/src/aio.rs b/libs/client/src/aio.rs
+index bb5fc556e..29734d6cd 100644
+--- a/libs/client/src/aio.rs
++++ b/libs/client/src/aio.rs
+@@ -43,6 +43,14 @@
+ use alloc::collections::VecDeque;
+ use alloc::vec::Vec;
+ use core::num::NonZeroU64;
++use core::sync::atomic::{AtomicU32, Ordering};
++
++/// PROBE: why the last connection ended: kind (1 call failed/no buffer, 2 reply words, 3 answers did not frame, 4 send failed), reply word 0, reply word 2.
++pub static PROBE_END: [AtomicU32; 3] = [AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0)];
++/// PROBE: the last completion call that failed in a waiter: a sequence number (how many so far),
++/// the connection's index, the kernel status, the hold (ms) and how long the call took (ms).
++pub static PROBE_CALL: [AtomicU32; 5] =
++    [AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0)];
+ 
+ use redoubt_rt::abi::{Error as SysError, FOREVER, MAX_LEND_PAGES, PAGE_SIZE};
+ use redoubt_rt::handle::Endpoint;
+@@ -335,9 +343,20 @@ impl Hub {
+     /// Takes a completion call's reply words 0 to 2 (`None`: the call failed) and its buffer.
+     fn collected(&mut self, c: usize, reply: Option<[u64; 3]>, buffer: Option<Buffer>) {
+         // Failed, ended, refused, or a session the server opened afresh: what was outstanding is gone.
+-        let (Some([0, bytes, 0]), Some(lend)) = (reply, buffer) else { return self.end(c) };
++        let (Some([0, bytes, 0]), Some(lend)) = (reply, buffer) else {
++            match reply {
++                None => PROBE_END[0].store(1, Ordering::SeqCst),
++                Some(w) => {
++                    PROBE_END[0].store(2, Ordering::SeqCst);
++                    PROBE_END[1].store(w[0] as u32, Ordering::SeqCst);
++                    PROBE_END[2].store(w[2] as u32, Ordering::SeqCst);
++                }
++            }
++            return self.end(c);
++        };
+         let n = usize::try_from(bytes).unwrap_or(usize::MAX);
+         if n > lend.len() || self.answers(c, &lend[..n]).is_err() {
++            PROBE_END[0].store(3, Ordering::SeqCst);
+             self.end(c);
+         }
+         self.conns[c].lend = Some(lend);
+@@ -419,7 +438,10 @@ impl Hub {
+                 Ok(()) => drop(conn.queue.drain(..count)),
+                 // Not taken: the server is busy. They go again at the next entry, first.
+                 Err((SysError::Timeout | SysError::Busy, _)) => return,
+-                Err(_) => return self.end(c),
++                Err(_) => {
++                    PROBE_END[0].store(4, Ordering::SeqCst);
++                    return self.end(c);
++                }
+             }
+         }
+     }
+@@ -491,7 +513,16 @@ fn waiter(endpoint: Endpoint, wake: Endpoint, index: u64, lend: Buffer) {
+             continue;
+         };
+         let hold = if held.is_empty() { COLLECT_WAIT } else { 0 };
++        let begun = redoubt_rt::handle::time_now().unwrap_or(0);
+         let mut outcome = endpoint.call(&collect_words(hold), &[], Some(buffer), hold + COLLECT_MARGIN_US);
++        if let Err(e) = &outcome.status {
++            let took = redoubt_rt::handle::time_now().unwrap_or(0).saturating_sub(begun);
++            PROBE_CALL[1].store(index as u32, Ordering::SeqCst);
++            PROBE_CALL[2].store(*e as u32, Ordering::SeqCst);
++            PROBE_CALL[3].store((hold / 1000) as u32, Ordering::SeqCst);
++            PROBE_CALL[4].store((took / 1000) as u32, Ordering::SeqCst);
++            PROBE_CALL[0].fetch_add(1, Ordering::SeqCst);
++        }
+         // A session the server opened afresh (word 2) is as good as an end: what was outstanding
+         // is gone.
+         let words = match (&outcome.status, &outcome.reply) {
+diff --git a/userland/otp/redoubt/src/lib.rs b/userland/otp/redoubt/src/lib.rs
+index 7b4eed1df..aeaf68ad6 100644
+--- a/userland/otp/redoubt/src/lib.rs
++++ b/userland/otp/redoubt/src/lib.rs
+@@ -136,10 +136,20 @@ struct ConsoleIo {
+     busy: u64,
+     /// The console took nothing, or has gone: nothing more is written.
+     gone: bool,
++    /// PROBE: why the read or write ended, said synchronously at the next console read.
++    why: Option<alloc::string::String>,
++    /// PROBE: how many failed completion calls have been said.
++    calls_said: u32,
+ }
+ 
+ fn now() -> u64 { redoubt_rt::handle::time_now().unwrap_or(0) }
+ 
++fn probe_why(what: &str, outcome: &Outcome) -> alloc::string::String {
++    let e = &redoubt_client::aio::PROBE_END;
++    let o = core::sync::atomic::Ordering::SeqCst;
++    format!("PROBE console {what} ended: {outcome:?}; hub end kind {} w0 {} w2 {} at t={}\n", e[0].load(o), e[1].load(o), e[2].load(o), now())
++}
++
+ impl ConsoleIo {
+     /// Takes `done` if it is the console's read or write; anything else, a file operation on
+     /// `/dev/cons` on the same connection among them, is handed back.
+@@ -151,6 +161,7 @@ impl ConsoleIo {
+             self.reading = None;
+             match done.outcome {
+                 Outcome::Read(0) => {
++                    self.why = Some(probe_why("read", &done.outcome));
+                     self.ended = true;
+                     self.eof_pending = true;
+                 }
+@@ -163,6 +174,7 @@ impl ConsoleIo {
+                 Outcome::Busy => {}
+                 // Refused, flushed, or the console has gone: there is no more input.
+                 _ => {
++                    self.why = Some(probe_why("read", &done.outcome));
+                     self.ended = true;
+                     self.eof_pending = true;
+                 }
+@@ -178,7 +190,10 @@ impl ConsoleIo {
+                     self.retry_at = Some(now().saturating_add(RETRY_US));
+                 }
+                 // A console that takes nothing, or has gone, gets no more.
+-                _ => self.stop_writing(),
++                _ => {
++                    self.why = Some(probe_why("write", &done.outcome));
++                    self.stop_writing();
++                }
+             }
+             self.write_buffer = done.buffer;
+             self.write(io);
+@@ -295,6 +310,8 @@ impl Redoubt {
+             retry_at: None,
+             busy: 0,
+             gone: false,
++            why: None,
++            calls_said: 0,
+         };
+         Ok(Redoubt {
+             lend,
+@@ -502,6 +519,21 @@ impl Platform for Redoubt {
+             self.start_reading();
+         }
+         self.take_completed();
++        if let Some(why) = self.cons.why.take() {
++            write_all(&self.console, &mut self.lend, why.as_bytes());
++        }
++        let c = &redoubt_client::aio::PROBE_CALL;
++        let o = core::sync::atomic::Ordering::SeqCst;
++        let seq = c[0].load(o);
++        if seq != self.cons.calls_said {
++            self.cons.calls_said = seq;
++            let line = format!(
++                "PROBE completion call failed (#{seq}): connection {} status {} hold {} ms took {} ms (late by {} ms past hold + margin) at t={}\n",
++                c[1].load(o), c[2].load(o), c[3].load(o), c[4].load(o),
++                c[4].load(o).saturating_sub(c[3].load(o) + (redoubt_client::aio::COLLECT_MARGIN_US / 1000) as u32), now()
++            );
++            write_all(&self.console, &mut self.lend, line.as_bytes());
++        }
+         if !self.cons.input.is_empty() {
+             return ConsoleInput::Data(self.cons.input.drain(..).collect());
+         }

@@ -39,4 +39,6 @@ fingerprinted on the tree: after any edit, run `prebuilt` again, or the case tar
 stale index). `cargo testbench --exact <case>` names one case; a bare name is still a substring.
 98 boot cases now run in guest time (icount): their verdicts hold beside anything.
 
-- Export BEAMLET_TOOLCHAINS, both RUSTSBI_PROTOTYPER vars and ~/.cargo/bin on PATH BEFORE `make prebuilt`: a prebuilt index built without them records 20 toolchain failures and every userland case replays them. Never write a log or scratch file in the worktree root (the index fingerprints the tree); use target/ or /tmp.
+- Export BEAMLET_TOOLCHAINS, both RUSTSBI_PROTOTYPER vars and ~/.cargo/bin on PATH BEFORE `make prebuilt`: a prebuilt index built without them records 20 toolchain failures and every userland case replays them. Never write a log or scratch file in the worktree root (the index fingerprints the tree); use target/ or $REDOUBT_TMP.
+
+- NEVER use /tmp for scratch, logs, sweeps, exports or target dirs: this host's /tmp is a 31 GB RAM filesystem and sweeps have filled it. Use $REDOUBT_TMP/<your-node>/ (= /home/mcloonan/redoubt/.tmp, git-ignored, on disk; `q run` sets REDOUBT_TMP and TMPDIR to it for every job; /var/tmp/redoubt links to it) or your worktree's target/. Delete your scratch when the package merges.

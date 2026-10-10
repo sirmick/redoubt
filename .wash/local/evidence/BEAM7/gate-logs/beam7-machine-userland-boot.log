@@ -1,4 +1,0 @@
-sudo: unable to resolve host 946ad3840f8f: Temporary failure in name resolution
-sudo: unable to resolve host 946ad3840f8f: Temporary failure in name resolution
-PASS  userland-boot [rv64, smp=1]      157.1s
-PASS  userland-boot [rv32, smp=1]      149.6s

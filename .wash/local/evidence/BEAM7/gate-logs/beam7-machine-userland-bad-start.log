@@ -1,4 +1,0 @@
-sudo: unable to resolve host 62ccb1dfcc3b: Temporary failure in name resolution
-sudo: unable to resolve host 62ccb1dfcc3b: Temporary failure in name resolution
-PASS  userland-bad-start [rv64, smp=1]   6.9s
-PASS  userland-bad-start [rv32, smp=1]   7.3s

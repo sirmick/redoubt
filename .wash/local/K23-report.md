@@ -210,3 +210,35 @@ After `NoSuch.call()` it times out at 450 s waiting for STEWARD2's expected
 `UndefinedFunctionError ... NoSuch.call/0`. The case's own description says a call to NoSuch
 "stays silent". That is beamlet's loading path. The boot, the steward's lines and the prompt
 before it are as expected, and the commit touches nothing there.
+
+## Final: the steward commit on STEWARD2's final tip
+
+The head is wp-K23-steward 8865a7a05, one commit on wp-STEWARD2 c3567f923 (main cc51f76ad).
+
+The red's P1 is fixed. init hands the steward a fresh connection at each manifest server, made
+through the badge, and disconnects it at the steward's exit, so every session connection under
+it goes with it. Stamping could not do this: a server tracks no exits.
+
+The probe is now a timed exit. Every restart-probe instance exits 14 s after its console session
+starts. SSH probes are not used, because sshd keeps a slot for each login the dying steward
+never answered, and has four slots.
+
+The red's P2 is folded: steward-restart makes 13 restarts, past ipd's cap of 12, and steward.md
+says littlefsd:alice-secrets is covered by the shared code only.
+
+littlefsd:alice-secrets's stack is 5 pages (peak 8,536 B). The control run, with init handing
+badges, refuses the console session from the 8th restart on.
+
+The rebase took STEWARD2's restructured serve loop: the probe exit sits after `after`. It also
+took main's milestone names (SUMMARY.md: Beyond M6). The todo page is deleted again, and no
+"recreates users" text remains.
+
+Size ceilings: libs/rt 3,542, servers/steward 1,193, servers/init 2,413.
+
+From a fresh prebuilt, each of these exited 0 on both widths:
+
+- steward-restart, steward-restart-reboot, steward-session-ends, steward-ssh-two-principals
+- init-restart, init-reboot, init-boot, budget-reap
+- the smoke set: userland-boot (rv32 included), bench-net-peer, ipc-outcomes
+
+size-budget, formatting, unsafe-budget, no-cruft and docs also exited 0.

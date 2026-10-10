@@ -262,3 +262,35 @@ beamlet-serve, beamlet-launch, beamlet-natives-attack (rv32 did not meet BEAM9's
 sessions' consoles are minted once); PASS rv64 docs, formatting, size-budget, unsafe-budget,
 no-cruft. Smoke set and host suite unchanged since f3c06d547 (no library code changed: the
 tester, the cases' files and one page).
+
+### Rebased onto STEWARD2's final tip (2026-10-08)
+
+Head b1103a365: one commit (26 files) on wp-STEWARD2's final tip c3567f923 (on main cc51f76ad),
+`git rebase --onto c3567f923 10bda633a wp-BEAM4-cases`, cb6ed7944 before. Two conflicts, both
+pages: docs/plan/m1-separation.md keeps the base's new steward and files bullets (the milestone
+split) with the cases' natives sentence; docs/userland/beamlet.md "Natives" status, the base's
+list grew by one host test, so the count is 30 (26 + the four bench cases). Nothing else moved.
+
+Gates on b1103a365 (prebuilt rv64 229 / rv32 215, rc 0; jobs.mk):
+- PASS both widths: beamlet-natives, beamlet-serve, beamlet-launch, beamlet-natives-attack.
+- Smoke set PASS both widths: beamlet-console, beamlet-boot, beamlet-footprint, aio-many-reads,
+  userland-boot (rv32 now passes: BEAM9 is in the base), init-boot, ipc-outcomes, bench-net-peer;
+  beamlet-files PASS rv64; rv32 FAILED once in the chain (`{'EXCEPTION',error,{badmatch,{error,
+  eexist}}}` at `prim_file:make_dir("/home/alice/d")`, after every earlier line passed) and
+  PASSED twice rerun alone. Not this branch's files (walfsd, the base's beamlet_files.erl); the
+  base's new "a file request answered busy goes again after the retry interval" (45f1880bc) is
+  the suspect: a retried mkdir whose first try had landed reads eexist. Named here, not chased.
+- PASS rv64 docs, formatting, size-budget, unsafe-budget, no-cruft.
+- Host: beamlet-redoubt --features fake 55/55 (console 13, files 18, limits 7, lookup 2, pack 2,
+  system 11, userland 2), q --quiet, rc 0.
+
+Run logs: /home/mcloonan/redoubt/.tmp/BEAM4c/ (beam4c-*.log: prebuilt, cases, smoke, gates,
+host suites), moved there from /tmp.
+
+### Rebased onto main df5705f10 (2026-10-08)
+
+Head 572d72fce: one commit on main df5705f10 (STEWARD2 merged; its final fold rewrote the
+commits under the branch). `git rebase --onto df5705f10 c3567f923`, no conflict; range-diff
+against b1103a365 differs in context only. Gates (prebuilt rv64 229 / rv32 215): PASS both
+widths beamlet-natives, beamlet-serve, beamlet-launch, beamlet-natives-attack; PASS docs. Log:
+/home/mcloonan/redoubt/.tmp/BEAM4c/main-rebase.log.

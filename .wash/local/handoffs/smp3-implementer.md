@@ -1,0 +1,45 @@
+SMP3 handoff, aimed at SMP2 (R12's shares and the targets across harts). SMP3 merged at main 36d1450f9 (branch head 366757552). Full report: .wash/local/SMP3-report.md; sweep findings: .wash/local/SMP3-smp2-findings.md.
+
+## What SMP3 built, and where
+
+- THE PICK. libs/stride/src/lib.rs `Wiring::pick`: lowest-ranked queued budget for which `next` (kernel `sched::next_thread`) finds a thread; a budget with no free thread whose runner is some hart's `cur` is PASSED OVER (bitmask `passed` by runner index) and stays queued; one no hart runs is descheduled as before. RECON1's ranks untouched; `Queue::pick(passed)` compares ranks only. Stride state one per budget: `Wiring::settle` folds EVERY runner of b; `Wiring::switch` requeues (back+1) a budget another hart still runs (`runner_of(c).is_some() || still_runnable`). `Wiring::bill` joins the FIRST runner of b only (fine for totals; note for SMP2's per-hart accounting). Stride tests: `a_pick_passes_over_a_budget_whose_threads_all_run_on_harts`, `a_budget_with_two_runnable_threads_runs_on_two_harts_at_one_pass` (libs/stride/src/tests.rs). The model has NO harts; `the_crate_and_the_model_agree` drives `Cpu` (one runner) and still passes. SMP2 must add harts to the model and the mutations.
+- WAKE IPI. kernel/src/sched.rs `leave()`: when started()>1, waiting = queued budgets no hart runs + sum of ready(b) over distinct running budgets (<= MAX_HARTS frame reads); > usize::from(next.is_none()) -> `hart::wake_idle()`. This is the brief's rule; it costs cross-hart ping-pong for a call within one budget (below). Wake affinity was declined for SMP3 and noted for a later package.
+- PROCESS STATE. kernel/src/ptable.rs: `Running(mask)` = some hart runs a thread; mask = ready threads NO hart runs; each hart's thread is in its hart block (arch/riscv/hart.rs `Block.tid`). `off_hart(pid, ready)` gives Running/Ready/Sleeping using `hart::runs_elsewhere(pid)`. `process.current_thread` is only a round-robin hint now. `switch_to_thread` Ready|Running merged; `activate_process_thread` accepts Running(x) from kmain when another hart runs the pid.
+- SHOOTDOWNS. arch/riscv/hart.rs `shootdown(pid, Shot) -> asked`; `Shot::{Flush=1, Fetch=2, Leave=3}`; block word `shoot` = (asid+1) | SHOOT_LEAVE bit; `serve()` at trap entry and in the lock spin; Flush/Fetch -> `mem::shot_flush` (ASID flush + fence.i), Leave -> `mem::shot_down` (satp to kernel, sets `left`). Targets = other harts whose block names pid and `left != pid` (`runs_elsewhere`). Callers: kernel/src/mem.rs `shoot(pid)` (Flush) and `sync_if_executable(pid, flags)` (Fetch) behind feature `smp-no-shootdown`; ptable.rs `evict(pid)` (Leave, behind `smp-no-evict`, prints the `shootdown: PID n stopped on hart(s)` line smp-evict expects, then `audit_left`). Sites: unmap, narrowing set_flags, map_anon/map_fixed/set_flags with X, process_map (source Flush, child Fetch), message.rs take_buffer, return_lend, free_abandoned_lend, move_buffer's transfer table frees, abandon's table frees, mem.rs undo_run, terminate_process (self-exit with a sibling elsewhere), kill_process.
+- STALE MASK (SMP1/ASID1's, unchanged): arch/riscv/mem.rs `mod stale` — per PID, harts owing an ASID flush before they next install it.
+- AUDITS (checked build). (1) arch/riscv/mem.rs `audit::removed/shot/returning`: every removal (`Space::removed`) is recorded per hart; `hart::shootdown` clears it; at every return, a removed pid that `runs_elsewhere` panics "ASID audit: PID n lost an entry while another hart ran it". This is the verdict of the smp-no-shootdown negative on QEMU. (2) sched.rs `audit_harts` (blocks vs process table vs runners) runs INSIDE `audit_marks` (AUDIT_MARKS, once a slice and before idle), billed to no budget (red's P2); `audit_marks` also checks every Running process has a hart.
+- TRACE. sched.rs trace: every record now has a 6th field, the writing hart's boot index; new kind `S` (id = target pid, pass bits 0-15 asked, 16-31 acked, 32+ why). Oracle tools/testbench/src/sched_oracle.rs: `Record.hart`, parse takes 5 or 6 fields, `S` admitted and ignored by the rank checks; `fence()` = post_check `smp_fence`. The oracle still replays ONE runner: at 2 harts every sched_oracle case fails with "rank clauses put budget N first" — SMP2's oracle work.
+- BENCH OPTIONS. `cargo testbench --smp N` (tools/testbench/src/main.rs, case.rs `Boot::with_harts`): every boot case at [N]; `keep_smp = true` keeps the case's counts (reason in a comment beside it); `timeout_secs_smp = S` replaces timeout_secs under --smp. keep_smp now: bench-poweroff-missing, map-anon-search-bound, budget-deadline. timeout_secs_smp: redoubt-ipc-attack = 90. jobs.mk leases cores from the toml's smp, so run a sweep as ONE q lease: see commands.
+- CASES. tests/smp-shootdown.toml (+ -mttcg): unmap / lend returned / lend within one process; tests/smp-fence.toml (sched-trace, post_check smp_fence). Programs tests/programs/src/bin/smp-shootdown.rs, smp-fence.rs.
+
+## The two-hart sweep (head 44fa4d2cf, before the final rebase)
+
+rv64 258 PASS / 26 FAIL; rv32 247 / 23. Every failure also fails at 2 harts on main + the option alone. SMP2's starting list (on SMP2's node now): deadline-flood-billed, endpoint-destroy-full, sched-budget-churn, sched-carve-return, sched-cluster, sched-debt-lift, sched-destroy-billing, sched-exit-churn, sched-idle-gap, sched-large-weight(-release), sched-latency, sched-latency-tcg, sched-lift-delay, sched-server-busy (rv64, flips at tolerance), sched-share(-release), sched-sleep-gaming, sched-ties, sched-timer-flood, sched-wake-no-preempt; measurements: expiry-deadline-then-timeout (rv64), scan-bounds; slow under icount: boot-profile x2 (first console read 51 s on main vs 20 s bound), kernel-containment (steady ~1.2 terminations/min, 35 of 112 by its 1800 s timeout; one hart does all in 437 s; NOT a stall).
+
+WHY: under icount (shift=3, sleep=off) QEMU runs the harts in turn on one host thread, and a hart spinning on the one kernel lock spends its whole turn and advances the shared virtual clock. So anything timed in guest time at 2 harts counts the other hart's spinning, and cross-hart hand-offs (a reply waking a thread on the idle hart, which then spins for the lock) multiply. Numbers: ipc-client/log-server (one budget) 1.3 s at 1 hart vs 8.2 s at 2 under icount; without icount 2.5 s both. The same cost is on docs/kernel/scheduling.md, Residual risks, "A call within one budget crosses harts".
+
+## Measurements that matter
+- unmap at 1 hart (asid-cost, release, icount, 10,000 map+touch+unmap): rv64 2,812,305 -> 2,813,907 us (+0.06 %); rv32 3,217,688 -> 3,221,678 us (+0.12 %).
+- redoubt-ipc-attack at 2 harts: 27.5 s rv64, 36.4 s rv32 (20 s at 1 hart).
+- Negative smp-no-shootdown with the audit silenced: smp_fence fails both widths; rv64 mttcg showed one real stale write (lend within one process).
+
+## Traps
+- `target/prebuilt` is fingerprinted on the tree: ANY edit (even an amend that leaves contents equal can trip it if done mid-run) makes cases fail with "built from this tree before it changed"; rebuild with `make ... prebuilt` and never edit while a gate or sweep runs.
+- A background job is killed at 2 h: run rv64 and rv32 sweeps as separate jobs; boot-profile (900 s) and kernel-containment (1800 s) dominate a sweep.
+- `cargo testbench` takes ONE filter (substring), `--exact` for one case.
+- Logs under target/testbench/run-*/ are pruned by later runs: copy what you need to $REDOUBT_TMP.
+- Never /tmp: scratch in $REDOUBT_TMP/<node>/ (/var/tmp/redoubt links there).
+- Recorded negatives need a kernel feature: there is no CLI flag; use a temporary tests/neg-*.toml with kernel_features, delete it after.
+- size-budget: a raised ceiling needs `Size budget: <crate>: <reason>` in the commit; kernel ceiling now 9599, libs/stride 699.
+- The red rejected per-pick audits outside sched::audit (billed, in the slice): every checked-build audit goes through `sched::audit`.
+
+## Commands
+export PATH="$HOME/.cargo/bin:$PATH" RUSTSBI_PROTOTYPER=/home/mcloonan/redoubt/bios/target/riscv64gc-unknown-none-elf/release/rustsbi-prototyper RUSTSBI_PROTOTYPER_RV32=/home/mcloonan/redoubt/bios/target/riscv32imac-unknown-none-elf/release/rustsbi-prototyper BEAMLET_TOOLCHAINS=/home/mcloonan/redoubt/toolchains; unset MAKEFLAGS; q=/home/mcloonan/redoubt/scripts/q
+- index: make -f /home/mcloonan/redoubt/scripts/jobs.mk -C <wt> prebuilt
+- a case: make -k -f .../jobs.mk -C <wt> rv64/<case> rv32/<case>
+- one case at 2 harts: $q run --cores 4 --tenant <node> -- target/prebuilt/testbench --prebuilt target/prebuilt --arch rv64 --smp 2 --exact <case>
+- sweep: $q run --cores 8 --tenant <node> -- target/prebuilt/testbench --prebuilt target/prebuilt --arch rv64 --smp 2 > target/smp2-rv64.log 2>&1
+- stride tests: $q run --cores 4 -- cargo test -p redoubt-stride ; bench host tests: cargo test -p testbench
+- format one file: rustfmt +nightly --edition 2024 --config skip_children=true <file>
+
+What consumed my context: re-running the gate after each rebase and each late addition (the index goes stale on any edit), and the two-hart sweeps' long timeouts.

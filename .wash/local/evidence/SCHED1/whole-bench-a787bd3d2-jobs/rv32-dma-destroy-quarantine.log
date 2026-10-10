@@ -1,1 +1,0 @@
-PASS  dma-destroy-quarantine [rv32, smp=1]   0.5s

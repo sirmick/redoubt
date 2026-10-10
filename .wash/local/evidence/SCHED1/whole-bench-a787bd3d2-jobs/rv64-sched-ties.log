@@ -1,2 +1,0 @@
-FAIL  sched-ties [rv64, smp=1]           1.5s  forbidden output /\[ties\] FAIL/: [ties] FAIL: a later entry's wakers ran first (clause 2)
-Error: 1 test(s) failed; console logs are in /home/mcloonan/redoubt/.worktrees/SCHED1/target/testbench/run-3739201-1791273673769203159

@@ -1,0 +1,7 @@
+# B47 repro: the fifth pipeline in a session is refused and leaks a budget
+
+Found by NSCR1 on main a72e774b8, rv64 (`cargo testbench <scratch> --arch rv64`, pipe recipe `tests/data/pipe/boot.toml`, console session).
+- Line typed (once): `t = fn -> {Redoubt.Pipeline.run([{"pipe-stage", ["say", "hi"]}]), elem(c.(), 1).processes, length(Port.list()), length(Process.list())} end` with `c = fn -> {:ok, o} = Redoubt.Budget.own(); Redoubt.Budget.usage(o) end`; then `{:tN, t.()}` on six separate lines.
+- Runs 1-4: `{:ok, ...}`, processes `{10, 1}`; runs 5 and 6: `{:error, :refused}`, processes `{10, 2}`; ports 3 and VM processes 22 throughout; 2 s later `c.()` is still `pages: {11008, ~8000}, processes: {10, 2}, weight: {100, 1}` (base `{11008, 6373}`, `{10, 1}`, `{100, 0}`), `Redoubt.Pipes.usage()` `{:error, :not_running}`: a weight-1 one-process budget (piped's shape, `@budget` in pipes.ex) leaked and untracked.
+- Same with `screen("screen-stage", ["big"])` (refused screens) as the pipeline: the fifth start fails identically, so it is the count of pipeline starts, not how they ended.
+- Where it got to: after four pipelines a direct `Redoubt.Pipes.open(1)` from the evaluator succeeds (piped starts, `users` holds the caller, namespace stays at 9 entries), so the refusal is later in the fifth `Pipeline.own/3` start (make_pipes mkdir, connect's mints, or `:redoubt.launch`), or depends on timing between the fourth release and the fifth `Pipes.open`; not narrowed further.

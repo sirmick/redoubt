@@ -1,2 +1,0 @@
-PASS  all-together [rv64, smp=1]         2.5s
-PASS  all-together [rv64, smp=2]         2.5s

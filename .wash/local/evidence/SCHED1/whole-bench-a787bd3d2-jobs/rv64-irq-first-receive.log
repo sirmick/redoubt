@@ -1,1 +1,0 @@
-PASS  irq-first-receive [rv64, smp=1]    0.6s

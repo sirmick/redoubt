@@ -1,3 +1,7 @@
 train-9 open 2026-10-07T10:03:41Z: K19 f4d3b41d9
 B8 b60c7cc5c
 B23 33289919e -> train 9 cut (K19, B8, B23); bench waits on K28 (main oracle regression from K19)
+K28 8cc1e88df merged (fixes the oracle failure K19 left); bench of train 9 can start; rv32 kernel-containment R10 still over (K29)
+RECON1 26f79ed08 merged -> one whole bench on this tip covers trains 9 (K19, B8, B23), 10 (B20, B9, BEAM9), 11 (BEAM10) + K28 + RECON1
+train-9 (9-11) bench start on 26f79ed08
+train-9 (9-11) judged 2026-10-07T14:02:22Z on 26f79ed08: 477 pass / 2 fail (+16 width-restricted, 50 host-only rv32 no-target); rv32 kernel-containment R10 30,535 = K29 (fix in gate); rv64 bench-ssh-loopback-deadlock NEW, deterministic, server log never created -> B25 (bisect over the train range). Bench cut by the 13:50Z restart, the 89 unfinished targets rerun on the same head.

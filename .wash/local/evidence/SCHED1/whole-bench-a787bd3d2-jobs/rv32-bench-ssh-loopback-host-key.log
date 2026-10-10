@@ -1,2 +1,0 @@
-FAIL  bench-ssh-loopback-host-key        0.1s  failed, but not with /^session alice: at the end: ssh exited \(status 255\), expected 0; last output: Host key verification failed\.$/: session alice: at the end: ssh exited (status 255), expected 0; last output: Error: Ssh(SessionEOF)
-Error: 1 test(s) failed; console logs are in /home/mcloonan/redoubt/.worktrees/SCHED1/target/testbench/run-3728338-1791273620165555486

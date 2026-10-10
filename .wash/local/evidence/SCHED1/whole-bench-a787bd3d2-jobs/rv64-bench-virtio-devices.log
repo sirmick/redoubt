@@ -1,1 +1,0 @@
-PASS  bench-virtio-devices [rv64, smp=1]   0.1s

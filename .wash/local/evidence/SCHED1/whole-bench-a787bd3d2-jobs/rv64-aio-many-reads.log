@@ -1,3 +1,0 @@
-FAIL  aio-many-reads-two [rv64, smp=1]  20.8s  forbidden output /aio-reader TEST FAILED/: [con ab184a255b12a262] aio-reader TEST FAILED: receive: Timeout
-PASS  aio-many-reads [rv64, smp=1]       1.0s
-Error: 1 test(s) failed; console logs are in /home/mcloonan/redoubt/.worktrees/SCHED1/target/testbench/run-2914035-1791249124155082198

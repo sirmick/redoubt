@@ -1,2 +1,0 @@
-PASS  timeouts-tcg [rv64, smp=1]         6.2s
-PASS  timeouts [rv64, smp=1]             2.4s

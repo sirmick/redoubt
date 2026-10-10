@@ -1,0 +1,2 @@
+train-15 open 2026-10-09T22:55:26Z: IDLE1 d2f6e523e, JOB1 a72e774b8, SCHED3 24d3016b7 (tip); whole bench in .worktrees/train-15, log .tmp/train-15/bench.log
+train-15 closed 2026-10-09T23:56:14Z: pushed main f5316e38c..24d3016b7 (IDLE1, JOB1, SCHED3); whole bench 588/588 PASS; bench-elixir-oracles-broken-guard hit its 46 s deadline under full load, passed alone in 1.9 s (shared-host rule)

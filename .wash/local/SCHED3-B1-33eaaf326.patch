@@ -1,0 +1,213 @@
+diff --git a/kernel/Cargo.toml b/kernel/Cargo.toml
+index 0215dab4b..f8831f630 100644
+--- a/kernel/Cargo.toml
++++ b/kernel/Cargo.toml
+@@ -87,6 +87,10 @@ audit-billed = ["test-only"]
+ # lock behind another hart's audit stays billed for the wait, so sched-budget-churn-shell's victim
+ # must miss its share at two harts (kernel/scheduling.md, "Fair kernel entry is bounded by count").
+ audit-wait-billed = ["test-only"]
++# Debug only, never in a bench build but one recorded negative run: every hart's timer comes by
++# every timeout and deadline, whoever pays for it, as before the payer's hart was preferred
++# (kernel/timer.md, "The hart timer").
++timer-any-hart = ["test-only"]
+ # Debug only, never in a bench build but one recorded negative run: the rest of a timer interrupt
+ # after its expiry, and the return's own walk, are billed as before the fix to the budget it
+ # interrupted, so the oracle's timer-entry check must fail.
+diff --git a/kernel/src/budget.rs b/kernel/src/budget.rs
+index 5a9cedaff..8b5bfa24c 100644
+--- a/kernel/src/budget.rs
++++ b/kernel/src/budget.rs
+@@ -922,7 +922,7 @@ impl MemoryManager {
+         })?;
+         if spec.deadline != FOREVER {
+             // A deadline already past is destroyed at the next kernel entry.
+-            crate::time::note_budget_deadline(spec.deadline);
++            crate::time::note_budget_deadline(spec.deadline, self.budget_id(pf));
+         }
+         Ok(installed)
+     }
+diff --git a/kernel/src/message.rs b/kernel/src/message.rs
+index 35fffdd9f..082328be4 100644
+--- a/kernel/src/message.rs
++++ b/kernel/src/message.rs
+@@ -695,7 +695,8 @@ fn settle(
+         if let Some(a) = mm.account_mut(pid) {
+             a.earliest_timeout = a.earliest_timeout.min(s.deadline);
+         }
+-        crate::time::note_timeout(s.deadline);
++        let payer = mm.budget_of(pid).map_or(0, |f| mm.budget(f).id);
++        crate::time::note_timeout(s.deadline, payer);
+     }
+     // `can_resume: false` is what takes this thread off the ready list (ptable.rs).
+     ss.activate_process_thread(tid, KERNEL_PID, 0, false).expect("the kernel can always run");
+@@ -2026,8 +2027,10 @@ fn fail_one(ss: &mut ProcessTable, mm: &mut MemoryManager, r: u64) {
+ pub struct Due {
+     /// The waits due, on the due list in the order the timer ends them.
+     pub count: u64,
+-    /// The earliest deadline still to come (`u64::MAX` for none).
++    /// The earliest deadline still to come (`u64::MAX` for none), and the id of the budget whose
++    /// thread waits for it (`None` for two at one instant, or none).
+     pub next: u64,
++    pub next_for: Option<u64>,
+     /// The last process whose cached earliest timeout had come with none of its threads due: a
+     /// wait that ended before its timeout left the timer early, and this walk is its
+     /// (kernel/timer.md, "R12 (scheduling) for timer work").
+@@ -2041,11 +2044,14 @@ pub struct Due {
+ /// deadline, then (pid, tid): the order the timer ends them in (kernel/timer.md, "Expiry"), in R
+ /// log R steps for R waits.
+ pub fn collect_due(mm: &mut MemoryManager, now: u64) -> Due {
+-    let mut due = Due { count: 0, next: u64::MAX, stale: None };
++    let mut due = Due { count: 0, next: u64::MAX, next_for: None, stale: None };
+     for pid in mm.live_pids() {
+-        let Some(earliest) = mm.account(pid).map(|a| a.earliest_timeout) else { continue };
++        let Some(earliest) = mm.account(pid).map(|a| a.earliest_timeout).filter(|e| *e != u64::MAX) else {
++            continue;
++        };
++        let payer = mm.budget_of(pid).map_or(0, |f| mm.budget(f).id);
+         if earliest > now {
+-            due.next = due.next.min(earliest);
++            (due.next, due.next_for) = crate::time::lowered((due.next, due.next_for), earliest, payer);
+             continue;
+         }
+         let mut exact = u64::MAX;
+@@ -2060,7 +2066,7 @@ pub fn collect_due(mm: &mut MemoryManager, now: u64) -> Due {
+                 timing(|| List::due().push_back(w, r));
+             } else {
+                 exact = exact.min(deadline);
+-                due.next = due.next.min(deadline);
++                (due.next, due.next_for) = crate::time::lowered((due.next, due.next_for), deadline, payer);
+             }
+             r = list.next(w, r);
+         }
+diff --git a/kernel/src/sched.rs b/kernel/src/sched.rs
+index 50fa4488f..c074573b8 100644
+--- a/kernel/src/sched.rs
++++ b/kernel/src/sched.rs
+@@ -251,6 +251,12 @@ impl Sched {
+     }
+ }
+ 
++/// Each hart's runner's id, by boot index: what the timer's arming asks of the harts
++/// ([`crate::time::rearm`]).
++pub fn runner_ids() -> [Option<u64>; MAX_HARTS] {
++    SCHED.with(|s| core::array::from_fn(|h| s.cpu.cur(h).map(|b| b.id)))
++}
++
+ /// A hart came online (`hart_main`, holding the kernel lock): the cap set counts it from here
+ /// (kernel/scheduling.md, "The current minimum and ties").
+ pub fn hart_online() {
+diff --git a/kernel/src/time.rs b/kernel/src/time.rs
+index 1ca013d52..1a061950e 100644
+--- a/kernel/src/time.rs
++++ b/kernel/src/time.rs
+@@ -48,6 +48,11 @@ struct Timer {
+     threads: u64,
+     /// No budget's deadline is earlier than this.
+     budgets: u64,
++    /// The id of the budget that pays for the item each hint was set for (a timeout's thread's
++    /// budget, a deadline's parent), `None` if two at one instant differ: a hart comes by a hint
++    /// whose payer another hart runs only if no hart that runs it does ([`rearm`]).
++    threads_for: Option<u64>,
++    budgets_for: Option<u64>,
+     /// When each hart's running thread's slice ends (`sched.rs`), by boot index; `NEVER` while
+     /// `kmain` runs there, and from a pick until the thread returns to user mode.
+     slice: [u64; MAX_HARTS],
+@@ -58,6 +63,8 @@ struct Timer {
+ static TIMER: KernelCell<Timer> = KernelCell::new(Timer {
+     threads: NEVER,
+     budgets: NEVER,
++    threads_for: None,
++    budgets_for: None,
+     slice: [NEVER; MAX_HARTS],
+     armed: [NEVER; MAX_HARTS],
+ });
+@@ -65,19 +72,30 @@ static TIMER: KernelCell<Timer> = KernelCell::new(Timer {
+ /// Monotonic microseconds since boot.
+ pub fn now_us() -> u64 { timer::now_us() }
+ 
+-/// A call blocked until `deadline`: make sure the timer comes by then.
+-pub fn note_timeout(deadline: u64) {
+-    TIMER.with(|t| t.threads = t.threads.min(deadline));
++/// A call blocked until `deadline`, its thread in the budget `payer` (its id): make sure a timer
++/// comes by then.
++pub fn note_timeout(deadline: u64, payer: u64) {
++    TIMER.with(|t| (t.threads, t.threads_for) = lowered((t.threads, t.threads_for), deadline, payer));
+     rearm();
+ }
+ 
+-/// A budget was created with `deadline`: make sure the timer comes by then (at once, for one
+-/// already past).
+-pub fn note_budget_deadline(deadline: u64) {
+-    TIMER.with(|t| t.budgets = t.budgets.min(deadline));
++/// A budget was created with `deadline` under `payer` (its parent's id): make sure a timer comes
++/// by then (at once, for one already past).
++pub fn note_budget_deadline(deadline: u64, payer: u64) {
++    TIMER.with(|t| (t.budgets, t.budgets_for) = lowered((t.budgets, t.budgets_for), deadline, payer));
+     rearm();
+ }
+ 
++/// A hint and its payer, lowered to an item at `at` that `payer` pays for: an earlier item's payer
++/// replaces it, and a second payer at the same instant leaves the hint to every hart.
++pub fn lowered((hint, by): (u64, Option<u64>), at: u64, payer: u64) -> (u64, Option<u64>) {
++    match at.cmp(&hint) {
++        core::cmp::Ordering::Less => (at, Some(payer)),
++        core::cmp::Ordering::Equal if by != Some(payer) => (hint, None),
++        _ => (hint, by),
++    }
++}
++
+ /// This hart's running thread's slice ends at `at` (`NEVER` for none).
+ pub fn set_slice_end(at: u64) {
+     TIMER.with(|t| t.slice[hart::index()] = at);
+@@ -87,12 +105,25 @@ pub fn set_slice_end(at: u64) {
+ /// When this hart's running thread's slice ends.
+ pub fn slice_end() -> u64 { TIMER.with(|t| t.slice[hart::index()]) }
+ 
+-/// Arm this hart's timer for the earliest thing due, if that changed: its own slice's end, or the
+-/// earliest timeout or deadline, which every hart's timer comes by.
++/// Arm this hart's timer for the earliest thing due, if that changed: its own slice's end, and
++/// the earliest timeout and the earliest deadline unless another hart runs the budget that pays
++/// for it and its timer comes by then (kernel/timer.md, "The hart timer"). So the work a timeout or
++/// a deadline makes lands on its payer's hart where it can, and not in another budget's slice; and
++/// a hart that runs the payer, or with none, every hart, still comes by each, so none is missed.
++/// Called at every switch ([`crate::sched::leave`]), as the hart's runner changes.
+ pub fn rearm() {
+     let h = hart::index();
++    let runners = crate::sched::runner_ids();
+     TIMER.with(|t| {
+-        let target = t.threads.min(t.budgets).min(t.slice[h]);
++        let ours = |at: u64, payer: Option<u64>| {
++            // Debug only, never in a bench build but one recorded negative run (feature
++            // `timer-any-hart`): every hart comes by every item, whoever pays for it.
++            let any = cfg!(feature = "timer-any-hart");
++            let Some(p) = payer.filter(|p| !any && runners[h] != Some(*p)) else { return at };
++            let covered = (0..MAX_HARTS).any(|g| g != h && runners[g] == Some(p) && t.armed[g] <= at);
++            if covered { NEVER } else { at }
++        };
++        let target = ours(t.threads, t.threads_for).min(ours(t.budgets, t.budgets_for)).min(t.slice[h]);
+         if target != t.armed[h] {
+             t.armed[h] = target;
+             timer::set(if target == NEVER { u64::MAX } else { timer::us_to_ticks(target) });
+@@ -210,12 +241,20 @@ pub fn expire_due(ss: &mut ProcessTable) -> Expired {
+     }
+     #[cfg(feature = "sched-trace")]
+     crate::sched::trace::expired(last, stale);
+-    let next_budget = MemoryManager::with(|mm| {
+-        mm.deadlines().map(|(d, _, _)| d).filter(|d| *d > now).min().unwrap_or(NEVER)
++    let (next_budget, budget_for, timeout_for) = MemoryManager::with(|mm| {
++        let mut next = (NEVER, None);
++        for (d, _, frame) in mm.deadlines().filter(|(d, _, _)| *d > now) {
++            if let Some(parent) = mm.budget(frame).parent {
++                next = lowered(next, d, mm.budget_id(parent));
++            }
++        }
++        (next.0, next.1, walk.next_for)
+     });
+     TIMER.with(|t| {
+         t.threads = walk.next;
++        t.threads_for = timeout_for;
+         t.budgets = next_budget;
++        t.budgets_for = budget_for;
+         // This hart's timer fired (or will, for what just passed); arm afresh.
+         t.armed[hart::index()] = 0;
+     });

@@ -1,0 +1,11 @@
+B35 handoff (beam4-cases-implementer), 2026-10-08, at the commit boundary after the red's P2 fold. Earlier packages of mine merged: BEAM4 cases 495dc205c, B26 ff92d6bb8, B29 ac178530e, B28 3b049cacc, BOOT2 0abd7b1cb; worktrees .worktrees/{BEAM4-cases,B26,B29,B28,BOOT2} clean, kept until pruned.
+
+STATE
+- wp-B35 head b95d0fda2 (81497bcf8 amended with the steward red's P2), ONE commit (19 files) on main 0abd7b1cb; worktree /home/mcloonan/redoubt/.worktrees/B35 CLEAN; not pushed. Red: OK with notes at 81497bcf8; P2 folded: the four BEAM4 natives manifests (tests/data/beamlet/{launch,natives,serve,natives-attack}.json) have bootfsd heap_pages 2176 (they publish beamlet + beamlet-hello + beamlet-caller + beamlet-session.args, ~1,026 pages on rv32), the image and the other two test manifests 2048; testbench.md's bootfsd memory row notes that the cap follows each manifest's own published total (JSON takes no comments).
+- Gates on b95d0fda2: PASS rv64+rv32 beamlet-natives, -serve, -launch, -natives-attack; PASS docs. On 81497bcf8 (same code): PASS both widths userland-boot, init-boot, boot-profile, beamlet-boot; size-budget, formatting, docs; bootfsd 18 + init 78 host tests.
+- Report: .wash/local/B35-report.md (final). Scratch .tmp/B35/.
+- LEFT: the head is sent as a question; the orchestrator merges next. After the merge: nothing (keep wp-B35 until pruned).
+
+DESIGN (approved, B): init's check::args(m, s, bundle_key, entries) writes each public entry as LEN:NAME; bootfsd parse_entry splits at the first colon, canonical length (no leading zero except "0", no overflow), path::valid_name on the name; SetupError::{BadLength, TooLarge} added; try_reserve_exact once; add refuses past the length; seal REFUSED while an entry is short. Cap rule (B32): twice the largest peak rounded up to 128; peaks 987 rv32 / 762 rv64 for the image.
+
+TRAPS: prebuilt fingerprints tree+commit (rerun after any edit/commit); exports (PATH ~/.cargo/bin, RUSTSBI_PROTOTYPER*, BEAMLET_TOOLCHAINS, REDOUBT_TMP=/home/mcloonan/redoubt/.tmp; unset MAKEFLAGS); size-budget counts code lines, a raise needs "Size budget: <crate>: <reason>" in the commit; the docs checker's C11 forbids package IDs in comments; `cargo +nightly fmt -p <crate>` formats its tests too; never /tmp, bare cargo, -j, stash, add -A; messages ≤ 2000 bytes.

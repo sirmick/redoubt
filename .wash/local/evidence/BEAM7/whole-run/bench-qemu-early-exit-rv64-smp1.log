@@ -1,2 +1,0 @@
-QEMU exited with exit status: 1; its stderr:
-qemu-system-riscv64: -icount no-such-option: icount: Invalid shift value

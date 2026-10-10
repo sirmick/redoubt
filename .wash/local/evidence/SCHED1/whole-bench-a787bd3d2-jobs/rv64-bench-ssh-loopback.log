@@ -1,8 +1,0 @@
-PASS  bench-ssh-loopback-aborted-text    0.9s
-PASS  bench-ssh-loopback-deadlock        0.2s
-FAIL  bench-ssh-loopback-exit            0.1s  failed, but not with /^session mallory: at the end: ssh exited \(status 255\), expected 0; last output: .*Permission denied \(publickey\)\.$/: session mallory: at the end: ssh exited (status 255), expected 0; last output: Error: Ssh(SessionEOF)
-PASS  bench-ssh-loopback-forbid          0.2s
-FAIL  bench-ssh-loopback-host-key        0.1s  failed, but not with /^session alice: at the end: ssh exited \(status 255\), expected 0; last output: Host key verification failed\.$/: session alice: at the end: ssh exited (status 255), expected 0; last output: Error: Ssh(SessionEOF)
-PASS  bench-ssh-loopback-openssh        17.8s
-PASS  bench-ssh-loopback                 0.1s
-Error: 2 test(s) failed; console logs are in /home/mcloonan/redoubt/.worktrees/SCHED1/target/testbench/run-2952485-1791249950133604875

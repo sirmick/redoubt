@@ -1,2 +1,0 @@
-PASS  budget-mem-churn [rv32, smp=1]     0.4s
-PASS  budget-mem-churn [rv32, smp=2]     0.3s

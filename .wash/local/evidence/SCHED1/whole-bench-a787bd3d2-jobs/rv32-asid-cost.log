@@ -1,2 +1,0 @@
-PASS  asid-cost-host [rv32, smp=1]       7.9s
-PASS  asid-cost [rv32, smp=1]           10.1s

@@ -1,2 +1,0 @@
-FAIL  sum-clear [rv64, smp=1]           20.0s  timed out waiting for /^!!! KERNEL FAILURE !!!: CPU Exception on PID [0-9]+: Load page fault of 0x[0-9a-f]+ at 0xff/
-Error: 1 test(s) failed; console logs are in /home/mcloonan/redoubt/.worktrees/bisect-fa08fe2c8/target/testbench/run-2252782-1791326509767847774

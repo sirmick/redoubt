@@ -1,3 +1,0 @@
-      qemu seed 3 (TESTBENCH_QEMU_SEED=3 replays it)
-      sched_oracle: 14467 records, 1441 picks in rank order, every wake at or above the floor, no pass falling but by a weight change; 1 lifts by the rule (0 with a leading parent and work to move); 5 weight changes by the rule; R10 1 destructions over up to 4738 object frames, µs p50/p99/max 15751/15751/15751, their threads' ending 59/59/59, no audit inside one; 1451 audits, 48740 µs; 1438 timer interrupts billed by the rule (0 expiring, 0 finding a wait ended early, 0 ticks after expiry to the budget billed last; 1438 ending a slice, 0 nobody's)
-PASS  endpoint-destroy-full [rv64, smp=1]   2.7s

@@ -1,3 +1,0 @@
-PASS  lend-untouched-page [rv64, smp=1]   0.6s
-FAIL  lend-untouched-page [rv64, smp=4]   0.6s  forbidden output /FAIL/: harts: FAIL: 4 in the tree, 4 started, 1 ran user code
-Error: 1 test(s) failed; console logs are in /home/mcloonan/redoubt/.worktrees/bisect-673be7afc/target/testbench/run-2319878-1791328378484455909

@@ -1,2 +1,0 @@
-PASS  return-lent-unmapped [rv64, smp=1]   0.2s
-PASS  return-lent-unmapped [rv64, smp=4]   0.2s

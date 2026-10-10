@@ -1,2 +1,0 @@
-PASS  bundle-mapped [rv64, smp=1]        0.2s
-PASS  bundle-mapped [rv32, smp=1]        0.3s

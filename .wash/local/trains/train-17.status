@@ -1,0 +1,16 @@
+train-17 open 2026-10-10T01:07:18Z: CTX2 050357e8a
+train-17 +B47 2026-10-10T01:31:54Z: 16fef8271
+train-17 +B46 2026-10-10T01:33:36Z: 9ad307a7b (tip; cut at three); whole bench in .worktrees/train-17, log .tmp/train-17/bench.log
+train-17 FAILED 2026-10-10T01:54:44Z: whole bench on 9ad307a7b: host-tests (testbench bin test the_image_recipe_packs_init_the_servers_and_the_manifest expects no consrelay); bisect by first-parent: fails at 050357e8a (CTX2) alone -> CTX2 returns to its branch for the one-line fix; train rebuilt from 6b46c8c86 with CTX2 fixed, B47, B46, B49
+B47: 38602920f -> 76ed4ae86 tree-diff-lines=4 (0 = same tree against its base after rebase)
+B46: 1d3177086 -> cca2b0a11 tree-diff-lines=16 (0 = same tree against its base after rebase)
+B49: 80df38d36 -> 1fcc52e47 tree-diff-lines=27 (0 = same tree against its base after rebase)
+train-17 REBUILT 2026-10-10T02:19:18Z: main reset to 6b46c8c86; CTX2 a7efce041 (test hunk fixed) -> c7efc9b67; B47 -> 59e9f4601; B46 -> a4c093827; B49 -> 98b866854 (tip). Content vs failed train: only the test fix (1 file, +2/-1). Rebased package commits carry the same trees as their reviewed heads modulo the base (recorded above); reviews and gates retained per SWARM. Whole bench in .worktrees/train-17b, log .tmp/train-17b/bench.log
+range-diff proof (rebased package commits = reviewed ones):
+1:  31dfc9b26 = 1:  97ccafeac beamlet: a waiter whose server
+2:  8bb6adb5c = 2:  672e2e3d1 beamlet: a handle gone with it
+3:  38602920f = 3:  76ed4ae86 tests, docs: eight pipelines i
+1:  1d3177086 = 1:  cca2b0a11 shell: printed text and the li
+1:  80df38d36 = 1:  1fcc52e47 tests: nscr-hostile-text sends
+train-17 (rebuilt) bench 2026-10-10T03:09:29Z on 98b866854: 610 rc=0, 2 FAIL: steward-home-quota rv64+rv32, step 9 rm timed out (deterministic: both widths): bisecting first-parent over c7efc9b67 (CTX2), 59e9f4601 (B47), a4c093827 (B46); rerun alone on the tip also running
+train-17 bisect 2026-10-10T04:00:22Z: steward-home-quota PASSES alone on c7efc9b67 (233 s), 59e9f4601 (264 s), a4c093827 (223 s): no package regression; the bench failure (both widths, 610 s deadline, rm->eio) is load-dependent -> shared-host rule: the tip reruns alone decide; the eio itself is B51

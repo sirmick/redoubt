@@ -1,4 +1,0 @@
-sudo: unable to resolve host cc4470361273: Temporary failure in name resolution
-sudo: unable to resolve host cc4470361273: Temporary failure in name resolution
-PASS  beamlet-console [rv64, smp=1]      1.2s
-PASS  beamlet-console [rv32, smp=1]      1.5s

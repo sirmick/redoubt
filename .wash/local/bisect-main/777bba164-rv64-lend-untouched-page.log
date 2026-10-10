@@ -1,2 +1,0 @@
-PASS  lend-untouched-page [rv64, smp=1]   0.5s
-PASS  lend-untouched-page [rv64, smp=4]   0.5s

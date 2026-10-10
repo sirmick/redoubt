@@ -1,1 +1,0 @@
-PASS  init-refuses-system-fit [rv64, smp=1]   0.1s

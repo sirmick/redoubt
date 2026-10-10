@@ -1,6 +1,0 @@
-==> kernel (riscv64imac-unknown-none-elf)
-    Finished `release` profile [optimized] target(s) in 0.02s
-==> loader (riscv64imac-unknown-none-elf)
-    Finished `release` profile [optimized] target(s) in 0.02s
-==> done
-exit 0

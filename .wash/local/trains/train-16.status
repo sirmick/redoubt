@@ -1,0 +1,4 @@
+train-16 open 2026-10-10T00:10:56Z: NSCR1 8d0a19415
+train-16 +TRY2 2026-10-10T00:37:57Z: 22195522e
+train-16 +BEAM19 2026-10-10T00:56:44Z: 6b46c8c86 (tip; cut at three); whole bench in .worktrees/train-16, log .tmp/train-16/bench.log
+train-16 closed 2026-10-10T01:29:51Z: pushed main 24d3016b7..6b46c8c86 (NSCR1, TRY2, BEAM19); whole bench 598/598 PASS, no reruns

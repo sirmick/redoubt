@@ -1,0 +1,496 @@
+diff --git a/kernel/src/arch/riscv/irq.rs b/kernel/src/arch/riscv/irq.rs
+index 4fac112b2..7e4e96977 100644
+--- a/kernel/src/arch/riscv/irq.rs
++++ b/kernel/src/arch/riscv/irq.rs
+@@ -55,9 +55,132 @@ pub fn disable_irq(irq_no: usize) { intc::disable_irq(irq_no); }
+ /// Complete the interrupt the trap handler claimed (`intc::pending`).
+ pub fn complete_irq() { intc::complete(); }
+ 
++/// PROBE (K27, scratch only): each stretch the hart spends in the kernel, from a trap from user
++/// mode (or a wake from idle) to the next return to user (or idle): what entered, whose, how long.
++/// Over 100 ms is said at once; a new longest over 1 ms is said too, so the last such line is
++/// the run's longest.
++pub mod kprobe {
++    use core::sync::atomic::{AtomicBool, AtomicU32, Ordering::SeqCst};
++    // 32-bit cells (rv32 has no 64-bit atomics): microseconds modulo 2^32, enough for any run
++    // shorter than 71 minutes.
++    static OPEN: AtomicBool = AtomicBool::new(false);
++    static BEGUN: AtomicU32 = AtomicU32::new(0);
++    static KIND: AtomicU32 = AtomicU32::new(0);
++    static NUMBER: AtomicU32 = AtomicU32::new(0);
++    static PID: AtomicU32 = AtomicU32::new(0);
++    static LONGEST: AtomicU32 = AtomicU32::new(0);
++    /// The last return to user mode, while user code may be running (cleared at idle), and the
++    /// longest stretch of user mode between two kernel entries: with 1 ms slices, a stretch far
++    /// past a slice means the guest did not run (its host did not run it) while its clock moved.
++    static IN_USER: AtomicBool = AtomicBool::new(false);
++    static LEFT: AtomicU32 = AtomicU32::new(0);
++    static LEFT_PID: AtomicU32 = AtomicU32::new(0);
++    static LONGEST_USER: AtomicU32 = AtomicU32::new(0);
++    /// The deadline the timer is armed for (µs since boot, modulo 2^32; none while `ARMED_SET` is
++    /// clear), and the latest a wake from idle has come past it.
++    static ARMED_SET: AtomicBool = AtomicBool::new(false);
++    static ARMED: AtomicU32 = AtomicU32::new(0);
++    static WORST_WAKE: AtomicU32 = AtomicU32::new(0);
++    fn now() -> u32 { crate::time::now_us() as u32 }
++    /// The timer was armed for `us` (`u64::MAX`: for nothing).
++    pub fn armed(us: u64) {
++        ARMED_SET.store(us != u64::MAX, SeqCst);
++        ARMED.store(us as u32, SeqCst);
++    }
++    /// A wake from idle: how late it is past the armed deadline, if that has passed.
++    pub fn woke() {
++        if !ARMED_SET.load(SeqCst) {
++            return;
++        }
++        let late = now().wrapping_sub(ARMED.load(SeqCst));
++        // A wake before the deadline (another interrupt) wraps to a huge value: not a lateness.
++        if late > 1 << 31 {
++            return;
++        }
++        let worse = late > WORST_WAKE.load(SeqCst);
++        if worse {
++            WORST_WAKE.store(late, SeqCst);
++        }
++        if late > 100_000 || (worse && late > 5_000) {
++            println!(
++                "kprobe: idle wake {} us{} past the armed deadline t={} at t={}",
++                late,
++                if worse { " (worst so far)" } else { "" },
++                ARMED.load(SeqCst),
++                now()
++            );
++        }
++    }
++    /// `kind`: 1 a system call (`number` its a0), 2 the timer, 3 an external interrupt, 4 a
++    /// software interrupt, 5 an exception (`number` its scause), 6 a wake from idle.
++    pub fn open(kind: u32, number: u32, pid: u32) {
++        if IN_USER.swap(false, SeqCst) {
++            let ran = now().wrapping_sub(LEFT.load(SeqCst));
++            let longer = ran > LONGEST_USER.load(SeqCst);
++            if longer {
++                LONGEST_USER.store(ran, SeqCst);
++            }
++            if ran > 100_000 || (longer && ran > 5_000) {
++                println!(
++                    "kprobe: user mode {} us{} without a kernel entry, pid {} then pid {} at t={}",
++                    ran,
++                    if longer { " (longest so far)" } else { "" },
++                    LEFT_PID.load(SeqCst),
++                    pid,
++                    now()
++                );
++            }
++        }
++        BEGUN.store(now(), SeqCst);
++        KIND.store(kind, SeqCst);
++        NUMBER.store(number, SeqCst);
++        PID.store(pid, SeqCst);
++        OPEN.store(true, SeqCst);
++    }
++    pub fn close(to: &str) {
++        if to == "user" {
++            LEFT.store(now(), SeqCst);
++            LEFT_PID.store(crate::arch::current_pid().get() as u32, SeqCst);
++            IN_USER.store(true, SeqCst);
++        } else {
++            IN_USER.store(false, SeqCst);
++        }
++        if !OPEN.swap(false, SeqCst) {
++            return;
++        }
++        let took = now().wrapping_sub(BEGUN.load(SeqCst));
++        let longer = took > LONGEST.load(SeqCst);
++        if longer {
++            LONGEST.store(took, SeqCst);
++        }
++        if took > 100_000 || (longer && took > 1_000) {
++            let (kind, number) = (KIND.load(SeqCst), NUMBER.load(SeqCst));
++            let name = match kind {
++                1 => redoubt_sys::Number::from_raw(u64::from(number)).map_or("syscall ?", |n| n.name()),
++                2 => "timer",
++                3 => "external interrupt",
++                4 => "software interrupt",
++                5 => "exception",
++                _ => "wake from idle",
++            };
++            println!(
++                "kprobe: kernel entry {} us{}: {} ({}) pid {} until {} at t={}",
++                took,
++                if longer { " (longest so far)" } else { "" },
++                name,
++                number,
++                PID.load(SeqCst),
++                to,
++                now()
++            );
++        }
++    }
++}
++
+ /// Resume whatever is current now: after the entering thread's process died at this entry, or
+ /// once a trap is fully handled.
+ fn resume_current() -> ! {
++    kprobe::close("user");
+     ArchProcess::with_current_mut(|p| {
+         crate::arch::syscall::resume(current_pid().get() == 1, p.current_thread())
+     })
+@@ -160,6 +283,16 @@ pub extern "C" fn trap_handler(
+     let epc = sepc::read();
+ 
+     let ex = RiscvException::from_regs(sc.bits(), epc, stval::read());
++    if from_user {
++        let (kind, number) = match ex {
++            RiscvException::CallFromUMode(..) => (1, a0 as u32),
++            RiscvException::SupervisorTimerInterrupt(_) => (2, 0),
++            RiscvException::SupervisorExternalInterrupt(_) => (3, 0),
++            RiscvException::SupervisorSoftwareInterrupt(_) => (4, 0),
++            _ => (5, sc.bits() as u32),
++        };
++        kprobe::open(kind, number, pid.get() as u32);
++    }
+     if !matches!(ex, RiscvException::StorePageFault(..) | RiscvException::LoadPageFault(..)) {
+         crate::arch::mem::retry_reset();
+     }
+diff --git a/kernel/src/arch/riscv/mod.rs b/kernel/src/arch/riscv/mod.rs
+index bf1ce54e3..2b6d5854c 100644
+--- a/kernel/src/arch/riscv/mod.rs
++++ b/kernel/src/arch/riscv/mod.rs
+@@ -44,12 +44,15 @@ pub fn init() {
+ pub fn idle() -> bool {
+     // Park the hart until an interrupt is pending, without the kernel lock: another hart's wake
+     // sends this one the reschedule interrupt while it is marked idle (`hart::wake_idle`).
++    irq::kprobe::close("idle");
+     hart::set_idle(true);
+     crate::cell::KERNEL_LOCK.release();
+     // SAFETY: `wfi` has no memory effect.
+     unsafe { core::arch::asm!("wfi", options(nomem, nostack)) };
+     crate::cell::KERNEL_LOCK.acquire();
+     hart::set_idle(false);
++    irq::kprobe::woke();
++    irq::kprobe::open(6, 0, 0);
+ 
+     // Briefly enable interrupts in Supervisor mode so any pending one drains into its
+     // userspace handler; otherwise interrupts stay disabled while in Supervisor mode.
+diff --git a/kernel/src/arch/riscv/timer_sbi.rs b/kernel/src/arch/riscv/timer_sbi.rs
+index 74b5fbcd7..4f404d333 100644
+--- a/kernel/src/arch/riscv/timer_sbi.rs
++++ b/kernel/src/arch/riscv/timer_sbi.rs
+@@ -75,6 +75,7 @@ pub fn us_to_ticks(us: u64) -> u64 {
+ /// Request a timer interrupt once `ticks` (since boot) have passed; `u64::MAX` for none. Writing
+ /// a deadline also clears a pending timer interrupt.
+ pub fn set(ticks: u64) {
++    crate::arch::irq::kprobe::armed(if ticks == u64::MAX { u64::MAX } else { ticks_to_us(ticks) });
+     let at = ticks.checked_add(BOOT_TICKS.with(|t| *t)).unwrap_or(u64::MAX);
+     sbi_rt::set_timer(at);
+ }
+diff --git a/libs/client/src/aio.rs b/libs/client/src/aio.rs
+index bb5fc556e..29734d6cd 100644
+--- a/libs/client/src/aio.rs
++++ b/libs/client/src/aio.rs
+@@ -43,6 +43,14 @@
+ use alloc::collections::VecDeque;
+ use alloc::vec::Vec;
+ use core::num::NonZeroU64;
++use core::sync::atomic::{AtomicU32, Ordering};
++
++/// PROBE: why the last connection ended: kind (1 call failed/no buffer, 2 reply words, 3 answers did not frame, 4 send failed), reply word 0, reply word 2.
++pub static PROBE_END: [AtomicU32; 3] = [AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0)];
++/// PROBE: the last completion call that failed in a waiter: a sequence number (how many so far),
++/// the connection's index, the kernel status, the hold (ms) and how long the call took (ms).
++pub static PROBE_CALL: [AtomicU32; 5] =
++    [AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0), AtomicU32::new(0)];
+ 
+ use redoubt_rt::abi::{Error as SysError, FOREVER, MAX_LEND_PAGES, PAGE_SIZE};
+ use redoubt_rt::handle::Endpoint;
+@@ -335,9 +343,20 @@ impl Hub {
+     /// Takes a completion call's reply words 0 to 2 (`None`: the call failed) and its buffer.
+     fn collected(&mut self, c: usize, reply: Option<[u64; 3]>, buffer: Option<Buffer>) {
+         // Failed, ended, refused, or a session the server opened afresh: what was outstanding is gone.
+-        let (Some([0, bytes, 0]), Some(lend)) = (reply, buffer) else { return self.end(c) };
++        let (Some([0, bytes, 0]), Some(lend)) = (reply, buffer) else {
++            match reply {
++                None => PROBE_END[0].store(1, Ordering::SeqCst),
++                Some(w) => {
++                    PROBE_END[0].store(2, Ordering::SeqCst);
++                    PROBE_END[1].store(w[0] as u32, Ordering::SeqCst);
++                    PROBE_END[2].store(w[2] as u32, Ordering::SeqCst);
++                }
++            }
++            return self.end(c);
++        };
+         let n = usize::try_from(bytes).unwrap_or(usize::MAX);
+         if n > lend.len() || self.answers(c, &lend[..n]).is_err() {
++            PROBE_END[0].store(3, Ordering::SeqCst);
+             self.end(c);
+         }
+         self.conns[c].lend = Some(lend);
+@@ -419,7 +438,10 @@ impl Hub {
+                 Ok(()) => drop(conn.queue.drain(..count)),
+                 // Not taken: the server is busy. They go again at the next entry, first.
+                 Err((SysError::Timeout | SysError::Busy, _)) => return,
+-                Err(_) => return self.end(c),
++                Err(_) => {
++                    PROBE_END[0].store(4, Ordering::SeqCst);
++                    return self.end(c);
++                }
+             }
+         }
+     }
+@@ -491,7 +513,16 @@ fn waiter(endpoint: Endpoint, wake: Endpoint, index: u64, lend: Buffer) {
+             continue;
+         };
+         let hold = if held.is_empty() { COLLECT_WAIT } else { 0 };
++        let begun = redoubt_rt::handle::time_now().unwrap_or(0);
+         let mut outcome = endpoint.call(&collect_words(hold), &[], Some(buffer), hold + COLLECT_MARGIN_US);
++        if let Err(e) = &outcome.status {
++            let took = redoubt_rt::handle::time_now().unwrap_or(0).saturating_sub(begun);
++            PROBE_CALL[1].store(index as u32, Ordering::SeqCst);
++            PROBE_CALL[2].store(*e as u32, Ordering::SeqCst);
++            PROBE_CALL[3].store((hold / 1000) as u32, Ordering::SeqCst);
++            PROBE_CALL[4].store((took / 1000) as u32, Ordering::SeqCst);
++            PROBE_CALL[0].fetch_add(1, Ordering::SeqCst);
++        }
+         // A session the server opened afresh (word 2) is as good as an end: what was outstanding
+         // is gone.
+         let words = match (&outcome.status, &outcome.reply) {
+diff --git a/servers/steward/src/bin/steward.rs b/servers/steward/src/bin/steward.rs
+index eb0e25773..59ce5c98e 100644
+--- a/servers/steward/src/bin/steward.rs
++++ b/servers/steward/src/bin/steward.rs
+@@ -151,7 +151,16 @@ mod machine {
+         watchers: Watchers,
+     }
+ 
++    /// PROBE (K27, scratch only): the steward's clock, as the audit line's.
++    fn probe_now() -> u64 { redoubt_rt::handle::time_now().unwrap_or(0) }
++
+     impl Machine<'_> {
++        /// PROBE (K27, scratch only): says how long `what` took, begun at `begun`.
++        fn probe(&self, what: &str, begun: u64) {
++            let now = probe_now();
++            say(self.startup, &format!("steward-probe: {what} took {} us, ended t={now}\n", now.saturating_sub(begun)));
++        }
++
+         fn server(&mut self, name: &str) -> Result<Connection, Error> {
+             if let Some(conn) = self.servers.get(name) {
+                 return Ok(conn.clone());
+@@ -212,7 +221,10 @@ mod machine {
+         type Handle = Handle;
+ 
+         fn create(&mut self, parent: Handle, spec: &BudgetSpec) -> Result<Handle, Error> {
+-            Budget::from_handle(parent).create_child(spec).map(|b| b.handle())
++            let begun = probe_now();
++            let made = Budget::from_handle(parent).create_child(spec).map(|b| b.handle());
++            self.probe(&format!("create (carve {} pages, labels {:?})", spec.pages, spec.labels.as_slice()), begun);
++            made
+         }
+ 
+         fn empty(&mut self, budget: Handle) -> Result<bool, Error> {
+@@ -231,6 +243,35 @@ mod machine {
+         }
+ 
+         fn connect(&mut self, domain: &Domain, slot: u16) -> Result<Option<Handle>, Error> {
++            let begun = probe_now();
++            let made = self.connect_inner(domain, slot);
++            self.probe(&format!("connect slot {slot}"), begun);
++            made
++        }
++
++        fn console(&mut self, handle: Option<Handle>) { self.console_inner(handle) }
++
++        fn release(&mut self, handle: Handle) { self.release_inner(handle) }
++
++        fn launch(
++            &mut self,
++            domain: &Domain,
++            budget: Handle,
++            connections: &[Option<Handle>],
++        ) -> Result<u64, Error> {
++            let begun = probe_now();
++            let made = self.launch_inner(domain, budget, connections);
++            self.probe("launch (whole)", begun);
++            made
++        }
++
++        fn random(&mut self) -> Result<u64, Error> { redoubt_rt::handle::random_u64() }
++
++        fn now(&mut self) -> u64 { redoubt_rt::handle::time_now().unwrap_or(0) }
++    }
++
++    impl Machine<'_> {
++        fn connect_inner(&mut self, domain: &Domain, slot: u16) -> Result<Option<Handle>, Error> {
+             let principal = self.principal(domain).ok_or(Error::BadHandle)?;
+             let Some(bound) = binding(&self.own_lines, &principal, domain.labels().as_slice(), slot) else {
+                 return Ok(None);
+@@ -270,13 +311,13 @@ mod machine {
+             }
+         }
+ 
+-        fn console(&mut self, handle: Option<Handle>) {
++        fn console_inner(&mut self, handle: Option<Handle>) {
+             if let Some(old) = core::mem::replace(&mut self.console, handle) {
+                 let _ = close(old);
+             }
+         }
+ 
+-        fn release(&mut self, handle: Handle) {
++        fn release_inner(&mut self, handle: Handle) {
+             // A session's console hears that the session is over: `sshd` ends its channel,
+             // `consoled` releases the connection (servers/steward.md, "Authentication and sessions").
+             if self.consoles.remove(&handle.index()) {
+@@ -292,7 +333,7 @@ mod machine {
+             let _ = close(handle);
+         }
+ 
+-        fn launch(
++        fn launch_inner(
+             &mut self,
+             domain: &Domain,
+             budget: Handle,
+@@ -312,8 +353,16 @@ mod machine {
+             let heap = self.session_pages.saturating_sub(SESSION_STACK_PAGES as u64 + 1);
+             // The steward's badge first, then the shared slots in order.
+             let slot = |i: usize| connections.get(i + 1).copied().flatten();
++            let (mut reads, mut read_us) = (0u64, 0u64);
++            let launch_begun = probe_now();
+             let started = {
+-                let mut read = |at: usize, buf: &mut [u8]| self.read_program(at, buf);
++                let mut read = |at: usize, buf: &mut [u8]| {
++                    let begun = probe_now();
++                    let r = self.read_program(at, buf);
++                    reads += 1;
++                    read_us += probe_now().saturating_sub(begun);
++                    r
++                };
+                 let mut launch =
+                     Launch::streamed(STUB_BIN, len, &mut read, Budget::from_handle(budget), exit);
+                 if let Some(steward) = connections.first().copied().flatten() {
+@@ -333,6 +382,10 @@ mod machine {
+                 launch.arg(&pages).arg(&endpoint).arg(SHELL);
+                 launch.start()
+             };
++            self.probe(
++                &format!("launch.start ({reads} image reads, {read_us} us in them)"),
++                launch_begun,
++            );
+             let job = started.map_err(|failed| {
+                 let _ = close(exit_handle);
+                 match failed.error {
+@@ -367,10 +420,6 @@ mod machine {
+             }
+             Ok(u64::from(exit_handle.index()))
+         }
+-
+-        fn random(&mut self) -> Result<u64, Error> { redoubt_rt::handle::random_u64() }
+-
+-        fn now(&mut self) -> u64 { redoubt_rt::handle::time_now().unwrap_or(0) }
+     }
+ 
+     /// Says `line` on the console `init` gave the steward, if it has one. Not the runtime's
+diff --git a/tools/testbench/src/qemu.rs b/tools/testbench/src/qemu.rs
+index 8f7170423..9bbbff6cd 100644
+--- a/tools/testbench/src/qemu.rs
++++ b/tools/testbench/src/qemu.rs
+@@ -554,8 +554,17 @@ pub fn run(
+ 
+     // Read the console on a thread so that the deadline applies even to a silent guest.
+     let (tx, rx) = mpsc::channel();
++    // PROBE (K27, scratch only): every console line with the host's wall-clock µs it arrived at,
++    // beside the log, for comparing the guest's clock with the host's.
++    let mut stamps = std::fs::File::create(log.with_extension("hosttime")).ok();
+     std::thread::spawn(move || {
+         for line in BufReader::new(stdout).split(b'\n').map_while(|l| l.ok()) {
++            if let Some(stamps) = stamps.as_mut() {
++                let host_us = std::time::SystemTime::now()
++                    .duration_since(std::time::UNIX_EPOCH)
++                    .map_or(0, |d| d.as_micros());
++                let _ = writeln!(stamps, "{host_us} {}", String::from_utf8_lossy(&line).trim_end());
++            }
+             if tx.send(String::from_utf8_lossy(&line).trim_end().to_string()).is_err() {
+                 break;
+             }
+diff --git a/userland/otp/redoubt/src/lib.rs b/userland/otp/redoubt/src/lib.rs
+index 7b4eed1df..aeaf68ad6 100644
+--- a/userland/otp/redoubt/src/lib.rs
++++ b/userland/otp/redoubt/src/lib.rs
+@@ -136,10 +136,20 @@ struct ConsoleIo {
+     busy: u64,
+     /// The console took nothing, or has gone: nothing more is written.
+     gone: bool,
++    /// PROBE: why the read or write ended, said synchronously at the next console read.
++    why: Option<alloc::string::String>,
++    /// PROBE: how many failed completion calls have been said.
++    calls_said: u32,
+ }
+ 
+ fn now() -> u64 { redoubt_rt::handle::time_now().unwrap_or(0) }
+ 
++fn probe_why(what: &str, outcome: &Outcome) -> alloc::string::String {
++    let e = &redoubt_client::aio::PROBE_END;
++    let o = core::sync::atomic::Ordering::SeqCst;
++    format!("PROBE console {what} ended: {outcome:?}; hub end kind {} w0 {} w2 {} at t={}\n", e[0].load(o), e[1].load(o), e[2].load(o), now())
++}
++
+ impl ConsoleIo {
+     /// Takes `done` if it is the console's read or write; anything else, a file operation on
+     /// `/dev/cons` on the same connection among them, is handed back.
+@@ -151,6 +161,7 @@ impl ConsoleIo {
+             self.reading = None;
+             match done.outcome {
+                 Outcome::Read(0) => {
++                    self.why = Some(probe_why("read", &done.outcome));
+                     self.ended = true;
+                     self.eof_pending = true;
+                 }
+@@ -163,6 +174,7 @@ impl ConsoleIo {
+                 Outcome::Busy => {}
+                 // Refused, flushed, or the console has gone: there is no more input.
+                 _ => {
++                    self.why = Some(probe_why("read", &done.outcome));
+                     self.ended = true;
+                     self.eof_pending = true;
+                 }
+@@ -178,7 +190,10 @@ impl ConsoleIo {
+                     self.retry_at = Some(now().saturating_add(RETRY_US));
+                 }
+                 // A console that takes nothing, or has gone, gets no more.
+-                _ => self.stop_writing(),
++                _ => {
++                    self.why = Some(probe_why("write", &done.outcome));
++                    self.stop_writing();
++                }
+             }
+             self.write_buffer = done.buffer;
+             self.write(io);
+@@ -295,6 +310,8 @@ impl Redoubt {
+             retry_at: None,
+             busy: 0,
+             gone: false,
++            why: None,
++            calls_said: 0,
+         };
+         Ok(Redoubt {
+             lend,
+@@ -502,6 +519,21 @@ impl Platform for Redoubt {
+             self.start_reading();
+         }
+         self.take_completed();
++        if let Some(why) = self.cons.why.take() {
++            write_all(&self.console, &mut self.lend, why.as_bytes());
++        }
++        let c = &redoubt_client::aio::PROBE_CALL;
++        let o = core::sync::atomic::Ordering::SeqCst;
++        let seq = c[0].load(o);
++        if seq != self.cons.calls_said {
++            self.cons.calls_said = seq;
++            let line = format!(
++                "PROBE completion call failed (#{seq}): connection {} status {} hold {} ms took {} ms (late by {} ms past hold + margin) at t={}\n",
++                c[1].load(o), c[2].load(o), c[3].load(o), c[4].load(o),
++                c[4].load(o).saturating_sub(c[3].load(o) + (redoubt_client::aio::COLLECT_MARGIN_US / 1000) as u32), now()
++            );
++            write_all(&self.console, &mut self.lend, line.as_bytes());
++        }
+         if !self.cons.input.is_empty() {
+             return ConsoleInput::Data(self.cons.input.drain(..).collect());
+         }
