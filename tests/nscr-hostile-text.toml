@@ -62,8 +62,12 @@ send = "{:esc_symbol, screen(\"screen-stage\", [\"esc-symbol\"])}\n"
 after = '\{:esc_symbol, \{'
 send = "{:stderr, (up.(\"up-stderr\"); screen(\"screen-stage\", [\"stderr\"]))}\n"
 
+# `q` at the frame's line, not at the first tag: that tag can come before the frame, and a `q`
+# sent there can end the program before another tag ends the frame's line, its standard error
+# then drawn on that line, behind the box. Only a tag after the frame ends the frame's line, so
+# what the session draws as the screen ends starts a line of its own.
 [[input]]
-after = '(^|\] )up-stderr$'
+after = 'screen-stage-ready'
 send = "q"
 
 [[input]]
