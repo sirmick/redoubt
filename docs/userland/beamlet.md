@@ -582,10 +582,11 @@ did not share the hart with, gives the rate (bench:beamlet-reduction-rate):
 
 | | rv64 | rv32 |
 | --- | ---: | ---: |
-| reductions a second | 52,647 | 47,052 |
-| guest instructions a reduction | 2,374 | 2,657 |
-| guest instructions a step of the loop | 3,577 | 4,002 |
-| before the changes below: reductions a second | 34,041 | 31,215 |
+| reductions a second | 55,674 | 49,928 |
+| before the kernel's slice end was cut (below): reductions a second | 52,936 | 46,959 |
+| then: guest instructions a reduction | 2,374 | 2,657 |
+| then: guest instructions a step of the loop | 3,577 | 4,002 |
+| before the interpreter's changes below: reductions a second | 34,041 | 31,215 |
 | before: guest instructions a step of the loop | 5,531 | 6,033 |
 
 A native call no longer fills all 255 argument slots it could pass (765 instructions on rv64 for
@@ -593,12 +594,15 @@ a native of two arguments), a fun's arguments stay in the x registers instead of
 vector, and the interpreter's step is inlined into its loop, so the registers it saves are saved
 once a time slice rather than once an instruction. On the host, beamlet runs a tail-recursive
 loop and `lists:foldl/3` at 70-200 ns a step. Of what is left on rv64, about four fifths is the
-interpreter's own work, some 200 guest instructions a BEAM instruction, and a fifth the
-kernel's: about 12,000 instructions for each interrupt the running VM takes. No yield and no count changed: a process still yields after its
-2,000 reductions or 200,000 instructions, and the kernel's time slice still preempts the VM's
+interpreter's own work, some 200 guest instructions a BEAM instruction, and the rest the
+kernel's, most of it the slice's end: about 8,800 kernel instructions on rv64 and 12,900 on rv32
+each time the VM's slice ends, against 15,000 and 20,700 before the kernel stopped re-arming the
+timer three times a preemption and decoding a whole budget to move one word
+([scheduling](../kernel/scheduling.md#preemption-points)). No yield and no count changed: a
+process still yields after its 2,000 reductions or 200,000 instructions, and the kernel's time slice still preempts the VM's
 thread whatever it runs. **The floor:** 42,000 reductions a second, the slower width's rate less
 a tenth, rounded down to a thousand; `beamlet-reduction-rate` fails below it, and the rate before
-these changes is below it on both widths. A session where a line has just been typed runs slower
+the interpreter's changes is below it on both widths. A session where a line has just been typed runs slower
 than this for a while: the shell's driver measures the line being edited again for each piece of
 input it echoes, which can take as much of the hart as the line's own code for seconds after a
 long line; the floor's run is the fastest of its 30 for that reason.

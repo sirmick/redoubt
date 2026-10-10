@@ -67,11 +67,12 @@ no dependencies.
 
 ### Preemption points
 
-<details><summary>Status: built · partly tested: that an interrupt's wake does not preempt, and that another budget's deadline does, are not attacked by a case · tested (7)</summary>
+<details><summary>Status: built · partly tested: that an interrupt's wake does not preempt, and that another budget's deadline does, are not attacked by a case · tested (8)</summary>
 
 - bench:sched-wake-no-preempt
 - bench:sched-wake-no-preempt-harts
 - bench:budget-deadline
+- bench:sched-timer-entry
 - host:redoubt-model::scheduler_contracts_hold
 - mutation:R12PreemptOnWake
 - mutation:R12TimeoutWakePreempts
@@ -108,6 +109,18 @@ the timer and device interrupts only from user mode or while idle, so a system c
 destruction runs to its end. Picking is done by `kmain`, the kernel's own loop (PID 1). It runs
 its pick through a private S-mode `ecall` into the kernel's trap handler, which saves `kmain`'s
 context as it saves a thread's.
+
+So a slice's end is a round trip through `kmain`: the timer interrupt preempts the thread, `kmain`
+picks, the same thread again if its budget still ranks first, and its switch returns to it.
+`sched-timer-entry` bounds what that costs the kernel: two spinners and nothing else, so every
+timer interrupt from user mode ends a slice, and the oracle bounds their lock sections, trap to
+return, net of the checked build's audits at one hart: the p99 at 2,000 ticks, the steady entry,
+which measures 1,073 on rv64 and 1,597 on rv32, and the longest at 5,000, the cold first
+preemptions of a phase, 3,431 and 4,234 (at two harts, where `icount`'s one clock counts the
+other hart's instructions too, they are recorded). In a release build the slice's end of
+a thread that only computes is about 8,800 kernel instructions on rv64 and 12,900 on rv32 (QEMU's
+exec log), about 7 and 10 % of a hart at the 1 ms slice, half of it the round trip itself: its
+budget descheduled and requeued, then picked again.
 
 ### The current minimum and ties
 
@@ -1227,7 +1240,7 @@ tells whoever reads the console who runs when. It exists only under the Cargo fe
   `sched-debt-lift`, `sched-lift-delay`, `sched-wake-no-preempt`,
   `sched-wake-no-preempt-harts`, `sched-cluster`,
   `sched-cluster-old-control`, `sched-latency`, `sched-latency-tcg`, `sched-lock-contention`,
-  `sched-lock-contention-4`, `irq-boot-hart-only`, `kernel-containment`, `endpoint-destroy-full`, `smp-fence` and
+  `sched-lock-contention-4`, `sched-timer-entry`, `irq-boot-hart-only`, `kernel-containment`, `endpoint-destroy-full`, `smp-fence` and
   `worst-walk`.
 
 The other diagnostic features are off by default in the same way: `walk-trace`, which implies
@@ -1235,7 +1248,8 @@ the trace and brackets each receive's pump, timer expiry and reconcile in it, fo
 alone; `lock-trace`, which implies the trace and records after each wait for the kernel lock its
 ticket and the sections ahead of it when drawn (`k`), for `irq-boot-hart-only`; `hold-trace`,
 which implies `lock-trace` and records each section of the kernel lock at its release, its ticks,
-cause and audits (`h`, `j`), for `sched-lock-contention` and `sched-lock-contention-4`;
+cause and audits (`h`, `j`), for `sched-lock-contention`, `sched-lock-contention-4` and
+`sched-timer-entry`;
 `irq-boot-hart-only`, whose boot hart alone
 takes device interrupts, for R78's negative case at two harts; `sched-inject-tie-fault`, a debug-only break of the tie rule that implies the trace;
 `sched-capped-holds-floor`, whose floor counts the capped budgets, for R12's negative case at two

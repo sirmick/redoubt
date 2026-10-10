@@ -109,6 +109,7 @@ bin = [
     { name = "sched-share", test = false },
     { name = "sched-sleep-gaming", test = false },
     { name = "sched-ties", test = false },
+    { name = "sched-timer-entry", test = false },
     { name = "sched-timer-flood", test = false },
     { name = "sched-wake-no-preempt", test = false },
     { name = "sched-wake-no-preempt-harts", test = false },

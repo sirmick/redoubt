@@ -2892,6 +2892,10 @@ fn lock_order(tickets: &[(u64, u64)], waits: &[(u64, u64, u64)], harts: u64) -> 
 /// fault, `0x300` plus its exception code.
 const PAGE_FAULTS: [u64; 3] = [0x30c, 0x30d, 0x30f];
 
+/// The cause of a section the supervisor timer interrupt began (`hold-trace`), `0x200` plus its
+/// code: from user mode, or in `kmain`'s idle.
+const TIMER_INTERRUPT: u64 = 0x205;
+
 /// A section's cause by name: a system call's, an interrupt's or an exception's code, or `kmain`.
 fn cause_name(cause: u64) -> String {
     match cause {
@@ -2958,7 +2962,9 @@ fn sections(sections: &[Section], waits: &[(u64, u64, u64)]) -> String {
 /// on more: the targets are gated at one hart and two and recorded at four. A `walk-trace`
 /// kernel's walks may each be bounded, `pump_max_us=N`, `expiry_max_us=N` and
 /// `reconcile_max_us=N`, the longest net of audits, judged before R10's p99; a `hold-trace`
-/// kernel's longest section a page fault caused, `fault_section_max_ticks=N`, net of audits. Every window a
+/// kernel's longest section a page fault caused, `fault_section_max_ticks=N`, and a timer interrupt,
+/// `timer_section_max_ticks=N` and their p99, `timer_section_p99_ticks=N` (both gated up to
+/// `gate_harts`), net of audits. Every window a
 /// target judges has the checked build's audit time inside it subtracted; R10's has none. Each charged
 /// share the program printed is judged on the kernel's charges in the trace
 /// ([`check_charged_share`]), and each share across harts on the same charges net of lock waits
@@ -3044,6 +3050,8 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
             "lease_end_p99_us",
             "gate_harts",
             "fault_section_max_ticks",
+            "timer_section_max_ticks",
+            "timer_section_p99_ticks",
             "driver_wake_p50_searches",
             "driver_wake_p99_searches",
             "wake_witnesses",
@@ -3130,6 +3138,43 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
     // (kernel/scheduling.md, "Responsiveness").
     let harts = sum.hart_time.map_or(1, |(_, h)| h);
     let gated = bounds.get("gate_harts").is_none_or(|g| harts <= *g);
+    // With `hold-trace`, the kernel sections a timer interrupt caused, net of audits: the slice's
+    // end, the pick and the return cost what they do, not what the kernel holds. The p99 bounds the
+    // steady entry, the max the cold ones (the first of a program's phases). Gated up to
+    // `gate_harts` as the latency targets are: under `icount` the harts share one clock, so a
+    // section's ticks on several count the other harts' instructions too.
+    let mut timer_sections = None;
+    let timer_bounds =
+        [("p99", bounds.get("timer_section_p99_ticks")), ("max", bounds.get("timer_section_max_ticks"))];
+    if timer_bounds.iter().any(|(_, b)| b.is_some()) {
+        let mut net: Vec<u64> = sum
+            .sections
+            .iter()
+            .filter(|s| s.cause == TIMER_INTERRUPT)
+            .map(|s| s.to - s.from - s.audits)
+            .collect();
+        let (p50, p99) = (percentile(&mut net, 50), percentile(&mut net, 99));
+        let max = *net
+            .last()
+            .ok_or("a timer section bound is set, but the trace holds no section a timer interrupt caused")?;
+        let mut judged = Vec::new();
+        for (q, bound) in timer_bounds {
+            let Some(bound) = bound else { continue };
+            let held = if q == "p99" { p99 } else { max };
+            if held > *bound && gated {
+                return Err(format!(
+                    "timer interrupts' kernel sections: their {q} held the lock {held} ticks net of audits, above {bound}"
+                ));
+            }
+            judged.push(format!("{q} <= {bound}"));
+        }
+        timer_sections = Some(format!(
+            "timer interrupts' kernel sections: {}, ticks net of audits p50/p99/max {p50}/{p99}/{max}: {}{}",
+            net.len(),
+            judged.join(", "),
+            if gated { String::new() } else { format!(", recorded at {harts} harts, not gated") }
+        ));
+    }
     // Each measure in each group, net of the audits inside its windows.
     let (mut lines, mut missed, mut decision_p99) = (Vec::new(), false, None::<u64>);
     // The old control's cluster envelope targets: whether any of them missed.
@@ -3357,6 +3402,7 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
     if !sum.sections.is_empty() {
         lines.push(sections(&sum.sections, &sum.lock_waits));
     }
+    lines.extend(timer_sections);
     let out = std::iter::once(head).chain(lines).collect::<Vec<_>>().join("\n      ");
     if missed { Err(out) } else { Ok(out) }
 }
@@ -4633,6 +4679,64 @@ mod tests {
         let none =
             run(&verdict_log(&[(1, 'W', 5, 0x10, 0), (1, 'K', 5, 0x10, 0)]), "fault_section_max_ticks=1");
         assert!(none.as_ref().is_err_and(|e| e.contains("no section a page fault caused")), "{none:?}");
+        // So is a timer interrupt's, and no other cause's: the fault's longer section is not it.
+        let timer = |bound: &str| {
+            let records = [
+                (1, 'W', 5, 0x10, 0),
+                (1, 'K', 5, 0x10, 0),
+                (2, 'h', 100, 220, 0),
+                (2, 'j', 0x205, 20, 0),
+                (2, 'h', 300, 900, 0),
+                (2, 'j', 0x30f, 0, 0),
+            ];
+            run(&verdict_log(&records), bound)
+        };
+        let ok = timer("timer_section_max_ticks=100").unwrap();
+        assert!(ok.contains(
+            "timer interrupts' kernel sections: 1, ticks net of audits p50/p99/max 100/100/100: max <= 100"
+        ));
+        assert!(timer("timer_section_max_ticks=99").is_err_and(|e| {
+            e.contains("timer interrupts' kernel sections: their max held the lock 100 ticks net of audits, above 99")
+        }));
+        // The p99 bounds the steady entry: one cold section in a hundred is the max's alone.
+        let steady = |bound: &str| {
+            let mut records = vec![(1, 'W', 5, 0x10, 0), (1, 'K', 5, 0x10, 0)];
+            for i in 0..100u64 {
+                let length = if i == 0 { 50 } else { 10 };
+                records.push((2, 'h', 1000 * i, u128::from(1000 * i + length), 0));
+                records.push((2, 'j', 0x205, 0, 0));
+            }
+            run(&verdict_log(&records), bound)
+        };
+        let ok = steady("timer_section_p99_ticks=10 timer_section_max_ticks=50").unwrap();
+        assert!(ok.contains("p50/p99/max 10/10/50: p99 <= 10, max <= 50"), "{ok}");
+        assert!(
+            steady("timer_section_p99_ticks=9").is_err_and(|e| e.contains("their p99 held the lock 10 "))
+        );
+        assert!(
+            steady("timer_section_max_ticks=49").is_err_and(|e| e.contains("their max held the lock 50 "))
+        );
+        // Above `gate_harts` harts it is recorded, not judged.
+        let two = |bound: &str| {
+            let records = [
+                (1, 'W', 5, 0x10, 0),
+                (1, 'K', 5, 0x10, 0),
+                (2, 'h', 100, 220, 1),
+                (2, 'j', 0x205, 20, 1),
+                (3, 'F', 1000, 2, 0),
+                (300, 'C', 10_300, 9_900, 0),
+            ];
+            run(&verdict_log(&records), bound)
+        };
+        assert!(two("timer_section_max_ticks=99 gate_harts=2").is_err());
+        let recorded = two("timer_section_max_ticks=99 gate_harts=1").unwrap();
+        assert!(
+            recorded.contains("p50/p99/max 100/100/100: max <= 99, recorded at 2 harts, not gated"),
+            "{recorded}"
+        );
+        let none =
+            run(&verdict_log(&[(1, 'W', 5, 0x10, 0), (1, 'K', 5, 0x10, 0)]), "timer_section_max_ticks=1");
+        assert!(none.as_ref().is_err_and(|e| e.contains("no section a timer interrupt caused")), "{none:?}");
         let orphan = verdict_on(&[(1, 'W', 5, 0x10, 0), (2, 'h', 100, 300, 0), (2, 'j', 0x115, 0, 1)]);
         assert!(orphan.unwrap_err().contains("a kernel section's cause after no section of its hart"));
         let over = verdict_on(&[(1, 'W', 5, 0x10, 0), (2, 'h', 100, 300, 0), (2, 'j', 0x115, 201, 0)]);
