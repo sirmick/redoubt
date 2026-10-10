@@ -1,9 +1,9 @@
 //! The one lock type, and what may be shared between schedulers.
 //!
-//! With the `std` feature the VM may run several schedulers on threads (docs/userland/beamlet.md):
-//! [`Lock`] is a mutex and shared values must be `Send + Sync`. Without it
-//! there is one scheduler: [`Lock`] is a `RefCell` and nothing needs to cross threads. Code
-//! is written once against this module and is correct in both.
+//! With the `std` feature (a host) or the `redoubt` feature (beamlet on Redoubt) the VM may run
+//! several schedulers on threads (docs/userland/beamlet.md): [`Lock`] is a mutex and shared values
+//! must be `Send + Sync`. With neither there is one scheduler: [`Lock`] is a `RefCell` and nothing
+//! needs to cross threads. Code is written once against this module and is correct in all three.
 
 #[cfg(feature = "std")]
 mod imp {
@@ -97,7 +97,76 @@ mod imp {
     pub type AnyShared = dyn core::any::Any + Send + Sync;
 }
 
-#[cfg(not(feature = "std"))]
+#[cfg(all(feature = "redoubt", not(feature = "std")))]
+mod imp {
+    use redoubt_rt::sync::{Condvar, Mutex, MutexGuard};
+
+    /// Exclusive access to a `T` for the holder of the guard: the runtime's mutex, whose waiters
+    /// sleep in the kernel. Taking a lock this thread already holds deadlocks, since the
+    /// runtime cannot say which thread holds it; the host's `std` build, which runs the same
+    /// code, panics on it instead.
+    pub struct Lock<T>(Mutex<T>);
+
+    impl<T> Lock<T> {
+        pub const fn new(value: T) -> Lock<T> { Lock(Mutex::new(value)) }
+
+        /// Wait for exclusive access.
+        pub fn lock(&self) -> Guard<'_, T> { Guard(Some(self.0.lock())) }
+
+        /// Make now the endpoint its waiters sleep on, so contending for it allocates nothing:
+        /// `false` if the kernel refused it (its waiters then poll).
+        pub fn prepare(&self) -> bool { self.0.prepare() }
+
+        /// Access through an exclusive reference, which needs no locking.
+        pub fn get_mut(&mut self) -> &mut T { self.0.get_mut() }
+    }
+
+    /// Always `Some`, except while a [`Wakeup::wait`] has released it.
+    pub struct Guard<'a, T>(Option<MutexGuard<'a, T>>);
+
+    impl<T> core::ops::Deref for Guard<'_, T> {
+        type Target = T;
+
+        fn deref(&self) -> &T { self.0.as_ref().expect("held") }
+    }
+
+    impl<T> core::ops::DerefMut for Guard<'_, T> {
+        fn deref_mut(&mut self) -> &mut T { self.0.as_mut().expect("held") }
+    }
+
+    /// Where idle schedulers wait for work.
+    #[derive(Default)]
+    pub struct Wakeup(Condvar);
+
+    impl Wakeup {
+        /// Release `guard`, wait to be woken, and lock again.
+        pub fn wait<'a, T>(&self, mut guard: Guard<'a, T>) -> Guard<'a, T> {
+            let inner = guard.0.take().expect("held");
+            guard.0 = Some(self.0.wait(inner));
+            guard
+        }
+
+        pub fn wake_one(&self) { self.0.notify_one(); }
+
+        pub fn wake_all(&self) { self.0.notify_all(); }
+
+        /// Make now what `schedulers` waiting at once need ([`Lock::prepare`]).
+        pub fn prepare(&self, schedulers: usize) -> bool { self.0.prepare(schedulers) }
+    }
+
+    /// Values that may be shared between schedulers.
+    pub trait Shared: Send + Sync {}
+    impl<T: Send + Sync + ?Sized> Shared for T {}
+
+    /// Values that may move between schedulers.
+    pub trait Sendable: Send {}
+    impl<T: Send + ?Sized> Sendable for T {}
+
+    /// A value of any type that may be shared between schedulers (a resource's value).
+    pub type AnyShared = dyn core::any::Any + Send + Sync;
+}
+
+#[cfg(not(any(feature = "std", feature = "redoubt")))]
 mod imp {
     /// Exclusive access to a `T` for the holder of the guard.
     pub struct Lock<T>(core::cell::RefCell<T>);
@@ -146,7 +215,7 @@ impl<T: Default> Default for Lock<T> {
 }
 
 /// What several schedulers will share must be `Sync`; what moves between them, `Send`.
-#[cfg(feature = "std")]
+#[cfg(any(feature = "std", feature = "redoubt"))]
 #[allow(dead_code)]
 fn assert_thread_safe() {
     fn shared<T: Send + Sync>() {}

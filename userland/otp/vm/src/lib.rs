@@ -12,8 +12,8 @@
 
 #![no_std]
 #![forbid(unsafe_code)]
-// Without the `std` feature there is one scheduler and shared values need not be `Send`.
-#![cfg_attr(not(feature = "std"), allow(clippy::arc_with_non_send_sync))]
+// Without threads (`std` or `redoubt`) there is one scheduler and shared values need not be `Send`.
+#![cfg_attr(not(any(feature = "std", feature = "redoubt")), allow(clippy::arc_with_non_send_sync))]
 // An `OwnedException` is large, but only returned when a process fails to start.
 #![allow(clippy::result_large_err)]
 

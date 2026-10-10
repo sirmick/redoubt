@@ -526,6 +526,10 @@ pub struct Vm {
     sys: Lock<System>,
     /// Where schedulers with nothing to do wait.
     wakeup: Wakeup,
+    /// The pages of a helper scheduler's stack ([`Vm::set_helper_stack_pages`]).
+    #[cfg(feature = "redoubt")]
+    #[cfg_attr(feature = "std", allow(dead_code))]
+    helper_stack_pages: usize,
 }
 
 impl Vm {
@@ -595,6 +599,8 @@ impl Vm {
                 report_memory: config.report_memory,
             }),
             wakeup: Wakeup::default(),
+            #[cfg(feature = "redoubt")]
+            helper_stack_pages: 16,
         }
         .boot()
     }
@@ -692,18 +698,57 @@ impl Vm {
                 result
             });
         }
+        // The endpoints the schedulers' locks sleep on are made now, so no contention between
+        // schedulers allocates: a VM at its budget's limit must not end at its first contended
+        // lock. One the kernel refuses leaves one scheduler, which contends with nobody.
+        #[cfg(all(feature = "redoubt", not(feature = "std")))]
+        let helpers = {
+            let platform = sys.lock().platform.clone();
+            if helpers > 0 && !(sys.prepare() && platform.prepare() && wakeup.prepare(helpers + 1)) {
+                let mut s = sys.lock();
+                s.schedulers = 1;
+                s.schedulers_online = 1;
+                0
+            } else {
+                helpers
+            }
+        };
+        #[cfg(all(feature = "redoubt", not(feature = "std")))]
+        if helpers > 0 {
+            return redoubt_rt::thread::scope(self.helper_stack_pages, |scope| {
+                // A helper the kernel will not start leaves fewer schedulers, never none: this
+                // thread is one. The helpers started are numbered from 1 without a gap.
+                let started = (1..=helpers)
+                    .take_while(|&index| scope.spawn(move || help(sys, wakeup, index)).is_ok())
+                    .count();
+                if started < helpers {
+                    let mut s = sys.lock();
+                    s.schedulers = started + 1;
+                    s.schedulers_online = s.schedulers_online.min(s.schedulers);
+                }
+                let result = drive(sys, wakeup, pid);
+                sys.lock().stopping = true;
+                wakeup.wake_all();
+                result
+            });
+        }
         let _ = helpers;
         drive(sys, wakeup, pid)
     }
 
-    /// Run on `n` schedulers (threads), at least one. Without the `std` feature there is only
-    /// ever one.
-    #[cfg(feature = "std")]
+    /// Run on `n` schedulers (threads), at least one. Without threads (`std` or `redoubt`)
+    /// there is only ever one.
+    #[cfg(any(feature = "std", feature = "redoubt"))]
     pub fn set_schedulers(&mut self, n: usize) {
         let sys = self.sys.get_mut();
         sys.schedulers = n.max(1);
         sys.schedulers_online = sys.schedulers;
     }
+
+    /// The pages of each helper scheduler's stack (`redoubt_rt::thread::spawn`): the embedder's
+    /// to size, as for its first thread. Unused where `std` starts the threads.
+    #[cfg(feature = "redoubt")]
+    pub fn set_helper_stack_pages(&mut self, pages: usize) { self.helper_stack_pages = pages; }
 
     /// Set a variable of the VM's own environment (`os:getenv/1`), which starts empty.
     pub fn setenv(&mut self, name: &str, value: &str) {
@@ -1639,9 +1684,9 @@ pub(crate) fn mailbox_full(table: &mut AtomTable, atoms: &Atoms) -> Arc<OwnedTer
 }
 
 /// A change to a process that a scheduler is running, made when its time slice ends.
-#[cfg(feature = "std")]
+#[cfg(any(feature = "std", feature = "redoubt"))]
 pub(crate) type Deferred = Box<dyn FnOnce(&mut Process) + Send>;
-#[cfg(not(feature = "std"))]
+#[cfg(not(any(feature = "std", feature = "redoubt")))]
 pub(crate) type Deferred = Box<dyn FnOnce(&mut Process)>;
 
 /// What a scheduler does next.
@@ -1670,7 +1715,7 @@ fn drive(sys: &Lock<System>, wakeup: &Wakeup, pid: Pid) -> Result<Outcome, RunEr
 }
 
 /// A helper scheduler: schedule until the run is over.
-#[cfg(feature = "std")]
+#[cfg(any(feature = "std", feature = "redoubt"))]
 fn help(sys: &Lock<System>, wakeup: &Wakeup, index: usize) {
     let mut sched = Sched::new(sys, wakeup);
     loop {
