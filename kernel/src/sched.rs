@@ -27,6 +27,8 @@
 //!   and it is requeued behind its equals if it still has a runnable thread. It then reconciles the queue
 //!   (one reconcile per kernel entry: budgets that gained a runnable thread wake, those that lost their last
 //!   one leave). The entry's payer pays for all of that, up to the return; user time starts there.
+//! - The frames a section freed are zeroed outside the lock when their hart idles (R81, `reclaim.rs`):
+//!   [`zeroed_idle`] bills that time to the budgets that freed them.
 //!
 //! A reconcile visits only the budgets whose runnable state changed: every change of a process's
 //! state that changes how many of its threads are ready marks it (`ptable.rs`), and the marks move
@@ -100,7 +102,19 @@ struct Billing {
     /// The hart's running thread was preempted ([`preempt`]) and stays ready: the switch that takes
     /// its budget off requeues its own thread, no wait for the cap set; a block is not.
     preempted: bool,
+    /// Who pays for zeroing the frames this hart retired and has not yet zeroed (R81): each payer
+    /// and how many frames, in retiring order, the last entry taking any overflow ([`retiring`]).
+    /// Kept until the frames are zeroed, by this hart idle ([`bill_zeroing`]) or by an allocation
+    /// on any hart ([`zeroed_here`]); the newest are zeroed first, as the pending list is a stack.
+    zeroing: [(Option<BudgetRef>, u32); ZEROING_PAYERS],
+    /// While a destruction runs ([`zeroing_payer`]): its payer, who pays for zeroing what it
+    /// frees, as for the rest of it (R10).
+    zeroing_payer: Option<BudgetRef>,
 }
+
+/// The payers one hart's zeroing is split between: a section's frames almost always have one
+/// (the caller, a destroyer, a deadline's payer); a timer entry's expiry may add a few.
+const ZEROING_PAYERS: usize = 4;
 
 /// Who kernel time is billed to.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -122,6 +136,8 @@ static SCHED: KernelCell<Sched> = KernelCell::new(Sched {
         #[cfg(debug_assertions)]
         excused: 0,
         preempted: false,
+        zeroing: [(None, 0); ZEROING_PAYERS],
+        zeroing_payer: None,
     }; MAX_HARTS],
     marks: Marks::new(BudgetRef { frame: 0, id: 0 }),
     online: 1,
@@ -425,6 +441,133 @@ pub fn from_user() {
             - crate::arch::irq::timer::ticks_to_us(now.saturating_sub(excused));
         crate::time::set_slice_end(crate::time::slice_end().saturating_add(length));
     }
+}
+
+/// This hart retired `frames` frames (R81): who pays for their zeroing outside the lock, the
+/// budget paying for this kernel time now, or a destruction's payer ([`zeroing_payer`]); nobody
+/// for `kmain`'s own work. Once a walk, not once a frame: a destruction retires thousands.
+pub fn retiring(frames: u32) {
+    if frames == 0 {
+        return;
+    }
+    SCHED.with(|s| {
+        let b = s.b();
+        let payer = b.zeroing_payer.or(match b.billing {
+            Some((_, Payer::Budget(p))) => Some(p),
+            _ => None,
+        });
+        let last = b.zeroing.iter().position(|(_, n)| *n == 0).unwrap_or(ZEROING_PAYERS);
+        match last.checked_sub(1).map(|i| &mut b.zeroing[i]) {
+            Some((p, n)) if *p == payer || last == ZEROING_PAYERS => *n += frames,
+            _ => b.zeroing[last] = (payer, frames),
+        }
+    });
+}
+
+/// A destruction begins (`Some`, its payer) or ends (`None`): the frames it frees are zeroed at
+/// its payer's cost (R10).
+pub fn zeroing_payer(payer: Option<BudgetRef>) { SCHED.with(|s| s.b().zeroing_payer = payer); }
+
+/// The budget this hart's kernel time is billed to now, if one is: a call's caller's.
+pub fn billing_budget() -> Option<BudgetRef> {
+    SCHED.with(|s| match s.b().billing {
+        Some((_, Payer::Budget(b))) => Some(b),
+        _ => None,
+    })
+}
+
+/// A destruction, its subtree marked dying and not yet freed: every hart's zeroing still to bill
+/// to a dying budget is `payer`'s instead, lifted with the rest of the dying budgets' debt (R10),
+/// so no bill names a budget that is gone. `None` only for `root`'s, which leaves nothing to run.
+/// Constant work: `ZEROING_PAYERS` entries a hart. Under the lock, as every entry is written and
+/// billed.
+pub fn lift_zeroing(mm: &MemoryManager, payer: Option<BudgetRef>) {
+    // Debug only, never in a bench build but one recorded negative run: nothing is lifted.
+    if cfg!(feature = "zeroing-unlifted") {
+        return;
+    }
+    SCHED.with(|s| {
+        let mut lifted = 0u64;
+        for hart in s.harts.iter_mut() {
+            for (entry, n) in hart.zeroing.iter_mut() {
+                if *n > 0 && entry.is_some_and(|b| mm.is_live_budget(b) && mm.budget(b.frame).dying) {
+                    *entry = payer;
+                    lifted += 1;
+                }
+            }
+        }
+        #[cfg(feature = "sched-trace")]
+        if lifted > 0 {
+            trace::record(trace::ZEROING_LIFTED, payer.map_or(0, |b| b.id), u128::from(lifted));
+        }
+        #[cfg(not(feature = "sched-trace"))]
+        let _ = lifted;
+    });
+}
+
+/// Take `frames` zeroed frames off `hart`'s payers, the newest first, as its pending list gives
+/// them: each payer and its share.
+fn zeroed_off(s: &mut Sched, hart: usize, frames: u32) -> [(Option<BudgetRef>, u32); ZEROING_PAYERS] {
+    let mut shares = [(None, 0); ZEROING_PAYERS];
+    let mut left = frames;
+    for (i, (payer, n)) in s.harts[hart].zeroing.iter_mut().enumerate().rev() {
+        let take = (*n).min(left);
+        shares[i] = (*payer, take);
+        *n -= take;
+        left -= take;
+        if *n == 0 {
+            *payer = None;
+        }
+    }
+    #[cfg(debug_assertions)]
+    assert!(left == 0, "R81: hart {} zeroed {} frames more than it retired", hart, left);
+    shares
+}
+
+/// Bill `ticks` of zeroing, `frames` frames this hart zeroed idle, to the payers of those frames
+/// (`retiring`), split by frames; the rest wait for its next idle pass. A payer destroyed meanwhile
+/// was replaced by its destruction's ([`lift_zeroing`]).
+fn bill_zeroing(ticks: u64, frames: u32) {
+    if frames == 0 {
+        return;
+    }
+    MemoryManager::with_mut(|mm| {
+        SCHED.with(|s| {
+            let shares = zeroed_off(s, here(), frames);
+            // Kernel work, though outside the lock: the trace's kernel time counts it, as it counts
+            // the bills.
+            #[cfg(feature = "sched-trace")]
+            trace::kernel_work(ticks);
+            for (payer, n) in shares {
+                if let Some(b) = payer.filter(|_| n > 0) {
+                    // A destruction lifted every entry naming a budget it ended ([`lift_zeroing`]).
+                    #[cfg(debug_assertions)]
+                    assert!(mm.is_live_budget(b), "R10: zeroing billed to budget {}, which is gone", b.id);
+                    s.bill(mm, b, ticks * u64::from(n) / u64::from(frames));
+                }
+            }
+        })
+    });
+}
+
+/// One of `hart`'s pending frames was zeroed under the lock, by an allocation that found the
+/// bitmap empty (`MemoryManager::reclaim_wait`): that section's own kernel time, so it leaves its
+/// payer's bill to come unbilled.
+pub fn zeroed_here(hart: usize) {
+    SCHED.with(|s| {
+        let _ = zeroed_off(s, hart, 1);
+    });
+}
+
+/// `kmain` takes the lock back after an idle pass: the zeroing this hart did meanwhile is billed
+/// to its payers (R81). No slice was running.
+pub fn zeroed_idle() {
+    let (ticks, frames) = crate::reclaim::take_zeroed();
+    #[cfg(feature = "sched-trace")]
+    if frames > 0 {
+        trace::record(trace::ZEROED, ticks, u128::from(frames));
+    }
+    bill_zeroing(ticks, frames);
 }
 
 /// Each hart's wait for the kernel lock from user mode, in a checked build: the raw `time` it came
@@ -953,6 +1096,26 @@ pub mod trace {
     /// A checked build's wait for the kernel lock, just after its `Q`: the ticks of other harts'
     /// audits it waited through in the id, which are not billed to the hart's runner.
     pub const EXCUSED: u8 = b'y';
+    /// `kmain` back from an idle pass that zeroed frames in flight (R81): the ticks it zeroed in the
+    /// id, their payers', and the frames in the pass field.
+    pub const ZEROED: u8 = b'0';
+    /// A destruction lifted zeroing still to bill to the budgets it ends ([`lift_zeroing`]): the
+    /// payer that takes it over in the id, 0 for none (`root`'s), and the entries in the pass field.
+    pub const ZEROING_LIFTED: u8 = b'p';
+    /// With `inflight-trace` (`smp-inflight-race`), each RAM frame's way through R81, by its index
+    /// in RAM in the id: retired, with the process to shoot down in the pass field (0 for none);
+    /// pending (no store can reach it); given back to the bitmap; taken from it. And each shootdown
+    /// of a process (`mem::shoot`), the PID in the id, whether or not a hart was asked.
+    #[cfg(feature = "inflight-trace")]
+    pub const RETIRED: u8 = b'i';
+    #[cfg(feature = "inflight-trace")]
+    pub const PENDED: u8 = b'd';
+    #[cfg(feature = "inflight-trace")]
+    pub const COMMITTED: u8 = b'b';
+    #[cfg(feature = "inflight-trace")]
+    pub const TAKEN: u8 = b'o';
+    #[cfg(feature = "inflight-trace")]
+    pub const SHOT: u8 = b's';
 
     /// Frames the ring takes (64 MiB, 256 MiB with `sched-trace-large`), and the records they hold.
     const PAGES: usize = if cfg!(feature = "sched-trace-large") { 65536 } else { 16384 };
@@ -1115,6 +1278,10 @@ pub mod trace {
             k.since[crate::arch::hart::index()].get_or_insert(now);
         });
     }
+
+    /// `ticks` of kernel work this hart did outside the kernel's own entries: zeroing the frames it
+    /// freed, after its release (R81).
+    pub fn kernel_work(ticks: u64) { KERNEL.with(|k| k.ticks += ticks); }
 
     /// This hart leaves the kernel at tick `now`, for user mode or the idle.
     pub fn kernel_until(now: u64) {

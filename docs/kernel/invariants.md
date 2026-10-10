@@ -351,7 +351,7 @@ reads the account the kernel attaches to the child's messages; the same probe, i
 
 ### I9 (pages W^X, zeroed, lends unmapped)
 
-<details><summary>Status: built · partly tested: reuse of a freed frame is attacked only in the model · tested (13)</summary>
+<details><summary>Status: built · partly tested: reuse of a freed frame is attacked by `smp-inflight-race`'s witness, which no case ties to the frame another process filled · tested (14)</summary>
 
 - bench:wx
 - bench:write-only-attack
@@ -361,6 +361,7 @@ reads the account the kernel attaches to the child's messages; the same probe, i
 - bench:lender-touches-lent
 - bench:uaf-lent-page
 - bench:device-exec-refused
+- bench:smp-inflight-race
 - mutation:R11NoZeroing
 - mutation:R11SetFlagsAllowsWx
 - mutation:R11SetFlagsAllowsWriteOnly
@@ -377,16 +378,20 @@ kernel's own mappings are R19 (kernel W^X)'s ([memory](memory.md)).
 
 **Kept in** `check_permissions` ([`kernel/src/arch/riscv/mem.rs`](../../kernel/src/arch/riscv/mem.rs):
 every user mapping; decoding refuses W+X flags before that); `set_flags`'s refusal of `EXECUTE`
-on a frame that is not RAM or is a `dma_alloc` frame; zeroing through the physmap before a
-mapping exists (`map_anon` and `map_fixed` in [`kernel/src/mem.rs`](../../kernel/src/mem.rs),
-`alloc_contiguous` for DMA, `ensure_page_exists_inner` for a page backed on first touch);
+on a frame that is not RAM or is a `dma_alloc` frame; zeroing a freed frame before it is free
+again ([R81 (frames in flight)](memory.md#r81-frames-in-flight), `zero_taken` in
+[`kernel/src/reclaim.rs`](../../kernel/src/reclaim.rs) and `reclaim_wait` in
+[`kernel/src/mem.rs`](../../kernel/src/mem.rs)), a frame free since boot when first taken
+(`take` in [`kernel/src/mem.rs`](../../kernel/src/mem.rs)), and a DMA pool frame as it leaves the
+pool (`dma_pool_take`);
 `lend_out`, which clears the lender's valid bit and
 keeps the entry as the record of the loan, so the lender faults on the page and cannot unmap or
 remap it until `reply` or a failed call gives it back.
 
 **Model check:** `Checker::i9_memory`: no mapping is W+X or write-only, every frame that appears
-since the last step reads zero, and no frame is reachable from two address spaces. The four
-listed R11 mutations fail here.
+since the last step reads zero, every free frame is zero and none is also held or in flight
+(R81), and no frame is reachable from two address spaces. The four listed R11 mutations fail
+here, and so do R81's.
 
 **Attacks:** `wx` runs children that make a writable page executable and write to their code, and
 the kernel must end them with the matching fault; `write-only-attack` asks for W without R through
@@ -648,8 +653,8 @@ co-holder cases.
 - **The model checks its own abstraction.** Every invariant is checked after every step of the
   model, but no trace has yet been replayed against the real kernel ([model](model.md)). On the
   real kernel some are attacked only in part: flows between user label sets (I7), reuse of a
-  freed frame (I9; `lender-touches-lent` attacks a lender's load and store of its lent page,
-  on one hart), fair turns among several groups (I11),
+  freed frame (I9; `smp-inflight-race`'s witness reads reused frames but cannot name them, and
+  `lender-touches-lent` attacks a lender's load and store of its lent page, on one hart), fair turns among several groups (I11),
   id reuse (I12), timeouts on more than one hart (I13), and a co-holder's reset (I16).
 - **A kernel bookkeeping bug is a stop.** The id checks behind I1 and the checked subtractions
   behind I5 stop the kernel when they fail. A bug that breaks them halts the machine for every

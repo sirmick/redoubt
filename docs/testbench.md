@@ -425,6 +425,13 @@ only reports them on more, marked `recorded at N harts, not gated`: the targets 
 hart and two and recorded at four ([responsiveness](kernel/scheduling.md#responsiveness)).
 `smp_fence` reads only the same trace's shootdown records: a page made executable was shot down
 on another hart running its process, which acknowledged ([memory](kernel/memory.md#instruction-fetch-after-mapping)).
+`smp_inflight` reads only an `inflight-trace` kernel's records of each RAM frame's way through
+[R81 (frames in flight)](kernel/memory.md#r81-frames-in-flight): retired (`i`, the frame and the process whose entry
+for it was cleared), each shootdown (`s`), pending (`d`), given back to the bitmap (`b`) and taken
+from it (`o`). Each frame is pending only on the hart that retired it and, if it was mapped, only
+after that hart shot its process down; given back only once pending, so its hart has zeroed it;
+and never taken in between. A run where no frame from a live space was retired, given back and
+taken again fails as racing nothing.
 
 ### Starting a case's programs
 
@@ -663,7 +670,13 @@ waited through, and the waiter, once it holds the lock having waited, bills its 
 and moves its slice's end by it, as the auditor does. The trace records it after the wait (`y`:
 the ticks), never more than the wait by the waiter's own clock (harts' clocks differ by a few
 ticks under `icount`), and the oracle takes out of a share only the part of a wait that was
-billed. A kernel built with `audit-wait-billed` bills the whole wait as before:
+billed. A hart's zeroing, idle, of the frames it freed
+([frames in flight](kernel/memory.md#frames-in-flight)) is billed when it takes the lock back, to
+the budgets that freed them; the trace records it (`0`: the ticks, the frames), and the oracle
+reports the total. A destruction gives any hart's zeroing still to bill to a budget it ends to
+its own payer, lifted with the rest of that budget's debt (`p`: the payer, the entries), which
+the oracle counts and refuses outside a destruction; the checked kernel stops if a bill names a
+budget that is gone. A kernel built with `audit-wait-billed` bills the whole wait as before:
 `sched-budget-churn-shell` at two harts reads 329 and 339 of 1000 on rv64 and rv32 against 404
 and 509, in a recorded negative run. The traced kernel stamps each audit's start
 and end (records `U` and `V`: which audit, and the time). The program prints each latency

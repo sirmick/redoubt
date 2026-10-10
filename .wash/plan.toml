@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 104
+revision = 117
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1613,7 +1613,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["CTX1"]
   body = "Second of three; brief .wash/local/CTX1-brief.md, design .wash/local/CTX1-design.md. A relay program in the context's own budget serves the VM's /dev/cons; the steward hands it each channel's console. 64 KiB buffer, newest kept, a dropped-count line, cut at line boundaries, resize on reattach. Takeover is told on both terminals, with the remote address. Tier A."
   state = "done"
-  revision = 84
+  revision = 112
   overrides = ["2026-10-08: started by Orchestrator before CTX1 (reported), M1 (reported): CTX1 is reported and under its last fold; CTX2 is stacked on it by the orchestrator's ruling", "2026-10-08: started by Orchestrator before M1 (reported): named contexts run ahead of M1's acceptance (owner request 2026-10-08)", "2026-10-09: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the userland track runs ahead of its acceptance", "2026-10-10: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the userland track runs ahead of its acceptance"]
 
 [[node]]
@@ -1625,7 +1625,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "Part c of named SSH contexts (brief .wash/local/CTX1-brief.md): the cap of live contexts per (principal, label set), never evicting; idle expiry of detached contexts, configurable per principal with a default; the shell's contexts()/detach()/end_context within the label set; the generation (or end-with-steward) rule on steward restart, chosen at its design checkpoint with costs. Also from CTX1's red: measure rule 3's timing (an unknown principal, label set or non-name is refused before any machine runs; a wrong key on a known principal runs the blame and session machines before login_key refuses it, counting nothing) at the SSH client, and equalize it if it is distinguishable above jitter."
   state = "active"
   revision = 85
-  overrides = ["2026-10-10: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the userland track runs ahead of its acceptance"]
+  overrides = ["2026-10-10: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the userland track runs ahead of its acceptance", "2026-10-10: started by Orchestrator before CTX2 (reported), M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the userland track runs ahead of its acceptance"]
 
 [[node]]
   id = "B39"
@@ -1821,9 +1821,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "smp"
   needs = ["SMP4"]
   body = "M2 page 'Several harts' step 5, reworded by measurement: zero on reclaim (freed frame -> in flight -> zeroed outside the lock by the freeing hart -> bitmap; allocation zeroes nothing), not zero on allocate. The in-flight invariant as a rule beside R11, with the model's rule and a mutation, and an attack case (a second hart racing to allocate, map or free an in-flight frame). Shootdown waits stay under the lock (measured ~0), a residual. Kernel: Tier A."
-  state = "active"
-  revision = 2
-  overrides = ["2026-10-09: started by Orchestrator before M1 (reported): several-harts track runs ahead of M1's acceptance", "2026-10-09: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; the several-harts track runs ahead of M1's acceptance"]
+  state = "done"
+  revision = 117
+  overrides = ["2026-10-09: started by Orchestrator before M1 (reported): several-harts track runs ahead of M1's acceptance", "2026-10-09: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; the several-harts track runs ahead of M1's acceptance", "2026-10-10: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; the several-harts track runs ahead of M1's acceptance"]
 
 [[node]]
   id = "B45"
@@ -1988,3 +1988,22 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "From B47's review (steward-red, .wash/qa/B47-stale-close.md and the B47 renewal): B47's Life covers the handles the VM minted and those returned through servers launched under a budget, but a request's handles arrive with no Life because the kernel tells a receiver badge, account and labels, never the sender's budget. So a program in a VM-carved budget that holds a VM-served endpoint (Elixir can pass one in launch.handles; no shell path does today) and sends a handle it minted can, after its budget is destroyed, make a later collection close a reused index in the session's own table: not the startup handles (console, steward, namespace are Owned::kept, never freed), but a sibling job's budget (its destroy then fails, pages leak), a piped or stage connection, or the VM's internal endpoints (a waiter's wake, a serve thread's, a job's exit endpoint), which can hang or break the session. No widening beyond the session, but more than such a program is given. Guard: when launch.handles passes a served endpoint into a launch in a carved budget, mint a fresh badge on the receive right the VM holds (serve.rs mints there already) and map badge -> that budget's Life; a request's handles from that badge go under the Life, or are closed eagerly at the budget's end. Host test: a launched program sends a minted handle, its budget is destroyed, a collection closes nothing at that index; a machine case under pipe-eight's setup. beamlet.md's residual becomes the rule. userland/otp: Tier A, the steward red. The kernel handle generation (owner's decision pending) is the construction fix for the whole class; this is the VM's own guard either way."
   state = "todo"
   revision = 98
+
+[[node]]
+  id = "K32"
+  title = "docs/kernel/README.md's TCB unsafe split is stale: the counts per crate no longer match the ratchet, and SMP6 moves Sv39's to 11"
+  template = "package"
+  parent = "smp"
+  needs = ["SMP6"]
+  body = "Found by SMP6 (its report and kernel-red's renewal): the TCB table on docs/kernel/README.md that splits the kernel's `unsafe` by crate and reason was stale before SMP6 and SMP6 changes it again (Sv39 to 11). Make the page's split derive from, or be checked against, tests/unsafe-budget.toml's ratchet (a docs check that fails when the two disagree, as the size budget's does), correct the numbers, and say on the page how the split is kept true. Docs and tooling: Tier B, one reviewer."
+  state = "todo"
+  revision = 111
+
+[[node]]
+  id = "B51"
+  title = "steward-home-quota under the bench's load: after the home is full, File.rm answers {:error, :eio} and the case runs to its 610 s deadline on both widths"
+  template = "package"
+  parent = "M2"
+  body = "Seen in train 17's whole bench on 98b866854 (CTX2, B47, B46, B49): steward-home-quota failed on rv64 and rv32 alike at step 9, `File.rm(\"/home/alice/a\")` after alice's home reached enospc answered `{:error, :eio}` (the alice ssh log shows it), and the case waited for `{:rm, :ok}` to its 610 s deadline. Alone, the same case passes in ~225 s on c7efc9b67 and a4c093827 (bisect, .tmp/train-17b/bisect.log), so the failure needs the bench's load (the net class runs one at a time, beside boots). An rm answering eio is wrong under any load: find where eio arises (walfsd's write path when the volume is full and a request is slow or retried; beamlet's files.rs retry after a busy answer (BEAM11); B47's Io release of an ended connection racing a late message; the 9P client's timeout mapped to eio) with a trace of the failing run (reproduce by running the case beside two or three boots), fix it, and make the case's wait for the rm bounded by its own step deadline rather than the case's. Both widths. Tier A if the fix is in a server or beamlet's platform (steward-red), else Tier B."
+  state = "todo"
+  revision = 116

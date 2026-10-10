@@ -442,8 +442,8 @@ fn walk_making(
                         space.flush_tables(virt);
                     }
                 })?;
-                // SAFETY: `alloc_page` returns a RAM frame that was free until now.
-                let child = unsafe { table.slot(index).install_table(frame) };
+                // SAFETY: `alloc_page` returns a RAM frame that was free until now, and zero (R81).
+                let child = unsafe { table.slot(index).install_table(frame, true) };
                 wrote(space.tables(virt));
                 linked = true;
                 child
@@ -663,8 +663,9 @@ impl MemoryMapping {
         }
 
         let root_phys = mm.alloc_page(pid)?;
-        // SAFETY: `alloc_page` returns a RAM frame that was free until now.
-        let root = unsafe { Table::new_in(window(), root_phys) };
+        // SAFETY: `alloc_page` returns a RAM frame that was free until now, and zero (R81): an
+        // empty table.
+        let root = unsafe { Table::at(window(), root_phys) };
 
         let current = current_root();
         for index in (ROOT_KERNEL_START..physmap::ENTRIES).filter(|index| *index != ROOT_PROCESS_AREA) {
@@ -693,9 +694,8 @@ impl MemoryMapping {
     /// budget (kernel/objects.md), named in the account once it is mapped. On failure the frame
     /// is given back, and any table the mapping took is in the space. Its flush is `allocate`'s.
     fn add_header_page(space: Space, mm: &mut MemoryManager, pid: Pid) -> Result<(), PageError> {
+        // Zero, as every frame the bitmap gives (R81).
         let header_phys = mm.alloc_context_page(pid)?;
-        // SAFETY: `alloc_context_page` returns a RAM frame that was free until now.
-        unsafe { window().zero_frame(header_phys) };
         map_page_in(space, mm, pid, header_phys, PROCESS_AREA, PteFlags::R | PteFlags::W)
             .inspect_err(|_| mm.free_frame_of(header_phys, pid).expect("the frame just taken"))?;
         mm.set_header(pid, header_phys);
@@ -1126,11 +1126,9 @@ pub fn ensure_page_exists_inner(mm: &mut MemoryManager, address: usize) -> Resul
     }
 
     // Out of memory is the process's problem, not the kernel's: the syscall fails, or the
-    // faulting process is terminated.
+    // faulting process is terminated. The page is zero before the process can see it: every frame
+    // the bitmap gives is (R11, R81).
     let new_page = mm.alloc_page(crate::arch::process::current_pid())?;
-    // Zero through the physmap before the page becomes visible to the process.
-    // SAFETY: `alloc_page` returns a RAM frame that was free until now.
-    unsafe { window().zero_frame(new_page) };
     // The leaf is the current space's own, flushed in its ASID. For the kernel PID above
     // `USER_AREA_END` it would be in a table every space shares: global, flushed in every ASID,
     // and checked by the `G` walk. No caller reaches that today: the loader reserves no page there.

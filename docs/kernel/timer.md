@@ -307,7 +307,11 @@ Status: built · partly tested: a boot with no `Time` tag is not attacked by a c
 - **Kernel work is not interrupted.** The kernel runs with interrupts off, so a timeout or
   deadline that passes during a long kernel operation (a budget's destruction, a large range
   call) is answered when that operation ends. `bench:budget-deadline` bounds a deadline's
-  lateness by the cost of the same destruction by hand plus 1,000 µs.
+  lateness by the cost of the same destruction by hand plus 1,000 µs. The frames such an
+  operation freed are zeroed by an idle hart, one frame a pass with interrupts off (about 30 µs),
+  only while every hart is idle, and on demand by an allocation that finds no free frame
+  ([frames in flight](memory.md#frames-in-flight)), so the zeroing adds at most one frame to an
+  interrupt's wait, on any hart count.
 - **Every process has a perfect clock.** `rdtime` resolves single ticks and `time_now` single
   microseconds, and both are free to read. Anything a process can time, it learns. Timing and
   covert channels are out of scope ([TENETS](../TENETS.md#threat-model)).

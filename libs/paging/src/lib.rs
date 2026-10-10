@@ -21,9 +21,9 @@
 //! 2. *A `Table` is always a page table.* One is only created by `Table::at`, whose caller vouches for the
 //!    frame (a root named by `satp`), by `Table::child`, which follows a valid non-leaf entry, or by
 //!    `Slot::install_table`. Non-leaf entries are written only by `install_table`, which zeroes the frame
-//!    first; `Slot::set` refuses them. So every non-leaf entry names a page table, by induction. Tables must
-//!    not be freed while an entry still points at them; that is the caller's obligation and is stated on
-//!    `at`.
+//!    first, or takes it zero from a caller that vouches for it; `Slot::set` refuses them. So every non-leaf
+//!    entry names a page table, by induction. Tables must not be freed while an entry still points at them;
+//!    that is the caller's obligation and is stated on `at`.
 //! 3. *Accesses do not race.* Entries are read and written whole, with volatile accesses through a raw
 //!    pointer; no reference to table memory is ever formed. The callers are single-threaded (the loader) or
 //!    run with interrupts off on one hart (the kernel). SMP must put address-space edits under a lock before
@@ -304,13 +304,22 @@ impl Slot {
     /// Copy an entry verbatim from another root, to share kernel mappings between address spaces.
     pub fn copy_from(self, other: Slot) { self.table.set(self.index, other.get()); }
 
-    /// Point this entry at a new next-level table in the frame at `phys`, and return it.
+    /// Point this entry at a new next-level table in the frame at `phys`, and return it. The frame
+    /// is zeroed here unless `already_zero` (the kernel's allocator gives only zero frames), so it
+    /// is not zeroed twice.
     ///
     /// # Safety
-    /// `phys` must be a freshly allocated RAM frame that nothing else uses. It is zeroed here.
-    pub unsafe fn install_table(self, phys: usize) -> Table {
-        // SAFETY: forwarded from the caller.
-        let table = unsafe { Table::new_in(self.table.window, phys) };
+    /// `phys` must be a freshly allocated RAM frame that nothing else uses, and with
+    /// `already_zero`, every byte of it zero.
+    pub unsafe fn install_table(self, phys: usize, already_zero: bool) -> Table {
+        // SAFETY: forwarded from the caller: a frame zeroed here, or zero already, is an empty table.
+        let table = unsafe {
+            if already_zero {
+                Table::at(self.table.window, phys)
+            } else {
+                Table::new_in(self.table.window, phys)
+            }
+        };
         self.table.set(self.index, Pte::table(phys));
         table
     }

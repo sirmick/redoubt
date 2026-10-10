@@ -41,6 +41,7 @@ pub fn resume(supervisor: bool, thread: &Thread) -> ! {
     assert!(supervisor || !crate::arch::hart::shot_down(), "a hart shot down resumes user mode");
     // Back to user mode, the hart gives up the kernel lock; `kmain` (S-mode) keeps it.
     if !supervisor {
+        crate::reclaim::end_section();
         crate::cell::KERNEL_LOCK.release();
     }
     // SAFETY: `_redoubt_resume_context` (asm) restores all registers from this thread's saved

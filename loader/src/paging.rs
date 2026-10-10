@@ -50,7 +50,7 @@ impl AddressSpace {
         }
         let kernel_l1 = alloc.alloc(pid);
         // SAFETY: `alloc` returns a RAM frame that nothing else uses.
-        unsafe { root.slot(ENTRIES - 1).install_table(kernel_l1) };
+        unsafe { root.slot(ENTRIES - 1).install_table(kernel_l1, false) };
         AddressSpace { root_phys, root, pid }
     }
 
@@ -77,7 +77,7 @@ impl AddressSpace {
                     assert!(table.get(index).is_empty(), "{virt:#x} is inside a superpage");
                     let frame = alloc.alloc(self.pid);
                     // SAFETY: `alloc` returns a RAM frame that nothing else uses.
-                    unsafe { table.slot(index).install_table(frame) }
+                    unsafe { table.slot(index).install_table(frame, false) }
                 }
             };
         }
@@ -119,7 +119,7 @@ impl AddressSpace {
                     assert!(superpage.is_leaf(), "{phys:#x} is not in the physmap");
                     let frame = alloc.alloc(self.pid);
                     // SAFETY: `alloc` returns a RAM frame that nothing else uses.
-                    let child = unsafe { slot.install_table(frame) };
+                    let child = unsafe { slot.install_table(frame, false) };
                     let flags = superpage.flags() - PteFlags::VALID;
                     for index in 0..ENTRIES {
                         let part = superpage.phys() + index * paging::leaf_size(level - 1);
