@@ -26,6 +26,15 @@ Status: built · tested: host:demo::flows
 
 A handle is the authority.
 
+| Part | Where | `unsafe` (pinned) |
+| --- | --- | --- |
+| demo | `demo/src` | 2 |
+| firmware | `bios` | not counted: vendored |
+
+| Ratchet budget | `unsafe` (pinned) |
+| --- | --- |
+| demo: the parser | 2 |
+
 ## Security properties
 
 ### R1 (flow)

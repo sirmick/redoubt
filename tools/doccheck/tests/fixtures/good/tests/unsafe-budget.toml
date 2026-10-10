@@ -1,0 +1,14 @@
+description = "Ratchet on unsafe"
+kind = "unsafe-budget"
+
+[[budget]]
+name = "demo: the parser"
+paths = ["demo/src/parse.rs"]
+max_unsafe = 2
+max_undocumented = 0
+
+[[budget]]
+name = "demo: the rest"
+paths = ["demo/src/lib.rs"]
+max_unsafe = 0
+max_undocumented = 0

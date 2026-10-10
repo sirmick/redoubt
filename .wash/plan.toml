@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 104
+revision = 135
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1613,7 +1613,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["CTX1"]
   body = "Second of three; brief .wash/local/CTX1-brief.md, design .wash/local/CTX1-design.md. A relay program in the context's own budget serves the VM's /dev/cons; the steward hands it each channel's console. 64 KiB buffer, newest kept, a dropped-count line, cut at line boundaries, resize on reattach. Takeover is told on both terminals, with the remote address. Tier A."
   state = "done"
-  revision = 84
+  revision = 112
   overrides = ["2026-10-08: started by Orchestrator before CTX1 (reported), M1 (reported): CTX1 is reported and under its last fold; CTX2 is stacked on it by the orchestrator's ruling", "2026-10-08: started by Orchestrator before M1 (reported): named contexts run ahead of M1's acceptance (owner request 2026-10-08)", "2026-10-09: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the userland track runs ahead of its acceptance", "2026-10-10: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the userland track runs ahead of its acceptance"]
 
 [[node]]
@@ -1624,8 +1624,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["CTX2"]
   body = "Part c of named SSH contexts (brief .wash/local/CTX1-brief.md): the cap of live contexts per (principal, label set), never evicting; idle expiry of detached contexts, configurable per principal with a default; the shell's contexts()/detach()/end_context within the label set; the generation (or end-with-steward) rule on steward restart, chosen at its design checkpoint with costs. Also from CTX1's red: measure rule 3's timing (an unknown principal, label set or non-name is refused before any machine runs; a wrong key on a known principal runs the blame and session machines before login_key refuses it, counting nothing) at the SSH client, and equalize it if it is distinguishable above jitter."
   state = "active"
-  revision = 85
-  overrides = ["2026-10-10: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the userland track runs ahead of its acceptance"]
+  revision = 135
+  overrides = ["2026-10-10: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the userland track runs ahead of its acceptance", "2026-10-10: started by Orchestrator before CTX2 (reported), M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the userland track runs ahead of its acceptance"]
 
 [[node]]
   id = "B39"
@@ -1728,9 +1728,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "smp"
   needs = ["SMP2"]
   body = "Cut from SMP2: beamlet on the machine runs one scheduler thread (docs/userland/beamlet.md); give a session's VM N schedulers on N harts and a case measuring a parallel Elixir workload's throughput at 2 harts against 1 on both widths, with the VM's heap and the session budget unchanged. Design checkpoint first (scheduler threads vs the I/O hub, locks in the VM, budgets per thread)."
-  state = "active"
-  revision = 86
-  overrides = ["2026-10-10: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the several-harts track runs ahead of its acceptance"]
+  state = "done"
+  revision = 134
+  overrides = ["2026-10-10: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the several-harts track runs ahead of its acceptance", "2026-10-10: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; the several-harts track runs ahead of M1's acceptance"]
 
 [[node]]
   id = "B44"
@@ -1791,8 +1791,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "smp"
   needs = ["SMP6"]
   body = "M2 page 'Several harts' step 6: per-hart magazines refilled from the bitmap under the lock and drawn from with interrupts off; frames zeroed as they enter a magazine, by step 5's in-flight rule. Attack case: a hart racing to allocate, map or free a frame in a magazine. Tier A: the kernel red."
-  state = "todo"
-  revision = 2
+  state = "active"
+  revision = 120
+  overrides = ["2026-10-10: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; the several-harts track runs ahead of M1's acceptance"]
 
 [[node]]
   id = "RCMD2"
@@ -1821,9 +1822,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "smp"
   needs = ["SMP4"]
   body = "M2 page 'Several harts' step 5, reworded by measurement: zero on reclaim (freed frame -> in flight -> zeroed outside the lock by the freeing hart -> bitmap; allocation zeroes nothing), not zero on allocate. The in-flight invariant as a rule beside R11, with the model's rule and a mutation, and an attack case (a second hart racing to allocate, map or free an in-flight frame). Shootdown waits stay under the lock (measured ~0), a residual. Kernel: Tier A."
-  state = "active"
-  revision = 2
-  overrides = ["2026-10-09: started by Orchestrator before M1 (reported): several-harts track runs ahead of M1's acceptance", "2026-10-09: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; the several-harts track runs ahead of M1's acceptance"]
+  state = "done"
+  revision = 117
+  overrides = ["2026-10-09: started by Orchestrator before M1 (reported): several-harts track runs ahead of M1's acceptance", "2026-10-09: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; the several-harts track runs ahead of M1's acceptance", "2026-10-10: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; the several-harts track runs ahead of M1's acceptance"]
 
 [[node]]
   id = "B45"
@@ -1966,8 +1967,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "smp"
   needs = ["SMP6"]
   body = "From BEAM19's exact instruction counts (.wash/local/BEAM19-report.md; QEMU exec log weighted by block length, icount shift=3, rv64 smp 1): while a session's VM runs a tight loop, each kernel entry (the timer interrupt at the slice, the scheduler's pick and return) costs about 12,000 kernel instructions, about 20 % of the hart. Measure the entry's parts with the kernel's trace and the exec log (trap save/restore, the lock, the pick, billing, reconcile marks, audits in a checked build vs none in release, the return), find what is proportional to nothing the entry does, and cut it; a reductions-per-second case already exists (beamlet-reduction-rate) and a kernel-side bound (instructions or ticks per entry, measured in the oracle net of audits) is the gate on both widths. Nothing changes in any rule; the scheduler's targets hold. Kernel: Tier A, the kernel red."
-  state = "todo"
-  revision = 76
+  state = "active"
+  revision = 118
+  overrides = ["2026-10-10: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; the several-harts track runs ahead of M1's acceptance"]
 
 [[node]]
   id = "B49"
@@ -1988,3 +1990,50 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "From B47's review (steward-red, .wash/qa/B47-stale-close.md and the B47 renewal): B47's Life covers the handles the VM minted and those returned through servers launched under a budget, but a request's handles arrive with no Life because the kernel tells a receiver badge, account and labels, never the sender's budget. So a program in a VM-carved budget that holds a VM-served endpoint (Elixir can pass one in launch.handles; no shell path does today) and sends a handle it minted can, after its budget is destroyed, make a later collection close a reused index in the session's own table: not the startup handles (console, steward, namespace are Owned::kept, never freed), but a sibling job's budget (its destroy then fails, pages leak), a piped or stage connection, or the VM's internal endpoints (a waiter's wake, a serve thread's, a job's exit endpoint), which can hang or break the session. No widening beyond the session, but more than such a program is given. Guard: when launch.handles passes a served endpoint into a launch in a carved budget, mint a fresh badge on the receive right the VM holds (serve.rs mints there already) and map badge -> that budget's Life; a request's handles from that badge go under the Life, or are closed eagerly at the budget's end. Host test: a launched program sends a minted handle, its budget is destroyed, a collection closes nothing at that index; a machine case under pipe-eight's setup. beamlet.md's residual becomes the rule. userland/otp: Tier A, the steward red. The kernel handle generation (owner's decision pending) is the construction fix for the whole class; this is the VM's own guard either way."
   state = "todo"
   revision = 98
+
+[[node]]
+  id = "K32"
+  title = "docs/kernel/README.md's TCB unsafe split is stale: the counts per crate no longer match the ratchet, and SMP6 moves Sv39's to 11"
+  template = "package"
+  parent = "smp"
+  needs = ["SMP6"]
+  body = "Found by SMP6 (its report and kernel-red's renewal): the TCB table on docs/kernel/README.md that splits the kernel's `unsafe` by crate and reason was stale before SMP6 and SMP6 changes it again (Sv39 to 11). Make the page's split derive from, or be checked against, tests/unsafe-budget.toml's ratchet (a docs check that fails when the two disagree, as the size budget's does), correct the numbers, and say on the page how the split is kept true. Docs and tooling: Tier B, one reviewer."
+  state = "done"
+  revision = 128
+  overrides = ["2026-10-10: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; the several-harts track runs ahead of M1's acceptance"]
+
+[[node]]
+  id = "B51"
+  title = "steward-home-quota under the bench's load: after the home is full, File.rm answers {:error, :eio} and the case runs to its 610 s deadline on both widths"
+  template = "package"
+  parent = "M2"
+  body = "Seen in train 17's whole bench on 98b866854 (CTX2, B47, B46, B49): steward-home-quota failed on rv64 and rv32 alike at step 9, `File.rm(\"/home/alice/a\")` after alice's home reached enospc answered `{:error, :eio}` (the alice ssh log shows it), and the case waited for `{:rm, :ok}` to its 610 s deadline. Alone, the same case passes in ~225 s on c7efc9b67 and a4c093827 (bisect, .tmp/train-17b/bisect.log), so the failure needs the bench's load (the net class runs one at a time, beside boots). An rm answering eio is wrong under any load: find where eio arises (walfsd's write path when the volume is full and a request is slow or retried; beamlet's files.rs retry after a busy answer (BEAM11); B47's Io release of an ended connection racing a late message; the 9P client's timeout mapped to eio) with a trace of the failing run (reproduce by running the case beside two or three boots), fix it, and make the case's wait for the rm bounded by its own step deadline rather than the case's. Both widths. Tier A if the fix is in a server or beamlet's platform (steward-red), else Tier B."
+  state = "todo"
+  revision = 116
+
+[[node]]
+  id = "B52"
+  title = "./test-shell has a test that fails about 2 runs in 30 on main: find the race and make it a verdict"
+  template = "package"
+  parent = "M2"
+  body = "Seen by BEAM18 (.wash/local/BEAM18-report.md names the test): ./test-shell failed once on a test that also fails about 2 of 30 runs on main 98b866854, and passed on rerun. A flaky host test costs every shell package a rerun and hides a real race. Reproduce with 30 runs on main (both VMs: beamlet and the BEAM), find the race (the driver's console fixture, a timing assumption, a shared temp dir), fix the test or the code, and show 60 clean runs. Tests only unless the code is at fault (then the owning page's tier). Tier B, one reviewer."
+  state = "todo"
+  revision = 123
+
+[[node]]
+  id = "B53"
+  title = ".wash/save.sh pushes main whenever it saves: a --local-only mode snapshots .wash/local and the wp-* branches without publishing an unbenched main"
+  template = "package"
+  parent = "M2"
+  body = "The orchestrator could not run .wash/save.sh for most of 2026-10-09/10: step 3 pushes main fast-forward unconditionally, and main held a train whose bench had not run (SWARM: a push follows the train's bench), so saving .wash/local meant copying save.sh's step 5 by hand. Also, step 1 refuses on any dirty worktree, including members' scratch worktrees under .tmp (measurement exports), which stalled saves for hours. Add `--local-only` (steps 4 and 5: wp-* branches and the wash-local snapshot; never main), make step 1 ignore worktrees under .tmp/ (scratch by the project's rule) while still refusing dirty .worktrees/*, and say both on SWARM.md 'Saving and resuming' and PROJECT.md. Tooling: Tier B, one reviewer; the owner owns save.sh so the change is proposed to the owner before merge."
+  state = "todo"
+  revision = 125
+
+[[node]]
+  id = "B54"
+  title = "redoubt-doccheck's C11 fixture tests fail under a plain `cargo test` (C11 did not fire) while the bench's docs case passes: an environment dependence in the fixtures"
+  template = "package"
+  parent = "M2"
+  body = "Noted by kernel-red while reviewing K32 (its K32 result): run directly as `cargo test -p redoubt-doccheck` in the reviewer's shell, c11_code, untracked_code_is_not_checked and narrow_cases_fire fail with 'C11 did not fire', while `cargo testbench docs` passes in the same worktree. C11 checks package ids in code; its fixtures appear to depend on the environment (a git checkout state, the tmp dir, the working directory). Reproduce both ways, find the dependence, and make the tests pass from any directory and shell the project supports (through q too); say on docs/testbench.md how doccheck's tests are run. Tests/tooling only: Tier B, one reviewer."
+  state = "todo"
+  revision = 129

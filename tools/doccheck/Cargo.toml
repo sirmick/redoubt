@@ -9,3 +9,6 @@ publish = false
 [[bin]]
 name = "doccheck"
 path = "src/main.rs"
+
+[dependencies]
+toml = "0.8"
