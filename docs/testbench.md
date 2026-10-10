@@ -1372,7 +1372,10 @@ doc comment of an `unsafe fn` or `unsafe impl`, in the comment block directly ab
 few lines. The case counts both and fails if either is over.
 Budgets only go down. Raising either limit, dropping a budget or narrowing its paths needs a line
 `Unsafe budget: <name>: <reason>` in the commit that does it, which the case reads the way the
-size budget reads its own ([below](#the-size-budget)), with the same history check.
+size budget reads its own ([below](#the-size-budget)), with the same history check. A page that
+quotes the ceilings, in a `` `unsafe` (pinned) `` column like the
+[kernel's TCB table](kernel/README.md#the-tcb-and-its-size), is held to them by the docs checker
+([below](#what-it-checks)), so a ceiling cannot move without the page.
 
 A configured path with no Rust source in it fails. So does coverage left out: every workspace
 member that can be built for the target (its crate root is `no_std`) must have each of its Rust
@@ -1652,11 +1655,12 @@ configuration for everything under `tests/`.
 
 ### What it checks
 
-<details><summary>Status: built · partly tested: no bench case runs it yet; it is run by hand before every change to the book · tested (5)</summary>
+<details><summary>Status: built · partly tested: no bench case runs it yet; it is run by hand before every change to the book · tested (6)</summary>
 
 - host:redoubt-doccheck::good_tree_is_clean
 - host:redoubt-doccheck::narrow_cases_fire
 - host:redoubt-doccheck::c1_reports_each_failure
+- host:redoubt-doccheck::c13_reports_each_failure
 - host:redoubt-doccheck::pages_scope_keeps_only_the_listed_pages
 - host:redoubt-doccheck::pages_scope_keeps_a_directory
 
@@ -1670,8 +1674,11 @@ every section has one well-formed status line and every test it names exists; th
 their names; that no page carries process references; that every rule ID is defined once and cited
 by its short name; that every relative link resolves; that the [security register](SECURITY.md)
 agrees with the pages; that no binary sits under `docs/`; that pages keep their templates; that
-every wire table is included once; and that every page is in the table of contents. Each rule has a
-small bad tree it must fire on and a good one it must not. `mdbook build docs` renders the book.
+every wire table is included once; that every page is in the table of contents; and that every
+count in a `` `unsafe` (pinned) `` column equals the ceilings in `unsafe-budget.toml`
+([the unsafe budget](#the-unsafe-budget)), summed over the budgets under a row's `Where` paths or
+read by the name in its `Ratchet budget` cell. Each rule has a small bad tree it must fire on and a
+good one it must not. `mdbook build docs` renders the book.
 
 ### The docs checker in the bench
 

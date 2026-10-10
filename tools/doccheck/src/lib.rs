@@ -1,6 +1,6 @@
-//! The docs checker: holds the pages to the style guide's rules C1..C12 (status lines, tests,
+//! The docs checker: holds the pages to the style guide's rules C1..C13 (status lines, tests,
 //! milestones, process references, rule IDs, links, the security register, no binaries,
-//! templates, wire tables, code comments, the table of contents).
+//! templates, wire tables, code comments, the table of contents, pinned `unsafe` counts).
 //!
 //! Markdown is read line by line: fenced blocks (```` ``` ```` or `~~~`) are tracked, and a
 //! heading is a line starting `#`..`######` and a space, outside a fence. Patterns are matched
@@ -70,6 +70,7 @@ pub fn check(root: &Path, scope: Scope) -> Vec<Finding> {
     no_binaries(&mut c);
     wire_tables(&mut c, &pages);
     summary(&mut c, &pages);
+    pinned_unsafe(&mut c, &pages);
     if scope.code {
         code(&mut c, &defs);
     }
@@ -308,7 +309,7 @@ fn has_phrase(lower: &str, phrase: &str) -> bool {
 /// Words that look like commit hashes and are not.
 const NOT_HASHES: [&str; 1] = ["ed25519"];
 
-/// C4's patterns; commit hashes only when `hashes`. With `checker`, `C1`..`C12` are this
+/// C4's patterns; commit hashes only when `hashes`. With `checker`, `C1`..`C13` are this
 /// checker's rule names, not package IDs (the page that documents the checker). One message per
 /// match.
 fn process_refs(s: &str, hashes: bool, checker: bool) -> Vec<String> {
@@ -333,7 +334,7 @@ fn process_refs(s: &str, hashes: bool, checker: bool) -> Vec<String> {
         } else if checker
             && w.strip_prefix('C')
                 .and_then(|n| n.parse::<u8>().ok())
-                .is_some_and(|n| (1..=12).contains(&n) && !w.starts_with("C0"))
+                .is_some_and(|n| (1..=13).contains(&n) && !w.starts_with("C0"))
         {
         } else if PACKAGES.iter().any(|p| w.strip_prefix(p).is_some_and(|r| digits_then(r, true))) {
             out.push(format!("package ID `{w}`"));
@@ -1147,4 +1148,122 @@ fn summary(c: &mut Ctx, pages: &[Page]) {
             c.err(12, &p.path, 1, "page is not linked from docs/SUMMARY.md".into());
         }
     }
+}
+
+// ---- C13: pinned `unsafe` counts ----
+
+/// The header of a column of `unsafe` counts that `tests/unsafe-budget.toml` pins.
+const PINNED: &str = "`unsafe` (pinned)";
+const UNSAFE_BUDGET: &str = "tests/unsafe-budget.toml";
+
+/// One `[[budget]]` of the unsafe budget: its name, paths and ceiling.
+struct UnsafeBudget {
+    name: String,
+    paths: Vec<String>,
+    max: i64,
+}
+
+/// Every table with a `` `unsafe` (pinned) `` column agrees with the unsafe budget's ceilings
+/// (docs/testbench.md, "The unsafe budget"). A `Where` column names a row's paths, and the row
+/// counts every budget whose paths all lie under them; a `Ratchet budget` column names one budget
+/// exactly. A count is a number, or `not counted: ...`.
+fn pinned_unsafe(c: &mut Ctx, pages: &[Page]) {
+    let mut budgets = None;
+    for p in pages {
+        let table = |i: usize| !p.fenced[i] && p.lines[i].trim_start().starts_with('|');
+        for h in (0..p.lines.len()).filter(|&h| table(h)) {
+            let header = cells(&p.lines[h]);
+            let Some(at) = header.iter().position(|x| x == PINNED) else { continue };
+            let by_path = header.iter().position(|x| x == "Where");
+            let by_name = header.iter().position(|x| x == "Ratchet budget");
+            let Some(key) = by_path.or(by_name) else {
+                c.err(
+                    13,
+                    &p.path,
+                    h + 1,
+                    format!("a {PINNED} table needs a `Where` or `Ratchet budget` column"),
+                );
+                continue;
+            };
+            let list = match budgets.get_or_insert_with(|| unsafe_budgets(c.root)) {
+                Ok(list) => list,
+                Err(e) => {
+                    c.err(13, &p.path, h + 1, e.clone());
+                    continue;
+                }
+            };
+            for i in (h + 1..p.lines.len()).take_while(|&i| table(i)) {
+                let row = cells(&p.lines[i]);
+                if row.iter().all(|x| x.chars().all(|ch| matches!(ch, '-' | ':' | ' '))) {
+                    continue;
+                }
+                let (Some(count), Some(cell)) = (row.get(at), row.get(key)) else {
+                    c.err(13, &p.path, i + 1, format!("row has {} cells, not {}", row.len(), header.len()));
+                    continue;
+                };
+                if count.starts_with("not counted") {
+                    continue;
+                }
+                let Ok(count) = count.parse::<i64>() else {
+                    c.err(13, &p.path, i + 1, format!("`{count}` is neither a count nor `not counted`"));
+                    continue;
+                };
+                let pinned = if by_path.is_some() {
+                    pinned_under(list, &code_spans(cell))
+                } else {
+                    let name = cell.replace('`', "");
+                    list.iter()
+                        .find(|b| b.name == name)
+                        .map(|b| b.max)
+                        .ok_or(format!("no budget named `{name}` in {UNSAFE_BUDGET}"))
+                };
+                match pinned {
+                    Ok(pinned) if pinned != count => c.err(
+                        13,
+                        &p.path,
+                        i + 1,
+                        format!("{cell}: {count}, but {UNSAFE_BUDGET} pins {pinned}"),
+                    ),
+                    Ok(_) => {}
+                    Err(e) => c.err(13, &p.path, i + 1, format!("{cell}: {e}")),
+                }
+            }
+        }
+    }
+}
+
+/// The sum of the ceilings of the budgets under `paths`; a budget only partly under them is an
+/// error, since the row would count some of its `unsafe` and not the rest.
+fn pinned_under(list: &[UnsafeBudget], paths: &[String]) -> Result<i64, String> {
+    let under = |b: &str| paths.iter().any(|p| b == p || b.starts_with(&format!("{p}/")));
+    let mut sum = None;
+    for b in list {
+        let inside = b.paths.iter().filter(|x| under(x)).count();
+        if inside == b.paths.len() {
+            *sum.get_or_insert(0) += b.max;
+        } else if inside > 0 {
+            return Err(format!("budget `{}` lies only partly under the row's paths", b.name));
+        }
+    }
+    sum.ok_or(format!("no budget in {UNSAFE_BUDGET} lies under the row's paths"))
+}
+
+/// The contents of each `` `...` `` span in `s`.
+fn code_spans(s: &str) -> Vec<String> { s.split('`').skip(1).step_by(2).map(str::to_string).collect() }
+
+fn unsafe_budgets(root: &Path) -> Result<Vec<UnsafeBudget>, String> {
+    let text = fs::read_to_string(root.join(UNSAFE_BUDGET)).map_err(|e| format!("{UNSAFE_BUDGET}: {e}"))?;
+    let doc: toml::Table = text.parse().map_err(|e| format!("{UNSAFE_BUDGET}: {e}"))?;
+    let bad = || format!("{UNSAFE_BUDGET}: each [[budget]] needs a name, paths and max_unsafe");
+    let list = doc.get("budget").and_then(|b| b.as_array()).ok_or_else(bad)?;
+    list.iter()
+        .map(|b| {
+            let name = b.get("name").and_then(|x| x.as_str()).ok_or_else(bad)?;
+            let paths = b.get("paths").and_then(|x| x.as_array()).ok_or_else(bad)?;
+            let paths: Result<_, _> =
+                paths.iter().map(|x| x.as_str().map(str::to_string).ok_or_else(bad)).collect();
+            let max = b.get("max_unsafe").and_then(|x| x.as_integer()).ok_or_else(bad)?;
+            Ok(UnsafeBudget { name: name.to_string(), paths: paths?, max })
+        })
+        .collect()
 }

@@ -271,7 +271,7 @@ under load, against one party that tries them all at once.
 
 ## The TCB and its size
 
-Status: built · partly tested: the inclusive line counts in the table are snapshots, not pinned by a case · tested: bench:unsafe-budget, bench:size-budget, host:testbench::actual_source_counts_still_enforce_the_budget, host:testbench::every_configured_root_must_contain_rust_source
+Status: built · partly tested: the inclusive line counts in the table are snapshots, not pinned by a case · tested: bench:unsafe-budget, bench:docs, bench:size-budget, host:testbench::actual_source_counts_still_enforce_the_budget, host:testbench::every_configured_root_must_contain_rust_source
 
 The trusted computing base (TCB) is the code whose failure can break Redoubt's guarantees: the
 firmware interface, the loader and the kernel, with the libraries they link, plus any server that
@@ -305,6 +305,11 @@ but which holds no `unsafe` keyword. `redoubt-sys`'s three are the `ecall` itsel
 `unsafe trait Transport` whose contract the runtime's `unsafe` rests on, and `Ecall`'s
 implementation of it. `redoubt-layout`, `redoubt-stride` and `redoubt-signing` say
 `#![forbid(unsafe_code)]`, so their budgets can only stay at 0.
+
+The `unsafe` counts on this page are kept true by the docs checker: every count in a
+`` `unsafe` (pinned) `` column must equal the ceilings in `tests/unsafe-budget.toml`, summed over
+the budgets under a row's paths or read by a row's budget name, so a change to a ceiling fails
+`bench:docs` until this page follows it ([docs checker](../testbench.md#what-it-checks)).
 
 `bench:unsafe-budget` does not boot. It counts every use of the word `unsafe` outside a `//`
 comment in each budget's paths, and fails if a count is over its ceiling, or if any use lacks a

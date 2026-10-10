@@ -668,6 +668,9 @@ dependencies = [
 [[package]]
 name = "redoubt-doccheck"
 version = "0.1.0"
+dependencies = [
+ "toml",
+]
 
 [[package]]
 name = "redoubt-erofsd"

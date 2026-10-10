@@ -1,0 +1,26 @@
+description = "Ratchet on unsafe"
+kind = "unsafe-budget"
+
+[[budget]]
+name = "kernel: core"
+paths = ["kernel/src/main.rs"]
+max_unsafe = 1
+max_undocumented = 0
+
+[[budget]]
+name = "kernel: arch"
+paths = ["kernel/src/arch"]
+max_unsafe = 1
+max_undocumented = 0
+
+[[budget]]
+name = "a and b"
+paths = ["servers/a/src", "servers/b/src"]
+max_unsafe = 0
+max_undocumented = 0
+
+[[budget]]
+name = "loader"
+paths = ["loader/src"]
+max_unsafe = 2
+max_undocumented = 0

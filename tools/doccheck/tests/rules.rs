@@ -61,6 +61,7 @@ fires! {
     c10_wire_tables: 10, "c10";
     c11_code: 11, "c11";
     c12_summary: 12, "c12";
+    c13_pinned_unsafe: 13, "c13";
 }
 
 /// C1's failures on one page: no status, malformed, double, stray and misplaced lines, and a
@@ -69,6 +70,15 @@ fires! {
 fn c1_reports_each_failure() {
     let lines: BTreeSet<usize> = run("c1").iter().filter(|f| f.rule == 1).map(|f| f.line).collect();
     assert_eq!(lines, BTreeSet::from([3, 7, 9, 17, 23, 25, 27, 29]));
+}
+
+/// C13's failures on one page: a count the ceilings disagree with, a budget only partly under a
+/// row's paths, a count that is not one, a budget named that does not exist, and a table that
+/// names its rows by neither paths nor budgets.
+#[test]
+fn c13_reports_each_failure() {
+    let lines: BTreeSet<usize> = run("c13").iter().filter(|f| f.rule == 13).map(|f| f.line).collect();
+    assert_eq!(lines, BTreeSet::from([5, 6, 7, 11, 13]));
 }
 
 /// `beyond` excuses only M6 (C3); a part of a rule must repeat its name (C5); generated and
