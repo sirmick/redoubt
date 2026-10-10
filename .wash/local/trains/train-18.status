@@ -1,2 +1,8 @@
 train-18 open 2026-10-10T03:57:57Z: SMP6 58326f13c (above train 17 tip 98b866854, unpushed pending its bench verdict)
 train-18 +K32 2026-10-10T04:11:54Z: 23d8ce412
+train-18 +BEAM18 2026-10-10T04:36:05Z: 4b84112f2 (tip; cut at three: SMP6, K32, BEAM18); whole bench in .worktrees/train-18, log .tmp/train-18/bench.log
+train-18 bench 2026-10-10T04:56:24Z: bench-elixir-oracles-broken-guard hit its 46 s deadline under load, passed alone in 2.4 s (B55 filed); bench continuing
+train-18 bench 2026-10-10T04:56:53Z: launch-idle rv64 smp4 FAIL: 119.1 interrupts/s per hart over the ceiling (9): a regression (SMP6 idle drain or BEAM18); bisecting 58326f13c (SMP6) vs 4b84112f2 (tip)
+train-18 REBUILT 2026-10-10T05:10:20Z: K32 246f388dc, BEAM18 90fe594b5 (tip) on 98b866854; BEAM18 commit 5 re-resolved (m2 page: its clause without SMP6 sentence); bench .worktrees/train-18b
+train-18 (with SMP6) final 2026-10-10T05:28:51Z: see failures above in the log; superseded by the rebuild
+train-18 REBUILT again 2026-10-10T05:30:03Z: K32 docs counts set to the ratchet without SMP6 (kernel 39, Sv39 13; was 37/11 on SMP6): K32 70c332015, BEAM18 04b7fa4d5 (tip); docs PASS; bench restarted

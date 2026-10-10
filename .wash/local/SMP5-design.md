@@ -247,3 +247,21 @@ sections' other work, not by zeroing, which was 15 s only while `kframe::zero` c
   "return" (recommended), rather than given back whenever every hart idles.
 - **Q4.** A new case `smp-magazine-race`, rather than a second phase of `smp-inflight-race` (which
   would lengthen a 2-hart case already near its timeout).
+
+## 9. Assumptions on SMP6's idle path (for the rebase onto SMP6's fixed head)
+
+Option X does not touch `arch/riscv/mod.rs::idle` nor `reclaim::take_one`/`zero_taken`. It relies on:
+
+1. `mem::entered()` runs at every acquisition that starts a section: the trap from user mode
+   (`irq.rs`) and `idle`'s re-acquire (`mod.rs`). SMP5 adds `refill_found()` there, before
+   `commit`: the hart's refill enters its magazine, or goes back, at the next entry, whichever path
+   it is. If the idle path's re-acquire moves or stops calling `entered()`, the refill of a section
+   that ended in idle is given back one entry later: still correct, nothing billed.
+2. `reclaim::wait_done()`'s halt condition is shared: SMP5 adds "and no hart's refill is zeroed"
+   (`fill_state == ZEROED`) to "every done list empty", and `refill()` wakes `WANT` like
+   `zero_taken`. A change to the drain's halt condition is merged by keeping both clauses.
+3. Pending lists are popped only under the lock (`pop_own`, beside `take_one`/`pop_pending`), and a
+   pending frame's payer debt comes off through `sched::zeroed_here` (at the next entry, for a
+   refill zeroed; at a steal), as an on-demand zeroing does.
+4. `MemoryManager::in_flight` counts only `IN_FLIGHT` frames; a refill from pending decrements it,
+   an unzeroed refill given back increments it and re-pends the frame (`reclaim::pend`).
