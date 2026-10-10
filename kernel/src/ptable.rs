@@ -143,7 +143,14 @@ impl Process {
 
     /// How many threads wait for the CPU: those of [`Process::ready_threads`], and one for a
     /// process being set up. The scheduler counts them for its budget (`sched.rs`).
-    pub fn ready_count(&self) -> u32 { self.ready_threads().map_or(1, |x| x.iter().count() as u32) }
+    pub fn ready_count(&self) -> u32 {
+        // As `ready_threads` says, without copying the mask out: a reconcile counts often.
+        match &self.state {
+            ProcessState::Ready(x) | ProcessState::Running(x) => x.count() as u32,
+            ProcessState::Setup { .. } => 1,
+            _ => 0,
+        }
+    }
 
     /// Every change of state goes through here: one that changes how many threads wait for the
     /// CPU (a thread becomes ready or stops being, the process starts or ends) marks the process

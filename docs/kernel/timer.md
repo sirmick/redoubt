@@ -37,11 +37,12 @@ a time never fires before `time_now` reaches it.
 
 ### The hart timer
 
-<details><summary>Status: built · partly tested: that a stale early hint costs one early interrupt and misses nothing is argued from the code, not attacked · tested (4)</summary>
+<details><summary>Status: built · partly tested: that a stale early hint costs one early interrupt and misses nothing is argued from the code, not attacked · tested (5)</summary>
 
 - bench:timeouts
 - bench:budget-deadline
 - bench:sched-share
+- bench:sched-timer-entry
 - mutation:TimeoutIgnoredWhileOthersRun
 
 </details>
@@ -57,9 +58,13 @@ The last two are hints, and a hint is only ever early. A thread that blocks with
 new deadline, lowers it at once; a call that does not block lowers nothing. A wait that ends
 before its timeout, or a budget destroyed by hand, leaves it where it was. A stale hint costs one
 early interrupt and one walk, which recomputes it; nothing is missed. The
-kernel re-arms only when the earliest time changes, through the SBI TIME extension
-(`kernel/src/arch/riscv/timer_sbi.rs`): one `ecall` to the firmware per arming. With nothing
-due at all (the kernel idle, no timeouts, no deadlines) the timer is set to never.
+kernel re-arms only when the earliest time changes, and only on its way to where a timer
+interrupt can be taken: the return to user mode, `kmain`'s idle, and a timer interrupt taken in
+that idle, which returns there. What changes the earliest time in between (a call that blocks
+with a timeout, a new deadline, a slice's end, the interrupt that fired) only records it. So a
+preemption arms the timer once, at the return to the thread `kmain` picks. Each arming is one
+`ecall` to the firmware, through the SBI TIME extension (`kernel/src/arch/riscv/timer_sbi.rs`).
+With nothing due at all (the kernel idle, no timeouts, no deadlines) the timer is set to never.
 
 While a user thread runs, its slice end is always pending. So the kernel is always entered
 within one slice, whatever the thread does. The kernel itself runs with supervisor interrupts
@@ -162,8 +167,8 @@ deadline gets `Timeout` with its lend consumed, not `Dead` with it returned.
 
 Finding what is due reads the waits with a deadline of each process whose cached earliest
 timeout has come, which each process keeps on a list of its own, and walks the deadline list.
-Both are skipped while the hints are in the future. After expiry the kernel recomputes both hints
-and re-arms.
+Both are skipped while the hints are in the future. After expiry the kernel recomputes both hints,
+and the timer is armed for them on the way out (above).
 
 ### Wall-clock time and time sync
 
