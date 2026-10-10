@@ -168,6 +168,34 @@ pub struct Watch {}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WatchReply {}
 
+/// `contexts`: opcode 14, buffer; reply [`ContextsReply`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Contexts {}
+
+/// The reply to [`Contexts`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ContextsReply<'a> {
+    pub list: &'a str,
+}
+
+/// `detach`: opcode 15, inline; reply [`DetachReply`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Detach {}
+
+/// The reply to [`Detach`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DetachReply {}
+
+/// `end_context`: opcode 16, buffer; reply [`EndContextReply`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EndContext<'a> {
+    pub name: &'a str,
+}
+
+/// The reply to [`EndContext`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EndContextReply {}
+
 /// Requests by opcode.
 const REQUESTS: &[Layout] = &[
     Layout { opcode: 1, inline: false, handles: 2 },
@@ -183,6 +211,9 @@ const REQUESTS: &[Layout] = &[
     Layout { opcode: 11, inline: true, handles: 0 },
     Layout { opcode: 12, inline: true, handles: 0 },
     Layout { opcode: 13, inline: true, handles: 0 },
+    Layout { opcode: 14, inline: false, handles: 0 },
+    Layout { opcode: 15, inline: true, handles: 0 },
+    Layout { opcode: 16, inline: false, handles: 0 },
 ];
 
 /// Every request of the protocol.
@@ -201,6 +232,9 @@ pub enum Message<'a> {
     EndLease(EndLease),
     EndSession(EndSession),
     Watch(Watch),
+    Contexts(Contexts),
+    Detach(Detach),
+    EndContext(EndContext<'a>),
 }
 
 impl<'a> Message<'a> {
@@ -220,6 +254,9 @@ impl<'a> Message<'a> {
             Message::EndLease(_) => &[],
             Message::EndSession(_) => &[],
             Message::Watch(_) => &[],
+            Message::Contexts(_) => &[],
+            Message::Detach(_) => &[],
+            Message::EndContext(_) => &[],
         }
     }
 
@@ -239,6 +276,9 @@ impl<'a> Message<'a> {
             Message::EndLease(_) => 11,
             Message::EndSession(_) => 12,
             Message::Watch(_) => 13,
+            Message::Contexts(_) => 14,
+            Message::Detach(_) => 15,
+            Message::EndContext(_) => 16,
         }
     }
 
@@ -285,6 +325,9 @@ impl<'a> Message<'a> {
             Message::EndLease(m) => w.u64(m.lease),
             Message::EndSession(_) => Ok(()),
             Message::Watch(_) => Ok(()),
+            Message::Contexts(_) => Ok(()),
+            Message::Detach(_) => Ok(()),
+            Message::EndContext(m) => w.string(m.name),
         }
     }
 
@@ -295,6 +338,7 @@ impl<'a> Message<'a> {
             11 => Message::EndLease(EndLease { lease: r.u64()? }),
             12 => Message::EndSession(EndSession {}),
             13 => Message::Watch(Watch {}),
+            15 => Message::Detach(Detach {}),
             _ => return Err(Error::BadOpcode),
         })
     }
@@ -314,6 +358,9 @@ impl<'a> Message<'a> {
             11 => Message::EndLease(EndLease { lease: r.u64()? }),
             12 => Message::EndSession(EndSession {}),
             13 => Message::Watch(Watch {}),
+            14 => Message::Contexts(Contexts {}),
+            15 => Message::Detach(Detach {}),
+            16 => Message::EndContext(EndContext { name: r.string()? }),
             _ => return Err(Error::BadOpcode),
         })
     }
@@ -358,6 +405,9 @@ const REPLIES: &[Layout] = &[
     Layout { opcode: 11, inline: true, handles: 0 },
     Layout { opcode: 12, inline: true, handles: 0 },
     Layout { opcode: 13, inline: true, handles: 0 },
+    Layout { opcode: 14, inline: false, handles: 0 },
+    Layout { opcode: 15, inline: true, handles: 0 },
+    Layout { opcode: 16, inline: false, handles: 0 },
 ];
 
 /// Every successful reply of the protocol, named after its request.
@@ -376,6 +426,9 @@ pub enum Reply<'a> {
     EndLease(EndLeaseReply),
     EndSession(EndSessionReply),
     Watch(WatchReply),
+    Contexts(ContextsReply<'a>),
+    Detach(DetachReply),
+    EndContext(EndContextReply),
 }
 
 impl<'a> Reply<'a> {
@@ -395,6 +448,9 @@ impl<'a> Reply<'a> {
             Reply::EndLease(_) => &[],
             Reply::EndSession(_) => &[],
             Reply::Watch(_) => &[],
+            Reply::Contexts(_) => &[],
+            Reply::Detach(_) => &[],
+            Reply::EndContext(_) => &[],
         }
     }
 
@@ -414,6 +470,9 @@ impl<'a> Reply<'a> {
             Reply::EndLease(_) => 11,
             Reply::EndSession(_) => 12,
             Reply::Watch(_) => 13,
+            Reply::Contexts(_) => 14,
+            Reply::Detach(_) => 15,
+            Reply::EndContext(_) => 16,
         }
     }
 
@@ -444,6 +503,9 @@ impl<'a> Reply<'a> {
             Reply::EndLease(_) => Ok(()),
             Reply::EndSession(_) => Ok(()),
             Reply::Watch(_) => Ok(()),
+            Reply::Contexts(m) => w.string(m.list),
+            Reply::Detach(_) => Ok(()),
+            Reply::EndContext(_) => Ok(()),
         }
     }
 
@@ -454,6 +516,7 @@ impl<'a> Reply<'a> {
             11 => Reply::EndLease(EndLeaseReply {}),
             12 => Reply::EndSession(EndSessionReply {}),
             13 => Reply::Watch(WatchReply {}),
+            15 => Reply::Detach(DetachReply {}),
             _ => return Err(Error::BadOpcode),
         })
     }
@@ -473,6 +536,9 @@ impl<'a> Reply<'a> {
             11 => Reply::EndLease(EndLeaseReply {}),
             12 => Reply::EndSession(EndSessionReply {}),
             13 => Reply::Watch(WatchReply {}),
+            14 => Reply::Contexts(ContextsReply { list: r.string()? }),
+            15 => Reply::Detach(DetachReply {}),
+            16 => Reply::EndContext(EndContextReply {}),
             _ => return Err(Error::BadOpcode),
         })
     }

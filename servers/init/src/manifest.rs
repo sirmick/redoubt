@@ -175,6 +175,17 @@ pub struct Principal {
     /// `home`.
     pub home_quota: Option<u64>,
     pub net: Vec<Net>,
+    /// Its contexts' cap per label set and their idle bound; each absent is the default
+    /// (servers/steward.md, "Contexts").
+    pub contexts: Contexts,
+}
+
+/// A principal's `contexts` in the manifest: `max` live sessions per label set, and the seconds
+/// a detached one lasts.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Contexts {
+    pub max: Option<i64>,
+    pub idle_secs: Option<i64>,
 }
 
 /// Why the file is not a manifest: not strict JSON, or not this structure.
@@ -347,6 +358,13 @@ fn principal(v: &Value) -> Result<Principal, SchemaError> {
             home: m.optional("home", string)?,
             home_quota: m.optional("home_quota", Value::u64_string)?,
             net: list(m, "net", net)?,
+            contexts: m.optional("contexts", contexts)?.unwrap_or_default(),
         })
+    })
+}
+
+fn contexts(v: &Value) -> Result<Contexts, SchemaError> {
+    v.object(|m| {
+        Ok(Contexts { max: m.optional("max", Value::int)?, idle_secs: m.optional("idle_secs", Value::int)? })
     })
 }

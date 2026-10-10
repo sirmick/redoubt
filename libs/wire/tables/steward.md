@@ -4,7 +4,9 @@ A label set travels as `bytes`: each label id as eight bytes, little-endian, in 
 message is accepted only on its badge class: `sshd`'s root badge (`login`, `channel_closed`,
 `approval_opened`, `approval_closed`, `watch`), the approval channel's (`pending`, `approve`, `deny`),
 `init`'s (`blame`), and a session's or an agent's minted badge (`submit`, `start_agent`,
-`end_lease`, `end_session`); on any other it is malformed, as an unknown opcode is.
+`end_lease`, `end_session`, `contexts`, `detach`, `end_context`); on any other it is malformed, as
+an unknown opcode is. `contexts`' list is one line per context of the caller's domain,
+`name<TAB>attached|detached<TAB>seconds`, the default context's name empty.
 
 <!-- ANCHOR: tables -->
 <!-- wire: steward -->
@@ -23,6 +25,9 @@ message is accepted only on its badge class: `sshd`'s root badge (`login`, `chan
 | 11 | `end_lease` | `lease: u64` | - |
 | 12 | `end_session` | - | - |
 | 13 | `watch` | - | - |
+| 14 | `contexts` | - | `list: string` |
+| 15 | `detach` | - | - |
+| 16 | `end_context` | `name: string` | - |
 
 <!-- wire-errors: steward -->
 | Code | Error |

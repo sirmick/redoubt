@@ -15,8 +15,8 @@ use redoubt_rt::server::minted::FIRST_MINTED_BADGE;
 use redoubt_rt::startup::{StartupBuilder, valid_name};
 use redoubt_steward::hash::key_id;
 use redoubt_steward::manifest::{
-    Limits, Manifest as StewardManifest, PrincipalSpec, RESERVED, Sizes, lines as manifest_lines, quote,
-    show_list,
+    Contexts as StewardContexts, Limits, Manifest as StewardManifest, PrincipalSpec, RESERVED, Sizes,
+    lines as manifest_lines, quote, show_list,
 };
 use redoubt_sys::DeviceInfo;
 use stub::MAX_STACK_PAGES;
@@ -752,8 +752,43 @@ fn budgets(m: &Manifest) -> Result<(), Refusal> {
         if let Some((name, _)) = sizes.iter().find(|(_, b)| over(b)) {
             return Err(at(format!("principals[{i}].budget"), Why::Sizes(name)));
         }
+        let fits = holds(p, st) as i64;
+        // The console's session counts against its principal's unlabelled set, so that principal
+        // needs two for one SSH context beside it.
+        let least = if m.console.as_deref() == Some(p.name.as_str()) { 2 } else { 1 };
+        if p.contexts.max.is_some_and(|n| !(least..=MAX_CONTEXTS as i64).contains(&n) || n > fits) {
+            return Err(at(format!("principals[{i}].contexts.max"), Why::Contexts));
+        }
+        if p.contexts.idle_secs.is_some_and(|s| !(MIN_IDLE_SECS as i64..=MAX_IDLE_SECS as i64).contains(&s)) {
+            return Err(at(format!("principals[{i}].contexts.idle_secs"), Why::Contexts));
+        }
     }
     Ok(())
+}
+
+/// The most live contexts a principal may have per label set.
+pub const MAX_CONTEXTS: u64 = 16;
+/// A detached context's idle bound when the manifest gives none: a day.
+pub const IDLE_SECS: u64 = 86_400;
+/// The idle bounds a manifest may give: a minute (for the bench) to a week.
+pub const MIN_IDLE_SECS: u64 = 60;
+pub const MAX_IDLE_SECS: u64 = 604_800;
+
+/// How many sessions one of `p`'s label sets' shares holds: the steward's equal share per domain,
+/// less a budget's own cost, by pages and by processes; at least 1 once the sizes check passed.
+pub fn holds(p: &crate::manifest::Principal, st: &Steward) -> u64 {
+    let n = domains(p) as u64;
+    let z = &st.sizes;
+    let pages = (p.budget.pages / n).saturating_sub(z.cost) / z.session.pages.max(1);
+    let processes = (p.budget.processes as u64 / n) / (z.session.processes as u64).max(1);
+    pages.min(processes)
+}
+
+/// A principal's contexts as the steward is told them: the manifest's `max`, or what a label
+/// set's share holds (at most [`MAX_CONTEXTS`]); its `idle_secs`, or [`IDLE_SECS`].
+pub fn contexts_of(p: &crate::manifest::Principal, st: &Steward) -> (u64, u64) {
+    let max = p.contexts.max.map_or(holds(p, st).min(MAX_CONTEXTS), |n| n as u64);
+    (max, p.contexts.idle_secs.map_or(IDLE_SECS, |s| s as u64))
 }
 
 /// The servers' budgets fit in what `system` has free: pages (each budget's own page included,
@@ -876,6 +911,10 @@ pub fn steward_lines(m: &Manifest, st: &Steward) -> Vec<String> {
                 owned: ids(&p.labels),
                 label_sets: sets,
                 top: limits(&p.budget),
+                contexts: {
+                    let (max, idle_secs) = contexts_of(p, st);
+                    StewardContexts { max, idle_secs }
+                },
             }
         })
         .collect();

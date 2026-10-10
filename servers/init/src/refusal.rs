@@ -78,6 +78,10 @@ pub enum Why {
     Stack,
     /// A heap cap of 0, or one that with the stack does not fit the server's budget.
     Heap,
+    /// A principal's `contexts`: a `max` of 0, over 16, or more sessions than a label set's share
+    /// holds, or below 2 for the console's principal, whose console session takes one; an
+    /// `idle_secs` outside 60 to 604,800.
+    Contexts,
     /// More labels than a budget holds.
     TooManyLabels,
     /// An argument with a NUL, one a `bootfsd` entry may not carry, or one `init` passes itself
@@ -159,6 +163,9 @@ impl fmt::Display for Why {
             Why::Second(program) => return write!(f, "a second {program}, and init calls only one"),
             Why::Sizes(size) => {
                 return write!(f, "a share per label set is smaller than the steward's {size} size");
+            }
+            Why::Contexts => {
+                "a principal's contexts take a max of 1 to 16 that a label set's share holds, 2 at least for the console's principal, and idle_secs of 60 to 604800"
             }
             Why::NotAName => "not a name",
             Why::AccountName => "a principal's or a label's name holds no : or +",
