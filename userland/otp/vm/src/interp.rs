@@ -350,34 +350,42 @@ fn call_native(
     mf: (&crate::atom::Atom, &crate::atom::Atom),
     arity: usize,
 ) -> R<Term> {
-    let mut args = [Term::Nil; 255];
-    for (i, slot) in args.iter_mut().enumerate().take(arity) {
+    // Only the slots the call passes are filled: a whole 255-slot array filled on every call
+    // costs more than most natives do.
+    let mut small = [Term::Nil; SMALL_ARITY];
+    let mut large = Vec::new();
+    let args = if arity <= SMALL_ARITY {
+        &mut small[..arity]
+    } else {
+        large.resize(arity, Term::Nil);
+        &mut large[..]
+    };
+    for (i, slot) in args.iter_mut().enumerate() {
         *slot = as_value(&mut p.heap, p.x[i]);
     }
-    run_native(sys, p, n, mf, &args[..arity])
+    run_native(sys, p, n, mf, args)
 }
 
-/// The code and x registers for calling `fun` (a term of `heap`) with `args`.
-pub(crate) fn fun_entry(
-    sys: &mut impl Code,
-    heap: &mut Heap,
-    fun: Term,
-    mut args: Vec<Term>,
-) -> Result<(Cp, Vec<Term>), Exception> {
-    let Some(f) = heap.as_fun(fun) else {
-        return Err(error_tuple(heap, &sys.atoms().badfun, fun));
-    };
-    if f.arity() as usize != args.len() {
-        let args = heap.list(args);
-        let info = heap.tuple(&[fun, args]);
-        return Err(error_tuple(heap, &sys.atoms().badarity, info));
+/// The most arguments a native call passes without allocating; nearly every native takes fewer.
+const SMALL_ARITY: usize = 8;
+
+/// Why a fun cannot be called.
+enum FunError {
+    BadFun,
+    BadArity,
+    Undef,
+}
+
+/// Where calling `fun` (a term of `heap`) with `arity` arguments enters, checked as BEAM checks
+/// a call. A local fun's captured environment follows the arguments, from `heap.as_fun(fun)`.
+fn fun_target(sys: &mut impl Code, heap: &Heap, fun: Term, arity: usize) -> Result<Cp, FunError> {
+    let Some(f) = heap.as_fun(fun) else { return Err(FunError::BadFun) };
+    if f.arity() as usize != arity {
+        return Err(FunError::BadArity);
     }
     match f {
         FunView::Local { module, index, env, uniq, arity, external, .. } => {
-            let env = env.to_vec();
-            let Some(m) = sys.module(&module) else {
-                return Err(Exception::error(Term::Atom(sys.atoms().undef)));
-            };
+            let Some(m) = sys.module(&module) else { return Err(FunError::Undef) };
             // A fun from another version of the module (or decoded from a binary) must match
             // this version's fun table, and a decoded one this version's checksum, or it is a
             // bad fun.
@@ -388,17 +396,40 @@ pub(crate) fn fun_entry(
                     && e.num_free as usize == env.len()
                     && e.arity == arity + e.num_free
             });
-            let Some(entry) = entry.map(|e| e.entry) else {
-                return Err(error_tuple(heap, &sys.atoms().badfun, fun));
-            };
-            args.extend(env);
-            Ok((Cp { module: m, pc: entry }, args))
+            entry.map(|e| Cp { module: m, pc: e.entry }).ok_or(FunError::BadFun)
         }
         FunView::Export { module, function, arity } => match sys.resolve(&module, &function, arity) {
-            Some(Target::Code(cp)) => Ok((cp, args)),
-            _ => Err(Exception::error(Term::Atom(sys.atoms().undef))),
+            Some(Target::Code(cp)) => Ok(cp),
+            _ => Err(FunError::Undef),
         },
     }
+}
+
+/// The exception for a fun that cannot be called with `args`.
+fn fun_error(sys: &mut impl Code, heap: &mut Heap, e: FunError, fun: Term, args: &[Term]) -> Exception {
+    match e {
+        FunError::BadFun => error_tuple(heap, &sys.atoms().badfun, fun),
+        FunError::BadArity => {
+            let args = heap.list(args.iter().copied());
+            let info = heap.tuple(&[fun, args]);
+            error_tuple(heap, &sys.atoms().badarity, info)
+        }
+        FunError::Undef => Exception::error(Term::Atom(sys.atoms().undef)),
+    }
+}
+
+/// The code and x registers for calling `fun` (a term of `heap`) with `args`.
+pub(crate) fn fun_entry(
+    sys: &mut impl Code,
+    heap: &mut Heap,
+    fun: Term,
+    mut args: Vec<Term>,
+) -> Result<(Cp, Vec<Term>), Exception> {
+    let cp = fun_target(sys, heap, fun, args.len()).map_err(|e| fun_error(sys, heap, e, fun, &args))?;
+    if let Some(FunView::Local { env, .. }) = heap.as_fun(fun) {
+        args.extend_from_slice(env);
+    }
+    Ok((cp, args))
 }
 
 /// How a call continues: `Call` saves a return address, `Last` deallocates the frame first,
@@ -617,7 +648,11 @@ fn apply(sys: &mut Sched<'_>, p: &mut Process, arity: usize, kind: Kind) -> R<Fl
     }
     if arity == 2 {
         let fun = p.x[0];
-        return call_fun(sys, p, fun, args, kind);
+        let n = args.len();
+        for (i, a) in args.into_iter().enumerate() {
+            p.x[i] = a;
+        }
+        return call_fun(sys, p, fun, n, kind);
     }
     let (Term::Atom(m), Term::Atom(f)) = (p.x[0], p.x[1]) else {
         let (m, f) = (p.x[0], p.x[1]);
@@ -630,23 +665,25 @@ fn apply(sys: &mut Sched<'_>, p: &mut Process, arity: usize, kind: Kind) -> R<Fl
     call_mfa(sys, p, &m, &f, n, kind)
 }
 
-fn call_fun(sys: &mut Sched<'_>, p: &mut Process, fun: Term, args: Vec<Term>, kind: Kind) -> R<Flow> {
+/// Call `fun` with the `arity` arguments in x0.., where they stay: a local fun's captured
+/// environment is copied in after them, and nothing else moves.
+fn call_fun(sys: &mut Sched<'_>, p: &mut Process, fun: Term, arity: usize, kind: Kind) -> R<Flow> {
     // An export fun of a native: call the native directly.
-    if let Some(FunView::Export { module, function, arity }) = p.heap.as_fun(fun) {
-        if arity as usize == args.len() {
-            let n = args.len();
-            for (i, a) in args.into_iter().enumerate() {
-                p.x[i] = a;
-            }
-            return call_mfa(sys, p, &module, &function, n, kind);
+    if let Some(FunView::Export { module, function, arity: a }) = p.heap.as_fun(fun) {
+        if a as usize == arity {
+            return call_mfa(sys, p, &module, &function, arity, kind);
         }
     }
-    let (entry, regs) = fun_entry(sys, &mut p.heap, fun, args)?;
-    if regs.len() > X_REGS {
-        return Err(Fault::BadCode("too many arguments"));
-    }
-    for (i, a) in regs.into_iter().enumerate() {
-        p.x[i] = a;
+    let entry = match fun_target(sys, &p.heap, fun, arity) {
+        Ok(cp) => cp,
+        Err(e) => {
+            let args = p.x[..arity].to_vec();
+            return Err(fun_error(sys, &mut p.heap, e, fun, &args).into());
+        }
+    };
+    if let Some(FunView::Local { env, .. }) = p.heap.as_fun(fun) {
+        let regs = p.x.get_mut(arity..arity + env.len()).ok_or(Fault::BadCode("too many arguments"))?;
+        regs.copy_from_slice(env);
     }
     if kind == Kind::Last {
         deallocate(p)?;
@@ -837,6 +874,9 @@ fn remove_handler(p: &mut Process, ins: &InstrView<'_>) -> R {
 
 // ---- the instruction loop ----
 
+/// One instruction. Inlined into [`run`], its one caller, so the registers it saves and its frame
+/// are set up once a time slice rather than once an instruction.
+#[inline(always)]
 fn step(sys: &mut Sched<'_>, p: &mut Process, module: &'static Module) -> R<Flow> {
     let here = p.pc.pc;
     let ins = &module.instr(here).ok_or(Fault::BadCode("pc outside the code"))?;
@@ -1250,14 +1290,15 @@ fn step(sys: &mut Sched<'_>, p: &mut Process, module: &'static Module) -> R<Flow
                 return Err(Fault::BadCode("call_fun arity"));
             }
             let fun = p.x[arity];
-            let args = p.x[..arity].to_vec();
-            return call_fun(sys, p, fun, args, Kind::Call);
+            return call_fun(sys, p, fun, arity, Kind::Call);
         }
         op::CALL_FUN2 => {
             let arity = u(ins, 1)?;
+            if arity >= X_REGS {
+                return Err(Fault::BadCode("call_fun arity"));
+            }
             let fun = src(p, ins, 2)?;
-            let args = p.x[..arity.min(X_REGS)].to_vec();
-            return call_fun(sys, p, fun, args, Kind::Call);
+            return call_fun(sys, p, fun, arity, Kind::Call);
         }
         op::APPLY | op::APPLY_LAST => {
             let arity = u(ins, 0)?;
