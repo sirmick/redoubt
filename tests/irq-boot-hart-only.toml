@@ -21,8 +21,10 @@ expect = [
     '^\[lock-contention\] 1 hammers. searches refused: \d+$',
     '^LATENCY-SAMPLE contention driver_wake \d+ \d+$',
     '^SCHED-LOCK-CONTENTION TEST PASSED$',
-    # The kernel's count: the boot hart claimed every device interrupt.
-    '^external interrupts: claimed by hart \[\d+, 0\], \d+ found nothing$',
+    # The kernel's count: the boot hart claimed every device interrupt, and the other hart's context
+    # took none, not even a claim that found nothing (recorded: claimed by hart [201, 0], found
+    # nothing by hart [0, 0], taken by hart [201, 0], both widths).
+    '^external interrupts: claimed by hart \[\d+, 0\], found nothing by hart \[\d+, 0\], taken by hart \[\d+, 0\]$',
     '^SCHED-TRACE-END \d+ dropped 0$',
 ]
 forbid = ['\[lock-contention\] FAIL']

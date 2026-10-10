@@ -1195,13 +1195,18 @@ read 1.5 and 1.7 ms). With the boot hart alone taking device interrupts they wer
 18.3/19.1 ms: the alarm waited out the boot hart's search, and the woken hart drew its ticket after
 the searcher's next call. `bench:irq-boot-hart-only` is that kernel (`irq-boot-hart-only`, a
 debug-only feature) under the same targets, which the post-check must fail (20.2 ms gross p50 on
-both widths: its hammer lands on the boot hart); a checked build's count of claims by hart at power-off shows its boot hart claiming
-all 201. Which hart idles at two harts follows the boot's timing, and in `sched-lock-contention`
-it is the boot hart (claims 200 and 1), so the count that shows other harts claiming is
-`sched-lock-contention-4`'s, which requires one of them to claim ten or more (59, 3, 137 and 2 on
-rv64; 36, 140, 23 and 2 on rv32). At four harts the p50 is 4.3 ms on rv64 and 5.3 ms on rv32,
-gated; the p99, 59.1 and 58.7 ms, waits for QEMU's turns under `icount` and is recorded there
-([residual risks](#residual-risks)). It is judged where the harts run at once:
+both widths: its hammer lands on the boot hart); a checked build's count at power-off shows its
+boot hart claiming all 201 and the other hart's context taking none (no claim, and no claim that
+found nothing). The count is each hart's: its claims, its claims that found nothing (it trapped
+for an alarm another hart claimed first) and their sum, the alarms its context took. The idle hart
+wins the claims, and which hart idles follows the boot's timing (claims 200 and 1 in one
+`sched-lock-contention` run; 29, 4, 168, 0 and 196, 1, 2, 2 in two `sched-lock-contention-4`
+runs), so the cases require what does not: `sched-lock-contention` and `sched-lock-contention-4`
+that a hart other than the boot hart took ten or more alarms, and `sched-lock-contention-4-mttcg`
+that every hart did. At four harts under `icount` the p50 (4.3 ms on rv64 and 5.3 ms on rv32 in
+one run) and the p99 (59.1 and 58.7 ms) wait for QEMU's turns and are recorded there, not gated
+([residual risks](#residual-risks)): rv32's p50 moved between 5 and 22 ms when a slice's end was
+made cheaper. It is judged where the harts run at once:
 `bench:sched-lock-contention-4-mttcg` runs the same program under QEMU's multi-threaded TCG, in
 host time, and judges the driver wake's net p50 and p99 in searches of the same run alone, which
 the program times before its children start (`one search alone`): at most three at p50 and eight
@@ -1392,13 +1397,17 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   line that rises while the idle hart is halted wakes it on time in virtual time, but the hart runs
   only when the running hart's turn ends, and then draws its ticket behind up to three sections. In
   `sched-lock-contention-4` that leaves the driver wake's p99 at 59.1 ms on rv64 and 58.7 ms on
-  rv32 (other runs read 49.7 and 40.6), so it is recorded there, not gated: every long idle halt
-  began with nothing pending, and the kernel cannot shorten another hart's turn. On harts that run
-  at once the woken hart draws its ticket at the rise, and the four-hart p99 is judged there, under
-  QEMU's multi-threaded TCG ([R78](#r78-fair-kernel-entry)).
+  rv32 (other runs read 49.7 and 40.6), and its p50 at 5 or 22 ms on rv32 as the kernel's
+  timing moves which turn the wake lands behind, so both are recorded there, not gated: every long
+  idle halt began with nothing pending, and the kernel cannot shorten another hart's turn. On harts
+  that run at once the woken hart draws its ticket at the rise, and the four-hart p50 and p99 are
+  judged there, under QEMU's multi-threaded TCG ([R78](#r78-fair-kernel-entry)).
 - **Every hart pays for each device interrupt.** An unmasked source raises the external interrupt
   on every hart's context, so each hart in user mode or idle when it rises traps, and all but one
-  take the kernel lock for a claim that finds nothing. Under multi-threaded TCG at four harts every
+  take the kernel lock for a claim that finds nothing; a hart in the kernel at the rise returns to
+  a source already claimed and masked, and does not trap (`sched-lock-contention-4-mttcg` requires
+  every hart to take ten or more of its 200 alarms; under `icount` a hammer in a search at every
+  rise took none, so `sched-lock-contention-4` requires only another hart's). Under multi-threaded TCG at four harts every
   alarm traps the other three (518 to 577 such entries in a run of 200 alarms, twenty runs), each
   holding the lock about 31 µs (p50; 50 µs at p90): at most three are ahead of a wake, about
   0.15 ms of a p99 of 4 to 12 ms. So it is not routed: sending each source to one idle hart (a busy

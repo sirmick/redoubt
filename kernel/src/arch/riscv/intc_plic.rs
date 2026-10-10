@@ -132,26 +132,31 @@ pub fn pending() -> Option<usize> {
     #[cfg(debug_assertions)]
     match claimed {
         Some(_) => CLAIMS[hart::index()].fetch_add(1, Ordering::Relaxed),
-        None => EMPTY.fetch_add(1, Ordering::Relaxed),
+        None => EMPTY[hart::index()].fetch_add(1, Ordering::Relaxed),
     };
     claimed
 }
 
-/// A checked build's count of the sources each hart claimed, by boot index, and of the claims
-/// that found nothing, for `irq-any-hart` ([`report`]).
+/// A checked build's count, by boot index, of the sources each hart claimed and of its claims that
+/// found nothing, another hart's context having claimed the source first ([`report`]).
 #[cfg(debug_assertions)]
 static CLAIMS: [AtomicU32; MAX_HARTS] = [const { AtomicU32::new(0) }; MAX_HARTS];
 #[cfg(debug_assertions)]
-static EMPTY: AtomicU32 = AtomicU32::new(0);
+static EMPTY: [AtomicU32; MAX_HARTS] = [const { AtomicU32::new(0) }; MAX_HARTS];
 
-/// A checked build's account at `system_reset` (`hart::report`): the claims by hart, the started
-/// harts only.
+/// A checked build's account at `system_reset` (`hart::report`), the started harts only: each
+/// hart's claims, its claims that found nothing, and their sum, the interrupts its context took
+/// whoever claimed them.
 #[cfg(debug_assertions)]
 pub fn report() {
-    let counts = CLAIMS.each_ref().map(|count| count.load(Ordering::Relaxed));
+    let n = hart::started();
+    let claimed = CLAIMS.each_ref().map(|count| count.load(Ordering::Relaxed));
+    let empty = EMPTY.each_ref().map(|count| count.load(Ordering::Relaxed));
+    let took: [u32; MAX_HARTS] = core::array::from_fn(|i| claimed[i] + empty[i]);
     println!(
-        "external interrupts: claimed by hart {:?}, {} found nothing",
-        &counts[..hart::started()],
-        EMPTY.load(Ordering::Relaxed)
+        "external interrupts: claimed by hart {:?}, found nothing by hart {:?}, taken by hart {:?}",
+        &claimed[..n],
+        &empty[..n],
+        &took[..n]
     );
 }
