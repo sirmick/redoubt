@@ -96,7 +96,8 @@ a deadline): the woken thread first runs at a pick, an idle hart's or one after 
 such a reason. `sched-wake-no-preempt` proves it at one hart nap by nap, each against the slice
 that follows it; `sched-wake-no-preempt-harts` judges it at two, each wake at the entry that made
 it, and needs at least five of its sixty wakes answered where they could have preempted, mid-slice
-or at another budget's call (17 to 27 in the runs so far). A kernel built with `wake-preempts`,
+or at another budget's call (11 to 15 on rv32 and 32 to 45 on rv64 in the runs so far, all at a
+call: no wake comes mid-slice, since the other hart is not armed for a newly noted timeout). A kernel built with `wake-preempts`,
 whose timeout wake preempts the entering thread as a deadline does, fails it on both widths, in a
 recorded negative run.
 

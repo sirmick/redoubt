@@ -9,7 +9,14 @@ post_check = "sched_oracle wake_no_preempt=60 wake_witnesses=5"
 smp = [2]
 # The oracle judges each wake at the entry that answered it and needs at least five that could have
 # preempted: answered mid-slice or at another budget's call (kernel/scheduling.md, "Preemption
-# points"). Two harts: at one, sched-wake-no-preempt proves each nap against a slice.
+# points"). Two harts: at one, sched-wake-no-preempt proves each nap against a slice. No wake is
+# mid-slice today: the nap ends while the sleeper's hart is still in the kernel after its call, and
+# the other hart is not armed for a newly noted timeout, so every witness is a spinner's call. Which
+# entry comes first after a nap's end, a call or a slice's end, is the slice's phase: with calls
+# every 100 µs main read 0 mid-slice, 21 at a call and 41 at a slice's end on rv32, and the
+# cheaper slice end 4 to 14 at a call. Every 50 µs, twelve runs a width read 11 to 15 at a call
+# (rv32) and 32 to 45 (rv64); a kernel built with `wake-preempts` fails it on both widths (wake
+# took hart 0 from budget 37, rv32; hart 1 from 34, rv64), a recorded run each.
 keep_smp = true
 timeout_secs = 120
 expect = [
