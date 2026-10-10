@@ -286,3 +286,109 @@ oracle; measured late-a 502); the icount case keeps its 3- and 4-hart judgements
 2-hart ones; scheduling.md's "A woken hart waits for QEMU's turns" residual gets the share case.
 Not the tolerance. No kernel change: K31 bills and arms by rule; re-adding an early re-arm would
 only move QEMU's turn back. Risk: mttcg is host time; one run so far, repeat runs needed.
+
+## Ruling A, delivered (2026-10-10)
+
+Head 9fa080db4 on bab03e8de (base 1fcdd656d). Range-diff: commits 1-3 unchanged (=), one new:
+9fa080db4 tests, docs: sched-capped's two-hart shares are judged where the harts run at once.
+Paths: tools/testbench/src/sched_oracle.rs (new arg hart_shares_from=N: shares recorded on a trace
+of fewer than N harts; host test), tests/sched-capped.toml (hart_shares_from=3; comment with 465/
+449/434, cause, nobody 30->71), tests/sched-capped-mttcg.toml (new, smp 2, no icount; spreads and
+negative in comment), docs/kernel/scheduling.md (status list + count 64, scenarios paragraph,
+holds-floor negative under mttcg, residual "A hart waits for QEMU's turns" gains the share case,
+keep_smp list), docs/testbench.md (sched-capped sentence), docs/SECURITY.md (R12 row).
+No kernel change.
+
+Five runs per width, sched-capped-mttcg, quiet, alone (pre-commit, same settings):
+- rv64: late-a 498-501, late-b/c 249-250, uncap 818-819/90/90, spread 499-500
+- rv32: late-a 497-501, late-b/c 249-251, uncap 818-819/89-91, spread 496-503
+Negative, holds-floor kernel without icount (temp toml, deleted): rv64 late-b 30 late-c 470,
+rv32 31/469, both missed (FAIL).
+
+Gates on 9fa080db4 (a72a8e68b + docs count only): make -k set both widths: sched-capped (rv32
+smp2 late-a 449 "judged from 3 harts: recorded"), sched-capped-holds-floor, sched-timer-entry,
+sched-latency, sched-share, sched-exit-churn, sched-lock-contention, sched-lock-contention-4,
+irq-boot-hart-only, smoke set (userland-boot, init-boot, bench-net-peer, ipc-outcomes,
+sum-clear, lend-untouched-page), host-tests, size-budget, unsafe-budget, formatting: all rc 0.
+docs failed on a72a8e68b (R12 status count 63 and SECURITY row), fixed, amended, docs rc 0.
+Quiet, alone: sched-capped-mttcg and sched-lock-contention-4-mttcg both widths PASS.
+cargo test -p testbench sched_oracle: 55 passed.
+Open: scripts/jobs.mk quiet list lacks sched-capped-mttcg (not my path; asked).
+Summaries checked: docs/kernel/scheduling.md, docs/testbench.md, docs/SECURITY.md updated; README
+and GETTING-STARTED name no sched case counts (no change).
+
+# Train 21: rv32 sched-wake-no-preempt-harts smp=2 (2026-10-10), analysis only
+
+Traces: .tmp/K31/wnp (train21-rv32.log is a later run in that dir; the failing one was pruned).
+Scratch exports: .tmp/K31/main-export (1fcdd656d), .tmp/K31/k31-export (be945cce6 + trial
+constants). Clause: check_wake_no_preempt_harts needs >= wake_witnesses (5) wakes that could have
+preempted: mid-slice (timer interrupt returning to user, O pass 1) or at another budget's call.
+
+| run | mid-slice | at another entry | at a slice's end |
+| --- | ---: | ---: | ---: |
+| main rv32 x3 (deterministic) | 0 | 21 | 41 |
+| K31 rv32 train | 0 | 4 | 58 |
+| K31 rv32 x5 (worktree) | 0 | 6, 8, 9, 9, 14 | 48-56 |
+| K31 rv64 x5 | 0 | 34-37 | 25-28 |
+
+No wake took a hart in any run: the property holds; the precondition is starved.
+Why: the nap (300 µs) ends while the sleeper's hart is still in the kernel after the sleep call
+(rv32 checked build, ~600 µs incl. the other hart's turns) and the other hart's timer is not armed
+for the new timeout, so no wake is ever mid-slice (main too). Each wake is answered at the first
+entry after the deadline: a spinner's call (witness) or a slice end. Wake minus deadline p50:
+main 577 µs, K31 394 (rv32), 224 (rv64): K31's cheaper slice end brings slice ends before the
+calls. Not seed-pinned: K31 rv32 varies 4-14.
+
+Trials (K31 kernel, scratch, program constants):
+- CALL_US 50: rv32 11, 11, 11; rv64 37-45. PASS.
+- NAP_US 2500: rv32 14 mid-slice + 18-19 calls PASS; rv64 FAIL "wake took hart 0 from 37".
+- NAP_US 1500: rv32 FAIL took; rv64 FAIL 60 in kmain.
+The "took" failures are a trace race: trace::timer_entry samples slice_over at the entry's start;
+irq.rs decides slice_over after the expiry. When the slice ends during a long entry, the kernel
+ends the slice (R 40, legitimately) and O records pass 2 ("not over"), which the oracle reads as
+the wake taking the hart (nap1500-rv32-1.log records 1434-1449: I at 253,856, entry to 254,482).
+
+## Trials of kernel-red's direction (scratch exports only; worktree frozen)
+
+Program (scratch): WakeDelay takes a third param, step: nap k = base + (k * step) % 1000 µs;
+the case uses base 130, step 17, CALL_US 37, 60 naps. Witnesses = mid-slice + at another entry.
+
+| kernel | rv32 (3 runs) | rv64 (3 runs) |
+| --- | --- | --- |
+| K31, stepped naps, no trace fix | 22, 23, 22 PASS | 48, 50 PASS; 1 FAIL "took hart 0 from 34" |
+| main, stepped naps, no trace fix | 8, 7, 8 PASS | 40 PASS; 2 FAIL "took hart" |
+| K31, stepped + trace fix | 15, 23, 22 PASS | 47, 49, 49 PASS |
+| main, stepped + trace fix | 10, 10, 7 PASS | 41, 40, 40 PASS |
+| wake-preempts negative (K31, stepped + fix) | FAIL took hart 0 from 37 | FAIL took hart 0 from 40 |
+
+The false "took hart" on main and K31 (main-rv64-2 records 3013-3025: I 40 at 353,722 µs, E 31,
+R 40, H 0, W 31, O pass 2) is the trace race: trace::timer_entry samples slice_over at the
+entry's start, irq.rs decides after the expiry, and only its decision preempts. Trace fix tried:
+irq.rs calls trace::slice_decided(slice_over) (sched-trace only) right after its decision, which
+sets the ring's slice_over that O reports. Files: .tmp/K31/wnp/step17*, k31-export, main-export.
+
+## Outcome (2026-10-10)
+
+K31's fix is 58ef21b66: CALL_US 50 (rv32 11-15, rv64 32-45 at a call, 0 mid-slice, 12 runs a
+width; wake-preempts negative fails). Option (b), deferred to B58: patch
+/home/mcloonan/redoubt/.tmp/K31/b58-trace-decision-stepped-naps.patch (applies to 58ef21b66,
+`git apply -p1`): irq.rs records trace::slice_decided(slice_over) at its decision; WakeDelay
+takes a step param (nap k = base + (k * step) % 1000); the case 130 µs + 17k, calls 37 µs.
+Trial numbers above (K31 rv32 15-23 / rv64 47-49, main 7-10 / 40-41, negative fails).
+kernel-red's conditions for B58: record the decision's now and slice_end (not the boolean) so the
+oracle judges 'over' itself; a host test with a slice ending mid-entry classed as a slice end;
+sched-trace only; negative still fails; five runs a width, mid-slice and at-call apart; 120 naps
+if rv32's minimum stays >= 10.
+
+## CALL_US 50: the twelve runs a width the commit quotes (witnesses at a call; mid-slice 0 in all)
+
+| runs | where | rv32 | rv64 |
+| --- | --- | --- | --- |
+| 1-3 | scratch export of be945cce6 + CALL_US 50 (.tmp/K31/wnp/call50-*.log) | 11, 11, 11 | 37, 45, 43 |
+| 4-8 | the same export (.tmp/K31/wnp/call50/k31-*.log) | 12, 11, 11, 13, 15 | 43, 45, 45, 45, 43 |
+| 9-12 | head 58ef21b66 (.tmp/K31/wnp/head/*.out; traces pruned, replayed at the time) | 15, 11, 11, 12 | 32, 37, 37, 37 |
+| range | | 11-15 | 32-45 |
+
+Plus the gate run on the head (target/jobs/*-sched-wake-no-preempt-harts.log): rv32 11, rv64 37.
+wake-preempts negative at CALL_US 50: rv32 'took hart 0 from budget 37', rv64 'took hart 1 from
+budget 34' (.tmp/K31/wnp/call50/neg-*.out).
