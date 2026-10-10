@@ -50,6 +50,12 @@ impl Heap {
             (Term::Atom(_) | Term::Int(_) | Term::Nil, _) | (_, Term::Atom(_) | Term::Int(_) | Term::Nil) => {
                 false
             }
+            // Bitstrings of different lengths differ, whatever their bits: ordering them would
+            // compare every byte of the shorter first.
+            (Term::Bits(_), Term::Bits(_)) => match (self.as_bits(a), self.as_bits(b)) {
+                (Some(x), Some(y)) if x.len != y.len => false,
+                _ => self.cmp_exact(a, b) == Ordering::Equal,
+            },
             _ => self.cmp_exact(a, b) == Ordering::Equal,
         }
     }

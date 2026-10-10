@@ -1,0 +1,54 @@
+description = "A floor on how fast beamlet runs compiled Erlang on the machine (docs/userland/beamlet.md, \"beamlet on Redoubt\"): in the console session of the image's own boot, Enum.reduce(1..65536, 0, &max/2), a loop of compiled Elixir calling a native through a fun on each step, is timed 30 times a second apart, and the fastest run, one the shell's driver did not share the hart with, is divided into the reductions the loop takes, counted by the VM. The session prints the rate; the case holds it to a floor, in guest time under icount, so the host's load does not move it. The rate is the VM's own count over the kernel's clock, as the boot profile's stamps are"
+arch = ["rv64", "rv32"]
+kind = "boot"
+recipe = "image/boot.toml"
+memory_mib = 1024
+# A disk keeps sleep on (docs/testbench.md, "Which cases run in guest time").
+icount = "shift=3"
+qemu_seed = 1
+# The boot, then 30 runs of about 2 s and a pause of 1 s each: 48.5 s (rv64) and 50.0 s (rv32)
+# alone, four times the slower.
+timeout_secs = 200
+expect = [
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+    '^\[con [0-9a-f]{16}\] :defined$',
+    '^\[con [0-9a-f]{16}\] :timed$',
+    # The floor, 42,000 reductions a second: the slower width's rate (47,052 on rv32; 52,647 on
+    # rv64) less a tenth, rounded down to a thousand (docs/userland/beamlet.md, "beamlet on
+    # Redoubt"). Before the interpreter stopped filling 255 argument slots on every native call,
+    # copying a fun's arguments through a vector and saving its registers on every instruction,
+    # the same run measured 34,041 (rv64) and 31,215 (rv32), and fails it.
+    '^\[con [0-9a-f]{16}\] "rate (4[2-9][0-9]{3}|[5-9][0-9]{4}|[0-9]{6,})"$',
+]
+forbid = [
+    # Below the floor: fail at once rather than at the timeout.
+    '^\[con [0-9a-f]{16}\] "rate ([0-9]{1,4}|[0-3][0-9]{4}|4[01][0-9]{3})"$',
+    'init: refused the boot',
+    'init: rebooting',
+    '^init: .* (exited|faulted|was killed)',
+    'EXCEPTION',
+    'steward: a step failed',
+]
+
+# Three short lines, each typed once the line before has answered: a long burst typed on the
+# console under icount can be lost on rv32 (docs/testbench.md).
+[[input]]
+after = 'Redoubt shell, on Elixir '
+send = "f = fn -> :timer.tc(Enum, :reduce, [1..65536, 0, &max/2]) end; :defined\n"
+
+[[input]]
+after = '\] :defined$'
+send = "t = Enum.min(for _ <- 1..30, do: (Process.sleep(1000); elem(f.(), 0))); :timed\n"
+
+[[input]]
+after = '\] :timed$'
+send = "{_, a} = Process.info(self(), :reductions); f.(); {_, b} = Process.info(self(), :reductions); \"rate #{div((b - a) * 1_000_000, t)}\"\n"
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]

@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 67
+revision = 80
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1613,7 +1613,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["CTX1"]
   body = "Second of three; brief .wash/local/CTX1-brief.md, design .wash/local/CTX1-design.md. A relay program in the context's own budget serves the VM's /dev/cons; the steward hands it each channel's console. 64 KiB buffer, newest kept, a dropped-count line, cut at line boundaries, resize on reattach. Takeover is told on both terminals, with the remote address. Tier A."
   state = "active"
-  revision = 61
+  revision = 71
   overrides = ["2026-10-08: started by Orchestrator before CTX1 (reported), M1 (reported): CTX1 is reported and under its last fold; CTX2 is stacked on it by the orchestrator's ruling", "2026-10-08: started by Orchestrator before M1 (reported): named contexts run ahead of M1's acceptance (owner request 2026-10-08)", "2026-10-09: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the userland track runs ahead of its acceptance", "2026-10-10: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the userland track runs ahead of its acceptance"]
 
 [[node]]
@@ -1883,8 +1883,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   needs = ["B45"]
   body = "From B45: on the machine, printing a 1 MiB line takes about 2 minutes (Text.visible plus the encoder). Profile on beamlet (which of grapheme walking, escaping, measuring, encoding dominates), make the common case (printable ASCII/UTF-8 with no controls) a fast path, and set a throughput target with a case. Escaping path: Tier A."
-  state = "active"
-  revision = 63
+  state = "reported"
+  revision = 80
   overrides = ["2026-10-09: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the shell track runs ahead of its acceptance", "2026-10-10: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the shell track runs ahead of its acceptance"]
 
 [[node]]
@@ -1933,9 +1933,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M2"
   body = "Found by B46 on main (rv64, smp 1, icount shift=3, alice's console session): Enum.reduce(1..262144, 0, &+/2) takes 22.7 s and a tail-recursive byte match over 256 KiB 17.2 s, about 87 us of guest time per loop step; native BIFs over the same 256 KiB are fast (:binary.match 0.13 s, :re.run 0.15 s, :binary.copy 0.05 s); on host beamlet the same loops take ~10 ms. 87 us is ~10,000 guest instructions a reduction, far beyond TCG's slowdown, so something per reduction (a kernel call, a clock read, a scheduler-yield to the I/O hub, an atomic the hub thread spins on, a reductions check that traps) or another VM thread spinning. Measure first (the kernel's trace of the session's calls per second during the loop: ecalls, timer, the hub thread's share; then perf on host beamlet with the platform's clock/yield hooks stubbed), find the cost, remove it, and gate a reductions-per-second floor on the machine with a case on both widths (the shell's interactive feel depends on it: B46's 8 KB/s was one symptom). userland/otp: Tier A, the beamlet/steward red; kernel changes, if any, the kernel red."
-  state = "active"
-  revision = 39
-  overrides = ["2026-10-09: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the userland track runs ahead of its acceptance"]
+  state = "done"
+  revision = 79
+  overrides = ["2026-10-09: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the userland track runs ahead of its acceptance", "2026-10-10: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the userland track runs ahead of its acceptance"]
 
 [[node]]
   id = "NSCR2"
@@ -1946,3 +1946,23 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "From NSCR1: the session decodes a program's cells frames a cell at a time in Elixir (Cells.reduce/3) after a whole-frame decode into a list of maps failed a 2.7 MB allocation under a frame flood and killed the session VM. The cell-at-a-time path costs about 0.5 s per full 30 KB frame on both widths, so the decoder, not the 1 MiB/s bound, paces floods, and a full-screen native program redraws at about 2 frames/s. Add a beamlet native that decodes a frame straight into the host's screen buffer (the same checks as the Elixir decoder, held to the same vectors; refused never repaired; bounded by the buffer's size), keep the Elixir decoder as the reference the vectors hold it to, and gate a frames-per-second floor with a case. userland/otp and the drawing path: Tier A, the steward/beamlet red."
   state = "todo"
   revision = 53
+
+[[node]]
+  id = "B48"
+  title = "A bound piped leaves a sys.known entry and its handle behind when its pipeline ends: a slow leak per pipeline"
+  template = "package"
+  parent = "M2"
+  needs = ["B47"]
+  body = "From B47's report (.wash/local/B47-report.md, 'Open'): each pipeline binds piped's connection into the session's namespace (Redoubt.Pipes, /dev/pipe) and a sys.known entry with its handle stays after the pipeline ends and piped's budget is destroyed; with B47's Life the stale handle closes nothing, but the entry and the slot are never returned, so a long session leaks one per pipeline until a table fills. Find the owner of the entry (the bind, the Pipes server, the Known table), return it when the pipeline's job ends (or reuse one piped per session if that is the design: say which on native.md), host test that a thousand pipelines leave the table where it started, and extend pipe-eight or add a sibling that runs 64 in one session on both widths. Acts with the session's authority: main, Tier A, the steward red."
+  state = "todo"
+  revision = 72
+
+[[node]]
+  id = "K31"
+  title = "A kernel entry costs ~12,000 instructions: about a fifth of a busy VM hart goes to the kernel's interrupt path"
+  template = "package"
+  parent = "smp"
+  needs = ["SMP6"]
+  body = "From BEAM19's exact instruction counts (.wash/local/BEAM19-report.md; QEMU exec log weighted by block length, icount shift=3, rv64 smp 1): while a session's VM runs a tight loop, each kernel entry (the timer interrupt at the slice, the scheduler's pick and return) costs about 12,000 kernel instructions, about 20 % of the hart. Measure the entry's parts with the kernel's trace and the exec log (trap save/restore, the lock, the pick, billing, reconcile marks, audits in a checked build vs none in release, the return), find what is proportional to nothing the entry does, and cut it; a reductions-per-second case already exists (beamlet-reduction-rate) and a kernel-side bound (instructions or ticks per entry, measured in the oracle net of audits) is the gate on both widths. Nothing changes in any rule; the scheduler's targets hold. Kernel: Tier A, the kernel red."
+  state = "todo"
+  revision = 76
