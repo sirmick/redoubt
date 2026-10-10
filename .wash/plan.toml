@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 41
+revision = 53
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1768,9 +1768,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   needs = ["JOB1"]
   body = "M2 page 'On Redoubt' step 5: shell.md#a-native-programs-screen-and-the-sessions-key. A native program sends cells frames on stdout; the session decodes them through the one decoder and draws through the encoder; Ctrl+\\ stays the session's. Attack: a frame or key sequence smuggling 0x1C, a native program's text reaching the terminal unescaped, a hijacked program drawing beyond its cells. Tier A (drawing path)."
-  state = "active"
-  revision = 29
-  overrides = ["2026-10-09: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the userland track runs ahead of its acceptance"]
+  state = "done"
+  revision = 52
+  overrides = ["2026-10-09: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the userland track runs ahead of its acceptance", "2026-10-10: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the userland track runs ahead of its acceptance"]
 
 [[node]]
   id = "PIPE1"
@@ -1893,8 +1893,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M2"
   body = "Follows TRY1 and IDLE1. `./launch --system --keep-disk` keeps the disk image under .tmp per arch (reuses it if its layout matches the image's manifest; otherwise refuses with the reason and the flag to start fresh, never silently reformats). Without the flag, a fresh disk as now. The read-only system volume still comes from the build, so a rebuilt system boots against kept home/vault volumes. GETTING-STARTED's 'Try the system' says so. A bench case: launch with --keep-disk, write a file at the prompt, relaunch, read it back. Tier B tooling."
-  state = "reported"
-  revision = 17
+  state = "active"
+  revision = 44
   overrides = ["2026-10-09: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the tooling track runs ahead of its acceptance"]
 
 [[node]]
@@ -1936,3 +1936,13 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   state = "active"
   revision = 39
   overrides = ["2026-10-09: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the userland track runs ahead of its acceptance"]
+
+[[node]]
+  id = "NSCR2"
+  title = "A native program's frames decode into a cell buffer in Rust: a full 80x24 frame in milliseconds, not half a second"
+  template = "package"
+  parent = "M2"
+  needs = ["NSCR1"]
+  body = "From NSCR1: the session decodes a program's cells frames a cell at a time in Elixir (Cells.reduce/3) after a whole-frame decode into a list of maps failed a 2.7 MB allocation under a frame flood and killed the session VM. The cell-at-a-time path costs about 0.5 s per full 30 KB frame on both widths, so the decoder, not the 1 MiB/s bound, paces floods, and a full-screen native program redraws at about 2 frames/s. Add a beamlet native that decodes a frame straight into the host's screen buffer (the same checks as the Elixir decoder, held to the same vectors; refused never repaired; bounded by the buffer's size), keep the Elixir decoder as the reference the vectors hold it to, and gate a frames-per-second floor with a case. userland/otp and the drawing path: Tier A, the steward/beamlet red."
+  state = "todo"
+  revision = 53

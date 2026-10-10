@@ -292,3 +292,169 @@ fn color_json(color: Color) -> String {
         Color::Rgb(r, g, b) => format!("[\"rgb\", {r}, {g}, {b}]"),
     }
 }
+
+fn key(key: Key, modifiers: u8) -> Event { Event::Key { key, modifiers } }
+
+fn symbol(text: &str) -> Key { Key::Symbol(Symbol::new(text).unwrap()) }
+
+/// The events every program's decoder must read, as the session writes them.
+fn good_events() -> Vec<(&'static str, Event)> {
+    vec![
+        ("the size of an 80 by 24 terminal", Event::Size { width: 80, height: 24 }),
+        ("the largest size", Event::Size { width: MAX_SIDE, height: MAX_SIDE }),
+        ("a letter", key(symbol("a"), 0)),
+        ("a wide symbol", key(symbol("界"), 0)),
+        ("joined code points", key(symbol("👩\u{200d}💻"), 0)),
+        ("Ctrl+C as a key", key(symbol("c"), CTRL)),
+        ("Alt+Shift+x", key(symbol("x"), ALT | SHIFT)),
+        ("Enter", key(Key::Enter, 0)),
+        ("Shift+Tab", key(Key::Tab, SHIFT)),
+        ("Backspace", key(Key::Backspace, 0)),
+        ("Esc", key(Key::Esc, 0)),
+        ("Ctrl+Up", key(Key::Up, CTRL)),
+        ("Down", key(Key::Down, 0)),
+        ("Left", key(Key::Left, 0)),
+        ("Ctrl+Alt+Shift+Right", key(Key::Right, KEY_MODIFIERS)),
+        ("Home", key(Key::Home, 0)),
+        ("End", key(Key::End, 0)),
+        ("Page Up", key(Key::PageUp, 0)),
+        ("Page Down", key(Key::PageDown, 0)),
+        ("Insert", key(Key::Insert, 0)),
+        ("Delete", key(Key::Delete, 0)),
+        ("F1", key(Key::F(1), 0)),
+        ("Shift+F12", key(Key::F(12), SHIFT)),
+        ("F24", key(Key::F(24), 0)),
+    ]
+}
+
+/// Event bytes every program's decoder must refuse, and why.
+fn bad_events() -> Vec<(&'static str, Vec<u8>, Error)> {
+    vec![
+        ("nothing at all", vec![], Error::Truncated),
+        ("an event of no kind", vec![3], Error::Kind),
+        ("a size cut short", vec![1, 80, 0, 24], Error::Truncated),
+        ("a width of zero", vec![1, 0, 0, 24, 0], Error::Size),
+        ("a height over the largest", vec![1, 80, 0, 1, 4], Error::Size),
+        ("a size with a byte after it", vec![1, 80, 0, 24, 0, 0], Error::Trailing),
+        ("a modifier bit that means nothing", vec![2, 8, 1], Error::Modifiers),
+        ("a key code of no key", vec![2, 0, 15], Error::Key),
+        ("F0", vec![2, 0, 0x80], Error::Key),
+        ("F25", vec![2, 0, 0x99], Error::Key),
+        ("an empty symbol", vec![2, 0, 0, 0], Error::Symbol),
+        ("a symbol that is the session's key", vec![2, 0, 0, 1, 0x1c], Error::Symbol),
+        ("a symbol that is ESC", vec![2, 0, 0, 1, 0x1b], Error::Symbol),
+        ("a symbol that is not UTF-8", vec![2, 0, 0, 1, 0xff], Error::Symbol),
+        ("a symbol's length past the end", vec![2, 0, 0, 2, b'a'], Error::Truncated),
+        ("a named key with a byte after it", vec![2, 0, 1, 0], Error::Trailing),
+    ]
+}
+
+#[test]
+fn good_events_decode_and_encode_back_to_their_bytes() {
+    for (name, event) in good_events() {
+        let bytes = encode_event(&event);
+        assert_eq!(decode_event(&bytes).as_ref(), Ok(&event), "{name}");
+        assert!(bytes.len() + 4 <= MAX_EVENT, "{name}");
+    }
+}
+
+#[test]
+fn bad_events_are_refused_for_their_reason() {
+    for (name, bytes, error) in bad_events() {
+        assert_eq!(decode_event(&bytes), Err(error), "{name}");
+    }
+}
+
+#[test]
+fn a_record_is_its_length_and_its_bytes_and_a_long_one_is_refused_unread() {
+    let frame = encode(&good()[1].1);
+    let mut stream = record(&frame);
+    stream.extend_from_slice(&record(b"next"));
+    let (body, rest) = split(&stream, max_frame(4, 2)).unwrap().unwrap();
+    assert_eq!(decode(body), Ok(good()[1].1.clone()));
+    assert_eq!(split(rest, 4), Ok(Some((&b"next"[..], &[][..]))));
+    for n in 0..4 + frame.len() {
+        assert_eq!(split(&stream[..n], max_frame(4, 2)), Ok(None), "cut at {n}");
+    }
+    assert_eq!(split(&[0xff, 0xff, 0xff, 0xff], max_frame(MAX_SIDE, MAX_SIDE)), Err(Error::Length));
+    assert_eq!(split(&record(b"12345"), 4), Err(Error::Length));
+    assert_eq!(max_frame(80, 24), 10 + 80 * 24 * 47);
+    let full = Frame {
+        width: 2,
+        height: 1,
+        clear: true,
+        cells: vec![
+            cell(0, 0, &"x".repeat(MAX_SYMBOL), Color::Rgb(1, 2, 3), Color::Rgb(4, 5, 6), Modifiers::ALL),
+            cell(1, 0, &"y".repeat(MAX_SYMBOL), Color::Rgb(1, 2, 3), Color::Rgb(4, 5, 6), Modifiers::ALL),
+        ],
+    };
+    assert_eq!(encode(&full).len(), max_frame(2, 1));
+}
+
+/// `events.json`: every event case above, for the session's encoder to be held to the same bytes.
+/// `CELLS_VECTORS=write cargo test` writes it; this test fails when it is not current.
+#[test]
+fn events_are_current() {
+    let mut cases = Vec::new();
+    for (name, event) in good_events() {
+        cases.push(format!(
+            "  {{\"name\": \"{name}\", \"hex\": \"{}\", \"event\": {}}}",
+            hex(&encode_event(&event)),
+            event_json(&event)
+        ));
+    }
+    for (name, bytes, error) in bad_events() {
+        cases.push(format!(
+            "  {{\"name\": \"{name}\", \"hex\": \"{}\", \"error\": \"{}\"}}",
+            hex(&bytes),
+            error.name()
+        ));
+    }
+    let json = format!("[\n{}\n]\n", cases.join(",\n"));
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/events.json");
+    if std::env::var("CELLS_VECTORS").as_deref() == Ok("write") {
+        std::fs::write(path, &json).unwrap();
+    }
+    let committed = std::fs::read_to_string(path).unwrap_or_default();
+    assert!(committed == json, "events.json is not current: run CELLS_VECTORS=write cargo test -p cells");
+}
+
+fn event_json(event: &Event) -> String {
+    match event {
+        Event::Size { width, height } => format!("{{\"size\": [{width}, {height}]}}"),
+        Event::Key { key, modifiers } => {
+            let names: Vec<String> = [(SHIFT, "shift"), (ALT, "alt"), (CTRL, "ctrl")]
+                .iter()
+                .filter(|(bit, _)| modifiers & bit != 0)
+                .map(|(_, name)| format!("\"{name}\""))
+                .collect();
+            let key = match key {
+                Key::Symbol(s) => format!("\"{}\"", s.as_str()),
+                Key::F(n) => format!("[\"f\", {n}]"),
+                named => format!("[\"{}\"]", key_name(named)),
+            };
+            format!("{{\"key\": {key}, \"modifiers\": [{}]}}", names.join(", "))
+        }
+    }
+}
+
+/// A named key as the session's key decoder names it.
+fn key_name(key: &Key) -> &'static str {
+    match key {
+        Key::Enter => "enter",
+        Key::Tab => "tab",
+        Key::Backspace => "backspace",
+        Key::Esc => "esc",
+        Key::Up => "up",
+        Key::Down => "down",
+        Key::Left => "left",
+        Key::Right => "right",
+        Key::Home => "home",
+        Key::End => "end",
+        Key::PageUp => "page_up",
+        Key::PageDown => "page_down",
+        Key::Insert => "insert",
+        Key::Delete => "delete",
+        Key::Symbol(_) | Key::F(_) => unreachable!(),
+    }
+}

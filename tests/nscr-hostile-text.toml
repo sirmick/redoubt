@@ -1,0 +1,78 @@
+description = "A native program's text never reaches the terminal unescaped (docs/plan/m2-usable-shell.md, attack suite, \"A screen writes no control sequence\"; docs/userland/shell.md, \"A native program's screen and the session's key\"): the console session runs /boot/screen-stage with screen four ways. It writes a clipboard write (OSC 52), a title and ESC X to its output as text, not records, and is refused for the length its first bytes claim; it claims a record of 4 GiB, refused before any of it is held; it sends a frame whose symbol holds the clipboard write, refused by the decoder; and it writes them to its standard error and draws a good frame, then ends at q, its standard error drawn after the screen as visible characters. Each refusal ends the program, its budget destroyed: the session's budget, read from the kernel, holds what it held before. The case judges the line's values and the bytes the session wrote, forbidding each sequence raw (docs/testbench.md, rule F)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The image's bundle with pipe-stage and screen-stage public in /boot.
+recipe = "tests/data/pipe/boot.toml"
+# As userland-boot: the principals' budgets, each holding the shell VM's session, need 1 GiB.
+memory_mib = 1024
+timeout_secs = 450
+# At most four screens a session: a session's fifth pipeline is refused today (B47), a bound
+# of the bench's sessions until it is fixed, not of the design.
+expect = [
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+    '(^|\] )\{:base, \{[0-9]+, [0-9]+\}\}$',
+    '(^|\] )\{:helper, :ok\}$',
+    '\{:raw, \{:error, \{:refused, :length\}\}\}$',
+    '\{:claim, \{:error, \{:refused, :length\}\}\}$',
+    '\{:esc_symbol, \{:error, \{:refused, :symbol\}\}\}$',
+    'screen-stage-ready',
+    '(^|\] )\^\[\]52;c;cHduZWQ=\^G\^\[\]0;pwned\^G\^\[X$',
+    '\{:stderr, \{:exited, 0\}\}$',
+    '(^|\] )\{:after_all, true, \{:error, :not_running\}\}$',
+]
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    'init: restarted',
+    'EXCEPTION',
+    'still ending',
+    # Each sequence raw: an OSC, ESC X and BEL. Redoubt.Term writes only CSI.
+    '\x1b\]',
+    '\x1bX',
+    '\x07',
+    'XXXXXXXX',
+]
+
+[[input]]
+after = 'Redoubt shell, on Elixir '
+send = "c = fn -> {:ok, o} = Redoubt.Budget.own(); {:ok, u} = Redoubt.Budget.usage(o); {elem(u.weight, 1), elem(u.processes, 1)} end; {:base, before = c.()}\n"
+
+# A screen's frames end no line on the console, and the bench reads only whole lines: so a helper
+# the case's own line spawns writes a line of its own, a tag, to the console port every half
+# second while a job runs, ending the line the frames are on. A tag also says the screen is in
+# front: keys typed after it wait for the program.
+[[input]]
+after = '(^|\] )\{:base, \{'
+send = '''up = fn tag -> spawn(fn -> w = :erlang.open_port({:fd, 0, 2}, [:out, :binary]); r = fn -> Enum.any?(Redoubt.Jobs.list(), &(&1.state == :running)) end; Enum.find(Stream.repeatedly(fn -> Process.sleep(50); r.() end), & &1); Enum.find(Stream.repeatedly(fn -> Port.command(w, "\n" <> tag <> "\n"); Process.sleep(500); r.() end), &(!&1)) end) end; {:helper, :ok}
+'''
+
+[[input]]
+after = '(^|\] )\{:helper, :ok\}$'
+send = "{:raw, screen(\"screen-stage\", [\"raw\"])}\n"
+
+[[input]]
+after = '\{:raw, \{'
+send = "{:claim, screen(\"screen-stage\", [\"claim\"])}\n"
+
+[[input]]
+after = '\{:claim, \{'
+send = "{:esc_symbol, screen(\"screen-stage\", [\"esc-symbol\"])}\n"
+
+[[input]]
+after = '\{:esc_symbol, \{'
+send = "{:stderr, (up.(\"up-stderr\"); screen(\"screen-stage\", [\"stderr\"]))}\n"
+
+[[input]]
+after = '(^|\] )up-stderr$'
+send = "q"
+
+[[input]]
+after = '\{:stderr, \{'
+send = "{:after_all, c.() == before, Redoubt.Pipes.usage()}\n"
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"

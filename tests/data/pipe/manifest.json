@@ -93,7 +93,7 @@
       "handed": [ { "endpoint": "ipd", "badge": "6" }, { "endpoint": "keyd", "badge": "1" },
                   { "endpoint": "steward", "badge": "1" } ] }
   ],
-  "public": ["beamlet", "piped", "pipe-stage"],
+  "public": ["beamlet", "piped", "pipe-stage", "screen-stage"],
   "labels": [ { "name": "alice-secrets", "owner": "alice", "id": "7" } ],
   "principals": [
     { "name": "alice", "account": "1001",

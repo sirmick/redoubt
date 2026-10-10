@@ -98,4 +98,30 @@ defmodule Redoubt.Term.FrameTest do
 
     assert Cells.decode(bytes) == {:error, :symbol}
   end
+
+  test "drawing a frame's bytes as they are decoded draws what drawing the decoded frame does" do
+    cells =
+      for y <- 0..3, x <- 0..9, do: {x, y, if(rem(x, 3) == 0, do: "界", else: "a"), {:indexed, y}, :reset, x}
+
+    cells = Enum.reject(cells, fn {x, _y, _s, _fg, _bg, _m} -> rem(x, 3) == 1 end)
+
+    bytes =
+      IO.iodata_to_binary([
+        <<1, 1, 10::little-16, 4::little-16, length(cells)::little-32>>,
+        for {x, y, symbol, fg, bg, mods} <- cells do
+          [
+            <<x::little-16, y::little-16, byte_size(symbol)>>,
+            symbol,
+            color(fg),
+            color(bg),
+            <<mods::little-16>>
+          ]
+        end
+      ])
+
+    {:ok, frame} = Cells.decode(bytes)
+    assert {:ok, out} = Frame.draw_bytes(bytes)
+    assert IO.iodata_to_binary(out) == IO.iodata_to_binary(Frame.draw(frame))
+    assert Frame.draw_bytes(binary_part(bytes, 0, byte_size(bytes) - 1)) == {:error, :truncated}
+  end
 end

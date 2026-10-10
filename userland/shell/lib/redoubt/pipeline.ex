@@ -79,11 +79,20 @@ defmodule Redoubt.Pipeline do
   @doc """
   Runs `stages` and waits for the last to end. Options:
   - `:input`: what the first stage reads: `nil` (the default) for nothing, the end of its input at
-    once; `:console` for the lines the person types, until Ctrl+D; or an enumerable of lines or
-    binaries, each line written with a newline after it.
-  - `:output`: `:capture` (the default) to return what the last stage writes, or `:console` to
-    draw it as it comes.
+    once; `:console` for the lines the person types, until Ctrl+D; an enumerable of lines or
+    binaries, each line written with a newline after it; or `{:records, host}`, what `host` hands
+    the feeder (below).
+  - `:output`: `:capture` (the default) to return what the last stage writes, `:console` to draw
+    it as it comes, or `{:records, host}` to hand it to `host` a read at a time (below); then the
+    stages' standard error is kept, as a background job's is, not drawn.
   - `:budget`: each stage's budget spec, `#{inspect(@default_budget)}` when left out.
+
+  With `{:records, host}` (`Redoubt.Screen.Native`, a native program's screen), `host` is told
+  `{#{inspect(__MODULE__)}, :stdin, feeder}` and sends the feeder `{:write, bytes}`, each answered
+  `{#{inspect(__MODULE__)}, :written, n}` once written; and it is sent each read of the last
+  stage's output as `{#{inspect(__MODULE__)}, :stdout, reader, bytes}`, the next read waiting for
+  its `{#{inspect(__MODULE__)}, :more}`, so `host` paces the stage's writes. Either ends if `host`
+  does.
 
   Returns `{:ok, %{output: bytes | nil, errors: nil, killed: bool, endings: [ending], usage:
   [usage]}}`, a stage's usage being what its budget held as it ended and `killed` whether the job
@@ -353,12 +362,21 @@ defmodule Redoubt.Pipeline do
   defp start_readers(job, input, output) do
     source = Enum.at(job.pipes, 0)
     sink = List.last(job.pipes)
-    errors = if match?({:kept, _}, output), do: output, else: :console
+
+    errors =
+      case output do
+        {:kept, _max} -> output
+        {:records, _host} -> {:kept, @kept_bytes}
+        _drawn -> :console
+      end
 
     %{
       feeder: spawn_link(fn -> feed(path(source, "w"), input) end),
       sink: spawn_link(fn -> exit({:read, drain(path(sink, "r"), output)}) end),
-      err: spawn_link(fn -> exit({:read, drain(path(job.err, "r"), errors)}) end)
+      err: spawn_link(fn -> exit({:read, drain(path(job.err, "r"), errors)}) end),
+      # A host's reader may be waiting for its host to ask for more: at the job's end nothing it
+      # holds is wanted, so it is not waited for.
+      paced: match?({:records, _host}, output)
     }
   end
 
@@ -371,6 +389,7 @@ defmodule Redoubt.Pipeline do
       case input do
         nil -> :ok
         :console -> console(file)
+        {:records, host} -> records_in(file, host)
         lines -> Enum.each(lines, &IO.binwrite(file, line(&1)))
       end
     after
@@ -401,6 +420,25 @@ defmodule Redoubt.Pipeline do
     end
   end
 
+  # What the host hands the first stage, each write answered once it is written.
+  defp records_in(file, host) do
+    ref = Process.monitor(host)
+    send(host, {__MODULE__, :stdin, self()})
+    records_loop(file, host, ref)
+  end
+
+  defp records_loop(file, host, ref) do
+    receive do
+      {:write, bytes} when is_binary(bytes) ->
+        IO.binwrite(file, bytes)
+        send(host, {__MODULE__, :written, byte_size(bytes)})
+        records_loop(file, host, ref)
+
+      {:DOWN, ^ref, :process, _host, _reason} ->
+        :ok
+    end
+  end
+
   # What a pipe holds until the end of its stream: returned; kept up to a bound, with the count of
   # the bytes past it, `{bytes, dropped}`; or written as the line's own output.
   defp drain(path, output) do
@@ -409,6 +447,7 @@ defmodule Redoubt.Pipeline do
     try do
       case output do
         {:kept, max} -> keep_loop(file, max, [], 0)
+        {:records, host} -> records_out(file, host, Process.monitor(host))
         output -> drain_loop(file, output, [], <<>>)
       end
     after
@@ -426,6 +465,23 @@ defmodule Redoubt.Pipeline do
 
       _eof_or_error ->
         {IO.iodata_to_binary(acc), dropped}
+    end
+  end
+
+  # Each read handed to the host, the next only once it asks for more: until then the pipe fills,
+  # and the stage's write waits.
+  defp records_out(file, host, ref) do
+    case IO.binread(file, @read_bytes) do
+      data when is_binary(data) ->
+        send(host, {__MODULE__, :stdout, self(), data})
+
+        receive do
+          {__MODULE__, :more} -> records_out(file, host, ref)
+          {:DOWN, ^ref, :process, _host, _reason} -> nil
+        end
+
+      _eof_or_error ->
+        nil
     end
   end
 
@@ -524,6 +580,7 @@ defmodule Redoubt.Pipeline do
     Enum.each(job.jobs, fn {_ref, %{budget: budget}} -> Budget.destroy(budget) end)
     job = collect_notices(job)
     let_go_all(job)
+    if readers.paced, do: Process.exit(readers.sink, :kill)
     output = reader_result(job, readers.sink)
     errors = reader_result(job, readers.err)
     Process.exit(readers.feeder, :kill)

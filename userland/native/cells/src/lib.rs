@@ -24,6 +24,23 @@
 //!   4 bytes        background, the same
 //!   u16 modifiers  bits of [`Modifiers::ALL`] only
 //! ```
+//!
+//! A native program with a screen and the session talk over its standard streams in **records**:
+//! a `u32` length, then that many bytes ([`record`], [`split`]). On its standard output each
+//! record is exactly one frame, of the size the session last gave it, and at most
+//! [`max_frame`] bytes for that size. On its standard input each record is one [`Event`]:
+//!
+//! ```text
+//! u8 kind       1: the screen's size, u16 width, u16 height, each 1 ..= MAX_SIDE
+//!               2: a key, then:
+//!   u8 modifiers  bits of KEY_MODIFIERS only: 1 shift, 2 alt, 4 ctrl
+//!   u8 key        0 a symbol, then u8 length and a [`Symbol`]'s bytes; 1 Enter, 2 Tab,
+//!                 3 Backspace, 4 Esc, 5 Up, 6 Down, 7 Left, 8 Right, 9 Home, 10 End,
+//!                 11 Page Up, 12 Page Down, 13 Insert, 14 Delete; 0x80 + n Fn, n 1 ..= 24
+//! ```
+//!
+//! The first event is the size; it comes again whenever the terminal's size changes.
+//! `events.json` holds the session's encoder to [`decode_event`]'s answers.
 
 #![no_std]
 #![forbid(unsafe_code)]
@@ -160,6 +177,12 @@ pub enum Error {
     Modifiers,
     /// Bytes after the last cell.
     Trailing,
+    /// A record longer than its bound.
+    Length,
+    /// An event of no known kind.
+    Kind,
+    /// A key of no known code.
+    Key,
 }
 
 impl Error {
@@ -177,6 +200,9 @@ impl Error {
             Error::Color => "color",
             Error::Modifiers => "modifiers",
             Error::Trailing => "trailing",
+            Error::Length => "length",
+            Error::Kind => "kind",
+            Error::Key => "key",
         }
     }
 }
@@ -252,6 +278,156 @@ pub fn decode(bytes: &[u8]) -> Result<Frame, Error> {
         return Err(Error::Trailing);
     }
     Ok(Frame { width, height, clear: flags & CLEAR != 0, cells })
+}
+
+/// The most bytes a frame of a `width` by `height` screen can take: every cell given, each with
+/// the longest symbol. A record on a program's standard output claiming more is refused before
+/// any of it is held.
+pub fn max_frame(width: u16, height: u16) -> usize {
+    HEADER + usize::from(width) * usize::from(height) * (MIN_CELL + MAX_SYMBOL)
+}
+
+/// A frame's header: version, flags, width, height and count.
+const HEADER: usize = 1 + 1 + 2 + 2 + 4;
+
+/// The most bytes an event's record takes: its length, then a key with the longest symbol.
+pub const MAX_EVENT: usize = 4 + 1 + 1 + 1 + 1 + MAX_SYMBOL;
+
+/// `body` as a record: its length, then its bytes.
+pub fn record(body: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(4 + body.len());
+    out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+    out.extend_from_slice(body);
+    out
+}
+
+/// The first record in `bytes`, and what follows it; `None` while it has not all arrived; refused
+/// [`Error::Length`] as soon as its length says more than `max`.
+pub fn split(bytes: &[u8], max: usize) -> Result<Option<(&[u8], &[u8])>, Error> {
+    let Some(head) = bytes.get(..4) else { return Ok(None) };
+    let length = u32::from_le_bytes([head[0], head[1], head[2], head[3]]) as usize;
+    if length > max {
+        return Err(Error::Length);
+    }
+    Ok(bytes[4..].get(..length).map(|body| (body, &bytes[4 + length..])))
+}
+
+/// What the session sends a native program with a screen, on its standard input.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Event {
+    /// The screen's size: every frame the program sends is this size from now.
+    Size { width: u16, height: u16 },
+    /// A key, with bits of [`KEY_MODIFIERS`].
+    Key { key: Key, modifiers: u8 },
+}
+
+/// Every modifier bit a key may carry.
+pub const KEY_MODIFIERS: u8 = SHIFT | ALT | CTRL;
+pub const SHIFT: u8 = 1;
+pub const ALT: u8 = 2;
+pub const CTRL: u8 = 4;
+
+/// A key: a symbol typed, or a named key.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Key {
+    Symbol(Symbol),
+    Enter,
+    Tab,
+    Backspace,
+    Esc,
+    Up,
+    Down,
+    Left,
+    Right,
+    Home,
+    End,
+    PageUp,
+    PageDown,
+    Insert,
+    Delete,
+    /// A function key, 1 to 24.
+    F(u8),
+}
+
+const SIZE: u8 = 1;
+const KEY: u8 = 2;
+const F: u8 = 0x80;
+const NAMED: [Key; 14] = [
+    Key::Enter,
+    Key::Tab,
+    Key::Backspace,
+    Key::Esc,
+    Key::Up,
+    Key::Down,
+    Key::Left,
+    Key::Right,
+    Key::Home,
+    Key::End,
+    Key::PageUp,
+    Key::PageDown,
+    Key::Insert,
+    Key::Delete,
+];
+
+/// The event's bytes, a record's body.
+pub fn encode_event(event: &Event) -> Vec<u8> {
+    let mut out = Vec::new();
+    match event {
+        Event::Size { width, height } => {
+            out.push(SIZE);
+            out.extend_from_slice(&width.to_le_bytes());
+            out.extend_from_slice(&height.to_le_bytes());
+        }
+        Event::Key { key, modifiers } => {
+            out.extend_from_slice(&[KEY, *modifiers]);
+            match key {
+                Key::Symbol(symbol) => {
+                    out.extend_from_slice(&[0, symbol.0.len() as u8]);
+                    out.extend_from_slice(symbol.0.as_bytes());
+                }
+                Key::F(n) => out.push(F + n),
+                named => out.push(NAMED.iter().position(|k| k == named).map_or(0, |i| i as u8 + 1)),
+            }
+        }
+    }
+    out
+}
+
+/// The event in `bytes`, a record's body, if they are exactly one.
+pub fn decode_event(bytes: &[u8]) -> Result<Event, Error> {
+    let mut r = Reader(bytes);
+    let event = match r.u8()? {
+        SIZE => {
+            let (width, height) = (r.u16()?, r.u16()?);
+            if !(1..=MAX_SIDE).contains(&width) || !(1..=MAX_SIDE).contains(&height) {
+                return Err(Error::Size);
+            }
+            Event::Size { width, height }
+        }
+        KEY => {
+            let modifiers = r.u8()?;
+            if modifiers & !KEY_MODIFIERS != 0 {
+                return Err(Error::Modifiers);
+            }
+            let key = match r.u8()? {
+                0 => {
+                    let length = usize::from(r.u8()?);
+                    Key::Symbol(Symbol::new(
+                        core::str::from_utf8(r.take(length)?).map_err(|_| Error::Symbol)?,
+                    )?)
+                }
+                code @ 1..=14 => NAMED[usize::from(code) - 1].clone(),
+                code @ 0x81..=0x98 => Key::F(code - F),
+                _ => return Err(Error::Key),
+            };
+            Event::Key { key, modifiers }
+        }
+        _ => return Err(Error::Kind),
+    };
+    if !r.0.is_empty() {
+        return Err(Error::Trailing);
+    }
+    Ok(event)
 }
 
 struct Reader<'a>(&'a [u8]);

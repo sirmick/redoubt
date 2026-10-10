@@ -214,7 +214,10 @@ streams, and its output reaches the console only through the shell's guard
 interrupt, Ctrl+C, the session's own key, or an INT or break over SSH, ends the line being
 evaluated and every native stage it runs in the foreground, never the session, `bg` runs a
 pipeline in the background, and `Job.kill` destroys one job's stage budgets and nothing else
-([the shell](../userland/shell.md#interrupting-and-killing-jobs)). What the milestone builds on: the serving
+([the shell](../userland/shell.md#interrupting-and-killing-jobs)); and a native program's screen:
+`screen` runs a program whose `cells` frames the session checks, paces and draws, and whose keys
+and size reach it as events on its standard input, the interrupt ending it whatever it does
+([the shell](../userland/shell.md#a-native-programs-screen-and-the-sessions-key)). What the milestone builds on: the serving
 library's parked calls ([serving](../servers/serving.md#parked-calls)), `consoled`'s 9P console
 ([consoled](../servers/consoled.md)), and budget destruction as the only way to end a process
 ([budgets](../kernel/budgets.md#r10-destruction)). The first step on Redoubt is built: a typed call
