@@ -230,7 +230,7 @@ expect = ['regex 1', 'regex 2']   # each must match a console line, in this orde
 forbid = ['regex']                # must never match
 poweroff = false             # true: the guest must power off after the last expect
 reporter = "checker"         # the program whose done() is the verdict (rule F)
-launch = false               # true: boot `./launch --system`'s own QEMU command line (one case)
+launch = false               # true: boot `./launch --system`'s own QEMU command line (launch-*)
 post_check = "sched_oracle"  # a host-side check of the console after a passing boot
 
 [[input]]                    # typed on the console once a line matches `after`
@@ -880,7 +880,7 @@ a program reads it again through `/boot` once the manifest's `public` list names
 
 ### Disks and network cards
 
-<details><summary>Status: built · tested (30)</summary>
+<details><summary>Status: built · tested (34)</summary>
 
 - bench:bench-virtio-devices
 - bench:bench-virtio-legacy-off
@@ -912,6 +912,10 @@ a program reads it again through `/boot` once the manifest's `public` list names
 - host:testbench::a_volume_s_bytes_are_held_to_its_partition
 - host:testbench::the_image_s_volumes_are_its_disk_s_partitions
 - host:testbench::a_case_s_manifest_is_held_to_its_disk
+- bench:launch-keep-disk
+- host:testbench::a_kept_disk_is_attached_as_it_is
+- host:testbench::a_kept_disk_of_another_layout_is_refused
+- host:testbench::a_kept_disk_is_held_to_its_recipe_s_manifest
 
 </details>
 
@@ -923,6 +927,7 @@ partitions = 1               # optional: a GPT of this many equal partitions, by
 # recipe = "image/disk.toml"
 # stage = "tests/data/littlefsd/stage"   # optional: what every partition holds instead of its stage
 # flip_version = true        # optional, with a recipe: one bit of each signed volume's version flipped
+# keep = true                # optional, with two boots: the second boots the disk the first left
 
 [userland]                   # the userland disk, attached read-only, packed once per run
 recipe = "image/userland.toml"
@@ -946,6 +951,12 @@ says, holding its stage's tree: `littlefs`, a writable volume written through `l
 code; `erofs`, a read-only volume written by `libs/erofs`'s writer
 ([erofsd](servers/erofsd.md#the-packer)); or `walfs`, a writable volume written by `libs/walfs`
 itself ([walfsd](servers/walfsd.md#the-packer)), so a case boots the disk the image ships.
+
+A disk with `keep = true` is made for the case's first boot and booted again, as that boot left
+it, by the second (`distinct_across_boots`): `launch-keep-disk` writes a file at the prompt in one
+boot and reads it in the next, as `./launch --system --keep-disk` keeps a person's disk between
+launches. A kept disk whose size or partition table is not the one a fresh disk would have is
+refused, never reformatted.
 
 A manifest's volume that gives `bytes` ([init](servers/init.md#home-quotas)) must be exactly
 its partition's size, which `init` never reads. A recipe names the manifest its disk serves

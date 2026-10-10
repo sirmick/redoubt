@@ -5,7 +5,8 @@
 #
 # Usage: ./launch [--arch rv32|rv64] [--smp N] [--debug] [--print-only]
 #                 [--program NAME|PATH]...
-#        ./launch --system [--arch rv32|rv64] [--smp N] [--ssh-port PORT] [--key PUB] [--print-only]
+#        ./launch --system [--arch rv32|rv64] [--smp N] [--ssh-port PORT] [--key PUB]
+#                          [--keep-disk [--fresh-disk]] [--print-only]
 #   --arch       target width (default rv64); both widths boot RustSBI from bios/
 #   --smp N      hart count (default 1; 4 with --system)
 #   --debug      start paused with QEMU's gdb stub on :1234
@@ -16,6 +17,9 @@
 #   --ssh-port   with --system, the host port forwarded to the guest's port 22 (default 2222)
 #   --key PUB    with --system, alice's login key (an Ed25519 .pub), instead of the checkout's
 #                development key, made once under .tmp/launch
+#   --keep-disk  with --system, keep the data disk under .tmp/launch across launches: your files
+#                survive; one laid out otherwise than the image's disk is refused, never reformatted
+#   --fresh-disk with --keep-disk, start the kept disk over from the image's
 #
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
@@ -25,6 +29,7 @@ smp=
 debug=0
 print_only=0
 system=0
+keep=0
 progs=()
 extra=()
 while (($#)); do
@@ -42,13 +47,15 @@ while (($#)); do
         --ssh-port=*) extra+=(--ssh-port "${1#*=}"); shift ;;
         --key)       extra+=(--key "$(realpath "${2:?--key needs a public key file}")"); shift 2 ;;
         --key=*)     extra+=(--key "$(realpath "${1#*=}")"); shift ;;
-        -h|--help)   sed -n '2,19p' "$0"; exit 0 ;;
+        --keep-disk) keep=1; extra+=(--keep-disk); shift ;;
+        --fresh-disk) extra+=(--fresh-disk); shift ;;
+        -h|--help)   sed -n '2,23p' "$0"; exit 0 ;;
         *) echo "launch: unknown argument: $1" >&2; exit 2 ;;
     esac
 done
 
 if [ "$system" = 0 ]; then
-    ((${#extra[@]} == 0)) || { echo "launch: --ssh-port and --key need --system" >&2; exit 2; }
+    ((${#extra[@]} == 0)) || { echo "launch: --ssh-port, --key, --keep-disk and --fresh-disk need --system" >&2; exit 2; }
     cmd=(cargo run --quiet -p testbench -- --arch "$arch" --smp "${smp:-1}" --run --print-qemu)
     if [ "$debug" = 1 ]; then cmd+=(--debug); fi
     if [ "$print_only" = 1 ]; then cmd+=(--print-only); fi
@@ -63,7 +70,19 @@ fi
 smp="${smp:-4}"
 export REDOUBT_TMP="${REDOUBT_TMP:-$PWD/.tmp}"
 mkdir -p "$REDOUBT_TMP/launch"
-argv="$REDOUBT_TMP/launch/qemu-$arch.argv"
+# A kept disk is one launch's at a time: its lock is taken before anything is built or written, and
+# held on fd 9 by this process and the QEMU (or the lease's client) it becomes, to the boot's end. A
+# second launch on the disk is refused before it touches the running one's files.
+if [ "$keep" = 1 ]; then
+    exec 9>"$REDOUBT_TMP/launch/disk-$arch.lock"
+    flock -n 9 || {
+        echo "launch: the kept disk $REDOUBT_TMP/launch/disk-$arch.img is in use by another launch: quit it first (Ctrl-A X)" >&2
+        exit 1
+    }
+    export REDOUBT_LAUNCH_DISK_LOCKED=1
+fi
+# This launch's own QEMU line, so a launch beside it cannot rewrite it between the build and the boot.
+argv="$REDOUBT_TMP/launch/qemu-$arch.$$.argv"
 leased=()
 if scripts/q ping >/dev/null 2>&1; then
     leased=(scripts/q run --name launch --cores)
@@ -74,7 +93,8 @@ build=(cargo run --quiet -p testbench -- --run --system --arch "$arch" --smp "$s
        --qemu-argv "$argv" "${extra[@]}")
 if ((${#leased[@]})); then build=("${leased[@]}" 8 -- "${build[@]}"); fi
 "${build[@]}"
-if [ "$print_only" = 1 ]; then exit 0; fi
 mapfile -d '' qemu < "$argv"
+rm -f "$argv"
+if [ "$print_only" = 1 ]; then exit 0; fi
 if ((${#leased[@]})); then qemu=("${leased[@]}" "$smp" -- "${qemu[@]}"); fi
 exec "${qemu[@]}"

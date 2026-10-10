@@ -1,0 +1,44 @@
+description = "A kept disk outlives a relaunch (GETTING-STARTED.md, \"Try the system\"; `./launch --system --keep-disk`): the machine launch boots, booted twice on one data disk kept between the boots, the read-only system volume packed by the build each time. At alice's console prompt each boot appends an `x` to /home/alice/boots and prints the file: the first boot, on a disk new from the image, prints `x`, and the second, on the disk the first left, `xx`; a disk not kept prints `x` twice, and the two boots' captures must differ. The verdict is the shell's line on the console, the file as walfsd served it"
+arch = ["rv64", "rv32"]
+kind = "boot"
+recipe = "image/boot.toml"
+# Boot launch's own command line, twice, on the kept disk.
+launch = true
+smp = [4]
+# The machine launch boots: four harts, launch's default.
+keep_smp = true
+# The image needs 1 GiB: the principals' budgets, each holding a shell VM's session, do not fit
+# the users budget 256 MiB leaves (docs/kernel/budgets.md).
+memory_mib = 1024
+timeout_secs = 300
+expect = [
+    '^init: the boot is done: ',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+    '^\[con [0-9a-f]{16}\] boots: x+$',
+]
+distinct_across_boots = ['^\[con [0-9a-f]{16}\] boots: (x+)$']
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    '^init: .* (exited|faulted|was killed)',
+    'init: restarted',
+    'EXCEPTION',
+    'File.Error',
+]
+
+# The file's count of boots so far, one more, then the count. The echo of the typed line holds
+# `"boots: "` in quotes, which the patterns' `boots: x` does not match.
+[[input]]
+after = '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir '
+send = "f = \"/home/alice/boots\"; File.write!(f, (case File.read(f) do {:ok, n} -> n; _ -> \"\" end) <> \"x\"); IO.puts(\"boots: \" <> File.read!(f))\n"
+
+[userland]
+recipe = "image/userland.toml"
+
+# The image's own disk, kept: the second boot finds what the first wrote.
+[disk]
+recipe = "image/disk.toml"
+keep = true
+
+[net]
+forward = [22]

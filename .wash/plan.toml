@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 53
+revision = 67
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1613,8 +1613,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["CTX1"]
   body = "Second of three; brief .wash/local/CTX1-brief.md, design .wash/local/CTX1-design.md. A relay program in the context's own budget serves the VM's /dev/cons; the steward hands it each channel's console. 64 KiB buffer, newest kept, a dropped-count line, cut at line boundaries, resize on reattach. Takeover is told on both terminals, with the remote address. Tier A."
   state = "active"
-  revision = 3
-  overrides = ["2026-10-08: started by Orchestrator before CTX1 (reported), M1 (reported): CTX1 is reported and under its last fold; CTX2 is stacked on it by the orchestrator's ruling", "2026-10-08: started by Orchestrator before M1 (reported): named contexts run ahead of M1's acceptance (owner request 2026-10-08)", "2026-10-09: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the userland track runs ahead of its acceptance"]
+  revision = 61
+  overrides = ["2026-10-08: started by Orchestrator before CTX1 (reported), M1 (reported): CTX1 is reported and under its last fold; CTX2 is stacked on it by the orchestrator's ruling", "2026-10-08: started by Orchestrator before M1 (reported): named contexts run ahead of M1's acceptance (owner request 2026-10-08)", "2026-10-09: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the userland track runs ahead of its acceptance", "2026-10-10: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the userland track runs ahead of its acceptance"]
 
 [[node]]
   id = "CTX3"
@@ -1884,8 +1884,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["B45"]
   body = "From B45: on the machine, printing a 1 MiB line takes about 2 minutes (Text.visible plus the encoder). Profile on beamlet (which of grapheme walking, escaping, measuring, encoding dominates), make the common case (printable ASCII/UTF-8 with no controls) a fast path, and set a throughput target with a case. Escaping path: Tier A."
   state = "active"
-  revision = 6
-  overrides = ["2026-10-09: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the shell track runs ahead of its acceptance"]
+  revision = 63
+  overrides = ["2026-10-09: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the shell track runs ahead of its acceptance", "2026-10-10: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the shell track runs ahead of its acceptance"]
 
 [[node]]
   id = "TRY2"
@@ -1893,9 +1893,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M2"
   body = "Follows TRY1 and IDLE1. `./launch --system --keep-disk` keeps the disk image under .tmp per arch (reuses it if its layout matches the image's manifest; otherwise refuses with the reason and the flag to start fresh, never silently reformats). Without the flag, a fresh disk as now. The read-only system volume still comes from the build, so a rebuilt system boots against kept home/vault volumes. GETTING-STARTED's 'Try the system' says so. A bench case: launch with --keep-disk, write a file at the prompt, relaunch, read it back. Tier B tooling."
-  state = "active"
-  revision = 44
-  overrides = ["2026-10-09: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the tooling track runs ahead of its acceptance"]
+  state = "done"
+  revision = 67
+  overrides = ["2026-10-09: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the tooling track runs ahead of its acceptance", "2026-10-10: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the tooling track runs ahead of its acceptance"]
 
 [[node]]
   id = "IDLE2"
@@ -1924,8 +1924,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   body = "Found by NSCR1 on main a72e774b8 (PIPE1 + JOB1 code). In one console session, Pipeline.run([{\"pipe-stage\", [\"say\",\"hi\"]}]) typed once per line: runs 1-4 return ok and the session's processes go back to {10,1}; runs 5 and on return {:error, :refused}. Ports, VM processes and the namespace (9 entries) stay flat; a direct Redoubt.Pipes.open(1) after four pipelines succeeds, so the refusal is later in the fifth start (make_pipes, connect or launch). A one-process weight-1 budget stays for good after the first pipeline (processes {10,2}, weight {100,1}): piped's own, which is by design if piped is the session's long-lived server; say so on the page or fix it. Today's cases run at most four pipelines, which is why they pass. Repro: .wash/local/B47-repro.md. Find the bound (a handle table, a served-file slot, piped's pipe table, launch's MAX_JOBS, a budget not returned), fix it, and add a case that runs eight pipelines in one session on both widths. Acts with the session's authority: main, Tier A, the steward red."
   state = "active"
-  revision = 35
-  overrides = ["2026-10-09: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the userland track runs ahead of its acceptance"]
+  revision = 57
+  overrides = ["2026-10-09: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the userland track runs ahead of its acceptance", "2026-10-10: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the userland track runs ahead of its acceptance"]
 
 [[node]]
   id = "BEAM19"

@@ -231,9 +231,10 @@ pub const DISK_BUS: &str = "virtio-mmio-bus.7";
 /// The userland disk's slot: `0x10006000`, interrupt 6.
 pub const USERLAND_BUS: &str = "virtio-mmio-bus.5";
 
-/// QEMU arguments for a case's virtio devices, for one boot: creates the disk afresh at
-/// `disk`, so no boot sees another's writes, and forwards from `ports`, the host ports in the
-/// forwards' order, or with none given from free ones. The userland disk is copied beside it from
+/// QEMU arguments for a case's virtio devices, for one boot: creates the disk afresh at `disk`,
+/// so no boot sees another's writes, unless it is kept and there already (`Disk::keep`), when
+/// its layout must be a fresh disk's; and forwards from `ports`, the host ports in the forwards'
+/// order, or with none given from free ones. The userland disk is copied beside it from
 /// `userland`, the run's one pack ([`crate::build::Builder::userland`]), with the case's damage,
 /// and attached read-only.
 pub fn virtio_devices(
@@ -248,6 +249,8 @@ pub fn virtio_devices(
     }
     if let Some(spec) = &boot.disk {
         match &spec.recipe {
+            // A kept disk, from an earlier boot: as that boot left it, if laid out as a fresh one.
+            _ if spec.keep && disk.exists() => check_layout(spec, disk)?,
             // Packed as `./mkimage` packs it, afresh for every boot.
             Some(recipe) => {
                 let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -345,6 +348,50 @@ pub fn virtio_devices(
         args.extend(peer::capture_args(net, &peers));
     }
     Ok((args, forwards))
+}
+
+/// Refuse a kept disk whose layout is not the one `spec` packs now: its size, and its partition
+/// table (`blkd`'s builder writes it the same for the same sizes); and, as a pack would, a recipe
+/// whose manifest's volumes no longer fit its partitions. Its volumes' contents are the guest's;
+/// a table that differs is never reformatted, only refused.
+fn check_layout(spec: &crate::case::Disk, disk: &Path) -> Result<()> {
+    let (bytes, table) = match &spec.recipe {
+        Some(recipe) => {
+            let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+            let recipe = crate::disk::Recipe::load(&root.join(recipe))?;
+            crate::disk::hold_recipe(&recipe, &root)
+                .with_context(|| format!("the kept disk {} is not attached", disk.display()))?;
+            let sectors = recipe.size_kib * 1024 / crate::disk::SECTOR;
+            (recipe.size_kib * 1024, Some(crate::disk::gpt_disk(sectors, recipe.partition.len() as u64)))
+        }
+        None => {
+            let sectors = spec.size_kib * 1024 / crate::disk::SECTOR;
+            (
+                spec.size_kib * 1024,
+                (spec.partitions > 0).then(|| crate::disk::gpt_disk(sectors, spec.partitions)),
+            )
+        }
+    };
+    let refuse = |why: String| {
+        anyhow::anyhow!(
+            "the kept disk {} is not laid out as the image's disk now ({why}): it is not reformatted; \
+             delete it, or launch with --fresh-disk, to start it over from the image's",
+            disk.display()
+        )
+    };
+    let len = std::fs::metadata(disk)?.len();
+    if len != bytes {
+        return Err(refuse(format!("{len} bytes, not {bytes}")));
+    }
+    if let Some(table) = table {
+        let head = crate::disk::TABLE_BYTES.min(table.len());
+        let mut kept = vec![0u8; head];
+        std::io::Read::read_exact(&mut std::fs::File::open(disk)?, &mut kept)?;
+        if kept != table[..head] {
+            return Err(refuse("its partition table differs".into()));
+        }
+    }
+    Ok(())
 }
 
 /// How much of QEMU's stderr the bench keeps: the last lines, each cut short, so a QEMU that
@@ -1013,6 +1060,79 @@ mod tests {
         let escape = "[con a] \x1b]0;title\x07";
         assert_eq!(forbidden(&forbid, escape, &shown(escape)).map(Regex::as_str), Some(r"\x1b"));
         assert!(forbidden(&forbid, "[con a] clean", "[con a] clean").is_none());
+    }
+
+    /// A kept disk already there is attached as it is; one not there yet is made; a disk that
+    /// is not kept is made afresh over one that is there.
+    #[test]
+    fn a_kept_disk_is_attached_as_it_is() {
+        let disk = std::env::temp_dir().join(format!("testbench-qemu-kept-{}.img", std::process::id()));
+        let kept = boot("[disk]\nsize_kib = 64\nkeep = true\n");
+        virtio_devices(&kept, &disk, None, &[]).unwrap();
+        assert_eq!(std::fs::metadata(&disk).unwrap().len(), 64 * 1024, "made the first time");
+        let mut files = vec![0u8; 64 * 1024];
+        files[..16].copy_from_slice(b"a person's files");
+        std::fs::write(&disk, &files).unwrap();
+        let (args, _) = virtio_devices(&kept, &disk, None, &[]).unwrap();
+        assert_eq!(std::fs::read(&disk).unwrap(), files);
+        assert!(args.iter().any(|a| a.contains(&disk.display().to_string())));
+        virtio_devices(&boot("[disk]\nsize_kib = 64\n"), &disk, None, &[]).unwrap();
+        assert_eq!(std::fs::read(&disk).unwrap(), vec![0; 64 * 1024], "afresh when not kept");
+        std::fs::remove_file(&disk).ok();
+    }
+
+    /// A kept disk laid out otherwise than a fresh one is refused, and left as it is: another
+    /// size, or another partition table; the same table with other contents is attached.
+    #[test]
+    fn a_kept_disk_of_another_layout_is_refused() {
+        let disk = std::env::temp_dir().join(format!("testbench-qemu-layout-{}.img", std::process::id()));
+        let two = boot("[disk]\nsize_kib = 64\npartitions = 2\nkeep = true\n");
+        virtio_devices(&two, &disk, None, &[]).unwrap();
+        let mut bytes = std::fs::read(&disk).unwrap();
+        let end = bytes.len();
+        bytes[end - 16..].copy_from_slice(b"a person's files");
+        std::fs::write(&disk, &bytes).unwrap();
+        virtio_devices(&two, &disk, None, &[]).unwrap();
+        assert_eq!(std::fs::read(&disk).unwrap(), bytes, "the same table: attached as it is");
+        let three = boot("[disk]\nsize_kib = 64\npartitions = 3\nkeep = true\n");
+        let why = virtio_devices(&three, &disk, None, &[]).unwrap_err().to_string();
+        assert!(why.contains("its partition table differs") && why.contains("--fresh-disk"), "{why}");
+        let bigger = boot("[disk]\nsize_kib = 128\npartitions = 2\nkeep = true\n");
+        let why = virtio_devices(&bigger, &disk, None, &[]).unwrap_err().to_string();
+        assert!(why.contains("65536 bytes, not 131072"), "{why}");
+        assert_eq!(std::fs::read(&disk).unwrap(), bytes, "never reformatted");
+        std::fs::remove_file(&disk).ok();
+    }
+
+    /// A kept disk packed from a recipe is held to the recipe's manifest as a pack is: a manifest
+    /// whose volume no longer fits its partition refuses the kept disk too, and leaves it as it is.
+    #[test]
+    fn a_kept_disk_is_held_to_its_recipe_s_manifest() {
+        let dir = std::env::temp_dir().join(format!("testbench-qemu-held-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (recipe, manifest, disk) =
+            (dir.join("disk.toml"), dir.join("manifest.json"), dir.join("disk.img"));
+        let bytes = crate::disk::partition_bytes(64, 1)[0];
+        let volume = |bytes: u64| {
+            let volumes =
+                json!({ "volumes": [{ "name": "data", "partition": 0, "bytes": bytes.to_string() }] });
+            std::fs::write(&manifest, volumes.to_string()).unwrap();
+        };
+        volume(bytes);
+        let text = format!(
+            "size_kib = 64\nmanifest = {:?}\n[[partition]]\nname = \"data\"\nfs = \"noise\"\n",
+            manifest
+        );
+        std::fs::write(&recipe, text).unwrap();
+        let kept = boot(&format!("[disk]\nrecipe = {:?}\nkeep = true\n", recipe));
+        virtio_devices(&kept, &disk, None, &[]).unwrap();
+        let packed = std::fs::read(&disk).unwrap();
+        virtio_devices(&kept, &disk, None, &[]).unwrap();
+        volume(bytes + 4096);
+        let why = format!("{:#}", virtio_devices(&kept, &disk, None, &[]).unwrap_err());
+        assert!(why.contains("is not attached") && why.contains(&format!("bytes {}", bytes + 4096)), "{why}");
+        assert_eq!(std::fs::read(&disk).unwrap(), packed, "left as it is");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     fn boot(devices: &str) -> Boot {

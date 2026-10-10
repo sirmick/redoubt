@@ -503,6 +503,12 @@ pub struct Disk {
     /// signing: the disk changes, never the manifest.
     #[serde(default)]
     pub flip_version: bool,
+    /// Keep the disk: a file already there is attached as it is, not packed afresh, if its layout
+    /// is the one a fresh disk would have. A case's two boots (`distinct_across_boots`) share it,
+    /// the second seeing what the first wrote; `--run --system --keep-disk` keeps it across
+    /// launches.
+    #[serde(default)]
+    pub keep: bool,
 }
 
 /// The userland disk (image/userland.toml): the run's one pack of its recipe, whose verified
@@ -908,6 +914,10 @@ impl Case {
                         "sessions need net.forward = [22]"
                     );
                 }
+                ensure!(
+                    !boot.disk.as_ref().is_some_and(|d| d.keep) || !boot.distinct_across_boots.is_empty(),
+                    "disk.keep shares the disk between two boots: it needs distinct_across_boots"
+                );
                 if boot.launch {
                     // launch's command line is booted as it is: nothing a case adds to QEMU's.
                     let net = boot.net.as_ref().filter(|n| n.forward == [22] && n.peer.is_empty());

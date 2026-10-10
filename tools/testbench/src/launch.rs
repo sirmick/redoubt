@@ -3,7 +3,9 @@
 //! assembled by the bench's own builder, packer and device arguments, so what a person boots is
 //! what that case boots. Alice's login key is a development key made once per checkout under
 //! `$REDOUBT_TMP/launch`, or the user's own (`--key`), given to alice in this boot's copy of the
-//! manifest only.
+//! manifest only. The data disk is new at every launch, or with `--keep-disk` kept there too,
+//! refused if the image's disk is laid out otherwise since and started over by `--fresh-disk`;
+//! a kept disk is one launch's at a time, locked before anything is built or written.
 
 use std::net::TcpListener;
 use std::os::unix::ffi::OsStrExt;
@@ -37,6 +39,10 @@ pub struct System<'a> {
     pub print_only: bool,
     /// Write the QEMU command here, each argument ended by a NUL, for `./launch` to boot.
     pub argv: Option<&'a Path>,
+    /// Keep the data disk across launches, under `$REDOUBT_TMP/launch`, instead of a new one.
+    pub keep_disk: bool,
+    /// With `keep_disk`, start the kept disk over from the image's.
+    pub fresh_disk: bool,
 }
 
 /// Build, pack and print; boot unless `print_only`.
@@ -50,6 +56,17 @@ pub fn system(builder: &Builder, workspace: &Path, logs: &Path, ask: &System) ->
     let Kind::Boot(boot) = &mut case.kind else { bail!("{CASE} is not a boot case") };
     boot.smp = vec![ask.smp];
     boot.login_key = Some(public);
+    let kept =
+        ask.keep_disk.then(|| launch_dir(workspace).map(|dir| dir.join(format!("disk-{}.img", ask.arch))));
+    let kept = kept.transpose()?;
+    // Held until the boot ends, or the caller holds it for the boot it runs (`./launch`).
+    let _lock = kept.as_deref().map(lock_kept).transpose()?;
+    if let Some(path) = &kept {
+        boot.disk.as_mut().context("the launch machine has no disk")?.keep = true;
+        if ask.fresh_disk && path.exists() {
+            std::fs::remove_file(path).with_context(|| format!("removing {}", path.display()))?;
+        }
+    }
 
     let target = target::find(ask.arch).with_context(|| format!("unknown arch {}", ask.arch))?;
     let machine =
@@ -63,7 +80,8 @@ pub fn system(builder: &Builder, workspace: &Path, logs: &Path, ask: &System) ->
     };
     let Kind::Boot(boot) = &case.kind else { unreachable!("checked above") };
     let firmware = crate::rustsbi_prototyper(target).map_err(|why| anyhow::anyhow!(why))?;
-    let disk = logs.join(format!("{}-{}.img", case.name, target.name));
+    let disk = kept.clone().unwrap_or_else(|| logs.join(format!("{}-{}.img", case.name, target.name)));
+    let made = !disk.exists();
     let qemu = command(machine, &firmware, &packed, boot, &disk, ask.smp, ask.ssh_port)?;
     let fingerprint = host_key_fingerprint(&std::fs::read(packed.bundle.with_extension("manifest.json"))?)?;
 
@@ -73,12 +91,26 @@ pub fn system(builder: &Builder, workspace: &Path, logs: &Path, ask: &System) ->
     }
     let identity =
         identity.map(|i| format!(" -i {}", qemu::shell_quote(&i.display().to_string()))).unwrap_or_default();
+    let disk = match (&kept, made) {
+        (None, _) => "The disk is new at every launch: files written in this boot are gone at the next \
+                      (--keep-disk keeps them)."
+            .to_string(),
+        (Some(path), true) => format!(
+            "The disk is kept at {}, new from the image now: files written survive to the next launch \
+             with --keep-disk.",
+            path.display()
+        ),
+        (Some(path), false) => format!(
+            "The disk is the one kept at {}, as the last launch left it; --fresh-disk starts it over \
+             from the image's.",
+            path.display()
+        ),
+    };
     eprintln!(
         "\nRedoubt {arch}, {smp} harts, {mib} MiB. This terminal is the serial console, alice's console \
-         session; Ctrl-A X quits QEMU.\nThe disk is new at every launch: files written in this boot are \
-         gone at the next.\nOnce the console prints \"sshd: listening on port 22\", log in from another \
-         terminal:\n\n  ssh -p {port}{identity} {PRINCIPAL}@localhost\n\nHost key: {fingerprint} (ED25519), \
-         the image's development host key\n",
+         session; Ctrl-A X quits QEMU.\n{disk}\nOnce the console prints \"sshd: listening on port \
+         22\", log in from another terminal:\n\n  ssh -p {port}{identity} {PRINCIPAL}@localhost\n\n\
+         Host key: {fingerprint} (ED25519), the image's development host key\n",
         arch = target.name,
         smp = ask.smp,
         mib = boot.memory_mib.unwrap_or(target::DEFAULT_MEMORY_MIB),
@@ -91,8 +123,8 @@ pub fn system(builder: &Builder, workspace: &Path, logs: &Path, ask: &System) ->
 }
 
 /// The QEMU command that boots the launch machine's `packed` image at `smp` harts, its disk
-/// packed afresh at `disk` and the guest's port 22 forwarded from the host's `port`: what
-/// `./launch --system` boots, and the `launch-system` case.
+/// packed afresh at `disk` (or, kept, as it is there) and the guest's port 22 forwarded from the
+/// host's `port`: what `./launch --system` boots, and the `launch-system` case.
 pub fn command(
     machine: &Machine,
     firmware: &str,
@@ -167,10 +199,7 @@ fn login_key(workspace: &Path, key: Option<&Path>) -> Result<(String, Option<Pat
             (public.to_path_buf(), identity)
         }
         None => {
-            let tmp = std::env::var_os("REDOUBT_TMP").map_or_else(|| workspace.join(".tmp"), PathBuf::from);
-            let dir = tmp.join("launch");
-            std::fs::create_dir_all(&dir)?;
-            let private = dir.join("id_ed25519");
+            let private = launch_dir(workspace)?.join("id_ed25519");
             if !private.exists() {
                 keygen(&private)?;
             }
@@ -178,6 +207,36 @@ fn login_key(workspace: &Path, key: Option<&Path>) -> Result<(String, Option<Pat
         }
     };
     Ok((public_line(&public)?, identity))
+}
+
+/// Set by `./launch` when it holds the kept disk's lock itself, from before the build to the end of
+/// the QEMU it then boots, which outlives this process: the lock found held is then the caller's.
+pub const LOCK_HELD: &str = "REDOUBT_LAUNCH_DISK_LOCKED";
+
+/// The lock of the kept disk `disk`, `disk-<arch>.lock` beside it, taken before anything writes the
+/// kept disk or the userland image beside it: a second launch on the disk while one runs is refused
+/// and leaves the running one's files as they are. `None` when it is held already and the caller
+/// says it holds it ([`LOCK_HELD`]); the variable alone, with the lock free, takes nothing on trust.
+fn lock_kept(disk: &Path) -> Result<Option<std::fs::File>> {
+    let path = disk.with_extension("lock");
+    let lock = std::fs::File::create(&path).with_context(|| format!("creating {}", path.display()))?;
+    match lock.try_lock() {
+        Ok(()) => Ok(Some(lock)),
+        Err(std::fs::TryLockError::WouldBlock) if std::env::var_os(LOCK_HELD).is_some() => Ok(None),
+        Err(std::fs::TryLockError::WouldBlock) => {
+            bail!("the kept disk {} is in use by another launch: quit it first (Ctrl-A X)", disk.display())
+        }
+        Err(std::fs::TryLockError::Error(e)) => Err(e).with_context(|| format!("locking {}", path.display())),
+    }
+}
+
+/// Where launch keeps what outlives a boot, for this checkout: `$REDOUBT_TMP/launch`, by default
+/// under the checkout's `.tmp`, which git ignores.
+fn launch_dir(workspace: &Path) -> Result<PathBuf> {
+    let tmp = std::env::var_os("REDOUBT_TMP").map_or_else(|| workspace.join(".tmp"), PathBuf::from);
+    let dir = tmp.join("launch");
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir)
 }
 
 /// The manifest's form of the Ed25519 public key in the file `public`: the type and the key,
@@ -271,6 +330,43 @@ mod tests {
     }
 
     const FINGERPRINT: &str = "SHA256:2HS8bJpYBy7bDfWIQN304coFKT0s6CVPABFLYq+IX5E";
+
+    /// A kept disk is one launch's at a time: while another holds its lock, by this function or by
+    /// `./launch`'s `flock` on the same file, a launch is refused and writes nothing; once it is
+    /// let go, the next takes it.
+    #[test]
+    fn a_kept_disk_in_use_is_refused() {
+        let dir = std::env::temp_dir().join(format!("testbench-launch-lock-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let disk = dir.join("disk-rv64.img");
+        std::fs::write(&disk, b"a person's files").unwrap();
+        let first = lock_kept(&disk).unwrap().expect("not held by a caller");
+        let why = lock_kept(&disk).unwrap_err().to_string();
+        assert!(why.contains("in use by another launch"), "{why}");
+        drop(first);
+        drop(lock_kept(&disk).unwrap());
+
+        // ./launch's lock, held by flock(1) for as long as its command runs.
+        let lock = disk.with_extension("lock");
+        // -o: flock itself holds the lock, not the command, so killing flock lets it go.
+        let mut held = std::process::Command::new("flock")
+            .arg("-o")
+            .arg(&lock)
+            .args(["-c", "echo held; exec sleep 60"])
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .expect("flock(1), from util-linux");
+        let mut line = String::new();
+        std::io::BufRead::read_line(&mut std::io::BufReader::new(held.stdout.take().unwrap()), &mut line)
+            .unwrap();
+        assert_eq!(line, "held\n");
+        assert!(lock_kept(&disk).is_err(), "./launch holds it");
+        held.kill().unwrap();
+        held.wait().unwrap();
+        lock_kept(&disk).unwrap();
+        assert_eq!(std::fs::read(&disk).unwrap(), b"a person's files");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     /// The host key the `launch-system` case's sessions insist on is the one launch prints the
     /// fingerprint of: the image manifest's `ssh_host` key. (A blob of 51 bytes needs no base64
