@@ -597,7 +597,9 @@ since under `icount` a section on several harts counts the others' instructions 
 p99 against K searches of the same run alone, from the program's `one search alone` line, at any
 hart count (`sched-lock-contention-4-mttcg`). `sched-capped` runs the model's capped scenarios
 ([model](kernel/model.md#scheduler-scenarios)) on the machine at two, three and four harts, each
-budget's share judged as below. It is itself checked against the model's ranks and against traces broken one clause at a
+budget's share judged as below; `hart_shares_from=3` records the shares on a trace of fewer harts,
+since under `icount` QEMU's turns move them, and `sched-capped-mttcg` judges the two-hart shares
+where the harts run at once ([QEMU's turns](kernel/scheduling.md#residual-risks)). It is itself checked against the model's ranks and against traces broken one clause at a
 time. The tracing kernel is a test build only
 ([R23 (no test channels)](kernel/scheduling.md#r23-no-test-channels)).
 

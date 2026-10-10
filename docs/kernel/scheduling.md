@@ -979,11 +979,12 @@ Status: built · tested: bench:sched-carve-inflation, bench:legacy-gone, host:re
 
 ### R12 (scheduling)
 
-<details><summary>Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search, `map_fixed`'s range, `process_create` and, after RAM fills, a one-page `map_anon`, `budget_create` and a rolled-back `process_create` (with a recorded negative run, `alloc-first-fit`); and at full occupancy, every PID in use with every thread, for a delivery, a timer expiry ending 250 waits at once and the reconcile that wakes their 250 budgets (over 8-seed sweeps, 7.8 ms on rv64 and 6.8 to 9.1 ms on rv32, bounded at 10 ms: the sweeps' worst and a tenth) and a destruction (at most 17.1 ms on rv64, 18.2 ms on rv32) (`bench:worst-walk`) · tested (63)</summary>
+<details><summary>Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search, `map_fixed`'s range, `process_create` and, after RAM fills, a one-page `map_anon`, `budget_create` and a rolled-back `process_create` (with a recorded negative run, `alloc-first-fit`); and at full occupancy, every PID in use with every thread, for a delivery, a timer expiry ending 250 waits at once and the reconcile that wakes their 250 budgets (over 8-seed sweeps, 7.8 ms on rv64 and 6.8 to 9.1 ms on rv32, bounded at 10 ms: the sweeps' worst and a tenth) and a destruction (at most 17.1 ms on rv64, 18.2 ms on rv32) (`bench:worst-walk`) · tested (64)</summary>
 
 - bench:sched-share
 - bench:sched-share-release
 - bench:sched-capped
+- bench:sched-capped-mttcg
 - bench:sched-capped-holds-floor
 - bench:sched-sleep-gaming
 - bench:sched-idle-gap
@@ -1104,11 +1105,13 @@ It is attacked three ways:
   server flooded by one user; a weight-1000 server among eight users of 100. On two, three and
   four harts, `sched-capped` runs the model's scenarios: a heavy budget with one thread on two
   harts while others join, a second cap at three, a capped budget gaining a thread, and one
-  budget spread over four harts. A kernel whose floor counts the capped budgets
+  budget spread over four harts; at two harts the shares are recorded under `icount` and judged
+  where the harts run at once (`sched-capped-mttcg`, QEMU's turns below). A kernel whose floor counts the capped budgets
   (`sched-capped-holds-floor`, a debug-only feature whose queue audit reads the same broken rule)
   passes every rank the oracle checks, and fails late join's shares at two harts, on both widths:
   B gets 52 of 1000 (rv64) and 56 (rv32) against 250 while C takes its hart
-  (`bench:sched-capped-holds-floor`, a case that must fail).
+  (`bench:sched-capped-holds-floor`, a case that must fail), and 30 and 31 where the harts run
+  at once (a recorded run each).
 - **The differential** drives `libs/stride`, wired as the kernel wires it, and the model's
   scheduler through 3,000 random sequences of creations, destructions (leaf, on a hart, and
   whole subtrees), wakes, blocks, runs and preemptions, at 1, 2 and 4 harts, and requires every
@@ -1392,7 +1395,7 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   another budget; a budget with one thread on two harts cannot be repaid by a pick. At two harts
   it is up to 17 % of a victim's window in `deadline-flood-billed-traced`, depending on where the
   destructions land ([timer](timer.md#r12-scheduling-for-timer-work)).
-- **A woken hart waits for QEMU's turns at four harts.** Under `icount` the harts take turns on one
+- **A hart waits for QEMU's turns.** Under `icount` the harts take turns on one
   host thread, and a hart in a kernel section keeps its turn to the section's end. A device's
   line that rises while the idle hart is halted wakes it on time in virtual time, but the hart runs
   only when the running hart's turn ends, and then draws its ticket behind up to three sections. In
@@ -1401,7 +1404,13 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   timing moves which turn the wake lands behind, so both are recorded there, not gated: every long
   idle halt began with nothing pending, and the kernel cannot shorten another hart's turn. On harts
   that run at once the woken hart draws its ticket at the rise, and the four-hart p50 and p99 are
-  judged there, under QEMU's multi-threaded TCG ([R78](#r78-fair-kernel-entry)).
+  judged there, under QEMU's multi-threaded TCG ([R78](#r78-fair-kernel-entry)). Turns move
+  shares too: at two harts on rv32, QEMU ends the heavy budget's hart's turn inside its slice
+  end's time billed to nobody (the checked build's audit, or `kmain`'s expiry walk) at every
+  slice, about 2,600 ticks a slice, so `sched-capped`'s late join reads 449 of 1000 against
+  500 (434 at `icount` shift 4) and the oracle's nobody share is 71 of 1000 where it was 30. The
+  two-hart shares are recorded there and judged in `sched-capped-mttcg` (497 to 501 over five
+  runs a width).
 - **Every hart pays for each device interrupt.** An unmasked source raises the external interrupt
   on every hart's context, so each hart in user mode or idle when it rises traps, and all but one
   take the kernel lock for a claim that finds nothing; a hart in the kernel at the rise returns to
@@ -1444,7 +1453,7 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   `bench-poweroff-missing` keeps one hart too, a bound of the bench's own.
   `sched-latency-tcg` runs at two harts: the kernel's lines wait, whole, for a program's line in
   progress ([the console's one writer](devices.md#the-consoles-one-writer)).
-  `sched-capped` (two, three and four harts), `sched-lock-contention` (two) and
+  `sched-capped` (two, three and four harts), `sched-capped-mttcg` (two), `sched-lock-contention` (two) and
   `sched-lock-contention-4` (four) keep the counts they are about.
 - **A call within one budget crosses harts.** A wake sends an idle hart the reschedule interrupt
   even when the woken thread's budget runs elsewhere, so a server and its client in one budget

@@ -2970,7 +2970,8 @@ fn sections(sections: &[Section], waits: &[(u64, u64, u64)]) -> String {
 /// ([`check_charged_share`]), and each share across harts on the same charges net of lock waits
 /// ([`check_hart_share`]), with the timer interrupts inside its window nobody paid for and those
 /// that found another budget's wait ended early beside; `stale_waits_in=<share>` requires one of
-/// the latter.
+/// the latter. With `hart_shares_from=N`, the shares across harts are recorded, not judged, on a
+/// trace of fewer than N harts.
 /// `round` requires the budget the program marks to run before any other budget is picked twice
 /// ([`check_round`]).
 pub fn run(log: &str, args: &str) -> Result<String, String> {
@@ -3049,6 +3050,7 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
             "r10_p99_us",
             "lease_end_p99_us",
             "gate_harts",
+            "hart_shares_from",
             "fault_section_max_ticks",
             "timer_section_max_ticks",
             "timer_section_p99_ticks",
@@ -3282,8 +3284,16 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
     if let Some(name) = stale_in.iter().find(|n| !hart_shares.iter().any(|s| s.name == **n)) {
         return Err(format!("stale_waits_in names {name}, but the log holds no such share"));
     }
+    // On a trace of fewer harts than `hart_shares_from` each is recorded, not judged: under `icount`
+    // a hart's clock counts the other harts' turns, which can land in time billed to nobody.
+    let shares_from = bounds.get("hart_shares_from").copied().unwrap_or(0);
     for s in hart_shares {
         let (line, met) = judged_at(check_hart_share(&records, &s)?, s.at, harts);
+        let (line, met) = if harts < shares_from {
+            (format!("{line}, judged from {shares_from} harts: recorded"), true)
+        } else {
+            (line, met)
+        };
         let inside = |t: &&u64| (s.window.0..s.window.1).contains(*t);
         let stale = sum.timer_stale_foreign.iter().filter(inside).count();
         let stale_missed = stale_in.contains(&s.name) && stale == 0;
@@ -5570,6 +5580,16 @@ mod tests {
             ),
             "{missed:?}"
         );
+        // Judged from three harts on, the same miss at two is recorded; at two from two, judged.
+        let line = format!("HART-SHARE v 100 {end} 30@2 2:1 300:1\n");
+        let recorded = run(&(two.clone() + &line), "hart_shares_from=3");
+        assert!(
+            recorded.as_ref().is_ok_and(
+                |s| s.contains("target missed (470 <= share <= 530), judged from 3 harts: recorded")
+            ),
+            "{recorded:?}"
+        );
+        assert!(run(&(two.clone() + &line), "hart_shares_from=2").is_err_and(|e| !e.contains("recorded")));
         let ok = run(&(on_harts(&t, &[], 1) + &format!("HART-SHARE v 100 {end} 30@2 2:1 900:1\n")), "");
         assert!(
             ok.as_ref().is_ok_and(

@@ -1,0 +1,35 @@
+description = "sched-capped where the harts run at once (multi-threaded TCG, no icount): the late join, uncap and spread scenarios judged at two harts on the kernel's charges net of lock waits against water-filling, within 50 per thousand, which sched-capped under icount only records at two harts: there a hart's clock counts the other hart's turns, which can fall in time billed to nobody (kernel/scheduling.md, \"Residual risks\") (host time, checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+programs = ["sched-capped"]
+# Five runs alone on quiet cores, each width, read late-a 497 to 501, late-b and late-c 249 to
+# 251, uncap 818 to 819 and 89 to 91, spread 496 to 503 (owed 500, 250, 818, 90 and 500). The
+# same program on the `sched-capped-holds-floor` kernel here misses late join: late-b 30 and
+# late-c 470 (rv64), 31 and 469 (rv32), a recorded run each.
+smp = [2]
+keep_smp = true
+# Test builds only: the trace ring (never in a default kernel).
+kernel_features = ["sched-trace"]
+post_check = "sched_oracle"
+timeout_secs = 1200
+expect = [
+    '^HART-SHARE late-a \d+ \d+ 50@2 2:1 100:1 100:1$',
+    '^HART-SHARE late-b \d+ \d+ 50@2 3:1 900:1 100:1$',
+    '^HART-SHARE late-c \d+ \d+ 50@2 4:1 900:1 100:1$',
+    '^HART-SHARE second-a \d+ \d+ 50@3 5:1 100:1 10:5 10:5 10:1$',
+    '^HART-SHARE second-b \d+ \d+ 50@3 6:1 1000:1 10:5 10:5 10:1$',
+    '^HART-SHARE second-c \d+ \d+ 50@3 7:5 1000:1 100:1 10:5 10:1$',
+    '^HART-SHARE second-e \d+ \d+ 50@3 9:1 1000:1 100:1 10:5 10:5$',
+    '^HART-SHARE uncap-a \d+ \d+ 50@2 10:2 100:1 100:1$',
+    '^HART-SHARE uncap-b \d+ \d+ 50@2 11:1 900:2 100:1$',
+    '^HART-SHARE uncap-c \d+ \d+ 50@2 12:1 900:2 100:1$',
+    '^HART-SHARE spread-a \d+ \d+ 50@2 13:4 100:1$',
+    '^HART-SHARE spread-b \d+ \d+ 50@2 14:1 100:4$',
+    '^HART-SHARE spread-a-4 \d+ \d+ 50@4 13:4 100:1$',
+    '^HART-SHARE spread-b-4 \d+ \d+ 50@4 14:1 100:4$',
+    '^SCHED-CAPPED TEST PASSED$',
+    '^SCHED-TRACE-END \d+ dropped 0$',
+]
+forbid = ['\[capped\] FAIL']
+poweroff = true
