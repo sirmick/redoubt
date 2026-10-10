@@ -214,10 +214,29 @@ pub enum Refusal {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Answer {
     Ok,
-    Session { id: u64, name: String },
-    Lease { id: u64, name: String },
-    Request { id: u64 },
+    /// A session's listing of its domain's contexts.
+    Contexts(Vec<Listed>),
+    Session {
+        id: u64,
+        name: String,
+    },
+    Lease {
+        id: u64,
+        name: String,
+    },
+    Request {
+        id: u64,
+    },
     Refused(Refusal),
+}
+
+/// One context in a listing: its name (empty for the default), whether a channel is attached,
+/// and the microseconds since it last started running, attached or detached. No client address.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Listed {
+    pub name: String,
+    pub attached: bool,
+    pub age: u64,
 }
 
 /// Who a notice goes to.

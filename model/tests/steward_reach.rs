@@ -69,6 +69,11 @@ macro_rules! instrumented {
                 saw(if r { "filter reaches shows" } else { "filter reaches hides" });
                 r
             }
+            pub fn sees(caller: &Domain, d: &Domain) -> bool {
+                let r = (Policy::SHIPPED.sees)(caller, d);
+                saw(if r { "filter sees shows" } else { "filter sees hides" });
+                r
+            }
         }
 
         /// Every name the wrappers can record: each guard both ways, each effect, each filter
@@ -80,6 +85,8 @@ macro_rules! instrumented {
             "filter audit_visible hides",
             "filter reaches shows",
             "filter reaches hides",
+            "filter sees shows",
+            "filter sees hides",
         ];
 
         /// `Policy::SHIPPED`, every entry wrapped.
@@ -89,6 +96,7 @@ macro_rules! instrumented {
                 $($e: wrap::$e,)*
                 audit_visible: wrap::audit_visible,
                 reaches: wrap::reaches,
+                sees: wrap::sees,
             }
         }
     };
@@ -96,11 +104,11 @@ macro_rules! instrumented {
 
 instrumented! {
     guards: agent_own_set, approval_key, blame_window, caller_unlabelled, context_free, copying, declassifies,
-        exact_labels, fair_share, grants_lease, granted, hash_matches, item_fits, lease_bounded,
-        login_key, not_locked, owns_labels, pending_cap, pushes, reading, rendered_here,
-        sponsor_session;
+        exact_labels, fair_share, grants_lease, granted, hash_matches, idle_due, is_context, item_fits,
+        lease_bounded, login_key, not_locked, owns_labels, pending_cap, pushes, reading, rendered_here,
+        sponsor_session, under_cap;
     effects: attach_relay, audit_agent_started, audit_approved, audit_attached, audit_blamed, audit_copy_failed,
-        audit_declassified, audit_denied, audit_lease_ended, audit_locked_out, audit_login,
+        audit_declassified, audit_denied, audit_idle, audit_lease_ended, audit_locked_out, audit_login,
         audit_push_failed, audit_pushed, audit_start_failed, audit_submitted, carve_crossing,
         carve_lease, carve_session, connect, copy_out, count_blame, create_scope, destroy_budget, detach_relay,
         destroy_crossing, destroy_partial, drop_requests, forget, freeze, grant_lease, launch,
@@ -120,7 +128,7 @@ const STEWARD: [(&str, Reach, u64); 2] = [
 
 /// Each family's last new item and how many it reaches, as kernel/model.md's table states them
 /// ("Property families"), for this generator.
-const LAST: [(u64, usize); 2] = [(114, 128), (675, 131)];
+const LAST: [(u64, usize); 2] = [(199, 142), (439, 145)];
 
 /// Seeds `0..n` of `f`, unmutated, on the instrument's table: the lowest seed reaching each rule
 /// and property. Every seed must hold.

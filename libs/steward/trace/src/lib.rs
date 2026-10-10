@@ -159,7 +159,7 @@ pub fn untaken(machines: &[redoubt_steward_gen::Machine], taken: &Rows) -> Vec<S
 mod tests {
     use super::*;
 
-    const TRACE: &str = "principal \"alice\" account=1 login=[11] approval=[21] owned=[7] sets=[[],[7]] top=100,10,10\n\
+    const TRACE: &str = "principal \"alice\" account=1 login=[11] approval=[21] owned=[7] sets=[[],[7]] top=100,10,10 contexts=2 idle=300\n\
                          sizes session=10,1,1 agent=10,1,1 sub_agent=5,1,1 crossing=2,1,1 cost=1\n\
                          event now=1 random=[5,6] reply=1 Login principal=\"alice\" labels=[] key=11\n\
                          event now=2 random=[7,8] reply=2 Login principal=\"alice\" labels=[7] key=99\n";

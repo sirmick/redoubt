@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 135
+revision = 150
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1623,8 +1623,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   needs = ["CTX2"]
   body = "Part c of named SSH contexts (brief .wash/local/CTX1-brief.md): the cap of live contexts per (principal, label set), never evicting; idle expiry of detached contexts, configurable per principal with a default; the shell's contexts()/detach()/end_context within the label set; the generation (or end-with-steward) rule on steward restart, chosen at its design checkpoint with costs. Also from CTX1's red: measure rule 3's timing (an unknown principal, label set or non-name is refused before any machine runs; a wrong key on a known principal runs the blame and session machines before login_key refuses it, counting nothing) at the SSH client, and equalize it if it is distinguishable above jitter."
-  state = "active"
-  revision = 135
+  state = "done"
+  revision = 149
   overrides = ["2026-10-10: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the userland track runs ahead of its acceptance", "2026-10-10: started by Orchestrator before CTX2 (reported), M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the userland track runs ahead of its acceptance"]
 
 [[node]]
@@ -1822,8 +1822,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "smp"
   needs = ["SMP4"]
   body = "M2 page 'Several harts' step 5, reworded by measurement: zero on reclaim (freed frame -> in flight -> zeroed outside the lock by the freeing hart -> bitmap; allocation zeroes nothing), not zero on allocate. The in-flight invariant as a rule beside R11, with the model's rule and a mutation, and an attack case (a second hart racing to allocate, map or free an in-flight frame). Shootdown waits stay under the lock (measured ~0), a residual. Kernel: Tier A."
-  state = "done"
-  revision = 117
+  state = "reported"
+  revision = 147
   overrides = ["2026-10-09: started by Orchestrator before M1 (reported): several-harts track runs ahead of M1's acceptance", "2026-10-09: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; the several-harts track runs ahead of M1's acceptance", "2026-10-10: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; the several-harts track runs ahead of M1's acceptance"]
 
 [[node]]
@@ -1968,7 +1968,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["SMP6"]
   body = "From BEAM19's exact instruction counts (.wash/local/BEAM19-report.md; QEMU exec log weighted by block length, icount shift=3, rv64 smp 1): while a session's VM runs a tight loop, each kernel entry (the timer interrupt at the slice, the scheduler's pick and return) costs about 12,000 kernel instructions, about 20 % of the hart. Measure the entry's parts with the kernel's trace and the exec log (trap save/restore, the lock, the pick, billing, reconcile marks, audits in a checked build vs none in release, the return), find what is proportional to nothing the entry does, and cut it; a reductions-per-second case already exists (beamlet-reduction-rate) and a kernel-side bound (instructions or ticks per entry, measured in the oracle net of audits) is the gate on both widths. Nothing changes in any rule; the scheduler's targets hold. Kernel: Tier A, the kernel red."
   state = "active"
-  revision = 118
+  revision = 150
   overrides = ["2026-10-10: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; the several-harts track runs ahead of M1's acceptance"]
 
 [[node]]
@@ -2037,3 +2037,31 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "Noted by kernel-red while reviewing K32 (its K32 result): run directly as `cargo test -p redoubt-doccheck` in the reviewer's shell, c11_code, untracked_code_is_not_checked and narrow_cases_fire fail with 'C11 did not fire', while `cargo testbench docs` passes in the same worktree. C11 checks package ids in code; its fixtures appear to depend on the environment (a git checkout state, the tmp dir, the working directory). Reproduce both ways, find the dependence, and make the tests pass from any directory and shell the project supports (through q too); say on docs/testbench.md how doccheck's tests are run. Tests/tooling only: Tier B, one reviewer."
   state = "todo"
   revision = 129
+
+[[node]]
+  id = "K33"
+  title = "A preemption's round trip through kmain costs ~7,000 instructions: the budget re-picked is descheduled and requeued only to be chosen again"
+  template = "package"
+  parent = "smp"
+  needs = ["K31"]
+  body = "From K31's measurement (.wash/local/K31-report.md): after K31's cuts a timer entry costs ~9,000 instructions on rv64 (13,200 rv32), and about half is the structural round trip when the slice ends and the same budget is picked again: leave(kmain) with deschedule (~3.6k), kmain's pick (~6.7k before K31's cursor fix), the switch trap and leave(VM). Design question first (the Architect, or the orchestrator while it is blocked): when the slice ends and the runnable set has not changed, can the hart re-pick in place (the stride's pass advanced, the cursor moved) without descheduling through kmain, and what does the model need to keep R12's shares and the preemption points (scheduling.md) provable? Then build it with the oracle's per-entry bound (sched-timer-entry) lowered to the new measurement with margin, the sched-* set at 1 and 2 harts both widths unchanged in verdict, reduction-rate moving up again. Kernel and stride: Tier A, the kernel red; model rule and mutation if a rule changes."
+  state = "todo"
+  revision = 139
+
+[[node]]
+  id = "B55"
+  title = "bench-elixir-oracles-broken-guard hits its 46 s deadline under a whole bench's load and passes alone in 2 s: the case's class or deadline is wrong"
+  template = "package"
+  parent = "M2"
+  body = "Seen in the whole benches of trains 15 and 18 (2026-10-09/10): bench-elixir-oracles-broken-guard, a bounded-class host case that builds beamlet and runs libs/steward/elixir/run-traces --break not_locked, 'ran past the case's deadline of 46 s' beside the rest of the bench, then passed alone in 1.9 s and 2.4 s. Twice per day it costs the orchestrator a rerun under the shared-host rule. Find what the deadline measures (the beamlet build under load? the oracle itself?), split the build out of the timed part (the bounded class's 4 cores against a saturated machine) or move the case to the quiet class, and set its deadline from the measured alone time with a stated margin; docs/testbench.md's class table says why. Tests/tooling: Tier B, one reviewer."
+  state = "todo"
+  revision = 140
+
+[[node]]
+  id = "B56"
+  title = "The system at rest takes 119 (rv64) / 161 (rv32) interrupts per second per hart after train 18 (SMP6, K32, BEAM18): the idle ceilings are breached forty-fold"
+  template = "package"
+  parent = "smp"
+  body = "Found by train 18's whole bench on 4b84112f2: launch-idle fails on both widths, interrupts per hart 119.1/s (rv64) and 161.2/s (rv32) against the ceiling of 9, host CPU over too; IDLE1 measured ~3/s on 6b46c8c86. Attributed by first-parent bisect to SMP6 (191.1/s at its merge 58326f13c alone); SMP6 dropped from train 18 (rebuilt as K32 + BEAM18), fix on wp-SMP6 (8fb11dc37 on 98b866854). CAUSE (measured on 8fb11dc37, .wash/local/SMP6-report.md): the rate is a 60 s average of a 1-2 s burst at the window's start. The login frees ~33k frames (~130 MiB) that sit in flight; when every hart goes idle together, all four drain their own pending lists at once, each frame a lock round trip (A1), the drainers contend, and nearly every re-acquire halts and is woken by the releaser's IPI (m_software at acquire_ticket's wfi paired 1:1 with wake_halted): ~32,900 of 33,160 IPIs fall in those two seconds; afterwards the rest is IDLE1-like (~3/s). The idle loop does halt when its list is empty; no timer storm; user ecalls as IDLE1. FIX: one hart drains at a time under the lock; a hart idle while another drains halts as before; when the drainer's list empties it wakes one idle hart with frames pending (one IPI per hart per drain). Then measure the single drainer's time (~33k x ~30 us) and its host-cores cost over the window; if the drain pushes host cores over 0.01, launch-idle waits for the system to settle before its window (frames in flight at zero via the trace, or a stated settle time) rather than moving the ceiling, and testbench.md and memory.md say that after a large free the idle harts spend about a second zeroing before the machine is quiet. Keep A1, A3 and the drain. Gate: launch-idle both widths at 4 harts under the ceilings; the per-cause table before/after in the report. Kernel: Tier A, kernel-red. Blocks SMP6's merge."
+  state = "todo"
+  revision = 145

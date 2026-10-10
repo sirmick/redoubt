@@ -96,6 +96,46 @@ defmodule Redoubt.Steward.Guards do
     end
   end
 
+  # A login that would make a context finds fewer than its principal's cap of live sessions in its
+  # domain, contexts and the console's; nothing is evicted. The console's own session is not capped.
+  def under_cap(cx) do
+    case session(cx) do
+      nil ->
+        {:error, :Unknown}
+
+      %{context: nil} ->
+        :ok
+
+      s ->
+        live =
+          state(cx).sessions
+          |> Map.values()
+          |> Enum.count(&(&1.id != s.id and &1.state != :ending))
+
+        ok_if(live < principal(cx, s.principal).contexts.max, :Cap)
+    end
+  end
+
+  # A detached context has been idle for its principal's bound since its clock started.
+  def idle_due(cx) do
+    case session(cx) do
+      nil ->
+        {:error, :Unknown}
+
+      s ->
+        bound = principal(cx, s.principal).contexts.idle_secs * 1_000_000
+        ok_if(s.idle != nil and cx.event.now - s.idle >= bound, :Unknown)
+    end
+  end
+
+  # The session is a context, not the console's.
+  def is_context(cx) do
+    case session(cx) do
+      %{context: c} when c != nil -> :ok
+      _ -> {:error, :Unknown}
+    end
+  end
+
   # R79: a context is one session at a time: the name a login gives is no other session's of its
   # domain, unless that one is already ending. The console's session (context nil) is no context.
   def context_free(cx) do

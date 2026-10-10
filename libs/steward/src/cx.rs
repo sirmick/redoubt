@@ -20,6 +20,9 @@ pub type Effect = fn(&mut Cx<'_>);
 pub type AuditFilter = fn(&Labels, &Audit) -> bool;
 /// Whether an approval channel of this principal reaches this domain's requests.
 pub type Reach = fn(&Principal, &Domain) -> bool;
+/// Whether a session of the first domain sees the contexts of the second (`contexts`,
+/// `end_context`).
+pub type Sees = fn(&Domain, &Domain) -> bool;
 
 /// Where a dispatch sends its object.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

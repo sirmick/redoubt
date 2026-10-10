@@ -25,7 +25,10 @@ defmodule Redoubt.Wire.Proto.Steward do
     10 => {:start_agent, :buffer, 0},
     11 => {:end_lease, :inline, 0},
     12 => {:end_session, :inline, 0},
-    13 => {:watch, :inline, 0}
+    13 => {:watch, :inline, 0},
+    14 => {:contexts, :buffer, 0},
+    15 => {:detach, :inline, 0},
+    16 => {:end_context, :buffer, 0}
   }
   @replies %{
     1 => {:login, :buffer, 0},
@@ -40,7 +43,10 @@ defmodule Redoubt.Wire.Proto.Steward do
     10 => {:start_agent, :buffer, 0},
     11 => {:end_lease, :inline, 0},
     12 => {:end_session, :inline, 0},
-    13 => {:watch, :inline, 0}
+    13 => {:watch, :inline, 0},
+    14 => {:contexts, :buffer, 0},
+    15 => {:detach, :inline, 0},
+    16 => {:end_context, :buffer, 0}
   }
   @errors %{
     1 => :malformed,
@@ -83,6 +89,9 @@ defmodule Redoubt.Wire.Proto.Steward do
   def layout(:end_lease), do: {11, :inline, [{:lease, :u64}], [], {[], []}}
   def layout(:end_session), do: {12, :inline, [], [], {[], []}}
   def layout(:watch), do: {13, :inline, [], [], {[], []}}
+  def layout(:contexts), do: {14, :buffer, [], [], {[{:list, :string}], []}}
+  def layout(:detach), do: {15, :inline, [], [], {[], []}}
+  def layout(:end_context), do: {16, :buffer, [{:name, :string}], [], {[], []}}
   def layout(_), do: nil
 
   @doc "Encodes a request: `{:ok, words, buffer}` or `{:error, reason}`."
@@ -133,6 +142,12 @@ defmodule Redoubt.Wire.Proto.Steward do
   defp enc(:reply, :end_session, %{} = f) when map_size(f) == 0, do: {12, []}
   defp enc(:request, :watch, %{} = f) when map_size(f) == 0, do: {13, []}
   defp enc(:reply, :watch, %{} = f) when map_size(f) == 0, do: {13, []}
+  defp enc(:request, :contexts, %{} = f) when map_size(f) == 0, do: {14, []}
+  defp enc(:reply, :contexts, %{list: v_list} = f) when map_size(f) == 1, do: {14, [W.str(v_list)]}
+  defp enc(:request, :detach, %{} = f) when map_size(f) == 0, do: {15, []}
+  defp enc(:reply, :detach, %{} = f) when map_size(f) == 0, do: {15, []}
+  defp enc(:request, :end_context, %{name: v_name} = f) when map_size(f) == 1, do: {16, [W.str(v_name)]}
+  defp enc(:reply, :end_context, %{} = f) when map_size(f) == 0, do: {16, []}
   defp enc(_, _, _), do: throw({:wire, :bad_message})
 
   defp read(:request, 1, <<n_principal::little-16, v_principal::binary-size(n_principal), n_label::little-16, v_label::binary-size(n_label), n_context::little-16, v_context::binary-size(n_context), n_from::little-16, v_from::binary-size(n_from), n_key::little-32, v_key::binary-size(n_key), rest::binary>>), do: W.utf8([v_principal, v_label, v_context, v_from], {:ok, :login, %{principal: v_principal, label: v_label, context: v_context, from: v_from, key: v_key}, rest})
@@ -161,5 +176,11 @@ defmodule Redoubt.Wire.Proto.Steward do
   defp read(:reply, 12, <<rest::binary>>), do: {:ok, :end_session, %{}, rest}
   defp read(:request, 13, <<rest::binary>>), do: {:ok, :watch, %{}, rest}
   defp read(:reply, 13, <<rest::binary>>), do: {:ok, :watch, %{}, rest}
+  defp read(:request, 14, <<rest::binary>>), do: {:ok, :contexts, %{}, rest}
+  defp read(:reply, 14, <<n_list::little-16, v_list::binary-size(n_list), rest::binary>>), do: W.utf8([v_list], {:ok, :contexts, %{list: v_list}, rest})
+  defp read(:request, 15, <<rest::binary>>), do: {:ok, :detach, %{}, rest}
+  defp read(:reply, 15, <<rest::binary>>), do: {:ok, :detach, %{}, rest}
+  defp read(:request, 16, <<n_name::little-16, v_name::binary-size(n_name), rest::binary>>), do: W.utf8([v_name], {:ok, :end_context, %{name: v_name}, rest})
+  defp read(:reply, 16, <<rest::binary>>), do: {:ok, :end_context, %{}, rest}
   defp read(_, _, _), do: {:error, :short_fields}
 end

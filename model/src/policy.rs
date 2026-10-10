@@ -33,12 +33,12 @@ use alloc::vec::Vec;
 use redoubt_steward::Policy;
 use redoubt_steward::audit::Record;
 use redoubt_steward::consts::{BLAME_COUNT, BLAME_WINDOW, DECLASSIFY_MAX, FIELD_CAP, MAX_LEASE, PENDING_CAP};
-use redoubt_steward::domain::Labels;
+use redoubt_steward::domain::{Domain, Labels};
 use redoubt_steward::effect::{Answer, Kind, Notice, Notified, Object, Output, Refusal, Token};
 use redoubt_steward::event::{Content, Event};
 use redoubt_steward::gen::session::State;
 use redoubt_steward::inspect;
-use redoubt_steward::manifest::{Limits, Manifest, PrincipalSpec, Sizes};
+use redoubt_steward::manifest::{Contexts, Limits, Manifest, PrincipalSpec, Sizes};
 use redoubt_steward::render::{printable, sanitize};
 
 use crate::check::Failure;
@@ -132,6 +132,19 @@ pub enum PolicyOp {
     Work {
         session: u64,
     },
+    /// The session lists its domain's contexts.
+    Contexts {
+        session: u64,
+    },
+    /// The session's own context lets its channel go.
+    Leave {
+        session: u64,
+    },
+    /// The session ends the context `name` of its domain.
+    EndContext {
+        session: u64,
+        name: String,
+    },
     /// Session or agent `by` ends lease `lease`.
     EndLease {
         by: u64,
@@ -164,6 +177,7 @@ pub fn manifest() -> Manifest {
         owned: owned.to_vec(),
         label_sets: sets.iter().map(|s| s.to_vec()).collect(),
         top: Limits { pages: 500, processes: 12, weight: 100 },
+        contexts: Contexts { max: 2, idle_secs: 300 },
     };
     let l = |pages, processes, weight| Limits { pages, processes, weight };
     let page = crate::kernel::Costs::default().budget;
@@ -291,7 +305,16 @@ pub fn random_op(run: &Run, rng: &mut Rng) -> PolicyOp {
             let from = String::from(rng.pick(&FROMS).unwrap());
             PolicyOp::Login { principal, labels, context, key, from }
         }
-        12..=14 => PolicyOp::EndSession { session: session(rng) },
+        // The context calls take a draw only where the call they split did.
+        12 => PolicyOp::EndSession { session: session(rng) },
+        13 => {
+            let s = session(rng);
+            PolicyOp::EndContext {
+                session: s,
+                name: String::from(CONTEXTS[(s % CONTEXTS.len() as u64) as usize]),
+            }
+        }
+        14 => PolicyOp::Leave { session: session(rng) },
         15..=21 => PolicyOp::StartAgent { session: session(rng), lease: lease(rng) },
         22..=28 => {
             let s = session(rng);
@@ -343,7 +366,11 @@ pub fn random_op(run: &Run, rng: &mut Rng) -> PolicyOp {
             let r = request(rng);
             PolicyOp::Deny { channel: answering(rng, r), request: r }
         }
-        63..=64 => PolicyOp::Usage { principal },
+        63 => PolicyOp::Usage { principal },
+        64 => {
+            let own = callers.iter().find(|c| c.principal == principal && c.kind == Kind::Session);
+            PolicyOp::Contexts { session: own.map_or(0, |c| c.id) }
+        }
         65..=73 => PolicyOp::Work { session: session(rng) },
         74..=75 => PolicyOp::ChannelClosed { session: session(rng), back: rng.below(3) as usize },
         76 => PolicyOp::SshdGone,
@@ -402,6 +429,8 @@ pub struct Run {
     pub per_session: BTreeMap<u64, u64>,
     /// Every attachment id a login's answer gave, per session, oldest first (P18).
     pub attachments: BTreeMap<u64, Vec<u64>>,
+    /// When each detached context last detached, as the model saw it (P20).
+    pub ghost_idle: BTreeMap<u64, u64>,
     /// The properties' instances the checks met: a check holds non-vacuously only from the first
     /// sequence that gives it one (the coverage instrument, model/tests/steward_reach.rs).
     pub reached: BTreeSet<&'static str>,
@@ -437,6 +466,7 @@ impl Run {
             per_session: BTreeMap::new(),
             reached: BTreeSet::new(),
             attachments: BTreeMap::new(),
+            ghost_idle: BTreeMap::new(),
         }
     }
 
@@ -471,6 +501,7 @@ impl Run {
         let before: Vec<Caller> = self.st.callers();
         let now = self.st.k.now;
         let fixed = inspect::fixed(&self.st.store).clone();
+        let before_contexts = self.context_sessions();
         let obs = match op {
             PolicyOp::Login { principal, labels, context, key, from } => {
                 let name = fixed.principals[*principal].name.clone();
@@ -539,6 +570,68 @@ impl Run {
                 String::new()
             }
             PolicyOp::EndSession { session } => format!("{:?}", self.st.end_session(*session)),
+            PolicyOp::Contexts { session } => {
+                let caller = self.st.caller(*session).filter(|c| c.kind == Kind::Session);
+                let want = caller.as_ref().map(|c| self.listed(&c.domain));
+                let r = self.st.contexts(*session);
+                // P21: a session lists its own domain's live contexts, all of them, and no other's.
+                if let (Some(Answer::Contexts(list)), Some(want)) = (&r, &want) {
+                    let got: Vec<(String, bool)> =
+                        list.iter().map(|c| (c.name.clone(), c.attached)).collect();
+                    if got != *want {
+                        return Err(format!(
+                            "P21: session {session} listed {got:?}, not its domain's {want:?}"
+                        ));
+                    }
+                    if !got.is_empty() {
+                        self.reached.insert("P21 a listing");
+                    }
+                }
+                format!("{r:?}")
+            }
+            PolicyOp::Leave { session } => {
+                let was = self.context_state(*session);
+                let r = self.st.leave(*session);
+                if r == Some(Answer::Ok) {
+                    if was != Some(State::Running) {
+                        return Err(format!("P21: session {session}, {was:?}, left a channel it had not"));
+                    }
+                    self.reached.insert("P21 a context leaves its channel");
+                }
+                format!("{r:?}")
+            }
+            PolicyOp::EndContext { session, name } => {
+                // A session the steward routes: one running or detached, not an agent's lease.
+                let routed = |st: &Steward, id: u64| {
+                    inspect::index(&st.store).routes.values().any(|r| r.id == id && r.kind == Kind::Session)
+                };
+                let caller = self.st.caller(*session).filter(|_| routed(&self.st, *session));
+                let mine = caller.as_ref().and_then(|c| self.live_context(&c.domain, name));
+                let r = self.st.end_context(*session, name);
+                // P21: a context of the caller's own domain ends, and no other; a name its domain
+                // does not hold is unknown.
+                match (&r, mine) {
+                    (Some(Answer::Ok), Some(id)) => {
+                        if self.context_state(id).is_some_and(|s| s != State::Ending) {
+                            return Err(format!("P21: end_context {name:?} answered ok, and {id} runs on"));
+                        }
+                        self.reached.insert("P21 a context ended by name");
+                    }
+                    (Some(Answer::Ok), None) => {
+                        return Err(format!(
+                            "P21: session {session} ended {name:?}, outside its domain's contexts"
+                        ));
+                    }
+                    (Some(Answer::Refused(Refusal::Cap)), _) | (None, _) => {}
+                    (Some(Answer::Refused(_)), Some(id)) if caller.is_some() => {
+                        return Err(format!(
+                            "P21: session {session} could not end its own context {id}: {r:?}"
+                        ));
+                    }
+                    _ => {}
+                }
+                format!("{r:?}")
+            }
             PolicyOp::StartAgent { session, lease } => {
                 let requester = self.st.caller(*session);
                 let r = self.st.start_agent(*session, *lease);
@@ -731,8 +824,148 @@ impl Run {
                 return Err(format!("P7: {:?} {} of {key:?} started while it was locked out", c.kind, c.id));
             }
         }
+        self.context_checks(op, &before_contexts, &fixed)?;
         self.check(from)?;
         Ok(obs)
+    }
+
+    /// The live contexts of `domain`, by name, and whether each is attached (P21).
+    fn listed(&self, domain: &Domain) -> Vec<(String, bool)> {
+        let mut l: Vec<(String, bool)> = inspect::domain(&self.st.store, domain)
+            .map(|s| {
+                s.sessions
+                    .values()
+                    .filter(|x| matches!(x.state, State::Running | State::Detached))
+                    .filter_map(|x| Some((x.context.clone()?, x.state == State::Running)))
+                    .collect()
+            })
+            .unwrap_or_default();
+        l.sort();
+        l
+    }
+
+    /// The live context of `domain` named `name`.
+    fn live_context(&self, domain: &Domain, name: &str) -> Option<u64> {
+        inspect::domain(&self.st.store, domain)?
+            .sessions
+            .values()
+            .find(|x| {
+                matches!(x.state, State::Running | State::Detached) && x.context.as_deref() == Some(name)
+            })
+            .map(|x| x.id)
+    }
+
+    /// A context session's state, if it is one.
+    fn context_state(&self, id: u64) -> Option<State> {
+        inspect::domains(&self.st.store)
+            .find_map(|(_, s)| s.sessions.get(&id).filter(|x| x.context.is_some()).map(|x| x.state))
+    }
+
+    /// Every context session: its domain, state and principal.
+    fn context_sessions(&self) -> BTreeMap<u64, (Domain, State, usize)> {
+        let mut m = BTreeMap::new();
+        for (d, s) in inspect::domains(&self.st.store) {
+            for x in s.sessions.values().filter(|x| x.context.is_some()) {
+                m.insert(x.id, (d.clone(), x.state, x.principal));
+            }
+        }
+        m
+    }
+
+    /// P19, the cap: no domain holds more live contexts than its principal's cap, and a login is
+    /// refused at the cap only when its domain holds that many. P20, idle: on the timer, exactly
+    /// the contexts detached for their principal's bound since their last detach end; an attached
+    /// one never does.
+    fn context_checks(
+        &mut self,
+        op: &PolicyOp,
+        before: &BTreeMap<u64, (Domain, State, usize)>,
+        fixed: &redoubt_steward::manifest::Fixed,
+    ) -> Result<(), String> {
+        let after = self.context_sessions();
+        // The model starts no console session: its live sessions are its contexts.
+        let live = |m: &BTreeMap<u64, (Domain, State, usize)>, d: &Domain| {
+            m.values().filter(|(x, s, _)| x == d && *s != State::Ending).count() as u64
+        };
+        for p in &fixed.principals {
+            for d in &p.domains {
+                let n = live(&after, d);
+                if n > p.contexts.max {
+                    return Err(format!(
+                        "P19: {d:?} holds {n} live contexts, over its cap {}",
+                        p.contexts.max
+                    ));
+                }
+                if n == p.contexts.max {
+                    self.reached.insert("P19 a domain at its cap");
+                }
+            }
+        }
+        if let PolicyOp::Login { principal, labels, .. } = op {
+            let refused =
+                self.st.outputs.last().is_some_and(|o| {
+                    matches!(o, Output::Reply { answer: Answer::Refused(Refusal::Cap), .. })
+                });
+            let p = &fixed.principals[*principal];
+            let d = Labels::new(labels).and_then(|l| p.domains.iter().find(|d| *d.labels() == l).cloned());
+            if let (true, Some(d)) = (refused, d) {
+                if live(before, &d) < p.contexts.max {
+                    return Err(format!(
+                        "P19: a login to {d:?} was refused at the cap with fewer than {} live",
+                        p.contexts.max
+                    ));
+                }
+                self.reached.insert("P19 a login refused at the cap");
+            }
+        }
+        let now = self.st.k.now;
+        for (id, (_, s, _)) in &after {
+            match s {
+                State::Detached => {
+                    self.ghost_idle.entry(*id).or_insert(now);
+                }
+                _ => {
+                    self.ghost_idle.remove(id);
+                }
+            }
+        }
+        let bound = |p: usize| fixed.principals[p].contexts.idle_us();
+        if matches!(op, PolicyOp::Tick { .. }) {
+            for (id, (d, s, p)) in before {
+                let gone = after.get(id).is_none_or(|(_, a, _)| *a == State::Ending);
+                if !gone {
+                    continue;
+                }
+                match s {
+                    State::Running => {
+                        return Err(format!("P20: {d:?} context {id}, attached, ended on the timer"));
+                    }
+                    State::Detached => {
+                        let since = self.ghost_idle.get(id).copied().unwrap_or(now);
+                        if now.saturating_sub(since) < bound(*p) {
+                            return Err(format!(
+                                "P20: {d:?} context {id} ended {} µs after its last detach, before its bound",
+                                now.saturating_sub(since)
+                            ));
+                        }
+                        self.reached.insert("P20 an idle context ends");
+                    }
+                    _ => {}
+                }
+            }
+            for (id, (d, s, p)) in &after {
+                let since = self.ghost_idle.get(id).copied().unwrap_or(now);
+                if *s == State::Detached && now.saturating_sub(since) >= bound(*p) {
+                    return Err(format!("P20: {d:?} context {id} detached past its bound runs on"));
+                }
+            }
+        }
+        for (id, _) in before {
+            if !after.contains_key(id) {
+                self.ghost_idle.remove(id);
+            }
+        }
+        Ok(())
     }
 
     /// P5's fair share and P4's notices, after a submission by `by`.

@@ -329,6 +329,8 @@ fn open_session(
         reply: event.reply,
         attachment: id,
         from: String::new(),
+        since: event.now,
+        idle: None,
     };
     insert(store, domain, Kind::Session, id, |st| {
         st.sessions.insert(id, s);
@@ -452,6 +454,46 @@ pub(crate) fn external(store: &mut Store, event: &Event, out: &mut Out) {
             let call = Call { caller: Some(by.clone()), ..call };
             run::<SessionM>(store, &call, out, &by.domain, by.id, gen::session::Event::EndSession);
         }
+        EventKind::Contexts { badge } => {
+            let Some(by) = route(store, *badge).filter(|r| r.kind == Kind::Session) else {
+                return unknown(event, out);
+            };
+            let list = contexts(store, &by.domain, event.now);
+            if event.reply != 0 {
+                out.effects.outputs.push(Output::Reply { to: event.reply, answer: Answer::Contexts(list) });
+            }
+        }
+        EventKind::Leave { badge } => {
+            let Some(by) = route(store, *badge).filter(|r| r.kind == Kind::Session) else {
+                return unknown(event, out);
+            };
+            let call = Call { caller: Some(by.clone()), ..call };
+            run::<SessionM>(store, &call, out, &by.domain, by.id, gen::session::Event::Leave);
+        }
+        EventKind::EndContext { badge, name } => {
+            let Some(by) = route(store, *badge).filter(|r| r.kind == Kind::Session) else {
+                return unknown(event, out);
+            };
+            // A name the caller's domain does not hold, live, is answered as one nobody holds.
+            let Some((domain, id)) = context_named(store, &by.domain, name) else {
+                return unknown(event, out);
+            };
+            let call = Call { caller: Some(by), ..call };
+            run::<SessionM>(store, &call, out, &domain, id, gen::session::Event::EndSession);
+        }
+        // Every context hears it, in domain and id order; its rows decide, and only a detached
+        // one past its bound ends.
+        EventKind::Idle => {
+            let contexts: Vec<(Domain, u64)> = store
+                .all()
+                .flat_map(|(d, s)| {
+                    s.sessions.values().filter(|x| x.context.is_some()).map(move |x| (d.clone(), x.id))
+                })
+                .collect();
+            for (domain, id) in contexts {
+                run::<SessionM>(store, &call, out, &domain, id, gen::session::Event::Idle);
+            }
+        }
         EventKind::Pending { .. } | EventKind::Approve { .. } | EventKind::Deny { .. } => {
             crate::edges::approval(store, event, out)
         }
@@ -514,6 +556,38 @@ pub(crate) fn external(store: &mut Store, event: &Event, out: &mut Out) {
             }
         }
     }
+}
+
+/// The live contexts a session of `caller` sees: its own domain's (`Policy::sees`), by name.
+fn contexts(store: &Store, caller: &Domain, now: u64) -> Vec<crate::effect::Listed> {
+    let sees = store.policy.sees;
+    let mut list: Vec<crate::effect::Listed> = store
+        .all()
+        .filter(|(d, _)| sees(caller, d))
+        .flat_map(|(_, s)| s.sessions.values())
+        .filter(|x| matches!(x.state, gen::session::State::Running | gen::session::State::Detached))
+        .filter_map(|x| {
+            let name = x.context.clone()?;
+            let attached = x.state == gen::session::State::Running;
+            Some(crate::effect::Listed { name, attached, age: now.saturating_sub(x.since) })
+        })
+        .collect();
+    list.sort_by(|a, b| a.name.cmp(&b.name));
+    list
+}
+
+/// The live context named `name` that a session of `caller` sees, by its domain and id.
+fn context_named(store: &Store, caller: &Domain, name: &str) -> Option<(Domain, u64)> {
+    let sees = store.policy.sees;
+    store.all().filter(|(d, _)| sees(caller, d)).find_map(|(d, s)| {
+        s.sessions
+            .values()
+            .find(|x| {
+                matches!(x.state, gen::session::State::Running | gen::session::State::Detached)
+                    && x.context.as_deref() == Some(name)
+            })
+            .map(|x| (d.clone(), x.id))
+    })
 }
 
 /// An event one machine raised for another. One that names an object already gone is dropped.

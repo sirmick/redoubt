@@ -1,7 +1,7 @@
 # Leases: StartAgent refused for each reason, an agent and its sub-agents, a failed start,
 # ending a lease from each kind of caller, an exit, and an end the guarantee excludes.
-principal "alice" account=1 login=[11] approval=[21] owned=[7] sets=[[],[7]] top=1000,30,300
-principal "bob" account=2 login=[12] approval=[22] owned=[] sets=[[]] top=1000,30,300
+principal "alice" account=1 login=[11] approval=[21] owned=[7] sets=[[],[7]] top=1000,30,300 contexts=2 idle=300
+principal "bob" account=2 login=[12] approval=[22] owned=[] sets=[[]] top=1000,30,300 contexts=2 idle=300
 servers 1
 sizes session=10,2,5 agent=10,2,5 sub_agent=5,1,2 crossing=2,1,1 cost=1
 

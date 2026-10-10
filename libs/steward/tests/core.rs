@@ -12,7 +12,7 @@ use redoubt_steward::effect::{
     StepFailed, Token,
 };
 use redoubt_steward::event::{Content, Event, EventKind};
-use redoubt_steward::manifest::{Limits, Manifest, PrincipalSpec, Sizes};
+use redoubt_steward::manifest::{Contexts, Limits, Manifest, PrincipalSpec, Sizes};
 use redoubt_steward::{Policy, Store, decide, inspect};
 
 const SECOND: u64 = 1_000_000;
@@ -26,6 +26,8 @@ fn manifest() -> Manifest {
         owned: owned.to_vec(),
         label_sets: sets.iter().map(|s| s.to_vec()).collect(),
         top: Limits { pages: 500, processes: 12, weight: 100 },
+        // Bob's cap is the one the cap's tests meet; idle contexts end after five minutes.
+        contexts: Contexts { max: if name == "bob" { 2 } else { 8 }, idle_secs: 300 },
     };
     let l = |pages, processes, weight| Limits { pages, processes, weight };
     Manifest {
@@ -479,6 +481,110 @@ fn a_context_is_attached_to_one_channel_at_a_time() {
     let detached = r.relayed.iter().filter(|x| !x.1).count();
     assert_eq!(detached, 2);
     assert!(inspect::index(&r.store).attachments.is_empty());
+}
+
+/// Rule 6: a login that would make one more context than the principal's cap in its domain is
+/// refused `cap`, after its key is checked, and makes nothing; the oldest is never evicted, a
+/// login to a live context is never capped, and another label set counts its own.
+#[test]
+fn the_cap_refuses_a_new_context_and_keeps_the_oldest() {
+    let mut r = Rig::new();
+    let (a, _) = r.login_as("bob", &[], "a", 21).unwrap();
+    let (b, _) = r.login_as("bob", &[], "b", 21).unwrap();
+    r.call(EventKind::ChannelClosed { session: b });
+    let made = r.budgets.len();
+    assert_eq!(refused(r.login_as("bob", &[], "c", 21)), Refusal::Cap);
+    assert_eq!(r.budgets.len(), made, "nothing carved");
+    // A wrong key is still the bad key's, never the cap's.
+    assert_eq!(refused(r.login_as("bob", &[], "c", 22)), Refusal::BadKey);
+    let live = &inspect::domain(&r.store, &d(1002, &[])).unwrap().sessions;
+    assert!(live.contains_key(&a) && live.contains_key(&b), "the oldest stays");
+    // The live ones still reattach or take over.
+    assert_eq!(r.login_as("bob", &[], "b", 21).unwrap().0, b);
+    assert_eq!(r.login_as("bob", &[], "a", 21).unwrap().0, a);
+    // Another label set has a cap of its own.
+    r.login_as("bob", &[9], "c", 21).unwrap();
+    // One ends: a new one fits again.
+    let badge = r.badge(a);
+    r.call(EventKind::EndSession { badge });
+    r.login_as("bob", &[], "c", 21).unwrap();
+}
+
+/// A detached context ends once its idle clock passes the principal's bound; an attached one
+/// never does, however long ago it last detached, since an attach clears the clock; the clock
+/// starts again at the next detach.
+#[test]
+fn idle_ends_a_detached_context_only() {
+    let mut r = Rig::new();
+    let (x, _) = r.login_as("alice", &[], "x", 11).unwrap();
+    let (y, _) = r.login_as("alice", &[], "y", 11).unwrap();
+    r.call(EventKind::ChannelClosed { session: x });
+    r.call(EventKind::ChannelClosed { session: y });
+    assert_eq!(r.store.next_idle(), Some(r.now + 300 * SECOND));
+    // y reattaches before its bound, then detaches again later.
+    r.now += 200 * SECOND;
+    r.login_as("alice", &[], "y", 11).unwrap();
+    r.now += 200 * SECOND;
+    r.call(EventKind::Idle);
+    let live = &inspect::domain(&r.store, &d(1001, &[])).unwrap().sessions;
+    assert!(!live.contains_key(&x), "x, detached for 400 s, ended");
+    assert!(live.contains_key(&y), "y is attached");
+    assert_eq!(r.records(|x| matches!(x, Record::IdleEnded { idle: 400, .. })).len(), 1);
+    let attachment = r.attachment;
+    r.call(EventKind::ChannelClosed { session: attachment });
+    r.now += 299 * SECOND;
+    r.call(EventKind::Idle);
+    assert!(
+        inspect::domain(&r.store, &d(1001, &[])).unwrap().sessions.contains_key(&y),
+        "its clock restarted"
+    );
+    r.now += SECOND;
+    r.call(EventKind::Idle);
+    assert!(!inspect::domain(&r.store, &d(1001, &[])).unwrap().sessions.contains_key(&y));
+    assert_eq!(r.store.next_idle(), None);
+}
+
+/// A session lists, detaches and ends the contexts of its own domain only: another label set's
+/// and another principal's are not listed, and ending one is the same `unknown` as a name
+/// nobody holds. Its own detach lets its channel go; the console's session has none to let go.
+#[test]
+fn a_session_sees_and_ends_its_own_domain_s_contexts_only() {
+    let mut r = Rig::new();
+    let (work, _) = r.login_as("alice", &[], "work", 11).unwrap();
+    let (home, _) = r.login_as("alice", &[], "home", 11).unwrap();
+    r.login_as("alice", &[7], "vault", 11).unwrap();
+    r.login_as("bob", &[], "work2", 21).unwrap();
+    r.call(EventKind::ChannelClosed { session: work });
+    r.now += 5 * SECOND;
+    let badge = r.badge(home);
+    let Some(Answer::Contexts(list)) = r.call(EventKind::Contexts { badge }) else { panic!() };
+    let names: Vec<(&str, bool, u64)> = list.iter().map(|c| (c.name.as_str(), c.attached, c.age)).collect();
+    assert_eq!(names, [("home", true, 5 * SECOND), ("work", false, 5 * SECOND)]);
+    for name in ["vault", "work2", "nobody"] {
+        let e = EventKind::EndContext { badge, name: name.into() };
+        assert_eq!(refusal(r.call(e)), Refusal::Unknown, "{name}");
+    }
+    assert_eq!(r.call(EventKind::EndContext { badge, name: "work".into() }), Some(Answer::Ok));
+    assert!(!inspect::domain(&r.store, &d(1001, &[])).unwrap().sessions.contains_key(&work));
+    // Its own detach: the channel goes, the context runs on.
+    r.relayed.clear();
+    assert_eq!(r.call(EventKind::Leave { badge }), Some(Answer::Ok));
+    assert_eq!(r.relayed, [(home, false, String::new())]);
+    assert_eq!(refusal(r.call(EventKind::Leave { badge })), Refusal::Unknown, "already detached");
+    // Its own end: as `exit`.
+    assert_eq!(r.call(EventKind::EndContext { badge, name: "home".into() }), Some(Answer::Ok));
+    // The console's session is no context: it lists none of itself and has no channel to let go.
+    r.call(EventKind::Console { principal: "alice".into() });
+    let console = inspect::domain(&r.store, &d(1001, &[]))
+        .unwrap()
+        .sessions
+        .values()
+        .find(|s| s.context.is_none())
+        .map(|s| s.id)
+        .unwrap();
+    let badge = r.badge(console);
+    assert_eq!(r.call(EventKind::Contexts { badge }), Some(Answer::Contexts(vec![])));
+    assert_eq!(refusal(r.call(EventKind::Leave { badge })), Refusal::Unknown, "the console's");
 }
 
 #[test]

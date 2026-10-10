@@ -77,4 +77,19 @@ defmodule Redoubt.Wire.Client.Steward do
   def watch(conn, timeout \\ C.timeout()) do
     C.call(conn, P, {:watch, %{}}, [], timeout)
   end
+
+  @doc "Calls `contexts`, waiting at most `timeout` ms."
+  def contexts(conn, timeout \\ C.timeout()) do
+    C.call(conn, P, {:contexts, %{}}, [], timeout)
+  end
+
+  @doc "Calls `detach`, waiting at most `timeout` ms."
+  def detach(conn, timeout \\ C.timeout()) do
+    C.call(conn, P, {:detach, %{}}, [], timeout)
+  end
+
+  @doc "Calls `end_context`, waiting at most `timeout` ms."
+  def end_context(conn, v_name, timeout \\ C.timeout()) do
+    C.call(conn, P, {:end_context, %{name: v_name}}, [], timeout)
+  end
 end

@@ -16,7 +16,8 @@ use redoubt_rt::ipc::{Caller, Words};
 use redoubt_rt::server::typed::{Answer as Typed, Outcome, Protocol, TypedServer, answer};
 use redoubt_rt::wire::Error as WireError;
 use redoubt_rt::wire::proto::steward::{
-    ChannelClosedReply, EndSessionReply, ErrorCode, LoginReply, Message, Reply,
+    ChannelClosedReply, ContextsReply, DetachReply, EndContextReply, EndSessionReply, ErrorCode, LoginReply,
+    Message, Reply,
 };
 use redoubt_steward::effect::{Answer, Output, Refusal};
 use redoubt_steward::event::EventKind;
@@ -65,9 +66,13 @@ impl Class {
             | Message::Watch(_) => Class::Sshd,
             Message::Pending(_) | Message::Approve(_) | Message::Deny(_) => Class::Approval,
             Message::Blame(_) => Class::Init,
-            Message::Submit(_) | Message::StartAgent(_) | Message::EndLease(_) | Message::EndSession(_) => {
-                Class::Session
-            }
+            Message::Submit(_)
+            | Message::StartAgent(_)
+            | Message::EndLease(_)
+            | Message::EndSession(_)
+            | Message::Contexts(_)
+            | Message::Detach(_)
+            | Message::EndContext(_) => Class::Session,
         }
     }
 }
@@ -100,6 +105,17 @@ fn error(r: Refusal) -> ErrorCode {
         Refusal::Failed => ErrorCode::Failed,
         Refusal::InUse => ErrorCode::InUse,
     }
+}
+
+/// A listing as `contexts` carries it: one line per context, `name<TAB>attached|detached<TAB>`
+/// and the whole seconds since it last started running, attached or detached.
+pub fn listing(list: &[redoubt_steward::effect::Listed]) -> String {
+    let mut s = String::new();
+    for c in list {
+        let state = if c.attached { "attached" } else { "detached" };
+        s.push_str(&alloc::format!("{}\t{state}\t{}\n", c.name, c.age / 1_000_000));
+    }
+    s
 }
 
 /// The protocol, for `redoubt-rt`'s typed dispatch.
@@ -190,6 +206,16 @@ where
             Message::EndSession(_) => {
                 (EventKind::EndSession { badge: caller.badge }, Some(Reply::EndSession(EndSessionReply {})))
             }
+            // The session's contexts (servers/steward.md, "Contexts"): its listing, its own
+            // detach, and its end of a context of its domain.
+            Message::Contexts(_) => (EventKind::Contexts { badge: caller.badge }, None),
+            Message::Detach(_) => {
+                (EventKind::Leave { badge: caller.badge }, Some(Reply::Detach(DetachReply {})))
+            }
+            Message::EndContext(m) => (
+                EventKind::EndContext { badge: caller.badge, name: m.name.into() },
+                Some(Reply::EndContext(EndContextReply {})),
+            ),
             // The core decides these, and the server binds no batch for them until STEWARD3.
             _ => return Err(ErrorCode::Unknown),
         };
@@ -208,6 +234,10 @@ where
             }
         }
         match (answer, ok) {
+            (Some(Answer::Contexts(list)), None) => {
+                self.name = listing(&list);
+                Ok(Typed::new(Reply::Contexts(ContextsReply { list: &self.name })))
+            }
             (Some(Answer::Session { id, name }), None) => {
                 self.name = name;
                 self.label_bytes = label_bytes(&login_labels);

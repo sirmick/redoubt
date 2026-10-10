@@ -1,7 +1,7 @@
 # Crossings (R42): declassifications and pushes, each kind's read, copy out and write, done and
 # failed, an item too big or not printable, answers while the snapshot is read, and a session's
 # end while it is.
-principal "alice" account=1 login=[11] approval=[21] owned=[7] sets=[[],[7]] top=1000,30,300
+principal "alice" account=1 login=[11] approval=[21] owned=[7] sets=[[],[7]] top=1000,30,300 contexts=2 idle=300
 sizes session=10,2,5 agent=10,2,5 sub_agent=5,1,2 crossing=2,1,1 cost=1
 
 # An unlabelled session (badge 102), a vault session (202), an approval channel.

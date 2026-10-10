@@ -89,6 +89,7 @@ fn alice() -> Principal {
         home: None,
         home_quota: None,
         net: vec![],
+        contexts: Default::default(),
     }
 }
 
@@ -1191,8 +1192,10 @@ fn with_steward() -> Manifest {
 }
 
 /// The lines carry each principal with its keys' ids, its owned labels' ids and its domains, its
-/// unlabelled set first; `keyd []`, since the live key-separation checks are init's and sshd's;
-/// the steward's slot count; and the sizes. Only the steward's entry gets them, and `users`.
+/// unlabelled set first, and its contexts: by default what a label set's share holds (alice's two
+/// shares of 4 processes hold 2 sessions of 1, bob's one 4) and a day's idle bound; `keyd []`, since the live
+/// key-separation checks are init's and sshd's; the steward's slot count; and the sizes. Only the steward's
+/// entry gets them, and `users`.
 #[test]
 fn the_steward_s_entry_alone_is_given_the_manifest_lines() {
     let m = with_steward();
@@ -1204,9 +1207,10 @@ fn the_steward_s_entry_alone_is_given_the_manifest_lines() {
         args(&m, steward, &BUNDLE_KEY, &ENTRIES),
         [
             format!(
-                "principal \"alice\" account=1001 login=[{id}] approval=[] owned=[7] sets=[[],[7]] top=4096,4,100"
+                "principal \"alice\" account=1001 login=[{id}] approval=[] owned=[7] sets=[[],[7]] top=4096,4,100 contexts=2 idle=86400"
             ),
-            "principal \"bob\" account=1002 login=[] approval=[] owned=[] sets=[[]] top=4096,4,100".into(),
+            "principal \"bob\" account=1002 login=[] approval=[] owned=[] sets=[[]] top=4096,4,100 contexts=4 idle=86400"
+                .into(),
             "keyd []".into(),
             format!("servers {STEWARD_SLOTS}"),
             "sizes session=512,1,10 agent=256,1,10 sub_agent=64,1,10 crossing=32,1,10 cost=1".into(),
@@ -1404,6 +1408,39 @@ fn the_steward_s_sizes_fit_every_principal_s_smallest_share() {
     let mut m = with_steward();
     m.principals[1].budget.weight = 9;
     refused_at(&m, "principals[1].budget", Why::Sizes("session"));
+    // A principal's contexts: a max of 1 to 16 that a label set's share holds, and an idle bound
+    // of a minute to a week; what the manifest gives is what the steward is told.
+    for (max, ok) in [(0, false), (1, true), (2, true), (3, false), (17, false)] {
+        let mut m = with_steward();
+        m.principals[0].contexts.max = Some(max);
+        match ok {
+            true => assert!(on_virt(&m).is_ok(), "max {max}"),
+            false => refused_at(&m, "principals[0].contexts.max", Why::Contexts),
+        }
+    }
+    for (idle, ok) in [(59, false), (60, true), (604_800, true), (604_801, false)] {
+        let mut m = with_steward();
+        m.principals[1].contexts.idle_secs = Some(idle);
+        match ok {
+            true => assert!(on_virt(&m).is_ok(), "idle {idle}"),
+            false => refused_at(&m, "principals[1].contexts.idle_secs", Why::Contexts),
+        }
+    }
+    // The console's principal: its console session takes one of its unlabelled set's, so a max
+    // of 1 would leave it no SSH context, and is refused.
+    for (max, ok) in [(1, false), (2, true)] {
+        let mut m = with_steward();
+        m.console = Some("alice".into());
+        m.principals[0].contexts.max = Some(max);
+        match ok {
+            true => assert!(on_virt(&m).is_ok(), "console max {max}"),
+            false => refused_at(&m, "principals[0].contexts.max", Why::Contexts),
+        }
+    }
+    let mut m = with_steward();
+    m.principals[1].contexts = redoubt_init::manifest::Contexts { max: Some(3), idle_secs: Some(120) };
+    let steward = m.servers.iter().find(|s| s.name == "steward").unwrap();
+    assert!(args(&m, steward, &BUNDLE_KEY, &ENTRIES)[1].ends_with(" contexts=3 idle=120"));
 }
 
 // ---- the bound on root ----

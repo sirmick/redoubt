@@ -6,7 +6,8 @@
 use redoubt_rt::abi::{BudgetSpec, Error, FOREVER, Handle, ReceivedHandles};
 use redoubt_rt::ipc::Caller;
 use redoubt_rt::wire::proto::steward::{
-    ChannelClosed, EndSession, ErrorCode, Login, LoginReply, Message, Reply, StartAgent, Watch,
+    ChannelClosed, Contexts, Detach, EndContext, EndSession, ErrorCode, Login, LoginReply, Message, Reply,
+    StartAgent, Watch,
 };
 use redoubt_steward::domain::Domain;
 use redoubt_steward::effect::Step;
@@ -25,14 +26,14 @@ const BOB_KEY: [u8; 32] = [2; 32];
 
 fn alice() -> String {
     format!(
-        "principal \"alice\" account=1001 login=[{}] approval=[21] owned=[7] sets=[[],[7]] top=1000,30,300",
+        "principal \"alice\" account=1001 login=[{}] approval=[21] owned=[7] sets=[[],[7]] top=1000,30,300 contexts=4 idle=300",
         key_id(&ALICE_KEY)
     )
 }
 
 fn bob() -> String {
     format!(
-        "principal \"bob\" account=1002 login=[{}] approval=[22] owned=[] sets=[[]] top=500,10,100",
+        "principal \"bob\" account=1002 login=[{}] approval=[22] owned=[] sets=[[]] top=500,10,100 contexts=2 idle=300",
         key_id(&BOB_KEY)
     )
 }
@@ -338,6 +339,7 @@ fn call(
             | Message::ApprovalClosed(_)
             | Message::EndLease(_)
             | Message::EndSession(_)
+            | Message::Detach(_)
             | Message::Watch(_)
     );
     let mut buf = if inline { Vec::new() } else { vec![0u8; 4096] };
@@ -365,6 +367,11 @@ fn call(
             Reply::ChannelClosed(redoubt_rt::wire::proto::steward::ChannelClosedReply {})
         }
         Reply::EndSession(_) => Reply::EndSession(redoubt_rt::wire::proto::steward::EndSessionReply {}),
+        Reply::Contexts(c) => Reply::Contexts(redoubt_rt::wire::proto::steward::ContextsReply {
+            list: Box::leak(c.list.to_string().into_boxed_str()),
+        }),
+        Reply::Detach(_) => Reply::Detach(redoubt_rt::wire::proto::steward::DetachReply {}),
+        Reply::EndContext(_) => Reply::EndContext(redoubt_rt::wire::proto::steward::EndContextReply {}),
         _ => panic!("a reply these tests do not read"),
     })
 }
@@ -691,6 +698,74 @@ fn a_dead_vm_ends_its_session() {
     s.event(&mut k, redoubt_steward::event::EventKind::Exited { object }, 0).unwrap();
     assert!(k.calls.iter().any(|c| matches!(c, Call::Destroy(_))));
     assert!(s.exited(pid).is_none());
+}
+
+/// The badge a session's own calls come on: its route in the core's index.
+fn badge_of(s: &Steward<usize, usize>, session: u64) -> u64 {
+    let index = redoubt_steward::inspect::index(&s.store);
+    index.routes.iter().find(|(_, r)| r.id == session).map(|(b, _)| *b).expect("a running session")
+}
+
+fn bob_in(context: &str) -> Message<'_> {
+    Message::Login(Login { principal: "bob", label: "", context, from: "198.51.100.2:51234", key: &BOB_KEY })
+}
+
+/// The cap, through the server: bob's cap is 2; a third context is refused `cap` and makes
+/// nothing, and the two he has stay.
+#[test]
+fn a_login_past_the_cap_is_refused_and_makes_nothing() {
+    let mut k = Recorder::default();
+    let mut s = started(&mut k);
+    call(&mut s, &mut k, SSHD, bob_in("a")).unwrap();
+    call(&mut s, &mut k, SSHD, bob_in("b")).unwrap();
+    k.calls.clear();
+    assert_eq!(call(&mut s, &mut k, SSHD, bob_in("c")).unwrap_err(), ErrorCode::Cap);
+    assert!(
+        k.creates().is_empty() && !k.calls.iter().any(|c| matches!(c, Call::Destroy(_))),
+        "{:?}",
+        k.calls
+    );
+    // Reattaching one of the two is no new context.
+    assert!(call(&mut s, &mut k, SSHD, bob_in("a")).is_ok());
+}
+
+/// A session's own calls on its badge (servers/steward.md, "Contexts"): its listing, one line a
+/// context of its domain only, `name<TAB>state<TAB>seconds`; its own detach, which lets its
+/// channel go and gives the console back; and its end of a context by name, which is `unknown`
+/// for any name outside its domain, as for one nobody holds.
+#[test]
+fn a_session_lists_detaches_and_ends_its_own_domain_s_contexts() {
+    let mut k = Recorder::default();
+    let mut s = started(&mut k);
+    let Ok(Reply::Login(a)) = call(&mut s, &mut k, SSHD, bob_in("a")) else { panic!() };
+    let Ok(Reply::Login(b)) = call(&mut s, &mut k, SSHD, bob_in("b")) else { panic!() };
+    let vault = Message::Login(Login {
+        principal: "alice",
+        label: "alice-secrets",
+        context: "v",
+        from: "",
+        key: &ALICE_KEY,
+    });
+    call(&mut s, &mut k, SSHD, vault).unwrap();
+    let badge = badge_of(&s, b.session);
+    let r = call(&mut s, &mut k, badge, Message::Contexts(Contexts {}));
+    let Ok(Reply::Contexts(c)) = r else { panic!("{r:?}") };
+    assert_eq!(c.list, "a\tattached\t0\nb\tattached\t0\n");
+    for name in ["v", "nobody"] {
+        let e = call(&mut s, &mut k, badge, Message::EndContext(EndContext { name })).unwrap_err();
+        assert_eq!(e, ErrorCode::Unknown, "{name}");
+    }
+    k.calls.clear();
+    assert!(call(&mut s, &mut k, badge, Message::EndContext(EndContext { name: "a" })).is_ok());
+    assert!(k.calls.iter().any(|c| matches!(c, Call::Destroy(_))), "{:?}", k.calls);
+    let routed = redoubt_steward::inspect::index(&s.store).routes.values().any(|r| r.id == a.session);
+    assert!(!routed, "a ended");
+    k.calls.clear();
+    assert!(call(&mut s, &mut k, badge, Message::Detach(Detach {})).is_ok());
+    assert!(matches!(k.calls.as_slice(), [Call::Detach { .. }, Call::Release(_)]), "{:?}", k.calls);
+    assert_eq!(call(&mut s, &mut k, badge, Message::Detach(Detach {})).unwrap_err(), ErrorCode::Unknown);
+    // On `sshd`'s badge they are malformed.
+    assert_eq!(call(&mut s, &mut k, SSHD, Message::Contexts(Contexts {})).unwrap_err(), ErrorCode::Malformed);
 }
 
 /// The console principal's session (servers/steward.md, "Authentication and sessions"): opened

@@ -854,6 +854,16 @@ mod machine {
         // with `Dead` (R4b), and so tells `sshd` its sessions are over.
         let mut watches: Vec<Request> = Vec::new();
         loop {
+            // The idle timer: a detached context past its principal's bound ends (servers/steward.md,
+            // "Contexts"); the receive below waits no longer than the next one's bound.
+            let now = redoubt_rt::handle::time_now().unwrap_or(0);
+            if steward.store.next_idle().is_some_and(|t| t <= now) {
+                let outputs = steward.event(&mut machine, EventKind::Idle, 0).ok();
+                if !after(startup, &mut steward, &mut usage, outputs) {
+                    return core_exited(startup);
+                }
+            }
+            let idle = steward.store.next_idle().map(|t| t.saturating_sub(now).max(1));
             #[cfg(feature = "restart-probe")]
             let wait = probe_at.saturating_sub(redoubt_rt::handle::time_now().unwrap_or(probe_at));
             #[cfg(not(feature = "restart-probe"))]
@@ -865,6 +875,7 @@ mod machine {
                 }
                 None => wait,
             };
+            let wait = idle.map_or(wait, |i| wait.min(i));
             match own.receive(wait, 0) {
                 Ok(Event::Call(request)) if watches_call(&request.caller, &request.words) => {
                     // One per `sshd` instance; a restarted `sshd`'s comes before the abandoned
@@ -914,6 +925,8 @@ mod machine {
                     }
                 }
                 Ok(_) => {}
+                // The timer's own wake: the loop's top ends what is due.
+                Err(Error::Timeout) if idle.is_some_and(|i| i <= wait) => {}
                 #[cfg(feature = "label-probe")]
                 Err(Error::Timeout) if machine.probe_due.is_some() => machine.probe_hand(),
                 #[cfg(feature = "restart-probe")]

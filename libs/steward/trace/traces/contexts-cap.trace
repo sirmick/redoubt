@@ -1,0 +1,46 @@
+# Contexts, part c: the cap of live contexts per domain, refused after the key and evicting
+# nothing; the idle timer in every state; a session's own detach, its listing and its end of a
+# context; the console's session, which is no context.
+principal "alice" account=1 login=[11] approval=[21] owned=[7] sets=[[],[7]] top=1000,30,300 contexts=3 idle=300
+keyd [31]
+servers 1
+sizes session=10,2,5 agent=10,2,5 sub_agent=5,1,2 crossing=2,1,1 cost=1
+
+# The console's session: no context.
+event now=1 random=[51,52,53] reply=1 Console principal="alice"
+event now=2 Done object=session@1/#51 ok=[budget(900),scope,connection,connection,process(60)]
+# `a` starts; the timer meets it starting.
+event now=3 random=[101,102,103] reply=2 Login principal="alice" labels=[] context="a" key=11 from="198.51.100.2:51234"
+event now=4 Idle
+event now=5 Done object=session@1/#101 ok=[budget(901),scope,process(70),done,connection,connection,process(71)]
+# `b`: three live with the console's, the cap. `c` is refused after its key; with a wrong key it
+# is still the bad key's.
+event now=6 random=[201,202,203] reply=3 Login principal="alice" labels=[] context="b" key=11 from="198.51.100.2:51235"
+event now=7 Done object=session@1/#201 ok=[budget(902),scope,process(72),done,connection,connection,process(73)]
+event now=8 random=[301,302,303] reply=4 Login principal="alice" labels=[] context="c" key=11 from="198.51.100.2:51236"
+event now=9 random=[311,312,313] reply=5 Login principal="alice" labels=[] context="c" key=21 from="198.51.100.2:51236"
+# The vault counts its own.
+event now=10 random=[401,402,403] reply=6 Login principal="alice" labels=[7] context="c" key=11 from="198.51.100.2:51237"
+event now=11 Done object=session@1/7#401 ok=[budget(903),scope,process(74),done,connection,connection,process(75)]
+# The console's session lists its domain's contexts; its own detach is refused: it has no channel.
+event now=12 reply=7 Contexts badge=52
+event now=13 reply=8 Leave badge=52
+# `a` detaches itself; again, refused; the timer meets it running and detached, before its bound.
+event now=14 reply=9 Leave badge=102
+event now=15 Done object=session@1/#101 ok=[done]
+event now=16 reply=10 Leave badge=102
+event now=17 Idle
+# A listing from `b`: `a` detached, `b` attached, nothing of the vault's.
+event now=18 reply=11 Contexts badge=202
+# `b` ends the vault's `c`: unknown, as a name nobody holds; then `a`, detached.
+event now=19 reply=12 EndContext badge=202 name="c"
+event now=20 reply=13 EndContext badge=202 name="nobody"
+event now=21 reply=14 EndContext badge=202 name="a"
+# The timer meets `a` ending.
+event now=22 Idle
+event now=23 Done object=session@1/#101 ok=[done]
+# `b` detaches; 300 s later the timer ends it, and the vault's attached `c` stays.
+event now=24 reply=15 ChannelClosed session=201
+event now=25 Done object=session@1/#201 ok=[done]
+event now=300000025 Idle
+event now=300000026 Done object=session@1/#201 ok=[done]

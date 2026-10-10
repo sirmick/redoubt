@@ -41,6 +41,10 @@ pub struct Policy {
     pub granted: Guard,
     /// Guard (a rule), in `request`.
     pub hash_matches: Guard,
+    /// Guard (a rule), in `session`.
+    pub idle_due: Guard,
+    /// Guard (an object's kind only, no rule), in `session`.
+    pub is_context: Guard,
     /// Guard (a rule), in `request`.
     pub item_fits: Guard,
     /// Guard (a rule), in `lease`, `request`.
@@ -61,7 +65,9 @@ pub struct Policy {
     pub rendered_here: Guard,
     /// Guard (a rule), in `lease`.
     pub sponsor_session: Guard,
-    /// Effect, in `session`.
+    /// Guard (a rule), in `session`.
+    pub under_cap: Guard,
+    /// Effect carrying a rule, in `session`.
     pub attach_relay: Effect,
     /// Effect, in `lease`.
     pub audit_agent_started: Effect,
@@ -77,6 +83,8 @@ pub struct Policy {
     pub audit_declassified: Effect,
     /// Effect, in `request`.
     pub audit_denied: Effect,
+    /// Effect, in `session`.
+    pub audit_idle: Effect,
     /// Effect, in `lease`.
     pub audit_lease_ended: Effect,
     /// Effect, in `blame`.
@@ -171,6 +179,8 @@ pub struct Policy {
     pub audit_visible: crate::cx::AuditFilter,
     /// The approval edge's routing: a channel's own account's requests, of owned labels (R38).
     pub reaches: crate::cx::Reach,
+    /// Whose contexts a session lists and may end: its own domain's only (R37).
+    pub sees: crate::cx::Sees,
 }
 
 impl Policy {
@@ -188,6 +198,8 @@ impl Policy {
         grants_lease: crate::guards::grants_lease,
         granted: crate::guards::granted,
         hash_matches: crate::guards::hash_matches,
+        idle_due: crate::guards::idle_due,
+        is_context: crate::guards::is_context,
         item_fits: crate::guards::item_fits,
         lease_bounded: crate::guards::lease_bounded,
         login_key: crate::guards::login_key,
@@ -198,6 +210,7 @@ impl Policy {
         reading: crate::guards::reading,
         rendered_here: crate::guards::rendered_here,
         sponsor_session: crate::guards::sponsor_session,
+        under_cap: crate::guards::under_cap,
         attach_relay: crate::effects::attach_relay,
         audit_agent_started: crate::effects::audit_agent_started,
         audit_approved: crate::effects::audit_approved,
@@ -206,6 +219,7 @@ impl Policy {
         audit_copy_failed: crate::effects::audit_copy_failed,
         audit_declassified: crate::effects::audit_declassified,
         audit_denied: crate::effects::audit_denied,
+        audit_idle: crate::effects::audit_idle,
         audit_lease_ended: crate::effects::audit_lease_ended,
         audit_locked_out: crate::effects::audit_locked_out,
         audit_login: crate::effects::audit_login,
@@ -253,5 +267,6 @@ impl Policy {
         write_item: crate::effects::write_item,
         audit_visible: crate::guards::audit_visible,
         reaches: crate::guards::reaches,
+        sees: crate::guards::sees,
     };
 }

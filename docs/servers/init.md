@@ -67,7 +67,7 @@ and `init`'s only input. Its entries:
 | `volumes` | each volume's name, `blkd` partition, label set and disk (the `servers` entry of the `blkd` serving it), and for a verified volume `verity`: its verifier (the `servers` entry of a [`verityd`](verityd.md)) and one mode, pinned, the root and data blocks it pins, `{ "server", "root": 64 lowercase hex digits, "blocks": a decimal string }`, or signed, the key its root block is signed under and the lowest version it may carry, `{ "server", "key": 64 lowercase hex digits or "bundle", "floor": a decimal string }`; and `bytes`, its size, a decimal string: its partition's, required where homes are carved from it ([home quotas](#home-quotas)) |
 | `servers` | each server's name, program (a bundle entry), budget (pages, processes, weight), the devices it gets (each a `devices` name and the name the program looks it up by), volume (its range badge, minted by `init`, and its label ids as `labels=`; a volume's server has `program` `walfsd` or `littlefsd` for a writable volume, or `erofsd` for a read-only one, and no other key says the format), the endpoints it receives on, the endpoints it is handed (each an endpoint name and the root badge `init` mints for it: a decimal string below `FIRST_MINTED_BADGE`, never used twice at one endpoint), arguments, and its stack in pages (`stack_pages`, 16 if absent, at most 128), and its heap cap in pages (`heap_pages`, none if absent) |
 | `public` | the bundle entries `bootfsd` serves at `/boot`, by exact name |
-| `principals` | each principal's name, SSH public keys (`ssh-ed25519` only, each once across every principal's login and approval lists) for login and approval, budget, account, owned labels, the label sets it works under (each a fixed, equal share of the principal's budget), home (volume and path) and its quota (`home_quota`, bytes as a decimal string, required with a home), and network scope (IP prefixes and ports) |
+| `principals` | each principal's name, SSH public keys (`ssh-ed25519` only, each once across every principal's login and approval lists) for login and approval, budget, account, owned labels, the label sets it works under (each a fixed, equal share of the principal's budget), home (volume and path) and its quota (`home_quota`, bytes as a decimal string, required with a home), network scope (IP prefixes and ports), and optionally its contexts (`contexts`: `max`, the live contexts per label set, and `idle_secs`, how long one stays detached, each a number; [contexts](#contexts)) |
 | `steward` | optional; the `servers` entry that is the steward, which alone `init` hands `users` at step 6, and the sizes it carves (`sizes`: `session`, `agent`, `sub_agent` and `crossing`, each a budget, and `cost`, a budget object's own pages). `init` checks every limit nonzero and each size within every principal's smallest share, and hands the steward the principals and sizes as the manifest lines, then its own lines: label names, and each principal's home, labelled volumes and network scope, whose servers the steward's entry must be handed ([steward](steward.md#the-manifest-lines)) |
 | `console` | optional; the principal whose unlabelled session the steward opens on the UART console ([steward](steward.md#authentication-and-sessions)); it needs a `steward`, and a name that is not a `principals` entry refuses the boot |
 | `confined` | optional; a boolean at the top level ([confinement](#the-confinement-check)) |
@@ -214,6 +214,18 @@ partition's size, and the bench refuses a case whose disk and manifest disagree 
 ([the test bench](../testbench.md#disks-and-network-cards)). The volume's server bounds what a
 carve may take all the same: it refuses a quota its room cannot hold
 ([walfsd](walfsd.md#quotas)), and a session then has no home.
+
+#### Contexts
+
+A principal's `contexts` caps its live contexts in each label set and bounds how long a detached
+one lasts ([steward](steward.md#contexts)). `init` writes both into the principal's manifest
+line, `contexts=N idle=S`. Absent, `max` is what one label set's share holds: the share's pages,
+less a budget's own cost, over the steward's session size, or its processes over a session's,
+whichever is fewer, and at most 16; `idle_secs` is a day, 86,400. `init` refuses, naming the
+field, a `max` of 0, above 16, or above what the share holds, so the cap, not a failed carve,
+is what refuses a login; a `max` below 2 for the `console` principal, whose console session
+counts against its unlabelled set's cap and would leave it no SSH context there; and an
+`idle_secs` below 60 or above 604,800, a week.
 
 ### The confinement check
 

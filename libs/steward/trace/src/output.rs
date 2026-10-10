@@ -45,6 +45,20 @@ fn context_of(c: &Option<String>) -> String { c.as_ref().map_or("none".into(), |
 fn answer(a: &Answer) -> String {
     match a {
         Answer::Ok => "ok".into(),
+        Answer::Contexts(list) => {
+            let l: Vec<String> = list
+                .iter()
+                .map(|c| {
+                    format!(
+                        "{}:{}:{}",
+                        quote(c.name.as_bytes()),
+                        if c.attached { "attached" } else { "detached" },
+                        c.age
+                    )
+                })
+                .collect();
+            format!("contexts [{}]", l.join(","))
+        }
         Answer::Session { id, name } => format!("session id={id} name={}", quote(name.as_bytes())),
         Answer::Lease { id, name } => format!("lease id={id} name={}", quote(name.as_bytes())),
         Answer::Request { id } => format!("request id={id}"),
@@ -63,6 +77,7 @@ fn record(r: &Record) -> String {
                 quote(from.as_bytes())
             )
         }
+        Record::IdleEnded { session, idle } => format!("IdleEnded session={session} idle={idle}"),
         Record::AgentStarted { lease, sponsor, parent, deadline } => {
             format!(
                 "AgentStarted lease={lease} sponsor={sponsor} parent={} deadline={deadline}",
@@ -219,14 +234,16 @@ pub fn boot(s: &mut String, store: &Store, carves: &[Carve]) {
         let d: Vec<String> = p.domains.iter().map(domain).collect();
         let _ = writeln!(
             s,
-            "principal {i} {} account={} login={} approval={} owned={} domains=[{}] top={}",
+            "principal {i} {} account={} login={} approval={} owned={} domains=[{}] top={} contexts={} idle={}",
             quote(p.name.as_bytes()),
             p.account,
             show_list(&p.login_keys),
             show_list(&p.approval_keys),
             show_list(p.owned.as_slice()),
             d.join(","),
-            limits(&p.top)
+            limits(&p.top),
+            p.contexts.max,
+            p.contexts.idle_secs
         );
     }
     let keyd: Vec<u64> = f.keyd.iter().copied().collect();

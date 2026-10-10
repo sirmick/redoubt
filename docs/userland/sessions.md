@@ -86,7 +86,7 @@ label set cannot starve another.
 
 ### Contexts
 
-Status: built · tested: bench:steward-context-login, host:redoubt-sshd::the_login_grammar, host:redoubt-sshd::only_a_pty_channel_s_end_of_input_closes_the_terminal, host:redoubt-steward::context_free_holds_one_session_per_name, bench:steward-session-ends, bench:steward-context-labels, bench:sshd-restart-detaches, host:redoubt-consrelay::an_attach_cuts_to_a_line_says_what_was_dropped_and_replays, host:redoubt-consrelay::the_vm_s_size_is_the_channel_s_and_an_attach_redraws
+Status: built · tested: bench:steward-context-login, host:redoubt-sshd::the_login_grammar, host:redoubt-sshd::only_a_pty_channel_s_end_of_input_closes_the_terminal, host:redoubt-steward::context_free_holds_one_session_per_name, bench:steward-session-ends, bench:steward-context-labels, bench:sshd-restart-detaches, host:redoubt-consrelay::an_attach_cuts_to_a_line_says_what_was_dropped_and_replays, host:redoubt-consrelay::the_vm_s_size_is_the_channel_s_and_an_attach_redraws, bench:steward-context-cap, bench:steward-context-idle, bench:shell-contexts, bench:steward-restart-context, bench:steward-login-timing
 
 A **context** is a named session of one principal in one label set. The SSH user name is
 `principal[+label][.context]`, in that order only: `alice` is Alice's default context,
@@ -117,13 +117,26 @@ a path. Contexts are not declared: a login names one, and the first login makes 
   nothing about which names exist. Its timing is not made equal: inside the steward's one call,
   an unknown principal or label set, or a name outside the grammar, is refused before any of its
   machines runs, and a wrong key for a known principal runs the blame and session machines before
-  the key check refuses it; nothing is counted. How far that difference shows through SSH is not
-  yet measured.
+  the key check refuses it; nothing is counted. Measured at the client, the three kinds' median
+  refusals lie within a millisecond of each other, inside their spread
+  ([the steward](../servers/steward.md#residual-risks)).
 - **Reserved names take no suffix.** `approve` is the approval terminal's name: no principal
   takes it, and `approve+x` and `approve.x` are not logins.
-
-A cap on live contexts per label set, and an idle expiry for detached ones, are planned
-([M2 (usable shell)](../plan/m2-usable-shell.md#the-shell)).
+- **A cap per label set** ([R82 (the context cap)](../servers/steward.md#r82-the-context-cap)). A principal has at
+  most a set number of live contexts in each label set, attached or detached, the console's
+  session counted where it runs: by default what the label set's share of the principal's budget
+  holds, or fewer if the manifest says so. A login that would make one more is refused like any
+  other refusal; nothing running is ended to make room. In the image alice has one SSH context
+  beside the console, two in her vault, and bob two.
+- **Idle contexts end** ([R83 (idle contexts end)](../servers/steward.md#r83-idle-contexts-end)). A context left
+  detached for its principal's idle bound, by default a day, ends with everything in it. An
+  attached context never does, and each attach starts the count again.
+- **From the prompt.** `contexts()` lists the session's label set's contexts, `detach()` closes
+  the terminal and leaves the context running, and `end_context(name)` ends one
+  ([the shell](shell.md#session-commands)). Another label set's contexts are never shown, and
+  its names are unknown.
+- **A steward restart ends them.** Contexts end with the steward; after it restarts, a login
+  makes a new context, however it is named ([the steward](../servers/steward.md#contexts)).
 
 ### A session is a VM in a budget
 

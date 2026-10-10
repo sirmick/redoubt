@@ -75,6 +75,45 @@ defmodule Redoubt.Shell.Session do
     end
   end
 
+  @summary "This principal's contexts in this label set"
+  @help """
+  The live contexts of this session's principal in this session's label set, its own among them:
+  each one's name (\"\" for the default context), whether a terminal is attached or it runs
+  detached, and the seconds since it was last attached or detached. Another label set's contexts
+  are never shown, nor another principal's. `{:error, :no_steward}` in a VM that is no session.
+  """
+  @examples [{"contexts()", "[%{name: \"work\", state: :detached, age: 340}, ...]"}]
+  defcommand contexts() do
+    case Redoubt.Contexts.list() do
+      {:ok, list} -> list
+      {:error, _} = error -> error
+    end
+  end
+
+  @summary "Leave this context running and close the terminal"
+  @help """
+  Lets this session's terminal go: the SSH connection closes, and the context runs on, detached,
+  its output kept, until a login reattaches it or it has been idle for its principal's bound.
+  `{:error, :unknown}` on the console's session, which has no terminal to let go.
+  """
+  @examples [{"detach()", "close the terminal, keep the work"}]
+  defcommand detach() do
+    Redoubt.Contexts.detach()
+  end
+
+  @summary "End a context of this label set by name"
+  @help """
+  Ends the context name of this session's principal and label set: its VM and everything in it
+  end, attached or detached. Ending this session's own context is as `exit`. A name that is not a
+  live context of this label set is `{:error, :unknown}`, whether nobody holds it or another label
+  set does.
+  """
+  @args name: "the context's name, \"\" for the default one"
+  @examples [{~S'end_context("work")', "end the context work"}]
+  defcommand end_context(name :: string) do
+    Redoubt.Contexts.end_context(name)
+  end
+
   @summary "The session's labels"
   @help """
   The labels this session's budget carries, by name: none for a plain session, the vault's for a

@@ -102,7 +102,7 @@ defmodule Redoubt.Steward do
     owned = labels(p.owned)
 
     cond do
-      p.account == 0 or p.account in accounts or p.name in names -> :refused
+      p.account == 0 or p.contexts.max == 0 or p.account in accounts or p.name in names -> :refused
       Enum.any?(domains, fn {_, l} -> l == nil end) or owned == nil -> :refused
       length(Enum.uniq(domains)) != length(domains) -> :refused
       true ->
@@ -113,7 +113,8 @@ defmodule Redoubt.Steward do
           approval_keys: p.approval_keys,
           owned: owned,
           domains: domains,
-          top: p.top
+          top: p.top,
+          contexts: p.contexts
         }
 
         principals(rest, [q | acc], MapSet.put(accounts, p.account), MapSet.put(names, p.name))
@@ -418,7 +419,9 @@ defmodule Redoubt.Steward do
         number: 0,
         reply: e.reply,
         attachment: id,
-        from: ""
+        from: "",
+        since: e.now,
+        idle: nil
       }
 
       {_, store} = insert(store, d, :session, id, s)
@@ -448,7 +451,9 @@ defmodule Redoubt.Steward do
         number: 0,
         reply: e.reply,
         attachment: id,
-        from: ""
+        from: "",
+        since: e.now,
+        idle: nil
       }
 
       {_, store} = insert(store, d, :session, id, s)
@@ -553,6 +558,45 @@ defmodule Redoubt.Steward do
       %{kind: :session} = by -> done(run(store, out, e, by.domain, :session, by.id, :end_session, %{caller: by}))
       _ -> unknown(store, e, out)
     end
+  end
+
+  defp external(store, %{kind: {:contexts, badge}} = e, out) do
+    case route(store, badge) do
+      %{kind: :session} = by -> {store, reply(out, e, {:contexts, contexts(store, by.domain, e.now)})}
+      _ -> unknown(store, e, out)
+    end
+  end
+
+  defp external(store, %{kind: {:leave, badge}} = e, out) do
+    case route(store, badge) do
+      %{kind: :session} = by -> done(run(store, out, e, by.domain, :session, by.id, :leave, %{caller: by}))
+      _ -> unknown(store, e, out)
+    end
+  end
+
+  # A name the caller's domain does not hold, live, is answered as one nobody holds.
+  defp external(store, %{kind: {:end_context, badge, name}} = e, out) do
+    with %{kind: :session} = by <- route(store, badge),
+         {d, id} <- context_named(store, by.domain, name) do
+      done(run(store, out, e, d, :session, id, :end_session, %{caller: by}))
+    else
+      _ -> unknown(store, e, out)
+    end
+  end
+
+  # Every context hears it, in domain and id order: its rows decide, and only a detached one
+  # past its bound ends.
+  defp external(store, %{kind: :idle} = e, out) do
+    contexts =
+      for d <- store.order,
+          {id, s} <- Enum.sort(store.domains[d].sessions),
+          s.context != nil,
+          do: {d, id}
+
+    Enum.reduce(contexts, {store, out}, fn {d, id}, {store, out} ->
+      {_, store, out} = run(store, out, e, d, :session, id, :idle)
+      {store, out}
+    end)
   end
 
   defp external(store, %{kind: {k, _}} = e, out) when k in [:pending], do: approval(store, e, out)
@@ -743,6 +787,34 @@ defmodule Redoubt.Steward do
       end)
 
     %{store | domains: domains}
+  end
+
+  # Whose contexts a session of domain `caller` sees: its own domain's only (R37).
+  def sees(caller, d), do: caller == d
+
+  # The live contexts a session of `caller` sees, by name: {name, attached, age}.
+  defp contexts(store, caller, now) do
+    for d <- store.order,
+        sees(caller, d),
+        {_, s} <- Enum.sort(store.domains[d].sessions),
+        s.state in [:running, :detached],
+        s.context != nil do
+      {s.context, s.state == :running, now - s.since}
+    end
+    |> Enum.sort_by(&elem(&1, 0))
+  end
+
+  # The live context named `name` that a session of `caller` sees.
+  defp context_named(store, caller, name) do
+    Enum.find_value(store.order, fn d ->
+      if sees(caller, d) do
+        store.domains[d].sessions
+        |> Enum.sort()
+        |> Enum.find_value(fn {id, s} ->
+          if s.state in [:running, :detached] and s.context == name, do: {d, id}
+        end)
+      end
+    end)
   end
 
   # ---- The three edges that cross domains (R34) -------------------------------------------
