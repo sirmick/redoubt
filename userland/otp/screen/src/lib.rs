@@ -12,7 +12,8 @@
 //!   allocating only a bit a cell of the buffer; each is charged in reductions by the cells it touched.
 //! - **Counted:** a process holds at most four buffers, and each declares its grids' bytes, which count as
 //!   its holder's own memory, toward its heap limit.
-//! - **One writer:** a buffer answers only the process that made it; any other gets `badarg`.
+//! - **One writer:** a buffer answers only the process that made it; any other gets `badarg`, but for
+//!   `draw/1`, which writes no cell: the shell's driver draws the buffer of the screen in front.
 //!
 //! Text comes in as graphemes, split by OTP's own segmentation (`String.graphemes/1`), and is
 //! measured by a table generated from OTP's `unicode_util:is_wide/1` (`wide.rs`): what the shell
@@ -34,6 +35,7 @@ use beamlet_vm::{Exception, Term};
 use cells::{Color, Modifiers};
 
 mod buffer;
+mod draw;
 mod wide;
 
 pub use buffer::{Buffer, MAX_CELLS, Read, Rect, Refusal, Refused, Style, UNICODE, columns};
@@ -54,6 +56,7 @@ pub static NATIVES: &[NativeSpec] = &[
     ("redoubt_screen", "plot", 4, plot),
     ("redoubt_screen", "diff", 1, diff),
     ("redoubt_screen", "frame", 3, frame),
+    ("redoubt_screen", "draw", 1, draw),
 ];
 
 /// A buffer as a resource: its owner, the grid, and its share of the owner's count of buffers,
@@ -252,6 +255,21 @@ fn diff(c: &mut Ctx, a: &[Term]) -> R {
         (b.diff(), cells)
     };
     let bytes = cells::encode(&frame);
+    charge(c, cells);
+    Ok(c.binary(&bytes))
+}
+
+/// `draw(B)`: the cells changed since the last `diff/1` or `draw/1`, as the escape sequences that
+/// draw them (`Buffer::draw`), which then become what is shown. The one native a process that
+/// did not make the buffer may call: it writes no cell, so the maker stays its only writer, and
+/// what it returns is drawn from the buffer's own cells, every one checked as it went in.
+fn draw(c: &mut Ctx, a: &[Term]) -> R {
+    let held = c.resource::<Grid>(a[0]).ok_or_else(|| c.badarg())?;
+    let (bytes, cells) = {
+        let mut b = held.buffer.lock();
+        let cells = usize::from(b.width()) * usize::from(b.height());
+        (b.draw(), cells)
+    };
     charge(c, cells);
     Ok(c.binary(&bytes))
 }

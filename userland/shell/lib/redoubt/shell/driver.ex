@@ -16,9 +16,10 @@ defmodule Redoubt.Shell.Driver do
 
   A screen (`Redoubt.Screen`) takes the terminal while it is in front: the driver shows the
   alternate screen, decodes the bytes typed into keys (`Redoubt.Term.Keys`) and sends them to the
-  screen's process, draws each frame it sends through the one decoder (`Redoubt.Term.Cells`) and
-  `Redoubt.Term.Frame`, and holds what `group` asks to draw, answering it at once so a writer
-  never waits on the screen. Ctrl+\\ ends the screen, and so does Ctrl+C unless the screen takes
+  screen's process, draws what changed in the one buffer the screen registered when it opened,
+  when the screen asks and only while it is in front (`Redoubt.Term.Buffer.draw/1`, the screen
+  natives' encoder over the buffer's own cells), and holds what `group` asks to draw, answering
+  it at once so a writer never waits on the screen. Ctrl+\\ ends the screen, and so does Ctrl+C unless the screen takes
   it as a key (`Redoubt.Screen.run/3`'s `ctrl_c: :key`). When the screen ends, the main screen is
   shown again, as it was, and what was held is drawn.
 
@@ -45,7 +46,7 @@ defmodule Redoubt.Shell.Driver do
   """
 
   alias Redoubt.Term
-  alias Redoubt.Term.{Frame, Keys}
+  alias Redoubt.Term.{Buffer, Frame, Keys}
 
   require Record
 
@@ -188,8 +189,17 @@ defmodule Redoubt.Shell.Driver do
         send(pid, {:redoubt_screen, :size, state.size.()})
         loop(state)
 
-      {:redoubt_screen, :frame, pid, bytes} when state.screen != nil and state.screen.pid == pid ->
-        loop(frame(state, bytes))
+      # The screen's buffer, once, as soon as it has opened: the only buffer drawn for it.
+      {:redoubt_screen, :buffer, pid, buffer}
+      when state.screen != nil and state.screen.pid == pid and state.screen.buffer == nil ->
+        loop(put_in(state.screen.buffer, buffer))
+
+      # Asked to draw: the screen in front's own buffer, or nothing. The asker is answered either
+      # way, so a screen that has ended or was never in front is not left waiting.
+      {:redoubt_screen, :draw, pid, buffer} ->
+        state = if in_front?(state, pid, buffer), do: draw_screen(state), else: state
+        send(pid, {:redoubt_screen, :drawn, self()})
+        loop(state)
 
       {:redoubt_screen, :close, pid} when state.screen != nil and state.screen.pid == pid ->
         loop(close_screen(state))
@@ -587,6 +597,7 @@ defmodule Redoubt.Shell.Driver do
 
     screen = %{
       pid: pid,
+      buffer: nil,
       ref: Process.monitor(pid),
       held: [],
       pending: <<>>,
@@ -602,17 +613,16 @@ defmodule Redoubt.Shell.Driver do
     state
   end
 
-  # A frame the decoder refuses ends the screen: nothing reaches the terminal but cells. It is
-  # drawn as it is decoded, a cell at a time, so a whole screen's frame is never one large term.
-  defp frame(state, bytes) do
-    case Frame.draw_bytes(bytes) do
-      {:ok, out} ->
-        write(state, out)
-        state
+  defp in_front?(%{screen: %{pid: pid, buffer: buffer}}, pid, buffer) when buffer != nil, do: true
+  defp in_front?(_state, _pid, _buffer), do: false
 
-      {:error, _why} ->
-        end_screen(state, :refused_frame)
-    end
+  # What changed in the screen's buffer, drawn by the screen natives from its own cells: nothing
+  # reaches the terminal but cells. A term registered that is no buffer ends the screen.
+  defp draw_screen(%{screen: screen} = state) do
+    write(state, Buffer.draw(screen.buffer))
+    state
+  rescue
+    ArgumentError -> end_screen(state, :refused_frame)
   end
 
   # The main screen as it was, and then what group asked to draw meanwhile.

@@ -11,6 +11,10 @@ defmodule Redoubt.Term.Frame do
   disagreement then costs one cell's place, never the rest of the row. A frame that clears the
   screen begins with `CSI 2J`; every frame ends with the style reset.
 
+  The driver draws a screen with this encoder in Rust, the screen natives' `draw/1` over the
+  screen's buffer (`Redoubt.Term.Buffer.draw/1`); `draw/1` here is kept as its reference, which
+  the shell's suite and `userland/otp/screen/draw.json` hold it to byte for byte.
+
   A screen is drawn on the alternate screen with the cursor hidden (`enter/0`), and leaving it
   (`leave/0`) shows the main screen as it was.
   """
@@ -34,24 +38,6 @@ defmodule Redoubt.Term.Frame do
   def draw(%{clear: clear, cells: cells}) do
     {out, _cursor, _style} = Enum.reduce(cells, start(clear), &cell/2)
     [out, @csi, "0m"]
-  end
-
-  @doc """
-  The escape sequences that draw the frame in `bytes`, read through the one decoder a cell at a
-  time (`Redoubt.Term.Cells.reduce/3`), so a whole screen's frame is never held as a list of cells;
-  or why the decoder refuses it, and then nothing.
-  """
-  @spec draw_bytes(binary()) :: {:ok, iodata()} | {:error, Redoubt.Term.Cells.error()}
-  def draw_bytes(bytes) do
-    step = fn
-      {:frame, %{clear: clear}}, nil -> {:cont, start(clear)}
-      {:cell, c}, acc -> {:cont, cell(c, acc)}
-    end
-
-    case Redoubt.Term.Cells.reduce(bytes, nil, step) do
-      {:ok, {out, _cursor, _style}} -> {:ok, [out, @csi, "0m"]}
-      {:error, _} = error -> error
-    end
   end
 
   defp start(clear), do: {[if(clear, do: [@csi, "0m", @csi, "2J"], else: [@csi, "0m"])], nil, Buffer.plain()}

@@ -84,6 +84,15 @@ defmodule Redoubt.Term.Buffer do
           | {:error, Redoubt.Term.Cells.error() | :cell}
   def frame(buffer, bytes, from \\ 0), do: apply(@natives, :frame, [buffer, bytes, from])
 
+  @doc """
+  The cells changed since the last frame, as the escape sequences that draw them, which then
+  become what is shown: the bytes `Redoubt.Term.Frame.draw/1` draws for `diff/1`'s frame, drawn
+  in Rust from the buffer's own cells. Any process holding the buffer may draw it; only its
+  owner draws into it.
+  """
+  @spec draw(t()) :: binary()
+  def draw(buffer), do: apply(@natives, :draw, [buffer])
+
   @doc "The terminal's own colours and no attributes."
   @spec plain() :: style()
   def plain, do: {:reset, :reset, 0}

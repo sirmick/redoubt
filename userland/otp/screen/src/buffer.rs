@@ -7,6 +7,8 @@ use alloc::vec::Vec;
 
 use cells::{Cell as Wire, Cells, Color, Frame, MAX_SIDE, MAX_SYMBOL, Modifiers, Symbol};
 
+use crate::draw::Encoder;
+
 /// The most cells a buffer holds.
 pub const MAX_CELLS: usize = 65_536;
 
@@ -258,27 +260,50 @@ impl Buffer {
 
     /// The cells changed since the last frame, as a frame, which then becomes what is shown.
     pub fn diff(&mut self) -> Frame {
-        let mut cells = Vec::new();
-        for (i, (back, front)) in self.back.iter().zip(&self.front).enumerate() {
-            let changed = if self.clear { *back != BLANK } else { back != front };
-            if changed {
-                if let Some(text) = back.glyph.as_str() {
-                    let (x, y) = (i % usize::from(self.width), i / usize::from(self.width));
-                    cells.push(Wire {
-                        x: x as u16,
-                        y: y as u16,
-                        symbol: Symbol::new(text).expect("a buffer holds no control character"),
-                        fg: back.style.fg,
-                        bg: back.style.bg,
-                        modifiers: back.style.modifiers,
-                    });
-                }
-            }
-        }
+        let cells = self
+            .changes()
+            .map(|(x, y, text, style)| Wire {
+                x,
+                y,
+                symbol: Symbol::new(text).expect("a buffer holds no control character"),
+                fg: style.fg,
+                bg: style.bg,
+                modifiers: style.modifiers,
+            })
+            .collect();
         let frame = Frame { width: self.width, height: self.height, clear: self.clear, cells };
+        self.shown();
+        frame
+    }
+
+    /// The cells changed since the last frame, as the escape sequences that draw them
+    /// (`draw.rs`): the bytes `Redoubt.Term.Frame.draw/1` writes for [`diff`](Buffer::diff)'s
+    /// frame. They then become what is shown.
+    pub fn draw(&mut self) -> Vec<u8> {
+        let mut encoder = Encoder::new(self.clear);
+        for (x, y, text, style) in self.changes() {
+            encoder.cell(x, y, text, style);
+        }
+        self.shown();
+        encoder.finish()
+    }
+
+    /// Each cell to send, in order, as `(x, y, symbol, style)`: when the screen is to be cleared,
+    /// every one that is not blank, else every one that changed; never the right half of a wide
+    /// grapheme.
+    fn changes(&self) -> impl Iterator<Item = (u16, u16, &str, Style)> {
+        let w = usize::from(self.width);
+        self.back.iter().zip(&self.front).enumerate().filter_map(move |(i, (back, front))| {
+            let changed = if self.clear { *back != BLANK } else { back != front };
+            let text = back.glyph.as_str().filter(|_| changed)?;
+            Some(((i % w) as u16, (i / w) as u16, text, back.style))
+        })
+    }
+
+    /// What was drawn into the buffer is now what the screen shows.
+    fn shown(&mut self) {
         self.front.copy_from_slice(&self.back);
         self.clear = false;
-        frame
     }
 
     /// The positions of `rect` inside the buffer.

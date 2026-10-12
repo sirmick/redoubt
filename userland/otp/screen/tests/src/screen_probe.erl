@@ -2,7 +2,7 @@
 %% screen program calls them. Only natives are used: the tests load no OTP modules.
 %% Rebuild: erlc +deterministic -o screen/tests/fixtures screen/tests/src/screen_probe.erl
 -module(screen_probe).
--export([drawn/0, control/0, other_owner/0, fifth/0, freed/0, big/0, grown/0, styles/0, read/0]).
+-export([drawn/0, control/0, other_owner/0, fifth/0, freed/0, big/0, grown/0, styles/0, read/0, drawn_elsewhere/0]).
 
 -define(PLAIN, {reset, reset, 0}).
 -define(LIMIT, #{size => 100000, kill => true, error_logger => false}).
@@ -80,6 +80,18 @@ read() ->
      reason(fun() -> redoubt_screen:frame(B, F, Next) end),
      reason(fun() -> redoubt_screen:frame(B, [F], 0) end),
      Other}.
+
+%% Another process may draw a buffer, and draws it once; it still may not draw into it.
+drawn_elsewhere() ->
+    B = redoubt_screen:new(4, 1),
+    3 = redoubt_screen:put(B, 0, 0, [<<"a">>, <<"b">>, <<"c">>], {{indexed, 1}, reset, 1}),
+    Self = self(),
+    spawn(fun() ->
+                  Self ! {other, redoubt_screen:draw(B), redoubt_screen:draw(B),
+                          reason(fun() -> redoubt_screen:put(B, 0, 0, [<<"x">>], ?PLAIN) end)}
+          end),
+    receive {other, First, Second, Put} -> ok end,
+    {First, Second, Put, reason(fun() -> redoubt_screen:draw(make_ref()) end)}.
 
 frame(W, H, Flags, Cells) ->
     <<1, Flags, W:16/little, H:16/little, (length(Cells)):32/little, (iolist_to_binary(Cells))/binary>>.

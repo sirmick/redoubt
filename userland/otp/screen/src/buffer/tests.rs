@@ -474,3 +474,167 @@ fn the_positions_given_are_a_frames_own_and_a_resumed_frame_neither_puts_again_n
     let Ok(Read::Joined { next, .. }) = b.read(&again, 0) else { panic!() };
     assert_eq!(b.read(&again, next), Err(Refused::Frame(cells::Error::Twice)));
 }
+
+// ---- the buffer drawn as escape sequences ----
+
+/// The frames of `draw.json` (written by the shell's `Redoubt.Term.Frame.draw/1`), each as its
+/// size, whether it clears, its cells as `(x, y, symbol, style)`, read without the cell
+/// protocol's checks, and the bytes drawn.
+#[allow(clippy::type_complexity)]
+fn draw_vectors() -> Vec<(String, u16, u16, bool, Vec<(u16, u16, String, Style)>, Vec<u8>)> {
+    let field = |line: &str, key: &str| {
+        let start = line.find(&alloc::format!("\"{key}\": \""))? + key.len() + 5;
+        Some(String::from(&line[start..start + line[start..].find('"')?]))
+    };
+    let unhex = |hex: String| -> Vec<u8> {
+        (0..hex.len()).step_by(2).map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap()).collect()
+    };
+    let color = |b: &[u8]| match b[0] {
+        0 => Color::Reset,
+        1 => Color::Indexed(b[1]),
+        _ => Color::Rgb(b[1], b[2], b[3]),
+    };
+    include_str!("../../draw.json")
+        .lines()
+        .filter_map(|line| {
+            let frame = unhex(field(line, "frame")?);
+            let le = |at: usize| u16::from_le_bytes([frame[at], frame[at + 1]]);
+            let (width, height, clear) = (le(2), le(4), frame[1] == 1);
+            let mut cells = Vec::new();
+            let mut at = 10;
+            while at < frame.len() {
+                let n = usize::from(frame[at + 4]);
+                let symbol = core::str::from_utf8(&frame[at + 5..at + 5 + n]).unwrap();
+                let rest = &frame[at + 5 + n..];
+                let modifiers = Modifiers::new(u16::from_le_bytes([rest[8], rest[9]])).unwrap();
+                let style = Style { fg: color(&rest[..4]), bg: color(&rest[4..8]), modifiers };
+                cells.push((le(at), le(at + 2), String::from(symbol), style));
+                at += 15 + n;
+            }
+            Some((
+                field(line, "name").unwrap(),
+                width,
+                height,
+                clear,
+                cells,
+                unhex(field(line, "drawn").unwrap()),
+            ))
+        })
+        .collect()
+}
+
+#[test]
+fn a_buffer_is_drawn_as_the_shells_encoder_draws_its_frame_control_characters_made_visible() {
+    let vectors = draw_vectors();
+    assert_eq!(vectors.len(), 6);
+    for (name, width, height, clear, cells, drawn) in vectors {
+        let mut b = Buffer::new(width, height).unwrap();
+        if !clear {
+            b.draw();
+        }
+        // Forced in: the buffer's own calls refuse a symbol holding a control character.
+        for (x, y, symbol, style) in &cells {
+            let at = usize::from(*y) * usize::from(width) + usize::from(*x);
+            b.back[at] = Cell { glyph: Glyph::text(symbol), style: *style };
+        }
+        let out = b.draw();
+        assert!(
+            out == drawn,
+            "{name}:\n  drawn {:?}\n  wants {:?}",
+            String::from_utf8_lossy(&out),
+            String::from_utf8_lossy(&drawn)
+        );
+        // Drawn, it is shown: the next frame has nothing.
+        assert_eq!(b.draw(), b"\x1b[0m\x1b[0m", "{name}");
+    }
+}
+
+#[test]
+fn no_byte_drawn_from_a_buffer_starts_a_sequence_but_the_encoders_own() {
+    // Every symbol that holds a control character, forced in: what is drawn holds ESC only as the
+    // start of CSI H, CSI J or SGR, and no C1 control.
+    for (name, width, height, _, cells, _) in draw_vectors() {
+        let mut b = Buffer::new(width, height).unwrap();
+        for (x, y, symbol, style) in &cells {
+            b.back[usize::from(*y) * usize::from(width) + usize::from(*x)] =
+                Cell { glyph: Glyph::text(symbol), style: *style };
+        }
+        let out = String::from_utf8(b.draw()).unwrap();
+        assert!(
+            !out.chars().any(|c| ('\u{80}'..='\u{9f}').contains(&c)
+                || matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')),
+            "{name}"
+        );
+        for (i, _) in out.match_indices('\x1b') {
+            let seq = &out[i + 1..];
+            let end = seq.find(|c: char| c.is_ascii_alphabetic()).expect("a final byte");
+            assert!(
+                seq.starts_with('[') && seq[1..end].bytes().all(|b| b.is_ascii_digit() || b == b';'),
+                "{name}: {seq:?}"
+            );
+            assert!(matches!(&seq[end..end + 1], "H" | "J" | "m"), "{name}: {seq:?}");
+        }
+        assert!(!out.bytes().any(|b| b < 0x20 && b != 0x1b || b == 0x7f), "{name}");
+    }
+}
+
+#[test]
+fn a_draw_beside_a_writer_on_another_thread_sees_whole_calls_and_loses_no_change() {
+    extern crate std;
+    use std::sync::{Arc, Mutex};
+
+    // The natives hold a buffer behind its resource's lock, as this mutex: a writer puts whole
+    // rows of one letter while a drawer on another thread draws as fast as it can.
+    let b = Arc::new(Mutex::new(Buffer::new(80, 24).unwrap()));
+    let writer = {
+        let b = Arc::clone(&b);
+        std::thread::spawn(move || {
+            for n in 0..3_000u32 {
+                let letter = ["A", "B", "C"][(n / 24 % 3) as usize];
+                let row: Vec<&str> = core::iter::repeat_n(letter, 80).collect();
+                b.lock().unwrap().put(0, (n % 24) as u16, row, Style::PLAIN).unwrap();
+            }
+        })
+    };
+    let mut draws = Vec::new();
+    while !writer.is_finished() {
+        draws.push(b.lock().unwrap().draw());
+    }
+    writer.join().unwrap();
+    draws.push(b.lock().unwrap().draw());
+    assert!(draws.len() > 1);
+
+    // Each draw replayed on a model of the terminal: a row it touches is one letter across (no
+    // put is seen half done), and the model ends as the buffer is (no change is lost).
+    let mut model = [[b' '; 80]; 24];
+    for out in &draws {
+        let (mut x, mut y, mut i) = (0, 0, 0);
+        let mut letters: [Option<u8>; 24] = [None; 24];
+        while i < out.len() {
+            if out[i] == 0x1b {
+                let end = i + out[i..].iter().position(|c| c.is_ascii_alphabetic()).unwrap();
+                let params = core::str::from_utf8(&out[i + 2..end]).unwrap();
+                match out[end] {
+                    b'H' => {
+                        let (row, col) = params.split_once(';').unwrap();
+                        (y, x) = (row.parse::<usize>().unwrap() - 1, col.parse::<usize>().unwrap() - 1);
+                    }
+                    b'J' => model = [[b' '; 80]; 24],
+                    _ => {}
+                }
+                i = end + 1;
+            } else {
+                assert!(letters[y].is_none_or(|l| l == out[i]), "a row drawn half put");
+                letters[y] = Some(out[i]);
+                model[y][x] = out[i];
+                (x, i) = (x + 1, i + 1);
+            }
+        }
+    }
+    let b = b.lock().unwrap();
+    for (y, row) in model.iter().enumerate() {
+        let shown: Vec<u8> =
+            (0..80).map(|x| b.back[y * 80 + x].glyph.as_str().unwrap().as_bytes()[0]).collect();
+        assert_eq!(&shown[..], &row[..], "row {y}");
+    }
+}

@@ -348,7 +348,10 @@ and every [full-screen program](#full-screen-programs).
 - **The only writer of control sequences.** `Redoubt.Term`'s encoder, in the shell's driver,
   which alone holds the session's connection to `/dev/cons`, is the one code that emits escape
   sequences for what the session draws, and what it draws is cells: a grapheme with a colour and
-  attributes, never bytes passed through. A control character in any text is drawn visibly
+  attributes, never bytes passed through. A screen's frames are drawn by the same encoder in
+  Rust, the screen natives' `draw/1` over the screen's buffer ([beamlet](beamlet.md#screen-natives)),
+  which the driver alone calls and writes, and which is held byte for byte to the encoder's
+  Elixir half (`Redoubt.Term.Frame.draw/1`). A control character in any text is drawn visibly
   ([hostile text](#hostile-text-never-drives-the-terminal)).
   There is no raw pass-through. The encoder ends every line with CR LF itself, since the console
   does no output processing; a host terminal that does so too draws the same.
@@ -572,8 +575,9 @@ own. It draws into a **screen buffer**, a grid of cells beamlet holds natively
   `view`, which draws the whole screen into the buffer, blank each time; only what changed since
   the last frame is sent. One Erlang process runs a screen, with its caller's heap limit (the
   evaluator's, from a line), the binaries it holds counted too: the shell's driver sends it the
-  keys while it is in front, and it answers each with `update`, `view` and the buffer's diff, a
-  frame the driver reads through the one decoder and draws. Its first event is
+  keys while it is in front, and it answers each with `update`, `view`, and a request that the
+  driver draw what changed in its buffer, the one buffer it registered when it opened, waiting
+  until the driver has. Its first event is
   `{:resize, cols, rows}`, with its size.
 - **Layout** is rectangles only: split into rows or columns by fixed size, percentage or what is
   left; centre; inset. A screen lays out in fixed rectangles.
@@ -598,8 +602,10 @@ own. It draws into a **screen buffer**, a grid of cells beamlet holds natively
 
 What a full-screen program cannot do:
 - **Draw a control sequence.** What a screen program draws reaches the terminal only through the
-  buffer's natives, which refuse a control character, and through the one decoder, which refuses
-  a frame that is not exactly cells; the driver ends a screen whose frame it refuses
+  buffer's natives, which refuse a control character, and through the encoder, which the driver
+  runs over that buffer's own cells and which makes any control character visible again: no
+  message of the screen protocol carries bytes to the terminal. The driver draws only the buffer
+  the screen in front registered, and ends a screen whose registered term is no buffer
   ([hostile text](#hostile-text-never-drives-the-terminal)).
 - **Keep the interrupt from the session.** Ctrl+\ ends the screen in front, as it ends a line at
   the prompt, and so does Ctrl+C unless the screen takes it as a key
@@ -691,9 +697,9 @@ front for the shell's driver, as a screen program's process is, with its line's 
   before it is put. The same reading with the decoder in Elixir (`Redoubt.Screen.Native.reference/3`,
   on `Redoubt.Term.Cells.reduce/3`) is kept as its reference: the shell's suite holds the two to
   the same answers and the same buffer over the vectors and seeded mutations of a whole screen's
-  frame. A frame refused partway draws nothing: the screen ends, and the buffer's diff is never
-  sent. The driver is handed
-  the buffer's diff at most 30 times a second, decoded again and drawn by the one encoder. A
+  frame. A frame refused partway draws nothing: the screen ends, and its buffer is never drawn
+  again. At most 30 times a second, between whole frames, the host asks the driver to draw what
+  changed in its buffer and waits until it has, so nothing of a frame half read is drawn. A
   program sending frames faster costs at most 30 drawn a second: the rest are applied to the
   buffer as they come.
 - **Pace.** The host asks for the program's next 4 KiB of output only once it has decoded what it
@@ -702,11 +708,11 @@ front for the shell's driver, as a screen program's process is, with its line's 
   however fast the program writes. Reading frames is the session's own work, on its VM: under
   QEMU a whole 80 by 24 frame of 30 KB, every cell changed, is read into the buffer in about
   20 ms on rv64 and 15 ms on rv32 (in Elixir it took about 0.75 s), so the 1 MiB, about 34 such
-  frames a second, is what holds a flooding program back. Drawing the buffer's diff is the
-  driver's, which decodes it again in Elixir: about 0.7 s for a whole changed screen, so a program
-  redrawing every cell is drawn about once a second. The host takes the share of the VM any busy
-  process takes, and the driver, which ends it, keeps its own (`nscr-interrupt` floods one and
-  ends it).
+  frames a second, is what holds a flooding program back. Drawing what changed is the driver's,
+  in Rust: under 30 ms for a whole changed screen (in Elixir it took about 0.7 s), and then the
+  console takes its 30 KB; a write that fails ends the driver, and the session's terminal with
+  it. The host takes the share of the VM any busy process takes, and the driver, which ends it,
+  keeps its own (`nscr-interrupt` floods one and ends it).
 - **Keys and size.** The program's first event is its size, and it is sent again when the
   terminal's size changes; each key the driver sends the screen is sent as an event, never the
   session's key, nor Ctrl+C unless the line gave it (the driver finds both in the bytes read

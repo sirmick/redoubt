@@ -126,3 +126,15 @@ fn a_programs_frame_is_read_in_stopping_at_a_joined_symbol_and_refused_as_the_de
     assert_eq!(shown(e[8]), "badarg", "not a binary");
     assert_eq!(shown(e[9]), "badarg", "not the caller's buffer");
 }
+
+#[test]
+fn another_process_draws_a_buffer_as_escape_sequences_once_and_may_not_draw_into_it() {
+    let result = run("drawn_elsewhere");
+    let e = elements(&result);
+    let bytes = |t: Term| result.heap().as_bits(t).unwrap().to_bytes().into_owned();
+    assert_eq!(bytes(e[0]), b"\x1b[0m\x1b[2J\x1b[1;1H\x1b[0;1;31mabc\x1b[0m");
+    assert_eq!(bytes(e[1]), b"\x1b[0m\x1b[0m", "drawn, it is shown");
+    let shown = |t: Term| OwnedTerm::new(result.heap(), t).to_string();
+    assert_eq!(shown(e[2]), "badarg");
+    assert_eq!(shown(e[3]), "badarg");
+}

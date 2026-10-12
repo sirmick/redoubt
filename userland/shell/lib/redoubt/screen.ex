@@ -160,6 +160,7 @@ defmodule Redoubt.Screen do
       end
 
     buffer = Buffer.new(cols, rows)
+    register(driver, buffer)
     screen = %{driver: driver, caller: caller, module: module, buffer: buffer, size: {cols, rows}}
     handle(screen, module.init(args), {:resize, cols, rows})
   end
@@ -189,10 +190,38 @@ defmodule Redoubt.Screen do
     end
   end
 
-  # The whole screen drawn afresh into a blank buffer; the diff is what changed.
+  # The whole screen drawn afresh into a blank buffer; the driver draws what changed.
   defp draw(%{buffer: buffer, size: {cols, rows}} = screen, state) do
     Buffer.fill(buffer, {0, 0, cols, rows}, " ")
     screen.module.view(state, buffer, screen.size)
-    send(screen.driver, {:redoubt_screen, :frame, self(), Buffer.diff(buffer)})
+    show(screen.driver, buffer)
+  end
+
+  @doc false
+  # A screen's buffer, made known to the driver once, as soon as the screen has opened: the one
+  # buffer the driver draws for it.
+  @spec register(pid(), Buffer.t()) :: :ok
+  def register(driver, buffer) do
+    send(driver, {:redoubt_screen, :buffer, self(), buffer})
+    :ok
+  end
+
+  @doc false
+  # Asks the driver to draw what changed in the screen's buffer, and waits until it has: the
+  # driver draws it in Rust from the buffer's own cells (`Redoubt.Term.Buffer.draw/1`), and the
+  # screen draws nothing into it meanwhile, so what is drawn is a whole frame.
+  @spec show(pid(), Buffer.t()) :: :ok
+  def show(driver, buffer) do
+    ref = Process.monitor(driver)
+    send(driver, {:redoubt_screen, :draw, self(), buffer})
+
+    receive do
+      {:redoubt_screen, :drawn, ^driver} ->
+        Process.demonitor(ref, [:flush])
+        :ok
+
+      {:DOWN, ^ref, :process, ^driver, _reason} ->
+        exit(:no_terminal)
+    end
   end
 end

@@ -969,7 +969,7 @@ column, the table one.
 
 ### Screen natives
 
-<details><summary>Status: built · partly tested: host only, but for `frame`, which a native program's screen reads its frames with on the machine (bench:nscr-interrupt, bench:nscr-beyond-cells); no boot draws a screen program's buffer · tested (26)</summary>
+<details><summary>Status: built · partly tested: host only, but for `frame` and `draw`, which a native program's screen reads and draws its frames with on the machine (bench:nscr-interrupt, bench:nscr-beyond-cells); no boot draws a screen program's buffer · tested (30)</summary>
 
 - host:beamlet-screen::a_buffer_is_at_most_1024_a_side_and_65536_cells
 - host:beamlet-screen::the_first_frame_clears_and_sends_what_is_not_blank
@@ -995,6 +995,10 @@ column, the table one.
 - host:beamlet-screen::a_clearing_frame_blanks_the_buffer_first
 - host:beamlet-screen::the_positions_given_are_a_frames_own_and_a_resumed_frame_neither_puts_again_nor_forgets_them
 - host:beamlet-screen::a_programs_frame_is_read_in_stopping_at_a_joined_symbol_and_refused_as_the_decoder_refuses
+- host:beamlet-screen::a_buffer_is_drawn_as_the_shells_encoder_draws_its_frame_control_characters_made_visible
+- host:beamlet-screen::no_byte_drawn_from_a_buffer_starts_a_sequence_but_the_encoders_own
+- host:beamlet-screen::a_draw_beside_a_writer_on_another_thread_sees_whole_calls_and_loses_no_change
+- host:beamlet-screen::another_process_draws_a_buffer_as_escape_sequences_once_and_may_not_draw_into_it
 - bench:nscr-interrupt
 - bench:nscr-beyond-cells
 
@@ -1014,6 +1018,7 @@ The screen buffer is `beamlet-screen`
 | `fill(B, Rect, Symbol, Style)` | one symbol, one code point of one column, and one style over a rectangle, clipped |
 | `plot(B, Rect, Dots, Style)` | a bitmap, one byte a cell holding its 2×4 dots in Braille's own order, drawn as U+2800 plus the byte |
 | `diff(B)` | the cells changed since the last `diff`, as a `cells` frame, which then becomes what is shown |
+| `draw(B)` | the cells changed since the last `diff` or `draw`, as the escape sequences that draw them, which then become what is shown: the bytes the shell's `Redoubt.Term.Frame.draw/1` draws for `diff`'s frame. Any process holding `B` may call it; it writes no cell |
 | `frame(B, Bytes, From)` | reads a native program's `cells` frame into the buffer from byte `From` (0 for its header), a cell at a time as the one decoder reads it (`cells::reduce`): `ok`; `{size, W, H}` for a frame of another size, nothing read; `{joined, Next, X, Y, Symbol, Style}` for a symbol joining code points, not put, for the caller to check is one grapheme, put, and go on from `Next`; `{error, Why}`, the decoder's reason or `cell` (a wide symbol in the last column). A frame that clears blanks the buffer first |
 
 A `Style` is `{Fg, Bg, Modifiers}`, each colour `reset`, `{indexed, I}` or `{rgb, R, G, B}` and the
@@ -1035,8 +1040,12 @@ modifiers the cell protocol's bits; a `Rect` is `{X, Y, W, H}`.
   ([limits](#limits-inside-one-vm)), from `new` and from `resize`. So a loop of `new/2` is ended
   by the limit that ends any runaway allocation. Code that erases the dictionary's count starts a
   new one; the heap limit still holds.
-- **One writer.** A buffer answers only the Erlang process that made it; any other gets `badarg`.
-  It sits behind a lock only because a resource may move between schedulers.
+- **One writer.** A buffer answers only the Erlang process that made it; any other gets `badarg`,
+  but for `draw`, which writes no cell. It sits behind a lock because a resource may move between
+  schedulers, and because the shell's driver draws it: a screen registers its buffer with the
+  driver when it opens, and asks the driver to draw it between whole frames. Holding a buffer's
+  term gives nothing but that draw, whose bytes go nowhere but to its caller; the driver writes
+  only the bytes it drew itself from the buffer the screen in front registered.
 - **One segmentation and one width table, OTP's.** Text arrives split into graphemes by OTP's own
   segmentation (`String.graphemes/1`), and a grapheme's columns come from a table generated from
   OTP's `unicode_util:is_wide/1` (`tools/gen-width.escript`, which fails the build's check when the
@@ -1044,12 +1053,24 @@ modifiers the cell protocol's bits; a `Rect` is `{X, Y, W, H}`.
   code points is wide. The shell measures with the same `is_wide/1`, so what is measured is what
   the buffer lays out, at the pinned OTP's Unicode version. The buffer does not segment text itself,
   so `fill` takes a single code point, and a caller that hands `put` two characters as one
-  grapheme draws them in one cell, misplacing what follows, and nothing more. `frame` puts a
-  symbol of one code point, always one grapheme, itself, and hands back any other unput for the
-  caller to segment.
-- **The diff speaks the cell protocol**, so a screen drawn in the session and a native program's
-  frames reach the encoder by one decoder
-  ([the shell](shell.md#the-terminal-library)).
+  grapheme draws them in one cell, misplacing what follows, and nothing more; `draw` then places
+  the next cell by the glyph's width as `columns` measures it, where the shell's
+  `Redoubt.Term.Frame.draw/1` sums its graphemes', the one case where the two draw otherwise.
+  `frame` puts a symbol of one code point, always one grapheme, itself, and hands back any other
+  unput for the caller to segment.
+- **The diff speaks the cell protocol**, and `draw` is the shell's encoder for screens in Rust,
+  over the buffer's own cells: the bytes `Redoubt.Term.Frame.draw/1` draws for the diff's frame,
+  byte for byte, which the shell's suite holds it to over every code point below U+3000 that a
+  symbol may be, the planes' edges, hostile text made visible, every attribute and colour form,
+  and frames after partial changes; and this crate's tests hold it to `draw.json`, frames that
+  `Frame.draw/1` draws, written and kept current by the shell's suite, with symbols holding
+  control characters forced in, which `draw` makes visible again as `Redoubt.Term.Text` does
+  ([the shell](shell.md#the-terminal-library)). It writes only the style reset, `CSI 2J`,
+  `CSI row;col H` and SGR from a cell's numeric colours and attributes. It holds the buffer's lock
+  across the diff and the advance of what is shown, so a draw beside its owner's writes on
+  another scheduler sees each call whole and loses no change, and it is charged in reductions by
+  the cells it examined. A new buffer, and one resized, is drawn whole at its first `draw`, as at
+  its first `diff`.
 
 ### Asynchronous underneath, synchronous on top
 

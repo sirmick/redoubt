@@ -18,8 +18,9 @@ defmodule Redoubt.Screen.Native do
     lays it out: one grapheme (OTP's segmentation, for a symbol joining code points), and a wide
     one not in the last column. `reference/3`, the same reading with the decoder in Elixir
     (`Redoubt.Term.Cells.reduce/3`), is what it is held to;
-  - hands the driver the buffer's diff at most 30 times a second, which the driver draws through
-    the one encoder;
+  - has the driver draw what changed in the buffer at most 30 times a second, only between
+    whole frames, and waits until it has (`Redoubt.Screen.show/2`): the driver draws it in Rust
+    from the buffer's own cells, and nothing of a frame half read or refused is ever drawn;
   - asks for the program's output at most 1 MiB a second: past that its read
     waits, the pipe fills, and the program's write waits;
   - sends the program its size first and again at each change, and each key the driver sends,
@@ -149,13 +150,15 @@ defmodule Redoubt.Screen.Native do
         5000 -> exit(:no_terminal)
       end
 
+    buffer = Buffer.new(cols, rows)
+    Redoubt.Screen.register(config.driver, buffer)
     me = self()
     runner = spawn_link(fn -> send(me, {__MODULE__, :ended, config.start.(me)}) end)
 
     state = %{
       config: config,
       runner: runner,
-      buffer: Buffer.new(cols, rows),
+      buffer: buffer,
       size: {cols, rows},
       stale: [],
       pending: <<>>,
@@ -336,7 +339,7 @@ defmodule Redoubt.Screen.Native do
   defp draw(%{dirty: false} = state), do: state
 
   defp draw(state) do
-    send(state.config.driver, {:redoubt_screen, :frame, self(), Buffer.diff(state.buffer)})
+    Redoubt.Screen.show(state.config.driver, state.buffer)
     %{state | dirty: false}
   end
 
