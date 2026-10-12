@@ -5,7 +5,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use cells::{Cell as Wire, Color, Frame, MAX_SIDE, MAX_SYMBOL, Modifiers, Symbol};
+use cells::{Cell as Wire, Cells, Color, Frame, MAX_SIDE, MAX_SYMBOL, Modifiers, Symbol};
 
 /// The most cells a buffer holds.
 pub const MAX_CELLS: usize = 65_536;
@@ -100,21 +100,33 @@ pub struct Buffer {
     front: Vec<Cell>,
     /// The next frame clears the screen and sends every cell that is not blank.
     clear: bool,
+    /// A program's frame being read, stopped at a joined symbol ([`Buffer::read`]).
+    reading: Option<Cells>,
 }
 
 impl Buffer {
     /// A blank buffer; its first frame clears the screen.
     pub fn new(width: u16, height: u16) -> Result<Buffer, Refusal> {
         let cells = check_size(width, height)?;
-        Ok(Buffer { width, height, back: vec![BLANK; cells], front: vec![BLANK; cells], clear: true })
+        Ok(Buffer {
+            width,
+            height,
+            back: vec![BLANK; cells],
+            front: vec![BLANK; cells],
+            clear: true,
+            reading: None,
+        })
     }
 
     pub fn width(&self) -> u16 { self.width }
 
     pub fn height(&self) -> u16 { self.height }
 
-    /// The bytes the buffer's two grids hold: what its holder's memory counts.
-    pub fn bytes(&self) -> usize { 2 * self.back.len() * size_of::<Cell>() }
+    /// The bytes the buffer's two grids hold, and the record of positions a frame being read
+    /// keeps, a bit a cell: what its holder's memory counts.
+    pub fn bytes(&self) -> usize {
+        2 * self.back.len() * size_of::<Cell>() + self.back.len().div_ceil(64) * 8
+    }
 
     /// A new size, blank; the next frame clears the screen and sends it all.
     pub fn resize(&mut self, width: u16, height: u16) -> Result<(), Refusal> {
@@ -200,6 +212,50 @@ impl Buffer {
         Ok(())
     }
 
+    /// Reads the frame in `bytes`, a native program's, into the buffer, a cell at a time as
+    /// `cells::reduce` reads it, from byte `from`: 0 for its header, or where the last call
+    /// stopped. The frame must be the buffer's size, else [`Read::Size`] and nothing is touched;
+    /// one that clears blanks the buffer first. Each cell, once the decoder has checked it, must
+    /// be one cell's worth as the session lays it out, and is then put as [`put`](Buffer::put)
+    /// puts one grapheme. A symbol of more than one code point stops the reading at
+    /// [`Read::Joined`]: whether it is one grapheme is OTP's segmentation to say, so the caller
+    /// says it, puts it, and goes on from `next`. A refused frame keeps the cells put before the
+    /// one refused; the caller draws none of it.
+    ///
+    /// Nothing is allocated but the decoder's record of the positions given, a bit a cell of
+    /// the buffer, whatever the frame claims.
+    pub fn read<'a>(&mut self, bytes: &'a [u8], from: usize) -> Result<Read<'a>, Refused> {
+        let mut cells = if from == 0 {
+            self.reading = None;
+            let h = cells::header(bytes).map_err(Refused::Frame)?;
+            if (h.width, h.height) != (self.width, self.height) {
+                return Ok(Read::Size { width: h.width, height: h.height });
+            }
+            if h.clear {
+                self.back.fill(BLANK);
+            }
+            Cells::new(&h)
+        } else {
+            match self.reading.take() {
+                Some(cells) if cells.at() == from => cells,
+                _ => return Err(Refused::Resume),
+            }
+        };
+        while let Some(c) = cells.next(bytes).map_err(Refused::Frame)? {
+            let style = Style { fg: c.fg, bg: c.bg, modifiers: c.modifiers };
+            if c.symbol.chars().nth(1).is_some() {
+                let next = cells.at();
+                self.reading = Some(cells);
+                return Ok(Read::Joined { next, x: c.x, y: c.y, symbol: c.symbol, style });
+            }
+            if columns(c.symbol) == 2 && c.x + 1 >= self.width {
+                return Err(Refused::Cell);
+            }
+            self.put(c.x, c.y, [c.symbol], style).expect("a decoded symbol holds no control character");
+        }
+        Ok(Read::Done)
+    }
+
     /// The cells changed since the last frame, as a frame, which then becomes what is shown.
     pub fn diff(&mut self) -> Frame {
         let mut cells = Vec::new();
@@ -261,6 +317,29 @@ impl Buffer {
             self.back[at + 1].glyph = SPACE;
         }
     }
+}
+
+/// How far [`Buffer::read`] got.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Read<'a> {
+    /// The frame was read whole and put.
+    Done,
+    /// The frame is of another size: nothing was read past its header, nothing put.
+    Size { width: u16, height: u16 },
+    /// The cell at `x`, `y` has a symbol of more than one code point, checked by the decoder and
+    /// not yet put; the next cell starts at byte `next`.
+    Joined { next: usize, x: u16, y: u16, symbol: &'a str, style: Style },
+}
+
+/// Why [`Buffer::read`] refused a frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Refused {
+    /// The decoder refused it.
+    Frame(cells::Error),
+    /// A cell is not one cell's worth: a wide symbol in the last column.
+    Cell,
+    /// `from` is not where the last reading stopped.
+    Resume,
 }
 
 /// A rectangle: its top left corner and its size, in cells.

@@ -68,6 +68,22 @@ defmodule Redoubt.Term.Buffer do
   @spec diff(t()) :: binary()
   def diff(buffer), do: apply(@natives, :diff, [buffer])
 
+  @doc """
+  Reads a native program's `cells` frame into the buffer from byte `from`, 0 for its header, as
+  the one decoder reads it, a cell at a time (`cells::reduce`, in Rust; `Redoubt.Term.Cells.reduce/3`
+  is the same decoder in Elixir). `:ok` once read whole; `{:size, w, h}` for a frame of another
+  size, nothing read; `{:joined, next, x, y, symbol, style}` for a cell whose symbol joins code
+  points, not put: whether it is one grapheme is OTP's segmentation to say, so the caller puts it
+  and goes on from `next`; or `{:error, why}`, `why` the decoder's reason or `:cell` (a wide
+  symbol in the last column). A `from` that is not where the last call stopped raises.
+  """
+  @spec frame(t(), binary(), non_neg_integer()) ::
+          :ok
+          | {:size, pos_integer(), pos_integer()}
+          | {:joined, pos_integer(), non_neg_integer(), non_neg_integer(), String.t(), style()}
+          | {:error, Redoubt.Term.Cells.error() | :cell}
+  def frame(buffer, bytes, from \\ 0), do: apply(@natives, :frame, [buffer, bytes, from])
+
   @doc "The terminal's own colours and no attributes."
   @spec plain() :: style()
   def plain, do: {:reset, :reset, 0}

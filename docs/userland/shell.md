@@ -519,7 +519,7 @@ every path above and judges the bytes the session wrote to `/dev/cons`.
 
 ### The cell protocol
 
-Status: built · partly tested: the Elixir decoder is held to the Rust one, and the Elixir event encoder to the Rust event decoder, by the shared vectors in the shell's ExUnit suite, which no bench case runs · tested: host:cells::good_frames_decode_and_encode_back_to_their_bytes, host:cells::no_control_character_is_ever_a_symbol, host:cells::vectors_are_current, host:cells::events_are_current
+Status: built · partly tested: the Elixir decoder is held to the Rust one, and the Elixir event encoder to the Rust event decoder, by the shared vectors in the shell's ExUnit suite, which no bench case runs · tested: host:cells::good_frames_decode_and_encode_back_to_their_bytes, host:cells::no_control_character_is_ever_a_symbol, host:cells::vectors_are_current, host:cells::events_are_current, host:cells::reduce_hands_over_the_header_then_each_cell_and_stops_where_asked, host:cells::a_cursor_reads_a_cell_at_a_time_and_refuses_as_decode_does
 
 A frame of changed cells, `cells` ([`userland/native/cells`](../../userland/native/cells/src/lib.rs))
 in Rust and `Redoubt.Term.Cells` in Elixir, is everything anything may hand the session to draw: a
@@ -527,7 +527,10 @@ position, a symbol, two colours and attributes per cell. It is strict. A symbol 
 string of at most 32 bytes, one cell's worth as the session lays it out, that holds no control
 character, a cell cannot fall outside its
 screen or be given twice, and a frame that decodes re-encodes to exactly its bytes; anything else
-is refused, never repaired. One file of vectors holds the two decoders to the same answers.
+is refused, never repaired. One file of vectors holds the two decoders to the same answers. Each
+decoder reads a cell at a time (`cells::reduce`, `Redoubt.Term.Cells.reduce/3`), checking each
+field as it reads it, so the two refuse a frame for the same reason, and neither need hold a whole
+frame's cells.
 
 A native program with a screen and the session exchange **records** on its standard streams: a
 `u32` length, then exactly that many bytes. On its output each record is one frame; on its input
@@ -642,7 +645,7 @@ What is not built: a `plot(values)` command drawing a series on the canvas.
 
 ### A native program's screen and the session's key
 
-<details><summary>Status: built · partly tested: a change of size reaches a native program's screen in the shell's ExUnit suite only (`test/redoubt/screen/native_test.exs`, which `./test-shell` runs on beamlet), since the UART names no size; so do the read and draw bounds; a key per principal is not built · tested (7)</summary>
+<details><summary>Status: built · partly tested: a change of size reaches a native program's screen in the shell's ExUnit suite only (`test/redoubt/screen/native_test.exs`, which `./test-shell` runs on beamlet), since the UART names no size; so do the read and draw bounds; a key per principal is not built · tested (10)</summary>
 
 - bench:nscr-interrupt
 - bench:nscr-hostile-text
@@ -651,6 +654,9 @@ What is not built: a `plot(values)` command drawing a series on the canvas.
 - host:cells::bad_events_are_refused_for_their_reason
 - host:cells::a_record_is_its_length_and_its_bytes_and_a_long_one_is_refused_unread
 - host:cells::events_are_current
+- host:beamlet-screen::every_vector_is_answered_as_the_decoder_answers_it
+- host:beamlet-screen::a_frame_read_in_puts_what_the_reference_puts_whatever_its_bytes
+- host:beamlet-screen::a_programs_frame_is_read_in_stopping_at_a_joined_symbol_and_refused_as_the_decoder_refuses
 
 </details>
 
@@ -673,24 +679,34 @@ front for the shell's driver, as a screen program's process is, with its line's 
   one longer than a frame of its screen can take is refused before any of it is held: at most
   10 + 47 bytes a cell (the header, then each cell with the longest symbol), so 90,250 bytes on
   80 by 24, and a header claiming 4 GiB costs nothing.
-- **Frames.** Each record is decoded by the one decoder a cell at a time, so a whole screen's
-  frame is never held as one term, and refused if the decoder refuses it; a
+- **Frames.** Each record is read straight into a screen buffer the host holds by the screen
+  natives ([beamlet](beamlet.md#screen-natives)): the one decoder, in Rust, a cell at a time, so a
+  whole screen's frame is never held as terms, and nothing is allocated for it beyond a bit a cell
+  of the buffer. It is refused if the decoder refuses it; a
   frame of any size but the one the session gave the program is refused, but a frame of a size it
   gave before the terminal last changed size is dropped, since it was on its way; and a cell must
   be one cell's worth as the session lays it out: one grapheme, and a wide one not in the last
-  column, or one cell could draw past its neighbours and the screen's edge. Its cells go into a
-  screen buffer the host holds ([beamlet](beamlet.md#screen-natives)), and the driver is handed
+  column, or one cell could draw past its neighbours and the screen's edge. A symbol joining code
+  points is handed back unput, and the host asks OTP's segmentation whether it is one grapheme
+  before it is put. The same reading with the decoder in Elixir (`Redoubt.Screen.Native.reference/3`,
+  on `Redoubt.Term.Cells.reduce/3`) is kept as its reference: the shell's suite holds the two to
+  the same answers and the same buffer over the vectors and seeded mutations of a whole screen's
+  frame. A frame refused partway draws nothing: the screen ends, and the buffer's diff is never
+  sent. The driver is handed
   the buffer's diff at most 30 times a second, decoded again and drawn by the one encoder. A
   program sending frames faster costs at most 30 drawn a second: the rest are applied to the
   buffer as they come.
 - **Pace.** The host asks for the program's next 4 KiB of output only once it has decoded what it
   holds, and for at most 1 MiB a second: until then the program's next write waits, parked at
   `piped`, its pipe holding one page. So the host holds at most one record's bound and one read
-  however fast the program writes. Decoding is the session's own work, on its VM: under QEMU a
-  whole 80 by 24 frame of 30 KB takes about 0.5 s on either width, so there the decoder, not the
-  1 MiB, holds a flooding program back. The host then takes the share of the VM any busy process
-  takes, and the driver, which ends it, keeps its own (`nscr-interrupt` floods one and ends it).
-  The 1 MiB bounds a machine that decodes faster.
+  however fast the program writes. Reading frames is the session's own work, on its VM: under
+  QEMU a whole 80 by 24 frame of 30 KB, every cell changed, is read into the buffer in about
+  20 ms on rv64 and 15 ms on rv32 (in Elixir it took about 0.75 s), so the 1 MiB, about 34 such
+  frames a second, is what holds a flooding program back. Drawing the buffer's diff is the
+  driver's, which decodes it again in Elixir: about 0.7 s for a whole changed screen, so a program
+  redrawing every cell is drawn about once a second. The host takes the share of the VM any busy
+  process takes, and the driver, which ends it, keeps its own (`nscr-interrupt` floods one and
+  ends it).
 - **Keys and size.** The program's first event is its size, and it is sent again when the
   terminal's size changes; each key the driver sends the screen is sent as an event, never the
   session's key, nor Ctrl+C unless the line gave it (the driver finds both in the bytes read

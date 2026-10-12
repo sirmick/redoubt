@@ -230,6 +230,69 @@ fn arbitrary_bytes_never_panic_and_what_decodes_encodes_back() {
     }
 }
 
+#[test]
+fn reduce_hands_over_the_header_then_each_cell_and_stops_where_asked() {
+    for (name, frame) in good() {
+        let bytes = encode(&frame);
+        let steps =
+            reduce(&bytes, Vec::new(), |step, mut seen: Vec<Step<'_>>| -> ControlFlow<Infallible, _> {
+                seen.push(step);
+                ControlFlow::Continue(seen)
+            });
+        let Ok(ControlFlow::Continue(steps)) = steps else { panic!("{name}") };
+        let h = Header {
+            width: frame.width,
+            height: frame.height,
+            clear: frame.clear,
+            count: frame.cells.len() as u32,
+        };
+        assert_eq!(steps[0], Step::Frame(h), "{name}");
+        let cells: Vec<Cell> = steps[1..]
+            .iter()
+            .map(|s| match s {
+                Step::Cell(c) => c.to_cell(),
+                Step::Frame(_) => panic!("{name}: a second header"),
+            })
+            .collect();
+        assert_eq!(cells, frame.cells, "{name}");
+        let stopped = reduce(&bytes, 0, |_, n| {
+            if n == 1 { ControlFlow::Break("stopped") } else { ControlFlow::Continue(n + 1) }
+        });
+        let expected =
+            if frame.cells.is_empty() { ControlFlow::Continue(1) } else { ControlFlow::Break("stopped") };
+        assert_eq!(stopped, Ok(expected), "{name}");
+    }
+}
+
+#[test]
+fn a_cursor_reads_a_cell_at_a_time_and_refuses_as_decode_does() {
+    // A cursor read one cell at a time: each good frame whole, each bad one refused as decode
+    // refuses it.
+    let frames = good().into_iter().map(|(name, f)| (name, encode(&f), None));
+    for (name, bytes, error) in frames.chain(bad().into_iter().map(|(name, b, e)| (name, b, Some(e)))) {
+        let read = header(&bytes).and_then(|h| {
+            let mut cells = Cells::new(&h);
+            let mut n = 0;
+            while let Some(c) = cells.next(&bytes)? {
+                // Where the cell just read began: its position, as it was given.
+                let start = cells.at() - 15 - c.symbol.len();
+                assert_eq!(
+                    bytes[start..start + 4],
+                    [c.x.to_le_bytes(), c.y.to_le_bytes()].concat(),
+                    "{name}"
+                );
+                n += 1;
+            }
+            assert_eq!(cells.at(), bytes.len(), "{name}");
+            Ok(n)
+        });
+        match error {
+            None => assert_eq!(read, Ok(decode(&bytes).unwrap().cells.len()), "{name}"),
+            Some(e) => assert_eq!(read, Err(e), "{name}"),
+        }
+    }
+}
+
 /// `vectors.json`: every case above, for the session's decoder to be held to the same answers.
 /// `CELLS_VECTORS=write cargo test` writes it; this test fails when it is not current.
 #[test]

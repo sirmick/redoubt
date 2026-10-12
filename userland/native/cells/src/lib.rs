@@ -47,9 +47,11 @@
 
 extern crate alloc;
 
-use alloc::collections::BTreeSet;
 use alloc::string::String;
+use alloc::vec;
 use alloc::vec::Vec;
+use core::convert::Infallible;
+use core::ops::ControlFlow;
 
 /// The version this crate writes and reads.
 pub const VERSION: u8 = 1;
@@ -77,14 +79,17 @@ pub struct Symbol(String);
 
 impl Symbol {
     /// The symbol, if `text` may be one.
-    pub fn new(text: &str) -> Result<Symbol, Error> {
-        if text.is_empty() || text.len() > MAX_SYMBOL || text.chars().any(forbidden) {
-            return Err(Error::Symbol);
-        }
-        Ok(Symbol(String::from(text)))
-    }
+    pub fn new(text: &str) -> Result<Symbol, Error> { Ok(Symbol(String::from(symbol(text)?))) }
 
     pub fn as_str(&self) -> &str { &self.0 }
+}
+
+/// `text`, if it may be a [`Symbol`].
+fn symbol(text: &str) -> Result<&str, Error> {
+    if text.is_empty() || text.len() > MAX_SYMBOL || text.chars().any(forbidden) {
+        return Err(Error::Symbol);
+    }
+    Ok(text)
 }
 
 /// Whether a character may never be in a symbol.
@@ -235,8 +240,70 @@ fn color(out: &mut Vec<u8>, color: Color) {
     });
 }
 
-/// The frame in `bytes`, if they are exactly one.
+/// The frame in `bytes`, if they are exactly one: [`reduce`] collecting the cells.
 pub fn decode(bytes: &[u8]) -> Result<Frame, Error> {
+    let mut frame = Frame { width: 0, height: 0, clear: false, cells: Vec::new() };
+    reduce(bytes, (), |step, ()| -> ControlFlow<Infallible> {
+        match step {
+            Step::Frame(h) => {
+                let cells = Vec::with_capacity(h.count as usize);
+                frame = Frame { width: h.width, height: h.height, clear: h.clear, cells };
+            }
+            Step::Cell(c) => frame.cells.push(c.to_cell()),
+        }
+        ControlFlow::Continue(())
+    })?;
+    Ok(frame)
+}
+
+/// What [`reduce`] hands its function: the frame's header once it is read and checked, then each
+/// cell as it is read and checked.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Step<'a> {
+    Frame(Header),
+    Cell(CellRef<'a>),
+}
+
+/// The decoder, a cell at a time, so that a large frame is never held whole: `f` is given the
+/// header, then each cell, and continues with an accumulator or stops with a value. Gives
+/// `Ok(Continue(acc))` when the bytes are exactly one frame, `Ok(Break(value))` when `f` stopped,
+/// or the error at the first field refused, as [`decode`] would refuse it: by then `f` has seen
+/// the cells before it, and a caller draws nothing until it has `Continue`. The session's
+/// `Redoubt.Term.Cells.reduce/3` is the same decoder in Elixir.
+pub fn reduce<'a, A, B>(
+    bytes: &'a [u8],
+    acc: A,
+    mut f: impl FnMut(Step<'a>, A) -> ControlFlow<B, A>,
+) -> Result<ControlFlow<B, A>, Error> {
+    let h = header(bytes)?;
+    let mut acc = match f(Step::Frame(h), acc) {
+        ControlFlow::Continue(acc) => acc,
+        stop => return Ok(stop),
+    };
+    let mut cells = Cells::new(&h);
+    while let Some(cell) = cells.next(bytes)? {
+        acc = match f(Step::Cell(cell), acc) {
+            ControlFlow::Continue(acc) => acc,
+            stop => return Ok(stop),
+        };
+    }
+    Ok(ControlFlow::Continue(acc))
+}
+
+/// A frame's header, read and checked: its size, whether it clears the screen, and how many cells
+/// follow.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Header {
+    pub width: u16,
+    pub height: u16,
+    pub clear: bool,
+    pub count: u32,
+}
+
+/// The header of the frame in `bytes`, each field checked as it is read, and a count the bytes
+/// after it cannot hold refused: a header alone may claim a million cells, and nothing is ever
+/// allocated for them.
+pub fn header(bytes: &[u8]) -> Result<Header, Error> {
     let mut r = Reader(bytes);
     if r.u8()? != VERSION {
         return Err(Error::Version);
@@ -253,31 +320,81 @@ pub fn decode(bytes: &[u8]) -> Result<Frame, Error> {
     if u64::from(count) > u64::from(width) * u64::from(height) {
         return Err(Error::Count);
     }
-    // Nothing is allocated for cells the bytes cannot hold: a header alone may claim a million.
     if count as usize > r.0.len() / MIN_CELL {
         return Err(Error::Truncated);
     }
-    let mut seen = BTreeSet::new();
-    let mut cells = Vec::with_capacity(count as usize);
-    for _ in 0..count {
+    Ok(Header { width, height, clear: flags & CLEAR != 0, count })
+}
+
+/// One cell as the decoder reads it, its symbol still in the frame's bytes: checked as a
+/// [`Symbol`] is, so it holds no control character.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CellRef<'a> {
+    pub x: u16,
+    pub y: u16,
+    pub symbol: &'a str,
+    pub fg: Color,
+    pub bg: Color,
+    pub modifiers: Modifiers,
+}
+
+impl CellRef<'_> {
+    /// The cell, its symbol copied out.
+    pub fn to_cell(&self) -> Cell {
+        let (x, y, fg, bg, modifiers) = (self.x, self.y, self.fg, self.bg, self.modifiers);
+        Cell { x, y, symbol: Symbol(String::from(self.symbol)), fg, bg, modifiers }
+    }
+}
+
+/// The cells after a frame's header, read one at a time from its bytes. It holds where the next
+/// cell starts, how many are left and which positions were given (a bit a cell of the screen,
+/// made at the first cell), and no borrow of the bytes: a caller may stop after any cell and go on
+/// later with the same bytes.
+pub struct Cells {
+    width: u16,
+    height: u16,
+    at: usize,
+    left: u32,
+    seen: Vec<u64>,
+}
+
+impl Cells {
+    /// The cells of the frame whose header is `h`.
+    pub fn new(h: &Header) -> Cells {
+        Cells { width: h.width, height: h.height, at: HEADER, left: h.count, seen: Vec::new() }
+    }
+
+    /// Where the next cell starts in the frame's bytes.
+    pub fn at(&self) -> usize { self.at }
+
+    /// The next cell of `bytes`, the frame's whole bytes, each field checked as it is read;
+    /// `None` after the last, once nothing follows it.
+    pub fn next<'a>(&mut self, bytes: &'a [u8]) -> Result<Option<CellRef<'a>>, Error> {
+        let mut r = Reader(bytes.get(self.at..).ok_or(Error::Truncated)?);
+        if self.left == 0 {
+            return if r.0.is_empty() { Ok(None) } else { Err(Error::Trailing) };
+        }
         let (x, y) = (r.u16()?, r.u16()?);
-        if x >= width || y >= height {
+        if x >= self.width || y >= self.height {
             return Err(Error::Position);
         }
-        if !seen.insert((y, x)) {
+        let i = usize::from(y) * usize::from(self.width) + usize::from(x);
+        if self.seen.is_empty() {
+            self.seen = vec![0; (usize::from(self.width) * usize::from(self.height)).div_ceil(64)];
+        }
+        let (word, bit) = (i / 64, 1u64 << (i % 64));
+        if self.seen[word] & bit != 0 {
             return Err(Error::Twice);
         }
+        self.seen[word] |= bit;
         let length = usize::from(r.u8()?);
-        let text = core::str::from_utf8(r.take(length)?).map_err(|_| Error::Symbol)?;
-        let symbol = Symbol::new(text)?;
+        let symbol = symbol(core::str::from_utf8(r.take(length)?).map_err(|_| Error::Symbol)?)?;
         let (fg, bg) = (r.color()?, r.color()?);
         let modifiers = Modifiers::new(r.u16()?)?;
-        cells.push(Cell { x, y, symbol, fg, bg, modifiers });
+        self.at = bytes.len() - r.0.len();
+        self.left -= 1;
+        Ok(Some(CellRef { x, y, symbol, fg, bg, modifiers }))
     }
-    if !r.0.is_empty() {
-        return Err(Error::Trailing);
-    }
-    Ok(Frame { width, height, clear: flags & CLEAR != 0, cells })
 }
 
 /// The most bytes a frame of a `width` by `height` screen can take: every cell given, each with

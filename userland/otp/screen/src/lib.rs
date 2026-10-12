@@ -8,8 +8,8 @@
 //! - **A control character is refused, not drawn:** `put/5` and `fill/4` raise `badarg` on one (the `cells`
 //!   crate's own rule), so a caller that forgot to make text visible fails loudly.
 //! - **Bounded:** 1024 cells a side and 65,536 in all; `put/5` reads no more graphemes than the row has
-//!   cells; no call makes more than one pass over a buffer; each is charged in reductions by the cells it
-//!   touched.
+//!   cells; no call makes more than one pass over a buffer; `frame/3` reads a program's frame in place,
+//!   allocating only a bit a cell of the buffer; each is charged in reductions by the cells it touched.
 //! - **Counted:** a process holds at most four buffers, and each declares its grids' bytes, which count as
 //!   its holder's own memory, toward its heap limit.
 //! - **One writer:** a buffer answers only the process that made it; any other gets `badarg`.
@@ -36,7 +36,7 @@ use cells::{Color, Modifiers};
 mod buffer;
 mod wide;
 
-pub use buffer::{Buffer, MAX_CELLS, Rect, Refusal, Style, UNICODE, columns};
+pub use buffer::{Buffer, MAX_CELLS, Read, Rect, Refusal, Refused, Style, UNICODE, columns};
 
 type R = Result<Term, Exception>;
 
@@ -53,6 +53,7 @@ pub static NATIVES: &[NativeSpec] = &[
     ("redoubt_screen", "fill", 4, fill),
     ("redoubt_screen", "plot", 4, plot),
     ("redoubt_screen", "diff", 1, diff),
+    ("redoubt_screen", "frame", 3, frame),
 ];
 
 /// A buffer as a resource: its owner, the grid, and its share of the owner's count of buffers,
@@ -138,6 +139,26 @@ fn color(c: &Ctx, t: Term) -> Result<Color, Exception> {
         _ => None,
     }
     .ok_or_else(|| c.badarg())
+}
+
+/// A style as `style/2` reads one.
+fn style_term(c: &mut Ctx, s: Style) -> Term {
+    let (fg, bg) = (color_term(c, s.fg), color_term(c, s.bg));
+    c.tuple(&[fg, bg, Term::Int(i64::from(s.modifiers.bits()))])
+}
+
+fn color_term(c: &mut Ctx, color: Color) -> Term {
+    match color {
+        Color::Reset => c.atom("reset"),
+        Color::Indexed(i) => {
+            let tag = c.atom("indexed");
+            c.tuple(&[tag, Term::Int(i64::from(i))])
+        }
+        Color::Rgb(r, g, b) => {
+            let tag = c.atom("rgb");
+            c.tuple(&[tag, Term::Int(i64::from(r)), Term::Int(i64::from(g)), Term::Int(i64::from(b))])
+        }
+    }
 }
 
 /// `{X, Y, W, H}`.
@@ -233,4 +254,48 @@ fn diff(c: &mut Ctx, a: &[Term]) -> R {
     let bytes = cells::encode(&frame);
     charge(c, cells);
     Ok(c.binary(&bytes))
+}
+
+/// `frame(B, Bytes, From)`: a native program's frame read into the buffer from byte `From`, 0
+/// for its header (`Buffer::read`). `ok` once it is read whole; `{size, W, H}` for a frame of
+/// another size, nothing read; `{joined, Next, X, Y, Symbol, Style}` for a cell whose symbol is
+/// more than one code point, not put, the caller to check it is one grapheme, put it, and go on
+/// from `Next`; `{error, Why}` when it is refused, `Why` the decoder's reason (as
+/// `Redoubt.Term.Cells` spells it) or `cell`. A `From` that is not where the last call stopped is
+/// `badarg`. Charged as `put` is, for the cells read, counted as one for each 15 bytes (the fewest
+/// a cell takes).
+fn frame(c: &mut Ctx, a: &[Term]) -> R {
+    let held = buffer(c, a[0])?;
+    let bits = c.heap().as_bits(a[1]).filter(|b| b.is_binary()).ok_or_else(|| c.badarg())?;
+    let from = a[2].as_usize().ok_or_else(|| c.badarg())?;
+    let bytes = bits.to_bytes();
+    let read = held.buffer.lock().read(&bytes, from);
+    let end = match read {
+        Ok(Read::Joined { next, .. }) => next,
+        _ => bytes.len(),
+    };
+    charge(c, end.saturating_sub(from) / 15);
+    match read {
+        Ok(Read::Done) => Ok(c.ok()),
+        Ok(Read::Size { width, height }) => {
+            let tag = c.atom("size");
+            Ok(c.tuple(&[tag, Term::Int(i64::from(width)), Term::Int(i64::from(height))]))
+        }
+        Ok(Read::Joined { next, x, y, symbol, style }) => {
+            let tag = c.atom("joined");
+            let symbol = c.binary(symbol.as_bytes());
+            let style = style_term(c, style);
+            let (next, x, y) = (Term::Int(next as i64), Term::Int(i64::from(x)), Term::Int(i64::from(y)));
+            Ok(c.tuple(&[tag, next, x, y, symbol, style]))
+        }
+        Err(Refused::Frame(e)) => {
+            let why = c.atom(e.name());
+            Ok(c.error_tuple(why))
+        }
+        Err(Refused::Cell) => {
+            let why = c.atom("cell");
+            Ok(c.error_tuple(why))
+        }
+        Err(Refused::Resume) => Err(c.badarg()),
+    }
 }

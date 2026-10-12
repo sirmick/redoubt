@@ -969,7 +969,7 @@ column, the table one.
 
 ### Screen natives
 
-<details><summary>Status: built · partly tested: host only; no boot draws a screen · tested (16)</summary>
+<details><summary>Status: built · partly tested: host only, but for `frame`, which a native program's screen reads its frames with on the machine (bench:nscr-interrupt, bench:nscr-beyond-cells); no boot draws a screen program's buffer · tested (26)</summary>
 
 - host:beamlet-screen::a_buffer_is_at_most_1024_a_side_and_65536_cells
 - host:beamlet-screen::the_first_frame_clears_and_sends_what_is_not_blank
@@ -987,6 +987,16 @@ column, the table one.
 - host:beamlet-screen::a_large_buffer_ends_its_owner_at_its_heap_limit
 - host:beamlet-screen::a_buffer_resized_past_the_heap_limit_ends_its_owner
 - host:beamlet-vm::sized_resources_past_a_processs_own_heap_limit_end_it
+- host:beamlet-screen::every_vector_is_answered_as_the_decoder_answers_it
+- host:beamlet-screen::a_frame_read_in_puts_what_the_reference_puts_whatever_its_bytes
+- host:beamlet-screen::a_frame_of_another_size_touches_nothing
+- host:beamlet-screen::a_joined_symbol_stops_the_reading_and_it_goes_on_only_from_where_it_stopped
+- host:beamlet-screen::a_refused_frame_keeps_the_cells_before_the_refusal_and_a_wide_one_at_the_edge_is_refused
+- host:beamlet-screen::a_clearing_frame_blanks_the_buffer_first
+- host:beamlet-screen::the_positions_given_are_a_frames_own_and_a_resumed_frame_neither_puts_again_nor_forgets_them
+- host:beamlet-screen::a_programs_frame_is_read_in_stopping_at_a_joined_symbol_and_refused_as_the_decoder_refuses
+- bench:nscr-interrupt
+- bench:nscr-beyond-cells
 
 </details>
 
@@ -1004,6 +1014,7 @@ The screen buffer is `beamlet-screen`
 | `fill(B, Rect, Symbol, Style)` | one symbol, one code point of one column, and one style over a rectangle, clipped |
 | `plot(B, Rect, Dots, Style)` | a bitmap, one byte a cell holding its 2×4 dots in Braille's own order, drawn as U+2800 plus the byte |
 | `diff(B)` | the cells changed since the last `diff`, as a `cells` frame, which then becomes what is shown |
+| `frame(B, Bytes, From)` | reads a native program's `cells` frame into the buffer from byte `From` (0 for its header), a cell at a time as the one decoder reads it (`cells::reduce`): `ok`; `{size, W, H}` for a frame of another size, nothing read; `{joined, Next, X, Y, Symbol, Style}` for a symbol joining code points, not put, for the caller to check is one grapheme, put, and go on from `Next`; `{error, Why}`, the decoder's reason or `cell` (a wide symbol in the last column). A frame that clears blanks the buffer first |
 
 A `Style` is `{Fg, Bg, Modifiers}`, each colour `reset`, `{indexed, I}` or `{rgb, R, G, B}` and the
 modifiers the cell protocol's bits; a `Rect` is `{X, Y, W, H}`.
@@ -1014,11 +1025,13 @@ modifiers the cell protocol's bits; a `Rect` is `{X, Y, W, H}`.
   carry.
 - **Bounded.** A buffer is at most 1024 cells on a side and 65,536 cells in all (larger is
   `system_limit`); `put` reads no more of its graphemes than the row has cells; no native does
-  more than one pass over a buffer. So every call has a ceiling on its time and its allocation,
+  more than one pass over a buffer; `frame` reads a frame in place, allocating only its record
+  of the positions given, a bit a cell of the buffer, made afresh for each frame, and charges by
+  the bytes it read. So every call has a ceiling on its time and its allocation,
   and it is charged in reductions by the cells it touched.
 - **Counted.** A process holds at most four buffers (a fifth is `system_limit`; one nothing holds
   any more is given back), counted in its process dictionary, and each buffer declares the bytes
-  of its two grids, which count as its holder's own memory, toward its own heap limit
+  of its two grids and of `frame`'s record of positions, which count as its holder's own memory, toward its own heap limit
   ([limits](#limits-inside-one-vm)), from `new` and from `resize`. So a loop of `new/2` is ended
   by the limit that ends any runaway allocation. Code that erases the dictionary's count starts a
   new one; the heap limit still holds.
@@ -1031,7 +1044,9 @@ modifiers the cell protocol's bits; a `Rect` is `{X, Y, W, H}`.
   code points is wide. The shell measures with the same `is_wide/1`, so what is measured is what
   the buffer lays out, at the pinned OTP's Unicode version. The buffer does not segment text itself,
   so `fill` takes a single code point, and a caller that hands `put` two characters as one
-  grapheme draws them in one cell, misplacing what follows, and nothing more.
+  grapheme draws them in one cell, misplacing what follows, and nothing more. `frame` puts a
+  symbol of one code point, always one grapheme, itself, and hands back any other unput for the
+  caller to segment.
 - **The diff speaks the cell protocol**, so a screen drawn in the session and a native program's
   frames reach the encoder by one decoder
   ([the shell](shell.md#the-terminal-library)).

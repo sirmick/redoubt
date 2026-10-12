@@ -10,13 +10,16 @@ defmodule Redoubt.Screen.Native do
   driver, as a `Redoubt.Screen`'s process is. The host:
   - reads the program's output as records (`Redoubt.Term.Cells.split/2`), refusing one whose
     length is more than a frame of its screen can take before holding any of it;
-  - decodes each through the one decoder, a cell at a time (`Redoubt.Term.Cells.reduce/3`), so
-    a whole screen's frame is never one large term; and refuses a frame the decoder refuses, a
-    frame of any size but the one it gave the program (a frame of a size it gave before the
-    terminal last changed size is dropped, not drawn), and a cell that is not one cell's worth as
-    the session lays it out: one grapheme, and a wide one not in the last column;
-  - puts each cell into a screen buffer of its own as it is read, and hands the driver the buffer's diff at
-    most 30 times a second, which the driver draws through the one encoder;
+  - reads each straight into a screen buffer of its own with the screen natives
+    (`Redoubt.Term.Buffer.frame/3`), the one decoder in Rust, a cell at a time, so a whole
+    screen's frame is never held as terms; and refuses a frame the decoder refuses, a frame of
+    any size but the one it gave the program (a frame of a size it gave before the terminal last
+    changed size is dropped, not drawn), and a cell that is not one cell's worth as the session
+    lays it out: one grapheme (OTP's segmentation, for a symbol joining code points), and a wide
+    one not in the last column. `reference/3`, the same reading with the decoder in Elixir
+    (`Redoubt.Term.Cells.reduce/3`), is what it is held to;
+  - hands the driver the buffer's diff at most 30 times a second, which the driver draws through
+    the one encoder;
   - asks for the program's output at most 1 MiB a second: past that its read
     waits, the pipe fills, and the program's write waits;
   - sends the program its size first and again at each change, and each key the driver sends,
@@ -246,39 +249,76 @@ defmodule Redoubt.Screen.Native do
   defp bound(state),
     do: [state.size | state.stale] |> Enum.map(fn {c, r} -> Cells.max_frame(c, r) end) |> Enum.max()
 
-  # A frame is checked and put into the buffer a cell at a time, as the one decoder reads it, so a
-  # whole screen's frame is never held as one term. A frame refused after some of its cells were
-  # put draws none of them: the screen ends, and the buffer's diff is never sent.
-  defp frame(%{buffer: buffer, size: {cols, rows}} = state, body) do
+  # A frame is read into the buffer by the screen natives, so a whole screen's frame is never
+  # held as terms. A frame refused after some of its cells were put draws none of them: the
+  # screen ends, and the buffer's diff is never sent.
+  defp frame(state, body) do
+    case read(state.buffer, state.size, body) do
+      # The size given is drawn, and frames of earlier sizes are no longer awaited.
+      :ok -> dirty(%{state | stale: []})
+      # A frame of a size given before the last change is dropped; of any other, refused.
+      {:size, w, h} -> if {w, h} in state.stale, do: state, else: refuse(state, :size)
+      {:error, why} -> refuse(state, why)
+    end
+  end
+
+  @doc false
+  # The frame in `body` read into `buffer`, of `size`, by the natives (`Redoubt.Term.Buffer.frame/3`),
+  # each cell checked by the one decoder and as one cell's worth: `:ok`, `{:size, w, h}` for a
+  # frame of another size, nothing put, or `{:error, why}`, `why` the decoder's reason or `:cell`.
+  # A symbol joining code points is checked here, by OTP's segmentation, and put.
+  @spec read(Buffer.t(), {pos_integer(), pos_integer()}, binary()) ::
+          :ok | {:size, pos_integer(), pos_integer()} | {:error, atom()}
+  def read(buffer, {cols, _rows}, body), do: read(buffer, cols, body, 0)
+
+  defp read(buffer, cols, body, from) do
+    case Buffer.frame(buffer, body, from) do
+      {:joined, next, x, y, symbol, style} ->
+        if one_cell?(symbol, x, cols) do
+          Buffer.put(buffer, x, y, symbol, style)
+          read(buffer, cols, body, next)
+        else
+          {:error, :cell}
+        end
+
+      read ->
+        read
+    end
+  end
+
+  @doc false
+  # `read/3`'s reference, which it is held to (test/redoubt/screen/read_test.exs): the frame
+  # decoded by `Redoubt.Term.Cells.reduce/3`, the decoder in Elixir, and each cell checked and put
+  # as it is read, the whole frame never held.
+  @spec reference(Buffer.t(), {pos_integer(), pos_integer()}, binary()) ::
+          :ok | {:size, pos_integer(), pos_integer()} | {:error, atom()}
+  def reference(buffer, {cols, rows}, body) do
     step = fn
       {:frame, %{width: ^cols, height: ^rows, clear: clear}}, nil ->
         if clear, do: Buffer.fill(buffer, {0, 0, cols, rows}, " ")
         {:cont, nil}
 
-      # A frame of a size given before the last change is dropped; of any other, refused.
       {:frame, %{width: w, height: h}}, nil ->
-        {:halt, if({w, h} in state.stale, do: :stale, else: {:refused, :size})}
+        {:halt, {:size, w, h}}
 
       {:cell, cell}, nil ->
-        if one_cell?(cell, cols) do
+        if one_cell?(cell.symbol, cell.x, cols) do
           Buffer.put(buffer, cell.x, cell.y, cell.symbol, {cell.fg, cell.bg, cell.modifiers})
           {:cont, nil}
         else
-          {:halt, {:refused, :cell}}
+          {:halt, {:error, :cell}}
         end
     end
 
     case Cells.reduce(body, nil, step) do
-      # The size given is drawn, and frames of earlier sizes are no longer awaited.
-      {:ok, nil} -> dirty(%{state | stale: []})
-      {:halt, :stale} -> state
-      {:halt, {:refused, why}} -> refuse(state, why)
-      {:error, why} -> refuse(state, why)
+      {:ok, nil} -> :ok
+      {:halt, value} -> value
+      {:error, _why} = error -> error
     end
   end
 
   # One cell's worth: one grapheme, and a wide one with room for it.
-  defp one_cell?(%{symbol: symbol, x: x}, cols) do
+  defp one_cell?(symbol, x, cols) do
     case String.graphemes(symbol) do
       [^symbol] -> Width.grapheme(symbol) == 1 or x + 1 < cols
       _more -> false
