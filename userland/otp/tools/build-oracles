@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Builds what the Elixir oracles' scripts (libs/steward/elixir/run-traces,
+# libs/wire/elixir/run-vectors) run: beamlet with the all-Rust regex engine, the steward model's
+# trace writer and the trace checker, each exactly as those scripts build it, so their own builds
+# find nothing left to do. The bench's `elixir` cases name it as their `build`, which runs before
+# the case's deadline starts (docs/testbench.md, "Elixir oracles").
+set -euo pipefail
+repo="$(cd "$(dirname "$0")/../../.." && pwd)"
+RE_ENGINE=rust "$repo/userland/otp/tools/build-beamlet" > /dev/null
+# Two commands, as run-traces runs them: one `-p` each, so each gets the features it gets there.
+cargo build --quiet --locked --manifest-path "$repo/Cargo.toml" -p redoubt-model --example steward-traces
+cargo build --quiet --locked --manifest-path "$repo/Cargo.toml" -p redoubt-steward-trace
