@@ -57,7 +57,10 @@ defmodule Redoubt.Screen.Native do
 
   Options: `:ctrl_c` (`:interrupt`), as `Redoubt.Screen.run/3`'s: with `:key`, Ctrl+C reaches
   the program as a key, and Ctrl+\\ alone ends it. The tests also give `:start`, a function
-  standing for the pipeline, called with the host, and `:bytes_per_second` and `:tick_ms`.
+  standing for the pipeline, called with the host, and `:bytes_per_second` and `:tick_ms`; and
+  the bench gives `stats: true`, which makes the value `{value, stats}`: the frames read whole
+  (`:read`), the frames drawn (`:drawn`), and the milliseconds from the first drawn to the last
+  (`:ms`), on the VM's clock.
   """
   @spec run(String.t(), [String.t()], keyword()) :: term()
   def run(name, args \\ [], opts \\ []) do
@@ -76,24 +79,25 @@ defmodule Redoubt.Screen.Native do
       ctrl_c: ctrl_c,
       start: Keyword.get(opts, :start, fn host -> pipeline(name, args, host) end),
       bytes_per_second: Keyword.get(opts, :bytes_per_second, @bytes_per_second),
-      tick_ms: Keyword.get(opts, :tick_ms, @tick_ms)
+      tick_ms: Keyword.get(opts, :tick_ms, @tick_ms),
+      stats: Keyword.get(opts, :stats, false)
     }
 
     heap = %{size: heap_words(), kill: true, error_logger: false, include_shared_binaries: true}
     {pid, ref} = Process.spawn(fn -> host(config) end, [:monitor, max_heap_size: heap])
-    await(pid, ref)
+    await(pid, ref, config.stats)
   end
 
   defp pipeline(name, args, host),
     do: Pipeline.run([{name, args}], input: {:records, host}, output: {:records, host})
 
-  defp await(pid, ref) do
+  defp await(pid, ref, stats) do
     receive do
-      {__MODULE__, :result, ^pid, value, errors} ->
+      {__MODULE__, :result, ^pid, value, errors, counts} ->
         Process.demonitor(ref, [:flush])
         settle(value)
         show(errors)
-        value
+        if stats, do: {value, counts}, else: value
 
       {:DOWN, ^ref, :process, ^pid, :interrupt} ->
         settle(nil)
@@ -169,7 +173,9 @@ defmodule Redoubt.Screen.Native do
       window: now(),
       allowance: config.bytes_per_second,
       dirty: false,
-      tick: false
+      tick: false,
+      counts: %{read: 0, drawn: 0, ms: 0},
+      first_drawn: nil
     }
 
     state |> event({:size, cols, rows}) |> loop()
@@ -258,7 +264,7 @@ defmodule Redoubt.Screen.Native do
   defp frame(state, body) do
     case read(state.buffer, state.size, body) do
       # The size given is drawn, and frames of earlier sizes are no longer awaited.
-      :ok -> dirty(%{state | stale: []})
+      :ok -> dirty(%{state | stale: [], counts: Map.update!(state.counts, :read, &(&1 + 1))})
       # A frame of a size given before the last change is dropped; of any other, refused.
       {:size, w, h} -> if {w, h} in state.stale, do: state, else: refuse(state, :size)
       {:error, why} -> refuse(state, why)
@@ -340,7 +346,9 @@ defmodule Redoubt.Screen.Native do
 
   defp draw(state) do
     Redoubt.Screen.show(state.config.driver, state.buffer)
-    %{state | dirty: false}
+    first = state.first_drawn || now()
+    counts = %{state.counts | drawn: state.counts.drawn + 1, ms: now() - first}
+    %{state | dirty: false, counts: counts, first_drawn: first}
   end
 
   # The next read is asked for while this second's bytes last; past them, at the next second.
@@ -371,7 +379,7 @@ defmodule Redoubt.Screen.Native do
 
   defp finish(state, value, errors) do
     send(state.config.driver, {:redoubt_screen, :close, self()})
-    send(state.config.caller, {__MODULE__, :result, self(), value, errors})
+    send(state.config.caller, {__MODULE__, :result, self(), value, errors, state.counts})
     exit(:normal)
   end
 

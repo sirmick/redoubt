@@ -1,0 +1,64 @@
+description = "A native program's whole frames are drawn at a rate a full-screen program can use (docs/userland/shell.md, \"A native program's screen and the session's key\"): the console session, at two harts, runs /boot/screen-stage with frames 120, which sends 120 whole 80 by 24 frames as fast as its output takes them, every cell changed in each (all Xs, then all Os), and exits. The session reads each into the host's buffer with the screen natives and has the driver draw what changed at its 30-a-second tick. The line takes the host's own counts (Redoubt.Screen.Native.run's stats: the frames read whole, the frames drawn, and the milliseconds from the first drawn to the last, on the VM's clock, which here is the host's: the case boots a disk and types at the console, so its verdict is one taken alone) and judges the rate of frames drawn against the floor, 8 a second. The bytes the session wrote never hold a frame drawn half of one frame and half of the next, though the host's reads and the driver's draws run on two schedulers: every frame changes all 1,920 cells, so each drawn is 1,920 of one letter; the session's budget, read from the kernel, holds what it held before (docs/testbench.md, rule F)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The image's bundle with pipe-stage and screen-stage public in /boot.
+recipe = "tests/data/pipe/boot.toml"
+# As userland-boot: the principals' budgets, each holding the shell VM's session, need 1 GiB.
+memory_mib = 1024
+# The session's VM runs two schedulers: at two harts they run at once.
+smp = [2]
+keep_smp = true
+timeout_secs = 450
+expect = [
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+    '(^|\] )\{:base, \{[0-9]+, [0-9]+\}\}$',
+    '(^|\] )\{:helper, :ok\}$',
+    # The floor: at least 8 frames drawn a second, from the first drawn to the last. Measured at
+    # two harts: all 120 drawn in 10.0 s on rv64 and 9.9 s on rv32, 11.9 and 12.1 a second, each
+    # whole frame's 30 KB written to the console the larger part; 8 is two thirds of the slower.
+    '\{:rate, \{:exited, 0\}, [0-9]+, [0-9]+, [0-9]+, true\}$',
+    '(^|\] )\{:after_all, true, \{:error, :not_running\}\}$',
+]
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    'init: restarted',
+    'EXCEPTION',
+    'still ending',
+    # A frame drawn torn. Every frame changes all 1,920 cells, so each frame drawn is 1,920 of one
+    # letter once its control sequences are taken out (as the bench matches): a run of one
+    # letter between the other's that is shorter, or any run that is longer, is a frame drawn
+    # half of one frame and half of the next. (A tag line may cut a run: its pieces then end the
+    # line, with no other letter on that side.)
+    'OX{1,1919}O',
+    'XO{1,1919}X',
+    'X{1921}',
+    'O{1921}',
+]
+
+[[input]]
+after = 'Redoubt shell, on Elixir '
+send = "c = fn -> {:ok, o} = Redoubt.Budget.own(); {:ok, u} = Redoubt.Budget.usage(o); {elem(u.weight, 1), elem(u.processes, 1)} end; {:base, before = c.()}\n"
+
+# A screen's frames end no line on the console, and the bench reads only whole lines: so a helper
+# the case's own line spawns writes a line of its own, a tag, to the console port every half
+# second while a job runs, ending the line the frames are on.
+[[input]]
+after = '(^|\] )\{:base, \{'
+send = '''up = fn tag -> spawn(fn -> w = :erlang.open_port({:fd, 0, 2}, [:out, :binary]); r = fn -> Enum.any?(Redoubt.Jobs.list(), &(&1.state == :running)) end; Enum.find(Stream.repeatedly(fn -> Process.sleep(50); r.() end), & &1); Enum.find(Stream.repeatedly(fn -> Port.command(w, "\n" <> tag <> "\n"); Process.sleep(500); r.() end), &(!&1)) end) end; {:helper, :ok}
+'''
+
+[[input]]
+after = '(^|\] )\{:helper, :ok\}$'
+send = "{v, s} = (up.(\"up-rate\"); Redoubt.Screen.Native.run(\"screen-stage\", [\"frames\", \"120\"], stats: true)); {:rate, v, s.read, s.drawn, s.ms, s.drawn > 1 and (s.drawn - 1) * 1000 >= 8 * s.ms}\n"
+
+[[input]]
+after = '\{:rate, '
+send = "{:after_all, c.() == before, Redoubt.Pipes.usage()}\n"
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"

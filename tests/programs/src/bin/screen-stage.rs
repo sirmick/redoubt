@@ -10,6 +10,8 @@
 //!   whole on blank cells reaches the terminal whole.
 //! - `flood`: sends the same whole frame, `screen-stage-flooding` on a screen of dots, as fast as its output
 //!   takes it, without end, reading nothing: the session decodes every frame, and draws the first.
+//! - `frames N`: sends N whole frames as fast as its output takes them, every cell of each changed (all `X`s,
+//!   then all `O`s, and so on), then exits 0: the session draws as many as it can, each whole.
 //! - `stderr`: writes control sequences to its standard error, then does what `draw` does.
 //! - Misbehaviours, each sent once after its size, then it waits without end: `raw` (control sequences,
 //!   unframed), `esc-symbol` (a frame with a symbol holding an OSC 52 clipboard write), `key-symbol` (a
@@ -133,6 +135,10 @@ fn run(startup: &Startup) -> u32 {
         ["draw"] => draw(&mut s, width, height),
         ["stderr"] => s.err(HOSTILE).and_then(|()| draw(&mut s, width, height)),
         ["flood"] => flood(&mut s, width, height),
+        ["frames", n] => match n.parse() {
+            Ok(n) => frames(&mut s, width, height, n),
+            Err(_) => Ok(BAD_ARGS),
+        },
         [how] => match misbehave(how, width, height) {
             Some(bytes) => s.out(&bytes).map(|()| -> u32 { redoubt_init_programs::park() }),
             None => Ok(BAD_ARGS),
@@ -207,6 +213,19 @@ fn flood(s: &mut Streams, width: u16, height: u16) -> Result<u32, Error> {
     loop {
         s.out(&record)?;
     }
+}
+
+fn frames(s: &mut Streams, width: u16, height: u16, n: u32) -> Result<u32, Error> {
+    let whole = |letter: &str| {
+        let cells =
+            (0..height).flat_map(|y| cells(width, 0, y, &letter.repeat(usize::from(width)), Color::Reset));
+        cells::record(&cells::encode(&Frame { width, height, clear: false, cells: cells.collect() }))
+    };
+    let records = [whole("X"), whole("O")];
+    for k in 0..n {
+        s.out(&records[k as usize % 2])?;
+    }
+    Ok(0)
 }
 
 /// One cell's bytes, written by hand: the crate's encoder would not write these symbols.

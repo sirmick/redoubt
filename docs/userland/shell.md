@@ -651,11 +651,12 @@ What is not built: a `plot(values)` command drawing a series on the canvas.
 
 ### A native program's screen and the session's key
 
-<details><summary>Status: built · partly tested: a change of size reaches a native program's screen in the shell's ExUnit suite only (`test/redoubt/screen/native_test.exs`, which `./test-shell` runs on beamlet), since the UART names no size; so do the read and draw bounds; a key per principal is not built · tested (10)</summary>
+<details><summary>Status: built · partly tested: a change of size reaches a native program's screen in the shell's ExUnit suite only (`test/redoubt/screen/native_test.exs`, which `./test-shell` runs on beamlet), since the UART names no size; so do the read and draw bounds; a key per principal is not built · tested (11)</summary>
 
 - bench:nscr-interrupt
 - bench:nscr-hostile-text
 - bench:nscr-beyond-cells
+- bench:nscr-frame-rate
 - host:cells::good_events_decode_and_encode_back_to_their_bytes
 - host:cells::bad_events_are_refused_for_their_reason
 - host:cells::a_record_is_its_length_and_its_bytes_and_a_long_one_is_refused_unread
@@ -710,9 +711,13 @@ front for the shell's driver, as a screen program's process is, with its line's 
   20 ms on rv64 and 15 ms on rv32 (in Elixir it took about 0.75 s), so the 1 MiB, about 34 such
   frames a second, is what holds a flooding program back. Drawing what changed is the driver's,
   in Rust: under 30 ms for a whole changed screen (in Elixir it took about 0.7 s), and then the
-  console takes its 30 KB; a write that fails ends the driver, and the session's terminal with
-  it. The host takes the share of the VM any busy process takes, and the driver, which ends it,
-  keeps its own (`nscr-interrupt` floods one and ends it).
+  console takes its 30 KB. A program redrawing every cell of an 80 by 24 screen is drawn about 12
+  times a second on either width at two harts, every frame it sends, the console's write the
+  larger part of each; `nscr-frame-rate` holds it to at least 8 on the VM's clock, which there is
+  the host's (the case boots a disk and types at the console), so its verdict is one taken alone.
+  A write that fails ends the driver, and the session's terminal with it. The host takes the share
+  of the VM any busy process takes, and the driver, which ends it, keeps its own (`nscr-interrupt`
+  floods one and ends it).
 - **Keys and size.** The program's first event is its size, and it is sent again when the
   terminal's size changes; each key the driver sends the screen is sent as an event, never the
   session's key, nor Ctrl+C unless the line gave it (the driver finds both in the bytes read
