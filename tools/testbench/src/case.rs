@@ -67,12 +67,18 @@ pub struct Elixir {
     pub otp: String,
     /// The version `elixir --version` must say.
     pub elixir: String,
+    /// Commands that build what the scripts run, as `scripts` are given, run before them and
+    /// before the deadline starts: a build's time is the host's load, not the oracle's. Each must
+    /// exit 0, and together they have a deadline of their own (`elixir::BUILD_SECS`).
+    #[serde(default)]
+    pub build: Vec<String>,
     /// Scripts, relative to the workspace root, each with its arguments after it, run in order
     /// from the workspace root. Each must exit 0.
     pub scripts: Vec<String>,
-    /// See `Boot::must_fail`. A toolchain that is not the pinned one is never what it waits for.
+    /// See `Boot::must_fail`. A toolchain that is not the pinned one, a failed or late build and a
+    /// script past the deadline are never what it waits for.
     pub must_fail: Option<String>,
-    /// The deadline of all the scripts together, the builds they make included; none when absent.
+    /// The deadline of all the scripts together, from the end of `build`; none when absent.
     pub timeout_secs: Option<f64>,
 }
 
