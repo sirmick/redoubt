@@ -193,6 +193,26 @@ acquisition of the lock gives back up to 64 done frames from every hart's list, 
 link, so a frame enters the bitmap all zero and the step adds a bounded piece to each kernel
 section. Pending frames are bounded only by RAM.
 
+Every build, the release one too, keeps a count of the frames in flight and says on the console
+when a large drain begins and ends: `mem: 1024 frames in flight` when the count first reaches
+1,024 since it was last 0, and `mem: frames in flight 0, at most N` when the frame that brings it
+back to 0 is given back, N the most it held meanwhile. Both are ordinary kernel lines, under the
+console's hold like the rest ([the console's one writer](devices.md#the-consoles-one-writer)), and
+the common give-back pays one comparison with 0. The bench waits on them before it measures a
+system at rest, so that window never holds the zeroing of the boot's and the login's frames
+([the machine at rest](../testbench.md#the-machine-at-rest)). Why 1,024 frames (4 MiB): on
+launch's machine the boot and the first login leave about 35,000 in flight, the first line coming
+during the boot and the second only once every hart first idles after the login, and the shell's
+step after the bench's window frees about 4,600, while a system at rest frees a page or two every
+few seconds, which never reaches it, so at rest the console stays quiet; and a drain under 1,024
+frames takes under 10 ms to zero, too short to matter to the window. A pair of lines needs 1,024
+frames retired and then a drain back to 0, so the console gets at most two lines for every 4 MiB
+freed and drained. What they tell a reader of the console is that some process freed 4 MiB or
+more and when the zeroing ended: a timing channel, out of scope
+([TENETS](../TENETS.md#threat-model)). The last frames come back at the lock's next acquisition,
+at rest the next timer interrupt, so the second line can follow the drainer's last frame by up to
+about a second.
+
 The zeroing an idle hart does is the work of whoever freed the frames, so it is billed to them: the
 budget paying for the kernel time when the frame was retired (the caller, a destroyer, or a
 deadline's payer ([R10 (destruction)](budgets.md#r10-destruction))), when the hart takes the lock
