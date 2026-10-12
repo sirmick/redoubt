@@ -12,8 +12,9 @@
 //! Every other step's slice end takes the kernel's slice end that picks where it is
 //! ([`Harts::repick`]): it must leave what the round trip through `kmain` leaves, the preempted
 //! thread made waiting by the process table, every field of the queue, the runners and the store
-//! compared, and it must pick what the model's slice end and pick do. The kernel's return to the
-//! thread reconciles, so the model reconciles there too.
+//! compared, and it must pick what the model's slice end and pick do. Every pick switches a hart
+//! on in the kernel's order, the settle, the switch on and the reconcile its return makes; the
+//! model reconciles there too.
 //!
 //! Destructions come in the kernel's shapes too: a leaf whose threads were blocked first; a
 //! budget on a hart, destroyed with its threads (a deadline: nothing deschedules it first); and a
@@ -213,17 +214,8 @@ impl Kernel {
         }
         let busy: BTreeSet<Thread> = self.thread.iter().flatten().copied().collect();
         let (b, t) = self.cpu.pick(&mut self.bs, |bs, b| next_thread(bs, &busy, b))?;
-        self.switch_into(h, b, t);
+        self.enter(h, b, t);
         self.current(h)
-    }
-
-    /// Hart `h` runs thread `t` of `b`, which the queue picked: a whole slice from here.
-    fn switch_into(&mut self, h: usize, b: u64, t: Thread) {
-        self.bs.0.get_mut(&b).unwrap().cursor = Some(t);
-        self.thread[h] = Some(t);
-        self.cpu.switch(h, &mut self.bs, Some(b), false, |_, _| true);
-        self.settle(b);
-        self.slice_left[h] = SLICE;
     }
 
     fn run(&mut self, h: usize, dt: u64) {
@@ -368,6 +360,18 @@ fn compare(m: &Scheduler, k: &Kernel, step: usize, seed: u64) {
     }
 }
 
+/// The model's pick on hart `h`. A pick that puts a thread on the hart is the kernel's switch into
+/// it, whose return reconciles (`sched::leave`), so the floor and the cap set follow the switch on
+/// there, in the model as in [`Kernel::enter`].
+fn model_pick(m: &mut Scheduler, h: usize) -> Option<Current> {
+    let switched = m.on(h).is_none();
+    let picked = m.pick_on(h);
+    if switched && picked.is_some() {
+        m.reconcile();
+    }
+    picked
+}
+
 fn run(seed: u64, harts: usize) -> [usize; 3] { run_with(seed, harts, None) }
 
 /// Runs one sequence; returns how often its slice ends picked in place, picked another and
@@ -452,7 +456,7 @@ fn run_with(seed: u64, harts: usize, mutation: Option<Mutation>) -> [usize; 3] {
             }
             // Time passes for whatever a hart runs.
             7..=9 => {
-                assert_eq!(m.pick_on(h), k.pick(h), "seed {seed} step {step} hart {h}'s pick");
+                assert_eq!(model_pick(&mut m, h), k.pick(h), "seed {seed} step {step} hart {h}'s pick");
                 let dt = match rng.below(3) {
                     0 => SLICE,
                     1 => 1 + rng.below(SLICE),
@@ -475,10 +479,7 @@ fn run_with(seed: u64, harts: usize, mutation: Option<Mutation>) -> [usize; 3] {
                             "seed {seed} step {step} hart {h}'s repick"
                         );
                     }
-                    assert_eq!(m.pick_on(h), picked, "seed {seed} step {step} hart {h}'s repick");
-                    // The kernel's return to the thread reconciles (`sched::leave`), so the floor
-                    // and the cap set follow the switch on there.
-                    m.reconcile();
+                    assert_eq!(model_pick(&mut m, h), picked, "seed {seed} step {step} hart {h}'s repick");
                 } else {
                     k.slice_end(h);
                 }
@@ -515,7 +516,7 @@ fn run_with(seed: u64, harts: usize, mutation: Option<Mutation>) -> [usize; 3] {
                 k.destroy_subtree(top, &subtree);
             }
             _ => {
-                assert_eq!(m.pick_on(h), k.pick(h), "seed {seed} step {step} hart {h}'s pick");
+                assert_eq!(model_pick(&mut m, h), k.pick(h), "seed {seed} step {step} hart {h}'s pick");
             }
         }
         compare(&m, &k, step, seed);
