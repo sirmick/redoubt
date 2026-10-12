@@ -993,8 +993,14 @@ pub fn destroy(mm: &mut MemoryManager, frame: BudgetFrame, weight_returned: bool
     });
 }
 
-/// Whether the running thread's slice is over (`time.rs` arms for its end).
-pub fn slice_over() -> bool { crate::time::slice_end() <= crate::time::now_us() }
+/// Whether the running thread's slice is over (`time.rs` arms for its end). A traced build records
+/// the decision's inputs, its end and now, so the oracle decides it again from them.
+pub fn slice_over() -> bool {
+    let (end, now) = (crate::time::slice_end(), crate::time::now_us());
+    #[cfg(feature = "sched-trace")]
+    trace::slice_decided(end, now);
+    end <= now
+}
 
 /// The running thread is preempted (its slice ended, or a budget deadline fired): it stays ready,
 /// and the CPU goes to `kmain`, which picks again. Its budget is descheduled as the kernel leaves
@@ -1140,8 +1146,8 @@ pub mod trace {
         /// Inside a timer or device interrupt from user mode, until it returns: its charges are
         /// recorded.
         interrupt: bool,
-        /// That interrupt came after its runner's slice had ended, so a return to `kmain` is the
-        /// slice's end, not a preemption.
+        /// That interrupt decided its runner's slice had ended ([`slice_decided`]), so a return to
+        /// `kmain` is the slice's end, not a preemption.
         slice_over: bool,
         /// The walk measured now (`walk-trace`), 0 for none.
         walk: u64,
@@ -1201,8 +1207,8 @@ pub mod trace {
 
     /// A timer interrupt from user mode began (`I`): the budget it interrupted (id 0 for none; no
     /// object has id 0), and the time in µs in the pass field. Until it returns (`O`: in the pass
-    /// field 1 to user mode, 0 to `kmain` with the runner's slice over at the entry, 2 to `kmain`
-    /// before it, a preemption), each charge is recorded (`B`: the payer and the ticks),
+    /// field 1 to user mode, 0 to `kmain` with the runner's slice over as the entry decided it
+    /// (`=`), 2 to `kmain` without, a preemption), each charge is recorded (`B`: the payer and the ticks),
     /// and the end of its expiry (`E`: the budget billed last, and in the pass field 1 for an
     /// expired item's, 2 for a wait's that ended before its timeout, 0 for none). The oracle
     /// checks that the budget it interrupted pays only for its own items, or for its slice's end
@@ -1211,6 +1217,10 @@ pub mod trace {
     pub const CHARGE: u8 = b'B';
     pub const EXPIRED: u8 = b'E';
     pub const RETURN: u8 = b'O';
+    /// A timer interrupt from user mode decided whether its runner's slice is over, after its expiry
+    /// (`=`: the slice's end in µs in the id, `NEVER` for none, and now in µs in the pass field):
+    /// it is over if its end is not after now. Its `O` says the same, and the oracle checks it.
+    pub const DECIDED: u8 = b'=';
     /// A device interrupt from user mode began (`x`), recorded as `I` is and followed by the same
     /// records, and its claim (`c`: the source in the id field, 0 if another hart claimed it
     /// first). The oracle checks that one that claims nothing is billed as a timer interrupt that
@@ -1218,21 +1228,30 @@ pub mod trace {
     pub const EXTERNAL_ENTRY: u8 = b'x';
     pub const CLAIM: u8 = b'c';
 
-    /// A timer interrupt from user mode began (after its user time was accrued).
+    /// A timer interrupt from user mode began (after its user time was accrued). Whether it ends
+    /// the slice is decided after its expiry ([`slice_decided`]).
     pub fn timer_entry() {
         let cur = super::SCHED.with(|s| s.cpu.cur(super::here()));
         let now = crate::time::now_us();
-        let over = crate::time::slice_end() <= now;
-        RING.with(|r| (r.interrupt, r.slice_over) = (true, over));
+        RING.with(|r| (r.interrupt, r.slice_over) = (true, false));
         record(TIMER_ENTRY, cur.map_or(0, |b| b.id), u128::from(now));
     }
 
-    /// A device interrupt from user mode began (after its user time was accrued).
+    /// The slice's end was decided (`super::slice_over`), its end `end` against `now`: inside an
+    /// interrupt from user mode, recorded (`=`), and its return says the same.
+    pub fn slice_decided(end: u64, now: u64) {
+        if RING.with(|r| r.interrupt) {
+            RING.with(|r| r.slice_over = end <= now);
+            record(DECIDED, end, u128::from(now));
+        }
+    }
+
+    /// A device interrupt from user mode began (after its user time was accrued). It ends no
+    /// slice.
     pub fn external_entry() {
         let cur = super::SCHED.with(|s| s.cpu.cur(super::here()));
         let now = crate::time::now_us();
-        let over = crate::time::slice_end() <= now;
-        RING.with(|r| (r.interrupt, r.slice_over) = (true, over));
+        RING.with(|r| (r.interrupt, r.slice_over) = (true, false));
         record(EXTERNAL_ENTRY, cur.map_or(0, |b| b.id), u128::from(now));
     }
 
