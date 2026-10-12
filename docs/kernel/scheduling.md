@@ -67,7 +67,7 @@ no dependencies.
 
 ### Preemption points
 
-<details><summary>Status: built · partly tested: that an interrupt's wake does not preempt, and that another budget's deadline does, are not attacked by a case · tested (10)</summary>
+<details><summary>Status: built · partly tested: that an interrupt's wake does not preempt, and that another budget's deadline does, are not attacked by a case · tested (12)</summary>
 
 - bench:sched-wake-no-preempt
 - bench:sched-wake-no-preempt-harts
@@ -76,6 +76,8 @@ no dependencies.
 - bench:budget-deadline
 - bench:sched-timer-entry
 - host:redoubt-model::scheduler_contracts_hold
+- host:redoubt-stride::the_crate_and_the_model_agree
+- host:testbench::a_pick_in_place_is_a_slice_end_that_requeued_its_runner
 - mutation:R12PreemptOnWake
 - mutation:R12TimeoutWakePreempts
 - mutation:R12SliceCountsExitWork
@@ -119,17 +121,26 @@ destruction runs to its end. Picking is done by `kmain`, the kernel's own loop (
 its pick through a private S-mode `ecall` into the kernel's trap handler, which saves `kmain`'s
 context as it saves a thread's.
 
-So a slice's end is a round trip through `kmain`: the timer interrupt preempts the thread, `kmain`
-picks, the same thread again if its budget still ranks first, and its switch returns to it.
-`sched-timer-entry` bounds what that costs the kernel: two spinners and nothing else, so every
+So a slice's end picks again. When nothing is due for `kmain`'s expiry to answer first and no
+other thread of the running budget waits for a hart, the trap picks where it is
+(`sched::repick`): the stride takes the steps of the round trip through `kmain`, in its order
+(`Harts::repick`), the budget charged and requeued behind its equals, the entry reconciled, the
+queue picked, and if the pick is the same budget its thread runs on, a new slice from its return,
+with no switch to `kmain` and back. Otherwise the thread is preempted and `kmain` picks, as before.
+The differential takes slice ends through it at 1, 2 and 4 harts and requires each to leave the
+queue as the round trip leaves it, its thread counted as the process table counts it there, and to
+pick what the model picks. The trace records the requeue and the pick and no change of the hart's
+runner; the oracle counts the thread as waiting only at such a slice's end
+([the scheduler oracle](../testbench.md#the-scheduler-oracle)).
+`sched-timer-entry` bounds what a slice's end costs the kernel: two spinners and nothing else, so every
 timer interrupt from user mode ends a slice, and the oracle bounds their lock sections, trap to
 return, net of the checked build's audits at one hart: the p99 at 2,000 ticks, the steady entry,
 which measures 1,073 on rv64 and 1,597 on rv32, and the longest at 5,000, the cold first
 preemptions of a phase, 3,431 and 4,234 (at two harts, where `icount`'s one clock counts the
 other hart's instructions too, they are recorded). In a release build the slice's end of
-a thread that only computes is about 8,800 kernel instructions on rv64 and 12,900 on rv32 (QEMU's
-exec log), about 7 and 10 % of a hart at the 1 ms slice, half of it the round trip itself: its
-budget descheduled and requeued, then picked again.
+a thread that only computes, alone on its hart, is about 4,200 kernel instructions on rv64 and
+6,700 on rv32 (QEMU's exec log), about 3.4 and 5.4 % of a hart at the 1 ms slice; through `kmain`
+it was 9,000 and 13,000.
 
 ### The current minimum and ties
 

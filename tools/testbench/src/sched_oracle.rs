@@ -73,7 +73,8 @@
 //! check it runs cannot pass for want of the interrupts it is about. Whether the interrupt ended
 //! the slice this check decides itself: the kernel records the decision's inputs after the
 //! expiry (`=`: the slice's end and now, µs), the slice is over if its end is not after now, and
-//! the return (`O`: 1 to user mode, 0 the slice's end, 2 a preemption) must say the same.
+//! the return (`O`: 1 to user mode with the slice running, 0 the slice ended at this entry: to
+//! `kmain`, or in place to user mode, 2 a preemption) must say the same.
 //!
 //! **The kernel's time nobody pays for** (kernel/scheduling.md, "Residual risks") closes the
 //! trace, one `C` record: the kernel's ticks on every hart in its id, the ticks charged to budgets
@@ -105,10 +106,15 @@
 //! the lift as a charge. A pick
 //! takes the first budget in rank order with a thread waiting (a budget with no `J` yet counts as
 //! having one); it may pass over a budget ranked ahead only if another hart runs it and none of
-//! its threads waits. Each wait for the kernel lock from user mode, another hart holding it, is a
-//! `Q` (its start and end in ticks), and an `F` before the `C` holds the ticks since boot and the
-//! harts: the summary reports the waits as a share of the harts' time, `lock waits N of 1000`, and
-//! judges nothing by it (kernel/scheduling.md, "Residual risks").
+//! its threads waits. A pick of the picking hart's own runner, with no `H` before it, is a slice's
+//! end that picked where it is: its thread counts as waiting only inside a timer interrupt on that
+//! hart that requeued the budget, began no destruction and decided the slice over (`=`), and only
+//! with no other thread of it waiting. Its `R` and `K` share the kernel entry the slice's end
+//! began (the kernel numbers one before them), and no clause reads an `R`'s entry: a requeue ranks
+//! by its order alone. Each wait for the kernel lock from user mode, another hart
+//! holding it, is a `Q` (its start and end in ticks), and an `F` before the `C` holds the ticks since
+//! boot and the harts: the summary reports the waits as a share of the harts' time, `lock waits N of
+//! 1000`, and judges nothing by it (kernel/scheduling.md, "Residual risks").
 //!
 //! **Frames in flight** (kernel/memory.md, R81). A hart zeroes the frames it freed after it gives
 //! up the kernel lock, and at its next trap from user mode the kernel bills that time to the
@@ -277,6 +283,8 @@ fn check_reweigh(records: &[Record]) -> Result<(usize, u128), String> {
 #[derive(Debug, Default)]
 pub struct Summary {
     pub picks: usize,
+    /// Of them, a slice's end that picked its hart's own budget again, in place.
+    pub picks_in_place: usize,
     /// Budgets lifted, at most to the floor, as they stopped being capped (`u`).
     pub uncaps: usize,
     pub lifts: usize,
@@ -377,6 +385,10 @@ struct TimerEntry {
     /// now, µs.
     hart: u64,
     decided: Option<(u64, u128)>,
+    /// The budgets requeued on its hart inside it (`R`), and whether a destruction began inside it
+    /// (`X`).
+    requeued: Vec<u64>,
+    destruction: bool,
 }
 
 /// Judge a timer interrupt at its return (to user mode or not): after an expiry that billed
@@ -530,6 +542,9 @@ pub fn check(records: &[Record]) -> Result<Summary, String> {
                     return Err(format!("record {}: a destruction began inside budget {id}'s", r.seq));
                 }
                 open_r10 = Some((r.id, r.pass));
+                if let Some(e) = open_timer.as_mut() {
+                    e.destruction = true;
+                }
                 threads_us = 0;
                 pumps = (0, 0);
             }
@@ -605,6 +620,8 @@ pub fn check(records: &[Record]) -> Result<Summary, String> {
                     charges: Vec::new(),
                     hart: r.hart,
                     decided: None,
+                    requeued: Vec::new(),
+                    destruction: false,
                 });
             }
             'x' => {
@@ -620,6 +637,8 @@ pub fn check(records: &[Record]) -> Result<Summary, String> {
                     charges: Vec::new(),
                     hart: r.hart,
                     decided: None,
+                    requeued: Vec::new(),
+                    destruction: false,
                 });
             }
             'c' => match open_timer.as_mut().and_then(|e| e.external.as_mut()) {
@@ -701,6 +720,9 @@ pub fn check(records: &[Record]) -> Result<Summary, String> {
             'R' => {
                 requeues += 1;
                 queued.insert(r.id, (r.pass, (1, requeues)));
+                if let Some(e) = open_timer.as_mut().filter(|e| e.hart == r.hart) {
+                    e.requeued.push(r.id);
+                }
             }
             'D' => {
                 queued.remove(&r.id);
@@ -825,9 +847,39 @@ pub fn check(records: &[Record]) -> Result<Summary, String> {
                         r.seq, r.id, r.pass
                     ));
                 }
+                // A pick of the picking hart's own runner is a slice's end that picked where it is
+                // (the round trip writes `H 0` before its pick): the preempted thread, which the
+                // process table never counted waiting, counts as waiting, as the round trip's `J`
+                // counted it. Only at a timer interrupt on that hart that requeued the budget, began
+                // no destruction (a deadline keeps the round trip) and decided the slice over (its
+                // `=`, which its `O` must then agree with), and only for a budget with no other
+                // thread waiting, whose turn the round-robin would owe.
+                let in_place = runs.get(&r.hart) == Some(&r.id);
+                if in_place {
+                    let refused =
+                        match open_timer.as_ref().filter(|e| e.hart == r.hart && e.external.is_none()) {
+                            None => Some("outside a timer interrupt on it"),
+                            Some(e) if !e.requeued.contains(&r.id) => Some("with no requeue"),
+                            Some(e) if e.destruction => Some("in an interrupt that began a destruction"),
+                            Some(e) if !e.decided.is_some_and(|(end, now)| u128::from(end) <= now) => {
+                                Some("in an interrupt that decided no slice's end")
+                            }
+                            Some(_) if ready.get(&r.id).is_some_and(|n| *n > 0) => {
+                                Some("with another thread waiting")
+                            }
+                            Some(_) => None,
+                        };
+                    if let Some(why) = refused {
+                        return Err(format!(
+                            "record {}: hart {} re-picked budget {} in place {why}",
+                            r.seq, r.hart, r.id
+                        ));
+                    }
+                    sum.picks_in_place += 1;
+                }
                 // Across harts a pick passes over a budget with no thread waiting for a hart: one
                 // whose threads all run on harts, which must be other harts than the picker.
-                let waiting = |id: &u64| ready.get(id).is_none_or(|n| *n > 0);
+                let waiting = |id: &u64| (in_place && *id == r.id) || ready.get(id).is_none_or(|n| *n > 0);
                 if !waiting(&r.id) {
                     return Err(format!(
                         "record {}: picked budget {}, which has no thread waiting",
@@ -3377,9 +3429,10 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
         kernel_time
     };
     let head = format!(
-        "sched_oracle: {} records, {} picks in rank order, every wake at or above the floor, no pass falling but by a weight change; {} passing over a budget whose threads all ran on other harts; {} lifted out of the cap set, at most to the floor; {} lifts by the rule ({} with a leading parent and work to move); {} weight changes by the rule; R10 {n} destructions over up to {} object frames, µs p50/p99/max {p50}/{p99}/{max}, their threads' ending {t50}/{t99}/{tmax}, no audit inside one; {} audits, {audit_total} µs; {} timer interrupts billed by the rule ({} expiring, {} finding a wait ended early, {} ticks after expiry to the budget billed last; {} ending a slice, {} nobody's; {} charging another budget than the one interrupted, {} ticks); {} device interrupts from user mode billed by the rule ({} claiming nothing){kernel_time}{lease_end}",
+        "sched_oracle: {} records, {} picks in rank order ({} in place), every wake at or above the floor, no pass falling but by a weight change; {} passing over a budget whose threads all ran on other harts; {} lifted out of the cap set, at most to the floor; {} lifts by the rule ({} with a leading parent and work to move); {} weight changes by the rule; R10 {n} destructions over up to {} object frames, µs p50/p99/max {p50}/{p99}/{max}, their threads' ending {t50}/{t99}/{tmax}, no audit inside one; {} audits, {audit_total} µs; {} timer interrupts billed by the rule ({} expiring, {} finding a wait ended early, {} ticks after expiry to the budget billed last; {} ending a slice, {} nobody's; {} charging another budget than the one interrupted, {} ticks); {} device interrupts from user mode billed by the rule ({} claiming nothing){kernel_time}{lease_end}",
         records.len(),
         sum.picks,
+        sum.picks_in_place,
         sum.passed_over,
         sum.uncaps,
         sum.lifts,
@@ -4604,6 +4657,90 @@ mod tests {
         assert!(none.contains("picked budget 5, which has no thread waiting"), "{none}");
     }
 
+    /// A slice's end that picks where it is records the fold's requeue (`R`) and the pick (`K`) of
+    /// the hart's own runner, with no `H` and no `J`: the preempted thread counts as waiting, as
+    /// the round trip's `J` counted it, only at a timer interrupt on that hart that requeued the
+    /// budget, began no destruction and decided the slice over (`=`), for a budget with no other
+    /// thread waiting; and the rank clauses judge it as any pick.
+    #[test]
+    fn a_pick_in_place_is_a_slice_end_that_requeued_its_runner() {
+        // Hart 0 runs budget 5, its one thread; 6 waits behind it.
+        let base = [
+            (1, 'W', 5, 0x10, 0),
+            (1, 'W', 6, 0x20, 0),
+            (1, 'J', 5, 1, 0),
+            (1, 'J', 6, 1, 0),
+            (1, 'K', 5, 0x10, 0),
+            (2, 'J', 5, 0, 0),
+            (2, 'H', 5, 0, 0),
+        ];
+        // A slice's end on hart 0 at 100 µs: its decision (the slice's end `end` against 100), the
+        // requeue, the pick and the return `ret`.
+        let slice_end = |pass: u128, end: u64, ret: u128| {
+            [
+                (3, 'I', 5, 100, 0),
+                (3, '=', end, 100, 0),
+                (3, 'R', 5, pass, 0),
+                (3, 'K', 5, pass, 0),
+                (3, 'O', 0, ret, 0),
+            ]
+        };
+        let ok = verdict_on(&[base.as_slice(), &slice_end(0x18, 100, 0)].concat()).unwrap();
+        assert!(ok.contains("2 picks in rank order (1 in place)"), "{ok}");
+        // Outside a timer interrupt on its hart.
+        let outside = verdict_on(&[base.as_slice(), &[(3, 'R', 5, 0x18, 0), (3, 'K', 5, 0x18, 0)]].concat());
+        assert!(
+            outside
+                .unwrap_err()
+                .contains("hart 0 re-picked budget 5 in place outside a timer interrupt on it")
+        );
+        let elsewhere = [
+            (3, 'I', 6, 100, 1),
+            (3, '=', 100, 100, 1),
+            (3, 'R', 5, 0x18, 0),
+            (3, 'K', 5, 0x18, 0),
+            (3, 'O', 0, 0, 1),
+        ];
+        let elsewhere = verdict_on(&[base.as_slice(), &elsewhere].concat());
+        assert!(elsewhere.unwrap_err().contains("in place outside a timer interrupt on it"));
+        // In an interrupt whose decision found the slice running.
+        let running = verdict_on(&[base.as_slice(), &slice_end(0x18, 101, 1)].concat()).unwrap_err();
+        assert!(
+            running.contains("re-picked budget 5 in place in an interrupt that decided no slice's end"),
+            "{running}"
+        );
+        // Ranked behind another budget: the rank clauses refuse it as any pick.
+        let behind = verdict_on(&[base.as_slice(), &slice_end(0x28, 100, 0)].concat()).unwrap_err();
+        assert!(behind.contains("the rank clauses put budget 6"), "{behind}");
+        // With no requeue of its runner.
+        let unqueued = [(3, 'I', 5, 100, 0), (3, '=', 100, 100, 0), (3, 'K', 5, 0x10, 0), (3, 'O', 0, 0, 0)];
+        let unqueued = verdict_on(&[base.as_slice(), &unqueued].concat()).unwrap_err();
+        assert!(unqueued.contains("re-picked budget 5 in place with no requeue"), "{unqueued}");
+        // With another thread of it waiting, whose turn the round-robin owed.
+        let sibling = [
+            (3, 'I', 5, 100, 0),
+            (3, '=', 100, 100, 0),
+            (3, 'J', 5, 1, 0),
+            (3, 'R', 5, 0x18, 0),
+            (3, 'K', 5, 0x18, 0),
+            (3, 'O', 0, 0, 0),
+        ];
+        let sibling = verdict_on(&[base.as_slice(), &sibling].concat()).unwrap_err();
+        assert!(sibling.contains("re-picked budget 5 in place with another thread waiting"), "{sibling}");
+        // In an interrupt that began a destruction: a deadline keeps the round trip.
+        let deadline = [
+            (3, 'I', 5, 100, 0),
+            (3, 'X', 9, 100, 0),
+            (3, 'Y', 9, 110, 0),
+            (3, '=', 100, 100, 0),
+            (3, 'R', 5, 0x18, 0),
+            (3, 'K', 5, 0x18, 0),
+            (3, 'O', 0, 0, 0),
+        ];
+        let deadline = verdict_on(&[base.as_slice(), &deadline].concat()).unwrap_err();
+        assert!(deadline.contains("in place in an interrupt that began a destruction"), "{deadline}");
+    }
+
     /// A shootdown (`S`) among the queue's records changes no rank: the check passes over it.
     #[test]
     fn a_shootdown_record_is_passed_over() {
@@ -5564,12 +5701,15 @@ mod tests {
             let (&b, &(pass, _)) = queue.iter().min_by_key(|(id, (p, k))| (*p, *k, **id)).unwrap();
             let after = pass + 1_000 * stride / weight[&b];
             let said = if say_weights { weight[&b] } else { 0 };
+            // The round trip through `kmain`: the pick, the slice, its end's requeue and the hart
+            // left for `kmain` (`H 0`), then the return there.
             t.extend([
                 (e, 'K', b, pass),
                 (e, 'H', b, said),
                 (e, 'I', b, now),
                 (e, '=', now as u64, now),
                 (e, 'R', b, after),
+                (e, 'H', 0, 0),
                 (e, 'O', 0, 0),
             ]);
             queue.insert(b, (after, (1, i128::from(n as u32))));
@@ -5612,7 +5752,7 @@ mod tests {
         let ok = run(&(on_harts(&t, &[], 1) + &format!("HART-SHARE v 100 {end} 30 2:1 300:1\n")), "");
         assert!(
             ok.as_ref().is_ok_and(|s| s.contains(
-                "hart share v: 256 of 1000 of the CPU the kernel charged in [100, 500] µs (records 27..=261)"
+                "hart share v: 256 of 1000 of the CPU the kernel charged in [100, 500] µs (records 27..=300)"
             ) && s.contains(
                 "at 1 harts: budget 44 10000 ticks of 38999, its lock waits 0 of 0 ticks taken out"
             ) && s

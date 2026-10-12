@@ -285,8 +285,13 @@ pub extern "C" fn trap_handler(
                 crate::sched::begin_billing();
             }
             crate::time::on_interrupt(from_user);
+            // The queue picks here; the thread runs on if it picks its budget again, and
+            // `kmain` takes the rest.
             if slice_over {
-                preempt();
+                let tid = ArchProcess::with_current(|p| p.current_tid());
+                if !ProcessTable::with(|ss| crate::sched::repick(ss, pid, tid)) {
+                    preempt();
+                }
             }
             resume_current();
         }

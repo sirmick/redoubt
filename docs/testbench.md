@@ -534,7 +534,7 @@ parks when it is done, unless its exit is the point of its case.
 
 ### The scheduler oracle
 
-<details><summary>Status: built · tested (28)</summary>
+<details><summary>Status: built · tested (29)</summary>
 
 - bench:sched-ties
 - bench:sched-capped
@@ -547,6 +547,7 @@ parks when it is done, unless its exit is the point of its case.
 - host:testbench::a_pick_passes_over_only_a_budget_that_other_harts_run
 - host:testbench::the_oracle_decides_whether_a_timer_interrupt_ended_the_slice
 - bench:sched-wake-no-preempt-harts-mttcg
+- host:testbench::a_pick_in_place_is_a_slice_end_that_requeued_its_runner
 - host:testbench::lock_waits_are_reported_per_mille_of_the_harts_time
 - host:testbench::lock_waits_take_the_lock_in_ticket_order
 - host:testbench::a_shootdown_record_is_passed_over
@@ -574,7 +575,13 @@ kernel entry's first, and within one entry the lower id; requeued ones in the or
 requeued. On several harts it also reads which budget each hart runs (`H`) and how many of each
 budget's threads wait for a hart (`J`, those no hart runs): a pick takes the first budget in that
 order with a thread waiting, and passes over one ranked ahead only if another hart runs it and
-none of its threads waits, never one it runs itself. It recomputes each lift and each weight
+none of its threads waits, never one it runs itself. A slice's end that picks where it is
+([preemption points](kernel/scheduling.md#preemption-points)) records the requeue and the pick of
+the hart's own runner, with no `H` and no `J`: the oracle counts the preempted thread as waiting,
+as the round trip's `J` counted it, only at a timer interrupt on that hart that requeued the
+budget, began no destruction and decided the slice over (`=`), and only for a budget with no other
+thread waiting; anything else is refused, and the rank clauses judge the pick as any other. It
+recomputes each lift and each weight
 change from the rule, and lets a pass fall only at a weight change. A kernel built with
 `lock-trace`, a test feature that implies the trace, also records each wait for the kernel lock's
 ticket after the wait (`k`: the ticket and the sections ahead of it when drawn); a release build
@@ -758,11 +765,13 @@ slice: after its expiry, to the budget the expiry billed last or to nobody, neve
 interrupted. It reports, judging nothing by them, the timer interrupts that charged a budget other
 than the one they interrupted and those ticks: another budget's timer work in the interrupted
 budget's time on its hart ([timer](kernel/timer.md#r12-scheduling-for-timer-work)). An
-interrupt's return (`O`) says where it goes: 1 to user mode, 0 to `kmain` with the interrupted
-runner's slice over, 2 to `kmain` without, a preemption. Whether the slice is over the oracle
-decides itself: the kernel records its decision's inputs after the entry's expiry (`=`: the
-slice's end and now, µs), the slice is over if its end is not after now, and a return that says
-otherwise fails, as does a decision outside a timer interrupt on its hart or a second one. With
+interrupt's return (`O`) says where it goes: 1 to user mode with the interrupted runner's slice
+running, 0 the slice ended at this entry (to `kmain`, or in place to user mode, where the return
+is recorded as the entry's handling ends), 2 to `kmain` without, a preemption. Whether the slice
+is over the oracle decides itself: the kernel records its decision's inputs after the entry's
+expiry (`=`: the slice's end and now, µs), the slice is over if its end is not after now, and a
+return that says otherwise fails, as does a decision outside a timer interrupt on its hart or a
+second one. With
 `wake_no_preempt=N` the oracle proves a timeout only wakes: at one hart N naps each against the
 slice that follows it; on several, each wake of the one budget that woke N times or more at the
 entry that made it, a return to user mode or a call its runner goes on from counting as a witness

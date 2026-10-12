@@ -465,6 +465,10 @@ impl<B: Copy + PartialEq, const N: usize> Queue<B, N> {
         }
     }
 
+    /// `b`'s threads waiting for a hart as the queue counts them, if it is queued: for a checked
+    /// kernel's comparison with the process table's count.
+    pub fn waiting_of(&self, b: B) -> Option<u32> { self.slot_of(b).map(|i| self.waiting[i]) }
+
     /// The budget at `slots[i]` had a thread (`had`) before its counts changed: if that changed, it
     /// joins or leaves those the floor counts, and the floor is raised at the end of the operation.
     fn recounted(&mut self, i: usize, had: bool) { self.pending |= had != self.has_thread(i); }

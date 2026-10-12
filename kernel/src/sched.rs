@@ -43,6 +43,8 @@
 //! round-robin cursor, in (pid, tid) order; its slice starts when it returns to user mode
 //! ([`leave`]). The running thread keeps the CPU until its slice ends, it blocks or exits, or a
 //! budget deadline fires; a wake never preempts (`time.rs` arms the timer for the slice's end).
+//! A slice's end picks where it is when it can ([`repick`]): the same steps of the queue as the
+//! round trip through `kmain`, and if they pick the same budget, its thread runs on.
 //!
 //! # `kmain`'s switch
 //! `kmain` runs its pick with [`switch_to`], a private S-mode `ecall` into the kernel's own trap
@@ -1010,6 +1012,85 @@ pub fn preempt(ss: &mut ProcessTable, tid: TID) {
     ss.activate_process_thread(tid, KERNEL_PID, 0, true).expect("the kernel can always run");
 }
 
+/// The running thread `(pid, tid)`'s slice ended (`arch::irq`): the queue picks here, as `kmain`
+/// would, when nothing is due for `kmain`'s expiry to answer first and no other thread of its
+/// budget waits for a hart (whose turn the round-robin may give). The stride takes the same steps
+/// in the same order as the round trip through `kmain` (`Harts::repick`): its budget charged and
+/// requeued behind its equals, the entry's reconcile, the pick. If the pick is its budget again,
+/// the thread runs on and `true`: no switch to `kmain` and back, the pick recorded, a new slice
+/// from its return ([`leave`]). Otherwise `false`, and the caller preempts it through `kmain`,
+/// whose pick, with nothing changed, is the one made here.
+pub fn repick(ss: &ProcessTable, pid: Pid, tid: TID) -> bool {
+    if crate::time::due() {
+        return false;
+    }
+    let now = ticks();
+    let in_place = MemoryManager::with_mut(|mm| {
+        SCHED.with(|s| {
+            let h = here();
+            let Some(b) = s.cpu.cur(h) else { return false };
+            s.settle(ss, mm);
+            if mm.ready(b) > 0 {
+                return false;
+            }
+            // What ran until here is folded at the switch off; from here the kernel's time is the
+            // pick's, the budget picked's, as in the round trip.
+            s.close_billing(mm, now);
+            #[cfg(feature = "sched-trace")]
+            trace::entry();
+            let Sched { cpu, marks, .. } = &mut *s;
+            let (lost, gained) = marks.changed();
+            let waiting = |mm: &MemoryManager, x: BudgetRef| mm.ready(x);
+            let next = |mm: &MemoryManager, x: BudgetRef| next_thread(ss, mm, x);
+            let done = cpu.repick(h, mm, lost, gained, waiting, (pid, tid), next);
+            #[cfg(debug_assertions)]
+            if let Err(e) = marks.check_visited(mm, |x| cpu.running(x)) {
+                panic!("the scheduler's marks: {:?}", e);
+            }
+            marks.clear();
+            match done {
+                redoubt_stride::Repick::InPlace => {
+                    // Its threads waiting for a hart are counted as the process table has them again.
+                    #[cfg(debug_assertions)]
+                    if s.online > 1 {
+                        assert_eq!(s.cpu.q.waiting_of(b), Some(mm.ready(b)), "the in-place pick's count");
+                    }
+                    mm.set_sched_cursor(b.frame, Some((pid, tid)));
+                    #[cfg(feature = "sched-trace")]
+                    trace::record(trace::PICK, b.id, mm.sched_state(b.frame).pass);
+                    s.b().billing = Some((now, Payer::Budget(b)));
+                    true
+                }
+                redoubt_stride::Repick::Other(..) => {
+                    // Off this hart for `kmain`'s pick, which pays for its pick and switch.
+                    #[cfg(feature = "sched-trace")]
+                    trace::record(trace::RUNS, 0, 0);
+                    s.b().user_since = None;
+                    s.b().billing = Some((now, Payer::Next));
+                    false
+                }
+                redoubt_stride::Repick::Declined => {
+                    unreachable!("budget {} has no other thread waiting", b.id)
+                }
+            }
+        })
+    });
+    if !in_place {
+        return false;
+    }
+    // A checked build's marks and cap audits, at most once a slice, where `kmain`'s pick runs them.
+    #[cfg(debug_assertions)]
+    if SCHED.with(|s| s.marks.audit_due(crate::time::now_us(), SLICE_US, false)) {
+        MemoryManager::with(|mm| audit_marks(ss, mm));
+    }
+    // The entry ended the slice, in place: recorded as the round trip's return to `kmain` records
+    // it. The return to the thread starts the next.
+    #[cfg(feature = "sched-trace")]
+    trace::slice_ended();
+    crate::time::set_slice_end(crate::time::NEVER);
+    true
+}
+
 /// `a0` of `kmain`'s switch: outside the call table (redoubt-sys numbers run from `NUMBER_BASE`
 /// + 1), so a user-mode `ecall` with it is refused as an unknown number.
 const SWITCH_TAG: usize = 0x5357_4954;
@@ -1207,8 +1288,9 @@ pub mod trace {
 
     /// A timer interrupt from user mode began (`I`): the budget it interrupted (id 0 for none; no
     /// object has id 0), and the time in µs in the pass field. Until it returns (`O`: in the pass
-    /// field 1 to user mode, 0 to `kmain` with the runner's slice over as the entry decided it
-    /// (`=`), 2 to `kmain` without, a preemption), each charge is recorded (`B`: the payer and the ticks),
+    /// field 1 to user mode with the runner's slice running, 0 the slice ended at this entry as it
+    /// decided (`=`): to `kmain`, or in place to user mode ([`slice_ended`]), 2 to `kmain` without,
+    /// a preemption), each charge is recorded (`B`: the payer and the ticks),
     /// and the end of its expiry (`E`: the budget billed last, and in the pass field 1 for an
     /// expired item's, 2 for a wait's that ended before its timeout, 0 for none). The oracle
     /// checks that the budget it interrupted pays only for its own items, or for its slice's end
@@ -1382,6 +1464,18 @@ pub mod trace {
                 (Some(_), true) => 2,
             };
             record(EXPIRED, last.map_or(0, |b| b.id), what);
+        }
+    }
+
+    /// The entry ended its runner's slice in place (`super::repick`): the interrupt's handling is
+    /// over and what runs next, the same thread or the pick, runs from here, so its return is
+    /// recorded now (`O` 0), as the round trip's return to `kmain` records the slice's end. The
+    /// return to user mode that follows is the next slice's start, not this interrupt's.
+    pub fn slice_ended() {
+        let (inside, over) = RING.with(|r| (core::mem::take(&mut r.interrupt), r.slice_over));
+        debug_assert!(inside && over, "a slice ended in place outside a timer interrupt that decided it");
+        if inside {
+            record(RETURN, 0, 0);
         }
     }
 
