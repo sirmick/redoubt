@@ -259,9 +259,12 @@ defmodule Redoubt.Shell.Session do
     |> Lines.new()
   end
 
-  # What the steward told the session of itself (`redoubt:identity/0`), or nil for a VM that is
-  # no session, or has no beamlet natives.
-  defp identity do
+  @doc """
+  What the steward told the session of itself (`redoubt:identity/0`: its principal, labels,
+  context and home), or nil for a VM that is no session, or has no beamlet natives.
+  """
+  @spec identity() :: map() | nil
+  def identity do
     case :redoubt.identity() do
       {:ok, identity} -> identity
       {:error, _} -> nil

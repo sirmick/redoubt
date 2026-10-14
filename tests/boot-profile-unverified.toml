@@ -39,7 +39,7 @@ expect = [
     # The target's line: the driver has drawn the first prompt, where a user sees the box ready.
     # Drawn beside the prompt, on its console line, so the line's start is the prompt's.
     'beamlet: first prompt drawn \[t=([0-9]{1,7}|1[0-9]{7})\]$',
-    '^\[con [0-9a-f]{16}\] / \([0-9]+\)> Enum\.sum\(1\.\.10\)$',
+    '^\[con [0-9a-f]{16}\] /home/alice \([0-9]+\)> Enum\.sum\(1\.\.10\)$',
     '^\[con [0-9a-f]{16}\] 55$',
     '^\[con [0-9a-f]{16}\] erofsd: boot-stats: 9P [0-9]+ ',
     'UndefinedFunctionError\) function BootStats.x/0 is undefined',

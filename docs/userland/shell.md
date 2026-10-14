@@ -51,7 +51,7 @@ file with `ed("notes.txt")`; browse and copy files in two panes with `fm("projec
 
 ### The shell in a session
 
-Status: built · partly tested: the steward starts it as the console principal's session on the UART and as each SSH login's session; launching a program is tested in the steward's sessions over SSH, a vault session and a plain one, and on the UART under a tester in the steward's place and in the console principal's session, and a session's files wait for its namespace to reach the VM · tested: bench:userland-boot, bench:steward-ssh-two-principals, bench:steward-vault-launch, bench:beamlet-launch, bench:pipe-hostile-output, host:beamlet-redoubt::a_launch_takes_what_it_is_given_and_its_end_is_an_event
+Status: built · partly tested: the steward starts it as the console principal's session on the UART and as each SSH login's session; launching a program is tested in the steward's sessions over SSH, a vault session and a plain one, and on the UART under a tester in the steward's place and in the console principal's session, and a session's files wait for its namespace to reach the VM; the start in the home runs in a plain and a vault session over SSH, and the session with no home on the host only · tested: bench:userland-boot, bench:steward-ssh-two-principals, bench:steward-vault-launch, bench:beamlet-launch, bench:pipe-hostile-output, bench:shell-commands, bench:launch-system, host:beamlet-redoubt::a_launch_takes_what_it_is_given_and_its_end_is_an_event
 
 Every session starts `Redoubt.Shell` over the session's console connection, `/dev/cons`
 ([consoled](../servers/consoled.md) on the UART, [sshd](../servers/sshd.md) for an SSH channel).
@@ -69,6 +69,19 @@ disk, checked against the signed bundle
 Everything the prompt evaluates runs with the session's authority, in the session's VM. There is
 nothing the shell can do that the session's handles do not allow, and nothing a command adds to
 them.
+
+**A session starts in its home.** The VM starts at `/`, the namespace's root, which holds only
+the bound prefixes and nothing writable; before its first prompt the shell moves the working
+directory to the home the steward told the session of (`home=/PATH`, the path its namespace
+binds the principal's home at, [sessions](sessions.md#what-a-session-is-told)), so a bare name
+at the prompt, `ed("notes.txt")` or `File.write("notes.txt", text)`, is a file in the home, and
+the prompt shows where it is: `/home/alice (1)> `. The console's session, an SSH session and a
+vault session start the same way, a vault session's home being its principal's as well (what it
+may write there is the label's business, [vault sessions](sessions.md#vault-sessions)). A
+session told no home, or whose home cannot be entered, says so once, `** no home to start in
+(:enoent); this session starts in /`, and starts at `/`. The start is information acted on, not
+authority: the shell can only move where the session's handles already reach. A VM that is no
+session, as on a host, starts where it is and says nothing.
 
 The userland disk's modules carry no `Docs` chunk, so `h/1` says no documentation is available;
 an optional documentation package `h/1` reads when present is not built.
