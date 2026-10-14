@@ -74,7 +74,12 @@
 //! the slice this check decides itself: the kernel records the decision's inputs after the
 //! expiry (`=`: the slice's end and now, µs), the slice is over if its end is not after now, and
 //! the return (`O`: 1 to user mode with the slice running, 0 the slice ended at this entry: to
-//! `kmain`, or in place to user mode, 2 a preemption) must say the same.
+//! `kmain`, or in place to user mode, 2 a preemption) must say the same. A slice's end that picks
+//! and switches where the trap is writes `I ... = R b K n O 0 J H n`, the pick inside the
+//! interrupt before its return; one that goes through `kmain` writes `R b H 0 O 0` and then
+//! `K n` there. Between `K n` and `H n` the hart's runner still reads `b`, which is harmless: `b`
+//! was just requeued behind `n`, so no clause can rank it ahead there. The proofs that read where
+//! a pick sits ([`check_carve_return`], [`check_wake_no_preempt`]) accept both shapes.
 //!
 //! **The kernel's time nobody pays for** (kernel/scheduling.md, "Residual risks") closes the
 //! trace, one `C` record: the kernel's ticks on every hart in its id, the ticks charged to budgets
@@ -1006,10 +1011,28 @@ fn check_wake_no_preempt(records: &[Record], expected: usize) -> Result<String, 
             if records[next_b].id != spinner || records[next_e].pass != 0 {
                 continue;
             }
-            if !own(next_b, next_e + 1).any(|r| r.kind == 'R' && r.id == spinner)
-                || own(next_b, next_e + 1).any(|r| "WDXY".contains(r.kind))
+            let second: Vec<&Record> = own(next_b, next_e + 1).collect();
+            let Some(requeued) = second.iter().position(|r| r.kind == 'R' && r.id == spinner) else {
+                continue;
+            };
+            if second.iter().any(|r| "WDXY".contains(r.kind))
                 || !own(e + 1, next_b).all(|r| r.kind != 'K' && r.kind != 'X')
-                || !own(next_e + 1, records.len())
+            {
+                continue;
+            }
+            // The pick after the slice's end: inside the interval after the requeue, where a slice's
+            // end that switches budgets makes it (kernel/scheduling.md, "Preemption points"), or
+            // `kmain`'s, the hart's first pick or interrupt after the return. One before the requeue
+            // would be a pick before the slice's end, and a second one is no slice's end: neither proves.
+            let picks: Vec<usize> =
+                second.iter().enumerate().filter(|(_, r)| r.kind == 'K').map(|(i, _)| i).collect();
+            let picked_inside = match picks[..] {
+                [] => false,
+                [k] if k > requeued => true,
+                _ => continue,
+            };
+            if !picked_inside
+                && !own(next_e + 1, records.len())
                     .find(|r| r.kind == 'K' || r.kind == 'I')
                     .is_some_and(|r| r.kind == 'K')
             {
@@ -2117,9 +2140,46 @@ fn check_carve_return(log: &str, records: &[Record]) -> Result<String, String> {
             records[pick].id
         ));
     }
-    if let Some(r) = records[pick + 1..finish].iter().find(|r| {
+    // A pick inside a timer interrupt on its own hart (an `I` there with no `O` between) is a
+    // slice's end that switched into the parent where the trap was (kernel/scheduling.md,
+    // "Preemption points"): the turn begins after that interrupt's return, which must be the
+    // slice's end (`O` 0; no pick is inside one returning 1 or 2). The round trip's pick, in
+    // `kmain`, has no interrupt around it, and the turn begins at the pick.
+    let hart = records[pick].hart;
+    let inside = records[..pick]
+        .iter()
+        .rev()
+        .filter(|r| r.hart == hart)
+        .find(|r| "IO".contains(r.kind))
+        .is_some_and(|r| r.kind == 'I');
+    let from = if inside {
+        let ret = records[pick + 1..finish]
+            .iter()
+            .position(|r| r.hart == hart && r.kind == 'O')
+            .map(|i| pick + 1 + i)
+            .ok_or_else(|| {
+                format!(
+                    "carve-return: parent {parent} was picked at record {} inside an interrupt that did not return before the carve",
+                    records[pick].seq
+                )
+            })?;
+        if records[ret].pass != 0 {
+            return Err(format!(
+                "carve-return: parent {parent} was picked at record {} inside an interrupt that returned {}, not as the slice's end",
+                records[pick].seq, records[ret].pass
+            ));
+        }
+        ret
+    } else {
+        pick
+    };
+    // From the pick to that return (the return itself excused), then from the return to the
+    // up-weight: no other pick, no requeue or leave of the parent, no other slice's end.
+    let lost = |r: &&Record| {
         r.kind == 'K' || (r.id == parent && "RD".contains(r.kind)) || (r.kind == 'O' && r.pass != 1)
-    }) {
+    };
+    let between = if inside { records[pick + 1..from].iter().find(lost) } else { None };
+    if let Some(r) = between.or_else(|| records[from + 1..finish].iter().find(lost)) {
         return Err(format!(
             "carve-return: parent {parent} lost its running turn at record {} ({})",
             r.seq, r.kind
@@ -4289,6 +4349,23 @@ mod tests {
         let mut preempted = events.to_vec();
         preempted.insert(4, ('K', 8, 10));
         assert!(check_wake_no_preempt(&records(&preempted), 1).is_err());
+        // The slice's end that switches where the trap is: the pick inside the interval, after
+        // the requeue, before the return; the first interrupt after it may then be the sleeper's.
+        let mut direct = events[..9].to_vec();
+        direct.insert(8, ('K', 8, 10));
+        direct.extend([('I', 8, 1900), ('O', 0, 1)]);
+        assert!(check_wake_no_preempt(&records(&direct), 1).is_ok());
+        // A pick before the requeue is a pick before the slice's end; a second pick is no slice's end.
+        let mut early = direct.clone();
+        early.swap(7, 8);
+        assert!(check_wake_no_preempt(&records(&early), 1).is_err());
+        let mut twice = direct.clone();
+        twice.insert(9, ('K', 8, 10));
+        assert!(check_wake_no_preempt(&records(&twice), 1).is_err());
+        // Without the pick inside, the round trip's K must still come before any interrupt.
+        let mut late = events[..9].to_vec();
+        late.extend([('I', 7, 1900), ('O', 0, 1), ('K', 8, 10)]);
+        assert!(check_wake_no_preempt(&records(&late), 1).is_err());
         let mut unframed = events;
         unframed[3] = ('B', 8, 10);
         assert!(check_wake_no_preempt(&records(&unframed), 1).is_err());
@@ -4413,9 +4490,30 @@ mod tests {
                 })
                 .collect::<Vec<_>>()
         };
-        assert!(check_carve_return("CARVE-OBS 900 950 12345\n", &records(&events)).is_ok());
+        let obs = "CARVE-OBS 900 950 12345\n";
+        assert!(check_carve_return(obs, &records(&events)).is_ok());
+        // The parent picked at a slice's end that switched where the trap was: the pick inside
+        // the timer interrupt, whose return (the slice's end, `O` 0) begins the turn.
+        let switched = |head: &[(char, u64, u128)]| [head, &events[1..]].concat();
+        let direct = [('I', 5, 100), ('R', 5, 120), ('K', 9, 110), ('O', 0, 0)];
+        assert!(check_carve_return(obs, &records(&switched(&direct))).is_ok());
+        // An interrupt that returned to user mode or as a preemption holds no pick; the parent
+        // requeued, or another pick, between the pick and the return loses the turn; and a slice's
+        // end after the pick's return still loses it.
+        for bad in [
+            vec![('I', 5, 100), ('R', 5, 120), ('K', 9, 110), ('O', 0, 1)],
+            vec![('I', 5, 100), ('R', 5, 120), ('K', 9, 110), ('O', 0, 2)],
+            vec![('I', 5, 100), ('R', 5, 120), ('K', 9, 110), ('R', 9, 111), ('O', 0, 0)],
+            vec![('I', 5, 100), ('R', 5, 120), ('K', 9, 110), ('K', 5, 120), ('O', 0, 0)],
+            vec![('I', 5, 100), ('R', 5, 120), ('K', 9, 110), ('O', 0, 0), ('I', 9, 200), ('O', 0, 0)],
+        ] {
+            assert!(check_carve_return(obs, &records(&switched(&bad))).is_err(), "{bad:?}");
+        }
+        // A timer interrupt returning to user mode inside the turn is no loss of it.
+        let mid = [('I', 5, 100), ('R', 5, 120), ('K', 9, 110), ('O', 0, 0), ('I', 9, 200), ('O', 0, 1)];
+        assert!(check_carve_return(obs, &records(&switched(&mid))).is_ok());
         events.insert(7, ('K', 5, 150));
-        assert!(check_carve_return("CARVE-OBS 900 950 12345\n", &records(&events)).is_err());
+        assert!(check_carve_return(obs, &records(&events)).is_err());
     }
 
     fn records_of(events: &[(char, u64)]) -> Vec<Record> {

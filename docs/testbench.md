@@ -580,7 +580,9 @@ none of its threads waits, never one it runs itself. A slice's end that picks wh
 the hart's own runner, with no `H` and no `J`: the oracle counts the preempted thread as waiting,
 as the round trip's `J` counted it, only at a timer interrupt on that hart that requeued the
 budget, began no destruction and decided the slice over (`=`), and only for a budget with no other
-thread waiting; anything else is refused, and the rank clauses judge the pick as any other. It
+thread waiting; anything else is refused, and the rank clauses judge the pick as any other. One
+that picks another budget's thread records that pick inside the interrupt and the hart's new
+runner at its return (`H`), and is judged as any pick. It
 recomputes each lift and each weight
 change from the rule, and lets a pass fall only at a weight change. A kernel built with
 `lock-trace`, a test feature that implies the trace, also records each wait for the kernel lock's

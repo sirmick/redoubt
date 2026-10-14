@@ -11,11 +11,14 @@ smp = [2]
 # preempted: answered mid-slice or at another budget's call (kernel/scheduling.md, "Preemption
 # points"). Two harts: at one, sched-wake-no-preempt proves each nap against a slice. The naps step
 # through 130 + (17k mod 1000) µs, so their ends move through the slices' phases, and each
-# spinner calls every 37 µs. Ten runs a width read 22 to 30 mid-slice and 51 to 69 at a call on
-# rv64, and 0 or 1 mid-slice and 40 to 43 at a call on rv32. Mid-slice is recorded here, not
+# spinner calls every 37 µs. Five runs a width alone read 26 to 30 mid-slice and 67 to 81 at a
+# call on rv64, and 0 to 4 mid-slice and 65 to 68 at a call on rv32; the floor, 20, is under a
+# third of the least (before the slice's end switched where it is, rv32 read 40 to 43 at a call,
+# and 17 while it picked there but switched through kmain). Mid-slice is recorded here, not
 # judged: under icount the hart armed for the timeout takes its interrupt only at its next turn,
-# after the other hart's call has answered it, so on rv32 such an interrupt finds nothing due (79
-# in one run). sched-wake-no-preempt-harts-mttcg, where the harts run at once, judges it.
+# after the other hart's call has answered it, so on rv32 such an interrupt finds nothing due.
+# sched-wake-no-preempt-harts-mttcg, where the harts run at once, judges it. A kernel built with
+# `wake-preempts` fails this case on rv32 (a wake took hart 0 from budget 37), a recorded run.
 keep_smp = true
 timeout_secs = 120
 expect = [

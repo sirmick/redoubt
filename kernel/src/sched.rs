@@ -44,13 +44,15 @@
 //! ([`leave`]). The running thread keeps the CPU until its slice ends, it blocks or exits, or a
 //! budget deadline fires; a wake never preempts (`time.rs` arms the timer for the slice's end).
 //! A slice's end picks where it is when it can ([`repick`]): the same steps of the queue as the
-//! round trip through `kmain`, and if they pick the same budget, its thread runs on.
+//! round trip through `kmain`; if they pick the same budget, its thread runs on, and if they pick
+//! another, the trap switches into it there ([`switch_here`]), as `kmain`'s switch would.
 //!
 //! # `kmain`'s switch
 //! `kmain` runs its pick with [`switch_to`], a private S-mode `ecall` into the kernel's own trap
 //! handler, which saves `kmain`'s context as it saves a thread's and resumes the picked thread
 //! ([`switch`]). It is not a system call: its tag is outside the call table, and a user-mode
-//! `ecall` with it is an unknown number (`InvalidArgument`) like any other.
+//! `ecall` with it is an unknown number (`InvalidArgument`) like any other. A slice's end that
+//! picked another budget's thread switches as `kmain` does, in the trap it is in.
 
 use redoubt_layout::{KERNEL_PID, Pid};
 use redoubt_stride::{Budgets, Harts, Marks, Ready, State};
@@ -1012,26 +1014,41 @@ pub fn preempt(ss: &mut ProcessTable, tid: TID) {
     ss.activate_process_thread(tid, KERNEL_PID, 0, true).expect("the kernel can always run");
 }
 
+/// What a slice's end did where it was ([`repick`]).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Picked {
+    /// The queue picked the running budget again: its thread runs on.
+    Own,
+    /// The queue picked this thread of another budget: the switch into it is the caller's
+    /// ([`switch_here`]).
+    Other(Pid, TID),
+    /// Nothing picked here (something is due for `kmain`'s expiry, or another thread of the budget
+    /// waits for a hart): the round trip through `kmain`, as before.
+    Kmain,
+}
+
 /// The running thread `(pid, tid)`'s slice ended (`arch::irq`): the queue picks here, as `kmain`
 /// would, when nothing is due for `kmain`'s expiry to answer first and no other thread of its
 /// budget waits for a hart (whose turn the round-robin may give). The stride takes the same steps
 /// in the same order as the round trip through `kmain` (`Harts::repick`): its budget charged and
 /// requeued behind its equals, the entry's reconcile, the pick. If the pick is its budget again,
-/// the thread runs on and `true`: no switch to `kmain` and back, the pick recorded, a new slice
-/// from its return ([`leave`]). Otherwise `false`, and the caller preempts it through `kmain`,
-/// whose pick, with nothing changed, is the one made here.
-pub fn repick(ss: &ProcessTable, pid: Pid, tid: TID) -> bool {
+/// the thread runs on ([`Picked::Own`]): no switch to `kmain` and back, the pick recorded, a new
+/// slice from its return ([`leave`]). If it is another budget's thread, the pick is recorded and
+/// the caller switches into it where it is ([`Picked::Other`], [`switch_here`]), which pays for
+/// the pick and the switch as it would for `kmain`'s. Otherwise ([`Picked::Kmain`]) the caller
+/// preempts it through `kmain`, as every slice's end went before.
+pub fn repick(ss: &ProcessTable, pid: Pid, tid: TID) -> Picked {
     if crate::time::due() {
-        return false;
+        return Picked::Kmain;
     }
     let now = ticks();
-    let in_place = MemoryManager::with_mut(|mm| {
+    let picked = MemoryManager::with_mut(|mm| {
         SCHED.with(|s| {
             let h = here();
-            let Some(b) = s.cpu.cur(h) else { return false };
+            let Some(b) = s.cpu.cur(h) else { return Picked::Kmain };
             s.settle(ss, mm);
             if mm.ready(b) > 0 {
-                return false;
+                return Picked::Kmain;
             }
             // What ran until here is folded at the switch off; from here the kernel's time is the
             // pick's, the budget picked's, as in the round trip.
@@ -1059,15 +1076,17 @@ pub fn repick(ss: &ProcessTable, pid: Pid, tid: TID) -> bool {
                     #[cfg(feature = "sched-trace")]
                     trace::record(trace::PICK, b.id, mm.sched_state(b.frame).pass);
                     s.b().billing = Some((now, Payer::Budget(b)));
-                    true
+                    Picked::Own
                 }
-                redoubt_stride::Repick::Other(..) => {
-                    // Off this hart for `kmain`'s pick, which pays for its pick and switch.
+                redoubt_stride::Repick::Other(n, (next_pid, next_tid)) => {
+                    // The pick, recorded as `kmain`'s is; the switch into it is the caller's, and
+                    // the budget picked pays for both from here, at the return ([`leave`]).
+                    mm.set_sched_cursor(n.frame, Some((next_pid, next_tid)));
                     #[cfg(feature = "sched-trace")]
-                    trace::record(trace::RUNS, 0, 0);
+                    trace::record(trace::PICK, n.id, mm.sched_state(n.frame).pass);
                     s.b().user_since = None;
                     s.b().billing = Some((now, Payer::Next));
-                    false
+                    Picked::Other(next_pid, next_tid)
                 }
                 redoubt_stride::Repick::Declined => {
                     unreachable!("budget {} has no other thread waiting", b.id)
@@ -1075,19 +1094,37 @@ pub fn repick(ss: &ProcessTable, pid: Pid, tid: TID) -> bool {
             }
         })
     });
-    if !in_place {
-        return false;
+    if picked == Picked::Kmain {
+        return picked;
     }
     // A checked build's marks and cap audits, at most once a slice, where `kmain`'s pick runs them.
+    // After a switch they run at its return ([`leave`]), once the process table counts the thread
+    // switched from as waiting, as the queue does.
     #[cfg(debug_assertions)]
-    if SCHED.with(|s| s.marks.audit_due(crate::time::now_us(), SLICE_US, false)) {
+    if picked == Picked::Own && SCHED.with(|s| s.marks.audit_due(crate::time::now_us(), SLICE_US, false)) {
         MemoryManager::with(|mm| audit_marks(ss, mm));
     }
     // The entry ended the slice, in place: recorded as the round trip's return to `kmain` records
-    // it. The return to the thread starts the next.
+    // it. The return to the thread that runs next starts its slice.
     #[cfg(feature = "sched-trace")]
     trace::slice_ended();
     crate::time::set_slice_end(crate::time::NEVER);
+    picked
+}
+
+/// A slice's end picked thread `next` of `pid` ([`Picked::Other`]): switch into it here, as
+/// `kmain`'s switch does ([`switch`]) and with the same steps, no round trip: the thread this hart
+/// ran, `tid`, is made ready (it stays runnable), the pick's address space and thread are
+/// activated, and instruction fetch is fenced before it runs. The return deschedules the budget
+/// switched from and starts the pick's slice ([`leave`]). `false` if the pick cannot be switched
+/// to, which the queue's pick rules out under the kernel lock: the caller then goes through
+/// `kmain`, which picks again, as it does after a switch of its own that cannot run.
+pub fn switch_here(ss: &mut ProcessTable, tid: TID, pid: Pid, next: TID) -> bool {
+    if ss.activate_process_thread(tid, pid, next, true).is_err() {
+        return false;
+    }
+    // As at `kmain`'s switch: another hart may have written code this one is about to fetch.
+    crate::arch::mem::sync_icache();
     true
 }
 

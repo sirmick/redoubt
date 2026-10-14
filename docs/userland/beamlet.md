@@ -582,7 +582,8 @@ did not share the hart with, gives the rate (bench:beamlet-reduction-rate):
 
 | | rv64 | rv32 |
 | --- | ---: | ---: |
-| reductions a second | 55,674 | 49,928 |
+| reductions a second | 57,529 | 52,150 |
+| before the kernel's slice end picked and switched where the trap is: reductions a second | 55,674 | 49,928 |
 | before the kernel's slice end was cut (below): reductions a second | 52,936 | 46,959 |
 | then: guest instructions a reduction | 2,374 | 2,657 |
 | then: guest instructions a step of the loop | 3,577 | 4,002 |

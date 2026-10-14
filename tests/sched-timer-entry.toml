@@ -9,17 +9,19 @@ smp = [1, 2]
 # kernel).
 kernel_features = ["hold-trace"]
 # Ticks are tenths of a microsecond on QEMU's virt board, 12.5 instructions each at shift=3. At one
-# hart the steady sections are 1,071 ticks (rv64) and 1,575 (rv32), p99 1,073 and 1,597; two are
-# cold, the program's first preemption after its calibration (1,998 and 2,524) and the window's
-# first (3,431 and 4,234). The p99 bound, 2,000, is the slower width's p99 and a quarter; the
-# max, 5,000, the slower width's cold section and a sixth. Before the kernel stopped re-arming
-# the timer three times a preemption, decoding a whole budget to move its round-robin cursor and
-# calling out for every word of a kernel object, the same run's steady sections were 2,239 and
-# 2,978 (p99 2,241 and 3,006) and its max 5,807 and 6,831: it fails both bounds on both widths.
-# Gated at one hart: under icount the harts share one clock, so at two a section's ticks count the
-# other hart's instructions too, and are recorded. The p99 bound assumes the run holds enough
-# sections that its two cold ones (rv32 2,524 and 4,234) sit above the 99th percentile: under
-# 200 sections the p99 lands on a cold one and fails; this run's length gives 355 to 369.
+# hart, where every slice's end switches budgets where the trap is, the steady sections are 928
+# ticks (rv64) and 1,388 (rv32), p99 930 and 1,415 (five runs a width alone); the longest is the
+# window's first, cold, preemption, 3,461 and 4,265. The p99 bound, 2,000, is 1.41 times the
+# slower width's p99; the max, 5,000, 1.17 times its cold section. Before the slice's end picked
+# and switched where it is, the same run's p99 was 1,096 and 1,597 (the round trip through kmain
+# with one timer arm) and, before the kernel stopped re-arming the timer three times a
+# preemption, decoding a whole budget to move its round-robin cursor and calling out for every
+# word of a kernel object, 2,241 and 3,006 with a max of 5,807 and 6,831: that one fails both
+# bounds on both widths. Gated at one hart: under icount the harts share one clock, so at two a
+# section's ticks count the other hart's instructions too, and are recorded (p99 5,433 and 7,354).
+# The p99 bound assumes the run holds enough sections that its cold ones sit above the 99th
+# percentile: under 200 sections the p99 lands on a cold one and fails; this run's length gives
+# 366 to 379.
 post_check = "sched_oracle timer_section_p99_ticks=2000 timer_section_max_ticks=5000 gate_harts=1"
 timeout_secs = 600
 expect = [

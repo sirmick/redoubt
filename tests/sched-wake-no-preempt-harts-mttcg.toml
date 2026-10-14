@@ -5,10 +5,12 @@ debug_assertions = true
 programs = ["sched-wake-no-preempt-harts"]
 kernel_features = ["sched-trace"]
 post_check = "sched_oracle wake_no_preempt=120 wake_witnesses=5 wake_mid_slice=5"
-# The icount case's program and naps. Ten runs alone on quiet cores, each width, read 52 to 78
-# mid-slice and 30 to 60 at a call (rv64), 57 to 71 and 30 to 44 (rv32). A kernel built with
-# `wake-preempts` fails it on both widths (wake took hart 0 from budget 34, rv64; from 37, rv32),
-# a recorded run each.
+# The icount case's program and naps. How many wakes come mid-slice is the host's race: with the
+# two harts on eight host cores, three runs a width read 49 to 55 (rv64) and 48 to 57 (rv32);
+# beside other cases 70 and 72; with the two vCPU threads and QEMU's I/O thread sharing two cores,
+# 10 to 25 and 3 to 18 (ten runs a width). So it runs on the quiet core set, and the bound is five.
+# A kernel built with `wake-preempts` fails it on both widths (wake took hart 0 from budget 34,
+# rv64; from 37, rv32), a recorded run each.
 smp = [2]
 keep_smp = true
 timeout_secs = 120
