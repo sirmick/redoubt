@@ -221,7 +221,8 @@ interrupt, Ctrl+C, the session's own key, or an INT or break over SSH, ends the 
 evaluated and every native stage it runs in the foreground, never the session, `bg` runs a
 pipeline in the background, and `Job.kill` destroys one job's stage budgets and nothing else
 ([the shell](../userland/shell.md#interrupting-and-killing-jobs)); and a native program's screen:
-`screen` runs a program whose `cells` frames the session checks, paces and draws, and whose keys
+`screen` runs a program whose `cells` frames the session checks, paces and draws, in Rust, a
+whole 80 by 24 screen redrawn about 12 times a second, and whose keys
 and size reach it as events on its standard input, the interrupt ending it whatever it does
 ([the shell](../userland/shell.md#a-native-programs-screen-and-the-sessions-key)). What the milestone builds on: the serving
 library's parked calls ([serving](../servers/serving.md#parked-calls)), `consoled`'s 9P console

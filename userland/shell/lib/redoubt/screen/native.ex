@@ -10,13 +10,17 @@ defmodule Redoubt.Screen.Native do
   driver, as a `Redoubt.Screen`'s process is. The host:
   - reads the program's output as records (`Redoubt.Term.Cells.split/2`), refusing one whose
     length is more than a frame of its screen can take before holding any of it;
-  - decodes each through the one decoder, a cell at a time (`Redoubt.Term.Cells.reduce/3`), so
-    a whole screen's frame is never one large term; and refuses a frame the decoder refuses, a
-    frame of any size but the one it gave the program (a frame of a size it gave before the
-    terminal last changed size is dropped, not drawn), and a cell that is not one cell's worth as
-    the session lays it out: one grapheme, and a wide one not in the last column;
-  - puts each cell into a screen buffer of its own as it is read, and hands the driver the buffer's diff at
-    most 30 times a second, which the driver draws through the one encoder;
+  - reads each straight into a screen buffer of its own with the screen natives
+    (`Redoubt.Term.Buffer.frame/3`), the one decoder in Rust, a cell at a time, so a whole
+    screen's frame is never held as terms; and refuses a frame the decoder refuses, a frame of
+    any size but the one it gave the program (a frame of a size it gave before the terminal last
+    changed size is dropped, not drawn), and a cell that is not one cell's worth as the session
+    lays it out: one grapheme (OTP's segmentation, for a symbol joining code points), and a wide
+    one not in the last column. `reference/3`, the same reading with the decoder in Elixir
+    (`Redoubt.Term.Cells.reduce/3`), is what it is held to;
+  - has the driver draw what changed in the buffer at most 30 times a second, only between
+    whole frames, and waits until it has (`Redoubt.Screen.show/2`): the driver draws it in Rust
+    from the buffer's own cells, and nothing of a frame half read or refused is ever drawn;
   - asks for the program's output at most 1 MiB a second: past that its read
     waits, the pipe fills, and the program's write waits;
   - sends the program its size first and again at each change, and each key the driver sends,
@@ -53,7 +57,10 @@ defmodule Redoubt.Screen.Native do
 
   Options: `:ctrl_c` (`:interrupt`), as `Redoubt.Screen.run/3`'s: with `:key`, Ctrl+C reaches
   the program as a key, and Ctrl+\\ alone ends it. The tests also give `:start`, a function
-  standing for the pipeline, called with the host, and `:bytes_per_second` and `:tick_ms`.
+  standing for the pipeline, called with the host, and `:bytes_per_second` and `:tick_ms`; and
+  the bench gives `stats: true`, which makes the value `{value, stats}`: the frames read whole
+  (`:read`), the frames drawn (`:drawn`), and the milliseconds from the first drawn to the last
+  (`:ms`), on the VM's clock.
   """
   @spec run(String.t(), [String.t()], keyword()) :: term()
   def run(name, args \\ [], opts \\ []) do
@@ -72,24 +79,25 @@ defmodule Redoubt.Screen.Native do
       ctrl_c: ctrl_c,
       start: Keyword.get(opts, :start, fn host -> pipeline(name, args, host) end),
       bytes_per_second: Keyword.get(opts, :bytes_per_second, @bytes_per_second),
-      tick_ms: Keyword.get(opts, :tick_ms, @tick_ms)
+      tick_ms: Keyword.get(opts, :tick_ms, @tick_ms),
+      stats: Keyword.get(opts, :stats, false)
     }
 
     heap = %{size: heap_words(), kill: true, error_logger: false, include_shared_binaries: true}
     {pid, ref} = Process.spawn(fn -> host(config) end, [:monitor, max_heap_size: heap])
-    await(pid, ref)
+    await(pid, ref, config.stats)
   end
 
   defp pipeline(name, args, host),
     do: Pipeline.run([{name, args}], input: {:records, host}, output: {:records, host})
 
-  defp await(pid, ref) do
+  defp await(pid, ref, stats) do
     receive do
-      {__MODULE__, :result, ^pid, value, errors} ->
+      {__MODULE__, :result, ^pid, value, errors, counts} ->
         Process.demonitor(ref, [:flush])
         settle(value)
         show(errors)
-        value
+        if stats, do: {value, counts}, else: value
 
       {:DOWN, ^ref, :process, ^pid, :interrupt} ->
         settle(nil)
@@ -146,13 +154,15 @@ defmodule Redoubt.Screen.Native do
         5000 -> exit(:no_terminal)
       end
 
+    buffer = Buffer.new(cols, rows)
+    Redoubt.Screen.register(config.driver, buffer)
     me = self()
     runner = spawn_link(fn -> send(me, {__MODULE__, :ended, config.start.(me)}) end)
 
     state = %{
       config: config,
       runner: runner,
-      buffer: Buffer.new(cols, rows),
+      buffer: buffer,
       size: {cols, rows},
       stale: [],
       pending: <<>>,
@@ -163,7 +173,9 @@ defmodule Redoubt.Screen.Native do
       window: now(),
       allowance: config.bytes_per_second,
       dirty: false,
-      tick: false
+      tick: false,
+      counts: %{read: 0, drawn: 0, ms: 0},
+      first_drawn: nil
     }
 
     state |> event({:size, cols, rows}) |> loop()
@@ -246,39 +258,76 @@ defmodule Redoubt.Screen.Native do
   defp bound(state),
     do: [state.size | state.stale] |> Enum.map(fn {c, r} -> Cells.max_frame(c, r) end) |> Enum.max()
 
-  # A frame is checked and put into the buffer a cell at a time, as the one decoder reads it, so a
-  # whole screen's frame is never held as one term. A frame refused after some of its cells were
-  # put draws none of them: the screen ends, and the buffer's diff is never sent.
-  defp frame(%{buffer: buffer, size: {cols, rows}} = state, body) do
+  # A frame is read into the buffer by the screen natives, so a whole screen's frame is never
+  # held as terms. A frame refused after some of its cells were put draws none of them: the
+  # screen ends, and the buffer's diff is never sent.
+  defp frame(state, body) do
+    case read(state.buffer, state.size, body) do
+      # The size given is drawn, and frames of earlier sizes are no longer awaited.
+      :ok -> dirty(%{state | stale: [], counts: Map.update!(state.counts, :read, &(&1 + 1))})
+      # A frame of a size given before the last change is dropped; of any other, refused.
+      {:size, w, h} -> if {w, h} in state.stale, do: state, else: refuse(state, :size)
+      {:error, why} -> refuse(state, why)
+    end
+  end
+
+  @doc false
+  # The frame in `body` read into `buffer`, of `size`, by the natives (`Redoubt.Term.Buffer.frame/3`),
+  # each cell checked by the one decoder and as one cell's worth: `:ok`, `{:size, w, h}` for a
+  # frame of another size, nothing put, or `{:error, why}`, `why` the decoder's reason or `:cell`.
+  # A symbol joining code points is checked here, by OTP's segmentation, and put.
+  @spec read(Buffer.t(), {pos_integer(), pos_integer()}, binary()) ::
+          :ok | {:size, pos_integer(), pos_integer()} | {:error, atom()}
+  def read(buffer, {cols, _rows}, body), do: read(buffer, cols, body, 0)
+
+  defp read(buffer, cols, body, from) do
+    case Buffer.frame(buffer, body, from) do
+      {:joined, next, x, y, symbol, style} ->
+        if one_cell?(symbol, x, cols) do
+          Buffer.put(buffer, x, y, symbol, style)
+          read(buffer, cols, body, next)
+        else
+          {:error, :cell}
+        end
+
+      read ->
+        read
+    end
+  end
+
+  @doc false
+  # `read/3`'s reference, which it is held to (test/redoubt/screen/read_test.exs): the frame
+  # decoded by `Redoubt.Term.Cells.reduce/3`, the decoder in Elixir, and each cell checked and put
+  # as it is read, the whole frame never held.
+  @spec reference(Buffer.t(), {pos_integer(), pos_integer()}, binary()) ::
+          :ok | {:size, pos_integer(), pos_integer()} | {:error, atom()}
+  def reference(buffer, {cols, rows}, body) do
     step = fn
       {:frame, %{width: ^cols, height: ^rows, clear: clear}}, nil ->
         if clear, do: Buffer.fill(buffer, {0, 0, cols, rows}, " ")
         {:cont, nil}
 
-      # A frame of a size given before the last change is dropped; of any other, refused.
       {:frame, %{width: w, height: h}}, nil ->
-        {:halt, if({w, h} in state.stale, do: :stale, else: {:refused, :size})}
+        {:halt, {:size, w, h}}
 
       {:cell, cell}, nil ->
-        if one_cell?(cell, cols) do
+        if one_cell?(cell.symbol, cell.x, cols) do
           Buffer.put(buffer, cell.x, cell.y, cell.symbol, {cell.fg, cell.bg, cell.modifiers})
           {:cont, nil}
         else
-          {:halt, {:refused, :cell}}
+          {:halt, {:error, :cell}}
         end
     end
 
     case Cells.reduce(body, nil, step) do
-      # The size given is drawn, and frames of earlier sizes are no longer awaited.
-      {:ok, nil} -> dirty(%{state | stale: []})
-      {:halt, :stale} -> state
-      {:halt, {:refused, why}} -> refuse(state, why)
-      {:error, why} -> refuse(state, why)
+      {:ok, nil} -> :ok
+      {:halt, value} -> value
+      {:error, _why} = error -> error
     end
   end
 
   # One cell's worth: one grapheme, and a wide one with room for it.
-  defp one_cell?(%{symbol: symbol, x: x}, cols) do
+  defp one_cell?(symbol, x, cols) do
     case String.graphemes(symbol) do
       [^symbol] -> Width.grapheme(symbol) == 1 or x + 1 < cols
       _more -> false
@@ -296,8 +345,10 @@ defmodule Redoubt.Screen.Native do
   defp draw(%{dirty: false} = state), do: state
 
   defp draw(state) do
-    send(state.config.driver, {:redoubt_screen, :frame, self(), Buffer.diff(state.buffer)})
-    %{state | dirty: false}
+    Redoubt.Screen.show(state.config.driver, state.buffer)
+    first = state.first_drawn || now()
+    counts = %{state.counts | drawn: state.counts.drawn + 1, ms: now() - first}
+    %{state | dirty: false, counts: counts, first_drawn: first}
   end
 
   # The next read is asked for while this second's bytes last; past them, at the next second.
@@ -328,7 +379,7 @@ defmodule Redoubt.Screen.Native do
 
   defp finish(state, value, errors) do
     send(state.config.driver, {:redoubt_screen, :close, self()})
-    send(state.config.caller, {__MODULE__, :result, self(), value, errors})
+    send(state.config.caller, {__MODULE__, :result, self(), value, errors, state.counts})
     exit(:normal)
   end
 

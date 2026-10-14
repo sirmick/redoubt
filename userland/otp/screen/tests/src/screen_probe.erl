@@ -2,7 +2,7 @@
 %% screen program calls them. Only natives are used: the tests load no OTP modules.
 %% Rebuild: erlc +deterministic -o screen/tests/fixtures screen/tests/src/screen_probe.erl
 -module(screen_probe).
--export([drawn/0, control/0, other_owner/0, fifth/0, freed/0, big/0, grown/0, styles/0]).
+-export([drawn/0, control/0, other_owner/0, fifth/0, freed/0, big/0, grown/0, styles/0, read/0, drawn_elsewhere/0]).
 
 -define(PLAIN, {reset, reset, 0}).
 -define(LIMIT, #{size => 100000, kill => true, error_logger => false}).
@@ -61,6 +61,42 @@ styles() ->
     B = redoubt_screen:new(2, 1),
     [reason(fun() -> redoubt_screen:put(B, 0, 0, [<<"x">>], S) end)
      || S <- [{red, reset, 0}, {{indexed, 256}, reset, 0}, {reset, reset, 1024}, {reset, reset}]].
+
+%% A program's frame read in: stopped at its joined symbol, gone on with after it, then frames
+%% of another size, refused, gone on with from elsewhere, not a binary, and not the caller's.
+read() ->
+    B = redoubt_screen:new(4, 1),
+    F = frame(4, 1, 0, [cell(0, <<"a">>), cell(1, <<"e", 16#301/utf8>>), cell(2, <<"界"/utf8>>)]),
+    {joined, Next, 1, 0, Joined, Style} = redoubt_screen:frame(B, F, 0),
+    1 = redoubt_screen:put(B, 1, 0, [Joined], Style),
+    Done = redoubt_screen:frame(B, F, Next),
+    Self = self(),
+    spawn(fun() -> Self ! {other, reason(fun() -> redoubt_screen:frame(B, F, 0) end)} end),
+    Other = receive {other, R} -> R end,
+    {Joined, Style, Done, redoubt_screen:diff(B),
+     redoubt_screen:frame(B, frame(5, 1, 1, []), 0),
+     redoubt_screen:frame(B, frame(4, 1, 0, [cell(0, <<"a">>), cell(0, <<"b">>)]), 0),
+     redoubt_screen:frame(B, frame(4, 1, 0, [cell(3, <<"界"/utf8>>)]), 0),
+     reason(fun() -> redoubt_screen:frame(B, F, Next) end),
+     reason(fun() -> redoubt_screen:frame(B, [F], 0) end),
+     Other}.
+
+%% Another process may draw a buffer, and draws it once; it still may not draw into it.
+drawn_elsewhere() ->
+    B = redoubt_screen:new(4, 1),
+    3 = redoubt_screen:put(B, 0, 0, [<<"a">>, <<"b">>, <<"c">>], {{indexed, 1}, reset, 1}),
+    Self = self(),
+    spawn(fun() ->
+                  Self ! {other, redoubt_screen:draw(B), redoubt_screen:draw(B),
+                          reason(fun() -> redoubt_screen:put(B, 0, 0, [<<"x">>], ?PLAIN) end)}
+          end),
+    receive {other, First, Second, Put} -> ok end,
+    {First, Second, Put, reason(fun() -> redoubt_screen:draw(make_ref()) end)}.
+
+frame(W, H, Flags, Cells) ->
+    <<1, Flags, W:16/little, H:16/little, (length(Cells)):32/little, (iolist_to_binary(Cells))/binary>>.
+
+cell(X, S) -> <<X:16/little, 0:16, (byte_size(S)), S/binary, 1, 1, 0, 0, 0:32, 1:16/little>>.
 
 limited(F) ->
     {Pid, Ref} = spawn_opt(F, [monitor, {max_heap_size, ?LIMIT}]),

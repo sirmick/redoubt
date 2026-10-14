@@ -185,6 +185,9 @@ defmodule Redoubt.Screen.NativeTest do
         {"a frame smaller than its screen", :size, quote(do: frame([cell(0, 0, "X")], size: {20, 5}))},
         {"a cell outside its screen", :position, quote(do: frame([cell(60, 0, "X")]))},
         {"a symbol of many graphemes", :cell, quote(do: frame([cell(50, 0, String.duplicate("X", 32))]))},
+        # Read by the natives up to it, the cells before it put, and the frame then refused here.
+        {"a last cell of two graphemes after cells to draw", :cell,
+         quote(do: frame(Enum.map(10..17, &cell(&1, 0, "X")) ++ [cell(20, 0, "e\u0301x")]))},
         {"a wide symbol in the last column", :cell, quote(do: frame([cell(59, 0, "界")]))},
         {"a symbol holding ESC", :symbol, quote(do: frame([cell(0, 0, "\e]52;c;eA==\a")]))},
         {"a symbol holding the session's key", :symbol, quote(do: frame([cell(0, 0, "\x1c")]))},

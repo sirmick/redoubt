@@ -107,3 +107,34 @@ fn a_buffer_resized_past_the_heap_limit_ends_its_owner() {
 fn a_style_that_is_not_one_is_badarg() {
     assert_eq!(run("styles").to_string(), "[badarg,badarg,badarg,badarg]");
 }
+
+#[test]
+fn a_programs_frame_is_read_in_stopping_at_a_joined_symbol_and_refused_as_the_decoder_refuses() {
+    let result = run("read");
+    let e = elements(&result);
+    let shown = |t: Term| OwnedTerm::new(result.heap(), t).to_string();
+    assert_eq!(result.heap().as_bits(e[0]).unwrap().to_bytes().as_ref(), "e\u{301}".as_bytes());
+    assert_eq!(shown(e[1]), "{{indexed,1},reset,1}");
+    assert_eq!(shown(e[2]), "ok");
+    let drawn = frame(&result, e[3]);
+    let drawn: Vec<(u16, u16, &str)> = drawn.cells.iter().map(|c| (c.x, c.y, c.symbol.as_str())).collect();
+    assert_eq!(drawn, [(0, 0, "a"), (1, 0, "e\u{301}"), (2, 0, "界")]);
+    assert_eq!(shown(e[4]), "{size,5,1}", "a frame of another size");
+    assert_eq!(shown(e[5]), "{error,twice}", "the decoder's reason, as the session spells it");
+    assert_eq!(shown(e[6]), "{error,cell}", "a wide symbol in the last column");
+    assert_eq!(shown(e[7]), "badarg", "going on from where no reading stopped");
+    assert_eq!(shown(e[8]), "badarg", "not a binary");
+    assert_eq!(shown(e[9]), "badarg", "not the caller's buffer");
+}
+
+#[test]
+fn another_process_draws_a_buffer_as_escape_sequences_once_and_may_not_draw_into_it() {
+    let result = run("drawn_elsewhere");
+    let e = elements(&result);
+    let bytes = |t: Term| result.heap().as_bits(t).unwrap().to_bytes().into_owned();
+    assert_eq!(bytes(e[0]), b"\x1b[0m\x1b[2J\x1b[1;1H\x1b[0;1;31mabc\x1b[0m");
+    assert_eq!(bytes(e[1]), b"\x1b[0m\x1b[0m", "drawn, it is shown");
+    let shown = |t: Term| OwnedTerm::new(result.heap(), t).to_string();
+    assert_eq!(shown(e[2]), "badarg");
+    assert_eq!(shown(e[3]), "badarg");
+}
