@@ -2,7 +2,10 @@ description = "the Elixir oracles on beamlet, under the pinned OTP and Elixir: t
 kind = "elixir"
 otp = "28.5.0.6"
 elixir = "1.20.4"
-# A cold build of beamlet and the model's trace writer on four cores, both cases at once: 33 to
-# 35 s measured, and a third.
-timeout_secs = 46
+# The build (a cold beamlet and the model's trace writer: 29 s alone on four cores, more beside
+# the rest of a bench) runs before the deadline starts. The scripts alone, built: 2.5 s; beside
+# two prebuilds: 3.2 s. The deadline is 10 s, four times the alone time; the self-check
+# (bench-elixir-oracles-broken-guard) shares this build and this deadline.
+build = ["userland/otp/tools/build-oracles"]
+timeout_secs = 10
 scripts = ["libs/steward/elixir/run-traces", "libs/wire/elixir/run-vectors"]

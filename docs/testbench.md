@@ -333,8 +333,9 @@ the job gets it as `TMPDIR` too, since a host's `/tmp` may be a RAM filesystem a
 fill. `scripts/jobs.mk` names every case as a make
 target (`rv64/<case>`, `cases-rv64`, `quiet-rv64`, `build-rv64`, `prebuilt`, `docs`) and picks
 the class for it: a boot takes one core per guest hart, a `host-tests` case or an Elixir case four
-(an Elixir case is mostly the build of beamlet and the model's trace writer), a case with a
-`fanout` two for its build while each of its jobs asks `q` for its own, and the host-clock cases
+(an Elixir case is mostly the build of beamlet and the model's trace writer, under that lease
+but outside its deadline, so it stays in this class: [Elixir oracles](#elixir-oracles)), a case
+with a `fanout` two for its build while each of its jobs asks `q` for its own, and the host-clock cases
 go quiet. A case target runs that case alone (`--exact`), from `target/prebuilt` when its width
 is there ([building once](#building-once)), else through `cargo testbench`. A case with no `arch`
 boots nothing, so it runs under `rv64/<case>` alone, and `rv32/<case>` does nothing. Case
@@ -349,7 +350,7 @@ since `jobs.mk` leases a case's cores from its own counts,
 such a sweep runs as `q run --cores M -- cargo testbench --smp N`, `M` at least `N`.
 
 **The heavy host cases.** What each costs on the 24-core build host, and the deadline it has
-(each a measured run and a third):
+(each a measured run and a third, unless its row says otherwise):
 
 | Case | Its cost | `timeout_secs` |
 | --- | --- | --- |
@@ -357,7 +358,7 @@ such a sweep runs as `q run --cores M -- cargo testbench --smp N`, `M` at least 
 | `model-host-tests` | one `cargo test` on four cores, every model test but the mutations, the steward families and their coverage check: under two minutes, the build included | none |
 | `steward-model-host-tests` | the two steward families at their counts and the check that their coverage table is reproduced ([property families](kernel/model.md#property-families)), each a job on four cores and threads: under two minutes of wall, the build included; the longest job `steward_policy`'s, 26 s | per job, 35 |
 | `rt-miri` | 12 jobs, one per file, about 100 s of wall: `heap`'s 60 to 96 s; `connection` 25 s; the rest under 10 s | per job, 128 |
-| `elixir-oracles`, `bench-elixir-oracles-broken-guard` | 33 to 35 s each from a cold build on four cores, both at once; the oracles themselves run in under a second | 46 |
+| `elixir-oracles`, `bench-elixir-oracles-broken-guard` | a cold build of beamlet and the model's trace writer, 29 s alone on four cores and up to 46 s beside a bench, outside the deadline ([Elixir oracles](#elixir-oracles)); then the scripts, 2.5 and 1.3 s alone, 3.2 and 1.7 s beside two prebuilds | the scripts', 10: four times `elixir-oracles`' alone |
 
 A case with `whole_run = false` is left out of a run with no filter and out of one whose filter
 is only part of its name; it runs when the filter is its whole name, and `--list` marks it "by
@@ -376,7 +377,7 @@ The kinds, and the fields each takes besides `description`, `arch` and `whole_ru
 | `size-budget` | the ceiling on each trusted crate's size ([below](#the-size-budget)) | `[[crate]]`: `name`, `paths`, `max_lines` |
 | `no-cruft` | the source gate ([below](#the-no-cruft-gate)) | `paths`, `[[forbidden]]` (`pattern`, `unless`, `within`), `no_allow_dead`, `one_definition`, `definition_paths`, `[[allow]]` (`path`, `rule`, `reason`) |
 | `fmt` | the formatting gate ([below](#the-formatting-gate)) | `roots`, `[[skip]]` (`path`, `reason`) |
-| `elixir` | runs scripts that check an Elixir oracle on beamlet against the Rust it shadows, each of which must exit 0, on the pinned toolchain ([below](#elixir-oracles)) | `otp`, `elixir`, `scripts` (each a path and its arguments), `must_fail`, `timeout_secs` (the scripts' together) |
+| `elixir` | runs scripts that check an Elixir oracle on beamlet against the Rust it shadows, each of which must exit 0, on the pinned toolchain ([below](#elixir-oracles)) | `otp`, `elixir`, `build` (commands run first, outside the deadline), `scripts` (each a path and its arguments), `must_fail`, `timeout_secs` (the scripts' together) |
 
 For `host-tests`, `workspace` defaults to the repository root and otherwise names a relative
 directory below it with a `Cargo.toml`; an absolute path, a path outside the repository or a
@@ -605,12 +606,13 @@ time. The tracing kernel is a test build only
 
 ### Elixir oracles
 
-<details><summary>Status: built · tested (4)</summary>
+<details><summary>Status: built · tested (5)</summary>
 
 - bench:elixir-oracles
 - bench:bench-elixir-oracles-broken-guard
 - host:testbench::another_version_is_refused
 - host:testbench::the_scripts_share_the_case_deadline
+- host:testbench::the_deadline_starts_after_the_build
 
 </details>
 
@@ -623,11 +625,18 @@ runs a module on beamlet. Before any script the case checks the toolchain: the `
 `releases/<major>/OTP_VERSION`), and `elixir --version` must say `elixir`. A missing or other
 toolchain fails the case even with `--allow-skip`, and no `must_fail` waits for it: an oracle that
 does not run catches nothing; the dev image carries both, and `scripts/setup.sh --with-beam`
-builds both on your own machine. With `timeout_secs`, the scripts together have that deadline,
-each run under `timeout` with what the ones before it left; one past it fails the case, saying
-so, and is never what a `must_fail` waits for. Nearly all of a run is the build of beamlet and
-of the model's trace writer, which every Elixir case shares through Cargo's cache: the BEAM
-starts and the oracles run in under a second, so nothing else is shared between the cases.
+builds both on your own machine. Then the case runs its `build` commands, each of which must
+exit 0, together within 600 s, a bound only a hung build reaches (a cold build's times are
+below). A failed or late build fails the case as a build, never as the oracle's timeout, and is
+never what a `must_fail` waits for. Both cases name `userland/otp/tools/build-oracles`, which
+builds beamlet, the model's trace writer and the trace checker as the scripts build them, so the
+scripts' own builds find nothing to do. With `timeout_secs`, the scripts together have that deadline, counted
+from the end of the build, each run under `timeout` with what the ones before it left; one past
+it fails the case, saying so, and is never what a `must_fail` waits for. The build is most of a
+cold run (29 s alone on four cores), and its time is the host's load: beside a whole bench, the
+two cases building the same targets at once on loaded cores, it has taken 46 s. Built, the
+scripts take 1.3 s (the self-check) and 2.5 s (`elixir-oracles`), so the deadline measures the
+oracles alone. The case's log says what the build and the scripts each took.
 
 ## Checked builds
 
