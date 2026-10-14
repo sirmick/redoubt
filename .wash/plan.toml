@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 159
+revision = 27
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -47,8 +47,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   title = "M1 (sessions over SSH, kept apart)"
   template = "milestone"
   body = "docs/plan/m1-separation.md. Alice and Bob log in over SSH (and on the console) into Elixir sessions on QEMU, each in fixed sub-budgets per label set, with files (read-only system, writable /home and /vault), kept apart and attack-tested; a dead steward restarts without a reboot; the scheduler's targets hold. The steward's second half (leases, agents, the powerbox, approvals, declassification, crash blame), the agent and the attack suite, approve@box and vault sessions over SSH, gen_tcp and the model on the real kernel moved to M3 (agents, approvals and the attack suite), after M2, on the owner's word (2026-10-07). Remaining: STEWARD2, K23, K26, WFS2, BOOT2, BEAM4's cases, K27, K29, BEAM12, BEAM13."
-  state = "reported"
-  revision = 2
+  state = "done"
+  revision = 4
 
 [[node]]
   id = "M2"
@@ -113,8 +113,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["init", "API1"]
   body = "docs/userland/beamlet.md#beamlet-on-redoubt; docs/userland/shell.md#the-shell-in-a-session (Redoubt.Shell, not IEx). Packages BEAM1-BEAM5 under it; cut by architect-10, BEAM1's brief at .wash/local/BEAM1-implementer.md."
-  state = "todo"
-  revision = 2
+  state = "done"
+  revision = 4
 
 [[node]]
   id = "fsd"
@@ -123,8 +123,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["init", "FSD3"]
   body = "docs/servers/fsd.md (packages FSD1, FSD2, FSD3); docs/userland/files.md#files-over-9p (its beamlet half is beamlet-redoubt's)"
-  state = "todo"
-  revision = 2
+  state = "done"
+  revision = 4
 
 [[node]]
   id = "gate"
@@ -182,8 +182,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M1"
   needs = ["STEWARD1", "FSD3", "BEAM2", "INIT3", "SSH1"]
   body = "docs/servers/steward.md; docs/userland/sessions.md; docs/servers/sshd.md#sessions-over-ssh. M1's half of the steward: STEWARD2 (principals, sub-budgets, sessions on the console and over SSH), K23 (restart), K26 (sshd after a restart). STEWARD3 and STEWARD4 moved to M3 (agents, approvals and the attack suite)."
-  state = "todo"
-  revision = 2
+  state = "done"
+  revision = 4
 
 [[node]]
   id = "FMT1"
@@ -1613,7 +1613,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["CTX1"]
   body = "Second of three; brief .wash/local/CTX1-brief.md, design .wash/local/CTX1-design.md. A relay program in the context's own budget serves the VM's /dev/cons; the steward hands it each channel's console. 64 KiB buffer, newest kept, a dropped-count line, cut at line boundaries, resize on reattach. Takeover is told on both terminals, with the remote address. Tier A."
   state = "done"
-  revision = 112
+  revision = 2
   overrides = ["2026-10-08: started by Orchestrator before CTX1 (reported), M1 (reported): CTX1 is reported and under its last fold; CTX2 is stacked on it by the orchestrator's ruling", "2026-10-08: started by Orchestrator before M1 (reported): named contexts run ahead of M1's acceptance (owner request 2026-10-08)", "2026-10-09: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the userland track runs ahead of its acceptance", "2026-10-10: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the userland track runs ahead of its acceptance"]
 
 [[node]]
@@ -1624,7 +1624,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["CTX2"]
   body = "Part c of named SSH contexts (brief .wash/local/CTX1-brief.md): the cap of live contexts per (principal, label set), never evicting; idle expiry of detached contexts, configurable per principal with a default; the shell's contexts()/detach()/end_context within the label set; the generation (or end-with-steward) rule on steward restart, chosen at its design checkpoint with costs. Also from CTX1's red: measure rule 3's timing (an unknown principal, label set or non-name is refused before any machine runs; a wrong key on a known principal runs the blame and session machines before login_key refuses it, counting nothing) at the SSH client, and equalize it if it is distinguishable above jitter."
   state = "done"
-  revision = 149
+  revision = 2
   overrides = ["2026-10-10: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the userland track runs ahead of its acceptance", "2026-10-10: started by Orchestrator before CTX2 (reported), M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the userland track runs ahead of its acceptance"]
 
 [[node]]
@@ -1729,7 +1729,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["SMP2"]
   body = "Cut from SMP2: beamlet on the machine runs one scheduler thread (docs/userland/beamlet.md); give a session's VM N schedulers on N harts and a case measuring a parallel Elixir workload's throughput at 2 harts against 1 on both widths, with the VM's heap and the session budget unchanged. Design checkpoint first (scheduler threads vs the I/O hub, locks in the VM, budgets per thread)."
   state = "done"
-  revision = 134
+  revision = 2
   overrides = ["2026-10-10: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the several-harts track runs ahead of its acceptance", "2026-10-10: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; the several-harts track runs ahead of M1's acceptance"]
 
 [[node]]
@@ -1760,7 +1760,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["PIPE1"]
   body = "M2 page 'On Redoubt' step 4: native.md#killing-a-job, shell.md#interrupting-and-killing-jobs. Each native stage in its own budget; Job.kill and Ctrl+C/Ctrl+\\ destroy the job's budgets and everything they started, never the session; follow() stops on the interrupt. Attack cases: a job ends and only it; no program swallows the interrupt; an interrupted line loses only itself. Design checkpoint first. Tier A."
   state = "done"
-  revision = 28
+  revision = 2
   overrides = ["2026-10-09: started by Orchestrator before M1 (reported): M2 'On Redoubt' step 4, ahead of M1's acceptance", "2026-10-09: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the userland track runs ahead of its acceptance"]
 
 [[node]]
@@ -1771,7 +1771,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["JOB1"]
   body = "M2 page 'On Redoubt' step 5: shell.md#a-native-programs-screen-and-the-sessions-key. A native program sends cells frames on stdout; the session decodes them through the one decoder and draws through the encoder; Ctrl+\\ stays the session's. Attack: a frame or key sequence smuggling 0x1C, a native program's text reaching the terminal unescaped, a hijacked program drawing beyond its cells. Tier A (drawing path)."
   state = "done"
-  revision = 52
+  revision = 2
   overrides = ["2026-10-09: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the userland track runs ahead of its acceptance", "2026-10-10: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the userland track runs ahead of its acceptance"]
 
 [[node]]
@@ -1790,9 +1790,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "smp"
   needs = ["SMP6"]
-  body = "M2 page 'Several harts' step 6: per-hart magazines refilled from the bitmap under the lock and drawn from with interrupts off; frames zeroed as they enter a magazine, by step 5's in-flight rule. Attack case: a hart racing to allocate, map or free a frame in a magazine. Tier A: the kernel red."
-  state = "reported"
-  revision = 155
+  body = "M2 page 'Several harts' step 6: per-hart magazines refilled from the bitmap under the lock and drawn from with interrupts off; frames zeroed as they enter a magazine, by step 5's in-flight rule. Attack case: a hart racing to allocate, map or free a frame in a magazine. Tier A: the kernel red.\nPARKED by the owner 2026-10-12 until the lock split (step 7). Built as Option X on wp-SMP5 1ecb4d3c8 (on 783aae576, base 58326f13c; pushed to origin): kernel-red found it correct (mutations caught; ownership, R81, refill CAS states, <= 2 zeroings at return, audit) but of little value under one big lock: endpoint_create sections -8 %, lock hold < 1 %, lock waits +1.4 %; in-flight peak 80.7k -> 24.4k frames. Reopen with the split; rebase onto main with kernel-red's P2-2 (take_one's 'more' and wake mask exclude magazine frames; the return zeroings must not reintroduce a pending-timer pass); an MTTCG churn case would show the real gain. Record: .wash/local/SMP5-report.md, .wash/local/handoffs/smp5-implementer.md."
+  state = "parked"
+  revision = 2
   overrides = ["2026-10-10: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; the several-harts track runs ahead of M1's acceptance"]
 
 [[node]]
@@ -1823,7 +1823,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["SMP4"]
   body = "M2 page 'Several harts' step 5, reworded by measurement: zero on reclaim (freed frame -> in flight -> zeroed outside the lock by the freeing hart -> bitmap; allocation zeroes nothing), not zero on allocate. The in-flight invariant as a rule beside R11, with the model's rule and a mutation, and an attack case (a second hart racing to allocate, map or free an in-flight frame). Shootdown waits stay under the lock (measured ~0), a residual. Kernel: Tier A."
   state = "done"
-  revision = 151
+  revision = 2
   overrides = ["2026-10-09: started by Orchestrator before M1 (reported): several-harts track runs ahead of M1's acceptance", "2026-10-09: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; the several-harts track runs ahead of M1's acceptance", "2026-10-10: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; the several-harts track runs ahead of M1's acceptance"]
 
 [[node]]
@@ -1865,7 +1865,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["SMP4"]
   body = "From SMP4's measurements: with audits excused, the remaining 2-hart misses are in the picks: budget-churn-shell rv64 404 and deadline-flood rv64 ~410 (want 450+), containment's bystander rv32 442, and sched-exit-churn's threads-exit near its bound (rv32 465 vs 450; kept @1); a creator carving and destroying children reweighs ~240 times and lifts the victim out of the cap set ~80 times (rv32 45) while holding both harts ~60% outside audits; and an audit-excused waiter keeps its slice (SMP4's P2), which moved deadline-flood rv64 875 -> 413. Find whether the cap-set lift/reweigh rules give the victim less than R12 promises on several harts, fix the rule or restate the target with the model, and judge those lines at 2 harts. Also restate sched-wake-no-preempt's proof for several harts (a timeout answered at the first entry on any hart is not a preemption) and judge it at 2. Kernel: Tier A."
   state = "done"
-  revision = 41
+  revision = 2
   overrides = ["2026-10-09: started by Orchestrator before M1 (reported): several-harts track runs ahead of M1's acceptance", "2026-10-09: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; the several-harts track runs ahead of M1's acceptance"]
 
 [[node]]
@@ -1876,7 +1876,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["TRY1"]
   body = "Owner's question (does it properly idle?). Boot launch's machine with 4 harts, log in, leave the prompt idle for 60 s; count from outside (QEMU -d int over the window's file offsets) interrupts per second per hart by cause and user ecalls, and QEMU's host CPU from /proc/<pid>/stat; measure first, then ceilings at ~2x; a hot spot found becomes a follow-up (a test-only kernel per-budget wake count). Quiet class. Tier B unless the kernel changes."
   state = "done"
-  revision = 23
+  revision = 2
   overrides = ["2026-10-09: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the tooling track runs ahead of its acceptance"]
 
 [[node]]
@@ -1887,7 +1887,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["B45"]
   body = "From B45: on the machine, printing a 1 MiB line takes about 2 minutes (Text.visible plus the encoder). Profile on beamlet (which of grapheme walking, escaping, measuring, encoding dominates), make the common case (printable ASCII/UTF-8 with no controls) a fast path, and set a throughput target with a case. Escaping path: Tier A."
   state = "reported"
-  revision = 100
+  revision = 2
   overrides = ["2026-10-09: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the shell track runs ahead of its acceptance", "2026-10-10: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the shell track runs ahead of its acceptance"]
 
 [[node]]
@@ -1897,7 +1897,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   body = "Follows TRY1 and IDLE1. `./launch --system --keep-disk` keeps the disk image under .tmp per arch (reuses it if its layout matches the image's manifest; otherwise refuses with the reason and the flag to start fresh, never silently reformats). Without the flag, a fresh disk as now. The read-only system volume still comes from the build, so a rebuilt system boots against kept home/vault volumes. GETTING-STARTED's 'Try the system' says so. A bench case: launch with --keep-disk, write a file at the prompt, relaunch, read it back. Tier B tooling."
   state = "done"
-  revision = 67
+  revision = 2
   overrides = ["2026-10-09: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the tooling track runs ahead of its acceptance", "2026-10-10: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the tooling track runs ahead of its acceptance"]
 
 [[node]]
@@ -1906,9 +1906,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "smp"
   needs = ["IDLE1"]
-  body = "From IDLE1's measurement (.wash/local/IDLE1-report.md; the red's reading of it): at rest m_software is 2.9 of 3.9 interrupts/s per hart; 559 of 625 land with epc in TicketLock::acquire_ticket against 602 release wake_halted ecalls, so about 1.04 harts woken per release: one waiter per hand-off, not every hart. The question is why the lock changes hands ~10/s on a machine at rest, with every hart halted: who takes it (timer entries re-arming? the idle loop?), and rearm's 501 set_timer against ~200 s_timer interrupts (2.5x re-arming per interrupt; a shared earliest timeout armed on every hart is the suspect, to be confirmed). Find the cause, remove the needless hand-offs and re-arms, then lower launch-idle's per-hart ceiling toward the measurement. Kernel: Tier A, the kernel red; nothing changes at one hart unless rearm does."
+  body = "From IDLE1's measurement (.wash/local/IDLE1-report.md; the red's reading of it): at rest m_software is 2.9 of 3.9 interrupts/s per hart; 559 of 625 land with epc in TicketLock::acquire_ticket against 602 release wake_halted ecalls, so about 1.04 harts woken per release: one waiter per hand-off, not every hart. The question is why the lock changes hands ~10/s on a machine at rest, with every hart halted: who takes it (timer entries re-arming? the idle loop?), and rearm's 501 set_timer against ~200 s_timer interrupts (2.5x re-arming per interrupt; a shared earliest timeout armed on every hart is the suspect, to be confirmed). Find the cause, remove the needless hand-offs and re-arms, then lower launch-idle's per-hart ceiling toward the measurement. Kernel: Tier A, the kernel red; nothing changes at one hart unless rearm does.\nAlso (kernel-red at B57, 2026-10-12): the post-login rv32 drain takes 5.8-6.2 s (rv64 ~0.35 s); B57 measured only the boot drain with counters (.tmp/B57/measure-drain-b57.patch; idle-with-pending-and-no-drainer 0.3-0.4 ms, gaps were A3 waiting on busy harts). If B57 has merged, take the same counters on one rv32 post-login drain here; more than a few ms of idle-with-pending-and-no-drainer reopens it as an R81 liveness defect."
   state = "todo"
-  revision = 24
+  revision = 2
 
 [[node]]
   id = "SCHED4"
@@ -1918,7 +1918,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["SCHED3"]
   body = "SCHED3's B1 was dropped by ruling (.wash/qa/sched3-b1-evidence.md; .wash/local/architect-questions.md 'SCHED3 B1') with a trigger: it returns if the oracle's report-only count of timer entries billed to a budget other than the one interrupted reaches 1 % of a victim's charged pool in a gate case. Met on wp-SCHED3 before merge: deadline-flood-billed-traced rv64 at 2 harts, 16 deadlines, 87 of 96 destructions on hart 0 under the victim, 89 entries, 833,543 ticks, ~17 % of 4.99M charged; victim 482 of 1000 (passes). Placement depends on timing alone. Form, as the Architect amended the ruling: the branch's (the global earliest item and its payer, None on a tie; rearm reads runner_ids(), O(harts); no scan of the deadlines on the switch path), NOT a per-budget cached minimum. Code: .wash/local/SCHED3-B1-33eaaf326.patch (wp-SCHED3's WIP 33eaaf326). Build the failing negative from this placement (`timer-any-hart` must fail where the count is gated), gate the count in deadline-flood-billed-traced and sched-exit-churn at 2 harts, measure deadline-notice latency before and after on both widths (baseline p99 4.6/5.1/4.6 ms rv64, 6.2/6.1/5.2 ms rv32; within one section), timer.md and scheduling.md say the rule; device interrupts stay IRQ1's residual. Kernel: Tier A, the kernel red; model rule and mutation if a rule changes."
   state = "todo"
-  revision = 34
+  revision = 2
 
 [[node]]
   id = "B47"
@@ -1927,7 +1927,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   body = "Found by NSCR1 on main a72e774b8 (PIPE1 + JOB1 code). In one console session, Pipeline.run([{\"pipe-stage\", [\"say\",\"hi\"]}]) typed once per line: runs 1-4 return ok and the session's processes go back to {10,1}; runs 5 and on return {:error, :refused}. Ports, VM processes and the namespace (9 entries) stay flat; a direct Redoubt.Pipes.open(1) after four pipelines succeeds, so the refusal is later in the fifth start (make_pipes, connect or launch). A one-process weight-1 budget stays for good after the first pipeline (processes {10,2}, weight {100,1}): piped's own, which is by design if piped is the session's long-lived server; say so on the page or fix it. Today's cases run at most four pipelines, which is why they pass. Repro: .wash/local/B47-repro.md. Find the bound (a handle table, a served-file slot, piped's pipe table, launch's MAX_JOBS, a budget not returned), fix it, and add a case that runs eight pipelines in one session on both widths. Acts with the session's authority: main, Tier A, the steward red."
   state = "done"
-  revision = 96
+  revision = 2
   overrides = ["2026-10-09: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the userland track runs ahead of its acceptance", "2026-10-10: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the userland track runs ahead of its acceptance"]
 
 [[node]]
@@ -1937,7 +1937,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   body = "Found by B46 on main (rv64, smp 1, icount shift=3, alice's console session): Enum.reduce(1..262144, 0, &+/2) takes 22.7 s and a tail-recursive byte match over 256 KiB 17.2 s, about 87 us of guest time per loop step; native BIFs over the same 256 KiB are fast (:binary.match 0.13 s, :re.run 0.15 s, :binary.copy 0.05 s); on host beamlet the same loops take ~10 ms. 87 us is ~10,000 guest instructions a reduction, far beyond TCG's slowdown, so something per reduction (a kernel call, a clock read, a scheduler-yield to the I/O hub, an atomic the hub thread spins on, a reductions check that traps) or another VM thread spinning. Measure first (the kernel's trace of the session's calls per second during the loop: ecalls, timer, the hub thread's share; then perf on host beamlet with the platform's clock/yield hooks stubbed), find the cost, remove it, and gate a reductions-per-second floor on the machine with a case on both widths (the shell's interactive feel depends on it: B46's 8 KB/s was one symptom). userland/otp: Tier A, the beamlet/steward red; kernel changes, if any, the kernel red."
   state = "done"
-  revision = 79
+  revision = 2
   overrides = ["2026-10-09: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the userland track runs ahead of its acceptance", "2026-10-10: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the userland track runs ahead of its acceptance"]
 
 [[node]]
@@ -1947,8 +1947,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   needs = ["NSCR1"]
   body = "From NSCR1: the session decodes a program's cells frames a cell at a time in Elixir (Cells.reduce/3) after a whole-frame decode into a list of maps failed a 2.7 MB allocation under a frame flood and killed the session VM. The cell-at-a-time path costs about 0.5 s per full 30 KB frame on both widths, so the decoder, not the 1 MiB/s bound, paces floods, and a full-screen native program redraws at about 2 frames/s. Add a beamlet native that decodes a frame straight into the host's screen buffer (the same checks as the Elixir decoder, held to the same vectors; refused never repaired; bounded by the buffer's size), keep the Elixir decoder as the reference the vectors hold it to, and gate a frames-per-second floor with a case. userland/otp and the drawing path: Tier A, the steward/beamlet red."
-  state = "todo"
-  revision = 53
+  state = "done"
+  revision = 13
+  overrides = ["2026-10-12: started by Orchestrator before M1 (reported): M1 is reported, not done, by the owner's milestone split (2026-10-07); M2's packages proceed on it"]
 
 [[node]]
   id = "B48"
@@ -1958,7 +1959,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["B47"]
   body = "From B47's report (.wash/local/B47-report.md, 'Open'): each pipeline binds piped's connection into the session's namespace (Redoubt.Pipes, /dev/pipe) and a sys.known entry with its handle stays after the pipeline ends and piped's budget is destroyed; with B47's Life the stale handle closes nothing, but the entry and the slot are never returned, so a long session leaks one per pipeline until a table fills. Find the owner of the entry (the bind, the Pipes server, the Known table), return it when the pipeline's job ends (or reuse one piped per session if that is the design: say which on native.md), host test that a thousand pipelines leave the table where it started, and extend pipe-eight or add a sibling that runs 64 in one session on both widths. Acts with the session's authority: main, Tier A, the steward red."
   state = "todo"
-  revision = 72
+  revision = 2
 
 [[node]]
   id = "K31"
@@ -1968,7 +1969,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["SMP6"]
   body = "From BEAM19's exact instruction counts (.wash/local/BEAM19-report.md; QEMU exec log weighted by block length, icount shift=3, rv64 smp 1): while a session's VM runs a tight loop, each kernel entry (the timer interrupt at the slice, the scheduler's pick and return) costs about 12,000 kernel instructions, about 20 % of the hart. Measure the entry's parts with the kernel's trace and the exec log (trap save/restore, the lock, the pick, billing, reconcile marks, audits in a checked build vs none in release, the return), find what is proportional to nothing the entry does, and cut it; a reductions-per-second case already exists (beamlet-reduction-rate) and a kernel-side bound (instructions or ticks per entry, measured in the oracle net of audits) is the gate on both widths. Nothing changes in any rule; the scheduler's targets hold. Kernel: Tier A, the kernel red."
   state = "done"
-  revision = 158
+  revision = 2
   overrides = ["2026-10-10: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; the several-harts track runs ahead of M1's acceptance", "2026-10-10: started by Orchestrator before M1 (reported): M1 is reported, not done, by the owner's milestone split (2026-10-07); M2's open kernel packages proceed on it, as K31's first implementer did"]
 
 [[node]]
@@ -1978,7 +1979,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   body = "Found by B47's gates on main 8d0a19415 (NSCR1 merged): rv32/nscr-hostile-text fails 3 of 3 alone on main (rv64 passes; on wp-B47 1 of 2). The case waits for the line that shows the OSC 52 attempt made visible (^[]52;c;...) but the console emits it split in two, so the expect never matches; the session reaches its end, after_all is true, and the case times out. Find why the line splits on rv32 only (the UART write chunking, the relay's 2 KiB chunk, the shell's line width, or the case's own expect anchored to one line) and fix the right one: if the console legitimately splits long lines, the expect must match across the split (as B29/B30 handled ordering and prompt drawing), else the writer's chunking is the bug. Both widths, several runs each. Tests/tooling: Tier B, one reviewer (steward-red)."
   state = "done"
-  revision = 104
+  revision = 2
   overrides = ["2026-10-10: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the userland track runs ahead of its acceptance"]
 
 [[node]]
@@ -1989,7 +1990,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["B47"]
   body = "From B47's review (steward-red, .wash/qa/B47-stale-close.md and the B47 renewal): B47's Life covers the handles the VM minted and those returned through servers launched under a budget, but a request's handles arrive with no Life because the kernel tells a receiver badge, account and labels, never the sender's budget. So a program in a VM-carved budget that holds a VM-served endpoint (Elixir can pass one in launch.handles; no shell path does today) and sends a handle it minted can, after its budget is destroyed, make a later collection close a reused index in the session's own table: not the startup handles (console, steward, namespace are Owned::kept, never freed), but a sibling job's budget (its destroy then fails, pages leak), a piped or stage connection, or the VM's internal endpoints (a waiter's wake, a serve thread's, a job's exit endpoint), which can hang or break the session. No widening beyond the session, but more than such a program is given. Guard: when launch.handles passes a served endpoint into a launch in a carved budget, mint a fresh badge on the receive right the VM holds (serve.rs mints there already) and map badge -> that budget's Life; a request's handles from that badge go under the Life, or are closed eagerly at the budget's end. Host test: a launched program sends a minted handle, its budget is destroyed, a collection closes nothing at that index; a machine case under pipe-eight's setup. beamlet.md's residual becomes the rule. userland/otp: Tier A, the steward red. The kernel handle generation (owner's decision pending) is the construction fix for the whole class; this is the VM's own guard either way."
   state = "todo"
-  revision = 98
+  revision = 2
 
 [[node]]
   id = "K32"
@@ -1999,7 +2000,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["SMP6"]
   body = "Found by SMP6 (its report and kernel-red's renewal): the TCB table on docs/kernel/README.md that splits the kernel's `unsafe` by crate and reason was stale before SMP6 and SMP6 changes it again (Sv39 to 11). Make the page's split derive from, or be checked against, tests/unsafe-budget.toml's ratchet (a docs check that fails when the two disagree, as the size budget's does), correct the numbers, and say on the page how the split is kept true. Docs and tooling: Tier B, one reviewer."
   state = "done"
-  revision = 128
+  revision = 2
   overrides = ["2026-10-10: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; the several-harts track runs ahead of M1's acceptance"]
 
 [[node]]
@@ -2009,7 +2010,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   body = "Seen in train 17's whole bench on 98b866854 (CTX2, B47, B46, B49): steward-home-quota failed on rv64 and rv32 alike at step 9, `File.rm(\"/home/alice/a\")` after alice's home reached enospc answered `{:error, :eio}` (the alice ssh log shows it), and the case waited for `{:rm, :ok}` to its 610 s deadline. Alone, the same case passes in ~225 s on c7efc9b67 and a4c093827 (bisect, .tmp/train-17b/bisect.log), so the failure needs the bench's load (the net class runs one at a time, beside boots). An rm answering eio is wrong under any load: find where eio arises (walfsd's write path when the volume is full and a request is slow or retried; beamlet's files.rs retry after a busy answer (BEAM11); B47's Io release of an ended connection racing a late message; the 9P client's timeout mapped to eio) with a trace of the failing run (reproduce by running the case beside two or three boots), fix it, and make the case's wait for the rm bounded by its own step deadline rather than the case's. Both widths. Tier A if the fix is in a server or beamlet's platform (steward-red), else Tier B."
   state = "todo"
-  revision = 116
+  revision = 2
 
 [[node]]
   id = "B52"
@@ -2018,7 +2019,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   body = "Seen by BEAM18 (.wash/local/BEAM18-report.md names the test): ./test-shell failed once on a test that also fails about 2 of 30 runs on main 98b866854, and passed on rerun. A flaky host test costs every shell package a rerun and hides a real race. Reproduce with 30 runs on main (both VMs: beamlet and the BEAM), find the race (the driver's console fixture, a timing assumption, a shared temp dir), fix the test or the code, and show 60 clean runs. Tests only unless the code is at fault (then the owning page's tier). Tier B, one reviewer."
   state = "todo"
-  revision = 123
+  revision = 2
 
 [[node]]
   id = "B53"
@@ -2027,7 +2028,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   body = "The orchestrator could not run .wash/save.sh for most of 2026-10-09/10: step 3 pushes main fast-forward unconditionally, and main held a train whose bench had not run (SWARM: a push follows the train's bench), so saving .wash/local meant copying save.sh's step 5 by hand. Also, step 1 refuses on any dirty worktree, including members' scratch worktrees under .tmp (measurement exports), which stalled saves for hours. Add `--local-only` (steps 4 and 5: wp-* branches and the wash-local snapshot; never main), make step 1 ignore worktrees under .tmp/ (scratch by the project's rule) while still refusing dirty .worktrees/*, and say both on SWARM.md 'Saving and resuming' and PROJECT.md. Tooling: Tier B, one reviewer; the owner owns save.sh so the change is proposed to the owner before merge."
   state = "todo"
-  revision = 125
+  revision = 2
 
 [[node]]
   id = "B54"
@@ -2036,7 +2037,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   body = "Noted by kernel-red while reviewing K32 (its K32 result): run directly as `cargo test -p redoubt-doccheck` in the reviewer's shell, c11_code, untracked_code_is_not_checked and narrow_cases_fire fail with 'C11 did not fire', while `cargo testbench docs` passes in the same worktree. C11 checks package ids in code; its fixtures appear to depend on the environment (a git checkout state, the tmp dir, the working directory). Reproduce both ways, find the dependence, and make the tests pass from any directory and shell the project supports (through q too); say on docs/testbench.md how doccheck's tests are run. Tests/tooling only: Tier B, one reviewer."
   state = "todo"
-  revision = 129
+  revision = 2
 
 [[node]]
   id = "K33"
@@ -2045,8 +2046,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "smp"
   needs = ["K31"]
   body = "From K31's measurement (.wash/local/K31-report.md): after K31's cuts a timer entry costs ~9,000 instructions on rv64 (13,200 rv32), and about half is the structural round trip when the slice ends and the same budget is picked again: leave(kmain) with deschedule (~3.6k), kmain's pick (~6.7k before K31's cursor fix), the switch trap and leave(VM). Design question first (the Architect, or the orchestrator while it is blocked): when the slice ends and the runnable set has not changed, can the hart re-pick in place (the stride's pass advanced, the cursor moved) without descheduling through kmain, and what does the model need to keep R12's shares and the preemption points (scheduling.md) provable? Then build it with the oracle's per-entry bound (sched-timer-entry) lowered to the new measurement with margin, the sched-* set at 1 and 2 harts both widths unchanged in verdict, reduction-rate moving up again. Kernel and stride: Tier A, the kernel red; model rule and mutation if a rule changes."
-  state = "todo"
-  revision = 139
+  state = "reported"
+  revision = 22
+  overrides = ["2026-10-12: started by Orchestrator before M1 (reported): M1 is reported, not done, by the owner's milestone split (2026-10-07); M2's kernel packages proceed on it"]
 
 [[node]]
   id = "B55"
@@ -2054,8 +2056,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M2"
   body = "Seen in the whole benches of trains 15 and 18 (2026-10-09/10): bench-elixir-oracles-broken-guard, a bounded-class host case that builds beamlet and runs libs/steward/elixir/run-traces --break not_locked, 'ran past the case's deadline of 46 s' beside the rest of the bench, then passed alone in 1.9 s and 2.4 s. Twice per day it costs the orchestrator a rerun under the shared-host rule. Find what the deadline measures (the beamlet build under load? the oracle itself?), split the build out of the timed part (the bounded class's 4 cores against a saturated machine) or move the case to the quiet class, and set its deadline from the measured alone time with a stated margin; docs/testbench.md's class table says why. Tests/tooling: Tier B, one reviewer."
-  state = "todo"
-  revision = 140
+  state = "done"
+  revision = 6
+  overrides = ["2026-10-12: started by Orchestrator before M1 (reported): M1 is reported, not done, by the owner's milestone split (2026-10-07); M2's packages proceed on it"]
 
 [[node]]
   id = "B56"
@@ -2064,7 +2067,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "smp"
   body = "Found by train 18's whole bench on 4b84112f2: launch-idle fails on both widths, interrupts per hart 119.1/s (rv64) and 161.2/s (rv32) against the ceiling of 9, host CPU over too; IDLE1 measured ~3/s on 6b46c8c86. Attributed by first-parent bisect to SMP6 (191.1/s at its merge 58326f13c alone); SMP6 dropped from train 18 (rebuilt as K32 + BEAM18), fix on wp-SMP6 (8fb11dc37 on 98b866854). CAUSE (measured on 8fb11dc37, .wash/local/SMP6-report.md): the rate is a 60 s average of a 1-2 s burst at the window's start. The login frees ~33k frames (~130 MiB) that sit in flight; when every hart goes idle together, all four drain their own pending lists at once, each frame a lock round trip (A1), the drainers contend, and nearly every re-acquire halts and is woken by the releaser's IPI (m_software at acquire_ticket's wfi paired 1:1 with wake_halted): ~32,900 of 33,160 IPIs fall in those two seconds; afterwards the rest is IDLE1-like (~3/s). The idle loop does halt when its list is empty; no timer storm; user ecalls as IDLE1. FIX: one hart drains at a time under the lock; a hart idle while another drains halts as before; when the drainer's list empties it wakes one idle hart with frames pending (one IPI per hart per drain). Then measure the single drainer's time (~33k x ~30 us) and its host-cores cost over the window; if the drain pushes host cores over 0.01, launch-idle waits for the system to settle before its window (frames in flight at zero via the trace, or a stated settle time) rather than moving the ceiling, and testbench.md and memory.md say that after a large free the idle harts spend about a second zeroing before the machine is quiet. Keep A1, A3 and the drain. Gate: launch-idle both widths at 4 harts under the ceilings; the per-cause table before/after in the report. Kernel: Tier A, kernel-red. Blocks SMP6's merge."
   state = "done"
-  revision = 152
+  revision = 2
 
 [[node]]
   id = "B57"
@@ -2072,9 +2075,10 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M2"
   needs = ["M1"]
-  body = "kernel-red's remedy named at SMP6's merge (train 20): the idle window is a host-clock measurement, and about half of rv32's 0.005-0.008 cores is the login drain (35k frames, 0.25-0.32 s) falling inside it, so a busy host can push one window over the 0.01 ceiling. Fix: the case opens its window once the kernel's frames-in-flight count reaches 0 (the kernel already counts them; a fixed settle time could hide a drain that never ends), and prints the drain's length and host cost beside the window's numbers. The ceiling stays 0.01. Pages: docs/kernel/memory.md (Frames in flight), docs/testbench.md (the machine at rest). Not a merge blocker; it is the home of the flake if the train bench fails launch-idle on host cores."
-  state = "todo"
-  revision = 153
+  body = "Reopened 2026-10-14 after acceptance at cd40d1eb2: train 22's whole bench failed beamlet-reduction-rate, beamlet-schedulers-mttcg and beamlet-schedulers-one-hart-mttcg on both widths, alone too. The kernel's fall line `mem: frames in flight 0, at most N` is printed between consoled's `[con ID] ` prefix and the program's text (the system goes idle during the cases' sleep loops, so the drain falls then), and the case's `^\\[con ID\\] :timed$` never matches. Evidence: .worktrees/train-20/target/testbench/run-2587263-1792018359801758854/beamlet-reduction-rate-rv64-smp1.log line 62-64. Any kernel line can split a consoled line this way; B57's is the first that fires during a session. Removed from train 22; the fix and the rule it needs (a consoled line is one UART write, or a kernel line waits for the console's line) are with kernel-red-2 on QA thread B57-split-line. Original: launch-idle's window opens on a host clock while R81's login drain may still run; open it once frames in flight reach 0, and print the drain beside it. Reports: .wash/local/B57-report.md, reviews .wash/local/B57-review-2026-10-14.md and kernel-red-2's round 2 result."
+  state = "active"
+  revision = 27
+  overrides = ["2026-10-12: started by Orchestrator before M1 (reported), M1 (reported): M1 is reported, not done, by the owner's milestone split (2026-10-07); M2's packages proceed on it"]
 
 [[node]]
   id = "B58"
@@ -2083,5 +2087,14 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   needs = ["M1"]
   body = "Found by K31's implementer (2026-10-10, .wash/local/K31-report.md 'sched-wake-no-preempt-harts'): with a 2,500 us nap, rv64 sched-wake-no-preempt-harts fails 'wake took hart' although the kernel rightly ended the slice: the trace record O carries slice_over as sampled when the entry began, not the decision irq.rs takes after the expiry walk, so a slice ending inside a long entry is recorded as not over (pass 2) and the oracle reads a wake that took a hart. sched-trace feature only, a few lines: record the kernel's own slice_over decision. Then lengthen the case's nap (2,500 us) so the sleeper's wake lands mid-slice and witnesses the wake-no-preempt property regardless of the call phase (K31 kept CALL_US 50 as the small fix; its toml quotes the counts). Pages: docs/kernel/scheduling.md (the trace record, wake-no-preempt), docs/testbench.md (the scheduler oracle). Gate: sched-wake-no-preempt-harts both widths with the long nap, >= 5 runs, mid-slice witnesses present; the recorded wake-preempts negative still fails. Tier B, kernel-red (trace only)."
-  state = "todo"
-  revision = 159
+  state = "done"
+  revision = 7
+
+[[node]]
+  id = "B59"
+  title = "A session starts in `/`, the namespace root, where nothing is writable: `ed(\"notes.txt\")` on the console answers `Not saved: :enoent`; a session starts in its home"
+  template = "package"
+  parent = "M2"
+  body = "Found by the owner by hand on 2026-10-14 on `./launch --system`'s console session: `ed(\"notes.txt\")`, Ctrl+S, dialog `Not saved: :enoent`. The VM starts with cwd `/` (userland/otp/vm/src/vm.rs:575) and nothing sets it at a session's start; only the `cd/1` helper (shell/helpers.ex:34) ever does. The root holds only the bound slots, so every relative file command fails until `cd(\"/home/alice\")`. Fix: a session starts in its principal's home (the steward binds it for console, SSH and vault sessions alike: servers/steward/src/own.rs:264-271; a vault session's home is still its home), the prompt shows it, and a session whose home is absent or unreadable starts in `/` and says so once. Case: the launch-system or a console case runs `File.write` of a bare name at the prompt and reads it back from /home/alice; a negative with no home line. Pages: docs/userland/shell.md (the loop, session commands), docs/userland/sessions.md if it states the start directory. Tier: shell track, steward-red reviews (what a session reaches at start is unchanged: a cwd adds no authority). Size S."
+  state = "done"
+  revision = 26
