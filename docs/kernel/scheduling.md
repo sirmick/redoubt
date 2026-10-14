@@ -67,10 +67,12 @@ no dependencies.
 
 ### Preemption points
 
-<details><summary>Status: built · partly tested: that an interrupt's wake does not preempt, and that another budget's deadline does, are not attacked by a case · tested (8)</summary>
+<details><summary>Status: built · partly tested: that an interrupt's wake does not preempt, and that another budget's deadline does, are not attacked by a case · tested (10)</summary>
 
 - bench:sched-wake-no-preempt
 - bench:sched-wake-no-preempt-harts
+- bench:sched-wake-no-preempt-harts-mttcg
+- host:testbench::the_oracle_decides_whether_a_timer_interrupt_ended_the_slice
 - bench:budget-deadline
 - bench:sched-timer-entry
 - host:redoubt-model::scheduler_contracts_hold
@@ -95,11 +97,17 @@ runner whose slice has not ended for its own reason (its slice's end, a block, a
 a deadline): the woken thread first runs at a pick, an idle hart's or one after a runner left for
 such a reason. `sched-wake-no-preempt` proves it at one hart nap by nap, each against the slice
 that follows it; `sched-wake-no-preempt-harts` judges it at two, each wake at the entry that made
-it, and needs at least five of its sixty wakes answered where they could have preempted, mid-slice
-or at another budget's call (11 to 15 on rv32 and 32 to 45 on rv64 in the runs so far, all at a
-call: no wake comes mid-slice, since the other hart is not armed for a newly noted timeout). A kernel built with `wake-preempts`,
-whose timeout wake preempts the entering thread as a deadline does, fails it on both widths, in a
-recorded negative run.
+it, its naps' ends stepped through the slices' phases, and needs at least twenty of its hundred and
+twenty wakes answered where they could have preempted, mid-slice or at another budget's call (40
+to 69 at a call in ten runs a width). Whether a slice ended at a timer interrupt the oracle
+decides itself, from the decision's inputs the trace records (its end and now), so a slice that
+ends during the entry's own expiry counts as ended, as the kernel ends it. Under `icount` a wake
+comes mid-slice on rv64 (22 to 30) but at most once on rv32, whose armed hart takes its interrupt
+only at its next turn, after the other hart's call has answered the timeout; so
+`sched-wake-no-preempt-harts-mttcg`, the same program where the harts run at once, needs five
+mid-slice (52 to 78 on rv64 and 57 to 71 on rv32, ten runs a width). A kernel built with
+`wake-preempts`, whose timeout wake preempts the entering thread as a deadline does, fails both on
+both widths, in recorded negative runs.
 
 A budget deadline preempts whatever runs, because the destruction lifts passes and removes
 budgets, so the queue must be picked again. A thread that entered the kernel just as the deadline
@@ -1247,7 +1255,7 @@ tells whoever reads the console who runs when. It exists only under the Cargo fe
   `sched-budget-churn`, `sched-budget-churn-shell`, `sched-exit-churn`, `sched-timer-flood`,
   `sched-carve-return`, `sched-carve-inflation`, `deadline-flood-billed-traced`), `sched-ties`,
   `sched-debt-lift`, `sched-lift-delay`, `sched-wake-no-preempt`,
-  `sched-wake-no-preempt-harts`, `sched-cluster`,
+  `sched-wake-no-preempt-harts`, `sched-wake-no-preempt-harts-mttcg`, `sched-cluster`,
   `sched-cluster-old-control`, `sched-latency`, `sched-latency-tcg`, `sched-lock-contention`,
   `sched-lock-contention-4`, `sched-timer-entry`, `irq-boot-hart-only`, `kernel-containment`, `endpoint-destroy-full`, `smp-fence` and
   `worst-walk`.
@@ -1411,6 +1419,11 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   slice, about 2,600 ticks a slice, so `sched-capped`'s late join reads 449 of 1000 against
   500 (434 at `icount` shift 4) and the oracle's nobody share is 71 of 1000 where it was 30. The
   two-hart shares are recorded there and judged in `sched-capped-mttcg` (497 to 501 over five
+  runs a width). Turns decide where a timeout is answered too: a hart's timer armed for it fires
+  in the hart's next turn, by which the other hart's call has answered it, so on rv32
+  `sched-wake-no-preempt-harts` has at most one wake mid-slice under `icount` (0 or 1 in ten runs,
+  and 79 of its interrupts finding nothing due in one); it records them, and
+  `sched-wake-no-preempt-harts-mttcg` judges them (52 to 78 on rv64 and 57 to 71 on rv32 over ten
   runs a width).
 - **Every hart pays for each device interrupt.** An unmasked source raises the external interrupt
   on every hart's context, so each hart in user mode or idle when it rises traps, and all but one
@@ -1454,8 +1467,9 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   `bench-poweroff-missing` keeps one hart too, a bound of the bench's own.
   `sched-latency-tcg` runs at two harts: the kernel's lines wait, whole, for a program's line in
   progress ([the console's one writer](devices.md#the-consoles-one-writer)).
-  `sched-capped` (two, three and four harts), `sched-capped-mttcg` (two), `sched-lock-contention` (two) and
-  `sched-lock-contention-4` (four) keep the counts they are about.
+  `sched-capped` (two, three and four harts), `sched-capped-mttcg` (two), `sched-lock-contention` (two),
+  `sched-lock-contention-4` (four), `sched-wake-no-preempt-harts` and
+  `sched-wake-no-preempt-harts-mttcg` (two) keep the counts they are about.
 - **A call within one budget crosses harts.** A wake sends an idle hart the reschedule interrupt
   even when the woken thread's budget runs elsewhere, so a server and its client in one budget
   hand each call and reply across two harts, each hand-off an interrupt and a wait for the lock,

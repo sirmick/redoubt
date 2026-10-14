@@ -70,7 +70,10 @@
 //! nobody's, inside each share's window (`HART-SHARE`), and those that found another budget's wait
 //! ended early; a case can require some of the latter in a share's window
 //! (`stale_waits_in=<share>`), so the
-//! check it runs cannot pass for want of the interrupts it is about.
+//! check it runs cannot pass for want of the interrupts it is about. Whether the interrupt ended
+//! the slice this check decides itself: the kernel records the decision's inputs after the
+//! expiry (`=`: the slice's end and now, µs), the slice is over if its end is not after now, and
+//! the return (`O`: 1 to user mode, 0 the slice's end, 2 a preemption) must say the same.
 //!
 //! **The kernel's time nobody pays for** (kernel/scheduling.md, "Residual risks") closes the
 //! trace, one `C` record: the kernel's ticks on every hart in its id, the ticks charged to budgets
@@ -168,7 +171,7 @@ pub fn parse(log: &str) -> Result<Vec<Record>, String> {
             return Err(bad());
         }
         let kind = f[2].chars().next().ok_or_else(bad)?;
-        if f[2].len() != 1 || !"WRDPKLlefrqwAaGgvNnXYZUVTtIBEOMmCSJHQFukzxchjy0pidbos".contains(kind) {
+        if f[2].len() != 1 || !"WRDPKLlefrqwAaGgvNnXYZUVTtIBEOMmCSJHQFukzxchjy0pidbos=".contains(kind) {
             return Err(bad());
         }
         records.push(Record {
@@ -370,6 +373,10 @@ struct TimerEntry {
     expired: Option<(u64, u128)>,
     /// Each charge: the payer, the ticks, and whether it came after the expiry's end.
     charges: Vec<(u64, u64, bool)>,
+    /// The hart it came on, and its decision whether the slice is over (`=`): the slice's end and
+    /// now, µs.
+    hart: u64,
+    decided: Option<(u64, u128)>,
 }
 
 /// Judge a timer interrupt at its return (to user mode or not): after an expiry that billed
@@ -596,6 +603,8 @@ pub fn check(records: &[Record]) -> Result<Summary, String> {
                     at: r.pass as u64,
                     expired: None,
                     charges: Vec::new(),
+                    hart: r.hart,
+                    decided: None,
                 });
             }
             'x' => {
@@ -609,6 +618,8 @@ pub fn check(records: &[Record]) -> Result<Summary, String> {
                     at: r.pass as u64,
                     expired: None,
                     charges: Vec::new(),
+                    hart: r.hart,
+                    decided: None,
                 });
             }
             'c' => match open_timer.as_mut().and_then(|e| e.external.as_mut()) {
@@ -620,7 +631,7 @@ pub fn check(records: &[Record]) -> Result<Summary, String> {
                     ));
                 }
             },
-            'B' | 'E' | 'O' if open_timer.is_none() => {
+            'B' | 'E' | 'O' | '=' if open_timer.is_none() => {
                 return Err(format!("record {}: a timer interrupt's record outside one", r.seq));
             }
             'B' => {
@@ -633,9 +644,36 @@ pub fn check(records: &[Record]) -> Result<Summary, String> {
                     return Err(format!("record {}: a timer interrupt's second or malformed expiry", r.seq));
                 }
             }
+            '=' => {
+                let e = open_timer.as_mut().expect("checked above");
+                if e.hart != r.hart || e.external.is_some() || e.decided.replace((r.id, r.pass)).is_some() {
+                    return Err(format!(
+                        "record {}: a slice's end decided outside a timer interrupt on its hart, or twice",
+                        r.seq
+                    ));
+                }
+            }
             'O' if r.pass > 2 => return Err(format!("record {}: a malformed return", r.seq)),
             'O' => {
                 let e = open_timer.take().expect("checked above");
+                // Whether the slice ended is the oracle's to decide, from the decision's inputs:
+                // its end not after now. Its return must say the same: to user mode only with the
+                // slice running, to `kmain` as its end only with it over, and as a preemption (a
+                // deadline's, before any decision) only without.
+                let over = e.decided.is_some_and(|(end, now)| u128::from(end) <= now);
+                let says = match r.pass {
+                    1 => "returned to user mode",
+                    0 => "ended the slice",
+                    _ => "preempted",
+                };
+                if (r.pass == 0) != over {
+                    return Err(format!(
+                        "record {}: a timer interrupt {says}, but its decision {} says the slice {}",
+                        r.seq,
+                        e.decided.map_or("(none)".into(), |(end, now)| format!("end {end} µs at {now} µs")),
+                        if over { "is over" } else { "runs" }
+                    ));
+                }
                 match e.external {
                     Some(claim) => check_external_entry(&e, claim, &mut sum)?,
                     None => check_timer_entry(&e, r.pass == 1, &mut sum)?,
@@ -945,21 +983,24 @@ fn check_wake_no_preempt(records: &[Record], expected: usize) -> Result<String, 
 /// interrupt, another budget's call, or `kmain`'s own. The sleeper is the one budget that woke at
 /// least `expected` times; each of its wakes is judged on the hart that recorded it:
 /// - inside a timer or device interrupt (`I` or `x` to `O`): returning to user mode (`O` 1), the runner it
-///   interrupted continued: a witness; returning to `kmain` with the runner's slice over at the entry (`O`
-///   0), the slice ended there: not judged; returning to `kmain` before it (`O` 2), the entry took the hart,
-///   and the check fails unless it destroyed a budget (`X`), as a deadline does;
+///   interrupted continued: a witness, mid-slice; returning to `kmain` with the runner's slice over as the
+///   entry decided it (`O` 0, which [`check`] holds to its `=`), the slice ended there: not judged; returning
+///   to `kmain` without (`O` 2), the entry took the hart, and the check fails unless it destroyed a budget
+///   (`X`), as a deadline does;
 /// - at another entry while the hart runs a budget (a call): that budget is not requeued (`R`) before the
 ///   hart's next interrupt, pick or switch: a witness;
 /// - in `kmain`, after the hart's runner left: if it left still runnable (`R`) outside an interrupt, with no
 ///   destruction (`X`), that entry took its hart, and the check fails; if it blocked, ended, or its slice
 ///   ended, nothing ran to preempt.
 ///
-/// At least `witnesses` of the wakes must be witnesses, so the check cannot pass for want of
-/// wakes that could have preempted.
+/// At least `witnesses` of the wakes must be witnesses, and at least `mid_slice` of them mid-slice,
+/// so the check cannot pass for want of wakes that could have preempted, nor with every one at a
+/// call.
 fn check_wake_no_preempt_harts(
     records: &[Record],
     expected: usize,
     witnesses: usize,
+    mid_slice_least: usize,
 ) -> Result<String, String> {
     let mut wakes = BTreeMap::<u64, Vec<usize>>::new();
     for (i, r) in records.iter().enumerate().filter(|(_, r)| r.kind == 'W') {
@@ -1033,9 +1074,9 @@ fn check_wake_no_preempt_harts(
         }
         in_kmain += 1;
     }
-    if mid_slice + at_call < witnesses {
+    if mid_slice + at_call < witnesses || mid_slice < mid_slice_least {
         return Err(format!(
-            "wake-no-preempt: budget {sleeper}'s {} wakes: {mid_slice} mid-slice, {at_call} at another entry, {at_end} at a slice's end, {in_kmain} in `kmain`; fewer than {witnesses} could have preempted",
+            "wake-no-preempt: budget {sleeper}'s {} wakes: {mid_slice} mid-slice, {at_call} at another entry, {at_end} at a slice's end, {in_kmain} in `kmain`; fewer than {witnesses} could have preempted, or fewer than {mid_slice_least} mid-slice",
             at.len()
         ));
     }
@@ -3057,6 +3098,7 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
             "driver_wake_p50_searches",
             "driver_wake_p99_searches",
             "wake_witnesses",
+            "wake_mid_slice",
         ]
         .contains(&name)
             || measure.is_some_and(|m| MEASURES.contains(&m))
@@ -3067,13 +3109,14 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
         bounds.insert(name, bound);
     }
     // One hart proves each wake against the slice that follows it; several judge the entry that
-    // answered each wake, and need witnesses (`wake_witnesses`).
+    // answered each wake, and need witnesses (`wake_witnesses`), so many mid-slice (`wake_mid_slice`).
     let several = records.iter().any(|r| r.hart != 0);
     let wake_proof = match (wake_no_preempt, several) {
         (Some(count), false) => Some(check_wake_no_preempt(&records, count)?),
         (Some(count), true) => {
             let witnesses = bounds.get("wake_witnesses").copied().unwrap_or(0) as usize;
-            Some(check_wake_no_preempt_harts(&records, count, witnesses)?)
+            let mid_slice = bounds.get("wake_mid_slice").copied().unwrap_or(0) as usize;
+            Some(check_wake_no_preempt_harts(&records, count, witnesses, mid_slice)?)
         }
         (None, _) => None,
     };
@@ -4238,20 +4281,26 @@ mod tests {
             ('R', 7, 50, 0),
             ('O', 0, 0, 0),
         ];
-        let judged = check_wake_no_preempt_harts(&on(&harts), 3, 2);
+        let judged = check_wake_no_preempt_harts(&on(&harts), 3, 2, 0);
         assert!(
             judged.as_ref().is_ok_and(
                 |s| s.contains("1 mid-slice, 1 at another entry") && s.contains("1 at a slice's end")
             ),
             "{judged:?}"
         );
+        // One mid-slice witness is not two.
+        assert!(check_wake_no_preempt_harts(&on(&harts), 3, 2, 1).is_ok());
+        assert!(
+            check_wake_no_preempt_harts(&on(&harts), 3, 2, 2)
+                .is_err_and(|e| e.contains("fewer than 2 mid-slice"))
+        );
         // Two witnesses are not three.
-        assert!(check_wake_no_preempt_harts(&on(&harts), 3, 3).is_err_and(|e| e.contains("fewer than 3")));
+        assert!(check_wake_no_preempt_harts(&on(&harts), 3, 3, 0).is_err_and(|e| e.contains("fewer than 3")));
         // The call's wake requeues hart 1's runner before its next interrupt: it took the hart.
         let mut took = harts.to_vec();
         took.insert(7, ('R', 9, 25, 1));
         assert!(
-            check_wake_no_preempt_harts(&on(&took), 3, 0)
+            check_wake_no_preempt_harts(&on(&took), 3, 0, 0)
                 .is_err_and(|e| e.contains("took hart 1 from budget 9"))
         );
         // The last wake's interrupt came before spinner 7's slice was over (`O` 2): it took the
@@ -4259,28 +4308,28 @@ mod tests {
         let mut early = harts.to_vec();
         early[14].2 = 2;
         assert!(
-            check_wake_no_preempt_harts(&on(&early), 3, 0)
+            check_wake_no_preempt_harts(&on(&early), 3, 0, 0)
                 .is_err_and(|e| e.contains("took hart 0 from budget 7"))
         );
         early.insert(12, ('X', 11, 0, 0));
-        assert!(check_wake_no_preempt_harts(&on(&early), 3, 0).is_ok());
+        assert!(check_wake_no_preempt_harts(&on(&early), 3, 0, 0).is_ok());
         // The call on hart 1 requeues runner 9 and leaves for `kmain`, which records the wake:
         // it took the hart. Had runner 9 blocked (`D`), nothing ran to preempt.
         let mut left = harts.to_vec();
         left.splice(6..7, [('R', 9, 25, 1), ('H', 0, 0, 1), ('W', 8, 20, 1)]);
         assert!(
-            check_wake_no_preempt_harts(&on(&left), 3, 0)
+            check_wake_no_preempt_harts(&on(&left), 3, 0, 0)
                 .is_err_and(|e| e.contains("took hart 1 from budget 9"))
         );
         left[6].0 = 'D';
         assert!(
-            check_wake_no_preempt_harts(&on(&left), 3, 0).is_ok_and(|s| s.contains("1 in `kmain`")),
+            check_wake_no_preempt_harts(&on(&left), 3, 0, 0).is_ok_and(|s| s.contains("1 in `kmain`")),
             "{:?}",
-            check_wake_no_preempt_harts(&on(&left), 3, 0)
+            check_wake_no_preempt_harts(&on(&left), 3, 0, 0)
         );
         // No budget woke three times.
         assert!(
-            check_wake_no_preempt_harts(&on(&harts), 4, 0).is_err_and(|e| e.contains("at least 4 wakes"))
+            check_wake_no_preempt_harts(&on(&harts), 4, 0, 0).is_err_and(|e| e.contains("at least 4 wakes"))
         );
     }
 
@@ -5292,7 +5341,13 @@ mod tests {
             }
             let (&b, &(pass, _)) = queue.iter().min_by_key(|(id, (p, k))| (*p, *k, **id)).unwrap();
             let after = pass + u128::from(SLICE_US * 10) * stride / weight[&b];
-            t.extend([(e, 'K', b, pass), (e, 'I', b, u128::from(now)), (e, 'R', b, after), (e, 'O', 0, 0)]);
+            t.extend([
+                (e, 'K', b, pass),
+                (e, 'I', b, u128::from(now)),
+                (e, '=', now, u128::from(now)),
+                (e, 'R', b, after),
+                (e, 'O', 0, 0),
+            ]);
             queue.insert(b, (after, (1, i128::from(n as u32))));
             counted += if b == 44 { 1_000 } else { 0 };
             now += SLICE_US;
@@ -5513,6 +5568,7 @@ mod tests {
                 (e, 'K', b, pass),
                 (e, 'H', b, said),
                 (e, 'I', b, now),
+                (e, '=', now as u64, now),
                 (e, 'R', b, after),
                 (e, 'O', 0, 0),
             ]);
@@ -5556,7 +5612,7 @@ mod tests {
         let ok = run(&(on_harts(&t, &[], 1) + &format!("HART-SHARE v 100 {end} 30 2:1 300:1\n")), "");
         assert!(
             ok.as_ref().is_ok_and(|s| s.contains(
-                "hart share v: 256 of 1000 of the CPU the kernel charged in [100, 500] µs (records 27..=222)"
+                "hart share v: 256 of 1000 of the CPU the kernel charged in [100, 500] µs (records 27..=261)"
             ) && s.contains(
                 "at 1 harts: budget 44 10000 ticks of 38999, its lock waits 0 of 0 ticks taken out"
             ) && s
@@ -5690,6 +5746,7 @@ mod tests {
             (2, 'W', 44, 0),
             (2, 'K', 44, 0),
             (2, 'I', 44, 100),
+            (2, '=', 100, 100),
             (2, 'R', 44, 1 << 24),
             (2, 'O', 0, 0),
             (3, 'K', 44, 1 << 24),
@@ -5699,13 +5756,14 @@ mod tests {
             (4, 'W', 44, 1 << 28),
             (4, 'K', 44, 1 << 28),
             (4, 'I', 44, 200),
+            (4, '=', 200, 200),
             (4, 'O', 0, 0),
         ]);
         let log = trace(&t) + "CHARGED-SHARE b 50 300 0 2\n";
         let ok = run(&log, "");
         assert!(
             ok.as_ref().is_ok_and(|s| s.contains(
-                "charged share b: 1000 of 1000 of the CPU the kernel charged to the budgets under its marks in [50, 300] µs (records 25..=34): budget 44 1600 ticks of 1600, audits charged to none; competitors by weight {44: 100}, expected 1000; 1 wakes in the window; charged outside its marks: {}: target met (1000 <= share <= 1000)"
+                "charged share b: 1000 of 1000 of the CPU the kernel charged to the budgets under its marks in [50, 300] µs (records 25..=35): budget 44 1600 ticks of 1600, audits charged to none; competitors by weight {44: 100}, expected 1000; 1 wakes in the window; charged outside its marks: {}: target met (1000 <= share <= 1000)"
             )),
             "{ok:?}"
         );
@@ -5803,6 +5861,86 @@ mod tests {
         }
     }
 
+    /// Whether a timer interrupt ended its runner's slice is the oracle's to decide, from the
+    /// decision's inputs the kernel records after its expiry (`=`: the slice's end, now): over if
+    /// its end is not after now. The return must agree: to user mode only with the slice running,
+    /// as its end only with it over, and as a preemption only without; a decision outside a
+    /// timer interrupt on its hart, or a second, is malformed.
+    #[test]
+    fn the_oracle_decides_whether_a_timer_interrupt_ended_the_slice() {
+        let pick = [(2, 'W', 1, 5), (2, 'K', 1, 5)];
+        let interrupt = |decision: Option<(u64, u128)>, ret: u128| {
+            let mut head = vec![(1, 'I', 1, 100)];
+            head.extend(decision.map(|(end, now)| (1, '=', end, now)));
+            head.push((1, 'O', 0, ret));
+            verdict(&[head, pick.to_vec()].concat())
+        };
+        // Its end reached: the slice ended, at its end or past it.
+        assert!(interrupt(Some((100, 100)), 0).is_ok());
+        assert!(interrupt(Some((90, 100)), 0).is_ok());
+        // Its end not reached: back to user mode, or a preemption; no decision (a deadline's,
+        // before it) is a preemption too.
+        assert!(interrupt(Some((101, 100)), 1).is_ok());
+        assert!(interrupt(Some((101, 100)), 2).is_ok());
+        assert!(interrupt(None, 2).is_ok());
+        assert!(interrupt(None, 1).is_ok());
+        for (what, decision, ret, says) in [
+            (
+                "an end the decision did not reach",
+                Some((101, 100)),
+                0,
+                "ended the slice, but its decision end 101 µs at 100 µs says the slice runs",
+            ),
+            (
+                "an end with no decision",
+                None,
+                0,
+                "ended the slice, but its decision (none) says the slice runs",
+            ),
+            (
+                "a preemption with the slice over",
+                Some((100, 100)),
+                2,
+                "preempted, but its decision end 100 µs at 100 µs says the slice is over",
+            ),
+            (
+                "user mode with the slice over",
+                Some((99, 100)),
+                1,
+                "returned to user mode, but its decision end 99 µs at 100 µs says the slice is over",
+            ),
+        ] {
+            let v = interrupt(decision, ret);
+            assert!(v.as_ref().is_err_and(|e| e.contains(says)), "{what}: {v:?}");
+        }
+        for (what, head) in [
+            ("outside an interrupt", vec![(1, '=', 100, 100)]),
+            ("twice", vec![(1, 'I', 1, 100), (1, '=', 100, 100), (1, '=', 100, 100), (1, 'O', 0, 0)]),
+            (
+                "in a device interrupt",
+                vec![(1, 'x', 1, 100), (1, 'c', 3, 0), (1, '=', 100, 100), (1, 'O', 0, 0)],
+            ),
+        ] {
+            let v = verdict(&[head, pick.to_vec()].concat());
+            assert!(
+                v.as_ref().is_err_and(|e| e.contains("a timer interrupt's record outside one")
+                    || e.contains("a slice's end decided outside a timer interrupt on its hart, or twice")),
+                "{what}: {v:?}"
+            );
+        }
+        let other_hart = verdict_on(&[
+            (1, 'I', 1, 100, 0),
+            (1, '=', 100, 100, 1),
+            (1, 'O', 0, 0, 0),
+            (2, 'W', 1, 5, 0),
+            (2, 'K', 1, 5, 0),
+        ]);
+        assert!(
+            other_hart
+                .is_err_and(|e| e.contains("a slice's end decided outside a timer interrupt on its hart"))
+        );
+    }
+
     #[test]
     fn a_timer_interrupt_bills_the_budgets_whose_items_it_expired() {
         let pick = [(2, 'W', 1, 5), (2, 'K', 1, 5)];
@@ -5822,7 +5960,7 @@ mod tests {
             // Found 2's wait ended before its timeout: 2 pays for the walk and the rest.
             vec![(1, 'I', 1, 100), (1, 'E', 2, 2), (1, 'B', 2, 9), (1, 'B', 2, 30), (1, 'O', 0, 1)],
             // Found nothing and ended 1's slice: 1 pays, and the CPU goes to `kmain`.
-            vec![(1, 'I', 1, 100), (1, 'E', 0, 0), (1, 'B', 1, 30), (1, 'O', 0, 0)],
+            vec![(1, 'I', 1, 100), (1, 'E', 0, 0), (1, '=', 100, 100), (1, 'B', 1, 30), (1, 'O', 0, 0)],
             // Found nothing, ended no slice: nobody pays.
             vec![(1, 'I', 1, 100), (1, 'E', 0, 0), (1, 'O', 0, 1)],
             vec![(1, 'I', 1, 100), (1, 'B', 1, 0), (1, 'O', 0, 1)],
@@ -5853,7 +5991,10 @@ mod tests {
                 vec![(1, 'I', 1, 100), (1, 'E', 2, 2), (1, 'B', 1, 30), (1, 'O', 0, 1)],
             ),
             ("found nothing, no slice end", vec![(1, 'I', 1, 100), (1, 'B', 1, 30), (1, 'O', 0, 1)]),
-            ("found nothing, another budget", vec![(1, 'I', 1, 100), (1, 'B', 3, 30), (1, 'O', 0, 0)]),
+            (
+                "found nothing, another budget",
+                vec![(1, 'I', 1, 100), (1, '=', 100, 100), (1, 'B', 3, 30), (1, 'O', 0, 0)],
+            ),
         ] {
             let v = verdict(&[head, pick.to_vec()].concat());
             assert!(v.as_ref().is_err_and(|e| e.contains("a timer interrupt")), "{what}: {v:?}");

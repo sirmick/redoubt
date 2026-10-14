@@ -797,8 +797,11 @@ fn run_child(arg: usize, more: Option<fn(Option<Role>, bool)>) -> ! {
             rd::process_exit(0)
         }
         Some(Role::WakeDelay) => {
-            let (nap, mut least) = (param(0), u64::MAX);
-            for _ in 0..param(1) {
+            // The k-th nap is `base + (k x step) mod 1000` µs: a step moves each nap's end through
+            // the spinners' phases (0 keeps every nap at `base`).
+            let (base, step, mut least) = (param(0), param(2), u64::MAX);
+            for k in 0..param(1) {
+                let nap = base + (k * step) % 1000;
                 let before = ticks();
                 let _ = rd::receive(None, nap, 0);
                 least = least.min(ticks().saturating_sub(before + nap * tpu) / tpu);

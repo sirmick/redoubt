@@ -535,7 +535,7 @@ parks when it is done, unless its exit is the point of its case.
 
 ### The scheduler oracle
 
-<details><summary>Status: built · tested (26)</summary>
+<details><summary>Status: built · tested (28)</summary>
 
 - bench:sched-ties
 - bench:sched-capped
@@ -546,6 +546,8 @@ parks when it is done, unless its exit is the point of its case.
 - host:testbench::kernel_sections_say_what_the_lock_waits_waited_behind
 - host:testbench::the_driver_wake_is_judged_in_searches_of_its_own_run
 - host:testbench::a_pick_passes_over_only_a_budget_that_other_harts_run
+- host:testbench::the_oracle_decides_whether_a_timer_interrupt_ended_the_slice
+- bench:sched-wake-no-preempt-harts-mttcg
 - host:testbench::lock_waits_are_reported_per_mille_of_the_harts_time
 - host:testbench::lock_waits_take_the_lock_in_ticket_order
 - host:testbench::a_shootdown_record_is_passed_over
@@ -766,14 +768,18 @@ interrupted. It reports, judging nothing by them, the timer interrupts that char
 than the one they interrupted and those ticks: another budget's timer work in the interrupted
 budget's time on its hart ([timer](kernel/timer.md#r12-scheduling-for-timer-work)). An
 interrupt's return (`O`) says where it goes: 1 to user mode, 0 to `kmain` with the interrupted
-runner's slice over at the entry, 2 to `kmain` before it, a preemption. With
+runner's slice over, 2 to `kmain` without, a preemption. Whether the slice is over the oracle
+decides itself: the kernel records its decision's inputs after the entry's expiry (`=`: the
+slice's end and now, µs), the slice is over if its end is not after now, and a return that says
+otherwise fails, as does a decision outside a timer interrupt on its hart or a second one. With
 `wake_no_preempt=N` the oracle proves a timeout only wakes: at one hart N naps each against the
 slice that follows it; on several, each wake of the one budget that woke N times or more at the
 entry that made it, a return to user mode or a call its runner goes on from counting as a witness
 and a preemption (`O` 2, or the runner requeued outside an interrupt, with no destruction) failing
-it, with at least `wake_witnesses=K` witnesses. A kernel built with `wake-preempts`, whose timeout
-wake preempts as a deadline does, fails `sched-wake-no-preempt-harts` on both widths in a recorded
-negative run. The trace ends with one record of
+it, with at least `wake_witnesses=K` witnesses and at least `wake_mid_slice=M` of them mid-slice. A
+kernel built with `wake-preempts`, whose timeout wake preempts as a deadline does, fails
+`sched-wake-no-preempt-harts` and `sched-wake-no-preempt-harts-mttcg` on both widths in recorded
+negative runs. The trace ends with one record of
 the kernel's time (`C`): every hart's ticks in the kernel, from a trap's entry or `kmain`'s loop
 to the return to user mode or the idle, in its id; the ticks charged to budgets in its pass; and
 in its entry field, which it alone uses so, the ticks the checked build's audits took.
