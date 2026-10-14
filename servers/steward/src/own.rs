@@ -203,15 +203,17 @@ impl Own {
 
 /// What a session's VM is told of itself, as launch arguments (servers/steward.md, "Authentication
 /// and sessions"; userland/sessions.md, "What a session is told"): `principal=NAME`; `label=NAME:ID` for each
-/// label of its set, in the set's order; and `context=NAME` for a named context, none for the principal's
-/// default one or the console's session. Fixed for the VM's life, and information only: what the session can
-/// reach is its connections, whatever these say.
+/// label of its set, in the set's order; `context=NAME` for a named context, none for the principal's
+/// default one or the console's session; and `home=/PATH`, where slot 1 binds the principal's home, for a
+/// labelled session as for a plain one, none for a principal with no home. Fixed for the VM's life, and
+/// information only: what the session can reach is its connections, whatever these say.
 pub fn session_args(own: &Own, principal: &str, labels: &[u64], context: Option<&str>) -> Vec<String> {
     // init's check gave every label of a set a name line; one without would have no name.
     let name = |id: &u64| own.labels.iter().find(|(_, l)| l == id).map_or("", |(n, _)| n.as_str());
     let labels = labels.iter().map(|id| format!("label={}:{id}", name(id)));
     let context = context.filter(|c| !c.is_empty()).map(|c| format!("context={c}"));
-    core::iter::once(format!("principal={principal}")).chain(labels).chain(context).collect()
+    let home = own.home(principal).map(|h| format!("home={}", h.path));
+    core::iter::once(format!("principal={principal}")).chain(labels).chain(context).chain(home).collect()
 }
 
 /// The system volume's server: the handle name the steward is handed it under and gives a

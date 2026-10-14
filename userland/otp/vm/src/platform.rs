@@ -233,6 +233,9 @@ pub struct Identity {
     pub labels: Vec<(String, u64)>,
     /// The context's name; `None` for the principal's default context or the console's session.
     pub context: Option<String>,
+    /// Where the session's namespace binds the principal's home, a clean absolute path; `None`
+    /// for a principal with no home.
+    pub home: Option<String>,
 }
 
 /// The result of a system module or application lookup. Refusal is terminal for this lookup;

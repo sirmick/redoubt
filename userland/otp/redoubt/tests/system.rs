@@ -560,15 +560,22 @@ fn a_launch_takes_what_it_is_given_and_its_end_is_an_event() {
 }
 
 /// What a session is told of itself is read from its arguments, and anything malformed tells
-/// nothing: no principal, two of them or two contexts, a label that is not `NAME:ID`.
+/// nothing: no principal, two of them, two contexts or two homes, a label that is not `NAME:ID`,
+/// a home that is not a clean absolute path.
 #[test]
 fn a_sessions_identity_is_read_from_its_arguments() {
     let told = beamlet_redoubt::identity;
     let labels = vec![("alice-secrets".to_string(), 7)];
-    assert_eq!(
-        told(&["budget_pages=9", "principal=alice", "label=alice-secrets:7", "context=work", "Elixir.M"]),
-        Some(Identity { principal: "alice".into(), labels, context: Some("work".into()) })
-    );
+    let args = [
+        "budget_pages=9",
+        "principal=alice",
+        "label=alice-secrets:7",
+        "context=work",
+        "home=/home/alice",
+        "M",
+    ];
+    let (context, home) = (Some("work".into()), Some("/home/alice".into()));
+    assert_eq!(told(&args), Some(Identity { principal: "alice".into(), labels, context, home }));
     assert_eq!(told(&["principal=bob"]), Some(Identity { principal: "bob".into(), ..Identity::default() }));
     for bad in [
         &["budget_pages=9"][..],
@@ -576,6 +583,9 @@ fn a_sessions_identity_is_read_from_its_arguments() {
         &["principal=a", "label=x"],
         &["principal=a", "label=x:y"],
         &["principal=a", "context=x", "context=y"],
+        &["principal=a", "home=/h", "home=/i"],
+        &["principal=a", "home=h"],
+        &["principal=a", "home=/h/../i"],
     ] {
         assert_eq!(told(bad), None, "{bad:?}");
     }
@@ -594,7 +604,7 @@ fn the_platform_tells_a_session_its_identity() {
         let startup = fixture::startup(&block);
         let mut p = Redoubt::new(&startup, Box::new(Dirs(Vec::new()))).expect("a platform");
         let labels = vec![("alice-secrets".to_string(), 7)];
-        assert_eq!(p.identity(), Some(Identity { principal: "alice".into(), labels, context: None }));
+        assert_eq!(p.identity(), Some(Identity { principal: "alice".into(), labels, ..Identity::default() }));
         0
     });
     assert_eq!(session.join().unwrap(), 0);

@@ -128,14 +128,19 @@ fn the_binding_table_binds_each_slot_as_the_page_says() {
 }
 
 /// What a session's VM is told of itself: its principal, each label of its set by name and id,
-/// and a named context; nothing for the default context or the console's session.
+/// a named context, nothing for the default context or the console's session; and where its home
+/// is bound, in a vault session as in a plain one, nothing for a principal with no home.
 #[test]
-fn a_sessions_arguments_name_its_principal_labels_and_context() {
-    let own = read(&["label \"alice-secrets\" id=7"]).unwrap();
+fn a_sessions_arguments_name_its_principal_labels_context_and_home() {
+    let own = read(&[
+        "label \"alice-secrets\" id=7",
+        "home \"alice\" handle=walfsd:data path=/home/alice quota=8388608",
+    ])
+    .unwrap();
     assert_eq!(
         session_args(&own, "alice", &[7], Some("work")),
-        ["principal=alice", "label=alice-secrets:7", "context=work"]
+        ["principal=alice", "label=alice-secrets:7", "context=work", "home=/home/alice"]
     );
-    assert_eq!(session_args(&own, "alice", &[], Some("")), ["principal=alice"]);
+    assert_eq!(session_args(&own, "alice", &[], Some("")), ["principal=alice", "home=/home/alice"]);
     assert_eq!(session_args(&own, "bob", &[], None), ["principal=bob"]);
 }

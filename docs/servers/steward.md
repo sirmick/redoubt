@@ -480,8 +480,9 @@ Status: built · tested: bench:steward-home-quota, bench:init-refuses-overcommit
   streaming the session's image from `bootfsd` through a 16-page lend, the most a call may lend,
   so the console session's VM is running within a second of the steward's start
   ([beamlet on Redoubt](../userland/beamlet.md#beamlet-on-redoubt)). Its arguments tell it what
-  it is (`own::session_args`): `principal=NAME`, `label=NAME:ID` for each label of its set, and
-  `context=NAME` for a named context, none for the default context or the console's session
+  it is (`own::session_args`): `principal=NAME`, `label=NAME:ID` for each label of its set,
+  `context=NAME` for a named context, none for the default context or the console's session, and
+  `home=/PATH` where slot 1 binds the principal's home, none for a principal with no `home` line
   ([sessions](../userland/sessions.md#what-a-session-is-told)); they are the steward's word to the
   session and grant nothing. It tells the VM `schedulers=2`, two scheduler threads in the session's
   process and budget: the count is the image's choice, since the kernel does not say how many harts
