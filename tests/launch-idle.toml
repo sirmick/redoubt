@@ -1,4 +1,4 @@
-description = "The launched system at rest (GETTING-STARTED.md, \"Try the system\"): the machine `./launch --system` boots, at four harts, with alice logged in over SSH at a terminal and her prompt left alone for 60 s, beside her console session's. Over that window the bench counts, from QEMU's own log, the interrupts each hart takes and the system calls from user mode, and QEMU's host CPU time, each per second against a ceiling: what an idle Redoubt costs the host. The prompt still answers after it. The measures are QEMU's and the host's, not the guest's"
+description = "The launched system at rest (GETTING-STARTED.md, \"Try the system\"): the machine `./launch --system` boots, at four harts, with alice logged in over SSH at a terminal and her prompt left alone for 60 s, beside her console session's, from when the kernel says the frames the boot and her login left in flight are zeroed and back (at most 30 s after the step begins, or the case fails). Over that window the bench counts, from QEMU's own log, the interrupts each hart takes and the system calls from user mode, and QEMU's host CPU time, each per second against a ceiling: what an idle Redoubt costs the host. The prompt still answers after it. The measures are QEMU's and the host's, not the guest's"
 arch = ["rv64", "rv32"]
 kind = "boot"
 recipe = "image/boot.toml"
@@ -28,6 +28,21 @@ expect_after = [
     '^\[con [0-9a-f]{16}\] sshd: login alice: session [0-9a-f]{16}, labels \[\]$',
 ]
 
+# The idle step's window waits for the kernel's `mem: frames in flight 0` line (the bench's
+# `DRAIN_WAIT` bounds it, docs/testbench.md "The machine at rest"). Before it judges, the bench
+# waits for 50 ms of console silence: a host-clock settle, only so that lines the console already
+# holds are read first; the drain's end itself is the kernel's line, never a time. A timeout names
+# which condition was unmet. The bound is 30 s, about five times rv32's most (5.8 to 6.2 s after
+# the step began, six runs alone; rv64 0.32 to 0.39 s). The drain is long because the boot and the
+# login keep a hart busy for most of its span, not because it stalls. Release counters on both
+# widths (2026-10-12) found:
+# - Every hart idle, frames pending and none draining: 0.3 to 0.4 ms a drain on rv32 (32 to 42 ms
+#   on rv64, the hand-on between harts).
+# - A halt with frames pending ended on an IPI (about 2,000) or a device interrupt (1,000 to
+#   1,400), and only 5 or 6 on the timer, which a stranded hart would wait for.
+# - The gaps between passes were work: about 500 of 0.5 to 5 ms and 5 of 50 ms or more, with about
+#   3,000 stops because a hart was busy.
+# - Zeroing itself took about 1 us a frame.
 [[session]]
 user = "alice"
 pty = true
