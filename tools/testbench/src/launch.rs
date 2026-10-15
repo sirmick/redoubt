@@ -1,13 +1,15 @@
-//! `./launch --system`: the whole image booted by hand, with its disks and network, and the line
+//! `./launch --system`: the whole image booted by hand, with its disks and network, and the lines
 //! to log in over SSH. The machine is the `launch-system` case's (`tests/launch-system.toml`),
 //! assembled by the bench's own builder, packer and device arguments, so what a person boots is
 //! what that case boots. Alice's login key is a development key made once per checkout under
 //! `$REDOUBT_TMP/launch`, or the user's own (`--key`), given to alice in this boot's copy of the
-//! manifest only. The data disk is new at every launch, or with `--keep-disk` kept there too,
-//! refused if the image's disk is laid out otherwise since and started over by `--fresh-disk`;
-//! a kept disk is one launch's at a time, locked before anything is built or written. The ssh
-//! line is printed with the QEMU command, and again once QEMU runs and the guest answers a
-//! connection through the forward: until then nothing holds the host port, and `ssh` is refused.
+//! manifest only; agent, the image's third principal, gets a second development key there the
+//! same way (`--agent-key`). The data disk is new at every launch, or with `--keep-disk` kept
+//! there too, refused if the image's disk is laid out otherwise since and started over by
+//! `--fresh-disk`; a kept disk is one launch's at a time, locked before anything is built or
+//! written. The ssh lines are printed with the QEMU command, and again once QEMU runs and the
+//! guest answers a connection through the forward: until then nothing holds the host port, and
+//! `ssh` is refused.
 
 use std::ffi::OsStr;
 use std::io::{ErrorKind, Read};
@@ -31,16 +33,24 @@ use crate::{Outcome, target};
 /// The case whose machine `--system` boots.
 pub const CASE: &str = "tests/launch-system.toml";
 
-/// The principal the login key is given to.
-const PRINCIPAL: &str = "alice";
+/// The principal the login key is given to, and its development key's name under the launch
+/// directory.
+pub const PRINCIPAL: &str = "alice";
+const DEVELOPMENT_KEY: &str = "id_ed25519";
+
+/// The image's third principal, a sponsor-run agent's, and its own development key's name.
+pub const AGENT: &str = "agent";
+const AGENT_DEVELOPMENT_KEY: &str = "agent_ed25519";
 
 /// What `--run --system` was asked for.
 pub struct System<'a> {
     pub arch: &'a str,
     pub smp: u32,
     pub ssh_port: u16,
-    /// The user's own public key, instead of the checkout's development key.
+    /// The user's own public key for alice, instead of the checkout's development key.
     pub key: Option<&'a Path>,
+    /// The user's own public key for agent, instead of the checkout's second development key.
+    pub agent_key: Option<&'a Path>,
     pub print_only: bool,
     /// Write the QEMU command here, each argument ended by a NUL, for `./launch` to boot.
     pub argv: Option<&'a Path>,
@@ -58,18 +68,22 @@ pub fn system(builder: &Builder, workspace: &Path, logs: &Path, ask: &System) ->
     if let Some(path) = ask.boot_argv {
         let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
         std::fs::remove_file(path).ok();
-        let (_, identity) = login_key(workspace, ask.key)?;
-        return run(from_nul_separated(&bytes)?, ask.ssh_port, identity.as_deref());
+        let (_, identity) = login_key(workspace, ask.key, DEVELOPMENT_KEY)?;
+        let (_, agent_identity) = login_key(workspace, ask.agent_key, AGENT_DEVELOPMENT_KEY)?;
+        let lines = ssh_lines(ask.ssh_port, identity.as_deref(), agent_identity.as_deref());
+        return run(from_nul_separated(&bytes)?, ask.ssh_port, &lines);
     }
     // The port first: a taken one is refused before minutes of building.
     TcpListener::bind(("127.0.0.1", ask.ssh_port))
         .with_context(|| format!("host port {} is taken; choose another with --ssh-port", ask.ssh_port))?;
-    let (public, identity) = login_key(workspace, ask.key)?;
+    let (public, identity) = login_key(workspace, ask.key, DEVELOPMENT_KEY)?;
+    let (agent_public, agent_identity) = login_key(workspace, ask.agent_key, AGENT_DEVELOPMENT_KEY)?;
 
     let mut case = Case::load(&workspace.join(CASE))?;
     let Kind::Boot(boot) = &mut case.kind else { bail!("{CASE} is not a boot case") };
     boot.smp = vec![ask.smp];
     boot.login_key = Some(public);
+    boot.agent_key = Some(agent_public);
     let kept =
         ask.keep_disk.then(|| launch_dir(workspace).map(|dir| dir.join(format!("disk-{}.img", ask.arch))));
     let kept = kept.transpose()?;
@@ -103,7 +117,7 @@ pub fn system(builder: &Builder, workspace: &Path, logs: &Path, ask: &System) ->
     if let Some(path) = ask.argv {
         std::fs::write(path, nul_separated(&qemu)).with_context(|| format!("writing {}", path.display()))?;
     }
-    let line = ssh_line(ask.ssh_port, identity.as_deref());
+    let lines = ssh_lines(ask.ssh_port, identity.as_deref(), agent_identity.as_deref());
     let disk = match (&kept, made) {
         (None, _) => "The disk is new at every launch: files written in this boot are gone at the next \
                       (--keep-disk keeps them)."
@@ -123,42 +137,48 @@ pub fn system(builder: &Builder, workspace: &Path, logs: &Path, ask: &System) ->
         "\nRedoubt {arch}, {smp} harts, {mib} MiB. This terminal is the serial console, alice's console \
          session; Ctrl-A X quits QEMU.\n{disk}\nLog in from another terminal once launch says \"port \
          {port} forwards to the guest\" (QEMU runs then; until it does, nothing holds the port and ssh \
-         is refused):\n\n  {line}\n\n\
+         is refused), as alice, or as agent, the image's third principal:\n\n  {lines}\n\n\
          Host key: {fingerprint} (ED25519), the image's development host key\n",
         arch = target.name,
         smp = ask.smp,
         mib = boot.memory_mib.unwrap_or(target::DEFAULT_MEMORY_MIB),
         port = ask.ssh_port,
+        lines = lines.join("\n  "),
     );
     if ask.print_only {
         return Ok(());
     }
-    run(qemu, ask.ssh_port, identity.as_deref())
+    run(qemu, ask.ssh_port, &lines)
 }
 
-/// The line that logs in as alice through the forward from the host's `port`, with `-i identity`
-/// when the private key's path is known.
-pub fn ssh_line(port: u16, identity: Option<&Path>) -> String {
+/// The line that logs in as `principal` through the forward from the host's `port`, with
+/// `-i identity` when the private key's path is known.
+pub fn ssh_line(port: u16, principal: &str, identity: Option<&Path>) -> String {
     let identity =
         identity.map(|i| format!(" -i {}", qemu::shell_quote(&i.display().to_string()))).unwrap_or_default();
-    format!("ssh -p {port}{identity} {PRINCIPAL}@localhost")
+    format!("ssh -p {port}{identity} {principal}@localhost")
+}
+
+/// The two lines launch prints, alice's then agent's, each with its own key.
+fn ssh_lines(port: u16, identity: Option<&Path>, agent_identity: Option<&Path>) -> [String; 2] {
+    [ssh_line(port, PRINCIPAL, identity), ssh_line(port, AGENT, agent_identity)]
 }
 
 /// Boot `qemu` with this terminal as its console, and once the guest answers through the forward
-/// from the host's `port`, say so with the ssh line; QEMU's end is the boot's.
-pub fn run(mut qemu: Command, port: u16, identity: Option<&Path>) -> Result<()> {
+/// from the host's `port`, say so with the ssh `lines`; QEMU's end is the boot's.
+pub fn run(mut qemu: Command, port: u16, lines: &[String]) -> Result<()> {
     let binary = qemu.get_program().to_string_lossy().into_owned();
     let mut child = qemu.spawn().with_context(|| format!("starting {binary}"))?;
-    let line = ssh_line(port, identity);
     // QEMU has the terminal in raw mode: lines end in \r\n.
+    let lines = lines.join("\r\n  ");
     match prove_forward(port, &mut child)? {
         Answer::Banner(banner) => eprint!(
             "\r\nport {port} forwards to the guest's sshd ({banner}; its \"connection 1\" on the console \
-             was this check). Log in from another terminal:\r\n\r\n  {line}\r\n\r\n"
+             was this check). Log in from another terminal:\r\n\r\n  {lines}\r\n\r\n"
         ),
         Answer::Closed => eprint!(
             "\r\nport {port} forwards to the guest. Once the console prints \"sshd: listening on port \
-             22\", log in from another terminal:\r\n\r\n  {line}\r\n\r\n"
+             22\", log in from another terminal:\r\n\r\n  {lines}\r\n\r\n"
         ),
     }
     let status = child.wait().with_context(|| format!("waiting for {binary}"))?;
@@ -218,7 +238,12 @@ pub fn command(
 ) -> Result<Command> {
     // The principals' homes and the vault's tree, as `./mkimage` makes them: the disk's stages.
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    for dir in ["target/image/stage/home/alice", "target/image/stage/home/bob", "target/image/vault"] {
+    for dir in [
+        "target/image/stage/home/alice",
+        "target/image/stage/home/bob",
+        "target/image/stage/home/agent",
+        "target/image/vault",
+    ] {
         std::fs::create_dir_all(root.join(dir))?;
     }
     let (devices, _) = qemu::virtio_devices(boot, disk, packed.userland.as_ref(), &[port])?;
@@ -235,14 +260,14 @@ pub fn command(
     Ok(image.interactive(false))
 }
 
-/// `manifest` with alice's login keys replaced by `key` alone.
-pub fn give_key(manifest: &[u8], key: &str) -> Result<Vec<u8>> {
+/// `manifest` with the login keys of `principal` replaced by `key` alone.
+pub fn give_key(manifest: &[u8], principal: &str, key: &str) -> Result<Vec<u8>> {
     let mut m: Value = serde_json::from_slice(manifest).context("a manifest is JSON")?;
-    let alice = m["principals"]
+    let given = m["principals"]
         .as_array_mut()
-        .and_then(|p| p.iter_mut().find(|p| p["name"] == PRINCIPAL))
-        .context("the manifest has no principal alice")?;
-    alice["ssh_keys"] = Value::Array(vec![key.into()]);
+        .and_then(|p| p.iter_mut().find(|p| p["name"] == principal))
+        .with_context(|| format!("the manifest has no principal {principal}"))?;
+    given["ssh_keys"] = Value::Array(vec![key.into()]);
     Ok(serde_json::to_vec_pretty(&m)?)
 }
 
@@ -270,10 +295,10 @@ fn keygen(private: &Path) -> Result<()> {
     Ok(())
 }
 
-/// The public key line alice gets, and the private half `ssh -i` names, if known: the user's own
-/// (`key`, a `.pub` file; its private half beside it, if there), or the checkout's development
-/// key, made the first time.
-fn login_key(workspace: &Path, key: Option<&Path>) -> Result<(String, Option<PathBuf>)> {
+/// The public key line a principal gets, and the private half `ssh -i` names, if known: the
+/// user's own (`key`, a `.pub` file; its private half beside it, if there), or the checkout's
+/// development key named `development` under the launch directory, made the first time.
+fn login_key(workspace: &Path, key: Option<&Path>, development: &str) -> Result<(String, Option<PathBuf>)> {
     let (public, identity) = match key {
         Some(public) => {
             let private = public.with_extension("");
@@ -282,7 +307,7 @@ fn login_key(workspace: &Path, key: Option<&Path>) -> Result<(String, Option<Pat
             (public.to_path_buf(), identity)
         }
         None => {
-            let private = launch_dir(workspace)?.join("id_ed25519");
+            let private = launch_dir(workspace)?.join(development);
             if !private.exists() {
                 keygen(&private)?;
             }
@@ -476,19 +501,25 @@ mod tests {
         assert_eq!(boot.net.as_ref().unwrap().host_key.as_deref(), Some(line.as_str()));
     }
 
-    /// alice's keys are replaced by the one key; bob and the rest are as they were.
+    /// The named principal's keys are replaced by the one key; the rest are as they were: alice's
+    /// by launch's first key, then agent's by its second, and bob keeps his.
     #[test]
-    fn alice_alone_gets_the_key() {
+    fn the_named_principal_alone_gets_the_key() {
         let base = br#"{"servers": [{"name": "keyd"}], "principals": [
             {"name": "alice", "account": "1001", "ssh_keys": ["ssh-ed25519 OLD", "ssh-ed25519 OLD2"]},
-            {"name": "bob", "ssh_keys": ["ssh-ed25519 BOB"]}]}"#;
-        let given: Value = serde_json::from_slice(&give_key(base, "ssh-ed25519 NEW").unwrap()).unwrap();
+            {"name": "bob", "ssh_keys": ["ssh-ed25519 BOB"]},
+            {"name": "agent", "ssh_keys": ["ssh-ed25519 TEST"]}]}"#;
+        let given = give_key(base, PRINCIPAL, "ssh-ed25519 NEW").unwrap();
+        let given: Value =
+            serde_json::from_slice(&give_key(&given, AGENT, "ssh-ed25519 AGENT").unwrap()).unwrap();
         let expected = serde_json::json!({"servers": [{"name": "keyd"}], "principals": [
             {"name": "alice", "account": "1001", "ssh_keys": ["ssh-ed25519 NEW"]},
             {"name": "bob", "ssh_keys": ["ssh-ed25519 BOB"]},
+            {"name": "agent", "ssh_keys": ["ssh-ed25519 AGENT"]},
         ]});
         assert_eq!(given, expected);
-        assert!(give_key(br#"{"principals": [{"name": "bob"}]}"#, "ssh-ed25519 NEW").is_err());
+        assert!(give_key(br#"{"principals": [{"name": "bob"}]}"#, PRINCIPAL, "ssh-ed25519 NEW").is_err());
+        assert!(give_key(br#"{"principals": [{"name": "alice"}]}"#, AGENT, "ssh-ed25519 NEW").is_err());
     }
 
     #[test]
@@ -513,8 +544,8 @@ mod tests {
         assert!(from_nul_separated(b"qemu").is_err(), "an argument cut short");
     }
 
-    /// The ssh line names the host port the forward is made from: the one `./launch --ssh-port`
-    /// gives both.
+    /// The ssh lines name the host port the forward is made from: the one `./launch --ssh-port`
+    /// gives both; alice's line first, then agent's, each with its own key.
     #[test]
     fn the_ssh_line_names_the_forwarded_port() {
         let boot: Boot = toml::from_str("programs = []\nexpect = []\n[net]\nforward = [22]\n").unwrap();
@@ -522,8 +553,19 @@ mod tests {
         let (args, forwards) = qemu::virtio_devices(&boot, &disk, None, &[2200]).unwrap();
         assert_eq!(forwards, [(22, 2200)]);
         assert!(args.iter().any(|a| a.contains("hostfwd=tcp:127.0.0.1:2200-:22")), "{args:?}");
-        assert_eq!(ssh_line(2200, Some(Path::new("a key"))), "ssh -p 2200 -i 'a key' alice@localhost");
-        assert_eq!(ssh_line(2222, None), "ssh -p 2222 alice@localhost");
+        assert_eq!(
+            ssh_line(2200, PRINCIPAL, Some(Path::new("a key"))),
+            "ssh -p 2200 -i 'a key' alice@localhost"
+        );
+        assert_eq!(ssh_line(2222, PRINCIPAL, None), "ssh -p 2222 alice@localhost");
+        assert_eq!(
+            ssh_line(2222, AGENT, Some(Path::new("agent key"))),
+            "ssh -p 2222 -i 'agent key' agent@localhost"
+        );
+        assert_eq!(
+            ssh_lines(2200, Some(Path::new("a")), Some(Path::new("b"))),
+            ["ssh -p 2200 -i a alice@localhost", "ssh -p 2200 -i b agent@localhost"]
+        );
     }
 
     /// The forward is proved by the guest's answer: sshd's banner, or the guest closing the

@@ -127,7 +127,9 @@ a path. Contexts are not declared: a login names one, and the first login makes 
   session counted where it runs: by default what the label set's share of the principal's budget
   holds, or fewer if the manifest says so. A login that would make one more is refused like any
   other refusal; nothing running is ended to make room. In the image alice has one SSH context
-  beside the console, two in her vault, and bob two.
+  beside the console, two in her vault, and bob and `agent` two each; `agent` is the image's
+  principal for a sponsor-run agent, whose body is a session like any other, with a home of its
+  own and no labels and no network scope ([agents](agents.md)).
 - **Idle contexts end** ([R83 (idle contexts end)](../servers/steward.md#r83-idle-contexts-end)). A context left
   detached for its principal's idle bound, by default a day, ends with everything in it. An
   attached context never does, and each attach starts the count again.
