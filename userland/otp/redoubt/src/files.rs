@@ -24,7 +24,7 @@ use redoubt_client::aio::{COMPLETION_PAGES, Conn, Done, MAX_WRITE, Outcome, RETR
 use redoubt_client::file::{Connection, ROOT};
 use redoubt_client::ns::Namespace;
 use redoubt_client::{Error, Lend, Name, littlefsd};
-use redoubt_rt::abi::{FOREVER, PAGE_SIZE};
+use redoubt_rt::abi::{Error as SysError, FOREVER, PAGE_SIZE};
 use redoubt_rt::ipc::Buffer;
 use redoubt_rt::server::ninep::{DMDIR, QTDIR, mode};
 use redoubt_rt::wire::ninep::{self, Body, IOHDRSZ, Message, Names, Qid};
@@ -557,7 +557,13 @@ impl Table {
         if names.len() > ninep::MAXWELEM {
             return Err(FileError::Enametoolong);
         }
-        let hub = io.connect(&conn).map_err(|_| FileError::Eio)?;
+        // A refusal of the VM's own, before a byte is sent: no waiter slot free for a connection
+        // (`Io::connect`), or no memory; neither is the server's failure, so neither is `eio`.
+        let hub = io.connect(&conn).map_err(|e| match e {
+            Error::Sys(SysError::TooManyThreads) => FileError::Emfile,
+            Error::Sys(SysError::OutOfMemory) => FileError::Enomem,
+            _ => FileError::Eio,
+        })?;
         let fid = conn.take_fid().map_err(|_| FileError::Emfile)?;
         let op = Op {
             kind,

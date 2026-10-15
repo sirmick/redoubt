@@ -1,7 +1,10 @@
 //! The volume under the files: `blkd`'s range as walfs blocks, and the mounting rule
 //! (servers/walfsd.md, "Serving").
 
-pub use redoubt_fileserver::range::{Fault, Geometry, Range, SECTOR};
+use alloc::rc::Rc;
+use core::cell::Cell;
+
+pub use redoubt_fileserver::range::{Fault, Geometry, Range, SECTOR, Why};
 use walfs::{Block, BlockDevice, Error, Filesystem, Geometry as Shape};
 
 /// A walfs block.
@@ -21,6 +24,17 @@ pub struct Blocks<R> {
     /// `walfsd` asks for no write on a read-only range; one that reached here anyway (a mount's
     /// recovery) is refused before `blkd` sees it.
     read_only: bool,
+    /// Why the range's last request faulted, for the server to say when the fault poisons the
+    /// volume: shared with it, since walfs holds the device.
+    why: Rc<Cell<Option<Why>>>,
+}
+
+impl<R: Range> Blocks<R> {
+    /// The range's fault as walfs's I/O error, its reason kept for the server.
+    fn io(&self, _: Fault) -> Error {
+        self.why.set(self.range.fault());
+        Error::Io
+    }
 }
 
 impl<R: Range> BlockDevice for Blocks<R> {
@@ -30,21 +44,21 @@ impl<R: Range> BlockDevice for Blocks<R> {
         if block >= self.count {
             return Err(Error::Io);
         }
-        self.range.read(u64::from(block) * SECTORS_PER_BLOCK, buf).map_err(|_| Error::Io)
+        self.range.read(u64::from(block) * SECTORS_PER_BLOCK, buf).map_err(|f| self.io(f))
     }
 
     fn write(&mut self, block: u32, data: &Block) -> Result<(), Error> {
         if self.read_only || block >= self.count {
             return Err(Error::Io);
         }
-        self.range.write(u64::from(block) * SECTORS_PER_BLOCK, data).map_err(|_| Error::Io)?;
+        self.range.write(u64::from(block) * SECTORS_PER_BLOCK, data).map_err(|f| self.io(f))?;
         // Test-only: the power-loss case's cut, after the write completed (src/cut.rs).
         #[cfg(feature = "cut-after-write")]
         crate::cut::wrote();
         Ok(())
     }
 
-    fn sync(&mut self) -> Result<(), Error> { self.range.flush().map_err(|_| Error::Io) }
+    fn sync(&mut self) -> Result<(), Error> { self.range.flush().map_err(|f| self.io(f)) }
 }
 
 /// Why there is no volume to serve: `walfsd` exits before serving.
@@ -58,8 +72,9 @@ pub enum NoVolume {
 
 /// What mounting found.
 pub enum Mounted<R: Range> {
-    /// A filesystem to serve, and whether its range refuses writes.
-    Files { fs: Filesystem<Blocks<R>>, read_only: bool },
+    /// A filesystem to serve, whether its range refuses writes, and where the range's last
+    /// fault's reason is kept ([`Blocks`]).
+    Files { fs: Filesystem<Blocks<R>>, read_only: bool, why: Rc<Cell<Option<Why>>> },
     /// The range holds something that does not mount (or could not be read): served as corrupt.
     Corrupt(Error),
 }
@@ -74,7 +89,8 @@ pub fn mount<R: Range>(mut range: R) -> Result<Mounted<R>, NoVolume> {
     if count < MIN_BLOCKS {
         return Err(NoVolume::TooSmall);
     }
-    let mut blocks = Blocks { range, count, read_only };
+    let why = Rc::new(Cell::new(None));
+    let mut blocks = Blocks { range, count, read_only, why: why.clone() };
     match blank(&mut blocks) {
         // A blank range that cannot be written holds no filesystem and never will.
         Ok(true) if read_only => return Ok(Mounted::Corrupt(Error::Invalid)),
@@ -87,7 +103,7 @@ pub fn mount<R: Range>(mut range: R) -> Result<Mounted<R>, NoVolume> {
         Err(e) => return Ok(Mounted::Corrupt(e)),
     }
     Ok(match Filesystem::mount(blocks) {
-        Ok(fs) => Mounted::Files { fs, read_only },
+        Ok(fs) => Mounted::Files { fs, read_only, why },
         Err(e) => Mounted::Corrupt(e),
     })
 }
