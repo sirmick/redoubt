@@ -107,39 +107,44 @@ wires the guest's serial console to your terminal.
 ### Try the system
 
 ```sh
-./launch --system                  # rv64, 4 harts, 1 GiB; boots, and prints the ssh line once the port forwards
+./launch --system                  # rv64, 4 harts, 1 GiB; boots, and prints the ssh lines once the port forwards
 ./launch --system --arch rv32      # the same system on the 32-bit machine
 ./launch --system --ssh-port 2200  # another host port for the guest's SSH
-./launch --system --key ~/.ssh/id_ed25519.pub   # log in with your own key
+./launch --system --key ~/.ssh/id_ed25519.pub   # log in as alice with your own key
+./launch --system --agent-key ~/.ssh/agent.pub  # and as agent with another
 ./launch --system --keep-disk      # keep your files from one launch to the next
 ./launch --system --keep-disk --fresh-disk   # start the kept disk over from the image's
-./launch --system --print-only     # build, print the QEMU command and the ssh line, and stop
+./launch --system --print-only     # build, print the QEMU command and the ssh lines, and stop
 ```
 
 `--system` boots the whole image: `init`, the servers, the steward, `sshd` and the shell, on the
 image's disk and its read-only userland disk, with QEMU's user network. It is the machine the
 `launch-system` case boots and logs in to. The terminal is the serial console, where alice's
-console session prints its prompt; Ctrl-A X quits QEMU. `launch` prints the ssh line twice: with
+console session prints its prompt; Ctrl-A X quits QEMU. `launch` prints the ssh lines twice: with
 the QEMU command once the build is done, and again, as `port 2222 forwards to the guest`, once
-QEMU runs and the guest has answered a connection through the forward. The second is the one to
-act on: until QEMU runs nothing holds the port and `ssh` is refused, and between the two lines
-QEMU may wait for its lease of the machine scheduler. If sshd was not yet listening when the
-check connected, wait for the console's `sshd: listening on port 22`; if it was, sshd logs the
-check as its connection 1. Then log in from another terminal:
+QEMU runs and the guest has answered a connection through the forward. The second time is the one
+to act on: until QEMU runs nothing holds the port and `ssh` is refused, and between the two
+prints QEMU may wait for its lease of the machine scheduler. If sshd was not yet listening when
+the check connected, wait for the console's `sshd: listening on port 22`; if it was, sshd logs the
+check as its connection 1. Then log in from another terminal, as alice, or as `agent`, the
+image's third principal ([the image](image/README.md)):
 
 ```sh
 ssh -p 2222 -i .tmp/launch/id_ed25519 alice@localhost
+ssh -p 2222 -i .tmp/launch/agent_ed25519 agent@localhost
 ```
 
 `ssh` asks you to accept the host key the first time. Check it against the fingerprint `launch`
 printed: it is the image's development host key, the same at every launch.
 
-- **The key.** On its first run `launch` makes a key pair for this checkout under `.tmp/launch/`
-  (git ignores it) and gives alice its public half, in the manifest of this boot's bundle only.
-  `image/manifest.json` is not changed, and alice's test key does not work on a launched system.
-  bob keeps his test key from `tests/keys/`: `ssh -p 2222 -i tests/keys/bob bob@localhost`.
+- **The keys.** On its first run `launch` makes two key pairs for this checkout under
+  `.tmp/launch/` (git ignores them) and gives alice and agent their public halves, in the manifest
+  of this boot's bundle only; `--key` and `--agent-key` name your own instead.
+  `image/manifest.json` is not changed, and alice's and agent's test keys do not work on a
+  launched system. bob keeps his test key from `tests/keys/`:
+  `ssh -p 2222 -i tests/keys/bob bob@localhost`.
 - **The disk is new at every launch,** and your files are gone at the next, unless you launch with
-  `--keep-disk`: the data disk, alice's and bob's homes and alice's vault, is then
+  `--keep-disk`: the data disk, alice's, bob's and agent's homes and alice's vault, is then
   `.tmp/launch/disk-<arch>.img`, made from the image the first time and booted as the last launch
   left it after that. The read-only system volume still comes from the build, so a rebuilt system
   boots against your kept files. If the image's disk is laid out otherwise since (another size or

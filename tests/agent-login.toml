@@ -1,0 +1,89 @@
+description = "The image's third principal, agent, logs in (image/README.md; docs/userland/sessions.md, \"What a session is told\"; docs/servers/steward.md, \"Principals\"): the image boots with sshd on port 22, the steward carves users/agent beside alice's and bob's budgets, and a session as agent over SSH, with agent's own key, reaches its prompt in /home/agent: pwd() says so, whoami() is \"agent\" and labels() is empty; the namespace table holds /home/agent and no /net, because the manifest gives agent no network scope, and alice's home is not reached by any entry, so File.read of a file there is enoent. Alice's own session in the same boot is the control: her table holds /net. Every answer is tagged, so a pattern matches the shell's printed value and never the echo of the line typed. The verdicts are the steward's carve and audit lines, sshd's login line naming agent with no labels, and the values the shell prints from the namespace the steward gave the session (rule F)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+recipe = "image/boot.toml"
+# The image needs 1 GiB: the principals' budgets, each holding a shell VM's session, do not fit
+# the users budget 256 MiB leaves (docs/kernel/budgets.md).
+memory_mib = 1024
+# Two logins, one after the other, each booting a shell VM.
+timeout_secs = 1500
+expect = [
+    '^init: started sshd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
+    '^init: started steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] steward: carved users/agent account 1003: \{\}$',
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{\} at [0-9]+: Login ',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+]
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    '^init: .* (exited|faulted|was killed)',
+    'init: restarted',
+    'EXCEPTION',
+    'steward: a step failed',
+    'sshd: login .*: refused',
+]
+# Alice logs in first and agent once she has her prompt, and the steward says a login's lines
+# before it answers sshd, so the lines come in one order.
+expect_after = [
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{\} at [0-9]+: Login \{ session: [0-9]+, principal: 0, key: [1-9]',
+    '^\[con [0-9a-f]{16}\] sshd: login alice: session [0-9a-f]{16}, labels \[\]$',
+    '^\[con [0-9a-f]{16}\] steward: audit 1003/\{\} at [0-9]+: Login \{ session: [0-9]+, principal: 2, key: [1-9]',
+    '^\[con [0-9a-f]{16}\] steward: users/agent/\{\} holds [0-9]+ pages, 10 processes$',
+    '^\[con [0-9a-f]{16}\] sshd: login agent: session [0-9a-f]{16}, labels \[\]$',
+]
+
+# The control: alice's namespace reaches the network.
+[[session]]
+user = "alice"
+pty = true
+steps = [
+    { expect = '/home/alice \([0-9]+\)> ' },
+    { send = "{:anet, Enum.any?(Redoubt.Namespace.table(), &(elem(&1, 0) == \"/net\"))}\n" },
+    { expect = '\{:anet, true\}' },
+    { expect = '\([0-9]+\)> ' },
+    { mark = "alice-up" },
+    { exit = 0 },
+]
+
+[[session]]
+user = "agent"
+pty = true
+steps = [
+    { wait = "alice-up" },
+    { expect = '/home/agent \([0-9]+\)> ' },
+    { send = "{:pwd, pwd()}\n" },
+    { expect = '\{:pwd, "/home/agent"\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:who, whoami()}\n" },
+    { expect = '\{:who, "agent"\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:lab, labels()}\n" },
+    { expect = '\{:lab, \[\]\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:home, Enum.any?(Redoubt.Namespace.table(), &(elem(&1, 0) == \"/home/agent\"))}\n" },
+    { expect = '\{:home, true\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:net, Enum.any?(Redoubt.Namespace.table(), &(elem(&1, 0) == \"/net\"))}\n" },
+    { expect = '\{:net, false\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:other, File.read(\"/home/alice/hello\")}\n" },
+    { expect = '\{:other, \{:error, :enoent\}\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:own, elem(File.read(\"/home/agent/hello\"), 0)}\n" },
+    { expect = '\{:own, :ok\}' },
+    { expect = '\([0-9]+\)> ' },
+    { exit = 0 },
+]
+
+[userland]
+recipe = "image/userland.toml"
+
+# The steward cases' stage: the three principals' homes, each holding a `hello`.
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]
+forward = [22]

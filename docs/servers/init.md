@@ -154,7 +154,11 @@ and `init`'s only input. Its entries:
   of (account, label set)s the manifest declares (each principal's unlabelled set and every label
   set it works under) plus the root badges `init` mints at that server, one per system caller. It
   counts every declared domain at every shared server, not only those a session will reach: an
-  over-count costs buckets, and an under-count would bind. `init` reads `buckets=N` from a
+  over-count costs buckets, and an under-count would bind. So a principal added to the image
+  raises every shared server's count by its domains: the image's three principals declare four,
+  and each server's `buckets=` is at least those plus its system callers (`keyd` 6, `ipd` 7;
+  `walfsd:data` and `erofsd:system` need 5 and carry 6, the spare for a case's extra client),
+  within what the server's own budget holds. `init` reads `buckets=N` from a
   server's arguments, with the serving library's parser, and no other argument. So a server's
   bucket count never binds in normal use, and a full server cannot tell a latecomer that others
   hold state ([serving](serving.md#residual-risks)). A server whose block has no `buckets=N`, or

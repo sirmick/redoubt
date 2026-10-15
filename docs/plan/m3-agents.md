@@ -94,6 +94,9 @@ The steward's policy core decides leases, approvals, declassification, push and 
 is tested on the host; the running server's half for them remains planned
 ([the policy core](../servers/steward.md#the-policy-core)). The kernel's half of several attacks
 above has its case, as the tables say, and the kernel containment gate holds hostile leases on the
-kernel's primitives alone ([containment](../kernel/README.md#containment)). What the milestone
+kernel's primitives alone ([containment](../kernel/README.md#containment)). The image has an
+`agent` principal ahead of leases, a session's budget with no labels and no network scope for a
+sponsor-run agent whose loop runs outside the box, logged in by `agent-login`
+([the image](../../image/README.md)). What the milestone
 builds on: the steward's principals, sub-budgets and sessions, and `sshd` on the box, from
 [M1 (sessions over SSH, kept apart)](m1-separation.md).

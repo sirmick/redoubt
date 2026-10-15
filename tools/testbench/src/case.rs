@@ -425,6 +425,10 @@ pub struct Boot {
     /// Alice's login key for this pack, set by `--run --system`, not by a case.
     #[serde(skip)]
     pub login_key: Option<String>,
+    /// Agent's login key for this pack, set by `--run --system` too; a case leaves agent its
+    /// test key.
+    #[serde(skip)]
+    pub agent_key: Option<String>,
     /// Measure the guest over a session's `idle` step: its interrupts and exceptions from QEMU's
     /// log, which the bench turns on through the monitor for that step alone, and QEMU's host CPU
     /// time; each rate is held to its ceiling.

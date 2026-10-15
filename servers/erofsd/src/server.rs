@@ -30,8 +30,8 @@ pub const COST: Cost =
 /// 2 completion calls at 64 KiB, 32 fids at 2 KiB, 8 connections at 512 bytes, 64 requests at 256
 /// and 2 pages at 4 KiB: 225 280 bytes, so 6 fit here (1 351 680). Every session reads the system
 /// volume on a connection the steward makes for it, so each principal's domain is a bucket beside
-/// the steward's: the image's three and the steward take 4, a case's extra client 5, and one more
-/// principal's domain fits.
+/// the steward's: the image's three principals' four domains and the steward take 5, and a case's
+/// extra client the sixth.
 pub const BUDGET: u64 = 1536 * 1024;
 
 /// The `Rerror` texts `erofsd` adds to the skeleton's fixed set, `littlefsd`'s words for the same

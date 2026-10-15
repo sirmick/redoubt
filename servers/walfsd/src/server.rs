@@ -35,8 +35,11 @@ pub const COST: Cost =
     Cost { in_flight: 64 * 1024, file: 2048, state: 512, request: REQUEST_STATE, page: PAGE_SIZE as u64 };
 /// The bytes of this server's budget its clients may use between them. A bucket at its caps costs
 /// 2 completion calls at 64 KiB, 32 fids at 2 KiB, 8 connections at 512 bytes, 128 requests at 256
-/// and 32 pages at 4 KiB: 364 544 bytes, so the manifests' 4 buckets take 1 458 176, and 5 fit.
-pub const BUDGET: u64 = 2 * 1024 * 1024;
+/// and 32 pages at 4 KiB: 364 544 bytes. 2 MiB held 5 buckets (1 822 720): the image's three
+/// principals' four domains and the steward at `walfsd:data`, and a case's extra client needs a
+/// sixth, so 3 MiB, which holds 8 (2 916 352): 768 pages of the entry's 1 024, beside its 64 of
+/// heap and 14 of stack.
+pub const BUDGET: u64 = 3 * 1024 * 1024;
 
 /// The attribute types a client's `set_attr` may not touch, 0 to 15, as on `littlefsd`, so a
 /// client sees one contract from both writable servers; walfs keeps nothing of `walfsd`'s in
