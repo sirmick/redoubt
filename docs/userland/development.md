@@ -44,12 +44,16 @@ laptop$ scp logscan-1.3.xpkg alice@box:/home/alice/in/
 
 ### The compilers on beamlet
 
-Status: built · partly tested: runs on the host only; the compiler cases (`tests/elixir/compiler_test.ex`, `tests/erlang/selfcompile.erl`) are differential suites that need OTP 28 and Elixir installed and are not run by the bench, and they only compile, load and call: nothing checks the chunk equality or the error handler below
+Status: built · partly tested: the compiler cases (`tests/elixir/compiler_test.ex`, `tests/erlang/selfcompile.erl`) are differential suites that need OTP 28 and Elixir installed and are not run by the bench, and they only compile, load and call: nothing checks the chunk equality or the error handler below · tested: bench:shell-compile, bench:shell-compile-module
 
 Elixir's compiler (`Code.compile_string`, `Code.eval_string`) and OTP's Erlang compiler
 (`compile:forms`) run on beamlet, and the modules they produce load and run in the same VM
 ([`userland/otp/tests/elixir/compiler_test.ex`](../../userland/otp/tests/elixir/compiler_test.ex),
 [`userland/otp/tests/erlang/selfcompile.erl`](../../userland/otp/tests/erlang/selfcompile.erl)).
+On the machine, a module a session compiles is kept as a `.beam` in the session's home and loaded
+again from its bytes (`:code.load_binary/3`); the system's module lookup never searches home, and
+a directory of home is looked in only once the session puts it on its own code path
+([beamlet](beamlet.md#beamlet-on-redoubt), [packages](packages.md#profiles-and-upgrades)).
 The code, atom, export and literal chunks they write are identical to BEAM's; compressed chunks
 (debug information, documentation) differ in bytes, because the deflate implementation differs,
 and decode to the same terms. A call to a function not yet loaded goes to the process's error
