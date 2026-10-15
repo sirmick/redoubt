@@ -41,7 +41,8 @@ agents follow ([M3 (agents, approvals and the attack suite)](docs/plan/m3-agents
   to the session's capabilities and audited.
 - [M5 (self-hosted development)](docs/plan/m5-self-hosted.md), **planned**: Redoubt is developed
   on Redoubt, with compilers, `git` and a model provider through gateways, and agents doing part of
-  the work. How far along: the Elixir and Erlang compilers run on beamlet, on the host.
+  the work. How far along: the Elixir and Erlang compilers run on beamlet, on the host; a module
+  defined at a session's prompt compiles on the machine.
 - [M6 (persist, install, share)](docs/plan/m6-persist.md), **planned**: the steward's state
   survives reboots; signed packages, trust lists and shared projects; A/B updates.
 

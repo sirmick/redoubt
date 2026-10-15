@@ -129,11 +129,13 @@ fn stream(c: &mut Ctx, t: &Term) -> Result<StreamRef, Exception> {
 /// What a deflater holds behind its own boxes, beyond `size_of::<CompressorOxide>()`: in
 /// `miniz_oxide` 0.9.1 (vendor/miniz_oxide), its dictionary (`LZ_DICT_FULL_SIZE`, 32,768 + 258
 /// bytes), its two hash chains (`LZ_DICT_SIZE` u16s each), its Huffman tables (3 tables of 288
-/// symbols: two u16s and a u8 each) and its output buffer (`OUT_BUF_SIZE`, 64 KiB x 13 / 10).
-/// An inflater holds its dictionary inline. The crate's constants are its own, so the sum is
-/// written out; `tests/zlib_codec.rs` measures it, so a new `miniz_oxide` fails that test.
+/// symbols: two u16s and a u8 each), its output buffer (`OUT_BUF_SIZE`, 64 KiB x 13 / 10) and
+/// its LZ code buffer (`LZ_CODE_BUF_SIZE`, 64 KiB), which Redoubt's patch to the crate boxes
+/// (vendor/README.md, "miniz_oxide") so the state is never a 65 KiB stack local. An inflater
+/// holds its dictionary inline. The crate's constants are its own, so the sum is written out;
+/// `tests/zlib_codec.rs` measures it, so a new `miniz_oxide` fails that test.
 pub const DEFLATE_BOXED: usize =
-    (32_768 + 258) + 2 * (32_768 * 2) + 3 * 288 * (2 + 2 + 1) + (64 * 1024 * 13) / 10;
+    (32_768 + 258) + 2 * (32_768 * 2) + 3 * 288 * (2 + 2 + 1) + (64 * 1024 * 13) / 10 + 64 * 1024;
 
 /// What stream `s` holds, in bytes: its queued input and output, its codec's state, and the term
 /// stashed in it.

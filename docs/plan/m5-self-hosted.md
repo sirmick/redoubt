@@ -83,6 +83,8 @@ In this order, after [M4 (files in and out)](m4-files.md):
 Built: the compilers run on beamlet, on the host: Elixir's compiler, OTP's Erlang compiler, and
 the `ssl` and `ssh` applications, unmodified
 ([development](../userland/development.md#the-compilers-on-beamlet),
-[beamlet](../userland/beamlet.md#what-runs-on-it)). The rest of this milestone is not built. It
+[beamlet](../userland/beamlet.md#what-runs-on-it)); on the machine, a module defined at a
+session's prompt compiles and runs (`shell-compile-module`,
+[beamlet on Redoubt](../userland/beamlet.md#beamlet-on-redoubt)). The rest of this milestone is not built. It
 builds on `ipd` with scopes and its sink rule, and on `keyd`'s signing purposes, which are built
 and tested ([ipd](../servers/ipd.md), [keyd](../servers/keyd.md)).

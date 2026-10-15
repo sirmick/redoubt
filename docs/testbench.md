@@ -1629,7 +1629,7 @@ part of the trusted computing base
 
 ## The memory budget
 
-Status: built · tested: bench:init-boot, bench:userland-boot, bench:userland-read-only, bench:beamlet-footprint, bench:steward-session-ends, bench:steward-ssh-two-principals, bench:init-refuses-stack, bench:memory-host-tests, host:testbench::a_qmp_socket_is_private_and_binds
+Status: built · tested: bench:init-boot, bench:userland-boot, bench:userland-read-only, bench:beamlet-footprint, bench:beamlet-compile-footprint, bench:steward-session-ends, bench:steward-ssh-two-principals, bench:init-refuses-stack, bench:memory-host-tests, host:testbench::a_qmp_socket_is_private_and_binds, host:testbench::heap_fits_holds_an_eighth_of_the_cap_over_the_peak
 
 A boot case under `init` can set `memory = true`. After its console verdict the bench stops
 QEMU over QMP and dumps the guest's physical RAM beside the case's log, as
@@ -1667,7 +1667,11 @@ magic word and the tag before `main`, so the program's file and the launcher's c
 none. The same scan finds each server's record by its magic word and tag and prints
 `heap NAME PEAK of CAP pages`, or `heap NAME PEAK pages uncapped`. It fails a missing or
 duplicated record, a record whose cap is not the manifest's `heap_pages`, and a capped server
-whose cap is less than twice its peak; an uncapped server is reported only.
+whose cap is less than twice its peak; an uncapped server is reported only. A case that drives a
+workload within a server another case sizes from its idle peak sets `heap_fits = true`, and its
+capped servers pass instead when the peak leaves at least an eighth of the cap unused: the
+question there is whether the work fits, not what the server's size should be
+(`beamlet-compile-footprint`).
 
 The standard image is scanned after `init-boot`, `userland-boot` and `userland-read-only` on both
 widths, and after `steward-session-ends` and `steward-ssh-two-principals`, whose SSH logins are the
@@ -1702,7 +1706,9 @@ additional client from the merged manifest.
 The read-only client's largest stack peak is 6,616 bytes and its heap's 31 pages; its case uses
 the 16-page stack default and no cap. A session's beamlet is no manifest server: the steward
 launches it with an 18-page stack, twice beamlet's stack peak of 36,136 bytes (`beamlet-footprint`
-on rv64, with the boot pack read before its VM starts and its console on the hub), its second
+on rv64, with the boot pack read before its VM starts and its console on the hub; a compile at the
+prompt peaks at 34,280 on rv64 and 25,816 on rv32 in `beamlet-compile-footprint`, whose heap is
+judged under `heap_fits`: 9,122 and 8,783 pages of the 11,092 cap), its second
 scheduler's thread with a stack of the same size, and a heap cap of what its share holds beside
 its two schedulers' stacks and thread pages, its locks' endpoints and its process's page, 11,092
 pages of the 11,136 the steward gives it of the 11,264 `sizes` gives a session, the rest its
@@ -1790,7 +1796,10 @@ with that patch applied, since that is what Cargo builds, and nothing else diffe
 `sunset` is patched ([sshd](servers/sshd.md#the-core-and-its-platforms)), and what its patch does
 is tested through its public API (`tools/vendor-check/tests/sunset_patch.rs`). `ascii` is patched
 too: rustc 1.98 refuses to build it from a path as published, since Cargo caps a registry crate's
-lints, not a vendored one's.
+lints, not a vendored one's. `miniz_oxide` is patched to box the deflater's 64 KiB code buffer
+under `with-alloc`, as it is on wasm32, so its state is never a 65 KiB stack local on a scheduler
+thread ([beamlet](userland/beamlet.md#beamlet-on-redoubt); `tests/zlib_codec.rs` measures the
+inline and the boxed parts).
 
 ## The no-cruft gate
 

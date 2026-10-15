@@ -102,8 +102,11 @@ mod machine {
     #[cfg(feature = "label-probe")]
     const PROBE_SETTLE_US: u64 = 3_000_000;
     const SHELL: &str = "Elixir.Redoubt.Shell";
-    /// A session VM's first-thread stack, in pages: twice beamlet's measured peak, 35,288 bytes
-    /// (servers/init.md, "Stacks"; docs/testbench.md, "The memory budget").
+    /// A session VM's first-thread stack, in pages: twice beamlet's largest measured peak,
+    /// 36,136 bytes at the idle prompt (`beamlet-footprint`; a compile at the prompt peaks lower,
+    /// `beamlet-compile-footprint`: servers/init.md, "Stacks"; docs/testbench.md, "The memory
+    /// budget"). beamlet gives its other schedulers the same (`SCHEDULER_STACK_PAGES`,
+    /// userland/otp/redoubt/src/lib.rs).
     const SESSION_STACK_PAGES: usize = 18;
     /// A session VM's schedulers (`schedulers=N`, docs/userland/beamlet.md, "beamlet on
     /// Redoubt"): the image's choice, since the kernel does not tell a program how many harts
