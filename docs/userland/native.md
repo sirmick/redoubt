@@ -577,7 +577,7 @@ reaping by one timeout, no more.
 - host:redoubt-client::a_write_is_at_most_one_page
 - host:redoubt-client::two_connections_have_a_waiter_each_and_the_caller_idles_in_receive
 - host:redoubt-client::a_caller_busy_past_the_session_bound_keeps_its_session
-- host:redoubt-client::a_server_that_breaks_its_hold_loses_the_session_at_the_margin
+- host:redoubt-client::a_server_late_past_its_hold_keeps_the_session
 
 </details>
 
@@ -613,8 +613,10 @@ schedulers submit, and a waiter per connection wakes it
   bytes) each, so a server whose share is one page a badge takes every one; a longer write is
   refused `TooLarge`, for its caller to split.
 - **One connection needs no other thread.** The caller waits in the completion call itself when
-  it would idle, asking the server to hold it no longer than its own next deadline, and timing it
-  out only a margin (1 s) after that, so a timeout means the server broke its promise. That holds
+  it would idle, asking the server to hold it no longer than its own next deadline, and gets it
+  back by then only from a server with nothing to do: a server in a dispatch answers when it next
+  runs, so the caller's deadline slips by at most the dispatch, never its session
+  ([serving](../servers/serving.md#multiplexed-connections)). That holds
   only while nothing else must wake the caller, and only for a caller that idles at least every
   `COLLECT_WAIT / 2` (5 s), since a session with no completion call parked for its session bound
   (at most `COLLECT_WAIT`) ends. Any other gives the connection a waiter.

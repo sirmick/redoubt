@@ -195,7 +195,7 @@ fn the_volume_never_runs_out_while_every_root_is_within_its_quota() {
 /// The inodes an entry may take: all but inode 0 and the root.
 fn fs_inodes(t: &mut T) -> usize {
     let mut n = 0;
-    t.server.fs.with(|fs| Ok(n = fs.inode_count() as usize - 2)).unwrap();
+    t.server.fs.with("count", |fs| Ok(n = fs.inode_count() as usize - 2)).unwrap();
     n
 }
 

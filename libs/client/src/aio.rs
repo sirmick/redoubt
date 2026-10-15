@@ -16,11 +16,11 @@
 //!   go end to end in transfers of one page, so many small ones cost one page and a send never needs more
 //!   than the page a server's share may allow; a request longer than a page goes alone. [`Hub::batch`] queues
 //!   a run of submits to send them so.
-//! - **Completions.** Each connection has one completion call, which names how long the server may hold it;
-//!   its own kernel timeout is that hold and [`COLLECT_MARGIN_US`], so a timeout means the server broke its
-//!   promise and the session is lost. A server ends a session its session bound (at most [`COLLECT_WAIT`])
-//!   after its last completion call returned with none parked, so a connection with requests outstanding
-//!   keeps one parked.
+//! - **Completions.** Each connection has one completion call, which names how long the server may hold it
+//!   with nothing to say; a server in a dispatch answers when its mux next runs, so the call has no kernel
+//!   timeout: a late answer is a busy server, and a dead one frees the call with `Dead`. A server ends a
+//!   session its session bound (at most [`COLLECT_WAIT`]) after its last completion call returned with none
+//!   parked, so a connection with requests outstanding keeps one parked.
 //!   - With one connection the caller may make it itself when it would idle ([`Hub::wait`], holding it at
 //!     most until its next deadline), and no other thread exists. Only a caller that idles at least every
 //!     `COLLECT_WAIT / 2` may: any other gives the connection a waiter.
@@ -59,9 +59,6 @@ use crate::error::{Error, Name, Refusal};
 
 /// How long a submit waits for its server to take the request (µs) before it is queued instead.
 pub const SUBMIT_TIMEOUT_US: u64 = 1_000;
-/// How much longer than its hold a completion call waits for its answer (µs) before the server
-/// is taken to have broken its promise.
-pub const COLLECT_MARGIN_US: u64 = 1_000_000;
 /// How long a completion call is held at most while a request waits in the queue (µs), so the
 /// queue is tried again soon.
 pub const RETRY_US: u64 = 10_000;
@@ -311,8 +308,10 @@ impl Hub {
     pub fn completed(&mut self) -> Option<Done> { self.done.pop_front() }
 
     /// Waits in `conn`'s completion call itself, which its server holds at most `hold_us` µs (at
-    /// most [`RETRY_US`] while anything is queued), and takes what it brings: for a caller with
-    /// one connection and nothing else to wake it. Not for a connection with a waiter.
+    /// most [`RETRY_US`] while anything is queued) with nothing to say, and takes what it brings:
+    /// for a caller with one connection and nothing else to wake it. A server in a dispatch
+    /// answers when it next runs, so the wait may outlive its hold by the dispatch. Not for a
+    /// connection with a waiter.
     pub fn wait(&mut self, conn: Conn, hold_us: u64) -> Result<(), Error> {
         self.poll();
         let c = &mut self.conns[conn.0];
@@ -327,7 +326,7 @@ impl Hub {
             None => Buffer::new(COMPLETION_PAGES)?,
         };
         let hold = if c.queue.is_empty() { hold_us } else { hold_us.min(RETRY_US) }.min(COLLECT_WAIT);
-        let mut outcome = c.endpoint.call(&collect_words(hold), &[], Some(lend), hold + COLLECT_MARGIN_US);
+        let mut outcome = c.endpoint.call(&collect_words(hold), &[], Some(lend), FOREVER);
         let reply = match (&outcome.status, &outcome.reply) {
             (Ok(()), Some(reply)) => Some([reply.words[0], reply.words[1], reply.words[2]]),
             _ => None,
@@ -538,7 +537,7 @@ fn hand_over(endpoint: &Endpoint, wake: &Endpoint, index: u64, lend: Buffer) {
             continue;
         };
         let hold = if held.is_empty() { COLLECT_WAIT } else { 0 };
-        let mut outcome = endpoint.call(&collect_words(hold), &[], Some(buffer), hold + COLLECT_MARGIN_US);
+        let mut outcome = endpoint.call(&collect_words(hold), &[], Some(buffer), FOREVER);
         // A session the server opened afresh (word 2) is as good as an end: what was outstanding
         // is gone.
         let words = match (&outcome.status, &outcome.reply) {

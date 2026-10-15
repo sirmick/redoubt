@@ -35,7 +35,7 @@ pub(crate) struct T {
 impl T {
     pub fn on(disk: &Memory, labels: &[u64]) -> T {
         let mounted = mount(disk.clone()).expect("a volume");
-        let server = NineServer::new(Walfsd::new(mounted, labels.to_vec()), limits(4), 0).unwrap();
+        let server = NineServer::new(Walfsd::new(mounted, labels.to_vec(), None), limits(4), 0).unwrap();
         T { server, buf: vec![0; MSIZE] }
     }
 
@@ -301,7 +301,7 @@ fn a_blank_range_is_formatted_and_only_a_blank_one() {
     assert!(formatted.iter().any(|b| *b != 0), "a blank range is formatted");
     assert!(matches!(mount(disk.clone()), Ok(Mounted::Files { .. })));
     assert!(disk.bytes() == formatted, "a formatted range is mounted, not formatted again");
-    assert!(!Walfsd::new(mount(disk.clone()).unwrap(), vec![]).is_corrupt());
+    assert!(!Walfsd::new(mount(disk.clone()).unwrap(), vec![], None).is_corrupt());
     let blocks = |n: u32| n as usize * SECTORS_PER_BLOCK as usize;
     assert_eq!(mount(Memory::blank(blocks(MIN_BLOCKS) - 1)).err(), Some(NoVolume::TooSmall));
     assert!(matches!(mount(Memory::blank(blocks(MIN_BLOCKS))), Ok(Mounted::Files { .. })));
@@ -334,7 +334,7 @@ fn noise_is_never_formatted_and_never_mounted() {
     }
     assert!(disk.bytes() == noise, "a range that holds anything is never formatted");
     assert!(
-        Walfsd::new(mount(disk.clone()).unwrap(), vec![]).is_corrupt(),
+        Walfsd::new(mount(disk.clone()).unwrap(), vec![], None).is_corrupt(),
         "the program says so on its console"
     );
     // A log header with one byte set is not blank either.
@@ -371,6 +371,23 @@ fn a_flipped_bit_in_a_file_is_corrupt_for_that_file_alone() {
     t.put(&who, "after", b"still writes");
     assert_eq!(t.get(&who, &["after"]).unwrap(), b"still writes");
     assert_eq!(t.get(&who, &["damaged"]).unwrap_err(), "corrupt", "and stays corrupt");
+}
+
+/// A poisoning is said once, naming the operation whose I/O error it was and the range's
+/// reason; a range in memory gives none, so the line says the device failed.
+#[test]
+fn a_poisoned_volume_says_so_once() {
+    let disk = Memory::blank(SECTORS);
+    let mut t = T::on(&disk, &[]);
+    let who = caller(1, &[]);
+    with_notes(&mut t, &who, b"before");
+    assert_eq!(t.server.fs.poison_line(), None);
+    disk.fail();
+    assert_eq!(t.walk(&who, 0, 1, &["notes"]).unwrap_err(), "corrupt");
+    let line = t.server.fs.poison_line().expect("said").to_string();
+    assert_eq!(line, "walfsd: volume poisoned: stat: the device failed\n");
+    assert_eq!(t.attach(&who, 5).unwrap_err(), "corrupt");
+    assert_eq!(t.server.fs.poison_line(), Some(line.as_str()), "said once");
 }
 
 /// A mounted volume whose device starts failing answers `corrupt` from then on, to every

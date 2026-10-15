@@ -4,14 +4,14 @@
 //! [`Blkd`] the one client of the protocol: what `blkd` answers is checked before it is used, and
 //! a reply of the wrong shape or length is a [`Fault`], which a format sees as an I/O error.
 
-use redoubt_rt::abi::{FOREVER, PAGE_SIZE};
+use core::fmt;
+
+use redoubt_rt::abi::{Error as SysError, FOREVER, PAGE_SIZE};
 use redoubt_rt::client::Lend;
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::server::MALFORMED;
 pub use redoubt_rt::wire::blkd::{MAX_SECTORS, SECTOR};
-#[cfg(feature = "one-volume-probe")]
-use redoubt_rt::wire::proto::blkd::ErrorCode;
-use redoubt_rt::wire::proto::blkd::{Flush, Info, Message, Read, Reply, Write};
+use redoubt_rt::wire::proto::blkd::{ErrorCode, Flush, Info, Message, Read, Reply, Write};
 
 #[cfg(feature = "test-support")]
 mod memory;
@@ -21,6 +21,34 @@ pub use memory::{Disk, Memory};
 /// A request to the range failed: it was refused, or the disk did.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Fault;
+
+/// Why the last request to [`Blkd`] was a [`Fault`], for the volume server to say when the fault
+/// poisons its volume (servers/walfsd.md, "Failure and restart").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Why {
+    /// The call itself failed: `blkd` is dead, or refused the sender.
+    Call(SysError),
+    /// `blkd` answered the request with this error.
+    Answered(ErrorCode),
+    /// A reply that is not the protocol's: malformed, or carrying handles.
+    Malformed,
+    /// A reply of the right kind but the wrong shape or length.
+    Shape,
+    /// The request did not fit its lend.
+    Encode,
+}
+
+impl fmt::Display for Why {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Why::Call(e) => write!(f, "the call failed: {e:?}"),
+            Why::Answered(code) => write!(f, "blkd answered {code:?}"),
+            Why::Malformed => f.write_str("a malformed reply"),
+            Why::Shape => f.write_str("a reply of the wrong shape"),
+            Why::Encode => f.write_str("the request did not encode"),
+        }
+    }
+}
 
 /// What `info` says of a range.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -51,6 +79,8 @@ pub trait Range {
     /// default reads the head and tail sectors through a sector of scratch and the whole sectors
     /// between straight into `out`; [`Blkd`] does it in one call per span.
     fn read_at(&mut self, at: u64, out: &mut [u8]) -> Result<(), Fault> { read_at(self, at, out) }
+    /// Why the last request was a [`Fault`], where the range can tell; a range in memory cannot.
+    fn fault(&self) -> Option<Why> { None }
 }
 
 /// [`Range::read_at`]'s default.
@@ -83,6 +113,8 @@ pub struct Blkd {
     /// The most sectors one call carries: [`MAX_SECTORS`], or what the lend holds beside the
     /// message if that is less.
     per_call: u32,
+    /// Why the last call was a [`Fault`], if it was.
+    why: Option<Why>,
 }
 
 impl Blkd {
@@ -91,7 +123,13 @@ impl Blkd {
     pub fn new(endpoint: Endpoint, pages: usize) -> Result<Blkd, Fault> {
         let fits = (pages * PAGE_SIZE).saturating_sub(SECTOR as usize) / SECTOR as usize;
         let per_call = u32::try_from(fits).unwrap_or(MAX_SECTORS).clamp(1, MAX_SECTORS);
-        Ok(Blkd { endpoint, lend: Lend::new(pages).map_err(|_| Fault)?, per_call })
+        Ok(Blkd { endpoint, lend: Lend::new(pages).map_err(|_| Fault)?, per_call, why: None })
+    }
+
+    /// The fault, noted so [`Range::fault`] can say why.
+    fn note(&mut self, why: Why) -> Fault {
+        self.why = Some(why);
+        Fault
     }
 
     /// Calls the range with `message` (opcode `opcode`) and hands `read` its reply. An inline
@@ -103,13 +141,22 @@ impl Blkd {
         inline: bool,
         read: impl FnOnce(Reply<'_>) -> Option<T>,
     ) -> Result<T, Fault> {
-        let outcome = if inline {
-            self.endpoint.call(&message.encode(&mut []).map_err(|_| Fault)?, &[], None, FOREVER)
+        self.why = None;
+        let encoded = if inline {
+            message.encode(&mut [])
         } else {
-            let words = message.encode(self.lend.pages().map_err(|_| Fault)?).map_err(|_| Fault)?;
+            match self.lend.pages() {
+                Ok(pages) => message.encode(pages),
+                Err(_) => return Err(self.note(Why::Encode)),
+            }
+        };
+        let Ok(words) = encoded else { return Err(self.note(Why::Encode)) };
+        let outcome = if inline {
+            self.endpoint.call(&words, &[], None, FOREVER)
+        } else {
             self.lend.call(&self.endpoint, &words, &[], FOREVER)
         };
-        let (reply, _) = outcome.into_result().map_err(|_| Fault)?;
+        let (reply, _) = outcome.into_result().map_err(|e| self.note(Why::Call(e)))?;
         // The range sends no handles; any that came are closed, and the reply is not believed.
         let mut handles = false;
         for handle in reply.handles.as_slice().iter().flatten() {
@@ -117,13 +164,15 @@ impl Blkd {
             handles = true;
         }
         if handles || reply.words == MALFORMED {
-            return Err(Fault);
+            return Err(self.note(Why::Malformed));
         }
         let body = if inline { &[][..] } else { self.lend.bytes() };
-        match Reply::decode(opcode, &reply.words, body, 0) {
-            Ok(Ok(reply)) => read(reply).ok_or(Fault),
-            _ => Err(Fault),
-        }
+        let result = match Reply::decode(opcode, &reply.words, body, 0) {
+            Ok(Ok(reply)) => read(reply).ok_or(Why::Shape),
+            Ok(Err(code)) => Err(Why::Answered(code)),
+            Err(_) => Err(Why::Malformed),
+        };
+        result.map_err(|why| self.note(why))
     }
 
     /// One `read`: `count` sectors from `sector`, of which the bytes `skip..skip + piece.len()`
@@ -184,6 +233,8 @@ impl Range for Blkd {
     fn flush(&mut self) -> Result<(), Fault> {
         self.call(4, &Message::Flush(Flush {}), true, |reply| matches!(reply, Reply::Flush(_)).then_some(()))
     }
+
+    fn fault(&self) -> Option<Why> { self.why }
 
     /// One call per span of [`Blkd::per_call`] sectors the bytes touch: a file's blocks are one.
     fn read_at(&mut self, at: u64, out: &mut [u8]) -> Result<(), Fault> {

@@ -595,7 +595,7 @@ each, with the volume check finding nothing.
 
 ## Failure and restart
 
-Status: built · tested: bench:walfsd-power-loss, bench:walfsd-corrupt-volume, bench:walfsd-reboot
+Status: built · tested: bench:walfsd-power-loss, bench:walfsd-corrupt-volume, bench:walfsd-reboot, host:redoubt-walfsd::a_poisoned_volume_says_so_once, host:redoubt-fileserver::a_fault_says_why
 
 - **`walfsd` crashes:** its clients' calls get `Dead`, `init` restarts it on the same endpoint
   ([init](init.md#restarts-and-reboots)), and its mount recovers a cut transaction from the log,
@@ -603,7 +603,9 @@ Status: built · tested: bench:walfsd-power-loss, bench:walfsd-corrupt-volume, b
 - **The medium is corrupt:** a volume that does not mount is served as corrupt, never exited on;
   a damaged block fails the requests that read it.
 - **An I/O error from `blkd`** poisons the volume until `walfsd` starts again, whose mount
-  recovers what the error left.
+  recovers what the error left. `walfsd` says so once on its console,
+  `walfsd: volume poisoned: <operation>: <reason>`, with the reason its range client noted: the
+  call failed, `blkd` answered an error, or a reply was malformed.
 
 ## Residual risks
 

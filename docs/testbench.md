@@ -1204,6 +1204,7 @@ steps = [
     { wait = "bob-ready" },      # wait for another session's mark
     { resize = [132, 43] },      # with `pty = true`: resize ssh's terminal
     { idle = 60 },               # with [idle]: type nothing for 60 s while the bench measures
+    { within = 30 },             # the next step must finish within 30 s, before the case's deadline
     { exit = 0 },                # close input, read until ssh exits, require this status
     { mark = "alice-gone" },     # only marks follow `exit`: this session's ssh is gone
 ]

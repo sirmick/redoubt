@@ -5,7 +5,7 @@
 use std::sync::{Arc, Mutex};
 
 use redoubt_fake_kernel::fake;
-use redoubt_fileserver::range::{Blkd, Fault, Geometry, Range, SECTOR};
+use redoubt_fileserver::range::{Blkd, Fault, Geometry, Range, SECTOR, Why};
 use redoubt_rt::abi::{FOREVER, Handle};
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::ipc::{Caller, Event, Words};
@@ -109,6 +109,46 @@ fn reads_split_at_the_lend_and_part_of_a_sector_is_a_fault() {
         assert_eq!(calls(&reads), 1, "the two sectors around it, in one call");
         assert_eq!(range.read(u64::MAX, &mut [0u8; S]), Err(Fault));
         assert_eq!(range.read(63, &mut [0u8; 2 * S]), Err(Fault), "past the range: blkd's refusal");
+    });
+    f.destroy(blkd, receive);
+    assert_eq!(thread.join().unwrap(), 0);
+}
+
+/// A fault says why: `blkd`'s own refusal is kept as the reason, and a call that succeeds
+/// clears it.
+#[test]
+fn a_fault_says_why() {
+    let f = fake();
+    let bytes: Vec<u8> = (0..64 * S).map(|i| (i % 251) as u8).collect();
+    let reads = Arc::new(Mutex::new(0));
+    let blkd = f.process(0, &[]);
+    let receive = f.endpoint(blkd);
+    let server = FakeBlkd { bytes: bytes.clone(), reads: reads.clone(), out: Vec::new() };
+    let thread = f.run(blkd, move || {
+        let (endpoint, mut server) = (Endpoint::from_handle(receive), server);
+        loop {
+            match endpoint.receive(FOREVER, 0) {
+                Ok(Event::Call(request)) => {
+                    let _ = serve_call::<Proto, _>(&mut server, request);
+                }
+                Ok(_) => {}
+                Err(_) => return 0,
+            }
+        }
+    });
+    let client = f.process(0, &[]);
+    let volume = f.grant(blkd, receive, client, 1);
+    f.as_process(client, || {
+        let mut range = Blkd::new(Endpoint::from_handle(volume), 2).unwrap();
+        let mut out = vec![0u8; S];
+        range.read(0, &mut out).unwrap();
+        assert_eq!(out, bytes[..S]);
+        assert_eq!(range.fault(), None);
+        assert_eq!(*reads.lock().unwrap(), 1);
+        assert_eq!(range.read(63, &mut [0u8; 2 * S]), Err(Fault));
+        assert_eq!(range.fault(), Some(Why::Answered(ErrorCode::OutOfRange)));
+        range.read(0, &mut out).unwrap();
+        assert_eq!(range.fault(), None, "a call that succeeds clears the reason");
     });
     f.destroy(blkd, receive);
     assert_eq!(thread.join().unwrap(), 0);

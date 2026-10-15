@@ -618,6 +618,8 @@ enum Event {
 struct Driver<'a> {
     shared: &'a Shared<'a>,
     deadline: Instant,
+    /// The step in progress must finish by this, if a `within` step bounded it.
+    within: Option<Instant>,
     /// When ssh started: each `expect` notes in the log how long after it matched.
     started: Instant,
     ssh: Reaped,
@@ -698,6 +700,7 @@ fn drive(
     let mut driver = Driver {
         shared,
         deadline,
+        within: None,
         started: Instant::now(),
         stdin: master.or_else(|| child.stdin.take().map(|pipe| std::os::fd::OwnedFd::from(pipe).into())),
         pty: session.pty,
@@ -731,8 +734,24 @@ fn drive(
 }
 
 impl Driver<'_> {
+    /// Runs one step. A `within` bounds the step after it, and only that one.
     fn step(&mut self, step: &Step) -> Result<(), Stop> {
+        if let Step::Within(seconds) = step {
+            self.within = Some(Instant::now() + Duration::from_secs_f64(*seconds));
+            return Ok(());
+        }
+        let result = self.run(step);
+        self.within = None;
+        result
+    }
+
+    /// When the step in progress must be done by: its own bound, if a `within` set one, or the
+    /// case's deadline.
+    fn limit(&self) -> Instant { self.within.map_or(self.deadline, |within| within.min(self.deadline)) }
+
+    fn run(&mut self, step: &Step) -> Result<(), Stop> {
         match step {
+            Step::Within(_) => Ok(()),
             Step::Send(text) => {
                 let stdin = self.stdin.as_mut().ok_or(Stop::Broken("send after exit".into()))?;
                 // ssh may be gone already; its exit is reported at the next expect or exit.
@@ -753,17 +772,17 @@ impl Driver<'_> {
                 self.shared.changed.notify_all();
                 Ok(())
             }
-            Step::Wait(mark) => self.shared.wait(mark, self.deadline),
+            Step::Wait(mark) => self.shared.wait(mark, self.limit()),
             Step::Idle(seconds) => {
                 // The quiet starts once the log is on, and the next step once it is off.
-                self.shared.idle_edge(true, self.deadline)?;
+                self.shared.idle_edge(true, self.limit())?;
                 let end = Instant::now() + Duration::from_secs_f64(*seconds);
                 // Read on, so the output still passes `forbid`, until the window ends.
                 let mut quiet = Ok(true);
                 while self.status.is_none() && matches!(quiet, Ok(true)) {
-                    quiet = self.pump_until(end.min(self.deadline));
+                    quiet = self.pump_until(end.min(self.limit()));
                 }
-                let ended = self.shared.idle_edge(false, self.deadline);
+                let ended = self.shared.idle_edge(false, self.limit());
                 quiet?;
                 ended?;
                 if let Some(status) = self.status {
@@ -825,8 +844,11 @@ impl Driver<'_> {
 
     /// Take in the next piece of output, or ssh's exit, whichever comes first.
     fn pump(&mut self, waiting_for: &str) -> Result<(), Stop> {
-        match self.pump_until(self.deadline)? {
+        match self.pump_until(self.limit())? {
             true => Ok(()),
+            false if self.within.is_some_and(|within| within < self.deadline) => {
+                Err(Stop::Failed(format!("timed out waiting for {waiting_for} within the step's own bound")))
+            }
             false => Err(Stop::Failed(format!("timed out waiting for {waiting_for}"))),
         }
     }
