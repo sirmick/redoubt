@@ -1564,7 +1564,7 @@ part of the trusted computing base
 
 ## The memory budget
 
-Status: built · tested: bench:init-boot, bench:userland-boot, bench:userland-read-only, bench:beamlet-footprint, bench:steward-session-ends, bench:steward-ssh-two-principals, bench:init-refuses-stack, bench:memory-host-tests
+Status: built · tested: bench:init-boot, bench:userland-boot, bench:userland-read-only, bench:beamlet-footprint, bench:steward-session-ends, bench:steward-ssh-two-principals, bench:init-refuses-stack, bench:memory-host-tests, host:testbench::a_qmp_socket_is_private_and_binds
 
 A boot case under `init` can set `memory = true`. After its console verdict the bench stops
 QEMU over QMP and dumps the guest's physical RAM beside the case's log, as
@@ -1585,10 +1585,13 @@ below it, and ignored above it, where either leaves the peak where it is. The be
 `stack NAME PEAK of PAGES pages` for each server and fails when the declared pages are less than
 twice the measured peak rounded up to a page. The dump, the size of the guest's RAM, is deleted
 once scanned; a scan that fails on a duplicate or out-of-range unit, or cannot read the dump,
-keeps it as the evidence. The QMP socket is always removed. It is in the temporary directory,
-under a name another user can predict, and QEMU creates it under the bench's umask, so it is
-private to the bench's user only under umask 077 or on a single-user host
-([a private directory for the QMP socket](todo/qmp-socket-private-dir.md)). The manifest's
+keeps it as the evidence. The QMP socket is in a directory of the run's own under the temporary
+directory, made 0700 under a name drawn at random, so whatever the bench's umask only its user
+can reach the socket and no other user can leave a file where it will be; the directory and the
+socket go when the run ends, passed, failed or in error. A bench killed outright leaves the
+directory, empty of any listener since QEMU dies with the bench, under `$REDOUBT_TMP`, the
+job's scratch. A temporary directory so deep that the socket's path would reach a Unix socket's
+108 bytes is refused before QEMU starts, naming the limit. The manifest's
 `stack_pages` defaults to 16 and cannot exceed 128
 ([the boot manifest](servers/init.md#the-boot-manifest)).
 
