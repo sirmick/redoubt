@@ -9,6 +9,13 @@
 //! queue membership, the floor, the tie counters, the cap set and each hart's running thread must
 //! agree after every step.
 //!
+//! Every other step's slice end takes the kernel's slice end that picks where it is
+//! ([`Harts::repick`]): it must leave what the round trip through `kmain` leaves, the preempted
+//! thread made waiting by the process table, every field of the queue, the runners and the store
+//! compared, and it must pick what the model's slice end and pick do. Every pick switches a hart
+//! on in the kernel's order, the settle, the switch on and the reconcile its return makes; the
+//! model reconciles there too.
+//!
 //! Destructions come in the kernel's shapes too: a leaf whose threads were blocked first; a
 //! budget on a hart, destroyed with its threads (a deadline: nothing deschedules it first); and a
 //! whole subtree at once, bottom-up (R10's order), the top's carve returned first (the kernel's
@@ -19,13 +26,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use redoubt_model::mutation::Mutation;
 use redoubt_model::sched::{Current, Scheduler};
 use redoubt_model::spec::SLICE;
-use redoubt_stride::{Budgets, Harts, State};
+use redoubt_stride::{Budgets, Harts, Repick, State};
 
 type Thread = (u64, u64);
 
 /// The most harts a run drives.
 const HARTS: usize = 4;
 
+#[derive(Clone, Debug)]
 struct Budget {
     state: State,
     parent: Option<u64>,
@@ -35,7 +43,7 @@ struct Budget {
     cursor: Option<Thread>,
 }
 
-#[derive(Default)]
+#[derive(Clone, Debug, Default)]
 struct Store(BTreeMap<u64, Budget>);
 
 impl Budgets<u64> for Store {
@@ -51,6 +59,7 @@ impl Budgets<u64> for Store {
 }
 
 /// The kernel's wiring ([`Harts`]) over a store, with each hart's thread and its slice.
+#[derive(Clone, Debug)]
 struct Kernel {
     cpu: Harts<u64, 64, HARTS>,
     harts: usize,
@@ -62,6 +71,10 @@ struct Kernel {
     /// The budgets whose threads changed since the last reconcile, as the kernel marks them: the
     /// only ones a reconcile visits.
     marked: Vec<u64>,
+    /// What the last [`Harts::repick`] did, and how often it ran in place, picked another and
+    /// declined.
+    last: Option<Repick<u64, Thread>>,
+    repicks: [usize; 3],
 }
 
 impl Kernel {
@@ -76,6 +89,8 @@ impl Kernel {
             slice_left: [0; HARTS],
             returned: BTreeSet::new(),
             marked: Vec::new(),
+            last: None,
+            repicks: [0; 3],
         }
     }
 
@@ -198,21 +213,8 @@ impl Kernel {
             return self.current(h);
         }
         let busy: BTreeSet<Thread> = self.thread.iter().flatten().copied().collect();
-        let (b, t) = self.cpu.pick(&mut self.bs, |bs, b| {
-            let x = &bs.0[&b];
-            let free = |t: &&Thread| !busy.contains(*t);
-            x.cursor
-                .and_then(|c| {
-                    x.threads.range((std::ops::Bound::Excluded(c), std::ops::Bound::Unbounded)).find(free)
-                })
-                .or_else(|| x.threads.iter().find(free))
-                .copied()
-        })?;
-        self.bs.0.get_mut(&b).unwrap().cursor = Some(t);
-        self.thread[h] = Some(t);
-        self.cpu.switch(h, &mut self.bs, Some(b), false, |_, _| true);
-        self.settle(b);
-        self.slice_left[h] = SLICE;
+        let (b, t) = self.cpu.pick(&mut self.bs, |bs, b| next_thread(bs, &busy, b))?;
+        self.enter(h, b, t);
         self.current(h)
     }
 
@@ -235,6 +237,87 @@ impl Kernel {
             self.deschedule(h);
         }
     }
+
+    /// Hart `h`'s slice ended: the kernel's slice end that picks where it is ([`Harts::repick`]),
+    /// its thread still on the hart for the counts. The round trip through `kmain` when it
+    /// declines.
+    fn repick(&mut self, h: usize) -> Option<Current> {
+        if self.cpu.cur(h).is_none() || self.slice_left[h] > 0 {
+            return self.current(h);
+        }
+        let own = self.thread[h].expect("a hart running a budget runs a thread");
+        let busy: BTreeSet<Thread> = self.thread.iter().flatten().copied().collect();
+        let mut marked = std::mem::take(&mut self.marked);
+        let lost = marked.clone();
+        let waiting = |bs: &Store, b: u64| bs.0[&b].threads.difference(&busy).count() as u32;
+        let next = |bs: &Store, b: u64| next_thread(bs, &busy, b);
+        let done = self.cpu.repick(h, &mut self.bs, &lost, &mut marked, waiting, own, next);
+        self.last = Some(done);
+        self.repicks[match done {
+            Repick::InPlace => 0,
+            Repick::Other(..) => 1,
+            Repick::Declined => 2,
+        }] += 1;
+        match done {
+            Repick::InPlace => {
+                self.bs.0.get_mut(&self.cpu.cur(h).unwrap()).unwrap().cursor = Some(own);
+                self.slice_left[h] = SLICE;
+            }
+            Repick::Other(n, t) => {
+                // The preempted thread is made waiting (its process marked), the pick's entered.
+                let b = own.0;
+                self.marked.push(b);
+                self.enter(h, n, t);
+            }
+            // The kernel's round trip through `kmain`, as it was.
+            Repick::Declined => {
+                self.marked = lost;
+                return self.round_trip(h);
+            }
+        }
+        self.current(h)
+    }
+
+    /// The same slice end as the kernel's round trip through `kmain` makes it, the thread counted
+    /// as the process table counts it: made waiting (its process marked) before the settle and
+    /// the switch off, the entry's and the pick's reconciles, the pick, and a thread of the pick
+    /// taken off the waiting ones before the settle, the switch on and the reconcile.
+    fn round_trip(&mut self, h: usize) -> Option<Current> {
+        let b = self.cpu.cur(h)?;
+        self.thread[h] = None;
+        self.marked.push(b);
+        self.settle(b);
+        let runnable = |bs: &Store, b: u64| !bs.0[&b].threads.is_empty();
+        self.cpu.switch(h, &mut self.bs, None, true, runnable);
+        self.reconcile();
+        self.reconcile();
+        let busy: BTreeSet<Thread> = self.thread.iter().flatten().copied().collect();
+        let (n, t) = self.cpu.pick(&mut self.bs, |bs, b| next_thread(bs, &busy, b))?;
+        self.enter(h, n, t);
+        self.current(h)
+    }
+
+    /// The kernel's switch into thread `t` of `n`, which the queue picked: the thread taken off
+    /// the waiting ones (its process marked), the settle, the switch on and the reconcile.
+    fn enter(&mut self, h: usize, n: u64, t: Thread) {
+        self.bs.0.get_mut(&n).unwrap().cursor = Some(t);
+        self.thread[h] = Some(t);
+        self.settle(n);
+        self.cpu.switch(h, &mut self.bs, Some(n), false, |_, _| true);
+        self.marked.push(n);
+        self.reconcile();
+        self.slice_left[h] = SLICE;
+    }
+}
+
+/// `b`'s next thread no hart runs (`busy`), after its round-robin cursor, wrapping.
+fn next_thread(bs: &Store, busy: &BTreeSet<Thread>, b: u64) -> Option<Thread> {
+    let x = &bs.0[&b];
+    let free = |t: &&Thread| !busy.contains(*t);
+    x.cursor
+        .and_then(|c| x.threads.range((std::ops::Bound::Excluded(c), std::ops::Bound::Unbounded)).find(free))
+        .or_else(|| x.threads.iter().find(free))
+        .copied()
 }
 
 struct Rng(u64);
@@ -277,9 +360,23 @@ fn compare(m: &Scheduler, k: &Kernel, step: usize, seed: u64) {
     }
 }
 
-fn run(seed: u64, harts: usize) { run_with(seed, harts, None) }
+/// The model's pick on hart `h`. A pick that puts a thread on the hart is the kernel's switch into
+/// it, whose return reconciles (`sched::leave`), so the floor and the cap set follow the switch on
+/// there, in the model as in [`Kernel::enter`].
+fn model_pick(m: &mut Scheduler, h: usize) -> Option<Current> {
+    let switched = m.on(h).is_none();
+    let picked = m.pick_on(h);
+    if switched && picked.is_some() {
+        m.reconcile();
+    }
+    picked
+}
 
-fn run_with(seed: u64, harts: usize, mutation: Option<Mutation>) {
+fn run(seed: u64, harts: usize) -> [usize; 3] { run_with(seed, harts, None) }
+
+/// Runs one sequence; returns how often its slice ends picked in place, picked another and
+/// declined ([`Harts::repick`]).
+fn run_with(seed: u64, harts: usize, mutation: Option<Mutation>) -> [usize; 3] {
     let mut rng = Rng(seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1);
     let mut m = Scheduler { mutation, ..Scheduler::default() };
     m.set_harts(harts);
@@ -359,7 +456,7 @@ fn run_with(seed: u64, harts: usize, mutation: Option<Mutation>) {
             }
             // Time passes for whatever a hart runs.
             7..=9 => {
-                assert_eq!(m.pick_on(h), k.pick(h), "seed {seed} step {step} hart {h}'s pick");
+                assert_eq!(model_pick(&mut m, h), k.pick(h), "seed {seed} step {step} hart {h}'s pick");
                 let dt = match rng.below(3) {
                     0 => SLICE,
                     1 => 1 + rng.below(SLICE),
@@ -368,7 +465,24 @@ fn run_with(seed: u64, harts: usize, mutation: Option<Mutation>) {
                 m.run_on(h, dt);
                 k.run(h, dt);
                 m.slice_end_on(h);
-                k.slice_end(h);
+                // Every other step's slice end picks where it is, as the kernel's does; it must
+                // leave what the round trip through `kmain` leaves, and pick what the model picks.
+                if step % 2 == 0 && k.slice_left[h] == 0 && k.cpu.cur(h).is_some() {
+                    let mut trip = k.clone();
+                    let picked = k.repick(h);
+                    if !matches!(k.last, Some(Repick::Declined)) {
+                        trip.round_trip(h);
+                        (trip.last, trip.repicks) = (k.last, k.repicks);
+                        assert_eq!(
+                            format!("{trip:?}"),
+                            format!("{k:?}"),
+                            "seed {seed} step {step} hart {h}'s repick"
+                        );
+                    }
+                    assert_eq!(model_pick(&mut m, h), picked, "seed {seed} step {step} hart {h}'s repick");
+                } else {
+                    k.slice_end(h);
+                }
             }
             // A budget deadline elsewhere: a hart's thread is preempted.
             10 => {
@@ -402,19 +516,28 @@ fn run_with(seed: u64, harts: usize, mutation: Option<Mutation>) {
                 k.destroy_subtree(top, &subtree);
             }
             _ => {
-                assert_eq!(m.pick_on(h), k.pick(h), "seed {seed} step {step} hart {h}'s pick");
+                assert_eq!(model_pick(&mut m, h), k.pick(h), "seed {seed} step {step} hart {h}'s pick");
             }
         }
         compare(&m, &k, step, seed);
     }
+    k.repicks
 }
 
 #[test]
 fn the_crate_and_the_model_agree() {
     for harts in [1, 2, 4] {
+        let mut repicks = [0; 3];
         for seed in 0..3000 {
-            run(seed, harts);
+            for (all, n) in repicks.iter_mut().zip(run(seed, harts)) {
+                *all += n;
+            }
         }
+        // Every way a slice end that picks where it is can go comes, at every hart count.
+        assert!(
+            repicks.iter().all(|n| *n > 100),
+            "at {harts} harts: in place, another, declined {repicks:?}"
+        );
     }
 }
 

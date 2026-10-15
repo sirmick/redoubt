@@ -31,10 +31,11 @@
 //!
 //! [`Harts`] is the wiring itself: one [`Runner`] per hart, the budget whose runtime is accruing
 //! there, when it is folded, and the order of the steps at a deschedule, a pick, a creation, a
-//! weight change and a destruction. A budget runs on as many harts as it has runnable threads,
-//! each hart charging its own runner to the budget's one pass. The kernel's `sched.rs` drives it
-//! with its trap-boundary accounting and the budgets' frames; [`Cpu`] is the same wiring for one
-//! hart, and the differential drives it against the model.
+//! weight change and a destruction, and a slice end that picks where it is ([`Harts::repick`]).
+//! A budget runs on as many harts as it has runnable threads, each hart charging its own runner to
+//! the budget's one pass. The kernel's `sched.rs` drives it with its trap-boundary accounting and
+//! the budgets' frames; [`Cpu`] is the same wiring for one hart, and the differential drives it
+//! against the model.
 
 #![no_std]
 #![forbid(unsafe_code)]
@@ -464,6 +465,10 @@ impl<B: Copy + PartialEq, const N: usize> Queue<B, N> {
         }
     }
 
+    /// `b`'s threads waiting for a hart as the queue counts them, if it is queued: for a checked
+    /// kernel's comparison with the process table's count.
+    pub fn waiting_of(&self, b: B) -> Option<u32> { self.slot_of(b).map(|i| self.waiting[i]) }
+
     /// The budget at `slots[i]` had a thread (`had`) before its counts changed: if that changed, it
     /// joins or leaves those the floor counts, and the floor is raised at the end of the operation.
     fn recounted(&mut self, i: usize, had: bool) { self.pending |= had != self.has_thread(i); }
@@ -725,6 +730,20 @@ impl<B> Default for Runner<B> {
     fn default() -> Self { Self::new() }
 }
 
+/// What [`Harts::repick`] did at a hart's slice end.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Repick<B, T> {
+    /// The queue picked the preempted budget again: its thread runs on, the hart's runner is it
+    /// again, and its counts are back where they were.
+    InPlace,
+    /// The queue picked another budget, and this thread of it: the hart's runner is none, and
+    /// the preempted thread is waiting. The switch into the pick is the caller's.
+    Other(B, T),
+    /// Nothing done: the hart runs no budget, or the budget has another thread waiting for a
+    /// hart, whose turn the round-robin may give.
+    Declined,
+}
+
 /// The queue wired to its runners, one per hart: when runtime is folded, and the order of the
 /// steps at a deschedule, a pick, a creation, a weight change and a destruction. Runtime is folded
 /// into a pass only here: at a deschedule ([`Wiring::switch`], at least [`MIN_CHARGE`]), before a
@@ -838,6 +857,47 @@ impl<B: Copy + PartialEq, const N: usize> Wiring<'_, B, N> {
                 Some(h) => passed |= 1 << h,
                 None => self.q.deschedule(bs, b, false),
             }
+        }
+    }
+
+    /// [`Harts::repick`]: the steps of the switch off, the reconciles, the pick and the switch on,
+    /// in their order, with the preempted thread counted as waiting from the settle before the
+    /// switch off until the one after the pick, as the process table counts it in the round trip.
+    fn repick<S: Budgets<B>, T>(
+        &mut self,
+        h: usize,
+        bs: &mut S,
+        lost: &[B],
+        gained: &mut [B],
+        waiting: impl Fn(&S, B) -> u32,
+        own: T,
+        mut next: impl FnMut(&S, B) -> Option<T>,
+    ) -> Repick<B, T> {
+        let Some(b) = self.runners[h].cur else { return Repick::Declined };
+        if waiting(bs, b) > 0 {
+            return Repick::Declined;
+        }
+        let counted = |bs: &S, x: B| waiting(bs, x) + u32::from(x == b);
+        // The switch off: its settle counts the preempted thread as waiting, then the runner is
+        // folded and requeued behind its equals, and the entry's marks are reconciled.
+        self.q.set_waiting(b, 1);
+        self.switch(h, bs, None, true, |_, _| true);
+        self.reconcile(bs, lost, gained, &counted);
+        // The pick's own reconcile, with nothing marked since.
+        self.reconcile(bs, &[], &mut [], &counted);
+        // The preempted thread is its budget's only one no hart runs: the round-robin's only answer.
+        let mut own = Some(own);
+        match self.pick(bs, |bs, x| if x == b { own.take() } else { next(bs, x) }) {
+            Some((n, _)) if n == b => {
+                // The switch on: its settle counts the thread running again, and the reconcile
+                // visits the budget whose count fell.
+                self.q.set_waiting(b, 0);
+                self.switch(h, bs, Some(b), false, |_, _| true);
+                self.reconcile(bs, &[b], &mut [], &waiting);
+                Repick::InPlace
+            }
+            Some((n, t)) => Repick::Other(n, t),
+            None => unreachable!("the preempted budget is queued with a thread no hart runs"),
         }
     }
 
@@ -1056,6 +1116,28 @@ impl<B: Copy + PartialEq, const N: usize, const H: usize> Harts<B, N, H> {
         next: impl FnMut(&S, B) -> Option<T>,
     ) -> Option<(B, T)> {
         self.wiring().pick(bs, next)
+    }
+
+    /// Hart `h`'s slice ended, and its thread `own` stays runnable: what a switch to no budget
+    /// with its thread requeued, the reconcile of the entry's marks (`lost`, `gained`), the pick's
+    /// reconcile, the pick and the switch into it do (kernel/scheduling.md, "Preemption points"),
+    /// without the process table ever counting `own` as waiting. `waiting` and `next` are the
+    /// caller's counts and choices with `own` still on the hart, so neither counts nor offers it;
+    /// it is counted here. If the queue picks its budget again, `own` runs on ([`Repick::InPlace`]);
+    /// otherwise the pick is returned and the caller makes `own` waiting and switches.
+    /// [`Repick::Declined`] if the budget has another thread waiting (its round-robin is the
+    /// caller's), or the hart runs none.
+    pub fn repick<S: Budgets<B>, T>(
+        &mut self,
+        h: usize,
+        bs: &mut S,
+        lost: &[B],
+        gained: &mut [B],
+        waiting: impl Fn(&S, B) -> u32,
+        own: T,
+        next: impl FnMut(&S, B) -> Option<T>,
+    ) -> Repick<B, T> {
+        self.wiring().repick(h, bs, lost, gained, waiting, own, next)
     }
 
     /// [`Cpu::create`], the parent's runner on whichever hart runs it.

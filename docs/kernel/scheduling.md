@@ -67,7 +67,7 @@ no dependencies.
 
 ### Preemption points
 
-<details><summary>Status: built · partly tested: that an interrupt's wake does not preempt, and that another budget's deadline does, are not attacked by a case · tested (10)</summary>
+<details><summary>Status: built · partly tested: that an interrupt's wake does not preempt, and that another budget's deadline does, are not attacked by a case · tested (12)</summary>
 
 - bench:sched-wake-no-preempt
 - bench:sched-wake-no-preempt-harts
@@ -76,6 +76,8 @@ no dependencies.
 - bench:budget-deadline
 - bench:sched-timer-entry
 - host:redoubt-model::scheduler_contracts_hold
+- host:redoubt-stride::the_crate_and_the_model_agree
+- host:testbench::a_pick_in_place_is_a_slice_end_that_requeued_its_runner
 - mutation:R12PreemptOnWake
 - mutation:R12TimeoutWakePreempts
 - mutation:R12SliceCountsExitWork
@@ -98,16 +100,20 @@ a deadline): the woken thread first runs at a pick, an idle hart's or one after 
 such a reason. `sched-wake-no-preempt` proves it at one hart nap by nap, each against the slice
 that follows it; `sched-wake-no-preempt-harts` judges it at two, each wake at the entry that made
 it, its naps' ends stepped through the slices' phases, and needs at least twenty of its hundred and
-twenty wakes answered where they could have preempted, mid-slice or at another budget's call (40
-to 69 at a call in ten runs a width). Whether a slice ended at a timer interrupt the oracle
+twenty wakes answered where they could have preempted, mid-slice or at another budget's call (67
+to 81 at a call on rv64 and 65 to 68 on rv32, five runs a width alone; the floor is a third of
+the least). Whether a slice ended at a timer interrupt the oracle
 decides itself, from the decision's inputs the trace records (its end and now), so a slice that
 ends during the entry's own expiry counts as ended, as the kernel ends it. Under `icount` a wake
-comes mid-slice on rv64 (22 to 30) but at most once on rv32, whose armed hart takes its interrupt
-only at its next turn, after the other hart's call has answered the timeout; so
+comes mid-slice on rv64 (26 to 30) but at most four times on rv32 (0 to 4), whose armed hart takes
+its interrupt only at its next turn, after the other hart's call has answered the timeout; so
 `sched-wake-no-preempt-harts-mttcg`, the same program where the harts run at once, needs five
-mid-slice (52 to 78 on rv64 and 57 to 71 on rv32, ten runs a width). A kernel built with
-`wake-preempts`, whose timeout wake preempts the entering thread as a deadline does, fails both on
-both widths, in recorded negative runs.
+mid-slice. How many come is the host's race: 49 to 55 on rv64 and 48 to 57 on rv32 with the two
+harts on eight host cores (three runs a width), 70 and 72 beside other cases, and as few as 3 with the two vCPU
+threads and QEMU's I/O thread sharing two cores, so the case runs on the quiet core set. A kernel
+built with `wake-preempts`, whose timeout wake preempts the entering thread as a deadline does,
+fails both on both widths, in recorded negative runs (on rv32 under `icount`: a wake took hart 0
+from budget 37).
 
 A budget deadline preempts whatever runs, because the destruction lifts passes and removes
 budgets, so the queue must be picked again. A thread that entered the kernel just as the deadline
@@ -119,17 +125,33 @@ destruction runs to its end. Picking is done by `kmain`, the kernel's own loop (
 its pick through a private S-mode `ecall` into the kernel's trap handler, which saves `kmain`'s
 context as it saves a thread's.
 
-So a slice's end is a round trip through `kmain`: the timer interrupt preempts the thread, `kmain`
-picks, the same thread again if its budget still ranks first, and its switch returns to it.
-`sched-timer-entry` bounds what that costs the kernel: two spinners and nothing else, so every
+So a slice's end picks again. When nothing is due for `kmain`'s expiry to answer first and no
+other thread of the running budget waits for a hart, the trap picks where it is
+(`sched::repick`): the stride takes the steps of the round trip through `kmain`, in its order
+(`Harts::repick`), the budget charged and requeued behind its equals, the entry reconciled, the
+queue picked. If the pick is the same budget its thread runs on, a new slice from its return, with
+no switch to `kmain` and back; if it is another budget's thread, the trap switches into it there
+(`sched::switch_here`), with the steps of `kmain`'s switch: the thread it ran made ready, the
+pick's address space and thread activated, instruction fetch fenced, one return, which
+deschedules the budget switched from and starts the pick's slice. Only a slice's end that finds
+something due, or whose budget has another thread waiting for a hart, goes through `kmain`, as
+every one did before. The differential takes slice ends through it at 1, 2 and 4 harts and requires
+each to leave the queue as the round trip leaves it, its thread counted as the process table counts
+it there, and to pick what the model picks. The trace records the requeue and the pick, and the
+hart's new runner at the return when it switched (`H`), no change of it when the thread ran on;
+the oracle counts the thread as waiting only at a slice's end that picked its own budget again
+([the scheduler oracle](../testbench.md#the-scheduler-oracle)).
+`sched-timer-entry` bounds what a slice's end costs the kernel: two spinners and nothing else, so every
 timer interrupt from user mode ends a slice, and the oracle bounds their lock sections, trap to
 return, net of the checked build's audits at one hart: the p99 at 2,000 ticks, the steady entry,
-which measures 1,073 on rv64 and 1,597 on rv32, and the longest at 5,000, the cold first
-preemptions of a phase, 3,431 and 4,234 (at two harts, where `icount`'s one clock counts the
-other hart's instructions too, they are recorded). In a release build the slice's end of
-a thread that only computes is about 8,800 kernel instructions on rv64 and 12,900 on rv32 (QEMU's
-exec log), about 7 and 10 % of a hart at the 1 ms slice, half of it the round trip itself: its
-budget descheduled and requeued, then picked again.
+which measures 930 on rv64 and 1,415 on rv32 (five runs a width alone, p50 928 and 1,389), and
+the longest at 5,000, the cold first preemptions of a phase, 3,461 and 4,265 (at two harts, where
+`icount`'s one clock counts the other hart's instructions too, they are recorded). In a release
+build the slice's end of a thread that only computes, alone on its hart, is about 4,200 kernel
+instructions on rv64 and 6,700 on rv32 (QEMU's exec log), about 3.4 and 5.4 % of a hart at the
+1 ms slice; through `kmain` it was 9,000 and 13,000. One that switches to another budget's thread,
+two such threads sharing a hart, is about 7,050 and 10,600 (the same log, `sched-timer-entry`'s
+program), 5.6 and 8.5 % of a hart; through `kmain` it was 8,500 and 12,200.
 
 ### The current minimum and ties
 
@@ -246,9 +268,9 @@ flowchart TD
     RQ --> REC
     LV --> REC
     REC["reconcile: each budget that gained a<br/>runnable thread wakes, highest id first,<br/>pass = max(own, floor), tie = front - 1"] --> FL["floor = max(floor, lowest queued pass)"]
-    FL --> R{"is the CPU<br/>with kmain?"}
+    FL --> R{"a pick due: the thread left,<br/>or its slice ended?"}
     R -- no --> RUN[the hart's running thread resumes]
-    R -- yes --> P["kmain picks the lowest (pass, tie, id)<br/>and runs that budget's next thread<br/>after its cursor, for up to 1 ms"]
+    R -- yes --> P["the queue picks the lowest (pass, tie, id)<br/>and runs that budget's next thread<br/>after its cursor, for up to 1 ms<br/>(at a slice's end the trap picks where it is;<br/>otherwise kmain does)"]
 ```
 *Figure: the pass and wake rule at one kernel entry. `w` is the budget's free weight.*
 
@@ -323,10 +345,11 @@ Kernel time is billed as well:
   next pick owing it; a pick of nothing is nobody's);
 - idle time is nobody's.
 
-A slice end costs about 0.12 ms of kernel time on rv64 and 0.17 ms on rv32 in the release build
-under QEMU (about 15,000 and 22,000 instructions) under nine runnable budgets, billed to the budget
-picked after it: the trap, two SBI timer calls, the deschedule, the reconcile, the pick and the
-switch, with under 3 µs of it per queued budget (the checked, traced build measures 2.4 µs per
+A slice end that switches budgets costs about 0.056 ms of kernel time on rv64 and 0.085 ms on
+rv32 in the release build under QEMU (about 7,050 and 10,600 instructions, two spinners sharing a
+hart), billed to the budget picked after it: the trap, one SBI timer call, the deschedule, the
+reconcile, the pick and the switch, made where the trap is
+([preemption points](#preemption-points)), with under 3 µs of it per queued budget (the checked, traced build measures 2.4 µs per
 queued budget per slice end from three to seventeen queued, net of its audits, over a fixed
 175 µs). At a 1 ms slice the nine spinners of `bench:sched-large-weight-release` do 0.91 (rv64)
 and 0.87 (rv32) of the useful work the 10 ms build does; the case requires 0.85, the fixed part
@@ -702,8 +725,9 @@ and gates the driver's wake there, both targets at two harts and the p50 at four
 ([R78](#r78-fair-kernel-entry)).
 
 A slice end adds its own kernel time ([charging](#charging)). In the release build that is about
-15,000 instructions on rv64 and 22,000 on rv32, so a 1 ms slice takes about 1.12 ms and 1.17 ms
-on the hart under nine runnable budgets. The checked, traced build takes longer, its slice end
+7,050 instructions on rv64 and 10,600 on rv32 when it switches budgets (4,200 and 6,700 when the
+same thread runs on), so a 1 ms slice takes about 1.06 ms and 1.09 ms on the hart with two
+runnable budgets, each further queued budget adding under 3 µs. The checked, traced build takes longer, its slice end
 growing by 2.4 µs per queued budget net of its audits: the median gap between slice ends, the
 marks' audit included, is about 1.22 ms under three, 1.30 ms under nine and 1.39 ms under
 seventeen (rv64). A round of N budgets' slices is N such periods, not N ms.

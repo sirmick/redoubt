@@ -285,8 +285,30 @@ pub extern "C" fn trap_handler(
                 crate::sched::begin_billing();
             }
             crate::time::on_interrupt(from_user);
+            // The queue picks here: the thread runs on if it picks its budget again, the trap
+            // switches into another budget's thread as `kmain` would, and `kmain` takes the rest.
             if slice_over {
-                preempt();
+                let tid = ArchProcess::with_current(|p| p.current_tid());
+                match ProcessTable::with(|ss| crate::sched::repick(ss, pid, tid)) {
+                    crate::sched::Picked::Own => {}
+                    crate::sched::Picked::Other(next_pid, next_tid) => {
+                        // Exact under the kernel lock, held since the entry's own check (a
+                        // shootdown is served outside it): checked again all the same before
+                        // another process's thread is resumed, and handled as the entry handles it.
+                        if crate::arch::hart::shot_down() {
+                            ProcessTable::with_mut(|ss| ss.switch_to_thread(KERNEL_PID, None))
+                                .expect("kmain exists");
+                            resume_current();
+                        }
+                        let switched = ProcessTable::with_mut(|ss| {
+                            crate::sched::switch_here(ss, tid, next_pid, next_tid)
+                        });
+                        if !switched {
+                            preempt();
+                        }
+                    }
+                    crate::sched::Picked::Kmain => preempt(),
+                }
             }
             resume_current();
         }

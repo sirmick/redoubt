@@ -23,7 +23,9 @@
 //! It runs at every kernel entry but `kmain`'s switch (`sched::switch_to`), first, before
 //! anything reads the entering process, so a deadline that has passed beats any operation that
 //! enters later.
-//! `kmain` expires, then picks, then switches, with no kernel entry in between.
+//! `kmain` expires, then picks, then switches, with no kernel entry in between. A slice's end
+//! that picks where it is (`sched::repick`) does so only with nothing due ([`due`]), so that
+//! expiry would have found nothing.
 //!
 //! # Hints
 //! Finding what is due means reading the timed waits of each process whose cached earliest
@@ -96,6 +98,14 @@ pub fn rearm() {
             timer::set(if target == NEVER { u64::MAX } else { timer::us_to_ticks(target) });
         }
     });
+}
+
+/// Whether a timeout or a budget deadline is due now: what `kmain`'s expiry would answer before
+/// its pick ([`expire_due`]'s first test), so a slice's end picks where it is only when there is
+/// none (`sched::repick`).
+pub fn due() -> bool {
+    let now = now_us();
+    TIMER.with(|t| t.threads <= now || t.budgets <= now)
 }
 
 /// The budget deadline due first at `now`: (deadline, id, frame).
