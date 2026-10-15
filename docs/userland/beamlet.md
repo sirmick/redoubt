@@ -79,9 +79,10 @@ The VM crate (`beamlet-vm`) is `#![forbid(unsafe_code)]`, and so are `beamlet-re
 
 ### Limits inside one VM
 
-<details><summary>Status: built · partly tested: in a boot, only the process heap limit and the budget's backstop are attacked · tested (34)</summary>
+<details><summary>Status: built · partly tested: in a boot, only the process heap limit and the budget's backstop are attacked · tested (35)</summary>
 
 - host:beamlet-vm::full_mailbox_kills_the_receiver
+- host:beamlet-vm::a_term_equal_to_itself_is_not_scanned
 - host:beamlet-vm::full_own_mailbox_kills_the_sender
 - host:beamlet-vm::a_roomy_mailbox_is_not_a_limit
 - host:beamlet-vm::the_vm_heap_limit_kills
@@ -162,6 +163,12 @@ VM down. Every limit fails closed: the offender ends, and nothing is lost silent
   minutes ([todo](../todo/beamlet-bignum-bounds.md)).
 - **Fixed limits**, each `system_limit`: 2^20 atoms of at most 255 characters, 2^16 processes, a
   stack of 2^24 slots, bignums of 2^24 bits, binaries of 2^30 bits.
+- **A term is equal to itself without being read.** Comparing a term with itself (`==`, `=:=`,
+  a map key, a sort) answers before a byte of it is touched, as BEAM's `eq` does: sound for every
+  Erlang term, since the language has no NaN and so no term that differs from itself. It matters
+  at the prompt: `erl_eval` compares every binding with itself on each call of an interpreted
+  fun, so a loop typed at the prompt over a 256 KiB binary once cost a scan of it a step
+  (`a_term_equal_to_itself_is_not_scanned`).
 
 These limits are measurements, not an allocator: one native that allocates a lot at once is caught
 afterwards. The hard backstop is the embedder's allocator, and on Redoubt the session budget's page

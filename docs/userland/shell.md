@@ -99,10 +99,13 @@ Status: built · partly tested: runs on the host only, on beamlet and on the BEA
    `Code.eval_quoted_with_env/4`. The shell holds the bindings and the environment between
    lines, so an evaluation that dies loses only its own line. The compiler's diagnostics are
    taken with `Code.with_diagnostics/2` and printed by the shell, not written by the compiler.
-   A `fn` typed at the prompt is interpreted, and on the machine each call of it costs about
-   3.6 ms plus 0.18 µs for every byte of a binary among its bindings, so a loop written at the
-   prompt over a 256 KiB binary takes 50 ms a step where the compiled walk takes 0.14 ms: why
-   is open.
+   A `fn` typed at the prompt is interpreted, and on the machine each call of it costs the
+   evaluator's constant, about 3.6 ms, whatever its bindings hold. It once cost 0.18 µs more
+   for every byte of a binary among them, so a loop written at the prompt over a 256 KiB
+   binary took 50 ms a step where the compiled walk takes 0.14 ms: the evaluator compares
+   each binding with itself on every call, and the VM read the whole binary to answer. The VM
+   now answers that a term is equal to itself without reading it
+   ([beamlet](beamlet.md#limits-inside-one-vm)), and the step no longer grows with the binary.
 4. **Print** the value through `Redoubt.Term.Text`, which draws every control character in it
    visibly (`^[`, `^G`, `<U+009B>`, `<U+202E>`); a `%Lines{}` is printed a line at a time.
 

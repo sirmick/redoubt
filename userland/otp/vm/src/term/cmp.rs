@@ -65,6 +65,18 @@ impl Heap {
 /// explicit stack, in the order Erlang compares them, so deep or long terms cannot exhaust the
 /// Rust stack.
 pub fn compare(ha: &Heap, a: Term, hb: &Heap, b: Term, exact: bool) -> Ordering {
+    let same_heap = core::ptr::eq(ha, hb);
+    // The same object is equal to itself, whatever it holds, before a byte of it is read. Sound
+    // for every Erlang term: the language has no NaN (a float that is not a number cannot be
+    // made), so no term differs from itself, under `==` or `=:=`. BEAM's `eq` begins the same
+    // way. Without this a binary compared with itself is read whole: `erl_eval` does that to
+    // every binding on every call of an interpreted fun (docs/userland/beamlet.md, "Limits
+    // inside one VM"). One `Ptr` names one object of one kind, so two terms with the same
+    // pointer on one heap are the same variant: the comparison across variants rests on that.
+    if same_heap && a.ptr().is_some() && a.ptr() == b.ptr() {
+        debug_assert_eq!(core::mem::discriminant(&a), core::mem::discriminant(&b), "one pointer, two kinds");
+        return Ordering::Equal;
+    }
     // Fast path, no allocation: most comparisons are between atomic values.
     if !a.is_container() || !b.is_container() {
         if let (Term::Int(x), Term::Int(y)) = (a, b) {
@@ -78,7 +90,6 @@ pub fn compare(ha: &Heap, a: Term, hb: &Heap, b: Term, exact: bool) -> Ordering 
             return compare_one(ha, a, hb, b, exact);
         }
     }
-    let same_heap = core::ptr::eq(ha, hb);
     let mut work: Vec<(Term, Term, bool)> = alloc::vec![(a, b, exact)];
     while let Some((a, b, exact)) = work.pop() {
         let (ra, rb) = (type_rank(&a), type_rank(&b));
@@ -183,6 +194,11 @@ fn ref_id(h: &Heap, t: Term) -> u64 {
 }
 
 fn compare_bits(x: &Bits, y: &Bits) -> Ordering {
+    // Two windows of one buffer at the same place are the same bits (two sub-binaries made from
+    // one match, say): equal without reading them.
+    if alloc::sync::Arc::ptr_eq(&x.data, &y.data) && x.offset == y.offset && x.len == y.len {
+        return Ordering::Equal;
+    }
     // Bit by bit; a prefix sorts first.
     let n = x.len.min(y.len);
     let bytes = n / 8;
