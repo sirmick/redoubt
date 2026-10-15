@@ -1,0 +1,110 @@
+description = "Compiling on the box, as the agent, kept in its home (docs/userland/development.md, \"The compilers on beamlet\"; docs/userland/beamlet.md, \"beamlet on Redoubt\"; docs/userland/packages.md, \"Profiles and upgrades\"): a session as agent over SSH compiles a module from a string with Code.compile_string, calls it, writes its .beam under /home/agent/lib, where the file server's stat says the bytes landed, purges and deletes it, and a call then raises UndefinedFunctionError although the .beam sits in home: the platform's lookup reads the boot pack and the verified volume, never the session's writable namespace (BL1). Putting /home/agent/lib on the session's own code path is its own choice: Code.append_path answers true and the call then answers from the file; the path is taken off again, the module purged, and :code.load_binary of the bytes read back brings it back and the call answers once more. Code.eval_string covers the evaluator's path; then the session removes what it made. The verdicts are the values the shell prints and the file server's answers (rule F), on both widths"
+arch = ["rv64", "rv32"]
+kind = "boot"
+recipe = "image/boot.toml"
+# The image needs 1 GiB: the principals' budgets, each holding a shell VM's session, do not fit
+# the users budget 256 MiB leaves (docs/kernel/budgets.md).
+memory_mib = 1024
+# A boot, one login and one compile from a string: the Elixir compiler runs interpreted on the
+# session's VM, as shell-compile-module's does.
+timeout_secs = 300
+expect = [
+    '^init: started sshd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
+    '^init: started steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] steward: carved users/agent account 1003: \{\}$',
+]
+# The session's own login: the steward's audit and budget lines for agent, then sshd's.
+expect_after = [
+    '^\[con [0-9a-f]{16}\] steward: audit 1003/\{\} at [0-9]+: Login \{ session: [0-9]+, principal: 2, key: [1-9]',
+    '^\[con [0-9a-f]{16}\] steward: users/agent/\{\} holds [0-9]+ pages, 10 processes$',
+    '^\[con [0-9a-f]{16}\] sshd: login agent: session [0-9a-f]{16}, labels \[\]$',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+]
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    '^init: .* (exited|faulted|was killed)',
+    'init: restarted',
+    'EXCEPTION',
+    'PROGRAM HALT',
+    'steward: a step failed',
+    'sshd: login .*: refused',
+]
+
+# Each answer is tagged, so a pattern matches what the shell printed and never the echo of the
+# line typed. The shell keeps the bindings between lines, so `mod` and `bin` carry through.
+[[session]]
+user = "agent"
+pty = true
+forbid = ['EXCEPTION', 'killed']
+steps = [
+    { expect = '/home/agent \([0-9]+\)> ' },
+    # 1. Compile a small module from a string and call it.
+    { send = "[{mod, bin}] = Code.compile_string(\"defmodule Homemade do def double(xs), do: Enum.map(xs, &(&1 * 2)) end\"); {:comp, mod, is_binary(bin), mod.double([1, 2, 3])}\n" },
+    { expect = '\{:comp, Homemade, true, \[2, 4, 6\]\}' },
+    { expect = '\([0-9]+\)> ' },
+    # 2. Keep the .beam in home: the file server's answers, and its stat of the bytes written.
+    { send = "{:mk, File.mkdir_p(\"/home/agent/lib\")}\n" },
+    { expect = '\{:mk, :ok\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:wr, File.write(\"/home/agent/lib/Elixir.Homemade.beam\", bin)}\n" },
+    { expect = '\{:wr, :ok\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:kept, File.stat!(\"/home/agent/lib/Elixir.Homemade.beam\").size == byte_size(bin)}\n" },
+    { expect = '\{:kept, true\}' },
+    { expect = '\([0-9]+\)> ' },
+    # 3. Purge and delete: the name is undefined although its .beam sits in home, because the
+    #    platform's lookup never consults the session's writable namespace and the code path is
+    #    empty.
+    { send = "{:del, (:code.purge(mod); :code.delete(mod))}\n" },
+    { expect = '\{:del, true\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:gone, try do mod.double([1]) rescue e -> e.__struct__ end}\n" },
+    { expect = '\{:gone, UndefinedFunctionError\}' },
+    { expect = '\([0-9]+\)> ' },
+    # 4. The session's own code path is its own choice: with home's directory on it the call
+    #    answers from the file. Then the path is taken off and the module purged again.
+    { send = "{:path, Code.append_path(\"/home/agent/lib\")}\n" },
+    { expect = '\{:path, true\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:viapath, mod.double([1, 2, 3])}\n" },
+    { expect = '\{:viapath, \[2, 4, 6\]\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:unpath, Code.delete_path(\"/home/agent/lib\"), (:code.purge(mod); :code.delete(mod))}\n" },
+    { expect = '\{:unpath, true, true\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:gone2, try do mod.double([1]) rescue e -> e.__struct__ end}\n" },
+    { expect = '\{:gone2, UndefinedFunctionError\}' },
+    { expect = '\([0-9]+\)> ' },
+    # 5. Reload from the bytes read back.
+    { send = "{:reload, :code.load_binary(mod, String.to_charlist(\"/home/agent/lib/Elixir.Homemade.beam\"), File.read!(\"/home/agent/lib/Elixir.Homemade.beam\"))}\n" },
+    { expect = '\{:reload, \{:module, Homemade\}\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:again, mod.double([1, 2, 3])}\n" },
+    { expect = '\{:again, \[2, 4, 6\]\}' },
+    { expect = '\([0-9]+\)> ' },
+    # 6. The evaluator's path.
+    { send = "{:eval, elem(Code.eval_string(\"a + b\", a: 1, b: 2), 0)}\n" },
+    { expect = '\{:eval, 3\}' },
+    { expect = '\([0-9]+\)> ' },
+    # 7. Remove what was made.
+    { send = "{:rm, rm_rf(\"/home/agent/lib\"), File.exists?(\"/home/agent/lib\")}\n" },
+    { expect = '\{:rm, :ok, false\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:clean, (:code.purge(mod); :code.delete(mod))}\n" },
+    { expect = '\{:clean, true\}' },
+    { expect = '\([0-9]+\)> ' },
+    { exit = 0 },
+]
+
+[userland]
+recipe = "image/userland.toml"
+
+# The steward cases' stage: the three principals' homes, each holding a `hello`.
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]
+forward = [22]

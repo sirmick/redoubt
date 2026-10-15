@@ -85,6 +85,7 @@ the `ssl` and `ssh` applications, unmodified
 ([development](../userland/development.md#the-compilers-on-beamlet),
 [beamlet](../userland/beamlet.md#what-runs-on-it)); on the machine, a module defined at a
 session's prompt compiles and runs (`shell-compile-module`,
-[beamlet on Redoubt](../userland/beamlet.md#beamlet-on-redoubt)). The rest of this milestone is not built. It
+[beamlet on Redoubt](../userland/beamlet.md#beamlet-on-redoubt)), and one compiled from a string
+is kept as a `.beam` in the session's home and loaded again from it (`shell-compile`). The rest of this milestone is not built. It
 builds on `ipd` with scopes and its sink rule, and on `keyd`'s signing purposes, which are built
 and tested ([ipd](../servers/ipd.md), [keyd](../servers/keyd.md)).
