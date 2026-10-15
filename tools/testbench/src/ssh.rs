@@ -426,9 +426,34 @@ impl Shared<'_> {
     }
 }
 
+/// What one session waited for before it first typed: each `expect` matched before its first
+/// `send`, with how long after its ssh started it matched. The login's latency, from ssh's start
+/// to the prompt, measured by every run (docs/servers/sshd.md, "Sessions over SSH").
+pub struct Login {
+    pub session: String,
+    pub matched: Vec<(String, f64)>,
+}
+
+impl Login {
+    /// The report's line under the case's result, in the bench's note indent.
+    pub fn note(&self) -> String {
+        let matched: Vec<String> =
+            self.matched.iter().map(|(pattern, after)| format!("/{pattern}/ {after:.2} s")).collect();
+        format!("      {}'s login: {} after ssh started", self.session, matched.join(", "))
+    }
+}
+
+/// What `run` found: why the first failing session failed, if one did, and the login of every
+/// session that finished.
+pub struct Sessions {
+    pub failed: Option<String>,
+    pub logins: Vec<Login>,
+}
+
 /// Run `sessions` concurrently until each has done its steps and its ssh has exited. Returns
-/// why the first failing session failed, or None. Setting `abort` makes them all give up. `idle`
-/// is told when an `idle` step starts and ends, and answers each edge once QEMU's log is on or off.
+/// why the first failing session failed, or None, and each session's login. Setting `abort`
+/// makes them all give up. `idle` is told when an `idle` step starts and ends, and answers each
+/// edge once QEMU's log is on or off.
 #[allow(clippy::too_many_arguments)]
 pub fn run(
     workspace: &Path,
@@ -439,7 +464,7 @@ pub fn run(
     deadline: Instant,
     abort: &AtomicBool,
     idle: Option<mpsc::Sender<IdleEdge>>,
-) -> Result<Option<String>> {
+) -> Result<Sessions> {
     let dir = logs.join("ssh");
     std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
     // Host keys: checked when the case says which key to expect, as known_hosts under one
@@ -521,7 +546,7 @@ pub fn run(
         commands.push((session, ssh, log));
     }
 
-    let stops: Vec<Result<(), Stop>> = std::thread::scope(|scope| {
+    let stops: Vec<Result<Vec<(String, f64)>, Stop>> = std::thread::scope(|scope| {
         let threads: Vec<_> = commands
             .into_iter()
             .map(|(session, ssh, log)| {
@@ -543,16 +568,20 @@ pub fn run(
         Server::Guest { .. } | Server::Redoubt { .. } => None,
     };
     let mut failure = None;
+    let mut logins = Vec::new();
     for (session, stop) in sessions.iter().zip(stops) {
         match stop {
             Err(Stop::Broken(why)) => bail!("session {}: {why}", session.name()),
             Err(Stop::Failed(why)) => {
                 failure.get_or_insert(format!("session {}: {why}", session.name()));
             }
-            Ok(()) | Err(Stop::Aborted) => {}
+            Ok(matched) if !matched.is_empty() => {
+                logins.push(Login { session: session.name().to_string(), matched })
+            }
+            Ok(_) | Err(Stop::Aborted) => {}
         }
     }
-    Ok(failure.or(leftover))
+    Ok(Sessions { failed: failure.or(leftover), logins })
 }
 
 /// The least time a case's guests have to go once their sessions' ssh have exited, however near
@@ -622,6 +651,10 @@ struct Driver<'a> {
     within: Option<Instant>,
     /// When ssh started: each `expect` notes in the log how long after it matched.
     started: Instant,
+    /// The `expect`s matched before the first `send`, and when: the login ([`Login`]).
+    login: Vec<(String, f64)>,
+    /// Set by the first `send`.
+    typed: bool,
     ssh: Reaped,
     /// ssh's standard input: a pipe, or for a `pty = true` session its terminal's master.
     stdin: Option<std::fs::File>,
@@ -648,7 +681,7 @@ fn drive(
     log: &Path,
     shared: &Shared,
     deadline: Instant,
-) -> Result<(), Stop> {
+) -> Result<Vec<(String, f64)>, Stop> {
     let forbid = session
         .forbid
         .iter()
@@ -702,6 +735,8 @@ fn drive(
         deadline,
         within: None,
         started: Instant::now(),
+        login: Vec::new(),
+        typed: false,
         stdin: master.or_else(|| child.stdin.take().map(|pipe| std::os::fd::OwnedFd::from(pipe).into())),
         pty: session.pty,
         ssh: Reaped(child),
@@ -730,7 +765,8 @@ fn drive(
         })?;
     }
     let tail = std::mem::take(&mut driver.line);
-    driver.check_line(&tail)
+    driver.check_line(&tail)?;
+    Ok(driver.login)
 }
 
 impl Driver<'_> {
@@ -756,6 +792,7 @@ impl Driver<'_> {
                 let stdin = self.stdin.as_mut().ok_or(Stop::Broken("send after exit".into()))?;
                 // ssh may be gone already; its exit is reported at the next expect or exit.
                 stdin.write_all(text.as_bytes()).and_then(|()| stdin.flush()).ok();
+                self.typed = true;
                 Ok(())
             }
             Step::Resize([cols, rows]) => {
@@ -804,10 +841,13 @@ impl Driver<'_> {
                 loop {
                     if let Some(found) = regex.find(&self.unmatched) {
                         self.unmatched.drain(..found.end());
-                        // Only in the log, as the exit marker is: how long the session took to
-                        // get here, the login's latency for its first prompt.
+                        // In the log, as the exit marker is: how long the session took to get
+                        // here; before the first `send`, the login's latency, reported too.
                         let after = self.started.elapsed().as_secs_f64();
                         writeln!(self.log, "\n[/{pattern}/ matched {after:.3} s after ssh started]")?;
+                        if !self.typed {
+                            self.login.push((pattern.clone(), after));
+                        }
                         return Ok(());
                     }
                     if let Some(status) = self.status {

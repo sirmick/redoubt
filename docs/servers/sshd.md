@@ -282,12 +282,18 @@ sequenceDiagram
 The operations `sshd` sends the steward are in the steward's table
 ([steward](steward.md#the-stewards-protocol)).
 
-Measured in `steward-ssh-two-principals` (QEMU, one hart, release build, seconds on the host's
-clock beside other work), a login reaches its shell's prompt 2 to 4 s after `ssh` starts: the
-session's VM writes its first line after 1.1 and 1.1 s on rv64 and 1.8 and 2.0 s on rv32 (alice,
-then bob beside her), and the prompt comes at 2.1 and 2.1 s on rv64 and 3.9 and 4.0 s on rv32. The
-key exchange, the login and the steward's batch, which streams the VM's image from `/boot`, are
-the first part; the shell's start from the boot pack the rest.
+Measured by the bench from its `ssh`'s start to the prompt's match (QEMU, release build, seconds
+on the host's clock; three runs each of `launch-system` at four harts and
+`steward-ssh-two-principals` at one, at main of 2026-10-15), a login reaches its shell's prompt about
+1.9 s after `ssh` starts on either width: 1.65–2.08 s alone, and 2.1–2.3 s for a second
+principal's login beside the first's running session, rv64 and rv32 within 5 % of each other. The
+connection, the key exchange, the login, the steward's carve and the VM's start, to beamlet's first
+read of the shell from the boot pack, are the first part, 0.8 s alone and 1.15 s beside another
+session; the shell's load from that read to its prompt is the rest, 1.0–1.1 s, the larger stage on
+both widths and in both cases. The console's lines carry no host time, so the handshake and the
+carve are not told apart within the first part. The bench prints each login under its case's
+result, so every train re-measures it ([the test bench](../testbench.md#ssh-sessions)); no ceiling
+is asserted until two trains agree within 20 %.
 
 ### `approve@box`
 

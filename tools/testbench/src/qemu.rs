@@ -629,6 +629,7 @@ pub fn run(
     workspace: &Path,
     forwards: &[Forward],
     log: &Path,
+    out: &mut dyn FnMut(String),
 ) -> Result<Verdict> {
     let machine = image.machine;
     let compile = |patterns: &mut dyn Iterator<Item = &str>| -> Result<Vec<Regex>> {
@@ -734,6 +735,7 @@ pub fn run(
             identity,
             log,
             deadline,
+            out,
         )? {
             return Ok(Verdict::Fail(why));
         }
@@ -908,8 +910,9 @@ impl After {
 
 /// Run the case's SSH sessions while still watching the console, so that a panic or the guest
 /// dying during a session fails the case, then read on until every `expect_after` pattern has
-/// matched or the deadline passes. Returns why it failed, if it did. With `[idle]`, a session's
-/// `idle` step is measured on `guest`, QEMU's pid and the harts it runs, and judged.
+/// matched or the deadline passes. Returns why it failed, if it did. Each session's login, what
+/// it waited for before it typed and when, goes to `out` for the report. With `[idle]`, a
+/// session's `idle` step is measured on `guest`, QEMU's pid and the harts it runs, and judged.
 #[allow(clippy::too_many_arguments)]
 fn run_sessions(
     watched: &mut Console,
@@ -920,6 +923,7 @@ fn run_sessions(
     identity: Option<&Path>,
     log: &Path,
     deadline: Instant,
+    out: &mut dyn FnMut(String),
 ) -> Result<Option<String>> {
     let logs = log.parent().context("log has no directory")?;
     let prefix = log.file_stem().context("log has no name")?.to_string_lossy();
@@ -971,8 +975,11 @@ fn run_sessions(
         if !matches!(console, Ok(None)) {
             abort.store(true, Ordering::Relaxed);
         }
-        let session_failure = sessions.join().expect("session runner panicked")?;
-        Ok(console?.or(session_failure))
+        let sessions = sessions.join().expect("session runner panicked")?;
+        for login in &sessions.logins {
+            out(login.note());
+        }
+        Ok(console?.or(sessions.failed))
     })?;
     // A failed session can leave QEMU's `log int` on: harmless, as QEMU ends with the case.
     if failed.is_some() {
