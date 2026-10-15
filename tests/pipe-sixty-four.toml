@@ -1,0 +1,49 @@
+description = "Sixty-four pipelines in one session leave nothing of their piped behind (docs/userland/native.md, \"Standard input and output, and pipes\"; docs/servers/piped.md, \"Started by a session\"; docs/userland/beamlet.md, \"Handles are resource terms\"): the console session runs pipe-stage say hi through Redoubt.Pipeline sixty-four times, each with a new piped bound at /dev/pipe on a new connection, and each gives hi and its stage's ending, and leaves the session's budget with the weight and processes it held before the first, piped's gone. Then the session's namespace table is the size it was before the first, and /dev/pipe resolves to nothing: piped's binding and the VM's handle to it went with its budget, where each pipeline once left one entry and one handle for the session's life. Every judged line is the session's"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The image's bundle with pipe-stage public in /boot, as pipe-eight's.
+recipe = "tests/data/pipe/boot.toml"
+# As userland-boot: the principals' budgets, each holding the shell VM's session, need 1 GiB.
+memory_mib = 1024
+# pipe-eight's eight take about 10 s after the boot; these take eight times that under load.
+timeout_secs = 450
+# Host clock in the guest (no icount), and run one at a time on the quiet cores (scripts/jobs.mk):
+# beside other work on rv32 a pipeline's first request on its fresh piped was answered eio, the
+# VM's six waiter places all held by ended pipeds whose waiters had not yet handed over their
+# ends (MAX_WAITERS, docs/userland/beamlet.md "Threads"); a failure beside other work has no
+# verdict until it fails alone (docs/testbench.md, "On a shared host").
+expect = [
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+    '(^|\] )\{:base, \{\{[0-9]+, [0-9]+\}, \{[0-9]+, [0-9]+\}\}, [0-9]+\}$',
+    '(^|\] )\{:ran, 64, \[\{"hi\\n", \[exited: 0\], true, true\}\]\}$',
+    '(^|\] )\{:table, true, \{:error, :not_found\}\}$',
+]
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    'init: restarted',
+    'EXCEPTION',
+    '\{[0-9]+, \{:error',
+]
+
+# The session's budget as the kernel reads it, and its namespace table's size, before any pipeline.
+[[input]]
+after = 'Redoubt shell, on Elixir '
+send = "c = fn -> {:ok, o} = Redoubt.Budget.own(); {:ok, u} = Redoubt.Budget.usage(o); {u.weight, u.processes} end; t = fn -> length(Redoubt.Namespace.table()) end; {:base, before = c.(), size = t.()}\n"
+
+# Each pipeline's output, endings, and whether the budget and piped are as before; the distinct
+# results, so one line judges all sixty-four, and a refused one shows as {i, {:error, name}}.
+[[input]]
+after = '(^|\] )\{:base, \{\{'
+send = "r = for i <- 1..64 do case Redoubt.Pipeline.run([{\"pipe-stage\", [\"say\", \"hi\"]}]) do {:ok, r} -> {r.output, r.endings, c.() == before, Redoubt.Pipes.usage() == {:error, :not_running}}; refused -> {i, refused} end end; {:ran, length(r), Enum.uniq(r)}\n"
+
+[[input]]
+after = '(^|\] )\{:ran, '
+send = "{:table, t.() == size, Redoubt.Namespace.lookup(\"/dev/pipe\")}\n"
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"

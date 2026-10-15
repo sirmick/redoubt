@@ -50,6 +50,19 @@ impl Io {
         })
     }
 
+    /// The VM forgot `conn`: its server went with its budget (`budget_destroy`). Its hub connection
+    /// is ended, so nothing more is sent on it: a request made on it after this, a stale file's
+    /// clunk at its term's collection, is refused, and never goes out on the handle's index, which
+    /// may be another handle's once its last term is collected (docs/userland/beamlet.md,
+    /// "Handles are resource terms"). A connection the hub never opened has nothing to end.
+    pub(crate) fn forget(&mut self, conn: &Connection) {
+        let hub =
+            self.conns.iter().find(|(k, _, _)| k.same(conn)).and_then(|(_, c, _)| c.as_ref().ok().copied());
+        if let Some(c) = hub {
+            self.hub.disconnect(c);
+        }
+    }
+
     /// `conn`'s hub connection: the first time, a multiplexed session on it and its waiter. A server
     /// that serves no multiplexed session refuses the first completion call, and that is the error;
     /// a waiter that cannot start is one too, for good. At [`MAX_WAITERS`], a connection whose

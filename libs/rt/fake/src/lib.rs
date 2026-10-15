@@ -410,6 +410,27 @@ impl Fake {
     /// test cannot name, as a VM's.
     pub fn last_launched(&self) -> Option<Launched> { self.lock().launched.last().cloned() }
 
+    /// What the child launched last to serve `owner` was given: the latest whose first handle is a
+    /// receive right to an endpoint `owner` holds a handle to. For a launcher whose handles the test
+    /// cannot name, beside other tests' launchers in the same fake.
+    pub fn served_child(&self, owner: usize) -> Option<Launched> {
+        let s = self.lock();
+        let held: Vec<usize> = s.processes[owner]
+            .handles
+            .iter()
+            .flatten()
+            .filter_map(|o| o.endpoint().ok())
+            .map(|e| e.id)
+            .collect();
+        s.launched
+            .iter()
+            .rev()
+            .find(|child| {
+                matches!(child.handles.first(), Some(Object::Endpoint(ep)) if ep.badge == 0 && held.contains(&ep.id))
+            })
+            .cloned()
+    }
+
     /// What `owner`'s child `process` was given.
     pub fn launched(&self, owner: usize, process: Handle) -> Launched {
         let s = self.lock();

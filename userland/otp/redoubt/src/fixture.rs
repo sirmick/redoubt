@@ -24,7 +24,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
-use redoubt_fake_kernel::fake;
+use redoubt_fake_kernel::{Launched, fake};
 use redoubt_rt::abi::{Error, FOREVER, Handle};
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::ipc::{Caller, Event, Request, Words};
@@ -635,7 +635,15 @@ pub struct Volume {
 }
 
 /// Starts `littlefsd` on a blank range of `sectors`, with `args` beside its endpoint's.
-pub fn volume(sectors: usize, args: &[&str]) -> Volume {
+pub fn volume(sectors: usize, args: &[&str]) -> Volume { volume_on(sectors, args, None) }
+
+/// As [`volume`], but serving the endpoint a launch with `serve` gave `child`, its first handle:
+/// the test plays the server the VM launched, as a session's `piped` is, in the child's budget.
+pub fn volume_served(child: &Launched, sectors: usize, args: &[&str]) -> Volume {
+    volume_on(sectors, args, Some(child))
+}
+
+fn volume_on(sectors: usize, args: &[&str], serving: Option<&Launched>) -> Volume {
     let f = fake();
     let blkd = f.process(0, &[]);
     let blkd_receive = f.endpoint(blkd);
@@ -653,7 +661,10 @@ pub fn volume(sectors: usize, args: &[&str]) -> Volume {
         }
     });
     let pid = f.process(0, &[]);
-    let receive = f.endpoint(pid);
+    let receive = match serving {
+        Some(child) => f.play(child, pid)[0],
+        None => f.endpoint(pid),
+    };
     let range = f.grant(blkd, blkd_receive, pid, 1);
     let mut builder = StartupBuilder::new(receive.index().max(range.index()));
     builder.handle("littlefsd:data", receive).handle("volume", range).arg("endpoint=littlefsd:data");

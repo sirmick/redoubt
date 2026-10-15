@@ -4,7 +4,8 @@ defmodule Redoubt.Pipes do
   pipeline needs it and none is running, in a budget carved from the session's, and bound at
   `/dev/pipe`, where the session makes and reads its pipes. Nothing of it exists at the prompt.
   Each process that opens it holds it until it lets go or ends; when the last does, its budget is
-  destroyed, so its pages go back to the session, and the next pipeline starts another.
+  destroyed, so its pages go back to the session, and with the budget go its binding at `/dev/pipe`
+  and the VM's handle to it (docs/userland/beamlet.md, "Natives"); the next pipeline starts another.
 
   One process holds it, so that its connection and budget outlive the line that started it: the
   launch's end arrives as a message to the process that launched it, which is this one.
@@ -36,9 +37,11 @@ defmodule Redoubt.Pipes do
   @doc """
   The session's connection to `piped`, starting it if it is not running, and `count` names for
   pipes no other job of the session's has used; the calling process holds `piped` until it calls
-  `release/0` or ends. `{:error, name}` if it cannot be started.
+  `release/0` or ends. `{:error, name}` if it cannot be started: `:not_found` with no `/boot/piped`,
+  `{:refused, {:read, "/boot/piped", reason}}` when its read failed otherwise, with the file
+  server's reason, or the launch's or the bind's name.
   """
-  @spec open(pos_integer()) :: {:ok, reference(), [String.t()]} | {:error, atom()}
+  @spec open(pos_integer()) :: {:ok, reference(), [String.t()]} | {:error, atom() | {:refused, term()}}
   def open(count) when is_integer(count) and count > 0 do
     GenServer.call(server(), {:open, count}, :infinity)
   end
@@ -152,11 +155,12 @@ defmodule Redoubt.Pipes do
     end
   end
 
+  # A refusal names what was refused: the read, and the file server's reason.
   defp read(path) do
     case File.read(path) do
       {:ok, bytes} -> {:ok, bytes}
       {:error, :enoent} -> {:error, :not_found}
-      {:error, _} -> {:error, :refused}
+      {:error, reason} -> {:error, {:refused, {:read, path, reason}}}
     end
   end
 end

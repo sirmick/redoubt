@@ -904,10 +904,24 @@ returned to calls on it, since its mints are stamped with that budget (a pipelin
 connections, which `piped` mints). The VM cannot tell a handle such a server minted from one it
 forwards, so a forwarded handle is marked gone too and is never closed: it stays in the VM's table
 until the VM ends, the price of never closing a reused index. The VM carves only from its own
-budget, so no budget it carved is below another. Tested:
-`a_destroyed_budgets_index_is_not_closed_when_its_term_is_collected` and
-`what_a_served_server_returned_goes_with_its_budget_and_is_not_closed_again` on the host, against
-a fake kernel that frees those indices as the kernel does, and `pipe-eight` on the machine. The
+budget, so no budget it carved is below another. What is the VM's own goes the other way: the
+send right a `launch` with `serve` gives it is to an endpoint the VM made, charged to the VM's
+budget, so the server's death leaves the slot to the VM, and it is closed when the right's last
+term goes. A handle the VM started with is known to the namespace for the VM's life; one a bind
+made known lives with the budget it came through (the budget a `launch` with `serve` ran in, or
+the one the connection a call brought it on came through), so destroying that budget forgets it,
+unbinds its prefixes and ends its hub connection, and a session's `piped`, bound at every
+pipeline, leaves no entry and no handle behind (each once stayed for the session's life). The
+hub's session on the forgotten connection is ended as the budget is destroyed, so a request on it
+after (a stale file's clunk at its term's collection) is refused rather than sent: once the
+handle's last term is collected its index may be the next launch's send right, and a request
+sent on it then would reach that server, inside the session's own table. Tested:
+`a_destroyed_budgets_index_is_not_closed_when_its_term_is_collected`,
+`what_a_served_server_returned_goes_with_its_budget_and_is_not_closed_again`,
+`a_served_servers_binding_and_handle_go_with_its_budget` and
+`a_forgotten_connections_requests_reach_no_later_holder_of_its_index` on the host, against
+a fake kernel that frees those indices as the kernel does, and `pipe-eight` and `pipe-sixty-four`
+on the machine. The
 residuals: a handle whose stamp the VM does not know may be revoked, and its index reused,
 before its term is collected, and collecting it then closes the handle that took the index. Such a
 handle is one revoked outside the VM, such as a grant whose stamp the steward destroys while the VM
@@ -942,6 +956,17 @@ Residuals:
   no status every protocol shares means a timeout, so its caller cannot tell the two apart.
 - A typed call whose caller exits is not cancelled: it holds its pool thread until its reply or
   its timeout, and the reply, with any handles it brought, is dropped and closed.
+- A forgotten connection's waiter calls on the server's handle by its index until the server's
+  death fails the call. Between two of its calls, the handle's last term could be collected and
+  the index given to the next launch's send right, so that one completion call reaches that
+  server, inside the session's own table. Holding the handle until the waiter has returned would
+  close that window; it stays, stated.
+- The six waiter places are a hard bound with a timing dependence (open): a fresh server's
+  first request, while every place is held by an ended server whose waiter has not yet handed
+  its end over, is refused `TooManyThreads`, which the files layer reports as `eio`, so a
+  pipeline started right after six others under load on rv32 answers `{:refused, {:mkdir, :eio}}`
+  (`pipe-sixty-four`, which therefore runs alone). A bounded wait for a hand-over at the bound,
+  and a name for the refusal that says a thread bound and not a device, are that open item's.
 
 The namespace and launching natives are the client library's `ns` and `launch`, so policy stays
 in Elixir and encoding in Rust. The file server's operations that name fids (`Redoubt.File`'s
@@ -1129,7 +1154,10 @@ hands the end over and returns, closing the handle it woke the VM through, and t
 gives its place up when the next one needs it. A session's `piped` is a new server at every
 pipeline, so a session runs any number of pipelines, each taking one place while it runs
 (`servers_bound_and_ended_one_after_another_never_run_out_of_waiters`; `pipe-eight`, eight in one
-session). No call holds a thread while it waits: a console read,
+session), as long as an ended `piped`'s waiter has handed its end over before the place is needed:
+six ended pipeds whose waiters have not yet done so refuse the seventh fresh one its first request,
+`{:refused, {:mkdir, :eio}}`, which `pipe-sixty-four` met on rv32 beside other work (open; in the
+residuals). No call holds a thread while it waits: a console read,
 a file read and a read on a `/net` connection's data file are each one request on the hub, so
 what a person or a peer takes to answer costs nothing but the request. Every 9P server in the
 image serves multiplexed sessions, so no call needs a thread of its own. What the scheduler's

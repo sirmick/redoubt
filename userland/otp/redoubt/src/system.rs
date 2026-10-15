@@ -8,7 +8,10 @@
 //!   `budget` is the VM's own budget, a budget made here is a budget, and any other handle is an endpoint.
 //! - **The namespace is the files' own** ([`crate::files`]): a bind here is a bind there. A handle is
 //!   attached as a 9P connection at most once (a second `Tversion` on one handle would end the first's fids),
-//!   so a handle bound twice is one connection.
+//!   so a handle bound twice is one connection. A handle the VM started with is known for the VM's life; one
+//!   a bind made known lives with the budget it came through (its returns' [`Life`]): destroying that budget
+//!   forgets it and unbinds its prefixes, so a session's `piped`, bound at every pipeline, leaves nothing
+//!   behind.
 //! - **A call goes out on a thread of the pool** ([`crate::pool`]), waiting at most its timeout: no hub
 //!   carries a typed call. Its reply is the wire's words, the buffer the reply's word 1 says (a lent
 //!   message's), and the handles it brought, each a new resource; the native decodes nothing of a protocol.
@@ -484,11 +487,28 @@ impl System for Redoubt {
 
     /// Destroyed, a budget the VM carved takes its handle with it, and the handles its servers
     /// minted: they are marked gone, so no collection closes their indices. The VM carves only
-    /// from its own budget, so no budget it carved is below another.
+    /// from its own budget, so no budget it carved is below another. It takes the bindings of the
+    /// connections that came through it too: every known handle whose returns died with it is
+    /// forgotten, every prefix naming its connection unbound, and its hub connection ended
+    /// ([`crate::io::Io::forget`]), so the VM's send right to a server it launched there (the
+    /// VM's own to close: the endpoint is charged to the VM's budget) is closed when its last
+    /// term goes, nothing is sent on it after, and the namespace holds no entry to a server that
+    /// is gone.
     fn budget_destroy(&mut self, b: &Object) -> Result<(), Refused> {
         Budget::from_handle(budget(b)?).destroy().map_err(|e| name(e.into()))?;
         if let Some(life) = &cap(b)?.owned.life {
             life.end();
+            let (ns, io) = (&mut self.files.ns, &mut self.io);
+            self.sys.known.retain(|known| {
+                if !known.returns.as_ref().is_some_and(|r| Arc::ptr_eq(r, life)) {
+                    return true;
+                }
+                if let Kind::Connection(conn) = &known.kind {
+                    ns.unbind(conn);
+                    io.forget(conn);
+                }
+                false
+            });
         }
         Ok(())
     }
