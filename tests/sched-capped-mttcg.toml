@@ -1,4 +1,4 @@
-description = "sched-capped where the harts run at once (multi-threaded TCG, no icount): the late join, uncap and spread scenarios judged at two harts on the kernel's charges net of lock waits against water-filling, within 50 per thousand, which sched-capped under icount only records at two harts: there a hart's clock counts the other hart's turns, which can fall in time billed to nobody (kernel/scheduling.md, \"Residual risks\") (host time, checked build)"
+description = "sched-capped where the harts run at once (multi-threaded TCG, no icount): the late join, uncap and spread scenarios judged at two harts and the second cap at three, on the kernel's charges net of lock waits against water-filling, within 50 per thousand, which sched-capped under icount only records at two and three harts: there a hart's clock counts the other harts' turns, which can fall in time billed to nobody, and three slice ends meet at the kernel lock in an order QEMU's turns fix (kernel/scheduling.md, \"Residual risks\") (host time, checked build, two and three harts)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true
@@ -7,7 +7,13 @@ programs = ["sched-capped"]
 # 251, uncap 818 to 819 and 89 to 91, spread 496 to 503 (owed 500, 250, 818, 90 and 500). The
 # same program on the `sched-capped-holds-floor` kernel here misses late join: late-b 30 and
 # late-c 470 (rv64), 31 and 469 (rv32), a recorded run each.
-smp = [2]
+# At three harts (B63), five runs a width alone on the quiet cores: second-a 327 to 328 and
+# second-b 328 to 329 (owed 333), second-c and second-e 114 (owed 111); each heavy budget's lock
+# waits 1.02 to 1.17M ticks of a 2.1 to 2.4M total in the 60M-tick window, the three 10-weight
+# budgets' under 26k each; one rv32 run with 13.9M of waits beside the machine's load read 314,
+# 315 and 123. Under icount the same clause reads 276 to 340 for the heavy budget on the hart
+# last to the lock at every slice end (tests/sched-capped.toml), so it is judged here.
+smp = [2, 3]
 keep_smp = true
 # Test builds only: the trace ring (never in a default kernel).
 kernel_features = ["sched-trace"]
