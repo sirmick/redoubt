@@ -3,7 +3,9 @@
 #
 # What it does, in order, and what it refuses:
 #   1. Refuses if any package worktree (.worktrees/*) has uncommitted changes: commit them as a
-#      WIP commit on that package's branch first (never stash; SWARM.md, staging).
+#      WIP commit on that package's branch first (never stash; SWARM.md, staging). A worktree
+#      under .tmp/ is scratch (a measurement, a negative; the project's rule for scratch) and is
+#      not looked at.
 #   2. Commits .wash/plan.toml and .wash/qa/ on main if they changed, as one `plan:` commit,
 #      when main is checked out in the project root and nothing else is staged there.
 #   3. Pushes main, fast-forward only (refuses if origin/main is not an ancestor).
@@ -13,14 +15,30 @@
 #      onto the wash-local branch through a temporary index, and pushes it. main's index and
 #      working tree are never touched by this step.
 #
+# With --local-only it does steps 1, 4 and 5 only: the package branches and the wash-local
+# snapshot go out, main is neither committed to nor pushed (a train whose bench has not run
+# stays unpublished; SWARM.md, publishing), and the project root need not be on main.
+#
 # It never force-pushes, never rewrites history and never deletes anything.
-#   .wash/save.sh            save
-#   .wash/save.sh --dry-run  say what it would do
+#   .wash/save.sh                         save
+#   .wash/save.sh --local-only            save the package branches and .wash/local, not main
+#   .wash/save.sh --dry-run               say what it would do (composes with --local-only)
 set -euo pipefail
 
 DRY=0
-[[ ${1:-} == --dry-run ]] && DRY=1
-ROOT=$(git rev-parse --show-toplevel)
+LOCAL=0
+for arg in "$@"; do
+    case $arg in
+        --dry-run) DRY=1 ;;
+        --local-only) LOCAL=1 ;;
+        *) echo "save: unknown argument $arg (--dry-run, --local-only)" >&2; exit 2 ;;
+    esac
+done
+# The project root, wherever this is run from: the parent of the common .git directory, which
+# a package worktree shares. The caller's own worktree would otherwise pass for the root, and
+# with --local-only nothing later catches it: its few .wash/local files would become
+# wash-local's tip.
+ROOT=$(cd "$(git rev-parse --git-common-dir)/.." && pwd -P)
 cd "$ROOT"
 
 run() { if ((DRY)); then echo "would: $*"; else "$@"; fi; }
@@ -28,10 +46,10 @@ say() { echo "save: $*"; }
 
 git fetch -q origin
 
-# 1. Package worktrees must be committed.
+# 1. Package worktrees must be committed; scratch worktrees under .tmp/ are nobody's to save.
 dirty=0
 while read -r wt; do
-    [[ $wt == "$ROOT" ]] && continue
+    [[ $wt == "$ROOT" || $wt == "$ROOT/.tmp/"* ]] && continue
     if [[ -n $(git -C "$wt" status --porcelain) ]]; then
         say "uncommitted changes in $wt: commit them as a WIP commit on its branch first"
         dirty=1
@@ -39,24 +57,28 @@ while read -r wt; do
 done < <(git worktree list --porcelain | sed -n 's/^worktree //p')
 ((dirty)) && exit 1
 
-# 2. The plan and the QA threads on main.
-[[ $(git symbolic-ref --short HEAD) == main ]] || { say "the project root is not on main"; exit 1; }
-if [[ -n $(git diff --cached --name-only) ]]; then
-    say "something is already staged in the project root; commit or unstage it first"; exit 1
-fi
-changed=$(git status --porcelain -- .wash/plan.toml .wash/qa)
-if [[ -n $changed ]]; then
-    say "committing the plan and QA threads:"; echo "$changed"
-    run git add -- .wash/plan.toml .wash/qa
-    run git commit -s -q -m "plan: the plan and its threads as the work is saved"
-fi
-
-# 3. main, fast-forward only.
-if git merge-base --is-ancestor origin/main main; then
-    run git push -q origin main
-    ((DRY)) || say "main pushed ($(git rev-parse --short main))"
+if ((LOCAL)); then
+    say "local only: main is neither committed to nor pushed"
 else
-    say "origin/main has commits main lacks: fetch and merge them first; nothing pushed"; exit 1
+    # 2. The plan and the QA threads on main.
+    [[ $(git symbolic-ref --short HEAD) == main ]] || { say "the project root is not on main"; exit 1; }
+    if [[ -n $(git diff --cached --name-only) ]]; then
+        say "something is already staged in the project root; commit or unstage it first"; exit 1
+    fi
+    changed=$(git status --porcelain -- .wash/plan.toml .wash/qa)
+    if [[ -n $changed ]]; then
+        say "committing the plan and QA threads:"; echo "$changed"
+        run git add -- .wash/plan.toml .wash/qa
+        run git commit -s -q -m "plan: the plan and its threads as the work is saved"
+    fi
+
+    # 3. main, fast-forward only.
+    if git merge-base --is-ancestor origin/main main; then
+        run git push -q origin main
+        ((DRY)) || say "main pushed ($(git rev-parse --short main))"
+    else
+        say "origin/main has commits main lacks: fetch and merge them first; nothing pushed"; exit 1
+    fi
 fi
 
 # 4. Every package branch, fast-forward only.
