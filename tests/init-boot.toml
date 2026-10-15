@@ -15,7 +15,7 @@ expect = [
     '^init: up$',
     '^init: the manifest is checked: 13 servers, bound \d+ pages$',
     '^init: started keyd$',
-    '^init: keyd holds none of the 3 keys$',
+    '^init: keyd holds none of the 4 keys$',
     '^init: started consoled, and writes through it$',
     '^init: started bootfsd, console [0-9a-f]{16}$',
     '^init: started blkd, console [0-9a-f]{16}$',

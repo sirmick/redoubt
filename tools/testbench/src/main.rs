@@ -97,6 +97,10 @@ struct Args {
     /// development key under $REDOUBT_TMP/launch.
     #[arg(long, value_name = "PUB", requires = "system")]
     key: Option<PathBuf>,
+    /// With --system, agent's login key the same way, instead of the checkout's second
+    /// development key.
+    #[arg(long, value_name = "PUB", requires = "system")]
+    agent_key: Option<PathBuf>,
     /// With --system, write the QEMU command here, each argument ended by a NUL.
     #[arg(long, value_name = "FILE", requires = "system")]
     qemu_argv: Option<PathBuf>,
@@ -264,6 +268,7 @@ fn main() -> Result<()> {
             smp: args.smp.unwrap_or(4),
             ssh_port: args.ssh_port,
             key: args.key.as_deref(),
+            agent_key: args.agent_key.as_deref(),
             print_only: args.print_only,
             argv: args.qemu_argv.as_deref(),
             boot_argv: args.boot_argv.as_deref(),
@@ -304,7 +309,7 @@ fn main() -> Result<()> {
             false,
             false,
             Profile::Release,
-            None,
+            &[],
             &logs.join("interactive.tar"),
         )?;
         let firmware = rustsbi_prototyper(target).map_err(|why| anyhow::anyhow!(why))?;
@@ -687,8 +692,8 @@ fn rustsbi_prototyper(target: &Target) -> Result<String, String> {
 /// Build the kernel, the loader, `programs` and `files` for `target`, pack them into `bundle`, and
 /// return the bundle and the loader. A manifest file pins its userland disk's roots, one digit
 /// off if the case's `userland` asks for a wrong root. `profile` applies to the kernel and the
-/// loader (the trusted base); programs are always release. With `login`, the manifest gives alice
-/// that login key alone (`launch::give_key`).
+/// loader (the trusted base); programs are always release. Each `login` gives its principal that
+/// login key alone in the manifest (`launch::give_key`).
 #[allow(clippy::too_many_arguments)]
 fn prepare(
     builder: &Builder,
@@ -701,7 +706,7 @@ fn prepare(
     tamper: bool,
     bare_archive: bool,
     profile: Profile,
-    login: Option<&str>,
+    login: &[(&str, String)],
     bundle: &Path,
 ) -> Result<(PathBuf, PathBuf)> {
     let mut features: Vec<String> = machine.kernel_features.iter().map(|f| f.to_string()).collect();
@@ -715,13 +720,13 @@ fn prepare(
         .iter()
         .map(|file| {
             let path = builder.program(target, &file.from)?.1;
-            let login = login.filter(|_| file.name == "manifest");
-            if file.servers.is_empty() && file.verity.is_none() && login.is_none() {
+            let login = if file.name == "manifest" { login } else { &[] };
+            if file.servers.is_empty() && file.verity.is_none() && login.is_empty() {
                 return Ok((file.name.clone(), path));
             }
             let mut bytes = file.merged(&std::fs::read(&path)?)?;
-            if let Some(key) = login {
-                bytes = launch::give_key(&bytes, key)?;
+            for (principal, key) in login {
+                bytes = launch::give_key(&bytes, principal, key)?;
             }
             if let Some(recipe) = &file.verity {
                 let wrong = userland.is_some_and(|u| u.wrong_root && &u.recipe == recipe);
@@ -892,18 +897,22 @@ fn pack_case(
     // or the code's problem, never what a `must_fail` is waiting for, so it is not judged.
     let bundle = logs.join(format!("{}-{}.tar", case.name, target.name));
     let profile = if boot.debug_assertions { Profile::Checked } else { Profile::Release };
-    // The launch machine's login key: the one `--run --system` was given, or one made beside the
-    // bundle, which its sessions log in with.
-    let login = match (&boot.login_key, boot.launch) {
-        (Some(key), _) => Some(key.clone()),
+    // The launch machine's login keys: alice's is the one `--run --system` was given, or one made
+    // beside the bundle, which its sessions log in with; agent's only what `--run --system` gave.
+    let mut login = Vec::new();
+    match (&boot.login_key, boot.launch) {
+        (Some(key), _) => login.push((launch::PRINCIPAL, key.clone())),
         (None, true) => match launch::case_key(&bundle) {
-            Ok(key) => Some(key),
+            Ok(key) => login.push((launch::PRINCIPAL, key)),
             Err(e) => {
                 return Ok(Err(vec![(String::new(), Outcome::Fail(format!("{e:#}")), elapsed(started))]));
             }
         },
-        (None, false) => None,
-    };
+        (None, false) => {}
+    }
+    if let Some(key) = &boot.agent_key {
+        login.push((launch::AGENT, key.clone()));
+    }
     let (bundle, loader) = match prepare(
         builder,
         target,
@@ -915,7 +924,7 @@ fn pack_case(
         boot.tamper_bundle,
         boot.sign_bare_archive,
         profile,
-        login.as_deref(),
+        &login,
         &bundle,
     ) {
         Ok(built) => built,

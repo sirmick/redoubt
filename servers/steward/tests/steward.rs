@@ -811,7 +811,7 @@ fn the_image_s_lines_round_trip_from_init_to_the_steward() {
     let mut k = Recorder::default();
     let s = start(&lines, USERS, &mut k).unwrap();
     let names: Vec<&str> = s.carved.iter().map(|c| c.name.as_str()).collect();
-    assert_eq!(names, ["alice", "bob"]);
+    assert_eq!(names, ["alice", "bob", "agent"]);
     assert_eq!(s.own.labels, [("alice-secrets".to_string(), 7)]);
     assert_eq!(s.own.console.as_deref(), Some("alice"));
     assert_eq!(s.own.net("alice").unwrap().rules, ["0.0.0.0/0:80,443"]);

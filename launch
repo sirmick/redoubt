@@ -6,17 +6,19 @@
 # Usage: ./launch [--arch rv32|rv64] [--smp N] [--debug] [--print-only]
 #                 [--program NAME|PATH]...
 #        ./launch --system [--arch rv32|rv64] [--smp N] [--ssh-port PORT] [--key PUB]
-#                          [--keep-disk [--fresh-disk]] [--print-only]
+#                          [--agent-key PUB] [--keep-disk [--fresh-disk]] [--print-only]
 #   --arch       target width (default rv64); both widths boot RustSBI from bios/
 #   --smp N      hart count (default 1; 4 with --system)
 #   --debug      start paused with QEMU's gdb stub on :1234
 #   --print-only print the QEMU command and exit without booting
 #   --program    a program to start: a test-programs binary name, or a path to an ELF
 #   --system     the whole image: init, the servers, the steward, sshd and the shell, with its
-#                disks and network; prints the ssh line to log in as alice
+#                disks and network; prints the ssh lines to log in as alice and as agent
 #   --ssh-port   with --system, the host port forwarded to the guest's port 22 (default 2222)
 #   --key PUB    with --system, alice's login key (an Ed25519 .pub), instead of the checkout's
 #                development key, made once under .tmp/launch
+#   --agent-key PUB  with --system, agent's login key the same way, instead of the checkout's
+#                second development key
 #   --keep-disk  with --system, keep the data disk under .tmp/launch across launches: your files
 #                survive; one laid out otherwise than the image's disk is refused, never reformatted
 #   --fresh-disk with --keep-disk, start the kept disk over from the image's
@@ -47,15 +49,17 @@ while (($#)); do
         --ssh-port=*) extra+=(--ssh-port "${1#*=}"); shift ;;
         --key)       extra+=(--key "$(realpath "${2:?--key needs a public key file}")"); shift 2 ;;
         --key=*)     extra+=(--key "$(realpath "${1#*=}")"); shift ;;
+        --agent-key) extra+=(--agent-key "$(realpath "${2:?--agent-key needs a public key file}")"); shift 2 ;;
+        --agent-key=*) extra+=(--agent-key "$(realpath "${1#*=}")"); shift ;;
         --keep-disk) keep=1; extra+=(--keep-disk); shift ;;
         --fresh-disk) extra+=(--fresh-disk); shift ;;
-        -h|--help)   sed -n '2,23p' "$0"; exit 0 ;;
+        -h|--help)   sed -n '2,25p' "$0"; exit 0 ;;
         *) echo "launch: unknown argument: $1" >&2; exit 2 ;;
     esac
 done
 
 if [ "$system" = 0 ]; then
-    ((${#extra[@]} == 0)) || { echo "launch: --ssh-port, --key, --keep-disk and --fresh-disk need --system" >&2; exit 2; }
+    ((${#extra[@]} == 0)) || { echo "launch: --ssh-port, --key, --agent-key, --keep-disk and --fresh-disk need --system" >&2; exit 2; }
     cmd=(cargo run --quiet -p testbench -- --arch "$arch" --smp "${smp:-1}" --run --print-qemu)
     if [ "$debug" = 1 ]; then cmd+=(--debug); fi
     if [ "$print_only" = 1 ]; then cmd+=(--print-only); fi

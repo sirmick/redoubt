@@ -214,7 +214,8 @@ and its kernel objects.
   limit is nearly twice it. The image's servers need 16,909 of `system`'s pages, each
   budget and its own page. The shell's VMs are not among them: the steward carves each session
   from its principal's sub-budget under `users`, from the top budgets the manifest names, 47,624
-  pages for Alice and 32,768 for Bob ([the steward](../servers/steward.md#fixed-sub-budgets-per-label-set)).
+  pages for Alice, 32,768 for Bob and 24,576 for agent ([the steward](../servers/steward.md#fixed-sub-budgets-per-label-set),
+  [the image](../../image/README.md)).
   A session is 11,264 pages, its VM's share and its console relay's. The VM's is 11,136 pages: a
   heap cap of twice the largest peak of beamlet's runtime heap across the memory cases plus what
   the VM holds outside its heap, 44 pages (its two schedulers' stacks and thread pages, its locks'

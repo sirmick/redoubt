@@ -604,7 +604,7 @@ is empty, `ssh alice.work@box` the context `work` ([sessions](../userland/sessio
   session's, whichever is fewer, and at most 16 ([init](init.md#contexts)); for the console's
   principal `init` refuses a `max` below 2, which would leave it no SSH context. The image's
   shares each hold two sessions, so alice has one SSH context beside the console in her
-  unlabelled set and two in her vault's, and bob two. A login that would make a context past the
+  unlabelled set and two in her vault's, and bob and agent two each. A login that would make a context past the
   cap is refused `cap` by the guard `under_cap`, after `login_key`, `owns_labels`, `not_locked`
   and the context check, and before anything is carved; no context is evicted for it. A login
   that reaches a live context, a reattach or a takeover, is never capped. At the client it is the

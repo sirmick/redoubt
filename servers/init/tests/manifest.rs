@@ -109,14 +109,17 @@ fn the_image_manifest_passes_and_its_plan_is_what_the_boot_follows() {
     // The userland disk's blkd: slot 0x1000_6000, interrupt 6.
     assert_eq!(plan.placements[8], vec![("disk".into(), h(12)), ("disk-irq".into(), h(20))]);
     assert!(plan.placements[0].is_empty());
-    // Alice's and bob's login keys, then the bundle key.
+    // Alice's, bob's and agent's login keys, then the bundle key.
     let asked: Vec<&str> = plan.keys.iter().map(|(at, _)| at.as_str()).collect();
-    assert_eq!(asked, ["principals[0].ssh_keys[0]", "principals[1].ssh_keys[0]", "bundle key"]);
-    // Three domains (alice's {} and {alice-secrets}, bob's {}) at every shared server, beside its
-    // system callers: init and sshd at keyd; init at consoled; init and the steward at bootfsd;
-    // netd, the steward and sshd at ipd; the steward at walfsd:data, walfsd:alice-secrets and
-    // erofsd.
-    assert_eq!(plan.buckets, vec![(0, 5), (1, 4), (2, 5), (5, 6), (6, 4), (7, 4), (10, 4)]);
+    assert_eq!(
+        asked,
+        ["principals[0].ssh_keys[0]", "principals[1].ssh_keys[0]", "principals[2].ssh_keys[0]", "bundle key"]
+    );
+    // Four domains (alice's {} and {alice-secrets}, bob's {}, agent's {}) at every shared server,
+    // beside its system callers: init and sshd at keyd; init at consoled; init and the steward at
+    // bootfsd; netd, the steward and sshd at ipd; the steward at walfsd:data,
+    // walfsd:alice-secrets and erofsd.
+    assert_eq!(plan.buckets, vec![(0, 6), (1, 5), (2, 6), (5, 7), (6, 5), (7, 5), (10, 5)]);
     // No handed item names consoled or bootfsd: init's own badge at each is 1. sshd is handed
     // keyd's 1, the host key's, so init's there is 2.
     assert_eq!(plan.init_badges, vec![(0, 2), (1, 1), (2, 1)]);
@@ -539,7 +542,7 @@ fn bootfsd_is_given_the_public_list_after_its_buckets() {
     m.public = vec!["trace".into()];
     let bootfsd = &m.servers[2];
     // Each public entry with its length from the bundle, so bootfsd reserves it once.
-    assert_eq!(redoubt_init::check::args(&m, bootfsd, &BUNDLE_KEY, &ENTRIES), ["buckets=5", "100:trace"]);
+    assert_eq!(redoubt_init::check::args(&m, bootfsd, &BUNDLE_KEY, &ENTRIES), ["buckets=6", "100:trace"]);
     assert_eq!(
         redoubt_init::check::args(&m, &m.servers[0], &BUNDLE_KEY, &ENTRIES).len(),
         3,
@@ -598,7 +601,7 @@ fn a_volume_s_labels_go_to_its_server_and_to_blkd() {
         )
     };
     assert_eq!(args(&m, "keyd").last().unwrap(), "labels=7");
-    assert_eq!(args(&m, "bootfsd"), ["buckets=5", "4000000:beamlet", "220000:piped", "230000:consrelay"]);
+    assert_eq!(args(&m, "bootfsd"), ["buckets=6", "4000000:beamlet", "220000:piped", "230000:consrelay"]);
     assert_eq!(args(&m, "blkd"), ["endpoint=blkd", "labels.2=7"]);
 }
 
@@ -1260,7 +1263,7 @@ fn the_steward_object_and_console_name_what_the_manifest_holds() {
 
 /// A home has a quota of at least a byte, and a quota a home; the homes' quotas on a volume sum to
 /// at most the bytes it gives, which it must give (servers/init.md, "Home quotas"). The image's
-/// two 8 MiB homes fit its 32 MiB data volume.
+/// three 8 MiB homes fit its 32 MiB data volume.
 #[test]
 fn home_quotas_are_checked_against_their_volume() {
     let full = full_image();
@@ -1278,12 +1281,14 @@ fn home_quotas_are_checked_against_their_volume() {
     let mut m = full.clone();
     m.volumes[data].bytes = None;
     refused_at(&m, &format!("volumes[{data}].bytes"), Why::OverCommitted);
-    // Over-committed by one byte, then exactly full.
+    // Over-committed by one byte, then exactly full: alice's and bob's homes share what agent's
+    // leaves.
     let mut m = full.clone();
-    m.principals[0].home_quota = Some(bytes / 2 + 1);
-    m.principals[1].home_quota = Some(bytes / 2);
+    let rest = bytes - m.principals[2].home_quota.unwrap();
+    m.principals[0].home_quota = Some(rest / 2 + 1);
+    m.principals[1].home_quota = Some(rest / 2);
     refused_at(&m, &format!("volumes[{data}].bytes"), Why::OverCommitted);
-    m.principals[0].home_quota = Some(bytes - bytes / 2);
+    m.principals[0].home_quota = Some(rest - rest / 2);
     on_virt(&m).unwrap();
 }
 
@@ -1885,7 +1890,7 @@ fn a_walfsd_entry_is_a_volume_server_as_a_littlefsd_one_is() {
     let data = |m: &Manifest| range(m, named(m, "walfsd:data")).map(|(at, badge)| (at.to_string(), badge));
     assert_eq!(data(&walfs).as_ref().map(|(at, _)| at.as_str()), Some("blkd"));
     assert_eq!(data(&walfs), data(&littlefs));
-    assert_eq!(args(&walfs, named(&walfs, "walfsd:data")), ["endpoint=walfsd:data", "buckets=5"]);
+    assert_eq!(args(&walfs, named(&walfs, "walfsd:data")), ["endpoint=walfsd:data", "buckets=6"]);
 }
 
 /// `boot-profile-unverified` boots the image less its verification

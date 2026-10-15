@@ -14,6 +14,7 @@ expect = [
     '^init: started steward, console [0-9a-f]{16}$',
     '^\[con [0-9a-f]{16}\] steward: carved users/alice account 1001: \{\} \{7\}$',
     '^\[con [0-9a-f]{16}\] steward: carved users/bob account 1002: \{\}$',
+    '^\[con [0-9a-f]{16}\] steward: carved users/agent account 1003: \{\}$',
     '^\[con [0-9a-f]{16}\] steward: audit 1001/\{\} at [0-9]+: Login ',
     '^\[con [0-9a-f]{16}\] beamlet: Elixir.Redoubt.Shell read from (erofsd:system|the boot pack)$',
     '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
