@@ -600,7 +600,9 @@ kernel, running the call to its end with interrupts off, would stall every other
 
 - **`map_fixed` can fill `map_anon`'s area.** A process that maps the whole area with
   `map_fixed` makes its own later `map_anon` calls fail with `OutOfMemory`. It harms only that
-  process.
+  process. The same for the runtime's thread-stack area
+  ([memory layout](memory-layout.md#regions)): a `map_fixed` of the program's own there takes a
+  slot, or a guard page, from its own later `spawn`, which is then refused.
 - **Several harts.** `fence.i` and the TLB flush act on the hart that runs the call. A
   process's translations carry its ASID, and a hart that ran it may keep them; it flushes
   that ASID before it next runs the process if any of its mappings were removed meanwhile or

@@ -8,3 +8,5 @@ publish = false
 
 [dependencies]
 redoubt-rt = { path = ".." }
+# `map_fixed`: a thread's stack at the address the runtime names, by `mmap`.
+libc = "0.2"

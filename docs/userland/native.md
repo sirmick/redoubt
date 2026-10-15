@@ -274,7 +274,7 @@ and `Redoubt.Job` and `Redoubt.Jobs` the shell's handle on it.
 
 ### `redoubt-rt`, the native runtime
 
-<details><summary>Status: built · partly tested: the 9P client's walk limit and its checks of a reply's tag, type and counts are not attacked; only its closing of stray handles is · tested (30)</summary>
+<details><summary>Status: built · partly tested: the 9P client's walk limit and its checks of a reply's tag, type and counts are not attacked; only its closing of stray handles is · tested (33)</summary>
 
 - bench:rt-build
 - bench:net-tcp
@@ -297,6 +297,9 @@ and `Redoubt.Job` and `Redoubt.Jobs` the shell's handle on it.
 - host:redoubt-rt::a_consumed_lend_is_replaced_by_fresh_pages
 - host:redoubt-rt::a_spawned_thread_runs_its_closure_as_this_process
 - host:redoubt-rt::a_refused_thread_drops_its_closure_unrun
+- host:redoubt-rt::a_spawned_stack_sits_above_an_unmapped_guard_page
+- host:redoubt-rt::a_spawned_stack_is_painted_from_the_top_for_the_scan
+- bench:thread-stack-guard
 - host:redoubt-rt::a_mutex_excludes_and_loses_nothing_under_contention
 - host:redoubt-rt::waiters_for_a_held_lock_sleep_and_each_gets_it
 - host:redoubt-rt::a_condvar_ping_pong_loses_no_wake_up
@@ -324,7 +327,7 @@ the loader stub.
 | `path` | lexical path cleaning, so `..` never climbs above a root |
 | `client` | a small synchronous 9P client |
 | `server` | the shared server library ([the serving library](../servers/serving.md)) |
-| `thread` | `spawn`: a closure on a thread of this process, with a stack from `map_anon` that outlives it and has no guard page below it, so an overflow writes over whatever is mapped there and the caller sizes the stack for the deepest call; `scope`: threads that borrow from their caller, all ended before it returns |
+| `thread` | `spawn`: a closure on a thread of this process, with a stack that outlives it, placed by `map_fixed` in the thread-stack area ([memory layout](../kernel/memory-layout.md#regions)) above an unmapped guard page, so an overflow faults there and the kernel ends the process at once (`thread-stack-guard`) instead of writing over what `map_anon` placed below; painted before the thread starts, so the bench's memory scan reports its peak as `stack NAME thread N PEAK` ([the memory budget](../testbench.md#the-memory-budget)); `scope`: threads that borrow from their caller, all ended before it returns |
 | `sync` | a semaphore, a mutex and a condvar for the threads of one process, whose waiters sleep on an endpoint |
 
 - **Start and end.** `entry!(run)` receives the startup page's address from the loader stub,

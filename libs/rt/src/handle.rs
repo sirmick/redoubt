@@ -75,6 +75,15 @@ pub fn map_anon(len: usize, flags: MemFlags) -> Result<usize, Error> {
     addr(syscall(&Call::MapAnon { len, flags }))
 }
 
+/// Maps `len` bytes (whole pages) of zeroed memory at exactly `addr`, which the kernel refuses
+/// (`InvalidArgument`, nothing mapped) if any page of the range is taken (kernel/memory.md,
+/// `map_fixed`). The runtime's own: only [`crate::thread::spawn`] calls it, to place a thread's
+/// stack above its guard page, and the pages are adopted by a [`Buffer`] at once. Public, it
+/// would let a program fill the thread-stack area under the runtime's placement.
+pub(crate) fn map_fixed(addr: usize, len: usize, flags: MemFlags) -> Result<(), Error> {
+    nothing(syscall(&Call::MapFixed { addr, len, flags }))
+}
+
 /// Unmaps `len` bytes at `addr`. The runtime's own: only an owner of the pages (the heap, a
 /// [`crate::ipc::Buffer`]) calls it, on pages it holds and no view borrows. Public, it would let
 /// safe code unmap a page the heap or a lend still owns, and the owner's next access would fault

@@ -1648,7 +1648,14 @@ message is not a duplicate. The lowest missing unit marks the stack's deepest to
 pages holding equally many of a stack page's units are refused for that unit's stack page or one
 below it, and ignored above it, where either leaves the peak where it is. The bench prints
 `stack NAME PEAK of PAGES pages` for each server and fails when the declared pages are less than
-twice the measured peak rounded up to a page. The dump, the size of the guest's RAM, is deleted
+twice the measured peak rounded up to a page. The runtime paints each stack it spawns a thread on
+the same way, with the server's tag, the spawn's number from 1 and each unit's index from the
+top, since the stack's size is the program's, not the manifest's
+([redoubt-rt](userland/native.md#redoubt-rt-the-native-runtime)); the bench prints `stack NAME thread N PEAK` for
+each it finds, the peak the deepest unit overwritten under the deepest one found, which is the
+stack's bottom short of an overflow (which ends the process at the guard page), and checks no
+margin: the program's constant (beamlet's `SCHEDULER_STACK_PAGES`) is sized from the largest by
+hand. The dump, the size of the guest's RAM, is deleted
 once scanned; a scan that fails on a duplicate or out-of-range unit, or cannot read the dump,
 keeps it as the evidence. The QMP socket is in a directory of the run's own under the temporary
 directory, made 0700 under a name drawn at random, so whatever the bench's umask only its user
@@ -1709,7 +1716,9 @@ launches it with an 18-page stack, twice beamlet's stack peak of 36,136 bytes (`
 on rv64, with the boot pack read before its VM starts and its console on the hub; a compile at the
 prompt peaks at 34,280 on rv64 and 25,832 on rv32 in `beamlet-compile-footprint`, whose heap is
 judged under `heap_fits`: 9,135 and 8,798 pages of the 11,220 cap), its second
-scheduler's thread with a stack of the same size, and a heap cap of what its share holds beside
+scheduler's thread with a stack of the same size (its peak at the prompt between 21,496 and
+25,200 bytes on rv64 over three runs, 21,752 on rv32, `stack beamlet thread 3`; the platform's
+three other threads stay under 1,600, `beamlet-footprint`), and a heap cap of what its share holds beside
 its two schedulers' stacks and thread pages, its locks' endpoints and its process's page, 11,220
 pages of the 11,264 the steward gives it of the 11,392 `sizes` gives a session, the rest its
 console relay's ([budgets](kernel/budgets.md), [the steward](servers/steward.md#authentication-and-sessions)): 108 pages over twice its heap's

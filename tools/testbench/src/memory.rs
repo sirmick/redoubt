@@ -1,7 +1,9 @@
-//! A stopped guest's RAM is the witness for first-thread stack use and heap peaks. The paint and
-//! the heap record are public, so any guest, including another server, can forge them; the result
-//! measures the paths these cases drove, not an adversarial proof.
+//! A stopped guest's RAM is the witness for stack use, the first thread's and each spawned
+//! thread's, and heap peaks. The paint and the heap record are public, so any guest, including
+//! another server, can forge them; the result measures the paths these cases drove, not an
+//! adversarial proof.
 
+use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -9,6 +11,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail, ensure};
 use redoubt_client::launch::STACK_PAINT;
 use redoubt_rt::heap::{RECORD_MAGIC, Record};
+use redoubt_rt::thread::THREAD_PAINT;
 use redoubt_sys::PAGE_SIZE;
 use serde_json::Value;
 use stub::MAX_STACK_PAGES;
@@ -144,11 +147,20 @@ impl StackPage {
 /// so a painted word copied into a buffer is ignored. Two pages holding equally many of a stack
 /// page at or below the lowest missing unit's, or a duplicate record, are ambiguous even if the
 /// copy came from the guest's ordinary data.
+///
+/// A spawned thread's stack is painted by the runtime (`redoubt_rt::thread::spawn`) with the
+/// server's tag, the spawn's number and each unit's index from the top, its size unknown to the
+/// bench: it is measured the same way, mirrored, its peak the deepest overwritten unit under the
+/// deepest one found, which is the stack's bottom short of an overflow (which ends the process).
 pub fn scan(mut ram: impl Read, bytes: u64, servers: &[Server]) -> Result<Measurement> {
     let mut stacks: Vec<Vec<StackPage>> =
         servers.iter().map(|s| vec![StackPage::default(); s.stack_pages]).collect();
     // The (server, stack page) pairs found in the physical page being scanned.
     let mut here: Vec<(usize, usize)> = Vec::new();
+    // Spawned stacks, by (server, thread number): their pages from the top, as far down as any
+    // unit was found; and the (server, thread, page) triples found in the physical page.
+    let mut threads: BTreeMap<(usize, u8), Vec<StackPage>> = BTreeMap::new();
+    let mut here_threads: Vec<((usize, u8), usize)> = Vec::new();
     let mut physical_page = 0;
     // Each server's heap record, (cap, peak); and the last four units, a record's length.
     let mut heaps: Vec<Option<(u64, u64)>> = vec![None; servers.len()];
@@ -164,6 +176,7 @@ pub fn scan(mut ram: impl Read, bytes: u64, servers: &[Server]) -> Result<Measur
             if ram_unit / PAGE_UNITS as u64 != physical_page {
                 physical_page = ram_unit / PAGE_UNITS as u64;
                 here.drain(..).for_each(|(i, k)| stacks[i][k].end_page());
+                here_threads.drain(..).for_each(|(t, k)| threads.get_mut(&t).unwrap()[k].end_page());
             }
             let word = u64::from_le_bytes(unit.try_into().unwrap());
             window.rotate_left(1);
@@ -173,6 +186,30 @@ pub fn scan(mut ram: impl Read, bytes: u64, servers: &[Server]) -> Result<Measur
                 let i = tag as usize - 1;
                 ensure!(heaps[i].is_none(), "{}: heap record found twice", servers[i].name);
                 heaps[i] = Some((window[Record::CAP], window[Record::PEAK]));
+            }
+            if (word >> 32) as u32 == THREAD_PAINT {
+                let (tag, thread) = (((word >> 24) & 0xff) as usize, ((word >> 16) & 0xff) as u8);
+                if tag == 0 || tag > servers.len() || thread == 0 {
+                    continue;
+                }
+                let index = (word & 0xffff) as usize;
+                // Indexed from the top, which is page-aligned: unit `index` lies at the mirrored
+                // offset of its page, as evidence of an untouched unit (as for the first thread).
+                let offset = index % PAGE_UNITS;
+                if ram_unit % PAGE_UNITS as u64 != (PAGE_UNITS - 1 - offset) as u64 {
+                    continue;
+                }
+                let k = index / PAGE_UNITS;
+                let pages = threads.entry((tag - 1, thread)).or_default();
+                if pages.len() <= k {
+                    pages.resize(k + 1, StackPage::default());
+                }
+                let page = &mut pages[k].here;
+                if *page == Units::default() {
+                    here_threads.push(((tag - 1, thread), k));
+                }
+                page[offset / 64] |= 1 << (offset % 64);
+                continue;
             }
             if (word >> 32) as u32 != STACK_PAINT {
                 continue;
@@ -206,6 +243,7 @@ pub fn scan(mut ram: impl Read, bytes: u64, servers: &[Server]) -> Result<Measur
         left -= n as u64;
     }
     here.drain(..).for_each(|(i, k)| stacks[i][k].end_page());
+    here_threads.drain(..).for_each(|(t, k)| threads.get_mut(&t).unwrap()[k].end_page());
     let mut lines = Vec::new();
     let mut failures = Vec::new();
     let mut missing = Vec::new();
@@ -236,6 +274,23 @@ pub fn scan(mut ram: impl Read, bytes: u64, servers: &[Server]) -> Result<Measur
             ));
         }
         lines.push(format!("stack {} {peak} of {} pages", server.name, server.stack_pages));
+        for (&(_, thread), pages) in threads.range((i, 1)..=(i, u8::MAX)) {
+            let found = |index: usize| pages[index / PAGE_UNITS].found(index % PAGE_UNITS);
+            let units = pages.len() * PAGE_UNITS;
+            // The deepest unit found is the stack's bottom, short of an overflow; the deepest
+            // missing one above it is the thread's deepest touched point.
+            let Some(bottom) = (0..units).rev().find(|&index| found(index)) else { continue };
+            let touched = (0..bottom).rev().find(|&index| !found(index)).map_or(0, |index| index + 1);
+            let frontier = touched.saturating_sub(1) / PAGE_UNITS;
+            if let Some((k, page)) = pages.iter().enumerate().take(frontier + 1).find(|(_, page)| page.tied) {
+                bail!(
+                    "{} thread {thread}: stack page {k}'s paint found twice, {} units in each of two pages",
+                    server.name,
+                    page.count
+                );
+            }
+            lines.push(format!("stack {} thread {thread} {}", server.name, touched * UNIT));
+        }
     }
     for (server, heap) in servers.iter().zip(&heaps) {
         let name = &server.name;
@@ -272,6 +327,7 @@ pub fn scan(mut ram: impl Read, bytes: u64, servers: &[Server]) -> Result<Measur
 #[cfg(test)]
 mod tests {
     use redoubt_client::launch::stack_paint;
+    use redoubt_rt::thread::thread_paint;
 
     use super::*;
 
@@ -335,6 +391,44 @@ mod tests {
         let servers = [server("a", 2)];
         let measured = scan(&ram[..], ram.len() as u64, &servers).unwrap();
         assert_eq!(measured.lines, ["stack a 1600 of 2 pages", "heap a 3 pages uncapped"]);
+        assert!(measured.failures.is_empty());
+    }
+
+    /// A spawned stack as the runtime paints it: `pages` pages of `thread_paint` units indexed
+    /// from the top, in memory order (the bottom unit first).
+    fn thread_painted(pages: usize, tag: u8, thread: u8) -> Vec<u8> {
+        let units = pages * PAGE_SIZE / UNIT;
+        (0..units).rev().flat_map(|i| thread_paint(tag, thread, i as u16).to_le_bytes()).collect()
+    }
+
+    #[test]
+    fn scanner_measures_a_spawned_stack_from_its_top() {
+        let mut ram = painted(1, 1);
+        // Two helpers, page-aligned as the kernel maps them: the first used 300 units of its two
+        // pages, the second 700 of its three.
+        let mut first = thread_painted(2, 1, 1);
+        let len = first.len();
+        first[len - 300 * UNIT..].fill(0);
+        ram.extend(first);
+        let mut second = thread_painted(3, 1, 2);
+        let len = second.len();
+        second[len - 700 * UNIT..].fill(0);
+        ram.extend(second);
+        // A copy of a deep unit of the first helper in a buffer, at another in-page offset: ignored.
+        ram.extend(thread_paint(1, 1, 1000).to_le_bytes());
+        records(&mut ram, 1);
+        ram.resize(ram.len().next_multiple_of(PAGE_SIZE), 0);
+        let servers = [server("a", 1)];
+        let measured = scan(&ram[..], ram.len() as u64, &servers).unwrap();
+        assert_eq!(
+            measured.lines,
+            [
+                "stack a 0 of 1 pages",
+                &format!("stack a thread 1 {}", 300 * UNIT),
+                &format!("stack a thread 2 {}", 700 * UNIT),
+                "heap a 3 pages uncapped"
+            ]
+        );
         assert!(measured.failures.is_empty());
     }
 

@@ -255,7 +255,9 @@ shells, plus what the VM holds outside its heap, rounded up to 128 pages: 11,264
 largest peak, 5,556 on rv64 at one hart, which its heap cap of 11,220 holds twice
 with 108 to spare, and with which the single VM boots in 512 MiB
 ([budgets](../kernel/budgets.md#the-tree-from-the-boot-manifest)). Outside the heap are 44 pages:
-its two schedulers' 18-page stacks and thread pages, up to five pages of endpoints its locks
+its two schedulers' 18-page stacks (the second's above a guard page of address space alone, which
+costs no page; its peak at the prompt is 21,496 to 25,200 bytes on rv64 over three runs, `stack
+beamlet thread 3` in `beamlet-footprint`'s scan) and thread pages, up to five pages of endpoints its locks
 make, and its process's own page. The share moves up a step of 128 when the peak passes what
 the cap holds twice: the rv64 peak may reach 5,610 pages before it moves again
 ([budgets](../kernel/budgets.md#the-tree-from-the-boot-manifest)). The shell's machine mode is
@@ -561,12 +563,17 @@ budget, and a connection to the userland disk's `erofsd`, a named handle its arg
   36,136 bytes (`beamlet-footprint`) over a compile's 34,280 (`beamlet-compile-footprint`), now
   that the compressor `term_to_binary(T, [compressed])` runs is a few hundred bytes and not a
   65 KiB frame ([what the VM holds at its prompt](#what-the-vm-holds-at-its-prompt)); a module compiled
-  at the prompt over SSH runs (`shell-compile-module`). A helper thread's stack has no guard page
-  ([the native runtime](native.md#redoubt-rt-the-native-runtime)): an overflow there writes over
-  the heap below it, and the VM dies later, not at the overflow. That the second scheduler's
-  stack overflowed under a compile is inferred from one such death, with the compressor still on
-  the stack, not measured: the scan paints the first thread only, and the guard-page node will
-  measure it. Several schedulers below.
+  at the prompt over SSH runs (`shell-compile-module`). A helper thread's stack sits above an
+  unmapped guard page ([the native runtime](native.md#redoubt-rt-the-native-runtime)): an
+  overflow there faults at once and the kernel ends the VM at the overflow, not later from a heap
+  it wrote over (`thread-stack-guard`). The runtime paints every spawned stack, so the scan
+  measures them: at the idle prompt the second scheduler peaks between 21,496 and 25,200 bytes
+  on rv64 over three runs and at 21,752 on rv32, the platform's three other threads under 1,600
+  (`beamlet-footprint`, `stack beamlet thread N`). A compile runs the compressor's frames on whichever scheduler holds the
+  process; `beamlet-compile-footprint` runs one scheduler so that is the painted first thread,
+  whose 34,280 bytes above are the figure every scheduler's 18 pages are sized from; no case
+  compiles on a helper, so a helper's peak under a compile is not measured. Several schedulers
+  below.
 - **`bind=PREFIX=HANDLE`** puts a named handle beamlet was handed at a prefix of its namespace
   (`bind=/home/alice=walfsd:data`): the `bind/2` a session performs for itself
   ([namespaces](sessions.md#namespaces)), for a VM `init` launches alone, whose namespace holds
