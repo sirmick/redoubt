@@ -11,11 +11,11 @@ timeout_secs = 450
 expect = [
     '^init: started steward, console [0-9a-f]{16}$',
     '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
-    '^\[con [0-9a-f]{16}\] / \([0-9]+\)> exec\("pipe-stage", \["hostile"\]\)$',
+    '^\[con [0-9a-f]{16}\] /home/alice \([0-9]+\)> exec\("pipe-stage", \["hostile"\]\)$',
     '(^|\] )\^\[\]52;c;aGk=\^G\^\[\]8;;http://x\^Glink\^\[\]8;;\^G\^\[\]0;pwned\^G\^\[\[21t\^\[X\^\?$',
     '(^|\] )\^\[\]52;c;aGk=\^G\^\[\]8;;http://x\^Glink\^\[\]8;;\^G\^\[\]0;pwned\^G\^\[\[21t\^\[X\^\?$',
     '\{:exited, 0\}',
-    '^\[con [0-9a-f]{16}\] / \([0-9]+\)> 1 \+ 1$',
+    '^\[con [0-9a-f]{16}\] /home/alice \([0-9]+\)> 1 \+ 1$',
     '^\[con [0-9a-f]{16}\] 2$',
 ]
 forbid = [

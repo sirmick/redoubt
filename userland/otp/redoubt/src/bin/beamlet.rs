@@ -2,7 +2,7 @@
 //! (docs/userland/beamlet.md, "beamlet on Redoubt").
 //!
 //!     beamlet budget_pages=N endpoint=NAME [schedulers=N] [report_memory] [report_io]
-//!             [bind=PREFIX=HANDLE]... [principal=NAME [label=NAME:ID]... [context=NAME]]
+//!             [bind=PREFIX=HANDLE]... [principal=NAME [label=NAME:ID]... [context=NAME] [home=/PATH]]
 //!             MODULE [FUNCTION]
 //!
 //! Its arguments, from its startup block, give its budget's pages, which size the VM's limits
@@ -87,6 +87,7 @@ fn start(startup: &Startup) -> u32 {
             && !arg.starts_with(beamlet_redoubt::PRINCIPAL)
             && !arg.starts_with(beamlet_redoubt::LABEL)
             && !arg.starts_with(beamlet_redoubt::CONTEXT)
+            && !arg.starts_with(beamlet_redoubt::HOME)
     });
     let Some(module) = args.next() else {
         say(startup, "beamlet: no module to run in its arguments");

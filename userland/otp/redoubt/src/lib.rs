@@ -595,13 +595,14 @@ pub fn binds<'a>(startup: &Startup<'a>) -> Result<Vec<(&'a str, Handle)>, &'a st
 
 /// The arguments a steward gives a session's VM to tell it what it is
 /// (docs/userland/sessions.md, "What a session is told"): `principal=NAME`, `label=NAME:ID` for each
-/// label of its set, and `context=NAME` for a named context.
+/// label of its set, `context=NAME` for a named context, and `home=/PATH` where its home is bound.
 pub const PRINCIPAL: &str = "principal=";
 pub const LABEL: &str = "label=";
 pub const CONTEXT: &str = "context=";
+pub const HOME: &str = "home=";
 
 /// The identity `args` tell: none without exactly one `principal=`, or with a `label=` that is not
-/// `NAME:ID` or a second `context=`.
+/// `NAME:ID`, a second `context=`, a second `home=` or one that is not a clean absolute path.
 pub fn identity(args: &[&str]) -> Option<Identity> {
     let mut principals = args.iter().filter_map(|arg| arg.strip_prefix(PRINCIPAL));
     let principal = principals.next()?.to_string();
@@ -618,7 +619,12 @@ pub fn identity(args: &[&str]) -> Option<Identity> {
     if contexts.next().is_some() {
         return None;
     }
-    Some(Identity { principal, labels, context })
+    let mut homes = args.iter().filter_map(|arg| arg.strip_prefix(HOME));
+    let home = homes.next().map(str::to_string);
+    if homes.next().is_some() || home.as_deref().is_some_and(|h| !redoubt_rt::path::is_clean_absolute(h)) {
+        return None;
+    }
+    Some(Identity { principal, labels, context, home })
 }
 
 /// The argument that gives the VM its budget's pages, required on the machine: a program cannot

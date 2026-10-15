@@ -263,18 +263,22 @@ for any other process, and a child sees only the table its launcher wrote for it
 
 ### What a session is told
 
-Status: built · partly tested: a plain session and a vault session read theirs on the machine; a named context's is host-tested only · tested: bench:shell-commands, host:beamlet-redoubt::a_sessions_identity_is_read_from_its_arguments, host:beamlet-redoubt::the_platform_tells_a_session_its_identity, host:beamlet-vm::the_identity_is_the_platforms_and_without_a_system_is_not_supported, host:redoubt-steward-server::a_sessions_arguments_name_its_principal_labels_and_context, host:redoubt-steward-server::a_sessions_launch_is_told_its_context
+Status: built · partly tested: a plain session and a vault session read theirs on the machine; a named context's is host-tested only · tested: bench:shell-commands, host:beamlet-redoubt::a_sessions_identity_is_read_from_its_arguments, host:beamlet-redoubt::the_platform_tells_a_session_its_identity, host:beamlet-vm::the_identity_is_the_platforms_and_without_a_system_is_not_supported, host:redoubt-steward-server::a_sessions_arguments_name_its_principal_labels_context_and_home, host:redoubt-steward-server::a_sessions_launch_is_told_its_context
 
 A session's VM learns what it is from its launch arguments, which the launcher writes into its
 startup block, as the steward does for every session it launches
 ([the steward](../servers/steward.md#authentication-and-sessions)): `principal=NAME`; `label=NAME:ID`, one for each label of its set, in the set's
-order; and `context=NAME` for a named context, none for the principal's default one or the
-console's session. beamlet reads them once at its start and gives them to Elixir as
-`redoubt:identity/0` ([beamlet](beamlet.md#natives)); a VM started without `principal=` is no
-session and gets `not_found`. They are fixed for the VM's life, and they are information, not
-authority: the label set the kernel stamps is `redoubt:labels/0`, and what the session can reach
-is its handles, whatever the arguments say. A session that could rewrite them would lie only to
-itself.
+order; `context=NAME` for a named context, none for the principal's default one or the
+console's session; and `home=/PATH`, the path the session's namespace binds the principal's home
+at, for a vault session as for a plain one, none for a principal with no home. beamlet reads them
+once at its start and gives them to Elixir as `redoubt:identity/0` ([beamlet](beamlet.md#natives));
+a VM started without `principal=` is no session and gets `not_found`, and one whose `home=` is
+not a clean absolute path, or comes twice, is told nothing either. They are fixed for the VM's
+life, and they are information, not authority: the label set the kernel stamps is
+`redoubt:labels/0`, and what the session can reach is its handles, whatever the arguments say;
+the shell starts in the home named, and can only because the namespace reaches it
+([the shell](shell.md#the-shell-in-a-session)). A session that could rewrite them would lie only
+to itself.
 
 ### How a program reads its namespace
 

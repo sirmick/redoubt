@@ -2,8 +2,9 @@ defmodule Redoubt.Shell.Helpers do
   @moduledoc """
   The file commands, imported at the prompt.
 
-  A relative name resolves against the VM's working directory, which `cd/1` sets and `pwd/0`
-  reports; the VM is the session, so it is the session's. A command that changes files returns
+  A relative name resolves against the VM's working directory, the session's home at the start
+  (`Redoubt.Shell.enter_home/1`), which `cd/1` moves and `pwd/0` reports; the VM is the session,
+  so it is the session's. A command that changes files returns
   `:ok`; one that asks returns what it found: lines of names, or a `Redoubt.Shell.Stat`. None asks
   whether you are sure: a command that removes a whole tree says so in its name, `rm_rf`.
   """

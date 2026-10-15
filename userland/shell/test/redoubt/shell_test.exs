@@ -117,6 +117,34 @@ defmodule Redoubt.ShellTest do
     assert out =~ "(3)> :woken\n"
   end
 
+  # The start directory is the shell's doing, from what the steward told the session: on a host
+  # the VM is no session, and the shell is tested where the test started it.
+  test "a session starts in its home, says so once when it has none, and a VM that is no session starts where it is",
+       %{tmp_dir: dir} do
+    here = File.cwd!()
+    on_exit(fn -> File.cd!(here) end)
+    {:ok, console} = StringIO.open("")
+    Process.group_leader(self(), console)
+
+    assert Redoubt.Shell.enter_home(%{principal: "alice", home: dir}) == {:ok, dir}
+    assert File.cwd!() == dir
+    File.cd!(here)
+
+    assert Redoubt.Shell.enter_home(%{principal: "alice", home: nil}) == {:error, :no_home}
+    assert File.cwd!() == here
+    gone = Path.join(dir, "gone")
+    assert Redoubt.Shell.enter_home(%{principal: "alice", home: gone}) == {:error, :enoent}
+    assert File.cwd!() == here
+    assert Redoubt.Shell.enter_home(nil) == :none
+    assert File.cwd!() == here
+
+    {_input, output} = StringIO.contents(console)
+
+    assert output ==
+             "** no home to start in (:no_home); this session starts in #{here}\n" <>
+               "** no home to start in (:enoent); this session starts in #{here}\n"
+  end
+
   test "an exit typed at the prompt ends only that line" do
     out = session("y = :kept\nexit(:bye)\ny\n")
     assert out =~ "** (exit) :bye"

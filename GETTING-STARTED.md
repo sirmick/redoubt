@@ -151,10 +151,9 @@ Things to try once you have a prompt:
 
 - `help()` lists the shell's commands; `help(:cp)` shows one. Long pages open in the pager; `q`
   leaves it.
-- A session starts at `/`, which nothing writes; alice's home is `/home/alice`.
-  `ed("/home/alice/notes.txt")` opens the editor on a file there, and `fm("/home/alice")` opens the
-  file manager's two panes. Both are tested on the host only; this is where they first run on the
-  machine.
+- A session starts in its home, `/home/alice`, which the prompt shows. `ed("notes.txt")` opens
+  the editor on a file there, and `fm()` opens the file manager's two panes. Both are tested on
+  the host only; this is where they first run on the machine.
 - Resize the terminal: the shell lays its prompt and screens out again at the new size.
 - Ctrl+\\ ends the screen or job in front of you; Ctrl+D or `exit` ends the session.
 - A named context is a session of its own: log out, then `ssh -p 2222 -i .tmp/launch/id_ed25519

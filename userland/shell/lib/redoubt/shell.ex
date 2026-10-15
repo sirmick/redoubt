@@ -10,7 +10,8 @@ defmodule Redoubt.Shell do
 
   At the prompt, every commandlet is imported (`Redoubt.Commandlet`), and `help()` lists them.
   `exit` or the end of the input ends the shell. Nothing is read or run at start but the shell
-  itself.
+  itself. A session starts in its home, the directory the steward told it of (`enter_home/1`);
+  a VM that is no session starts where it is.
 
   Lines are read from the group leader with `IO.gets/1`. On a console that is OTP's `group`,
   under the shell's own driver (`Redoubt.Shell.Driver`): the line is edited by `edlin`, with
@@ -24,6 +25,9 @@ defmodule Redoubt.Shell do
   alias Redoubt.Commandlet.Registry
   alias Redoubt.Shell.{Completer, Driver, Evaluator, Printer}
   alias Redoubt.Term.Text
+
+  # beamlet's natives (docs/userland/beamlet.md, "Natives"): no module, so nothing to check at compile time.
+  @compile {:no_warn_undefined, :redoubt}
 
   @doc """
   beamlet's entry point (`beamlet ... Elixir.Redoubt.Shell`): starts the shell's application,
@@ -52,9 +56,55 @@ defmodule Redoubt.Shell do
       Printer.text("Redoubt shell, on Elixir #{System.version()}. `exit` or Ctrl+D ends it.")
     end
 
+    enter_home(identity())
+
     # The driver the interrupt comes from, if the shell runs on its console.
     limits = Keyword.take(opts, [:max_heap_words]) ++ [driver: Driver.of_group()]
     loop(%{counter: 1, binding: [], env: prompt_env(), limits: limits})
+  end
+
+  @doc """
+  Starts the session in its home, the directory `identity` (what the steward told the session,
+  `redoubt:identity/0`) names: the working directory moves there, and the prompt shows it. A
+  session told no home, or whose home cannot be entered, says so once and starts where the VM
+  did, `/`, where nothing is writable. A VM that is no session (`nil`, on a host) starts where
+  it is, and nothing is said.
+
+  Returns `{:ok, home}`, `{:error, reason}` for a session that could not start in its home, or
+  `:none` for a VM that is no session.
+  """
+  @spec enter_home(map() | nil) :: {:ok, String.t()} | {:error, term()} | :none
+  def enter_home(nil), do: :none
+
+  def enter_home(identity) do
+    result =
+      case identity do
+        %{home: home} when is_binary(home) -> with(:ok <- File.cd(home), do: {:ok, home})
+        _no_home -> {:error, :no_home}
+      end
+
+    with {:error, reason} <- result do
+      here =
+        case File.cwd() do
+          {:ok, dir} -> Text.visible(dir)
+          {:error, _reason} -> "?"
+        end
+
+      Printer.text("** no home to start in (#{inspect(reason)}); this session starts in #{here}")
+      result
+    end
+  end
+
+  # What the steward told the session of itself, or nil for a VM that is no session, or has no
+  # beamlet natives. Read here, not through `Redoubt.Shell.Session`, so the start loads no
+  # command's module: the prompt's footprint is measured.
+  defp identity do
+    case :redoubt.identity() do
+      {:ok, identity} -> identity
+      {:error, _} -> nil
+    end
+  rescue
+    UndefinedFunctionError -> nil
   end
 
   defp loop(state) do

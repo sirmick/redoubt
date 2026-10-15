@@ -783,7 +783,7 @@ every server binding is pure Elixir over them:
 | `serve/1`, `reply/2` | serve an endpoint: requests arrive as messages carrying badge, account and labels |
 | `budget_create/1`, `budget_destroy/1`, `budget_usage/1` | carve and end budgets; a deadline makes one a lease |
 | `labels/0` | this VM's label set, fixed when its budget was made |
-| `identity/0` | what the steward told a session's VM of itself: its principal, its labels' names, its context |
+| `identity/0` | what the steward told a session's VM of itself: its principal, its labels' names, its context, where its home is bound |
 | `launch/1` | launching a native program: the image, budget, namespace, handles and arguments come from the Elixir caller, and the client library's `launch` makes the calls and writes the startup block; a server is given a new endpoint to serve, and its caller the send right |
 
 They are the module `redoubt`'s, over the platform's `System`
@@ -848,9 +848,10 @@ with no `System`, the host CLI's, answers each `{error, not_supported}`; the hos
 - **`labels()`** is the VM's label set, read at its start off the first call thread's first
   wake-up, which the kernel stamps with the sender's labels as it stamps every message: the
   kernel's word, not a launcher's, and fixed.
-- **`identity()`** is `{ok, #{principal => Name, labels => [{Name, Id}], context => Name | nil}}`:
-  what the steward told a session's VM of itself in its arguments (`principal=`, `label=NAME:ID`,
-  `context=`; [sessions](sessions.md#what-a-session-is-told)), read once at the start and fixed. It
+- **`identity()`** is `{ok, #{principal => Name, labels => [{Name, Id}], context => Name | nil,
+  home => Path | nil}}`: what the steward told a session's VM of itself in its arguments
+  (`principal=`, `label=NAME:ID`, `context=`, `home=/PATH`;
+  [sessions](sessions.md#what-a-session-is-told)), read once at the start and fixed. It
   is the launcher's word, information and not authority: `labels()` is the kernel's, and what the
   session can reach is its handles. A VM started with no `principal=`, as one under `init`, gets
   `{error, not_found}`.

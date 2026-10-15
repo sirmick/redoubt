@@ -208,7 +208,8 @@ impl System for Test {
 
     fn identity(&mut self) -> Option<Identity> {
         let labels = vec![("alice-secrets".into(), 7)];
-        Some(Identity { principal: "alice".into(), labels, context: Some("work".into()) })
+        let (context, home) = (Some("work".into()), Some("/home/alice".into()));
+        Some(Identity { principal: "alice".into(), labels, context, home })
     }
 
     fn launch(&mut self, asker: u64, job: u64, launch: Launch) -> Result<Option<Object>, Refused> {
@@ -324,8 +325,9 @@ fn the_identity_is_the_platforms_and_without_a_system_is_not_supported() {
     assert_eq!(
         result,
         format!(
-            "{{ok,#{{context => {},labels => [{{{},7}}],principal => {}}}}}",
+            "{{ok,#{{context => {},home => {},labels => [{{{},7}}],principal => {}}}}}",
             text("work"),
+            text("/home/alice"),
             text("alice-secrets"),
             text("alice")
         )

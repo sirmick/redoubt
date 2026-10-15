@@ -292,9 +292,9 @@ pub fn labels(c: &mut Ctx, _a: &[Term]) -> R {
     Ok(c.list(terms))
 }
 
-/// `identity()`: `{ok, #{principal => Name, labels => [{Name, Id}], context => Name | nil}}`, what
-/// the steward told this VM of itself when it launched it as a session; `{error, not_found}` for a
-/// VM that is no session.
+/// `identity()`: `{ok, #{principal => Name, labels => [{Name, Id}], context => Name | nil, home =>
+/// Path | nil}}`, what the steward told this VM of itself when it launched it as a session;
+/// `{error, not_found}` for a VM that is no session.
 pub fn identity(c: &mut Ctx, _a: &[Term]) -> R {
     Ok(match with_system(c, |s| Ok(s.identity())) {
         Ok(Some(i)) => {
@@ -313,8 +313,12 @@ pub fn identity(c: &mut Ctx, _a: &[Term]) -> R {
                 Some(name) => c.binary(name.as_bytes()),
                 None => c.atom("nil"),
             };
-            let keys = [c.atom("principal"), c.atom("labels"), c.atom("context")];
-            let m = c.map_from(keys.into_iter().zip([principal, labels, context]));
+            let home = match &i.home {
+                Some(path) => c.binary(path.as_bytes()),
+                None => c.atom("nil"),
+            };
+            let keys = [c.atom("principal"), c.atom("labels"), c.atom("context"), c.atom("home")];
+            let m = c.map_from(keys.into_iter().zip([principal, labels, context, home]));
             c.ok_tuple(m)
         }
         Ok(None) => refused(c, Refused("not_found")),

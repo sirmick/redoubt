@@ -1,4 +1,4 @@
-description = "The machine `./launch --system` boots (GETTING-STARTED.md, \"Try the system\"): the image's bundle, packed from image/boot.toml, on the image's own disk and its read-only userland disk, with the network and port 22 forwarded, at four harts; alice logs in over SSH and gets a prompt from her own VM, which evaluates a marker. launch reads this case for its machine, so what a person boots is what this case boots. The verdicts are init's, sshd's and the steward's lines (rule F)"
+description = "The machine `./launch --system` boots (GETTING-STARTED.md, \"Try the system\"): the image's bundle, packed from image/boot.toml, on the image's own disk and its read-only userland disk, with the network and port 22 forwarded, at four harts; alice logs in over SSH and gets a prompt from her own VM, in her home, which evaluates a marker. launch reads this case for its machine, so what a person boots is what this case boots. The verdicts are init's, sshd's and the steward's lines (rule F)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 recipe = "image/boot.toml"
@@ -35,7 +35,7 @@ expect_after = [
 [[session]]
 user = "alice"
 steps = [
-    { expect = '\([0-9]+\)> ' },
+    { expect = '/home/alice \([0-9]+\)> ' },
     { send = "\"alice-\" <> \"marker\"\n" },
     { expect = '"alice-marker"' },
     { exit = 0 },
