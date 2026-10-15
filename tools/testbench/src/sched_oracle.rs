@@ -3049,7 +3049,8 @@ fn foreign_timer(
 /// hart timer"). A timeout whose payer runs nowhere is armed on one hart, so a sleeper's timeout
 /// wakes its own hart alone; a kernel that arms every hart wakes every idle hart for it, and all
 /// but one find it served. The budget never running, or no section at all, is a construction
-/// error, not a verdict.
+/// error, not a verdict. A hart's first section, with no `j` before it, reads as entered from the
+/// idle: harmless, since every hart's boot sections precede the marked budget's first run.
 fn idle_sections_that_found_nothing(
     records: &[Record],
     sections: &[Section],

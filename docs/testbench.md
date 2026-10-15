@@ -1320,14 +1320,16 @@ and the bench measures that window:
 
 The case log gets one `[idle]` line with every rate, and a rate over its ceiling fails the case;
 a ceiling left out is measured and printed only. A window that measured nothing fails too, never
-passing under its ceilings for want of data: no log, a hart with no timer interrupt, no system
-call from user mode, or no host CPU time. `launch-idle`'s ceilings are about twice the most that
-nine 60 s windows measured, five on rv64 and four on rv32 (the case's comment gives each), so a
-ceiling catches a cost that doubles, not the window-to-window spread. Those windows were
-measured before the session's next step waited for `log none`, so that step's command fell in
-them. One window on each width since measured 4.1 system calls a second, so `user_ecalls`, at
-18, is loose by about 2x until the kernel's lock wake-ups at rest are cut and the ceilings set
-again.
+passing under its ceilings for want of data: no log, no timer interrupt on any hart (an idle hart
+may take none in a whole window, since a timeout whose payer runs nowhere is armed on one hart:
+[the hart timer](kernel/timer.md#the-hart-timer)), no system call from user mode, or no host CPU
+time. `launch-idle`'s ceilings are twice the most that ten 60 s windows measured, five a width
+(the case's comment gives each), so a ceiling catches a cost that doubles, not the
+window-to-window spread: 3.8 interrupts a second on the busiest hart (1.6 to 1.9 measured), 12.2
+system calls from user mode (6.0 to 6.1), and 0.01 host cores, the measure's own resolution
+(0.001 to 0.002). Before the one-hart rule the busiest hart took 3.4 to 3.5 a second, three
+quarters of them the kernel lock's hand-off interrupts, each timeout waking every hart
+([the hart timer](kernel/timer.md#the-hart-timer)).
 
 The window never holds the zeroing of the frames in flight
 ([frames in flight](kernel/memory.md#frames-in-flight)): about 35,000, which the boot and the

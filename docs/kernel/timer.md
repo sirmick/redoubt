@@ -89,7 +89,15 @@ that very return or idle, but the choice is path-dependent (a hart running anoth
 it, and then the interrupt is billed to the item's payer as any timer work is), and what the rule
 bounds is the count of harts an item wakes, one, not which. Before, every hart's timer came by
 such an item, so at rest, where every blocked budget's payer runs nowhere, each timeout woke
-every hart and all but one took the kernel lock for nothing. The decision is a pure function of
+every hart and all but one took the kernel lock for nothing: the launched system at the prompt
+(`bench:launch-idle`, four harts, 60 s windows) took 197 timer interrupts a window on rv64 (173
+on rv32) for about 65 timeouts, the lock changed hands 371 times (313) with each hand-off an
+interrupt to the halted waiter, and the kernel re-armed the timer 345 times (319); with the rule,
+five windows a width, 63 to 70 timer interrupts, 100 to 115 hand-offs (a woken thread's own
+calls meeting another hart's entry, no longer the harts waking for nothing) and 194 to 199
+re-arms (three a timeout: the noting hart's, the slice end's at the thread's return, the next
+item's at its idle), the busiest hart from 3.5 interrupts a second to 1.6 to 1.9 and two harts
+under 0.3, often without a timer interrupt in the whole window. The decision is a pure function of
 the hint, the harts' runners and what each timer is armed for (`redoubt_stride::Hint::due_on`,
 read at each re-arm from the scheduler's runners, one read per hart; the deadline list is never
 scanned on the way to user mode), and it keeps the liveness the plain rule had: at every return
@@ -390,8 +398,20 @@ Status: built · partly tested: a boot with no `Time` tag is not attacked by a c
   hart that covers an item whose payer runs nowhere, waits for that hart to leave the kernel,
   where an idle hart would have answered it at once: the cost of waking one hart instead of every
   hart is a wake's latency, bounded by the covering hart's kernel section
-  ([the hart timer](#the-hart-timer); the wake targets are re-judged at two harts in
-  `bench:sched-latency` and `bench:kernel-containment`). `bench:budget-deadline` bounds a deadline's
+  ([the hart timer](#the-hart-timer)). Re-judged at two harts with the rule, every target met:
+  `bench:sched-latency`'s deadline notice net p99 at N = 1, 4 and 16 rose by 0.2 to 0.4 ms on
+  both widths (rv64 3,763, 3,874 and 4,076 µs from 3,535, 3,428 and 3,758; rv32 4,302, 4,390 and
+  5,407 from 3,933, 4,104 and 5,133), within the program's p99 kernel section of 1.0 to 1.1 ms;
+  its timer wake at N = 16 by 1.6 and 3.7 ms (10,702 and 21,463 from 9,132 and 17,714) while at
+  N = 1 it and the driver wake fell. The N = 16 rise is more than a section, and its mechanism is
+  the rule itself under a burst of timeouts: sixteen sleepers' timeouts, every payer running
+  nowhere while it sleeps, are armed on one hart, so their wakes are served there in turn while
+  the other hart idles, where before each hart answered about half of them. It is a cost of the
+  one-hart rule, not of a kernel section, and it has a trigger: if that timer wake's p99 at N = 16
+  nears its 50 ms target, or a workload shows sleepers bursting on one hart, the covering hart
+  hands the items due beyond the first to an idle hart, or an idle hart is preferred to cover.
+  `bench:kernel-containment`'s deadline notice 24,529 and
+  27,882 from 24,001 and 27,120. At one hart nothing moved. `bench:budget-deadline` bounds a deadline's
   lateness by the cost of the same destruction by hand plus 1,000 µs. The frames such an
   operation freed are zeroed by an idle hart, one frame a pass with interrupts off (about 30 µs),
   only while every hart is idle, and on demand by an allocation that finds no free frame

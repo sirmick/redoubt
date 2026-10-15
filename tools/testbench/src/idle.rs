@@ -198,8 +198,8 @@ impl Window {
     }
 
     /// The window's measures as one line, naming any drain that opened inside it, and why it fails
-    /// `ceilings`, if it does. A window that measured nothing is an error, never a pass: no log, a
-    /// hart with no timer interrupt, no system call from user mode, or no host CPU time.
+    /// `ceilings`, if it does. A window that measured nothing is an error, never a pass: no log, no
+    /// timer interrupt on any hart, no system call from user mode, or no host CPU time.
     pub fn judge(&self, ceilings: &Idle) -> Result<(String, Option<String>)> {
         let (Some((t0, cpu0)), Some((t1, cpu1))) = (self.start, self.end) else {
             bail!("the idle window never ran")
@@ -215,16 +215,15 @@ impl Window {
             n => format!("; {n} drain(s) opened inside the window"),
         };
         let summary = format!("{}{inside}", counts.summary(seconds, cores));
-        // The floors. Every hart of every window measured so far took timer interrupts (0.6 to
-        // 1.2 a second, nine windows of 60 s on both widths), so a hart with none was not logged.
+        // The floors. A timeout whose payer runs nowhere is armed on one hart (kernel/timer.md,
+        // "The hart timer"), so an idle hart may take no timer interrupt in a whole window; a
+        // window in which no hart took one was not logged.
         let mut nothing = Vec::new();
         if text.is_empty() {
             nothing.push("the log is empty".to_string());
         }
-        for hart in 0..u64::from(self.harts) {
-            if counts.interrupts.get(&hart).and_then(|by| by.get("s_timer")).is_none_or(|n| *n == 0) {
-                nothing.push(format!("hart {hart} took no timer interrupt"));
-            }
+        if counts.interrupts.values().all(|by| by.get("s_timer").is_none_or(|n| *n == 0)) {
+            nothing.push("no hart took a timer interrupt".to_string());
         }
         if counts.exceptions.get("user_ecall").is_none_or(|n| *n == 0) {
             nothing.push("no system call from user mode".to_string());
@@ -547,13 +546,18 @@ some other line
     }
 
     /// A window that measured nothing is an error, never a pass under its ceilings: an empty or
-    /// missing log, a hart with no timer interrupt, no user system call, no host CPU time.
+    /// missing log, no timer interrupt on any hart, no user system call, no host CPU time. A hart
+    /// with none while another took them is a window measured (the kernel arms a timeout whose
+    /// payer runs nowhere on one hart, so an idle hart may take none).
     #[test]
     fn a_window_that_measured_nothing_fails() {
         let half = Duration::from_millis(500);
         let nothing = |(w, _dir): (Window, Dir)| w.judge(&Idle::default()).unwrap_err().to_string();
         assert!(nothing(window("empty", 2, "", half)).contains("the log is empty"));
-        assert!(nothing(window("hart", 3, LOG, half)).contains("hart 2 took no timer interrupt"));
+        let no_timer: String =
+            LOG.lines().filter(|l| !l.contains("s_timer")).map(|l| format!("{l}\n")).collect();
+        assert!(nothing(window("timer", 2, &no_timer, half)).contains("no hart took a timer interrupt"));
+        assert!(window("hart", 3, LOG, half).0.judge(&Idle::default()).is_ok(), "hart 2 idle: measured");
         let no_ecall: String =
             LOG.lines().filter(|l| !l.contains("user_ecall")).map(|l| format!("{l}\n")).collect();
         assert!(nothing(window("ecall", 2, &no_ecall, half)).contains("no system call from user mode"));

@@ -100,17 +100,21 @@ a deadline): the woken thread first runs at a pick, an idle hart's or one after 
 such a reason. `sched-wake-no-preempt` proves it at one hart nap by nap, each against the slice
 that follows it; `sched-wake-no-preempt-harts` judges it at two, each wake at the entry that made
 it, its naps' ends stepped through the slices' phases, and needs at least twenty of its hundred and
-twenty wakes answered where they could have preempted, mid-slice or at another budget's call (67
-to 81 at a call on rv64 and 65 to 74 on rv32, five runs a width alone and one with the timer's
-placement; the floor is a third of the least). Whether a slice ended at a timer interrupt the oracle
+twenty wakes answered where they could have preempted, mid-slice or at another budget's call (57
+to 101 at a call on rv64 and 65 to 74 on rv32, five runs a width alone and three with the timer's
+placement, whose one hart armed for a sleeper's timeout moves where a wake is answered run to
+run; the floor is a third of the least). Whether a slice ended at a timer interrupt the oracle
 decides itself, from the decision's inputs the trace records (its end and now), so a slice that
 ends during the entry's own expiry counts as ended, as the kernel ends it. Under `icount` a wake
-comes mid-slice on rv64 (26 to 35) but at most four times on rv32 (0 to 4), whose armed hart takes
-its interrupt only at its next turn, after the other hart's call has answered the timeout; so
-`sched-wake-no-preempt-harts-mttcg`, the same program where the harts run at once, needs five
-mid-slice. How many come is the host's race: 49 to 55 on rv64 and 48 to 57 on rv32 with the two
-harts on eight host cores (three runs a width), 69 to 75 beside other cases, and as few as 3 with the two vCPU
-threads and QEMU's I/O thread sharing two cores, so the case runs on the quiet core set. A kernel
+comes mid-slice on rv64 (1 to 61 across runs; 26 to 35 before the placement) but at most four
+times on rv32 (0 to 4), whose armed hart takes its interrupt only at its next turn, after the
+other hart's call has answered the timeout; so `sched-wake-no-preempt-harts-mttcg`, the same
+program where the harts run at once, needs five mid-slice. How many come is the host's race: 49
+to 55 on rv64 and 48 to 57 on rv32 with the two harts on eight host cores (three runs a width),
+41 to 74 alone on the quiet core set with the placement, 69 to 75 beside other cases, as few as 5
+beside a whole bench's load, and as few as 3 with the two vCPU threads and QEMU's I/O thread
+sharing two cores, so the case runs on the quiet core set, and a read at the floor is re-run alone
+before it is believed. A kernel
 built with `wake-preempts`, whose timeout wake preempts the entering thread as a deadline does,
 fails both on both widths, in recorded negative runs (on rv32 under `icount`: a wake took hart 0
 from budget 37).
@@ -144,11 +148,12 @@ the oracle counts the thread as waiting only at a slice's end that picked its ow
 `sched-timer-entry` bounds what a slice's end costs the kernel: two spinners and nothing else, so every
 timer interrupt from user mode ends a slice, and the oracle bounds their lock sections, trap to
 return, net of the checked build's audits at one hart: the p99 at 2,000 ticks, the steady entry,
-which measures 945 on rv64 and 1,441 on rv32 (five runs a width alone, p50 943 and 1,416; 930
-and 1,415 before the timer's placement read the harts' runners at each re-arm, 15 and 26 ticks:
-[the hart timer](timer.md#the-hart-timer)), and the longest at 5,000, the cold first preemptions
-of a phase, 3,548 and 4,446 (at two harts, where `icount`'s one clock counts the other hart's
-instructions too, they are recorded: p99 5,445 and 7,375). In a release
+which measures 951 on rv64 and 1,452 on rv32 (five runs a width alone, p50 949 and 1,424; 930
+and 1,415 before the timer's placement read the harts' runners at each re-arm, 15 and 26 ticks,
+and 945 and 1,441 before its one-hart rule for an item whose payer runs nowhere asked every
+hart's arming, 6 more: [the hart timer](timer.md#the-hart-timer)), and the longest at 5,000, the
+cold first preemptions of a phase, 3,552 and 4,452 (at two harts, where `icount`'s one clock
+counts the other hart's instructions too, they are recorded: p99 5,447 and 7,378). In a release
 build the slice's end of a thread that only computes, alone on its hart, is about 4,200 kernel
 instructions on rv64 and 6,700 on rv32 (QEMU's exec log), about 3.4 and 5.4 % of a hart at the
 1 ms slice; through `kmain` it was 9,000 and 13,000. One that switches to another budget's thread,
@@ -1183,7 +1188,12 @@ pending runs no `wfi` at all: the architecture lets `wfi` return at once then, b
 hart regardless and, under `icount`, runs it again only after every other hart's turn
 (`arch::halt_masking`), which cost an idle hart woken by `sched-lock-contention-4`'s alarm
 28.5 ms. A checked build counts the halts it skips, and `sched-lock-contention` requires some at
-two and at four harts (95 to 182 a run). The
+two and at four harts (95 to 182 a run). A hart halted in `kmain`'s idle is not in the lock's set
+and no release wakes it; since a timeout whose payer runs nowhere is armed on one hart
+([the hart timer](timer.md#the-hart-timer)), the machine at rest no longer hands the lock around
+for its sleeps: at the prompt the lock changed hands 5 to 6 times a second with every hart
+halted, each hand-off an interrupt, and changes hands 1.7 to 1.9 times a second with the rule,
+each for a woken thread's own work (`bench:launch-idle`). The
 mark, the read, the release's store and its read of the set are sequentially consistent, so either
 the release sees the mark or the waiter sees the new ticket: no hart halts past its turn. Under
 QEMU's `icount`, where the harts take turns on one host thread and the clock counts every running
@@ -1438,6 +1448,11 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   own slice end), is counted and bounded at 10 of 1000 of the victim's charges in three host-clock
   cases; under icount which entry comes first is QEMU's turn order, and the icount cases report
   the count without a bound ([timer](timer.md#r12-scheduling-for-timer-work)).
+- **A burst of timeouts is served by one hart.** Timeouts whose payers run nowhere are armed on one
+  hart, so sixteen sleepers waking together are served there in turn while another hart idles:
+  `bench:sched-latency`'s timer wake p99 at N = 16 rose 1.6 and 3.7 ms at two harts, every target
+  met. The trigger for handing the items beyond the first to an idle hart is on the timer page
+  ([timer](timer.md#residual-risks)).
 - **A hart waits for QEMU's turns.** Under `icount` the harts take turns on one
   host thread, and a hart in a kernel section keeps its turn to the section's end. A device's
   line that rises while the idle hart is halted wakes it on time in virtual time, but the hart runs
@@ -1457,7 +1472,7 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   in the hart's next turn, by which the other hart's call has answered it, so on rv32
   `sched-wake-no-preempt-harts` has at most one wake mid-slice under `icount` (0 or 1 in ten runs,
   and 79 of its interrupts finding nothing due in one); it records them, and
-  `sched-wake-no-preempt-harts-mttcg` judges them (52 to 78 on rv64 and 57 to 75 on rv32 over ten
+  `sched-wake-no-preempt-harts-mttcg` judges them (41 to 78 on rv64 and 41 to 75 on rv32 over ten
   runs a width).
 - **Every hart pays for each device interrupt.** An unmasked source raises the external interrupt
   on every hart's context, so each hart in user mode or idle when it rises traps, and all but one
