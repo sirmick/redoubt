@@ -845,7 +845,7 @@ unsafe impl redoubt_rt::Transport for Fake {
                 });
                 Ok(Return::Tid(1))
             }
-            Call::Mint { source, badge, budget: None } => {
+            Call::Mint { source, badge, budget } => {
                 let mut s = self.lock();
                 let ep = match source {
                     MintSource::Handle(h) => {
@@ -860,7 +860,16 @@ unsafe impl redoubt_rt::Transport for Fake {
                         _ => return Err(Error::InvalidArgument),
                     },
                 };
-                let stamp = s.processes[pid].runs_in;
+                // A budget named stamps the handle, so it goes when that budget is destroyed
+                // (objects.md, mint): the fake takes the caller's word that it is at or below the
+                // source's stamp.
+                let stamp = match budget {
+                    None => s.processes[pid].runs_in,
+                    Some(b) => match lookup(&s, pid, b)? {
+                        Object::Budget(index) => Some(index),
+                        _ => return Err(Error::WrongObject),
+                    },
+                };
                 Ok(Return::Handle(install(
                     &mut s,
                     pid,

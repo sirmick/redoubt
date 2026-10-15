@@ -875,7 +875,9 @@ with no `System`, the host CLI's, answers each `{error, not_supported}`; the hos
   `killed`): the client library's `launch` with the image the caller read, a budget it carved, its
   namespace entries and named handles (at most `MAX_START_HANDLES` together, `serve`'s counted),
   and arguments; the platform adds the loader stub, which it carries as `init` does, and the job's
-  own exit endpoint ([native programs](native.md#launching-from-a-session)). With `serve => Name`
+  own exit endpoint ([native programs](native.md#launching-from-a-session)). A receive right the
+  VM serves among them goes to the program as a send right with a badge of the launch's own, in a
+  budget the VM carved (below). With `serve => Name`
   the program is a server: the platform makes an endpoint, gives the child its receive right as
   the named handle `Name`, keeps none of it once the child has started, and answers `{ok, Job,
   Connection}`, the caller's send right with the server's own badge (below every minted one), which
@@ -936,17 +938,30 @@ sent on it then would reach that server, inside the session's own table. Tested:
 `a_served_servers_binding_and_handle_go_with_its_budget` and
 `a_forgotten_connections_requests_reach_no_later_holder_of_its_index` on the host, against
 a fake kernel that frees those indices as the kernel does, and `pipe-eight` and `pipe-sixty-four`
-on the machine. The
-residuals: a handle whose stamp the VM does not know may be revoked, and its index reused,
-before its term is collected, and collecting it then closes the handle that took the index. Such a
-handle is one revoked outside the VM, such as a grant whose stamp the steward destroys while the VM
-lives. Or it is one a request brought to an endpoint the VM serves, from a program in a budget the
-VM carved that holds a connection to that endpoint (given in `launch`'s `handles`) and sends a
-handle it minted: the kernel tells a receiver the sender's badge, account and labels, never its
-budget, and a carved budget carries the session's account and labels, so the VM cannot know which
-budget stamped it. What such a close reaches is the session's own table, so a program that
-arranges one harms only the session that launched it. A generation in the handle word would guard
-both, and is the owner's to decide. A handle cannot reach another VM in a
+on the machine. A request's handles come with no budget: the kernel tells a receiver the sender's
+badge, account and labels, never its budget, and a carved budget carries the session's account and
+labels. So a receive right the VM serves, given in a `launch`'s `handles` or `namespace` to a
+program in a budget the VM carved, goes to the program as a send right with a badge of that
+launch's own (`LAUNCH_BADGE` on, the next for each launch on that endpoint), minted from the
+receive right and stamped with the budget, never the receive right itself. What the program sends
+through it is stamped with its budget at best, as its own mints are, so the handles a request with
+that badge brings die with the budget and go under its Life: a program that sends a handle it
+minted and is then destroyed leaves a term whose collection closes nothing at the index the kernel
+has given on, be it a sibling job's budget or a connection of the session's. A handle such a
+program forwarded rather than minted is kept, never closed, as a server's is. The badge dies with
+the budget, so no request carries it after; one on its way to the VM as the budget went is known
+by its badge's range, and its handles kept. A badge in that range the VM did not mint (a holder of
+the receive right outside the VM mints what it likes) is taken for such a launch's, so what it
+brings is kept: a leak within the session's table, bounded as a forwarded handle's is, each
+such handle staying in the table until the VM ends, and never a close. Tested:
+`what_a_launched_program_sends_to_a_served_endpoint_goes_with_its_budget_and_is_not_closed_again`
+on the host and `pipe-stage-handle` on the machine, where a stage given the session's served
+endpoint sends it the receive right of an endpoint it made, its budget is destroyed, and the
+budget carved next is still held once the term is collected. The residual: a handle revoked
+outside the VM, such as a grant whose stamp the steward destroys while the VM lives, is not known
+gone, and its index may be reused before its term is collected; collecting it then closes the
+handle that took the index, inside the session's own table. A generation in the handle word is to
+guard that, in work of its own. A handle cannot reach another VM in a
 message: the term format writes a resource as a plain reference, with no state behind it, so a
 decoded copy grants nothing, and a handle crosses between processes only in a kernel call that
 names it. Delegation is always `new_connection`, a typed call on a connection, not a native

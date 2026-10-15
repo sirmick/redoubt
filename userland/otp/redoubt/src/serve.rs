@@ -15,6 +15,11 @@
 //!   its receive right ([`SELF`]): only the VM holds it, so the thread takes a send with that badge as an
 //!   answer and any other as a request. The answer names the call by the number the thread gave it; an answer
 //!   to a call that has ended already (expired, or abandoned by its caller) is dropped.
+//! - **A launch in a budget the VM carved is given a served endpoint as a send right with a badge of its
+//!   own** ([`Served::admit`]), minted from the receive right and stamped with that budget, never the receive
+//!   right itself: the handles a request with that badge brings die with the budget, as the program's mints
+//!   do, and go under its [`Life`], so a collection closes nothing at their indices once the kernel has freed
+//!   them (docs/userland/beamlet.md, "Handles are resource terms").
 
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -22,13 +27,13 @@ use core::num::NonZeroU64;
 
 use beamlet_vm::platform::{Event, Message, Object, Refused};
 use redoubt_rt::abi::{FOREVER, Handle, Handles, MAX_LABELS, MAX_LEND_PAGES, MAX_MSG_HANDLES, PAGE_SIZE};
-use redoubt_rt::handle::{Endpoint, time_now};
+use redoubt_rt::handle::{Budget, Endpoint, time_now};
 use redoubt_rt::ipc::{Buffer, Delivery, Request};
 use redoubt_rt::server::parked::Parked;
 use redoubt_rt::server::typed::{Outcome, finish};
 use redoubt_rt::server::{Admission, AdmitKey, Limits, MALFORMED, close_delivery};
 
-use crate::system::{Cap, kernel};
+use crate::system::{Cap, Life, kernel};
 
 /// The most endpoints one VM serves.
 pub const MAX_SERVED: usize = 2;
@@ -39,6 +44,11 @@ pub const BADGE: u64 = 0x200;
 /// The badge the VM answers with, minted from the served endpoint's receive right: the largest a
 /// mint gives, which no client's badge is.
 pub const SELF: u64 = u32::MAX as u64;
+
+/// The first badge minted for a launch given a served endpoint; each launch on that endpoint takes
+/// the next, below [`SELF`]. A request with a badge from here on that no live launch holds is one
+/// a destroyed launch's program sent before its budget went: what it brought is kept, never closed.
+pub const LAUNCH_BADGE: u64 = 0x8000_0000;
 
 /// The longest a request waits for its answer (µs): past it, the thread answers it.
 pub const REQUEST_WAIT_US: u64 = 5_000_000;
@@ -72,6 +82,24 @@ struct Thread {
     answer: Arc<Endpoint>,
     endpoint: Handle,
     _held: Object,
+    /// The badge minted for each launch given the endpoint, and the budget it runs in; one whose
+    /// budget has gone leaves at the next launch.
+    launches: Vec<(u64, Arc<Life>)>,
+    /// The next launch's badge.
+    next: u64,
+}
+
+impl Thread {
+    /// The budget a request's handles die with, by the request's badge
+    /// ([`LAUNCH_BADGE`]): a live launch's, one already gone for a badge of a launch's that is
+    /// forgotten, none for any other client.
+    fn life(&self, badge: u64) -> Option<Arc<Life>> {
+        match self.launches.iter().find(|(b, _)| *b == badge) {
+            Some((_, life)) => Some(Arc::clone(life)),
+            None if (LAUNCH_BADGE..SELF).contains(&badge) => Some(Arc::new(Life::ended())),
+            None => None,
+        }
+    }
 }
 
 /// The endpoints served.
@@ -107,35 +135,69 @@ impl Served {
         let woken = wake.mint(NonZeroU64::new(BADGE + i).ok_or(Refused("protocol"))?, None).map_err(name)?;
         let body = alloc::boxed::Box::new(move || serve(receive, woken));
         redoubt_rt::thread::spawn(body, STACK_PAGES).map_err(name)?;
-        self.threads.push(Thread { asker, answer: Arc::new(answer), endpoint, _held: held });
+        self.threads.push(Thread {
+            asker,
+            answer: Arc::new(answer),
+            endpoint,
+            _held: held,
+            launches: Vec::new(),
+            next: LAUNCH_BADGE,
+        });
         Ok(())
+    }
+
+    /// For a launch in `budget`, which dies with `life`, given the receive right `endpoint`: the send
+    /// right it gets instead, with a badge of its own, stamped with that budget; `None` if the VM
+    /// does not serve `endpoint`. The VM's copy is the caller's to close once the child holds its own.
+    /// The launches whose budgets have gone leave the endpoint's `launches` here, at the next launch.
+    pub(crate) fn admit(
+        &mut self,
+        endpoint: Handle,
+        budget: Handle,
+        life: &Arc<Life>,
+    ) -> Option<Result<Handle, Refused>> {
+        let thread = self.threads.iter_mut().find(|t| t.endpoint == endpoint)?;
+        thread.launches.retain(|(_, life)| !life.gone());
+        if thread.next >= SELF {
+            return Some(Err(Refused("too_many")));
+        }
+        let Some(badge) = NonZeroU64::new(thread.next) else { return Some(Err(Refused("protocol"))) };
+        let budget = Budget::from_handle(budget);
+        let minted = match Endpoint::from_handle(endpoint).mint(badge, Some(&budget)) {
+            Ok(minted) => minted.handle(),
+            Err(e) => return Some(Err(Refused(kernel(e)))),
+        };
+        thread.next += 1;
+        thread.launches.push((badge.get(), Arc::clone(life)));
+        Some(Ok(minted))
     }
 
     /// Takes a serve thread's wake-up as a request for its asker; anything else is handed back.
     pub(crate) fn deliver(&mut self, delivery: Delivery) -> Result<(u64, Event), Delivery> {
         let i = delivery.caller.badge.wrapping_sub(BADGE) as usize;
         let kind = delivery.words[0];
-        let (Some(Thread { asker, answer, .. }), true) = (self.threads.get(i), kind == CALL || kind == SEND)
-        else {
+        let (Some(thread), true) = (self.threads.get(i), kind == CALL || kind == SEND) else {
             return Err(delivery);
         };
         let Some(bytes) = delivery.transfer.as_deref() else { return Err(delivery) };
+        let (badge, account) = (delivery.words[2], delivery.words[3]);
+        let life = thread.life(badge);
         let header = words_of(bytes);
         let labels = header[1..1 + (header[0] as usize).min(MAX_LABELS)].to_vec();
         let words = [header[17], header[18], header[19], header[20]];
         let handles = (0..(header[21] as usize).min(MAX_MSG_HANDLES))
             .filter_map(|h| Handle::new(header[22 + h] as u32))
-            .map(Cap::received)
+            .map(|h| Cap::returned(h, life.clone()))
             .collect();
         let buffer = match header[26] {
             u64::MAX => None,
             n => Some(bytes[HEADER..HEADER + (n as usize).min(MAX_BYTES)].to_vec()),
         };
-        let request = (kind == CALL)
-            .then(|| Arc::new(Pending { answer: Arc::clone(answer), number: delivery.words[1] }) as Object);
-        let (badge, account) = (delivery.words[2], delivery.words[3]);
+        let request = (kind == CALL).then(|| {
+            Arc::new(Pending { answer: Arc::clone(&thread.answer), number: delivery.words[1] }) as Object
+        });
         let message = Message { words, buffer, handles };
-        Ok((*asker, Event::Request { request, badge, account, labels, message }))
+        Ok((thread.asker, Event::Request { request, badge, account, labels, message }))
     }
 }
 

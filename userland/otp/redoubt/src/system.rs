@@ -63,9 +63,12 @@ pub const MAX_BINDINGS: usize = 64;
 pub(crate) struct Life(AtomicBool);
 
 impl Life {
+    /// A budget already gone: for a handle known to have died with one the VM no longer names.
+    pub(crate) fn ended() -> Life { Life(AtomicBool::new(true)) }
+
     fn end(&self) { self.0.store(true, Ordering::SeqCst) }
 
-    fn gone(&self) -> bool { self.0.load(Ordering::SeqCst) }
+    pub(crate) fn gone(&self) -> bool { self.0.load(Ordering::SeqCst) }
 }
 
 /// A handle the VM holds: one it was given since its start is closed when its last [`Cap`] goes,
@@ -126,14 +129,11 @@ impl Cap {
         Arc::new(Cap { owned, kind, returns })
     }
 
-    /// A handle a request brought: an endpoint, closed when its last copy goes. It dies with no
-    /// budget the VM knows: a receiver is told its sender's badge, account and labels, never its
-    /// budget, and a budget the VM carved carries the session's account and labels
-    /// (docs/userland/beamlet.md, "Handles are resource terms", the residuals).
-    pub(crate) fn received(handle: Handle) -> Object { Cap::returned(handle, None) }
-
-    /// A handle a reply brought, on a connection whose returns die with `returns`: an endpoint,
-    /// closed when its last copy goes unless it has gone with them.
+    /// A handle a reply brought, on a connection whose returns die with `returns`, or a request
+    /// brought, from a launch whose budget is `returns` ([`crate::serve::Served::admit`]): an
+    /// endpoint, closed when its last copy goes unless it has gone with them. A request's from
+    /// any other client dies with no budget the VM knows: a receiver is told its sender's badge,
+    /// account and labels, never its budget.
     pub(crate) fn returned(handle: Handle, returns: Option<Arc<Life>>) -> Object {
         Cap::serving(Arc::new(Owned::under(handle, returns.clone())), Kind::Endpoint, returns)
     }
@@ -526,15 +526,42 @@ impl System for Redoubt {
 
     fn identity(&mut self) -> Option<Identity> { self.sys.identity.clone() }
 
+    /// A receive right the VM serves, given to a launch in a budget the VM carved, goes as a send
+    /// right with a badge of the launch's own, stamped with that budget
+    /// ([`crate::serve::Served::admit`]): what requests with that badge bring dies with the
+    /// budget, so it goes under its [`Life`]. The VM's copies of those send rights are closed once
+    /// the child holds its own.
     fn launch(&mut self, asker: u64, job: u64, launch: Launch) -> Result<Option<Object>, Refused> {
-        let resolved = crate::jobs::Resolved {
-            budget: budget(&launch.budget)?,
-            namespace: launch.namespace.iter().map(|(_, o)| endpoint(o)).collect::<Result<_, _>>()?,
-            handles: launch.handles.iter().map(|(_, o)| cap(o).map(Cap::handle)).collect::<Result<_, _>>()?,
-        };
+        let carved = budget(&launch.budget)?;
         // What calls on the server return dies with the budget it runs in.
         let returns = cap(&launch.budget)?.owned.life.clone();
+        let mut minted: Vec<Owned> = Vec::new();
+        let mut given = |handle: Handle| -> Result<Handle, Refused> {
+            let Some(life) = &returns else { return Ok(handle) };
+            match self.sys.served.admit(handle, carved, life) {
+                Some(send) => {
+                    let send = send?;
+                    minted.push(Owned::new(send));
+                    Ok(send)
+                }
+                None => Ok(handle),
+            }
+        };
+        let resolved = crate::jobs::Resolved {
+            budget: carved,
+            namespace: launch
+                .namespace
+                .iter()
+                .map(|(_, o)| endpoint(o).and_then(&mut given))
+                .collect::<Result<_, _>>()?,
+            handles: launch
+                .handles
+                .iter()
+                .map(|(_, o)| cap(o).map(Cap::handle).and_then(&mut given))
+                .collect::<Result<_, _>>()?,
+        };
         let served = self.sys.jobs.launch(self.io.wake(), asker, job, launch, resolved)?;
+        drop(minted);
         Ok(served.map(|send| Cap::serving(Arc::new(Owned::new(send.handle())), Kind::Endpoint, returns)))
     }
 
