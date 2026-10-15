@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 136
+revision = 165
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1989,8 +1989,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   needs = ["B47"]
   body = "From B47's review (steward-red, .wash/qa/B47-stale-close.md and the B47 renewal): B47's Life covers the handles the VM minted and those returned through servers launched under a budget, but a request's handles arrive with no Life because the kernel tells a receiver badge, account and labels, never the sender's budget. So a program in a VM-carved budget that holds a VM-served endpoint (Elixir can pass one in launch.handles; no shell path does today) and sends a handle it minted can, after its budget is destroyed, make a later collection close a reused index in the session's own table: not the startup handles (console, steward, namespace are Owned::kept, never freed), but a sibling job's budget (its destroy then fails, pages leak), a piped or stage connection, or the VM's internal endpoints (a waiter's wake, a serve thread's, a job's exit endpoint), which can hang or break the session. No widening beyond the session, but more than such a program is given. Guard: when launch.handles passes a served endpoint into a launch in a carved budget, mint a fresh badge on the receive right the VM holds (serve.rs mints there already) and map badge -> that budget's Life; a request's handles from that badge go under the Life, or are closed eagerly at the budget's end. Host test: a launched program sends a minted handle, its budget is destroyed, a collection closes nothing at that index; a machine case under pipe-eight's setup. beamlet.md's residual becomes the rule. userland/otp: Tier A, the steward red. The kernel handle generation (owner's decision pending) is the construction fix for the whole class; this is the VM's own guard either way."
-  state = "todo"
-  revision = 2
+  state = "reported"
+  revision = 158
 
 [[node]]
   id = "K32"
@@ -2169,3 +2169,48 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   state = "done"
   revision = 128
   overrides = ["2026-10-15: started by Orchestrator before B60 (reported): B60 is reviewed OK with notes and one docs amend from acceptance; B65 waits on its head only for one shell.md sentence"]
+
+[[node]]
+  id = "B66"
+  title = "./launch --system's printed ssh line was refused while the console worked: diagnose the owner's run, and launch proves its port forward live after QEMU starts"
+  template = "package"
+  parent = "M2"
+  body = "Owner, 2026-10-15: `./launch --system`, then the printed `ssh -p 2222 -i .tmp/launch/id_ed25519 alice@localhost`, answered 'Connection refused' while the serial console was alive. 'Refused' means nothing listened on the host's 127.0.0.1:2222: not the guest's sshd (a guest not yet listening resets or hangs the connection, QEMU holds the host port from its start). Candidates, by reading: (1) the ssh typed before QEMU ran (the build takes minutes; launch prints the line before building, tools/testbench/src/launch.rs:112-123); (2) the forward absent from the QEMU line launch ran (qemu.rs:329-332 adds hostfwd from the case's [net] forward = [22], tests/launch-system.toml:52; `scripts/q run` may have changed what ran: launch:88-99); (3) `localhost` resolving to ::1 first (the forward is 127.0.0.1 only; ssh falls through to 127.0.0.1, so this alone does not refuse). Step 1: reproduce with the owner's exact command on this host, both with and without the q daemon, and read the `+ qemu-system...` line launch echoed (ask the owner for their terminal's text if the first run passes). Step 2, whatever step 1 finds: launch proves the forward after QEMU starts (a connect to 127.0.0.1:port that gets the guest's reset or sshd's banner, then prints 'port 2222 forwards to the guest') and prints the ssh line again then, not only before the build; GETTING-STARTED.md:122-128 says when to try it; a host test holds launch.rs's printed line to the port the forward uses. If step 1 finds a defect, it is fixed here with its own case. Files: tools/testbench/src/launch.rs, launch, GETTING-STARTED.md; none of B50's. Tier A (the bench's launch path is what a person boots): kernel-red-2. Size S."
+  state = "done"
+  revision = 152
+
+[[node]]
+  id = "B67"
+  title = "SSH connect-to-prompt latency is in every session log and published nowhere: measure it per width at today's main, state it on sshd.md, report it each train"
+  template = "package"
+  parent = "M2"
+  body = "Owner's M1 polish list: login latency. The bench writes each ssh session's time to its first matched prompt in the session log (tools/testbench/src/ssh.rs:807-810, 'the login's latency for its first prompt'), and no page or case reads it: `grep -ri latency docs` finds nothing about a login. Step 1: from the logs of the last three trains' launch-system and steward-ssh-two-principals runs, both widths (`.tmp/train-*/`), tabulate the first prompt's latency (alice alone; alice beside bob), and split it with the console's lines: sshd's handshake (`sshd: login ... session`), the steward's carve and VM start, the VM's first prompt. Step 2: state the figures on docs/servers/sshd.md 'Sessions over SSH' (a sentence with both widths, where they come from, and which stage dominates) and in docs/plan/m2-usable-shell.md's polish list; a case-level record: launch-system's toml gains a comment with the figures and the log line that holds them, and the bench's report prints the first-prompt latency beside the case's time for every session (ssh.rs: the number is already computed; one line in the report), so every train re-measures it. No ceiling is asserted until two trains agree within 20 %; then a `within` on the prompt expect in launch-system at 1.5x the slower width, as sched cases bound their timings. Files: tools/testbench/src/ssh.rs (report only), tests/launch-system.toml, docs/servers/sshd.md, docs/plan/m2-usable-shell.md; none of B50's. Tier B (a measurement and a report line; the ceiling is a case change): kernel-red-2 reviews the bench change. Size S."
+  state = "done"
+  revision = 147
+
+[[node]]
+  id = "B68"
+  title = "beamlet's crypto natives run modpow on operands of any size up to the 2^24-bit bignum limit: a hostile key file or DH parameter holds a scheduler thread for minutes"
+  template = "package"
+  parent = "M2"
+  body = "docs/todo/beamlet-bignum-bounds.md: `crypto:mod_pow/3`, `generate_key(dh, ...)` and `compute_key(dh, ...)` (userland/otp/crypto/src/pk.rs:155 dh_params, :177, :193, :202) run num-bigint's modpow on the caller's numbers, bounded only by the VM's bignum limit (2^24 bits). A native is not preempted by reductions: a megabyte modulus and exponent hold the scheduler thread, and every process on it, for minutes; it stays inside the session (budget weight shares the CPU) but a key file or peer parameter the session reads can hang its tools, as RSA keys did before from_components checked sizes. Lever: hold P and the modulus to a stated width (OpenSSL's OPENSSL_DH_MAX_MODULUS_BITS is 10,000 bits; RSA's limit here is 8,192), and each exponent and base to the modulus's width, before any modpow; an oversized operand is refused as the RSA size refusal is, never a panic. Gates: a host test per native with an oversized modulus and exponent showing the refusal comes at once (under 10 ms where the unbounded call takes seconds; measure the negative once and quote it); the crypto difftests still agree with BEAM on every in-range vector; the bound stated in beamlet.md 'Limits inside one VM' beside the RSA size, and the todo page deleted in the same commit. Files: userland/otp/crypto, its tests, beamlet.md's limits table (B50 edits beamlet.md's Life section: rebase, no overlap in lines). Tier A (a session's liveness against hostile input): steward-red-2. Size S."
+  state = "done"
+  revision = 161
+
+[[node]]
+  id = "B69"
+  title = "Invisible format characters pass the terminal guard: soft hyphen, zero-width characters, joiners, BOM, plane-14 tags and U+2028/U+2029 draw as they are, so two names can look the same"
+  template = "package"
+  parent = "M2"
+  body = "docs/todo/shell-invisible-format.md (shell.md:557 and SECURITY.md:254 carry the residual): the guard draws every ASCII and 8-bit control, DEL and the bidi controls as text (userland/shell/lib/redoubt/term/text.ex:32 control?/1; userland/native/cells/src/lib.rs:96 forbidden()), but the invisible format characters (U+00AD, U+200B..U+200D, U+2060..U+2064, U+FEFF, the plane-14 tags) and the line/paragraph separators pass: `rm report.txt` and `rm re​port.txt` draw the same, and a tag sequence carries text the person never sees. Architect's rule for the one open point: U+200D is drawn as `<U+200D>` everywhere except inside an extended grapheme cluster that is an emoji ZWJ sequence (Extended_Pictographic ZWJ Extended_Pictographic...), where the cluster is one symbol and draws as one, as today; every other character above is drawn `<U+XXXX>` wherever it stands, as U+009B is, and never held by a cell's symbol. Build: control?/1 and forbidden() gain the set (one shared table, stated once beside the cells vectors), the grapheme walk keeps the emoji exception, a vector in userland/native/cells/vectors.json and a test per character hold both decoders to it (the existing `no_control_character_is_ever_a_symbol` stops counting U+2028 as good), a shell test shows the two `rm` lines draw differently and a woman-technologist ZWJ sequence still draws as one two-column symbol. Gates: ./test-shell on both VMs, the cells vectors, shell-output-rate unchanged within noise (one range test per code point on the existing path), the residual leaves shell.md and SECURITY.md, the todo page deleted. Files: userland/shell term, userland/native/cells, shell.md, SECURITY.md; none of B50's. Tier A (the terminal guard is authority over what the person sees): steward-red-2, on main, not the shell branch. Size S."
+  state = "active"
+  revision = 145
+
+[[node]]
+  id = "B70"
+  title = "libs/rt's parked-write test races the host's clock: 14 of 20 failures under load with no panic captured; order it on events on a clock the test drives"
+  template = "package"
+  parent = "M2"
+  body = "docs/todo/parked-write-clock.md: libs/rt/tests/parked_write.rs `a_waiting_write_is_parked_abandoned_and_expired` (LONGEST 300 ms at :57, the client's 50 ms at :106, the deadline assertion at :122) failed 14 of 20 runs in a loop on a loaded host (load 100-170) and 0 of 15 directly; the fake kernel reads the host's clock and the test races two waits on it, as parked.rs does. Which assertion fails is unknown: the panic was not captured. Two windows fit: a client stalled past 300 ms gets the server's Rerror instead of its own Timeout; a client whose 50 ms passes before the server parks the write abandons a call that was never parked. A flaky test is a bug (TENETS 6), and trains run every host test beside a bench. Step 1: run the loaded loop through q beside a train's bench (`q run` on the general cores, 20 runs) with the panic captured, name the assertion and the window on the todo page. Step 2: order the test on events, not time: the first write is abandoned only after the server has parked it (a signal from the fake server), and the server's deadline is a step on a clock the test drives (the fake kernel's time_now made settable for this test, as the model's clock is), or each wait is on the parked state with no deadline racing it; parked.rs gets the same treatment where it shares the shape. Gates: 20 runs in a row in the loaded loop, the rt host tests and fuzz target unchanged otherwise, the todo page deleted and serving.md's R28 test list unchanged in names. Files: libs/rt/tests/parked_write.rs, parked.rs, the fake kernel's clock in libs/rt; none of B50's. Tier A (libs/rt): steward-red-2 (an rt host test, no bench case). Size S."
+  state = "done"
+  revision = 165
