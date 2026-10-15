@@ -1704,10 +1704,10 @@ the 16-page stack default and no cap. A session's beamlet is no manifest server:
 launches it with an 18-page stack, twice beamlet's stack peak of 36,136 bytes (`beamlet-footprint`
 on rv64, with the boot pack read before its VM starts and its console on the hub), its second
 scheduler's thread with a stack of the same size, and a heap cap of what its share holds beside
-its two schedulers' stacks and thread pages, its locks' endpoints and its process's page, 11,092
-pages of the 11,136 the steward gives it of the 11,264 `sizes` gives a session, the rest its
+its two schedulers' stacks and thread pages, its locks' endpoints and its process's page, 11,220
+pages of the 11,264 the steward gives it of the 11,392 `sizes` gives a session, the rest its
 console relay's ([budgets](kernel/budgets.md), [the steward](servers/steward.md#authentication-and-sessions)): 108 pages over twice its heap's
-largest peak across the memory cases on each width, 5,492 pages (rv64 at 2 harts; 5,491 at 1),
+largest peak across the memory cases on each width, 5,556 pages (rv64 at 1 hart),
 above what its prompt holds ([beamlet](userland/beamlet.md#what-the-vm-holds-at-its-prompt)). `beamlet-footprint` scans
 the VM alone, under its own copy of the single-VM manifest. Its cap leaves its process heap,
 ETS and `persistent_term` limits, a sixteenth of its budget each (696 pages), reachable: a flooding process, about

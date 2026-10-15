@@ -128,6 +128,73 @@ shell's driver and its encoder too ([line editing](#line-editing-and-history)), 
 the same, and so is what the VM logs, the crash reports of processes a line spawned among it
 ([hostile text](#hostile-text-never-drives-the-terminal)).
 
+### The machine mode
+
+Status: built · partly tested: on the host, on beamlet and on the BEAM, in the shell's own ExUnit suite (`test/redoubt/shell/driver_test.exs`: entering and leaving, a one-line and a multi-line block, a block that raises, one that ends too soon, one that calls `exit()`, one interrupted, a result line beginning with the token, a block reading its shell's mailbox, a block forging the mode's messages without the key, a mark after output that left the line open, a line past the bound, a refused token, a screen refused and a long value printed whole); on the machine one session over SSH enters the mode, sends a three-line block and a call, reads an error's mark and leaves · tested: bench:shell-machine
+
+A program driving a session over its terminal (an agent's loop, [M3 (agents, approvals and the attack suite)](../plan/m3-agents.md))
+needs to send a block of Elixir and know exactly where its result ends and whether it failed.
+`machine(token)`, typed at the prompt, enters a mode made for it, and `machine(nil)` or the end
+of the session leaves it. The token is the caller's, 8 to 64 characters of `[A-Za-z0-9_-]`;
+anything else is a usage error and the prompt stays. In the mode:
+
+- **Input is lines, as sent.** The driver takes the bytes itself, past `group` and `edlin`: no
+  echo, no completion, no history, no redraw, no prompt. Bytes up to a newline are a line, a
+  carriage return before it dropped, every other byte kept (a tab, a backspace: `group`'s
+  echo-off reader would edit them); a line longer than 1 MiB is dropped whole, and the block it
+  was part of is not evaluated and is marked `error`, saying so. A line that is exactly the
+  token ends an **input block**, parsed and evaluated whole, so a program sends a multi-line
+  definition without the loop's "reads another line" rule deciding where it ends; a block that
+  ends before its expression does is that block's syntax error, not an unfinished line. The
+  driver holds the lines, and the shell asks for one at a time, between blocks only: lines a
+  program sends ahead wait in the driver, not in the shell's mailbox. Ctrl+C and the session's
+  key keep their meaning: they end the line being evaluated, whose mark then says `error`, and
+  with none they drop the block typed so far, the lines held with it. Ctrl+D at the start of a
+  line is the end of the input, as it is at an empty prompt, and ends the session; a block ends
+  only by its token line.
+- **Every block's end is marked.** After the block's output, one line, `<token> <n> ok`,
+  `<token> <n> error` or `<token> <n> exit`, `n` the counter the prompt would show, the status
+  what the evaluator returned: `ok` for a value, `error` for a raise, a syntax error, an
+  interrupt or a heap kill, `exit` for `exit()`, `exit` alone, Ctrl+D or the console's end. An
+  empty block is a line of the counter too, marked `ok`. The line that enters the mode is marked
+  under the token it set, so the program knows the mode is on and the counter; the block that
+  leaves it is marked under the token it was sent with, and the next prompt follows the mark.
+  The mark begins a line of its own: the driver draws it for the shell, after a newline when the
+  block's output left the line open, through `Redoubt.Term.Text` like everything else; the token
+  is ASCII, which the guard leaves as it is.
+- **Output is otherwise unchanged:** values, errors and diagnostics print as at the prompt,
+  through the same guard, so hostile text in a result is drawn visibly and cannot forge a mark:
+  a forged mark is a line starting with the token, which the program chose and the evaluated
+  code is never given. The shell holds it in its loop's state alone, never in the bindings, the
+  environment or the process dictionary of the evaluating process; `machine/1` ends its line
+  as `exit()` does, keeping nothing of it; the driver cuts the line that named the token from
+  `group`'s history when the mode opens, since any process can read `group`'s state; and while
+  a block runs no later line, the next token line among them, is in the shell's mailbox, which
+  any process can read too. Nor can a block ask the driver for one: the mode's messages (open,
+  the next line, the mark, close) carry a **key**, a reference the driver mints once for the
+  first process that asks, the shell at its start before any line runs, and keeps with that
+  process's pid; a message without it is dropped unanswered and not counted, so a block that
+  learns the shell's pid pulls no line, draws no mark and closes nothing. The token and the key
+  are in no process a block can read: the shell's loop state and the driver's. What remains is
+  the driver's own mailbox, the console bytes it has not read yet, and a `:next` of the shell's
+  in flight, readable as any mailbox is ([beamlet](beamlet.md#limits-inside-one-vm)): that is
+  the residual, and a program that wants none sends the next block only after the mark.
+- **Screens are refused.** A program driving the terminal cannot answer one: the editor, `pick`,
+  `fm` and every `Redoubt.Screen.run/3` fail with an `ArgumentError` naming the mode, and the
+  line is marked `error`. The pager is not entered: a long `%Lines{}` value prints whole, as it
+  does on a console that does not say its size, since the lines are what the program asked for.
+  The feed is refused too, so a native program that reads what is typed gets no input: the lines
+  are the block's.
+- **The width is the terminal's.** `machine/1` does not resize anything: a value is laid out at
+  the terminal's width as a person would see it, and a program that wants long lines sets its
+  pty's size.
+
+Residual: on the machine a `defmodule` at the prompt, in the mode or out of it, ends the
+session's VM with a store page fault at the top of a scheduler's stack (beamlet's 18-page
+scheduler stacks, [beamlet](beamlet.md#beamlet-on-redoubt)); it compiles on the host's beamlet,
+where the host tests define a module in a block. Until beamlet is fixed, the bench case's
+three-line block binds a function, and a program on the machine defines no module.
+
 ### Commands
 
 Status: built · partly tested: runs on the host only; its tests are the shell's own ExUnit suite, which `./test-shell` runs and no bench case does
@@ -244,6 +311,7 @@ Status: built · partly tested: `clear()` runs on the host only, in the shell's 
 | `detach()` | close the terminal and leave the context running; `{:error, :unknown}` in a session that is no context |
 | `end_context(name)` | end the context `name` of the session's label set, its own included, as `exit`; `{:error, :unknown}` for any other name, another label set's included |
 | `clear()` | clear the screen; the next prompt is drawn at its top |
+| `machine(token)`, `machine(nil)` | enter the machine mode, for a program driving the session, and leave it ([the machine mode](#the-machine-mode)) |
 
 Not built:
 - **`now()`, `today()`, `ago(time)`**, wall-clock time, which a session has from
@@ -1083,6 +1151,17 @@ and one parser leave nothing to inject into.
 **Commands are declared, not written twice.** A command's types, its help, its page and what
 completion offers come from one declaration that does not compile without its help, so a command
 cannot drift from its documentation or ship without it.
+
+**A mark ends a block, not a prompt.** A program driving a session cannot take the next prompt
+as the end of a result: a result can contain a prompt, printed or forged, and a line editor
+echoes, completes and redraws, all noise to a program. So the machine mode marks every block's
+end with a line the program chose the token of, and the evaluated code never sees the token: it
+is not in the bindings, the environment or the evaluating process, the line that set it is cut
+from history, the lines ahead wait in the driver until the shell asks, and the asking carries a
+key minted for the shell alone; so the token and the key are in no process a block can read,
+and the driver's own mailbox is the one residual. Hostile text in a result is drawn through the
+same guard as everything else, so it is visible text that merely resembles a mark, and the real
+mark follows it.
 
 **One layer.** An operation that does not need its own address space is an Elixir function, not
 a program: there is no `cp` or `ls` binary to launch, to sign or to audit. A native program is

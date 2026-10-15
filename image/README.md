@@ -14,12 +14,12 @@ The sources of the signed boot bundle and the disk images; what they produce goe
   `agent`, alice's agent in name only for now: the principal a sponsor-run agent logs in as,
   with a home of its own and bob's quota, no labels and no network scope, which leases convert
   when the steward has them ([agents](../docs/userland/agents.md)). All three have test keys from
-  `tests/keys/`, so the manifest must never ship. The budgets, in pages: a session is 11,264 and
-  its budget's own cost 1, so two sessions are 22,530, and each label set's share is its
+  `tests/keys/`, so the manifest must never ship. The budgets, in pages: a session is 11,392 and
+  its budget's own cost 1, so two sessions are 22,786, and each label set's share is its
   principal's pages over its label sets, less 1. Alice's 47,624 give each of her two label sets
-  23,811: two sessions, her console session and one SSH login under `{}`, with 1,281 over. Bob's
-  32,768 give his one set 32,767, two sessions with 10,237 over, and agent's 24,576 give its one
-  set 24,575, two sessions (one login and a second context) with 2,045 over. Together the three
+  23,811: two sessions, her console session and one SSH login under `{}`, with 1,025 over. Bob's
+  32,768 give his one set 32,767, two sessions with 9,981 over, and agent's 24,576 give its one
+  set 24,575, two sessions (one login and a second context) with 1,789 over. Together the three
   top budgets are 104,968 pages, 104,971 with their own, of the about 192,700 pages `users`
   holds on the 1 GiB machine (the kernel's `Budgets:` line at boot: 192,723 at one rv64 boot,
   192,576 and 192,600 at rv32 ones, the figure moving a little with the pack), a margin of

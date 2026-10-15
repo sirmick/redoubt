@@ -26,14 +26,16 @@ defmodule Redoubt.Shell.Evaluator do
 
   @doc """
   Evaluates `quoted` with `binding` in `env`, printing its value or its error, and returns the
-  new binding and environment, `:error` when the line failed and they are unchanged, or `:exit`
-  when the line called `exit()`.
+  new binding and environment, `:error` when the line failed and they are unchanged, `:exit`
+  when the line called `exit()`, or `{:machine, token}` when it called `machine(token)`
+  (`Redoubt.Shell.Control`): the shell enters its machine mode with the token, or leaves it for
+  `nil`. Like `exit()`, the call ends its line, whose bindings are not kept.
 
   `limits` may set `:max_heap_words`, and `:driver`, the shell's driver, which the interrupt
   comes from (`Redoubt.Shell.Driver.of_group/0`); with none, the line cannot be interrupted.
   """
   @spec eval(Macro.t(), Code.binding(), Macro.Env.t(), keyword()) ::
-          {:ok, Code.binding(), Macro.Env.t()} | :error | :exit
+          {:ok, Code.binding(), Macro.Env.t()} | :error | :exit | {:machine, String.t() | nil}
   def eval(quoted, binding, env, limits \\ []) do
     shell = self()
     heap = %{size: Keyword.get(limits, :max_heap_words, @max_heap_words), kill: true, error_logger: false}
@@ -136,6 +138,9 @@ defmodule Redoubt.Shell.Evaluator do
 
         {:throw, :redoubt_shell_exit, _stack} ->
           :exit
+
+        {:throw, {:redoubt_shell_machine, token}, _stack} when is_binary(token) or token == nil ->
+          {:machine, token}
 
         # The diagnostics said what was wrong; this says only that the line did not compile.
         {:error, %CompileError{}, _stack} when diagnostics != [] ->

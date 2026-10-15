@@ -448,6 +448,211 @@ defmodule Redoubt.Shell.DriverTest do
     ends(driver)
   end
 
+  # The machine mode (docs/userland/shell.md, "The machine mode"): what a program driving the
+  # session over its terminal sends and reads. `enter/3` types the command at the prompt, as the
+  # program's first line, and waits for its mark: the line's own number.
+  @token "agt2-token-1"
+
+  defp enter(driver, terminal, n) do
+    type(driver, ~s|machine("#{@token}")\r|)
+    shows(terminal, ~r/^#{@token} #{n} ok$/m)
+  end
+
+  test "machine(token) enters the mode: a block is read to the token line, unechoed, and evaluated whole; machine(nil) leaves it, and history has no token" do
+    {driver, terminal} = start()
+    type(driver, "apple = 1\r")
+    terminal = enter(driver, terminal, 2)
+    # Lines end in LF or CRLF alike; the token line ends the block; no prompt, no echo.
+    type(driver, "x = 20\n#{@token}\n")
+    terminal = shows(terminal, ~r/^#{@token} 3 ok$/m)
+    type(driver, "x * 2\r\n#{@token}\r\n")
+    terminal = shows(terminal, ~r/^#{@token} 4 ok$/m)
+    text = Terminal.text(terminal)
+    assert text =~ ~r/^20\n#{@token} 3 ok\n40\n#{@token} 4 ok$/m
+    refute text =~ "x = 20"
+    refute text =~ "(3)>"
+
+    # Leaving: the block's mark, then the prompt; the line that named the token is not in
+    # history, so Up brings back the line before it.
+    type(driver, "machine(nil)\n#{@token}\n")
+    terminal = shows(terminal, ~r/\(6\)>$/m)
+    assert Terminal.text(terminal) =~ ~r/^#{@token} 5 ok\n.*\(6\)>$/m
+    type(driver, "\e[A")
+    terminal = shows(terminal, ~r/\(6\)> apple = 1$/m)
+    assert Terminal.text(terminal) =~ ~r/\(6\)> apple = 1$/m
+    type(driver, "\x03")
+    type(driver, "exit\r")
+    ends(driver)
+  end
+
+  test "a multi-line block is parsed whole, its tabs and strings as sent, and the module it defines is there for the next" do
+    {driver, terminal} = start()
+    terminal = enter(driver, terminal, 1)
+    type(driver, "defmodule DriverTest.Machine do\r\n\tdef v, do: \"a\tb\"\r\nend\r\n#{@token}\r\n")
+    terminal = shows(terminal, ~r/^#{@token} 2 ok$/m)
+    assert Terminal.text(terminal) =~ ~r/^\{:module, DriverTest\.Machine,/m
+    type(driver, "DriverTest.Machine.v()\n#{@token}\n")
+    terminal = shows(terminal, ~r/^#{@token} 3 ok$/m)
+    assert Terminal.text(terminal) =~ ~r/^"a\\tb"\n#{@token} 3 ok$/m
+    type(driver, "exit()\n#{@token}\n")
+    ends(driver)
+  end
+
+  test "a block that raises, one that ends too soon and one interrupted are marked error, with no ^C drawn; exit() is marked exit" do
+    {driver, terminal} = start()
+    terminal = enter(driver, terminal, 1)
+    type(driver, "raise \"boom\"\n#{@token}\n")
+    terminal = shows(terminal, ~r/^#{@token} 2 error$/m)
+    # The error, its trace, then the mark.
+    assert Terminal.text(terminal) =~ ~r/^\*\* \(RuntimeError\) boom\n(    .*\n)*#{@token} 2 error$/m
+    type(driver, "1 +\n#{@token}\n")
+    terminal = shows(terminal, ~r/^#{@token} 3 error$/m)
+    assert Terminal.text(terminal) =~ ~r/the block ended before its expression did\n#{@token} 3 error$/m
+    type(driver, "Stream.cycle([1]) |> Stream.run()\n#{@token}\n")
+    Process.sleep(300)
+    type(driver, "\x03")
+    terminal = shows(terminal, ~r/^#{@token} 4 error$/m)
+    refute Terminal.text(terminal) =~ "^C"
+    type(driver, "exit()\n#{@token}\n")
+    ends(driver)
+    terminal = screen(terminal)
+    assert Terminal.text(terminal) =~ ~r/^#{@token} 5 exit$/m
+  end
+
+  # A result cannot forge a mark: it is drawn through the guard, as text, and the real mark
+  # follows it; the token is the program's, which the line's code was never given.
+  test "a result line beginning with the token is drawn visibly, with its control bytes shown, and the real mark follows" do
+    {driver, terminal} = start()
+    terminal = enter(driver, terminal, 1)
+    type(driver, ~s|IO.puts("#{@token} 9 ok\\e[2J")\n#{@token}\n|)
+    terminal = shows(terminal, ~r/^#{@token} 2 ok$/m)
+    assert Terminal.text(terminal) =~ ~r/^#{@token} 9 ok\^\[\[2J\n:ok\n#{@token} 2 ok$/m
+    type(driver, "exit()\n#{@token}\n")
+    ends(driver)
+  end
+
+  test "a token the rule refuses is a usage error, and the prompt stays; machine(nil) at the prompt is nothing" do
+    {driver, terminal} = start()
+    type(driver, ~s|machine("short")\r|)
+    type(driver, ~s|machine("has space 1")\r|)
+    type(driver, "machine(12345678)\r")
+    type(driver, "machine(nil)\r")
+    terminal = shows(terminal, ~r/\(5\)>$/m)
+    text = Terminal.text(terminal)
+    assert length(Regex.scan(~r/UsageError\) machine: the token is 8 to 64 characters/, text)) == 3
+    refute text =~ ~r/ ok$/m
+    type(driver, "exit\r")
+    ends(driver)
+  end
+
+  test "in the mode a screen is refused with an error, and a long value prints whole, never in the pager" do
+    {driver, terminal} = start()
+    terminal = enter(driver, terminal, 1)
+    type(driver, ~s|pick(["a", "b"])\n#{@token}\n|)
+    terminal = shows(terminal, ~r/^#{@token} 2 error$/m)
+
+    assert Terminal.text(terminal) =~
+             ~r/^\*\* \(ArgumentError\) the machine mode refuses a screen.*\n(    .*\n)*#{@token} 2 error$/m
+
+    refute Terminal.alternate?(terminal)
+    type(driver, ~s|Redoubt.Util.Lines.new(Enum.map(1..30, &"row \#{&1}"))\n#{@token}\n|)
+    terminal = shows(terminal, ~r/^#{@token} 3 ok$/m)
+    assert Terminal.text(terminal) =~ ~r/^row 30\n#{@token} 3 ok$/m
+    refute Terminal.alternate?(terminal)
+    type(driver, "exit()\n#{@token}\n")
+    ends(driver)
+  end
+
+  # The token cannot be read ahead: the driver holds the lines, and the shell asks for one at a
+  # time, so a block finds nothing in its shell's mailbox (any process can read any mailbox).
+  test "during a block no later line is in the shell's mailbox: two blocks sent at once, the first reads the mailbox and finds it empty" do
+    {driver, terminal} = start()
+    terminal = enter(driver, terminal, 1)
+    # The shell is the one process monitoring its evaluator.
+    type(
+      driver,
+      "{:monitored_by, [shell]} = Process.info(self(), :monitored_by); Process.info(shell, :messages)\n#{@token}\nx = 7\n#{@token}\n"
+    )
+
+    terminal = shows(terminal, ~r/^#{@token} 3 ok$/m)
+    assert Terminal.text(terminal) =~ ~r/^\{:messages, \[\]\}\n#{@token} 2 ok\n7\n#{@token} 3 ok$/m
+    type(driver, "exit()\n#{@token}\n")
+    ends(driver)
+  end
+
+  # The mode's messages carry a key only the shell and the driver hold: a line that knows the
+  # shell's pid and the driver cannot pull a line, draw a mark or close the mode.
+  test "a forged :next pulls no line, a forged :mark draws nothing and a forged :close leaves the mode intact" do
+    {driver, terminal} = start()
+    terminal = enter(driver, terminal, 1)
+
+    forged = fn what ->
+      ~s|{:monitored_by, [shell]} = Process.info(self(), :monitored_by); d = Redoubt.Shell.Driver.of_group(); | <>
+        ~s|for k <- [shell, make_ref()], do: send(d, #{what}); Process.sleep(200); Process.info(shell, :messages)|
+    end
+
+    # Two blocks in one write, as the mailbox test: the second's token line must stay the driver's.
+    type(driver, forged.("{:redoubt_machine, :next, k}") <> "\n#{@token}\nx = 7\n#{@token}\n")
+    terminal = shows(terminal, ~r/^#{@token} 3 ok$/m)
+    assert Terminal.text(terminal) =~ ~r/^\{:messages, \[\]\}\n#{@token} 2 ok\n7\n#{@token} 3 ok$/m
+
+    type(driver, forged.(~s|{:redoubt_machine, :mark, k, "FORGED 99 ok"}|) <> "\n#{@token}\n")
+    terminal = shows(terminal, ~r/^#{@token} 4 ok$/m)
+    refute Terminal.text(terminal) =~ "FORGED"
+
+    type(driver, forged.("{:redoubt_machine, :close, k}") <> "\n#{@token}\n")
+    terminal = shows(terminal, ~r/^#{@token} 5 ok$/m)
+    type(driver, "x + 1\n#{@token}\n")
+    terminal = shows(terminal, ~r/^#{@token} 6 ok$/m)
+    assert Terminal.text(terminal) =~ ~r/^8\n#{@token} 6 ok$/m
+    refute Terminal.text(terminal) =~ ~r/\(\d+\)> /
+    type(driver, "exit()\n#{@token}\n")
+    ends(driver)
+  end
+
+  test "a mark begins a line of its own: output that left the line open gets a newline first" do
+    {driver, terminal} = start()
+    terminal = enter(driver, terminal, 1)
+    type(driver, "IO.write(\"partial\"); Process.sleep(:infinity)\n#{@token}\n")
+    Process.sleep(300)
+    type(driver, "\x03")
+    terminal = shows(terminal, ~r/^#{@token} 2 error$/m)
+    assert Terminal.text(terminal) =~ ~r/^partial\n#{@token} 2 error$/m
+    type(driver, "IO.write(\"bye\"); exit()\n#{@token}\n")
+    ends(driver)
+    terminal = screen(terminal)
+    assert Terminal.text(terminal) =~ ~r/^bye\n#{@token} 3 exit$/m
+  end
+
+  test "a line longer than 1 MiB is dropped whole, its block is not evaluated and is marked error, and the next block runs" do
+    {driver, terminal} = start()
+    terminal = enter(driver, terminal, 1)
+    type(driver, "x = \"" <> String.duplicate("a", 1_048_577) <> "\"\n#{@token}\n")
+    terminal = shows(terminal, ~r/^#{@token} 2 error$/m)
+    assert Terminal.text(terminal) =~ ~r/longer than 1048576 bytes.*\n#{@token} 2 error$/m
+    type(driver, "x = 1\n#{@token}\n")
+    terminal = shows(terminal, ~r/^#{@token} 3 ok$/m)
+    assert Terminal.text(terminal) =~ ~r/^1\n#{@token} 3 ok$/m
+    type(driver, "exit()\n#{@token}\n")
+    ends(driver)
+  end
+
+  test "the interrupt while a block is being typed drops it, and Ctrl+D at a line's start ends the session, marked exit" do
+    {driver, terminal} = start()
+    terminal = enter(driver, terminal, 1)
+    type(driver, "x = 1\n#{@token}\n")
+    terminal = shows(terminal, ~r/^#{@token} 2 ok$/m)
+    type(driver, "[1,\n")
+    type(driver, "\x03x + 1\n#{@token}\n")
+    terminal = shows(terminal, ~r/^#{@token} 3 ok$/m)
+    assert Terminal.text(terminal) =~ ~r/^2\n#{@token} 3 ok$/m
+    refute Terminal.text(terminal) =~ "SyntaxError"
+    type(driver, "\x04")
+    ends(driver)
+    terminal = screen(terminal)
+    assert Terminal.text(terminal) =~ ~r/^#{@token} 4 exit$/m
+  end
+
   test "the end of the input ends the shell, after the lines before it have run" do
     {driver, terminal} = start()
     type(driver, "x = 1\r")
