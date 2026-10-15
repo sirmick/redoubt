@@ -535,7 +535,7 @@ parks when it is done, unless its exit is the point of its case.
 
 ### The scheduler oracle
 
-<details><summary>Status: built · tested (30)</summary>
+<details><summary>Status: built · tested (31)</summary>
 
 - bench:sched-ties
 - bench:sched-capped
@@ -566,6 +566,7 @@ parks when it is done, unless its exit is the point of its case.
 - host:testbench::a_charged_share_across_harts_is_judged_by_water_filling_net_of_lock_waits
 - host:testbench::a_hart_share_is_judged_of_every_charge_against_water_filling
 - host:testbench::timer_work_billed_elsewhere_in_a_budgets_time_is_bounded_inside_its_share
+- host:testbench::idle_sections_that_found_nothing_are_bounded
 - host:testbench::an_unmatched_audit_fails
 
 </details>
@@ -605,7 +606,13 @@ longest section a page fault began, net of its audits (`fault-report-bound`), an
 their p99, the steady entry's cost, which the few cold sections (a program's first preemptions)
 cannot hide a regression of; both are gated up to `gate_harts` as the latency targets are,
 since under `icount` a section on several harts counts the others' instructions too
-(`sched-timer-entry`, at one hart; recorded at two). Where the clock is the host's,
+(`sched-timer-entry`, at one hart; recorded at two). With the trace beside it,
+`idle_sections_max=<mark>:<N>` bounds the kernel sections a hart entered from the idle and left
+with no record of its own but an audit's, a lock take that found nothing due and nothing runnable,
+from the first run of the budget the program marks (the mark's weight, as a share's):
+`timer-flood-at-rest`'s two sleepers each sleep a thousand short timeouts on two harts, and a
+kernel that arms every hart's timer for a timeout whose payer runs nowhere wakes each hart for
+the other's naps too ([the hart timer](kernel/timer.md#the-hart-timer)). Where the clock is the host's,
 `driver_wake_p50_searches=K` and `driver_wake_p99_searches=K` judge the driver wake's net p50 and
 p99 against K searches of the same run alone, from the program's `one search alone` line, at any
 hart count (`sched-lock-contention-4-mttcg`). `sched-capped` runs the model's capped scenarios
@@ -652,7 +659,7 @@ oracles alone. The case's log says what the build and the scripts each took.
 
 ## Checked builds
 
-<details><summary>Status: built · tested (19)</summary>
+<details><summary>Status: built · tested (20)</summary>
 
 - bench:bench-debug-assertions
 - bench:bench-debug-assertions-off
@@ -661,6 +668,7 @@ oracles alone. The case's log says what the build and the scripts each took.
 - bench:sched-latency
 - bench:sched-budget-churn
 - bench:sched-exit-churn
+- bench:timer-flood-at-rest
 - bench:sched-exit-churn-mttcg
 - bench:sched-timer-flood
 - bench:sched-carve-return

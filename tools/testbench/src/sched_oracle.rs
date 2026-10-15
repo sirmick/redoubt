@@ -3042,6 +3042,71 @@ fn foreign_timer(
     )
 }
 
+/// The kernel sections (`h`, with `hold-trace`) a hart entered from the idle (its runner `None`,
+/// after its `H 0`) and left with no record of its own but a checked build's audits (`U`, `V`):
+/// a lock take that found nothing due and nothing runnable, counted from the first run of the
+/// budget of mark weight `w` on, against `bound` (`idle_sections_max`; kernel/timer.md, "The
+/// hart timer"). A timeout whose payer runs nowhere is armed on one hart, so a sleeper's timeout
+/// wakes its own hart alone; a kernel that arms every hart wakes every idle hart for it, and all
+/// but one find it served. The budget never running, or no section at all, is a construction
+/// error, not a verdict.
+fn idle_sections_that_found_nothing(
+    records: &[Record],
+    sections: &[Section],
+    w: u64,
+    bound: usize,
+) -> Result<(String, bool), String> {
+    let what = "idle sections";
+    let (parent, marked) = lifts(records);
+    let a = mark(&marked, w, what)?;
+    let first = records
+        .iter()
+        .position(|r| r.kind == 'H' && r.id != 0 && root_of(&[a], &parent, r.id).is_some())
+        .ok_or_else(|| format!("{what}: budget {a} never ran"))?;
+    if sections.is_empty() {
+        return Err(format!("{what}: the trace holds no kernel sections (hold-trace)"));
+    }
+    // Per hart: whether it ran a thread (`H n`) or had left for `kmain` (`H 0`) as of its last
+    // section's end, and whether any record but an audit's was written in the section open since.
+    let mut runner: BTreeMap<u64, bool> = BTreeMap::new();
+    let mut at_start: BTreeMap<u64, bool> = BTreeMap::new();
+    let mut wrote: BTreeMap<u64, bool> = BTreeMap::new();
+    let mut by_hart: BTreeMap<u64, usize> = BTreeMap::new();
+    let mut n = 0;
+    for (i, r) in records.iter().enumerate() {
+        match r.kind {
+            'h' => {
+                let idle = !at_start.get(&r.hart).copied().unwrap_or(false);
+                if i >= first && idle && !wrote.get(&r.hart).copied().unwrap_or(false) {
+                    n += 1;
+                    *by_hart.entry(r.hart).or_default() += 1;
+                }
+            }
+            'j' => {
+                at_start.insert(r.hart, runner.get(&r.hart).copied().unwrap_or(false));
+                wrote.insert(r.hart, false);
+            }
+            'U' | 'V' => {}
+            'H' => {
+                runner.insert(r.hart, r.id != 0);
+                wrote.insert(r.hart, true);
+            }
+            _ => {
+                wrote.insert(r.hart, true);
+            }
+        }
+    }
+    let each: Vec<String> = by_hart.iter().map(|(h, n)| format!("hart {h}: {n}")).collect();
+    Ok((
+        format!(
+            "kernel sections entered from the idle that found nothing, from budget {a}'s first run on: {n} ({}): target {} (<= {bound})",
+            if each.is_empty() { "none".to_string() } else { each.join(", ") },
+            if n <= bound { "met" } else { "missed" }
+        ),
+        n <= bound,
+    ))
+}
+
 /// The harts the trace's `F` states, 1 in a trace with none.
 fn harts(records: &[Record]) -> u64 {
     records.iter().rev().find(|r| r.kind == 'F').map_or(1, |r| r.pass as u64)
@@ -3240,7 +3305,9 @@ fn sections(sections: &[Section], waits: &[(u64, u64, u64)]) -> String {
 /// the latter; `foreign_timer_in=<share>:<N>` bounds the ticks of those that interrupted the
 /// judged budget and charged another at N of 1000 of its charges, on two harts or more
 /// ([`foreign_timer`]). With `hart_shares_from=N`, the shares across harts are recorded, not
-/// judged, on a trace of fewer than N harts.
+/// judged, on a trace of fewer than N harts. With `hold-trace` too, `idle_sections_max=<mark>:<N>`
+/// bounds the kernel sections entered from the idle that found nothing to do, from the first run
+/// of the budget of mark weight `mark` on ([`idle_sections_that_found_nothing`]).
 /// `round` requires the budget the program marks to run before any other budget is picked twice
 /// ([`check_round`]).
 pub fn run(log: &str, args: &str) -> Result<String, String> {
@@ -3261,6 +3328,9 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
     let mut stale_in = Vec::new();
     // Each share's bound on the timer work billed elsewhere in its budget's time, per mille.
     let mut foreign_in: Vec<(&str, u64)> = Vec::new();
+    // The mark weight and bound of the idle sections that found nothing, from the marked budget's
+    // first run on.
+    let mut idle_sections: Option<(u64, usize)> = None;
     let mut wake_no_preempt = None;
     let mut cluster = false;
     let mut cluster_old_control = false;
@@ -3314,6 +3384,14 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
                 .and_then(|(s, b)| Some((s, b.parse::<u64>().ok()?)))
                 .ok_or_else(|| format!("malformed foreign_timer_in {arg:?}"))?;
             foreign_in.push((share, bound));
+            continue;
+        }
+        if let Some(spec) = arg.strip_prefix("idle_sections_max=") {
+            idle_sections = Some(
+                spec.split_once(':')
+                    .and_then(|(w, b)| Some((w.parse::<u64>().ok()?, b.parse::<usize>().ok()?)))
+                    .ok_or_else(|| format!("malformed idle_sections_max {arg:?}"))?,
+            );
             continue;
         }
         if let Some(count) = arg.strip_prefix("wake_no_preempt=") {
@@ -3591,6 +3669,11 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
             sum.timer_empty.iter().filter(inside).count(),
             if stale_missed { " (none, but the case requires some)" } else { "" }
         ));
+    }
+    if let Some((w, bound)) = idle_sections {
+        let (line, met) = idle_sections_that_found_nothing(&records, &sum.sections, w, bound)?;
+        missed |= !met;
+        lines.push(line);
     }
     let mut lease_end = String::new();
     if let Some(bound) = bounds.get("lease_end_p99_us") {
@@ -6496,6 +6579,56 @@ mod tests {
         }
         let v = run(&with(&foreign, 2), "foreign_timer_in=nobody:10");
         assert!(v.as_ref().is_err_and(|e| e.contains("no such share")), "{v:?}");
+    }
+
+    /// The kernel sections entered from the idle that found nothing, from the marked budget's
+    /// first run on, are bounded (`idle_sections_max=<mark>:<N>`): a section after the hart's `H 0`
+    /// with no record but audits counts; one that picked, one entered from a running thread, and
+    /// one before the budget first ran do not.
+    #[test]
+    fn idle_sections_that_found_nothing_are_bounded() {
+        // Budget 44 (mark weight 2) runs on hart 0 from the second slice. After the third slice's
+        // return, hart 1 leaves for kmain (`H 0` inside the section that then idles) and holds the
+        // lock three more times: twice finding nothing (once with an audit inside), once serving
+        // budget 9's item (`$`); hart 0, whose runner is a thread, holds it once with nothing inside.
+        let (t, _) = round_robin(&[(44, 100), (9, 300)], 40, true, None);
+        let at = t.iter().enumerate().filter(|(_, r)| r.1 == 'O').nth(2).unwrap().0 + 1;
+        let e = t[at - 1].0;
+        let mut recs: Vec<(u64, char, u64, u128, u64)> =
+            t.iter().map(|&(e, k, id, p)| (e, k, id, p, 0)).collect();
+        let held = |hart: u64| [(e, 'h', 10, 20, hart), (e, 'j', 0, 0, hart)];
+        let on_hart_1 = [
+            vec![(e, 'H', 0, 0, 1)],
+            held(1).to_vec(),
+            held(1).to_vec(),
+            vec![(e, 'U', 4, 100, 1), (e, 'V', 4, 110, 1)],
+            held(1).to_vec(),
+            vec![(e, '$', 9, 500 | (126u128 << 32), 1)],
+            held(1).to_vec(),
+            held(0).to_vec(),
+        ]
+        .concat();
+        recs.splice(at..at, on_hart_1);
+        // Hart 1 idle and finding nothing before 44 ever ran, in the first entry: not counted.
+        let first = t[0].0;
+        recs.splice(0..0, [(first, 'H', 0, 0, 1), (first, 'h', 10, 20, 1), (first, 'j', 0, 0, 1)]);
+        let last = recs.last().unwrap().0;
+        recs.push((last, 'F', 1_000_000, 2, 0));
+        let log = verdict_log(&recs);
+        let v = run(&log, "idle_sections_max=2:1");
+        assert!(
+            v.as_ref().is_err_and(|e| e.contains(
+                "kernel sections entered from the idle that found nothing, from budget 44's first run on: 2 (hart 1: 2): target missed (<= 1)"
+            )),
+            "{v:?}"
+        );
+        let v = run(&log, "idle_sections_max=2:2");
+        assert!(v.as_ref().is_ok_and(|s| s.contains("2 (hart 1: 2): target met (<= 2)")), "{v:?}");
+        for bad in ["idle_sections_max=2", "idle_sections_max=:2", "idle_sections_max=2:x"] {
+            let v = run(&log, bad);
+            assert!(v.as_ref().is_err_and(|e| e.contains("malformed idle_sections_max")), "{bad}: {v:?}");
+        }
+        assert!(run(&log, "idle_sections_max=9:2").is_err_and(|e| e.contains("mark weight 9")));
     }
 
     #[test]

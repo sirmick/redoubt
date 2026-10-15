@@ -1,0 +1,33 @@
+description = "A budget that sleeps in short timeouts wakes no hart but its own for them (kernel/timer.md, \"The hart timer\"): two sleepers on two harts each sleep a thousand times for 1 ms, so each hart re-arms its timer at every nap, as a machine at rest does for its own periodic sleeps; the post-check counts the kernel sections entered from the idle that found nothing to do, which a kernel armed on every hart fails with one for every nap of the other sleeper (virtual time, checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+icount = "shift=3,sleep=off"
+programs = ["timer-flood-at-rest"]
+# Test builds only: the trace ring (never in a default kernel), which needs a checked build, and
+# the lock's sections (`hold-trace`), whose hart and contents the post-check reads.
+kernel_features = ["sched-trace", "hold-trace"]
+# A sleeper's timeout is taken on the hart its thread left: a timeout's payer runs nowhere while
+# its one thread sleeps, so it is armed on the first hart to re-arm, and that hart re-arms as it
+# idles after the sleep's call (the choice is path-dependent, and a sleeper does move harts when
+# the other hart's entry finds its timeout passed first; what the rule bounds is that one hart is
+# woken for it, not which). A hart woken for an item another hart has served takes the lock, finds
+# nothing due and nothing runnable, and idles again: a kernel section holding no record but the
+# checked build's audits, which the post-check counts from A's first run on. With the rule the
+# count is 2 or 3 (three runs a width), bound 20; a kernel built with `timer-any-hart` arms both
+# harts for every nap of either sleeper, so one hart wakes for the other's every nap and finds it
+# served: 1,999 on rv64 and 1,999 on rv32, the recorded negative runs (both sleepers had settled
+# on one hart, and the other woke for nothing). The count is of lock takes, not of a race, so it
+# holds under icount. A single sleeper beside an idle hart shows nothing on either kernel: a
+# halted hart never re-arms, so it stays armed for whatever was earliest at its last exit; the
+# storm needs harts that exit, as a machine at rest has.
+post_check = "sched_oracle idle_sections_max=2:20"
+smp = [2]
+keep_smp = true
+timeout_secs = 300
+expect = [
+    '^TIMER-FLOOD-AT-REST TEST PASSED$',
+    '^SCHED-TRACE-END \d+ dropped 0$',
+]
+forbid = ['PANIC']
+poweroff = true

@@ -37,13 +37,14 @@ a time never fires before `time_now` reaches it.
 
 ### The hart timer
 
-<details><summary>Status: built · partly tested: that a stale early hint costs one early interrupt and misses nothing is argued from the code, not attacked · tested (11)</summary>
+<details><summary>Status: built · partly tested: that a stale early hint costs one early interrupt and misses nothing is argued from the code, not attacked · tested (12)</summary>
 
 - bench:timeouts
 - bench:budget-deadline
 - bench:sched-share
 - bench:sched-timer-entry
 - bench:deadline-placement
+- bench:timer-flood-at-rest
 - mutation:TimeoutIgnoredWhileOthersRun
 - host:redoubt-stride::a_hint_is_lowered_and_a_tie_of_payers_belongs_to_every_hart
 - host:redoubt-stride::each_item_is_armed_on_a_hart_that_runs_its_payer_or_on_one_hart

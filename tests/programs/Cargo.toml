@@ -125,6 +125,7 @@ bin = [
     { name = "syscall-attack", test = false },
     { name = "thread-limit", test = false },
     { name = "timeouts", test = false },
+    { name = "timer-flood-at-rest", test = false },
     { name = "touch-beyond-ram", test = false },
     { name = "touch-beyond-ram-survivor", test = false },
     { name = "uaf-grabber", test = false },
