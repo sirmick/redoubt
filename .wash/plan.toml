@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 165
+revision = 173
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1989,8 +1989,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   needs = ["B47"]
   body = "From B47's review (steward-red, .wash/qa/B47-stale-close.md and the B47 renewal): B47's Life covers the handles the VM minted and those returned through servers launched under a budget, but a request's handles arrive with no Life because the kernel tells a receiver badge, account and labels, never the sender's budget. So a program in a VM-carved budget that holds a VM-served endpoint (Elixir can pass one in launch.handles; no shell path does today) and sends a handle it minted can, after its budget is destroyed, make a later collection close a reused index in the session's own table: not the startup handles (console, steward, namespace are Owned::kept, never freed), but a sibling job's budget (its destroy then fails, pages leak), a piped or stage connection, or the VM's internal endpoints (a waiter's wake, a serve thread's, a job's exit endpoint), which can hang or break the session. No widening beyond the session, but more than such a program is given. Guard: when launch.handles passes a served endpoint into a launch in a carved budget, mint a fresh badge on the receive right the VM holds (serve.rs mints there already) and map badge -> that budget's Life; a request's handles from that badge go under the Life, or are closed eagerly at the budget's end. Host test: a launched program sends a minted handle, its budget is destroyed, a collection closes nothing at that index; a machine case under pipe-eight's setup. beamlet.md's residual becomes the rule. userland/otp: Tier A, the steward red. The kernel handle generation (owner's decision pending) is the construction fix for the whole class; this is the VM's own guard either way."
-  state = "reported"
-  revision = 158
+  state = "done"
+  revision = 171
 
 [[node]]
   id = "K32"
@@ -2203,8 +2203,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M2"
   body = "docs/todo/shell-invisible-format.md (shell.md:557 and SECURITY.md:254 carry the residual): the guard draws every ASCII and 8-bit control, DEL and the bidi controls as text (userland/shell/lib/redoubt/term/text.ex:32 control?/1; userland/native/cells/src/lib.rs:96 forbidden()), but the invisible format characters (U+00AD, U+200B..U+200D, U+2060..U+2064, U+FEFF, the plane-14 tags) and the line/paragraph separators pass: `rm report.txt` and `rm re​port.txt` draw the same, and a tag sequence carries text the person never sees. Architect's rule for the one open point: U+200D is drawn as `<U+200D>` everywhere except inside an extended grapheme cluster that is an emoji ZWJ sequence (Extended_Pictographic ZWJ Extended_Pictographic...), where the cluster is one symbol and draws as one, as today; every other character above is drawn `<U+XXXX>` wherever it stands, as U+009B is, and never held by a cell's symbol. Build: control?/1 and forbidden() gain the set (one shared table, stated once beside the cells vectors), the grapheme walk keeps the emoji exception, a vector in userland/native/cells/vectors.json and a test per character hold both decoders to it (the existing `no_control_character_is_ever_a_symbol` stops counting U+2028 as good), a shell test shows the two `rm` lines draw differently and a woman-technologist ZWJ sequence still draws as one two-column symbol. Gates: ./test-shell on both VMs, the cells vectors, shell-output-rate unchanged within noise (one range test per code point on the existing path), the residual leaves shell.md and SECURITY.md, the todo page deleted. Files: userland/shell term, userland/native/cells, shell.md, SECURITY.md; none of B50's. Tier A (the terminal guard is authority over what the person sees): steward-red-2, on main, not the shell branch. Size S."
-  state = "active"
-  revision = 145
+  state = "done"
+  revision = 172
 
 [[node]]
   id = "B70"
@@ -2214,3 +2214,14 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "docs/todo/parked-write-clock.md: libs/rt/tests/parked_write.rs `a_waiting_write_is_parked_abandoned_and_expired` (LONGEST 300 ms at :57, the client's 50 ms at :106, the deadline assertion at :122) failed 14 of 20 runs in a loop on a loaded host (load 100-170) and 0 of 15 directly; the fake kernel reads the host's clock and the test races two waits on it, as parked.rs does. Which assertion fails is unknown: the panic was not captured. Two windows fit: a client stalled past 300 ms gets the server's Rerror instead of its own Timeout; a client whose 50 ms passes before the server parks the write abandons a call that was never parked. A flaky test is a bug (TENETS 6), and trains run every host test beside a bench. Step 1: run the loaded loop through q beside a train's bench (`q run` on the general cores, 20 runs) with the panic captured, name the assertion and the window on the todo page. Step 2: order the test on events, not time: the first write is abandoned only after the server has parked it (a signal from the fake server), and the server's deadline is a step on a clock the test drives (the fake kernel's time_now made settable for this test, as the model's clock is), or each wait is on the parked state with no deadline racing it; parked.rs gets the same treatment where it shares the shape. Gates: 20 runs in a row in the loaded loop, the rt host tests and fuzz target unchanged otherwise, the todo page deleted and serving.md's R28 test list unchanged in names. Files: libs/rt/tests/parked_write.rs, parked.rs, the fake kernel's clock in libs/rt; none of B50's. Tier A (libs/rt): steward-red-2 (an rt host test, no bench case). Size S."
   state = "done"
   revision = 165
+
+[[node]]
+  id = "B71"
+  title = "beamlet's :binary.match tries every pattern at every byte and rebuilds the pattern list per call: the shell's control pattern growing 70 -> 88 entries cost shell-output-rate 5-8 %"
+  template = "package"
+  parent = "M2"
+  needs = ["B69"]
+  body = "From B69's gates (.wash/local/B69-report.md 'Follow-ons'): adding 18 entries to the shell's control pattern (70 -> 88) cost shell-output-rate 5-8 % on both widths (ascii 34,500 -> 32,100 B/s rv64); on the BEAM the two patterns cost the same. Cause, by reading userland/otp/vm/src/bif/binary.rs: `find` (:151) tests every pattern at every byte, O(len x patterns x pattern length); `patterns` (:126) re-collects the list into fresh Vecs on every call, and `compile_pattern` (:190) only wraps the list in {bm, P}, so a compiled pattern buys nothing; `bytes_of` copies the haystack per call too. The escaping path (Text.visible, the terminal guard) runs this on every piece, so every pattern the guard gains costs the shell's output rate. Lever: `compile_pattern` builds a real matcher the VM keeps (a resource or an opaque term the BIF recognises): a first-byte table (256 entries, each the patterns starting with that byte, longest first) is enough for the guard's single-code-point patterns and keeps leftmost-longest; Aho-Corasick if the table does not reach O(len) on the realistic page. An uncompiled pattern list builds the matcher per call (BEAM does the same). The haystack is read in place, not copied, where the term is one contiguous binary. Gates: a host measurement in userland/otp/vm tests (match over 64 KiB with 1, 8, 88 patterns: time per byte flat in the pattern count, quoted before/after); the binary difftests agree with BEAM on match/matches/split/replace, leftmost-longest and scope included; shell-output-rate's four rates re-measured on the machine both widths, the gain quoted in shell.md's profile bullet beside B64's, and the floors raised only if two runs agree; beamlet.md names compile_pattern as a real compile. Files: userland/otp/vm/src/bif/binary.rs and its tests, shell.md, beamlet.md's BIF notes; none of B50's or B69's once B69 merges. Tier A (the escaping path's rate depends on it): steward-red-2. Size S-M."
+  state = "reported"
+  revision = 173
+  overrides = ["2026-10-15: started by Orchestrator before B69 (active): B71's need on B69 is the final rate measurement only; the files are disjoint (binary.rs vs the shell's text.ex), so the matcher work starts now and the shell rates are taken after B69 merges"]
