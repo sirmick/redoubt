@@ -1,0 +1,41 @@
+description = "A kernel line that comes while a program's line is unfinished leaves nothing bare (servers/consoled.md, \"Started by init\"; kernel/devices.md, \"The console's one writer\"): half-rest writes `half` with no newline, faultee dies serving its call so the kernel's kill line comes then, and half-rest writes `rest` once the instance init restarts answers. The console's bytes are the verdict, the kernel's and consoled's: `[con N] half` on a line of its own, the kill line, then `[con N] rest` with its prefix again; `rest` bare, or the kill line on half's line, fails. At 2 harts on both widths"
+arch = ["rv64", "rv32"]
+kind = "boot"
+icount = "shift=3,sleep=off"
+smp = [2]
+# The real init, keyd, consoled and bootfsd, faultee and half-rest, which is handed a badge at
+# faultee. faultee is labelled, so its panic's words cannot reach the console (servers/consoled.md
+# R69) and the kill line is the first thing after `half`; unlabelled, its panic line would end
+# half's line by consoled's own rule and the kernel's would be tested on nothing. init's fault
+# and restart lines are bare, between the kill line and `rest`.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-bootfsd", bin = "bootfsd" },
+    { package = "redoubt-init-programs", bin = "faultee" },
+    { package = "redoubt-init-programs", bin = "half-rest" },
+]
+timeout_secs = 30
+expect = [
+    '^init: started faultee, console [0-9a-f]{16}$',
+    '^init: started half-rest, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] half$',
+    '^\[!\] Terminating process with PID [0-9]+$',
+    '^init: faultee \(PID [0-9]+\) faulted',
+    '^init: restarted faultee, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] rest$',
+    '^\[con [0-9a-f]{16}\] half-rest TEST PASSED$',
+]
+forbid = [
+    '^rest$',
+    '^\[con [0-9a-f]{16}\] half[^-]',
+    'half\[!\]',
+    'init: refused the boot',
+    'init: rebooting',
+]
+reporter = "half-rest"
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/init/kernel-line-mid-line.json" }

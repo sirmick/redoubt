@@ -5,7 +5,8 @@
 use core::fmt;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-use redoubt_conhold::{Busy, Hold, Line};
+use redoubt_conhold::{Busy, Hold as ConsoleHold, Line};
+use redoubt_sys::Hold;
 
 use crate::args::KernelArguments;
 use crate::io::SerialWrite;
@@ -26,7 +27,7 @@ const HOLD_BYTES: usize = 4096;
 /// the console's hold (kernel/devices.md, "The console's one writer").
 pub struct Output<'a> {
     serial: &'a mut dyn SerialWrite,
-    hold: Hold<HOLD_BYTES>,
+    hold: ConsoleHold<HOLD_BYTES>,
     #[cfg(feature = "wrap-print")]
     character_count: usize,
 }
@@ -35,7 +36,7 @@ impl<'a> Output<'a> {
     fn new(serial: &'a mut dyn SerialWrite) -> Output<'a> {
         Output {
             serial,
-            hold: Hold::new(),
+            hold: ConsoleHold::new(),
             #[cfg(feature = "wrap-print")]
             character_count: 0,
         }
@@ -117,6 +118,12 @@ pub fn print(args: fmt::Arguments) {
             stream.write_fmt(args).unwrap();
         }
         Line::Free => stream.write_fmt(args).unwrap(),
+        // The holder's line is unfinished: it is ended first, so this line starts one of its own
+        // and the holder's next write starts another (its next take says so).
+        Line::Ending => {
+            let _ = stream.write_str("\r\n");
+            stream.write_fmt(args).unwrap()
+        }
     });
     // A print inside this one (a `Display` that prints) takes the stateless console instead.
     if printed.is_none() && PRINTER.load(Ordering::Relaxed) == me() {
@@ -125,21 +132,22 @@ pub fn print(args: fmt::Arguments) {
 }
 
 /// `console_hold`'s console side, for `pid`, once the kernel has checked its handle is the
-/// console's: taking the hold, or giving it back and printing the kernel's lines that waited, so
-/// they come before the holder's next write. With no console set up, nothing waits, and the hold
-/// is nothing.
-pub fn hold(pid: u32, take: bool) -> Result<(), Busy> {
-    with_output(|stream| {
-        if take {
-            stream.hold.take(pid)
-        } else {
-            if stream.hold.release(pid) {
-                stream.flush("");
+/// console's: taking the hold, answering whether a kernel line ended the holder's unfinished line
+/// since it last gave the hold back; or giving it back, finished or not, and printing the
+/// kernel's lines that waited, so they come before the holder's next write. With no console set
+/// up, nothing waits, and the hold is nothing.
+pub fn hold(pid: u32, hold: Hold) -> Result<bool, Busy> {
+    with_output(|stream| match hold {
+        Hold::Take => stream.hold.take(pid),
+        Hold::Release | Hold::ReleaseOpen => {
+            // Lines that waited while the line was left unfinished end it first.
+            if let Some(end) = stream.hold.release(pid, hold == Hold::ReleaseOpen) {
+                stream.flush(if end { "\r\n" } else { "" });
             }
-            Ok(())
+            Ok(false)
         }
     })
-    .unwrap_or(Ok(()))
+    .unwrap_or(Ok(false))
 }
 
 /// The machine is stopping (`system_reset`): the hold ends, whoever has it, and the kernel's
@@ -153,12 +161,15 @@ pub fn flush_held() {
     });
 }
 
-/// `pid` has died: if it held the console it was cut off inside a write, so its line is ended
-/// before the kernel's lines that waited for it go out.
+/// `pid` has died: if it held the console it was cut off inside a write, and if it left its line
+/// unfinished that line is still open, so the line is ended before the kernel's lines that waited
+/// for it and the kill's own go out; nothing is owed to its PID after.
 pub fn died(pid: u32) {
+    use fmt::Write;
     with_output(|stream| {
         if stream.hold.died(pid) {
-            stream.flush("\r\n");
+            let _ = stream.write_str("\r\n");
+            stream.flush("");
         }
     });
 }

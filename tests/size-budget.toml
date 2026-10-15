@@ -6,7 +6,7 @@ kind = "size-budget"
 [[crate]]
 name = "kernel"
 paths = ["kernel/src"]
-max_lines = 10757
+max_lines = 10763
 
 [[crate]]
 name = "loader"
@@ -21,7 +21,7 @@ max_lines = 362
 [[crate]]
 name = "libs/sys"
 paths = ["libs/sys/src"]
-max_lines = 1033
+max_lines = 1040
 
 [[crate]]
 name = "libs/layout"
@@ -46,7 +46,7 @@ max_lines = 173
 [[crate]]
 name = "libs/conhold"
 paths = ["libs/conhold/src"]
-max_lines = 70
+max_lines = 95
 
 [[crate]]
 name = "libs/ipclist"
@@ -131,7 +131,7 @@ max_lines = 244
 [[crate]]
 name = "servers/consoled"
 paths = ["servers/consoled/src"]
-max_lines = 395
+max_lines = 408
 
 [[crate]]
 name = "servers/piped"
@@ -163,7 +163,7 @@ max_lines = 2923
 [[crate]]
 name = "servers/init"
 paths = ["servers/init/src"]
-max_lines = 2545
+max_lines = 2546
 
 [[crate]]
 name = "servers/erofsd"

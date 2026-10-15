@@ -3950,13 +3950,14 @@ impl Kernel {
 
     /// `console_hold(h(MMIO), hold)`: the console's hold, through the console's registers'
     /// handle (kernel/devices.md, "The console's one writer"). Decoding checks the handle, then
-    /// the hold (1 take, 2 give back); then `BadHandle`, `WrongObject` for any device but the
-    /// console's registers, and `Busy` for a take while another process holds it. Giving back a
-    /// hold the caller does not have changes nothing. The kernel's lines, which the hold makes
-    /// wait, are not modelled.
+    /// the hold (1 take, 2 give back, 3 give back with the holder's line unfinished); then
+    /// `BadHandle`, `WrongObject` for any device but the console's registers, and `Busy` for a
+    /// take while another process holds it. Giving back a hold the caller does not have changes
+    /// nothing. The kernel's lines, which the hold makes wait, and the unfinished line the kernel
+    /// ends before one of its own, are not modelled.
     pub fn console_hold(&mut self, pid: u64, h: u64, hold: u64) -> R<()> {
         let h = decode_handle(h)?;
-        if hold != 1 && hold != 2 {
+        if hold != 1 && hold != 2 && hold != 3 {
             return Err(Error::InvalidArgument);
         }
         let d = self.lookup_device(pid, h)?;
@@ -3966,7 +3967,7 @@ impl Kernel {
         match (hold, self.console_holder) {
             (1, None) => self.console_holder = Some(pid),
             (1, Some(holder)) if holder != pid => return Err(Error::Busy),
-            (2, Some(holder)) if holder == pid => self.console_holder = None,
+            (2 | 3, Some(holder)) if holder == pid => self.console_holder = None,
             _ => {}
         }
         Ok(())

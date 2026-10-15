@@ -118,6 +118,9 @@ pub enum Hold {
     Take = 1,
     /// The caller has written: the kernel's lines that waited go out before this call returns.
     Release = 2,
+    /// The caller has written, and its line is unfinished: as `Release`, and a kernel line that
+    /// comes before the caller's next take ends that line first; the take then answers that it did.
+    ReleaseOpen = 3,
 }
 
 /// How each kind of argument travels in registers (the table in the crate docs).
@@ -213,7 +216,7 @@ impl Arg for ResetKind {
 impl Arg for Hold {
     fn write(&self, w: &mut Writer) { w.u32(*self as u32) }
 
-    fn read(r: &mut Reader) -> Result<Self, Error> { r.tag(&[Hold::Take, Hold::Release]) }
+    fn read(r: &mut Reader) -> Result<Self, Error> { r.tag(&[Hold::Take, Hold::Release, Hold::ReleaseOpen]) }
 }
 
 /// Added to every call's number in the table below. Every `a0` outside the table, this one and

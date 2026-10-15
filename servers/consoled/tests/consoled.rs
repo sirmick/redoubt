@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use redoubt_consoled::uart::FIFO;
 use redoubt_consoled::{HOLD_CHUNK, MAX_INPUT};
 use redoubt_fake_kernel::fake;
-use redoubt_rt::abi::{FOREVER, Handle, MAX_THREADS};
+use redoubt_rt::abi::{FOREVER, Handle, Hold, MAX_THREADS};
 use redoubt_rt::client::{ClientError, Connection, Lend};
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::ipc::Buffer;
@@ -335,6 +335,38 @@ fn writes_go_out_inside_the_console_s_hold_a_chunk_at_a_time() {
         assert_eq!(c.write(&mut lend, 0, 0, b"!").unwrap(), 1, "a refused hold still writes");
     });
     assert_eq!(b.printed(), b'!');
+    assert_eq!(b.shut_down(), redoubt_rt::exit::OK);
+}
+
+/// A write that leaves a line unfinished gives the hold back saying so, and one that finishes it
+/// does not; once the kernel's answer says it ended that line, the write goes out as a line of its
+/// own (prefix first: `Lines`, tests/lines.rs), and the answer is consumed (servers/consoled.md,
+/// "Started by `init`"). The hold is taken and given back once at start, before any write.
+#[test]
+fn an_unfinished_line_is_given_back_as_such_and_starts_again_once_the_kernel_ended_it() {
+    let b = boot();
+    let f = fake();
+    let (writer, conn) = b.client();
+    let holds = || f.console_holds(b.server);
+    // The probe comes after the UART's set-up, which is what `boot` waits for.
+    wait_until("the hold is probed", || holds().len() == 2);
+    assert_eq!(holds(), [(Hold::Take, false), (Hold::Release, false)], "probed once at start");
+    f.as_process(writer, || {
+        let c = Connection::new(Endpoint::from_handle(conn));
+        let mut lend = Lend::new(4).unwrap();
+        c.attach(&mut lend, 0, "").unwrap();
+        c.open(&mut lend, 0, mode::OWRITE).unwrap();
+        assert_eq!(c.write(&mut lend, 0, 0, b"half").unwrap(), 4);
+        assert_eq!(holds()[2..], [(Hold::Take, false), (Hold::ReleaseOpen, false)]);
+        assert_eq!(b.printed(), b'f');
+        // A kernel line ended the line between the two writes.
+        f.console_line_ended(b.server);
+        assert_eq!(c.write(&mut lend, 0, 0, b"rest\n").unwrap(), 5);
+        assert_eq!(holds()[4..], [(Hold::Take, true), (Hold::Release, false)]);
+        assert_eq!(b.printed(), b'\n');
+        assert_eq!(c.write(&mut lend, 0, 0, b"on\n").unwrap(), 3);
+        assert_eq!(holds()[6..], [(Hold::Take, false), (Hold::Release, false)], "answered once");
+    });
     assert_eq!(b.shut_down(), redoubt_rt::exit::OK);
 }
 

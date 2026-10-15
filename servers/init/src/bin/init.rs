@@ -125,11 +125,13 @@ mod machine {
             match self {
                 // Inside the console's hold, so no kernel line lands inside it (kernel/devices.md,
                 // "The console's one writer").
-                Out::Uart(registers) => Mmio::from_handle(h(CONSOLE_MMIO)).console_held(|| {
+                Out::Uart(registers) => Mmio::from_handle(h(CONSOLE_MMIO)).console_held(|_| {
                     for byte in line.bytes() {
                         while registers.read_u8(LSR).is_some_and(|lsr| lsr & LSR_THR_EMPTY == 0) {}
                         registers.write_u8(THR, byte);
                     }
+                    // Whole lines, so none is left unfinished and none needs starting again.
+                    ((), !line.ends_with('\n'))
                 }),
                 Out::Console(file) => {
                     if let Some(lend) = lend {

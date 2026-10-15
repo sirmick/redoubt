@@ -256,15 +256,21 @@ before it calls the firmware, because that call never returns.
 
 ### The console's one writer
 
-<details><summary>Status: built · tested (10)</summary>
+<details><summary>Status: built · tested (16)</summary>
 
 - bench:console-one-writer
+- bench:console-kernel-line-mid-line
 - bench:console-hold-stuck
 - host:redoubt-conhold::lines_wait_whole_while_held_and_go_out_in_order_at_release
 - host:redoubt-conhold::a_line_that_does_not_fit_goes_out_after_the_queue_and_leaves_nothing_behind
 - host:redoubt-conhold::one_holder_at_a_time
 - host:redoubt-conhold::a_holder_that_dies_gives_the_hold_back_and_only_it_does
 - host:redoubt-conhold::a_line_with_nobody_holding_goes_out_at_once
+- host:redoubt-conhold::a_free_line_ends_an_unfinished_line_once_and_the_next_take_says_so
+- host:redoubt-conhold::nothing_is_ended_while_no_line_is_unfinished_and_a_held_line_still_waits
+- host:redoubt-conhold::lines_that_waited_end_an_unfinished_line_at_the_give_back_and_the_next_take_is_told
+- host:redoubt-conhold::only_the_holder_whose_line_was_ended_is_told
+- host:redoubt-conhold::a_process_that_dies_with_its_line_unfinished_is_owed_nothing_after
 - host:redoubt-consoled::writes_go_out_inside_the_console_s_hold_a_chunk_at_a_time
 - host:redoubt-sys::every_result_and_error_round_trips
 - host:redoubt-sys::malformed_results_are_refused
@@ -281,6 +287,15 @@ program. On several harts the two would interleave byte by byte, so a kill line
 1) before it writes and gives it back (2) after. While it holds it, a kernel line waits, whole,
 in a queue of 4 KiB (about 107 kill lines, a containment-sized destruction's), and the lines that waited go out when the hold is
 given back, before the call returns, so they come before the holder's next write.
+- **A line left unfinished between writes.** A holder's line can span its writes: a prompt
+  waiting for its answer, a `\r` sent before the text. Between them nobody holds, so a kernel
+  line goes out at once, inside that line. The holder says so: a give-back with `hold` 3 says
+  its line is unfinished, and the kernel then ends that line (`\r\n`) before the next line of
+  its own that finds nobody holding, or before the lines that waited and go out at that
+  give-back, once; that holder's next take, and only its, returns 1 if it did, and the holder
+  starts its line again ([consoled](../servers/consoled.md#started-by-init)). A give-back with
+  2 says the line is finished. Nothing else changes: the kernel never waits, a held line waits
+  whole, and the bound below stands.
 - **The kernel never waits for user mode.** A line with nobody holding goes out at once. A line
   that does not fit the queue goes out at once too, after everything queued: a holder that keeps
   the hold, or writes for long, then sees a kernel line inside its own write. That is the bound:
@@ -296,11 +311,14 @@ given back, before the call returns, so they come before the holder's next write
 - **A holder that dies** holding it was cut off inside a write. The kernel gives the hold back
   for it as the process ends, ends that line (`\r\n`), then prints the lines that waited and the
   kill's own. The hold is the process's: a thread that exits holding it leaves it to the
-  process's other threads, and the last thread's exit ends the process.
+  process's other threads, and the last thread's exit ends the process. A process that dies
+  between writes with its line unfinished is treated the same: the kernel ends that line before
+  the kill's own, and nothing is owed to its PID after, so a later process given that PID is
+  told nothing.
 - **When the machine stops** (`system_reset`), the hold ends and the lines that waited go out
   first. A panic's text goes out after them and never waits.
 
-Errors, in order: decoding (`hold` neither 1 nor 2 is `InvalidArgument`), `BadHandle`,
+Errors, in order: decoding (`hold` not 1, 2 or 3 is `InvalidArgument`), `BadHandle`,
 `WrongObject`, `Busy`. With no kernel console (a build without printing) the hold has nothing to
 make wait. The rules and the queue are `redoubt-conhold`, host-tested; the queue sits beside the
 kernel's console under the lock its prints already take, one hart at a time

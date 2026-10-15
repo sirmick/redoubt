@@ -113,7 +113,7 @@ one. "(2)" marks a 64-bit value in two registers. A field named `..._rec` is the
 | 0x11a | `map_fixed` | address, len, flags | - | [memory](memory.md) |
 | 0x11b | `device_info` | device handle | kind (1 MMIO, 2 IRQ, 3 Reset), a (2), b (2), flags: the device's `Devs` entry | [devices](devices.md#device_info) |
 | 0x11c | `budget_reap` | budget handle | the children the budget still has, or does not return if the caller's own budget is in the reaped child's subtree, or its process object is charged there | [budgets](budgets.md#r10-destruction) |
-| 0x11d | `console_hold` | console MMIO device handle, hold (1 take, 2 give back) | - | [devices](devices.md#the-consoles-one-writer) |
+| 0x11d | `console_hold` | console MMIO device handle, hold (1 take, 2 give back, 3 give back with the caller's line unfinished) | a take: 1 if a kernel line ended the caller's unfinished line since it last gave the hold back, else 0; a give-back: 0 | [devices](devices.md#the-consoles-one-writer) |
 
 `thread_create`'s and `process_start`'s argument reaches the new thread unchanged in its first
 argument register; the kernel does not check it, nor the entry or stack pointer. A `usize`

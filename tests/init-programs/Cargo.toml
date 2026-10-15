@@ -87,6 +87,16 @@ name = "hello-sink"
 path = "src/bin/hello-sink.rs"
 test = false
 
+[[bin]]
+name = "faultee"
+path = "src/bin/faultee.rs"
+test = false
+
+[[bin]]
+name = "half-rest"
+path = "src/bin/half-rest.rs"
+test = false
+
 [lib]
 test = false
 doctest = false

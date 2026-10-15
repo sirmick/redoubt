@@ -90,7 +90,9 @@ pub fn prefix(id: u64) -> [u8; PREFIX_LEN] {
 /// (servers/consoled.md, "Started by `init`"). A line written through a minted connection starts
 /// with that connection's [`prefix`]; one through a root badge goes out as it is. A write through
 /// another badge than the one that left a line unfinished ends that line first, so no line holds
-/// two writers' bytes.
+/// two writers' bytes. The kernel is the other writer it cannot see: it is told when a line is
+/// unfinished ([`Lines::is_open`]), ends it before a line of its own, and says so at the next
+/// hold, when the writer's line starts again ([`Lines::kernel_ended`]).
 ///
 /// The output is any sink that takes what it can of some bytes and says how many it took: the
 /// UART in the program, a buffer in the tests. A sink that takes less leaves the line open with
@@ -112,6 +114,14 @@ struct Open {
 
 impl Lines {
     pub const fn new() -> Lines { Lines { open: None } }
+
+    /// Whether a writer's line is unfinished: given back with the console's hold, so the kernel
+    /// ends the line before a line of its own (kernel/devices.md, "The console's one writer").
+    pub fn is_open(&self) -> bool { self.open.is_some() }
+
+    /// The kernel ended the unfinished line: the writer's next bytes start a line of their own,
+    /// prefix first.
+    pub fn kernel_ended(&mut self) { self.open = None; }
 
     /// Writes `data` from the caller with `badge`, which is the minted connection `id` or, with
     /// `None`, a root badge; how many bytes of `data` went out.
@@ -298,18 +308,26 @@ impl FileServer for Console {
     }
 
     /// Output, every line of it saying who wrote it ([`Lines`]), inside the console's hold a
-    /// [`HOLD_CHUNK`] at a time, so the kernel's lines land between chunks and never inside one.
-    /// The offset is ignored, as for a read. A byte the transmitter would not take is a short
-    /// write, which 9P allows, rather than a server that spins.
+    /// [`HOLD_CHUNK`] at a time, so the kernel's lines land between chunks and never inside one;
+    /// a chunk that leaves a line unfinished says so as it gives the hold back, and a line the
+    /// kernel ended meanwhile starts again at the next chunk. The offset is ignored, as for a
+    /// read. A byte the transmitter would not take is a short write, which 9P allows, rather than
+    /// a server that spins.
     fn write(&mut self, caller: &Caller, _: &Cons, _offset: u64, data: &[u8]) -> Result<usize, NineError> {
         let id = self.minted.iter().find(|(b, _)| *b == caller.badge).map(|(_, id)| *id);
         let (uart, lines) = (&self.uart, &mut self.lines);
         let mut done = 0;
         for chunk in data.chunks(HOLD_CHUNK) {
-            let mut write = || lines.write(caller.badge, id, chunk, &mut |bytes| uart.put_all(bytes));
+            let mut write = |ended: bool| {
+                if ended {
+                    lines.kernel_ended();
+                }
+                let n = lines.write(caller.badge, id, chunk, &mut |bytes| uart.put_all(bytes));
+                (n, lines.is_open())
+            };
             let n = match &self.hold {
                 Some(registers) => registers.console_held(write),
-                None => write(),
+                None => write(false).0,
             };
             done += n;
             if n < chunk.len() {
