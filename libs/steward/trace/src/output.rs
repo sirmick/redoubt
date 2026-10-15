@@ -232,9 +232,11 @@ pub fn boot(s: &mut String, store: &Store, carves: &[Carve]) {
     let f = inspect::fixed(store);
     for (i, p) in f.principals.iter().enumerate() {
         let d: Vec<String> = p.domains.iter().map(domain).collect();
+        // A sponsor only where there is one, so a trace of unsponsored principals reads as before.
+        let sponsor = p.sponsor.map_or(String::new(), |q| format!(" sponsor={q}"));
         let _ = writeln!(
             s,
-            "principal {i} {} account={} login={} approval={} owned={} domains=[{}] top={} contexts={} idle={}",
+            "principal {i} {} account={} login={} approval={} owned={} domains=[{}] top={} contexts={} idle={}{sponsor}",
             quote(p.name.as_bytes()),
             p.account,
             show_list(&p.login_keys),
@@ -250,14 +252,15 @@ pub fn boot(s: &mut String, store: &Store, carves: &[Carve]) {
     let z = &f.sizes;
     let _ = writeln!(
         s,
-        "fixed keyd={} servers={} sizes session={} agent={} sub_agent={} crossing={} cost={}",
+        "fixed keyd={} servers={} sizes session={} agent={} sub_agent={} crossing={} cost={}{}",
         show_list(&keyd),
         f.servers,
         limits(&z.session),
         limits(&z.agent),
         limits(&z.sub_agent),
         limits(&z.crossing),
-        z.budget_cost
+        z.budget_cost,
+        if z.agent_quota == 0 { String::new() } else { format!(" agent_quota={}", z.agent_quota) }
     );
     for c in carves {
         let _ = writeln!(s, "carve account={} top={}", c.account, limits(&c.top));

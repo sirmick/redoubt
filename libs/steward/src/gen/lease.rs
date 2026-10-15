@@ -48,6 +48,14 @@ pub fn dispatch(p: &Policy, cx: &mut Cx<'_>, from: Option<State>, event: Event) 
     match (from, event) {
         (None, Event::StartAgent) => {
             'row: {
+                match (p.caller_session)(cx) {
+                    Ok(()) => break 'row,
+                    Err(r) => cx.refused(r),
+                }
+                (p.refuse)(cx);
+                return Next::Nothing;
+            }
+            'row: {
                 match (p.caller_unlabelled)(cx) {
                     Ok(()) => break 'row,
                     Err(r) => cx.refused(r),

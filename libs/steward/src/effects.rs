@@ -7,9 +7,9 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::audit::Record;
-use crate::consts::{BLAME_COUNT, BLAME_WINDOW, CROSSING_LIFE};
+use crate::consts::{BLAME_COUNT, BLAME_WINDOW, CROSSING_LIFE, MAX_LEASE};
 use crate::cx::{Cx, Raised};
-use crate::domain::Labels;
+use crate::domain::{Domain, Labels};
 use crate::effect::{
     Answer, Bytes, Kind, Notice, Notified, Object, Output, Parent, Refusal, Scope, Server, Step, Token,
 };
@@ -46,44 +46,50 @@ pub fn forget(cx: &mut Cx<'_>) {
 
 // Sessions and leases.
 
-/// A session's budget, from its domain's fixed sub-budget.
+/// A session's budget, from its domain's fixed sub-budget; a sponsored principal's from its
+/// sponsor's unlabelled sub-budget, as a lease of `MAX_LEASE` (R39: it bills to the sponsor,
+/// R8, and the sponsor can end it).
 pub fn carve_session(cx: &mut Cx<'_>) {
+    let (parent, deadline) = match sponsor(cx) {
+        Some(q) => (Parent::Sub(sponsor_domain(cx, q)), Some(cx.now().saturating_add(MAX_LEASE))),
+        None => (Parent::Sub(cx.domain.clone()), None),
+    };
     let step = Step::CreateBudget {
         token: cx.token(BUDGET),
-        parent: Parent::Sub(cx.domain.clone()),
+        parent,
         limits: cx.fixed.sizes.session,
         labels: cx.domain.labels().clone(),
-        deadline: None,
+        deadline,
     };
     cx.step(step);
 }
 
-/// R39: a lease from its domain's sub-budget; a sub-agent inside its agent's budget, ending no
-/// later.
+/// The sponsor of the object's principal, for a session of a sponsored principal.
+fn sponsor(cx: &Cx<'_>) -> Option<usize> {
+    match cx.kind {
+        Kind::Session => session(cx).and_then(|s| cx.fixed.principals[s.principal].sponsor),
+        _ => None,
+    }
+}
+
+/// Principal `q`'s unlabelled domain.
+fn sponsor_domain(cx: &Cx<'_>, q: usize) -> Domain {
+    Domain::new(cx.fixed.principals[q].account, Labels::empty())
+}
+
+/// R39: a lease's budget from its domain's sub-budget, with the manifest's `agent` size, ending
+/// when its lease does.
 pub fn carve_lease(cx: &mut Cx<'_>) {
     let now = cx.now();
     let Some(l) = lease(cx) else { return };
-    let mut deadline = now.saturating_add(l.lease);
-    let (parent, limits) = match l.parent.and_then(|a| cx.state.leases.get(&a)) {
-        Some(agent) => {
-            deadline = deadline.min(agent.deadline);
-            let owner = Object { domain: cx.domain.clone(), kind: Kind::Lease, id: agent.id };
-            (Parent::Budget(Token { owner, slot: BUDGET }), cx.fixed.sizes.sub_agent)
-        }
-        None => (Parent::Sub(cx.domain.clone()), cx.fixed.sizes.agent),
-    };
-    carve_lease_in(cx, parent, limits, deadline);
-}
-
-/// A lease's budget from `parent`, with `limits`, ending at `deadline`.
-pub fn carve_lease_in(cx: &mut Cx<'_>, parent: Parent, limits: crate::manifest::Limits, deadline: u64) {
+    let deadline = now.saturating_add(l.lease);
     if let Some(l) = cx.state.leases.get_mut(&cx.id) {
         l.deadline = deadline;
     }
     let step = Step::CreateBudget {
         token: cx.token(BUDGET),
-        parent,
-        limits,
+        parent: Parent::Sub(cx.domain.clone()),
+        limits: cx.fixed.sizes.agent,
         labels: cx.domain.labels().clone(),
         deadline: Some(deadline),
     };
@@ -354,9 +360,15 @@ pub fn audit_lease_ended(cx: &mut Cx<'_>) {
     cx.audit(Record::LeaseEnded { lease: id });
 }
 
-/// The sponsor learns that the lease ended, not why: a notice to its unlabelled sessions.
+/// The sponsor learns that the lease ended, not why: a notice to its unlabelled sessions. A
+/// lease's sponsor is its domain's principal; a sponsored principal's session is a lease of its
+/// sponsor's; a session of an unsponsored principal tells nobody.
 pub fn notify_sponsor(cx: &mut Cx<'_>) {
-    let sponsor = cx.domain.unlabelled();
+    let sponsor = match (cx.kind, sponsor(cx)) {
+        (Kind::Lease, _) => cx.domain.unlabelled(),
+        (_, Some(q)) => sponsor_domain(cx, q),
+        _ => return,
+    };
     let to: Vec<u64> = cx
         .index
         .routes

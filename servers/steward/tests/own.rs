@@ -1,7 +1,9 @@
 //! The steward's own lines (servers/steward.md, "The manifest lines"): what `init` appends after
 //! the core's, parsed strictly, and a network scope encoded as `ipd`'s `grant` takes it.
 
-use redoubt_steward_server::own::{Bound, Home, How, Own, SYSTEM, Vault, binding, is_own, session_args};
+use redoubt_steward_server::own::{
+    Bound, Child, Home, How, Own, SYSTEM, Vault, binding, is_own, lease_args, session_args,
+};
 
 fn read(lines: &[&str]) -> Result<Own, String> {
     let mut own = Own::default();
@@ -106,25 +108,39 @@ fn the_binding_table_binds_each_slot_as_the_page_says() {
     let at = |p: &str| Some(p.to_string());
     let boot = Some(Bound { how: fresh("bootfsd", ""), at: at("/boot"), name: Some("bootfsd") });
     // The home is minted through the one connection the steward keeps for alice, carved with her quota.
-    let carved = How::Carved {
+    let carved = |below: &str, below_quota: u64| How::Carved {
         key: "home alice".into(),
         server: "walfsd:data".into(),
         root: "/home/alice".into(),
         quota: 8 << 20,
+        below: below.into(),
+        below_quota,
     };
-    let home = Some(Bound { how: carved, at: at("/home/alice"), name: None });
+    let home = Some(Bound { how: carved("", 0), at: at("/home/alice"), name: None });
     let cons = Some(Bound { how: How::Console, at: at("/dev/cons"), name: None });
     let system = Some(Bound { how: fresh(SYSTEM, ""), at: None, name: Some(SYSTEM) });
     let scope = own.net("alice").unwrap().scope.clone();
     let net = Some(Bound { how: How::Grant { scope }, at: at("/net"), name: None });
     let vault = Some(Bound { how: fresh("walfsd:alice-secrets", ""), at: at("/vault"), name: None });
-    let table = |labels: &[u64], who: &str| (0..7).map(|s| binding(&own, who, labels, s)).collect::<Vec<_>>();
+    let table = |labels: &[u64], who: &str| {
+        let child = Child::Session { labelled: !labels.is_empty() };
+        (0..7).map(|s| binding(&own, who, labels, child, s, 1 << 20)).collect::<Vec<_>>()
+    };
     assert_eq!(
         table(&[], "alice"),
         [boot.clone(), home.clone(), None, net, cons.clone(), system.clone(), None]
     );
     assert_eq!(table(&[7], "alice"), [boot.clone(), home, vault, None, cons.clone(), system.clone(), None]);
-    assert_eq!(table(&[], "bob"), [boot, None, None, None, cons, system, None]);
+    assert_eq!(table(&[], "bob"), [boot.clone(), None, None, None, cons, system.clone(), None]);
+    // A lease of alice's: `/boot`, her home's `project` directory through the same carve with
+    // the lease's own quota, at `/project`, and the system volume; no vault, no network, no
+    // console. A sponsor with no home gives its lease no root.
+    let project = Some(Bound { how: carved("project", 1 << 20), at: at("/project"), name: None });
+    let lease =
+        |who: &str| (0..7).map(|s| binding(&own, who, &[], Child::Lease, s, 1 << 20)).collect::<Vec<_>>();
+    assert_eq!(lease("alice"), [boot.clone(), project, None, None, None, system.clone(), None]);
+    assert_eq!(lease("bob"), [boot, None, None, None, None, system, None]);
+    assert_eq!(lease_args("alice"), ["principal=alice", "home=/project"]);
 }
 
 /// What a session's VM is told of itself: its principal, each label of its set by name and id,

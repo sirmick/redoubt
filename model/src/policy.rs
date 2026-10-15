@@ -5,7 +5,7 @@
 //!
 //! | Property | Statement | Source |
 //! | --- | --- | --- |
-//! | P1 sessions | a session's or a lease's budget is carved from its domain's fixed sub-budget (a sub-agent's from its agent's), with its principal's account and its domain's labels, which the principal owns | servers/steward.md, "Fixed sub-budgets per label set" |
+//! | P1 sessions | a session's or a lease's budget is carved from its domain's fixed sub-budget, with its principal's account and its domain's labels, which the principal owns | servers/steward.md, "Fixed sub-budgets per label set" |
 //! | P2 login | a login used one of the principal's login keys, never one `keyd` holds | servers/steward.md, "Authentication and sessions" |
 //! | P3 approvals | an approval channel opened with the principal's approval key; an approval was answered on the channel that rendered the request last, named the hash it showed, which never changed, and granted no label the approver lacks | servers/steward.md R38 |
 //! | P4 screens | a channel sees only its own principal's requests, and labelled ones only if it owns every label; rendered text is printable ASCII with capped free text; a labelled request shows none of its free text; an approval-waiting notice reaches only sessions whose labels include the request's | servers/steward.md, "The powerbox and approvals"; R38 |
@@ -13,7 +13,7 @@
 //! | P6 crossings | a declassification is submitted from a session with exactly the item's labels and a push from an unlabelled one; what is copied out or pushed is exactly the snapshot taken at submission, a declassified item at most `DECLASSIFY_MAX` bytes of printable text, read or written through a budget with exactly the labelled side's labels | servers/steward.md R42 |
 //! | P7 blame | a domain's sessions and leases end exactly when three server crashes blamed on it (by the kernel's exit notices) fall within ten minutes; no others are touched; none of it starts for the next ten minutes | servers/steward.md R40; servers/init.md, "Restarts and reboots" |
 //! | P8 labelled sessions | a labelled session or agent starts nothing; it only submits requests | servers/steward.md, "Authentication and sessions" |
-//! | P9 leases | an agent's budget has a deadline at most `MAX_LEASE` away; a sub-agent sits in its agent's budget and ends no later; an expired lease is gone | servers/steward.md R39 |
+//! | P9 leases | an agent's budget has a deadline at most `MAX_LEASE` away; an expired lease is gone | servers/steward.md R39 |
 //! | P10 non-interference | a vault session's work (item writes, requests, calls to a shared server) changes nothing an unlabelled session observes: its results, the usage of `users`, of every principal's budget and unlabelled sub-budget, and the audit records an unlabelled reader may read | servers/steward.md R37 |
 //! | P11 writes | every write to an item is through a budget with exactly the item's labels; the steward's own write goes only to the unlabelled volume | servers/steward.md R42 |
 //! | P12 system budgets | only `init` and the steward hold a handle to a system-class budget; a session's connections are narrowed to a revocation scope inside its budget | servers/steward.md R41; servers/init.md R33 |
@@ -178,14 +178,26 @@ pub fn manifest() -> Manifest {
         label_sets: sets.iter().map(|s| s.to_vec()).collect(),
         top: Limits { pages: 500, processes: 12, weight: 100 },
         contexts: Contexts { max: 2, idle_secs: 300 },
+        sponsor: None,
     };
     let l = |pages, processes, weight| Limits { pages, processes, weight };
     let page = crate::kernel::Costs::default().budget;
     Manifest {
         principals: vec![
-            p("alice", 1001, 11, 12, &[7, 8], &[&[], &[7], &[8]]),
+            // Alice's top holds carol's sessions too: 18 processes, so a label set's share,
+            // a third, holds three sessions, one over the cap of two contexts, and the cap is
+            // what refuses the third, not the budget. Bob's share holds two: his domains fill.
+            PrincipalSpec {
+                top: Limits { pages: 500, processes: 18, weight: 100 },
+                ..p("alice", 1001, 11, 12, &[7, 8], &[&[], &[7], &[8]])
+            },
             p("bob", 1002, 21, 22, &[9], &[&[], &[9], &[7]]),
-            p("carol", 1003, 31, 32, &[], &[&[]]),
+            // Carol is sponsored by alice: her sessions are leases of alice's, and her labelled
+            // set is one she may never log in to (R39). The same principal, the same draws.
+            PrincipalSpec {
+                sponsor: Some(String::from("alice")),
+                ..p("carol", 1003, 31, 32, &[10], &[&[], &[10]])
+            },
         ],
         keyd_keys: vec![100, 101],
         servers: 1,
@@ -195,6 +207,7 @@ pub fn manifest() -> Manifest {
             sub_agent: l(16, 1, 1),
             crossing: l(page, 0, 0),
             budget_cost: page,
+            agent_quota: 0,
         },
     }
 }
@@ -638,25 +651,14 @@ impl Run {
                 if requester.as_ref().is_some_and(|c| c.labelled()) {
                     self.reached.insert("P8 a labelled caller asks to start an agent");
                 }
-                if let (Some(req), Some(Answer::Lease { id, .. })) = (&requester, &r) {
+                if let (Some(req), Some(Answer::Lease { .. })) = (&requester, &r) {
                     if req.labelled() {
                         return Err(format!("P8: labelled {:?} {session} started an agent", req.kind));
                     }
-                    let new = self.st.caller(*id).and_then(|c| self.st.budget_of(&c.object()));
-                    let mine = self.st.budget_of(&req.object());
+                    // A lease nested in a lease is a later package's: a lease's badge is told
+                    // `unknown` (servers/steward.md, "Leases").
                     if req.kind == Kind::Lease {
-                        let k = &self.st.k;
-                        let (Some(new), Some(mine)) = (new, mine) else {
-                            return Err(format!("P9: agent {session}'s sub-agent {id} has no budget"));
-                        };
-                        let deadline = |b: u64| k.budgets.get(&b).and_then(|x| x.deadline);
-                        let under = k.is_descendant_or_self(new, mine);
-                        let ends = deadline(new).is_some_and(|d| deadline(mine).is_some_and(|m| d <= m));
-                        if !under || !ends {
-                            return Err(format!(
-                                "P9: agent {session}'s sub-agent is outside it or outlives it"
-                            ));
-                        }
+                        return Err(format!("P9: lease {session} started an agent inside itself"));
                     }
                 }
                 format!("{r:?}")
@@ -745,17 +747,27 @@ impl Run {
             }
             PolicyOp::Usage { principal } => {
                 let account = fixed.principals[*principal].account.get();
-                let h = self.st.tops[&account].1;
-                format!("{:?}", self.st.usage(h))
+                // A sponsored principal has no top of its own: its use is its sponsor's.
+                match self.st.tops.get(&account) {
+                    Some((_, h)) => format!("{:?}", self.st.usage(*h)),
+                    None => String::from("sponsored"),
+                }
             }
             PolicyOp::Work { session } => format!("{:?}", self.st.work(*session)),
             PolicyOp::EndLease { by, lease } => {
                 let (b, l) = (self.st.caller(*by), self.st.caller(*lease));
-                let leased = l.as_ref().is_some_and(|l| l.kind == Kind::Lease);
+                // The account that may end it: a lease's own domain's; a sponsored principal's
+                // session's, its sponsor's (R39).
+                let sponsored_by = l.as_ref().and_then(|l| match l.kind {
+                    Kind::Lease => Some(l.domain.account()),
+                    Kind::Session => {
+                        fixed.principals[l.principal].sponsor.map(|q| fixed.principals[q].account)
+                    }
+                    _ => None,
+                });
+                let leased = sponsored_by.is_some();
                 let sponsor = b.as_ref().is_some_and(|b| {
-                    b.kind == Kind::Session
-                        && !b.labelled()
-                        && l.as_ref().is_some_and(|l| l.domain.account() == b.domain.account())
+                    b.kind == Kind::Session && !b.labelled() && sponsored_by == Some(b.domain.account())
                 });
                 let r = self.st.end_lease(*by, *lease);
                 if leased && sponsor && (r != Some(Answer::Ok) || self.st.caller(*lease).is_some()) {
@@ -1092,40 +1104,46 @@ impl Run {
         let fixed = inspect::fixed(&st.store);
         let callers = st.callers();
         let budget = |c: &Caller| st.budget_of(&c.object());
-        let lease_budgets: BTreeSet<u64> =
-            callers.iter().filter(|c| c.kind == Kind::Lease).filter_map(budget).collect();
         for c in &callers {
             let p = &fixed.principals[c.principal];
             let what = format!("{:?} {} of {:?}", c.kind, c.id, c.domain);
             let id = budget(c).ok_or(format!("P1: {what} has no budget"))?;
             let b = k.budgets.get(&id).ok_or(format!("P9: {what}'s budget is gone, and it is not"))?;
-            let top = st.tops[&p.account.get()].0;
+            // A sponsored principal's session is a lease of its sponsor's (R39): under the
+            // sponsor's top, with the sponsor's account (R8), unlabelled, carved from the
+            // sponsor's unlabelled sub-budget, with a deadline.
+            let sponsor = p.sponsor.filter(|_| c.kind == Kind::Session).map(|q| &fixed.principals[q]);
+            if sponsor.is_some() && c.labelled() {
+                return Err(format!("P1: {what} is a sponsored principal's labelled session"));
+            }
+            let owner = sponsor.unwrap_or(p);
+            let top = st.tops[&owner.account.get()].0;
             let under = k.is_descendant_or_self(id, top) && id != top;
-            if !under || b.account != p.account.get() || b.labels != c.domain.labels().as_slice() {
+            if !under || b.account != owner.account.get() || b.labels != c.domain.labels().as_slice() {
                 return Err(format!("P1: {what}'s budget is not its principal's, with its labels"));
             }
-            // Carved from its domain's sub-budget, or (a sub-agent) from an agent's budget there.
-            let sub = st.subs.get(&c.domain).map(|x| x.0);
-            let in_agent = c.kind == Kind::Lease && b.parent.is_some_and(|x| lease_budgets.contains(&x));
-            if b.parent != sub && !in_agent {
+            // Carved from its domain's sub-budget (a sponsored session: the sponsor's unlabelled
+            // one).
+            let carved_from = match sponsor {
+                Some(q) => Domain::new(q.account, Labels::empty()),
+                None => c.domain.clone(),
+            };
+            let sub = st.subs.get(&carved_from).map(|x| x.0);
+            if b.parent != sub {
                 return Err(format!("P1: {what} is not carved from its domain's sub-budget"));
             }
-            self.reached.insert(match (c.kind, in_agent, c.labelled()) {
-                (Kind::Lease, true, _) => "P1 a sub-agent",
-                (Kind::Lease, false, _) => "P1 an agent",
-                (_, _, true) => "P1 a labelled session",
+            self.reached.insert(match (c.kind, c.labelled(), sponsor.is_some()) {
+                (Kind::Lease, _, _) => "P1 an agent",
+                (_, _, true) => "P1 a sponsored session",
+                (_, true, _) => "P1 a labelled session",
                 _ => "P1 an unlabelled session",
             });
             if !p.owned.includes(c.domain.labels()) {
                 return Err(format!("P1: {what} carries labels its principal does not own"));
             }
-            if c.kind == Kind::Lease {
+            if c.kind == Kind::Lease || sponsor.is_some() {
                 if b.deadline.is_none_or(|d| d <= k.now) {
                     return Err(format!("P9: {what} has no future deadline"));
-                }
-                let parent = b.parent.and_then(|x| k.budgets.get(&x)).and_then(|x| x.deadline);
-                if in_agent && parent.is_none_or(|pd| b.deadline.is_some_and(|d| d > pd)) {
-                    return Err(format!("P9: {what} outlives its agent"));
                 }
             }
         }

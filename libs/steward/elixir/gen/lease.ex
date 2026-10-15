@@ -13,15 +13,16 @@ defmodule Redoubt.Steward.Gen.Lease do
   # table gives no row is `:no_row`.
   def rows(nil, :start_agent) do
     [
-      {13, [{:not, :caller_unlabelled}], [:refuse], :nothing},
-      {14, [{:not, :lease_bounded}], [:refuse], :nothing},
-      {15, [{:not, :not_locked}], [:refuse], :nothing},
-      {16, [], [:carve_lease, :create_scope, :connect, :launch], {:to, :starting}},
+      {13, [{:not, :caller_session}], [:refuse], :nothing},
+      {14, [{:not, :caller_unlabelled}], [:refuse], :nothing},
+      {15, [{:not, :lease_bounded}], [:refuse], :nothing},
+      {16, [{:not, :not_locked}], [:refuse], :nothing},
+      {17, [], [:carve_lease, :create_scope, :connect, :launch], {:to, :starting}},
     ]
   end
   def rows(nil, :granted) do
     [
-      {17, [], [:carve_lease, :create_scope, :connect, :launch], {:to, :starting}},
+      {18, [], [:carve_lease, :create_scope, :connect, :launch], {:to, :starting}},
     ]
   end
   def rows(nil, :done), do: :no_row
@@ -34,31 +35,31 @@ defmodule Redoubt.Steward.Gen.Lease do
   def rows(:starting, :granted), do: :no_row
   def rows(:starting, :done) do
     [
-      {18, [:granted, {:not, :not_locked}], [:audit_start_failed, :destroy_budget], {:to, :ending}},
-      {19, [{:not, :not_locked}], [:refuse, :destroy_budget], {:to, :ending}},
-      {20, [:granted], [:route, :audit_agent_started], {:to, :running}},
-      {21, [], [:route, :audit_agent_started, :reply_agent], {:to, :running}},
+      {19, [:granted, {:not, :not_locked}], [:audit_start_failed, :destroy_budget], {:to, :ending}},
+      {20, [{:not, :not_locked}], [:refuse, :destroy_budget], {:to, :ending}},
+      {21, [:granted], [:route, :audit_agent_started], {:to, :running}},
+      {22, [], [:route, :audit_agent_started, :reply_agent], {:to, :running}},
     ]
   end
   def rows(:starting, :failed) do
     [
-      {22, [:granted], [:audit_start_failed, :destroy_partial], {:to, :ending}},
-      {23, [], [:refuse, :destroy_partial], {:to, :ending}},
+      {23, [:granted], [:audit_start_failed, :destroy_partial], {:to, :ending}},
+      {24, [], [:refuse, :destroy_partial], {:to, :ending}},
     ]
   end
   def rows(:starting, :end_lease) do
     [
-      {24, [], :unreachable, :stay},
+      {25, [], :unreachable, :stay},
     ]
   end
   def rows(:starting, :exited) do
     [
-      {24, [], :unreachable, :stay},
+      {25, [], :unreachable, :stay},
     ]
   end
   def rows(:starting, :locked_out) do
     [
-      {25, [], [], :stay},
+      {26, [], [], :stay},
     ]
   end
 
@@ -66,27 +67,27 @@ defmodule Redoubt.Steward.Gen.Lease do
   def rows(:ending, :granted), do: :no_row
   def rows(:ending, :done) do
     [
-      {30, [], [:forget], {:to, :ended}},
+      {31, [], [:forget], {:to, :ended}},
     ]
   end
   def rows(:ending, :failed) do
     [
-      {30, [], [:forget], {:to, :ended}},
+      {31, [], [:forget], {:to, :ended}},
     ]
   end
   def rows(:ending, :end_lease) do
     [
-      {31, [], :unreachable, :stay},
+      {32, [], :unreachable, :stay},
     ]
   end
   def rows(:ending, :exited) do
     [
-      {31, [], :unreachable, :stay},
+      {32, [], :unreachable, :stay},
     ]
   end
   def rows(:ending, :locked_out) do
     [
-      {32, [], [], :stay},
+      {33, [], [], :stay},
     ]
   end
 
@@ -94,28 +95,28 @@ defmodule Redoubt.Steward.Gen.Lease do
   def rows(:running, :granted), do: :no_row
   def rows(:running, :done) do
     [
-      {29, [], :unreachable, :stay},
+      {30, [], :unreachable, :stay},
     ]
   end
   def rows(:running, :failed) do
     [
-      {29, [], :unreachable, :stay},
+      {30, [], :unreachable, :stay},
     ]
   end
   def rows(:running, :end_lease) do
     [
-      {26, [{:not, :sponsor_session}], [:refuse], :stay},
-      {27, [], [:unroute, :drop_requests, :audit_lease_ended, :notify_sponsor, :reply_ok, :destroy_budget], {:to, :ending}},
+      {27, [{:not, :sponsor_session}], [:refuse], :stay},
+      {28, [], [:unroute, :drop_requests, :audit_lease_ended, :notify_sponsor, :reply_ok, :destroy_budget], {:to, :ending}},
     ]
   end
   def rows(:running, :exited) do
     [
-      {28, [], [:unroute, :drop_requests, :audit_lease_ended, :notify_sponsor, :destroy_budget], {:to, :ending}},
+      {29, [], [:unroute, :drop_requests, :audit_lease_ended, :notify_sponsor, :destroy_budget], {:to, :ending}},
     ]
   end
   def rows(:running, :locked_out) do
     [
-      {28, [], [:unroute, :drop_requests, :audit_lease_ended, :notify_sponsor, :destroy_budget], {:to, :ending}},
+      {29, [], [:unroute, :drop_requests, :audit_lease_ended, :notify_sponsor, :destroy_budget], {:to, :ending}},
     ]
   end
 

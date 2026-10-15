@@ -5,16 +5,18 @@
 //! under the core's tokens.
 
 use alloc::collections::BTreeMap;
+use alloc::string::String;
 use alloc::vec::Vec;
 
 use redoubt_rt::abi::{BudgetSpec, Error, FOREVER, Labels};
 use redoubt_steward::consts::RANDOM_WORDS;
 use redoubt_steward::effect::{
-    Answer, Batch, Kind, Object, Output, Parent, Produced, ReplyTo, Server, Step, StepFailed, Token,
+    Answer, Batch, Kind, Notice, Notified, Object, Output, Parent, Produced, ReplyTo, Server, Step,
+    StepFailed, Token,
 };
 use redoubt_steward::event::{Event, EventKind};
 use redoubt_steward::manifest::Limits;
-use redoubt_steward::{Effects, decide};
+use redoubt_steward::{Effects, decide, inspect};
 
 use crate::{Kernel, Steward};
 
@@ -58,6 +60,11 @@ impl<B: Copy, H: Copy> Steward<B, H> {
         let mut queue = alloc::collections::VecDeque::new();
         queue.push_back((kind, reply));
         while let Some((kind, reply)) = queue.pop_front() {
+            // The object's process is gone before the core decides its exit: a destroy the core
+            // then asks for may find the budget gone too (a lease the kernel's deadline took).
+            if let EventKind::Exited { object } = &kind {
+                self.pids.retain(|_, o| o != object);
+            }
             let mut random = [0; RANDOM_WORDS];
             for w in &mut random {
                 // A generator that fails gives no words, and the core exits rather than number
@@ -84,6 +91,11 @@ impl<B: Copy, H: Copy> Steward<B, H> {
                         if self.console_session.is_none() {
                             outputs.push(Output::Reply { to: CONSOLE, answer });
                         }
+                    }
+                    // The sponsor's notice goes now, while the lease is still in the store to be
+                    // named; what it says is the lease's name alone.
+                    Output::Notice { to: Notified::Session(badge), notice: Notice::LeaseEnded { lease } } => {
+                        self.notify(kernel, badge, lease);
                     }
                     o => outputs.push(o),
                 }
@@ -116,6 +128,51 @@ impl<B: Copy, H: Copy> Steward<B, H> {
     /// The object whose process `pid` is, if it still runs: an exit notice for any other is late,
     /// for an object already ending, and is dropped.
     pub fn exited(&self, pid: u64) -> Option<Object> { self.pids.get(&pid).cloned() }
+
+    /// The object whose process `pid` was, and the name its notice gave it, if the core let the
+    /// object go before the process's exit notice came (a lease `end_lease` ended, a session its
+    /// deadline took): taken once, for the exit line.
+    pub fn ended(&mut self, pid: u64) -> Option<(Object, String)> { self.ended.remove(&pid) }
+
+    /// `owner`'s processes leave the running ones for the ended, named now, while the core still
+    /// knows the object.
+    fn end_pids(&mut self, owner: &Object) {
+        let name =
+            self.lease_name(owner.id).unwrap_or_else(|| alloc::format!("{:?} {}", owner.kind, owner.id));
+        let gone: Vec<u64> = self.pids.iter().filter(|(_, o)| *o == owner).map(|(p, _)| *p).collect();
+        for pid in gone {
+            self.pids.remove(&pid);
+            self.ended.insert(pid, (owner.clone(), name.clone()));
+        }
+    }
+
+    /// A lease's name as a notice says it, `<principal>/<name>`: `alice/agent-3` for an agent
+    /// alice started, `agent/session-7` for a sponsored principal's session. `None` for an id
+    /// that names nothing now.
+    pub fn lease_name(&self, lease: u64) -> Option<String> {
+        let index = inspect::index(&self.store);
+        let (domain, kind) = index.ids.get(&lease)?;
+        let state = inspect::domain(&self.store, domain)?;
+        let fixed = inspect::fixed(&self.store);
+        let (principal, name) = match kind {
+            Kind::Lease => {
+                state.leases.get(&lease).map(|l| (l.principal, alloc::format!("agent-{}", l.number)))?
+            }
+            _ => state.sessions.get(&lease).map(|s| (s.principal, alloc::format!("session-{}", s.number)))?,
+        };
+        Some(alloc::format!("{}/{name}", fixed.principals.get(principal)?.name))
+    }
+
+    /// Tells the session routed by `badge` that `lease` ended, on the notices endpoint its launch
+    /// kept; a session with none, or one the core no longer routes, is told nothing.
+    fn notify<K: Kernel<Budget = B, Handle = H>>(&mut self, kernel: &mut K, badge: u64, lease: u64) {
+        let Some(route) = inspect::index(&self.store).routes.get(&badge) else { return };
+        let session = Object { domain: route.domain.clone(), kind: route.kind, id: route.id };
+        let (Some(n), Some(name)) = (self.notices.get(&session).copied(), self.lease_name(lease)) else {
+            return;
+        };
+        kernel.notify(n, lease, &name);
+    }
 
     /// Runs `batch`'s steps in order, stopping at the first that fails.
     fn run<K: Kernel<Budget = B, Handle = H>>(
@@ -175,7 +232,7 @@ impl<B: Copy, H: Copy> Steward<B, H> {
                     // The session's requests come back on the steward's own endpoint, routed by
                     // this badge.
                     Server::Steward => Some(kernel.mint(*badge, scope)?),
-                    Server::Shared(slot) => kernel.connect(&owner.domain, *slot, scope)?,
+                    Server::Shared(slot) => kernel.connect(owner, *slot, scope)?,
                 };
                 self.made.insert(token.clone(), Made::Connection(h));
                 Ok(Produced::Connection)
@@ -192,9 +249,14 @@ impl<B: Copy, H: Copy> Steward<B, H> {
                 let session = self.store.domain(&owner.domain).and_then(|d| d.sessions.get(&owner.id));
                 let context =
                     session.filter(|_| owner.kind == Kind::Session).and_then(|s| s.context.as_deref());
-                let pid = kernel.launch(&owner.domain, b, &held, context)?;
+                let (pid, notices) = kernel.launch(owner, b, &held, context)?;
                 self.made.insert(token.clone(), Made::Process(pid));
                 self.pids.insert(pid, owner.clone());
+                if let Some(n) = notices {
+                    if let Some(old) = self.notices.insert(owner.clone(), n) {
+                        kernel.release(old);
+                    }
+                }
                 Ok(Produced::Process(pid))
             }
             Step::LaunchRelay { token, budget } => {
@@ -230,11 +292,19 @@ impl<B: Copy, H: Copy> Steward<B, H> {
                     Err(e) => Err(e),
                 }
             }
-            // The owner's process is ending: its exit notice is late from here on.
+            // The owner's process is ending: its exit notice is late from here on. A lease the
+            // kernel's deadline took is already gone, its handle revoked with it (R10), and its
+            // `Exited` reaches here with no process left: that destroy's `BadHandle` is the end
+            // the core asked for, not a failure. On a budget whose process still runs it is one.
             Step::DestroyBudget { budget } => {
                 let b = self.budget(budget)?;
-                self.pids.retain(|_, o| o != owner);
-                kernel.destroy(b)?;
+                let running = self.pids.values().any(|o| o == owner);
+                self.end_pids(owner);
+                match kernel.destroy(b) {
+                    Ok(()) => {}
+                    Err(Error::BadHandle) if !running => {}
+                    Err(e) => return Err(e),
+                }
                 self.made.remove(budget);
                 Ok(Produced::Done)
             }
@@ -248,7 +318,10 @@ impl<B: Copy, H: Copy> Steward<B, H> {
     /// each connection is given back to its server, which frees what it held for it (the
     /// cleanup, which is never the cutoff).
     fn forget<K: Kernel<Budget = B, Handle = H>>(&mut self, kernel: &mut K, object: &Object) {
-        self.pids.retain(|_, o| o != object);
+        self.end_pids(object);
+        if let Some(n) = self.notices.remove(object) {
+            kernel.release(n);
+        }
         let mine: Vec<Token> = self.made.keys().filter(|t| &t.owner == object).cloned().collect();
         let mut connections = Vec::new();
         for t in mine {

@@ -46,11 +46,12 @@ mod machine {
     use redoubt_rt::server::typed::finish;
     use redoubt_rt::server::{close_delivery, own_args};
     use redoubt_rt::startup::Startup;
-    use redoubt_rt::wire::proto::{consol, consrelay, ipd};
+    use redoubt_rt::wire::proto::{consol, consrelay, ipd, steward};
     use redoubt_steward::domain::Domain;
-    use redoubt_steward::effect::Output;
+    use redoubt_steward::effect::{Object, Output};
     use redoubt_steward::event::EventKind;
-    use redoubt_steward_server::own::{Bound, How, Own, SYSTEM, binding, session_args};
+    use redoubt_steward::inspect;
+    use redoubt_steward_server::own::{Bound, Child, How, Own, SYSTEM, binding, lease_args, session_args};
     use redoubt_steward_server::protocol::{Serving, answer_with, watches as watches_call};
     use redoubt_steward_server::watchers::Watchers;
     use redoubt_steward_server::{Kernel, SLOTS, Steward, start};
@@ -102,6 +103,9 @@ mod machine {
     #[cfg(feature = "label-probe")]
     const PROBE_SETTLE_US: u64 = 3_000_000;
     const SHELL: &str = "Elixir.Redoubt.Shell";
+    /// The module a lease's VM runs: the agent of this package (servers/steward.md, "Leases";
+    /// userland/agents.md, "Leases"), from the system volume as the shell is.
+    const AGENT: &str = "Elixir.Redoubt.Agents.Echo";
     /// A session VM's first-thread stack, in pages: twice beamlet's largest measured peak,
     /// 36,136 bytes at the idle prompt (`beamlet-footprint`; a compile at the prompt peaks lower,
     /// `beamlet-compile-footprint`: servers/init.md, "Stacks"; docs/testbench.md, "The memory
@@ -124,6 +128,13 @@ mod machine {
     const WATCH_STACK_PAGES: usize = 4;
     /// The badge the steward sends a session's exit endpoint to an idle watcher under.
     const WORK: u64 = 1;
+    /// The badge of the steward's send right on a session's notices endpoint, and the name the
+    /// VM finds the receive right under (userland/sessions.md, "What a session is told").
+    const NOTICES: u64 = 1;
+    const NOTICES_HANDLE: &str = "notices";
+    /// How long a `lease_ended` send waits for the session's VM to take it (µs): past it the
+    /// notice is dropped, and the steward is never held by a session that does not read.
+    const NOTICE_US: u64 = 100_000;
     /// The steward's lend, in pages: the most a call may lend, so a 64-page batch of a session's
     /// image is read from `bootfsd` in four reads, not sixteen or more (a 9P read carries at most
     /// the lend's `iounit`, and a call costs about the same whatever it carries).
@@ -154,16 +165,19 @@ mod machine {
                 Err(_) => redoubt_rt::handle::thread_exit(),
             };
             let exit = Endpoint::from_handle(h(index));
-            loop {
+            // The notice's cause and code go with the report: an agent's VM has no console of
+            // its own to say how it ended.
+            let (cause, code) = loop {
                 match exit.receive(FOREVER, 0) {
-                    Ok(Event::Exit(_)) | Err(_) => break,
+                    Ok(Event::Exit(n)) => break (n.cause as u64, u64::from(n.code)),
+                    Err(_) => break (0, 0),
                     Ok(Event::Call(request)) => drop(request),
                     Ok(Event::Send(delivery)) => close_delivery(&delivery),
                     Ok(_) => {}
                 }
-            }
+            };
             let report = Endpoint::from_handle(h(REPORT.load(Ordering::Acquire)));
-            let _ = report.send(&[u64::from(index), 0, 0, 0], &[], None, FOREVER);
+            let _ = report.send(&[u64::from(index), cause, code, 0], &[], None, FOREVER);
         }
     }
 
@@ -212,8 +226,11 @@ mod machine {
         /// Each principal's account and name.
         accounts: Vec<(u64, String)>,
         own_lines: Own,
-        /// A session's pages, the manifest's `sizes`: its VM's and its relay's.
+        /// A session's pages, the manifest's `sizes`: its VM's and its relay's; and a lease's,
+        /// with the bytes of its sponsor's home its root is carved with.
         session_pages: u64,
+        agent_pages: u64,
+        agent_quota: u64,
         /// The program's length on `/boot`, and the relay's.
         program_len: usize,
         relay_len: usize,
@@ -315,20 +332,25 @@ mod machine {
             Ok(Nine::new(endpoint))
         }
 
-        /// A fresh connection at the root of the one kept for `key`, sharing its quota, minted in
-        /// `scope`, held until released.
+        /// A fresh connection at `below` the root of the one kept for `key`, minted in `scope`,
+        /// held until released: at the kept one's own root with `below_quota` 0, sharing its
+        /// quota; below it with `below_quota` bytes carved from the kept one's, given back when it
+        /// is released (walfsd.md, "Quotas").
         fn fresh_carved(
             &mut self,
             key: &str,
             name: &str,
             root: &str,
             quota: u64,
+            below: &str,
+            below_quota: u64,
             scope: Handle,
         ) -> Result<Option<u64>, Error> {
             let kept = self.carve(key, name, root, quota)?;
             let scope = Budget::from_handle(scope);
-            let (endpoint, id) =
-                kept.new_connection(&mut self.lend, "", 0, Some(&scope)).map_err(|_| Error::Refused)?;
+            let (endpoint, id) = kept
+                .new_connection(&mut self.lend, below, below_quota, Some(&scope))
+                .map_err(|_| Error::Refused)?;
             Ok(Some(self.hold(endpoint.handle(), Some((Via::Carved(key.into()), id)), false)))
         }
 
@@ -448,15 +470,18 @@ mod machine {
 
         /// Every connection a server mints for the child is minted in `scope` (R41): a 9P
         /// server's by `new_connection`'s scope, `ipd`'s by its typed `grant`'s.
-        fn connect(&mut self, domain: &Domain, slot: u16, scope: Handle) -> Result<Option<u64>, Error> {
-            let principal = self.principal(domain).ok_or(Error::BadHandle)?;
-            let Some(bound) = binding(&self.own_lines, &principal, domain.labels().as_slice(), slot) else {
+        fn connect(&mut self, owner: &Object, slot: u16, scope: Handle) -> Result<Option<u64>, Error> {
+            let principal = self.principal(&owner.domain).ok_or(Error::BadHandle)?;
+            let labels = owner.domain.labels().as_slice();
+            let child = Child::of(owner.kind, labels);
+            let Some(bound) = binding(&self.own_lines, &principal, labels, child, slot, self.agent_quota)
+            else {
                 return Ok(None);
             };
             match bound.how {
                 How::Fresh { server, root } => self.fresh(&server, &root, scope),
-                How::Carved { key, server, root, quota } => {
-                    self.fresh_carved(&key, &server, &root, quota, scope)
+                How::Carved { key, server, root, quota, below, below_quota } => {
+                    self.fresh_carved(&key, &server, &root, quota, &below, below_quota, scope)
                 }
                 How::Grant { scope: net } => {
                     let conn = self.server("ipd")?;
@@ -545,11 +570,11 @@ mod machine {
         /// index here ([`Held`]).
         fn launch(
             &mut self,
-            domain: &Domain,
+            owner: &Object,
             budget: Handle,
             connections: &[Option<u64>],
             context: Option<&str>,
-        ) -> Result<u64, Error> {
+        ) -> Result<(u64, Option<u64>), Error> {
             // The steward's badge and the shared slots, resolved on the stack: the launch is
             // the steward's heap peak, and this adds nothing to it.
             let keys = connections;
@@ -557,16 +582,45 @@ mod machine {
             for (slot, key) in connections.iter_mut().zip(keys) {
                 *slot = key.and_then(|k| self.handle_of(k));
             }
-            let principal = self.principal(domain).ok_or(Error::BadHandle)?;
-            let labels = domain.labels().as_slice();
-            let bound: Vec<Option<Bound>> =
-                (0..SLOTS).map(|s| binding(&self.own_lines, &principal, labels, s)).collect();
+            let principal = self.principal(&owner.domain).ok_or(Error::BadHandle)?;
+            let labels = owner.domain.labels().as_slice();
+            let child = Child::of(owner.kind, labels);
+            let bound: Vec<Option<Bound>> = (0..SLOTS)
+                .map(|s| binding(&self.own_lines, &principal, labels, child, s, self.agent_quota))
+                .collect();
             let exit = Endpoint::create()?;
             let exit_handle = exit.handle();
-            // The VM's share: the session's pages less its relay's, told to it as its budget's
-            // pages in its startup block, which it sizes its limits by.
-            let vm_pages = self.session_pages.saturating_sub(RELAY_PAGES);
-            let told = session_args(&self.own_lines, &principal, labels, context);
+            // A session's notices endpoint (servers/steward.md, "Leases"): the VM is given the
+            // receive right as the named handle `notices`, and the steward keeps the one send
+            // right, closed with the session. An agent's VM is told of no lease's end.
+            let notices = match child {
+                Child::Session { .. } => {
+                    let receive = Endpoint::create().inspect_err(|_| {
+                        let _ = close(exit_handle);
+                    })?;
+                    let send = receive.mint(NonZeroU64::new(NOTICES).expect("NOTICES is not 0"), None);
+                    match send {
+                        Ok(send) => Some((receive, send)),
+                        Err(e) => {
+                            let _ = close(receive.handle());
+                            let _ = close(exit_handle);
+                            return Err(e);
+                        }
+                    }
+                }
+                Child::Lease => None,
+            };
+            // The VM's share, told to it as its budget's pages in its startup block, which it
+            // sizes its limits by: a session's pages less its relay's; a lease's whole, it has
+            // no relay. A lease's VM runs the agent's module, told the sponsor it acts for.
+            let (vm_pages, told, module) = match child {
+                Child::Lease => (self.agent_pages, lease_args(&principal), AGENT),
+                Child::Session { .. } => (
+                    self.session_pages.saturating_sub(RELAY_PAGES),
+                    session_args(&self.own_lines, &principal, labels, context),
+                    SHELL,
+                ),
+            };
             let endpoint = format!("endpoint={SYSTEM}");
             let len = self.program_len;
             let schedulers = format!("schedulers={SESSION_SCHEDULERS}");
@@ -585,6 +639,9 @@ mod machine {
                     launch.handle("steward", steward);
                 }
                 launch.handle("budget", budget);
+                if let Some((receive, _)) = &notices {
+                    launch.handle(NOTICES_HANDLE, receive.handle());
+                }
                 for (i, b) in bound.iter().enumerate() {
                     let (Some(b), Some(conn)) = (b, slot(i)) else { continue };
                     if let Some(name) = b.name {
@@ -598,11 +655,20 @@ mod machine {
                     .stack_pages(SESSION_STACK_PAGES)
                     .heap_pages(u32::try_from(heap).unwrap_or(u32::MAX))
                     .budget_pages(vm_pages);
-                told.iter().fold(launch.arg(&endpoint).arg(&schedulers), |l, arg| l.arg(arg)).arg(SHELL);
+                told.iter().fold(launch.arg(&endpoint).arg(&schedulers), |l, arg| l.arg(arg)).arg(module);
                 launch.start()
             };
+            // The VM holds its copy of the receive right now, or the launch failed: the steward
+            // keeps only the send right, and only for a VM that started.
+            let send = notices.map(|(receive, send)| {
+                let _ = close(receive.handle());
+                send.handle()
+            });
             let job = started.map_err(|failed| {
                 let _ = close(exit_handle);
+                if let Some(s) = send {
+                    let _ = close(s);
+                }
                 match failed.error {
                     redoubt_client::Error::Sys(e) => e,
                     _ => Error::Refused,
@@ -621,9 +687,12 @@ mod machine {
             }
             if let Err(e) = self.watch_exit(exit_handle) {
                 let _ = close(exit_handle);
+                if let Some(s) = send {
+                    let _ = close(s);
+                }
                 return Err(e);
             }
-            Ok(u64::from(exit_handle.index()))
+            Ok((u64::from(exit_handle.index()), send.map(|s| self.keep(s))))
         }
 
         /// The relay is launched from `/boot` in the context's budget with a hello badge of its
@@ -724,6 +793,16 @@ mod machine {
                 redoubt_client::Error::Sys(Error::Timeout) => Error::Timeout,
                 _ => Error::Refused,
             })
+        }
+
+        /// One page, one send, within [`NOTICE_US`]: a VM that does not take it in time misses
+        /// the notice, and the page comes back and is unmapped with the error.
+        fn notify(&mut self, notices: u64, lease: u64, name: &str) {
+            let Some(notices) = self.handle_of(notices) else { return };
+            let Ok(mut page) = Buffer::new(1) else { return };
+            let m = steward::Message::LeaseEnded(steward::LeaseEnded { lease, name });
+            let Ok(words) = m.encode(&mut page) else { return };
+            let _ = Endpoint::from_handle(notices).send(&words, &[], Some(page), NOTICE_US);
         }
 
         fn random(&mut self) -> Result<u64, Error> { redoubt_rt::handle::random_u64() }
@@ -852,6 +931,8 @@ mod machine {
             accounts: Vec::new(),
             own_lines: Own::default(),
             session_pages: 0,
+            agent_pages: 0,
+            agent_quota: 0,
             program_len: 0,
             relay_len: 0,
             hello: Endpoint::create().ok(),
@@ -887,9 +968,17 @@ mod machine {
                 &format!("steward: carved users/{} account {}: {}\n", c.name, c.account, subs.join(" ")),
             );
         }
-        machine.accounts = steward.carved.iter().map(|c| (c.account, c.name.clone())).collect();
+        // Every principal's account and name, a sponsored principal's too: its sessions are
+        // carved under its sponsor's, but their namespace and arguments are its own.
+        machine.accounts = inspect::fixed(&steward.store)
+            .principals
+            .iter()
+            .map(|p| (p.account.get(), p.name.clone()))
+            .collect();
         machine.own_lines = steward.own.clone();
         machine.session_pages = steward.sizes.session.pages;
+        machine.agent_pages = steward.sizes.agent.pages;
+        machine.agent_quota = steward.sizes.agent_quota;
         if let Some((_, cons)) = startup.namespace().find(|(path, _)| *path == "/dev/cons") {
             machine.consoled = Connection::attach(Endpoint::from_handle(cons), &mut machine.lend).ok();
         }
@@ -970,7 +1059,39 @@ mod machine {
                     let key = delivery.words[0] as u64;
                     let _ = close(h(key as u32));
                     machine.watchers.reported();
-                    let Some(object) = steward.exited(key) else { continue };
+                    // How the process ended, said once, under the name the notice gives it
+                    // (`alice/agent-1`), so the two lines correlate: a session's VM has its own
+                    // console and a lease's has none (servers/steward.md, "Leases"). A process
+                    // whose object the core let go of first (a lease `end_lease` ended, its VM
+                    // killed with its budget) gets its line and no event.
+                    let cause = match delivery.words[1] {
+                        1 => "exited",
+                        2 => "faulted",
+                        3 => "was killed",
+                        _ => "ended",
+                    };
+                    let (object, name, running) = match steward.exited(key) {
+                        Some(object) => {
+                            let name = steward
+                                .lease_name(object.id)
+                                .unwrap_or_else(|| format!("{:?} {}", object.kind, object.id));
+                            (object, name, true)
+                        }
+                        None => match steward.ended(key) {
+                            Some((object, name)) => (object, name, false),
+                            None => continue,
+                        },
+                    };
+                    let line = format!(
+                        "steward: lease {name} of {}/{} {cause} {}\n",
+                        object.domain.account(),
+                        labels(object.domain.labels().as_slice()),
+                        delivery.words[2]
+                    );
+                    say(startup, &line);
+                    if !running {
+                        continue;
+                    }
                     let outputs = steward.event(&mut machine, EventKind::Exited { object }, 0).ok();
                     if !after(startup, &mut steward, &mut usage, outputs) {
                         return core_exited(startup);

@@ -159,6 +159,10 @@ defmodule Redoubt.Steward.Guards do
   # A labelled session or agent starts nothing.
   def caller_unlabelled(cx), do: ok_if(labels(cx) == [], :Labelled)
 
+  # `start_agent` is a session's call: a lease's badge, which would nest a lease, is told nothing;
+  # nested leases are a later package (servers/steward.md, "Leases").
+  def caller_session(cx), do: ok_if(match?(%{kind: :session}, cx.caller), :Unknown)
+
   # R40: nothing new starts in a locked-out domain until its window passes; for an approval,
   # the domain the grant would start a lease in. A request that starts no lease is not held.
   def not_locked(cx) do
@@ -290,6 +294,32 @@ defmodule Redoubt.Steward.Guards do
       by ->
         {account, by_labels} = by.domain
         ok_if(by.kind == :session and account == elem(cx.domain, 0) and by_labels == [], :NotSponsor)
+    end
+  end
+
+  # R39: a sponsored principal's session is ended only from an unlabelled session of its sponsor.
+  def sponsor_of(cx) do
+    with by when by != nil <- cx.caller,
+         %{principal: p} <- session(cx),
+         q when q != nil <- Enum.at(cx.store.fixed.principals, p).sponsor do
+      {account, by_labels} = by.domain
+      sponsor = Enum.at(cx.store.fixed.principals, q).account
+      ok_if(by.kind == :session and account == sponsor and by_labels == [], :NotSponsor)
+    else
+      nil -> {:error, :NotSponsor}
+      _ -> {:error, :Unknown}
+    end
+  end
+
+  # A sponsored principal logs in to its unlabelled set alone.
+  def sponsor_set(cx) do
+    case session(cx) do
+      %{principal: p} ->
+        sponsored = Enum.at(cx.store.fixed.principals, p).sponsor != nil
+        ok_if(not sponsored or elem(cx.domain, 1) == [], :Labelled)
+
+      _ ->
+        {:error, :Unknown}
     end
   end
 

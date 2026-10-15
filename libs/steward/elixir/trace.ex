@@ -187,7 +187,8 @@ defmodule Redoubt.Steward.Trace do
       owned: list(f["owned"]),
       label_sets: lists(f["sets"]),
       top: triple(f["top"]),
-      contexts: %{max: num(f["contexts"]), idle_secs: num(f["idle"])}
+      contexts: %{max: num(f["contexts"]), idle_secs: num(f["idle"])},
+      sponsor: f["sponsor"] && unquote_(f["sponsor"])
     }
   end
 
@@ -217,7 +218,9 @@ defmodule Redoubt.Steward.Trace do
       agent: triple(f["agent"]),
       sub_agent: triple(f["sub_agent"]),
       crossing: triple(f["crossing"]),
-      budget_cost: num(f["cost"])
+      budget_cost: num(f["cost"]),
+      # The one optional field of the line: a lease root's quota, 0 when absent.
+      agent_quota: num(Map.get(f, "agent_quota", "0"))
     }
   end
 
@@ -293,14 +296,16 @@ defmodule Redoubt.Steward.Trace do
         "principal #{i} #{qs(p.name)} account=#{p.account} login=#{list_(p.login_keys)} " <>
           "approval=#{list_(p.approval_keys)} owned=#{list_(p.owned)} " <>
           "domains=[#{Enum.map_join(p.domains, ",", &dom/1)}] top=#{lim(p.top)} " <>
-          "contexts=#{p.contexts.max} idle=#{p.contexts.idle_secs}\n"
+          "contexts=#{p.contexts.max} idle=#{p.contexts.idle_secs}" <>
+          if(p.sponsor == nil, do: "\n", else: " sponsor=#{p.sponsor}\n")
       end)
 
     z = f.sizes
 
     fixed =
       "fixed keyd=#{list_(f.keyd)} servers=#{f.servers} sizes session=#{lim(z.session)} agent=#{lim(z.agent)} " <>
-        "sub_agent=#{lim(z.sub_agent)} crossing=#{lim(z.crossing)} cost=#{z.budget_cost}\n"
+        "sub_agent=#{lim(z.sub_agent)} crossing=#{lim(z.crossing)} cost=#{z.budget_cost}" <>
+        if(z.agent_quota == 0, do: "\n", else: " agent_quota=#{z.agent_quota}\n")
 
     c =
       Enum.map(carves, fn {account, top, subs} ->

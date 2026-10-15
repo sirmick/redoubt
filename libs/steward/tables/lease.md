@@ -10,6 +10,7 @@ through the lease-supervision edge. Included by
 <!-- steward: lease -->
 | From | Event | Guard | To | Effects |
 | --- | --- | --- | --- | --- |
+| - | `StartAgent` | `!caller_session` | - | `refuse` |
 | - | `StartAgent` | `!caller_unlabelled` | - | `refuse` |
 | - | `StartAgent` | `!lease_bounded` | - | `refuse` |
 | - | `StartAgent` | `!not_locked` | - | `refuse` |

@@ -188,6 +188,11 @@ anything else is a usage error and the prompt stays. In the mode:
 - **The width is the terminal's.** `machine/1` does not resize anything: a value is laid out at
   the terminal's width as a person would see it, and a program that wants long lines sets its
   pty's size.
+- **A lease's end is a line of its own.** `[lease NAME ended]`, the steward's notice that a
+  lease of the session's principal ended ([the steward](../servers/steward.md#leases)), is
+  printed by the shell's listener when the send arrives, through the same guard as every line
+  and outside any block: in the mode as at the prompt it lands wherever the stream is, between a
+  block's output and its mark if that is when it came, and never begins with the token.
 
 A `defmodule` typed at the prompt compiles and runs on the machine (`shell-compile-module`, a
 line at a time; [beamlet](beamlet.md#beamlet-on-redoubt)); the mode's cases bind a function, none

@@ -356,9 +356,6 @@ pub enum Mutation {
     PolicyLoginWithKeydKey,
     /// An approval channel opens with a login key (`approval_key`).
     PolicyApproveWithLoginKey,
-    /// A sub-agent is carved from its domain's sub-budget, with a lease outliving its agent's
-    /// (`carve_lease`).
-    PolicySubAgentOutlivesAgent,
     /// No `MAX_LEASE` (`lease_bounded`).
     PolicyUnboundedLease,
     /// A session's or agent's end leaves its requests pending, counted against the cap
@@ -385,6 +382,10 @@ pub enum Mutation {
     PolicyDeclassifyUnfit,
     /// A lease is ended from a labelled session of its sponsor (`sponsor_session`).
     PolicyEndLeaseFromVault,
+    /// A sponsored principal's session is ended by any session (`sponsor_of`).
+    PolicySponsoredEndedByAnyone,
+    /// A sponsored principal logs in to a labelled set (`sponsor_set`).
+    PolicySponsoredVaultLogin,
     /// A session may write an item whose labels contain its own (write up): the volume's check, in
     /// the embedder.
     PolicyWriteUp,
@@ -435,7 +436,7 @@ pub enum Mutation {
 }
 
 impl Mutation {
-    pub const ALL: [Mutation; 175] = {
+    pub const ALL: [Mutation; 176] = {
         use Mutation::*;
         [
             R1SkipLabelCheck,
@@ -583,7 +584,6 @@ impl Mutation {
             PolicySequentialIds,
             PolicyLoginWithKeydKey,
             PolicyApproveWithLoginKey,
-            PolicySubAgentOutlivesAgent,
             PolicyUnboundedLease,
             PolicyDeadSessionRequestsKept,
             PolicyRenderNotWhitelisted,
@@ -595,6 +595,8 @@ impl Mutation {
             PolicyDeclassifyFromUnlabelled,
             PolicyDeclassifyUnfit,
             PolicyEndLeaseFromVault,
+            PolicySponsoredEndedByAnyone,
+            PolicySponsoredVaultLogin,
             PolicyWriteUp,
             PolicyServerHoldsSystemBudget,
             PolicyAuditUnfiltered,
@@ -760,9 +762,10 @@ impl Mutation {
             | PolicyNoPendingCap
             | PolicyDeadSessionRequestsKept => "R38",
             PolicyUnboundedLease
-            | PolicySubAgentOutlivesAgent
             | PolicyEndLeaseAdmitted
             | PolicyEndLeaseFromVault
+            | PolicySponsoredEndedByAnyone
+            | PolicySponsoredVaultLogin
             | PolicyNoFairShare => "R39",
             PolicyBlameNoWindow | PolicyNoLockout => "R40",
             PolicyContextTwice => "R79",
@@ -793,7 +796,6 @@ pub fn policy(m: Option<Mutation>) -> Policy {
         Some(Mutation::PolicyNoFairShare) => p.fair_share = pass,
         Some(Mutation::PolicyDeadSessionRequestsKept) => p.drop_requests = nothing,
         Some(Mutation::PolicyUnboundedLease) => p.lease_bounded = lease_bounded,
-        Some(Mutation::PolicySubAgentOutlivesAgent) => p.carve_lease = carve_lease,
         Some(Mutation::PolicyShowLabelledToAll) => p.reaches = |_, _| true,
         Some(Mutation::PolicyRenderNotWhitelisted) => p.render = render_unwhitelisted,
         Some(Mutation::PolicyLabelledFreeTextShown) => p.render = render_labelled_text,
@@ -805,6 +807,8 @@ pub fn policy(m: Option<Mutation>) -> Policy {
         Some(Mutation::PolicyDeclassifyWithoutReader) => p.carve_crossing = nothing,
         Some(Mutation::PolicyDeclassifyLive) => p.copy_out = copy_out,
         Some(Mutation::PolicyEndLeaseFromVault) => p.sponsor_session = sponsor_session,
+        Some(Mutation::PolicySponsoredEndedByAnyone) => p.sponsor_of = pass,
+        Some(Mutation::PolicySponsoredVaultLogin) => p.sponsor_set = pass,
         Some(Mutation::PolicyAuditUnfiltered) => p.audit_visible = |_, _| true,
         Some(Mutation::PolicyContextTwice) => p.context_free = pass,
         Some(Mutation::PolicyTakeoverBeforeAuth) => p.login_key = login_key_or_live,
@@ -833,8 +837,8 @@ mod broken {
     use redoubt_steward::consts::BLAME_COUNT;
     use redoubt_steward::cx::Cx;
     use redoubt_steward::domain::Labels;
-    use redoubt_steward::effect::{Bytes, Kind, Notice, Notified, Output, Parent, Refusal, Step};
-    use redoubt_steward::effects::{carve_lease_in, show};
+    use redoubt_steward::effect::{Bytes, Kind, Notice, Notified, Output, Refusal, Step};
+    use redoubt_steward::effects::show;
     use redoubt_steward::guards::{lease, request, session};
     use redoubt_steward::render::{Rules, screen};
 
@@ -909,13 +913,6 @@ mod broken {
 
     /// Every lease from its domain's sub-budget, for as long as it asks: a sub-agent outlives its
     /// agent.
-    pub fn carve_lease(cx: &mut Cx<'_>) {
-        let Some(asked) = lease(cx).map(|l| l.lease) else { return };
-        let (parent, limits) = (Parent::Sub(cx.domain().clone()), cx.fixed().sizes.agent);
-        let deadline = cx.now().saturating_add(asked);
-        carve_lease_in(cx, parent, limits, deadline);
-    }
-
     /// Printable means not a control character: bidi and format characters pass.
     fn unwhitelisted(s: &str, cap: usize) -> String {
         let mut out = String::new();

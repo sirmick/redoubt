@@ -1,5 +1,6 @@
-# Leases: StartAgent refused for each reason, an agent and its sub-agents, a failed start,
-# ending a lease from each kind of caller, an exit, and an end the guarantee excludes.
+# Leases: StartAgent refused for each reason (a lease's own badge among them), three agents, a
+# failed start, ending a lease from each kind of caller, an exit, and an end the guarantee
+# excludes.
 principal "alice" account=1 login=[11] approval=[21] owned=[7] sets=[[],[7]] top=1000,30,300 contexts=2 idle=300
 principal "bob" account=2 login=[12] approval=[22] owned=[] sets=[[]] top=1000,30,300 contexts=2 idle=300
 servers 1
@@ -18,12 +19,15 @@ event now=5 random=[301,302,303] reply=6 StartAgent badge=999 lease=1000
 # An agent for a minute (badge 302).
 event now=6 random=[301,302,303] reply=7 StartAgent badge=102 lease=60000000
 event now=7 Done object=lease@1/#301 ok=[budget(903),scope,connection,connection,process(73)]
-# Its sub-agent asks for a day and ends no later than its agent; its start fails.
+# The agent's own badge starts nothing: a lease is not a session, and a lease nested in a
+# lease is a later package.
 event now=8 random=[401,402,403] reply=8 StartAgent badge=302 lease=86400000000
+# A second agent asks for a day; its start fails.
+event now=8 random=[401,402,403] reply=20 StartAgent badge=102 lease=86400000000
 event now=9 Done object=lease@1/#401 failed=2,4
 event now=10 Done object=lease@1/#401 ok=[done]
-# A second sub-agent starts.
-event now=11 random=[501,502,503] reply=9 StartAgent badge=302 lease=1000000
+# A third agent starts.
+event now=11 random=[501,502,503] reply=9 StartAgent badge=102 lease=1000000
 event now=12 Done object=lease@1/#501 ok=[budget(904),scope,connection,connection,process(74)]
 # Not the sponsor's unlabelled session: the vault session, and the agent itself.
 event now=13 reply=10 EndLease badge=202 lease=301
@@ -37,7 +41,7 @@ event now=15 reply=15 EndLease badge=102 lease=101
 # The sponsor ends the agent: the sponsor's unlabelled sessions are told.
 event now=16 reply=16 EndLease badge=102 lease=301
 event now=17 Done object=lease@1/#301 ok=[done]
-# The sub-agent's process exits.
+# The third agent's process exits.
 event now=18 Exited object=lease@1/#501
 event now=19 Done object=lease@1/#501 failed=0,2
 # A lease still starting is ended: the guarantee excludes it, and the steward exits.

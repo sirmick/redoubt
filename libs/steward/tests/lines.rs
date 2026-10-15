@@ -24,6 +24,7 @@ fn the_lines_read_as_the_manifest_and_write_back_the_same() {
             label_sets: vec![vec![], vec![7]],
             top: l(1000, 30, 300),
             contexts: Contexts { max: 3, idle_secs: 3600 },
+            sponsor: None,
         }],
         keyd_keys: vec![31],
         servers: 4,
@@ -33,10 +34,21 @@ fn the_lines_read_as_the_manifest_and_write_back_the_same() {
             sub_agent: l(5, 1, 2),
             crossing: l(2, 1, 1),
             budget_cost: 1,
+            agent_quota: 0,
         },
     };
     assert_eq!(m, want);
     assert_eq!(lines(&m), [ALICE, "keyd [31]", "servers 4", SIZES]);
+    // The one optional field of the sizes line: a lease root's quota, written only when there is
+    // one, so every line without it reads and writes as before.
+    let quota = format!("{SIZES} agent_quota=1048576");
+    let with = parse(&[ALICE, "keyd [31]", "servers 4", &quota]).unwrap();
+    assert_eq!(with.sizes, Sizes { agent_quota: 1 << 20, ..want.sizes });
+    assert_eq!(lines(&with)[3], quota);
+    assert_eq!(
+        parse(&[ALICE, &format!("{SIZES} agent_quota=1 agent_quota=2")]).unwrap_err(),
+        "line 2: unknown field `agent_quota`"
+    );
 }
 
 #[test]

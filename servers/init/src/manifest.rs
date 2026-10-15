@@ -14,8 +14,8 @@
 //! | `volumes[]` | `name`, `partition` (number), then optional `labels` (label names), `disk` (the `servers` entry of its `blkd`), `verity` (`server`, the `servers` entry of its `verityd`; pinned, `root` (64 lowercase hex digits) and `blocks` (string), or signed, `key` (64 lowercase hex digits or `bundle`) and `floor` (string)), `bytes` (string) |
 //! | `servers[]` | `name`, `program` (a bundle entry), `budget`, then optional `stack_pages` (string), `heap_pages` (string), `labels`, `devices[]` (`device`, `as`), `volume`, `receives` (endpoint names), `handed[]` (`endpoint`, `badge` (string)), `args` |
 //! | `public` | bundle entry names |
-//! | `principals[]` | `name`, `account` (string), `budget`, then optional `ssh_keys`, `approval_keys`, `labels` (owned), `label_sets[]` (`labels`), `home` (`VOLUME:/PATH`), `home_quota` (string), `net[]` (`prefix`, `ports`) |
-//! | `steward` | `server` (the `servers` entry of the steward), `sizes` (`session`, `agent`, `sub_agent`, `crossing`: each a `budget`; `cost` (string)), optional |
+//! | `principals[]` | `name`, `account` (string), `budget` (required unless `sponsor` is given, and refused with it), then optional `ssh_keys`, `approval_keys`, `labels` (owned), `label_sets[]` (`labels`), `home` (`VOLUME:/PATH`), `home_quota` (string), `net[]` (`prefix`, `ports`), `sponsor` (another principal's name) |
+//! | `steward` | `server` (the `servers` entry of the steward), `sizes` (`session`, `agent`, `sub_agent`, `crossing`: each a `budget`, `agent` also with an optional `quota` (string: bytes of the sponsor's home for a lease's root); `cost` (string)), optional |
 //! | `console` | a principal's name, optional |
 //!
 //! A `budget` is `{ "pages": string, "processes": number, "weight": number }`. Every list is
@@ -54,6 +54,9 @@ pub struct Steward {
 pub struct Sizes {
     pub session: Budget,
     pub agent: Budget,
+    /// The bytes of its sponsor's home a lease's root is carved with (`agent.quota`; 0 when the
+    /// manifest gives none).
+    pub agent_quota: u64,
     pub sub_agent: Budget,
     pub crossing: Budget,
     /// The pages a budget object itself costs.
@@ -165,7 +168,9 @@ pub struct Net {
 pub struct Principal {
     pub name: String,
     pub account: u64,
-    pub budget: Budget,
+    /// Its top budget; none for a sponsored principal, whose sessions are leases carved from
+    /// its sponsor's (servers/steward.md, "Leases").
+    pub budget: Option<Budget>,
     pub ssh_keys: Vec<String>,
     pub approval_keys: Vec<String>,
     pub labels: Vec<String>,
@@ -178,6 +183,9 @@ pub struct Principal {
     /// Its contexts' cap per label set and their idle bound; each absent is the default
     /// (servers/steward.md, "Contexts").
     pub contexts: Contexts,
+    /// The principal that answers for it, for an agent's: its sessions are leases under the
+    /// sponsor's budget (servers/steward.md, "Leases").
+    pub sponsor: Option<String>,
 }
 
 /// A principal's `contexts` in the manifest: `max` live sessions per label set, and the seconds
@@ -327,13 +335,28 @@ fn steward(v: &Value) -> Result<Steward, SchemaError> {
 
 fn sizes(v: &Value) -> Result<Sizes, SchemaError> {
     v.object(|m| {
+        let (agent, agent_quota) = m.required("agent", agent_size)?;
         Ok(Sizes {
             session: m.required("session", budget)?,
-            agent: m.required("agent", budget)?,
+            agent,
+            agent_quota,
             sub_agent: m.required("sub_agent", budget)?,
             crossing: m.required("crossing", budget)?,
             cost: m.required("cost", Value::u64_string)?,
         })
+    })
+}
+
+/// The agent size: a budget and, optionally, `quota`, the bytes of its sponsor's home a lease's
+/// root is carved with.
+fn agent_size(v: &Value) -> Result<(Budget, u64), SchemaError> {
+    v.object(|m| {
+        let budget = Budget {
+            pages: m.required("pages", Value::u64_string)?,
+            processes: m.required("processes", Value::int)?,
+            weight: m.required("weight", Value::int)?,
+        };
+        Ok((budget, m.optional("quota", Value::u64_string)?.unwrap_or(0)))
     })
 }
 
@@ -350,7 +373,7 @@ fn principal(v: &Value) -> Result<Principal, SchemaError> {
         Ok(Principal {
             name: m.required("name", string)?,
             account: m.required("account", Value::u64_string)?,
-            budget: m.required("budget", budget)?,
+            budget: m.optional("budget", budget)?,
             ssh_keys: list(m, "ssh_keys", string)?,
             approval_keys: list(m, "approval_keys", string)?,
             labels: list(m, "labels", string)?,
@@ -359,6 +382,7 @@ fn principal(v: &Value) -> Result<Principal, SchemaError> {
             home_quota: m.optional("home_quota", Value::u64_string)?,
             net: list(m, "net", net)?,
             contexts: m.optional("contexts", contexts)?.unwrap_or_default(),
+            sponsor: m.optional("sponsor", string)?,
         })
     })
 }

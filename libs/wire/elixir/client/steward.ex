@@ -92,4 +92,9 @@ defmodule Redoubt.Wire.Client.Steward do
   def end_context(conn, v_name, timeout \\ C.timeout()) do
     C.call(conn, P, {:end_context, %{name: v_name}}, [], timeout)
   end
+
+  @doc "Calls `lease_ended`, waiting at most `timeout` ms."
+  def lease_ended(conn, v_lease, v_name, timeout \\ C.timeout()) do
+    C.call(conn, P, {:lease_ended, %{lease: v_lease, name: v_name}}, [], timeout)
+  end
 end

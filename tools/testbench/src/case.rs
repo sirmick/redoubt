@@ -1618,10 +1618,22 @@ mod tests {
             let cost = number(&sizes["cost"]);
             let console = u64::from(json.get("console").is_some());
             for p in principals {
+                // A sponsored principal has no budget of its own: as `init`'s `holds` derives
+                // it, its cap comes from its sponsor's budget and label sets (its sessions are
+                // leases of its sponsor's, carved from the sponsor's unlabelled share;
+                // userland/agents.md, "Leases").
+                let owner = match p.get("sponsor").and_then(|s| s.as_str()) {
+                    Some(sponsor) => principals
+                        .iter()
+                        .find(|q| q["name"] == sponsor)
+                        .unwrap_or_else(|| panic!("{sponsor}")),
+                    None => p,
+                };
+                let budget = &owner["budget"];
                 // servers/init/src/check.rs `domains` and `holds`: the unlabelled set and each
                 // distinct labelled one; the share is an equal part less a budget's own cost.
                 let mut sets: Vec<Vec<&str>> = vec![Vec::new()];
-                for set in p["label_sets"].as_array().into_iter().flatten() {
+                for set in owner["label_sets"].as_array().into_iter().flatten() {
                     let mut labels: Vec<&str> =
                         set["labels"].as_array().unwrap().iter().filter_map(|l| l.as_str()).collect();
                     labels.sort_unstable();
@@ -1630,8 +1642,8 @@ mod tests {
                     }
                 }
                 let n = sets.len() as u64;
-                let pages = (number(&p["budget"]["pages"]) / n).saturating_sub(cost) / session.0.max(1);
-                let processes = (number(&p["budget"]["processes"]) / n) / session.1.max(1);
+                let pages = (number(&budget["pages"]) / n).saturating_sub(cost) / session.0.max(1);
+                let processes = (number(&budget["processes"]) / n) / session.1.max(1);
                 let cap = p.pointer("/contexts/max").map_or(pages.min(processes).min(16), number);
                 let sum = console + cap + LEASES + 1;
                 if sum > largest.0 {

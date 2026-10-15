@@ -719,9 +719,12 @@ fn budgets(m: &Manifest) -> Result<(), Refusal> {
     }) {
         return Err(at(format!("servers[{i}].heap_pages"), Why::Heap));
     }
+    // A principal has a budget, or a sponsor whose budget holds its sessions, never both.
     for (i, p) in m.principals.iter().enumerate() {
-        if !fine(&p.budget) {
-            return Err(at(format!("principals[{i}].budget"), Why::Budget));
+        match &p.budget {
+            Some(b) if p.sponsor.is_none() && fine(b) => {}
+            None if p.sponsor.is_some() => {}
+            _ => return Err(at(format!("principals[{i}].budget"), Why::Budget)),
         }
     }
     let Some(st) = &m.steward else { return Ok(()) };
@@ -738,6 +741,11 @@ fn budgets(m: &Manifest) -> Result<(), Refusal> {
             return Err(at(format!("steward.sizes.{name}"), Why::Budget));
         }
     }
+    // A lease's root is carved from its sponsor's home: its quota is below every home's, so the
+    // home has room left for the principal's own sessions.
+    if m.principals.iter().filter_map(|p| p.home_quota).any(|q| z.agent_quota >= q) {
+        return Err(at("steward.sizes.agent.quota".into(), Why::Quota));
+    }
     if z.cost == 0 {
         return Err(at("steward.sizes.cost".into(), Why::Budget));
     }
@@ -745,14 +753,18 @@ fn budgets(m: &Manifest) -> Result<(), Refusal> {
     // budget per domain, less a budget's own cost (servers/steward.md, "Fixed sub-budgets per
     // label set").
     for (i, p) in m.principals.iter().enumerate() {
-        let n = domains(p) as u64;
-        let share = (p.budget.pages / n).saturating_sub(z.cost);
-        let (processes, weight) = (p.budget.processes as u64 / n, p.budget.weight as u64 / n);
-        let over = |b: &Budget| b.pages > share || b.processes as u64 > processes || b.weight as u64 > weight;
-        if let Some((name, _)) = sizes.iter().find(|(_, b)| over(b)) {
-            return Err(at(format!("principals[{i}].budget"), Why::Sizes(name)));
+        // A sponsored principal's sessions come from its sponsor's share, checked at the sponsor.
+        if let Some(budget) = &p.budget {
+            let n = domains(p) as u64;
+            let share = (budget.pages / n).saturating_sub(z.cost);
+            let (processes, weight) = (budget.processes as u64 / n, budget.weight as u64 / n);
+            let over =
+                |b: &Budget| b.pages > share || b.processes as u64 > processes || b.weight as u64 > weight;
+            if let Some((name, _)) = sizes.iter().find(|(_, b)| over(b)) {
+                return Err(at(format!("principals[{i}].budget"), Why::Sizes(name)));
+            }
         }
-        let fits = holds(p, st) as i64;
+        let fits = holds(m, p, st) as i64;
         // The console's session counts against its principal's unlabelled set, so that principal
         // needs two for one SSH context beside it.
         let least = if m.console.as_deref() == Some(p.name.as_str()) { 2 } else { 1 };
@@ -776,18 +788,21 @@ pub const MAX_IDLE_SECS: u64 = 604_800;
 
 /// How many sessions one of `p`'s label sets' shares holds: the steward's equal share per domain,
 /// less a budget's own cost, by pages and by processes; at least 1 once the sizes check passed.
-pub fn holds(p: &crate::manifest::Principal, st: &Steward) -> u64 {
-    let n = domains(p) as u64;
+pub fn holds(m: &Manifest, p: &crate::manifest::Principal, st: &Steward) -> u64 {
+    // A sponsored principal's sessions are carved from its sponsor's unlabelled share.
+    let owner = p.sponsor.as_ref().and_then(|s| m.principals.iter().find(|q| &q.name == s)).unwrap_or(p);
+    let Some(budget) = &owner.budget else { return 0 };
+    let n = domains(owner) as u64;
     let z = &st.sizes;
-    let pages = (p.budget.pages / n).saturating_sub(z.cost) / z.session.pages.max(1);
-    let processes = (p.budget.processes as u64 / n) / (z.session.processes as u64).max(1);
+    let pages = (budget.pages / n).saturating_sub(z.cost) / z.session.pages.max(1);
+    let processes = (budget.processes as u64 / n) / (z.session.processes as u64).max(1);
     pages.min(processes)
 }
 
 /// A principal's contexts as the steward is told them: the manifest's `max`, or what a label
 /// set's share holds (at most [`MAX_CONTEXTS`]); its `idle_secs`, or [`IDLE_SECS`].
-pub fn contexts_of(p: &crate::manifest::Principal, st: &Steward) -> (u64, u64) {
-    let max = p.contexts.max.map_or(holds(p, st).min(MAX_CONTEXTS), |n| n as u64);
+pub fn contexts_of(m: &Manifest, p: &crate::manifest::Principal, st: &Steward) -> (u64, u64) {
+    let max = p.contexts.max.map_or(holds(m, p, st).min(MAX_CONTEXTS), |n| n as u64);
     (max, p.contexts.idle_secs.map_or(IDLE_SECS, |s| s as u64))
 }
 
@@ -928,11 +943,13 @@ pub fn steward_lines(m: &Manifest, st: &Steward) -> Vec<String> {
                 approval_keys: keys(&p.approval_keys),
                 owned: ids(&p.labels),
                 label_sets: sets,
-                top: limits(&p.budget),
+                // A sponsored principal's top is nothing: the steward carves it none.
+                top: p.budget.as_ref().map_or(Limits::default(), limits),
                 contexts: {
-                    let (max, idle_secs) = contexts_of(p, st);
+                    let (max, idle_secs) = contexts_of(m, p, st);
                     StewardContexts { max, idle_secs }
                 },
+                sponsor: p.sponsor.clone(),
             }
         })
         .collect();
@@ -947,6 +964,7 @@ pub fn steward_lines(m: &Manifest, st: &Steward) -> Vec<String> {
             sub_agent: limits(&z.sub_agent),
             crossing: limits(&z.crossing),
             budget_cost: z.cost,
+            agent_quota: z.agent_quota,
         },
     };
     let mut out = manifest_lines(&lines);
@@ -997,6 +1015,14 @@ fn quotas(m: &Manifest) -> Result<(), Refusal> {
     for (i, p) in m.principals.iter().enumerate() {
         if p.home.is_some() != p.home_quota.is_some() || p.home_quota == Some(0) {
             return Err(at(format!("principals[{i}].home_quota"), Why::Quota));
+        }
+        // A sponsor is another principal, itself unsponsored: no chains yet (servers/steward.md,
+        // "Leases"; the steward refuses the same, this names the field).
+        if let Some(s) = &p.sponsor {
+            let sponsor = m.principals.iter().find(|q| &q.name == s);
+            if s == &p.name || !sponsor.is_some_and(|q| q.sponsor.is_none()) {
+                return Err(at(format!("principals[{i}].sponsor"), Why::Unknown));
+            }
         }
         if let Some((v, path)) = home(p) {
             let shared = m.principals[..i]

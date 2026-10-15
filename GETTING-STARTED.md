@@ -127,7 +127,8 @@ to act on: until QEMU runs nothing holds the port and `ssh` is refused, and betw
 prints QEMU may wait for its lease of the machine scheduler. If sshd was not yet listening when
 the check connected, wait for the console's `sshd: listening on port 22`; if it was, sshd logs the
 check as its connection 1. Then log in from another terminal, as alice, or as `agent`, the
-image's third principal ([the image](image/README.md)):
+image's third principal, whose session is a lease of alice's: her shell prints
+`[lease agent/session-1 ended]` when it ends ([the image](image/README.md)):
 
 ```sh
 ssh -p 2222 -i .tmp/launch/id_ed25519 alice@localhost

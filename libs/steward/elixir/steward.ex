@@ -71,6 +71,7 @@ defmodule Redoubt.Steward do
   # `broken` names one guard the run replaces with one that always holds (the negative run).
   def boot(m, broken \\ nil) do
     with {:ok, principals} <- principals(m.principals, [], MapSet.new(), MapSet.new()),
+         {:ok, principals} <- sponsors(principals),
          logins = Enum.flat_map(m.principals, & &1.login_keys) |> MapSet.new(),
          approvals = Enum.flat_map(m.principals, & &1.approval_keys) |> MapSet.new(),
          keyd = m.keyd_keys |> Enum.uniq() |> Enum.sort(),
@@ -114,18 +115,43 @@ defmodule Redoubt.Steward do
           owned: owned,
           domains: domains,
           top: p.top,
-          contexts: p.contexts
+          contexts: p.contexts,
+          sponsor: Map.get(p, :sponsor)
         }
 
         principals(rest, [q | acc], MapSet.put(accounts, p.account), MapSet.put(names, p.name))
     end
   end
 
-  # An equal share of the top budget per label set, less each sub-budget's own object.
+  # A sponsor is another principal, itself unsponsored (no chains here), by index.
+  defp sponsors(principals) do
+    Enum.reduce_while(principals, {:ok, []}, fn p, {:ok, acc} ->
+      case p.sponsor do
+        nil ->
+          {:cont, {:ok, [p | acc]}}
+
+        name ->
+          i = Enum.find_index(principals, &(&1.name == name))
+
+          if i != nil and name != p.name and Enum.at(principals, i).sponsor == nil,
+            do: {:cont, {:ok, [%{p | sponsor: i} | acc]}},
+            else: {:halt, :refused}
+      end
+    end)
+    |> case do
+      {:ok, acc} -> {:ok, Enum.reverse(acc)}
+      other -> other
+    end
+  end
+
+  # An equal share of the top budget per label set, less each sub-budget's own object; a
+  # sponsored principal has no carve.
   defp carves(fixed) do
     cost = fixed.sizes.budget_cost
 
-    Enum.map(fixed.principals, fn p ->
+    fixed.principals
+    |> Enum.filter(&(&1.sponsor == nil))
+    |> Enum.map(fn p ->
       n = max(length(p.domains), 1)
       {pages, processes, weight} = p.top
       share = {max(div(pages, n) - cost, 0), div(processes, n), div(weight, n)}
@@ -881,13 +907,27 @@ defmodule Redoubt.Steward do
   end
 
   # Lease supervision: an unlabelled session of the sponsor ends a lease, in the lease's domain.
+  # Lease supervision: an agent's lease, or a sponsored principal's session, ended by its
+  # sponsor's unlabelled session; a caller of any other account is told nothing.
   defp end_lease(store, %{kind: {:end_lease, badge, lease}} = e, out) do
     with by when by != nil <- route(store, badge),
-         {d, :lease} <- store.ids[lease],
-         true <- elem(d, 0) == elem(by.domain, 0) do
-      answered(run(store, out, e, d, :lease, lease, :end_lease, %{caller: by}), e)
+         {d, kind} <- store.ids[lease],
+         sponsor when sponsor != nil <- sponsor_account(store, d, kind, lease),
+         true <- sponsor == elem(by.domain, 0) do
+      answered(run(store, out, e, d, kind, lease, :end_lease, %{caller: by}), e)
     else
       _ -> unknown(store, e, out)
+    end
+  end
+
+  defp sponsor_account(_store, d, :lease, _id), do: elem(d, 0)
+
+  defp sponsor_account(store, d, :session, id) do
+    with %{principal: p} <- store.domains[d].sessions[id],
+         q when q != nil <- Enum.at(store.fixed.principals, p).sponsor do
+      Enum.at(store.fixed.principals, q).account
+    else
+      _ -> nil
     end
   end
 

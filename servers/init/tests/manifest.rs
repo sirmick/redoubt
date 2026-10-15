@@ -101,7 +101,7 @@ fn alice() -> Principal {
     Principal {
         name: "alice".into(),
         account: 1001,
-        budget: budget(4096),
+        budget: Some(budget(4096)),
         ssh_keys: vec![LOGIN_KEY.into()],
         approval_keys: vec![],
         labels: vec![],
@@ -110,6 +110,7 @@ fn alice() -> Principal {
         home_quota: None,
         net: vec![],
         contexts: Default::default(),
+        sponsor: None,
     }
 }
 
@@ -521,8 +522,9 @@ fn servers_that_do_not_fit_in_system_are_refused() {
     let mut machine = machine(&devices, &ENTRIES);
     let m = image();
     // keyd 256, consoled 1024, bootfsd 4096, the two blkds 512 each, verity:system 256, netd
-    // 1024, ipd 4096, walfsd:data and erofsd:system 1024 each, and a page each for the budgets.
-    let pages = 256 + 1024 + 4096 + 512 * 2 + 256 + 1024 + 4096 + 1024 * 2 + 10;
+    // 1024, ipd 4096, walfsd:data 1280 (the entry rule of walfsd.md, "Serving"), erofsd:system
+    // 1024, and a page each for the budgets.
+    let pages = 256 + 1024 + 4096 + 512 * 2 + 256 + 1024 + 4096 + 1280 + 1024 + 10;
     machine.system.pages_limit = machine.system.pages_usage + pages - 1;
     assert_eq!(
         on(&m, &machine).unwrap_err(),
@@ -1181,14 +1183,14 @@ fn with_steward() -> Manifest {
     m.principals.push(Principal {
         labels: vec!["alice-secrets".into()],
         label_sets: vec![LabelSet { labels: vec!["alice-secrets".into()] }],
-        budget: top,
+        budget: Some(top),
         ..alice()
     });
     m.principals.push(Principal {
         name: "bob".into(),
         account: 1002,
         ssh_keys: vec![],
-        budget: top,
+        budget: Some(top),
         ..alice()
     });
     let base = server(&mut image(), "keyd").clone();
@@ -1206,6 +1208,7 @@ fn with_steward() -> Manifest {
         sizes: Sizes {
             session: size(512),
             agent: size(256),
+            agent_quota: 0,
             sub_agent: size(64),
             crossing: size(32),
             cost: 1,
@@ -1417,6 +1420,32 @@ fn the_steward_s_own_lines_bind_homes_vaults_and_scopes() {
     refused_at(&m, "principals[0].label_sets[0]", Why::Unknown);
 }
 
+/// The agent size's quota, a lease root's bytes of its sponsor's home, is below every home's
+/// quota, so the home keeps room for its principal's own sessions; absent, it is 0 and the
+/// steward's line leaves it out; present, the line carries it.
+#[test]
+fn the_agent_size_s_quota_is_below_every_home_s() {
+    let mut m = with_steward();
+    // Alice's home on the image's data volume, whose server the steward's entry is handed.
+    server(&mut m, "steward").handed.push(Handed { endpoint: "walfsd:data".into(), badge: 1 });
+    m.principals[0].home = Some("data:/home/alice".into());
+    m.principals[0].home_quota = Some(8 << 20);
+    m.steward.as_mut().unwrap().sizes.agent_quota = 8 << 20;
+    refused_at(&m, "steward.sizes.agent.quota", Why::Quota);
+    m.steward.as_mut().unwrap().sizes.agent_quota = 1 << 20;
+    on_virt(&m).unwrap();
+    let steward = m.servers.iter().find(|s| s.name == "steward").unwrap();
+    let lines = args(&m, steward, &BUNDLE_KEY, &ENTRIES);
+    assert!(
+        lines.iter().any(|l| l.starts_with("sizes ") && l.ends_with(" agent_quota=1048576")),
+        "{lines:?}"
+    );
+    m.steward.as_mut().unwrap().sizes.agent_quota = 0;
+    on_virt(&m).unwrap();
+    let lines = args(&m, steward, &BUNDLE_KEY, &ENTRIES);
+    assert!(lines.iter().any(|l| l.starts_with("sizes ") && !l.contains("agent_quota")), "{lines:?}");
+}
+
 /// Every size a process can run in, and each within the smallest sub-budget the steward carves:
 /// an equal share of a principal's budget per domain, less a budget's own cost.
 #[test]
@@ -1437,7 +1466,7 @@ fn the_steward_s_sizes_fit_every_principal_s_smallest_share() {
     m.steward.as_mut().unwrap().sizes.session.pages = 2048;
     refused_at(&m, "principals[0].budget", Why::Sizes("session"));
     let mut m = with_steward();
-    m.principals[1].budget.weight = 9;
+    m.principals[1].budget.as_mut().unwrap().weight = 9;
     refused_at(&m, "principals[1].budget", Why::Sizes("session"));
     // A principal's contexts: a max of 1 to 16 that a label set's share holds, and an idle bound
     // of a minute to a week; what the manifest gives is what the steward is told.

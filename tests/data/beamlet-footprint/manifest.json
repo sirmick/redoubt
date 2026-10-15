@@ -74,7 +74,8 @@
     { "name": "beamlet", "program": "beamlet",
       "stack_pages": "18", "heap_pages": "11220",
       "budget": { "pages": "11264", "processes": 1, "weight": 100 },
-      "handed": [ { "endpoint": "erofsd:system", "badge": "7" } ],
+      "handed": [ { "endpoint": "erofsd:system", "badge": "7" },
+                  { "endpoint": "walfsd:data", "badge": "8" } ],
       "args": ["endpoint=erofsd:system", "schedulers=2", "Elixir.Redoubt.Shell"] }
   ]
 }

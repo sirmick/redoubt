@@ -156,16 +156,16 @@ The counts come from what the seeds reach, not from habit. `model/tests/steward_
 records, per seed, each rule of the core's `Policy` table that held and each that refused, each
 effect that ran, each filter's answers, and each property's first instance (a session's budget
 checked, a declassification copied out, a blame, a lockout, a lease ended, an observation after
-vault work left out). Searched to 20,000 seeds, `steward_policy` reaches 142 of these, its
-last new one at seed 199, and to 10,000 seeds `steward_noninterference` 145, its last at seed
-439. A family's count comes from that measured seed of its last new coverage: four times it,
+vault work left out). Searched to 20,000 seeds, `steward_policy` reaches 148 of these, its
+last new one at seed 439, and to 10,000 seeds `steward_noninterference` 151, its last at seed
+296. A family's count comes from that measured seed of its last new coverage: four times it,
 rounded up to a thousand, but never below a seed at which the family's random search catches a
 mutation (`PolicyDeclassifyUnfit` at 1,418, and `PolicyDeclassifyLive` at 1,166), so 2,000 for
 each; `steward_noninterference` runs 3,000, a margin it keeps. The counts are for coverage:
 the three mutations whose state the random search builds only by chance are held by their named
 scenarios ([mutations](#mutations)), whatever the counts.
-`the_reach_table_is_reproduced` checks what the first seeds reach: seeds 0 to 199 of
-`steward_policy` reach 142 items and 0 to 439 of `steward_noninterference` 145, the last of
+`the_reach_table_is_reproduced` checks what the first seeds reach: seeds 0 to 439 of
+`steward_policy` reach 148 items and 0 to 296 of `steward_noninterference` 151, the last of
 them first at that seed, so a change to the generator, the core or the checks that moves either
 fails. That no later seed reaches a new item, and the catch floor of 1,418 and 1,166, come from
 the ignored runs (`reach_table`, `catch_table` in `model/tests/steward_reach.rs`): they are
@@ -311,7 +311,7 @@ A **mutation** is one deliberate break planted in the model. Each variant of `en
 `self.broken(Mutation::...)`: one site for most variants, two or three where the rule is kept in
 more than one place, and a direct comparison with the mutation for `AbandonNoticeMissing` and
 `R11LendStaysMapped`. With no mutation, the model is the specified kernel.
-`Mutation::ALL` lists all 175 variants. `Mutation::rule()` returns the ID each one breaks, as in
+`Mutation::ALL` lists all 176 variants. `Mutation::rule()` returns the ID each one breaks, as in
 the table below; the steward's variants, named `Policy...`, break the server rules the steward
 model checks. Each of those but four is one broken entry of the core's `Policy` table
 (`mutation::policy`), since the crate that ships has no mutation switch; the other four break the
@@ -389,7 +389,7 @@ model's embedder: its entropy, its admission, a volume's write check and the ser
 | [R36 (unpredictable ids)](../servers/steward.md#r36-unpredictable-ids) | `PolicySequentialIds` | random ids |
 | [R37 (vault non-interference)](../servers/steward.md#r37-vault-non-interference) | `PolicyVaultWithoutOwnership`, `PolicyWriteUp`, `PolicyLabelledStartsAgent`, `PolicyAgentOtherSet`, `PolicyAuditUnfiltered`, `PolicyContextsAcrossSets` | vault ownership, no write up, a labelled session starting nothing and asking for agents only in its own set, filtered audit reads, a session's contexts listed and ended only in its own set |
 | [R38 (out-of-band approval)](../servers/steward.md#r38-out-of-band-approval) | `PolicyApproveIgnoresHash`, `PolicyApproveOtherChannel`, `PolicyShowLabelledToAll`, `PolicyRenderNotWhitelisted`, `PolicyLabelledFreeTextShown`, `PolicyNotifyLabelledToAll`, `PolicyNoPendingCap`, `PolicyDeadSessionRequestsKept` | approval of the frozen request on the channel that rendered it, by its owner; what the screen and the notices show; the pending cap |
-| [R39 (leases end)](../servers/steward.md#r39-leases-end) | `PolicyUnboundedLease`, `PolicySubAgentOutlivesAgent`, `PolicyEndLeaseAdmitted`, `PolicyEndLeaseFromVault`, `PolicyNoFairShare` | bounded leases, sub-agents ending with them, ending always admitted and only from the sponsor's unlabelled session, a fair share |
+| [R39 (leases end)](../servers/steward.md#r39-leases-end) | `PolicyUnboundedLease`, `PolicyEndLeaseAdmitted`, `PolicyEndLeaseFromVault`, `PolicySponsoredEndedByAnyone`, `PolicySponsoredVaultLogin`, `PolicyNoFairShare` | bounded leases, ending always admitted and only from the sponsor's unlabelled session (a sponsored principal's session too, and never a labelled login of its), a fair share |
 | [R40 (blame by label set)](../servers/steward.md#r40-blame-by-label-set) | `PolicyBlameNoWindow`, `PolicyNoLockout` | the blame window and the lockout |
 | [R42 (one approved item)](../servers/steward.md#r42-one-approved-item) | `PolicyDeclassifyLive`, `PolicyDeclassifyWithoutReader`, `PolicyDeclassifyFromUnlabelled`, `PolicyDeclassifyUnfit` | a snapshot, through a reader or writer with the labelled side's labels, from a session with them, of printable text within `DECLASSIFY_MAX` |
 | [R79 (one session per context)](../servers/steward.md#r79-one-session-per-context) | `PolicyContextTwice` | a second login to a live context of the same name in its domain |
@@ -538,7 +538,7 @@ described on [the steward](../servers/steward.md).
 
 | Property | What must hold |
 | --- | --- |
-| sessions | a session's or lease's budget is carved from its domain's sub-budget (a sub-agent's from its agent's), with the principal's account and the domain's labels, which the principal owns |
+| sessions | a session's or lease's budget is carved from its domain's sub-budget, with the principal's account and the domain's labels, which the principal owns |
 | login | a login used one of the principal's login keys, never one `keyd` holds |
 | approvals | an approval channel opened with the principal's approval key; an approval was answered on the channel that rendered the request last, named the hash it showed, which never changed, and granted no label the approver lacks |
 | screens | a channel sees only its own principal's requests, and labelled ones only if it owns every label; rendered text is printable ASCII with capped free text; a labelled request shows none of its free text; an approval-waiting notice reaches only sessions whose labels include the request's |
@@ -546,7 +546,7 @@ described on [the steward](../servers/steward.md).
 | crossings | a declassification comes from a session with exactly the item's labels and a push from an unlabelled one; what is copied out or pushed is exactly the snapshot taken at submission, a declassified item at most `DECLASSIFY_MAX` bytes of printable text, through a reader or writer budget with exactly the labelled side's labels |
 | crash blame | a domain's sessions and leases end exactly when three server crashes blamed on it fall within ten minutes; nothing else is touched; nothing of it starts for the next ten minutes |
 | labelled sessions | a labelled session or agent starts nothing; it only submits requests |
-| leases | an agent's budget has a deadline at most `MAX_LEASE` (24 hours) away; a sub-agent sits in its agent's budget and ends no later; an expired lease is gone |
+| leases | an agent's budget has a deadline at most `MAX_LEASE` (24 hours) away; an expired lease is gone |
 | non-interference | a vault session's work changes nothing an unlabelled session observes: its results, its requests' ids, the usage of `users` and of every principal's budget and unlabelled sub-budget, and the audit records an unlabelled reader may read |
 | writes | every write to an item is through a budget with exactly the item's labels; the steward's own write goes only to the unlabelled volume |
 | system budgets | only `init` and the steward hold a handle to a system-class budget; a session's connections are narrowed to a revocation scope inside its budget |
@@ -557,7 +557,13 @@ described on [the steward](../servers/steward.md).
 | context commands | a session lists exactly its own domain's live contexts; only an attached context lets its channel go; `end_context` ends a context of the caller's own domain and no other, and always can |
 
 `steward_policy` runs 20 to 160 random policy operations per seed and checks the properties and
-the kernel's checks after each, and that the steward never exits. `steward_noninterference` runs
+the kernel's checks after each, and that the steward never exits. Its manifest gives alice's top
+18 processes, so a label set's share, a third, holds three sessions, one over the cap of two
+contexts: some top must hold one more session than the cap, or the kernel's refusal of the third
+login for processes stands in for the cap's and the cap rule is invisible to the model
+(`PolicyNoContextCap` went uncaught when the one principal with a single label set, carol, became
+sponsored and her sessions moved under alice's share). Bob's top keeps 12, a share holding two,
+so his domains still fill and a start fails there. `steward_noninterference` runs
 one sequence twice, the second time without the vault sessions' work (their item writes, requests
 and calls to the server, and the owner's approvals and denials of their requests), and compares
 everything an unlabelled session observes, the order the server takes its calls in included. The

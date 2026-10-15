@@ -306,3 +306,46 @@ fn after_the_console_ends_idling_still_waits_for_its_deadline() {
 
 #[test]
 fn there_is_no_wall_clock() { with_platform(std::io::empty(), |p| assert_eq!(p.system_time_us(), None)); }
+
+/// A lease's namespace holds no `/dev/cons` (docs/userland/agents.md, "Leases"): the platform
+/// starts without one and serves the console as one that has gone.
+#[test]
+fn without_a_console_writes_are_dropped_reads_end_and_the_size_is_unknown() {
+    let f = fake();
+    let (pid, block) = fixture::lease(&[], &[]);
+    let vm = f.run(pid, move || {
+        let startup = fixture::startup(&block);
+        let mut p = Redoubt::new(&startup, Box::new(Dirs(Vec::new()))).expect("a platform");
+        // No console, so no connection to it: nothing waits on one.
+        assert_eq!(p.waiters(), 0);
+        p.console_write(b"nobody reads this\n");
+        assert_eq!(p.console_read(), ConsoleInput::Eof);
+        assert_eq!(p.console_size(), None);
+        assert_eq!(p.console_resized(), None);
+        p.console_listening(false);
+        p.console_listening(true);
+        assert_eq!(p.console_read(), ConsoleInput::Eof);
+        // Nothing will arrive: the idle returns, and a timer's deadline still holds it.
+        p.idle(None);
+        let deadline = p.monotonic_us() + 20_000;
+        p.idle(Some(deadline));
+        assert!(p.monotonic_us() >= deadline);
+        assert_eq!(p.requests(), 0);
+        0
+    });
+    assert_eq!(vm.join().unwrap(), 0);
+}
+
+/// A VM in a process with no console runs its module to its exit: the code is the module's, and
+/// the result line has nowhere to go.
+#[test]
+fn a_vm_without_a_console_runs_its_module_to_exit() {
+    let f = fake();
+    let (pid, block) = fixture::lease(&[], &[]);
+    let fixtures = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../vm/tests/fixtures");
+    let vm = f.run(pid, move || {
+        let startup = fixture::startup(&block);
+        beamlet_redoubt::run(&startup, Box::new(Dirs(vec![fixtures])), "console", "size", Some(4096), None)
+    });
+    assert_eq!(vm.join().unwrap(), 0);
+}

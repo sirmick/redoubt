@@ -58,7 +58,8 @@ pub struct Lease {
     /// How long it was asked for, and when it ends.
     pub lease: u64,
     pub deadline: u64,
-    /// The agent it runs inside, for a sub-agent: same domain.
+    /// The agent it runs inside, for a sub-agent: same domain. Always `None` today: a lease
+    /// nested in a lease is a later package's (servers/steward.md, "Leases").
     pub parent: Option<u64>,
     /// Started by an approved request: no caller waits for it.
     pub granted: bool,
