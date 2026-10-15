@@ -1734,7 +1734,7 @@ configuration for everything under `tests/`.
 
 ### What it checks
 
-<details><summary>Status: built · partly tested: no bench case runs it yet; it is run by hand before every change to the book · tested (6)</summary>
+<details><summary>Status: built · tested (8)</summary>
 
 - host:redoubt-doccheck::good_tree_is_clean
 - host:redoubt-doccheck::narrow_cases_fire
@@ -1742,6 +1742,8 @@ configuration for everything under `tests/`.
 - host:redoubt-doccheck::c13_reports_each_failure
 - host:redoubt-doccheck::pages_scope_keeps_only_the_listed_pages
 - host:redoubt-doccheck::pages_scope_keeps_a_directory
+- host:redoubt-doccheck::untracked_code_is_not_checked
+- host:redoubt-doccheck::a_copy_under_an_ignored_directory_is_checked_whole
 
 </details>
 
@@ -1758,6 +1760,14 @@ count in a `` `unsafe` (pinned) `` column equals the ceilings in `unsafe-budget.
 ([the unsafe budget](#the-unsafe-budget)), summed over the budgets under a row's `Where` paths or
 read by the name in its `Ratchet budget` cell. Each rule has a small bad tree it must fire on and a
 good one it must not. `mdbook build docs` renders the book.
+
+**Running its tests.** `cargo test -p redoubt-doccheck` runs them from any directory and any
+shell the project supports (through `scripts/q` too); the bench's `docs` case runs the same suite
+([below](#the-docs-checker-in-the-bench)). The fixtures are found by the crate's own path, not
+the working directory. C11 asks git which files under the tree it checks are tracked, so that a
+checkout's untracked files (reference sources, scratch) are not Redoubt's code; a tree that is no
+tracked part of a repository, outside one or under an ignored directory such as `.tmp/` or
+`target/`, is checked whole, and the caller's `GIT_DIR` does not redirect the question.
 
 ### The docs checker in the bench
 

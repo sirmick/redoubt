@@ -112,3 +112,33 @@ fn untracked_code_is_not_checked() {
         "an untracked file was checked: {findings:#?}"
     );
 }
+
+/// A tree that is no tracked part of a repository is checked whole: the c11 fixture copied under
+/// the repository's own ignored `target/` (as a copy under `.tmp/` is, by the project's scratch
+/// rule), where git answers and names nothing, fires C11 on the same lines as in place.
+#[test]
+fn a_copy_under_an_ignored_directory_is_checked_whole() {
+    fn copy(from: &std::path::Path, to: &std::path::Path) {
+        std::fs::create_dir_all(to).unwrap();
+        for entry in std::fs::read_dir(from).unwrap() {
+            let entry = entry.unwrap();
+            let target = to.join(entry.file_name());
+            if entry.file_type().unwrap().is_dir() {
+                copy(&entry.path(), &target);
+            } else {
+                std::fs::copy(entry.path(), target).unwrap();
+            }
+        }
+    }
+    let copied = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("c11-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&copied);
+    copy(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/c11"), &copied);
+    let findings = check(&copied, Scope { pages: None, code: true });
+    std::fs::remove_dir_all(&copied).unwrap();
+    let at =
+        |path: &str, line: usize| findings.iter().any(|f| f.rule == 11 && f.path == path && f.line == line);
+    assert!(
+        at("libs/wire/elixir/proto/ping.ex", 2) && at("libs/wire/elixir/wire.ex", 3) && at("src/lib.rs", 1),
+        "{findings:#?}"
+    );
+}

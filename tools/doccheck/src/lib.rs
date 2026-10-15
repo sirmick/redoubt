@@ -1041,15 +1041,30 @@ fn wire_tables(c: &mut Ctx, pages: &[Page]) {
     }
 }
 
-/// The files git tracks under `root`, relative to it, or `None` where `root` is not inside a
-/// repository (a fixture copied to a temporary directory), in which case every file counts.
+/// The files git tracks under `root`, relative to it, or `None` where `root` is not a tracked
+/// part of a repository, in which case every file counts: outside any repository (a fixture
+/// copied to `/tmp`), where git fails; or under a repository's ignored directory (a copy under
+/// `.tmp/` or `target/`, which the project's scratch rule puts inside the checkout), where git
+/// answers and names nothing. Git is asked about `root` itself, not about whatever repository
+/// the caller's `GIT_DIR` names.
 fn tracked(root: &Path) -> Option<std::collections::BTreeSet<String>> {
-    let out = std::process::Command::new("git").arg("-C").arg(root).args(["ls-files", "-z"]).output().ok()?;
+    let out = std::process::Command::new("git")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .env_remove("GIT_COMMON_DIR")
+        .arg("-C")
+        .arg(root)
+        .args(["ls-files", "-z"])
+        .output()
+        .ok()?;
     if !out.status.success() {
         return None;
     }
     let list = String::from_utf8_lossy(&out.stdout);
-    Some(list.split('\0').filter(|s| !s.is_empty()).map(str::to_string).collect())
+    let files: std::collections::BTreeSet<String> =
+        list.split('\0').filter(|s| !s.is_empty()).map(str::to_string).collect();
+    (!files.is_empty()).then_some(files)
 }
 
 // ---- C11: code comments and case descriptions ----
