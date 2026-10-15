@@ -1,0 +1,20 @@
+description = "A device holds at most MAX_RUNS (32) runs (kernel/devices.md, dma_alloc): through one empty virtio-mmio slot a child gets 32 one-page runs and OutOfMemory for the 33rd; its places come back at its end, so the first program gets 32 again and OutOfMemory for the 33rd while its budget has room and a run through a second slot succeeds, so the refusal is the device's; and a second child gets no run through the full device, so the limit is the device's and not the caller's (checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+icount = "shift=3,sleep=off"
+debug_assertions = true
+# The first program, so it holds every device object (kernel/devices.md). It prints on the
+# console it maps itself: there is no log-server here.
+programs = ["dma-max-runs"]
+timeout_secs = 20
+# Every verdict is the kernel's answer: the children's exit codes carry what dma_alloc said.
+expect = [
+    '^\[dma-max-runs\] mapped the console$',
+    '^\[dma-max-runs\] ok: a child allocating one-page runs through device handle [0-9]+ got Some\(32\) and then OutOfMemory$',
+    '^\[dma-max-runs\] ok: after the child.s end this program got 32 runs through handle [0-9]+, and the 33rd is Err\(OutOfMemory\) \(2 pages: Err\(OutOfMemory\)\)$',
+    '^\[dma-max-runs\] ok: the refusal is the device.s: the budget has [0-9]+ pages of room, and a run through handle [0-9]+ is Ok\(\(\)\)$',
+    '^\[dma-max-runs\] ok: a second child gets no run through the full device: Some\(0\) runs before OutOfMemory$',
+    '^\[dma-max-runs\] DMA MAX RUNS PASSED$',
+]
+forbid = ['\[dma-max-runs\] FAIL', 'PROGRAM HALT']
+poweroff = true

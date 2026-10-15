@@ -20,7 +20,7 @@ cannot keep writing into pages that have passed to someone else.
 
 ### Device objects
 
-Status: built · partly tested: the page a device object costs its owner, and the refusal of a DMA device past the sixteenth, are not attacked by a case · tested: bench:device, bench:irq-attack, bench:dma-rules
+Status: built · partly tested: the refusal of a DMA device past the sixteenth is not attacked by a case (QEMU virt has eight virtio-mmio slots, and the bench hands QEMU no device tree of its own: Residual risks) · tested: bench:device, bench:irq-attack, bench:dma-rules, bench:device-object-page
 
 A device object takes one of three forms (`kernel/src/device.rs`):
 
@@ -41,7 +41,9 @@ most `MAX_DMA_DEVICES` (16) of them. A DMA device past that gets no object at al
 device the kernel could not reset must not be handed out.
 
 Each device object costs `DEVICE_PAGES` (1) page, charged to the budget that owns it, as an
-endpoint is ([objects](objects.md)). At boot that owner is `system`. There is no
+endpoint is ([objects](objects.md)). At boot that owner is `system`, and that is all `system`
+holds: its usage is one page per device object, and one page comes back when a quarantine
+destroys one (`device-object-page`). There is no
 `device_destroy`: a device object dies when its owner budget is destroyed
 ([R10 (destruction)](budgets.md#r10-destruction)), or when its device is quarantined
 ([Quarantine](#quarantine)). Handles to device objects carry badge 0 and can be copied and
@@ -114,10 +116,11 @@ whatever the device. The [executable model](model.md) checks every answer it giv
 
 ### `dma_alloc`
 
-<details><summary>Status: built · partly tested: the limit of `MAX_RUNS` runs per device is not attacked by a case · tested (4)</summary>
+<details><summary>Status: built · tested (5)</summary>
 
 - bench:device
 - bench:dma-rules
+- bench:dma-max-runs
 - host:redoubt-model::dma_pages_stay_put
 - mutation:DmaUnmapFrees
 
@@ -328,7 +331,7 @@ every step; the lines themselves are not modelled.
 
 ### Devices handed to the first program
 
-Status: built · partly tested: the loader's refusal of a device tree that names no console, or a console with no interrupt, is not attacked by a case · tested: bench:device, bench:irq-attack
+Status: built · partly tested: the loader's refusal of a device tree that names no console, or a console with no interrupt, is not attacked by a case (the bench hands QEMU no device tree of its own: Residual risks) · tested: bench:device, bench:irq-attack
 
 The kernel gives every device object to `init`, the one program the loader starts, to place
 ([below](#which-process-gets-which-device)), in the handle order
@@ -413,7 +416,7 @@ two label sets share a device.
 
 ### R5 (interrupts)
 
-<details><summary>Status: built · partly tested: masking a fired source is attacked only in the model; completing the claim before masking, and billing an interrupt to its IRQ object's owner, are not attacked · tested (6)</summary>
+<details><summary>Status: built · partly tested: masking a fired source is attacked only in the model; completing the claim before masking, and billing an interrupt to its IRQ object's owner, are argued (Residual risks), not attacked · tested (6)</summary>
 
 - bench:uart-irq
 - bench:irq-first-receive
@@ -475,7 +478,7 @@ sequenceDiagram
 
 ### R18 (device authority)
 
-Status: built · partly tested: the kernel's refusal of a malformed `Devs` entry (one overlapping RAM or an interrupt controller among them) and of a `Grnt` boot argument is not attacked by a case · tested: bench:irq-attack, bench:legacy-gone, bench:device-info-attack
+Status: built · partly tested: the kernel's refusal of a malformed `Devs` entry (one overlapping RAM or an interrupt controller among them) and of a `Grnt` boot argument is not attacked by a case (the loader emits neither, and the bench hands the kernel no argument block of its own: Residual risks) · tested: bench:irq-attack, bench:legacy-gone, bench:device-info-attack
 
 Device objects are the only device authority. A process reaches an MMIO range, an interrupt or
 the Reset right only through a handle to its device object; a process that holds none gets
@@ -500,8 +503,9 @@ the PLIC for itself alone.
 
 ## Failure and restart
 
-<details><summary>Status: built · partly tested: destroying a device object's owner budget, and a device handle closing when the budget that stamped it is destroyed, are not attacked by a case · tested (4)</summary>
+<details><summary>Status: built · partly tested: at an owner's destruction the waiters' `Dead` and the handle sweep are attacked, the mask of the source is argued (Residual risks); a device handle's stamp is `root`, so the one destruction that closes it by its stamp is the tree's end · tested (5)</summary>
 
+- bench:device-owner-destroy
 - bench:dma-reset-reuse
 - bench:dma-reset-quarantine
 - bench:dma-rules
@@ -559,13 +563,36 @@ the PLIC for itself alone.
   status after `dma_alloc` has handed a frame to a new holder, so it shows the reset came before
   the new holder's use. That the reset strictly precedes the pooling rests on the kernel's own
   assertion and the model's I16 check.
-- **Two halves of R5 are not attacked on QEMU.** Its 16550 console raises the controller once
+- **Three parts of R5 are not attacked on QEMU.** Its 16550 console raises the controller once
   per byte, not from a held level, so a kernel that never masked a fired source passes
-  `uart-irq`; and QEMU accepts a completion for a masked source, so the completion order cannot
-  be told apart. The mask is attacked in the model; the order is argued from the code.
-- **An interrupt's kernel time is billed to the IRQ object's owner** (`system` at boot), not to
-  the driver that holds the handle. Masking bounds it to one interrupt per `receive`, at the
-  driver's pace.
+  `uart-irq`; the mask is attacked in the model. The order, the claim completed before the source
+  is masked, is argued: both writes are made in one kernel section, on a hart that takes no
+  interrupt in supervisor mode, under the kernel lock that another hart's claim would need, so
+  nothing is delivered between them; and because the mask is a priority write and the enable bits
+  stay, the PLIC does not ignore a completion for a masked source, so even the reverse order would
+  lose nothing on this controller, and QEMU's PLIC, which accepts either, cannot tell the two
+  apart for a case. The billing, the interrupt's kernel time charged to the IRQ object's owner
+  (`system` at boot), is argued from the handler: it bills the owner the IRQ index names, and the
+  budget it interrupted sees its slice resume; the trace records the charge inside an interrupt,
+  and attacking it on the target is [scheduling](scheduling.md)'s open line. Masking bounds that
+  time to one interrupt per `receive`, at the driver's pace.
+- **Crafted boot inputs are not attacked.** Every case boots QEMU's own device tree and the
+  loader's own argument block. So the loader's refusal of a tree that names no console or a
+  console without an interrupt, a seventeenth DMA device (QEMU virt has eight virtio-mmio slots),
+  and the kernel's refusal of a `Devs` entry that overlaps RAM or a controller and of a `Grnt`
+  tag are code no case reaches: the loader filters the first and emits neither of the last two.
+  A device tree the bench could hand QEMU would reach every one but `Grnt`, which no tree can
+  produce; that lever is not built.
+- **The mask at an owner's destruction is argued.** `destroy_device` fails the waiters, masks
+  the source and then sweeps the handles, the one path quarantine takes too
+  (`dma-reset-quarantine`); `device-owner-destroy` sees the `Dead` and the sweep. A source left
+  unmasked would, at the device's next interrupt, be completed and masked by the handler for an
+  interrupt no object owns, whose line prints only under `debug-print`, and the checked build's
+  count of claims prints at `system_reset`, which the destruction takes the Reset right away
+  from: nothing a case can see tells a masked source from an unowned one.
+- **A device handle's stamp is `root`.** Boot stamps every device handle so, a copy keeps its
+  stamp and `mint` takes endpoints only ([R9 (stamps)](objects.md#r9-stamps)), so the one destruction
+  that closes a device handle by its stamp rather than by its object is the whole tree's.
 
 ## Why
 

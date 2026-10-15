@@ -1,0 +1,28 @@
+description = "Destroying a device object's owner budget (kernel/devices.md, \"Failure and restart\"; R10): the first program, in root, parks a thread in receive on the console's interrupt and destroys system, which owns every device object; the waiter gets Dead, every device handle is gone (the console's, the Reset right's) and system with them, the console mapping made before survives, and a byte sent after the destruction reaches the UART by polling (checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+icount = "shift=3,sleep=off"
+debug_assertions = true
+# In init's place, so it holds every device object (kernel/devices.md), and runs in root, which
+# the destruction of system does not reach. It prints on the console it mapped before the
+# destruction: a mapping outlives its handle. There is no log-server here, and no power-off: the
+# Reset right dies with system, so the case ends on its lines.
+programs = ["device-owner-destroy"]
+timeout_secs = 20
+# The verdicts are the kernel's answers: Dead to the waiter, BadHandle from every device call and
+# from budget_usage on system. A kernel that left the source unmasked would show nothing a process
+# can see (the page says so); one that panicked or stormed on the byte would not reach the last line.
+expect = [
+    '^\[device-owner-destroy\] mapped the console$',
+    '^\[device-owner-destroy\] destroying system, the owner of every device object, with a thread in receive on the console.s interrupt$',
+    '^\[device-owner-destroy\] ok: the thread in receive on the console.s interrupt got Dead \(Ok\(\(\)\); waiter 1\)$',
+    '^\[device-owner-destroy\] ok: all [0-9]+ device handles are gone: map_device Err\(BadHandle\), receive on the irq Err\(BadHandle\), system_reset Err\(BadHandle\), and system Err\(BadHandle\)$',
+    '^\[device-owner-destroy\] send a byte$',
+    '^\[device-owner-destroy\] ok: a byte sent after the destruction reached the UART through the mapping made before it$',
+    '^\[device-owner-destroy\] DEVICE OWNER DESTROY PASSED$',
+]
+forbid = ['\[device-owner-destroy\] FAIL', 'KERNEL FAILURE', 'PROGRAM HALT']
+
+[[input]]
+after = '^\[device-owner-destroy\] send a byte$'
+send = "y"
