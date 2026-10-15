@@ -100,6 +100,10 @@ struct Args {
     /// With --system, write the QEMU command here, each argument ended by a NUL.
     #[arg(long, value_name = "FILE", requires = "system")]
     qemu_argv: Option<PathBuf>,
+    /// With --system, boot the QEMU command an earlier --qemu-argv wrote to FILE instead of
+    /// building: `./launch`'s boot step. The file is removed.
+    #[arg(long, value_name = "FILE", requires = "system", conflicts_with_all = ["qemu_argv", "print_only"])]
+    boot_argv: Option<PathBuf>,
     /// With --system, keep the data disk under $REDOUBT_TMP/launch across launches: made from the
     /// image the first time, then booted as the last launch left it.
     #[arg(long, requires = "system")]
@@ -262,6 +266,7 @@ fn main() -> Result<()> {
             key: args.key.as_deref(),
             print_only: args.print_only,
             argv: args.qemu_argv.as_deref(),
+            boot_argv: args.boot_argv.as_deref(),
             keep_disk: args.keep_disk,
             fresh_disk: args.fresh_disk,
         };

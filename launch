@@ -65,7 +65,9 @@ fi
 
 # --system: build and pack under one lease of the machine scheduler (scripts/q), then boot under
 # a lease of a core per hart, so the build's cores are not held while QEMU runs. Without a
-# scheduler running, both steps run unleased.
+# scheduler running, both steps run unleased. The boot waits for its lease with nothing on the
+# ssh port; the bench runs QEMU and prints the ssh line again once the guest answers through the
+# forward.
 ((${#progs[@]} == 0 && debug == 0)) || { echo "launch: --system takes no --program or --debug" >&2; exit 2; }
 smp="${smp:-4}"
 export REDOUBT_TMP="${REDOUBT_TMP:-$PWD/.tmp}"
@@ -93,8 +95,10 @@ build=(cargo run --quiet -p testbench -- --run --system --arch "$arch" --smp "$s
        --qemu-argv "$argv" "${extra[@]}")
 if ((${#leased[@]})); then build=("${leased[@]}" 8 -- "${build[@]}"); fi
 "${build[@]}"
-mapfile -d '' qemu < "$argv"
-rm -f "$argv"
-if [ "$print_only" = 1 ]; then exit 0; fi
-if ((${#leased[@]})); then qemu=("${leased[@]}" "$smp" -- "${qemu[@]}"); fi
-exec "${qemu[@]}"
+if [ "$print_only" = 1 ]; then rm -f "$argv"; exit 0; fi
+boot=(cargo run --quiet -p testbench -- --run --system --arch "$arch" --boot-argv "$argv" "${extra[@]}")
+if ((${#leased[@]})); then
+    echo "launch: QEMU starts under a lease of $smp cores from scripts/q, behind the jobs already running; the ssh port is refused until it does" >&2
+    boot=("${leased[@]}" "$smp" -- "${boot[@]}")
+fi
+exec "${boot[@]}"

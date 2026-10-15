@@ -5,12 +5,17 @@
 //! `$REDOUBT_TMP/launch`, or the user's own (`--key`), given to alice in this boot's copy of the
 //! manifest only. The data disk is new at every launch, or with `--keep-disk` kept there too,
 //! refused if the image's disk is laid out otherwise since and started over by `--fresh-disk`;
-//! a kept disk is one launch's at a time, locked before anything is built or written.
+//! a kept disk is one launch's at a time, locked before anything is built or written. The ssh
+//! line is printed with the QEMU command, and again once QEMU runs and the guest answers a
+//! connection through the forward: until then nothing holds the host port, and `ssh` is refused.
 
-use std::net::TcpListener;
+use std::ffi::OsStr;
+use std::io::{ErrorKind, Read};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, Command};
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail, ensure};
 use serde_json::Value;
@@ -39,6 +44,9 @@ pub struct System<'a> {
     pub print_only: bool,
     /// Write the QEMU command here, each argument ended by a NUL, for `./launch` to boot.
     pub argv: Option<&'a Path>,
+    /// Boot the QEMU command written there by an earlier run, instead of building: `./launch`'s
+    /// boot step, under a lease of its own.
+    pub boot_argv: Option<&'a Path>,
     /// Keep the data disk across launches, under `$REDOUBT_TMP/launch`, instead of a new one.
     pub keep_disk: bool,
     /// With `keep_disk`, start the kept disk over from the image's.
@@ -47,6 +55,12 @@ pub struct System<'a> {
 
 /// Build, pack and print; boot unless `print_only`.
 pub fn system(builder: &Builder, workspace: &Path, logs: &Path, ask: &System) -> Result<()> {
+    if let Some(path) = ask.boot_argv {
+        let bytes = std::fs::read(path).with_context(|| format!("reading {}", path.display()))?;
+        std::fs::remove_file(path).ok();
+        let (_, identity) = login_key(workspace, ask.key)?;
+        return run(from_nul_separated(&bytes)?, ask.ssh_port, identity.as_deref());
+    }
     // The port first: a taken one is refused before minutes of building.
     TcpListener::bind(("127.0.0.1", ask.ssh_port))
         .with_context(|| format!("host port {} is taken; choose another with --ssh-port", ask.ssh_port))?;
@@ -89,8 +103,7 @@ pub fn system(builder: &Builder, workspace: &Path, logs: &Path, ask: &System) ->
     if let Some(path) = ask.argv {
         std::fs::write(path, nul_separated(&qemu)).with_context(|| format!("writing {}", path.display()))?;
     }
-    let identity =
-        identity.map(|i| format!(" -i {}", qemu::shell_quote(&i.display().to_string()))).unwrap_or_default();
+    let line = ssh_line(ask.ssh_port, identity.as_deref());
     let disk = match (&kept, made) {
         (None, _) => "The disk is new at every launch: files written in this boot are gone at the next \
                       (--keep-disk keeps them)."
@@ -108,8 +121,9 @@ pub fn system(builder: &Builder, workspace: &Path, logs: &Path, ask: &System) ->
     };
     eprintln!(
         "\nRedoubt {arch}, {smp} harts, {mib} MiB. This terminal is the serial console, alice's console \
-         session; Ctrl-A X quits QEMU.\n{disk}\nOnce the console prints \"sshd: listening on port \
-         22\", log in from another terminal:\n\n  ssh -p {port}{identity} {PRINCIPAL}@localhost\n\n\
+         session; Ctrl-A X quits QEMU.\n{disk}\nLog in from another terminal once launch says \"port \
+         {port} forwards to the guest\" (QEMU runs then; until it does, nothing holds the port and ssh \
+         is refused):\n\n  {line}\n\n\
          Host key: {fingerprint} (ED25519), the image's development host key\n",
         arch = target.name,
         smp = ask.smp,
@@ -119,7 +133,75 @@ pub fn system(builder: &Builder, workspace: &Path, logs: &Path, ask: &System) ->
     if ask.print_only {
         return Ok(());
     }
-    qemu::run_to_end(qemu, machine.qemu)
+    run(qemu, ask.ssh_port, identity.as_deref())
+}
+
+/// The line that logs in as alice through the forward from the host's `port`, with `-i identity`
+/// when the private key's path is known.
+pub fn ssh_line(port: u16, identity: Option<&Path>) -> String {
+    let identity =
+        identity.map(|i| format!(" -i {}", qemu::shell_quote(&i.display().to_string()))).unwrap_or_default();
+    format!("ssh -p {port}{identity} {PRINCIPAL}@localhost")
+}
+
+/// Boot `qemu` with this terminal as its console, and once the guest answers through the forward
+/// from the host's `port`, say so with the ssh line; QEMU's end is the boot's.
+pub fn run(mut qemu: Command, port: u16, identity: Option<&Path>) -> Result<()> {
+    let binary = qemu.get_program().to_string_lossy().into_owned();
+    let mut child = qemu.spawn().with_context(|| format!("starting {binary}"))?;
+    let line = ssh_line(port, identity);
+    // QEMU has the terminal in raw mode: lines end in \r\n.
+    match prove_forward(port, &mut child)? {
+        Answer::Banner(banner) => eprint!(
+            "\r\nport {port} forwards to the guest's sshd ({banner}; its \"connection 1\" on the console \
+             was this check). Log in from another terminal:\r\n\r\n  {line}\r\n\r\n"
+        ),
+        Answer::Closed => eprint!(
+            "\r\nport {port} forwards to the guest. Once the console prints \"sshd: listening on port \
+             22\", log in from another terminal:\r\n\r\n  {line}\r\n\r\n"
+        ),
+    }
+    let status = child.wait().with_context(|| format!("waiting for {binary}"))?;
+    ensure!(status.success(), "{binary} exited with {status}");
+    Ok(())
+}
+
+/// What answered a connection through the forward: the guest, either way.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Answer {
+    /// sshd's first line: it listens.
+    Banner(String),
+    /// The guest closed the connection: its network is up and nothing listens on the port yet.
+    Closed,
+}
+
+/// Connect to the host's `port` until the guest answers, or `qemu` ends. QEMU accepts a host
+/// connection as soon as it runs, guest or not, and relays it: a guest whose network is not up
+/// leaves it hanging (dropped and tried again), a guest with nothing on the port closes it, and
+/// sshd sends its banner.
+pub fn prove_forward(port: u16, qemu: &mut Child) -> Result<Answer> {
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    loop {
+        if let Some(status) = qemu.try_wait()? {
+            bail!("QEMU exited with {status} before the guest answered on port {port}");
+        }
+        // Refused while QEMU has not bound the port yet.
+        let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_millis(500)) else {
+            std::thread::sleep(Duration::from_millis(100));
+            continue;
+        };
+        stream.set_read_timeout(Some(Duration::from_secs(1)))?;
+        let mut buf = [0u8; 256];
+        match stream.read(&mut buf) {
+            Ok(0) => return Ok(Answer::Closed),
+            Ok(n) => {
+                let text = String::from_utf8_lossy(&buf[..n]);
+                return Ok(Answer::Banner(text.lines().next().unwrap_or_default().to_string()));
+            }
+            Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => continue,
+            Err(_) => return Ok(Answer::Closed),
+        }
+    }
 }
 
 /// The QEMU command that boots the launch machine's `packed` image at `smp` harts, its disk
@@ -314,6 +396,17 @@ fn nul_separated(cmd: &Command) -> Vec<u8> {
     out
 }
 
+/// The command [`nul_separated`] wrote: its program and arguments, ended by the parent's death as
+/// the bench's own QEMU is.
+fn from_nul_separated(bytes: &[u8]) -> Result<Command> {
+    let bytes = bytes.strip_suffix(b"\0").context("a QEMU argv file ends each argument with a NUL")?;
+    let mut parts = bytes.split(|b| *b == 0).map(OsStr::from_bytes);
+    let mut cmd = Command::new(parts.next().context("an empty QEMU argv file")?);
+    cmd.args(parts);
+    qemu::exit_with_parent(&mut cmd);
+    Ok(cmd)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -410,6 +503,49 @@ mod tests {
     fn the_argv_file_ends_each_argument_with_a_nul() {
         let mut cmd = Command::new("qemu");
         cmd.args(["-m", "1024M", "a b"]);
-        assert_eq!(nul_separated(&cmd), b"qemu\0-m\01024M\0a b\0");
+        let bytes = nul_separated(&cmd);
+        assert_eq!(bytes, b"qemu\0-m\01024M\0a b\0");
+        let read = from_nul_separated(&bytes).unwrap();
+        assert_eq!(read.get_program(), "qemu");
+        assert_eq!(read.get_args().collect::<Vec<_>>(), ["-m", "1024M", "a b"]);
+        assert!(from_nul_separated(b"").is_err());
+        assert!(from_nul_separated(b"qemu").is_err(), "an argument cut short");
+    }
+
+    /// The ssh line names the host port the forward is made from: the one `./launch --ssh-port`
+    /// gives both.
+    #[test]
+    fn the_ssh_line_names_the_forwarded_port() {
+        let boot: Boot = toml::from_str("programs = []\nexpect = []\n[net]\nforward = [22]\n").unwrap();
+        let disk = std::env::temp_dir().join(format!("testbench-launch-forward-{}", std::process::id()));
+        let (args, forwards) = qemu::virtio_devices(&boot, &disk, None, &[2200]).unwrap();
+        assert_eq!(forwards, [(22, 2200)]);
+        assert!(args.iter().any(|a| a.contains("hostfwd=tcp:127.0.0.1:2200-:22")), "{args:?}");
+        assert_eq!(ssh_line(2200, Some(Path::new("a key"))), "ssh -p 2200 -i 'a key' alice@localhost");
+        assert_eq!(ssh_line(2222, None), "ssh -p 2222 alice@localhost");
+    }
+
+    /// The forward is proved by the guest's answer: sshd's banner, or the guest closing the
+    /// connection; a port nothing answers on is tried until QEMU ends, and that is the failure.
+    #[test]
+    fn the_forward_is_proved_by_the_guest_s_answer() {
+        let mut qemu = Command::new("sleep").arg("30").spawn().unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let guest = std::thread::spawn(move || {
+            let (mut sshd, _) = listener.accept().unwrap();
+            std::io::Write::write_all(&mut sshd, b"SSH-2.0-Sunset-0.6.0\r\nmore").unwrap();
+            drop(listener.accept().unwrap());
+        });
+        assert_eq!(prove_forward(port, &mut qemu).unwrap(), Answer::Banner("SSH-2.0-Sunset-0.6.0".into()));
+        assert_eq!(prove_forward(port, &mut qemu).unwrap(), Answer::Closed);
+        guest.join().unwrap();
+        qemu.kill().unwrap();
+        qemu.wait().unwrap();
+
+        // Nothing on the port, and QEMU gone: the proof fails with QEMU's exit.
+        let mut qemu = Command::new("false").spawn().unwrap();
+        let why = prove_forward(port, &mut qemu).unwrap_err().to_string();
+        assert!(why.contains("QEMU exited"), "{why}");
     }
 }
