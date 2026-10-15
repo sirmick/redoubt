@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 109
+revision = 120
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -2009,8 +2009,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M2"
   body = "Seen in train 17's whole bench on 98b866854 (CTX2, B47, B46, B49): steward-home-quota failed on rv64 and rv32 alike at step 9, `File.rm(\"/home/alice/a\")` after alice's home reached enospc answered `{:error, :eio}` (the alice ssh log shows it), and the case waited for `{:rm, :ok}` to its 610 s deadline. Alone, the same case passes in ~225 s on c7efc9b67 and a4c093827 (bisect, .tmp/train-17b/bisect.log), so the failure needs the bench's load (the net class runs one at a time, beside boots). An rm answering eio is wrong under any load: find where eio arises (walfsd's write path when the volume is full and a request is slow or retried; beamlet's files.rs retry after a busy answer (BEAM11); B47's Io release of an ended connection racing a late message; the 9P client's timeout mapped to eio) with a trace of the failing run (reproduce by running the case beside two or three boots), fix it, and make the case's wait for the rm bounded by its own step deadline rather than the case's. Both widths. Tier A if the fix is in a server or beamlet's platform (steward-red), else Tier B."
-  state = "reported"
-  revision = 108
+  state = "done"
+  revision = 112
 
 [[node]]
   id = "B52"
@@ -2115,8 +2115,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   needs = ["B46"]
   body = "Residual from B46 (merged in train 17 as a4c093827; .wash/local/B46-report.md 'Residuals'): the fast path covers printable runs whose width is one column per code point; CJK, marks and emoji fall back to measuring each grapheme, and the per-stage profile and the 1 MiB-line time on the machine were last measured before BEAM19 and K33. Re-profile at today's main both widths; if the wide/combining path dominates a realistic text, give it a run path of its own with a floor in shell-output-rate; otherwise record the numbers and close. Escaping path: Tier A, steward-red. Not opened on 2026-10-15: a candidate for the owner's polish list."
-  state = "active"
-  revision = 94
+  state = "reported"
+  revision = 118
 
 [[node]]
   id = "B61"
@@ -2135,9 +2135,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   needs = ["B61", "B51"]
   body = "The gap two packages name (2026-10-15). B61: Io::connect at MAX_WAITERS waits HAND_US (1 s) for an ended piped's waiter to hand over; under heavy load a hand-over took longer and the seventh fresh piped was refused Emfile though no live server held its place (pipe-sixty-four rv32 beside a whole bench, 1 run in 3), so the case stays in the quiet class. B51's ruling (QA B51-completion-hold): the client's completion call has no clock; a Hub::wait caller overshoots its deadline by a stall; a wedged server holds its clients until it dies. Both want a bound tied to the request's own deadline, and beamlet's files layer (userland/otp/redoubt/src/files.rs, Io) carries none: a File call has no deadline to tie to. Design first (the Architect): where a request's deadline lives (the Elixir caller's timeout? the session's? a per-call option?), what a hub wait does at it (answer late-busy, refuse, or hand back), and whether the kernel's R28 parked-call accounting is touched. Then build; pipe-sixty-four leaves the quiet class when it closes. Tier A: steward-red. Size M."
-  state = "active"
-  revision = 109
-  overrides = ["2026-10-15: started by Orchestrator before B51 (reported): B61 and B51 are accepted and merged in train 27 (a22f121cd), on the bench now; B62 builds on that head and rebases onto main at the publish"]
+  state = "done"
+  revision = 114
+  overrides = ["2026-10-15: started by Orchestrator before B51 (reported): B61 and B51 are accepted and merged in train 27 (a22f121cd), on the bench now; B62 builds on that head and rebases onto main at the publish", "2026-10-15: started by Orchestrator before B51 (reported): B51 is published on main 1dd0acb27 (train 27); its node lags the publish"]
 
 [[node]]
   id = "B63"
@@ -2148,3 +2148,22 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "Found 2026-10-15 while pinning IDLE2's train failure (QA IDLE2-sched-capped; .wash/local/IDLE2-report.md 'Reopened'; logs .tmp/IDLE2/pin/): on main 146db8897, rv64 sched-capped alone on the quiet cores fails 2 of 5 runs at smp=3 (second-a 277 or second-b 280 against 283..383; smp 2 and 4 pass 10/10; rv32 passes); IDLE2's head fails 3 of 5 the same way. In the second window no timeout fires; every interrupt is a slice end of the hart's own runner; the three slice ends meet at the lock each slice in a fixed order, a slice-end section is ~6.3-6.6k ticks, and the heavy budget on the last hart waits 23-45 % of its hart behind the others' sections. Share is charged over all charged net of lock waits, so the budget on the last hart reads 276-340: under icount the order is QEMU's turn order, fixed once set (K31's 'A hart waits for QEMU's turns' residual), which the toml concedes at 2 harts (the twin judges smp=[2] only); the second-cap clause at 3 harts has the same exposure and no twin. Trains 25 and 26 both hit it under load. Fix as kernel-red-2's ruling on IDLE2-sched-capped sets out: the host-clock twin judges at 3 (smp [2,3], quiet class, five runs quoted), the icount case records there (hart_shares_from raised), a case change under K31, no bound widened. Tier A (a kernel case's judging): kernel-red. Size S."
   state = "done"
   revision = 106
+
+[[node]]
+  id = "B64"
+  title = "The shell pays a per-piece prologue twice a line: Text.visible and Width.run each take 64 code points in Erlang before a run path starts, so a realistic page draws at ~70 % of its ASCII twin's rate"
+  template = "package"
+  parent = "M2"
+  needs = ["B60"]
+  body = "B60's reading (.wash/local/B60-report.md, 2026-10-15): a realistic page (82-byte lines, one CJK word, one emoji, one accented name) draws at 7,200/6,400 B/s against its ASCII twin's 10,400/9,300; its five lone graphemes and two run restarts explain under a third of the gap; the rest is per-piece: every line is a piece, and Text.visible and Width.run each walk the first 64 code points in Erlang before the binary fast path takes over. Lever: start the run path at the piece's first byte when the piece is printable (one check, not 64 steps), or share one prologue between the two passes. Measure with shell-text-profile (B60's case) before and after; a floor on the page text in shell-output-rate if the gain holds. Escaping path: Tier A, steward-red. A polish candidate for the owner's list, not opened on 2026-10-15."
+  state = "todo"
+  revision = 117
+
+[[node]]
+  id = "B65"
+  title = "A fun typed at the shell prompt pays ~0.18 µs per byte of every binary among its bindings on each call: a loop over a 256 KiB binary costs 50 ms a step and hours in all"
+  template = "package"
+  parent = "M2"
+  body = "Found by B60's measurement (.wash/local/B60-report.md, 2026-10-15; steward-red-2's P2-1): a function defined at the prompt runs in the evaluator (erl_eval) and each call costs ~3.6 ms plus ~0.18 µs per byte of the binaries bound in its environment, so a walk over a large binary is quadratic: 50 ms a step at 256 KiB (350x a compiled step), hours for the whole. Not the shell's encoder (B60 measured compiled walks linear at 141-422 µs a grapheme). Find where the per-byte cost arises (the bindings copied per call? the binary re-matched? beamlet's erl_eval or term copying), bound it or make large bindings references, with a host measurement on beamlet and a sentence in shell.md's evaluator section; until then shell.md names the trap (B60 points at it). Tier B (the evaluator is OTP's; beamlet's platform if the cost is the VM's). Size S-M."
+  state = "active"
+  revision = 120
