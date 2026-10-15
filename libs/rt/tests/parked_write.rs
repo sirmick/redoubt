@@ -2,7 +2,8 @@
 //! a waiting read, charged to the same admission, answered at once when its caller gives up, and
 //! refused with the server's timeout when its deadline passes.
 
-use std::time::{Duration, Instant};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use redoubt_fake_kernel::fake;
 use redoubt_rt::abi::{Error, FOREVER};
@@ -55,14 +56,36 @@ impl FileServer for Full {
 
 /// How long a parked write waits before the server refuses it.
 const LONGEST: u64 = 300_000;
+/// How long the first write's caller waits before it gives up.
+const GIVES_UP: u64 = 50_000;
 
+/// Waits for the test's next step, `cond`, polling the fake kernel's state; fails naming `step`
+/// if it does not come within `TRIES` polls, before the fake's own 60 s guard.
+fn until(step: &str, mut cond: impl FnMut() -> bool) {
+    const TRIES: u32 = 20_000;
+    for _ in 0..TRIES {
+        if cond() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    panic!("{step}: not reached in {TRIES} polls");
+}
+
+/// Each step waits on the server's state, on a clock the test holds: a caller's wait and the
+/// server's deadline end with the test's tick, taken once the server says it has parked the
+/// write, so neither races the host.
 #[test]
 fn a_waiting_write_is_parked_abandoned_and_expired() {
     let f = fake();
+    f.hold_clock();
     let (server, client) = (f.process(0, &[]), f.process(1001, &[]));
     let receive = f.endpoint(server);
     let conn = f.grant(server, receive, client, 1);
 
+    // How many writes the server has parked, for the test to wait on.
+    let parks = Arc::new(AtomicU32::new(0));
+    let parked_so_far = parks.clone();
     let server_thread = f.run(server, move || {
         let ep = Endpoint::from_handle(receive);
         let limits = Limits { buckets: 2, in_flight: 4, files: 4, state: 0, requests: 0, pages: 0 };
@@ -84,8 +107,11 @@ fn a_waiting_write_is_parked_abandoned_and_expired() {
                     // Its deadline runs from now, not from before the receive that waited.
                     let now = handle::time_now().unwrap();
                     let charge = nine.charge_of(&held.caller);
-                    if let Err(NotParked(r)) = parked.park(nine.admission_mut(), held, charge, (), now) {
-                        refuse(r, NineError("too_many")).unwrap();
+                    match parked.park(nine.admission_mut(), held, charge, (), now) {
+                        Ok(()) => {
+                            parked_so_far.fetch_add(1, Ordering::Release);
+                        }
+                        Err(NotParked(r)) => refuse(r, NineError("too_many")).unwrap(),
                     }
                 }
                 Ok(Event::Abandoned(id)) => {
@@ -98,29 +124,39 @@ fn a_waiting_write_is_parked_abandoned_and_expired() {
     });
 
     f.as_process(client, || {
-        let mut c = Connection::new(Endpoint::from_handle(conn));
+        let c = Connection::new(Endpoint::from_handle(conn));
         let mut lend = Lend::new(4).unwrap();
         c.attach(&mut lend, 0, "").unwrap();
         c.open(&mut lend, 0, mode::OWRITE).unwrap();
-        // Its caller gives up first: the write is answered at once, freeing it.
-        c.timeout = 50_000;
-        assert_eq!(c.write(&mut lend, 0, 0, b"lost"), Err(ClientError::Sys(Error::Timeout)));
     });
-    // Only a hang guard, so the fake kernel's own 60 s.
-    let deadline = Instant::now() + Duration::from_secs(60);
-    while f.open_calls(server) != 0 {
-        assert!(Instant::now() < deadline, "the abandoned write was never answered");
-        std::thread::sleep(Duration::from_millis(1));
-    }
-    f.as_process(client, || {
+    // The first caller gives up: once its write is parked, its wait ends, the server is told and
+    // answers the write at once, freeing it.
+    let lost = f.run(client, move || {
         let mut c = Connection::new(Endpoint::from_handle(conn));
         let mut lend = Lend::new(4).unwrap();
-        // This one waits it out: the server's deadline answers it, with an Rerror.
-        c.timeout = FOREVER;
-        let started = Instant::now();
-        assert_eq!(c.write(&mut lend, 0, 0, b"late"), Err(ClientError::Rerror(ErrorName::Timeout)));
-        assert!(started.elapsed() >= Duration::from_micros(LONGEST), "answered before its deadline");
+        c.timeout = GIVES_UP;
+        u32::from(c.write(&mut lend, 0, 0, b"lost") == Err(ClientError::Sys(Error::Timeout)))
     });
+    until("the server parked the first write", || parks.load(Ordering::Acquire) == 1);
+    f.tick(GIVES_UP);
+    assert_eq!(lost.join().unwrap(), 1, "the first write's caller did not time out");
+    until("the abandoned write was answered", || f.open_calls(server) == 0);
+
+    // The second waits it out: the server's deadline answers it, with an Rerror, and not before.
+    let late = f.run(client, move || {
+        let mut c = Connection::new(Endpoint::from_handle(conn));
+        let mut lend = Lend::new(4).unwrap();
+        c.timeout = FOREVER;
+        let started = handle::time_now().unwrap();
+        let answer = c.write(&mut lend, 0, 0, b"late");
+        let waited = handle::time_now().unwrap() - started;
+        assert_eq!(answer, Err(ClientError::Rerror(ErrorName::Timeout)));
+        assert!(waited >= LONGEST, "answered {waited} µs in, before its deadline");
+        0
+    });
+    until("the server parked the second write", || parks.load(Ordering::Acquire) == 2);
+    f.tick(LONGEST);
+    late.join().unwrap();
     f.destroy(server, receive);
     assert_eq!(server_thread.join().unwrap(), 11, "one abandoned and one expired write");
 }

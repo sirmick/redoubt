@@ -21,7 +21,9 @@
 //! (`Fake::launched`); a child runs nothing, and a test ends it (`Fake::exit`), which sends its one exit
 //! notice. Every call is logged by name (`Fake::calls`), a test can have the next
 //! call of a name refused (`Fake::refuse`), or a later one (`Fake::refuse_after`), and it can read
-//! the most pages a process held at once (`Fake::held_peak`).
+//! the most pages a process held at once (`Fake::held_peak`). Its clock is the host's until a test
+//! holds it (`Fake::hold_clock`) and moves it itself (`Fake::tick`), so a deadline, a server's own
+//! or a call's timeout, is a step the test takes and never a race against the host.
 //!
 //! It also has what a driver needs: device objects (`Fake::mmio` and `Fake::irq`), `map_device`
 //! over a page of host memory a test can read and write as if it were registers, `receive` on an
@@ -39,7 +41,7 @@ use std::alloc::{Layout, alloc_zeroed, dealloc};
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::num::NonZeroU64;
-use std::sync::atomic::AtomicPtr;
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
 use std::sync::{Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -215,8 +217,12 @@ pub struct Fake {
     state: Mutex<State>,
     changed: Condvar,
     boot: Instant,
+    /// Whether a test holds the clock ([`Fake::hold_clock`]), and where it stands then, in
+    /// microseconds since boot.
+    held: AtomicBool,
+    clock: AtomicU64,
     /// Whether a wait with no deadline may last for ever ([`Fake::never_stuck`]).
-    patient: std::sync::atomic::AtomicBool,
+    patient: AtomicBool,
 }
 
 thread_local! {
@@ -239,7 +245,9 @@ pub fn fake() -> &'static Fake {
             state: Mutex::new(State { rng: 0x2545_f491_4f6c_dd1d, next_id: 1, ..State::default() }),
             changed: Condvar::new(),
             boot: Instant::now(),
-            patient: std::sync::atomic::AtomicBool::new(false),
+            held: AtomicBool::new(false),
+            clock: AtomicU64::new(0),
+            patient: AtomicBool::new(false),
         }));
         redoubt_rt::install_transport(fake);
         fake
@@ -565,21 +573,69 @@ impl Fake {
     /// Lets a wait with no deadline last for ever, for a program run on this fake that waits on a
     /// person rather than a test: a shell whose user is thinking changes nothing for as long as
     /// they think. Tests never call it, so a test that stalls still fails after [`STUCK`].
-    pub fn never_stuck(&self) { self.patient.store(true, std::sync::atomic::Ordering::Relaxed); }
+    pub fn never_stuck(&self) { self.patient.store(true, Ordering::Relaxed); }
 
     /// Seeds the kernel's `random`, for a program run on this fake for a person, whose keys must
     /// not repeat from run to run. Tests never call it, so their randomness repeats, as a test's
     /// should.
     pub fn seed_random(&self, seed: u64) { self.lock().rng = seed | 1; }
 
-    /// Waits for a change or the deadline; false once the deadline has passed. A wait with no
-    /// deadline (`FOREVER`) that sees nothing change anywhere in this kernel for [`STUCK`] panics:
-    /// the test is stuck (a server that ended early, a reply never sent), and fails naming it
-    /// rather than hanging the run. Load slows a test's progress; it does not stop every change.
-    fn wait<'a>(&self, guard: &mut Option<MutexGuard<'a, State>>, deadline: Option<Instant>) -> bool {
+    /// Microseconds since boot: the host's clock, or the test's once it holds it.
+    fn now(&self) -> u64 {
+        if self.held.load(Ordering::Acquire) {
+            self.clock.load(Ordering::Acquire)
+        } else {
+            self.boot.elapsed().as_micros() as u64
+        }
+    }
+
+    /// Takes the clock from the host: from here `time_now` stands still and only [`Fake::tick`]
+    /// moves it, so a deadline, a server's own or a call's or receive's timeout, is a step the
+    /// test takes once the state it waits on is reached, never a race against the host. A test
+    /// that parks a call and expires it, or has a caller give up on one, holds the clock; one
+    /// that holds it and ticks nothing is stuck ([`STUCK`]) as a `FOREVER` wait is. Held once for
+    /// the binary, however many of its tests ask.
+    pub fn hold_clock(&self) {
+        let _s = self.lock();
+        if !self.held.load(Ordering::Acquire) {
+            self.clock.store(self.boot.elapsed().as_micros() as u64, Ordering::Release);
+            self.held.store(true, Ordering::Release);
+        }
+    }
+
+    /// `dt` microseconds pass on the held clock, as the model's `tick`: every wait sees the time.
+    pub fn tick(&self, dt: u64) {
+        let _s = self.lock();
+        assert!(self.held.load(Ordering::Acquire), "a tick of a clock the test does not hold");
+        self.clock.fetch_add(dt, Ordering::AcqRel);
+        self.changed.notify_all();
+    }
+
+    /// When a wait of `timeout` µs ends, on this kernel's clock; `None` for `FOREVER`.
+    fn deadline(&self, timeout: u64) -> Option<u64> {
+        (timeout != FOREVER).then(|| self.now().saturating_add(timeout))
+    }
+
+    /// Waits for a change or the deadline; false once the deadline has passed. A wait only a
+    /// change can end, one with no deadline (`FOREVER`) or one on a held clock, that sees nothing
+    /// change anywhere in this kernel for [`STUCK`] panics: the test is stuck (a server that
+    /// ended early, a reply never sent, a tick never taken), and fails naming it rather than
+    /// hanging the run. Load slows a test's progress; it does not stop every change.
+    fn wait<'a>(&self, guard: &mut Option<MutexGuard<'a, State>>, deadline: Option<u64>) -> bool {
         let g = guard.take().unwrap();
-        match deadline {
-            None if self.patient.load(std::sync::atomic::Ordering::Relaxed) => {
+        let now = self.now();
+        if deadline.is_some_and(|d| now >= d) {
+            *guard = Some(g);
+            return false;
+        }
+        let host =
+            deadline.filter(|_| !self.held.load(Ordering::Acquire)).map(|d| Duration::from_micros(d - now));
+        match host {
+            Some(host) => {
+                let (g, _) = self.changed.wait_timeout(g, host).unwrap_or_else(|e| e.into_inner());
+                *guard = Some(g);
+            }
+            None if self.patient.load(Ordering::Relaxed) => {
                 *guard = Some(self.changed.wait(g).unwrap_or_else(|e| e.into_inner()));
             }
             None => {
@@ -587,18 +643,9 @@ impl Fake {
                 if waited.timed_out() {
                     drop(g);
                     panic!(
-                        "a FOREVER wait saw no change in the fake kernel for {STUCK:?}: the test is stuck"
+                        "a wait only a change can end saw none in the fake kernel for {STUCK:?}: the test is stuck"
                     );
                 }
-                *guard = Some(g);
-            }
-            Some(deadline) => {
-                let now = Instant::now();
-                if now >= deadline {
-                    *guard = Some(g);
-                    return false;
-                }
-                let (g, _) = self.changed.wait_timeout(g, deadline - now).unwrap_or_else(|e| e.into_inner());
                 *guard = Some(g);
             }
         }
@@ -656,13 +703,9 @@ fn free(addr: usize, len: usize) {
     unsafe { dealloc(addr as *mut u8, Layout::from_size_align(len, PAGE_SIZE).unwrap()) };
 }
 
-/// How long a wait with no deadline may see nothing change before the test is called stuck: far
-/// beyond any step of any test here, however loaded the machine.
+/// How long a wait only a change can end may see nothing change before the test is called stuck:
+/// far beyond any step of any test here, however loaded the machine.
 const STUCK: Duration = Duration::from_secs(60);
-
-fn deadline(timeout: u64) -> Option<Instant> {
-    (timeout != FOREVER).then(|| Instant::now() + Duration::from_micros(timeout))
-}
 
 /// Whether `pages` lies inside one of `pid`'s mappings.
 fn owns(s: &State, pid: usize, pages: Pages) -> bool {
@@ -880,7 +923,7 @@ unsafe impl redoubt_rt::Transport for Fake {
                 self.changed.notify_all();
                 Ok(Return::Reply(ReplyOutcome { delivered, installed }))
             }
-            Call::TimeNow => Ok(Return::Time(self.boot.elapsed().as_micros() as u64)),
+            Call::TimeNow => Ok(Return::Time(self.now())),
             Call::Random => {
                 let mut s = self.lock();
                 s.rng ^= s.rng << 13;
@@ -1092,7 +1135,7 @@ impl Fake {
             s.given_up.insert(id.get(), (pid, p.addr, p.npages.get() * PAGE_SIZE));
         }
         self.changed.notify_all();
-        let deadline = deadline(timeout);
+        let deadline = self.deadline(timeout);
         let mut guard = Some(s);
         let result = loop {
             let s = guard.as_mut().unwrap();
@@ -1148,7 +1191,7 @@ impl Fake {
     }
 
     fn receive(&self, pid: usize, from: Option<Handle>, timeout: u64, rec: usize) -> Result<Return, Error> {
-        let deadline = deadline(timeout);
+        let deadline = self.deadline(timeout);
         let mut guard = Some(self.lock());
         not_given_up(guard.as_ref().unwrap(), pid, rec, RECEIVED_SLOTS * 8)?;
         let Some(from) = from else {
