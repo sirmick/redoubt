@@ -1012,7 +1012,7 @@ fn boot_case(
         // Every boot gets fresh devices: a new disk, new host ports.
         // A kept disk is the first boot's, which the second boot finds as the first left it.
         let kept = boot.disk.as_ref().is_some_and(|d| d.keep).then(|| log.with_extension("img"));
-        let boot_once = |log: &Path| -> Result<Verdict> {
+        let mut boot_once = |log: &Path| -> Result<Verdict> {
             let disk = kept.clone().unwrap_or_else(|| log.with_extension("img"));
             // The launch machine boots launch's own command line, which brings its devices and
             // takes nothing added: no guest seed either.
@@ -1053,7 +1053,7 @@ fn boot_case(
                 }
                 false => None,
             };
-            let verdict = qemu::run(&image, launched, boot, &builder.workspace, &forwards, log)?;
+            let verdict = qemu::run(&image, launched, boot, &builder.workspace, &forwards, log, out)?;
             Ok(peer::finish_dials(verdict, dials))
         };
         let outcome = match boot_once(&log)? {
@@ -1186,7 +1186,8 @@ fn ssh_loopback(
         LoopbackServer::Openssh => ssh::loopback(workspace, dir, &case.name, authorized, host_key)?,
     };
     let abort = std::sync::atomic::AtomicBool::new(false);
-    let sessions = ssh::run(workspace, &loopback.session, &server, logs, &case.name, deadline, &abort, None)?;
+    let sessions =
+        ssh::run(workspace, &loopback.session, &server, logs, &case.name, deadline, &abort, None)?.failed;
     // What the server saw comes first: a case that fails as its `must_fail` expects still fails if
     // the server did not see it that way.
     let server_log = ssh::loopback_log(&logs.join("ssh"), &case.name);

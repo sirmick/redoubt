@@ -34,6 +34,12 @@ expect_after = [
 
 [[session]]
 user = "alice"
+# The login's latency, ssh's start to the prompt: the prompt matched 1.65–2.08 s after ssh started on
+# either width (three runs each at main of 2026-10-15, 0.8 s of it to beamlet's first read of the
+# shell; docs/servers/sshd.md, "Sessions over SSH"). The session's log notes it,
+# target/testbench/run-*/launch-system-<arch>-smp4-alice.ssh.log: `[/.../ matched N s after ssh
+# started]`, and the bench prints it under the case's result. No `within` bounds the prompt until
+# two trains agree within 20 %.
 steps = [
     { expect = '/home/alice \([0-9]+\)> ' },
     { send = "\"alice-\" <> \"marker\"\n" },

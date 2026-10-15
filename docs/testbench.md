@@ -1214,7 +1214,9 @@ command = "echo hi"          # optional: a command (with `-s`, a subsystem) in p
 
 Every session's exit status is checked and all of its output passes `forbid`; a session that fails
 stops the others. Its log notes each `expect` that matched and when, in seconds after its `ssh`
-started: a login's latency to its first prompt. A `pty = true` session's `ssh` reads its input from a pseudo-terminal the bench
+started, and the bench prints under the case's result those matched before the session first
+typed: a login's latency to its first prompt, re-measured by every run
+([sshd](servers/sshd.md#sessions-over-ssh)). A `pty = true` session's `ssh` reads its input from a pseudo-terminal the bench
 opens at 80x24, so that `ssh` reports a size change as OpenSSH does for a user; its output stays on
 pipes. `resize` sets that terminal's size and signals `ssh` (`SIGWINCH`), which then sends a
 `window-change` if the size changed. The terminal is the client's input and never a verdict. With `net.host_key` set, `ssh` refuses any other host key. Test keys live in

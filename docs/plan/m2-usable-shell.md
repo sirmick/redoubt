@@ -209,7 +209,10 @@ paths ([the shell](../userland/shell.md#completion)); and resource use, `free`, 
 `ps` and `top`, over the session's own budget and its VM, `df` not yet
 ([the shell](../userland/shell.md#resource-use)); and the editor, `ed`, with syntax
 highlighting, and the file manager, `fm`, host-tested ([the shell](../userland/shell.md#the-editor)).
-On Redoubt the shell runs in each session over SSH, and so do its commands: files through
+On Redoubt the shell runs in each session over SSH, reached about 1.9 s after `ssh` starts on
+either width, 1.0–1.1 s of it the shell's own load from beamlet's first read of it to its prompt
+(the bench prints each login's latency under the case's result;
+[sshd](../servers/sshd.md#sessions-over-ssh)), and so do its commands: files through
 beamlet's platform in the session's home and vault, binds, and `whoami` and `labels`, as the
 steward told the session (`bench:shell-commands`; [the shell](../userland/shell.md#session-commands));
 and native programs and pipes: a native stage's standard streams are pipes the session serves
