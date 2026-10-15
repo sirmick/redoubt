@@ -1,4 +1,5 @@
-//! Unit tests of the rules on their own. `tests/differential.rs` checks them against the model.
+//! Unit tests of the rules on their own, and of the timer's placement ([`Hint`]).
+//! `tests/differential.rs` checks the rules against the model.
 
 extern crate std;
 
@@ -828,4 +829,125 @@ fn a_hart_coming_online_counts_the_queued_budgets_afresh() {
     harts.accrue(0, 1000);
     harts.settle(&mut bs, 1);
     assert_eq!(harts.q.capped().collect::<Vec<_>>(), [1], "900 x 2 > 1 x 1000: 1 is capped");
+}
+
+/// A hint is only ever lowered: an earlier item takes it, payer and all; a second payer at the
+/// same instant leaves it to every hart (`None`); a later item changes nothing.
+#[test]
+fn a_hint_is_lowered_and_a_tie_of_payers_belongs_to_every_hart() {
+    let h = Hint::NONE.lowered(500, Some(7));
+    assert_eq!(h, Hint { at: 500, payer: Some(7) });
+    assert_eq!(h.lowered(700, Some(9)), h, "a later item changes nothing");
+    assert_eq!(h.lowered(500, Some(7)), h, "the same payer at the same instant keeps it");
+    assert_eq!(h.lowered(500, Some(9)), Hint { at: 500, payer: None }, "two payers tie");
+    assert_eq!(h.lowered(400, Some(9)), Hint { at: 400, payer: Some(9) }, "an earlier item takes it");
+    assert_eq!(h.lowered(400, None), Hint { at: 400, payer: None });
+    assert_eq!(Hint { at: 500, payer: None }.lowered(500, Some(7)).payer, None, "a tie stays one");
+}
+
+/// What every hart's timer is armed for once each has re-armed against the others (as the harts
+/// do at their returns), iterated to a fixed point: `slice` is each hart's own slice end.
+fn armed_at(items: &[Hint], runners: &[Option<u64>], slice: &[u64]) -> Vec<u64> {
+    let mut armed = vec![u64::MAX; runners.len()];
+    for _ in 0..8 {
+        let next: Vec<u64> = (0..runners.len())
+            .map(|h| items.iter().map(|i| i.due_on(h, runners, &armed)).fold(slice[h], u64::min))
+            .collect();
+        if next == armed {
+            return armed;
+        }
+        armed = next;
+    }
+    panic!("the arming did not settle: {armed:?}");
+}
+
+/// Liveness: however the harts run the payers, after every hart has re-armed at least one hart is
+/// armed at or before each item; and placement: an item whose payer runs is armed only on the
+/// harts that run it, while one whose payer runs nowhere, or has none, is armed on every hart.
+#[test]
+fn each_item_is_armed_on_a_hart_that_runs_its_payer_or_on_every_hart() {
+    let mut rng = Rng(0x5eed);
+    for _ in 0..20_000 {
+        let harts = 1 + rng.range(0, 3) as usize;
+        let runners: Vec<Option<u64>> =
+            (0..harts).map(|_| [None, Some(1), Some(2), Some(3)][rng.range(0, 3) as usize]).collect();
+        let slice: Vec<u64> =
+            runners.iter().map(|r| if r.is_some() { rng.range(100, 1100) } else { u64::MAX }).collect();
+        let items: Vec<Hint> = (0..2)
+            .map(|_| Hint {
+                at: rng.range(1, 2000),
+                payer: [None, Some(1), Some(2), Some(3)][rng.range(0, 3) as usize],
+            })
+            .collect();
+        let armed = armed_at(&items, &runners, &slice);
+        for item in &items {
+            assert!(armed.iter().any(|a| *a <= item.at), "{item:?} uncovered: {runners:?} {armed:?}");
+            let on: Vec<usize> =
+                (0..harts).filter(|h| item.due_on(*h, &runners, &armed) == item.at).collect();
+            match item.payer.filter(|p| runners.contains(&Some(*p))) {
+                Some(p) => assert_eq!(
+                    on,
+                    (0..harts).filter(|h| runners[*h] == Some(p)).collect::<Vec<_>>(),
+                    "{item:?} {runners:?}"
+                ),
+                None => assert_eq!(on.len(), harts, "{item:?} runs nowhere: every hart"),
+            }
+        }
+    }
+}
+
+/// An item noted on a hart that does not run its payer is armed there too until the payer's hart
+/// re-arms: a hart armed later than the item (or not at all) covers nothing, one armed at or
+/// before it, or whose timer has fired and is being re-armed (`armed` 0), does.
+#[test]
+fn a_hart_covers_an_item_only_when_armed_at_or_before_it() {
+    let item = Hint { at: 500, payer: Some(1) };
+    let runners = [Some(2), Some(1)];
+    assert_eq!(
+        item.due_on(0, &runners, &[u64::MAX, u64::MAX]),
+        500,
+        "the payer's hart is armed later: this one arms too"
+    );
+    assert_eq!(item.due_on(0, &runners, &[u64::MAX, 900]), 500);
+    assert_eq!(item.due_on(0, &runners, &[u64::MAX, 500]), u64::MAX, "the payer's hart comes by it");
+    assert_eq!(
+        item.due_on(0, &runners, &[u64::MAX, 0]),
+        u64::MAX,
+        "the payer's hart's timer fired and re-arms"
+    );
+    assert_eq!(item.due_on(1, &runners, &[500, u64::MAX]), 500, "the payer's own hart always arms");
+    assert_eq!(Hint { at: 500, payer: None }.due_on(0, &runners, &[u64::MAX, 500]), 500, "a tie: every hart");
+}
+
+/// A hart that covered an item switches to another budget and re-arms: the item stays covered,
+/// by that hart itself while its payer runs nowhere, and still by it once a third hart runs the
+/// payer but is armed later, until that hart has armed at or before the item and alone comes by it.
+#[test]
+fn an_item_stays_covered_when_the_hart_that_covered_it_switches_away() {
+    let item = Hint { at: 500, payer: Some(1) };
+    let covered = |armed: &[u64]| armed.iter().any(|a| *a <= item.at);
+    // Hart 1 runs the payer and is armed for the item; hart 0 leaves it to hart 1.
+    let mut runners = [Some(2), Some(1), None];
+    let mut armed = [u64::MAX, 500, u64::MAX];
+    assert_eq!(item.due_on(0, &runners, &armed), u64::MAX);
+    // Hart 1 switches to budget 3; its timer fired, or it re-arms at the return either way, with
+    // the payer now running nowhere: it arms the item itself, and so would any other hart.
+    runners[1] = Some(3);
+    armed[1] = 0;
+    assert_eq!(item.due_on(0, &runners, &armed), 500, "no hart runs the payer: every hart arms");
+    armed[1] = item.due_on(1, &runners, &armed);
+    assert_eq!(armed[1], 500, "the hart that left the payer arms the item");
+    assert!(covered(&armed));
+    // The payer is picked on hart 2, which has not re-armed yet: hart 1 keeps the item until hart
+    // 2 is armed at or before it, then leaves it to hart 2.
+    runners[2] = Some(1);
+    armed[1] = item.due_on(1, &runners, &armed);
+    assert_eq!(armed[1], 500, "the payer's hart is armed later: this one keeps the item");
+    assert!(covered(&armed));
+    armed[2] = item.due_on(2, &runners, &armed);
+    assert_eq!(armed[2], 500, "the payer's own hart arms it");
+    armed[1] = item.due_on(1, &runners, &armed);
+    assert_eq!(armed[1], u64::MAX, "and the hart that left the payer leaves the item to it");
+    assert_eq!(item.due_on(0, &runners, &armed), u64::MAX);
+    assert!(covered(&armed));
 }

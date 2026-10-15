@@ -7,7 +7,14 @@ programs = ["sched-exit-churn"]
 # Test builds only: the trace ring (never in a default kernel). The oracle checks every pick, and
 # judges the victim's share of what the kernel charged in the window the program prints
 # (`HART-SHARE`), net of lock waits; audits are charged to no one, and so is a wait behind another
-# hart's audit. Each variant is judged at whatever harts the run has.
+# hart's audit. Each variant is judged at whatever harts the run has. At two harts the timer work
+# billed to others in the victim's time (the attacker's poll timeouts, whose payer runs nowhere
+# while it waits, so every hart's timer comes by them) is reported, not bounded, here: under
+# icount which hart answers is QEMU's turn order, and a run locks into one phase: 20 of 1000 of
+# the victim's charges against threads that exit (164 such interrupts, 323,661 ticks) on rv64 and
+# 0 on rv32 in one run each (before the placement 27 interrupts and 70,232 ticks on rv64, 8 and
+# 17,035 on rv32, in one phase). Where the harts run at once it is 0 to 5 of 1000, bounded at 10
+# by sched-exit-churn-mttcg (kernel/scheduling.md, "A hart waits for QEMU's turns").
 kernel_features = ["sched-trace"]
 post_check = "sched_oracle"
 timeout_secs = 600

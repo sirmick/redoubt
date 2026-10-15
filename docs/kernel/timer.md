@@ -37,13 +37,18 @@ a time never fires before `time_now` reaches it.
 
 ### The hart timer
 
-<details><summary>Status: built · partly tested: that a stale early hint costs one early interrupt and misses nothing is argued from the code, not attacked · tested (5)</summary>
+<details><summary>Status: built · partly tested: that a stale early hint costs one early interrupt and misses nothing is argued from the code, not attacked · tested (10)</summary>
 
 - bench:timeouts
 - bench:budget-deadline
 - bench:sched-share
 - bench:sched-timer-entry
+- bench:deadline-placement
 - mutation:TimeoutIgnoredWhileOthersRun
+- host:redoubt-stride::a_hint_is_lowered_and_a_tie_of_payers_belongs_to_every_hart
+- host:redoubt-stride::each_item_is_armed_on_a_hart_that_runs_its_payer_or_on_every_hart
+- host:redoubt-stride::a_hart_covers_an_item_only_when_armed_at_or_before_it
+- host:redoubt-stride::an_item_stays_covered_when_the_hart_that_covered_it_switches_away
 
 </details>
 
@@ -66,6 +71,22 @@ preemption arms the timer once, at the return to the thread `kmain` picks. Each 
 `ecall` to the firmware, through the SBI TIME extension (`kernel/src/arch/riscv/timer_sbi.rs`).
 With nothing due at all (the kernel idle, no timeouts, no deadlines) the timer is set to never.
 
+**Whose hart comes by an item.** Each hint carries the id of the budget that pays for its item: a
+timeout's, the blocked thread's budget; a deadline's, the dying budget's parent (the bill at the
+destruction may go to an ancestor with free weight; the placement reads the parent). A hart arms
+its timer for an item if it runs the payer, if no hart runs the payer, if two payers tie at the
+instant (the hint then names none), or if no other hart that runs the payer is armed at or before
+it; otherwise that hart's timer comes by it. So the work the item makes, the timeout's answer or
+the whole destruction, lands on its payer's hart where the payer runs, in the payer's own time,
+and not in another budget's slice ([R12 for timer work](#r12-scheduling-for-timer-work)). The
+decision is a pure function of the hint, the harts' runners and what each timer is armed for
+(`redoubt_stride::Hint::due_on`, read at each re-arm from the scheduler's runners, one read per
+hart; the deadline list is never scanned on the way to user mode), and it keeps the liveness the
+plain rule had: at every return to user mode and before every idle, at least one hart is armed at
+or before each kind's earliest item, which the host tests above hold over random runner sets.
+A payer that runs nowhere is the common case for a timeout: a budget with one thread blocks to
+wait, so its own timeout is every hart's, as before.
+
 While a user thread runs, its slice end is always pending. So the kernel is always entered
 within one slice, whatever the thread does. The kernel itself runs with supervisor interrupts
 off. A timer interrupt is taken from user mode, or while `kmain` sleeps in `wfi` with nothing
@@ -74,11 +95,11 @@ once.
 
 ```mermaid
 flowchart TD
-    blk["a thread blocks in call, send<br/>or receive with a finite timeout"] --> hto["earliest timeout: lowered"]
-    mk["budget_create<br/>with a deadline"] --> hdl["earliest deadline: lowered"]
+    blk["a thread blocks in call, send<br/>or receive with a finite timeout"] --> hto["earliest timeout: lowered,<br/>its payer the thread's budget"]
+    mk["budget_create<br/>with a deadline"] --> hdl["earliest deadline: lowered,<br/>its payer the parent"]
     pick[a picked thread returns<br/>to user mode] --> hsl["slice end: return + SLICE_US"]
     leave[the kernel leaves for kmain] --> hnv["slice end: never"]
-    hto --> M{earliest of the three<br/>changed?}
+    hto --> M{"this hart's earliest changed?<br/>(an item whose payer another hart<br/>runs, armed by then, is that hart's)"}
     hdl --> M
     hsl --> M
     hnv --> M
@@ -247,7 +268,7 @@ deadline itself. The only delay is the kernel work already in progress when the 
 
 ### R12 (scheduling) for timer work
 
-Status: built · tested: bench:sched-timer-flood, bench:deadline-flood-billed, bench:sched-exit-churn, mutation:R12TimerWorkUnbilled
+Status: built · tested: bench:sched-timer-flood, bench:deadline-flood-billed, bench:sched-exit-churn, bench:deadline-placement, bench:deadline-flood-billed-traced-mttcg, bench:sched-exit-churn-mttcg, mutation:R12TimerWorkUnbilled
 
 R12 is owned by [scheduling](scheduling.md#r12-scheduling); this is how its charging applies to
 the timer's work. Each expired item's work is billed under it: a timeout to its thread's budget, a deadline's
@@ -266,23 +287,55 @@ own handling between two intervals, nobody's; a deadline's destruction still doe
 microsecond apart, or creates many budgets with staggered deadlines, spends its own CPU share, not
 a neighbour's.
 
-On several harts the bill is right but the hart may not be the payer's. Every hart's timer comes
-by the earliest timeout and the earliest deadline, so the hart that answers one is often running
-another budget, and that budget's thread waits out the payer's work. A pick repays it only where
-it can: a budget with one thread, beside a payer with one, on two harts, cannot take a second
-hart, and denying the payer its own would leave that hart idle. The traced kernel's oracle reports
-the timer interrupts that charged a budget other than the one they interrupted, and those ticks
-([the scheduler oracle](../testbench.md#the-scheduler-oracle)). At two harts: in
-`sched-exit-churn` against threads that exit, the attacker's poll timeouts, 27 such interrupts and
-70,232 ticks on rv64 (0.23 % of the window's charges), 8 and 17,035 on rv32; in
-`deadline-flood-billed-traced` with 16 deadlines, where the destructions land decides the victim's
-share: mostly on the creator's hart, 3 such interrupts and 34,046 ticks (rv32) and the victim keeps
-872 of 1000; mostly on the victim's (87 of 96, rv64), 89 and 833,543 ticks, 17 % of the window's
-charges, and it keeps 482, against at least 450. Arming each hart's timer only for the items its
-runner pays for, or that no hart's runner pays for, is the known remedy; it moved no gate's share
-in the runs that had the creator's placement, and it is not built. The deadline notice at two harts
-as built: net p99 4.6, 4.6 and 5.1 ms at N = 1, 4 and 16 on rv64, 6.2, 5.2 and 6.1 ms on rv32
-(`sched-latency`).
+On several harts the bill is right, and the hart is the payer's where the payer runs: a hart's
+timer comes by a timeout or a deadline only if it runs the budget that pays for it, or no hart
+does, or the payer's hart is not yet armed by then ([the hart timer](#the-hart-timer)). Before, every hart's timer came by the earliest of each,
+so the hart that answered one was often running another budget, whose thread waited out the
+payer's work; a pick repays that only where it can, and a budget with one thread beside a payer
+with one, on two harts, cannot take a second hart. The traced kernel's oracle reports the timer
+interrupts from user mode that charged a budget other than the one they interrupted, with their
+ticks, and a case bounds them inside a victim's window as a share of what the victim was charged
+(`foreign_timer_in`, [the scheduler oracle](../testbench.md#the-scheduler-oracle)), at 10 of
+1000 at two harts, where the harts run at once (multi-threaded TCG, host time, on the quiet core
+set): `deadline-placement`, whose creator makes its deadlines 600 µs ahead and then only spins,
+reads 0 to 1 of 1000 in five runs a width, and a kernel built with `timer-any-hart`, every hart's
+timer coming by every item as before, fails it at 21 (rv64, 74 such interrupts, 251,881 ticks)
+and 29 (rv32, 89, 364,375), the recorded negative runs; `deadline-flood-billed-traced-mttcg`
+reads 1 to 4 with 16 deadlines and 0 to 1 with 64, `sched-exit-churn-mttcg` 0 (rv64) and 1 to 5
+(rv32) against threads that exit and 0 against the processes, five runs a width each. Before the
+placement, at two harts: in `sched-exit-churn` against threads that exit, the attacker's poll
+timeouts, 27 such interrupts and 70,232 ticks on rv64 (0.23 % of the window's charges), 8 and
+17,035 on rv32; in `deadline-flood-billed-traced` with 16 deadlines, where the destructions landed
+decided the victim's share: mostly on the creator's hart, 3 such interrupts and 34,046 ticks
+(rv32) and the victim kept 872 of 1000; mostly on the victim's (87 of 96, rv64), 89 and 833,543
+ticks, 17 % of the window's charges, and it kept 482, against at least 450. Under icount the
+count is not the placement's but the order of QEMU's turns, and a run locks into one phase: the
+icount cases report it and bound nothing by it ([a hart waits for QEMU's
+turns](scheduling.md#residual-risks)).
+
+What still lands elsewhere, and is counted, not excluded: a payer that runs nowhere (a
+one-thread budget waiting on its own timeout), whose item every hart comes by, so a victim beside
+such a poller answers about half of its timeouts (`sched-exit-churn` under icount: 20 of 1000 of
+the victim's charges, 164 interrupts, on rv64 and 0 on rv32 in one run each, which phase the run
+locked into); two payers at one instant, whose items are every hart's; an item noted on a hart
+that does not run its payer, which that hart arms too until the payer's hart next re-arms; an
+item whose payer was destroyed and its id reused before the expiry recomputed the hint, which is
+placed as the new holder of the id runs until then (the placement alone, never the bill); and any
+item that has passed when some other entry comes, a call's, or a slice's end through `kmain` or
+inside its own interrupt, which serves it there (I13 and R10 order every passed item first, on
+any hart). The last is a flood's: the payer's hart is inside one destruction with interrupts off
+while the next deadline passes, and the victim's own slice-end interrupt reaches it first, the
+destruction landing there; under icount, where the victim's slice end runs 0.7 ms ahead of the
+payer's exact-time interrupt in QEMU's turns and the 26 ms destruction cycle keeps that phase,
+`deadline-flood-billed-traced` read 114 of 1000 of the victim's charges with 16 deadlines and
+235 and 241 with 64 in two runs of one bundle on rv64 (0 in another, 0 and 1 on rv32), what the
+residual can cost under one clock. Device interrupts are placed by the controller, not the payer
+([IRQ1's residual](devices.md#residual-risks)). The deadline notice at two harts
+(`sched-latency`, net p99 at N = 1, 4 and 16): before the placement 3,297, 3,409 and 3,764 µs on
+rv64, 3,985, 4,079 and 5,093 on rv32; with it 3,535, 3,428 and 3,758 and 3,933, 4,104 and 5,133,
+every move within the same program's p99 kernel section (10,167 ticks on rv64 and 11,053 on
+rv32, 1.0 to 1.1 ms, with `hold-trace`), the cost of waiting for the payer's hart;
+`kernel-containment` at two harts 24,001 from 24,027 and 27,120 from 27,349.
 
 ## Failure and restart
 
@@ -309,9 +362,16 @@ Status: built · partly tested: a boot with no `Time` tag is not attacked by a c
   1,000 µs for an idle sleep and asserts wake targets under load only in virtual time
   (`bench:timeouts`, `bench:sched-latency`); `bench:timeouts-tcg` reports real-time lateness
   without judging it.
+- **Timer work can still land on another budget's hart.** An item is armed on its payer's hart
+  where the payer runs; one whose payer runs nowhere or ties with another, one noted on a hart
+  that does not run its payer until the payer's hart re-arms, one whose destroyed payer's id was
+  reused before the hint was recomputed, and one that has passed when some other entry comes are
+  answered where they are. The oracle counts them and three cases bound
+  the count inside a victim's window ([R12 for timer work](#r12-scheduling-for-timer-work)).
 - **Kernel work is not interrupted.** The kernel runs with interrupts off, so a timeout or
   deadline that passes during a long kernel operation (a budget's destruction, a large range
-  call) is answered when that operation ends. `bench:budget-deadline` bounds a deadline's
+  call) is answered when that operation ends, and one armed on its payer's hart waits for that
+  hart to leave the kernel, where an idle hart would have answered it at once. `bench:budget-deadline` bounds a deadline's
   lateness by the cost of the same destruction by hand plus 1,000 µs. The frames such an
   operation freed are zeroed by an idle hart, one frame a pass with interrupts off (about 30 µs),
   only while every hart is idle, and on demand by an allocation that finds no free frame

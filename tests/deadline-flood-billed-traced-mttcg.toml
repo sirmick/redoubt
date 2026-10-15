@@ -1,0 +1,31 @@
+description = "deadline-flood-billed-traced where the harts run at once (multi-threaded TCG, no icount): the victim keeps at least its share of the harts by the kernel's charges net of lock waits, and the timer work billed to others in its time, the creator's destructions reaching its hart, is at most 10 of 1000 of its charges, which under icount only the order of QEMU's turns decides (kernel/timer.md, \"R12 (scheduling) for timer work\") (host time, checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+programs = ["deadline-flood-billed"]
+# Test builds only: the trace ring (never in a default kernel), which needs a checked build; its
+# audits are charged to no one.
+kernel_features = ["sched-trace"]
+# The icount case's program at two harts, judged on the host clock. A deadline's destruction is
+# armed on the creator's hart, which runs the payer; what the victim's hart still serves is a
+# deadline that passed while the creator's hart was inside the destruction before it, with
+# interrupts off, and which the victim's own slice-end interrupt reached first (I13: a passed item
+# is served by the first entry anywhere). Five runs a width alone on the quiet cores: 16 deadlines
+# 2, 1, 4, 3, 3 of 1000 (rv64; 24,606 to 55,657 ticks; the victim's share 772 to 776) and 2, 3, 2,
+# 2, 3 (rv32; 31,321 to 45,146; 762 to 765); 64 deadlines 0, 0, 0, 1, 0 (rv64; 3,917 to 16,293;
+# 798 to 802) and 0 throughout (rv32; 1,522 to 10,881; 788 to 791). Under icount the same count
+# reads QEMU's turn order and locks into one phase for a run (0 or 114 of 1000 with 16 deadlines,
+# 235 and 241 with 64 in two runs of one bundle on rv64; 0 and 1 on rv32), so the icount case
+# records it and this one judges it, on the quiet core set, one such case at a time.
+post_check = "sched_oracle foreign_timer_in=16-deadlines:10 foreign_timer_in=64-deadlines:10"
+smp = [2]
+keep_smp = true
+timeout_secs = 300
+expect = [
+    '^HART-SHARE 16-deadlines \d+ \d+ 50\+ 2:1 100:1$',
+    '^HART-SHARE 64-deadlines \d+ \d+ 50\+ 3:1 100:1$',
+    '^DEADLINE-FLOOD-BILLED TEST PASSED$',
+    '^SCHED-TRACE-END \d+ dropped 0$',
+]
+forbid = ['PANIC']
+poweroff = true
