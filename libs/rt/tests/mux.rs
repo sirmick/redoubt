@@ -20,13 +20,17 @@ use redoubt_rt::server::ninep::{
 use redoubt_rt::server::{AdmitKey, Limits, Resource};
 use redoubt_rt::wire::ninep::{Body, Message, message_size};
 
-/// A root holding `now`, whose reads and writes are answered at once, and `wait`, whose reads
-/// and writes always wait.
+/// A root holding `now`, whose reads and writes are answered at once, `wait`, whose reads and
+/// writes always wait, and `slow`, whose writes take [`SLOW_DISPATCH`] of the server's time.
 struct Files;
 
 const ROOT: u8 = 0;
 const NOW: u8 = 1;
 const WAIT: u8 = 2;
+const SLOW: u8 = 3;
+/// How long a write to `slow` holds the server in its dispatch (µs): a file server away on its
+/// device, as walfsd is on blkd.
+const SLOW_DISPATCH: u64 = 1_500_000;
 
 fn qid(node: u8) -> Qid { Qid { kind: if node == ROOT { 0x80 } else { 0 }, version: 0, path: node.into() } }
 
@@ -41,6 +45,7 @@ impl FileServer for Files {
         let node = match name {
             "now" => NOW,
             "wait" => WAIT,
+            "slow" => SLOW,
             _ => return Err(NineError::NOT_FOUND),
         };
         Ok((node, qid(node)))
@@ -65,6 +70,9 @@ impl FileServer for Files {
     fn write_or_wait(&mut self, _: &Caller, node: &u8, _: u64, data: &[u8]) -> Result<Write, NineError> {
         if *node == WAIT {
             return Ok(Write::Wait);
+        }
+        if *node == SLOW {
+            std::thread::sleep(Duration::from_micros(SLOW_DISPATCH));
         }
         Ok(Write::Done(data.len()))
     }
@@ -146,15 +154,16 @@ fn until(step: &str, mut cond: impl FnMut() -> bool) {
     }
 }
 
-/// The fids every client opens by one-call 9P before it multiplexes: `now` and `wait`.
+/// The fids every client opens by one-call 9P before it multiplexes: `now`, `wait` and `slow`.
 const NOW_FID: u32 = 1;
 const WAIT_FID: u32 = 2;
+const SLOW_FID: u32 = 3;
 
 fn open_files(ep: Handle) {
     let c = Connection::new(Endpoint::from_handle(ep));
     let mut lend = Lend::new(1).unwrap();
     c.attach(&mut lend, 0, "").unwrap();
-    for (fid, name) in [(NOW_FID, "now"), (WAIT_FID, "wait")] {
+    for (fid, name) in [(NOW_FID, "now"), (WAIT_FID, "wait"), (SLOW_FID, "slow")] {
         c.walk(&mut lend, 0, fid, name).unwrap();
         c.open(&mut lend, fid, mode::ORDWR).unwrap();
     }
@@ -572,6 +581,49 @@ fn a_completion_call_is_held_at_most_its_hold_and_the_servers_bound() {
         // The session lives on.
         read(ha, 0, NOW_FID);
         assert_eq!(collect(ha), vec![(0, Got::Data(b"hello".to_vec()))]);
+    });
+    w.end();
+}
+
+/// A dispatch is the file server's time, its calls to other servers included; the mux runs only
+/// between dispatches, so a parked completion call whose hold runs out during one is answered
+/// when the dispatch returns, empty, and its session is kept (servers/serving.md, "The completion
+/// call").
+#[test]
+fn a_dispatch_longer_than_the_hold_answers_the_parked_call_after_it() {
+    const HOLD: u64 = 200_000;
+    let w = World::new();
+    let f = fake();
+    let (a, ha) = w.client(1010);
+    let (b, hb) = w.client(1011);
+    f.as_process(a, || open_session(ha));
+    f.as_process(b, || open_session(hb));
+    // b parks a call to be served into, then a parks one with a short hold, then b's write
+    // comes: its dispatch holds the server past a's hold.
+    let b_thread = f.run(b, move || {
+        assert_eq!(collect_raw(hb, FOREVER).unwrap().0[0], 0);
+        0
+    });
+    until("b's call is parked", || f.open_calls(w.server) == 1);
+    let parked_for = Arc::new(Mutex::new(None));
+    let seen_by_a = parked_for.clone();
+    let a_thread = f.run(a, move || {
+        let started = Instant::now();
+        let got = collect_held(ha, HOLD, FOREVER).unwrap();
+        *seen_by_a.lock().unwrap() = Some((started.elapsed(), got));
+        0
+    });
+    until("a's call is parked", || f.open_calls(w.server) == 2);
+    f.as_process(b, || write(hb, 0, SLOW_FID));
+    assert_eq!(a_thread.join().unwrap(), 0);
+    assert_eq!(b_thread.join().unwrap(), 0);
+    let (held, got) = parked_for.lock().unwrap().take().unwrap();
+    assert_eq!(got, ([0; 4], vec![]), "answered empty when the dispatch returned");
+    assert!(held >= Duration::from_micros(SLOW_DISPATCH), "answered at {held:?}, during the dispatch");
+    // a's session lives on: its next request is served in its next call.
+    f.as_process(a, || {
+        read(ha, 1, NOW_FID);
+        assert_eq!(collect(ha), vec![(1, Got::Data(b"hello".to_vec()))]);
     });
     w.end();
 }
