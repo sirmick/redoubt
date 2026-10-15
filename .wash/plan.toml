@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 233
+revision = 254
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -889,12 +889,12 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
 [[node]]
   id = "STEWARD3"
   title = "The steward server: leases and agents, the powerbox at approve@box, crash blame"
-  template = "package"
+  template = "step"
   parent = "AGENTS"
   needs = ["STEWARD2", "BEAM4", "IPC3", "SCHED1"]
-  body = "Brief: .wash/local/STEWARD3-implementer.md (architect-15). Tier A, size L. docs/servers/steward.md#leases, #the-powerbox-and-approvals, #crash-blame, R38-R41; docs/userland/sessions.md#approve; docs/userland/agents.md; docs/servers/init.md#restarts-and-reboots; docs/servers/serving.md#admit."
+  body = "The steward's second half, split into children (2026-10-16): STEWARD3R (R41's mechanism, design first), STEWARD3A (leases and agents), STEWARD3B (the powerbox at approve@box), STEWARD3C (crash blame). The brief they share: .wash/local/STEWARD3-implementer.md (architect-15; its points 1-3, cases 1-8, page lines, owned paths). The step is done when steward.md's Leases, The powerbox and approvals and Crash blame sections and R38-R41 read built · tested, and AGENT0's agent principal runs under a lease with its harness unchanged."
   state = "todo"
-  revision = 2
+  revision = 251
 
 [[node]]
   id = "STEWARD4"
@@ -2295,8 +2295,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "AGENT0"
   body = "Brief: .wash/local/AGT2-implementer.md. Tier B (the shell, inside one session's budget), size S-M, shell track. Page: docs/userland/shell.md (a new section under The loop or The shell in a session). Host tests under ./test-shell, one bench case driving a session over SSH through the mode with a multi-line result and a crashing line, verdicts from the shell's printed values (rule F)."
-  state = "done"
-  revision = 229
+  state = "reported"
+  revision = 246
 
 [[node]]
   id = "AGT3"
@@ -2305,8 +2305,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENT0"
   needs = ["AGT1", "AGT4"]
   body = "Brief: .wash/local/AGT3-implementer.md. Tier B (the session's own VM and files), size S. Page: docs/userland/development.md#the-compilers-on-beamlet (status line: built, partly tested: host only -> tested in a boot), docs/plan/m5-self-hosted.md if it names the gap. Case: a session over SSH as agent compiles a module from a string, writes its .beam to /home/agent, purges and reloads it from the file, calls it; and the same on rv32. Verdicts from the shell's printed values and the file server's answers."
-  state = "todo"
-  revision = 220
+  state = "done"
+  revision = 250
 
 [[node]]
   id = "AGT4"
@@ -2314,8 +2314,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "AGENT0"
   body = "Brief: .wash/local/AGT4-brief.md. AGT2's finding (.wash/local/AGT2-report.md 'Finding'): a three-line `defmodule` at the shell prompt over SSH, in or out of the machine mode, ends the session's VM: `PROGRAM HALT: CPU Exception on PID 420: Store page fault of 0x7ffecae8 at 0x002e2b70`; a probe at the plain prompt faults identically (deterministic); host beamlet compiles the block; no machine case compiles a module. The address: the first thread's stack sits under 0x8000_0000 (memory-layout.md:224-226); 0x7ffecae8 is 79,127 bytes, 19.4 pages, below the top, and the steward launches a session VM's first thread with SESSION_STACK_PAGES = 18 (steward.rs:105-107: twice the 36,136-byte peak beamlet-footprint measured, which compiles nothing; helper schedulers get SCHEDULER_STACK_PAGES = 18, lib.rs:648-650). So the first scheduler's native stack overflowed: the compile needs over 72 KiB where the term walks are iterative and something on the compile path is not. Step 1: addr2line 0x002e2b70 on the packed ELF both widths; on the host, the same block under a stack-peak probe names the recursion and its depth. Step 2: (a) make that path iterative if it is one path; else (b) the stack declared from a new peak by the page's rule (twice the largest peak): beamlet-footprint gains a compile, both constants follow, the steward's heap-cap arithmetic (11,092 of 11,136 pages) recomputed on the page and in the code. No separate compile thread: the compiler is Erlang code on a scheduler. Gates: a machine case shell-compile-module (the defmodule typed over SSH and called, both widths, 5 runs); beamlet-footprint with the new peak quoted; the shell set; size-budget; steward-ssh-two-principals once; init.md 'Stacks', testbench.md's memory-budget paragraph and beamlet.md updated. Files: userland/otp (vm, redoubt lib.rs), servers/steward/src/bin/steward.rs, tests/, the three pages. Tier A (a session limit moves, or the interpreter): steward-red-2. Size S-M. Blocks AGT3 and AGENT0."
-  state = "active"
-  revision = 222
+  state = "done"
+  revision = 244
 
 [[node]]
   id = "B74"
@@ -2323,5 +2323,52 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M2"
   body = "Train 34's bench (a43b72b13; .tmp/train-34b/fail-rv64-rt-miri.log): libs/rt/tests/parked_write.rs `a_waiting_write_is_parked_abandoned_and_expired` under Miri panics at :159 (`late.join().unwrap()`), the `late` client having died of the fake's guard 'a wait only a change can end saw none in the fake kernel for 60s' (libs/rt/fake/src/lib.rs:619-646) after 60.96 s; trains 32 and 33 passed; B70 put the test on a held clock the test ticks. By reading, the ordering has a hole and Miri's scheduler finds it: `until(parks == 2)` (:157) observes the park, not the server's next `receive`; a receive's deadline is `now + timeout` at the call (lib.rs:615-617) and `tick` only adds to the clock (:607-612), so a tick taken between the park and the receive leaves the server a deadline one LONGEST past the tick that nothing reaches, and the client (FOREVER) waits until the guard fires. Miri load reaching 60 host seconds is the other reading; the first makes it moot. Step 1: reproduce under Miri alone and loaded (20 runs each, through q), and show the hole natively by a forced yield between the park and the receive, naming the reading. Step 2, the fix in the fake, never a longer timeout: a tick on a held clock is taken only when every other thread of the fake is in `wait` (the fake counts threads alive and waiting; `tick` blocks until they agree: a quiescent step), so a tick always ends the waits it was written to end; the guard's panic names the clock's time and the waits outstanding. parked.rs and beamlet-redoubt's fake suite (26 tests) get the rule for free. Gates: rt-miri alone 20/20 and beside a bench 20/20; `cargo test -p redoubt-rt`; B70's 20-run loaded loop; beamlet-redoubt's fake suite; the fake's doc states the quiescent tick; no host timeout lengthened. Files: libs/rt/fake/src/lib.rs, libs/rt/tests/parked_write.rs, parked.rs, the page describing the fake kernel's clock. Tier A (libs/rt's fake): steward-red-2. Size S."
+  state = "done"
+  revision = 237
+
+[[node]]
+  id = "B75"
+  title = "A spawned thread's stack has no guard page: an overflow writes over whatever is mapped below and the process dies later elsewhere (AGT4's rv64 illegal instruction), not at the overflow"
+  template = "package"
+  parent = "M2"
+  body = "libs/rt/src/thread.rs:25 says it: 'No guard page below it: a stack that overflows writes over whatever is mapped below'; `spawn` (:33-41) takes `Buffer::new(stack_pages)` and hands it to thread_create. AGT4 found the cost: a helper scheduler's overflow corrupted the heap silently and rv64 died later with an illegal instruction, while the first thread's overflow faulted at once at its unmapped page (memory-layout.md:224-226); beamlet-compile-footprint paints the first thread only, so a helper's peak is unmeasured. Lever: the runtime places every spawned stack with an unmapped page below it, by whichever the ABI allows without a kernel change: a mapping of stack_pages + 1 whose lowest page is given back (unmapped) before the thread starts, or a fixed placement leaving a hole below (map_anon's area, memory-layout.md); the guard costs no frame, one page of address space; the sentence on thread.rs and native.md says so and the 'no guard page' sentence goes. The painted-stack measurement (MEM1's launcher) extends to spawned stacks so beamlet-compile-footprint and the memory scan report each scheduler's peak, and SCHEDULER_STACK_PAGES is sized from the largest. Gates: a host test and a boot case thread-stack-guard: a spawned thread overflows on purpose and the kernel's fault line names it at the guard, the process ending there, no later crash; beamlet-footprint and beamlet-compile-footprint both widths with the helper peaks quoted; the rt host tests; the kernel's address-space cases unchanged. Files: libs/rt/src/thread.rs, libs/rt/src/buffer or map, tools/testbench's memory scan, docs/userland/native.md, docs/userland/beamlet.md. Tier A (libs/rt, every program's threads): steward-red-2. Size S."
   state = "active"
-  revision = 224
+  revision = 252
+
+[[node]]
+  id = "STEWARD3A"
+  title = "Leases and agents: start_agent and end_lease, a deadline the kernel ends, the sponsor's notice; AGENT0's agent principal logs in into a lease under alice's sub-budget, its harness unchanged"
+  template = "package"
+  parent = "STEWARD3"
+  body = "Brief: .wash/local/STEWARD3-implementer.md point 1, cases 1-3 and 8's host tests. The core already decides leases (STEWARD0/1); the server lacks the operations. Build: `start_agent` from an unlabelled session's badge answers Lease {id, name} with the batch (CreateBudget under the sponsor's sub-budget for the label set with the lease's limits, labels and deadline, at most MAX_LEASE, refused longer, never shortened; Connect to the lease's roots; Launch of beamlet with the agent's module; the exit notice to the steward); the lease ends by deadline (the kernel's destruction, the steward's Exited from the notice), by `end_lease` from any of the sponsor's unlabelled sessions answered from the receive loop ahead of admission, or by blame (STEWARD3C); each path runs notify_sponsor, a send on the sponsor sessions' steward connections that beamlet surfaces as a message and the shell prints, naming the lease and never why. Connections end by the launcher's disconnect until STEWARD3R lands (R41 stays Open with its words). Conversion from AGENT0: the manifest's `agent` principal (AGT1: own key, home, sub-budget, 'sponsored by alice in name') gains a `sponsor` line init checks; a login as agent is the sponsor's lease, its session budget carved under alice's sub-budget with deadline MAX_LEASE, so alice's sessions can end_lease it and receive its end; AGT2's machine mode and AGT3's compile run inside it unchanged (agent-login, launch-system and the AGT3 case pass as they are, plus the notice when the lease ends). Cases: steward-lease-ends, steward-end-lease (p99 125 ms call-to-notice, net of audits), steward-sub-agent-dies-with-agent; host: end_lease answered under a flood, the new badge classes. Pages: steward.md Leases to built, R39, Authority; agents.md's lease sections; sessions.md; init.md's manifest (sponsor); SECURITY.md R39; libs/wire/tables/steward.md. Tier A: steward-red-2. Size M."
+  state = "active"
+  revision = 253
+
+[[node]]
+  id = "STEWARD3B"
+  title = "The powerbox at approve@box: submit and its notice, sshd's approval channel on the approval key, the rendered screen, approve/deny bound to the last screen, a granted labelled agent runs"
+  template = "package"
+  parent = "STEWARD3"
+  needs = ["STEWARD3A"]
+  body = "Brief: .wash/local/STEWARD3-implementer.md point 2, cases 4-6 and the fuzz target of 8. Build: `submit` from a session's or agent's badge carries the structured Content (an agent in a label set, a note; declassify and push are STEWARD4's) and the reason; the core freezes it, draws id and binding hash, checks the pending cap and fair share, answers Request {id}; its notify reaches only channels whose labels include the request's. sshd recognises the user `approve`, authenticates with the principal's approval key only (the core's approval_key guard, holds first; a login key refused), opens the approval channel at the steward (ApprovalOpened on sshd's root badge) and serves it as a consol console whose other end is the steward: the steward writes the core's rendered screens (printable ASCII only, render.rs) and reads `approve <id> <hash>` and `deny <id>`; a hash not the last screen's is HashMismatch to the channel only, never to the requester; the close is ApprovalClosed. A granted labelled agent runs STEWARD3A's batch from the approval row. Cases: steward-approve-box (the labelled agent granted and running; the wrong hash refused; the login key refused by sshd), steward-screen-inert (64 chars of ANSI, bidi and format in the reason: no 0x1B and nothing outside 0x20..0x7E in the relayed bytes), steward-pending-cap (PENDING_CAP + 1 refused Cap; a second agent's fair share; a dead session's requests gone); host: the channel's line parser as a fuzz target. Pages: steward.md The powerbox and approvals, R38, R42, Authority (the channel's badge class); sshd.md approve@box and R67 to built; sessions.md approve@; SECURITY.md rows; the wire table. Keys: an approval key per principal in tests/keys and the manifest. Tier A: steward-red-2. Size M."
+  state = "todo"
+  revision = 251
+
+[[node]]
+  id = "STEWARD3C"
+  title = "Crash blame on the steward: init's blame(account, labels, server) counted per (account, label set); three in BLAME_WINDOW destroy the domain's sessions and leases and refuse new ones until it passes"
+  template = "package"
+  parent = "STEWARD3"
+  needs = ["STEWARD3A"]
+  body = "Brief: .wash/local/STEWARD3-implementer.md point 3, case 7 and the blame timeout of 8. The kernel's blame reaches init through the exit notice (R21, built); init's restart machine has the blame half planned (init.md 'Restarts and reboots'). Build: `blame(account, labels, server)` accepted on init's root badge class only; the core counts per (account, label set) and at BLAME_COUNT within BLAME_WINDOW answers a lockout: DestroyBudget for every session and lease of that domain (STEWARD3A's leases included), a refusal of new sessions for it until the window passes, both audited as console lines (STEWARD2's residual stands until M4); the steward answers init within its blame timeout, and a blame it cannot take in time is init's console line, not a restart loop. Case steward-blame-lockout: bob's session crashes walfsd three times within the window with a named real fault, or the bench's fault injection if one exists (the case says which; a fault that does not exist is a design question, not an invention); every budget of bob's {} is destroyed, his next login is refused until the window passes (virtual time advanced), alice's session is untouched, walfsd restarted by init; a second run with the crash from bob's vault session leaves his unlabelled session untouched (R40 keys by label set). Host: the blame timeout; the lockout's refusal tells nothing apart (rule 3's refusals). Pages: steward.md Crash blame and R40 to built, 'Failure and restart' residual ('the steward's restart ends every session'), init.md's blame half, SECURITY.md R40, agents.md's blame bullet. Tier A: steward-red-2. Size S."
+  state = "todo"
+  revision = 251
+
+[[node]]
+  id = "STEWARD3R"
+  title = "R41 has no mechanism: a connection carries no revocation scope, so a lease's connections end only by the launcher's disconnect; design the scope, then build it in the serving library"
+  template = "package"
+  parent = "STEWARD3"
+  body = "The design question handed from STEWARD2 (.wash/local/STEWARD3-implementer.md '2026-10-06: a design question'; steward.md R41 'Open'; the R41 departure accepted for sessions in the Architect's handoff): `new_connection(root, quota)` carries no scope and only the process that makes a handle stamps it, so the steward's CreateScope budget (zero limits inside a lease) binds nothing; a lease's connections today end by the launcher's disconnect at the lease's end (agents.md 'When a lease ends'). Step 1 (the Architect, before any build): the ruling, with the page line for steward.md R41 and the kernel or protocol page it touches, between (a) a scope handle a server accepts at new_connection and ends connections by (a serving-library change in libs/rt, every file server's for free; a wire-table field), and (b) a disconnect-by-scope the steward drives (no server change; the steward must know every connection it minted). A choice that changes the kernel's ABI or the 9P wire goes to the owner by decision_request with both; a serving-library-only mechanism is the Architect's. Step 2: the build per the ruling, with a host test in libs/rt (a connection made in a scope ends when the scope's budget is destroyed, its fids freed, its sibling in another scope untouched) and R41's status and SECURITY.md row. STEWARD3A builds leases whose connections end by the launcher's disconnect until this lands, and R41 stays Open with this node's words. Files: docs/servers/steward.md R41, docs/servers/serving.md, libs/rt/src/server (if (a)), libs/wire/tables/steward.md, servers/steward. Tier A (authority over connections): steward-red-2. Size S (design) + S (build)."
+  state = "active"
+  revision = 254
