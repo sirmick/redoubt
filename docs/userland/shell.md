@@ -189,11 +189,9 @@ anything else is a usage error and the prompt stays. In the mode:
   the terminal's width as a person would see it, and a program that wants long lines sets its
   pty's size.
 
-Residual: on the machine a `defmodule` at the prompt, in the mode or out of it, ends the
-session's VM with a store page fault at the top of a scheduler's stack (beamlet's 18-page
-scheduler stacks, [beamlet](beamlet.md#beamlet-on-redoubt)); it compiles on the host's beamlet,
-where the host tests define a module in a block. Until beamlet is fixed, the bench case's
-three-line block binds a function, and a program on the machine defines no module.
+A `defmodule` typed at the prompt compiles and runs on the machine (`shell-compile-module`, a
+line at a time; [beamlet](beamlet.md#beamlet-on-redoubt)); the mode's cases bind a function, none
+defines a module.
 
 ### Commands
 

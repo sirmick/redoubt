@@ -303,7 +303,7 @@ fn every_patch_is_a_vendored_crates_and_recorded() {
         let file = entry.unwrap().file_name().to_string_lossy().into_owned();
         let name =
             file.strip_suffix(".patch").unwrap_or_else(|| panic!("vendor/patches/{file}: not a .patch"));
-        assert!(VENDORED.iter().any(|(n, ..)| *n == name), "vendor/patches/{file}: {name} is not vendored");
+        assert!(all().any(|(n, ..)| *n == name), "vendor/patches/{file}: {name} is not vendored");
         let heading = format!("### `{name}`");
         assert!(readme.lines().any(|l| l == heading), "vendor/README.md has no section {heading:?}");
         patched += 1;

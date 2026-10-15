@@ -27,6 +27,9 @@ pub struct Server {
     pub name: String,
     pub stack_pages: usize,
     pub heap_pages: u64,
+    /// The case's `heap_fits`: a capped heap passes when its peak leaves at least an eighth of
+    /// the cap, not when the cap is twice the peak.
+    pub heap_fits: bool,
 }
 
 #[derive(Debug)]
@@ -97,7 +100,12 @@ pub fn servers(boot: &Boot, workspace: &Path) -> Result<Vec<Server>> {
             );
             let heap_pages = pages("heap_pages")?;
             ensure!(heap_pages != Some(0), "{name}: invalid heap_pages 0");
-            Ok(Server { name: name.to_string(), stack_pages, heap_pages: heap_pages.unwrap_or(0) })
+            Ok(Server {
+                name: name.to_string(),
+                stack_pages,
+                heap_pages: heap_pages.unwrap_or(0),
+                heap_fits: boot.heap_fits,
+            })
         })
         .collect()
 }
@@ -239,6 +247,14 @@ pub fn scan(mut ram: impl Read, bytes: u64, servers: &[Server]) -> Result<Measur
         if cap != server.heap_pages {
             failures
                 .push(format!("{name}: heap record capped at {cap} pages, declared {}", server.heap_pages));
+        } else if cap != 0 && server.heap_fits {
+            if cap.saturating_sub(peak) < cap / 8 {
+                failures.push(format!(
+                    "{name}: heap peak {peak} pages leaves {} of its {cap}-page cap, less than an eighth, {}",
+                    cap.saturating_sub(peak),
+                    cap / 8
+                ));
+            }
         } else if cap != 0 && cap < peak.saturating_mul(2) {
             failures.push(format!(
                 "{name}: heap needs {} pages for twice its {peak}-page peak, capped at {cap}",
@@ -270,7 +286,36 @@ mod tests {
 
     /// An uncapped server of `pages` stack pages.
     fn server(name: &str, pages: usize) -> Server {
-        Server { name: name.into(), stack_pages: pages, heap_pages: 0 }
+        Server { name: name.into(), stack_pages: pages, heap_pages: 0, heap_fits: false }
+    }
+
+    /// Under `heap_fits`, a capped heap passes with an eighth of its cap left over its peak, and
+    /// fails a page short of that; the twice-the-peak rule is not applied; an uncapped heap is
+    /// still only reported.
+    #[test]
+    fn heap_fits_holds_an_eighth_of_the_cap_over_the_peak() {
+        let mut ram = painted(1, 1);
+        ram.extend(painted(1, 2));
+        ram.resize(CHUNK - 2 * UNIT, 0);
+        ram.extend(record(1, 40, 35));
+        ram.extend(record(2, 0, 9));
+        ram.resize(ram.len().next_multiple_of(PAGE_SIZE), 0);
+        let fits = |cap| {
+            [
+                Server { heap_pages: cap, heap_fits: true, ..server("a", 1) },
+                Server { heap_fits: true, ..server("b", 1) },
+            ]
+        };
+        let measured = scan(&ram[..], ram.len() as u64, &fits(40)).unwrap();
+        assert!(measured.failures.is_empty(), "{:?}", measured.failures);
+        assert_eq!(measured.lines[2..], ["heap a 35 of 40 pages", "heap b 9 pages uncapped"]);
+        let at = CHUNK - 2 * UNIT;
+        ram[at..at + 4 * UNIT].copy_from_slice(&record(1, 40, 36));
+        let measured = scan(&ram[..], ram.len() as u64, &fits(40)).unwrap();
+        assert_eq!(
+            measured.failures,
+            ["a: heap peak 36 pages leaves 4 of its 40-page cap, less than an eighth, 5"]
+        );
     }
 
     /// RAM holding `servers`' records, uncapped, each with a peak of 3 pages.

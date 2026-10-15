@@ -1,0 +1,69 @@
+description = "What a compile at the prompt costs the shell's VM (docs/userland/beamlet.md, \"What the VM holds at its prompt\" and \"Limits inside one VM\"; docs/testbench.md, \"The memory budget\"): the image's servers boot with beamlet started by init under beamlet-footprint's manifest with one scheduler, so every process runs on the painted first thread, and the breakdown printed at the prompt; the shell compiles a three-line defmodule typed at its prompt and calls the module, and the session still answers. The bench's memory scan then reports the first thread's stack peak, which the compiler's deepest native frames set and from which the steward's scheduler stacks are declared, and the heap peak with the compiler's modules loaded, judged under heap_fits: it leaves at least an eighth of the session's cap, the cap another case sizes from the idle VM"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# beamlet-footprint's programs and manifest, with one scheduler
+# (tests/data/beamlet-compile-footprint/manifest.json).
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-bootfsd", bin = "bootfsd" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-verityd", bin = "verityd" },
+    { package = "redoubt-netd", bin = "netd" },
+    { package = "redoubt-ipd", bin = "ipd" },
+    { package = "redoubt-walfsd", bin = "walfsd" },
+    { package = "redoubt-erofsd", bin = "erofsd" },
+    { package = "beamlet-redoubt", bin = "beamlet", workspace = "userland/otp" },
+]
+memory_mib = 512
+memory = true
+heap_fits = true
+timeout_secs = 330
+expect = [
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+    '^\[con [0-9a-f]{16}\] footprint runtime pages held_now=[0-9]+ peak=[0-9]+ unaccounted=[0-9]+ transient=[0-9]+$',
+    '\{:module, Compiled,',
+    '\{:call, \{:compiled, 42\}\}$',
+    '\{:still, 2\}$',
+]
+forbid = [
+    'init: refused the boot',
+    '^init: .* (exited|faulted|was killed)',
+    'init: restarted',
+    'init: rebooting',
+    'not loaded',
+    'EXCEPTION',
+    'PROGRAM HALT',
+]
+
+# Each answer is tagged, so a pattern matches what the shell printed and never the echo of the
+# line typed. The block's lines are typed ahead at once: the shell keeps them, each after the one
+# before.
+[[input]]
+after = 'footprint runtime pages held_now='
+send = "defmodule Compiled do\n  def v, do: {:compiled, 41 + 1}\nend\n"
+
+[[input]]
+after = '\{:module, Compiled,'
+send = "{:call, Compiled.v()}\n"
+
+[[input]]
+after = '\{:call, \{:compiled, 42\}\}$'
+send = "{:still, 1 + 1}\n"
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/beamlet-compile-footprint/manifest.json" }
+verity = "image/userland.toml"
+
+[[file.servers]]
+name = "beamlet"
+args = ["endpoint=erofsd:system", "schedulers=1", "report_memory", "Elixir.Redoubt.Shell"]
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/littlefsd/stage"
