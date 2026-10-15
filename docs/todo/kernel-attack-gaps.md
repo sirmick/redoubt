@@ -44,13 +44,12 @@ gap: the page's section, the claim, and what no case attacks.
 - A passed deadline comes first: a process entering the kernel in a tight loop to put its deadline off is not attacked (the same gap as budgets.md's).
 
 ### devices.md
-- Device objects: the one page a device object costs its owner is not measured; a DMA device past `MAX_DMA_DEVICES` (16) getting no object is not attacked.
-- `dma_alloc`: the `MAX_RUNS` (32) runs-per-device limit is not reached by a case.
+- Device objects: a DMA device past `MAX_DMA_DEVICES` (16) getting no object is not attacked: QEMU virt has eight virtio-mmio slots, and the bench hands QEMU no device tree of its own (the page a device object costs is measured by `device-object-page`).
 - Reset before reuse: that the reset precedes pooling inside the kernel is attacked only in the model.
-- Devices handed to the first program: the loader's refusal of a device tree with no console, or a console with no interrupt, is not attacked.
-- R5 (interrupts): masking a fired source is attacked only in the model (QEMU's 16550 raises per byte); completing the claim before masking, and billing interrupt time to the IRQ object's owner, are not attacked.
-- R18 (device authority): the kernel's refusal of a malformed `Devs` entry and of a `Grnt` boot argument is not attacked.
-- Failure and restart: destroying a device object's owner budget (IRQ waiters get `Dead`, source masked, handles swept) is not attacked; nor is a device handle closing when the budget that stamped it is destroyed.
+- Devices handed to the first program: the loader's refusal of a device tree with no console, or a console with no interrupt, is not attacked (no case boots a crafted device tree).
+- R5 (interrupts): masking a fired source is attacked only in the model (QEMU's 16550 raises per byte); completing the claim before masking, and billing interrupt time to the IRQ object's owner, are argued on the page (QEMU's PLIC accepts a completion for a masked source), not attacked.
+- R18 (device authority): the kernel's refusal of a malformed `Devs` entry and of a `Grnt` boot argument is not attacked: the loader emits neither, no case hands the kernel a crafted argument block, and no device tree can produce a `Grnt` tag.
+- Failure and restart: at the destruction of a device object's owner budget the source's mask is argued on the page (`device-owner-destroy` attacks the waiters' `Dead` and the handle sweep); a device handle closing with the budget that stamped it has no case short of the tree's end, every device handle's stamp being `root`.
 
 ### processes.md
 - Processes and PIDs: that PIDs are drawn at random is not attacked.
