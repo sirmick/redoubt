@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 62
+revision = 82
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1905,10 +1905,10 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   title = "The kernel at rest: the lock changes hands ~10/s with every hart halted and the timer is re-armed 2.5x per interrupt; the idle ceilings come down"
   template = "package"
   parent = "smp"
-  needs = ["IDLE1"]
+  needs = ["IDLE1", "SCHED4"]
   body = "From IDLE1's measurement (.wash/local/IDLE1-report.md; the red's reading of it): at rest m_software is 2.9 of 3.9 interrupts/s per hart; 559 of 625 land with epc in TicketLock::acquire_ticket against 602 release wake_halted ecalls, so about 1.04 harts woken per release: one waiter per hand-off, not every hart. The question is why the lock changes hands ~10/s on a machine at rest, with every hart halted: who takes it (timer entries re-arming? the idle loop?), and rearm's 501 set_timer against ~200 s_timer interrupts (2.5x re-arming per interrupt; a shared earliest timeout armed on every hart is the suspect, to be confirmed). Find the cause, remove the needless hand-offs and re-arms, then lower launch-idle's per-hart ceiling toward the measurement. Kernel: Tier A, the kernel red; nothing changes at one hart unless rearm does.\nAlso (kernel-red at B57, 2026-10-12): the post-login rv32 drain takes 5.8-6.2 s (rv64 ~0.35 s); B57 measured only the boot drain with counters (.tmp/B57/measure-drain-b57.patch; idle-with-pending-and-no-drainer 0.3-0.4 ms, gaps were A3 waiting on busy harts). If B57 has merged, take the same counters on one rv32 post-login drain here; more than a few ms of idle-with-pending-and-no-drainer reopens it as an R81 liveness defect."
-  state = "todo"
-  revision = 2
+  state = "reported"
+  revision = 81
 
 [[node]]
   id = "SCHED4"
@@ -1917,8 +1917,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "smp"
   needs = ["SCHED3"]
   body = "SCHED3's B1 was dropped by ruling (.wash/qa/sched3-b1-evidence.md; .wash/local/architect-questions.md 'SCHED3 B1') with a trigger: it returns if the oracle's report-only count of timer entries billed to a budget other than the one interrupted reaches 1 % of a victim's charged pool in a gate case. Met on wp-SCHED3 before merge: deadline-flood-billed-traced rv64 at 2 harts, 16 deadlines, 87 of 96 destructions on hart 0 under the victim, 89 entries, 833,543 ticks, ~17 % of 4.99M charged; victim 482 of 1000 (passes). Placement depends on timing alone. Form, as the Architect amended the ruling: the branch's (the global earliest item and its payer, None on a tie; rearm reads runner_ids(), O(harts); no scan of the deadlines on the switch path), NOT a per-budget cached minimum. Code: .wash/local/SCHED3-B1-33eaaf326.patch (wp-SCHED3's WIP 33eaaf326). Build the failing negative from this placement (`timer-any-hart` must fail where the count is gated), gate the count in deadline-flood-billed-traced and sched-exit-churn at 2 harts, measure deadline-notice latency before and after on both widths (baseline p99 4.6/5.1/4.6 ms rv64, 6.2/6.1/5.2 ms rv32; within one section), timer.md and scheduling.md say the rule; device interrupts stay IRQ1's residual. Kernel: Tier A, the kernel red; model rule and mutation if a rule changes."
-  state = "reported"
-  revision = 62
+  state = "done"
+  revision = 78
 
 [[node]]
   id = "B47"
@@ -1958,8 +1958,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   needs = ["B47"]
   body = "From B47's report (.wash/local/B47-report.md, 'Open'): each pipeline binds piped's connection into the session's namespace (Redoubt.Pipes, /dev/pipe) and a sys.known entry with its handle stays after the pipeline ends and piped's budget is destroyed; with B47's Life the stale handle closes nothing, but the entry and the slot are never returned, so a long session leaks one per pipeline until a table fills. Find the owner of the entry (the bind, the Pipes server, the Known table), return it when the pipeline's job ends (or reuse one piped per session if that is the design: say which on native.md), host test that a thousand pipelines leave the table where it started, and extend pipe-eight or add a sibling that runs 64 in one session on both widths. Acts with the session's authority: main, Tier A, the steward red."
-  state = "active"
-  revision = 61
+  state = "done"
+  revision = 74
 
 [[node]]
   id = "K31"
@@ -2009,17 +2009,17 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M2"
   body = "Seen in train 17's whole bench on 98b866854 (CTX2, B47, B46, B49): steward-home-quota failed on rv64 and rv32 alike at step 9, `File.rm(\"/home/alice/a\")` after alice's home reached enospc answered `{:error, :eio}` (the alice ssh log shows it), and the case waited for `{:rm, :ok}` to its 610 s deadline. Alone, the same case passes in ~225 s on c7efc9b67 and a4c093827 (bisect, .tmp/train-17b/bisect.log), so the failure needs the bench's load (the net class runs one at a time, beside boots). An rm answering eio is wrong under any load: find where eio arises (walfsd's write path when the volume is full and a request is slow or retried; beamlet's files.rs retry after a busy answer (BEAM11); B47's Io release of an ended connection racing a late message; the 9P client's timeout mapped to eio) with a trace of the failing run (reproduce by running the case beside two or three boots), fix it, and make the case's wait for the rm bounded by its own step deadline rather than the case's. Both widths. Tier A if the fix is in a server or beamlet's platform (steward-red), else Tier B."
-  state = "todo"
-  revision = 2
+  state = "active"
+  revision = 82
 
 [[node]]
   id = "B52"
   title = "./test-shell has a test that fails about 2 runs in 30 on main: find the race and make it a verdict"
   template = "package"
   parent = "M2"
-  body = "Seen by BEAM18 (.wash/local/BEAM18-report.md names the test): ./test-shell failed once on a test that also fails about 2 of 30 runs on main 98b866854, and passed on rerun. A flaky host test costs every shell package a rerun and hides a real race. Reproduce with 30 runs on main (both VMs: beamlet and the BEAM), find the race (the driver's console fixture, a timing assumption, a shared temp dir), fix the test or the code, and show 60 clean runs. Tests only unless the code is at fault (then the owning page's tier). Tier B, one reviewer."
-  state = "todo"
-  revision = 2
+  body = "Two instances so far: (1) ./test-shell has a test that fails about 2 runs in 30 on main: find the race and make it a verdict. (2) 2026-10-15, B48's report: beamlet-redoubt's B47 waiters test and B48's hub test settle their first handle count and each failed once by an early sample under the full suite (Fake::served_child now replaces the global last_launched in the tests). Both: find the race, make the test wait on the event it means, not on a sample."
+  state = "active"
+  revision = 75
 
 [[node]]
   id = "B53"
@@ -2036,8 +2036,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M2"
   body = "Noted by kernel-red while reviewing K32 (its K32 result): run directly as `cargo test -p redoubt-doccheck` in the reviewer's shell, c11_code, untracked_code_is_not_checked and narrow_cases_fire fail with 'C11 did not fire', while `cargo testbench docs` passes in the same worktree. C11 checks package ids in code; its fixtures appear to depend on the environment (a git checkout state, the tmp dir, the working directory). Reproduce both ways, find the dependence, and make the tests pass from any directory and shell the project supports (through q too); say on docs/testbench.md how doccheck's tests are run. Tests/tooling only: Tier B, one reviewer."
-  state = "todo"
-  revision = 2
+  state = "done"
+  revision = 77
 
 [[node]]
   id = "K33"
@@ -2117,3 +2117,13 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "Residual from B46 (merged in train 17 as a4c093827; .wash/local/B46-report.md 'Residuals'): the fast path covers printable runs whose width is one column per code point; CJK, marks and emoji fall back to measuring each grapheme, and the per-stage profile and the 1 MiB-line time on the machine were last measured before BEAM19 and K33. Re-profile at today's main both widths; if the wide/combining path dominates a realistic text, give it a run path of its own with a floor in shell-output-rate; otherwise record the numbers and close. Escaping path: Tier A, steward-red. Not opened on 2026-10-15: a candidate for the owner's polish list."
   state = "todo"
   revision = 46
+
+[[node]]
+  id = "B61"
+  title = "Io::connect refuses TooManyThreads when all MAX_WAITERS=6 hub connections are ended pipeds whose waiters have not handed over: a fresh piped gets {:refused, {:mkdir, :eio}}"
+  template = "package"
+  parent = "M2"
+  needs = ["B48"]
+  body = "Found by B48's pipe-sixty-four on rv32 beside other work (.wash/local/B48-report.md 'Round 2'): one pipeline in about 64, at a random index, gets {:refused, {:mkdir, :eio}} on the fresh piped's first request; the cause is Io::connect (beamlet-redoubt) refusing TooManyThreads when all MAX_WAITERS=6 hub connections belong to ended pipeds whose waiters have not yet handed over their ends: a timing limit, not B48's change (the control at cf9074eae fails the same). Fix direction: a bounded wait at MAX_WAITERS (connect waits for a waiter to hand over, within the request's own deadline) or the ended connection's waiter hands over before the destroy returns; say which on beamlet.md; a host test that provokes 7 fresh connections before any waiter hands over; pipe-sixty-four leaves the quiet class once the limit is gone. Tier A (the hub is the session's I/O): steward-red. Size S."
+  state = "todo"
+  revision = 65
