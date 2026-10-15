@@ -127,7 +127,9 @@ defmodule Redoubt.Shell.DriverTest do
     type(driver, ~s|cat("al\t|)
     terminal = screen(terminal, &text.(&1, ~r/> cat\("alp$/m))
     type(driver, "\t")
-    terminal = screen(terminal, &text.(&1, ~r/alps\.txt/))
+    # The listing, whole: waited for as asserted, since it is drawn in more than one write and a
+    # frame holding its second name may not yet hold its first.
+    terminal = screen(terminal, &text.(&1, ~r/alpha\.txt +alps\.txt/))
     assert text.(terminal, ~r/alpha\.txt +alps\.txt/)
     type(driver, "\x03")
     type(driver, "exit\r")
@@ -479,15 +481,18 @@ defmodule Redoubt.Shell.DriverTest do
     # Tall enough to hold the three reports, stack traces and all.
     {driver, terminal} = start([], 200)
     # Through the emulator's report, through proc_lib's, and with a reason that is not UTF-8.
+    # Each report is waited for as it is asserted: a report is drawn in more than one write, and
+    # a frame holding its first word may not yet hold the rest (the escaped controls came more
+    # than the quiet 300 ms after "raw " once, under load).
     type(driver, ~S|spawn(fn -> raise "\e]52;c;aGk=\a\e]0;pwned\a\u202Eevil\e[2J" end); :ok| <> "\r")
-    terminal = shows(terminal, "evil")
+    terminal = shows(terminal, ~r/pwned.*evil/)
     type(driver, ~S|Task.start(fn -> raise "task\e[6n\x9B" end); :ok| <> "\r")
-    terminal = shows(terminal, "task")
+    terminal = shows(terminal, ~r/Task #PID<[\d.]+> .*terminating/)
     type(driver, ~S|spawn(fn -> :erlang.error({:boom, <<0xFF, 0xFE, 27, "[2J">>}) end); :ok| <> "\r")
     terminal = shows(terminal, "boom")
     # An event whose text is the controls themselves, unescaped by any formatter.
     type(driver, ~S|spawn(fn -> :logger.error("raw \e]52;c;aGk=\a\u202E\x9B<\xFF>") end); :ok| <> "\r")
-    terminal = shows(terminal, "raw ")
+    terminal = shows(terminal, "raw ^[]52;c;aGk=^G<U+202E><9B><<FF>>")
     # The model raises on any sequence but the encoder's own; each report is drawn, in the words
     # of whichever formatter the VM's logger has (the BEAM's escapes the reasons itself).
     text = Terminal.text(terminal)
