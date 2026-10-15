@@ -1,0 +1,30 @@
+description = "A deadline's destruction lands on the hart running the budget that pays for it (kernel/timer.md, \"The hart timer\"): a creator floods its budget with deadlines that fall after its creations and then only spins beside an equal-weight victim on two harts; the timer work billed to others in the victim's time is bounded by the post-check on the trace, and the victim keeps its share of the harts (virtual time, checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+icount = "shift=3,sleep=off"
+programs = ["deadline-placement"]
+# Test builds only: the trace ring (never in a default kernel), which needs a checked build; its
+# audits are charged to no one.
+kernel_features = ["sched-trace"]
+# The bound: timer interrupts in the victim's time that charged another budget, at most 10 of 1000
+# of what the victim was charged in the window (`foreign_timer_in`). The deadlines fall 600 µs
+# after a round's creations, so none is served at a creator's own entry; the creator then spins
+# in user mode, so each is served at a timer interrupt: on the creator's hart, whose timer alone
+# is armed for its deadlines (the round's children share the creator as payer, no tie). A kernel
+# built with `timer-any-hart`, every hart's timer coming by every deadline, has icount's turn
+# decide the hart, lands a share of the destructions on the victim's and fails the bound
+# (TBD-NEG-RV64 and TBD-NEG-RV32 of 1000, the recorded negative runs); what still reaches the
+# victim's hart through `kmain` or its own entries is reported beside. Two harts: at one every
+# interrupt is on the victim's hart, and the bound is recorded, not judged.
+post_check = "sched_oracle foreign_timer_in=placement:10"
+smp = [2]
+keep_smp = true
+timeout_secs = 600
+expect = [
+    '^HART-SHARE placement \d+ \d+ 50\+ 2:1 100:1$',
+    '^DEADLINE-PLACEMENT TEST PASSED$',
+    '^SCHED-TRACE-END \d+ dropped 0$',
+]
+forbid = ['PANIC']
+poweroff = true

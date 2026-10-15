@@ -535,7 +535,7 @@ parks when it is done, unless its exit is the point of its case.
 
 ### The scheduler oracle
 
-<details><summary>Status: built · tested (29)</summary>
+<details><summary>Status: built · tested (30)</summary>
 
 - bench:sched-ties
 - bench:sched-capped
@@ -565,6 +565,7 @@ parks when it is done, unless its exit is the point of its case.
 - host:testbench::water_filling_caps_a_budget_at_its_threads
 - host:testbench::a_charged_share_across_harts_is_judged_by_water_filling_net_of_lock_waits
 - host:testbench::a_hart_share_is_judged_of_every_charge_against_water_filling
+- host:testbench::timer_work_billed_elsewhere_in_a_budgets_time_is_bounded_inside_its_share
 - host:testbench::an_unmatched_audit_fails
 
 </details>
@@ -651,7 +652,7 @@ oracles alone. The case's log says what the build and the scripts each took.
 
 ## Checked builds
 
-<details><summary>Status: built · tested (16)</summary>
+<details><summary>Status: built · tested (17)</summary>
 
 - bench:bench-debug-assertions
 - bench:bench-debug-assertions-off
@@ -663,6 +664,7 @@ oracles alone. The case's log says what the build and the scripts each took.
 - bench:sched-timer-flood
 - bench:sched-carve-return
 - bench:deadline-flood-billed-traced
+- bench:deadline-placement
 - host:testbench::audits_are_subtracted_inside_each_window
 - host:testbench::a_hart_share_is_judged_of_every_charge_against_water_filling
 - host:testbench::an_unmatched_audit_fails
@@ -773,9 +775,17 @@ the old billing, fails that check in a recorded negative run. It records each de
 from user mode the same way (`x`), with its claim (`c`: the source, or 0 when another hart claimed
 it first), and checks that one that claims nothing is billed as a timer interrupt that ends no
 slice: after its expiry, to the budget the expiry billed last or to nobody, never to the budget it
-interrupted. It reports, judging nothing by them, the timer interrupts that charged a budget other
-than the one they interrupted and those ticks: another budget's timer work in the interrupted
-budget's time on its hart ([timer](kernel/timer.md#r12-scheduling-for-timer-work)). An
+interrupted. It reports the timer interrupts that charged a budget other than the one they
+interrupted and those ticks: another budget's timer work in the interrupted budget's time on its
+hart ([timer](kernel/timer.md#r12-scheduling-for-timer-work)); with `foreign_timer_in=<share>:<N>`
+it bounds them inside that share's window, the ticks of timer interrupts from user mode that
+interrupted the judged budget (or one lifted into it) and charged a budget outside its marks, at
+N of 1000 of what the judged budget was charged there, on a trace of two harts or more (at one
+every interrupt is on the victim's hart: recorded). Only timer interrupts count against the
+bound: an item that has passed when a call's entry or `kmain`'s comes is served there, so the
+kernel records an expiry's charges outside an interrupt too (`$`: the payer, the ticks and the
+time), and the check reports beside each share the ticks they charged others at the judged
+budget's own entries and in `kmain` on a hart it had just left, judging nothing by them. An
 interrupt's return (`O`) says where it goes: 1 to user mode with the interrupted runner's slice
 running, 0 the slice ended at this entry (to `kmain`, or in place to user mode, where the return
 is recorded as the entry's handling ends), 2 to `kmain` without, a preemption. Whether the slice

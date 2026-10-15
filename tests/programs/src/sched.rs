@@ -105,8 +105,8 @@ pub enum Role {
     /// [`Stats::DEADLINE`]. With p2 = 1, hold each wake's and notice's window until the launcher
     /// asks ([`Bench::samples`]).
     Steward = 15,
-    /// Rounds of p0 empty weight-0 budgets under slot 3, their deadlines 1 µs apart from 200 µs
-    /// ahead, each round then counting for 1 ms; report the count.
+    /// Rounds of p0 empty weight-0 budgets under slot 3, their deadlines 1 µs apart from p1 µs
+    /// ahead (200 with p1 = 0), each round then counting for 1 ms; report the count.
     DeadlineFlood = 19,
     /// Sleep, so that what follows begins a slice; carve p0 of this budget's weight (slot 3) to an
     /// empty child, count until nine tenths of a slice after the wake, then destroy it so the
@@ -906,11 +906,12 @@ fn run_child(arg: usize, more: Option<fn(Option<Role>, bool)>) -> ! {
         }
         Some(Role::ProcessChurn) => process_churn(end),
         Some(Role::DeadlineFlood) => {
+            let ahead = if param(1) == 0 { 200 } else { param(1) };
             let mut n = 0;
             while ticks() < end {
                 let now = rd::time_now().unwrap_or(0);
                 for i in 0..param(0) {
-                    let spec = rd::BudgetSpec { deadline: now + 200 + i, ..rd::spec(1, 0, 0) };
+                    let spec = rd::BudgetSpec { deadline: now + ahead + i, ..rd::spec(1, 0, 0) };
                     let _ = rd::create(3, &spec);
                 }
                 n += spin_until((ticks() + 1_000 * tpu).min(end));

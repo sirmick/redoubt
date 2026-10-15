@@ -70,7 +70,13 @@
 //! nobody's, inside each share's window (`HART-SHARE`), and those that found another budget's wait
 //! ended early; a case can require some of the latter in a share's window
 //! (`stale_waits_in=<share>`), so the
-//! check it runs cannot pass for want of the interrupts it is about. Whether the interrupt ended
+//! check it runs cannot pass for want of the interrupts it is about. It reports the interrupts
+//! that charged a budget other than the one they interrupted, and a case bounds those inside a
+//! share's window (`foreign_timer_in=<share>:<per mille>`, [`foreign_timer`]): another budget's
+//! timer work in the judged budget's time, judged on two harts or more (kernel/timer.md, "R12
+//! (scheduling) for timer work"). An expiry's charge outside an interrupt, at a call's entry or
+//! `kmain`'s (`$`: the payer, the ticks and the time), is reported beside, never judged: a passed
+//! item is served by the first entry anywhere. Whether the interrupt ended
 //! the slice this check decides itself: the kernel records the decision's inputs after the
 //! expiry (`=`: the slice's end and now, µs), the slice is over if its end is not after now, and
 //! the return (`O`: 1 to user mode with the slice running, 0 the slice ended at this entry: to
@@ -182,7 +188,7 @@ pub fn parse(log: &str) -> Result<Vec<Record>, String> {
             return Err(bad());
         }
         let kind = f[2].chars().next().ok_or_else(bad)?;
-        if f[2].len() != 1 || !"WRDPKLlefrqwAaGgvNnXYZUVTtIBEOMmCSJHQFukzxchjy0pidbos=".contains(kind) {
+        if f[2].len() != 1 || !"WRDPKLlefrqwAaGgvNnXYZUVTtIBEOMmCSJHQFukzxchjy0pidbos=$".contains(kind) {
             return Err(bad());
         }
         records.push(Record {
@@ -321,6 +327,14 @@ pub struct Summary {
     /// timer work"). Report-only.
     pub timer_foreign: usize,
     pub timer_foreign_ticks: u64,
+    /// Each such interrupt: when it came, the budget it interrupted, and its charges (payer,
+    /// ticks), so a share can bound the timer work billed elsewhere in its budget's time
+    /// (`foreign_timer_in`).
+    pub timer_foreign_entries: Vec<ForeignTimer>,
+    /// An expiry's charges outside a timer or device interrupt (`$`): at a call's entry (the hart's
+    /// runner is the caller) or `kmain`'s (no runner; the last one is the budget whose slice end or
+    /// block led there). Reported beside each share, never judged.
+    pub expiry_charges: Vec<ExpiryCharge>,
     /// When each timer interrupt that found neither and ended no slice came, µs, in trace order.
     pub timer_empty: Vec<u64>,
     /// When each timer interrupt that found another budget's wait ended early came, µs.
@@ -372,6 +386,25 @@ pub struct Section {
     pub audits: u64,
 }
 
+/// A timer interrupt from user mode that charged a budget other than the one it interrupted.
+#[derive(Clone, Debug)]
+pub struct ForeignTimer {
+    pub at: u64,
+    pub interrupted: Option<u64>,
+    pub charges: Vec<(u64, u64)>,
+}
+
+/// An expiry's charge outside an interrupt from user mode (`$`).
+#[derive(Clone, Copy, Debug)]
+pub struct ExpiryCharge {
+    pub at: u64,
+    /// The hart's runner (`H`), `None` in `kmain`, and its last runner.
+    pub runner: Option<u64>,
+    pub last_runner: Option<u64>,
+    pub payer: u64,
+    pub ticks: u64,
+}
+
 /// A timer interrupt from user mode, from its `I` to its `O`; or a device interrupt, from its `x`.
 struct TimerEntry {
     seq: u64,
@@ -407,6 +440,11 @@ fn check_timer_entry(e: &TimerEntry, to_user: bool, sum: &mut Summary) -> Result
     if foreign > 0 {
         sum.timer_foreign += 1;
         sum.timer_foreign_ticks += foreign;
+        sum.timer_foreign_entries.push(ForeignTimer {
+            at: e.at,
+            interrupted: e.interrupted,
+            charges: charged.clone().map(|c| (c.0, c.1)).collect(),
+        });
     }
     match e.expired {
         Some((last, what @ (1 | 2))) => {
@@ -514,6 +552,8 @@ pub fn check(records: &[Record]) -> Result<Summary, String> {
     // one, as every budget has on one hart when it is picked), and each hart's runner (`H`).
     let mut ready: BTreeMap<u64, u128> = BTreeMap::new();
     let mut runs: BTreeMap<u64, u64> = BTreeMap::new();
+    // Each hart's last runner, kept while it is in `kmain` (for an expiry's charge there, `$`).
+    let mut last_runner: BTreeMap<u64, u64> = BTreeMap::new();
     let mut sum = Summary::default();
     let mut i = 0;
     while i < records.len() {
@@ -662,6 +702,16 @@ pub fn check(records: &[Record]) -> Result<Summary, String> {
                 let e = open_timer.as_mut().expect("checked above");
                 e.charges.push((r.id, r.pass as u64, e.expired.is_some()));
             }
+            '$' if open_timer.is_some() => {
+                return Err(format!("record {}: an expiry's charge outside an interrupt, inside one", r.seq));
+            }
+            '$' => sum.expiry_charges.push(ExpiryCharge {
+                at: (r.pass >> 32) as u64,
+                runner: runs.get(&r.hart).copied(),
+                last_runner: last_runner.get(&r.hart).copied(),
+                payer: r.id,
+                ticks: (r.pass & 0xffff_ffff) as u64,
+            }),
             'E' => {
                 let e = open_timer.as_mut().expect("checked above");
                 if r.pass > 2 || e.expired.replace((r.id, r.pass)).is_some() {
@@ -771,6 +821,7 @@ pub fn check(records: &[Record]) -> Result<Summary, String> {
                     runs.remove(&r.hart);
                 } else {
                     runs.insert(r.hart, r.id);
+                    last_runner.insert(r.hart, r.id);
                 }
             }
             'Q' => {
@@ -2866,7 +2917,7 @@ fn hart_shares(log: &str) -> Result<Vec<HartShare<'_>>, String> {
 /// the trace states it at the window's start; at one hart that is its weight over theirs. A
 /// budget the program does not name (its own, `init`'s) is in the whole and owed nothing, so it
 /// counts against the share. Every want is stated, so a failure names its numbers.
-fn check_hart_share(records: &[Record], s: &HartShare) -> Result<(String, bool), String> {
+fn check_hart_share(records: &[Record], s: &HartShare) -> Result<HartJudged, String> {
     let what = format!("hart share {}", s.name);
     let (parent, marked) = lifts(records);
     let judged = mark(&marked, s.mark.0, &what)?;
@@ -2906,8 +2957,8 @@ fn check_hart_share(records: &[Record], s: &HartShare) -> Result<(String, bool),
         .iter()
         .map(|(i, (w, k))| format!("{w}:{} {}", k.map_or("-".to_string(), |k| k.to_string()), wants[i]))
         .collect();
-    Ok((
-        format!(
+    Ok(HartJudged {
+        line: format!(
             "hart share {}: {share} of 1000 of the CPU the kernel charged in [{start}, {end}] µs (records {}..={}), net of lock waits, at {harts} harts: budget {judged} {} ticks of {}, its lock waits {its_waits} of {all_waits} ticks taken out; water-filling wants in thousandths of a hart (weight:threads want, the judged first) [{}], expected {expected}; {} budgets charged, {} wakes in the window: target {} ({})",
             s.name,
             records[first].seq,
@@ -2925,7 +2976,70 @@ fn check_hart_share(records: &[Record], s: &HartShare) -> Result<(String, bool),
             }
         ),
         met,
-    ))
+        judged,
+        its_ticks: (its / stride) as u64,
+    })
+}
+
+/// A share across harts judged: its line, its verdict, the budget judged and what it was charged
+/// in the window, ticks, net of its lock waits.
+struct HartJudged {
+    line: String,
+    met: bool,
+    judged: u64,
+    its_ticks: u64,
+}
+
+/// The timer work billed to budgets outside the judged one's marks in its own time, inside a
+/// share's window (`foreign_timer_in`, kernel/timer.md, "R12 (scheduling) for timer work"): the
+/// ticks of timer interrupts from user mode that interrupted the judged budget (or one lifted into
+/// it) and charged another, as a share of what the judged budget was charged; and, reported only,
+/// the ticks an expiry charged others at the judged budget's own entries and in `kmain` on a hart
+/// it had just left. Judged on a trace of two harts or more: on one, every interrupt is on the
+/// victim's hart.
+fn foreign_timer(
+    records: &[Record],
+    sum: &Summary,
+    s: &HartShare,
+    judged: &HartJudged,
+    bound: Option<u64>,
+    harts: u64,
+) -> (String, bool) {
+    let (parent, _) = lifts(records);
+    let under = |b: u64| root_of(&[judged.judged], &parent, b).is_some();
+    let inside = |at: u64| (s.window.0..s.window.1).contains(&at);
+    let foreign: u64 = sum
+        .timer_foreign_entries
+        .iter()
+        .filter(|e| inside(e.at) && e.interrupted.is_some_and(under))
+        .flat_map(|e| e.charges.iter())
+        .filter(|(payer, _)| !under(*payer))
+        .map(|(_, ticks)| ticks)
+        .sum();
+    let per_mille = foreign.saturating_mul(1000) / judged.its_ticks.max(1);
+    let elsewhere = |pick: &dyn Fn(&ExpiryCharge) -> bool| -> u64 {
+        sum.expiry_charges
+            .iter()
+            .filter(|c| inside(c.at) && !under(c.payer) && pick(c))
+            .map(|c| c.ticks)
+            .sum()
+    };
+    let at_calls = elsewhere(&|c| c.runner.is_some_and(under));
+    let in_kmain = elsewhere(&|c| c.runner.is_none() && c.last_runner.is_some_and(under));
+    let (target, met) = match bound {
+        None => (String::new(), true),
+        Some(b) if harts < 2 => (format!(": <= {b}, recorded at {harts} hart, not gated"), true),
+        Some(b) => {
+            (format!(": target {} (<= {b})", if per_mille <= b { "met" } else { "missed" }), per_mille <= b)
+        }
+    };
+    (
+        format!(
+            "timer work billed to other budgets in budget {}'s time: {foreign} ticks in timer interrupts, {per_mille} of 1000 of its charges{target}; {at_calls} ticks at its own entries and {in_kmain} in `kmain` after it left, reported",
+            judged.judged
+        ),
+        met,
+    )
 }
 
 /// The harts the trace's `F` states, 1 in a trace with none.
@@ -3123,8 +3237,10 @@ fn sections(sections: &[Section], waits: &[(u64, u64, u64)]) -> String {
 /// ([`check_charged_share`]), and each share across harts on the same charges net of lock waits
 /// ([`check_hart_share`]), with the timer interrupts inside its window nobody paid for and those
 /// that found another budget's wait ended early beside; `stale_waits_in=<share>` requires one of
-/// the latter. With `hart_shares_from=N`, the shares across harts are recorded, not judged, on a
-/// trace of fewer than N harts.
+/// the latter; `foreign_timer_in=<share>:<N>` bounds the ticks of those that interrupted the
+/// judged budget and charged another at N of 1000 of its charges, on two harts or more
+/// ([`foreign_timer`]). With `hart_shares_from=N`, the shares across harts are recorded, not
+/// judged, on a trace of fewer than N harts.
 /// `round` requires the budget the program marks to run before any other budget is picked twice
 /// ([`check_round`]).
 pub fn run(log: &str, args: &str) -> Result<String, String> {
@@ -3143,6 +3259,8 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
     // Each bound, by its argument's name.
     let mut bounds = BTreeMap::new();
     let mut stale_in = Vec::new();
+    // Each share's bound on the timer work billed elsewhere in its budget's time, per mille.
+    let mut foreign_in: Vec<(&str, u64)> = Vec::new();
     let mut wake_no_preempt = None;
     let mut cluster = false;
     let mut cluster_old_control = false;
@@ -3187,6 +3305,15 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
         }
         if let Some(share) = arg.strip_prefix("stale_waits_in=") {
             stale_in.push(share);
+            continue;
+        }
+        if let Some(spec) = arg.strip_prefix("foreign_timer_in=") {
+            let (share, bound) = spec
+                .split_once(':')
+                .filter(|(s, _)| !s.is_empty())
+                .and_then(|(s, b)| Some((s, b.parse::<u64>().ok()?)))
+                .ok_or_else(|| format!("malformed foreign_timer_in {arg:?}"))?;
+            foreign_in.push((share, bound));
             continue;
         }
         if let Some(count) = arg.strip_prefix("wake_no_preempt=") {
@@ -3442,8 +3569,12 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
     // On a trace of fewer harts than `hart_shares_from` each is recorded, not judged: under `icount`
     // a hart's clock counts the other harts' turns, which can land in time billed to nobody.
     let shares_from = bounds.get("hart_shares_from").copied().unwrap_or(0);
+    if let Some((name, _)) = foreign_in.iter().find(|(n, _)| !hart_shares.iter().any(|s| s.name == *n)) {
+        return Err(format!("foreign_timer_in names {name}, but the log holds no such share"));
+    }
     for s in hart_shares {
-        let (line, met) = judged_at(check_hart_share(&records, &s)?, s.at, harts);
+        let judged = check_hart_share(&records, &s)?;
+        let (line, met) = judged_at((judged.line.clone(), judged.met), s.at, harts);
         let (line, met) = if harts < shares_from {
             (format!("{line}, judged from {shares_from} harts: recorded"), true)
         } else {
@@ -3452,9 +3583,11 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
         let inside = |t: &&u64| (s.window.0..s.window.1).contains(*t);
         let stale = sum.timer_stale_foreign.iter().filter(inside).count();
         let stale_missed = stale_in.contains(&s.name) && stale == 0;
-        missed |= !met || stale_missed;
+        let bound = foreign_in.iter().find(|(n, _)| *n == s.name).map(|(_, b)| *b);
+        let (foreign, foreign_met) = foreign_timer(&records, &sum, &s, &judged, bound, harts);
+        missed |= !met || stale_missed || !foreign_met;
         lines.push(format!(
-            "{line}; {} timer interrupts nobody's, {stale} finding another budget's wait ended early{}",
+            "{line}; {} timer interrupts nobody's, {stale} finding another budget's wait ended early{}; {foreign}",
             sum.timer_empty.iter().filter(inside).count(),
             if stale_missed { " (none, but the case requires some)" } else { "" }
         ));
@@ -6271,6 +6404,94 @@ mod tests {
         let v = run(&log, "stale_waits_in=v");
         assert!(v.as_ref().is_err_and(|e| e.contains("none, but the case requires some")), "{v:?}");
         assert!(run(&log, "stale_waits_in=nobody").is_err_and(|e| e.contains("no such share")));
+    }
+
+    /// Inside a share's window, the timer interrupts that interrupted the judged budget and
+    /// charged another are bounded, per mille of what the judged budget was charged, on a trace of
+    /// two harts or more (`foreign_timer_in`), and an expiry's charges outside an interrupt (`$`)
+    /// are reported by where the judged budget's hart was: at its own entries, or in `kmain` after
+    /// it left.
+    #[test]
+    fn timer_work_billed_elsewhere_in_a_budgets_time_is_bounded_inside_its_share() {
+        let (t, end) = round_robin(&[(44, 100), (9, 300)], 40, true, None);
+        // The share is always met (`1000-`): only the timer work is judged. `extra` goes after the
+        // third slice's return, (kind, id, pass) each.
+        let with = |extra: &[(char, u64, u128)], harts: u128| {
+            let at = t.iter().enumerate().filter(|(_, r)| r.1 == 'O').nth(2).unwrap().0 + 1;
+            let mut t = t.clone();
+            let e = t[at - 1].0;
+            t.splice(at..at, extra.iter().map(|&(kind, id, pass)| (e, kind, id, pass)));
+            on_harts(&t, &[], harts) + &format!("HART-SHARE v 100 {end} 1000- 2 300\n")
+        };
+        // Budget 44 is interrupted at 125 µs and 9's deadline charges 9 for 500 ticks: 50 of
+        // 1000 of the 10,000 ticks 44 was charged in the window.
+        let foreign = [('I', 44, 125), ('E', 9, 1), ('B', 9, 500), ('O', 0, 1)];
+        let v = run(&with(&foreign, 2), "foreign_timer_in=v:10");
+        assert!(
+            v.as_ref().is_err_and(|e| e.contains(
+                "timer work billed to other budgets in budget 44's time: 500 ticks in timer interrupts, 50 of 1000 of its charges: target missed (<= 10); 0 ticks at its own entries and 0 in `kmain` after it left, reported"
+            )),
+            "{v:?}"
+        );
+        let v = run(&with(&foreign, 2), "foreign_timer_in=v:60");
+        assert!(
+            v.as_ref().is_ok_and(|s| s.contains("50 of 1000 of its charges: target met (<= 60)")),
+            "{v:?}"
+        );
+        // At one hart every interrupt is on the judged budget's hart: recorded.
+        let v = run(&with(&foreign, 1), "foreign_timer_in=v:10");
+        assert!(
+            v.as_ref()
+                .is_ok_and(|s| s.contains("50 of 1000 of its charges: <= 10, recorded at 1 hart, not gated")),
+            "{v:?}"
+        );
+        // An interrupt that interrupted 9 and charged 9 is nobody's foreign work in 44's time, and
+        // one that charged 44 in 44's time is its own.
+        for own in [
+            [('I', 9, 125), ('E', 9, 1), ('B', 9, 500), ('O', 0, 1)],
+            [('I', 44, 125), ('E', 44, 1), ('B', 44, 500), ('O', 0, 1)],
+        ] {
+            let v = run(&with(&own, 2), "foreign_timer_in=v:0");
+            assert!(v.as_ref().is_ok_and(|s| s.contains("0 ticks in timer interrupts, 0 of 1000")), "{v:?}");
+        }
+        // An expiry's charge outside an interrupt names the time in its pass's high bits: one while
+        // 44 runs (at its own entry) and one after its slice ended, in `kmain`, each charging 9 for
+        // 500 ticks; one charging 44 is not another's.
+        let dollar = |payer: u64| ('$', payer, 500 | (126u128 << 32));
+        let running = t.iter().position(|r| r.1 == 'H' && r.2 == 44).unwrap();
+        let returned = running + t[running..].iter().position(|r| r.1 == 'O').unwrap();
+        let mut spent = t.clone();
+        let after = |t: &mut Vec<Rec>, i: usize, extra: &[(char, u64, u128)]| {
+            let e = t[i].0;
+            t.splice(i + 1..i + 1, extra.iter().map(|&(kind, id, pass)| (e, kind, id, pass)));
+        };
+        after(&mut spent, returned, &[dollar(9)]);
+        after(&mut spent, running, &[dollar(9), dollar(44)]);
+        let v = run(
+            &(on_harts(&spent, &[], 2) + &format!("HART-SHARE v 100 {end} 1000- 2 300\n")),
+            "foreign_timer_in=v:10",
+        );
+        assert!(
+            v.as_ref().is_ok_and(|s| s.contains(
+                "0 ticks in timer interrupts, 0 of 1000 of its charges: target met (<= 10); 500 ticks at its own entries and 500 in `kmain` after it left, reported"
+            )),
+            "{v:?}"
+        );
+        // Inside an interrupt such a charge is a `B`, never a `$`.
+        let v = run(&with(&[('I', 44, 125), dollar(9), ('O', 0, 1)], 2), "");
+        assert!(
+            v.as_ref().is_err_and(|e| e.contains("an expiry's charge outside an interrupt, inside one")),
+            "{v:?}"
+        );
+        // The argument names a share and a bound.
+        for bad in
+            ["foreign_timer_in=v", "foreign_timer_in=v:", "foreign_timer_in=v:x", "foreign_timer_in=:10"]
+        {
+            let v = run(&with(&foreign, 2), bad);
+            assert!(v.as_ref().is_err_and(|e| e.contains("malformed foreign_timer_in")), "{bad}: {v:?}");
+        }
+        let v = run(&with(&foreign, 2), "foreign_timer_in=nobody:10");
+        assert!(v.as_ref().is_err_and(|e| e.contains("no such share")), "{v:?}");
     }
 
     #[test]

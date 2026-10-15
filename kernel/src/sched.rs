@@ -1273,6 +1273,9 @@ pub mod trace {
         /// That interrupt decided its runner's slice had ended ([`slice_decided`]), so a return to
         /// `kmain` is the slice's end, not a preemption.
         slice_over: bool,
+        /// Inside an expiry that found something due, outside an interrupt from user mode (a call's
+        /// entry, or `kmain`'s): its charges are recorded as [`EXPIRY_CHARGE`].
+        expiry: bool,
         /// The walk measured now (`walk-trace`), 0 for none.
         walk: u64,
     }
@@ -1284,6 +1287,7 @@ pub mod trace {
         entry: 0,
         interrupt: false,
         slice_over: false,
+        expiry: false,
         walk: 0,
     });
 
@@ -1391,10 +1395,24 @@ pub mod trace {
     /// a timer interrupt from user mode.
     pub fn charge(id: u64, ticks: u64) {
         KERNEL.with(|k| k.charged += ticks);
-        if RING.with(|r| r.interrupt) {
-            record(CHARGE, id, u128::from(ticks));
+        match RING.with(|r| (r.interrupt, r.expiry)) {
+            (true, _) => record(CHARGE, id, u128::from(ticks)),
+            (false, true) => {
+                record(EXPIRY_CHARGE, id, u128::from(ticks) | u128::from(crate::time::now_us()) << 32)
+            }
+            (false, false) => {}
         }
     }
+
+    /// An expiry's bill outside a timer or device interrupt from user mode (`$`): at a call's
+    /// entry, or `kmain`'s, whichever hart's entry came first to an item that had passed; the payer
+    /// in the id, the ticks in the pass field's low 32 bits and the time in µs above them. The
+    /// oracle reports the timer work a budget's hart took this way beside what its timer
+    /// interrupts took (kernel/timer.md, "R12 (scheduling) for timer work").
+    pub const EXPIRY_CHARGE: u8 = b'$';
+
+    /// An expiry that found something due begins or ends (`time::expire_due`).
+    pub fn expiry(open: bool) { RING.with(|r| r.expiry = open); }
 
     /// The kernel's time and what of it was charged, once, at the trace's end (`C`): the id is
     /// every hart's ticks in the kernel, from a trap's entry or `kmain`'s loop to the return to

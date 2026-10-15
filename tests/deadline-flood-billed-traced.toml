@@ -9,13 +9,16 @@ programs = ["deadline-flood-billed"]
 # time, so the victim's share is the kernel's charges (`HART-SHARE`); the counts' bounds are the
 # release twin's.
 kernel_features = ["sched-trace"]
-post_check = "sched_oracle"
-# Judged at the bench's harts. At two the destructions run on whichever hart's timer comes first,
-# and the victim's share follows where they land: mostly on the creator's hart (91 of 96 on rv64
-# and 77 of 80 on rv32 with 16 deadlines, 124 and 125 of 128 with 64) it keeps about 870 of 1000;
-# mostly on its own (87 of 96, rv64, 16 deadlines, in one build) it keeps 482, near the bound. A
-# failure here with the destructions on the victim's hart is that placement, which no pick can
-# repay a one-thread victim (kernel/timer.md, "R12 (scheduling) for timer work").
+# Judged at the bench's harts. At two the destructions land on the creator's hart, whose timer
+# alone is armed for its deadlines while it runs, or at the creator's own entries; the timer work
+# billed to others in the victim's time is bounded at 10 of 1000 of its charges (`foreign_timer_in`,
+# judged at two harts, recorded at one). Before the placement the destructions ran on whichever
+# hart's timer came first, and the victim's share followed where they landed: mostly on the
+# creator's hart (91 of 96 on rv64 and 77 of 80 on rv32 with 16 deadlines, 124 and 125 of 128
+# with 64) it kept about 870 of 1000; mostly on its own (87 of 96, rv64, 16 deadlines, in one
+# build) 482, near the bound, which no pick can repay a one-thread victim (kernel/timer.md, "R12
+# (scheduling) for timer work"). With it: TBD-GATE.
+post_check = "sched_oracle foreign_timer_in=16-deadlines:10 foreign_timer_in=64-deadlines:10"
 timeout_secs = 600
 expect = [
     '^HART-SHARE 16-deadlines \d+ \d+ 50\+ 2:1 100:1$',

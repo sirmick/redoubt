@@ -7,9 +7,13 @@ programs = ["sched-exit-churn"]
 # Test builds only: the trace ring (never in a default kernel). The oracle checks every pick, and
 # judges the victim's share of what the kernel charged in the window the program prints
 # (`HART-SHARE`), net of lock waits; audits are charged to no one, and so is a wait behind another
-# hart's audit. Each variant is judged at whatever harts the run has.
+# hart's audit. Each variant is judged at whatever harts the run has. At two harts the timer work
+# billed to others in the victim's time (the attacker's poll timeouts, whose payer runs nowhere
+# while it waits) is bounded at 10 of 1000 of the victim's charges (`foreign_timer_in`; before the
+# placement 27 such interrupts and 70,232 ticks on rv64, 0.23 % of the window's charges, 8 and
+# 17,035 on rv32); at one hart it is recorded.
 kernel_features = ["sched-trace"]
-post_check = "sched_oracle"
+post_check = "sched_oracle foreign_timer_in=threads-exit:10 foreign_timer_in=processes-exit:10 foreign_timer_in=processes-fault:10"
 timeout_secs = 600
 expect = [
     '^HART-SHARE threads-exit \d+ \d+ 50\+ 2:1 100:2$',

@@ -170,6 +170,8 @@ pub fn expire_due(ss: &mut ProcessTable) -> Expired {
     if TIMER.with(|t| t.threads.at > now && t.budgets.at > now) {
         return Expired { destroyed: false, last: None };
     }
+    #[cfg(feature = "sched-trace")]
+    crate::sched::trace::expiry(true);
     let mut started = crate::sched::now_ticks();
     // The `EXPIRY` walk is the timer's own: the collect walk and its sort. Each ending, and the
     // pump it makes, is recorded after it, as its own.
@@ -260,6 +262,8 @@ pub fn expire_due(ss: &mut ProcessTable) -> Expired {
     }
     // From the last bill on, the rest of the entry is the budget billed last's (none with nothing
     // expired), the bill's own handling included; an audit below is charged to no one.
+    #[cfg(feature = "sched-trace")]
+    crate::sched::trace::expiry(false);
     crate::sched::bill_from(last, at);
     MemoryManager::with(crate::message::audit);
     // The deadlines' destructions audit once, here: inside the loop, a wait due later than one
