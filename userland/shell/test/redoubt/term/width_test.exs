@@ -46,8 +46,8 @@ defmodule Redoubt.Term.WidthTest do
     for c <- runs do
       g = <<c::utf8>>
       assert Width.run(g) == {byte_size(g), 1}, Integer.to_string(c, 16)
-      # A run of 100 code points, past the 64 its Erlang prefix takes, goes on by the VM's matcher:
-      # the same set.
+      # A run of 100 code points, across the matcher's first window for a two-byte one: the same
+      # set.
       assert Width.run(String.duplicate(g, 100) <> "\u0301") == {100 * byte_size(g), 100},
              Integer.to_string(c, 16)
 
@@ -73,15 +73,18 @@ defmodule Redoubt.Term.WidthTest do
     assert Width.run("abéп\u0301x世") == {6, 4}
   end
 
-  # The VM's matcher takes a run past its first 64 code points, in windows of 128 bytes and then
-  # 512, each cut where a character starts. At every window's edge, and through runs longer than
-  # the windows, what it measures is what the Erlang path measures a code point at a time: a code
-  # point alone never reaches the matcher, so that path is the reference.
-  test "past a run's first 64 code points the matcher measures what the Erlang path does, at every window's edge" do
-    stops = ["\e", "\u0301", "\u00AD", "\u0483", "€", "🙂", "世", "\u0530"]
+  # The VM's matcher takes a run in windows of 128 bytes and then 512, each cut where a character
+  # starts. At every window's edge, and through runs longer than the windows, what it measures is
+  # what it measures a code point at a time: a code point alone fills no window, so that path is
+  # the reference.
+  test "the matcher measures a run as it measures its code points one at a time, at every window's edge" do
+    # No byte that is not UTF-8: `run/1` takes text made visible, in which none is left, and the
+    # encoder asks it only for a lead byte in 0x20..0x7E or 0xC2..0xD4.
+    stops = ["\e", "\u0301", "\u00AD", "\u0483", "€", "🙂", "世", "\u0530", "\u200D"]
+
     goes = ["é", "я", "~"]
 
-    for filler <- ["x", "é"], at <- edges(filler), special <- stops ++ goes do
+    for filler <- ["x", "é"], at <- edges(), special <- stops ++ goes do
       text = prefix(filler, at) <> special <> String.duplicate(filler, 600)
       assert Width.run(text) == by_code_points(text), "#{inspect(special)} at byte #{at} after #{filler}"
     end
@@ -92,12 +95,9 @@ defmodule Redoubt.Term.WidthTest do
     end
   end
 
-  # The byte offsets about the windows' edges: where the Erlang prefix ends (64 code points), and
-  # 128, 640 and 1152 bytes past it, five bytes each side.
-  defp edges(filler) do
-    start = 64 * byte_size(filler)
-    for edge <- [start, start + 128, start + 640, start + 1152], at <- (edge - 5)..(edge + 5), do: at
-  end
+  # The byte offsets about the windows' edges: the text's start, and 128, 640 and 1152 bytes in,
+  # five bytes each side.
+  defp edges, do: for(edge <- [0, 128, 640, 1152], at <- max(edge - 5, 0)..(edge + 5), do: at)
 
   # `at` bytes of `filler`, one byte of ASCII making up an odd count.
   defp prefix(filler, at) do

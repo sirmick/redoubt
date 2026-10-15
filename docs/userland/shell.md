@@ -399,47 +399,50 @@ and every [full-screen program](#full-screen-programs).
   whatever stands beside it (printable ASCII, and the Latin, IPA, Greek and Cyrillic letters below
   U+0530 that no mark is part of) takes a column a code point at once, but for its last when more
   follows, which a combining mark may join; other text is measured a grapheme at a time, and a run
-  of ASCII control characters is drawn in caret notation into one binary. A run's first 64 code
-  points are taken in Erlang and the rest by the VM's own matchers (`:binary.match`, `:unicode`,
-  `:re`), a window of up to 512 bytes at a time: on the machine a step of an Erlang loop costs
+  of ASCII control characters is drawn in caret notation into one binary. A run is taken by the
+  VM's own matchers (`:binary.match`, `:unicode`, `:re`) from its first byte, a window of 128 and
+  then up to 512 bytes at a time: on the machine a step of an Erlang loop over code points costs
   thousands of guest instructions ([beamlet](beamlet.md#beamlet-on-redoubt), about 3,600 on rv64),
-  as much as a matcher spends on hundreds of bytes, while on the host the two are near. A window is
-  small so that the lists a matcher's answer makes do not grow the driver's heap toward its limit.
-  What is drawn is the same, byte for byte.
+  about what a matcher spends on two bytes of text, so a line of 80 is one call of each matcher,
+  and a run of one code point costs a call, a few steps' worth, which text of such runs pays (the
+  profile, below). A window is small so that the lists a matcher's answer makes do not grow the
+  driver's heap toward its limit. What is drawn is the same, byte for byte.
 - **The line being edited** is drawn again in one pass over its graphemes, which places the cursor
   on its way, and a printable ASCII grapheme that fits on its row costs one step of it. A key
   typed at the line's end draws itself alone and moves the cursor the encoder keeps, so it costs
   the key, not the line: the 200th character typed costs what the 10th did.
 - **The rate:** on the machine, timed in guest time (`icount`, `shift=3`), the encoder draws 256 KiB
-  of ASCII at about 30,800 bytes a second on rv64 and 27,800 on rv32 (28,500 and 25,800 when runs
-  were built), and of Cyrillic at 31,900 and 29,600, where the encoder before runs draws about 620
-  and 1,240 (rv64, on the same interpreter); a line of 1 MiB at 35,100 and 31,600, in 29.9 and
-  33.2 s; text of short runs between tabs, controls and wide characters at about 4,200, where it
-  draws 1,150. A keystroke in the middle of a line of 400 characters, wrapped over six rows of 80,
-  draws the line again in about 57 ms on rv64 and 65 ms on rv32, where it took 1.64 and 1.84 s.
-  `shell-output-rate` holds both widths to 12,000 bytes a second for each text, a margin of 2.1 on
-  the slowest (rv32's ASCII), and the least of three redraws to 250 ms, a margin of 3.8. It times
-  the encoder alone: what reaches the person also passes the driver's writes and `consoled` or
-  `sshd`, and a keystroke `group` and `edlin`'s own work. The numbers are measured on beamlet's
-  faster interpreter, which moved them little: the encoder's time is now mostly the VM's matchers
-  and the few steps a run takes.
+  of ASCII at about 31,000 bytes a second on rv64 and 28,000 on rv32 (34,600 and 31,400 in
+  `shell-output-rate`'s own run; 28,500 and 25,800 when runs were built), and of Cyrillic at
+  43,700 and 41,000, where the encoder before runs draws about 620 and 1,240 (rv64, on the same
+  interpreter); a line of 1 MiB at 36,900 and 33,000, in 28.4 and 31.7 s; text of short runs
+  between tabs, controls and wide characters at about 3,800 and 3,300, where it draws 1,150. A
+  keystroke in the middle of a line of 400 characters, wrapped over six rows of 80, draws the
+  line again in about 110 ms on either width, where it took 1.64 and 1.84 s. `shell-output-rate`
+  holds both widths to 12,000 bytes a second for each line, a margin of 2.6 on the slowest
+  (rv32's ASCII); the page of the profile below to 6,500 and the same page in ASCII to 12,000
+  (7,800 and 16,500 in this case's run on rv32), margins of 1.2 and 1.4, close because they trap
+  the return of a per-line prologue the encoder once paid (about 6,000 and 9,400 with it); and
+  the least of three redraws to 250 ms, a margin
+  of 2. It times the encoder alone: what reaches the person also passes the driver's writes and
+  `consoled` or `sshd`, and a keystroke `group` and `edlin`'s own work. The encoder's time is
+  mostly the VM's matchers.
 - **The profile** (`shell-text-profile`, run by name, both widths, guest time): of a 256 KiB
   line's draw, making it visible is three fifths and the run path's wrap and encoding the rest,
   about 30 µs a byte in all. Text that leaves the run path is measured a grapheme at a time, about
-  0.8 ms a grapheme on rv64 and 0.9 on rv32: the walk (`String.next_grapheme`, which is
-  `:unicode_util.gc/1`) 0.42 ms and the width (`:unicode_util.is_wide/1`) 0.22 ms. So CJK, emoji
-  and text broken by combining marks draws at about 4,100 and 3,600 bytes a second, 64 KiB of it in
-  16 to 18 s: slow and bounded. A page of 82-byte lines of English with one CJK word, one emoji
-  and one accented name each draws at 7,200 and 6,400 bytes a second, and the same page in ASCII
-  alone at 10,400 and 9,300: a line's five graphemes, and the two runs they split, cost 3.5 of its
-  11.4 ms on rv64, and the rest is the piece's. Every line is a piece, and a piece's first 64 code
-  points are taken one at a time in Erlang by `Text.visible` and again by `Width.run` before the
-  matchers: the ASCII page's `Text.visible` costs 3.8 ms a line where the long line's costs 1.6 ms
-  for the same bytes. A run path for wide text would gain such a page a fifth at most, and is not
-  built; the per-grapheme path stays as it is. That a page of ordinary lines draws at a third of
-  a long line's rate, the piece's prologue paid twice a line, is the cost left: whether the
-  prologue should be shorter when the piece is, or a line's runs carried past its newline, is
-  not decided.
+  0.85 ms a grapheme on rv64 and 1.0 on rv32: the walk (`String.next_grapheme`, which is
+  `:unicode_util.gc/1`) 0.42 ms, the width (`:unicode_util.is_wide/1`) 0.22 ms, and a matcher
+  call for each run of one code point between them. So CJK, emoji and text broken by combining
+  marks draws at about 3,800 and 3,300 bytes a second, 64 KiB of it in 17 to 20 s: slow and
+  bounded. A page of 82-byte lines of English with one CJK word, one emoji and one accented name
+  each draws at 9,700 and 8,400 bytes a second, and the same page in ASCII alone at 18,500 and
+  16,000. A line's five
+  graphemes, and the two runs they split, cost 4.0 of the page's 8.5 ms a line on rv64; the rest,
+  4.4 ms where the same bytes of a long line cost 2.6, is the line's own as a piece: a call of
+  each matcher in `Text.visible` and again in `Width.run`, the cut at its newline, and the row's
+  bookkeeping. A run path for wide text would gain such a page under half, and is not built; the
+  per-grapheme path stays as it is. Whether a line's runs should be carried past its newline, so
+  that a page pays the matchers once a window rather than once a line, is not decided.
 - **Frames are the cell protocol** ([the cell protocol](#the-cell-protocol)): the screen buffer's
   diff speaks it ([beamlet](beamlet.md#screen-natives)), and the encoder reads it through the one
   decoder (`Redoubt.Term.Cells`) and draws it

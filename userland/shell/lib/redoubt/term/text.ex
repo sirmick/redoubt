@@ -19,9 +19,8 @@ defmodule Redoubt.Term.Text do
 
   @tab 8
 
-  # A run's first code points taken one at a time, then the bytes of text the first call of the
-  # VM's matchers on it looks at, and the most any looks at (`printable/1`).
-  @steps 64
+  # The bytes of text the first call of the VM's matchers on a run looks at, and the most any
+  # looks at (`printable/1`).
   @first 128
   @most 512
 
@@ -92,22 +91,11 @@ defmodule Redoubt.Term.Text do
   defp unprintable(<<b, rest::binary>>, col, acc), do: scan(rest, col + 4, [byte(b) | acc])
 
   # The bytes and the code points of the printable text `text` starts with: UTF-8 code points
-  # that are not `control?/1`. Its first `@steps` are taken one at a time in Erlang; a run longer
-  # than that goes on by the VM's own matchers, a window at a time (`matched/4`): on the machine
-  # an Erlang step costs as much as a matcher spends on hundreds of bytes, while a call of one
-  # costs as much as several steps, so text of short runs is quickest a code point at a time and a
-  # long run in few calls.
-  defp printable(text), do: printable(text, 0, 0, @steps)
-
-  defp printable(<<c, rest::binary>>, bytes, points, left) when left > 0 and c in 0x20..0x7E,
-    do: printable(rest, bytes + 1, points + 1, left - 1)
-
-  defp printable(<<c::utf8, rest::binary>>, bytes, points, left)
-       when left > 0 and c >= 0xA0 and c not in 0x202A..0x202E and c not in 0x2066..0x2069,
-       do: printable(rest, bytes + byte_size(<<c::utf8>>), points + 1, left - 1)
-
-  defp printable(text, bytes, points, 0), do: matched(text, @first, bytes, points)
-  defp printable(_text, bytes, points, _left), do: {bytes, points}
+  # that are not `control?/1`, by the VM's own matchers from the first byte, a window at a time
+  # (`matched/4`). On the machine a step of an Erlang loop over the code points costs about what
+  # a matcher spends on two bytes, and a call of one as much as a few steps, so a run of any
+  # length is quickest in the matchers' few calls: a line of 80 is one.
+  defp printable(text), do: matched(text, @first, 0, 0)
 
   # The run on from `text`'s start, by the VM's matchers: a window of `size` bytes, and while the
   # run fills it the next, four times as long, up to `@most`. In a window, the run ends at the

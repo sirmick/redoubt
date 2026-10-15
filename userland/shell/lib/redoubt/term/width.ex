@@ -14,9 +14,8 @@ defmodule Redoubt.Term.Width do
   @spec columns(String.t()) :: non_neg_integer()
   def columns(text), do: text |> String.graphemes() |> Enum.map(&grapheme/1) |> Enum.sum()
 
-  # A run's first code points taken one at a time, then the bytes of text the first call of the
-  # VM's matcher on it looks at, and the most any looks at (`run/1`).
-  @steps 64
+  # The bytes of text the first call of the VM's matcher on a run looks at, and the most any looks
+  # at (`run/1`).
   @first 128
   @most 512
 
@@ -28,20 +27,9 @@ defmodule Redoubt.Term.Width do
   follows, which a combining mark after it would join.
   """
   @spec run(String.t()) :: {non_neg_integer(), non_neg_integer()}
-  def run(text), do: run(text, 0, 0, @steps)
-
-  # The first `@steps` code points one at a time in Erlang, and a run longer than that on by the
-  # VM's matcher a window at a time (`matched/4`), as `Redoubt.Term.Text`'s scan does, for the
-  # same reason.
-  defp run(<<c, rest::binary>>, bytes, points, left) when left > 0 and c in 0x20..0x7E,
-    do: run(rest, bytes + 1, points + 1, left - 1)
-
-  defp run(<<c::utf8, rest::binary>>, bytes, points, left)
-       when left > 0 and (c in 0xA0..0xAC or c in 0xAE..0x2FF or c in 0x370..0x482 or c in 0x48A..0x52F),
-       do: run(rest, bytes + 2, points + 1, left - 1)
-
-  defp run(text, bytes, points, 0), do: matched(text, @first, bytes, points)
-  defp run(_text, bytes, points, _left), do: {bytes, points}
+  # By the VM's matcher from the first byte, a window at a time (`matched/4`), as
+  # `Redoubt.Term.Text`'s scan does, for the same reason.
+  def run(text), do: matched(text, @first, 0, 0)
 
   # The run on from `text`'s start: a window of `size` bytes, and while the run fills it the next,
   # four times as long, up to `@most`.

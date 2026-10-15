@@ -43,22 +43,21 @@ defmodule Redoubt.Term.TextTest do
         do: refute(Text.visible(text) == text, hex),
         else: assert(Text.visible(text) == text, hex)
 
-      # After a short run and after one of 100 code points, past the 64 a run's Erlang prefix
-      # takes, so the VM's matchers find the code point; a tab's stop depends on where it is, and
-      # has its own test.
+      # After a short run and after one of 100 code points (150 bytes, so the matchers' first
+      # window ends before the code point); a tab's stop depends on where it is, and has its own
+      # test.
       for run <- ["aé", String.duplicate("aé", 50)], c != ?\t do
         assert Text.visible(run <> text <> "z") == run <> Text.visible(text) <> "z", hex
       end
     end
   end
 
-  # The VM's matchers take a printable run past its first 64 code points, in windows of 128 bytes
-  # and then 512. At every window's edge, whatever falls there (a control of one byte, of two as
-  # C2 8x, or of three as E2 80 AA; a character of two, three or four bytes cut by the edge; a byte
-  # that is not UTF-8, or a sequence cut short; a combining mark; a tab), the text is drawn as the
-  # Erlang path draws it a code point at a time: a code point alone never reaches the matchers, so
-  # that path is the reference.
-  test "past a run's first 64 code points the matchers draw what the Erlang path does, at every window's edge" do
+  # The VM's matchers take a printable run in windows of 128 bytes and then 512. At every window's
+  # edge, whatever falls there (a control of one byte, of two as C2 8x, or of three as E2 80 AA; a
+  # character of two, three or four bytes cut by the edge; a byte that is not UTF-8, or a sequence
+  # cut short; a combining mark; a tab), the text is drawn as the matchers draw it a unit at a
+  # time: a unit alone fills no window, so that path is the reference.
+  test "the matchers draw a run as they draw its units one at a time, at every window's edge" do
     specials = [
       "\e",
       "\u0000",
@@ -72,12 +71,16 @@ defmodule Redoubt.Term.TextTest do
       "€",
       "🙂",
       "\u0301",
+      "‍",
       <<0xFF>>,
       <<0xE2, 0x82>>,
-      <<0xF0, 0x9F, 0x99>>
+      <<0xF0, 0x9F, 0x99>>,
+      <<0xED, 0xA0, 0x80>>,
+      <<0xC0, 0x80>>,
+      <<0xE0, 0x80, 0x80>>
     ]
 
-    for filler <- ["x", "é"], at <- edges(filler), special <- specials do
+    for filler <- ["x", "é"], at <- edges(), special <- specials do
       text = prefix(filler, at) <> special <> String.duplicate(filler, 600)
       assert Text.visible(text, 3) == by_units(text, 3), "#{inspect(special)} at byte #{at} after #{filler}"
     end
@@ -85,15 +88,15 @@ defmodule Redoubt.Term.TextTest do
     for filler <- ["x", "é", "я", "x\u00e9", "世"], n <- [65, 80, 100, 600, 1500] do
       text = String.duplicate(filler, n)
       assert Text.visible(text) == text, "#{n} of #{filler}"
+      # A multibyte sequence cut short at the text's very end.
+      cut = text <> <<0xF0, 0x9F, 0x99>>
+      assert Text.visible(cut, 3) == by_units(cut, 3), "#{n} of #{filler}, cut at the end"
     end
   end
 
-  # The byte offsets about the windows' edges: where the Erlang prefix ends (64 code points), and
-  # 128, 640 and 1152 bytes past it, five bytes each side.
-  defp edges(filler) do
-    start = 64 * byte_size(filler)
-    for edge <- [start, start + 128, start + 640, start + 1152], at <- (edge - 5)..(edge + 5), do: at
-  end
+  # The byte offsets about the windows' edges: the text's start, and 128, 640 and 1152 bytes in,
+  # five bytes each side.
+  defp edges, do: for(edge <- [0, 128, 640, 1152], at <- max(edge - 5, 0)..(edge + 5), do: at)
 
   # `at` bytes of `filler`, one byte of ASCII making up an odd count.
   defp prefix(filler, at) do
