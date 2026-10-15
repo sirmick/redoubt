@@ -23,7 +23,7 @@ use redoubt_sys::{Error, Handle};
 use redoubt_wire::ninep::{Body, ErrorName, IOHDRSZ, Message, NOFID, NOTAG, Names, Qid, Stat, VERSION};
 use redoubt_wire::proto::ninep_common;
 
-use crate::handle::Endpoint;
+use crate::handle::{Budget, Endpoint};
 use crate::ipc::{Buffer, CallOutcome, Words};
 use crate::path;
 use crate::server::ninep::WORDS_9P;
@@ -131,10 +131,15 @@ impl Connection {
     /// Gives the endpoint back.
     pub fn into_endpoint(self) -> Endpoint { self.endpoint }
 
-    /// Calls with `lend`'s pages.
-    fn call(&self, lend: &mut Lend, words: &Words) -> Result<crate::ipc::Reply, ClientError> {
+    /// Calls with `lend`'s pages, `handles` travelling with the request.
+    fn call(
+        &self,
+        lend: &mut Lend,
+        words: &Words,
+        handles: &[Handle],
+    ) -> Result<crate::ipc::Reply, ClientError> {
         lend.buffer()?;
-        Ok(lend.call(&self.endpoint, words, &[], self.timeout).into_result()?.0)
+        Ok(lend.call(&self.endpoint, words, handles, self.timeout).into_result()?.0)
     }
 
     /// Sends `body` and returns the reply's body, which must be `body`'s R-message.
@@ -147,7 +152,7 @@ impl Connection {
         };
         let want = body.kind() + 1;
         Message { tag, body }.encode(lend.buffer()?).map_err(ClientError::Encode)?;
-        let reply = self.call(lend, &WORDS_9P)?;
+        let reply = self.call(lend, &WORDS_9P, &[])?;
         // No 9P reply carries handles: close any a hostile server sent, before anything else.
         close_all(reply.handles.as_slice());
         if reply.words != WORDS_9P || !reply.handles.as_slice().is_empty() {
@@ -260,20 +265,26 @@ impl Connection {
 
     /// `new_connection`: a fresh connection to this server rooted at `root` (relative to this
     /// connection's root; it never climbs above it), with `quota` bytes carved from this
-    /// connection's quota (0 shares it). Returns the connection and its id, which only this
+    /// connection's quota (0 shares it), minted in the revocation scope `scope` if one is given:
+    /// the server stamps the connection's handle with it, so destroying the scope ends the
+    /// connection in every table at once (servers/steward.md R41); the server's records of it
+    /// are freed by `disconnect` as for any connection. A scope not at or below the stamp of
+    /// this connection is refused. Returns the connection and its id, which only this
     /// connection may `disconnect`. What a launcher gives each child (servers/init.md, "Fresh
     /// connections per child").
-    /// A refusal is `Remote`, whatever its reason: which root exists, which cap was reached and
-    /// which quota was refused are the server's business, not the caller's.
+    /// A refusal is `Remote`, whatever its reason: which root exists, which cap was reached,
+    /// which quota or scope was refused are the server's business, not the caller's.
     pub fn new_connection(
         &self,
         lend: &mut Lend,
         root: &str,
         quota: u64,
+        scope: Option<&Budget>,
     ) -> Result<(Endpoint, u64), ClientError> {
         let request = ninep_common::Message::NewConnection(ninep_common::NewConnection { root, quota });
         let words = request.encode(lend.buffer()?).map_err(ClientError::Encode)?;
-        let reply = self.call(lend, &words)?;
+        let scope = scope.map(Budget::handle);
+        let reply = self.call(lend, &words, scope.as_slice())?;
         let handles = reply.handles.as_slice();
         match ninep_common::Reply::decode(2, &reply.words, lend.bytes(), handles.len()) {
             Ok(Ok(ninep_common::Reply::NewConnection(r))) => match handles {

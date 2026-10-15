@@ -75,7 +75,9 @@ struct Host {
 struct NoKernel;
 
 impl Minter for NoKernel {
-    fn mint(&mut self, _: std::num::NonZeroU64) -> Result<Handle, Error> { Err(Error::NotPermitted) }
+    fn mint(&mut self, _: std::num::NonZeroU64, _: Option<Handle>) -> Result<Handle, Error> {
+        Err(Error::NotPermitted)
+    }
 
     fn random(&mut self) -> Result<u64, Error> { Err(Error::NotPermitted) }
 }

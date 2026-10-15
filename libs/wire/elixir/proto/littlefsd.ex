@@ -11,18 +11,19 @@ defmodule Redoubt.Wire.Proto.Littlefsd do
   """
   alias Redoubt.Wire, as: W
 
-  # opcode => {name, shape, handles}; replies are keyed by their request's opcode.
+  # opcode => {name, shape, handle slots, slots that may be empty}; replies are keyed by
+  # their request's opcode.
   @requests %{
-    16 => {:rename, :buffer, 0},
-    17 => {:copy_file, :buffer, 0},
-    18 => {:set_attr, :buffer, 0},
-    19 => {:get_attr, :buffer, 0}
+    16 => {:rename, :buffer, 0, 0},
+    17 => {:copy_file, :buffer, 0, 0},
+    18 => {:set_attr, :buffer, 0, 0},
+    19 => {:get_attr, :buffer, 0, 0}
   }
   @replies %{
-    16 => {:rename, :buffer, 0},
-    17 => {:copy_file, :buffer, 0},
-    18 => {:set_attr, :buffer, 0},
-    19 => {:get_attr, :buffer, 0}
+    16 => {:rename, :buffer, 0, 0},
+    17 => {:copy_file, :buffer, 0, 0},
+    18 => {:set_attr, :buffer, 0, 0},
+    19 => {:get_attr, :buffer, 0, 0}
   }
   @errors %{
     1 => :malformed,

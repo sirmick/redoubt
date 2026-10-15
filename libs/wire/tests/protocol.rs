@@ -15,12 +15,12 @@ fn layouts_are_the_tables() {
     let mut buf = [0u8; 64];
     let small = example::Message::Small(example::Small { a: 1, b: 2 });
     let (layout, words) = request::<example::Protocol>(&small, &mut buf);
-    assert_eq!(layout, Layout { opcode: 3, inline: true, handles: 0 });
+    assert_eq!(layout, Layout { opcode: 3, inline: true, handles: 0, optional: 0 });
     assert_eq!(words, small.encode(&mut [0u8; 64]).unwrap());
 
     let named = example::Message::Named(example::Named { id: 7, name: "x" });
     let (layout, words) = request::<example::Protocol>(&named, &mut buf);
-    assert_eq!(layout, Layout { opcode: 5, inline: false, handles: 0 });
+    assert_eq!(layout, Layout { opcode: 5, inline: false, handles: 0, optional: 0 });
     let mut own = [0u8; 64];
     assert_eq!(words, named.encode(&mut own).unwrap());
     assert_eq!(buf, own, "the same bytes in the buffer");

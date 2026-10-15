@@ -11,12 +11,13 @@ defmodule Redoubt.Wire.Proto.Startup do
   """
   alias Redoubt.Wire, as: W
 
-  # opcode => {name, shape, handles}; replies are keyed by their request's opcode.
+  # opcode => {name, shape, handle slots, slots that may be empty}; replies are keyed by
+  # their request's opcode.
   @requests %{
-    1 => {:startup, :buffer, 0}
+    1 => {:startup, :buffer, 0, 0}
   }
   @replies %{
-    1 => {:startup, :buffer, 0}
+    1 => {:startup, :buffer, 0, 0}
   }
   @errors %{
     1 => :malformed

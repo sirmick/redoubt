@@ -125,7 +125,8 @@ fn burst(
     let mut conns = Vec::new();
     conns.push((first, open_aio(&conn, out)?));
     if two {
-        let (minted, _) = conn.new_connection(&mut out.lend, "/", 0).map_err(|e| format!("mint: {e:?}"))?;
+        let (minted, _) =
+            conn.new_connection(&mut out.lend, "/", 0, None).map_err(|e| format!("mint: {e:?}"))?;
         let second = Connection::attach(Endpoint::from_handle(minted.handle()), &mut out.lend)
             .map_err(|e| format!("attach the second: {e:?}"))?;
         conns.push((minted, open_aio(&second, out)?));

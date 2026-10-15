@@ -11,18 +11,19 @@ defmodule Redoubt.Wire.Proto.NetCtl do
   """
   alias Redoubt.Wire, as: W
 
-  # opcode => {name, shape, handles}; replies are keyed by their request's opcode.
+  # opcode => {name, shape, handle slots, slots that may be empty}; replies are keyed by
+  # their request's opcode.
   @requests %{
-    1 => {:connect, :buffer, 0},
-    2 => {:listen, :inline, 0},
-    3 => {:close, :inline, 0},
-    4 => {:abort, :inline, 0}
+    1 => {:connect, :buffer, 0, 0},
+    2 => {:listen, :inline, 0, 0},
+    3 => {:close, :inline, 0, 0},
+    4 => {:abort, :inline, 0, 0}
   }
   @replies %{
-    1 => {:connect, :buffer, 0},
-    2 => {:listen, :inline, 0},
-    3 => {:close, :inline, 0},
-    4 => {:abort, :inline, 0}
+    1 => {:connect, :buffer, 0, 0},
+    2 => {:listen, :inline, 0, 0},
+    3 => {:close, :inline, 0, 0},
+    4 => {:abort, :inline, 0, 0}
   }
   @errors %{
     1 => :malformed,

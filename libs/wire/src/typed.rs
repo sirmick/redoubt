@@ -95,8 +95,21 @@ impl HandleKind {
 pub struct Layout {
     pub opcode: u32,
     pub inline: bool,
-    /// How many handles travel with it.
+    /// How many handle slots it has.
     pub handles: usize,
+    /// How many of the last slots may be empty (`handle[N]? KIND` in the table): a message
+    /// arrives with between `handles - optional` and `handles` handles.
+    pub optional: usize,
+}
+
+impl Layout {
+    /// The handles a message must carry.
+    pub const fn required(&self) -> usize { self.handles - self.optional }
+
+    /// Checks the handle count a message arrived with against this layout.
+    pub fn check(&self, got: usize) -> Result<(), Error> {
+        if got >= self.required() && got <= self.handles { Ok(()) } else { Err(Error::BadHandles) }
+    }
 }
 
 /// One generated protocol, for code generic over every table: the client library's one typed
@@ -211,7 +224,7 @@ pub fn decode<'a, T>(
     read_inline: impl FnOnce(u32, &mut Reader<'_>) -> Result<T, Error>,
     read_buffer: impl FnOnce(u32, &mut Reader<'a>) -> Result<T, Error>,
 ) -> Result<T, Error> {
-    check_handles(handles, layout.handles)?;
+    layout.check(handles)?;
     if layout.inline {
         let bytes = inline_bytes(words, buf)?;
         let mut r = Reader::new(&bytes);
@@ -233,7 +246,8 @@ pub fn encode_file(
     out: &mut [u8],
     body: impl FnOnce(&mut Writer<'_>) -> Result<(), Error>,
 ) -> Result<usize, Error> {
-    check_handles(layout.handles, 0)?;
+    // A file carries no handles: only a message that needs none can be written into one.
+    check_handles(layout.required(), 0)?;
     Writer::new(out).atomic(|w| {
         w.u32(layout.opcode)?;
         body(w)?;
@@ -255,7 +269,7 @@ pub fn decode_file<'a, T>(
     }
     let mut r = Reader::new(bytes);
     let layout = layout(layouts, r.u32()?)?;
-    check_handles(layout.handles, 0)?;
+    check_handles(layout.required(), 0)?;
     let value = read_buffer(layout.opcode, &mut r)?;
     r.finish()?;
     Ok(value)
@@ -387,11 +401,27 @@ mod tests {
         assert_eq!(HandleKind::from_name(""), None);
     }
 
+    /// An optional slot is one that may be empty, never one in the middle: a message carries
+    /// between the required count and the slot count, and the file framing needs none.
+    #[test]
+    fn an_optional_slot_may_be_empty() {
+        let l = Layout { opcode: 2, inline: false, handles: 2, optional: 1 };
+        assert_eq!(l.required(), 1);
+        assert_eq!(l.check(0), Err(Error::BadHandles));
+        assert_eq!(l.check(1), Ok(()));
+        assert_eq!(l.check(2), Ok(()));
+        assert_eq!(l.check(3), Err(Error::BadHandles));
+        let strict = Layout { opcode: 3, inline: true, handles: 1, optional: 0 };
+        assert_eq!(strict.check(0), Err(Error::BadHandles));
+        assert_eq!(strict.check(1), Ok(()));
+    }
+
     #[test]
     fn file_framing() {
         let layouts = [
-            Layout { opcode: 9, inline: true, handles: 0 },
-            Layout { opcode: 10, inline: false, handles: 1 },
+            Layout { opcode: 9, inline: true, handles: 0, optional: 0 },
+            Layout { opcode: 10, inline: false, handles: 1, optional: 0 },
+            Layout { opcode: 11, inline: false, handles: 1, optional: 1 },
         ];
         let mut out = [0u8; 8];
         let n = encode_file(&layouts[0], &mut out, |w| w.u16(0x0201)).unwrap();
@@ -405,6 +435,9 @@ mod tests {
         // A message with handles cannot be written into a file.
         assert_eq!(decode_file(&layouts, &[10, 0, 0, 0, 1, 2], read), Err(Error::BadHandles));
         assert_eq!(encode_file(&layouts[1], &mut out, |w| w.u16(1)), Err(Error::BadHandles));
+        // One whose only handle is optional can, carrying none.
+        assert_eq!(decode_file(&layouts, &[11, 0, 0, 0, 1, 2], read), Ok(0x0201));
+        assert!(encode_file(&layouts[2], &mut out, |w| w.u16(1)).is_ok());
         // Too small an output: nothing written.
         let mut small = [0u8; 5];
         assert_eq!(encode_file(&layouts[0], &mut small, |w| w.u16(1)), Err(Error::TooLarge));

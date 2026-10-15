@@ -474,7 +474,7 @@ impl Default for FakeKernel {
 }
 
 impl Minter for FakeKernel {
-    fn mint(&mut self, badge: NonZeroU64) -> Result<Handle, Error> {
+    fn mint(&mut self, badge: NonZeroU64, _scope: Option<Handle>) -> Result<Handle, Error> {
         self.minted.push(badge.get());
         Handle::new(99 + (self.minted.len() as u32 % 1000)).ok_or(Error::InvalidArgument)
     }

@@ -335,21 +335,28 @@ minted under the launcher's, as well.
 
 ### `ninep_common`
 
-<details><summary>Status: built · tested (4)</summary>
+<details><summary>Status: built · tested (7)</summary>
 
 - host:redoubt-rt::minted_connections_are_admitted_and_fold_into_the_share_they_came_from
 - host:redoubt-rt::disconnect_frees_everything_minted_under_it_and_only_for_its_holder
 - host:redoubt-rt::a_strangers_id_is_refused_like_one_that_does_not_exist
 - host:redoubt-rt::unasked_handles_are_closed_and_other_opcodes_are_malformed
+- host:redoubt-rt::a_connection_is_minted_in_the_scope_its_requester_sends
+- host:redoubt-wire-gen::an_optional_handle_is_a_slot_that_may_be_empty
+- host:redoubt-wire::an_optional_slot_may_be_empty
 
 </details>
 
-Every 9P endpoint also serves `ninep_common`, typed opcodes 1 to 15. `new_connection(root, quota)`
-mints a fresh connection rooted at `root`, a path relative to the caller's own root that never
-climbs above it, and replies with the connection's endpoint handle and its id. `quota` is the
+Every 9P endpoint also serves `ninep_common`, typed opcodes 1 to 15. `new_connection(root, quota,
+scope)` mints a fresh connection rooted at `root`, a path relative to the caller's own root that
+never climbs above it, and replies with the connection's endpoint handle and its id. `quota` is the
 byte quota asked for: the skeleton passes it to the file server's `minted` hook, which may refuse
 it (`refused`), and a server that meters no bytes ignores it. What a quota means is the file
-server's ([littlefsd](littlefsd.md#quotas)). `disconnect(id)` frees the connection with that id and
+server's ([littlefsd](littlefsd.md#quotas)). `scope` is an optional budget handle, the request's
+one handle slot (`handle[0]? budget`: a slot the sender may leave empty): the revocation scope
+the connection is minted in, which stamps its handle; absent, the server's own stamp
+([R41 (narrowing by revocation scope)](steward.md#r41-narrowing-by-revocation-scope); how the skeleton serves it is on
+[the serving library](serving.md#the-9p-server-skeleton)). `disconnect(id)` frees the connection with that id and
 everything minted under it; an id the caller did not receive is `not_yours`, the same answer as
 an id that does not exist. Opcodes 1 and 4 to 15 are reserved and malformed. How the skeleton
 serves them is on [the serving library](serving.md#the-9p-server-skeleton).

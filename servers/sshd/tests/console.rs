@@ -147,7 +147,11 @@ fn consol_size_is_the_pty_s_and_a_resize_is_due_when_it_changes() {
 struct Mints(u32);
 
 impl redoubt_rt::server::minted::Minter for Mints {
-    fn mint(&mut self, _: std::num::NonZeroU64) -> Result<redoubt_rt::abi::Handle, redoubt_rt::abi::Error> {
+    fn mint(
+        &mut self,
+        _: std::num::NonZeroU64,
+        _: Option<redoubt_rt::abi::Handle>,
+    ) -> Result<redoubt_rt::abi::Handle, redoubt_rt::abi::Error> {
         self.0 += 1;
         Ok(redoubt_rt::abi::Handle::new(self.0).unwrap())
     }

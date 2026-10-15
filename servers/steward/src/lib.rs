@@ -56,9 +56,15 @@ pub trait Kernel {
     fn budget_id(&self, budget: Self::Budget) -> u64;
     /// A badge on the steward's own endpoint, stamped with `stamp`.
     fn mint(&mut self, badge: u64, stamp: Self::Budget) -> Result<Self::Handle, Error>;
-    /// A fresh connection for a child of `domain` at shared slot `slot`, or none where the slot
-    /// binds to nothing for that domain.
-    fn connect(&mut self, domain: &Domain, slot: u16) -> Result<Option<Self::Handle>, Error>;
+    /// A fresh connection for a child of `domain` at shared slot `slot`, minted in the revocation
+    /// scope `scope` so that destroying the scope ends it (servers/steward.md R41), or none where
+    /// the slot binds to nothing for that domain.
+    fn connect(
+        &mut self,
+        domain: &Domain,
+        slot: u16,
+        scope: Self::Budget,
+    ) -> Result<Option<Self::Handle>, Error>;
     /// The consoles of the next login's session, the two connections to the channel `sshd` sent
     /// with it: the steward's own, through which `ended` ends the channel, and the relay's, which
     /// `attach` hands on; the steward owns both from here.
@@ -169,6 +175,10 @@ impl<B: Copy, H> Steward<B, H> {
     pub fn sub(&self, domain: &Domain) -> Option<B> {
         self.carved.iter().flat_map(|c| &c.subs).find(|(d, _)| d == domain).map(|(_, b)| *b)
     }
+
+    /// How many things the steps made are held: budgets, scopes, connections and processes of
+    /// every object the core still knows. What an object's end leaves is nothing of its own.
+    pub fn holding(&self) -> usize { self.made.len() }
 }
 
 /// Starts the steward from its manifest lines: the core's boot, then its carve under `users`.

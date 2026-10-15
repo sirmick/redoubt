@@ -11,28 +11,29 @@ defmodule Redoubt.Wire.Proto.Example do
   """
   alias Redoubt.Wire, as: W
 
-  # opcode => {name, shape, handles}; replies are keyed by their request's opcode.
+  # opcode => {name, shape, handle slots, slots that may be empty}; replies are keyed by
+  # their request's opcode.
   @requests %{
-    1 => {:ping, :inline, 0},
-    2 => {:pong, :inline, 0},
-    3 => {:small, :inline, 0},
-    4 => {:wide, :buffer, 0},
-    5 => {:named, :buffer, 0},
-    6 => {:blob, :buffer, 0},
-    7 => {:grant, :inline, 2},
-    8 => {:read, :buffer, 0},
-    4294967295 => {:last, :buffer, 1}
+    1 => {:ping, :inline, 0, 0},
+    2 => {:pong, :inline, 0, 0},
+    3 => {:small, :inline, 0, 0},
+    4 => {:wide, :buffer, 0, 0},
+    5 => {:named, :buffer, 0, 0},
+    6 => {:blob, :buffer, 0, 0},
+    7 => {:grant, :inline, 2, 0},
+    8 => {:read, :buffer, 0, 0},
+    4294967295 => {:last, :buffer, 1, 0}
   }
   @replies %{
-    1 => {:ping, :inline, 0},
-    2 => {:pong, :inline, 0},
-    3 => {:small, :inline, 0},
-    4 => {:wide, :buffer, 0},
-    5 => {:named, :buffer, 0},
-    6 => {:blob, :buffer, 0},
-    7 => {:grant, :inline, 1},
-    8 => {:read, :buffer, 0},
-    4294967295 => {:last, :buffer, 0}
+    1 => {:ping, :inline, 0, 0},
+    2 => {:pong, :inline, 0, 0},
+    3 => {:small, :inline, 0, 0},
+    4 => {:wide, :buffer, 0, 0},
+    5 => {:named, :buffer, 0, 0},
+    6 => {:blob, :buffer, 0, 0},
+    7 => {:grant, :inline, 1, 0},
+    8 => {:read, :buffer, 0, 0},
+    4294967295 => {:last, :buffer, 0, 0}
   }
   @errors %{
     1 => :malformed,

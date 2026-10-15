@@ -25,7 +25,7 @@ defmodule Redoubt.Wire do
   | `:too_large` | `TooLarge` | the encoding exceeds 64 KiB (or 12 bytes inline) |
   | `:bad_words` | `BadWords` | not four integers, one beyond 32 bits, or an unused word not zero |
   | `:bad_opcode` | `BadOpcode` | an opcode the protocol does not define (or without a reply) |
-  | `:bad_handles` | `BadHandles` | a handle count other than the layout's |
+  | `:bad_handles` | `BadHandles` | a handle count outside the layout's (its required slots to all of them) |
   | `:unexpected_buffer` | `UnexpectedBuffer` | an inline message with a buffer |
   | `:short` | `Short` | word 1 or a file names more bytes than there are |
   | `:short_fields` | `Short` | the fields end before their layout does |
@@ -59,8 +59,9 @@ defmodule Redoubt.Wire do
   @doc "Encodes a request in the file framing: `{:ok, bytes}`."
   def encode_file(message, layouts, enc) do
     encoding(message, fn op, io ->
-      {_name, _shape, handles} = Map.fetch!(layouts, op)
-      if handles != 0, do: throw({:wire, :bad_handles})
+      # A file carries no handles: only a message that needs none can be written into one.
+      {_name, _shape, handles, optional} = Map.fetch!(layouts, op)
+      if handles - optional != 0, do: throw({:wire, :bad_handles})
       bytes = IO.iodata_to_binary([<<op::little-32>>, io])
       if byte_size(bytes) > @msize, do: throw({:wire, :too_large})
       {:ok, bytes}
@@ -80,14 +81,14 @@ defmodule Redoubt.Wire do
     body = IO.iodata_to_binary(io)
 
     case Map.fetch!(layouts, op) do
-      {_name, :inline, _handles} ->
+      {_name, :inline, _handles, _optional} ->
         # The generator only makes a message inline if it fits; this guards against a bug there.
         if byte_size(body) > @inline_bytes, do: throw({:wire, :too_large})
         pad = @inline_bytes - byte_size(body)
         <<w1::little-32, w2::little-32, w3::little-32>> = <<body::binary, 0::size(pad * 8)>>
         {:ok, [word0, w1, w2, w3], <<>>}
 
-      {_name, :buffer, _handles} ->
+      {_name, :buffer, _handles, _optional} ->
         if byte_size(body) > @msize, do: throw({:wire, :too_large})
         {:ok, [word0, byte_size(body), 0, 0], body}
     end
@@ -142,8 +143,8 @@ defmodule Redoubt.Wire do
     do: {:error, :too_large}
 
   def decode_file(<<op::little-32, rest::binary>>, layouts, read) do
-    with {:ok, {_name, _shape, count}} <- lookup(layouts, op),
-         :ok <- check_handles(count, 0),
+    with {:ok, {_name, _shape, count, optional}} <- lookup(layouts, op),
+         :ok <- check_handles(count - optional, 0, 0),
          {:ok, name, fields, left} <- read.(op, rest),
          :ok <- finish(:buffer, left) do
       {:ok, {name, fields}}
@@ -158,8 +159,8 @@ defmodule Redoubt.Wire do
     if Enum.all?(strings, &String.valid?/1), do: result, else: {:error, :bad_utf8}
   end
 
-  defp fields(op, {_name, shape, count}, words, buffer, handles, read) do
-    with :ok <- check_handles(handles, count),
+  defp fields(op, {_name, shape, count, optional}, words, buffer, handles, read) do
+    with :ok <- check_handles(handles, count, optional),
          {:ok, body} <- body(shape, words, buffer),
          {:ok, name, fields, rest} <- read.(op, body),
          :ok <- finish(shape, rest) do
@@ -182,8 +183,9 @@ defmodule Redoubt.Wire do
     end
   end
 
-  defp check_handles(count, count), do: :ok
-  defp check_handles(_, _), do: {:error, :bad_handles}
+  # Between the required slots and all of them: the last `optional` slots may be empty.
+  defp check_handles(got, count, optional) when got <= count and got + optional >= count, do: :ok
+  defp check_handles(_, _, _), do: {:error, :bad_handles}
 
   # The 12 inline bytes (an inline message has no buffer), or a buffer message's first
   # word-1 bytes.

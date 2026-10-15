@@ -430,13 +430,21 @@ drops the request it names ([multiplexed connections](#multiplexed-connections))
 carries one of a fixed set of texts, so a hostile request cannot choose it. Every allocation a
 request makes fails cleanly with an `Rerror`, never by killing the server.
 
-**`ninep_common`** (the table is on [wire](wire.md)): `new_connection(root, quota)` mints a
-connection rooted at `root`, a path relative to the caller's own root, cleaned so it never climbs
+**`ninep_common`** (the table is on [wire](wire.md)): `new_connection(root, quota, scope)` mints
+a connection rooted at `root`, a path relative to the caller's own root, cleaned so it never climbs
 above it and walked with the same label checks as a `Twalk`. A mint at the caller's own root (an
 empty path) walks nothing and reads nothing: the reply carries a handle and an id, no qid, and the
 first read of that root is the holder's `Tattach`, checked against the holder's labels like every
 request after it, so a server may hand out a connection to data it cannot read itself and learns
 nothing by it. It is admitted as a `State` of the caller's share, and the file server's `minted` hook may refuse it (a quota it cannot grant).
+`scope`, an optional budget handle, is the revocation scope the connection is minted in: the
+skeleton passes it to the kernel's `mint` as the stamp, so destroying the scope ends the
+connection in every table at once
+([R41 (narrowing by revocation scope)](steward.md#r41-narrowing-by-revocation-scope)), and
+closes it once minted with; absent, the connection is stamped as the server's own. A scope not at
+or below the server's own stamp is the kernel's `NotPermitted`, answered `refused` like any mint
+that fails. The skeleton learns nothing of a scope's destruction: the connection's record, its
+fids and admission stay until its `disconnect`, which is the cleanup and never the cutoff.
 `disconnect(id)` frees the connection and everything minted under it: their fids are clunked,
 their admission released, and the file server told (`disconnected`). `mint_rooted` mints a
 connection at a root the file server chose, in the same table, for a typed `grant` whose scope the

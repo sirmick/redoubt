@@ -14,8 +14,8 @@ defmodule Redoubt.Wire.Client.NinepCommon do
   alias Redoubt.Wire.Proto.NinepCommon, as: P
 
   @doc "Calls `new_connection`, waiting at most `timeout` ms."
-  def new_connection(conn, v_root, v_quota, timeout \\ C.timeout()) do
-    C.call(conn, P, {:new_connection, %{root: v_root, quota: v_quota}}, [], timeout)
+  def new_connection(conn, v_root, v_quota, h_scope \\ nil, timeout \\ C.timeout()) do
+    C.call(conn, P, {:new_connection, %{root: v_root, quota: v_quota}}, Enum.reject([h_scope], &is_nil/1), timeout)
   end
 
   @doc "Calls `disconnect`, waiting at most `timeout` ms."

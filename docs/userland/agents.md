@@ -80,8 +80,10 @@ sooner. A lease is task-scoped: "read `~/project`, write `~/project/out`, the `m
   until the window passes: the steward's blame-by-label-set rule
   ([crash blame](../servers/steward.md#crash-blame)). An agent shares its sponsor's account, so the
   sponsor answers for its agents, and a crash loop is stopped at the sponsor.
-- **When a lease ends**, the launcher disconnects the agent's connections and releases what typed
-  servers granted it; everything is recorded in the audit log from M5 (self-hosted development).
+- **When a lease ends**, the scope's destruction ends the agent's connections at once, in every
+  table ([R41 (narrowing by revocation scope)](../servers/steward.md#r41-narrowing-by-revocation-scope)); the steward then
+  disconnects them at each server to free what they held, and releases what typed servers
+  granted; everything is recorded in the audit log from M5 (self-hosted development).
 
 **Open:** none.
 

@@ -56,6 +56,7 @@ enum Call {
     Connect {
         labels: Vec<u64>,
         slot: u16,
+        scope: usize,
     },
     Console(Option<u32>),
     Release(usize),
@@ -142,10 +143,10 @@ impl Kernel for Recorder {
 
     /// The binding table's shape: slot 2 (the vault) binds to nothing unlabelled, slot 3 (the
     /// network) to nothing labelled.
-    fn connect(&mut self, domain: &Domain, slot: u16) -> Result<Option<usize>, Error> {
+    fn connect(&mut self, domain: &Domain, slot: u16, scope: usize) -> Result<Option<usize>, Error> {
         let labels = domain.labels().as_slice().to_vec();
         let binds = redoubt_steward_server::own::binds(!labels.is_empty(), slot);
-        self.calls.push(Call::Connect { labels, slot });
+        self.calls.push(Call::Connect { labels, slot, scope });
         if binds { self.make().map(Some) } else { Ok(None) }
     }
 
@@ -404,7 +405,7 @@ fn a_login_runs_the_session_batch_and_answers_the_session() {
         other => panic!("{other:?}"),
     };
     assert!(badge >= MINTED);
-    let connects: Vec<Call> = (0..6).map(|slot| Call::Connect { labels: vec![], slot }).collect();
+    let connects: Vec<Call> = (0..6).map(|slot| Call::Connect { labels: vec![], slot, scope }).collect();
     assert_eq!(
         k.calls[..3],
         [
@@ -698,6 +699,36 @@ fn a_dead_vm_ends_its_session() {
     s.event(&mut k, redoubt_steward::event::EventKind::Exited { object }, 0).unwrap();
     assert!(k.calls.iter().any(|c| matches!(c, Call::Destroy(_))));
     assert!(s.exited(pid).is_none());
+}
+
+/// R41's order at a session's end (servers/steward.md, "R41"): the budget, with the scope its
+/// connections were minted in, is destroyed first, the cutoff the kernel makes in every table
+/// at once; then each connection is given back to its server, the cleanup. Every connection the
+/// session's batch made goes back, the steward's own badge and the console included, and the
+/// steward holds nothing of the session afterwards.
+#[test]
+fn a_session_s_end_destroys_its_budget_before_it_releases_its_connections() {
+    let mut k = Recorder::default();
+    let mut s = started(&mut k);
+    let before = s.holding();
+    let Ok(Reply::Login(_)) = call(&mut s, &mut k, SSHD, login("bob", "", &BOB_KEY)) else { panic!() };
+    let scope = k.calls.iter().find_map(|c| match c {
+        Call::Connect { scope, .. } => Some(*scope),
+        _ => None,
+    });
+    assert!(scope.is_some(), "every shared connection is minted in the session's scope");
+    let pid = k.made as u64;
+    let object = s.exited(pid).unwrap();
+    k.calls.clear();
+    s.event(&mut k, redoubt_steward::event::EventKind::Exited { object }, 0).unwrap();
+    let destroyed = k.calls.iter().position(|c| matches!(c, Call::Destroy(_))).expect("the budget goes");
+    let releases: Vec<usize> =
+        k.calls.iter().enumerate().filter(|(_, c)| matches!(c, Call::Release(_))).map(|(i, _)| i).collect();
+    // Every connection the batch held: the badge, the shared slots, the relay's control
+    // connection and the console.
+    assert!(releases.len() >= 6, "{:?}", k.calls);
+    assert!(releases.iter().all(|&i| i > destroyed), "destroy, then disconnect: {:?}", k.calls);
+    assert_eq!(s.holding(), before, "nothing of the session is held");
 }
 
 /// The badge a session's own calls come on: its route in the core's index.

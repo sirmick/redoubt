@@ -67,7 +67,7 @@ impl Boot {
             let mut lend = Lend::new(1).unwrap();
             Connection::attach(Endpoint::from_handle(self.founding), &mut lend)
                 .unwrap()
-                .new_connection(&mut lend, "", 0)
+                .new_connection(&mut lend, "", 0, None)
                 .unwrap()
         });
         let session = f.process(account, &[]);

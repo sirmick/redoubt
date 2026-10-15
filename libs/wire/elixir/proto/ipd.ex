@@ -11,14 +11,15 @@ defmodule Redoubt.Wire.Proto.Ipd do
   """
   alias Redoubt.Wire, as: W
 
-  # opcode => {name, shape, handles}; replies are keyed by their request's opcode.
+  # opcode => {name, shape, handle slots, slots that may be empty}; replies are keyed by
+  # their request's opcode.
   @requests %{
-    16 => {:grant, :buffer, 0},
-    17 => {:frame, :buffer, 0}
+    16 => {:grant, :buffer, 0, 0},
+    17 => {:frame, :buffer, 0, 0}
   }
   @replies %{
-    16 => {:grant, :buffer, 1},
-    17 => {:frame, :buffer, 0}
+    16 => {:grant, :buffer, 1, 0},
+    17 => {:frame, :buffer, 0, 0}
   }
   @errors %{
     1 => :malformed,

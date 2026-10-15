@@ -11,16 +11,17 @@ defmodule Redoubt.Wire.Proto.Consol do
   """
   alias Redoubt.Wire, as: W
 
-  # opcode => {name, shape, handles}; replies are keyed by their request's opcode.
+  # opcode => {name, shape, handle slots, slots that may be empty}; replies are keyed by
+  # their request's opcode.
   @requests %{
-    16 => {:size, :inline, 0},
-    17 => {:resize, :inline, 0},
-    18 => {:ended, :inline, 0}
+    16 => {:size, :inline, 0, 0},
+    17 => {:resize, :inline, 0, 0},
+    18 => {:ended, :inline, 0, 0}
   }
   @replies %{
-    16 => {:size, :inline, 0},
-    17 => {:resize, :inline, 0},
-    18 => {:ended, :inline, 0}
+    16 => {:size, :inline, 0, 0},
+    17 => {:resize, :inline, 0, 0},
+    18 => {:ended, :inline, 0, 0}
   }
   @errors %{
     1 => :malformed

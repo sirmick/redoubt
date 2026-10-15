@@ -39,7 +39,7 @@ mod machine {
     use redoubt_client::typed;
     use redoubt_rt::abi::{Error, FOREVER, Handle, Handles, Labels, MAX_LEND_PAGES};
     use redoubt_rt::client::{Connection as Nine, Lend};
-    use redoubt_rt::handle::{Endpoint, close};
+    use redoubt_rt::handle::{Budget, Endpoint, close};
     use redoubt_rt::ipc::{Caller, Delivery, Event, Request};
     use redoubt_rt::server::minted::Minter;
     use redoubt_rt::server::ninep::{NineError, NineServer, WORDS_9P, mode, refuse, refuse_malformed};
@@ -267,8 +267,8 @@ mod machine {
     struct Own<'e>(&'e Endpoint);
 
     impl Minter for Own<'_> {
-        fn mint(&mut self, badge: NonZeroU64) -> Result<Handle, Error> {
-            Ok(self.0.mint(badge, None)?.handle())
+        fn mint(&mut self, badge: NonZeroU64, scope: Option<Handle>) -> Result<Handle, Error> {
+            Ok(self.0.mint(badge, scope.map(Budget::from_handle).as_ref())?.handle())
         }
 
         fn random(&mut self) -> Result<u64, Error> { redoubt_rt::handle::random_u64() }

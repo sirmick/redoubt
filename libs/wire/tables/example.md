@@ -32,7 +32,9 @@ Then one row per message:
   (`u32` length + bytes), and `handle[N] KIND` (one ASCII space between them): the handle in
   slot N, which must name an object of kind KIND, one of `endpoint`, `budget`, `process`,
   `mmio`, `irq` or `reset` (`docs/kernel/objects.md`). Slots are numbered 0, 1, ... in order,
-  at most 4 (`MAX_MSG_HANDLES`), and carry no bytes. The kind is required, and an unknown one
+  at most 4 (`MAX_MSG_HANDLES`), and carry no bytes. `handle[N]? KIND` is a slot the sender
+  may leave empty; such slots come after every required one, since slots are positional, and
+  a message arrives with any count from the required slots to all of them. The kind is required, and an unknown one
   is refused, but it is documentation: the generator puts it in the generated codecs' docs
   only, and nothing checks it on receipt, since the kernel does not report a received
   handle's kind. A handle of the wrong kind is found by use: `WrongObject` on its first use,

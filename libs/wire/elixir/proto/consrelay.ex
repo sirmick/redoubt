@@ -11,16 +11,17 @@ defmodule Redoubt.Wire.Proto.Consrelay do
   """
   alias Redoubt.Wire, as: W
 
-  # opcode => {name, shape, handles}; replies are keyed by their request's opcode.
+  # opcode => {name, shape, handle slots, slots that may be empty}; replies are keyed by
+  # their request's opcode.
   @requests %{
-    24 => {:attach, :buffer, 1},
-    25 => {:detach, :buffer, 0},
-    26 => {:hello, :inline, 2}
+    24 => {:attach, :buffer, 1, 0},
+    25 => {:detach, :buffer, 0, 0},
+    26 => {:hello, :inline, 2, 0}
   }
   @replies %{
-    24 => {:attach, :buffer, 0},
-    25 => {:detach, :buffer, 0},
-    26 => {:hello, :inline, 0}
+    24 => {:attach, :buffer, 0, 0},
+    25 => {:detach, :buffer, 0, 0},
+    26 => {:hello, :inline, 0, 0}
   }
   @errors %{
     1 => :malformed,

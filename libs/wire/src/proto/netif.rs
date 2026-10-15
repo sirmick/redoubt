@@ -29,8 +29,8 @@ pub struct TransmitReply {}
 
 /// Requests by opcode.
 const REQUESTS: &[Layout] = &[
-    Layout { opcode: 1, inline: true, handles: 0 },
-    Layout { opcode: 2, inline: false, handles: 0 },
+    Layout { opcode: 1, inline: true, handles: 0, optional: 0 },
+    Layout { opcode: 2, inline: false, handles: 0, optional: 0 },
 ];
 
 /// Every request of the protocol.
@@ -106,8 +106,8 @@ impl<'a> Message<'a> {
 
 /// Replies, by the opcode of their request.
 const REPLIES: &[Layout] = &[
-    Layout { opcode: 1, inline: true, handles: 0 },
-    Layout { opcode: 2, inline: false, handles: 0 },
+    Layout { opcode: 1, inline: true, handles: 0, optional: 0 },
+    Layout { opcode: 2, inline: false, handles: 0, optional: 0 },
 ];
 
 /// Every successful reply of the protocol, named after its request.

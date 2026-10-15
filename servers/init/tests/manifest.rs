@@ -3,7 +3,9 @@
 //! image's own manifest (`image/manifest.json`) in one way and expects the refusal for that rule
 //! and no other.
 
-use redoubt_init::check::{MANIFEST, Machine, Plan, STEWARD_SLOTS, args, block, is_steward};
+use redoubt_init::check::{
+    HandedStamp, MANIFEST, Machine, Plan, STEWARD_SLOTS, args, block, handed_stamp, is_steward,
+};
 use redoubt_init::fuzz::{BUNDLE_KEY, ENTRIES, machine, virt_devices};
 use redoubt_init::manifest::{
     Budget, Device, DeviceUse, Handed, Label, LabelSet, Net, Principal, Server, Sizes, Steward, Verity,
@@ -1250,8 +1252,14 @@ fn the_steward_s_entry_alone_is_given_the_manifest_lines() {
             "{}",
             s.name
         );
+        // Every other entry's handed badges are stamped with its own budget (servers/init.md,
+        // "Restarts and reboots").
+        assert_eq!(handed_stamp(&m, s), HandedStamp::Instance, "{}", s.name);
     }
     assert!(is_steward(&m, steward));
+    // The steward's are stamped `users`, the budget every session's and lease's scope lies under
+    // (servers/steward.md R41).
+    assert_eq!(handed_stamp(&m, steward), HandedStamp::Users);
 }
 
 #[test]

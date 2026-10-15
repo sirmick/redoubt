@@ -879,6 +879,24 @@ pub fn is_steward(m: &Manifest, s: &Server) -> bool {
     m.steward.as_ref().is_some_and(|st| st.server == s.name)
 }
 
+/// The budget the badges `init` hands an instance are stamped with (servers/init.md, "Restarts
+/// and reboots").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HandedStamp {
+    /// The instance's own budget: a copy it passed on dies with it.
+    Instance,
+    /// `users`: the steward's connections at every server are stamped with it, so a session's or
+    /// lease's revocation scope, which lies under `users`, narrows them (servers/steward.md R41).
+    /// What the instance stamp bought, the steward's restart gets from `init`'s disconnect of
+    /// its fresh connections and the reaping of `users`.
+    Users,
+}
+
+/// What the badges handed to `s` are stamped with: `users` for the steward's entry alone.
+pub fn handed_stamp(m: &Manifest, s: &Server) -> HandedStamp {
+    if is_steward(m, s) { HandedStamp::Users } else { HandedStamp::Instance }
+}
+
 /// The manifest lines the steward is started with, one per argument (servers/steward.md, "The
 /// manifest lines"), written by the policy core's own writer: each principal with its keys' ids,
 /// its owned labels' ids, and its domains, its unlabelled set first and then each different label

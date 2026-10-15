@@ -6,19 +6,29 @@ use core::num::NonZeroU64;
 
 use super::*;
 
-/// A kernel for `answer_common`: mints handles 100, 101, ... and remembers the badges.
+/// A kernel for `answer_common`: mints handles 100, 101, ... and remembers the badges and the
+/// scope each was minted in; refuses the scope `refuses` as the kernel refuses one not below
+/// the server's stamp.
 struct FakeKernel {
     minted: Vec<u64>,
+    scopes: Vec<Option<Handle>>,
+    refuses: Option<Handle>,
     rng: u64,
 }
 
 impl FakeKernel {
-    fn new() -> FakeKernel { FakeKernel { minted: Vec::new(), rng: 0x9e37_79b9_7f4a_7c15 } }
+    fn new() -> FakeKernel {
+        FakeKernel { minted: Vec::new(), scopes: Vec::new(), refuses: None, rng: 0x9e37_79b9_7f4a_7c15 }
+    }
 }
 
 impl Minter for FakeKernel {
-    fn mint(&mut self, badge: NonZeroU64) -> Result<Handle, Error> {
+    fn mint(&mut self, badge: NonZeroU64, scope: Option<Handle>) -> Result<Handle, Error> {
+        if scope.is_some() && scope == self.refuses {
+            return Err(Error::NotPermitted);
+        }
         self.minted.push(badge.get());
+        self.scopes.push(scope);
         Ok(Handle::new(99 + self.minted.len() as u32).unwrap())
     }
 
@@ -57,18 +67,35 @@ impl T {
         root: &str,
         quota: u64,
     ) -> Result<(u64, u64), u32> {
+        self.connect_in(k, who, root, quota, &[])
+    }
+
+    /// `new_connection` from `who` bringing `handles` (its scope, or what a hostile client
+    /// sends): the new connection's badge and id, or the error status. Whatever was brought is
+    /// closed either way.
+    fn connect_in(
+        &mut self,
+        k: &mut FakeKernel,
+        who: &Caller,
+        root: &str,
+        quota: u64,
+        handles: &[Handle],
+    ) -> Result<(u64, u64), u32> {
         let message = ninep_common::Message::NewConnection(ninep_common::NewConnection { root, quota });
-        let (outcome, lend) = self.common(k, who, message, &[]);
+        let (outcome, lend) = self.common(k, who, message, handles);
         if outcome.words[0] != 0 {
-            assert!(outcome.send.as_slice().is_empty() && outcome.close.as_slice().is_empty());
+            assert!(outcome.send.as_slice().is_empty());
+            assert_eq!(outcome.close.as_slice(), handles, "a refusal closes what the request brought");
             return Err(outcome.words[0] as u32);
         }
         let sent = outcome.send.as_slice();
         let reply = ninep_common::Reply::decode(2, &outcome.words, &lend, sent.len()).unwrap().unwrap();
         let ninep_common::Reply::NewConnection(reply) = reply else { panic!("{reply:?}") };
-        // One handle travels, and the server's own copy is closed once it has.
+        // One handle travels, and the server's own copy is closed once it has, the scope with it.
         assert_eq!(sent, [h(99 + k.minted.len() as u32)]);
-        assert_eq!(outcome.close.as_slice(), sent);
+        let mut close = handles.to_vec();
+        close.extend_from_slice(sent);
+        assert_eq!(outcome.close.as_slice(), close);
         Ok((*k.minted.last().unwrap(), reply.id))
     }
 
@@ -557,4 +584,31 @@ fn a_rooted_mint_is_admitted() {
     }
     assert!(made >= 1);
     assert_eq!(t.server.admission().held(AdmitKey::of(&a), Resource::State), made);
+}
+
+/// R41: a connection is minted in the scope its requester sends, the request's one handle
+/// slot, which the server passes to the kernel's `mint` as the stamp and closes once minted
+/// with; a scope the kernel refuses (not at or below the server's own stamp) is `refused`, with
+/// nothing minted and the admission given back; a request bringing more than its one slot does
+/// not decode, and is malformed with everything it brought closed.
+#[test]
+fn a_connection_is_minted_in_the_scope_its_requester_sends() {
+    let (mut t, mut k) = (T::new(), FakeKernel::new());
+    let a = alice();
+    let (scope, other) = (h(7), h(8));
+    let (_, id) = t.connect_in(&mut k, &a, "", 0, &[scope]).unwrap();
+    assert_eq!(k.scopes, [Some(scope)]);
+    t.disconnect(&mut k, &a, id).unwrap();
+    // No scope sent: the server's own stamp, as before.
+    t.connect(&mut k, &a, "a", 0).unwrap();
+    assert_eq!(k.scopes, [Some(scope), None]);
+    k.refuses = Some(other);
+    let held = t.server.admission().held(AdmitKey::of(&a), Resource::State);
+    assert_eq!(t.connect_in(&mut k, &a, "", 0, &[other]), Err(REFUSED));
+    assert_eq!(k.minted.len(), 2, "nothing minted");
+    assert_eq!(t.server.minted.len(), 1, "and nothing recorded");
+    assert_eq!(t.server.admission().held(AdmitKey::of(&a), Resource::State), held, "the admission is back");
+    let (mut t, mut k) = (T::new(), FakeKernel::new());
+    assert_eq!(t.connect_in(&mut k, &a, "", 0, &[scope, other]), Err(ErrorCode::Malformed.code()));
+    assert!(k.minted.is_empty());
 }

@@ -66,17 +66,17 @@ max_lines = 93
 [[crate]]
 name = "libs/client"
 paths = ["libs/client/src"]
-max_lines = 1118
+max_lines = 1124
 
 [[crate]]
 name = "libs/rt"
 paths = ["libs/rt/src"]
-max_lines = 3943
+max_lines = 3961
 
 [[crate]]
 name = "libs/wire"
 paths = ["libs/wire/src"]
-max_lines = 3908
+max_lines = 3915
 
 [[crate]]
 name = "libs/steward"
@@ -121,7 +121,7 @@ max_lines = 1356
 [[crate]]
 name = "servers/steward"
 paths = ["servers/steward/src"]
-max_lines = 1536
+max_lines = 1576
 
 [[crate]]
 name = "servers/bootfsd"
@@ -141,7 +141,7 @@ max_lines = 387
 [[crate]]
 name = "servers/consrelay"
 paths = ["servers/consrelay/src"]
-max_lines = 778
+max_lines = 780
 
 [[crate]]
 name = "servers/blkd"
@@ -163,7 +163,7 @@ max_lines = 2923
 [[crate]]
 name = "servers/init"
 paths = ["servers/init/src"]
-max_lines = 2559
+max_lines = 2591
 
 [[crate]]
 name = "servers/erofsd"

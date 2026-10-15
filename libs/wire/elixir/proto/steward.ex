@@ -11,42 +11,43 @@ defmodule Redoubt.Wire.Proto.Steward do
   """
   alias Redoubt.Wire, as: W
 
-  # opcode => {name, shape, handles}; replies are keyed by their request's opcode.
+  # opcode => {name, shape, handle slots, slots that may be empty}; replies are keyed by
+  # their request's opcode.
   @requests %{
-    1 => {:login, :buffer, 2},
-    2 => {:channel_closed, :inline, 0},
-    3 => {:approval_opened, :buffer, 0},
-    4 => {:approval_closed, :inline, 0},
-    5 => {:pending, :buffer, 0},
-    6 => {:approve, :buffer, 0},
-    7 => {:deny, :buffer, 0},
-    8 => {:blame, :buffer, 0},
-    9 => {:submit, :buffer, 0},
-    10 => {:start_agent, :buffer, 0},
-    11 => {:end_lease, :inline, 0},
-    12 => {:end_session, :inline, 0},
-    13 => {:watch, :inline, 0},
-    14 => {:contexts, :buffer, 0},
-    15 => {:detach, :inline, 0},
-    16 => {:end_context, :buffer, 0}
+    1 => {:login, :buffer, 2, 0},
+    2 => {:channel_closed, :inline, 0, 0},
+    3 => {:approval_opened, :buffer, 0, 0},
+    4 => {:approval_closed, :inline, 0, 0},
+    5 => {:pending, :buffer, 0, 0},
+    6 => {:approve, :buffer, 0, 0},
+    7 => {:deny, :buffer, 0, 0},
+    8 => {:blame, :buffer, 0, 0},
+    9 => {:submit, :buffer, 0, 0},
+    10 => {:start_agent, :buffer, 0, 0},
+    11 => {:end_lease, :inline, 0, 0},
+    12 => {:end_session, :inline, 0, 0},
+    13 => {:watch, :inline, 0, 0},
+    14 => {:contexts, :buffer, 0, 0},
+    15 => {:detach, :inline, 0, 0},
+    16 => {:end_context, :buffer, 0, 0}
   }
   @replies %{
-    1 => {:login, :buffer, 0},
-    2 => {:channel_closed, :inline, 0},
-    3 => {:approval_opened, :buffer, 0},
-    4 => {:approval_closed, :inline, 0},
-    5 => {:pending, :buffer, 0},
-    6 => {:approve, :buffer, 0},
-    7 => {:deny, :buffer, 0},
-    8 => {:blame, :buffer, 0},
-    9 => {:submit, :buffer, 0},
-    10 => {:start_agent, :buffer, 0},
-    11 => {:end_lease, :inline, 0},
-    12 => {:end_session, :inline, 0},
-    13 => {:watch, :inline, 0},
-    14 => {:contexts, :buffer, 0},
-    15 => {:detach, :inline, 0},
-    16 => {:end_context, :buffer, 0}
+    1 => {:login, :buffer, 0, 0},
+    2 => {:channel_closed, :inline, 0, 0},
+    3 => {:approval_opened, :buffer, 0, 0},
+    4 => {:approval_closed, :inline, 0, 0},
+    5 => {:pending, :buffer, 0, 0},
+    6 => {:approve, :buffer, 0, 0},
+    7 => {:deny, :buffer, 0, 0},
+    8 => {:blame, :buffer, 0, 0},
+    9 => {:submit, :buffer, 0, 0},
+    10 => {:start_agent, :buffer, 0, 0},
+    11 => {:end_lease, :inline, 0, 0},
+    12 => {:end_session, :inline, 0, 0},
+    13 => {:watch, :inline, 0, 0},
+    14 => {:contexts, :buffer, 0, 0},
+    15 => {:detach, :inline, 0, 0},
+    16 => {:end_context, :buffer, 0, 0}
   }
   @errors %{
     1 => :malformed,

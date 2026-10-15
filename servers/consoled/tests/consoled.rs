@@ -497,11 +497,11 @@ fn init_s_badge_mints_a_console_for_every_server_init_can_start() {
         let c = Connection::new(Endpoint::from_handle(conn));
         let mut lend = Lend::new(4).unwrap();
         for i in 0..MAX_THREADS - 1 {
-            c.new_connection(&mut lend, "", 0).unwrap_or_else(|e| panic!("connection {i}: {e:?}"));
+            c.new_connection(&mut lend, "", 0, None).unwrap_or_else(|e| panic!("connection {i}: {e:?}"));
         }
         // One more still fits the bucket; past it, the bucket is full.
-        c.new_connection(&mut lend, "", 0).unwrap();
-        assert_eq!(c.new_connection(&mut lend, "", 0).unwrap_err(), ClientError::Remote);
+        c.new_connection(&mut lend, "", 0, None).unwrap();
+        assert_eq!(c.new_connection(&mut lend, "", 0, None).unwrap_err(), ClientError::Remote);
     });
     assert_eq!(b.shut_down(), redoubt_rt::exit::OK);
 }
@@ -521,7 +521,7 @@ fn every_console_init_mints_attaches_and_opens_in_its_one_bucket() {
         let mut consoles = vec![Connection::new(Endpoint::from_handle(conn))];
         for i in 0..MAX_THREADS - 1 {
             let (minted, _) =
-                own.new_connection(&mut lend, "", 0).unwrap_or_else(|e| panic!("console {i}: {e:?}"));
+                own.new_connection(&mut lend, "", 0, None).unwrap_or_else(|e| panic!("console {i}: {e:?}"));
             consoles.push(Connection::new(minted));
         }
         // The root, and `cons` walked from it and opened (redoubt_client's console).

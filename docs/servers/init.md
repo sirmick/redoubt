@@ -614,7 +614,13 @@ connections outlive it at that server, if it serves sessions later.
   owned by `root`, so the budget's destruction does not reach it, and every client's handle to it
   stays good. The badges `init` hands the instance are stamped with its budget
   ([R9 (stamps)](../kernel/objects.md#r9-stamps)), so a copy it passed on dies with it, and the
-  badge minted again for the next instance has no other holder.
+  badge minted again for the next instance has no other holder. The steward's entry alone has
+  its badges, and its console connection, stamped `users`, so that a session's or lease's revocation scope, which lies under
+  `users`, narrows the connections the steward mints through them
+  ([R41 (narrowing by revocation scope)](steward.md#r41-narrowing-by-revocation-scope)); what the instance stamp bought, the
+  steward's restart gets below: `init` disconnects its fresh connections and reaps `users` to
+  nothing, so no handle the dead steward made or passed on outlives its restart, their only
+  holders being sessions and leases, all under `users`.
 - **A driver** gets its device handles again from `init`'s copies. The kernel reset the device at
   the dead instance's end, before its DMA pages were reused
   ([devices](../kernel/devices.md#reset-before-reuse)), and the new instance brings it up from a

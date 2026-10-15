@@ -283,7 +283,7 @@ fn the_exit_notice_releases_every_grant() {
         let mut lend = Lend::new(1).unwrap();
         let conn = Connection::attach(Endpoint::from_handle(boot_conn), &mut lend).unwrap();
         conn.open(&mut lend, "keyd", mode::OREAD).unwrap().close(&mut lend).unwrap();
-        conn.new_connection(&mut lend, "", 0).unwrap().0
+        conn.new_connection(&mut lend, "", 0, None).unwrap().0
     });
     let minted = f.copy(child, minted.handle(), grandchild);
     let sign = Message::SignRecord(SignRecord { record: b"x" });

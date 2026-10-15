@@ -355,7 +355,8 @@ the loader stub.
   call consumed maps fresh pages on its next call. A walk is at most 16 components after cleaning,
   refused rather than split; a reply must decode, carry the request's tag and be the matching
   reply, and every count is checked against what was asked. A 9P reply carries no handles, so any
-  that arrive are closed. For launchers it also has `new_connection` and `disconnect`.
+  that arrive are closed. For launchers it also has `new_connection(root, quota, scope)`, the
+  scope the connection is minted in, and `disconnect`.
 - **Locks sleep on endpoints.** The kernel has no futex and the runtime no thread-locals, so a
   `sync` semaphore makes an endpoint the first time a thread must wait on it: a waiter that takes
   its count below zero `receive`s there, and a release that raises it from below zero `send`s one

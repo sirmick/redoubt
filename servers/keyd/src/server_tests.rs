@@ -60,7 +60,7 @@ impl FakeKernel {
 }
 
 impl Minter for FakeKernel {
-    fn mint(&mut self, badge: NonZeroU64) -> Result<Handle, Error> {
+    fn mint(&mut self, badge: NonZeroU64, _scope: Option<Handle>) -> Result<Handle, Error> {
         if self.mint_fails {
             return Err(Error::OutOfMemory);
         }

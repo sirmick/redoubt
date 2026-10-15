@@ -166,13 +166,16 @@ impl<B: Copy, H: Copy> Steward<B, H> {
                 self.made.insert(scope.token().clone(), Made::Scope(s));
                 Ok(Produced::Scope)
             }
+            // Every connection is minted in the object's scope, so the scope's end ends it in
+            // every table at once (R41): the steward's own badge by its mint, a shared server's
+            // by `new_connection`'s scope.
             Step::Connect { token, scope, server, badge } => {
                 let scope = self.budget(scope.token())?;
                 let h = match server {
                     // The session's requests come back on the steward's own endpoint, routed by
-                    // this badge, stamped with the scope so the scope's end ends it.
+                    // this badge.
                     Server::Steward => Some(kernel.mint(*badge, scope)?),
-                    Server::Shared(slot) => kernel.connect(&owner.domain, *slot)?,
+                    Server::Shared(slot) => kernel.connect(&owner.domain, *slot, scope)?,
                 };
                 self.made.insert(token.clone(), Made::Connection(h));
                 Ok(Produced::Connection)
@@ -240,21 +243,25 @@ impl<B: Copy, H: Copy> Steward<B, H> {
         }
     }
 
-    /// Drops what `object`'s steps made: its connections are closed and given back to their
-    /// servers; a budget left is destroyed.
+    /// Drops what `object`'s steps made, in R41's order: a budget left is destroyed first, its
+    /// scope and every connection minted in it ending with it (the cutoff, the kernel's); then
+    /// each connection is given back to its server, which frees what it held for it (the
+    /// cleanup, which is never the cutoff).
     fn forget<K: Kernel<Budget = B, Handle = H>>(&mut self, kernel: &mut K, object: &Object) {
         self.pids.retain(|_, o| o != object);
         let mine: Vec<Token> = self.made.keys().filter(|t| &t.owner == object).cloned().collect();
-        let mut budgets = Vec::new();
+        let mut connections = Vec::new();
         for t in mine {
             match self.made.remove(&t) {
-                Some(Made::Connection(Some(h)) | Made::Relay(_, h)) => kernel.release(h),
-                Some(Made::Budget(b)) => budgets.push(b),
+                Some(Made::Connection(Some(h)) | Made::Relay(_, h)) => connections.push(h),
+                Some(Made::Budget(b)) => {
+                    let _ = kernel.destroy(b);
+                }
                 _ => {}
             }
         }
-        for b in budgets {
-            let _ = kernel.destroy(b);
+        for h in connections {
+            kernel.release(h);
         }
     }
 }

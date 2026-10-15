@@ -159,7 +159,7 @@ impl Volume {
             let mut lend = Lend::new(4).unwrap();
             Connection::attach(Endpoint::from_handle(self.founding), &mut lend)
                 .unwrap()
-                .new_connection(&mut lend, "", 0)
+                .new_connection(&mut lend, "", 0, None)
                 .expect("a connection for the session")
         });
         let session = f.process(account, labels);

@@ -150,7 +150,7 @@ impl Session {
 
     /// A fresh connection to `server`, as the steward gives a session its own.
     fn fresh(&mut self, server: &Connection) -> Result<Handle, Error> {
-        server.new_connection(&mut self.lend, "", 0).map(|(endpoint, _)| endpoint.handle())
+        server.new_connection(&mut self.lend, "", 0, None).map(|(endpoint, _)| endpoint.handle())
     }
 
     /// Launches `/boot/NAME` in `budget` with what `child` gives it, and returns its job.

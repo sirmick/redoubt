@@ -97,7 +97,7 @@ impl Running {
         let f = fake();
         let (handle, id) = f.as_process(self.session, || {
             let c = Connection::new(Endpoint::from_handle(self.root));
-            let (e, id) = c.new_connection(&mut lend(), path, 0).unwrap();
+            let (e, id) = c.new_connection(&mut lend(), path, 0, None).unwrap();
             (e.handle(), id)
         });
         let pid = f.process(1001, &[3]);
@@ -236,7 +236,7 @@ fn a_stage_reaches_only_the_end_it_was_given() {
         assert!(c.create(&mut l, 0, "x", DMDIR, mode::OREAD).is_err(), "made something");
         // `..` and `/` clean to its own root, which it may mint again: the same end, no more.
         for root in ["../w", "../../canary/r", "/canary/w", "w", "x"] {
-            assert_eq!(c.new_connection(&mut l, root, 0).err(), Some(ClientError::Remote), "{root}");
+            assert_eq!(c.new_connection(&mut l, root, 0, None).err(), Some(ClientError::Remote), "{root}");
         }
     });
     assert_eq!(r.shut_down(), redoubt_rt::exit::OK);
@@ -253,7 +253,7 @@ fn only_the_sessions_own_badge_makes_and_removes_pipes() {
     f.as_process(other, || {
         let c = Connection::new(Endpoint::from_handle(handle));
         assert_eq!(c.attach(&mut lend(), 0, ""), Err(ClientError::Rerror(ErrorName::NotPermitted)));
-        assert_eq!(c.new_connection(&mut lend(), "p/w", 0).err(), Some(ClientError::Remote));
+        assert_eq!(c.new_connection(&mut lend(), "p/w", 0, None).err(), Some(ClientError::Remote));
     });
     f.as_process(r.session, || {
         let c = Connection::new(Endpoint::from_handle(r.root));

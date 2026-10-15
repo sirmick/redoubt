@@ -186,11 +186,11 @@ fn a_minted_connection_cannot_climb_out_of_its_root_and_a_refused_quota_mints_no
         let mut lend = Lend::new(1).unwrap();
         let conn = Connection::attach(Endpoint::from_handle(conn), &mut lend).unwrap();
         assert_eq!(
-            conn.new_connection(&mut lend, "home/a", QUOTA + 1).err(),
+            conn.new_connection(&mut lend, "home/a", QUOTA + 1, None).err(),
             Some(Error::Rerror(Name::Other))
         );
         assert_eq!(fake().held(launcher).0, held, "a refused quota brought no handle");
-        conn.new_connection(&mut lend, "home/a", QUOTA).unwrap().0
+        conn.new_connection(&mut lend, "home/a", QUOTA, None).unwrap().0
     });
     let minted = fake().copy(launcher, minted.handle(), child);
     fake().as_process(child, || {
