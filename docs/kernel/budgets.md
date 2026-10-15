@@ -216,22 +216,23 @@ and its kernel objects.
   from its principal's sub-budget under `users`, from the top budgets the manifest names, 47,624
   pages for Alice, 32,768 for Bob and 24,576 for agent ([the steward](../servers/steward.md#fixed-sub-budgets-per-label-set),
   [the image](../../image/README.md)).
-  A session is 11,264 pages, its VM's share and its console relay's. The VM's is 11,136 pages: a
+  A session is 11,392 pages, its VM's share and its console relay's. The VM's is 11,264 pages: a
   heap cap of twice the largest peak of beamlet's runtime heap across the memory cases plus what
   the VM holds outside its heap, 44 pages (its two schedulers' stacks and thread pages, its locks'
   endpoints and its process's page), rounded up to 128
   ([beamlet](../userland/beamlet.md#what-the-vm-holds-at-its-prompt)), from a largest peak of
-  5,492 pages on rv64 (at two harts; 5,491 at one) and 5,308 on rv32, which the cap, 11,092 pages,
-  holds twice with 108 to spare. It was 11,008 with one scheduler, 19 pages outside the heap, and
-  11,904 while the shell loaded every command's module at its start, when the peak was 5,904. The
-  scan's cap rule bounds it from below: an rv64 peak above 5,546 pages puts the cap under twice
-  the peak, and the share then moves up a step of 128. The relay's is 128 pages: its image (about 21 pages on
+  5,556 pages on rv64 (at one hart, with the shell's machine mode beside the agent principal;
+  5,542 with the machine mode alone, 5,523 before it) and 5,362 on rv32, which the cap, 11,220
+  pages, holds twice with 108 to spare. It was 11,136 from a peak of 5,492, 11,008 with one
+  scheduler, 19 pages outside the heap, and 11,904 while the shell loaded every command's module
+  at its start, when the peak was 5,904. The scan's cap rule bounds it from below: an rv64 peak
+  above 5,610 pages puts the cap under twice the peak, and the share then moves up a step of 128. The relay's is 128 pages: its image (about 21 pages on
   rv64), its four stacks (5, 4, 4 and 4 pages), a heap cap of twice its 22-page peak
   (`consrelay-footprint`), and what the kernel charges for a process, rounded up to 128
   ([consrelay](../servers/consrelay.md#the-bound)). The steward gives the VM the session's pages
   less the relay's, as its `budget_pages` and its heap cap, so the relay's room is never the VM's.
   The console session has no relay and its VM the same share. Each sub-budget still holds two
-  sessions, 22,530 pages with their budgets' own pages: Alice's top budget splits into two of about
+  sessions, 22,786 pages with their budgets' own pages: Alice's top budget splits into two of about
   23,800 pages, one for her unlabelled sessions (the console's and one SSH context) and one for her
   vault's, and Bob's one sub-budget of about 32,760 holds two, as before, but not three. A session holds ten processes: its
   VM, its relay, its pipe server `piped` and up to seven stages

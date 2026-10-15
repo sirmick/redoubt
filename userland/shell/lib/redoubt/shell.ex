@@ -20,6 +20,18 @@ defmodule Redoubt.Shell do
   ends the line being read, or the line being evaluated, with the pipelines it runs, and never the
   shell. Tab completes (`Redoubt.Shell.Completer`), from the
   prompt's names as they are at each read.
+
+  In the **machine mode** (docs/userland/shell.md, "The machine mode"), entered by `machine/1`
+  with a token, the lines come from the driver, one for each asked for
+  (`{:redoubt_machine, :next, self()}`, then `{:redoubt_machine, :line, text}`), with no prompt,
+  echo or editing, and a line that is exactly the token ends a block, parsed and evaluated whole.
+  Every block's end is marked with one line, `token n ok|error|exit`, `n` the counter the prompt
+  would show, drawn by the driver for this process at the start of a line, through the guard
+  like everything else. The token, and the key the driver minted for this process at its start
+  (`Redoubt.Shell.Driver.machine_key/1`), which every ask and mark carries, are held in this
+  loop's state alone: never in the bindings or the environment the evaluated code gets, and the
+  line that set the token is cut from `group`'s history; and since a line is asked for only
+  between blocks, no later line is in this process's mailbox while a block runs.
   """
 
   alias Redoubt.Commandlet.Registry
@@ -58,9 +70,21 @@ defmodule Redoubt.Shell do
 
     enter_home(identity())
 
-    # The driver the interrupt comes from, if the shell runs on its console.
-    limits = Keyword.take(opts, [:max_heap_words]) ++ [driver: Driver.of_group()]
-    loop(%{counter: 1, binding: [], env: prompt_env(), limits: limits})
+    # The driver the interrupt comes from, if the shell runs on its console; and the machine
+    # mode's key, asked for now, before any line runs, so no line can be the first to ask.
+    driver = Driver.of_group()
+    limits = Keyword.take(opts, [:max_heap_words]) ++ [driver: driver]
+
+    state = %{
+      counter: 1,
+      binding: [],
+      env: prompt_env(),
+      limits: limits,
+      machine: nil,
+      key: Driver.machine_key(driver)
+    }
+
+    loop(state)
   end
 
   @doc """
@@ -108,22 +132,144 @@ defmodule Redoubt.Shell do
   end
 
   defp loop(state) do
-    case read(state, "") do
+    case if(state.machine, do: read_block(state, [], nil), else: read(state, "")) do
       :done ->
+        _ = ended(state, :exit)
         :ok
 
       :blank ->
         loop(state)
 
+      # An empty block: nothing to evaluate, and its mark says so.
+      :empty ->
+        loop(ended(state, :ok))
+
       {:error, message} ->
         Printer.text(message)
-        loop(%{state | counter: state.counter + 1})
+        loop(ended(state, :error))
 
       {:ok, quoted} ->
         case Evaluator.eval(quoted, state.binding, state.env, state.limits) do
-          {:ok, binding, env} -> loop(%{state | binding: binding, env: env, counter: state.counter + 1})
-          :error -> loop(%{state | counter: state.counter + 1})
-          :exit -> :ok
+          {:ok, binding, env} ->
+            loop(ended(%{state | binding: binding, env: env}, :ok))
+
+          :error ->
+            loop(ended(state, :error))
+
+          :exit ->
+            _ = ended(state, :exit)
+            :ok
+
+          # Leaving the mode, the block is marked under the token it was sent with; entering,
+          # or changing the token, the line is marked under the token it set.
+          {:machine, nil} ->
+            loop(state |> ended(:ok) |> leave_machine())
+
+          {:machine, token} ->
+            loop(state |> enter_machine(token) |> ended(:ok))
+        end
+    end
+  end
+
+  # A line has ended: in the machine mode its mark is drawn, and the counter moves on.
+  defp ended(%{machine: nil} = state, _status), do: %{state | counter: state.counter + 1}
+
+  defp ended(%{machine: token} = state, status) do
+    send(driver(state), {:redoubt_machine, :mark, state.key, "#{token} #{state.counter} #{status}"})
+
+    receive do
+      {:redoubt_machine, :marked} -> :ok
+    end
+
+    %{state | counter: state.counter + 1}
+  end
+
+  # ---- the machine mode ----
+
+  defp driver(%{limits: limits}), do: Keyword.fetch!(limits, :driver)
+
+  # The driver takes the keys for the mode; `machine/1` has checked there is one. A screen or a
+  # feed a line left behind holds them instead, and then the mode is refused and the prompt stays;
+  # so is a shell the driver gave no key (another process asked first, which no line can).
+  defp enter_machine(%{machine: nil, key: nil} = state, _token) do
+    Printer.text("** machine: the terminal gave this shell no key, so the mode cannot open")
+    state
+  end
+
+  defp enter_machine(%{machine: nil} = state, token) do
+    send(driver(state), {:redoubt_machine, :open, state.key})
+
+    receive do
+      {:redoubt_machine, :opened} ->
+        %{state | machine: token}
+
+      {:redoubt_machine, :refused} ->
+        Printer.text("** machine: a screen or a feed holds the terminal, so the mode cannot open")
+        state
+    end
+  end
+
+  defp enter_machine(state, token), do: %{state | machine: token}
+
+  defp leave_machine(%{machine: nil} = state), do: state
+
+  defp leave_machine(state) do
+    send(driver(state), {:redoubt_machine, :close, state.key})
+
+    receive do
+      {:redoubt_machine, :closed} -> :ok
+    end
+
+    flush_machine()
+    %{state | machine: nil}
+  end
+
+  # Lines the driver sent before it was told to close are no block's.
+  defp flush_machine do
+    receive do
+      {:redoubt_machine, _what} -> flush_machine()
+      {:redoubt_machine, _what, _detail} -> flush_machine()
+    after
+      0 -> :ok
+    end
+  end
+
+  # A block: the lines up to the one that is exactly the token, each asked for in turn, so none
+  # waits in this mailbox while a block runs. A line the driver dropped for its length (`long`,
+  # the bound) fails the block; the interrupt drops the lines read so far; the end of the input
+  # ends the shell.
+  defp read_block(%{machine: token} = state, lines, long) do
+    send(driver(state), {:redoubt_machine, :next, state.key})
+
+    receive do
+      {:redoubt_machine, :line, ^token} -> block(state, lines, long)
+      {:redoubt_machine, :line, line} -> read_block(state, [line | lines], long)
+      {:redoubt_machine, :long, bound} -> read_block(state, lines, bound)
+      {:redoubt_machine, :interrupt} -> read_block(state, [], nil)
+      {:redoubt_machine, :eof} -> :done
+    end
+  end
+
+  # A block is parsed whole: one that ends before its expression does is wrong, not unfinished,
+  # since the token said where it ends.
+  defp block(_state, _lines, bound) when is_integer(bound),
+    do:
+      {:error, "** shell: a line of the block was longer than #{bound} bytes, so the block was not evaluated"}
+
+  defp block(state, lines, nil) do
+    code = lines |> Enum.reverse() |> Enum.join("\n")
+
+    case String.trim(code) do
+      "" ->
+        :empty
+
+      "exit" ->
+        :done
+
+      _code ->
+        case parse(code, state) do
+          :incomplete -> {:error, "** (SyntaxError) shell: the block ended before its expression did"}
+          result -> result
         end
     end
   end

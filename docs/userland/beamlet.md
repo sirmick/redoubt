@@ -212,19 +212,19 @@ own:
 
 | What | rv64 | rv32 |
 | --- | ---: | ---: |
-| Decoded code: instructions | 532 | 532 |
-| Decoded code: operands | 2,152 | 2,152 |
+| Decoded code: instructions | 535 | 535 |
+| Decoded code: operands | 2,169 | 2,169 |
 | Literals: each module's | 37 | 37 |
-| Literals: the shared table | 695 | 692 |
-| Module tables | 236 | 206 |
-| Atoms | 96 | 67 |
+| Literals: the shared table | 719 | 717 |
+| Module tables | 235 | 205 |
+| Atoms | 97 | 68 |
 | Processes (22): heaps, collected | 57 | 57 |
-| Processes: the rest | 117 | 111 |
+| Processes: the rest | 118 | 112 |
 | ETS and binaries | 1 | 1 |
-| Accounted | 3,923 | 3,857 |
-| Runtime heap at the prompt: held, peak | 4,145, 4,563 | 3,975, 4,394 |
-| Not accounted (held less accounted) | 222 | 118 |
-| The scan's peak, after one command | 5,491 | 5,308 |
+| Accounted | 3,968 | 3,901 |
+| Runtime heap at the prompt: held, peak | 4,196, 4,601 | 4,023, 4,431 |
+| Not accounted (held less accounted) | 228 | 122 |
+| The scan's peak, after one command | 5,542 | 5,362 |
 
 A module's instructions are 8-byte entries over one array of its operands, 16 bytes each on either
 width, a list operand's items in the same array, so decoded code is the same size on both widths
@@ -246,17 +246,15 @@ the first command loads more modules.
 
 The image budgets the VM twice the largest peak the scan finds across its memory cases, in
 `beamlet-footprint`, the one case that scans a shell's VM now that the steward starts the others'
-shells, plus what the VM holds outside its heap, rounded up to 128 pages: 11,136 pages from the
-largest peak, 5,492 on rv64 at two harts (5,491 at one), which its heap cap of 11,092 holds twice
+shells, plus what the VM holds outside its heap, rounded up to 128 pages: 11,264 pages from the
+largest peak, 5,556 on rv64 at one hart, which its heap cap of 11,220 holds twice
 with 108 to spare, and with which the single VM boots in 512 MiB
 ([budgets](../kernel/budgets.md#the-tree-from-the-boot-manifest)). Outside the heap are 44 pages:
 its two schedulers' 18-page stacks and thread pages, up to five pages of endpoints its locks
-make, and its process's own page. With one scheduler they were 19, and the share was 11,008
-pages, from which the rv64 peak then, 5,491 pages at one hart, was 3 under the 5,494 at which the share moves up
-a step of 128; the second scheduler's 25 pages moved it up that step. The rv64 peak may now
-reach 5,546 pages before it moves again ([budgets](../kernel/budgets.md#the-tree-from-the-boot-manifest)).
-The budget was 11,904 pages while every module of the shell's was loaded at its start, the
-commands' among them, and the peak was 5,904. The line editor under the shell's driver is loaded at
+make, and its process's own page. The share moves up a step of 128 when the peak passes what
+the cap holds twice: the rv64 peak may reach 5,610 pages before it moves again
+([budgets](../kernel/budgets.md#the-tree-from-the-boot-manifest)). The shell's machine mode is
+19 of the pages at the prompt, the driver's and the loop's code. The line editor under the shell's driver is loaded at
 the prompt: OTP's `group`, `edlin`, `edlin_key`, `group_history`, `prim_tty`, `shell`,
 `gen_statem`, `sys` and `kernel`, with `Redoubt.Term` and the driver. The shell's protocols are not
 consolidated, but nothing at the prompt, nor a plain line, dispatches a protocol on a struct, so

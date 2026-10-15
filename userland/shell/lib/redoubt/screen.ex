@@ -86,6 +86,11 @@ defmodule Redoubt.Screen do
       {:DOWN, ^ref, :process, ^pid, :interrupt} ->
         {nil, state}
 
+      # The shell's machine mode: a program driving the session cannot answer a screen.
+      {:DOWN, ^ref, :process, ^pid, {:refused, :machine}} ->
+        raise ArgumentError,
+              "the machine mode refuses a screen: a program driving the session cannot answer one"
+
       {:DOWN, ^ref, :process, ^pid, reason} ->
         exit({:screen, reason})
     end
@@ -127,7 +132,8 @@ defmodule Redoubt.Screen do
 
         receive do
           {:redoubt_screen, :size, {cols, rows}} -> {:ok, {cols, rows}}
-          {:redoubt_screen, :size, :unknown} -> :none
+          # Not known, or the shell's machine mode, where no screen opens.
+          {:redoubt_screen, :size, none} when none in [:unknown, :machine] -> :none
         end
     end
   end
@@ -155,6 +161,7 @@ defmodule Redoubt.Screen do
     {cols, rows} =
       receive do
         {:redoubt_screen, :opened, cols, rows} -> {cols, rows}
+        {:redoubt_screen, :refused, reason} -> exit({:refused, reason})
       after
         5000 -> exit(:no_terminal)
       end

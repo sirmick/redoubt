@@ -36,6 +36,29 @@ defmodule Redoubt.Shell.Driver do
   and killing jobs"). Under a feed the interrupt does the same, so a native program reading what
   is typed cannot keep it from the shell.
 
+  In the shell's **machine mode** (docs/userland/shell.md, "The machine mode"), opened by the shell
+  itself (`{:redoubt_machine, :open, key}`) and closed by it, the bytes typed go to no `group`:
+  the driver cuts them into lines at each newline, a carriage return before it dropped, and
+  holds them in a queue of its own, with no echo, no editing and no history. The shell asks for
+  one line at a time (`{:redoubt_machine, :next, key}`) and gets it (`{:redoubt_machine, :line,
+  text}`), so while it evaluates a block it has asked for nothing and no later line, the next
+  block's token line among them, is in its mailbox, which any process can read. A line longer
+  than 1 MiB is dropped whole and the shell told (`{:redoubt_machine, :long, bound}`). The
+  shell's mark for a block is drawn here for it (`{:redoubt_machine, :mark, key, text}`), after
+  a newline if the output left the line open, through the guard like any text. The **key** is a
+  reference the driver mints once, for the first process that asks (`machine_key/1`: the shell,
+  at its start, before any line runs), and keeps with that process's pid; a `:open`, `:next`,
+  `:mark` or `:close` without it is dropped unanswered, so a line that learns the shell's pid
+  can pull no line, draw no mark and close nothing. The key lives in the shell's loop state and
+  here, which no line can read. The interrupt keys keep their meaning: while a line is evaluated they end it, as above but
+  with no `^C` drawn; otherwise the line being typed and the lines held are dropped and the shell
+  is told in its turn (`{:redoubt_machine, :interrupt}`), so it drops the block read so far.
+  Ctrl+D at the start of a line, like the console's end, is the end of the input
+  (`{:redoubt_machine, :eof}`). While the mode is open no screen opens and no feed, and a screen
+  asking the terminal's size is told `:machine`: a program driving the session cannot answer
+  one. The line that opened the mode, which names the token, is cut from `group`'s history when
+  the mode opens.
+
   While the driver runs, the logger writes through it too (`Redoubt.Shell.Log`): its `default`
   handler, which writes to the console past the guard, is put back when the driver ends.
 
@@ -59,6 +82,8 @@ defmodule Redoubt.Shell.Driver do
   @slice 65_536
   # The session's own key, Ctrl+\: the interrupt no screen can take.
   @session_key 0x1C
+  # The most bytes a line may hold in the machine mode: a longer one is dropped whole.
+  @machine_line 1_048_576
   @esc_timeout 50
 
   @doc """
@@ -121,6 +146,12 @@ defmodule Redoubt.Shell.Driver do
       # The line being evaluated, if any: the shell's pid, the token it named it by, and its
       # monitor.
       evaluating: nil,
+      # The shell in its machine mode, if it is: its monitor, the bytes of the line being typed
+      # (oldest first) and their count, whether that line is past the bound and being dropped,
+      # the lines read and not yet asked for, and whether the shell is asking.
+      machine: nil,
+      # The machine mode's key and the pid it was minted for (`machine_key/1`), once asked.
+      keyed: nil,
       esc_timeout: Keyword.get(opts, :esc_timeout, @esc_timeout)
     }
 
@@ -185,8 +216,34 @@ defmodule Redoubt.Shell.Driver do
       {:DOWN, ref, :process, _pid, _reason} when state.evaluating != nil and state.evaluating.ref == ref ->
         loop(%{state | evaluating: nil})
 
+      {:redoubt_machine, :key, pid} ->
+        loop(machine_key(state, pid))
+
+      # The mode's messages carry the key; one without it is anyone's, and is dropped below.
+      {:redoubt_machine, :open, key} when state.keyed != nil and state.keyed.key == key ->
+        loop(open_machine(state))
+
+      {:redoubt_machine, :close, key} when state.machine != nil and state.keyed.key == key ->
+        loop(close_machine(state))
+
+      {:redoubt_machine, :next, key} when state.machine != nil and state.keyed.key == key ->
+        loop(machine_next(state))
+
+      {:redoubt_machine, :mark, key, text} when state.machine != nil and state.keyed.key == key ->
+        loop(machine_mark(state, text))
+
+      {:redoubt_machine, _what, _key} ->
+        loop(state)
+
+      {:redoubt_machine, _what, _key, _text} ->
+        loop(state)
+
+      {:DOWN, ref, :process, _pid, _reason} when state.machine != nil and state.machine.ref == ref ->
+        loop(%{state | machine: nil})
+
+      # In the machine mode a screen has no size to lay out at: none opens.
       {:redoubt_screen, :size, pid} ->
-        send(pid, {:redoubt_screen, :size, state.size.()})
+        send(pid, {:redoubt_screen, :size, if(state.machine, do: :machine, else: state.size.())})
         loop(state)
 
       # The screen's buffer, once, as soon as it has opened: the only buffer drawn for it.
@@ -362,6 +419,10 @@ defmodule Redoubt.Shell.Driver do
   defp input(%{eof_check: {ref, rest, queued}} = state, input),
     do: %{state | eof_check: {ref, rest, [input | queued]}}
 
+  # In the machine mode the shell reads no line from group: the console's end goes to it as the
+  # end of its input, and a last line without its newline ends no block.
+  defp input(%{machine: machine} = state, :eof) when machine != nil, do: machine_item(state, :eof)
+
   # A last line without its newline is still a line, as it is from a pipe.
   defp input(state, :eof) do
     state = if state.last in [?\n, ?\r, nil], do: state, else: to_group(state, "\n")
@@ -388,6 +449,20 @@ defmodule Redoubt.Shell.Driver do
   end
 
   defp keys(state, <<>>), do: state
+
+  # In the machine mode, the interrupt is found before the bytes are cut into lines: what was
+  # typed before it is the lines it ends, and what came after is the next block's, which a
+  # program sends in the same write as its interrupt.
+  defp keys(%{machine: %{}} = state, text) do
+    case :binary.match(text, [<<3>>, <<@session_key>>]) do
+      :nomatch ->
+        machine_bytes(state, text)
+
+      {at, 1} ->
+        <<ahead::binary-size(^at), _interrupt, rest::binary>> = text
+        state |> machine_bytes(ahead) |> machine_interrupt() |> keys(rest)
+    end
+  end
 
   # Under a feed, the interrupt is found before the keys are fed: what was typed before it goes
   # to the feed, and what came after goes with the line.
@@ -461,17 +536,183 @@ defmodule Redoubt.Shell.Driver do
     state = %{state | evaluating: nil}
 
     # A feed's line being typed ends with the ^C after it, as a line being edited does, and the
-    # feed goes with the line: what is typed next is the shell's.
+    # feed goes with the line: what is typed next is the shell's. In the machine mode nothing is
+    # drawn: the block's mark says the line failed.
     state =
-      if Term.line_open?(state.term) do
-        {out, term} = Term.interrupt(state.term)
-        write(state, out)
-        %{state | term: term}
-      else
-        echo(state, {:put_chars, :unicode, "^C\n"})
+      cond do
+        Term.line_open?(state.term) ->
+          {out, term} = Term.interrupt(state.term)
+          write(state, out)
+          %{state | term: term}
+
+        state.machine != nil ->
+          state
+
+        true ->
+          echo(state, {:put_chars, :unicode, "^C\n"})
       end
 
     if state.feed, do: close_feed(state), else: state
+  end
+
+  # ---- the machine mode ----
+
+  @doc """
+  The machine mode's key from `driver` (`of_group/0`), for the first process that asks and no
+  other: the shell asks at its start, before any line runs, and keeps it in its loop's state.
+  `nil` with no driver, or when the key is already another process's.
+  """
+  @spec machine_key(pid() | nil) :: reference() | nil
+  def machine_key(nil), do: nil
+
+  def machine_key(driver) do
+    send(driver, {:redoubt_machine, :key, self()})
+
+    receive do
+      {:redoubt_machine, :key, key} -> key
+    end
+  end
+
+  defp machine_key(%{keyed: nil} = state, pid) do
+    key = make_ref()
+    send(pid, {:redoubt_machine, :key, key})
+    %{state | keyed: %{pid: pid, key: key}}
+  end
+
+  defp machine_key(state, pid) do
+    send(pid, {:redoubt_machine, :key, nil})
+    state
+  end
+
+  # The shell opens the mode from its loop, between lines, so no line is open, but a screen or a
+  # feed a line left behind would hold the keys: then the mode is refused. The line that opened
+  # it named the token, and group has just saved it: it is cut from the history, so no later
+  # line can read the token back from group (`:sys.get_state/1` reads it as any state).
+  defp open_machine(%{machine: nil, screen: nil, feed: nil, keyed: %{pid: pid}} = state) do
+    send(pid, {:redoubt_machine, :opened})
+    drop_newest_history(state)
+
+    machine = %{
+      ref: Process.monitor(pid),
+      line: [],
+      size: 0,
+      long: false,
+      queue: :queue.new(),
+      wanted: false
+    }
+
+    %{state | machine: machine}
+  end
+
+  defp open_machine(%{keyed: %{pid: pid}} = state) do
+    send(pid, {:redoubt_machine, :refused})
+    state
+  end
+
+  # The shell leaves the mode: a line half typed and the lines held go with it, and the keys
+  # after are group's.
+  defp close_machine(%{machine: machine, keyed: %{pid: pid}} = state) do
+    Process.demonitor(machine.ref, [:flush])
+    send(pid, {:redoubt_machine, :closed})
+    %{state | machine: nil}
+  end
+
+  # Bytes in the mode: a newline ends a line, a carriage return just before it dropped, and the
+  # line is held for the shell as it is, every other byte kept (a tab, a backspace). A line past
+  # the bound is dropped to its newline, and the shell is told in its place. Ctrl+D at the start
+  # of a line is the end of the input, and what follows it goes nowhere.
+  defp machine_bytes(state, <<>>), do: state
+
+  defp machine_bytes(%{machine: %{long: true} = machine} = state, text) do
+    case :binary.match(text, "\n") do
+      :nomatch ->
+        state
+
+      {at, 1} ->
+        state = %{state | machine: %{machine | long: false}}
+
+        state
+        |> machine_item({:long, @machine_line})
+        |> machine_bytes(binary_part(text, at + 1, byte_size(text) - at - 1))
+    end
+  end
+
+  defp machine_bytes(%{machine: %{size: 0}} = state, <<4, _rest::binary>>), do: machine_item(state, :eof)
+
+  defp machine_bytes(%{machine: machine} = state, text) do
+    {ahead, rest} =
+      case :binary.match(text, "\n") do
+        :nomatch -> {text, nil}
+        {at, 1} -> {binary_part(text, 0, at), binary_part(text, at + 1, byte_size(text) - at - 1)}
+      end
+
+    cond do
+      machine.size + byte_size(ahead) > @machine_line ->
+        machine_bytes(%{state | machine: %{machine | line: [], size: 0, long: true}}, text)
+
+      rest == nil ->
+        %{state | machine: %{machine | line: [machine.line | ahead], size: machine.size + byte_size(ahead)}}
+
+      true ->
+        line = IO.iodata_to_binary([machine.line | ahead])
+        state = %{state | machine: %{machine | line: [], size: 0}}
+        state |> machine_item({:line, String.replace_suffix(line, "\r", "")}) |> machine_bytes(rest)
+    end
+  end
+
+  # A line, or what stands for one, goes to the shell if it is asking, else waits its turn: the
+  # shell asks for one at a time, so during a block none is in its mailbox.
+  defp machine_item(%{machine: %{wanted: true} = machine} = state, item) do
+    deliver(state.keyed.pid, item)
+    %{state | machine: %{machine | wanted: false}}
+  end
+
+  defp machine_item(%{machine: machine} = state, item),
+    do: %{state | machine: %{machine | queue: :queue.in(item, machine.queue)}}
+
+  defp machine_next(%{machine: machine} = state) do
+    case :queue.out(machine.queue) do
+      {{:value, item}, queue} ->
+        deliver(state.keyed.pid, item)
+        %{state | machine: %{machine | queue: queue}}
+
+      {:empty, _queue} ->
+        %{state | machine: %{machine | wanted: true}}
+    end
+  end
+
+  defp deliver(pid, {:line, text}), do: send(pid, {:redoubt_machine, :line, text})
+  defp deliver(pid, {:long, bound}), do: send(pid, {:redoubt_machine, :long, bound})
+  defp deliver(pid, what) when what in [:eof, :interrupt], do: send(pid, {:redoubt_machine, what})
+
+  # The shell's mark for a block, drawn through the guard like any text, at the start of a line:
+  # output that left the line open gets its newline first.
+  defp machine_mark(state, text) do
+    state = if state.term.origin == 0, do: state, else: draw(state, {:put_chars, :unicode, "\n"})
+    state = draw(state, {:put_chars, :unicode, text <> "\n"})
+    send(state.keyed.pid, {:redoubt_machine, :marked})
+    state
+  end
+
+  # The interrupt in the mode: a line being evaluated is ended, as at the prompt; with none, the
+  # line being typed and the lines held are dropped, and the shell drops the block they were
+  # part of when it next asks.
+  defp machine_interrupt(%{evaluating: nil, machine: machine} = state) do
+    state = %{state | machine: %{machine | line: [], size: 0, long: false, queue: :queue.new()}}
+    machine_item(state, :interrupt)
+  end
+
+  defp machine_interrupt(state), do: interrupt_line(state)
+
+  # group's newest line, cut by a process of its own, as `trim_history/1` cuts.
+  defp drop_newest_history(%{group: group}) do
+    spawn(fn ->
+      :sys.replace_state(group, fn {name, data} ->
+        lines = group_state(data, :line_history)
+        rest = if is_list(lines) and lines != [], do: tl(lines), else: lines
+        {name, group_state(data, line_history: rest)}
+      end)
+    end)
   end
 
   # ---- the feed ----
@@ -512,7 +753,7 @@ defmodule Redoubt.Shell.Driver do
     end
   end
 
-  defp open_feed(%{feed: nil, screen: nil} = state, pid) do
+  defp open_feed(%{feed: nil, screen: nil, machine: nil} = state, pid) do
     send(pid, {:redoubt_feed, :opened})
     %{state | feed: %{pid: pid, ref: Process.monitor(pid), line: "", cr: false}}
   end
@@ -587,8 +828,14 @@ defmodule Redoubt.Shell.Driver do
   # ---- a screen in front ----
 
   # One screen at a time: a second is refused, and its process ends, before it has run any of
-  # its module's code. The bytes that interrupt a screen are the session's key, and Ctrl+C
-  # unless the screen takes it as a key.
+  # its module's code. In the machine mode every screen is refused, and told so, so the line
+  # that asked fails with the reason. The bytes that interrupt a screen are the session's key,
+  # and Ctrl+C unless the screen takes it as a key.
+  defp open_screen(%{machine: %{}} = state, pid, _ctrl_c) do
+    send(pid, {:redoubt_screen, :refused, :machine})
+    state
+  end
+
   defp open_screen(%{screen: nil} = state, pid, ctrl_c) do
     {cols, rows} = geometry(state.size)
     write(state, Frame.enter())

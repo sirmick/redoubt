@@ -227,7 +227,11 @@ pipeline in the background, and `Job.kill` destroys one job's stage budgets and 
 `screen` runs a program whose `cells` frames the session checks, paces and draws, in Rust, a
 whole 80 by 24 screen redrawn about 12 times a second, and whose keys
 and size reach it as events on its standard input, the interrupt ending it whatever it does
-([the shell](../userland/shell.md#a-native-programs-screen-and-the-sessions-key)). What the milestone builds on: the serving
+([the shell](../userland/shell.md#a-native-programs-screen-and-the-sessions-key)); and the machine
+mode: a program driving a session over its terminal sends blocks ended by a token line, read
+unedited and evaluated whole, and reads each block's mark, `token n ok|error|exit`, host-tested
+and in one session over SSH (`bench:shell-machine`;
+[the shell](../userland/shell.md#the-machine-mode)). What the milestone builds on: the serving
 library's parked calls ([serving](../servers/serving.md#parked-calls)), `consoled`'s 9P console
 ([consoled](../servers/consoled.md)), and budget destruction as the only way to end a process
 ([budgets](../kernel/budgets.md#r10-destruction)). The first step on Redoubt is built: a typed call
