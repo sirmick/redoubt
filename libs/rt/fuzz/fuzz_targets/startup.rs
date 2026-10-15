@@ -24,6 +24,7 @@ fuzz_target!(|data: &[u8]| {
         assert_eq!(addr % 4096, 0);
         assert!(addr.checked_add(len).is_some());
     }
-    // A heap cap of 0 is no cap, never a cap that refuses everything.
+    // A heap cap of 0 is no cap, never a cap that refuses everything; a budget of 0 is none told.
     assert_ne!(startup.heap_pages(), Some(0));
+    assert_ne!(startup.budget_pages(), Some(0));
 });

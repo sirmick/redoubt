@@ -410,13 +410,13 @@ itself: it is given seeds and purposes, not what the rest of the system does wit
 
 ### The startup block
 
-<details><summary>Status: built · partly tested: the parser's fuzz target runs in no bench case; in a boot, only the blocks `init` and `stub-launch` write are parsed · tested (15)</summary>
+<details><summary>Status: built · partly tested: the parser's fuzz target runs in no bench case; in a boot, only the blocks `init` and `stub-launch` write are parsed · tested (17)</summary>
 
 - bench:rt-host-tests
 - host:redoubt-rt::round_trip
 - host:redoubt-rt::the_page_is_the_wire_message
 - host:redoubt-rt::image_round_trips_and_is_validated
-- host:redoubt-rt::heap_pages_and_tag_round_trip
+- host:redoubt-rt::heap_pages_budget_pages_and_tag_round_trip
 - host:redoubt-rt::resolve_takes_the_longest_prefix
 - host:redoubt-rt::handle_names_follow_the_manifest_rule
 - host:redoubt-rt::hostile_blocks_are_refused
@@ -424,6 +424,8 @@ itself: it is given seeds and purposes, not what the rest of the system does wit
 - host:redoubt-rt::handle_counts_are_what_process_start_can_install
 - host:redoubt-rt::random_bytes_never_panic
 - fuzz:redoubt-rt/startup
+- host:redoubt-init::a_servers_block_carries_its_budgets_pages
+- host:beamlet-redoubt::a_launch_takes_what_it_is_given_and_its_end_is_an_event
 - bench:stub-launch
 - bench:net-tcp
 - bench:heap-cap
@@ -443,13 +445,14 @@ encoding of its fields ([wire](wire.md#the-message-convention)). The rest of the
 
 | Field | Holds |
 | --- | --- |
-| `version` | 2; a block of any other version is refused |
+| `version` | 3; a block of any other version is refused |
 | `handle_count` | n, the handles `process_start` installed, at most `MAX_START_HANDLES` (128) |
 | `namespace` | entries `handle: u32`, `path: string`: where a handle is bound, a clean absolute path (`/`, `/dev/cons`) |
 | `handles` | entries `handle: u32`, `name: string`: a named handle, the name under the manifest's rule |
 | `argv` | `string`s, the arguments in order (each may be empty) |
 | `image_addr`, `image_len` | where the program's ELF image sits in the child and its exact length, for the loader stub; both 0 for none |
 | `heap_pages` | the child's heap cap in pages ([Heaps](#the-boot-manifest)), 0 for none |
+| `budget_pages` | the pages of the budget the launcher made for the child, 0 for none: `init` writes the manifest's `budget.pages`; the steward writes a session VM's share of its session's budget, the session's pages less its relay's 128, and the relay's its 128 ([budgets](../kernel/budgets.md#the-tree-from-the-boot-manifest)); a session's `launch` writes the pages the VM carved the budget with, and for a child launched into the VM's own budget, that budget's whole pages, the session's share, which the child then shares with the VM. The launcher's word, information and not authority: a program holds no handle it could read its budget from, and `beamlet` sizes its limits by it ([limits](../userland/beamlet.md#limits-inside-one-vm)) |
 | `tag` | the launch tag the bench measures the child's stack and heap by, 0 for none: `init` gives each server its place in the manifest, from 1 |
 
 **Checked whole.** The parent may be hostile, so the parser bounds everything and checks
@@ -462,7 +465,8 @@ exits with code 102 before `main` runs ([R31 (startup block checked whole)](#r31
 **Using it.** `resolve(path)` finds the namespace entry with the longest matching prefix and the
 rest of the path; `handle(name)` finds a named handle; `args` gives the arguments. The runtime
 notes the handle bound at `/dev/cons` for its panic report, caps its heap at `heap_pages`, and
-marks its heap record with `tag`, all before `main`. `StartupBuilder` writes a block for a
+marks its heap record with `tag`, all before `main`; `budget_pages` it gives the program to read.
+`StartupBuilder` writes a block for a
 launcher, and its `finish` runs the parser on the result, so a launcher can only write blocks a
 child accepts.
 

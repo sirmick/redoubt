@@ -335,8 +335,8 @@ const FRAME_HEADER: usize = 4;
 /// One whole page: the startup block never holds more (servers/init.md, "The startup block").
 const MAX_BLOCK: usize = PAGE_SIZE;
 /// The only `startup` block version this stub understands (servers/init.md, "The startup
-/// block").
-const VERSION: u32 = 2;
+/// block"): the wire crate's, the one the runtime's builder writes.
+const VERSION: u32 = redoubt_wire::STARTUP_VERSION;
 
 /// Why the startup page's image fields could not be read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

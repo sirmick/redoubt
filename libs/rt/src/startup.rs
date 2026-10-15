@@ -11,13 +11,14 @@
 //!
 //! | Field | Holds |
 //! | --- | --- |
-//! | `version` | 2; a block of any other version is refused |
+//! | `version` | 3; a block of any other version is refused |
 //! | `handle_count` | n, the handles `process_start` installed (slots 1..=n), at most `MAX_START_HANDLES` |
 //! | `namespace` | entries `handle: u32`, `path: string`: a clean absolute path (`/`, `/dev/cons`) |
 //! | `handles` | entries `handle: u32`, `name: string`: a named handle, the name under the manifest's rule ([`valid_name`]) |
 //! | `argv` | `string`s, the arguments in order (each may be empty) |
 //! | `image_addr`, `image_len` | the image the loader stub loads, both 0 for none |
 //! | `heap_pages` | the heap's cap in pages ([`crate::heap::Heap::start`]), 0 for none |
+//! | `budget_pages` | the pages of the budget the launcher made for the child, or the child's share of one it divides, 0 for none |
 //! | `tag` | the launch tag the bench measures the child by, 0 for none |
 //!
 //! Handles are 1..=n. Paths are unique among `namespace` entries and names among `handles`
@@ -34,7 +35,7 @@ use crate::path;
 
 /// The largest block: one page.
 pub const MAX_BLOCK: usize = PAGE_SIZE;
-const VERSION: u32 = 2;
+const VERSION: u32 = redoubt_wire::STARTUP_VERSION;
 /// The longest handle name (servers/init.md, Names).
 pub const MAX_NAME: usize = 64;
 
@@ -116,12 +117,14 @@ pub struct Startup<'a> {
     /// `(image_addr, image_len)`, `None` when the block named no image (servers/init.md).
     image: Option<(usize, usize)>,
     heap_pages: u32,
+    budget_pages: u64,
     tag: u16,
 }
 
 impl<'a> Startup<'a> {
     /// A process started with no block.
-    pub const EMPTY: Startup<'static> = Startup { entries: Vec::new(), image: None, heap_pages: 0, tag: 0 };
+    pub const EMPTY: Startup<'static> =
+        Startup { entries: Vec::new(), image: None, heap_pages: 0, budget_pages: 0, tag: 0 };
 
     /// Parses the block at the front of `page` (at most [`MAX_BLOCK`] bytes of it are looked at).
     pub fn parse(page: &'a [u8]) -> Result<Startup<'a>, StartupError> {
@@ -166,7 +169,13 @@ impl<'a> Startup<'a> {
             push(&mut entries, Entry::Arg(r.string().map_err(StartupError::Malformed)?))?;
         }
         let image = parse_image(fields.image_addr, fields.image_len)?;
-        Ok(Startup { entries, image, heap_pages: fields.heap_pages, tag: fields.tag })
+        Ok(Startup {
+            entries,
+            image,
+            heap_pages: fields.heap_pages,
+            budget_pages: fields.budget_pages,
+            tag: fields.tag,
+        })
     }
 
     fn entries(&self) -> impl Iterator<Item = Entry<'a>> + '_ { self.entries.iter().copied() }
@@ -179,6 +188,11 @@ impl<'a> Startup<'a> {
 
     /// The heap's cap in pages (servers/init.md, "Heaps"), `None` for an uncapped heap.
     pub fn heap_pages(&self) -> Option<usize> { (self.heap_pages != 0).then_some(self.heap_pages as usize) }
+
+    /// The pages of the budget the launcher made for this process (servers/init.md, "The startup
+    /// block"), or its share of one the launcher divides; `None` when the launcher said none. The
+    /// launcher's word: a program holds no handle it could read its budget's pages from.
+    pub fn budget_pages(&self) -> Option<u64> { (self.budget_pages != 0).then_some(self.budget_pages) }
 
     /// The launch tag (servers/init.md, "The startup block"), 0 for none.
     pub fn tag(&self) -> u16 { self.tag }
@@ -272,6 +286,7 @@ pub struct StartupBuilder {
     image_addr: u64,
     image_len: u64,
     heap_pages: u32,
+    budget_pages: u64,
     tag: u16,
     /// A string too long for its `u16` length, remembered for `finish`.
     too_long: bool,
@@ -288,6 +303,7 @@ impl StartupBuilder {
             image_addr: 0,
             image_len: 0,
             heap_pages: 0,
+            budget_pages: 0,
             tag: 0,
             too_long: false,
         }
@@ -304,6 +320,13 @@ impl StartupBuilder {
     /// Caps the child's heap at `pages` pages; 0, the default, is no cap.
     pub fn heap_pages(&mut self, pages: u32) -> &mut Self {
         self.heap_pages = pages;
+        self
+    }
+
+    /// Tells the child the pages of the budget made for it, or its share of one the launcher
+    /// divides; 0, the default, tells it none.
+    pub fn budget_pages(&mut self, pages: u64) -> &mut Self {
+        self.budget_pages = pages;
         self
     }
 
@@ -354,6 +377,7 @@ impl StartupBuilder {
             image_addr: self.image_addr,
             image_len: self.image_len,
             heap_pages: self.heap_pages,
+            budget_pages: self.budget_pages,
             tag: self.tag,
         });
         let mut page = alloc::vec![0; MAX_BLOCK];
@@ -398,7 +422,7 @@ mod tests {
         assert_eq!(s.handle("nope"), None);
         assert_eq!(s.args().collect::<Vec<_>>(), vec!["--verbose", "", "naïve"]);
         assert_eq!(s.image(), None);
-        assert_eq!((s.heap_pages(), s.tag()), (None, 0));
+        assert_eq!((s.heap_pages(), s.budget_pages(), s.tag()), (None, None, 0));
         // The rest of the page is not read.
         let mut page = bytes.clone();
         page.resize(MAX_BLOCK, 0xaa);
@@ -412,7 +436,7 @@ mod tests {
         let bytes = StartupBuilder::new(1).namespace("/", h(1)).arg("a").finish().unwrap();
         let mut want = vec![];
         want.extend_from_slice(&1u32.to_le_bytes()); // opcode
-        want.extend_from_slice(&2u32.to_le_bytes()); // version
+        want.extend_from_slice(&3u32.to_le_bytes()); // version
         want.extend_from_slice(&1u32.to_le_bytes()); // handle_count
         want.extend_from_slice(&7u32.to_le_bytes()); // namespace: 7 bytes
         want.extend_from_slice(&[1, 0, 0, 0, 1, 0, b'/']);
@@ -422,6 +446,7 @@ mod tests {
         want.extend_from_slice(&0u64.to_le_bytes()); // image_addr: none
         want.extend_from_slice(&0u64.to_le_bytes()); // image_len: none
         want.extend_from_slice(&0u32.to_le_bytes()); // heap_pages: none
+        want.extend_from_slice(&0u64.to_le_bytes()); // budget_pages: none
         want.extend_from_slice(&0u16.to_le_bytes()); // tag: none
         assert_eq!(bytes[..4], (want.len() as u32).to_le_bytes());
         assert_eq!(bytes[4..], want[..]);
@@ -445,13 +470,21 @@ mod tests {
     }
 
     #[test]
-    fn heap_pages_and_tag_round_trip() {
-        let bytes = StartupBuilder::new(0).heap_pages(48).tag(3).finish().unwrap();
+    fn heap_pages_budget_pages_and_tag_round_trip() {
+        let bytes = StartupBuilder::new(0).heap_pages(48).budget_pages(64).tag(3).finish().unwrap();
         let s = Startup::parse(&bytes).unwrap();
-        assert_eq!((s.heap_pages(), s.tag()), (Some(48), 3));
-        let bytes = StartupBuilder::new(0).heap_pages(u32::MAX).tag(u16::MAX).finish().unwrap();
+        assert_eq!((s.heap_pages(), s.budget_pages(), s.tag()), (Some(48), Some(64), 3));
+        let bytes = StartupBuilder::new(0)
+            .heap_pages(u32::MAX)
+            .budget_pages(u64::MAX)
+            .tag(u16::MAX)
+            .finish()
+            .unwrap();
         let s = Startup::parse(&bytes).unwrap();
-        assert_eq!((s.heap_pages(), s.tag()), (Some(u32::MAX as usize), u16::MAX));
+        assert_eq!(
+            (s.heap_pages(), s.budget_pages(), s.tag()),
+            (Some(u32::MAX as usize), Some(u64::MAX), u16::MAX)
+        );
     }
 
     #[test]
@@ -494,21 +527,23 @@ mod tests {
         let len = u32::from_le_bytes(cut[..4].try_into().unwrap());
         cut[..4].copy_from_slice(&(len - 1).to_le_bytes());
         assert!(matches!(reject(&cut), Some(StartupError::Malformed(_))));
-        // A wrong opcode or version: version 1, which had neither the cap nor the tag, too.
+        // A wrong opcode or version: version 2, which had no budget_pages, too.
         let mut bad = good.clone();
         bad[4] = 2;
         assert!(matches!(reject(&bad), Some(StartupError::Malformed(_))));
-        for version in [0, 1, 3] {
+        for version in [0, 1, 2, 4] {
             let mut bad = good.clone();
             bad[8] = version;
             assert_eq!(reject(&bad), Some(StartupError::BadVersion));
         }
-        // A version 1 block as a version 1 parent wrote it, without the two fields, is short.
-        let mut v1 = good[..good.len() - 6].to_vec();
-        let len = v1.len() as u32 - 4;
-        v1[..4].copy_from_slice(&len.to_le_bytes());
-        v1[8] = 1;
-        assert!(matches!(reject(&v1), Some(StartupError::Malformed(_))));
+        // A version 2 block as a version 2 parent wrote it, without budget_pages between the heap
+        // cap and the tag, is short.
+        let mut v2 = good[..good.len() - 10].to_vec();
+        v2.extend_from_slice(&good[good.len() - 2..]);
+        let len = v2.len() as u32 - 4;
+        v2[..4].copy_from_slice(&len.to_le_bytes());
+        v2[8] = 2;
+        assert!(matches!(reject(&v2), Some(StartupError::Malformed(_))));
         // Each builder step the parser must refuse, and why.
         type Case<'a> = (&'a dyn Fn(&mut StartupBuilder), Option<StartupError>);
         let cases: [Case; 11] = [
@@ -544,6 +579,7 @@ mod tests {
             image_addr: 0,
             image_len: 0,
             heap_pages: 0,
+            budget_pages: 0,
             tag: 0,
         };
         let ok = fields(&[1, 0, 0, 0, 1, 0, b'/'], &[1, 0, 0, 0, 1, 0, b'k'], &[0, 0]);

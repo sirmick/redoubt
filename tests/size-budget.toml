@@ -66,17 +66,17 @@ max_lines = 93
 [[crate]]
 name = "libs/client"
 paths = ["libs/client/src"]
-max_lines = 1109
+max_lines = 1118
 
 [[crate]]
 name = "libs/rt"
 paths = ["libs/rt/src"]
-max_lines = 3927
+max_lines = 3943
 
 [[crate]]
 name = "libs/wire"
 paths = ["libs/wire/src"]
-max_lines = 3905
+max_lines = 3908
 
 [[crate]]
 name = "libs/steward"
@@ -163,7 +163,7 @@ max_lines = 2923
 [[crate]]
 name = "servers/init"
 paths = ["servers/init/src"]
-max_lines = 2546
+max_lines = 2559
 
 [[crate]]
 name = "servers/erofsd"

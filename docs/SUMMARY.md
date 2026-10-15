@@ -71,7 +71,6 @@
 - [M6 (persist, install, share)](plan/m6-persist.md)
 - [Follow-ups](todo/README.md)
   - [Kernel attack gaps](todo/kernel-attack-gaps.md)
-  - [beamlet is told its budget by an argument the manifest keeps equal by hand](todo/beamlet-budget-from-startup.md)
 - [Beyond M6](beyond/README.md)
   - [The FPGA platform](beyond/fpga-platform.md)
   - [The card's host backend](beyond/card-host.md)

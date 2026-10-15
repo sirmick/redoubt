@@ -31,3 +31,8 @@ pub use codec::Error;
 /// The 9P `msize` and the largest typed-message buffer: `MAX_LEND_PAGES` (16) pages of
 /// 4 KiB (kernel/ipc.md, servers/wire.md).
 pub const MSIZE: usize = 64 * 1024;
+
+/// The `startup` block's version (servers/init.md, "The startup block"), owned here with the
+/// message's table: the runtime that parses a block and the loader stub that reads its image
+/// fields both take it from here, so a layout change moves them together. 3 since `budget_pages`.
+pub const STARTUP_VERSION: u32 = 3;

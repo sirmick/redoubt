@@ -74,6 +74,8 @@ struct Thread {
 /// named handle's, in the launch's order.
 pub(crate) struct Resolved {
     pub(crate) budget: Handle,
+    /// The budget's pages as the VM knows them, for the child's startup block (0 for none).
+    pub(crate) budget_pages: u64,
     pub(crate) namespace: Vec<Handle>,
     pub(crate) handles: Vec<Handle>,
 }
@@ -106,7 +108,7 @@ impl Jobs {
             }
             None => return Err(Refused("too_many")),
         };
-        let Resolved { budget, namespace, handles } = resolved;
+        let Resolved { budget, budget_pages, namespace, handles } = resolved;
         let served = match &l.serve {
             Some(_) => Some(served()?),
             None => None,
@@ -156,6 +158,7 @@ impl Jobs {
         if let Some(pages) = heap_pages {
             builder.heap_pages(pages);
         }
+        builder.budget_pages(budget_pages);
         let started = match builder.start() {
             Ok(started) => started,
             Err(failed) => {

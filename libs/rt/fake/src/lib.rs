@@ -486,6 +486,15 @@ impl Fake {
         s.launched.iter().filter(|child| child.budget == index).cloned().collect()
     }
 
+    /// What each child made in a budget carved from the one `owner` holds as `parent` was given,
+    /// oldest first: a launcher's children in budgets it carved, whose handles the test never
+    /// sees, even after it destroyed them.
+    pub fn launched_under(&self, owner: usize, parent: Handle) -> Vec<Launched> {
+        let s = self.lock();
+        let Ok(Object::Budget(index)) = lookup(&s, owner, parent) else { panic!("not a budget handle") };
+        s.launched.iter().filter(|child| s.budgets[child.budget].parent == Some(index)).cloned().collect()
+    }
+
     /// Whether the `slot`th handle (from 0) `owner`'s child `process` was started with is the object
     /// `owner`'s `handle` names.
     pub fn installed(&self, owner: usize, process: Handle, slot: usize, handle: Handle) -> bool {

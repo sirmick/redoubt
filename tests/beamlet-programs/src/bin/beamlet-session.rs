@@ -70,7 +70,8 @@ struct Child<'a> {
     namespace: Vec<(&'a str, Handle)>,
     handles: Vec<(&'a str, Handle)>,
     args: Vec<&'a str>,
-    pages: Option<(usize, u32)>,
+    /// Its stack, its heap cap and its budget's pages, as the steward tells a session VM.
+    pages: Option<(usize, u32, u64)>,
 }
 
 /// One VM to run: its module and function, its session's label set and its processes.
@@ -178,8 +179,8 @@ impl Session {
         for arg in &child.args {
             launch.arg(arg);
         }
-        if let Some((stack, heap)) = child.pages {
-            launch.stack_pages(stack).heap_pages(heap);
+        if let Some((stack, heap, budget)) = child.pages {
+            launch.stack_pages(stack).heap_pages(heap).budget_pages(budget);
         }
         launch.start().map_err(|failed| failed.error)
     }
@@ -268,13 +269,12 @@ fn run(startup: &Startup) -> u32 {
             park();
         };
         let service = if serving { Endpoint::create().ok() } else { None };
-        let pages = format!("budget_pages={SESSION_PAGES}");
         let heap = (SESSION_PAGES - SESSION_STACK_PAGES as u64 - 1) as u32;
         let mut child = Child {
             namespace: alloc::vec![("/dev/cons", console), ("/boot", boot), (HOME, home)],
             handles: alloc::vec![("budget", budget.handle()), ("bootfsd", boot), ("erofsd:system", system)],
-            args: alloc::vec![&pages, "endpoint=erofsd:system", module, function],
-            pages: Some((SESSION_STACK_PAGES, heap)),
+            args: alloc::vec!["endpoint=erofsd:system", module, function],
+            pages: Some((SESSION_STACK_PAGES, heap, SESSION_PAGES)),
         };
         if keyd {
             if let Some(h) = startup.handle("keyd") {

@@ -14,7 +14,7 @@ defmodule Redoubt.Wire.Client.Startup do
   alias Redoubt.Wire.Proto.Startup, as: P
 
   @doc "Calls `startup`, waiting at most `timeout` ms."
-  def startup(conn, v_version, v_handle_count, v_namespace, v_handles, v_argv, v_image_addr, v_image_len, v_heap_pages, v_tag, timeout \\ C.timeout()) do
-    C.call(conn, P, {:startup, %{version: v_version, handle_count: v_handle_count, namespace: v_namespace, handles: v_handles, argv: v_argv, image_addr: v_image_addr, image_len: v_image_len, heap_pages: v_heap_pages, tag: v_tag}}, [], timeout)
+  def startup(conn, v_version, v_handle_count, v_namespace, v_handles, v_argv, v_image_addr, v_image_len, v_heap_pages, v_budget_pages, v_tag, timeout \\ C.timeout()) do
+    C.call(conn, P, {:startup, %{version: v_version, handle_count: v_handle_count, namespace: v_namespace, handles: v_handles, argv: v_argv, image_addr: v_image_addr, image_len: v_image_len, heap_pages: v_heap_pages, budget_pages: v_budget_pages, tag: v_tag}}, [], timeout)
   end
 end

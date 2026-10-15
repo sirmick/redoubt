@@ -183,9 +183,11 @@ limit ([R6 (charging)](../kernel/budgets.md#r6-charging)). The image also caps `
 ([init](../servers/init.md#the-boot-manifest)), but at the budget's edge, where the budget binds
 first: that cap is there for the bench's measurement. On Redoubt the platform lowers
 `max_heap_words`, `max_ets_words` and `max_persistent_words` to a sixteenth of the VM's budget
-each, which it takes from its
-required argument `budget_pages=N`, the budget's pages
-([todo](../todo/beamlet-budget-from-startup.md)). Each counts the VM's own 8-byte words, as the VM
+each, which it reads from its startup block's `budget_pages`
+([init](../servers/init.md#the-startup-block)): the launcher that made the budget fills it, `init`
+from the manifest's `budget.pages`, the steward with the VM's share of its session's budget, so
+no argument has to be kept equal to the budget by hand, and a manifest that names one is refused
+by the bench (host:testbench::no_manifest_names_budget_pages). Each counts the VM's own 8-byte words, as the VM
 counts a process (two for a 16-byte term), so a limit is the same bytes on rv32 as on rv64. A flooding process peaks at about four times its
 heap limit, the old heap, the collector's copy and its growth, so the budget must be at least twice
 what the VM uses with no Erlang process running; then one flooding process, the tables or
@@ -194,7 +196,7 @@ pages, 2,850,816 bytes; the shell at its prompt holds 3,696 bytes in ETS and 36,
 `persistent_term`, about a thousandth and a hundredth of it. Several flooding at once, or a native's single large allocation,
 reach the backstop instead, which ends the VM, and `init` restarts it. It is a server like any other
 under `init`'s restart rule: a VM that cannot stay up (a start module that fails every time, a
-manifest without `budget_pages`) is restarted until the limit, and then the machine reboots
+startup block that tells it no budget, exit code 4) is restarted until the limit, and then the machine reboots
 ([init](../servers/init.md#restarts-and-reboots)). CPU between VMs is the kernel's to share, by
 budget weight ([scheduling](../kernel/scheduling.md)).
 
@@ -884,8 +886,10 @@ with no `System`, the host CLI's, answers each `{error, not_supported}`; the hos
   `{ok, Job}`, and the job's end arrives as `{exit, Job, Cause, Code}` (`exited`, `faulted` or
   `killed`): the client library's `launch` with the image the caller read, a budget it carved, its
   namespace entries and named handles (at most `MAX_START_HANDLES` together, `serve`'s counted),
-  and arguments; the platform adds the loader stub, which it carries as `init` does, and the job's
-  own exit endpoint ([native programs](native.md#launching-from-a-session)). A receive right the
+  and arguments; the platform adds the loader stub, which it carries as `init` does, the job's
+  own exit endpoint ([native programs](native.md#launching-from-a-session)), and the budget's
+  pages, which it recorded when it carved the budget, into the child's startup block
+  ([init](../servers/init.md#the-startup-block)): one source, nothing a caller types. A receive right the
   VM serves among them goes to the program as a send right with a badge of the launch's own, in a
   budget the VM carved (below). With `serve => Name`
   the program is a server: the platform makes an endpoint, gives the child its receive right as

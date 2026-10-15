@@ -576,8 +576,10 @@ is empty, `ssh alice.work@box` the context `work` ([sessions](../userland/sessio
 - **A context outlives its channel.** Its VM's `/dev/cons` is served by a console relay,
   [`consrelay`](consrelay.md), that the steward launches in the session's budget beside the VM
   and attaches to one SSH channel at a time ([R80](#r80-one-channel-per-context)). The session's
-  budget holds 128 pages for it, and the VM is told the rest as its `budget_pages` and capped
-  there ([budgets](../kernel/budgets.md#the-tree-from-the-boot-manifest)). Closing that
+  budget holds 128 pages for it, and the VM is told the rest as its startup block's
+  `budget_pages` and capped there
+  ([budgets](../kernel/budgets.md#the-tree-from-the-boot-manifest),
+  [init](init.md#the-startup-block)). Closing that
   channel detaches the context: the relay lets the channel go, the steward gives its console back
   (`sshd` closes the channel with status 0), and the VM runs on, its output kept by the relay.
   `exit`, a VM that ends, and the steward's other ends still end the session.

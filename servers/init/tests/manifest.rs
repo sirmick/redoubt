@@ -3,7 +3,7 @@
 //! image's own manifest (`image/manifest.json`) in one way and expects the refusal for that rule
 //! and no other.
 
-use redoubt_init::check::{MANIFEST, Machine, Plan, STEWARD_SLOTS, args, is_steward};
+use redoubt_init::check::{MANIFEST, Machine, Plan, STEWARD_SLOTS, args, block, is_steward};
 use redoubt_init::fuzz::{BUNDLE_KEY, ENTRIES, machine, virt_devices};
 use redoubt_init::manifest::{
     Budget, Device, DeviceUse, Handed, Label, LabelSet, Net, Principal, Server, Sizes, Steward, Verity,
@@ -12,6 +12,7 @@ use redoubt_init::manifest::{
 use redoubt_init::refusal::{Refusal, Sharing, Why};
 use redoubt_init::{ARENA_PAGES, Manifest, check, read};
 use redoubt_rt::abi::MAX_START_HANDLES;
+use redoubt_rt::startup::Startup;
 use redoubt_rt::wire::json::{SchemaError, SchemaKind};
 use stub::MAX_STACK_PAGES;
 
@@ -62,6 +63,23 @@ fn on_virt(m: &Manifest) -> Result<Plan, Refusal> {
 }
 
 fn on(m: &Manifest, machine: &Machine) -> Result<Plan, Refusal> { check(m, machine, BUNDLE_KEY) }
+
+/// Each server's startup block tells it the pages of the budget `init` makes for it: the
+/// manifest's `budget.pages`, which `beamlet` sizes its limits by, written by `init` and by no
+/// argument kept equal by hand.
+#[test]
+fn a_servers_block_carries_its_budgets_pages() {
+    let m = image();
+    let devices = virt_devices();
+    let machine = machine(&devices, &ENTRIES);
+    assert!(on(&m, &machine).is_ok());
+    for (i, s) in m.servers.iter().enumerate() {
+        let page = block(&m, i, &machine, &BUNDLE_KEY).unwrap();
+        let startup = Startup::parse(&page).unwrap();
+        assert_eq!(startup.budget_pages(), Some(s.budget.pages), "{}", s.name);
+        assert_eq!(startup.heap_pages(), s.heap_pages.map(|p| p as usize), "{}", s.name);
+    }
+}
 
 fn refused_at(m: &Manifest, path: &str, why: Why) {
     assert_eq!(on_virt(m).unwrap_err(), Refusal::At { at: path.into(), why });
@@ -1051,7 +1069,7 @@ fn confined_gives_each_label_set_its_own_userland_disk() {
         volume: None,
         receives: vec![],
         handed: vec![Handed { endpoint: littlefsd.into(), badge: 7 }],
-        args: vec!["budget_pages=256".into()],
+        args: vec!["endpoint=littlefsd:system".into()],
     };
     m.servers.push(beamlet("beamlet", vec![], "littlefsd:system"));
     m.servers.push(beamlet("beamlet-l", secret(), "littlefsd:system-l"));

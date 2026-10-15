@@ -522,7 +522,8 @@ mod machine {
             let args = args(m, s, &self.plan.bundle_key, &lengths);
             let mut launch = Launch::new(STUB_BIN, image, budget, exit);
             launch.stack_pages(s.stack_pages as usize).stack_tag((i + 1) as u16);
-            launch.heap_pages(s.heap_pages.unwrap_or(0));
+            // The budget it made for the server, told to it: `beamlet` sizes its limits by it.
+            launch.heap_pages(s.heap_pages.unwrap_or(0)).budget_pages(s.budget.pages);
             for name in &s.receives {
                 launch.handle(name, self.endpoint(name));
             }

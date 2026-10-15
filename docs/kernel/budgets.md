@@ -228,7 +228,8 @@ and its kernel objects.
   rv64), its four stacks (5, 4, 4 and 4 pages), a heap cap of twice its 22-page peak
   (`consrelay-footprint`), and what the kernel charges for a process, rounded up to 128
   ([consrelay](../servers/consrelay.md#the-bound)). The steward gives the VM the session's pages
-  less the relay's, as its `budget_pages` and its heap cap, so the relay's room is never the VM's.
+  less the relay's, as its startup block's `budget_pages` and its heap cap, so the relay's room is
+  never the VM's.
   The console session has no relay and its VM the same share. Each sub-budget still holds two
   sessions, 22,530 pages with their budgets' own pages: Alice's top budget splits into two of about
   23,800 pages, one for her unlabelled sessions (the console's and one SSH context) and one for her

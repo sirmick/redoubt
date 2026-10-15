@@ -75,6 +75,6 @@
       "stack_pages": "18", "heap_pages": "11092",
       "budget": { "pages": "11136", "processes": 1, "weight": 100 },
       "handed": [ { "endpoint": "erofsd:system", "badge": "7" } ],
-      "args": ["budget_pages=11136", "endpoint=erofsd:system", "schedulers=2", "Elixir.Redoubt.Shell"] }
+      "args": ["endpoint=erofsd:system", "schedulers=2", "Elixir.Redoubt.Shell"] }
   ]
 }
