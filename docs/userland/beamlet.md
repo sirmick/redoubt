@@ -79,7 +79,7 @@ The VM crate (`beamlet-vm`) is `#![forbid(unsafe_code)]`, and so are `beamlet-re
 
 ### Limits inside one VM
 
-<details><summary>Status: built · partly tested: in a boot, only the process heap limit and the budget's backstop are attacked · tested (35)</summary>
+<details><summary>Status: built · partly tested: in a boot, only the process heap limit and the budget's backstop are attacked · tested (39)</summary>
 
 - host:beamlet-vm::full_mailbox_kills_the_receiver
 - host:beamlet-vm::a_term_equal_to_itself_is_not_scanned
@@ -116,6 +116,10 @@ The VM crate (`beamlet-vm`) is `#![forbid(unsafe_code)]`, and so are `beamlet-re
 - host:beamlet-vm::an_update_element_past_the_ets_limit_is_refused
 - host:beamlet-vm::heir_data_past_the_ets_limit_is_refused
 - host:beamlet-vm::heir_data_counts_toward_the_ets_limit
+- host:beamlet-crypto::mod_exp_refuses_an_oversized_operand_before_it_runs
+- host:beamlet-crypto::dh_generate_key_refuses_oversized_parameters_before_it_runs
+- host:beamlet-crypto::dh_compute_key_refuses_an_oversized_private_key_before_it_runs
+- host:beamlet-crypto::an_oversized_rsa_private_key_is_refused_before_it_is_built
 
 </details>
 
@@ -157,10 +161,13 @@ VM down. Every limit fails closed: the offender ends, and nothing is lost silent
   key's own words are released. A value's parts that are already literals (another persistent
   value, a module's constant) are not copied, and count only where they were first put.
   `persistent_term:info()` reports the count as its `memory`.
-- **CPU:** reductions preempt every process, including a loop of plain jumps with no calls.
-  Residual: a native is not preempted, and `crypto:mod_pow` and finite-field Diffie-Hellman run
-  `modpow` on operands only the bignum limit bounds, so one call can hold its scheduler for
-  minutes ([todo](../todo/beamlet-bignum-bounds.md)).
+- **CPU:** reductions preempt every process, including a loop of plain jumps with no calls. A
+  native is not preempted, so what one may compute is bounded before it runs: `crypto:mod_pow`
+  and finite-field Diffie-Hellman hold the modulus (`P`), the base and the exponent each to
+  10,000 bits, OpenSSL's `OPENSSL_DH_MAX_MODULUS_BITS`, and an RSA key to 8,192 bits, its `D`
+  and primes to `N`'s width; within the bound every call answers as BEAM's does, and a wider
+  operand is refused with `badarg` before any arithmetic, where the unbounded call on a
+  megabyte's would hold its scheduler thread, and every process on it, for days.
 - **Fixed limits**, each `system_limit`: 2^20 atoms of at most 255 characters, 2^16 processes, a
   stack of 2^24 slots, bignums of 2^24 bits, binaries of 2^30 bits.
 - **A term is equal to itself without being read.** Comparing a term with itself (`==`, `=:=`,
