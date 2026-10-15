@@ -152,12 +152,65 @@ pub fn ecdh_compute_key(c: &mut Ctx, a: &[Term]) -> R {
 
 // ---- finite-field Diffie-Hellman and modular exponentiation ----
 
+/// The widest operand a modular exponentiation runs on: OpenSSL's `OPENSSL_DH_MAX_MODULUS_BITS`.
+/// A native is not preempted by reductions, so `modpow` over a megabyte modulus and exponent
+/// would hold its scheduler thread, and every process on it, for minutes; the modulus, the base
+/// and the exponent are each held to this width before any `modpow` runs, as an RSA key's parts
+/// are held before `from_components` ([`rsa_private_of`]).
+const MAX_MODULUS_BITS: u64 = 10_000;
+
+/// The operand of a modular exponentiation that is too wide to run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Wide {
+    Base,
+    Exponent,
+    Modulus,
+}
+
+/// `base ^ exp mod m`, or the first operand over [`MAX_MODULUS_BITS`]: the modulus, then the
+/// base, then the exponent. Within the bound every call answers as BEAM's does: a base wider than
+/// the modulus is reduced by it first (the bound is absolute, not the modulus's width, because
+/// that division itself costs seconds over a 2^30-bit base). Every `modpow` in this crate runs
+/// through here. What remains linear in the caller's bytes is decoding them into a `BigUint`
+/// before this check, which the VM's binary limit of 2^30 bits bounds.
+fn mod_pow(base: &BigUint, exp: &BigUint, m: &BigUint) -> Result<BigUint, Wide> {
+    if m.bits() > MAX_MODULUS_BITS {
+        return Err(Wide::Modulus);
+    }
+    if base.bits() > MAX_MODULUS_BITS {
+        return Err(Wide::Base);
+    }
+    if exp.bits() > MAX_MODULUS_BITS {
+        return Err(Wide::Exponent);
+    }
+    Ok((base % m).modpow(exp, m))
+}
+
+/// The `badarg` for an operand [`mod_pow`] refused, on the argument it came in: `args` are the
+/// base's, the exponent's and the modulus's.
+fn too_wide(c: &mut Ctx, wide: Wide, args: [i64; 3]) -> E {
+    match wide {
+        Wide::Base => badarg(c, args[0], "Base too large"),
+        Wide::Exponent => badarg(c, args[1], "Exponent too large"),
+        Wide::Modulus => badarg(c, args[2], "Modulus too large"),
+    }
+}
+
+/// The group `[P, G]`, if it is one: `P` over 3, `G` not zero, each within [`MAX_MODULUS_BITS`].
+fn dh_group(p: BigUint, g: BigUint) -> Option<(BigUint, BigUint)> {
+    let fits = p > BigUint::from(3u32)
+        && p.bits() <= MAX_MODULUS_BITS
+        && !g.is_zero()
+        && g.bits() <= MAX_MODULUS_BITS;
+    fits.then_some((p, g))
+}
+
 fn dh_params(c: &mut Ctx, t: &Term, arg: i64) -> Result<(BigUint, BigUint), E> {
     let parts = c.heap().to_vec(*t).unwrap_or_default();
     let p = parts.first().and_then(|x| c.heap().iodata_bytes(*x)).map(|b| BigUint::from_bytes_be(&b));
     let g = parts.get(1).and_then(|x| c.heap().iodata_bytes(*x)).map(|b| BigUint::from_bytes_be(&b));
     match (p, g) {
-        (Some(p), Some(g)) if p > BigUint::from(3u32) && !g.is_zero() => Ok((p, g)),
+        (Some(p), Some(g)) => dh_group(p, g).ok_or_else(|| badarg(c, arg, "Bad DH parameters")),
         _ => Err(badarg(c, arg, "Bad DH parameters")),
     }
 }
@@ -174,7 +227,7 @@ pub fn dh_generate_key(c: &mut Ctx, a: &[Term]) -> R {
         } else {
             uint(c, a, 0, "private key")?
         };
-    let public = g.modpow(&private, &p);
+    let public = mod_pow(&g, &private, &p).map_err(|w| too_wide(c, w, [1, 0, 1]))?;
     Ok({
         let e = [bin(c, &public.to_bytes_be()), bin(c, &private.to_bytes_be())];
         c.tuple(&e)
@@ -190,7 +243,8 @@ pub fn dh_compute_key(c: &mut Ctx, a: &[Term]) -> R {
         return Err(nif_error(c, "error", -1, "Bad public key"));
     }
     let mine = uint(c, a, 1, "private key")?;
-    Ok(bin(c, &theirs.modpow(&mine, &p).to_bytes_be()))
+    let shared = mod_pow(&theirs, &mine, &p).map_err(|w| too_wide(c, w, [0, 1, 2]))?;
+    Ok(bin(c, &shared.to_bytes_be()))
 }
 
 /// `mod_exp_nif(Base, Exponent, Modulus, BinHdr)`: with `BinHdr` 4, a 4-byte length prefix.
@@ -199,7 +253,7 @@ pub fn mod_exp(c: &mut Ctx, a: &[Term]) -> R {
     if m.is_zero() {
         return Err(badarg(c, 2, "Modulus is zero"));
     }
-    let r = base.modpow(&exp, &m).to_bytes_be();
+    let r = mod_pow(&base, &exp, &m).map_err(|w| too_wide(c, w, [0, 1, 2]))?.to_bytes_be();
     Ok(match a[3].as_i64() {
         Some(4) => {
             let mut out = (r.len() as u32).to_be_bytes().to_vec();
@@ -626,7 +680,9 @@ pub fn rsa_generate_key(c: &mut Ctx, a: &[Term]) -> R {
 mod tests {
     extern crate std;
 
-    use super::ed25519_pair_of;
+    use num_bigint::BigUint;
+
+    use super::{Wide, dh_group, ed25519_pair_of, mod_pow};
 
     fn hex(s: &str) -> alloc::vec::Vec<u8> {
         (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
@@ -758,6 +814,117 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// RFC 3526's 2048-bit MODP group (group 14), the one `tests/cryptotests/pubkey.erl` agrees
+    /// with BEAM over.
+    fn modp2048() -> BigUint {
+        BigUint::from_bytes_be(&hex(concat!(
+            "ffffffffffffffffc90fdaa22168c234c4c6628b80dc1cd129024e088a67cc74020bbea63b139b22514a0879",
+            "8e3404ddef9519b3cd3a431b302b0a6df25f14374fe1356d6d51c245e485b576625e7ec6f44c42e9a637ed6b",
+            "0bff5cb6f406b7edee386bfb5a899fa5ae9f24117c4b1fe649286651ece45b3dc2007cb8a163bf0598da4836",
+            "1c55d39a69163fa8fd24cf5f83655d23dca3ad961c62f356208552bb9ed529077096966d670c354e4abc9804",
+            "f1746c08ca18217c32905e462e36ce3be39e772c180e86039b2783a2ec07a28fb5c55df06f4c52c9de2bcbf6",
+            "955817183995497cea956ae515d2261898fa051015728e5a8aacaa68ffffffffffffffff"
+        )))
+    }
+
+    /// A number of `bits` bits, every one set.
+    fn ones(bits: u64) -> BigUint { (BigUint::from(1u32) << bits) - 1u32 }
+
+    /// `mod_pow` refuses its oversized operand at once: under 10 ms, where `num-bigint`'s
+    /// unbounded `modpow` takes 1.2 s over 2^14-bit operands and 72 s over 2^16-bit (8 KiB) ones
+    /// in a release build (measured once on the bench host), so a megabyte's would take days.
+    fn refused_at_once(base: &BigUint, exp: &BigUint, m: &BigUint, why: Wide) {
+        let at = std::time::Instant::now();
+        assert_eq!(mod_pow(base, exp, m), Err(why));
+        assert!(at.elapsed() < std::time::Duration::from_millis(10), "{why:?}: {:?}", at.elapsed());
+    }
+
+    /// `mod_exp_nif`: `crypto:mod_pow/3`'s vectors from `pubkey.erl` hold, a base or exponent
+    /// wider than the modulus answers as BEAM does, and so does every operand at the bound; one
+    /// bit over it, in any operand, is refused at once, an 8 MiB operand among them.
+    #[test]
+    fn mod_exp_refuses_an_oversized_operand_before_it_runs() {
+        let n = |v: u64| BigUint::from(v);
+        assert_eq!(mod_pow(&n(3), &n(1000), &n(1_000_007)), Ok(n(297_623)));
+        assert_eq!(mod_pow(&n(2), &n(10), &n(1000)), Ok(n(24)));
+        assert_eq!(mod_pow(&n(1000), &n(1), &n(1000)), Ok(n(0)));
+        assert_eq!(mod_pow(&n(1024), &n(1), &n(1000)), Ok(n(24)));
+        assert_eq!(mod_pow(&n(2), &n(1024), &n(1000)), Ok(n(216)));
+        assert_eq!(mod_pow(&((BigUint::from(1u32) << 1024) + 5u32), &n(3), &n(1_000_007)), Ok(n(751_391)));
+        let widest = ones(super::MAX_MODULUS_BITS);
+        assert_eq!(mod_pow(&n(2), &n(5), &widest), Ok(n(32)));
+        assert_eq!(mod_pow(&widest, &widest, &widest), Ok(n(0)));
+        assert_eq!(mod_pow(&widest, &widest, &n(1000)), Ok(n(375)));
+
+        let huge = BigUint::from_bytes_be(&[0xff; 8 << 20]);
+        let over = ones(super::MAX_MODULUS_BITS + 1);
+        refused_at_once(&n(2), &n(5), &huge, Wide::Modulus);
+        refused_at_once(&n(2), &n(5), &over, Wide::Modulus);
+        refused_at_once(&huge, &n(5), &widest, Wide::Base);
+        refused_at_once(&over, &n(1), &n(1000), Wide::Base);
+        refused_at_once(&n(2), &huge, &widest, Wide::Exponent);
+        refused_at_once(&n(2), &over, &n(1000), Wide::Exponent);
+    }
+
+    /// `dh_generate_key_nif`: `G ^ private mod P` is the textbook public value (`5 ^ 6 mod 23`
+    /// is 8) and, over group 14, a value in `[2, P - 2]` the `compute_key` vector below is built
+    /// from; a `G` or private exponent wider than `P` but within the bound answers as BEAM does;
+    /// the group check refuses a `P` or `G` over the bound as it refuses a `P` of 3 or a `G` of
+    /// 0, and a given private exponent over it is refused at once.
+    #[test]
+    fn dh_generate_key_refuses_oversized_parameters_before_it_runs() {
+        let (p, g) = (modp2048(), BigUint::from(2u32));
+        let a = (BigUint::from(1u32) << 200) + 12345u32;
+        assert_eq!(
+            mod_pow(&BigUint::from(5u32), &BigUint::from(6u32), &BigUint::from(23u32)),
+            Ok(BigUint::from(8u32))
+        );
+        assert!(dh_group(p.clone(), g.clone()).is_some());
+        let public = mod_pow(&g, &a, &p).unwrap();
+        assert!(public > BigUint::from(1u32) && public < &p - 1u32);
+        assert!(dh_group(p.clone(), &p << 1u32).is_some());
+        assert_eq!(mod_pow(&(&p + &g), &a, &p), Ok(public.clone()));
+        assert_eq!(mod_pow(&g, &(&a + &p - 1u32), &p), Ok(public));
+        assert!(dh_group(BigUint::from(3u32), g.clone()).is_none());
+        assert!(dh_group(p.clone(), BigUint::from(0u32)).is_none());
+
+        let huge = BigUint::from_bytes_be(&[0xff; 8 << 20]);
+        let (over, widest) = (ones(super::MAX_MODULUS_BITS + 1), ones(super::MAX_MODULUS_BITS));
+        let at = std::time::Instant::now();
+        assert!(dh_group(huge.clone(), g.clone()).is_none());
+        assert!(dh_group(over.clone(), g.clone()).is_none());
+        assert!(dh_group(widest, g.clone()).is_some());
+        assert!(dh_group(p.clone(), over.clone()).is_none());
+        assert!(at.elapsed() < std::time::Duration::from_millis(10), "{:?}", at.elapsed());
+        refused_at_once(&g, &huge, &p, Wide::Exponent);
+        refused_at_once(&g, &over, &p, Wide::Exponent);
+    }
+
+    /// `dh_compute_key_nif`: over group 14 with private exponents `2^200 + 12345` and
+    /// `2^300 + 6789`, both sides reach the shared secret computed outside this crate; the
+    /// private exponent is refused at once when over the bound (the peer's value is already
+    /// held under `P` by the range check).
+    #[test]
+    fn dh_compute_key_refuses_an_oversized_private_key_before_it_runs() {
+        let (p, g) = (modp2048(), BigUint::from(2u32));
+        let a = (BigUint::from(1u32) << 200) + 12345u32;
+        let b = (BigUint::from(1u32) << 300) + 6789u32;
+        let (public_a, public_b) = (mod_pow(&g, &a, &p).unwrap(), mod_pow(&g, &b, &p).unwrap());
+        let shared = BigUint::from_bytes_be(&hex(concat!(
+            "c9d52002db1a5241869270b79bc0dc96362d58cdfa74dbfcd1ffb544eac1c1365d54f0a8a1bb788f56f56c06",
+            "93a97fc58155c9945fc6408bd5d19feed5e1089e7238f5f762594bae0ad90c46aa008ed204a5033d3d27fc66",
+            "98f2b97a6919fdd7df63a79d6fa45de3e297c753f52c702bdcfe3be0814578611115f2639a5932cd55c1f172",
+            "45ce99ab534de48eaad25e75b244d4e1e7957e0e81115099f8c21ad1c8e26d0a393a06962bdd68a074e550ed",
+            "96347563fdb9f742bf791f3819b2eeac0e9498135c7059b2dc2b4360e980b29c62e4e76d860fc5c004845f87",
+            "1b09dad59fd4b2136c1a0debb2c822926b272ac8c15b4d1f7d119f0c29d04f57393c68e6"
+        )));
+        assert_eq!(mod_pow(&public_b, &a, &p), Ok(shared.clone()));
+        assert_eq!(mod_pow(&public_a, &b, &p), Ok(shared));
+
+        refused_at_once(&public_b, &BigUint::from_bytes_be(&[0xff; 8 << 20]), &p, Wide::Exponent);
+        refused_at_once(&public_b, &ones(super::MAX_MODULUS_BITS + 1), &p, Wide::Exponent);
     }
 
     /// A low-order point gives an all-zero secret, which `dh` refuses, as OpenSSL does.
