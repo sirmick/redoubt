@@ -355,6 +355,24 @@ impl Fake {
         (p.handles.iter().flatten().count(), p.held())
     }
 
+    /// Waits until `pid` holds exactly `handles` handles, at most `timeout`: `true` when it does.
+    /// For a test that knows what a thread of the process is about to close or make, and waits for
+    /// that rather than for a count sampled at some moment.
+    pub fn wait_held(&self, pid: usize, handles: usize, timeout: std::time::Duration) -> bool {
+        let deadline = std::time::Instant::now() + timeout;
+        let mut s = self.lock();
+        loop {
+            if s.processes[pid].handles.iter().flatten().count() == handles {
+                return true;
+            }
+            let now = std::time::Instant::now();
+            if now >= deadline {
+                return false;
+            }
+            s = self.changed.wait_timeout(s, deadline - now).unwrap_or_else(|e| e.into_inner()).0;
+        }
+    }
+
     /// The most pages `pid` had mapped at once since the last read (or since it was made); the
     /// next read starts from what it holds now.
     pub fn held_peak(&self, pid: usize) -> usize {
@@ -796,6 +814,8 @@ unsafe impl redoubt_rt::Transport for Fake {
                 let mut s = self.lock();
                 lookup(&s, pid, handle)?;
                 s.processes[pid].handles[handle.index() as usize] = None;
+                // A test may wait for this close (`wait_held`).
+                self.changed.notify_all();
                 Ok(Return::Nothing)
             }
             Call::Call { endpoint, body_rec, lend, timeout } => {

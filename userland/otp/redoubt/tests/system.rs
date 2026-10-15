@@ -263,41 +263,30 @@ fn servers_bound_and_ended_one_after_another_never_run_out_of_waiters() {
                 .collect()
         },
         move |p, pid| {
-            let (mut made, mut handles) = (Vec::new(), Vec::new());
-            let before = p.waiters();
-            for name in SERVERS {
+            let mut made = Vec::new();
+            // Nothing is in flight before the first bind: what the VM holds now is what it holds
+            // again once each server's waiter has returned, the one handle it added closed.
+            let (waiters, handles) = (p.waiters(), f.held(pid).0);
+            for (i, name) in SERVERS.iter().enumerate() {
                 let (server, _) = p.lookup(name).unwrap();
                 p.bind("/dev/pipe", &server).unwrap();
                 made.push(ask(p, |p| p.make_dir("/dev/pipe/p")));
-                let waiters = p.waiters();
+                assert_eq!(p.waiters(), waiters + 1, "server {i}: its waiter started");
                 assert_eq!(volumes.lock().unwrap().remove(0).stop(), redoubt_rt::exit::OK);
-                // As a session idles between pipelines: the ended server's waiter hands over its end.
-                let until = p.monotonic_us() + 1_000_000;
-                while p.waiters() == waiters && p.monotonic_us() < until {
+                // As a session idles between pipelines: the ended server's waiter hands over its
+                // end, which the VM takes, and the hub lets the waiter go.
+                let until = p.monotonic_us() + 5_000_000;
+                while p.waiters() != waiters && p.monotonic_us() < until {
                     let soon = p.monotonic_us() + 10_000;
                     p.idle(Some(soon));
                 }
-                // The waiter closes its handle as it returns, just after its last wake-up: the
-                // first count is taken once it has held still for a while, the rest once they
-                // reach it.
-                let until = std::time::Instant::now() + std::time::Duration::from_secs(1);
-                while handles.first().is_some_and(|first| f.held(pid).0 != *first)
-                    && std::time::Instant::now() < until
-                {
-                    std::thread::sleep(std::time::Duration::from_millis(1));
-                }
-                let (mut last, mut still) = (f.held(pid).0, 0);
-                while handles.is_empty() && still < 50 {
-                    std::thread::sleep(std::time::Duration::from_millis(1));
-                    let now = f.held(pid).0;
-                    still = if now == last { still + 1 } else { 0 };
-                    last = now;
-                }
-                handles.push(last);
+                assert_eq!(p.waiters(), waiters, "server {i}: its waiter handed its end over");
+                // The waiter closes its handle as it returns, just after that: waited for, not
+                // sampled.
+                let closed = f.wait_held(pid, handles, std::time::Duration::from_secs(5));
+                assert!(closed, "server {i}: the waiter's handle closed; the VM holds {}", f.held(pid).0);
             }
             assert_eq!(made, [Ok(()); SERVERS.len()]);
-            assert_eq!(p.waiters(), before);
-            assert!(handles.iter().all(|h| *h == handles[0]), "the VM's handles: {handles:?}");
         },
     );
 }
@@ -357,34 +346,27 @@ fn a_served_servers_binding_and_handle_go_with_its_budget() {
                 // Unbound with the budget, while the terms are still held.
                 assert_eq!(p.lookup("/dev/pipe/p").err(), Some(Refused("not_found")), "pipeline {i}");
                 assert_eq!(table(p), paths, "pipeline {i}");
-                assert_eq!(volume.stop(), redoubt_rt::exit::OK);
+                // The terms gone, nothing of the VM's is in flight: the budget went with the
+                // destroy, the send right with its last term, the job's handles with its exit.
+                // What is left to go is the waiter's one handle, once its server is gone.
                 drop(conn);
                 drop(budget);
+                let settled = f.held(pid).0;
+                assert_eq!(volume.stop(), redoubt_rt::exit::OK);
                 // As a session idles between pipelines: the ended server's waiter hands over its
-                // end and closes its handle, just after its last wake-up.
-                let until = p.monotonic_us() + 1_000_000;
+                // end, which the VM takes, and the hub lets the waiter go.
+                let until = p.monotonic_us() + 5_000_000;
                 while p.waiters() == waiters && p.monotonic_us() < until {
                     let soon = p.monotonic_us() + 10_000;
                     p.idle(Some(soon));
                 }
-                let until = std::time::Instant::now() + std::time::Duration::from_secs(1);
-                while handles.is_some_and(|h| f.held(pid).0 != h) && std::time::Instant::now() < until {
-                    std::thread::sleep(std::time::Duration::from_millis(1));
-                }
+                assert_ne!(p.waiters(), waiters, "pipeline {i}: its waiter handed its end over");
+                // Then the waiter closes that handle, on its thread: waited for, not sampled.
+                let closed = f.wait_held(pid, settled - 1, std::time::Duration::from_secs(5));
+                assert!(closed, "pipeline {i}: the waiter's handle closed; the VM holds {}", f.held(pid).0);
                 match handles {
-                    Some(h) => assert_eq!(f.held(pid).0, h, "the VM's handles after pipeline {i}"),
-                    // The waiter closes its own handle after its hand-over, on its thread: the
-                    // count is taken once it has held still for a while.
-                    None => {
-                        let (mut last, mut still) = (f.held(pid).0, 0);
-                        while still < 50 {
-                            std::thread::sleep(std::time::Duration::from_millis(1));
-                            let now = f.held(pid).0;
-                            still = if now == last { still + 1 } else { 0 };
-                            last = now;
-                        }
-                        handles = Some(last);
-                    }
+                    Some(h) => assert_eq!(settled - 1, h, "the VM's handles after pipeline {i}"),
+                    None => handles = Some(settled - 1),
                 }
             }
         },
@@ -478,19 +460,17 @@ fn a_forgotten_connections_requests_reach_no_later_holder_of_its_index() {
             // The server gone, the waiter returns, closing the handle it woke the VM through.
             let before = f.held(pid).0;
             assert_eq!(volume.stop(), redoubt_rt::exit::OK);
-            // Synchronization, not a bound: the whole binary's tests run beside this one.
+            // The VM takes the waiter's last hand-over by idling, and the hub lets it go; then the
+            // waiter closes its handle, on its thread: waited for, not sampled. The bounds are
+            // synchronization: the whole binary's tests run beside this one.
             let until = p.monotonic_us() + 5_000_000;
             while p.waiters() == waiters && p.monotonic_us() < until {
                 let soon = p.monotonic_us() + 10_000;
                 p.idle(Some(soon));
             }
-            let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
-            while f.held(pid).0 != before - 1 && std::time::Instant::now() < until {
-                std::thread::sleep(std::time::Duration::from_millis(1));
-                let soon = p.monotonic_us() + 1_000;
-                p.idle(Some(soon));
-            }
-            assert_eq!(f.held(pid).0, before - 1, "the waiter's handle, closed as it returned");
+            assert_ne!(p.waiters(), waiters, "the waiter handed its end over");
+            let closed = f.wait_held(pid, before - 1, std::time::Duration::from_secs(5));
+            assert!(closed, "the waiter's handle, closed as it returned; the VM holds {}", f.held(pid).0);
             drop(again);
             p.budget_destroy(&second).unwrap();
             let (_, event) = next(p);
