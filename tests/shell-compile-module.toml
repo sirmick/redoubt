@@ -1,0 +1,57 @@
+description = "A module defined at the prompt is compiled on the machine and runs (docs/userland/beamlet.md, \"beamlet on Redoubt\"; docs/servers/init.md, \"Stacks\"): in alice's session over SSH, a three-line defmodule typed at the prompt compiles, answers {:module, ...}, and a call of its function answers; then the session still answers. The compiler is Erlang code on the session VM's scheduler, and its deepest native frames set the stack the steward gives a session VM's threads (docs/testbench.md, \"The memory budget\")"
+arch = ["rv64", "rv32"]
+kind = "boot"
+recipe = "image/boot.toml"
+memory_mib = 1024
+# A boot, a login and one compile: the Elixir compiler runs interpreted on the session's VM.
+timeout_secs = 240
+expect = [
+    '^init: started sshd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
+    '^init: started steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+]
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    '^init: .* (exited|faulted|was killed)',
+    'EXCEPTION',
+    'PROGRAM HALT',
+    'steward: a step failed',
+]
+
+# Each answer is tagged, so a pattern matches what the shell printed and never the echo of the
+# line typed. The block is typed a line at a time, each after the continuation prompt.
+[[session]]
+user = "alice"
+pty = true
+forbid = ['EXCEPTION', 'killed']
+steps = [
+    { expect = '\([0-9]+\)> ' },
+    { send = "defmodule Compiled do\n" },
+    { expect = '\.\.\.\([0-9]+\)> ' },
+    { send = "  def v, do: {:compiled, 41 + 1}\n" },
+    { expect = '\.\.\.\([0-9]+\)> ' },
+    { send = "end\n" },
+    { expect = '\{:module, Compiled,' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:call, Compiled.v()}\n" },
+    { expect = '\{:call, \{:compiled, 42\}\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:zlib, (fn -> z = :zlib.open(); :ok = :zlib.deflateInit(z, 6); d = :zlib.deflate(z, \"hello hello hello\", :finish); :zlib.deflateEnd(z); :zlib.close(z); byte_size(:erlang.iolist_to_binary(d)) end).()}\n" },
+    { expect = '\{:zlib, [0-9]+\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:still, 1 + 1}\n" },
+    { expect = '\{:still, 2\}' },
+    { exit = 0 },
+]
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]
+forward = [22]

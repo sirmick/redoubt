@@ -324,7 +324,7 @@ the loader stub.
 | `path` | lexical path cleaning, so `..` never climbs above a root |
 | `client` | a small synchronous 9P client |
 | `server` | the shared server library ([the serving library](../servers/serving.md)) |
-| `thread` | `spawn`: a closure on a thread of this process, with a stack from `map_anon` that outlives it; `scope`: threads that borrow from their caller, all ended before it returns |
+| `thread` | `spawn`: a closure on a thread of this process, with a stack from `map_anon` that outlives it and has no guard page below it, so an overflow writes over whatever is mapped there and the caller sizes the stack for the deepest call; `scope`: threads that borrow from their caller, all ended before it returns |
 | `sync` | a semaphore, a mutex and a condvar for the threads of one process, whose waiters sleep on an endpoint |
 
 - **Start and end.** `entry!(run)` receives the startup page's address from the loader stub,

@@ -49,6 +49,14 @@ fn allocated<T>(f: impl FnOnce() -> T) -> (usize, T) {
     (BYTES.with(Cell::get), v)
 }
 
+/// The deflater's inline state is small enough to be a stack local wherever the crate builds
+/// one: Redoubt's patch boxes its 64 KiB code buffer (vendor/README.md, "miniz_oxide"), since
+/// `term_to_binary(T, [compressed])` runs it on a scheduler thread's stack.
+#[test]
+fn a_deflaters_inline_state_is_a_few_hundred_bytes() {
+    assert!(core::mem::size_of::<CompressorOxide>() < 512, "{}", core::mem::size_of::<CompressorOxide>());
+}
+
 #[test]
 fn a_deflaters_boxed_state_is_the_constant() {
     let flags = create_comp_flags_from_zip_params(6, 15, 0);

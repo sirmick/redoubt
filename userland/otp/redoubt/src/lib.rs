@@ -641,7 +641,10 @@ pub const SCHEDULERS: &str = "schedulers=";
 pub const MAX_SCHEDULERS: usize = 8;
 
 /// The pages of each scheduler thread's stack after the first: as the steward gives a session
-/// VM's first thread, twice beamlet's measured peak.
+/// VM's first thread (`SESSION_STACK_PAGES`, servers/steward), twice beamlet's largest measured
+/// first-thread peak, 36,136 bytes at the idle prompt; a compile at the prompt peaks at 34,280
+/// (docs/userland/beamlet.md, "beamlet on Redoubt"). Every scheduler carries what any process
+/// may run, and a process runs on whichever holds it.
 pub const SCHEDULER_STACK_PAGES: usize = 18;
 
 /// The schedulers `schedulers=N` among `args` asks for, at most [`MAX_SCHEDULERS`]: exactly one

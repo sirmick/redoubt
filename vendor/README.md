@@ -386,6 +386,16 @@ full output delivers the status once, when the output drains. The signing event 
 requests are offered to `sunset`'s author once they have been reviewed here; the curve change is
 ours.
 
+### `miniz_oxide`
+
+`CompressorOxide`, the deflater's state, keeps its LZ code buffer, `[u8; 64 KiB]`, inline on
+every target but wasm32, so the struct is 65,712 bytes and `compress_to_vec` holds it as a local:
+one frame nearly the size of a scheduler thread's stack on Redoubt, where
+`term_to_binary(T, [compressed])` under the interpreter's frames overflowed it and a `defmodule`
+at the prompt ended the session's VM ([beamlet](../docs/userland/beamlet.md#beamlet-on-redoubt)).
+The patch boxes the buffer under `with-alloc` as the crate already does on wasm32, so the struct
+is a few hundred bytes wherever it is built. It changes no output and can go upstream.
+
 ### `ascii`
 
 `fn from(a: AsciiChar)` binds `a`, also the name of an `AsciiChar` variant. rustc 1.98 makes

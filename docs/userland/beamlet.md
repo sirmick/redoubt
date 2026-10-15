@@ -79,7 +79,7 @@ The VM crate (`beamlet-vm`) is `#![forbid(unsafe_code)]`, and so are `beamlet-re
 
 ### Limits inside one VM
 
-<details><summary>Status: built · partly tested: in a boot, only the process heap limit and the budget's backstop are attacked · tested (39)</summary>
+<details><summary>Status: built · partly tested: in a boot, only the process heap limit and the budget's backstop are attacked · tested (42)</summary>
 
 - host:beamlet-vm::full_mailbox_kills_the_receiver
 - host:beamlet-vm::a_term_equal_to_itself_is_not_scanned
@@ -105,6 +105,9 @@ The VM crate (`beamlet-vm`) is `#![forbid(unsafe_code)]`, and so are `beamlet-re
 - host:beamlet-vm::an_inflater_holds_nothing_beyond_its_own_box
 - bench:beamlet-heap-flood
 - bench:beamlet-budget-flood
+- bench:beamlet-compile-footprint
+- bench:beamlet-compile-flood
+- host:beamlet-vm::a_deflaters_inline_state_is_a_few_hundred_bytes
 - host:beamlet-vm::the_footprint_is_reported_at_the_first_wait_for_input
 - host:beamlet-vm::held_bytes_follow_the_runtime_heap
 - bench:beamlet-footprint
@@ -261,6 +264,33 @@ the prompt: OTP's `group`, `edlin`, `edlin_key`, `group_history`, `prim_tty`, `s
 `gen_statem`, `sys` and `kernel`, with `Redoubt.Term` and the driver. The shell's protocols are not
 consolidated, but nothing at the prompt, nor a plain line, dispatches a protocol on a struct, so
 Elixir's `Protocol` and `Enumerable` load only for a line that does.
+
+That rule sizes the idle VM, and a compile is a workload within it: `beamlet-compile-footprint`
+types a three-line `defmodule` at the prompt under the same manifest, calls the module, and
+judges that the compile fits the session's cap with at least an eighth of it to spare
+(`heap_fits`, [the memory budget](../testbench.md#the-memory-budget)). The compiler's modules
+stay loaded, so its heap peak is 9,135 pages on rv64 and 8,798 on rv32 of the 11,220 cap, 2,085
+and 2,422 pages under it (an eighth is 1,402). It runs one scheduler, so every process is on the
+first thread, the one the scan paints: with two, the compile runs on whichever scheduler holds the
+shell's evaluator, and the second thread's stack is not measured. Its first thread's stack peaks at
+34,280 bytes on rv64 and 25,832 on rv32, under `beamlet-footprint`'s idle 36,136, so the 18-page
+declaration stands. It was 88,888 and 81,056 while `term_to_binary(T, [compressed])`, which the
+compiler calls for a chunk, kept miniz_oxide's whole compressor, 65,712 bytes of it a code buffer,
+as a local of its own function: one native frame larger than the stack left under the
+interpreter's, which `defmodule` at the prompt ended with a store page fault below the first
+scheduler's stack on rv64 and rv32 alike, and `zlib:deflateInit/2` built the same temporary
+on the stack before boxing it (on rv32 most times, not every time). Redoubt's patch to the crate
+boxes the code buffer under `with-alloc`, as the crate does on wasm32
+([patched crates](../testbench.md#patched-crates)), so the state is a few hundred bytes wherever
+it is built and the frame is gone.
+Residual: a session that has compiled has spent its flood headroom on the compiler's code. The
+sixteenth limits are static, so one flooding process after a compile reaches the budget's
+backstop before its own limit, an allocation fails, the VM ends and `init` restarts it: a logout,
+within the session's own budget and no other principal's, where before the compile the process
+would have been killed alone (`beamlet-compile-flood`, both widths: the allocation that fails is
+about 1.2 MiB on rv64 and 2.4 MiB on rv32, from one run of each). The follow-up is the VM deriving its limits from
+the pages not held by loaded code, recomputed after a load, which keeps the guarantee at any
+footprint without resizing a session.
 
 Residual: QEMU's default 256 MiB is out of reach. Its `system` budget leaves the VM about 2,700
 pages beside the other servers, and the VM holds more than that at its prompt (the table above),
@@ -490,7 +520,7 @@ to the VM (`console_resized`), whose `idle` returns for it. There is no wall clo
 
 ### beamlet on Redoubt
 
-Status: built · partly tested: programs and `/net` are not built · tested: bench:beamlet-natives, bench:beamlet-reduction-rate, bench:beamlet-schedulers-mttcg, bench:beamlet-schedulers-one-hart-mttcg, host:beamlet-vm::two_schedulers_lose_nothing_across_the_system_lock, host:beamlet-vm::schedulers_go_offline_and_online_again, host:beamlet-redoubt::two_schedulers_lose_nothing_across_the_system_lock, host:beamlet-redoubt::four_schedulers_lose_nothing_either, host:beamlet-redoubt::without_the_argument_the_vm_has_one_scheduler, host:beamlet-redoubt::the_count_is_one_decimal_argument_capped_and_one_otherwise, host:beamlet-redoubt::the_io_report_counts_the_schedulers, bench:beamlet-boot, bench:beamlet-console, bench:beamlet-files, bench:boot-profile, bench:boot-profile-unverified, bench:pack-outside-module, bench:pack-bad-truncated, bench:pack-bad-wrong-length, bench:pack-bad-wrong-name, bench:beamlet-heap-flood, bench:beamlet-budget-flood, bench:userland-boot, bench:userland-bad-start, bench:userland-read-only, bench:verity-flipped-tree, bench:verity-wrong-root, host:beamlet-redoubt::a_module_is_its_file_and_a_failed_read_is_refused, host:beamlet-redoubt::not_found_at_the_open_is_absent_and_every_other_error_is_refused_by_name, host:beamlet-redoubt::verified_module_lookup_propagates_found_absent_and_refused, host:beamlet-redoubt::verified_application_lookup_propagates_found_absent_and_refused, host:beamlet-redoubt::a_packed_module_comes_from_the_pack_and_any_other_from_the_volume, host:beamlet-redoubt::a_pack_with_a_bad_entry_is_refused_whole, host:testbench::the_boot_pack_is_deterministic_sorted_and_only_of_the_objects, host:beamlet-vm::the_search_is_flat_in_the_pattern_count, host:beamlet-vm::the_matcher_finds_what_every_pattern_at_every_byte_finds
+Status: built · partly tested: programs and `/net` are not built · tested: bench:beamlet-natives, bench:beamlet-reduction-rate, bench:beamlet-schedulers-mttcg, bench:beamlet-schedulers-one-hart-mttcg, bench:shell-compile-module, host:beamlet-vm::two_schedulers_lose_nothing_across_the_system_lock, host:beamlet-vm::schedulers_go_offline_and_online_again, host:beamlet-redoubt::two_schedulers_lose_nothing_across_the_system_lock, host:beamlet-redoubt::four_schedulers_lose_nothing_either, host:beamlet-redoubt::without_the_argument_the_vm_has_one_scheduler, host:beamlet-redoubt::the_count_is_one_decimal_argument_capped_and_one_otherwise, host:beamlet-redoubt::the_io_report_counts_the_schedulers, bench:beamlet-boot, bench:beamlet-console, bench:beamlet-files, bench:boot-profile, bench:boot-profile-unverified, bench:pack-outside-module, bench:pack-bad-truncated, bench:pack-bad-wrong-length, bench:pack-bad-wrong-name, bench:beamlet-heap-flood, bench:beamlet-budget-flood, bench:userland-boot, bench:userland-bad-start, bench:userland-read-only, bench:verity-flipped-tree, bench:verity-wrong-root, host:beamlet-redoubt::a_module_is_its_file_and_a_failed_read_is_refused, host:beamlet-redoubt::not_found_at_the_open_is_absent_and_every_other_error_is_refused_by_name, host:beamlet-redoubt::verified_module_lookup_propagates_found_absent_and_refused, host:beamlet-redoubt::verified_application_lookup_propagates_found_absent_and_refused, host:beamlet-redoubt::a_packed_module_comes_from_the_pack_and_any_other_from_the_volume, host:beamlet-redoubt::a_pack_with_a_bad_entry_is_refused_whole, host:testbench::the_boot_pack_is_deterministic_sorted_and_only_of_the_objects, host:beamlet-vm::the_search_is_flat_in_the_pattern_count, host:beamlet-vm::the_matcher_finds_what_every_pattern_at_every_byte_finds
 
 On Redoubt, beamlet is a native program. Its built `Platform` adapter uses the client library
 ([native programs](native.md#the-client-library)) for the console, files, verified code lookup
@@ -527,7 +557,16 @@ budget, and a connection to the userland disk's `erofsd`, a named handle its arg
   program how many harts there are, so the VM cannot follow the machine; a call that says so is
   a later package's, if an image ever needs one. The first scheduler is beamlet's own thread, and
   each other is a thread of the runtime's `thread::scope` with an 18-page stack, the size of a
-  session VM's first. Several schedulers below.
+  session VM's first: twice the largest first-thread peak the memory cases find, the idle shell's
+  36,136 bytes (`beamlet-footprint`) over a compile's 34,280 (`beamlet-compile-footprint`), now
+  that the compressor `term_to_binary(T, [compressed])` runs is a few hundred bytes and not a
+  65 KiB frame ([what the VM holds at its prompt](#what-the-vm-holds-at-its-prompt)); a module compiled
+  at the prompt over SSH runs (`shell-compile-module`). A helper thread's stack has no guard page
+  ([the native runtime](native.md#redoubt-rt-the-native-runtime)): an overflow there writes over
+  the heap below it, and the VM dies later, not at the overflow. That the second scheduler's
+  stack overflowed under a compile is inferred from one such death, with the compressor still on
+  the stack, not measured: the scan paints the first thread only, and the guard-page node will
+  measure it. Several schedulers below.
 - **`bind=PREFIX=HANDLE`** puts a named handle beamlet was handed at a prefix of its namespace
   (`bind=/home/alice=walfsd:data`): the `bind/2` a session performs for itself
   ([namespaces](sessions.md#namespaces)), for a VM `init` launches alone, whose namespace holds

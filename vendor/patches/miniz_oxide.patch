@@ -1,0 +1,46 @@
+Redoubt's patch to miniz_oxide 0.9.1 as crates.io published it (vendor/README.md, "miniz_oxide").
+Apply with: patch -p1 -d vendor/miniz_oxide < vendor/patches/miniz_oxide.patch
+
+diff --git a/src/deflate/core.rs b/src/deflate/core.rs
+index 5d454db9a..4489e0467 100644
+--- a/src/deflate/core.rs
++++ b/src/deflate/core.rs
+@@ -1,7 +1,7 @@
+ //! Streaming compression functionality.
+ 
+ use alloc::boxed::Box;
+-#[cfg(target_arch = "wasm32")]
++#[cfg(any(target_arch = "wasm32", feature = "with-alloc"))]
+ use alloc::vec;
+ use core::convert::TryInto;
+ use core::{cmp, mem};
+@@ -1580,9 +1580,9 @@ impl ParamsOxide {
+ 
+ #[derive(Clone)]
+ pub(crate) struct LZOxide {
+-    #[cfg(target_arch = "wasm32")]
++    #[cfg(any(target_arch = "wasm32", feature = "with-alloc"))]
+     pub codes: Box<[u8; LZ_CODE_BUF_SIZE]>,
+-    #[cfg(not(target_arch = "wasm32"))]
++    #[cfg(not(any(target_arch = "wasm32", feature = "with-alloc")))]
+     pub codes: [u8; LZ_CODE_BUF_SIZE],
+     pub code_position: usize,
+     pub flag_position: usize,
+@@ -1592,7 +1592,7 @@ pub(crate) struct LZOxide {
+ }
+ 
+ impl LZOxide {
+-    #[cfg(target_arch = "wasm32")]
++    #[cfg(any(target_arch = "wasm32", feature = "with-alloc"))]
+     fn new() -> Self {
+         LZOxide {
+             codes: vec![0; LZ_CODE_BUF_SIZE]
+@@ -1606,7 +1606,7 @@ impl LZOxide {
+         }
+     }
+ 
+-    #[cfg(not(target_arch = "wasm32"))]
++    #[cfg(not(any(target_arch = "wasm32", feature = "with-alloc")))]
+     const fn new() -> Self {
+         LZOxide {
+             codes: [0; LZ_CODE_BUF_SIZE],
