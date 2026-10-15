@@ -1148,8 +1148,8 @@ It is attacked three ways:
   server flooded by one user; a weight-1000 server among eight users of 100. On two, three and
   four harts, `sched-capped` runs the model's scenarios: a heavy budget with one thread on two
   harts while others join, a second cap at three, a capped budget gaining a thread, and one
-  budget spread over four harts; at two harts the shares are recorded under `icount` and judged
-  where the harts run at once (`sched-capped-mttcg`, QEMU's turns below). A kernel whose floor counts the capped budgets
+  budget spread over four harts; at two and three harts the shares are recorded under `icount`
+  and judged where the harts run at once (`sched-capped-mttcg`, QEMU's turns below). A kernel whose floor counts the capped budgets
   (`sched-capped-holds-floor`, a debug-only feature whose queue audit reads the same broken rule)
   passes every rank the oracle checks, and fails late join's shares at two harts, on both widths:
   B gets 52 of 1000 (rv64) and 56 (rv32) against 250 while C takes its hart
@@ -1468,7 +1468,15 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   slice, about 2,600 ticks a slice, so `sched-capped`'s late join reads 449 of 1000 against
   500 (434 at `icount` shift 4) and the oracle's nobody share is 71 of 1000 where it was 30. The
   two-hart shares are recorded there and judged in `sched-capped-mttcg` (497 to 501 over five
-  runs a width). Turns decide where a timeout is answered too: a hart's timer armed for it fires
+  runs a width). Turns fix the order harts take the kernel lock too: in `sched-capped`'s second
+  cap at three harts no timeout fires in the window, every interrupt is a slice end of the hart's
+  own runner, and the three slice ends meet at the lock every slice in one order, so the heavy
+  budget on the last hart waits 1.3 to 2.3 slice-end sections (6,300 to 6,600 ticks each in the
+  checked, traced build) at every slice, 23 to 45 % of its hart, and reads 276 to 340 of 1000
+  against 333 (two misses in five runs alone on main, three in five on a kernel differing only in
+  the phase the threads come onto their harts with); the three-hart shares are recorded there
+  and judged in `sched-capped-mttcg` at three harts (327 to 329 over five runs a width, each
+  heavy budget's lock waits about 1.1M ticks of 60M). Turns decide where a timeout is answered too: a hart's timer armed for it fires
   in the hart's next turn, by which the other hart's call has answered it, so on rv32
   `sched-wake-no-preempt-harts` has at most one wake mid-slice under `icount` (0 or 1 in ten runs,
   and 79 of its interrupts finding nothing due in one); it records them, and
@@ -1516,7 +1524,7 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   `bench-poweroff-missing` keeps one hart too, a bound of the bench's own.
   `sched-latency-tcg` runs at two harts: the kernel's lines wait, whole, for a program's line in
   progress ([the console's one writer](devices.md#the-consoles-one-writer)).
-  `sched-capped` (two, three and four harts), `sched-capped-mttcg` (two), `sched-lock-contention` (two),
+  `sched-capped` (two, three and four harts), `sched-capped-mttcg` (two and three), `sched-lock-contention` (two),
   `sched-lock-contention-4` (four), `sched-wake-no-preempt-harts` and
   `sched-wake-no-preempt-harts-mttcg` (two) keep the counts they are about.
 - **A call within one budget crosses harts.** A wake sends an idle hart the reschedule interrupt

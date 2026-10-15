@@ -1,23 +1,34 @@
-description = "R12 across harts, the capped budgets (kernel/scheduling.md, \"The current minimum and ties\"): the model's four scenarios on the machine (late join, second cap, uncap, spread), each budget's share after a budget wakes or gains a thread judged by the post-check on the kernel's charges net of lock waits against water-filling at the harts the trace states, within 50 per thousand, at three and four harts and recorded at two, judged where the harts run at once (sched-capped-mttcg) (virtual time, checked build, two, three and four harts)"
+description = "R12 across harts, the capped budgets (kernel/scheduling.md, \"The current minimum and ties\"): the model's four scenarios on the machine (late join, second cap, uncap, spread), each budget's share after a budget wakes or gains a thread judged by the post-check on the kernel's charges net of lock waits against water-filling at the harts the trace states, within 50 per thousand, at four harts and recorded at two and three, judged where the harts run at once (sched-capped-mttcg) (virtual time, checked build, two, three and four harts)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true
 icount = "shift=3,sleep=off"
 programs = ["sched-capped"]
 # At one hart no budget is ever capped. Late join and uncap are judged at two harts, second cap at
-# three and spread at two and four (`@` on each line); every run reports all four. At two harts
-# the shares are recorded here and judged in `sched-capped-mttcg` (`hart_shares_from=3`): under
-# icount the harts take turns on one clock, and on rv32 QEMU ends hart 0's turn inside its
-# audit at the return to `kmain` (327 µs against 81) or in `kmain`'s expiry walk at every slice
-# end, about 2,600 ticks a slice billed to nobody on the heavy budget's hart alone (nobody 71 of
-# 1000, against 30 before the slice end cost 12,869 instructions). Late-a there reads 449 (465
-# before; 434 at icount shift=4), and 502 where the harts run at once.
+# three and spread at two and four (`@` on each line); every run reports all four. At two and
+# three harts the shares are recorded here and judged in `sched-capped-mttcg`
+# (`hart_shares_from=4`): under icount the harts take turns on one clock. At two harts on rv32
+# QEMU ends hart 0's turn inside its audit at the return to `kmain` (327 µs against 81) or in
+# `kmain`'s expiry walk at every slice end, about 2,600 ticks a slice billed to nobody on the heavy
+# budget's hart alone (nobody 71 of 1000, against 30 before the slice end cost 12,869
+# instructions). Late-a there reads 449 (465 before; 434 at icount shift=4), and 502 where the
+# harts run at once. At three harts the second cap's window holds no timeout at all: every
+# interrupt is a slice end of the hart's own runner, the three slice ends meet at the kernel lock
+# every slice in an order QEMU's turns fix once set, a slice-end section of this checked traced
+# build is 6,300 to 6,600 ticks, and the heavy budget on the hart last in that order waits 1.3 to
+# 2.3 sections at every slice end: 4.6 to 9.0M ticks of its 19.9M, 23 to 45 % of its hart, taken
+# from its charges. So the 3-hart read measures QEMU's turn order: on rv64 alone on the quiet
+# cores, five runs each, second-a or second-b (whichever sits on that hart) read 277, 280 (two
+# misses of 283) and 287 to 340 on main 146db8897, and 276, 278, 279 (three misses) and 360, 365
+# on IDLE2's 87553025a, the same kernel but for the phase the threads come onto their harts with;
+# where the harts run at once both read 327 to 329 in every run (B63). Spread at four harts is
+# judged here still (10 of 10 on both trees) and has the same exposure.
 smp = [2, 3, 4]
 keep_smp = true
 # Test builds only: the trace ring (never in a default kernel). Under icount a count is the
 # machine's instructions, not a hart's time, so the shares are the kernel's charges (`HART-SHARE`).
 kernel_features = ["sched-trace"]
-post_check = "sched_oracle hart_shares_from=3"
+post_check = "sched_oracle hart_shares_from=4"
 timeout_secs = 1200
 expect = [
     '^HART-SHARE late-a \d+ \d+ 50@2 2:1 100:1 100:1$',
