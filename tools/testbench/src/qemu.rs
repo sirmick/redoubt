@@ -41,7 +41,7 @@ pub enum Verdict {
 /// sends it SIGKILL when the thread that started it ends (the parent-death signal, asked for
 /// between fork and exec, so before QEMU runs at all). A run killed at its timeout leaves no
 /// guest running.
-fn exit_with_parent(qemu: &mut Command) -> &mut Command {
+pub fn exit_with_parent(qemu: &mut Command) -> &mut Command {
     let parent = std::process::id() as libc::pid_t;
     // SAFETY: the hook runs in the child between fork and exec, where only async-signal-safe
     // calls may be made: it makes two system calls, reads errno, and allocates nothing.

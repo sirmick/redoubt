@@ -107,7 +107,7 @@ wires the guest's serial console to your terminal.
 ### Try the system
 
 ```sh
-./launch --system                  # rv64, 4 harts, 1 GiB; prints the ssh line, then boots
+./launch --system                  # rv64, 4 harts, 1 GiB; boots, and prints the ssh line once the port forwards
 ./launch --system --arch rv32      # the same system on the 32-bit machine
 ./launch --system --ssh-port 2200  # another host port for the guest's SSH
 ./launch --system --key ~/.ssh/id_ed25519.pub   # log in with your own key
@@ -119,8 +119,13 @@ wires the guest's serial console to your terminal.
 `--system` boots the whole image: `init`, the servers, the steward, `sshd` and the shell, on the
 image's disk and its read-only userland disk, with QEMU's user network. It is the machine the
 `launch-system` case boots and logs in to. The terminal is the serial console, where alice's
-console session prints its prompt; Ctrl-A X quits QEMU. Once the console prints `sshd: listening
-on port 22`, log in from another terminal with the line `launch` printed:
+console session prints its prompt; Ctrl-A X quits QEMU. `launch` prints the ssh line twice: with
+the QEMU command once the build is done, and again, as `port 2222 forwards to the guest`, once
+QEMU runs and the guest has answered a connection through the forward. The second is the one to
+act on: until QEMU runs nothing holds the port and `ssh` is refused, and between the two lines
+QEMU may wait for its lease of the machine scheduler. If sshd was not yet listening when the
+check connected, wait for the console's `sshd: listening on port 22`; if it was, sshd logs the
+check as its connection 1. Then log in from another terminal:
 
 ```sh
 ssh -p 2222 -i .tmp/launch/id_ed25519 alice@localhost
@@ -145,7 +150,8 @@ printed: it is the image's development host key, the same at every launch.
   it back.
 - **The port** is on 127.0.0.1 only, and the guest reaches nothing outside QEMU.
 - **The build and the boot** each run under a lease of the machine scheduler, `scripts/q`, when its
-  daemon runs: the boot holds a core per hart.
+  daemon runs: the boot holds a core per hart, and `launch` says so before QEMU's lease is
+  waited for. Without a daemon, `launch` says so too and runs both at once.
 
 Things to try once you have a prompt:
 
