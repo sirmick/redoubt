@@ -890,6 +890,7 @@ walked past its cap, and no binary is copied past its own:
 | `CALL_THREADS`, `MAX_QUEUED` | 2 calls out at once, 64 waiting | [`pool.rs`](../../userland/otp/redoubt/src/pool.rs) |
 | `SEND_TIMEOUT_US`, `ATTACH_US`, `HAND_US` | 1 ms a send waits for its receiver, 1 s each of a bind's attach calls, 1 s a thread of the platform's to take its work (one that does not has ended, and is set aside) | [`system.rs`](../../userland/otp/redoubt/src/system.rs) |
 | `MAX_SERVED`, `REQUEST_WAIT_US` | 2 endpoints served, 5 s a request waits for its answer | [`serve.rs`](../../userland/otp/redoubt/src/serve.rs) |
+| `FILE_WAIT_US` | 10 s a file operation waits for each request's answer, for a share, or for a waiter's place | [`files.rs`](../../userland/otp/redoubt/src/files.rs) |
 | `MAX_JOBS` | 16 jobs running at once, a thread of 4 pages each once one is needed | [`jobs.rs`](../../userland/otp/redoubt/src/jobs.rs) |
 
 Handles are resource terms: unforgeable, collected, and never serialisable. A copy of a handle
@@ -962,11 +963,11 @@ Residuals:
   server, inside the session's own table. Holding the handle until the waiter has returned would
   close that window; it stays, stated.
 - The six waiter places are a hard bound: a seventh live server a session uses at once is refused
-  `emfile` after the bound's wait, and a session that needs seven servers at once has no way but
-  to let one go first. And the wait is a fixed second: an ended server whose waiter has not handed
-  its end over by then holds its place too, and the fresh request is refused the same, as one
-  pipeline in sixty-four was on rv32 beside ten bench jobs. A wait bounded by the request's own
-  deadline would close that, and the files layer carries none (open).
+  `emfile` after `FILE_WAIT_US` (10 s), and a session that needs seven servers at once has no way
+  but to let one go first. The wait is the operation's, parked off the VM's thread: an ended
+  server whose waiter has not handed its end over yet holds its place only until it does, and the
+  fresh request is served then (once, with a fixed second on the VM's thread, one pipeline in
+  sixty-four was refused on rv32 beside ten bench jobs).
 
 The namespace and launching natives are the client library's `ns` and `launch`, so policy stays
 in Elixir and encoding in Rust. The file server's operations that name fids (`Redoubt.File`'s
@@ -1155,17 +1156,18 @@ gives its place up when the next one needs it. A session's `piped` is a new serv
 pipeline, so a session runs any number of pipelines, each taking one place while it runs
 (`servers_bound_and_ended_one_after_another_never_run_out_of_waiters`; `pipe-eight`, eight in one
 session). An ended server's waiter hands its end over only once its completion call has failed
-with the server's death and the VM has received the hand-over, so the VM waits for it: when it
-forgets the connection, as the server's budget is destroyed, and at the bound, when a fresh server
-needs a place that an ended one still holds, up to `HAND_US` (1 s) each; once, before it waited,
-six ended pipeds whose waiters had not yet handed over refused a session's seventh pipeline its
-first request as `eio` (`pipe-sixty-four` on rv32 beside other work;
-`a_fresh_connection_at_the_bound_waits_for_an_ended_waiters_hand_over`). Past that wait the
-request is refused `emfile`, the VM's own bound and not a device's error, whether every place is
-held by a live server (`a_fresh_connection_past_the_bound_is_refused_emfile_and_the_live_ones_still_serve`)
-or an ended server's waiter has still not handed over: beside ten bench jobs on rv32 one took
-longer than the second, and a session's fourteenth pipeline was refused so (open; in the
-residuals). No call holds a thread while it waits: a console read,
+with the server's death and the VM has received the hand-over. The VM waits for it when it
+forgets the connection, as the server's budget is destroyed, up to `HAND_US` (1 s); an operation
+that finds every place held parks, off the VM's thread, until an ended server's waiter hands one
+over, or fails `emfile` at `FILE_WAIT_US` (10 s), the VM's own bound and not a device's error
+(`a_fresh_connection_at_the_bound_waits_for_an_ended_waiters_hand_over`: the connect returns
+`Later` at once and the operation completes when the hand-over comes;
+`a_fresh_connection_past_the_bound_is_refused_emfile_and_the_live_ones_still_serve`: every place
+held by a live server, the live ones still served). Once, before the VM waited for a hand-over at
+all, six ended pipeds whose waiters had not yet handed over refused a session's seventh pipeline
+its first request as `eio`, and once a wait of 1 s on the VM's thread was outlasted by a hand-over
+under load and refused a fourteenth (`pipe-sixty-four` on rv32 beside other work): the wait is
+now the operation's, not the VM's, and ten times longer. No call holds a thread while it waits: a console read,
 a file read and a read on a `/net` connection's data file are each one request on the hub, so
 what a person or a peer takes to answer costs nothing but the request. Every 9P server in the
 image serves multiplexed sessions, so no call needs a thread of its own. What the scheduler's

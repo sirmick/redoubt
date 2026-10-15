@@ -457,6 +457,7 @@ pub struct FileInfo {
 pub enum FileError {
     Eacces,
     Ebadf,
+    Ebusy,
     Eexist,
     Einval,
     Eio,
@@ -490,6 +491,7 @@ impl FileError {
         match self {
             FileError::Eacces => "eacces",
             FileError::Ebadf => "ebadf",
+            FileError::Ebusy => "ebusy",
             FileError::Eexist => "eexist",
             FileError::Einval => "einval",
             FileError::Eio => "eio",
