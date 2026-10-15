@@ -1,8 +1,9 @@
 //! Running one boot under QEMU and judging its console output.
 
 use std::collections::VecDeque;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
+use std::os::unix::fs::DirBuilderExt;
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -108,11 +109,49 @@ impl Drop for Reaped {
     }
 }
 
-/// A file QEMU made for the run, removed however the run ends.
-struct Removed(PathBuf);
+/// Where QEMU listens for QMP: a socket in a directory of the run's own. The directory is made
+/// 0700 under the temporary directory, as `mkdtemp` makes one, under a name drawn from
+/// `/dev/urandom`, so whatever the bench's umask only its user reaches the socket, and no other
+/// user can leave a file at a name it predicts. A Unix socket's path must be under 108 bytes,
+/// which a run directory deep in a worktree can pass, so the socket is never there, and a
+/// temporary directory too deep for it is refused before QEMU starts. The directory and the
+/// socket go with the guard, however the run ends; only a bench killed outright leaves it, and
+/// QEMU dies with the bench, so what stays under `$REDOUBT_TMP` is an empty directory nothing
+/// listens in.
+struct QmpDir(PathBuf);
 
-impl Drop for Removed {
-    fn drop(&mut self) { std::fs::remove_file(&self.0).ok(); }
+/// The size of `sun_path`, with its terminating NUL: a socket's path is shorter.
+const SUN_PATH: usize = 108;
+
+impl QmpDir {
+    fn new() -> Result<Self> { Self::under(&std::env::temp_dir()) }
+
+    fn under(tmp: &Path) -> Result<Self> {
+        let dir = loop {
+            let mut random = [0u8; 8];
+            std::fs::File::open("/dev/urandom")?.read_exact(&mut random)?;
+            let dir = tmp.join(format!("redoubt-qmp-{:016x}", u64::from_le_bytes(random)));
+            match std::fs::DirBuilder::new().mode(0o700).create(&dir) {
+                Ok(()) => break Self(dir),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(e).with_context(|| format!("making {}", dir.display())),
+            }
+        };
+        let socket = dir.socket();
+        ensure!(
+            socket.as_os_str().len() < SUN_PATH,
+            "the QMP socket's path {} is {} bytes; a Unix socket's must be under {SUN_PATH}: set REDOUBT_TMP nearer the root",
+            socket.display(),
+            socket.as_os_str().len()
+        );
+        Ok(dir)
+    }
+
+    fn socket(&self) -> PathBuf { self.0.join("qmp.sock") }
+}
+
+impl Drop for QmpDir {
+    fn drop(&mut self) { std::fs::remove_dir_all(&self.0).ok(); }
 }
 
 /// What to boot: the same for a test run and for an interactive session.
@@ -660,11 +699,10 @@ pub fn run(
         Some((qemu, identity)) => (qemu, Some(identity)),
         None => (image.qemu(), None),
     };
-    let qmp_path = qmp_socket();
     // Declared before the guest, so dropped after QEMU is reaped.
-    let _qmp = boot.memory.then(|| Removed(qmp_path.clone()));
-    if boot.memory {
-        qemu.args(["-qmp", &format!("unix:{},server=on,wait=off", qmp_path.display())]);
+    let qmp = if boot.memory { Some(QmpDir::new()?) } else { None };
+    if let Some(qmp) = &qmp {
+        qemu.args(["-qmp", &format!("unix:{},server=on,wait=off", qmp.socket().display())]);
     }
     // launch's line has the console on stdio already (`-nographic`).
     if identity.is_none() {
@@ -768,11 +806,11 @@ pub fn run(
     if console.announced.is_some() && !console.passed_seen {
         return Ok(Verdict::Fail("ended without the reporter's PASSED".into()));
     }
-    if boot.memory {
+    if let Some(qmp) = &qmp {
         if guest.0.try_wait()?.is_some() {
             return Ok(Verdict::Fail("guest exited before its stack measurement".into()));
         }
-        let measured = measure_stacks(image, boot, workspace, log, &qmp_path, &mut console, deadline);
+        let measured = measure_stacks(image, boot, workspace, log, &qmp.socket(), &mut console, deadline);
         match measured {
             Ok(measured) => {
                 for line in measured.lines {
@@ -854,15 +892,6 @@ fn measure_stacks(
         std::fs::remove_file(&dump).ok();
     }
     result
-}
-
-/// Where QEMU listens for QMP: a Unix socket's path must be under 108 bytes, which a run
-/// directory deep in a worktree can pass, so it goes in the temporary directory, named for this
-/// bench and the boot.
-fn qmp_socket() -> PathBuf {
-    static BOOTS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-    let boot = BOOTS.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!("redoubt-qmp-{}-{boot}.sock", std::process::id()))
 }
 
 /// QMP may send asynchronous events between a command and its reply; only `return` or `error`
@@ -1243,8 +1272,8 @@ mod tests {
         }
         // QEMU greets a QMP client only from its main loop, so after it is running: killing the
         // stand-in earlier would test only a race.
-        let qmp = std::env::temp_dir().join(format!("testbench-exit-with-parent-{}.qmp", std::process::id()));
-        std::fs::remove_file(&qmp).ok();
+        let dir = QmpDir::new().expect("a private directory for QMP");
+        let qmp = dir.socket();
         let name = module_path!().split_once("::").map_or("", |(_, path)| path).to_string()
             + "::a_killed_bench_leaves_no_qemu";
         let mut bench = Command::new(std::env::current_exe().expect("this test binary"))
@@ -1279,7 +1308,6 @@ mod tests {
             }
             std::thread::sleep(Duration::from_millis(20));
         }
-        std::fs::remove_file(&qmp).ok();
         bench.kill().expect("killing the stand-in");
         bench.wait().ok();
         // Gone, or a zombie waiting for init to reap it.
@@ -1311,12 +1339,28 @@ mod tests {
         assert!(why.starts_with("`qemu-system-no-such-width` could not be run: "), "{why}");
     }
 
-    /// Each boot's QMP socket is its own, and short enough to bind wherever the run directory is.
+    /// Each boot's QMP socket is its own, in a directory only the bench's user can enter, short
+    /// enough to bind wherever the run directory is, and gone with its guard; a temporary
+    /// directory too deep for a Unix socket's path is refused naming the limit, and leaves nothing.
     #[test]
-    fn a_qmp_socket_path_binds() {
-        let (a, b) = (qmp_socket(), qmp_socket());
-        assert_ne!(a, b);
-        assert!(a.as_os_str().len() < 108, "{}", a.display());
+    fn a_qmp_socket_is_private_and_binds() {
+        use std::os::unix::fs::PermissionsExt;
+        let (a, b) = (QmpDir::new().unwrap(), QmpDir::new().unwrap());
+        assert_ne!(a.0, b.0);
+        assert_eq!(std::fs::metadata(&a.0).unwrap().permissions().mode() & 0o777, 0o700);
+        assert!(a.socket().as_os_str().len() < SUN_PATH, "{}", a.socket().display());
+        let dir = a.0.clone();
+        drop(a);
+        assert!(!dir.exists());
+
+        let deep = std::env::temp_dir()
+            .join(format!("testbench-qmp-deep-{}", std::process::id()))
+            .join("x".repeat(SUN_PATH));
+        std::fs::create_dir_all(&deep).unwrap();
+        let why = QmpDir::under(&deep).err().expect("a path past 108 bytes").to_string();
+        assert!(why.contains("must be under 108"), "{why}");
+        assert_eq!(std::fs::read_dir(&deep).unwrap().count(), 0);
+        std::fs::remove_dir_all(deep.parent().unwrap()).unwrap();
     }
 
     fn modern(args: &[String]) -> usize { args.windows(2).filter(|w| w == &MODERN_VIRTIO).count() }
