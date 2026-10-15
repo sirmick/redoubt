@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use redoubt_client::Name;
-use redoubt_client::aio::{COLLECT_MARGIN_US, Conn, Done, Hub, MAX_WRITE, Outcome, SUBMIT_TIMEOUT_US};
+use redoubt_client::aio::{Conn, Done, Hub, MAX_WRITE, Outcome, SUBMIT_TIMEOUT_US};
 use redoubt_fake_kernel::fake;
 use redoubt_rt::abi::{Error, FOREVER, Handle, MAX_LEND_PAGES, PAGE_SIZE};
 use redoubt_rt::client::{Connection, Lend};
@@ -619,12 +619,17 @@ fn a_caller_busy_past_the_session_bound_keeps_its_session() {
     w.end();
 }
 
+/// A completion call outlives its hold while the server is away (a dispatch; here a pause past
+/// what the old margin allowed): the client puts no clock on it, so the wait returns when the
+/// server is back, the session is kept, and the next request is served.
 #[test]
-fn a_server_that_breaks_its_hold_loses_the_session_at_the_margin() {
+fn a_server_late_past_its_hold_keeps_the_session() {
+    /// Longer than the 50 ms hold and the 1 s margin the client once put on the call.
+    const PAUSE: Duration = Duration::from_millis(1_100);
     let w = World::new();
     let ep = w.connection(8);
     let f = fake();
-    let (server, paused) = (w.server, w.paused.clone());
+    let (server, open, paused) = (w.server, w.open.clone(), w.paused.clone());
     // Set once the read is taken: until then the server may hold the session's opening call, which
     // `until_parked` would take for the completion call and pause the server before the read.
     let taken = Arc::new(AtomicBool::new(false));
@@ -638,18 +643,22 @@ fn a_server_that_breaks_its_hold_loses_the_session_at_the_margin() {
         // measures from.
         sent(&mut hub);
         read_taken.store(true, Ordering::Release);
-        // The server takes the call and stops answering: the call times out a margin past its hold.
+        // The server takes the call and goes away past the hold: the call waits for it.
         let started = Instant::now();
         hub.wait(conn, 50_000).unwrap();
         let waited = started.elapsed();
-        assert!(waited >= Duration::from_micros(50_000 + COLLECT_MARGIN_US), "gave up at {waited:?}");
-        // The session is lost: the read comes back ended, with its buffer.
-        let done = hub.completed().unwrap();
+        assert!(waited >= PAUSE, "the call came back at {waited:?}, before the server was");
+        // The session is kept: the gated read is answered, with its buffer, and a new request is
+        // served.
+        let done = next(&mut hub, conn);
         assert_eq!(
-            (done.tag, done.outcome, done.buffer.unwrap().as_ptr() as usize),
-            (tag, Outcome::Ended, at)
+            (done.tag, data(&done), done.buffer.as_ref().unwrap().as_ptr() as usize),
+            (tag, &b"opened"[..], at)
         );
-        assert_eq!(hub.read(conn, NOW_FID, 0, buffer().0).unwrap_err(), redoubt_client::Error::Disconnected);
+        let second = hub.read(conn, NOW_FID, 0, buffer().0).unwrap();
+        sent(&mut hub);
+        let done = next(&mut hub, conn);
+        assert_eq!((done.tag, data(&done)), (second, &b"hello"[..]));
         1
     });
     let started = Instant::now();
@@ -659,17 +668,11 @@ fn a_server_that_breaks_its_hold_loses_the_session_at_the_margin() {
     }
     until_parked(server);
     paused.store(true, Ordering::Release);
-    assert_eq!(client.join().unwrap(), 1);
-    // The server, answering again, is told of the abandoned call and ends the session: a new
-    // completion call opens a fresh one.
+    std::thread::sleep(PAUSE);
+    // Back, with the gate open: the parked call is answered, and the read goes into a call.
+    open.store(true, Ordering::Release);
     paused.store(false, Ordering::Release);
-    f.as_process(w.client, || {
-        let started = Instant::now();
-        let mut hub = Hub::new();
-        while hub.connect(Endpoint::from_handle(ep)).is_err() {
-            assert!(started.elapsed() < Duration::from_secs(20), "the old session never ended");
-        }
-    });
+    assert_eq!(client.join().unwrap(), 1);
     w.end();
 }
 

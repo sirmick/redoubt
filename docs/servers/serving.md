@@ -214,13 +214,14 @@ stateDiagram-v2
 
 ### Multiplexed connections
 
-<details><summary>Status: built · partly tested: attacked in host tests with the runtime's fake kernel; a boot runs it only in `aio-many-reads` and `aio-many-reads-two` · tested (14)</summary>
+<details><summary>Status: built · partly tested: attacked in host tests with the runtime's fake kernel; a boot runs it only in `aio-many-reads` and `aio-many-reads-two` · tested (15)</summary>
 
 - bench:aio-many-reads
 - bench:aio-many-reads-two
 - host:redoubt-rt::a_sends_pages_count_once_and_go_back_with_its_last_request
 - host:redoubt-rt::a_parked_read_sent_in_a_page_leaves_the_page_to_a_write
 - host:redoubt-rt::a_completion_call_is_held_at_most_its_hold_and_the_servers_bound
+- host:redoubt-rt::a_dispatch_longer_than_the_hold_answers_the_parked_call_after_it
 - host:redoubt-rt::a_never_polling_client_holds_only_its_share
 - host:redoubt-rt::death_with_requests_parked_frees_the_connection
 - host:redoubt-rt::a_death_between_completion_calls_is_found_at_the_session_bound
@@ -257,9 +258,11 @@ connection; the client half is the client library's hub
   in word 2; the server holds nothing for a connection before it, and drops a request that comes
   with no session open. Later ones are parked, one at a time (a second is malformed), and answered
   `[0, bytes, 0, 0]` with R-messages end to end at the front of the lend, or empty when the hold
-  runs out. The client's own timeout on the call is its hold and a margin (`COLLECT_MARGIN_US`,
-  1 s), so a client waits until its next deadline and abandons nothing, and a completion call
-  that times out means the server broke its promise.
+  runs out. The hold is how long the server keeps the call with nothing to say, not when it
+  returns: a server in a dispatch (its file server's time, including the calls that makes to
+  other servers) answers when the mux next runs. So the client puts no clock on the call: a late
+  answer is a busy server, and a dead one frees the call with `Dead`
+  ([R3](../kernel/ipc.md#r3-lends-and-abandoned-calls)).
 - **Served only into a parked completion call's lend.** Requests are answered when a completion
   call is parked, straight into its lend, in the order they came: nothing is copied out or held
   in the server, and a request waiting for a call holds its admission. A read is served only where
@@ -766,6 +769,8 @@ its `Rflush`, never after.
   performed a non-provisional effect (a file write) keeps the effect without learning of it.
 - **Admission counts objects, not bytes.** Bytes are the file server's to meter (`littlefsd`'s and
   `walfsd`'s quotas); every other server keeps no byte count.
+- **A server wedged in a dispatch holds its clients.** Their completion calls come back only
+  when it answers or dies; the bench, not the client, finds a server that never does.
 - **A share of two pages is one page.** At a server whose cap is 2 `Pages` (`consoled`, `erofsd`,
   `bootfsd`) a badge of a non-zero account may hold one page at a time
   ([R26](#r26-admission-fairness): less than half, and at least one), so of two requests too long
