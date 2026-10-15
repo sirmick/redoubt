@@ -1108,6 +1108,65 @@ fn what_a_served_server_returned_goes_with_its_budget_and_is_not_closed_again() 
     );
 }
 
+/// A program launched in a budget the VM carved, given an endpoint the VM serves, gets a send right
+/// with a badge of the launch's own, and what it sends through it is stamped with its budget, so it
+/// goes when the VM destroys that budget, index and all: collecting the request's terms closes
+/// nothing, and the budgets carved after it are still held.
+#[test]
+fn what_a_launched_program_sends_to_a_served_endpoint_goes_with_its_budget_and_is_not_closed_again() {
+    let f = fake();
+    with_session(
+        move |pid| vec![("budget", f.budget(pid)), ("service", f.endpoint(pid))],
+        move |p, pid| {
+            let (service, _) = p.lookup("service").unwrap();
+            p.serve(ME, &service).unwrap();
+            let spec = BudgetSpec { pages: 8, processes: 1, weight: 1, ..Default::default() };
+            let budget = p.budget_create(&spec).unwrap();
+            let launch = Launch {
+                image: b"\x7fELF".to_vec(),
+                budget: budget.clone(),
+                namespace: vec![],
+                handles: vec![("service".into(), service.clone())],
+                args: vec![],
+                stack_pages: None,
+                heap_pages: None,
+                serve: None,
+            };
+            p.launch(ME, 1, launch).unwrap();
+            let child = f.last_launched().unwrap();
+            // The child's one handle is not the receive right.
+            assert_eq!(f.served(pid, &child, 0), None);
+            // The test plays the program, in its budget: it makes an endpoint there and sends the
+            // VM its receive right.
+            let program = f.process(0, &[]);
+            let given = f.play(&child, program)[0];
+            f.run(program, move || {
+                let made = Endpoint::create().unwrap();
+                Endpoint::from_handle(given).send(&[9, 0, 0, 0], &[made.handle()], None, FOREVER).unwrap();
+                0
+            });
+            let (_, Event::Request { request, badge, message, .. }) = next(p) else {
+                panic!("not a request")
+            };
+            assert!(request.is_none());
+            assert!((beamlet_redoubt::LAUNCH_BADGE..u32::MAX as u64).contains(&badge), "badge {badge}");
+            assert_eq!(message.handles.len(), 1);
+            p.budget_destroy(&budget).unwrap();
+            let (_, event) = next(p);
+            assert!(matches!(event, Event::Exit { job: 1, cause: "killed", .. }));
+            // The kernel freed the sent handle's index with its budget; the budgets carved now
+            // take the indices freed, and collecting the request's term closes none of them.
+            let held = f.held(pid).0;
+            let carved: Vec<Object> = (0..REFILLS).map(|_| p.budget_create(&spec).unwrap()).collect();
+            drop(message);
+            assert_eq!(f.held(pid).0, held + REFILLS);
+            for budget in &carved {
+                assert_eq!(p.budget_destroy(budget), Ok(()));
+            }
+        },
+    );
+}
+
 #[test]
 fn a_launch_past_its_jobs_is_refused_and_a_serves_endpoint_with_it() {
     let f = fake();

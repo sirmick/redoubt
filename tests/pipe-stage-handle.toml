@@ -1,0 +1,52 @@
+description = "A stage's handle dies with the stage's budget and closes nothing else (docs/userland/beamlet.md, \"Handles are resource terms\"): the console session comes by a receive right of its own (a pipe-stage launched with serve hands its endpoint back) and serves it, then launches pipe-stage give in a carved budget with that endpoint among its handles. The stage gets a send right with a badge of the launch's own, not the receive right, and sends the session the receive right of an endpoint it made in its budget; the session destroys the budget, carves another, which the kernel gives the freed index, and collects the request's term: the second budget is still held. Then a pipeline runs as before and the session's budget is as it was. Every judged line is the session's"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The image's bundle with pipe-stage public in /boot, as pipe-eight's.
+recipe = "tests/data/pipe/boot.toml"
+# As userland-boot: the principals' budgets, each holding the shell VM's session, need 1 GiB.
+memory_mib = 1024
+timeout_secs = 450
+expect = [
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+    '(^|\] )\{:base, \{\{[0-9]+, [0-9]+\}, \{[0-9]+, [0-9]+\}\}\}$',
+    '(^|\] )\{:handed, \{:exited, 0\}, :ok\}$',
+    '(^|\] )\{:collected, true, \{:exited, 0\}, :ok, :ok\}$',
+    '(^|\] )\{:run, "hi\\n", \[exited: 0\], true\}$',
+]
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    'init: restarted',
+    'EXCEPTION',
+    '\{:collected, false',
+    '\{:run, \{:error',
+]
+
+[[input]]
+after = 'Redoubt shell, on Elixir '
+send = "c = fn -> {:ok, o} = Redoubt.Budget.own(); {:ok, u} = Redoubt.Budget.usage(o); {u.weight, u.processes} end; {:base, before = c.()}\n"
+
+# A stage launched with `serve` answers one call with a copy of its receive right: the session's
+# own endpoint to serve, which outlives the stage's budget (the VM made it, charged to its own).
+[[input]]
+after = '(^|\] )\{:base, \{\{'
+send = "{:ok, image} = File.read(\"/boot/pipe-stage\"); spec = %{pages: 256, processes: 1, weight: 1}; {:ok, b0} = Redoubt.Budget.carve(spec); {:ok, j0, conn} = :redoubt.launch(%{image: image, budget: b0, serve: \"ep\", args: [\"hand\", \"ep\"]}); {:ok, ref} = :redoubt.call(conn, {[0, 0, 0, 0], nil, []}, 2000); right = receive do {:reply, ^ref, {:ok, {_, _, [r]}}} -> r end; {:handed, Redoubt.Process.await(j0, 5000), Redoubt.Budget.destroy(b0)}\n"
+
+# The shell evaluates each line in a fresh process, and a served endpoint's requests go to the
+# process that served it, so the serve and the receive are one line. The request's handle term
+# lives only in the closure's frame, held to its last line, so the collection after it returns
+# drops it: once that closed the index the second budget's handle had taken.
+[[input]]
+after = '(^|\] )\{:handed, '
+send = "f = fn -> :ok = :redoubt.serve(right); {:ok, b1} = Redoubt.Budget.carve(spec); {:ok, j1} = :redoubt.launch(%{image: image, budget: b1, handles: [{\"ep\", right}], args: [\"give\", \"ep\"]}); {badge, sent} = receive do {:request, nil, badge, _, _, {_, _, [sent]}} -> {badge, sent} end; ending = Redoubt.Process.await(j1, 5000); :ok = Redoubt.Budget.destroy(b1); {:ok, b2} = Redoubt.Budget.carve(spec); {badge >= 0x80000000 and sent != nil, ending, b2} end; {launch_badge, ending, b2} = f.(); :erlang.garbage_collect(); {:collected, launch_badge, ending, elem(Redoubt.Budget.usage(b2), 0), Redoubt.Budget.destroy(b2)}\n"
+
+[[input]]
+after = '(^|\] )\{:collected, '
+send = "IO.inspect(case Redoubt.Pipeline.run([{\"pipe-stage\", [\"say\", \"hi\"]}]) do {:ok, r} -> {:run, r.output, r.endings, c.() == before}; refused -> {:run, refused} end)\n"
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"

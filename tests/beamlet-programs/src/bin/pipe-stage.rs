@@ -15,6 +15,10 @@
 //! - `hostile`: writes control sequences to its output and its standard error.
 //! - `attack`: tries every way past its three streams (below), then writes `attack-out` and a newline: its
 //!   output is the only thing it can reach, so that is all the next stage gets.
+//! - `hand NAME`: launched with `serve`, answers the first call on the named handle NAME with a copy of that
+//!   receive right, then exits: how a session comes by an endpoint of its own to serve.
+//! - `give NAME`: makes an endpoint, sends its receive right through the named handle NAME, then exits: a
+//!   stage that hands the session a handle stamped with the stage's budget. These two open no stream.
 //!
 //! What `attack` tries, each of which must fail: any other name in its namespace (`/`, `/boot`,
 //! `/home/alice`, `/dev/cons`, `/dev/pipe`) and any named handle; its input opened for writing, by
@@ -37,9 +41,11 @@ use alloc::vec::Vec;
 use redoubt_client::file::{Connection, File};
 use redoubt_client::ns::Namespace;
 use redoubt_client::{Error, Lend};
-use redoubt_rt::abi::Handle;
+use redoubt_rt::abi::{FOREVER, Handle, Handles};
 use redoubt_rt::handle::Endpoint;
+use redoubt_rt::ipc::Event;
 use redoubt_rt::server::ninep::{DMDIR, mode};
+use redoubt_rt::server::typed::{Outcome, finish};
 use redoubt_rt::startup::Startup;
 use redoubt_rt::wire::proto::ninep_common;
 
@@ -107,9 +113,17 @@ impl Streams {
 }
 
 fn run(startup: &Startup) -> u32 {
+    let args: Vec<&str> = startup.args().collect();
+    if let ["hand" | "give", name] = args.as_slice() {
+        let Some((_, handle)) = startup.handles().find(|(n, _)| n == name) else { return BAD_ARGS };
+        let handle: Handle = handle;
+        return match args[0] {
+            "hand" => hand(Endpoint::from_handle(handle)),
+            _ => give(&Endpoint::from_handle(handle)),
+        };
+    }
     let Ok(mut lend) = Lend::new(LEND_PAGES) else { return NO_STREAM };
     let Ok(ns) = Namespace::from_startup(startup, &mut lend) else { return NO_STREAM };
-    let args: Vec<&str> = startup.args().collect();
     if args.first() == Some(&"attack") {
         attack(startup, &ns, &mut lend);
     }
@@ -191,6 +205,33 @@ fn yes(s: &mut Streams) -> u32 {
         if s.out(b"y\n").is_err() {
             return REFUSED;
         }
+    }
+}
+
+/// Answers the first call on `served` with a copy of it, the receive right.
+fn hand(served: Endpoint) -> u32 {
+    loop {
+        match served.receive(FOREVER, 0) {
+            Ok(Event::Call(request)) => {
+                let mut send = Handles::new();
+                let _ = send.push(served.handle());
+                return match finish(request, &Outcome { words: [0; 4], send, close: Handles::new() }) {
+                    Ok(_) => 0,
+                    Err(_) => REFUSED,
+                };
+            }
+            Ok(_) => {}
+            Err(_) => return REFUSED,
+        }
+    }
+}
+
+/// Sends the receive right of an endpoint made here, stamped with this budget, through `to`.
+fn give(to: &Endpoint) -> u32 {
+    let Ok(made) = Endpoint::create() else { return REFUSED };
+    match to.send(&[0; 4], &[made.handle()], None, FOREVER) {
+        Ok(()) => 0,
+        Err(_) => REFUSED,
     }
 }
 
