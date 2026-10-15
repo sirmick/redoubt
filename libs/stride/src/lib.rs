@@ -1183,17 +1183,22 @@ impl Hint {
 
     /// When hart `h`'s timer must come by this item, given each hart's runner (`runners`, the id of
     /// the budget it runs) and what each hart's timer is armed for (`armed`): at the item if `h`
-    /// runs its payer, if no hart runs the payer, if the payer is `None`, or if no other hart that
-    /// runs the payer is armed at or before it; never otherwise, that hart's timer coming by it.
-    /// So the item's work lands on its payer's hart where it can, and at every return to user
-    /// mode at least one hart is armed at or before each item.
+    /// runs its payer, or if no other hart that covers it, armed at or before it (0: fired and
+    /// re-arming), runs the payer; with the payer running nowhere or `None`, at the item unless
+    /// any other hart covers it; never otherwise, that hart's timer coming by it. So the item's
+    /// work lands on its payer's hart where it can and on one hart, the first to re-arm, where
+    /// it cannot (kernel/timer.md, "The hart timer"), and at every return to user mode at least
+    /// one hart is armed at or before each item.
     pub fn due_on(self, h: usize, runners: &[Option<u64>], armed: &[u64]) -> u64 {
-        let Some(p) = self.payer else { return self.at };
-        if runners[h] == Some(p) {
+        if self.payer.is_some() && runners[h] == self.payer {
             return self.at;
         }
-        let covered =
-            runners.iter().zip(armed).enumerate().any(|(g, (r, a))| g != h && *r == Some(p) && *a <= self.at);
+        let runs = self.payer.filter(|p| runners.contains(&Some(*p)));
+        let covered = runners
+            .iter()
+            .zip(armed)
+            .enumerate()
+            .any(|(g, (r, a))| g != h && *a <= self.at && runs.is_none_or(|p| *r == Some(p)));
         if covered { u64::MAX } else { self.at }
     }
 }

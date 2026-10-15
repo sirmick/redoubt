@@ -98,8 +98,9 @@ pub fn slice_end() -> u64 { TIMER.with(|t| t.slice[hart::index()]) }
 /// earliest timeout and the earliest deadline unless another hart runs the budget that pays for
 /// it and its timer comes by it ([`Hint::due_on`]; kernel/timer.md, "The hart timer"). So the work
 /// a timeout or a deadline makes lands on its payer's hart where it can, not in another budget's
-/// slice; an item whose payer runs nowhere, or that two payers share, every hart comes by, as every
-/// item did before. The harts' runners are read as they are now (`sched::runner_ids`): at the
+/// slice; an item whose payer runs nowhere, or that two payers share, one hart comes by, the first
+/// to re-arm, so at rest a timeout wakes one hart, not every hart. The harts' runners are read as
+/// they are now (`sched::runner_ids`): at the
 /// return to user mode, after the switch, and before `kmain` idles (module docs).
 pub fn rearm() {
     let h = hart::index();
