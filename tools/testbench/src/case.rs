@@ -649,6 +649,9 @@ pub enum Step {
     /// Type nothing for this many seconds, still reading the output, while the bench measures the
     /// guest at rest ([`Boot::idle`]).
     Idle(f64),
+    /// The next step must finish within this many seconds, or the session fails there: a step
+    /// whose answer should be quick is not left to wait out the case's deadline.
+    Within(f64),
 }
 
 #[derive(Debug, Deserialize)]

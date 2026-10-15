@@ -36,7 +36,9 @@ pub fn serve(startup: &Startup) -> u32 {
     // A range that does not mount is served as corrupt, not exited on: a damaged medium must
     // not become a restart loop.
     let Ok(random) = redoubt_rt::handle::random_u64() else { return NO_RANDOM };
-    let walfsd = Walfsd::new(mounted, labels);
+    // The console, for the one line a poisoned volume says while serving.
+    let console = startup.namespace().find(|(path, _)| *path == "/dev/cons").map(|(_, console)| console);
+    let walfsd = Walfsd::new(mounted, labels, console);
     if walfsd.is_corrupt() {
         say(startup, CORRUPT);
     }

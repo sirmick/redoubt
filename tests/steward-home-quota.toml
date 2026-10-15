@@ -40,6 +40,9 @@ steps = [
     { mark = "second-full" },
     { wait = "bob-done" },
     { send = "{:rm, File.rm(\"/home/alice/a\")}\n" },
+    # One remove on a full home answers in seconds; a wrong answer (an `{:error, :eio}` from a
+    # poisoned volume) fails here, not at the case's deadline.
+    { within = 120 },
     { expect = '\{:rm, :ok\}' },
     { send = "{:after_rm, fill.(\"/home/alice/c\", 4096)}\n" },
     { expect = '\{:after_rm, 4096\}' },

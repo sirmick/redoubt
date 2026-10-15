@@ -1,20 +1,24 @@
 //! The files behind the 9P skeleton: one walfs volume, every node carrying the volume's labels.
 
-use alloc::string::String;
+use alloc::format;
+use alloc::rc::Rc;
+use alloc::string::{String, ToString};
 use alloc::vec::Vec;
+use core::cell::Cell;
 
 use redoubt_fileserver::quota::{Ledger, Refusal};
-use redoubt_rt::abi::PAGE_SIZE;
+use redoubt_rt::abi::{Handle, PAGE_SIZE};
 use redoubt_rt::ipc::Caller;
 use redoubt_rt::path;
 use redoubt_rt::server::ninep::{
     DMDIR, FileServer, FileStat, NineError, QTDIR, Qid, REQUEST_STATE, Read, mode,
 };
 use redoubt_rt::server::{Cost, Limits};
+use redoubt_rt::start::say_on;
 use redoubt_rt::wire::proto::littlefsd::ErrorCode;
 use walfs::{Error as FsError, FileHandle, FileType, Filesystem, Metadata, OpenOptions};
 
-use crate::volume::{BLOCK, Blocks, Mounted, Range};
+use crate::volume::{BLOCK, Blocks, Mounted, Range, Why};
 
 /// What admission lets each of `buckets` buckets hold (servers/serving.md R26); the count is the
 /// manifest's `buckets=N`. A call is answered as it arrives; what is held is a multiplexed
@@ -177,27 +181,33 @@ pub struct Walfsd<R: Range> {
     changes: u64,
     /// The one listing window, whoever lists.
     window: Window,
+    /// Why the range's last request faulted ([`Blocks`]), for the line a poisoning says.
+    why: Rc<Cell<Option<Why>>>,
+    /// The console `init` gave this server, if it has one: where a poisoning is said.
+    console: Option<Handle>,
+    /// The line said when the volume was poisoned, once; `None` while it is not.
+    poisoned: Option<String>,
     /// How many passes over a directory listings made.
     #[cfg(test)]
     pub(crate) passes: u32,
 }
 
 impl<R: Range> Walfsd<R> {
-    /// The server for what [`crate::volume::mount`] found, under `labels`. The volume root's
-    /// quota is the data region's bytes, and it holds what is on the volume, counted now; a
-    /// volume that does not count is served as corrupt.
-    pub fn new(mounted: Mounted<R>, labels: Vec<u64>) -> Walfsd<R> {
-        let (fs, read_only, room, share, held) = match mounted {
-            Mounted::Files { mut fs, read_only } => {
+    /// The server for what [`crate::volume::mount`] found, under `labels`, saying what it must on
+    /// `console`. The volume root's quota is the data region's bytes, and it holds what is on the
+    /// volume, counted now; a volume that does not count is served as corrupt.
+    pub fn new(mounted: Mounted<R>, labels: Vec<u64>, console: Option<Handle>) -> Walfsd<R> {
+        let (fs, read_only, room, share, held, why) = match mounted {
+            Mounted::Files { mut fs, read_only, why } => {
                 let room = u64::from(fs.data_blocks()) * u64::from(BLOCK);
                 // Inode 0 and the root are never an entry's.
                 let share = room.div_ceil(u64::from(fs.inode_count().saturating_sub(2).max(1)));
                 match tally(&mut fs, "", share, &[]) {
-                    Ok((held, _)) => (Some(fs), read_only, room, share, held),
-                    Err(_) => (None, read_only, 0, 0, 0),
+                    Ok((held, _)) => (Some(fs), read_only, room, share, held, why),
+                    Err(_) => (None, read_only, 0, 0, 0, why),
                 }
             }
-            Mounted::Corrupt(_) => (None, false, 0, 0, 0),
+            Mounted::Corrupt(_) => (None, false, 0, 0, 0, Rc::new(Cell::new(None))),
         };
         Walfsd {
             fs,
@@ -208,9 +218,31 @@ impl<R: Range> Walfsd<R> {
             ledger: Ledger::new(room, held, walfs::ROOT as u64),
             changes: 0,
             window: Window::default(),
+            why,
+            console,
+            poisoned: None,
             #[cfg(test)]
             passes: 0,
         }
+    }
+
+    /// The line said when the volume was poisoned, if it was (servers/walfsd.md, "Failure and
+    /// restart").
+    pub fn poison_line(&self) -> Option<&str> { self.poisoned.as_deref() }
+
+    /// `what`'s I/O error poisons the volume: served as corrupt from now on, and said once on the
+    /// console, with the range's reason where it has one.
+    fn poison(&mut self, what: &'static str) {
+        self.fs = None;
+        if self.poisoned.is_some() {
+            return;
+        }
+        let why = self.why.get().map_or_else(|| "the device failed".to_string(), |w| w.to_string());
+        let line = format!("walfsd: volume poisoned: {what}: {why}\n");
+        if let Some(console) = self.console {
+            say_on(console, &line);
+        }
+        self.poisoned = Some(line);
     }
 
     /// Whether the volume is served as corrupt: every attach refused with `corrupt`.
@@ -236,18 +268,19 @@ impl<R: Range> Walfsd<R> {
         &self.attr
     }
 
-    /// Runs `op` on the filesystem. A damaged block is `Corrupt` for this request alone
-    /// (servers/walfsd.md, "What is corrupt"); an I/O error poisons the volume until it is
-    /// mounted again (servers/walfsd.md, "Failure and restart"), and from then on every request
-    /// is corrupt.
+    /// Runs `op`, the operation `what`, on the filesystem. A damaged block is `Corrupt` for this
+    /// request alone (servers/walfsd.md, "What is corrupt"); an I/O error poisons the volume
+    /// until it is mounted again (servers/walfsd.md, "Failure and restart"), and from then on
+    /// every request is corrupt.
     pub(crate) fn with<T>(
         &mut self,
+        what: &'static str,
         op: impl FnOnce(&mut Filesystem<Blocks<R>>) -> Result<T, FsError>,
     ) -> Result<T, Failure> {
         let fs = self.fs.as_mut().ok_or(Failure::Fs(FsError::Corrupt))?;
         let r = op(fs);
         if r.as_ref().is_err_and(|e| matches!(e, FsError::Io | FsError::Poisoned)) {
-            self.fs = None;
+            self.poison(what);
         }
         r.map_err(Failure::Fs)
     }
@@ -256,7 +289,7 @@ impl<R: Range> Walfsd<R> {
     /// Anything else is `removed`, so a fid never reaches a file that took the place of the one
     /// it was on. Returns what `stat` says of it now.
     pub(crate) fn find(&mut self, node: &Node) -> Result<Metadata, Failure> {
-        match self.with(|fs| fs.stat(&node.path)) {
+        match self.with("stat", |fs| fs.stat(&node.path)) {
             Ok(m) if m.inode == node.ino && m.generation == node.generation => Ok(m),
             Ok(_) | Err(Failure::Fs(FsError::NoEntry | FsError::NotDir)) => Err(Failure::Removed),
             Err(e) => Err(e),
@@ -265,7 +298,7 @@ impl<R: Range> Walfsd<R> {
 
     /// The node for the entry at `path`.
     pub(crate) fn node_at(&mut self, path: String) -> Result<Node, Failure> {
-        let m = self.with(|fs| fs.stat(&path))?;
+        let m = self.with("stat", |fs| fs.stat(&path))?;
         Ok(Node::at(path, &m))
     }
 
@@ -284,7 +317,7 @@ impl<R: Range> Walfsd<R> {
 
     /// The bytes the directory at `dir` holds in blocks.
     pub(crate) fn dir_size(&mut self, dir: &str) -> Result<u64, Failure> {
-        self.with(|fs| fs.stat(dir)).map(|m| m.size)
+        self.with("stat", |fs| fs.stat(dir)).map(|m| m.size)
     }
 
     /// Moves the change generation on: every change to the volume calls this first, so no
@@ -314,12 +347,12 @@ impl<R: Range> Walfsd<R> {
     /// What the entry at `path` holds: its share, and a file's blocks or all that lies under a
     /// directory, its own blocks included. No live root is at or under it.
     pub(crate) fn holds(&mut self, path: &str) -> Result<u64, Failure> {
-        let m = self.with(|fs| fs.stat(path))?;
+        let m = self.with("stat", |fs| fs.stat(path))?;
         let under = match m.kind {
             FileType::File => file_bytes(m.size),
             FileType::Dir => {
                 let share = self.share;
-                self.with(|fs| tally(fs, path, share, &[]))?.0
+                self.with("count", |fs| tally(fs, path, share, &[]))?.0
             }
         };
         Ok(self.share.saturating_add(under))
@@ -332,7 +365,7 @@ impl<R: Range> Walfsd<R> {
         let live = self.ledger.charges().unwrap();
         let share = self.share;
         for (_, path, quota, held, reserve) in self.ledger.roots() {
-            let counted = self.with(|fs| tally(fs, &path, share, &live)).unwrap();
+            let counted = self.with("count", |fs| tally(fs, &path, share, &live)).unwrap();
             assert_eq!((held, reserve), counted, "the root at {path:?}");
             assert!(over || held + reserve <= quota, "the root at {path:?}: {held} + {reserve} > {quota}");
         }
@@ -346,7 +379,7 @@ impl<R: Range> Walfsd<R> {
         op: impl FnOnce(&mut Filesystem<Blocks<R>>, FileHandle) -> Result<T, FsError>,
     ) -> Result<T, Failure> {
         self.find(node)?;
-        self.with(|fs| {
+        self.with("open", |fs| {
             let h = fs.open(&node.path, options)?;
             let r = op(fs, h);
             let closed = fs.close(h);
@@ -358,13 +391,13 @@ impl<R: Range> Walfsd<R> {
     /// Creates the file `path` in `dir`, which must not hold it: a create that finds the name
     /// taken is `exists`, never an open of what is there.
     pub(crate) fn create_file(&mut self, path: &str) -> Result<(), Failure> {
-        match self.with(|fs| fs.stat(path)) {
+        match self.with("stat", |fs| fs.stat(path)) {
             Ok(_) => return Err(Failure::Fs(FsError::Exists)),
             Err(Failure::Fs(FsError::NoEntry)) => {}
             Err(e) => return Err(e),
         }
         let new = OpenOptions { write: true, create: true, ..OpenOptions::default() };
-        self.with(|fs| {
+        self.with("create", |fs| {
             let h = fs.open(path, new)?;
             fs.close(h)
         })
@@ -386,7 +419,7 @@ impl<R: Range> Walfsd<R> {
         {
             self.passes += 1;
         }
-        self.with(|fs| {
+        self.with("list", |fs| {
             fs.read_dir(&dir.path, |entry| {
                 let Ok(name) = core::str::from_utf8(entry.name) else { return };
                 if !path::valid_name(name) || kept.is_err() || w.entries.len() == WINDOW {
@@ -568,7 +601,7 @@ impl<R: Range> FileServer for Walfsd<R> {
             Err(Refusal::Refused) => Err(text::QUOTA_REFUSED),
             Err(Refusal::Count(e)) => {
                 if matches!(e, FsError::Io | FsError::Poisoned) {
-                    self.fs = None;
+                    self.poison("count");
                 }
                 Err(nine(Failure::Fs(e)))
             }
@@ -638,7 +671,7 @@ impl<R: Range> FileServer for Walfsd<R> {
         });
         // A write that filled the volume part way, or failed after some transactions, left the
         // file as long as it now is.
-        if let Ok(now) = self.with(|fs| fs.stat(&node.path)) {
+        if let Ok(now) = self.with("stat", |fs| fs.stat(&node.path)) {
             self.ledger.change(i, file_bytes(now.size), file_bytes(old));
         }
         written.map_err(nine)
@@ -657,7 +690,7 @@ impl<R: Range> FileServer for Walfsd<R> {
     ) -> Result<Option<(Node, FileStat)>, NineError> {
         if self.window.holds(dir, self.changes, index) {
             // Nothing changed since the fill found `dir`, unless the volume failed meanwhile.
-            self.with(|_| Ok(())).map_err(nine)?;
+            self.with("attach", |_| Ok(())).map_err(nine)?;
         } else {
             self.fill(dir, index).map_err(nine)?;
         }
@@ -678,7 +711,7 @@ impl<R: Range> FileServer for Walfsd<R> {
         let i = self.room(&dir.path, self.share + u64::from(BLOCK)).map_err(nine)?;
         self.changing(i, &dir.path, |walfsd| {
             if perm & DMDIR != 0 {
-                walfsd.with(|fs| fs.mkdir(&path))?;
+                walfsd.with("mkdir", |fs| fs.mkdir(&path))?;
             } else {
                 walfsd.create_file(&path)?;
             }
@@ -705,7 +738,7 @@ impl<R: Range> FileServer for Walfsd<R> {
         let dir = parent(&node.path);
         let i = self.ledger.holder(dir);
         self.changed();
-        self.with(|fs| fs.remove(&node.path)).map_err(nine)?;
+        self.with("remove", |fs| fs.remove(&node.path)).map_err(nine)?;
         self.ledger.change(i, 0, held);
         Ok(())
     }

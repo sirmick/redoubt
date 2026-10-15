@@ -72,7 +72,7 @@ impl<R: Range> Typed<'_, R> {
         let to = fs.found_child(&new_dir, r.new_name).map_err(code)?;
         // A rename onto itself changes nothing, if there is anything to rename.
         if from == to {
-            return fs.with(|fs| fs.stat(&from)).map(|_| ()).map_err(code);
+            return fs.with("stat", |fs| fs.stat(&from)).map(|_| ()).map_err(code);
         }
         // Moving a live root or a directory holding one, or renaming over a live root's
         // directory, would end its connections (servers/walfsd.md, "Quotas").
@@ -93,7 +93,7 @@ impl<R: Range> Typed<'_, R> {
         let dst = fs.room(new_dir.path(), crossing + u64::from(BLOCK)).map_err(code)?;
         fs.changing(dst, new_dir.path(), |fs| {
             // walfs refuses a directory moved into itself (`Invalid`, so `not_permitted`).
-            fs.with(|fs| fs.rename(&from, &to))?;
+            fs.with("rename", |fs| fs.rename(&from, &to))?;
             fs.ledger.change(src, 0, moved);
             fs.ledger.change(dst, moved, replaced);
             Ok(())
@@ -122,7 +122,7 @@ impl<R: Range> Typed<'_, R> {
         let copy = |walfsd: &mut Walfsd<R>| {
             walfsd.create_file(&to)?;
             walfsd.ledger.change(root, walfsd.share(), 0);
-            let copied = walfsd.with(|fs| {
+            let copied = walfsd.with("copy", |fs| {
                 let from = fs.open(src.path(), OpenOptions { read: true, ..OpenOptions::default() })?;
                 let into = match fs.open(&to, OpenOptions { write: true, ..OpenOptions::default() }) {
                     Ok(into) => into,
@@ -150,8 +150,8 @@ impl<R: Range> Typed<'_, R> {
             });
             // What the copy left is charged, counted afresh: the whole file, or nothing once a
             // failed copy is removed.
-            let left = walfsd.with(|fs| fs.stat(&to)).map(|m| m.size).unwrap_or(0);
-            if copied.is_err() && walfsd.with(|fs| fs.remove(&to)).is_ok() {
+            let left = walfsd.with("stat", |fs| fs.stat(&to)).map(|m| m.size).unwrap_or(0);
+            if copied.is_err() && walfsd.with("remove", |fs| fs.remove(&to)).is_ok() {
                 walfsd.ledger.change(root, 0, walfsd.share());
             } else {
                 walfsd.ledger.change(root, file_bytes(left), 0);
@@ -176,7 +176,7 @@ impl<R: Range> Typed<'_, R> {
         fs.writable().map_err(code)?;
         fs.find(&node).map_err(code)?;
         fs.changed();
-        fs.with(|fs| fs.set_attr(node.path(), s.attr, s.value)).map_err(code)
+        fs.with("set_attr", |fs| fs.set_attr(node.path(), s.attr, s.value)).map_err(code)
     }
 
     fn get_attr(&mut self, caller: &Caller, g: &GetAttr) -> Result<&[u8], ErrorCode> {
@@ -187,7 +187,7 @@ impl<R: Range> Typed<'_, R> {
         if g.attr == 0 {
             return Err(ErrorCode::NotFound);
         }
-        let value = fs.with(|fs| fs.get_attr(node.path(), g.attr)).map_err(code)?;
+        let value = fs.with("get_attr", |fs| fs.get_attr(node.path(), g.attr)).map_err(code)?;
         Ok(fs.keep_attr(value))
     }
 }

@@ -728,7 +728,21 @@ unsafe impl redoubt_rt::Transport for Fake {
             s.calls.push((pid, name));
             if let Some(i) = s.refusals.iter().position(|(p, c, _, _)| *p == pid && *c == name) {
                 if s.refusals[i].2 == 0 {
-                    return Err(s.refusals.remove(i).3);
+                    let error = s.refusals.remove(i).3;
+                    // A `call` refused before receipt is an outcome, as the kernel's `Busy` or
+                    // `Refused` is: its status the error, its lend returned, no reply.
+                    if let Call::Call { lend, .. } = call {
+                        return Ok(Return::Call(CallOutcome {
+                            status: Err(error),
+                            lend: if lend.is_some() {
+                                LendDisposition::Returned
+                            } else {
+                                LendDisposition::None
+                            },
+                            reply_present: false,
+                        }));
+                    }
+                    return Err(error);
                 }
                 s.refusals[i].2 -= 1;
             }

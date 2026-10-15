@@ -182,6 +182,12 @@ pub fn note_console(startup: &Startup) {
 /// retried: for a server (`littlefsd`, `verityd`), serving matters more than the line.
 pub fn say(startup: &Startup, line: &str) {
     let Some((_, console)) = startup.namespace().find(|(path, _)| *path == "/dev/cons") else { return };
+    say_on(console, line);
+}
+
+/// Says `line` on `console`, a `/dev/cons` connection's handle, as [`say`] does, for a server
+/// that found its console at start and speaks later (`walfsd`, when its volume is poisoned).
+pub fn say_on(console: Handle, line: &str) {
     let Ok(mut lend) = Lend::new(1) else { return };
     let console = Connection::new(Endpoint::from_handle(console));
     let _ = console
