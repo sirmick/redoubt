@@ -328,10 +328,11 @@ pub fn identity(c: &mut Ctx, _a: &[Term]) -> R {
 
 /// `launch(#{image, budget, namespace, handles, args, stack_pages, heap_pages, serve})`: `{ok, Job}`,
 /// and the job's end arrives as `{exit, Job, Cause, Code}`. `image` is the program's bytes and
-/// `budget` one the caller carved; `namespace` is `[{Path, Connection}]` and `handles` `[{Name,
-/// Handle}]`, at most [`MAX_START_HANDLES`] together with `serve`'s; `args` is `[Binary]`. With
-/// `serve => Name`, the child is given a new endpoint's receive right as the named handle `Name`, and
-/// the answer is `{ok, Job, Connection}`, the caller's send right to it.
+/// `budget` one the caller carved (the platform tells the child its pages); `namespace` is `[{Path,
+/// Connection}]` and `handles` `[{Name, Handle}]`, at most [`MAX_START_HANDLES`] together with
+/// `serve`'s; `args` is `[Binary]`. With `serve => Name`, the child is given a new endpoint's
+/// receive right as the named handle `Name`, and the answer is `{ok, Job, Connection}`, the
+/// caller's send right to it.
 pub fn launch(c: &mut Ctx, a: &[Term]) -> R {
     let f = fields(
         c,

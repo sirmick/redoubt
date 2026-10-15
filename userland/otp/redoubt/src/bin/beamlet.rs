@@ -1,12 +1,13 @@
 //! `beamlet`: the Elixir VM on Redoubt, a program `init` starts like any other
 //! (docs/userland/beamlet.md, "beamlet on Redoubt").
 //!
-//!     beamlet budget_pages=N endpoint=NAME [schedulers=N] [report_memory] [report_io]
+//!     beamlet endpoint=NAME [schedulers=N] [report_memory] [report_io]
 //!             [bind=PREFIX=HANDLE]... [principal=NAME [label=NAME:ID]... [context=NAME] [home=/PATH]]
 //!             MODULE [FUNCTION]
 //!
-//! Its arguments, from its startup block, give its budget's pages, which size the VM's limits
-//! ([`beamlet_redoubt::limits`]), the handle its userland volume is reached by, its schedulers
+//! Its startup block gives its budget's pages, which size the VM's limits
+//! ([`beamlet_redoubt::limits`]), filled by its launcher from the budget it made for it
+//! (`Startup::budget_pages`). Its arguments give the handle its userland volume is reached by, its schedulers
 //! ([`beamlet_redoubt::schedulers`], one unless it is told more), ask for its memory
 //! breakdown at its first prompt ([`beamlet_redoubt::REPORT_MEMORY`]), say what its I/O cost when
 //! it ends ([`beamlet_redoubt::REPORT_IO`]), bind handles it was handed at prefixes of its
@@ -50,7 +51,7 @@ redoubt_rt::entry!(start);
 /// The exit code for a startup block without a module to run, or without the handle `endpoint=`
 /// names, or for a start module the userland volume does not hold.
 const USAGE: u32 = 2;
-/// The exit code for a missing or malformed `budget_pages=N`, before the VM starts: without it
+/// The exit code for a startup block that tells it no budget, before the VM starts: without it
 /// the VM's limits would be its defaults, far above any budget; or for no `endpoint=NAME`.
 const BAD_ARGS: u32 = 4;
 /// The argument naming the handle the userland volume is reached by.
@@ -59,10 +60,11 @@ const ENDPOINT: &str = "endpoint=";
 const LEND_PAGES: usize = 4;
 
 fn start(startup: &Startup) -> u32 {
-    // `budget_pages=N`, anywhere, sizes the VM's limits, and `report_memory`, anywhere, asks for
-    // the breakdown. The rest are MODULE [FUNCTION].
-    let Some(budget_pages) = beamlet_redoubt::budget_pages(startup.args()) else {
-        say(startup, "beamlet: no budget_pages=N, or a malformed one, in its arguments");
+    // The block's budget pages size the VM's limits: the launcher's word for the budget it made,
+    // which no argument could keep equal to by hand. `report_memory`, anywhere, asks for the
+    // breakdown. The rest are MODULE [FUNCTION].
+    let Some(budget_pages) = startup.budget_pages() else {
+        say(startup, "beamlet: its startup block tells it no budget");
         return BAD_ARGS;
     };
     // `endpoint=NAME`, anywhere: the handle the userland volume is reached by.
@@ -78,8 +80,7 @@ fn start(startup: &Startup) -> u32 {
         return BAD_ARGS;
     }
     let mut args = startup.args().filter(|arg| {
-        !arg.starts_with(beamlet_redoubt::BUDGET_PAGES)
-            && !arg.starts_with(ENDPOINT)
+        !arg.starts_with(ENDPOINT)
             && !arg.starts_with(beamlet_redoubt::BIND)
             && !arg.starts_with(beamlet_redoubt::SCHEDULERS)
             && *arg != beamlet_redoubt::REPORT_MEMORY

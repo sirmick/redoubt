@@ -72,7 +72,6 @@
 - [Follow-ups](todo/README.md)
   - [Kernel attack gaps](todo/kernel-attack-gaps.md)
   - [Invisible format characters pass the terminal guard](todo/shell-invisible-format.md)
-  - [beamlet is told its budget by an argument the manifest keeps equal by hand](todo/beamlet-budget-from-startup.md)
   - [A private directory for the QMP socket](todo/qmp-socket-private-dir.md)
 - [Beyond M6](beyond/README.md)
   - [The FPGA platform](beyond/fpga-platform.md)

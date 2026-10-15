@@ -628,11 +628,6 @@ pub fn identity(args: &[&str]) -> Option<Identity> {
     Some(Identity { principal, labels, context, home })
 }
 
-/// The argument that gives the VM its budget's pages, required on the machine: a program cannot
-/// read its own budget (it holds no budget handle), so the manifest that sets the budget says it
-/// again here.
-pub const BUDGET_PAGES: &str = "budget_pages=";
-
 /// The argument that has the platform say, when the VM ends, how many requests went through the
 /// hub and how many threads it ran: the scheduler and the waiters, and no thread per request.
 pub const REPORT_IO: &str = "report_io";
@@ -672,17 +667,6 @@ pub const LIMIT_SHARE: u64 = 16;
 /// process (two words for a 16-byte term, a binary's bytes in eights), not the machine's word.
 pub const VM_WORD_BYTES: u64 = 8;
 
-/// The pages of `budget_pages=N` among `args`: exactly one, with N a decimal number above zero;
-/// otherwise `None`.
-pub fn budget_pages<'a>(args: impl Iterator<Item = &'a str>) -> Option<u64> {
-    let mut given = args.filter_map(|arg| arg.strip_prefix(BUDGET_PAGES));
-    let (Some(n), None) = (given.next(), given.next()) else { return None };
-    if n.is_empty() || !n.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    n.parse().ok().filter(|&pages| pages > 0)
-}
-
 /// The VM's limits for a budget of `budget_pages` pages: one process's heap (`max_heap_words`),
 /// all ETS tables together (`max_ets_words`) and `persistent_term` (`max_persistent_words`) each
 /// get a sixteenth of it ([`LIMIT_SHARE`]), in the VM's words ([`VM_WORD_BYTES`]): the same bytes
@@ -705,7 +689,8 @@ pub fn limits(budget_pages: Option<u64>) -> Limits {
 /// with the natives the shell's modules need, and writes how it ended to the console: the value
 /// it returned, or the exception that ended it. The result is the process's exit code: 0 once the
 /// function ran, however it ended; 1 if the VM could not start it or failed. The VM's limits
-/// are sized to its budget, `budget_pages`, if the embedder knows it ([`limits`]). With
+/// are sized to its budget, `budget_pages`, if the embedder knows it ([`limits`]; on the machine
+/// the startup block carries it, `Startup::budget_pages`). With
 /// `report_memory`, the VM prints its memory breakdown when it first waits for console input.
 pub fn run(
     startup: &Startup,

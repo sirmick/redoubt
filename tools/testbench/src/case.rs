@@ -1483,12 +1483,12 @@ mod tests {
         assert!(matches!(&programs.programs[4], Program::Zeros { zeros: 4096 }));
     }
 
-    /// Every manifest that starts `beamlet`, the image's and the cases', gives it
-    /// `budget_pages=N` with N its budget's pages: the argument sizes the VM's limits, and
-    /// nothing else keeps it equal to the budget. The stopgap until the startup block carries
-    /// the budget (docs/todo/beamlet-budget-from-startup.md).
+    /// No manifest, the image's or a case's, names `budget_pages`: `beamlet` is told its budget
+    /// by its startup block, which its launcher fills from the budget it made (servers/init.md,
+    /// "The startup block"), and an argument kept equal to it by hand would be ignored and
+    /// mislead a reader into thinking it sized anything.
     #[test]
-    fn every_beamlet_is_told_its_own_budget() {
+    fn no_manifest_names_budget_pages() {
         fn manifests(dir: &Path, found: &mut Vec<PathBuf>) {
             for entry in std::fs::read_dir(dir).unwrap() {
                 let path = entry.unwrap().path();
@@ -1509,14 +1509,14 @@ mod tests {
                 continue;
             };
             let Some(servers) = json.get("servers").and_then(|s| s.as_array()) else { continue };
-            for server in servers.iter().filter(|s| s["program"] == "beamlet") {
-                let pages =
-                    server["budget"]["pages"].as_str().unwrap_or_else(|| panic!("{path:?}: no budget"));
-                let args: Vec<&str> =
-                    server["args"].as_array().into_iter().flatten().filter_map(|a| a.as_str()).collect();
-                let given: Vec<&str> = args.iter().filter_map(|a| a.strip_prefix("budget_pages=")).collect();
-                assert_eq!(given, [pages], "{path:?}: beamlet's budget_pages, against its budget");
-                beamlets += 1;
+            for server in servers {
+                let args = server["args"].as_array().into_iter().flatten().filter_map(|a| a.as_str());
+                let named: Vec<&str> = args.filter(|a| a.starts_with("budget_pages=")).collect();
+                assert!(
+                    named.is_empty(),
+                    "{path:?}: {named:?} sizes nothing: the startup block carries the budget"
+                );
+                beamlets += usize::from(server["program"] == "beamlet");
             }
         }
         assert!(beamlets >= 4, "the beamlet cases' manifests were not found ({beamlets})");

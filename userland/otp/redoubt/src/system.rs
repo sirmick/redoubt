@@ -105,8 +105,10 @@ impl Drop for Owned {
 pub(crate) enum Kind {
     /// A 9P connection, attached.
     Connection(Connection),
-    /// A budget.
-    Budget,
+    /// A budget, and its pages: what the VM carved it with, or for its own, what its startup block
+    /// told it (0 for none). A child launched in it is told them in its block, so no caller keeps
+    /// a number equal to the budget by hand.
+    Budget { pages: u64 },
     /// Any other handle: an endpoint or a receive right.
     Endpoint,
 }
@@ -209,7 +211,11 @@ impl Sys {
                 None => sys.known.push(Known {
                     owned: Arc::new(Owned::kept(handle)),
                     name: Some(name.to_string()),
-                    kind: if name == BUDGET { Kind::Budget } else { Kind::Endpoint },
+                    kind: if name == BUDGET {
+                        Kind::Budget { pages: startup.budget_pages().unwrap_or(0) }
+                    } else {
+                        Kind::Endpoint
+                    },
                     returns: None,
                 }),
             }
@@ -309,11 +315,11 @@ pub(crate) fn worker(
     Ok(go)
 }
 
-/// A budget's handle, or `wrong_object` before any kernel call.
-fn budget(object: &Object) -> Result<Handle, Refused> {
+/// A budget's handle and its pages, or `wrong_object` before any kernel call.
+fn budget(object: &Object) -> Result<(Handle, u64), Refused> {
     let cap = cap(object)?;
     match cap.kind {
-        Kind::Budget => Ok(cap.handle()),
+        Kind::Budget { pages } => Ok((cap.handle(), pages)),
         _ => Err(Refused("wrong_object")),
     }
 }
@@ -322,7 +328,7 @@ fn budget(object: &Object) -> Result<Handle, Refused> {
 fn endpoint(object: &Object) -> Result<Handle, Refused> {
     let cap = cap(object)?;
     match cap.kind {
-        Kind::Budget => Err(Refused("wrong_object")),
+        Kind::Budget { .. } => Err(Refused("wrong_object")),
         _ => Ok(cap.handle()),
     }
 }
@@ -362,7 +368,7 @@ impl System for Redoubt {
         let cap = cap(handle)?;
         let conn = match &cap.kind {
             Kind::Connection(conn) => conn.clone(),
-            Kind::Budget => return Err(Refused("not_a_connection")),
+            Kind::Budget { .. } => return Err(Refused("not_a_connection")),
             Kind::Endpoint => match self.sys.find(cap.handle()) {
                 Some(i) if matches!(self.sys.known[i].kind, Kind::Connection(_)) => {
                     let Kind::Connection(conn) = &self.sys.known[i].kind else { unreachable!("matched") };
@@ -482,7 +488,7 @@ impl System for Redoubt {
         };
         let child = Budget::from_handle(parent).create_child(&spec).map_err(|e| name(e.into()))?;
         let life = Some(Arc::new(Life::default()));
-        Ok(Cap::object(Arc::new(Owned::under(child.handle(), life)), Kind::Budget))
+        Ok(Cap::object(Arc::new(Owned::under(child.handle(), life)), Kind::Budget { pages: spec.pages }))
     }
 
     /// Destroyed, a budget the VM carved takes its handle with it, and the handles its servers
@@ -495,7 +501,7 @@ impl System for Redoubt {
     /// term goes, nothing is sent on it after, and the namespace holds no entry to a server that
     /// is gone.
     fn budget_destroy(&mut self, b: &Object) -> Result<(), Refused> {
-        Budget::from_handle(budget(b)?).destroy().map_err(|e| name(e.into()))?;
+        Budget::from_handle(budget(b)?.0).destroy().map_err(|e| name(e.into()))?;
         if let Some(life) = &cap(b)?.owned.life {
             life.end();
             let (ns, io) = (&mut self.files.ns, &mut self.io);
@@ -514,7 +520,7 @@ impl System for Redoubt {
     }
 
     fn budget_usage(&mut self, b: &Object) -> Result<Usage, Refused> {
-        let u = Budget::from_handle(budget(b)?).usage().map_err(|e| name(e.into()))?;
+        let u = Budget::from_handle(budget(b)?.0).usage().map_err(|e| name(e.into()))?;
         Ok(Usage {
             pages: (u.pages_limit, u.pages_usage),
             processes: (u.processes_limit.into(), u.processes_usage.into()),
@@ -532,7 +538,7 @@ impl System for Redoubt {
     /// budget, so it goes under its [`Life`]. The VM's copies of those send rights are closed once
     /// the child holds its own.
     fn launch(&mut self, asker: u64, job: u64, launch: Launch) -> Result<Option<Object>, Refused> {
-        let carved = budget(&launch.budget)?;
+        let (carved, budget_pages) = budget(&launch.budget)?;
         // What calls on the server return dies with the budget it runs in.
         let returns = cap(&launch.budget)?.owned.life.clone();
         let mut minted: Vec<Owned> = Vec::new();
@@ -549,6 +555,7 @@ impl System for Redoubt {
         };
         let resolved = crate::jobs::Resolved {
             budget: carved,
+            budget_pages,
             namespace: launch
                 .namespace
                 .iter()

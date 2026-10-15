@@ -17,6 +17,7 @@ pub struct Startup<'a> {
     pub image_addr: u64,
     pub image_len: u64,
     pub heap_pages: u32,
+    pub budget_pages: u64,
     pub tag: u16,
 }
 
@@ -61,6 +62,7 @@ impl<'a> Message<'a> {
                 w.u64(m.image_addr)?;
                 w.u64(m.image_len)?;
                 w.u32(m.heap_pages)?;
+                w.u64(m.budget_pages)?;
                 w.u16(m.tag)
             }
         }
@@ -72,7 +74,7 @@ impl<'a> Message<'a> {
 
     fn read_buffer(opcode: u32, r: &mut Reader<'a>) -> Result<Self, Error> {
         Ok(match opcode {
-            1 => Message::Startup(Startup { version: r.u32()?, handle_count: r.u32()?, namespace: r.bytes()?, handles: r.bytes()?, argv: r.bytes()?, image_addr: r.u64()?, image_len: r.u64()?, heap_pages: r.u32()?, tag: r.u16()? }),
+            1 => Message::Startup(Startup { version: r.u32()?, handle_count: r.u32()?, namespace: r.bytes()?, handles: r.bytes()?, argv: r.bytes()?, image_addr: r.u64()?, image_len: r.u64()?, heap_pages: r.u32()?, budget_pages: r.u64()?, tag: r.u16()? }),
             _ => return Err(Error::BadOpcode),
         })
     }

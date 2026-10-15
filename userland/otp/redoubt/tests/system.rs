@@ -21,6 +21,7 @@ use redoubt_rt::abi::{FOREVER, Handle};
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::ipc::Event as IpcEvent;
 use redoubt_rt::server::typed::{Outcome, finish};
+use redoubt_rt::startup::Startup;
 
 /// The asker the tests' calls are made as.
 const ME: u64 = 7;
@@ -927,6 +928,20 @@ fn a_launch_takes_what_it_is_given_and_its_end_is_an_event() {
             assert!(p.launch(ME, 2, launch(&own)).unwrap().is_none());
             let held = budget.lock().unwrap().unwrap();
             assert_eq!(f.launched_in(pid, held).len(), 1);
+            // Its block tells it its budget's pages as the VM knows them, never a number the
+            // caller typed: none for the VM's own budget here (the VM's own block named none),
+            // and for a budget the VM carved, what it carved it with, recorded at budget_create.
+            let told = |child: &redoubt_fake_kernel::Launched| {
+                Startup::parse(&child.maps[3].2).unwrap().budget_pages()
+            };
+            assert_eq!(told(&f.launched_in(pid, held)[0]), None);
+            let spec = BudgetSpec { pages: 64, processes: 1, weight: 1, ..Default::default() };
+            let carved = p.budget_create(&spec).unwrap();
+            assert!(p.launch(ME, 3, launch(&carved)).unwrap().is_none());
+            assert_eq!(f.launched_under(pid, held).iter().map(told).collect::<Vec<_>>(), [Some(64)]);
+            p.budget_destroy(&carved).unwrap();
+            let (_, event) = next(p);
+            assert!(matches!(event, Event::Exit { job: 3, cause: "killed", .. }));
             // Its budget destroyed, it is killed, and the notice comes back naming the job.
             p.budget_destroy(&own).unwrap();
             let (asker, event) = next(p);
@@ -944,7 +959,7 @@ fn a_sessions_identity_is_read_from_its_arguments() {
     let told = beamlet_redoubt::identity;
     let labels = vec![("alice-secrets".to_string(), 7)];
     let args = [
-        "budget_pages=9",
+        "endpoint=erofsd:system",
         "principal=alice",
         "label=alice-secrets:7",
         "context=work",
@@ -955,7 +970,7 @@ fn a_sessions_identity_is_read_from_its_arguments() {
     assert_eq!(told(&args), Some(Identity { principal: "alice".into(), labels, context, home }));
     assert_eq!(told(&["principal=bob"]), Some(Identity { principal: "bob".into(), ..Identity::default() }));
     for bad in [
-        &["budget_pages=9"][..],
+        &["endpoint=erofsd:system"][..],
         &["principal=a", "principal=b"],
         &["principal=a", "label=x"],
         &["principal=a", "label=x:y"],

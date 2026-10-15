@@ -1097,41 +1097,56 @@ fn public(m: &Manifest, machine: &Machine) -> Result<(), Refusal> {
 
 /// Each server's startup block holds its handles and arguments within one page and
 /// `MAX_START_HANDLES`: the block written here is the one the boot writes, with the same names,
-/// a console connection at `/dev/cons`, the image, the heap cap and the tag.
+/// a console connection at `/dev/cons`, the image, the heap cap, the budget's pages and the tag.
 fn blocks(m: &Manifest, machine: &Machine, bundle_key: &[u8; KEY_LEN]) -> Result<(), Refusal> {
     for (i, s) in m.servers.iter().enumerate() {
-        let refused = || at(format!("servers[{i}]"), Why::Block);
-        let mut names: Vec<String> = s.receives.clone();
-        names.extend(s.handed.iter().map(|h| h.endpoint.clone()));
-        if s.volume.is_some() || verified(m, s).is_some() {
-            names.push(String::from(VOLUME));
-        }
-        if is_steward(m, s) {
-            names.push(String::from(USERS));
-        }
-        for d in &s.devices {
-            names.push(d.name.clone());
-            names.push(format!("{}{IRQ_SUFFIX}", d.name));
-        }
-        let count = names.len() + 1;
-        if count > MAX_START_HANDLES {
-            return Err(refused());
-        }
-        let mut block = StartupBuilder::new(count as u32);
-        let handle = |n: usize| Handle::new(n as u32).ok_or_else(refused);
-        for (n, name) in names.iter().enumerate() {
-            block.handle(name, handle(n + 1)?);
-        }
-        block.namespace("/dev/cons", handle(count)?);
-        for a in args(m, s, bundle_key, machine.entries) {
-            block.arg(&a);
-        }
-        let len = machine.entries.iter().find(|(e, _)| *e == s.program).map_or(0, |(_, len)| *len);
-        // The tag is the server's place, as at launch.
-        block.image(stub::IMAGE_AT, len).heap_pages(s.heap_pages.unwrap_or(0)).tag((i + 1) as u16);
-        block.finish().map_err(|_| refused())?;
+        block(m, i, machine, bundle_key)?;
     }
     Ok(())
+}
+
+/// The startup block of `m.servers[i]`, as the boot writes it ([`blocks`]).
+pub fn block(
+    m: &Manifest,
+    i: usize,
+    machine: &Machine,
+    bundle_key: &[u8; KEY_LEN],
+) -> Result<Vec<u8>, Refusal> {
+    let s = &m.servers[i];
+    let refused = || at(format!("servers[{i}]"), Why::Block);
+    let mut names: Vec<String> = s.receives.clone();
+    names.extend(s.handed.iter().map(|h| h.endpoint.clone()));
+    if s.volume.is_some() || verified(m, s).is_some() {
+        names.push(String::from(VOLUME));
+    }
+    if is_steward(m, s) {
+        names.push(String::from(USERS));
+    }
+    for d in &s.devices {
+        names.push(d.name.clone());
+        names.push(format!("{}{IRQ_SUFFIX}", d.name));
+    }
+    let count = names.len() + 1;
+    if count > MAX_START_HANDLES {
+        return Err(refused());
+    }
+    let mut block = StartupBuilder::new(count as u32);
+    let handle = |n: usize| Handle::new(n as u32).ok_or_else(refused);
+    for (n, name) in names.iter().enumerate() {
+        block.handle(name, handle(n + 1)?);
+    }
+    block.namespace("/dev/cons", handle(count)?);
+    for a in args(m, s, bundle_key, machine.entries) {
+        block.arg(&a);
+    }
+    let len = machine.entries.iter().find(|(e, _)| *e == s.program).map_or(0, |(_, len)| *len);
+    // The tag is the server's place, as at launch.
+    block
+        .image(stub::IMAGE_AT, len)
+        .heap_pages(s.heap_pages.unwrap_or(0))
+        .budget_pages(s.budget.pages)
+        .tag((i + 1) as u16);
+    block.finish().map_err(|_| refused())
 }
 
 /// Every principal's login and approval key, decoded (R35 (key separation)), each once across

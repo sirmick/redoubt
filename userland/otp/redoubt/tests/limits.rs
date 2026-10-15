@@ -1,14 +1,14 @@
 //! The VM's limits from its budget (docs/userland/beamlet.md, "Limits inside one VM"): one
 //! process's heap, all ETS tables and `persistent_term` each get a sixteenth of the budget, in the
-//! VM's 8-byte words, so a flood meets its limit in Erlang before the budget ends the VM;
-//! `budget_pages=N` gives the budget, and `run` builds its VM with these limits.
+//! VM's 8-byte words, so a flood meets its limit in Erlang before the budget ends the VM; the
+//! startup block gives the budget, and `run` builds its VM with these limits.
 
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use beamlet_redoubt::fixture::{self, ConsoleServer, Dirs};
-use beamlet_redoubt::{VM_WORD_BYTES, budget_pages, limits, run};
+use beamlet_redoubt::{VM_WORD_BYTES, limits, run};
 use beamlet_vm::vm::Limits;
 use redoubt_fake_kernel::fake;
 
@@ -37,30 +37,6 @@ fn without_a_budget_the_defaults_stand() {
 #[test]
 fn a_huge_budget_saturates_rather_than_wraps() {
     assert_eq!(limits(Some(u64::MAX)).max_heap_words, u64::MAX / 16 / VM_WORD_BYTES);
-}
-
-#[test]
-fn the_budget_is_one_decimal_argument_anywhere() {
-    assert_eq!(budget_pages(["budget_pages=4096", "m"].into_iter()), Some(4096));
-    assert_eq!(budget_pages(["m", "f", "budget_pages=7"].into_iter()), Some(7));
-}
-
-#[test]
-fn a_missing_or_malformed_budget_is_none() {
-    for args in [
-        &[][..],
-        &["m", "f"],
-        &["budget_pages="],
-        &["budget_pages=0"],
-        &["budget_pages=-1"],
-        &["budget_pages=+5"],
-        &["budget_pages=4k"],
-        &["budget_pages= 4"],
-        &["budget_pages=99999999999999999999999"],
-        &["budget_pages=4", "budget_pages=4"],
-    ] {
-        assert_eq!(budget_pages(args.iter().copied()), None, "{args:?}");
-    }
 }
 
 /// The console server's screen, which a test reads back.

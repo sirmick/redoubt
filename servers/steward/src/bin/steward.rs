@@ -510,9 +510,9 @@ mod machine {
                 (0..SLOTS).map(|s| binding(&self.own_lines, &principal, labels, s)).collect();
             let exit = Endpoint::create()?;
             let exit_handle = exit.handle();
-            // The VM's share: the session's pages less its relay's.
+            // The VM's share: the session's pages less its relay's, told to it as its budget's
+            // pages in its startup block, which it sizes its limits by.
             let vm_pages = self.session_pages.saturating_sub(RELAY_PAGES);
-            let pages = format!("budget_pages={vm_pages}");
             let told = session_args(&self.own_lines, &principal, labels, context);
             let endpoint = format!("endpoint={SYSTEM}");
             let len = self.program_len;
@@ -541,10 +541,11 @@ mod machine {
                         launch.namespace(at, conn);
                     }
                 }
-                launch.stack_pages(SESSION_STACK_PAGES).heap_pages(u32::try_from(heap).unwrap_or(u32::MAX));
-                told.iter()
-                    .fold(launch.arg(&pages).arg(&endpoint).arg(&schedulers), |l, arg| l.arg(arg))
-                    .arg(SHELL);
+                launch
+                    .stack_pages(SESSION_STACK_PAGES)
+                    .heap_pages(u32::try_from(heap).unwrap_or(u32::MAX))
+                    .budget_pages(vm_pages);
+                told.iter().fold(launch.arg(&endpoint).arg(&schedulers), |l, arg| l.arg(arg)).arg(SHELL);
                 launch.start()
             };
             let job = started.map_err(|failed| {
@@ -581,7 +582,8 @@ mod machine {
                 let mut launch =
                     Launch::streamed(STUB_BIN, len, &mut read, Budget::from_handle(budget), exit);
                 launch.handle(RELAY_HELLO, hello.handle());
-                launch.stack_pages(RELAY_STACK_PAGES).heap_pages(RELAY_HEAP_PAGES);
+                // Its share of the session's budget, the pages the VM is not told.
+                launch.stack_pages(RELAY_STACK_PAGES).heap_pages(RELAY_HEAP_PAGES).budget_pages(RELAY_PAGES);
                 launch.start()
             };
             let _ = close(hello.handle());
