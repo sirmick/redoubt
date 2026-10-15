@@ -134,6 +134,35 @@ fn bad() -> Vec<(&'static str, Vec<u8>, Error)> {
         ("a symbol that is the C1 control CSI", one("\u{9b}".as_bytes()), Error::Symbol),
         ("a symbol that overrides the text's direction", one("\u{202e}".as_bytes()), Error::Symbol),
         ("a symbol that isolates the text's direction", one("\u{2066}".as_bytes()), Error::Symbol),
+        ("a symbol holding a soft hyphen", one("re\u{ad}port".as_bytes()), Error::Symbol),
+        ("a symbol holding a zero-width space", one("re\u{200b}port".as_bytes()), Error::Symbol),
+        ("a symbol holding a zero-width non-joiner", one("a\u{200c}b".as_bytes()), Error::Symbol),
+        ("a symbol holding a joiner between letters", one("a\u{200d}b".as_bytes()), Error::Symbol),
+        ("a symbol that is a joiner alone", one("\u{200d}".as_bytes()), Error::Symbol),
+        (
+            "a symbol holding a joiner after a pictograph and before a letter",
+            one("🙂\u{200d}a".as_bytes()),
+            Error::Symbol,
+        ),
+        (
+            "a symbol holding a joiner after a letter and before a pictograph",
+            one("a\u{200d}🙂".as_bytes()),
+            Error::Symbol,
+        ),
+        (
+            "a symbol holding a joiner after a selector that follows no pictograph",
+            one("a\u{fe0f}\u{200d}🙂".as_bytes()),
+            Error::Symbol,
+        ),
+        ("a symbol holding two joiners in a row", one("👩\u{200d}\u{200d}💻".as_bytes()), Error::Symbol),
+        ("a symbol holding a joiner last", one("👩\u{200d}".as_bytes()), Error::Symbol),
+        ("a symbol holding a line separator", one("a\u{2028}b".as_bytes()), Error::Symbol),
+        ("a symbol holding a paragraph separator", one("a\u{2029}b".as_bytes()), Error::Symbol),
+        ("a symbol holding a word joiner", one("a\u{2060}b".as_bytes()), Error::Symbol),
+        ("a symbol holding an invisible operator", one("a\u{2064}b".as_bytes()), Error::Symbol),
+        ("a symbol holding a byte order mark", one("\u{feff}a".as_bytes()), Error::Symbol),
+        ("a symbol holding a tag", one("a\u{e0067}".as_bytes()), Error::Symbol),
+        ("a symbol holding a cancel tag", one("🏴\u{e007f}".as_bytes()), Error::Symbol),
         ("a symbol that is not UTF-8", one(b"\xff"), Error::Symbol),
         ("a symbol one byte too long", one(&long), Error::Symbol),
         ("a colour of no kind", with(16, 3), Error::Color),
@@ -187,13 +216,100 @@ fn bad_bytes_are_refused_for_their_reason() {
 
 #[test]
 fn no_control_character_is_ever_a_symbol() {
-    for c in (0..0x20).chain(0x7f..0xa0).chain(0x202a..0x202f).chain(0x2066..0x206a) {
+    for (c, _) in table("forbidden") {
         let c = char::from_u32(c).unwrap();
         assert_eq!(Symbol::new(&c.to_string()), Err(Error::Symbol), "U+{:04X}", c as u32);
         assert_eq!(Symbol::new(&format!("a{c}b")), Err(Error::Symbol), "U+{:04X} inside", c as u32);
+        // Not even a joiner's place saves another, nor a pictograph's a joiner that is not between two.
+        if c != JOINER {
+            assert_eq!(Symbol::new(&format!("👩{c}💻")), Err(Error::Symbol), "U+{:04X} joining", c as u32);
+        }
+        assert_eq!(
+            Symbol::new(&format!("👩{c}")),
+            Err(Error::Symbol),
+            "U+{:04X} after a pictograph",
+            c as u32
+        );
+        assert_eq!(
+            Symbol::new(&format!("{c}💻")),
+            Err(Error::Symbol),
+            "U+{:04X} before a pictograph",
+            c as u32
+        );
     }
-    for ok in ["a", " ", "~", "é", "e\u{301}", "界", "🙂", "👩\u{200d}💻", "\u{a0}", "\u{2028}"] {
+    for ok in
+        ["a", " ", "~", "é", "e\u{301}", "界", "🙂", "\u{a0}", "\u{200e}", "\u{202f}", "\u{2065}", "\u{206a}"]
+    {
         assert!(Symbol::new(ok).is_ok(), "{ok:?}");
+    }
+}
+
+#[test]
+fn a_joiner_is_a_symbols_only_inside_an_emoji_zwj_sequence() {
+    // An element is a pictograph alone, with the presentation selector, or with a skin tone.
+    for ok in [
+        "👩\u{200d}💻",
+        "👩\u{1f3fd}\u{200d}💻",
+        "❤\u{fe0f}\u{200d}🔥",
+        "👨\u{200d}👩\u{200d}👧\u{200d}👦",
+        "🏳\u{fe0f}\u{200d}🌈",
+        "©\u{200d}®",
+    ] {
+        assert!(Symbol::new(ok).is_ok(), "{ok:?}");
+        assert!(!holds_forbidden(ok), "{ok:?}");
+    }
+    for bad in [
+        "a\u{200d}b",
+        "👩\u{200d}a",
+        "a\u{200d}💻",
+        "👩\u{301}\u{200d}💻",
+        "👩\u{fe0e}\u{200d}💻",
+        "\u{fe0f}\u{200d}💻",
+        "👩\u{200d}\u{fe0f}💻",
+        "👩\u{200d}\u{200d}💻",
+        "👩\u{200d}",
+        "\u{200d}💻",
+        "\u{200d}",
+    ] {
+        assert_eq!(Symbol::new(bad), Err(Error::Symbol), "{bad:?}");
+        assert!(holds_forbidden(bad), "{bad:?}");
+    }
+    // `allowed` says which character is at fault, so an encoder can draw it and keep the rest.
+    let flags: Vec<(char, bool)> = allowed("👩\u{200d}💻\u{200d}x").collect();
+    assert_eq!(flags, vec![('👩', true), (JOINER, true), ('💻', true), (JOINER, false), ('x', true)]);
+}
+
+/// `forbidden.txt`'s ranges of `kind`: every code point in them, with the line's words after.
+fn table(kind: &str) -> Vec<(u32, String)> {
+    let text = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/forbidden.txt")).unwrap();
+    let mut points = Vec::new();
+    for line in text.lines().filter(|l| l.starts_with(kind)) {
+        let mut words = line.split_whitespace();
+        words.next();
+        let first = u32::from_str_radix(words.next().unwrap(), 16).unwrap();
+        let last = u32::from_str_radix(words.next().unwrap(), 16).unwrap();
+        let what = words.collect::<Vec<_>>().join(" ");
+        points.extend((first..=last).map(|c| (c, what.clone())));
+    }
+    assert!(!points.is_empty(), "{kind}");
+    points
+}
+
+#[test]
+fn the_forbidden_characters_and_the_pictographs_are_the_shared_tables() {
+    let forbidden_table: std::collections::HashSet<u32> =
+        table("forbidden").into_iter().map(|(c, _)| c).collect();
+    let pictographic_table: std::collections::HashSet<u32> =
+        table("pictographic").into_iter().map(|(c, _)| c).collect();
+    assert_eq!(forbidden_table.len(), 32 + 33 + 1 + 3 + 2 + 5 + 5 + 4 + 1 + 128);
+    for c in (0..=0x10ffff).filter_map(char::from_u32) {
+        assert_eq!(forbidden(c), forbidden_table.contains(&(c as u32)), "U+{:04X} forbidden", c as u32);
+        assert_eq!(
+            pictographic(c),
+            pictographic_table.contains(&(c as u32)),
+            "U+{:04X} pictographic",
+            c as u32
+        );
     }
 }
 

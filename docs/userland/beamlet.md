@@ -1059,8 +1059,10 @@ The screen buffer is `beamlet-screen`
 A `Style` is `{Fg, Bg, Modifiers}`, each colour `reset`, `{indexed, I}` or `{rgb, R, G, B}` and the
 modifiers the cell protocol's bits; a `Rect` is `{X, Y, W, H}`.
 - **A control character is refused, not drawn.** `put` and `fill` raise `badarg` on one (the
-  ASCII and 8-bit controls, DEL, and the bidirectional embedding, override and isolate controls:
-  the `cells` crate's own rule) and write nothing of that call, so a caller that forgot to make
+  ASCII and 8-bit controls, DEL, the bidirectional embedding, override and isolate controls and
+  the invisible format characters, a zero-width joiner inside an emoji sequence apart: the
+  `cells` crate's own rule, `userland/native/cells/forbidden.txt`) and write nothing of that
+  call, so a caller that forgot to make
   text visible fails loudly, and nothing reaches the encoder that the cell protocol would not
   carry.
 - **Bounded.** A buffer is at most 1024 cells on a side and 65,536 cells in all (larger is

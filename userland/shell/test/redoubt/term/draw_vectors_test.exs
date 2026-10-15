@@ -20,7 +20,7 @@ defmodule Redoubt.Term.DrawVectorsTest do
 
   # Every control character `Redoubt.Term.Text` makes visible, and text that would drive a
   # terminal if it were not.
-  @controls Enum.concat([0..0x1F, 0x7F..0x9F, 0x202A..0x202E, 0x2066..0x2069])
+  @controls Enum.concat(Redoubt.Term.Text.controls())
   @hostile [
     "\e]52;c;cHduZWQ=\a",
     "\e]8;;http://x\e\\",

@@ -71,7 +71,6 @@
 - [M6 (persist, install, share)](plan/m6-persist.md)
 - [Follow-ups](todo/README.md)
   - [Kernel attack gaps](todo/kernel-attack-gaps.md)
-  - [Invisible format characters pass the terminal guard](todo/shell-invisible-format.md)
   - [beamlet's modular exponentiation takes operands of any size](todo/beamlet-bignum-bounds.md)
   - [The parked write test races the host's clock](todo/parked-write-clock.md)
   - [beamlet is told its budget by an argument the manifest keeps equal by hand](todo/beamlet-budget-from-startup.md)

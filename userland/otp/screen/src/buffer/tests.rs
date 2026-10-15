@@ -135,7 +135,21 @@ fn a_grapheme_longer_than_a_symbol_may_be_is_u_fffd() {
 #[test]
 fn a_control_character_is_refused_and_nothing_of_the_call_is_written() {
     let mut b = Buffer::new(10, 1).unwrap();
-    for bad in ["\u{1b}", "\u{7}", "\u{7f}", "\u{9b}", "\u{202e}", "\u{2066}", "a\u{0}"] {
+    for bad in [
+        "\u{1b}",
+        "\u{7}",
+        "\u{7f}",
+        "\u{9b}",
+        "\u{202e}",
+        "\u{2066}",
+        "a\u{0}",
+        "\u{ad}",
+        "\u{200b}",
+        "a\u{200d}",
+        "\u{2028}",
+        "\u{feff}",
+        "\u{e0067}",
+    ] {
         assert_eq!(b.put(0, 0, ["o", "k", bad], Style::PLAIN), Err(Refusal::Control), "{bad:?}");
         assert_eq!(
             b.fill(Rect { x: 0, y: 0, w: 2, h: 1 }, bad, Style::PLAIN),
@@ -144,6 +158,11 @@ fn a_control_character_is_refused_and_nothing_of_the_call_is_written() {
         );
     }
     assert!(cells(&b.diff()).is_empty());
+    // A joiner inside an emoji sequence is the grapheme's, and the grapheme is put as one symbol.
+    assert_eq!(b.put(0, 0, ["👩\u{200d}💻", "x"], Style::PLAIN), Ok(3));
+    let drawn = cells(&b.diff());
+    assert_eq!(drawn.len(), 2);
+    assert_eq!(drawn[0].2, "👩\u{200d}💻");
 }
 
 #[test]
@@ -246,7 +265,7 @@ fn vectors() -> Vec<(String, Vec<u8>, Option<String>)> {
 #[test]
 fn every_vector_is_answered_as_the_decoder_answers_it() {
     let vectors = vectors();
-    assert_eq!(vectors.len(), 34);
+    assert_eq!(vectors.len(), 51);
     let mut read = 0;
     for (name, bytes, error) in vectors {
         // A buffer of the frame's size, when it gives one a buffer may be; else any: a header

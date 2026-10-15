@@ -152,7 +152,7 @@ impl Buffer {
         }
         let room = usize::from(self.width - x);
         let taken: Vec<&str> = graphemes.into_iter().take(room).collect();
-        if taken.iter().any(|g| g.chars().any(cells::forbidden)) {
+        if taken.iter().any(|g| cells::holds_forbidden(g)) {
             return Err(Refusal::Control);
         }
         let (mut col, y) = (usize::from(x), usize::from(y));
@@ -185,7 +185,7 @@ impl Buffer {
     /// column (a space, a line, a block, a Braille pattern): the buffer does not segment text, so
     /// it takes no more than it can measure.
     pub fn fill(&mut self, rect: Rect, symbol: &str, style: Style) -> Result<(), Refusal> {
-        if symbol.chars().any(cells::forbidden) {
+        if cells::holds_forbidden(symbol) {
             return Err(Refusal::Control);
         }
         if symbol.chars().count() != 1 || columns(symbol) != 1 {

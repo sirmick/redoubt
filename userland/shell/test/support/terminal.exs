@@ -86,7 +86,8 @@ defmodule Redoubt.Test.Terminal do
   defp parse(terminal, text) do
     {grapheme, rest} = String.next_grapheme(text)
 
-    if grapheme |> String.to_charlist() |> Enum.any?(&Redoubt.Term.Text.control?/1) do
+    # The cell protocol's rule: a control character, but for a joiner inside an emoji sequence.
+    if Redoubt.Term.Cells.forbidden?(grapheme) do
       raise "a control character reached the terminal: #{inspect(grapheme)}"
     end
 

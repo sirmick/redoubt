@@ -220,6 +220,19 @@ defmodule Redoubt.TermTest do
     end
   end
 
+  test "an invisible format character is drawn, so two names look different; an emoji's joiner is kept" do
+    {screen, _term} =
+      draw([{:put_chars, :unicode, "rm report.txt\nrm re\u200Bport.txt\nrm re\u00ADport.txt\n"}])
+
+    assert Terminal.lines(screen) == ["rm report.txt", "rm re<U+200B>port.txt", "rm re<U+00AD>port.txt"]
+    # Typed, the same; and a woman technologist is one symbol of two columns, her joiner inside.
+    {screen, _term} = draw(prompt() ++ [insert("re\u200Bport 👩\u200D💻x")])
+    assert Terminal.lines(screen) == ["> re<U+200B>port 👩\u200D💻x"]
+    assert Terminal.cursor(screen) == {0, 2 + 2 + 8 + 5 + 2 + 1}
+    {screen, _term} = draw([{:put_chars, :unicode, "👩\u200D💻 a\u200Db\n"}])
+    assert Terminal.lines(screen) == ["👩\u200D💻 a<U+200D>b"]
+  end
+
   test "a wide character takes two columns" do
     {screen, _term} = draw(prompt() ++ [insert("世x")])
     assert Terminal.lines(screen) == ["> 世x"]
