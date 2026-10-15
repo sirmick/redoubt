@@ -87,6 +87,23 @@ a fun's environment binds every variable of the prompt's binding list, so the wh
 the same term. beamlet's `eq_exact` (cmp.rs:42-60) short-circuits atoms, small integers, `[]`
 and bitstrings of unequal length, then compares bytes; `compare` has no identity check either.
 
+## Phase 3: rebased onto B60, shell.md's trap sentence as history (b65-implementer, 2026-10-15)
+
+B60's final head named 94b26298b (on main 3d5464c41). `git rebase --onto 94b26298b 3d5464c41
+wp-B65` (clean, 1/1). `docs/userland/shell.md` "The loop" step 3: B60's sentence ("costs about
+3.6 ms plus 0.18 µs for every byte ... why is open") rewritten as history: a call costs the
+evaluator's constant (~3.6 ms) whatever its bindings hold; it once cost 0.18 µs a byte more,
+50 ms a step over 256 KiB, because the evaluator compares each binding with itself on every
+call and the VM read the binary to answer; the VM now answers that a term equals itself without
+reading it (link to beamlet.md#limits-inside-one-vm); the step no longer grows with the binary.
+No package IDs. Amended into the one commit; the message's Page line names shell.md too.
+
+**Head: wp-B65 = 43c42bbdc on wp-B60 94b26298b**, one commit, tree clean. Light gates at it (q,
+4 cores): `cargo test -p beamlet-vm` 108 passed / 0 failed, `a_term_equal_to_itself_is_not_scanned
+... ok` (0.12 s); `make -f scripts/jobs.mk docs` PASS 1.4 s rc=0; `cargo +nightly fmt -p
+beamlet-vm --check` rc=0. Summaries grepped for the per-byte claim (README.md,
+GETTING-STARTED.md, docs/README.md, beamlet.md): only shell.md:103 carried it; none other changes.
+
 ## Phase 2: built (Tier A, the orchestrator's word)
 
 Review (steward-red-2): OK with notes; P3 folded: the comment states that one `Ptr` names one

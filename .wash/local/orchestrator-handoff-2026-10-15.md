@@ -12,7 +12,15 @@ step of 10-14/15 (times before 07:38Z on 10-15 are ~8 h fast).
   publish or with `.wash/save.sh`).
 - Train worktree `.worktrees/train-20` (detached, reuse, never rename), at 19d158892.
 
-## Train 29, ready to assemble
+## Train 29: ASSEMBLED and ON THE BENCH (11:20Z)
+- Head `142c4b5cb` in `.worktrees/train-20` = main 82b8c9bd9 + B60 94b26298b + B65 43c42bbdc (both accepted,
+  trailers in the merge commits). Bench logs `.tmp/train-29/{prebuilt.log,bench.log}`, `DONE` marks the end.
+- Then: copy any failing job log aside (`cp target/jobs/<w>-<case>.log .tmp/train-29/`), rerun fails alone
+  (`make -k -j1 -f scripts/jobs.mk set CASES=...`), publish (root: `git merge --ff-only 142c4b5cb`, the SWARM
+  publishing check, `git add .wash/plan.toml .wash/qa/ && git commit -m "plan: train 29 published (B60, B65)"`,
+  `git push origin main`), remove `.worktrees/B60` `.worktrees/B65` and `wp-B60` `wp-B65` local+remote.
+
+## (earlier notes on train 29's parts)
 - **B60** ACCEPTED at `94b26298b` (wp-B60 on 3d5464c41; tests+docs: shell-text-profile case, shell.md numbers,
   trap sentence pointing at B65 as 'open'). Trailers: plan_accept B60 was called (gates: prebuilt;
   shell-text-profile + shell-output-rate both widths; docs). Reviewed-by: steward-red-2: OK with notes.
@@ -49,3 +57,9 @@ B64 (shell per-piece prologue), B65 follow-ons none. pipe-sixty-four stays quiet
   `Size budget:` line in the merge commit.
 - save.sh refuses on dirty scratch worktrees under .tmp (B53 fixes that); check `git worktree list | grep .tmp`.
 - Reviewers' turns ending without a report = their Wash calls refused (capability reviewers): never use the flag.
+
+## PUBLISHED (12:10Z): train 29 is on origin/main 47b0d98ea. Nothing is launchable without the owner's decisions (B53, B50 handle generations, SMP5). B64 is a recorded candidate. Members left: architect, idle2-implementer (idle), kernel-red-2, steward-red-2.
+
+## 13:15Z: B64 OPENED on the owner's standing "keep working through M2": b64-implementer (resident, auto) in .worktrees/B64 = wp-B64 from 47b0d98ea; steward-red-2 reviews (Tier A); report expected at .wash/local/B64-report.md. Then: review, plan_accept, train 30 (with B53 if the owner says yes), bench, publish. Owner decisions still open: B53, handle generations (B50), SMP5.
+
+## 13:55Z: TRAIN 30 = dbd97b72b (47b0d98ea + B64 87ba3378e, trailers in the merge) ON THE BENCH; logs .tmp/train-30/{prebuilt,bench}.log, DONE marks the end, failing job logs copied to fail-<w>-<case>.log there. Then rerun fails alone, publish (ff root main, publishing check, plan: commit, push), remove .worktrees/B64 + wp-B64 local/remote, end b64-implementer.
