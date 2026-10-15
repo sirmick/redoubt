@@ -77,13 +77,13 @@ gap: the page's section, the claim, and what no case attacks.
 - Failure and restart: a picked thread dying before the switch needs another hart's destruction to land between `kmain`'s pick and its switch, which no case can time; the queue cannot be filled (one slot per process). Neither is attacked by a case.
 
 ### boot.md
-- Firmware: the bench never falling back to QEMU's own firmware is not attacked.
-- The argument block: the kernel's refusals of a malformed block (a tag past the end, a second `MREx`, a bad `Devs` entry, a `Grnt` tag) are not attacked.
-- R16 (image confinement): an image cut short inside its segment data and a writable and executable segment are not attacked; the truncated-image case runs on rv64 only.
-- R17: a short or missing seed and a missing timebase are not attacked (every QEMU boot supplies both); nor an initrd under 64 bytes.
-- Verified boot, R15 (verified boot) and R17: the two signature cases run on rv64 only.
-- Devices handed to the first program: a DMA device past the sixteenth getting no object is not attacked (as devices.md's).
-- Failure and restart: a reboot through `system_reset` (the chain rerun, the bundle verified again) is not attacked.
+- ~~Firmware: the bench never falling back to QEMU's own firmware is not attacked.~~ Closed: `host:testbench::a_missing_firmware_image_fails_the_case_rather_than_falling_back`, `host:testbench::every_boot_names_the_checked_firmware_and_a_tree_only_when_edited`.
+- The argument block: the kernel's refusals of a block only the loader could write (a tag past the end, a second `MREx`, a `Devs` entry that names RAM or a controller, wraps or names interrupt 0, a `Grnt` tag) are not attacked: no device tree makes the loader write one (it filters RAM and interrupt 0 itself) and the kernel has no host tests; a loader test knob would be a loader change. The one malformed `Devs` entry a tree can produce, an interrupt past the PLIC's sources, is attacked: `boot-rejects-irq-past-plic`. The page says so as a residual.
+- ~~R16 (image confinement): an image cut short inside its segment data and a writable and executable segment are not attacked; the truncated-image case runs on rv64 only.~~ Closed: `loader-rejects-segment-data-cut`, `loader-rejects-wx-segment`; `loader-rejects-truncated-elf` on both widths.
+- ~~R17: a short or missing seed and a missing timebase are not attacked (every QEMU boot supplies both); nor an initrd under 64 bytes.~~ Closed: `boot-rejects-no-seed`, `boot-rejects-short-seed`, `boot-rejects-no-timebase` (the tree QEMU built, edited), `verified-boot-rejects-short-initrd`. The kernel's own refusal of a missing `Seed` tag stands behind the loader's and is not reached; the page says so.
+- ~~Verified boot, R15 (verified boot) and R17: the two signature cases run on rv64 only.~~ Closed: both on both widths.
+- Devices handed to the first program: a DMA device past the sixteenth getting no object is not attacked (as devices.md's): ATK3's, with devices.md's line.
+- ~~Failure and restart: a reboot through `system_reset` (the chain rerun, the bundle verified again) is not attacked.~~ Closed: `reboot-verifies-bundle`.
 
 ### memory-layout.md
 - `satp` and the TLB: no case attacks a stale translation surviving an address-space switch or an unmap (one hart, global flush; argued from the code; attacked across harts in M2 (usable shell): [several harts](../plan/m2-usable-shell.md#several-harts)).

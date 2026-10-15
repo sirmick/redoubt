@@ -390,6 +390,18 @@ pub struct Boot {
     /// bytes, which the loader must still refuse. The container and the archive are otherwise normal.
     #[serde(default)]
     pub sign_bare_archive: bool,
+    /// Hand the loader only the first this many bytes of the signed bundle: an initrd too short
+    /// to hold a signature (fewer than 64), which the loader must refuse before it reads anything
+    /// as one (kernel/boot.md, R17).
+    #[serde(default)]
+    pub short_initrd: Option<usize>,
+    /// Changes to the device tree QEMU built for the machine, made before the boot
+    /// (docs/testbench.md, "Hostile inputs"): a property dropped, cut short or overwritten, each
+    /// by path. The tree is dumped from the case's own QEMU line, edited in place and given back
+    /// with `-dtb`, so the firmware, the loader and the kernel see one machine with that one
+    /// difference.
+    #[serde(default)]
+    pub device_tree: Vec<TreeEdit>,
     /// Data entries added to the bundle after the programs: a trace, a manifest, a hostile image.
     #[serde(default)]
     pub file: Vec<BundleFile>,
@@ -824,6 +836,28 @@ pub enum Corruption {
     Entry(String),
     /// Cut the file to this many bytes (fewer than it has): a malformed image.
     Truncate(usize),
+    /// Give the first loadable segment these permissions, letters of `rwx`: `"rwx"` asks for a
+    /// page both writable and executable, which no loader may map (kernel/boot.md, R16).
+    SegmentFlags(String),
+    /// Drop the section table and cut the file this many bytes before the end of the last
+    /// loadable segment's data (fewer than it has): an image whose headers parse and whose
+    /// segment data runs past the end (kernel/boot.md, R16). The table goes because a linker
+    /// puts it after the data, where a cut short enough to reach the data takes the table first
+    /// and fails the parse instead (loader-rejects-truncated-elf).
+    TruncateSegmentData(usize),
+}
+
+/// One change to the device tree QEMU built ([`Boot::device_tree`]), naming a property by its
+/// path, `/node/.../property`, which must exist.
+#[derive(Debug, Deserialize)]
+#[serde(untagged, deny_unknown_fields)]
+pub enum TreeEdit {
+    /// Remove the property.
+    Drop { drop: String },
+    /// Keep only the property's first `to` bytes (fewer than it has).
+    Shrink { shrink: String, to: usize },
+    /// Overwrite the property's cells with `words`, as many as it has.
+    Set { set: String, words: Vec<u32> },
 }
 
 #[derive(Debug, Deserialize)]

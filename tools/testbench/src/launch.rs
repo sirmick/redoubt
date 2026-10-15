@@ -230,6 +230,7 @@ pub fn command(
         smp,
         memory_mib: boot.memory_mib.unwrap_or(target::DEFAULT_MEMORY_MIB),
         devices: &devices,
+        dtb: None,
     };
     Ok(image.interactive(false))
 }

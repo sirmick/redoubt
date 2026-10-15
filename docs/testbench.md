@@ -238,8 +238,8 @@ after = "claimed irq 10"
 send = "xyz"
 ```
 
-A `boot` case also takes `allow_panic`, `tamper_bundle`, `sign_bare_archive`,
-`distinct_across_boots` and `distinct` ([hostile inputs](#hostile-inputs)), `[[file]]`
+A `boot` case also takes `allow_panic`, `tamper_bundle`, `sign_bare_archive`, `short_initrd`,
+`device_tree`, `distinct_across_boots` and `distinct` ([hostile inputs](#hostile-inputs)), `[[file]]`
 ([bundle files](#bundle-files)), `[disk]` and `[net]` ([devices](#devices-and-the-network)),
 `[[session]]` ([SSH sessions](#ssh-sessions)), `must_fail` ([self-checks](#self-checks)), and
 `poweroff_status`: the QEMU exit status a `poweroff` case requires (0 by default; 255 for an SBI
@@ -892,14 +892,25 @@ to its prompt ([the boot-time target](userland/beamlet.md#beamlet-on-redoubt)).
 
 ## Hostile inputs
 
-<details><summary>Status: built · tested (6)</summary>
+<details><summary>Status: built · tested (17)</summary>
 
 - bench:loader-rejects-kernel-address
 - bench:loader-rejects-kernel-entry
 - bench:loader-rejects-truncated-elf
+- bench:loader-rejects-segment-data-cut
+- bench:loader-rejects-wx-segment
 - bench:verified-boot-rejects-tamper
 - bench:verified-boot-rejects-bare-archive
+- bench:verified-boot-rejects-short-initrd
+- bench:boot-rejects-no-seed
+- bench:boot-rejects-short-seed
+- bench:boot-rejects-no-timebase
+- bench:boot-rejects-irq-past-plic
 - bench:rng
+- host:testbench::a_dropped_property_is_gone_and_the_rest_still_reads
+- host:testbench::a_shortened_property_keeps_its_first_bytes
+- host:testbench::an_overwritten_property_has_the_words_and_its_length
+- host:testbench::a_property_the_tree_lacks_is_an_error_not_a_quiet_boot
 
 </details>
 
@@ -909,10 +920,28 @@ A program entry can be a good binary the bench corrupts before injecting it:
 programs = ["log-server", { corrupt = "rng-test", with = { segment-vaddr = "0xffffffffffd00000" } }]
 ```
 
-`with` is `segment-vaddr`, `entry` or `truncate` (a byte count smaller than the file).
-`tamper_bundle = true` flips one bundle byte after signing, and `sign_bare_archive = true` signs the
-archive without its domain and length; the loader must refuse both
-([R15 (verified boot)](kernel/boot.md#r15-verified-boot)). A case that expects a deliberate panic
+`with` is `segment-vaddr`, `entry`, `truncate` (a byte count smaller than the file),
+`segment-flags` (letters of `rwx` for the first loadable segment: `"rwx"` asks for a page no
+loader may map) or `truncate-segment-data` (the section table dropped and the file cut this many
+bytes before the end of the last loadable segment's data, so the headers parse and the data runs
+past the end). `tamper_bundle = true` flips one bundle byte after signing, `sign_bare_archive = true`
+signs the archive without its domain and length, and `short_initrd = 63` hands the loader only that
+many bytes of the signed bundle; the loader must refuse all three
+([R15 (verified boot)](kernel/boot.md#r15-verified-boot), [R17 (fail closed)](kernel/boot.md#r17-fail-closed)).
+
+`device_tree` changes the device tree QEMU built for the case's own command line: the bench dumps
+it (`-machine dumpdtb=`), edits it in place and boots it with `-dtb`, so the firmware, the loader
+and the kernel see the one machine with that one difference. Each edit names a property by path
+and must find it:
+
+```toml
+device_tree = [{ drop = "/chosen/rng-seed" }]                                  # removed
+device_tree = [{ shrink = "/chosen/rng-seed", to = 8 }]                        # its first 8 bytes
+device_tree = [{ set = "/cpus/timebase-frequency", words = [0] }]              # its cells, as many as it has
+```
+
+A dropped or shortened property leaves `FDT_NOP` tokens behind, so no byte moves and the header
+stays true (`tools/testbench/src/fdt.rs`). A case that expects a deliberate panic
 sets `allow_panic = true`, which drops only `PANIC` from the always-forbidden list, and forbids what
 must not happen instead. `distinct_across_boots = ['id: (.*)']` boots twice and requires the captured
 text to differ; `distinct = ['console (.*)']` requires, within one boot, two or more lines it

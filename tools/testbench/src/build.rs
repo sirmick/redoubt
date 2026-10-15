@@ -463,6 +463,24 @@ fn corrupt_elf(elf: &mut Vec<u8>, corruption: &Corruption) -> Result<()> {
         elf[at..at + width].copy_from_slice(&value.to_le_bytes()[..width]);
     };
     let u16_at = |elf: &[u8], at: usize| u16::from_le_bytes([elf[at], elf[at + 1]]) as usize;
+    let u32_at = |elf: &[u8], at: usize| u32::from_le_bytes(elf[at..at + 4].try_into().unwrap()) as usize;
+    // An address-sized field of a program header, by the header's offset in the file.
+    let field = |elf: &[u8], at: usize| {
+        if is_64 { u64::from_le_bytes(elf[at..at + 8].try_into().unwrap()) as usize } else { u32_at(elf, at) }
+    };
+    // The loadable segments' program headers, by file offset (e_phoff, e_phentsize, e_phnum).
+    let loadable = |elf: &[u8]| -> Vec<usize> {
+        let (phoff, phentsize, phnum) = if is_64 {
+            (field(elf, 0x20), u16_at(elf, 0x36), u16_at(elf, 0x38))
+        } else {
+            (u32_at(elf, 0x1c), u16_at(elf, 0x2a), u16_at(elf, 0x2c))
+        };
+        (0..phnum).map(|i| phoff + i * phentsize).filter(|at| u32_at(elf, *at) == PT_LOAD as usize).collect()
+    };
+    // Where a program header keeps p_flags, p_offset, p_vaddr and p_filesz: ELF64 puts the flags
+    // second, ELF32 after the sizes.
+    let (flags_at, offset_at, vaddr_at, filesz_at) =
+        if is_64 { (0x04, 0x08, 0x10, 0x20) } else { (0x18, 0x04, 0x08, 0x10) };
 
     match corruption {
         Corruption::Truncate(length) => {
@@ -471,27 +489,39 @@ fn corrupt_elf(elf: &mut Vec<u8>, corruption: &Corruption) -> Result<()> {
         }
         Corruption::Entry(address) => put(elf, 0x18, parse(address)?),
         Corruption::SegmentVaddr(address) => {
-            // (e_phoff, e_phentsize, e_phnum, p_vaddr within a program header)
-            let (phoff, phentsize, phnum, vaddr_at) = if is_64 {
-                (
-                    u64::from_le_bytes(elf[0x20..0x28].try_into()?) as usize,
-                    u16_at(elf, 0x36),
-                    u16_at(elf, 0x38),
-                    0x10,
-                )
-            } else {
-                (
-                    u32::from_le_bytes(elf[0x1c..0x20].try_into()?) as usize,
-                    u16_at(elf, 0x2a),
-                    u16_at(elf, 0x2c),
-                    0x08,
-                )
-            };
-            let header = (0..phnum)
-                .map(|i| phoff + i * phentsize)
-                .find(|at| u32::from_le_bytes(elf[*at..*at + 4].try_into().unwrap()) == PT_LOAD)
-                .context("ELF has no loadable segment")?;
+            let header = *loadable(elf).first().context("ELF has no loadable segment")?;
             put(elf, header + vaddr_at, parse(address)?);
+        }
+        Corruption::SegmentFlags(letters) => {
+            let header = *loadable(elf).first().context("ELF has no loadable segment")?;
+            let mut flags = 0u32;
+            for letter in letters.chars() {
+                // p_flags: PF_X, PF_W, PF_R.
+                flags |= match letter {
+                    'x' => 1,
+                    'w' => 2,
+                    'r' => 4,
+                    other => bail!("segment-flags = {letters:?}: {other:?} is not one of rwx"),
+                };
+            }
+            elf[header + flags_at..][..4].copy_from_slice(&flags.to_le_bytes());
+        }
+        Corruption::TruncateSegmentData(short) => {
+            let header = loadable(elf)
+                .into_iter()
+                .rev()
+                .find(|at| field(elf, at + filesz_at) > 0)
+                .context("ELF has no loadable segment with file data")?;
+            let (offset, filesz) = (field(elf, header + offset_at), field(elf, header + filesz_at));
+            ensure!(
+                *short > 0 && *short < filesz,
+                "truncate-segment-data = {short} does not cut inside the last segment's {filesz} bytes of data"
+            );
+            // No section table: e_shoff, then e_shentsize, e_shnum and e_shstrndx.
+            put(elf, if is_64 { 0x28 } else { 0x20 }, 0);
+            let shentsize_at = if is_64 { 0x3a } else { 0x2e };
+            elf[shentsize_at..shentsize_at + 6].fill(0);
+            elf.truncate(offset + filesz - short);
         }
     }
     Ok(())

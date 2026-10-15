@@ -1,5 +1,7 @@
 description = "The loader refuses a boot bundle whose signature covers the bare archive, with no domain and no length"
-arch = ["rv64"]
+# rv64 only since it was written, for no reason the case recorded: the loader is one binary for
+# both widths and the verification is the same code, which rv32 now shows (R15, R17).
+arch = ["rv64", "rv32"]
 kind = "boot"
 icount = "shift=3,sleep=off"
 programs = ["log-server"]

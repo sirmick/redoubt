@@ -1,0 +1,42 @@
+description = "A reboot through system_reset runs the chain again from the firmware, and the bundle is verified again (kernel/boot.md, \"Failure and restart\"): the loader's first line, its signature line and the kernel's start, then init's reboot, then all three once more"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# init-reboot's machine: the real init, the six servers, and quitter, which exits with code 7 at
+# once, listed before ipd, so init's sixth exit of it reboots the machine (servers/init.md,
+# "Restarts and reboots"). What this case watches is the second boot: the whole chain's lines a
+# second time, with the bundle verified again, in order.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-bootfsd", bin = "bootfsd" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-netd", bin = "netd" },
+    { package = "redoubt-ipd", bin = "ipd" },
+    { package = "redoubt-init-programs", bin = "quitter" },
+]
+timeout_secs = 90
+# The verdict is the loader's and the kernel's own lines, which no server prints bare (consoled
+# prefixes every other line), and init's bare reboot line; the second loader line only a reset of
+# the machine prints.
+expect = [
+    '^loader: Redoubt rv(64|32) loader, boot hart 0$',
+    '^  bundle signature ok \(\d+ bytes\)$',
+    '^KMAIN \(clean boot\)',
+    '^init: rebooting: quitter was restarted 5 times within 60 seconds$',
+    '^loader: Redoubt rv(64|32) loader, boot hart 0$',
+    '^  bundle signature ok \(\d+ bytes\)$',
+    '^KMAIN \(clean boot\)',
+    '^init: started quitter, console [0-9a-f]{16}$',
+]
+forbid = ['init: refused the boot']
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/init/reboot.json" }
+
+[disk]
+size_kib = 4096
+partitions = 1
+
+[net]

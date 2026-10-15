@@ -1,5 +1,7 @@
 description = "The loader refuses a program image cut short inside its program headers"
-arch = ["rv64"]
+# rv64 only since it was written, for no reason the case recorded: the loader is one binary for
+# both widths and the parse is the same code, which rv32 now shows.
+arch = ["rv64", "rv32"]
 kind = "boot"
 icount = "shift=3,sleep=off"
 programs = [{ corrupt = "rng-test", with = { truncate = 80 } }]
