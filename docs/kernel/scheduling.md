@@ -20,9 +20,10 @@ serves the steward.
 
 ### One flat stride queue
 
-<details><summary>Status: built · partly tested: round-robin among one budget's threads is not attacked by a case · tested (15)</summary>
+<details><summary>Status: built · tested (16)</summary>
 
 - bench:sched-share
+- bench:sched-round-robin
 - bench:sched-large-weight
 - bench:sched-server-busy
 - bench:sched-carve-inflation
@@ -60,18 +61,26 @@ Class (`system` or `user`) decides trust, never order ([budgets](budgets.md)). A
 server doing a user's work waits its turn like the user.
 
 Within a budget, threads take turns. Each pick runs the budget's next runnable thread that no
-hart is running, after the one it last picked, in (pid, tid) order, wrapping. The code is `kernel/src/sched.rs`, which keeps
+hart is running, after the one it last picked, in (pid, tid) order, wrapping. `sched-round-robin`
+holds one budget's four threads, two processes of two, to that order on one hart: each thread
+notes when the CPU comes back to it after a gap of over half a slice, and over twelve rounds the
+four run the cycle their first runs set, in (pid, tid) order from the cursor, each once a round,
+wrapping, with their counts within a tenth of each other (over 100 ms, rv64: 25, 24, 24 and 24
+slices, counts 589,056, 570,624, 564,480 and 568,832; rv32: 24, 24, 23 and 23 slices, counts
+199,936, 201,984, 198,912 and 193,280). The code is `kernel/src/sched.rs`, which keeps
 each budget's scheduling state in the budget's own frame, and `libs/stride`, which holds the
 arithmetic, the ranks and the order of steps. `libs/stride` is `#![forbid(unsafe_code)]` and has
 no dependencies.
 
 ### Preemption points
 
-<details><summary>Status: built · partly tested: that an interrupt's wake does not preempt, and that another budget's deadline does, are not attacked by a case · tested (12)</summary>
+<details><summary>Status: built · tested (14)</summary>
 
 - bench:sched-wake-no-preempt
 - bench:sched-wake-no-preempt-harts
 - bench:sched-wake-no-preempt-harts-mttcg
+- bench:sched-irq-wake
+- bench:sched-deadline-preempt
 - host:testbench::the_oracle_decides_whether_a_timer_interrupt_ended_the_slice
 - bench:budget-deadline
 - bench:sched-timer-entry
@@ -119,9 +128,26 @@ built with `wake-preempts`, whose timeout wake preempts the entering thread as a
 fails both on both widths, in recorded negative runs (on rv32 under `icount`: a wake took hart 0
 from budget 37).
 
+A device interrupt only wakes too. `sched-irq-wake` runs a driver stand-in on the goldfish RTC's
+alarm beside an equal-weight spinner, so every alarm interrupts the spinner mid-slice, and the
+oracle requires each device interrupt that claimed its source and woke the driver to return to
+the spinner, which runs to its slice's end before the driver is picked (`irq_wake_no_preempt`):
+60 of 60 alarms on both widths, on one hart. It also refuses a device interrupt that began no
+destruction and returned otherwise than to user mode. No kernel feature makes a device wake preempt, so
+the check's negative is its floor: asked for 61 proofs of 60 alarms it fails, naming the 60 (a recorded
+run).
+
 A budget deadline preempts whatever runs, because the destruction lifts passes and removes
 budgets, so the queue must be picked again. A thread that entered the kernel just as the deadline
-fired takes its trap again when it next runs.
+fired takes its trap again when it next runs. `sched-deadline-preempt` makes empty budgets due
+1.3 ms ahead, one at a time, beside a spinner, so the deadlines fall at every phase of the two
+runners' slices, and the oracle requires every timer interrupt that destroyed another budget by its
+deadline to leave for `kmain` with its runner requeued and the hart's next event a pick, never to
+return to the runner (`deadline_preempts`): 94 preemptions on rv64 and 80 on rv32 over 2.5 s, every
+one mid-slice (the checked build's audits after each destruction take most of the window: 78
+audits, 356 ms, in the first 300 ms tried). The deadlines a runner's own call finds due preempt it
+too, outside the trace's interrupt brackets, and are not counted. Asked for 200 the check fails,
+naming the 94 (a recorded run).
 
 The kernel itself is never preempted. It runs with interrupts off (`sstatus.SIE` clear) and takes
 the timer and device interrupts only from user mode or while idle, so a system call or a
@@ -283,9 +309,10 @@ flowchart TD
 
 ### Charging
 
-<details><summary>Status: built · partly tested: interrupt handling billed to the device's owner is not attacked by a case · tested (19)</summary>
+<details><summary>Status: built · tested (20)</summary>
 
 - bench:sched-sleep-gaming
+- bench:sched-irq-wake
 - bench:sched-exit-churn
 - bench:sched-timer-flood
 - bench:sched-server-busy
@@ -342,7 +369,12 @@ Kernel time is billed as well:
   timer interrupt that found neither is the budget's its hart runs when it ends that budget's slice,
   and nobody's otherwise;
 - an interrupt's handling is billed to the owner of its device object
-  ([R5 (interrupts)](devices.md#r5-interrupts)); one with no device object, to nobody; a device
+  ([R5 (interrupts)](devices.md#r5-interrupts)), the budget it is charged to: `system`, which the
+  boot charges every device to, whoever holds the handle (`sched-irq-wake`'s oracle requires every
+  device interrupt that claimed its source to charge the budget the program marks, `system`, and
+  lets it charge only that and, for its return, the budget it interrupted: 60 alarms charged
+  `system` 286,980 ticks on rv64 and 208,903 on rv32 in the checked build, 4,783 and 3,482 each,
+  and the interrupted spinner 19,476 and 31,488 for their returns); one with no device object, to nobody; a device
   interrupt that claims nothing, its source claimed first by another hart, is billed as a timer
   interrupt that ends no slice: the rest of it after its expiry is the budget its expiry billed
   last, or nobody's, never the budget it interrupted;
@@ -695,7 +727,7 @@ stated margin. The sweep's seeds and worst case are recorded here with the targe
 | deadline notice: the lease's `killed` notice received, less the lease's deadline | p99 <= 40 ms (back from 54 ms when destruction scanned every object frame; [budgets](budgets.md#residual-risks)) |
 | R10 kernel time of one destruction, from the trace | p99 <= 30 ms (back from 39 ms when destruction scanned every object frame; [budgets](budgets.md#residual-risks)) |
 | a lease's end from the steward's decision: the worst decision-wake p99 + R10's p99 | <= 95 + 30 = 125 ms, asserted as one sum by the post-check |
-| `budget_destroy`, call to return | recorded against one round: R10's 30 ms plus (runnable budgets + 2) slices |
+| `budget_destroy`, call to return | p99 <= 51 ms: one round at N = 16, R10's 30 ms plus (runnable budgets + 2) slices, 21 of 1 ms (`destroy_call_p99_us`, judged net of audits as the wakes are) |
 | the 1000-weight server's share of the spinning CPU at N = 16 | at least 384 less 30 per thousand |
 
 In instructions: 15 ms is 1,875,000, 25 ms is 3,125,000, 30 ms is 3,750,000, 40 ms is 5,000,000,
@@ -1022,7 +1054,7 @@ Status: built · tested: bench:sched-carve-inflation, bench:legacy-gone, host:re
 
 ### R12 (scheduling)
 
-<details><summary>Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search, `map_fixed`'s range, `process_create` and, after RAM fills, a one-page `map_anon`, `budget_create` and a rolled-back `process_create` (with a recorded negative run, `alloc-first-fit`); and at full occupancy, every PID in use with every thread, for a delivery, a timer expiry ending 250 waits at once and the reconcile that wakes their 250 budgets (over 8-seed sweeps, 7.8 ms on rv64 and 6.8 to 9.1 ms on rv32, bounded at 10 ms: the sweeps' worst and a tenth) and a destruction (at most 17.1 ms on rv64, 18.2 ms on rv32) (`bench:worst-walk`) · tested (64)</summary>
+<details><summary>Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search, `map_fixed`'s range, `process_create` and, after RAM fills, a one-page `map_anon`, `budget_create` and a rolled-back `process_create` (with a recorded negative run, `alloc-first-fit`); beyond the memory calls, for `endpoint_create`, `mint`, `close`, `thread_create` and `thread_exit`, `call` and `reply`, a `receive` of a queued message, `time_now` and `budget_usage` against a hostile budget's full handle table, two thousand endpoints and 250 parked threads (`bench:call-bounds`); and at full occupancy, every PID in use with every thread, for a delivery, a timer expiry ending 250 waits at once and the reconcile that wakes their 250 budgets (over 8-seed sweeps, 7.8 ms on rv64 and 6.8 to 9.1 ms on rv32, bounded at 10 ms: the sweeps' worst and a tenth) and a destruction (at most 17.1 ms on rv64, 18.2 ms on rv32) (`bench:worst-walk`) · tested (65)</summary>
 
 - bench:sched-share
 - bench:sched-share-release
@@ -1046,6 +1078,7 @@ Status: built · tested: bench:sched-carve-inflation, bench:legacy-gone, host:re
 - bench:sched-carve-return
 - bench:map-anon-search-bound
 - bench:scan-bounds
+- bench:call-bounds
 - bench:worst-walk
 - host:redoubt-stride::the_crate_and_the_model_agree
 - host:redoubt-stride::a_broken_model_disagrees
@@ -1137,6 +1170,22 @@ first took 1.2 s against 22 ms. So do a one-page `map_anon`, a `budget_create` a
 `alloc-first-fit`, which takes each frame by the first-fit scan of RAM the bitmap replaced,
 fails the case on both widths in a recorded negative run (a one-page `map_anon`: 1174 µs against
 374 µs on rv64, 1274 against 474 on rv32).
+Beyond the memory calls, `bench:call-bounds` makes `endpoint_create`, `mint`, `close`,
+`thread_create` and `thread_exit`, `call` and `reply`, a `receive` of a queued message, `time_now`
+and `budget_usage` sixteen times each on an empty system and again after a hostile budget has
+filled its handle table (4,093 handles), made two thousand endpoints and parked 190 threads in
+`send` at the victim's endpoint and 60 in timed waits; the kernel's time for each is its lock
+section from a `hold-trace` kernel, net of the checked build's audits, and the oracle holds each
+call's longest section after the fill to twice its longest before, or 100 ticks. Each call reads
+alike on both sides, in ticks before and after on rv64 (rv32): `endpoint_create` 1,359 and 1,313
+(1,932 and 1,843), `mint` 1,036 and 1,113 (1,440 and 1,553), `close` 425 and 433 (560 and 578),
+`thread_create` 770 and 778 (1,170 and 1,201), `call` 10,625 and 10,638 (10,054 and 10,127),
+`reply` 3,243 and 3,192 (3,311 and 3,378), `time_now` 280 and 288 (394 and 414), `budget_usage` 872
+and 881 (899 and 917); two grow with the caller's own objects, as the rule allows: `receive` reads
+9,585 and 11,380 (8,070 and 10,033), a fifth more with the caller's own endpoint's queue filled by
+the hostile's 190 senders, one reading at 190, not a slope, and bounded because a receive's pump
+reads the endpoint's own lists only, never every thread (`worst-walk` bounds the pump); and
+`thread_exit` by half with 250 threads in the process, 1,045 and 1,519 (1,421 and 2,012).
 
 It is attacked three ways:
 - **Boot cases, in virtual time**, judge what the kernel charged each budget over a window, net of
@@ -1276,7 +1325,13 @@ the twin's would not.
 
 ### R23 (no test channels)
 
-Status: built · partly tested: no case builds the production kernel and checks that it carries no trace, or that a test-only feature is refused without debug assertions
+<details><summary>Status: built · tested (3)</summary>
+
+- bench:bench-no-trace
+- bench:bench-trace-scan-catches
+- bench:bench-test-only-refused
+
+</details>
 
 The production kernel carries no test-only diagnostic channel. The scheduling trace is one: a
 record of every budget's id and pass at every wake, requeue, pass change, pick and lift, which
@@ -1294,18 +1349,29 @@ tells whoever reads the console who runs when. It exists only under the Cargo fe
   `sched-budget-churn`, `sched-budget-churn-shell`, `sched-exit-churn`, `sched-timer-flood`,
   `sched-carve-return`, `sched-carve-inflation`, `deadline-flood-billed-traced`), `sched-ties`,
   `sched-debt-lift`, `sched-lift-delay`, `sched-wake-no-preempt`,
-  `sched-wake-no-preempt-harts`, `sched-wake-no-preempt-harts-mttcg`, `sched-cluster`,
+  `sched-wake-no-preempt-harts`, `sched-wake-no-preempt-harts-mttcg`, `sched-irq-wake`,
+  `sched-deadline-preempt`, `sched-cluster`,
   `sched-cluster-old-control`, `sched-latency`, `sched-latency-tcg`, `sched-lock-contention`,
   `sched-lock-contention-4`, `sched-timer-entry`, `irq-boot-hart-only`, `kernel-containment`, `endpoint-destroy-full`, `smp-fence` and
   `worst-walk`.
+
+The bench checks it on the binary (`bench-no-trace`): a `build` case builds the production
+kernel, the release profile with `qemu-virt` alone as `./build` does, and fails on the first of
+`SCHED-TRACE` (the trace's console lines) and `5sched5trace` (the mangled path of its module,
+`redoubt_kernel::sched::trace`, which every symbol of it carries and the kept symbol table would
+show) found anywhere in its bytes. `bench-trace-scan-catches` plants the trace, a checked kernel
+built with `sched-trace`, under the same scan and must fail on the console line (at offset
+0x37ba1 on rv64 and 0x3b69e on rv32, in the ring's `SCHED-TRACE-END ... dropped` text); and
+`bench-test-only-refused` asks the release profile for `sched-trace` and must fail on the kernel's
+refusal below, in the compiler's words.
 
 The other diagnostic features are off by default in the same way: `walk-trace`, which implies
 the trace and brackets each receive's pump, timer expiry and reconcile in it, for `worst-walk`
 alone; `lock-trace`, which implies the trace and records after each wait for the kernel lock its
 ticket and the sections ahead of it when drawn (`k`), for `irq-boot-hart-only`; `hold-trace`,
 which implies `lock-trace` and records each section of the kernel lock at its release, its ticks,
-cause and audits (`h`, `j`), for `sched-lock-contention`, `sched-lock-contention-4` and
-`sched-timer-entry`;
+cause and audits (`h`, `j`), for `sched-lock-contention`, `sched-lock-contention-4`,
+`sched-timer-entry` and `call-bounds`;
 `irq-boot-hart-only`, whose boot hart alone
 takes device interrupts, for R78's negative case at two harts; `sched-inject-tie-fault`, a debug-only break of the tie rule that implies the trace;
 `sched-capped-holds-floor`, whose floor counts the capped budgets, for R12's negative case at two
@@ -1334,7 +1400,7 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
 
 ## Failure and restart
 
-<details><summary>Status: built · partly tested: a picked thread that dies before the switch, and a full queue, are not attacked by a case · tested (6)</summary>
+<details><summary>Status: built · partly tested: a picked thread dying before the switch needs another hart's destruction to land between `kmain`'s pick and its switch, which no case can time, and the queue cannot be filled (one slot per process), so neither is attacked by a case · tested (6)</summary>
 
 - bench:sched-exit-churn
 - bench:budget-deadline
@@ -1506,6 +1572,10 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   | Case | Class | Why | At two harts |
   | --- | --- | --- | --- |
   | `sched-wake-no-preempt` | one hart's slices | its proof reads each nap against the slice that follows it, which needs every timeout answered by a timer interrupt mid-slice; at two harts most are answered at a slice's end or at another budget's call | `sched-wake-no-preempt-harts` |
+  | `sched-deadline-preempt` | one hart's slices | the deadline's timer comes on its payer's hart; on two the other runner has a hart of its own, so which budget an expiry interrupts is QEMU's turn order | none |
+  | `call-bounds` | one hart's sections | under `icount` a lock section on several harts counts the other hart's instructions too, as `sched-timer-entry`'s | none |
+  | `sched-irq-wake` | one hart's slices | its proof reads each device interrupt against the runner's slice that follows it; on two the idle hart takes the wake, and there is nothing to preempt | `sched-wake-no-preempt-harts` (timeouts' wakes, at the entry that answers them) |
+  | `sched-round-robin` | one hart's turns | the round-robin is among the threads no hart runs, and on several harts a budget's threads run at once | none |
   | `sched-large-weight` | audits | its users' hart switches budgets each slice and takes most audits, charged to no one, so the server reads 572 of 1000 on rv32 against 450 to 550 | `sched-share` (its 300 holds a hart) |
   | `deadline-flood-billed` | a count | a release build with no trace | `deadline-flood-billed-traced` and `sched-timer-flood` |
   | `sched-share-release` | a count | a release build with no trace | `sched-share` |

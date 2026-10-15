@@ -416,9 +416,10 @@ two label sets share a device.
 
 ### R5 (interrupts)
 
-<details><summary>Status: built · partly tested: masking a fired source is attacked only in the model; completing the claim before masking, and billing an interrupt to its IRQ object's owner, are argued (Residual risks), not attacked · tested (6)</summary>
+<details><summary>Status: built · partly tested: masking a fired source is attacked only in the model; completing the claim before masking is argued (Residual risks); billing an interrupt to its IRQ object's owner is attacked by `bench:sched-irq-wake` · tested (7)</summary>
 
 - bench:uart-irq
+- bench:sched-irq-wake
 - bench:irq-first-receive
 - bench:receive-bad-record
 - mutation:R5NoMaskOnFire
@@ -563,7 +564,7 @@ the PLIC for itself alone.
   status after `dma_alloc` has handed a frame to a new holder, so it shows the reset came before
   the new holder's use. That the reset strictly precedes the pooling rests on the kernel's own
   assertion and the model's I16 check.
-- **Three parts of R5 are not attacked on QEMU.** Its 16550 console raises the controller once
+- **Two parts of R5 are not attacked on QEMU.** Its 16550 console raises the controller once
   per byte, not from a held level, so a kernel that never masked a fired source passes
   `uart-irq`; the mask is attacked in the model. The order, the claim completed before the source
   is masked, is argued: both writes are made in one kernel section, on a hart that takes no
@@ -572,10 +573,11 @@ the PLIC for itself alone.
   stay, the PLIC does not ignore a completion for a masked source, so even the reverse order would
   lose nothing on this controller, and QEMU's PLIC, which accepts either, cannot tell the two
   apart for a case. The billing, the interrupt's kernel time charged to the IRQ object's owner
-  (`system` at boot), is argued from the handler: it bills the owner the IRQ index names, and the
-  budget it interrupted sees its slice resume; the trace records the charge inside an interrupt,
-  and attacking it on the target is [scheduling](scheduling.md)'s open line. Masking bounds that
-  time to one interrupt per `receive`, at the driver's pace.
+  (`system` at boot, whoever holds the handle), is attacked by `bench:sched-irq-wake`: the trace
+  records each charge inside a device interrupt, and its oracle requires every claimed interrupt
+  to charge `system` and nothing but the return to the budget interrupted
+  ([scheduling](scheduling.md#charging)). Masking bounds that time to one interrupt per
+  `receive`, at the driver's pace.
 - **Crafted boot inputs are not attacked.** Every case boots QEMU's own device tree and the
   loader's own argument block. So the loader's refusal of a tree that names no console or a
   console without an interrupt, a seventeenth DMA device (QEMU virt has eight virtio-mmio slots),

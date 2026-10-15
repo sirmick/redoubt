@@ -1212,6 +1212,260 @@ fn check_wake_no_preempt_harts(
     ))
 }
 
+/// A hart's interrupt intervals from user mode, `I` or `x` to `O`, by record index, and nested or
+/// unended ones refused.
+fn interrupt_intervals(records: &[Record]) -> Result<BTreeMap<u64, Vec<(usize, usize)>>, String> {
+    let mut intervals = BTreeMap::<u64, Vec<(usize, usize)>>::new();
+    let mut begin = BTreeMap::new();
+    for (i, r) in records.iter().enumerate() {
+        match r.kind {
+            'I' | 'x' => {
+                if begin.insert(r.hart, i).is_some() {
+                    return Err(format!("record {}: nested interrupt interval", r.seq));
+                }
+            }
+            'O' => {
+                let b = begin.remove(&r.hart).ok_or_else(|| format!("record {}: unmatched return", r.seq))?;
+                intervals.entry(r.hart).or_default().push((b, i));
+            }
+            _ => {}
+        }
+    }
+    if !begin.is_empty() {
+        return Err("unended interrupt interval".into());
+    }
+    Ok(intervals)
+}
+
+/// **A device interrupt only wakes** (kernel/scheduling.md, "Preemption points"), at one hart. A
+/// proof is a device interrupt from user mode (`x` to `O`) that claimed a source (`c`), woke one
+/// budget other than the one it interrupted (`W`) and returned to user mode (`O 1`) with no pick,
+/// requeue, leave or destruction inside; and whose hart's next pick or interrupt is a timer
+/// interrupt that requeued the interrupted budget (`R`) and returned to `kmain` or ended its slice
+/// in place: the runner ran to its slice's end before the woken budget was picked. Every device
+/// interrupt from user mode that began no destruction must return to user mode: it ends no slice
+/// and preempts nothing. The case needs `expected` proofs, so it cannot pass for want of
+/// interrupts that could have preempted.
+fn check_irq_wake_no_preempt(records: &[Record], expected: usize) -> Result<String, String> {
+    let intervals = interrupt_intervals(records)?;
+    let (mut proofs, mut claimed, mut woke) = (BTreeMap::<u64, usize>::new(), 0usize, 0usize);
+    for (&hart, list) in &intervals {
+        let own = |from: usize, to: usize| records[from..to].iter().filter(move |r| r.hart == hart);
+        for &(b, e) in list {
+            if records[b].kind != 'x' {
+                continue;
+            }
+            let inside = || own(b, e + 1);
+            let destruction = inside().any(|r| r.kind == 'X');
+            if !destruction && records[e].pass != 1 {
+                return Err(format!(
+                    "record {}: a device interrupt that interrupted budget {} {} instead of returning to user mode",
+                    records[e].seq,
+                    records[b].id,
+                    if records[e].pass == 0 { "ended its slice" } else { "preempted it" }
+                ));
+            }
+            let claim = inside().find(|r| r.kind == 'c').map_or(0, |r| r.id);
+            let runner = records[b].id;
+            if claim == 0 || destruction || runner == 0 {
+                continue;
+            }
+            claimed += 1;
+            let wakes: Vec<u64> =
+                inside().filter(|r| r.kind == 'W' && r.id != runner).map(|r| r.id).collect();
+            if wakes.len() != 1 || inside().any(|r| "KRD".contains(r.kind)) {
+                continue;
+            }
+            woke += 1;
+            // The hart's next pick or interrupt: a timer interrupt whose records requeue the runner.
+            let Some(next) = own(e + 1, records.len()).find(|r| "KIx".contains(r.kind)) else { continue };
+            if next.kind != 'I' || next.id != runner {
+                continue;
+            }
+            let nb = records.iter().position(|r| core::ptr::eq(r, next)).expect("found above");
+            let Some(&(_, ne)) = list.iter().find(|(b, _)| *b == nb) else { continue };
+            if own(nb, ne + 1).any(|r| r.kind == 'R' && r.id == runner) && records[ne].pass != 1 {
+                *proofs.entry(wakes[0]).or_default() += 1;
+            }
+        }
+    }
+    let matches: Vec<_> = proofs.iter().filter(|(_, n)| **n >= expected).collect();
+    if matches.len() != 1 {
+        return Err(format!(
+            "irq-wake-no-preempt: wanted one budget woken by at least {expected} device interrupts whose runner ran to its slice's end; {claimed} claimed a source, {woke} woke one budget, proofs by budget {proofs:?}"
+        ));
+    }
+    let (driver, n) = matches[0];
+    Ok(format!(
+        "irq-wake-no-preempt: {n} of {claimed} device interrupts woke budget {driver} and returned to the runner, which ran to its slice's end before the pick"
+    ))
+}
+
+/// **An interrupt's handling is its device's owner's** (kernel/scheduling.md, "Charging"): every
+/// device interrupt from user mode that claimed a source charges budget `owner` after its claim
+/// (`B`): the budget the device object is charged to, which the program marks. After the claim it
+/// may charge only the owner and, for its return, the budget it interrupted, whose ticks are
+/// reported; a third budget, or no charge to the owner, fails. The trace must hold such an
+/// interrupt.
+fn check_irq_billed_to(records: &[Record], owner: u64) -> Result<String, String> {
+    let intervals = interrupt_intervals(records)?;
+    let (mut n, mut owner_ticks, mut runner_ticks) = (0usize, 0u64, 0u64);
+    for (&hart, list) in &intervals {
+        for &(b, e) in list.iter().filter(|(b, _)| records[*b].kind == 'x') {
+            let inside: Vec<&Record> = records[b..=e].iter().filter(|r| r.hart == hart).collect();
+            let Some(claim) = inside.iter().position(|r| r.kind == 'c') else { continue };
+            let irq = inside[claim].id;
+            if irq == 0 {
+                continue;
+            }
+            n += 1;
+            let runner = records[b].id;
+            let mut to_owner = 0;
+            for r in inside[claim + 1..].iter().filter(|r| r.kind == 'B' && r.pass > 0) {
+                let ticks = r.pass as u64;
+                if r.id == owner {
+                    to_owner += ticks;
+                } else if r.id == runner {
+                    runner_ticks += ticks;
+                } else {
+                    return Err(format!(
+                        "record {}: a device interrupt that claimed source {irq} charged {ticks} ticks to budget {}, neither its device's owner {owner} nor the budget it interrupted {runner}",
+                        r.seq, r.id
+                    ));
+                }
+            }
+            if to_owner == 0 {
+                return Err(format!(
+                    "record {}: a device interrupt that claimed source {irq} charged nothing to budget {owner}, its device's owner (it interrupted budget {runner}; charges {:?})",
+                    records[b].seq,
+                    inside[claim + 1..]
+                        .iter()
+                        .filter(|r| r.kind == 'B')
+                        .map(|r| (r.id, r.pass as u64))
+                        .collect::<Vec<_>>()
+                ));
+            }
+            owner_ticks += to_owner;
+        }
+    }
+    if n == 0 {
+        return Err(format!(
+            "irq_billed_to={owner} is set, but no device interrupt from user mode claimed a source"
+        ));
+    }
+    Ok(format!(
+        "irq-billed-to: {n} device interrupts claimed a source and charged its owner, budget {owner}, {owner_ticks} ticks for their handling; {runner_ticks} ticks to the budgets they interrupted, for their returns"
+    ))
+}
+
+/// **A budget deadline preempts whatever runs** (kernel/scheduling.md, "Preemption points"):
+/// every timer interrupt from user mode (`I` to `O`) that destroyed a budget (`X`) other than the
+/// one it interrupted must leave for `kmain` (`O 2`, a preemption, or `O 0`, its slice over as
+/// well), never return to user mode, with the interrupted budget requeued inside it (`R`), and the
+/// hart's next pick or interrupt must be a pick: the queue was picked again. The case needs
+/// `expected` such deadlines.
+fn check_deadline_preempts(records: &[Record], expected: usize) -> Result<String, String> {
+    let intervals = interrupt_intervals(records)?;
+    let (mut preempted, mut ended) = (0usize, 0usize);
+    for (&hart, list) in &intervals {
+        let own = |from: usize, to: usize| records[from..to].iter().filter(move |r| r.hart == hart);
+        for &(b, e) in list.iter().filter(|(b, _)| records[*b].kind == 'I') {
+            let runner = records[b].id;
+            let destroyed: Vec<u64> = own(b, e + 1).filter(|r| r.kind == 'X').map(|r| r.id).collect();
+            if runner == 0 || destroyed.is_empty() || destroyed.contains(&runner) {
+                continue;
+            }
+            if records[e].pass == 1 {
+                return Err(format!(
+                    "record {}: a timer interrupt that destroyed budget {} by its deadline returned to budget {runner} in user mode: the deadline did not preempt it",
+                    records[e].seq, destroyed[0]
+                ));
+            }
+            if !own(b, e + 1).any(|r| r.kind == 'R' && r.id == runner) {
+                return Err(format!(
+                    "record {}: a timer interrupt that destroyed budget {} by its deadline left for `kmain` without requeuing budget {runner}",
+                    records[e].seq, destroyed[0]
+                ));
+            }
+            if own(e + 1, records.len()).find(|r| "KIx".contains(r.kind)).is_none_or(|r| r.kind != 'K') {
+                return Err(format!(
+                    "record {}: after a deadline preempted budget {runner}, the hart's next pick or interrupt was no pick",
+                    records[e].seq
+                ));
+            }
+            if records[e].pass == 2 {
+                preempted += 1;
+            } else {
+                ended += 1;
+            }
+        }
+    }
+    if preempted + ended < expected {
+        return Err(format!(
+            "deadline-preempts: wanted at least {expected} timer interrupts that destroyed another budget by its deadline and preempted the runner; {preempted} preempted mid-slice, {ended} with the runner's slice over too"
+        ));
+    }
+    Ok(format!(
+        "deadline-preempts: {} timer interrupts destroyed another budget by its deadline and left for `kmain`, the runner requeued and the queue picked again: {preempted} mid-slice, {ended} with its slice over too",
+        preempted + ended
+    ))
+}
+
+/// **A call's kernel time does not grow with what other budgets hold** (kernel/scheduling.md,
+/// R12), with `hold-trace`: the program prints two windows of `rdtime` ticks (`CALL-BOUNDS
+/// <start> <end> <start> <end> <factor> <floor>`), the calls on an empty system and the same after a
+/// hostile budget built what it could; for every system call made in the first window, its longest
+/// kernel section (by cause, net of audits) in the second is held to `factor` times its longest in
+/// the first, or `floor` ticks. A call made only in the second window is reported, not judged; at
+/// least eight calls must be judged. `None` without the line.
+fn check_call_bounds(log: &str, sections: &[Section]) -> Result<Option<String>, String> {
+    let Some(line) = log.lines().map(|l| l.trim_end_matches('\r')).find(|l| l.starts_with("CALL-BOUNDS "))
+    else {
+        return Ok(None);
+    };
+    let f: Vec<u64> =
+        line["CALL-BOUNDS ".len()..].split_whitespace().filter_map(|x| x.parse().ok()).collect();
+    let [s1, e1, s2, e2, factor, floor] = f[..] else { return Err(format!("malformed {line:?}")) };
+    let longest = |from: u64, to: u64| {
+        let mut by_cause = BTreeMap::<u64, u64>::new();
+        for s in sections.iter().filter(|s| s.cause < 0x200 && s.from >= from && s.to <= to) {
+            let net = s.to - s.from - s.audits;
+            by_cause.entry(s.cause).and_modify(|m| *m = (*m).max(net)).or_insert(net);
+        }
+        by_cause
+    };
+    let (empty, filled) = (longest(s1, e1), longest(s2, e2));
+    let mut judged = Vec::new();
+    let mut unjudged = Vec::new();
+    for (cause, after) in &filled {
+        let Some(before) = empty.get(cause) else {
+            unjudged.push(format!("{} {after}", cause_name(*cause)));
+            continue;
+        };
+        let bound = factor * (*before).max(floor);
+        if *after > bound {
+            return Err(format!(
+                "call bounds: `{}` held the lock {after} ticks net of audits after the fill, above {bound}: {factor} x its longest on the empty system, {before} (floor {floor})",
+                cause_name(*cause)
+            ));
+        }
+        judged.push(format!("{} {before}->{after}", cause_name(*cause)));
+    }
+    if judged.len() < 8 {
+        return Err(format!(
+            "call bounds: only {} system calls made in both windows ({})",
+            judged.len(),
+            judged.join(", ")
+        ));
+    }
+    Ok(Some(format!(
+        "call bounds: {} calls each within {factor} x its empty-system section (floor {floor} ticks): {}; made after the fill only: {}",
+        judged.len(),
+        judged.join(", "),
+        if unjudged.is_empty() { "none".to_string() } else { unjudged.join(", ") }
+    )))
+}
+
 /// The fixture fixes both the start order and the sample plan. This parser rejects missing or
 /// repeated setup acknowledgements and altered plans before any W is classified.
 fn cluster_plan(log: &str) -> Result<(u64, u64, u64, u64), String> {
@@ -3122,9 +3376,9 @@ pub fn audit_inside(audits: &[(u64, u64)], from: u64, to: u64) -> u64 {
 
 /// The measures a program times on `time_now` and prints sample by sample, each a window
 /// `[end - gross, end]` in µs: `LATENCY-SAMPLE <group> <measure> <end> <gross>`, the group being
-/// what the program judges apart (`N=16`). With them, how many it took of each
-/// (`LATENCY-COUNT <group> <measure> <n>`), so a window lost on the way fails the check.
-const MEASURES: [&str; 4] = ["driver_wake", "timer_wake", "decision_wake", "deadline_notice"];
+/// what the program judges apart (`N=16`); `destroy_call` is `budget_destroy` call to return. With them, how
+/// many it took of each (`LATENCY-COUNT <group> <measure> <n>`), so a window lost on the way fails the check.
+const MEASURES: [&str; 5] = ["driver_wake", "timer_wake", "decision_wake", "deadline_notice", "destroy_call"];
 
 /// The walks a `walk-trace` kernel brackets, by their ids 1 to 3, each with a `<name>_max_us`
 /// bound: a receive's pump, a timer expiry's own walk, and a reconcile.
@@ -3310,7 +3564,13 @@ fn sections(sections: &[Section], waits: &[(u64, u64, u64)]) -> String {
 /// bounds the kernel sections entered from the idle that found nothing to do, from the first run
 /// of the budget of mark weight `mark` on ([`idle_sections_that_found_nothing`]).
 /// `round` requires the budget the program marks to run before any other budget is picked twice
-/// ([`check_round`]).
+/// ([`check_round`]). `irq_wake_no_preempt=N` needs N device interrupts that woke a budget and
+/// returned to their runner, which ran to its slice's end ([`check_irq_wake_no_preempt`]);
+/// `irq_billed_to=<mark>` needs every device interrupt that claimed a source to charge the budget of
+/// mark weight `mark`, its device's owner ([`check_irq_billed_to`]); `deadline_preempts=N` needs
+/// every timer interrupt that destroyed another budget by its deadline to preempt its runner, and
+/// N of them ([`check_deadline_preempts`]). A `CALL-BOUNDS` line in the log is judged on a
+/// `hold-trace` kernel's sections ([`check_call_bounds`]).
 pub fn run(log: &str, args: &str) -> Result<String, String> {
     let records = parse(log)?;
     let mut sum = check(&records)?;
@@ -3417,6 +3677,9 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
             "driver_wake_p99_searches",
             "wake_witnesses",
             "wake_mid_slice",
+            "irq_wake_no_preempt",
+            "irq_billed_to",
+            "deadline_preempts",
         ]
         .contains(&name)
             || measure.is_some_and(|m| MEASURES.contains(&m))
@@ -3438,6 +3701,24 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
         }
         (None, _) => None,
     };
+    // A device interrupt's wake and bill, and a deadline's preemption (kernel/scheduling.md,
+    // "Preemption points" and "Charging"); the marks name the devices' owner.
+    let irq_wake_proof = bounds
+        .get("irq_wake_no_preempt")
+        .map(|n| check_irq_wake_no_preempt(&records, *n as usize))
+        .transpose()?;
+    let irq_bill_proof = bounds
+        .get("irq_billed_to")
+        .map(|w| {
+            let (_, marked) = lifts(&records);
+            check_irq_billed_to(&records, mark(&marked, *w, "irq_billed_to")?)
+        })
+        .transpose()?;
+    let deadline_proof = bounds
+        .get("deadline_preempts")
+        .map(|n| check_deadline_preempts(&records, *n as usize))
+        .transpose()?;
+    let call_bounds_proof = check_call_bounds(log, &sum.sections)?;
     if cluster_old_control && !cluster {
         return Err("cluster_old_control requires cluster".into());
     }
@@ -3760,6 +4041,9 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
         report.push(proof);
     }
     if let Some(proof) = lift_delay_proof {
+        report.push(proof);
+    }
+    for proof in [irq_wake_proof, irq_bill_proof, deadline_proof, call_bounds_proof].into_iter().flatten() {
         report.push(proof);
     }
     for (name, (net, audits)) in WALKS.iter().zip(walks) {
@@ -6664,6 +6948,152 @@ mod tests {
             assert!(run(&log, "").is_err(), "{what} was accepted");
         }
         assert!(run(&format!("{one}SCHED-TRACE-END 2 dropped 0\n"), "").is_ok());
+    }
+
+    /// Records on one hart, `(kind, id, pass)`, each its own kernel entry.
+    fn one_hart(events: &[(char, u64, u128)]) -> Vec<Record> {
+        events
+            .iter()
+            .enumerate()
+            .map(|(i, &(kind, id, pass))| Record { seq: i as u64, entry: i as u64, kind, id, pass, hart: 0 })
+            .collect()
+    }
+
+    /// A device interrupt that woke the driver (8) and returned to the spinner (7), which ran to
+    /// its slice's end before the pick: a proof. One that picked inside, or returned otherwise
+    /// than to user mode, or whose runner was picked before its slice's end, is not; a return
+    /// that is no return to user mode fails outright.
+    #[test]
+    fn a_device_wake_that_preempts_is_caught() {
+        let events = [
+            ('K', 7, 0),
+            ('x', 7, 100),
+            ('c', 11, 0),
+            ('B', 2, 30),
+            ('W', 8, 10),
+            ('B', 7, 4),
+            ('O', 0, 1),
+            ('I', 7, 900),
+            ('=', 1000, 1000),
+            ('R', 7, 20),
+            ('K', 8, 10),
+            ('O', 0, 0),
+        ];
+        assert!(check_irq_wake_no_preempt(&one_hart(&events), 1).is_ok());
+        assert!(check_irq_wake_no_preempt(&one_hart(&events), 2).is_err());
+        let mut picked_inside = events.to_vec();
+        picked_inside.insert(5, ('K', 8, 10));
+        assert!(check_irq_wake_no_preempt(&one_hart(&picked_inside), 1).is_err());
+        let mut picked_before_the_end = events.to_vec();
+        picked_before_the_end.insert(7, ('K', 8, 10));
+        assert!(check_irq_wake_no_preempt(&one_hart(&picked_before_the_end), 1).is_err());
+        let mut preempted = events.to_vec();
+        preempted[6] = ('O', 0, 2);
+        assert!(
+            check_irq_wake_no_preempt(&one_hart(&preempted), 1).is_err_and(|e| e.contains("preempted it")),
+        );
+        // One that claimed nothing (another hart's) proves nothing, and is no failure.
+        let mut unclaimed = events.to_vec();
+        unclaimed[2] = ('c', 0, 0);
+        assert!(check_irq_wake_no_preempt(&one_hart(&unclaimed), 1).is_err_and(|e| e.contains("0 woke")));
+    }
+
+    /// A claimed device interrupt charges its device's owner (2) and, for its return, the budget
+    /// it interrupted (7); no owner charge, or a third budget's, fails.
+    #[test]
+    fn a_device_interrupt_bills_its_devices_owner() {
+        let events = [
+            ('K', 7, 0),
+            ('x', 7, 100),
+            ('B', 9, 3),
+            ('c', 11, 0),
+            ('B', 2, 30),
+            ('W', 8, 10),
+            ('B', 7, 4),
+            ('O', 0, 1),
+        ];
+        let ok = check_irq_billed_to(&one_hart(&events), 2).unwrap();
+        assert!(ok.contains("30 ticks") && ok.contains("4 ticks"), "{ok}");
+        // Marked wrongly, the owner's charge is a third budget's.
+        assert!(check_irq_billed_to(&one_hart(&events), 3).is_err_and(|e| e.contains("neither")));
+        let mut unbilled = events.to_vec();
+        unbilled.remove(4);
+        assert!(
+            check_irq_billed_to(&one_hart(&unbilled), 2)
+                .is_err_and(|e| e.contains("charged nothing to budget 2"))
+        );
+        let mut third = events.to_vec();
+        third[6] = ('B', 5, 4);
+        assert!(check_irq_billed_to(&one_hart(&third), 2).is_err_and(|e| e.contains("neither")));
+        // The charge before the claim is the expiry's, not the interrupt's; with no claimed
+        // interrupt at all, the check proves nothing.
+        let mut none = events.to_vec();
+        none[3] = ('c', 0, 0);
+        assert!(check_irq_billed_to(&one_hart(&none), 2).is_err_and(|e| e.contains("no device interrupt")));
+    }
+
+    /// A timer interrupt that destroyed another budget by its deadline preempts its runner: it
+    /// leaves for `kmain` with the runner requeued, and the next thing on the hart is a pick.
+    #[test]
+    fn a_deadline_that_does_not_preempt_is_caught() {
+        let events = [
+            ('K', 7, 0),
+            ('I', 7, 100),
+            ('X', 9, 100),
+            ('Y', 9, 150),
+            ('R', 7, 20),
+            ('H', 0, 0),
+            ('O', 0, 2),
+            ('K', 7, 20),
+        ];
+        assert!(check_deadline_preempts(&one_hart(&events), 1).is_ok());
+        assert!(check_deadline_preempts(&one_hart(&events), 2).is_err());
+        let mut returned = events.to_vec();
+        returned[6] = ('O', 0, 1);
+        assert!(
+            check_deadline_preempts(&one_hart(&returned), 1).is_err_and(|e| e.contains("did not preempt"))
+        );
+        let mut unrequeued = events.to_vec();
+        unrequeued.remove(4);
+        assert!(
+            check_deadline_preempts(&one_hart(&unrequeued), 1)
+                .is_err_and(|e| e.contains("without requeuing"))
+        );
+        let mut no_pick = events.to_vec();
+        no_pick[7] = ('I', 7, 2000);
+        no_pick.push(('O', 0, 1));
+        assert!(check_deadline_preempts(&one_hart(&no_pick), 1).is_err_and(|e| e.contains("no pick")));
+        // The interrupted budget's own deadline is the caller-last path, not a preemption.
+        let mut own = events.to_vec();
+        own[2] = ('X', 7, 100);
+        own[3] = ('Y', 7, 150);
+        assert!(check_deadline_preempts(&one_hart(&own), 1).is_err_and(|e| e.contains("wanted at least 1")));
+    }
+
+    /// Each call's longest section after the fill is held to the factor of its empty-system
+    /// longest, or the floor; a call made after the fill alone is reported.
+    #[test]
+    fn call_bounds_hold_each_call_to_its_empty_system_section() {
+        let section = |from, to, cause, audits| Section { from, to, hart: 0, cause, audits };
+        let mut sections: Vec<Section> = (1..=8u64)
+            .flat_map(|c| [section(100 + c, 110 + c, c, 0), section(1000 + c, 1030 + c, c, 10)])
+            .collect();
+        sections.push(section(1100, 1200, 9, 0));
+        let log = "CALL-BOUNDS 0 500 900 1500 2 100\n";
+        let ok = check_call_bounds(log, &sections).unwrap().unwrap();
+        assert!(
+            ok.contains("8 calls") && ok.contains("made after the fill only: an unknown call 100"),
+            "{ok}"
+        );
+        // The floor: 10 ticks empty, 20 after, bounded by 2 x 100.
+        sections.push(section(1050, 1300, 3, 30));
+        let err = check_call_bounds(log, &sections).unwrap_err();
+        assert!(err.contains("220 ticks") && err.contains("above 200"), "{err}");
+        sections.pop();
+        sections.truncate(2);
+        assert!(check_call_bounds(log, &sections).is_err_and(|e| e.contains("only 1 system calls")));
+        assert!(check_call_bounds("no line\n", &sections).unwrap().is_none());
+        assert!(check_call_bounds("CALL-BOUNDS 1 2 3\n", &sections).is_err());
     }
 }
 

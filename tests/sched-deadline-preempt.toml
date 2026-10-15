@@ -1,0 +1,21 @@
+description = "Another budget's deadline preempts whatever runs (kernel/scheduling.md, \"Preemption points\"): a spinner and a creator making empty budgets due 1.3 ms ahead, one at a time; the post-check needs every timer interrupt that destroyed a budget by its deadline to have left for `kmain` with its runner requeued and the queue picked again, never to have returned to the runner, and 40 of them (virtual time, checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+icount = "shift=3,sleep=off"
+programs = ["sched-deadline-preempt"]
+# Test builds only: the trace ring (never in a default kernel).
+kernel_features = ["sched-trace"]
+post_check = "sched_oracle deadline_preempts=40"
+# One hart: the deadline's timer comes on its payer's hart, and on two the other runner has a hart
+# of its own, so which budget an expiry interrupts, and whether any runs there, is QEMU's turn order
+# (kernel/scheduling.md, "Residual risks").
+keep_smp = true
+timeout_secs = 300
+expect = [
+    '^\[deadline-preempt\] the spinner counted \d+ and the creator \d+ of 1000 of the window',
+    '^SCHED-DEADLINE-PREEMPT TEST PASSED$',
+    '^SCHED-TRACE-END \d+ dropped 0$',
+]
+forbid = ['\[deadline-preempt\] FAIL', 'PROGRAM HALT']
+poweroff = true

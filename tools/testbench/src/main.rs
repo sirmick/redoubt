@@ -865,12 +865,25 @@ fn pack_case(
 
     let boot = match &case.kind {
         Kind::Build(build) => {
-            let outcome = match builder.cargo_build(target, &build.package, &build.features, Profile::Release)
-            {
-                Ok(()) => Outcome::Pass,
+            let profile = if build.debug_assertions { Profile::Checked } else { Profile::Release };
+            let built = if build.forbid_in_binary.is_empty() {
+                builder.cargo_build(target, &build.package, &build.features, profile).map(|()| None)
+            } else {
+                builder.binary(target, &build.package, None, &build.features, profile).map(Some)
+            };
+            let outcome = match built {
+                Ok(None) => Outcome::Pass,
+                Ok(Some(binary)) => match forbidden_in_binary(&binary, &build.forbid_in_binary) {
+                    Ok(()) => Outcome::Pass,
+                    Err(why) => Outcome::Fail(why),
+                },
                 Err(e) => Outcome::Fail(format!("{e:#}")),
             };
-            return Ok(Err(vec![(String::new(), outcome, elapsed(started))]));
+            return Ok(Err(vec![(
+                String::new(),
+                judge(build.must_fail.as_deref(), outcome)?,
+                elapsed(started),
+            )]));
         }
         Kind::Boot(boot) => boot,
         Kind::UnsafeBudget(_)
@@ -1144,6 +1157,25 @@ fn post_check(boot: &case::Boot, log: &Path, out: &mut dyn FnMut(String)) -> Res
         Some(other) => bail!("unknown post_check {other:?}"),
         None => Outcome::Pass,
     })
+}
+
+/// The first of `patterns` the file at `binary` holds, anywhere in its bytes, as a failure quoting
+/// where and what is around it; `Ok` when it holds none (a `build` case's `forbid_in_binary`).
+fn forbidden_in_binary(binary: &Path, patterns: &[String]) -> Result<(), String> {
+    let bytes = std::fs::read(binary).map_err(|e| format!("reading {}: {e}", binary.display()))?;
+    for pattern in patterns {
+        let needle = pattern.as_bytes();
+        if let Some(at) = bytes.windows(needle.len()).position(|w| w == needle) {
+            let around = &bytes[at.saturating_sub(8)..(at + needle.len() + 24).min(bytes.len())];
+            let around: String =
+                around.iter().map(|&b| if b.is_ascii_graphic() { b as char } else { '.' }).collect();
+            return Err(format!(
+                "the binary holds {pattern:?} at offset {at:#x} ({around}): {}",
+                binary.display()
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Apply a case's `must_fail` to the verdict of its run: then the case passes only if the run

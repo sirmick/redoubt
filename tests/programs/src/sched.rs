@@ -144,7 +144,17 @@ pub enum Role {
     /// Count until the window ends, entering the kernel with `time_now` each p0 µs; report the
     /// count.
     SpinCalling = 33,
+    /// Two threads of this process, each counting until the window ends and noting when it got
+    /// the CPU back after a gap of over half a slice (its resumptions): each thread sends its first
+    /// [`RESUMPTIONS`] resumptions (`rdtime` in µs, three a message, tagged
+    /// `thread << 8 | message`), then its slices and count (tagged `thread << 8 | 0xf`); the main
+    /// thread is thread 0, the one it makes at its first turn thread 1 (kernel/scheduling.md,
+    /// "One flat stride queue": round-robin within a budget).
+    RoundRobin = 34,
 }
+
+/// The resumptions a [`Role::RoundRobin`] thread reports.
+pub const RESUMPTIONS: usize = 12;
 
 impl Role {
     fn from_u8(x: u8) -> Option<Role> {
@@ -183,6 +193,7 @@ impl Role {
             SpinThreads,
             SearchHammer,
             SpinCalling,
+            RoundRobin,
         ]
         .into_iter()
         .find(|r| *r as u8 == x)
@@ -364,6 +375,48 @@ fn search_alone(samples: &mut [u64]) {
         let _ = rd::unmap(span, rd::PAGE_SIZE);
     }
     samples.sort_unstable();
+}
+
+/// A [`Role::RoundRobin`] thread, `k` 0 or 1: count until the window ends, noting each time the
+/// CPU came back after a gap of over half a slice, and report (the role's messages, on slot 1).
+extern "C" fn round_robin_thread(k: usize) -> ! {
+    let (tpu, end) = (tpu(), end_ticks());
+    let gap = SLICE_US / 2 * tpu;
+    let mut resumed = [0u32; RESUMPTIONS];
+    let (mut n, mut slices, mut count, mut last) = (0usize, 0u64, 0u64, ticks());
+    // The first run counts as a resumption: the main thread's first turn after its wake, the
+    // other's first after its creation. Times are `rdtime` in µs, absolute.
+    let mut note = |at: u64, n: &mut usize, slices: &mut u64| {
+        *slices += 1;
+        if *n < RESUMPTIONS {
+            resumed[*n] = (at / tpu) as u32;
+            *n += 1;
+        }
+    };
+    note(last, &mut n, &mut slices);
+    while last < end {
+        for _ in 0..CHUNK {
+            count = core::hint::black_box(count + 1);
+        }
+        let now = ticks();
+        if now - last > gap {
+            note(now, &mut n, &mut slices);
+        }
+        last = now;
+    }
+    for (i, three) in resumed.chunks(3).enumerate() {
+        let words = [three[0] as usize, three[1] as usize, three[2] as usize, k << 8 | i];
+        let _ = rd::send(1, &rd::body(words), None, rd::FOREVER);
+    }
+    let [lo, hi] = halves(count);
+    let _ = rd::send(1, &rd::body([slices as usize, lo, hi, k << 8 | 0xf]), None, rd::FOREVER);
+    DONE.fetch_add(1, SeqCst);
+    if k == 0 {
+        await_done(2);
+        rd::process_exit(0)
+    }
+    rd::thread_exit().ok();
+    crate::park()
 }
 
 /// Count until the window ends, a `late` one ([`Role::SpinThreads`]'s p1) from p2 ticks.
@@ -846,6 +899,10 @@ fn run_child(arg: usize, more: Option<fn(Option<Role>, bool)>) -> ! {
             rd::process_exit(0)
         }
         Some(Role::SearchHammer) => search_hammer(end),
+        Some(Role::RoundRobin) => {
+            thread(round_robin_thread, 1);
+            round_robin_thread(0)
+        }
         Some(Role::SpinThreads) => {
             let (first, more) = (param(0).max(1) as usize, param(1) as usize);
             for _ in 1..first {
@@ -1100,6 +1157,11 @@ impl Stats {
     /// The steward's wake from the timeout after which it destroys a lease: its decision.
     pub const DECISION_WAKE: usize = 5;
     pub const DESTROY: usize = 3;
+    /// `budget_destroy`, call to return, as a window the post-check judges net of audits (the
+    /// same samples as [`Stats::DESTROY`], whose summary is gross). The tags share one space with
+    /// the containment gate's (`CT_*`, 4 and 7 to 9) on slot 1: [`Bench::samples`] names a
+    /// measure by its tag alone, so a tag taken twice makes a count with no windows.
+    pub const DESTROY_CALL: usize = 10;
     /// The driver's alarms that never arrived (first word: how many).
     pub const DRIVER_LOST: usize = 6;
     pub const DRIVER_WAKE: usize = 1;
@@ -1112,6 +1174,7 @@ impl Stats {
             Stats::TIMER_WAKE => Some("timer_wake"),
             Stats::DECISION_WAKE => Some("decision_wake"),
             Stats::DEADLINE => Some("deadline_notice"),
+            Stats::DESTROY_CALL => Some("destroy_call"),
             _ => None,
         }
     }
@@ -1262,12 +1325,13 @@ fn driver(k: usize, hold: bool) {
 
 /// The steward stand-in: `k` timeout wakes (how late it runs again after each deadline); `leases`
 /// one-process leases carved from slot 3, each destroyed by hand after a timeout (how long
-/// `budget_destroy` takes); and `leases` more destroyed by their deadlines (how late the killed
-/// notice arrives).
+/// `budget_destroy` takes, call to return: a summary, and each as a window the post-check judges
+/// net of audits); and `leases` more destroyed by their deadlines (how late the killed notice
+/// arrives).
 fn steward(k: usize, leases: usize, hold: bool) {
     let now = || rd::time_now().unwrap_or(0);
     let (k, leases) = (k.min(MAX_SAMPLES), leases.min(MAX_SAMPLES));
-    let mut windows = [[Window::default(); MAX_SAMPLES]; 3];
+    let mut windows = [[Window::default(); MAX_SAMPLES]; 4];
     timer_wakes(&mut windows[0][..k]);
     let image = spawn::image();
     let exit = rd::endpoint_create().expect("exit");
@@ -1293,7 +1357,9 @@ fn steward(k: usize, leases: usize, hold: bool) {
         windows[1][ns] = Window { end: woke, gross: woke.saturating_sub(before + 5_000) };
         ns += 1;
         if rd::destroy(lease).is_ok() {
-            destroy[nd] = now() - woke;
+            let returned = now();
+            destroy[nd] = returned - woke;
+            windows[3][nd] = Window { end: returned, gross: returned - woke };
             nd += 1;
         }
         let _ = rd::receive(Some(exit), 1_000_000, 0);
@@ -1326,11 +1392,13 @@ fn steward(k: usize, leases: usize, hold: bool) {
     Stats::report(&mut destroy[..nd], Stats::DESTROY);
     report_windows(&windows[1][..ns], Stats::DECISION_WAKE);
     report_windows(&windows[2][..nn], Stats::DEADLINE);
+    report_windows(&windows[3][..nd], Stats::DESTROY_CALL);
     if hold {
         hand_over(&[
             (Stats::TIMER_WAKE, &windows[0][..k]),
             (Stats::DECISION_WAKE, &windows[1][..ns]),
             (Stats::DEADLINE, &windows[2][..nn]),
+            (Stats::DESTROY_CALL, &windows[3][..nd]),
         ]);
     }
 }
@@ -1550,7 +1618,8 @@ const CT_CHECK: usize = 2;
 const CT_DONE: usize = 3;
 
 /// The tag of the steward's verdict report on its slot 1 (the only line a hostile agent's lease
-/// could otherwise write to is progress, never a report).
+/// could otherwise write to is progress, never a report). The `CT_*` tags share their space with
+/// [`Stats`]'s.
 pub const CT_VERDICT: usize = 7;
 /// The tag of the steward's report of the bystander's window: `[start, start, length, tag]` (µs,
 /// the start in halves).
@@ -2389,15 +2458,15 @@ impl Bench {
         out
     }
 
-    /// Collect `n` messages of raw words: for each child index, up to four messages in the order
-    /// they came.
-    pub fn collect_words(&mut self, n: usize) -> [[[usize; 4]; 4]; 64] {
-        let mut out = [[[0usize; 4]; 4]; 64];
+    /// Collect `n` messages of raw words: for each child index, up to five messages in the order
+    /// they came (the steward stand-in's five summaries).
+    pub fn collect_words(&mut self, n: usize) -> [[[usize; 4]; 5]; 64] {
+        let mut out = [[[0usize; 4]; 5]; 64];
         let mut seen = [0usize; 64];
         for _ in 0..n {
             if let Ok(Received::Message(m)) = rd::receive(Some(self.rep), 60_000_000, 0) {
                 let i = (m.badge as usize).saturating_sub(1);
-                if i < 64 && seen[i] < 4 {
+                if i < 64 && seen[i] < 5 {
                     out[i][seen[i]] = m.body.words;
                     seen[i] += 1;
                 }
@@ -2613,6 +2682,20 @@ impl Bench {
             let _ = write!(Console, " {}:{}", w, k);
         }
         let _ = writeln!(Console);
+    }
+
+    /// Two windows of system calls the bench's post-check (`sched_oracle`) compares from a
+    /// `hold-trace` kernel's lock sections: printed as `CALL-BOUNDS <start> <end> <start> <end>
+    /// <factor> <floor>`, each window in the kernel's ticks (its clock counts from its boot, as
+    /// the sections do: `time_now` times the ticks per µs), the second's longest section of each
+    /// call made in the first, net of audits, held to `factor` times the first's or `floor` ticks
+    /// (kernel/scheduling.md, R12).
+    pub fn call_bounds(&self, empty: (u64, u64), filled: (u64, u64), factor: u64, floor: u64) {
+        let _ = writeln!(
+            Console,
+            "CALL-BOUNDS {} {} {} {} {} {}",
+            empty.0, empty.1, filled.0, filled.1, factor, floor
+        );
     }
 
     pub fn check(&mut self, ok: bool, what: core::fmt::Arguments) {
