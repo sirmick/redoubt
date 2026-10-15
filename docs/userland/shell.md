@@ -99,6 +99,10 @@ Status: built · partly tested: runs on the host only, on beamlet and on the BEA
    `Code.eval_quoted_with_env/4`. The shell holds the bindings and the environment between
    lines, so an evaluation that dies loses only its own line. The compiler's diagnostics are
    taken with `Code.with_diagnostics/2` and printed by the shell, not written by the compiler.
+   A `fn` typed at the prompt is interpreted, and on the machine each call of it costs about
+   3.6 ms plus 0.18 µs for every byte of a binary among its bindings, so a loop written at the
+   prompt over a 256 KiB binary takes 50 ms a step where the compiled walk takes 0.14 ms: why
+   is open.
 4. **Print** the value through `Redoubt.Term.Text`, which draws every control character in it
    visibly (`^[`, `^G`, `<U+009B>`, `<U+202E>`); a `%Lines{}` is printed a line at a time.
 
@@ -345,11 +349,12 @@ in a `Job`.
 
 ### The terminal library
 
-<details><summary>Status: built · partly tested: the line editor and screens on the host only, and screens on beamlet alone (the BEAM has no screen buffer); printed text is drawn on the machine, a long line over SSH and the encoder's rate at the console; its tests are the shell's own ExUnit suite (`test/redoubt/term_test.exs`, `test/redoubt/term/frame_test.exs`, `test/redoubt/term/keys_test.exs`, `test/redoubt/term/width_test.exs`, `test/redoubt/shell/driver_test.exs`, `test/redoubt/screen_test.exs`), judged on a model of the terminal that takes only the encoder's sequences, and a pseudo-terminal test of the real binary, both of which `./test-shell` runs · tested (3)</summary>
+<details><summary>Status: built · partly tested: the line editor and screens on the host only, and screens on beamlet alone (the BEAM has no screen buffer); printed text is drawn on the machine, a long line over SSH and the encoder's rate at the console; its tests are the shell's own ExUnit suite (`test/redoubt/term_test.exs`, `test/redoubt/term/frame_test.exs`, `test/redoubt/term/keys_test.exs`, `test/redoubt/term/width_test.exs`, `test/redoubt/shell/driver_test.exs`, `test/redoubt/screen_test.exs`), judged on a model of the terminal that takes only the encoder's sequences, and a pseudo-terminal test of the real binary, both of which `./test-shell` runs · tested (4)</summary>
 
 - host:beamlet::pick_on_a_terminal_takes_the_screen_and_gives_it_back_with_the_choice
 - bench:shell-long-output
 - bench:shell-output-rate
+- bench:shell-text-profile
 
 </details>
 
@@ -403,17 +408,35 @@ and every [full-screen program](#full-screen-programs).
   typed at the line's end draws itself alone and moves the cursor the encoder keeps, so it costs
   the key, not the line: the 200th character typed costs what the 10th did.
 - **The rate:** on the machine, timed in guest time (`icount`, `shift=3`), the encoder draws 256 KiB
-  of ASCII at about 28,500 bytes a second on rv64 and 25,800 on rv32, and of Cyrillic at 31,900 and
-  29,600, where the encoder before runs draws about 620 and 1,240 (rv64, on the same interpreter);
-  text of short runs between tabs, controls and wide characters at about 4,200, where it draws
-  1,150. A keystroke in the middle of a line of 400 characters, wrapped over six rows of 80, draws
-  the line again in about 57 ms on rv64 and 65 ms on rv32, where it took 1.64 and 1.84 s.
+  of ASCII at about 30,800 bytes a second on rv64 and 27,800 on rv32 (28,500 and 25,800 when runs
+  were built), and of Cyrillic at 31,900 and 29,600, where the encoder before runs draws about 620
+  and 1,240 (rv64, on the same interpreter); a line of 1 MiB at 35,100 and 31,600, in 29.9 and
+  33.2 s; text of short runs between tabs, controls and wide characters at about 4,200, where it
+  draws 1,150. A keystroke in the middle of a line of 400 characters, wrapped over six rows of 80,
+  draws the line again in about 57 ms on rv64 and 65 ms on rv32, where it took 1.64 and 1.84 s.
   `shell-output-rate` holds both widths to 12,000 bytes a second for each text, a margin of 2.1 on
   the slowest (rv32's ASCII), and the least of three redraws to 250 ms, a margin of 3.8. It times
   the encoder alone: what reaches the person also passes the driver's writes and `consoled` or
   `sshd`, and a keystroke `group` and `edlin`'s own work. The numbers are measured on beamlet's
   faster interpreter, which moved them little: the encoder's time is now mostly the VM's matchers
   and the few steps a run takes.
+- **The profile** (`shell-text-profile`, run by name, both widths, guest time): of a 256 KiB
+  line's draw, making it visible is three fifths and the run path's wrap and encoding the rest,
+  about 30 µs a byte in all. Text that leaves the run path is measured a grapheme at a time, about
+  0.8 ms a grapheme on rv64 and 0.9 on rv32: the walk (`String.next_grapheme`, which is
+  `:unicode_util.gc/1`) 0.42 ms and the width (`:unicode_util.is_wide/1`) 0.22 ms. So CJK, emoji
+  and text broken by combining marks draws at about 4,100 and 3,600 bytes a second, 64 KiB of it in
+  16 to 18 s: slow and bounded. A page of 82-byte lines of English with one CJK word, one emoji
+  and one accented name each draws at 7,200 and 6,400 bytes a second, and the same page in ASCII
+  alone at 10,400 and 9,300: a line's five graphemes, and the two runs they split, cost 3.5 of its
+  11.4 ms on rv64, and the rest is the piece's. Every line is a piece, and a piece's first 64 code
+  points are taken one at a time in Erlang by `Text.visible` and again by `Width.run` before the
+  matchers: the ASCII page's `Text.visible` costs 3.8 ms a line where the long line's costs 1.6 ms
+  for the same bytes. A run path for wide text would gain such a page a fifth at most, and is not
+  built; the per-grapheme path stays as it is. That a page of ordinary lines draws at a third of
+  a long line's rate, the piece's prologue paid twice a line, is the cost left: whether the
+  prologue should be shorter when the piece is, or a line's runs carried past its newline, is
+  not decided.
 - **Frames are the cell protocol** ([the cell protocol](#the-cell-protocol)): the screen buffer's
   diff speaks it ([beamlet](beamlet.md#screen-natives)), and the encoder reads it through the one
   decoder (`Redoubt.Term.Cells`) and draws it
