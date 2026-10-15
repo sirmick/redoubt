@@ -1,0 +1,58 @@
+description = "A measurement, run by name: the shell's encoder per stage (the whole draw, making visible, the grapheme walk, the width walk) over ASCII, hostile mixed text (CJK, emoji and a combining mark), a realistic page of English with one CJK word, one emoji and one accented name a line, the same page in ASCII alone, and a 1 MiB line, in guest microseconds at alice's console prompt, each stage printed as it completes (docs/userland/shell.md, \"The terminal library\")"
+arch = ["rv64", "rv32"]
+# About 70 s a width alone, its figures read from the console log, nothing judged: run by name
+# (`make -f scripts/jobs.mk rv64/shell-text-profile`), never in every merge's run.
+whole_run = false
+kind = "boot"
+recipe = "image/boot.toml"
+memory_mib = 1024
+# Guest time, as shell-output-rate: a figure is the machine's instructions, not the loaded host's.
+icount = "shift=3"
+timeout_secs = 900
+expect = [
+    '^init: the boot is done: ',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+    '(^|\] )\{:stage, :ascii, :whole, ',
+    '(^|\] )\{:stage, :ascii4k, :width, ',
+    '(^|\] )\{:stage, :mixed4k, :width, ',
+    '(^|\] )\{:stage, :page4k, :width, ',
+    '(^|\] )\{:stage, :apage4k, :width, ',
+    '(^|\] )\{:stage, :page, :whole, ',
+    '(^|\] )\{:stage, :apage, :whole, ',
+    '(^|\] )\{:mib, ',
+]
+forbid = ['init: refused the boot', 'init: rebooting', 'EXCEPTION', '\{:error']
+
+# Timers: one guest-time run of a closure, in µs, printed per stage as it completes. The whole
+# draw is Term.request over Term.slices, as the console's driver draws a print; the grapheme and
+# width walks are the compiled ones (String.graphemes, Width.columns): a walk written at the
+# prompt runs in the evaluator, and its step grows with the size of the binary it is bound to
+# (4 KiB: 4.3 ms a step; 256 KiB: 50 ms, 350 times the compiled walk's), the trap the second
+# attempt at this case fell into (docs/userland/shell.md, "The loop").
+[[input]]
+after = '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir '
+send = "tm = fn f -> t = System.monotonic_time(:microsecond); f.(); System.monotonic_time(:microsecond) - t end; whole = fn s -> tm.(fn -> term = Redoubt.Term.new(80, 24); Enum.reduce(Redoubt.Term.slices(term, {:put_chars, :unicode, s}, 65_536), term, fn r, term -> elem(Redoubt.Term.request(term, r), 1) end) end) end; vis = fn s -> tm.(fn -> Redoubt.Term.Text.visible(s) end) end; gr = fn s -> tm.(fn -> String.graphemes(s) end) end; wd = fn s -> tm.(fn -> Redoubt.Term.Width.columns(s) end) end; prof = fn name, s -> IO.inspect({:stage, name, :whole, byte_size(s), whole.(s)}); IO.inspect({:stage, name, :visible, vis.(s)}); IO.inspect({:stage, name, :graphemes, gr.(s)}); IO.inspect({:stage, name, :width, wd.(s)}) end; :ok\n"
+
+# The whole path and visible over 256 KiB of ASCII; every stage over 4 KiB of each text (the
+# walks build a list of the graphemes, so they take a piece's worth, not a print's). The lines
+# of the two pages are 82 bytes each.
+[[input]]
+after = '(^|\] ):ok$'
+send = "ascii = String.duplicate(\"z\", 262_144); line = \"The quick brown fox jumps over the lazy dog near \\u4e16\\u754c, says Jos\\u00e9 \\u{1F642} at noon.\\n\"; aline = \"The quick brown fox jumps over the lazy dog near Beijing, says Josef :-) at noon.\\n\"; pages = fn l, n -> String.duplicate(l, div(n, byte_size(l))) end; IO.inspect({:stage, :ascii, :whole, byte_size(ascii), whole.(ascii)}); IO.inspect({:stage, :ascii, :visible, vis.(ascii)}); prof.(:ascii4k, binary_part(ascii, 0, 4096)); prof.(:mixed4k, String.duplicate(\"世界🙂e\\u0301\", div(4096, 13))); prof.(:page4k, pages.(line, 4096)); prof.(:apage4k, pages.(aline, 4096)); :done\n"
+
+# The whole path over 64 KiB of the mixed text and of each page.
+[[input]]
+after = '(^|\] ):done$'
+send = "mixed = String.duplicate(\"世界🙂e\\u0301\", div(65_536, 13)); page = pages.(line, 65_536); apage = pages.(aline, 65_536); IO.inspect({:stage, :mixed, :whole, byte_size(mixed), whole.(mixed)}); IO.inspect({:stage, :page, :whole, byte_size(page), whole.(page)}); IO.inspect({:stage, :apage, :whole, byte_size(apage), whole.(apage)}); :done2\n"
+
+# One line of 1 MiB through the whole path, in bytes a second.
+[[input]]
+after = '(^|\] ):done2$'
+send = "mib = String.duplicate(\"z\", 1_048_576); w = whole.(mib); IO.inspect({:mib, byte_size(mib), [whole_us: w, bytes_per_s: div(1_048_576 * 1_000_000, max(w, 1))]})\n"
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
