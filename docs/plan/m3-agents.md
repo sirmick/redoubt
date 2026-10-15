@@ -97,6 +97,8 @@ above has its case, as the tables say, and the kernel containment gate holds hos
 kernel's primitives alone ([containment](../kernel/README.md#containment)). The image has an
 `agent` principal ahead of leases, a session's budget with no labels and no network scope for a
 sponsor-run agent whose loop runs outside the box, logged in by `agent-login`
-([the image](../../image/README.md)). What the milestone
+([the image](../../image/README.md)); in that session the agent compiles a module from a string,
+keeps its `.beam` in its home and loads it again from the bytes, by `shell-compile`
+([development](../userland/development.md#the-compilers-on-beamlet)). What the milestone
 builds on: the steward's principals, sub-budgets and sessions, and `sshd` on the box, from
 [M1 (sessions over SSH, kept apart)](m1-separation.md).
