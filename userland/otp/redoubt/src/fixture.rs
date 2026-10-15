@@ -340,6 +340,9 @@ pub fn sink(busy: u32) -> SinkServer {
         let limits = Limits { buckets: 4, in_flight: 2, files: 8, state: 4, requests: 2, pages: 2 };
         let random = redoubt_rt::handle::random_u64().unwrap_or(1);
         let Ok(mut server) = NineServer::new(sink, limits, random) else { return 1 };
+        // A held read waits as long as the test holds it: the server answers no `timeout` of
+        // its own, so what a client does with a request never answered is the client's.
+        server.requests_wait(FOREVER);
         server.run(&Endpoint::from_handle(endpoint), |_, request| refuse_malformed(request))
     });
     SinkServer { pid, endpoint, thread, writes, taken, hold_reads, clunks }

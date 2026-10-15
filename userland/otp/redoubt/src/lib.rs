@@ -54,7 +54,7 @@ use beamlet_vm::memory::HeapPages;
 use beamlet_vm::platform::{ConsoleInput, Files, Identity, Lookup, Platform, PlatformError, System};
 use beamlet_vm::vm::{Config, Limits};
 use beamlet_vm::{Class, Vm};
-pub use files::posix;
+pub use files::{FILE_WAIT_US, posix};
 pub use jobs::MAX_JOBS;
 use redoubt_client::aio::{Conn, Done, MAX_WRITE, Outcome, RETRY_US};
 use redoubt_client::console::Console;

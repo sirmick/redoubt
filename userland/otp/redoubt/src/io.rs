@@ -26,8 +26,9 @@ use crate::system::HAND_US;
 /// the home volume, a labelled volume, `ipd`, the console, the system volume); a bind is one of
 /// these connections again. Each is a thread of the process, under the kernel's 255 a process. A
 /// connection whose server has ended gives its place up once its waiter has handed its end over,
-/// which the VM waits for when it forgets the connection and, at the bound, when it needs the
-/// place ([`Io::forget`], [`Io::connect`]).
+/// which the VM waits for when it forgets the connection ([`Io::forget`]); an operation that finds
+/// every place held parks until an ended server's waiter hands one over, or fails `emfile` at
+/// `FILE_WAIT_US` (files.rs), off the VM's thread.
 pub const MAX_WAITERS: usize = 6;
 
 /// The hub, its connections, and the endpoint its waiters wake the VM on.
@@ -61,8 +62,8 @@ impl Io {
     /// "Handles are resource terms"). The server is dead, so its waiter's completion call fails
     /// at once and the waiter sends its last hand-over: the VM waits for it here, [`HAND_US`] at
     /// most, and lets the connection go, so the place is free before the next server needs it.
-    /// Past the bound the place is let go when needed ([`Io::connect`]). A connection the hub
-    /// never opened has nothing to end.
+    /// Past the bound the place is let go when the hand-over comes ([`Io::connect`], its caller
+    /// parked). A connection the hub never opened has nothing to end.
     pub(crate) fn forget(&mut self, conn: &Connection) {
         let hub =
             self.conns.iter().find(|(k, _, _)| k.same(conn)).and_then(|(_, c, _)| c.as_ref().ok().copied());
@@ -76,11 +77,10 @@ impl Io {
     /// `conn`'s hub connection: the first time, a multiplexed session on it and its waiter. A server
     /// that serves no multiplexed session refuses the first completion call, and that is the error;
     /// a waiter that cannot start is one too, for good. At [`MAX_WAITERS`], a connection whose
-    /// server has ended and whose waiter has returned gives its place up first; one whose waiter
-    /// has yet to hand its end over is waited for, [`HAND_US`] at most, since a session's `piped`
-    /// is a new server, on a new connection, at every pipeline (docs/servers/piped.md). With every
-    /// place still held past that, `TooManyThreads`: the VM's own bound, which the files layer
-    /// names `emfile`.
+    /// server has ended and whose waiter has returned gives its place up first; with every place
+    /// still held, `TooManyThreads` at once, the VM's own bound: nothing waits here, since the
+    /// operation that asked parks and asks again (files.rs), and a session's `piped` is a new
+    /// server, on a new connection, at every pipeline (docs/servers/piped.md).
     pub fn connect(&mut self, conn: &Connection) -> Result<Conn, Error> {
         if let Some((_, c, _)) = self.conns.iter().find(|(known, _, _)| known.same(conn)) {
             return *c;
@@ -89,12 +89,6 @@ impl Io {
             // A waiter's last wake-up may be waiting still: taken, its connection is over.
             self.take_waiting();
             self.reap();
-        }
-        if self.conns.len() == MAX_WAITERS {
-            self.hand_over(|io| {
-                io.reap();
-                io.conns.len() < MAX_WAITERS
-            });
         }
         if self.conns.len() == MAX_WAITERS {
             return Err(Error::Sys(redoubt_rt::abi::Error::TooManyThreads));

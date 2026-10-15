@@ -7,10 +7,11 @@
 
 use std::sync::{Arc, Mutex};
 
-use beamlet_redoubt::Redoubt;
 use beamlet_redoubt::fixture::{self, Dirs, Volume};
 use beamlet_redoubt::io::MAX_WAITERS;
+use beamlet_redoubt::system::HAND_US;
 use beamlet_redoubt::system::MAX_BINDINGS;
+use beamlet_redoubt::{FILE_WAIT_US, Redoubt};
 use beamlet_vm::platform::{
     BudgetSpec, Event, FileError, Files, Identity, Launch, Message, Object, OpenMode, Platform, Refused,
     System,
@@ -313,8 +314,8 @@ fn servers(
 }
 
 /// Every place held by a server that has just ended, none of whose waiters has handed its end
-/// over yet, and a fresh server needing one: the VM waits for a hand-over at the bound and serves
-/// the fresh one (once, `eio`: a session's seventh pipeline under load, B61).
+/// over yet, and a fresh server needing one: the request parks off the VM's thread (the call
+/// answers `Later` at once) and is served once a hand-over frees a place.
 #[test]
 fn a_fresh_connection_at_the_bound_waits_for_an_ended_waiters_hand_over() {
     let f = fake();
@@ -341,18 +342,34 @@ fn a_fresh_connection_at_the_bound_waits_for_an_ended_waiters_hand_over() {
             });
             let (fresh, _) = p.lookup(&format!("s{places}")).unwrap();
             p.bind("/fresh", &fresh).unwrap();
+            // The call does not hold the VM's thread for the hand-over: it answers `Later` at once.
             let started = std::time::Instant::now();
-            assert_eq!(ask(p, |p| p.make_dir("/fresh/p")), Ok(()));
-            assert!(started.elapsed() >= std::time::Duration::from_millis(100), "waited for a hand-over");
+            p.asker(Some(ME));
+            assert_eq!(p.make_dir("/fresh/p"), Err(FileError::Later));
+            p.asker(None);
+            assert!(
+                started.elapsed() < std::time::Duration::from_micros(HAND_US),
+                "the VM's thread was held"
+            );
+            while p.finished() != Some(ME) {
+                p.idle(None);
+            }
+            p.asker(Some(ME));
+            assert_eq!(p.make_dir("/fresh/p"), Ok(()));
+            p.asker(None);
+            assert!(
+                started.elapsed() >= std::time::Duration::from_millis(100),
+                "served before the hand-over"
+            );
             assert!(ender.join().unwrap().iter().all(|code| *code == redoubt_rt::exit::OK));
             assert_eq!(volumes.lock().unwrap().remove(0).stop(), redoubt_rt::exit::OK);
         },
     );
 }
 
-/// Every place held by a live server, and a fresh one needing a place: after the bound's wait the
-/// request is refused by the VM's own name, `emfile`, not a device's `eio`, and the live servers
-/// are still served.
+/// Every place held by a live server, and a fresh one needing a place: the request parks for
+/// `FILE_WAIT_US`, then fails by the VM's own name, `emfile`, not a device's `eio`, and the live
+/// servers are still served.
 #[test]
 fn a_fresh_connection_past_the_bound_is_refused_emfile_and_the_live_ones_still_serve() {
     let f = fake();
@@ -371,13 +388,99 @@ fn a_fresh_connection_past_the_bound_is_refused_emfile_and_the_live_ones_still_s
             p.bind("/fresh", &fresh).unwrap();
             let started = std::time::Instant::now();
             assert_eq!(ask(p, |p| p.make_dir("/fresh/p")), Err(FileError::Emfile));
-            assert!(started.elapsed() >= std::time::Duration::from_millis(900), "waited the bound first");
+            assert!(
+                started.elapsed() >= std::time::Duration::from_micros(FILE_WAIT_US),
+                "failed before the bound"
+            );
             assert_eq!(ask(p, |p| p.make_dir("/s0/q")), Ok(()));
             for _ in 0..=places {
                 assert_eq!(volumes.lock().unwrap().remove(0).stop(), redoubt_rt::exit::OK);
             }
         },
     );
+}
+
+/// A request the server takes and never answers fails `etimedout` at `FILE_WAIT_US`, the
+/// server's own name for a request it gave up on; its answer, coming late, is dropped; and the
+/// connection still serves the next request.
+#[test]
+fn a_request_unanswered_past_file_wait_fails_etimedout_and_the_connection_still_serves() {
+    let f = fake();
+    let sink = fixture::sink(0);
+    let (hold, taken) = (Arc::clone(&sink.hold_reads), Arc::clone(&sink.taken));
+    let (server, endpoint) = (sink.pid, sink.endpoint);
+    with_session(
+        move |pid| vec![("sink", f.grant(server, endpoint, pid, 0x60))],
+        move |p, _| {
+            let (sink, _) = p.lookup("sink").unwrap();
+            p.bind("/sink", &sink).unwrap();
+            let held = ask(p, |p| p.open("/sink/out", OpenMode::default())).unwrap();
+            let how = OpenMode { write: true, ..OpenMode::default() };
+            let out = ask(p, |p| p.open("/sink/out", how)).unwrap();
+            // The sink holds the read: the request is taken and stays unanswered.
+            hold.store(true, std::sync::atomic::Ordering::SeqCst);
+            let started = std::time::Instant::now();
+            assert_eq!(ask(p, |p| p.read(held, 16)), Err(FileError::Etimedout));
+            assert!(
+                started.elapsed() >= std::time::Duration::from_micros(FILE_WAIT_US),
+                "failed before the bound"
+            );
+            // The answer comes late, to no one; the connection serves the next request.
+            hold.store(false, std::sync::atomic::Ordering::SeqCst);
+            let until = p.monotonic_us() + 200_000;
+            while p.monotonic_us() < until {
+                let step = p.monotonic_us() + 20_000;
+                p.idle(Some(step));
+            }
+            assert_eq!(ask(p, |p| p.write(out, b"still here")), Ok(()));
+            assert_eq!(taken.lock().unwrap().as_slice(), b"still here");
+            p.close(held);
+            p.close(out);
+        },
+    );
+    f.destroy(sink.pid, sink.endpoint);
+    let _ = sink.thread.join();
+}
+
+/// A request answered `busy` again and again fails `ebusy` at `FILE_WAIT_US`, and the retry
+/// stops: no request reaches the server after the failure.
+#[test]
+fn a_request_busy_past_file_wait_fails_busy() {
+    let f = fake();
+    let sink = fixture::sink(u32::MAX);
+    let writes = Arc::clone(&sink.writes);
+    let (server, endpoint) = (sink.pid, sink.endpoint);
+    with_session(
+        move |pid| vec![("sink", f.grant(server, endpoint, pid, 0x60))],
+        move |p, _| {
+            let (sink, _) = p.lookup("sink").unwrap();
+            p.bind("/sink", &sink).unwrap();
+            let how = OpenMode { write: true, ..OpenMode::default() };
+            let out = ask(p, |p| p.open("/sink/out", how)).unwrap();
+            let started = std::time::Instant::now();
+            assert_eq!(ask(p, |p| p.write(out, b"never taken")), Err(FileError::Ebusy));
+            assert!(
+                started.elapsed() >= std::time::Duration::from_micros(FILE_WAIT_US),
+                "failed before the bound"
+            );
+            // A retry in flight at the bound still reaches the server; after that, none does.
+            let settle = |p: &mut Redoubt| {
+                let until = p.monotonic_us() + 200_000;
+                while p.monotonic_us() < until {
+                    let step = p.monotonic_us() + 20_000;
+                    p.idle(Some(step));
+                }
+            };
+            settle(p);
+            let tried = writes.lock().unwrap().len();
+            assert!(tried > 1, "the write was retried: {tried} tries");
+            settle(p);
+            assert_eq!(writes.lock().unwrap().len(), tried, "a retry went on past the failure");
+            p.close(out);
+        },
+    );
+    f.destroy(sink.pid, sink.endpoint);
+    let _ = sink.thread.join();
 }
 
 /// How many pipelines a long session runs: each one `piped`, launched with `serve`, bound and ended.

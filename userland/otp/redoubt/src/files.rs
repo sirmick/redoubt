@@ -133,20 +133,36 @@ enum Kind {
     },
 }
 
+/// How long a file operation waits (µs) for each request's answer, `busy` retries counted, and
+/// for a connection's place at `MAX_WAITERS` (docs/userland/files.md, "Everything moves in
+/// pieces"): the file server's own longest wait for a request (`COLLECT_WAIT`), past which it
+/// would have answered `timeout` had it been running. Past it the operation fails with the name
+/// of what it waited for: `etimedout` an answer, `ebusy` a share, `emfile` a place. The clock is
+/// the files layer's: nothing waits on the VM's thread for any of them.
+pub const FILE_WAIT_US: u64 = 10_000_000;
+
 /// One asker's operation.
 struct Op {
     kind: Kind,
     conn: Connection,
-    hub: Conn,
+    /// The hub connection, once the operation has one: an operation that finds every waiter's
+    /// place held parks without one ([`Table::go_on`]).
+    hub: Option<Conn>,
     fid: u32,
     /// The fid is walked and is this operation's to clunk.
     walked: bool,
     /// The request out, and its tag.
     out: Option<(Ask, u16)>,
-    /// The server answered the request `busy` (over the connection's share for a moment): when
-    /// it goes again, [`RETRY_US`] later rather than at once, as the hub's rule for a queued
-    /// request has it.
+    /// The server answered the request `busy` (over the connection's share for a moment), or
+    /// every waiter's place is held: when it goes again, [`RETRY_US`] later rather than at once,
+    /// as the hub's rule for a queued request has it.
     retry_at: Option<u64>,
+    /// When what the operation waits for has waited too long ([`FILE_WAIT_US`]): set at a
+    /// request's first send and cleared by its answer, or at the operation's start while it
+    /// wants a place.
+    deadline: Option<u64>,
+    /// The request out was answered `busy` at least once: what it waits for is a share.
+    busied: bool,
     result: Option<Result<Answer, FileError>>,
     abandoned: bool,
 }
@@ -197,10 +213,22 @@ impl Table {
         }
     }
 
-    /// Sends every request whose retry has come due; an abandoned operation waiting to retry ends
+    /// Fails every operation whose wait has reached [`FILE_WAIT_US`], naming what it waited for;
+    /// sends every request whose retry has come due; an abandoned operation waiting to retry ends
     /// instead, asking nothing more.
     pub(crate) fn pump(&mut self, io: &mut Io) {
         let now = crate::now();
+        let late: Vec<u64> = self
+            .ops
+            .iter()
+            .filter(|(_, op)| op.out.is_some() && op.deadline.is_some_and(|at| at <= now))
+            .map(|(a, _)| *a)
+            .collect();
+        for asker in late {
+            let Some(mut op) = self.ops.remove(&asker) else { continue };
+            self.give_up(&mut op);
+            self.go_on(io, asker, op);
+        }
         let mut i = 0;
         while i < self.closes.len() {
             if self.closes[i].retry_at > now {
@@ -230,11 +258,42 @@ impl Table {
         }
     }
 
-    /// How long until a request answered `busy` goes again, if one waits to: a bound on any wait
-    /// meanwhile, so nothing else need wake the VM for it.
+    /// How long until a request answered `busy` goes again, or an operation's wait reaches its
+    /// bound, if one waits to: a bound on any wait meanwhile, so nothing else need wake the VM
+    /// for it.
     pub(crate) fn retry_in(&self, now: u64) -> Option<u64> {
-        let ops = self.ops.values().filter_map(|op| op.retry_at);
+        let ops = self.ops.values().flat_map(|op| [op.retry_at, op.deadline]).flatten();
         ops.chain(self.closes.iter().map(|c| c.retry_at)).map(|at| at.saturating_sub(now)).min()
+    }
+
+    /// `op` has waited [`FILE_WAIT_US`]: it fails with the name of what it waited for. A place
+    /// at `MAX_WAITERS`: `emfile`, it never held one. A share, `busy` again and again: `ebusy`,
+    /// the retry stops. An answer: `etimedout`, the server's own name for it. A request in
+    /// flight at the bound (the first send, or a retry the server has not answered yet) is left
+    /// to the server: its answer, if it ever comes, finds no owner and is dropped, and its fid is
+    /// retired as a lost reply's is, so no later walk reaches a fid the server may still hold. A
+    /// request parked for its retry was never taken: a walk's fid is freed, a walked fid is
+    /// clunked. The connection is kept.
+    fn give_up(&mut self, op: &mut Op) {
+        let Some((ask, tag)) = op.out.take() else { return };
+        op.deadline = None;
+        let parked = op.retry_at.take().is_some();
+        let failed = match op.hub {
+            None => FileError::Emfile,
+            Some(hub) => {
+                if !parked {
+                    self.requests.retain(|(c, t, _)| !(*c == hub && *t == tag));
+                    op.walked = false;
+                }
+                if op.busied { FileError::Ebusy } else { FileError::Etimedout }
+            }
+        };
+        if parked && matches!(ask, Ask::Walk(_)) {
+            op.conn.free_fid(op.fid);
+            op.walked = false;
+        }
+        op.busied = false;
+        op.result.get_or_insert(Err(failed));
     }
 
     /// How many requests the servers have answered `busy`.
@@ -262,6 +321,11 @@ impl Table {
                 if let Some(mut op) = self.ops.remove(&asker) {
                     let reply = op.out.take().map(|(ask, _)| (reply(&ask, done), ask));
                     if let Some((reply, ask)) = reply {
+                        // Answered: the request's clock stops; a `busy` keeps it running.
+                        if !matches!(reply, Reply::Busy) {
+                            op.deadline = None;
+                            op.busied = false;
+                        }
                         self.answer(&mut op, ask, reply);
                     }
                     if op.abandoned && op.result.is_none() {
@@ -291,6 +355,7 @@ impl Table {
             (_, Reply::Busy) => {
                 // Over the connection's share for a moment: asked again after the retry interval.
                 self.busy += 1;
+                op.busied = true;
                 op.retry_at = Some(crate::now().saturating_add(RETRY_US));
                 op.out = Some((ask, 0));
                 return;
@@ -373,8 +438,8 @@ impl Table {
             Kind::Open { how, .. } => {
                 let handle = self.next;
                 self.next += 1;
-                let open =
-                    Open { conn: op.conn.clone(), hub: op.hub, fid: op.fid, pos: 0, append: how.append };
+                let Some(hub) = op.hub else { return op.result = Some(Err(FileError::Eio)) };
+                let open = Open { conn: op.conn.clone(), hub, fid: op.fid, pos: 0, append: how.append };
                 self.open.insert(handle, open);
                 // The fid is the open file's now.
                 op.walked = false;
@@ -484,23 +549,60 @@ impl Table {
     }
 
     /// Sends what `op` asks next, or ends it: its result, then a clunk of the fid it walked. An ask
-    /// answered `busy` waits here until its retry is due, and [`Table::pump`] sends it.
+    /// answered `busy` waits here until its retry is due, and [`Table::pump`] sends it. An
+    /// operation without a hub connection yet takes one first; with every waiter's place held it
+    /// parks the same way, asking again at the retry interval until a hand-over frees a place or
+    /// its wait reaches [`FILE_WAIT_US`] ([`Table::give_up`]): a refusal of the VM's own, before
+    /// a byte is sent, and never on the VM's thread.
     fn go_on(&mut self, io: &mut Io, asker: u64, mut op: Op) {
         loop {
+            let now = crate::now();
             if op.out.is_none() && op.result.is_some() && op.walked {
                 op.out = Some((Ask::Clunk, 0));
             }
-            if op.out.is_some() && op.retry_at.is_some_and(|at| crate::now() < at) {
+            if op.out.is_some() && op.retry_at.is_some_and(|at| now < at) {
                 self.ops.insert(asker, op);
                 return;
             }
             let Some((ask, _)) = op.out.take() else {
                 return self.end(io, asker, op);
             };
-            match send(io, op.hub, op.fid, &ask) {
+            let hub = match op.hub {
+                Some(hub) => hub,
+                None => match io.connect(&op.conn) {
+                    Ok(hub) => {
+                        op.hub = Some(hub);
+                        op.deadline = None;
+                        hub
+                    }
+                    Err(Error::Sys(SysError::TooManyThreads)) if op.deadline.is_some_and(|at| now < at) => {
+                        op.out = Some((ask, 0));
+                        op.retry_at = Some(now.saturating_add(RETRY_US));
+                        self.ops.insert(asker, op);
+                        return;
+                    }
+                    Err(e) => {
+                        // No place within the bound, no memory, or no connection to make: the
+                        // walk's fid was never made, and nothing was sent.
+                        if matches!(ask, Ask::Walk(_)) {
+                            op.conn.free_fid(op.fid);
+                        }
+                        op.walked = false;
+                        op.deadline = None;
+                        op.result.get_or_insert(Err(match e {
+                            Error::Sys(SysError::TooManyThreads) => FileError::Emfile,
+                            Error::Sys(SysError::OutOfMemory) => FileError::Enomem,
+                            _ => FileError::Eio,
+                        }));
+                        continue;
+                    }
+                },
+            };
+            match send(io, hub, op.fid, &ask) {
                 Ok(tag) => {
                     op.out = Some((ask, tag));
-                    self.requests.push((op.hub, tag, Owner::Op(asker)));
+                    op.deadline.get_or_insert(now.saturating_add(FILE_WAIT_US));
+                    self.requests.push((hub, tag, Owner::Op(asker)));
                     self.ops.insert(asker, op);
                     return;
                 }
@@ -557,22 +659,18 @@ impl Table {
         if names.len() > ninep::MAXWELEM {
             return Err(FileError::Enametoolong);
         }
-        // A refusal of the VM's own, before a byte is sent: no waiter slot free for a connection
-        // (`Io::connect`), or no memory; neither is the server's failure, so neither is `eio`.
-        let hub = io.connect(&conn).map_err(|e| match e {
-            Error::Sys(SysError::TooManyThreads) => FileError::Emfile,
-            Error::Sys(SysError::OutOfMemory) => FileError::Enomem,
-            _ => FileError::Eio,
-        })?;
         let fid = conn.take_fid().map_err(|_| FileError::Emfile)?;
+        // The connection's hub session comes in `go_on`; the wait for a place starts now.
         let op = Op {
             kind,
             conn,
-            hub,
+            hub: None,
             fid,
             walked: false,
             out: Some((Ask::Walk(names), 0)),
             retry_at: None,
+            deadline: Some(crate::now().saturating_add(FILE_WAIT_US)),
+            busied: false,
             result: None,
             abandoned: false,
         };
@@ -593,11 +691,13 @@ impl Table {
         let op = Op {
             kind,
             conn: open.conn.clone(),
-            hub: open.hub,
+            hub: Some(open.hub),
             fid: open.fid,
             walked: false,
             out: Some((first, 0)),
             retry_at: None,
+            deadline: None,
+            busied: false,
             result: None,
             abandoned: false,
         };

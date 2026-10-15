@@ -45,7 +45,7 @@ of it; per-file metadata through the server's `set_attr` and `get_attr` is plann
 
 ### Files over 9P
 
-<details><summary>Status: built · partly tested: the host tests run beamlet's platform against the real `littlefsd` on the fake kernel, and OTP's `prim_file` over the natives runs in a boot in bench:beamlet-files; Elixir's `File` over them runs in a session once the steward's sessions do · tested (26)</summary>
+<details><summary>Status: built · partly tested: the host tests run beamlet's platform against the real `littlefsd` on the fake kernel, and OTP's `prim_file` over the natives runs in a boot in bench:beamlet-files; Elixir's `File` over them runs in a session once the steward's sessions do · tested (28)</summary>
 
 - host:beamlet-redoubt::files_are_written_read_listed_renamed_and_removed
 - host:beamlet-redoubt::a_rename_the_volume_refuses_is_eacces
@@ -61,6 +61,8 @@ of it; per-file metadata through the server's `set_attr` and `get_attr` is plann
 - host:beamlet-redoubt::a_file_operation_on_the_consoles_connection_is_answered
 - host:beamlet-redoubt::a_write_answered_busy_goes_again_after_the_retry_interval
 - host:beamlet-redoubt::a_close_answered_busy_is_retried_and_its_fid_is_kept_until_the_clunk_is_served
+- host:beamlet-redoubt::a_request_unanswered_past_file_wait_fails_etimedout_and_the_connection_still_serves
+- host:beamlet-redoubt::a_request_busy_past_file_wait_fails_busy
 - host:beamlet-redoubt::a_stat_reports_only_what_9p_has
 - host:beamlet-redoubt::what_has_no_9p_field_is_refused_visibly
 - host:beamlet-redoubt::a_field_set_on_a_missing_file_is_enoent
@@ -103,8 +105,12 @@ neither inside nor above one is `:enoent` ([sessions](sessions.md#namespaces)).
 - **Everything moves in pieces**: a read asks at most what one answer carries (the 64 KiB `msize`
   less its header), a write at most a page, each one request on the VM's hub
   ([asynchronous underneath](beamlet.md#asynchronous-underneath-synchronous-on-top)), so only the
-  Erlang process that asked waits for it. The file server's `rename` is a typed call, which no hub
-  carries: it is made on the VM's thread.
+  Erlang process that asked waits for it. It waits at most `FILE_WAIT_US` (10 s, the file server's
+  own longest wait for a request) for each request, `busy` retries counted, and for a connection's
+  place at `MAX_WAITERS`; past that the operation fails with the name of what it waited for
+  (`etimedout` an answer, `ebusy` a share, `emfile` a place), the connection kept and a later
+  answer dropped. None of it waits on the VM's thread. The file server's `rename` is a typed call,
+  which no hub carries: it is made on the VM's thread.
 - **Plain 9P2000**, with no Unix extensions: a `stat` has a name, a length, a modification time
   and a qid (the server's identity and version for the file), and nothing else. Custom
   per-file metadata is the file server's typed `set_attr` and `get_attr`, kept in the volume's
@@ -139,6 +145,13 @@ missing path's `enoent`, and bench:beamlet-files sees `mode` undefined in a boot
 written back as `ok` and written to a missing file as `enoent`.
 
 Residuals, each a departure from the table, until the file server serves what it needs:
+- **A request that times out retires its fid.** An operation whose request went unanswered for
+  `FILE_WAIT_US` keeps that fid out of use for the connection's life, as a lost reply's is, since
+  the server may still hold it; a connection has `MAX_FIDS` (64) of them, so a server that never
+  answers costs its connection at most 64 timed-out requests before every operation on it is
+  `emfile`. The VM's own waits (the console's writes) consult the console's retry, not a file
+  operation's deadline: a timed-out operation is noticed when the VM next idles or takes a
+  completion, bounded by the console's progress.
 - **No times are set and none is stored.** The 9P skeleton refuses `Twstat`, so a time given to
   `File.write_stat` or `File.touch` is not kept, though the call is `:ok`, and a cut at a
   position (`:file.truncate/1`) other than an open's is `{:error, :enotsup}`; and no file server

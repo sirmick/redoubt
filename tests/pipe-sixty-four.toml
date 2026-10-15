@@ -8,10 +8,11 @@ memory_mib = 1024
 # pipe-eight's eight take about 10 s after the boot; these take eight times that under load.
 timeout_secs = 450
 # Host clock in the guest (no icount), and run one at a time on the quiet cores (scripts/jobs.mk).
-# The VM waits for an ended piped's waiter to hand its end over, at each pipeline's end and at
-# the bound, 1 s each (docs/userland/beamlet.md "Threads"); beside heavy load on rv32 (ten bench
-# jobs) a hand-over took longer than that, and the seventh fresh piped's first request was refused
-# {:refused, {:mkdir, :emfile}}: a failure beside other work has no verdict until it fails alone
+# A fresh piped needs a waiter's place; one an ended piped's waiter still holds is handed over
+# when that waiter returns, and the pipeline's first request parks until it is, up to FILE_WAIT_US
+# (10 s), off the VM's thread (docs/userland/beamlet.md "Threads"). The hand-over itself is
+# load-bound, so the case stays in the quiet class until it has passed five times beside a whole
+# bench on rv32: a failure beside other work has no verdict until it fails alone
 # (docs/testbench.md, "On a shared host").
 expect = [
     '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
