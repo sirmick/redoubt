@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 126
+revision = 128
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -2166,6 +2166,6 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   needs = ["B60"]
   body = "Found by B60's measurement (.wash/local/B60-report.md, 2026-10-15; steward-red-2's P2-1): a function defined at the prompt runs in the evaluator (erl_eval) and each call costs ~3.6 ms plus ~0.18 µs per byte of the binaries bound in its environment, so a walk over a large binary is quadratic: 50 ms a step at 256 KiB (350x a compiled step), hours for the whole. Not the shell's encoder (B60 measured compiled walks linear at 141-422 µs a grapheme). Find where the per-byte cost arises (the bindings copied per call? the binary re-matched? beamlet's erl_eval or term copying), bound it or make large bindings references, with a host measurement on beamlet and a sentence in shell.md's evaluator section; until then shell.md names the trap (B60 points at it). Tier B (the evaluator is OTP's; beamlet's platform if the cost is the VM's). Size S-M."
-  state = "active"
-  revision = 125
+  state = "done"
+  revision = 128
   overrides = ["2026-10-15: started by Orchestrator before B60 (reported): B60 is reviewed OK with notes and one docs amend from acceptance; B65 waits on its head only for one shell.md sentence"]
