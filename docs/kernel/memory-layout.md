@@ -189,13 +189,14 @@ any other address there is an ordinary fault.
 
 ### Regions
 
-<details><summary>Status: built · partly tested: the message area is a convention of the kernel that no case attacks as an address · tested (5)</summary>
+<details><summary>Status: built · partly tested: the message area is a convention of the kernel that no case attacks as an address · tested (6)</summary>
 
 - bench:map-fixed-attack
 - bench:map-fixed-tables
 - bench:map-anon-search-bound
 - bench:boot-stack-reservation
 - bench:bundle-mapped
+- bench:thread-stack-guard
 
 </details>
 
@@ -210,6 +211,7 @@ User space uses the same addresses on both widths, all below 2 GiB. On Sv39 the 
 | `0x2000_0000`..`0x4000_0000` | the bundle (`BUNDLE_AT`), only in `init`'s address space or the tester's in its place: the whole verified initrd, mapped read-only by the loader and kept so by `init`, which is trusted (a program it starts holds only copies), charged to `root`; at most 512 MiB, and the loader refuses a larger one or one that does not start on a page. `map_fixed` over it is refused as an overlap | the loader |
 | `0x4000_0000`..`0x4040_0000` | the message area (4 MiB): where the kernel maps a lend or transfer the process receives, every one inside it | the kernel |
 | `0x6000_0000`..`0x7000_0000` | the `map_anon` area (256 MiB): where `map_anon`, `map_device` and `dma_alloc` place pages, every run inside it | the kernel |
+| `0x7000_0000`..`0x7FF0_0000` | the thread-stack area (255 MiB, `redoubt_rt::thread::STACKS_BASE`): where the runtime's `spawn` places every spawned thread's stack by `map_fixed`, slot after slot from the bottom, each stack's pages above one page the runtime leaves unmapped as its guard, so an overflow faults there and the kernel ends the process at once ([redoubt-rt](../userland/native.md#redoubt-rt-the-native-runtime)); the kernel places nothing here (`map_anon`'s area ends below it), so a guard stays unmapped under the process's own `map_anon` calls, and a `map_fixed` of the program's own in the area is refused to the next `spawn` whose slot it took | the runtime |
 | `0x7FF0_0000` | the startup block, in a launched process | the launcher |
 | `0x7FF8_0000`..`0x8000_0000` | the first thread's stack: the loader reserves 32 pages (`0x7FFE_0000`..`0x8000_0000`) for a boot process, backing only the top one before first touch; a launcher maps and backs all of a child's chosen 1 to 128 pages here | the loader for a boot process; a launcher places its own |
 
@@ -225,7 +227,7 @@ top 0x7fff_ffff
 columns widths
 0x7ff8_0000 | first thread's stack (up to 128 pages launched; boot reserves top 32 pages) | Sv32: the end of user space; Sv39: user space goes on to 0x40_0000_0000
 0x7ff0_0000 | startup block (launched)
-0x7000_0000 hole | free
+0x7000_0000 | thread-stack area, 255 MiB: spawned stacks, each above an unmapped guard page (the runtime)
 0x6000_0000 | map_anon area, 256 MiB
 0x4040_0000 hole | free
 0x4000_0000 | message area, 4 MiB

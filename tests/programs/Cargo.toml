@@ -131,6 +131,8 @@ bin = [
     { name = "stub-launch", test = false },
     { name = "syscall-attack", test = false },
     { name = "thread-limit", test = false },
+    { name = "thread-stack-guard", test = false },
+    { name = "thread-stack-overflow", test = false },
     { name = "timeouts", test = false },
     { name = "timer-flood-at-rest", test = false },
     { name = "touch-beyond-ram", test = false },
@@ -158,9 +160,9 @@ redoubt-sys = { path = "../../libs/sys" }
 # The kernel-half addresses the attack cases aim at, from their one definition.
 redoubt-layout = { path = "../../libs/layout" }
 # Only for the launchers: the startup-block builder, and the stub's own fixed address/bounds-
-# checking constants; `launcher-orphan` and `heap-cap` launch through the client library's
-# `Launch`, and `heap-capped` runs on the runtime. Every other test program stays on the raw `rd`
-# wrapper.
+# checking constants; `launcher-orphan`, `heap-cap` and `thread-stack-guard` launch through the
+# client library's `Launch`, and `heap-capped` and `thread-stack-overflow` run on the runtime.
+# Every other test program stays on the raw `rd` wrapper.
 redoubt-rt = { path = "../../libs/rt" }
 redoubt-client = { path = "../../libs/client" }
 # The requests `launcher-orphan` and the programs it starts send each other.

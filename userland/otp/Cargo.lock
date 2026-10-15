@@ -712,6 +712,7 @@ dependencies = [
 name = "redoubt-fake-kernel"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "redoubt-rt",
 ]
 

@@ -1,0 +1,17 @@
+description = "A spawned thread's stack has an unmapped guard page below it (userland/native.md, \"redoubt-rt\", thread; kernel/memory-layout.md, \"Regions\"): a tester in init's place launches thread-stack-overflow, whose helper thread recurses without end on a two-page stack in the thread-stack area's first slot; its first store below the stack lands in the guard page, which the kernel's fault line names (0x7000_0xxx), and the process ends there, its exit notice Faulted, with no later crash elsewhere (AGT4's illegal instruction from a helper's overflow into the heap); both widths"
+arch = ["rv64", "rv32"]
+kind = "boot"
+icount = "shift=3,sleep=off"
+# The tester in init's place, since servers under init hold no budget handle (R33), and the
+# child it launches from the bundle. The verdicts are the kernel's: the fault line's address in
+# the guard page, and the exit notice's cause; the child's words are traces.
+programs = ["thread-stack-guard", "thread-stack-overflow"]
+timeout_secs = 10
+expect = [
+    '^\[thread-stack-guard\] trace: the child is about to spawn its helper$',
+    '^PROGRAM HALT: CPU Exception on PID \d+: Store page fault of 0x70000[0-9a-f]{3} at 0x',
+    '^\[thread-stack-guard\] ok: the helper.s overflow ended the child at its guard page: cause Faulted$',
+    '^\[thread-stack-guard\] THREAD STACK GUARD TEST PASSED$',
+]
+forbid = ['\[thread-stack-guard\] FAIL', 'Illegal instruction', 'Load page fault', 'Instruction page fault']
+poweroff = true

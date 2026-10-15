@@ -97,6 +97,14 @@ impl Buffer {
         Ok(Buffer::adopt(Pages { addr, npages }))
     }
 
+    /// `npages` zeroed pages at exactly `addr` (`map_fixed`): refused if any of them is taken.
+    pub(crate) fn fixed(addr: usize, npages: usize) -> Result<Buffer, Error> {
+        let npages = core::num::NonZeroUsize::new(npages).ok_or(Error::InvalidArgument)?;
+        let len = npages.get().checked_mul(PAGE_SIZE).ok_or(Error::TooLarge)?;
+        crate::handle::map_fixed(addr, len, MemFlags::READ | MemFlags::WRITE)?;
+        Ok(Buffer::adopt(Pages { addr, npages }))
+    }
+
     pub(crate) fn adopt(pages: Pages) -> Self { Self { mapping: Mapping::adopt(pages) } }
 
     pub fn npages(&self) -> usize { self.mapping.pages.npages.get() }

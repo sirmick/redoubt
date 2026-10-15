@@ -4,7 +4,8 @@
 //! share the host's address space, so a lend is "mapped" into the server by passing its
 //! address, and records are read and written where the runtime put them. It models what the
 //! runtime and the echo pair use (endpoints, badges, `mint`, the four IPC calls, `serve`,
-//! abandoned calls and their notices, `map_anon`, `unmap`, `handle_close`, `time_now`, `random`,
+//! abandoned calls and their notices, `map_anon`, `map_fixed` (host pages at the address named,
+//! for a spawned thread's stack), `unmap`, `handle_close`, `time_now`, `random`,
 //! `process_exit`) and not the rest: no charging, no label check between user budgets (R1), no fair waiting
 //! (R2). A lend's or a transfer's pages are given up for the message, as the kernel's are
 //! (docs/kernel/ipc.md, Messages): a given-up range is refused to every call (a second lend or
@@ -201,6 +202,9 @@ struct State {
     /// leaked. An entry is replaced when its address is allocated again; after an `Unmap` it is
     /// left dangling, which is harmless because nothing reads it.
     anon: HashMap<usize, AtomicPtr<u8>>,
+    /// The addresses `MapFixed` mapped, host pages from `mmap` at the address the runtime named
+    /// (a spawned thread's stack above its guard page), which `Unmap` gives back with `munmap`.
+    fixed: HashSet<usize>,
     /// Launched processes, by the index their handles carry.
     launched: Vec<Launched>,
     /// Exit notices not yet received: (endpoint, notice).
@@ -397,6 +401,15 @@ impl Fake {
         let s = self.lock();
         let p = &s.processes[pid];
         (p.handles.iter().flatten().count(), p.held())
+    }
+
+    /// What `pid` has mapped: each range's address and length, in address order.
+    pub fn mappings(&self, pid: usize) -> Vec<(usize, usize)> {
+        let s = self.lock();
+        let mut mappings: Vec<(usize, usize)> =
+            s.processes[pid].mappings.iter().map(|(&a, &l)| (a, l)).collect();
+        mappings.sort_unstable();
+        mappings
     }
 
     /// Waits until `pid` holds exactly `handles` handles, at most `timeout`: `true` when it does.
@@ -894,6 +907,45 @@ unsafe impl redoubt_rt::Transport for Fake {
                 s.anon.insert(addr, AtomicPtr::new(pages));
                 Ok(Return::Addr(addr))
             }
+            Call::MapFixed { addr, len, .. } => {
+                // The kernel's range checks (kernel/memory.md, `map_fixed`); the overlap check is
+                // the host's: the fake processes share this address space, and `mmap` with
+                // `MAP_FIXED_NOREPLACE` refuses a range any of it has taken, as the kernel
+                // refuses one touching a taken page, mapping nothing.
+                if addr == 0 || len == 0 || addr % PAGE_SIZE != 0 || len % PAGE_SIZE != 0 {
+                    return Err(Error::InvalidArgument);
+                }
+                let Some(end) = addr.checked_add(len) else { return Err(Error::InvalidArgument) };
+                if end > redoubt_rt::abi::USER_AREA_END {
+                    return Err(Error::InvalidArgument);
+                }
+                let mut s = self.lock();
+                // SAFETY (host test code only): an anonymous private mapping of fresh pages at
+                // `addr`, replacing nothing (`MAP_FIXED_NOREPLACE`), so no memory of this process
+                // is remapped under a reference; the pages are given back by `Unmap` below, once.
+                let got = unsafe {
+                    libc::mmap(
+                        addr as *mut libc::c_void,
+                        len,
+                        libc::PROT_READ | libc::PROT_WRITE,
+                        libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_FIXED_NOREPLACE,
+                        -1,
+                        0,
+                    )
+                };
+                if got == libc::MAP_FAILED {
+                    return Err(Error::InvalidArgument);
+                }
+                if got as usize != addr {
+                    // An old kernel without `MAP_FIXED_NOREPLACE` took it as a hint: not placed.
+                    // SAFETY (host test code only): `got` is the mapping `mmap` just returned.
+                    unsafe { libc::munmap(got, len) };
+                    return Err(Error::InvalidArgument);
+                }
+                s.processes[pid].map(addr, len);
+                s.fixed.insert(addr);
+                Ok(Return::Nothing)
+            }
             Call::Unmap { addr, len } => {
                 let mut s = self.lock();
                 if s.processes[pid].mappings.get(&addr) != Some(&len) {
@@ -901,7 +953,13 @@ unsafe impl redoubt_rt::Transport for Fake {
                 }
                 not_given_up(&s, pid, addr, len)?;
                 s.processes[pid].mappings.remove(&addr);
-                free(addr, len);
+                if s.fixed.remove(&addr) {
+                    // SAFETY (host test code only): `MapFixed` above mapped exactly `len` bytes at
+                    // `addr`, which its process has just given up, so they are unmapped once.
+                    unsafe { libc::munmap(addr as *mut libc::c_void, len) };
+                } else {
+                    free(addr, len);
+                }
                 Ok(Return::Nothing)
             }
             Call::EndpointCreate => {
