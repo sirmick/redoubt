@@ -1,0 +1,19 @@
+description = "The kernel refuses a boot with no timebase (R17): a tree whose timebase-frequency is 0, which the loader reports by leaving out Time, and the kernel panics before any process"
+arch = ["rv64", "rv32"]
+kind = "boot"
+icount = "shift=3,sleep=off"
+programs = ["log-server"]
+timeout_secs = 10
+# QEMU's own tree for this line, with /cpus/timebase-frequency set to 0 (docs/testbench.md,
+# "Hostile inputs"). The property stays, as 0, rather than going: the firmware needs it to come
+# up at all (RustSBI prints nothing without it), and the loader reads 0 as none and writes no
+# `Time` tag (loader/src/main.rs). Every real QEMU boot supplies 10 MHz, which is why no boot
+# attacked this before.
+device_tree = [{ set = "/cpus/timebase-frequency", words = [0] }]
+allow_panic = true          # the kernel is supposed to panic here
+# The verdict is the kernel's own, from its boot (PID 1, before KMAIN, which is forbidden), so no
+# program ran to print it; the loader's own report of the timebase it read comes first.
+expect = ['timebase 0 Hz', '^PANIC in PID 1', 'the loader reported no timebase \(`Time`\)']
+forbid = ['KMAIN']
+poweroff = true             # and the refusal stops the machine, rather than limping on
+poweroff_status = 255       # RustSBI preserves the kernel's SBI SystemFailure reason

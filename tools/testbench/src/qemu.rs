@@ -127,6 +127,9 @@ pub struct Image<'a> {
     pub memory_mib: u32,
     /// Extra QEMU arguments attaching devices (`virtio_devices`).
     pub devices: &'a [String],
+    /// A device tree to boot with instead of the one QEMU builds (`-dtb`): the case's edited
+    /// copy of that one (`Boot::device_tree`).
+    pub dtb: Option<&'a Path>,
 }
 
 impl Image<'_> {
@@ -142,7 +145,33 @@ impl Image<'_> {
             .arg("-initrd")
             .arg(self.bundle)
             .args(self.devices);
+        if let Some(dtb) = self.dtb {
+            qemu.arg("-dtb").arg(dtb);
+        }
         qemu
+    }
+
+    /// Write the device tree QEMU builds for this very command line to `path`: the same machine,
+    /// memory, harts and devices, with `dumpdtb`, on which QEMU writes the tree and exits before
+    /// the firmware runs.
+    pub fn dump_device_tree(&self, path: &Path) -> Result<()> {
+        let mut qemu = self.qemu();
+        qemu.args([
+            "-machine",
+            &format!("dumpdtb={}", path.display()),
+            "-display",
+            "none",
+            "-serial",
+            "none",
+        ]);
+        let output = qemu.output().with_context(|| format!("starting {}", self.machine.qemu))?;
+        ensure!(
+            output.status.success() && path.exists(),
+            "dumping the device tree: {} ({})",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+        Ok(())
     }
 
     /// Boot with the console on this terminal. Ctrl-A X quits QEMU. If `debug`, start
@@ -1049,6 +1078,34 @@ fn idle_edges(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every boot names its firmware with `-bios`, the one path the run checked, and no boot
+    /// leaves QEMU to pick one (kernel/boot.md, "Firmware"); a device tree is passed only when a
+    /// case edited one.
+    #[test]
+    fn every_boot_names_the_checked_firmware_and_a_tree_only_when_edited() {
+        let machine = Machine {
+            qemu: "qemu-system-riscv64",
+            qemu_args: &["-machine", "virt"],
+            loader_package: "loader",
+            kernel_features: &[],
+        };
+        let mut image = Image {
+            machine: &machine,
+            firmware: "/checked/rustsbi-prototyper",
+            loader: Path::new("loader"),
+            bundle: Path::new("bundle.tar"),
+            smp: 1,
+            memory_mib: 256,
+            devices: &[],
+            dtb: None,
+        };
+        let line = shell_line(&image.qemu());
+        assert!(line.contains(" -bios /checked/rustsbi-prototyper "), "{line}");
+        assert!(!line.contains("-dtb"), "{line}");
+        image.dtb = Some(Path::new("edited.dtb"));
+        assert!(shell_line(&image.qemu()).ends_with(" -dtb edited.dtb"));
+    }
 
     /// `expect_after` matches in order: a line that matches a later pattern first does not count
     /// for it, and the first pattern unmatched is the one a miss names.

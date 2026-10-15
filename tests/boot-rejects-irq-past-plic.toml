@@ -1,0 +1,19 @@
+description = "The kernel refuses a Devs entry naming an interrupt at or above the PLIC's 1024 sources: a device node asking for interrupt 1024, which the loader passes on and the kernel stops the boot over"
+arch = ["rv64", "rv32"]
+kind = "boot"
+icount = "shift=3,sleep=off"
+programs = ["log-server"]
+timeout_secs = 10
+# QEMU's own tree for this line, with one virtio slot's interrupt set to 1024 (docs/testbench.md,
+# "Hostile inputs"). The loader keeps the node (it drops only interrupt 0 and a node in RAM), so
+# this is the one malformed `Devs` entry a device tree can produce; the kernel's other refusals
+# of the block are the loader's to write and no tree reaches them (docs/kernel/boot.md, "The
+# argument block").
+device_tree = [{ set = "/soc/virtio_mmio@10008000/interrupts", words = [1024] }]
+allow_panic = true          # the kernel is supposed to panic here
+# The verdict is the kernel's own, from its boot (PID 1, before KMAIN, which is forbidden), so no
+# program ran to print it; the loader's acceptance of the bundle comes first.
+expect = ['bundle signature ok', '^PANIC in PID 1', "Devs: an interrupt beyond the PLIC's sources"]
+forbid = ['KMAIN']
+poweroff = true             # and the refusal stops the machine, rather than limping on
+poweroff_status = 255       # RustSBI preserves the kernel's SBI SystemFailure reason

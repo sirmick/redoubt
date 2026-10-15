@@ -57,7 +57,7 @@ built for each width, serves rv32 (Sv32) and rv64 (Sv39); both widths boot.
 
 ### Firmware
 
-Status: built · partly tested: that the bench never falls back to QEMU's own firmware is not attacked by a case · tested: bench:rustsbi-boot, bench:verified-boot-rejects-tamper
+Status: built · tested: bench:rustsbi-boot, bench:verified-boot-rejects-tamper, host:testbench::a_missing_firmware_image_fails_the_case_rather_than_falling_back, host:testbench::every_boot_names_the_checked_firmware_and_a_tree_only_when_edited
 
 The only firmware is the **RustSBI Prototyper**, vendored in `bios/` at a pinned upstream commit
 and built for both widths by `scripts/build-bios.sh`. Its `qemu-virt` feature compiles only QEMU
@@ -150,12 +150,14 @@ runs the same builder and writes `target/image/redoubt.bundle`.
 
 ### The argument block
 
-<details><summary>Status: built · partly tested: the kernel's refusals of a malformed block (a tag past the end, a second `MREx`, a `Devs` entry that names RAM or a controller, wraps or names interrupt 0 or one at or above 1024, a `Grnt` tag) are not attacked by a case · tested (4)</summary>
+<details><summary>Status: built · partly tested: the kernel's refusals of a block only the loader could write (a tag past the end, a second `MREx`, a `Devs` entry that names RAM or a controller, wraps or names interrupt 0, a `Grnt` tag) are not attacked by a case: no device tree makes the loader write one, and the kernel has no host tests · tested (6)</summary>
 
 - bench:rustsbi-boot
 - bench:device
 - bench:uart-irq
 - bench:rng
+- bench:boot-rejects-irq-past-plic
+- bench:boot-rejects-no-timebase
 
 </details>
 
@@ -390,10 +392,11 @@ for `./mkimage` and for `init-boot`, which boots the recipe's bundle to `init`'s
 
 ### Verified boot
 
-<details><summary>Status: built · partly tested: the two boot cases run on rv64 only; the rv32 loader's check is the same code, not attacked · tested (7)</summary>
+<details><summary>Status: built · tested (8)</summary>
 
 - bench:verified-boot-rejects-tamper
 - bench:verified-boot-rejects-bare-archive
+- bench:verified-boot-rejects-short-initrd
 - host:redoubt-signing::preamble_is_the_documented_bytes
 - host:redoubt-signing::domain_is_prefix_free
 - host:redoubt-signing::volume_preimage_is_the_documented_bytes
@@ -460,7 +463,7 @@ compiles its public half in instead ([getting started](../../GETTING-STARTED.md)
 
 ### Randomness
 
-Status: built · partly tested: that a short or missing seed stops the boot is not attacked by a case · tested: bench:rng
+Status: built · tested: bench:rng, bench:boot-rejects-no-seed, bench:boot-rejects-short-seed
 
 The loader copies `/chosen/rng-seed` (16 to 64 bytes; QEMU `virt` writes a fresh one each boot)
 into the `Seed` tag, and refuses to boot with less than 16 bytes. The kernel folds the whole seed
@@ -494,7 +497,7 @@ Status: built · tested: bench:irq-attack, bench:device, bench:device-info-attac
 
 ### R15 (verified boot)
 
-Status: built · partly tested: the two boot cases run on rv64 only · tested: bench:verified-boot-rejects-tamper, bench:verified-boot-rejects-bare-archive, host:testbench::golden_signature_over_a_known_archive
+Status: built · tested: bench:verified-boot-rejects-tamper, bench:verified-boot-rejects-bare-archive, bench:verified-boot-rejects-short-initrd, host:testbench::golden_signature_over_a_known_archive
 
 No byte of the bundle is parsed or run before its signature checks. The loader reads only the
 bundle's range from the device tree, verifies the signature over
@@ -538,7 +541,7 @@ extends verified boot to the userland's integrity, not to a code-signing gate.
 
 ### R16 (image confinement)
 
-Status: built · partly tested: an image cut short inside its segment data and a writable and executable segment are not attacked by a case; the truncated-image case runs on rv64 only · tested: bench:loader-rejects-kernel-address, bench:loader-rejects-kernel-entry, bench:loader-rejects-truncated-elf
+Status: built · tested: bench:loader-rejects-kernel-address, bench:loader-rejects-kernel-entry, bench:loader-rejects-truncated-elf, bench:loader-rejects-segment-data-cut, bench:loader-rejects-wx-segment
 
 The loader confines every image to its area (`loader/src/image.rs`). Every loadable segment,
 from its address to address plus memory size, and the entry point must lie in the area: for a
@@ -554,10 +557,15 @@ would be written into all of them.
 
 ### R17 (fail closed)
 
-<details><summary>Status: built · partly tested: a short or missing seed and a missing timebase are not attacked by a case (every QEMU boot supplies both); the two signature cases run on rv64 only; the physmap and PLIC-context refusals, the loader's device-table refusal and the kernel's ASID-width refusal are tested on the host, not by a boot · tested (10)</summary>
+<details><summary>Status: built · partly tested: the kernel's own refusal of a missing `Seed` tag stands behind the loader's refusal of the seed and is not reached by a boot; the physmap and PLIC-context refusals, the loader's device-table refusal and the kernel's ASID-width refusal are tested on the host, not by a boot · tested (15)</summary>
 
 - bench:verified-boot-rejects-tamper
 - bench:verified-boot-rejects-bare-archive
+- bench:verified-boot-rejects-short-initrd
+- bench:boot-rejects-no-seed
+- bench:boot-rejects-short-seed
+- bench:boot-rejects-no-timebase
+- bench:boot-rejects-irq-past-plic
 - host:redoubt-layout::ram_one_page_past_the_physmap_end_is_refused
 - host:loader::a_boot_hart_without_an_s_mode_context_is_refused
 - host:loader::booting_on_hart_1_takes_hart_1s_s_mode_context
@@ -578,7 +586,10 @@ interrupt; a bundle that is not a tar or has no second entry; a bundle that does
 page, is larger than 512 MiB or shares a page with the device tree; an image R16 refuses; a full
 argument block; any argument-block refusal of the kernel's. A refusal of
 the loader's prints `loader PANIC` and one of the kernel's a kernel panic; both then power off.
-The two boot cases require the power-off and QEMU's status 255.
+The refusal cases require the power-off and QEMU's status 255, on both widths. The seed and
+timebase cases boot QEMU's own device tree with one property removed, cut short or set to 0
+([hostile inputs](../testbench.md#hostile-inputs)); the timebase stays as 0 rather than going
+because the firmware does not come up without it.
 
 A device tree with a PLIC but no S-mode context for the boot hart stops the boot too
 ([the `Plic` row](#the-argument-block)), and so does one with more MMIO regions or interrupts
@@ -594,12 +605,13 @@ naming both ranges.
 
 ## Failure and restart
 
-<details><summary>Status: built · partly tested: a reboot through `system_reset` is not attacked by a case · tested (4)</summary>
+<details><summary>Status: built · tested (5)</summary>
 
 - bench:verified-boot-rejects-tamper
 - bench:device
 - bench:panic-in-print
 - bench:bundle-mapped
+- bench:reboot-verifies-bundle
 
 </details>
 
@@ -651,9 +663,12 @@ naming both ranges.
 - **The kernel trusts the loader.** It checks the argument block's shape and its device
   entries, but takes the RAM range, the ownership tables and the process table as true, and does
   not check the tags' CRC. On QEMU the loader is not verified (above).
-- **The kernel's argument-block refusals are argued from the code**, not attacked by a case;
-  nor are the short-seed and missing-timebase refusals (R17) or the three R16 gaps
-  ([attack gaps](../todo/kernel-attack-gaps.md)).
+- **The kernel's refusals of a block only the loader could write are argued from the code**: a
+  tag past the end, a second `MREx`, a `Devs` entry naming RAM or a controller, wrapping or
+  naming interrupt 0, a `Grnt` tag. No device tree makes the loader write one, and the kernel
+  has no host tests. The one such entry a tree can produce, an interrupt past the PLIC's
+  sources, is attacked (`boot-rejects-irq-past-plic`), as are the seed, timebase and image
+  refusals ([attack gaps](../todo/kernel-attack-gaps.md)).
 - **Device indices are positional.** Past the fixed three, a device's handle index depends on
   the device tree's order and on which DMA devices the kernel could register. A program that
   pins one depends on the machine. Placement by name is planned

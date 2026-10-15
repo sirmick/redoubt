@@ -12,6 +12,7 @@ mod cruft;
 mod disk;
 mod elixir;
 mod fanout;
+mod fdt;
 mod fmt;
 mod idle;
 mod launch;
@@ -303,6 +304,7 @@ fn main() -> Result<()> {
             &[],
             false,
             false,
+            None,
             Profile::Release,
             None,
             &logs.join("interactive.tar"),
@@ -316,6 +318,7 @@ fn main() -> Result<()> {
             smp: args.smp.unwrap_or(1),
             memory_mib: target::DEFAULT_MEMORY_MIB,
             devices: &[],
+            dtb: None,
         };
         return image.run_interactive(args.debug, args.print_qemu, args.print_only);
     }
@@ -668,13 +671,18 @@ fn rustsbi_prototyper(target: &Target) -> Result<String, String> {
     } else {
         ("RUSTSBI_PROTOTYPER_RV32", "riscv32imac-unknown-none-elf")
     };
-    let path = match std::env::var(env) {
-        Ok(path) => path,
-        Err(_) => {
-            let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-            format!("{}/bios/target/{arch}/release/rustsbi-prototyper", root.display())
-        }
-    };
+    firmware_image(std::env::var(env).ok(), env, arch)
+}
+
+/// The firmware image a case boots on: `named` (the variable `env`'s value) or else the vendored
+/// build for `arch`, and nothing else. Where neither is a file the answer is an error naming the
+/// path and the variable, which fails the case (a skip only under `--allow-skip`): no case boots
+/// on QEMU's own firmware (kernel/boot.md, "Firmware").
+fn firmware_image(named: Option<String>, env: &str, arch: &str) -> Result<String, String> {
+    let path = named.unwrap_or_else(|| {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        format!("{}/bios/target/{arch}/release/rustsbi-prototyper", root.display())
+    });
     if std::path::Path::new(&path).exists() {
         Ok(std::fs::canonicalize(&path).map(|p| p.to_string_lossy().into_owned()).unwrap_or(path))
     } else {
@@ -700,6 +708,7 @@ fn prepare(
     extra_kernel_features: &[String],
     tamper: bool,
     bare_archive: bool,
+    short_initrd: Option<usize>,
     profile: Profile,
     login: Option<&str>,
     bundle: &Path,
@@ -739,6 +748,12 @@ fn prepare(
     let listing =
         (!files.iter().any(|(name, _)| name == "programs") && !under_init).then_some(listing.as_slice());
     build::bundle(bundle, &kernel, &programs, listing, &files, tamper, bare_archive)?;
+    if let Some(short) = short_initrd {
+        // The signed bundle's first bytes only: too few to be a signature, let alone an archive.
+        anyhow::ensure!(short < 64, "short_initrd = {short} is not shorter than a signature (64 bytes)");
+        let signed = std::fs::read(bundle)?;
+        std::fs::write(bundle, &signed[..short])?;
+    }
     Ok((bundle.to_path_buf(), loader))
 }
 
@@ -914,6 +929,7 @@ fn pack_case(
         &boot.kernel_features,
         boot.tamper_bundle,
         boot.sign_bare_archive,
+        boot.short_initrd,
         profile,
         login.as_deref(),
         &bundle,
@@ -1035,7 +1051,7 @@ fn boot_case(
             if let Some(seed) = seed {
                 devices.extend(["-seed".into(), seed.to_string()]);
             }
-            let image = Image {
+            let mut image = Image {
                 machine,
                 firmware,
                 loader,
@@ -1043,7 +1059,18 @@ fn boot_case(
                 smp: *smp,
                 memory_mib: boot.memory_mib.unwrap_or(target::DEFAULT_MEMORY_MIB),
                 devices: &devices,
+                dtb: None,
             };
+            // A case that changes the device tree boots the one QEMU built for this very line,
+            // dumped and edited beside the log, so the only difference is the edit.
+            let dtb = log.with_extension("dtb");
+            if !boot.device_tree.is_empty() {
+                image.dump_device_tree(&dtb)?;
+                let mut tree = std::fs::read(&dtb)?;
+                fdt::edit(&mut tree, &boot.device_tree)?;
+                std::fs::write(&dtb, &tree)?;
+                image.dtb = Some(&dtb);
+            }
             // The network's far side dials in while it boots (`peer.rs`); its peers and capture are
             // judged by the post-check below.
             let deadline = Instant::now() + std::time::Duration::from_secs_f64(boot.timeout_secs);
@@ -1219,6 +1246,28 @@ fn ssh_loopback(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The bench never falls back to QEMU's own firmware (kernel/boot.md, "Firmware"): a missing
+    /// image, named by the variable or the vendored default, is an error naming it, which the run
+    /// reports as the case's failure (`missing`) and never as a boot without `-bios`; and a present
+    /// one is answered by its own path, so the boot's `-bios` names the file that was checked.
+    #[test]
+    fn a_missing_firmware_image_fails_the_case_rather_than_falling_back() {
+        let env = "RUSTSBI_PROTOTYPER";
+        let missing =
+            firmware_image(Some("/nowhere/rustsbi-prototyper".into()), env, "riscv64gc-unknown-none-elf");
+        let why = missing.unwrap_err();
+        assert!(
+            why.contains("/nowhere/rustsbi-prototyper") && why.contains("set RUSTSBI_PROTOTYPER"),
+            "{why}"
+        );
+        let nowhere = firmware_image(None, env, "no-such-arch");
+        assert!(nowhere.unwrap_err().contains("/bios/target/no-such-arch/release/rustsbi-prototyper"));
+        let here = std::env::current_exe().unwrap();
+        let found =
+            firmware_image(Some(here.to_string_lossy().into_owned()), env, "riscv64gc-unknown-none-elf");
+        assert_eq!(found.unwrap(), std::fs::canonicalize(&here).unwrap().to_string_lossy());
+    }
 
     /// A `distinct` pattern passes only on two or more captures, all different.
     #[test]
