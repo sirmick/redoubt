@@ -32,6 +32,9 @@ pub(crate) mod system;
 mod unicode;
 mod zlib;
 
+/// The matcher behind `binary:match` and `compile_pattern/1`; a test measures its cost against
+/// the pattern count.
+pub use binary::Matcher;
 pub use proc::send;
 /// What a deflater holds behind `miniz_oxide`'s own boxes, which a stream counts as its holder's
 /// memory; a test measures it against the crate.

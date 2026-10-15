@@ -122,40 +122,95 @@ pub fn decode_unsigned(c: &mut Ctx, a: &[Term]) -> R {
 
 // ---- searching ----
 
-/// A pattern: one binary or a list of them, none empty.
-fn patterns(c: &Ctx, t: &Term) -> Result<Vec<Vec<u8>>, Exception> {
+/// A compiled pattern: what `compile_pattern/1` builds and keeps in a resource, and what a search
+/// over an uncompiled pattern builds for the call. The patterns are sorted by their first byte,
+/// the longest first among those sharing one, and `starts` indexes the groups, so a byte of the
+/// haystack is compared only against the patterns that start with it: a search costs the
+/// haystack's length, not its length times the pattern count, and at the leftmost position that
+/// matches the longest pattern still wins.
+pub struct Matcher {
+    pats: Vec<Vec<u8>>,
+    /// The patterns starting with byte `b` are `pats[starts[b]..starts[b + 1]]`.
+    starts: [u32; 257],
+}
+
+impl Matcher {
+    /// From the patterns, none empty (the caller checks).
+    pub fn new(mut pats: Vec<Vec<u8>>) -> Matcher {
+        pats.sort_by(|a, b| a[0].cmp(&b[0]).then(b.len().cmp(&a.len())));
+        let mut starts = [0u32; 257];
+        for p in &pats {
+            starts[p[0] as usize + 1] += 1;
+        }
+        for b in 0..256 {
+            starts[b + 1] += starts[b];
+        }
+        Matcher { pats, starts }
+    }
+
+    /// The first match within `hay[from..until]`: at the leftmost position, the longest pattern.
+    pub fn find(&self, hay: &[u8], from: usize, until: usize) -> Option<(usize, usize)> {
+        let hay = &hay[..until];
+        for i in from..until {
+            let b = hay[i] as usize;
+            let group = &self.pats[self.starts[b] as usize..self.starts[b + 1] as usize];
+            if let Some(p) = group.iter().find(|p| hay[i..].starts_with(p)) {
+                return Some((i, p.len()));
+            }
+        }
+        None
+    }
+
+    /// What it holds, which counts toward its holders' heap limit.
+    pub fn bytes(&self) -> usize {
+        size_of::<Matcher>() + self.pats.iter().map(|p| size_of::<Vec<u8>>() + p.len()).sum::<usize>()
+    }
+}
+
+/// The matcher a search runs: the one a compiled pattern holds, or one built for this call.
+enum Pattern {
+    Compiled(super::Held<Matcher>),
+    Fresh(Matcher),
+}
+
+impl core::ops::Deref for Pattern {
+    type Target = Matcher;
+
+    fn deref(&self) -> &Matcher {
+        match self {
+            Pattern::Compiled(m) => m,
+            Pattern::Fresh(m) => m,
+        }
+    }
+}
+
+/// A pattern: one binary or a list of them, none empty, or `compile_pattern/1`'s `{bm | ac, Ref}`.
+fn pattern(c: &Ctx, t: &Term) -> Result<Pattern, Exception> {
     let list = match t {
         Term::Bits(_) => alloc::vec![*t],
-        // A "compiled" pattern is just the pattern (see `compile_pattern/1`).
-        Term::Tuple(_) => match c.heap().as_tuple(*t) {
-            Some(&[_, p]) => return patterns(c, &p),
-            _ => return Err(c.badarg()),
-        },
+        Term::Tuple(_) => {
+            return match c.heap().as_tuple(*t) {
+                Some(&[Term::Atom(tag), r]) if matches!(tag.as_str(), "bm" | "ac") => {
+                    c.resource::<Matcher>(r).map(Pattern::Compiled)
+                }
+                _ => None,
+            }
+            .ok_or_else(|| c.badarg());
+        }
         _ => c.heap().to_vec(*t).ok_or_else(|| c.badarg())?,
     };
-    let mut out = Vec::new();
+    let mut pats = Vec::with_capacity(list.len());
     for p in &list {
         let b = bytes_of(c, p)?;
         if b.is_empty() {
             return Err(c.badarg());
         }
-        out.push(b);
+        pats.push(b);
     }
-    if out.is_empty() {
+    if pats.is_empty() {
         return Err(c.badarg());
     }
-    Ok(out)
-}
-
-/// The first match at or after `from`: at the leftmost position, the longest pattern.
-fn find(hay: &[u8], pats: &[Vec<u8>], from: usize, until: usize) -> Option<(usize, usize)> {
-    (from..until).find_map(|i| {
-        pats.iter()
-            .filter(|p| i + p.len() <= until && hay[i..i + p.len()] == p[..])
-            .map(|p| p.len())
-            .max()
-            .map(|len| (i, len))
-    })
+    Ok(Pattern::Fresh(Matcher::new(pats)))
 }
 
 /// The elements of an options list. Like BEAM, an improper tail ends the list and is ignored
@@ -187,28 +242,36 @@ fn scope(c: &Ctx, opts: Option<&Term>, size: usize) -> Result<(usize, usize), Ex
 
 fn found(c: &mut Ctx, i: usize, len: usize) -> Term { c.tuple(&[Term::Int(i as i64), Term::Int(len as i64)]) }
 
+/// `compile_pattern(Pattern)`: `{bm, Ref}` for one pattern and `{ac, Ref}` for several, as on BEAM,
+/// the reference a resource holding the matcher, which counts toward its holders' heap limit.
 pub fn compile_pattern(c: &mut Ctx, a: &[Term]) -> R {
-    patterns(c, &a[0])?;
-    let bm = c.atom("bm");
-    Ok(c.tuple(&[bm, a[0]]))
+    let Pattern::Fresh(m) = pattern(c, &a[0])? else {
+        return Err(c.badarg());
+    };
+    let tag = c.atom(if m.pats.len() == 1 { "bm" } else { "ac" });
+    let bytes = m.bytes();
+    let r = c.new_resource_sized(m, bytes);
+    Ok(c.tuple(&[tag, r]))
 }
 
 pub fn match_(c: &mut Ctx, a: &[Term]) -> R {
-    let hay = bytes_of(c, &a[0])?;
-    let pats = patterns(c, &a[1])?;
+    let b = bin(c, &a[0])?;
+    let hay = b.to_bytes();
+    let m = pattern(c, &a[1])?;
     let (lo, hi) = scope(c, a.get(2), hay.len())?;
-    Ok(match find(&hay, &pats, lo, hi) {
+    Ok(match m.find(&hay, lo, hi) {
         Some((i, len)) => found(c, i, len),
         None => c.atom("nomatch"),
     })
 }
 
 pub fn matches(c: &mut Ctx, a: &[Term]) -> R {
-    let hay = bytes_of(c, &a[0])?;
-    let pats = patterns(c, &a[1])?;
+    let b = bin(c, &a[0])?;
+    let hay = b.to_bytes();
+    let m = pattern(c, &a[1])?;
     let (mut at, hi) = scope(c, a.get(2), hay.len())?;
     let mut out = Vec::new();
-    while let Some((i, len)) = find(&hay, &pats, at, hi) {
+    while let Some((i, len)) = m.find(&hay, at, hi) {
         out.push(found(c, i, len));
         at = i + len;
     }
@@ -218,8 +281,8 @@ pub fn matches(c: &mut Ctx, a: &[Term]) -> R {
 /// `split(Bin, Pattern, Options)` with `global`, `trim`, `trim_all` and `{scope, _}`.
 pub fn split(c: &mut Ctx, a: &[Term]) -> R {
     let b = bin(c, &a[0])?;
-    let hay = b.to_bytes().into_owned();
-    let pats = patterns(c, &a[1])?;
+    let hay = b.to_bytes();
+    let m = pattern(c, &a[1])?;
     let (mut global, mut trim, mut trim_all) = (false, false, false);
     let mut scope_opts = Vec::new();
     if let Some(opts) = a.get(2) {
@@ -237,7 +300,7 @@ pub fn split(c: &mut Ctx, a: &[Term]) -> R {
     let (mut at, hi) = scope(c, Some(&scope_list), hay.len())?;
     let mut pieces: Vec<(usize, usize)> = Vec::new();
     let mut start = 0;
-    while let Some((i, len)) = find(&hay, &pats, at, hi) {
+    while let Some((i, len)) = m.find(&hay, at, hi) {
         pieces.push((start, i));
         start = i + len;
         at = start;
@@ -281,3 +344,65 @@ fn common(c: &Ctx, a: &Term, suffix: bool) -> R {
 pub fn longest_common_prefix(c: &mut Ctx, a: &[Term]) -> R { common(c, &a[0], false) }
 
 pub fn longest_common_suffix(c: &mut Ctx, a: &[Term]) -> R { common(c, &a[0], true) }
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec::Vec;
+
+    use super::Matcher;
+
+    fn matcher(pats: &[&[u8]]) -> Matcher {
+        Matcher::new(pats.iter().map(|p| p.to_vec()).collect::<Vec<_>>())
+    }
+
+    #[test]
+    fn the_longest_pattern_wins_at_the_leftmost_position() {
+        // One pattern a prefix of another, whichever order they are given in.
+        for pats in [&[&b"ab"[..], &b"abc"[..]], &[&b"abc"[..], &b"ab"[..]]] {
+            let m = matcher(pats);
+            assert_eq!(m.find(b"xabcd", 0, 5), Some((1, 3)));
+            assert_eq!(m.find(b"xabd", 0, 4), Some((1, 2)));
+        }
+        // A shorter pattern that starts earlier beats a longer one that starts later.
+        let m = matcher(&[b"b", b"abcd"]);
+        assert_eq!(m.find(b"xbabcd", 0, 6), Some((1, 1)));
+        assert_eq!(m.find(b"xabcd", 0, 5), Some((1, 4)));
+    }
+
+    #[test]
+    fn patterns_sharing_a_first_byte_are_each_tried() {
+        let m = matcher(&[b"ab", b"ac", b"ad"]);
+        assert_eq!(m.find(b"aaab", 0, 4), Some((2, 2)));
+        assert_eq!(m.find(b"aaac", 0, 4), Some((2, 2)));
+        assert_eq!(m.find(b"aaad", 0, 4), Some((2, 2)));
+        assert_eq!(m.find(b"aaae", 0, 4), None);
+    }
+
+    #[test]
+    fn a_match_at_the_last_byte_is_found_and_one_past_the_scope_is_not() {
+        let m = matcher(&[b"z", b"yz"]);
+        assert_eq!(m.find(b"abcz", 0, 4), Some((3, 1)));
+        assert_eq!(m.find(b"abyz", 0, 4), Some((2, 2)));
+        // The whole pattern must lie within the scope.
+        assert_eq!(m.find(b"abyz", 0, 3), None);
+        assert_eq!(matcher(&[b"abc"]).find(b"abc", 0, 2), None);
+        assert_eq!(matcher(&[b"abc"]).find(b"ab", 0, 2), None);
+    }
+
+    #[test]
+    fn an_empty_scope_at_the_end_matches_nothing() {
+        let m = matcher(&[b"a"]);
+        assert_eq!(m.find(b"aaa", 3, 3), None);
+        assert_eq!(m.find(b"aaa", 2, 3), Some((2, 1)));
+        assert_eq!(m.find(b"", 0, 0), None);
+    }
+
+    #[test]
+    fn every_byte_value_is_a_first_byte() {
+        let pats: Vec<Vec<u8>> = (0..=255u8).map(|b| alloc::vec![b, b]).collect();
+        let m = Matcher::new(pats);
+        assert_eq!(m.find(b"\x00\xff\xff", 0, 3), Some((1, 2)));
+        assert_eq!(m.find(b"\x00\x00", 0, 2), Some((0, 2)));
+        assert_eq!(m.find(b"\x01\x02\x03", 0, 3), None);
+    }
+}

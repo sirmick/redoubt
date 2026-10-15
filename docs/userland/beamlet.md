@@ -401,6 +401,16 @@ checks it: each test runs on BEAM and on beamlet and the printed results must be
   stream bounds what it holds queued, so a hostile archive cannot make one call allocate without
   limit, and what it holds counts toward its holder's heap limit
   ([limits inside one VM](#limits-inside-one-vm)).
+- **A compiled pattern is a compiled matcher.** `binary:compile_pattern/1` builds a matcher the
+  VM keeps behind the reference it returns (`{bm, Ref}` for one pattern, `{ac, Ref}` for several,
+  as on BEAM): the patterns indexed by their first byte, the longest first, so `binary:match`,
+  `matches` and `split` compare a byte of the haystack only against the patterns that start with
+  it, and a search costs the haystack's length whatever the pattern count, the leftmost and then
+  longest match still winning. An uncompiled pattern is compiled for the call, as on BEAM; the
+  haystack is read in place; what a compiled pattern holds counts toward its holders' heap limit.
+  On the host, 88 patterns over 64 KiB cost what one does, 0.44 ns a byte, where comparing every
+  pattern at every byte cost 11 ns with 8 patterns and 127 ns with 88
+  (`the_search_is_flat_in_the_pattern_count`).
 - **Not supported:** NIFs and port drivers (foreign code runs as a separate program), distribution,
   hot code upgrade, and any OTP version but the pinned one.
 
@@ -480,7 +490,7 @@ to the VM (`console_resized`), whose `idle` returns for it. There is no wall clo
 
 ### beamlet on Redoubt
 
-Status: built · partly tested: programs and `/net` are not built · tested: bench:beamlet-natives, bench:beamlet-reduction-rate, bench:beamlet-schedulers-mttcg, bench:beamlet-schedulers-one-hart-mttcg, host:beamlet-vm::two_schedulers_lose_nothing_across_the_system_lock, host:beamlet-vm::schedulers_go_offline_and_online_again, host:beamlet-redoubt::two_schedulers_lose_nothing_across_the_system_lock, host:beamlet-redoubt::four_schedulers_lose_nothing_either, host:beamlet-redoubt::without_the_argument_the_vm_has_one_scheduler, host:beamlet-redoubt::the_count_is_one_decimal_argument_capped_and_one_otherwise, host:beamlet-redoubt::the_io_report_counts_the_schedulers, bench:beamlet-boot, bench:beamlet-console, bench:beamlet-files, bench:boot-profile, bench:boot-profile-unverified, bench:pack-outside-module, bench:pack-bad-truncated, bench:pack-bad-wrong-length, bench:pack-bad-wrong-name, bench:beamlet-heap-flood, bench:beamlet-budget-flood, bench:userland-boot, bench:userland-bad-start, bench:userland-read-only, bench:verity-flipped-tree, bench:verity-wrong-root, host:beamlet-redoubt::a_module_is_its_file_and_a_failed_read_is_refused, host:beamlet-redoubt::not_found_at_the_open_is_absent_and_every_other_error_is_refused_by_name, host:beamlet-redoubt::verified_module_lookup_propagates_found_absent_and_refused, host:beamlet-redoubt::verified_application_lookup_propagates_found_absent_and_refused, host:beamlet-redoubt::a_packed_module_comes_from_the_pack_and_any_other_from_the_volume, host:beamlet-redoubt::a_pack_with_a_bad_entry_is_refused_whole, host:testbench::the_boot_pack_is_deterministic_sorted_and_only_of_the_objects
+Status: built · partly tested: programs and `/net` are not built · tested: bench:beamlet-natives, bench:beamlet-reduction-rate, bench:beamlet-schedulers-mttcg, bench:beamlet-schedulers-one-hart-mttcg, host:beamlet-vm::two_schedulers_lose_nothing_across_the_system_lock, host:beamlet-vm::schedulers_go_offline_and_online_again, host:beamlet-redoubt::two_schedulers_lose_nothing_across_the_system_lock, host:beamlet-redoubt::four_schedulers_lose_nothing_either, host:beamlet-redoubt::without_the_argument_the_vm_has_one_scheduler, host:beamlet-redoubt::the_count_is_one_decimal_argument_capped_and_one_otherwise, host:beamlet-redoubt::the_io_report_counts_the_schedulers, bench:beamlet-boot, bench:beamlet-console, bench:beamlet-files, bench:boot-profile, bench:boot-profile-unverified, bench:pack-outside-module, bench:pack-bad-truncated, bench:pack-bad-wrong-length, bench:pack-bad-wrong-name, bench:beamlet-heap-flood, bench:beamlet-budget-flood, bench:userland-boot, bench:userland-bad-start, bench:userland-read-only, bench:verity-flipped-tree, bench:verity-wrong-root, host:beamlet-redoubt::a_module_is_its_file_and_a_failed_read_is_refused, host:beamlet-redoubt::not_found_at_the_open_is_absent_and_every_other_error_is_refused_by_name, host:beamlet-redoubt::verified_module_lookup_propagates_found_absent_and_refused, host:beamlet-redoubt::verified_application_lookup_propagates_found_absent_and_refused, host:beamlet-redoubt::a_packed_module_comes_from_the_pack_and_any_other_from_the_volume, host:beamlet-redoubt::a_pack_with_a_bad_entry_is_refused_whole, host:testbench::the_boot_pack_is_deterministic_sorted_and_only_of_the_objects, host:beamlet-vm::the_search_is_flat_in_the_pattern_count, host:beamlet-vm::the_matcher_finds_what_every_pattern_at_every_byte_finds
 
 On Redoubt, beamlet is a native program. Its built `Platform` adapter uses the client library
 ([native programs](native.md#the-client-library)) for the console, files, verified code lookup
