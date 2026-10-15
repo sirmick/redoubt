@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 226
+revision = 233
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -2286,8 +2286,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "AGENT0"
   body = "Brief: .wash/local/AGT1-implementer.md. Tier A (the manifest and the steward's principals; docs/servers/init.md#the-manifest, docs/servers/steward.md#principals), size S. Pages: docs/userland/sessions.md (the principals of the image), image/README.md, GETTING-STARTED.md (launch --system's ssh line for agent@). Case: a login as agent over SSH reaches its prompt in /home/agent, finds /home/alice enoent, and has no /net; launch-system's expectations extended."
-  state = "active"
-  revision = 214
+  state = "done"
+  revision = 233
 
 [[node]]
   id = "AGT2"
@@ -2295,8 +2295,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "AGENT0"
   body = "Brief: .wash/local/AGT2-implementer.md. Tier B (the shell, inside one session's budget), size S-M, shell track. Page: docs/userland/shell.md (a new section under The loop or The shell in a session). Host tests under ./test-shell, one bench case driving a session over SSH through the mode with a multi-line result and a crashing line, verdicts from the shell's printed values (rule F)."
-  state = "reported"
-  revision = 226
+  state = "done"
+  revision = 229
 
 [[node]]
   id = "AGT3"
