@@ -50,6 +50,10 @@ impl Namespace {
         Ok(())
     }
 
+    /// Removes every prefix at which `conn` is bound: for a connection to a server that has gone
+    /// with its budget.
+    pub fn unbind(&mut self, conn: &Connection) { self.entries.retain(|(_, c)| !c.same(conn)) }
+
     /// The connection the clean absolute `path` resolves to, and the rest of `path` below it.
     pub fn lookup<'p>(&self, path: &'p str) -> Option<(&Connection, &'p str)> {
         path::resolve(self.list(), path)

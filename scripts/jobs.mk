@@ -51,6 +51,10 @@ cases := $(sort $(basename $(notdir $(wildcard tests/*.toml))))
 quiet := rt-host-tests client-host-tests r4-host-tests bench-ssh-guest bench-ssh-loopback-deadlock
 quiet += steward-sub-budget-flood steward-ssh-two-principals steward-vault-session steward-vault-launch steward-session-ends
 quiet += steward-ssh-idle launch-idle
+# pipe-sixty-four: 64 pipelines on the host's clock; beside other work on rv32 a fresh piped's first
+# request is eio while the six waiter places are held by ended pipeds whose waiters have not yet
+# handed over their ends (tests/pipe-sixty-four.toml).
+quiet += pipe-sixty-four
 quiet += sched-lock-contention-4-mttcg sched-capped-mttcg smp-evict-mttcg smp-shootdown-mttcg sched-wake-no-preempt-harts-mttcg
 quiet += beamlet-schedulers-mttcg beamlet-schedulers-one-hart-mttcg
 quiet := $(filter $(cases),$(quiet))

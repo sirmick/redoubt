@@ -76,10 +76,11 @@ is already built and attacked.
 
 ### Started by a session
 
-<details><summary>Status: built · tested (5)</summary>
+<details><summary>Status: built · tested (6)</summary>
 
 - bench:pipe-carries
 - bench:pipe-eight
+- bench:pipe-sixty-four
 - bench:pipe-no-authority
 - host:redoubt-piped::only_the_sessions_own_badge_makes_and_removes_pipes
 - host:redoubt-piped::a_stage_reaches_only_the_end_it_was_given
@@ -116,7 +117,10 @@ admission allows.
   lets go or ends, and starts another at the next pipeline, which `pipe-carries` times at about
   60 ms under QEMU (about 200 ms for the session's first, which loads the shell's modules too).
   No budget of `piped`'s outlives its pipeline: after each of eight pipelines in one session the
-  session's budget holds what it held before them, processes, weight and all (`pipe-eight`).
+  session's budget holds what it held before them, processes, weight and all (`pipe-eight`), and
+  nothing of `piped` outlives its budget in the session either: its binding at `/dev/pipe` and the
+  VM's handle to it go when the budget does ([beamlet](../userland/beamlet.md#natives); after 64
+  pipelines, `pipe-sixty-four`, the namespace table is its size before the first).
 - **Labels.** `piped` runs in a budget carved from the session's, so it carries the session's
   labels, and the kernel lets no other set's message reach a server with no exemption
   ([R1 (flow)](../kernel/ipc.md#r1-flow)): its files carry the label set of the session's first

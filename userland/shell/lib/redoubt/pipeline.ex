@@ -96,11 +96,16 @@ defmodule Redoubt.Pipeline do
 
   Returns `{:ok, %{output: bytes | nil, errors: nil, killed: bool, endings: [ending], usage:
   [usage]}}`, a stage's usage being what its budget held as it ended and `killed` whether the job
-  was killed (`Redoubt.Job.kill/1`), or `{:error, name}` when it could not start. The job is the
-  session's (`Redoubt.Jobs`) while it runs.
+  was killed (`Redoubt.Job.kill/1`), or `{:error, name}` when it could not start: `:empty_stage`,
+  `:too_many`, `:not_found` (a program not in `/boot`), `:out_of_processes`, a budget's or a
+  launch's refusal by its name, or `{:refused, why}` when a server of the session's own refused a
+  step, `why` naming it with the server's reason: `{:read, path, reason}` for a program's image,
+  `{:mkdir, reason}` for a pipe's directory at `piped`, `{:mint, reason}` for a stage's stream
+  connection. The job is the session's (`Redoubt.Jobs`) while it runs.
   """
   @spec run([stage()], keyword()) ::
-          {:ok, %{output: binary() | nil, endings: [ending()], usage: [map() | nil]}} | {:error, atom()}
+          {:ok, %{output: binary() | nil, endings: [ending()], usage: [map() | nil]}}
+          | {:error, atom() | {:refused, term()}}
   def run(stages, opts \\ []) do
     caller = self()
     ref = make_ref()
@@ -128,7 +133,7 @@ defmodule Redoubt.Pipeline do
   nothing; what the last stage writes and every stage's standard error are kept, up to
   #{@kept_bytes} bytes each, for `Redoubt.Job.await/2`.
   """
-  @spec start([stage()], keyword()) :: {:ok, Redoubt.Job.t()} | {:error, atom()}
+  @spec start([stage()], keyword()) :: {:ok, Redoubt.Job.t()} | {:error, atom() | {:refused, term()}}
   def start(stages, opts \\ []) do
     starter = self()
     ref = make_ref()
@@ -270,11 +275,13 @@ defmodule Redoubt.Pipeline do
     end
   end
 
+  # A refusal names what was refused and the server's reason: a refusal that hides its reason is
+  # a dead end at the prompt.
   defp read(path) do
     case File.read(path) do
       {:ok, bytes} -> {:ok, bytes}
       {:error, :enoent} -> {:error, :not_found}
-      {:error, _} -> {:error, :refused}
+      {:error, reason} -> {:error, {:refused, {:read, path, reason}}}
     end
   end
 
@@ -285,7 +292,7 @@ defmodule Redoubt.Pipeline do
     Enum.reduce_while(job.pipes ++ [job.err], {:ok, job}, fn name, {:ok, job} ->
       case File.mkdir(Pipes.prefix() <> "/" <> name) do
         :ok -> {:cont, {:ok, %{job | made: [name | job.made]}}}
-        {:error, _} -> {:halt, {:error, :refused, job}}
+        {:error, reason} -> {:halt, {:error, {:refused, {:mkdir, reason}}, job}}
       end
     end)
   end
@@ -302,7 +309,7 @@ defmodule Redoubt.Pipeline do
 
       case mint_all(job.root, ends, []) do
         {:ok, minted} -> {:cont, {:ok, %{job | conns: job.conns ++ [minted]}}}
-        {:error, minted} -> {:halt, {:error, :refused, %{job | conns: job.conns ++ [minted]}}}
+        {:error, why, minted} -> {:halt, {:error, why, %{job | conns: job.conns ++ [minted]}}}
       end
     end)
     |> case do
@@ -320,7 +327,8 @@ defmodule Redoubt.Pipeline do
   defp mint_all(root, [end_ | rest], minted) do
     case NinepCommon.new_connection(root, end_, 0) do
       {:ok, %{conn: conn, id: id}} -> mint_all(root, rest, [{conn, id} | minted])
-      _refused -> {:error, Enum.reverse(minted)}
+      {:error, reason} -> {:error, {:refused, {:mint, reason}}, Enum.reverse(minted)}
+      other -> {:error, {:refused, {:mint, other}}, Enum.reverse(minted)}
     end
   end
 

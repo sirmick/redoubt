@@ -299,6 +299,11 @@ impl Hub {
         true
     }
 
+    /// Ends `conn` from the caller's side, for a server the caller knows has gone: what is
+    /// outstanding comes back `Ended`, what is queued is dropped, and every request after is
+    /// refused `Disconnected`, so none goes out on an endpoint handle the caller may close.
+    pub fn disconnect(&mut self, conn: Conn) { self.end(conn.0) }
+
     /// The next completion, if any.
     pub fn completed(&mut self) -> Option<Done> { self.done.pop_front() }
 

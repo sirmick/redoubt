@@ -123,10 +123,11 @@ from the Elixir caller, and Rust makes the calls and writes the startup block
 
 ### Standard input and output, and pipes
 
-<details><summary>Status: built · partly tested: in a boot the stages run under a tester in the steward's place, but for `exec`, which also runs in the steward's sessions over SSH, and for hostile output, drawn by the console principal's shell; a stage's console input is host-tested only · tested (11)</summary>
+<details><summary>Status: built · partly tested: in a boot the stages run under a tester in the steward's place, but for `exec`, which also runs in the steward's sessions over SSH, and for hostile output, drawn by the console principal's shell; a stage's console input is host-tested only · tested (12)</summary>
 
 - bench:pipe-carries
 - bench:pipe-eight
+- bench:pipe-sixty-four
 - bench:pipe-never-reads
 - bench:pipe-no-authority
 - bench:pipe-interrupted
@@ -206,7 +207,11 @@ holding it ends: nothing of it exists at the prompt.
   watches the line that asked: if the line ends first, interrupted or crashed, the owner destroys
   every stage's budget, so no stage outlives the line that ran it.
 - **Bounds.** At most 7 stages, and no more than the session's budget has processes for: a
-  pipeline the budget cannot hold is refused `out_of_processes` before any stage starts. The
+  pipeline the budget cannot hold is refused `out_of_processes` before any stage starts. A
+  refusal by a server of the session's own names the step and the server's reason,
+  `{:error, {:refused, why}}`: `{:read, path, reason}` for a program's image from `/boot`,
+  `{:mkdir, reason}` for a pipe's directory at `piped`, `{:mint, reason}` for a stage's stream
+  connection; `:not_found` is a program `/boot` does not have. The
   image's session holds 10 processes, its VM and `piped` among them, and its console's relay once
   a session has one. `piped` lets the session and its stages park 8 calls between them, a stage's
   one and the session's own, which is what bounds a pipeline at 7. The VM runs 16 jobs at once
@@ -215,7 +220,10 @@ holding it ends: nothing of it exists at the prompt.
   compete with the VM's headroom while a pipeline runs: the session's budget is the bound.
   `piped`'s is 768 pages, carved when a pipeline starts it and destroyed when the last pipeline
   holding it ends, so a session that is not piping holds none of it, after any number of pipelines
-  (`pipe-eight` runs eight in one session). It holds 86 pages on rv64 and
+  (`pipe-eight` runs eight in one session): not its binding at `/dev/pipe` nor the VM's handle to
+  it, which go with its budget ([beamlet](beamlet.md#natives); `pipe-sixty-four`, 64 in one
+  session, finds the namespace table its size before the first and nothing at `/dev/pipe`), where
+  each pipeline once left one entry and one handle for the session's life. It holds 86 pages on rv64 and
   83 on rv32 after `pipe-carries`' pipelines; the rest is what its clients' parked calls may lend
   it at worst, 552 pages for the two buckets admission needs at the least, which is why 512 would
   not do ([piped](../servers/piped.md#serving-pipes)). Starting it again costs about 60 ms under

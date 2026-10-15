@@ -11,7 +11,8 @@ use beamlet_redoubt::Redoubt;
 use beamlet_redoubt::fixture::{self, Dirs, Volume};
 use beamlet_redoubt::system::MAX_BINDINGS;
 use beamlet_vm::platform::{
-    BudgetSpec, Event, FileError, Files, Identity, Launch, Message, Object, Platform, Refused, System,
+    BudgetSpec, Event, FileError, Files, Identity, Launch, Message, Object, OpenMode, Platform, Refused,
+    System,
 };
 use redoubt_fake_kernel::fake;
 use redoubt_rt::abi::{FOREVER, Handle};
@@ -276,18 +277,225 @@ fn servers_bound_and_ended_one_after_another_never_run_out_of_waiters() {
                     let soon = p.monotonic_us() + 10_000;
                     p.idle(Some(soon));
                 }
-                // The waiter closes its handle as it returns, just after its last wake-up.
+                // The waiter closes its handle as it returns, just after its last wake-up: the
+                // first count is taken once it has held still for a while, the rest once they
+                // reach it.
                 let until = std::time::Instant::now() + std::time::Duration::from_secs(1);
                 while handles.first().is_some_and(|first| f.held(pid).0 != *first)
                     && std::time::Instant::now() < until
                 {
                     std::thread::sleep(std::time::Duration::from_millis(1));
                 }
-                handles.push(f.held(pid).0);
+                let (mut last, mut still) = (f.held(pid).0, 0);
+                while handles.is_empty() && still < 50 {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                    let now = f.held(pid).0;
+                    still = if now == last { still + 1 } else { 0 };
+                    last = now;
+                }
+                handles.push(last);
             }
             assert_eq!(made, [Ok(()); SERVERS.len()]);
             assert_eq!(p.waiters(), before);
             assert!(handles.iter().all(|h| *h == handles[0]), "the VM's handles: {handles:?}");
+        },
+    );
+}
+
+/// How many pipelines a long session runs: each one `piped`, launched with `serve`, bound and ended.
+const PIPELINES: usize = 1000;
+
+/// Launches `launch` for `job` and plays its server with a file server on the endpoint the child
+/// was given: the send right, and the server. The child is found by the send right the VM, `pid`,
+/// holds to it: other tests of this binary launch into the same fake.
+fn serve_launch(p: &mut Redoubt, pid: usize, job: u64, launch: Launch) -> (Object, Volume) {
+    let conn = p.launch(ME, job, launch).unwrap().expect("a send right");
+    let child = fake().served_child(pid).expect("the child");
+    (conn, fixture::volume_served(&child, 256, &["buckets=4"]))
+}
+
+/// A server the VM launched with `serve` and bound at a prefix leaves nothing behind once its budget
+/// is destroyed: the prefix is unbound with the budget, before any term is dropped, and the VM's
+/// send right to it, the VM's own, is closed when its last term goes. A session's `piped` is one
+/// such at every pipeline (docs/servers/piped.md), and after a thousand the namespace table and the
+/// VM's handles are where they started (each pipeline once left one entry and one handle for the
+/// VM's life).
+#[test]
+fn a_served_servers_binding_and_handle_go_with_its_budget() {
+    let f = fake();
+    with_session(
+        move |pid| vec![("budget", f.budget(pid))],
+        move |p, pid| {
+            let spec = BudgetSpec { pages: 8, processes: 1, weight: 1, ..Default::default() };
+            let table = |p: &mut Redoubt| p.table().into_iter().map(|e| e.path).collect::<Vec<_>>();
+            let paths = table(p);
+            // The VM's handles once the first pipeline is over: the first launch starts a job
+            // thread, with its endpoint and the two rights it is woken and wakes through, which
+            // the VM keeps and reuses for its life (`jobs.rs`).
+            let mut handles = None;
+            for i in 0..PIPELINES {
+                let budget = p.budget_create(&spec).unwrap();
+                let launch = Launch {
+                    image: b"\x7fELF".to_vec(),
+                    budget: budget.clone(),
+                    namespace: vec![],
+                    handles: vec![],
+                    args: vec![],
+                    stack_pages: None,
+                    heap_pages: None,
+                    serve: Some("serve".into()),
+                };
+                // The test plays the server, a file server on the endpoint the child was given.
+                let (conn, volume) = serve_launch(p, pid, i as u64, launch);
+                p.bind("/dev/pipe", &conn).unwrap();
+                assert_eq!(ask(p, |p| p.make_dir("/dev/pipe/p")), Ok(()));
+                assert!(table(p).contains(&"/dev/pipe".to_string()));
+                let waiters = p.waiters();
+                p.budget_destroy(&budget).unwrap();
+                let (_, event) = next(p);
+                assert!(matches!(event, Event::Exit { cause: "killed", .. }), "pipeline {i}: not its exit");
+                // Unbound with the budget, while the terms are still held.
+                assert_eq!(p.lookup("/dev/pipe/p").err(), Some(Refused("not_found")), "pipeline {i}");
+                assert_eq!(table(p), paths, "pipeline {i}");
+                assert_eq!(volume.stop(), redoubt_rt::exit::OK);
+                drop(conn);
+                drop(budget);
+                // As a session idles between pipelines: the ended server's waiter hands over its
+                // end and closes its handle, just after its last wake-up.
+                let until = p.monotonic_us() + 1_000_000;
+                while p.waiters() == waiters && p.monotonic_us() < until {
+                    let soon = p.monotonic_us() + 10_000;
+                    p.idle(Some(soon));
+                }
+                let until = std::time::Instant::now() + std::time::Duration::from_secs(1);
+                while handles.is_some_and(|h| f.held(pid).0 != h) && std::time::Instant::now() < until {
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+                match handles {
+                    Some(h) => assert_eq!(f.held(pid).0, h, "the VM's handles after pipeline {i}"),
+                    // The waiter closes its own handle after its hand-over, on its thread: the
+                    // count is taken once it has held still for a while.
+                    None => {
+                        let (mut last, mut still) = (f.held(pid).0, 0);
+                        while still < 50 {
+                            std::thread::sleep(std::time::Duration::from_millis(1));
+                            let now = f.held(pid).0;
+                            still = if now == last { still + 1 } else { 0 };
+                            last = now;
+                        }
+                        handles = Some(last);
+                    }
+                }
+            }
+        },
+    );
+}
+
+/// A forgotten connection's hub session is ended at once: a request on it afterwards (a stale
+/// open file's clunk, at its term's collection) is refused rather than sent, so it reaches nobody,
+/// though the VM's handle to the server, closed as its last term went, has its index again by
+/// then as the next launch's send right.
+#[test]
+fn a_forgotten_connections_requests_reach_no_later_holder_of_its_index() {
+    let f = fake();
+    with_session(
+        move |pid| vec![("budget", f.budget(pid))],
+        move |p, pid| {
+            let spec = BudgetSpec { pages: 8, processes: 1, weight: 1, ..Default::default() };
+            let launch = |budget: &Object| Launch {
+                image: b"\x7fELF".to_vec(),
+                budget: budget.clone(),
+                namespace: vec![],
+                handles: vec![],
+                args: vec![],
+                stack_pages: None,
+                heap_pages: None,
+                serve: Some("serve".into()),
+            };
+            let first = p.budget_create(&spec).unwrap();
+            let (conn, volume) = serve_launch(p, pid, 1, launch(&first));
+            p.bind("/dev/pipe", &conn).unwrap();
+            let how = OpenMode { write: true, create: true, ..OpenMode::default() };
+            let file = ask(p, |p| p.open("/dev/pipe/f", how)).unwrap();
+            let waiters = p.waiters();
+            p.budget_destroy(&first).unwrap();
+            let (_, event) = next(p);
+            assert!(matches!(event, Event::Exit { job: 1, cause: "killed", .. }));
+            // A second server, which the test plays: it answers two calls, each with a handle it
+            // mints, and counts whatever reaches its endpoint after them.
+            let second = p.budget_create(&spec).unwrap();
+            let again = p.launch(ME, 2, launch(&second)).unwrap().expect("a send right");
+            let probe = f.process(0, &[]);
+            let receive = f.play(&f.served_child(pid).unwrap(), probe)[0];
+            let stray = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let counted = Arc::clone(&stray);
+            f.run(probe, move || {
+                let e = Endpoint::from_handle(receive);
+                let mut answered = 0;
+                while let Ok(event) = e.receive(FOREVER, 16) {
+                    if answered == 2 {
+                        counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        continue;
+                    }
+                    if let IpcEvent::Call(request) = event {
+                        let minted = e.mint(core::num::NonZeroU64::new(77).unwrap(), None).unwrap().handle();
+                        let mut send = redoubt_rt::abi::Handles::new();
+                        let _ = send.push(minted);
+                        let _ = finish(request, &Outcome { words: [0; 4], send, close: send });
+                        answered += 1;
+                    }
+                }
+                0
+            });
+            let returned = |p: &mut Redoubt, call: u64| {
+                p.call(ME, call, &again, message([1, 0, 0, 0], None), 1_000_000).unwrap();
+                let (_, Event::Reply { result, .. }) = next(p) else { panic!("not a reply") };
+                result.unwrap().handles
+            };
+            // The first call starts the pool's thread, with the handles it keeps.
+            let warm = returned(p, 3);
+            // The forgotten connection's last term gone, its index is free, and the next handle
+            // the VM gets, the one the second server's reply brings, takes it.
+            let held = f.held(pid).0;
+            drop(conn);
+            assert_eq!(f.held(pid).0, held - 1);
+            let reused = returned(p, 4);
+            assert_eq!(f.held(pid).0, held);
+            // The stale file's clunk, as its term's collection sends it: refused on the ended
+            // session; sent, it would go out on the index and reach the second server.
+            p.close(file);
+            for _ in 0..10 {
+                let soon = p.monotonic_us() + 10_000;
+                p.idle(Some(soon));
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            assert_eq!(
+                stray.load(std::sync::atomic::Ordering::SeqCst),
+                0,
+                "a request reached the new holder"
+            );
+            drop((warm, reused));
+            // The server gone, the waiter returns, closing the handle it woke the VM through.
+            let before = f.held(pid).0;
+            assert_eq!(volume.stop(), redoubt_rt::exit::OK);
+            // Synchronization, not a bound: the whole binary's tests run beside this one.
+            let until = p.monotonic_us() + 5_000_000;
+            while p.waiters() == waiters && p.monotonic_us() < until {
+                let soon = p.monotonic_us() + 10_000;
+                p.idle(Some(soon));
+            }
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while f.held(pid).0 != before - 1 && std::time::Instant::now() < until {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+                let soon = p.monotonic_us() + 1_000;
+                p.idle(Some(soon));
+            }
+            assert_eq!(f.held(pid).0, before - 1, "the waiter's handle, closed as it returned");
+            drop(again);
+            p.budget_destroy(&second).unwrap();
+            let (_, event) = next(p);
+            assert!(matches!(event, Event::Exit { job: 2, cause: "killed", .. }));
+            f.destroy(probe, receive);
         },
     );
 }

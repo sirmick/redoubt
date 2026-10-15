@@ -146,12 +146,13 @@ Residuals, each a departure from the table, until the file server serves what it
 
 ### Copying, moving, removing and binds
 
-<details><summary>Status: built · partly tested: in a session on the machine a copy across volumes is shown only from a read-only volume and into a vault, and a move between two writable volumes, which no session holds, runs on the host only · tested (5)</summary>
+<details><summary>Status: built · partly tested: in a session on the machine a copy across volumes is shown only from a read-only volume and into a vault, and a move between two writable volumes, which no session holds, runs on the host only · tested (6)</summary>
 
 - bench:shell-commands
 - host:beamlet-redoubt::a_copy_within_one_volume_is_the_servers
 - host:beamlet-redoubt::a_bind_is_the_files_namespace_and_one_connection
 - host:beamlet-redoubt::binds_past_the_cap_are_refused_and_a_bound_prefix_is_still_replaced
+- host:beamlet-redoubt::a_served_servers_binding_and_handle_go_with_its_budget
 - host:beamlet-redoubt::a_rename_the_volume_refuses_is_eacces
 
 </details>
@@ -171,7 +172,13 @@ another's files. So what an operation costs depends on where its two ends are:
 authority, and no other process sees it. It replaces what Unix does with symbolic links, hard
 links and bind mounts: giving something a second name. A bind at a prefix already bound replaces
 what was there, and the table holds at most 64 entries, so a bind of a new prefix past them is
-`{:error, :system_limit}` ([beamlet](beamlet.md#natives)).
+`{:error, :system_limit}` ([beamlet](beamlet.md#natives)). A bind lasts as long as the session,
+or as long as the budget the connection came through when it came through one the session
+carved (the send right a `launch` with `serve` in that budget returned, or a handle a call on
+such a connection brought): destroying the budget unbinds every prefix naming the connection, so
+a path there is `:enoent` and not a dead server's refusal, and the session's handle to it is
+closed when its last copy goes (a pipeline's `piped`, bound at `/dev/pipe`;
+`a_served_servers_binding_and_handle_go_with_its_budget`).
 - **Replacing is within the session's own authority.** A bind over `/boot` or `/dev/cons` changes
   what the session's own `exec` reads its program from and mints its child's console at, as any
   path does: a session can already run any code it writes, so a program read from elsewhere gains
