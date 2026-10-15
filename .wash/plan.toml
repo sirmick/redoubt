@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 82
+revision = 98
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1906,9 +1906,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "smp"
   needs = ["IDLE1", "SCHED4"]
-  body = "From IDLE1's measurement (.wash/local/IDLE1-report.md; the red's reading of it): at rest m_software is 2.9 of 3.9 interrupts/s per hart; 559 of 625 land with epc in TicketLock::acquire_ticket against 602 release wake_halted ecalls, so about 1.04 harts woken per release: one waiter per hand-off, not every hart. The question is why the lock changes hands ~10/s on a machine at rest, with every hart halted: who takes it (timer entries re-arming? the idle loop?), and rearm's 501 set_timer against ~200 s_timer interrupts (2.5x re-arming per interrupt; a shared earliest timeout armed on every hart is the suspect, to be confirmed). Find the cause, remove the needless hand-offs and re-arms, then lower launch-idle's per-hart ceiling toward the measurement. Kernel: Tier A, the kernel red; nothing changes at one hart unless rearm does.\nAlso (kernel-red at B57, 2026-10-12): the post-login rv32 drain takes 5.8-6.2 s (rv64 ~0.35 s); B57 measured only the boot drain with counters (.tmp/B57/measure-drain-b57.patch; idle-with-pending-and-no-drainer 0.3-0.4 ms, gaps were A3 waiting on busy harts). If B57 has merged, take the same counters on one rv32 post-login drain here; more than a few ms of idle-with-pending-and-no-drainer reopens it as an R81 liveness defect."
-  state = "reported"
-  revision = 81
+  body = "Reopened 2026-10-15 after acceptance at 87553025a: train 26's whole bench (B52 + IDLE2 on 146db8897) failed rv64 sched-capped at 3 harts, and the alone rerun failed it again (2 of 3 rv64 smp=3 runs; smp=2 and 4 pass; rv32 passes): the `late` phase's three equal-share budgets, expected 333 each (283..383), read late-a 271-272 and late-b/-c 342-404; late-a's lock waits 8.9M of 19.4M ticks in the window (train 25's bench showed the same clause under load; alone it passed then). Evidence: .tmp/train-26/fail-alone-rv64-sched-capped.log, .tmp/train-26/sched-capped-run/ (the run dir, kept), .tmp/train-26/fail-rv64-sched-capped.log (the bench's). IDLE2 is out of train 26 (B52 publishes alone); its branch wp-IDLE2 87553025a is frozen until the cause is named: the one-hart timer placement is the suspect (a payer-nowhere item's covering hart serving timeouts for the budget that lost share?). QA thread IDLE2-sched-capped with kernel-red-2. Original: the kernel at rest: the lock changes hands ~10/s with every hart halted and the timer is re-armed 2.5x per interrupt; the idle ceilings come down. Reports .wash/local/IDLE2-report.md; design and verdicts on IDLE2-design."
+  state = "active"
+  revision = 98
 
 [[node]]
   id = "SCHED4"
@@ -2009,8 +2009,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M2"
   body = "Seen in train 17's whole bench on 98b866854 (CTX2, B47, B46, B49): steward-home-quota failed on rv64 and rv32 alike at step 9, `File.rm(\"/home/alice/a\")` after alice's home reached enospc answered `{:error, :eio}` (the alice ssh log shows it), and the case waited for `{:rm, :ok}` to its 610 s deadline. Alone, the same case passes in ~225 s on c7efc9b67 and a4c093827 (bisect, .tmp/train-17b/bisect.log), so the failure needs the bench's load (the net class runs one at a time, beside boots). An rm answering eio is wrong under any load: find where eio arises (walfsd's write path when the volume is full and a request is slow or retried; beamlet's files.rs retry after a busy answer (BEAM11); B47's Io release of an ended connection racing a late message; the 9P client's timeout mapped to eio) with a trace of the failing run (reproduce by running the case beside two or three boots), fix it, and make the case's wait for the rm bounded by its own step deadline rather than the case's. Both widths. Tier A if the fix is in a server or beamlet's platform (steward-red), else Tier B."
-  state = "active"
-  revision = 82
+  state = "reported"
+  revision = 91
 
 [[node]]
   id = "B52"
@@ -2018,8 +2018,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M2"
   body = "Two instances so far: (1) ./test-shell has a test that fails about 2 runs in 30 on main: find the race and make it a verdict. (2) 2026-10-15, B48's report: beamlet-redoubt's B47 waiters test and B48's hub test settle their first handle count and each failed once by an early sample under the full suite (Fake::served_child now replaces the global last_launched in the tests). Both: find the race, make the test wait on the event it means, not on a sample."
-  state = "active"
-  revision = 75
+  state = "done"
+  revision = 87
 
 [[node]]
   id = "B53"
@@ -2115,8 +2115,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   needs = ["B46"]
   body = "Residual from B46 (merged in train 17 as a4c093827; .wash/local/B46-report.md 'Residuals'): the fast path covers printable runs whose width is one column per code point; CJK, marks and emoji fall back to measuring each grapheme, and the per-stage profile and the 1 MiB-line time on the machine were last measured before BEAM19 and K33. Re-profile at today's main both widths; if the wide/combining path dominates a realistic text, give it a run path of its own with a floor in shell-output-rate; otherwise record the numbers and close. Escaping path: Tier A, steward-red. Not opened on 2026-10-15: a candidate for the owner's polish list."
-  state = "todo"
-  revision = 46
+  state = "active"
+  revision = 94
 
 [[node]]
   id = "B61"
@@ -2125,5 +2125,15 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   needs = ["B48"]
   body = "Found by B48's pipe-sixty-four on rv32 beside other work (.wash/local/B48-report.md 'Round 2'): one pipeline in about 64, at a random index, gets {:refused, {:mkdir, :eio}} on the fresh piped's first request; the cause is Io::connect (beamlet-redoubt) refusing TooManyThreads when all MAX_WAITERS=6 hub connections belong to ended pipeds whose waiters have not yet handed over their ends: a timing limit, not B48's change (the control at cf9074eae fails the same). Fix direction: a bounded wait at MAX_WAITERS (connect waits for a waiter to hand over, within the request's own deadline) or the ended connection's waiter hands over before the destroy returns; say which on beamlet.md; a host test that provokes 7 fresh connections before any waiter hands over; pipe-sixty-four leaves the quiet class once the limit is gone. Tier A (the hub is the session's I/O): steward-red. Size S."
+  state = "done"
+  revision = 97
+
+[[node]]
+  id = "B62"
+  title = "A hub wait is bounded by the request's own deadline, which the files layer does not carry: past HAND_US an ended server's place is still not free, and a Hub::wait caller overshoots by a stall"
+  template = "package"
+  parent = "M2"
+  needs = ["B61", "B51"]
+  body = "The gap two packages name (2026-10-15). B61: Io::connect at MAX_WAITERS waits HAND_US (1 s) for an ended piped's waiter to hand over; under heavy load a hand-over took longer and the seventh fresh piped was refused Emfile though no live server held its place (pipe-sixty-four rv32 beside a whole bench, 1 run in 3), so the case stays in the quiet class. B51's ruling (QA B51-completion-hold): the client's completion call has no clock; a Hub::wait caller overshoots its deadline by a stall; a wedged server holds its clients until it dies. Both want a bound tied to the request's own deadline, and beamlet's files layer (userland/otp/redoubt/src/files.rs, Io) carries none: a File call has no deadline to tie to. Design first (the Architect): where a request's deadline lives (the Elixir caller's timeout? the session's? a per-call option?), what a hub wait does at it (answer late-busy, refuse, or hand back), and whether the kernel's R28 parked-call accounting is touched. Then build; pipe-sixty-four leaves the quiet class when it closes. Tier A: steward-red. Size M."
   state = "todo"
-  revision = 65
+  revision = 96
