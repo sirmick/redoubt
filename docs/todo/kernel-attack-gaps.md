@@ -68,14 +68,14 @@ gap: the page's section, the claim, and what no case attacks.
 - R19 (kernel W^X): no case plants a writable kernel code page to show the boot check stops.
 
 ### scheduling.md
-- One flat stride queue: round-robin among one budget's threads is not attacked.
-- Preemption points: an interrupt's wake not preempting, and another budget's deadline preempting, are not attacked.
-- The current minimum and ties: clauses 1 and 4 are checked on the target only when a run happens to tie; the host tests and model attack them.
-- Charging: interrupt handling billed to the device object's owner is not attacked.
-- Responsiveness: `budget_destroy` call-to-return is recorded, not asserted.
-- R12 (scheduling): the bound on a call's kernel time is attacked only for `map_anon`'s search and `map_fixed`'s range.
-- R23 (no test channels): no case builds the production kernel and scans it for the trace.
-- Failure and restart: a picked thread dying before the switch, and a full queue, are not attacked.
+- ~~One flat stride queue: round-robin among one budget's threads is not attacked.~~ `sched-round-robin`.
+- ~~Preemption points: an interrupt's wake not preempting, and another budget's deadline preempting, are not attacked.~~ `sched-irq-wake`, `sched-deadline-preempt`.
+- The current minimum and ties: clauses 1 and 4 are checked on the target only when a run happens to tie, and no case can make one: a waker ties a requeued budget, and two requeued budgets tie, only at passes equal to the tick, which charging makes a coincidence; the host tests and model attack them.
+- ~~Charging: interrupt handling billed to the device object's owner is not attacked.~~ `sched-irq-wake`.
+- ~~Responsiveness: `budget_destroy` call-to-return is recorded, not asserted.~~ `sched-latency` (`destroy_call_p99_us`).
+- R12 (scheduling): the bound on a call's kernel time is attacked for the memory calls (`map-anon-search-bound`, `scan-bounds`, `worst-walk`) and the endpoint, handle, thread, IPC and clock calls (`call-bounds`); not for lends and transfers, `process_map`, `set_flags` and the device calls.
+- ~~R23 (no test channels): no case builds the production kernel and scans it for the trace.~~ `bench-no-trace`, `bench-trace-scan-catches`, `bench-test-only-refused`.
+- Failure and restart: a picked thread dying before the switch needs another hart's destruction to land between `kmain`'s pick and its switch, which no case can time; the queue cannot be filled (one slot per process). Neither is attacked by a case.
 
 ### boot.md
 - Firmware: the bench never falling back to QEMU's own firmware is not attacked.

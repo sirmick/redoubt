@@ -1,0 +1,9 @@
+description = "Bench self-check: the scan `bench-no-trace` runs over the production kernel catches a planted trace: a checked kernel built with `sched-trace` must fail it on the trace's console line"
+arch = ["rv64", "rv32"]
+kind = "build"
+package = "redoubt-kernel"
+features = ["qemu-virt", "sched-trace"]
+# The trace compiles only into a checked kernel (`test-only`): the negative needs one.
+debug_assertions = true
+forbid_in_binary = ["SCHED-TRACE", "5sched5trace"]
+must_fail = '^the binary holds "SCHED-TRACE" at offset 0x[0-9a-f]+ \('

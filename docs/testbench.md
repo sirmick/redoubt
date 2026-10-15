@@ -370,7 +370,7 @@ The kinds, and the fields each takes besides `description`, `arch` and `whole_ru
 | Kind | What it does | Its fields |
 | --- | --- | --- |
 | `boot` | boots the kernel with `programs` as its first processes and judges the run | those above |
-| `build` | only checks that a package compiles for each target: coverage for what the bench does not boot | `package`, `features` |
+| `build` | only checks that a package compiles for each target: coverage for what the bench does not boot; with `forbid_in_binary`, that the binary holds none of the byte strings named ([self-checks](#self-checks)) | `package`, `features`, `debug_assertions` (the checked profile instead of the release), `forbid_in_binary`, `must_fail` (the build's error, or the scan's finding) |
 | `host-tests` | runs `cargo test` on the host for the named workspace packages, for what no boot can reach (a constant the loader and the bench share is right in the machine's eyes even when it is wrong); with `miri`, under nightly Miri. These cases are the bench's only host tests; `cargo test --workspace` is not run, though it compiles. The kernel and the test programs have no host tests (`test = false` on their targets) | `packages`, `tests` (the test files to run; default all), `miri`, `workspace`, `features`, `tools`, `filter` (only the tests whose names contain one of these), `skip` (tests left out, by part of their name), `profile` (Cargo's, such as `release`), `fanout` (`each`, `env`, `values`, `cores`, `vars`, `late`, `late_cores`), `timeout_secs` (each fanned job's deadline) |
 | `ssh-loopback` | runs `[[session]]`s against a host OpenSSH server with no guest, to check the session runner on its own | `authorized` (the test keys the server accepts), `[[session]]`, `timeout_secs`, `host_key` (default: the server's own), `server_log` (patterns each of which must match a line of the server's own log), `must_fail` |
 | `unsafe-budget` | the ratchet on `unsafe` ([below](#the-unsafe-budget)) | `[[budget]]`: `name`, `paths`, `max_unsafe`, `max_undocumented`; `[[uncounted]]`: `path`, `reason` |
@@ -535,7 +535,7 @@ parks when it is done, unless its exit is the point of its case.
 
 ### The scheduler oracle
 
-<details><summary>Status: built · tested (31)</summary>
+<details><summary>Status: built · tested (38)</summary>
 
 - bench:sched-ties
 - bench:sched-capped
@@ -568,6 +568,13 @@ parks when it is done, unless its exit is the point of its case.
 - host:testbench::timer_work_billed_elsewhere_in_a_budgets_time_is_bounded_inside_its_share
 - host:testbench::idle_sections_that_found_nothing_are_bounded
 - host:testbench::an_unmatched_audit_fails
+- bench:sched-irq-wake
+- bench:sched-deadline-preempt
+- bench:call-bounds
+- host:testbench::a_device_wake_that_preempts_is_caught
+- host:testbench::a_device_interrupt_bills_its_devices_owner
+- host:testbench::a_deadline_that_does_not_preempt_is_caught
+- host:testbench::call_bounds_hold_each_call_to_its_empty_system_section
 
 </details>
 
@@ -615,7 +622,22 @@ kernel that arms every hart's timer for a timeout whose payer runs nowhere wakes
 the other's naps too ([the hart timer](kernel/timer.md#the-hart-timer)). Where the clock is the host's,
 `driver_wake_p50_searches=K` and `driver_wake_p99_searches=K` judge the driver wake's net p50 and
 p99 against K searches of the same run alone, from the program's `one search alone` line, at any
-hart count (`sched-lock-contention-4-mttcg`). `sched-capped` runs the model's capped scenarios
+hart count (`sched-lock-contention-4-mttcg`). Three checks read the interrupts' brackets
+([preemption points](kernel/scheduling.md#preemption-points), [charging](kernel/scheduling.md#charging)):
+`irq_wake_no_preempt=N` needs N device interrupts from user mode that claimed a source, woke one
+budget and returned to the runner with no pick inside, whose hart's next pick or interrupt was the
+runner's slice's end (`sched-irq-wake`), and refuses any device interrupt that began no destruction
+yet did not return to user mode; `irq_billed_to=<mark>` needs every device interrupt that claimed a
+source to charge the budget the program marks after the claim, and lets
+it charge only that budget and, for its return, the one it interrupted: the owner is the program's
+to name, and `sched-irq-wake` names the boot's, `system`; `deadline_preempts=N` needs
+every timer interrupt from user mode that destroyed another budget by its deadline to leave for
+`kmain` with its runner requeued and the hart's next event a pick, and N of them
+(`sched-deadline-preempt`). With `hold-trace`, a `CALL-BOUNDS` line names two windows in the
+kernel's ticks, a `factor` and a `floor`: for every system call made in the first, its longest
+section in the second, net of audits, is held to `factor` times its longest in the first or the
+`floor`; a call made in the second alone is reported; at least eight must be judged (`call-bounds`,
+[R12 (scheduling)](kernel/scheduling.md#r12-scheduling)). `sched-capped` runs the model's capped scenarios
 ([model](kernel/model.md#scheduler-scenarios)) on the machine at two, three and four harts, each
 budget's share judged as below; `hart_shares_from=4` records the shares on a trace of fewer harts,
 since under `icount` QEMU's turns move them, and `sched-capped-mttcg` judges the two- and
@@ -1414,7 +1436,7 @@ rest, [sshd](servers/sshd.md#sessions-over-ssh)).
 
 ## Self-checks
 
-<details><summary>Status: built · tested (14)</summary>
+<details><summary>Status: built · tested (17)</summary>
 
 - bench:bench-attack-forgery
 - bench:bench-console-after-expect
@@ -1430,6 +1452,9 @@ rest, [sshd](servers/sshd.md#sessions-over-ssh)).
 - bench:bench-cbo-self-unrefused
 - bench:bench-qemu-early-exit
 - bench:bench-elixir-oracles-broken-guard
+- bench:bench-no-trace
+- bench:bench-trace-scan-catches
+- bench:bench-test-only-refused
 
 </details>
 
@@ -1442,7 +1467,8 @@ must_fail = '^regex$'        # passes only if the run fails with a matching reas
 ```
 
 `must_fail` is judged against the run's verdict only (console, sessions, devices); a build error or
-the bench's own trouble is a failure regardless, and so is an `elixir` case's toolchain. Each case
+the bench's own trouble is a failure regardless, and so is an `elixir` case's toolchain. A `build`
+case's `must_fail` alone matches its build's error, or its binary scan's finding (below). Each case
 writes its pattern anchored and quoting the evidence, so it cannot pass by failing for some other
 reason; the bench does not enforce the anchoring, so a reviewer checks it. An attack case can have
 a self-check of its own: `bench-net-self-unrefused` runs `net-attacks`'s boot with `ipd` not told
@@ -1453,6 +1479,16 @@ verdict line that never comes.
 `bench-elixir-oracles-broken-guard` runs the steward core's reference with its `not_locked` guard
 held always, and must fail on the first event where its output leaves the core's
 ([the trace encoding](servers/steward.md#the-trace-encoding)).
+A `build` case with `forbid_in_binary` reads the binary it built and fails on the first byte string
+named that it holds anywhere, quoting the offset and what is around it: `bench-no-trace` builds the
+production kernel, the release profile with the board feature alone as `./build` makes it, and
+forbids the scheduling trace's console-line prefix and its module's mangled path: the scan proves
+this trace absent, not every channel
+([R23 (no test channels)](kernel/scheduling.md#r23-no-test-channels)); `bench-trace-scan-catches`
+builds a checked kernel with `sched-trace` (`debug_assertions = true`: a test-only feature
+compiles into no other) under the same scan and must fail on the trace's console line; and
+`bench-test-only-refused` asks the release profile for `sched-trace` and must fail on the kernel's
+own refusal, a test-only feature needing a checked build, in the compiler's words.
 
 ## The unsafe budget
 

@@ -1,0 +1,10 @@
+description = "Bench self-check and R23 (kernel/scheduling.md, \"No test channels\"): the production kernel, the release profile with the board feature alone as `./build` makes it, holds no scheduling trace: neither the trace's console lines nor its module's symbols are anywhere in the binary"
+arch = ["rv64", "rv32"]
+kind = "build"
+package = "redoubt-kernel"
+features = ["qemu-virt"]
+# The trace's console lines (`SCHED-TRACE ...`, `SCHED-TRACE-END`) and the mangled path of its
+# module, `redoubt_kernel::sched::trace`, which every symbol of it carries (`5sched5trace`): the
+# release profile keeps the symbol table (`strip = false`), so a trace site compiled in would name
+# itself. `bench-trace-scan-catches` plants the trace and must fail here.
+forbid_in_binary = ["SCHED-TRACE", "5sched5trace"]

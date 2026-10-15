@@ -1,0 +1,20 @@
+description = "A device interrupt only wakes, and its handling is its device's owner's (kernel/scheduling.md, \"Preemption points\" and \"Charging\"): a driver stand-in on the goldfish RTC's alarm beside an equal-weight spinner; the post-check needs 40 of its 60 alarms to have woken the driver and returned to the spinner, which ran to its slice's end before the driver was picked, and every alarm that claimed its source to have charged `system`, the budget the boot charges every device object to, never the spinner (virtual time, checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+icount = "shift=3,sleep=off"
+programs = ["sched-irq-wake"]
+# Test builds only: the trace ring (never in a default kernel).
+kernel_features = ["sched-trace"]
+# The devices' owner is marked with an empty budget of weight 2 under `system`.
+post_check = "sched_oracle irq_wake_no_preempt=40 irq_billed_to=2"
+# One hart: on two the idle hart takes the wake, and there is nothing to preempt.
+keep_smp = true
+timeout_secs = 300
+expect = [
+    '^\[irq-wake\] ok: the driver took \d+ alarms',
+    '^SCHED-IRQ-WAKE TEST PASSED$',
+    '^SCHED-TRACE-END \d+ dropped 0$',
+]
+forbid = ['\[irq-wake\] FAIL', 'PROGRAM HALT']
+poweroff = true

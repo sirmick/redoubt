@@ -14,9 +14,9 @@
 //! - steward timer wake: `time_now` when the steward runs again, less its timeout's deadline; and the same
 //!   for the timeout after which it decides to destroy a lease (its decision wake);
 //! - `budget_destroy`, call to return: R10's own cost (kernel time nothing preempts) and, when the steward's
-//!   slice ended during it, its wait for the CPU after. Recorded, not asserted: its bound is one round, R10
-//!   plus (runnable budgets + 2) slices. R10's kernel time alone is in the kernel's trace (records `X` and
-//!   `Y`), and the bench's post-check asserts its p99;
+//!   slice ended during it, its wait for the CPU after. Its bound is one round, R10's p99 plus (runnable
+//!   budgets + 2) slices at N = 16, judged by the post-check net of audits (`destroy_call`). R10's kernel
+//!   time alone is in the kernel's trace (records `X` and `Y`), and the post-check asserts its p99;
 //! - deadline notice: `time_now` when the steward receives a lease's `killed` notice, less the lease's
 //!   deadline;
 //! - R10's own kernel time, and the object frames it walks (its cost grows with them), are in the kernel's
@@ -119,8 +119,8 @@ extern "C" fn measure(_: usize) -> ! {
             b.start(budgets[nb - 1], Role::Spin, &[], &[])
         });
         b.go(50_000, WINDOW_US);
-        // The spinners' counts, the driver's two reports and the steward's four.
-        let words = b.collect_words(n as usize + usize::from(server.is_some()) + 2 + 4);
+        // The spinners' counts, the driver's two reports and the steward's five.
+        let words = b.collect_words(n as usize + usize::from(server.is_some()) + 2 + 5);
         let count = |i: usize| join(words[i][0][0], words[i][0][1]);
         b.note(format_args!(
             "N={}: weights driver 1000, steward 1000, {} sessions x 100{}; spinning budgets {}",
@@ -157,10 +157,11 @@ extern "C" fn measure(_: usize) -> ! {
                 n, w[0]
             ));
         }
-        // Recorded, not judged: one round, R10 plus (runnable budgets + 2) slices.
+        // Gross here; the post-check judges each sample net of audits against one round, R10's
+        // p99 plus (runnable budgets + 2) slices at N = 16 (`destroy_call_p99_us`).
         match stat(s, Stats::DESTROY) {
             Some(w) => b.note(format_args!(
-                "N={} budget_destroy, call to return: {} / {} / {} ({}); recorded, bound one round: {} µs",
+                "N={} budget_destroy, call to return: {} / {} / {} ({}): gross, audits included; net in the post-check, bound one round: {} µs",
                 n,
                 w[0],
                 w[1],

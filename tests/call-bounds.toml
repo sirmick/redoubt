@@ -1,0 +1,23 @@
+description = "A call's kernel time does not grow with what other budgets hold (R12), beyond the memory calls: endpoint_create, mint, close, thread_create and thread_exit, call and reply, receive of a queued message, time_now and budget_usage, each made sixteen times on an empty system and again after a hostile budget filled its handle table, made two thousand endpoints and parked 250 threads in queued sends and timed waits; every call's longest kernel lock section after the fill, net of the checked build's audits, within twice its empty-system longest or 100 ticks, judged by the post-check from the trace (virtual time, checked build, `hold-trace`)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+icount = "shift=3,sleep=off"
+programs = ["call-bounds"]
+# Test builds only: each kernel lock section with its cause and its audits (never in a default
+# kernel), so the post-check reads each call's own kernel time.
+kernel_features = ["hold-trace"]
+post_check = "sched_oracle"
+# One hart: under `icount` a lock section on several harts counts the other hart's instructions
+# too, so a call's section would read the hostile's turns, not the call (as `sched-timer-entry`;
+# kernel/scheduling.md, "Residual risks").
+keep_smp = true
+timeout_secs = 600
+expect = [
+    '^\[call-bounds\] ok: the hostile filled its handle table, made its endpoints and parked its threads$',
+    '^CALL-BOUNDS \d+ \d+ \d+ \d+ 2 100$',
+    '^CALL-BOUNDS TEST PASSED$',
+    '^SCHED-TRACE-END \d+ dropped 0$',
+]
+forbid = ['\[call-bounds\] FAIL', 'PROGRAM HALT', 'PANIC']
+poweroff = true

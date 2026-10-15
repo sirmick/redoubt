@@ -660,6 +660,17 @@ pub struct Build {
     pub package: String,
     #[serde(default)]
     pub features: Vec<String>,
+    /// Build the checked profile (debug assertions on) instead of the release one.
+    #[serde(default)]
+    pub debug_assertions: bool,
+    /// Byte strings the built binary must not hold anywhere (its code, data or symbol names), for
+    /// a self-check that a test-only channel is out of the production kernel (kernel/scheduling.md,
+    /// R23). Each is sought as written.
+    #[serde(default)]
+    pub forbid_in_binary: Vec<String>,
+    /// See `Boot::must_fail`: here the build's own error (a test-only feature refused without
+    /// debug assertions is a compile error by design) or a `forbid_in_binary` finding.
+    pub must_fail: Option<String>,
 }
 
 /// A program to inject into the boot bundle. The `bin` form takes `budgets`: the budgets the

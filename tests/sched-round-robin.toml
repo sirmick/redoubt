@@ -1,0 +1,20 @@
+description = "Round-robin within a budget (kernel/scheduling.md, \"One flat stride queue\"): one budget's four threads, two processes of two, take turns in (pid, tid) order from the cursor, wrapping, each thread once a round, judged from each thread's own resumptions over twelve rounds, and their counts alike (virtual time, release build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+icount = "shift=3,sleep=off"
+# A release build: the threads read their gaps on `rdtime`, and a checked build's audits at a
+# slice's end would show as gaps of their own.
+programs = ["sched-round-robin"]
+# One hart: on several a budget runs on as many harts as it has runnable threads, and the
+# round-robin is among the threads no hart runs; the cycle this case reads is one hart's.
+keep_smp = true
+timeout_secs = 120
+expect = [
+    '^\[round-robin\] ok: every thread reported 12 resumptions, its slices and its count$',
+    '^\[round-robin\] ok: the first runs follow \(pid, tid\) order',
+    '^\[round-robin\] ok: 12 rounds ran the cycle in order, each thread once a round, wrapping$',
+    '^\[round-robin\] ok: the four threads. counts are within a tenth of each other and their slices within one$',
+    '^SCHED-ROUND-ROBIN TEST PASSED$',
+]
+forbid = ['\[round-robin\] FAIL', 'PROGRAM HALT']
+poweroff = true

@@ -1,4 +1,4 @@
-description = "Latency under the named workload (the targets in kernel/scheduling.md, \"Responsiveness\"): a driver stand-in on the goldfish RTC's alarm interrupt, a steward stand-in on timeouts, hand destroys after a decision timeout and lease deadlines, and 1, 4 and 16 spinning sessions; 200 wakes and 50 destructions of each kind per run; driver and timer wakes p50 <= 15 ms and p99 <= 50 ms, decision wakes p50 <= 25 ms and p99 <= 95 ms (from the fourth seed sweep), deadline notice p99 <= 40 ms and R10 kernel time p99 <= 30 ms (from the trace; both from the seed sweep), a lease's end p99 <= 125 ms, a 1000-weight server's share under the 16-session load; every latency target judged by the post-check net of the checked build's audits, and every pick checked by the rank oracle (virtual time, checked build)"
+description = "Latency under the named workload (the targets in kernel/scheduling.md, \"Responsiveness\"): a driver stand-in on the goldfish RTC's alarm interrupt, a steward stand-in on timeouts, hand destroys after a decision timeout and lease deadlines, and 1, 4 and 16 spinning sessions; 200 wakes and 50 destructions of each kind per run; driver and timer wakes p50 <= 15 ms and p99 <= 50 ms, decision wakes p50 <= 25 ms and p99 <= 95 ms (from the fourth seed sweep), deadline notice p99 <= 40 ms and R10 kernel time p99 <= 30 ms (from the trace; both from the seed sweep), budget_destroy call to return p99 <= 51 ms (one round at N = 16), a lease's end p99 <= 125 ms, a 1000-weight server's share under the 16-session load; every latency target judged by the post-check net of the checked build's audits, and every pick checked by the rank oracle (virtual time, checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true
@@ -19,7 +19,9 @@ kernel_features = ["sched-trace"]
 # decision-wake p99 plus R10's, <= 95 + 30 ms; and every latency target, judged on the program's
 # sample windows net of the checked build's audit time inside each (kernel/scheduling.md,
 # "Responsiveness"); the targets are gated at one hart and two and recorded at more (`gate_harts`).
-post_check = "sched_oracle gate_harts=2 r10_p99_us=30000 lease_end_p99_us=125000 driver_wake_p50_us=15000 driver_wake_p99_us=50000 timer_wake_p50_us=15000 timer_wake_p99_us=50000 decision_wake_p50_us=25000 decision_wake_p99_us=95000 deadline_notice_p99_us=40000"
+# `destroy_call`: `budget_destroy` call to return, one round at N = 16: R10's 30 ms plus
+# (runnable budgets + 2) slices, 17 + 2 + 2 of 1 ms (kernel/scheduling.md, "Responsiveness").
+post_check = "sched_oracle gate_harts=2 r10_p99_us=30000 lease_end_p99_us=125000 driver_wake_p50_us=15000 driver_wake_p99_us=50000 timer_wake_p50_us=15000 timer_wake_p99_us=50000 decision_wake_p50_us=25000 decision_wake_p99_us=95000 deadline_notice_p99_us=40000 destroy_call_p99_us=51000"
 timeout_secs = 1800
 expect = [
     '^\[latency\] the RTC keeps virtual time: met',
@@ -39,6 +41,7 @@ expect = [
     '^\[latency\] N=16 deadline notice: .*: gross, audits included; net in the post-check',
     '^\[latency\] N=16 budget_destroy, call to return: ',
     '^LATENCY-SAMPLE N=16 deadline_notice \d+ \d+$',
+    '^LATENCY-SAMPLE N=16 destroy_call \d+ \d+$',
     '^\[latency\] N=16: the 1000-weight server counted \d+ of 1000 of the spinning CPU \(its weight.s 384\)$',
     '^SCHED-LATENCY TEST PASSED$',
     '^SCHED-TRACE-END \d+ dropped 0$',

@@ -1,0 +1,7 @@
+description = "R23 (kernel/scheduling.md, \"No test channels\"): a test-only kernel feature is refused without debug assertions: the release kernel with `sched-trace` does not compile, and says why"
+arch = ["rv64", "rv32"]
+kind = "build"
+package = "redoubt-kernel"
+features = ["qemu-virt", "sched-trace"]
+# The kernel's own refusal (`kernel/src/main.rs`), as cargo reports it.
+must_fail = '(?s)^building redoubt-kernel for rv(64|32) failed: .*a test-only kernel feature needs a checked build \(debug assertions on\)'
