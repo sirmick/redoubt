@@ -1,26 +1,37 @@
-description = "A deadline's destruction lands on the hart running the budget that pays for it (kernel/timer.md, \"The hart timer\"): a creator floods its budget with deadlines that fall after its creations and then only spins beside an equal-weight victim on two harts; the timer work billed to others in the victim's time is bounded by the post-check on the trace, and the victim keeps its share of the harts (virtual time, checked build)"
+description = "A deadline's destruction lands on the hart running the budget that pays for it (kernel/timer.md, \"The hart timer\"), where the harts run at once (multi-threaded TCG, no icount): a creator floods its budget with deadlines that fall after its creations and then only spins beside an equal-weight victim on two harts; the timer work billed to others in the victim's time is bounded by the post-check on the trace at 10 of 1000 of the victim's charges, which a kernel built with timer-any-hart fails, and the victim keeps its share of the harts (host time, checked build)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true
-icount = "shift=3,sleep=off"
 programs = ["deadline-placement"]
 # Test builds only: the trace ring (never in a default kernel), which needs a checked build; its
 # audits are charged to no one.
 kernel_features = ["sched-trace"]
 # The bound: timer interrupts in the victim's time that charged another budget, at most 10 of 1000
 # of what the victim was charged in the window (`foreign_timer_in`). The deadlines fall 600 µs
-# after a round's creations, so none is served at a creator's own entry; the creator then spins
-# in user mode, so each is served at a timer interrupt: on the creator's hart, whose timer alone
-# is armed for its deadlines (the round's children share the creator as payer, no tie). A kernel
-# built with `timer-any-hart`, every hart's timer coming by every deadline, has icount's turn
-# decide the hart, lands a share of the destructions on the victim's and fails the bound
-# (TBD-NEG-RV64 and TBD-NEG-RV32 of 1000, the recorded negative runs); what still reaches the
-# victim's hart through `kmain` or its own entries is reported beside. Two harts: at one every
-# interrupt is on the victim's hart, and the bound is recorded, not judged.
+# after a round's creations and the creator then spins in user mode, so the round's first is
+# served at a timer interrupt on the creator's hart, whose timer alone is armed for its deadlines
+# (the round's children share the creator as payer, no tie); the fifteen after it pass during
+# that destruction (26 ms in a checked build) and whichever entry comes first serves them: the
+# creator's own next calls or `kmain` after its slice end (`$`: 236 such charges in a run, 153 at
+# a call's entry and 83 in `kmain`, 100,388 ticks, on rv64; 128, 74, 54 and 76,299 on rv32), or
+# the victim's slice end, which the bound counts. Five runs a width alone on the quiet cores read
+# 0, 0, 1, 0, 0 of 1000 (rv64; 0 to 13,366 ticks) and 0, 1, 0, 0, 0 (rv32; 0 to 14,410), one or
+# two destructions of 96 that the victim's own slice end reached first. A kernel built with `timer-any-hart`, every hart's timer coming by
+# every deadline, races the two harts for each round's first deadline and fails the bound: 21 of
+# 1000 on rv64 (74 such interrupts, 251,881 ticks) and 29 on rv32 (89, 364,375), the recorded
+# negative runs. Under icount the same program reads QEMU's turn order, not the placement: the
+# creator's vCPU is the one running when the clock reaches the deadline, so it takes the
+# interrupt whether or not the victim's hart is armed, and the negative passes there too (5
+# interrupts, 1 of 1000, both widths); a case that measures QEMU's turn order is judged where
+# the harts run at once (kernel/scheduling.md, "A hart waits for QEMU's turns"), so this one runs
+# without icount, on the quiet core set, one such case at a time, as
+# sched-wake-no-preempt-harts-mttcg does. What still reaches the victim's hart through `kmain` or
+# its own entries is reported beside the bound. Two harts: at one every interrupt is on the
+# victim's hart, and the bound is recorded, not judged.
 post_check = "sched_oracle foreign_timer_in=placement:10"
 smp = [2]
 keep_smp = true
-timeout_secs = 600
+timeout_secs = 300
 expect = [
     '^HART-SHARE placement \d+ \d+ 50\+ 2:1 100:1$',
     '^DEADLINE-PLACEMENT TEST PASSED$',

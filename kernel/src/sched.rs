@@ -1406,9 +1406,10 @@ pub mod trace {
 
     /// An expiry's bill outside a timer or device interrupt from user mode (`$`): at a call's
     /// entry, or `kmain`'s, whichever hart's entry came first to an item that had passed; the payer
-    /// in the id, the ticks in the pass field's low 32 bits and the time in µs above them. The
-    /// oracle reports the timer work a budget's hart took this way beside what its timer
-    /// interrupts took (kernel/timer.md, "R12 (scheduling) for timer work").
+    /// in the id, the ticks in the pass field's low 32 bits and the time in µs above them (32 bits:
+    /// it wraps after 2^32 µs, 71 minutes, longer than any case runs). The oracle reports the
+    /// timer work a budget's hart took this way beside what its timer interrupts took
+    /// (kernel/timer.md, "R12 (scheduling) for timer work").
     pub const EXPIRY_CHARGE: u8 = b'$';
 
     /// An expiry that found something due begins or ends (`time::expire_due`).

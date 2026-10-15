@@ -1,11 +1,12 @@
 //! A deadline's destruction lands on the hart that runs the budget paying for it (kernel/timer.md,
 //! "The hart timer"): a creator floods its own budget with empty weight-0 budgets whose deadlines
-//! fall 600 µs ahead, after its last creation, and then only spins, so each is destroyed at a
-//! timer interrupt and never at one of the creator's own entries; an equal-weight victim spins
-//! beside it on the other hart. The traced twin's post-check judges the victim's share on the
-//! kernel's charges (`HART-SHARE`) and bounds the timer work billed to others in the victim's
-//! time; a kernel built with `timer-any-hart`, every hart's timer coming by every deadline, lands
-//! a share of the destructions on the victim's hart and fails that bound.
+//! fall 600 µs ahead, after its last creation, and then only spins, so a round's first is
+//! destroyed at a timer interrupt on the creator's hart and the rest, passing during that
+//! destruction, at whichever entry comes first; an equal-weight victim spins beside it on the
+//! other hart. The case's post-check judges the victim's share on the kernel's charges
+//! (`HART-SHARE`) and bounds the timer work billed to others in the victim's time, where the harts
+//! run at once; a kernel built with `timer-any-hart`, every hart's timer coming by every deadline,
+//! races the harts for each round's first and fails that bound.
 
 #![no_std]
 #![no_main]

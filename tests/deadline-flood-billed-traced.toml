@@ -9,16 +9,26 @@ programs = ["deadline-flood-billed"]
 # time, so the victim's share is the kernel's charges (`HART-SHARE`); the counts' bounds are the
 # release twin's.
 kernel_features = ["sched-trace"]
-# Judged at the bench's harts. At two the destructions land on the creator's hart, whose timer
-# alone is armed for its deadlines while it runs, or at the creator's own entries; the timer work
-# billed to others in the victim's time is bounded at 10 of 1000 of its charges (`foreign_timer_in`,
-# judged at two harts, recorded at one). Before the placement the destructions ran on whichever
-# hart's timer came first, and the victim's share followed where they landed: mostly on the
-# creator's hart (91 of 96 on rv64 and 77 of 80 on rv32 with 16 deadlines, 124 and 125 of 128
-# with 64) it kept about 870 of 1000; mostly on its own (87 of 96, rv64, 16 deadlines, in one
-# build) 482, near the bound, which no pick can repay a one-thread victim (kernel/timer.md, "R12
-# (scheduling) for timer work"). With it: TBD-GATE.
-post_check = "sched_oracle foreign_timer_in=16-deadlines:10 foreign_timer_in=64-deadlines:10"
+# Judged at the bench's harts. At two a destruction is armed on the creator's hart, which runs the
+# payer, or served at the creator's own entries; the timer work billed to others in the victim's
+# time is reported, not bounded, here: under icount it reads QEMU's turn order. The creator
+# refills each slot a destruction frees with a deadline 200 µs ahead; while the creator's hart is
+# inside the destruction before it, with interrupts off, that deadline passes, and whichever
+# hart's entry comes first serves it (I13): the victim's own 1 ms slice end's interrupt, 0.7 ms
+# ahead of the creator's exact-time one under icount's turns, and the 26 ms destruction cycle
+# locks that phase for the run: 0 then 114 of 1000 of the victim's charges with 16 deadlines and
+# 235 and 241 with 64 in two runs of one bundle on rv64 (the victim keeping 507 to 530, against
+# its floor of 450: a share failure here in that phase is the phase, and the twin judges the
+# share where the harts run at once), 0 and 1 on rv32 (919 and 920). Where the harts run at once
+# it is 0 to 4 of 1000, bounded at 10 by
+# deadline-flood-billed-traced-mttcg (a case that measures QEMU's turn order is judged where the
+# harts run at once: kernel/scheduling.md, "A hart waits for QEMU's turns"). Before the
+# placement the destructions ran on whichever hart's timer came first: mostly on the creator's
+# hart (91 of 96 on rv64 and 77 of 80 on rv32 with 16 deadlines, 124 and 125 of 128 with 64) the
+# victim kept about 870 of 1000; mostly on its own (87 of 96, rv64, 16 deadlines, in one build)
+# 482, near the bound, which no pick can repay a one-thread victim (kernel/timer.md, "R12
+# (scheduling) for timer work").
+post_check = "sched_oracle"
 timeout_secs = 600
 expect = [
     '^HART-SHARE 16-deadlines \d+ \d+ 50\+ 2:1 100:1$',

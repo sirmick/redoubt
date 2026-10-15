@@ -268,7 +268,7 @@ deadline itself. The only delay is the kernel work already in progress when the 
 
 ### R12 (scheduling) for timer work
 
-Status: built · tested: bench:sched-timer-flood, bench:deadline-flood-billed, bench:sched-exit-churn, mutation:R12TimerWorkUnbilled
+Status: built · tested: bench:sched-timer-flood, bench:deadline-flood-billed, bench:sched-exit-churn, bench:deadline-placement, bench:deadline-flood-billed-traced-mttcg, bench:sched-exit-churn-mttcg, mutation:R12TimerWorkUnbilled
 
 R12 is owned by [scheduling](scheduling.md#r12-scheduling); this is how its charging applies to
 the timer's work. Each expired item's work is billed under it: a timeout to its thread's budget, a deadline's
@@ -295,30 +295,47 @@ payer's work; a pick repays that only where it can, and a budget with one thread
 with one, on two harts, cannot take a second hart. The traced kernel's oracle reports the timer
 interrupts from user mode that charged a budget other than the one they interrupted, with their
 ticks, and a case bounds them inside a victim's window as a share of what the victim was charged
-(`foreign_timer_in`, [the scheduler oracle](../testbench.md#the-scheduler-oracle)):
-`deadline-placement`, whose creator makes its deadlines and then only spins, at 10 of 1000 at
-two harts, where a kernel built with `timer-any-hart`, every hart's timer coming by every item
-as before, fails it (TBD-NEG-RV64 / TBD-NEG-RV32 of 1000, the recorded negative runs);
-`deadline-flood-billed-traced` and `sched-exit-churn` at the same bound. Before the placement, at
-two harts: in `sched-exit-churn` against threads that exit, the attacker's poll timeouts, 27 such
-interrupts and 70,232 ticks on rv64 (0.23 % of the window's charges), 8 and 17,035 on rv32; in
-`deadline-flood-billed-traced` with 16 deadlines, where the destructions landed decided the
-victim's share: mostly on the creator's hart, 3 such interrupts and 34,046 ticks (rv32) and the
-victim kept 872 of 1000; mostly on the victim's (87 of 96, rv64), 89 and 833,543 ticks, 17 % of
-the window's charges, and it kept 482, against at least 450. With it: TBD-GATES.
+(`foreign_timer_in`, [the scheduler oracle](../testbench.md#the-scheduler-oracle)), at 10 of
+1000 at two harts, where the harts run at once (multi-threaded TCG, host time, on the quiet core
+set): `deadline-placement`, whose creator makes its deadlines 600 µs ahead and then only spins,
+reads 0 to 1 of 1000 in five runs a width, and a kernel built with `timer-any-hart`, every hart's
+timer coming by every item as before, fails it at 21 (rv64, 74 such interrupts, 251,881 ticks)
+and 29 (rv32, 89, 364,375), the recorded negative runs; `deadline-flood-billed-traced-mttcg`
+reads 1 to 4 with 16 deadlines and 0 to 1 with 64, `sched-exit-churn-mttcg` 0 (rv64) and 1 to 5
+(rv32) against threads that exit and 0 against the processes, five runs a width each. Before the
+placement, at two harts: in `sched-exit-churn` against threads that exit, the attacker's poll
+timeouts, 27 such interrupts and 70,232 ticks on rv64 (0.23 % of the window's charges), 8 and
+17,035 on rv32; in `deadline-flood-billed-traced` with 16 deadlines, where the destructions landed
+decided the victim's share: mostly on the creator's hart, 3 such interrupts and 34,046 ticks
+(rv32) and the victim kept 872 of 1000; mostly on the victim's (87 of 96, rv64), 89 and 833,543
+ticks, 17 % of the window's charges, and it kept 482, against at least 450. Under icount the
+count is not the placement's but the order of QEMU's turns, and a run locks into one phase: the
+icount cases report it and bound nothing by it ([a hart waits for QEMU's
+turns](scheduling.md#residual-risks)).
 
 What still lands elsewhere, and is counted, not excluded: a payer that runs nowhere (a
-one-thread budget waiting on its own timeout), whose item every hart comes by; two payers at one
-instant, whose items are every hart's; an item noted on a hart that does not run its payer, which
-that hart arms too until the payer's hart next re-arms; an item whose payer was destroyed and its
-id reused before the expiry recomputed the hint, which is placed as the new holder of the id runs
-until then (the placement alone, never the bill); and any item that has passed when some other
-entry comes, a call's or a slice's end through `kmain`, which serves it there (I13 and R10 order
-every passed item first, on any hart). Device interrupts are placed by the controller, not
-the payer ([IRQ1's residual](devices.md#residual-risks)). The deadline notice at two harts:
-before, net p99 4.6, 4.6 and 5.1 ms at N = 1, 4 and 16 on rv64, 6.2, 5.2 and 6.1 ms on rv32; with
-the placement TBD-LAT-RV64 and TBD-LAT-RV32 (`sched-latency`), within one kernel section of
-before, the cost of waiting for the payer's hart.
+one-thread budget waiting on its own timeout), whose item every hart comes by, so a victim beside
+such a poller answers about half of its timeouts (`sched-exit-churn` under icount: 20 of 1000 of
+the victim's charges, 164 interrupts, on rv64 and 0 on rv32 in one run each, which phase the run
+locked into); two payers at one instant, whose items are every hart's; an item noted on a hart
+that does not run its payer, which that hart arms too until the payer's hart next re-arms; an
+item whose payer was destroyed and its id reused before the expiry recomputed the hint, which is
+placed as the new holder of the id runs until then (the placement alone, never the bill); and any
+item that has passed when some other entry comes, a call's, or a slice's end through `kmain` or
+inside its own interrupt, which serves it there (I13 and R10 order every passed item first, on
+any hart). The last is a flood's: the payer's hart is inside one destruction with interrupts off
+while the next deadline passes, and the victim's own slice-end interrupt reaches it first, the
+destruction landing there; under icount, where the victim's slice end runs 0.7 ms ahead of the
+payer's exact-time interrupt in QEMU's turns and the 26 ms destruction cycle keeps that phase,
+`deadline-flood-billed-traced` read 114 of 1000 of the victim's charges with 16 deadlines and
+235 and 241 with 64 in two runs of one bundle on rv64 (0 in another, 0 and 1 on rv32), what the
+residual can cost under one clock. Device interrupts are placed by the controller, not the payer
+([IRQ1's residual](devices.md#residual-risks)). The deadline notice at two harts
+(`sched-latency`, net p99 at N = 1, 4 and 16): before the placement 3,297, 3,409 and 3,764 µs on
+rv64, 3,985, 4,079 and 5,093 on rv32; with it 3,535, 3,428 and 3,758 and 3,933, 4,104 and 5,133,
+every move within the same program's p99 kernel section (10,167 ticks on rv64 and 11,053 on
+rv32, 1.0 to 1.1 ms, with `hold-trace`), the cost of waiting for the payer's hart;
+`kernel-containment` at two harts 24,001 from 24,027 and 27,120 from 27,349.
 
 ## Failure and restart
 

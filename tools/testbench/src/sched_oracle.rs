@@ -3622,7 +3622,7 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
         kernel_time
     };
     let head = format!(
-        "sched_oracle: {} records, {} picks in rank order ({} in place), every wake at or above the floor, no pass falling but by a weight change; {} passing over a budget whose threads all ran on other harts; {} lifted out of the cap set, at most to the floor; {} lifts by the rule ({} with a leading parent and work to move); {} weight changes by the rule; R10 {n} destructions over up to {} object frames, µs p50/p99/max {p50}/{p99}/{max}, their threads' ending {t50}/{t99}/{tmax}, no audit inside one; {} audits, {audit_total} µs; {} timer interrupts billed by the rule ({} expiring, {} finding a wait ended early, {} ticks after expiry to the budget billed last; {} ending a slice, {} nobody's; {} charging another budget than the one interrupted, {} ticks); {} device interrupts from user mode billed by the rule ({} claiming nothing){kernel_time}{lease_end}",
+        "sched_oracle: {} records, {} picks in rank order ({} in place), every wake at or above the floor, no pass falling but by a weight change; {} passing over a budget whose threads all ran on other harts; {} lifted out of the cap set, at most to the floor; {} lifts by the rule ({} with a leading parent and work to move); {} weight changes by the rule; R10 {n} destructions over up to {} object frames, µs p50/p99/max {p50}/{p99}/{max}, their threads' ending {t50}/{t99}/{tmax}, no audit inside one; {} audits, {audit_total} µs; {} timer interrupts billed by the rule ({} expiring, {} finding a wait ended early, {} ticks after expiry to the budget billed last; {} ending a slice, {} nobody's; {} charging another budget than the one interrupted, {} ticks); {} expiry charges outside an interrupt ({} at a call's entry, {} in `kmain`), {} ticks; {} device interrupts from user mode billed by the rule ({} claiming nothing){kernel_time}{lease_end}",
         records.len(),
         sum.picks,
         sum.picks_in_place,
@@ -3641,6 +3641,10 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
         sum.timer_empty.len(),
         sum.timer_foreign,
         sum.timer_foreign_ticks,
+        sum.expiry_charges.len(),
+        sum.expiry_charges.iter().filter(|c| c.runner.is_some()).count(),
+        sum.expiry_charges.iter().filter(|c| c.runner.is_none()).count(),
+        sum.expiry_charges.iter().map(|c| c.ticks).sum::<u64>(),
         sum.external_entries,
         sum.external_empty
     );
@@ -6474,7 +6478,7 @@ mod tests {
         assert!(
             v.as_ref().is_ok_and(|s| s.contains(
                 "0 ticks in timer interrupts, 0 of 1000 of its charges: target met (<= 10); 500 ticks at its own entries and 500 in `kmain` after it left, reported"
-            )),
+            ) && s.contains("3 expiry charges outside an interrupt (2 at a call's entry, 1 in `kmain`), 1500 ticks")),
             "{v:?}"
         );
         // Inside an interrupt such a charge is a `B`, never a `$`.

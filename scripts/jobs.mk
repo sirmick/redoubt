@@ -52,6 +52,7 @@ quiet := rt-host-tests client-host-tests r4-host-tests bench-ssh-guest bench-ssh
 quiet += steward-sub-budget-flood steward-ssh-two-principals steward-vault-session steward-vault-launch steward-session-ends
 quiet += steward-ssh-idle launch-idle
 quiet += sched-lock-contention-4-mttcg sched-capped-mttcg smp-evict-mttcg smp-shootdown-mttcg sched-wake-no-preempt-harts-mttcg
+quiet += deadline-placement deadline-flood-billed-traced-mttcg sched-exit-churn-mttcg
 quiet += beamlet-schedulers-mttcg beamlet-schedulers-one-hart-mttcg
 quiet := $(filter $(cases),$(quiet))
 net := $(filter-out $(quiet),$(sort $(basename $(notdir $(shell grep -lE '^(forward *=|\[\[?net\.(peer|dial|poke))' $$(grep -lE '^\[net\]' tests/*.toml))))))

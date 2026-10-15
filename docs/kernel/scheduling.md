@@ -101,15 +101,15 @@ such a reason. `sched-wake-no-preempt` proves it at one hart nap by nap, each ag
 that follows it; `sched-wake-no-preempt-harts` judges it at two, each wake at the entry that made
 it, its naps' ends stepped through the slices' phases, and needs at least twenty of its hundred and
 twenty wakes answered where they could have preempted, mid-slice or at another budget's call (67
-to 81 at a call on rv64 and 65 to 68 on rv32, five runs a width alone; the floor is a third of
-the least). Whether a slice ended at a timer interrupt the oracle
+to 81 at a call on rv64 and 65 to 74 on rv32, five runs a width alone and one with the timer's
+placement; the floor is a third of the least). Whether a slice ended at a timer interrupt the oracle
 decides itself, from the decision's inputs the trace records (its end and now), so a slice that
 ends during the entry's own expiry counts as ended, as the kernel ends it. Under `icount` a wake
-comes mid-slice on rv64 (26 to 30) but at most four times on rv32 (0 to 4), whose armed hart takes
+comes mid-slice on rv64 (26 to 35) but at most four times on rv32 (0 to 4), whose armed hart takes
 its interrupt only at its next turn, after the other hart's call has answered the timeout; so
 `sched-wake-no-preempt-harts-mttcg`, the same program where the harts run at once, needs five
 mid-slice. How many come is the host's race: 49 to 55 on rv64 and 48 to 57 on rv32 with the two
-harts on eight host cores (three runs a width), 70 and 72 beside other cases, and as few as 3 with the two vCPU
+harts on eight host cores (three runs a width), 69 to 75 beside other cases, and as few as 3 with the two vCPU
 threads and QEMU's I/O thread sharing two cores, so the case runs on the quiet core set. A kernel
 built with `wake-preempts`, whose timeout wake preempts the entering thread as a deadline does,
 fails both on both widths, in recorded negative runs (on rv32 under `icount`: a wake took hart 0
@@ -144,9 +144,11 @@ the oracle counts the thread as waiting only at a slice's end that picked its ow
 `sched-timer-entry` bounds what a slice's end costs the kernel: two spinners and nothing else, so every
 timer interrupt from user mode ends a slice, and the oracle bounds their lock sections, trap to
 return, net of the checked build's audits at one hart: the p99 at 2,000 ticks, the steady entry,
-which measures 930 on rv64 and 1,415 on rv32 (five runs a width alone, p50 928 and 1,389), and
-the longest at 5,000, the cold first preemptions of a phase, 3,461 and 4,265 (at two harts, where
-`icount`'s one clock counts the other hart's instructions too, they are recorded). In a release
+which measures 945 on rv64 and 1,441 on rv32 (five runs a width alone, p50 943 and 1,416; 930
+and 1,415 before the timer's placement read the harts' runners at each re-arm, 15 and 26 ticks:
+[the hart timer](timer.md#the-hart-timer)), and the longest at 5,000, the cold first preemptions
+of a phase, 3,548 and 4,446 (at two harts, where `icount`'s one clock counts the other hart's
+instructions too, they are recorded: p99 5,445 and 7,375). In a release
 build the slice's end of a thread that only computes, alone on its hart, is about 4,200 kernel
 instructions on rv64 and 6,700 on rv32 (QEMU's exec log), about 3.4 and 5.4 % of a hart at the
 1 ms slice; through `kmain` it was 9,000 and 13,000. One that switches to another budget's thread,
@@ -640,8 +642,11 @@ either, and the waiter's slice's end moves by it (the trace's `y`). That changes
 well as the bill: an excused waiter keeps its slice, stays on its hart and meets the next audit.
 At two harts `deadline-flood-billed-traced`'s victim, whose creator's destructions each run a
 20 ms audit, moved from 875 to 413 of 1000 on rv64 with it, from one mode of its share to the
-other; with the lift target ("The current minimum and ties") it keeps 482 to 877, by where the
-destructions land ([residual risks](#residual-risks)). Each is
+other; with the lift target ("The current minimum and ties") it kept 482 to 877, by where the
+destructions landed; with a destruction armed on the creator's hart it keeps 919 to 924 or 507 to
+530 under icount, by which hart's entry first reaches a deadline that passed during the destruction
+before it, and 762 to 802 where the harts run at once ([residual risks](#residual-risks),
+[timer](timer.md#r12-scheduling-for-timer-work)). Each is
 owed its water-filling share, which at one hart is its weight's; the victims of churn, floods and
 gaming are owed at least theirs. Measured at 1 ms in the checked build, of 1000, rv64 / rv32:
 
@@ -661,8 +666,8 @@ gaming are owed at least theirs. Measured at 1 ms in the checked build, of 1000,
 | `sched-carve-inflation`, four deep (500) | 499 / 498 | 460 / 538 |
 | `sched-carve-return`, after the carve's return (500, kept at one hart) | 500 / 499 | |
 | `sched-budget-churn-shell`, the shell's victim (500) | 633 / 535 | 571 / 539 |
-| `deadline-flood-billed-traced`, 16 deadlines (500) | 501 / 499 | 482 / 872 |
-| `deadline-flood-billed-traced`, 64 deadlines (500) | 498 / 498 | 877 / 880 |
+| `deadline-flood-billed-traced`, 16 deadlines (500) | 501 / 499 | 507 or 924 by phase / 919 (773 / 765 on the host clock) |
+| `deadline-flood-billed-traced`, 64 deadlines (500) | 498 / 498 | 526 or 530 by phase / 920 (802 / 788 on the host clock) |
 | the containment gate's bystander (833, 500 reported) | 833 / 833 | 450, 567 / 557 |
 
 `sched-large-weight`'s users and `sched-server-busy` judge a ratio of counts between budgets alike,
@@ -1428,9 +1433,11 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   runs, so a one-thread victim on two harts, whom no pick can repay, no longer destroys a flood
   of its neighbour's budgets (before: up to 17 % of its window in `deadline-flood-billed-traced`,
   by where the destructions landed). What still lands elsewhere, a payer that runs nowhere or
-  ties, an item noted away from its payer's hart, a passed item served by the first entry, is
-  counted and bounded at 10 of 1000 of the victim's charges in three cases
-  ([timer](timer.md#r12-scheduling-for-timer-work)).
+  ties, an item noted away from its payer's hart, a passed item served by the first entry (a
+  flood's next deadline, passing while the payer's hart destroys the one before, at the victim's
+  own slice end), is counted and bounded at 10 of 1000 of the victim's charges in three host-clock
+  cases; under icount which entry comes first is QEMU's turn order, and the icount cases report
+  the count without a bound ([timer](timer.md#r12-scheduling-for-timer-work)).
 - **A hart waits for QEMU's turns.** Under `icount` the harts take turns on one
   host thread, and a hart in a kernel section keeps its turn to the section's end. A device's
   line that rises while the idle hart is halted wakes it on time in virtual time, but the hart runs
@@ -1450,7 +1457,7 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   in the hart's next turn, by which the other hart's call has answered it, so on rv32
   `sched-wake-no-preempt-harts` has at most one wake mid-slice under `icount` (0 or 1 in ten runs,
   and 79 of its interrupts finding nothing due in one); it records them, and
-  `sched-wake-no-preempt-harts-mttcg` judges them (52 to 78 on rv64 and 57 to 71 on rv32 over ten
+  `sched-wake-no-preempt-harts-mttcg` judges them (52 to 78 on rv64 and 57 to 75 on rv32 over ten
   runs a width).
 - **Every hart pays for each device interrupt.** An unmasked source raises the external interrupt
   on every hart's context, so each hart in user mode or idle when it rises traps, and all but one

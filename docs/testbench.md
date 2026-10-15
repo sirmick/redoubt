@@ -652,7 +652,7 @@ oracles alone. The case's log says what the build and the scripts each took.
 
 ## Checked builds
 
-<details><summary>Status: built · tested (17)</summary>
+<details><summary>Status: built · tested (19)</summary>
 
 - bench:bench-debug-assertions
 - bench:bench-debug-assertions-off
@@ -661,9 +661,11 @@ oracles alone. The case's log says what the build and the scripts each took.
 - bench:sched-latency
 - bench:sched-budget-churn
 - bench:sched-exit-churn
+- bench:sched-exit-churn-mttcg
 - bench:sched-timer-flood
 - bench:sched-carve-return
 - bench:deadline-flood-billed-traced
+- bench:deadline-flood-billed-traced-mttcg
 - bench:deadline-placement
 - host:testbench::audits_are_subtracted_inside_each_window
 - host:testbench::a_hart_share_is_judged_of_every_charge_against_water_filling
@@ -784,8 +786,14 @@ N of 1000 of what the judged budget was charged there, on a trace of two harts o
 every interrupt is on the victim's hart: recorded). Only timer interrupts count against the
 bound: an item that has passed when a call's entry or `kmain`'s comes is served there, so the
 kernel records an expiry's charges outside an interrupt too (`$`: the payer, the ticks and the
-time), and the check reports beside each share the ticks they charged others at the judged
-budget's own entries and in `kmain` on a hart it had just left, judging nothing by them. An
+time in µs, which wraps after 2^32 µs, 71 minutes, longer than any case), and the check reports
+beside each share the ticks they charged others at the judged budget's own entries and in `kmain`
+on a hart it had just left, judging nothing by them, and in its summary how many such charges the
+trace holds, at a call's entry and in `kmain`, and their ticks. The bound is judged where the
+harts run at once (`deadline-placement`, `deadline-flood-billed-traced-mttcg`,
+`sched-exit-churn-mttcg`, host-clock cases on the quiet core set): under icount which hart's
+entry first reaches an item that has passed is the order of QEMU's turns, and a run locks into
+one phase ([timer](kernel/timer.md#r12-scheduling-for-timer-work)). An
 interrupt's return (`O`) says where it goes: 1 to user mode with the interrupted runner's slice
 running, 0 the slice ended at this entry (to `kmain`, or in place to user mode, where the return
 is recorded as the entry's handling ends), 2 to `kmain` without, a preemption. Whether the slice
