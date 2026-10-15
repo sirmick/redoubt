@@ -82,6 +82,7 @@ fn sample_calls() -> Vec<Call> {
         Call::BudgetReap { budget: h(13) },
         Call::ConsoleHold { device: h(5), hold: Hold::Take },
         Call::ConsoleHold { device: h(5), hold: Hold::Release },
+        Call::ConsoleHold { device: h(5), hold: Hold::ReleaseOpen },
     ]
 }
 
@@ -117,6 +118,7 @@ fn sample_returns(number: Number) -> Vec<Return> {
             Return::Device(DeviceInfo::Reset),
         ],
         Number::BudgetReap => std::vec![Return::Remaining(0), Return::Remaining(u32::MAX)],
+        Number::ConsoleHold => std::vec![Return::Wrote(false), Return::Wrote(true)],
         _ => std::vec![Return::Nothing],
     }
 }
@@ -528,12 +530,16 @@ fn malformed_calls_are_refused() {
     assert_eq!(decode([reap, 1, 0, 0, 0, 0, 0, 0]), Ok(Call::BudgetReap { budget: h(1) }));
     let hold = Number::ConsoleHold as u64;
     assert_eq!(decode([hold, 5, 0, 0, 0, 0, 0, 0]), Err(Error::InvalidArgument), "hold 0");
-    assert_eq!(decode([hold, 5, 3, 0, 0, 0, 0, 0]), Err(Error::InvalidArgument), "unknown hold");
+    assert_eq!(decode([hold, 5, 4, 0, 0, 0, 0, 0]), Err(Error::InvalidArgument), "unknown hold");
     assert_eq!(decode([hold, 0, 1, 0, 0, 0, 0, 0]), Err(Error::BadHandle), "hold, handle 0");
     assert_eq!(decode([hold, 5, 1, 1, 0, 0, 0, 0]), Err(Error::InvalidArgument), "hold, a3");
     assert_eq!(
         decode([hold, 5, 2, 0, 0, 0, 0, 0]),
         Ok(Call::ConsoleHold { device: h(5), hold: Hold::Release })
+    );
+    assert_eq!(
+        decode([hold, 5, 3, 0, 0, 0, 0, 0]),
+        Ok(Call::ConsoleHold { device: h(5), hold: Hold::ReleaseOpen })
     );
 }
 
@@ -568,6 +574,9 @@ fn malformed_results_are_refused() {
         Ok(Return::Device(DeviceInfo::Mmio { base: 0x2_0000_1000, size: 0x3000, dma: true })),
         "device_info: a 34-bit base"
     );
+    // `console_hold`: the answer is a bit.
+    assert_eq!(decode_result(Number::ConsoleHold, &[0, 2, 0, 0, 0, 0, 0, 0]), Err(Error::InvalidArgument));
+    assert_eq!(decode_result(Number::ConsoleHold, &[0, 1, 0, 0, 0, 0, 0, 0]), Ok(Return::Wrote(true)));
 }
 
 #[test]

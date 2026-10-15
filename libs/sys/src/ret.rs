@@ -82,6 +82,9 @@ pub enum Return {
     Device(DeviceInfo),
     /// `budget_reap`: how many children the budget still has.
     Remaining(u32),
+    /// `console_hold`: a take's answer, whether a kernel line ended the caller's unfinished line
+    /// since it last gave the hold back; false for a release.
+    Wrote(bool),
 }
 
 /// Which device a handle names: `device_info`'s result, in the form of the `Devs` entry the
@@ -172,6 +175,7 @@ pub fn encode_result(result: &Result<Return, Error>) -> [u64; REGS] {
                 Return::Random(value) => w.u64(value),
                 Return::Device(info) => info.write(w),
                 Return::Remaining(n) => w.u32(n),
+                Return::Wrote(wrote) => w.u32(u32::from(wrote)),
             }
         }
     }
@@ -234,6 +238,11 @@ pub fn decode_result(number: Number, regs: &[u64; REGS]) -> Result<Return, Error
         Number::Random => Return::Random(r.u64()?),
         Number::DeviceInfo => Return::Device(DeviceInfo::read(&mut r)?),
         Number::BudgetReap => Return::Remaining(r.u32()?),
+        Number::ConsoleHold => Return::Wrote(match r.u32()? {
+            0 => false,
+            1 => true,
+            _ => return Err(Error::InvalidArgument),
+        }),
         Number::Unmap
         | Number::SetFlags
         | Number::ThreadExit
@@ -247,7 +256,6 @@ pub fn decode_result(number: Number, regs: &[u64; REGS]) -> Result<Return, Error
         | Number::BudgetDestroy
         | Number::BudgetUsage
         | Number::SystemReset
-        | Number::ConsoleHold
         | Number::MapFixed => Return::Nothing,
         Number::Call => unreachable!(),
     };

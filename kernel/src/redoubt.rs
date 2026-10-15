@@ -17,7 +17,7 @@
 
 use redoubt_layout::Pid;
 use redoubt_sys::{
-    BUDGET_SPEC_SLOTS, BudgetSpec, Call, CallOutcome, Error, Hold, LendDisposition, Number, REGS, Return,
+    BUDGET_SPEC_SLOTS, BudgetSpec, Call, CallOutcome, Error, LendDisposition, Number, REGS, Return,
     USAGE_SLOTS, encode_result,
 };
 
@@ -166,9 +166,9 @@ fn dispatch(pid: Pid, tid: TID, call: Call) -> Result<Option<Return>, Error> {
         Call::ConsoleHold { device, hold } => {
             MemoryManager::with(|mm| mm.check_console(pid, device.index()))?;
             // Outside the memory manager: a release prints the kernel's lines that waited.
-            crate::debug::console::hold(pid.get().into(), hold == Hold::Take)
+            crate::debug::console::hold(pid.get().into(), hold)
                 .map_err(|_| Error::Busy)
-                .map(done)
+                .map(|wrote| Some(Return::Wrote(wrote)))
         }
         Call::TimeNow => Ok(Some(Return::Time(crate::time::now_us()))),
         Call::Random => {

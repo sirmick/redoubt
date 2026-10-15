@@ -266,20 +266,24 @@ impl Mmio {
 
     /// Takes or gives back the console's hold, on the console's registers (kernel/devices.md,
     /// "The console's one writer"): while it is held the kernel's lines wait, whole, and they go
-    /// out when it is given back. `WrongObject` on any other device; `Busy` if another process
+    /// out when it is given back. A take answers whether a kernel line ended the caller's
+    /// unfinished line since it last gave the hold back; a release says with `Hold::ReleaseOpen`
+    /// that its line is unfinished. `WrongObject` on any other device; `Busy` if another process
     /// holds it.
-    pub fn console_hold(&self, hold: Hold) -> Result<(), Error> {
-        syscall(&Call::ConsoleHold { device: self.0, hold }).map(|_| ())
+    pub fn console_hold(&self, hold: Hold) -> Result<bool, Error> {
+        syscall(&Call::ConsoleHold { device: self.0, hold }).map(|r| matches!(r, Return::Wrote(true)))
     }
 
     /// Runs `write`, a write of the console's registers, inside the console's hold, so no kernel
-    /// line lands inside it. A hold refused, or a call the kernel lacks, is a write as before:
-    /// the hold only keeps lines whole, and nothing waits on it.
-    pub fn console_held<R>(&self, write: impl FnOnce() -> R) -> R {
-        let held = self.console_hold(Hold::Take).is_ok();
-        let result = write();
-        if held {
-            let _ = self.console_hold(Hold::Release);
+    /// line lands inside it. `write` is told whether a kernel line ended the line its last write
+    /// left unfinished, so it starts its line again, and answers whether it leaves one unfinished
+    /// now, so the kernel ends it before a line of its own. A hold refused, or a call the kernel
+    /// lacks, is a write as before: the hold only keeps lines whole, and nothing waits on it.
+    pub fn console_held<R>(&self, write: impl FnOnce(bool) -> (R, bool)) -> R {
+        let held = self.console_hold(Hold::Take);
+        let (result, open) = write(held.unwrap_or(false));
+        if held.is_ok() {
+            let _ = self.console_hold(if open { Hold::ReleaseOpen } else { Hold::Release });
         }
         result
     }

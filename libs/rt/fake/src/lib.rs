@@ -45,8 +45,9 @@ use std::time::{Duration, Instant};
 
 use redoubt_rt::abi::{
     BODY_SLOTS, BUDGET_SPEC_SLOTS, Body, BudgetSpec, Call, CallOutcome, Cause, Error, ExitNotice, FOREVER,
-    Handle, Handles, Labels, LendDisposition, MAX_START_HANDLES, MemFlags, Message, MessageKind, MintSource,
-    PAGE_SIZE, Pages, RECEIVED_SLOTS, Received, ReceivedBody, ReceivedHandles, ReplyOutcome, Return,
+    Handle, Handles, Hold, Labels, LendDisposition, MAX_START_HANDLES, MemFlags, Message, MessageKind,
+    MintSource, PAGE_SIZE, Pages, RECEIVED_SLOTS, Received, ReceivedBody, ReceivedHandles, ReplyOutcome,
+    Return,
 };
 use redoubt_rt::ipc::{Request, Words};
 use redoubt_rt::server::typed::{Outcome, finish};
@@ -203,6 +204,11 @@ struct State {
     calls: Vec<(usize, &'static str)>,
     /// Calls to refuse once: (process, call name, matching calls to let through first, error).
     refusals: Vec<(usize, &'static str, usize, Error)>,
+    /// Every `console_hold`, by process: what it asked and what a take was answered.
+    holds: Vec<(usize, Hold, bool)>,
+    /// Processes whose next take of the console's hold is told a kernel line ended their
+    /// unfinished line ([`Fake::console_line_ended`]).
+    console_ended: HashSet<usize>,
 }
 
 pub struct Fake {
@@ -475,6 +481,21 @@ impl Fake {
     pub fn refuse_after(&self, pid: usize, call: &'static str, skip: usize, error: Error) {
         self.lock().refusals.push((pid, call, skip, error));
     }
+
+    /// `pid`'s `console_hold` calls, in order: what each asked, and whether a take was told a
+    /// kernel line ended the holder's unfinished line (false for a give-back).
+    pub fn console_holds(&self, pid: usize) -> Vec<(Hold, bool)> {
+        self.lock()
+            .holds
+            .iter()
+            .filter(|(p, _, _)| *p == pid)
+            .map(|(_, hold, wrote)| (*hold, *wrote))
+            .collect()
+    }
+
+    /// A kernel line ended the line `pid` gave the hold back on unfinished: its next take is told
+    /// so, once (kernel/devices.md, "The console's one writer").
+    pub fn console_line_ended(&self, pid: usize) { self.lock().console_ended.insert(pid); }
 
     /// Runs `body` as process `pid` on its own thread; the handle yields its exit code.
     pub fn run<F: FnOnce() -> u32 + Send + 'static>(
@@ -958,13 +979,17 @@ unsafe impl redoubt_rt::Transport for Fake {
                 Ok(Return::Nothing)
             }
             // The fake prints no kernel lines, so a hold has nothing to make wait: the handle is
-            // checked as the kernel checks it, a device's registers, and nothing else happens.
-            Call::ConsoleHold { device, .. } => {
-                let s = self.lock();
+            // checked as the kernel checks it, a device's registers, and nothing else happens. A
+            // take is told a kernel line ended the holder's unfinished line only when a test said
+            // so ([`Fake::console_line_ended`]), and once.
+            Call::ConsoleHold { device, hold } => {
+                let mut s = self.lock();
                 let Object::Mmio(_) = lookup(&s, pid, device)? else {
                     return Err(Error::WrongObject);
                 };
-                Ok(Return::Nothing)
+                let wrote = hold == Hold::Take && s.console_ended.remove(&pid);
+                s.holds.push((pid, hold, wrote));
+                Ok(Return::Wrote(wrote))
             }
             other => panic!("the fake kernel does not model {:?}", other.number().name()),
         }

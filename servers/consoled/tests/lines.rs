@@ -65,6 +65,27 @@ fn a_line_is_continued_by_its_writer_and_ended_by_any_other() {
     );
 }
 
+/// The kernel ended a line left unfinished between two writes (kernel/devices.md, "The console's
+/// one writer"): the writer's next bytes start a line of their own, prefix first, and a line is
+/// reported unfinished exactly while one is.
+#[test]
+fn a_line_the_kernel_ended_starts_again_with_its_prefix() {
+    let (mut lines, mut uart) = (Lines::new(), Uart::default());
+    assert!(!lines.is_open());
+    uart.write(&mut lines, a(), b"half");
+    assert!(lines.is_open());
+    // Between the writes: the kernel's `\r\n` and its line, which `Lines` never sees.
+    lines.kernel_ended();
+    assert!(!lines.is_open());
+    uart.write(&mut lines, a(), b"rest\n");
+    assert!(!lines.is_open());
+    assert_eq!(uart.text(), "[con 0123456789abcdef] half[con 0123456789abcdef] rest\n");
+    // Nothing ended: the writer continues its own line.
+    uart.write(&mut lines, a(), b"more");
+    uart.write(&mut lines, a(), b" still\n");
+    assert_eq!(&uart.text()[uart.text().len() - 34..], "[con 0123456789abcdef] more still\n");
+}
+
 /// The UART may take less than it is given, a prefix's bytes included. Whatever the cuts, every
 /// line is one writer's: a bare line holds only `init`'s bytes, and a prefixed one only the bytes
 /// of the connection whose id it carries. Each writer writes only its own letter, so a line's

@@ -40,7 +40,9 @@ with nothing below it.
 
 - **A write** sends its bytes out of the UART, in order, each line saying who wrote it
   ([started by `init`](#started-by-init)), inside the console's hold 256 bytes at a time, so the
-  kernel's lines land between those chunks and never inside one
+  kernel's lines land between those chunks and never inside one; a chunk that leaves a line
+  unfinished gives the hold back saying so, and a line the kernel ended meanwhile starts again
+  at the next write, prefix first
   ([the console's one writer](../kernel/devices.md#the-consoles-one-writer)). A hold the kernel
   refuses is a write as before.
 - **A read** returns the input held, from the start of the queue; the offset is ignored, since a
@@ -135,15 +137,18 @@ The table: [libs/wire/tables/consol.md](../../libs/wire/tables/consol.md).
 
 ### Started by `init`
 
-<details><summary>Status: built · tested (14)</summary>
+<details><summary>Status: built · tested (17)</summary>
 
 - bench:init-boot
 - bench:init-servers
 - bench:init-console-forgery
+- bench:console-kernel-line-mid-line
 - bench:bench-init-reporter-forged
 - host:redoubt-consoled::the_prefix_is_the_id_in_sixteen_hex_digits
 - host:redoubt-consoled::a_root_line_is_bare_and_a_minted_one_carries_its_id_on_every_line
 - host:redoubt-consoled::a_line_is_continued_by_its_writer_and_ended_by_any_other
+- host:redoubt-consoled::a_line_the_kernel_ended_starts_again_with_its_prefix
+- host:redoubt-consoled::an_unfinished_line_is_given_back_as_such_and_starts_again_once_the_kernel_ended_it
 - host:redoubt-consoled::whatever_the_uart_takes_no_line_mixes_writers_or_carries_another_s_id
 - host:redoubt-rt::the_file_server_learns_the_id_the_requester_got
 - host:redoubt-consoled::a_console_with_no_device_does_not_start
@@ -173,8 +178,14 @@ as the bench's log server does today
 ([rule F](../testbench.md#rule-f-trusted-verdicts)). `ended` on a minted connection releases it:
 the steward says so when the console session it started is over. If a write comes from a
 different connection than the one that left the last line unfinished, `consoled` ends that line
-first. So a line a program writes cannot come out bare, and it cannot carry another connection's
-id. A transmitter that takes only part of a prefix leaves the line open, and the rest of the
+first. The kernel is a writer `consoled` cannot see, and a program's line can stay unfinished
+between two of its writes (a prompt waiting for its answer; a `\r` sent before the text), when
+nobody holds the console: so `consoled` gives the console's hold back saying the line is
+unfinished, the kernel ends that line before a line of its own, and says so at `consoled`'s next
+take, which starts the program's line again, prefix first
+([the console's one writer](../kernel/devices.md#the-consoles-one-writer)). So a line a program
+writes cannot come out bare, not even after a kernel line broke it, and it cannot carry another
+connection's id. A transmitter that takes only part of a prefix leaves the line open, and the rest of the
 prefix goes out before any more of the writer's bytes; ended by another writer, such a line holds
 the start of its writer's prefix and nothing else.
 
@@ -211,6 +222,9 @@ growing.
 Status: built · partly tested: the restart claims are read from the code, not attacked across a restart · tested: host:redoubt-consoled::a_console_with_no_device_does_not_start, host:redoubt-consoled::a_read_with_no_input_waits_and_is_freed_when_its_caller_gives_up
 
 - **No UART or interrupt handle:** `consoled` exits with a code before serving.
+- **The hold refused:** `consoled` takes and gives back the console's hold once before serving.
+  A kernel that refuses it (`WrongObject`: the UART is not the kernel's console; `Busy`) would
+  leave every line open to a kernel line, so `consoled` exits with code 8 (`NO_HOLD`) instead.
 - **A reader gives up:** its parked read is answered and freed at once.
 - **`consoled` restarts:** held input is lost, parked reads and `resize` calls get `Dead`, and
   clients ask for fresh connections.

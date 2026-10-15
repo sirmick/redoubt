@@ -17,7 +17,8 @@
 //! **Every line says who wrote it.** `init` starts it with the UART `init` has unmapped, attaches
 //! through a root badge of its own, and mints each child's `/dev/cons` from it: a line written
 //! through a minted connection starts with `[con N] `, its id, and only `init`'s lines are bare
-//! ([`server::Lines`]; servers/consoled.md, "Started by `init`"). In the bench's other cases
+//! ([`server::Lines`]; servers/consoled.md, "Started by `init`"); a line the kernel ended while
+//! it was unfinished starts again, prefix first. In the bench's other cases
 //! `log-server` holds the UART instead; the two are never started together, since two holders of
 //! one device would both reach its registers (kernel/devices.md, "Authority").
 //!

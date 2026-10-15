@@ -32,7 +32,7 @@ use core::sync::atomic::{AtomicU32, Ordering};
 
 use redoubt_consoled::server::{BUDGET, COST, Console, limits, size_arg};
 use redoubt_consoled::uart::Uart;
-use redoubt_rt::abi::{Error, FOREVER, Handle};
+use redoubt_rt::abi::{Error, FOREVER, Handle, Hold};
 use redoubt_rt::handle::{Endpoint, Irq, Mmio};
 use redoubt_rt::ipc::{Buffer, Delivery, Request};
 use redoubt_rt::server::ninep::{
@@ -69,6 +69,10 @@ pub const NO_IRQ: u32 = 6;
 /// The kernel would not give a random word, and a server's first minted badge must be
 /// unpredictable (servers/serving.md R27).
 pub const NO_RANDOM: u32 = 7;
+/// The kernel refused the console's hold on the UART (`WrongObject`: it is not the kernel's
+/// console; `Busy`: another process holds it). Every write would go out unprotected, so the
+/// console is not served (servers/consoled.md, "Failure and restart").
+pub const NO_HOLD: u32 = 8;
 
 /// The badge the interrupt thread's wake-ups arrive with. It is the serving thread's own mint
 /// off its receive right, so it is this process's and not a client's. A client that held a
@@ -206,6 +210,12 @@ pub fn serve(startup: &Startup) -> u32 {
     }
     let Ok(random) = redoubt_rt::handle::random_u64() else { return NO_RANDOM };
     let Ok(size) = size_arg(&args) else { return BAD_LIMITS };
+    // The hold, taken and given back once before anything is written: a refusal now would be one
+    // at every write, silent, and lines the kernel can break are not served.
+    if mmio.console_hold(Hold::Take).is_err() {
+        return NO_HOLD;
+    }
+    let _ = mmio.console_hold(Hold::Release);
     let mut console = Console::new(uart);
     console.size = size;
     console.hold = Some(mmio);

@@ -81,6 +81,16 @@ pub mod passer {
     pub const EXIT: u64 = 1;
 }
 
+/// What `half-rest` calls `faultee` with, four words, the opcode first.
+pub mod faultee {
+    /// Fault while serving this call: the kernel ends `faultee` and the caller gets `Dead`.
+    pub const FAULT: u64 = 1;
+    /// Answer [`OK`]: the instance that answers is up.
+    pub const PING: u64 = 2;
+    /// The words of an answer: status 0.
+    pub const OK: [u64; 4] = [0; 4];
+}
+
 /// A file server with one empty directory: a connection needs a root, nothing more.
 pub struct Empty;
 
