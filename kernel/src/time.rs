@@ -41,6 +41,8 @@
 //! Microseconds are the ABI's unit (kernel/timer.md, "Time"): deadlines are kept in them, and
 //! converted to timer ticks rounding up, so an interrupt never comes before its deadline.
 
+use redoubt_stride::Hint;
+
 use crate::arch::hart::{self, MAX_HARTS};
 use crate::arch::irq::timer;
 use crate::cell::KernelCell;
@@ -52,10 +54,11 @@ use crate::ptable::ProcessTable;
 pub const NEVER: u64 = u64::MAX;
 
 struct Timer {
-    /// No thread's timeout is earlier than this.
-    threads: u64,
-    /// No budget's deadline is earlier than this.
-    budgets: u64,
+    /// No thread's timeout is earlier than this, and the budget that pays for it (the blocked
+    /// thread's), which decides the hart whose timer comes by it ([`rearm`]).
+    threads: Hint,
+    /// No budget's deadline is earlier than this, and its payer (the dying budget's parent).
+    budgets: Hint,
     /// When each hart's running thread's slice ends (`sched.rs`), by boot index; `NEVER` while
     /// `kmain` runs there, and from a pick until the thread returns to user mode.
     slice: [u64; MAX_HARTS],
@@ -64,8 +67,8 @@ struct Timer {
 }
 
 static TIMER: KernelCell<Timer> = KernelCell::new(Timer {
-    threads: NEVER,
-    budgets: NEVER,
+    threads: Hint::NONE,
+    budgets: Hint::NONE,
     slice: [NEVER; MAX_HARTS],
     armed: [NEVER; MAX_HARTS],
 });
@@ -73,12 +76,17 @@ static TIMER: KernelCell<Timer> = KernelCell::new(Timer {
 /// Monotonic microseconds since boot.
 pub fn now_us() -> u64 { timer::now_us() }
 
-/// A call blocked until `deadline`: make sure the timer comes by then.
-pub fn note_timeout(deadline: u64) { TIMER.with(|t| t.threads = t.threads.min(deadline)); }
+/// A call blocked until `deadline`, its thread in the budget `payer` (its id): make sure a timer
+/// comes by then. Only recorded: the entry's return arms ([`rearm`]).
+pub fn note_timeout(deadline: u64, payer: Option<u64>) {
+    TIMER.with(|t| t.threads = t.threads.lowered(deadline, payer));
+}
 
-/// A budget was created with `deadline`: make sure the timer comes by then (at once, for one
-/// already past).
-pub fn note_budget_deadline(deadline: u64) { TIMER.with(|t| t.budgets = t.budgets.min(deadline)); }
+/// A budget was created with `deadline` under the budget `payer` (its parent's id): make sure a
+/// timer comes by then (at once, for one already past). Only recorded, as a timeout is.
+pub fn note_budget_deadline(deadline: u64, payer: Option<u64>) {
+    TIMER.with(|t| t.budgets = t.budgets.lowered(deadline, payer));
+}
 
 /// This hart's running thread's slice ends at `at` (`NEVER` for none).
 pub fn set_slice_end(at: u64) { TIMER.with(|t| t.slice[hart::index()] = at); }
@@ -86,13 +94,23 @@ pub fn set_slice_end(at: u64) { TIMER.with(|t| t.slice[hart::index()] = at); }
 /// When this hart's running thread's slice ends.
 pub fn slice_end() -> u64 { TIMER.with(|t| t.slice[hart::index()]) }
 
-/// Arm this hart's timer for the earliest thing due, if that changed: its own slice's end, or the
-/// earliest timeout or deadline, which every hart's timer comes by. At the return to user mode and
-/// before `kmain` idles (module docs).
+/// Arm this hart's timer for the earliest thing due, if that changed: its own slice's end, and the
+/// earliest timeout and the earliest deadline unless another hart runs the budget that pays for
+/// it and its timer comes by it ([`Hint::due_on`]; kernel/timer.md, "The hart timer"). So the work
+/// a timeout or a deadline makes lands on its payer's hart where it can, not in another budget's
+/// slice; an item whose payer runs nowhere, or that two payers share, every hart comes by, as every
+/// item did before. The harts' runners are read as they are now (`sched::runner_ids`): at the
+/// return to user mode, after the switch, and before `kmain` idles (module docs).
 pub fn rearm() {
     let h = hart::index();
+    let runners = crate::sched::runner_ids();
     TIMER.with(|t| {
-        let target = t.threads.min(t.budgets).min(t.slice[h]);
+        // Debug only, never in a bench build but one recorded negative run (feature
+        // `timer-any-hart`): every hart's timer comes by every item, whoever pays for it.
+        let item = |hint: Hint| {
+            if cfg!(feature = "timer-any-hart") { hint.at } else { hint.due_on(h, &runners, &t.armed) }
+        };
+        let target = item(t.threads).min(item(t.budgets)).min(t.slice[h]);
         if target != t.armed[h] {
             t.armed[h] = target;
             timer::set(if target == NEVER { u64::MAX } else { timer::us_to_ticks(target) });
@@ -100,12 +118,12 @@ pub fn rearm() {
     });
 }
 
-/// Whether a timeout or a budget deadline is due now: what `kmain`'s expiry would answer before
-/// its pick ([`expire_due`]'s first test), so a slice's end picks where it is only when there is
-/// none (`sched::repick`).
+/// Whether a timeout or a budget deadline is due now, whichever hart's timer is armed for it: what
+/// `kmain`'s expiry would answer before its pick ([`expire_due`]'s first test), so a slice's end
+/// picks where it is only when there is none (`sched::repick`).
 pub fn due() -> bool {
     let now = now_us();
-    TIMER.with(|t| t.threads <= now || t.budgets <= now)
+    TIMER.with(|t| t.threads.at <= now || t.budgets.at <= now)
 }
 
 /// The budget deadline due first at `now`: (deadline, id, frame).
@@ -149,7 +167,7 @@ pub struct Expired {
 /// of the expiry falls between two intervals, to nobody.
 pub fn expire_due(ss: &mut ProcessTable) -> Expired {
     let now = now_us();
-    if TIMER.with(|t| t.threads > now && t.budgets > now) {
+    if TIMER.with(|t| t.threads.at > now && t.budgets.at > now) {
         return Expired { destroyed: false, last: None };
     }
     let mut started = crate::sched::now_ticks();
@@ -222,8 +240,13 @@ pub fn expire_due(ss: &mut ProcessTable) -> Expired {
     }
     #[cfg(feature = "sched-trace")]
     crate::sched::trace::expired(last, stale);
+    // The earliest deadline still to come, and its payer: the dying budget's parent (the bill may
+    // go to an ancestor with free weight, decided at the destruction; the placement reads the
+    // parent).
     let next_budget = MemoryManager::with(|mm| {
-        mm.deadlines().map(|(d, _, _)| d).filter(|d| *d > now).min().unwrap_or(NEVER)
+        mm.deadlines().filter(|(d, _, _)| *d > now).fold(Hint::NONE, |next, (d, _, frame)| {
+            next.lowered(d, mm.budget(frame).parent.map(|p| mm.budget_id(p)))
+        })
     });
     TIMER.with(|t| {
         t.threads = walk.next;

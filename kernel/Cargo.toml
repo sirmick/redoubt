@@ -91,6 +91,11 @@ audit-wait-billed = ["test-only"]
 # thread whose kernel entry answered it, as a deadline does, so sched-wake-no-preempt-harts must
 # fail (kernel/scheduling.md, "Preemption points").
 wake-preempts = ["test-only"]
+# Debug only, never in a bench build but one recorded negative run: every hart's timer comes by
+# every timeout and deadline, whoever pays for it, as before the payer's hart was preferred, so
+# deadline-placement's victim takes the creator's destructions and its gate on the timer work
+# billed elsewhere must fail (kernel/timer.md, "The hart timer").
+timer-any-hart = ["test-only"]
 # Debug only, never in a bench build but one recorded negative run: the rest of a timer interrupt
 # after its expiry, and the return's own walk, are billed as before the fix to the budget it
 # interrupted, so the oracle's timer-entry check must fail.

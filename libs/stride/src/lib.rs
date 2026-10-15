@@ -1157,5 +1157,46 @@ impl<B: Copy + PartialEq, const N: usize, const H: usize> Harts<B, N, H> {
     }
 }
 
+/// A hint of the kernel's timer (kernel/timer.md, "The hart timer"): the earliest item of one
+/// kind, a timeout or a deadline, in µs (`u64::MAX` for none), and the id of the budget that pays
+/// for it, `None` when two payers tie at that instant or none is known.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Hint {
+    pub at: u64,
+    pub payer: Option<u64>,
+}
+
+impl Hint {
+    /// No item.
+    pub const NONE: Hint = Hint { at: u64::MAX, payer: None };
+
+    /// Lowered to an item at `at` that `payer` pays for: an earlier item replaces the hint, payer
+    /// and all; a second payer at the same instant leaves it to every hart; a later one changes
+    /// nothing.
+    pub fn lowered(self, at: u64, payer: Option<u64>) -> Hint {
+        match at.cmp(&self.at) {
+            core::cmp::Ordering::Less => Hint { at, payer },
+            core::cmp::Ordering::Equal if self.payer != payer => Hint { at: self.at, payer: None },
+            _ => self,
+        }
+    }
+
+    /// When hart `h`'s timer must come by this item, given each hart's runner (`runners`, the id of
+    /// the budget it runs) and what each hart's timer is armed for (`armed`): at the item if `h`
+    /// runs its payer, if no hart runs the payer, if the payer is `None`, or if no other hart that
+    /// runs the payer is armed at or before it; never otherwise, that hart's timer coming by it.
+    /// So the item's work lands on its payer's hart where it can, and at every return to user
+    /// mode at least one hart is armed at or before each item.
+    pub fn due_on(self, h: usize, runners: &[Option<u64>], armed: &[u64]) -> u64 {
+        let Some(p) = self.payer else { return self.at };
+        if runners[h] == Some(p) {
+            return self.at;
+        }
+        let covered =
+            runners.iter().zip(armed).enumerate().any(|(g, (r, a))| g != h && *r == Some(p) && *a <= self.at);
+        if covered { u64::MAX } else { self.at }
+    }
+}
+
 #[cfg(test)]
 mod tests;

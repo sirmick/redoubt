@@ -1423,11 +1423,14 @@ panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
   gate at two harts ([memory](memory.md#residual-risks)). A wake behind R12's costliest call waits at most the section in
   progress at two harts (`sched-lock-contention`, [R78](#r78-fair-kernel-entry)): the idle hart
   takes the device's interrupt and draws its ticket behind it.
-- **Timer work billed to one budget can take another's hart.** A timeout's or a deadline's work is
-  billed to its payer, but whichever hart's timer comes first answers it, often one running
-  another budget; a budget with one thread on two harts cannot be repaid by a pick. At two harts
-  it is up to 17 % of a victim's window in `deadline-flood-billed-traced`, depending on where the
-  destructions land ([timer](timer.md#r12-scheduling-for-timer-work)).
+- **Timer work billed to one budget can still take another's hart.** A timeout's or a deadline's
+  work is billed to its payer, and its interrupt is armed on the payer's hart where the payer
+  runs, so a one-thread victim on two harts, whom no pick can repay, no longer destroys a flood
+  of its neighbour's budgets (before: up to 17 % of its window in `deadline-flood-billed-traced`,
+  by where the destructions landed). What still lands elsewhere, a payer that runs nowhere or
+  ties, an item noted away from its payer's hart, a passed item served by the first entry, is
+  counted and bounded at 10 of 1000 of the victim's charges in three cases
+  ([timer](timer.md#r12-scheduling-for-timer-work)).
 - **A hart waits for QEMU's turns.** Under `icount` the harts take turns on one
   host thread, and a hart in a kernel section keeps its turn to the section's end. A device's
   line that rises while the idle hart is halted wakes it on time in virtual time, but the hart runs

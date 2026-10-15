@@ -945,7 +945,7 @@ impl MemoryManager {
         })?;
         if spec.deadline != FOREVER {
             // A deadline already past is destroyed at the next kernel entry.
-            crate::time::note_budget_deadline(spec.deadline);
+            crate::time::note_budget_deadline(spec.deadline, Some(self.budget_id(pf)));
         }
         Ok(installed)
     }

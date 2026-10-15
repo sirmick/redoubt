@@ -275,6 +275,12 @@ impl Sched {
     }
 }
 
+/// Each hart's runner's id, by boot index (`None` for a hart in `kmain` or not started): what the
+/// timer's arming asks of the harts (`time::rearm`), one read per hart.
+pub fn runner_ids() -> [Option<u64>; MAX_HARTS] {
+    SCHED.with(|s| core::array::from_fn(|h| s.cpu.cur(h).map(|b| b.id)))
+}
+
 /// A hart came online (`hart_main`, holding the kernel lock): the cap set counts it from here
 /// (kernel/scheduling.md, "The current minimum and ties").
 pub fn hart_online() {

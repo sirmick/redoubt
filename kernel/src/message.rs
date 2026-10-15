@@ -695,7 +695,7 @@ fn settle(
         if let Some(a) = mm.account_mut(pid) {
             a.earliest_timeout = a.earliest_timeout.min(s.deadline);
         }
-        crate::time::note_timeout(s.deadline);
+        crate::time::note_timeout(s.deadline, mm.budget_of(pid).map(|f| mm.budget_id(f)));
     }
     // `can_resume: false` is what takes this thread off the ready list (ptable.rs).
     ss.activate_process_thread(tid, KERNEL_PID, 0, false).expect("the kernel can always run");
@@ -2026,8 +2026,10 @@ fn fail_one(ss: &mut ProcessTable, mm: &mut MemoryManager, r: u64) {
 pub struct Due {
     /// The waits due, on the due list in the order the timer ends them.
     pub count: u64,
-    /// The earliest deadline still to come (`u64::MAX` for none).
-    pub next: u64,
+    /// The earliest deadline still to come (`u64::MAX` for none), with the budget whose thread
+    /// waits for it (`None` for two budgets' at one instant): the hart whose timer comes by it
+    /// (`time.rs`).
+    pub next: redoubt_stride::Hint,
     /// The last process whose cached earliest timeout had come with none of its threads due: a
     /// wait that ended before its timeout left the timer early, and this walk is its
     /// (kernel/timer.md, "R12 (scheduling) for timer work").
@@ -2041,11 +2043,12 @@ pub struct Due {
 /// deadline, then (pid, tid): the order the timer ends them in (kernel/timer.md, "Expiry"), in R
 /// log R steps for R waits.
 pub fn collect_due(mm: &mut MemoryManager, now: u64) -> Due {
-    let mut due = Due { count: 0, next: u64::MAX, stale: None };
+    let mut due = Due { count: 0, next: redoubt_stride::Hint::NONE, stale: None };
     for pid in mm.live_pids() {
         let Some(earliest) = mm.account(pid).map(|a| a.earliest_timeout) else { continue };
+        let payer = mm.budget_of(pid).map(|f| mm.budget_id(f));
         if earliest > now {
-            due.next = due.next.min(earliest);
+            due.next = due.next.lowered(earliest, payer);
             continue;
         }
         let mut exact = u64::MAX;
@@ -2060,7 +2063,7 @@ pub fn collect_due(mm: &mut MemoryManager, now: u64) -> Due {
                 timing(|| List::due().push_back(w, r));
             } else {
                 exact = exact.min(deadline);
-                due.next = due.next.min(deadline);
+                due.next = due.next.lowered(deadline, payer);
             }
             r = list.next(w, r);
         }
