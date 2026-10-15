@@ -557,7 +557,12 @@ impl Table {
         if names.len() > ninep::MAXWELEM {
             return Err(FileError::Enametoolong);
         }
-        let hub = io.connect(&conn).map_err(|_| FileError::Eio)?;
+        // The VM's own bound on connections it waits on names itself; a server's refusal of the
+        // session, or a waiter that could not start, is the device's.
+        let hub = io.connect(&conn).map_err(|e| match e {
+            redoubt_client::Error::Sys(redoubt_rt::abi::Error::TooManyThreads) => FileError::Emfile,
+            _ => FileError::Eio,
+        })?;
         let fid = conn.take_fid().map_err(|_| FileError::Emfile)?;
         let op = Op {
             kind,

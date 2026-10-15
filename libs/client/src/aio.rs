@@ -283,6 +283,9 @@ impl Hub {
     /// wake-up.
     pub fn waiters(&self) -> usize { self.conns.iter().filter(|c| c.waiter.is_some()).count() }
 
+    /// Whether `conn`'s waiter has yet to hand over its last wake-up.
+    pub fn waiting(&self, conn: Conn) -> bool { self.conns[conn.0].waiter.is_some() }
+
     /// Lets go of `conn` if it is over and no thread of the hub's is left in it: it ended, and its
     /// waiter, if it had one, has handed over its last wake-up and returned. What its record held
     /// (its tags, its queue, its completion buffer) is freed, and `true` comes back; `conn` itself

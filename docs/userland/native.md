@@ -211,7 +211,13 @@ holding it ends: nothing of it exists at the prompt.
   refusal by a server of the session's own names the step and the server's reason,
   `{:error, {:refused, why}}`: `{:read, path, reason}` for a program's image from `/boot`,
   `{:mkdir, reason}` for a pipe's directory at `piped`, `{:mint, reason}` for a stage's stream
-  connection; `:not_found` is a program `/boot` does not have. The
+  connection; `:not_found` is a program `/boot` does not have. A fresh `piped` needs one of the
+  VM's six waiter places: the VM waits for an ended one's waiter to hand its end over, at the
+  pipeline's end and at the bound, so pipelines back to back under load get their place
+  ([beamlet](beamlet.md#asynchronous-underneath-synchronous-on-top)); six live servers at once
+  refuse the seventh `{:mkdir, :emfile}`, and so does an ended one whose waiter has not handed
+  over within the VM's second of waiting, as under heavy load on rv32 (open, on the beamlet page's
+  residuals). The
   image's session holds 10 processes, its VM and `piped` among them, and its console's relay once
   a session has one. `piped` lets the session and its stages park 8 calls between them, a stage's
   one and the session's own, which is what bounds a pipeline at 7. The VM runs 16 jobs at once

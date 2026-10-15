@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex};
 
 use beamlet_redoubt::Redoubt;
 use beamlet_redoubt::fixture::{self, Dirs, Volume};
+use beamlet_redoubt::io::MAX_WAITERS;
 use beamlet_redoubt::system::MAX_BINDINGS;
 use beamlet_vm::platform::{
     BudgetSpec, Event, FileError, Files, Identity, Launch, Message, Object, OpenMode, Platform, Refused,
@@ -291,6 +292,94 @@ fn servers_bound_and_ended_one_after_another_never_run_out_of_waiters() {
     );
 }
 
+/// Servers for the places the VM has, each granted to the session as a named handle.
+fn servers(
+    f: &'static redoubt_fake_kernel::Fake,
+    pid: usize,
+    n: usize,
+    made: &Mutex<Vec<Volume>>,
+) -> Vec<(&'static str, Handle)> {
+    const NAMES: [&str; 8] = ["s0", "s1", "s2", "s3", "s4", "s5", "s6", "s7"];
+    let mut made = made.lock().unwrap();
+    NAMES[..n]
+        .iter()
+        .map(|name| {
+            let volume = fixture::volume(2048, &["buckets=4"]);
+            let handle = f.grant(volume.littlefsd, volume.endpoint, pid, 0x60);
+            made.push(volume);
+            (*name, handle)
+        })
+        .collect()
+}
+
+/// Every place held by a server that has just ended, none of whose waiters has handed its end
+/// over yet, and a fresh server needing one: the VM waits for a hand-over at the bound and serves
+/// the fresh one (once, `eio`: a session's seventh pipeline under load, B61).
+#[test]
+fn a_fresh_connection_at_the_bound_waits_for_an_ended_waiters_hand_over() {
+    let f = fake();
+    let volumes: Arc<Mutex<Vec<Volume>>> = Arc::default();
+    let made = Arc::clone(&volumes);
+    with_session(
+        move |pid| servers(f, pid, MAX_WAITERS, &made),
+        move |p, _| {
+            // The console holds one place; the rest go to servers, each used so its waiter runs.
+            let places = MAX_WAITERS - p.waiters();
+            for i in 0..places {
+                let (server, _) = p.lookup(&format!("s{i}")).unwrap();
+                p.bind(&format!("/s{i}"), &server).unwrap();
+                assert_eq!(ask(p, |p| p.make_dir(&format!("/s{i}/p"))), Ok(()));
+            }
+            assert_eq!(p.waiters(), MAX_WAITERS);
+            // A fresh server needs a place while every one is held; the servers holding them end
+            // a moment later, as a session's ended pipeds do under load, their waiters' hand-overs
+            // still to come when the request is made.
+            let ending: Vec<Volume> = (0..places).map(|_| volumes.lock().unwrap().remove(0)).collect();
+            let ender = std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                ending.into_iter().map(Volume::stop).collect::<Vec<_>>()
+            });
+            let (fresh, _) = p.lookup(&format!("s{places}")).unwrap();
+            p.bind("/fresh", &fresh).unwrap();
+            let started = std::time::Instant::now();
+            assert_eq!(ask(p, |p| p.make_dir("/fresh/p")), Ok(()));
+            assert!(started.elapsed() >= std::time::Duration::from_millis(100), "waited for a hand-over");
+            assert!(ender.join().unwrap().iter().all(|code| *code == redoubt_rt::exit::OK));
+            assert_eq!(volumes.lock().unwrap().remove(0).stop(), redoubt_rt::exit::OK);
+        },
+    );
+}
+
+/// Every place held by a live server, and a fresh one needing a place: after the bound's wait the
+/// request is refused by the VM's own name, `emfile`, not a device's `eio`, and the live servers
+/// are still served.
+#[test]
+fn a_fresh_connection_past_the_bound_is_refused_emfile_and_the_live_ones_still_serve() {
+    let f = fake();
+    let volumes: Arc<Mutex<Vec<Volume>>> = Arc::default();
+    let made = Arc::clone(&volumes);
+    with_session(
+        move |pid| servers(f, pid, MAX_WAITERS, &made),
+        move |p, _| {
+            let places = MAX_WAITERS - p.waiters();
+            for i in 0..places {
+                let (server, _) = p.lookup(&format!("s{i}")).unwrap();
+                p.bind(&format!("/s{i}"), &server).unwrap();
+                assert_eq!(ask(p, |p| p.make_dir(&format!("/s{i}/p"))), Ok(()));
+            }
+            let (fresh, _) = p.lookup(&format!("s{places}")).unwrap();
+            p.bind("/fresh", &fresh).unwrap();
+            let started = std::time::Instant::now();
+            assert_eq!(ask(p, |p| p.make_dir("/fresh/p")), Err(FileError::Emfile));
+            assert!(started.elapsed() >= std::time::Duration::from_millis(900), "waited the bound first");
+            assert_eq!(ask(p, |p| p.make_dir("/s0/q")), Ok(()));
+            for _ in 0..=places {
+                assert_eq!(volumes.lock().unwrap().remove(0).stop(), redoubt_rt::exit::OK);
+            }
+        },
+    );
+}
+
 /// How many pipelines a long session runs: each one `piped`, launched with `serve`, bound and ended.
 const PIPELINES: usize = 1000;
 
@@ -339,34 +428,31 @@ fn a_served_servers_binding_and_handle_go_with_its_budget() {
                 p.bind("/dev/pipe", &conn).unwrap();
                 assert_eq!(ask(p, |p| p.make_dir("/dev/pipe/p")), Ok(()));
                 assert!(table(p).contains(&"/dev/pipe".to_string()));
-                let waiters = p.waiters();
+                // Nothing is in flight: the job runs, the VM holds its send right and the budget.
+                let (waiters, before) = (p.waiters(), f.held(pid).0);
+                // The server dies first here (on the machine the destroy kills it; the fake does
+                // not run the child), so the destroy finds its waiter's hand-over coming.
+                assert_eq!(volume.stop(), redoubt_rt::exit::OK);
                 p.budget_destroy(&budget).unwrap();
+                // Forgetting the connection waited for that hand-over: the hub has let the
+                // waiter go before the destroy returned, with no idle in between.
+                assert_eq!(p.waiters(), waiters - 1, "pipeline {i}: its waiter handed its end over");
                 let (_, event) = next(p);
                 assert!(matches!(event, Event::Exit { cause: "killed", .. }), "pipeline {i}: not its exit");
                 // Unbound with the budget, while the terms are still held.
                 assert_eq!(p.lookup("/dev/pipe/p").err(), Some(Refused("not_found")), "pipeline {i}");
                 assert_eq!(table(p), paths, "pipeline {i}");
-                // The terms gone, nothing of the VM's is in flight: the budget went with the
-                // destroy, the send right with its last term, the job's handles with its exit.
-                // What is left to go is the waiter's one handle, once its server is gone.
+                // The terms gone, five handles leave what the VM held before the server was
+                // stopped: the budget's with the destroy, the job's exit endpoint and process
+                // handle with its exit, the send right with its last term, and the waiter's one,
+                // which it closes as it returns, on its thread: waited for, not sampled.
                 drop(conn);
                 drop(budget);
-                let settled = f.held(pid).0;
-                assert_eq!(volume.stop(), redoubt_rt::exit::OK);
-                // As a session idles between pipelines: the ended server's waiter hands over its
-                // end, which the VM takes, and the hub lets the waiter go.
-                let until = p.monotonic_us() + 5_000_000;
-                while p.waiters() == waiters && p.monotonic_us() < until {
-                    let soon = p.monotonic_us() + 10_000;
-                    p.idle(Some(soon));
-                }
-                assert_ne!(p.waiters(), waiters, "pipeline {i}: its waiter handed its end over");
-                // Then the waiter closes that handle, on its thread: waited for, not sampled.
-                let closed = f.wait_held(pid, settled - 1, std::time::Duration::from_secs(5));
+                let closed = f.wait_held(pid, before - 5, std::time::Duration::from_secs(5));
                 assert!(closed, "pipeline {i}: the waiter's handle closed; the VM holds {}", f.held(pid).0);
                 match handles {
-                    Some(h) => assert_eq!(settled - 1, h, "the VM's handles after pipeline {i}"),
-                    None => handles = Some(settled - 1),
+                    Some(h) => assert_eq!(before - 5, h, "the VM's handles after pipeline {i}"),
+                    None => handles = Some(before - 5),
                 }
             }
         },

@@ -7,11 +7,12 @@ recipe = "tests/data/pipe/boot.toml"
 memory_mib = 1024
 # pipe-eight's eight take about 10 s after the boot; these take eight times that under load.
 timeout_secs = 450
-# Host clock in the guest (no icount), and run one at a time on the quiet cores (scripts/jobs.mk):
-# beside other work on rv32 a pipeline's first request on its fresh piped was answered eio, the
-# VM's six waiter places all held by ended pipeds whose waiters had not yet handed over their
-# ends (MAX_WAITERS, docs/userland/beamlet.md "Threads"); a failure beside other work has no
-# verdict until it fails alone (docs/testbench.md, "On a shared host").
+# Host clock in the guest (no icount), and run one at a time on the quiet cores (scripts/jobs.mk).
+# The VM waits for an ended piped's waiter to hand its end over, at each pipeline's end and at
+# the bound, 1 s each (docs/userland/beamlet.md "Threads"); beside heavy load on rv32 (ten bench
+# jobs) a hand-over took longer than that, and the seventh fresh piped's first request was refused
+# {:refused, {:mkdir, :emfile}}: a failure beside other work has no verdict until it fails alone
+# (docs/testbench.md, "On a shared host").
 expect = [
     '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
     '(^|\] )\{:base, \{\{[0-9]+, [0-9]+\}, \{[0-9]+, [0-9]+\}\}, [0-9]+\}$',
