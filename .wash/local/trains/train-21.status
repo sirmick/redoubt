@@ -16,3 +16,4 @@
 2026-10-10T09:47Z crossed messages: implementer-2 had committed (a) CALL_US 50 as 58ef21b66 (rv32 11-15 over 12 runs, rv64 32-45, negative fails, structural-0 stated) before (b) reached it; (a) stands, (b) goes to B58 (slice_decided patch kept under .tmp/K31). kernel-red review of 58ef21b66 requested; on OK remerge onto 1fcdd656d, bench, push.
 2026-10-10T09:48Z kernel-red OK on 58ef21b66 ((a) conditions). K31 remerged: db6575a3f on 1fcdd656d; whole bench started (.tmp/train-20/bench-train21.log).
 2026-10-10T10:08Z PUBLISHED: bench rc=0, 633 PASS (09:48-10:08Z) on db6575a3f (K31); origin/main 1fcdd656d -> db6575a3f.
+2026-10-10T10:09Z k31-implementer-2 ended (handoff on file; B58 patch at .tmp/K31/b58-trace-decision-stepped-naps.patch); wp-K31 + worktree removed; wash-local 61561be7f. Train worktree .worktrees/train-20 at db6575a3f for the next train.

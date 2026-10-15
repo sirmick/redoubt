@@ -252,3 +252,28 @@ pages, drops the "9 pages more" delta and names testbench.md.
 - budgets.md, beamlet.md and testbench.md: updated as above.
 - shell.md: its rates still match.
 - image/manifest.json: unchanged, and it agrees.
+
+## 2026-10-14 (b46-implementer, relaunch on 92b84a5b8): the package is already on main
+
+The assignment assumed 3fd9684e4's branch was gone and the work unmerged. Neither holds:
+
+- 3fd9684e4, 057643aa1, b0589db53 and 1d3177086 all still exist as commits.
+- Main carries the work: `cca2b0a11` (same title and body as 1d3177086) merged in train 17 as
+  `a4c093827` ("merge: the shell draws printed text and redraws the prompt line forty times
+  faster"), trailers `Plan-Node: B46`, `Gates: ...`, `Reviewed-by: Red team: Merge verdict: OK
+  with notes` (steward-red OK on 1d3177086).
+- On 92b84a5b8, `userland/shell/lib/redoubt/term.ex`, `term/text.ex`, `term/width.ex`, the three
+  test files, `tests/shell-output-rate.toml` and `tests/shell-long-output.toml` are byte-identical
+  to 1d3177086 (`git diff cca2b0a11 1d3177086 -- userland/shell tests/shell-*.toml docs/userland/shell.md`
+  is empty). `docs/kernel/budgets.md`, `docs/testbench.md` and `docs/userland/beamlet.md` differ
+  only where BEAM18 later moved the session's footprint arithmetic (two schedulers, 11,136 pages).
+- A cherry-pick of 1d3177086 onto 92b84a5b8 therefore brings no code: only three doc conflicts
+  against newer text. Aborted; the worktree is clean at 92b84a5b8, wp-B46 has no commits of its own.
+
+The plan node B46 reads `active` with no QA threads: stale bookkeeping from train 17, not open work.
+
+Not in the merged package, if the orchestrator wants a follow-up: B45's 1 MiB line itself timed on
+the machine (the case times two 256 KiB texts and a 400-character redraw); a per-stage profile
+re-taken at today's main; text outside the run set (CJK, marks, emoji) still measured a grapheme at
+a time (residual in the 2026-10-09 section). No case was run today: the machine is on CONW2's
+timing cases and SCHED4's builds, and the orchestrator may close the node instead.

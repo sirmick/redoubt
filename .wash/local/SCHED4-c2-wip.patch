@@ -1,0 +1,544 @@
+From d24d5b5cf554aa6ac6ff934129cc453cf182d841 Mon Sep 17 00:00:00 2001
+From: Michael <sirmick@gmail.com>
+Date: Wed, 14 Oct 2026 18:17:09 -0700
+Subject: [PATCH] WIP (checkpoint, unbuilt, to be reworded and amended by the
+ successor): SCHED4 commit 2, the oracle's foreign_timer_in bound and $
+ report, deadline-placement, the three gated tomls
+
+Written and not yet compiled, formatted or tested: tools/testbench/src/sched_oracle.rs (foreign_timer_in arg, ForeignTimer/ExpiryCharge in Summary, '$' record, HartJudged, foreign_timer()), kernel trace EXPIRY_CHARGE '$' + expiry flag (sched.rs trace, time.rs expire_due), tests/programs DeadlineFlood p1 = deadline offset + bin deadline-placement, tests/deadline-placement.toml, deadline-flood-billed-traced.toml and sched-exit-churn.toml post_checks, docs/testbench.md and timer.md status. No host test for the oracle arg yet; no size-budget line yet.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+---
+ docs/kernel/timer.md                         |   3 +-
+ docs/testbench.md                            |  14 +-
+ kernel/src/sched.rs                          |  22 +++-
+ kernel/src/time.rs                           |   4 +
+ tests/deadline-flood-billed-traced.toml      |  17 ++-
+ tests/deadline-placement.toml                |  30 +++++
+ tests/programs/Cargo.toml                    |   1 +
+ tests/programs/src/bin/deadline-placement.rs |  39 ++++++
+ tests/programs/src/sched.rs                  |   7 +-
+ tests/sched-exit-churn.toml                  |   8 +-
+ tools/testbench/src/sched_oracle.rs          | 132 ++++++++++++++++++-
+ 11 files changed, 253 insertions(+), 24 deletions(-)
+ create mode 100644 tests/deadline-placement.toml
+ create mode 100644 tests/programs/src/bin/deadline-placement.rs
+
+diff --git a/docs/kernel/timer.md b/docs/kernel/timer.md
+index 00cabb677..bb003032c 100644
+--- a/docs/kernel/timer.md
++++ b/docs/kernel/timer.md
+@@ -37,12 +37,13 @@ a time never fires before `time_now` reaches it.
+ 
+ ### The hart timer
+ 
+-<details><summary>Status: built · partly tested: that a stale early hint costs one early interrupt and misses nothing is argued from the code, not attacked · tested (8)</summary>
++<details><summary>Status: built · partly tested: that a stale early hint costs one early interrupt and misses nothing is argued from the code, not attacked · tested (9)</summary>
+ 
+ - bench:timeouts
+ - bench:budget-deadline
+ - bench:sched-share
+ - bench:sched-timer-entry
++- bench:deadline-placement
+ - mutation:TimeoutIgnoredWhileOthersRun
+ - host:redoubt-stride::a_hint_is_lowered_and_a_tie_of_payers_belongs_to_every_hart
+ - host:redoubt-stride::each_item_is_armed_on_a_hart_that_runs_its_payer_or_on_every_hart
+diff --git a/docs/testbench.md b/docs/testbench.md
+index 135fa5ed6..5c4bfd249 100644
+--- a/docs/testbench.md
++++ b/docs/testbench.md
+@@ -773,9 +773,17 @@ the old billing, fails that check in a recorded negative run. It records each de
+ from user mode the same way (`x`), with its claim (`c`: the source, or 0 when another hart claimed
+ it first), and checks that one that claims nothing is billed as a timer interrupt that ends no
+ slice: after its expiry, to the budget the expiry billed last or to nobody, never to the budget it
+-interrupted. It reports, judging nothing by them, the timer interrupts that charged a budget other
+-than the one they interrupted and those ticks: another budget's timer work in the interrupted
+-budget's time on its hart ([timer](kernel/timer.md#r12-scheduling-for-timer-work)). An
++interrupted. It reports the timer interrupts that charged a budget other than the one they
++interrupted and those ticks: another budget's timer work in the interrupted budget's time on its
++hart ([timer](kernel/timer.md#r12-scheduling-for-timer-work)); with `foreign_timer_in=<share>:<N>`
++it bounds them inside that share's window, the ticks of timer interrupts from user mode that
++interrupted the judged budget (or one lifted into it) and charged a budget outside its marks, at
++N of 1000 of what the judged budget was charged there, on a trace of two harts or more (at one
++every interrupt is on the victim's hart: recorded). Only timer interrupts count against the
++bound: an item that has passed when a call's entry or `kmain`'s comes is served there, so the
++kernel records an expiry's charges outside an interrupt too (`$`: the payer, the ticks and the
++time), and the check reports beside each share the ticks they charged others at the judged
++budget's own entries and in `kmain` on a hart it had just left, judging nothing by them. An
+ interrupt's return (`O`) says where it goes: 1 to user mode with the interrupted runner's slice
+ running, 0 the slice ended at this entry (to `kmain`, or in place to user mode, where the return
+ is recorded as the entry's handling ends), 2 to `kmain` without, a preemption. Whether the slice
+diff --git a/kernel/src/sched.rs b/kernel/src/sched.rs
+index 56b84f02f..ddb6c09dc 100644
+--- a/kernel/src/sched.rs
++++ b/kernel/src/sched.rs
+@@ -1273,6 +1273,9 @@ pub mod trace {
+         /// That interrupt decided its runner's slice had ended ([`slice_decided`]), so a return to
+         /// `kmain` is the slice's end, not a preemption.
+         slice_over: bool,
++        /// Inside an expiry that found something due, outside an interrupt from user mode (a call's
++        /// entry, or `kmain`'s): its charges are recorded as [`EXPIRY_CHARGE`].
++        expiry: bool,
+         /// The walk measured now (`walk-trace`), 0 for none.
+         walk: u64,
+     }
+@@ -1284,6 +1287,7 @@ pub mod trace {
+         entry: 0,
+         interrupt: false,
+         slice_over: false,
++        expiry: false,
+         walk: 0,
+     });
+ 
+@@ -1391,11 +1395,25 @@ pub mod trace {
+     /// a timer interrupt from user mode.
+     pub fn charge(id: u64, ticks: u64) {
+         KERNEL.with(|k| k.charged += ticks);
+-        if RING.with(|r| r.interrupt) {
+-            record(CHARGE, id, u128::from(ticks));
++        match RING.with(|r| (r.interrupt, r.expiry)) {
++            (true, _) => record(CHARGE, id, u128::from(ticks)),
++            (false, true) => {
++                record(EXPIRY_CHARGE, id, u128::from(ticks) | u128::from(crate::time::now_us()) << 32)
++            }
++            (false, false) => {}
+         }
+     }
+ 
++    /// An expiry's bill outside a timer or device interrupt from user mode (`$`): at a call's
++    /// entry, or `kmain`'s, whichever hart's entry came first to an item that had passed; the payer
++    /// in the id, the ticks in the pass field's low 32 bits and the time in µs above them. The
++    /// oracle reports the timer work a budget's hart took this way beside what its timer
++    /// interrupts took (kernel/timer.md, "R12 (scheduling) for timer work").
++    pub const EXPIRY_CHARGE: u8 = b'$';
++
++    /// An expiry that found something due begins or ends (`time::expire_due`).
++    pub fn expiry(open: bool) { RING.with(|r| r.expiry = open); }
++
+     /// The kernel's time and what of it was charged, once, at the trace's end (`C`): the id is
+     /// every hart's ticks in the kernel, from a trap's entry or `kmain`'s loop to the return to
+     /// user mode or the idle, the pass the ticks charged to budgets, and the entry field the
+diff --git a/kernel/src/time.rs b/kernel/src/time.rs
+index bf0e78632..3644f6c0d 100644
+--- a/kernel/src/time.rs
++++ b/kernel/src/time.rs
+@@ -170,6 +170,8 @@ pub fn expire_due(ss: &mut ProcessTable) -> Expired {
+     if TIMER.with(|t| t.threads.at > now && t.budgets.at > now) {
+         return Expired { destroyed: false, last: None };
+     }
++    #[cfg(feature = "sched-trace")]
++    crate::sched::trace::expiry(true);
+     let mut started = crate::sched::now_ticks();
+     // The `EXPIRY` walk is the timer's own: the collect walk and its sort. Each ending, and the
+     // pump it makes, is recorded after it, as its own.
+@@ -260,6 +262,8 @@ pub fn expire_due(ss: &mut ProcessTable) -> Expired {
+     }
+     // From the last bill on, the rest of the entry is the budget billed last's (none with nothing
+     // expired), the bill's own handling included; an audit below is charged to no one.
++    #[cfg(feature = "sched-trace")]
++    crate::sched::trace::expiry(false);
+     crate::sched::bill_from(last, at);
+     MemoryManager::with(crate::message::audit);
+     // The deadlines' destructions audit once, here: inside the loop, a wait due later than one
+diff --git a/tests/deadline-flood-billed-traced.toml b/tests/deadline-flood-billed-traced.toml
+index 72449322f..12a6a906e 100644
+--- a/tests/deadline-flood-billed-traced.toml
++++ b/tests/deadline-flood-billed-traced.toml
+@@ -9,13 +9,16 @@ programs = ["deadline-flood-billed"]
+ # time, so the victim's share is the kernel's charges (`HART-SHARE`); the counts' bounds are the
+ # release twin's.
+ kernel_features = ["sched-trace"]
+-post_check = "sched_oracle"
+-# Judged at the bench's harts. At two the destructions run on whichever hart's timer comes first,
+-# and the victim's share follows where they land: mostly on the creator's hart (91 of 96 on rv64
+-# and 77 of 80 on rv32 with 16 deadlines, 124 and 125 of 128 with 64) it keeps about 870 of 1000;
+-# mostly on its own (87 of 96, rv64, 16 deadlines, in one build) it keeps 482, near the bound. A
+-# failure here with the destructions on the victim's hart is that placement, which no pick can
+-# repay a one-thread victim (kernel/timer.md, "R12 (scheduling) for timer work").
++# Judged at the bench's harts. At two the destructions land on the creator's hart, whose timer
++# alone is armed for its deadlines while it runs, or at the creator's own entries; the timer work
++# billed to others in the victim's time is bounded at 10 of 1000 of its charges (`foreign_timer_in`,
++# judged at two harts, recorded at one). Before the placement the destructions ran on whichever
++# hart's timer came first, and the victim's share followed where they landed: mostly on the
++# creator's hart (91 of 96 on rv64 and 77 of 80 on rv32 with 16 deadlines, 124 and 125 of 128
++# with 64) it kept about 870 of 1000; mostly on its own (87 of 96, rv64, 16 deadlines, in one
++# build) 482, near the bound, which no pick can repay a one-thread victim (kernel/timer.md, "R12
++# (scheduling) for timer work"). With it: TBD-GATE.
++post_check = "sched_oracle foreign_timer_in=16-deadlines:10 foreign_timer_in=64-deadlines:10"
+ timeout_secs = 600
+ expect = [
+     '^HART-SHARE 16-deadlines \d+ \d+ 50\+ 2:1 100:1$',
+diff --git a/tests/deadline-placement.toml b/tests/deadline-placement.toml
+new file mode 100644
+index 000000000..489a39040
+--- /dev/null
++++ b/tests/deadline-placement.toml
+@@ -0,0 +1,30 @@
++description = "A deadline's destruction lands on the hart running the budget that pays for it (kernel/timer.md, \"The hart timer\"): a creator floods its budget with deadlines that fall after its creations and then only spins beside an equal-weight victim on two harts; the timer work billed to others in the victim's time is bounded by the post-check on the trace, and the victim keeps its share of the harts (virtual time, checked build)"
++arch = ["rv64", "rv32"]
++kind = "boot"
++debug_assertions = true
++icount = "shift=3,sleep=off"
++programs = ["deadline-placement"]
++# Test builds only: the trace ring (never in a default kernel), which needs a checked build; its
++# audits are charged to no one.
++kernel_features = ["sched-trace"]
++# The bound: timer interrupts in the victim's time that charged another budget, at most 10 of 1000
++# of what the victim was charged in the window (`foreign_timer_in`). The deadlines fall 600 µs
++# after a round's creations, so none is served at a creator's own entry; the creator then spins
++# in user mode, so each is served at a timer interrupt: on the creator's hart, whose timer alone
++# is armed for its deadlines (the round's children share the creator as payer, no tie). A kernel
++# built with `timer-any-hart`, every hart's timer coming by every deadline, has icount's turn
++# decide the hart, lands a share of the destructions on the victim's and fails the bound
++# (TBD-NEG-RV64 and TBD-NEG-RV32 of 1000, the recorded negative runs); what still reaches the
++# victim's hart through `kmain` or its own entries is reported beside. Two harts: at one every
++# interrupt is on the victim's hart, and the bound is recorded, not judged.
++post_check = "sched_oracle foreign_timer_in=placement:10"
++smp = [2]
++keep_smp = true
++timeout_secs = 600
++expect = [
++    '^HART-SHARE placement \d+ \d+ 50\+ 2:1 100:1$',
++    '^DEADLINE-PLACEMENT TEST PASSED$',
++    '^SCHED-TRACE-END \d+ dropped 0$',
++]
++forbid = ['PANIC']
++poweroff = true
+diff --git a/tests/programs/Cargo.toml b/tests/programs/Cargo.toml
+index f3b2c70c2..7c662c96e 100644
+--- a/tests/programs/Cargo.toml
++++ b/tests/programs/Cargo.toml
+@@ -24,6 +24,7 @@ bin = [
+     { name = "console-hold-stuck", test = false },
+     { name = "console-one-writer", test = false },
+     { name = "deadline-flood-billed", test = false },
++    { name = "deadline-placement", test = false },
+     { name = "destroy-keeps-notices", test = false },
+     { name = "destroy-keeps-notices-creator", test = false },
+     { name = "device-exec-refused", test = false },
+diff --git a/tests/programs/src/bin/deadline-placement.rs b/tests/programs/src/bin/deadline-placement.rs
+new file mode 100644
+index 000000000..e36ecc324
+--- /dev/null
++++ b/tests/programs/src/bin/deadline-placement.rs
+@@ -0,0 +1,39 @@
++//! A deadline's destruction lands on the hart that runs the budget paying for it (kernel/timer.md,
++//! "The hart timer"): a creator floods its own budget with empty weight-0 budgets whose deadlines
++//! fall 600 µs ahead, after its last creation, and then only spins, so each is destroyed at a
++//! timer interrupt and never at one of the creator's own entries; an equal-weight victim spins
++//! beside it on the other hart. The traced twin's post-check judges the victim's share on the
++//! kernel's charges (`HART-SHARE`) and bounds the timer work billed to others in the victim's
++//! time; a kernel built with `timer-any-hart`, every hart's timer coming by every deadline, lands
++//! a share of the destructions on the victim's hart and fails that bound.
++
++#![no_std]
++#![no_main]
++
++use test_programs::rd;
++use test_programs::sched::{Bench, Role, mark};
++
++const WINDOW: u64 = 2_000_000;
++const TOL: u64 = 50;
++
++#[no_mangle]
++pub extern "C" fn _start() -> ! {
++    let mut b = Bench::new("deadline-placement");
++    // Room for 16 budgets of its own; their deadlines 600 µs ahead, past the round's creations.
++    let creator = b.budget(rd::USERS, 100, 3, rd::FOREVER);
++    let victim = b.budget(rd::USERS, 100, 1, rd::FOREVER);
++    mark(victim, 2);
++    let c = b.start(creator, Role::DeadlineFlood, &[16, 600], &[creator]);
++    let v = b.start(victim, Role::Spin, &[], &[]);
++    let (start, end) = b.go(50_000, WINDOW);
++    let counts = b.collect(2);
++    let (cs, vs) = (b.share(counts[c], end - start), b.share(counts[v], end - start));
++    b.note(format_args!("16 deadlines a round, 600 µs ahead: the creator got {} of 1000, the victim {}", cs, vs));
++    b.hart_share("placement", (start, end), (TOL, "+"), (2, 1), &[(100, 1)]);
++    rd::destroy(creator).unwrap();
++    rd::destroy(victim).unwrap();
++    b.finish("DEADLINE-PLACEMENT")
++}
++
++#[panic_handler]
++fn panic(info: &core::panic::PanicInfo) -> ! { test_programs::sched::panicked("deadline-placement", info) }
+diff --git a/tests/programs/src/sched.rs b/tests/programs/src/sched.rs
+index 3126818d7..e092a3dad 100644
+--- a/tests/programs/src/sched.rs
++++ b/tests/programs/src/sched.rs
+@@ -105,8 +105,8 @@ pub enum Role {
+     /// [`Stats::DEADLINE`]. With p2 = 1, hold each wake's and notice's window until the launcher
+     /// asks ([`Bench::samples`]).
+     Steward = 15,
+-    /// Rounds of p0 empty weight-0 budgets under slot 3, their deadlines 1 µs apart from 200 µs
+-    /// ahead, each round then counting for 1 ms; report the count.
++    /// Rounds of p0 empty weight-0 budgets under slot 3, their deadlines 1 µs apart from p1 µs
++    /// ahead (200 with p1 = 0), each round then counting for 1 ms; report the count.
+     DeadlineFlood = 19,
+     /// Sleep, so that what follows begins a slice; carve p0 of this budget's weight (slot 3) to an
+     /// empty child, count until nine tenths of a slice after the wake, then destroy it so the
+@@ -906,11 +906,12 @@ fn run_child(arg: usize, more: Option<fn(Option<Role>, bool)>) -> ! {
+         }
+         Some(Role::ProcessChurn) => process_churn(end),
+         Some(Role::DeadlineFlood) => {
++            let ahead = if param(1) == 0 { 200 } else { param(1) };
+             let mut n = 0;
+             while ticks() < end {
+                 let now = rd::time_now().unwrap_or(0);
+                 for i in 0..param(0) {
+-                    let spec = rd::BudgetSpec { deadline: now + 200 + i, ..rd::spec(1, 0, 0) };
++                    let spec = rd::BudgetSpec { deadline: now + ahead + i, ..rd::spec(1, 0, 0) };
+                     let _ = rd::create(3, &spec);
+                 }
+                 n += spin_until((ticks() + 1_000 * tpu).min(end));
+diff --git a/tests/sched-exit-churn.toml b/tests/sched-exit-churn.toml
+index 40c8388e1..a6f7d4dbd 100644
+--- a/tests/sched-exit-churn.toml
++++ b/tests/sched-exit-churn.toml
+@@ -7,9 +7,13 @@ programs = ["sched-exit-churn"]
+ # Test builds only: the trace ring (never in a default kernel). The oracle checks every pick, and
+ # judges the victim's share of what the kernel charged in the window the program prints
+ # (`HART-SHARE`), net of lock waits; audits are charged to no one, and so is a wait behind another
+-# hart's audit. Each variant is judged at whatever harts the run has.
++# hart's audit. Each variant is judged at whatever harts the run has. At two harts the timer work
++# billed to others in the victim's time (the attacker's poll timeouts, whose payer runs nowhere
++# while it waits) is bounded at 10 of 1000 of the victim's charges (`foreign_timer_in`; before the
++# placement 27 such interrupts and 70,232 ticks on rv64, 0.23 % of the window's charges, 8 and
++# 17,035 on rv32); at one hart it is recorded.
+ kernel_features = ["sched-trace"]
+-post_check = "sched_oracle"
++post_check = "sched_oracle foreign_timer_in=threads-exit:10 foreign_timer_in=processes-exit:10 foreign_timer_in=processes-fault:10"
+ timeout_secs = 600
+ expect = [
+     '^HART-SHARE threads-exit \d+ \d+ 50\+ 2:1 100:2$',
+diff --git a/tools/testbench/src/sched_oracle.rs b/tools/testbench/src/sched_oracle.rs
+index ab1d846e9..7fe2cd2d2 100644
+--- a/tools/testbench/src/sched_oracle.rs
++++ b/tools/testbench/src/sched_oracle.rs
+@@ -182,7 +182,7 @@ pub fn parse(log: &str) -> Result<Vec<Record>, String> {
+             return Err(bad());
+         }
+         let kind = f[2].chars().next().ok_or_else(bad)?;
+-        if f[2].len() != 1 || !"WRDPKLlefrqwAaGgvNnXYZUVTtIBEOMmCSJHQFukzxchjy0pidbos=".contains(kind) {
++        if f[2].len() != 1 || !"WRDPKLlefrqwAaGgvNnXYZUVTtIBEOMmCSJHQFukzxchjy0pidbos=$".contains(kind) {
+             return Err(bad());
+         }
+         records.push(Record {
+@@ -321,6 +321,14 @@ pub struct Summary {
+     /// timer work"). Report-only.
+     pub timer_foreign: usize,
+     pub timer_foreign_ticks: u64,
++    /// Each such interrupt: when it came, the budget it interrupted, and its charges (payer,
++    /// ticks), so a share can bound the timer work billed elsewhere in its budget's time
++    /// (`foreign_timer_in`).
++    pub timer_foreign_entries: Vec<ForeignTimer>,
++    /// An expiry's charges outside a timer or device interrupt (`$`): at a call's entry (the hart's
++    /// runner is the caller) or `kmain`'s (no runner; the last one is the budget whose slice end or
++    /// block led there). Reported beside each share, never judged.
++    pub expiry_charges: Vec<ExpiryCharge>,
+     /// When each timer interrupt that found neither and ended no slice came, µs, in trace order.
+     pub timer_empty: Vec<u64>,
+     /// When each timer interrupt that found another budget's wait ended early came, µs.
+@@ -372,6 +380,26 @@ pub struct Section {
+     pub audits: u64,
+ }
+ 
++/// A timer interrupt from user mode that charged a budget other than the one it interrupted.
++#[derive(Clone, Debug)]
++pub struct ForeignTimer {
++    pub at: u64,
++    pub interrupted: Option<u64>,
++    pub charges: Vec<(u64, u64)>,
++}
++
++/// An expiry's charge outside an interrupt from user mode (`$`).
++#[derive(Clone, Copy, Debug)]
++pub struct ExpiryCharge {
++    pub at: u64,
++    pub hart: u64,
++    /// The hart's runner (`H`), `None` in `kmain`, and its last runner.
++    pub runner: Option<u64>,
++    pub last_runner: Option<u64>,
++    pub payer: u64,
++    pub ticks: u64,
++}
++
+ /// A timer interrupt from user mode, from its `I` to its `O`; or a device interrupt, from its `x`.
+ struct TimerEntry {
+     seq: u64,
+@@ -407,6 +435,11 @@ fn check_timer_entry(e: &TimerEntry, to_user: bool, sum: &mut Summary) -> Result
+     if foreign > 0 {
+         sum.timer_foreign += 1;
+         sum.timer_foreign_ticks += foreign;
++        sum.timer_foreign_entries.push(ForeignTimer {
++            at: e.at,
++            interrupted: e.interrupted,
++            charges: charged.clone().map(|c| (c.0, c.1)).collect(),
++        });
+     }
+     match e.expired {
+         Some((last, what @ (1 | 2))) => {
+@@ -514,6 +547,8 @@ pub fn check(records: &[Record]) -> Result<Summary, String> {
+     // one, as every budget has on one hart when it is picked), and each hart's runner (`H`).
+     let mut ready: BTreeMap<u64, u128> = BTreeMap::new();
+     let mut runs: BTreeMap<u64, u64> = BTreeMap::new();
++    // Each hart's last runner, kept while it is in `kmain` (for an expiry's charge there, `$`).
++    let mut last_runner: BTreeMap<u64, u64> = BTreeMap::new();
+     let mut sum = Summary::default();
+     let mut i = 0;
+     while i < records.len() {
+@@ -662,6 +697,17 @@ pub fn check(records: &[Record]) -> Result<Summary, String> {
+                 let e = open_timer.as_mut().expect("checked above");
+                 e.charges.push((r.id, r.pass as u64, e.expired.is_some()));
+             }
++            '$' if open_timer.is_some() => {
++                return Err(format!("record {}: an expiry's charge outside an interrupt, inside one", r.seq));
++            }
++            '$' => sum.expiry_charges.push(ExpiryCharge {
++                at: (r.pass >> 32) as u64,
++                hart: r.hart,
++                runner: runs.get(&r.hart).copied(),
++                last_runner: last_runner.get(&r.hart).copied(),
++                payer: r.id,
++                ticks: (r.pass & 0xffff_ffff) as u64,
++            }),
+             'E' => {
+                 let e = open_timer.as_mut().expect("checked above");
+                 if r.pass > 2 || e.expired.replace((r.id, r.pass)).is_some() {
+@@ -771,6 +817,7 @@ pub fn check(records: &[Record]) -> Result<Summary, String> {
+                     runs.remove(&r.hart);
+                 } else {
+                     runs.insert(r.hart, r.id);
++                    last_runner.insert(r.hart, r.id);
+                 }
+             }
+             'Q' => {
+@@ -2866,7 +2913,7 @@ fn hart_shares(log: &str) -> Result<Vec<HartShare<'_>>, String> {
+ /// the trace states it at the window's start; at one hart that is its weight over theirs. A
+ /// budget the program does not name (its own, `init`'s) is in the whole and owed nothing, so it
+ /// counts against the share. Every want is stated, so a failure names its numbers.
+-fn check_hart_share(records: &[Record], s: &HartShare) -> Result<(String, bool), String> {
++fn check_hart_share(records: &[Record], s: &HartShare) -> Result<HartJudged, String> {
+     let what = format!("hart share {}", s.name);
+     let (parent, marked) = lifts(records);
+     let judged = mark(&marked, s.mark.0, &what)?;
+@@ -2925,7 +2972,64 @@ fn check_hart_share(records: &[Record], s: &HartShare) -> Result<(String, bool),
+             }
+         ),
+         met,
+-    ))
++        judged,
++        its_ticks: (its / stride) as u64,
++    })
++}
++
++/// A share across harts judged: its line, its verdict, the budget judged and what it was charged
++/// in the window, ticks, net of its lock waits.
++struct HartJudged {
++    line: String,
++    met: bool,
++    judged: u64,
++    its_ticks: u64,
++}
++
++/// The timer work billed to budgets outside the judged one's marks in its own time, inside a
++/// share's window (`foreign_timer_in`, kernel/timer.md, "R12 (scheduling) for timer work"): the
++/// ticks of timer interrupts from user mode that interrupted the judged budget (or one lifted into
++/// it) and charged another, as a share of what the judged budget was charged; and, reported only,
++/// the ticks an expiry charged others at the judged budget's own entries and in `kmain` on a hart
++/// it had just left. Judged on a trace of two harts or more: on one, every interrupt is on the
++/// victim's hart.
++fn foreign_timer(
++    records: &[Record],
++    sum: &Summary,
++    s: &HartShare,
++    judged: &HartJudged,
++    bound: Option<u64>,
++    harts: u64,
++) -> (String, bool) {
++    let (parent, _) = lifts(records);
++    let under = |b: u64| root_of(&[judged.judged], &parent, b).is_some();
++    let inside = |at: u64| (s.window.0..s.window.1).contains(&at);
++    let foreign: u64 = sum
++        .timer_foreign_entries
++        .iter()
++        .filter(|e| inside(e.at) && e.interrupted.is_some_and(under))
++        .flat_map(|e| e.charges.iter())
++        .filter(|(payer, _)| !under(*payer))
++        .map(|(_, ticks)| ticks)
++        .sum();
++    let per_mille = foreign.saturating_mul(1000) / judged.its_ticks.max(1);
++    let elsewhere = |pick: &dyn Fn(&ExpiryCharge) -> bool| -> u64 {
++        sum.expiry_charges.iter().filter(|c| inside(c.at) && !under(c.payer) && pick(c)).map(|c| c.ticks).sum()
++    };
++    let at_calls = elsewhere(&|c| c.runner.is_some_and(under));
++    let in_kmain = elsewhere(&|c| c.runner.is_none() && c.last_runner.is_some_and(under));
++    let (target, met) = match bound {
++        None => (String::new(), true),
++        Some(b) if harts < 2 => (format!(": <= {b}, recorded at {harts} hart, not gated"), true),
++        Some(b) => (format!(": target {} (<= {b})", if per_mille <= b { "met" } else { "missed" }), per_mille <= b),
++    };
++    (
++        format!(
++            "timer work billed to other budgets in budget {}'s time: {foreign} ticks in timer interrupts, {per_mille} of 1000 of its charges{target}; {at_calls} ticks at its own entries and {in_kmain} in `kmain` after it left, reported",
++            judged.judged
++        ),
++        met,
++    )
+ }
+ 
+ /// The harts the trace's `F` states, 1 in a trace with none.
+@@ -3143,6 +3247,8 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
+     // Each bound, by its argument's name.
+     let mut bounds = BTreeMap::new();
+     let mut stale_in = Vec::new();
++    // Each share's bound on the timer work billed elsewhere in its budget's time, per mille.
++    let mut foreign_in: Vec<(&str, u64)> = Vec::new();
+     let mut wake_no_preempt = None;
+     let mut cluster = false;
+     let mut cluster_old_control = false;
+@@ -3189,6 +3295,14 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
+             stale_in.push(share);
+             continue;
+         }
++        if let Some(spec) = arg.strip_prefix("foreign_timer_in=") {
++            let (share, bound) = spec
++                .split_once(':')
++                .and_then(|(s, b)| Some((s, b.parse::<u64>().ok()?)))
++                .ok_or_else(|| format!("malformed foreign_timer_in {arg:?}"))?;
++            foreign_in.push((share, bound));
++            continue;
++        }
+         if let Some(count) = arg.strip_prefix("wake_no_preempt=") {
+             wake_no_preempt = Some(count.parse::<usize>().map_err(|_| format!("bad wake count {arg:?}"))?);
+             continue;
+@@ -3442,8 +3556,12 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
+     // On a trace of fewer harts than `hart_shares_from` each is recorded, not judged: under `icount`
+     // a hart's clock counts the other harts' turns, which can land in time billed to nobody.
+     let shares_from = bounds.get("hart_shares_from").copied().unwrap_or(0);
++    if let Some((name, _)) = foreign_in.iter().find(|(n, _)| !hart_shares.iter().any(|s| s.name == *n)) {
++        return Err(format!("foreign_timer_in names {name}, but the log holds no such share"));
++    }
+     for s in hart_shares {
+-        let (line, met) = judged_at(check_hart_share(&records, &s)?, s.at, harts);
++        let judged = check_hart_share(&records, &s)?;
++        let (line, met) = judged_at((judged.line.clone(), judged.met), s.at, harts);
+         let (line, met) = if harts < shares_from {
+             (format!("{line}, judged from {shares_from} harts: recorded"), true)
+         } else {
+@@ -3452,9 +3570,11 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
+         let inside = |t: &&u64| (s.window.0..s.window.1).contains(*t);
+         let stale = sum.timer_stale_foreign.iter().filter(inside).count();
+         let stale_missed = stale_in.contains(&s.name) && stale == 0;
+-        missed |= !met || stale_missed;
++        let bound = foreign_in.iter().find(|(n, _)| *n == s.name).map(|(_, b)| *b);
++        let (foreign, foreign_met) = foreign_timer(&records, &sum, &s, &judged, bound, harts);
++        missed |= !met || stale_missed || !foreign_met;
+         lines.push(format!(
+-            "{line}; {} timer interrupts nobody's, {stale} finding another budget's wait ended early{}",
++            "{line}; {} timer interrupts nobody's, {stale} finding another budget's wait ended early{}; {foreign}",
+             sum.timer_empty.iter().filter(inside).count(),
+             if stale_missed { " (none, but the case requires some)" } else { "" }
+         ));
+-- 
+2.53.0
+
