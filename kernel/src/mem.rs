@@ -94,6 +94,8 @@ pub struct MemoryManager {
     free: FreeFrames,
     /// The frames in flight (`IN_FLIGHT`'s in the table): retired, not yet back in the bitmap.
     in_flight: usize,
+    /// The most frames in flight since they were last none ([`Self::went_in_flight`]).
+    in_flight_peak: usize,
     /// Done frames taken from a hart's done list and not yet given back to the bitmap, linked
     /// through `reclaim::LINK` (`reclaim::unlink`): the rest of a list one commit did not finish.
     committing: Option<usize>,
@@ -152,6 +154,12 @@ const _: () = assert!(crate::arch::process::MAX_PROCESS_COUNT < 0xfffd);
 /// The most done frames one acquisition of the kernel lock gives back to the bitmap
 /// (`MemoryManager::commit`): a constant, so the commit adds a bounded step to every section (R12).
 pub const COMMIT_MAX: usize = 64;
+/// The frames in flight at which the kernel says so on the console, and says again when they are
+/// all back (kernel/memory.md, "Frames in flight"): 4 MiB, what the boot and a login leave in
+/// flight or a session's step frees, never the page or two a system at rest frees. Its rate bound:
+/// a pair of lines needs this many frames retired and then a drain back to 0, which happens only
+/// with every hart idle, so at most two lines for every 4 MiB freed and drained.
+const IN_FLIGHT_LOUD: usize = 1024;
 type RamAllocation = Option<Pid>;
 
 /// Every free RAM frame, a set bit in a bitmap the kernel keeps in frames of its own (owned by
@@ -264,6 +272,7 @@ impl MemoryManager {
                 level_start: [0; LEVELS + 1],
             },
             in_flight: 0,
+            in_flight_peak: 0,
             committing: None,
             dma_pool: DmaPool { first: 0, held: [0; DMA_POOL_PAGES / 64] },
             extra_allocations: LoaderTable(None),
@@ -508,8 +517,28 @@ impl MemoryManager {
         self.check_zero(index);
         self.set_owner(index, None);
         self.in_flight -= 1;
+        if self.in_flight == 0 {
+            if self.in_flight_peak >= IN_FLIGHT_LOUD && !cfg!(feature = "inflight-never-none") {
+                println!("mem: frames in flight 0, at most {}", self.in_flight_peak);
+            }
+            self.in_flight_peak = 0;
+        }
         #[cfg(feature = "inflight-trace")]
         crate::sched::trace::record(crate::sched::trace::COMMITTED, index as u64, 0);
+    }
+
+    /// `n` more frames in flight. The first time they reach [`IN_FLIGHT_LOUD`] since they were last
+    /// none, the console says so, and says again when [`Self::give_back`] brings them to none: what
+    /// the bench waits for before it measures a system at rest (`launch-idle`), so the window holds
+    /// no zeroing of the boot's and the login's frames.
+    fn went_in_flight(&mut self, n: usize) {
+        self.in_flight += n;
+        if self.in_flight > self.in_flight_peak {
+            if self.in_flight_peak < IN_FLIGHT_LOUD && self.in_flight >= IN_FLIGHT_LOUD {
+                println!("mem: {} frames in flight", IN_FLIGHT_LOUD);
+            }
+            self.in_flight_peak = self.in_flight;
+        }
     }
 
     /// The attack case's check (`smp-inflight-race`), a stamped audit: every word of a frame given
@@ -558,7 +587,7 @@ impl MemoryManager {
         #[allow(unreachable_code)]
         {
             self.set_owner(index, Some(IN_FLIGHT));
-            self.in_flight += 1;
+            self.went_in_flight(1);
             match shot {
                 // Debug only, never in a bench build but one recorded negative run: pending (its
                 // link written, its zeroing due) before the shootdown, so `smp-inflight-race` must
@@ -784,7 +813,7 @@ impl MemoryManager {
         if let (Some(first), Some(last)) = (chain.first, chain.last) {
             crate::reclaim::pend_chain(first as usize, last as usize);
         }
-        self.in_flight += chain.linked;
+        self.went_in_flight(chain.linked);
         crate::sched::retiring(chain.frames);
     }
 

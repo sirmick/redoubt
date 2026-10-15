@@ -2,7 +2,9 @@
 //! over a session's `idle` step, the interrupts and exceptions each hart takes, from QEMU's own
 //! log, and QEMU's host CPU time. The log is turned on for that window alone, through the monitor
 //! that `-nographic` multiplexes on the console (Ctrl-A c), so the command line booted is
-//! launch's, unchanged; outside the window every system call would be logged.
+//! launch's, unchanged; outside the window every system call would be logged. The window opens
+//! once the frames a login freed are all zeroed and back, as the kernel's console says
+//! (kernel/memory.md, "Frames in flight"), so it never measures that drain, which it prints beside.
 
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -16,6 +18,53 @@ use crate::case::Idle;
 /// QEMU's mux escape, then `c`: the console's input goes to the monitor, or back.
 const SWITCH: &[u8] = b"\x01c";
 
+/// The longest the idle step waits for the frames in flight to come back to none before its window
+/// opens. About 35,000 frames, what the boot and the login leave in flight, wait until every hart
+/// first idles after the login; at four harts alone they were back 0.32 to 0.39 s after the step
+/// began on rv64 and 5.8 to 6.2 s on rv32, six runs each, the last given back at the lock's next
+/// take, at rest the next timer interrupt. About five times rv32's most: margin for a loaded host.
+/// A drain that takes longer fails the case.
+pub const DRAIN_WAIT: Duration = Duration::from_secs(30);
+
+/// The kernel's console line when the frames in flight reach its threshold (`mem: N frames in
+/// flight`), and when they are next none (`mem: frames in flight 0, at most N`). Only the kernel's
+/// lines are bare: `consoled` prefixes every program's.
+const RISE: (&str, &str) = ("mem: ", " frames in flight");
+const FALL: &str = "mem: frames in flight 0, at most ";
+
+/// What the console said of the frames in flight: a drain opens at the kernel's first line and
+/// closes at its second.
+#[derive(Debug, Default)]
+struct Drain {
+    /// The threshold the open drain's frames passed, if one is open.
+    open: Option<u64>,
+    /// The most frames the last closed drain had in flight.
+    peak: Option<u64>,
+    /// The drains closed so far.
+    closed: u32,
+    /// The idle step's start, while the window waits: when, QEMU's CPU time then, and the drains
+    /// closed by then.
+    held: Option<(Instant, Duration, u32)>,
+    /// The console fell silent after the step started: every line queued before it was read.
+    caught_up: bool,
+    /// The wait, once the window opened: wall time and QEMU's CPU time, and whether a drain ended
+    /// in it.
+    waited: Option<(Duration, Duration, bool)>,
+    /// Drains that opened inside the window: named on the window's own line, once it has ended.
+    inside: u32,
+}
+
+/// What [`Window::poll`] found.
+#[derive(Debug, PartialEq)]
+pub enum Poll {
+    /// Nothing to do: no step waits, or its wait goes on.
+    Waiting,
+    /// The window just opened: tell the session.
+    Started,
+    /// The drain outlasted [`DRAIN_WAIT`]: why the case fails.
+    Failed(String),
+}
+
 /// One idle window: started and ended as the session's step is, then judged.
 pub struct Window {
     pid: u32,
@@ -26,6 +75,7 @@ pub struct Window {
     ticks: u64,
     start: Option<(Instant, Duration)>,
     end: Option<(Instant, Duration)>,
+    drain: Drain,
 }
 
 impl Window {
@@ -36,11 +86,102 @@ impl Window {
         let ticks: u64 =
             String::from_utf8_lossy(&getconf.stdout).trim().parse().context("getconf CLK_TCK")?;
         ensure!(ticks > 0, "no clock tick rate");
-        Ok(Window { pid, harts, log, ticks, start: None, end: None })
+        Ok(Window { pid, harts, log, ticks, start: None, end: None, drain: Drain::default() })
+    }
+
+    /// A console line, as shown: the kernel's lines on the frames in flight open and close a drain.
+    pub fn see(&mut self, line: &str) {
+        if let Some(peak) = line.strip_prefix(FALL).and_then(|n| n.trim_end().parse().ok()) {
+            self.drain.open = None;
+            self.drain.peak = Some(peak);
+            self.drain.closed += 1;
+        } else if let Some(at) = line
+            .strip_prefix(RISE.0)
+            .and_then(|rest| rest.trim_end().strip_suffix(RISE.1))
+            .and_then(|n| n.parse().ok())
+        {
+            self.drain.open = Some(at);
+            if self.start.is_some() && self.end.is_none() {
+                self.drain.inside += 1;
+            }
+        }
+    }
+
+    /// The console was silent for a while: every line it had queued is read.
+    pub fn silence(&mut self) { self.drain.caught_up = true; }
+
+    /// The idle step starts: the window opens at a [`Self::poll`] once the console has caught up
+    /// and no drain is open.
+    pub fn step(&mut self) -> Result<()> {
+        ensure!(self.start.is_none() && self.drain.held.is_none(), "a second idle window");
+        self.drain.held = Some((Instant::now(), cpu_time(self.pid, self.ticks)?, self.drain.closed));
+        self.drain.caught_up = false;
+        Ok(())
+    }
+
+    /// Open the window if the step waits and the frames in flight are back to none, after at least
+    /// one drain closed since the sessions began: the boot and the login leave tens of thousands of
+    /// frames in flight until then, so a kernel that says nothing fails too. Fail the case if they are not
+    /// within [`DRAIN_WAIT`] of the step's start.
+    pub fn poll(&mut self, console: &mut dyn Write) -> Result<Poll> {
+        let Some((t0, cpu0, closed)) = self.drain.held else { return Ok(Poll::Waiting) };
+        let waited = t0.elapsed();
+        if self.drain.caught_up && self.drain.open.is_none() && self.drain.peak.is_some() {
+            let cpu = cpu_time(self.pid, self.ticks)?.saturating_sub(cpu0);
+            self.drain.held = None;
+            self.drain.waited = Some((waited, cpu, self.drain.closed > closed));
+            self.start(console)?;
+            return Ok(Poll::Started);
+        }
+        if waited <= DRAIN_WAIT {
+            return Ok(Poll::Waiting);
+        }
+        Ok(Poll::Failed(format!(
+            "idle: the frames in flight did not come back to 0 within {} s of the idle step: {}",
+            DRAIN_WAIT.as_secs(),
+            self.drain_line()
+        )))
+    }
+
+    /// The drain beside the window, one line: what the step waited for, how long, and what QEMU
+    /// spent meanwhile.
+    pub fn drain_line(&self) -> String {
+        let peak = |p: Option<u64>| p.map_or("none seen".to_string(), |n| format!("at most {n} frames"));
+        let what = match (self.drain.held, self.drain.waited) {
+            // Waiting still: every condition the window waits on that is unmet.
+            (Some((t0, ..)), _) => {
+                let mut unmet = Vec::new();
+                if !self.drain.caught_up {
+                    unmet.push("the console never fell silent for 50 ms".to_string());
+                }
+                match (self.drain.open, self.drain.peak) {
+                    (Some(at), _) => unmet.push(format!("a drain still open, over {at} frames in flight")),
+                    (None, None) => unmet.push("no drain ended since the sessions began".to_string()),
+                    (None, Some(_)) => {}
+                }
+                format!("{} {:.1} s after the step began", unmet.join(" and "), t0.elapsed().as_secs_f64())
+            }
+            (None, Some((wall, cpu, true))) => format!(
+                "back to 0 frames in flight {:.2} s after the step began ({}), QEMU {:.2} s of host CPU \
+                 meanwhile ({:.3} cores); the window opened then",
+                wall.as_secs_f64(),
+                peak(self.drain.peak),
+                cpu.as_secs_f64(),
+                cpu.as_secs_f64() / wall.as_secs_f64().max(f64::EPSILON)
+            ),
+            (None, Some((wall, _, false))) => format!(
+                "none open at the step and none since (the last: {}); the window opened {:.2} s after it \
+                 began",
+                peak(self.drain.peak),
+                wall.as_secs_f64()
+            ),
+            (None, None) => "the step never began".to_string(),
+        };
+        format!("[idle] drain: {what}")
     }
 
     /// Turn QEMU's interrupt log on, through the monitor on `console`, and take its CPU time.
-    pub fn start(&mut self, console: &mut dyn Write) -> Result<()> {
+    fn start(&mut self, console: &mut dyn Write) -> Result<()> {
         ensure!(self.start.is_none(), "a second idle window");
         let path = self.log.display().to_string();
         ensure!(!path.contains('\n'), "a log path with a newline");
@@ -56,9 +197,9 @@ impl Window {
         monitor(console, &["log none"])
     }
 
-    /// The window's measures as one line, and why it fails `ceilings`, if it does. A window that
-    /// measured nothing is an error, never a pass: no log, a hart with no timer interrupt, no
-    /// system call from user mode, or no host CPU time.
+    /// The window's measures as one line, naming any drain that opened inside it, and why it fails
+    /// `ceilings`, if it does. A window that measured nothing is an error, never a pass: no log, a
+    /// hart with no timer interrupt, no system call from user mode, or no host CPU time.
     pub fn judge(&self, ceilings: &Idle) -> Result<(String, Option<String>)> {
         let (Some((t0, cpu0)), Some((t1, cpu1))) = (self.start, self.end) else {
             bail!("the idle window never ran")
@@ -69,7 +210,11 @@ impl Window {
         let text =
             std::fs::read_to_string(&self.log).with_context(|| format!("reading {}", self.log.display()))?;
         let counts = Counts::parse(&text);
-        let summary = counts.summary(seconds, cores);
+        let inside = match self.drain.inside {
+            0 => String::new(),
+            n => format!("; {n} drain(s) opened inside the window"),
+        };
+        let summary = format!("{}{inside}", counts.summary(seconds, cores));
         // The floors. Every hart of every window measured so far took timer interrupts (0.6 to
         // 1.2 a second, nine windows of 60 s on both widths), so a hart with none was not logged.
         let mut nothing = Vec::new();
@@ -252,8 +397,139 @@ some other line
             ticks: 100,
             start: Some((t0, Duration::ZERO)),
             end: Some((t0 + Duration::from_secs(1), cpu)),
+            drain: Drain::default(),
         };
         (window, Dir(dir))
+    }
+
+    /// A window not yet opened, over this test's own process, whose CPU time it reads.
+    fn unopened() -> Window {
+        Window {
+            pid: std::process::id(),
+            harts: 1,
+            log: PathBuf::from("unused"),
+            ticks: 100,
+            start: None,
+            end: None,
+            drain: Drain::default(),
+        }
+    }
+
+    const RISE_LINE: &str = "mem: 1024 frames in flight";
+    const FALL_LINE: &str = "mem: frames in flight 0, at most 35440";
+
+    /// With a drain open at the step, the window opens at the kernel's line that the frames in
+    /// flight are back to none, not before, and the drain line says what it waited.
+    #[test]
+    fn the_window_opens_once_the_frames_in_flight_are_back() {
+        let (mut window, mut typed) = (unopened(), Vec::new());
+        window.see(RISE_LINE);
+        window.step().unwrap();
+        window.silence();
+        assert_eq!(window.poll(&mut typed).unwrap(), Poll::Waiting);
+        assert!(typed.is_empty());
+        window.see(FALL_LINE);
+        assert_eq!(window.poll(&mut typed).unwrap(), Poll::Started);
+        assert!(String::from_utf8_lossy(&typed).contains("log int"));
+        let line = window.drain_line();
+        assert!(line.starts_with("[idle] drain: back to 0 frames in flight "), "{line}");
+        assert!(line.contains("(at most 35440 frames), QEMU "), "{line}");
+        assert_eq!(window.poll(&mut typed).unwrap(), Poll::Waiting);
+    }
+
+    /// With none open, the window still waits for the console to fall silent once, so a drain's
+    /// line queued before the step is read first.
+    #[test]
+    fn the_window_opens_after_the_lines_already_queued() {
+        let (mut window, mut typed) = (unopened(), Vec::new());
+        window.see(RISE_LINE);
+        window.see(FALL_LINE);
+        window.step().unwrap();
+        assert_eq!(window.poll(&mut typed).unwrap(), Poll::Waiting);
+        window.see(RISE_LINE);
+        window.silence();
+        assert_eq!(window.poll(&mut typed).unwrap(), Poll::Waiting);
+        window.see(FALL_LINE);
+        assert_eq!(window.poll(&mut typed).unwrap(), Poll::Started);
+        // A drain that began after the step ended in its wait, and is the one named.
+        assert!(window.drain_line().starts_with("[idle] drain: back to 0 frames in flight "));
+        let (mut closed, mut typed) = (unopened(), Vec::new());
+        closed.see(RISE_LINE);
+        closed.see(FALL_LINE);
+        closed.step().unwrap();
+        closed.silence();
+        assert_eq!(closed.poll(&mut typed).unwrap(), Poll::Started);
+        let line = closed.drain_line();
+        assert!(
+            line.starts_with(
+                "[idle] drain: none open at the step and none since (the last: at most 35440 frames)"
+            ),
+            "{line}"
+        );
+    }
+
+    /// A kernel that says nothing of the frames in flight never opens the window: the boot and the
+    /// login leave far more than the threshold in flight, so no drain ended fails at the bound; so
+    /// does a console that never falls silent, and the failure names which.
+    #[test]
+    fn no_drain_seen_fails_at_the_bound() {
+        let (mut quiet, mut typed) = (unopened(), Vec::new());
+        quiet.step().unwrap();
+        quiet.silence();
+        assert_eq!(quiet.poll(&mut typed).unwrap(), Poll::Waiting);
+        let (_, cpu, open) = quiet.drain.held.unwrap();
+        quiet.drain.held = Some((Instant::now() - DRAIN_WAIT - Duration::from_secs(1), cpu, open));
+        let Poll::Failed(why) = quiet.poll(&mut typed).unwrap() else { panic!("the wait did not fail") };
+        assert!(why.contains("[idle] drain: no drain ended since the sessions began 31."), "{why}");
+        assert!(typed.is_empty());
+        // A console never silent is named as the condition unmet, beside the drain's.
+        let (mut chatty, mut typed) = (unopened(), Vec::new());
+        chatty.see(RISE_LINE);
+        chatty.see(FALL_LINE);
+        chatty.step().unwrap();
+        let (_, cpu, closed) = chatty.drain.held.unwrap();
+        chatty.drain.held = Some((Instant::now() - DRAIN_WAIT - Duration::from_secs(1), cpu, closed));
+        let Poll::Failed(why) = chatty.poll(&mut typed).unwrap() else { panic!("the wait did not fail") };
+        assert!(why.contains("[idle] drain: the console never fell silent for 50 ms 31."), "{why}");
+    }
+
+    /// A drain that never ends fails the case at the bound, saying how long it waited and what it
+    /// knows of the frames in flight; the window never opens.
+    #[test]
+    fn a_drain_that_never_ends_fails_at_the_bound() {
+        let (mut window, mut typed) = (unopened(), Vec::new());
+        window.see(RISE_LINE);
+        window.step().unwrap();
+        window.silence();
+        let (_, cpu, open) = window.drain.held.unwrap();
+        window.drain.held = Some((Instant::now() - DRAIN_WAIT - Duration::from_secs(1), cpu, open));
+        let Poll::Failed(why) = window.poll(&mut typed).unwrap() else { panic!("the wait did not fail") };
+        assert!(why.starts_with("idle: the frames in flight did not come back to 0 within 30 s"), "{why}");
+        assert!(why.contains("[idle] drain: a drain still open, over 1024 frames in flight 31."), "{why}");
+        assert!(why.contains("over 1024 frames in flight"), "{why}");
+        assert!(typed.is_empty());
+    }
+
+    /// Only the kernel's bare lines count: a program's line, under `consoled`'s prefix, opens no
+    /// drain; a drain opened inside the window is named on the window's own line, which comes
+    /// after it ends, and one outside is not.
+    #[test]
+    fn only_the_kernel_s_lines_open_a_drain_and_one_inside_is_named() {
+        let mut program = unopened();
+        program.see(&format!("[con 0123456789abcdef] {RISE_LINE}"));
+        assert_eq!(program.drain.open, None);
+        let (mut open, _dir) = window("inside", 1, LOG, Duration::from_millis(500));
+        let end = open.end.take();
+        open.see(RISE_LINE);
+        open.end = end;
+        open.see(RISE_LINE);
+        let (summary, over) = open.judge(&Idle::default()).unwrap();
+        assert!(summary.ends_with("; 1 drain(s) opened inside the window"), "{summary}");
+        assert_eq!(over, None);
+        assert!(!open.drain_line().contains("inside"), "{}", open.drain_line());
+        let (quiet, _dir) = window("outside", 1, LOG, Duration::from_millis(500));
+        let (summary, _) = quiet.judge(&Idle::default()).unwrap();
+        assert!(summary.ends_with("exceptions/s: user_ecall 2.0"), "{summary}");
     }
 
     /// Each ceiling fails the window when its rate is over it; none set, nothing fails.

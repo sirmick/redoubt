@@ -934,20 +934,7 @@ fn run_sessions(
         .as_ref()
         .map(|_| idle::Window::new(pid, harts, log.with_extension("int.log")))
         .transpose()?;
-    // The idle step's edges, as the session told them: the window starts or ends on the console,
-    // and the session, waiting, is told it has.
-    let mut idle_edges = |watched: &mut Console| -> Result<()> {
-        while let Ok((on, done)) = idle_rx.try_recv() {
-            if let Some(window) = window.as_mut() {
-                match on {
-                    true => window.start(&mut watched.stdin)?,
-                    false => window.end(&mut watched.stdin)?,
-                }
-            }
-            done.send(()).ok();
-        }
-        Ok(())
-    };
+    let mut held: Option<mpsc::Sender<()>> = None;
     let failed: Option<String> = std::thread::scope(|scope| -> Result<Option<String>> {
         let (server, prefix, abort) = (&server, &prefix, &abort);
         let idle = boot.idle.is_some().then_some(idle_tx);
@@ -955,16 +942,27 @@ fn run_sessions(
             .spawn(move || ssh::run(workspace, &boot.session, server, logs, prefix, deadline, abort, idle));
         let mut console: Result<Option<String>> = Ok(None);
         while !sessions.is_finished() && matches!(console, Ok(None)) {
-            if let Err(e) = idle_edges(watched) {
-                console = Err(e);
-                break;
+            match idle_edges(&idle_rx, window.as_mut(), &mut held, watched) {
+                Ok(None) => {}
+                failed => {
+                    console = failed;
+                    break;
+                }
             }
             console = match watched.next(Instant::now() + Duration::from_millis(50)) {
                 Ok(Line::Text(line)) => {
                     after.see(&line);
+                    if let Some(window) = window.as_mut() {
+                        window.see(&line);
+                    }
                     Ok(None)
                 }
-                Ok(Line::Timeout) => Ok(None),
+                Ok(Line::Timeout) => {
+                    if let Some(window) = window.as_mut() {
+                        window.silence();
+                    }
+                    Ok(None)
+                }
                 Ok(Line::Forbidden(why)) => Ok(Some(why)),
                 Ok(Line::Exited) => Ok(Some("guest exited during the SSH sessions".to_string())),
                 Err(e) => Err(e),
@@ -1001,6 +999,44 @@ fn run_sessions(
         }
     }
     Ok(None)
+}
+
+/// The idle step's edges, as the session told them on `edges`: the window starts or ends on the
+/// console, and the session, waiting, is told it has. A start waits in `held`, the session with
+/// it, until the frames in flight are back to none ([`idle::Window::poll`]). Why the case fails,
+/// if they are not.
+fn idle_edges(
+    edges: &mpsc::Receiver<ssh::IdleEdge>,
+    window: Option<&mut idle::Window>,
+    held: &mut Option<mpsc::Sender<()>>,
+    watched: &mut Console,
+) -> Result<Option<String>> {
+    let Some(window) = window else {
+        while let Ok((_, done)) = edges.try_recv() {
+            done.send(()).ok();
+        }
+        return Ok(None);
+    };
+    while let Ok((on, done)) = edges.try_recv() {
+        if on {
+            window.step()?;
+            *held = Some(done);
+        } else {
+            window.end(&mut watched.stdin)?;
+            done.send(()).ok();
+        }
+    }
+    match window.poll(&mut watched.stdin)? {
+        idle::Poll::Waiting => Ok(None),
+        idle::Poll::Started => {
+            writeln!(watched.log, "{}", window.drain_line())?;
+            if let Some(done) = held.take() {
+                done.send(()).ok();
+            }
+            Ok(None)
+        }
+        idle::Poll::Failed(why) => Ok(Some(why)),
+    }
 }
 
 #[cfg(test)]

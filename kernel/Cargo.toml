@@ -108,6 +108,9 @@ inflight-trace = ["sched-trace"]
 # `smp-inflight-race` must fail.
 inflight-early-commit = ["test-only"]
 inflight-zero-unshot = ["test-only"]
+# Never in a bench build but one recorded negative run: the console never says the frames in
+# flight are back to none, as if a drain never ended, so `launch-idle` must fail at its wait's bound.
+inflight-never-none = ["test-only"]
 # Debug only, never in a bench build but one recorded negative run: a destruction leaves the
 # zeroing still to bill to the budgets it ends where it is, so the checked kernel's bill names a
 # budget that is gone (kernel/budgets.md, R10).

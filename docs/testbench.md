@@ -1257,7 +1257,7 @@ boots QEMU's own OpenSBI: the rule that only RustSBI boots is Redoubt's.
 
 ### The machine at rest
 
-<details><summary>Status: built · tested (6)</summary>
+<details><summary>Status: built · tested (11)</summary>
 
 - bench:launch-idle
 - host:testbench::the_log_is_counted_by_hart_and_name
@@ -1265,6 +1265,11 @@ boots QEMU's own OpenSBI: the rule that only RustSBI boots is Redoubt's.
 - host:testbench::a_window_that_measured_nothing_fails
 - host:testbench::the_monitor_is_reached_and_left_by_the_mux_escape
 - host:testbench::an_idle_step_needs_idle_and_launch
+- host:testbench::the_window_opens_once_the_frames_in_flight_are_back
+- host:testbench::the_window_opens_after_the_lines_already_queued
+- host:testbench::a_drain_that_never_ends_fails_at_the_bound
+- host:testbench::no_drain_seen_fails_at_the_bound
+- host:testbench::only_the_kernel_s_lines_open_a_drain_and_one_inside_is_named
 
 </details>
 
@@ -1296,12 +1301,29 @@ ceiling catches a cost that doubles, not the window-to-window spread. Those wind
 measured before the session's next step waited for `log none`, so that step's command fell in
 them. One window on each width since measured 4.1 system calls a second, so `user_ecalls`, at
 18, is loose by about 2x until the kernel's lock wake-ups at rest are cut and the ceilings set
-again. The window opens as the frames a login freed are zeroed, once every hart idles
-([frames in flight](kernel/memory.md#frames-in-flight)); one hart zeroes them at a time, about
-35,000 frames in 0.25 s on rv64 and 0.32 s on rv32, so they cost host time, not interrupts.
-Before R81 the busiest hart took 3.1 interrupts a second on rv64 and 2.8 on rv32, at 0.002
-cores; with it, five windows each, 3.1 to 4.2 and 2.7 to 3.7, at 0.005 to 0.008 cores. The
-measures are the hardware's view: they say how often the guest wakes, not which budget woke it;
+again.
+
+The window never holds the zeroing of the frames in flight
+([frames in flight](kernel/memory.md#frames-in-flight)): about 35,000, which the boot and the
+login leave in flight and one hart zeroes once every hart first idles after the login, about half
+of a window's host time when the window held them. The kernel says on the console when a drain of
+1,024 frames or more begins (`mem: 1024 frames in flight`) and when the frames in flight are back
+to 0 (`mem: frames in flight 0, at most N`). When the session reaches its idle step, the bench
+reads the console lines already queued, until it falls silent for 50 ms (a host-clock settle, for
+those lines only), and holds the session and
+the window until a drain has ended since the sessions began, none being open. Six runs a width
+alone, at four harts, saw them back 0.32 to 0.39 s after the step began on rv64, at about 0.6 host
+cores, and 5.8 to 6.2 s on rv32, at about 0.15; why rv32's every hart idles that much later
+after the prompt is not yet measured. The bench waits at most 30 s from the step's start, about five times
+rv32's most, the margin for a loaded host; a drain still open then, none ended, or a console never
+silent fails the case, and the failure names which; the drain's end is the kernel's line, never a
+settle time. The case log's `[idle] drain:` line, before the window's own, says what
+the wait came to: the drain's most frames, the wall time from the step's start to its end and
+QEMU's host CPU meanwhile, or that none ended in the wait. A drain that opens inside the window
+is named on the window's own `[idle]` line, written once it has ended: the window's work,
+measured. Before R81 the busiest hart took 3.1 interrupts a
+second on rv64 and 2.8 on rv32, at 0.002 cores; with the wait, those twelve windows read 2.9 to
+3.5 at 0.001 to 0.003 cores. The measures are the hardware's view: they say how often the guest wakes, not which budget woke it;
 that would take the kernel's own trace, which prints only at a reset. `launch-idle` is a
 host-clock case, run in the quiet class.
 
