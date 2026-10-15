@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 128
+revision = 136
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -2155,9 +2155,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M2"
   needs = ["B60"]
-  body = "B60's reading (.wash/local/B60-report.md, 2026-10-15): a realistic page (82-byte lines, one CJK word, one emoji, one accented name) draws at 7,200/6,400 B/s against its ASCII twin's 10,400/9,300; its five lone graphemes and two run restarts explain under a third of the gap; the rest is per-piece: every line is a piece, and Text.visible and Width.run each walk the first 64 code points in Erlang before the binary fast path takes over. Lever: start the run path at the piece's first byte when the piece is printable (one check, not 64 steps), or share one prologue between the two passes. Measure with shell-text-profile (B60's case) before and after; a floor on the page text in shell-output-rate if the gain holds. Escaping path: Tier A, steward-red. A polish candidate for the owner's list, not opened on 2026-10-15."
-  state = "todo"
-  revision = 117
+  body = "B60's reading (.wash/local/B60-report.md, 2026-10-15): a realistic page (82-byte lines, one CJK word, one emoji, one accented name) draws at 7,200/6,400 B/s against its ASCII twin's 10,400/9,300; its five lone graphemes and two run restarts explain under a third of the gap; the rest is per-piece: every line is a piece, and Text.visible and Width.run each walk the first 64 code points in Erlang before the binary fast path takes over. Lever: start the run path at the piece's first byte when the piece is printable (one check, not 64 steps), or share one prologue between the two passes. Measure with shell-text-profile (B60's case) before and after; a floor on the page text in shell-output-rate if the gain holds. Escaping path: Tier A, steward-red-2 reviews. Opened 2026-10-15 13:15Z on the owner's standing 'keep working through M2' (b64-implementer, wp-B64 from 47b0d98ea); report at .wash/local/B64-report.md."
+  state = "done"
+  revision = 136
 
 [[node]]
   id = "B65"
