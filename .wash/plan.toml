@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 41
+revision = 52
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1885,9 +1885,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M2"
   needs = ["B45"]
-  body = "From B45: on the machine, printing a 1 MiB line takes about 2 minutes (Text.visible plus the encoder). Profile on beamlet (which of grapheme walking, escaping, measuring, encoding dominates), make the common case (printable ASCII/UTF-8 with no controls) a fast path, and set a throughput target with a case. Escaping path: Tier A."
-  state = "reported"
-  revision = 2
+  body = "From B45: on the machine, printing a 1 MiB line takes about 2 minutes (Text.visible plus the encoder). Profile on beamlet (which of grapheme walking, escaping, measuring, encoding dominates), make the common case (printable ASCII/UTF-8 with no controls) a fast path, and set a throughput target with a case. Escaping path: Tier A. Merged in train 17 as a4c093827 (wp-B46 1d3177086; steward-red OK with notes): runs of printable text drawn forty times faster, ASCII 28.6K/25.6K B/s, 400-char redraw 57/66 ms, floors 12K B/s and 250 ms in shell-output-rate and shell-long-output. The node's state lagged the merge until 2026-10-15. Residuals: B60."
+  state = "done"
+  revision = 47
   overrides = ["2026-10-09: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the shell track runs ahead of its acceptance", "2026-10-10: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the shell track runs ahead of its acceptance"]
 
 [[node]]
@@ -1917,8 +1917,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "smp"
   needs = ["SCHED3"]
   body = "SCHED3's B1 was dropped by ruling (.wash/qa/sched3-b1-evidence.md; .wash/local/architect-questions.md 'SCHED3 B1') with a trigger: it returns if the oracle's report-only count of timer entries billed to a budget other than the one interrupted reaches 1 % of a victim's charged pool in a gate case. Met on wp-SCHED3 before merge: deadline-flood-billed-traced rv64 at 2 harts, 16 deadlines, 87 of 96 destructions on hart 0 under the victim, 89 entries, 833,543 ticks, ~17 % of 4.99M charged; victim 482 of 1000 (passes). Placement depends on timing alone. Form, as the Architect amended the ruling: the branch's (the global earliest item and its payer, None on a tie; rearm reads runner_ids(), O(harts); no scan of the deadlines on the switch path), NOT a per-budget cached minimum. Code: .wash/local/SCHED3-B1-33eaaf326.patch (wp-SCHED3's WIP 33eaaf326). Build the failing negative from this placement (`timer-any-hart` must fail where the count is gated), gate the count in deadline-flood-billed-traced and sched-exit-churn at 2 harts, measure deadline-notice latency before and after on both widths (baseline p99 4.6/5.1/4.6 ms rv64, 6.2/6.1/5.2 ms rv32; within one section), timer.md and scheduling.md say the rule; device interrupts stay IRQ1's residual. Kernel: Tier A, the kernel red; model rule and mutation if a rule changes."
-  state = "todo"
-  revision = 2
+  state = "reported"
+  revision = 48
 
 [[node]]
   id = "B47"
@@ -1958,8 +1958,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   needs = ["B47"]
   body = "From B47's report (.wash/local/B47-report.md, 'Open'): each pipeline binds piped's connection into the session's namespace (Redoubt.Pipes, /dev/pipe) and a sys.known entry with its handle stays after the pipeline ends and piped's budget is destroyed; with B47's Life the stale handle closes nothing, but the entry and the slot are never returned, so a long session leaks one per pipeline until a table fills. Find the owner of the entry (the bind, the Pipes server, the Known table), return it when the pipeline's job ends (or reuse one piped per session if that is the design: say which on native.md), host test that a thousand pipelines leave the table where it started, and extend pipe-eight or add a sibling that runs 64 in one session on both widths. Acts with the session's authority: main, Tier A, the steward red."
-  state = "todo"
-  revision = 2
+  state = "active"
+  revision = 44
 
 [[node]]
   id = "K31"
@@ -2076,8 +2076,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   needs = ["CONW2"]
   body = "Reopened 2026-10-14 after acceptance at cd40d1eb2: train 22's whole bench failed beamlet-reduction-rate, beamlet-schedulers-mttcg and beamlet-schedulers-one-hart-mttcg on both widths, alone too. The kernel's fall line `mem: frames in flight 0, at most N` is printed between consoled's `[con ID] ` prefix and the program's text (the system goes idle during the cases' sleep loops, so the drain falls then), and the case's `^\\[con ID\\] :timed$` never matches. Evidence: .worktrees/train-20/target/testbench/run-2587263-1792018359801758854/beamlet-reduction-rate-rv64-smp1.log line 62-64. Any kernel line can split a consoled line this way; B57's is the first that fires during a session. Removed from train 22; the fix and the rule it needs (a consoled line is one UART write, or a kernel line waits for the console's line) are with kernel-red-2 on QA thread B57-split-line. Original: launch-idle's window opens on a host clock while R81's login drain may still run; open it once frames in flight reach 0, and print the drain beside it. Reports: .wash/local/B57-report.md, reviews .wash/local/B57-review-2026-10-14.md and kernel-red-2's round 2 result."
-  state = "reported"
-  revision = 30
+  state = "done"
+  revision = 52
   overrides = ["2026-10-12: started by Orchestrator before M1 (reported), M1 (reported): M1 is reported, not done, by the owner's milestone split (2026-10-07); M2's packages proceed on it"]
 
 [[node]]
@@ -2105,5 +2105,15 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "smp"
   body = "Ruled on QA B57-split-line (kernel-red-2, 2026-10-14) after train 22's bench failed three beamlet timing cases: consoled's hold covers a write, a program's line spans writes (the shell sends \"\\r\" then \":timed\\r\\n\"), and between writes nobody holds, so a free kernel line (B57's fall line; a kill line; any) prints at once after the `[con ID] ` prefix and the next write continues bare. consoled.md promises a program's line is never bare. Design (b57-implementer-3, ruled binding): one bit each way on console_hold, the kernel never waits: Release(3) says 'line open' (cleared by Release(2) or the kernel's own \"\\r\\n\"); a free kernel line with a line open writes \"\\r\\n\" first and goes out whole, and notes `wrote`; Take answers 'kernel wrote since' (cleared only by that Take) and consoled re-emits the prefix. State in Output under PRINTER; held lines, Line::Full and the 4 KiB bound unchanged; a refused Take keeps today's behaviour; consoled takes and releases once at start and a refusal is an exit code named in consoled.md. Proof: case console-kernel-line-mid-line (write `half`, end a child, write `rest\\n`: expect `[con ID] half`, the kill line, `[con ID] rest`; forbid `^rest$`), both widths at 2 harts; beamlet-reduction-rate, beamlet-schedulers-mttcg, -one-hart-mttcg green at CONW2's head; conhold host tests for the two bits; redoubt-sys round-trip tests; the model's rule if it has one. Pages: docs/kernel/devices.md 'The console's one writer', docs/servers/consoled.md. Touches redoubt-sys, kernel, conhold, rt, consoled, model: Tier A, kernel-red-2 reviews. B57 needs this, its code unchanged; its three cases rerun on CONW2's head before it rejoins a train. Branch wp-CONW2 from 691646841."
-  state = "reported"
-  revision = 41
+  state = "done"
+  revision = 51
+
+[[node]]
+  id = "B60"
+  title = "The shell's text past B46's fast path: CJK, combining marks and emoji are still measured a grapheme at a time, and B45's 1 MiB line is untimed on the machine"
+  template = "package"
+  parent = "M2"
+  needs = ["B46"]
+  body = "Residual from B46 (merged in train 17 as a4c093827; .wash/local/B46-report.md 'Residuals'): the fast path covers printable runs whose width is one column per code point; CJK, marks and emoji fall back to measuring each grapheme, and the per-stage profile and the 1 MiB-line time on the machine were last measured before BEAM19 and K33. Re-profile at today's main both widths; if the wide/combining path dominates a realistic text, give it a run path of its own with a floor in shell-output-rate; otherwise record the numbers and close. Escaping path: Tier A, steward-red. Not opened on 2026-10-15: a candidate for the owner's polish list."
+  state = "todo"
+  revision = 46
