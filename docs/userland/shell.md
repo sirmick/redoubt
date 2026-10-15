@@ -417,34 +417,37 @@ and every [full-screen program](#full-screen-programs).
   typed at the line's end draws itself alone and moves the cursor the encoder keeps, so it costs
   the key, not the line: the 200th character typed costs what the 10th did.
 - **The rate:** on the machine, timed in guest time (`icount`, `shift=3`), the encoder draws 256 KiB
-  of ASCII at about 39,000 bytes a second on rv64 and 33,000 on rv32 (44,100 and 38,100 in
-  `shell-output-rate`'s own run; 34,600 and 31,400 with one matcher pattern per control, 28,500
-  and 25,800 when runs were built), and of Cyrillic at 63,900 and 56,900, where the encoder
-  before runs draws about 620 and 1,240 (rv64, on the same interpreter); a line of 1 MiB at
-  49,800 and 42,400, in 21.1 and 24.8 s; text of short runs
-  between tabs, controls and wide characters at about 3,900 and 3,400, where it draws 1,150. A
-  keystroke in the middle of a line of 400 characters, wrapped over six rows of 80, draws the
-  line again in about 110 ms on either width, where it took 1.64 and 1.84 s. `shell-output-rate`
-  holds both widths to 12,000 bytes a second for each line, a margin of 3.2 on the slowest
-  (rv32's ASCII); the page of the profile below to 6,500 and the same page in ASCII to 12,000
-  (8,250 and 18,400 in this case's run on rv32), margins of 1.3 and 1.5, close because they trap
-  the return of a per-line prologue the encoder once paid (about 6,000 and 9,400 with it); and
-  the least of three redraws to 250 ms, a margin
-  of 2. It times the encoder alone: what reaches the person also passes the driver's writes and
-  `consoled` or `sshd`, and a keystroke `group` and `edlin`'s own work. The encoder's time is
-  mostly the VM's matchers.
+  of ASCII at about 52,000 bytes a second on rv64 and 41,000 on rv32 (62,500–66,000 and
+  49,500–51,200 in `shell-output-rate`'s own run, three runs), and of Cyrillic at 123,000 and
+  98,600; a line of 1 MiB at 79,300 and 61,500, in 13.2 and 17.1 s; text of short runs between
+  tabs, controls and wide characters at about 4,000 and 3,500. The baseline is the run path with
+  one matcher pattern per control character, before beamlet's `:binary.match` compiled its
+  pattern ([beamlet](beamlet.md#beamlet-on-redoubt)): 34,600 and 31,400 for ASCII, 43,700 and
+  41,000 for Cyrillic, 36,900 and 33,100 for the line of 1 MiB, 1,150 for the short runs; the
+  encoder before runs drew about 620 and 1,240 (rv64, on the same interpreter). A keystroke in
+  the middle of a line of 400 characters, wrapped over six rows of 80, draws the line again in
+  about 110 ms on either width (98–134 ms in the runs; the matcher moved it nowhere), where it
+  took 1.64 and 1.84 s. `shell-output-rate` holds both widths to 24,000 bytes a second for each
+  line, a margin of 2.1 on the slowest (rv32's ASCII); the page of the profile below to 8,000 and
+  the same page in ASCII to 24,000 (10,300 and 31,300 in this case's run on rv32), margins of 1.3,
+  close because they trap the return of a per-line prologue the encoder once paid (about 6,000
+  and 9,400 with it); and the least of three redraws to 250 ms, a margin of 2. It times the
+  encoder alone: what reaches the person also passes the driver's writes and `consoled` or `sshd`,
+  and a keystroke `group` and `edlin`'s own work. The encoder's time is mostly the VM's matchers.
 - **The profile** (`shell-text-profile`, run by name, both widths, guest time): of a 256 KiB
-  line's draw, making it visible is three fifths and the run path's wrap and encoding the rest,
-  about 30 µs a byte in all. Text that leaves the run path is measured a grapheme at a time, about
-  0.85 ms a grapheme on rv64 and 1.0 on rv32: the walk (`String.next_grapheme`, which is
-  `:unicode_util.gc/1`) 0.42 ms, the width (`:unicode_util.is_wide/1`) 0.22 ms, and a matcher
-  call for each run of one code point between them. So CJK, emoji and text broken by combining
-  marks draws at about 3,900 and 3,400 bytes a second, 64 KiB of it in 17 to 19 s: slow and
-  bounded. A page of 82-byte lines of English with one CJK word, one emoji and one accented name
-  each draws at 10,500 and 8,900 bytes a second, and the same page in ASCII alone at 22,200 and
-  18,200. A line's five
-  graphemes, and the two runs they split, cost about 4 of the page's 7.8 ms a line on rv64; the
-  rest, where the same bytes of a long line cost 2.1, is the line's own as a piece: a call of
+  line's draw (4.9–5.0 s on rv64 and 6.3–6.5 on rv32; 6.6–6.8 and 7.8–7.9 before beamlet's
+  compiled matcher), making it visible is three tenths (1.5 and 2.0 s; it was three fifths) and
+  the run path's wrap and encoding the rest, about 19 and 24 µs a byte in all. Text that leaves
+  the run path is measured a grapheme at a time, about 0.85 ms a grapheme on rv64 and 1.0 on
+  rv32: the walk (`String.next_grapheme`, which is `:unicode_util.gc/1`) 0.42 ms, the width
+  (`:unicode_util.is_wide/1`) 0.22 ms, and a matcher call for each run of one code point between
+  them. So CJK, emoji and text broken by combining marks draws at about 4,000 and 3,500 bytes a
+  second, 64 KiB of it in 16 to 19 s (3 % faster with the compiled matcher: the per-grapheme walk
+  does not search): slow and bounded. A page of 82-byte lines of English with one CJK word, one
+  emoji and one accented name each draws at 13,100 and 11,300 bytes a second (10,500 and 8,900
+  before), and the same page in ASCII alone at 37,000 and 31,200 (22,200 and 18,200). A line's
+  five graphemes, and the two runs they split, cost about 4 of the page's 6.3 ms a line on rv64;
+  the rest, where the same bytes of a long line cost 1.6, is the line's own as a piece: a call of
   each matcher in `Text.visible` and again in `Width.run`, the cut at its newline, and the row's
   bookkeeping. A run path for wide text would gain such a page under half, and is not built; the
   per-grapheme path stays as it is. Whether a line's runs should be carried past its newline, so
