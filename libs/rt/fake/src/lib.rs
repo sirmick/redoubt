@@ -23,7 +23,10 @@
 //! call of a name refused (`Fake::refuse`), or a later one (`Fake::refuse_after`), and it can read
 //! the most pages a process held at once (`Fake::held_peak`). Its clock is the host's until a test
 //! holds it (`Fake::hold_clock`) and moves it itself (`Fake::tick`), so a deadline, a server's own
-//! or a call's timeout, is a step the test takes and never a race against the host.
+//! or a call's timeout, is a step the test takes and never a race against the host. A tick is a
+//! quiescent step: it is taken only once every other thread of the fake is in a wait, so it ends
+//! the waits the test wrote it to end and never falls between a server's reading of the time and
+//! the receive that reading gave its deadline.
 //!
 //! It also has what a driver needs: device objects (`Fake::mmio` and `Fake::irq`), `map_device`
 //! over a page of host memory a test can read and write as if it were registers, `receive` on an
@@ -211,11 +214,17 @@ struct State {
     /// Processes whose next take of the console's hold is told a kernel line ended their
     /// unfinished line ([`Fake::console_line_ended`]).
     console_ended: HashSet<usize>,
+    /// The threads of the fake ([`Counted`]) alive, and how many of them are in `wait`: a tick
+    /// of the held clock is taken only when every one but the ticker's is ([`Fake::tick`]).
+    alive: usize,
+    waiting: usize,
 }
 
 pub struct Fake {
     state: Mutex<State>,
     changed: Condvar,
+    /// Signalled when a thread of the fake enters a wait or ends, for a tick waiting on them.
+    quiet: Condvar,
     boot: Instant,
     /// Whether a test holds the clock ([`Fake::hold_clock`]), and where it stands then, in
     /// microseconds since boot.
@@ -227,6 +236,32 @@ pub struct Fake {
 
 thread_local! {
     static CURRENT: Cell<Option<usize>> = const { Cell::new(None) };
+    /// Whether this thread is one of the fake's ([`Counted`]).
+    static COUNTED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// A thread of the fake, counted in `State::alive` while it lives: one `run`, `as_process` or
+/// `thread_create` made. A tick of the held clock waits for every one but the ticker's own to be
+/// in `wait` ([`Fake::tick`]). A thread counted once stays counted once, however the three nest.
+struct Counted<'a>(Option<&'a Fake>);
+
+impl<'a> Counted<'a> {
+    fn new(fake: &'a Fake) -> Self {
+        if COUNTED.with(Cell::get) {
+            return Counted(None);
+        }
+        COUNTED.with(|c| c.set(true));
+        fake.lock().alive += 1;
+        Counted(Some(fake))
+    }
+}
+
+impl Drop for Counted<'_> {
+    fn drop(&mut self) {
+        if let Some(fake) = self.0 {
+            fake.uncount();
+        }
+    }
 }
 
 /// The unwind payload of `process_exit`.
@@ -244,6 +279,7 @@ pub fn fake() -> &'static Fake {
         let fake: &'static Fake = Box::leak(Box::new(Fake {
             state: Mutex::new(State { rng: 0x2545_f491_4f6c_dd1d, next_id: 1, ..State::default() }),
             changed: Condvar::new(),
+            quiet: Condvar::new(),
             boot: Instant::now(),
             held: AtomicBool::new(false),
             clock: AtomicU64::new(0),
@@ -551,6 +587,7 @@ impl Fake {
         body: F,
     ) -> std::thread::JoinHandle<u32> {
         std::thread::spawn(move || {
+            let _counted = Counted::new(self);
             CURRENT.with(|c| c.set(Some(pid)));
             match std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
                 Ok(code) => code,
@@ -564,6 +601,7 @@ impl Fake {
 
     /// Runs `body` as `pid` on this thread.
     pub fn as_process<T>(&self, pid: usize, body: impl FnOnce() -> T) -> T {
+        let _counted = Counted::new(self);
         let old = CURRENT.with(|c| c.replace(Some(pid)));
         let result = body();
         CURRENT.with(|c| c.set(old));
@@ -603,10 +641,40 @@ impl Fake {
         }
     }
 
+    /// This thread is one of the fake's no longer: its `run` or `as_process` is over, or it has
+    /// exited (`thread_exit`, whose host thread parks for good and reaches no wait). Once.
+    fn uncount(&self) {
+        if COUNTED.with(|c| c.replace(false)) {
+            self.lock().alive -= 1;
+            self.quiet.notify_all();
+        }
+    }
+
     /// `dt` microseconds pass on the held clock, as the model's `tick`: every wait sees the time.
+    /// A quiescent step: taken only once every other thread of the fake is in a wait, so a tick
+    /// always ends the waits the test wrote it to end. A test observes a server's state (a call
+    /// parked, a count reached) and not its next `receive`, whose deadline is read at the call;
+    /// a tick taken between the two would leave that receive a deadline one timeout past the
+    /// tick, which no later tick reaches, and its caller waiting for ever. Microseconds natively,
+    /// the gap is wide under Miri. The rule for a test, then: across a tick, keep no thread of the
+    /// fake busy outside a wait (no host sleep, channel or join on it). A thread that reaches no
+    /// wait in [`STUCK`] fails the tick, naming the clock's time and the waits outstanding.
     pub fn tick(&self, dt: u64) {
-        let _s = self.lock();
+        let mut s = self.lock();
         assert!(self.held.load(Ordering::Acquire), "a tick of a clock the test does not hold");
+        let others = |s: &State| s.alive - usize::from(COUNTED.with(Cell::get));
+        while s.waiting < others(&s) {
+            let (g, waited) = self.quiet.wait_timeout(s, STUCK).unwrap_or_else(|e| e.into_inner());
+            s = g;
+            if waited.timed_out() && s.waiting < others(&s) {
+                let (waiting, others, now) = (s.waiting, others(&s), self.now());
+                drop(s);
+                panic!(
+                    "a tick of the held clock at {now} µs waited {STUCK:?} for the other threads of the fake to \
+                     reach a wait and {waiting} of {others} did: the test is stuck"
+                );
+            }
+        }
         self.clock.fetch_add(dt, Ordering::AcqRel);
         self.changed.notify_all();
     }
@@ -620,9 +688,11 @@ impl Fake {
     /// change can end, one with no deadline (`FOREVER`) or one on a held clock, that sees nothing
     /// change anywhere in this kernel for [`STUCK`] panics: the test is stuck (a server that
     /// ended early, a reply never sent, a tick never taken), and fails naming it rather than
-    /// hanging the run. Load slows a test's progress; it does not stop every change.
+    /// hanging the run, naming the clock's time and the waits outstanding. Load slows a test's
+    /// progress; it does not stop every change. While it waits, the thread is one a tick of the
+    /// held clock need not wait for ([`Fake::tick`]).
     fn wait<'a>(&self, guard: &mut Option<MutexGuard<'a, State>>, deadline: Option<u64>) -> bool {
-        let g = guard.take().unwrap();
+        let mut g = guard.take().unwrap();
         let now = self.now();
         if deadline.is_some_and(|d| now >= d) {
             *guard = Some(g);
@@ -630,25 +700,33 @@ impl Fake {
         }
         let host =
             deadline.filter(|_| !self.held.load(Ordering::Acquire)).map(|d| Duration::from_micros(d - now));
-        match host {
-            Some(host) => {
-                let (g, _) = self.changed.wait_timeout(g, host).unwrap_or_else(|e| e.into_inner());
-                *guard = Some(g);
-            }
+        debug_assert!(
+            COUNTED.with(Cell::get),
+            "a wait in the fake kernel from a thread that is none of its own"
+        );
+        g.waiting += 1;
+        self.quiet.notify_all();
+        let (mut g, stuck) = match host {
+            Some(host) => (self.changed.wait_timeout(g, host).unwrap_or_else(|e| e.into_inner()).0, false),
             None if self.patient.load(Ordering::Relaxed) => {
-                *guard = Some(self.changed.wait(g).unwrap_or_else(|e| e.into_inner()));
+                (self.changed.wait(g).unwrap_or_else(|e| e.into_inner()), false)
             }
             None => {
                 let (g, waited) = self.changed.wait_timeout(g, STUCK).unwrap_or_else(|e| e.into_inner());
-                if waited.timed_out() {
-                    drop(g);
-                    panic!(
-                        "a wait only a change can end saw none in the fake kernel for {STUCK:?}: the test is stuck"
-                    );
-                }
-                *guard = Some(g);
+                (g, waited.timed_out())
             }
+        };
+        g.waiting -= 1;
+        if stuck {
+            let (waiting, others, now) = (g.waiting, g.alive.saturating_sub(1), self.now());
+            let clock = if self.held.load(Ordering::Acquire) { "held" } else { "host's" };
+            drop(g);
+            panic!(
+                "a wait only a change can end saw none in the fake kernel for {STUCK:?}: the test is stuck \
+                 (the {clock} clock at {now} µs, {waiting} of the {others} other threads of the fake in a wait)"
+            );
         }
+        *guard = Some(g);
         true
     }
 }
@@ -839,6 +917,7 @@ unsafe impl redoubt_rt::Transport for Fake {
                 // to a `usize`, which is what `process_start` and `thread_create` take.
                 let entry: extern "C" fn(usize) -> ! = unsafe { std::mem::transmute(entry) };
                 std::thread::spawn(move || {
+                    let _counted = Counted::new(fake());
                     CURRENT.with(|c| c.set(Some(pid)));
                     // The body never returns; `process_exit` unwinds, which ends this thread.
                     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| entry(arg)));
@@ -942,9 +1021,12 @@ unsafe impl redoubt_rt::Transport for Fake {
             }
             // The thread ends: it never runs again. Its host thread waits for good, since nothing
             // may unwind through the runtime's `extern "C"` trampoline; the test's end ends it.
-            Call::ThreadExit => loop {
-                std::thread::park();
-            },
+            Call::ThreadExit => {
+                self.uncount();
+                loop {
+                    std::thread::park();
+                }
+            }
             Call::ProcessExit { code } => {
                 self.lock().exits.insert(pid, code);
                 std::panic::resume_unwind(Box::new(Exited(code)))
