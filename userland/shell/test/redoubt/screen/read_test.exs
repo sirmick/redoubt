@@ -37,7 +37,7 @@ defmodule Redoubt.Screen.ReadTest do
 
   test "every vector is answered as the decoder answers it, by both readings alike" do
     cases = vectors()
-    assert length(cases) == 34
+    assert length(cases) == 51
 
     for %{"name" => name, "hex" => hex} = vector <- cases do
       bytes = Base.decode16!(hex, case: :lower)

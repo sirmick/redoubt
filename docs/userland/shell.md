@@ -406,22 +406,28 @@ and every [full-screen program](#full-screen-programs).
   about what a matcher spends on two bytes of text, so a line of 80 is one call of each matcher,
   and a run of one code point costs a call, a few steps' worth, which text of such runs pays (the
   profile, below). A window is small so that the lists a matcher's answer makes do not grow the
-  driver's heap toward its limit. What is drawn is the same, byte for byte.
+  driver's heap toward its limit. The run's end is found by `:binary.match` over the 38 byte
+  patterns a control character may start with (the ASCII controls, DEL and five UTF-8 prefixes),
+  a hit settled by `control?/1` and a character that only shares a prefix (a no-break space, a
+  dash) stepped over, rather than over one pattern per control: beamlet's matcher tries every
+  pattern at every byte, so a run costs the pattern count a byte. What is drawn is the same, byte
+  for byte.
 - **The line being edited** is drawn again in one pass over its graphemes, which places the cursor
   on its way, and a printable ASCII grapheme that fits on its row costs one step of it. A key
   typed at the line's end draws itself alone and moves the cursor the encoder keeps, so it costs
   the key, not the line: the 200th character typed costs what the 10th did.
 - **The rate:** on the machine, timed in guest time (`icount`, `shift=3`), the encoder draws 256 KiB
-  of ASCII at about 31,000 bytes a second on rv64 and 28,000 on rv32 (34,600 and 31,400 in
-  `shell-output-rate`'s own run; 28,500 and 25,800 when runs were built), and of Cyrillic at
-  43,700 and 41,000, where the encoder before runs draws about 620 and 1,240 (rv64, on the same
-  interpreter); a line of 1 MiB at 36,900 and 33,000, in 28.4 and 31.7 s; text of short runs
-  between tabs, controls and wide characters at about 3,800 and 3,300, where it draws 1,150. A
+  of ASCII at about 39,000 bytes a second on rv64 and 33,000 on rv32 (44,100 and 38,100 in
+  `shell-output-rate`'s own run; 34,600 and 31,400 with one matcher pattern per control, 28,500
+  and 25,800 when runs were built), and of Cyrillic at 63,900 and 56,900, where the encoder
+  before runs draws about 620 and 1,240 (rv64, on the same interpreter); a line of 1 MiB at
+  49,800 and 42,400, in 21.1 and 24.8 s; text of short runs
+  between tabs, controls and wide characters at about 3,900 and 3,400, where it draws 1,150. A
   keystroke in the middle of a line of 400 characters, wrapped over six rows of 80, draws the
   line again in about 110 ms on either width, where it took 1.64 and 1.84 s. `shell-output-rate`
-  holds both widths to 12,000 bytes a second for each line, a margin of 2.6 on the slowest
+  holds both widths to 12,000 bytes a second for each line, a margin of 3.2 on the slowest
   (rv32's ASCII); the page of the profile below to 6,500 and the same page in ASCII to 12,000
-  (7,800 and 16,500 in this case's run on rv32), margins of 1.2 and 1.4, close because they trap
+  (8,250 and 18,400 in this case's run on rv32), margins of 1.3 and 1.5, close because they trap
   the return of a per-line prologue the encoder once paid (about 6,000 and 9,400 with it); and
   the least of three redraws to 250 ms, a margin
   of 2. It times the encoder alone: what reaches the person also passes the driver's writes and
@@ -433,12 +439,12 @@ and every [full-screen program](#full-screen-programs).
   0.85 ms a grapheme on rv64 and 1.0 on rv32: the walk (`String.next_grapheme`, which is
   `:unicode_util.gc/1`) 0.42 ms, the width (`:unicode_util.is_wide/1`) 0.22 ms, and a matcher
   call for each run of one code point between them. So CJK, emoji and text broken by combining
-  marks draws at about 3,800 and 3,300 bytes a second, 64 KiB of it in 17 to 20 s: slow and
+  marks draws at about 3,900 and 3,400 bytes a second, 64 KiB of it in 17 to 19 s: slow and
   bounded. A page of 82-byte lines of English with one CJK word, one emoji and one accented name
-  each draws at 9,700 and 8,400 bytes a second, and the same page in ASCII alone at 18,500 and
-  16,000. A line's five
-  graphemes, and the two runs they split, cost 4.0 of the page's 8.5 ms a line on rv64; the rest,
-  4.4 ms where the same bytes of a long line cost 2.6, is the line's own as a piece: a call of
+  each draws at 10,500 and 8,900 bytes a second, and the same page in ASCII alone at 22,200 and
+  18,200. A line's five
+  graphemes, and the two runs they split, cost about 4 of the page's 7.8 ms a line on rv64; the
+  rest, where the same bytes of a long line cost 2.1, is the line's own as a piece: a call of
   each matcher in `Text.visible` and again in `Width.run`, the cut at its newline, and the row's
   bookkeeping. A run path for wide text would gain such a page under half, and is not built; the
   per-grapheme path stays as it is. Whether a line's runs should be carried past its newline, so
@@ -521,10 +527,22 @@ assume, because a query on a UART that never answers costs a timeout at every lo
 
 Text the session draws, from a file's contents, a file name, a program's output or a model's reply,
 reaches `/dev/cons` only as visible characters: every control character in it (the ASCII and 8-bit
-controls, DEL, and the bidirectional embedding, override and isolate controls) is drawn as text
-(`^[`, `^G`, `<U+009B>`), as `less` does. So hostile text cannot set the person's clipboard
-(OSC 52), retitle their window, forge a link (OSC 8), reorder what is shown, or make the terminal
-answer as if typed. It holds because the encoder is the one writer of what the session draws, and
+controls, DEL, the bidirectional embedding, override and isolate controls, and the invisible
+format characters: the soft hyphen, the zero-width space, non-joiner and joiner, the word joiner
+and the invisible operators, the byte order mark, the tags of plane 14, and the line and paragraph
+separators) is drawn as text (`^[`, `^G`, `<U+009B>`, `<U+200B>`), as `less` does. So hostile
+text cannot set the person's clipboard (OSC 52), retitle their window, forge a link (OSC 8),
+reorder what is shown, make the terminal answer as if typed, or hide a character in a name
+(`rm report.txt` and `rm re<U+200B>port.txt` are drawn apart; a tag sequence such as a
+subdivision flag draws as its flag followed by its tags). The one character of the set a
+grapheme may hold is the zero-width joiner inside an emoji ZWJ sequence, between an element (a
+pictograph, alone or with the presentation selector U+FE0F or a skin tone modifier) and a
+pictograph: `👩‍💻` is one symbol of two columns and draws as one; a joiner anywhere else is
+`<U+200D>`. The set and the pictographs (Extended_Pictographic, as the pinned OTP has them) are
+stated once, in
+[`userland/native/cells/forbidden.txt`](../../userland/native/cells/forbidden.txt), and the
+printer, the session's cell decoder and the `cells` crate are each held to it code point by code
+point. It holds because the encoder is the one writer of what the session draws, and
 because nothing reaches the encoder but cells, whose symbols cannot hold a control character: from
 the shell's printer, from a screen program through the buffer's natives, which refuse one, and
 from a native program only as `cells` frames. The line editor is the one path that hands the
@@ -554,17 +572,13 @@ a VM without OTP's logger in its code (the host's beamlet run with no system pat
 small stand-in, which prints to `standard_error` past the driver, though Redoubt's userland volume
 holds OTP's; and the bidirectional marks (U+200E,
 U+200F, U+061C) are drawn, since they only settle the direction of the weak and neutral characters
-next to them. The invisible format characters (U+00AD, U+200B to U+200D, U+2060 to U+2064,
-U+FEFF, the tag characters of plane 14) and the line and paragraph separators (U+2028, U+2029)
-pass the guard too, so a file name or text holding them can look like another; they neither drive
-the terminal nor reach the approval channel, which only the steward draws
-([sessions](sessions.md#approve)), and drawing them as `<U+XXXX>` is
-[a follow-up](../todo/shell-invisible-format.md). The attack case writes hostile text through
-every path above and judges the bytes the session wrote to `/dev/cons`.
+next to them. A grapheme cut by the edge of a printed piece (4 KiB) is drawn as its parts, so a
+joiner the cut separates from its pictograph is `<U+200D>`. The attack case writes hostile text
+through every path above and judges the bytes the session wrote to `/dev/cons`.
 
 ### The cell protocol
 
-Status: built · partly tested: the Elixir decoder is held to the Rust one, and the Elixir event encoder to the Rust event decoder, by the shared vectors in the shell's ExUnit suite, which no bench case runs · tested: host:cells::good_frames_decode_and_encode_back_to_their_bytes, host:cells::no_control_character_is_ever_a_symbol, host:cells::vectors_are_current, host:cells::events_are_current, host:cells::reduce_hands_over_the_header_then_each_cell_and_stops_where_asked, host:cells::a_cursor_reads_a_cell_at_a_time_and_refuses_as_decode_does
+Status: built · partly tested: the Elixir decoder is held to the Rust one, and the Elixir event encoder to the Rust event decoder, by the shared vectors in the shell's ExUnit suite, which no bench case runs · tested: host:cells::good_frames_decode_and_encode_back_to_their_bytes, host:cells::no_control_character_is_ever_a_symbol, host:cells::a_joiner_is_a_symbols_only_inside_an_emoji_zwj_sequence, host:cells::the_forbidden_characters_and_the_pictographs_are_the_shared_tables, host:cells::vectors_are_current, host:cells::events_are_current, host:cells::reduce_hands_over_the_header_then_each_cell_and_stops_where_asked, host:cells::a_cursor_reads_a_cell_at_a_time_and_refuses_as_decode_does
 
 A frame of changed cells, `cells` ([`userland/native/cells`](../../userland/native/cells/src/lib.rs))
 in Rust and `Redoubt.Term.Cells` in Elixir, is everything anything may hand the session to draw: a

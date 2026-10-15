@@ -251,11 +251,9 @@ capabilities, which the kernel contains ([trust tiers](servers/README.md#trust-t
 - The terminal guard stops hostile text, not the session's own code, which can write to its own
   console; and it draws the bidirectional marks, which only settle weak and neutral characters
   ([the shell](userland/shell.md#hostile-text-never-drives-the-terminal)).
-- The invisible format characters (soft hyphen, zero-width characters, joiners, the byte order
-  mark, the tag block) and the line and paragraph separators pass the terminal guard, so a name
-  or text holding them can look like another; they neither drive the terminal nor reach the
-  approval channel ([the shell](userland/shell.md#hostile-text-never-drives-the-terminal),
-  [todo](todo/shell-invisible-format.md)).
+- The terminal guard draws every character that is there, not its likeness: a name made of
+  look-alike letters (Cyrillic а for a) can still look like another
+  ([the shell](userland/shell.md#hostile-text-never-drives-the-terminal)).
 - Ed25519 is checked cofactored everywhere on the box, so signatures are malleable; nothing that
   holds a wall takes one as an identifier ([beamlet](userland/beamlet.md#what-runs-on-it),
   [boot](kernel/boot.md#residual-risks)).

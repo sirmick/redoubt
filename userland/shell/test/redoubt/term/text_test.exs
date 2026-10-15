@@ -28,13 +28,129 @@ defmodule Redoubt.Term.TextTest do
     assert Text.visible("\u202Aa\u202C") == "<U+202A>a<U+202C>"
   end
 
-  test "the control characters are the cells crate's, one rule for both" do
-    for c <- Enum.concat([0..0x1F, 0x7F..0x9F, 0x202A..0x202E, 0x2066..0x2069]), do: assert(Text.control?(c))
-    for c <- [0x20, ?a, 0xA0, 0x200E, 0x2029, 0x202F, 0x2065, 0x206A], do: refute(Text.control?(c))
+  test "an invisible format character is drawn, so two names cannot look the same" do
+    assert Text.visible("rm re\u200Bport.txt") == "rm re<U+200B>port.txt"
+    assert Text.visible("re\u00ADport") == "re<U+00AD>port"
+    assert Text.visible("a\u200Cb\u2060c\u2064d") == "a<U+200C>b<U+2060>c<U+2064>d"
+    assert Text.visible("\uFEFFa\u2028b\u2029") == "<U+FEFF>a<U+2028>b<U+2029>"
+    assert Text.visible("🏴\u{E0067}\u{E0062}\u{E007F}") == "🏴<U+E0067><U+E0062><U+E007F>"
+    # Nine columns for a tag, eight for the rest, as the tab stops count.
+    assert Text.visible("\u{E0067}\tx") == "<U+E0067>       x"
+    assert Text.visible("\u200B\tx") == "<U+200B>        x"
+  end
+
+  # The matcher that ends a run looks for the bytes a control may start with (`C2`, `E2 80`,
+  # `E2 81`, `EF BB`, `F3 A0`); a character that starts with them and is no control is text.
+  test "a character that shares a control's first bytes is drawn as itself, alone and in a run" do
+    for c <- [
+          "\u00A0",
+          "\u00A9",
+          "\u00AC",
+          "\u00AE",
+          "\u2013",
+          "\u2014",
+          "\u201C",
+          "\u201D",
+          "\u2026",
+          "\u2071",
+          "\uFEFC",
+          "\u{E0080}",
+          "\u{E01EF}"
+        ] do
+      assert Text.visible(c) == c, c
+      assert Text.visible("a" <> c <> "b") == "a" <> c <> "b", c
+      run = String.duplicate("x" <> c, 100)
+      assert Text.visible(run) == run, c
+      assert Text.visible(run <> "\u200B" <> run) == run <> "<U+200B>" <> run, c
+      assert Text.visible(c <> "\u2028" <> c) == c <> "<U+2028>" <> c, c
+    end
+
+    assert Text.visible("rm \u201Creport\u201D \u2013 \u00A9 Jos\u00E9\u00A0\u200Bx") ==
+             "rm \u201Creport\u201D \u2013 \u00A9 Jos\u00E9\u00A0<U+200B>x"
+  end
+
+  test "a joiner is kept inside an emoji sequence and drawn anywhere else" do
+    for kept <- ["👩\u200D💻", "👩🏽\u200D💻", "❤️\u200D🔥", "👨\u200D👩\u200D👧\u200D👦", "x👩\u200D💻y"] do
+      assert Text.visible(kept) == kept
+      refute Redoubt.Term.Cells.forbidden?(kept)
+    end
+
+    assert Text.visible("a\u200Db") == "a<U+200D>b"
+    assert Text.visible("👩\u200Da") == "👩<U+200D>a"
+    assert Text.visible("a\u200D💻") == "a<U+200D>💻"
+    assert Text.visible("👩\u200D") == "👩<U+200D>"
+    assert Text.visible("\u200D💻") == "<U+200D>💻"
+    assert Text.visible("👩\u200D\u200D💻") == "👩<U+200D><U+200D>💻"
+    assert Text.visible("👩́\u200D💻") == "👩́<U+200D>💻"
+    assert Text.visible("क्\u200Dष") == "क्<U+200D>ष"
+    # A joiner after a drawn control, a tab or a byte that is not UTF-8 is drawn too.
+    assert Text.visible("\e\u200D💻") == "^[<U+200D>💻"
+    assert Text.visible("\t\u200D💻") == "        <U+200D>💻"
+    assert Text.visible(<<0xFF, "\u200D💻">>) == "<FF><U+200D>💻"
+    # The decision counts: a joiner that is kept is a code point of the line, for the tab stops.
+    assert Text.visible("👩\u200D💻\tx") == "👩\u200D💻     x"
+  end
+
+  # The one table, userland/native/cells/forbidden.txt, which the cells crate's tests hold its
+  # decoder to as well. On beamlet ./test-shell mounts it beside the vectors (CELLS_VECTORS).
+  defp table(kind) do
+    (System.get_env("CELLS_VECTORS") || Path.expand("../../../../native/cells/vectors.json", __DIR__))
+    |> Path.dirname()
+    |> Path.join("forbidden.txt")
+    |> File.read!()
+    |> String.split("\n")
+    |> Enum.filter(&String.starts_with?(&1, kind))
+    |> Enum.map(fn line ->
+      [^kind, first, last | _what] = String.split(line)
+      String.to_integer(first, 16)..String.to_integer(last, 16)
+    end)
+  end
+
+  # The cells crate's test sweeps every code point against the file; here the ranges are compared
+  # as stated, and the functions probed at every range's edges, which a sweep on beamlet cannot
+  # afford.
+  test "the control characters and the pictographs are the shared table's, the cells crate's rule too" do
+    forbidden = table("forbidden")
+    assert Enum.sum(Enum.map(forbidden, &Range.size/1)) == 32 + 33 + 1 + 3 + 2 + 5 + 5 + 4 + 1 + 128
+    assert Enum.sort(Text.controls()) == Enum.sort(forbidden)
+    pictographic = table("pictographic")
+    assert length(pictographic) == 78
+    assert Enum.sort(Text.pictographs()) == Enum.sort(pictographic)
+    in_any = fn ranges, c -> Enum.any?(ranges, &(c in &1)) end
+
+    for first..last//1 <- forbidden ++ pictographic,
+        c <- [first - 1, first, last, last + 1],
+        c in 0..0x10FFFF do
+      assert Text.control?(c) == in_any.(forbidden, c), "U+#{Integer.to_string(c, 16)}"
+      assert Text.pictographic?(c) == in_any.(pictographic, c), "U+#{Integer.to_string(c, 16)}"
+    end
+  end
+
+  test "the pictographs are the ones OTP's grapheme walk joins across a joiner" do
+    # A code point is Extended_Pictographic exactly when OTP joins it to a pictograph and joiner
+    # before it (GB11) and does not join it to a letter (so it is no mark or joiner itself).
+    pictographic = fn c ->
+      length(:unicode_util.gc([0x1F600, 0x200D, c])) == 1 and length(:unicode_util.gc([?a, c])) == 2
+    end
+
+    edges = for first..last//1 <- table("pictographic"), c <- [first - 1, first, last, last + 1], do: c
+
+    for c <- edges ++ [?a, 0x200D, 0xFE0F, 0x1F3FD, 0x0301, 0x0915], c <= 0x10FFFF do
+      assert Text.pictographic?(c) == pictographic.(c), "U+#{Integer.to_string(c, 16)}"
+    end
   end
 
   test "a code point passes as itself exactly when it is not a control character, alone or in a run" do
-    points = Enum.concat([0..0x3000, 0xD7F0..0xD7FF, 0xE000..0xE010, 0xFFF0..0x10010, 0x10FFF0..0x10FFFF])
+    points =
+      Enum.concat([
+        0..0x3000,
+        0xD7F0..0xD7FF,
+        0xE000..0xE010,
+        0xFEF0..0xFF00,
+        0xFFF0..0x10010,
+        0xDFFF0..0xE0090,
+        0x10FFF0..0x10FFFF
+      ])
 
     for c <- points do
       {text, hex} = {<<c::utf8>>, Integer.to_string(c, 16)}
@@ -53,10 +169,11 @@ defmodule Redoubt.Term.TextTest do
   end
 
   # The VM's matchers take a printable run in windows of 128 bytes and then 512. At every window's
-  # edge, whatever falls there (a control of one byte, of two as C2 8x, or of three as E2 80 AA; a
-  # character of two, three or four bytes cut by the edge; a byte that is not UTF-8, or a sequence
-  # cut short; a combining mark; a tab), the text is drawn as the matchers draw it a unit at a
-  # time: a unit alone fills no window, so that path is the reference.
+  # edge, whatever falls there (a control of one byte, of two as C2 8x or C2 AD, of three as
+  # E2 80 AA or EF BB BF, or of four as a tag; a character of two, three or four bytes cut by the
+  # edge; a byte that is not UTF-8, or a sequence cut short; a combining mark; a tab; an emoji
+  # sequence, whose joiner is kept), the text is drawn as the matchers draw it a unit at a time: a
+  # unit alone fills no window, so that path is the reference.
   test "the matchers draw a run as they draw its units one at a time, at every window's edge" do
     specials = [
       "\e",
@@ -64,14 +181,30 @@ defmodule Redoubt.Term.TextTest do
       "\u007F",
       "\u0085",
       "\u009B",
+      "\u00AD",
+      "\u200B",
+      "\u2028",
       "\u202A",
+      "\u2060",
       "\u2069",
+      "\uFEFF",
+      "\u{E0001}",
+      "\u{E007F}",
+      "\u00A0",
+      "\u00A9",
+      "\u2013",
+      "\u201C",
+      "\u2071",
+      "\uFEFC",
+      "\u{E0080}",
       "\t",
       "é",
       "€",
       "🙂",
       "\u0301",
-      "‍",
+      "\u200D",
+      "👩\u200D💻",
+      "👩🏽\u200D💻",
       <<0xFF>>,
       <<0xE2, 0x82>>,
       <<0xF0, 0x9F, 0x99>>,
@@ -103,8 +236,9 @@ defmodule Redoubt.Term.TextTest do
     String.duplicate(filler, div(at, byte_size(filler))) <> String.duplicate("x", rem(at, byte_size(filler)))
   end
 
-  # `visible/2` a unit at a time (a code point, or a byte that is not one), the column carried:
-  # the Erlang path's own answer.
+  # `visible/2` a unit at a time (a code point, or a byte that is not one; an emoji sequence whole,
+  # since a joiner is judged by what stands beside it), the column carried: the Erlang path's own
+  # answer.
   defp by_units(text, col) do
     {out, col} =
       text
@@ -118,6 +252,8 @@ defmodule Redoubt.Term.TextTest do
   end
 
   defp units(<<>>), do: []
+  defp units(<<"👩\u200D💻", rest::binary>>), do: ["👩\u200D💻" | units(rest)]
+  defp units(<<"👩🏽\u200D💻", rest::binary>>), do: ["👩🏽\u200D💻" | units(rest)]
   defp units(<<c::utf8, rest::binary>>), do: [<<c::utf8>> | units(rest)]
   defp units(<<b, rest::binary>>), do: [<<b>> | units(rest)]
 
@@ -147,10 +283,12 @@ defmodule Redoubt.Term.TextTest do
     every_byte = for b <- 0..255, into: <<>>, do: <<b>>
     every_c1 = for c <- 0x80..0x9F, into: <<>>, do: <<c::utf8>>
 
-    for input <- [every_byte, every_c1, every_byte <> every_c1] do
+    every_control = for c <- Enum.concat(Text.controls()), into: <<>>, do: <<c::utf8>>
+
+    for input <- [every_byte, every_c1, every_byte <> every_c1, every_control, "👩" <> every_control <> "💻"] do
       out = Text.visible(input)
       assert String.valid?(out)
-      assert out |> String.to_charlist() |> Enum.all?(&(&1 >= 0x20 and &1 != 0x7F and &1 not in 0x80..0x9F))
+      refute out |> String.to_charlist() |> Enum.any?(&Text.control?/1)
     end
   end
 end

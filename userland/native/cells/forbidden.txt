@@ -1,0 +1,107 @@
+# The characters no cell's symbol may hold, and the one exception: the table both decoders keep.
+#
+# `forbidden FIRST LAST  what`: a range of code points, in hex, that is never drawn as itself and
+# never a symbol's, wherever it stands: the printer (Redoubt.Term.Text, control?/1) draws it as
+# text (`^[`, `^?`, `<U+200B>`), and a symbol holding it is refused by the cells crate
+# (src/lib.rs, forbidden), by Redoubt.Term.Cells and by the screen buffer's natives. The one
+# exception is the zero-width joiner, U+200D, inside an emoji ZWJ sequence: between an element
+# (a pictograph, alone or followed by U+FE0F or a skin tone modifier, U+1F3FB to U+1F3FF) and a
+# pictograph, the grapheme is one symbol and draws as one.
+#
+# `pictographic FIRST LAST`: Extended_Pictographic, the 78 ranges of Unicode 16.0, as the pinned
+# OTP's (28.5) unicode_util has them (gc_1's gc_ext_pict clauses; it also decides the shell's
+# graphemes).
+#
+# Each decoder states both in its own code; its tests hold every code point to this file:
+# cells::the_forbidden_characters_and_the_pictographs_are_the_shared_tables, and the shell's
+# text_test.exs. The file changes only with both.
+
+forbidden 0000 001F  the C0 controls, ESC among them
+forbidden 007F 009F  DEL and the C1 controls, which some terminals obey as ESC and a byte
+forbidden 00AD 00AD  the soft hyphen
+forbidden 200B 200D  the zero-width space, non-joiner and joiner
+forbidden 2028 2029  the line and paragraph separators
+forbidden 202A 202E  the bidirectional embedding and override controls
+forbidden 2060 2064  the word joiner and the invisible operators
+forbidden 2066 2069  the bidirectional isolate controls
+forbidden FEFF FEFF  the byte order mark, the zero-width no-break space
+forbidden E0000 E007F  the tags of plane 14
+
+pictographic 00A9 00A9
+pictographic 00AE 00AE
+pictographic 203C 203C
+pictographic 2049 2049
+pictographic 2122 2122
+pictographic 2139 2139
+pictographic 2194 2199
+pictographic 21A9 21AA
+pictographic 231A 231B
+pictographic 2328 2328
+pictographic 2388 2388
+pictographic 23CF 23CF
+pictographic 23E9 23F3
+pictographic 23F8 23FA
+pictographic 24C2 24C2
+pictographic 25AA 25AB
+pictographic 25B6 25B6
+pictographic 25C0 25C0
+pictographic 25FB 25FE
+pictographic 2600 2605
+pictographic 2607 2612
+pictographic 2614 2685
+pictographic 2690 2705
+pictographic 2708 2712
+pictographic 2714 2714
+pictographic 2716 2716
+pictographic 271D 271D
+pictographic 2721 2721
+pictographic 2728 2728
+pictographic 2733 2734
+pictographic 2744 2744
+pictographic 2747 2747
+pictographic 274C 274C
+pictographic 274E 274E
+pictographic 2753 2755
+pictographic 2757 2757
+pictographic 2763 2767
+pictographic 2795 2797
+pictographic 27A1 27A1
+pictographic 27B0 27B0
+pictographic 27BF 27BF
+pictographic 2934 2935
+pictographic 2B05 2B07
+pictographic 2B1B 2B1C
+pictographic 2B50 2B50
+pictographic 2B55 2B55
+pictographic 3030 3030
+pictographic 303D 303D
+pictographic 3297 3297
+pictographic 3299 3299
+pictographic 1F000 1F0FF
+pictographic 1F10D 1F10F
+pictographic 1F12F 1F12F
+pictographic 1F16C 1F171
+pictographic 1F17E 1F17F
+pictographic 1F18E 1F18E
+pictographic 1F191 1F19A
+pictographic 1F1AD 1F1E5
+pictographic 1F201 1F20F
+pictographic 1F21A 1F21A
+pictographic 1F22F 1F22F
+pictographic 1F232 1F23A
+pictographic 1F23C 1F23F
+pictographic 1F249 1F3FA
+pictographic 1F400 1F53D
+pictographic 1F546 1F64F
+pictographic 1F680 1F6FF
+pictographic 1F774 1F77F
+pictographic 1F7D5 1F7FF
+pictographic 1F80C 1F80F
+pictographic 1F848 1F84F
+pictographic 1F85A 1F85F
+pictographic 1F888 1F88F
+pictographic 1F8AE 1F8FF
+pictographic 1F90C 1F93A
+pictographic 1F93C 1F945
+pictographic 1F947 1FAFF
+pictographic 1FC00 1FFFD

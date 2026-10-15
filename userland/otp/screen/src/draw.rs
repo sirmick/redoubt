@@ -79,12 +79,13 @@ fn color(out: &mut Vec<u8>, color: Color, base: u8, bright: u8, ext: u8) {
 }
 
 /// `symbol` as `Redoubt.Term.Text.visible/1` draws text from column 0: a tab as spaces to the
-/// next stop of eight code points, a C0 control in caret notation (`^[`), DEL as `^?`, a C1
-/// control as `<U+009B>`, a bidirectional embedding, override or isolate control as `<U+202E>`,
-/// and every other character as itself.
+/// next stop of eight code points, a C0 control in caret notation (`^[`), DEL as `^?`, any other
+/// character a symbol may not hold where it stands (`cells::allowed`: a C1 control, a bidirectional
+/// control, an invisible format character, a joiner outside an emoji sequence) as `<U+009B>`, and
+/// every other character as itself.
 fn visible(out: &mut Vec<u8>, symbol: &str) {
     let mut col = 0;
-    for c in symbol.chars() {
+    for (c, allowed) in cells::allowed(symbol) {
         let n = c as u32;
         col += match c {
             '\t' => {
@@ -100,9 +101,11 @@ fn visible(out: &mut Vec<u8>, symbol: &str) {
                 out.extend_from_slice(b"^?");
                 2
             }
-            '\u{80}'..='\u{9f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' => {
+            _ if !allowed => {
+                // `<U+XXXX>`: eight columns, nine for a tag.
+                let before = out.len();
                 let _ = write!(Text(out), "<U+{n:04X}>");
-                8
+                out.len() - before
             }
             _ => {
                 let mut utf8 = [0; 4];

@@ -14,7 +14,7 @@ defmodule Redoubt.Screen.DrawTest do
     @moduletag skip: "the screen buffer is beamlet's natives, which the BEAM does not have"
   end
 
-  @controls Enum.concat([0..0x1F, 0x7F..0x9F, 0x202A..0x202E, 0x2066..0x2069])
+  @controls Enum.concat(Redoubt.Term.Text.controls())
   @edges [0xFFFC, 0xFFFD, 0xFFFE, 0xFFFF, 0x10000, 0x1FFFD, 0x1FFFF, 0x20000, 0x2FFFF, 0x30000] ++
            [0x3FFFF, 0xE0000, 0xE0001, 0xE007F, 0xEFFFF, 0xF0000, 0xFFFFD, 0x100000, 0x10FFFF]
   @colors [
@@ -47,7 +47,7 @@ defmodule Redoubt.Screen.DrawTest do
     do: {Enum.at(@colors, rem(i, 9)), Enum.at(@colors, rem(div(i, 9), 9)), rem(i * 37, 512)}
 
   test "every code point below U+3000 a symbol may be, and the planes' edges, are drawn alike" do
-    points = Enum.reject(0..0x2FFF, &(&1 in @controls or &1 in 0xD800..0xDFFF)) ++ @edges
+    points = Enum.reject(Enum.to_list(0..0x2FFF) ++ @edges, &(&1 in @controls or &1 in 0xD800..0xDFFF))
 
     # A screen of 80 by 24 at a time; each code point a symbol of its own, side by side where it
     # lands, in a style that changes every few cells, with gaps that move the cursor.

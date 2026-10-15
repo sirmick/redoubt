@@ -70,10 +70,14 @@ const MIN_CELL: usize = 2 + 2 + 1 + 4 + 4 + 2;
 
 /// What a cell shows: a non-empty UTF-8 string of at most [`MAX_SYMBOL`] bytes that holds no
 /// control character. That rules out the ASCII controls (U+0000 to U+001F, ESC among them), DEL,
-/// the 8-bit controls (U+0080 to U+009F, which some terminals obey as ESC and a byte), and the
+/// the 8-bit controls (U+0080 to U+009F, which some terminals obey as ESC and a byte), the
 /// bidirectional embedding, override and isolate controls (U+202A to U+202E, U+2066 to U+2069),
-/// which reorder what is shown around them. Everything else is left to the session's width tables
-/// to lay out.
+/// which reorder what is shown around them, and the invisible format characters (the soft hyphen,
+/// the zero-width characters and joiners, the byte order mark, the tags of plane 14) and the line
+/// and paragraph separators, with which two symbols can look the same ([`forbidden`]; the table is
+/// stated once in `forbidden.txt`). The one exception is the zero-width joiner inside an emoji ZWJ
+/// sequence (`👩‍💻`), which is one grapheme and draws as one ([`joined`]). Everything else is left
+/// to the session's width tables to lay out.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Symbol(String);
 
@@ -86,16 +90,147 @@ impl Symbol {
 
 /// `text`, if it may be a [`Symbol`].
 fn symbol(text: &str) -> Result<&str, Error> {
-    if text.is_empty() || text.len() > MAX_SYMBOL || text.chars().any(forbidden) {
+    if text.is_empty() || text.len() > MAX_SYMBOL || holds_forbidden(text) {
         return Err(Error::Symbol);
     }
     Ok(text)
 }
 
-/// Whether a character may never be in a symbol.
+/// Whether a character is never drawn as itself: a control, or an invisible format character
+/// (`forbidden.txt`). A symbol may hold one only as [`joined`] allows.
 pub fn forbidden(c: char) -> bool {
-    matches!(c, '\u{0}'..='\u{1f}' | '\u{7f}'..='\u{9f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+    matches!(
+        c,
+        '\u{0}'..='\u{1f}'
+            | '\u{7f}'..='\u{9f}'
+            | '\u{ad}'
+            | '\u{200b}'..='\u{200d}'
+            | '\u{2028}'..='\u{202e}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{2069}'
+            | '\u{feff}'
+            | '\u{e0000}'..='\u{e007f}'
+    )
 }
+
+/// The zero-width joiner, kept in a symbol only inside an emoji ZWJ sequence.
+pub const JOINER: char = '\u{200d}';
+
+/// Whether a joiner stands inside an emoji ZWJ sequence, given the two characters before it
+/// (`before`, the nearer last) and the one after: between an element, a pictograph alone or
+/// followed by the emoji presentation selector or a skin tone modifier, and a pictograph.
+pub fn joined(before: [Option<char>; 2], after: Option<char>) -> bool {
+    let element = match before {
+        [_, Some(c)] if pictographic(c) => true,
+        [Some(p), Some('\u{fe0f}' | '\u{1f3fb}'..='\u{1f3ff}')] => pictographic(p),
+        _ => false,
+    };
+    element && after.is_some_and(pictographic)
+}
+
+/// Each character of `text` in turn, with whether a symbol may hold it where it stands: every
+/// character that is not [`forbidden`], and a [`JOINER`] that is [`joined`].
+pub fn allowed(text: &str) -> impl Iterator<Item = (char, bool)> + '_ {
+    let mut before = [None, None];
+    let mut chars = text.chars().peekable();
+    core::iter::from_fn(move || {
+        let c = chars.next()?;
+        let ok = !forbidden(c) || (c == JOINER && joined(before, chars.peek().copied()));
+        before = [before[1], Some(c)];
+        Some((c, ok))
+    })
+}
+
+/// Whether `text` holds a character no symbol may, where it stands ([`allowed`]).
+pub fn holds_forbidden(text: &str) -> bool { allowed(text).any(|(_, ok)| !ok) }
+
+/// Whether a character is Extended_Pictographic: Unicode 16.0's ranges, as the pinned OTP has
+/// them (`forbidden.txt`).
+pub fn pictographic(c: char) -> bool {
+    let c = c as u32;
+    PICTOGRAPHIC.iter().any(|&(first, last)| first <= c && c <= last)
+}
+
+const PICTOGRAPHIC: [(u32, u32); 78] = [
+    (0xa9, 0xa9),
+    (0xae, 0xae),
+    (0x203c, 0x203c),
+    (0x2049, 0x2049),
+    (0x2122, 0x2122),
+    (0x2139, 0x2139),
+    (0x2194, 0x2199),
+    (0x21a9, 0x21aa),
+    (0x231a, 0x231b),
+    (0x2328, 0x2328),
+    (0x2388, 0x2388),
+    (0x23cf, 0x23cf),
+    (0x23e9, 0x23f3),
+    (0x23f8, 0x23fa),
+    (0x24c2, 0x24c2),
+    (0x25aa, 0x25ab),
+    (0x25b6, 0x25b6),
+    (0x25c0, 0x25c0),
+    (0x25fb, 0x25fe),
+    (0x2600, 0x2605),
+    (0x2607, 0x2612),
+    (0x2614, 0x2685),
+    (0x2690, 0x2705),
+    (0x2708, 0x2712),
+    (0x2714, 0x2714),
+    (0x2716, 0x2716),
+    (0x271d, 0x271d),
+    (0x2721, 0x2721),
+    (0x2728, 0x2728),
+    (0x2733, 0x2734),
+    (0x2744, 0x2744),
+    (0x2747, 0x2747),
+    (0x274c, 0x274c),
+    (0x274e, 0x274e),
+    (0x2753, 0x2755),
+    (0x2757, 0x2757),
+    (0x2763, 0x2767),
+    (0x2795, 0x2797),
+    (0x27a1, 0x27a1),
+    (0x27b0, 0x27b0),
+    (0x27bf, 0x27bf),
+    (0x2934, 0x2935),
+    (0x2b05, 0x2b07),
+    (0x2b1b, 0x2b1c),
+    (0x2b50, 0x2b50),
+    (0x2b55, 0x2b55),
+    (0x3030, 0x3030),
+    (0x303d, 0x303d),
+    (0x3297, 0x3297),
+    (0x3299, 0x3299),
+    (0x1f000, 0x1f0ff),
+    (0x1f10d, 0x1f10f),
+    (0x1f12f, 0x1f12f),
+    (0x1f16c, 0x1f171),
+    (0x1f17e, 0x1f17f),
+    (0x1f18e, 0x1f18e),
+    (0x1f191, 0x1f19a),
+    (0x1f1ad, 0x1f1e5),
+    (0x1f201, 0x1f20f),
+    (0x1f21a, 0x1f21a),
+    (0x1f22f, 0x1f22f),
+    (0x1f232, 0x1f23a),
+    (0x1f23c, 0x1f23f),
+    (0x1f249, 0x1f3fa),
+    (0x1f400, 0x1f53d),
+    (0x1f546, 0x1f64f),
+    (0x1f680, 0x1f6ff),
+    (0x1f774, 0x1f77f),
+    (0x1f7d5, 0x1f7ff),
+    (0x1f80c, 0x1f80f),
+    (0x1f848, 0x1f84f),
+    (0x1f85a, 0x1f85f),
+    (0x1f888, 0x1f88f),
+    (0x1f8ae, 0x1f8ff),
+    (0x1f90c, 0x1f93a),
+    (0x1f93c, 0x1f945),
+    (0x1f947, 0x1faff),
+    (0x1fc00, 0x1fffd),
+];
 
 /// A cell's colour: the terminal's own, one of its 256 indexed colours (the first sixteen are the
 /// named ones), or a 24-bit colour. On the wire, a kind byte and three more, unused ones zero:

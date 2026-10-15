@@ -32,7 +32,7 @@ defmodule Redoubt.Term.CellsTest do
 
   test "every case of the cells crate is answered as it answers it" do
     cases = vectors()
-    assert length(cases) == 34
+    assert length(cases) == 51
 
     for %{"name" => name, "hex" => hex} = vector <- cases do
       bytes = Base.decode16!(hex, case: :lower)
@@ -65,12 +65,29 @@ defmodule Redoubt.Term.CellsTest do
     end
   end
 
-  test "the forbidden characters are C0, DEL, C1 and the direction controls" do
-    for c <- Enum.concat([0..0x1F, 0x7F..0x9F, 0x202A..0x202E, 0x2066..0x2069]) do
+  test "the forbidden characters are the control characters, a joiner inside an emoji sequence apart" do
+    for c <- Enum.concat(Redoubt.Term.Text.controls()) do
       assert Cells.forbidden?(<<c::utf8>>), "U+#{Integer.to_string(c, 16)}"
+      assert Cells.forbidden?(<<"a", c::utf8, "b">>), "U+#{Integer.to_string(c, 16)} inside"
+
+      if c != 0x200D,
+        do: assert(Cells.forbidden?(<<"👩", c::utf8, "💻">>), "U+#{Integer.to_string(c, 16)} joining")
     end
 
-    for ok <- ["a", " ", "é", "界", "🙂", "👩\u200D💻", "\u00A0", "\u2028"], do: refute(Cells.forbidden?(ok))
+    for ok <- ["a", " ", "é", "界", "🙂", "👩\u200D💻", "👩🏽\u200D💻", "❤\uFE0F\u200D🔥", "\u00A0", "\u200E"],
+        do: refute(Cells.forbidden?(ok), ok)
+
+    for bad <- [
+          "a\u200Db",
+          "👩\u200Da",
+          "a\u200D💻",
+          "👩\u200D",
+          "\u200D💻",
+          "👩\u200D\u200D💻",
+          "re\u200Bport",
+          "\u2028"
+        ],
+        do: assert(Cells.forbidden?(bad), bad)
   end
 
   # The events the cells crate's decoder reads, beside its frames' vectors.

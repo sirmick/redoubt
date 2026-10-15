@@ -143,11 +143,22 @@ defmodule Redoubt.Term.Cells do
   end
 
   @doc """
-  Whether `text` holds a character no symbol may: C0, DEL, C1, or a bidirectional embedding,
-  override or isolate control.
+  Whether `text` holds a character no symbol may: a control character (`Redoubt.Term.Text.control?/1`:
+  C0, DEL, C1, the bidirectional controls, the invisible format characters), but for a zero-width
+  joiner inside an emoji ZWJ sequence (`Redoubt.Term.Text.joined?/2`).
   """
   @spec forbidden?(String.t()) :: boolean()
-  def forbidden?(text), do: text |> String.to_charlist() |> Enum.any?(&Redoubt.Term.Text.control?/1)
+  def forbidden?(text), do: forbidden?(text, <<>>)
+
+  defp forbidden?(<<>>, _before), do: false
+
+  defp forbidden?(<<0x200D::utf8, rest::binary>> = text, before),
+    do: not Redoubt.Term.Text.joined?(before, rest) or forbidden?(rest, before <> binary_part(text, 0, 3))
+
+  defp forbidden?(<<c::utf8, rest::binary>> = text, before) do
+    Redoubt.Term.Text.control?(c) or
+      forbidden?(rest, before <> binary_part(text, 0, byte_size(text) - byte_size(rest)))
+  end
 
   defp color(<<0, 0, 0, 0, rest::binary>>), do: {:ok, :reset, rest}
   defp color(<<1, i, 0, 0, rest::binary>>), do: {:ok, {:indexed, i}, rest}
