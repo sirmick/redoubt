@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 202
+revision = 226
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -55,9 +55,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   title = "M2 (usable shell)"
   template = "milestone"
   needs = ["M1"]
-  body = "docs/plan/m2-usable-shell.md. The near-term goal (owner, 2026-10-07). Two tracks: the shell (built on the host first, then on Redoubt) and several harts (SMP3, then SMP2). The host shell track (shell-host) starts now, ahead of M1, on the owner's word; the on-Redoubt shell steps follow M1."
-  state = "todo"
-  revision = 2
+  body = "docs/plan/m2-usable-shell.md. The near-term goal (owner, 2026-10-07). Two tracks: the shell (built on the host first, then on Redoubt) and several harts (SMP3, then SMP2). The host shell track (shell-host) starts now, ahead of M1, on the owner's word; the on-Redoubt shell steps follow M1. Closed by the owner 2026-10-15: both tracks are built (shell host steps 1-6 and Redoubt steps 1-5; several harts steps 1-5); SMP5 (magazines) stays parked and step 7 gated on measurement; ATK2, ATK3, ATK4 and B72 finish as they are, and no further kernel-attack-gaps package is admitted ahead of AGENT0 and STEWARD3."
+  state = "done"
+  revision = 213
 
 [[node]]
   id = "M3"
@@ -1301,9 +1301,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   title = "M3 (agents, approvals and the attack suite)"
   template = "milestone"
   needs = ["M2"]
-  body = "docs/plan/m3-agents.md. Moved out of M1 on the owner's word (2026-10-07), to run after M2: the steward's second half (leases and agents, the powerbox at approve@box, crash blame: STEWARD3; declassification and push, the responsiveness targets with the real steward: STEWARD4), sshd's vault sessions and approve@box, gen_tcp (BEAM5), Alice's agent under a lease and the scripted hostile agent and user (the attack suite), and the model's traces replayed on the real kernel. Node ids M3, M4, M5 keep their ids; their titles are M4, M5, M6."
+  body = "docs/plan/m3-agents.md. Moved out of M1 on the owner's word (2026-10-07), to run after M2. First, on the owner's word (2026-10-15), AGENT0: agentic control over SSH, a sponsor-run agent whose loop is on the host and whose body is a principal's session in the box; then the steward's second half (leases and agents, the powerbox at approve@box, crash blame: STEWARD3; declassification and push, the responsiveness targets with the real steward: STEWARD4), sshd's vault sessions and approve@box, gen_tcp (BEAM5), Alice's agent under a lease and the scripted hostile agent and user (the attack suite), and the model's traces replayed on the real kernel. Node ids M3, M4, M5 keep their ids; their titles are M4, M5, M6."
   state = "todo"
-  revision = 2
+  revision = 213
 
 [[node]]
   id = "PLAN2"
@@ -2232,8 +2232,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M2"
   body = "docs/todo/kernel-attack-gaps.md 'scheduling.md', eight lines, the most of any page: round-robin among one budget's threads; an interrupt's wake not preempting and another budget's deadline preempting; tie clauses 1 and 4 checked on the target only when a run happens to tie; interrupt handling billed to the device object's owner; budget_destroy call-to-return recorded, not asserted; R12's kernel-time bound attacked only for map_anon's search and map_fixed's range; R23 (no test channels) with no case building the production kernel and scanning it for the trace; a picked thread dying before the switch and a full queue. Lever: one case per line where a case can see the claim (the sched-* pattern: a tester under init, icount, the scheduler oracle over the trace, judged net of audits per B5/B15), a host test or model mutation where only those can (the tie clauses), and R23 as a bench self-check: build the production kernel once per bench and grep its binary for the trace's strings and symbols (a planted one must fail it: the negative). Each case's clause states what it proves and quotes its first measurement both widths; a line that cannot be attacked on QEMU (the shared-host and icount rules) is restated on the page as what it is and stays on the todo page with the reason. Gates: every new case passes 5 runs in its class both widths; no bound widened; the page's status lines drop 'partly tested' where a case now holds the claim; the scheduling.md section of the todo page is emptied, each line's fate stated. Files: tests/*.toml, the tester programs under tests/, model/src/mutation.rs where a mutation is added (no extra RNG draws), docs/kernel/scheduling.md, docs/SECURITY.md rows. Tier A (kernel cases): kernel-red-2. Size M. Launchable while smp is quiet; SMP5 stays parked."
-  state = "done"
-  revision = 199
+  state = "reported"
+  revision = 217
 
 [[node]]
   id = "ATK3"
@@ -2250,8 +2250,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M2"
   body = "docs/todo/kernel-attack-gaps.md 'boot.md', seven lines: the bench never falling back to QEMU's own firmware is not attacked; the kernel's refusals of a malformed block (a tag past the end, a second MREx, a bad Devs entry, a Grnt tag) are not attacked; R16 (image confinement): an image cut short inside its segment data and a writable-and-executable segment are not attacked, and the truncated-image case runs on rv64 only; R17 (fail closed): a short or missing seed, a missing timebase, an initrd under 64 bytes are not attacked (every QEMU boot supplies them); R15/R17's two signature cases run on rv64 only; a 17th DMA device (devices.md's line, taken there); a reboot through system_reset (the chain rerun, the bundle verified again) is not attacked. Lever: the bench's boot cases already pass crafted images and blocks (the truncated-image and signature cases): widen each to both widths and add one crafted input per refusal, each an expected kernel failure with the kernel's named reason as the verdict (rule F), the firmware fallback as a bench host test on the QEMU line (no -bios default), and system_reset as a case that reboots once through the tester and expects the chain's lines twice with the bundle's verification line both times. Gates: each case 5 runs both widths; the rv64-only cases run on rv32 and their toml comments say why they did not before; boot.md status lines updated; the section emptied with each line's fate (the DMA line to ATK3). Files: tests/*.toml, the image-crafting helpers in tools/testbench, docs/kernel/boot.md, SECURITY.md; kernel/ only if a refusal is found missing. Tier A (kernel and verified-boot cases): kernel-red-2. Size M."
-  state = "active"
-  revision = 184
+  state = "done"
+  revision = 211
 
 [[node]]
   id = "B72"
@@ -2270,3 +2270,58 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "docs/todo/qmp-socket-private-dir.md (testbench.md:1589-1590 carries the note): a boot case with memory = true starts QEMU with -qmp at <tmp>/redoubt-qmp-<pid>-<n>.sock (tools/testbench/src/qemu.rs:862-865: the bench's pid and its boot count), created under the bench's umask; with umask 002 any member of the bench user's group can connect while the case runs, and whoever holds QMP stops the guest, writes its memory and saves its RAM to any file the bench's user can write; a file left at the predicted name makes QEMU fail to start, a failure with no verdict. Lever: each run makes a private directory with mkdtemp (mode 0700) under $REDOUBT_TMP (the no-/tmp rule) and creates the socket inside it, so only the bench's user reaches it whatever the umask; the directory and socket go when the run ends however it ends (the same removal path that drops the socket today). Gates: a host test checks the directory's mode is 0700 and the socket path fits a Unix socket's 108 bytes under the longest REDOUBT_TMP the tree uses; the memory-budget cases (launch-idle, beamlet-footprint) run once both widths; the umask note leaves testbench.md and the todo page is deleted in the same commit. Files: tools/testbench/src/qemu.rs and its tests, docs/testbench.md. Tier B (bench tooling, no guest code): kernel-red-2. Size XS."
   state = "done"
   revision = 186
+
+[[node]]
+  id = "AGENT0"
+  title = "Agentic control over SSH: a sponsor-run agent, its loop on the host, its body a principal's session in the box"
+  template = "step"
+  parent = "AGENTS"
+  body = "Owner, 2026-10-15: the fastest talking agent runs its model loop on the sponsor's host and its body in the box as an ordinary M1 principal over SSH, confined by M1's walls (own sub-budget, own home, labels, no /net); STEWARD3 later turns the same agent into a leased one with narrowed grants without changing the harness. Three packages: AGT1 (the agent principal in the image), AGT2 (the shell's non-interactive mode, the harness's eval channel), AGT3 (compile and load on the box). The host-side loop is outside the box (tools/, a build-host script under tenet 3) and is the owner's; docs/userland/agents.md#the-agent-harness and #the-agent-loop stay planned for M5 and are not amended by this step. Briefs: .wash/local/AGT1-implementer.md, AGT2-implementer.md, AGT3-implementer.md."
+  state = "todo"
+  revision = 213
+
+[[node]]
+  id = "AGT1"
+  title = "The agent principal: `agent` in the image's manifest, its own key, home and sub-budget, sponsored by alice in name"
+  template = "package"
+  parent = "AGENT0"
+  body = "Brief: .wash/local/AGT1-implementer.md. Tier A (the manifest and the steward's principals; docs/servers/init.md#the-manifest, docs/servers/steward.md#principals), size S. Pages: docs/userland/sessions.md (the principals of the image), image/README.md, GETTING-STARTED.md (launch --system's ssh line for agent@). Case: a login as agent over SSH reaches its prompt in /home/agent, finds /home/alice enoent, and has no /net; launch-system's expectations extended."
+  state = "active"
+  revision = 214
+
+[[node]]
+  id = "AGT2"
+  title = "The shell's non-interactive mode: no line editing, each evaluation's end marked, so a program driving the pty knows where a result ends"
+  template = "package"
+  parent = "AGENT0"
+  body = "Brief: .wash/local/AGT2-implementer.md. Tier B (the shell, inside one session's budget), size S-M, shell track. Page: docs/userland/shell.md (a new section under The loop or The shell in a session). Host tests under ./test-shell, one bench case driving a session over SSH through the mode with a multi-line result and a crashing line, verdicts from the shell's printed values (rule F)."
+  state = "reported"
+  revision = 226
+
+[[node]]
+  id = "AGT3"
+  title = "Compiling on the box: Code.compile_string in a session, the .beam written to home, loaded and called; the compiler's status line moves from host-only"
+  template = "package"
+  parent = "AGENT0"
+  needs = ["AGT1", "AGT4"]
+  body = "Brief: .wash/local/AGT3-implementer.md. Tier B (the session's own VM and files), size S. Page: docs/userland/development.md#the-compilers-on-beamlet (status line: built, partly tested: host only -> tested in a boot), docs/plan/m5-self-hosted.md if it names the gap. Case: a session over SSH as agent compiles a module from a string, writes its .beam to /home/agent, purges and reloads it from the file, calls it; and the same on rv32. Verdicts from the shell's printed values and the file server's answers."
+  state = "todo"
+  revision = 220
+
+[[node]]
+  id = "AGT4"
+  title = "A `defmodule` typed at the prompt on the machine ends the session's VM: store page fault at 0x7ffecae8, 19.4 pages below the first thread's stack top, whose declared stack is 18 pages"
+  template = "package"
+  parent = "AGENT0"
+  body = "Brief: .wash/local/AGT4-brief.md. AGT2's finding (.wash/local/AGT2-report.md 'Finding'): a three-line `defmodule` at the shell prompt over SSH, in or out of the machine mode, ends the session's VM: `PROGRAM HALT: CPU Exception on PID 420: Store page fault of 0x7ffecae8 at 0x002e2b70`; a probe at the plain prompt faults identically (deterministic); host beamlet compiles the block; no machine case compiles a module. The address: the first thread's stack sits under 0x8000_0000 (memory-layout.md:224-226); 0x7ffecae8 is 79,127 bytes, 19.4 pages, below the top, and the steward launches a session VM's first thread with SESSION_STACK_PAGES = 18 (steward.rs:105-107: twice the 36,136-byte peak beamlet-footprint measured, which compiles nothing; helper schedulers get SCHEDULER_STACK_PAGES = 18, lib.rs:648-650). So the first scheduler's native stack overflowed: the compile needs over 72 KiB where the term walks are iterative and something on the compile path is not. Step 1: addr2line 0x002e2b70 on the packed ELF both widths; on the host, the same block under a stack-peak probe names the recursion and its depth. Step 2: (a) make that path iterative if it is one path; else (b) the stack declared from a new peak by the page's rule (twice the largest peak): beamlet-footprint gains a compile, both constants follow, the steward's heap-cap arithmetic (11,092 of 11,136 pages) recomputed on the page and in the code. No separate compile thread: the compiler is Erlang code on a scheduler. Gates: a machine case shell-compile-module (the defmodule typed over SSH and called, both widths, 5 runs); beamlet-footprint with the new peak quoted; the shell set; size-budget; steward-ssh-two-principals once; init.md 'Stacks', testbench.md's memory-budget paragraph and beamlet.md updated. Files: userland/otp (vm, redoubt lib.rs), servers/steward/src/bin/steward.rs, tests/, the three pages. Tier A (a session limit moves, or the interpreter): steward-red-2. Size S-M. Blocks AGT3 and AGENT0."
+  state = "active"
+  revision = 222
+
+[[node]]
+  id = "B74"
+  title = "rt-miri hits B70's own STUCK guard in parked_write: a held-clock tick can be taken before the server has entered the receive whose deadline it was meant to end, so the second write waits for ever"
+  template = "package"
+  parent = "M2"
+  body = "Train 34's bench (a43b72b13; .tmp/train-34b/fail-rv64-rt-miri.log): libs/rt/tests/parked_write.rs `a_waiting_write_is_parked_abandoned_and_expired` under Miri panics at :159 (`late.join().unwrap()`), the `late` client having died of the fake's guard 'a wait only a change can end saw none in the fake kernel for 60s' (libs/rt/fake/src/lib.rs:619-646) after 60.96 s; trains 32 and 33 passed; B70 put the test on a held clock the test ticks. By reading, the ordering has a hole and Miri's scheduler finds it: `until(parks == 2)` (:157) observes the park, not the server's next `receive`; a receive's deadline is `now + timeout` at the call (lib.rs:615-617) and `tick` only adds to the clock (:607-612), so a tick taken between the park and the receive leaves the server a deadline one LONGEST past the tick that nothing reaches, and the client (FOREVER) waits until the guard fires. Miri load reaching 60 host seconds is the other reading; the first makes it moot. Step 1: reproduce under Miri alone and loaded (20 runs each, through q), and show the hole natively by a forced yield between the park and the receive, naming the reading. Step 2, the fix in the fake, never a longer timeout: a tick on a held clock is taken only when every other thread of the fake is in `wait` (the fake counts threads alive and waiting; `tick` blocks until they agree: a quiescent step), so a tick always ends the waits it was written to end; the guard's panic names the clock's time and the waits outstanding. parked.rs and beamlet-redoubt's fake suite (26 tests) get the rule for free. Gates: rt-miri alone 20/20 and beside a bench 20/20; `cargo test -p redoubt-rt`; B70's 20-run loaded loop; beamlet-redoubt's fake suite; the fake's doc states the quiescent tick; no host timeout lengthened. Files: libs/rt/fake/src/lib.rs, libs/rt/tests/parked_write.rs, parked.rs, the page describing the fake kernel's clock. Tier A (libs/rt's fake): steward-red-2. Size S."
+  state = "active"
+  revision = 224
