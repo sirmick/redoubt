@@ -3,12 +3,15 @@
 # test-shell -- test Redoubt's shell (userland/shell) and its native libraries (userland/native):
 # the Elixir's formatting, the native crates' tests, the shell's tests on beamlet and the same
 # tests on BEAM, its entry point, and beamlet's Redoubt platform, built for the machine as it
-# ships and then on the fake kernel with the shell on it. Every stage runs; the exit status is
-# non-zero if any failed.
+# ships and then on the fake kernel with the shell on it. Every stage runs but one: the platform's
+# tests on the fake kernel are skipped when the binaries and fixtures they run are byte-identical
+# to the last pass here. The exit status is non-zero if any stage failed.
 #
 # Usage: ./test-shell [FILE...]
 #   ./test-shell                                  every stage, every test
 #   ./test-shell test/redoubt/util_test.exs       these test files (in userland/shell), on both VMs
+#   rm userland/otp/target/test-shell-fake-kernel  then ./test-shell: the fake-kernel stage again,
+#                                                 unchanged or not (a loop hunting a flake wants it)
 #
 # The Rust's formatting needs nightly rustfmt, which the bench's formatting case runs.
 # A test that passes on BEAM and fails on beamlet is a beamlet bug. The entry point is its own
