@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 52
+revision = 62
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1918,7 +1918,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["SCHED3"]
   body = "SCHED3's B1 was dropped by ruling (.wash/qa/sched3-b1-evidence.md; .wash/local/architect-questions.md 'SCHED3 B1') with a trigger: it returns if the oracle's report-only count of timer entries billed to a budget other than the one interrupted reaches 1 % of a victim's charged pool in a gate case. Met on wp-SCHED3 before merge: deadline-flood-billed-traced rv64 at 2 harts, 16 deadlines, 87 of 96 destructions on hart 0 under the victim, 89 entries, 833,543 ticks, ~17 % of 4.99M charged; victim 482 of 1000 (passes). Placement depends on timing alone. Form, as the Architect amended the ruling: the branch's (the global earliest item and its payer, None on a tie; rearm reads runner_ids(), O(harts); no scan of the deadlines on the switch path), NOT a per-budget cached minimum. Code: .wash/local/SCHED3-B1-33eaaf326.patch (wp-SCHED3's WIP 33eaaf326). Build the failing negative from this placement (`timer-any-hart` must fail where the count is gated), gate the count in deadline-flood-billed-traced and sched-exit-churn at 2 harts, measure deadline-notice latency before and after on both widths (baseline p99 4.6/5.1/4.6 ms rv64, 6.2/6.1/5.2 ms rv32; within one section), timer.md and scheduling.md say the rule; device interrupts stay IRQ1's residual. Kernel: Tier A, the kernel red; model rule and mutation if a rule changes."
   state = "reported"
-  revision = 48
+  revision = 62
 
 [[node]]
   id = "B47"
@@ -1959,7 +1959,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["B47"]
   body = "From B47's report (.wash/local/B47-report.md, 'Open'): each pipeline binds piped's connection into the session's namespace (Redoubt.Pipes, /dev/pipe) and a sys.known entry with its handle stays after the pipeline ends and piped's budget is destroyed; with B47's Life the stale handle closes nothing, but the entry and the slot are never returned, so a long session leaks one per pipeline until a table fills. Find the owner of the entry (the bind, the Pipes server, the Known table), return it when the pipeline's job ends (or reuse one piped per session if that is the design: say which on native.md), host test that a thousand pipelines leave the table where it started, and extend pipe-eight or add a sibling that runs 64 in one session on both widths. Acts with the session's authority: main, Tier A, the steward red."
   state = "active"
-  revision = 44
+  revision = 61
 
 [[node]]
   id = "K31"
@@ -2027,8 +2027,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M2"
   body = "The orchestrator could not run .wash/save.sh for most of 2026-10-09/10: step 3 pushes main fast-forward unconditionally, and main held a train whose bench had not run (SWARM: a push follows the train's bench), so saving .wash/local meant copying save.sh's step 5 by hand. Also, step 1 refuses on any dirty worktree, including members' scratch worktrees under .tmp (measurement exports), which stalled saves for hours. Add `--local-only` (steps 4 and 5: wp-* branches and the wash-local snapshot; never main), make step 1 ignore worktrees under .tmp/ (scratch by the project's rule) while still refusing dirty .worktrees/*, and say both on SWARM.md 'Saving and resuming' and PROJECT.md. Tooling: Tier B, one reviewer; the owner owns save.sh so the change is proposed to the owner before merge."
-  state = "todo"
-  revision = 2
+  state = "reported"
+  revision = 57
 
 [[node]]
   id = "B54"
