@@ -686,6 +686,10 @@ unknown one, so a session cannot send `login`, `approve` or `blame`.
 - **`blame`**, from `init`'s root badge alone, is [crash blame](#crash-blame): the account and
   labels the exit notice named, counted by the core, and answered as it arrives whatever it
   counted toward.
+- **`reconnected`**, from `init`'s root badge alone, carries the new connection at a restarted
+  shared server, and **`rebind`**, from a session's badge, answers the slot's connection again
+  with the path it is bound at; **`server_restarted`** is the steward's send to a session's
+  `notices` endpoint, never a call ([failure and restart](#failure-and-restart)).
 - **Not yet bound:** a `submit` of a declassification or a push (kinds 2 and 3) is `unknown`
   until [declassification and push](#declassification-and-push).
 
@@ -703,7 +707,10 @@ answered at once: the loop never parks it, `protocol::ahead`), `submit` (from se
 agents), `approve` and `deny` (from the approval channel), and `blame(account: u64, labels:
 bytes, server: string)` (from `init`, [init](init.md#restarts-and-reboots)), each accepted only
 through its badge class, as above; and `lease_ended(lease: u64, name: string)`, the steward's
-send to a session ([leases](#leases)).
+send to a session ([leases](#leases)). A shared server's restart adds `reconnected(server:
+string, connection: handle)` from `init`, `rebind(slot: u16)` from a session, answered `at:
+string, connection: handle`, and the steward's send `server_restarted(server: string, slot:
+u16)` ([failure and restart](#failure-and-restart)).
 
 ### Leases
 
@@ -740,7 +747,8 @@ or an agent with a person at the top of the chain.
   right and closes it with the session), naming the lease as `<principal>/<name>`
   (`alice/agent-3`, `agent/session-7`) and never why; the shell prints `[lease NAME ended]`. A
   session whose VM does not take the send in the steward's bound misses it, and the steward is
-  not held: the core forgets a notice no session can take.
+  not held: the core forgets a notice no session can take. The same endpoint carries
+  `server_restarted` ([failure and restart](#failure-and-restart)).
 - **A lease the kernel's deadline took** reaches the steward as its process's exit notice with
   the budget already gone: the core's `DestroyBudget` on it is the end asked for, not a failed
   step, once that object's exit is in; on a budget whose process still runs it is one.
@@ -962,7 +970,7 @@ exception: each carries exactly one label set and dies after one item
 
 ### Crash blame
 
-Status: built · partly tested: the machine shows one blame counted, bob's crash of `walfsd:data`; the lockout at three and the vault arm are the host test, since a restarted server strands the steward's connection ([failure and restart](#failure-and-restart)) · tested: bench:steward-blame-lockout, host:redoubt-steward-server::three_blames_in_the_window_lock_the_domain_out_until_the_window_passes, host:redoubt-steward-server::every_operation_on_another_badge_class_is_malformed, host:redoubt-init::a_blame_the_steward_does_not_take_in_time_is_lost_and_said, host:redoubt-init::a_handed_badge_is_a_root_badge_given_once_at_its_endpoint
+Status: built · partly tested: the machine shows one blame counted (`steward-blame-lockout`) and the lockout at the third, bob's three crashes of `walfsd:data` ending his session and refusing his login while alice's home answers on (`steward-server-restart`); the vault arm and the window's end are the host test · tested: bench:steward-blame-lockout, bench:steward-server-restart, host:redoubt-steward-server::three_blames_in_the_window_lock_the_domain_out_until_the_window_passes, host:redoubt-steward-server::every_operation_on_another_badge_class_is_malformed, host:redoubt-init::a_blame_the_steward_does_not_take_in_time_is_lost_and_said, host:redoubt-init::a_handed_badge_is_a_root_badge_given_once_at_its_endpoint
 
 A server that faults, or exits holding open calls, names in its exit notice the account and
 labels of the current call of the thread that failed
@@ -1154,7 +1162,7 @@ A sponsored principal's session is a lease of its sponsor's under the same rule.
 
 ### R40 (blame by label set)
 
-Status: built · partly tested: the lockout at three is a host test and the model's; the machine shows one blame attributed ([crash blame](#crash-blame)) · tested: bench:steward-blame-lockout, host:redoubt-steward-server::three_blames_in_the_window_lock_the_domain_out_until_the_window_passes, host:redoubt-steward::blame_window_and_not_locked, mutation:PolicyBlameNoWindow, mutation:PolicyNoLockout
+Status: built · tested: bench:steward-blame-lockout, bench:steward-server-restart, host:redoubt-steward-server::three_blames_in_the_window_lock_the_domain_out_until_the_window_passes, host:redoubt-steward::blame_window_and_not_locked, mutation:PolicyBlameNoWindow, mutation:PolicyNoLockout
 
 An (account, label set)'s sessions and leases are ended exactly when three server crashes blamed
 on it fall within ten minutes, no new session of it starts for the next ten minutes, and no other
@@ -1261,7 +1269,7 @@ detached again ends by its first detach's clock, before its bound.
 
 ## Failure and restart
 
-Status: built · partly tested: `steward-restart` proves the release of a dead steward's connections by count at `bootfsd`, `erofsd:system`, `walfsd:data` and `ipd`, and at `littlefsd:alice-secrets` only by the code they share, since it opens no vault session · tested: bench:steward-restart, bench:steward-restart-ssh, bench:steward-restart-reboot, bench:steward-session-ends, host:redoubt-steward-server::users_not_empty_is_a_start_failure_before_any_carve, host:redoubt-steward-server::watch_is_held_only_from_sshd_and_malformed_on_any_other_badge
+Status: built · partly tested: `steward-restart` proves the release of a dead steward's connections by count at `bootfsd`, `erofsd:system`, `walfsd:data` and `ipd`, and at `littlefsd:alice-secrets` only by the code they share, since it opens no vault session; a shared server's restart is re-bound on the machine at `walfsd:data`, and at the vault's server and `ipd` by the code they share and the host test · tested: bench:steward-restart, bench:steward-restart-ssh, bench:steward-restart-reboot, bench:steward-session-ends, bench:steward-server-restart, host:redoubt-steward-server::users_not_empty_is_a_start_failure_before_any_carve, host:redoubt-steward-server::watch_is_held_only_from_sshd_and_malformed_on_any_other_badge, host:redoubt-steward-server::a_servers_restart_tells_its_sessions_and_a_session_rebinds_its_slot, host:redoubt-steward-server::every_operation_on_another_badge_class_is_malformed, host:redoubt-init::a_restart_strands_the_stewards_connections_at_the_endpoints_the_server_receives_on, host:redoubt-init::the_outcome_of_the_hand_over_is_said_in_blames_words
 
 - **The steward is part of the trusted base; its crash is a bug.** If it dies, `init` reaps
   `users`, which logs every session out and ends every lease, and restarts the steward; the
@@ -1276,13 +1284,53 @@ Status: built · partly tested: `steward-restart` proves the release of a dead s
   when its one item is done.
 - **A shared server restarts.** Its tables are empty ([R27](serving.md#r27-badge-allocation)),
   so every connection it served is gone: the steward's kept connection, through which it mints
-  each session's home, and every live session's. Until the steward is told of the restart and
-  re-mints (planned: `init` hands it a new connection; sessions re-bind through the steward), a
-  login fails its home step and a session's files answer an error
-  ([init](init.md#fresh-connections-per-child)); the blame counts are kept, so a crasher's
-  lockout still comes at the third blame once the mechanism lands. This is why
-  `steward-blame-lockout` shows one blame attributed on the machine and the lockout at three is
-  a host test ([crash blame](#crash-blame)).
+  each session's home, and every live session's. One path for every shared server puts them
+  back. `init`, having restarted the server and offered the fault's blame, makes the steward a
+  new fresh connection there as it did at the steward's start, once the new instance serves, and
+  hands it over with `reconnected(server, connection)`, on the root badge it alone holds
+  ([init](init.md#fresh-connections-per-child)); the steward reaches
+  the server by it from here, and forgets what it held at the old instance (its attached
+  connection, the carves it kept, every session's connection there: ids the new instance never
+  drew, so nothing is disconnected and the records go). Then it sends `server_restarted(server,
+  slot)` on the `notices` endpoint of every live session whose binding table has a slot at that
+  server, one send per slot. A session re-binds: `rebind(slot)` from its badge is the slot's
+  connection again, minted as its login batch minted it (through the new kept connection for a
+  home, in the session's own scope), answered with the connection and the path the session binds
+  it at; the new connection takes the dead one's place in the steward's records, so the
+  session's end releases it as it would have ([R41](#r41-narrowing-by-revocation-scope)'s
+  order), and the shell binds it there in place of the dead one and prints one line
+  ([the shell](../userland/shell.md#the-machine-mode)). A login after the restart is minted below
+  the new connection and gets its home. The blame counts are kept across all of this, so a
+  crasher's lockout comes at the third blame ([crash blame](#crash-blame)). `rebind` is the
+  server's, no event of the core's: it grants nothing the login did not; a slot bound to nothing
+  at a path for the caller (the vault's for an unlabelled session, the console's, the system
+  volume's named handle) is `unknown`, and a mint the server refuses `failed`. What the path
+  does not reach: a lease's VM has no `notices` endpoint and no shell, so an agent's `/project`
+  stays dead until its deadline or its sponsor's `end_lease` (a `rebind` from a lease's badge is
+  answered `unknown`, as a foreign slot's is: an agent cannot re-bind what its sponsor was not
+  told of), and the sponsor's way out is
+  `end_lease` and a new `start_agent` (the sponsor's own sessions are re-bound; a `notices`
+  endpoint for leases is a later node, when agents must outlive a server's restart); the system
+  volume is a named handle beamlet loads code through, which no bind replaces, so an
+  `erofsd:system` restart leaves every session as good as dead until it ends; a login that
+  reaches the steward between the server's restart and `reconnected` fails its home step and is
+  refused, and the person retries; a `reconnected` the steward does not take within the second
+  leaves it stranded at that server until its own restart
+  ([init](init.md#fresh-connections-per-child)); and a restarted `consoled` is `init`'s
+  residual ([init](init.md#residual-risks)). One more, with its number: a session's or lease's
+  end batch gives each of its connections back with a `disconnect`, and an SSH session's console
+  with an `ended` to `sshd`, each a wait bounded by the call timeout (`RELEASE_TIMEOUT`, one
+  second), during which the steward serves nobody. Measured on `steward-server-restart`: the
+  `ended` waits its full second when `sshd` closed the channel first (it is calling the steward
+  itself then) or is busy, and a `disconnect` at a server still recovering waits its second too.
+  So a blame whose lockout ends an SSH session is answered after that second and `init` may
+  report it `lost` though the steward took it (the audit lines `Blamed` and `LockedOut` are the
+  record; [init](init.md#residual-risks)), and a `reconnected` arriving during a session's end
+  can be lost the same way. Per [R41](#r41-narrowing-by-revocation-scope) the cleanup is never
+  the cutoff, so the end can answer after `DestroyBudget` and the disconnects and `ended` become
+  deferred, bounded, capped retries the machine runs at its turn: a follow-up node under
+  STEWARD3 owns that. Already here: a relay the destroy took is told nothing, since a call to it
+  would only wait out its bound.
 
 **What a dead steward held at the shared servers goes with it.** `init` hands the steward a
 fresh connection at each server it is handed (`bootfsd`, the volumes' file servers, `ipd`), not

@@ -3,13 +3,13 @@ The steward's protocol's message and error tables, included by its owning page, 
 A label set travels as `bytes`: each label id as eight bytes, little-endian, in any order. Each
 message is accepted only on its badge class: `sshd`'s root badge (`login`, `channel_closed`,
 `approval_opened`, `approval_closed`, `watch`), the approval channel's (`pending`, `approve`, `deny`),
-`init`'s (`blame`), and a session's or an agent's minted badge (`submit`, `start_agent`,
-`end_lease`, `end_session`, `contexts`, `detach`, `end_context`); on any other it is malformed, as
+`init`'s (`blame`, `reconnected`), and a session's or an agent's minted badge (`submit`, `start_agent`,
+`end_lease`, `end_session`, `contexts`, `detach`, `end_context`, `rebind`); on any other it is malformed, as
 an unknown opcode is. The approval channel's badge is the steward's own: its reader threads send
 `pending`, `approve` and `deny` on it for the lines a person types at `approve@box`, and
 `approve`'s `hash` is the full 32 bytes or the screen's 4-byte code (servers/steward.md, "The
-powerbox and approvals"). `lease_ended` and `approval_waiting` are the steward's own sends to a
-session's `notices` endpoint (servers/steward.md, "Leases"), never calls: as a call each is
+powerbox and approvals"). `lease_ended`, `approval_waiting` and `server_restarted` are the steward's own sends to a
+session's `notices` endpoint (servers/steward.md, "Leases", "The powerbox and approvals" and "Failure and restart"), never calls: as a call each is
 malformed on every badge. `contexts`' list is one line per context of the caller's domain,
 `name<TAB>attached|detached<TAB>seconds`, the default context's name empty.
 
@@ -35,6 +35,9 @@ malformed on every badge. `contexts`' list is one line per context of the caller
 | 16 | `end_context` | `name: string` | - |
 | 17 | `lease_ended` | `lease: u64`, `name: string` | - |
 | 18 | `approval_waiting` | - | - |
+| 19 | `reconnected` | `server: string`, `connection: handle[0] endpoint` | - |
+| 20 | `server_restarted` | `server: string`, `slot: u16` | - |
+| 21 | `rebind` | `slot: u16` | `at: string`, `connection: handle[0] endpoint` |
 
 <!-- wire-errors: steward -->
 | Code | Error |

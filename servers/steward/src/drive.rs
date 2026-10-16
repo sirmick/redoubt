@@ -9,12 +9,13 @@ use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use redoubt_rt::abi::{BudgetSpec, Error, FOREVER, Labels};
+use redoubt_rt::abi::{BudgetSpec, Error, FOREVER, Handle, Labels};
 use redoubt_steward::consts::RANDOM_WORDS;
 use redoubt_steward::effect::{
     Answer, Batch, Kind, Notice, Notified, Object, Output, Parent, Produced, Rendered, ReplyTo, Server, Step,
     StepFailed, Token,
 };
+use redoubt_steward::effects::{CONNECTIONS, SCOPE};
 use redoubt_steward::event::{Event, EventKind};
 use redoubt_steward::manifest::Limits;
 use redoubt_steward::{Effects, decide, inspect};
@@ -252,6 +253,57 @@ impl<B: Copy, H: Copy> Steward<B, H> {
         kernel.notify(n, lease, &name);
     }
 
+    /// A shared server restarted and `init` re-made the steward's connection at it
+    /// (servers/steward.md, "Failure and restart"): the kernel's records there are replaced, and
+    /// every live session with a slot at that server is told, one `server_restarted` send per
+    /// slot on its notices endpoint, so it re-binds ([`Steward::rebind`]). No event of the
+    /// core's: the server grants nothing here it did not grant at the login. A lease's VM has no
+    /// notices endpoint and is told nothing: its connections there stay dead.
+    pub fn reconnected<K: Kernel<Budget = B, Handle = H>>(
+        &mut self,
+        kernel: &mut K,
+        server: &str,
+        connection: Handle,
+    ) {
+        kernel.reconnected(server, connection);
+        let sessions: Vec<(Object, H)> = self.notices.iter().map(|(o, n)| (o.clone(), *n)).collect();
+        for (object, n) in sessions {
+            for slot in kernel.slots_at(&object, server) {
+                kernel.restarted(n, server, slot);
+            }
+        }
+    }
+
+    /// The object routed by `badge` re-makes its connection at `slot`, in the scope its batch
+    /// made: the one the batch made there died with its server's old instance. The new one takes
+    /// the dead one's token, so the object's end releases it as it would have (R41's order), and
+    /// the dead one's record is dropped. Answers the handle the reply carries and the path the
+    /// child binds it at; `None` for a badge that routes nothing or a slot bound to nothing at a
+    /// path.
+    pub fn rebind<K: Kernel<Budget = B, Handle = H>>(
+        &mut self,
+        kernel: &mut K,
+        badge: u64,
+        slot: u16,
+    ) -> Result<Option<(Handle, String)>, Error> {
+        let Some(route) = inspect::index(&self.store).routes.get(&badge).cloned() else { return Ok(None) };
+        // A lease is not re-bound (servers/steward.md, "Failure and restart"; userland/agents.md):
+        // its VM is told of no restart, and its sponsor's way out is `end_lease` and a new
+        // `start_agent`; an agent's `rebind` is answered as a foreign slot's is.
+        if route.kind == Kind::Lease {
+            return Ok(None);
+        }
+        let owner = Object { domain: route.domain, kind: route.kind, id: route.id };
+        let scope = self.budget(&Token { owner: owner.clone(), slot: SCOPE })?;
+        let Some((key, handle, at)) = kernel.rebind(&owner, slot, scope)? else { return Ok(None) };
+        let token =
+            Token { owner, slot: CONNECTIONS + 1 + u8::try_from(slot).map_err(|_| Error::InvalidArgument)? };
+        if let Some(Made::Connection(Some(old))) = self.made.insert(token, Made::Connection(Some(key))) {
+            kernel.release(old);
+        }
+        Ok(Some((handle, at)))
+    }
+
     /// Runs `batch`'s steps in order, stopping at the first that fails.
     fn run<K: Kernel<Budget = B, Handle = H>>(
         &mut self,
@@ -356,9 +408,13 @@ impl<B: Copy, H: Copy> Steward<B, H> {
             // channel's session is over, and it never waits on code in the context's budget. A
             // detach past its bound is a detach: the relay lets the channel go as it takes the
             // call, and only the note, best effort, was still to be written to a channel that has
-            // stopped reading (servers/consrelay.md, "The `consrelay` protocol").
+            // stopped reading (servers/consrelay.md, "The `consrelay` protocol"). A relay whose
+            // process a `DestroyBudget` before this step took (a lockout's end batch, a dead VM's)
+            // is gone with its budget: there is nobody to tell, and a call would only wait out its
+            // bound while the steward serves nobody (servers/steward.md, "Failure and restart").
             Step::Detach { relay, console, note } => {
                 let told = match self.made.get(relay) {
+                    Some(Made::Relay(pid, _)) if !self.pids.contains_key(pid) => Ok(()),
                     Some(Made::Relay(_, control)) => kernel.detach(*control, note),
                     _ => Err(Error::BadHandle),
                 };

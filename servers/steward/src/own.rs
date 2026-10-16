@@ -244,6 +244,21 @@ pub enum How {
     Console,
 }
 
+/// The network's server: the handle name the steward is handed `ipd` under.
+pub const IPD: &str = "ipd";
+
+impl How {
+    /// The shared server the connection is minted at, by the handle name the steward was handed
+    /// it under; none for the console, which is no shared server of the sessions'.
+    pub fn server(&self) -> Option<&str> {
+        match self {
+            How::Fresh { server, .. } | How::Carved { server, .. } => Some(server),
+            How::Grant { .. } => Some(IPD),
+            How::Console => None,
+        }
+    }
+}
+
 /// A slot's binding: how its connection is made, the namespace path it is bound at, and the
 /// startup-block name it is handed under, if any.
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -103,6 +103,15 @@ sooner. A lease is task-scoped: "read `~/project`, write `~/project/out`, the `m
   is dropped, a read answers the end of the input, so an agent's output has nowhere to go but
   `/project/out`. How its VM ended is the steward's console line
   (`steward: lease alice/agent-1 of 1001/{} exited 0`), never the agent's.
+- **A lease is not re-bound.** When a shared server restarts, the steward tells its sessions on
+  their `notices` endpoints and each shell re-binds its home
+  ([the steward](../servers/steward.md#failure-and-restart)); a lease's VM has no such
+  endpoint and no shell, so an agent's `/project` at a restarted `walfsd` stays dead until its
+  deadline or its sponsor's `end_lease` (the steward answers a lease's `rebind` `unknown`); the
+  sponsor's way out is `end_lease` and a new
+  `start_agent`, the sponsor's own sessions being re-bound. Ending the lease for the server's
+  fault would punish the sponsor's work when the sponsor already holds the choice; a `notices`
+  endpoint for leases is a later node, when agents must outlive a server's restart.
 
 ### A lease's end is the kernel's
 

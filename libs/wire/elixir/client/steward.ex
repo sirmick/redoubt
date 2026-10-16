@@ -102,4 +102,19 @@ defmodule Redoubt.Wire.Client.Steward do
   def approval_waiting(conn, timeout \\ C.timeout()) do
     C.call(conn, P, {:approval_waiting, %{}}, [], timeout)
   end
+
+  @doc "Calls `reconnected`, waiting at most `timeout` ms."
+  def reconnected(conn, v_server, h_connection, timeout \\ C.timeout()) do
+    C.call(conn, P, {:reconnected, %{server: v_server}}, [h_connection], timeout)
+  end
+
+  @doc "Calls `server_restarted`, waiting at most `timeout` ms."
+  def server_restarted(conn, v_server, v_slot, timeout \\ C.timeout()) do
+    C.call(conn, P, {:server_restarted, %{server: v_server, slot: v_slot}}, [], timeout)
+  end
+
+  @doc "Calls `rebind`, waiting at most `timeout` ms."
+  def rebind(conn, v_slot, timeout \\ C.timeout()) do
+    C.call(conn, P, {:rebind, %{slot: v_slot}}, [], timeout)
+  end
 end

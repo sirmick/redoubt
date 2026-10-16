@@ -1,4 +1,4 @@
-description = "Crash blame reaches the steward and is counted by (account, label set) on the machine (docs/servers/init.md, \"Restarts and reboots\"; docs/servers/steward.md, \"Crash blame\" and R40): bob's SSH session arms walfsd's test-only cut (feature cut-after-write, servers/walfsd/src/cut.rs: a walk to walfsd-cut-1 from his home) and writes a block, so walfsd:data exits inside his write, faulted, blamed by the kernel on bob's account and his empty label set (R21); init restarts walfsd:data and then offers the blame to the steward through its own badge, which the steward takes and audits Blamed for bob/{}, one count toward his lockout, destroying nothing: bob's shell still answers, and so does alice's, whose home is dead with the instance, as every connection the dead walfsd served is (steward.md \"Failure and restart\": a shared server's restart strands the steward's kept connection too, so no new login gets a home until the restart gap is closed). The lockout at the third blame is the server's host test. The verdicts are the kernel's blame in init's lines, the steward's audit line, init's restart line and the two shells' own answers (rule F)"
+description = "Crash blame reaches the steward and is counted by (account, label set) on the machine (docs/servers/init.md, \"Restarts and reboots\"; docs/servers/steward.md, \"Crash blame\" and R40): bob's SSH session arms walfsd's test-only cut (feature cut-after-write, servers/walfsd/src/cut.rs: a walk to walfsd-cut-1 from his home) and writes a block, so walfsd:data exits inside his write, faulted, blamed by the kernel on bob's account and his empty label set (R21); init restarts walfsd:data and then offers the blame to the steward through its own badge, which the steward takes and audits Blamed for bob/{}, one count toward his lockout, destroying nothing: bob's shell still answers, and so does alice's, whose home, dead with the instance as every connection the dead walfsd served is, is re-bound through the steward once init hands it a new connection (steward.md \"Failure and restart\"; steward-server-restart shows the rest: three blames, the lockout, a login after). The lockout at the third blame is the server's host test and steward-server-restart's. The verdicts are the kernel's blame in init's lines, the steward's audit line, init's restart line and the two shells' own answers (rule F)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 # The image's programs, walfsd built with its test-only cut (both volumes' instances carry it;
@@ -38,6 +38,8 @@ forbid = [
     '^init: walfsd:data .*(exited|was killed)',
     'blamed on nobody',
     'lost: the steward',
+    'made the steward no new connection',
+    'not re-bound',
     'EXCEPTION',
     'steward: a step failed',
     'steward: the core exited',
@@ -46,13 +48,14 @@ forbid = [
 ]
 # 10: CUT_EXIT (servers/walfsd/src/cut.rs). An exit holding bob's call is faulted, blamed on his
 # account and label set (kernel/processes.md R21); init restarts walfsd:data first, then the
-# steward audits the blame under bob's unlabelled domain before it answers, and init says the
-# steward took it.
+# steward audits the blame under bob's unlabelled domain before it answers, init says the
+# steward took it, and hands the steward its new connection at the new instance.
 expect_after = [
     '^init: walfsd:data \(PID [0-9]+\) faulted, code 10, serving account 1002, labels none$',
     '^init: restarted walfsd:data, console [0-9a-f]{16}$',
     '^\[con [0-9a-f]{16}\] steward: audit 1002/\{\} at [0-9]+: Blamed$',
     "^init: walfsd:data's fault blamed on account 1002, labels none: the steward took it$",
+    '^init: walfsd:data reconnected for the steward after [0-9]+ ms: the steward took it$',
 ]
 
 [[file]]
@@ -86,8 +89,8 @@ steps = [
     { exit = 0 },
 ]
 
-# Alice is logged in before the cut and answers after it: her VM is untouched by bob's blame.
-# Her home is dead with the instance, as every connection it served is: stated here, not hidden.
+# Alice is logged in before the cut and answers after it: her VM is untouched by bob's blame, and
+# her home, dead with the instance as every connection it served is, is re-bound by her shell.
 [[session]]
 user = "alice"
 pty = true
@@ -101,8 +104,9 @@ steps = [
     { send = "{:after, 1 + 1}\n" },
     { expect = '\{:after, 2\}' },
     { expect = '\([0-9]+\)> ' },
-    { send = "{:home, File.stat(\"/home/alice\")}\n" },
-    { expect = '\{:home, \{:error, :[a-z]+\}\}' },
+    { expect = '\[walfsd:data restarted: /home/alice re-bound\]' },
+    { send = "{:home, elem(File.stat(\"/home/alice\"), 0)}\n" },
+    { expect = '\{:home, :ok\}' },
     { expect = '\([0-9]+\)> ' },
     { mark = "alice-done" },
     { exit = 0 },

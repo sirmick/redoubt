@@ -551,12 +551,15 @@ The bench's launcher, `stub-launch`, and `init` both launch this way
 
 ### Fresh connections per child
 
-<details><summary>Status: built · tested (4)</summary>
+<details><summary>Status: built · tested (7)</summary>
 
 - bench:init-servers
 - bench:init-console-forgery
 - bench:init-restart
 - bench:steward-restart
+- bench:steward-server-restart
+- host:redoubt-init::a_restart_strands_the_stewards_connections_at_the_endpoints_the_server_receives_on
+- host:redoubt-init::the_outcome_of_the_hand_over_is_said_in_blames_words
 
 </details>
 
@@ -579,16 +582,36 @@ corrupt) or does not answer within a second, is handed the badge instead, as eve
 steward starts and meets that server's own answers. Only then can a dead steward's session
 connections outlive it at that server, if it serves sessions later.
 
-A file server's or `ipd`'s restart strands the steward's fresh connection there, as a restarted
-`consoled` strands every server's console ([residual risks](#residual-risks)); the planned way
-out, for every server: `init` re-makes it and tells the steward
-([steward](steward.md#failure-and-restart)).
+A shared server's restart strands the steward's fresh connection there, and every session's
+minted under it, in the dead instance's tables. So after restarting a server, and after the
+fault's blame, `init` makes the steward a new connection at each of that server's endpoints the
+steward is handed, as above, waiting up to three seconds for the new instance to serve (a file
+server recovers its log before it serves, and under a test feature checks its volume: on the
+image's data volume the first restart's recovery measured 589 to 953 ms on both widths, one
+run past a second unmeasured, and the restarts after it 8 to 71 ms; the bound is twice the
+measured maximum plus a second's margin for the run the old bound cut short, rounded up to the
+next whole second: 2 × 0.953 s + 1 s = 2.9 s, so 3 s, `reconnect::SERVER_TIMEOUT`), and
+hands it over with `reconnected(server, connection)` through its own badge at the steward (the
+one `blame` goes on), within the same second a blame waits; the connection replaces the one in
+`init`'s list, so the release at the steward's exit frees the new one. `init` says how long the
+new instance took to serve and what became of the connection (`init: walfsd:data reconnected
+for the steward after 812 ms: the steward took it`, or `lost: the steward did not answer within
+1 s`, `lost: the steward ended`, `lost: the steward refused it`), and a connection the steward
+did not take is disconnected again: its sessions keep their dead connections there, and the
+steward stays stranded at that server until its own restart, nothing retried
+([residual risks](#residual-risks)). A login that reaches the steward between the restart and
+`reconnected` fails its home step and is refused; the person retries. A server that makes no
+connection within the bound is said too (`init: walfsd:data made the steward no new connection
+within 3 s of its restart`), and is stranded the same way. The steward tells
+its sessions and they re-bind ([steward](steward.md#failure-and-restart)). A restarted
+`consoled` is not on this path ([residual risks](#residual-risks)).
 
 ### Restarts and reboots
 
-<details><summary>Status: built · partly tested: the machine shows one fault blamed through `init`'s own badge and taken by the steward; the timeout's outcome is decided on the host; three faults under the steward are no bench case (the steward's page says why); a restarted `consoled`'s attach is read from the code, not attacked · tested (19)</summary>
+<details><summary>Status: built · partly tested: the machine shows a fault blamed through `init`'s own badge and taken by the steward, three of them reaching the lockout, and the steward's connection at the restarted server handed over; the timeouts' outcomes are decided on the host; a restarted `consoled`'s attach is read from the code, not attacked · tested (20)</summary>
 
 - bench:steward-blame-lockout
+- bench:steward-server-restart
 - host:redoubt-init::a_blame_goes_to_the_steward_only_for_a_named_account_while_the_steward_runs
 - host:redoubt-init::a_blame_the_steward_does_not_take_in_time_is_lost_and_said
 - host:redoubt-init::a_blame_taken_a_dead_steward_and_a_refusal_are_told_apart
@@ -660,6 +683,10 @@ out, for every server: `init` re-makes it and tells the steward
   alone, badge 3 on its endpoint, which `init` mints for itself at each of the steward's starts and
   the manifest check hands to no server: anyone who could send it could have another principal's
   sessions ended by forging three crashes.
+- **Reconnected.** After the blame, `init` hands the steward a new connection at the restarted
+  server ([fresh connections](#fresh-connections-per-child)), so the sessions the server served
+  get their files back, and a login after the restart its home. The blame goes first because
+  its second must not be spent behind the server's recovery, which the new connection waits for.
 - **A wedged steward cannot stall restarts.** `init` restarts the server first, then blames, with a
   timeout of one second (`blame::TIMEOUT`, the same as a dead child's grant releases); a blame lost
   to the timeout is reported on the console (`... : lost: the steward did not answer within 1 s`)
@@ -910,7 +937,16 @@ Status: built · partly tested: the runtime's exit on a refused block is read fr
   ([a shared image cache](../beyond/image-cache.md)). The steward may still cache an image's
   bytes, to avoid reading them again, because each child still gets its own copy.
 - **A blame can be lost.** If the steward does not take `init`'s blame within its timeout, the
-  crash is reported on the console but counts toward no lockout.
+  crash is reported on the console but counts toward no lockout. The converse too: a blame
+  whose lockout ends an SSH session is answered after that session's end batch, whose `ended`
+  to `sshd` can wait out its own second, so `init` may say `lost` of a blame the steward took and
+  acted on (`steward-server-restart`'s third blame; the audit lines are the record); the
+  deferral of end batches' cleanup is a follow-up under STEWARD3
+  ([steward](steward.md#failure-and-restart)).
+- **A new connection can be lost the same way.** If the steward does not take `init`'s
+  `reconnected` within its second, the restarted server's sessions keep their dead connections
+  and the steward mints no home there until its own restart; `init` says so and retries nothing
+  ([fresh connections](#fresh-connections-per-child)).
 - **The mediators are trusted across labels.** The steward and `sshd` are the confinement check's
   one exception; a bug in either reaches every label set they serve.
 - **The stub cannot see the stack.** A segment that names the stack's pages is refused by
@@ -926,7 +962,9 @@ Status: built · partly tested: the runtime's exit on a refused block is read fr
   being blamed (a bug the blame rule does not reach) can reboot the box.
 - **A restarted `consoled` forgets every server's console.** The servers' connections lived
   in the dead instance's tables, and `init` has no way to hand a running server a new one, so
-  a server's lines are refused until it restarts too. `init` attaches again and says so.
+  a server's lines are refused until it restarts too. `init` attaches again and says so. The
+  steward alone is handed new connections after a restart, at the servers it is handed
+  ([fresh connections](#fresh-connections-per-child)); `consoled` is not among them.
 - **A console that cannot start reboots silently.** `init` has given up the UART, so its
   lines about `consoled`'s restarts and the reboot go nowhere.
 
