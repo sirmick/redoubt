@@ -272,9 +272,10 @@ a disk or a userland disk (38 cases; the rule for a disk is above); host sockets
 `poke`, a peer or a dial (8); input the host types on the console, `[[input]]` (4; under `icount`
 the rv32 UART lost a burst of it); and a run whose purpose is the host's
 time (`asid-cost-host`, `sched-latency-tcg`, `timeouts-tcg`, and `smp-evict-mttcg`,
-`smp-shootdown-mttcg`, `console-one-writer`, `sched-lock-contention-4-mttcg`,
-`beamlet-schedulers-mttcg` and `beamlet-schedulers-one-hart-mttcg`, which need QEMU's
-multi-threaded TCG). Several harts do not keep a case
+`smp-shootdown-mttcg`, `console-one-writer`, `sched-lock-contention-4-mttcg` and
+`beamlet-schedulers-mttcg`, which need QEMU's multi-threaded TCG; its one-hart twin
+`beamlet-schedulers-one-hart` runs in guest time, since on one hart what it measures is the
+instructions two schedulers' switching costs). Several harts do not keep a case
 on the host's clock: under `icount` QEMU runs the harts in turn on one host thread, and a hart
 waiting for the kernel lock halts rather than spending its turn
 ([R78 (fair kernel entry)](kernel/scheduling.md#r78-fair-kernel-entry)). One case reads no host clock and stays on it for now: `redoubt-ipc`
@@ -317,8 +318,10 @@ invocation and no build run beside it. Those are a `host-tests` case whose crate
 a wall-clock bound (`redoubt-rt`, `redoubt-client`, `redoubt-keyd` and `redoubt-consoled` do;
 `redoubt-ipd`, `redoubt-model` and `testbench` only read the clock), which no tolerance would
 make load-proof; a boot case whose bound is a ratio of two host times (`sched-lock-contention-4-mttcg`:
-a stalled vCPU thread lengthens a wake but not the search it is counted in; `beamlet-schedulers-mttcg`
-and its one-hart twin: a stalled vCPU thread lengthens one of the two runs it compares); a case whose expectation is a timeout (`bench-ssh-guest`, and
+a stalled vCPU thread lengthens a wake but not the search it is counted in; `beamlet-schedulers-mttcg`:
+a stalled vCPU thread lengthens one of the two runs it compares, and on the quiet set's four cores
+alone its one-hart twin read 81 to 95 for a ratio that is 94 in guest time, which is why that twin
+runs under `icount`); a case whose expectation is a timeout (`bench-ssh-guest`, and
 `bench-ssh-loopback-deadlock`, whose `must_fail` is the mark it never gets); and a host-clock
 case with a VM session whose console goes through the hub's hold and which must still be alive
 after a hold boundary (the steward's SSH session cases): a stall of the guest of a second or

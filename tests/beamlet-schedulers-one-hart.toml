@@ -1,0 +1,55 @@
+description = "A session's two schedulers cost little on one hart (docs/userland/beamlet.md, \"Several schedulers\"): beamlet-schedulers-mttcg's run at 1 hart, where the two scheduler threads share the hart. In the console session of the image's boot, two Task.async loops of Enum.reduce(1..65536, 0, &max/2), awaited, are timed 10 times with one scheduler online and 10 with two, alternated, and the fastest of each gives the ratio, the time with one over the time with two, in hundredths: at least 90, so two schedulers keep nine tenths of one's throughput. Unlike its twin, the case runs under icount: on one hart the cost of two schedulers is the instructions their switching takes, which guest time counts the same on any host however loaded, where the host's clock read the ratio anywhere from 81 to 95 across boots alone on one four-core set"
+arch = ["rv64", "rv32"]
+kind = "boot"
+recipe = "image/boot.toml"
+memory_mib = 1024
+smp = [1]
+# The ratio is of two schedulers on one hart against one: `--smp N` would judge it at N.
+keep_smp = true
+# A disk keeps sleep on (docs/testbench.md, "Which cases run in guest time"). Guest time here is
+# the hart's instructions: both runs keep it busy, so the idle time sleep adds is outside them.
+icount = "shift=3"
+qemu_seed = 1
+# The boot, then 10 pairs of runs of about 3.5 and 4 s of guest time and a pause of 1 s each,
+# about 100 s of guest time: 27.4 to 28.5 s (rv64) and 25.3 to 25.9 s (rv32) of wall alone over
+# five runs, 34.3 s at most beside a twelve-core load; four times the slowest alone.
+timeout_secs = 120
+expect = [
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+    '^\[con [0-9a-f]{16}\] :defined$',
+    '^\[con [0-9a-f]{16}\] :timed$',
+    # Two schedulers on one hart keep at least nine tenths of one's throughput. In guest time the
+    # ratio measures 94 on rv32 and 95 or 96 on rv64, alone or beside a load (docs/userland/beamlet.md,
+    # "Several schedulers").
+    '^\[con [0-9a-f]{16}\] "ratio (9[0-9]|[1-9][0-9]{2}) one [0-9]+ two [0-9]+ schedulers 2"$',
+]
+forbid = [
+    '^\[con [0-9a-f]{16}\] "ratio ([0-9]|[0-8][0-9]) ',
+    'init: refused the boot',
+    'init: rebooting',
+    '^init: .* (exited|faulted|was killed)',
+    'EXCEPTION',
+    'steward: a step failed',
+]
+
+# Three short lines, each typed once the line before has answered, as beamlet-reduction-rate's.
+[[input]]
+after = 'Redoubt shell, on Elixir '
+send = "g = fn -> elem(:timer.tc(fn -> Enum.map(Enum.map(1..2, fn _ -> Task.async(fn -> Enum.reduce(1..65536, 0, &max/2) end) end), &Task.await(&1, :infinity)) end), 0) end; :defined\n"
+
+[[input]]
+after = '\] :defined$'
+send = "m = fn n -> :erlang.system_flag(:schedulers_online, n); Process.sleep(500); g.() end; ts = for _ <- 1..10, do: {m.(1), m.(2)}; :timed\n"
+
+[[input]]
+after = '\] :timed$'
+send = "a = Enum.min(Enum.map(ts, &elem(&1, 0))); b = Enum.min(Enum.map(ts, &elem(&1, 1))); \"ratio #{div(a * 100, b)} one #{a} two #{b} schedulers #{:erlang.system_info(:schedulers)}\"\n"
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]
