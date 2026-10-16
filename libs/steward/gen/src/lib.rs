@@ -40,6 +40,7 @@ const GUARDS: &[(&str, bool)] = &[
     ("approval_key", true),
     ("blame_window", true),
     ("caller_unlabelled", true),
+    ("caller_session", true),
     ("context_free", true),
     ("copying", false),
     ("declassifies", false),
@@ -59,7 +60,9 @@ const GUARDS: &[(&str, bool)] = &[
     ("pushes", false),
     ("reading", false),
     ("rendered_here", true),
+    ("sponsor_of", true),
     ("sponsor_session", true),
+    ("sponsor_set", true),
     ("under_cap", true),
 ];
 
@@ -1121,8 +1124,11 @@ mod tests {
         let names: Vec<&str> = all.iter().map(|m| m.name.as_str()).collect();
         assert_eq!(names, ["approval_channel", "blame", "crossing", "lease", "request", "session"]);
         let by = |n: &str| all.iter().find(|m| m.name == n).unwrap();
+        // The sponsor's `EndLease` is answered ahead of admission for an agent's lease and for a
+        // sponsored principal's session alike; nothing else is.
         assert_eq!(by("lease").ahead, ["EndLease"]);
-        assert!(all.iter().filter(|m| m.name != "lease").all(|m| m.ahead.is_empty()));
+        assert_eq!(by("session").ahead, ["EndLease"]);
+        assert!(all.iter().filter(|m| m.name != "lease" && m.name != "session").all(|m| m.ahead.is_empty()));
         assert_eq!(
             by("request").states,
             ["Snapshotting", "Frozen", "Dropped", "Rendered", "Approved", "Denied"]

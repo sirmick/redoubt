@@ -16,8 +16,8 @@ use redoubt_rt::ipc::{Caller, Words};
 use redoubt_rt::server::typed::{Answer as Typed, Outcome, Protocol, TypedServer, answer};
 use redoubt_rt::wire::Error as WireError;
 use redoubt_rt::wire::proto::steward::{
-    ChannelClosedReply, ContextsReply, DetachReply, EndContextReply, EndSessionReply, ErrorCode, LoginReply,
-    Message, Reply,
+    ChannelClosedReply, ContextsReply, DetachReply, EndContextReply, EndLeaseReply, EndSessionReply,
+    ErrorCode, LoginReply, Message, Reply, StartAgentReply,
 };
 use redoubt_steward::effect::{Answer, Output, Refusal};
 use redoubt_steward::event::EventKind;
@@ -73,6 +73,9 @@ impl Class {
             | Message::Contexts(_)
             | Message::Detach(_)
             | Message::EndContext(_) => Class::Session,
+            // The steward's own send to a session's notices endpoint: a call of it, on any badge,
+            // is malformed.
+            Message::LeaseEnded(_) => Class::None,
         }
     }
 }
@@ -83,6 +86,19 @@ impl Class {
 /// malformed, as every message on the wrong class is ([`answer_with`]).
 pub fn watches(caller: &Caller, words: &Words) -> bool {
     Class::of(caller.badge) == Class::Sshd && matches!(Message::decode(words, &[], 0), Ok(Message::Watch(_)))
+}
+
+/// Whether a call is a sponsor's `end_lease`, which the core answers ahead of admission
+/// (`EventKind::ahead`; servers/serving.md, "`admit`"): the steward's loop answers every call as
+/// it arrives and parks none, so the one it must never hold back is never held back; this names
+/// it, so a loop that one day parks its calls can take it first. Only a minted badge's counts:
+/// on another class the call is malformed, as every message on the wrong class is.
+pub fn ahead(caller: &Caller, words: &Words) -> bool {
+    Class::of(caller.badge) == Class::Session
+        && match Message::decode(words, &[], 0) {
+            Ok(Message::EndLease(m)) => EventKind::EndLease { badge: caller.badge, lease: m.lease }.ahead(),
+            _ => false,
+        }
 }
 
 /// A label set as the protocol carries it ([`redoubt_rt::wire::labels`]).
@@ -176,7 +192,8 @@ where
         request: Message<'_>,
         handles: &[KernelHandle],
     ) -> Result<Typed<Reply<'s>>, ErrorCode> {
-        if Class::of(caller.badge) != Class::of_message(&request) {
+        let class = Class::of(caller.badge);
+        if class == Class::None || class != Class::of_message(&request) {
             return Err(ErrorCode::Malformed);
         }
         let mut login_labels = Vec::new();
@@ -216,7 +233,17 @@ where
                 EventKind::EndContext { badge: caller.badge, name: m.name.into() },
                 Some(Reply::EndContext(EndContextReply {})),
             ),
-            // The core decides these, and the server binds no batch for them until STEWARD3.
+            // An agent on a lease (servers/steward.md, "Leases"): started from an unlabelled
+            // session's badge, for `lease` µs, answered with the lease once its batch is done;
+            // ended from any unlabelled session of its sponsor, which the core answers at once
+            // and the loop never parks ([`ahead`]).
+            Message::StartAgent(m) => (EventKind::StartAgent { badge: caller.badge, lease: m.lease }, None),
+            Message::EndLease(m) => (
+                EventKind::EndLease { badge: caller.badge, lease: m.lease },
+                Some(Reply::EndLease(EndLeaseReply {})),
+            ),
+            // The powerbox's and crash blame's: the core decides them, and the server binds
+            // their batches in STEWARD3B and STEWARD3C.
             _ => return Err(ErrorCode::Unknown),
         };
         let outputs = match self.steward.event(self.kernel, kind, CALL) {
@@ -243,6 +270,10 @@ where
                 self.label_bytes = label_bytes(&login_labels);
                 let reply = LoginReply { session: id, name: &self.name, labels: &self.label_bytes };
                 Ok(Typed::new(Reply::Login(reply)))
+            }
+            (Some(Answer::Lease { id, name }), None) => {
+                self.name = name;
+                Ok(Typed::new(Reply::StartAgent(StartAgentReply { lease: id, name: &self.name })))
             }
             // A notice the core takes without an answer (a channel's close) is answered empty;
             // the core answers only its refusal.

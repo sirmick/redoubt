@@ -12,12 +12,11 @@ expect = [
     '^init: started sshd, console [0-9a-f]{16}$',
     '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
     '^init: started steward, console [0-9a-f]{16}$',
-    '^\[con [0-9a-f]{16}\] steward: carved users/agent account 1003: \{\}$',
 ]
 # The session's own login: the steward's audit and budget lines for agent, then sshd's.
 expect_after = [
     '^\[con [0-9a-f]{16}\] steward: audit 1003/\{\} at [0-9]+: Login \{ session: [0-9]+, principal: 2, key: [1-9]',
-    '^\[con [0-9a-f]{16}\] steward: users/agent/\{\} holds [0-9]+ pages, 10 processes$',
+    '^\[con [0-9a-f]{16}\] steward: users/alice/\{\} holds [0-9]+ pages, 20 processes$',
     '^\[con [0-9a-f]{16}\] sshd: login agent: session [0-9a-f]{16}, labels \[\]$',
     '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
 ]

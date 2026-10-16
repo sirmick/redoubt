@@ -15,7 +15,9 @@
 //! - **The console** is `/dev/cons` in the process's namespace, opened once. One read is out on the hub at a
 //!   time, parked by the server until there is typing, and one write: the bytes the VM writes wait here, in
 //!   order, for the write before them, since the console's share is a page a badge and a write is a page. A
-//!   write the console answers `busy` goes again `RETRY_US` later, not at once.
+//!   write the console answers `busy` goes again `RETRY_US` later, not at once. A namespace without one, a
+//!   lease's (docs/userland/agents.md, "Leases"), is served too: writes are dropped, a read answers the end
+//!   of the input, the size is unknown and never changes.
 //! - **The console's size** is asked of its server afresh each time ([`Platform::console_size`]), and its
 //!   changes come from one thread that keeps a `resize` call out there ([`resize`]).
 //! - **Time** is the kernel's microseconds since boot, and `system_time_us` is `None`: there is no wall clock
@@ -97,10 +99,11 @@ const FLUSH_US: u64 = 2_000_000;
 /// The platform of one VM, on Redoubt.
 pub struct Redoubt {
     lend: Lend,
-    /// The console's open file, for its size; its I/O goes through [`Redoubt::io`].
-    console: Arc<Console>,
+    /// The console's open file, for its size; its I/O goes through [`Redoubt::io`]. `None` in a
+    /// namespace without `/dev/cons`, and so is [`Redoubt::cons`].
+    console: Option<Arc<Console>>,
     io: Io,
-    cons: ConsoleIo,
+    cons: Option<ConsoleIo>,
     /// The console's changes of size, once reading has begun.
     resizes: resize::Resizes,
     /// The namespace's files, open files and file operations.
@@ -277,8 +280,9 @@ struct Loads {
 pub fn stamp() -> alloc::string::String { format!(" [t={}]", redoubt_rt::handle::time_now().unwrap_or(0)) }
 
 impl Redoubt {
-    /// The platform of a process started with `startup`, whose namespace holds `/dev/cons`, which
-    /// serves multiplexed sessions.
+    /// The platform of a process started with `startup`. Its namespace holds `/dev/cons`, which
+    /// serves multiplexed sessions, or none at all, as a lease's does not
+    /// (docs/userland/agents.md, "Leases"): then the console is served as one that has gone.
     pub fn new(startup: &Startup, modules: Box<dyn Modules>) -> Result<Redoubt, Error> {
         // A bind it cannot make is refused before any server is asked anything.
         let binds = binds(startup).map_err(|_| Refusal::BadPath)?;
@@ -288,29 +292,34 @@ impl Redoubt {
             let conn = redoubt_client::file::Connection::attach(Endpoint::from_handle(handle), &mut lend)?;
             ns.bind(prefix, conn)?;
         }
-        let console = Arc::new(Console::open(&ns, &mut lend)?);
+        let console = match ns.lookup("/dev/cons") {
+            Some(_) => Some(Arc::new(Console::open(&ns, &mut lend)?)),
+            None => None,
+        };
         let mut io = Io::new()?;
         // Before any waiter: the first wake-up on the VM's endpoint is the first call thread's.
         let (pool, labels) = pool::Pool::start(io.wake()).map_err(|_| Error::Unexpected)?;
         let sys = system::Sys::new(startup, &ns, labels, pool);
-        let conn = io.connect(console.file().connection())?;
-        let cons = ConsoleIo {
-            conn,
-            fid: console.file().fid(),
-            reading: None,
-            read_buffer: None,
-            input: VecDeque::new(),
-            started: false,
-            ended: false,
-            listening: true,
-            eof_pending: false,
-            writing: None,
-            write_buffer: None,
-            output: VecDeque::new(),
-            retry_at: None,
-            busy: 0,
-            gone: false,
-        };
+        let mut cons = None;
+        if let Some(console) = &console {
+            cons = Some(ConsoleIo {
+                conn: io.connect(console.file().connection())?,
+                fid: console.file().fid(),
+                reading: None,
+                read_buffer: None,
+                input: VecDeque::new(),
+                started: false,
+                ended: false,
+                listening: true,
+                eof_pending: false,
+                writing: None,
+                write_buffer: None,
+                output: VecDeque::new(),
+                retry_at: None,
+                busy: 0,
+                gone: false,
+            });
+        }
         Ok(Redoubt {
             lend,
             console,
@@ -352,11 +361,18 @@ impl Redoubt {
                 .as_bytes(),
             );
         }
-        self.cons.started = true;
-        self.cons.read(&mut self.io);
-        let console = self.console.file().connection().endpoint().handle();
-        self.resizes.start(self.io.wake(), console);
+        if let (Some(cons), Some(console)) = (&mut self.cons, &self.console) {
+            cons.started = true;
+            cons.read(&mut self.io);
+            self.resizes.start(self.io.wake(), console.file().connection().endpoint().handle());
+        }
     }
+
+    /// Whether anything written is still to reach the console.
+    fn writes_pending(&self) -> bool { self.cons.as_ref().is_some_and(ConsoleIo::writes_pending) }
+
+    /// How long until a write the console answered `busy` goes again, if one waits to.
+    fn retry_in(&self, now: u64) -> Option<u64> { self.cons.as_ref().and_then(|cons| cons.retry_in(now)) }
 
     /// `file` from the module source, for `name`: one the source refuses is said on the console,
     /// naming it and why, and ends this lookup.
@@ -394,11 +410,17 @@ impl Redoubt {
     /// has come due.
     fn dispatch(&mut self) {
         while let Some(done) = self.io.completed() {
-            let Some(done) = self.cons.take(&mut self.io, done) else { continue };
+            let done = match &mut self.cons {
+                Some(cons) => cons.take(&mut self.io, done),
+                None => Some(done),
+            };
+            let Some(done) = done else { continue };
             // Anything else is no one's: dropped, with its buffer.
             self.files.take(&mut self.io, done);
         }
-        self.cons.write(&mut self.io);
+        if let Some(cons) = &mut self.cons {
+            cons.write(&mut self.io);
+        }
         self.files.pump(&mut self.io);
         while let Some(delivery) = self.io.other() {
             let Some(delivery) = self.resizes.deliver(delivery) else { continue };
@@ -426,8 +448,9 @@ impl Drop for Redoubt {
                 self.io.waiters()
             );
             self.console_write(line.as_bytes());
-            if self.cons.busy > 0 {
-                let line = format!("beamlet: io: the console answered busy {} times\n", self.cons.busy);
+            let busy = self.cons.as_ref().map_or(0, |cons| cons.busy);
+            if busy > 0 {
+                let line = format!("beamlet: io: the console answered busy {busy} times\n");
                 self.console_write(line.as_bytes());
             }
             if self.files.busy_answers() > 0 {
@@ -437,12 +460,12 @@ impl Drop for Redoubt {
             }
         }
         let until = now().saturating_add(FLUSH_US);
-        while self.cons.writes_pending() {
+        while self.writes_pending() {
             let now = redoubt_rt::handle::time_now().unwrap_or(until);
             if now >= until {
                 return;
             }
-            let wait = self.cons.retry_in(now).map_or(until - now, |r| r.min(until - now));
+            let wait = self.retry_in(now).map_or(until - now, |r| r.min(until - now));
             self.io.wait(wait);
             self.dispatch();
         }
@@ -485,18 +508,19 @@ impl Platform for Redoubt {
         // Anything that arrived before this idle is handed over now: a wait would sleep on it
         // until some other wake-up came, if one ever did. Console input counts only while a
         // process reads it: with none, the VM would spin on what nobody takes.
-        let console = self.cons.listening
-            && (!self.cons.input.is_empty() || self.cons.eof_pending || self.resizes.pending());
+        let console = self.cons.as_ref().is_some_and(|cons| {
+            cons.listening && (!cons.input.is_empty() || cons.eof_pending || self.resizes.pending())
+        });
         if console || self.files.has_finished() || self.sys.has_events() {
             return;
         }
         let now = self.monotonic_us();
-        let retry = [self.cons.retry_in(now), self.files.retry_in(now)].into_iter().flatten().min();
+        let retry = [self.retry_in(now), self.files.retry_in(now)].into_iter().flatten().min();
         let timeout = match deadline {
             Some(deadline) => deadline.saturating_sub(now),
             // Nothing will arrive, so nothing would wake the VM: return, and it gives up.
             None if retry.is_none()
-                && (!self.cons.started || self.cons.ended)
+                && self.cons.as_ref().is_none_or(|cons| !cons.started || cons.ended)
                 && !self.files.busy()
                 && !self.sys.busy() =>
             {
@@ -511,19 +535,27 @@ impl Platform for Redoubt {
     /// Queues `bytes` behind what is already queued, and sends what the console will take; past
     /// [`MAX_OUTPUT`] waiting, waits in place for the console to take some.
     fn console_write(&mut self, bytes: &[u8]) {
-        if self.cons.gone {
+        let Some(cons) = &mut self.cons else { return };
+        if cons.gone {
             return;
         }
-        self.cons.output.extend(bytes);
-        self.cons.write(&mut self.io);
-        while self.cons.output.len() > MAX_OUTPUT && self.cons.writes_pending() {
-            self.io.wait(self.cons.retry_in(now()).unwrap_or(FOREVER));
+        cons.output.extend(bytes);
+        cons.write(&mut self.io);
+        loop {
+            let Some(cons) = &self.cons else { return };
+            if cons.output.len() <= MAX_OUTPUT || !cons.writes_pending() {
+                return;
+            }
+            self.io.wait(cons.retry_in(now()).unwrap_or(FOREVER));
             self.dispatch();
         }
     }
 
-    /// Asked afresh each time, never cached: the console's size can change.
-    fn console_size(&mut self) -> Option<(u16, u16)> { self.console.size(&mut self.lend).ok().flatten() }
+    /// Asked afresh each time, never cached: the console's size can change. Without a console it
+    /// is unknown (the shell, which never runs there, would take 80 by 24).
+    fn console_size(&mut self) -> Option<(u16, u16)> {
+        self.console.as_ref().and_then(|console| console.size(&mut self.lend).ok().flatten())
+    }
 
     /// The newest size the console changed to since the VM last asked: the resize thread's word.
     fn console_resized(&mut self) -> Option<(u16, u16)> { self.resizes.take() }
@@ -537,22 +569,25 @@ impl Platform for Redoubt {
 
     /// A reader again: the read that waited for one goes out (it may be the first).
     fn console_listening(&mut self, listening: bool) {
-        self.cons.listening = listening;
-        if listening && self.cons.started {
-            self.cons.read(&mut self.io);
+        let Some(cons) = &mut self.cons else { return };
+        cons.listening = listening;
+        if listening && cons.started {
+            cons.read(&mut self.io);
         }
     }
 
+    /// Without a console, the end of the input.
     fn console_read(&mut self) -> ConsoleInput {
-        if !self.cons.started {
+        if self.cons.as_ref().is_some_and(|cons| !cons.started) {
             self.start_reading();
         }
         self.take_completed();
-        if !self.cons.input.is_empty() {
-            return ConsoleInput::Data(self.cons.input.drain(..).collect());
+        let Some(cons) = &mut self.cons else { return ConsoleInput::Eof };
+        if !cons.input.is_empty() {
+            return ConsoleInput::Data(cons.input.drain(..).collect());
         }
-        if self.cons.ended {
-            self.cons.eof_pending = false;
+        if cons.ended {
+            cons.eof_pending = false;
             ConsoleInput::Eof
         } else {
             ConsoleInput::Nothing
@@ -691,9 +726,9 @@ pub fn limits(budget_pages: Option<u64>) -> Limits {
 }
 
 /// Runs `module:function()` in a new VM on the platform of the process started with `startup`,
-/// with the natives the shell's modules need, and writes how it ended to the console: the value
-/// it returned, or the exception that ended it. The result is the process's exit code: 0 once the
-/// function ran, however it ended; 1 if the VM could not start it or failed. The VM's limits
+/// with the natives the shell's modules need, and writes how it ended to the console, if it has
+/// one: the value it returned, or the exception that ended it. The result is the process's exit
+/// code: 0 once the function ran, however it ended; 1 if the VM could not start it or failed. The VM's limits
 /// are sized to its budget, `budget_pages`, if the embedder knows it ([`limits`]; on the machine
 /// the startup block carries it, `Startup::budget_pages`). With
 /// `report_memory`, the VM prints its memory breakdown when it first waits for console input.
@@ -705,9 +740,9 @@ pub fn run(
     budget_pages: Option<u64>,
     report_memory: Option<HeapPages>,
 ) -> u32 {
-    // Without a console there is nowhere to say why.
+    // Without a platform there is nowhere to say why.
     let Ok(platform) = Redoubt::new(startup, modules) else { return 1 };
-    let console = Arc::clone(&platform.console);
+    let console = platform.console.clone();
     let natives: &'static [NativeSpec] = Box::leak(
         [beamlet_crypto::NATIVES, beamlet_re::NATIVES, beamlet_screen::NATIVES].concat().into_boxed_slice(),
     );
@@ -732,6 +767,8 @@ pub fn run(
     };
     // The platform's end sends what the VM wrote first, so the line comes after it.
     drop(vm);
-    say(&console, &line);
+    if let Some(console) = &console {
+        say(console, &line);
+    }
     code
 }

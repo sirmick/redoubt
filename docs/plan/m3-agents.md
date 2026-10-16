@@ -94,11 +94,13 @@ The steward's policy core decides leases, approvals, declassification, push and 
 is tested on the host; the running server's half for them remains planned
 ([the policy core](../servers/steward.md#the-policy-core)). The kernel's half of several attacks
 above has its case, as the tables say, and the kernel containment gate holds hostile leases on the
-kernel's primitives alone ([containment](../kernel/README.md#containment)). The image has an
-`agent` principal ahead of leases, a session's budget with no labels and no network scope for a
-sponsor-run agent whose loop runs outside the box, logged in by `agent-login`
-([the image](../../image/README.md)); in that session the agent compiles a module from a string,
-keeps its `.beam` in its home and loads it again from the bytes, by `shell-compile`
-([development](../userland/development.md#the-compilers-on-beamlet)). What the milestone
+kernel's primitives alone ([containment](../kernel/README.md#containment)). The image's
+`agent` principal, for a sponsor-run agent whose loop runs outside the box, is sponsored by alice:
+its login is a lease of hers, which her sessions can end and are told the end of, with no labels
+and no network scope, logged in by `agent-login`; in that session the agent compiles a module
+from a string, keeps its `.beam` in its home and loads it again from the bytes, by
+`shell-compile` ([development](../userland/development.md#the-compilers-on-beamlet)); and
+`start_agent` and `end_lease` run on the machine ([the image](../../image/README.md);
+[the steward](../servers/steward.md#leases)). What the milestone
 builds on: the steward's principals, sub-budgets and sessions, and `sshd` on the box, from
 [M1 (sessions over SSH, kept apart)](m1-separation.md).

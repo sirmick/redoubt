@@ -5,7 +5,8 @@ message is accepted only on its badge class: `sshd`'s root badge (`login`, `chan
 `approval_opened`, `approval_closed`, `watch`), the approval channel's (`pending`, `approve`, `deny`),
 `init`'s (`blame`), and a session's or an agent's minted badge (`submit`, `start_agent`,
 `end_lease`, `end_session`, `contexts`, `detach`, `end_context`); on any other it is malformed, as
-an unknown opcode is. `contexts`' list is one line per context of the caller's domain,
+an unknown opcode is. `lease_ended` is the steward's own send to a session's `notices` endpoint
+(servers/steward.md, "Leases"), never a call: as a call it is malformed on every badge. `contexts`' list is one line per context of the caller's domain,
 `name<TAB>attached|detached<TAB>seconds`, the default context's name empty.
 
 <!-- ANCHOR: tables -->
@@ -28,6 +29,7 @@ an unknown opcode is. `contexts`' list is one line per context of the caller's d
 | 14 | `contexts` | - | `list: string` |
 | 15 | `detach` | - | - |
 | 16 | `end_context` | `name: string` | - |
+| 17 | `lease_ended` | `lease: u64`, `name: string` | - |
 
 <!-- wire-errors: steward -->
 | Code | Error |

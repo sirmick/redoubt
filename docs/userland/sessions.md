@@ -126,10 +126,11 @@ a path. Contexts are not declared: a login names one, and the first login makes 
   most a set number of live contexts in each label set, attached or detached, the console's
   session counted where it runs: by default what the label set's share of the principal's budget
   holds, or fewer if the manifest says so. A login that would make one more is refused like any
-  other refusal; nothing running is ended to make room. In the image alice has one SSH context
-  beside the console, two in her vault, and bob and `agent` two each; `agent` is the image's
-  principal for a sponsor-run agent, whose body is a session like any other, with a home of its
-  own and no labels and no network scope ([agents](agents.md)).
+  other refusal; nothing running is ended to make room. In the image alice has two SSH contexts
+  beside the console, three in her vault, and bob two; `agent` is the image's principal for a
+  sponsor-run agent, sponsored by alice: its session is a lease of hers, carved from her
+  unlabelled share (so it counts among her contexts there), with a home of its own and no labels
+  and no network scope ([agents](agents.md)).
 - **Idle contexts end** ([R83 (idle contexts end)](../servers/steward.md#r83-idle-contexts-end)). A context left
   detached for its principal's idle bound, by default a day, ends with everything in it. An
   attached context never does, and each attach starts the count again.
@@ -274,6 +275,9 @@ order; `context=NAME` for a named context, none for the principal's default one 
 console's session; and `home=/PATH`, the path the session's namespace binds the principal's home
 at, for a vault session as for a plain one, none for a principal with no home. beamlet reads them
 once at its start and gives them to Elixir as `redoubt:identity/0` ([beamlet](beamlet.md#natives));
+beside them a session is launched with the named handle `notices`, the receive right of the
+endpoint the steward tells it a lease's end on, which the shell serves from its start
+(`Redoubt.Shell.Notices`; [the steward](../servers/steward.md#leases));
 a VM started without `principal=` is no session and gets `not_found`, and one whose `home=` is
 not a clean absolute path, or comes twice, is told nothing either. They are fixed for the VM's
 life, and they are information, not authority: the label set the kernel stamps is

@@ -25,6 +25,7 @@ use alloc::vec::Vec;
 use redoubt_rt::path::is_clean_absolute;
 use redoubt_rt::startup::valid_name;
 use redoubt_rt::wire::ipd_scope::{self, RULE_BYTES};
+use redoubt_steward::effect::Kind;
 use redoubt_steward::manifest::{list, string, tokens, u64_of};
 
 /// A principal's home.
@@ -216,6 +217,13 @@ pub fn session_args(own: &Own, principal: &str, labels: &[u64], context: Option<
     core::iter::once(format!("principal={principal}")).chain(labels).chain(context).chain(home).collect()
 }
 
+/// What a lease's VM is told of itself: the sponsor it acts for, as `principal=NAME`, and where
+/// its project root is bound, `home=/project`; no labels (a lease of this package is unlabelled)
+/// and no context. Information only, as a session's.
+pub fn lease_args(principal: &str) -> Vec<String> {
+    alloc::vec![format!("principal={principal}"), format!("home={PROJECT_AT}")]
+}
+
 /// The system volume's server: the handle name the steward is handed it under and gives a
 /// session's VM, which its `endpoint=` argument names.
 pub const SYSTEM: &str = "erofsd:system";
@@ -227,8 +235,9 @@ pub enum How {
     Fresh { server: String, root: String },
     /// A fresh connection minted, with no quota of its own, through the one connection the
     /// steward holds for `key`: minted once, at `server` rooted at `root` with `quota` bytes, and
-    /// kept for the steward's life, so every session it binds shares that quota.
-    Carved { key: String, server: String, root: String, quota: u64 },
+    /// kept for the steward's life, so every session it binds shares that quota. The fresh one
+    /// is rooted at `below`, a path under the kept one's root (empty for the root itself).
+    Carved { key: String, server: String, root: String, quota: u64, below: String, below_quota: u64 },
     /// A connection `ipd` grants, narrowed to `scope` (its `grant` encoding).
     Grant { scope: Vec<u8> },
     /// The session's console: `sshd`'s channel, or a connection minted at `consoled`.
@@ -244,23 +253,63 @@ pub struct Bound {
     pub name: Option<&'static str>,
 }
 
-/// Whether `slot` can bind anything for a session with labels (`labelled`) or without: the vault
-/// only for a labelled one, the network only for an unlabelled one, the rest for both.
-pub fn binds(labelled: bool, slot: u16) -> bool {
-    match slot {
-        2 => labelled,
-        3 => !labelled,
-        s => s < crate::SLOTS,
+/// Whose namespace a binding is for: a session's, with labels or without, or a lease's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Child {
+    Session { labelled: bool },
+    Lease,
+}
+
+impl Child {
+    /// A session's or a lease's, by the kind of the object the batch is for.
+    pub fn of(kind: Kind, labels: &[u64]) -> Child {
+        match kind {
+            Kind::Lease => Child::Lease,
+            _ => Child::Session { labelled: !labels.is_empty() },
+        }
     }
 }
 
-/// The binding table, for `principal`'s session with `labels`, at `slot`: none where the slot
-/// binds nothing for that session, which makes no call and gives the child no entry.
-pub fn binding(own: &Own, principal: &str, labels: &[u64], slot: u16) -> Option<Bound> {
-    if !binds(!labels.is_empty(), slot) {
+/// The directory of the sponsor's home a lease works in (userland/agents.md, "Leases"), and the
+/// path its namespace binds it at.
+pub const PROJECT: &str = "project";
+pub const PROJECT_AT: &str = "/project";
+
+/// Whether `slot` can bind anything for `child`: for a session, the vault only for a labelled
+/// one, the network only for an unlabelled one, the rest for both; for a lease, `/boot` (the
+/// programs it may launch in its own sub-budgets), its project root and the system volume: no
+/// vault, no network, no console (servers/steward.md, "Leases").
+pub fn binds(child: Child, slot: u16) -> bool {
+    match (child, slot) {
+        (Child::Lease, s) => s == 0 || s == 1 || s == 5,
+        (Child::Session { labelled }, 2) => labelled,
+        (Child::Session { labelled }, 3) => !labelled,
+        (Child::Session { .. }, s) => s < crate::SLOTS,
+    }
+}
+
+/// The binding table, for `principal`'s `child` with `labels`, at `slot`: none where the slot
+/// binds nothing for it, which makes no call and gives the child no entry.
+pub fn binding(
+    own: &Own,
+    principal: &str,
+    labels: &[u64],
+    child: Child,
+    slot: u16,
+    lease_quota: u64,
+) -> Option<Bound> {
+    if !binds(child, slot) {
         return None;
     }
     let fresh = |server: &str, root: &str| How::Fresh { server: server.into(), root: root.into() };
+    // A lease's root is the sponsor's `project` directory, minted through the home's one carve
+    // with a quota of its own, `lease_quota` (the manifest's `agent_quota`), carved from the
+    // home's and given back at the lease's end: a root below the home with no quota would hold
+    // nothing (walfsd.md, "Quotas"). A session's is the home itself, sharing the home's quota.
+    let (below, below_quota, at) = match child {
+        Child::Lease => (PROJECT, lease_quota, PROJECT_AT),
+        Child::Session { .. } => ("", 0, ""),
+    };
     match slot {
         0 => Some(Bound { how: fresh("bootfsd", ""), at: Some("/boot".into()), name: Some("bootfsd") }),
         1 => own.home(principal).map(|h| Bound {
@@ -269,8 +318,10 @@ pub fn binding(own: &Own, principal: &str, labels: &[u64], slot: u16) -> Option<
                 server: h.handle.clone(),
                 root: h.path.clone(),
                 quota: h.quota,
+                below: below.into(),
+                below_quota,
             },
-            at: Some(h.path.clone()),
+            at: Some(if at.is_empty() { h.path.clone() } else { at.into() }),
             name: None,
         }),
         2 => own.vault(principal, labels).map(|v| Bound {

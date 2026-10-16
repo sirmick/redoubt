@@ -67,7 +67,7 @@ operations, pipes, jobs, line editing, completion, help and the editor) is
 
 ## What an agent sees
 
-Status: planned · M3 (agents, approvals and the attack suite)
+Status: built · partly tested: a lease's capabilities are its sponsor's `~/project` and the system volume, started by `start_agent` or by the sponsored principal's login; the narrowed grants, the gateway and the harness's tools are later · tested: bench:steward-lease-ends, bench:steward-end-lease, bench:steward-sub-agent-dies-with-agent, bench:agent-login
 
 An agent is its own principal with a **sponsor**, the principal who answers for it. It runs in
 its own beamlet VM, under a **lease**: a budget with a kernel deadline, placed under its
@@ -80,8 +80,6 @@ nothing more ([agents](agents.md)).
 An agent never inherits network access. From M5 (self-hosted development) it reaches a model
 provider through a `gatewayd` capability that holds the API key, never through a socket
 ([gatewayd](../servers/gatewayd.md)).
-
-**Open:** none.
 
 ## What a developer sees
 

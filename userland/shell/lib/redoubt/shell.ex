@@ -35,7 +35,7 @@ defmodule Redoubt.Shell do
   """
 
   alias Redoubt.Commandlet.Registry
-  alias Redoubt.Shell.{Completer, Driver, Evaluator, Printer}
+  alias Redoubt.Shell.{Completer, Driver, Evaluator, Notices, Printer}
   alias Redoubt.Term.Text
 
   # beamlet's natives (docs/userland/beamlet.md, "Natives"): no module, so nothing to check at compile time.
@@ -48,6 +48,9 @@ defmodule Redoubt.Shell do
   """
   def start do
     {:ok, _started} = Application.ensure_all_started(:redoubt_shell)
+    # The steward's lease notices, served for the VM's life (`Redoubt.Shell.Notices`); a VM
+    # launched with no `notices` handle has none to serve.
+    _ = Notices.start()
     Driver.run()
   end
 

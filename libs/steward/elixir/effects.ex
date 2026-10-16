@@ -16,6 +16,7 @@ defmodule Redoubt.Steward.Effects do
   @console 201
   @read 1
   @crossing_life 1_000_000
+  @max_lease 24 * 3600 * 1_000_000
   @u64 0xFFFF_FFFF_FFFF_FFFF
 
   defp add(a, b), do: min(a + b, @u64)
@@ -54,31 +55,43 @@ defmodule Redoubt.Steward.Effects do
 
   # Sessions and leases.
 
+  # A session's budget, from its domain's sub-budget; a sponsored principal's from its sponsor's
+  # unlabelled sub-budget, as a lease of MAX_LEASE (R39).
   def carve_session(cx) do
     sizes = cx.store.fixed.sizes
-    step(cx, {:create_budget, token(cx, @budget), {:sub, cx.domain}, sizes.session, elem(cx.domain, 1), nil})
+
+    {parent, deadline} =
+      case sponsor(cx) do
+        nil -> {{:sub, cx.domain}, nil}
+        q -> {{:sub, sponsor_domain(cx, q)}, add(cx.event.now, @max_lease)}
+      end
+
+    step(cx, {:create_budget, token(cx, @budget), parent, sizes.session, elem(cx.domain, 1), deadline})
   end
 
-  # R39: from the domain's sub-budget for its lease; a sub-agent inside its agent's budget, ending
-  # no later.
+  # The sponsor of the object's principal, for a session of a sponsored principal.
+  defp sponsor(%{kind: :session} = cx) do
+    case Guards.session(cx) do
+      %{principal: p} -> Enum.at(cx.store.fixed.principals, p).sponsor
+      _ -> nil
+    end
+  end
+
+  defp sponsor(_cx), do: nil
+
+  defp sponsor_domain(cx, q), do: {Enum.at(cx.store.fixed.principals, q).account, []}
+
+  # R39: from the domain's sub-budget, the manifest's agent size, ending when the lease does.
   def carve_lease(cx) do
     case Guards.lease(cx) do
       nil ->
         cx
 
       l ->
-        sizes = cx.store.fixed.sizes
         deadline = add(cx.event.now, l.lease)
-        agent = l.parent && Guards.state(cx).leases[l.parent]
-
-        {parent, limits, deadline} =
-          case agent do
-            nil -> {{:sub, cx.domain}, sizes.agent, deadline}
-            a -> {{:budget, {{cx.domain, :lease, a.id}, @budget}}, sizes.sub_agent, min(deadline, a.deadline)}
-          end
-
         cx = update(cx, :leases, &%{&1 | deadline: deadline})
-        step(cx, {:create_budget, token(cx, @budget), parent, limits, elem(cx.domain, 1), deadline})
+        limits = cx.store.fixed.sizes.agent
+        step(cx, {:create_budget, token(cx, @budget), {:sub, cx.domain}, limits, elem(cx.domain, 1), deadline})
     end
   end
 
@@ -313,13 +326,24 @@ defmodule Redoubt.Steward.Effects do
   def audit_lease_ended(cx), do: audit(cx, {:lease_ended, cx.id})
 
   # The sponsor learns that the lease ended, not why: its unlabelled sessions are told.
+  # The sponsor learns that the lease ended, not why: a lease's sponsor is its domain's principal,
+  # a sponsored principal's session is a lease of its sponsor's, an unsponsored session tells nobody.
   def notify_sponsor(cx) do
-    sponsor = {elem(cx.domain, 0), []}
+    sponsor =
+      case {cx.kind, sponsor(cx)} do
+        {:lease, _} -> {elem(cx.domain, 0), []}
+        {_, nil} -> nil
+        {_, q} -> sponsor_domain(cx, q)
+      end
 
-    cx.store.routes
-    |> Enum.sort()
-    |> Enum.filter(fn {_, {d, kind, _}} -> kind == :session and d == sponsor end)
-    |> Enum.reduce(cx, fn {b, _}, cx -> output(cx, {:notice, {:session, b}, {:lease_ended, cx.id}}) end)
+    if sponsor == nil do
+      cx
+    else
+      cx.store.routes
+      |> Enum.sort()
+      |> Enum.filter(fn {_, {d, kind, _}} -> kind == :session and d == sponsor end)
+      |> Enum.reduce(cx, fn {b, _}, cx -> output(cx, {:notice, {:session, b}, {:lease_ended, cx.id}}) end)
+    end
   end
 
   # Requests.

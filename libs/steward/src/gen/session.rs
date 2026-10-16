@@ -33,6 +33,7 @@ pub enum Event {
     Exited,
     Detach,
     Leave,
+    EndLease,
     Idle,
     Attach,
     LockedOut,
@@ -40,7 +41,7 @@ pub enum Event {
 
 impl Event {
     /// Answered ahead of admission: marked `(ahead)` in the table.
-    pub const fn ahead(self) -> bool { false }
+    pub const fn ahead(self) -> bool { matches!(self, Event::EndLease) }
 
     /// Taken before the object exists: some row from `-` names it.
     pub const fn creates(self) -> bool { matches!(self, Event::Login | Event::Console) }
@@ -63,6 +64,14 @@ pub fn dispatch(p: &Policy, cx: &mut Cx<'_>, from: Option<State>, event: Event) 
             }
             'row: {
                 match (p.owns_labels)(cx) {
+                    Ok(()) => break 'row,
+                    Err(r) => cx.refused(r),
+                }
+                (p.refuse)(cx);
+                return Next::Nothing;
+            }
+            'row: {
+                match (p.sponsor_set)(cx) {
                     Ok(()) => break 'row,
                     Err(r) => cx.refused(r),
                 }
@@ -116,7 +125,7 @@ pub fn dispatch(p: &Policy, cx: &mut Cx<'_>, from: Option<State>, event: Event) 
             (p.launch)(cx);
             Next::To(State::Starting)
         }
-        (None, Event::Done | Event::Failed | Event::EndSession | Event::ChannelClosed | Event::Exited | Event::Detach | Event::Leave | Event::Idle | Event::Attach | Event::LockedOut) => Next::NoRow,
+        (None, Event::Done | Event::Failed | Event::EndSession | Event::ChannelClosed | Event::Exited | Event::Detach | Event::Leave | Event::EndLease | Event::Idle | Event::Attach | Event::LockedOut) => Next::NoRow,
         (Some(State::Starting), Event::Done) => {
             'row: {
                 match (p.not_locked)(cx) {
@@ -152,6 +161,10 @@ pub fn dispatch(p: &Policy, cx: &mut Cx<'_>, from: Option<State>, event: Event) 
         (Some(State::Starting), Event::Leave) => {
             Next::Unreachable
         }
+        (Some(State::Starting), Event::EndLease) => {
+            (p.refuse)(cx);
+            Next::Stay
+        }
         (Some(State::Starting), Event::Idle) => {
             Next::Stay
         }
@@ -186,6 +199,10 @@ pub fn dispatch(p: &Policy, cx: &mut Cx<'_>, from: Option<State>, event: Event) 
         (Some(State::Ending), Event::Leave) => {
             Next::Unreachable
         }
+        (Some(State::Ending), Event::EndLease) => {
+            (p.refuse)(cx);
+            Next::Stay
+        }
         (Some(State::Ending), Event::Idle) => {
             Next::Stay
         }
@@ -204,12 +221,14 @@ pub fn dispatch(p: &Policy, cx: &mut Cx<'_>, from: Option<State>, event: Event) 
             (p.refuse)(cx);
             (p.unroute)(cx);
             (p.drop_requests)(cx);
+            (p.notify_sponsor)(cx);
             (p.destroy_budget)(cx);
             Next::To(State::Ending)
         }
         (Some(State::Running), Event::EndSession) => {
             (p.unroute)(cx);
             (p.drop_requests)(cx);
+            (p.notify_sponsor)(cx);
             (p.reply_ok)(cx);
             (p.destroy_budget)(cx);
             Next::To(State::Ending)
@@ -221,6 +240,7 @@ pub fn dispatch(p: &Policy, cx: &mut Cx<'_>, from: Option<State>, event: Event) 
         (Some(State::Running), Event::Exited) => {
             (p.unroute)(cx);
             (p.drop_requests)(cx);
+            (p.notify_sponsor)(cx);
             (p.destroy_budget)(cx);
             Next::To(State::Ending)
         }
@@ -241,6 +261,23 @@ pub fn dispatch(p: &Policy, cx: &mut Cx<'_>, from: Option<State>, event: Event) 
             (p.reply_ok)(cx);
             Next::To(State::Detached)
         }
+        (Some(State::Running), Event::EndLease) => {
+            'row: {
+                match (p.sponsor_of)(cx) {
+                    Ok(()) => break 'row,
+                    Err(r) => cx.refused(r),
+                }
+                (p.refuse)(cx);
+                return Next::Stay;
+            }
+            (p.unroute)(cx);
+            (p.drop_requests)(cx);
+            (p.audit_lease_ended)(cx);
+            (p.notify_sponsor)(cx);
+            (p.reply_ok)(cx);
+            (p.destroy_budget)(cx);
+            Next::To(State::Ending)
+        }
         (Some(State::Running), Event::Idle) => {
             Next::Stay
         }
@@ -253,6 +290,7 @@ pub fn dispatch(p: &Policy, cx: &mut Cx<'_>, from: Option<State>, event: Event) 
         (Some(State::Running), Event::LockedOut) => {
             (p.unroute)(cx);
             (p.drop_requests)(cx);
+            (p.notify_sponsor)(cx);
             (p.destroy_budget)(cx);
             Next::To(State::Ending)
         }
@@ -263,12 +301,14 @@ pub fn dispatch(p: &Policy, cx: &mut Cx<'_>, from: Option<State>, event: Event) 
         (Some(State::Detached), Event::Failed) => {
             (p.unroute)(cx);
             (p.drop_requests)(cx);
+            (p.notify_sponsor)(cx);
             (p.destroy_budget)(cx);
             Next::To(State::Ending)
         }
         (Some(State::Detached), Event::EndSession) => {
             (p.unroute)(cx);
             (p.drop_requests)(cx);
+            (p.notify_sponsor)(cx);
             (p.reply_ok)(cx);
             (p.destroy_budget)(cx);
             Next::To(State::Ending)
@@ -279,6 +319,7 @@ pub fn dispatch(p: &Policy, cx: &mut Cx<'_>, from: Option<State>, event: Event) 
         (Some(State::Detached), Event::Exited) => {
             (p.unroute)(cx);
             (p.drop_requests)(cx);
+            (p.notify_sponsor)(cx);
             (p.destroy_budget)(cx);
             Next::To(State::Ending)
         }
@@ -288,6 +329,23 @@ pub fn dispatch(p: &Policy, cx: &mut Cx<'_>, from: Option<State>, event: Event) 
         (Some(State::Detached), Event::Leave) => {
             (p.refuse)(cx);
             Next::Stay
+        }
+        (Some(State::Detached), Event::EndLease) => {
+            'row: {
+                match (p.sponsor_of)(cx) {
+                    Ok(()) => break 'row,
+                    Err(r) => cx.refused(r),
+                }
+                (p.refuse)(cx);
+                return Next::Stay;
+            }
+            (p.unroute)(cx);
+            (p.drop_requests)(cx);
+            (p.audit_lease_ended)(cx);
+            (p.notify_sponsor)(cx);
+            (p.reply_ok)(cx);
+            (p.destroy_budget)(cx);
+            Next::To(State::Ending)
         }
         (Some(State::Detached), Event::Idle) => {
             'row: {
@@ -300,6 +358,7 @@ pub fn dispatch(p: &Policy, cx: &mut Cx<'_>, from: Option<State>, event: Event) 
             (p.audit_idle)(cx);
             (p.unroute)(cx);
             (p.drop_requests)(cx);
+            (p.notify_sponsor)(cx);
             (p.destroy_budget)(cx);
             Next::To(State::Ending)
         }
@@ -311,10 +370,11 @@ pub fn dispatch(p: &Policy, cx: &mut Cx<'_>, from: Option<State>, event: Event) 
         (Some(State::Detached), Event::LockedOut) => {
             (p.unroute)(cx);
             (p.drop_requests)(cx);
+            (p.notify_sponsor)(cx);
             (p.destroy_budget)(cx);
             Next::To(State::Ending)
         }
         (Some(State::Detached), Event::Login | Event::Console) => Next::NoRow,
-        (Some(State::Ended), Event::Login | Event::Console | Event::Done | Event::Failed | Event::EndSession | Event::ChannelClosed | Event::Exited | Event::Detach | Event::Leave | Event::Idle | Event::Attach | Event::LockedOut) => Next::NoRow,
+        (Some(State::Ended), Event::Login | Event::Console | Event::Done | Event::Failed | Event::EndSession | Event::ChannelClosed | Event::Exited | Event::Detach | Event::Leave | Event::EndLease | Event::Idle | Event::Attach | Event::LockedOut) => Next::NoRow,
     }
 }

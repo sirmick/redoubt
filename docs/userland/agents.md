@@ -43,7 +43,7 @@ Alice at `ssh approve@box` ([sessions](sessions.md#approve)).
 
 ### An agent is a principal with a sponsor
 
-Status: planned · M3 (agents, approvals and the attack suite)
+Status: built · partly tested: the sponsored principal and the leases `start_agent` makes run on the machine; the chain of sponsors (an agent sponsoring an agent) is not built: a sponsor is a person's principal · tested: bench:agent-login, bench:steward-lease-ends, host:redoubt-steward::a_sponsored_principals_session_is_a_lease_of_its_sponsors
 
 Humans, agents and projects are the same kind of principal to the steward: a named, accountable
 identity with a way to authenticate, a set of capabilities and an audit identity. They differ in
@@ -60,11 +60,9 @@ authentication and default policy, not mechanism ([the steward](../servers/stewa
   its capabilities allow, until its lease ends, and nothing more; it can run code it wrote, but
   never with more authority than it holds ([packages](packages.md)).
 
-**Open:** none.
-
 ### Leases
 
-Status: planned · M3 (agents, approvals and the attack suite)
+Status: built · partly tested: a lease's grants are its sponsor's `~/project` and the system volume, and the read root is writable until a server takes a read-only connection; the task-scoped grants and gateways are later · tested: bench:steward-lease-ends, bench:steward-end-lease, bench:steward-sub-agent-dies-with-agent, bench:agent-login
 
 A **lease** is a budget with a deadline, made by the steward for an agent or a session. When the
 deadline passes, the kernel destroys the budget and everything in it; the sponsor can end it
@@ -84,12 +82,26 @@ sooner. A lease is task-scoped: "read `~/project`, write `~/project/out`, the `m
   table ([R41 (narrowing by revocation scope)](../servers/steward.md#r41-narrowing-by-revocation-scope)); the steward then
   disconnects them at each server to free what they held, and releases what typed servers
   granted; everything is recorded in the audit log from M5 (self-hosted development).
-
-**Open:** none.
+  However it ended, the sponsor's unlabelled sessions are told: the shell prints
+  `[lease NAME ended]` from the steward's `lease_ended` send, naming the lease and never why
+  ([the steward](../servers/steward.md#leases)).
+- **The image's `agent` is a sponsored principal**: its login is a lease of alice's, carved from
+  her unlabelled share for `MAX_LEASE`, which her sessions can end and are told the end of; the
+  harness that drives it runs inside the lease unchanged.
+- **A lease's root has a quota of its own.** `/project` is the sponsor's `~/project`, minted
+  below the home with the `agent` size's `quota` (1 MiB in the image) carved from the home's and
+  given back at the lease's end: among the lease's sizes, since a root below a home with no quota
+  holds nothing ([walfsd](../servers/walfsd.md#quotas)); a `~/project` already holding more
+  refuses the lease, and `start_agent` answers `failed`.
+- **A lease has no console.** Its namespace holds no `/dev/cons`, and beamlet's platform runs
+  without one ([beamlet](beamlet.md#beamlet-on-redoubt)): what the agent writes to the console
+  is dropped, a read answers the end of the input, so an agent's output has nowhere to go but
+  `/project/out`. How its VM ended is the steward's console line
+  (`steward: lease alice/agent-1 of 1001/{} exited 0`), never the agent's.
 
 ### A lease's end is the kernel's
 
-Status: built · partly tested: a process that enters the kernel in a tight loop to put a deadline off is not attacked by a case · tested: bench:budget-deadline, mutation:BudgetDeadlineIgnored
+Status: built · partly tested: a process that enters the kernel in a tight loop to put a deadline off is not attacked by a case · tested: bench:budget-deadline, bench:steward-lease-ends, bench:steward-sub-agent-dies-with-agent, mutation:BudgetDeadlineIgnored
 
 The deadline under a lease is a kernel mechanism, and it is built
 ([budgets](../kernel/budgets.md#deadlines)). When it passes, the kernel destroys the budget exactly
@@ -98,7 +110,7 @@ spinning in user mode is stopped by the timer interrupt. There is no call or sta
 kernel puts a deadline off. The processes it kills get exit notices with cause `killed`, a call a
 server took is abandoned, every handle to the budget is revoked
 ([R10 (destruction)](../kernel/budgets.md#r10-destruction)), and a child budget's later deadline
-never fires: a sub-agent's lease inside an agent's never outlives it.
+never fires: a sub-agent's budget inside an agent's never outlives it.
 
 ### An agent cannot crowd out its sponsor
 

@@ -56,12 +56,13 @@ pub trait Kernel {
     fn budget_id(&self, budget: Self::Budget) -> u64;
     /// A badge on the steward's own endpoint, stamped with `stamp`.
     fn mint(&mut self, badge: u64, stamp: Self::Budget) -> Result<Self::Handle, Error>;
-    /// A fresh connection for a child of `domain` at shared slot `slot`, minted in the revocation
-    /// scope `scope` so that destroying the scope ends it (servers/steward.md R41), or none where
-    /// the slot binds to nothing for that domain.
+    /// A fresh connection for `owner`'s child (a session's or a lease's: the binding table
+    /// differs by kind) at shared slot `slot`, minted in the revocation scope `scope` so that
+    /// destroying the scope ends it (servers/steward.md R41), or none where the slot binds to
+    /// nothing for it.
     fn connect(
         &mut self,
-        domain: &Domain,
+        owner: &Object,
         slot: u16,
         scope: Self::Budget,
     ) -> Result<Option<Self::Handle>, Error>;
@@ -71,16 +72,22 @@ pub trait Kernel {
     fn console(&mut self, console: Option<redoubt_rt::abi::Handle>, relay: Option<redoubt_rt::abi::Handle>);
     /// Gives a connection back: closed here, and disconnected at its server.
     fn release(&mut self, handle: Self::Handle);
-    /// Starts a child of `domain` in `budget` through the loader stub, with the connections the
-    /// batch made in slot order (the steward's first), told the session's `context` (`None` for
-    /// the console's session or an agent); returns its process id.
+    /// Starts `owner`'s child in `budget` through the loader stub (a session's VM, or an agent's
+    /// for a lease), with the connections the batch made in slot order (the steward's first),
+    /// told the session's `context` (`None` for the console's session or an agent); returns its
+    /// process id and, for a session, the send right of the `notices` endpoint its VM was given
+    /// the receive right of, which [`Kernel::notify`] sends on (servers/steward.md, "Leases").
     fn launch(
         &mut self,
-        domain: &Domain,
+        owner: &Object,
         budget: Self::Budget,
         connections: &[Option<Self::Handle>],
         context: Option<&str>,
-    ) -> Result<u64, Error>;
+    ) -> Result<(u64, Option<Self::Handle>), Error>;
+    /// Sends `lease_ended` for `lease`, named `name`, on a session's notices endpoint: one way,
+    /// bounded, never retried. A send that does not go is dropped: the steward is never held by
+    /// a session that does not read.
+    fn notify(&mut self, notices: Self::Handle, lease: u64, name: &str);
     /// A context's console relay, started in `budget` (servers/steward.md, "Contexts"): its
     /// process id, and the steward's control connection to it. The next console connection of
     /// `domain`'s namespace is the relay's, which it serves the session's `/dev/cons` on.
@@ -152,6 +159,12 @@ pub struct Steward<B, H> {
     made: MadeMap<B, H>,
     /// Each running process, by id, and the object it is.
     pids: BTreeMap<u64, Object>,
+    /// Each process whose object the core has let go of before the process's exit notice came
+    /// (a lease ended by `end_lease`, a session its deadline took): the object and the name its
+    /// notice gave it, for the exit line that notice correlates with; taken by [`Steward::ended`].
+    ended: BTreeMap<u64, (Object, String)>,
+    /// Each session's notices endpoint: the send right its launch kept, closed with the session.
+    notices: BTreeMap<Object, H>,
     /// The console principal's session, while it runs.
     console_session: Option<u64>,
     /// Each step that failed since the server last said them, with the kernel's error.
@@ -214,8 +227,9 @@ pub fn start<K: Kernel>(
         return Err(StartError::UsersNotEmpty);
     }
     let mut carved = Vec::new();
-    // Boot carves for each principal in the manifest's order.
-    for (c, p) in carves.iter().zip(&manifest.principals) {
+    // Boot carves for each unsponsored principal in the manifest's order; a sponsored one's
+    // sessions are carved under its sponsor's sub-budget, so it has no top of its own.
+    for c in &carves {
         let account = c.account.get();
         let refused = |labels: &[u64], error| StartError::Carve { account, labels: labels.to_vec(), error };
         // The account is set once, here: everything under the top budget shares it (R8, R14).
@@ -228,7 +242,7 @@ pub fn start<K: Kernel>(
             let sub = kernel.create(top, &sub_spec).map_err(|e| refused(labels, e))?;
             subs.push((domain.clone(), sub));
         }
-        carved.push(Carved { name: p.name.clone(), account, top, subs });
+        carved.push(Carved { name: c.name.clone(), account, top, subs });
     }
     let sizes = manifest.sizes;
     Ok(Steward {
@@ -239,6 +253,8 @@ pub fn start<K: Kernel>(
         sizes,
         made: BTreeMap::new(),
         pids: BTreeMap::new(),
+        ended: BTreeMap::new(),
+        notices: BTreeMap::new(),
         console_session: None,
         failed: Vec::new(),
     })

@@ -11,27 +11,35 @@ The sources of the signed boot bundle and the disk images; what they produce goe
   for the disk's `data` volume, `walfsd:alice-secrets` for alice's labelled one, the userland
   disk's `blkd:system`, `verity:system` and `erofsd:system`, the steward and `sshd`. Its principals
   are alice (who owns `alice-secrets` and works under `{}` and `{alice-secrets}`), bob, and
-  `agent`, alice's agent in name only for now: the principal a sponsor-run agent logs in as,
-  with a home of its own and bob's quota, no labels and no network scope, which leases convert
-  when the steward has them ([agents](../docs/userland/agents.md)). All three have test keys from
+  `agent`, the principal a sponsor-run agent logs in as, **sponsored by alice**: it has a home
+  of its own, bob's quota, no labels and no network scope, and no budget of its own: its session
+  is a lease of alice's, carved from her unlabelled share for `MAX_LEASE`, which her sessions
+  can end and are told the end of ([agents](../docs/userland/agents.md);
+  [the steward](../docs/servers/steward.md#leases)). All three have test keys from
   `tests/keys/`, so the manifest must never ship. The budgets, in pages: a session is 11,392 and
-  its budget's own cost 1, so two sessions are 22,786, and each label set's share is its
-  principal's pages over its label sets, less 1. Alice's 47,624 give each of her two label sets
-  23,811: two sessions, her console session and one SSH login under `{}`, with 1,025 over. Bob's
-  32,768 give his one set 32,767, two sessions with 9,981 over, and agent's 24,576 give its one
-  set 24,575, two sessions (one login and a second context) with 1,789 over. Together the three
-  top budgets are 104,968 pages, 104,971 with their own, of the about 192,700 pages `users`
-  holds on the 1 GiB machine (the kernel's `Budgets:` line at boot: 192,723 at one rv64 boot,
-  192,576 and 192,600 at rv32 ones, the figure moving a little with the pack), a margin of
-  about 88,000 pages, so alice's and bob's did not have to shrink for agent's. A session holds
-  10 processes, its VM, its console's relay, `piped` and up to 7 stages of a pipeline, and
-  alice's 40, bob's 20 and agent's 20 give each label set two sessions of them. So each
-  principal's cap of live contexts per label set is 2, the console's session counted in alice's
-  unlabelled set; what one account may have open at `walfsd` at once is that cap, the console
-  session, a lease and one spare for a context detaching while another attaches, 5 here, and the
-  server's constant is the largest such sum over the tree's manifests, 6
-  ([walfsd](../docs/servers/walfsd.md#serving)); the two `walfsd` entries' 1,280 pages are that
-  page's entry rule. The shell,
+  its budget's own cost 1, and each label set's share is its principal's pages over its label
+  sets, less 1. Alice's `{}` share must hold at once her console session, one SSH login, the
+  agent's sponsored session and one lease of the steward's `agent` size (5,248 pages, 2
+  processes: the agent VM's heap peak on the echo path, 1,993 pages on rv64 and 2,083 on rv32
+  as `beamlet-agent-footprint` measures it once the agent has read its input and written its
+  result, doubled, with the 44 pages it holds outside the heap and room for one sub-agent's
+  budget, `sub_agent`'s 1,024 and its own page, rounded up to 128; and a `quota` of 1 MiB, the
+  bytes of the sponsor's home a lease's `/project` root is carved with, of alice's 8 MiB
+  `home_quota`, given back when the lease ends):
+  three sessions are 34,179 and the lease 5,249, 39,428 in all, so alice's 81,920 give each of
+  her two label sets 40,959, with 1,531 over in `{}` and three sessions' room in her vault's. Bob's 32,768 give his one set 32,767, two sessions
+  with 9,981 over. Together the two top budgets are 114,688 pages, 114,690 with their own, of
+  the about 192,700 pages `users` holds on the 1 GiB machine (the kernel's `Budgets:` line at
+  boot: 192,723 at one rv64 boot, 192,576 and 192,600 at rv32 ones, the figure moving a little
+  with the pack), a margin of about 78,000 pages. A session holds 10 processes, its VM, its
+  console's relay, `piped` and up to 7 stages of a pipeline, and a lease 2, its VM and one
+  sub-agent's process: alice's 64 give each label set 32, three sessions and a lease, and bob's
+  20 two sessions. The cap of live contexts follows: alice three per set (the console's session
+  and the agent's count among her `{}` ones), bob two; what one account may have open at
+  `walfsd` at once is that cap, the console session, a lease and one spare for a context
+  detaching while another attaches, 6 for alice, and the server's constant is the largest such
+  sum over the tree's manifests, 6 ([walfsd](../docs/servers/walfsd.md#serving)); the two
+  `walfsd` entries' 1,280 pages are that page's entry rule. The shell,
   `Redoubt.Shell`, is started by the
   steward as the console principal's session (`console: "alice"`) on the UART, and as each SSH
   login's session on port 22 ([steward](../docs/servers/steward.md#authentication-and-sessions)).

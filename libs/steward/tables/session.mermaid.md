@@ -10,11 +10,13 @@ stateDiagram-v2
     Running --> Detached: ChannelClosed, Detach
     Running --> Detached: Leave
     Running --> Ending: EndSession
+    Running --> Ending: EndLease
     Running --> Ending: Exited, LockedOut
     Running --> Ending: Failed
     Detached --> Running: Attach
     Detached --> Ending: Idle
     Detached --> Ending: EndSession
+    Detached --> Ending: EndLease
     Detached --> Ending: Exited, LockedOut, Failed
     Ending --> Ended: Done, Failed
     Ended --> [*]

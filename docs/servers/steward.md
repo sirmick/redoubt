@@ -233,12 +233,14 @@ default. The model swaps one entry for a broken one.
 | `not_locked`, `blame_window` | R40 | `PolicyNoLockout`, `PolicyBlameNoWindow` |
 | `pending_cap`, `fair_share` | the pending cap per domain, a fair share per session | `PolicyNoPendingCap`, `PolicyNoFairShare` |
 | `drop_requests` | a session's end drops its requests | `PolicyDeadSessionRequestsKept` |
-| `lease_bounded`, `carve_lease` | R39: a lease at most `MAX_LEASE`; a sub-agent inside its agent's budget, ending no later | `PolicyUnboundedLease`, `PolicySubAgentOutlivesAgent` |
+| `lease_bounded`, `carve_lease` | R39: a lease at most `MAX_LEASE`, its budget from its domain's sub-budget, ending with it | `PolicyUnboundedLease` |
 | `reaches`, `render`, `notify` | R38's screens: an approval channel reaches only its own account's requests, whose every label its principal owns; printable ASCII, capped, no labelled free text; an approval-waiting notice reaches only channels whose labels include all the request's | `PolicyShowLabelledToAll`, `PolicyRenderNotWhitelisted`, `PolicyLabelledFreeTextShown`, `PolicyNotifyLabelledToAll` |
 | `rendered_here`, `hash_matches` | R38's binding | `PolicyApproveOtherChannel`, `PolicyApproveIgnoresHash` |
 | `exact_labels`, `item_fits` | R42: a declassification is submitted from a session with exactly the item's labels, a push from an unlabelled session; a declassified item is at most `DECLASSIFY_MAX` bytes of printable text | `PolicyDeclassifyFromUnlabelled`, `PolicyDeclassifyUnfit` |
 | `carve_crossing`, `copy_out` | R42: a reader or writer budget carries exactly the labelled side's labels; a copy out writes exactly the snapshot | `PolicyDeclassifyWithoutReader`, `PolicyDeclassifyLive` |
 | `sponsor_session` | a lease is ended only from an unlabelled session of its sponsor | `PolicyEndLeaseFromVault` |
+| `sponsor_of` | a sponsored principal's session is ended only from an unlabelled session of its sponsor | `PolicySponsoredEndedByAnyone` |
+| `sponsor_set` | a sponsored principal logs in to its unlabelled set alone | `PolicySponsoredVaultLogin` |
 | `audit_visible` | every audit read goes through it: a record is read under [R25 (the label check)](serving.md#r25-the-label-check) | `PolicyAuditUnfiltered` |
 
 A guard that reads only an object's kind (which crossing it is, whether a request snapshots)
@@ -292,7 +294,10 @@ so the steward still holds no key.
   the minted range ([R27 (badge allocation)](serving.md#r27-badge-allocation)) and no session's
   badge is a root badge. It says on its console each audit record, each step that failed with the
   kernel's error, and each sub-budget's usage when it changes, before it answers the call that
-  caused them.
+  caused them; and how each process it launched ended, once, as `steward: lease NAME of
+  ACCOUNT/LABELS exited CODE` (`faulted`, `was killed`), NAME the name the `lease_ended` notice
+  gives the lease (`alice/agent-1`; a session's is `alice/session-2`), so the two lines
+  correlate: the lease's end audit while audit records are console lines.
 - **The model** binds the same crate to the kernel model, in place of its own copy of the
   policy, so the property families (P1 to P18) and the mutations attack the code that ships. The
   model's families drive events; its checks read the core's state through a read-only
@@ -316,11 +321,16 @@ the manifest is never public, so `/boot` cannot carry it. A trace begins with th
 - `principal "NAME" account=N login=[..] approval=[..] owned=[..] sets=[[..],..] top=P,N,W
   contexts=N idle=S`: one per principal, its keys by id, its owned labels and each label set by
   label ids, its unlabelled set first, its budget, and its cap of live contexts per label set and
-  their idle bound in seconds ([contexts](#contexts)).
+  their idle bound in seconds ([contexts](#contexts)); `sponsor="NAME"` on a sponsored principal's
+  line, the one field a line may leave out, names the principal that answers for it
+  ([leases](#leases)): boot carves it no top budget (`top=0,0,0`), and its sessions are leases of
+  its sponsor's. A sponsor is another principal, itself unsponsored: no chains here.
 - `keyd [..]`, the ids of keys `keyd` holds; `init` writes `keyd []` (see
   [residual risks](#residual-risks)).
 - `servers N`, the shared servers' slots a session connects to.
-- `sizes session=P,N,W agent=.. sub_agent=.. crossing=.. cost=N`, the budgets the steward carves.
+- `sizes session=P,N,W agent=.. sub_agent=.. crossing=.. cost=N [agent_quota=B]`, the budgets the
+  steward carves, and the bytes of its sponsor's home a lease's root is carved with (the one
+  field the line may leave out: 0 then, a root that holds nothing).
 
 After the core's lines `init` appends the steward's own, which the server parses and the core
 never sees, each naming only what `init`'s check found in the manifest:
@@ -398,8 +408,10 @@ Status: built · tested: bench:steward-boot, bench:steward-ssh-two-principals, h
 - The principals come from the boot manifest ([init](init.md#the-boot-manifest)): each one's login
   and approval keys, budget, account, owned labels, the label sets it works under, home and
   network scope. The steward is stateless across boots.
-- **Nesting.** Every principal has its own space, and its sponsor can destroy its budget.
-  Principals can run their own servers and delegate into them.
+- **Nesting.** Every principal has its own space, and its sponsor can destroy its budget. A
+  **sponsored principal** (`sponsor` in the manifest) has no top budget of its own: its sessions
+  are leases carved from its sponsor's unlabelled sub-budget, which the sponsor can end
+  ([leases](#leases)). Principals can run their own servers and delegate into them.
 
 ### Fixed sub-budgets per label set
 
@@ -432,7 +444,9 @@ Status: built · tested: bench:steward-home-quota, bench:init-refuses-overcommit
   life; every session's home is minted through it with no quota of its own, at its root, so they
   all share the one quota: two sessions, or a session and the console session, stop together at
   it, and so do a principal's named contexts. A session's connection is disconnected through the
-  kept one when the session ends. A write past the quota is the server's `enospc`
+  kept one when the session ends. A lease's root, the home's `project` directory, is minted
+  through the kept one too, but below the home, with the manifest's `agent_quota` bytes carved
+  from the home's quota for the lease's life ([leases](#leases)). A write past the quota is the server's `enospc`
   ([walfsd](walfsd.md#quotas)); the principal's other homes' room, and every other principal's,
   is untouched.
 - **A restart re-carves.** A dead steward's kept connections go with it: `init` disconnects the
@@ -660,9 +674,12 @@ same answer as an unknown one, so a session cannot send `login`, `approve` or `b
   the session is but a live context's `in_use` ([contexts](#contexts)). The reply is the session's
   id, its name and the channel's labels.
 - **`channel_closed`** ends the session the channel carried.
-- **Not yet bound:** `submit`, `start_agent`, `end_lease`, `approve`, `deny`, `pending`,
-  `approval_opened`, `approval_closed` and `blame` are in the table and accepted only on their
-  badge classes, and answered `unknown` until their batches are built.
+- **`start_agent`** and **`end_lease`**, from a session's badge, are the lease operations
+  ([leases](#leases)); **`lease_ended`** is the steward's own send to a session's `notices`
+  endpoint, never a call: on any badge it is malformed.
+- **Not yet bound:** `submit`, `approve`, `deny`, `pending`, `approval_opened`,
+  `approval_closed` and `blame` are in the table and accepted only on their badge classes, and
+  answered `unknown` until their batches are built (the powerbox and crash blame).
 
 The table: [libs/wire/tables/steward.md](../../libs/wire/tables/steward.md).
 
@@ -670,21 +687,55 @@ The table: [libs/wire/tables/steward.md](../../libs/wire/tables/steward.md).
 
 ### The lease and approval operations
 
-Status: planned · M3 (agents, approvals and the attack suite)
+Status: built · partly tested: `start_agent` and `end_lease` run on the machine; the approval operations and `blame` are answered `unknown` until the powerbox and crash blame · tested: bench:steward-end-lease, host:redoubt-steward-server::start_agent_runs_the_lease_batch_and_answers_the_lease, host:redoubt-steward-server::end_lease_from_the_sponsor_destroys_the_lease_and_tells_her_sessions, host:redoubt-steward-server::every_operation_on_another_badge_class_is_malformed
 
-The steward's protocol adds `submit` (from sessions and agents), `approve` and `deny` (from the
-approval channel), `end_lease` (from a sponsor), and `blame(account: u64, labels: bytes,
-server: string)` (from `init`, [init](init.md#restarts-and-reboots)), each accepted only through
-its badge class, as above.
-
-**Open:** these operations' fields; they are written with the steward's second half.
+The steward's protocol adds `start_agent(lease: u64)` (from an unlabelled session, answered with
+the lease's id and name once its batch is done) and `end_lease(lease: u64)` (from the sponsor,
+answered at once: the loop never parks it, `protocol::ahead`), `submit` (from sessions and
+agents), `approve` and `deny` (from the approval channel), and `blame(account: u64, labels:
+bytes, server: string)` (from `init`, [init](init.md#restarts-and-reboots)), each accepted only
+through its badge class, as above; and `lease_ended(lease: u64, name: string)`, the steward's
+send to a session ([leases](#leases)).
 
 ### Leases
 
-Status: planned · M3 (agents, approvals and the attack suite)
+Status: built · partly tested: a lease's roots are its sponsor's `~/project` and the system volume (the task-scoped grants and `gatewayd` are later) · tested: bench:steward-lease-ends, bench:steward-end-lease, bench:steward-sub-agent-dies-with-agent, bench:agent-login, host:redoubt-steward-server::start_agent_runs_the_lease_batch_and_answers_the_lease, host:redoubt-steward-server::end_lease_from_the_sponsor_destroys_the_lease_and_tells_her_sessions, host:redoubt-steward-server::a_leases_deadline_ends_it_without_a_failed_step, host:redoubt-steward-server::a_login_as_the_sponsored_principal_is_a_lease_of_its_sponsors, host:redoubt-steward::a_sponsored_principals_session_is_a_lease_of_its_sponsors, host:redoubt-steward::sponsor_session_and_notify_sponsor
 
 An agent is its own principal, never an impersonation, with an accountable **sponsor**: a person,
 or an agent with a person at the top of the chain.
+
+- **`start_agent`** from an unlabelled session's badge (a lease's badge is told `unknown`: a
+  lease is not a session, and a lease nested in a lease is a later package) is the core's lease
+  batch: the lease's
+  budget from the sponsor's unlabelled sub-budget with the manifest's `agent` size and the
+  deadline asked for, a scope, the steward's badge on it, a connection per slot of the binding
+  table for a lease (`/boot`, the sponsor's home's `project` directory at `/project`, minted
+  through the home's one carve with the manifest's `agent_quota` bytes carved from the home's
+  quota and given back at the lease's end, since a root below the home with no quota of its own
+  holds nothing ([walfsd](walfsd.md#quotas)); a `project` holding more than that quota refuses
+  the mint, the step fails and `start_agent` answers `failed`; and the system volume: no vault,
+  no network, no console), and beamlet
+  launched on the agent's module, `Redoubt.Agents.Echo` in this image, told `principal=` the
+  sponsor and `home=/project`; its process has an exit endpoint the steward watches as a
+  session's. The reply names the lease (`agent-1`, numbered per domain).
+- **A sponsored principal** (the image's `agent`, `sponsor: "alice"` in the manifest) has no
+  top budget: a login as it runs the session machine as any login does, but its session's budget
+  is carved from the sponsor's unlabelled sub-budget with a deadline of `MAX_LEASE`, so it is a
+  lease of the sponsor's: `end_lease` with the session's id ends it, and its every end tells the
+  sponsor. It stays its own principal: its records and routes are its own domain's, its reply
+  `session-N`, and a login of its in a labelled set is refused (`labelled`): its vault work goes
+  through `submit` and an approval, never a login. The harness that drives it (the machine
+  mode, a compile on the box) runs inside the lease unchanged.
+- **Each path tells the sponsor:** every unlabelled session of the sponsor receives one
+  `lease_ended` send on the `notices` endpoint it was launched with (the receive right is the
+  named handle `notices` in its startup block, which the shell serves; the steward keeps the send
+  right and closes it with the session), naming the lease as `<principal>/<name>`
+  (`alice/agent-3`, `agent/session-7`) and never why; the shell prints `[lease NAME ended]`. A
+  session whose VM does not take the send in the steward's bound misses it, and the steward is
+  not held: the core forgets a notice no session can take.
+- **A lease the kernel's deadline took** reaches the steward as its process's exit notice with
+  the budget already gone: the core's `DestroyBudget` on it is the end asked for, not a failed
+  step, once that object's exit is in; on a budget whose process still runs it is one.
 
 - **An agent's budget sits under its sponsor's**, so it shares the sponsor's account: it is
   carved from the sponsor's fixed sub-budget for the lease's label set, never from a session's
@@ -725,11 +776,15 @@ or an agent with a person at the top of the chain.
 - **Each agent runs in its own VM**; sub-agents with different authority are separate VMs.
 
 The model checks leases and their end (its P9 and P13; `PolicyUnboundedLease`,
-`PolicySubAgentOutlivesAgent`, `PolicyEndLeaseAdmitted`, `PolicyEndLeaseFromVault`,
-`PolicyNoFairShare`) and the lease lifecycle ([R39 (leases end)](#r39-leases-end)): the lease
-machine's, whose table and generated diagram are [above](#the-lease).
+`PolicyEndLeaseAdmitted`, `PolicyEndLeaseFromVault`, `PolicyNoFairShare`), the sponsored principal (its P1 and P13; `PolicySponsoredVaultLogin`,
+`PolicySponsoredEndedByAnyone`) and the lease lifecycle ([R39 (leases end)](#r39-leases-end)):
+the lease machine's, whose table and generated diagram are [above](#the-lease), and the session
+machine's `EndLease` rows.
 
-**Open:** none.
+Residuals: a lease's "read `~/project`" root is writable, since no server takes a read-only
+connection yet; a sponsor whose sessions all missed the notice has no `leases` listing to ask
+(later, with the powerbox); the lease's connections end by the launcher's disconnect at its end
+until [R41](#r41-narrowing-by-revocation-scope)'s scope lands.
 
 ### The powerbox and approvals
 
@@ -1045,13 +1100,14 @@ text.
 
 ### R39 (leases end)
 
-Status: planned · M3 (agents, approvals and the attack suite)
+Status: built · tested: bench:steward-lease-ends, bench:steward-end-lease, bench:steward-sub-agent-dies-with-agent, bench:agent-login, host:redoubt-steward::a_sponsored_principals_session_is_a_lease_of_its_sponsors, mutation:PolicyUnboundedLease, mutation:PolicyEndLeaseFromVault, mutation:PolicySponsoredEndedByAnyone, mutation:PolicySponsoredVaultLogin
 
-Every lease's budget has a deadline at most `MAX_LEASE` away, every sub-agent sits inside its
-agent's budget and ends no later, an expired lease is gone, and its sponsor can always end it,
-ahead of admission, however hard the agent floods the servers they share.
-
-**Open:** none.
+Every lease's budget has a deadline at most `MAX_LEASE` away, an expired lease is gone, and its
+sponsor can always end it, ahead of admission, however hard the agent floods the servers they
+share. A sub-agent is a child budget inside the agent's, which the kernel ends with its parent
+whatever its own deadline ([R10 (destruction)](../kernel/budgets.md#r10-destruction)); the
+steward carves none itself, a lease nested in a lease being a later package's ([leases](#leases)).
+A sponsored principal's session is a lease of its sponsor's under the same rule.
 
 ### R40 (blame by label set)
 

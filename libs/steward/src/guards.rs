@@ -120,6 +120,13 @@ pub fn sees(caller: &Domain, other: &Domain) -> bool { caller == other }
 /// domain.
 pub fn caller_unlabelled(cx: &Cx<'_>) -> Verdict { ok_if(cx.domain.labels().is_empty(), Refusal::Labelled) }
 
+/// `start_agent` is a session's call: a lease's badge, which would nest a lease, is told nothing
+/// (`unknown`); a lease is not a session, and nested leases are a later package
+/// (servers/steward.md, "Leases").
+pub fn caller_session(cx: &Cx<'_>) -> Verdict {
+    ok_if(cx.caller.as_ref().is_some_and(|by| by.kind == Kind::Session), Refusal::Unknown)
+}
+
 /// No new session or lease while the domain is locked out (R40); for an approval, the domain
 /// the grant would start a lease in. In the blame machine, it says the window has passed.
 pub fn not_locked(cx: &Cx<'_>) -> Verdict {
@@ -230,6 +237,23 @@ pub fn sponsor_session(cx: &Cx<'_>) -> Verdict {
         && by.domain.account() == cx.domain.account()
         && by.domain.labels().is_empty();
     ok_if(sponsor, Refusal::NotSponsor)
+}
+
+/// R39: a sponsored principal's session is ended only from an unlabelled session of its sponsor.
+pub fn sponsor_of(cx: &Cx<'_>) -> Verdict {
+    let by = cx.caller.as_ref().ok_or(Refusal::NotSponsor)?;
+    let p = &cx.fixed.principals[session(cx).ok_or(Refusal::Unknown)?.principal];
+    let sponsor = p.sponsor.map(|q| cx.fixed.principals[q].account);
+    let ok =
+        by.kind == Kind::Session && Some(by.domain.account()) == sponsor && by.domain.labels().is_empty();
+    ok_if(ok, Refusal::NotSponsor)
+}
+
+/// A sponsored principal logs in to its unlabelled set alone: its vault work goes through
+/// `submit` and an approval, as a labelled agent's does, never a login.
+pub fn sponsor_set(cx: &Cx<'_>) -> Verdict {
+    let p = &cx.fixed.principals[session(cx).ok_or(Refusal::Unknown)?.principal];
+    ok_if(p.sponsor.is_none() || cx.domain.labels().is_empty(), Refusal::Labelled)
 }
 
 /// Every audit read goes through it: a record is read under R25, so only a reader holding all

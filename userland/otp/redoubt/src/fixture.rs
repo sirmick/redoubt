@@ -171,17 +171,36 @@ pub fn session_built(
     labels: &[u64],
     extra: impl FnOnce(usize) -> Vec<(&'static str, Handle)>,
 ) -> (usize, Vec<u8>) {
+    built(Some(console), volumes, args, labels, extra)
+}
+
+/// A new process with no `/dev/cons`, as a lease's (docs/userland/agents.md, "Leases"), a
+/// connection to each volume, and `args`, and its startup block.
+pub fn lease(volumes: &[(&str, &Volume)], args: &[&str]) -> (usize, Vec<u8>) {
+    built(None, volumes, args, &[], |_| Vec::new())
+}
+
+fn built(
+    console: Option<&ConsoleServer>,
+    volumes: &[(&str, &Volume)],
+    args: &[&str],
+    labels: &[u64],
+    extra: impl FnOnce(usize) -> Vec<(&'static str, Handle)>,
+) -> (usize, Vec<u8>) {
     let f = fake();
     let pid = f.process(1001, labels);
-    let cons = f.grant(console.pid, console.endpoint, pid, 0x20 + pid as u64);
-    let mut held: Vec<(&str, Handle)> = volumes
-        .iter()
-        .map(|(name, volume)| (*name, f.grant(volume.littlefsd, volume.endpoint, pid, 0x40 + pid as u64)))
+    let mut held: Vec<(&str, Handle)> = console
+        .map(|console| ("/dev/cons", f.grant(console.pid, console.endpoint, pid, 0x20 + pid as u64)))
+        .into_iter()
         .collect();
+    held.extend(
+        volumes.iter().map(|(name, volume)| {
+            (*name, f.grant(volume.littlefsd, volume.endpoint, pid, 0x40 + pid as u64))
+        }),
+    );
     held.extend(extra(pid));
-    let highest = held.iter().map(|(_, h)| h.index()).fold(cons.index(), u32::max);
+    let highest = held.iter().map(|(_, h)| h.index()).max().unwrap_or(0);
     let mut builder = StartupBuilder::new(highest);
-    builder.namespace("/dev/cons", cons);
     for (name, handle) in held {
         if name.starts_with('/') {
             builder.namespace(name, handle);

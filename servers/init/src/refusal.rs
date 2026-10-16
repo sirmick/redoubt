@@ -170,7 +170,7 @@ impl fmt::Display for Why {
             Why::NotAName => "not a name",
             Why::AccountName => "a principal's or a label's name holds no : or +",
             Why::Reserved => "a reserved name",
-            Why::Quota => "a home has a quota of at least 1 byte, and a quota has a home",
+            Why::Quota => "a home has a quota of at least 1 byte, a quota has a home, and the agent size's quota is below every home's",
             Why::SharedVault => "a labelled volume is one principal's vault, and another's label set names it",
             Why::SharedHome => "a home is one principal's: no other home is it, holds it or is inside it",
             Why::OverCommitted => "a volume's home quotas sum to at most its bytes, which it gives",

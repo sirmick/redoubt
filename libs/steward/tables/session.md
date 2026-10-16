@@ -16,6 +16,7 @@ Included by [the steward's page](../../../docs/servers/steward.md#machines); the
 | --- | --- | --- | --- | --- |
 | - | `Login` | `!login_key` | - | `refuse` |
 | - | `Login` | `!owns_labels` | - | `refuse` |
+| - | `Login` | `!sponsor_set` | - | `refuse` |
 | - | `Login` | `!not_locked` | - | `refuse` |
 | - | `Login` | `!context_free` | - | `take_over` |
 | - | `Login` | `!under_cap` | - | `refuse` |
@@ -26,6 +27,7 @@ Included by [the steward's page](../../../docs/servers/steward.md#machines); the
 | `Starting` | `Done` | - | `Running` | `route`, `audit_login`, `reply_login` |
 | `Starting` | `Failed` | - | `Ending` | `refuse`, `destroy_partial` |
 | `Starting` | `EndSession`, `ChannelClosed`, `Exited`, `Detach`, `Leave` | - | = | `unreachable` |
+| `Starting` | `EndLease` (ahead) | - | = | `refuse` |
 | `Starting` | `Idle` | - | = | - |
 | `Starting` | `Attach` | - | = | `refuse_in_use` |
 | `Starting` | `LockedOut` | - | = | - |
@@ -34,19 +36,24 @@ Included by [the steward's page](../../../docs/servers/steward.md#machines); the
 | `Running` | `Leave` | `!is_context` | = | `refuse` |
 | `Running` | `Leave` | - | `Detached` | `detach_relay`, `reply_ok` |
 | `Running` | `Idle` | - | = | - |
-| `Running` | `EndSession` | - | `Ending` | `unroute`, `drop_requests`, `reply_ok`, `destroy_budget` |
-| `Running` | `Exited`, `LockedOut` | - | `Ending` | `unroute`, `drop_requests`, `destroy_budget` |
+| `Running` | `EndSession` | - | `Ending` | `unroute`, `drop_requests`, `notify_sponsor`, `reply_ok`, `destroy_budget` |
+| `Running` | `EndLease` (ahead) | `!sponsor_of` | = | `refuse` |
+| `Running` | `EndLease` (ahead) | - | `Ending` | `unroute`, `drop_requests`, `audit_lease_ended`, `notify_sponsor`, `reply_ok`, `destroy_budget` |
+| `Running` | `Exited`, `LockedOut` | - | `Ending` | `unroute`, `drop_requests`, `notify_sponsor`, `destroy_budget` |
 | `Running` | `Done` | - | = | `reply_login` |
-| `Running` | `Failed` | - | `Ending` | `refuse`, `unroute`, `drop_requests`, `destroy_budget` |
+| `Running` | `Failed` | - | `Ending` | `refuse`, `unroute`, `drop_requests`, `notify_sponsor`, `destroy_budget` |
 | `Detached` | `Attach` | - | `Running` | `attach_relay`, `audit_attached` |
 | `Detached` | `ChannelClosed`, `Detach`, `Done` | - | = | - |
 | `Detached` | `Leave` | - | = | `refuse` |
 | `Detached` | `Idle` | `!idle_due` | = | - |
-| `Detached` | `Idle` | - | `Ending` | `audit_idle`, `unroute`, `drop_requests`, `destroy_budget` |
-| `Detached` | `EndSession` | - | `Ending` | `unroute`, `drop_requests`, `reply_ok`, `destroy_budget` |
-| `Detached` | `Exited`, `LockedOut`, `Failed` | - | `Ending` | `unroute`, `drop_requests`, `destroy_budget` |
+| `Detached` | `Idle` | - | `Ending` | `audit_idle`, `unroute`, `drop_requests`, `notify_sponsor`, `destroy_budget` |
+| `Detached` | `EndSession` | - | `Ending` | `unroute`, `drop_requests`, `notify_sponsor`, `reply_ok`, `destroy_budget` |
+| `Detached` | `EndLease` (ahead) | `!sponsor_of` | = | `refuse` |
+| `Detached` | `EndLease` (ahead) | - | `Ending` | `unroute`, `drop_requests`, `audit_lease_ended`, `notify_sponsor`, `reply_ok`, `destroy_budget` |
+| `Detached` | `Exited`, `LockedOut`, `Failed` | - | `Ending` | `unroute`, `drop_requests`, `notify_sponsor`, `destroy_budget` |
 | `Ending` | `Done`, `Failed` | - | `Ended` | `forget` |
 | `Ending` | `EndSession`, `ChannelClosed`, `Exited`, `Attach`, `Detach`, `Leave` | - | = | `unreachable` |
+| `Ending` | `EndLease` (ahead) | - | = | `refuse` |
 | `Ending` | `LockedOut`, `Idle` | - | = | - |
 
 <!-- ANCHOR_END: table -->

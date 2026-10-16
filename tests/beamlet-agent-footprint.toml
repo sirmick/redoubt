@@ -1,0 +1,60 @@
+description = "What an agent's VM holds (docs/servers/steward.md, \"Leases\"; docs/userland/beamlet.md, \"What the VM holds at its prompt\"): the image's servers boot with beamlet started by init as a lease's VM is, running the agent module `Redoubt.Agents.Echo` with the session's two schedulers and no shell, its project root the data volume's root with the staged input `keep hello`, so it takes the echo path (reads the input, writes `out/result`, reads it back) and then idles as an agent that has done its work does: the bench's memory scan, from the guest's RAM after the agent says the result is written, states the VM's heap peak over that run, `heap beamlet PEAK of CAP pages`, which the image's `sizes.agent` is set from (twice the peak plus what the VM holds outside the heap, rounded up to 128; image/README.md). The verdict is the scan's line, with beamlet's line that the agent module was loaded and the agent's that it wrote (rule F)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The image's programs; the manifest is the image's servers with beamlet started by init
+# (tests/data/beamlet-footprint/manifest.json), its arguments an agent's: the sponsor it acts for,
+# where its project root is bound, and the agent module as its start module.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-bootfsd", bin = "bootfsd" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-verityd", bin = "verityd" },
+    { package = "redoubt-netd", bin = "netd" },
+    { package = "redoubt-ipd", bin = "ipd" },
+    { package = "redoubt-walfsd", bin = "walfsd" },
+    { package = "redoubt-erofsd", bin = "erofsd" },
+    { package = "beamlet-redoubt", bin = "beamlet", workspace = "userland/otp" },
+]
+# As beamlet-footprint: beamlet's budget there, twice the shell VM's largest peak, needs the
+# 512 MiB system budget.
+memory_mib = 512
+memory = true
+timeout_secs = 330
+expect = [
+    # beamlet loaded the agent module from the system volume: the VM is up and holds what an
+    # agent holds (the file module it then calls is the boot pack's, loaded unlogged).
+    'Elixir\.Redoubt\.Agents\.Echo read from',
+    # The agent read its staged input, `keep hello`, and wrote the result: the echo path done,
+    # the VM idle. The scan that follows measures that.
+    'agent: result written',
+]
+forbid = [
+    'init: refused the boot',
+    'init: restarted',
+    '^init: .* (exited|faulted|was killed)',
+    'init: rebooting',
+    'did not start',
+    'not loaded',
+    'EXCEPTION',
+]
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/beamlet-footprint/manifest.json" }
+verity = "image/userland.toml"
+
+[[file.servers]]
+name = "beamlet"
+# The data volume's root, holding the staged `in`, bound at the project root a lease's VM has.
+args = ["endpoint=erofsd:system", "schedulers=2", "principal=alice", "home=/project", "bind=/project=walfsd:data", "Elixir.Redoubt.Agents.Echo"]
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/beamlet-footprint/stage"
+
+[net]

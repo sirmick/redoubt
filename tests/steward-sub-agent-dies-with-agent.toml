@@ -1,0 +1,59 @@
+description = "A sub-agent dies with its agent (docs/servers/steward.md, \"Leases\" and R39; docs/kernel/budgets.md, R10; docs/userland/agents.md, \"Delegation only narrows\"): alice's SSH session writes `sub 600000` to ~/project/in and starts an agent with a twenty-second lease; the agent carves a sub-budget of its own with a deadline ten minutes away and launches `piped` from /boot in it, a server that lives until its budget ends; the lease's deadline destroys the agent's budget and, inside it, the sub-budget with its later deadline and its process (R10: a child budget's later deadline never fires), and the kernel's count of alice's sub-budget is back to her sessions, the lease's two carved processes given back; the steward audits the lease's end and alice's shell prints `[lease alice/agent-1 ended]`. The sub-budget inside the lease is not a line of its own on the sponsor's sub-budget, which counts what is carved from it; its end with its parent is the kernel's rule, proven by `budget-deadline` and `budget-destroy-kills`. The verdicts are the kernel's counts through the steward's usage lines, its audit lines and the notice (rule F)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+recipe = "image/boot.toml"
+# The image needs 1 GiB: the principals' budgets, each holding shell VMs' sessions and a lease,
+# do not fit the users budget 256 MiB leaves (docs/kernel/budgets.md).
+memory_mib = 1024
+timeout_secs = 1500
+expect = [
+    '^init: started sshd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
+    '^init: started steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+]
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    '^init: .* (exited|faulted|was killed)',
+    'init: restarted',
+    'EXCEPTION',
+    'steward: a step failed',
+    'steward: the core exited',
+    'sshd: login .*: refused',
+]
+# The lease's two carved processes over her two sessions' twenty while it runs; all gone with
+# the lease, the sub-budget inside it and its process with them, whatever their own deadline.
+expect_after = [
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{\} at [0-9]+: AgentStarted \{ lease: [0-9]+, sponsor: 0, parent: None, deadline: [0-9]+ \}',
+    '^\[con [0-9a-f]{16}\] steward: users/alice/\{\} holds [0-9]+ pages, 22 processes$',
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{\} at [0-9]+: LeaseEnded \{ lease: [0-9]+ \}',
+    '^\[con [0-9a-f]{16}\] steward: users/alice/\{\} holds [0-9]+ pages, 20 processes$',
+]
+
+[[session]]
+user = "alice"
+pty = true
+steps = [
+    { expect = '/home/alice \([0-9]+\)> ' },
+    { send = "{:stage, File.mkdir_p(\"/home/alice/project/out\"), File.write(\"/home/alice/project/in\", \"sub 600000\")}\n" },
+    { expect = '\{:stage, :ok, :ok\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:ok, c} = Redoubt.Contexts.connection(); {:lease, Redoubt.Wire.Client.Steward.start_agent(c, 20_000_000)}\n" },
+    { expect = '\{:lease, \{:ok, %\{lease: [0-9]+, name: "agent-1"\}\}\}' },
+    { expect = '\([0-9]+\)> ' },
+    { expect = '\[lease alice/agent-1 ended\]' },
+    { send = "{:after, :ok}\n" },
+    { expect = '\{:after, :ok\}' },
+    { exit = 0 },
+]
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]
+forward = [22]

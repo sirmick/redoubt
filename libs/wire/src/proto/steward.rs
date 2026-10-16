@@ -196,6 +196,17 @@ pub struct EndContext<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EndContextReply {}
 
+/// `lease_ended`: opcode 17, buffer; reply [`LeaseEndedReply`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LeaseEnded<'a> {
+    pub lease: u64,
+    pub name: &'a str,
+}
+
+/// The reply to [`LeaseEnded`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LeaseEndedReply {}
+
 /// Requests by opcode.
 const REQUESTS: &[Layout] = &[
     Layout { opcode: 1, inline: false, handles: 2, optional: 0 },
@@ -214,6 +225,7 @@ const REQUESTS: &[Layout] = &[
     Layout { opcode: 14, inline: false, handles: 0, optional: 0 },
     Layout { opcode: 15, inline: true, handles: 0, optional: 0 },
     Layout { opcode: 16, inline: false, handles: 0, optional: 0 },
+    Layout { opcode: 17, inline: false, handles: 0, optional: 0 },
 ];
 
 /// Every request of the protocol.
@@ -235,6 +247,7 @@ pub enum Message<'a> {
     Contexts(Contexts),
     Detach(Detach),
     EndContext(EndContext<'a>),
+    LeaseEnded(LeaseEnded<'a>),
 }
 
 impl<'a> Message<'a> {
@@ -257,6 +270,7 @@ impl<'a> Message<'a> {
             Message::Contexts(_) => &[],
             Message::Detach(_) => &[],
             Message::EndContext(_) => &[],
+            Message::LeaseEnded(_) => &[],
         }
     }
 
@@ -279,6 +293,7 @@ impl<'a> Message<'a> {
             Message::Contexts(_) => 14,
             Message::Detach(_) => 15,
             Message::EndContext(_) => 16,
+            Message::LeaseEnded(_) => 17,
         }
     }
 
@@ -328,6 +343,10 @@ impl<'a> Message<'a> {
             Message::Contexts(_) => Ok(()),
             Message::Detach(_) => Ok(()),
             Message::EndContext(m) => w.string(m.name),
+            Message::LeaseEnded(m) => {
+                w.u64(m.lease)?;
+                w.string(m.name)
+            }
         }
     }
 
@@ -361,6 +380,7 @@ impl<'a> Message<'a> {
             14 => Message::Contexts(Contexts {}),
             15 => Message::Detach(Detach {}),
             16 => Message::EndContext(EndContext { name: r.string()? }),
+            17 => Message::LeaseEnded(LeaseEnded { lease: r.u64()?, name: r.string()? }),
             _ => return Err(Error::BadOpcode),
         })
     }
@@ -408,6 +428,7 @@ const REPLIES: &[Layout] = &[
     Layout { opcode: 14, inline: false, handles: 0, optional: 0 },
     Layout { opcode: 15, inline: true, handles: 0, optional: 0 },
     Layout { opcode: 16, inline: false, handles: 0, optional: 0 },
+    Layout { opcode: 17, inline: false, handles: 0, optional: 0 },
 ];
 
 /// Every successful reply of the protocol, named after its request.
@@ -429,6 +450,7 @@ pub enum Reply<'a> {
     Contexts(ContextsReply<'a>),
     Detach(DetachReply),
     EndContext(EndContextReply),
+    LeaseEnded(LeaseEndedReply),
 }
 
 impl<'a> Reply<'a> {
@@ -451,6 +473,7 @@ impl<'a> Reply<'a> {
             Reply::Contexts(_) => &[],
             Reply::Detach(_) => &[],
             Reply::EndContext(_) => &[],
+            Reply::LeaseEnded(_) => &[],
         }
     }
 
@@ -473,6 +496,7 @@ impl<'a> Reply<'a> {
             Reply::Contexts(_) => 14,
             Reply::Detach(_) => 15,
             Reply::EndContext(_) => 16,
+            Reply::LeaseEnded(_) => 17,
         }
     }
 
@@ -506,6 +530,7 @@ impl<'a> Reply<'a> {
             Reply::Contexts(m) => w.string(m.list),
             Reply::Detach(_) => Ok(()),
             Reply::EndContext(_) => Ok(()),
+            Reply::LeaseEnded(_) => Ok(()),
         }
     }
 
@@ -539,6 +564,7 @@ impl<'a> Reply<'a> {
             14 => Reply::Contexts(ContextsReply { list: r.string()? }),
             15 => Reply::Detach(DetachReply {}),
             16 => Reply::EndContext(EndContextReply {}),
+            17 => Reply::LeaseEnded(LeaseEndedReply {}),
             _ => return Err(Error::BadOpcode),
         })
     }

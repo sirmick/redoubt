@@ -1,0 +1,58 @@
+# A sponsored principal (R39): dave's sessions are leases of alice's, carved from her unlabelled
+# sub-budget with a deadline of MAX_LEASE; a labelled login of his is refused; alice's unlabelled
+# session ends them and is told of every end, however it comes; nobody else can end them.
+principal "alice" account=1 login=[11] approval=[21] owned=[7] sets=[[],[7]] top=1000,30,300 contexts=2 idle=300
+principal "bob" account=2 login=[12] approval=[22] owned=[] sets=[[]] top=1000,30,300 contexts=2 idle=300
+principal "dave" account=3 login=[13] approval=[23] owned=[9] sets=[[],[9]] top=0,0,0 contexts=4 idle=300 sponsor="alice"
+servers 1
+sizes session=10,2,5 agent=10,2,5 sub_agent=5,1,2 crossing=2,1,1 cost=1
+
+# Alice's unlabelled session (badge 102) and her vault session (badge 202); bob's (badge 602).
+event now=1 random=[101,102,103] reply=1 Login principal="alice" labels=[] key=11
+event now=2 Done object=session@1/#101 ok=[budget(901),scope,connection,connection,process(71)]
+event now=3 random=[201,202,203] reply=2 Login principal="alice" labels=[7] key=11
+event now=4 Done object=session@1/7#201 ok=[budget(902),scope,connection,connection,process(72)]
+event now=5 random=[601,602,603] reply=3 Login principal="bob" labels=[] key=12
+event now=6 Done object=session@2/#601 ok=[budget(903),scope,connection,connection,process(73)]
+# Dave's labelled login is refused: a sponsored principal's vault work goes through an approval.
+event now=7 random=[301,302,303] reply=4 Login principal="dave" labels=[9] key=13
+# His unlabelled login is a lease of alice's (badge 302): carved from users/alice/{}, for a day.
+event now=8 random=[301,302,303] reply=5 Login principal="dave" labels=[] key=13
+event now=9 Done object=session@3/#301 ok=[budget(904),scope,connection,connection,process(74)]
+# Not the sponsor's unlabelled session: alice's vault session; bob; dave himself.
+event now=10 reply=6 EndLease badge=202 lease=301
+event now=10 reply=7 EndLease badge=602 lease=301
+event now=10 reply=8 EndLease badge=302 lease=301
+# Alice ends it, and is told.
+event now=11 reply=9 EndLease badge=102 lease=301
+event now=12 Done object=session@3/#301 ok=[done]
+# A detached one (its channel closed) is ended the same way.
+event now=13 random=[401,402,403] reply=10 Login principal="dave" labels=[] key=13
+event now=14 Done object=session@3/#401 ok=[budget(905),scope,connection,connection,process(75)]
+event now=15 ChannelClosed session=401
+event now=16 reply=11 EndLease badge=202 lease=401
+event now=16 reply=12 EndLease badge=102 lease=401
+event now=17 Done object=session@3/#401 ok=[done]
+# Its process exits: alice is told.
+event now=18 random=[501,502,503] reply=13 Login principal="dave" labels=[] key=13
+event now=19 Done object=session@3/#501 ok=[budget(906),scope,connection,connection,process(76)]
+event now=20 Exited object=session@3/#501
+event now=21 Done object=session@3/#501 ok=[done]
+# Dave ends his own session: alice is told.
+event now=22 random=[701,702,703] reply=14 Login principal="dave" labels=[] key=13
+event now=23 Done object=session@3/#701 ok=[budget(907),scope,connection,connection,process(77)]
+event now=24 reply=15 EndSession badge=702
+event now=25 Done object=session@3/#701 ok=[done]
+# A session still starting, or already ending, refuses an end rather than failing the steward.
+event now=26 random=[801,802,803] reply=16 Login principal="dave" labels=[] key=13
+event now=27 reply=17 EndLease badge=102 lease=801
+event now=28 Done object=session@3/#801 ok=[budget(908),scope,connection,connection,process(78)]
+event now=29 reply=18 EndLease badge=102 lease=801
+event now=30 reply=19 EndLease badge=102 lease=801
+event now=31 Done object=session@3/#801 ok=[done]
+# A detached one past its idle bound ends, and alice is told.
+event now=32 random=[901,902,903] reply=20 Login principal="dave" labels=[] key=13
+event now=33 Done object=session@3/#901 ok=[budget(909),scope,connection,connection,process(79)]
+event now=34 ChannelClosed session=901
+event now=400000034 Idle
+event now=400000035 Done object=session@3/#901 ok=[done]

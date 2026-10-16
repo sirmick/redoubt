@@ -48,6 +48,10 @@ pub struct PrincipalSpec {
     /// Its top budget, which boot splits into one fixed sub-budget per label set.
     pub top: Limits,
     pub contexts: Contexts,
+    /// The principal that answers for it, by name: a sponsored principal (an agent's,
+    /// userland/agents.md "An agent is a principal with a sponsor") is carved no top budget; its
+    /// sessions are leases under the sponsor's unlabelled sub-budget, which the sponsor can end.
+    pub sponsor: Option<String>,
 }
 
 /// The sizes the steward carves, set by the system bundle.
@@ -55,12 +59,16 @@ pub struct PrincipalSpec {
 pub struct Sizes {
     pub session: Limits,
     pub agent: Limits,
-    /// A sub-agent, carved inside its agent's budget.
+    /// A sub-agent, carved inside its agent's budget: parsed and kept for the later package that
+    /// nests leases; no carve uses it today.
     pub sub_agent: Limits,
     /// A reader or writer budget.
     pub crossing: Limits,
     /// The pages a budget object itself costs, taken from each sub-budget's share.
     pub budget_cost: u64,
+    /// The bytes of its sponsor's home a lease's root, the home's `project` directory, is
+    /// carved with (servers/steward.md, "Leases"); 0, none: a root with no quota holds nothing.
+    pub agent_quota: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -84,6 +92,8 @@ pub struct Principal {
     pub domains: Vec<Domain>,
     pub top: Limits,
     pub contexts: Contexts,
+    /// Its sponsor's index, for a sponsored principal: another principal, itself unsponsored.
+    pub sponsor: Option<usize>,
 }
 
 /// The fixed part of the store.
@@ -95,9 +105,12 @@ pub struct Fixed {
     pub sizes: Sizes,
 }
 
-/// What boot carves for one principal: its top budget, and a fixed sub-budget per label set.
+/// What boot carves for one unsponsored principal, by name: its top budget, and a fixed
+/// sub-budget per label set. A sponsored principal has no carve: its sessions are carved under
+/// its sponsor's.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Carve {
+    pub name: String,
     pub account: NonZeroU64,
     pub top: Limits,
     pub subs: Vec<(Domain, Limits)>,
@@ -105,14 +118,20 @@ pub struct Carve {
 
 impl Fixed {
     /// The manifest, checked: accounts non-zero and distinct, names distinct, label sets valid
-    /// and distinct, a cap of at least one context, and no key in two roles or held by `keyd`
-    /// (R35).
+    /// and distinct, a cap of at least one context, a sponsor that is another, unsponsored,
+    /// principal, and no key in two roles or held by `keyd` (R35).
     pub fn new(m: &Manifest) -> Option<Fixed> {
         let mut accounts = BTreeSet::new();
         let mut names = BTreeSet::new();
         let mut logins = BTreeSet::new();
         let mut approvals = BTreeSet::new();
         let mut principals = Vec::new();
+        let sponsor_of = |p: &PrincipalSpec| -> Option<Option<usize>> {
+            let Some(name) = &p.sponsor else { return Some(None) };
+            let i = m.principals.iter().position(|q| &q.name == name)?;
+            // No chains here: a sponsor answers for its agents itself (userland/agents.md).
+            (name != &p.name && m.principals[i].sponsor.is_none()).then_some(Some(i))
+        };
         for p in &m.principals {
             let account = NonZeroU64::new(p.account)?;
             if p.contexts.max == 0 || !accounts.insert(account) || !names.insert(p.name.clone()) {
@@ -137,6 +156,7 @@ impl Fixed {
                 domains,
                 top: p.top,
                 contexts: p.contexts,
+                sponsor: sponsor_of(p)?,
             };
             principals.push(principal);
         }
@@ -158,12 +178,13 @@ impl Fixed {
         self.principals.iter().position(|p| p.account == account)
     }
 
-    /// Boot's carving: an equal share of the top budget per label set, less each sub-budget's own
-    /// object.
+    /// Boot's carving, for each unsponsored principal: an equal share of the top budget per label
+    /// set, less each sub-budget's own object.
     pub fn carves(&self) -> Vec<Carve> {
         let cost = self.sizes.budget_cost;
         self.principals
             .iter()
+            .filter(|p| p.sponsor.is_none())
             .map(|p| {
                 let n = (p.domains.len() as u64).max(1);
                 let share = Limits {
@@ -172,6 +193,7 @@ impl Fixed {
                     weight: p.top.weight / n,
                 };
                 Carve {
+                    name: p.name.clone(),
                     account: p.account,
                     top: p.top,
                     subs: p.domains.iter().map(|d| (d.clone(), share)).collect(),
@@ -183,9 +205,10 @@ impl Fixed {
 
 /// The manifest's lines, read one at a time: `principal "NAME" account=N login=[..]
 /// approval=[..] owned=[..] sets=[[..],..] top=P,N,W contexts=N idle=S`, `keyd [..]`, `servers N` and `sizes
-/// session=P,N,W agent=.. sub_agent=.. crossing=.. cost=N`. Strict: every field once and no
-/// other, `keyd`, `servers` and `sizes` at most once, `sizes` required; `keyd` and `servers` are
-/// empty and 0 when absent. A line is refused whole, with why.
+/// session=P,N,W agent=.. sub_agent=.. crossing=.. cost=N [agent_quota=B]`. Strict: every field
+/// once and no other (`sponsor=` and `agent_quota=` the two a line may leave out), `keyd`,
+/// `servers` and `sizes` at most once, `sizes` required; `keyd` and `servers` are empty and 0
+/// when absent. A line is refused whole, with why.
 #[derive(Default)]
 pub struct Lines {
     principals: Vec<PrincipalSpec>,
@@ -231,8 +254,9 @@ pub fn lines(m: &Manifest) -> Vec<String> {
         .iter()
         .map(|p| {
             let sets: Vec<String> = p.label_sets.iter().map(|l| show_list(l)).collect();
+            let sponsor = p.sponsor.as_ref().map_or(String::new(), |s| format!(" sponsor={}", quote(s.as_bytes())));
             format!(
-                "principal {} account={} login={} approval={} owned={} sets=[{}] top={} contexts={} idle={}",
+                "principal {} account={} login={} approval={} owned={} sets=[{}] top={} contexts={} idle={}{sponsor}",
                 quote(p.name.as_bytes()),
                 p.account,
                 show_list(&p.login_keys),
@@ -249,12 +273,13 @@ pub fn lines(m: &Manifest) -> Vec<String> {
     out.push(format!("keyd {}", show_list(&m.keyd_keys)));
     out.push(format!("servers {}", m.servers));
     out.push(format!(
-        "sizes session={} agent={} sub_agent={} crossing={} cost={}",
+        "sizes session={} agent={} sub_agent={} crossing={} cost={}{}",
         show(&z.session),
         show(&z.agent),
         show(&z.sub_agent),
         show(&z.crossing),
-        z.budget_cost
+        z.budget_cost,
+        if z.agent_quota == 0 { String::new() } else { format!(" agent_quota={}", z.agent_quota) }
     ));
     out
 }
@@ -301,8 +326,18 @@ fn fields<'a, const N: usize>(toks: &[&'a str], keys: [&str; N]) -> Result<[&'a 
 
 fn principal(toks: &[&str]) -> Result<PrincipalSpec, String> {
     let (name, rest) = toks.split_first().ok_or("a principal has a name")?;
+    // `sponsor="NAME"` is the one field a line may leave out: most principals have none.
+    let mut sponsor = None;
+    let mut rest: Vec<&str> = rest.to_vec();
+    if let Some(i) = rest.iter().position(|t| t.starts_with("sponsor=")) {
+        let v = &rest.remove(i)["sponsor=".len()..];
+        if rest.iter().any(|t| t.starts_with("sponsor=")) {
+            return Err("a second `sponsor=`".into());
+        }
+        sponsor = Some(string(v)?);
+    }
     let [account, login, approval, owned, sets, top, contexts, idle] =
-        fields(rest, ["account", "login", "approval", "owned", "sets", "top", "contexts", "idle"])?;
+        fields(&rest, ["account", "login", "approval", "owned", "sets", "top", "contexts", "idle"])?;
     Ok(PrincipalSpec {
         name: string(name)?,
         account: u64_of(account)?,
@@ -312,18 +347,27 @@ fn principal(toks: &[&str]) -> Result<PrincipalSpec, String> {
         label_sets: lists(sets)?,
         top: limits(top)?,
         contexts: Contexts { max: u64_of(contexts)?, idle_secs: u64_of(idle)? },
+        sponsor,
     })
 }
 
 fn sizes(toks: &[&str]) -> Result<Sizes, String> {
+    // `agent_quota=N` is the one field the line may leave out: a lease's root is carved no
+    // quota then, as before the field was.
+    let mut agent_quota = 0;
+    let mut rest: Vec<&str> = toks.to_vec();
+    if let Some(i) = rest.iter().position(|t| t.starts_with("agent_quota=")) {
+        agent_quota = u64_of(&rest.remove(i)["agent_quota=".len()..])?;
+    }
     let [session, agent, sub_agent, crossing, cost] =
-        fields(toks, ["session", "agent", "sub_agent", "crossing", "cost"])?;
+        fields(&rest, ["session", "agent", "sub_agent", "crossing", "cost"])?;
     Ok(Sizes {
         session: limits(session)?,
         agent: limits(agent)?,
         sub_agent: limits(sub_agent)?,
         crossing: limits(crossing)?,
         budget_cost: u64_of(cost)?,
+        agent_quota,
     })
 }
 

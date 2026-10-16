@@ -8,7 +8,9 @@ use crate::domain::Domain;
 use crate::effect::Kind;
 use crate::event::{Content, Event, EventKind};
 use crate::gen;
-use crate::machines::{Call, CrossingM, LeaseM, RequestM, answered, release, route, run, run_in, unknown};
+use crate::machines::{
+    Call, CrossingM, LeaseM, RequestM, SessionM, answered, release, route, run, run_in, unknown,
+};
 use crate::store::{Crossing, Store};
 
 /// The key `Store::pair` takes: only this module can make one.
@@ -69,18 +71,37 @@ pub(crate) fn approval(store: &mut Store, event: &Event, out: &mut Out) {
     answered(next, event, out);
 }
 
-/// Lease supervision: an unlabelled session of the sponsor ends a lease, in the lease's domain.
-/// Ahead of admission, as the table marks it.
+/// Lease supervision: an unlabelled session of the sponsor ends a lease, in the lease's domain:
+/// an agent's lease, or a sponsored principal's session, whose sponsor is its principal's. A
+/// caller of any other account is told nothing (`unknown`, as for an id nobody holds). Ahead of
+/// admission, as the tables mark it.
 pub(crate) fn end_lease(store: &mut Store, event: &Event, out: &mut Out) {
     let EventKind::EndLease { badge, lease } = &event.kind else { return };
     let Some(by) = route(store, *badge) else { return unknown(event, out) };
-    let Some((domain, Kind::Lease)) = store.index.ids.get(lease).cloned() else { return unknown(event, out) };
-    if domain.account() != by.domain.account() {
+    let Some((domain, kind)) = store.index.ids.get(lease).cloned() else { return unknown(event, out) };
+    let sponsor = match kind {
+        Kind::Lease => Some(domain.account()),
+        Kind::Session => store
+            .domain(&domain)
+            .and_then(|d| d.sessions.get(lease))
+            .and_then(|s| store.fixed.principals[s.principal].sponsor)
+            .map(|q| store.fixed.principals[q].account),
+        _ => None,
+    };
+    if sponsor != Some(by.domain.account()) {
         return unknown(event, out);
     }
     let call = Call { caller: Some(by), ..Call::of(event) };
-    let next = run::<LeaseM>(store, &call, out, &domain, *lease, gen::lease::Event::EndLease);
-    answered(next, event, out);
+    match kind {
+        Kind::Lease => {
+            let next = run::<LeaseM>(store, &call, out, &domain, *lease, gen::lease::Event::EndLease);
+            answered(next, event, out);
+        }
+        _ => {
+            let next = run::<SessionM>(store, &call, out, &domain, *lease, gen::session::Event::EndLease);
+            answered(next, event, out);
+        }
+    }
 }
 
 /// The crossing: a request opens one in the labelled side's domain (a declassification's read

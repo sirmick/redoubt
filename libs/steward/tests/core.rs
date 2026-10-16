@@ -28,6 +28,7 @@ fn manifest() -> Manifest {
         top: Limits { pages: 500, processes: 12, weight: 100 },
         // Bob's cap is the one the cap's tests meet; idle contexts end after five minutes.
         contexts: Contexts { max: if name == "bob" { 2 } else { 8 }, idle_secs: 300 },
+        sponsor: None,
     };
     let l = |pages, processes, weight| Limits { pages, processes, weight };
     Manifest {
@@ -36,6 +37,8 @@ fn manifest() -> Manifest {
             // Bob works under {7} but does not own it.
             p("bob", 1002, 21, 22, &[9], &[&[], &[9], &[7]]),
             p("carol", 1003, 31, 32, &[], &[&[]]),
+            // Dave is sponsored by alice: his sessions are leases of hers (R39).
+            PrincipalSpec { sponsor: Some("alice".into()), ..p("dave", 1004, 41, 42, &[10], &[&[], &[10]]) },
         ],
         keyd_keys: vec![100, 101],
         servers: 1,
@@ -45,6 +48,7 @@ fn manifest() -> Manifest {
             sub_agent: l(8, 1, 1),
             crossing: l(1, 0, 0),
             budget_cost: 1,
+            agent_quota: 0,
         },
     }
 }
@@ -62,6 +66,8 @@ struct Rig {
     volumes: BTreeMap<(Vec<u64>, u64), Vec<u8>>,
     /// Budgets the batches made: token -> (kernel id, labels).
     budgets: BTreeMap<Token, (u64, Vec<u64>)>,
+    /// Each budget's parent and deadline, in the order they were made.
+    carved: Vec<(Parent, Option<u64>)>,
     next_budget: u64,
     outputs: Vec<Output>,
     audit: Vec<Audit>,
@@ -97,6 +103,7 @@ impl Rig {
             reply: 0,
             volumes: BTreeMap::new(),
             budgets: BTreeMap::new(),
+            carved: Vec::new(),
             next_budget: 1000,
             outputs: Vec::new(),
             audit: Vec::new(),
@@ -167,9 +174,10 @@ impl Rig {
         let mut read: BTreeMap<Token, Vec<u8>> = BTreeMap::new();
         for (i, s) in steps.iter().enumerate() {
             let p = match s {
-                Step::CreateBudget { token, labels, .. } => {
+                Step::CreateBudget { token, labels, parent, deadline, .. } => {
                     self.next_budget += 1;
                     self.budgets.insert(token.clone(), (self.next_budget, labels.as_slice().to_vec()));
+                    self.carved.push((parent.clone(), *deadline));
                     Produced::Budget(self.next_budget)
                 }
                 Step::CreateScope { .. } => Produced::Scope,
@@ -653,15 +661,13 @@ fn lease_bounded_and_carve_lease() {
     assert_eq!(refused(r.agent(b, 0)), Refusal::BadLease);
     assert_eq!(refused(r.agent(b, MAX_LEASE + 1)), Refusal::BadLease);
     assert_eq!(refused(r.agent(b, u64::MAX)), Refusal::BadLease);
-    let (agent, ab) = r.agent(b, MAX_LEASE).unwrap();
+    let (agent, _) = r.agent(b, MAX_LEASE).unwrap();
     let u = d(1001, &[]);
     let deadline = inspect::domain(&r.store, &u).unwrap().leases[&agent].deadline;
     assert_eq!(deadline, r.now + MAX_LEASE);
-    // A sub-agent sits inside its agent's budget and ends no later.
-    let (sub, _) = r.agent(ab, MAX_LEASE).unwrap();
-    let l = &inspect::domain(&r.store, &u).unwrap().leases[&sub];
-    assert_eq!((l.parent, l.deadline), (Some(agent), deadline));
-    assert_eq!(r.records(|x| matches!(x, Record::AgentStarted { parent: Some(_), .. })).len(), 1);
+    // A lease nested in a lease is a later package: a lease's badge starts none
+    // (`a_lease_cannot_start_an_agent`); a sub-agent is the budget the agent carves itself.
+    assert!(r.records(|x| matches!(x, Record::AgentStarted { parent: Some(_), .. })).is_empty());
 }
 
 #[test]
@@ -985,6 +991,50 @@ fn sponsor_session_and_notify_sponsor() {
     assert_eq!(*r.records(|x| matches!(x, Record::LeaseEnded { .. }))[0].domain(), d(1001, &[]));
 }
 
+/// A sponsored principal's session is a lease of its sponsor's (R39): carved from the sponsor's
+/// unlabelled sub-budget with a deadline of `MAX_LEASE`, in its own domain; a labelled login of
+/// its is refused; only an unlabelled session of the sponsor ends it, and the sponsor's
+/// unlabelled sessions are told of every end: the sponsor's, the process's exit, its own.
+#[test]
+fn a_sponsored_principals_session_is_a_lease_of_its_sponsors() {
+    let mut r = Rig::new();
+    let (_, u) = r.login("alice", &[], 11).unwrap();
+    let (_, v) = r.login("alice", &[7], 11).unwrap();
+    let (_, other) = r.login("bob", &[], 21).unwrap();
+    assert_eq!(refused(r.login("dave", &[10], 41)), Refusal::Labelled, "a sponsored principal's vault login");
+    let before = r.carved.len();
+    let (lease, db) = r.login("dave", &[], 41).unwrap();
+    let (parent, deadline) = &r.carved[before];
+    assert_eq!(*parent, Parent::Sub(d(1001, &[])), "carved from alice's unlabelled sub-budget");
+    assert_eq!(*deadline, Some(r.now + MAX_LEASE));
+    assert_eq!(r.sessions_in(&d(1004, &[])), 1, "in dave's own domain");
+    assert!(EventKind::EndLease { badge: u, lease }.ahead());
+    assert_eq!(
+        refusal(r.call(EventKind::EndLease { badge: v, lease })),
+        Refusal::NotSponsor,
+        "alice's vault"
+    );
+    assert_eq!(refusal(r.call(EventKind::EndLease { badge: other, lease })), Refusal::Unknown, "bob");
+    assert_eq!(refusal(r.call(EventKind::EndLease { badge: db, lease })), Refusal::Unknown, "dave himself");
+    let from = r.outputs.len();
+    assert_eq!(r.call(EventKind::EndLease { badge: u, lease }), Some(Answer::Ok));
+    assert_eq!(r.sessions_in(&d(1004, &[])), 0);
+    assert_eq!(r.notices(from), [(Notified::Session(u), Notice::LeaseEnded { lease })]);
+    assert_eq!(*r.records(|x| matches!(x, Record::LeaseEnded { .. }))[0].domain(), d(1004, &[]));
+    // Its process's exit, and its own `exit`, tell the sponsor too; bob's end tells nobody.
+    let (lease, _) = r.login("dave", &[], 41).unwrap();
+    let from = r.outputs.len();
+    r.call(EventKind::Exited { object: Object { domain: d(1004, &[]), kind: Kind::Session, id: lease } });
+    assert_eq!(r.notices(from), [(Notified::Session(u), Notice::LeaseEnded { lease })]);
+    let (lease, db) = r.login("dave", &[], 41).unwrap();
+    let from = r.outputs.len();
+    assert_eq!(r.call(EventKind::EndSession { badge: db }), Some(Answer::Ok));
+    assert_eq!(r.notices(from), [(Notified::Session(u), Notice::LeaseEnded { lease })]);
+    let from = r.outputs.len();
+    assert_eq!(r.call(EventKind::EndSession { badge: other }), Some(Answer::Ok));
+    assert!(r.notices(from).is_empty());
+}
+
 #[test]
 fn a_lease_ends_at_its_deadline_or_its_process_exit() {
     let mut r = Rig::new();
@@ -1061,6 +1111,16 @@ fn an_event_naming_nothing_gets_one_answer() {
     ] {
         assert_eq!(refusal(r.call(kind)), Refusal::Unknown);
     }
+}
+
+/// `start_agent` is a session's call: a lease's badge, which would nest a lease, is told
+/// `unknown`; nested leases are a later package (servers/steward.md, "Leases").
+#[test]
+fn a_lease_cannot_start_an_agent() {
+    let mut r = Rig::new();
+    let (_, u) = r.login("alice", &[], 11).unwrap();
+    let (_, lease) = r.agent(u, SECOND).unwrap();
+    assert_eq!(refusal(r.call(EventKind::StartAgent { badge: lease, lease: SECOND })), Refusal::Unknown);
 }
 
 #[test]

@@ -29,7 +29,8 @@ defmodule Redoubt.Wire.Proto.Steward do
     13 => {:watch, :inline, 0, 0},
     14 => {:contexts, :buffer, 0, 0},
     15 => {:detach, :inline, 0, 0},
-    16 => {:end_context, :buffer, 0, 0}
+    16 => {:end_context, :buffer, 0, 0},
+    17 => {:lease_ended, :buffer, 0, 0}
   }
   @replies %{
     1 => {:login, :buffer, 0, 0},
@@ -47,7 +48,8 @@ defmodule Redoubt.Wire.Proto.Steward do
     13 => {:watch, :inline, 0, 0},
     14 => {:contexts, :buffer, 0, 0},
     15 => {:detach, :inline, 0, 0},
-    16 => {:end_context, :buffer, 0, 0}
+    16 => {:end_context, :buffer, 0, 0},
+    17 => {:lease_ended, :buffer, 0, 0}
   }
   @errors %{
     1 => :malformed,
@@ -93,6 +95,7 @@ defmodule Redoubt.Wire.Proto.Steward do
   def layout(:contexts), do: {14, :buffer, [], [], {[{:list, :string}], []}}
   def layout(:detach), do: {15, :inline, [], [], {[], []}}
   def layout(:end_context), do: {16, :buffer, [{:name, :string}], [], {[], []}}
+  def layout(:lease_ended), do: {17, :buffer, [{:lease, :u64}, {:name, :string}], [], {[], []}}
   def layout(_), do: nil
 
   @doc "Encodes a request: `{:ok, words, buffer}` or `{:error, reason}`."
@@ -149,6 +152,8 @@ defmodule Redoubt.Wire.Proto.Steward do
   defp enc(:reply, :detach, %{} = f) when map_size(f) == 0, do: {15, []}
   defp enc(:request, :end_context, %{name: v_name} = f) when map_size(f) == 1, do: {16, [W.str(v_name)]}
   defp enc(:reply, :end_context, %{} = f) when map_size(f) == 0, do: {16, []}
+  defp enc(:request, :lease_ended, %{lease: v_lease, name: v_name} = f) when map_size(f) == 2, do: {17, [W.u(v_lease, 64), W.str(v_name)]}
+  defp enc(:reply, :lease_ended, %{} = f) when map_size(f) == 0, do: {17, []}
   defp enc(_, _, _), do: throw({:wire, :bad_message})
 
   defp read(:request, 1, <<n_principal::little-16, v_principal::binary-size(n_principal), n_label::little-16, v_label::binary-size(n_label), n_context::little-16, v_context::binary-size(n_context), n_from::little-16, v_from::binary-size(n_from), n_key::little-32, v_key::binary-size(n_key), rest::binary>>), do: W.utf8([v_principal, v_label, v_context, v_from], {:ok, :login, %{principal: v_principal, label: v_label, context: v_context, from: v_from, key: v_key}, rest})
@@ -183,5 +188,7 @@ defmodule Redoubt.Wire.Proto.Steward do
   defp read(:reply, 15, <<rest::binary>>), do: {:ok, :detach, %{}, rest}
   defp read(:request, 16, <<n_name::little-16, v_name::binary-size(n_name), rest::binary>>), do: W.utf8([v_name], {:ok, :end_context, %{name: v_name}, rest})
   defp read(:reply, 16, <<rest::binary>>), do: {:ok, :end_context, %{}, rest}
+  defp read(:request, 17, <<v_lease::little-64, n_name::little-16, v_name::binary-size(n_name), rest::binary>>), do: W.utf8([v_name], {:ok, :lease_ended, %{lease: v_lease, name: v_name}, rest})
+  defp read(:reply, 17, <<rest::binary>>), do: {:ok, :lease_ended, %{}, rest}
   defp read(_, _, _), do: {:error, :short_fields}
 end

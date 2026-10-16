@@ -6,13 +6,16 @@
 use redoubt_rt::abi::{BudgetSpec, Error, FOREVER, Handle, ReceivedHandles};
 use redoubt_rt::ipc::Caller;
 use redoubt_rt::wire::proto::steward::{
-    ChannelClosed, Contexts, Detach, EndContext, EndSession, ErrorCode, Login, LoginReply, Message, Reply,
-    StartAgent, Watch,
+    ChannelClosed, Contexts, Detach, EndContext, EndLease, EndSession, ErrorCode, LeaseEnded, Login,
+    LoginReply, Message, Reply, StartAgent, Watch,
 };
+use redoubt_steward::consts::MAX_LEASE;
 use redoubt_steward::domain::Domain;
-use redoubt_steward::effect::Step;
+use redoubt_steward::effect::{Kind, Object, Output, Step};
+use redoubt_steward::event::EventKind;
 use redoubt_steward::hash::key_id;
 use redoubt_steward_server::drive::MINTED;
+use redoubt_steward_server::own::Child;
 use redoubt_steward_server::protocol::{APPROVAL, INIT, SSHD, Serving, answer_with, watches};
 use redoubt_steward_server::{Kernel, StartError, Steward, start};
 
@@ -38,6 +41,16 @@ fn bob() -> String {
     )
 }
 
+const AGENT_KEY: [u8; 32] = [3; 32];
+
+/// The image's agent principal: sponsored by alice, so it has no top of its own.
+fn agent() -> String {
+    format!(
+        "principal \"agent\" account=1003 login=[{}] approval=[23] owned=[] sets=[[]] top=0,0,0 contexts=2 idle=300 sponsor=\"alice\"",
+        key_id(&AGENT_KEY)
+    )
+}
+
 /// What the kernel was asked, in order.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Call {
@@ -54,6 +67,7 @@ enum Call {
         stamp: usize,
     },
     Connect {
+        kind: Kind,
         labels: Vec<u64>,
         slot: u16,
         scope: usize,
@@ -61,6 +75,7 @@ enum Call {
     Console(Option<u32>),
     Release(usize),
     Launch {
+        kind: Kind,
         budget: usize,
         connections: Vec<Option<usize>>,
         context: Option<String>,
@@ -80,6 +95,12 @@ enum Call {
         relay: usize,
         note: String,
     },
+    /// `lease_ended` sent on a session's notices endpoint.
+    Notify {
+        notices: usize,
+        lease: u64,
+        name: String,
+    },
 }
 
 /// Budget and handle `i` are the `i`th the kernel made; `USERS` is the one the steward holds.
@@ -93,6 +114,10 @@ struct Recorder {
     users_busy: bool,
     /// What every relay's `detach` answers, once recorded: `Ok` unless a test says.
     detach: Option<Error>,
+    /// Each budget made, with the deadline it was asked for.
+    deadlines: Vec<(usize, u64)>,
+    /// Budgets the kernel's deadline took: a `destroy` of one is `BadHandle`, its handle revoked.
+    gone: Vec<usize>,
 }
 
 impl Recorder {
@@ -114,8 +139,8 @@ impl Kernel for Recorder {
     type Handle = usize;
 
     fn create(&mut self, parent: usize, spec: &BudgetSpec) -> Result<usize, Error> {
-        assert_eq!(spec.deadline, FOREVER);
         let made = self.make()?;
+        self.deadlines.push((made, spec.deadline));
         self.calls.push(Call::Create {
             parent,
             pages: spec.pages,
@@ -130,7 +155,7 @@ impl Kernel for Recorder {
 
     fn destroy(&mut self, budget: usize) -> Result<(), Error> {
         self.calls.push(Call::Destroy(budget));
-        Ok(())
+        if self.gone.contains(&budget) { Err(Error::BadHandle) } else { Ok(()) }
     }
 
     fn budget_id(&self, budget: usize) -> u64 { budget as u64 }
@@ -142,11 +167,11 @@ impl Kernel for Recorder {
     }
 
     /// The binding table's shape: slot 2 (the vault) binds to nothing unlabelled, slot 3 (the
-    /// network) to nothing labelled.
-    fn connect(&mut self, domain: &Domain, slot: u16, scope: usize) -> Result<Option<usize>, Error> {
-        let labels = domain.labels().as_slice().to_vec();
-        let binds = redoubt_steward_server::own::binds(!labels.is_empty(), slot);
-        self.calls.push(Call::Connect { labels, slot, scope });
+    /// network) to nothing labelled; a lease binds its project root and the system volume alone.
+    fn connect(&mut self, owner: &Object, slot: u16, scope: usize) -> Result<Option<usize>, Error> {
+        let labels = owner.domain.labels().as_slice().to_vec();
+        let binds = redoubt_steward_server::own::binds(Child::of(owner.kind, &labels), slot);
+        self.calls.push(Call::Connect { kind: owner.kind, labels, slot, scope });
         if binds { self.make().map(Some) } else { Ok(None) }
     }
 
@@ -159,15 +184,27 @@ impl Kernel for Recorder {
 
     fn launch(
         &mut self,
-        _domain: &Domain,
+        owner: &Object,
         budget: usize,
         connections: &[Option<usize>],
         context: Option<&str>,
-    ) -> Result<u64, Error> {
+    ) -> Result<(u64, Option<usize>), Error> {
+        // A session's VM is given a notices endpoint; the handle made is its send right. Made
+        // before the process, so the last thing a login makes is its pid.
+        let notices = if owner.kind == Kind::Session { Some(self.make()?) } else { None };
         let pid = self.make()? as u64;
         let context = context.map(String::from);
-        self.calls.push(Call::Launch { budget, connections: connections.to_vec(), context });
-        Ok(pid)
+        self.calls.push(Call::Launch {
+            kind: owner.kind,
+            budget,
+            connections: connections.to_vec(),
+            context,
+        });
+        Ok((pid, notices))
+    }
+
+    fn notify(&mut self, notices: usize, lease: u64, name: &str) {
+        self.calls.push(Call::Notify { notices, lease, name: name.into() });
     }
 
     fn launch_relay(&mut self, _domain: &Domain, budget: usize) -> Result<(u64, usize), Error> {
@@ -208,7 +245,7 @@ fn shape(k: &Recorder) -> Vec<(usize, u64, u32, Vec<u64>, u64)> {
 }
 
 fn lines(extra: &[&str]) -> Vec<String> {
-    let mut l = vec![alice(), bob(), "keyd [31]".into(), SERVERS.into(), SIZES.into()];
+    let mut l = vec![alice(), bob(), agent(), "keyd [31]".into(), SERVERS.into(), SIZES.into()];
     l.extend(extra.iter().map(|s| s.to_string()));
     l
 }
@@ -267,7 +304,7 @@ fn a_console_naming_no_principal_is_a_start_failure_naming_its_line() {
     let l: Vec<&str> = l.iter().map(String::as_str).collect();
     assert_eq!(
         start(&l, USERS, &mut k).err().unwrap(),
-        StartError::Lines("line 6: carol is no principal".into())
+        StartError::Lines("line 7: carol is no principal".into())
     );
     assert!(k.calls.is_empty());
 }
@@ -373,6 +410,11 @@ fn call(
         }),
         Reply::Detach(_) => Reply::Detach(redoubt_rt::wire::proto::steward::DetachReply {}),
         Reply::EndContext(_) => Reply::EndContext(redoubt_rt::wire::proto::steward::EndContextReply {}),
+        Reply::StartAgent(a) => Reply::StartAgent(redoubt_rt::wire::proto::steward::StartAgentReply {
+            lease: a.lease,
+            name: Box::leak(a.name.to_string().into_boxed_str()),
+        }),
+        Reply::EndLease(_) => Reply::EndLease(redoubt_rt::wire::proto::steward::EndLeaseReply {}),
         _ => panic!("a reply these tests do not read"),
     })
 }
@@ -405,7 +447,8 @@ fn a_login_runs_the_session_batch_and_answers_the_session() {
         other => panic!("{other:?}"),
     };
     assert!(badge >= MINTED);
-    let connects: Vec<Call> = (0..6).map(|slot| Call::Connect { labels: vec![], slot, scope }).collect();
+    let connects: Vec<Call> =
+        (0..6).map(|slot| Call::Connect { kind: Kind::Session, labels: vec![], slot, scope }).collect();
     assert_eq!(
         k.calls[..3],
         [
@@ -424,7 +467,7 @@ fn a_login_runs_the_session_batch_and_answers_the_session() {
     );
     assert_eq!(&k.calls[6..12], &connects[..]);
     match &k.calls[12] {
-        Call::Launch { budget, connections, context } => {
+        Call::Launch { kind: Kind::Session, budget, connections, context } => {
             assert_eq!(*budget, session_budget);
             assert_eq!(context.as_deref(), Some(""), "the principal's default context");
             assert_eq!(connections.len(), 7, "the steward's, then six slots");
@@ -521,7 +564,7 @@ fn a_login_to_an_attached_context_takes_it_over() {
             Call::Attach {
                 relay,
                 note: "[context work: reattached; taken over from 198.51.100.2:51234]\r\n".into(),
-                kept: 17
+                kept: 18
             },
         ]
     );
@@ -595,9 +638,18 @@ fn every_operation_on_another_badge_class_is_malformed() {
         assert_eq!(e, ErrorCode::Malformed, "end_session on {badge:#x}");
     }
     assert!(k.creates().is_empty());
-    // On its own class, an operation the server binds no batch for yet is the core's unknown.
+    // On its own class, an operation from a minted badge the core routes nowhere is the core's
+    // unknown; the steward's own `lease_ended` is a call of nobody's, on any badge.
     let e = call(&mut s, &mut k, session, Message::StartAgent(StartAgent { lease: 1 })).unwrap_err();
     assert_eq!(e, ErrorCode::Unknown);
+    for badge in [session, SSHD, APPROVAL, INIT, 0] {
+        let m = Message::LeaseEnded(LeaseEnded { lease: 1, name: "alice/agent-1" });
+        assert_eq!(
+            call(&mut s, &mut k, badge, m).unwrap_err(),
+            ErrorCode::Malformed,
+            "lease_ended on {badge:#x}"
+        );
+    }
 }
 
 /// `watch` is `sshd`'s alone: the program holds it only from `sshd`'s root badge
@@ -662,7 +714,7 @@ fn closing_the_channel_detaches_the_context_and_a_login_reattaches() {
         k.calls,
         [
             Call::Console(Some(CONSOLE)),
-            Call::Attach { relay, note: "[context default: reattached]\r\n".into(), kept: 17 },
+            Call::Attach { relay, note: "[context default: reattached]\r\n".into(), kept: 18 },
         ]
     );
 }
@@ -841,10 +893,206 @@ fn the_image_s_lines_round_trip_from_init_to_the_steward() {
     let lines: Vec<&str> = args.iter().map(String::as_str).filter(|a| !a.starts_with("buckets=")).collect();
     let mut k = Recorder::default();
     let s = start(&lines, USERS, &mut k).unwrap();
+    // Agent, sponsored by alice, is carved nothing of its own.
     let names: Vec<&str> = s.carved.iter().map(|c| c.name.as_str()).collect();
-    assert_eq!(names, ["alice", "bob", "agent"]);
+    assert_eq!(names, ["alice", "bob"]);
+    let fixed = redoubt_steward::inspect::fixed(&s.store);
+    assert_eq!(fixed.principals.iter().map(|p| p.sponsor).collect::<Vec<_>>(), [None, None, Some(0)]);
     assert_eq!(s.own.labels, [("alice-secrets".to_string(), 7)]);
     assert_eq!(s.own.console.as_deref(), Some("alice"));
     assert_eq!(s.own.net("alice").unwrap().rules, ["0.0.0.0/0:80,443"]);
     assert!(s.label("alice-secrets").is_some());
+}
+
+// ---- leases and agents (servers/steward.md, "Leases") ----
+
+/// Alice's unlabelled session, logged in: its minted badge.
+fn alice_session(s: &mut Steward<usize, usize>, k: &mut Recorder) -> u64 {
+    let Ok(Reply::Login(r)) = call(s, k, SSHD, login("alice", "", &ALICE_KEY)) else { panic!() };
+    let badge = badge_of(s, r.session);
+    k.calls.clear();
+    badge
+}
+
+/// The pid of the one process `s` runs for `kind`.
+fn pid_of(s: &Steward<usize, usize>, kind: Kind) -> u64 {
+    (1..200).find(|p| s.exited(*p).is_some_and(|o| o.kind == kind)).expect("a process of that kind")
+}
+
+/// `start_agent` from an unlabelled session's badge is the core's lease batch: the lease's
+/// budget from the sponsor's unlabelled sub-budget with the agent's size and the deadline asked
+/// for, a scope, the steward's badge on the scope, a connection per slot (a lease binds `/boot`,
+/// its project root and the system volume) and the launch of the agent's VM with no notices
+/// endpoint; the reply names the lease. A lease over `MAX_LEASE` is refused, never shortened; a
+/// vault session starts nothing.
+#[test]
+fn start_agent_runs_the_lease_batch_and_answers_the_lease() {
+    let mut k = Recorder::default();
+    let mut s = started(&mut k);
+    let u = alice_session(&mut s, &mut k);
+    let before = k.deadlines.len();
+    let Ok(Reply::StartAgent(a)) =
+        call(&mut s, &mut k, u, Message::StartAgent(StartAgent { lease: 60_000_000 }))
+    else {
+        panic!()
+    };
+    assert!(a.lease >= MINTED);
+    assert_eq!(a.name, "agent-1");
+    let alice_unlabelled = 2;
+    assert_eq!(
+        k.calls[0],
+        Call::Create { parent: alice_unlabelled, pages: 10, processes: 2, labels: vec![], account: 0 }
+    );
+    let (budget, deadline) = k.deadlines[before];
+    assert!(deadline != FOREVER && deadline >= 60_000_000, "a deadline, the lease's: {deadline}");
+    assert!(matches!(k.calls[1], Call::Create { parent, pages: 0, .. } if parent == budget), "the scope");
+    let scope = match &k.calls[2] {
+        Call::Mint { stamp, .. } => *stamp,
+        other => panic!("{other:?}"),
+    };
+    let connects: Vec<Call> =
+        (0..6).map(|slot| Call::Connect { kind: Kind::Lease, labels: vec![], slot, scope }).collect();
+    assert_eq!(&k.calls[3..9], &connects[..]);
+    match &k.calls[9] {
+        Call::Launch { kind: Kind::Lease, budget: b, connections, .. } => {
+            assert_eq!(*b, budget);
+            let bound: Vec<bool> = connections.iter().map(Option::is_some).collect();
+            assert_eq!(
+                bound,
+                [true, true, true, false, false, false, true],
+                "the steward's, /boot, slot 1, slot 5"
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(k.calls.len(), 10, "no notices endpoint for an agent, nothing else");
+    let too_long = Message::StartAgent(StartAgent { lease: MAX_LEASE + 1 });
+    assert_eq!(call(&mut s, &mut k, u, too_long).unwrap_err(), ErrorCode::BadLease);
+    let Ok(Reply::Login(v)) = call(&mut s, &mut k, SSHD, login("alice", "alice-secrets", &ALICE_KEY)) else {
+        panic!()
+    };
+    let v = badge_of(&s, v.session);
+    let from_vault = Message::StartAgent(StartAgent { lease: 1_000_000 });
+    assert_eq!(call(&mut s, &mut k, v, from_vault).unwrap_err(), ErrorCode::Labelled);
+}
+
+/// `end_lease` is the sponsor's alone: bob's session is told nothing (`unknown`), alice's vault
+/// session `not_sponsor`; from her unlabelled session it destroys the lease's budget, gives its
+/// connections back, and sends `lease_ended`, named `alice/agent-1`, on the notices endpoint of
+/// each of her unlabelled sessions and no other. The loop answers it ahead of admission.
+#[test]
+fn end_lease_from_the_sponsor_destroys_the_lease_and_tells_her_sessions() {
+    let mut k = Recorder::default();
+    let mut s = started(&mut k);
+    let u = alice_session(&mut s, &mut k);
+    let Ok(Reply::Login(b)) = call(&mut s, &mut k, SSHD, login("bob", "", &BOB_KEY)) else { panic!() };
+    let b = badge_of(&s, b.session);
+    let Ok(Reply::Login(v)) = call(&mut s, &mut k, SSHD, login("alice", "alice-secrets", &ALICE_KEY)) else {
+        panic!()
+    };
+    let v = badge_of(&s, v.session);
+    let Ok(Reply::StartAgent(a)) =
+        call(&mut s, &mut k, u, Message::StartAgent(StartAgent { lease: 60_000_000 }))
+    else {
+        panic!()
+    };
+    let lease = a.lease;
+    let end = || Message::EndLease(EndLease { lease });
+    let words = end().encode(&mut []).unwrap();
+    let caller = |badge| Caller { badge, account: 0, labels: Default::default() };
+    assert!(redoubt_steward_server::protocol::ahead(&caller(u), &words));
+    assert!(!redoubt_steward_server::protocol::ahead(&caller(SSHD), &words));
+    assert_eq!(call(&mut s, &mut k, b, end()).unwrap_err(), ErrorCode::Unknown);
+    assert_eq!(call(&mut s, &mut k, v, end()).unwrap_err(), ErrorCode::NotSponsor);
+    let pid = pid_of(&s, Kind::Lease);
+    k.calls.clear();
+    let Ok(Reply::EndLease(_)) = call(&mut s, &mut k, u, end()) else { panic!() };
+    // The lease's process is no longer a running one, but its exit notice, still to come, gets
+    // its line under the notice's name: kept for it once, then gone.
+    assert!(s.exited(pid).is_none());
+    let (object, name) = s.ended(pid).expect("the ended process is kept for its exit notice");
+    assert!(object.kind == Kind::Lease && object.id == lease && name == "alice/agent-1", "{object:?} {name}");
+    assert!(s.ended(pid).is_none());
+    let notified: Vec<&Call> = k.calls.iter().filter(|c| matches!(c, Call::Notify { .. })).collect();
+    assert_eq!(notified.len(), 1, "alice's one unlabelled session, not bob's, not her vault's: {notified:?}");
+    assert!(
+        matches!(notified[0], Call::Notify { lease: l, name, .. } if *l == lease && name == "alice/agent-1")
+    );
+    assert!(k.calls.iter().any(|c| matches!(c, Call::Destroy(_))));
+    assert!(k.calls.iter().any(|c| matches!(c, Call::Release(_))), "its connections are given back");
+    assert!(s.failed.is_empty());
+}
+
+/// A lease the kernel's deadline took: its process's exit notice arrives with the budget gone,
+/// and the core's `DestroyBudget` on it is the end asked for, not a failed step; the sponsor is
+/// told all the same.
+#[test]
+fn a_leases_deadline_ends_it_without_a_failed_step() {
+    let mut k = Recorder::default();
+    let mut s = started(&mut k);
+    let u = alice_session(&mut s, &mut k);
+    let Ok(Reply::StartAgent(a)) =
+        call(&mut s, &mut k, u, Message::StartAgent(StartAgent { lease: 2_000_000 }))
+    else {
+        panic!()
+    };
+    // The lease's budget: the one made with a deadline (its scope follows, for ever).
+    let leased = |k: &Recorder| k.deadlines.iter().rev().find(|d| d.1 != FOREVER).map(|d| d.0).unwrap();
+    let budget = leased(&k);
+    let pid = pid_of(&s, Kind::Lease);
+    k.gone.push(budget);
+    k.calls.clear();
+    let object = s.exited(pid).unwrap();
+    let outputs = s.event(&mut k, EventKind::Exited { object }, 0).unwrap();
+    assert!(s.failed.is_empty(), "{:?}", s.failed);
+    assert!(k.calls.contains(&Call::Destroy(budget)), "{:?}", k.calls);
+    assert!(k.calls.iter().any(
+        |c| matches!(c, Call::Notify { lease, name, .. } if *lease == a.lease && name == "alice/agent-1")
+    ));
+    assert!(
+        !outputs.iter().any(|o| matches!(o, Output::Notice { .. })),
+        "the notice went, it is not left over"
+    );
+    // A destroy refused on a budget whose process still runs is a failed step.
+    let Ok(Reply::StartAgent(a)) =
+        call(&mut s, &mut k, u, Message::StartAgent(StartAgent { lease: 2_000_000 }))
+    else {
+        panic!()
+    };
+    k.gone.push(leased(&k));
+    let Ok(Reply::EndLease(_)) = call(&mut s, &mut k, u, Message::EndLease(EndLease { lease: a.lease }))
+    else {
+        panic!()
+    };
+    assert_eq!(s.failed.len(), 1);
+}
+
+/// A login as the sponsored principal is a lease of its sponsor's: its session's budget is
+/// carved from alice's unlabelled sub-budget with a deadline of `MAX_LEASE`, in its own domain
+/// and with its own name; alice's session ends it by `end_lease` with the session's id, and is
+/// told `agent/session-1`; the launch is a session's, with a notices endpoint.
+#[test]
+fn a_login_as_the_sponsored_principal_is_a_lease_of_its_sponsors() {
+    let mut k = Recorder::default();
+    let mut s = started(&mut k);
+    let u = alice_session(&mut s, &mut k);
+    let before = k.deadlines.len();
+    let Ok(Reply::Login(r)) = call(&mut s, &mut k, SSHD, login("agent", "", &AGENT_KEY)) else { panic!() };
+    assert_eq!(r.name, "session-1");
+    let alice_unlabelled = 2;
+    assert!(
+        matches!(k.calls[1], Call::Create { parent, pages: 10, processes: 2, .. } if parent == alice_unlabelled)
+    );
+    let (_, deadline) = k.deadlines[before];
+    assert!(deadline != FOREVER && deadline >= MAX_LEASE, "a day's deadline: {deadline}");
+    assert!(k.calls.iter().any(|c| matches!(c, Call::Launch { kind: Kind::Session, .. })));
+    k.calls.clear();
+    let Ok(Reply::EndLease(_)) = call(&mut s, &mut k, u, Message::EndLease(EndLease { lease: r.session }))
+    else {
+        panic!()
+    };
+    assert!(k.calls.iter().any(
+        |c| matches!(c, Call::Notify { lease, name, .. } if *lease == r.session && name == "agent/session-1")
+    ));
+    assert!(k.calls.iter().any(|c| matches!(c, Call::Destroy(_))));
 }

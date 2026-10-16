@@ -25,6 +25,8 @@ pub struct Policy {
     pub blame_window: Guard,
     /// Guard (a rule), in `lease`.
     pub caller_unlabelled: Guard,
+    /// Guard (a rule), in `lease`.
+    pub caller_session: Guard,
     /// Guard (a rule), in `session`.
     pub context_free: Guard,
     /// Guard (an object's kind only, no rule), in `crossing`.
@@ -63,8 +65,12 @@ pub struct Policy {
     pub reading: Guard,
     /// Guard (a rule), in `request`.
     pub rendered_here: Guard,
+    /// Guard (a rule), in `session`.
+    pub sponsor_of: Guard,
     /// Guard (a rule), in `lease`.
     pub sponsor_session: Guard,
+    /// Guard (a rule), in `session`.
+    pub sponsor_set: Guard,
     /// Guard (a rule), in `session`.
     pub under_cap: Guard,
     /// Effect carrying a rule, in `session`.
@@ -85,7 +91,7 @@ pub struct Policy {
     pub audit_denied: Effect,
     /// Effect, in `session`.
     pub audit_idle: Effect,
-    /// Effect, in `lease`.
+    /// Effect, in `lease`, `session`.
     pub audit_lease_ended: Effect,
     /// Effect, in `blame`.
     pub audit_locked_out: Effect,
@@ -137,7 +143,7 @@ pub struct Policy {
     pub lock_out: Effect,
     /// Effect carrying a rule, in `request`.
     pub notify: Effect,
-    /// Effect, in `lease`.
+    /// Effect, in `lease`, `session`.
     pub notify_sponsor: Effect,
     /// Effect, in `request`.
     pub open_copy_out: Effect,
@@ -190,6 +196,7 @@ impl Policy {
         approval_key: crate::guards::approval_key,
         blame_window: crate::guards::blame_window,
         caller_unlabelled: crate::guards::caller_unlabelled,
+        caller_session: crate::guards::caller_session,
         context_free: crate::guards::context_free,
         copying: crate::guards::copying,
         declassifies: crate::guards::declassifies,
@@ -209,7 +216,9 @@ impl Policy {
         pushes: crate::guards::pushes,
         reading: crate::guards::reading,
         rendered_here: crate::guards::rendered_here,
+        sponsor_of: crate::guards::sponsor_of,
         sponsor_session: crate::guards::sponsor_session,
+        sponsor_set: crate::guards::sponsor_set,
         under_cap: crate::guards::under_cap,
         attach_relay: crate::effects::attach_relay,
         audit_agent_started: crate::effects::audit_agent_started,

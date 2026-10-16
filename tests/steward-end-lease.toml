@@ -1,0 +1,104 @@
+description = "The sponsor ends a lease, and nobody else can (docs/servers/steward.md, \"Leases\" and R39; docs/servers/serving.md, \"admit\"): alice's SSH session writes `spin` to ~/project/in and starts an agent with a ten-minute lease, whose VM then loops for ever; bob's session cannot end it: it cannot learn the id (R36, R37: nothing of alice's reaches his namespace), and the steward tells a caller of another account nothing of any id (`unknown`); nor can alice's vault session (`not_sponsor`), which reads the id from her unlabelled home; alice's unlabelled session ends it with `end_lease`, answered at once, and her shell prints `[lease alice/agent-1 ended]`: the time from the call's echo to that line in her stream is the lease-end latency measured here, call to notice, through the steward's receive loop (the kernel's destruction and the exit notice between). The steward's usage line shows her sub-budget back to her sessions. The verdicts are the steward's answers to each caller as the shells printed them, its audit and usage lines, and the notice (rule F)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+recipe = "image/boot.toml"
+# The image needs 1 GiB: the principals' budgets, each holding shell VMs' sessions and a lease,
+# do not fit the users budget 256 MiB leaves (docs/kernel/budgets.md).
+memory_mib = 1024
+# Three logins and an agent's VM.
+timeout_secs = 1800
+expect = [
+    '^init: started sshd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
+    '^init: started steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+]
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    '^init: .* (exited|faulted|was killed)',
+    'init: restarted',
+    'EXCEPTION',
+    'steward: a step failed',
+    'steward: the core exited',
+    'sshd: login .*: refused',
+]
+expect_after = [
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{\} at [0-9]+: AgentStarted \{ lease: [0-9]+, sponsor: 0, parent: None, deadline: [0-9]+ \}',
+    '^\[con [0-9a-f]{16}\] steward: users/alice/\{\} holds [0-9]+ pages, 22 processes$',
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{\} at [0-9]+: LeaseEnded \{ lease: [0-9]+ \}',
+    '^\[con [0-9a-f]{16}\] steward: users/alice/\{\} holds [0-9]+ pages, 20 processes$',
+]
+
+# Alice starts the agent and leaves its id in her home for the others to try; after their
+# refusals she ends it. Every answer is tagged, so a pattern matches the printed value.
+[[session]]
+user = "alice"
+pty = true
+steps = [
+    { expect = '/home/alice \([0-9]+\)> ' },
+    { send = "{:stage, File.mkdir_p(\"/home/alice/project/out\"), File.write(\"/home/alice/project/in\", \"spin\")}\n" },
+    { expect = '\{:stage, :ok, :ok\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:ok, c} = Redoubt.Contexts.connection(); {:ok, %{lease: l}} = Redoubt.Wire.Client.Steward.start_agent(c, 600_000_000); {:lease, File.write(\"/home/alice/project/lease\", Integer.to_string(l))}\n" },
+    { expect = '\{:lease, :ok\}' },
+    { expect = '\([0-9]+\)> ' },
+    { mark = "agent-started" },
+    { wait = "others-refused" },
+    { send = "{:ended, Redoubt.Wire.Client.Steward.end_lease(c, l)}\n" },
+    # The steward's notice first, then the call's answer: the lease batch sends `lease_ended`
+    # before it replies, and the shell's listener prints the notice as it arrives, above the
+    # prompt the result is then printed under. The gap in the log between the line typed and
+    # the notice matched is the latency measured.
+    { expect = '\[lease alice/agent-1 ended\]' },
+    { expect = '\{:ended, \{:ok, %\{\}\}\}' },
+    { mark = "alice-done" },
+    { exit = 0 },
+]
+
+# Bob reads nothing of alice's home and cannot learn the id; whatever id he names, the steward
+# tells him nothing (the real id's refusal is the server's host test and the core's trace).
+[[session]]
+user = "bob"
+pty = true
+forbid = ['lease alice/agent-1 ended']
+steps = [
+    { expect = '/home/bob \([0-9]+\)> ' },
+    { wait = "agent-started" },
+    { send = "{:ok, c} = Redoubt.Contexts.connection(); {:bob, Redoubt.Wire.Client.Steward.end_lease(c, 9223372036854775809)}\n" },
+    { expect = '\{:bob, \{:error, :unknown\}\}' },
+    { expect = '\([0-9]+\)> ' },
+    { mark = "bob-refused" },
+    { wait = "alice-done" },
+    { exit = 0 },
+]
+
+# Alice's vault session reads her unlabelled home (R25 lets a vault session read, never write,
+# unlabelled volumes) and is refused: ending a lease it shares no labels with would be a flow out.
+[[session]]
+user = "alice+alice-secrets"
+name = "alice-vault"
+pty = true
+forbid = ['lease alice/agent-1 ended']
+steps = [
+    { expect = '/home/alice \([0-9]+\)> ' },
+    { wait = "agent-started" },
+    { send = "{:ok, c} = Redoubt.Contexts.connection(); {:ok, t} = File.read(\"/home/alice/project/lease\"); {:vault, Redoubt.Wire.Client.Steward.end_lease(c, String.to_integer(String.trim(t)))}\n" },
+    { expect = '\{:vault, \{:error, :not_sponsor\}\}' },
+    { expect = '\([0-9]+\)> ' },
+    { mark = "vault-refused" },
+    { wait = "bob-refused" },
+    { mark = "others-refused" },
+    { wait = "alice-done" },
+    { exit = 0 },
+]
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]
+forward = [22]
