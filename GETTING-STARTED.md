@@ -47,8 +47,11 @@ the bench names a QEMU too old when it first boots one.
 - With `rustup`: `rustup toolchain install` of the version
   [`rust-toolchain.toml`](rust-toolchain.toml) names, with the targets and components it lists;
   nightly with `rustfmt`, `miri` and `rust-src`; and `cargo install --locked` of
-  `cargo-binutils`, `mdbook`, `mdbook-mermaid` and `mdbook-svgbob` at the versions
-  `scripts/setup.sh` pins.
+  `cargo-binutils`, `mdbook-mermaid` and `mdbook-svgbob` at the versions `scripts/setup.sh`
+  pins, and of `mdbook` resolved fresh (`cargo install mdbook@0.5.4`, no `--locked`): its
+  lockfile's indexer doubles the book's search index
+  ([the search index](docs/README.md#the-search-index)), and an mdbook installed before that
+  change is replaced with `cargo install --force mdbook@0.5.4`.
 - Then [the firmware](#firmware). For beamlet's suites, the OTP and Elixir
   [the beamlet section](#beamlet) names; OTP's build also wants `make`, `pkg-config`
   and the development files of OpenSSL, ncurses and zlib, and Elixir's zip `unzip`.

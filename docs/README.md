@@ -122,3 +122,19 @@ as a table on GitHub. Solid lines are built; dashed lines are planned. The book 
 `mdbook-mermaid` preprocessor and `cargo` for its own.
 The docs checker, `redoubt-doccheck`, holds every page to these rules
 ([the test bench](testbench.md#the-docs-checker)).
+
+### The search index
+
+The book's search index (`target/book/searchindex-<hash>.js`) is held to a ceiling of
+**7,000,000 bytes**, 30 % under the 10,000,000 at which mdbook warns and the build check fails;
+`the_book_builds` fails over the ceiling naming the size and the three largest pages, so the
+failure says what grew. The index is about three times the pages' text (3.2× in October 2026: a
+term's postings for every section it appears in), and the three largest pages hold a fifth of
+the text. The ceiling moves only by a stated, measured decision in the same change as the
+measurement, and never past mdbook's 10,000,000. Headroom is kept
+by keeping the pages to their argument: measurements, evidence tables, transcripts and
+reasoning beyond what a rule or a design needs stay outside the book, in the working notes or a
+case's comment, not on the page. A page leaving the book, or splitting, is the owner's decision,
+never a way to pass the check. The index needs an mdbook built with elasticlunr-rs 3.1.0 or later (an older indexer
+doubles every field's tokens into the next field; `scripts/setup.sh` installs the right one and
+the same check reads the version from the binary).
