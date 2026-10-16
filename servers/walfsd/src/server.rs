@@ -22,10 +22,15 @@ use crate::volume::{BLOCK, Blocks, Mounted, Range, Why};
 
 /// What admission lets each of `buckets` buckets hold (servers/serving.md R26); the count is the
 /// manifest's `buckets=N`. A call is answered as it arrives; what is held is a multiplexed
-/// connection's completion call (`InFlight`, one per session, so two lets a share hold one), its
-/// requests (`Requests`) and the pages their transfers brought (`Pages`).
+/// connection's completion call (`InFlight`, one per session), its requests (`Requests`) and the
+/// pages their transfers brought (`Pages`). A bucket is one account's (serving.md "Buckets"), so
+/// `in_flight` is what a manifest lets one account have open at once: its console session, its
+/// cap of live contexts per label set, its leases, and one spare for a context detaching while
+/// another attaches (its connection lives until the relay ends); the bench holds it to the
+/// largest such sum over the tree's manifests (tools/testbench,
+/// `the_servers_admit_what_a_manifest_lets_one_account_hold`): 1 + 3 + 1 + 1.
 pub const fn limits(buckets: u32) -> Limits {
-    Limits { buckets, in_flight: 2, files: 32, state: 8, requests: 128, pages: 32 }
+    Limits { buckets, in_flight: 6, files: 32, state: 8, requests: 128, pages: 32 }
 }
 /// What one of each costs, in bytes: a completion call holds its caller's lend, charged to this
 /// server until it replies (kernel/ipc.md R3), `MAX_LEND_PAGES` pages at worst; a fid is its
@@ -34,12 +39,12 @@ pub const fn limits(buckets: u32) -> Limits {
 pub const COST: Cost =
     Cost { in_flight: 64 * 1024, file: 2048, state: 512, request: REQUEST_STATE, page: PAGE_SIZE as u64 };
 /// The bytes of this server's budget its clients may use between them. A bucket at its caps costs
-/// 2 completion calls at 64 KiB, 32 fids at 2 KiB, 8 connections at 512 bytes, 128 requests at 256
-/// and 32 pages at 4 KiB: 364 544 bytes. 2 MiB held 5 buckets (1 822 720): the image's three
-/// principals' four domains and the steward at `walfsd:data`, and a case's extra client needs a
-/// sixth, so 3 MiB, which holds 8 (2 916 352): 768 pages of the entry's 1 024, beside its 64 of
+/// 6 completion calls at 64 KiB, 32 fids at 2 KiB, 8 connections at 512 bytes, 128 requests at 256
+/// and 32 pages at 4 KiB: 626 688 bytes. The image's `walfsd:data` has 6 buckets, the three
+/// principals' four domains, the steward and a case's extra client, 3 760 128 bytes: 4 MiB holds
+/// them and not a seventh (4 386 816). That is 1 024 pages of the entry's 1 280, beside its 64 of
 /// heap and 14 of stack.
-pub const BUDGET: u64 = 3 * 1024 * 1024;
+pub const BUDGET: u64 = 4 * 1024 * 1024;
 
 /// The attribute types a client's `set_attr` may not touch, 0 to 15, as on `littlefsd`, so a
 /// client sees one contract from both writable servers; walfs keeps nothing of `walfsd`'s in

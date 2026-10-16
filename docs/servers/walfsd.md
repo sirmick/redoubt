@@ -363,8 +363,9 @@ and a `write` for each file, each the transactions it takes. It is deterministic
 
 ### Serving
 
-<details><summary>Status: built · tested (33)</summary>
+<details><summary>Status: built · tested (36)</summary>
 
+- bench:steward-three-contexts
 - bench:walfsd-boot
 - bench:walfsd-confined-labelled
 - bench:walfsd-corrupt-volume
@@ -373,6 +374,7 @@ and a `write` for each file, each the transactions it takes. It is deterministic
 - bench:walfsd-label-check
 - bench:walfsd-reboot
 - host:redoubt-init::a_walfsd_entry_is_a_volume_server_as_a_littlefsd_one_is
+- host:testbench::the_servers_admit_what_a_manifest_lets_one_account_hold
 - host:redoubt-walfsd::a_blank_range_is_formatted_and_only_a_blank_one
 - host:redoubt-walfsd::a_cut_at_every_write_of_a_write_and_a_rename_leaves_before_or_after
 - host:redoubt-walfsd::a_device_that_fails_makes_the_volume_corrupt_until_it_is_mounted_again
@@ -396,6 +398,7 @@ and a `write` for each file, each the transactions it takes. It is deterministic
 - host:redoubt-walfsd::rename_moves_within_the_volume_and_keeps_the_inode
 - host:redoubt-walfsd::the_client_library_works_against_walfsd
 - host:redoubt-walfsd::the_conformance_vectors_run_against_walfsd
+- host:redoubt-walfsd::the_limits_fit_the_budget
 - host:redoubt-walfsd::the_volumes_labels_are_checked_on_every_request
 - host:redoubt-walfsd::typed_operations_check_the_volumes_labels
 
@@ -456,7 +459,13 @@ typed operations, so a client names no format:
 - **Listings** are served from a window of up to 64 entries filled by one pass over the
   directory, as on `littlefsd`, so listing n entries costs about n / 64 passes.
 - **Admission** is the serving library's, with `littlefsd`'s caps per bucket
-  ([R26 (admission fairness)](serving.md#r26-admission-fairness)).
+  ([R26 (admission fairness)](serving.md#r26-admission-fairness)), the completion calls per
+  bucket derived from what a manifest lets one account have open at once
+  ([littlefsd](littlefsd.md#volumes-connections-and-labels)); its budget, 4 MiB, holds the
+  image's six buckets at their caps (6 × 626,688 bytes) and not a seventh. **An entry's pages
+  are what the server may hold at its limits:** that budget, its heap cap and its stack, rounded
+  up to 256 pages: 1,024 + 64 + 14, so 1,280 for every `walfsd` entry in the tree, whatever its
+  bucket count; a case's manifest sizes by the same rule, never by what its case happens to use.
 - **Memory** is the format's ([Memory](#memory)), a node per fid (its path), the listing window,
   and the quota's records; the image declares the heap the memory scan measured
   ([testbench](../testbench.md#the-memory-budget)).

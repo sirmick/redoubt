@@ -1,0 +1,114 @@
+description = "A principal's third live context gets its home (docs/servers/littlefsd.md, \"Volumes, connections and labels\", Admission; docs/servers/serving.md, \"Buckets\"; docs/servers/steward.md, \"Contexts\"): walfsd admits per account, so its completion calls per bucket must hold what the manifest lets one account have open at once. This case's manifest gives alice a share that holds three sessions, so her cap is 3: her console session writes and reads a file in her home, alice.a logs in and does the same, and alice.b, her third live context, writes its file and reads all three while the other two stay live; alice.a then reads again beside it. With walfsd's old two calls per bucket the third context's home answered every request Eio. The verdicts are the steward's audit, sshd's lines and each session's own output and exit status (rule F)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The image's programs (steward-context-idle's list, the steward as shipped), with this case's
+# manifest.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-bootfsd", bin = "bootfsd" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-verityd", bin = "verityd" },
+    { package = "redoubt-netd", bin = "netd" },
+    { package = "redoubt-ipd", bin = "ipd" },
+    { package = "redoubt-walfsd", bin = "walfsd" },
+    { package = "redoubt-erofsd", bin = "erofsd" },
+    { package = "beamlet-redoubt", bin = "beamlet", workspace = "userland/otp" },
+    { package = "redoubt-piped", bin = "piped" },
+    { package = "redoubt-steward-server", bin = "steward" },
+    { package = "redoubt-sshd", bin = "sshd" },
+    { package = "redoubt-consrelay", bin = "consrelay" },
+]
+# The image needs 1 GiB: the principals' budgets, each holding a shell VM's session, do not fit
+# the users budget 256 MiB leaves (docs/kernel/budgets.md).
+memory_mib = 1024
+# Three shell VMs booted one after another (steward-context-cap's bound).
+timeout_secs = 1500
+expect = [
+    '^init: started sshd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
+    '^init: started steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+    # Alice's console session, typed below: its file written and read back.
+    '\{:c, :ok\}',
+    '\{:cr, \{:ok, "console"\}\}',
+]
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    '^init: .* (exited|faulted|was killed)',
+    'init: restarted',
+    'EXCEPTION',
+    'steward: the core exited',
+    'steward: a step failed',
+    'sshd: login .*: refused',
+    'sshd: every slot is busy',
+    ':eio',
+    ':enospc',
+]
+# Each login follows the last one's marks, so the lines come in one order.
+expect_after = [
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{\} at [0-9]+: Login \{ session: [0-9]+, principal: 0, key: [1-9][0-9]*, context: Some\("a"\) \}',
+    '^\[con [0-9a-f]{16}\] sshd: login alice\.a: session [0-9a-f]{16}, labels \[\]$',
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{\} at [0-9]+: Login \{ session: [0-9]+, principal: 0, key: [1-9][0-9]*, context: Some\("b"\) \}',
+    '^\[con [0-9a-f]{16}\] sshd: login alice\.b: session [0-9a-f]{16}, labels \[\]$',
+]
+
+# The second live context: writes its file, and reads again once the third is up beside it.
+[[session]]
+user = "alice.a"
+pty = true
+steps = [
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:a, File.write(\"/home/alice/a\", \"second\")}\n" },
+    { expect = '\{:a, :ok\}' },
+    { send = "{:ar, File.read(\"/home/alice/a\")}\n" },
+    { expect = '\{:ar, \{:ok, "second"\}\}' },
+    { mark = "a-up" },
+    { wait = "b-up" },
+    { send = "{:ar2, File.read(\"/home/alice/b\")}\n" },
+    { expect = '\{:ar2, \{:ok, "third"\}\}' },
+    { mark = "a-done" },
+    { send = "exit\n" },
+    { exit = 0 },
+]
+
+# The third live context, beside the console's session and alice.a: its home is served.
+[[session]]
+user = "alice.b"
+pty = true
+# With two calls per bucket this context had no home: "no home to start in (:eio)" at its banner.
+forbid = [':eio']
+steps = [
+    { wait = "a-up" },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:b, File.write(\"/home/alice/b\", \"third\")}\n" },
+    { expect = '\{:b, :ok\}' },
+    { send = "{:br, Enum.map([\"c\", \"a\", \"b\"], &File.read(\"/home/alice/\" <> &1))}\n" },
+    { expect = '\{:br, \[ok: "console", ok: "second", ok: "third"\]\}' },
+    { mark = "b-up" },
+    { wait = "a-done" },
+    { send = "exit\n" },
+    { exit = 0 },
+]
+
+# Alice's console session, once its banner is out: typed ahead of its prompt.
+[[input]]
+after = 'Redoubt shell, on Elixir'
+send = "{:c, File.write(\"/home/alice/c\", \"console\")}\n{:cr, File.read(\"/home/alice/c\")}\n"
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/steward/three-contexts.manifest.json" }
+verity = "image/userland.toml"
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]
+forward = [22]

@@ -580,3 +580,17 @@ fn listing_a_directory_reads_it_once_per_window() {
     assert!(names.iter().enumerate().all(|(i, n)| *n == std::format!("f{i:03}")));
     assert_eq!(t.server.fs.passes - passes, 200usize.div_ceil(64) as u32);
 }
+
+/// The budget holds the image's six buckets at their caps and not a seventh (`BUDGET`'s
+/// arithmetic): a bucket costs 626 688 bytes with six completion calls.
+#[test]
+fn the_limits_fit_the_budget() {
+    let bucket = u64::from(limits(1).in_flight) * COST.in_flight
+        + 32 * COST.file
+        + 8 * COST.state
+        + 128 * COST.request
+        + 32 * COST.page;
+    assert_eq!(bucket, 626_688);
+    assert!(limits(6).fits(&COST, BUDGET));
+    assert!(!limits(7).fits(&COST, BUDGET));
+}
