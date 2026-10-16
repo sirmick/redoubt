@@ -5,8 +5,12 @@ message is accepted only on its badge class: `sshd`'s root badge (`login`, `chan
 `approval_opened`, `approval_closed`, `watch`), the approval channel's (`pending`, `approve`, `deny`),
 `init`'s (`blame`), and a session's or an agent's minted badge (`submit`, `start_agent`,
 `end_lease`, `end_session`, `contexts`, `detach`, `end_context`); on any other it is malformed, as
-an unknown opcode is. `lease_ended` is the steward's own send to a session's `notices` endpoint
-(servers/steward.md, "Leases"), never a call: as a call it is malformed on every badge. `contexts`' list is one line per context of the caller's domain,
+an unknown opcode is. The approval channel's badge is the steward's own: its reader threads send
+`pending`, `approve` and `deny` on it for the lines a person types at `approve@box`, and
+`approve`'s `hash` is the full 32 bytes or the screen's 4-byte code (servers/steward.md, "The
+powerbox and approvals"). `lease_ended` and `approval_waiting` are the steward's own sends to a
+session's `notices` endpoint (servers/steward.md, "Leases"), never calls: as a call each is
+malformed on every badge. `contexts`' list is one line per context of the caller's domain,
 `name<TAB>attached|detached<TAB>seconds`, the default context's name empty.
 
 <!-- ANCHOR: tables -->
@@ -15,9 +19,9 @@ an unknown opcode is. `lease_ended` is the steward's own send to a session's `no
 | --- | --- | --- | --- |
 | 1 | `login` | `principal: string`, `label: string`, `context: string`, `from: string`, `key: bytes`, `console: handle[0] endpoint`, `relay: handle[1] endpoint` | `session: u64`, `name: string`, `labels: bytes` |
 | 2 | `channel_closed` | `session: u64` | - |
-| 3 | `approval_opened` | `principal: string`, `key: bytes` | `channel: u64` |
+| 3 | `approval_opened` | `key: bytes`, `console: handle[0] endpoint`, `reader: handle[1] endpoint` | `channel: u64` |
 | 4 | `approval_closed` | `channel: u64` | - |
-| 5 | `pending` | `channel: u64` | `request: u64`, `hash: bytes`, `labels: bytes`, `text: string` |
+| 5 | `pending` | `channel: u64` | - |
 | 6 | `approve` | `channel: u64`, `request: u64`, `hash: bytes` | - |
 | 7 | `deny` | `channel: u64`, `request: u64` | - |
 | 8 | `blame` | `account: u64`, `labels: bytes`, `server: string` | - |
@@ -30,6 +34,7 @@ an unknown opcode is. `lease_ended` is the steward's own send to a session's `no
 | 15 | `detach` | - | - |
 | 16 | `end_context` | `name: string` | - |
 | 17 | `lease_ended` | `lease: u64`, `name: string` | - |
+| 18 | `approval_waiting` | - | - |
 
 <!-- wire-errors: steward -->
 | Code | Error |

@@ -901,6 +901,7 @@ dependencies = [
  "redoubt-init",
  "redoubt-rt",
  "redoubt-steward",
+ "redoubt-steward-server",
 ]
 
 [[package]]

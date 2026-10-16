@@ -51,8 +51,9 @@ mod machine {
     use redoubt_steward::effect::{Object, Output};
     use redoubt_steward::event::EventKind;
     use redoubt_steward::inspect;
+    use redoubt_steward_server::approval::{Line, Lines, parse};
     use redoubt_steward_server::own::{Bound, Child, How, Own, SYSTEM, binding, lease_args, session_args};
-    use redoubt_steward_server::protocol::{Serving, answer_with, watches as watches_call};
+    use redoubt_steward_server::protocol::{APPROVAL, Serving, answer_with, watches as watches_call};
     use redoubt_steward_server::watchers::Watchers;
     use redoubt_steward_server::{Kernel, SLOTS, Steward, start};
 
@@ -135,6 +136,27 @@ mod machine {
     /// How long a `lease_ended` send waits for the session's VM to take it (µs): past it the
     /// notice is dropped, and the steward is never held by a session that does not read.
     const NOTICE_US: u64 = 100_000;
+    /// Open approval channels at most, and so reader threads at most (servers/steward.md, "The
+    /// powerbox and approvals"): the steward's bound on its own threads beside the watchers,
+    /// declared as theirs is. An open past it is refused, and the person's `ssh approve@box`
+    /// fails.
+    const CHANNELS: usize = 4;
+    /// A reader's stack, in pages: it attaches a 9P connection, reads, parses a line and makes
+    /// one typed call, the same depth as `sshd`'s `say`.
+    const READER_STACK_PAGES: usize = 8;
+    /// The badge the steward hands a reader its channel under, on the readers' work endpoint,
+    /// and how long the hand-over waits for a reader to take it (µs): an idle reader is waiting
+    /// already, a new one is about to; past the bound the open fails.
+    const HAND: u64 = 1;
+    const HAND_US: u64 = 1_000_000;
+    /// A root badge of the steward's own, below the minted range and none of the protocol's
+    /// roles: each reader reports a channel's end on it, and is counted idle again.
+    const READER_DONE: u64 = 5;
+    /// How long a screen's write waits for `sshd`'s channel to take it (µs): past it the screen
+    /// is dropped and the person asks again with `pending`, so the main loop is never held by a
+    /// terminal that does not read, and a reader's call on badge `APPROVAL` is always served:
+    /// the pair cannot deadlock.
+    const SCREEN_US: u64 = 1_000_000;
     /// The steward's lend, in pages: the most a call may lend, so a 64-page batch of a session's
     /// image is read from `bootfsd` in four reads, not sixteen or more (a 9P read carries at most
     /// the lend's `iounit`, and a call costs about the same whatever it carries).
@@ -142,6 +164,8 @@ mod machine {
 
     /// The handle the watchers report on: `EXITS` minted on the steward's endpoint.
     static REPORT: AtomicU32 = AtomicU32::new(0);
+    /// The handle the readers report on: `READER_DONE` minted on the steward's endpoint.
+    static READER_REPORT: AtomicU32 = AtomicU32::new(0);
 
     fn h(index: u32) -> Handle { Handle::new(index).expect("a slot is at least 1") }
 
@@ -187,6 +211,116 @@ mod machine {
         Server(String),
         Carved(String),
         Console,
+    }
+
+    /// An approval channel's reader (servers/steward.md, "The powerbox and approvals"): `arg` is
+    /// the readers' work endpoint. It takes a channel from there (the channel's id, the reader
+    /// console `sshd` minted for it, and a send right of the steward's own badge `APPROVAL`),
+    /// blocks in `read` on the console for the person's lines, parses each
+    /// (`redoubt_steward_server::approval`) and calls the steward on that badge, which the main
+    /// loop serves as any call (it never waits on a reader: its screen writes are bounded by
+    /// [`SCREEN_US`]); the answer is written back on the same console. The channel's end ends
+    /// its input; the reader reports it done on [`READER_REPORT`] and takes the next channel: a
+    /// thread's stack is never given back, so readers are reused as the watchers are. A new one
+    /// starts only when every reader is busy, and a reader counts busy until its report is
+    /// taken, so there are at most [`CHANNELS`] readers plus those between a channel's end and
+    /// the main loop's taking of its report.
+    extern "C" fn reader_thread(arg: usize) -> ! {
+        let work = Endpoint::from_handle(h(arg as u32));
+        loop {
+            let (channel, console, steward) = match work.receive(FOREVER, 0) {
+                Ok(Event::Send(d)) if d.caller.badge == HAND => {
+                    let handles = d.handles.as_slice();
+                    if let [Some(console), Some(steward)] = handles {
+                        // The channel's id in two machine words: a word is 32 bits on rv32.
+                        (d.words[0] | (d.words[1] << 32), *console, *steward)
+                    } else {
+                        close_delivery(&d);
+                        continue;
+                    }
+                }
+                Ok(Event::Send(d)) => {
+                    close_delivery(&d);
+                    continue;
+                }
+                Ok(_) => continue,
+                Err(_) => redoubt_rt::handle::thread_exit(),
+            };
+            read_channel(channel, console, steward);
+            let _ = close(console);
+            let _ = close(steward);
+            let report = Endpoint::from_handle(h(READER_REPORT.load(Ordering::Acquire)));
+            let _ = report.send(&[channel & 0xffff_ffff, channel >> 32, 0, 0], &[], None, FOREVER);
+        }
+    }
+
+    /// The reader's loop, until the console's end of input or a failure of the connection.
+    fn read_channel(channel: u64, console: Handle, steward: Handle) {
+        let Ok(mut lend) = Lend::new(1) else { return };
+        let Ok(conn) = Connection::attach(Endpoint::from_handle(console), &mut lend) else { return };
+        let Ok(file) = conn.open(&mut lend, "", mode::ORDWR) else { return };
+        let steward = Endpoint::from_handle(steward);
+        let mut lines = Lines::new();
+        let mut buf = [0u8; 256];
+        loop {
+            let n = match file.read_at(&mut lend, 0, &mut buf) {
+                Ok(0) | Err(_) => return,
+                Ok(n) => n,
+            };
+            let typed = lines.push(&buf[..n]);
+            for _ in 0..lines.dropped() {
+                let _ = file.write_at(&mut lend, 0, b"line too long\r\n");
+            }
+            for line in typed {
+                let answer = match parse(&line) {
+                    None => String::from("unknown command\r\n"),
+                    Some(Line::Pending) => {
+                        let m = steward::Message::Pending(steward::Pending { channel });
+                        answer_line(&steward, &mut lend, &m, "")
+                    }
+                    Some(Line::Approve { request, hash }) => {
+                        let m = steward::Message::Approve(steward::Approve {
+                            channel,
+                            request,
+                            hash: hash.bytes(),
+                        });
+                        answer_line(&steward, &mut lend, &m, &format!("approved {request:016x}\r\n"))
+                    }
+                    Some(Line::Deny { request }) => {
+                        let m = steward::Message::Deny(steward::Deny { channel, request });
+                        answer_line(&steward, &mut lend, &m, &format!("denied {request:016x}\r\n"))
+                    }
+                };
+                if !answer.is_empty() {
+                    let _ = file.write_at(&mut lend, 0, answer.as_bytes());
+                }
+            }
+        }
+    }
+
+    /// The steward's answer to a reader's call as a line: `ok` on success, else the refusal by
+    /// the wire's name (`refused: hash_mismatch`), or that the steward did not answer.
+    fn answer_line(steward: &Endpoint, lend: &mut Lend, m: &steward::Message<'_>, ok: &str) -> String {
+        match typed::call::<steward::Protocol, _>(steward, lend, m, &[], |_, _| Some(())) {
+            Ok(Some(())) => String::from(ok),
+            Err(redoubt_client::Error::Server(code)) => match steward::ErrorCode::from_code(code) {
+                Some(c) => format!("refused: {}\r\n", snake(&format!("{c:?}"))),
+                None => format!("refused: {code}\r\n"),
+            },
+            _ => String::from("the steward did not answer\r\n"),
+        }
+    }
+
+    /// `HashMismatch` as the wire's table names it, `hash_mismatch`.
+    fn snake(name: &str) -> String {
+        let mut out = String::new();
+        for c in name.chars() {
+            if c.is_ascii_uppercase() && !out.is_empty() {
+                out.push('_');
+            }
+            out.push(c.to_ascii_lowercase());
+        }
+        out
     }
 
     /// What the steward holds for a child, under a key of its own ([`Machine::held`]).
@@ -250,6 +384,16 @@ mod machine {
         work: Endpoint,
         work_send: Endpoint,
         watchers: Watchers,
+        /// The next approval channel's consoles, the two connections `sshd` sent with its open:
+        /// the steward's, for screens, and its reader's.
+        approval: Option<(Handle, Handle)>,
+        /// Each open approval channel's screen console, by the channel's id.
+        channels: BTreeMap<u64, Handle>,
+        /// The readers' work endpoint, the badge the steward hands them channels on, and the
+        /// pool's count (reused as the watchers are).
+        reader_work: Endpoint,
+        reader_hand: Endpoint,
+        readers: Watchers,
     }
 
     impl Machine<'_> {
@@ -608,13 +752,13 @@ mod machine {
                         }
                     }
                 }
-                Child::Lease => None,
+                Child::Lease { .. } => None,
             };
             // The VM's share, told to it as its budget's pages in its startup block, which it
             // sizes its limits by: a session's pages less its relay's; a lease's whole, it has
             // no relay. A lease's VM runs the agent's module, told the sponsor it acts for.
             let (vm_pages, told, module) = match child {
-                Child::Lease => (self.agent_pages, lease_args(&principal), AGENT),
+                Child::Lease { .. } => (self.agent_pages, lease_args(&principal), AGENT),
                 Child::Session { .. } => (
                     self.session_pages.saturating_sub(RELAY_PAGES),
                     session_args(&self.own_lines, &principal, labels, context),
@@ -805,6 +949,116 @@ mod machine {
             let _ = Endpoint::from_handle(notices).send(&words, &[], Some(page), NOTICE_US);
         }
 
+        fn notify_approval(&mut self, notices: u64) {
+            let Some(notices) = self.handle_of(notices) else { return };
+            let m = steward::Message::ApprovalWaiting(steward::ApprovalWaiting {});
+            let Ok(words) = m.encode(&mut []) else { return };
+            let _ = Endpoint::from_handle(notices).send(&words, &[], None, NOTICE_US);
+        }
+
+        fn approval_consoles(&mut self, console: Option<Handle>, reader: Option<Handle>) {
+            let next = match (console, reader) {
+                (Some(c), Some(r)) => Some((c, r)),
+                (c, r) => {
+                    for h in [c, r].into_iter().flatten() {
+                        let _ = close(h);
+                    }
+                    None
+                }
+            };
+            if let Some((c, r)) = core::mem::replace(&mut self.approval, next) {
+                let _ = close(c);
+                let _ = close(r);
+            }
+        }
+
+        /// The channel is handed to a reader: its console and a send right of the steward's own
+        /// badge `APPROVAL`, on the readers' work endpoint; an idle reader takes it, and a new one
+        /// starts only when every reader is busy (`Watchers`, as the exit watchers are pooled).
+        /// Past [`CHANNELS`] open channels the open is refused and the consoles closed.
+        fn channel_opened(&mut self, channel: u64) -> Result<(), Error> {
+            let (console, reader) = self.approval.take().ok_or(Error::BadHandle)?;
+            // Each stage named, so a channel the steward cannot serve says which call refused.
+            let started = (|| {
+                if self.channels.len() >= CHANNELS {
+                    return Err(("the channel cap", Error::Refused));
+                }
+                let badge = NonZeroU64::new(APPROVAL).expect("APPROVAL is not 0");
+                let send = self.own.mint(badge, None).map_err(|e| ("the badge", e))?;
+                let new = self.readers.watch();
+                let thread = if new {
+                    Buffer::new(READER_STACK_PAGES).map_err(|e| ("the stack", e)).and_then(|stack| {
+                        let work = self.reader_work.handle().index() as usize;
+                        redoubt_rt::handle::thread_create(reader_thread, stack, work)
+                            .map(|_| ())
+                            .map_err(|e| ("the thread", e))
+                    })
+                } else {
+                    Ok(())
+                };
+                let handed = thread.and_then(|()| {
+                    self.reader_hand
+                        .send(
+                            &[channel & 0xffff_ffff, channel >> 32, 0, 0],
+                            &[reader, send.handle()],
+                            None,
+                            HAND_US,
+                        )
+                        .map_err(|(e, _)| {
+                            // The thread, if it started, waits idle in the pool.
+                            self.readers.unwatch(false);
+                            ("the hand-over", e)
+                        })
+                });
+                if matches!(handed, Err(("the stack", _)) | Err(("the thread", _))) {
+                    self.readers.unwatch(new);
+                }
+                let _ = close(send.handle());
+                handed
+            })();
+            match started {
+                Ok(()) => {
+                    let _ = close(reader);
+                    self.channels.insert(channel, console);
+                    Ok(())
+                }
+                Err((what, e)) => {
+                    let _ = close(console);
+                    let _ = close(reader);
+                    say(
+                        self.startup,
+                        &format!("steward: approval channel {channel:016x} not served: {what} ({e:?})\n"),
+                    );
+                    Err(e)
+                }
+            }
+        }
+
+        /// A screen that cannot be written within the bound is dropped and said once, with why:
+        /// the person asks again with `pending`.
+        fn screen(&mut self, channel: u64, text: &str) {
+            let Some(console) = self.channels.get(&channel) else { return };
+            let endpoint = Endpoint::from_handle(*console);
+            let written = Connection::attach_within(endpoint, &mut self.lend, SCREEN_US).and_then(|conn| {
+                let file = conn.open(&mut self.lend, "", mode::OWRITE)?;
+                let n = file.write_at(&mut self.lend, 0, text.as_bytes())?;
+                let _ = file.close(&mut self.lend);
+                Ok(n)
+            });
+            if let Err(e) = written {
+                say(
+                    self.startup,
+                    &format!("steward: a screen on channel {channel:016x} was not written: {e:?}\n"),
+                );
+            }
+        }
+
+        fn channel_closed(&mut self, channel: u64) {
+            if let Some(console) = self.channels.remove(&channel) {
+                let _ = close(console);
+            }
+        }
+
         fn random(&mut self) -> Result<u64, Error> { redoubt_rt::handle::random_u64() }
 
         fn now(&mut self) -> u64 { redoubt_rt::handle::time_now().unwrap_or(0) }
@@ -917,6 +1171,13 @@ mod machine {
             say(startup, "steward: cannot make its watchers' work endpoint\n");
             return NOT_STARTED;
         };
+        let Some((reader_work, reader_hand)) = Endpoint::create()
+            .ok()
+            .and_then(|w| w.mint(NonZeroU64::new(HAND).expect("HAND is not 0"), None).ok().map(|s| (w, s)))
+        else {
+            say(startup, "steward: cannot make its readers' work endpoint\n");
+            return NOT_STARTED;
+        };
         let mut machine = Machine {
             startup,
             lend,
@@ -945,6 +1206,11 @@ mod machine {
             work,
             work_send,
             watchers: Watchers::default(),
+            approval: None,
+            channels: BTreeMap::new(),
+            reader_work,
+            reader_hand,
+            readers: Watchers::default(),
         };
         // The kernel's count of what `users` holds as this instance starts: 0, at boot and after
         // `init` emptied a dead steward's carves.
@@ -996,6 +1262,11 @@ mod machine {
             return NOT_STARTED;
         };
         REPORT.store(report.handle().index(), Ordering::Release);
+        let Ok(done) = own.mint(NonZeroU64::new(READER_DONE).expect("READER_DONE is not 0"), None) else {
+            say(startup, "steward: cannot mint its readers' badge\n");
+            return NOT_STARTED;
+        };
+        READER_REPORT.store(done.handle().index(), Ordering::Release);
         let mut usage = BTreeMap::new();
         tree(startup, &steward, &mut usage);
         let outputs = steward.open_console(&mut machine).ok();
@@ -1043,15 +1314,30 @@ mod machine {
                     let mut serving = Serving::new(&mut steward, &mut machine);
                     let outcome = answer_with(&mut serving, &caller, &words, &handles, request.lend());
                     let (outputs, exited) = (core::mem::take(&mut serving.outputs), serving.exited);
+                    let deferred = core::mem::take(&mut serving.after);
                     // What the call did is said before it is answered, so its records come
                     // before anything the caller says of the answer.
                     after(startup, &mut steward, &mut usage, Some(outputs));
                     let _ = finish(request, &outcome);
-                    // A console a refused login brought is not kept.
+                    // A console a refused login or approval open brought is not kept.
                     machine.console(None, None);
+                    machine.approval_consoles(None, None);
                     if exited {
                         return core_exited(startup);
                     }
+                    // An approval channel's first screen, now that its `sshd` thread is free to
+                    // take the write.
+                    for kind in deferred {
+                        let outputs = steward.event(&mut machine, kind, 0).ok();
+                        if !after(startup, &mut steward, &mut usage, outputs) {
+                            return core_exited(startup);
+                        }
+                    }
+                }
+                // A reader's report: its channel ended, and it waits for the next.
+                Ok(Event::Send(delivery)) if delivery.caller.badge == READER_DONE => {
+                    close_delivery(&delivery);
+                    machine.readers.reported();
                 }
                 // A watcher's report: the exit endpoint it watched, now done with.
                 Ok(Event::Send(delivery)) if delivery.caller.badge == EXITS => {

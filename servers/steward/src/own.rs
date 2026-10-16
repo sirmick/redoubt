@@ -253,19 +253,20 @@ pub struct Bound {
     pub name: Option<&'static str>,
 }
 
-/// Whose namespace a binding is for: a session's, with labels or without, or a lease's.
+/// Whose namespace a binding is for: a session's or a lease's, with labels or without.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Child {
     Session { labelled: bool },
-    Lease,
+    Lease { labelled: bool },
 }
 
 impl Child {
     /// A session's or a lease's, by the kind of the object the batch is for.
     pub fn of(kind: Kind, labels: &[u64]) -> Child {
+        let labelled = !labels.is_empty();
         match kind {
-            Kind::Lease => Child::Lease,
-            _ => Child::Session { labelled: !labels.is_empty() },
+            Kind::Lease => Child::Lease { labelled },
+            _ => Child::Session { labelled },
         }
     }
 }
@@ -278,10 +279,11 @@ pub const PROJECT_AT: &str = "/project";
 /// Whether `slot` can bind anything for `child`: for a session, the vault only for a labelled
 /// one, the network only for an unlabelled one, the rest for both; for a lease, `/boot` (the
 /// programs it may launch in its own sub-budgets), its project root and the system volume: no
-/// vault, no network, no console (servers/steward.md, "Leases").
+/// vault slot, no network, no console (servers/steward.md, "Leases"). A labelled lease's
+/// project root is its vault, bound at slot 1 ([`binding`]).
 pub fn binds(child: Child, slot: u16) -> bool {
     match (child, slot) {
-        (Child::Lease, s) => s == 0 || s == 1 || s == 5,
+        (Child::Lease { .. }, s) => s == 0 || s == 1 || s == 5,
         (Child::Session { labelled }, 2) => labelled,
         (Child::Session { labelled }, 3) => !labelled,
         (Child::Session { .. }, s) => s < crate::SLOTS,
@@ -302,16 +304,24 @@ pub fn binding(
         return None;
     }
     let fresh = |server: &str, root: &str| How::Fresh { server: server.into(), root: root.into() };
-    // A lease's root is the sponsor's `project` directory, minted through the home's one carve
-    // with a quota of its own, `lease_quota` (the manifest's `agent_quota`), carved from the
-    // home's and given back at the lease's end: a root below the home with no quota would hold
-    // nothing (walfsd.md, "Quotas"). A session's is the home itself, sharing the home's quota.
+    // An unlabelled lease's root is the sponsor's `project` directory, minted through the home's
+    // one carve with a quota of its own, `lease_quota` (the manifest's `agent_quota`), carved
+    // from the home's and given back at the lease's end: a root below the home with no quota
+    // would hold nothing (walfsd.md, "Quotas"). A session's is the home itself, sharing the
+    // home's quota. A labelled lease's is its label set's vault, whole: the vault is the task's
+    // scope, with the vault's own quota, shared as a vault session shares it (R25 lets a
+    // labelled agent touch nothing of the unlabelled home; userland/agents.md, "Leases").
     let (below, below_quota, at) = match child {
-        Child::Lease => (PROJECT, lease_quota, PROJECT_AT),
+        Child::Lease { .. } => (PROJECT, lease_quota, PROJECT_AT),
         Child::Session { .. } => ("", 0, ""),
     };
     match slot {
         0 => Some(Bound { how: fresh("bootfsd", ""), at: Some("/boot".into()), name: Some("bootfsd") }),
+        1 if child == (Child::Lease { labelled: true }) => own.vault(principal, labels).map(|v| Bound {
+            how: fresh(&v.handle, ""),
+            at: Some(PROJECT_AT.into()),
+            name: None,
+        }),
         1 => own.home(principal).map(|h| Bound {
             how: How::Carved {
                 key: format!("home {principal}"),

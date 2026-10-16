@@ -297,20 +297,30 @@ is asserted until two trains agree within 20 %.
 
 ### `approve@box`
 
-Status: planned · M3 (agents, approvals and the attack suite)
+Status: built · tested: bench:steward-approve-box, bench:steward-screen-inert, bench:steward-pending-cap, host:redoubt-steward-server::an_approval_channel_opens_on_the_approval_key_alone
 
 `ssh approve@box` authenticates with the person's own approval key, one of their own SSH keys that
 the manifest lists for approval, and on that connection only the
 steward talks: `sshd` relays the steward's rendered requests and the person's answers, and nothing
-a session or agent sends reaches it ([steward](steward.md#the-powerbox-and-approvals)). A session's
+a session or agent sends reaches it ([steward](steward.md#the-powerbox-and-approvals)). The user
+name `approve` names no principal, so `sshd` sends the key alone: it mints two connections to the
+channel's console, as for a login, and asks the steward with `approval_opened(key, console,
+reader)`; the steward finds the principal from the key, opens the channel only for one of its
+approval keys (a login key is `bad_key`, and `sshd` denies the login) and answers the channel's
+id, which serves as the session's here; the close is `approval_closed`. The steward writes its
+screens through the first connection and its reader for the channel reads the person's lines
+through the second, so the bytes each way are the steward's and the person's alone. The person
+answers `approve ID HASH` with the hash the screen showed in full, or with the eight-character
+code the screen shows beside it: a person cannot type 64 hex characters reliably, and the code
+binds the approval to the screen the person saw as the full hash does, because the steward
+expands it only from the last screen it wrote on that channel, and the screen is the steward's
+alone to write. A session's
 network scope never includes the box's own addresses ([ipd](ipd.md#the-boxs-own-addresses)), so a
 hijacked session cannot log in to `approve@box` over loopback
 ([R68 (only the steward on approve@box)](#r68-only-the-steward-on-approvebox)). An address that
 loops back to the box without being listed as the box's own (a NAT hairpin) is refused only if the
 manifest lists it; the backstop is that `sshd` refuses any login key `keyd` holds, so a hijacked
 session that reaches `approve@box` that way still has no key to sign with.
-
-**Open:** none.
 
 ### Files in and out
 
@@ -375,15 +385,13 @@ data leaves the box over SSH only to the person who owns the label, on the chann
 
 ### R68 (only the steward on approve@box)
 
-Status: planned · M3 (agents, approvals and the attack suite)
+Status: built · partly tested: a route back to the box the manifest does not list is the stated gap · tested: bench:steward-approve-box, bench:steward-screen-inert
 
 On an `approve@box` connection, authenticated with the person's own approval key, every byte shown
 comes from the steward and every answer goes to it; no session, agent or other channel can write to
 it or open one from inside the box. A route back to the box that the manifest does not list as the
 box's own is the gap in the second half; `sshd`'s refusal of every key `keyd` holds is the backstop,
 so such a session still cannot authenticate there with a `keyd` key.
-
-**Open:** none.
 
 ## Failure and restart
 

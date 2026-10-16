@@ -39,9 +39,12 @@ pub struct ChannelClosed {
 pub struct ChannelClosedReply {}
 
 /// `approval_opened`: opcode 3, buffer; reply [`ApprovalOpenedReply`].
+///
+/// Handle slots: `console` (slot 0, endpoint), `reader` (slot 1, endpoint).
+/// Kinds are documentation, checked by use: a handle of the wrong kind gets `WrongObject`
+/// on first use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ApprovalOpened<'a> {
-    pub principal: &'a str,
     pub key: &'a [u8],
 }
 
@@ -61,7 +64,7 @@ pub struct ApprovalClosed {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ApprovalClosedReply {}
 
-/// `pending`: opcode 5, buffer; reply [`PendingReply`].
+/// `pending`: opcode 5, inline; reply [`PendingReply`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Pending {
     pub channel: u64,
@@ -69,12 +72,7 @@ pub struct Pending {
 
 /// The reply to [`Pending`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PendingReply<'a> {
-    pub request: u64,
-    pub hash: &'a [u8],
-    pub labels: &'a [u8],
-    pub text: &'a str,
-}
+pub struct PendingReply {}
 
 /// `approve`: opcode 6, buffer; reply [`ApproveReply`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -207,13 +205,21 @@ pub struct LeaseEnded<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LeaseEndedReply {}
 
+/// `approval_waiting`: opcode 18, inline; reply [`ApprovalWaitingReply`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ApprovalWaiting {}
+
+/// The reply to [`ApprovalWaiting`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ApprovalWaitingReply {}
+
 /// Requests by opcode.
 const REQUESTS: &[Layout] = &[
     Layout { opcode: 1, inline: false, handles: 2, optional: 0 },
     Layout { opcode: 2, inline: true, handles: 0, optional: 0 },
-    Layout { opcode: 3, inline: false, handles: 0, optional: 0 },
+    Layout { opcode: 3, inline: false, handles: 2, optional: 0 },
     Layout { opcode: 4, inline: true, handles: 0, optional: 0 },
-    Layout { opcode: 5, inline: false, handles: 0, optional: 0 },
+    Layout { opcode: 5, inline: true, handles: 0, optional: 0 },
     Layout { opcode: 6, inline: false, handles: 0, optional: 0 },
     Layout { opcode: 7, inline: false, handles: 0, optional: 0 },
     Layout { opcode: 8, inline: false, handles: 0, optional: 0 },
@@ -226,6 +232,7 @@ const REQUESTS: &[Layout] = &[
     Layout { opcode: 15, inline: true, handles: 0, optional: 0 },
     Layout { opcode: 16, inline: false, handles: 0, optional: 0 },
     Layout { opcode: 17, inline: false, handles: 0, optional: 0 },
+    Layout { opcode: 18, inline: true, handles: 0, optional: 0 },
 ];
 
 /// Every request of the protocol.
@@ -248,6 +255,7 @@ pub enum Message<'a> {
     Detach(Detach),
     EndContext(EndContext<'a>),
     LeaseEnded(LeaseEnded<'a>),
+    ApprovalWaiting(ApprovalWaiting),
 }
 
 impl<'a> Message<'a> {
@@ -256,7 +264,7 @@ impl<'a> Message<'a> {
         match self {
             Message::Login(_) => &["console", "relay"],
             Message::ChannelClosed(_) => &[],
-            Message::ApprovalOpened(_) => &[],
+            Message::ApprovalOpened(_) => &["console", "reader"],
             Message::ApprovalClosed(_) => &[],
             Message::Pending(_) => &[],
             Message::Approve(_) => &[],
@@ -271,6 +279,7 @@ impl<'a> Message<'a> {
             Message::Detach(_) => &[],
             Message::EndContext(_) => &[],
             Message::LeaseEnded(_) => &[],
+            Message::ApprovalWaiting(_) => &[],
         }
     }
 
@@ -294,6 +303,7 @@ impl<'a> Message<'a> {
             Message::Detach(_) => 15,
             Message::EndContext(_) => 16,
             Message::LeaseEnded(_) => 17,
+            Message::ApprovalWaiting(_) => 18,
         }
     }
 
@@ -307,10 +317,7 @@ impl<'a> Message<'a> {
                 w.bytes(m.key)
             }
             Message::ChannelClosed(m) => w.u64(m.session),
-            Message::ApprovalOpened(m) => {
-                w.string(m.principal)?;
-                w.bytes(m.key)
-            }
+            Message::ApprovalOpened(m) => w.bytes(m.key),
             Message::ApprovalClosed(m) => w.u64(m.channel),
             Message::Pending(m) => w.u64(m.channel),
             Message::Approve(m) => {
@@ -347,6 +354,7 @@ impl<'a> Message<'a> {
                 w.u64(m.lease)?;
                 w.string(m.name)
             }
+            Message::ApprovalWaiting(_) => Ok(()),
         }
     }
 
@@ -354,10 +362,12 @@ impl<'a> Message<'a> {
         Ok(match opcode {
             2 => Message::ChannelClosed(ChannelClosed { session: r.u64()? }),
             4 => Message::ApprovalClosed(ApprovalClosed { channel: r.u64()? }),
+            5 => Message::Pending(Pending { channel: r.u64()? }),
             11 => Message::EndLease(EndLease { lease: r.u64()? }),
             12 => Message::EndSession(EndSession {}),
             13 => Message::Watch(Watch {}),
             15 => Message::Detach(Detach {}),
+            18 => Message::ApprovalWaiting(ApprovalWaiting {}),
             _ => return Err(Error::BadOpcode),
         })
     }
@@ -366,7 +376,7 @@ impl<'a> Message<'a> {
         Ok(match opcode {
             1 => Message::Login(Login { principal: r.string()?, label: r.string()?, context: r.string()?, from: r.string()?, key: r.bytes()? }),
             2 => Message::ChannelClosed(ChannelClosed { session: r.u64()? }),
-            3 => Message::ApprovalOpened(ApprovalOpened { principal: r.string()?, key: r.bytes()? }),
+            3 => Message::ApprovalOpened(ApprovalOpened { key: r.bytes()? }),
             4 => Message::ApprovalClosed(ApprovalClosed { channel: r.u64()? }),
             5 => Message::Pending(Pending { channel: r.u64()? }),
             6 => Message::Approve(Approve { channel: r.u64()?, request: r.u64()?, hash: r.bytes()? }),
@@ -381,6 +391,7 @@ impl<'a> Message<'a> {
             15 => Message::Detach(Detach {}),
             16 => Message::EndContext(EndContext { name: r.string()? }),
             17 => Message::LeaseEnded(LeaseEnded { lease: r.u64()?, name: r.string()? }),
+            18 => Message::ApprovalWaiting(ApprovalWaiting {}),
             _ => return Err(Error::BadOpcode),
         })
     }
@@ -416,7 +427,7 @@ const REPLIES: &[Layout] = &[
     Layout { opcode: 2, inline: true, handles: 0, optional: 0 },
     Layout { opcode: 3, inline: false, handles: 0, optional: 0 },
     Layout { opcode: 4, inline: true, handles: 0, optional: 0 },
-    Layout { opcode: 5, inline: false, handles: 0, optional: 0 },
+    Layout { opcode: 5, inline: true, handles: 0, optional: 0 },
     Layout { opcode: 6, inline: false, handles: 0, optional: 0 },
     Layout { opcode: 7, inline: false, handles: 0, optional: 0 },
     Layout { opcode: 8, inline: false, handles: 0, optional: 0 },
@@ -429,6 +440,7 @@ const REPLIES: &[Layout] = &[
     Layout { opcode: 15, inline: true, handles: 0, optional: 0 },
     Layout { opcode: 16, inline: false, handles: 0, optional: 0 },
     Layout { opcode: 17, inline: false, handles: 0, optional: 0 },
+    Layout { opcode: 18, inline: true, handles: 0, optional: 0 },
 ];
 
 /// Every successful reply of the protocol, named after its request.
@@ -438,7 +450,7 @@ pub enum Reply<'a> {
     ChannelClosed(ChannelClosedReply),
     ApprovalOpened(ApprovalOpenedReply),
     ApprovalClosed(ApprovalClosedReply),
-    Pending(PendingReply<'a>),
+    Pending(PendingReply),
     Approve(ApproveReply),
     Deny(DenyReply),
     Blame(BlameReply),
@@ -451,6 +463,7 @@ pub enum Reply<'a> {
     Detach(DetachReply),
     EndContext(EndContextReply),
     LeaseEnded(LeaseEndedReply),
+    ApprovalWaiting(ApprovalWaitingReply),
 }
 
 impl<'a> Reply<'a> {
@@ -474,6 +487,7 @@ impl<'a> Reply<'a> {
             Reply::Detach(_) => &[],
             Reply::EndContext(_) => &[],
             Reply::LeaseEnded(_) => &[],
+            Reply::ApprovalWaiting(_) => &[],
         }
     }
 
@@ -497,6 +511,7 @@ impl<'a> Reply<'a> {
             Reply::Detach(_) => 15,
             Reply::EndContext(_) => 16,
             Reply::LeaseEnded(_) => 17,
+            Reply::ApprovalWaiting(_) => 18,
         }
     }
 
@@ -510,12 +525,7 @@ impl<'a> Reply<'a> {
             Reply::ChannelClosed(_) => Ok(()),
             Reply::ApprovalOpened(m) => w.u64(m.channel),
             Reply::ApprovalClosed(_) => Ok(()),
-            Reply::Pending(m) => {
-                w.u64(m.request)?;
-                w.bytes(m.hash)?;
-                w.bytes(m.labels)?;
-                w.string(m.text)
-            }
+            Reply::Pending(_) => Ok(()),
             Reply::Approve(_) => Ok(()),
             Reply::Deny(_) => Ok(()),
             Reply::Blame(_) => Ok(()),
@@ -531,6 +541,7 @@ impl<'a> Reply<'a> {
             Reply::Detach(_) => Ok(()),
             Reply::EndContext(_) => Ok(()),
             Reply::LeaseEnded(_) => Ok(()),
+            Reply::ApprovalWaiting(_) => Ok(()),
         }
     }
 
@@ -538,10 +549,12 @@ impl<'a> Reply<'a> {
         Ok(match opcode {
             2 => Reply::ChannelClosed(ChannelClosedReply {}),
             4 => Reply::ApprovalClosed(ApprovalClosedReply {}),
+            5 => Reply::Pending(PendingReply {}),
             11 => Reply::EndLease(EndLeaseReply {}),
             12 => Reply::EndSession(EndSessionReply {}),
             13 => Reply::Watch(WatchReply {}),
             15 => Reply::Detach(DetachReply {}),
+            18 => Reply::ApprovalWaiting(ApprovalWaitingReply {}),
             _ => return Err(Error::BadOpcode),
         })
     }
@@ -552,7 +565,7 @@ impl<'a> Reply<'a> {
             2 => Reply::ChannelClosed(ChannelClosedReply {}),
             3 => Reply::ApprovalOpened(ApprovalOpenedReply { channel: r.u64()? }),
             4 => Reply::ApprovalClosed(ApprovalClosedReply {}),
-            5 => Reply::Pending(PendingReply { request: r.u64()?, hash: r.bytes()?, labels: r.bytes()?, text: r.string()? }),
+            5 => Reply::Pending(PendingReply {}),
             6 => Reply::Approve(ApproveReply {}),
             7 => Reply::Deny(DenyReply {}),
             8 => Reply::Blame(BlameReply {}),
@@ -565,6 +578,7 @@ impl<'a> Reply<'a> {
             15 => Reply::Detach(DetachReply {}),
             16 => Reply::EndContext(EndContextReply {}),
             17 => Reply::LeaseEnded(LeaseEndedReply {}),
+            18 => Reply::ApprovalWaiting(ApprovalWaitingReply {}),
             _ => return Err(Error::BadOpcode),
         })
     }

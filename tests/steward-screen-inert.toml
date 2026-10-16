@@ -1,0 +1,83 @@
+description = "The approval screen is inert (docs/servers/steward.md, \"The powerbox and approvals\" and R38; docs/servers/sshd.md, R68): alice's agent submits a note whose reason is 64 characters of terminal escapes (ESC [ 2 J, the screen clear), bidi overrides (U+202E), isolates (U+2066), zero-width spaces (U+200B) and the bell, a field that would repaint or disguise a screen drawn as it came; the steward renders it on alice's approval channel escaped (render.rs: a whitelist of printable ASCII, every other character `?`: each ESC, and `[2J` stays as the printable text it is), so the bytes sshd relays to `ssh approve@box` hold no ESC and nothing outside 0x20 to 0x7E but the line ends. The verdict is the bytes sshd relayed on the channel, read by the bench's forbid over the approver's output, and the steward's Submitted line (rule F)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+recipe = "image/boot.toml"
+# The image needs 1 GiB: the principals' budgets, each holding shell VMs' sessions and a lease,
+# do not fit the users budget 256 MiB leaves (docs/kernel/budgets.md).
+memory_mib = 1024
+# A login, an agent's VM and the approval terminal.
+timeout_secs = 1500
+expect = [
+    '^init: started sshd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
+    '^init: started steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+]
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    '^init: .* (exited|faulted|was killed)',
+    'init: restarted',
+    'EXCEPTION',
+    'steward: a step failed',
+    'steward: the core exited',
+    'sshd: login .*: refused',
+]
+expect_after = [
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{\} at [0-9]+: Submitted \{ request: [0-9]+ \}',
+    '^\[con [0-9a-f]{16}\] sshd: login approve: approval channel [0-9a-f]{16}$',
+]
+
+# Alice stages the hostile reason (64 Unicode scalar values: eight screen clears, then eight of
+# the bidi override, the isolate, the zero-width space and the bell) and starts the agent that
+# submits it as a note.
+[[session]]
+user = "alice"
+pty = true
+steps = [
+    { expect = '/home/alice \([0-9]+\)> ' },
+    { send = "hostile = String.duplicate(\"\\e[2J\", 8) <> String.duplicate(\"\\u202E\\u2066\\u200B\\a\", 8); {:len, String.length(hostile)}\n" },
+    { expect = '\{:len, 64\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:stage, File.mkdir_p(\"/home/alice/project/out\"), File.write(\"/home/alice/project/in\", \"note \" <> hostile)}\n" },
+    { expect = '\{:stage, :ok, :ok\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:ok, c} = Redoubt.Contexts.connection(); {:lease, Redoubt.Wire.Client.Steward.start_agent(c, 600_000_000)}\n" },
+    { expect = '\{:lease, \{:ok, %\{lease: [0-9]+, name: "agent-1"\}\}\}' },
+    { expect = '\([0-9]+\)> ' },
+    { expect = '\[an approval is waiting\]' },
+    { mark = "waiting" },
+    { wait = "screen-read" },
+    { exit = 0 },
+]
+
+# The approval terminal: the screen shows the note with every character outside printable ASCII
+# as `?` (each ESC; `[2J` is printable and stays, inert without its ESC; the bidi, isolate,
+# zero-width and bell characters), and nothing sshd relayed on this channel is an escape or a
+# byte outside printable ASCII but the line ends. The forbid runs over every line of this
+# session's output until ssh exits.
+[[session]]
+user = "approve"
+name = "approver"
+key = "alice-approval"
+pty = true
+forbid = ['\x1b', '[^\x20-\x7e]']
+steps = [
+    { wait = "waiting" },
+    { expect = 'pending approvals for alice:' },
+    { expect = 'request [0-9a-f]{16} hash [0-9a-f]{64} code [0-9a-f]{8}' },
+    { expect = 'request from alice \(agent-1, labels \[\]\): a note \(untrusted\): ""; reason \(untrusted\): "(\?\[2J){8}\?{32}"' },
+    { expect = 'type: approve <id> <hash or code> \| deny <id> \| pending' },
+    { mark = "screen-read" },
+    { exit = 0 },
+]
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]
+forward = [22]

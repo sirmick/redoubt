@@ -24,8 +24,8 @@ defmodule Redoubt.Wire.Client.Steward do
   end
 
   @doc "Calls `approval_opened`, waiting at most `timeout` ms."
-  def approval_opened(conn, v_principal, v_key, timeout \\ C.timeout()) do
-    C.call(conn, P, {:approval_opened, %{principal: v_principal, key: v_key}}, [], timeout)
+  def approval_opened(conn, v_key, h_console, h_reader, timeout \\ C.timeout()) do
+    C.call(conn, P, {:approval_opened, %{key: v_key}}, [h_console, h_reader], timeout)
   end
 
   @doc "Calls `approval_closed`, waiting at most `timeout` ms."
@@ -96,5 +96,10 @@ defmodule Redoubt.Wire.Client.Steward do
   @doc "Calls `lease_ended`, waiting at most `timeout` ms."
   def lease_ended(conn, v_lease, v_name, timeout \\ C.timeout()) do
     C.call(conn, P, {:lease_ended, %{lease: v_lease, name: v_name}}, [], timeout)
+  end
+
+  @doc "Calls `approval_waiting`, waiting at most `timeout` ms."
+  def approval_waiting(conn, timeout \\ C.timeout()) do
+    C.call(conn, P, {:approval_waiting, %{}}, [], timeout)
   end
 end

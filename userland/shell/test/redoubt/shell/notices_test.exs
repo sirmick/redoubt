@@ -20,6 +20,12 @@ defmodule Redoubt.Shell.NoticesTest do
     assert Notices.line(@steward, words, buffer, []) == "[lease alice/agent-1 ended]"
   end
 
+  test "an approval_waiting on the steward's badge prints that one is waiting, and nothing of it" do
+    {:ok, words, buffer} = P.encode({:approval_waiting, %{}})
+    assert Notices.line(@steward, words, buffer, []) == "[an approval is waiting]"
+    assert Notices.line(@forged, words, buffer, []) == nil
+  end
+
   test "a forged notice, sent through the session's own endpoint under badge 0, prints nothing" do
     {words, buffer} = notice("alice/agent-1")
     assert Notices.line(@forged, words, buffer, []) == nil

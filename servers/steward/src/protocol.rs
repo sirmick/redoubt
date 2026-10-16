@@ -16,12 +16,14 @@ use redoubt_rt::ipc::{Caller, Words};
 use redoubt_rt::server::typed::{Answer as Typed, Outcome, Protocol, TypedServer, answer};
 use redoubt_rt::wire::Error as WireError;
 use redoubt_rt::wire::proto::steward::{
-    BlameReply, ChannelClosedReply, ContextsReply, DetachReply, EndContextReply, EndLeaseReply,
-    EndSessionReply, ErrorCode, LoginReply, Message, Reply, StartAgentReply,
+    ApprovalClosedReply, ApprovalOpenedReply, ApproveReply, BlameReply, ChannelClosedReply, ContextsReply,
+    DenyReply, DetachReply, EndContextReply, EndLeaseReply, EndSessionReply, ErrorCode, LoginReply, Message,
+    PendingReply, Reply, StartAgentReply, SubmitReply,
 };
 use redoubt_steward::effect::{Answer, Output, Refusal};
-use redoubt_steward::event::EventKind;
+use redoubt_steward::event::{Content, EventKind};
 use redoubt_steward::hash::key_id;
+use redoubt_steward::inspect;
 
 use crate::drive::{Exited, MINTED};
 use crate::{Kernel, Steward};
@@ -73,9 +75,9 @@ impl Class {
             | Message::Contexts(_)
             | Message::Detach(_)
             | Message::EndContext(_) => Class::Session,
-            // The steward's own send to a session's notices endpoint: a call of it, on any badge,
-            // is malformed.
-            Message::LeaseEnded(_) => Class::None,
+            // The steward's own sends to a session's notices endpoint: a call of either, on any
+            // badge, is malformed.
+            Message::LeaseEnded(_) | Message::ApprovalWaiting(_) => Class::None,
         }
     }
 }
@@ -157,6 +159,10 @@ pub struct Serving<'a, K: Kernel> {
     pub kernel: &'a mut K,
     /// The outputs other than this call's reply: audit records, notices.
     pub outputs: Vec<Output>,
+    /// Events the server raises once this call is answered: an approval channel's first redraw,
+    /// which cannot be written while `sshd`'s thread for the channel waits in the call that
+    /// opened it (the bounded write would only time out).
+    pub after: Vec<EventKind>,
     /// The core exited: the server ends once this call is answered.
     pub exited: bool,
     /// The reply's strings, which the reply borrows.
@@ -170,6 +176,7 @@ impl<'a, K: Kernel> Serving<'a, K> {
             steward,
             kernel,
             outputs: Vec::new(),
+            after: Vec::new(),
             exited: false,
             name: String::new(),
             label_bytes: Vec::new(),
@@ -197,6 +204,9 @@ where
             return Err(ErrorCode::Malformed);
         }
         let mut login_labels = Vec::new();
+        // An approval channel opening: the channel's id, drawn here as every id the server hands
+        // the core, and answered once the core has it open.
+        let mut opened = None;
         let (kind, ok) = match request {
             Message::Login(m) => {
                 // The key's id first, whatever else the login names; a label the manifest does
@@ -220,6 +230,59 @@ where
                 EventKind::ChannelClosed { session: m.session },
                 Some(Reply::ChannelClosed(ChannelClosedReply {})),
             ),
+            // `approve@box` (servers/steward.md, "The powerbox and approvals"): the SSH user
+            // names no principal, so the key does: the principal whose approval keys hold it,
+            // else the one whose login keys do, so that the core's `approval_key` guard, the
+            // keeper, refuses a login key as `bad_key`; a key of nobody's is `unknown`. The two
+            // consoles `sshd` sent are the channel's once the core opens it.
+            Message::ApprovalOpened(m) => {
+                let key = <[u8; 32]>::try_from(m.key).map_err(|_| ErrorCode::BadKey)?;
+                let key = key_id(&key);
+                let principals = &inspect::fixed(&self.steward.store).principals;
+                let whose = |keys: fn(&redoubt_steward::manifest::Principal) -> &Vec<u64>| {
+                    principals.iter().find(|p| keys(p).contains(&key)).map(|p| p.name.clone())
+                };
+                let principal =
+                    whose(|p| &p.approval_keys).or_else(|| whose(|p| &p.login_keys)).unwrap_or_default();
+                self.kernel.approval_consoles(handles.first().copied(), handles.get(1).copied());
+                let channel = self.kernel.random().map_or(0, |r| r | MINTED);
+                opened = Some(channel);
+                (EventKind::ApprovalOpened { channel, principal, key }, None)
+            }
+            Message::ApprovalClosed(m) => {
+                self.kernel.channel_closed(m.channel);
+                self.steward.channel_closed(m.channel);
+                (
+                    EventKind::ApprovalClosed { channel: m.channel },
+                    Some(Reply::ApprovalClosed(ApprovalClosedReply {})),
+                )
+            }
+            // The lines a person typed on an approval channel, sent by the steward's own reader
+            // for it: a redraw, an approval naming the frozen request's hash in full or by the
+            // code the last screen showed beside it (`Steward::hash_of_code`), a denial. A code
+            // the last screen did not show is `hash_mismatch`, to the channel alone.
+            Message::Pending(m) => {
+                (EventKind::Pending { channel: m.channel }, Some(Reply::Pending(PendingReply {})))
+            }
+            Message::Approve(m) => {
+                let hash = match <[u8; 32]>::try_from(m.hash) {
+                    Ok(hash) => hash,
+                    Err(_) => match self.steward.hash_of_code(m.channel, m.request, m.hash) {
+                        Some(hash) if m.hash.len() == 4 => hash,
+                        // A channel with no screen: the core's answer (unknown, for one nobody
+                        // holds) says more than a mismatch would.
+                        None if !self.steward.screened(m.channel) => [0; 32],
+                        _ => return Err(ErrorCode::HashMismatch),
+                    },
+                };
+                (
+                    EventKind::Approve { channel: m.channel, request: m.request, hash },
+                    Some(Reply::Approve(ApproveReply {})),
+                )
+            }
+            Message::Deny(m) => {
+                (EventKind::Deny { channel: m.channel, request: m.request }, Some(Reply::Deny(DenyReply {})))
+            }
             Message::EndSession(_) => {
                 (EventKind::EndSession { badge: caller.badge }, Some(Reply::EndSession(EndSessionReply {})))
             }
@@ -255,8 +318,23 @@ where
                 },
                 Some(Reply::Blame(BlameReply {})),
             ),
-            // The powerbox's: the core decides them, and the server binds their batches in
-            // STEWARD3B.
+            // A request to the powerbox (servers/steward.md, "The powerbox and approvals"): the
+            // structured content by its kind, and the requester's reason; the core freezes it
+            // and answers its id. A declassification or a push (kinds 2 and 3) is STEWARD4's:
+            // until then it is `unknown`, as an operation not yet bound.
+            Message::Submit(m) => {
+                let content = match m.kind {
+                    0 => Content::Note { what: m.what.into() },
+                    1 => Content::Agent {
+                        labels: redoubt_rt::wire::labels::decode(m.labels).collect(),
+                        lease: m.lease,
+                    },
+                    _ => return Err(ErrorCode::Unknown),
+                };
+                (EventKind::Submit { badge: caller.badge, content, reason: m.reason.into() }, None)
+            }
+            // `watch` is taken before this match and the steward's own sends are malformed on
+            // every badge: nothing else is unbound.
             _ => return Err(ErrorCode::Unknown),
         };
         let outputs = match self.steward.event(self.kernel, kind, CALL) {
@@ -273,6 +351,18 @@ where
                 o => self.outputs.push(o),
             }
         }
+        // The channel is open in the core: the server takes its consoles and starts its reader,
+        // and redraws it once this call is answered, so the person sees what waits. A channel
+        // the server cannot serve is closed in the core again, and the open fails.
+        if let (Some(channel), Some(Answer::Ok)) = (opened, &answer) {
+            if self.kernel.channel_opened(channel).is_err() {
+                let closed = self.steward.event(self.kernel, EventKind::ApprovalClosed { channel }, 0);
+                self.outputs.extend(closed.unwrap_or_default());
+                return Err(ErrorCode::Failed);
+            }
+            self.after.push(EventKind::Pending { channel });
+            return Ok(Typed::new(Reply::ApprovalOpened(ApprovalOpenedReply { channel })));
+        }
         match (answer, ok) {
             (Some(Answer::Contexts(list)), None) => {
                 self.name = listing(&list);
@@ -287,6 +377,9 @@ where
             (Some(Answer::Lease { id, name }), None) => {
                 self.name = name;
                 Ok(Typed::new(Reply::StartAgent(StartAgentReply { lease: id, name: &self.name })))
+            }
+            (Some(Answer::Request { id }), None) => {
+                Ok(Typed::new(Reply::Submit(SubmitReply { request: id })))
             }
             // A notice the core takes without an answer (a channel's close) is answered empty;
             // the core answers only its refusal.

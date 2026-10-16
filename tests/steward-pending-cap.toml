@@ -1,0 +1,104 @@
+description = "The pending cap and the fair share (docs/servers/steward.md, \"The powerbox and approvals\": `pending_cap`, `fair_share`, `drop_requests`; R26): alice's agent submits PENDING_CAP + 1 (five) notes; its fair share of the cap is PENDING_CAP divided among the domain's live sessions and leases (her console session, her SSH session and the agent: one), so the first is accepted and the next four are refused `cap`, nothing of them kept; a second agent of hers, in the same label set, still gets its share (its one note accepted); her own session's note is accepted too, and dropped when that session ends, so the approval screen opened after it lists the two agents' notes and nothing of hers. The verdicts are the steward's answers as the agents wrote them to the project and the shell printed them, its Submitted lines, and the screen the steward wrote on the channel as sshd relayed it (rule F)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+recipe = "image/boot.toml"
+# The image needs 1 GiB: the principals' budgets, each holding shell VMs' sessions and leases,
+# do not fit the users budget 256 MiB leaves (docs/kernel/budgets.md).
+memory_mib = 1024
+# A login, two agents' VMs and the approval terminal.
+timeout_secs = 1800
+expect = [
+    '^init: started sshd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
+    '^init: started steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+]
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    '^init: .* (exited|faulted|was killed)',
+    'init: restarted',
+    'EXCEPTION',
+    'steward: a step failed',
+    'steward: the core exited',
+    'sshd: login .*: refused',
+]
+# Three requests enter: one per agent and alice's own; the cap's refusals leave no record.
+expect_after = [
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{\} at [0-9]+: Submitted \{ request: [0-9]+ \}',
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{\} at [0-9]+: Submitted \{ request: [0-9]+ \}',
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{\} at [0-9]+: Submitted \{ request: [0-9]+ \}',
+    '^\[con [0-9a-f]{16}\] sshd: login approve: approval channel [0-9a-f]{16}$',
+]
+
+# Alice starts the first agent on five notes and reads its five answers; then the second on one
+# note; then submits her own and leaves. Every answer is tagged, so a pattern matches the shell's
+# printed value and never the echo of the line typed.
+[[session]]
+user = "alice"
+pty = true
+steps = [
+    { expect = '/home/alice \([0-9]+\)> ' },
+    { send = "{:stage, File.mkdir_p(\"/home/alice/project/out\"), File.write(\"/home/alice/project/in\", \"notes 5 flood\")}\n" },
+    { expect = '\{:stage, :ok, :ok\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:ok, c} = Redoubt.Contexts.connection(); {:lease, Redoubt.Wire.Client.Steward.start_agent(c, 600_000_000)}\n" },
+    { expect = '\{:lease, \{:ok, %\{lease: [0-9]+, name: "agent-1"\}\}\}' },
+    { expect = '\([0-9]+\)> ' },
+    { expect = '\[an approval is waiting\]' },
+    { send = "read = fn -> Enum.find_value(1..120, fn _ -> case File.read(\"/home/alice/project/out/result\") do {:ok, t} when t != \"\" -> t; _ -> Process.sleep(1000); nil end end) end; {:first, read.()}\n" },
+    { expect = '\{:first,\s+"\{:ok, %\{request: [0-9]+\}\}\\n\{:error, :cap\}\\n\{:error, :cap\}\\n\{:error, :cap\}\\n\{:error, :cap\}\\n"\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:restage, File.rm(\"/home/alice/project/out/result\"), File.write(\"/home/alice/project/in\", \"notes 1 second\")}\n" },
+    { expect = '\{:restage, :ok, :ok\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:lease, Redoubt.Wire.Client.Steward.start_agent(c, 600_000_000)}\n" },
+    { expect = '\{:lease, \{:ok, %\{lease: [0-9]+, name: "agent-2"\}\}\}' },
+    { expect = '\([0-9]+\)> ' },
+    { expect = '\[an approval is waiting\]' },
+    { send = "{:second, read.()}\n" },
+    { expect = '\{:second,\s+"\{:ok, %\{request: [0-9]+\}\}\\n"\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:mine, Redoubt.Wire.Client.Steward.submit(c, 0, <<>>, 0, 0, 0, \"\", \"mine\")}\n" },
+    { expect = '\{:mine, \{:ok, %\{request: [0-9]+\}\}\}' },
+    { expect = '\([0-9]+\)> ' },
+    # The session ends itself through the steward (a closed channel alone would leave the
+    # context detached, its requests pending): the steward drops its request before it destroys
+    # the budget, and ends the channel, so ssh exits clean.
+    # A marker printed first, so the line was read before the input is closed (a close first
+    # would detach the context instead, its request pending); the steward then ends the session
+    # and the channel, and ssh exits clean.
+    { send = "IO.puts(\"bye\"); Process.sleep(1000); Redoubt.Wire.Client.Steward.end_session(c)\n" },
+    { expect = '^bye$' },
+    { exit = 0 },
+    { mark = "alice-gone" },
+]
+
+# The approval terminal, opened once alice's session has ended: the two agents' notes wait, hers
+# is gone with her session.
+[[session]]
+user = "approve"
+name = "approver"
+key = "alice-approval"
+pty = true
+forbid = ['"mine"']
+steps = [
+    { wait = "alice-gone" },
+    { expect = 'pending approvals for alice:' },
+    # The two notes, in the screen's order (by id, which is random): one pattern for either,
+    # matched twice.
+    { expect = 'request from alice \(agent-[12], labels \[\]\): a note \(untrusted\): ""; reason \(untrusted\): "(flood 1|second 1)"' },
+    { expect = 'request from alice \(agent-[12], labels \[\]\): a note \(untrusted\): ""; reason \(untrusted\): "(flood 1|second 1)"' },
+    { expect = 'type: approve <id> <hash or code> \| deny <id> \| pending' },
+    { exit = 0 },
+]
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]
+forward = [22]

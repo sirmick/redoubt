@@ -320,7 +320,7 @@ startup block and resolves paths against it
 
 ### `approve@`
 
-Status: planned · M3 (agents, approvals and the attack suite)
+Status: built · partly tested: a labelled agent's request and a note; a declassification waits for the steward's declassification and push · tested: bench:steward-approve-box, bench:steward-screen-inert, bench:steward-pending-cap
 
 `ssh approve@box` is the approval terminal. When an agent asks its sponsor for more authority, or
 a session asks for a declassification, the request goes to the steward, and the requester's own
@@ -335,7 +335,11 @@ from ([the steward](../servers/steward.md)).
   the label consequences. Every field is printable ASCII, escaped and length-capped. A labelled
   requester's free text is never shown; an unlabelled requester's is quoted and marked untrusted.
 - **What is approved** is bound: each request has a random 64-bit id and a hash of its exact
-  content, and approving confirms both. An approval grants no more than the approver holds.
+  content, and approving confirms both: `approve ID HASH`, the hash in full or as the
+  eight-character code the screen shows beside it, which the steward expands only from the last
+  screen it wrote on that channel ([sshd](../servers/sshd.md#approvebox)). An approval grants no
+  more than the approver holds. The requester's own sessions print `[an approval is waiting]` and
+  nothing of the request.
 
 In M3 (agents, approvals and the attack suite) `approve@` is served by the same `sshd` as every
 other channel. That is a stated residual: a bug in the SSH code reached from any channel could
@@ -343,8 +347,6 @@ control the approval screen, and a network flood can delay approvals ([sshd](../
 The design protects the approval channel from the requester; it does not protect the person's
 judgment, and an approval that grants more than the person intended is a wall the design names, not
 one it closes ([agents](agents.md)).
-
-**Open:** none.
 
 ## Why
 

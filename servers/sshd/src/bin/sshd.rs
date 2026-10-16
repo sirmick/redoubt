@@ -104,6 +104,8 @@ mod machine {
     /// The longest a login, or a channel's close, waits for the steward's answer: a restart's
     /// gap is a few seconds.
     const LOGIN_WAIT_US: u64 = 30_000_000;
+    /// The user name of the approval terminal (`redoubt_sshd::Login::RESERVED`).
+    const APPROVE: &str = "approve";
 
     /// Fids at `ipd`, which every thread's calls share through the one scope badge: the root,
     /// the main thread's two, and each slot's three from [`slot_fids`], and its fourth, which
@@ -285,6 +287,9 @@ mod machine {
         console: Option<Consoles>,
         /// The session the login made, and the steward's generation then.
         session: Option<(u64, u32)>,
+        /// The session is an approval channel (`approve@box`): its id is the steward's channel
+        /// id, and its close is `approval_closed`.
+        approval: bool,
         /// The client's address, `a.b.c.d:port`, or empty if `ipd` did not say: only the
         /// steward's notes of a context's takeover show it.
         from: String,
@@ -402,6 +407,9 @@ mod machine {
                 self.say("sshd: restart-probe: exiting\n");
                 redoubt_rt::handle::process_exit(PROBE_EXIT);
             }
+            if who.principal == APPROVE && who.label.is_none() && who.context.is_none() {
+                return self.approve(key);
+            }
             let mut name = match who.label {
                 Some(label) => format!("{}+{label}", who.principal),
                 None => String::from(who.principal),
@@ -476,9 +484,11 @@ mod machine {
         }
 
         fn end(&mut self, session: Console) {
+            let approval = self.approval;
             self.closed(session.id);
             session.chan.borrow_mut().end(0);
-            self.say(&format!("sshd: session {:016x} ended\n", session.id));
+            let what = if approval { "approval channel" } else { "session" };
+            self.say(&format!("sshd: {what} {:016x} ended\n", session.id));
         }
 
         fn refused(&mut self, request: Refusal) {
@@ -487,13 +497,77 @@ mod machine {
     }
 
     impl Slot<'_> {
+        /// `approve@box` (servers/sshd.md, "`approve@box`"; steward.md, "The powerbox and
+        /// approvals"): the user name names no principal, the key does. Two connections to the
+        /// channel's console as for a login (the steward writes its screens through one and its
+        /// reader reads the person's lines through the other), sent with `approval_opened`; the
+        /// steward opens the channel only for one of a principal's approval keys and answers its
+        /// id, which serves as the session's. Nothing else of the channel differs from a session's
+        /// here: its bytes are the steward's alone, both ways (R68).
+        fn approve(&mut self, key: &PublicKey) -> Result<Console, Refused> {
+            let made = self.nine.mint_rooted(&me(), (File, qid()), None, &mut Own(self.endpoint));
+            let Ok((console, _, badge)) = made else {
+                self.say("sshd: login approve: no console\n");
+                return Err(Refused);
+            };
+            let made = self.nine.mint_rooted(&me(), (File, qid()), None, &mut Own(self.endpoint));
+            let Ok((reader, _, reader_badge)) = made else {
+                let _ = close(console);
+                self.nine.unmint(badge);
+                self.say("sshd: login approve: no console\n");
+                return Err(Refused);
+            };
+            let consoles = Consoles { steward: badge, relay: reader_badge };
+            let m = steward::Message::ApprovalOpened(steward::ApprovalOpened { key });
+            let steward = Endpoint::from_handle(self.handed.steward);
+            let answer = typed::call_within::<steward::Protocol, _>(
+                &steward,
+                &mut self.lend,
+                &m,
+                &[console, reader],
+                LOGIN_WAIT_US,
+                |r, _| match r {
+                    steward::Reply::ApprovalOpened(a) => Some(a.channel),
+                    _ => None,
+                },
+            );
+            let _ = close(console);
+            let _ = close(reader);
+            match answer {
+                Ok(Some(channel)) => {
+                    self.say(&format!("sshd: login approve: approval channel {channel:016x}\n"));
+                    self.nine.fs.labels = Vec::new();
+                    self.console = Some(consoles);
+                    self.session = Some((channel, GENERATION.load(Ordering::Acquire)));
+                    self.approval = true;
+                    Ok(Console::new(self.nine.fs.chan.clone(), channel, false))
+                }
+                refused => {
+                    let why = match refused {
+                        Err(redoubt_client::Error::Server(code)) => steward::ErrorCode::from_code(code)
+                            .map_or_else(|| format!("{code}"), |c| format!("{c:?}")),
+                        _ => String::from("no answer"),
+                    };
+                    self.say(&format!("sshd: login approve: refused ({why})\n"));
+                    self.nine.unmint(badge);
+                    self.nine.unmint(reader_badge);
+                    Err(Refused)
+                }
+            }
+        }
+
         /// Tells the steward the channel of session `id` has closed, once: the steward detaches its
-        /// context (servers/steward.md, R80). Nothing is told after the steward's end.
+        /// context (servers/steward.md, R80), or ends the approval channel. Nothing is told after
+        /// the steward's end.
         fn closed(&mut self, id: u64) {
             if self.session.take().is_none() {
                 return;
             }
-            let m = steward::Message::ChannelClosed(steward::ChannelClosed { session: id });
+            let m = if core::mem::take(&mut self.approval) {
+                steward::Message::ApprovalClosed(steward::ApprovalClosed { channel: id })
+            } else {
+                steward::Message::ChannelClosed(steward::ChannelClosed { session: id })
+            };
             let steward = Endpoint::from_handle(self.handed.steward);
             // Bounded as a login is: a steward that is gone has nothing of this session left.
             let _ = typed::call_within::<steward::Protocol, _>(
@@ -580,6 +654,7 @@ mod machine {
             parked: Parked::new(FOREVER),
             console: None,
             session: None,
+            approval: false,
             from,
         };
         slot.nine.requests_wait(FOREVER);

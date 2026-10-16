@@ -6,8 +6,10 @@
 use redoubt_rt::abi::{BudgetSpec, Error, FOREVER, Handle, ReceivedHandles};
 use redoubt_rt::ipc::Caller;
 use redoubt_rt::wire::proto::steward::{
-    Blame, ChannelClosed, Contexts, Detach, EndContext, EndLease, EndSession, ErrorCode, LeaseEnded, Login,
-    LoginReply, Message, Reply, StartAgent, Watch,
+    ApprovalClosed, ApprovalClosedReply, ApprovalOpened, ApprovalOpenedReply, Approve, ApproveReply, Blame,
+    ChannelClosed, Contexts, Deny, DenyReply, Detach, EndContext, EndLease, EndSession, ErrorCode,
+    LeaseEnded, Login, LoginReply, Message, Pending, PendingReply, Reply, StartAgent, Submit, SubmitReply,
+    Watch,
 };
 use redoubt_steward::audit::Record;
 use redoubt_steward::consts::{BLAME_COUNT, BLAME_WINDOW, MAX_LEASE};
@@ -24,14 +26,17 @@ const USERS: usize = 0;
 const SERVERS: &str = "servers 6";
 const SIZES: &str = "sizes session=10,2,5 agent=10,2,5 sub_agent=5,1,2 crossing=2,1,1 cost=1";
 const ALICE_KEY: [u8; 32] = [1; 32];
+/// Alice's approval key, which opens her `approve@box` channel and nothing else.
+const ALICE_APPROVAL_KEY: [u8; 32] = [4; 32];
 /// The handle a login's console connection arrives as.
 const CONSOLE: u32 = 9;
 const BOB_KEY: [u8; 32] = [2; 32];
 
 fn alice() -> String {
     format!(
-        "principal \"alice\" account=1001 login=[{}] approval=[21] owned=[7] sets=[[],[7]] top=1000,30,300 contexts=4 idle=300",
-        key_id(&ALICE_KEY)
+        "principal \"alice\" account=1001 login=[{}] approval=[{}] owned=[7] sets=[[],[7]] top=1000,30,300 contexts=4 idle=300",
+        key_id(&ALICE_KEY),
+        key_id(&ALICE_APPROVAL_KEY)
     )
 }
 
@@ -102,6 +107,17 @@ enum Call {
         lease: u64,
         name: String,
     },
+    /// `approval_waiting` sent on a session's notices endpoint.
+    NotifyApproval(usize),
+    /// An approval channel's two consoles, by the first's index.
+    ApprovalConsoles(Option<u32>),
+    ChannelOpened(u64),
+    /// A screen written on an approval channel.
+    Screen {
+        channel: u64,
+        text: String,
+    },
+    ChannelClosed(u64),
 }
 
 /// Budget and handle `i` are the `i`th the kernel made; `USERS` is the one the steward holds.
@@ -119,6 +135,8 @@ struct Recorder {
     deadlines: Vec<(usize, u64)>,
     /// Budgets the kernel's deadline took: a `destroy` of one is `BadHandle`, its handle revoked.
     gone: Vec<usize>,
+    /// Every reader thread is taken: the next channel cannot be served.
+    channels_full: bool,
 }
 
 impl Recorder {
@@ -207,6 +225,24 @@ impl Kernel for Recorder {
     fn notify(&mut self, notices: usize, lease: u64, name: &str) {
         self.calls.push(Call::Notify { notices, lease, name: name.into() });
     }
+
+    fn notify_approval(&mut self, notices: usize) { self.calls.push(Call::NotifyApproval(notices)); }
+
+    fn approval_consoles(&mut self, console: Option<Handle>, reader: Option<Handle>) {
+        assert_eq!(console.is_some(), reader.is_some(), "an open brings both consoles or none");
+        self.calls.push(Call::ApprovalConsoles(console.map(|h| h.index())));
+    }
+
+    fn channel_opened(&mut self, channel: u64) -> Result<(), Error> {
+        self.calls.push(Call::ChannelOpened(channel));
+        if self.channels_full { Err(Error::Refused) } else { Ok(()) }
+    }
+
+    fn screen(&mut self, channel: u64, text: &str) {
+        self.calls.push(Call::Screen { channel, text: text.into() });
+    }
+
+    fn channel_closed(&mut self, channel: u64) { self.calls.push(Call::ChannelClosed(channel)); }
 
     fn launch_relay(&mut self, _domain: &Domain, budget: usize) -> Result<(u64, usize), Error> {
         let control = self.make()?;
@@ -325,7 +361,10 @@ fn a_servers_count_other_than_the_binding_table_s_is_a_start_failure() {
 fn a_manifest_the_core_refuses_is_a_start_failure_before_any_carve() {
     let mut k = Recorder::default();
     // Bob's login key is alice's approval key: one key in two roles.
-    let bob = bob().replace(&format!("login=[{}]", key_id(&BOB_KEY)), "login=[21]");
+    let bob = bob().replace(
+        &format!("login=[{}]", key_id(&BOB_KEY)),
+        &format!("login=[{}]", key_id(&ALICE_APPROVAL_KEY)),
+    );
     let l = [alice(), bob, SERVERS.into(), SIZES.into()];
     let l: Vec<&str> = l.iter().map(String::as_str).collect();
     assert_eq!(start(&l, USERS, &mut k).err().unwrap(), StartError::Manifest);
@@ -386,6 +425,7 @@ fn call_outputs(
         m,
         Message::ChannelClosed(_)
             | Message::ApprovalClosed(_)
+            | Message::Pending(_)
             | Message::EndLease(_)
             | Message::EndSession(_)
             | Message::Detach(_)
@@ -395,9 +435,10 @@ fn call_outputs(
     let words = m.encode(&mut buf).unwrap();
     let opcode = words[0] as u32;
     let caller = Caller { badge, account: 0, labels: Default::default() };
-    // A login brings the channel's two console connections: here handles 9 and 10.
+    // A login brings the channel's two console connections, an approval channel's open its
+    // two: here handles 9 and 10.
     let mut handles = ReceivedHandles::new();
-    if matches!(m, Message::Login(_)) {
+    if matches!(m, Message::Login(_) | Message::ApprovalOpened(_)) {
         handles.push(Handle::new(CONSOLE)).unwrap();
         handles.push(Handle::new(CONSOLE + 1)).unwrap();
     }
@@ -405,6 +446,11 @@ fn call_outputs(
     let outcome = answer_with(&mut serving, &caller, &words, &handles, &mut buf);
     assert!(!serving.exited, "the core exited");
     let outputs = core::mem::take(&mut serving.outputs);
+    // What the server raises once the call is answered (an opened channel's first screen), as
+    // the program's loop does.
+    for kind in core::mem::take(&mut serving.after) {
+        serving.steward.event(serving.kernel, kind, 0).unwrap();
+    }
     let reply = Reply::decode(opcode, &outcome.words, &buf, 0).unwrap();
     // Owned copies of what the tests read: a login's session and labels.
     let reply = reply.map(|r| match r {
@@ -428,6 +474,12 @@ fn call_outputs(
         }),
         Reply::EndLease(_) => Reply::EndLease(redoubt_rt::wire::proto::steward::EndLeaseReply {}),
         Reply::Blame(_) => Reply::Blame(redoubt_rt::wire::proto::steward::BlameReply {}),
+        Reply::Submit(r) => Reply::Submit(SubmitReply { request: r.request }),
+        Reply::ApprovalOpened(r) => Reply::ApprovalOpened(ApprovalOpenedReply { channel: r.channel }),
+        Reply::ApprovalClosed(_) => Reply::ApprovalClosed(ApprovalClosedReply {}),
+        Reply::Pending(_) => Reply::Pending(PendingReply {}),
+        Reply::Approve(_) => Reply::Approve(ApproveReply {}),
+        Reply::Deny(_) => Reply::Deny(DenyReply {}),
         _ => panic!("a reply these tests do not read"),
     });
     (reply, outputs)
@@ -657,7 +709,45 @@ fn every_operation_on_another_badge_class_is_malformed() {
         let m = Message::Blame(Blame { account: 1002, labels: &[], server: "walfsd:data" });
         assert_eq!(call(&mut s, &mut k, badge, m).unwrap_err(), ErrorCode::Malformed, "blame on {badge:#x}");
     }
+    // The powerbox's: `submit` from a minted badge alone, the channel's open and close from
+    // `sshd`'s alone, and `pending`, `approve` and `deny` from the approval channel's alone, which
+    // only the steward's own readers hold (servers/steward.md, "The powerbox and approvals").
+    for badge in [SSHD, APPROVAL, INIT, 0, 4, MINTED - 1] {
+        let e = call(&mut s, &mut k, badge, submit(0, &[], 0, "", "x")).unwrap_err();
+        assert_eq!(e, ErrorCode::Malformed, "submit on {badge:#x}");
+    }
+    for badge in [session, APPROVAL, INIT, 0, 4, MINTED - 1] {
+        let m = Message::ApprovalOpened(ApprovalOpened { key: &ALICE_APPROVAL_KEY });
+        assert_eq!(
+            call(&mut s, &mut k, badge, m).unwrap_err(),
+            ErrorCode::Malformed,
+            "approval_opened on {badge:#x}"
+        );
+        let m = Message::ApprovalClosed(ApprovalClosed { channel: 7 });
+        assert_eq!(
+            call(&mut s, &mut k, badge, m).unwrap_err(),
+            ErrorCode::Malformed,
+            "approval_closed on {badge:#x}"
+        );
+    }
+    for badge in [session, SSHD, INIT, 0, 4, MINTED - 1] {
+        let m = Message::Pending(Pending { channel: 7 });
+        assert_eq!(
+            call(&mut s, &mut k, badge, m).unwrap_err(),
+            ErrorCode::Malformed,
+            "pending on {badge:#x}"
+        );
+        let m = Message::Approve(Approve { channel: 7, request: 8, hash: &[0; 32] });
+        assert_eq!(
+            call(&mut s, &mut k, badge, m).unwrap_err(),
+            ErrorCode::Malformed,
+            "approve on {badge:#x}"
+        );
+        let m = Message::Deny(Deny { channel: 7, request: 8 });
+        assert_eq!(call(&mut s, &mut k, badge, m).unwrap_err(), ErrorCode::Malformed, "deny on {badge:#x}");
+    }
     assert!(k.creates().is_empty());
+    assert!(!k.calls.iter().any(|c| matches!(c, Call::ApprovalConsoles(_))), "no console taken off class");
     // On its own class, an operation from a minted badge the core routes nowhere is the core's
     // unknown; the steward's own `lease_ended` is a call of nobody's, on any badge.
     let e = call(&mut s, &mut k, session, Message::StartAgent(StartAgent { lease: 1 })).unwrap_err();
@@ -1214,4 +1304,227 @@ fn three_blames_in_the_window_lock_the_domain_out_until_the_window_passes() {
     });
     assert!(matches!(call(&mut s, &mut k, SSHD, vault), Ok(Reply::Login(_))));
     assert!(s.failed.is_empty());
+}
+/// A label set as the wire carries it.
+fn label_bytes(ids: &[u64]) -> Vec<u8> { redoubt_rt::wire::labels::encode(ids).collect() }
+
+fn submit<'a>(kind: u32, labels: &'a [u8], lease: u64, what: &'a str, reason: &'a str) -> Message<'a> {
+    Message::Submit(Submit { kind, labels, lease, item: 0, source: 0, what, reason })
+}
+
+/// Opens an approval channel with `key`: the channel's id.
+fn open_channel(s: &mut Steward<usize, usize>, k: &mut Recorder, key: &[u8; 32]) -> Result<u64, ErrorCode> {
+    match call(s, k, SSHD, Message::ApprovalOpened(ApprovalOpened { key }))? {
+        Reply::ApprovalOpened(r) => Ok(r.channel),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// The screens written on `channel`, in order.
+fn screens(k: &Recorder, channel: u64) -> Vec<String> {
+    k.calls
+        .iter()
+        .filter_map(|c| match c {
+            Call::Screen { channel: ch, text } if *ch == channel => Some(text.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The hash and the code the last screen on `channel` showed for `request`.
+fn shown(k: &Recorder, channel: u64, request: u64) -> ([u8; 32], Vec<u8>) {
+    let last = screens(k, channel).pop().expect("a screen");
+    let line =
+        last.lines().find(|l| l.starts_with(&format!("request {request:016x} hash "))).expect("the request");
+    let hex = &line["request 0000000000000000 hash ".len()..][..64];
+    let mut hash = [0; 32];
+    for (i, b) in hash.iter_mut().enumerate() {
+        *b = u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).unwrap();
+    }
+    assert!(line.ends_with(&format!(" code {}", &hex[..8])), "{line}");
+    (hash, hash[..4].to_vec())
+}
+
+/// `approve@box` (servers/steward.md, "The powerbox and approvals", R38): a channel opens on one
+/// of the principal's approval keys alone, the principal found from the key, and is redrawn at
+/// once; a login key is `bad_key` (the core's guard, told the key's owner), a key of nobody's
+/// `unknown`; past the server's readers the open fails and the core is told the channel closed;
+/// `sshd`'s close ends it.
+#[test]
+fn an_approval_channel_opens_on_the_approval_key_alone() {
+    let mut k = Recorder::default();
+    let mut s = started(&mut k);
+    assert_eq!(open_channel(&mut s, &mut k, &ALICE_KEY).unwrap_err(), ErrorCode::BadKey);
+    assert_eq!(open_channel(&mut s, &mut k, &[5; 32]).unwrap_err(), ErrorCode::Unknown);
+    assert_eq!(k.calls, [Call::ApprovalConsoles(Some(CONSOLE)), Call::ApprovalConsoles(Some(CONSOLE))]);
+    k.calls.clear();
+    let c = open_channel(&mut s, &mut k, &ALICE_APPROVAL_KEY).unwrap();
+    assert!(c >= MINTED);
+    assert_eq!(
+        k.calls,
+        [
+            Call::ApprovalConsoles(Some(CONSOLE)),
+            Call::ChannelOpened(c),
+            Call::Screen { channel: c, text: "no approval is waiting for alice\r\n".into() },
+        ]
+    );
+    k.calls.clear();
+    k.channels_full = true;
+    assert_eq!(open_channel(&mut s, &mut k, &ALICE_APPROVAL_KEY).unwrap_err(), ErrorCode::Failed);
+    assert!(matches!(k.calls[..], [Call::ApprovalConsoles(_), Call::ChannelOpened(_)]), "{:?}", k.calls);
+    k.channels_full = false;
+    k.calls.clear();
+    // The first channel is still open: a `pending` on it redraws; one on a channel nobody holds
+    // is unknown.
+    assert!(matches!(
+        call(&mut s, &mut k, APPROVAL, Message::Pending(Pending { channel: c })),
+        Ok(Reply::Pending(_))
+    ));
+    assert_eq!(screens(&k, c), ["no approval is waiting for alice\r\n"]);
+    let e = call(&mut s, &mut k, APPROVAL, Message::Pending(Pending { channel: c + 1 })).unwrap_err();
+    assert_eq!(e, ErrorCode::Unknown);
+    k.calls.clear();
+    let closed = call(&mut s, &mut k, SSHD, Message::ApprovalClosed(ApprovalClosed { channel: c }));
+    assert!(matches!(closed, Ok(Reply::ApprovalClosed(_))));
+    assert_eq!(k.calls, [Call::ChannelClosed(c)]);
+    let e = call(&mut s, &mut k, APPROVAL, Message::Pending(Pending { channel: c })).unwrap_err();
+    assert_eq!(e, ErrorCode::Unknown);
+}
+
+/// The request and approval path (servers/steward.md, "The powerbox and approvals"; R38's
+/// binding): alice's session submits a request for an agent in her vault's label set; her
+/// session is told an approval is waiting, and the channel redrawn with the request's id, its
+/// binding hash and the hash's code beside the core's rendered line; an approval naming another
+/// hash, or a code the screen did not show, is `hash_mismatch` to the channel and starts
+/// nothing; the code the screen showed approves it, and the lease batch runs in the labelled
+/// domain: its budget from the `{7}` sub-budget with the label, its connections a labelled
+/// lease's; the approved request is off the next screen.
+#[test]
+fn a_request_is_rendered_bound_to_its_screen_and_its_approval_starts_the_labelled_agent() {
+    let mut k = Recorder::default();
+    let mut s = started(&mut k);
+    let u = alice_session(&mut s, &mut k);
+    let c = open_channel(&mut s, &mut k, &ALICE_APPROVAL_KEY).unwrap();
+    k.calls.clear();
+    let labels = label_bytes(&[7]);
+    let Ok(Reply::Submit(r)) = call(&mut s, &mut k, u, submit(1, &labels, 60_000_000, "", "audit the vault"))
+    else {
+        panic!()
+    };
+    assert!(r.request >= MINTED);
+    assert!(
+        k.calls.iter().any(|c| matches!(c, Call::NotifyApproval(_))),
+        "her session is told: {:?}",
+        k.calls
+    );
+    let screen = screens(&k, c).pop().expect("the channel is redrawn");
+    assert!(screen.starts_with("pending approvals for alice:\r\n"), "{screen}");
+    assert!(screen.contains(&format!("request {:016x} hash ", r.request)), "{screen}");
+    assert!(
+        screen.contains("start an agent labelled [7] for 1 min; reason (untrusted): \"audit the vault\""),
+        "{screen}"
+    );
+    assert!(screen.ends_with("type: approve <id> <hash or code> | deny <id> | pending\r\n"), "{screen}");
+    let (hash, code) = shown(&k, c, r.request);
+    k.calls.clear();
+    let wrong = Message::Approve(Approve { channel: c, request: r.request, hash: &[0; 32] });
+    assert_eq!(call(&mut s, &mut k, APPROVAL, wrong).unwrap_err(), ErrorCode::HashMismatch);
+    let mut other = code.clone();
+    other[0] ^= 1;
+    let wrong_code = Message::Approve(Approve { channel: c, request: r.request, hash: &other });
+    assert_eq!(call(&mut s, &mut k, APPROVAL, wrong_code).unwrap_err(), ErrorCode::HashMismatch);
+    let short = Message::Approve(Approve { channel: c, request: r.request, hash: &hash[..3] });
+    assert_eq!(call(&mut s, &mut k, APPROVAL, short).unwrap_err(), ErrorCode::HashMismatch);
+    let elsewhere = Message::Approve(Approve { channel: c + 1, request: r.request, hash: &code });
+    assert_eq!(call(&mut s, &mut k, APPROVAL, elsewhere).unwrap_err(), ErrorCode::Unknown);
+    assert!(k.calls.is_empty(), "nothing started: {:?}", k.calls);
+    let approve = Message::Approve(Approve { channel: c, request: r.request, hash: &code });
+    assert!(matches!(call(&mut s, &mut k, APPROVAL, approve), Ok(Reply::Approve(_))));
+    let alice_secrets = 3;
+    assert_eq!(
+        k.calls[0],
+        Call::Create { parent: alice_secrets, pages: 10, processes: 2, labels: vec![7], account: 0 }
+    );
+    let connects: Vec<Call> = k.calls.iter().filter(|c| matches!(c, Call::Connect { .. })).cloned().collect();
+    assert_eq!(connects.len(), 6);
+    assert!(
+        connects
+            .iter()
+            .all(|c| matches!(c, Call::Connect { kind: Kind::Lease, labels, .. } if labels == &[7]))
+    );
+    match k.calls.iter().find(|c| matches!(c, Call::Launch { .. })) {
+        Some(Call::Launch { kind: Kind::Lease, connections, .. }) => {
+            let bound: Vec<bool> = connections.iter().map(Option::is_some).collect();
+            assert_eq!(
+                bound,
+                [true, true, true, false, false, false, true],
+                "the steward's, /boot, the vault at /project, slot 5"
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+    // Approved is final: a second approval names nothing pending, and the screen is empty.
+    let again = Message::Approve(Approve { channel: c, request: r.request, hash: &hash });
+    assert_eq!(call(&mut s, &mut k, APPROVAL, again).unwrap_err(), ErrorCode::Unknown);
+    k.calls.clear();
+    let _ = call(&mut s, &mut k, APPROVAL, Message::Pending(Pending { channel: c }));
+    assert_eq!(screens(&k, c), ["no approval is waiting for alice\r\n"]);
+}
+
+/// A note is rendered quoted and marked untrusted from an unlabelled session, and withheld from a
+/// labelled one (R38: a labelled requester's free text would carry the vault out); a denial
+/// takes the request off the screen; a session's end drops its requests, so the next screen
+/// lists none of them. A declassification is STEWARD4's: `unknown` until then.
+#[test]
+fn notes_are_rendered_by_their_requesters_labels_and_a_dead_sessions_requests_are_gone() {
+    let mut k = Recorder::default();
+    let mut s = started(&mut k);
+    let u = alice_session(&mut s, &mut k);
+    let Ok(Reply::Login(v)) = call(&mut s, &mut k, SSHD, login("alice", "alice-secrets", &ALICE_KEY)) else {
+        panic!()
+    };
+    let vault = badge_of(&s, v.session);
+    let c = open_channel(&mut s, &mut k, &ALICE_APPROVAL_KEY).unwrap();
+    k.calls.clear();
+    let Ok(Reply::Submit(plain)) = call(&mut s, &mut k, u, submit(0, &[], 0, "ship it \x1b[31m", "please"))
+    else {
+        panic!()
+    };
+    let screen = screens(&k, c).pop().unwrap();
+    assert!(
+        screen.contains("a note (untrusted): \"ship it ?[31m\"; reason (untrusted): \"please\""),
+        "{screen}"
+    );
+    k.calls.clear();
+    let Ok(Reply::Submit(secret)) =
+        call(&mut s, &mut k, vault, submit(0, &[], 0, "the secret", "the secret"))
+    else {
+        panic!()
+    };
+    let screen = screens(&k, c).pop().unwrap();
+    assert!(
+        screen.contains("a note (text withheld: labelled requester); reason withheld (labelled requester)"),
+        "{screen}"
+    );
+    assert!(!screen.contains("the secret"), "{screen}");
+    assert!(screen.contains(&format!("request {:016x} hash ", plain.request)), "both pending: {screen}");
+    let (_, secret_code) = shown(&k, c, secret.request);
+    let e = call(&mut s, &mut k, u, submit(2, &label_bytes(&[7]), 0, "", "")).unwrap_err();
+    assert_eq!(e, ErrorCode::Unknown, "a declassification is not bound yet");
+    k.calls.clear();
+    let deny = Message::Deny(Deny { channel: c, request: secret.request });
+    assert!(matches!(call(&mut s, &mut k, APPROVAL, deny), Ok(Reply::Deny(_))));
+    let _ = call(&mut s, &mut k, APPROVAL, Message::Pending(Pending { channel: c }));
+    let screen = screens(&k, c).pop().unwrap();
+    assert!(screen.contains(&format!("request {:016x}", plain.request)), "{screen}");
+    assert!(!screen.contains(&format!("request {:016x}", secret.request)), "{screen}");
+    // The denied request's code was on an earlier screen, not the last: an approval by it is a
+    // mismatch to the channel, and nothing of a final request moves.
+    let stale = Message::Approve(Approve { channel: c, request: secret.request, hash: &secret_code });
+    assert_eq!(call(&mut s, &mut k, APPROVAL, stale).unwrap_err(), ErrorCode::HashMismatch);
+    k.calls.clear();
+    assert!(matches!(call(&mut s, &mut k, u, Message::EndSession(EndSession {})), Ok(Reply::EndSession(_))));
+    k.calls.clear();
+    let _ = call(&mut s, &mut k, APPROVAL, Message::Pending(Pending { channel: c }));
+    assert_eq!(screens(&k, c), ["no approval is waiting for alice\r\n"]);
 }

@@ -131,11 +131,18 @@ fn the_image_manifest_passes_and_its_plan_is_what_the_boot_follows() {
     // The userland disk's blkd: slot 0x1000_6000, interrupt 6.
     assert_eq!(plan.placements[8], vec![("disk".into(), h(12)), ("disk-irq".into(), h(20))]);
     assert!(plan.placements[0].is_empty());
-    // Alice's, bob's and agent's login keys, then the bundle key.
+    // Alice's and bob's login and approval keys, agent's login key, then the bundle key.
     let asked: Vec<&str> = plan.keys.iter().map(|(at, _)| at.as_str()).collect();
     assert_eq!(
         asked,
-        ["principals[0].ssh_keys[0]", "principals[1].ssh_keys[0]", "principals[2].ssh_keys[0]", "bundle key"]
+        [
+            "principals[0].ssh_keys[0]",
+            "principals[0].approval_keys[0]",
+            "principals[1].ssh_keys[0]",
+            "principals[1].approval_keys[0]",
+            "principals[2].ssh_keys[0]",
+            "bundle key"
+        ]
     );
     // Four domains (alice's {} and {alice-secrets}, bob's {}, agent's {}) at every shared server,
     // beside its system callers: init and sshd at keyd; init at consoled; init and the steward at
