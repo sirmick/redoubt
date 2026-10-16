@@ -298,8 +298,9 @@ so the steward still holds no key.
   ACCOUNT/LABELS exited CODE` (`faulted`, `was killed`), NAME the name the `lease_ended` notice
   gives the lease (`alice/agent-1`; a session's is `alice/session-2`), so the two lines
   correlate: the lease's end audit while audit records are console lines; a crossing's program
-  the same way as `steward: crossing ID of ACCOUNT/LABELS was killed CODE`, ID the crossing's,
-  once its budget is destroyed ([declassification and push](#declassification-and-push)). It
+  the same way as `steward: crossing ID of ACCOUNT/LABELS exited 0`, ID the crossing's: the
+  program exits once its one call is answered, or `was killed CODE` when its budget's
+  destruction came first ([declassification and push](#declassification-and-push)). It
   says its own time on each `end_lease` and `submit`, `steward: served submit in N us`, from the
   call's arrival to its answer ([residual risks](#residual-risks)).
 - **The model** binds the same crate to the kernel model, in place of its own copy of the
@@ -972,7 +973,10 @@ snapshots it and hashes the snapshot. A pushed item is not held to `DECLASSIFY_M
 **`PUSH_MAX`**, 61,440 bytes: fifteen of the steward's sixteen lend pages, the sixteenth for the
 item's path and the message's lengths, so the snapshot reaches the writer in one call; a source
 over it is `too_big` by a `stat` before the core sees the request, and one grown past it between
-the two is `failed`. Its screen shows the source and the target by id with their paths, the
+the two is `failed`. The steward's heap holds the pending snapshots: `PENDING_CAP` pushes of
+fifteen pages each beside a read's sixteen-page buffer and its working set, so its `heap_pages`
+is 128 in the image's manifest (the cap on the runtime's heap: 32 was short of one 4 KiB push's
+read on rv64). Its screen shows the source and the target by id with their paths, the
 item's size and the snapshot's SHA-256. On approval it writes exactly that snapshot through a
 **write crossing** in the target's domain, the same budget and program with the target's labels,
 called once with the snapshot (`write`), since a write needs equal labels; the program truncates
@@ -1446,8 +1450,10 @@ it. **The latency probe**, `latency-probe`, is the second such feature, built by
 alone (the bench's host test `only_steward_latency_builds_the_latency_probe` holds it to that):
 the steward arms two timeouts after a probe lease's start and ends that lease by its own
 `EndLease` at the second, prints its wake, deadline-notice and `budget_destroy` samples for the
-bench's oracle, and exits at its start when the case's marker file is in the console principal's
-home, so `init`'s reboot rule dumps the kernel's trace ([responsiveness](../kernel/scheduling.md#responsiveness)).
+bench's oracle, then `LATENCY-END` with its clock after the third round's counts (the window's
+end: the oracle judges no destruction ending after it and no sample printed after it), and exits
+at its start when the case's marker file is in the console principal's home, so `init`'s reboot
+rule dumps the kernel's trace ([responsiveness](../kernel/scheduling.md#responsiveness)).
 It raises only events the core has, touches no row, guard or effect, and prints nothing but its
 samples. Every instance then serves as usual and exits 14 seconds after it starts the console session,
 so the case restarts it thirteen times, each time with that session and its connections live, without meeting

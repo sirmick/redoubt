@@ -101,7 +101,8 @@ mod machine {
     /// return as `destroy_call`; a lease the kernel's deadline took prints its exit notice's
     /// arrival less the deadline as `deadline_notice`. Each sample's group is the count of the
     /// domain's other live leases (`N=16`); the counts go out as `LATENCY-COUNT` lines when the
-    /// domain's leases are all gone. A steward that finds [`LATENCY_DONE`] in the console
+    /// domain's leases are all gone, and after the third round's, `LATENCY-END` with the
+    /// steward's clock, the window's end. A steward that finds [`LATENCY_DONE`] in the console
     /// principal's home at its start exits [`LATENCY_EXIT`] at once: six such exits trip init's
     /// reboot rule, whose reset dumps the kernel's trace the bench's oracle reads.
     #[cfg(feature = "latency-probe")]
@@ -1620,21 +1621,29 @@ mod machine {
         }
 
         /// The counts, once the domain's leases are all gone: one line per measure and group.
+        /// After the third round's, the window's end, `LATENCY-END` with the steward's clock: the
+        /// oracle judges no destruction ending after it and no sample printed after it (the
+        /// marker-file exits that follow reap every lease's VM, none of them a sample).
         fn flush(&mut self, startup: &Startup) {
             for ((measure, n), count) in core::mem::take(&mut self.counts) {
                 say(startup, &format!("steward: LATENCY-COUNT N={n} {measure} {count}\n"));
             }
             self.rounds += 1;
+            if self.rounds == 3 {
+                let now = redoubt_rt::handle::time_now().unwrap_or(0);
+                say(startup, &format!("steward: LATENCY-END {now}\n"));
+            }
         }
     }
 
-    /// `latency-probe` only: the live leases of `lease`'s domain other than itself, the sample's
-    /// group; and the whole store's live leases.
+    /// `latency-probe` only: the live leases other than `lease` itself, over every principal (the
+    /// case's spinners are spread over six: the load is the box's, whoever carries it), the
+    /// sample's group; and the whole store's live leases.
     #[cfg(feature = "latency-probe")]
     fn others(steward: &Steward<Handle, u64>, lease: u64) -> usize {
         let index = inspect::index(&steward.store);
-        let Some((domain, _)) = index.ids.get(&lease) else { return 0 };
-        inspect::domain(&steward.store, domain).map_or(0, |d| d.leases.len().saturating_sub(1))
+        let live = leases_live(steward);
+        if index.ids.contains_key(&lease) { live.saturating_sub(1) } else { live }
     }
 
     #[cfg(feature = "latency-probe")]

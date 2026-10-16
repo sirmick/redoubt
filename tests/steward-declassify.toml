@@ -1,4 +1,4 @@
-description = "Declassification (docs/servers/steward.md, \"Declassification and push\" and R42; docs/servers/sshd.md, \"approve@box\"): alice's vault session writes a 40-byte text item in her vault and submits it for declassification (`submit` kind 2, `what` its path); the steward, unlabelled, never reads the vault: it carves a reader budget under users with exactly the item's labels and her account, launches the crossing program in it with one connection to the vault rooted at the item's directory, minted in that budget, calls it once for the item, and destroys the budget, whose process the kernel kills (the steward's crossing line); the snapshot is hashed and the request frozen; a 300-byte item is refused too_big and a binary one not_printable at submission, each after its own read crossing; `ssh approve@box` with alice's approval key shows the whole item, the hash, the code and the item's path as the requester's text; the vault session changes the item between the submission and the approval; `approve <id> <code>` lands exactly the snapshot at ~/out/memo in alice's unlabelled home by the steward's own write, never a re-read, which her unlabelled session reads back byte for byte; a second declassification to the same landing is in_use. The verdicts are the steward's audit lines (Submitted, Approved, Declassified naming the snapshot and the reader budget), its crossing and served lines, the steward's answers as the shells printed them, the bytes the steward wrote on the channel as sshd relayed them, and the file alice's plain session reads (rule F)"
+description = "Declassification (docs/servers/steward.md, \"Declassification and push\" and R42; docs/servers/sshd.md, \"approve@box\"): alice's vault session writes a 40-byte text item in her vault and submits it for declassification (`submit` kind 2, `what` its path); the steward, unlabelled, never reads the vault: it carves a reader budget under users with exactly the item's labels and her account, launches the crossing program in it with one connection to the vault rooted at the item's directory, minted in that budget, calls it once for the item, and destroys the budget, whose process exits once its call is answered or is killed with the budget if still running (the steward's crossing line); the snapshot is hashed and the request frozen; a 300-byte item is refused too_big and a binary one not_printable at submission, each after its own read crossing; `ssh approve@box` with alice's approval key shows the whole item, the hash, the code and the item's path as the requester's text; the vault session changes the item between the submission and the approval; `approve <id> <code>` lands exactly the snapshot at ~/out/memo in alice's unlabelled home by the steward's own write, never a re-read, which her unlabelled session reads back byte for byte; a second declassification to the same landing is in_use. The verdicts are the steward's audit lines (Submitted, Approved, Declassified naming the snapshot and the reader budget), its crossing and served lines, the steward's answers as the shells printed them, the bytes the steward wrote on the channel as sshd relayed them, and the file alice's plain session reads (rule F)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 recipe = "image/boot.toml"
@@ -23,14 +23,15 @@ forbid = [
     'steward: the core exited',
     'sshd: login alice.*: refused',
 ]
-# The two refused items each ran a read crossing, destroyed with its process; the accepted one is
-# submitted in the vault's domain, its crossing destroyed too; the approval copies the snapshot
-# out, audited with the reader budget's id; the steward says its own time on each submit.
+# The two refused items each ran a read crossing, destroyed once its program answered (the
+# program exits on its own after its one call, or the destruction kills it first); the accepted
+# one is submitted in the vault's domain, its crossing destroyed too; the approval copies the
+# snapshot out, audited with the reader budget's id; the steward says its own time on each submit.
 expect_after = [
-    '^\[con [0-9a-f]{16}\] steward: crossing [0-9]+ of 1001/\{7\} was killed [0-9]+$',
-    '^\[con [0-9a-f]{16}\] steward: crossing [0-9]+ of 1001/\{7\} was killed [0-9]+$',
+    '^\[con [0-9a-f]{16}\] steward: crossing [0-9]+ of 1001/\{7\} (exited 0|was killed [0-9]+)$',
+    '^\[con [0-9a-f]{16}\] steward: crossing [0-9]+ of 1001/\{7\} (exited 0|was killed [0-9]+)$',
     '^\[con [0-9a-f]{16}\] steward: audit 1001/\{7\} at [0-9]+: Submitted \{ request: [0-9]+ \}',
-    '^\[con [0-9a-f]{16}\] steward: crossing [0-9]+ of 1001/\{7\} was killed [0-9]+$',
+    '^\[con [0-9a-f]{16}\] steward: crossing [0-9]+ of 1001/\{7\} (exited 0|was killed [0-9]+)$',
     '^\[con [0-9a-f]{16}\] sshd: login approve: approval channel [0-9a-f]{16}$',
     '^\[con [0-9a-f]{16}\] steward: audit 1001/\{7\} at [0-9]+: Approved \{ request: [0-9]+, principal: 0, key: [1-9][0-9]*, hash: \[',
     '^\[con [0-9a-f]{16}\] steward: audit 1001/\{7\} at [0-9]+: Declassified \{ request: [0-9]+, bytes: \[102, 111, 114, 116, 121, 32, 98, 121, 116, 101, 115, .*\], reader: [1-9][0-9]* \}',
@@ -56,10 +57,11 @@ steps = [
     { expect = '\{:binary, \{:error, :not_printable\}\}' },
     { expect = '\([0-9]+\)> ' },
     { send = "{:memo, Redoubt.Wire.Client.Steward.submit(c, 2, <<7::little-64>>, 0, 0, 0, \"notes/memo\", \"\")}\n" },
-    { expect = '\{:memo, \{:ok, %\{request: [0-9]+\}\}\}' },
     # The steward's `approval_waiting` on this session's notices endpoint: the request's labels
-    # are the vault's, so the vault session is told, printed by the shell.
-    { expect = '\[an approval is waiting\]' },
+    # are the vault's, so the vault session is told, printed by the shell's listener in its own
+    # order against the reply (before it in the runs seen), so one pattern takes either order; the
+    # prompt may have gone by inside it, so the next line is sent without waiting for one.
+    { expect = '(?s)\[an approval is waiting\].*\{:memo, \{:ok, %\{request: [0-9]+\}\}\}|\{:memo, \{:ok, %\{request: [0-9]+\}\}\}.*\[an approval is waiting\]' },
     { send = "{:changed, File.write(\"/vault/notes/memo\", \"changed since the submission: not what lands\")}\n" },
     { expect = '\{:changed, :ok\}' },
     { expect = '\([0-9]+\)> ' },

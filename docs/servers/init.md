@@ -235,7 +235,7 @@ counts against its unlabelled set's cap and would leave it no SSH context there;
 
 ### The confinement check
 
-<details><summary>Status: built · partly tested: the steward's half, for what it creates after the boot, is the policy core's guards, which the model and host tests attack, and its binding of a home under `confined` is host-tested; no confined boot with a vault runs on the bench yet, which attaches one writable disk · tested (13)</summary>
+<details><summary>Status: built · partly tested: the steward's half, for what it creates after the boot, is the policy core's guards, which the model and host tests attack, and its binding of a home under `confined` is host-tested; no confined boot with a vault runs on the bench yet, which attaches one writable disk · tested (14)</summary>
 
 - bench:init-refuses-confined-server
 - host:redoubt-init::confined_refuses_two_label_sets_on_one_endpoint
@@ -247,6 +247,7 @@ counts against its unlabelled set's cap and would leave it no SSH context there;
 - host:redoubt-init::confined_refuses_two_label_sets_on_one_disk
 - host:redoubt-init::confined_refuses_a_server_instance_serving_two_label_sets
 - host:redoubt-init::confined_counts_only_a_shared_servers_own_label_set
+- host:redoubt-init::confined_does_not_count_an_exempt_server_handed_a_labelled_endpoint
 - host:redoubt-init::confined_lets_label_sets_that_share_nothing_share_the_cores
 - host:redoubt-init::confined_gives_each_label_set_its_own_userland_disk
 - host:redoubt-init::confined_gives_each_label_set_its_own_verifier
@@ -288,7 +289,17 @@ and, for a shared server (one that takes
 `buckets=N`), every principal domain with the server's own label set. Only such a domain may later
 be granted a connection there, since the steward grants within a label set by this same rule, so
 a server a session may later reach is never missed; a domain with another set is not counted, and
-the bucket rule still sizes the server for every principal domain. The kinds are checked in the
+the bucket rule still sizes the server for every principal domain. An exempt server (the steward,
+`sshd`) handed an endpoint is not counted as its user either. It is not the user: it mints a
+session's connection in that session's scope, and the session is the user. The steward binds a
+labelled volume only to a session in exactly that volume's label set (its binding rule, which the
+model's routes check and the vault's `exact_labels` guard keeps), and the server it mints at
+admits only a caller whose labels equal its volume's
+([R25 (the label check)](serving.md#r25-the-label-check)), so a steward that routed a labelled
+endpoint to another set would be refused by the server it routed to. The steward itself never
+reads a vault: a declassification reads through a crossing carrying the item's labels
+([R42 (one approved item)](steward.md#r42-one-approved-item)). So the exemption says only who is
+not counted; it widens nothing the steward may route. The kinds are checked in the
 order listed, and the refusal names the kind. So in a confined boot each disk holds one label
 set's volumes, and its `blkd` carries that set, and each label set reading a verified volume has
 its own `verityd`.
@@ -881,7 +892,7 @@ server from a manifest that grants it a budget and expects the boot refused.
 
 ### R34 (confined placement)
 
-<details><summary>Status: built · partly tested: the steward's and `sshd`'s exception runs only in the unconfined image; the steward's home binding under `confined` is host-tested, never booted · tested (13)</summary>
+<details><summary>Status: built · partly tested: the steward's and `sshd`'s exception runs only in the unconfined image; the steward's home binding under `confined` is host-tested, never booted · tested (14)</summary>
 
 - bench:init-refuses-confined-server
 - host:redoubt-init::confined_refuses_two_label_sets_on_one_endpoint
@@ -893,6 +904,7 @@ server from a manifest that grants it a budget and expects the boot refused.
 - host:redoubt-init::confined_refuses_two_label_sets_on_one_disk
 - host:redoubt-init::confined_refuses_a_server_instance_serving_two_label_sets
 - host:redoubt-init::confined_counts_only_a_shared_servers_own_label_set
+- host:redoubt-init::confined_does_not_count_an_exempt_server_handed_a_labelled_endpoint
 - host:redoubt-init::confined_lets_label_sets_that_share_nothing_share_the_cores
 - host:redoubt-init::confined_gives_each_label_set_its_own_userland_disk
 - host:redoubt-init::confined_gives_each_label_set_its_own_verifier

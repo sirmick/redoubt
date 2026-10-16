@@ -305,6 +305,8 @@ pub struct Summary {
     pub telling: usize,
     /// Each destruction's duration, µs, in trace order.
     pub r10_us: Vec<u64>,
+    /// Each destruction's end on the kernel's clock (its `Y`), µs, in trace order.
+    pub r10_end_us: Vec<u64>,
     /// The most object frames present at a destruction's start (R10 walks them all).
     pub r10_frames: u64,
     /// Each checked-build audit's span, µs (`U` to `V`), in trace order.
@@ -641,6 +643,7 @@ pub fn check(records: &[Record]) -> Result<Summary, String> {
             'Y' => match open_r10.take() {
                 Some((id, t)) if id == r.id => {
                     sum.r10_us.push(r.pass.saturating_sub(t) as u64);
+                    sum.r10_end_us.push(r.pass as u64);
                     sum.r10_threads_us.push(threads_us);
                     sum.r10_pumps.push(pumps);
                 }
@@ -3399,12 +3402,42 @@ fn unprefixed(line: &str) -> &str {
     line
 }
 
+/// The window's end, if the program marked one: `LATENCY-END <time>` on the kernel's clock (the
+/// steward's `time_now`, which the trace's `X` and `Y` records share), printed after its last
+/// sample. Nothing after it is judged: no sample printed after it and no destruction ending after
+/// it (`steward-latency`'s marker-file exits reap every lease's VM, none of them a sample). One at
+/// most.
+fn latency_end(log: &str) -> Result<Option<u64>, String> {
+    let mut end = None;
+    for line in log.lines().map(|line| unprefixed(line.trim_end_matches('\r'))) {
+        let Some(rest) = line.strip_prefix("LATENCY-END ") else { continue };
+        let at = rest.trim().parse::<u64>().map_err(|_| format!("malformed {line:?}"))?;
+        if end.replace(at).is_some() {
+            return Err("a second LATENCY-END line".into());
+        }
+    }
+    Ok(end)
+}
+
+/// Keeps the entries of `v` whose `mask` is set: the destructions' vectors stay aligned.
+fn keep<T>(v: &mut Vec<T>, mask: &[bool]) {
+    let mut i = 0;
+    v.retain(|_| {
+        i += 1;
+        mask[i - 1]
+    });
+}
+
 /// The windows the program printed, `(end, gross)` in µs, and the count it took, by measure (its
-/// index in [`MEASURES`]) and group. Every group's windows must number its count.
+/// index in [`MEASURES`]) and group, up to the window's end if the program marked one
+/// ([`latency_end`]). Every group's windows must number its count.
 fn samples(log: &str) -> Result<BTreeMap<(usize, &str), Vec<(u64, u64)>>, String> {
     let mut windows: BTreeMap<(usize, &str), Vec<(u64, u64)>> = BTreeMap::new();
     let mut counts = BTreeMap::new();
     for line in log.lines().map(|line| unprefixed(line.trim_end_matches('\r'))) {
+        if line.starts_with("LATENCY-END ") {
+            break;
+        }
         let (sample, rest) = match (line.strip_prefix("LATENCY-SAMPLE "), line.strip_prefix("LATENCY-COUNT "))
         {
             (Some(rest), _) => (true, rest),
@@ -3590,6 +3623,19 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
     let records = parse(log)?;
     let mut sum = check(&records)?;
     let samples = samples(log)?;
+    // A destruction ending after the window's marked end is recorded, not judged.
+    let after_end = match latency_end(log)? {
+        Some(at) => {
+            let mask: Vec<bool> = sum.r10_end_us.iter().map(|end| *end <= at).collect();
+            let later = mask.iter().filter(|in_window| !**in_window).count();
+            keep(&mut sum.r10_us, &mask);
+            keep(&mut sum.r10_end_us, &mask);
+            keep(&mut sum.r10_threads_us, &mask);
+            keep(&mut sum.r10_pumps, &mask);
+            format!("; {later} destructions after LATENCY-END at {at} µs, not judged")
+        }
+        None => String::new(),
+    };
     let n = sum.r10_us.len();
     let (p50, p99, max) = (
         percentile(&mut sum.r10_us, 50),
@@ -4002,7 +4048,7 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
         kernel_time
     };
     let head = format!(
-        "sched_oracle: {} records, {} picks in rank order ({} in place), every wake at or above the floor, no pass falling but by a weight change; {} passing over a budget whose threads all ran on other harts; {} lifted out of the cap set, at most to the floor; {} lifts by the rule ({} with a leading parent and work to move); {} weight changes by the rule; R10 {n} destructions over up to {} object frames, µs p50/p99/max {p50}/{p99}/{max}, their threads' ending {t50}/{t99}/{tmax}, no audit inside one; {} audits, {audit_total} µs; {} timer interrupts billed by the rule ({} expiring, {} finding a wait ended early, {} ticks after expiry to the budget billed last; {} ending a slice, {} nobody's; {} charging another budget than the one interrupted, {} ticks); {} expiry charges outside an interrupt ({} at a call's entry, {} in `kmain`), {} ticks; {} device interrupts from user mode billed by the rule ({} claiming nothing){kernel_time}{lease_end}",
+        "sched_oracle: {} records, {} picks in rank order ({} in place), every wake at or above the floor, no pass falling but by a weight change; {} passing over a budget whose threads all ran on other harts; {} lifted out of the cap set, at most to the floor; {} lifts by the rule ({} with a leading parent and work to move); {} weight changes by the rule; R10 {n} destructions over up to {} object frames, µs p50/p99/max {p50}/{p99}/{max}, their threads' ending {t50}/{t99}/{tmax}, no audit inside one; {} audits, {audit_total} µs; {} timer interrupts billed by the rule ({} expiring, {} finding a wait ended early, {} ticks after expiry to the budget billed last; {} ending a slice, {} nobody's; {} charging another budget than the one interrupted, {} ticks); {} expiry charges outside an interrupt ({} at a call's entry, {} in `kmain`), {} ticks; {} device interrupts from user mode billed by the rule ({} claiming nothing){kernel_time}{lease_end}{after_end}",
         records.len(),
         sum.picks,
         sum.picks_in_place,
@@ -5826,6 +5872,52 @@ mod tests {
         // Unpaired or nested brackets.
         assert!(verdict(&[(1, 'Y', 7, 1), (1, 'W', 1, 5), (1, 'K', 1, 5)]).is_err());
         assert!(verdict(&[(1, 'X', 7, 1), (1, 'X', 8, 2), (1, 'W', 1, 5), (1, 'K', 1, 5)]).is_err());
+    }
+
+    /// The window's end the real steward marks (`steward-latency`): a destruction ending after
+    /// `LATENCY-END` is recorded and not judged, a sample printed after it is not a sample, and the
+    /// marker is one line, well formed.
+    #[test]
+    fn destructions_after_the_marker_are_recorded_not_judged() {
+        let t = trace(&[
+            (1, 'X', 7, 100),
+            (1, 'Y', 7, 130),
+            (1, 'X', 8, 200),
+            (1, 'Y', 8, 300),
+            (1, 'W', 1, 5),
+            (1, 'K', 1, 5),
+        ]);
+        assert!(run(&t, "r10_p99_us=50").is_err_and(|e| e.contains("above 50")));
+        let marked = format!("{t}[con 0123456789abcdef] steward: LATENCY-END 150\n");
+        let ok = run(&marked, "r10_p99_us=50");
+        assert!(
+            ok.as_ref().is_ok_and(|s| s
+                .contains("R10 1 destructions over up to 0 object frames, µs p50/p99/max 30/30/30")
+                && s.contains("; 1 destructions after LATENCY-END at 150 µs, not judged")),
+            "{ok:?}"
+        );
+        let late =
+            format!("{marked}[con 0123456789abcdef] steward: LATENCY-SAMPLE N=1 decision_wake 200 100\n");
+        assert!(run(&late, "lease_end_p99_us=1000").is_err_and(|e| e.contains("no decision_wake sample")));
+        let early = format!(
+            "{t}LATENCY-SAMPLE N=1 decision_wake 120 20\nLATENCY-COUNT N=1 decision_wake 1\nLATENCY-END 150\n"
+        );
+        let ok = run(&early, "r10_p99_us=50 lease_end_p99_us=50");
+        assert!(
+            ok.as_ref().is_ok_and(|s| s.contains("decision wake 20 + R10 30 = 50 µs: target met")),
+            "{ok:?}"
+        );
+        // Every destruction after the marker: the ring held none of the window, and a bound on R10
+        // has nothing to judge.
+        assert!(
+            run(&format!("{t}LATENCY-END 50\n"), "r10_p99_us=50")
+                .is_err_and(|e| e.contains("holds no destruction"))
+        );
+        assert!(run(&format!("{t}LATENCY-END soon\n"), "").is_err_and(|e| e.contains("malformed")));
+        assert!(
+            run(&format!("{t}LATENCY-END 1\nLATENCY-END 2\n"), "")
+                .is_err_and(|e| e.contains("second LATENCY-END"))
+        );
     }
 
     #[test]

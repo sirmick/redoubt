@@ -2027,6 +2027,63 @@ fn confined_counts_a_home_for_the_principals_unlabelled_domain_alone() {
     ));
 }
 
+/// An exempt server (the steward) handed a labelled server's endpoint is not counted as its
+/// user: it mints a session's connection in that session's scope, and the session is the user,
+/// whose labels the server checks itself (servers/init.md, "The confinement check"; R25). So a
+/// confined manifest with a labelled vault handed to the steward passes, while the same endpoint
+/// handed to an unlabelled server that is not exempt is refused as before.
+#[test]
+fn confined_does_not_count_an_exempt_server_handed_a_labelled_endpoint() {
+    let mut m = without_volumes();
+    m.confined = true;
+    secrets(&mut m);
+    m.principals
+        .push(Principal { label_sets: vec![LabelSet { labels: vec!["alice-secrets".into()] }], ..alice() });
+    let secret = || vec![String::from("alice-secrets")];
+    m.volumes.push(Volume {
+        name: "secret".into(),
+        partition: 0,
+        labels: secret(),
+        disk: None,
+        verity: None,
+        bytes: None,
+    });
+    server(&mut m, "blkd").labels = secret();
+    let base = server(&mut image(), "walfsd:data").clone();
+    m.servers.push(Server {
+        name: "walfsd:secret".into(),
+        volume: Some("secret".into()),
+        labels: secret(),
+        receives: vec!["walfsd:secret".into()],
+        args: vec!["endpoint=walfsd:secret".into(), "buckets=4".into()],
+        ..base
+    });
+    let keyd = server(&mut image(), "keyd").clone();
+    m.servers.push(Server {
+        name: "steward".into(),
+        program: "steward".into(),
+        receives: vec!["steward".into()],
+        handed: vec![Handed { endpoint: "walfsd:secret".into(), badge: 7 }],
+        args: vec![],
+        ..keyd.clone()
+    });
+    assert_eq!(redoubt_init::confine::check(&m), Ok(()));
+    // The same endpoint handed to an unlabelled server that is not exempt: two sets on it.
+    m.servers.push(Server {
+        name: "reader".into(),
+        program: "littlefsd-client".into(),
+        receives: vec![],
+        handed: vec![Handed { endpoint: "walfsd:secret".into(), badge: 7 }],
+        args: vec![],
+        ..keyd
+    });
+    let walfsd = m.servers.iter().position(|s| s.name == "walfsd:secret").unwrap();
+    assert_eq!(
+        redoubt_init::confine::check(&m),
+        Err(Refusal::Confined { at: format!("servers[{walfsd}].receives[0]"), sharing: Sharing::Endpoint })
+    );
+}
+
 /// The steward is told a confined manifest by one of its own lines, `confined`, the last of them,
 /// and nothing of the kind otherwise (servers/steward.md, "The manifest lines").
 #[test]
