@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 312
+revision = 338
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -2341,8 +2341,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "STEWARD3"
   body = "Brief: .wash/local/STEWARD3-implementer.md point 1, cases 1-3 and 8's host tests. The core already decides leases (STEWARD0/1); the server lacks the operations. Build: `start_agent` from an unlabelled session's badge answers Lease {id, name} with the batch (CreateBudget under the sponsor's sub-budget for the label set with the lease's limits, labels and deadline, at most MAX_LEASE, refused longer, never shortened; Connect to the lease's roots; Launch of beamlet with the agent's module; the exit notice to the steward); the lease ends by deadline (the kernel's destruction, the steward's Exited from the notice), by `end_lease` from any of the sponsor's unlabelled sessions answered from the receive loop ahead of admission, or by blame (STEWARD3C); each path runs notify_sponsor, a send on the sponsor sessions' steward connections that beamlet surfaces as a message and the shell prints, naming the lease and never why. Connections end by the launcher's disconnect until STEWARD3R lands (R41 stays Open with its words). Conversion from AGENT0: the manifest's `agent` principal (AGT1: own key, home, sub-budget, 'sponsored by alice in name') gains a `sponsor` line init checks; a login as agent is the sponsor's lease, its session budget carved under alice's sub-budget with deadline MAX_LEASE, so alice's sessions can end_lease it and receive its end; AGT2's machine mode and AGT3's compile run inside it unchanged (agent-login, launch-system and the AGT3 case pass as they are, plus the notice when the lease ends). Cases: steward-lease-ends, steward-end-lease (p99 125 ms call-to-notice, net of audits), steward-sub-agent-dies-with-agent; host: end_lease answered under a flood, the new badge classes. Pages: steward.md Leases to built, R39, Authority; agents.md's lease sections; sessions.md; init.md's manifest (sponsor); SECURITY.md R39; libs/wire/tables/steward.md. Tier A: steward-red-2. Size M."
-  state = "active"
-  revision = 312
+  state = "done"
+  revision = 338
 
 [[node]]
   id = "STEWARD3B"
@@ -2351,8 +2351,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "STEWARD3"
   needs = ["STEWARD3A"]
   body = "Brief: .wash/local/STEWARD3-implementer.md point 2, cases 4-6 and the fuzz target of 8. Build: `submit` from a session's or agent's badge carries the structured Content (an agent in a label set, a note; declassify and push are STEWARD4's) and the reason; the core freezes it, draws id and binding hash, checks the pending cap and fair share, answers Request {id}; its notify reaches only channels whose labels include the request's. sshd recognises the user `approve`, authenticates with the principal's approval key only (the core's approval_key guard, holds first; a login key refused), opens the approval channel at the steward (ApprovalOpened on sshd's root badge) and serves it as a consol console whose other end is the steward: the steward writes the core's rendered screens (printable ASCII only, render.rs) and reads `approve <id> <hash>` and `deny <id>`; a hash not the last screen's is HashMismatch to the channel only, never to the requester; the close is ApprovalClosed. A granted labelled agent runs STEWARD3A's batch from the approval row. Cases: steward-approve-box (the labelled agent granted and running; the wrong hash refused; the login key refused by sshd), steward-screen-inert (64 chars of ANSI, bidi and format in the reason: no 0x1B and nothing outside 0x20..0x7E in the relayed bytes), steward-pending-cap (PENDING_CAP + 1 refused Cap; a second agent's fair share; a dead session's requests gone); host: the channel's line parser as a fuzz target. Pages: steward.md The powerbox and approvals, R38, R42, Authority (the channel's badge class); sshd.md approve@box and R67 to built; sessions.md approve@; SECURITY.md rows; the wire table. Keys: an approval key per principal in tests/keys and the manifest. Tier A: steward-red-2. Size M."
-  state = "todo"
-  revision = 251
+  state = "active"
+  revision = 319
 
 [[node]]
   id = "STEWARD3C"
@@ -2361,8 +2361,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "STEWARD3"
   needs = ["STEWARD3A"]
   body = "Brief: .wash/local/STEWARD3-implementer.md point 3, case 7 and the blame timeout of 8. The kernel's blame reaches init through the exit notice (R21, built); init's restart machine has the blame half planned (init.md 'Restarts and reboots'). Build: `blame(account, labels, server)` accepted on init's root badge class only; the core counts per (account, label set) and at BLAME_COUNT within BLAME_WINDOW answers a lockout: DestroyBudget for every session and lease of that domain (STEWARD3A's leases included), a refusal of new sessions for it until the window passes, both audited as console lines (STEWARD2's residual stands until M4); the steward answers init within its blame timeout, and a blame it cannot take in time is init's console line, not a restart loop. Case steward-blame-lockout: bob's session crashes walfsd three times within the window with a named real fault, or the bench's fault injection if one exists (the case says which; a fault that does not exist is a design question, not an invention); every budget of bob's {} is destroyed, his next login is refused until the window passes (virtual time advanced), alice's session is untouched, walfsd restarted by init; a second run with the crash from bob's vault session leaves his unlabelled session untouched (R40 keys by label set). Host: the blame timeout; the lockout's refusal tells nothing apart (rule 3's refusals). Pages: steward.md Crash blame and R40 to built, 'Failure and restart' residual ('the steward's restart ends every session'), init.md's blame half, SECURITY.md R40, agents.md's blame bullet. Tier A: steward-red-2. Size S."
-  state = "todo"
-  revision = 251
+  state = "reported"
+  revision = 328
+  overrides = ["2026-10-16: started by Orchestrator before STEWARD3A (active): STEWARD3A is accepted; it is active only for its train-42 fix (an amend); 3C's base is its accepted content"]
 
 [[node]]
   id = "STEWARD3R"
@@ -2409,3 +2410,22 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "Measured on train 40 (B76 + STEWARD3S, 704 pass, ~5.5 h wall; `scripts/q log`): 30 cases took lock=net, summed wait 12,360 s (3.4 h), the longest 1,353 s for rv32 bench-net-peer (a 0.5 s case) while members' net gates (STEWARD3A, 3Q) held the lock; non-net waits summed 1,690 s. What the lock guards (testbench.md:301-303): the bench picks a forwarded host port by binding and releasing it (qemu.rs:275-284 free_ports; the poke's UDP port) before QEMU binds it, so two boots at once may race for a port. Nothing else in a [net] case is shared: peers are guestfwd to a helper with no host listener (peer.rs:5-9), the capture a per-boot pcap, slirp per QEMU. Lever: `q run --ports N` leases N host ports no other lease holds (REDOUBT_PORTS=lo-hi in the job's environment, released with the job, also on a kill); the bench binds its forwards and the poke inside the range when the variable is set (free_ports stays outside q); jobs.mk's net recipe takes `--ports` and drops `--lock net`. A train's net tail and a member's net gate then run side by side. Class (ii) on testbench.md stays: bench-ssh-guest and bench-ssh-loopback-deadlock (timeout expectations) and the host-clock cases run alone for their own reasons, none for a port; the page says the race is gone under q. Gates: the net cases both widths through q (bench-net-peer, net-tcp, net-attacks, the pcap cases, the loopback set); two members' net gates beside a bench once, no port failure; a train's net tail wall time and summed wait before/after from `q log`, quoted; q's tests for the lease (no overlap; freed with the job). Files: scripts/q, scripts/jobs.mk, tools/testbench/src/qemu.rs, peer.rs, docs/testbench.md. Tier B (bench and pool): kernel-red-2. Size S-M. Launchable beside 3A/3Q; the q daemon's restart lands at a train boundary, the orchestrator's call."
   state = "done"
   revision = 302
+
+[[node]]
+  id = "STEWARD3X"
+  title = "A shared server's restart strands every connection it served, the steward's kept one included: init hands the steward a new connection, the steward tells its sessions, a session re-binds its home"
+  template = "package"
+  parent = "STEWARD3"
+  needs = ["STEWARD3Q"]
+  body = "Found by STEWARD3C (.wash/local/STEWARD3C-questions.md Q1; ruling .wash/local/STEWARD3C-Q1-ruling.md): a shared server restarts with empty tables (R27), so the steward's kept fresh connection at walfsd:data (init.md 'Fresh connections per child') is dead, every later login fails its home step, and every live session's home connection is dead too; init has no way to hand a running server a new connection (init.md's consoled residual, the file servers' and ipd's as well). m3-agents.md's crash-blame row ('Alice is unaffected when walfsd panics') assumes this mechanism. Lever, one path for every shared server: (1) init, after restarting a server, makes the steward a new fresh connection there and calls the steward's root-class `reconnected(server, connection: handle[0])`; the steward replaces its kept connection; the records below the dead one died with the instance, so nothing leaks and init's release at the steward's exit still frees everything. (2) The steward sends `server_restarted(server)` on the `notices` endpoint of every session the server served. (3) A session re-binds: `rebind(slot)` from its badge mints a new connection below the new kept one, in the session's scope; the shell re-opens the binding on the notice; a session that never re-binds keeps `enotconn`. consoled's restart follows the same path or is stated as not covered. Cases: steward-server-restart (bob's write cuts walfsd:data; alice's and bob's sessions re-bind and read their homes; a login after the restart succeeds; three cuts reach R40's lockout on the machine, closing 3C's residual); host: init's call, the steward's rows, the oracle traces. Pages: steward.md 'Failure and restart' (the residual becomes the rule), init.md, agents.md, m3-agents.md's row, SECURITY.md R40 to tested. Files: servers/init, servers/steward, libs/steward (rows, oracle, model), the wire table, the shell's binding code, tests/. Tier A: steward-red-2. Size M."
+  state = "active"
+  revision = 327
+
+[[node]]
+  id = "B78"
+  title = "mdbook's search index crossed its 10 MB warning (10,000,112 bytes) and the_book_builds fails on any mdbook WARN, so every package that adds prose fails the docs case: the index gets a stated headroom"
+  template = "package"
+  parent = "M2"
+  body = "STEWARD3C's report (.wash/local/STEWARD3C-report.md:98-101): the search index reached 10,000,112 bytes with its prose and mdbook warns above 10 MB; `the_book_builds` (tools/doccheck/tests/docs.rs:19) fails on any WARN, so the implementer trimmed ~600 bytes to pass, and the next package adding a sentence fails the same way. The book's markdown is ~1.6 MB (testbench.md 136 KB, scheduling.md 125 KB, beamlet.md 105 KB the largest); elasticlunr's index is several times the text, and `[output.html.search]` (docs/book.toml) sets only `enable`. Lever, measured not guessed: build the index with each of mdbook's own knobs (`expand = false`, which drops prefix expansion and is the largest saving; `heading-split-level`; `teaser-word-count`) and record the index bytes and whether a search for a rule name (R41, `budget_pages`, `walfsd`) still finds its section; pick the smallest index whose search still finds those, aiming at least 30 % under the 10 MB WARN. Then the rule: a doccheck test reads the built index's size and fails at a stated ceiling below mdbook's WARN with the size and the three largest pages named, so a future failure says what grew instead of 'WARN'; docs/README.md states the ceiling and the headroom rule (evidence, tables and measurements beyond a page's argument go to .wash/local or a case comment, not the page; no page is split or removed here: a page leaving the book is the owner's). Gates: `cargo test -p redoubt-doccheck --test docs` green on the dev image (mdbook present), the three searches shown found, the index size quoted before and after, the ceiling test's negative (a fixture book over the ceiling fails naming its pages). Files: docs/book.toml, tools/doccheck/tests/docs.rs and a fixture, docs/README.md. Tier B (docs tooling): kernel-red-2. Size S."
+  state = "done"
+  revision = 334
