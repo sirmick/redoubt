@@ -1,4 +1,4 @@
-description = "The responsiveness targets measured with the real steward (docs/kernel/scheduling.md, \"Responsiveness\" and R12; docs/servers/steward.md, \"Leases\"), beside sched-latency's stand-ins: six principals' sessions start N spinning agents between them (Redoubt.Agents.Echo `spin`, each a beamlet VM on a lease; the servers admit about three leases per principal beside its sessions, so the load is spread as the box's would be) for N = 1, 4 and 16, then alice's session starts D probe leases the steward ends by its own decision (its test-only latency-probe arms a timer after each one's start and, at a second timeout, ends it: the steward's timer wake and decision wake, time_now less the deadline it armed, printed as the stand-in prints them, and its budget_destroy call to return) and D leases the kernel's deadline takes (the deadline notice: the exit notice's arrival less the deadline), D = 16 at N = 1 and 4, 8 at N = 16 (p99 at D samples is the maximum; the pinned seed's sweep stands behind it); each sample's group is the count of the other live leases over every principal; the counts go out when a round's leases are all gone, and the window's end is marked after the third round's. R10's cost per destruction is the kernel's trace: the case ends by the steward's marker-file exit, six times, so init's reboot rule resets the machine and the kernel dumps its trace. A lease's end is measured to its destruction and the notice to the sponsor: the servers' records are freed after, off the measured path. Targets unchanged from the stand-in's: decision wake p50 <= 25 ms and p99 <= 95 ms, timer wake p50 <= 15 ms and p99 <= 50 ms, deadline notice p99 <= 40 ms, R10 kernel time p99 <= 30 ms, a lease's end (the worst decision-wake p99 + R10's p99) <= 125 ms; every latency target judged by the post-check net of the checked build's audits, and every pick checked by the rank oracle (virtual time, checked build). A miss is a finding, not a tuning"
+description = "The responsiveness targets measured with the real steward (docs/kernel/scheduling.md, \"Responsiveness\" and R12; docs/servers/steward.md, \"Leases\"), beside sched-latency's stand-ins: four principals' sessions start N spinning agents between them (Redoubt.Agents.Echo `spin`, each a beamlet VM on a lease; the servers admit one account's sessions and leases up to what the manifest lets it hold, so the load is spread over principals as the box's would be, and four principals declare the image's four domains, so every shared server keeps the image's bucket count) for N = 1, 4 and 16, then alice's session starts D probe leases the steward ends by its own decision (its test-only latency-probe arms a timer after each one's start and, at a second timeout, ends it: the steward's timer wake and decision wake, time_now less the deadline it armed, printed as the stand-in prints them, and its budget_destroy call to return) and D leases the kernel's deadline takes (the deadline notice: the exit notice's arrival less the deadline), D = 16 at N = 1 and 4, 8 at N = 16 (p99 at D samples is the maximum; the pinned seed's sweep stands behind it); each sample's group is the count of the other live leases over every principal; the counts go out when a round's leases are all gone, and the window's end is marked after the third round's. R10's cost per destruction is the kernel's trace: the case ends by the steward's marker-file exit, six times, so init's reboot rule resets the machine and the kernel dumps its trace. A lease's end is measured to its destruction and the notice to the sponsor: the servers' records are freed after, off the measured path. Targets unchanged from the stand-in's: decision wake p50 <= 25 ms and p99 <= 95 ms, timer wake p50 <= 15 ms and p99 <= 50 ms, deadline notice p99 <= 40 ms, R10 kernel time p99 <= 30 ms, a lease's end (the worst decision-wake p99 + R10's p99) <= 125 ms; every latency target judged by the post-check net of the checked build's audits, and every pick checked by the rank oracle (virtual time, checked build). A miss is a finding, not a tuning"
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true
@@ -25,16 +25,16 @@ programs = [
     { package = "redoubt-sshd", bin = "sshd" },
     { package = "redoubt-consrelay", bin = "consrelay" },
 ]
-# Sixteen lease VMs of 5248 pages (328 MiB) beside seven shells of 11392 pages (the six
-# principals' sessions and alice's console session, 311 MiB); the principals' budgets in the
-# latency manifest sum to 327,680 pages (1280 MiB), which `users` must hold: 2048 MiB leaves it
+# Sixteen lease VMs of 5248 pages (328 MiB) beside five shells of 11392 pages (the four
+# principals' sessions and alice's console session, 222 MiB); the principals' budgets in the
+# latency manifest sum to 262,144 pages (1 GiB), which `users` must hold: 2048 MiB leaves it
 # about 1.76 GiB. The trace ring's large form holds a boot this long.
 memory_mib = 2048
 # Test builds only: the trace ring, its large form, and its dump at the reset.
 kernel_features = ["sched-trace-large"]
 # The targets are gated at one hart and at two (kernel/scheduling.md, "Responsiveness").
 smp = [1, 2]
-# Up to 23 beamlet VMs live at once under icount, and the reboot rule needs six exits within 60 s.
+# Up to 21 beamlet VMs live at once under icount, and the reboot rule needs six exits within 60 s.
 timeout_secs = 5400
 post_check = "sched_oracle gate_harts=2 r10_p99_us=30000 lease_end_p99_us=125000 timer_wake_p50_us=15000 timer_wake_p99_us=50000 decision_wake_p50_us=25000 decision_wake_p99_us=95000 deadline_notice_p99_us=40000"
 expect = [
@@ -115,8 +115,6 @@ steps = [
     { wait = "bob-16-up" },
     { wait = "carol-16-up" },
     { wait = "dave-16-up" },
-    { wait = "erin-16-up" },
-    { wait = "mallory-16-up" },
     { send = "{:measured, 16, measure.(8)}\n" },
     { expect = '\{:measured, 16, :measured\}' },
     { expect = '\([0-9]+\)> ' },
@@ -127,17 +125,16 @@ steps = [
     { wait = "bob-gone" },
     { wait = "carol-gone" },
     { wait = "dave-gone" },
-    { wait = "erin-gone" },
-    { wait = "mallory-gone" },
     { send = "{:marker, File.write(\"/home/alice/latency-done\", \"the case is done\")}\n" },
     { expect = '\{:marker, :ok\}' },
     { expect = '\([0-9]+\)> ' },
     { exit = 0 },
 ]
 
-# The other principals carry the rest of the load: bob two spinners at N = 4 and three at
-# N = 16, carol, dave and erin three at N = 16, mallory two; each starts them when alice's round
-# opens, ends them when it closes, and leaves before the marker file is written.
+# The other principals carry the rest of the load: bob two spinners at N = 4 and five at
+# N = 16, carol five and dave four at N = 16 (a session and five leases is what one account's
+# admission holds); each starts them when alice's round opens, ends them when it closes, and
+# leaves before the marker file is written.
 [[session]]
 user = "bob"
 pty = true
@@ -157,8 +154,8 @@ steps = [
     { expect = '\([0-9]+\)> ' },
     { mark = "bob-4-down" },
     { wait = "round-16-go" },
-    { send = "s = for _ <- 1..3, do: start.(); {:up, 16, length(s)}\n" },
-    { expect = '\{:up, 16, 3\}' },
+    { send = "s = for _ <- 1..5, do: start.(); {:up, 16, length(s)}\n" },
+    { expect = '\{:up, 16, 5\}' },
     { expect = '\([0-9]+\)> ' },
     { mark = "bob-16-up" },
     { wait = "round-16-end" },
@@ -178,8 +175,8 @@ steps = [
     { expect = '\{:stage, :ok, :ok\}' },
     { expect = '\([0-9]+\)> ' },
     { wait = "round-16-go" },
-    { send = "s = for _ <- 1..3, do: start.(); {:up, 16, length(s)}\n" },
-    { expect = '\{:up, 16, 3\}' },
+    { send = "s = for _ <- 1..5, do: start.(); {:up, 16, length(s)}\n" },
+    { expect = '\{:up, 16, 5\}' },
     { expect = '\([0-9]+\)> ' },
     { mark = "carol-16-up" },
     { wait = "round-16-end" },
@@ -199,8 +196,8 @@ steps = [
     { expect = '\{:stage, :ok, :ok\}' },
     { expect = '\([0-9]+\)> ' },
     { wait = "round-16-go" },
-    { send = "s = for _ <- 1..3, do: start.(); {:up, 16, length(s)}\n" },
-    { expect = '\{:up, 16, 3\}' },
+    { send = "s = for _ <- 1..4, do: start.(); {:up, 16, length(s)}\n" },
+    { expect = '\{:up, 16, 4\}' },
     { expect = '\([0-9]+\)> ' },
     { mark = "dave-16-up" },
     { wait = "round-16-end" },
@@ -209,48 +206,6 @@ steps = [
     { expect = '\([0-9]+\)> ' },
     { exit = 0 },
     { mark = "dave-gone" },
-]
-
-[[session]]
-user = "erin"
-pty = true
-steps = [
-    { expect = '/home/erin \([0-9]+\)> ' },
-    { send = "{:ok, c} = Redoubt.Contexts.connection(); start = fn -> {:ok, %{lease: l}} = Redoubt.Wire.Client.Steward.start_agent(c, 600_000_000); l end; {:stage, File.mkdir_p(\"/home/erin/project/out\"), File.write(\"/home/erin/project/in\", \"spin\")}\n" },
-    { expect = '\{:stage, :ok, :ok\}' },
-    { expect = '\([0-9]+\)> ' },
-    { wait = "round-16-go" },
-    { send = "s = for _ <- 1..3, do: start.(); {:up, 16, length(s)}\n" },
-    { expect = '\{:up, 16, 3\}' },
-    { expect = '\([0-9]+\)> ' },
-    { mark = "erin-16-up" },
-    { wait = "round-16-end" },
-    { send = "Enum.each(s, &Redoubt.Wire.Client.Steward.end_lease(c, &1)); {:down, 16}\n" },
-    { expect = '\{:down, 16\}' },
-    { expect = '\([0-9]+\)> ' },
-    { exit = 0 },
-    { mark = "erin-gone" },
-]
-
-[[session]]
-user = "mallory"
-pty = true
-steps = [
-    { expect = '/home/mallory \([0-9]+\)> ' },
-    { send = "{:ok, c} = Redoubt.Contexts.connection(); start = fn -> {:ok, %{lease: l}} = Redoubt.Wire.Client.Steward.start_agent(c, 600_000_000); l end; {:stage, File.mkdir_p(\"/home/mallory/project/out\"), File.write(\"/home/mallory/project/in\", \"spin\")}\n" },
-    { expect = '\{:stage, :ok, :ok\}' },
-    { expect = '\([0-9]+\)> ' },
-    { wait = "round-16-go" },
-    { send = "s = for _ <- 1..2, do: start.(); {:up, 16, length(s)}\n" },
-    { expect = '\{:up, 16, 2\}' },
-    { expect = '\([0-9]+\)> ' },
-    { mark = "mallory-16-up" },
-    { wait = "round-16-end" },
-    { send = "Enum.each(s, &Redoubt.Wire.Client.Steward.end_lease(c, &1)); {:down, 16}\n" },
-    { expect = '\{:down, 16\}' },
-    { expect = '\([0-9]+\)> ' },
-    { exit = 0 },
-    { mark = "mallory-gone" },
 ]
 
 [[file]]

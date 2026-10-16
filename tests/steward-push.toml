@@ -32,8 +32,8 @@ expect_after = [
     '^\[con [0-9a-f]{16}\] steward: audit 1001/\{7\} at [0-9]+: Submitted \{ request: [0-9]+ \}',
     '^\[con [0-9a-f]{16}\] sshd: login approve: approval channel [0-9a-f]{16}$',
     '^\[con [0-9a-f]{16}\] steward: audit 1001/\{7\} at [0-9]+: Approved \{ request: [0-9]+, principal: 0, key: [1-9][0-9]*, hash: \[',
-    '^\[con [0-9a-f]{16}\] steward: crossing [0-9]+ of 1001/\{7\} (exited 0|was killed [0-9]+)$',
     '^\[con [0-9a-f]{16}\] steward: audit 1001/\{7\} at [0-9]+: Pushed \{ request: [0-9]+, source: [0-9]+, item: [0-9]+, bytes: \[0, 1, 2, 3, 4, ',
+    '^\[con [0-9a-f]{16}\] steward: crossing [0-9]+ of 1001/\{7\} (exited 0|was killed [0-9]+)$',
 ]
 
 # Alice's unlabelled session stages the source (4 KiB of every byte value) and one over the

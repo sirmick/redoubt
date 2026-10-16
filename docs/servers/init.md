@@ -235,9 +235,10 @@ counts against its unlabelled set's cap and would leave it no SSH context there;
 
 ### The confinement check
 
-<details><summary>Status: built · partly tested: the steward's half, for what it creates after the boot, is the policy core's guards, which the model and host tests attack, and its binding of a home under `confined` is host-tested; no confined boot with a vault runs on the bench yet, which attaches one writable disk · tested (14)</summary>
+<details><summary>Status: built · tested (15)</summary>
 
 - bench:init-refuses-confined-server
+- bench:steward-confined-push
 - host:redoubt-init::confined_refuses_two_label_sets_on_one_endpoint
 - host:redoubt-init::confined_refuses_two_label_sets_on_one_volume
 - host:redoubt-init::confined_counts_a_home_for_the_principals_unlabelled_domain_alone
@@ -892,8 +893,9 @@ server from a manifest that grants it a budget and expects the boot refused.
 
 ### R34 (confined placement)
 
-<details><summary>Status: built · partly tested: the steward's and `sshd`'s exception runs only in the unconfined image; the steward's home binding under `confined` is host-tested, never booted · tested (14)</summary>
+<details><summary>Status: built · tested (15)</summary>
 
+- bench:steward-confined-push
 - bench:init-refuses-confined-server
 - host:redoubt-init::confined_refuses_two_label_sets_on_one_endpoint
 - host:redoubt-init::confined_refuses_two_label_sets_on_one_volume
