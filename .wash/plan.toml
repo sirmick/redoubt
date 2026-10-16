@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 374
+revision = 375
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -2449,3 +2449,12 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "Found by STEWARD4 (thread STEWARD4-crossing Q8; the implementer's need in .wash/local/B79-brief-from-steward4.md): the bench attaches one writable `[disk]` (disk0, bus 7) and the read-only userland disk (bus 5): tools/testbench/src/qemu.rs:349-409, docs/testbench.md 'Disks and network cards'. A confined manifest cannot put the unlabelled home volume and the vault on one disk (R34's device rule: one blkd, two label sets; servers/init confine.rs:132), so STEWARD4's confined-push boot case cannot boot. Build: a `[vault]` recipe beside `[disk]` (its own recipe/stage, `disk2` on a free virtio-mmio bus, the manifest device line, `devices_sit_on_fixed_slots` extended), the case toml key, testbench.md's section and the devices table; a host test that a recipe with both disks places them on their fixed slots and one without `[vault]` is unchanged; one existing case gains `[vault]` as proof of a boot with two writable disks (blkd:data and blkd:vault), both widths. Nothing else moves: no kernel, no init, no steward. Files: tools/testbench, docs/testbench.md, tests/<one case>.toml. Tier A tooling (the bench's device map), reviewer kernel-red-3. Size S. Consumer: STEWARD4 case 3 (rebases onto this or lands its boot case in a follow-up)."
   state = "done"
   revision = 371
+
+[[node]]
+  id = "B80"
+  title = "rv32 beamlet-schedulers-one-hart-mttcg reads ratio 81-82 alone on main (floor 90): two schedulers on one guest hart outrun one by a fifth, so the case's verdict follows the host's load, not the VM"
+  template = "package"
+  parent = "AGENTS"
+  body = "Found on train 48 (STEWARD3Y) and reproduced alone on main's tip 69aa50dd3 in the train worktree: rv32 `ratio 82 one 386566 two 465804 schedulers 2` (alone, main), `ratio 81 one 381169 two 467637` (alone, 3Y's tree), `ratio 81 one 382509 two 470400` (train 48 under load); rv64 PASS each time; the same tree passed the case under train 47's bench load. tests/beamlet-schedulers-one-hart-mttcg.toml judges two schedulers on one guest hart against one and forbids a ratio under 90 (docs/userland/beamlet.md 'Several schedulers': two schedulers cost little on one hart). Under mttcg the two scheduler threads are two host threads; with q's lease (how many host cores does the case get?) and an idle host, the second scheduler runs on a second host core while the guest sees one hart, so 'two' outruns 'one' and the ratio reads low; under a loaded host the threads contend and the ratio reads ~100. Find what the case measures and make it a verdict: pin the guest's threads to one host core for this case (q run --cores 1, or the bench's taskset for mttcg one-hart cases), or judge the reduction counts on the guest's own clock (icount), or restate the page's claim and the floor with the arithmetic; rv64 passing while rv32 fails needs its explanation too. Transcripts: .tmp/train-48/transcript-rv32-schedulers-alone-main.log, -alone-3y.log, transcript-rv32-beamlet-schedulers-one-hart-mttcg.log (train 48). Files: tests/beamlet-schedulers-one-hart-mttcg.toml, tools/testbench (if the pinning is the bench's), docs/userland/beamlet.md, docs/testbench.md. Tier B (a case's verdict), reviewer kernel-red-3. Size S. Consumer: every train (the case is in the whole bench; until fixed a rv32 failure of it alone is a known flake, recorded on the train)."
+  state = "todo"
+  revision = 375
