@@ -36,7 +36,9 @@
 #           multi-threaded TCG cases, whose harts are host threads (sched-lock-contention-4-mttcg
 #           bounds a host time): `q run --quiet`, one at a time on the reserved cores while the
 #           rest of the machine keeps running
-#   net     a [net] table opening host sockets: one at a time among themselves (`--lock net`)
+#   net     a [net] table opening host sockets: each leases the host ports its boot forwards
+#           (the TCP forwards and the poke) from q (`--ports N`, REDOUBT_PORTS=lo-hi), so two
+#           run side by side without racing for a port; one with peers or dials alone needs none
 #   fanned  a host-tests case with a `fanout`: 2 cores to build, and each job asks q for its own
 #   bounded other host-tests cases and the Elixir oracles (they build beamlet): 4 cores
 #           (RUST_TEST_THREADS follows the lease)
@@ -73,6 +75,9 @@ logs := target/jobs
 prebuilt := target/prebuilt
 # cores for a boot case: its largest smp value (default 1)
 smp = $(or $(lastword $(sort $(shell grep -oE '[0-9]+' <<< "$$(grep -E '^smp *=' tests/$(1).toml 2>/dev/null)"))),1)
+# host ports a net case forwards: every port in its `forward` lists plus one per poke; `--ports N` for q, or nothing
+ports = $(if $(filter-out 0,$(1)),--ports $(1))
+ports_of = $(call ports,$(shell grep -oE '[0-9]+' <<< "$$(grep -E '^forward *=' tests/$(1).toml 2>/dev/null)" | wc -l | xargs -I{} expr {} + $$(grep -cE '^\[net\.poke\]' tests/$(1).toml 2>/dev/null)))
 
 .PHONY: list list-classes docs prebuilt build-rv64 build-rv32 cases-rv64 cases-rv32 quiet-rv64 quiet-rv32 all-rv64 all-rv32 set \
 	$(addprefix rv64/,$(cases)) $(addprefix rv32/,$(cases))
@@ -107,7 +112,7 @@ $(addprefix rv64/,$(quiet)) $(addprefix rv32/,$(filter-out $(hostonly),$(quiet))
 	$(call case_recipe,--quiet,quiet)
 
 $(addprefix rv64/,$(net)) $(addprefix rv32/,$(filter-out $(hostonly),$(net))): %:
-	$(call case_recipe,--cores $(call smp,$(@F)) --lock net,net)
+	$(call case_recipe,--cores $(call smp,$(@F)) $(call ports_of,$(@F)),net)
 
 $(addprefix rv64/,$(fanned)) $(addprefix rv32/,$(filter-out $(hostonly),$(fanned))): %:
 	$(call case_recipe,--cores 2,fanned)

@@ -298,9 +298,15 @@ bound on a time, and a failure beside other work has no verdict until it fails a
 table by itself changes neither class: an empty one gives the guest a card that reaches
 nothing, and binds no host port. A table with a `forward`, a `poke`, a peer or a dial puts host
 sockets beside the boot, in wall time: its dials retry until the case's deadline, so a pass
-stands and a failure is rerun alone, as for any host-clock wait; and because the bench picks a
-forwarded host port by binding and releasing it before QEMU takes it, two such boots at once
-may race for one port, so the rule asks that two such boots not run at once. An `ssh-loopback`
+stands and a failure is rerun alone, as for any host-clock wait. Its host ports come from the
+job's lease under `scripts/q` (`q run --ports N`, the forwards and the poke; the job sees
+`REDOUBT_PORTS=lo-hi`, a range no other lease holds, and the bench takes the forwards' ports from
+its start), so two such boots run side by side without meeting on a port; what remains under q
+is a stranger to q taking a pooled port between the daemon's probe and QEMU's bind, which fails
+that boot loudly, as before. Outside q the bench
+picks a forwarded host port by binding and releasing it before QEMU takes it, so two such boots
+at once may race for one port, and there the rule asks that two such boots not run at once; a
+lost race fails the boot rather than hiding (QEMU cannot bind). An `ssh-loopback`
 case is the same kind of case: its `sshd` runs in inetd mode through `ssh`'s `ProxyCommand`
 and binds no port, its guest's stdio is a virtio-serial port, and the kind's probe (one
 loopback session with a 30 s connect timeout) runs once before any case and decides whether the
@@ -328,9 +334,16 @@ alone.
 `scripts/q` applies that rule for a whole machine. It is one scheduler process that leases real
 cores: `q run --cores N -- <command>` waits for N free cores, runs the command pinned to them
 (`taskset`; cargo's jobs and `RUST_TEST_THREADS` follow the lease) and returns its exit code;
-`--quiet` runs a host-clock case on a reserved core set, one such case at a time, while the rest
-of the machine keeps working; `--lock net` keeps two `[net]` boots apart; a lease ends with the
-client process, so a killed job frees its cores. A job's scratch goes to `$REDOUBT_TMP`, by
+`--quiet` runs a host-clock case on a reserved core set (the daemon's `--quiet`, by default its
+last four cores, `""` for none), one such case at a time, while the rest
+of the machine keeps working; `--ports N` leases N host ports from the daemon's pool (23000-23999,
+below the ephemeral range; a port a stranger holds is skipped) and hands them to the job as
+`REDOUBT_PORTS=lo-hi`, so a `[net]` case's forwards never meet another's, where before one
+machine-wide `--lock net` ran every such case in turn (train 40: 30 cases, 12,360 s of summed
+waiting, 1,353 s once for a 0.5 s case); a lease ends with the
+client process, so a killed job frees its cores and ports, and a restarted daemon adopts the
+jobs still running, their pins and their ranges, until they end (`scripts/q-test` checks the
+lease on a daemon of its own). A job's scratch goes to `$REDOUBT_TMP`, by
 default `.tmp` at the checkout's root, which git ignores, so removing the checkout removes it;
 the job gets it as `TMPDIR` too, since a host's `/tmp` may be a RAM filesystem a sweep would
 fill. `scripts/jobs.mk` names every case as a make
@@ -345,8 +358,8 @@ is there ([building once](#building-once)), else through `cargo testbench`; its 
 it (`--keep-failed`), so a transcript is never lost to the run directories' pruning. A case
 with no `arch` boots nothing, so it runs under `rv64/<case>` alone, and `rv32/<case>` does
 nothing. Case targets may run at once (`set CASES="..."` runs a set on both widths) only while
-each still takes its own lease, the quiet ones run alone on the quiet set and the `[net]` ones keep the
-`net` lock, as every case target does: the leases, not make, keep the host from being
+each still takes its own lease, the quiet ones run alone on the quiet set and the `[net]` ones hold
+their port leases, as every case target does: the leases, not make, keep the host from being
 oversubscribed. `q ls` shows
 the core map and the queue; `q log` the recent jobs with the time each waited and ran.
 `cargo testbench --smp N` boots every boot case once at `N` harts instead of its own counts, but

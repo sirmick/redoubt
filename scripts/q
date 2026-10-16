@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """q: one scheduler for the whole machine; every member's build, test and QEMU run goes through it.
 
-    q daemon [--cores 0-23] [--quiet 20-23]   the scheduler (one per machine; `q ping` checks)
-    q run [--cores N] [--quiet] [--lock NAME] [--prio P] [--tenant T] [--name S] -- <cmd...>
+    q daemon [--cores 0-23] [--quiet 20-23] [--ports 23000-23999]
+                                             the scheduler (one per machine; `q ping` checks)
+    q run [--cores N] [--quiet] [--lock NAME] [--ports N] [--prio P] [--tenant T] [--name S] -- <cmd...>
                                              wait for a lease of N cores, run <cmd> pinned to them
                                              (taskset), exit with its code; the lease ends with
                                              this process, however it ends
@@ -23,7 +24,13 @@ TMPDIR, since /tmp may be a RAM filesystem that a sweep's scratch fills.
 Classes are flags, not names to learn:
   --quiet     a host-clock case: runs alone on the reserved quiet core set, one at a time
               among quiet jobs, while everything else keeps running on the general cores
-  --lock NAME a named mutex (the [net] cases: one at a time among themselves, shared otherwise)
+  --lock NAME a named mutex (one at a time among the jobs naming it, shared otherwise)
+  --ports N   N consecutive host ports no other lease holds, from the daemon's pool (--ports on
+              the daemon, default 23000-23999, below Linux's ephemeral range); the job gets them
+              as REDOUBT_PORTS=lo-hi and the bench binds its forwards inside the range, so two
+              [net] boots never race for a port. A daemon that predates the flag answers with
+              no ports; the client then runs the job under `--lock net` instead, the old rule,
+              and says so on stderr: restart the daemon
   --prio P    higher runs first (default 5, or $Q_PRIO; a whole-bench train exports Q_PRIO=0 so
               members' gates go first; a sweep too)
   Fairness: tenants are served round-robin by running cores, and while another tenant waits no
@@ -31,8 +38,9 @@ Classes are flags, not names to learn:
   machine against everyone's gates. A job that cannot fit for 60 s takes the free cores if they
   are at least half its ask (it only runs slower); below that the free cores are held for it,
   and after 180 s it takes whatever is free, so a hold never outlasts the jobs it waits on.
-  A restarted daemon adopts the jobs still running under the old one (their taskset pins) and
-  frees their cores as they exit, so a restart never double-books the machine.
+  A restarted daemon adopts the jobs still running under the old one (their taskset pins, and
+  the REDOUBT_PORTS in their environment) and frees their cores and ports as they exit, so a
+  restart never double-books the machine.
   --tenant T  who is asking (default: the worktree, from cwd); tenants share the machine
               round-robin so one cannot starve the rest
 
@@ -51,6 +59,8 @@ import time
 
 SOCK = os.environ.get("REDOUBT_Q", "/tmp/redoubt-q.sock")
 LOG = SOCK + ".log"
+PORTS = "23000-23999"  # the daemon's default port pool: below the ephemeral range (32768-60999)
+PORT_LOCK = "net"  # what a --ports job falls back to under a daemon that leases no ports
 STARVE_S = 60.0  # after this a starved job takes what is free if >= half its ask; after 3x, any core
 RETRY_S = 600.0  # a client waits this long for a daemon to answer (across a restart)
 
@@ -84,11 +94,33 @@ def fmt_cores(cores):
     return ",".join(f"{a}-{b}" if a != b else f"{a}" for a, b in runs)
 
 
+def parse_range(spec):
+    """'lo-hi' (inclusive) as (lo, hi); None for anything else."""
+    try:
+        lo, hi = spec.strip().split("-")
+        lo, hi = int(lo), int(hi)
+    except (AttributeError, ValueError):
+        return None
+    return (lo, hi) if 0 < lo <= hi <= 65535 else None
+
+
+def port_free(port):
+    """True if nothing on the host holds `port`, TCP or UDP, on the loopback interface right
+    now: the pool keeps leases apart from each other, the probe keeps them off a stranger."""
+    for kind in (socket.SOCK_STREAM, socket.SOCK_DGRAM):
+        try:
+            with socket.socket(socket.AF_INET, kind) as s:
+                s.bind(("127.0.0.1", port))
+        except OSError:
+            return False
+    return True
+
+
 # ----------------------------------------------------------------------------- daemon
 
 
 class Job:
-    __slots__ = ("conn", "req", "seq", "t_in", "t_start", "cores", "quiet", "lock", "tenant")
+    __slots__ = ("conn", "req", "seq", "t_in", "t_start", "cores", "ports", "quiet", "lock", "tenant")
 
     def __init__(self, conn, req, seq):
         self.conn = conn
@@ -97,6 +129,7 @@ class Job:
         self.t_in = time.time()
         self.t_start = None
         self.cores = []
+        self.ports = None  # (lo, hi) once leased
         self.quiet = bool(req.get("quiet"))
         self.lock = req.get("lock") or None
         self.tenant = req.get("tenant") or "?"
@@ -104,6 +137,16 @@ class Job:
     @property
     def want(self):
         return max(1, int(self.req.get("cores") or 1))
+
+    @property
+    def want_ports(self):
+        return max(0, int(self.req.get("ports") or 0))
+
+    @property
+    def tags(self):
+        """The lease's marks for a log or status line."""
+        return (f"{' quiet' if self.quiet else ''}{' lock=' + self.lock if self.lock else ''}"
+                f"{' ports=%d-%d' % self.ports if self.ports else ''}")
 
     @property
     def prio(self):
@@ -115,16 +158,18 @@ class Job:
 
 
 class Daemon:
-    def __init__(self, all_cores, quiet_cores):
+    def __init__(self, all_cores, quiet_cores, ports):
         self.quiet_set = [c for c in quiet_cores if c in all_cores]
         self.general = [c for c in all_cores if c not in self.quiet_set]
         self.free = set(self.general)
+        self.pool = ports  # (lo, hi): the host ports this daemon leases
+        self.leased_ports = set()  # every port under a running or adopted lease
         self.quiet_busy = None  # the one quiet job
         self.locks = {}  # name -> job
         self.waiting = []  # Job, in arrival order
         self.running = {}  # conn -> Job
         self.bufs = {}  # conn -> partial line
-        self.adopted = {}  # pid -> cores of a job inherited from a previous daemon
+        self.adopted = {}  # pid -> (cores, ports) of a job inherited from a previous daemon
         self.seq = 0
         self.sel = selectors.DefaultSelector()
         self.log = open(LOG, "a", buffering=1)
@@ -140,8 +185,27 @@ class Daemon:
     def order(self):
         return sorted(self.waiting, key=lambda j: (-j.prio, self.tenant_load(j.tenant), j.seq))
 
-    def fits(self, job):
+    def find_ports(self, n):
+        """The lowest run of `n` consecutive pool ports under no lease and bound by nothing on
+        the host, as (lo, hi); None when the pool has no such run."""
+        lo, hi = self.pool
+        if len(self.leased_ports) + n > hi - lo + 1:
+            return None
+        run = 0
+        for port in range(lo, hi + 1):
+            run = 0 if port in self.leased_ports or not port_free(port) else run + 1
+            if run == n:
+                return (port - n + 1, port)
+        return None
+
+    def held(self, job):
+        """What a job waits on besides cores: its lock, or ports the pool cannot give now."""
         if job.lock and job.lock in self.locks:
+            return True
+        return job.want_ports > 0 and self.find_ports(job.want_ports) is None
+
+    def fits(self, job):
+        if self.held(job):
             return False
         if job.quiet:
             return self.quiet_busy is None and bool(self.quiet_set)
@@ -170,7 +234,7 @@ class Daemon:
                 n = min(job.want, len(self.general))
                 cores = sorted(self.free)[:n]
                 self.start(job, cores)
-            elif not (job.lock and job.lock in self.locks) and now - job.t_in > STARVE_S:
+            elif not self.held(job) and now - job.t_in > STARVE_S:
                 # the head job has waited long enough: it takes what is free if that is at
                 # least half its ask (a build or a test suite only runs slower), else the
                 # free cores are held for it and nothing smaller starts
@@ -182,6 +246,11 @@ class Daemon:
                     blocked_general = True
 
     def start(self, job, cores):
+        if job.want_ports:
+            job.ports = self.find_ports(job.want_ports)
+            if job.ports is None:
+                return  # a stranger bound a port since fits() looked: the job keeps waiting
+            self.leased_ports |= set(range(job.ports[0], job.ports[1] + 1))
         self.waiting.remove(job)
         job.cores = cores
         job.t_start = time.time()
@@ -193,12 +262,11 @@ class Daemon:
             self.locks[job.lock] = job
         self.running[job.conn] = job
         try:
-            job.conn.sendall((json.dumps({"cores": cores}) + "\n").encode())
+            job.conn.sendall((json.dumps({"cores": cores, "ports": job.ports}) + "\n").encode())
         except OSError:
             self.finish(job.conn)
             return
-        self.logline(f"start  {job.tenant} {job.name!r} cores={fmt_cores(cores)}"
-                     f"{' quiet' if job.quiet else ''}{' lock=' + job.lock if job.lock else ''}"
+        self.logline(f"start  {job.tenant} {job.name!r} cores={fmt_cores(cores)}{job.tags}"
                      f" waited={job.t_start - job.t_in:.1f}s")
 
     def finish(self, conn):
@@ -216,7 +284,9 @@ class Daemon:
                 self.free |= set(job.cores)
             if job.lock and self.locks.get(job.lock) is job:
                 del self.locks[job.lock]
-            self.logline(f"end    {job.tenant} {job.name!r} cores={fmt_cores(job.cores)}"
+            if job.ports:
+                self.leased_ports -= set(range(job.ports[0], job.ports[1] + 1))
+            self.logline(f"end    {job.tenant} {job.name!r} cores={fmt_cores(job.cores)}{job.tags}"
                          f" ran={time.time() - job.t_start:.1f}s")
         self.bufs.pop(conn, None)
         try:
@@ -230,18 +300,21 @@ class Daemon:
         now = time.time()
         lines = [f"general cores {fmt_cores(self.general)}: {len(self.free)} free ({fmt_cores(self.free)});"
                  f" quiet cores {fmt_cores(self.quiet_set)}: {'busy' if self.quiet_busy else 'free'};"
+                 f" ports {self.pool[0]}-{self.pool[1]}: {len(self.leased_ports)} leased;"
                  f" up {int(now - self.t0)}s"]
         if self.adopted:
             lines.append(f"adopted from the previous daemon: {len(self.adopted)} jobs on "
-                         f"{fmt_cores(c for cs in self.adopted.values() for c in cs)}")
+                         f"{fmt_cores(c for cs, _ in self.adopted.values() for c in cs)}"
+                         f"{', ports ' + fmt_cores(p for _, ps in self.adopted.values() for p in ps) if any(ps for _, ps in self.adopted.values()) else ''}")
         lines.append(f"running {len(self.running)}:")
         for j in sorted(self.running.values(), key=lambda j: j.t_start):
             lines.append(f"  {fmt_cores(j.cores):>6}  {int(now - j.t_start):>5}s  {j.tenant:<18} {j.name}"
-                         f"{'  [quiet]' if j.quiet else ''}{'  lock=' + j.lock if j.lock else ''}")
+                         f"{'  ' + j.tags.strip() if j.tags else ''}")
         lines.append(f"waiting {len(self.waiting)}:")
         for j in self.order():
             lines.append(f"  want {j.want:>2}  {int(now - j.t_in):>5}s  p{j.prio} {j.tenant:<18} {j.name}"
-                         f"{'  [quiet]' if j.quiet else ''}{'  lock=' + j.lock if j.lock else ''}")
+                         f"{'  [quiet]' if j.quiet else ''}{'  lock=' + j.lock if j.lock else ''}"
+                         f"{'  ports=%d' % j.want_ports if j.want_ports else ''}")
         if self.locks:
             lines.append("locks: " + ", ".join(sorted(self.locks)))
         by = {}
@@ -304,9 +377,10 @@ class Daemon:
             self.finish(conn)
 
     def adopt(self):
-        """Mark the cores of jobs still running under a previous daemon as busy until they exit:
-        the children of every `q run` client, by their CPU affinity (taskset execs the command,
-        so the pin is read from /proc, not from a cmdline)."""
+        """Mark the cores and ports of jobs still running under a previous daemon as busy until
+        they exit: the children of every `q run` client, by their CPU affinity (taskset execs the
+        command, so the pin is read from /proc, not from a cmdline) and the REDOUBT_PORTS in
+        their environment (the client sets it for the command, so it is the lease's)."""
         import glob
         runners = set()
         for pid_dir in glob.glob("/proc/[0-9]*"):
@@ -334,17 +408,30 @@ class Daemon:
             cores = [c for c in parse_cores(allowed) if c in self.general]
             if not cores or len(cores) == len(self.general):
                 continue  # unpinned or the whole machine: not one of ours
+            # The ports are best effort: another user's environ is unreadable, and its cores
+            # are still adopted (a job of another user holds no pool port of ours anyway).
+            try:
+                with open(pid_dir + "/environ", "rb") as f:
+                    env = dict(kv.split(b"=", 1) for kv in f.read().split(b"\0") if b"=" in kv)
+            except (OSError, ValueError):
+                env = {}
+            leased = parse_range(env.get(b"REDOUBT_PORTS", b"").decode(errors="replace"))
+            ports = [p for p in range(leased[0], leased[1] + 1) if self.pool[0] <= p <= self.pool[1]] if leased else []
             pid = int(pid_dir.rsplit("/", 1)[1])
             self.free -= set(cores)
-            self.adopted[pid] = cores
-            self.logline(f"adopt  pid {pid} cores={fmt_cores(cores)} {b' '.join(argv[:3]).decode(errors='replace')[:60]!r}")
+            self.leased_ports |= set(ports)
+            self.adopted[pid] = (cores, ports)
+            self.logline(f"adopt  pid {pid} cores={fmt_cores(cores)}{' ports=' + fmt_cores(ports) if ports else ''}"
+                         f" {b' '.join(argv[:3]).decode(errors='replace')[:60]!r}")
 
     def reap_adopted(self):
-        for pid, cores in list(self.adopted.items()):
+        for pid, (cores, ports) in list(self.adopted.items()):
             if not os.path.exists(f"/proc/{pid}"):
                 self.free |= set(cores)
+                self.leased_ports -= set(ports)
                 del self.adopted[pid]
-                self.logline(f"freed  pid {pid} cores={fmt_cores(cores)} (adopted job ended)")
+                self.logline(f"freed  pid {pid} cores={fmt_cores(cores)}{' ports=' + fmt_cores(ports) if ports else ''}"
+                             f" (adopted job ended)")
 
     def serve(self):
         if os.path.exists(SOCK):
@@ -365,7 +452,8 @@ class Daemon:
         srv.listen(256)
         srv.setblocking(False)
         self.sel.register(srv, selectors.EVENT_READ, "srv")
-        self.logline(f"daemon general={fmt_cores(self.general)} quiet={fmt_cores(self.quiet_set)}")
+        self.logline(f"daemon general={fmt_cores(self.general)} quiet={fmt_cores(self.quiet_set)}"
+                     f" ports={self.pool[0]}-{self.pool[1]}")
         self.adopt()
         def on_term(*_):
             raise SystemExit(0)
@@ -416,9 +504,9 @@ def cmd_run(a, cmd):
         print("q run: no command", file=sys.stderr)
         return 2
     cwd = os.getcwd()
-    req = {"op": "run", "cores": a.cores, "quiet": a.quiet, "lock": a.lock, "prio": a.prio,
-           "tenant": a.tenant or default_tenant(cwd), "name": a.name, "pid": os.getpid(),
-           "cwd": cwd, "cmd": cmd}
+    req = {"op": "run", "cores": a.cores, "quiet": a.quiet, "lock": a.lock, "ports": a.ports,
+           "prio": a.prio, "tenant": a.tenant or default_tenant(cwd), "name": a.name,
+           "pid": os.getpid(), "cwd": cwd, "cmd": cmd}
     # A lease request survives a daemon restart: resubmit until one answers (up to RETRY_S).
     deadline = time.time() + RETRY_S
     lease = None
@@ -438,6 +526,14 @@ def cmd_run(a, cmd):
                 print(f"q: no daemon at {SOCK} ({e}); start one with `q daemon`", file=sys.stderr)
                 return 3
             time.sleep(2)
+        if lease is not None and a.ports and "ports" not in lease and req["lock"] != PORT_LOCK:
+            # A daemon from before --ports: give the lease back and take the old rule's lock,
+            # so the job still runs apart from every other [net] boot.
+            print(f"q: the daemon at {SOCK} leases no ports; running {a.name or 'the job'} under"
+                  f" --lock {PORT_LOCK} instead (restart the daemon: `q stop`, `q daemon`)", file=sys.stderr)
+            s.close()
+            req["lock"] = PORT_LOCK
+            lease = None
     cores = lease["cores"]
     n = len(cores)
     env = dict(os.environ)
@@ -446,6 +542,10 @@ def cmd_run(a, cmd):
     env["CARGO_BUILD_JOBS"] = str(n)
     env["RUST_TEST_THREADS"] = str(max(1, n))
     env["Q_CORES"] = fmt_cores(cores)
+    if lease.get("ports"):
+        env["REDOUBT_PORTS"] = "%d-%d" % tuple(lease["ports"])
+    else:
+        env.pop("REDOUBT_PORTS", None)  # never a parent lease's range: that one is in use
     scratch = os.environ.get("REDOUBT_TMP") or os.path.join(
         os.path.dirname(os.path.dirname(os.path.realpath(__file__))), ".tmp")
     os.makedirs(scratch, exist_ok=True)
@@ -510,11 +610,16 @@ def main():
     if sub == "daemon":
         p = argparse.ArgumentParser(prog="q daemon")
         p.add_argument("--cores", default=f"0-{os.cpu_count() - 1}")
-        p.add_argument("--quiet", default="")
+        p.add_argument("--quiet", default=None, help="the quiet core set (default: the last four; '' for none)")
+        p.add_argument("--ports", default=PORTS)
         a = p.parse_args(argv[1:])
         all_cores = parse_cores(a.cores)
-        quiet = parse_cores(a.quiet) if a.quiet else all_cores[-4:]
-        return Daemon(all_cores, quiet).serve()
+        quiet = parse_cores(a.quiet) if a.quiet is not None else all_cores[-4:]
+        ports = parse_range(a.ports)
+        if ports is None:
+            print(f"q daemon: --ports wants lo-hi, not {a.ports!r}", file=sys.stderr)
+            return 2
+        return Daemon(all_cores, quiet, ports).serve()
     if sub == "run":
         rest = argv[1:]
         cmd = []
@@ -525,6 +630,7 @@ def main():
         p.add_argument("--cores", type=int, default=1)
         p.add_argument("--quiet", action="store_true")
         p.add_argument("--lock", default=None)
+        p.add_argument("--ports", type=int, default=0)
         p.add_argument("--prio", type=int, default=int(os.environ.get("Q_PRIO", "5")))
         p.add_argument("--tenant", default=None)
         p.add_argument("--name", default=None)

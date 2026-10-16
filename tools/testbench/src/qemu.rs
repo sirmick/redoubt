@@ -271,11 +271,42 @@ pub fn shell_quote(s: &str) -> String {
 /// A forwarded port, (guest port, host port): each TCP `forward`, then the UDP poke's.
 pub type Forward = (u16, u16);
 
+/// The host ports one boot forwards: `tcp` of them for the TCP forwards, in order, then the
+/// poke's UDP port when `udp`. Under `scripts/q` the job holds a range of ports no other lease
+/// has (`REDOUBT_PORTS=lo-hi`, `q run --ports N`), and the ports are taken from its start, so
+/// two boots at once cannot meet on one; the variable names a range too small for the boot is
+/// an error (the recipe asked for too few). Outside q the OS picks them ([`free_ports`],
+/// [`peer::free_udp_port`]), with that path's race.
+pub fn host_ports(tcp: usize, udp: bool) -> Result<(Vec<u16>, Option<u16>)> {
+    match std::env::var("REDOUBT_PORTS") {
+        Ok(range) => leased_ports(&range, tcp, udp),
+        Err(_) => Ok((free_ports(tcp)?, udp.then(peer::free_udp_port).transpose()?)),
+    }
+}
+
+/// [`host_ports`] inside the leased `range`, `lo-hi` inclusive.
+fn leased_ports(range: &str, tcp: usize, udp: bool) -> Result<(Vec<u16>, Option<u16>)> {
+    let (lo, hi) = range
+        .split_once('-')
+        .and_then(|(lo, hi)| Some((lo.trim().parse::<u16>().ok()?, hi.trim().parse::<u16>().ok()?)))
+        .filter(|(lo, hi)| lo <= hi)
+        .with_context(|| format!("REDOUBT_PORTS={range:?}: not a lo-hi range"))?;
+    let need = tcp + usize::from(udp);
+    ensure!(
+        usize::from(hi - lo) + 1 >= need,
+        "REDOUBT_PORTS={range}: {} ports leased, this boot forwards {need}",
+        hi - lo + 1
+    );
+    let mut ports = (lo..=hi).take(need);
+    Ok((ports.by_ref().take(tcp).collect(), ports.next()))
+}
+
 /// `count` distinct TCP ports on the loopback interface that nothing was listening on a
-/// moment ago. The OS picks them, so benches running side by side do not collide. Between
+/// moment ago. The OS picks them, so benches running side by side rarely collide. Between
 /// here and QEMU binding them another process could take one; QEMU then fails to start and
 /// the boot fails. That needs a second program asking for ports at that instant; it is not
-/// retried, so it would show as a failure rather than hide.
+/// retried, so it would show as a failure rather than hide. Under q the ports come from the
+/// job's lease instead ([`host_ports`]).
 pub fn free_ports(count: usize) -> Result<Vec<u16>> {
     // Hold every listener until all are chosen, so the OS cannot hand out one port twice.
     let listeners =
@@ -382,8 +413,8 @@ pub fn virtio_devices(
         // reach it. A case that needs an outside peer must add one deliberately. ipv6=off: the
         // guest speaks only IPv4, and slirp would otherwise advertise itself as an IPv6 router.
         let mut netdev = "user,id=net0,restrict=on,ipv6=off".to_string();
-        let hosts = match ports {
-            [] => free_ports(net.forward.len())?,
+        let (hosts, udp) = match ports {
+            [] => host_ports(net.forward.len(), net.poke.is_some())?,
             given => {
                 ensure!(
                     given.len() == net.forward.len(),
@@ -391,7 +422,8 @@ pub fn virtio_devices(
                     given.len(),
                     net.forward.len()
                 );
-                given.to_vec()
+                // Given ports come from `launch`, whose boot has no poke: the OS pick is never taken.
+                (given.to_vec(), net.poke.is_some().then(peer::free_udp_port).transpose()?)
             }
         };
         for (guest, host) in net.forward.iter().zip(hosts) {
@@ -399,8 +431,7 @@ pub fn virtio_devices(
             forwards.push((*guest, host));
         }
         // The poke's forward goes with the others, found by its guest port (`Console::poke`).
-        if let Some(poke) = &net.poke {
-            let host = peer::free_udp_port()?;
+        if let Some((poke, host)) = net.poke.as_ref().zip(udp) {
             netdev += &format!(",hostfwd=udp:127.0.0.1:{host}-:{}", poke.port);
             forwards.push((poke.port, host));
         }
@@ -1513,6 +1544,25 @@ mod tests {
         assert_eq!((forwards.len(), forwards[0].0, guest), (2, 8000, 47000));
         assert!(netdev.contains(&format!(",hostfwd=udp:127.0.0.1:{host}-:47000")), "{netdev}");
         assert!(!self::args("[net]\nforward = [8000]\n").iter().any(|a| a.contains("hostfwd=udp")));
+    }
+
+    /// Under a q lease the forwards take the range's first ports, TCP first then the poke's,
+    /// so two boots with disjoint leases cannot meet on a port; a range too small for the boot
+    /// is refused rather than overrun, as is one that is not `lo-hi`.
+    #[test]
+    fn leased_ports_come_from_the_range_in_order() {
+        assert_eq!(leased_ports("23000-23001", 1, true).unwrap(), (vec![23000], Some(23001)));
+        assert_eq!(leased_ports("23000-23001", 2, false).unwrap(), (vec![23000, 23001], None));
+        assert_eq!(leased_ports("23005-23005", 0, true).unwrap(), (vec![], Some(23005)));
+        assert_eq!(leased_ports("23005-23005", 0, false).unwrap(), (vec![], None));
+        let short = leased_ports("23000-23000", 1, true).unwrap_err().to_string();
+        assert!(short.contains("1 ports leased, this boot forwards 2"), "{short}");
+        for bad in ["23000", "23001-23000", "x-y", ""] {
+            assert!(
+                leased_ports(bad, 1, false).unwrap_err().to_string().contains("not a lo-hi range"),
+                "{bad}"
+            );
+        }
     }
 
     /// The guest reaches nothing outside QEMU: every network is `restrict=on`, the wider one a

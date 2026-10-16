@@ -1,0 +1,154 @@
+#!/usr/bin/env python3
+"""The port lease of scripts/q, tested against a daemon of its own on a private socket.
+
+    scripts/q-test          (no arguments; exits 0 when every check holds)
+
+Starts `q daemon` on a socket under $REDOUBT_TMP with a pool of a few ports and four cores, then
+checks, with `q run --ports` jobs that only sleep: two jobs at once get disjoint ranges from the
+pool and REDOUBT_PORTS names each; a third that cannot fit waits until one of them ends, then
+gets a freed range; a killed job frees its ports at once; a port something else already holds
+is skipped; and a daemon restarted under running jobs adopts their ports and leases around them.
+Not checked here: a job whose environ the daemon cannot read (another user's) keeps its cores
+adopted and contributes no ports; /proc cannot be made unreadable to its own user from a test.
+The real daemon is never touched: the socket is this test's own, and the sleeps are pinned to
+cores the test itself may use.
+"""
+import os
+import re
+import signal
+import socket
+import subprocess
+import sys
+import time
+
+HERE = os.path.dirname(os.path.realpath(__file__))
+Q = os.path.join(HERE, "q")
+SCRATCH = os.environ.get("REDOUBT_TMP") or os.path.join(os.path.dirname(HERE), ".tmp")
+SOCK = os.path.join(SCRATCH, f"q-test-{os.getpid()}.sock")
+POOL = (24100, 24105)  # six ports: two leases of two, a third waits
+ENV = dict(os.environ, REDOUBT_Q=SOCK)
+# The daemon pins jobs to these; a sleep runs anywhere. More than the jobs at once, so they wait
+# on ports, never cores. The last cores, not the first: a restarted daemon adopts every `q run`
+# child pinned inside its set, and the machine's own daemon hands out its low cores; its quiet
+# set is the last four, and a job pinned to the whole set is skipped as not the daemon's own.
+CORES = sorted(os.sched_getaffinity(0))[-4:]
+
+
+def daemon():
+    p = subprocess.Popen(
+        [sys.executable, Q, "daemon", "--cores", ",".join(map(str, CORES)), "--quiet", "",
+         "--ports", "%d-%d" % POOL],
+        env=ENV, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    for _ in range(100):
+        if subprocess.run([sys.executable, Q, "ping"], env=ENV, capture_output=True).returncode == 0:
+            return p
+        time.sleep(0.1)
+    sys.exit("the test daemon never answered: " + p.stderr.read().decode())
+
+
+def run(ports, seconds, name):
+    """A `q run --ports` job that writes its REDOUBT_PORTS to stdout, then sleeps."""
+    return subprocess.Popen(
+        [sys.executable, Q, "run", "--cores", "1", "--ports", str(ports), "--name", name, "--",
+         "sh", "-c", f'echo "$REDOUBT_PORTS"; exec sleep {seconds}'],
+        env=ENV, stdout=subprocess.PIPE, text=True)
+
+
+def range_of(job, timeout=10.0):
+    """The REDOUBT_PORTS the job printed, as (lo, hi), once it has started."""
+    end = time.time() + timeout
+    while time.time() < end:
+        line = job.stdout.readline().strip()
+        if line:
+            lo, hi = line.split("-")
+            return int(lo), int(hi)
+        time.sleep(0.05)
+    sys.exit(f"{job.args[-3]!r} did not start within {timeout}s")
+
+
+def ls():
+    return subprocess.run([sys.executable, Q, "ls"], env=ENV, capture_output=True, text=True).stdout
+
+
+def leased():
+    return int(re.search(r"ports \d+-\d+: (\d+) leased", ls()).group(1))
+
+
+def check(cond, what):
+    if not cond:
+        print("FAIL", what, file=sys.stderr)
+        print(ls(), file=sys.stderr)
+        sys.exit(1)
+    print("ok  ", what)
+
+
+def main():
+    os.makedirs(SCRATCH, exist_ok=True)
+    d = daemon()
+    try:
+        # Two at once: disjoint ranges of the asked size, inside the pool.
+        a, b = run(2, 120, "a"), run(2, 120, "b")
+        ra, rb = range_of(a), range_of(b)
+        for r in (ra, rb):
+            check(POOL[0] <= r[0] <= r[1] <= POOL[1] and r[1] - r[0] + 1 == 2, f"range {r} is two pool ports")
+        check(ra[1] < rb[0] or rb[1] < ra[0], f"ranges {ra} and {rb} are disjoint")
+        check(leased() == 4, "the daemon counts 4 ports leased")
+
+        # A port a stranger holds is skipped: the next lease goes around it.
+        held = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        held.bind(("127.0.0.1", max(ra[1], rb[1]) + 1))
+        # The third job cannot fit (the pool's two free ports are not consecutive): it waits.
+        c = run(2, 120, "c")
+        time.sleep(1.5)
+        check("waiting 1:" in ls() and "ports=2" in ls(), "a job with no run of free ports waits")
+        held.close()
+        rc = range_of(c)
+        check(rc[0] > max(ra[1], rb[1]) and rc[1] <= POOL[1], f"the third lease {rc} came once the held port freed")
+        check(leased() == 6, "the daemon counts 6 ports leased")
+
+        # The pool is full: a fourth waits; a killed job frees its ports and the fourth takes them.
+        e = run(2, 120, "e")
+        time.sleep(1.0)
+        check("waiting 1:" in ls(), "a job waits on a full pool")
+        os.kill(a.pid, signal.SIGTERM)
+        a.wait(timeout=10)
+        re_ = range_of(e)
+        check(re_ == ra, f"the killed job's range {ra} went to the waiting job ({re_})")
+
+        # A daemon restart under running jobs: the new one adopts their ports from their
+        # environment and leases around them; it frees them as the jobs end.
+        subprocess.run([sys.executable, Q, "stop"], env=ENV, capture_output=True)
+        d.wait(timeout=10)
+        d = daemon()
+        status = ls()
+        check("adopted from the previous daemon" in status and "ports 24100-24105" in status,
+              "the restarted daemon adopted the running jobs' ports")
+        check(leased() == 6, "the adopted jobs' 6 ports are leased")
+        f = run(1, 120, "f")
+        time.sleep(1.0)
+        check("waiting 1:" in ls(), "a new job waits on adopted ports")
+        for j in (b, c, e):
+            os.kill(j.pid, signal.SIGTERM)
+            j.wait(timeout=10)
+        rf = range_of(f)
+        check(POOL[0] <= rf[0] == rf[1] <= POOL[1], f"the new job leased {rf} once an adopted job ended")
+        os.kill(f.pid, signal.SIGTERM)
+        f.wait(timeout=10)
+        time.sleep(1.5)
+        check(leased() == 0, "everything is freed")
+        print("PASS q-test")
+    finally:
+        subprocess.run([sys.executable, Q, "stop"], env=ENV, capture_output=True)
+        try:
+            d.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            d.kill()
+        for p in (SOCK, SOCK + ".log"):
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
+
+
+if __name__ == "__main__":
+    main()
