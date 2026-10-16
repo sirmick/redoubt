@@ -1,6 +1,6 @@
 # AGT4 report
 
-Base: main 3a80e5af0; branch wp-AGT4 (worktree .worktrees/AGT4). Head: 9dfc1c743 (one commit, rebased onto main 32a448875 for the review fold P1 and P3; P2 waits for train 36).
+Base: main 3a80e5af0; branch wp-AGT4 (worktree .worktrees/AGT4). Head: c90196606 (one commit on main 0b487325b, train 36; review fold P1-P3 in it: budget_pages dropped, the session cap restated at 11,220, AGT2's shell.md residual replaced). Logs .tmp/AGT4/train36/.
 Gates (all on the committed tree, from `make -f scripts/jobs.mk prebuilt`, 302 rv64 + 288 rv32
 pieces, 0 failed; logs .tmp/AGT4/final/ and alone/): beamlet's set from `scripts/shell-cases` (60
 cases) + size-budget, both widths: 119 PASS 0 FAIL (steward-ssh-two-principals, beamlet-footprint,

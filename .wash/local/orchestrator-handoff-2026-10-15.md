@@ -152,3 +152,113 @@ B64 (shell per-piece prologue), B65 follow-ons none. pipe-sixty-four stays quiet
 ## 06:15Z: STEWARD3 wave launched: steward3r-implementer (wp-STEWARD3R from 32a448875; Architect rules R41 on QA thread STEWARD3R-scope first), steward3a-implementer (wp-STEWARD3A from e19e31528 = train 36 head), b75-implementer (wp-B75 from 32a448875). 3B/3C launch when 3A is accepted. The Architect wrote steward-red-2 as reviewer: it is steward-red-3.
 
 ## PUBLISHED 06:30Z: train 36 on origin/main 0b487325b (AGT1 agent principal, AGT2 machine mode + session 11,392, B74 quiescent tick); 693 pass + beamlet-lookup-host alone. AGT1/AGT2/B74 worktrees+branches removed, implementers ended. NEXT: train 37 = AGT4 (rebasing onto 0b487325b; deletes AGT2 residual; recomputes cap 11,220) + AGT3 (rebases onto AGT4 head). In flight: STEWARD3R (ruling first), STEWARD3A (on e19e31528 = main), B75.
+
+## 07:05Z: AGT4 FINAL c90196606 on 0b487325b (renewed OK). TRAIN 37 = AGT4 c90196606 + AGT3 (after its rebase + range-diff renewal). Trailers for AGT4 as recorded at acceptance (gates line) with Reviewed-by: steward-red-3: Merge verdict: OK (renewed at c90196606).
+
+## 07:25Z: AGT3 ACCEPTED (final) at 66c36d3bb on AGT4 c90196606. TRAIN 37 = 0b487325b + AGT4 c90196606 + AGT3 66c36d3bb ON THE BENCH; logs .tmp/train-37. Then publish, remove .worktrees/AGT4 AGT3 + branches, end agt4/agt3 implementers: AGENT0 step complete (set AGENT0 done). In flight: STEWARD3R (ruling), STEWARD3A (on main), B75.
+
+## PUBLISHED 07:50Z: train 37 on origin/main (AGT4, AGT3): 702 pass rc 0. AGENT0 DONE. AGT4/AGT3 removed, implementers ended. In flight: STEWARD3R (ruling thread STEWARD3R-scope), STEWARD3A (threads STEWARD3A-notice, -sponsored-login), B75. STEWARD3S drafted (needs 3R). Re-accept AGT2/ATK2 (renewals left them reported).
+
+## 08:30Z: B75 ACCEPTED at f9a1fa206 (Plan-Node: B75 / Gates: q run -- cargo test -p redoubt-rt (+2); testbench memory (+1); beamlet-redoubt --features fake 81; redoubt-client 43; consrelay 26; sshd 34 0, make -f scripts/jobs.mk prebuilt both widths (every rt bin builds) 0, make -j4 -f scripts/jobs.mk set CASES=thread-stack-guard (x3),beamlet-footprint,<shell set 57 + unsafe-budget: 113> WIDTHS=rv64,rv32 0, docs; cargo +nightly fmt --check; size-budget (libs/rt 3943 -> 3994, Size budget line in the commit) 0 / Reviewed-by: steward-red-3: Merge verdict: OK with notes). Rebasing onto 43588e0d6 (compile-footprint helper peak to quote), range-diff renewal, then TRAIN 38 = B75 (+ STEWARD3A/3R if ready).
+
+## 08:50Z: B75 re-accepted at 54972509a (renewed OK). TRAIN 38 = 43588e0d6 + B75 54972509a ON THE BENCH; logs .tmp/train-38. Then publish, remove .worktrees/B75 + wp-B75, end b75-implementer. STEWARD3A/3R pending; 3B/3C/3S queued.
+
+## 13:30Z: STEWARD3R ACCEPTED at dcdb9bce1 on 43588e0d6 (Plan-Node: STEWARD3R / QA: STEWARD3R-scope / Gates: make -f scripts/jobs.mk prebuilt both widths (every rt bin type-checks and builds) 0, host tests: rt, wire, steward, init, client, ipd; the eight servers (243/0/2 pre-existing ignores); beamlet-redoubt --features fake 81; elixir-oracles 0, cases: init-boot, init-restart, init-rollback, ninep-newconn-discard, redoubt-revoke, beamlet-launch, steward-restart, -session-ends, -context-labels, -ssh-two-principals, agent-login 0, size-budget (six ceilings raised with reasons; steward heap 30 -> 32); unsafe-budget; docs; cargo +nightly fmt --check 0 / Reviewed-by: steward-red-3: Merge verdict: OK with notes; stage .wash/qa/STEWARD3R-scope.md with the plan commit). TRAIN 39 = STEWARD3R (+3A) after train 38. STEWARD3S launched on dcdb9bce1.
+
+## 14:20Z: steward3a-implementer -> steward3a-implementer-2 (handoff_from). STEWARD3A at 98a166314 (WIP-complete core; Q3/exit line/gates left). Train 38 (B75) bench slow behind the [net] lock (501+ pass, 0 fail at 4 h). STEWARD3S on 3R's head.
+
+## PUBLISHED 15:00Z (10-16): train 38 on origin/main be9c8b6c4 (B75 spawned-stack guard page); 704 pass rc 0 (bench took ~6 h behind the [net] lock shared with STEWARD3A gates). B75 removed, implementer ended.
+## TRAIN 39 = be9c8b6c4 + STEWARD3R dcdb9bce1 ON THE BENCH; logs .tmp/train-39. Then publish (stage .wash/qa too), remove .worktrees/STEWARD3R + wp-STEWARD3R, end steward3r-implementer; tell steward3s to rebase onto the new main. In flight: STEWARD3A (implementer-2), STEWARD3S.
+
+## 15:10Z: TRAIN 39 = 42437cdaf (be9c8b6c4 + STEWARD3R dcdb9bce1; size-budget libs/rt conflict -> 4012 = sum) ON THE BENCH; logs .tmp/train-39. TRAP: start the bench only after `git status --short | wc -l` is 0 in train-20 (a runner started on a conflicted tree once; killed). Then publish, remove STEWARD3R worktree+branch, end steward3r-implementer, tell steward3s to rebase.
+
+## 16:00Z: STEWARD3S at c61ee5d5d on dcdb9bce1 (reviewed OK with notes, folded); after train 39 publishes: rebase onto the new main, libs/rt 4013 with reason, prebuilt + its set, range-diff renewal, train 40 (with STEWARD3A if accepted).
+
+## PUBLISHED 18:40Z (10-16): train 39 on origin/main c1eb9aa3c (STEWARD3R: R41 revocation scope); 703 pass + aio-many-reads-two rv64: a flake (fails 1 in 3 alone; also train 35 without 3R): node requested from the Architect (B76?). STEWARD3R worktree+branch removed, implementer ended. STEWARD3S told to rebase onto c1eb9aa3c (rt 4013). NEXT: train 40 = STEWARD3S (+3A).
+
+## 18:55Z: B76 opened (b76-implementer, wp-B76 from c1eb9aa3c). Net lock: measure the next train's wait on [net] from `scripts/q log` before asking for a node. IN FLIGHT: STEWARD3A (impl-2), STEWARD3S (rebasing for train 40), B76. Queued: 3B, 3C after 3A.
+
+## 19:40Z: B76 ACCEPTED at wp-B76 306dc5705 on c1eb9aa3c (two commits: d88f23f91 bench --keep-failed, 306dc5705 the case's print order; Plan-Node: B76 / Gates: aio-many-reads-two alone x50 both widths (before: rv64 48/50; after: 50/50 both at 0.7-0.8 s), transcripts kept under .tmp/B76/ 0, make -f scripts/jobs.mk prebuilt (rv64 324, rv32 312); aio-many-reads + bench-net-peer both widths; client-host-tests 0, q run -- cargo test -p testbench (212 incl. a_failing_boots_logs_are_kept_under_its_jobs_name); docs; formatting 0 / Reviewed-by: steward-red-3: Merge verdict: OK with notes). Closing note for the node: why the race was 1-in-3 on rv64 under load stays unexplained; the fix removes the race. TRAIN 40 = B76 + STEWARD3S (after its renewal) (+3A).
+
+## 19:50Z: STEWARD3S ACCEPTED at eb5cf690a. TRAIN 40 = 9e792c1d5 (c1eb9aa3c + B76 306dc5705 [2 commits] + STEWARD3S eb5cf690a) ON THE BENCH; logs .tmp/train-40. Measure the [net] wait from `scripts/q log` after DONE (Architect drafts the port-range node if > 1 h). Then publish, remove .worktrees/B76 STEWARD3S + branches, end b76/steward3s implementers, save.sh. STEWARD3A (impl-2) then 3B/3C.
+
+## 21:15Z: STEWARD3Q opened (wp-STEWARD3Q from c1eb9aa3c; the per-account admission cap; lands before 3A). STEWARD3A-2 building (2a) the lease quota; its lease cases run on a scratch merge of 3Q. IN FLIGHT: STEWARD3A, STEWARD3Q. Train 40 (B76 + 3S) benching. Then 3B/3C.
+
+## PUBLISHED 22:10Z (10-16): train 40 on origin/main 6713d6ffa (B76 aio case order + bench --keep-failed; STEWARD3S ipd grant scope); 704 pass rc 0, ~5.5 h wall (host 04:42Z start). B76/STEWARD3S removed, implementers ended. IN FLIGHT: STEWARD3A (impl-2; lease quota 2a), STEWARD3Q (admission cap; lands before 3A). Then 3B/3C. save.sh at the next clean moment (3A worktree dirty while it works).
+
+## 22:30Z: B77 opened (wp-B77 from 6713d6ffa): q --ports leases replace --lock net. When B77 publishes: restart the q daemon (`scripts/q stop` then `setsid nohup scripts/q daemon`) at a train boundary with no member jobs running (q ls empty); the new daemon adopts running leases. IN FLIGHT: STEWARD3A (impl-2), STEWARD3Q, B77.
+
+## 01:05Z (10-17): REVIEWER ROTATION kernel-red-2 -> kernel-red-3 (handoff_from). B77 review reassigned to kernel-red-3. Reviewers now: steward-red-3 (userland/shell/rt/servers), kernel-red-3 (kernel/loader/bench/pool). Members: architect, steward-red-3, kernel-red-3, steward3a-implementer-2, steward3q-implementer, b77-implementer.
+
+## 01:40Z (10-17): B77 ACCEPTED at wp-B77 e7b765b91 on 6713d6ffa (Plan-Node: B77 / Gates: scripts/q-test (14 checks on a private daemon: disjoint ranges, held port skipped, full-pool wait, kill frees, restart adopts ports and cores) 0, make -j4 -f scripts/jobs.mk set CASES=<30 net cases> WIDTHS=rv64,rv32: old daemon (lock fallback) 60/60 in 4,892 s; new daemon, two makes side by side, 60/60 in 269 s 0, q run -- cargo test -p testbench (213 incl. leased_ports); make -f scripts/jobs.mk prebuilt; docs; no-cruft; cargo +nightly fmt --check 0 / Reviewed-by: kernel-red-3: Merge verdict: OK). TRAIN 41 = B77 (+ STEWARD3Q when accepted; 3A after). AFTER train 41 publishes: restart the q daemon from the root (`scripts/q stop`; `setsid nohup python3 scripts/q daemon`), it adopts running pins; until then --ports jobs fall back to lock=net.
+
+## 01:50Z (10-17): TRAIN 41 = 9590eab6c (6713d6ffa + B77 e7b765b91) ON THE BENCH; logs .tmp/train-41 (old daemon: --ports falls back to lock=net; expect the slow net tail one last time). Then publish, remove .worktrees/B77 + wp-B77, end b77-implementer, RESTART THE Q DAEMON (root: scripts/q stop; setsid nohup python3 scripts/q daemon; `q ls` shows adopted pins), save.sh.
+
+## 03:45Z (10-17): STEWARD3Q ACCEPTED at wp-STEWARD3Q 794449d21 on 6713d6ffa (Plan-Node: STEWARD3Q / Gates: host tests: walfsd 54+8, littlefsd 32+4 (+the_limits_fit_the_budget each); testbench the_servers_admit_what_a_manifest_lets_one_account_hold (the tree's largest derived sum = 6) 0, make -f scripts/jobs.mk prebuilt both widths (313, 0 failed); size-budget; docs; formatting 0, cases both widths: steward-three-contexts x3 (negative at in_flight 2 recorded), init-boot, image-disk, steward-home-quota, steward-context-cap/-idle/-labels/-login, walfsd-boot/-quota/-confined-labelled/-label-check/-one-volume, pipe-eight 0, beamlet-footprint (5,542/5,357 of 11,220), beamlet-compile-footprint (9,135/8,804), beamlet-files both widths after the entry move; 21 walfsd entries in 13 manifests at 1,280 0 / Reviewed-by: steward-red-3: Merge verdict: OK). TRAIN 42 = STEWARD3Q (+ STEWARD3A when accepted) after train 41 publishes + the q daemon restart. Tell steward3a-implementer-2 that 3Q is at 794449d21 (its lease cases run on a scratch merge of it).
+
+## 04:40Z (10-17): STEWARD3A reported f04dc870e; review (steward-red-3) + rebase onto 794449d21 (3Q) in parallel; the four lease cases must pass for real on that tree before acceptance. TRAIN 42 = 3Q 794449d21 then 3A (rebased). After 3A: 3B (powerbox) and 3C (crash blame) launch (both need 3A).
+
+## PUBLISHED 05:10Z (10-17): train 41 on origin/main e42f63193 (B77: net cases lease ports from q); 704 pass rc 0. B77 removed, implementer ended. Q DAEMON RESTARTED on the merged scripts/q (ports 23000-23999 pool; quiet last four); from here --lock net is gone from the recipe and net tails run in parallel. NEXT: train 42 = STEWARD3Q 794449d21 + STEWARD3A (rebased; four lease cases for real; review + renewal).
+
+## 05:50Z (10-17): STEWARD3A rotation 2 -> 3 (handoff_from). 2d831801b = code + folds complete on 794449d21; implementer-3 runs the gates (four lease cases for real) and reports; steward-red-3 renews by range-diff vs f04dc870e; then TRAIN 42 = 794449d21 (3Q) + 2d831801b (3A, ff on top). Then launch 3B, 3C (need 3A).
+
+## 06:20Z (10-17): STEWARD3A ACCEPTED at 2d831801b. TRAIN 42 = ced062648 (e42f63193 + STEWARD3Q 794449d21 + STEWARD3A 2d831801b) ON THE BENCH (first under the port-leasing daemon: measure its wall time); logs .tmp/train-42; stage .wash/qa/STEWARD3A-*.md with the plan commit. Then publish, remove .worktrees/STEWARD3Q STEWARD3A + branches, end steward3q-implementer and steward3a-implementer-3, save.sh. 3B + 3C launch now (need 3A: accepted).
+
+## 06:30Z (10-17): STEWARD3B + STEWARD3C launched (wp-STEWARD3B, wp-STEWARD3C from 2d831801b; they rebase onto main after train 42 publishes). 3Q/3A implementers ended. IN FLIGHT: 3B, 3C. After train 42: STEWARD3 step complete except 3B/3C; then STEWARD4 (owner's order) via the Architect.
+
+## 06:50Z (10-17): TRAIN 42 FAILED (711 pass; 28 min wall under the new daemon: B77 works): userland-boot both widths (AGT1 expectation of the agent carve line; sponsored agent prints none) + model-mutations (PolicySubAgentOutlivesAgent, PolicyNoContextCap not caught). All STEWARD3A. steward3a-fixer launched on wp-STEWARD3A-fix (2d831801b) to amend; steward-red-3 renews by diff; then reassemble train 42 = 794449d21 + the amended 3A. Logs .tmp/train-42/fail-*.
+
+## 07:45Z (10-17): B78 opened (wp-B78 from e42f63193) and STEWARD3X opened (wp-STEWARD3X from 15cea878a = 3C head). Stack: main e42f63193 < 3Q 794449d21 < 3A 2d831801b (amend pending) < 3C 15cea878a < 3X. 3B on 2d831801b. Train 42 reassembles with the amended 3A; later trains carry 3C, 3B, 3X, B78 after rebases.
+
+## 08:05Z (10-17): STEWARD3C at 09c209d7f (reviewed OK with notes, folded; holds). Order at the next trains: train 42 = 3Q + 3A-amended; then 3C (rebased onto 3A-amended) + B78; then 3B, 3X as they land.
+
+## 08:35Z (10-17): mdbook reinstalled on this host (cargo install mdbook --version 0.5.4 --force -> elasticlunr-rs 3.1.0); other hosts follow scripts/setup.sh once B78 lands. B78 ships: setup.sh (no --locked for mdbook, with the reason), ceiling 7,000,000 in doccheck, level 3 kept.
+
+## 09:20Z (10-17): B78 ACCEPTED at wp-B78 77269612df on e42f63193 (Plan-Node: B78 / Gates: q run -- cargo testbench docs (index 6,093,217 B on the reinstalled mdbook; ceiling 7,000,000; no mdbook WARN); hand search of R41, budget_pages, walfsd at their anchors 0, q run -- cargo test -p redoubt-doccheck (rules 23 incl. search_index_within + elasticlunr_version; docs 2; fixture fails at ceiling 1,000 naming big/mid/small) 0, cargo +nightly fmt --check; git diff --check; bash -n scripts/setup.sh; doccheck binary clean 0 / Reviewed-by: kernel-red-3: Merge verdict: OK). Rides train 42 with 3Q + 3A-amended (it is on main; the docs case needs the reinstalled host: done). NOTE: any other host must reinstall mdbook per setup.sh after B78 lands.
+
+## 10:15Z (10-17): STEWARD3A re-accepted at e825c2defa. TRAIN 42 (reassembled) = 3976bf148 (e42f63193 + STEWARD3Q 794449d21 + STEWARD3A e825c2defa + B78 77269612df) ON THE BENCH; logs .tmp/train-42b. Then publish (stage .wash/qa/STEWARD3A-*.md), remove .worktrees/STEWARD3Q STEWARD3A STEWARD3A-fix B78 + branches wp-STEWARD3Q wp-STEWARD3A wp-STEWARD3A-fix wp-B78, end b78-implementer, save.sh. 3C rebasing onto e825c2defa; 3B, 3X building.
+
+## PUBLISHED 11:10Z (10-17): train 42 on origin/main 6af2d6020 (STEWARD3Q admission cap; STEWARD3A leases and agents; B78 search index headroom); 714 pass rc 0, 32 min wall. Worktrees STEWARD3Q/3A/3A-fix/B78 + branches removed; b78 implementer ended. NEXT: train 43 = STEWARD3C e562a2879 (on e825c2defa: fast-forwards onto main) once renewed, + STEWARD3X/3B as they land. save.sh deferred (3X worktree dirty).
+
+## 11:40Z (10-17): STEWARD3C ACCEPTED at wp-STEWARD3C e562a2879 on e825c2defa (= main 6af2d6020 content; ff) (Plan-Node: STEWARD3C / QA: STEWARD3C-shared-restart / Gates: host tests: steward server 2+4+30, init 21+1+66 (+3 blame.rs: the timeout, Told/Lost/Gone/Refused), the lockout host test (three blames: sessions and leases destroyed, login locked out, vault arm, window) 0, make -f scripts/jobs.mk prebuilt (329/318); steward-blame-lockout both widths (11.0/10.0 s: one blame attributed on the machine) 0, cases: init-restart, walfsd-power-loss, steward-restart, steward-session-ends, steward-lease-ends; elixir-oracles (no untaken row); steward-model-host-tests 0, docs; size-budget (servers/steward 1785, servers/init 2702 with reasons); unsafe-budget; formatting 0 / Reviewed-by: steward-red-3: Merge verdict: OK). TRAIN 43 = 3C (+ 3X/3B when accepted). STEWARD3X is based on 3C's OLD head 15cea878a: it must rebase onto e562a2879 (3C final) before its train.
+
+## 11:50Z (10-17): TRAIN 43 = 6af2d6020 + STEWARD3C e562a2879 ON THE BENCH; logs .tmp/train-43 (stage .wash/qa/STEWARD3C-shared-restart.md with the plan commit). Then publish, remove .worktrees/STEWARD3C + wp-STEWARD3C, end steward3c-implementer. Remaining: 3B (powerbox), 3X (restart gap). Then STEWARD3 done -> STEWARD4 brief from the Architect.
+
+## PUBLISHED 12:40Z (10-17): train 43 on origin/main 377d1770a (STEWARD3C crash blame); 716 pass rc 0, 28 min. 3C worktree+branch removed, implementer ended. IN FLIGHT: STEWARD3B (powerbox), STEWARD3X (restart gap; rebase onto main 377d1770a before its train: 3C is on main now). Then STEWARD3 done; ask the Architect for STEWARD4 (owner order). save.sh deferred (3X dirty).
+
+## 15:30Z (10-17): STEWARD3Y drafted (needs 3X; steward-red-3 despite the body saying -2): end batch replies after DestroyBudget, disconnects deferred and bounded. Launch after 3X is accepted.
+
+## 15:45Z (10-17): STEWARD3B in review (steward-red-3) while rebasing onto 377d1770a; it drops heading-split-level 2 (B78 on main) and keeps wire op 18 (3X renumbers to 19/20/21). Train 44 = 3B (+3X). After 3X: STEWARD3Y (deferred disconnects). Then STEWARD3 step done -> STEWARD4 brief.
+
+## 16:05Z (10-17): REVIEWER ROTATION steward-red-3 -> steward-red-4 (handoff_from). Reviewers: steward-red-4, kernel-red-3. STEWARD3B review reassigned to steward-red-4 (content on 9ddfa0a45; renewal after the rebase onto 377d1770a).
+
+## 17:20Z (10-17): STEWARD3B ACCEPTED at wp-STEWARD3B 3d51c0982 on 377d1770a (QA: STEWARD3B-channel; stage .wash/qa/STEWARD3B-channel.md). TRAIN 44 = 377d1770a + 3B 3d51c0982 ON THE BENCH; logs .tmp/train-44 (the merge message amended for the QA trailer after the bench started: same tree; the head to ff is `git -C .worktrees/train-20 rev-parse HEAD` at publish, not bd1408db2). Then publish, remove .worktrees/STEWARD3B + wp-STEWARD3B, end steward3b-implementer. Remaining: STEWARD3X (then 3Y).
+
+## 18:00Z (10-17): train 44 first bench void (amend during prebuilt -> "tree changed"); TRAIN 44 rerun = fea3cfc42 ON THE BENCH, logs .tmp/train-44b. Never touch git in train-20 after the runner starts.
+
+## Train 44b (STEWARD3B) red, 19:27Z
+Train 44c started: head 76d60b116 = 377d1770a + 5d289d0c2 (fold: init-boot 6 keys); .tmp/train-44c.
+init-boot both widths: 3B's manifest adds two approval keys; init prints "6 keys", tests/init-boot.toml:18 said 4.
+Fold sent to steward3b-implementer (amend, gate init-boot both widths). Next: re-merge on 377d1770a as train 44c
+(.tmp/train-44c), whole bench. Lesson: a manifest change (keys, badges, servers) must gate init-boot; add it to
+every steward/init package's gate list. STEWARD3X: OK with notes at 5dd079803 (frozen); P2 lease-rebind refusal
+folds at the rebase onto main after 44 publishes; STEWARD3Y body rev 343 updated by the Architect.
+
+## Train 44 published, ~20:00Z
+Train 44c green 722/722; main 76d60b116 (STEWARD3B 5d289d0c2), plan commit 612204b9e pushed; wp-STEWARD3B pushed,
+worktree and local branch removed; steward3b-implementer ended. save.sh deferred (3X worktree dirty mid-rebase).
+STEWARD3X: rebasing onto 76d60b116 with folds (lease-badge rebind refused + host test; docs rerun; init-boot gated,
+6 keys). Then renewal by steward-red-4 (range-diff from 5dd079803), train 45 (.tmp/train-45 from 44c's run.sh),
+then launch STEWARD3Y (body rev 343; steward-red-4), then the Architect's STEWARD4 brief. Check .wash/local for
+owner files first.
+
+## Train 45 started (STEWARD3X)
+Head 89d012e8a = 76d60b116 + STEWARD3X 86aa77767 (renewal OK, steward-red-4); .tmp/train-45. On green: ff main,
+plan commit (stage .wash/qa/STEWARD3X-rebind.md), push main + wp-STEWARD3X, remove .worktrees/STEWARD3X and the
+branch, end steward3x-implementer, save.sh. Then launch STEWARD3Y (body rev 343; needs 3X on main; steward-red-4),
+then the Architect's STEWARD4 brief.
+STEWARD4 brief refreshed: .wash/local/STEWARD4-implementer-2026-10-16.md (Architect; size L, Tier A, reviewer
+steward-red-2 named -> use steward-red-4; no owner decision needed; next free opcode 22). Plan: after train 45
+publishes, launch STEWARD3Y (small, drive.rs) AND STEWARD4 from the new main (override: needs STEWARD3; the owner
+wants parallel work); STEWARD4 rebases onto 3Y when 3Y lands (hotspot drive.rs/Machine). Update STEWARD4's node
+body to point at the new brief in the next plan_set batch (file under .wash/local).

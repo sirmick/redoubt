@@ -1,9 +1,12 @@
 # AGT3: compiling on the box, proven in a boot
 
 Branch wp-AGT3, worktree /home/mcloonan/redoubt/.worktrees/AGT3.
-Base 326b6dca1 (scratch merge of AGT4 9dfc1c743 + AGT1 0771a430f). Head **df6003eec**, one commit
-(amended from 2f7c2b4ca with the review's two folds: beamlet.md's status token, the 11,265 wording;
-docs PASS rc=0 again). Holding for train 37; rebase onto main when told.
+Head **66c36d3bb**: the one commit (df6003eec's content, which amended 2f7c2b4ca with the
+review's two folds: beamlet.md's status token, the 11,265 wording) rebased onto AGT4's final head
+c90196606, itself on main 0b487325b (train 36). First developed on base 326b6dca1 (scratch merge
+of AGT4 9dfc1c743 + AGT1 0771a430f). Content-only rebase; after it: prebuilt rc=0, `set
+CASES=shell-compile WIDTHS=rv64,rv32` rc=0 (PASS rv64 10.3 s, PASS rv32 9.5 s), docs PASS rc=0.
+Train 37 = AGT4 + AGT3.
 
 ## Delivered
 
