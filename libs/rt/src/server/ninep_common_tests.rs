@@ -453,7 +453,7 @@ fn an_account_0_rooted_chain_holds_one_bucket() {
     let root = (0usize, t.server.fs.qid(0));
     let mut last = daemon.badge;
     let mut made = 0;
-    while let Ok((_, _, badge)) = t.server.mint_rooted(&through(&daemon, last), root, &mut k) {
+    while let Ok((_, _, badge)) = t.server.mint_rooted(&through(&daemon, last), root, None, &mut k) {
         (last, made) = (badge, made + 1);
     }
     assert_eq!(made, 8, "the chain holds one bucket's 8 connections");
@@ -549,7 +549,7 @@ fn a_rooted_mint_is_an_ordinary_connection_rooted_where_the_server_says() {
     t.attach(&a, 0, "");
     // The file server picks the root: `a/b` (node 2), whatever the caller's own root is.
     let root = (2usize, t.server.fs.qid(2));
-    let (handle, id, badge) = t.server.mint_rooted(&a, root, &mut k).unwrap();
+    let (handle, id, badge) = t.server.mint_rooted(&a, root, None, &mut k).unwrap();
     assert_eq!(handle, h(99 + k.minted.len() as u32));
     assert!(badge >= FIRST_MINTED_BADGE);
     assert_eq!(t.server.connections(), 1);
@@ -565,7 +565,7 @@ fn a_rooted_mint_is_an_ordinary_connection_rooted_where_the_server_says() {
         "no such connection"
     );
     // `unmint` undoes one whose reply was not delivered, admission and all.
-    let (_, _, badge) = t.server.mint_rooted(&a, root, &mut k).unwrap();
+    let (_, _, badge) = t.server.mint_rooted(&a, root, None, &mut k).unwrap();
     t.server.unmint(badge);
     assert_eq!(t.server.connections(), 0);
     assert_eq!(t.server.admission().held(AdmitKey::of(&a), Resource::State), 0);
@@ -578,7 +578,7 @@ fn a_rooted_mint_is_admitted() {
     let a = alice();
     let root = (0usize, t.server.fs.qid(0));
     let mut made = 0;
-    while t.server.mint_rooted(&a, root, &mut k).is_ok() {
+    while t.server.mint_rooted(&a, root, None, &mut k).is_ok() {
         made += 1;
         assert!(made <= 8, "the state cap binds");
     }

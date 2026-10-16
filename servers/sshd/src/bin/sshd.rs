@@ -410,12 +410,12 @@ mod machine {
                 name = format!("{name}.{context}");
             }
             // Two connections to the channel: the steward's, and its context's relay's.
-            let made = self.nine.mint_rooted(&me(), (File, qid()), &mut Own(self.endpoint));
+            let made = self.nine.mint_rooted(&me(), (File, qid()), None, &mut Own(self.endpoint));
             let Ok((console, _, badge)) = made else {
                 self.say(&format!("sshd: login {name}: no console\n"));
                 return Err(Refused);
             };
-            let made = self.nine.mint_rooted(&me(), (File, qid()), &mut Own(self.endpoint));
+            let made = self.nine.mint_rooted(&me(), (File, qid()), None, &mut Own(self.endpoint));
             let Ok((relay, _, relay_badge)) = made else {
                 let _ = close(console);
                 self.nine.unmint(badge);

@@ -871,23 +871,25 @@ impl<S: FileServer> NineServer<S> {
     /// the caller walked: `ipd`'s typed `grant`, whose root carries a scope no wider than the
     /// caller's (servers/ipd.md R61). It is minted exactly as `new_connection` mints one, in the
     /// same table: admission first, then a badge above 2^63 and a random id, the file server's
-    /// [`FileServer::minted`] hook (with no quota), then the handle, so `disconnect` frees it like
-    /// any other. Returns (handle, id, badge). The caller replies with the handle and, unless the
-    /// reply was delivered with it installed, undoes the connection with [`NineServer::unmint`]
-    /// (servers/serving.md, "Replies and rollback"). Deciding that `root` is no wider than the
-    /// caller's own is the file server's, and so is deciding that the caller may mint at all:
-    /// unlike `new_connection`, this does not attach the caller's own root or check its labels
+    /// [`FileServer::minted`] hook (with no quota), then the handle, stamped with `scope` where
+    /// the request brought one (servers/steward.md R41), so `disconnect` frees it like any other
+    /// and the scope's end ends it. Returns (handle, id, badge). The caller replies with the handle and,
+    /// unless the reply was delivered with it installed, undoes the connection with
+    /// [`NineServer::unmint`] (servers/serving.md, "Replies and rollback"). Deciding that `root` is no
+    /// wider than the caller's own is the file server's, and so is deciding that the caller may mint at
+    /// all: unlike `new_connection`, this does not attach the caller's own root or check its labels
     /// first, so the file server calls it only for a caller it has authorised (`ipd` refuses
     /// labelled callers and checks the caller's scope before it mints).
     pub fn mint_rooted(
         &mut self,
         caller: &Caller,
         root: (S::Node, Qid),
+        scope: Option<Handle>,
         kernel: &mut impl Minter,
     ) -> Result<(Handle, u64, u64), NineError> {
         let (client, share) = self.charge_of(caller);
         self.admission.admit(client, share, Resource::State).map_err(|_| NineError::TOO_MANY)?;
-        let made = self.mint_at(caller, root, 0, None, kernel, share);
+        let made = self.mint_at(caller, root, 0, scope, kernel, share);
         if made.is_err() {
             self.admission.release(client, share, Resource::State);
         }

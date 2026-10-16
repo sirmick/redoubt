@@ -447,8 +447,9 @@ that fails. The skeleton learns nothing of a scope's destruction: the connection
 fids and admission stay until its `disconnect`, which is the cleanup and never the cutoff.
 `disconnect(id)` frees the connection and everything minted under it: their fids are clunked,
 their admission released, and the file server told (`disconnected`). `mint_rooted` mints a
-connection at a root the file server chose, in the same table, for a typed `grant` whose scope the
-server has already checked ([ipd](ipd.md)).
+connection at a root the file server chose, in the same table and in the revocation scope the
+grant brought, if any, for a typed `grant` whose scope the server has already checked
+([ipd](ipd.md#scopes-and-grants)).
 
 **Waiting.** A read whose answer is not there yet (`Read::Wait`) or a write that cannot be taken
 yet (`Write::Wait`) is not answered: `serve_parking` hands the request back with its T-message

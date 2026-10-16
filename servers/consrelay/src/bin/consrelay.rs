@@ -526,7 +526,7 @@ pub fn serve(startup: &Startup) -> u32 {
     let Ok(random) = redoubt_rt::handle::random_u64() else { return NO_START };
     let Ok(mut server) = NineServer::new(relay, LIMITS, random) else { return NO_START };
     server.requests_wait(FOREVER);
-    let Ok((vm, _, _)) = server.mint_rooted(&me(), (File, qid()), &mut Own(&endpoint)) else {
+    let Ok((vm, _, _)) = server.mint_rooted(&me(), (File, qid()), None, &mut Own(&endpoint)) else {
         return NO_START;
     };
     let mut words = [0; 4];

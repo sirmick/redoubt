@@ -19,15 +19,16 @@ use redoubt_rt::wire::MSIZE;
 use redoubt_rt::wire::ninep::{Body, Message, NOFID, Names, stats};
 use redoubt_rt::wire::proto::{ipd, net_ctl, ninep_common};
 
-/// The kernel's part in minting, for host tests.
+/// The kernel's part in minting, for host tests: each mint's badge and the scope it was
+/// stamped with.
 struct FakeKernel {
-    minted: Vec<u64>,
+    minted: Vec<(u64, Option<Handle>)>,
     rng: u64,
 }
 
 impl Minter for FakeKernel {
-    fn mint(&mut self, badge: NonZeroU64, _scope: Option<Handle>) -> Result<Handle, Error> {
-        self.minted.push(badge.get());
+    fn mint(&mut self, badge: NonZeroU64, scope: Option<Handle>) -> Result<Handle, Error> {
+        self.minted.push((badge.get(), scope));
         Ok(Handle::new(99 + self.minted.len() as u32).unwrap())
     }
 
@@ -334,7 +335,7 @@ fn new_connection(w: &mut World, who: &Caller, root: &str, k: &mut FakeKernel) -
         .unwrap();
     let outcome = w.nine.answer_common(who, &words, &Handles::new(), &mut lend, k);
     match ninep_common::Reply::decode(2, &outcome.words, &lend, outcome.send.as_slice().len()).unwrap() {
-        Ok(ninep_common::Reply::NewConnection(r)) => Ok((r.id, *k.minted.last().unwrap())),
+        Ok(ninep_common::Reply::NewConnection(r)) => Ok((r.id, k.minted.last().unwrap().0)),
         Ok(_) => panic!(),
         Err(code) => Err(code.code()),
     }
@@ -367,6 +368,42 @@ fn grant_raw(w: &mut World, who: &Caller, bytes: &[u8], k: &mut FakeKernel) -> R
         Ok(_) => panic!(),
         Err(code) => Err(code.code()),
     }
+}
+
+/// A `grant` that brings a revocation scope (servers/steward.md R41) is minted stamped with it,
+/// and the scope is closed with the reply, after `ipd`'s copy of the minted handle; one that
+/// brings none is minted as `ipd`'s own. Which scopes the kernel admits is the kernel's
+/// (tests/program.rs, against the fake kernel).
+#[test]
+fn a_grant_is_minted_in_the_revocation_scope_it_brings() {
+    let mut w = World::new(64);
+    let mut k = kernel();
+    let root = caller(ANY, 0, &[]);
+    let narrow = connect_scope(ip(10, 1, 9, 0), 24, 7, 7).encode();
+    let revocation = Handle::new(7).unwrap();
+    let mut lend = vec![0u8; 512];
+    let words = ipd::Message::Grant(ipd::Grant { scope: &narrow }).encode(&mut lend).unwrap();
+    let brought = Handles::from_slice(&[revocation]).unwrap();
+    let (outcome, minted) = answer_grant(&mut w.nine, &root, &words, &brought, &mut lend, &mut k);
+    assert!(minted.is_some());
+    let conn = outcome.send.as_slice()[0];
+    assert_eq!(k.minted.last().unwrap().1, Some(revocation), "stamped with the scope");
+    assert_eq!(outcome.close.as_slice(), &[revocation, conn], "the scope and ipd's copy close");
+    assert!(matches!(ipd::Reply::decode(16, &outcome.words, &lend, 1), Ok(Ok(ipd::Reply::Grant(_)))));
+    // Without one, the mint is stamped as `ipd`'s own, and only `ipd`'s copy closes.
+    let words = ipd::Message::Grant(ipd::Grant { scope: &narrow }).encode(&mut lend).unwrap();
+    let (outcome, _) = answer_grant(&mut w.nine, &root, &words, &Handles::new(), &mut lend, &mut k);
+    assert_eq!(k.minted.last().unwrap().1, None);
+    assert_eq!(outcome.close.as_slice().len(), 1);
+    // A refused grant closes what it brought and mints nothing.
+    let wide = anywhere().encode();
+    let words = ipd::Message::Grant(ipd::Grant { scope: &wide }).encode(&mut lend).unwrap();
+    let before = k.minted.len();
+    let narrow_root = caller(NARROW, 0, &[]);
+    let (outcome, minted) = answer_grant(&mut w.nine, &narrow_root, &words, &brought, &mut lend, &mut k);
+    assert!(minted.is_none());
+    assert_eq!(k.minted.len(), before);
+    assert_eq!(outcome.close.as_slice(), &[revocation]);
 }
 
 /// `new_connection` keeps the caller's scope, and is rooted at `""` or `"tcp"` only.

@@ -14,7 +14,7 @@ defmodule Redoubt.Wire.Proto.Ipd do
   # opcode => {name, shape, handle slots, slots that may be empty}; replies are keyed by
   # their request's opcode.
   @requests %{
-    16 => {:grant, :buffer, 0, 0},
+    16 => {:grant, :buffer, 1, 1},
     17 => {:frame, :buffer, 0, 0}
   }
   @replies %{
@@ -35,9 +35,10 @@ defmodule Redoubt.Wire.Proto.Ipd do
   Handle kinds, from the table: documentation, checked by use (a handle of the wrong kind
   gets `WrongObject` on first use).
 
+  - `grant`: `revocation` (slot 0, budget, optional)
   - `grant` reply: `conn` (slot 0, endpoint)
   """
-  def layout(:grant), do: {16, :buffer, [{:scope, :bytes}], [], {[{:id, :u64}], [:conn]}}
+  def layout(:grant), do: {16, :buffer, [{:scope, :bytes}], [:revocation], {[{:id, :u64}], [:conn]}}
   def layout(:frame), do: {17, :buffer, [{:frame, :bytes}], [], {[], []}}
   def layout(_), do: nil
 

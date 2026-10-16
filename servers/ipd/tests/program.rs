@@ -18,9 +18,9 @@ use std::time::{Duration, Instant};
 
 use redoubt_fake_kernel::fake;
 use redoubt_ipd::scope::{Ports, Prefix, Rule, Scope};
-use redoubt_rt::abi::{FOREVER, Handle, Handles};
+use redoubt_rt::abi::{BudgetSpec, Error, FOREVER, Handle, Handles, Labels};
 use redoubt_rt::client::{ClientError, Connection, Lend};
-use redoubt_rt::handle::Endpoint;
+use redoubt_rt::handle::{Budget, Endpoint};
 use redoubt_rt::ipc::{Buffer, Event};
 use redoubt_rt::server::ninep::mode;
 use redoubt_rt::server::typed::{Outcome, finish};
@@ -424,6 +424,123 @@ fn grant_mints_a_narrower_connection() {
         assert_eq!(ipd::Reply::decode(16, &reply.words, &[], 0), Ok(Err(ipd::ErrorCode::NotPermitted)));
     });
     assert_eq!(net.shut_down(), redoubt_rt::exit::OK);
+}
+
+/// `grant`'s revocation scope (servers/steward.md R41), the twin of the rt test for
+/// `new_connection`'s: a connection granted in scope S dies with S in every table, the
+/// principal's handle and the steward's copy alike, with no word to `ipd`; its sibling in T
+/// serves; a scope not below `ipd`'s own stamp is refused and mints nothing; `ipd` keeps neither
+/// the scopes nor its copies of the handles; and the steward's `disconnect` frees S's record once.
+#[test]
+fn a_granted_connection_in_a_scope_ends_when_the_scope_is_destroyed() {
+    let net = boot(6);
+    // One echo listener per connection made below: each takes one.
+    for _ in 0..3 {
+        net.peer.lock().unwrap().echo_on(7);
+    }
+    let f = fake();
+    // The budget `ipd`'s connections are stamped with: for a shared server, `users`.
+    let users = f.budget(net.ipd);
+    f.runs_in(net.ipd, users);
+    let (steward, conn) = net.client(0, &[], ANY);
+    let users_at_steward = f.copy(net.ipd, users, steward);
+    let elsewhere = f.budget(steward);
+    let held_before = f.held(net.ipd).0;
+    let grant = |scope: Handle| -> Result<(Handle, u64), ipd::ErrorCode> {
+        let narrow = Scope::new(&[Rule::Connect(
+            Prefix::new(u32::from_be_bytes(PEER_ADDR), 32).unwrap(),
+            Ports::new(7, 7).unwrap(),
+        )])
+        .unwrap()
+        .encode();
+        let mut page = Buffer::new(1).unwrap();
+        let words = ipd::Message::Grant(ipd::Grant { scope: &narrow }).encode(&mut page).unwrap();
+        let ep = Endpoint::from_handle(conn);
+        let (reply, page) = ep.call(&words, &[scope], Some(page), 1_000_000).into_result().unwrap();
+        let got = reply.handles.as_slice();
+        match ipd::Reply::decode(16, &reply.words, &page.unwrap(), got.len()) {
+            Ok(Ok(ipd::Reply::Grant(g))) => Ok((got[0].unwrap(), g.id)),
+            Ok(Err(code)) => Err(code),
+            other => panic!("no grant: {other:?}"),
+        }
+    };
+    let (in_s, id_s, in_t, id_t, scope_s) = f.as_process(steward, || {
+        let users = Budget::from_handle(users_at_steward);
+        let (s, t) = (users.create_child(&scope_spec()).unwrap(), users.create_child(&scope_spec()).unwrap());
+        // A scope that is not below `ipd`'s stamp: the kernel refuses the mint, `ipd` answers
+        // `not_permitted`, and nothing was made.
+        assert_eq!(grant(elsewhere).err(), Some(ipd::ErrorCode::NotPermitted));
+        let (in_s, id_s) = grant(s.handle()).unwrap();
+        let (in_t, id_t) = grant(t.handle()).unwrap();
+        // One more request, answered after `ipd` has finished the grants: it closes its copy of
+        // a minted handle, and the scope that stamped it, after the reply that carried it.
+        let c = Connection::new(Endpoint::from_handle(conn));
+        let mut lend = Lend::new(1).unwrap();
+        c.attach(&mut lend, 90, "").unwrap();
+        c.clunk(&mut lend, 90).unwrap();
+        (in_s, id_s, in_t, id_t, s.handle())
+    });
+    assert_eq!(f.held(net.ipd).0, held_before, "ipd kept nothing of the grants");
+    let (child_s, child_t) = (f.process(1, &[]), f.process(1, &[]));
+    let handle_s = f.copy(steward, in_s, child_s);
+    let handle_t = f.copy(steward, in_t, child_t);
+    // A socket connected to the peer and closed, every fid clunked after.
+    let connects = |pid: usize, handle: Handle| {
+        f.as_process(pid, || {
+            let c = Connection::new(Endpoint::from_handle(handle));
+            let mut lend = Lend::new(4).unwrap();
+            socket(&c, &mut lend);
+            connect(&c, &mut lend, PEER_ADDR, 7).unwrap();
+            let mut status = [0u8; 8];
+            c.read(&mut lend, 2, 0, &mut status).unwrap();
+            assert_eq!(status[0], 2, "established");
+            c.write(&mut lend, 2, 0, &op(net_ctl::Message::Close(net_ctl::Close {}))).unwrap();
+            for fid in [0, 2, 3] {
+                c.clunk(&mut lend, fid).unwrap();
+            }
+        })
+    };
+    let attach = |pid: usize, handle: Handle| {
+        f.as_process(pid, || {
+            let c = Connection::new(Endpoint::from_handle(handle));
+            let mut lend = Lend::new(1).unwrap();
+            c.attach(&mut lend, 0, "").and_then(|_| c.clunk(&mut lend, 0))
+        })
+    };
+    connects(child_s, handle_s);
+    connects(child_t, handle_t);
+
+    // The scope goes: the connection in it is gone from the child's table and the steward's,
+    // with no word to `ipd`; the sibling still serves.
+    f.as_process(steward, || Budget::from_handle(scope_s).destroy().unwrap());
+    assert_eq!(attach(child_s, handle_s), Err(ClientError::Sys(Error::BadHandle)));
+    assert_eq!(f.held(child_s).0, 0, "the child's only handle is gone");
+    assert_eq!(attach(steward, in_s), Err(ClientError::Sys(Error::BadHandle)), "the steward's copy too");
+    attach(steward, in_t).unwrap();
+    connects(child_t, handle_t);
+
+    // `ipd` still holds the dead connection's record: the steward's `disconnect` frees it, by
+    // the id, once.
+    f.as_process(steward, || {
+        let c = Connection::new(Endpoint::from_handle(conn));
+        c.disconnect(id_s, FOREVER).unwrap();
+        assert_eq!(c.disconnect(id_s, FOREVER), Err(ClientError::Remote), "freed once");
+        c.disconnect(id_t, FOREVER).unwrap();
+    });
+    wait_until("ipd to hold no call", || f.open_calls(net.ipd) == 0);
+    assert_eq!(net.shut_down(), redoubt_rt::exit::OK);
+}
+
+/// A revocation scope: a zero-limit child budget (servers/steward.md R41).
+fn scope_spec() -> BudgetSpec {
+    BudgetSpec {
+        pages: 0,
+        processes: 0,
+        weight: 0,
+        labels: Labels::from_slice(&[]).unwrap(),
+        account: 0,
+        deadline: FOREVER,
+    }
 }
 
 /// A parked read whose caller gives up is answered at once (its open call and admission freed),
