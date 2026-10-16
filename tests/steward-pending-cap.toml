@@ -63,12 +63,12 @@ steps = [
     { expect = '\{:mine, \{:ok, %\{request: [0-9]+\}\}\}' },
     { expect = '\([0-9]+\)> ' },
     # The session ends itself through the steward (a closed channel alone would leave the
-    # context detached, its requests pending): the steward drops its request before it destroys
-    # the budget, and ends the channel, so ssh exits clean.
-    # A marker printed first, so the line was read before the input is closed (a close first
-    # would detach the context instead, its request pending); the steward then ends the session
-    # and the channel, and ssh exits clean.
-    { send = "IO.puts(\"bye\"); Process.sleep(1000); Redoubt.Wire.Client.Steward.end_session(c)\n" },
+    # context detached, its request pending): the steward drops its request before it destroys
+    # the budget, and ends the channel, so ssh exits clean. A marker printed first, so the whole
+    # line was read before the exit step closes the input, and end_session right behind it: the
+    # close reaches the steward as sshd's channel_closed tens of milliseconds later (the network,
+    # ssh's EOF, sshd's call), and a detach first would end the channel with the request pending.
+    { send = "IO.puts(\"bye\"); Redoubt.Wire.Client.Steward.end_session(c)\n" },
     { expect = '^bye$' },
     { exit = 0 },
     { mark = "alice-gone" },

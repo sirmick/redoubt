@@ -20,6 +20,15 @@
 //! | 5 | the system volume's `erofsd` | handle `erofsd:system`, named by `endpoint=` | the same |
 //!
 //! A slot bound to nothing makes no call and gives the child no entry, so its path is `:enoent`.
+//!
+//! **Cleanup at the loop's turn** (servers/steward.md, "Failure and restart"): an end batch is
+//! answered once `DestroyBudget` has run, the cutoff; each connection it gave back is a step in
+//! the library's queue (`redoubt_steward_server::cleanup`), and the loop runs the steps due at
+//! its top, before it receives again, each within [`CLEANUP_US`]: a `disconnect` by id at the
+//! server that minted it, or `ended` on `sshd`'s channel console. A step a busy or recovering
+//! server does not take in time ends the turn (the rest stay due for the next, after one
+//! receive), is retried at a later turn and dropped after the cap with a line; the loop never
+//! waits more than one such bound on a server while it serves nobody.
 
 #![cfg_attr(target_os = "none", no_std, no_main)]
 
@@ -35,7 +44,6 @@ mod machine {
     use core::sync::atomic::{AtomicU32, Ordering};
 
     use redoubt_client::file::Connection;
-    use redoubt_client::grants::RELEASE_TIMEOUT;
     use redoubt_client::launch::Launch;
     use redoubt_client::typed;
     use redoubt_rt::abi::{BudgetSpec, Error, FOREVER, Handle, MAX_LEND_PAGES};
@@ -52,6 +60,7 @@ mod machine {
     use redoubt_steward::event::EventKind;
     use redoubt_steward::inspect;
     use redoubt_steward_server::approval::{Line, Lines, parse};
+    use redoubt_steward_server::cleanup::TRIES;
     use redoubt_steward_server::own::{
         Bound, Child, How, IPD, Own, SYSTEM, binding, lease_args, session_args,
     };
@@ -138,6 +147,11 @@ mod machine {
     /// How long a `lease_ended` send waits for the session's VM to take it (µs): past it the
     /// notice is dropped, and the steward is never held by a session that does not read.
     const NOTICE_US: u64 = 100_000;
+    /// How long a cleanup step waits for its server to take the call (µs): the steward's own
+    /// send bound, [`NOTICE_US`], never the client library's call timeout (`RELEASE_TIMEOUT`, a
+    /// second). A server busy or recovering past it is retried at a later turn
+    /// (`redoubt_steward_server::cleanup`).
+    const CLEANUP_US: u64 = NOTICE_US;
     /// Open approval channels at most, and so reader threads at most (servers/steward.md, "The
     /// powerbox and approvals"): the steward's bound on its own threads beside the watchers,
     /// declared as theirs is. An open past it is refused, and the person's `ssh approve@box`
@@ -692,37 +706,78 @@ mod machine {
             }
         }
 
-        /// Gives the connection held under `key` back: the server is told to free what it held
-        /// for it (`disconnect` by its id, or `ended` for `sshd`'s channel console: servers/
-        /// steward.md, "Authentication and sessions"), and the steward's own copy, if it still
-        /// has one, is closed. The cleanup after a scope's end, never the cutoff (R41).
+        /// The steward's own copy of a connection minted in the owner's scope goes now: the
+        /// scope's end frees its index for the next handle installed ([`Held`]), and the server
+        /// is told at the loop's turn ([`Machine::clean`]). A copy the steward itself still uses
+        /// (`sshd`'s channel console, a relay's control connection, a notices send right) is none
+        /// of the scope's, and stays until its step is done.
         fn release(&mut self, key: u64) {
-            let Some(Held { handle, via, console }) = self.held.remove(&key) else { return };
-            if let (true, Some(handle)) = (console, handle) {
-                if let Ok(ended) = consol::Message::Ended(consol::Ended {}).encode(&mut []) {
-                    let _ = Endpoint::from_handle(handle).send(&ended, &[], None, RELEASE_TIMEOUT);
+            if let Some(Held { handle, via: Some(_), .. }) = self.held.get_mut(&key) {
+                if let Some(handle) = handle.take() {
+                    let _ = close(handle);
                 }
             }
-            if let Some((via, id)) = via {
-                let through = match via {
-                    Via::Server(name) => self.unattached(&name).ok(),
-                    Via::Carved(key) => {
-                        self.carved.get(&key).map(|(h, _)| Nine::new(Endpoint::from_handle(*h)))
-                    }
-                    Via::Console => {
-                        if let Some(cons) = &self.consoled {
-                            let _ = cons.disconnect(id, RELEASE_TIMEOUT);
+        }
+
+        /// Gives the connection held under `key` back to its server within [`CLEANUP_US`]:
+        /// `ended` for `sshd`'s channel console (servers/steward.md, "Authentication and
+        /// sessions"), else `disconnect` by its id through what minted it. A server that did not
+        /// take the call in time is `Timeout`, and the record stays for the retry; on the last
+        /// attempt it goes anyway, with a line (the server's admission for the connection is
+        /// then freed by its own restart). A connection at a server that restarted since has
+        /// no record here ([`Machine::reconnected`]), and a server the steward no longer
+        /// reaches nothing to tell: both are done. The cleanup after a scope's end, never the
+        /// cutoff (R41).
+        fn clean(&mut self, key: u64, last: bool) -> Result<(), Error> {
+            let Some(held) = self.held.get(&key) else { return Ok(()) };
+            let (told, what) = match (held.console, held.handle, &held.via) {
+                (true, Some(handle), _) => {
+                    let ended = consol::Message::Ended(consol::Ended {})
+                        .encode(&mut [])
+                        .map_err(|_| Error::InvalidArgument)
+                        .and_then(|m| {
+                            Endpoint::from_handle(handle).send(&m, &[], None, CLEANUP_US).map_err(|(e, _)| e)
+                        });
+                    (ended, String::from("ended to sshd's channel"))
+                }
+                (_, _, Some((via, id))) => {
+                    let (told, at) = match via {
+                        Via::Server(name) => {
+                            (self.unattached(name).ok().map(|n| disconnect(&n, *id)), name.as_str())
                         }
-                        None
-                    }
-                };
-                if let Some(through) = through {
-                    let _ = through.disconnect(id, RELEASE_TIMEOUT);
+                        Via::Carved(k) => {
+                            let kept = self.carved.get(k);
+                            (
+                                kept.map(|(h, _)| disconnect(&Nine::new(Endpoint::from_handle(*h)), *id)),
+                                kept.map_or(k.as_str(), |(_, s)| s.as_str()),
+                            )
+                        }
+                        Via::Console => {
+                            let told = self.consoled.as_ref().map(|c| {
+                                c.disconnect(*id, CLEANUP_US).map_err(|e| match e {
+                                    redoubt_client::Error::Sys(e) => e,
+                                    _ => Error::Refused,
+                                })
+                            });
+                            (told, "consoled")
+                        }
+                    };
+                    (told.unwrap_or(Ok(())), format!("disconnect {id} at {at}"))
                 }
+                _ => (Ok(()), String::new()),
+            };
+            match told {
+                Err(Error::Timeout) if !last => return Err(Error::Timeout),
+                Err(Error::Timeout) => say(
+                    self.startup,
+                    &format!("steward: {what} dropped after {TRIES} attempts: the server did not take it\n"),
+                ),
+                _ => {}
             }
-            if let Some(handle) = handle {
+            if let Some(Held { handle: Some(handle), .. }) = self.held.remove(&key) {
                 let _ = close(handle);
             }
+            Ok(())
         }
 
         /// The child is started with copies of the connections held under `connections`; the
@@ -925,10 +980,14 @@ mod machine {
                 RELAY_US,
                 |_, _| (),
             );
-            // The relay holds its copy now, or none: the steward keeps only its own.
+            // The relay holds its copy now, or none: the steward keeps only its own. A kept
+            // console whose relay refused goes untold: `sshd`'s thread is in this login call,
+            // so an `ended` could not be taken, and the refusal it gets ends the channel.
             let _ = close(theirs);
             if told.is_err() {
-                self.release(kept);
+                if let Some(Held { handle: Some(handle), .. }) = self.held.remove(&kept) {
+                    let _ = close(handle);
+                }
                 return Err(Error::Refused);
             }
             #[cfg(feature = "label-probe")]
@@ -1149,6 +1208,16 @@ mod machine {
         fn random(&mut self) -> Result<u64, Error> { redoubt_rt::handle::random_u64() }
 
         fn now(&mut self) -> u64 { redoubt_rt::handle::time_now().unwrap_or(0) }
+    }
+
+    /// `disconnect` by `id` through `nine`, within [`CLEANUP_US`], as the kernel's error: a server
+    /// that did not take the call is `Timeout`; one that refused, or answered nothing readable,
+    /// `Refused`.
+    fn disconnect(nine: &Nine, id: u64) -> Result<(), Error> {
+        nine.disconnect(id, CLEANUP_US).map_err(|e| match e {
+            redoubt_rt::client::ClientError::Sys(e) => e,
+            _ => Error::Refused,
+        })
     }
 
     /// Says `line` on the console `init` gave the steward, if it has one. Not the runtime's
@@ -1377,6 +1446,11 @@ mod machine {
                 }
             }
             let idle = steward.store.next_idle().map(|t| t.saturating_sub(now).max(1));
+            // The cleanup steps due: each connection an end gave back since the last turn, and
+            // the retries whose time has come, each within CLEANUP_US, up to the first that
+            // times out; the receive below wakes for the next retry, or at once for the steps
+            // a timeout left due.
+            let due = steward.cleanup(&mut machine).map(|t| t.saturating_sub(now).max(1));
             #[cfg(feature = "restart-probe")]
             let wait = probe_at.saturating_sub(redoubt_rt::handle::time_now().unwrap_or(probe_at));
             #[cfg(not(feature = "restart-probe"))]
@@ -1388,7 +1462,7 @@ mod machine {
                 }
                 None => wait,
             };
-            let wait = idle.map_or(wait, |i| wait.min(i));
+            let wait = [idle, due].into_iter().flatten().fold(wait, u64::min);
             match own.receive(wait, 0) {
                 Ok(Event::Call(request)) if watches_call(&request.caller, &request.words) => {
                     // One per `sshd` instance; a restarted `sshd`'s comes before the abandoned
@@ -1485,8 +1559,9 @@ mod machine {
                     }
                 }
                 Ok(_) => {}
-                // The timer's own wake: the loop's top ends what is due.
-                Err(Error::Timeout) if idle.is_some_and(|i| i <= wait) => {}
+                // The timers' own wakes: the loop's top ends what is due, and runs the cleanup
+                // steps whose retry has come.
+                Err(Error::Timeout) if [idle, due].into_iter().flatten().any(|t| t <= wait) => {}
                 #[cfg(feature = "label-probe")]
                 Err(Error::Timeout) if machine.probe_due.is_some() => machine.probe_hand(),
                 #[cfg(feature = "restart-probe")]

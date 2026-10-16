@@ -17,10 +17,11 @@ use redoubt_steward::domain::Domain;
 use redoubt_steward::effect::{Kind, Object, Output, Step};
 use redoubt_steward::event::EventKind;
 use redoubt_steward::hash::key_id;
+use redoubt_steward_server::cleanup::{RETRY_US, TRIES};
 use redoubt_steward_server::drive::MINTED;
 use redoubt_steward_server::own::{Child, binds};
 use redoubt_steward_server::protocol::{APPROVAL, INIT, SSHD, Serving, answer_with, watches};
-use redoubt_steward_server::{Kernel, StartError, Steward, start};
+use redoubt_steward_server::{Kernel, SLOTS, StartError, Steward, start};
 
 const USERS: usize = 0;
 const SERVERS: &str = "servers 6";
@@ -80,6 +81,12 @@ enum Call {
     },
     Console(Option<u32>),
     Release(usize),
+    /// A connection's server told, at the loop's turn: `last` on the attempt past which the
+    /// record goes anyway.
+    Clean {
+        handle: usize,
+        last: bool,
+    },
     Launch {
         kind: Kind,
         budget: usize,
@@ -154,6 +161,11 @@ struct Recorder {
     gone: Vec<usize>,
     /// Every reader thread is taken: the next channel cannot be served.
     channels_full: bool,
+    /// What every cleanup step's server answers: `Ok` unless a test says (`Timeout`: the server
+    /// did not take the call).
+    clean: Option<Error>,
+    /// Microseconds the clock has been moved on by, beside the words drawn.
+    clock: u64,
 }
 
 impl Recorder {
@@ -217,6 +229,11 @@ impl Kernel for Recorder {
     }
 
     fn release(&mut self, handle: usize) { self.calls.push(Call::Release(handle)); }
+
+    fn clean(&mut self, handle: usize, last: bool) -> Result<(), Error> {
+        self.calls.push(Call::Clean { handle, last });
+        self.clean.map_or(Ok(()), Err)
+    }
 
     fn launch(
         &mut self,
@@ -329,7 +346,7 @@ impl Kernel for Recorder {
         Ok(self.words * 0x1_0000)
     }
 
-    fn now(&mut self) -> u64 { self.words }
+    fn now(&mut self) -> u64 { self.words + self.clock }
 }
 
 fn shape(k: &Recorder) -> Vec<(usize, u64, u32, Vec<u64>, u64)> {
@@ -1098,6 +1115,194 @@ fn a_session_s_end_destroys_its_budget_before_it_releases_its_connections() {
     assert!(releases.len() >= 6, "{:?}", k.calls);
     assert!(releases.iter().all(|&i| i > destroyed), "destroy, then disconnect: {:?}", k.calls);
     assert_eq!(s.holding(), before, "nothing of the session is held");
+}
+
+/// The handles `k` recorded as given back (`release`) or told (`clean`), in order.
+fn released(k: &Recorder) -> Vec<usize> {
+    k.calls.iter().filter_map(|c| if let Call::Release(h) = c { Some(*h) } else { None }).collect()
+}
+
+fn cleaned(k: &Recorder) -> Vec<(usize, bool)> {
+    k.calls
+        .iter()
+        .filter_map(|c| if let Call::Clean { handle, last } = c { Some((*handle, *last)) } else { None })
+        .collect()
+}
+
+/// A session logged in and ended by its own `end_session`, with the kernel's record cleared
+/// before the end: what the end batch left in the cleanup queue.
+fn ended_session(s: &mut Steward<usize, usize>, k: &mut Recorder, principal: &str, key: &[u8]) {
+    let Ok(Reply::Login(r)) = call(s, k, SSHD, login(principal, "", key)) else { panic!() };
+    let badge = badge_of(s, r.session);
+    k.calls.clear();
+    assert!(matches!(call(s, k, badge, Message::EndSession(EndSession {})), Ok(Reply::EndSession(_))));
+}
+
+/// The end batch is answered once its scope is destroyed, the cutoff; the servers are told at
+/// the loop's turn (servers/steward.md, "Failure and restart"): no `clean` runs inside the event,
+/// every connection the end released waits in the queue, and one turn tells them all, once each,
+/// in the order they were released.
+#[test]
+fn a_session_s_end_is_answered_before_any_cleanup_call() {
+    let mut k = Recorder::default();
+    let mut s = started(&mut k);
+    ended_session(&mut s, &mut k, "bob", &BOB_KEY);
+    let released = released(&k);
+    assert!(released.len() >= 6, "{:?}", k.calls);
+    assert!(cleaned(&k).is_empty(), "no server is told inside the event: {:?}", k.calls);
+    assert_eq!(s.pending(), released.len());
+    k.calls.clear();
+    assert_eq!(s.cleanup(&mut k), None, "nothing is left to retry");
+    assert_eq!(cleaned(&k), released.iter().map(|&h| (h, false)).collect::<Vec<_>>());
+    assert_eq!(s.pending(), 0);
+    k.calls.clear();
+    assert_eq!(s.cleanup(&mut k), None);
+    assert!(k.calls.is_empty(), "an empty queue makes no call");
+}
+
+/// What the end batch defers is the servers' side alone: the core's events of the end, a
+/// session's pending requests withdrawn with it (servers/steward.md, "The powerbox and
+/// approvals"), all run before the end is answered. Alice's session submits a request and ends;
+/// an approval channel opened on the reply, before any cleanup turn, lists nothing of hers.
+#[test]
+fn an_ended_session_s_pending_request_is_withdrawn_before_the_end_s_reply() {
+    let mut k = Recorder::default();
+    let mut s = started(&mut k);
+    let u = alice_session(&mut s, &mut k);
+    let Ok(Reply::Submit(r)) = call(&mut s, &mut k, u, submit(0, &[], 0, "", "mine")) else { panic!() };
+    k.calls.clear();
+    assert!(matches!(call(&mut s, &mut k, u, Message::EndSession(EndSession {})), Ok(Reply::EndSession(_))));
+    assert!(cleaned(&k).is_empty() && s.pending() > 0, "the servers are still to be told: {:?}", k.calls);
+    let c = open_channel(&mut s, &mut k, &ALICE_APPROVAL_KEY).unwrap();
+    let screen = screens(&k, c).pop().expect("the channel's first screen");
+    assert!(
+        !screen.contains(&format!("request {:016x} ", r.request)),
+        "withdrawn with her session: {screen}"
+    );
+    assert!(!screen.contains("\"mine\""), "{screen}");
+    assert!(screen.starts_with("no approval is waiting for alice"), "{screen}");
+}
+
+/// One round of attempts at `steps` due steps whose servers all time out: a turn tells one step
+/// and leaves the rest due now, so the round is as many turns as steps; the last turn's due.
+fn round(s: &mut Steward<usize, usize>, k: &mut Recorder, steps: usize) -> Option<u64> {
+    let now = k.now();
+    let mut due = None;
+    for turn in 0..steps {
+        let before = cleaned(k).len();
+        due = s.cleanup(k);
+        assert_eq!(cleaned(k).len(), before + 1, "turn {turn}: one timed-out step per turn");
+        if turn + 1 < steps {
+            assert!(due.is_some_and(|t| t <= now), "turn {turn}: the steps behind it stay due: {due:?}");
+        }
+    }
+    due
+}
+
+/// A step whose server does not take the call within the steward's send bound (`Timeout`) is
+/// kept and retried no sooner than `RETRY_US` later, up to `TRIES` attempts, the last told it is
+/// the last; then the record goes whatever the server did. A turn before the retry is due makes
+/// no call.
+#[test]
+fn a_cleanup_step_that_times_out_is_retried_then_dropped() {
+    let mut k = Recorder::default();
+    let mut s = started(&mut k);
+    ended_session(&mut s, &mut k, "bob", &BOB_KEY);
+    let pending = s.pending();
+    assert!(pending > 0);
+    k.clean = Some(Error::Timeout);
+    k.calls.clear();
+    let now = k.now();
+    let due = round(&mut s, &mut k, pending);
+    assert_eq!(due, Some(now + RETRY_US), "the retry is due RETRY_US after the attempt");
+    assert_eq!(cleaned(&k).len(), pending);
+    assert!(cleaned(&k).iter().all(|&(_, last)| !last));
+    assert_eq!(s.pending(), pending, "a timed-out step is kept");
+    k.calls.clear();
+    k.clock += RETRY_US - 1;
+    assert_eq!(s.cleanup(&mut k), due);
+    assert!(k.calls.is_empty(), "not due yet: no call");
+    for attempt in 2..=TRIES {
+        k.clock += RETRY_US;
+        k.calls.clear();
+        let next = round(&mut s, &mut k, pending);
+        let last = attempt == TRIES;
+        assert_eq!(cleaned(&k).len(), pending, "attempt {attempt}");
+        assert!(cleaned(&k).iter().all(|&(_, l)| l == last), "attempt {attempt}: {:?}", k.calls);
+        if last {
+            assert_eq!((next, s.pending()), (None, 0), "dropped after TRIES attempts");
+        } else {
+            assert!(next.is_some() && s.pending() == pending, "attempt {attempt} is kept");
+        }
+    }
+}
+
+/// A turn stops at its first step the server did not take in time: the steps behind it stay
+/// due now, untold, so the loop receives before it waits on a server again, and a turn costs it
+/// one send bound at most; the next turn, its servers answering, tells every other step.
+#[test]
+fn a_turn_stops_at_its_first_timed_out_step() {
+    let mut k = Recorder::default();
+    let mut s = started(&mut k);
+    ended_session(&mut s, &mut k, "bob", &BOB_KEY);
+    let pending = s.pending();
+    assert!(pending >= 2);
+    let first = released(&k)[0];
+    k.clean = Some(Error::Timeout);
+    k.calls.clear();
+    let now = k.now();
+    assert_eq!(s.cleanup(&mut k), Some(now), "the steps behind the timed-out one are due now");
+    assert_eq!(cleaned(&k), vec![(first, false)], "one wait per turn: {:?}", k.calls);
+    assert_eq!(s.pending(), pending, "the timed-out step is kept, the rest untouched");
+    k.clean = None;
+    k.calls.clear();
+    assert_eq!(s.cleanup(&mut k), Some(now + RETRY_US), "only the retry is left");
+    assert_eq!(cleaned(&k).len(), pending - 1, "the next turn tells every other step: {:?}", k.calls);
+    assert_eq!(s.pending(), 1);
+}
+
+/// Any outcome but `Timeout` ends a step at once: an `ended` to a channel `sshd` already closed
+/// fails `Dead` and is never retried, and a `disconnect` the server refuses is done too.
+#[test]
+fn a_cleanup_step_the_server_refuses_or_cannot_take_is_done_at_once() {
+    for error in [Error::Dead, Error::Refused] {
+        let mut k = Recorder::default();
+        let mut s = started(&mut k);
+        ended_session(&mut s, &mut k, "bob", &BOB_KEY);
+        let pending = s.pending();
+        k.clean = Some(error);
+        k.calls.clear();
+        assert_eq!(s.cleanup(&mut k), None);
+        assert_eq!(cleaned(&k).len(), pending);
+        assert_eq!(s.pending(), 0, "{error:?} ends the step");
+    }
+}
+
+/// The queue's bound (servers/steward.md, "Failure and restart"): a connection enters once, when
+/// its owner's end releases it, so the queue never holds more than the connections the ended
+/// objects held, at most `SLOTS + 4` per session (its badge, a connection per slot, its relay's
+/// control connection, the attached channel console and its notices send right); a turn empties
+/// it, and an object's second end queues nothing.
+#[test]
+fn the_cleanup_queue_holds_each_released_connection_once() {
+    let mut k = Recorder::default();
+    let mut s = started(&mut k);
+    let mut all = Vec::new();
+    for (principal, key) in [("bob", &BOB_KEY), ("alice", &ALICE_KEY)] {
+        ended_session(&mut s, &mut k, principal, key);
+        let released = released(&k);
+        assert!(released.len() <= SLOTS as usize + 4, "{principal}: {released:?}");
+        all.extend(released);
+    }
+    let mut unique = all.clone();
+    unique.sort_unstable();
+    unique.dedup();
+    assert_eq!(unique.len(), all.len(), "each connection once: {all:?}");
+    assert_eq!(s.pending(), all.len());
+    k.calls.clear();
+    s.cleanup(&mut k);
+    assert_eq!(cleaned(&k).len(), all.len());
+    assert_eq!(s.pending(), 0);
 }
 
 /// The badge a session's own calls come on: its route in the core's index.

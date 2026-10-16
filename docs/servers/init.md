@@ -937,12 +937,11 @@ Status: built · partly tested: the runtime's exit on a refused block is read fr
   ([a shared image cache](../beyond/image-cache.md)). The steward may still cache an image's
   bytes, to avoid reading them again, because each child still gets its own copy.
 - **A blame can be lost.** If the steward does not take `init`'s blame within its timeout, the
-  crash is reported on the console but counts toward no lockout. The converse too: a blame
-  whose lockout ends an SSH session is answered after that session's end batch, whose `ended`
-  to `sshd` can wait out its own second, so `init` may say `lost` of a blame the steward took and
-  acted on (`steward-server-restart`'s third blame; the audit lines are the record); the
-  deferral of end batches' cleanup is a follow-up under STEWARD3
-  ([steward](steward.md#failure-and-restart)).
+  crash is reported on the console but counts toward no lockout. A session's end no longer
+  holds the steward past that timeout: the end is answered once its scope is destroyed, and its
+  `ended` to `sshd` and its disconnects run at the steward's turn, each within its own 100 ms
+  send bound ([steward](steward.md#failure-and-restart)); `steward-blame-lockout` and
+  `steward-server-restart` forbid `lost` for a blame.
 - **A new connection can be lost the same way.** If the steward does not take `init`'s
   `reconnected` within its second, the restarted server's sessions keep their dead connections
   and the steward mints no home there until its own restart; `init` says so and retries nothing
