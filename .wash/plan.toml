@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 375
+revision = 389
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -893,8 +893,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   needs = ["STEWARD2", "BEAM4", "IPC3", "SCHED1"]
   body = "The steward's second half, split into children (2026-10-16): STEWARD3R (R41's mechanism, design first), STEWARD3A (leases and agents), STEWARD3B (the powerbox at approve@box), STEWARD3C (crash blame). The brief they share: .wash/local/STEWARD3-implementer.md (architect-15; its points 1-3, cases 1-8, page lines, owned paths). The step is done when steward.md's Leases, The powerbox and approvals and Crash blame sections and R38-R41 read built · tested, and AGENT0's agent principal runs under a lease with its harness unchanged."
-  state = "todo"
-  revision = 251
+  state = "done"
+  revision = 376
 
 [[node]]
   id = "STEWARD4"
@@ -2456,5 +2456,43 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "AGENTS"
   body = "Found on train 48 (STEWARD3Y) and reproduced alone on main's tip 69aa50dd3 in the train worktree: rv32 `ratio 82 one 386566 two 465804 schedulers 2` (alone, main), `ratio 81 one 381169 two 467637` (alone, 3Y's tree), `ratio 81 one 382509 two 470400` (train 48 under load); rv64 PASS each time; the same tree passed the case under train 47's bench load. tests/beamlet-schedulers-one-hart-mttcg.toml judges two schedulers on one guest hart against one and forbids a ratio under 90 (docs/userland/beamlet.md 'Several schedulers': two schedulers cost little on one hart). Under mttcg the two scheduler threads are two host threads; with q's lease (how many host cores does the case get?) and an idle host, the second scheduler runs on a second host core while the guest sees one hart, so 'two' outruns 'one' and the ratio reads low; under a loaded host the threads contend and the ratio reads ~100. Find what the case measures and make it a verdict: pin the guest's threads to one host core for this case (q run --cores 1, or the bench's taskset for mttcg one-hart cases), or judge the reduction counts on the guest's own clock (icount), or restate the page's claim and the floor with the arithmetic; rv64 passing while rv32 fails needs its explanation too. Transcripts: .tmp/train-48/transcript-rv32-schedulers-alone-main.log, -alone-3y.log, transcript-rv32-beamlet-schedulers-one-hart-mttcg.log (train 48). Files: tests/beamlet-schedulers-one-hart-mttcg.toml, tools/testbench (if the pinning is the bench's), docs/userland/beamlet.md, docs/testbench.md. Tier B (a case's verdict), reviewer kernel-red-3. Size S. Consumer: every train (the case is in the whole bench; until fixed a rv32 failure of it alone is a known flake, recorded on the train)."
+  state = "done"
+  revision = 386
+
+[[node]]
+  id = "STEWARD3Z"
+  title = "A shared server counts the steward's minted connections in the steward's own share, eight in all; per-principal root badges put each in its account's bucket, and consoled's pool follows the manifest"
+  template = "package"
+  parent = "STEWARD3"
+  needs = ["STEWARD3Q"]
+  body = "Brief: .wash/local/STEWARD3Z-implementer.md; rulings .wash/local/STEWARD3Z-ruling.md (Q1 consoled's caps by who holds them, (A); Q2 the six-principal boot and the latency table move to STEWARD3V). Found by STEWARD4's latency case (STEWARD4-ruling.md 'Q12'): admit.rs counts a connection a client mints in the share of the connection it minted from, so every connection the steward mints at erofsd:system (a session's shell and relay, a lease's) is a State of the steward's own share there, cap 8: the box holds eight steward-minted system-volume connections in all, a fifth session or a fourth lease refused on today's image; 3Q's per-account derivation missed the minter's share. consoled's per-bucket cap is init's need applied to every bucket, so its 2 MiB holds five. Lever: the serving library admits a connection minted for another account in that account's bucket from its first request, holding one of the minter's pending slots until then (R26 bounds a mint flood by the minter's share); fallback, a root badge per principal per shared server, only if the primary cannot be made sound. consoled: the default bucket's state derived from what one account holds, init's root badge alone at MAX_THREADS by with_overrides, the fit's arithmetic on the page. Gates: rt host tests (pending pool, the move at first call, the flood bound, the free at disconnect); steward-many-sessions on a three-principal manifest (four sessions and four leases hold system-volume connections at once); the steward set, aio-many-reads-two, walfsd-quota both widths; 3Q's admission host test extended. Not here (STEWARD3V): the six-principal boot, steward-latency at N = 4 and 16, the other shared servers' budgets. Pages: serving.md, consoled.md, init.md, steward.md Authority, SECURITY.md R26/R77. Files: libs/rt/src/server, servers/consoled, servers/init, tests/. Hotspot with STEWARD4: drive.rs (no edits to its files). Tier A: steward-red-4. Size M."
+  state = "active"
+  revision = 388
+
+[[node]]
+  id = "STEWARD3W"
+  title = "A cleanup step a busy server did not take is parked and retried at that server's next answer, not dropped until its restart"
+  template = "package"
+  parent = "STEWARD3"
+  body = "Ruling: .wash/local/STEWARD3W-ruling.md. Seen in STEWARD4's latency run (round 3, two spinner VMs at erofsd:system): a lease's disconnect timed out four times in 3Y's cleanup queue and was dropped, so its State stayed in the share at erofsd:system until a restart that never came, and the eighth lease connect was refused. TRIES/RETRY_US were calibrated for a recovering server (four tries span init's 3 s SERVER_TIMEOUT, so a server taking none restarts and frees the record); a busy server answers others, init sees it alive, and the count is a wrong proxy for lost. Rule: the fourth timeout parks the step; a parked step runs at the loop's turn after any call to that server completed within its bound (a mint taken or refused, a step done), and before a mint the steward makes at that server while steps are parked there (at most one bound, a turn's rule); reconnected for that server forgets its parked steps; a server that never answers costs no bound per turn once parked; the queue's argued bound covers parked steps unchanged. The 100 ms send bound stays: the loop's latency promise; a busy server is met by persistence, not width. Pages: steward.md's cleanup paragraph and residual sentence; the console line becomes 'parked after 4 attempts: retried when the server answers'; SECURITY.md R41 row if tests change. Host tests: parked step runs at next answered call; a mint at a server with parked steps runs them first and succeeds where it was refused; reconnected forgets parked steps; a never-answering server costs no bound; each connection held once. Bench: steward-latency round 3 forbids the parked line outliving the round, steward-server-restart unchanged, both widths. Files: servers/steward/src/cleanup.rs, drive.rs, lib.rs, tests/. Hotspot: STEWARD4's drive.rs; the orchestrator starts this after STEWARD4 lands. Size S; Tier A; steward-red reviews."
   state = "todo"
-  revision = 375
+  revision = 383
+
+[[node]]
+  id = "STEWARD3V"
+  title = "A shared server's admission budget follows its manifest entry's pages, not a compiled constant: six principals boot, and steward-latency regains N = 4 and 16"
+  template = "package"
+  parent = "STEWARD3"
+  needs = ["STEWARD3Z"]
+  body = "Ruling: .wash/local/STEWARD3Z-ruling.md 'Q2'. Found by STEWARD4's six-principal manifest (keyd buckets=10, consoled 9, bootfsd 10, ipd 11, walfsd:data 10, walfsd:alice-secrets 9, erofsd:system 10 by init's rule, 7 domains + system callers): every shared server checks limits(buckets).fits(COST, BUDGET) against a compiled constant that holds six (erofsd 1.5 MiB, bootfsd 1 MiB, walfsd 4 MiB: 'the image's six buckets and not a seventh'), so each refuses to start and init reboots. Rule: a shared server's usable budget is its entry's pages x PAGE_SIZE less its heap cap and stack, checked at start with Limits::fits against buckets=N (BAD_LIMITS, init reboots, unchanged); the entry rule on walfsd.md takes its derivation form: an entry's pages are what its count of buckets at their caps needs plus heap cap and stack, rounded up to 256; a case's manifest sizes by the same rule, never by what its case uses. The manifest is the one source; the count enters the rule; no maximum is picked. The image's entries keep their pages where the arithmetic already holds (walfsd 1,280 pages = 1,202 of budget, six buckets and a seventh); the latency manifest's entries are recomputed (walfsd ~1,614 -> 1,792). Scope: erofsd, bootfsd, walfsd, littlefsd, keyd, ipd (consoled is 3Z's); each page's admission paragraph with the derivation and the image's arithmetic; init.md's entry rule; the bench host test holds every manifest in the tree to pages >= the count's need, beside 3Q's terms; steward-latency regains N = 4 and 16 and scheduling.md's 'With the real steward' table is completed beside the stand-in's 1/4/16 (coordinated with STEWARD4 through the orchestrator; the gate moves here from 3Z). Gates: the servers' host tests, the steward set, walfsd-quota, aio-many-reads-two, the six-principal boot, both widths; docs; the size budget. Size M; Tier A (admission); steward-red reviews."
+  state = "todo"
+  revision = 387
+
+[[node]]
+  id = "B81"
+  title = "beamlet-lookup-host fails its system host tests under a whole bench's load about one train in two and passes alone; the kept job log keeps cargo's warnings, not the failing test's name"
+  template = "package"
+  parent = "AGENTS"
+  body = "Seen on trains 44 (first run), 46 and 49 (2026-10-16/17), each time `beamlet-lookup-host  host tests failed` after 46-76 s, and PASS alone each time (train 46: 77.9 s). BEAM10 made beamlet-redoubt's tests/system.rs a verdict once; a test in it flakes again under load. Two faults: (1) find the test and the race: run `cargo test -p beamlet-redoubt --test system` beside a load (a concurrent q build) until it fails, keep the output, name the test, fix the race on events not the host's clock (B4/B70's rule) or move the test to the alone class with the reason; (2) the bench's kept log for a host-test case (B76) holds the tail of cargo's output, which is the vendor deprecation warnings, not the failing test's name or panic: keep the test harness's failures block (or the whole cargo test output) in target/jobs/<w>-<case>.log so a train's failure is diagnosable after the run dir is pruned. Transcripts: .tmp/train-46/transcript-rv64-beamlet-lookup-host.log, .tmp/train-49/transcript-rv64-beamlet-lookup-host.log (both show only warnings). Files: userland/beamlet-redoubt/tests/system.rs (or wherever the test lives), tools/testbench (the host-test log keep), docs/testbench.md. Tier B (a case's verdict and the bench's logs), reviewer kernel-red-3. Size S."
+  state = "todo"
+  revision = 389
