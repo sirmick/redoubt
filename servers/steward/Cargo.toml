@@ -17,6 +17,9 @@ redoubt-rt = { path = "../../libs/rt" }
 redoubt-steward = { path = "../../libs/steward" }
 
 [features]
+# The approval channel's line parser as a fuzz body, for `fuzz/` (servers/steward/fuzz); host tests
+# build it as well.
+fuzz = []
 # Test-only, for the bench's steward-restart case, and off in every default build, as littlefsd's
 # and netd's restart-probe are: every instance exits 14 s after it starts its console session
 # (src/bin/steward.rs, PROBE_EXIT).
@@ -27,6 +30,8 @@ restart-probe = []
 label-probe = []
 
 [dev-dependencies]
+# The fuzz body, for the tests in tests/.
+redoubt-steward-server = { path = ".", features = ["fuzz"] }
 # init's manifest reading and its writer of the steward's lines, for the round trip over the image's
 # manifest in tests/steward.rs.
 redoubt-init = { path = "../init" }

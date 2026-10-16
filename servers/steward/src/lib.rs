@@ -18,7 +18,10 @@
 
 extern crate alloc;
 
+pub mod approval;
 pub mod drive;
+#[cfg(feature = "fuzz")]
+pub mod fuzz;
 pub mod own;
 pub mod protocol;
 pub mod watchers;
@@ -88,6 +91,29 @@ pub trait Kernel {
     /// bounded, never retried. A send that does not go is dropped: the steward is never held by
     /// a session that does not read.
     fn notify(&mut self, notices: Self::Handle, lease: u64, name: &str);
+    /// Sends `approval_waiting` on a session's notices endpoint, the same way.
+    fn notify_approval(&mut self, notices: Self::Handle);
+    /// The consoles of the next approval channel, the two connections to the `approve@box`
+    /// channel `sshd` sent with `approval_opened` (servers/steward.md, "The powerbox and
+    /// approvals"): the one the steward writes screens through, and the one its reader for the
+    /// channel reads the person's lines through; the steward owns both from here, and
+    /// [`Kernel::channel_opened`] takes them or the next call drops them.
+    fn approval_consoles(
+        &mut self,
+        console: Option<redoubt_rt::abi::Handle>,
+        reader: Option<redoubt_rt::abi::Handle>,
+    );
+    /// The core opened approval channel `channel`: the consoles of
+    /// [`Kernel::approval_consoles`] are its, and its reader starts; `Err` when the steward
+    /// cannot serve it (the channel cap, no thread), and the core is told it closed.
+    fn channel_opened(&mut self, channel: u64) -> Result<(), Error>;
+    /// Writes `text`, printable ASCII and line ends, on `channel`'s console: bounded, one way; a
+    /// write that does not go within the bound is dropped, and the person asks again with
+    /// `pending`. The steward is never held by a terminal that does not read.
+    fn screen(&mut self, channel: u64, text: &str);
+    /// Approval channel `channel` is closed: its consoles go, and its reader ends at the end of
+    /// its input.
+    fn channel_closed(&mut self, channel: u64);
     /// A context's console relay, started in `budget` (servers/steward.md, "Contexts"): its
     /// process id, and the steward's control connection to it. The next console connection of
     /// `domain`'s namespace is the relay's, which it serves the session's `/dev/cons` on.
@@ -165,6 +191,10 @@ pub struct Steward<B, H> {
     ended: BTreeMap<u64, (Object, String)>,
     /// Each session's notices endpoint: the send right its launch kept, closed with the session.
     notices: BTreeMap<Object, H>,
+    /// The last screen written on each open approval channel: each request shown, by id, with
+    /// the binding hash it showed, so a person's 4-byte code expands to the hash of the screen
+    /// they saw and nothing else (servers/steward.md, "The powerbox and approvals").
+    screens: BTreeMap<u64, Vec<(u64, [u8; 32])>>,
     /// The console principal's session, while it runs.
     console_session: Option<u64>,
     /// Each step that failed since the server last said them, with the kernel's error.
@@ -255,6 +285,7 @@ pub fn start<K: Kernel>(
         pids: BTreeMap::new(),
         ended: BTreeMap::new(),
         notices: BTreeMap::new(),
+        screens: BTreeMap::new(),
         console_session: None,
         failed: Vec::new(),
     })

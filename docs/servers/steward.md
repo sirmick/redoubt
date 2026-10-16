@@ -662,10 +662,11 @@ page. Its sessions' operation is `login` (from `sshd`); the operations for lease
 crash blame are below ([the lease and approval operations](#the-lease-and-approval-operations)).
 
 **Each operation is accepted only through the badge class it belongs to.** The steward gives a
-root badge per caller role (`sshd` 1 and the approval channel 2, each a `handed` badge in the
-manifest; `init` 3, which `init` mints for itself and the manifest check hands to nobody), and
-sessions get minted badges. An operation on any other badge is malformed, the
-same answer as an unknown one, so a session cannot send `login`, `approve` or `blame`.
+root badge per caller role (`sshd` 1, a `handed` badge in the manifest; `init` 3, which `init`
+mints for itself and the manifest check hands to nobody; the approval channel's, 2, the steward's
+own, a send right it mints on its endpoint for each channel's reader, held by nobody else), and
+sessions get minted badges. An operation on any other badge is malformed, the same answer as an
+unknown one, so a session cannot send `login`, `approve` or `blame`.
 
 - **`login`** carries the principal's name, the label's name (empty for an unlabelled session),
   the context's name (empty for the default one), the raw key and the channel's console
@@ -676,14 +677,17 @@ same answer as an unknown one, so a session cannot send `login`, `approve` or `b
   id, its name and the channel's labels.
 - **`channel_closed`** ends the session the channel carried.
 - **`start_agent`** and **`end_lease`**, from a session's badge, are the lease operations
-  ([leases](#leases)); **`lease_ended`** is the steward's own send to a session's `notices`
-  endpoint, never a call: on any badge it is malformed.
+  ([leases](#leases)); **`submit`**, from a session's or an agent's, **`approval_opened`** and
+  **`approval_closed`** from `sshd`, and **`pending`**, **`approve`** and **`deny`** on the
+  approval channel's badge are the powerbox's ([the powerbox and
+  approvals](#the-powerbox-and-approvals)); **`lease_ended`** and **`approval_waiting`** are the
+  steward's own sends to a session's `notices` endpoint, never calls: on any badge each is
+  malformed.
 - **`blame`**, from `init`'s root badge alone, is [crash blame](#crash-blame): the account and
   labels the exit notice named, counted by the core, and answered as it arrives whatever it
   counted toward.
-- **Not yet bound:** `submit`, `approve`, `deny`, `pending`, `approval_opened` and
-  `approval_closed` are in the table and accepted only on their badge classes, and answered
-  `unknown` until their batches are built (the powerbox).
+- **Not yet bound:** a `submit` of a declassification or a push (kinds 2 and 3) is `unknown`
+  until [declassification and push](#declassification-and-push).
 
 The table: [libs/wire/tables/steward.md](../../libs/wire/tables/steward.md).
 
@@ -691,7 +695,7 @@ The table: [libs/wire/tables/steward.md](../../libs/wire/tables/steward.md).
 
 ### The lease and approval operations
 
-Status: built · partly tested: `start_agent` and `end_lease` run on the machine, `blame` on the host; the approval operations are answered `unknown` until the powerbox · tested: bench:steward-end-lease, host:redoubt-steward-server::start_agent_runs_the_lease_batch_and_answers_the_lease, host:redoubt-steward-server::end_lease_from_the_sponsor_destroys_the_lease_and_tells_her_sessions, host:redoubt-steward-server::every_operation_on_another_badge_class_is_malformed, host:redoubt-steward-server::three_blames_in_the_window_lock_the_domain_out_until_the_window_passes
+Status: built · partly tested: `start_agent`, `end_lease`, `submit` and the approval channel's operations run on the machine, `blame` on the host; a declassification or push `submit` is `unknown` until declassification and push · tested: bench:steward-end-lease, bench:steward-approve-box, host:redoubt-steward-server::start_agent_runs_the_lease_batch_and_answers_the_lease, host:redoubt-steward-server::end_lease_from_the_sponsor_destroys_the_lease_and_tells_her_sessions, host:redoubt-steward-server::an_approval_channel_opens_on_the_approval_key_alone, host:redoubt-steward-server::every_operation_on_another_badge_class_is_malformed, host:redoubt-steward-server::three_blames_in_the_window_lock_the_domain_out_until_the_window_passes
 
 The steward's protocol adds `start_agent(lease: u64)` (from an unlabelled session, answered with
 the lease's id and name once its batch is done) and `end_lease(lease: u64)` (from the sponsor,
@@ -792,7 +796,7 @@ until [R41](#r41-narrowing-by-revocation-scope)'s scope lands.
 
 ### The powerbox and approvals
 
-Status: planned · M3 (agents, approvals and the attack suite)
+Status: built · partly tested: a labelled agent's request and a note are submitted, rendered, approved and denied on the machine; a declassification or a push is [declassification and push](#declassification-and-push), STEWARD4's · tested: bench:steward-approve-box, bench:steward-screen-inert, bench:steward-pending-cap, host:redoubt-steward-server::a_request_is_rendered_bound_to_its_screen_and_its_approval_starts_the_labelled_agent, host:redoubt-steward-server::notes_are_rendered_by_their_requesters_labels_and_a_dead_sessions_requests_are_gone, host:redoubt-steward-server::an_approval_channel_opens_on_the_approval_key_alone, host:redoubt-steward-server::the_three_commands_parse, host:redoubt-steward-server::the_fuzz_corpus_still_passes, mutation:PolicyApproveIgnoresHash, mutation:PolicyApproveWithLoginKey, mutation:PolicyNoPendingCap
 
 The **powerbox** grants authority a principal lacks and confirms a principal's own high-stakes
 steps: an agent asking its sponsor, a principal asking the holder of a shared resource, a new
@@ -822,7 +826,9 @@ trusted key, a declassification. Most things need none.
   holds at most a fair share of it; a dead session's requests are dropped. A labelled request is
   shown only to principals owning every label it carries, and otherwise refused at submission. Its
   "approval waiting" notification reaches only channels whose labels include all of the request's,
-  and `approve@box`.
+  and `approve@box`. The share is the cap divided among the domain's live sessions and leases, at
+  least one: beside Alice's console and SSH sessions her agent submits one request and its second
+  is `cap`, whatever the domain has left.
 - **An approval grants no more than the approver holds.** A request reaches only its own
   principal's approval channels, and that principal owns every label the request carries or asks
   for, checked when it entered and when it was submitted. A project's requests, which several
@@ -834,20 +840,46 @@ sequenceDiagram
     participant ST as steward
     participant SH as sshd (approve@box)
     participant P as Alice
-    Note over A,P: planned
-    A-->>ST: submit(content, reason)
-    ST-->>ST: freeze, id, hash(content),<br/>check the pending cap
-    ST-->>A: request id
-    ST-->>P: notification on her channels:<br/>an approval is waiting
-    P-->>SH: ssh approve@box with her approval key
-    SH-->>ST: approval channel for alice
-    ST-->>SH: rendered request (printable ASCII)
-    P-->>SH: approve(id, hash)
-    SH-->>ST: approve(id, hash)
-    ST-->>ST: hash matches, grant at most<br/>what Alice holds, audit
-    ST-->>A: the grant
+    A->>ST: submit(content, reason)
+    ST->>ST: freeze, id, hash(content),<br/>check the pending cap
+    ST->>A: request id
+    ST->>P: approval_waiting on her sessions'<br/>notices endpoints
+    P->>SH: ssh approve@box with her approval key
+    SH->>ST: approval_opened(key, console, reader)
+    ST->>SH: the screen on the console (printable ASCII)
+    P->>SH: approve ID HASH-or-CODE
+    SH->>ST: the line, read by the channel's reader
+    ST->>ST: hash matches, grant at most<br/>what Alice holds, audit
+    ST->>A: the labelled agent starts
 ```
-*Figure: an agent's request approved out of band. All of it is planned.*
+*Figure: an agent's request approved out of band.*
+
+**The channel, as built.** `sshd` recognises the user name `approve`, which names no principal:
+it mints two connections to the channel's console as it does for a login and sends them with the
+key in `approval_opened`; the steward finds the principal from the key (the one whose approval
+keys hold it, else the one whose login keys do, so that `approval_key`, the keeper, answers
+`bad_key`; a key of nobody's is `unknown`), the core opens the channel, and the server starts a
+**reader** for it: a thread that blocks in `read` on the second connection for the person's lines
+and sends each, parsed (`approve ID HASH`, `deny ID`, `pending`:
+`servers/steward/src/approval.rs`, fuzzed in `servers/steward/fuzz`), to the steward's own
+endpoint on badge 2, which the main loop serves as any call and answers on the channel
+(`approved ID`, `refused: hash_mismatch`, `unknown command`). The main loop writes the **screen**
+through the first connection, bounded (`SCREEN_US`: a terminal that stops reading loses a screen,
+which `pending` redraws, and never holds the steward), so the pair cannot deadlock: a reader's
+call waits only on the main loop, and the main loop never waits on a reader. Open channels are
+at most `CHANNELS` (4), and readers are pooled as the exit watchers are: a reader whose channel
+ended waits for the next, and a new one starts only when every reader is busy, so a hundred
+logins cost the stacks of the most open at once; the steward's threads stay bounded and
+declared. The screen is a header naming the channel's principal; per pending request
+`request ID hash HASH code CODE` (the id and hash in hex, the code the hash's first four bytes)
+and the core's rendered line; and the line to type. The person types the full hash or the code:
+the server expands a code only from the last screen it wrote on that channel, so either binds the
+approval to the screen the person saw, and a code the last screen did not show is
+`hash_mismatch` to the channel alone, never to the requester, as a stale hash is. The core's `Approve` takes the full
+hash. The requester's sessions are told by `approval_waiting` on their `notices` endpoints (the
+shell prints `[an approval is waiting]`), which says nothing of the request; a notice to an open
+channel of the principal redraws it. A granted labelled agent runs [the lease batch](#leases) in
+the label set's domain, its `/project` the set's vault.
 
 The model checks binding, screens, caps and the approval channel (its P3, P4 and P5;
 `PolicyApproveIgnoresHash`, `PolicyRenderNotWhitelisted`, `PolicyLabelledFreeTextShown`,
@@ -860,9 +892,9 @@ principal: `PENDING_CAP` 4 pending requests per (account, label set); `FIELD_CAP
 `DECLASSIFY_MAX` 256 bytes; `BLAME_COUNT` 3 blamed crashes within `BLAME_WINDOW`, 10 minutes;
 `MAX_LEASE` 24 hours.
 
-The attack test: a field full of ANSI escapes renders inert.
-
-**Open:** none.
+The attack test: a field full of ANSI escapes renders inert (`steward-screen-inert`: 64
+characters of screen clears, bidi overrides, isolates, zero-width spaces and bells reach the
+channel as 64 `?`, the verdict the bytes `sshd` relayed).
 
 ### Declassification and push
 
@@ -1102,14 +1134,12 @@ before, is service timing.
 
 ### R38 (out-of-band approval)
 
-Status: planned · M3 (agents, approvals and the attack suite)
+Status: built · partly tested: declassification and push, the other approved contents, are STEWARD4's · tested: bench:steward-approve-box, bench:steward-screen-inert, bench:steward-pending-cap, host:redoubt-steward-server::a_request_is_rendered_bound_to_its_screen_and_its_approval_starts_the_labelled_agent, host:redoubt-steward-server::an_approval_channel_opens_on_the_approval_key_alone, mutation:PolicyApproveIgnoresHash, mutation:PolicyApproveWithLoginKey, mutation:PolicyApproveOtherChannel, mutation:PolicyShowLabelledToAll, mutation:PolicyRenderNotWhitelisted, mutation:PolicyLabelledFreeTextShown, mutation:PolicyNotifyLabelledToAll
 
 An approval takes effect only if it came through `approve@box` with the approver's own approval
 key, named the frozen request's id and content hash, and grants no label or authority the approver
 lacks; a labelled request is shown only to owners of all its labels and shows none of its free
 text.
-
-**Open:** none.
 
 ### R39 (leases end)
 

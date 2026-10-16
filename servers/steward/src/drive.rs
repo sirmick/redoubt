@@ -4,14 +4,15 @@
 //! The server decides nothing here: it carries out the steps in order and keeps what they made
 //! under the core's tokens.
 
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, BTreeSet};
+use alloc::format;
 use alloc::string::String;
 use alloc::vec::Vec;
 
 use redoubt_rt::abi::{BudgetSpec, Error, FOREVER, Labels};
 use redoubt_steward::consts::RANDOM_WORDS;
 use redoubt_steward::effect::{
-    Answer, Batch, Kind, Notice, Notified, Object, Output, Parent, Produced, ReplyTo, Server, Step,
+    Answer, Batch, Kind, Notice, Notified, Object, Output, Parent, Produced, Rendered, ReplyTo, Server, Step,
     StepFailed, Token,
 };
 use redoubt_steward::event::{Event, EventKind};
@@ -57,9 +58,16 @@ impl<B: Copy, H: Copy> Steward<B, H> {
     ) -> Result<Vec<Output>, Exited> {
         let mut outputs = Vec::new();
         let mut reopen = false;
+        // The approval channels this event redraws (a `Pending` of theirs ran), and the screens
+        // the core rendered on each: written as one block per channel at the end.
+        let mut redrawn = BTreeSet::new();
+        let mut screens: BTreeMap<u64, Vec<Rendered>> = BTreeMap::new();
         let mut queue = alloc::collections::VecDeque::new();
         queue.push_back((kind, reply));
         while let Some((kind, reply)) = queue.pop_front() {
+            if let EventKind::Pending { channel } = &kind {
+                redrawn.insert(*channel);
+            }
             // The object's process is gone before the core decides its exit: a destroy the core
             // then asks for may find the budget gone too (a lease the kernel's deadline took).
             if let EventKind::Exited { object } = &kind {
@@ -97,6 +105,18 @@ impl<B: Copy, H: Copy> Steward<B, H> {
                     Output::Notice { to: Notified::Session(badge), notice: Notice::LeaseEnded { lease } } => {
                         self.notify(kernel, badge, lease);
                     }
+                    Output::Notice { to: Notified::Session(badge), notice: Notice::ApprovalWaiting } => {
+                        if let Some(n) = self.notices_of(badge) {
+                            kernel.notify_approval(n);
+                        }
+                    }
+                    // An approval channel of the requester's principal is open: it is redrawn,
+                    // which renders the request on it (servers/steward.md, "The powerbox and
+                    // approvals").
+                    Output::Notice { to: Notified::Channel(channel), notice: Notice::ApprovalWaiting } => {
+                        queue.push_back((EventKind::Pending { channel }, 0));
+                    }
+                    Output::Screen { channel, screen } => screens.entry(channel).or_default().push(screen),
                     o => outputs.push(o),
                 }
             }
@@ -106,11 +126,73 @@ impl<B: Copy, H: Copy> Steward<B, H> {
                 queue.push_back((EventKind::Done { object, result }, 0));
             }
         }
+        for channel in redrawn.iter().chain(screens.keys()).copied().collect::<BTreeSet<u64>>() {
+            let shown = screens.remove(&channel).unwrap_or_default();
+            let text = self.compose(channel, &shown);
+            self.screens.insert(channel, shown.iter().map(|r| (r.id, r.hash)).collect());
+            kernel.screen(channel, &text);
+        }
         if reopen {
             self.console_session = None;
             outputs.extend(self.open_console(kernel)?);
         }
         Ok(outputs)
+    }
+
+    /// The screen an approval channel shows (servers/steward.md, "The powerbox and approvals";
+    /// sshd.md, "`approve@box`"): a header naming the channel's principal; per request its id,
+    /// its binding hash and the hash's first four bytes as the code a person types in its
+    /// place, then the core's rendered line (`render.rs`: printable ASCII only, so nothing here
+    /// but these bytes and the line ends reaches the terminal); and the line to type. Written as
+    /// `\r\n` lines: the channel has no line discipline.
+    fn compose(&self, channel: u64, shown: &[Rendered]) -> String {
+        let index = inspect::index(&self.store);
+        let fixed = inspect::fixed(&self.store);
+        let who = index
+            .channels
+            .get(&channel)
+            .and_then(|c| fixed.principals.get(c.principal))
+            .map_or("nobody", |p| p.name.as_str());
+        if shown.is_empty() {
+            return format!("no approval is waiting for {who}\r\n");
+        }
+        let mut text = format!("pending approvals for {who}:\r\n");
+        for r in shown {
+            let hash: String = r.hash.iter().map(|b| format!("{b:02x}")).collect();
+            text.push_str(&format!(
+                "request {:016x} hash {hash} code {}\r\n  {}\r\n",
+                r.id,
+                &hash[..8],
+                r.text
+            ));
+        }
+        text.push_str("type: approve <id> <hash or code> | deny <id> | pending\r\n");
+        text
+    }
+
+    /// The hash the last screen on `channel` showed for request `request` with `code` as its
+    /// first bytes: the one hash a code can mean, and only while that screen is the last. `None`
+    /// for anything else, which is `HashMismatch`, answered to the channel only.
+    pub fn hash_of_code(&self, channel: u64, request: u64, code: &[u8]) -> Option<[u8; 32]> {
+        self.screens
+            .get(&channel)?
+            .iter()
+            .find(|(id, hash)| *id == request && hash.starts_with(code))
+            .map(|(_, hash)| *hash)
+    }
+
+    /// Whether a screen was written on `channel`: it is open and was redrawn at least once.
+    pub fn screened(&self, channel: u64) -> bool { self.screens.contains_key(&channel) }
+
+    /// Approval channel `channel` is closed: nothing of its screens is kept.
+    pub fn channel_closed(&mut self, channel: u64) { self.screens.remove(&channel); }
+
+    /// The notices endpoint of the session routed by `badge`, if the core routes it and it has
+    /// one.
+    fn notices_of(&self, badge: u64) -> Option<H> {
+        let route = inspect::index(&self.store).routes.get(&badge)?;
+        let session = Object { domain: route.domain.clone(), kind: route.kind, id: route.id };
+        self.notices.get(&session).copied()
     }
 
     /// Opens the console principal's session, if the manifest names one: at the start, and again
@@ -166,11 +248,7 @@ impl<B: Copy, H: Copy> Steward<B, H> {
     /// Tells the session routed by `badge` that `lease` ended, on the notices endpoint its launch
     /// kept; a session with none, or one the core no longer routes, is told nothing.
     fn notify<K: Kernel<Budget = B, Handle = H>>(&mut self, kernel: &mut K, badge: u64, lease: u64) {
-        let Some(route) = inspect::index(&self.store).routes.get(&badge) else { return };
-        let session = Object { domain: route.domain.clone(), kind: route.kind, id: route.id };
-        let (Some(n), Some(name)) = (self.notices.get(&session).copied(), self.lease_name(lease)) else {
-            return;
-        };
+        let (Some(n), Some(name)) = (self.notices_of(badge), self.lease_name(lease)) else { return };
         kernel.notify(n, lease, &name);
     }
 

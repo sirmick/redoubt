@@ -136,10 +136,18 @@ fn the_binding_table_binds_each_slot_as_the_page_says() {
     // the lease's own quota, at `/project`, and the system volume; no vault, no network, no
     // console. A sponsor with no home gives its lease no root.
     let project = Some(Bound { how: carved("project", 1 << 20), at: at("/project"), name: None });
-    let lease =
-        |who: &str| (0..7).map(|s| binding(&own, who, &[], Child::Lease, s, 1 << 20)).collect::<Vec<_>>();
-    assert_eq!(lease("alice"), [boot.clone(), project, None, None, None, system.clone(), None]);
-    assert_eq!(lease("bob"), [boot, None, None, None, None, system, None]);
+    let lease = |labels: &[u64], who: &str| {
+        let child = Child::Lease { labelled: !labels.is_empty() };
+        (0..7).map(|s| binding(&own, who, labels, child, s, 1 << 20)).collect::<Vec<_>>()
+    };
+    assert_eq!(lease(&[], "alice"), [boot.clone(), project, None, None, None, system.clone(), None]);
+    assert_eq!(lease(&[], "bob"), [boot.clone(), None, None, None, None, system.clone(), None]);
+    // A labelled lease's root is its label set's vault, whole, at `/project`: no carve of the
+    // unlabelled home, which R25 lets it touch nothing of.
+    let vault_project =
+        Some(Bound { how: fresh("walfsd:alice-secrets", ""), at: at("/project"), name: None });
+    assert_eq!(lease(&[7], "alice"), [boot.clone(), vault_project, None, None, None, system.clone(), None]);
+    assert_eq!(lease(&[7], "bob"), [boot, None, None, None, None, system, None]);
     assert_eq!(lease_args("alice"), ["principal=alice", "home=/project"]);
 }
 

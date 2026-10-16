@@ -1269,6 +1269,8 @@ forbid = ['bob-secret']      # never in this session's output, until ssh exits
 steps = [
     { expect = '\(1\)> ' },     # wait for the prompt
     { send = "File.read(\"/work/x\")\n" },
+    { expect = 'id ([0-9a-f]+)' },  # a pattern with groups keeps its captures...
+    { send = "approve $1\n" },     # ...for a send to type back ($1 to $9; $$ is a $)
     { mark = "alice-ready" },    # tell other sessions this one got here
     { wait = "bob-ready" },      # wait for another session's mark
     { resize = [132, 43] },      # with `pty = true`: resize ssh's terminal

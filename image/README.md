@@ -15,8 +15,8 @@ The sources of the signed boot bundle and the disk images; what they produce goe
   of its own, bob's quota, no labels and no network scope, and no budget of its own: its session
   is a lease of alice's, carved from her unlabelled share for `MAX_LEASE`, which her sessions
   can end and are told the end of ([agents](../docs/userland/agents.md);
-  [the steward](../docs/servers/steward.md#leases)). All three have test keys from
-  `tests/keys/`, so the manifest must never ship. The budgets, in pages: a session is 11,392 and
+  [the steward](../docs/servers/steward.md#leases)). All three have login test keys, and alice and bob
+  approval keys (`approve@box`), from `tests/keys/`, so the manifest must never ship. The budgets, in pages: a session is 11,392 and
   its budget's own cost 1, and each label set's share is its principal's pages over its label
   sets, less 1. Alice's `{}` share must hold at once her console session, one SSH login, the
   agent's sponsored session and one lease of the steward's `agent` size (5,248 pages, 2

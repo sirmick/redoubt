@@ -1,0 +1,3 @@
+[toolchain]
+# cargo-fuzz needs nightly (sanitizers); pinned so a run is reproducible.
+channel = "nightly-2026-05-11"

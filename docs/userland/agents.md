@@ -93,6 +93,11 @@ sooner. A lease is task-scoped: "read `~/project`, write `~/project/out`, the `m
   given back at the lease's end: among the lease's sizes, since a root below a home with no quota
   holds nothing ([walfsd](../servers/walfsd.md#quotas)); a `~/project` already holding more
   refuses the lease, and `start_agent` answers `failed`.
+- **A labelled agent's `/project` is its label set's vault**: the vault is the task's scope, and
+  [R25 (the label check)](../servers/serving.md#r25-the-label-check) lets the agent touch nothing
+  of the unlabelled `~/project`; an unlabelled agent's is its
+  sponsor's `~/project`, with a quota carved from the home. A labelled agent is started only by an
+  approval at `approve@box` ([the steward](../servers/steward.md#the-powerbox-and-approvals)).
 - **A lease has no console.** Its namespace holds no `/dev/cons`, and beamlet's platform runs
   without one ([beamlet](beamlet.md#beamlet-on-redoubt)): what the agent writes to the console
   is dropped, a read answers the end of the input, so an agent's output has nowhere to go but

@@ -673,6 +673,37 @@ struct Driver<'a> {
     last_line: String,
     /// Output not yet consumed by an `expect`.
     unmatched: String,
+    /// The capture groups of the last `expect` with groups that matched, for a `send` to type
+    /// back (`$1`).
+    captures: Vec<String>,
+}
+
+/// `text` with each `$N` (N in 1..=9) replaced by the Nth capture group of the last `expect`
+/// with groups that matched, empty if the group did not take part or no pattern had one, and
+/// `$$` by one `$`; any other `$` stays. So a case types back what the box printed and it could
+/// not know beforehand: a request's random id and binding hash, say.
+pub fn expand(text: &str, captures: &[String]) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '$' {
+            out.push(c);
+            continue;
+        }
+        match chars.peek() {
+            Some('$') => {
+                chars.next();
+                out.push('$');
+            }
+            Some(d) if d.is_ascii_digit() && *d != '0' => {
+                let n = d.to_digit(10).unwrap() as usize;
+                chars.next();
+                out.push_str(captures.get(n - 1).map_or("", String::as_str));
+            }
+            _ => out.push('$'),
+        }
+    }
+    out
 }
 
 fn drive(
@@ -750,6 +781,7 @@ fn drive(
         line: String::new(),
         last_line: String::new(),
         unmatched: String::new(),
+        captures: Vec::new(),
     };
     for (number, step) in session.steps.iter().enumerate().skip(first) {
         driver.step(step).map_err(|stop| match stop {
@@ -790,6 +822,7 @@ impl Driver<'_> {
             Step::Within(_) => Ok(()),
             Step::Send(text) => {
                 let stdin = self.stdin.as_mut().ok_or(Stop::Broken("send after exit".into()))?;
+                let text = expand(text, &self.captures);
                 // ssh may be gone already; its exit is reported at the next expect or exit.
                 stdin.write_all(text.as_bytes()).and_then(|()| stdin.flush()).ok();
                 self.typed = true;
@@ -839,7 +872,17 @@ impl Driver<'_> {
                 // still mean the start and end of a line, as they do everywhere else here.
                 let regex = Regex::new(&format!("(?m){pattern}")).map_err(|e| Stop::Broken(e.to_string()))?;
                 loop {
-                    if let Some(found) = regex.find(&self.unmatched) {
+                    if let Some(found) = regex.captures(&self.unmatched) {
+                        // A pattern with groups replaces the captures; one without leaves them,
+                        // so an answer expected between a capture and its use keeps it.
+                        if found.len() > 1 {
+                            self.captures = found
+                                .iter()
+                                .skip(1)
+                                .map(|g| g.map_or(String::new(), |g| g.as_str().into()))
+                                .collect();
+                        }
+                        let found = found.get(0).expect("the whole match");
                         self.unmatched.drain(..found.end());
                         // In the log, as the exit marker is: how long the session took to get
                         // here; before the first `send`, the login's latency, reported too.
@@ -966,6 +1009,16 @@ fn describe(status: ExitStatus) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A `send` types back the last `expect`'s capture groups: `$N` for the Nth, empty for one
+    /// that did not take part, `$$` for a `$`, and any other `$` as it is.
+    #[test]
+    fn send_types_back_the_last_expects_captures() {
+        let captures = vec![String::from("8000000000000001"), String::from("ab"), String::new()];
+        assert_eq!(expand("approve $1 $2\n", &captures), "approve 8000000000000001 ab\n");
+        assert_eq!(expand("$3|$4|$0|$$|$x|$", &captures), "||$0|$|$x|$");
+        assert_eq!(expand("none $1", &[]), "none ");
+    }
 
     /// An `ssh` that refuses an option the bench gives it says why, in ssh's own words; one it
     /// takes passes.

@@ -16,6 +16,7 @@ roots = [
     "servers/init/fuzz",
     "servers/ipd/fuzz",
     "servers/netd/fuzz",
+    "servers/steward/fuzz",
     "stub/fuzz",
     "userland/otp",
     "userland/native",

@@ -1,0 +1,153 @@
+description = "The powerbox at approve@box (docs/servers/steward.md, \"The powerbox and approvals\" and R38; docs/servers/sshd.md, \"approve@box\" and R68; docs/userland/sessions.md, \"approve@\"): alice's agent, on its lease, submits a request for an agent labelled alice-secrets; the steward freezes it, draws its id and binding hash, and tells alice's unlabelled session an approval is waiting, which her shell prints, while bob's session prints nothing; `ssh approve@box` with alice's approval key opens the approval channel at the steward, which writes the screen: the request's id, its hash and the hash's code, and the rendered line naming the agent, the label set, the lease and the untrusted reason; `approve` with a hash that is not the screen's is refused on the channel alone and starts nothing; `approve` with the code the screen showed grants it, and the labelled agent runs in its vault (its /project is the alice-secrets volume), writing the result alice's vault session reads; the approved request is off the next screen; `ssh approve@box` with alice's login key is refused by the steward's approval_key guard, and sshd denies the login. The verdicts are the steward's audit lines (Submitted, Approved naming the key and hash, AgentStarted in 1001/{7}), the kernel's usage counts, the shell's notice line, the bytes the steward wrote on the channel as sshd relayed them, the file the labelled agent wrote and ssh's exit status on the refused key (rule F)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+recipe = "image/boot.toml"
+# The image needs 1 GiB: the principals' budgets, each holding shell VMs' sessions and leases,
+# do not fit the users budget 256 MiB leaves (docs/kernel/budgets.md).
+memory_mib = 1024
+# Four logins, two agents' VMs and the approval terminal.
+timeout_secs = 1800
+expect = [
+    '^init: started sshd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
+    '^init: started steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+]
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    '^init: .* (exited|faulted|was killed)',
+    'init: restarted',
+    'EXCEPTION',
+    'steward: a step failed',
+    'steward: the core exited',
+    'sshd: login alice.*: refused',
+    'sshd: login bob: refused',
+]
+# The request is submitted (its records in the target's domain, 1001/{7}); the login key's channel
+# is refused; the approval key's opens; the wrong hash is refused on the channel (no line: the
+# requester is told nothing), then the request is approved: the labelled lease is carved from
+# alice's {7} sub-budget beside her vault session's ten processes (two more while it runs), runs
+# and ends.
+expect_after = [
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{7\} at [0-9]+: Submitted \{ request: [0-9]+ \}',
+    '^\[con [0-9a-f]{16}\] sshd: login approve: refused \(BadKey\)$',
+    '^\[con [0-9a-f]{16}\] sshd: login approve: approval channel [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{7\} at [0-9]+: Approved \{ request: [0-9]+, principal: 0, key: [1-9][0-9]*, hash: \[',
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{7\} at [0-9]+: AgentStarted \{ lease: [0-9]+, sponsor: 0, parent: None, deadline: [0-9]+ \}',
+    '^\[con [0-9a-f]{16}\] steward: users/alice/\{7\} holds [0-9]+ pages, 12 processes$',
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{7\} at [0-9]+: LeaseEnded \{ lease: [0-9]+ \}',
+    '^\[con [0-9a-f]{16}\] steward: users/alice/\{7\} holds [0-9]+ pages, 10 processes$',
+]
+
+# Alice stages her agent's input (a request for an agent labelled 7, alice-secrets, for ten
+# minutes) and starts it; her shell prints the notice when the request is in. Every answer is
+# tagged, so a pattern matches the shell's printed value and never the echo of the line typed.
+[[session]]
+user = "alice"
+pty = true
+steps = [
+    { expect = '/home/alice \([0-9]+\)> ' },
+    { send = "{:stage, File.mkdir_p(\"/home/alice/project/out\"), File.write(\"/home/alice/project/in\", \"agent 7 600000 audit the vault\")}\n" },
+    { expect = '\{:stage, :ok, :ok\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:ok, c} = Redoubt.Contexts.connection(); {:lease, Redoubt.Wire.Client.Steward.start_agent(c, 600_000_000)}\n" },
+    { expect = '\{:lease, \{:ok, %\{lease: [0-9]+, name: "agent-1"\}\}\}' },
+    { expect = '\([0-9]+\)> ' },
+    # The steward's `approval_waiting` on this session's notices endpoint, printed by the shell.
+    { expect = '\[an approval is waiting\]' },
+    { mark = "waiting" },
+    { wait = "approved" },
+    { send = "{:asked, File.read(\"/home/alice/project/out/result\")}\n" },
+    { expect = '\{:asked,\s+\{:ok, "\{:ok, %\{request: [0-9]+\}\}\\n"\}\}' },
+    { expect = '\([0-9]+\)> ' },
+    { wait = "vault-done" },
+    { exit = 0 },
+]
+
+# Bob's session runs beside it and is told nothing: the notice goes to the requester's
+# principal's sessions, and the screen to its approval channel alone.
+[[session]]
+user = "bob"
+pty = true
+forbid = ['an approval is waiting', 'audit the vault']
+steps = [
+    { expect = '/home/bob \([0-9]+\)> ' },
+    { wait = "vault-done" },
+    { send = "{:bob, :still_here}\n" },
+    { expect = '\{:bob, :still_here\}' },
+    { exit = 0 },
+]
+
+# Alice's vault session stages the labelled agent's input in the vault, which is the labelled
+# lease's /project, and reads the result it wrote there once the approval started it. It logs in
+# once the login key's attempt is over: sshd has four slots, and the case keeps to them.
+[[session]]
+user = "alice+alice-secrets"
+name = "alice-vault"
+pty = true
+steps = [
+    { wait = "login-key-refused" },
+    { expect = '/home/alice \([0-9]+\)> ' },
+    { send = "{:stage, File.mkdir_p(\"/vault/out\"), File.write(\"/vault/in\", \"echo from the vault\")}\n" },
+    { expect = '\{:stage, :ok, :ok\}' },
+    { expect = '\([0-9]+\)> ' },
+    { mark = "vault-staged" },
+    { wait = "approved" },
+    { send = "{:result, Enum.find_value(1..120, fn _ -> case File.read(\"/vault/out/result\") do {:ok, t} when t != \"\" -> t; _ -> Process.sleep(1000); nil end end)}\n" },
+    { expect = '\{:result, "echo from the vault\\n"\}' },
+    { expect = '\([0-9]+\)> ' },
+    { mark = "vault-done" },
+    { exit = 0 },
+]
+
+# The approval terminal, with alice's approval key: the steward's screen, a wrong hash refused on
+# the channel, the code the screen showed approving, the next screen empty. Nothing on this
+# channel is a session's: every byte is the steward's.
+[[session]]
+user = "approve"
+name = "approver"
+key = "alice-approval"
+pty = true
+forbid = ['\x1b']
+steps = [
+    { wait = "vault-staged" },
+    { expect = 'pending approvals for alice:' },
+    { expect = 'request ([0-9a-f]{16}) hash ([0-9a-f]{64}) code ([0-9a-f]{8})' },
+    { expect = 'request from alice \(agent-1, labels \[\]\): start an agent labelled \[7\] for 10 min; reason \(untrusted\): "audit the vault"' },
+    { expect = 'type: approve <id> <hash or code> \| deny <id> \| pending' },
+    { send = "approve $1 0000000000000000000000000000000000000000000000000000000000000000\n" },
+    { expect = 'refused: hash_mismatch' },
+    { send = "approve $1 ffffffff\n" },
+    { expect = 'refused: hash_mismatch' },
+    { send = "approve $1 $3\n" },
+    { expect = 'approved ([0-9a-f]{16})' },
+    { mark = "approved" },
+    { send = "pending\n" },
+    { expect = 'no approval is waiting for alice' },
+    { wait = "vault-done" },
+    { exit = 0 },
+]
+
+# approve@box with alice's login key, once the request waits: the steward's approval_key guard
+# refuses it (bad_key), and sshd denies the login, so ssh gives up (255).
+[[session]]
+user = "approve"
+name = "approve-with-login-key"
+key = "alice"
+pty = true
+steps = [
+    { wait = "waiting" },
+    { exit = 255 },
+    { mark = "login-key-refused" },
+]
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]
+forward = [22]

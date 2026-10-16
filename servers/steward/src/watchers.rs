@@ -2,7 +2,10 @@
 //! waits on a session's exit endpoint for its one notice and reports it. A thread's stack is never
 //! given back (the runtime keeps it), so threads are reused: a watcher that has reported waits for
 //! the next session, and a new one starts only when every watcher is watching. There are never
-//! more watchers than sessions alive at once, however many come and go.
+//! more watchers than sessions alive at once, however many come and go. The approval channels'
+//! readers are pooled by the same count ("The powerbox and approvals"): a reader whose channel
+//! ended waits for the next, so a hundred `approve@box` logins cost the stacks of the most open
+//! at once, never a hundred.
 
 /// The watchers started and the sessions they are watching.
 #[derive(Default, Debug, PartialEq, Eq)]
@@ -57,6 +60,24 @@ mod tests {
         w.reported();
         assert!(!w.watch(), "an idle watcher takes the next session");
         assert_eq!(w.started(), 2);
+    }
+
+    /// Approval channels opened and closed one after another, a hundred times: one reader, its
+    /// stack the whole cost; one that could not start is not counted as started.
+    #[test]
+    fn channels_coming_and_going_reuse_one_reader() {
+        let mut r = Watchers::default();
+        for i in 0..100 {
+            assert_eq!(r.watch(), i == 0, "open {i}");
+            r.reported();
+        }
+        assert_eq!(r.started(), 1);
+        assert!(!r.watch(), "one open: the idle reader takes it");
+        assert!(r.watch(), "two open at once: a second reader");
+        r.unwatch(true);
+        assert_eq!(r.started(), 1, "a thread that did not start is not in the pool");
+        r.reported();
+        assert!(!r.watch(), "the one reader takes the next channel");
     }
 
     /// A watcher that could not start is not counted, and the next launch tries again.
