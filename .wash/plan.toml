@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 352
+revision = 355
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -903,8 +903,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   needs = ["STEWARD3", "K19"]
   body = "Brief: .wash/local/STEWARD4-implementer.md (architect-15). Tier A, size M. docs/servers/steward.md#declassification-and-push, R42; docs/servers/init.md#the-confinement-check; docs/kernel/scheduling.md#responsiveness (targets unchanged; a new case steward-latency beside sched-latency; a miss is a finding, not a tuning)."
-  state = "todo"
-  revision = 2
+  state = "reported"
+  revision = 355
+  overrides = ["2026-10-16: started by Orchestrator before STEWARD3 (todo): STEWARD4's need STEWARD3 closes with STEWARD3Y (small, launching after train 45); the brief refresh is design work ahead of the build, per the owner's M3 order"]
 
 [[node]]
   id = "VOL2"
@@ -2418,8 +2419,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "STEWARD3"
   needs = ["STEWARD3Q"]
   body = "Found by STEWARD3C (.wash/local/STEWARD3C-questions.md Q1; ruling .wash/local/STEWARD3C-Q1-ruling.md): a shared server restarts with empty tables (R27), so the steward's kept fresh connection at walfsd:data (init.md 'Fresh connections per child') is dead, every later login fails its home step, and every live session's home connection is dead too; init has no way to hand a running server a new connection (init.md's consoled residual, the file servers' and ipd's as well). m3-agents.md's crash-blame row ('Alice is unaffected when walfsd panics') assumes this mechanism. Lever, one path for every shared server: (1) init, after restarting a server, makes the steward a new fresh connection there and calls the steward's root-class `reconnected(server, connection: handle[0])`; the steward replaces its kept connection; the records below the dead one died with the instance, so nothing leaks and init's release at the steward's exit still frees everything. (2) The steward sends `server_restarted(server)` on the `notices` endpoint of every session the server served. (3) A session re-binds: `rebind(slot)` from its badge mints a new connection below the new kept one, in the session's scope; the shell re-opens the binding on the notice; a session that never re-binds keeps `enotconn`. consoled's restart follows the same path or is stated as not covered. Cases: steward-server-restart (bob's write cuts walfsd:data; alice's and bob's sessions re-bind and read their homes; a login after the restart succeeds; three cuts reach R40's lockout on the machine, closing 3C's residual); host: init's call, the steward's rows, the oracle traces. Pages: steward.md 'Failure and restart' (the residual becomes the rule), init.md, agents.md, m3-agents.md's row, SECURITY.md R40 to tested. Files: servers/init, servers/steward, libs/steward (rows, oracle, model), the wire table, the shell's binding code, tests/. Tier A: steward-red-2. Size M."
-  state = "reported"
-  revision = 352
+  state = "done"
+  revision = 353
 
 [[node]]
   id = "B78"
