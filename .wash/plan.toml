@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 264
+revision = 280
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -2232,8 +2232,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M2"
   body = "docs/todo/kernel-attack-gaps.md 'scheduling.md', eight lines, the most of any page: round-robin among one budget's threads; an interrupt's wake not preempting and another budget's deadline preempting; tie clauses 1 and 4 checked on the target only when a run happens to tie; interrupt handling billed to the device object's owner; budget_destroy call-to-return recorded, not asserted; R12's kernel-time bound attacked only for map_anon's search and map_fixed's range; R23 (no test channels) with no case building the production kernel and scanning it for the trace; a picked thread dying before the switch and a full queue. Lever: one case per line where a case can see the claim (the sched-* pattern: a tester under init, icount, the scheduler oracle over the trace, judged net of audits per B5/B15), a host test or model mutation where only those can (the tie clauses), and R23 as a bench self-check: build the production kernel once per bench and grep its binary for the trace's strings and symbols (a planted one must fail it: the negative). Each case's clause states what it proves and quotes its first measurement both widths; a line that cannot be attacked on QEMU (the shared-host and icount rules) is restated on the page as what it is and stays on the todo page with the reason. Gates: every new case passes 5 runs in its class both widths; no bound widened; the page's status lines drop 'partly tested' where a case now holds the claim; the scheduling.md section of the todo page is emptied, each line's fate stated. Files: tests/*.toml, the tester programs under tests/, model/src/mutation.rs where a mutation is added (no extra RNG draws), docs/kernel/scheduling.md, docs/SECURITY.md rows. Tier A (kernel cases): kernel-red-2. Size M. Launchable while smp is quiet; SMP5 stays parked."
-  state = "reported"
-  revision = 217
+  state = "done"
+  revision = 266
 
 [[node]]
   id = "ATK3"
@@ -2295,8 +2295,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "AGENT0"
   body = "Brief: .wash/local/AGT2-implementer.md. Tier B (the shell, inside one session's budget), size S-M, shell track. Page: docs/userland/shell.md (a new section under The loop or The shell in a session). Host tests under ./test-shell, one bench case driving a session over SSH through the mode with a multi-line result and a crashing line, verdicts from the shell's printed values (rule F)."
-  state = "reported"
-  revision = 246
+  state = "done"
+  revision = 265
 
 [[node]]
   id = "AGT3"
@@ -2332,8 +2332,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "M2"
   body = "libs/rt/src/thread.rs:25 says it: 'No guard page below it: a stack that overflows writes over whatever is mapped below'; `spawn` (:33-41) takes `Buffer::new(stack_pages)` and hands it to thread_create. AGT4 found the cost: a helper scheduler's overflow corrupted the heap silently and rv64 died later with an illegal instruction, while the first thread's overflow faulted at once at its unmapped page (memory-layout.md:224-226); beamlet-compile-footprint paints the first thread only, so a helper's peak is unmeasured. Lever: the runtime places every spawned stack with an unmapped page below it, by whichever the ABI allows without a kernel change: a mapping of stack_pages + 1 whose lowest page is given back (unmapped) before the thread starts, or a fixed placement leaving a hole below (map_anon's area, memory-layout.md); the guard costs no frame, one page of address space; the sentence on thread.rs and native.md says so and the 'no guard page' sentence goes. The painted-stack measurement (MEM1's launcher) extends to spawned stacks so beamlet-compile-footprint and the memory scan report each scheduler's peak, and SCHEDULER_STACK_PAGES is sized from the largest. Gates: a host test and a boot case thread-stack-guard: a spawned thread overflows on purpose and the kernel's fault line names it at the guard, the process ending there, no later crash; beamlet-footprint and beamlet-compile-footprint both widths with the helper peaks quoted; the rt host tests; the kernel's address-space cases unchanged. Files: libs/rt/src/thread.rs, libs/rt/src/buffer or map, tools/testbench's memory scan, docs/userland/native.md, docs/userland/beamlet.md. Tier A (libs/rt, every program's threads): steward-red-2. Size S."
-  state = "active"
-  revision = 252
+  state = "done"
+  revision = 273
 
 [[node]]
   id = "STEWARD3A"
@@ -2370,8 +2370,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "STEWARD3"
   body = "The design question handed from STEWARD2 (.wash/local/STEWARD3-implementer.md '2026-10-06: a design question'; steward.md R41 'Open'; the R41 departure accepted for sessions in the Architect's handoff): `new_connection(root, quota)` carries no scope and only the process that makes a handle stamps it, so the steward's CreateScope budget (zero limits inside a lease) binds nothing; a lease's connections today end by the launcher's disconnect at the lease's end (agents.md 'When a lease ends'). Step 1 (the Architect, before any build): the ruling, with the page line for steward.md R41 and the kernel or protocol page it touches, between (a) a scope handle a server accepts at new_connection and ends connections by (a serving-library change in libs/rt, every file server's for free; a wire-table field), and (b) a disconnect-by-scope the steward drives (no server change; the steward must know every connection it minted). A choice that changes the kernel's ABI or the 9P wire goes to the owner by decision_request with both; a serving-library-only mechanism is the Architect's. Step 2: the build per the ruling, with a host test in libs/rt (a connection made in a scope ends when the scope's budget is destroyed, its fids freed, its sibling in another scope untouched) and R41's status and SECURITY.md row. STEWARD3A builds leases whose connections end by the launcher's disconnect until this lands, and R41 stays Open with this node's words. Files: docs/servers/steward.md R41, docs/servers/serving.md, libs/rt/src/server (if (a)), libs/wire/tables/steward.md, servers/steward. Tier A (authority over connections): steward-red-2. Size S (design) + S (build)."
-  state = "active"
-  revision = 254
+  state = "done"
+  revision = 279
 
 [[node]]
   id = "STEWARD3S"
@@ -2380,5 +2380,5 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "STEWARD3"
   needs = ["STEWARD3R"]
   body = "STEWARD3R's residual under R41 (.wash/local/STEWARD3R-ruling.md 'Cases, settled', point 2): `new_connection(root, quota, scope)` mints every 9P connection (fsd, consoled, carved homes) in the session's or lease's scope, so destroying the scope ends it in every table at once; ipd's typed `grant` (How::Grant in the steward's drive, libs/wire/tables/ipd.md) has no scope field, so a network connection ends only when the steward's cleanup disconnect reaches ipd, and a copy forwarded by a hijacked agent lives until then. Lever: the grant gains an optional `scope: handle[0] budget` as op 2 did; ipd mints the granted connection with it through the same Minter path; the steward passes the scope through Kernel::connect for Server::Net as for Shared. Gates: the rt host test's twin for ipd's grant (a granted connection in scope S dies with S, a sibling in T serves); the net cases once both widths (bench-net-peer, the ipd cases that grant); R41's residual leaves steward.md and SECURITY.md's row says every connection kind; the wire table's row. Files: libs/wire/tables/ipd.md, servers/ipd, servers/steward's drive, docs/servers/steward.md, ipd.md. Tier A (authority over connections): steward-red-2. Size S."
-  state = "todo"
-  revision = 263
+  state = "active"
+  revision = 280
