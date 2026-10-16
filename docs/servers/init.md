@@ -118,7 +118,9 @@ and `init`'s only input. Its entries:
   caller is that caller's `handed` badge, written in both places by the manifest's author; `init`
   mints it from the `handed` item, never from the argument. Where `init` calls a server itself
   (`keyd`, `consoled` and `bootfsd`, at the first endpoint each receives on), its own handle
-  carries the smallest badge from 1 that no `handed` item there uses. A manifest names each of
+  carries the smallest badge from 1 that no `handed` item there uses; at the steward's entry it
+  is badge 3, the class the steward accepts `blame` on, which no `handed` item may name there
+  ([restarts and reboots](#restarts-and-reboots)). A manifest names each of
   these programs at most once, `keyd` exactly once: a second would run beside the one `init`
   calls, unchecked, and a second `keyd` could hold keys `init` never asked about (R35). A program
   that may run more than once (`blkd`, one per disk; `walfsd`, `littlefsd` or `erofsd`, one per volume) is told the endpoint
@@ -577,10 +579,19 @@ corrupt) or does not answer within a second, is handed the badge instead, as eve
 steward starts and meets that server's own answers. Only then can a dead steward's session
 connections outlive it at that server, if it serves sessions later.
 
+A file server's or `ipd`'s restart strands the steward's fresh connection there, as a restarted
+`consoled` strands every server's console ([residual risks](#residual-risks)); the planned way
+out, for every server: `init` re-makes it and tells the steward
+([steward](steward.md#failure-and-restart)).
+
 ### Restarts and reboots
 
-<details><summary>Status: built · partly tested: blame, `blame`'s badge and a wedged steward are the steward's, not built; a restarted `consoled`'s attach is read from the code, not attacked · tested (15)</summary>
+<details><summary>Status: built · partly tested: the machine shows one fault blamed through `init`'s own badge and taken by the steward; the timeout's outcome is decided on the host; three faults under the steward are no bench case (the steward's page says why); a restarted `consoled`'s attach is read from the code, not attacked · tested (19)</summary>
 
+- bench:steward-blame-lockout
+- host:redoubt-init::a_blame_goes_to_the_steward_only_for_a_named_account_while_the_steward_runs
+- host:redoubt-init::a_blame_the_steward_does_not_take_in_time_is_lost_and_said
+- host:redoubt-init::a_blame_taken_a_dead_steward_and_a_refusal_are_told_apart
 - bench:init-restart
 - bench:init-handed-revoked
 - bench:init-reboot
@@ -641,13 +652,20 @@ connections outlive it at that server, if it serves sessions later.
   thread was serving ([R21 (crash blame)](../kernel/processes.md#r21-crash-blame)). `init` passes
   them to the steward in one typed call, `blame(account, labels, server)`, in the steward's table,
   where `server` is the faulting server's manifest name for the audit record; the steward's rule
-  counts by (account, label set) only ([steward](steward.md#crash-blame)).
+  counts by (account, label set) only ([steward](steward.md#crash-blame)). The fault line says
+  whom the notice named (`init: walfsd:data (PID 9) faulted, code 10, serving account 1002, labels
+  none`), and a second line, after the restart, what became of the blame (`init: walfsd:data's
+  fault blamed on account 1002, labels none: the steward took it`).
 - **Only `init` can blame.** The steward accepts `blame` only through a root badge it gives `init`
-  alone: anyone who could send it could have another principal's sessions ended by forging three
-  crashes.
+  alone, badge 3 on its endpoint, which `init` mints for itself at each of the steward's starts and
+  the manifest check hands to no server: anyone who could send it could have another principal's
+  sessions ended by forging three crashes.
 - **A wedged steward cannot stall restarts.** `init` restarts the server first, then blames, with a
-  timeout; a blame lost to the timeout is reported on the console. A fault before the steward
-  runs is reported on the console and blamed on nobody.
+  timeout of one second (`blame::TIMEOUT`, the same as a dead child's grant releases); a blame lost
+  to the timeout is reported on the console (`... : lost: the steward did not answer within 1 s`)
+  and counts toward no lockout, and nothing is retried. A fault before the steward runs, or of the
+  steward itself, is reported on the console and blamed on nobody (`; blamed on nobody: no
+  steward`); a fault whose notice names nobody says so (`; blamed on nobody`).
 - **Reboot.** More than 5 restarts of one server within 60 seconds, not stopped by blame, reboots
   the machine: failing closed beats a server that cannot stay up. So does a restart `init`
   cannot make: a budget it cannot carve, a badge or console connection it cannot mint, or a

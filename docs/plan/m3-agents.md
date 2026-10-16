@@ -47,7 +47,7 @@ Bob, attacking Alice.
 | Endpoint flooding: 10,000 sender threads calling `walfsd`, and Alice is still served in her turn | [R2 (fair waiting)](../kernel/ipc.md#r2-fair-waiting) | `redoubt-ipc` for the kernel's half (`WAIT_CAP` and turns per group); with `walfsd` not yet |
 | A vault session filling its `WAIT_CAP` on a shared server leaves its owner's unlabelled session's turn and cap unaffected | R2, [R37 (vault non-interference)](../servers/steward.md#r37-vault-non-interference) | not yet |
 | A lender destroyed while `walfsd` holds its lent pages, and `walfsd` survives | [R3 (lends and abandoned calls)](../kernel/ipc.md#r3-lends-and-abandoned-calls) | `uaf-lent-page`, `process-lifecycle` for the kernel; with `walfsd` not yet |
-| Crash blame: Bob crashes `walfsd` three times while Alice is busy; every session and lease of Bob's with that label set ends and he cannot log straight back in; Alice is unaffected, also when `walfsd` panics rather than faults and when the crashing thread holds her calls open too; a crash from a `send` while a bystander's call is parked blames nobody; a vault session's crashes do not end its owner's unlabelled session | [R21 (crash blame)](../kernel/processes.md#r21-crash-blame), [R40 (blame by label set)](../servers/steward.md#r40-blame-by-label-set) | `process`, `process-attack` for the kernel's blame; the steward's not yet |
+| Crash blame: Bob crashes `walfsd` three times while Alice is busy; every session and lease of Bob's with that label set ends and he cannot log straight back in; Alice is unaffected, also when `walfsd` panics rather than faults and when the crashing thread holds her calls open too; a crash from a `send` while a bystander's call is parked blames nobody; a vault session's crashes do not end its owner's unlabelled session | [R21 (crash blame)](../kernel/processes.md#r21-crash-blame), [R40 (blame by label set)](../servers/steward.md#r40-blame-by-label-set) | `process`, `process-attack` for the kernel's blame; `steward-blame-lockout` for one blame counted on the machine; the lockout at three and the vault arm host only; "Alice is unaffected" not yet (the restart gap, a follow-up under STEWARD3) |
 | Pinned open calls: 64 lent calls parked at `ipd` with short timeouts, and `ipd` still takes `netd`'s frames and frees the abandoned calls; SSH sessions survive | [R28 (parked-call accounting)](../servers/serving.md#r28-parked-call-accounting), [R4a (open calls)](../kernel/ipc.md#r4a-open-calls) | `net-pinned`; with SSH not yet |
 | System fairness: a busy `walfsd:data` does not fill `blkd`'s `WAIT_CAP` for `walfsd:alice-secrets` | R2 | not yet |
 | Server CPU: expensive requests to a server delay other users only by that server's weight | R12 | `sched-server-busy`, `sched-large-weight` |
@@ -91,7 +91,9 @@ cases for what it builds.
 ## Progress
 
 The steward's policy core decides leases, approvals, declassification, push and crash blame, and
-is tested on the host; the running server's half for them remains planned
+is tested on the host; the running server's half is built for leases and crash blame (one blame
+counted on the machine, the lockout at three a host test) and remains planned for approvals,
+declassification and push
 ([the policy core](../servers/steward.md#the-policy-core)). The kernel's half of several attacks
 above has its case, as the tables say, and the kernel containment gate holds hostile leases on the
 kernel's primitives alone ([containment](../kernel/README.md#containment)). The image's
