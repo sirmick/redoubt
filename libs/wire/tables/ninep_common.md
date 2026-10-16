@@ -4,7 +4,7 @@ The `ninep_common` protocol's message and error tables, included by its owning p
 <!-- wire: ninep_common -->
 | Opcode | Message | Fields | Reply |
 | --- | --- | --- | --- |
-| 2 | `new_connection` | `root: string`, `quota: u64` | `conn: handle[0] endpoint`, `id: u64` |
+| 2 | `new_connection` | `root: string`, `quota: u64`, `scope: handle[0]? budget` | `conn: handle[0] endpoint`, `id: u64` |
 | 3 | `disconnect` | `id: u64` | - |
 
 <!-- wire-errors: ninep_common -->

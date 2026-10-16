@@ -80,7 +80,7 @@
       "receives": ["erofsd:system"],
       "args": ["endpoint=erofsd:system", "buckets=5"] },
     { "name": "steward", "program": "steward",
-      "stack_pages": "9", "heap_pages": "30",
+      "stack_pages": "9", "heap_pages": "32",
       "budget": { "pages": "1024", "processes": 1, "weight": 100 },
       "receives": ["steward"],
       "handed": [ { "endpoint": "bootfsd", "badge": "7" }, { "endpoint": "erofsd:system", "badge": "7" },

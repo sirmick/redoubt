@@ -383,7 +383,7 @@ impl Me {
             // Wait for it to finish, so the connection is made (and counted) before the judge goes on.
             let _ = self.status(&Socket { ctl, data: ctl });
         }
-        tried(5, self.c.new_connection(&mut self.lend, "", 0).is_ok());
+        tried(5, self.c.new_connection(&mut self.lend, "", 0, None).is_ok());
         tried(6, self.grant_anything());
         self.report(event::LABELLED, opened)?;
         loop {

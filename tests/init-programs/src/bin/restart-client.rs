@@ -59,8 +59,8 @@ fn check(startup: &Startup, lend: &mut Lend) -> Result<(), String> {
     let at = Endpoint::from_handle(startup.handle("restartee").ok_or("no restartee handle")?);
     let conn =
         Connection::attach(Endpoint::from_handle(at.handle()), lend).map_err(|e| format!("attach: {e:?}"))?;
-    let (_, first) = conn.new_connection(lend, "", 0).map_err(|e| format!("mint: {e:?}"))?;
-    let (_, second) = conn.new_connection(lend, "", 0).map_err(|e| format!("mint again: {e:?}"))?;
+    let (_, first) = conn.new_connection(lend, "", 0, None).map_err(|e| format!("mint: {e:?}"))?;
+    let (_, second) = conn.new_connection(lend, "", 0, None).map_err(|e| format!("mint again: {e:?}"))?;
     // An id this instance minted is its own to release.
     conn.disconnect(first, TIMEOUT).map_err(|e| format!("release the first id: {e:?}"))?;
 

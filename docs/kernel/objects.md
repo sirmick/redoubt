@@ -301,7 +301,8 @@ The rules:
   (I4 (only badge-0 handles receive)).
 - With no budget handle, the new handle gets the default stamp. With one, that budget must be the
   default stamp or below it in the budget tree, or the call is `NotPermitted`: a budget handle
-  only narrows.
+  only narrows. A 9P server mints a connection in the scope its client hands it
+  ([R41 (narrowing by revocation scope)](../servers/steward.md#r41-narrowing-by-revocation-scope)).
 - The new handle is installed like any other: the lowest free index, `TooLarge` or `OutOfMemory`
   if the table cannot take it.
 

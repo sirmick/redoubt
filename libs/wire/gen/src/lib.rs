@@ -42,9 +42,10 @@ pub enum Ty {
     U64,
     Str,
     Bytes,
-    /// The handle in this slot, and the kind of object it must name (documentation: kinds
-    /// are checked by use, servers/wire.md); carries no bytes.
-    Handle(usize, HandleKind),
+    /// The handle in this slot, the kind of object it must name (documentation: kinds are
+    /// checked by use, servers/wire.md), and whether the slot may be empty (`handle[N]? KIND`:
+    /// optional slots come after every required one); carries no bytes.
+    Handle(usize, HandleKind, bool),
 }
 
 impl Ty {
@@ -76,18 +77,24 @@ fn data(fields: &[Field]) -> impl Iterator<Item = &Field> {
     fields.iter().filter(|f| !matches!(f.ty, Ty::Handle(..)))
 }
 
-/// The handle fields, with their slot and kind.
-fn handles(fields: &[Field]) -> impl Iterator<Item = (&Field, usize, HandleKind)> {
+/// The handle fields, with their slot, kind and whether the slot may be empty.
+fn handles(fields: &[Field]) -> impl Iterator<Item = (&Field, usize, HandleKind, bool)> {
     fields.iter().filter_map(|f| match f.ty {
-        Ty::Handle(slot, kind) => Some((f, slot, kind)),
+        Ty::Handle(slot, kind, optional) => Some((f, slot, kind, optional)),
         _ => None,
     })
 }
 
+/// How many of the handle slots may be empty: the last ones, by the parser's rule.
+fn optional(fields: &[Field]) -> usize { handles(fields).filter(|(.., optional)| *optional).count() }
+
 /// `` `name` (slot N, KIND) `` for each handle, for the generated docs; `None` if there are none.
 fn handle_doc(fields: &[Field]) -> Option<String> {
     let hs: Vec<String> = handles(fields)
-        .map(|(f, slot, kind)| format!("`{}` (slot {slot}, {})", f.name, kind.name()))
+        .map(|(f, slot, kind, optional)| {
+            let may = if optional { ", optional" } else { "" };
+            format!("`{}` (slot {slot}, {}{may})", f.name, kind.name())
+        })
         .collect();
     (!hs.is_empty()).then(|| hs.join(", "))
 }
@@ -258,7 +265,7 @@ fn parse_code(what: &str, s: &str) -> Result<u32, String> {
     Ok(value)
 }
 
-fn parse_type(s: &str, handles_so_far: usize) -> Result<Ty, String> {
+fn parse_type(s: &str, handles_so_far: usize, optional_so_far: bool) -> Result<Ty, String> {
     Ok(match s {
         "u8" => Ty::U8,
         "u16" => Ty::U16,
@@ -268,10 +275,15 @@ fn parse_type(s: &str, handles_so_far: usize) -> Result<Ty, String> {
         "bytes" => Ty::Bytes,
         _ => {
             // `handle[N] KIND`: the slot, one ASCII space, then the kind of object the handle
-            // must name. One spelling: no tabs, doubled or non-ASCII spaces.
+            // must name; `handle[N]? KIND` for a slot that may be empty. One spelling: no tabs,
+            // doubled or non-ASCII spaces.
             let (slot, kind) = match s.split_once(' ') {
                 Some((slot, kind)) => (slot, Some(kind)),
                 None => (s, None),
+            };
+            let (slot, optional) = match slot.strip_suffix('?') {
+                Some(slot) => (slot, true),
+                None => (slot, false),
             };
             let slot = slot
                 .strip_prefix("handle[")
@@ -299,7 +311,12 @@ fn parse_type(s: &str, handles_so_far: usize) -> Result<Ty, String> {
             if slot >= MAX_MSG_HANDLES {
                 return Err(format!("`{s}`: a message carries at most {MAX_MSG_HANDLES} handles"));
             }
-            Ty::Handle(slot, kind)
+            // Slots are positional, so an empty one can only be at the end: once a slot may be
+            // empty, so may every later one.
+            if optional_so_far && !optional {
+                return Err(format!("`{s}`: a required handle cannot follow an optional one (`handle[N]?`)"));
+            }
+            Ty::Handle(slot, kind, optional)
         }
     })
 }
@@ -321,7 +338,11 @@ fn parse_fields(cell: &str) -> Result<Vec<Field>, String> {
             return Err(format!("field `{fname}` appears twice"));
         }
         let slots = handles(&parsed).count();
-        parsed.push(Field { name: fname.to_string(), ty: parse_type(ty.trim_ascii(), slots)? });
+        let optional_so_far = optional(&parsed) > 0;
+        parsed.push(Field {
+            name: fname.to_string(),
+            ty: parse_type(ty.trim_ascii(), slots, optional_so_far)?,
+        });
     }
     Ok(parsed)
 }
@@ -717,15 +738,15 @@ pub fn rust(p: &Protocol) -> String {
         rust_struct(&mut s, &format!("/// The reply to [`{}`].", m.type_name()), &m.reply_type(), &m.reply);
     }
 
-    let layouts = |rows: Vec<(u32, bool, usize)>| {
+    let layouts = |rows: Vec<(u32, bool, &[Field])>| {
         rows.iter()
-            .map(|(op, inline, h)| {
-                format!("    Layout {{ opcode: {op}, inline: {inline}, handles: {h} }},\n")
+            .map(|(op, inline, fields)| {
+                let (h, o) = (handles(fields).count(), optional(fields));
+                format!("    Layout {{ opcode: {op}, inline: {inline}, handles: {h}, optional: {o} }},\n")
             })
             .collect::<String>()
     };
-    let requests =
-        layouts(p.messages.iter().map(|m| (m.opcode, m.inline(), handles(&m.fields).count())).collect());
+    let requests = layouts(p.messages.iter().map(|m| (m.opcode, m.inline(), m.fields.as_slice())).collect());
     let _ = write!(s, "\n/// Requests by opcode.\nconst REQUESTS: &[Layout] = &[\n{requests}];\n");
     let rows: Vec<Row<'_>> = p
         .messages
@@ -777,8 +798,7 @@ pub fn rust(p: &Protocol) -> String {
     }
     s.push_str("}\n");
 
-    let replies =
-        layouts(p.messages.iter().map(|m| (m.opcode, m.inline(), handles(&m.reply).count())).collect());
+    let replies = layouts(p.messages.iter().map(|m| (m.opcode, m.inline(), m.reply.as_slice())).collect());
     let _ = write!(
         s,
         "\n/// Replies, by the opcode of their request.\nconst REPLIES: &[Layout] = &[\n{replies}];\n"
@@ -924,18 +944,21 @@ pub fn elixir(p: &Protocol) -> String {
     let _ = writeln!(s, "  \"\"\"");
     s.push_str("  alias Redoubt.Wire, as: W\n\n");
     let shape = |m: &MessageDef| if m.inline() { ":inline" } else { ":buffer" };
-    s.push_str("  # opcode => {name, shape, handles}; replies are keyed by their request's opcode.\n");
-    let reqs: Vec<String> = p
-        .messages
-        .iter()
-        .map(|m| format!("    {} => {{:{}, {}, {}}}", m.opcode, m.name, shape(m), handles(&m.fields).count()))
-        .collect();
+    s.push_str("  # opcode => {name, shape, handle slots, slots that may be empty}; replies are keyed by\n");
+    s.push_str("  # their request's opcode.\n");
+    let row = |m: &MessageDef, fields: &[Field]| {
+        format!(
+            "    {} => {{:{}, {}, {}, {}}}",
+            m.opcode,
+            m.name,
+            shape(m),
+            handles(fields).count(),
+            optional(fields)
+        )
+    };
+    let reqs: Vec<String> = p.messages.iter().map(|m| row(m, &m.fields)).collect();
     let _ = writeln!(s, "  @requests %{{\n{}\n  }}", reqs.join(",\n"));
-    let reps: Vec<String> = p
-        .messages
-        .iter()
-        .map(|m| format!("    {} => {{:{}, {}, {}}}", m.opcode, m.name, shape(m), handles(&m.reply).count()))
-        .collect();
+    let reps: Vec<String> = p.messages.iter().map(|m| row(m, &m.reply)).collect();
     let _ = writeln!(s, "  @replies %{{\n{}\n  }}", reps.join(",\n"));
     let errs: Vec<String> = p.errors.iter().map(|e| format!("    {} => :{}", e.code, e.name)).collect();
     let _ = writeln!(s, "  @errors %{{\n{}\n  }}\n", errs.join(",\n"));
@@ -1041,27 +1064,28 @@ pub fn elixir_client(p: &Protocol) -> String {
         let fields: Vec<String> = data(&m.fields).map(|f| format!("{}: v_{}", f.name, f.name)).collect();
         let mut args = vec!["conn".to_string()];
         args.extend(values.iter().cloned());
-        args.extend(held.iter().cloned());
+        // An optional slot's argument defaults to `nil`, which is left out of the list sent.
+        args.extend(handles(&m.fields).map(|(f, .., optional)| {
+            if optional { format!("h_{} \\\\ nil", f.name) } else { format!("h_{}", f.name) }
+        }));
+        let held = if optional(&m.fields) > 0 {
+            format!("Enum.reject([{}], &is_nil/1)", held.join(", "))
+        } else {
+            format!("[{}]", held.join(", "))
+        };
         s.push('\n');
         if m.send {
             let _ = writeln!(s, "  @doc \"Sends `{}`, one way.\"", m.name);
             let _ = writeln!(s, "  def {}({}) do", m.name, args.join(", "));
-            let _ = writeln!(
-                s,
-                "    C.send(conn, P, {{:{}, %{{{}}}}}, [{}])",
-                m.name,
-                fields.join(", "),
-                held.join(", ")
-            );
+            let _ = writeln!(s, "    C.send(conn, P, {{:{}, %{{{}}}}}, {held})", m.name, fields.join(", "));
         } else {
             let _ = writeln!(s, "  @doc \"Calls `{}`, waiting at most `timeout` ms.\"", m.name);
             let _ = writeln!(s, "  def {}({}, timeout \\\\ C.timeout()) do", m.name, args.join(", "));
             let _ = writeln!(
                 s,
-                "    C.call(conn, P, {{:{}, %{{{}}}}}, [{}], timeout)",
+                "    C.call(conn, P, {{:{}, %{{{}}}}}, {held}, timeout)",
                 m.name,
-                fields.join(", "),
-                held.join(", ")
+                fields.join(", ")
             );
         }
         s.push_str("  end\n");
@@ -1160,9 +1184,9 @@ mod tests {
         assert_eq!(p[0].name, "demo");
         let m = &p[0].messages;
         assert_eq!(m[1].type_name(), "BC");
-        assert_eq!(m[1].fields[1].ty, Ty::Handle(0, HandleKind::Endpoint));
+        assert_eq!(m[1].fields[1].ty, Ty::Handle(0, HandleKind::Endpoint, false));
         assert_eq!(m[0].reply, []);
-        assert_eq!(m[2].reply[1].ty, Ty::Handle(0, HandleKind::Budget));
+        assert_eq!(m[2].reply[1].ty, Ty::Handle(0, HandleKind::Budget, false));
         assert!(m[0].inline());
         assert!(!m[1].inline());
         // An inline request whose reply needs a buffer is buffer-shaped.
@@ -1259,7 +1283,7 @@ mod tests {
         for kind in HandleKind::ALL {
             let p = protocols(&format!("{HEAD}| 1 | `a` | `h: handle[0] {}` | - |\n{ERRORS}", kind.name()))
                 .unwrap();
-            assert_eq!(p[0].messages[0].fields[0].ty, Ty::Handle(0, kind));
+            assert_eq!(p[0].messages[0].fields[0].ty, Ty::Handle(0, kind, false));
         }
         assert!(err("| 1 | `a` | `h: handle[0]` | - |\n").contains("needs its kind"));
         assert!(err("| 1 | `a` | - | `h: handle[0]` |\n").contains("needs its kind"));
@@ -1272,6 +1296,38 @@ mod tests {
         assert!(err("| 1 | `a` | `h: handle [0] endpoint` | - |\n").contains("unknown type"));
         assert!(err("| 1 | `a` | `h: handle[0]endpoint` | - |\n").contains("unknown type"));
         assert!(err("| 1 | `a` | `h: u32 endpoint` | - |\n").contains("unknown type"));
+    }
+
+    /// `handle[N]? KIND` is a slot that may be empty: the layout counts it among the handles
+    /// and among the optional ones, so a message arrives with either count; a required slot
+    /// after an optional one is refused, since slots are positional. The Elixir client takes it
+    /// as an argument defaulting to `nil`, left out of the handles sent.
+    #[test]
+    fn an_optional_handle_is_a_slot_that_may_be_empty() {
+        let p = protocols(&format!(
+            "{HEAD}| 1 | `a` | `x: u32`, `r: handle[0] endpoint`, `s: handle[1]? budget` | - |\n{ERRORS}"
+        ))
+        .unwrap();
+        let fields = &p[0].messages[0].fields;
+        assert_eq!(fields[1].ty, Ty::Handle(0, HandleKind::Endpoint, false));
+        assert_eq!(fields[2].ty, Ty::Handle(1, HandleKind::Budget, true));
+        let rust = rust(&p[0]);
+        assert!(rust.contains("Layout { opcode: 1, inline: true, handles: 2, optional: 1 }"), "{rust}");
+        assert!(rust.contains("`r` (slot 0, endpoint), `s` (slot 1, budget, optional)"), "{rust}");
+        let ex = elixir(&p[0]);
+        assert!(ex.contains("1 => {:a, :inline, 2, 1}"), "{ex}");
+        let client = elixir_client(&p[0]);
+        assert!(
+            client.contains("def a(conn, v_x, h_r, h_s \\\\ nil, timeout \\\\ C.timeout()) do"),
+            "{client}"
+        );
+        assert!(client.contains("Enum.reject([h_r, h_s], &is_nil/1)"), "{client}");
+        assert!(
+            err("| 1 | `a` | `s: handle[0]? budget`, `r: handle[1] endpoint` | - |\n")
+                .contains("cannot follow")
+        );
+        assert!(err("| 1 | `a` | `s: handle[0] ? budget` | - |\n").contains("with one space"));
+        assert!(err("| 1 | `a` | `s: handle[0]?? budget` | - |\n").contains("unknown type"));
     }
 
     /// The separator is exactly one ASCII space. A tab, two spaces or a
@@ -1431,7 +1487,9 @@ mod tests {
         let names: Vec<&str> = n.messages.iter().map(|m| m.name.as_str()).collect();
         assert_eq!(names, ["new_connection", "disconnect"]);
         assert!(!n.messages[0].inline(), "`new_connection` carries a string");
-        assert_eq!(n.messages[0].reply[0].ty, Ty::Handle(0, HandleKind::Endpoint));
+        assert_eq!(n.messages[0].reply[0].ty, Ty::Handle(0, HandleKind::Endpoint, false));
+        // R41: the connection's scope, a slot a caller without one leaves empty.
+        assert_eq!(n.messages[0].fields[2].ty, Ty::Handle(0, HandleKind::Budget, true));
         assert_eq!(s.messages[0].name, "startup");
         assert!(!s.messages[0].inline());
         assert_eq!(n.errors[0], malformed());

@@ -343,7 +343,7 @@ fn a_labelled_caller_gets_nothing_and_holds_no_bucket() {
         let c = Connection::new(Endpoint::from_handle(conn));
         let mut lend = Lend::new(4).unwrap();
         assert!(c.attach(&mut lend, 0, "").is_err(), "a labelled attach");
-        assert!(c.new_connection(&mut lend, "", 0).is_err(), "a labelled new_connection");
+        assert!(c.new_connection(&mut lend, "", 0, None).is_err(), "a labelled new_connection");
         let ep = c.into_endpoint();
         let scope = Scope::new(&[Rule::Connect(Prefix::new(0, 0).unwrap(), Ports::new(1, 65535).unwrap())])
             .unwrap()

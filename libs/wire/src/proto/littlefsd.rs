@@ -60,10 +60,10 @@ pub struct GetAttrReply<'a> {
 
 /// Requests by opcode.
 const REQUESTS: &[Layout] = &[
-    Layout { opcode: 16, inline: false, handles: 0 },
-    Layout { opcode: 17, inline: false, handles: 0 },
-    Layout { opcode: 18, inline: false, handles: 0 },
-    Layout { opcode: 19, inline: false, handles: 0 },
+    Layout { opcode: 16, inline: false, handles: 0, optional: 0 },
+    Layout { opcode: 17, inline: false, handles: 0, optional: 0 },
+    Layout { opcode: 18, inline: false, handles: 0, optional: 0 },
+    Layout { opcode: 19, inline: false, handles: 0, optional: 0 },
 ];
 
 /// Every request of the protocol.
@@ -162,10 +162,10 @@ impl<'a> Message<'a> {
 
 /// Replies, by the opcode of their request.
 const REPLIES: &[Layout] = &[
-    Layout { opcode: 16, inline: false, handles: 0 },
-    Layout { opcode: 17, inline: false, handles: 0 },
-    Layout { opcode: 18, inline: false, handles: 0 },
-    Layout { opcode: 19, inline: false, handles: 0 },
+    Layout { opcode: 16, inline: false, handles: 0, optional: 0 },
+    Layout { opcode: 17, inline: false, handles: 0, optional: 0 },
+    Layout { opcode: 18, inline: false, handles: 0, optional: 0 },
+    Layout { opcode: 19, inline: false, handles: 0, optional: 0 },
 ];
 
 /// Every successful reply of the protocol, named after its request.

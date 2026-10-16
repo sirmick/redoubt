@@ -11,18 +11,19 @@ defmodule Redoubt.Wire.Proto.Blkd do
   """
   alias Redoubt.Wire, as: W
 
-  # opcode => {name, shape, handles}; replies are keyed by their request's opcode.
+  # opcode => {name, shape, handle slots, slots that may be empty}; replies are keyed by
+  # their request's opcode.
   @requests %{
-    1 => {:info, :buffer, 0},
-    2 => {:read, :buffer, 0},
-    3 => {:write, :buffer, 0},
-    4 => {:flush, :inline, 0}
+    1 => {:info, :buffer, 0, 0},
+    2 => {:read, :buffer, 0, 0},
+    3 => {:write, :buffer, 0, 0},
+    4 => {:flush, :inline, 0, 0}
   }
   @replies %{
-    1 => {:info, :buffer, 0},
-    2 => {:read, :buffer, 0},
-    3 => {:write, :buffer, 0},
-    4 => {:flush, :inline, 0}
+    1 => {:info, :buffer, 0, 0},
+    2 => {:read, :buffer, 0, 0},
+    3 => {:write, :buffer, 0, 0},
+    4 => {:flush, :inline, 0, 0}
   }
   @errors %{
     1 => :malformed,

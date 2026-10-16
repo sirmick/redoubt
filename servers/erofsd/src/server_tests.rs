@@ -345,7 +345,7 @@ fn a_range_that_cannot_be_sized_is_no_volume() {
 struct Kernel(Vec<u64>);
 
 impl Minter for Kernel {
-    fn mint(&mut self, badge: NonZeroU64) -> Result<Handle, Error> {
+    fn mint(&mut self, badge: NonZeroU64, _scope: Option<Handle>) -> Result<Handle, Error> {
         self.0.push(badge.get());
         Ok(Handle::new(99 + self.0.len() as u32).unwrap())
     }

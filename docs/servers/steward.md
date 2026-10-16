@@ -1065,7 +1065,7 @@ on it fall within ten minutes, no new session of it starts for the next ten minu
 
 ### R41 (narrowing by revocation scope)
 
-Status: planned · M3 (agents, approvals and the attack suite)
+Status: built · partly tested: the attack case handing a server a session's budget, and a lease's connections ending at its deadline, are STEWARD3A's with the leases · tested: host:redoubt-rt::a_connection_minted_in_a_scope_ends_when_the_scope_is_destroyed, host:redoubt-rt::a_connection_is_minted_in_the_scope_its_requester_sends, host:redoubt-steward-server::a_session_s_end_destroys_its_budget_before_it_releases_its_connections, host:redoubt-init::the_steward_s_entry_alone_is_given_the_manifest_lines
 
 A server that narrows a session's connection to that session's life holds a revocation scope made
 for it, never a budget holding processes. So a compromised server can revoke what it minted,
@@ -1074,11 +1074,20 @@ connection narrowed to a session's budget cannot be written, since `Connect` tak
 which only a zero-limit `CreateScope` makes. The attack test hands a server a session's budget and
 expects it refused.
 
-**Open:** a connection does not carry the revocation scope the steward makes for it:
-`new_connection` has no scope, and only the process that makes a handle stamps it. Narrowing by
-scope needs a means (a scope handle a server accepts at `new_connection` and kills by, or a
-disconnect-by-scope), designed before any lease relies on R41; until then connections
-end by the launcher's disconnect.
+A server narrowing a connection mints it in the scope it is handed: `new_connection(root, quota,
+scope)` carries the scope, the server's `mint` stamps the handle with it
+([R9 (stamps)](../kernel/objects.md#r9-stamps)), the kernel refuses a scope not below the server's
+own stamp, and destroying the scope ends the handle in every table at once, forwarded copies
+included ([R10 (destruction)](../kernel/budgets.md#r10-destruction)). What the server holds for
+the connection (fids,
+admission, quota) it cannot see die: the steward disconnects each connection of a scope after
+destroying it, cleanup that follows the cutoff and never is it. Every `Connect` the steward
+issues is minted in the session's or lease's scope, its own badge and the shared servers' alike;
+the steward's connections at those servers are stamped `users` by `init`
+([init](init.md#restarts-and-reboots)), the budget every scope lies under, so the kernel's
+narrowing passes. The steward holds no copy of a child's scoped connections once the child has
+them, so none can outlive its scope in the steward's own table, whose freed index the kernel
+gives to the next handle installed.
 
 ### R42 (one approved item)
 
@@ -1217,6 +1226,10 @@ so the case restarts it thirteen times, each time with that session and its conn
   guard stays, exercised by the model and the traces.
 - **Steward work is paid by the steward.** A principal's requests cost the steward's budget and
   time, bounded by its caps and per-request work, not by the requester's budget.
+- **`ipd`'s grant carries no scope.** A session's network connection comes from `ipd`'s typed
+  `grant`, whose wire has no scope slot, so it is stamped `users` and ends by the steward's
+  disconnect alone, not with the session's scope as every 9P connection does (R41). A scope slot
+  on `grant` is a follow-up of its own.
 - **A context's relay holds the steward's one thread for a bounded time.** The steward waits up to
   2 s for a relay's `hello` at each SSH login that starts a context, and up to 1 s for each
   `attach` and `detach`, so a relay that never answers delays every other principal's call by that

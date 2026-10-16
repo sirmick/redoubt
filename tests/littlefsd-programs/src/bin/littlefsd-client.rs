@@ -324,7 +324,7 @@ fn quota(startup: &Startup, out: &mut Out, endpoint: &str, bytes: Option<&str>) 
             .and_then(|d| d.close(&mut out.lend))
             .map_err(|e| format!("mkdir {name}: {e:?}"))?;
         let (minted, _) = base
-            .new_connection(&mut out.lend, &format!("/{name}"), quota)
+            .new_connection(&mut out.lend, &format!("/{name}"), quota, None)
             .map_err(|e| format!("mint {name}: {e:?}"))?;
         roots.push(Connection::attach(minted, &mut out.lend).map_err(|e| format!("attach {name}: {e:?}"))?);
     }

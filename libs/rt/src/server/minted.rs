@@ -49,8 +49,10 @@ pub struct NotYours;
 /// system call.
 pub trait Minter {
     /// A handle to the endpoint the request came in on, with `badge`, stamped like the handle
-    /// the request came through (kernel/objects.md R9).
-    fn mint(&mut self, badge: NonZeroU64) -> Result<Handle, Error>;
+    /// the request came through or, narrower, with the budget `scope` names: the revocation
+    /// scope the connection is minted in (kernel/objects.md R9; servers/steward.md R41). A scope
+    /// not at or below the default stamp is the kernel's `NotPermitted`.
+    fn mint(&mut self, badge: NonZeroU64, scope: Option<Handle>) -> Result<Handle, Error>;
     /// A random `u64`.
     fn random(&mut self) -> Result<u64, Error>;
 }
@@ -59,8 +61,8 @@ pub trait Minter {
 pub struct Kernel(pub NonZeroU64);
 
 impl Minter for Kernel {
-    fn mint(&mut self, badge: NonZeroU64) -> Result<Handle, Error> {
-        Ok(crate::ipc::mint_from_message(self.0, badge)?.handle())
+    fn mint(&mut self, badge: NonZeroU64, scope: Option<Handle>) -> Result<Handle, Error> {
+        Ok(crate::ipc::mint_from_message(self.0, badge, scope)?.handle())
     }
 
     fn random(&mut self) -> Result<u64, Error> { crate::handle::random_u64() }
@@ -218,18 +220,19 @@ impl<T> Minted<T> {
         Ok(Ticket { badge, id, requester: Requester::of(caller), charged: (self.key(caller), share) })
     }
 
-    /// Mints the handle for `ticket` and records it with `value`: the handle to send, its id and
-    /// its badge. Whatever happens, the badge is spent.
+    /// Mints the handle for `ticket`, in `scope` if the requester named one, and records it with
+    /// `value`: the handle to send, its id and its badge. Whatever happens, the badge is spent.
     pub fn commit(
         &mut self,
         ticket: Ticket,
         value: T,
+        scope: Option<Handle>,
         kernel: &mut impl Minter,
     ) -> Result<(Handle, u64, u64), MintError> {
         let Ticket { badge, id, requester, charged } = ticket;
         // Never reused, whatever happens to this capability (servers/serving.md R27).
         self.next_badge = badge.get().wrapping_add(1);
-        let handle = kernel.mint(badge).map_err(|_| MintError::Failed)?;
+        let handle = kernel.mint(badge, scope).map_err(|_| MintError::Failed)?;
         self.minted_here = Some(badge.get());
         self.entries.push(Entry {
             badge: badge.get(),
@@ -342,7 +345,8 @@ mod tests {
     }
 
     impl Minter for Fake {
-        fn mint(&mut self, badge: NonZeroU64) -> Result<Handle, Error> {
+        fn mint(&mut self, badge: NonZeroU64, scope: Option<Handle>) -> Result<Handle, Error> {
+            assert_eq!(scope, None, "this table's tests mint in no scope");
             if self.fails {
                 return Err(Error::OutOfMemory);
             }
@@ -366,7 +370,7 @@ mod tests {
     /// Mints one for `who`, charged to `share`; the (handle, id, badge).
     fn mint(t: &mut Minted<u32>, k: &mut Fake, who: &Caller, share: u64, value: u32) -> (Handle, u64, u64) {
         let ticket = t.reserve(who, share, k).unwrap();
-        t.commit(ticket, value, k).unwrap()
+        t.commit(ticket, value, None, k).unwrap()
     }
 
     /// servers/serving.md R27: the first badge is drawn from the kernel's randomness, above
@@ -516,7 +520,7 @@ mod tests {
         k.fails = true;
         let ticket = t.reserve(&who, 1, &mut k).unwrap();
         assert_eq!(ticket.badge(), spent, "a dropped ticket's badge is not spent");
-        assert_eq!(t.commit(ticket, 1, &mut k), Err(MintError::Failed));
+        assert_eq!(t.commit(ticket, 1, None, &mut k), Err(MintError::Failed));
         assert!(t.is_empty());
         k.fails = false;
         let (_, _, badge) = mint(&mut t, &mut k, &who, 1, 1);
@@ -531,7 +535,7 @@ mod tests {
         let who = caller(1, 0);
         assert!(t.reserve(&who, 1, &mut k).is_ok());
         let ticket = t.reserve(&who, 1, &mut k).unwrap();
-        t.commit(ticket, 0, &mut k).unwrap();
+        t.commit(ticket, 0, None, &mut k).unwrap();
         assert_eq!(t.next_badge, 0, "the counter wrapped");
         assert_eq!(t.reserve(&who, 1, &mut k).err(), Some(MintError::TooMany), "and stops there");
     }

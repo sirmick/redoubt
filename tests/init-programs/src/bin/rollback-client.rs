@@ -58,10 +58,11 @@ fn check(startup: &Startup, out: &mut Out) -> Result<(), String> {
     // Granted, its capability lost on the way: the reply came, and the kernel had no slot for
     // the capability (kernel/ipc.md, "How a call completes").
     let lost = |r| matches!(r, Err(ClientError::Sys(Error::OutOfMemory)));
-    let discarded = (0..DISCARDED).filter(|_| lost(console.new_connection(&mut out.lend, "", 0))).count();
+    let discarded =
+        (0..DISCARDED).filter(|_| lost(console.new_connection(&mut out.lend, "", 0, None))).count();
     let free = held.pop().ok_or("no handle minted")?;
     free.close().map_err(|e| format!("free one slot: {e:?}"))?;
-    let stood = console.new_connection(&mut out.lend, "", 0);
+    let stood = console.new_connection(&mut out.lend, "", 0, None);
     for copy in held {
         let _ = copy.close();
     }

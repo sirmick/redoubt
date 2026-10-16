@@ -585,8 +585,9 @@ impl<S: FileServer> NineServer<S> {
         kernel: &mut impl Minter,
     ) -> Outcome {
         let none = Handles::new();
-        // Neither operation takes a handle, so any the request brought are closed unread:
-        // one that does not decode is malformed.
+        // `new_connection` may bring one handle, the scope; nothing else takes one. Whatever a
+        // request brought is closed once it is answered, the scope once minted with: one that
+        // does not decode is malformed.
         let decoded = ninep_common::Message::decode(words, lend, handles.as_slice().len());
         let fail = |code: u32| Outcome {
             words: redoubt_wire::typed::error_reply(code),
@@ -607,21 +608,25 @@ impl<S: FileServer> NineServer<S> {
                 Err(NotYours) => fail(NOT_YOURS),
             },
             Ok(ninep_common::Message::NewConnection(n)) => {
+                // The scope is the request's one handle slot, empty for a caller without one.
+                let scope = handles.as_slice().first().copied();
                 // `root` borrows the lend, which the reply is written over: the connection is
                 // made before the reply is encoded.
-                match self.new_connection(caller, n.root, n.quota, kernel) {
+                match self.new_connection(caller, n.root, n.quota, scope, kernel) {
                     Err(_) => fail(ErrorCode::Refused.code()),
                     Ok((handle, id, badge)) => {
+                        // Our copy of the handle is closed once the reply has copied it; the
+                        // scope, which stamped it, is closed with it.
+                        let mut close = *handles;
+                        let _ = close.push(handle);
                         match Reply::NewConnection(NewConnectionReply { id }).encode(lend) {
-                            // Our copy of the handle is closed once the reply has copied it.
                             Ok(words) => {
                                 let send = Handles::from_slice(&[handle]).unwrap_or(none);
-                                Outcome { words, send, close: send }
+                                Outcome { words, send, close }
                             }
                             // No room for the reply: the connection is undone.
                             Err(_) => {
                                 self.forget(badge);
-                                let close = Handles::from_slice(&[handle]).unwrap_or(none);
                                 Outcome { words: MALFORMED, send: none, close }
                             }
                         }
@@ -817,18 +822,20 @@ impl<S: FileServer> NineServer<S> {
     }
 
     /// `new_connection`: mints a connection rooted at `root` below the caller's own root, asking
-    /// the file server to grant it `quota` bytes. Returns the new handle, its id and its badge.
+    /// the file server to grant it `quota` bytes, in the revocation scope `scope` if the caller
+    /// sent one (servers/steward.md R41). Returns the new handle, its id and its badge.
     fn new_connection(
         &mut self,
         caller: &Caller,
         root: &str,
         quota: u64,
+        scope: Option<Handle>,
         kernel: &mut impl Minter,
     ) -> Result<(Handle, u64, u64), NineError> {
         // Admission first, so a client at its cap makes the server do no work for it.
         let (client, share) = self.charge_of(caller);
         self.admission.admit(client, share, Resource::State).map_err(|_| NineError::TOO_MANY)?;
-        let made = self.make_connection(caller, root, quota, kernel, share);
+        let made = self.make_connection(caller, root, quota, scope, kernel, share);
         if made.is_err() {
             self.admission.release(client, share, Resource::State);
         }
@@ -841,6 +848,7 @@ impl<S: FileServer> NineServer<S> {
         caller: &Caller,
         root: &str,
         quota: u64,
+        scope: Option<Handle>,
         kernel: &mut impl Minter,
         share: u64,
     ) -> Result<(Handle, u64, u64), NineError> {
@@ -856,7 +864,7 @@ impl<S: FileServer> NineServer<S> {
             self.step(caller, &mut steps, name)?;
         }
         let new_root = steps.pop().ok_or(NineError::NOT_FOUND)?;
-        self.mint_at(caller, new_root, quota, kernel, share)
+        self.mint_at(caller, new_root, quota, scope, kernel, share)
     }
 
     /// Mints a connection rooted at `root`, a node the **file server** chose rather than a path
@@ -879,7 +887,7 @@ impl<S: FileServer> NineServer<S> {
     ) -> Result<(Handle, u64, u64), NineError> {
         let (client, share) = self.charge_of(caller);
         self.admission.admit(client, share, Resource::State).map_err(|_| NineError::TOO_MANY)?;
-        let made = self.mint_at(caller, root, 0, kernel, share);
+        let made = self.mint_at(caller, root, 0, None, kernel, share);
         if made.is_err() {
             self.admission.release(client, share, Resource::State);
         }
@@ -891,12 +899,15 @@ impl<S: FileServer> NineServer<S> {
     /// rollback").
     pub fn unmint(&mut self, badge: u64) { self.forget(badge) }
 
-    /// The minting both `new_connection` and `mint_rooted` share, its admission taken.
+    /// The minting both `new_connection` and `mint_rooted` share, its admission taken. The
+    /// handle is stamped with `scope` where there is one: the kernel refuses a scope not at or
+    /// below the server's own stamp, which answers as any failed mint (`NO_ID`, `refused`).
     fn mint_at(
         &mut self,
         caller: &Caller,
         new_root: (S::Node, Qid),
         quota: u64,
+        scope: Option<Handle>,
         kernel: &mut impl Minter,
         share: u64,
     ) -> Result<(Handle, u64, u64), NineError> {
@@ -907,7 +918,7 @@ impl<S: FileServer> NineServer<S> {
         // The file server has the last word (its quota), before any handle exists.
         let badge = ticket.badge();
         self.fs.minted(caller, badge, ticket.id(), &new_root.0, quota)?;
-        match self.minted.commit(ticket, new_root, kernel) {
+        match self.minted.commit(ticket, new_root, scope, kernel) {
             Ok(made) => Ok(made),
             Err(_) => {
                 self.fs.disconnected(badge);

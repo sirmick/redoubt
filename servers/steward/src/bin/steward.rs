@@ -27,7 +27,7 @@ extern crate alloc;
 
 #[cfg(target_os = "none")]
 mod machine {
-    use alloc::collections::{BTreeMap, BTreeSet};
+    use alloc::collections::BTreeMap;
     use alloc::format;
     use alloc::string::String;
     use alloc::vec::Vec;
@@ -168,15 +168,27 @@ mod machine {
     }
 
     /// What a connection the steward holds for a child was minted through: a server it was
-    /// handed, by handle name, or a connection it carved and keeps, by its key.
+    /// handed, by handle name, a connection it carved and keeps, by its key, or its own console.
     enum Via {
         Server(String),
         Carved(String),
+        Console,
     }
 
-    /// What a connection the steward holds for a child was minted through, and the id it is
-    /// disconnected by there; none for one the steward did not make (a badge, a console).
-    type Held = Option<(Via, u64)>;
+    /// What the steward holds for a child, under a key of its own ([`Machine::held`]).
+    struct Held {
+        /// The steward's own copy of the handle: closed once a launch has copied it into the
+        /// child, since the kernel ends a connection minted in a scope at the scope's end (R41)
+        /// and frees its index for the next handle installed, so a copy kept would soon name
+        /// something else. Kept only for what the steward itself still uses: a channel's
+        /// console, told `ended`; a relay's control connection.
+        handle: Option<Handle>,
+        /// What it was minted through and the id it is disconnected by there; none for one the
+        /// steward did not make (a badge, `sshd`'s console).
+        via: Option<(Via, u64)>,
+        /// `sshd`'s channel console: told `ended` when it is released.
+        console: bool,
+    }
 
     struct Machine<'s> {
         startup: &'s Startup<'s>,
@@ -190,13 +202,13 @@ mod machine {
         /// relay is given.
         console: Option<Handle>,
         relay_console: Option<Handle>,
-        held: BTreeMap<u32, Held>,
+        /// What is held for children, by a key drawn once and never reused: the core's `Handle`.
+        held: BTreeMap<u64, Held>,
+        next_key: u64,
         /// The connections carved once with a quota and kept for the steward's life, by key (a
         /// principal's home): every session's is minted through one with no quota of its own, so
         /// they share it. `init` disconnects them at the steward's exit, with all minted below.
         carved: BTreeMap<String, Handle>,
-        /// The held handles that are a session's console, told `ended` when they are released.
-        consoles: BTreeSet<u32>,
         /// Each principal's account and name.
         accounts: Vec<(u64, String)>,
         own_lines: Own,
@@ -210,8 +222,8 @@ mod machine {
         hellos: u64,
         /// The VM's console the last relay served, for the next console slot.
         relay_vm: Option<Handle>,
-        /// `label-probe` only: the first labelled context's relay, which every later attach of
-        /// another relay hands its channel's console too.
+        /// `label-probe` only: the first labelled context's relay (its control connection),
+        /// which every later attach of another relay hands its channel's console too.
         #[cfg(feature = "label-probe")]
         probe_victim: Option<Handle>,
         /// `label-probe` only: the hand-over due, at this time, of this channel console.
@@ -280,13 +292,14 @@ mod machine {
             Ok(Nine::new(Endpoint::from_handle(handle)))
         }
 
-        /// A fresh connection to `name`'s server rooted at `root`, held until released.
-        fn fresh(&mut self, name: &str, root: &str) -> Result<Option<Handle>, Error> {
+        /// A fresh connection to `name`'s server rooted at `root`, minted in `scope`, held until
+        /// released.
+        fn fresh(&mut self, name: &str, root: &str, scope: Handle) -> Result<Option<u64>, Error> {
             let server = self.unattached(name)?;
+            let scope = Budget::from_handle(scope);
             let (endpoint, id) =
-                server.new_connection(&mut self.lend, root, 0).map_err(|_| Error::Refused)?;
-            self.held.insert(endpoint.handle().index(), Some((Via::Server(name.into()), id)));
-            Ok(Some(endpoint.handle()))
+                server.new_connection(&mut self.lend, root, 0, Some(&scope)).map_err(|_| Error::Refused)?;
+            Ok(Some(self.hold(endpoint.handle(), Some((Via::Server(name.into()), id)), false)))
         }
 
         /// The connection kept for `key`, carved at `name`'s server rooted at `root` with `quota`
@@ -297,24 +310,26 @@ mod machine {
             }
             let server = self.unattached(name)?;
             let (endpoint, _) =
-                server.new_connection(&mut self.lend, root, quota).map_err(|_| Error::Refused)?;
+                server.new_connection(&mut self.lend, root, quota, None).map_err(|_| Error::Refused)?;
             self.carved.insert(key.into(), endpoint.handle());
             Ok(Nine::new(endpoint))
         }
 
-        /// A fresh connection at the root of the one kept for `key`, sharing its quota, held
-        /// until released.
+        /// A fresh connection at the root of the one kept for `key`, sharing its quota, minted in
+        /// `scope`, held until released.
         fn fresh_carved(
             &mut self,
             key: &str,
             name: &str,
             root: &str,
             quota: u64,
-        ) -> Result<Option<Handle>, Error> {
+            scope: Handle,
+        ) -> Result<Option<u64>, Error> {
             let kept = self.carve(key, name, root, quota)?;
-            let (endpoint, id) = kept.new_connection(&mut self.lend, "", 0).map_err(|_| Error::Refused)?;
-            self.held.insert(endpoint.handle().index(), Some((Via::Carved(key.into()), id)));
-            Ok(Some(endpoint.handle()))
+            let scope = Budget::from_handle(scope);
+            let (endpoint, id) =
+                kept.new_connection(&mut self.lend, "", 0, Some(&scope)).map_err(|_| Error::Refused)?;
+            Ok(Some(self.hold(endpoint.handle(), Some((Via::Carved(key.into()), id)), false)))
         }
 
         fn principal(&self, domain: &Domain) -> Option<String> {
@@ -338,11 +353,19 @@ mod machine {
             if done == buf.len() { Ok(()) } else { Err(Error::InvalidArgument) }
         }
 
-        /// Keeps `handle` until it is released, with nothing to disconnect.
-        fn keep(&mut self, handle: Handle) -> Handle {
-            self.held.insert(handle.index(), None);
-            handle
+        /// Holds `handle` for a child under a new key, with what disconnects it, if anything,
+        /// and whether it is a channel's console.
+        fn hold(&mut self, handle: Handle, via: Option<(Via, u64)>, console: bool) -> u64 {
+            self.next_key += 1;
+            self.held.insert(self.next_key, Held { handle: Some(handle), via, console });
+            self.next_key
         }
+
+        /// Keeps `handle` until it is released, with nothing to disconnect.
+        fn keep(&mut self, handle: Handle) -> u64 { self.hold(handle, None, false) }
+
+        /// The handle held under `key`, if the steward still has its copy.
+        fn handle_of(&self, key: u64) -> Option<Handle> { self.held.get(&key).and_then(|h| h.handle) }
 
         /// Has a watcher wait for the one exit notice on `exit`: an idle one, or a new one when
         /// every watcher is watching. Unwatched, the notice would never be read, so a launch
@@ -394,7 +417,8 @@ mod machine {
 
     impl Kernel for Machine<'_> {
         type Budget = Handle;
-        type Handle = Handle;
+        /// A key into [`Machine::held`], never a handle's index.
+        type Handle = u64;
 
         /// A relay's VM console not taken by its own batch's console slot, because a step between
         /// failed, is closed here: every batch that launches a VM creates its budget and scope
@@ -416,23 +440,28 @@ mod machine {
 
         fn budget_id(&self, budget: Handle) -> u64 { u64::from(budget.index()) }
 
-        fn mint(&mut self, badge: u64, stamp: Handle) -> Result<Handle, Error> {
+        fn mint(&mut self, badge: u64, stamp: Handle) -> Result<u64, Error> {
             let badge = NonZeroU64::new(badge).ok_or(Error::InvalidArgument)?;
             let minted = self.own.mint(badge, Some(&Budget::from_handle(stamp)))?;
             Ok(self.keep(minted.handle()))
         }
 
-        fn connect(&mut self, domain: &Domain, slot: u16) -> Result<Option<Handle>, Error> {
+        /// Every connection a 9P server mints for the child is minted in `scope` (R41). `ipd`'s
+        /// typed `grant` carries no scope, so that connection ends by the disconnect alone
+        /// (servers/steward.md, "Residual risks").
+        fn connect(&mut self, domain: &Domain, slot: u16, scope: Handle) -> Result<Option<u64>, Error> {
             let principal = self.principal(domain).ok_or(Error::BadHandle)?;
             let Some(bound) = binding(&self.own_lines, &principal, domain.labels().as_slice(), slot) else {
                 return Ok(None);
             };
             match bound.how {
-                How::Fresh { server, root } => self.fresh(&server, &root),
-                How::Carved { key, server, root, quota } => self.fresh_carved(&key, &server, &root, quota),
-                How::Grant { scope } => {
+                How::Fresh { server, root } => self.fresh(&server, &root, scope),
+                How::Carved { key, server, root, quota } => {
+                    self.fresh_carved(&key, &server, &root, quota, scope)
+                }
+                How::Grant { scope: net } => {
                     let conn = self.server("ipd")?;
-                    let grant = ipd::Message::Grant(ipd::Grant { scope: &scope });
+                    let grant = ipd::Message::Grant(ipd::Grant { scope: &net });
                     let made = typed::call::<ipd::Protocol, _>(
                         conn.endpoint(),
                         &mut self.lend,
@@ -444,8 +473,7 @@ mod machine {
                         },
                     );
                     let (handle, id) = made.ok().flatten().ok_or(Error::Refused)?;
-                    self.held.insert(handle.index(), Some((Via::Server(String::from("ipd")), id)));
-                    Ok(Some(handle))
+                    Ok(Some(self.hold(handle, Some((Via::Server(String::from("ipd")), id)), false)))
                 }
                 How::Console => {
                     // A context's VM gets the console its relay serves; the relay holds the
@@ -453,17 +481,19 @@ mod machine {
                     if let Some(vm) = self.relay_vm.take() {
                         return Ok(Some(self.keep(vm)));
                     }
-                    let console = match (self.console.take(), self.consoled.clone()) {
-                        (Some(handle), _) => handle,
+                    match (self.console.take(), self.consoled.clone()) {
+                        // `sshd`'s channel console, told `ended` at the session's end.
+                        (Some(handle), _) => Ok(Some(self.hold(handle, None, true))),
+                        // The UART session's, minted at the steward's own console in the scope.
                         (None, Some(cons)) => {
-                            let (endpoint, _) =
-                                cons.new_connection(&mut self.lend, "", 0).map_err(|_| Error::Refused)?;
-                            endpoint.handle()
+                            let scope = Budget::from_handle(scope);
+                            let (endpoint, id) = cons
+                                .new_connection(&mut self.lend, "", 0, Some(&scope))
+                                .map_err(|_| Error::Refused)?;
+                            Ok(Some(self.hold(endpoint.handle(), Some((Via::Console, id)), false)))
                         }
-                        (None, None) => return Ok(None),
-                    };
-                    self.consoles.insert(console.index());
-                    Ok(Some(self.keep(console)))
+                        (None, None) => Ok(None),
+                    }
                 }
             }
         }
@@ -480,33 +510,54 @@ mod machine {
             }
         }
 
-        fn release(&mut self, handle: Handle) {
-            // A session's console hears that the session is over: `sshd` ends its channel,
-            // `consoled` releases the connection (servers/steward.md, "Authentication and sessions").
-            if self.consoles.remove(&handle.index()) {
+        /// Gives the connection held under `key` back: the server is told to free what it held
+        /// for it (`disconnect` by its id, or `ended` for `sshd`'s channel console: servers/
+        /// steward.md, "Authentication and sessions"), and the steward's own copy, if it still
+        /// has one, is closed. The cleanup after a scope's end, never the cutoff (R41).
+        fn release(&mut self, key: u64) {
+            let Some(Held { handle, via, console }) = self.held.remove(&key) else { return };
+            if let (true, Some(handle)) = (console, handle) {
                 if let Ok(ended) = consol::Message::Ended(consol::Ended {}).encode(&mut []) {
                     let _ = Endpoint::from_handle(handle).send(&ended, &[], None, RELEASE_TIMEOUT);
                 }
             }
-            if let Some(Some((via, id))) = self.held.remove(&handle.index()) {
+            if let Some((via, id)) = via {
                 let through = match via {
                     Via::Server(name) => self.unattached(&name).ok(),
                     Via::Carved(key) => self.carved.get(&key).map(|h| Nine::new(Endpoint::from_handle(*h))),
+                    Via::Console => {
+                        if let Some(cons) = &self.consoled {
+                            let _ = cons.disconnect(id, RELEASE_TIMEOUT);
+                        }
+                        None
+                    }
                 };
                 if let Some(through) = through {
                     let _ = through.disconnect(id, RELEASE_TIMEOUT);
                 }
             }
-            let _ = close(handle);
+            if let Some(handle) = handle {
+                let _ = close(handle);
+            }
         }
 
+        /// The child is started with copies of the connections held under `connections`; the
+        /// steward's own copies are closed once it runs, so that a scope's end leaves no stale
+        /// index here ([`Held`]).
         fn launch(
             &mut self,
             domain: &Domain,
             budget: Handle,
-            connections: &[Option<Handle>],
+            connections: &[Option<u64>],
             context: Option<&str>,
         ) -> Result<u64, Error> {
+            // The steward's badge and the shared slots, resolved on the stack: the launch is
+            // the steward's heap peak, and this adds nothing to it.
+            let keys = connections;
+            let mut connections = [None; SLOTS as usize + 1];
+            for (slot, key) in connections.iter_mut().zip(keys) {
+                *slot = key.and_then(|k| self.handle_of(k));
+            }
             let principal = self.principal(domain).ok_or(Error::BadHandle)?;
             let labels = domain.labels().as_slice();
             let bound: Vec<Option<Bound>> =
@@ -560,6 +611,15 @@ mod machine {
             })?;
             // The process ends with its budget; its notice comes to the exit endpoint.
             let _ = close(job.process().handle());
+            // The child holds its copies now: the steward's go, but for a channel's console,
+            // which `release` still tells `ended`.
+            for key in keys.iter().flatten() {
+                if let Some(held) = self.held.get_mut(key).filter(|h| !h.console) {
+                    if let Some(handle) = held.handle.take() {
+                        let _ = close(handle);
+                    }
+                }
+            }
             if let Err(e) = self.watch_exit(exit_handle) {
                 let _ = close(exit_handle);
                 return Err(e);
@@ -573,7 +633,7 @@ mod machine {
         /// dies ends its context. The badge carries the steward's stamp, not the context's: the
         /// kernel stamps a mint only at or below the endpoint's own (kernel/abi.md, `mint`), and
         /// the relay's copy goes with the relay's process.
-        fn launch_relay(&mut self, domain: &Domain, budget: Handle) -> Result<(u64, Handle), Error> {
+        fn launch_relay(&mut self, domain: &Domain, budget: Handle) -> Result<(u64, u64), Error> {
             self.hellos += 1;
             let badge = NonZeroU64::new(self.hellos).ok_or(Error::InvalidArgument)?;
             let hello = self.hello.as_ref().ok_or(Error::BadHandle)?.mint(badge, None)?;
@@ -608,26 +668,26 @@ mod machine {
             if let Some(old) = self.relay_vm.replace(vm) {
                 let _ = close(old);
             }
-            let control = self.keep(control);
             #[cfg(feature = "label-probe")]
             if !domain.labels().is_empty() && self.probe_victim.is_none() {
                 self.probe_victim = Some(control);
             }
             #[cfg(not(feature = "label-probe"))]
             let _ = domain;
+            let control = self.keep(control);
             Ok((u64::from(exit_handle.index()), control))
         }
 
         /// The login's channel console is kept, told `ended` when it is released, and the relay
         /// is given the channel's other connection, `sshd`'s for it, with `note`. Only the kept
         /// one can end the channel (servers/sshd.md, "A pty session").
-        fn attach(&mut self, relay: Handle, note: &str) -> Result<Handle, Error> {
+        fn attach(&mut self, relay: u64, note: &str) -> Result<u64, Error> {
+            let relay = self.handle_of(relay).ok_or(Error::BadHandle)?;
             let (Some(console), Some(theirs)) = (self.console.take(), self.relay_console.take()) else {
                 self.console(None, None);
                 return Err(Error::BadHandle);
             };
-            self.consoles.insert(console.index());
-            let console = self.keep(console);
+            let kept = self.hold(console, None, true);
             let m = consrelay::Message::Attach(consrelay::Attach { note });
             let told = typed::call_within::<consrelay::Protocol, _>(
                 &Endpoint::from_handle(relay),
@@ -640,17 +700,18 @@ mod machine {
             // The relay holds its copy now, or none: the steward keeps only its own.
             let _ = close(theirs);
             if told.is_err() {
-                self.release(console);
+                self.release(kept);
                 return Err(Error::Refused);
             }
             #[cfg(feature = "label-probe")]
             self.probe_cross(relay, console);
-            Ok(console)
+            Ok(kept)
         }
 
         /// The relay writes `note` to its channel and lets it go, within [`RELAY_US`]: past it,
         /// `Timeout`, which the core's driver counts as detached.
-        fn detach(&mut self, relay: Handle, note: &str) -> Result<(), Error> {
+        fn detach(&mut self, relay: u64, note: &str) -> Result<(), Error> {
+            let relay = self.handle_of(relay).ok_or(Error::BadHandle)?;
             let m = consrelay::Message::Detach(consrelay::Detach { note });
             typed::call_within::<consrelay::Protocol, _>(
                 &Endpoint::from_handle(relay),
@@ -713,7 +774,7 @@ mod machine {
 
     /// Says each batch step that failed, with the kernel's error: the core's answer names only
     /// `Failed`.
-    fn failed(startup: &Startup, steward: &mut Steward<Handle, Handle>) {
+    fn failed(startup: &Startup, steward: &mut Steward<Handle, u64>) {
         for (step, error) in core::mem::take(&mut steward.failed) {
             say(startup, &format!("steward: a step failed ({error:?}): {step:?}\n"));
         }
@@ -723,7 +784,7 @@ mod machine {
     /// with no outputs, false: the core exited.
     fn after(
         startup: &Startup,
-        steward: &mut Steward<Handle, Handle>,
+        steward: &mut Steward<Handle, u64>,
         usage: &mut BTreeMap<u32, (u64, u64)>,
         outputs: Option<Vec<Output>>,
     ) -> bool {
@@ -742,7 +803,7 @@ mod machine {
 
     /// What each domain's sub-budget holds, said when it changes: the kernel's count of the
     /// pages and processes carved from it, which a session's budget takes and its end gives back.
-    fn tree(startup: &Startup, steward: &Steward<Handle, Handle>, last: &mut BTreeMap<u32, (u64, u64)>) {
+    fn tree(startup: &Startup, steward: &Steward<Handle, u64>, last: &mut BTreeMap<u32, (u64, u64)>) {
         for c in &steward.carved {
             for (d, sub) in &c.subs {
                 let Ok(u) = Budget::from_handle(*sub).usage() else { continue };
@@ -787,8 +848,8 @@ mod machine {
             console: None,
             relay_console: None,
             held: BTreeMap::new(),
+            next_key: 0,
             carved: BTreeMap::new(),
-            consoles: BTreeSet::new(),
             accounts: Vec::new(),
             own_lines: Own::default(),
             session_pages: 0,
@@ -813,7 +874,7 @@ mod machine {
                 &format!("steward: users holds {} pages, {} processes\n", u.pages_usage, u.processes_usage),
             );
         }
-        let mut steward: Steward<Handle, Handle> = match start(&lines, users, &mut machine) {
+        let mut steward: Steward<Handle, u64> = match start(&lines, users, &mut machine) {
             Ok(s) => s,
             Err(e) => {
                 say(startup, &format!("{e}\n"));

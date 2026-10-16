@@ -32,12 +32,12 @@ pub extern "C" fn _start() -> ! {
     }
     log!(logger, "[ninep-client] table full after {} endpoints", filled);
     for _ in 0..DISCARDED {
-        if client.new_connection(&mut lend, "", 0).is_ok() {
+        if client.new_connection(&mut lend, "", 0, None).is_ok() {
             log!(logger, "[ninep-client] a capability arrived with the table full");
         }
     }
     rd::close(first).expect("close one");
-    match client.new_connection(&mut lend, "", 0) {
+    match client.new_connection(&mut lend, "", 0, None) {
         Ok((_, id)) => {
             log!(logger, "[ninep-client] connected with one slot free");
             let _ = client.disconnect(id, client.timeout);

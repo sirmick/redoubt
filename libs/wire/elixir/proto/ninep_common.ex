@@ -11,14 +11,15 @@ defmodule Redoubt.Wire.Proto.NinepCommon do
   """
   alias Redoubt.Wire, as: W
 
-  # opcode => {name, shape, handles}; replies are keyed by their request's opcode.
+  # opcode => {name, shape, handle slots, slots that may be empty}; replies are keyed by
+  # their request's opcode.
   @requests %{
-    2 => {:new_connection, :buffer, 0},
-    3 => {:disconnect, :inline, 0}
+    2 => {:new_connection, :buffer, 1, 1},
+    3 => {:disconnect, :inline, 0, 0}
   }
   @replies %{
-    2 => {:new_connection, :buffer, 1},
-    3 => {:disconnect, :inline, 0}
+    2 => {:new_connection, :buffer, 1, 0},
+    3 => {:disconnect, :inline, 0, 0}
   }
   @errors %{
     1 => :malformed,
@@ -34,9 +35,10 @@ defmodule Redoubt.Wire.Proto.NinepCommon do
   Handle kinds, from the table: documentation, checked by use (a handle of the wrong kind
   gets `WrongObject` on first use).
 
+  - `new_connection`: `scope` (slot 0, budget, optional)
   - `new_connection` reply: `conn` (slot 0, endpoint)
   """
-  def layout(:new_connection), do: {2, :buffer, [{:root, :string}, {:quota, :u64}], [], {[{:id, :u64}], [:conn]}}
+  def layout(:new_connection), do: {2, :buffer, [{:root, :string}, {:quota, :u64}], [:scope], {[{:id, :u64}], [:conn]}}
   def layout(:disconnect), do: {3, :inline, [{:id, :u64}], [], {[], []}}
   def layout(_), do: nil
 

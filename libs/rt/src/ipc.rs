@@ -249,8 +249,15 @@ impl Endpoint {
 
 /// `mint` from the open call `id` of this thread, with the default stamp (for a server that
 /// holds the call's id but not its [`Request`], which the lend is borrowed from).
-pub(crate) fn mint_from_message(id: NonZeroU64, badge: NonZeroU64) -> Result<Endpoint, Error> {
-    mint(MintSource::Message(id), badge, None)
+/// `mint` from the open call `id`, stamped like the handle it came through or, narrower, with
+/// the budget `scope` names (kernel/objects.md, `mint`; R9).
+pub(crate) fn mint_from_message(
+    id: NonZeroU64,
+    badge: NonZeroU64,
+    scope: Option<Handle>,
+) -> Result<Endpoint, Error> {
+    let call = Call::Mint { source: MintSource::Message(id), badge, budget: scope };
+    handle(syscall(&call)).map(Endpoint::from_handle)
 }
 
 fn mint(source: MintSource, badge: NonZeroU64, budget: Option<&Budget>) -> Result<Endpoint, Error> {

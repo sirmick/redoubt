@@ -24,7 +24,7 @@ struct Kernel {
 }
 
 impl Minter for Kernel {
-    fn mint(&mut self, badge: NonZeroU64) -> Result<Handle, Error> {
+    fn mint(&mut self, badge: NonZeroU64, _scope: Option<Handle>) -> Result<Handle, Error> {
         self.minted.push(badge.get());
         Ok(Handle::new(99 + self.minted.len() as u32).unwrap())
     }

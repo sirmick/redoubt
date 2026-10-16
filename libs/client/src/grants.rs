@@ -48,7 +48,7 @@ impl Grants {
         root: &str,
         quota: u64,
     ) -> Result<Endpoint, Error> {
-        let (conn, id) = parent.new_connection(lend, root, quota)?;
+        let (conn, id) = parent.new_connection(lend, root, quota, None)?;
         self.entries.push(Grant::Connection { parent: parent.clone(), id });
         Ok(conn)
     }

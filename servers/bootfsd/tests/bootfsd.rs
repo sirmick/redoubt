@@ -107,7 +107,12 @@ fn a_session_reads_the_public_entries_and_sees_nothing_else() {
     let session = f.process(1001, &[]);
     let (conn, id) = f
         .as_process(init, || {
-            Connection::new(Endpoint::from_handle(founding)).new_connection(&mut Lend::new(4).unwrap(), "", 0)
+            Connection::new(Endpoint::from_handle(founding)).new_connection(
+                &mut Lend::new(4).unwrap(),
+                "",
+                0,
+                None,
+            )
         })
         .expect("a connection for the session");
     let conn = f.copy(init, conn.handle(), session);
@@ -186,7 +191,12 @@ fn a_client_cannot_publish_into_boot() {
     let session = f.process(1001, &[]);
     let (conn, _) = f
         .as_process(init, || {
-            Connection::new(Endpoint::from_handle(founding)).new_connection(&mut Lend::new(4).unwrap(), "", 0)
+            Connection::new(Endpoint::from_handle(founding)).new_connection(
+                &mut Lend::new(4).unwrap(),
+                "",
+                0,
+                None,
+            )
         })
         .unwrap();
     let conn = f.copy(init, conn.handle(), session);

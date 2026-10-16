@@ -33,7 +33,8 @@ fn run(startup: &Startup) -> u32 {
     };
     let Ok(mut lend) = Lend::new(LEND_PAGES) else { return NO_LEND };
     // `new_connection` needs no session: it is `ninep_common`, beside 9P.
-    let Ok((minted, _)) = Connection::new(Endpoint::from_handle(server)).new_connection(&mut lend, "", 0)
+    let Ok((minted, _)) =
+        Connection::new(Endpoint::from_handle(server)).new_connection(&mut lend, "", 0, None)
     else {
         return NOT_MINTED;
     };

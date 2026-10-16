@@ -165,14 +165,19 @@ const NAMES: [&str; 8] = ["a", "b", "f", "..", "vault", "key", "", "x/y"];
 
 const LIMITS: Limits = Limits { buckets: 6, in_flight: 8, files: 20, state: 6, requests: 12, pages: 4 };
 
-/// Mints handles by number and draws ids from a xorshift; remembers every badge minted.
+/// Mints handles by number and draws ids from a xorshift; remembers every badge minted. A scope
+/// is refused as the kernel refuses one not below the server's stamp when `refuses` is set.
 struct Kernel {
     minted: Vec<u64>,
     rng: u64,
+    refuses: bool,
 }
 
 impl Minter for Kernel {
-    fn mint(&mut self, badge: NonZeroU64) -> Result<Handle, Error> {
+    fn mint(&mut self, badge: NonZeroU64, scope: Option<Handle>) -> Result<Handle, Error> {
+        if scope.is_some() && self.refuses {
+            return Err(Error::NotPermitted);
+        }
         assert!(badge.get() >= FIRST_MINTED_BADGE && !self.minted.contains(&badge.get()), "badge reused");
         self.minted.push(badge.get());
         Ok(Handle::new(1).unwrap())
@@ -337,7 +342,7 @@ fuzz_target!(|data: &[u8]| {
     let overrides = [Override { badge: 1, in_flight: 0, files: 10, state: 3 }];
     let admission = Admission::with_overrides(LIMITS, &overrides).unwrap();
     let mut server = NineServer::with_admission(Tree { data: Default::default() }, admission, 0);
-    let mut kernel = Kernel { minted: Vec::new(), rng: 0x2545_f491_4f6c_dd1d };
+    let mut kernel = Kernel { minted: Vec::new(), rng: 0x2545_f491_4f6c_dd1d, refuses: false };
     // Connection ids handed out, with who asked for each.
     let mut ids: Vec<(u64, Caller)> = Vec::new();
     let mut input = Input(data);
@@ -388,7 +393,19 @@ fuzz_target!(|data: &[u8]| {
                 let message =
                     ninep_common::Message::NewConnection(ninep_common::NewConnection { root, quota });
                 let words = message.encode(&mut lend).unwrap();
-                let outcome = server.answer_common(&caller, &words, &Handles::new(), &mut lend, &mut kernel);
+                // The scope slot: empty, a scope, a scope the kernel refuses, or two handles
+                // (malformed); whatever was brought is in the outcome's `close`.
+                let brought: &[Handle] = match (arg >> 8) % 4 {
+                    0 => &[],
+                    1 | 2 => &[Handle::new(2).unwrap()],
+                    _ => &[Handle::new(2).unwrap(), Handle::new(3).unwrap()],
+                };
+                kernel.refuses = (arg >> 8) % 4 == 2;
+                let handles = Handles::from_slice(brought).unwrap();
+                let outcome = server.answer_common(&caller, &words, &handles, &mut lend, &mut kernel);
+                for h in brought {
+                    assert!(outcome.close.as_slice().contains(h), "a handle the request brought is closed");
+                }
                 if outcome.words[0] == 0 {
                     let reply =
                         ninep_common::Reply::decode(2, &outcome.words, &lend, 1).expect("the reply decodes");

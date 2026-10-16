@@ -8,10 +8,12 @@ mod echo_client;
 #[path = "../src/bin/echo-server.rs"]
 mod echo_server;
 
+use core::num::NonZeroU64;
+
 use redoubt_fake_kernel::fake;
-use redoubt_rt::abi::{FOREVER, Handle, PAGE_SIZE};
+use redoubt_rt::abi::{BudgetSpec, Error, FOREVER, Handle, Labels, PAGE_SIZE};
 use redoubt_rt::client::{ClientError, Connection, Lend};
-use redoubt_rt::handle::Endpoint;
+use redoubt_rt::handle::{Budget, Endpoint};
 use redoubt_rt::ipc::Buffer;
 use redoubt_rt::server::MALFORMED;
 use redoubt_rt::server::ninep::WORDS_9P;
@@ -170,9 +172,9 @@ fn a_launcher_gives_its_child_a_fresh_connection_and_disconnects_it() {
             Err(ClientError::Rerror(ErrorName::NotFound))
         );
         client.clunk(&mut lend, 90).unwrap();
-        let (fresh, id) = client.new_connection(&mut lend, "", 0).unwrap();
+        let (fresh, id) = client.new_connection(&mut lend, "", 0, None).unwrap();
         // Rooted below the launcher's root; a file that is not there is refused.
-        assert_eq!(client.new_connection(&mut lend, "nope", 0).err(), Some(ClientError::Remote));
+        assert_eq!(client.new_connection(&mut lend, "nope", 0, None).err(), Some(ClientError::Remote));
         (fresh.handle(), id)
     });
     // The server kept no handle: its copy of the minted one was closed once the reply carried it.
@@ -213,4 +215,119 @@ fn a_launcher_gives_its_child_a_fresh_connection_and_disconnects_it() {
     assert_eq!(f.held(server).0, handles_before);
     f.destroy(server, receive);
     assert_eq!(server_thread.join().unwrap(), 0);
+}
+
+/// A zero-limit budget: a revocation scope (kernel/budgets.md).
+fn scope_spec() -> BudgetSpec {
+    BudgetSpec {
+        pages: 0,
+        processes: 0,
+        weight: 0,
+        labels: Labels::from_slice(&[]).unwrap(),
+        account: 0,
+        deadline: FOREVER,
+    }
+}
+
+/// R41 (servers/steward.md): a launcher mints a child's connection in a revocation scope,
+/// `new_connection(root, quota, scope)`, and the server stamps the connection's handle with it.
+/// Destroying the scope ends the connection in every table at once: the child's next request
+/// finds its handle gone, while a sibling connection in another scope on the same server is
+/// untouched. The server holds nothing for the scope (its copy is closed once minted with) and
+/// cannot see the destruction: its record stays until the launcher's `disconnect`, which is
+/// the cleanup and never the cutoff. A scope not below the server's own stamp is refused.
+#[test]
+fn a_connection_minted_in_a_scope_ends_when_the_scope_is_destroyed() {
+    let f = fake();
+    let server = f.process(0, &[]);
+    // The budget the server's connections are stamped with: for a shared server, `users`.
+    let users = f.budget(server);
+    f.runs_in(server, users);
+    let receive = f.endpoint(server);
+    let launcher = f.process(1001, &[]);
+    let connection = f.grant(server, receive, launcher, 5);
+    let users_at_launcher = f.copy(server, users, launcher);
+    let server_thread = launch(server, server_block(receive), echo_server::serve);
+    let (child_s, child_t) = (f.process(1001, &[]), f.process(1001, &[]));
+    let held_before = f.held(server).0;
+    let elsewhere = f.budget(launcher);
+
+    let (in_s, id_s, in_t, id_t, scope_s) = f.as_process(launcher, || {
+        let client = Connection::new(Endpoint::from_handle(connection));
+        let mut lend = Lend::new(1).unwrap();
+        let users = Budget::from_handle(users_at_launcher);
+        let (s, t) = (users.create_child(&scope_spec()).unwrap(), users.create_child(&scope_spec()).unwrap());
+        // A scope that is not below the server's stamp: the kernel refuses the mint, the
+        // server answers `refused`, and nothing was made.
+        let elsewhere = Budget::from_handle(elsewhere);
+        assert_eq!(
+            client.new_connection(&mut lend, "", 0, Some(&elsewhere)).err(),
+            Some(ClientError::Remote)
+        );
+        let (in_s, id_s) = client.new_connection(&mut lend, "", 0, Some(&s)).unwrap();
+        let (in_t, id_t) = client.new_connection(&mut lend, "", 0, Some(&t)).unwrap();
+        // One more request, answered after the server has finished the mints: it closes its
+        // copy of a minted handle after the reply that carried it.
+        client.attach(&mut lend, 90, "").unwrap();
+        client.clunk(&mut lend, 90).unwrap();
+        (in_s.handle(), id_s, in_t.handle(), id_t, s.handle())
+    });
+    // The server kept nothing: neither its copies of the minted handles nor the scopes.
+    assert_eq!(f.held(server).0, held_before);
+    let in_s = f.copy(launcher, in_s, child_s);
+    let in_t = f.copy(launcher, in_t, child_t);
+    let attach = |pid: usize, conn: Handle, fid: u32| {
+        f.as_process(pid, || {
+            Connection::new(Endpoint::from_handle(conn)).attach(&mut Lend::new(1).unwrap(), fid, "")
+        })
+    };
+    attach(child_s, in_s, 1).unwrap();
+    attach(child_t, in_t, 1).unwrap();
+
+    // The scope goes: the connection in it is gone from the child's table (and the launcher's
+    // copy with it), with no word to the server; the sibling still serves.
+    f.as_process(launcher, || Budget::from_handle(scope_s).destroy().unwrap());
+    assert_eq!(attach(child_s, in_s, 2), Err(ClientError::Sys(Error::BadHandle)));
+    attach(child_t, in_t, 2).unwrap();
+    assert_eq!(f.held(child_s).0, 0, "the child's only handle is gone");
+
+    // The server still holds the dead connection's record (its fids, its admission): the
+    // launcher's `disconnect` frees it, by the id, once.
+    f.as_process(launcher, || {
+        let client = Connection::new(Endpoint::from_handle(connection));
+        client.disconnect(id_s, FOREVER).unwrap();
+        assert_eq!(client.disconnect(id_s, FOREVER), Err(ClientError::Remote), "freed once");
+        client.disconnect(id_t, FOREVER).unwrap();
+    });
+    f.destroy(server, receive);
+    assert_eq!(server_thread.join().unwrap(), 0);
+}
+
+/// The fake kernel's `mint` keeps the kernel's stamp rule (kernel/objects.md R9, `mint`): a
+/// mint from a receive right is stamped like the right, or with a budget named at or below that
+/// stamp; one named elsewhere is `NotPermitted`. The test above relies on it for a mint from a
+/// call.
+#[test]
+fn the_fake_kernel_s_mint_only_narrows() {
+    let f = fake();
+    let owner = f.process(0, &[]);
+    let top = f.budget(owner);
+    f.runs_in(owner, top);
+    let right = f.endpoint(owner);
+    let elsewhere = f.budget(owner);
+    f.as_process(owner, || {
+        let right = Endpoint::from_handle(right);
+        let below = Budget::from_handle(top).create_child(&scope_spec()).unwrap();
+        let badge = NonZeroU64::new(9).unwrap();
+        assert!(right.mint(badge, None).is_ok());
+        assert!(right.mint(badge, Some(&Budget::from_handle(top))).is_ok(), "at the stamp");
+        let minted = right.mint(badge, Some(&below)).unwrap();
+        assert_eq!(right.mint(badge, Some(&Budget::from_handle(elsewhere))).err(), Some(Error::NotPermitted));
+        // Destroying the budget named takes the handle minted in it and the budget's own, and
+        // no other: of the seven held (top, the right, elsewhere, below and three mints), five.
+        assert_eq!(f.held(owner).0, 7);
+        below.destroy().unwrap();
+        assert_eq!(f.held(owner).0, 5);
+        assert_eq!(Endpoint::from_handle(minted.handle()).mint(badge, None).err(), Some(Error::BadHandle));
+    });
 }

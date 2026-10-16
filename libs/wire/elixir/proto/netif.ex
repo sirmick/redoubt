@@ -11,14 +11,15 @@ defmodule Redoubt.Wire.Proto.Netif do
   """
   alias Redoubt.Wire, as: W
 
-  # opcode => {name, shape, handles}; replies are keyed by their request's opcode.
+  # opcode => {name, shape, handle slots, slots that may be empty}; replies are keyed by
+  # their request's opcode.
   @requests %{
-    1 => {:info, :inline, 0},
-    2 => {:transmit, :buffer, 0}
+    1 => {:info, :inline, 0, 0},
+    2 => {:transmit, :buffer, 0, 0}
   }
   @replies %{
-    1 => {:info, :inline, 0},
-    2 => {:transmit, :buffer, 0}
+    1 => {:info, :inline, 0, 0},
+    2 => {:transmit, :buffer, 0, 0}
   }
   @errors %{
     1 => :malformed,

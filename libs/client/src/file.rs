@@ -20,7 +20,7 @@ use core::sync::atomic::{AtomicU32, Ordering};
 
 use redoubt_rt::abi::FOREVER;
 use redoubt_rt::client::{self, Lend};
-use redoubt_rt::handle::Endpoint;
+use redoubt_rt::handle::{Budget, Endpoint};
 use redoubt_rt::server::ninep::MAX_FIDS;
 use redoubt_rt::wire::ninep::{self, Qid};
 
@@ -145,10 +145,17 @@ impl Connection {
     }
 
     /// `new_connection`: a fresh connection to this server rooted at `root` (below this one's; it
-    /// never climbs above it), with `quota` bytes carved from this connection's (0 shares it).
-    /// Returns its endpoint and the id only this connection may disconnect it by.
-    pub fn new_connection(&self, lend: &mut Lend, root: &str, quota: u64) -> Result<(Endpoint, u64), Error> {
-        Ok(self.0.nine.new_connection(lend, root, quota)?)
+    /// never climbs above it), with `quota` bytes carved from this connection's (0 shares it),
+    /// minted in the revocation scope `scope` if one is given (servers/steward.md R41). Returns
+    /// its endpoint and the id only this connection may disconnect it by.
+    pub fn new_connection(
+        &self,
+        lend: &mut Lend,
+        root: &str,
+        quota: u64,
+        scope: Option<&Budget>,
+    ) -> Result<(Endpoint, u64), Error> {
+        Ok(self.0.nine.new_connection(lend, root, quota, scope)?)
     }
 
     /// `disconnect`: frees the connection with `id` and everything minted under it, waiting at

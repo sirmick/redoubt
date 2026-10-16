@@ -153,6 +153,8 @@ struct Pending {
     id: NonZeroU64,
     call: bool,
     badge: u64,
+    /// The stamp of the handle it was sent through: what a `mint` from the call stamps with.
+    stamp: Option<usize>,
     account: u64,
     labels: Labels,
     words: [usize; 4],
@@ -173,7 +175,9 @@ struct State {
     endpoints: Vec<EndpointState>,
     next_id: u64,
     /// Calls taken and not replied to: id -> (receiving process, endpoint).
-    open: HashMap<u64, (usize, usize)>,
+    /// Each open call: its receiver, the endpoint it arrived on and the stamp of the handle it
+    /// came through (the default stamp of a `mint` from it, kernel/objects.md R9).
+    open: HashMap<u64, (usize, usize, Option<usize>)>,
     /// Replies waiting for their caller: id -> (words, handles).
     replies: HashMap<u64, ([usize; 4], Vec<Object>)>,
     /// Sends a receiver has taken.
@@ -453,7 +457,7 @@ impl Fake {
 
     /// Calls taken and not yet replied to, by any process.
     pub fn open_calls(&self, pid: usize) -> usize {
-        self.lock().open.values().filter(|(p, _)| *p == pid).count()
+        self.lock().open.values().filter(|(p, ..)| *p == pid).count()
     }
 
     /// A new budget whose handle goes into `owner`'s table: what a launcher carves for a child. It
@@ -475,6 +479,14 @@ impl Fake {
         }
         let Ok(Object::Budget(index)) = lookup(&s, owner, budget) else { panic!("not a budget handle") };
         s.budgets[index].destroyed
+    }
+
+    /// A test says `pid` runs in the budget it holds as `budget`: the endpoints it makes and the
+    /// handles it grants from now on are stamped with it, as [`Fake::play`] says of a child's.
+    pub fn runs_in(&self, pid: usize, budget: Handle) {
+        let mut s = self.lock();
+        let Ok(Object::Budget(index)) = lookup(&s, pid, budget) else { panic!("not a budget handle") };
+        s.processes[pid].runs_in = Some(index);
     }
 
     /// A test plays `child`, which the fake does not run, as the process `pid`: `pid` runs in the
@@ -775,6 +787,19 @@ fn set(labels: &[u64]) -> Vec<u64> {
     set
 }
 
+/// Whether budget `b` is `top` or below it in the tree.
+fn at_or_below(s: &State, mut b: usize, top: usize) -> bool {
+    loop {
+        if b == top {
+            return true;
+        }
+        match s.budgets[b].parent {
+            Some(parent) => b = parent,
+            None => return false,
+        }
+    }
+}
+
 fn lookup(s: &State, pid: usize, h: Handle) -> Result<Object, Error> {
     s.processes[pid].handles.get(h.index() as usize).copied().flatten().ok_or(Error::BadHandle)
 }
@@ -993,26 +1018,36 @@ unsafe impl redoubt_rt::Transport for Fake {
             }
             Call::Mint { source, badge, budget } => {
                 let mut s = self.lock();
-                let ep = match source {
+                // The endpoint and the default stamp: the receive right's, or the stamp of the
+                // handle the call came through (kernel/objects.md, `mint`). A handle with no
+                // stamp (made by a process a test gave no budget) is stamped with the process's
+                // budget, if a test gave it one since.
+                let (ep, default) = match source {
                     MintSource::Handle(h) => {
                         let ep = as_endpoint(&s, pid, h)?;
                         if ep.badge != 0 {
                             return Err(Error::NotPermitted);
                         }
-                        ep.id
+                        (ep.id, ep.stamp)
                     }
                     MintSource::Message(id) => match s.open.get(&id.get()) {
-                        Some(&(receiver, ep)) if receiver == pid => ep,
+                        Some(&(receiver, ep, stamp)) if receiver == pid => (ep, stamp),
                         _ => return Err(Error::InvalidArgument),
                     },
                 };
-                // A budget named stamps the handle, so it goes when that budget is destroyed
-                // (objects.md, mint): the fake takes the caller's word that it is at or below the
-                // source's stamp.
+                let default = default.or(s.processes[pid].runs_in);
+                // A budget named stamps the handle, so it goes when that budget is destroyed,
+                // and it only narrows: at or below the default stamp, or `NotPermitted`
+                // (objects.md, mint). A default of none is the fake's root, above every budget.
                 let stamp = match budget {
-                    None => s.processes[pid].runs_in,
+                    None => default,
                     Some(b) => match lookup(&s, pid, b)? {
-                        Object::Budget(index) => Some(index),
+                        Object::Budget(index) => {
+                            if default.is_some_and(|top| !at_or_below(&s, index, top)) {
+                                return Err(Error::NotPermitted);
+                            }
+                            Some(index)
+                        }
                         _ => return Err(Error::WrongObject),
                     },
                 };
@@ -1051,7 +1086,7 @@ unsafe impl redoubt_rt::Transport for Fake {
                 not_given_up(&s, pid, body_rec, BODY_SLOTS * 8)?;
                 let body = read_body(body_rec)?;
                 match s.open.get(&msg_id.get()) {
-                    Some(&(receiver, _)) if receiver == pid => {}
+                    Some(&(receiver, ..)) if receiver == pid => {}
                     _ => return Err(Error::InvalidArgument),
                 }
                 let handles = body
@@ -1101,7 +1136,7 @@ unsafe impl redoubt_rt::Transport for Fake {
             Call::Serve { msg_id } => {
                 let mut s = self.lock();
                 match s.open.get(&msg_id.get()) {
-                    Some(&(receiver, _)) if receiver == pid => {
+                    Some(&(receiver, ..)) if receiver == pid => {
                         s.log.push((pid, "serve", msg_id.get()));
                         Ok(Return::Nothing)
                     }
@@ -1284,8 +1319,18 @@ impl Fake {
         s.next_id += 1;
         let (account, labels) = (s.processes[pid].account, s.processes[pid].labels);
         let words = body.words;
-        let pending =
-            Pending { id, call: is_call, badge: ep.badge, account, labels, words, handles, pages, from: pid };
+        let pending = Pending {
+            id,
+            call: is_call,
+            badge: ep.badge,
+            stamp: ep.stamp,
+            account,
+            labels,
+            words,
+            handles,
+            pages,
+            from: pid,
+        };
         s.endpoints[ep.id].queue.push_back(pending);
         // From here until the message settles, the pages are given up (docs/kernel/ipc.md,
         // Messages).
@@ -1318,7 +1363,7 @@ impl Fake {
                 }
                 // A call already taken is abandoned by the endpoint's destruction, and no notice
                 // follows: there is no endpoint left to receive one on (R3).
-                if let Some(&(receiver, _)) = s.open.get(&id.get()) {
+                if let Some(&(receiver, ..)) = s.open.get(&id.get()) {
                     return Ok(abandon(s, pid, receiver, id, pages, Error::Dead));
                 }
                 break Err(Error::Dead);
@@ -1331,7 +1376,7 @@ impl Fake {
                 }
                 // A call the server took is abandoned (R3): it stays open there until the
                 // server replies, and the server is told.
-                if let Some(&(receiver, endpoint)) = s.open.get(&id.get()) {
+                if let Some(&(receiver, endpoint, _)) = s.open.get(&id.get()) {
                     s.notices.push_back((receiver, endpoint, id.get()));
                     self.changed.notify_all();
                     return Ok(abandon(s, pid, receiver, id, pages, Error::Timeout));
@@ -1398,7 +1443,7 @@ impl Fake {
             if let Some(p) = s.endpoints[ep.id].queue.pop_front() {
                 let handles: Vec<Handle> = p.handles.iter().map(|e| install(s, pid, *e)).collect();
                 let kind = if p.call {
-                    s.open.insert(p.id.get(), (pid, ep.id));
+                    s.open.insert(p.id.get(), (pid, ep.id, p.stamp));
                     MessageKind::Call { lend: p.pages }
                 } else {
                     // A transfer changes owner: the mapping moves to the receiver.

@@ -11,22 +11,23 @@ defmodule Redoubt.Wire.Proto.Keyd do
   """
   alias Redoubt.Wire, as: W
 
-  # opcode => {name, shape, handles}; replies are keyed by their request's opcode.
+  # opcode => {name, shape, handle slots, slots that may be empty}; replies are keyed by
+  # their request's opcode.
   @requests %{
-    1 => {:sign_ssh_exchange, :buffer, 0},
-    2 => {:sign_record, :buffer, 0},
-    3 => {:public_key, :buffer, 0},
-    4 => {:holds, :buffer, 0},
-    5 => {:grant, :inline, 0},
-    6 => {:release, :inline, 0}
+    1 => {:sign_ssh_exchange, :buffer, 0, 0},
+    2 => {:sign_record, :buffer, 0, 0},
+    3 => {:public_key, :buffer, 0, 0},
+    4 => {:holds, :buffer, 0, 0},
+    5 => {:grant, :inline, 0, 0},
+    6 => {:release, :inline, 0, 0}
   }
   @replies %{
-    1 => {:sign_ssh_exchange, :buffer, 0},
-    2 => {:sign_record, :buffer, 0},
-    3 => {:public_key, :buffer, 0},
-    4 => {:holds, :buffer, 0},
-    5 => {:grant, :inline, 1},
-    6 => {:release, :inline, 0}
+    1 => {:sign_ssh_exchange, :buffer, 0, 0},
+    2 => {:sign_record, :buffer, 0, 0},
+    3 => {:public_key, :buffer, 0, 0},
+    4 => {:holds, :buffer, 0, 0},
+    5 => {:grant, :inline, 1, 0},
+    6 => {:release, :inline, 0, 0}
   }
   @errors %{
     1 => :malformed,

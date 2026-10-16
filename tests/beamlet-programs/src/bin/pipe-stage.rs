@@ -262,7 +262,7 @@ fn attack(startup: &Startup, ns: &Namespace, lend: &mut Lend) {
     for path in ["", "..", "../w", "../r", "w", "../../canary/w", "/canary/w"] {
         let _ = stdin.open(lend, path, mode::OWRITE).and_then(|f| f.write_at(lend, 0, b"pwned"));
         let _ = stdin.open(lend, path, mode::ORDWR).and_then(|f| f.write_at(lend, 0, b"pwned"));
-        if let Ok((endpoint, _)) = stdin.new_connection(lend, path, 0) {
+        if let Ok((endpoint, _)) = stdin.new_connection(lend, path, 0, None) {
             if let Ok(minted) = Connection::attach(endpoint, lend) {
                 let _ = minted.open(lend, "", mode::OWRITE).and_then(|f| f.write_at(lend, 0, b"pwned"));
             }
@@ -273,7 +273,7 @@ fn attack(startup: &Startup, ns: &Namespace, lend: &mut Lend) {
     let _ = stdout.open(lend, "", mode::OREAD).map(|f| f.read_at(lend, 0, &mut [0; 16]));
     for path in ["../r", "r", "../../canary/w", "../../canary/r", "/canary/w", "canary/w"] {
         let _ = stdout.open(lend, path, mode::OWRITE).and_then(|f| f.write_at(lend, 0, b"pwned"));
-        if let Ok((endpoint, _)) = stdout.new_connection(lend, path, 0) {
+        if let Ok((endpoint, _)) = stdout.new_connection(lend, path, 0, None) {
             if let Ok(minted) = Connection::attach(endpoint, lend) {
                 let _ = minted.open(lend, "", mode::OWRITE).and_then(|f| f.write_at(lend, 0, b"pwned"));
             }

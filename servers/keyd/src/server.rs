@@ -217,7 +217,7 @@ impl KeyServer {
                 let made = self
                     .granted
                     .reserve(caller, share, kernel)
-                    .and_then(|ticket| self.granted.commit(ticket, index, kernel));
+                    .and_then(|ticket| self.granted.commit(ticket, index, None, kernel));
                 let (handle, id, _badge) = made.map_err(|e| {
                     self.admission.release(client, share, Resource::State);
                     match e {

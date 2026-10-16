@@ -36,7 +36,9 @@ mod machine {
     use redoubt_client::typed;
     use redoubt_init::bound::{LEND_PAGES, WATCH_STACK_PAGES};
     use redoubt_init::bundle::{Bundle, Entry};
-    use redoubt_init::check::{BOOTFSD, MANIFEST, Machine, Plan, USERS, VOLUME, args, is_steward, range};
+    use redoubt_init::check::{
+        BOOTFSD, HandedStamp, MANIFEST, Machine, Plan, USERS, VOLUME, args, handed_stamp, is_steward, range,
+    };
     use redoubt_init::manifest::{DeviceUse, Manifest};
     use redoubt_init::refusal::Refusal;
     use redoubt_init::restarts::{self, Restarts};
@@ -459,9 +461,40 @@ mod machine {
             };
             let exit_handle = exit.handle();
             let image = self.entries.iter().find(|e| e.name == s.program).expect("the check found it").data;
+            // What the instance's badges and console connection are stamped with: its budget,
+            // so a copy the server passes on dies with it and its restart's badge has no other
+            // holder. The steward's alone are stamped `users`, so that a session's or lease's
+            // scope, under `users`, narrows the connections it mints through them
+            // (servers/steward.md R41); at its exit `init` disconnects its fresh connections and
+            // reaps `users`, which leaves its copies no holder either.
+            let stamped = handed_stamp(m, s);
+            let stamp = Budget::from_handle(match stamped {
+                HandedStamp::Instance => budget.handle(),
+                HandedStamp::Users => h(USERS_BUDGET),
+            });
             let mut console = None;
             if let Some(parent) = self.connection().cloned() {
-                match parent.new_connection(&mut self.lend, "", 0) {
+                // `init`'s own connection stamps what it mints with `consoled`'s budget; the
+                // steward's console is minted through `init`'s badge there stamped `users`
+                // instead, held for the one call.
+                let made = match (stamped, self.consoled) {
+                    (HandedStamp::Users, Some(ci)) => {
+                        let badge = self.plan.init_badges.iter().find(|(x, _)| *x == ci).map(|(_, b)| *b);
+                        let badge = badge
+                            .and_then(NonZeroU64::new)
+                            .expect("init writes through consoled by its badge");
+                        let right = Endpoint::from_handle(self.endpoint(&m.servers[ci].receives[0]));
+                        let Ok(through) = right.mint(badge, Some(&stamp)) else {
+                            self.failed(&s.name, "mint a console badge for")
+                        };
+                        let server = Nine::within(Endpoint::from_handle(through.handle()), RELEASE_TIMEOUT);
+                        let made = server.new_connection(&mut self.lend, "", 0, None);
+                        let _ = redoubt_rt::handle::close(through.handle());
+                        made.map_err(CallError::from)
+                    }
+                    _ => parent.new_connection(&mut self.lend, "", 0, None),
+                };
+                match made {
                     Ok(minted) => console = Some(minted),
                     // A `consoled` that ended meanwhile: this instance runs without a console.
                     Err(e) if matches!(self.consoled.map(|c| self.stop(c, e, "")), Some(Stop::Exited)) => {}
@@ -472,10 +505,8 @@ mod machine {
             let mut fresh = Vec::new();
             for item in &s.handed {
                 let badge = NonZeroU64::new(item.badge).expect("the check refused badge 0");
-                // Stamped with the instance's budget, as `init`'s own handle is: a copy the server
-                // passes on dies with it, so its restart's badge has no other holder.
                 let Ok(minted) =
-                    Endpoint::from_handle(self.endpoint(&item.endpoint)).mint(badge, Some(&budget))
+                    Endpoint::from_handle(self.endpoint(&item.endpoint)).mint(badge, Some(&stamp))
                 else {
                     self.failed(&s.name, "mint a handed badge for")
                 };
@@ -492,7 +523,7 @@ mod machine {
                 // every server is, and `init` says so: the steward starts, and meets that
                 // server's own answers, as it would have.
                 let server = Nine::within(Endpoint::from_handle(minted.handle()), RELEASE_TIMEOUT);
-                match server.new_connection(&mut self.lend, "", 0) {
+                match server.new_connection(&mut self.lend, "", 0, None) {
                     Ok((connection, id)) => {
                         let _ = redoubt_rt::handle::close(minted.handle());
                         fresh.push((item.endpoint.clone(), badge, id));

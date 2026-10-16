@@ -25,7 +25,7 @@ fn wrong_owner_disconnect_is_a_recognized_not_yours_reply() {
     let id = f.as_process(owner, || {
         let client = Connection::new(Endpoint::from_handle(owner_connection));
         let mut lend = Lend::new(1).unwrap();
-        client.new_connection(&mut lend, "", 0).unwrap().1
+        client.new_connection(&mut lend, "", 0, None).unwrap().1
     });
     f.as_process(stranger, || {
         let request = ninep_common::Message::Disconnect(ninep_common::Disconnect { id });
