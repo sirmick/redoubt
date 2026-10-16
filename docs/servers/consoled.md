@@ -238,6 +238,12 @@ Status: built · partly tested: the restart claims are read from the code, not a
   up.
 - **Anyone with a connection reads the console.** What is typed on the physical console is visible to
   every holder of a `consoled` connection.
+- **The pool is a constant.** The bytes its clients may use between them are the program's
+  `BUDGET` (2 MiB), not the manifest's budget, and a bucket at its caps costs 355,584 bytes with
+  `MAX_THREADS` at 255, so five buckets fit: a manifest declaring more domains (the image's
+  three principals declare four, beside `init`'s) does not boot, since the program refuses limits
+  that would not fit and `init`'s reboot rule follows its exits. A follow-up sizes the limits
+  from the manifest, as the file servers' are.
 
 ## Why
 

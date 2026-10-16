@@ -100,9 +100,11 @@ mod machine {
     /// badge that started it, no new row or effect) and prints its `budget_destroy` call to
     /// return as `destroy_call`; a lease the kernel's deadline took prints its exit notice's
     /// arrival less the deadline as `deadline_notice`. Each sample's group is the count of the
-    /// domain's other live leases (`N=16`); the counts go out as `LATENCY-COUNT` lines when the
-    /// domain's leases are all gone, and after the third round's, `LATENCY-END` with the
-    /// steward's clock, the window's end. A steward that finds [`LATENCY_DONE`] in the console
+    /// live leases, itself among them (`N=3`); the counts go out as `LATENCY-COUNT` lines when
+    /// the leases are all gone and the case has written the round's marker ([`LATENCY_ROUND`]
+    /// and the round's number) in the console principal's home, and after the third round's,
+    /// `LATENCY-END` with the steward's clock, the window's end. A steward that finds
+    /// [`LATENCY_DONE`] in the console
     /// principal's home at its start exits [`LATENCY_EXIT`] at once: six such exits trip init's
     /// reboot rule, whose reset dumps the kernel's trace the bench's oracle reads.
     #[cfg(feature = "latency-probe")]
@@ -113,6 +115,10 @@ mod machine {
     const LATENCY_DECIDE_US: u64 = 30_000;
     #[cfg(feature = "latency-probe")]
     const LATENCY_DONE: &str = "latency-done";
+    #[cfg(feature = "latency-probe")]
+    const LATENCY_ROUND: &str = "latency-round-";
+    #[cfg(feature = "latency-probe")]
+    const LATENCY_POLL_US: u64 = 500_000;
     #[cfg(feature = "latency-probe")]
     pub const LATENCY_EXIT: u32 = 9;
 
@@ -1636,14 +1642,14 @@ mod machine {
         }
     }
 
-    /// `latency-probe` only: the live leases other than `lease` itself, over every principal (the
-    /// case's spinners are spread over six: the load is the box's, whoever carries it), the
-    /// sample's group; and the whole store's live leases.
+    /// `latency-probe` only: the live leases, `lease` itself among them (the case's N: the
+    /// spinners beside the probe's or the deadline's lease), the sample's group; a lease the core
+    /// has already let go of counts itself in.
     #[cfg(feature = "latency-probe")]
     fn others(steward: &Steward<Handle, u64>, lease: u64) -> usize {
         let index = inspect::index(&steward.store);
         let live = leases_live(steward);
-        if index.ids.contains_key(&lease) { live.saturating_sub(1) } else { live }
+        if index.ids.contains_key(&lease) { live } else { live + 1 }
     }
 
     #[cfg(feature = "latency-probe")]
@@ -1841,12 +1847,28 @@ mod machine {
                 }
                 None => wait,
             };
-            // The probe's samples are counted out when the round's leases are gone; after the
-            // case's three rounds, its marker file ends this instance for the reboot.
+            // The probe's samples are counted out when the round's leases are gone and the case
+            // has marked the round's end (at N = 1 no spinner outlives a probe lease, so the
+            // leases are gone after each one: the marker, not the count, closes a round); while
+            // the counts wait for it, the receive below looks again within half a second. After
+            // the case's three rounds, its marker file ends this instance for the reboot.
             #[cfg(feature = "latency-probe")]
-            if !probe.counts.is_empty() && leases_live(&steward) == 0 {
-                probe.flush(startup);
-            }
+            let wait = if !probe.counts.is_empty() && leases_live(&steward) == 0 {
+                let marker = format!("{LATENCY_ROUND}{}", probe.rounds + 1);
+                let marked = steward
+                    .own
+                    .console
+                    .clone()
+                    .is_some_and(|console| matches!(machine.home_stat(&console, &marker), Ok(Some(_))));
+                if marked {
+                    probe.flush(startup);
+                    wait
+                } else {
+                    wait.min(LATENCY_POLL_US)
+                }
+            } else {
+                wait
+            };
             #[cfg(feature = "latency-probe")]
             if probe.rounds >= 3 && probe.due.is_none() {
                 if let Some(console) = steward.own.console.clone() {

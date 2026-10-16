@@ -767,6 +767,15 @@ its `Rflush`, never after.
   manifest declares there ([init](init.md#the-boot-manifest)).
 - **A full bucket makes the last comer wait.** With three or more badges in one bucket, the
   bucket can fill, and a further badge is refused until one gives something back.
+- **A root badge's share caps everything minted from it.** A connection a client mints is a
+  `State` of the share it minted it from, so every connection the steward mints for a session or
+  a lease at a shared server is counted in the steward's own share there, under that server's
+  per-bucket `state` cap, whatever the principal: at `erofsd:system` (`state` 8, two connections
+  per session, one per lease) the image admits three sessions and three leases together, or
+  four sessions and none, and `steward-latency` measures at most three live leases
+  ([responsiveness](../kernel/scheduling.md#responsiveness)). A follow-up gives the steward a
+  root badge per principal at each shared server, so a minted connection's `State` lands in its
+  principal's bucket and the admission derivation is the whole truth.
 - **A parked call costs its caller and the server.** Each holds one of the caller's
   `MAX_OPEN_CALLS` and one of the server's admission slots for as long as it waits. A console read
   has no deadline and is reclaimed only by its caller giving up; a multiplexed one is reclaimed with
