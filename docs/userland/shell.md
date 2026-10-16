@@ -192,7 +192,12 @@ anything else is a usage error and the prompt stays. In the mode:
   lease of the session's principal ended ([the steward](../servers/steward.md#leases)), is
   printed by the shell's listener when the send arrives, through the same guard as every line
   and outside any block: in the mode as at the prompt it lands wherever the stream is, between a
-  block's output and its mark if that is when it came, and never begins with the token.
+  block's output and its mark if that is when it came, and never begins with the token. So is a
+  shared server's restart: the listener re-binds the slot the steward's `server_restarted`
+  names, through the session's own connection to the steward (`rebind`), at the path the steward
+  answers, and prints `[walfsd:data restarted: /home/alice re-bound]`, or `[walfsd:data
+  restarted: slot 1 not re-bound (REASON)]`
+  ([the steward](../servers/steward.md#failure-and-restart)).
 
 A `defmodule` typed at the prompt compiles and runs on the machine (`shell-compile-module`, a
 line at a time; [beamlet](beamlet.md#beamlet-on-redoubt)); the mode's cases bind a function, none

@@ -1,0 +1,196 @@
+description = "A shared server's restart strands every connection it served, and the box recovers them (docs/servers/steward.md, \"Failure and restart\"; docs/servers/init.md, \"Fresh connections per child\"; R40): bob's SSH session arms walfsd's test-only cut (feature cut-after-write, servers/walfsd/src/cut.rs) and writes a block, so walfsd:data exits inside his write, faulted and blamed on his account (R21); init restarts it, offers the blame, then re-makes the steward's fresh connection there once the new instance serves and hands it over with `reconnected`; the steward tells every session the server served on its notices endpoint, and each shell re-binds its home through the steward (`rebind`) and prints one line. Alice, logged in before, reads back the file she wrote before the cut (walfsd-power-loss's rule: what was written before a cut survives it), a login after the restart gets its home, and the UART console session re-binds too. Bob cuts walfsd:data twice more: at the third blame within the window the steward locks his unlabelled domain out (R40 on the machine): his session's budget is destroyed, so his SSH channel ends, his next login is refused, and alice's home answers on, re-bound a third time. The verdicts are init's and the steward's lines, and the shells' own answers (rule F)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The image's programs, walfsd built with its test-only cut (both volumes' instances carry it;
+# only bob arms his).
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-bootfsd", bin = "bootfsd" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-verityd", bin = "verityd" },
+    { package = "redoubt-netd", bin = "netd" },
+    { package = "redoubt-ipd", bin = "ipd" },
+    { package = "redoubt-walfsd", bin = "walfsd", features = ["cut-after-write"] },
+    { package = "redoubt-erofsd", bin = "erofsd" },
+    { package = "beamlet-redoubt", bin = "beamlet", workspace = "userland/otp" },
+    { package = "redoubt-piped", bin = "piped" },
+    { package = "redoubt-steward-server", bin = "steward" },
+    { package = "redoubt-sshd", bin = "sshd" },
+    { package = "redoubt-consrelay", bin = "consrelay" },
+]
+# The principals' budgets, each holding a shell VM's session, need 1 GiB (steward-session-ends).
+memory_mib = 1024
+# Four logins and three restarts.
+timeout_secs = 1500
+expect = [
+    '^init: started sshd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
+    '^init: started steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+]
+# Nothing but walfsd:data may end; no blame and no new connection is lost; no re-bind fails;
+# no batch step fails, the lockout's included.
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    '^init: (keyd|consoled|bootfsd|blkd|blkd:system|verity:system|netd|ipd|walfsd:alice-secrets|erofsd:system|steward|sshd) .*(exited|faulted|was killed)',
+    '^init: walfsd:data .*(exited|was killed)',
+    'blamed on nobody',
+    # The first two blames are answered at once; the third, whose lockout ends bob's session,
+    # is answered after that end batch, which can wait a second on sshd (the residual on
+    # steward.md "Failure and restart"): its init line is not a verdict here, the audit is.
+    "fault blamed on account 1002, labels none: lost: the steward (ended|refused it)",
+    'reconnected for the steward after [0-9]+ ms: lost',
+    'made the steward no new connection',
+    'not re-bound',
+    'EXCEPTION',
+    'steward: a step failed',
+    'steward: the core exited',
+    'walfsd: the volume check (found [0-9]+ problems|stopped)',
+]
+# 10: CUT_EXIT (servers/walfsd/src/cut.rs). Each cut, in init's order: the fault blamed on bob's
+# account and label set, the restart, the blame counted (the steward audits it before it answers
+# init), then the steward's new connection handed over once the new instance serves (its volume
+# check first). The third blame locks bob's unlabelled domain out. The UART console session (alice's) re-binds its home too and prints the same line
+# as her SSH session's; where it lands relative to init's blame line is the VM's scheduling, so
+# it is not expected in this order (the session logs are the re-bind's verdict).
+expect_after = [
+    '^init: walfsd:data \(PID [0-9]+\) faulted, code 10, serving account 1002, labels none$',
+    '^init: restarted walfsd:data, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] steward: audit 1002/\{\} at [0-9]+: Blamed$',
+    "^init: walfsd:data's fault blamed on account 1002, labels none: the steward took it$",
+    '^init: walfsd:data reconnected for the steward after [0-9]+ ms: the steward took it$',
+    '^init: walfsd:data \(PID [0-9]+\) faulted, code 10, serving account 1002, labels none$',
+    '^\[con [0-9a-f]{16}\] steward: audit 1002/\{\} at [0-9]+: Blamed$',
+    '^init: walfsd:data reconnected for the steward after [0-9]+ ms: the steward took it$',
+    '^init: walfsd:data \(PID [0-9]+\) faulted, code 10, serving account 1002, labels none$',
+    '^\[con [0-9a-f]{16}\] steward: audit 1002/\{\} at [0-9]+: Blamed$',
+    '^\[con [0-9a-f]{16}\] steward: audit 1002/\{\} at [0-9]+: LockedOut \{ until: [0-9]+ \}$',
+    '^init: walfsd:data reconnected for the steward after [0-9]+ ms: the steward took it$',
+]
+
+[[file]]
+name = "manifest"
+from = { path = "image/manifest.json" }
+verity = "image/userland.toml"
+
+# Bob writes a block to his home, arms the cut at the next block write, and writes again: that
+# write ends walfsd:data with his call in service, so it fails; his shell is told of the restart
+# and re-binds his home, which answers again. Three times; the third blame ends his session (the
+# channel closes under him: sshd ends it as a logout, ssh exits 0), and his next login is refused.
+# The forbidden `lost`, `no new connection` and `not re-bound` lines hold the restart path to its
+# bounds (docs/servers/init.md, "Fresh connections per child"). Every answer is tagged,
+# so a pattern matches the printed value.
+[[session]]
+user = "bob"
+pty = true
+steps = [
+    { expect = '/home/bob \([0-9]+\)> ' },
+    { send = "{:first, File.write(\"/home/bob/f\", String.duplicate(\"a\", 4096))}\n" },
+    { expect = '\{:first, :ok\}' },
+    { expect = '\([0-9]+\)> ' },
+    { wait = "alice-ready" },
+    { send = "{:armed, File.stat(\"/home/bob/walfsd-cut-1\")}\n" },
+    { expect = '\{:armed, \{:error, :enoent\}\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:cut, File.write(\"/home/bob/f\", String.duplicate(\"b\", 4096))}\n" },
+    { expect = '\{:cut, \{:error, :[a-z]+\}\}' },
+    { expect = '\[walfsd:data restarted: /home/bob re-bound\]' },
+    { mark = "bob-cut-1" },
+    { send = "{:bob_home, elem(File.stat(\"/home/bob\"), 0)}\n" },
+    { expect = '\{:bob_home, :ok\}' },
+    { expect = '\([0-9]+\)> ' },
+    { wait = "alice-rebound-1" },
+    { wait = "later-login" },
+    { send = "{:armed2, File.stat(\"/home/bob/walfsd-cut-1\")}\n" },
+    { expect = '\{:armed2, \{:error, :enoent\}\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:cut2, File.write(\"/home/bob/f\", String.duplicate(\"c\", 4096))}\n" },
+    { expect = '\{:cut2, \{:error, :[a-z]+\}\}' },
+    { expect = '\[walfsd:data restarted: /home/bob re-bound\]' },
+    { mark = "bob-cut-2" },
+    { wait = "alice-rebound-2" },
+    { send = "{:armed3, File.stat(\"/home/bob/walfsd-cut-1\")}\n" },
+    { expect = '\{:armed3, \{:error, :enoent\}\}' },
+    { expect = '\([0-9]+\)> ' },
+    # The third blame locks him out while his write's answer is still to print: his VM goes with
+    # his budget, so the answer is not expected; the shell's redraw of the accepted line shows it
+    # took the line before the input closes (a line typed and closed on at once is a logout).
+    { send = "{:cut3, File.write(\"/home/bob/f\", String.duplicate(\"d\", 4096))}\n" },
+    { expect = '\x1b\[1A\x1b\[J/home/bob \([0-9]+\)> \{:cut3, File\.write' },
+    { exit = 0 },
+    { mark = "bob-locked" },
+]
+
+# Alice is logged in before the cuts. What she wrote before each survives it: she reads it back
+# once her shell has re-bound her home, every time.
+[[session]]
+user = "alice"
+pty = true
+steps = [
+    { expect = '/home/alice \([0-9]+\)> ' },
+    { send = "{:kept, File.write(\"/home/alice/kept\", \"before\")}\n" },
+    { expect = '\{:kept, :ok\}' },
+    { expect = '\([0-9]+\)> ' },
+    { mark = "alice-ready" },
+    { wait = "bob-cut-1" },
+    { expect = '\[walfsd:data restarted: /home/alice re-bound\]' },
+    { send = "{:read1, File.read(\"/home/alice/kept\")}\n" },
+    { expect = '\{:read1, \{:ok, "before"\}\}' },
+    { expect = '\([0-9]+\)> ' },
+    { mark = "alice-rebound-1" },
+    { wait = "bob-cut-2" },
+    { expect = '\[walfsd:data restarted: /home/alice re-bound\]' },
+    { send = "{:read2, File.read(\"/home/alice/kept\")}\n" },
+    { expect = '\{:read2, \{:ok, "before"\}\}' },
+    { expect = '\([0-9]+\)> ' },
+    { mark = "alice-rebound-2" },
+    { wait = "bob-locked" },
+    { expect = '\[walfsd:data restarted: /home/alice re-bound\]' },
+    { send = "{:read3, File.read(\"/home/alice/kept\")}\n" },
+    { expect = '\{:read3, \{:ok, "before"\}\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:after, 1 + 1}\n" },
+    { expect = '\{:after, 2\}' },
+    { expect = '\([0-9]+\)> ' },
+    { exit = 0 },
+]
+
+# A login after the first restart gets its home: alice's second context, minted below the
+# steward's new connection.
+[[session]]
+user = "alice.later"
+pty = true
+steps = [
+    { wait = "alice-rebound-1" },
+    { expect = '/home/alice \([0-9]+\)> ' },
+    { send = "{:later, File.read(\"/home/alice/kept\")}\n" },
+    { expect = '\{:later, \{:ok, "before"\}\}' },
+    { expect = '\([0-9]+\)> ' },
+    # Logged out before bob cuts again: a session ending at the moment of a cut holds the steward
+    # in its end batch's bounded waits (steward.md "Failure and restart", the residual).
+    { exit = 0 },
+    { mark = "later-login" },
+]
+
+# Locked out: bob's login after the third blame is refused as a wrong key is.
+[[session]]
+user = "bob"
+name = "bob-locked-out"
+steps = [
+    { wait = "bob-locked" },
+    { expect = 'Permission denied \(publickey\)' },
+    { exit = 255 },
+]
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]
+forward = [22]

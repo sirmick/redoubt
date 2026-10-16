@@ -114,6 +114,28 @@ pub trait Kernel {
     /// Approval channel `channel` is closed: its consoles go, and its reader ends at the end of
     /// its input.
     fn channel_closed(&mut self, channel: u64);
+    /// `init` re-made the steward's connection at `server`, restarted (servers/steward.md,
+    /// "Failure and restart"): the steward reaches the server by `connection` from here, and
+    /// what it held there (its attached connection, the carves it kept, every child's
+    /// connection) died with the old instance and is forgotten, nothing disconnected.
+    fn reconnected(&mut self, server: &str, connection: redoubt_rt::abi::Handle);
+    /// The slots of `owner`'s binding table at `server` whose connection its child binds at a
+    /// path: the ones it is told to re-bind after `server`'s restart. A named handle (the
+    /// system volume's) and the console are not among them.
+    fn slots_at(&self, owner: &Object, server: &str) -> Vec<u16>;
+    /// Sends `server_restarted` for `server`'s `slot` on a session's notices endpoint, as
+    /// [`Kernel::notify`] sends: one way, bounded, never retried.
+    fn restarted(&mut self, notices: Self::Handle, server: &str, slot: u16);
+    /// A fresh connection for `owner`'s child at `slot` again, in `scope`, after the slot's
+    /// server restarted: the handle it is held under, the kernel handle the reply carries to the
+    /// child (the steward's own copy goes with the reply), and the path the child binds it at;
+    /// none where the slot binds nothing at a path.
+    fn rebind(
+        &mut self,
+        owner: &Object,
+        slot: u16,
+        scope: Self::Budget,
+    ) -> Result<Option<(Self::Handle, redoubt_rt::abi::Handle, String)>, Error>;
     /// A context's console relay, started in `budget` (servers/steward.md, "Contexts"): its
     /// process id, and the steward's control connection to it. The next console connection of
     /// `domain`'s namespace is the relay's, which it serves the session's `/dev/cons` on.

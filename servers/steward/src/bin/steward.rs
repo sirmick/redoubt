@@ -52,7 +52,9 @@ mod machine {
     use redoubt_steward::event::EventKind;
     use redoubt_steward::inspect;
     use redoubt_steward_server::approval::{Line, Lines, parse};
-    use redoubt_steward_server::own::{Bound, Child, How, Own, SYSTEM, binding, lease_args, session_args};
+    use redoubt_steward_server::own::{
+        Bound, Child, How, IPD, Own, SYSTEM, binding, lease_args, session_args,
+    };
     use redoubt_steward_server::protocol::{APPROVAL, Serving, answer_with, watches as watches_call};
     use redoubt_steward_server::watchers::Watchers;
     use redoubt_steward_server::{Kernel, SLOTS, Steward, start};
@@ -355,8 +357,14 @@ mod machine {
         next_key: u64,
         /// The connections carved once with a quota and kept for the steward's life, by key (a
         /// principal's home): every session's is minted through one with no quota of its own, so
-        /// they share it. `init` disconnects them at the steward's exit, with all minted below.
-        carved: BTreeMap<String, Handle>,
+        /// they share it, and the handle name of the server it is at. `init` disconnects them at
+        /// the steward's exit, with all minted below; a server's restart forgets its
+        /// ([`Machine::reconnected`]), and the next carve mints them again.
+        carved: BTreeMap<String, (Handle, String)>,
+        /// The connection `init` handed the steward at a server that restarted since, by the
+        /// server's handle name, in place of the startup block's (servers/steward.md, "Failure
+        /// and restart").
+        replaced: BTreeMap<String, Handle>,
         /// Each principal's account and name.
         accounts: Vec<(u64, String)>,
         own_lines: Own,
@@ -435,11 +443,17 @@ mod machine {
             say(self.startup, &line);
         }
 
+        /// The handle the steward reaches the server named `name` by: the one `init` handed it
+        /// since the server's last restart, else the startup block's.
+        fn named(&self, name: &str) -> Option<Handle> {
+            self.replaced.get(name).copied().or_else(|| self.startup.handle(name))
+        }
+
         fn server(&mut self, name: &str) -> Result<Connection, Error> {
             if let Some(conn) = self.servers.get(name) {
                 return Ok(conn.clone());
             }
-            let handle = self.startup.handle(name).ok_or(Error::BadHandle)?;
+            let handle = self.named(name).ok_or(Error::BadHandle)?;
             let conn = Connection::attach(Endpoint::from_handle(handle), &mut self.lend)
                 .map_err(|_| Error::Refused)?;
             self.servers.insert(name.into(), conn.clone());
@@ -449,7 +463,7 @@ mod machine {
         /// The server the steward was handed as `name`, unattached: minting and disconnecting
         /// need no fid, and the steward may not read a labelled volume's root itself (R25).
         fn unattached(&self, name: &str) -> Result<Nine, Error> {
-            let handle = self.startup.handle(name).ok_or(Error::BadHandle)?;
+            let handle = self.named(name).ok_or(Error::BadHandle)?;
             Ok(Nine::new(Endpoint::from_handle(handle)))
         }
 
@@ -466,13 +480,13 @@ mod machine {
         /// The connection kept for `key`, carved at `name`'s server rooted at `root` with `quota`
         /// bytes the first time it is needed.
         fn carve(&mut self, key: &str, name: &str, root: &str, quota: u64) -> Result<Nine, Error> {
-            if let Some(handle) = self.carved.get(key) {
+            if let Some((handle, _)) = self.carved.get(key) {
                 return Ok(Nine::new(Endpoint::from_handle(*handle)));
             }
             let server = self.unattached(name)?;
             let (endpoint, _) =
                 server.new_connection(&mut self.lend, root, quota, None).map_err(|_| Error::Refused)?;
-            self.carved.insert(key.into(), endpoint.handle());
+            self.carved.insert(key.into(), (endpoint.handle(), name.into()));
             Ok(Nine::new(endpoint))
         }
 
@@ -628,7 +642,7 @@ mod machine {
                     self.fresh_carved(&key, &server, &root, quota, &below, below_quota, scope)
                 }
                 How::Grant { scope: net } => {
-                    let conn = self.server("ipd")?;
+                    let conn = self.server(IPD)?;
                     let grant = ipd::Message::Grant(ipd::Grant { scope: &net });
                     let made = typed::call::<ipd::Protocol, _>(
                         conn.endpoint(),
@@ -641,7 +655,7 @@ mod machine {
                         },
                     );
                     let (handle, id) = made.ok().flatten().ok_or(Error::Refused)?;
-                    Ok(Some(self.hold(handle, Some((Via::Server(String::from("ipd")), id)), false)))
+                    Ok(Some(self.hold(handle, Some((Via::Server(String::from(IPD)), id)), false)))
                 }
                 How::Console => {
                     // A context's VM gets the console its relay serves; the relay holds the
@@ -692,7 +706,9 @@ mod machine {
             if let Some((via, id)) = via {
                 let through = match via {
                     Via::Server(name) => self.unattached(&name).ok(),
-                    Via::Carved(key) => self.carved.get(&key).map(|h| Nine::new(Endpoint::from_handle(*h))),
+                    Via::Carved(key) => {
+                        self.carved.get(&key).map(|(h, _)| Nine::new(Endpoint::from_handle(*h)))
+                    }
                     Via::Console => {
                         if let Some(cons) = &self.consoled {
                             let _ = cons.disconnect(id, RELEASE_TIMEOUT);
@@ -1034,6 +1050,35 @@ mod machine {
             }
         }
 
+        /// The new connection stands in for the startup block's handle (a second restart's for
+        /// the first's, closed). What was minted at the old instance is dead there: the attached
+        /// connection, the carves kept at it and every child's connection, held by ids the new
+        /// instance never drew; their records go, and nothing is disconnected.
+        fn reconnected(&mut self, server: &str, connection: Handle) {
+            if let Some(old) = self.replaced.insert(server.into(), connection) {
+                let _ = close(old);
+            }
+            self.servers.remove(server);
+            let carved_there: Vec<String> =
+                self.carved.iter().filter(|(_, (_, s))| s == server).map(|(k, _)| k.clone()).collect();
+            for key in &carved_there {
+                if let Some((handle, _)) = self.carved.remove(key) {
+                    let _ = close(handle);
+                }
+            }
+            let dead = |held: &Held| match &held.via {
+                Some((Via::Server(s), _)) => s == server,
+                Some((Via::Carved(k), _)) => carved_there.contains(k),
+                _ => false,
+            };
+            let gone: Vec<u64> = self.held.iter().filter(|(_, h)| dead(h)).map(|(k, _)| *k).collect();
+            for key in gone {
+                if let Some(Held { handle: Some(handle), .. }) = self.held.remove(&key) {
+                    let _ = close(handle);
+                }
+            }
+        }
+
         /// A screen that cannot be written within the bound is dropped and said once, with why:
         /// the person asks again with `pending`.
         fn screen(&mut self, channel: u64, text: &str) {
@@ -1057,6 +1102,48 @@ mod machine {
             if let Some(console) = self.channels.remove(&channel) {
                 let _ = close(console);
             }
+        }
+
+        fn slots_at(&self, owner: &Object, server: &str) -> Vec<u16> {
+            let Some(principal) = self.principal(&owner.domain) else { return Vec::new() };
+            let labels = owner.domain.labels().as_slice();
+            let child = Child::of(owner.kind, labels);
+            (0..SLOTS)
+                .filter(|&slot| {
+                    binding(&self.own_lines, &principal, labels, child, slot, self.agent_quota)
+                        .is_some_and(|b| b.at.is_some() && b.how.server() == Some(server))
+                })
+                .collect()
+        }
+
+        /// As [`Machine::notify`]: one page, one send, within [`NOTICE_US`].
+        fn restarted(&mut self, notices: u64, server: &str, slot: u16) {
+            let Some(notices) = self.handle_of(notices) else { return };
+            let Ok(mut page) = Buffer::new(1) else { return };
+            let m = steward::Message::ServerRestarted(steward::ServerRestarted { server, slot });
+            let Ok(words) = m.encode(&mut page) else { return };
+            let _ = Endpoint::from_handle(notices).send(&words, &[], Some(page), NOTICE_US);
+        }
+
+        /// The slot's binding again, as [`Machine::connect`] makes it, for a slot at a shared
+        /// server bound at a path; the steward's copy of the handle goes with the reply.
+        fn rebind(
+            &mut self,
+            owner: &Object,
+            slot: u16,
+            scope: Handle,
+        ) -> Result<Option<(u64, Handle, String)>, Error> {
+            let principal = self.principal(&owner.domain).ok_or(Error::BadHandle)?;
+            let labels = owner.domain.labels().as_slice();
+            let child = Child::of(owner.kind, labels);
+            let Some(bound) = binding(&self.own_lines, &principal, labels, child, slot, self.agent_quota)
+            else {
+                return Ok(None);
+            };
+            let (Some(at), Some(_)) = (bound.at, bound.how.server()) else { return Ok(None) };
+            let Some(key) = self.connect(owner, slot, scope)? else { return Ok(None) };
+            let handle = self.held.get_mut(&key).and_then(|h| h.handle.take()).ok_or(Error::BadHandle)?;
+            Ok(Some((key, handle, at)))
         }
 
         fn random(&mut self) -> Result<u64, Error> { redoubt_rt::handle::random_u64() }
@@ -1189,6 +1276,7 @@ mod machine {
             held: BTreeMap::new(),
             next_key: 0,
             carved: BTreeMap::new(),
+            replaced: BTreeMap::new(),
             accounts: Vec::new(),
             own_lines: Own::default(),
             session_pages: 0,

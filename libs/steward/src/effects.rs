@@ -17,12 +17,14 @@ use crate::event::{Content, EventKind};
 use crate::guards::{lease, request, session};
 use crate::store::{Crossing, CrossingKind, Route};
 
-/// The slots of what a session's or a lease's batch makes.
+/// The slots of what a session's or a lease's batch makes. The scope's and the connections' are
+/// public for the server's re-bind, which re-makes one connection the batch made in the scope
+/// it made (servers/steward.md, "Failure and restart").
 const BUDGET: u8 = 0;
-const SCOPE: u8 = 1;
+pub const SCOPE: u8 = 1;
 const PROCESS: u8 = 2;
 /// The connection to the steward; the shared servers' follow, one each.
-const CONNECTIONS: u8 = 3;
+pub const CONNECTIONS: u8 = 3;
 /// A context's console relay, and the channel console it holds while attached.
 const RELAY: u8 = 200;
 const CONSOLE: u8 = 201;

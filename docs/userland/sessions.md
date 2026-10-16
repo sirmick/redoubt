@@ -276,8 +276,10 @@ console's session; and `home=/PATH`, the path the session's namespace binds the 
 at, for a vault session as for a plain one, none for a principal with no home. beamlet reads them
 once at its start and gives them to Elixir as `redoubt:identity/0` ([beamlet](beamlet.md#natives));
 beside them a session is launched with the named handle `notices`, the receive right of the
-endpoint the steward tells it a lease's end on, which the shell serves from its start
-(`Redoubt.Shell.Notices`; [the steward](../servers/steward.md#leases));
+endpoint the steward tells it a lease's end on, and a shared server's restart, which the shell
+serves from its start, re-binding the slot the restart named through the steward
+(`Redoubt.Shell.Notices`; [the steward](../servers/steward.md#leases),
+[failure and restart](../servers/steward.md#failure-and-restart));
 a VM started without `principal=` is no session and gets `not_found`, and one whose `home=` is
 not a clean absolute path, or comes twice, is told nothing either. They are fixed for the VM's
 life, and they are information, not authority: the label set the kernel stamps is

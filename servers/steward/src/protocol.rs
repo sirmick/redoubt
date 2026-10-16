@@ -11,14 +11,14 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use redoubt_rt::abi::{Handle as KernelHandle, ReceivedHandles};
+use redoubt_rt::abi::{Handle as KernelHandle, Handles, ReceivedHandles};
 use redoubt_rt::ipc::{Caller, Words};
 use redoubt_rt::server::typed::{Answer as Typed, Outcome, Protocol, TypedServer, answer};
 use redoubt_rt::wire::Error as WireError;
 use redoubt_rt::wire::proto::steward::{
     ApprovalClosedReply, ApprovalOpenedReply, ApproveReply, BlameReply, ChannelClosedReply, ContextsReply,
     DenyReply, DetachReply, EndContextReply, EndLeaseReply, EndSessionReply, ErrorCode, LoginReply, Message,
-    PendingReply, Reply, StartAgentReply, SubmitReply,
+    PendingReply, RebindReply, ReconnectedReply, Reply, StartAgentReply, SubmitReply,
 };
 use redoubt_steward::effect::{Answer, Output, Refusal};
 use redoubt_steward::event::{Content, EventKind};
@@ -67,17 +67,18 @@ impl Class {
             | Message::ApprovalClosed(_)
             | Message::Watch(_) => Class::Sshd,
             Message::Pending(_) | Message::Approve(_) | Message::Deny(_) => Class::Approval,
-            Message::Blame(_) => Class::Init,
+            Message::Blame(_) | Message::Reconnected(_) => Class::Init,
             Message::Submit(_)
             | Message::StartAgent(_)
             | Message::EndLease(_)
             | Message::EndSession(_)
             | Message::Contexts(_)
             | Message::Detach(_)
-            | Message::EndContext(_) => Class::Session,
-            // The steward's own sends to a session's notices endpoint: a call of either, on any
-            // badge, is malformed.
-            Message::LeaseEnded(_) | Message::ApprovalWaiting(_) => Class::None,
+            | Message::EndContext(_)
+            | Message::Rebind(_) => Class::Session,
+            // The steward's own sends to a session's notices endpoint: a call of any of them, on
+            // any badge, is malformed.
+            Message::LeaseEnded(_) | Message::ApprovalWaiting(_) | Message::ServerRestarted(_) => Class::None,
         }
     }
 }
@@ -202,6 +203,39 @@ where
         let class = Class::of(caller.badge);
         if class == Class::None || class != Class::of_message(&request) {
             return Err(ErrorCode::Malformed);
+        }
+        // A shared server's restart (servers/steward.md, "Failure and restart") is the server's
+        // path, no event of the core's: `init`'s new connection replaces what the steward
+        // reached the server by, and a session re-makes one connection its login batch made,
+        // in that batch's scope, granted nothing the login did not grant. A slot bound to
+        // nothing at a path, the console's among them, is `unknown`; a mint the server refuses
+        // is `failed`.
+        match request {
+            Message::Reconnected(m) => {
+                let connection = *handles.first().ok_or(ErrorCode::Malformed)?;
+                self.steward.reconnected(self.kernel, m.server, connection);
+                return Ok(Typed::new(Reply::Reconnected(ReconnectedReply {})));
+            }
+            Message::Rebind(m) => {
+                return match self.steward.rebind(self.kernel, caller.badge, m.slot) {
+                    Ok(Some((connection, at))) => {
+                        self.name = at;
+                        let mut handles = Handles::new();
+                        // Cannot fail: one handle, and a reply may carry `MAX_MSG_HANDLES`.
+                        let _ = handles.push(connection);
+                        // Minted for the caller: the steward's copy goes once the reply has
+                        // copied it, as it goes after a launch.
+                        Ok(Typed {
+                            reply: Reply::Rebind(RebindReply { at: &self.name }),
+                            handles,
+                            close_after_reply: true,
+                        })
+                    }
+                    Ok(None) => Err(ErrorCode::Unknown),
+                    Err(_) => Err(ErrorCode::Failed),
+                };
+            }
+            _ => {}
         }
         let mut login_labels = Vec::new();
         // An approval channel opening: the channel's id, drawn here as every id the server hands

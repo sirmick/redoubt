@@ -8,8 +8,8 @@ use redoubt_rt::ipc::Caller;
 use redoubt_rt::wire::proto::steward::{
     ApprovalClosed, ApprovalClosedReply, ApprovalOpened, ApprovalOpenedReply, Approve, ApproveReply, Blame,
     ChannelClosed, Contexts, Deny, DenyReply, Detach, EndContext, EndLease, EndSession, ErrorCode,
-    LeaseEnded, Login, LoginReply, Message, Pending, PendingReply, Reply, StartAgent, Submit, SubmitReply,
-    Watch,
+    LeaseEnded, Login, LoginReply, Message, Pending, PendingReply, Rebind, RebindReply, Reconnected,
+    ReconnectedReply, Reply, ServerRestarted, StartAgent, Submit, SubmitReply, Watch,
 };
 use redoubt_steward::audit::Record;
 use redoubt_steward::consts::{BLAME_COUNT, BLAME_WINDOW, MAX_LEASE};
@@ -18,7 +18,7 @@ use redoubt_steward::effect::{Kind, Object, Output, Step};
 use redoubt_steward::event::EventKind;
 use redoubt_steward::hash::key_id;
 use redoubt_steward_server::drive::MINTED;
-use redoubt_steward_server::own::Child;
+use redoubt_steward_server::own::{Child, binds};
 use redoubt_steward_server::protocol::{APPROVAL, INIT, SSHD, Serving, answer_with, watches};
 use redoubt_steward_server::{Kernel, StartError, Steward, start};
 
@@ -118,6 +118,23 @@ enum Call {
         text: String,
     },
     ChannelClosed(u64),
+    /// `init`'s new connection at a restarted server.
+    Reconnected {
+        server: String,
+    },
+    /// `server_restarted` sent on a session's notices endpoint.
+    Restarted {
+        notices: usize,
+        server: String,
+        slot: u16,
+    },
+    /// A slot's connection made again; the handle made is the new connection's.
+    Rebind {
+        kind: Kind,
+        labels: Vec<u64>,
+        slot: u16,
+        scope: usize,
+    },
 }
 
 /// Budget and handle `i` are the `i`th the kernel made; `USERS` is the one the steward holds.
@@ -243,6 +260,52 @@ impl Kernel for Recorder {
     }
 
     fn channel_closed(&mut self, channel: u64) { self.calls.push(Call::ChannelClosed(channel)); }
+
+    fn reconnected(&mut self, server: &str, _connection: Handle) {
+        self.calls.push(Call::Reconnected { server: server.into() });
+    }
+
+    /// The image's binding table by handle name: `/boot` at `bootfsd`, the home at `walfsd:data`,
+    /// the vault at `littlefsd:alice-secrets`, the network at `ipd`; the console (slot 4) is no
+    /// shared server, and the system volume (slot 5) a named handle nobody re-binds.
+    fn slots_at(&self, owner: &Object, server: &str) -> Vec<u16> {
+        let labels = owner.domain.labels().as_slice().to_vec();
+        let slot = match server {
+            "bootfsd" => 0,
+            "walfsd:data" => 1,
+            "littlefsd:alice-secrets" => 2,
+            "ipd" => 3,
+            _ => return Vec::new(),
+        };
+        if binds(Child::of(owner.kind, &labels), slot) { vec![slot] } else { Vec::new() }
+    }
+
+    fn restarted(&mut self, notices: usize, server: &str, slot: u16) {
+        self.calls.push(Call::Restarted { notices, server: server.into(), slot });
+    }
+
+    fn rebind(
+        &mut self,
+        owner: &Object,
+        slot: u16,
+        scope: usize,
+    ) -> Result<Option<(usize, Handle, String)>, Error> {
+        let labels = owner.domain.labels().as_slice().to_vec();
+        let child = Child::of(owner.kind, &labels);
+        self.calls.push(Call::Rebind { kind: owner.kind, labels, slot, scope });
+        let at = match slot {
+            0 => "/boot",
+            1 => "/home",
+            2 => "/vault",
+            3 => "/net",
+            _ => return Ok(None),
+        };
+        if !binds(child, slot) {
+            return Ok(None);
+        }
+        let made = self.make()?;
+        Ok(Some((made, Handle::new(made as u32).unwrap(), at.into())))
+    }
 
     fn launch_relay(&mut self, _domain: &Domain, budget: usize) -> Result<(u64, usize), Error> {
         let control = self.make()?;
@@ -436,10 +499,12 @@ fn call_outputs(
     let opcode = words[0] as u32;
     let caller = Caller { badge, account: 0, labels: Default::default() };
     // A login brings the channel's two console connections, an approval channel's open its
-    // two: here handles 9 and 10.
+    // two: here handles 9 and 10; `init`'s `reconnected` brings the new connection, handle 9.
     let mut handles = ReceivedHandles::new();
-    if matches!(m, Message::Login(_) | Message::ApprovalOpened(_)) {
+    if matches!(m, Message::Login(_) | Message::ApprovalOpened(_) | Message::Reconnected(_)) {
         handles.push(Handle::new(CONSOLE)).unwrap();
+    }
+    if matches!(m, Message::Login(_) | Message::ApprovalOpened(_)) {
         handles.push(Handle::new(CONSOLE + 1)).unwrap();
     }
     let mut serving = Serving::new(s, k);
@@ -451,7 +516,8 @@ fn call_outputs(
     for kind in core::mem::take(&mut serving.after) {
         serving.steward.event(serving.kernel, kind, 0).unwrap();
     }
-    let reply = Reply::decode(opcode, &outcome.words, &buf, 0).unwrap();
+    // A reply that carries a handle (`rebind`'s connection) decodes only with it counted.
+    let reply = Reply::decode(opcode, &outcome.words, &buf, outcome.send.as_slice().len()).unwrap();
     // Owned copies of what the tests read: a login's session and labels.
     let reply = reply.map(|r| match r {
         Reply::Login(l) => Reply::Login(LoginReply {
@@ -480,6 +546,8 @@ fn call_outputs(
         Reply::Pending(_) => Reply::Pending(PendingReply {}),
         Reply::Approve(_) => Reply::Approve(ApproveReply {}),
         Reply::Deny(_) => Reply::Deny(DenyReply {}),
+        Reply::Reconnected(_) => Reply::Reconnected(ReconnectedReply {}),
+        Reply::Rebind(r) => Reply::Rebind(RebindReply { at: Box::leak(r.at.to_string().into_boxed_str()) }),
         _ => panic!("a reply these tests do not read"),
     });
     (reply, outputs)
@@ -760,6 +828,145 @@ fn every_operation_on_another_badge_class_is_malformed() {
             "lease_ended on {badge:#x}"
         );
     }
+    // The restart path (servers/steward.md, "Failure and restart"): `reconnected` is `init`'s
+    // alone, so nobody else can swap the connection the steward mints every home through;
+    // `rebind` is a session's; the steward's own `server_restarted` is a call of nobody's.
+    for badge in [session, SSHD, APPROVAL, 0, 4, MINTED - 1] {
+        let m = Message::Reconnected(Reconnected { server: "walfsd:data" });
+        assert_eq!(
+            call(&mut s, &mut k, badge, m).unwrap_err(),
+            ErrorCode::Malformed,
+            "reconnected on {badge:#x}"
+        );
+    }
+    for badge in [SSHD, APPROVAL, INIT, 0] {
+        let m = Message::Rebind(Rebind { slot: 1 });
+        assert_eq!(call(&mut s, &mut k, badge, m).unwrap_err(), ErrorCode::Malformed, "rebind on {badge:#x}");
+    }
+    for badge in [session, SSHD, APPROVAL, INIT, 0] {
+        let m = Message::ServerRestarted(ServerRestarted { server: "walfsd:data", slot: 1 });
+        assert_eq!(
+            call(&mut s, &mut k, badge, m).unwrap_err(),
+            ErrorCode::Malformed,
+            "server_restarted on {badge:#x}"
+        );
+    }
+    assert!(k.calls.iter().all(|c| !matches!(c, Call::Reconnected { .. } | Call::Rebind { .. })));
+}
+
+/// A shared server's restart (servers/steward.md, "Failure and restart"): `init`'s `reconnected`
+/// hands the kernel the new connection, and every live session with a slot at that server is
+/// sent `server_restarted` for it: at `walfsd:data`, slot 1 (the home) to alice's two sessions
+/// and bob's, nothing to the lease, which has no notices endpoint; at the vault's server, to the
+/// vault session alone. A session's `rebind(1)` re-makes that slot's connection in the session's
+/// scope and answers the handle and the path; the dead one's record is released (the kernel has
+/// nothing to disconnect) and the new one is held in its place, so the session's end gives it
+/// back. The console's slot, the named handle's, a slot bound to nothing for the caller and a lease's badge
+/// are `unknown`, as is a badge the core routes nowhere.
+#[test]
+fn a_servers_restart_tells_its_sessions_and_a_session_rebinds_its_slot() {
+    let mut k = Recorder::default();
+    let mut s = started(&mut k);
+    let Ok(Reply::Login(a)) = call(&mut s, &mut k, SSHD, login("alice", "", &ALICE_KEY)) else { panic!() };
+    let u = badge_of(&s, a.session);
+    // The login's connection at slot 1, and the scope it was minted in.
+    let login_scope = k
+        .calls
+        .iter()
+        .find_map(|c| match c {
+            Call::Connect { slot: 1, scope, .. } => Some(*scope),
+            _ => None,
+        })
+        .expect("the login minted the home's connection in the session's scope");
+    k.calls.clear();
+    let Ok(Reply::Login(b)) = call(&mut s, &mut k, SSHD, login("bob", "", &BOB_KEY)) else { panic!() };
+    let b = badge_of(&s, b.session);
+    // The last thing a login makes is its pid.
+    let bob_pid = k.made as u64;
+    let Ok(Reply::Login(v)) = call(&mut s, &mut k, SSHD, login("alice", "alice-secrets", &ALICE_KEY)) else {
+        panic!()
+    };
+    let v = badge_of(&s, v.session);
+    let Ok(Reply::StartAgent(_)) =
+        call(&mut s, &mut k, u, Message::StartAgent(StartAgent { lease: 60_000_000 }))
+    else {
+        panic!()
+    };
+    let before = s.holding();
+    k.calls.clear();
+    let m = Message::Reconnected(Reconnected { server: "walfsd:data" });
+    let Ok(Reply::Reconnected(_)) = call(&mut s, &mut k, INIT, m) else { panic!() };
+    assert_eq!(k.calls[0], Call::Reconnected { server: "walfsd:data".into() });
+    let told = |k: &Recorder, server: &str| -> Vec<(usize, u16)> {
+        k.calls
+            .iter()
+            .filter_map(|c| match c {
+                Call::Restarted { notices, server: at, slot } if at == server => Some((*notices, *slot)),
+                _ => None,
+            })
+            .collect()
+    };
+    let homes = told(&k, "walfsd:data");
+    assert_eq!(homes.len(), 3, "alice's two sessions and bob's, not the lease: {:?}", k.calls);
+    assert!(homes.iter().all(|(_, slot)| *slot == 1), "{homes:?}");
+    let mut endpoints: Vec<usize> = homes.iter().map(|(n, _)| *n).collect();
+    endpoints.dedup();
+    assert_eq!(endpoints.len(), 3, "each on its own notices endpoint");
+    assert_eq!(k.calls.len(), 4, "nothing else: {:?}", k.calls);
+    k.calls.clear();
+    let m = Message::Reconnected(Reconnected { server: "littlefsd:alice-secrets" });
+    let Ok(Reply::Reconnected(_)) = call(&mut s, &mut k, INIT, m) else { panic!() };
+    assert_eq!(told(&k, "littlefsd:alice-secrets").len(), 1, "the vault session alone: {:?}", k.calls);
+    k.calls.clear();
+    let Ok(Reply::Rebind(r)) = call(&mut s, &mut k, u, Message::Rebind(Rebind { slot: 1 })) else { panic!() };
+    assert_eq!(r.at, "/home");
+    // By the login batch's route: the same object, the same slot, the same scope, so the same
+    // stamp, root and quota as the login's connection (the binding table is one function of
+    // them); the re-bind grants nothing the login did not.
+    assert_eq!(
+        k.calls[0],
+        Call::Rebind { kind: Kind::Session, labels: vec![], slot: 1, scope: login_scope },
+        "{:?}",
+        k.calls
+    );
+    assert!(matches!(k.calls[1], Call::Release(_)), "the dead connection's record goes: {:?}", k.calls);
+    assert_eq!(k.calls.len(), 2);
+    assert_eq!(s.holding(), before, "the new connection takes the dead one's token");
+    for slot in [2, 4, 5, 6] {
+        let e = call(&mut s, &mut k, u, Message::Rebind(Rebind { slot })).unwrap_err();
+        assert_eq!(
+            e,
+            ErrorCode::Unknown,
+            "slot {slot}: the vault binds nothing unlabelled, the rest no path"
+        );
+    }
+    let e = call(&mut s, &mut k, MINTED | 5, Message::Rebind(Rebind { slot: 1 })).unwrap_err();
+    assert_eq!(e, ErrorCode::Unknown);
+    // A lease is not re-bound (Q3 of the ruling): its badge's `rebind` of its project root is
+    // answered as a foreign slot's, and nothing is made or released.
+    let lease_badge = redoubt_steward::inspect::index(&s.store)
+        .routes
+        .iter()
+        .find(|(_, r)| r.kind == Kind::Lease)
+        .map(|(b, _)| *b)
+        .expect("the lease is routed");
+    let held = s.holding();
+    k.calls.clear();
+    let e = call(&mut s, &mut k, lease_badge, Message::Rebind(Rebind { slot: 1 })).unwrap_err();
+    assert_eq!(e, ErrorCode::Unknown, "a lease's rebind");
+    assert!(k.calls.is_empty() && s.holding() == held, "nothing made or released: {:?}", k.calls);
+    let Ok(Reply::Rebind(_)) = call(&mut s, &mut k, v, Message::Rebind(Rebind { slot: 2 })) else { panic!() };
+    let Ok(Reply::Rebind(_)) = call(&mut s, &mut k, b, Message::Rebind(Rebind { slot: 1 })) else { panic!() };
+    let bobs_new = k.made;
+    k.calls.clear();
+    let object = s.exited(bob_pid).expect("bob's VM runs");
+    s.event(&mut k, EventKind::Exited { object }, 0).unwrap();
+    assert!(
+        k.calls.contains(&Call::Release(bobs_new)),
+        "the re-bound connection goes with the session: {:?}",
+        k.calls
+    );
+    assert!(s.failed.is_empty());
 }
 
 /// `watch` is `sshd`'s alone: the program holds it only from `sshd`'s root badge
@@ -1266,6 +1473,13 @@ fn three_blames_in_the_window_lock_the_domain_out_until_the_window_passes() {
     let destroyed: Vec<usize> =
         k.calls.iter().filter_map(|c| if let Call::Destroy(b) = c { Some(*b) } else { None }).collect();
     assert_eq!(destroyed, vec![bob_session, bob_lease], "bob's session and lease, nothing else");
+    // The destroy took the relay with the budget: nobody is told, the console alone is given
+    // back, so the blame's answer does not wait out a dead relay's bound (init's second).
+    assert!(
+        k.calls.iter().all(|c| !matches!(c, Call::Detach { .. })),
+        "no detach call on a relay the destroy took: {:?}",
+        k.calls
+    );
     assert!(s.failed.is_empty());
     k.calls.clear();
     assert_eq!(call(&mut s, &mut k, SSHD, login("bob", "", &BOB_KEY)).unwrap_err(), ErrorCode::LockedOut);

@@ -34,7 +34,6 @@ mod machine {
     use redoubt_client::grants::RELEASE_TIMEOUT;
     use redoubt_client::launch::{Job, Launch};
     use redoubt_client::typed;
-    use redoubt_init::blame;
     use redoubt_init::bound::{LEND_PAGES, WATCH_STACK_PAGES};
     use redoubt_init::bundle::{Bundle, Entry};
     use redoubt_init::check::{
@@ -44,6 +43,7 @@ mod machine {
     use redoubt_init::refusal::Refusal;
     use redoubt_init::restarts::{self, Restarts};
     use redoubt_init::{ARENA_PAGES, check, read};
+    use redoubt_init::{blame, reconnect};
     use redoubt_rt::abi::{
         BudgetSpec, Cause, Error, FOREVER, Handle, Labels, MAX_LABELS, MAX_THREADS, PAGE_SIZE, ResetKind,
         Usage,
@@ -681,7 +681,8 @@ mod machine {
         }
 
         /// Server `i`'s instance ended: its line, its console connection released, the reboot
-        /// rules, a new instance, and then a fault's blame to the steward. Its watching thread
+        /// rules, a new instance, a fault's blame to the steward, and the steward's new
+        /// connection at the new instance ([`Boot::reconnect`]). Its watching thread
         /// destroyed its budget, which swept the job's handles and `init`'s own at it.
         fn restart(&mut self, i: usize, pid: u64, cause: u64, code: u64) {
             let m = self.manifest;
@@ -750,9 +751,76 @@ mod machine {
                 self.empty_users();
             }
             self.start(i);
-            self.restarting = false;
             if let Some((st, account, labels, named)) = blamed {
                 self.blame(st, i, account, &labels, &named);
+            }
+            self.reconnect(i);
+            self.restarting = false;
+        }
+
+        /// Server `i` restarted with empty tables, so the steward's fresh connection there and
+        /// every session's minted under it are dead ([`Started::fresh`]): for each endpoint of
+        /// `i`'s the steward is handed, `init` makes it a new connection through the handed
+        /// badge, as the steward's start did, waiting [`reconnect::SERVER_TIMEOUT`] for the new
+        /// instance to serve (a file server recovers its log first), and hands it over with
+        /// `reconnected` within [`blame::TIMEOUT`]; the steward tells its sessions, which re-bind
+        /// (servers/steward.md, "Failure and restart"). After the fault's blame, so the blame's
+        /// second is not spent behind the server's recovery. The new connection replaces the
+        /// fresh list's entry, so the release at the steward's exit frees it; one the steward did
+        /// not take is disconnected again, and either way `init` says what became of it and
+        /// keeps no copy. Nothing to do while no steward runs, or for the steward's own restart,
+        /// whose start made new ones.
+        fn reconnect(&mut self, i: usize) {
+            let m = self.manifest;
+            let Some(st) = self.steward.filter(|&st| st != i && self.alive(st)) else { return };
+            let steward = &m.servers[st];
+            let stranded: Vec<(String, NonZeroU64)> =
+                reconnect::handed_at(&steward.handed, &m.servers[i].receives)
+                    .map(|h| {
+                        (h.endpoint.clone(), NonZeroU64::new(h.badge).expect("the check refused badge 0"))
+                    })
+                    .collect();
+            for (endpoint, badge) in stranded {
+                let users = Budget::from_handle(h(USERS_BUDGET));
+                let Ok(minted) = Endpoint::from_handle(self.endpoint(&endpoint)).mint(badge, Some(&users))
+                else {
+                    self.failed(&steward.name, "mint a handed badge for")
+                };
+                let server = Nine::within(Endpoint::from_handle(minted.handle()), reconnect::SERVER_TIMEOUT);
+                // Timed: the wait is the new instance's recovery, which the bound is set from.
+                let before = redoubt_rt::handle::time_now().unwrap_or(0);
+                let made = server.new_connection(&mut self.lend, "", 0, None);
+                let waited_ms =
+                    redoubt_rt::handle::time_now().unwrap_or(before).saturating_sub(before) / 1000;
+                let _ = redoubt_rt::handle::close(minted.handle());
+                let Ok((connection, id)) = made else {
+                    self.say(format_args!("{}", reconnect::none_made(&endpoint)));
+                    continue;
+                };
+                let taken = match self.own(st) {
+                    Ok(own) => {
+                        let msg = steward::Message::Reconnected(steward::Reconnected { server: &endpoint });
+                        blame::taken(typed::call_within::<steward::Protocol, _>(
+                            &own,
+                            &mut self.lend,
+                            &msg,
+                            &[connection.handle()],
+                            blame::TIMEOUT,
+                            |_, _| (),
+                        ))
+                    }
+                    Err(_) => blame::Taken::Gone,
+                };
+                let _ = redoubt_rt::handle::close(connection.handle());
+                let fresh = (endpoint.clone(), badge, id);
+                match (taken, self.started[st].as_mut()) {
+                    (blame::Taken::Told, Some(s)) => {
+                        s.fresh.retain(|(e, _, _)| *e != endpoint);
+                        s.fresh.push(fresh);
+                    }
+                    _ => self.release_fresh(&[fresh]),
+                }
+                self.say(format_args!("{}", reconnect::said(&endpoint, waited_ms, taken)));
             }
         }
 

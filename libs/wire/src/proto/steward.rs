@@ -213,6 +213,47 @@ pub struct ApprovalWaiting {}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ApprovalWaitingReply {}
 
+/// `reconnected`: opcode 19, buffer; reply [`ReconnectedReply`].
+///
+/// Handle slots: `connection` (slot 0, endpoint).
+/// Kinds are documentation, checked by use: a handle of the wrong kind gets `WrongObject`
+/// on first use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Reconnected<'a> {
+    pub server: &'a str,
+}
+
+/// The reply to [`Reconnected`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReconnectedReply {}
+
+/// `server_restarted`: opcode 20, buffer; reply [`ServerRestartedReply`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ServerRestarted<'a> {
+    pub server: &'a str,
+    pub slot: u16,
+}
+
+/// The reply to [`ServerRestarted`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ServerRestartedReply {}
+
+/// `rebind`: opcode 21, buffer; reply [`RebindReply`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Rebind {
+    pub slot: u16,
+}
+
+/// The reply to [`Rebind`].
+///
+/// Handle slots: `connection` (slot 0, endpoint).
+/// Kinds are documentation, checked by use: a handle of the wrong kind gets `WrongObject`
+/// on first use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RebindReply<'a> {
+    pub at: &'a str,
+}
+
 /// Requests by opcode.
 const REQUESTS: &[Layout] = &[
     Layout { opcode: 1, inline: false, handles: 2, optional: 0 },
@@ -233,6 +274,9 @@ const REQUESTS: &[Layout] = &[
     Layout { opcode: 16, inline: false, handles: 0, optional: 0 },
     Layout { opcode: 17, inline: false, handles: 0, optional: 0 },
     Layout { opcode: 18, inline: true, handles: 0, optional: 0 },
+    Layout { opcode: 19, inline: false, handles: 1, optional: 0 },
+    Layout { opcode: 20, inline: false, handles: 0, optional: 0 },
+    Layout { opcode: 21, inline: false, handles: 0, optional: 0 },
 ];
 
 /// Every request of the protocol.
@@ -256,6 +300,9 @@ pub enum Message<'a> {
     EndContext(EndContext<'a>),
     LeaseEnded(LeaseEnded<'a>),
     ApprovalWaiting(ApprovalWaiting),
+    Reconnected(Reconnected<'a>),
+    ServerRestarted(ServerRestarted<'a>),
+    Rebind(Rebind),
 }
 
 impl<'a> Message<'a> {
@@ -280,6 +327,9 @@ impl<'a> Message<'a> {
             Message::EndContext(_) => &[],
             Message::LeaseEnded(_) => &[],
             Message::ApprovalWaiting(_) => &[],
+            Message::Reconnected(_) => &["connection"],
+            Message::ServerRestarted(_) => &[],
+            Message::Rebind(_) => &[],
         }
     }
 
@@ -304,6 +354,9 @@ impl<'a> Message<'a> {
             Message::EndContext(_) => 16,
             Message::LeaseEnded(_) => 17,
             Message::ApprovalWaiting(_) => 18,
+            Message::Reconnected(_) => 19,
+            Message::ServerRestarted(_) => 20,
+            Message::Rebind(_) => 21,
         }
     }
 
@@ -355,6 +408,12 @@ impl<'a> Message<'a> {
                 w.string(m.name)
             }
             Message::ApprovalWaiting(_) => Ok(()),
+            Message::Reconnected(m) => w.string(m.server),
+            Message::ServerRestarted(m) => {
+                w.string(m.server)?;
+                w.u16(m.slot)
+            }
+            Message::Rebind(m) => w.u16(m.slot),
         }
     }
 
@@ -392,6 +451,9 @@ impl<'a> Message<'a> {
             16 => Message::EndContext(EndContext { name: r.string()? }),
             17 => Message::LeaseEnded(LeaseEnded { lease: r.u64()?, name: r.string()? }),
             18 => Message::ApprovalWaiting(ApprovalWaiting {}),
+            19 => Message::Reconnected(Reconnected { server: r.string()? }),
+            20 => Message::ServerRestarted(ServerRestarted { server: r.string()?, slot: r.u16()? }),
+            21 => Message::Rebind(Rebind { slot: r.u16()? }),
             _ => return Err(Error::BadOpcode),
         })
     }
@@ -441,6 +503,9 @@ const REPLIES: &[Layout] = &[
     Layout { opcode: 16, inline: false, handles: 0, optional: 0 },
     Layout { opcode: 17, inline: false, handles: 0, optional: 0 },
     Layout { opcode: 18, inline: true, handles: 0, optional: 0 },
+    Layout { opcode: 19, inline: false, handles: 0, optional: 0 },
+    Layout { opcode: 20, inline: false, handles: 0, optional: 0 },
+    Layout { opcode: 21, inline: false, handles: 1, optional: 0 },
 ];
 
 /// Every successful reply of the protocol, named after its request.
@@ -464,6 +529,9 @@ pub enum Reply<'a> {
     EndContext(EndContextReply),
     LeaseEnded(LeaseEndedReply),
     ApprovalWaiting(ApprovalWaitingReply),
+    Reconnected(ReconnectedReply),
+    ServerRestarted(ServerRestartedReply),
+    Rebind(RebindReply<'a>),
 }
 
 impl<'a> Reply<'a> {
@@ -488,6 +556,9 @@ impl<'a> Reply<'a> {
             Reply::EndContext(_) => &[],
             Reply::LeaseEnded(_) => &[],
             Reply::ApprovalWaiting(_) => &[],
+            Reply::Reconnected(_) => &[],
+            Reply::ServerRestarted(_) => &[],
+            Reply::Rebind(_) => &["connection"],
         }
     }
 
@@ -512,6 +583,9 @@ impl<'a> Reply<'a> {
             Reply::EndContext(_) => 16,
             Reply::LeaseEnded(_) => 17,
             Reply::ApprovalWaiting(_) => 18,
+            Reply::Reconnected(_) => 19,
+            Reply::ServerRestarted(_) => 20,
+            Reply::Rebind(_) => 21,
         }
     }
 
@@ -542,6 +616,9 @@ impl<'a> Reply<'a> {
             Reply::EndContext(_) => Ok(()),
             Reply::LeaseEnded(_) => Ok(()),
             Reply::ApprovalWaiting(_) => Ok(()),
+            Reply::Reconnected(_) => Ok(()),
+            Reply::ServerRestarted(_) => Ok(()),
+            Reply::Rebind(m) => w.string(m.at),
         }
     }
 
@@ -579,6 +656,9 @@ impl<'a> Reply<'a> {
             16 => Reply::EndContext(EndContextReply {}),
             17 => Reply::LeaseEnded(LeaseEndedReply {}),
             18 => Reply::ApprovalWaiting(ApprovalWaitingReply {}),
+            19 => Reply::Reconnected(ReconnectedReply {}),
+            20 => Reply::ServerRestarted(ServerRestartedReply {}),
+            21 => Reply::Rebind(RebindReply { at: r.string()? }),
             _ => return Err(Error::BadOpcode),
         })
     }

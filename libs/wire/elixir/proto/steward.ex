@@ -31,7 +31,10 @@ defmodule Redoubt.Wire.Proto.Steward do
     15 => {:detach, :inline, 0, 0},
     16 => {:end_context, :buffer, 0, 0},
     17 => {:lease_ended, :buffer, 0, 0},
-    18 => {:approval_waiting, :inline, 0, 0}
+    18 => {:approval_waiting, :inline, 0, 0},
+    19 => {:reconnected, :buffer, 1, 0},
+    20 => {:server_restarted, :buffer, 0, 0},
+    21 => {:rebind, :buffer, 0, 0}
   }
   @replies %{
     1 => {:login, :buffer, 0, 0},
@@ -51,7 +54,10 @@ defmodule Redoubt.Wire.Proto.Steward do
     15 => {:detach, :inline, 0, 0},
     16 => {:end_context, :buffer, 0, 0},
     17 => {:lease_ended, :buffer, 0, 0},
-    18 => {:approval_waiting, :inline, 0, 0}
+    18 => {:approval_waiting, :inline, 0, 0},
+    19 => {:reconnected, :buffer, 0, 0},
+    20 => {:server_restarted, :buffer, 0, 0},
+    21 => {:rebind, :buffer, 1, 0}
   }
   @errors %{
     1 => :malformed,
@@ -81,6 +87,8 @@ defmodule Redoubt.Wire.Proto.Steward do
 
   - `login`: `console` (slot 0, endpoint), `relay` (slot 1, endpoint)
   - `approval_opened`: `console` (slot 0, endpoint), `reader` (slot 1, endpoint)
+  - `reconnected`: `connection` (slot 0, endpoint)
+  - `rebind` reply: `connection` (slot 0, endpoint)
   """
   def layout(:login), do: {1, :buffer, [{:principal, :string}, {:label, :string}, {:context, :string}, {:from, :string}, {:key, :bytes}], [:console, :relay], {[{:session, :u64}, {:name, :string}, {:labels, :bytes}], []}}
   def layout(:channel_closed), do: {2, :inline, [{:session, :u64}], [], {[], []}}
@@ -100,6 +108,9 @@ defmodule Redoubt.Wire.Proto.Steward do
   def layout(:end_context), do: {16, :buffer, [{:name, :string}], [], {[], []}}
   def layout(:lease_ended), do: {17, :buffer, [{:lease, :u64}, {:name, :string}], [], {[], []}}
   def layout(:approval_waiting), do: {18, :inline, [], [], {[], []}}
+  def layout(:reconnected), do: {19, :buffer, [{:server, :string}], [:connection], {[], []}}
+  def layout(:server_restarted), do: {20, :buffer, [{:server, :string}, {:slot, :u16}], [], {[], []}}
+  def layout(:rebind), do: {21, :buffer, [{:slot, :u16}], [], {[{:at, :string}], [:connection]}}
   def layout(_), do: nil
 
   @doc "Encodes a request: `{:ok, words, buffer}` or `{:error, reason}`."
@@ -160,6 +171,12 @@ defmodule Redoubt.Wire.Proto.Steward do
   defp enc(:reply, :lease_ended, %{} = f) when map_size(f) == 0, do: {17, []}
   defp enc(:request, :approval_waiting, %{} = f) when map_size(f) == 0, do: {18, []}
   defp enc(:reply, :approval_waiting, %{} = f) when map_size(f) == 0, do: {18, []}
+  defp enc(:request, :reconnected, %{server: v_server} = f) when map_size(f) == 1, do: {19, [W.str(v_server)]}
+  defp enc(:reply, :reconnected, %{} = f) when map_size(f) == 0, do: {19, []}
+  defp enc(:request, :server_restarted, %{server: v_server, slot: v_slot} = f) when map_size(f) == 2, do: {20, [W.str(v_server), W.u(v_slot, 16)]}
+  defp enc(:reply, :server_restarted, %{} = f) when map_size(f) == 0, do: {20, []}
+  defp enc(:request, :rebind, %{slot: v_slot} = f) when map_size(f) == 1, do: {21, [W.u(v_slot, 16)]}
+  defp enc(:reply, :rebind, %{at: v_at} = f) when map_size(f) == 1, do: {21, [W.str(v_at)]}
   defp enc(_, _, _), do: throw({:wire, :bad_message})
 
   defp read(:request, 1, <<n_principal::little-16, v_principal::binary-size(n_principal), n_label::little-16, v_label::binary-size(n_label), n_context::little-16, v_context::binary-size(n_context), n_from::little-16, v_from::binary-size(n_from), n_key::little-32, v_key::binary-size(n_key), rest::binary>>), do: W.utf8([v_principal, v_label, v_context, v_from], {:ok, :login, %{principal: v_principal, label: v_label, context: v_context, from: v_from, key: v_key}, rest})
@@ -198,5 +215,11 @@ defmodule Redoubt.Wire.Proto.Steward do
   defp read(:reply, 17, <<rest::binary>>), do: {:ok, :lease_ended, %{}, rest}
   defp read(:request, 18, <<rest::binary>>), do: {:ok, :approval_waiting, %{}, rest}
   defp read(:reply, 18, <<rest::binary>>), do: {:ok, :approval_waiting, %{}, rest}
+  defp read(:request, 19, <<n_server::little-16, v_server::binary-size(n_server), rest::binary>>), do: W.utf8([v_server], {:ok, :reconnected, %{server: v_server}, rest})
+  defp read(:reply, 19, <<rest::binary>>), do: {:ok, :reconnected, %{}, rest}
+  defp read(:request, 20, <<n_server::little-16, v_server::binary-size(n_server), v_slot::little-16, rest::binary>>), do: W.utf8([v_server], {:ok, :server_restarted, %{server: v_server, slot: v_slot}, rest})
+  defp read(:reply, 20, <<rest::binary>>), do: {:ok, :server_restarted, %{}, rest}
+  defp read(:request, 21, <<v_slot::little-16, rest::binary>>), do: {:ok, :rebind, %{slot: v_slot}, rest}
+  defp read(:reply, 21, <<n_at::little-16, v_at::binary-size(n_at), rest::binary>>), do: W.utf8([v_at], {:ok, :rebind, %{at: v_at}, rest})
   defp read(_, _, _), do: {:error, :short_fields}
 end

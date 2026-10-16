@@ -18,6 +18,7 @@ pub mod bundle;
 pub mod check;
 pub mod confine;
 pub mod manifest;
+pub mod reconnect;
 pub mod refusal;
 pub mod restarts;
 pub mod sshkey;
