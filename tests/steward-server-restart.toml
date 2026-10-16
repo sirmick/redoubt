@@ -38,10 +38,10 @@ forbid = [
     '^init: (keyd|consoled|bootfsd|blkd|blkd:system|verity:system|netd|ipd|walfsd:alice-secrets|erofsd:system|steward|sshd) .*(exited|faulted|was killed)',
     '^init: walfsd:data .*(exited|was killed)',
     'blamed on nobody',
-    # The first two blames are answered at once; the third, whose lockout ends bob's session,
-    # is answered after that end batch, which can wait a second on sshd (the residual on
-    # steward.md "Failure and restart"): its init line is not a verdict here, the audit is.
-    "fault blamed on account 1002, labels none: lost: the steward (ended|refused it)",
+    # Every blame is taken within init's second, the third included: its lockout's end batch
+    # answers once bob's scope is destroyed and tells sshd and the servers at the steward's turn
+    # (steward.md "Failure and restart"), so no blame waits behind a dead channel's `ended`.
+    'fault blamed on account 1002, labels none: lost',
     'reconnected for the steward after [0-9]+ ms: lost',
     'made the steward no new connection',
     'not re-bound',

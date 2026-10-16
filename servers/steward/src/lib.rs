@@ -19,6 +19,7 @@
 extern crate alloc;
 
 pub mod approval;
+pub mod cleanup;
 pub mod drive;
 #[cfg(feature = "fuzz")]
 pub mod fuzz;
@@ -73,8 +74,18 @@ pub trait Kernel {
     /// with it: the steward's own, through which `ended` ends the channel, and the relay's, which
     /// `attach` hands on; the steward owns both from here.
     fn console(&mut self, console: Option<redoubt_rt::abi::Handle>, relay: Option<redoubt_rt::abi::Handle>);
-    /// Gives a connection back: closed here, and disconnected at its server.
+    /// A connection is given back, the steward's side: its own copy of a handle minted in the
+    /// owner's scope is closed now, before the scope's end frees the index for the next handle
+    /// installed. The server's side is [`Kernel::clean`]'s, deferred to the loop's turn
+    /// ([`cleanup`]).
     fn release(&mut self, handle: Self::Handle);
+    /// The server is told to free what it held for the connection (`disconnect` by its id, or
+    /// `ended` for `sshd`'s channel console: servers/steward.md, "Failure and restart"), within
+    /// the steward's own send bound, never the call's. `Err(Timeout)` when the server did not
+    /// take the call in time: the record is kept for a retry, unless `last`, when it goes
+    /// anyway, said on the console. Any other outcome ends the step: a connection whose server
+    /// restarted since has no record left and nothing to tell.
+    fn clean(&mut self, handle: Self::Handle, last: bool) -> Result<(), Error>;
     /// Starts `owner`'s child in `budget` through the loader stub (a session's VM, or an agent's
     /// for a lease), with the connections the batch made in slot order (the steward's first),
     /// told the session's `context` (`None` for the console's session or an agent); returns its
@@ -205,6 +216,8 @@ pub struct Steward<B, H> {
     /// The sizes the core carves, which a session's arguments repeat.
     pub sizes: Sizes,
     made: MadeMap<B, H>,
+    /// The connections given back whose servers are still to be told ([`cleanup`]).
+    cleanup: cleanup::Queue<H>,
     /// Each running process, by id, and the object it is.
     pids: BTreeMap<u64, Object>,
     /// Each process whose object the core has let go of before the process's exit notice came
@@ -244,6 +257,9 @@ impl<B: Copy, H> Steward<B, H> {
     /// How many things the steps made are held: budgets, scopes, connections and processes of
     /// every object the core still knows. What an object's end leaves is nothing of its own.
     pub fn holding(&self) -> usize { self.made.len() }
+
+    /// How many connections given back still wait for their server to be told.
+    pub fn pending(&self) -> usize { self.cleanup.len() }
 }
 
 /// Starts the steward from its manifest lines: the core's boot, then its carve under `users`.
@@ -304,6 +320,7 @@ pub fn start<K: Kernel>(
         own,
         sizes,
         made: BTreeMap::new(),
+        cleanup: cleanup::Queue::default(),
         pids: BTreeMap::new(),
         ended: BTreeMap::new(),
         notices: BTreeMap::new(),

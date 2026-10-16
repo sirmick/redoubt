@@ -1186,7 +1186,8 @@ own stamp, and destroying the scope ends the handle in every table at once, forw
 included ([R10 (destruction)](../kernel/budgets.md#r10-destruction)). What the server holds for
 the connection (fids,
 admission, quota) it cannot see die: the steward disconnects each connection of a scope after
-destroying it, cleanup that follows the cutoff and never is it. Every `Connect` the steward
+destroying it, at its loop's turn ([failure and restart](#failure-and-restart)), cleanup that
+follows the cutoff and never is it. Every `Connect` the steward
 issues is minted in the session's or lease's scope, its own badge and the shared servers' alike,
 `ipd`'s typed `grant` carrying the scope in its one optional handle slot as `new_connection` does
 ([ipd](ipd.md#scopes-and-grants)), so every shared server's connection a session holds, 9P
@@ -1269,7 +1270,7 @@ detached again ends by its first detach's clock, before its bound.
 
 ## Failure and restart
 
-Status: built · partly tested: `steward-restart` proves the release of a dead steward's connections by count at `bootfsd`, `erofsd:system`, `walfsd:data` and `ipd`, and at `littlefsd:alice-secrets` only by the code they share, since it opens no vault session; a shared server's restart is re-bound on the machine at `walfsd:data`, and at the vault's server and `ipd` by the code they share and the host test · tested: bench:steward-restart, bench:steward-restart-ssh, bench:steward-restart-reboot, bench:steward-session-ends, bench:steward-server-restart, host:redoubt-steward-server::users_not_empty_is_a_start_failure_before_any_carve, host:redoubt-steward-server::watch_is_held_only_from_sshd_and_malformed_on_any_other_badge, host:redoubt-steward-server::a_servers_restart_tells_its_sessions_and_a_session_rebinds_its_slot, host:redoubt-steward-server::every_operation_on_another_badge_class_is_malformed, host:redoubt-init::a_restart_strands_the_stewards_connections_at_the_endpoints_the_server_receives_on, host:redoubt-init::the_outcome_of_the_hand_over_is_said_in_blames_words
+Status: built · partly tested: `steward-restart` proves the release of a dead steward's connections by count at `bootfsd`, `erofsd:system`, `walfsd:data` and `ipd`, and at `littlefsd:alice-secrets` only by the code they share, since it opens no vault session; a shared server's restart is re-bound on the machine at `walfsd:data`, and at the vault's server and `ipd` by the code they share and the host test · tested: bench:steward-restart, bench:steward-restart-ssh, bench:steward-restart-reboot, bench:steward-session-ends, bench:steward-server-restart, host:redoubt-steward-server::users_not_empty_is_a_start_failure_before_any_carve, host:redoubt-steward-server::watch_is_held_only_from_sshd_and_malformed_on_any_other_badge, host:redoubt-steward-server::a_servers_restart_tells_its_sessions_and_a_session_rebinds_its_slot, host:redoubt-steward-server::every_operation_on_another_badge_class_is_malformed, host:redoubt-init::a_restart_strands_the_stewards_connections_at_the_endpoints_the_server_receives_on, host:redoubt-init::the_outcome_of_the_hand_over_is_said_in_blames_words, bench:steward-blame-lockout, host:redoubt-steward-server::a_session_s_end_is_answered_before_any_cleanup_call, host:redoubt-steward-server::an_ended_session_s_pending_request_is_withdrawn_before_the_end_s_reply, host:redoubt-steward-server::a_cleanup_step_that_times_out_is_retried_then_dropped, host:redoubt-steward-server::a_turn_stops_at_its_first_timed_out_step, host:redoubt-steward-server::a_cleanup_step_the_server_refuses_or_cannot_take_is_done_at_once, host:redoubt-steward-server::the_cleanup_queue_holds_each_released_connection_once
 
 - **The steward is part of the trusted base; its crash is a bug.** If it dies, `init` reaps
   `users`, which logs every session out and ends every lease, and restarts the steward; the
@@ -1317,20 +1318,46 @@ Status: built · partly tested: `steward-restart` proves the release of a dead s
   refused, and the person retries; a `reconnected` the steward does not take within the second
   leaves it stranded at that server until its own restart
   ([init](init.md#fresh-connections-per-child)); and a restarted `consoled` is `init`'s
-  residual ([init](init.md#residual-risks)). One more, with its number: a session's or lease's
-  end batch gives each of its connections back with a `disconnect`, and an SSH session's console
-  with an `ended` to `sshd`, each a wait bounded by the call timeout (`RELEASE_TIMEOUT`, one
-  second), during which the steward serves nobody. Measured on `steward-server-restart`: the
-  `ended` waits its full second when `sshd` closed the channel first (it is calling the steward
-  itself then) or is busy, and a `disconnect` at a server still recovering waits its second too.
-  So a blame whose lockout ends an SSH session is answered after that second and `init` may
-  report it `lost` though the steward took it (the audit lines `Blamed` and `LockedOut` are the
-  record; [init](init.md#residual-risks)), and a `reconnected` arriving during a session's end
-  can be lost the same way. Per [R41](#r41-narrowing-by-revocation-scope) the cleanup is never
-  the cutoff, so the end can answer after `DestroyBudget` and the disconnects and `ended` become
-  deferred, bounded, capped retries the machine runs at its turn: a follow-up node under
-  STEWARD3 owns that. Already here: a relay the destroy took is told nothing, since a call to it
-  would only wait out its bound.
+  residual ([init](init.md#residual-risks)).
+- **An end answers at the cutoff; its servers are told at the loop's turn.** A session's or
+  lease's end batch is answered once `DestroyBudget` has run: the scope's end is the cutoff
+  ([R41](#r41-narrowing-by-revocation-scope)), and what the end still owes its servers only
+  frees their records. Each connection it gives back is a step in the steward's cleanup queue
+  (`servers/steward/src/cleanup.rs`): a `disconnect` by its id at the server that minted it, or
+  an `ended` on `sshd`'s channel console. The loop runs the steps due at its top, before it
+  receives again, each within the steward's own send bound (100 ms, what a notice gets; never
+  the client library's one-second call timeout), and stops at the first step the server did not
+  take in time: the steps behind it stay due, the loop receives once and turns again, so a busy
+  or recovering server costs the loop one bound per turn at most, never a second per connection
+  and never a whole queue's worth of waits before the next caller is served. A step the server
+  did not take in time is retried no sooner than a second later, up to four attempts, which span at least 3.4 s:
+  past `init`'s 3 s bound on a restarted server's first answer
+  ([init](init.md#fresh-connections-per-child)), so a server that has not served by then is
+  lost to `init` too. The fourth failure drops the step with a console line (`steward: disconnect
+  12 at walfsd:data dropped after 4 attempts: the server did not take it`), and the server's
+  admission for that connection is then freed only by its own restart: the residual. Any other
+  outcome ends a step at once: an `ended` to a channel `sshd` already closed is taken or fails
+  `Dead`, never retried; a connection at a server that restarted since has no record left
+  (`reconnected` forgot it) and nothing to tell. The queue is bounded by the connections live
+  sessions and leases hold: a connection enters once, when its owner's end releases it or a
+  `rebind` replaces it (one step per call), at most the slots plus four per session (its badge,
+  a connection per slot, its relay's control connection, the attached channel console and its
+  notices send right) and the slots plus one per lease, and leaves done or dropped within the
+  retries' span. The bound is argued, not enforced: the queue has no cap; it drains at every
+  turn its servers answer, and a session re-binding at a server that is not taking its steps
+  queues nothing more, since the mint there fails too. Before this, each `disconnect`
+  and `ended` ran inside the end batch with the call's full second, during which the steward
+  served nobody: measured on `steward-server-restart`, the `ended` waited its second when `sshd`
+  had closed the channel first (it was calling the steward itself then) or was busy, a
+  `disconnect` at a recovering server waited its second too, and a blame whose lockout ended an
+  SSH session was answered after it and reported `lost` by `init` though the steward took it.
+  The `ended` a client's close brought was lost the same way, every time: `sshd`'s thread was
+  inside its own `channel_closed` call, so the channel only ended when something else ended the
+  session; now it ends as the detach is cleaned up, as the rule above says, and
+  `steward-pending-cap` ends its session before its channel closes rather than a second after.
+  `steward-blame-lockout` and `steward-server-restart` now forbid `lost` for a blame on both
+  widths. Already here: a relay the destroy took is told nothing, since a call to it would only
+  wait out its bound.
 
 **What a dead steward held at the shared servers goes with it.** `init` hands the steward a
 fresh connection at each server it is handed (`bootfsd`, the volumes' file servers, `ipd`), not

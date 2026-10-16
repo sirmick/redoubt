@@ -246,6 +246,24 @@ impl<B: Copy, H: Copy> Steward<B, H> {
         Some(alloc::format!("{}/{name}", fixed.principals.get(principal)?.name))
     }
 
+    /// Gives connection `h` back: the steward's own copy goes now ([`Kernel::release`]), and its
+    /// server is told at the loop's turn ([`Steward::cleanup`]), never from inside an event: the
+    /// cutoff is the scope's destroy, and a cleanup call a busy or recovering server does not
+    /// take would hold the loop for its whole bound (servers/steward.md, "Failure and restart").
+    fn give_back<K: Kernel<Budget = B, Handle = H>>(&mut self, kernel: &mut K, h: H) {
+        kernel.release(h);
+        self.cleanup.push(h, kernel.now());
+    }
+
+    /// Runs the cleanup steps due now, each within the steward's own send bound, up to the first
+    /// that times out, which is retried at a later turn up to the cap and then dropped
+    /// ([`crate::cleanup`]); returns when the earliest remaining step is due (now, when the turn
+    /// stopped short), so the loop wakes for it.
+    pub fn cleanup<K: Kernel<Budget = B, Handle = H>>(&mut self, kernel: &mut K) -> Option<u64> {
+        let now = kernel.now();
+        self.cleanup.run(now, |h, last| kernel.clean(h, last))
+    }
+
     /// Tells the session routed by `badge` that `lease` ended, on the notices endpoint its launch
     /// kept; a session with none, or one the core no longer routes, is told nothing.
     fn notify<K: Kernel<Budget = B, Handle = H>>(&mut self, kernel: &mut K, badge: u64, lease: u64) {
@@ -299,7 +317,7 @@ impl<B: Copy, H: Copy> Steward<B, H> {
         let token =
             Token { owner, slot: CONNECTIONS + 1 + u8::try_from(slot).map_err(|_| Error::InvalidArgument)? };
         if let Some(Made::Connection(Some(old))) = self.made.insert(token, Made::Connection(Some(key))) {
-            kernel.release(old);
+            self.give_back(kernel, old);
         }
         Ok(Some((handle, at)))
     }
@@ -384,7 +402,7 @@ impl<B: Copy, H: Copy> Steward<B, H> {
                 self.pids.insert(pid, owner.clone());
                 if let Some(n) = notices {
                     if let Some(old) = self.notices.insert(owner.clone(), n) {
-                        kernel.release(old);
+                        self.give_back(kernel, old);
                     }
                 }
                 Ok(Produced::Process(pid))
@@ -412,6 +430,7 @@ impl<B: Copy, H: Copy> Steward<B, H> {
             // process a `DestroyBudget` before this step took (a lockout's end batch, a dead VM's)
             // is gone with its budget: there is nobody to tell, and a call would only wait out its
             // bound while the steward serves nobody (servers/steward.md, "Failure and restart").
+            // The console's `ended` to `sshd` is cleanup, run at the loop's turn.
             Step::Detach { relay, console, note } => {
                 let told = match self.made.get(relay) {
                     Some(Made::Relay(pid, _)) if !self.pids.contains_key(pid) => Ok(()),
@@ -419,7 +438,7 @@ impl<B: Copy, H: Copy> Steward<B, H> {
                     _ => Err(Error::BadHandle),
                 };
                 if let Some(Made::Connection(Some(h))) = self.made.remove(console) {
-                    kernel.release(h);
+                    self.give_back(kernel, h);
                 }
                 match told {
                     Ok(()) | Err(Error::Timeout) => Ok(Produced::Done),
@@ -449,12 +468,12 @@ impl<B: Copy, H: Copy> Steward<B, H> {
 
     /// Drops what `object`'s steps made, in R41's order: a budget left is destroyed first, its
     /// scope and every connection minted in it ending with it (the cutoff, the kernel's); then
-    /// each connection is given back to its server, which frees what it held for it (the
-    /// cleanup, which is never the cutoff).
+    /// each connection is given back ([`Steward::give_back`]): its server is told at the loop's
+    /// turn and frees what it held for it (the cleanup, which is never the cutoff).
     fn forget<K: Kernel<Budget = B, Handle = H>>(&mut self, kernel: &mut K, object: &Object) {
         self.end_pids(object);
         if let Some(n) = self.notices.remove(object) {
-            kernel.release(n);
+            self.give_back(kernel, n);
         }
         let mine: Vec<Token> = self.made.keys().filter(|t| &t.owner == object).cloned().collect();
         let mut connections = Vec::new();
@@ -468,7 +487,7 @@ impl<B: Copy, H: Copy> Steward<B, H> {
             }
         }
         for h in connections {
-            kernel.release(h);
+            self.give_back(kernel, h);
         }
     }
 }
