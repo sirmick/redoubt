@@ -1104,7 +1104,7 @@ fn boot_case(
                 "a launch case boots launch's line, with no seed"
             );
             let (mut devices, forwards) = match boot.launch {
-                true => (Vec::new(), vec![(22, qemu::free_ports(1)?[0])]),
+                true => (Vec::new(), vec![(22, qemu::host_ports(1, false)?.0[0])]),
                 false => qemu::virtio_devices(boot, &disk, userland.as_ref(), &[])?,
             };
             if let Some(icount) = &boot.icount {
