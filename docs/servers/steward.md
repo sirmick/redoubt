@@ -662,8 +662,9 @@ page. Its sessions' operation is `login` (from `sshd`); the operations for lease
 crash blame are below ([the lease and approval operations](#the-lease-and-approval-operations)).
 
 **Each operation is accepted only through the badge class it belongs to.** The steward gives a
-root badge per caller role (`sshd` 1, the approval channel 2, `init` 3, each a `handed` badge in
-the manifest), and sessions get minted badges. An operation on any other badge is malformed, the
+root badge per caller role (`sshd` 1 and the approval channel 2, each a `handed` badge in the
+manifest; `init` 3, which `init` mints for itself and the manifest check hands to nobody), and
+sessions get minted badges. An operation on any other badge is malformed, the
 same answer as an unknown one, so a session cannot send `login`, `approve` or `blame`.
 
 - **`login`** carries the principal's name, the label's name (empty for an unlabelled session),
@@ -677,9 +678,12 @@ same answer as an unknown one, so a session cannot send `login`, `approve` or `b
 - **`start_agent`** and **`end_lease`**, from a session's badge, are the lease operations
   ([leases](#leases)); **`lease_ended`** is the steward's own send to a session's `notices`
   endpoint, never a call: on any badge it is malformed.
-- **Not yet bound:** `submit`, `approve`, `deny`, `pending`, `approval_opened`,
-  `approval_closed` and `blame` are in the table and accepted only on their badge classes, and
-  answered `unknown` until their batches are built (the powerbox and crash blame).
+- **`blame`**, from `init`'s root badge alone, is [crash blame](#crash-blame): the account and
+  labels the exit notice named, counted by the core, and answered as it arrives whatever it
+  counted toward.
+- **Not yet bound:** `submit`, `approve`, `deny`, `pending`, `approval_opened` and
+  `approval_closed` are in the table and accepted only on their badge classes, and answered
+  `unknown` until their batches are built (the powerbox).
 
 The table: [libs/wire/tables/steward.md](../../libs/wire/tables/steward.md).
 
@@ -687,7 +691,7 @@ The table: [libs/wire/tables/steward.md](../../libs/wire/tables/steward.md).
 
 ### The lease and approval operations
 
-Status: built · partly tested: `start_agent` and `end_lease` run on the machine; the approval operations and `blame` are answered `unknown` until the powerbox and crash blame · tested: bench:steward-end-lease, host:redoubt-steward-server::start_agent_runs_the_lease_batch_and_answers_the_lease, host:redoubt-steward-server::end_lease_from_the_sponsor_destroys_the_lease_and_tells_her_sessions, host:redoubt-steward-server::every_operation_on_another_badge_class_is_malformed
+Status: built · partly tested: `start_agent` and `end_lease` run on the machine, `blame` on the host; the approval operations are answered `unknown` until the powerbox · tested: bench:steward-end-lease, host:redoubt-steward-server::start_agent_runs_the_lease_batch_and_answers_the_lease, host:redoubt-steward-server::end_lease_from_the_sponsor_destroys_the_lease_and_tells_her_sessions, host:redoubt-steward-server::every_operation_on_another_badge_class_is_malformed, host:redoubt-steward-server::three_blames_in_the_window_lock_the_domain_out_until_the_window_passes
 
 The steward's protocol adds `start_agent(lease: u64)` (from an unlabelled session, answered with
 the lease's id and name once its batch is done) and `end_lease(lease: u64)` (from the sponsor,
@@ -926,25 +930,34 @@ exception: each carries exactly one label set and dies after one item
 
 ### Crash blame
 
-Status: planned · M3 (agents, approvals and the attack suite)
+Status: built · partly tested: the machine shows one blame counted, bob's crash of `walfsd:data`; the lockout at three and the vault arm are the host test, since a restarted server strands the steward's connection ([failure and restart](#failure-and-restart)) · tested: bench:steward-blame-lockout, host:redoubt-steward-server::three_blames_in_the_window_lock_the_domain_out_until_the_window_passes, host:redoubt-steward-server::every_operation_on_another_badge_class_is_malformed, host:redoubt-init::a_blame_the_steward_does_not_take_in_time_is_lost_and_said, host:redoubt-init::a_handed_badge_is_a_root_badge_given_once_at_its_endpoint
 
 A server that faults, or exits holding open calls, names in its exit notice the account and
 labels of the current call of the thread that failed
 ([R21 (crash blame)](../kernel/processes.md#r21-crash-blame)), and `init` passes them on
 ([init](init.md#restarts-and-reboots)) through `blame`, which the steward accepts only on `init`'s
-root badge. **Three crashes blamed on one (account, label set) within
-ten minutes destroy every budget of that (account, label set)**, sessions and leases alike, their
-agents with them, and the steward refuses new sessions for it until the window passes, recording
-both in the audit log. A logout alone would not stop a principal logging straight back in, or its
-agent carrying on. Keyed by the label set too: a vault session crashing a shared server must not
-end its owner's unlabelled sessions, which would be a channel out of the vault. A crash with no
-current call blames nobody and counts only toward `init`'s restart limit.
+root badge (badge 3 on its endpoint; `init`'s manifest check hands it to nobody). **Three crashes
+blamed on one (account, label set) within ten minutes destroy every budget of that (account,
+label set)**, sessions and leases alike, their agents with them, and the steward refuses new
+sessions for it until the window passes, recording both in the audit log. A logout alone would
+not stop a principal logging straight back in, or its agent carrying on. Keyed by the label set
+too: a vault session crashing a shared server must not end its owner's unlabelled sessions, which
+would be a channel out of the vault. A crash with no current call blames nobody and counts only
+toward `init`'s restart limit.
+
+The core runs it: one `blame` machine per domain ([a domain's blame](#a-domains-blame)) counts
+each blame and, at the third within the window, raises `LockedOut` to every session and lease of
+the domain, whose end batches destroy their budgets; a login or `start_agent` in the domain is
+refused `locked_out` until the window passes; a blame on no domain of the manifest (nobody, or a
+label set it does not know) is taken and counts nowhere. Every blame is audited `Blamed` and a
+lockout `LockedOut` with the window's end, console lines until the audit file; `init`'s own line
+names the server and whom it blamed. A blame that reaches no lockout changes nothing visible but
+the count: the caller sees the same answer either way. Residual: the `Blamed` record carries no
+server name; `init`'s line does, until the audit log carries it.
 
 The model checks it on the kernel model's own exit notices (its P7; `PolicyBlameNoWindow`,
 `PolicyNoLockout`) ([R40 (blame by label set)](#r40-blame-by-label-set)). Blame counted per account
 would need a second domain, which no handler can borrow.
-
-**Open:** none.
 
 ### The transfer audit log
 
@@ -1111,13 +1124,11 @@ A sponsored principal's session is a lease of its sponsor's under the same rule.
 
 ### R40 (blame by label set)
 
-Status: planned · M3 (agents, approvals and the attack suite)
+Status: built · partly tested: the lockout at three is a host test and the model's; the machine shows one blame attributed ([crash blame](#crash-blame)) · tested: bench:steward-blame-lockout, host:redoubt-steward-server::three_blames_in_the_window_lock_the_domain_out_until_the_window_passes, host:redoubt-steward::blame_window_and_not_locked, mutation:PolicyBlameNoWindow, mutation:PolicyNoLockout
 
 An (account, label set)'s sessions and leases are ended exactly when three server crashes blamed
 on it fall within ten minutes, no new session of it starts for the next ten minutes, and no other
 (account, label set)'s sessions are touched.
-
-**Open:** none.
 
 ### R41 (narrowing by revocation scope)
 
@@ -1233,6 +1244,15 @@ Status: built · partly tested: `steward-restart` proves the release of a dead s
   closes its channel; nobody else is affected.
 - **A reader or writer budget** outlives nothing: it has a deadline, and the steward destroys it
   when its one item is done.
+- **A shared server restarts.** Its tables are empty ([R27](serving.md#r27-badge-allocation)),
+  so every connection it served is gone: the steward's kept connection, through which it mints
+  each session's home, and every live session's. Until the steward is told of the restart and
+  re-mints (planned: `init` hands it a new connection; sessions re-bind through the steward), a
+  login fails its home step and a session's files answer an error
+  ([init](init.md#fresh-connections-per-child)); the blame counts are kept, so a crasher's
+  lockout still comes at the third blame once the mechanism lands. This is why
+  `steward-blame-lockout` shows one blame attributed on the machine and the lockout at three is
+  a host test ([crash blame](#crash-blame)).
 
 **What a dead steward held at the shared servers goes with it.** `init` hands the steward a
 fresh connection at each server it is handed (`bootfsd`, the volumes' file servers, `ipd`), not

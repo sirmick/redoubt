@@ -16,8 +16,8 @@ use redoubt_rt::ipc::{Caller, Words};
 use redoubt_rt::server::typed::{Answer as Typed, Outcome, Protocol, TypedServer, answer};
 use redoubt_rt::wire::Error as WireError;
 use redoubt_rt::wire::proto::steward::{
-    ChannelClosedReply, ContextsReply, DetachReply, EndContextReply, EndLeaseReply, EndSessionReply,
-    ErrorCode, LoginReply, Message, Reply, StartAgentReply,
+    BlameReply, ChannelClosedReply, ContextsReply, DetachReply, EndContextReply, EndLeaseReply,
+    EndSessionReply, ErrorCode, LoginReply, Message, Reply, StartAgentReply,
 };
 use redoubt_steward::effect::{Answer, Output, Refusal};
 use redoubt_steward::event::EventKind;
@@ -242,8 +242,21 @@ where
                 EventKind::EndLease { badge: caller.badge, lease: m.lease },
                 Some(Reply::EndLease(EndLeaseReply {})),
             ),
-            // The powerbox's and crash blame's: the core decides them, and the server binds
-            // their batches in STEWARD3B and STEWARD3C.
+            // Crash blame from `init`'s root badge (servers/steward.md, "Crash blame"): the
+            // account and labels the exit notice named; `server` is the audit record's, which
+            // is a console line until the audit file, said by `init`'s own line. The core counts
+            // it by domain, a lockout runs the sessions' and leases' end batches, and the call
+            // is answered as it arrives, whatever it counted toward: a blame on no domain of the
+            // manifest (nobody, or a label set it does not know) is taken and counts nowhere.
+            Message::Blame(m) => (
+                EventKind::Blame {
+                    account: m.account,
+                    labels: redoubt_rt::wire::labels::decode(m.labels).collect(),
+                },
+                Some(Reply::Blame(BlameReply {})),
+            ),
+            // The powerbox's: the core decides them, and the server binds their batches in
+            // STEWARD3B.
             _ => return Err(ErrorCode::Unknown),
         };
         let outputs = match self.steward.event(self.kernel, kind, CALL) {

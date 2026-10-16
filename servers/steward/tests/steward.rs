@@ -6,10 +6,11 @@
 use redoubt_rt::abi::{BudgetSpec, Error, FOREVER, Handle, ReceivedHandles};
 use redoubt_rt::ipc::Caller;
 use redoubt_rt::wire::proto::steward::{
-    ChannelClosed, Contexts, Detach, EndContext, EndLease, EndSession, ErrorCode, LeaseEnded, Login,
+    Blame, ChannelClosed, Contexts, Detach, EndContext, EndLease, EndSession, ErrorCode, LeaseEnded, Login,
     LoginReply, Message, Reply, StartAgent, Watch,
 };
-use redoubt_steward::consts::MAX_LEASE;
+use redoubt_steward::audit::Record;
+use redoubt_steward::consts::{BLAME_COUNT, BLAME_WINDOW, MAX_LEASE};
 use redoubt_steward::domain::Domain;
 use redoubt_steward::effect::{Kind, Object, Output, Step};
 use redoubt_steward::event::EventKind;
@@ -370,6 +371,16 @@ fn call(
     badge: u64,
     m: Message<'_>,
 ) -> Result<Reply<'static>, ErrorCode> {
+    call_outputs(s, k, badge, m).0
+}
+
+/// [`call`], with the outputs beside the reply: the audit records and notices the call raised.
+fn call_outputs(
+    s: &mut Steward<usize, usize>,
+    k: &mut Recorder,
+    badge: u64,
+    m: Message<'_>,
+) -> (Result<Reply<'static>, ErrorCode>, Vec<Output>) {
     // An inline message travels in its words alone: one that came with a lend is malformed.
     let inline = matches!(
         m,
@@ -393,9 +404,10 @@ fn call(
     let mut serving = Serving::new(s, k);
     let outcome = answer_with(&mut serving, &caller, &words, &handles, &mut buf);
     assert!(!serving.exited, "the core exited");
+    let outputs = core::mem::take(&mut serving.outputs);
     let reply = Reply::decode(opcode, &outcome.words, &buf, 0).unwrap();
     // Owned copies of what the tests read: a login's session and labels.
-    reply.map(|r| match r {
+    let reply = reply.map(|r| match r {
         Reply::Login(l) => Reply::Login(LoginReply {
             session: l.session,
             name: Box::leak(l.name.to_string().into_boxed_str()),
@@ -415,8 +427,10 @@ fn call(
             name: Box::leak(a.name.to_string().into_boxed_str()),
         }),
         Reply::EndLease(_) => Reply::EndLease(redoubt_rt::wire::proto::steward::EndLeaseReply {}),
+        Reply::Blame(_) => Reply::Blame(redoubt_rt::wire::proto::steward::BlameReply {}),
         _ => panic!("a reply these tests do not read"),
-    })
+    });
+    (reply, outputs)
 }
 
 fn login<'a>(principal: &'a str, label: &'a str, key: &'a [u8]) -> Message<'a> {
@@ -636,6 +650,12 @@ fn every_operation_on_another_badge_class_is_malformed() {
     for badge in [SSHD, APPROVAL, INIT, 0] {
         let e = call(&mut s, &mut k, badge, Message::EndSession(EndSession {})).unwrap_err();
         assert_eq!(e, ErrorCode::Malformed, "end_session on {badge:#x}");
+    }
+    // `blame` is `init`'s alone: on any other badge it is malformed, so nobody can have another
+    // principal's sessions ended by forging three crashes (servers/init.md, "Only init can blame").
+    for badge in [session, SSHD, APPROVAL, 0, 4, MINTED - 1] {
+        let m = Message::Blame(Blame { account: 1002, labels: &[], server: "walfsd:data" });
+        assert_eq!(call(&mut s, &mut k, badge, m).unwrap_err(), ErrorCode::Malformed, "blame on {badge:#x}");
     }
     assert!(k.creates().is_empty());
     // On its own class, an operation from a minted badge the core routes nowhere is the core's
@@ -1095,4 +1115,103 @@ fn a_login_as_the_sponsored_principal_is_a_lease_of_its_sponsors() {
         |c| matches!(c, Call::Notify { lease, name, .. } if *lease == r.session && name == "agent/session-1")
     ));
     assert!(k.calls.iter().any(|c| matches!(c, Call::Destroy(_))));
+}
+
+// ---- crash blame (servers/steward.md, "Crash blame", R40) ----
+
+fn blame<'a>(account: u64, labels: &'a [u8]) -> Message<'a> {
+    Message::Blame(Blame { account, labels, server: "walfsd:data" })
+}
+
+fn records(outputs: &[Output]) -> Vec<Record> {
+    outputs
+        .iter()
+        .filter_map(|o| match o {
+            Output::Audit(a) => Some(a.record().clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// `init`'s `blame` is counted by (account, label set): two blames on bob's unlabelled domain
+/// change nothing but the count, each answered and audited `Blamed`; the third within the window
+/// is the lockout, audited `LockedOut` with the window's end, which destroys the budgets of
+/// bob's session and his lease and nothing of alice's; his next login is refused `locked_out`
+/// while alice's is admitted, and once the window has passed his login is admitted again. A
+/// blame on nobody (account 0) or on a label set the manifest does not know is answered the
+/// same and counts nowhere. Keyed by the label set: three blames on alice's unlabelled domain
+/// destroy her unlabelled session alone, her vault session stands and her vault login is
+/// admitted while her unlabelled one is refused.
+#[test]
+fn three_blames_in_the_window_lock_the_domain_out_until_the_window_passes() {
+    let mut k = Recorder::default();
+    let mut s = started(&mut k);
+    let alice_session_budget = k.made + 1;
+    let _alice = alice_session(&mut s, &mut k);
+    let bob_session = k.made + 1;
+    let Ok(Reply::Login(b)) = call(&mut s, &mut k, SSHD, login("bob", "", &BOB_KEY)) else { panic!() };
+    let b = badge_of(&s, b.session);
+    let bob_lease = k.made + 1;
+    let Ok(Reply::StartAgent(_)) =
+        call(&mut s, &mut k, b, Message::StartAgent(StartAgent { lease: 60_000_000 }))
+    else {
+        panic!()
+    };
+    k.calls.clear();
+    for n in 1..BLAME_COUNT {
+        let (reply, outputs) = call_outputs(&mut s, &mut k, INIT, blame(1002, &[]));
+        assert!(matches!(reply, Ok(Reply::Blame(_))), "blame {n}: {reply:?}");
+        assert_eq!(records(&outputs), vec![Record::Blamed], "blame {n}");
+        assert!(k.calls.is_empty(), "blame {n} changes nothing visible: {:?}", k.calls);
+    }
+    let (reply, outputs) = call_outputs(&mut s, &mut k, INIT, blame(1002, &[]));
+    assert!(matches!(reply, Ok(Reply::Blame(_))));
+    let recorded = records(&outputs);
+    let Some(Record::LockedOut { until }) = recorded.get(1).cloned() else { panic!("{recorded:?}") };
+    assert!(until > k.words && until <= k.words + BLAME_WINDOW, "the window's end: {until} at {}", k.words);
+    assert!(
+        matches!(recorded[..], [Record::Blamed, Record::LockedOut { .. }, Record::LeaseEnded { .. }]),
+        "{recorded:?}"
+    );
+    let destroyed: Vec<usize> =
+        k.calls.iter().filter_map(|c| if let Call::Destroy(b) = c { Some(*b) } else { None }).collect();
+    assert_eq!(destroyed, vec![bob_session, bob_lease], "bob's session and lease, nothing else");
+    assert!(s.failed.is_empty());
+    k.calls.clear();
+    assert_eq!(call(&mut s, &mut k, SSHD, login("bob", "", &BOB_KEY)).unwrap_err(), ErrorCode::LockedOut);
+    assert!(k.creates().is_empty(), "a refused login makes nothing");
+    assert!(matches!(
+        call(&mut s, &mut k, SSHD, login("alice", "alice-secrets", &ALICE_KEY)),
+        Ok(Reply::Login(_))
+    ));
+    // Blame on nobody, and on a label set the manifest does not know: taken, counted nowhere.
+    k.calls.clear();
+    for (account, labels) in [(0, &[][..]), (1001, &99u64.to_le_bytes()[..])] {
+        let (reply, outputs) = call_outputs(&mut s, &mut k, INIT, blame(account, labels));
+        assert!(matches!(reply, Ok(Reply::Blame(_))));
+        assert!(records(&outputs).is_empty() && k.calls.is_empty(), "{account}: {outputs:?} {:?}", k.calls);
+    }
+    // The window passes: bob is let back in.
+    k.words = until;
+    assert!(matches!(call(&mut s, &mut k, SSHD, login("bob", "", &BOB_KEY)), Ok(Reply::Login(_))));
+    // The vault arm (R40): alice's vault session, logged in above, outlives three blames on her
+    // unlabelled domain, which end her unlabelled session alone; her vault login is admitted
+    // while her unlabelled one is locked out.
+    k.calls.clear();
+    for _ in 0..BLAME_COUNT {
+        assert!(matches!(call(&mut s, &mut k, INIT, blame(1001, &[])), Ok(Reply::Blame(_))));
+    }
+    let destroyed: Vec<usize> =
+        k.calls.iter().filter_map(|c| if let Call::Destroy(b) = c { Some(*b) } else { None }).collect();
+    assert_eq!(destroyed, vec![alice_session_budget], "alice's unlabelled session alone");
+    assert_eq!(call(&mut s, &mut k, SSHD, login("alice", "", &ALICE_KEY)).unwrap_err(), ErrorCode::LockedOut);
+    let vault = Message::Login(Login {
+        principal: "alice",
+        label: "alice-secrets",
+        context: "v",
+        from: "",
+        key: &ALICE_KEY,
+    });
+    assert!(matches!(call(&mut s, &mut k, SSHD, vault), Ok(Reply::Login(_))));
+    assert!(s.failed.is_empty());
 }

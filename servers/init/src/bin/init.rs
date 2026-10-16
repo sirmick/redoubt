@@ -34,6 +34,7 @@ mod machine {
     use redoubt_client::grants::RELEASE_TIMEOUT;
     use redoubt_client::launch::{Job, Launch};
     use redoubt_client::typed;
+    use redoubt_init::blame;
     use redoubt_init::bound::{LEND_PAGES, WATCH_STACK_PAGES};
     use redoubt_init::bundle::{Bundle, Entry};
     use redoubt_init::check::{
@@ -52,7 +53,7 @@ mod machine {
     use redoubt_rt::ipc::{Buffer, Event};
     use redoubt_rt::server::close_delivery;
     use redoubt_rt::server::ninep::mode;
-    use redoubt_rt::wire::proto::{bootfs, keyd};
+    use redoubt_rt::wire::proto::{bootfs, keyd, steward};
     use redoubt_sys::DeviceInfo;
 
     /// The stub's own flat binary (`build.rs`).
@@ -253,6 +254,8 @@ mod machine {
         keyd: usize,
         consoled: Option<usize>,
         bootfsd: Option<usize>,
+        /// The steward's entry, which a fault's blame goes to once it runs.
+        steward: Option<usize>,
         /// Whether the boot has come to its public entries: a `bootfsd` restarted after that gets
         /// them again.
         public: bool,
@@ -678,22 +681,31 @@ mod machine {
         }
 
         /// Server `i`'s instance ended: its line, its console connection released, the reboot
-        /// rules, and a new instance. Its watching thread destroyed its budget, which swept the
-        /// job's handles and `init`'s own at it.
+        /// rules, a new instance, and then a fault's blame to the steward. Its watching thread
+        /// destroyed its budget, which swept the job's handles and `init`'s own at it.
         fn restart(&mut self, i: usize, pid: u64, cause: u64, code: u64) {
             let m = self.manifest;
             let name = m.servers[i].name.as_str();
             let ended = self.started[i].take();
+            // A fault's blame: the account and labels its exit notice named, offered to the
+            // steward once the restart is done (servers/init.md, "A wedged steward cannot stall
+            // restarts"); none while no steward runs, or when the steward itself faulted.
+            let mut blamed = None;
             if cause == Cause::Faulted as u64 {
                 let account = kept(i, 0);
                 let count = (kept(i, 1) as usize).min(MAX_LABELS);
                 let labels: Vec<u64> = (0..count).map(|n| kept(i, 2 + n)).collect();
                 let serving =
                     if account == 0 { String::from("nobody") } else { format!("account {account}") };
-                let labels = label_names(m, &labels);
+                let steward = self.steward.filter(|&st| st != i && self.alive(st));
+                let nowhere = blame::nowhere(account, steward.is_some());
+                let named = label_names(m, &labels);
                 self.say(format_args!(
-                    "init: {name} (PID {pid}) faulted, code {code}, serving {serving}, labels {labels}; blamed on nobody: no steward"
+                    "init: {name} (PID {pid}) faulted, code {code}, serving {serving}, labels {named}{nowhere}"
                 ));
+                if let Some(st) = steward.filter(|_| blame::goes_to_the_steward(account, true)) {
+                    blamed = Some((st, account, labels, named));
+                }
             } else {
                 let cause = if cause == Cause::Exited as u64 { "exited" } else { "was killed" };
                 self.say(format_args!("init: {name} (PID {pid}) {cause}, code {code}"));
@@ -739,6 +751,33 @@ mod machine {
             }
             self.start(i);
             self.restarting = false;
+            if let Some((st, account, labels, named)) = blamed {
+                self.blame(st, i, account, &labels, &named);
+            }
+        }
+
+        /// Offers server `i`'s fault to the steward `st`, through `init`'s own badge there,
+        /// waiting at most [`blame::TIMEOUT`]: the steward counts it by (account, label set) and
+        /// decides the lockout (servers/steward.md, "Crash blame"); `init` says what became of
+        /// the blame, and a lost one counts toward nothing.
+        fn blame(&mut self, st: usize, i: usize, account: u64, labels: &[u64], named: &str) {
+            let name = self.manifest.servers[i].name.as_str();
+            let taken = match self.own(st) {
+                Ok(steward) => {
+                    let bytes: Vec<u8> = redoubt_rt::wire::labels::encode(labels).collect();
+                    let m = steward::Message::Blame(steward::Blame { account, labels: &bytes, server: name });
+                    blame::taken(typed::call_within::<steward::Protocol, _>(
+                        &steward,
+                        &mut self.lend,
+                        &m,
+                        &[],
+                        blame::TIMEOUT,
+                        |_, _| (),
+                    ))
+                }
+                Err(_) => blame::Taken::Gone,
+            };
+            self.say(format_args!("{}", blame::said(name, account, named, taken)));
         }
 
         /// Disconnects the fresh connections `init` made for a dead steward
@@ -954,6 +993,7 @@ mod machine {
             keyd: running(&manifest, "keyd").expect("the check refused a manifest without keyd"),
             consoled: running(&manifest, "consoled"),
             bootfsd: running(&manifest, BOOTFSD),
+            steward: manifest.servers.iter().position(|s| is_steward(&manifest, s)),
             public: false,
             root_before: root.pages_usage,
             closed: Closed::default(),

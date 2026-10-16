@@ -4,7 +4,8 @@
 //! and no other.
 
 use redoubt_init::check::{
-    HandedStamp, MANIFEST, Machine, Plan, STEWARD_SLOTS, args, block, handed_stamp, is_steward,
+    HandedStamp, MANIFEST, Machine, Plan, STEWARD_INIT_BADGE, STEWARD_SLOTS, args, block, handed_stamp,
+    is_steward,
 };
 use redoubt_init::fuzz::{BUNDLE_KEY, ENTRIES, machine, virt_devices};
 use redoubt_init::manifest::{
@@ -142,8 +143,9 @@ fn the_image_manifest_passes_and_its_plan_is_what_the_boot_follows() {
     // walfsd:alice-secrets and erofsd.
     assert_eq!(plan.buckets, vec![(0, 6), (1, 5), (2, 6), (5, 7), (6, 5), (7, 5), (10, 5)]);
     // No handed item names consoled or bootfsd: init's own badge at each is 1. sshd is handed
-    // keyd's 1, the host key's, so init's there is 2.
-    assert_eq!(plan.init_badges, vec![(0, 2), (1, 1), (2, 1)]);
+    // keyd's 1, the host key's, so init's there is 2. At the steward it is the protocol's 3,
+    // the class `blame` is accepted on.
+    assert_eq!(plan.init_badges, vec![(0, 2), (1, 1), (2, 1), (11, 3)]);
 }
 
 #[test]
@@ -381,6 +383,14 @@ fn a_handed_badge_is_a_root_badge_given_once_at_its_endpoint() {
     // The same badge at another endpoint is another root.
     let mut m = image();
     server(&mut m, "keyd").handed.push(Handed { endpoint: "netd".into(), badge: 3 });
+    assert!(on_virt(&m).is_ok());
+    // init's own badge at the steward, the one `blame` is accepted on, is handed to nobody
+    // (servers/init.md, "Only init can blame"); the badge beside it is a root like any other.
+    let mut m = full_image();
+    server(&mut m, "netd").handed.push(Handed { endpoint: "steward".into(), badge: STEWARD_INIT_BADGE });
+    refused_at(&m, "servers[4].handed[1].badge", Why::Badge);
+    let mut m = full_image();
+    server(&mut m, "netd").handed.push(Handed { endpoint: "steward".into(), badge: 2 });
     assert!(on_virt(&m).is_ok());
 }
 

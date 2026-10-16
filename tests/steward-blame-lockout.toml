@@ -1,0 +1,119 @@
+description = "Crash blame reaches the steward and is counted by (account, label set) on the machine (docs/servers/init.md, \"Restarts and reboots\"; docs/servers/steward.md, \"Crash blame\" and R40): bob's SSH session arms walfsd's test-only cut (feature cut-after-write, servers/walfsd/src/cut.rs: a walk to walfsd-cut-1 from his home) and writes a block, so walfsd:data exits inside his write, faulted, blamed by the kernel on bob's account and his empty label set (R21); init restarts walfsd:data and then offers the blame to the steward through its own badge, which the steward takes and audits Blamed for bob/{}, one count toward his lockout, destroying nothing: bob's shell still answers, and so does alice's, whose home is dead with the instance, as every connection the dead walfsd served is (steward.md \"Failure and restart\": a shared server's restart strands the steward's kept connection too, so no new login gets a home until the restart gap is closed). The lockout at the third blame is the server's host test. The verdicts are the kernel's blame in init's lines, the steward's audit line, init's restart line and the two shells' own answers (rule F)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The image's programs, walfsd built with its test-only cut (both volumes' instances carry it;
+# only bob arms his).
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-bootfsd", bin = "bootfsd" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-verityd", bin = "verityd" },
+    { package = "redoubt-netd", bin = "netd" },
+    { package = "redoubt-ipd", bin = "ipd" },
+    { package = "redoubt-walfsd", bin = "walfsd", features = ["cut-after-write"] },
+    { package = "redoubt-erofsd", bin = "erofsd" },
+    { package = "beamlet-redoubt", bin = "beamlet", workspace = "userland/otp" },
+    { package = "redoubt-piped", bin = "piped" },
+    { package = "redoubt-steward-server", bin = "steward" },
+    { package = "redoubt-sshd", bin = "sshd" },
+    { package = "redoubt-consrelay", bin = "consrelay" },
+]
+# The principals' budgets, each holding a shell VM's session, need 1 GiB (steward-session-ends).
+memory_mib = 1024
+# Two logins and a restart.
+timeout_secs = 1500
+expect = [
+    '^init: started sshd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
+    '^init: started steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+]
+# Nothing but walfsd:data may end, the blame is never lost, and one blame locks nobody out.
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    '^init: (keyd|consoled|bootfsd|blkd|blkd:system|verity:system|netd|ipd|walfsd:alice-secrets|erofsd:system|steward|sshd) .*(exited|faulted|was killed)',
+    '^init: walfsd:data .*(exited|was killed)',
+    'blamed on nobody',
+    'lost: the steward',
+    'EXCEPTION',
+    'steward: a step failed',
+    'steward: the core exited',
+    'steward: audit .*: LockedOut',
+    'walfsd: the volume check (found [0-9]+ problems|stopped)',
+]
+# 10: CUT_EXIT (servers/walfsd/src/cut.rs). An exit holding bob's call is faulted, blamed on his
+# account and label set (kernel/processes.md R21); init restarts walfsd:data first, then the
+# steward audits the blame under bob's unlabelled domain before it answers, and init says the
+# steward took it.
+expect_after = [
+    '^init: walfsd:data \(PID [0-9]+\) faulted, code 10, serving account 1002, labels none$',
+    '^init: restarted walfsd:data, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] steward: audit 1002/\{\} at [0-9]+: Blamed$',
+    "^init: walfsd:data's fault blamed on account 1002, labels none: the steward took it$",
+]
+
+[[file]]
+name = "manifest"
+from = { path = "image/manifest.json" }
+verity = "image/userland.toml"
+
+# Bob writes a block to his home, arms the cut at the next block write, and writes again: that
+# write ends walfsd:data with his call in service, so it fails, and his shell answers on, nothing
+# of his destroyed by one blame. Every answer is tagged, so a pattern matches the printed value.
+[[session]]
+user = "bob"
+pty = true
+steps = [
+    { expect = '/home/bob \([0-9]+\)> ' },
+    { send = "{:first, File.write(\"/home/bob/f\", String.duplicate(\"a\", 4096))}\n" },
+    { expect = '\{:first, :ok\}' },
+    { expect = '\([0-9]+\)> ' },
+    { wait = "alice-ready" },
+    { send = "{:armed, File.stat(\"/home/bob/walfsd-cut-1\")}\n" },
+    { expect = '\{:armed, \{:error, :enoent\}\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:cut, File.write(\"/home/bob/f\", String.duplicate(\"b\", 4096))}\n" },
+    { expect = '\{:cut, \{:error, :[a-z]+\}\}' },
+    { expect = '\([0-9]+\)> ' },
+    { mark = "bob-cut" },
+    { send = "{:bob_alive, 1 + 1}\n" },
+    { expect = '\{:bob_alive, 2\}' },
+    { expect = '\([0-9]+\)> ' },
+    { wait = "alice-done" },
+    { exit = 0 },
+]
+
+# Alice is logged in before the cut and answers after it: her VM is untouched by bob's blame.
+# Her home is dead with the instance, as every connection it served is: stated here, not hidden.
+[[session]]
+user = "alice"
+pty = true
+steps = [
+    { expect = '/home/alice \([0-9]+\)> ' },
+    { send = "{:before, 1 + 1}\n" },
+    { expect = '\{:before, 2\}' },
+    { expect = '\([0-9]+\)> ' },
+    { mark = "alice-ready" },
+    { wait = "bob-cut" },
+    { send = "{:after, 1 + 1}\n" },
+    { expect = '\{:after, 2\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:home, File.stat(\"/home/alice\")}\n" },
+    { expect = '\{:home, \{:error, :[a-z]+\}\}' },
+    { expect = '\([0-9]+\)> ' },
+    { mark = "alice-done" },
+    { exit = 0 },
+]
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]
+forward = [22]

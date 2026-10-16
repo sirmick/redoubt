@@ -43,8 +43,13 @@ pub const BUCKETS_ARG: &str = "buckets=";
 /// The program that serves `/boot`: `init` pushes the `public` entries to it.
 pub const BOOTFSD: &str = "bootfsd";
 /// The programs `init` calls itself, each through a root badge of its own there: `keyd` for
-/// `holds`, `consoled` for its own lines, `bootfsd` for the public entries.
+/// `holds`, `consoled` for its own lines, `bootfsd` for the public entries. The steward's entry
+/// is the fourth, for `blame`, through [`STEWARD_INIT_BADGE`].
 pub const INIT_CALLS: [&str; 3] = ["keyd", "consoled", BOOTFSD];
+/// `init`'s root badge at the steward, the one `blame` is accepted on (servers/steward.md, "The
+/// steward's protocol": `sshd`'s is 1, the approval channel's 2, `init`'s 3;
+/// `servers/steward/src/protocol.rs`). No `handed` item may name it there.
+pub const STEWARD_INIT_BADGE: u64 = 3;
 /// The most rules a scope `ipd` grants holds ([`redoubt_rt::wire::ipd_scope::MAX_RULES`]).
 pub use redoubt_rt::wire::ipd_scope::MAX_RULES as IPD_RULES;
 /// The steward's binding table's shared slots ([`redoubt_steward::consts::SLOTS`]).
@@ -533,7 +538,10 @@ fn references(m: &Manifest, machine: &Machine) -> Result<(), Refusal> {
                 &t.handed[..upto]
             });
             let twice = earlier.any(|g| g.endpoint == h.endpoint && g.badge == h.badge);
-            if h.badge == 0 || h.badge >= FIRST_MINTED_BADGE || twice {
+            // `init`'s own badge at the steward is handed to nobody: `blame` is `init`'s alone.
+            let inits = h.badge == STEWARD_INIT_BADGE
+                && m.servers.iter().any(|t| is_steward(m, t) && t.receives.first() == Some(&h.endpoint));
+            if h.badge == 0 || h.badge >= FIRST_MINTED_BADGE || twice || inits {
                 return Err(at(format!("servers[{i}].handed[{k}].badge"), Why::Badge));
             }
         }
@@ -1254,14 +1262,22 @@ pub fn domains(p: &crate::manifest::Principal) -> usize {
 pub fn callers(m: &Manifest, s: &Server) -> u64 {
     let handed =
         m.servers.iter().flat_map(|t| &t.handed).filter(|h| s.receives.contains(&h.endpoint)).count();
-    handed as u64 + u64::from(INIT_CALLS.contains(&s.program.as_str()))
+    handed as u64 + u64::from(INIT_CALLS.contains(&s.program.as_str()) || is_steward(m, s))
 }
 
 /// `init`'s own badge at each server it calls ([`Plan::init_badges`]). Badges at an endpoint are
-/// distinct (checked with the references), so one of the first `handed + 1` is free.
+/// distinct (checked with the references), so one of the first `handed + 1` is free; at the
+/// steward it is [`STEWARD_INIT_BADGE`], the class the steward accepts `blame` on, which no
+/// `handed` item names (checked above).
 fn init_badges(m: &Manifest) -> Vec<(usize, u64)> {
     let mut out = Vec::new();
     for (i, s) in m.servers.iter().enumerate() {
+        if is_steward(m, s) {
+            if !s.receives.is_empty() {
+                out.push((i, STEWARD_INIT_BADGE));
+            }
+            continue;
+        }
         let Some(endpoint) = s.receives.first().filter(|_| INIT_CALLS.contains(&s.program.as_str())) else {
             continue;
         };
