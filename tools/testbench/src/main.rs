@@ -1094,7 +1094,7 @@ fn boot_case(
         let log = boot_log(logs, name, target.name, *smp);
         // Every boot gets fresh devices: a new disk, new host ports.
         // A kept disk is the first boot's, which the second boot finds as the first left it.
-        let kept = boot.disk.as_ref().is_some_and(|d| d.keep).then(|| log.with_extension("img"));
+        let kept = boot.disks().any(|(_, d)| d.keep).then(|| log.with_extension("img"));
         let mut boot_once = |log: &Path| -> Result<Verdict> {
             let disk = kept.clone().unwrap_or_else(|| log.with_extension("img"));
             // The launch machine boots launch's own command line, which brings its devices and

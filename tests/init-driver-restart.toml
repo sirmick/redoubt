@@ -3,7 +3,8 @@ arch = ["rv64", "rv32"]
 kind = "boot"
 icount = "shift=3,sleep=off"
 debug_assertions = true
-# The real init, keyd, consoled and bootfsd, dma-driver on the empty slot at 0x10005000, and
+# The real init, keyd, consoled and bootfsd, dma-driver on the empty slot at 0x10005000 (bus 4,
+# the bench's [vault] slot: a case carries [vault] or this manifest, never both), and
 # driver-client, handed a badge at it. The fault and restart lines are init's, bare; the verdict
 # is the client's, which only an answer from an instance that took its page gives.
 programs = [

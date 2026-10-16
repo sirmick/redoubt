@@ -223,10 +223,20 @@ pub fn partition_bytes(size_kib: u64, count: u64) -> Vec<u64> {
 /// (servers/init.md, "Home quotas"), holds exactly its partition's size on the disk
 /// whose partitions are `sizes` (and, where `names` is given, is the partition of its name):
 /// `init` refuses quotas past `bytes`, so `bytes` may not promise more than the partition holds,
-/// nor drift from it.
-pub fn hold(manifest: &serde_json::Value, sizes: &[u64], names: Option<&[&str]>) -> Result<()> {
+/// nor drift from it. With `device` given, only the volumes on that device's disk are held: those
+/// whose `blkd` (the server `disk` names, or the manifest's one `blkd` program) holds the device
+/// (servers/init.md, "The boot manifest"), as a case with two disks holds each disk's own.
+pub fn hold(
+    manifest: &serde_json::Value,
+    sizes: &[u64],
+    names: Option<&[&str]>,
+    device: Option<&str>,
+) -> Result<()> {
     for v in manifest["volumes"].as_array().into_iter().flatten() {
         let Some(bytes) = v.get("bytes") else { continue };
+        if device.is_some_and(|device| !on_device(manifest, v, device)) {
+            continue;
+        }
         let name = v["name"].as_str().unwrap_or("?");
         let bytes: u64 =
             bytes.as_str().and_then(|b| b.parse().ok()).with_context(|| format!("volume {name}: bytes"))?;
@@ -240,6 +250,20 @@ pub fn hold(manifest: &serde_json::Value, sizes: &[u64], names: Option<&[&str]>)
     Ok(())
 }
 
+/// Whether volume `v` of `manifest` is on the disk at `device`: its `blkd` lists the device
+/// (`"devices": [{ "device": "disk2", ... }]`), as `init` finds a volume's disk (`check::blkd`).
+fn on_device(manifest: &serde_json::Value, v: &serde_json::Value, device: &str) -> bool {
+    let servers = manifest["servers"].as_array().into_iter().flatten();
+    let mut blkds = servers.filter(|s| s["program"] == "blkd");
+    let blkd = match v.get("disk") {
+        Some(disk) => blkds.find(|s| &s["name"] == disk),
+        // Unnamed: the manifest's one `blkd`, as for `init`; two is a manifest it refuses.
+        None => blkds.next().filter(|_| blkds.next().is_none()),
+    };
+    blkd.and_then(|b| b["devices"].as_array())
+        .is_some_and(|devices| devices.iter().any(|d| d["device"] == device))
+}
+
 /// The manifest `recipe` names, read under `root`, held to the recipe's partitions ([`hold`]):
 /// by every pack, and by a kept disk before it is attached as it is.
 pub fn hold_recipe(recipe: &Recipe, root: &Path) -> Result<()> {
@@ -248,7 +272,7 @@ pub fn hold_recipe(recipe: &Recipe, root: &Path) -> Result<()> {
     let manifest =
         serde_json::from_slice(&text).with_context(|| format!("{} is not JSON", path.display()))?;
     let names: Vec<&str> = recipe.partition.iter().map(|p| p.name.as_str()).collect();
-    hold(&manifest, &partition_bytes(recipe.size_kib, names.len() as u64), Some(&names))
+    hold(&manifest, &partition_bytes(recipe.size_kib, names.len() as u64), Some(&names), None)
         .with_context(|| format!("{} against the recipe's partitions", path.display()))
 }
 
@@ -668,12 +692,43 @@ mod tests {
                 { "name": "other", "partition": 7 },
             ] })
         };
-        assert!(hold(&manifest(sizes[0], 0), &sizes, Some(&["data", "vault"])).is_ok());
-        assert!(hold(&manifest(sizes[1], 1), &sizes, None).is_ok());
-        assert!(hold(&manifest(sizes[0] + 1, 0), &sizes, None).is_err());
-        assert!(hold(&manifest(sizes[0] - 1, 0), &sizes, None).is_err());
-        assert!(hold(&manifest(sizes[0], 2), &sizes, None).is_err());
-        assert!(hold(&manifest(sizes[1], 1), &sizes, Some(&["data", "vault"])).is_err());
+        assert!(hold(&manifest(sizes[0], 0), &sizes, Some(&["data", "vault"]), None).is_ok());
+        assert!(hold(&manifest(sizes[1], 1), &sizes, None, None).is_ok());
+        assert!(hold(&manifest(sizes[0] + 1, 0), &sizes, None, None).is_err());
+        assert!(hold(&manifest(sizes[0] - 1, 0), &sizes, None, None).is_err());
+        assert!(hold(&manifest(sizes[0], 2), &sizes, None, None).is_err());
+        assert!(hold(&manifest(sizes[1], 1), &sizes, Some(&["data", "vault"]), None).is_err());
+    }
+
+    /// With two disks, each holds the volumes of the `blkd` its device goes to and no other's: a
+    /// vault volume's `bytes` are its own disk's partition, not the data disk's; a volume naming
+    /// no `blkd` is on the manifest's one, and on none when there are two.
+    #[test]
+    fn each_disk_holds_the_volumes_on_its_device() {
+        let (data, vault) = (partition_bytes(1024, 1), partition_bytes(4096, 1));
+        let manifest = serde_json::json!({
+            "volumes": [
+                { "name": "data", "partition": 0, "disk": "blkd:data", "bytes": data[0].to_string() },
+                { "name": "vault", "partition": 0, "disk": "blkd:vault", "bytes": vault[0].to_string() },
+                { "name": "unnamed", "partition": 0, "bytes": "1" },
+            ],
+            "servers": [
+                { "name": "blkd:data", "program": "blkd", "devices": [{ "device": "disk0", "as": "disk" }] },
+                { "name": "blkd:vault", "program": "blkd", "devices": [{ "device": "disk2", "as": "disk" }] },
+            ]
+        });
+        assert!(hold(&manifest, &data, None, Some("disk0")).is_ok());
+        assert!(hold(&manifest, &vault, None, Some("disk2")).is_ok());
+        let why = hold(&manifest, &data, None, Some("disk2")).unwrap_err().to_string();
+        assert!(why.starts_with("volume vault: bytes"), "{why}");
+        assert!(hold(&manifest, &data, None, None).is_err(), "every volume, held to one disk");
+        let one = serde_json::json!({
+            "volumes": [{ "name": "unnamed", "partition": 0, "bytes": data[0].to_string() }],
+            "servers": [{ "name": "blkd", "program": "blkd", "devices": [{ "device": "disk0", "as": "disk" }] }]
+        });
+        assert!(hold(&one, &data, None, Some("disk0")).is_ok());
+        assert!(hold(&one, &vault, None, Some("disk0")).is_err());
+        assert!(hold(&one, &vault, None, Some("disk2")).is_ok(), "not on this disk");
     }
 
     /// The image's manifest gives its writable volumes their partitions' sizes on the image's
@@ -687,7 +742,7 @@ mod tests {
             serde_json::from_slice(&std::fs::read(root.join("image/manifest.json")).unwrap()).unwrap();
         let names: Vec<&str> = recipe.partition.iter().map(|p| p.name.as_str()).collect();
         let sizes = partition_bytes(recipe.size_kib, names.len() as u64);
-        hold(&image, &sizes, Some(&names)).unwrap();
+        hold(&image, &sizes, Some(&names), None).unwrap();
         let dir = stage("held");
         let wrong = serde_json::json!({ "volumes": [
             { "name": "data", "partition": 0, "bytes": (partition_bytes(1024, 1)[0] + 4096).to_string() },

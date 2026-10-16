@@ -75,7 +75,11 @@ fn run(startup: &Startup) -> u32 {
     };
     let mut args = startup.args();
     let checked = match (args.next(), args.next()) {
-        (Some("boot"), Some(at)) => boot(startup, &mut out, at).map(|()| Ends::Passed),
+        // Every endpoint named, in turn: `walfsd-boot` writes a volume on each of its two disks.
+        (Some("boot"), Some(at)) => core::iter::once(at)
+            .chain(args)
+            .try_for_each(|at| boot(startup, &mut out, at))
+            .map(|()| Ends::Passed),
         (Some("reboot"), Some(at)) => reboot(startup, &mut out, at),
         (Some("read"), Some(at)) => read(startup, &mut out, at, args).map(|()| Ends::Passed),
         (Some("apart"), Some(at)) => apart(startup, &mut out, at, args.next()).map(|()| Ends::Passed),
@@ -153,7 +157,7 @@ fn dir(conn: &Connection, out: &mut Out, path: &str) -> Result<File, String> {
 }
 
 /// `littlefsd-boot`: the volume `littlefsd` formatted takes a file and a directory, the file reads back, is
-/// renamed into the directory and reads back there, and both are removed.
+/// renamed into the directory and reads back there, and both are removed; the line says where.
 fn boot(startup: &Startup, out: &mut Out, endpoint: &str) -> Result<(), String> {
     let conn = attach(startup, out, endpoint)?;
     let text = b"written through littlefsd under init\n";
@@ -180,7 +184,8 @@ fn boot(startup: &Startup, out: &mut Out, endpoint: &str) -> Result<(), String> 
     if conn.stat(&mut out.lend, "/d").is_ok() {
         return Err("d is still there after its remove".into());
     }
-    out.say("littlefsd-client wrote, read, renamed and removed\n").map_err(|e| format!("say: {e:?}"))
+    out.say(&format!("littlefsd-client wrote, read, renamed and removed at {endpoint}\n"))
+        .map_err(|e| format!("say: {e:?}"))
 }
 
 /// `userland-read-only`: on a read-only volume a create is refused, and so is a write to `file`,
