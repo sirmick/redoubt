@@ -2041,6 +2041,10 @@ mod machine {
                         return core_exited(startup);
                     }
                 }
+                // The probe's look for the round's marker, half a second on: the loop's top
+                // looks again.
+                #[cfg(feature = "latency-probe")]
+                Err(Error::Timeout) if !probe.counts.is_empty() && leases_live(&steward) == 0 => {}
                 // The timers' own wakes: the loop's top ends what is due, and runs the cleanup
                 // steps whose retry has come.
                 Err(Error::Timeout) if [idle, due].into_iter().flatten().any(|t| t <= wait) => {}
