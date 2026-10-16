@@ -522,7 +522,7 @@ to the VM (`console_resized`), whose `idle` returns for it. There is no wall clo
 
 ### beamlet on Redoubt
 
-Status: built · partly tested: programs and `/net` are not built · tested: bench:beamlet-natives, bench:beamlet-reduction-rate, bench:beamlet-schedulers-mttcg, bench:beamlet-schedulers-one-hart-mttcg, bench:shell-compile-module, bench:shell-compile, host:beamlet-vm::two_schedulers_lose_nothing_across_the_system_lock, host:beamlet-vm::schedulers_go_offline_and_online_again, host:beamlet-redoubt::two_schedulers_lose_nothing_across_the_system_lock, host:beamlet-redoubt::four_schedulers_lose_nothing_either, host:beamlet-redoubt::without_the_argument_the_vm_has_one_scheduler, host:beamlet-redoubt::the_count_is_one_decimal_argument_capped_and_one_otherwise, host:beamlet-redoubt::the_io_report_counts_the_schedulers, host:beamlet-redoubt::without_a_console_writes_are_dropped_reads_end_and_the_size_is_unknown, host:beamlet-redoubt::a_vm_without_a_console_runs_its_module_to_exit, bench:beamlet-boot, bench:beamlet-console, bench:beamlet-files, bench:boot-profile, bench:boot-profile-unverified, bench:pack-outside-module, bench:pack-bad-truncated, bench:pack-bad-wrong-length, bench:pack-bad-wrong-name, bench:beamlet-heap-flood, bench:beamlet-budget-flood, bench:userland-boot, bench:userland-bad-start, bench:userland-read-only, bench:verity-flipped-tree, bench:verity-wrong-root, host:beamlet-redoubt::a_module_is_its_file_and_a_failed_read_is_refused, host:beamlet-redoubt::not_found_at_the_open_is_absent_and_every_other_error_is_refused_by_name, host:beamlet-redoubt::verified_module_lookup_propagates_found_absent_and_refused, host:beamlet-redoubt::verified_application_lookup_propagates_found_absent_and_refused, host:beamlet-redoubt::a_packed_module_comes_from_the_pack_and_any_other_from_the_volume, host:beamlet-redoubt::a_pack_with_a_bad_entry_is_refused_whole, host:testbench::the_boot_pack_is_deterministic_sorted_and_only_of_the_objects, host:beamlet-vm::the_search_is_flat_in_the_pattern_count, host:beamlet-vm::the_matcher_finds_what_every_pattern_at_every_byte_finds
+Status: built · partly tested: programs and `/net` are not built · tested: bench:beamlet-natives, bench:beamlet-reduction-rate, bench:beamlet-schedulers-mttcg, bench:beamlet-schedulers-one-hart, bench:shell-compile-module, bench:shell-compile, host:beamlet-vm::two_schedulers_lose_nothing_across_the_system_lock, host:beamlet-vm::schedulers_go_offline_and_online_again, host:beamlet-redoubt::two_schedulers_lose_nothing_across_the_system_lock, host:beamlet-redoubt::four_schedulers_lose_nothing_either, host:beamlet-redoubt::without_the_argument_the_vm_has_one_scheduler, host:beamlet-redoubt::the_count_is_one_decimal_argument_capped_and_one_otherwise, host:beamlet-redoubt::the_io_report_counts_the_schedulers, host:beamlet-redoubt::without_a_console_writes_are_dropped_reads_end_and_the_size_is_unknown, host:beamlet-redoubt::a_vm_without_a_console_runs_its_module_to_exit, bench:beamlet-boot, bench:beamlet-console, bench:beamlet-files, bench:boot-profile, bench:boot-profile-unverified, bench:pack-outside-module, bench:pack-bad-truncated, bench:pack-bad-wrong-length, bench:pack-bad-wrong-name, bench:beamlet-heap-flood, bench:beamlet-budget-flood, bench:userland-boot, bench:userland-bad-start, bench:userland-read-only, bench:verity-flipped-tree, bench:verity-wrong-root, host:beamlet-redoubt::a_module_is_its_file_and_a_failed_read_is_refused, host:beamlet-redoubt::not_found_at_the_open_is_absent_and_every_other_error_is_refused_by_name, host:beamlet-redoubt::verified_module_lookup_propagates_found_absent_and_refused, host:beamlet-redoubt::verified_application_lookup_propagates_found_absent_and_refused, host:beamlet-redoubt::a_packed_module_comes_from_the_pack_and_any_other_from_the_volume, host:beamlet-redoubt::a_pack_with_a_bad_entry_is_refused_whole, host:testbench::the_boot_pack_is_deterministic_sorted_and_only_of_the_objects, host:beamlet-vm::the_search_is_flat_in_the_pattern_count, host:beamlet-vm::the_matcher_finds_what_every_pattern_at_every_byte_finds
 
 On Redoubt, beamlet is a native program. Its built `Platform` adapter uses the client library
 ([native programs](native.md#the-client-library)) for the console, files, verified code lookup
@@ -711,25 +711,40 @@ stack and thread page and the locks' endpoints are 25 of the share's pages
 In the console session of the image's boot, two `Task.async` loops of
 `Enum.reduce(1..65536, 0, &max/2)`, awaited, timed 10 times with one scheduler online and 10 with
 two, alternated; the fastest of each (bench:beamlet-schedulers-mttcg, and
-bench:beamlet-schedulers-one-hart-mttcg at 1 hart):
+bench:beamlet-schedulers-one-hart at 1 hart):
 
 | | rv64 | rv32 |
 | --- | ---: | ---: |
 | 2 harts, one scheduler online | 417,514 µs | 487,274 µs |
 | 2 harts, two schedulers | 234,728 µs | 257,310 µs |
 | the ratio, one over two | 1.77 | 1.89 |
-| 1 hart, the same ratio | 0.99 | 0.99 |
+| 1 hart, one scheduler online, in guest time | 3,459,590 µs | 3,790,698 µs |
+| 1 hart, two schedulers, in guest time | 3,601,614 µs | 3,999,102 µs |
+| the ratio at 1 hart | 0.96 | 0.94 |
 
-Across runs alone the 2-hart ratio measured 1.77 to 2.14 on rv64 (7 runs) and 1.83 to 1.94 on rv32 (5). These are host times: the cases run
+Across runs alone the 2-hart ratio measured 1.77 to 2.14 on rv64 (7 runs) and 1.83 to 1.94 on rv32 (5). The 2-hart times are host times: the case runs
 without `icount`, in multi-threaded TCG, where the harts are host threads that run at once.
 Under `icount` QEMU runs the harts in turn on one host thread and guest time counts every hart's
 instructions, so a second hart cannot make a run faster in guest time
 ([which cases run in guest time](../testbench.md#the-case-file)). Both times come from one boot,
 so the ratio holds beside a steady load but not beside a stalled vCPU thread, and is a verdict
-only alone. **The floor:** a ratio of 1.40 at 2 harts, a fifth under the lowest measured
+only alone. At 1 hart nothing runs at once, and the cost of two schedulers is the instructions
+their switching takes: the kernel's slice ends alternate the two threads where one scheduler
+keeps the hart. So the one-hart case runs under `icount` (`shift=3`, seed 1), where the ratio is
+a count of instructions, the same on any host however loaded: seven boots, two beside a
+twelve-core load, read 0.94 on rv32 and 0.95 or 0.96 on rv64; across boots the one-scheduler
+side's fastest runs lie within 100 µs of each other and the two-scheduler side's in two clusters
+2.3 ms (rv64) and 2.8 ms (rv32) apart, within 0.1 % of a 3.6 or 4.0 s run, and a boot's ten pairs
+lie within 1.7 % of each other. On the host's clock the same case read 0.81 to 0.95 across six
+boots alone on rv32 (0.96 twice on rv64): a boot's ten host times of either side spread by a
+tenth, and the fastest of each side met by chance. Sampled beside those runs, the vCPU thread
+moved among the four cores of `q`'s quiet set 13 to 28 times a run, and those cores' clocks
+read anywhere from 0.8 to 4.7 GHz; pinned to one host core the case read 0.93 on rv32 and 0.96
+on rv64, and a side's ten times still spread by 3 to 9 %. **The floor:** a ratio of 1.40 at 2 harts, a fifth under the lowest measured
 alone, since the train's bench runs the case beside other work, where it once measured 1.53; a VM
 whose schedulers ran one at a time would measure about 1.0. And 0.90 at 1 hart: two schedulers
-sharing one hart keep nine tenths of one's throughput. The case does not measure what the kernel
+sharing one hart keep nine tenths of one's throughput, four points under the slower width's 0.94
+in guest time, where a boot's pairs vary by less than two. The case does not measure what the kernel
 charges for the two threads: by the kernel's rule each hart's run is charged to the session's one
 budget ([scheduling](../kernel/scheduling.md#one-flat-stride-queue)), which the scheduling cases
 judge, not this one. With two schedulers at 1 hart, `beamlet-reduction-rate` measures 52,936 (rv64) and
