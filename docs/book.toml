@@ -19,5 +19,7 @@ command = "cargo run -q -p mdbook-memmap --"
 additional-js = ["theme/mermaid.min.js", "theme/mermaid-init.js"]
 git-repository-url = "https://github.com/sirmick/redoubt"
 
+# The index is held to 7,000,000 bytes by the docs checker (README.md, "The search index"); the
+# heading split stays at mdbook's default of 3 so that every rule's heading is its own hit.
 [output.html.search]
 enable = true

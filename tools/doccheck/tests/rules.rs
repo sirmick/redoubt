@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-use redoubt_doccheck::{Finding, Scope, check};
+use redoubt_doccheck::{Finding, Scope, check, elasticlunr_version, search_index_within};
 
 fn run(tree: &str) -> Vec<Finding> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(tree);
@@ -79,6 +79,32 @@ fn c1_reports_each_failure() {
 fn c13_reports_each_failure() {
     let lines: BTreeSet<usize> = run("c13").iter().filter(|f| f.rule == 13).map(|f| f.line).collect();
     assert_eq!(lines, BTreeSet::from([5, 6, 7, 11, 13]));
+}
+
+/// The search index over its ceiling fails naming the size, the ceiling and the three largest
+/// pages, largest first; at or under it, the size is returned.
+#[test]
+fn index_over_its_ceiling_names_the_largest_pages() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/index");
+    let book = root.join("book");
+    let err = search_index_within(&root, &book, 1_000).unwrap_err();
+    assert!(err.contains("1491 bytes") && err.contains("ceiling of 1000"), "{err}");
+    let at = ["docs/big.md", "docs/mid.md", "docs/small.md"].map(|p| err.find(p).expect(p));
+    assert!(at[0] < at[1] && at[1] < at[2] && !err.contains("tiny.md"), "{err}");
+    assert_eq!(search_index_within(&root, &book, 1_491), Ok(1491));
+    assert!(search_index_within(&root, &root.join("docs"), 1_000).unwrap_err().contains("no searchindex"));
+}
+
+/// The indexer's version is read from the crate path an mdbook binary embeds; a binary without
+/// one, or with a malformed one, yields none.
+#[test]
+fn elasticlunr_version_is_read_from_the_binary() {
+    let at = |b: &[u8]| elasticlunr_version(b);
+    assert_eq!(at(b"\0/registry/src/index/elasticlunr-rs-3.1.0/src/lib.rs\0"), Some((3, 1, 0)));
+    assert_eq!(at(b"xelasticlunr-rs-3.0.2/src/pipeline.rs"), Some((3, 0, 2)));
+    assert_eq!(at(b"elasticlunr-rs-12.34.56."), Some((12, 34, 56)));
+    assert_eq!(at(b"elasticlunr-rs-3.1/src"), None);
+    assert_eq!(at(b"mdbook without the path"), None);
 }
 
 /// `beyond` excuses only M6 (C3); a part of a rule must repeat its name (C5); generated and

@@ -1266,6 +1266,51 @@ fn pinned_under(list: &[UnsafeBudget], paths: &[String]) -> Result<i64, String> 
 /// The contents of each `` `...` `` span in `s`.
 fn code_spans(s: &str) -> Vec<String> { s.split('`').skip(1).step_by(2).map(str::to_string).collect() }
 
+/// The book's search index (`searchindex*.js` under `book`; mdbook names the file by its hash):
+/// its size in bytes, or, over `ceiling`, a message naming the size, the ceiling and the three
+/// largest pages, so that the failure says what grew. mdbook itself warns at 10,000,000 bytes
+/// of index; the ceiling keeps a stated headroom under that
+/// ([the book's rules](../../docs/README.md#the-search-index)).
+pub fn search_index_within(root: &Path, book: &Path, ceiling: u64) -> Result<u64, String> {
+    let entries = fs::read_dir(book).map_err(|e| format!("{}: {e}", book.display()))?;
+    let index = entries
+        .flatten()
+        .map(|e| e.path())
+        .find(|p| {
+            let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            name.starts_with("searchindex") && name.ends_with(".js")
+        })
+        .ok_or_else(|| format!("{}: no searchindex*.js", book.display()))?;
+    let size = fs::metadata(&index).map_err(|e| format!("{}: {e}", index.display()))?.len();
+    if size <= ceiling {
+        return Ok(size);
+    }
+    let mut pages: Vec<(u64, String)> = page_paths(root)
+        .into_iter()
+        .filter_map(|p| Some((fs::metadata(root.join(&p)).ok()?.len(), p)))
+        .collect();
+    pages.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    let largest: Vec<String> = pages.iter().take(3).map(|(n, p)| format!("{p} ({} KB)", n / 1024)).collect();
+    Err(format!(
+        "the search index is {size} bytes, over its ceiling of {ceiling} (mdbook warns at 10,000,000): \
+         the largest pages are {}",
+        largest.join(", ")
+    ))
+}
+
+/// The elasticlunr-rs version an mdbook binary was built with, read from the crate's source path
+/// that its panic locations embed (`elasticlunr-rs-<major>.<minor>.<patch>/`); `None` when the
+/// binary carries no such path. The book needs 3.1.0 or later: before it, every field was
+/// indexed with the tokens of the fields before it, and the index came out 60 % too large.
+pub fn elasticlunr_version(binary: &[u8]) -> Option<(u64, u64, u64)> {
+    const NEEDLE: &[u8] = b"elasticlunr-rs-";
+    let at = binary.windows(NEEDLE.len()).position(|w| w == NEEDLE)? + NEEDLE.len();
+    let rest: String =
+        binary[at..].iter().take_while(|b| b.is_ascii_digit() || **b == b'.').map(|&b| b as char).collect();
+    let mut parts = rest.split('.').map(|p| p.parse::<u64>().ok());
+    Some((parts.next()??, parts.next()??, parts.next()??))
+}
+
 fn unsafe_budgets(root: &Path) -> Result<Vec<UnsafeBudget>, String> {
     let text = fs::read_to_string(root.join(UNSAFE_BUDGET)).map_err(|e| format!("{UNSAFE_BUDGET}: {e}"))?;
     let doc: toml::Table = text.parse().map_err(|e| format!("{UNSAFE_BUDGET}: {e}"))?;

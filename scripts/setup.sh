@@ -216,6 +216,15 @@ for spec in "${CARGO_TOOLS[@]}"; do
     name="${spec%@*}" version="${spec#*@}"
     if grep -q "^$name v$version:" <<<"$have"; then
         done_ "$spec"
+    elif [ "$name" = mdbook ]; then
+        # mdbook 0.5.4's lockfile pins elasticlunr-rs 3.0.2, which indexes each field with the
+        # tokens of the fields before it (fixed in 3.1.0): the book's search index comes out 60 %
+        # larger than its text warrants and crosses mdbook's 10 MB warning. Resolved fresh, the
+        # install links elasticlunr-rs >= 3.1.0; the docs checker's `the_book_builds` reads the
+        # version from the binary and holds the index to its ceiling. A binary installed before
+        # this change is replaced with `cargo install --force mdbook@0.5.4`. Back to --locked when
+        # the pinned mdbook's own lockfile is at elasticlunr-rs >= 3.1.0.
+        cargo install "$spec"
     else
         cargo install --locked "$spec"
     fi
