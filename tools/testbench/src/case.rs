@@ -412,6 +412,10 @@ pub struct Boot {
     pub file: Vec<BundleFile>,
     /// A virtio-blk disk, created afresh for every boot.
     pub disk: Option<Disk>,
+    /// The vault disk: a second writable virtio-blk disk beside `disk`, with a recipe or layout
+    /// of its own, for a manifest that keeps the home volume and the vault on separate devices
+    /// (servers/init.md, "The confinement check", R34).
+    pub vault: Option<Disk>,
     /// The userland disk, a second virtio-blk disk the host attaches read-only, packed from its
     /// recipe for every boot.
     pub userland: Option<Userland>,
@@ -897,6 +901,14 @@ impl Boot {
     /// bundle entries, which `init` starts as its manifest says.
     pub fn under_init(&self) -> bool { self.programs.first().is_some_and(Program::is_init) }
 
+    /// The case's writable disks, each with the device name a manifest gives it: `[disk]` is
+    /// `disk0` and `[vault]` is `disk2` (`qemu::VAULT_BUS`).
+    pub fn disks(&self) -> impl Iterator<Item = (&'static str, &Disk)> {
+        [("disk0", self.disk.as_ref()), ("disk2", self.vault.as_ref())]
+            .into_iter()
+            .filter_map(|(device, disk)| Some((device, disk?)))
+    }
+
     /// Under `init`, the line in which `init` announces the reporter's console connection, bare:
     /// its one capture is the connection's id.
     pub fn reporter_announced(&self) -> Option<String> {
@@ -979,8 +991,12 @@ impl Case {
                     );
                 }
                 ensure!(
-                    !boot.disk.as_ref().is_some_and(|d| d.keep) || !boot.distinct_across_boots.is_empty(),
+                    !boot.disks().any(|(_, d)| d.keep) || !boot.distinct_across_boots.is_empty(),
                     "disk.keep shares the disk between two boots: it needs distinct_across_boots"
+                );
+                ensure!(
+                    boot.vault.is_none() || boot.disk.is_some(),
+                    "a vault is a second disk: it needs [disk]"
                 );
                 if boot.launch {
                     // launch's command line is booted as it is: nothing a case adds to QEMU's.
@@ -1001,7 +1017,7 @@ impl Case {
                 for pattern in &boot.expect_after {
                     regex::Regex::new(pattern)?;
                 }
-                if let Some(disk) = &boot.disk {
+                for (device, disk) in boot.disks() {
                     match &disk.recipe {
                         Some(_) => ensure!(
                             disk.size_kib == 0 && disk.partitions == 0,
@@ -1014,7 +1030,8 @@ impl Case {
                         }
                     }
                     // The manifest's volume sizes are the disk's partitions (servers/init.md, "Home
-                    // quotas"); a recipe holds its own manifest when it packs.
+                    // quotas"); a recipe holds its own manifest when it packs. With a vault, each
+                    // disk holds the volumes of the `blkd` its device goes to.
                     let manifest =
                         boot.file.iter().find(|f| f.name == "manifest").and_then(|f| match &f.from {
                             Program::Path { path } => Some(path),
@@ -1026,6 +1043,7 @@ impl Case {
                             .with_context(|| format!("reading {}", path.display()))?;
                         // A refusal case's manifest need not be JSON: `init` says so.
                         if let Ok(json) = serde_json::from_slice(&text) {
+                            let on = boot.vault.is_some().then_some(device);
                             let held = match &disk.recipe {
                                 Some(recipe) => {
                                     let recipe = crate::disk::Recipe::load(&root.join(recipe))?;
@@ -1033,14 +1051,14 @@ impl Case {
                                         recipe.partition.iter().map(|p| p.name.as_str()).collect();
                                     let sizes =
                                         crate::disk::partition_bytes(recipe.size_kib, names.len() as u64);
-                                    crate::disk::hold(&json, &sizes, Some(&names))
+                                    crate::disk::hold(&json, &sizes, Some(&names), on)
                                 }
                                 None => {
                                     let sizes = crate::disk::partition_bytes(disk.size_kib, disk.partitions);
-                                    crate::disk::hold(&json, &sizes, None)
+                                    crate::disk::hold(&json, &sizes, None, on)
                                 }
                             };
-                            held.with_context(|| format!("{} against the case's disk", path.display()))?;
+                            held.with_context(|| format!("{} against the case's {device}", path.display()))?;
                         }
                     }
                 }

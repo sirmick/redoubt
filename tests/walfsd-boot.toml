@@ -1,8 +1,9 @@
-description = "walfsd under init (servers/walfsd.md, \"Serving\"): init starts blkd and a walfsd for the manifest's one volume, minting its range badge at blkd; walfsd formats the blank partition as walfs; a client handed a root badge at walfsd (littlefsd-client, a client of either writable server) writes, reads, renames and removes a file and a directory through 9P and walfsd's typed rename"
+description = "walfsd under init (servers/walfsd.md, \"Serving\"), on two writable disks (docs/testbench.md, \"Disks and network cards\"): init starts a blkd for the data disk and one for the vault disk (blkd:data on disk0, blkd:vault on disk2) and a walfsd for each disk's one volume, minting its range badge at its blkd; each walfsd formats its blank partition as walfs; a client handed a root badge at each walfsd (littlefsd-client, a client of either writable server) writes, reads, renames and removes a file and a directory through 9P and walfsd's typed rename on the data volume, then on the vault volume"
 arch = ["rv64", "rv32"]
 kind = "boot"
 # The real init, the servers the manifest names, and littlefsd-client, which holds no Reset right,
-# so the case ends at its verdict.
+# so the case ends at its verdict. The vault disk is the bench's `[vault]`: a second writable
+# disk on its own slot, the one a confined manifest keeps the vault on.
 programs = [
     { package = "redoubt-init", bin = "init" },
     { package = "redoubt-keyd", bin = "keyd" },
@@ -13,10 +14,12 @@ programs = [
 ]
 timeout_secs = 60
 expect = [
-    '^init: the manifest is checked: 5 servers, bound \d+ pages$',
-    '^init: started walfsd, console [0-9a-f]{16}$',
+    '^init: the manifest is checked: 7 servers, bound \d+ pages$',
+    '^init: started walfsd:data, console [0-9a-f]{16}$',
+    '^init: started walfsd:vault, console [0-9a-f]{16}$',
     '^init: started client, console [0-9a-f]{16}$',
-    '^\[con [0-9a-f]{16}\] littlefsd-client wrote, read, renamed and removed$',
+    '^\[con [0-9a-f]{16}\] littlefsd-client wrote, read, renamed and removed at walfsd:data$',
+    '^\[con [0-9a-f]{16}\] littlefsd-client wrote, read, renamed and removed at walfsd:vault$',
     '^\[con [0-9a-f]{16}\] littlefsd-client TEST PASSED$',
 ]
 forbid = ['init: refused the boot', '^init: .* (exited|faulted|was killed)', 'init: restarted', 'init: rebooting']
@@ -24,8 +27,12 @@ reporter = "client"
 
 [[file]]
 name = "manifest"
-from = { path = "tests/data/walfsd/boot.json" }
+from = { path = "tests/data/walfsd/two-disks.json" }
 
 [disk]
 size_kib = 4096
+partitions = 1
+
+[vault]
+size_kib = 2048
 partitions = 1

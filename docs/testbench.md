@@ -1026,7 +1026,7 @@ a program reads it again through `/boot` once the manifest's `public` list names
 
 ### Disks and network cards
 
-<details><summary>Status: built · tested (34)</summary>
+<details><summary>Status: built · tested (37)</summary>
 
 - bench:bench-virtio-devices
 - bench:bench-virtio-legacy-off
@@ -1045,6 +1045,9 @@ a program reads it again through `/boot` once the manifest's `public` list names
 - host:testbench::a_recipe_packs_a_table_and_a_volume_per_partition
 - host:testbench::a_stage_is_walked_parents_first_in_name_order
 - host:testbench::devices_sit_on_fixed_slots
+- host:testbench::the_vault_disk_sits_beside_the_data_disk
+- host:testbench::each_disk_holds_the_volumes_on_its_device
+- bench:walfsd-boot
 - host:testbench::every_network_is_restricted
 - host:testbench::virtio_devices_are_modern
 - host:testbench::the_userland_disk_sits_on_its_slot_read_only
@@ -1074,6 +1077,10 @@ partitions = 1               # optional: a GPT of this many equal partitions, by
 # stage = "tests/data/littlefsd/stage"   # optional: what every partition holds instead of its stage
 # flip_version = true        # optional, with a recipe: one bit of each signed volume's version flipped
 # keep = true                # optional, with two boots: the second boots the disk the first left
+
+[vault]                      # optional, with [disk]: a second writable disk, disk2, the same keys
+size_kib = 2048
+partitions = 1
 
 [userland]                   # the userland disk, attached read-only, packed once per run
 recipe = "image/userland.toml"
@@ -1109,7 +1116,19 @@ its partition's size, which `init` never reads. A recipe names the manifest its 
 (`manifest = "image/manifest.json"`), and the pack is refused if a volume's `bytes` differs from
 its partition's, or the partition at its index has another name; at load the bench refuses a case
 whose `manifest` file gives a volume `bytes` its disk's partition does not have, whether the disk
-is a recipe or `size_kib` and `partitions`.
+is a recipe or `size_kib` and `partitions`. With a `[vault]`, each disk holds the volumes of the
+`blkd` its device goes to: a volume's `disk` names its `blkd`, whose `devices` entry is `disk0` or
+`disk2`.
+
+`[vault]` is a second writable disk beside `[disk]`, with the same keys and its own recipe or
+layout, for a manifest that keeps the unlabelled home volume and the vault on separate devices,
+as a confined one must ([R34 (confined placement)](servers/init.md#r34-confined-placement): one `blkd` serves one label set,
+so two label sets need two disks). It is `disk2` on its own slot, made and kept as the data disk
+is, beside it. `walfsd-boot` boots both: a `blkd` on each, a `walfsd` on each disk's one volume,
+and a client writing and reading back on both. Its slot, bus 4, is the one
+`tests/data/init/driver.json` names `slot5`: the empty slot `dma-driver` is given in
+`init-driver-restart` and `init-quarantine-reboot`, empty only because no disk sits there. A case
+carries `[vault]` or that manifest, never both.
 
 A recipe's volume may also generate files, for a case that needs many and not their
 contents: `generated = { files = 600, read = "f000" }` makes `f000` to `f599` in the volume's root
@@ -1150,10 +1169,17 @@ manifest's root by one digit instead, never the disk
 ([R76 (verified volumes)](servers/verityd.md#r76-verified-volumes)). Nothing is generated beside the objects.
 
 Devices use virtio-mmio's modern transport, which `blkd` and `netd` require. Each sits on a fixed
-virtio-mmio slot, the one `image/manifest.json` names: the card at `0x10007000` with interrupt 7,
-the data disk at `0x10008000` with interrupt 8, and the userland disk at `0x10006000` with
-interrupt 6, whether or not the case has the others. So a case's manifest names its devices as the
-image's does. The userland disk is attached read-only (`readonly=on`): QEMU refuses every write
+virtio-mmio slot, whether or not the case has the others, so a case's manifest names its devices
+as the image's does (`image/manifest.json` names the first three):
+
+| device | `[table]` | QEMU bus | base | irq | manifest line |
+| --- | --- | --- | --- | --- | --- |
+| data disk | `[disk]` | `virtio-mmio-bus.7` | `0x10008000` | 8 | `{ "name": "disk0", "base": "268468224", "irq": 8, "dma": true }` |
+| network card | `[net]` | `virtio-mmio-bus.6` | `0x10007000` | 7 | `{ "name": "net0", "base": "268464128", "irq": 7, "dma": true }` |
+| userland disk | `[userland]` | `virtio-mmio-bus.5` | `0x10006000` | 6 | `{ "name": "disk1", "base": "268460032", "irq": 6, "dma": true }` |
+| vault disk | `[vault]` | `virtio-mmio-bus.4` | `0x10005000` | 5 | `{ "name": "disk2", "base": "268455936", "irq": 5, "dma": true }` |
+
+The userland disk is attached read-only (`readonly=on`): QEMU refuses every write
 to it, so nothing on the box can change it. The guest reaches nothing outside QEMU
 (`restrict=on`, checked for every `[net]` case): there is no outside peer, only forwarded
 connections coming in, unless a case adds one deliberately. Nor is it offered IPv6 (`ipv6=off`),

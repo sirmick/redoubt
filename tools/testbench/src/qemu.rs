@@ -329,13 +329,15 @@ pub const NET_BUS: &str = "virtio-mmio-bus.6";
 pub const DISK_BUS: &str = "virtio-mmio-bus.7";
 /// The userland disk's slot: `0x10006000`, interrupt 6.
 pub const USERLAND_BUS: &str = "virtio-mmio-bus.5";
+/// The vault disk's slot (`[vault]`, `disk2`): `0x10005000`, interrupt 5, the next free one down.
+pub const VAULT_BUS: &str = "virtio-mmio-bus.4";
 
 /// QEMU arguments for a case's virtio devices, for one boot: creates the disk afresh at `disk`,
 /// so no boot sees another's writes, unless it is kept and there already (`Disk::keep`), when
-/// its layout must be a fresh disk's; and forwards from `ports`, the host ports in the forwards'
-/// order, or with none given from free ones. The userland disk is copied beside it from
-/// `userland`, the run's one pack ([`crate::build::Builder::userland`]), with the case's damage,
-/// and attached read-only.
+/// its layout must be a fresh disk's; the vault disk, if the case has one, the same way beside
+/// it; and forwards from `ports`, the host ports in the forwards' order, or with none given from
+/// free ones. The userland disk is copied beside it from `userland`, the run's one pack
+/// ([`crate::build::Builder::userland`]), with the case's damage, and attached read-only.
 pub fn virtio_devices(
     boot: &Boot,
     disk: &Path,
@@ -346,36 +348,17 @@ pub fn virtio_devices(
     if boot.disk.is_some() || boot.net.is_some() || boot.userland.is_some() {
         args.extend(MODERN_VIRTIO.iter().map(|a| a.to_string()));
     }
-    if let Some(spec) = &boot.disk {
-        match &spec.recipe {
-            // A kept disk, from an earlier boot: as that boot left it, if laid out as a fresh one.
-            _ if spec.keep && disk.exists() => check_layout(spec, disk)?,
-            // Packed as `./mkimage` packs it, afresh for every boot.
-            Some(recipe) => {
-                let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-                let recipe = crate::disk::Recipe::load(&root.join(recipe))?;
-                let (mut bytes, verified) = crate::disk::pack(&recipe, &root, spec.stage.as_deref())?;
-                if spec.flip_version {
-                    let signed: Vec<_> = verified.iter().filter(|v| v.signed.is_some()).collect();
-                    ensure!(!signed.is_empty(), "a flipped version needs a signed volume");
-                    for v in signed {
-                        crate::disk::flip_version(&mut bytes, v)?;
-                    }
-                }
-                std::fs::write(disk, bytes)?;
-            }
-            None => {
-                std::fs::File::create(disk)?.set_len(spec.size_kib * 1024)?;
-                if spec.partitions > 0 {
-                    let sectors = spec.size_kib * 1024 / crate::disk::SECTOR;
-                    std::fs::write(disk, crate::disk::gpt_disk(sectors, spec.partitions))?;
-                }
-            }
-        }
+    // The vault disk sits beside the data disk, `<disk>.vault.img`, kept with it.
+    let vault = disk.with_extension("vault.img");
+    for (spec, path, id, bus) in
+        [(&boot.disk, disk, "disk0", DISK_BUS), (&boot.vault, vault.as_path(), "disk2", VAULT_BUS)]
+    {
+        let Some(spec) = spec else { continue };
+        make_disk(spec, path)?;
         // QEMU's option syntax separates with commas; a comma inside a value is doubled.
-        let file = disk.display().to_string().replace(',', ",,");
-        args.extend(["-drive".into(), format!("if=none,format=raw,id=disk0,file={file}")]);
-        args.extend(["-device".into(), format!("virtio-blk-device,drive=disk0,bus={DISK_BUS}")]);
+        let file = path.display().to_string().replace(',', ",,");
+        args.extend(["-drive".into(), format!("if=none,format=raw,id={id},file={file}")]);
+        args.extend(["-device".into(), format!("virtio-blk-device,drive={id},bus={bus}")]);
     }
     if let Some(spec) = &boot.userland {
         let staged = userland.context("a userland disk with nothing staged")?;
@@ -447,6 +430,36 @@ pub fn virtio_devices(
         args.extend(peer::capture_args(net, &peers));
     }
     Ok((args, forwards))
+}
+
+/// A writable disk at `disk` as `spec` says, for one boot: kept and there already, as the earlier
+/// boot left it, if laid out as a fresh one; packed from its recipe as `./mkimage` packs it,
+/// afresh for every boot; or zeroed at its size, with a GPT of its partitions.
+fn make_disk(spec: &crate::case::Disk, disk: &Path) -> Result<()> {
+    match &spec.recipe {
+        _ if spec.keep && disk.exists() => check_layout(spec, disk),
+        Some(recipe) => {
+            let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+            let recipe = crate::disk::Recipe::load(&root.join(recipe))?;
+            let (mut bytes, verified) = crate::disk::pack(&recipe, &root, spec.stage.as_deref())?;
+            if spec.flip_version {
+                let signed: Vec<_> = verified.iter().filter(|v| v.signed.is_some()).collect();
+                ensure!(!signed.is_empty(), "a flipped version needs a signed volume");
+                for v in signed {
+                    crate::disk::flip_version(&mut bytes, v)?;
+                }
+            }
+            Ok(std::fs::write(disk, bytes)?)
+        }
+        None => {
+            std::fs::File::create(disk)?.set_len(spec.size_kib * 1024)?;
+            if spec.partitions > 0 {
+                let sectors = spec.size_kib * 1024 / crate::disk::SECTOR;
+                std::fs::write(disk, crate::disk::gpt_disk(sectors, spec.partitions))?;
+            }
+            Ok(())
+        }
+    }
 }
 
 /// Refuse a kept disk whose layout is not the one `spec` packs now: its size, and its partition
@@ -1463,32 +1476,79 @@ mod tests {
         assert!(args("").is_empty());
     }
 
-    /// Each device sits on its fixed slot, alone or with the other: the card on bus 6
-    /// (`0x10007000`, interrupt 7), the disk on bus 7 (`0x10008000`, interrupt 8), and the
-    /// userland disk on bus 5 (`0x10006000`, interrupt 6), as `image/manifest.json` names them. A
+    /// Each device sits on its fixed slot, alone or with the others: the card on bus 6
+    /// (`0x10007000`, interrupt 7), the disk on bus 7 (`0x10008000`, interrupt 8), the userland
+    /// disk on bus 5 (`0x10006000`, interrupt 6), as `image/manifest.json` names them, and the
+    /// vault disk on bus 4 (`0x10005000`, interrupt 5), as `walfsd-boot`'s manifest names it. A
     /// boot proves QEMU puts them there: `init` refuses a device that is not where its manifest
-    /// says (`net-tcp` has no disk, `init-boot` all three).
+    /// says (`net-tcp` has no disk, `init-boot` the image's three, `walfsd-boot` both writable
+    /// disks).
     #[test]
     fn devices_sit_on_fixed_slots() {
         let net = format!("virtio-net-device,netdev=net0,bus={NET_BUS}");
         let disk = format!("virtio-blk-device,drive=disk0,bus={DISK_BUS}");
+        let vault = format!("virtio-blk-device,drive=disk2,bus={VAULT_BUS}");
         let devices = |case: &str| -> Vec<String> {
             args(case).windows(2).filter(|w| w[0] == "-device").map(|w| w[1].clone()).collect()
         };
         assert_eq!(devices("[net]\n"), [net.clone()]);
         assert_eq!(devices("[disk]\nsize_kib = 64\n"), [disk.clone()]);
-        assert_eq!(devices("[net]\n[disk]\nsize_kib = 64\n"), [disk, net]);
-        // The image's manifest names each device on one line.
-        let manifest = include_str!("../../../image/manifest.json");
-        for (name, bus) in [("net0", NET_BUS), ("disk0", DISK_BUS), ("disk1", USERLAND_BUS)] {
+        assert_eq!(devices("[net]\n[disk]\nsize_kib = 64\n"), [disk.clone(), net.clone()]);
+        assert_eq!(devices("[net]\n[disk]\nsize_kib = 64\n[vault]\nsize_kib = 64\n"), [disk, vault, net]);
+        assert_eq!(VAULT_BUS, "virtio-mmio-bus.4");
+        // The image's manifest names each device on one line; the vault proof case's names the
+        // vault disk's.
+        let line = |name: &str, bus: &str, space: &str| {
             let i: u64 = bus.strip_prefix("virtio-mmio-bus.").unwrap().parse().unwrap();
-            let line = format!(
-                "{{ \"name\": \"{name}\", \"base\": \"{}\", \"irq\": {}, \"dma\": true }}",
+            format!(
+                "{{{space}\"name\": \"{name}\", \"base\": \"{}\", \"irq\": {}, \"dma\": true{space}}}",
                 0x1000_1000 + i * 0x1000,
                 1 + i
-            );
+            )
+        };
+        let manifest = include_str!("../../../image/manifest.json");
+        for (name, bus) in [("net0", NET_BUS), ("disk0", DISK_BUS), ("disk1", USERLAND_BUS)] {
+            let line = line(name, bus, " ");
             assert!(manifest.contains(&line), "image/manifest.json lacks {line}");
         }
+        let proof = include_str!("../../../tests/data/walfsd/two-disks.json");
+        for (name, bus) in [("disk0", DISK_BUS), ("disk2", VAULT_BUS)] {
+            let line = line(name, bus, "");
+            assert!(proof.contains(&line), "tests/data/walfsd/two-disks.json lacks {line}");
+        }
+    }
+
+    /// A case's vault disk is a second writable disk beside its data disk, `<disk>.vault.img`,
+    /// laid out by its own table, on its own slot; a case without `[vault]` gets the very same
+    /// arguments as before there was one.
+    #[test]
+    fn the_vault_disk_sits_beside_the_data_disk() {
+        let dir = std::env::temp_dir().join(format!("testbench-qemu-vault-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let disk = dir.join("boot.img");
+        let one = "[disk]\nsize_kib = 64\npartitions = 1\n[net]\n";
+        let (without, _) = virtio_devices(&boot(one), &disk, None, &[]).unwrap();
+        let (with, _) = virtio_devices(
+            &boot(&format!("{one}[vault]\nsize_kib = 128\npartitions = 2\n")),
+            &disk,
+            None,
+            &[],
+        )
+        .unwrap();
+        let vault = disk.with_extension("vault.img");
+        assert_eq!(std::fs::metadata(&disk).unwrap().len(), 64 * 1024);
+        assert_eq!(std::fs::metadata(&vault).unwrap().len(), 128 * 1024);
+        let sectors = 128 * 1024 / crate::disk::SECTOR;
+        assert_eq!(std::fs::read(&vault).unwrap(), crate::disk::gpt_disk(sectors, 2));
+        let drive = format!("if=none,format=raw,id=disk2,file={}", vault.display());
+        let device = format!("virtio-blk-device,drive=disk2,bus={VAULT_BUS}");
+        let added: Vec<_> = with.iter().filter(|a| !without.contains(a)).collect();
+        assert_eq!(added, [&drive, &device], "{with:?}");
+        // The vault's four arguments follow the data disk's; everything else is as it was.
+        let i = with.iter().position(|a| a == &drive).unwrap();
+        assert_eq!([&with[..i - 1], &with[i + 3..]].concat(), without);
+        assert_eq!(with[i - 1], "-drive");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     /// The userland disk sits on its own slot, bus 5 (`0x10006000`, interrupt 6), beside the

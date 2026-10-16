@@ -16,7 +16,7 @@ expect = [
     '^init: the manifest is checked: 5 servers, bound \d+ pages$',
     '^init: started littlefsd, console [0-9a-f]{16}$',
     '^init: started client, console [0-9a-f]{16}$',
-    '^\[con [0-9a-f]{16}\] littlefsd-client wrote, read, renamed and removed$',
+    '^\[con [0-9a-f]{16}\] littlefsd-client wrote, read, renamed and removed at littlefsd:data$',
     '^\[con [0-9a-f]{16}\] littlefsd-client TEST PASSED$',
 ]
 forbid = ['init: refused the boot', '^init: .* (exited|faulted|was killed)', 'init: restarted', 'init: rebooting']
