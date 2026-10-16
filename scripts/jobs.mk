@@ -7,7 +7,9 @@
 # hand goes through q too: `q run --cores 8 -- cargo build ...`, `q run --cores 4 -- cargo test ...`.
 #
 # targets
-#   rv64/<case>  rv32/<case>   that one case on that width; log target/jobs/<w>-<case>.log: from
+#   rv64/<case>  rv32/<case>   that one case on that width; log target/jobs/<w>-<case>.log, and
+#                              when it fails its console and session logs beside it as
+#                              target/jobs/<w>-<case>.smp<N>*.log (`--keep-failed`); from
 #                              target/prebuilt with no cargo when its <w>/index.json exists
 #                              (`target/prebuilt/testbench --prebuilt target/prebuilt`), else
 #                              `cargo testbench`; a case with no `arch` (it boots nothing)
@@ -93,7 +95,7 @@ build-rv64 build-rv32: build-%:
 define case_recipe
 @mkdir -p $(logs); w=$(@D); c=$(@F)
 bench=(cargo testbench); [ -f $(prebuilt)/$$w/index.json ] && bench=($(prebuilt)/testbench --prebuilt $(prebuilt))
-$(q) run $(1) --name $$w/$$c -- "$${bench[@]}" --exact --arch $$w $$c > $(logs)/$$w-$$c.log 2>&1; rc=$$?
+$(q) run $(1) --name $$w/$$c -- "$${bench[@]}" --exact --arch $$w $$c --keep-failed $(logs) > $(logs)/$$w-$$c.log 2>&1; rc=$$?
 grep -E '^(PASS|FAIL|SKIP)' $(logs)/$$w-$$c.log || tail -5 $(logs)/$$w-$$c.log
 echo "$@ rc=$$rc ($(2))"; exit $$rc
 endef

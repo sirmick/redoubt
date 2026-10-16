@@ -23,7 +23,10 @@ target/prebuilt/testbench --prebuilt target/prebuilt --exact --arch rv64 timer  
 
 The exit status is non-zero if anything fails. Each run keeps its boots' console logs, SSH
 transcripts, disk images and captures in a directory of its own,
-`target/testbench/run-<pid>-<time>/`, and `target/testbench/last` names the latest. Runs may
+`target/testbench/run-<pid>-<time>/`, and `target/testbench/last` names the latest. Only the
+newest few run directories are kept, so `--keep-failed DIR` copies a failing boot's console log,
+its second boot's and its sessions' into `DIR` as `<arch>-<case>.smp<N>…`, where they outlive
+the run (`host:testbench::a_failing_boots_logs_are_kept_under_its_jobs_name`). Runs may
 overlap in one worktree: each packs the kernel cargo reports for its own features, never the
 shared `target/` path another run may have rebuilt. A case the host cannot run (no RustSBI
 firmware, no OpenSSH) fails and says what is missing; `--allow-skip` reports it as skipped
@@ -194,7 +197,7 @@ description says so ("verdict: survival only").
 
 ### The case file
 
-Status: built · partly tested: that an unknown field or table is refused is read from the code, not attacked by a case · tested: bench:bench-console-after-expect, bench:bench-poweroff-missing, host:testbench::a_case_out_of_the_whole_run_runs_only_by_name, host:testbench::host_tests_route_only_to_a_requested_workspace_and_forward_features, host:testbench::an_oracles_tools_must_be_on_the_path, host:testbench::sweep_seeds_are_ranges_or_lists, host:testbench::a_sweep_is_refused_before_anything_builds, host:testbench::sweep_boots_have_their_own_files, host:testbench::the_join_prints_in_seed_order_and_counts_failures, host:testbench::a_fanout_is_of_values_files_or_tests, host:testbench::a_job_passes_fails_or_runs_past_its_deadline, host:testbench::a_cpu_list_counts_its_ranges, bench:rt-miri, bench:model-mutations
+Status: built · partly tested: that an unknown field or table is refused is read from the code, not attacked by a case · tested: bench:bench-console-after-expect, bench:bench-poweroff-missing, host:testbench::a_case_out_of_the_whole_run_runs_only_by_name, host:testbench::host_tests_route_only_to_a_requested_workspace_and_forward_features, host:testbench::an_oracles_tools_must_be_on_the_path, host:testbench::sweep_seeds_are_ranges_or_lists, host:testbench::a_sweep_is_refused_before_anything_builds, host:testbench::sweep_boots_have_their_own_files, host:testbench::the_join_prints_in_seed_order_and_counts_failures, host:testbench::a_fanout_is_of_values_files_or_tests, host:testbench::a_job_passes_fails_or_runs_past_its_deadline, host:testbench::a_cpu_list_counts_its_ranges, host:testbench::a_failing_boots_logs_are_kept_under_its_jobs_name, bench:rt-miri, bench:model-mutations
 
 A case is one TOML file. Paths in it are relative to the workspace root, and an unknown field or
 table is an error, so a misspelling cannot silently drop a check. The one exception is a `programs`
@@ -337,10 +340,12 @@ the class for it: a boot takes one core per guest hart, a `host-tests` case or a
 but outside its deadline, so it stays in this class: [Elixir oracles](#elixir-oracles)), a case
 with a `fanout` two for its build while each of its jobs asks `q` for its own, and the host-clock cases
 go quiet. A case target runs that case alone (`--exact`), from `target/prebuilt` when its width
-is there ([building once](#building-once)), else through `cargo testbench`. A case with no `arch`
-boots nothing, so it runs under `rv64/<case>` alone, and `rv32/<case>` does nothing. Case
-targets may run at once (`set CASES="..."` runs a set on both widths) only while each still
-takes its own lease, the quiet ones run alone on the quiet set and the `[net]` ones keep the
+is there ([building once](#building-once)), else through `cargo testbench`; its output is
+`target/jobs/<arch>-<case>.log`, and a failing boot's console and session logs are kept beside
+it (`--keep-failed`), so a transcript is never lost to the run directories' pruning. A case
+with no `arch` boots nothing, so it runs under `rv64/<case>` alone, and `rv32/<case>` does
+nothing. Case targets may run at once (`set CASES="..."` runs a set on both widths) only while
+each still takes its own lease, the quiet ones run alone on the quiet set and the `[net]` ones keep the
 `net` lock, as every case target does: the leases, not make, keep the host from being
 oversubscribed. `q ls` shows
 the core map and the queue; `q log` the recent jobs with the time each waited and ran.

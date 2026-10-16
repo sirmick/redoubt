@@ -9,7 +9,9 @@
 //!   completion call is always parked, so they are answered as they come, and the thread idles in `receive`
 //!   on `OWN`; without, it has one connection and waits in its completion call itself.
 //! - `second ENDPOINT OWN PEER`: waits on `OWN` for the burst, reads `/aio` by one call per request while the
-//!   burst's 64 reads are held at `littlefsd`, and sends its result to `PEER`.
+//!   burst's 64 reads are held at `littlefsd`, says its verdict, and only then sends its result to `PEER`:
+//!   the burst cannot print before the second's line is on the console, so the case's lines come in the order
+//!   it expects them.
 //!
 //! Each prints its verdict on its console, and the burst, the case's reporter, `TEST PASSED`; it
 //! prints how many threads it ran: itself and its waiters.
@@ -69,7 +71,8 @@ fn run(startup: &Startup) -> u32 {
             }
         }
         (Some("second"), Some(at), Some(own), Some(peer)) => match second(startup, &mut out, at, own, peer) {
-            Ok(verdict) => format!("aio-reader {verdict}\n"),
+            // Its verdict is said before the burst is told, so it has nothing left to say.
+            Ok(()) => String::new(),
             Err(why) => format!("aio-reader TEST FAILED: {why}\n"),
         },
         (part, ..) => format!("aio-reader TEST FAILED: no such part, or no endpoints: {part:?}\n"),
@@ -225,7 +228,11 @@ fn idle(hub: &mut Hub, own: &Endpoint, retries: &mut u64) -> Result<Option<Deliv
     }
 }
 
-fn second(startup: &Startup, out: &mut Out, at: &str, own: &str, peer: &str) -> Result<String, String> {
+/// The second program's part. Its verdict goes on its console before its answer goes to the
+/// burst: `consoled` serves its writes on one thread, in the order the calls arrive, so the
+/// burst, which prints only once told, prints after it. The case expects the lines in that
+/// order, and a run in which the burst's came first spent the whole deadline waiting for them.
+fn second(startup: &Startup, out: &mut Out, at: &str, own: &str, peer: &str) -> Result<(), String> {
     let (own, peer) = (endpoint(startup, own)?, endpoint(startup, peer)?);
     while !matches!(own.receive(FOREVER, 0), Ok(Event::Send(d)) if d.words[0] == GO) {}
     let conn =
@@ -234,10 +241,13 @@ fn second(startup: &Startup, out: &mut Out, at: &str, own: &str, peer: &str) -> 
     let mut got = [0u8; EACH];
     let n = file.read_at(&mut out.lend, 0, &mut got).map_err(|e| format!("read: {e:?}"))?;
     let ok = n == EACH && got.iter().enumerate().all(|(i, b)| *b == byte(i));
+    if ok {
+        out.say("aio-reader second: read answered during the burst\n").map_err(|e| format!("say: {e:?}"))?;
+    }
     peer.send(&[READ_OK, u64::from(ok), 0, 0], &[], None, FOREVER)
         .map_err(|(e, _)| format!("answer: {e:?}"))?;
     if !ok {
         return Err(format!("read {n} bytes, not /aio's first {EACH}"));
     }
-    Ok(String::from("second: read answered during the burst"))
+    Ok(())
 }
