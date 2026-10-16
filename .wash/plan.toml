@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 294
+revision = 312
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -2342,7 +2342,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "STEWARD3"
   body = "Brief: .wash/local/STEWARD3-implementer.md point 1, cases 1-3 and 8's host tests. The core already decides leases (STEWARD0/1); the server lacks the operations. Build: `start_agent` from an unlabelled session's badge answers Lease {id, name} with the batch (CreateBudget under the sponsor's sub-budget for the label set with the lease's limits, labels and deadline, at most MAX_LEASE, refused longer, never shortened; Connect to the lease's roots; Launch of beamlet with the agent's module; the exit notice to the steward); the lease ends by deadline (the kernel's destruction, the steward's Exited from the notice), by `end_lease` from any of the sponsor's unlabelled sessions answered from the receive loop ahead of admission, or by blame (STEWARD3C); each path runs notify_sponsor, a send on the sponsor sessions' steward connections that beamlet surfaces as a message and the shell prints, naming the lease and never why. Connections end by the launcher's disconnect until STEWARD3R lands (R41 stays Open with its words). Conversion from AGENT0: the manifest's `agent` principal (AGT1: own key, home, sub-budget, 'sponsored by alice in name') gains a `sponsor` line init checks; a login as agent is the sponsor's lease, its session budget carved under alice's sub-budget with deadline MAX_LEASE, so alice's sessions can end_lease it and receive its end; AGT2's machine mode and AGT3's compile run inside it unchanged (agent-login, launch-system and the AGT3 case pass as they are, plus the notice when the lease ends). Cases: steward-lease-ends, steward-end-lease (p99 125 ms call-to-notice, net of audits), steward-sub-agent-dies-with-agent; host: end_lease answered under a flood, the new badge classes. Pages: steward.md Leases to built, R39, Authority; agents.md's lease sections; sessions.md; init.md's manifest (sponsor); SECURITY.md R39; libs/wire/tables/steward.md. Tier A: steward-red-2. Size M."
   state = "active"
-  revision = 253
+  revision = 312
 
 [[node]]
   id = "STEWARD3B"
@@ -2398,5 +2398,14 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "STEWARD3"
   body = "Found by STEWARD3A (.wash/local/STEWARD3A-questions.md 'Q4', wall 1; evidence .tmp/STEWARD3A/exp11, exp12 in its worktree): walfsd's `limits` (servers/walfsd/src/server.rs; littlefsd the same) admit `in_flight: 2` multiplexed sessions per bucket, and a bucket is keyed by account (serving.md 'Buckets', R26). Alice's console and SSH sessions hold both, so a lease of hers (her account by design) has its session-opening collect answered REFUSED in 3 ms and every file op is Eio; the same cap refuses her third live context its home, which the manifest allows (contexts cap 3): a latent defect no case exercises. With in_flight 4 the lease's read succeeds. Lever: the cap is what the manifest lets one account hold at once, stated as a derivation: 1 console session + the contexts cap + the leases per principal + 1 spare for a context detaching while another attaches (its connection lives until the relay ends); the image gives 6. A bench host test holds each server's constant to the largest such sum over the tree's manifests (every_beamlet_is_told_its_own_budget's pattern). `Limits::fits` against BUDGET with buckets=6: 6 x (364,544 + 262,144) = 3.76 MB > 3 MiB, so BUDGET and both servers' heap caps rise, the arithmetic on walfsd.md, littlefsd.md (admission lines, the limits doc comment) and image/README.md. Cases: steward-three-contexts (alice's three contexts live, each reading and writing its home, both widths); STEWARD3A's lease cases run on this branch until it merges. Gates: walfsd-quota, steward-home-quota, steward-context-cap, the memory scan for both servers (peak under half the new cap), both widths; the host test. Files: servers/walfsd, servers/littlefsd, libs/fileserver if the limits are shared, tools/testbench, image/manifest.json and tests/data manifests' heap_pages, docs/servers/walfsd.md, littlefsd.md, serving.md, image/README.md. Tier A (a shared server's admission): steward-red-2. Size S."
-  state = "active"
-  revision = 294
+  state = "done"
+  revision = 310
+
+[[node]]
+  id = "B77"
+  title = "Every [net] case waits on one machine-wide lock (train 40: 3.4 h summed, 1,353 s once for a 0.5 s case); the lock guards only a port race, so the net cases lease ports from q instead"
+  template = "package"
+  parent = "M2"
+  body = "Measured on train 40 (B76 + STEWARD3S, 704 pass, ~5.5 h wall; `scripts/q log`): 30 cases took lock=net, summed wait 12,360 s (3.4 h), the longest 1,353 s for rv32 bench-net-peer (a 0.5 s case) while members' net gates (STEWARD3A, 3Q) held the lock; non-net waits summed 1,690 s. What the lock guards (testbench.md:301-303): the bench picks a forwarded host port by binding and releasing it (qemu.rs:275-284 free_ports; the poke's UDP port) before QEMU binds it, so two boots at once may race for a port. Nothing else in a [net] case is shared: peers are guestfwd to a helper with no host listener (peer.rs:5-9), the capture a per-boot pcap, slirp per QEMU. Lever: `q run --ports N` leases N host ports no other lease holds (REDOUBT_PORTS=lo-hi in the job's environment, released with the job, also on a kill); the bench binds its forwards and the poke inside the range when the variable is set (free_ports stays outside q); jobs.mk's net recipe takes `--ports` and drops `--lock net`. A train's net tail and a member's net gate then run side by side. Class (ii) on testbench.md stays: bench-ssh-guest and bench-ssh-loopback-deadlock (timeout expectations) and the host-clock cases run alone for their own reasons, none for a port; the page says the race is gone under q. Gates: the net cases both widths through q (bench-net-peer, net-tcp, net-attacks, the pcap cases, the loopback set); two members' net gates beside a bench once, no port failure; a train's net tail wall time and summed wait before/after from `q log`, quoted; q's tests for the lease (no overlap; freed with the job). Files: scripts/q, scripts/jobs.mk, tools/testbench/src/qemu.rs, peer.rs, docs/testbench.md. Tier B (bench and pool): kernel-red-2. Size S-M. Launchable beside 3A/3Q; the q daemon's restart lands at a train boundary, the orchestrator's call."
+  state = "done"
+  revision = 302
