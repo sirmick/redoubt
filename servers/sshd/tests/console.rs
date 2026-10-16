@@ -168,8 +168,8 @@ fn a_login_s_two_consoles_and_only_the_steward_s_ends_the_channel() {
     let mut nine = NineServer::new(cons, LIMITS, 1).unwrap();
     let me = Caller { badge: 1, account: 0, labels: Labels::new() };
     let root = || (File, redoubt_sshd::console::qid());
-    let (_, _, steward) = nine.mint_rooted(&me, root(), &mut Mints(10)).unwrap();
-    let (_, _, relay) = nine.mint_rooted(&me, root(), &mut Mints(20)).unwrap();
+    let (_, _, steward) = nine.mint_rooted(&me, root(), None, &mut Mints(10)).unwrap();
+    let (_, _, relay) = nine.mint_rooted(&me, root(), None, &mut Mints(20)).unwrap();
     assert_ne!(steward, relay);
     let consoles = Consoles { steward, relay };
     assert!(consoles.may_end(steward));

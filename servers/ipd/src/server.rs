@@ -356,8 +356,11 @@ fn serve_own<N: Netif, E: Entropy>(
     sent.map(|_| ())
 }
 
-/// `grant(scope)`: a connection whose scope is `scope`, which must be canonical and no wider than
-/// the caller's own. Makes no system call but through `kernel`. Returns the outcome and, if a
+/// `grant(scope, revocation)`: a connection whose scope is `scope`, which must be canonical and
+/// no wider than the caller's own, minted in the revocation scope the request's one optional
+/// handle names, if it brought one (servers/steward.md R41), so that scope's end ends the
+/// connection in every table; the handle is closed once minted with, as every handle a request
+/// brings is. Makes no system call but through `kernel`. Returns the outcome and, if a
 /// connection was minted, its badge (to undo if the reply is not delivered).
 pub fn answer_grant<N: Netif, E: Entropy>(
     nine: &mut NineServer<NetFs<N, E>>,
@@ -380,10 +383,11 @@ pub fn answer_grant<N: Netif, E: Entropy>(
     if !held.narrows(&requested) {
         return fail(ErrorCode::NotPermitted);
     }
+    let revocation = handles.as_slice().first().copied();
     let scope = nine.fs.add_scope(requested);
     let root = Node { scope, at: At::Root };
     nine.fs.set_granting(true);
-    let made = nine.mint_rooted(caller, (root, root.qid()), kernel);
+    let made = nine.mint_rooted(caller, (root, root.qid()), revocation, kernel);
     nine.fs.set_granting(false);
     let (handle, id, badge): (Handle, u64, u64) = match made {
         Ok(made) => made,
@@ -393,15 +397,18 @@ pub fn answer_grant<N: Netif, E: Entropy>(
             return fail(code);
         }
     };
+    // Our copy of the handle is closed once the reply has copied it, and the revocation scope,
+    // which stamped it, with it.
+    let mut close = *handles;
+    let _ = close.push(handle);
     match Reply::Grant(GrantReply { id }).encode(lend) {
         Ok(words) => {
             let send = Handles::from_slice(&[handle]).unwrap_or(none);
-            (Outcome { words, send, close: send }, Some(badge))
+            (Outcome { words, send, close }, Some(badge))
         }
         Err(_) => {
             nine.unmint(badge);
             nine.fs.collect_scopes();
-            let close = Handles::from_slice(&[handle]).unwrap_or(none);
             (Outcome { words: MALFORMED, send: none, close }, None)
         }
     }

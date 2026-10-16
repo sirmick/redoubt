@@ -4,7 +4,7 @@ The `ipd` protocol's message and error tables, included by its owning page, [ser
 <!-- wire: ipd ninep -->
 | Opcode | Kind | Message | Fields | Reply |
 | --- | --- | --- | --- | --- |
-| 16 | call | `grant` | `scope: bytes` | `conn: handle[0] endpoint`, `id: u64` |
+| 16 | call | `grant` | `scope: bytes`, `revocation: handle[0]? budget` | `conn: handle[0] endpoint`, `id: u64` |
 | 17 | send | `frame` | `frame: bytes` | - |
 
 <!-- wire-errors: ipd -->

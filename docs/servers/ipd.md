@@ -91,10 +91,12 @@ The table: [libs/wire/tables/net_ctl.md](../../libs/wire/tables/net_ctl.md).
 
 ### Scopes and grants
 
-<details><summary>Status: built · tested (11)</summary>
+<details><summary>Status: built · tested (13)</summary>
 
 - bench:net-attacks
 - host:redoubt-ipd::a_scope_permits_exactly_what_its_rules_contain
+- host:redoubt-ipd::a_granted_connection_in_a_scope_ends_when_the_scope_is_destroyed
+- host:redoubt-ipd::a_grant_is_minted_in_the_revocation_scope_it_brings
 - host:redoubt-ipd::a_grant_only_narrows
 - host:redoubt-ipd::a_grant_never_widens_or_adds_listen
 - host:redoubt-ipd::the_encoding_is_canonical_and_round_trips
@@ -120,7 +122,14 @@ The table: [libs/wire/tables/net_ctl.md](../../libs/wire/tables/net_ctl.md).
   ([R61 (scopes only narrow)](#r61-scopes-only-narrow)). It replies with the connection and its id,
   and follows the typed grant pattern ([wire](wire.md#granting-and-releasing)); the connection is
   an ordinary one in the skeleton's table (`mint_rooted`), freed by `disconnect`, and undone if its
-  reply is lost.
+  reply is lost. Its one optional handle slot, `revocation: handle[0]? budget`, is the revocation
+  budget the connection is minted in, what `new_connection`'s `scope` slot names
+  ([wire](wire.md#ninep_common)), called `revocation` here because on this page a scope is the
+  prefixes and ports a connection may reach: the skeleton stamps the handle with it, so
+  destroying the budget ends the connection in every table at once, and `ipd` closes the handle
+  once minted with; a budget not below `ipd`'s own stamp is the kernel's refusal, answered
+  `not_permitted` ([R41 (narrowing by revocation scope)](steward.md#r41-narrowing-by-revocation-scope)).
+  The steward sends a session's or lease's revocation budget with every grant it asks for.
 - **The scope's encoding** in a `grant`: `count: u8`, then per rule `kind: u8` (1 connect,
   2 listen), `addr: bytes[4]` (network order; zero for listen), `len: u8` (zero for listen),
   `lo: u16`, `hi: u16`. It is canonical and round-trips.

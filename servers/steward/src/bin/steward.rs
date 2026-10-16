@@ -446,9 +446,8 @@ mod machine {
             Ok(self.keep(minted.handle()))
         }
 
-        /// Every connection a 9P server mints for the child is minted in `scope` (R41). `ipd`'s
-        /// typed `grant` carries no scope, so that connection ends by the disconnect alone
-        /// (servers/steward.md, "Residual risks").
+        /// Every connection a server mints for the child is minted in `scope` (R41): a 9P
+        /// server's by `new_connection`'s scope, `ipd`'s by its typed `grant`'s.
         fn connect(&mut self, domain: &Domain, slot: u16, scope: Handle) -> Result<Option<u64>, Error> {
             let principal = self.principal(domain).ok_or(Error::BadHandle)?;
             let Some(bound) = binding(&self.own_lines, &principal, domain.labels().as_slice(), slot) else {
@@ -466,7 +465,7 @@ mod machine {
                         conn.endpoint(),
                         &mut self.lend,
                         &grant,
-                        &[],
+                        &[scope],
                         |r, got| match r {
                             ipd::Reply::Grant(g) => got.take(0).map(|h| (h, g.id)),
                             _ => None,

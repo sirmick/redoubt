@@ -14,8 +14,8 @@ defmodule Redoubt.Wire.Client.Ipd do
   alias Redoubt.Wire.Proto.Ipd, as: P
 
   @doc "Calls `grant`, waiting at most `timeout` ms."
-  def grant(conn, v_scope, timeout \\ C.timeout()) do
-    C.call(conn, P, {:grant, %{scope: v_scope}}, [], timeout)
+  def grant(conn, v_scope, h_revocation \\ nil, timeout \\ C.timeout()) do
+    C.call(conn, P, {:grant, %{scope: v_scope}}, Enum.reject([h_revocation], &is_nil/1), timeout)
   end
 
   @doc "Sends `frame`, one way."

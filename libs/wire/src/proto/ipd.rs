@@ -7,6 +7,10 @@ use crate::codec::{Error, Reader, Writer};
 use crate::typed::{self, Layout, Words};
 
 /// `grant`: opcode 16, buffer; reply [`GrantReply`].
+///
+/// Handle slots: `revocation` (slot 0, budget, optional).
+/// Kinds are documentation, checked by use: a handle of the wrong kind gets `WrongObject`
+/// on first use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Grant<'a> {
     pub scope: &'a [u8],
@@ -34,7 +38,7 @@ pub struct FrameReply {}
 
 /// Requests by opcode.
 const REQUESTS: &[Layout] = &[
-    Layout { opcode: 16, inline: false, handles: 0, optional: 0 },
+    Layout { opcode: 16, inline: false, handles: 1, optional: 1 },
     Layout { opcode: 17, inline: false, handles: 0, optional: 0 },
 ];
 
@@ -49,7 +53,7 @@ impl<'a> Message<'a> {
     /// The handles it carries, by slot.
     pub fn handle_names(&self) -> &'static [&'static str] {
         match self {
-            Message::Grant(_) => &[],
+            Message::Grant(_) => &["revocation"],
             Message::Frame(_) => &[],
         }
     }

@@ -378,7 +378,8 @@ fuzz_target!(|data: &[u8]| {
                 // undone as an undelivered reply would be (servers/serving.md, "Replies and
                 // rollback").
                 let root = arg as usize % TREE.len();
-                if let Ok((_, id, badge)) = server.mint_rooted(&caller, (root, qid(root)), &mut kernel) {
+                if let Ok((_, id, badge)) = server.mint_rooted(&caller, (root, qid(root)), None, &mut kernel)
+                {
                     if arg & 0x100 == 0 {
                         ids.push((id, caller));
                     } else {
