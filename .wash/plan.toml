@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 338
+revision = 341
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -2361,8 +2361,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "STEWARD3"
   needs = ["STEWARD3A"]
   body = "Brief: .wash/local/STEWARD3-implementer.md point 3, case 7 and the blame timeout of 8. The kernel's blame reaches init through the exit notice (R21, built); init's restart machine has the blame half planned (init.md 'Restarts and reboots'). Build: `blame(account, labels, server)` accepted on init's root badge class only; the core counts per (account, label set) and at BLAME_COUNT within BLAME_WINDOW answers a lockout: DestroyBudget for every session and lease of that domain (STEWARD3A's leases included), a refusal of new sessions for it until the window passes, both audited as console lines (STEWARD2's residual stands until M4); the steward answers init within its blame timeout, and a blame it cannot take in time is init's console line, not a restart loop. Case steward-blame-lockout: bob's session crashes walfsd three times within the window with a named real fault, or the bench's fault injection if one exists (the case says which; a fault that does not exist is a design question, not an invention); every budget of bob's {} is destroyed, his next login is refused until the window passes (virtual time advanced), alice's session is untouched, walfsd restarted by init; a second run with the crash from bob's vault session leaves his unlabelled session untouched (R40 keys by label set). Host: the blame timeout; the lockout's refusal tells nothing apart (rule 3's refusals). Pages: steward.md Crash blame and R40 to built, 'Failure and restart' residual ('the steward's restart ends every session'), init.md's blame half, SECURITY.md R40, agents.md's blame bullet. Tier A: steward-red-2. Size S."
-  state = "reported"
-  revision = 328
+  state = "done"
+  revision = 341
   overrides = ["2026-10-16: started by Orchestrator before STEWARD3A (active): STEWARD3A is accepted; it is active only for its train-42 fix (an amend); 3C's base is its accepted content"]
 
 [[node]]
