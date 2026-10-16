@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 341
+revision = 352
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -2351,8 +2351,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "STEWARD3"
   needs = ["STEWARD3A"]
   body = "Brief: .wash/local/STEWARD3-implementer.md point 2, cases 4-6 and the fuzz target of 8. Build: `submit` from a session's or agent's badge carries the structured Content (an agent in a label set, a note; declassify and push are STEWARD4's) and the reason; the core freezes it, draws id and binding hash, checks the pending cap and fair share, answers Request {id}; its notify reaches only channels whose labels include the request's. sshd recognises the user `approve`, authenticates with the principal's approval key only (the core's approval_key guard, holds first; a login key refused), opens the approval channel at the steward (ApprovalOpened on sshd's root badge) and serves it as a consol console whose other end is the steward: the steward writes the core's rendered screens (printable ASCII only, render.rs) and reads `approve <id> <hash>` and `deny <id>`; a hash not the last screen's is HashMismatch to the channel only, never to the requester; the close is ApprovalClosed. A granted labelled agent runs STEWARD3A's batch from the approval row. Cases: steward-approve-box (the labelled agent granted and running; the wrong hash refused; the login key refused by sshd), steward-screen-inert (64 chars of ANSI, bidi and format in the reason: no 0x1B and nothing outside 0x20..0x7E in the relayed bytes), steward-pending-cap (PENDING_CAP + 1 refused Cap; a second agent's fair share; a dead session's requests gone); host: the channel's line parser as a fuzz target. Pages: steward.md The powerbox and approvals, R38, R42, Authority (the channel's badge class); sshd.md approve@box and R67 to built; sessions.md approve@; SECURITY.md rows; the wire table. Keys: an approval key per principal in tests/keys and the manifest. Tier A: steward-red-2. Size M."
-  state = "active"
-  revision = 319
+  state = "done"
+  revision = 348
 
 [[node]]
   id = "STEWARD3C"
@@ -2418,8 +2418,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "STEWARD3"
   needs = ["STEWARD3Q"]
   body = "Found by STEWARD3C (.wash/local/STEWARD3C-questions.md Q1; ruling .wash/local/STEWARD3C-Q1-ruling.md): a shared server restarts with empty tables (R27), so the steward's kept fresh connection at walfsd:data (init.md 'Fresh connections per child') is dead, every later login fails its home step, and every live session's home connection is dead too; init has no way to hand a running server a new connection (init.md's consoled residual, the file servers' and ipd's as well). m3-agents.md's crash-blame row ('Alice is unaffected when walfsd panics') assumes this mechanism. Lever, one path for every shared server: (1) init, after restarting a server, makes the steward a new fresh connection there and calls the steward's root-class `reconnected(server, connection: handle[0])`; the steward replaces its kept connection; the records below the dead one died with the instance, so nothing leaks and init's release at the steward's exit still frees everything. (2) The steward sends `server_restarted(server)` on the `notices` endpoint of every session the server served. (3) A session re-binds: `rebind(slot)` from its badge mints a new connection below the new kept one, in the session's scope; the shell re-opens the binding on the notice; a session that never re-binds keeps `enotconn`. consoled's restart follows the same path or is stated as not covered. Cases: steward-server-restart (bob's write cuts walfsd:data; alice's and bob's sessions re-bind and read their homes; a login after the restart succeeds; three cuts reach R40's lockout on the machine, closing 3C's residual); host: init's call, the steward's rows, the oracle traces. Pages: steward.md 'Failure and restart' (the residual becomes the rule), init.md, agents.md, m3-agents.md's row, SECURITY.md R40 to tested. Files: servers/init, servers/steward, libs/steward (rows, oracle, model), the wire table, the shell's binding code, tests/. Tier A: steward-red-2. Size M."
-  state = "active"
-  revision = 327
+  state = "reported"
+  revision = 352
 
 [[node]]
   id = "B78"
@@ -2429,3 +2429,13 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "STEWARD3C's report (.wash/local/STEWARD3C-report.md:98-101): the search index reached 10,000,112 bytes with its prose and mdbook warns above 10 MB; `the_book_builds` (tools/doccheck/tests/docs.rs:19) fails on any WARN, so the implementer trimmed ~600 bytes to pass, and the next package adding a sentence fails the same way. The book's markdown is ~1.6 MB (testbench.md 136 KB, scheduling.md 125 KB, beamlet.md 105 KB the largest); elasticlunr's index is several times the text, and `[output.html.search]` (docs/book.toml) sets only `enable`. Lever, measured not guessed: build the index with each of mdbook's own knobs (`expand = false`, which drops prefix expansion and is the largest saving; `heading-split-level`; `teaser-word-count`) and record the index bytes and whether a search for a rule name (R41, `budget_pages`, `walfsd`) still finds its section; pick the smallest index whose search still finds those, aiming at least 30 % under the 10 MB WARN. Then the rule: a doccheck test reads the built index's size and fails at a stated ceiling below mdbook's WARN with the size and the three largest pages named, so a future failure says what grew instead of 'WARN'; docs/README.md states the ceiling and the headroom rule (evidence, tables and measurements beyond a page's argument go to .wash/local or a case comment, not the page; no page is split or removed here: a page leaving the book is the owner's). Gates: `cargo test -p redoubt-doccheck --test docs` green on the dev image (mdbook present), the three searches shown found, the index size quoted before and after, the ceiling test's negative (a fixture book over the ceiling fails naming its pages). Files: docs/book.toml, tools/doccheck/tests/docs.rs and a fixture, docs/README.md. Tier B (docs tooling): kernel-red-2. Size S."
   state = "done"
   revision = 334
+
+[[node]]
+  id = "STEWARD3Y"
+  title = "The steward's end batch blocks its loop on each server's disconnect, serving nobody while a server recovers: the disconnects become deferred cleanup after the destroy"
+  template = "package"
+  parent = "STEWARD3"
+  needs = ["STEWARD3X"]
+  body = "Found by STEWARD3X in steward-blame-lockout (.wash/local/STEWARD3X-ruling.md 'Q4 amended'; 3X's report names the stall): a session's end batch waited its full RELEASE_TIMEOUT (1 s) on the `ended` send to sshd's channel console after sshd had closed the channel first, and init's blame arriving then was lost; the same shape holds for an end batch's disconnect at a not-yet-serving server (walfsd's recovery, 580-953 ms measured). Every cleanup call in an end batch (the `ended` send, each server's disconnect) runs on the steward's loop with the call's full timeout, and during it the steward serves nobody (logins, blame, end_lease ahead of admission included). STEWARD3R's rule already separates cutoff from cleanup: destroying the scope is the cutoff; `ended` and the disconnects free records and never are the cutoff. Lever: the end batch replies after DestroyBudget; the cleanup calls become deferred steps the Machine keeps in a bounded queue and runs at its loop's turn, each bounded short (the steward's own send bound, not RELEASE_TIMEOUT), a timed-out one retried at the next turn with a stated retry cap, then dropped with a console line (a server's admission for that connection is then freed only by its own restart: the residual that remains; an `ended` to a channel sshd already closed needs no retry). The queue is bounded by the connections live sessions and leases hold, stated. Gates: host (the end's reply precedes any cleanup call; a timed-out step is retried then dropped with the line; the queue's bound); steward-blame-lockout and steward-server-restart with no blame lost and `lost` forbidden (the stall before/after quoted, both widths); steward-session-ends, steward-lease-ends and steward-end-lease's 125 ms p99 unchanged or better. Pages: steward.md 'Failure and restart' and init.md 'Residual risks' (3X's residual becomes the rule), the Machine's doc comment. Files: servers/steward (the Machine, drive.rs), tests/, docs. Tier A: steward-red-2. Size S."
+  state = "todo"
+  revision = 350
