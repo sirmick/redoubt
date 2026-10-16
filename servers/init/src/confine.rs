@@ -101,12 +101,15 @@ pub fn check(m: &Manifest) -> Result<(), Refusal> {
             }
         }
     }
-    // A volume: its own set, every server attaching it and every domain of a principal whose
-    // home is on it. A labelled domain reading a shared unlabelled volume is one such case.
+    // A volume: its own set, every server attaching it and, for a principal whose home is on
+    // it, the principal's unlabelled domain alone: under `confined` the steward binds a home to
+    // unlabelled sessions only, leaving a labelled session's home unbound with the push as its
+    // way in (servers/steward.md, "Declassification and push"), so a labelled domain never
+    // reads the shared unlabelled volume its principal's home is on.
     for (i, v) in m.volumes.iter().enumerate() {
         let mut sets = alloc::vec![set(&v.labels)];
         sets.extend(m.servers.iter().filter(|s| s.volume.as_ref() == Some(&v.name)).map(|s| set(&s.labels)));
-        for (p, domain) in principal_sets(m) {
+        for (p, domain) in principal_sets(m).into_iter().filter(|(_, d)| d.is_empty()) {
             let home = m.principals[p].home.as_deref().and_then(|h| h.split_once(':'));
             if home.is_some_and(|(volume, _)| volume == v.name) {
                 sets.push(domain);

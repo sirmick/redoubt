@@ -640,7 +640,10 @@ fn a_volume_s_labels_go_to_its_server_and_to_blkd() {
         )
     };
     assert_eq!(args(&m, "keyd").last().unwrap(), "labels=7");
-    assert_eq!(args(&m, "bootfsd"), ["buckets=6", "4000000:beamlet", "220000:piped", "230000:consrelay"]);
+    assert_eq!(
+        args(&m, "bootfsd"),
+        ["buckets=6", "4000000:beamlet", "220000:piped", "230000:consrelay", "150000:crossing"]
+    );
     assert_eq!(args(&m, "blkd"), ["endpoint=blkd", "labels.2=7"]);
 }
 
@@ -1987,4 +1990,52 @@ fn the_boot_profiles_unverified_copies_are_the_image_less_its_verification() {
     assert!(image.contains("\nverity = true\n"), "the image's userland volume is verified");
     let copy = body(include_str!("../../../tests/data/boot-profile/userland-unverified.toml"));
     assert_eq!(copy, image.replace("\nverity = true\n", "\n"));
+}
+
+/// A confined manifest in which a labelled domain's principal has a home on a shared unlabelled
+/// volume is not refused at the volume: the check counts the home's volume for the principal's
+/// unlabelled domain alone, since the steward leaves a labelled session's home unbound and
+/// offers the push (servers/steward.md, "Declassification and push"); a labelled server
+/// attaching the same volume is refused as before.
+#[test]
+fn confined_counts_a_home_for_the_principals_unlabelled_domain_alone() {
+    let mut m = without_volumes();
+    m.confined = true;
+    secrets(&mut m);
+    m.principals.push(Principal {
+        label_sets: vec![LabelSet { labels: vec![] }, LabelSet { labels: vec!["alice-secrets".into()] }],
+        home: Some("data:/home/alice".into()),
+        home_quota: Some(1 << 20),
+        ..alice()
+    });
+    m.volumes.push(Volume {
+        name: "data".into(),
+        partition: 0,
+        labels: vec![],
+        disk: None,
+        verity: None,
+        bytes: None,
+    });
+    // An unlabelled server attaching it: the home's server.
+    m.servers[0].volume = Some("data".into());
+    assert_eq!(redoubt_init::confine::check(&m), Ok(()));
+    // The same volume attached by a labelled server: two sets on one volume, refused.
+    m.servers[0].labels = vec!["alice-secrets".into()];
+    assert!(matches!(
+        redoubt_init::confine::check(&m),
+        Err(Refusal::Confined { sharing: Sharing::Volume, .. })
+    ));
+}
+
+/// The steward is told a confined manifest by one of its own lines, `confined`, the last of them,
+/// and nothing of the kind otherwise (servers/steward.md, "The manifest lines").
+#[test]
+fn the_steward_is_told_a_confined_manifest() {
+    let mut m = with_steward();
+    let steward = m.servers.iter().position(|s| s.name == "steward").unwrap();
+    let lines = args(&m, &m.servers[steward], &BUNDLE_KEY, &ENTRIES);
+    assert!(!lines.iter().any(|l| l == "confined"), "{lines:?}");
+    m.confined = true;
+    let lines = args(&m, &m.servers[steward], &BUNDLE_KEY, &ENTRIES);
+    assert_eq!(lines.last().map(String::as_str), Some("confined"), "{lines:?}");
 }

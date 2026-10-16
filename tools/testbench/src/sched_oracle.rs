@@ -3384,12 +3384,27 @@ const MEASURES: [&str; 5] = ["driver_wake", "timer_wake", "decision_wake", "dead
 /// bound: a receive's pump, a timer expiry's own walk, and a reconcile.
 const WALKS: [&str; 3] = ["pump", "expiry", "reconcile"];
 
+/// A line of the steward's console as the bench logs it, `[con <16 hex>] steward: ` before the
+/// steward's text: the prefix is cut, so the real steward's samples (`steward-latency`, its
+/// test-only `latency-probe`; kernel/scheduling.md, "Responsiveness") read as a program's. Any
+/// other line is left as it is: no other prefix, and no other program's, is a sample.
+fn unprefixed(line: &str) -> &str {
+    let Some(rest) = line.strip_prefix("[con ") else { return line };
+    let id = rest.get(..16).unwrap_or_default();
+    if id.len() == 16 && id.bytes().all(|b| b.is_ascii_hexdigit()) {
+        if let Some(text) = rest[16..].strip_prefix("] steward: ") {
+            return text;
+        }
+    }
+    line
+}
+
 /// The windows the program printed, `(end, gross)` in µs, and the count it took, by measure (its
 /// index in [`MEASURES`]) and group. Every group's windows must number its count.
 fn samples(log: &str) -> Result<BTreeMap<(usize, &str), Vec<(u64, u64)>>, String> {
     let mut windows: BTreeMap<(usize, &str), Vec<(u64, u64)>> = BTreeMap::new();
     let mut counts = BTreeMap::new();
-    for line in log.lines().map(|line| line.trim_end_matches('\r')) {
+    for line in log.lines().map(|line| unprefixed(line.trim_end_matches('\r'))) {
         let (sample, rest) = match (line.strip_prefix("LATENCY-SAMPLE "), line.strip_prefix("LATENCY-COUNT "))
         {
             (Some(rest), _) => (true, rest),
@@ -5987,6 +6002,21 @@ mod tests {
         assert!(run(&audited("LATENCY-SAMPLE N=1 timer_wake 9 6\n"), "").is_err());
         assert!(run(&audited("LATENCY-COUNT N=1 timer_wake 0\n"), "").is_ok());
         assert!(run(&audited(""), "lunch_p99_us=5").is_err());
+        // The real steward's samples arrive under its console's prefix and nobody else's.
+        let prefixed = audited(
+            "[con 0123456789abcdef] steward: LATENCY-SAMPLE N=4 decision_wake 9 6\n\
+             [con 0123456789abcdef] steward: LATENCY-COUNT N=4 decision_wake 1\n",
+        );
+        assert!(
+            run(&prefixed, "decision_wake_p99_us=10").is_ok(),
+            "{:?}",
+            run(&prefixed, "decision_wake_p99_us=10")
+        );
+        assert!(run(&prefixed, "decision_wake_p99_us=5").is_err_and(|e| e.contains("target missed")));
+        let other = audited("[con 0123456789abcdef] sshd: LATENCY-SAMPLE N=4 decision_wake 9 6\n");
+        assert!(run(&other, "decision_wake_p99_us=10").is_err_and(|e| e.contains("no decision_wake sample")));
+        let short = audited("[con 0123] steward: LATENCY-COUNT N=4 decision_wake 0\n");
+        assert!(run(&short, "decision_wake_p99_us=10").is_err_and(|e| e.contains("no decision_wake sample")));
     }
 
     type Rec = (u64, char, u64, u128);

@@ -132,6 +132,10 @@ defmodule Redoubt.ShellTest do
 
     assert Redoubt.Shell.enter_home(%{principal: "alice", home: nil}) == {:error, :no_home}
     assert File.cwd!() == here
+    # A labelled session told no home: a confined boot's, whose way in is a push.
+    labelled = %{principal: "alice", home: nil, labels: [{"alice-secrets", 7}]}
+    assert Redoubt.Shell.enter_home(labelled) == {:error, :no_home}
+    assert File.cwd!() == here
     gone = Path.join(dir, "gone")
     assert Redoubt.Shell.enter_home(%{principal: "alice", home: gone}) == {:error, :enoent}
     assert File.cwd!() == here
@@ -142,6 +146,7 @@ defmodule Redoubt.ShellTest do
 
     assert output ==
              "** no home to start in (:no_home); this session starts in #{here}\n" <>
+               "** no home in this label set: a push is the way in; this session starts in #{here}\n" <>
                "** no home to start in (:enoent); this session starts in #{here}\n"
   end
 

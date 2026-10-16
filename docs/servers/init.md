@@ -68,7 +68,7 @@ and `init`'s only input. Its entries:
 | `servers` | each server's name, program (a bundle entry), budget (pages, processes, weight), the devices it gets (each a `devices` name and the name the program looks it up by), volume (its range badge, minted by `init`, and its label ids as `labels=`; a volume's server has `program` `walfsd` or `littlefsd` for a writable volume, or `erofsd` for a read-only one, and no other key says the format), the endpoints it receives on, the endpoints it is handed (each an endpoint name and the root badge `init` mints for it: a decimal string below `FIRST_MINTED_BADGE`, never used twice at one endpoint), arguments, and its stack in pages (`stack_pages`, 16 if absent, at most 128), and its heap cap in pages (`heap_pages`, none if absent) |
 | `public` | the bundle entries `bootfsd` serves at `/boot`, by exact name |
 | `principals` | each principal's name, SSH public keys (`ssh-ed25519` only, each once across every principal's login and approval lists) for login and approval, budget (or, for a sponsored principal, `sponsor`: another, unsponsored, principal's name, and no budget: its sessions are leases carved from the sponsor's, [steward](steward.md#leases)), account, owned labels, the label sets it works under (each a fixed, equal share of the principal's budget), home (volume and path) and its quota (`home_quota`, bytes as a decimal string, required with a home), network scope (IP prefixes and ports), and optionally its contexts (`contexts`: `max`, the live contexts per label set, and `idle_secs`, how long one stays detached, each a number; [contexts](#contexts)) |
-| `steward` | optional; the `servers` entry that is the steward, which alone `init` hands `users` at step 6, and the sizes it carves (`sizes`: `session`, `agent`, `sub_agent` and `crossing`, each a budget, `agent` also with an optional `quota`, the bytes of its sponsor's home a lease's root is carved with, and `cost`, a budget object's own pages). `init` checks every limit nonzero, each size within every principal's smallest share and the agent's `quota` below every principal's `home_quota`, and hands the steward the principals and sizes as the manifest lines, then its own lines: label names, and each principal's home, labelled volumes and network scope, whose servers the steward's entry must be handed ([steward](steward.md#the-manifest-lines)) |
+| `steward` | optional; the `servers` entry that is the steward, which alone `init` hands `users` at step 6, and the sizes it carves (`sizes`: `session`, `agent`, `sub_agent` and `crossing`, each a budget, `agent` also with an optional `quota`, the bytes of its sponsor's home a lease's root is carved with, and `cost`, a budget object's own pages). `init` checks every limit nonzero, each size within every principal's smallest share and the agent's `quota` below every principal's `home_quota`, and hands the steward the principals and sizes as the manifest lines, then its own lines: label names, each principal's home, labelled volumes and network scope, whose servers the steward's entry must be handed, and `confined` when the manifest sets it ([steward](steward.md#the-manifest-lines)) |
 | `console` | optional; the principal whose unlabelled session the steward opens on the UART console ([steward](steward.md#authentication-and-sessions)); it needs a `steward`, and a name that is not a `principals` entry refuses the boot |
 | `confined` | optional; a boolean at the top level ([confinement](#the-confinement-check)) |
 
@@ -235,11 +235,14 @@ counts against its unlabelled set's cap and would leave it no SSH context there;
 
 ### The confinement check
 
-<details><summary>Status: built · partly tested: the steward's half, for what it creates after the boot, is the policy core's guards, which the model and host tests attack, never a confined boot · tested (10)</summary>
+<details><summary>Status: built · partly tested: the steward's half, for what it creates after the boot, is the policy core's guards, which the model and host tests attack, and its binding of a home under `confined` is host-tested; no confined boot with a vault runs on the bench yet, which attaches one writable disk · tested (13)</summary>
 
 - bench:init-refuses-confined-server
 - host:redoubt-init::confined_refuses_two_label_sets_on_one_endpoint
 - host:redoubt-init::confined_refuses_two_label_sets_on_one_volume
+- host:redoubt-init::confined_counts_a_home_for_the_principals_unlabelled_domain_alone
+- host:redoubt-init::the_steward_is_told_a_confined_manifest
+- host:redoubt-steward-server::a_confined_boot_leaves_a_labelled_sessions_home_unbound
 - host:redoubt-init::confined_gives_a_labelled_domain_no_network
 - host:redoubt-init::confined_refuses_two_label_sets_on_one_disk
 - host:redoubt-init::confined_refuses_a_server_instance_serving_two_label_sets
@@ -267,9 +270,14 @@ trusted base, and its cores, whose timing is no more partitioned than the caches
 The label set compared is a budget's labels (a server's `labels`, a principal's label sets) and,
 for a volume, its `volumes` entry's label set. Two sets differ when they are not equal: `{a}`
 differs from `{}`, from `{b}` and from `{a,b}`. A system server such as the steward carries no
-labels, so it is a domain of its own. A confined manifest in which a labelled domain reads a
-shared unlabelled volume is refused too; data enters such a domain by an audited push from the
-steward ([steward](steward.md)). The refusal is a boot failure, not a warning
+labels, so it is a domain of its own. A confined manifest in which a labelled domain's principal
+has a home on a shared unlabelled volume is not refused: the check counts the home's volume for
+the principal's unlabelled domain alone, because the steward binds a home to unlabelled sessions
+alone under `confined`, which `init` tells it as one of its own lines, leaving a labelled
+session's home unbound and offering the push; data enters such a domain by an audited push from
+the steward ([steward](steward.md#declassification-and-push)). So the static half of R34
+(volumes, disks, servers, endpoints) is this check's, and the one dynamic half, which domain a
+home is bound for, is the steward's. Every other refusal is a boot failure, not a warning
 ([R34 (confined placement)](#r34-confined-placement)).
 
 The domains compared are each `servers` entry, under its `labels` (`{}` if none), and each
@@ -873,11 +881,14 @@ server from a manifest that grants it a budget and expects the boot refused.
 
 ### R34 (confined placement)
 
-<details><summary>Status: built · partly tested: the steward's and `sshd`'s exception runs only in the unconfined image, never in a confined boot · tested (10)</summary>
+<details><summary>Status: built · partly tested: the steward's and `sshd`'s exception runs only in the unconfined image; the steward's home binding under `confined` is host-tested, never booted · tested (13)</summary>
 
 - bench:init-refuses-confined-server
 - host:redoubt-init::confined_refuses_two_label_sets_on_one_endpoint
 - host:redoubt-init::confined_refuses_two_label_sets_on_one_volume
+- host:redoubt-init::confined_counts_a_home_for_the_principals_unlabelled_domain_alone
+- host:redoubt-init::the_steward_is_told_a_confined_manifest
+- host:redoubt-steward-server::a_confined_boot_leaves_a_labelled_sessions_home_unbound
 - host:redoubt-init::confined_gives_a_labelled_domain_no_network
 - host:redoubt-init::confined_refuses_two_label_sets_on_one_disk
 - host:redoubt-init::confined_refuses_a_server_instance_serving_two_label_sets
@@ -890,7 +901,9 @@ server from a manifest that grants it a budget and expects the boot refused.
 
 With `confined` set, no two entries with differing label sets share a server instance, volume,
 endpoint, network instance or device object, and no labelled domain reads a shared
-unlabelled volume; a manifest that would place them so fails the boot. The one exception is the
+unlabelled volume: a manifest that would place entries so fails the boot, and a labelled
+session's home, the one shared unlabelled volume a principal's domains would share, is left
+unbound by the steward, which `init` tells of the profile. The one exception is the
 control plane: the steward and `sshd`, by the request and owner-approval path, per-item single-label
 reader and writer budgets, and lease-ending supervision only. The attack verdict is the boot
 failing, not the manifest's claim.
@@ -928,6 +941,12 @@ Status: built · partly tested: the runtime's exit on a refused block is read fr
   the bundle image holds the box's private keys; the bundle is signed, never encrypted, and what
   keeps the seeds off `/boot` is that the manifest is never public. Sealing the keys to the
   machine is [keyd](keyd.md)'s.
+- **A labelled session in a confined boot still reads code volumes.** The check counts no
+  read-only code volume (`/boot`, the system volume) for a labelled domain, and the steward binds
+  both for a labelled session as for a plain one: a labelled domain reading code it shares with
+  every other is [R25 (the label check)](serving.md#r25-the-label-check)'s business, not a flow out; the data
+  volume it would share, its principal's home, is the one left unbound
+  ([steward](steward.md#declassification-and-push)).
 - **A confined boot is checked once.** Capabilities handed over after boot are outside the check;
   a system server that hands one across label sets breaks confinement without the kernel noticing.
 - **Every child pays for a copy of its image.** There is no shared text: a launcher copies the ELF

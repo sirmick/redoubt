@@ -666,6 +666,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "redoubt-crossing"
+version = "0.1.0"
+dependencies = [
+ "redoubt-rt",
+ "redoubt-steward",
+]
+
+[[package]]
 name = "redoubt-doccheck"
 version = "0.1.0"
 dependencies = [

@@ -1360,7 +1360,8 @@ mod tests {
                 "sshd",
                 "consrelay",
                 "beamlet",
-                "piped"
+                "piped",
+                "crossing"
             ]
         );
         assert!(programs[0].is_init());
@@ -1601,6 +1602,40 @@ mod tests {
     /// what a label set's share holds, as `init` derives it), the leases per principal, and one
     /// spare for a context detaching while another attaches. The constant is the largest such sum
     /// over the tree's manifests, exactly: more would be a guess, fewer refuses a context its home.
+    /// The steward's test-only `latency-probe` (servers/steward.md, "Failure and restart") is
+    /// built by `steward-latency`'s recipe and by nothing else in the tree: the probe ends leases
+    /// by the steward's own decision and exits on a marker file, which no other case may meet.
+    #[test]
+    fn only_steward_latency_builds_the_latency_probe() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let mut enabling = Vec::new();
+        for entry in std::fs::read_dir(root.join("tests")).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_some_and(|e| e == "toml")
+                && std::fs::read_to_string(&path).unwrap().contains("latency-probe")
+            {
+                enabling.push(path.file_name().unwrap().to_string_lossy().into_owned());
+            }
+        }
+        assert_eq!(enabling, ["steward-latency.toml"]);
+        for dir in ["image", "tests/data"] {
+            let mut found = Vec::new();
+            manifests_under(&root.join(dir), &mut found);
+            for path in found {
+                let text = std::fs::read_to_string(&path).unwrap();
+                assert!(!text.contains("latency-probe"), "{} names the probe", path.display());
+            }
+        }
+    }
+
+    /// Every file under `dir`, recursively.
+    fn manifests_under(dir: &Path, found: &mut Vec<PathBuf>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() { manifests_under(&path, found) } else { found.push(path) }
+        }
+    }
+
     #[test]
     fn the_servers_admit_what_a_manifest_lets_one_account_hold() {
         /// The steward's leases per principal (servers/steward.md, "Leases"); no manifest names it.

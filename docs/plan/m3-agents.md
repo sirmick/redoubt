@@ -91,12 +91,14 @@ cases for what it builds.
 ## Progress
 
 The steward's policy core decides leases, approvals, declassification, push and crash blame, and
-is tested on the host; the running server's half is built for leases and crash blame (the
-lockout at three on the machine, the sessions a crashed server served re-bound through the
-steward, an ended session's servers told at the steward's turn so no blame is lost behind
-them) and remains planned for approvals,
-declassification and push
-([the policy core](../servers/steward.md#the-policy-core)). The kernel's half of several attacks
+is tested on the host; the running server's half is built for leases, approvals at
+`approve@box`, declassification and push (one item through a crossing budget with exactly its
+labels, landing in `~/out`, or pushed into the vault; a confined boot's push lands on the
+machine, the labelled session's home left unbound) and crash blame (the lockout at three on
+the machine, the sessions a crashed server served re-bound through the steward, an ended
+session's servers told at the steward's turn so no blame is lost behind them)
+([the policy core](../servers/steward.md#the-policy-core),
+[declassification and push](../servers/steward.md#declassification-and-push)). The kernel's half of several attacks
 above has its case, as the tables say, and the kernel containment gate holds hostile leases on the
 kernel's primitives alone ([containment](../kernel/README.md#containment)). The image's
 `agent` principal, for a sponsor-run agent whose loop runs outside the box, is sponsored by alice:

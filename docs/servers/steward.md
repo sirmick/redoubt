@@ -297,7 +297,11 @@ so the steward still holds no key.
   caused them; and how each process it launched ended, once, as `steward: lease NAME of
   ACCOUNT/LABELS exited CODE` (`faulted`, `was killed`), NAME the name the `lease_ended` notice
   gives the lease (`alice/agent-1`; a session's is `alice/session-2`), so the two lines
-  correlate: the lease's end audit while audit records are console lines.
+  correlate: the lease's end audit while audit records are console lines; a crossing's program
+  the same way as `steward: crossing ID of ACCOUNT/LABELS was killed CODE`, ID the crossing's,
+  once its budget is destroyed ([declassification and push](#declassification-and-push)). It
+  says its own time on each `end_lease` and `submit`, `steward: served submit in N us`, from the
+  call's arrival to its answer ([residual risks](#residual-risks)).
 - **The model** binds the same crate to the kernel model, in place of its own copy of the
   policy, so the property families (P1 to P18) and the mutations attack the code that ships. The
   model's families drive events; its checks read the core's state through a read-only
@@ -343,7 +347,10 @@ never sees, each naming only what `init`'s check found in the manifest:
 - `net "PRINCIPAL" PREFIX:PORTS ...`, its network scope in the manifest's form, `*` for every
   port, which the steward passes to `ipd`'s `grant`.
 - `console "PRINCIPAL"`, the manifest's `console`: the principal whose unlabelled session the
-  steward opens on the UART.
+  steward opens on the UART;
+- `confined`, alone, when the manifest sets `confined`: a labelled session's home slot binds
+  nothing, and a push is the domain's way in ([declassification and
+  push](#declassification-and-push); [init](init.md#the-confinement-check)).
 
 The parser is the core's (`libs/steward/src/manifest.rs`), `no_std` and strict: each field once and
 no other, `keyd`, `servers` and `sizes` at most once and `sizes` required, a number digits only.
@@ -690,8 +697,11 @@ unknown one, so a session cannot send `login`, `approve` or `blame`.
   shared server, and **`rebind`**, from a session's badge, answers the slot's connection again
   with the path it is bound at; **`server_restarted`** is the steward's send to a session's
   `notices` endpoint, never a call ([failure and restart](#failure-and-restart)).
-- **Not yet bound:** a `submit` of a declassification or a push (kinds 2 and 3) is `unknown`
-  until [declassification and push](#declassification-and-push).
+- A `submit` of a declassification (kind 2) names its item by `what`, a path in the vault; one
+  of a push (kind 3) names its source and target by `what`, the source's path in the submitter's
+  home, a newline, the target's path in the vault; `item` and `source` on the wire are ignored,
+  the server drawing the ids the core hashes ([declassification and
+  push](#declassification-and-push)).
 
 The table: [libs/wire/tables/steward.md](../../libs/wire/tables/steward.md).
 
@@ -699,7 +709,7 @@ The table: [libs/wire/tables/steward.md](../../libs/wire/tables/steward.md).
 
 ### The lease and approval operations
 
-Status: built · partly tested: `start_agent`, `end_lease`, `submit` and the approval channel's operations run on the machine, `blame` on the host; a declassification or push `submit` is `unknown` until declassification and push · tested: bench:steward-end-lease, bench:steward-approve-box, host:redoubt-steward-server::start_agent_runs_the_lease_batch_and_answers_the_lease, host:redoubt-steward-server::end_lease_from_the_sponsor_destroys_the_lease_and_tells_her_sessions, host:redoubt-steward-server::an_approval_channel_opens_on_the_approval_key_alone, host:redoubt-steward-server::every_operation_on_another_badge_class_is_malformed, host:redoubt-steward-server::three_blames_in_the_window_lock_the_domain_out_until_the_window_passes
+Status: built · partly tested: `start_agent`, `end_lease`, `submit` and the approval channel's operations run on the machine, `blame` on the host · tested: bench:steward-end-lease, bench:steward-approve-box, bench:steward-declassify, bench:steward-push, host:redoubt-steward-server::start_agent_runs_the_lease_batch_and_answers_the_lease, host:redoubt-steward-server::end_lease_from_the_sponsor_destroys_the_lease_and_tells_her_sessions, host:redoubt-steward-server::an_approval_channel_opens_on_the_approval_key_alone, host:redoubt-steward-server::every_operation_on_another_badge_class_is_malformed, host:redoubt-steward-server::three_blames_in_the_window_lock_the_domain_out_until_the_window_passes
 
 The steward's protocol adds `start_agent(lease: u64)` (from an unlabelled session, answered with
 the lease's id and name once its batch is done) and `end_lease(lease: u64)` (from the sponsor,
@@ -804,7 +814,7 @@ until [R41](#r41-narrowing-by-revocation-scope)'s scope lands.
 
 ### The powerbox and approvals
 
-Status: built · partly tested: a labelled agent's request and a note are submitted, rendered, approved and denied on the machine; a declassification or a push is [declassification and push](#declassification-and-push), STEWARD4's · tested: bench:steward-approve-box, bench:steward-screen-inert, bench:steward-pending-cap, host:redoubt-steward-server::a_request_is_rendered_bound_to_its_screen_and_its_approval_starts_the_labelled_agent, host:redoubt-steward-server::notes_are_rendered_by_their_requesters_labels_and_a_dead_sessions_requests_are_gone, host:redoubt-steward-server::an_approval_channel_opens_on_the_approval_key_alone, host:redoubt-steward-server::the_three_commands_parse, host:redoubt-steward-server::the_fuzz_corpus_still_passes, mutation:PolicyApproveIgnoresHash, mutation:PolicyApproveWithLoginKey, mutation:PolicyNoPendingCap
+Status: built · partly tested: a labelled agent's request, a note, a declassification and a push are submitted, rendered, approved and denied on the machine · tested: bench:steward-approve-box, bench:steward-declassify, bench:steward-push, bench:steward-screen-inert, bench:steward-pending-cap, host:redoubt-steward-server::a_request_is_rendered_bound_to_its_screen_and_its_approval_starts_the_labelled_agent, host:redoubt-steward-server::notes_are_rendered_by_their_requesters_labels_and_a_dead_sessions_requests_are_gone, host:redoubt-steward-server::an_approval_channel_opens_on_the_approval_key_alone, host:redoubt-steward-server::the_three_commands_parse, host:redoubt-steward-server::the_fuzz_corpus_still_passes, mutation:PolicyApproveIgnoresHash, mutation:PolicyApproveWithLoginKey, mutation:PolicyNoPendingCap
 
 The **powerbox** grants authority a principal lacks and confirms a principal's own high-stakes
 steps: an agent asking its sponsor, a principal asking the holder of a shared resource, a new
@@ -906,67 +916,118 @@ channel as 64 `?`, the verdict the bytes `sshd` relayed).
 
 ### Declassification and push
 
-Status: planned · M3 (agents, approvals and the attack suite)
+Status: built · partly tested: a declassification and a push run on the machine; the confined deployment's half (a labelled session's home left unbound, `init`'s rule and its `confined` line) is host-tested, its boot waiting on a second writable disk in the bench · tested: bench:steward-declassify, bench:steward-push, host:redoubt-steward-server::a_declassification_reads_through_a_crossing_and_its_approval_copies_the_snapshot_out, host:redoubt-steward-server::an_item_too_big_or_not_printable_is_refused_at_submission_and_the_crossing_destroyed, host:redoubt-steward-server::a_reader_that_dies_fails_the_submission_and_the_partial_crossing_is_destroyed, host:redoubt-steward-server::a_push_reads_the_source_unlabelled_and_its_approval_writes_through_a_crossing, host:redoubt-steward-server::a_writer_that_fails_is_audited_and_the_partial_crossing_destroyed, host:redoubt-steward-server::a_denied_requests_items_are_forgotten, host:redoubt-steward-server::a_confined_boot_leaves_a_labelled_sessions_home_unbound, host:redoubt-crossing::a_read_answers_the_item_once_and_is_then_served, host:redoubt-crossing::an_item_over_the_bound_is_cut_one_past_declassify_max, host:redoubt-crossing::a_write_writes_the_bytes_as_the_item_and_the_other_mode_s_call_is_failed, host:redoubt-crossing::a_missing_item_is_failed, mutation:PolicyDeclassifyLive, mutation:PolicyDeclassifyWithoutReader, mutation:PolicyDeclassifyFromUnlabelled, mutation:PolicyDeclassifyUnfit, mutation:PolicyWriteUp
 
 **Declassification** moves one item from a label down to an unlabelled volume. Only the label's
-owner declassifies, from a session carrying that label, one item at a time, after a high-stakes
-approval:
+owner declassifies, from a session carrying exactly that label set, one item at a time, after a
+high-stakes approval:
 
-1. At submission the steward **snapshots** the item and hashes the snapshot. The steward is
-   unlabelled and cannot read the item, so it creates a short-lived **reader budget** carrying
-   exactly the item's labels, with a deadline, and `call`s it; the reader reads the item and fills
-   the steward's lend with it. A labelled budget only ever answers a request, never starts one, and
-   the steward's `system` class lets the call through
-   ([R1 (flow)](../kernel/ipc.md#r1-flow)). There is no standing reader, and the steward stays
-   unlabelled. Any other labelled read the steward needs (a labelled volume's `stat`) goes the same
-   way.
-2. The approval shows all of it. Items over `DECLASSIFY_MAX` (256 bytes), or not printable text,
-   are refused.
-3. On approval, the steward copies exactly that snapshot to an unlabelled volume.
+1. **Submission.** `submit` (kind 2) names the item by `what`, its path in the vault
+   (`notes/memo`); the server draws the id the core hashes and keeps the path beside it for the
+   request's life. The steward **snapshots** the item through a **read crossing**: the core's
+   crossing machine carves a budget under `users` with exactly the item's labels and a deadline
+   of `CROSSING_LIFE` (one second), which the server stamps with the labelled side's account, as
+   boot stamps a top budget: it bills to the owner ([R8 (accounts)](../kernel/budgets.md#r8-accounts)), a
+   crash of it is blamed on the domain ([R40](#r40-blame-by-label-set)), and its connection falls
+   in the account's bucket at the vault's server, where it holds one connection record
+   (`State`) for at most `CROSSING_LIFE` and no completion call, since the program's 9P calls are
+   plain ([walfsd](walfsd.md#serving)). In it the steward launches the **`crossing` program**
+   (`servers/crossing`: one program, its mode an argument) through the loader stub, with one
+   connection to the vault's server at the vault's root, minted in the crossing budget as its
+   scope, so the budget's destruction ends the connection in every table at once
+   ([R41](#r41-narrowing-by-revocation-scope)), and the receive right of an endpoint the steward
+   made and kept a call right on. The steward calls it once (`read`, the table below), within
+   `CROSSING_LIFE`: the program walks to the item, reads it whole up to `DECLASSIFY_MAX` + 1
+   bytes (`READ_MAX`: one past the bound tells an item over it from one at it, and bounds the
+   lend whatever the item's size), answers it into the steward's lend and exits; the steward
+   destroys the budget and, after, gives the connection back with a `disconnect` (the cleanup,
+   never the cutoff). The steward, unlabelled, never reads the vault: a mint below the vault's
+   root walks the path with the caller's labels ([R25](serving.md#r25-the-label-check)), which
+   it has not, so the connection is at the root and the labelled program walks; and the labelled
+   program only ever answers, since the endpoint's owner is the steward
+   ([R1 (flow)](../kernel/ipc.md#r1-flow)). The core checks the snapshot: over `DECLASSIFY_MAX` (256
+   bytes) is `too_big`, not printable text (ASCII 0x20 to 0x7E and newlines) `not_printable`,
+   each after its own crossing, destroyed the same way. A reader that exits, hangs past the
+   deadline or answers wrongly fails the step: the partial crossing is destroyed and the
+   submission is `failed`. The request is frozen with the hash of its content, the ids and the
+   snapshot: what is approved is the bytes.
+2. **The screen** shows all of it: the core's line names the item by id and quotes the snapshot
+   whole; beneath it the server adds one line per item the request names, its path as the
+   requester's text, sanitized and cut as a field is (`FIELD_CAP`) and never part of the hash.
+3. **On approval** the steward copies exactly the snapshot (the core's `Bytes::Literal`, never a
+   re-read) to **`~/out/<name>`** in the submitter's unlabelled home, `<name>` the item's last
+   path element, by its own write through the connection it keeps at the home, making `out` if it
+   is missing and never over a file that is there: a submission whose landing is taken is refused
+   `in_use` before any budget is carved. The copy out is audited `Declassified` with the snapshot
+   and the reader budget's id.
 
 A **push** is the mirror, low to high: how input enters a labelled domain in a confined deployment,
 where the domain reads no shared unlabelled volume ([init](init.md#the-confinement-check)). One
-push moves one item from an unlabelled volume into the labelled domain's volume. The target
-label's owner triggers it through the powerbox with an out-of-band approval; the confined domain
-cannot trigger one, name the item, or pull one. The owner submits it from an unlabelled session.
-At submission the steward reads the source (it is unlabelled), snapshots it and hashes the
-snapshot, as a declassification does. A pushed item is not held to `DECLASSIFY_MAX`: its screen
-shows the source and the target, the item's size and the snapshot's hash. On approval it writes
-exactly that snapshot through a short-lived **writer budget** carrying exactly the target label
-set, since a write needs equal labels. There is no standing path, queue or batch, and the push is
-audited with the request's labels. The steward declines a labelled session's mount of a shared
-unlabelled volume in a confined deployment and offers the push instead.
+push moves one item from the submitter's unlabelled home into the labelled domain's volume. The
+target label's owner submits it from an unlabelled session (kind 3, `what` the source's path in
+the home, a newline, the target's path in the vault); a vault session's push is refused at
+submission, as is another principal's (`not_owner`): the confined domain cannot trigger one, name
+the item, or pull one. At submission the steward reads the source itself (it is unlabelled),
+snapshots it and hashes the snapshot. A pushed item is not held to `DECLASSIFY_MAX` but to
+**`PUSH_MAX`**, 61,440 bytes: fifteen of the steward's sixteen lend pages, the sixteenth for the
+item's path and the message's lengths, so the snapshot reaches the writer in one call; a source
+over it is `too_big` by a `stat` before the core sees the request, and one grown past it between
+the two is `failed`. Its screen shows the source and the target by id with their paths, the
+item's size and the snapshot's SHA-256. On approval it writes exactly that snapshot through a
+**write crossing** in the target's domain, the same budget and program with the target's labels,
+called once with the snapshot (`write`), since a write needs equal labels; the program truncates
+an item that is there and makes one that is not, in a directory that must exist (a target whose
+directory is missing fails the program's walk, and the crossing is `failed`). A writer that fails
+after some bytes leaves the vault as it is: the vault's owner sees a short file named as the
+target, the request is audited `PushFailed`, and the next push overwrites it. A push that lands is
+audited `Pushed` with the request's labels, the target's domain's. There is no standing path,
+queue or batch.
+
+**Confined deployments.** The steward declines a labelled session's mount of a shared unlabelled
+volume and offers the push instead: when `init`'s `confined` line is among the steward's own, the
+binding table leaves a labelled session's home slot bound to nothing and tells its VM no `home=`;
+the shell says so once at its start ([the shell](../userland/shell.md#the-shell)). `init`'s check
+no longer refuses such a manifest, counting the home's volume for the principal's unlabelled domain
+alone ([init](init.md#the-confinement-check)). `/boot` and the system volume, read-only code,
+stay bound for a labelled session: a stated residual of the check, which does not count code
+volumes.
+
+The crossing's protocol, included from
+[libs/wire/tables/crossing.md](../../libs/wire/tables/crossing.md):
+
+{{#include ../../libs/wire/tables/crossing.md:tables}}
 
 ```mermaid
 sequenceDiagram
     participant P as Alice (owner)
     participant ST as steward
-    participant R as reader budget {alice-secrets}
+    participant R as crossing budget {alice-secrets}
     participant V as walfsd:alice-secrets
     participant U as walfsd:data
-    Note over P,U: planned
-    P-->>ST: declassify(item)
-    ST-->>R: create (exact labels, deadline), call
-    R-->>V: read the item
-    R-->>ST: the snapshot, in the steward's lend
-    ST-->>ST: size and text checks, hash
-    ST-->>P: approve@box shows all of it
-    P-->>ST: approve(id, hash)
-    ST-->>U: write exactly the snapshot
-    ST-->>ST: destroy the reader, audit
+    P->>ST: submit(declassify, notes/memo)
+    ST->>R: create (exact labels, the account, a deadline), launch crossing, call read
+    R->>V: walk to the item, read it
+    R->>ST: the snapshot, in the steward's lend
+    ST->>R: destroy, then disconnect
+    ST->>ST: size and text checks, hash, freeze
+    ST->>P: approve@box shows all of it, with the path
+    P->>ST: approve(id, code)
+    ST->>U: write exactly the snapshot to ~/out/memo
+    ST->>ST: audit Declassified
 ```
-*Figure: declassifying one item. All of it is planned.*
+*Figure: declassifying one item.*
 
 The model checks that what is copied out is exactly the snapshot, read through a reader with the
 item's labels, and the push's shape (its P6 and P11; `PolicyDeclassifyLive`,
 `PolicyDeclassifyWithoutReader`, `PolicyDeclassifyFromUnlabelled`, `PolicyDeclassifyUnfit`,
-`PolicyWriteUp`) ([R42 (one approved item)](#r42-one-approved-item)).
+`PolicyWriteUp`) ([R42 (one approved item)](#r42-one-approved-item)). The server's host tests
+drive the same code against a kernel that records its calls: the crossing's budget carries exactly
+the labels and the account, the copy out is the steward's one write and no read of the vault, the
+reader that dies and the writer that fails each end in a destroyed crossing with nothing held.
 
 The steward's reader and writer budgets are edges of the confinement check's one named
 exception: each carries exactly one label set and dies after one item
 ([init](init.md#the-confinement-check)).
-
-**Open:** none.
 
 ### Crash blame
 
@@ -1200,15 +1261,13 @@ gives to the next handle installed.
 
 ### R42 (one approved item)
 
-Status: planned · M3 (agents, approvals and the attack suite)
+Status: built · partly tested: the declassification and the push run on the machine; a confined boot's push is host-tested · tested: bench:steward-declassify, bench:steward-push, host:redoubt-steward-server::a_declassification_reads_through_a_crossing_and_its_approval_copies_the_snapshot_out, host:redoubt-steward-server::a_push_reads_the_source_unlabelled_and_its_approval_writes_through_a_crossing, host:redoubt-crossing::an_item_over_the_bound_is_cut_one_past_declassify_max, mutation:PolicyDeclassifyLive, mutation:PolicyDeclassifyWithoutReader, mutation:PolicyDeclassifyFromUnlabelled, mutation:PolicyDeclassifyUnfit, mutation:PolicyWriteUp
 
 Data crosses a label only as one item per owner-approved request: declassification copies out
 exactly the snapshot taken at submission, read through a reader budget with exactly the item's
 labels; a push writes one item through a writer budget with exactly the target's labels, triggered
 only by the target label's owner. Every other write to an item is by a session with exactly the
 item's labels.
-
-**Open:** none.
 
 ### R79 (one session per context)
 
@@ -1281,8 +1340,9 @@ Status: built · partly tested: `steward-restart` proves the release of a dead s
   `init`'s reboot.
 - **A session crashes:** the steward destroys its budget and tells its console `ended`; `sshd`
   closes its channel; nobody else is affected.
-- **A reader or writer budget** outlives nothing: it has a deadline, and the steward destroys it
-  when its one item is done.
+- **A reader or writer budget** outlives nothing: it has a deadline, `CROSSING_LIFE`, and the
+  steward destroys it when its one item is done, or when its program fails; its connection is
+  given back after ([declassification and push](#declassification-and-push)).
 - **A shared server restarts.** Its tables are empty ([R27](serving.md#r27-badge-allocation)),
   so every connection it served is gone: the steward's kept connection, through which it mints
   each session's home, and every live session's. One path for every shared server puts them
@@ -1382,7 +1442,14 @@ the last one's until the kernel says its caller is gone.
 
 **The restart probe** is a test-only feature, `restart-probe` (`src/bin/steward.rs`,
 `PROBE_EXIT`), off in every default build; the bench's `steward-restart` builds the steward with
-it. Every instance then serves as usual and exits 14 seconds after it starts the console session,
+it. **The latency probe**, `latency-probe`, is the second such feature, built by `steward-latency`
+alone (the bench's host test `only_steward_latency_builds_the_latency_probe` holds it to that):
+the steward arms two timeouts after a probe lease's start and ends that lease by its own
+`EndLease` at the second, prints its wake, deadline-notice and `budget_destroy` samples for the
+bench's oracle, and exits at its start when the case's marker file is in the console principal's
+home, so `init`'s reboot rule dumps the kernel's trace ([responsiveness](../kernel/scheduling.md#responsiveness)).
+It raises only events the core has, touches no row, guard or effect, and prints nothing but its
+samples. Every instance then serves as usual and exits 14 seconds after it starts the console session,
 so the case restarts it thirteen times, each time with that session and its connections live, without meeting
 `init`'s reboot rule.
 

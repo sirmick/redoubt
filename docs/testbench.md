@@ -1744,7 +1744,7 @@ additional client from the merged manifest.
 | --- | ---: | ---: | ---: | ---: |
 | `keyd` | 7,368 | 4 | 4 | 8 |
 | `consoled` | 10,384 | 6 | 11 | 22 |
-| `bootfsd` | 7,320 | 4 | 1,089 | 2,304 (the image publishes `beamlet`, `piped` and `consrelay`, and the cap follows each manifest's own published total) |
+| `bootfsd` | 7,320 | 4 | 1,089 | 2,304 (the image publishes `beamlet`, `piped`, `consrelay` and `crossing`, and the cap follows each manifest's own published total) |
 | `blkd` | 4,520 | 3 | 19 | 38 |
 | `netd` | 4,296 | 3 | 2 | 4 |
 | `ipd` | 13,672 | 7 | 37 | 74 |

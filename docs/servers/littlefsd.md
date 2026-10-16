@@ -126,7 +126,10 @@ a flash medium, and for the cases that ask for a littlefs volume.
   detaching while another attaches (its connection lives until the relay ends), and the bench
   holds the constant, `walfsd`'s too, to the largest such sum over the tree's manifests: 1 + 3 +
   1 + 1 under `steward-three-contexts`'s manifest, 1 + 2 + 1 + 1 under the image's
-  ([image](../../image/README.md)). Fewer refused a principal's third live context its home.
+  ([image](../../image/README.md)). Fewer refused a principal's third live context its home. A
+  crossing's program, in a budget stamped with the account, makes plain calls and holds no
+  completion call: one connection record (`State`) of the account's bucket for at most a second
+  ([the steward](steward.md#declassification-and-push)).
   When a manifest's sum grows past the constant the host test fails by name, so the constant
   moves with the manifests, never ahead of them.
 - **Metadata** lives in littlefs user attributes: what `stat` needs (mtime, qid version) and the

@@ -12,15 +12,23 @@ use alloc::vec::Vec;
 use redoubt_rt::abi::{BudgetSpec, Error, FOREVER, Handle, Labels};
 use redoubt_steward::consts::RANDOM_WORDS;
 use redoubt_steward::effect::{
-    Answer, Batch, Kind, Notice, Notified, Object, Output, Parent, Produced, Rendered, ReplyTo, Server, Step,
-    StepFailed, Token,
+    Answer, Batch, Bytes, Kind, Notice, Notified, Object, Output, Parent, Produced, Rendered, ReplyTo,
+    Server, Step, StepFailed, Token,
 };
 use redoubt_steward::effects::{CONNECTIONS, SCOPE};
 use redoubt_steward::event::{Event, EventKind};
 use redoubt_steward::manifest::Limits;
 use redoubt_steward::{Effects, decide, inspect};
 
-use crate::{Kernel, Steward};
+use crate::{Kernel, PUSH_MAX, Steward};
+
+/// The slot of a crossing's one connection among its owner's tokens: given back after the
+/// crossing's budget is destroyed, as a session's are (R41's order).
+const CROSSING_CONNECTION: u8 = 3;
+
+/// The directory a declassified item lands in, below the submitter's home: `~/out/<name>`,
+/// `<name>` the item's last path element (servers/steward.md, "Declassification and push").
+pub const OUT: &str = "out";
 
 /// Every word the server hands the core has this bit set, so each id and badge the core draws
 /// from them is in the minted range (servers/serving.md R27): a session's badge can never be a
@@ -91,6 +99,12 @@ impl<B: Copy, H: Copy> Steward<B, H> {
                         reopen |= self.console_session == Some(object.id) && object.kind == Kind::Session;
                         self.forget(kernel, &object);
                     }
+                    // A submission is a request now: the items its call drew are the request's,
+                    // before any screen names them.
+                    Output::Reply { to, answer: Answer::Request { id } } => {
+                        self.items_of_request(id);
+                        outputs.push(Output::Reply { to, answer: Answer::Request { id } });
+                    }
                     Output::Reply { to: CONSOLE, answer } => {
                         self.console_session = match answer {
                             Answer::Session { id, .. } => Some(id),
@@ -126,7 +140,26 @@ impl<B: Copy, H: Copy> Steward<B, H> {
                 let result = self.run(kernel, &batch);
                 queue.push_back((EventKind::Done { object, result }, 0));
             }
+            // A crossing's final state removes it with no `forget` of the tables': what its
+            // steps made (its connection, a budget a failed destroy left) is dropped once the
+            // core no longer holds it, after the batches of this decision, so a copy out or a
+            // write still finds its item's path; the items of requests gone go the same way.
+            let gone: BTreeSet<Object> = self
+                .made
+                .keys()
+                .map(|t| t.owner.clone())
+                .chain(self.pids.values().cloned())
+                .filter(|o| o.kind == Kind::Crossing)
+                .filter(|o| !self.store.domain(&o.domain).is_some_and(|d| d.has(Kind::Crossing, o.id)))
+                .collect();
+            for object in gone {
+                self.forget(kernel, &object);
+            }
         }
+        // A submission's items are bound to its request when the core answers it, which for a
+        // declassification or a push is the decision after its read's: the items of requests
+        // gone, and of a submission refused, go once the whole event is decided.
+        self.sweep_items();
         for channel in redrawn.iter().chain(screens.keys()).copied().collect::<BTreeSet<u64>>() {
             let shown = screens.remove(&channel).unwrap_or_default();
             let text = self.compose(channel, &shown);
@@ -144,8 +177,10 @@ impl<B: Copy, H: Copy> Steward<B, H> {
     /// sshd.md, "`approve@box`"): a header naming the channel's principal; per request its id,
     /// its binding hash and the hash's first four bytes as the code a person types in its
     /// place, then the core's rendered line (`render.rs`: printable ASCII only, so nothing here
-    /// but these bytes and the line ends reaches the terminal); and the line to type. Written as
-    /// `\r\n` lines: the channel has no line discipline.
+    /// but these bytes and the line ends reaches the terminal), then one line per item the
+    /// request names, the path as the requester's text, sanitized and capped as the core
+    /// sanitizes a field (the core's line names the item by id alone); and the line to type.
+    /// Written as `\r\n` lines: the channel has no line discipline.
     fn compose(&self, channel: u64, shown: &[Rendered]) -> String {
         let index = inspect::index(&self.store);
         let fixed = inspect::fixed(&self.store);
@@ -166,6 +201,10 @@ impl<B: Copy, H: Copy> Steward<B, H> {
                 &hash[..8],
                 r.text
             ));
+            for (id, path) in self.items_named(r.id) {
+                let path = redoubt_steward::render::sanitize(path, redoubt_steward::consts::FIELD_CAP);
+                text.push_str(&format!("  item {id}: path (the requester's text) \"{path}\"\r\n"));
+            }
         }
         text.push_str("type: approve <id> <hash or code> | deny <id> | pending\r\n");
         text
@@ -220,8 +259,7 @@ impl<B: Copy, H: Copy> Steward<B, H> {
     /// `owner`'s processes leave the running ones for the ended, named now, while the core still
     /// knows the object.
     fn end_pids(&mut self, owner: &Object) {
-        let name =
-            self.lease_name(owner.id).unwrap_or_else(|| alloc::format!("{:?} {}", owner.kind, owner.id));
+        let name = self.lease_name(owner.id).unwrap_or_else(|| named(owner));
         let gone: Vec<u64> = self.pids.iter().filter(|(_, o)| *o == owner).map(|(p, _)| *p).collect();
         for pid in gone {
             self.pids.remove(&pid);
@@ -350,13 +388,17 @@ impl<B: Copy, H: Copy> Steward<B, H> {
         step: &Step,
     ) -> Result<Produced, Error> {
         match step {
+            // A budget under `users` (a crossing's) is stamped with its domain's account, as
+            // boot stamps a principal's top budget: it bills to the owner (R8), its crash is
+            // blamed on the domain (R40), and its connection falls in the account's bucket at
+            // its server (serving.md, "Buckets"). Every other budget inherits its parent's.
             Step::CreateBudget { token, parent, limits, labels, deadline } => {
-                let parent = match parent {
-                    Parent::Sub(domain) => self.sub(domain).ok_or(Error::BadHandle)?,
-                    Parent::Budget(t) => self.budget(t)?,
-                    Parent::Users => self.users,
+                let (parent, account) = match parent {
+                    Parent::Sub(domain) => (self.sub(domain).ok_or(Error::BadHandle)?, 0),
+                    Parent::Budget(t) => (self.budget(t)?, 0),
+                    Parent::Users => (self.users, owner.domain.account().get()),
                 };
-                let spec = spec(limits, labels.as_slice(), 0, deadline.unwrap_or(FOREVER))?;
+                let spec = spec(limits, labels.as_slice(), account, deadline.unwrap_or(FOREVER))?;
                 let b = kernel.create(parent, &spec)?;
                 self.made.insert(token.clone(), Made::Budget(b));
                 Ok(Produced::Budget(kernel.budget_id(b)))
@@ -461,9 +503,65 @@ impl<B: Copy, H: Copy> Steward<B, H> {
                 self.made.remove(budget);
                 Ok(Produced::Done)
             }
-            // Crossings are STEWARD4's: no step reads or writes a volume yet.
-            Step::Read { .. } | Step::Write { .. } => Err(Error::InvalidArgument),
+            // A crossing's read (servers/steward.md, "Declassification and push"; R42): the
+            // item read through the reader budget, by the `crossing` program, which the kernel
+            // calls once; the steward, unlabelled, never reads the vault (R1). The connection the
+            // program held is kept under the crossing's token, given back once the budget is
+            // destroyed. The steward's own read is a push's source, in the submitter's home,
+            // bounded by `PUSH_MAX`.
+            Step::Read { token: _, through, labels: _, item } => {
+                let path = self.items.get(item).map(|i| i.path.clone()).ok_or(Error::BadHandle)?;
+                match through {
+                    Some(budget) => {
+                        let budget = self.budget(budget)?;
+                        let (pid, key, bytes) = kernel.cross(owner, budget, &path, None)?;
+                        self.crossed(owner, pid, key);
+                        Ok(Produced::Bytes(bytes))
+                    }
+                    None => {
+                        let principal = self.principal_of(owner)?;
+                        Ok(Produced::Bytes(kernel.home_read(&principal, &path, PUSH_MAX)?))
+                    }
+                }
+            }
+            // A crossing's write: a push's item written through the writer budget by the same
+            // program; the steward's own write is a declassification's copy out, exactly the
+            // snapshot (`Bytes::Literal`, never a re-read: R42) to `~/out/<name>` in the
+            // submitter's home, refused over a file that is there.
+            Step::Write { through, labels: _, item, bytes } => {
+                let Bytes::Literal(bytes) = bytes else { return Err(Error::InvalidArgument) };
+                let path = self.items.get(item).map(|i| i.path.clone()).ok_or(Error::BadHandle)?;
+                match through {
+                    Some(budget) => {
+                        let budget = self.budget(budget)?;
+                        let (pid, key, _) = kernel.cross(owner, budget, &path, Some(bytes))?;
+                        self.crossed(owner, pid, key);
+                    }
+                    None => {
+                        let principal = self.principal_of(owner)?;
+                        let name = split(&path).1;
+                        kernel.home_write(&principal, &format!("{OUT}/{name}"), bytes)?;
+                    }
+                }
+                Ok(Produced::Done)
+            }
         }
+    }
+
+    /// The crossing program ran for `owner`: its process is `owner`'s, for the exit line, and its
+    /// connection is held under `owner`'s token until the crossing is forgotten.
+    fn crossed(&mut self, owner: &Object, pid: u64, key: Option<H>) {
+        self.pids.insert(pid, owner.clone());
+        if key.is_some() {
+            let token = Token { owner: owner.clone(), slot: CROSSING_CONNECTION };
+            self.made.insert(token, Made::Connection(key));
+        }
+    }
+
+    /// The principal whose home `owner`'s domain's account names: the submitter's, for a
+    /// request's or a crossing's steps there.
+    fn principal_of(&self, owner: &Object) -> Result<String, Error> {
+        self.principal_name(owner.domain.account().get()).ok_or(Error::BadHandle)
     }
 
     /// Drops what `object`'s steps made, in R41's order: a budget left is destroyed first, its
@@ -489,6 +587,24 @@ impl<B: Copy, H: Copy> Steward<B, H> {
         for h in connections {
             self.give_back(kernel, h);
         }
+    }
+}
+
+/// An object that is no lease, as its exit line names it: a crossing by its id alone, anything
+/// else by its kind and id.
+pub fn named(object: &Object) -> String {
+    match object.kind {
+        Kind::Crossing => alloc::format!("{}", object.id),
+        kind => alloc::format!("{kind:?} {}", object.id),
+    }
+}
+
+/// An item's path as its directory and its name: `("", "note")` for an item at the root,
+/// `("a/b", "note")` below it.
+pub fn split(path: &str) -> (&str, &str) {
+    match path.rsplit_once('/') {
+        Some((dir, name)) => (dir, name),
+        None => ("", path),
     }
 }
 
