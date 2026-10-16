@@ -23,7 +23,7 @@ a flash medium, and for the cases that ask for a littlefs volume.
 
 ### Volumes, connections and labels
 
-<details><summary>Status: built · tested (35)</summary>
+<details><summary>Status: built · tested (37)</summary>
 
 - bench:littlefsd-boot
 - bench:littlefsd-confined-labelled
@@ -31,6 +31,8 @@ a flash medium, and for the cases that ask for a littlefs volume.
 - bench:littlefsd-label-check
 - bench:littlefsd-large-directory
 - bench:littlefsd-one-volume
+- host:testbench::the_servers_admit_what_a_manifest_lets_one_account_hold
+- host:redoubt-littlefsd::the_limits_fit_the_budget
 - host:redoubt-littlefsd::attach_walk_open_read_write
 - host:redoubt-littlefsd::files_and_directories_survive_a_remount
 - host:redoubt-littlefsd::a_removed_files_other_fids_get_removed
@@ -115,9 +117,18 @@ a flash medium, and for the cases that ask for a littlefs volume.
   revocation is destroying the grant.
 - **Admission** is the serving library's, per (account, label set) with a fair share per badge
   ([R26 (admission fairness)](serving.md#r26-admission-fairness)): 32 fids, 8 minted
-  connections, 2 multiplexed connections' completion calls, 128 of their requests and 32 pages
-  they brought ([serving](serving.md#multiplexed-connections)) per bucket, sized to fit a 2 MiB
-  budget; a `disconnect` frees a client's fids.
+  connections, 6 multiplexed connections' completion calls, 128 of their requests and 32 pages
+  they brought ([serving](serving.md#multiplexed-connections)) per bucket, sized to fit a 3 MiB
+  budget (a bucket at its caps is 626,688 bytes; the manifests' four take 2,506,752 and a fifth
+  fits); a `disconnect` frees a client's fids. The completion calls are not a guess: a bucket is
+  one account's, so they are what a manifest lets one account have open at once, its console
+  session, its cap of live contexts per label set, its leases and one spare for a context
+  detaching while another attaches (its connection lives until the relay ends), and the bench
+  holds the constant, `walfsd`'s too, to the largest such sum over the tree's manifests: 1 + 3 +
+  1 + 1 under `steward-three-contexts`'s manifest, 1 + 2 + 1 + 1 under the image's
+  ([image](../../image/README.md)). Fewer refused a principal's third live context its home.
+  When a manifest's sum grows past the constant the host test fails by name, so the constant
+  moves with the manifests, never ahead of them.
 - **Metadata** lives in littlefs user attributes: what `stat` needs (mtime, qid version) and the
   per-file attributes of `get_attr` and `set_attr`. No access time is kept. A file's qid version
   moves with every write and truncation, so a client caching it sees the change. mtime is 0

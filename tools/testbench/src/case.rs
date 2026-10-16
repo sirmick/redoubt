@@ -1577,6 +1577,81 @@ mod tests {
         assert!(beamlets >= 4, "the beamlet cases' manifests were not found ({beamlets})");
     }
 
+    /// `walfsd` and `littlefsd` admit per bucket, and a bucket is one account's (servers/serving.md,
+    /// "Buckets"), so their `in_flight` is what a manifest lets one account have open at once: the
+    /// console session, the cap of live contexts per label set (the manifest's `contexts.max`, or
+    /// what a label set's share holds, as `init` derives it), the leases per principal, and one
+    /// spare for a context detaching while another attaches. The constant is the largest such sum
+    /// over the tree's manifests, exactly: more would be a guess, fewer refuses a context its home.
+    #[test]
+    fn the_servers_admit_what_a_manifest_lets_one_account_hold() {
+        /// The steward's leases per principal (servers/steward.md, "Leases"); no manifest names it.
+        const LEASES: u64 = 1;
+        fn manifests(dir: &Path, found: &mut Vec<PathBuf>) {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    manifests(&path, found);
+                } else if path.extension().is_some_and(|e| e == "json") {
+                    found.push(path);
+                }
+            }
+        }
+        let number = |v: &serde_json::Value| -> u64 {
+            v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse().ok())).unwrap_or_else(|| panic!("{v}"))
+        };
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let mut found = vec![root.join("image/manifest.json")];
+        manifests(&root.join("tests/data"), &mut found);
+        let mut largest = (0, PathBuf::new());
+        for path in found {
+            let Ok(json) = serde_json::from_slice::<serde_json::Value>(&std::fs::read(&path).unwrap()) else {
+                continue;
+            };
+            // Only a manifest with a steward has sessions; a refusal case's may be ill-formed.
+            let (Some(sizes), Some(principals)) =
+                (json.pointer("/steward/sizes"), json["principals"].as_array())
+            else {
+                continue;
+            };
+            let session = (number(&sizes["session"]["pages"]), number(&sizes["session"]["processes"]));
+            let cost = number(&sizes["cost"]);
+            let console = u64::from(json.get("console").is_some());
+            for p in principals {
+                // servers/init/src/check.rs `domains` and `holds`: the unlabelled set and each
+                // distinct labelled one; the share is an equal part less a budget's own cost.
+                let mut sets: Vec<Vec<&str>> = vec![Vec::new()];
+                for set in p["label_sets"].as_array().into_iter().flatten() {
+                    let mut labels: Vec<&str> =
+                        set["labels"].as_array().unwrap().iter().filter_map(|l| l.as_str()).collect();
+                    labels.sort_unstable();
+                    if !sets.contains(&labels) {
+                        sets.push(labels);
+                    }
+                }
+                let n = sets.len() as u64;
+                let pages = (number(&p["budget"]["pages"]) / n).saturating_sub(cost) / session.0.max(1);
+                let processes = (number(&p["budget"]["processes"]) / n) / session.1.max(1);
+                let cap = p.pointer("/contexts/max").map_or(pages.min(processes).min(16), number);
+                let sum = console + cap + LEASES + 1;
+                if sum > largest.0 {
+                    largest = (sum, path.clone());
+                }
+            }
+        }
+        let (sum, path) = largest;
+        assert_eq!(
+            u64::from(redoubt_walfsd::limits(1).in_flight),
+            sum,
+            "walfsd's in_flight is not {path:?}'s sum"
+        );
+        assert_eq!(
+            u64::from(redoubt_littlefsd::limits(1).in_flight),
+            sum,
+            "littlefsd's in_flight is not {path:?}'s sum"
+        );
+    }
+
     /// A case out of the whole run runs only when named in full; any other case as before.
     #[test]
     fn a_case_out_of_the_whole_run_runs_only_by_name() {

@@ -881,3 +881,17 @@ fn one_reply_costs_a_bounded_number_of_passes() {
     assert_eq!(most, 1310);
     assert!(passes as usize <= most.div_ceil(WINDOW) + 1, "{passes} passes");
 }
+
+/// The budget holds the manifests' four buckets at their caps, a fifth, and not a sixth
+/// (`BUDGET`'s arithmetic): a bucket costs 626 688 bytes with six completion calls.
+#[test]
+fn the_limits_fit_the_budget() {
+    let bucket = u64::from(limits(1).in_flight) * COST.in_flight
+        + 32 * COST.file
+        + 8 * COST.state
+        + 128 * COST.request
+        + 32 * COST.page;
+    assert_eq!(bucket, 626_688);
+    assert!(limits(5).fits(&COST, BUDGET));
+    assert!(!limits(6).fits(&COST, BUDGET));
+}

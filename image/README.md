@@ -25,7 +25,13 @@ The sources of the signed boot bundle and the disk images; what they produce goe
   192,576 and 192,600 at rv32 ones, the figure moving a little with the pack), a margin of
   about 88,000 pages, so alice's and bob's did not have to shrink for agent's. A session holds
   10 processes, its VM, its console's relay, `piped` and up to 7 stages of a pipeline, and
-  alice's 40, bob's 20 and agent's 20 give each label set two sessions of them. The shell,
+  alice's 40, bob's 20 and agent's 20 give each label set two sessions of them. So each
+  principal's cap of live contexts per label set is 2, the console's session counted in alice's
+  unlabelled set; what one account may have open at `walfsd` at once is that cap, the console
+  session, a lease and one spare for a context detaching while another attaches, 5 here, and the
+  server's constant is the largest such sum over the tree's manifests, 6
+  ([walfsd](../docs/servers/walfsd.md#serving)); the two `walfsd` entries' 1,280 pages are that
+  page's entry rule. The shell,
   `Redoubt.Shell`, is started by the
   steward as the console principal's session (`console: "alice"`) on the UART, and as each SSH
   login's session on port 22 ([steward](../docs/servers/steward.md#authentication-and-sessions)).

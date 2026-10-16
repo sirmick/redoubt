@@ -1315,6 +1315,7 @@ dependencies = [
  "redoubt-stride",
  "redoubt-sys",
  "redoubt-verity",
+ "redoubt-walfsd",
  "regex",
  "serde",
  "serde_json",

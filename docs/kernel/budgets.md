@@ -211,7 +211,7 @@ and its kernel objects.
   With the steward, `sshd` and the userland disk's `blkd`, `verity` and `erofsd`, the image
   manifest's bound is 564 pages on both widths (`init-boot` prints it; 14 of them the 16-page lend
   `init` pushes the public entries through), and the fixed 1,024-page
-  limit is nearly twice it. The image's servers need 16,909 of `system`'s pages, each
+  limit is nearly twice it. The image's servers need 17,421 of `system`'s pages, each
   budget and its own page. The shell's VMs are not among them: the steward carves each session
   from its principal's sub-budget under `users`, from the top budgets the manifest names, 47,624
   pages for Alice, 32,768 for Bob and 24,576 for agent ([the steward](../servers/steward.md#fixed-sub-budgets-per-label-set),

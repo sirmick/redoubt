@@ -19,10 +19,15 @@ use crate::volume::{BLOCK, Blocks, Mounted, Range};
 
 /// What admission lets each of `buckets` buckets hold (servers/serving.md R26); the count is the
 /// manifest's `buckets=N`. A call is answered as it arrives; what is held is a multiplexed
-/// connection's completion call (`InFlight`, one per session, so two lets a share hold one), its
-/// requests (`Requests`) and the pages their transfers brought (`Pages`).
+/// connection's completion call (`InFlight`, one per session), its requests (`Requests`) and the
+/// pages their transfers brought (`Pages`). A bucket is one account's (serving.md "Buckets"), so
+/// `in_flight` is what a manifest lets one account have open at once: its console session, its
+/// cap of live contexts per label set, its leases, and one spare for a context detaching while
+/// another attaches (its connection lives until the relay ends); the bench holds it to the
+/// largest such sum over the tree's manifests (tools/testbench,
+/// `the_servers_admit_what_a_manifest_lets_one_account_hold`): 1 + 3 + 1 + 1.
 pub const fn limits(buckets: u32) -> Limits {
-    Limits { buckets, in_flight: 2, files: 32, state: 8, requests: 128, pages: 32 }
+    Limits { buckets, in_flight: 6, files: 32, state: 8, requests: 128, pages: 32 }
 }
 /// What one of each costs, in bytes: a completion call holds its caller's lend, charged to this
 /// server until it replies (kernel/ipc.md R3), `MAX_LEND_PAGES` pages at worst; a fid is its
@@ -31,9 +36,10 @@ pub const fn limits(buckets: u32) -> Limits {
 pub const COST: Cost =
     Cost { in_flight: 64 * 1024, file: 2048, state: 512, request: REQUEST_STATE, page: PAGE_SIZE as u64 };
 /// The bytes of this server's budget its clients may use between them. A bucket at its caps costs
-/// 2 completion calls at 64 KiB, 32 fids at 2 KiB, 8 connections at 512 bytes, 128 requests at 256
-/// and 32 pages at 4 KiB: 364 544 bytes, so the manifests' 4 buckets take 1 458 176, and 5 fit.
-pub const BUDGET: u64 = 2 * 1024 * 1024;
+/// 6 completion calls at 64 KiB, 32 fids at 2 KiB, 8 connections at 512 bytes, 128 requests at 256
+/// and 32 pages at 4 KiB: 626 688 bytes, so the manifests' 4 buckets take 2 506 752, and 5 fit
+/// 3 MiB (3 133 440): 768 pages of the entry's 1 024.
+pub const BUDGET: u64 = 3 * 1024 * 1024;
 
 /// Test-only, for the bench's `littlefsd-restart` (feature `restart-probe`, off in every default build,
 /// as netd's is): a walk to this name ends the instance with [`PROBE_EXIT`] while it holds the
