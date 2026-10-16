@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 355
+revision = 374
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -903,9 +903,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   needs = ["STEWARD3", "K19"]
   body = "Brief: .wash/local/STEWARD4-implementer.md (architect-15). Tier A, size M. docs/servers/steward.md#declassification-and-push, R42; docs/servers/init.md#the-confinement-check; docs/kernel/scheduling.md#responsiveness (targets unchanged; a new case steward-latency beside sched-latency; a miss is a finding, not a tuning)."
-  state = "reported"
-  revision = 355
-  overrides = ["2026-10-16: started by Orchestrator before STEWARD3 (todo): STEWARD4's need STEWARD3 closes with STEWARD3Y (small, launching after train 45); the brief refresh is design work ahead of the build, per the owner's M3 order"]
+  state = "active"
+  revision = 357
+  overrides = ["2026-10-16: started by Orchestrator before STEWARD3 (todo): STEWARD4's need STEWARD3 closes with STEWARD3Y (small, launching after train 45); the brief refresh is design work ahead of the build, per the owner's M3 order", "2026-10-16: started by Orchestrator before STEWARD3 (todo): STEWARD4 needs STEWARD3, which closes with STEWARD3Y (size S, launched now in parallel); the owner wants parallel work; STEWARD4 rebases onto 3Y when it lands (hotspot drive.rs/Machine)", "2026-10-16: started by Orchestrator before STEWARD3 (todo): STEWARD4 needs STEWARD3, which closes with STEWARD3Y (on train 46 now); continuation of the first implementer's work"]
 
 [[node]]
   id = "VOL2"
@@ -2438,5 +2438,14 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "STEWARD3"
   needs = ["STEWARD3X"]
   body = "Found by STEWARD3X in steward-blame-lockout (.wash/local/STEWARD3X-ruling.md 'Q4 amended'; 3X's report names the stall): a session's end batch waited its full RELEASE_TIMEOUT (1 s) on the `ended` send to sshd's channel console after sshd had closed the channel first, and init's blame arriving then was lost; the same shape holds for an end batch's disconnect at a not-yet-serving server (walfsd's recovery, 580-953 ms measured). Every cleanup call in an end batch (the `ended` send, each server's disconnect) runs on the steward's loop with the call's full timeout, and during it the steward serves nobody (logins, blame, end_lease ahead of admission included). STEWARD3R's rule already separates cutoff from cleanup: destroying the scope is the cutoff; `ended` and the disconnects free records and never are the cutoff. Lever: the end batch replies after DestroyBudget; the cleanup calls become deferred steps the Machine keeps in a bounded queue and runs at its loop's turn, each bounded short (the steward's own send bound, not RELEASE_TIMEOUT), a timed-out one retried at the next turn with a stated retry cap, then dropped with a console line (a server's admission for that connection is then freed only by its own restart: the residual that remains; an `ended` to a channel sshd already closed needs no retry). The queue is bounded by the connections live sessions and leases hold, stated. Gates: host (the end's reply precedes any cleanup call; a timed-out step is retried then dropped with the line; the queue's bound); steward-blame-lockout and steward-server-restart with no blame lost and `lost` forbidden (the stall before/after quoted, both widths); steward-session-ends, steward-lease-ends and steward-end-lease's 125 ms p99 unchanged or better. Pages: steward.md 'Failure and restart' and init.md 'Residual risks' (3X's residual becomes the rule), the Machine's doc comment. Files: servers/steward (the Machine, drive.rs), tests/, docs. Tier A: steward-red-2. Size S."
-  state = "todo"
-  revision = 350
+  state = "done"
+  revision = 374
+
+[[node]]
+  id = "B79"
+  title = "The bench attaches a second writable disk: `[vault]` beside `[disk]`, so a confined manifest (home volume and vault on separate devices, R34) boots on the bench"
+  template = "package"
+  parent = "AGENTS"
+  body = "Found by STEWARD4 (thread STEWARD4-crossing Q8; the implementer's need in .wash/local/B79-brief-from-steward4.md): the bench attaches one writable `[disk]` (disk0, bus 7) and the read-only userland disk (bus 5): tools/testbench/src/qemu.rs:349-409, docs/testbench.md 'Disks and network cards'. A confined manifest cannot put the unlabelled home volume and the vault on one disk (R34's device rule: one blkd, two label sets; servers/init confine.rs:132), so STEWARD4's confined-push boot case cannot boot. Build: a `[vault]` recipe beside `[disk]` (its own recipe/stage, `disk2` on a free virtio-mmio bus, the manifest device line, `devices_sit_on_fixed_slots` extended), the case toml key, testbench.md's section and the devices table; a host test that a recipe with both disks places them on their fixed slots and one without `[vault]` is unchanged; one existing case gains `[vault]` as proof of a boot with two writable disks (blkd:data and blkd:vault), both widths. Nothing else moves: no kernel, no init, no steward. Files: tools/testbench, docs/testbench.md, tests/<one case>.toml. Tier A tooling (the bench's device map), reviewer kernel-red-3. Size S. Consumer: STEWARD4 case 3 (rebases onto this or lands its boot case in a follow-up)."
+  state = "done"
+  revision = 371
