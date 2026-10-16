@@ -139,6 +139,10 @@ struct Args {
     /// Refused if the tree has changed since.
     #[arg(long, value_name = "DIR", conflicts_with_all = ["run", "sweep"])]
     prebuilt: Option<PathBuf>,
+    /// Copy a failing boot's console and session logs into DIR, as `<arch>-<case>.smp<N>…`, so
+    /// the transcript outlives the run directory's pruning.
+    #[arg(long, value_name = "DIR", conflicts_with_all = ["run", "list", "sweep"])]
+    keep_failed: Option<PathBuf>,
 }
 
 /// The seeds of a `--sweep`, each once.
@@ -502,7 +506,9 @@ fn main() -> Result<()> {
                 }
                 _ => None,
             };
-            for (variant, outcome, seconds) in run_case(&builder, case, target, &logs, &missing, entry)? {
+            let kept = args.keep_failed.as_deref();
+            for (variant, outcome, seconds) in run_case(&builder, case, target, &logs, &missing, entry, kept)?
+            {
                 failures += report(&format!("{} [{}{}]", case.name, target.name, variant), outcome, seconds);
             }
         }
@@ -589,7 +595,7 @@ fn run_sweep(
         let dir = seed_dir(logs, seed, ready.target.name);
         let results = std::fs::create_dir(&dir)
             .with_context(|| format!("creating {}", dir.display()))
-            .and_then(|()| boot_case(builder, ready, Some(seed), &dir, &mut |line| notes.push(line)));
+            .and_then(|()| boot_case(builder, ready, Some(seed), &dir, None, &mut |line| notes.push(line)));
         SeedRun { seed, arch: ready.target.name, notes, results }
     });
     let arches: Vec<&str> = built.iter().map(|ready| ready.target.name).collect();
@@ -799,7 +805,7 @@ type Results = Vec<(String, Outcome, f32)>;
 
 /// Run one case on one target. A boot case yields one result per `smp` entry. `missing` turns
 /// something the host lacks into a failure or, with --allow-skip, a skip. `prebuilt` is what a
-/// `--prebuild` left for it, if the run is from one.
+/// `--prebuild` left for it, if the run is from one. `kept` is `--keep-failed`'s directory.
 fn run_case(
     builder: &Builder,
     case: &Case,
@@ -807,11 +813,44 @@ fn run_case(
     logs: &Path,
     missing: &dyn Fn(String) -> Outcome,
     prebuilt: Option<&Entry>,
+    kept: Option<&Path>,
 ) -> Result<Results> {
     match build_case(builder, case, target, logs, missing, prebuilt)? {
-        Ok(ready) => boot_case(builder, &ready, qemu_seed(ready.boot)?, logs, &mut |line| println!("{line}")),
+        Ok(ready) => {
+            boot_case(builder, &ready, qemu_seed(ready.boot)?, logs, kept, &mut |line| println!("{line}"))
+        }
         Err(results) => Ok(results),
     }
+}
+
+/// `--keep-failed`: a failing boot's logs copied into `dir`, named for the job that ran it
+/// (`scripts/jobs.mk`'s `<arch>-<case>.log` is beside them): its console log `log`
+/// (`<case>-<arch>-smp<N>.log`), the second boot's, and its sessions' under `ssh/`, each as
+/// `<arch>-<case>.smp<N>` followed by what came after the console log's stem. The paths written.
+fn keep_failed(dir: &Path, log: &Path, case: &str, arch: &str, smp: u32) -> Result<Vec<PathBuf>> {
+    std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    let logs = log.parent().context("the console log has no directory")?;
+    let stem = log.file_stem().context("the console log has no name")?.to_string_lossy().into_owned();
+    let mut written = Vec::new();
+    for from in [logs.to_path_buf(), logs.join("ssh")] {
+        let Ok(entries) = std::fs::read_dir(&from) else { continue };
+        for entry in entries {
+            let path = entry?.path();
+            let name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+            let Some(rest) = name.strip_prefix(stem.as_str()) else { continue };
+            // What follows the stem is a suffix of its own (`.log`, `-alice.ssh.log`), never
+            // another smp count's digits.
+            if !(rest.starts_with('.') || rest.starts_with('-')) || !rest.ends_with(".log") || !path.is_file()
+            {
+                continue;
+            }
+            let to = dir.join(format!("{arch}-{case}.smp{smp}{rest}"));
+            prebuilt::copy(&path, &to)?;
+            written.push(to);
+        }
+    }
+    written.sort();
+    Ok(written)
 }
 
 /// A boot case built and packed for one target, to boot any number of times.
@@ -1041,6 +1080,7 @@ fn boot_case(
     built: &Built,
     seed: Option<u64>,
     logs: &Path,
+    keep: Option<&Path>,
     out: &mut dyn FnMut(String),
 ) -> Result<Results> {
     let Built { boot, name, target, machine, firmware, packed: Packed { loader, bundle, userland } } = built;
@@ -1137,11 +1177,13 @@ fn boot_case(
             Outcome::Pass if boot.post_check.is_some() || peers => post_check(boot, &log, out)?,
             other => other,
         };
-        results.push((
-            format!(", smp={smp}"),
-            judge(boot.must_fail.as_deref(), outcome)?,
-            elapsed(run_started),
-        ));
+        let outcome = judge(boot.must_fail.as_deref(), outcome)?;
+        if let (Outcome::Fail(_), Some(dir)) = (&outcome, keep) {
+            for path in keep_failed(dir, &log, name, target.name, *smp)? {
+                out(format!("      kept {}", path.display()));
+            }
+        }
+        results.push((format!(", smp={smp}"), outcome, elapsed(run_started)));
     }
     Ok(results)
 }
@@ -1486,5 +1528,42 @@ mod tests {
         let (text, failures) = join("sched", &["rv64"], vec![seed_run(2, "rv64", Outcome::Pass)]);
         assert_eq!(failures, 0);
         assert!(text.ends_with("sweep sched rv64: 1 seed, 1 passed, 0 failed\n"), "{text}");
+    }
+
+    /// `--keep-failed DIR` copies a failing boot's console log, its second boot's and its
+    /// sessions' logs into DIR under the job's name (`<arch>-<case>.smp<N>…`), and nothing else
+    /// of the run directory: not the disk image, not another case's or another width's logs.
+    #[test]
+    fn a_failing_boots_logs_are_kept_under_its_jobs_name() {
+        let root = std::env::temp_dir().join(format!("redoubt-keep-failed-test-{}", std::process::id()));
+        let (logs, kept) = (root.join("run"), root.join("jobs"));
+        std::fs::create_dir_all(logs.join("ssh")).unwrap();
+        let log = boot_log(&logs, "aio-many-reads-two", "rv64", 1);
+        for (path, text) in [
+            (log.clone(), "init: up\n"),
+            (log.with_extension("second-boot.log"), "init: up again\n"),
+            (log.with_extension("img"), "a disk\n"),
+            (logs.join("ssh/aio-many-reads-two-rv64-smp1-alice.ssh.log"), "alice\n"),
+            (logs.join("ssh/aio-many-reads-two-rv64-smp1-known_hosts"), "redoubt key\n"),
+            (boot_log(&logs, "aio-many-reads-two", "rv32", 1), "the other width\n"),
+            (boot_log(&logs, "aio-many-reads-two-again", "rv64", 1), "another case\n"),
+        ] {
+            std::fs::write(path, text).unwrap();
+        }
+        let written = keep_failed(&kept, &log, "aio-many-reads-two", "rv64", 1).unwrap();
+        let names: Vec<String> =
+            written.iter().map(|p| p.file_name().unwrap().to_string_lossy().into_owned()).collect();
+        assert_eq!(
+            names,
+            [
+                "rv64-aio-many-reads-two.smp1-alice.ssh.log",
+                "rv64-aio-many-reads-two.smp1.log",
+                "rv64-aio-many-reads-two.smp1.second-boot.log"
+            ]
+        );
+        assert!(written.iter().all(|p| p.parent() == Some(kept.as_path())));
+        assert_eq!(std::fs::read_to_string(&written[1]).unwrap(), "init: up\n");
+        assert_eq!(std::fs::read_dir(&kept).unwrap().count(), 3);
+        std::fs::remove_dir_all(&root).unwrap();
     }
 }
