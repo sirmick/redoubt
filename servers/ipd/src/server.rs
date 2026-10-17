@@ -10,7 +10,11 @@
 //! or write for at most [`DATA_WAIT_US`], then `timeout`. They are served again once the stack
 //! says they would not wait, and an abandoned one is answered at once. A multiplexed connection's
 //! requests (servers/serving.md, "Multiplexed connections") wait in the skeleton instead, every
-//! one for at most [`DATA_WAIT_US`], and are served again after every poll.
+//! one for at most [`DATA_WAIT_US`], and are served again after every poll. Both waits are
+//! strictly shorter than the longest a client waits for an answer (servers/ipd.md, "Pinned and
+//! abandoned calls"): a `data` read's answer carries bytes, and a client that gave up before it
+//! came would drop them from the stream. Bytes that arrive after the `timeout` wait in the
+//! socket's buffer for the read the client makes next.
 //!
 //! **Sockets are paid for in the shared admission** (servers/ipd.md, "Sizing"): around each 9P
 //! request the caller's bucket and share reserve up to [`SOCKETS_PER_REQUEST`] `State` units
@@ -38,10 +42,14 @@ use crate::link::Netif;
 use crate::scope::Scope;
 use crate::stack::{Entropy, MAX_BACKLOG, Owner, WaitFor};
 
-/// How long a `ctl` read waits for a connect or an accept (µs).
-pub const CTL_WAIT_US: u64 = 60_000_000;
-/// How long a `data` read or write waits (µs).
-pub const DATA_WAIT_US: u64 = 30_000_000;
+/// How long a `ctl` read waits for a connect or an accept (µs): [`DATA_WAIT_US`], the same bound
+/// for the same reason, though a `ctl` read asked again finds the same state.
+pub const CTL_WAIT_US: u64 = DATA_WAIT_US;
+/// How long a `data` read or write waits (µs): strictly shorter than the 10 s the beamlet hub
+/// waits for a request's answer (`FILE_WAIT_US`, userland/otp/redoubt/src/files.rs), by a 2 s
+/// margin, a round figure far above the kernel's delivery of the reply (microseconds), so a read's answer is
+/// never dropped by a client that gave up first, with the bytes it carried.
+pub const DATA_WAIT_US: u64 = 8_000_000;
 /// `grant`'s opcode, and the ingress `frame`'s (servers/ipd.md, `ipd`'s table).
 pub const GRANT: u64 = 16;
 pub const FRAME: u64 = 17;
