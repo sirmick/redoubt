@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 462
+revision = 467
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -2562,9 +2562,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
 
 [[node]]
   id = "B88"
-  title = "At two harts on rv32, erofsd:system takes nobody's call under two spinner VMs: the steward's disconnects there time out, start_agent hits the client's timeout, nothing prints for ~570 s"
+  title = "The rv32 two-hart latency stall: two spinner VMs loading code at once saturate the verified read path, then outrun the 5 s launch bound on compute; verityd caches from the manifest and reads ahead"
   template = "package"
   parent = "AGENTS"
-  body = "Seen by STEWARD3W's steward-latency N = 3 round on rv32 at two harts, twice (2026-10-17): before and after STEWARD3U's bounded console writes (so not the console-hold wedge first suspected): the steward's cleanup disconnects at erofsd:system time out (parked after four), the shell's start_agent for the next lease gets the client's 5 s `timeout` while the steward had taken no call, and nothing prints for ~570 s until the spinners' deadline kills; rv64 at two harts and rv32 at one hart complete the same round. The implementer's reading: erofsd:system (the read-only system volume server; its two spinner VMs read code from it) takes nobody's call under two spinner VMs at two harts on rv32. Logs: .tmp/STEWARD3W/latency-logs/stall2-* (the console, the session logs). Work: reproduce (`TESTBENCH_QEMU_SEED=3 cargo testbench steward-latency --arch rv32 --keep-failed <dir>` at two harts under q, LATENCY_ROUNDS 3) and find who is stuck: erofsd's serving loop (a receive that never returns at two harts: IPC3's per-endpoint delivery, the hub's waiters, verityd's block checks under two readers), the kernel (a lost wake, a timer on the wrong hart: SCHED4, B87's interrupt-claim shape), or the steward (a call of its own outside any batch): name it from the trace and the logs; the fix where it belongs with a two-hart case both widths (or one width if rv64 cannot show it, said why); the steward-latency rv32 two-hart row regained. Related: B87 (two-hart trace rejections). Files: servers/erofsd, libs/rt serving, kernel/src as the cause dictates; docs where the rule lives. Tier A; reviewer kernel-red-3 (steward-red-4 if the steward). Size M."
-  state = "active"
-  revision = 456
+  body = "Found by STEWARD3W's steward-latency N = 3 round on rv32 at two harts (twice, before and after STEWARD3U), first read as erofsd:system taking nobody's call. The block-trace (a test-only kernel instrument this node adds, off in every default build) showed the steward's calls out all return within 1.43 s and it waits to receive on its own endpoint, the read path's servers run whenever asked, and a kernel lost wake is refuted: the wedge is the verified system-volume read path (erofsd, verityd, blkd) under two concurrent VM code loads, verityd's four data blocks thrashing with no read-ahead, the shell's own load starved past start_agent's 5 s bound. Fix: verityd's data cache is sized from its manifest entry's heap (half the cap less a derived reserve, floor four), and a request's cold run is read ahead in one read bounded by MAX_SECTORS and the cache's size (up to five blkd calls at the two-page lend), every block hash-checked before it is kept; blkd reads fall from 2704 to 924 on the case and rounds N = 1 and 2 complete on rv32 at two harts. Round three does not: launch beside two spinners takes 5.3 to 5.7 s against 3.9 s alone (rv64: 2.2 to 3.3 s), and a larger cache cuts reads further without moving it, so the remaining cause is compute, two equal-weight module decodes and the shell's share under icount at two harts; the rv32 two-hart N = 3 and 4 rows are stated missed with that cause, the target unmoved. verity:system's heap grows 100 to 118 pages (init's rule: twice the measured peak) in the image and every memory-checked manifest; budget 256 unchanged. Residuals: the steward's mints at shared servers wait within FOREVER (bounded disconnects, unbounded mints; max observed 1.43 s), its own node; whether a session's load outranks a lease's under the scheduler, the Architect's. Report .wash/local/B88-report.md. Tier A; reviewer kernel-red-3. Size M."
+  state = "done"
+  revision = 467
