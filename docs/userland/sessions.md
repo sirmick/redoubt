@@ -273,7 +273,9 @@ startup block, as the steward does for every session it launches
 ([the steward](../servers/steward.md#authentication-and-sessions)): `principal=NAME`; `label=NAME:ID`, one for each label of its set, in the set's
 order; `context=NAME` for a named context, none for the principal's default one or the
 console's session; and `home=/PATH`, the path the session's namespace binds the principal's home
-at, for a vault session as for a plain one, none for a principal with no home. beamlet reads them
+at, for a vault session as for a plain one, none for a principal with no home or for a vault
+session in a confined boot, whose home slot binds nothing
+([the steward](../servers/steward.md#declassification-and-push)). beamlet reads them
 once at its start and gives them to Elixir as `redoubt:identity/0` ([beamlet](beamlet.md#natives));
 beside them a session is launched with the named handle `notices`, the receive right of the
 endpoint the steward tells it a lease's end on, and a shared server's restart, which the shell

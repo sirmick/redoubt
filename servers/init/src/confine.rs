@@ -59,12 +59,14 @@ fn reads_through(m: &Manifest, s: &Server, t: &Server) -> bool {
 /// The label sets that use server `i`: its own, every server handed one of its endpoints or a
 /// volume's range at it (a `littlefsd`, or a verified volume's `verityd`, on that `blkd`'s disk; an
 /// `littlefsd` at its volume's `verityd`), and, if it is shared, every principal domain with its own
-/// set.
+/// set. An exempt server handed an endpoint is not a user of it: it holds the root badge to mint
+/// each session's connection in that session's scope (R41), so the user is the session, whose
+/// set the server checks itself (R25; servers/init.md, "The confinement check").
 fn users<'a>(m: &'a Manifest, i: usize) -> Vec<Set<'a>> {
     let s = &m.servers[i];
     let mut sets = alloc::vec![set(&s.labels)];
     let holds = |t: &Server| m.volumes.iter().any(|v| on_disk(m, v, s) && holds_range(m, v, t));
-    for t in &m.servers {
+    for t in m.servers.iter().filter(|t| !exempt(t)) {
         let range = (s.program == BLKD && holds(t)) || reads_through(m, s, t);
         if range || t.handed.iter().any(|h| s.receives.contains(&h.endpoint)) {
             sets.push(set(&t.labels));
@@ -83,8 +85,8 @@ fn refuse(at: String, sharing: Sharing) -> Result<(), Refusal> { Err(Refusal::Co
 
 /// R34 for a manifest with `confined` set.
 pub fn check(m: &Manifest) -> Result<(), Refusal> {
-    // An endpoint: its receiver, every server handed it, and at a verifier's first, the server
-    // attaching its volume.
+    // An endpoint: its receiver, every server handed it (an exempt one is not a user: see
+    // `users`), and at a verifier's first, the server attaching its volume.
     for (i, s) in m.servers.iter().enumerate().filter(|(_, s)| !exempt(s)) {
         for (k, e) in s.receives.iter().enumerate() {
             let mut sets = alloc::vec![set(&s.labels)];
@@ -92,7 +94,9 @@ pub fn check(m: &Manifest) -> Result<(), Refusal> {
                 m.servers
                     .iter()
                     .filter(|t| {
-                        t.handed.iter().any(|h| &h.endpoint == e) || (k == 0 && reads_through(m, s, t))
+                        !exempt(t)
+                            && (t.handed.iter().any(|h| &h.endpoint == e)
+                                || (k == 0 && reads_through(m, s, t)))
                     })
                     .map(|t| set(&t.labels)),
             );
@@ -101,12 +105,15 @@ pub fn check(m: &Manifest) -> Result<(), Refusal> {
             }
         }
     }
-    // A volume: its own set, every server attaching it and every domain of a principal whose
-    // home is on it. A labelled domain reading a shared unlabelled volume is one such case.
+    // A volume: its own set, every server attaching it and, for a principal whose home is on
+    // it, the principal's unlabelled domain alone: under `confined` the steward binds a home to
+    // unlabelled sessions only, leaving a labelled session's home unbound with the push as its
+    // way in (servers/steward.md, "Declassification and push"), so a labelled domain never
+    // reads the shared unlabelled volume its principal's home is on.
     for (i, v) in m.volumes.iter().enumerate() {
         let mut sets = alloc::vec![set(&v.labels)];
         sets.extend(m.servers.iter().filter(|s| s.volume.as_ref() == Some(&v.name)).map(|s| set(&s.labels)));
-        for (p, domain) in principal_sets(m) {
+        for (p, domain) in principal_sets(m).into_iter().filter(|(_, d)| d.is_empty()) {
             let home = m.principals[p].home.as_deref().and_then(|h| h.split_once(':'));
             if home.is_some_and(|(volume, _)| volume == v.name) {
                 sets.push(domain);

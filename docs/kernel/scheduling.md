@@ -582,9 +582,10 @@ got 0.
 
 ### Responsiveness
 
-<details><summary>Status: built · tested (20)</summary>
+<details><summary>Status: built · tested (21)</summary>
 
 - bench:sched-latency
+- bench:steward-latency
 - bench:sched-lock-contention
 - bench:sched-lock-contention-4
 - bench:sched-lock-contention-4-mttcg
@@ -777,6 +778,49 @@ seventeen (rv64). A round of N budgets' slices is N such periods, not N ms.
 The decision wake is measured by the stand-in itself (`time_now` against its own deadline), and
 the post-check reads its sample windows, net of audits, while R10's time comes from the kernel's
 trace: that half of the lease-end sum is the program's own report, not the kernel's.
+
+**With the real steward.** `steward-latency` measures the same quantities from the steward
+itself: alice's session holds N live leases, the probe's own lease or the kernel's deadline lease
+among them beside N - 1 spinning agents (`Redoubt.Agents.Echo spin`, each a beamlet VM of 5,248
+pages on a lease), N = 1 and 2, D = 16 of each kind per round; the steward's test-only probe arms
+its timer at the last point before the receive that waits on it, prints its wake, its decision
+wake and its `budget_destroy` call to return, and the kernel's deadline notice, as the stand-in
+prints them; the post-check judges them net of audits with the targets above, unchanged, and
+R10 from the trace. The load shapes differ: the stand-in's spinners were plain budgets of weight
+100 under `users`, the steward's are lease VMs under alice's share, each a `sizes.agent` budget;
+the measured quantities are per lease end, whatever carries the load. The steward runs at the
+workload's weight, 1,000 under `system`, in the case's manifest. A lease's end is measured to its
+destruction and the notice to the sponsor: the servers' records are freed after, off the measured
+path. N = 4 and 16 are not measured here: when the case was written the box admitted at most
+eight steward-minted system-volume connections, the steward's own share at `erofsd:system`; a
+connection the steward mints is now admitted in its account from its first request
+([serving](../servers/serving.md#admit)), so the stand-in's columns at 4 and 16 stand alone
+until the case runs there. N = 3 is not reached: a cleanup step dropped
+at a busy server leaks a `State` there and the eighth is refused
+([steward](../servers/steward.md#failure-and-restart)). Measured at seed 3, net µs p50/p99 at
+N = 1 / N = 2; each lease destroyed is a VM budget of 5,248 pages, and the gross figures beside
+the deadline notice and the destroy call carry 300-500 ms of the checked build's audits after
+such a destruction (subtracted, as every target is net):
+
+| Measure (net µs, N = 1 / 2) | rv64, 1 hart | rv32, 1 hart | rv64, 2 harts | rv32, 2 harts |
+| --- | --- | --- | --- | --- |
+| steward timer wake (p50/p99) | 23362/24089, 25887/27735: p50 missed | 53310/57418, 26139/28116: missed | 40365/49236, 39183/45495: p50 missed | 58412/84010, 61174/66142: missed |
+| steward decision wake (p50/p99) | 4090/6996, 5560/12936 | 5327/6357, 6541/8264 | 28806/42572 (p50 missed), 19386/27335 | 55659/69864, 40849/45094: p50 missed |
+| deadline notice (p99) | 26623, 28447 | 29869, 29651 | 49511, 55108: missed | 80148, 86247: missed |
+| `budget_destroy`, call to return (p50/p99) | 4661/6009, 6018/8361 | 6703/9279, 5812/8934 | 7592/8740, 7502/10143 | 8488/11177, 9579/10446 |
+| R10, 65 destructions (p99) | 9664 | 9623 | 9746 | 9754 |
+| a lease's end (worst decision wake p99 + R10) | 12936 + 9664 = 22600 | 8264 + 9623 = 17887 | 42572 + 9746 = 52318 | 69864 + 9754 = 79618 |
+
+At one hart the real steward meets every target but its timer wake's p50: the steward reaches
+its wait with the console round trips of the reply it has just given on its pass (its audit and
+usage lines, each line an attach, open, write and close at `consoled`), and the wake pays for
+that work before it, by the rule above. At two harts, where `icount` counts both harts'
+instructions, the same work doubles and the decision wake at N = 1 and the deadline notice miss
+too; the two-hart figures are gated as the stand-in's are, and these misses are findings against
+the steward's loop, not the scheduler. The case runs by name, out of the whole run, until the
+loop's console cost is fixed. The 65 destructions judged are those before the probe's
+`LATENCY-END`; the sixteen after it (the marker-file exits reaping the leases) are recorded and
+not judged.
 
 **The sweep** (2026-09-27, seeds 1 to 16, on rv64 and rv32, `TESTBENCH_QEMU_SEED`; the gate runs
 seed 3, this sweep's worst, and no gate sets the variable). The steward decision wake, p50 / p99 in µs at N = 1, 4 and 16, and a lease's end (the
@@ -1054,9 +1098,10 @@ Status: built · tested: bench:sched-carve-inflation, bench:legacy-gone, host:re
 
 ### R12 (scheduling)
 
-<details><summary>Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search, `map_fixed`'s range, `process_create` and, after RAM fills, a one-page `map_anon`, `budget_create` and a rolled-back `process_create` (with a recorded negative run, `alloc-first-fit`); beyond the memory calls, for `endpoint_create`, `mint`, `close`, `thread_create` and `thread_exit`, `call` and `reply`, a `receive` of a queued message, `time_now` and `budget_usage` against a hostile budget's full handle table, two thousand endpoints and 250 parked threads (`bench:call-bounds`); and at full occupancy, every PID in use with every thread, for a delivery, a timer expiry ending 250 waits at once and the reconcile that wakes their 250 budgets (over 8-seed sweeps, 7.8 ms on rv64 and 6.8 to 9.1 ms on rv32, bounded at 10 ms: the sweeps' worst and a tenth) and a destruction (at most 17.1 ms on rv64, 18.2 ms on rv32) (`bench:worst-walk`) · tested (65)</summary>
+<details><summary>Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search, `map_fixed`'s range, `process_create` and, after RAM fills, a one-page `map_anon`, `budget_create` and a rolled-back `process_create` (with a recorded negative run, `alloc-first-fit`); beyond the memory calls, for `endpoint_create`, `mint`, `close`, `thread_create` and `thread_exit`, `call` and `reply`, a `receive` of a queued message, `time_now` and `budget_usage` against a hostile budget's full handle table, two thousand endpoints and 250 parked threads (`bench:call-bounds`); and at full occupancy, every PID in use with every thread, for a delivery, a timer expiry ending 250 waits at once and the reconcile that wakes their 250 budgets (over 8-seed sweeps, 7.8 ms on rv64 and 6.8 to 9.1 ms on rv32, bounded at 10 ms: the sweeps' worst and a tenth) and a destruction (at most 17.1 ms on rv64, 18.2 ms on rv32) (`bench:worst-walk`) · tested (66)</summary>
 
 - bench:sched-share
+- bench:steward-latency
 - bench:sched-share-release
 - bench:sched-capped
 - bench:sched-capped-mttcg

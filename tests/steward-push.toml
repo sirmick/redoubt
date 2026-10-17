@@ -1,0 +1,132 @@
+description = "Push (docs/servers/steward.md, \"Declassification and push\" and R42; docs/servers/init.md, \"The confinement check\"): alice's unlabelled session writes a 4 KiB file in her home and submits a push of it into her vault (`submit` kind 3, `what` the source's path in her home, a newline, the target's path in the vault); the steward, unlabelled, reads the source itself through its kept connection at her home, snapshots and hashes it; a source over PUSH_MAX is refused too_big before anything is read, a vault session's push is refused (a labelled requester pushes nothing) and bob's push into alice's label is not_owner; `ssh approve@box` shows the source and target by id with their paths, the size and the digest, never the bytes; `approve <id> <code>` carves a writer budget under users with exactly the target's labels and alice's account, launches the crossing program in it with one connection to the vault rooted at the target's directory, minted in that budget, hands it the snapshot in one call, and destroys the budget; alice's vault session reads the item back whole and equal. The verdicts are the steward's audit lines (Submitted in the target's domain, Approved, Pushed naming the writer budget), its crossing line, the steward's answers as the shells printed them, the bytes the steward wrote on the channel as sshd relayed them, and the vault session's comparison (rule F)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+recipe = "image/boot.toml"
+# The image needs 1 GiB: the principals' budgets, each holding shell VMs' sessions, do not fit
+# the users budget 256 MiB leaves (docs/kernel/budgets.md).
+memory_mib = 1024
+# Four logins and the approval terminal.
+timeout_secs = 1800
+expect = [
+    '^init: started sshd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
+    '^init: started steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+]
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    '^init: .* (exited|faulted|was killed)',
+    'init: restarted',
+    'EXCEPTION',
+    'steward: a step failed',
+    'steward: the core exited',
+    'sshd: login alice.*: refused',
+    'sshd: login bob: refused',
+]
+# The request's records are the target's domain's; the writer budget is destroyed once the item
+# is written (its program exits on its own after its one call, or the destruction kills it first).
+expect_after = [
+    # The steward says its own time on each submit (the refused ones first), then the audit line.
+    '^\[con [0-9a-f]{16}\] steward: served submit in [0-9]+ us$',
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{7\} at [0-9]+: Submitted \{ request: [0-9]+ \}',
+    '^\[con [0-9a-f]{16}\] sshd: login approve: approval channel [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{7\} at [0-9]+: Approved \{ request: [0-9]+, principal: 0, key: [1-9][0-9]*, hash: \[',
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{7\} at [0-9]+: Pushed \{ request: [0-9]+, source: [0-9]+, item: [0-9]+, bytes: \[0, 1, 2, 3, 4, ',
+    '^\[con [0-9a-f]{16}\] steward: crossing [0-9]+ of 1001/\{7\} (exited 0|was killed [0-9]+)$',
+]
+
+# Alice's unlabelled session stages the source (4 KiB of every byte value) and one over the
+# bound, and submits; the answers are tagged, so a pattern matches the printed value. Her
+# shell prints the notice: the request's labels are none, so every session of hers is told.
+[[session]]
+user = "alice"
+pty = true
+steps = [
+    { expect = '/home/alice \([0-9]+\)> ' },
+    { send = "data = for i <- 0..4095, into: <<>>, do: <<rem(i, 256)>>; {:stage, File.write(\"/home/alice/in\", data), File.write(\"/home/alice/huge\", :binary.copy(<<1>>, 61441))}\n" },
+    { expect = '\{:stage, :ok, :ok\}' },
+    { expect = '\([0-9]+\)> ' },
+    # The source exists before the vault session's push names it: the steward stats the source
+    # before the core (`unknown` otherwise), and the case wants the core's answer.
+    { mark = "staged" },
+    { wait = "vault-staged" },
+    { send = "{:ok, c} = Redoubt.Contexts.connection(); {:huge, Redoubt.Wire.Client.Steward.submit(c, 3, <<7::little-64>>, 0, 0, 0, \"huge\\nsecret/in\", \"\")}\n" },
+    { expect = '\{:huge, \{:error, :too_big\}\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:push, Redoubt.Wire.Client.Steward.submit(c, 3, <<7::little-64>>, 0, 0, 0, \"in\\nsecret/in\", \"a push\")}\n" },
+    # The notice is printed by the shell's listener in its own order against the reply, so one
+    # pattern takes either order.
+    { expect = '(?s)\[an approval is waiting\].*\{:push, \{:ok, %\{request: [0-9]+\}\}\}|\{:push, \{:ok, %\{request: [0-9]+\}\}\}.*\[an approval is waiting\]' },
+    { mark = "submitted" },
+    { wait = "vault-done" },
+    { exit = 0 },
+]
+
+# Alice's vault session makes the target's directory, is refused a push of its own, and reads
+# the pushed item back once the approval has written it, comparing it with the same bytes.
+[[session]]
+user = "alice+alice-secrets"
+name = "alice-vault"
+pty = true
+steps = [
+    { expect = '/home/alice \([0-9]+\)> ' },
+    { wait = "staged" },
+    { send = "{:ok, c} = Redoubt.Contexts.connection(); {:staged, File.mkdir_p(\"/vault/secret\"), Redoubt.Wire.Client.Steward.submit(c, 3, <<7::little-64>>, 0, 0, 0, \"in\\nsecret/in\", \"\")}\n" },
+    { expect = '\{:staged, :ok, \{:error, :not_owner\}\}' },
+    { expect = '\([0-9]+\)> ' },
+    { mark = "vault-staged" },
+    { wait = "approved" },
+    { send = "data = for i <- 0..4095, into: <<>>, do: <<rem(i, 256)>>; {:pushed, Enum.find_value(1..60, fn _ -> case File.read(\"/vault/secret/in\") do {:ok, t} when t == data -> :equal; {:ok, t} -> {:other, byte_size(t)}; _ -> Process.sleep(1000); nil end end)}\n" },
+    { expect = '\{:pushed, :equal\}' },
+    { expect = '\([0-9]+\)> ' },
+    { mark = "vault-done" },
+    { exit = 0 },
+]
+
+# Bob cannot push into alice's label: the target is not his, whatever his source.
+[[session]]
+user = "bob"
+pty = true
+forbid = ['an approval is waiting']
+steps = [
+    { expect = '/home/bob \([0-9]+\)> ' },
+    { send = "{:ok, c} = Redoubt.Contexts.connection(); {:bob, Redoubt.Wire.Client.Steward.submit(c, 3, <<7::little-64>>, 0, 0, 0, \"hello\\nsecret/in\", \"\")}\n" },
+    { expect = '\{:bob, \{:error, :not_owner\}\}' },
+    { expect = '\([0-9]+\)> ' },
+    { wait = "vault-done" },
+    { exit = 0 },
+]
+
+# The approval terminal: the screen shows the push by its ids and paths, size and digest, no
+# bytes; the code approves.
+[[session]]
+user = "approve"
+name = "approver"
+key = "alice-approval"
+pty = true
+forbid = ['\x1b']
+steps = [
+    { wait = "submitted" },
+    { expect = 'pending approvals for alice:' },
+    { expect = 'request ([0-9a-f]{16}) hash ([0-9a-f]{64}) code ([0-9a-f]{8})' },
+    { expect = 'request from alice \(session-[0-9]+, labels \[\]\): push unlabelled item [0-9]+ \(4096 bytes, sha256 [0-9a-f]{64}\) to item [0-9]+ of labels \[7\]; reason \(untrusted\): "a push"' },
+    # The two items' path lines, in the order of their ids (drawn at random): one pattern for both.
+    { expect = '(?s)item [0-9]+: path \(the requester.s text\) "(?:in|secret/in)".*item [0-9]+: path \(the requester.s text\) "(?:in|secret/in)"' },
+    { expect = 'type: approve <id> <hash or code> \| deny <id> \| pending' },
+    { send = "approve $1 $3\n" },
+    { expect = 'approved ([0-9a-f]{16})' },
+    { mark = "approved" },
+    { wait = "vault-done" },
+    { exit = 0 },
+]
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]
+forward = [22]

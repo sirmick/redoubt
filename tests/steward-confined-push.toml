@@ -1,0 +1,137 @@
+description = "A confined deployment's way in (docs/servers/init.md, \"The confinement check\" and R34; docs/servers/steward.md, \"Declassification and push\"): under a confined manifest (tests/data/steward/confined.manifest.json: the vault on its own disk and blkd, alice without a network scope, init's `confined` line to the steward) alice's vault session is given no home: the shared unlabelled volume her home is on stays unbound for a labelled session, the login's reply names no home and the shell says so in one line, starting at `/`; her unlabelled session's push of a 4 KiB file into the vault, approved at approve@box, lands, and the vault session reads it back whole. The verdicts are init's acceptance of the manifest and its server count, the shell's line, the steward's audit lines (Submitted, Approved, Pushed naming the writer budget), its crossing line, and the vault session's comparison (rule F)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The image's programs, as image/boot.toml names them (a case with a manifest of its own lists
+# them), the crossing program the image publishes among them.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-bootfsd", bin = "bootfsd" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-verityd", bin = "verityd" },
+    { package = "redoubt-netd", bin = "netd" },
+    { package = "redoubt-ipd", bin = "ipd" },
+    { package = "redoubt-walfsd", bin = "walfsd" },
+    { package = "redoubt-erofsd", bin = "erofsd" },
+    { package = "beamlet-redoubt", bin = "beamlet", workspace = "userland/otp" },
+    { package = "redoubt-piped", bin = "piped" },
+    { package = "redoubt-crossing", bin = "crossing" },
+    { package = "redoubt-steward-server", bin = "steward" },
+    { package = "redoubt-sshd", bin = "sshd" },
+    { package = "redoubt-consrelay", bin = "consrelay" },
+]
+# The image needs 1 GiB: the principals' budgets, each holding shell VMs' sessions, do not fit
+# the users budget 256 MiB leaves (docs/kernel/budgets.md).
+memory_mib = 1024
+# Three logins and the approval terminal.
+timeout_secs = 1800
+expect = [
+    '^init: the manifest is checked: 14 servers, bound \d+ pages$',
+    '^init: started sshd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
+    '^init: started steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+]
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    '^init: .* (exited|faulted|was killed)',
+    'init: restarted',
+    'EXCEPTION',
+    'steward: a step failed',
+    'steward: the core exited',
+    'sshd: login alice.*: refused',
+]
+# The push's records are the target's domain's; the writer budget is destroyed once the item is
+# written (its program exits on its own after its one call, or the destruction kills it first).
+expect_after = [
+    '^\[con [0-9a-f]{16}\] steward: served submit in [0-9]+ us$',
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{7\} at [0-9]+: Submitted \{ request: [0-9]+ \}',
+    '^\[con [0-9a-f]{16}\] sshd: login approve: approval channel [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{7\} at [0-9]+: Approved \{ request: [0-9]+, principal: 0, key: [1-9][0-9]*, hash: \[',
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{7\} at [0-9]+: Pushed \{ request: [0-9]+, source: [0-9]+, item: [0-9]+, bytes: \[0, 1, 2, 3, 4, ',
+    '^\[con [0-9a-f]{16}\] steward: crossing [0-9]+ of 1001/\{7\} (exited 0|was killed [0-9]+)$',
+]
+
+# Alice's vault session: told no home, it starts at `/`, says so, makes the target's directory
+# in the vault, and reads the pushed item back once the approval has written it.
+[[session]]
+user = "alice+alice-secrets"
+name = "alice-vault"
+pty = true
+forbid = ['/home/alice']
+steps = [
+    { expect = 'no home in this label set: a push is the way in; this session starts in /' },
+    { expect = '/ \([0-9]+\)> ' },
+    { send = "{:staged, File.mkdir_p(\"/vault/secret\")}\n" },
+    { expect = '\{:staged, :ok\}' },
+    { expect = '\([0-9]+\)> ' },
+    { mark = "vault-staged" },
+    { wait = "approved" },
+    { send = "data = for i <- 0..4095, into: <<>>, do: <<rem(i, 256)>>; {:pushed, Enum.find_value(1..60, fn _ -> case File.read(\"/vault/secret/in\") do {:ok, t} when t == data -> :equal; {:ok, t} -> {:other, byte_size(t)}; _ -> Process.sleep(1000); nil end end)}\n" },
+    { expect = '\{:pushed, :equal\}' },
+    { expect = '\([0-9]+\)> ' },
+    { mark = "vault-done" },
+    { exit = 0 },
+]
+
+# Alice's unlabelled session has its home, stages the source and submits the push; the notice
+# is printed by the shell's listener in its own order against the reply.
+[[session]]
+user = "alice"
+pty = true
+steps = [
+    { expect = '/home/alice \([0-9]+\)> ' },
+    { send = "data = for i <- 0..4095, into: <<>>, do: <<rem(i, 256)>>; {:stage, File.write(\"/home/alice/in\", data)}\n" },
+    { expect = '\{:stage, :ok\}' },
+    { expect = '\([0-9]+\)> ' },
+    { wait = "vault-staged" },
+    { send = "{:ok, c} = Redoubt.Contexts.connection(); {:push, Redoubt.Wire.Client.Steward.submit(c, 3, <<7::little-64>>, 0, 0, 0, \"in\\nsecret/in\", \"the way in\")}\n" },
+    { expect = '(?s)\[an approval is waiting\].*\{:push, \{:ok, %\{request: [0-9]+\}\}\}|\{:push, \{:ok, %\{request: [0-9]+\}\}\}.*\[an approval is waiting\]' },
+    { mark = "submitted" },
+    { wait = "vault-done" },
+    { exit = 0 },
+]
+
+# The approval terminal: the push by its ids and paths, size and digest; the code approves.
+[[session]]
+user = "approve"
+name = "approver"
+key = "alice-approval"
+pty = true
+forbid = ['\x1b']
+steps = [
+    { wait = "submitted" },
+    { expect = 'pending approvals for alice:' },
+    { expect = 'request ([0-9a-f]{16}) hash ([0-9a-f]{64}) code ([0-9a-f]{8})' },
+    { expect = 'request from alice \(session-[0-9]+, labels \[\]\): push unlabelled item [0-9]+ \(4096 bytes, sha256 [0-9a-f]{64}\) to item [0-9]+ of labels \[7\]; reason \(untrusted\): "the way in"' },
+    { expect = 'type: approve <id> <hash or code> \| deny <id> \| pending' },
+    { send = "approve $1 $3\n" },
+    { expect = 'approved ([0-9a-f]{16})' },
+    { mark = "approved" },
+    { wait = "vault-done" },
+    { exit = 0 },
+]
+
+# The confined manifest: the vault's volume on disk2 behind a labelled blkd of its own.
+[[file]]
+name = "manifest"
+from = { path = "tests/data/steward/confined.manifest.json" }
+verity = "image/userland.toml"
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+# The vault disk (docs/testbench.md, "Disks and network cards"): disk2 on its own slot, the one
+# a confined manifest keeps the vault on; walfsd formats the blank partition.
+[vault]
+size_kib = 8192
+partitions = 1
+
+[net]
+forward = [22]

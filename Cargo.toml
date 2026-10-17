@@ -35,6 +35,7 @@ members = [
   "servers/bootfsd",
   "servers/consoled",
   "servers/consrelay",
+  "servers/crossing",
   "servers/blkd",
   "servers/netd",
   "servers/ipd",

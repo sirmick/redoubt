@@ -242,6 +242,7 @@ Status: planned · M1 (sessions over SSH, kept apart)
 | `netd` | its own endpoint | the network card's MMIO (DMA) and IRQ handles | anything else |
 | `ipd:network` | its own endpoint | a `netd` connection | a budget; a labelled caller's request |
 | [`piped`](piped.md) | the endpoint its session's launch made | the buffers of one session's pipes | any other handle; another session's bytes |
+| `crossing` | the endpoint the steward calls it on, and one connection to the labelled volume at its root, in a budget with exactly that label set | one item read or written ([the steward](steward.md#declassification-and-push)) | a second call; anything outside its label set |
 
 No server's startup block carries a budget handle. A manifest that gives a server one is refused,
 because a budget handle is a destroy right and a create right: a compromised `ipd` holding its

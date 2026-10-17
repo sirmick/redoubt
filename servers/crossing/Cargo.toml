@@ -1,0 +1,15 @@
+[package]
+name = "redoubt-crossing"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "crossing: the steward's reader or writer of one item, in a budget carrying the item's labels (servers/steward.md, \"Declassification and push\")"
+
+[[bin]]
+name = "crossing"
+path = "src/bin/crossing.rs"
+
+[dependencies]
+redoubt-rt = { path = "../../libs/rt" }
+# `DECLASSIFY_MAX`: the one bound a read answers up to, named once in the core.
+redoubt-steward = { path = "../../libs/steward" }

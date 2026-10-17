@@ -25,7 +25,10 @@ use crate::volume::{BLOCK, Blocks, Mounted, Range};
 /// cap of live contexts per label set, its leases, and one spare for a context detaching while
 /// another attaches (its connection lives until the relay ends); the bench holds it to the
 /// largest such sum over the tree's manifests (tools/testbench,
-/// `the_servers_admit_what_a_manifest_lets_one_account_hold`): 1 + 3 + 1 + 1.
+/// `the_servers_admit_what_a_manifest_lets_one_account_hold`): 1 + 3 + 1 + 1. A crossing's
+/// program (servers/steward.md, "Declassification and push"), in a budget stamped with the
+/// account, makes plain calls and holds no completion call: one `State` of the bucket for at
+/// most a second, which no sum here counts.
 pub const fn limits(buckets: u32) -> Limits {
     Limits { buckets, in_flight: 6, files: 32, state: 8, requests: 128, pages: 32 }
 }

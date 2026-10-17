@@ -50,11 +50,12 @@ mod machine {
     use redoubt_rt::client::{Connection as Nine, Lend};
     use redoubt_rt::handle::{Budget, Endpoint, close};
     use redoubt_rt::ipc::{Buffer, Event, Request};
-    use redoubt_rt::server::ninep::mode;
+    use redoubt_rt::server::ninep::{DMDIR, mode};
     use redoubt_rt::server::typed::finish;
     use redoubt_rt::server::{close_delivery, own_args};
     use redoubt_rt::startup::Startup;
-    use redoubt_rt::wire::proto::{consol, consrelay, ipd, steward};
+    use redoubt_rt::wire::proto::{consol, consrelay, crossing, ipd, steward};
+    use redoubt_steward::consts::CROSSING_LIFE;
     use redoubt_steward::domain::Domain;
     use redoubt_steward::effect::{Object, Output};
     use redoubt_steward::event::EventKind;
@@ -90,11 +91,53 @@ mod machine {
     const WATCHES: usize = 2;
     #[cfg(feature = "restart-probe")]
     const PROBE_DELAY: u64 = 14_000_000;
+    /// Test-only, for the bench's `steward-latency` (feature `latency-probe`, off in every
+    /// default build; kernel/scheduling.md, "Responsiveness"): a lease asked for exactly
+    /// [`LATENCY_LEASE_US`] is the probe's. After its `start_agent` is answered the steward prints
+    /// the answer to its next receive as a `reply_wait` sample (its own work after the reply),
+    /// arms there a timeout of [`LATENCY_TIMER_US`] and prints its wake as a `timer_wake` sample (`time_now`
+    /// less the deadline it armed), then one of [`LATENCY_DECIDE_US`] whose wake is a
+    /// `decision_wake` sample, on which it ends the lease itself (the core's `EndLease` on the
+    /// badge that started it, no new row or effect) and prints its `budget_destroy` call to
+    /// return as `destroy_call`; a lease the kernel's deadline took prints its exit notice's
+    /// arrival less the deadline as `deadline_notice`. Each sample's group is the count of the
+    /// live leases, itself among them (`N=2`); the counts go out as `LATENCY-COUNT` lines when
+    /// the leases are all gone and the case has written the round's marker ([`LATENCY_ROUND`]
+    /// and the round's number) in the console principal's home, and after the second round's,
+    /// `LATENCY-END` with the steward's clock, the window's end. A steward that finds
+    /// [`LATENCY_DONE`] in the console
+    /// principal's home at its start exits [`LATENCY_EXIT`] at once: six such exits trip init's
+    /// reboot rule, whose reset dumps the kernel's trace the bench's oracle reads.
+    #[cfg(feature = "latency-probe")]
+    const LATENCY_LEASE_US: u64 = 9_000_000;
+    #[cfg(feature = "latency-probe")]
+    const LATENCY_TIMER_US: u64 = 20_000;
+    #[cfg(feature = "latency-probe")]
+    const LATENCY_DECIDE_US: u64 = 30_000;
+    #[cfg(feature = "latency-probe")]
+    const LATENCY_DONE: &str = "latency-done";
+    #[cfg(feature = "latency-probe")]
+    const LATENCY_ROUND: &str = "latency-round-";
+    #[cfg(feature = "latency-probe")]
+    const LATENCY_POLL_US: u64 = 500_000;
+    #[cfg(feature = "latency-probe")]
+    pub const LATENCY_EXIT: u32 = 9;
 
     /// The program a session runs, on `/boot`, and its start module.
     const PROGRAM: &str = "beamlet";
     /// A context's console relay, on `/boot` (servers/consrelay.md).
     const RELAY: &str = "consrelay";
+    /// A crossing's reader or writer of one item, on `/boot` (servers/steward.md,
+    /// "Declassification and push"), the names its startup block holds (servers/crossing), and
+    /// its first-thread stack and heap cap in pages: it holds one page of lend, one fid and at
+    /// most `DECLASSIFY_MAX + 1` bytes read; a write's bytes stay in the steward's lend.
+    const CROSSING: &str = "crossing";
+    const CROSSING_SERVE: &str = "serve";
+    const CROSSING_VOLUME: &str = "volume";
+    const CROSSING_STACK_PAGES: usize = 4;
+    const CROSSING_HEAP_PAGES: u32 = 4;
+    /// The badge the steward's call right on a crossing's endpoint carries: the one caller.
+    const CROSSING_CALL: u64 = 1;
     /// The name the relay finds its hello badge under (servers/consrelay.md).
     const RELAY_HELLO: &str = "hello";
     /// The relay's first-thread stack and its heap cap, in pages: twice what `consrelay-footprint`
@@ -375,6 +418,10 @@ mod machine {
         /// the steward's exit, with all minted below; a server's restart forgets its
         /// ([`Machine::reconnected`]), and the next carve mints them again.
         carved: BTreeMap<String, (Handle, String)>,
+        /// The kept carves the steward itself reads and writes files through, attached once, by
+        /// the carve's key: a push's source, a declassified item's landing (servers/steward.md,
+        /// "Declassification and push"). Forgotten with the carve at the server's restart.
+        homes: BTreeMap<String, Connection>,
         /// The connection `init` handed the steward at a server that restarted since, by the
         /// server's handle name, in place of the startup block's (servers/steward.md, "Failure
         /// and restart").
@@ -387,9 +434,12 @@ mod machine {
         session_pages: u64,
         agent_pages: u64,
         agent_quota: u64,
-        /// The program's length on `/boot`, and the relay's.
+        /// The program's length on `/boot`, the relay's and the crossing program's, and a
+        /// crossing budget's pages, the manifest's `sizes.crossing`.
         program_len: usize,
         relay_len: usize,
+        crossing_len: usize,
+        crossing_pages: u64,
         /// The endpoint relays say hello on, and the badge the last one was given.
         hello: Option<Endpoint>,
         hellos: u64,
@@ -416,6 +466,10 @@ mod machine {
         reader_work: Endpoint,
         reader_hand: Endpoint,
         readers: Watchers,
+        /// `latency-probe` only: the last `budget_destroy`'s end and length (µs), the probe's
+        /// `destroy_call` sample.
+        #[cfg(feature = "latency-probe")]
+        last_destroy: Option<(u64, u64)>,
     }
 
     impl Machine<'_> {
@@ -531,6 +585,21 @@ mod machine {
             self.accounts.iter().find(|(acc, _)| *acc == a).map(|(_, n)| n.clone())
         }
 
+        /// The steward's own file connection at `principal`'s home: the kept carve, attached once
+        /// (its fids are the steward's alone; the carve mints connections and needs none).
+        fn home(&mut self, principal: &str) -> Result<Connection, Error> {
+            let h = self.own_lines.home(principal).cloned().ok_or(Error::BadHandle)?;
+            let key = format!("home {principal}");
+            if let Some(conn) = self.homes.get(&key) {
+                return Ok(conn.clone());
+            }
+            let kept = self.carve(&key, &h.handle, &h.path, h.quota)?;
+            let conn =
+                Connection::attach(kept.into_endpoint(), &mut self.lend).map_err(|_| Error::Refused)?;
+            self.homes.insert(key, conn.clone());
+            Ok(conn)
+        }
+
         /// Reads `buf.len()` bytes of the program `path` at `at`, through `bootfsd`.
         fn read_program(&mut self, path: &str, at: usize, buf: &mut [u8]) -> Result<(), Error> {
             let conn = self.server("bootfsd")?;
@@ -630,7 +699,17 @@ mod machine {
             Ok(u.pages_usage == 0 && u.processes_usage == 0 && u.weight_carved == 0)
         }
 
-        fn destroy(&mut self, budget: Handle) -> Result<(), Error> { Budget::from_handle(budget).destroy() }
+        fn destroy(&mut self, budget: Handle) -> Result<(), Error> {
+            #[cfg(feature = "latency-probe")]
+            let began = redoubt_rt::handle::time_now().unwrap_or(0);
+            let destroyed = Budget::from_handle(budget).destroy();
+            #[cfg(feature = "latency-probe")]
+            {
+                let end = redoubt_rt::handle::time_now().unwrap_or(began);
+                self.last_destroy = Some((end, end.saturating_sub(began)));
+            }
+            destroyed
+        }
 
         fn budget_id(&self, budget: Handle) -> u64 { u64::from(budget.index()) }
 
@@ -1121,6 +1200,7 @@ mod machine {
             let carved_there: Vec<String> =
                 self.carved.iter().filter(|(_, (_, s))| s == server).map(|(k, _)| k.clone()).collect();
             for key in &carved_there {
+                self.homes.remove(key);
                 if let Some((handle, _)) = self.carved.remove(key) {
                     let _ = close(handle);
                 }
@@ -1205,6 +1285,102 @@ mod machine {
             Ok(Some((key, handle, at)))
         }
 
+        /// The crossing program (servers/steward.md, "Declassification and push"; R42): one
+        /// connection to the domain's vault at its root (a mint below the root walks the path
+        /// with the caller's labels, R25, which the unlabelled steward has not: the labelled
+        /// program walks to the item), minted in `budget` as its scope so the budget's
+        /// destruction ends it in every table (R41), and an endpoint the steward makes and keeps
+        /// a call right on, whose receive right the program is given, so the labelled program
+        /// only ever answers (R1). Launched from `/boot` through the stub, as a relay is, and
+        /// called once within `CROSSING_LIFE`, the budget's own deadline. The steward's copies of
+        /// what the program holds go once it runs; the connection is held under a key for the
+        /// disconnect after the destroy.
+        fn cross(
+            &mut self,
+            owner: &Object,
+            budget: Handle,
+            path: &str,
+            bytes: Option<&[u8]>,
+        ) -> Result<(u64, Option<u64>, Vec<u8>), Error> {
+            let principal = self.principal(&owner.domain).ok_or(Error::BadHandle)?;
+            let labels = owner.domain.labels().as_slice();
+            let vault = self.own_lines.vault(&principal, labels).cloned().ok_or(Error::BadHandle)?;
+            let key = self.fresh(&vault.handle, "", budget)?.ok_or(Error::Refused)?;
+            let result = self.cross_through(key, budget, path, bytes);
+            if result.is_err() {
+                self.release(key);
+            }
+            result.map(|(pid, bytes)| (pid, Some(key), bytes))
+        }
+
+        fn home_stat(&mut self, principal: &str, path: &str) -> Result<Option<u64>, Error> {
+            let home = self.home(principal)?;
+            match home.stat(&mut self.lend, path) {
+                Ok(stat) => Ok(Some(stat.length)),
+                Err(redoubt_client::Error::Rerror(_)) => Ok(None),
+                Err(_) => Err(Error::Refused),
+            }
+        }
+
+        fn home_read(&mut self, principal: &str, path: &str, max: usize) -> Result<Vec<u8>, Error> {
+            let home = self.home(principal)?;
+            let file = home.open(&mut self.lend, path, mode::OREAD).map_err(|_| Error::Refused)?;
+            let mut out = Vec::new();
+            out.try_reserve(max + 1).map_err(|_| Error::OutOfMemory)?;
+            out.resize(max + 1, 0);
+            let mut done = 0;
+            let mut read = Ok(());
+            while done < out.len() {
+                match file.read_at(&mut self.lend, done as u64, &mut out[done..]) {
+                    Ok(0) => break,
+                    Ok(n) => done += n,
+                    Err(_) => {
+                        read = Err(Error::Refused);
+                        break;
+                    }
+                }
+            }
+            let _ = file.close(&mut self.lend);
+            read?;
+            if done > max {
+                return Err(Error::TooLarge);
+            }
+            out.truncate(done);
+            Ok(out)
+        }
+
+        /// `path`'s directory is made if it is missing; a file at `path` already there refuses
+        /// the write, so nothing is ever overwritten by the steward.
+        fn home_write(&mut self, principal: &str, path: &str, bytes: &[u8]) -> Result<(), Error> {
+            let home = self.home(principal)?;
+            if home.stat(&mut self.lend, path).is_ok() {
+                return Err(Error::Busy);
+            }
+            let (dir, name) = redoubt_steward_server::drive::split(path);
+            if !dir.is_empty() && home.stat(&mut self.lend, dir).is_err() {
+                let (parent, leaf) = redoubt_steward_server::drive::split(dir);
+                let made = home
+                    .create(&mut self.lend, parent, leaf, DMDIR | 0o755, mode::OREAD)
+                    .map_err(|_| Error::Refused)?;
+                let _ = made.close(&mut self.lend);
+            }
+            let file =
+                home.create(&mut self.lend, dir, name, 0o644, mode::OWRITE).map_err(|_| Error::Refused)?;
+            let mut done = 0;
+            let mut wrote = Ok(());
+            while done < bytes.len() {
+                match file.write_at(&mut self.lend, done as u64, &bytes[done..]) {
+                    Ok(0) | Err(_) => {
+                        wrote = Err(Error::Refused);
+                        break;
+                    }
+                    Ok(n) => done += n,
+                }
+            }
+            let _ = file.close(&mut self.lend);
+            wrote
+        }
+
         fn random(&mut self) -> Result<u64, Error> { redoubt_rt::handle::random_u64() }
 
         fn now(&mut self) -> u64 { redoubt_rt::handle::time_now().unwrap_or(0) }
@@ -1220,6 +1396,104 @@ mod machine {
         })
     }
 
+    impl Machine<'_> {
+        /// The launch and the one call of [`Machine::cross`], once the connection is held under
+        /// `key`: the process id and the bytes a read answered.
+        fn cross_through(
+            &mut self,
+            key: u64,
+            budget: Handle,
+            path: &str,
+            bytes: Option<&[u8]>,
+        ) -> Result<(u64, Vec<u8>), Error> {
+            let volume = self.handle_of(key).ok_or(Error::BadHandle)?;
+            let serve = Endpoint::create()?;
+            let call = match serve.mint(NonZeroU64::new(CROSSING_CALL).expect("CROSSING_CALL is not 0"), None)
+            {
+                Ok(call) => call,
+                Err(e) => {
+                    let _ = close(serve.handle());
+                    return Err(e);
+                }
+            };
+            let exit = match Endpoint::create() {
+                Ok(exit) => exit,
+                Err(e) => {
+                    let _ = close(serve.handle());
+                    let _ = close(call.handle());
+                    return Err(e);
+                }
+            };
+            let exit_handle = exit.handle();
+            let len = self.crossing_len;
+            let pages = self.crossing_pages;
+            let started = {
+                let mut read = |at: usize, buf: &mut [u8]| self.read_program(CROSSING, at, buf);
+                let mut launch =
+                    Launch::streamed(STUB_BIN, len, &mut read, Budget::from_handle(budget), exit);
+                launch.handle(CROSSING_SERVE, serve.handle());
+                launch.handle(CROSSING_VOLUME, volume);
+                launch.stack_pages(CROSSING_STACK_PAGES).heap_pages(CROSSING_HEAP_PAGES).budget_pages(pages);
+                launch.arg(if bytes.is_some() { "write" } else { "read" });
+                launch.start()
+            };
+            // The program holds its copies of the endpoint and the connection now, or none.
+            let _ = close(serve.handle());
+            if let Some(held) = self.held.get_mut(&key) {
+                if let Some(handle) = held.handle.take() {
+                    let _ = close(handle);
+                }
+            }
+            let job = started.map_err(|failed| {
+                let _ = close(exit_handle);
+                let _ = close(call.handle());
+                match failed.error {
+                    redoubt_client::Error::Sys(e) => e,
+                    _ => Error::Refused,
+                }
+            })?;
+            let _ = close(job.process().handle());
+            if let Err(e) = self.watch_exit(exit_handle) {
+                let _ = close(exit_handle);
+                let _ = close(call.handle());
+                return Err(e);
+            }
+            let pid = u64::from(exit_handle.index());
+            let answered = match bytes {
+                None => typed::call_within::<crossing::Protocol, _>(
+                    &call,
+                    &mut self.lend,
+                    &crossing::Message::Read(crossing::Read { path }),
+                    &[],
+                    CROSSING_LIFE,
+                    |r, _| match r {
+                        crossing::Reply::Read(r) => Some(r.bytes.to_vec()),
+                        _ => None,
+                    },
+                ),
+                Some(bytes) => typed::call_within::<crossing::Protocol, _>(
+                    &call,
+                    &mut self.lend,
+                    &crossing::Message::Write(crossing::Write { path, bytes }),
+                    &[],
+                    CROSSING_LIFE,
+                    |r, _| match r {
+                        crossing::Reply::Write(_) => Some(Vec::new()),
+                        _ => None,
+                    },
+                ),
+            };
+            let _ = close(call.handle());
+            match answered {
+                Ok(Some(bytes)) => Ok((pid, bytes)),
+                Ok(None) => Err(Error::Refused),
+                Err(redoubt_client::Error::Server(_)) => Err(Error::Refused),
+                Err(redoubt_client::Error::Sys(e)) => Err(e),
+                Err(_) => Err(Error::Refused),
+            }
+        }
+    }
+
     /// Says `line` on the console `init` gave the steward, if it has one. Not the runtime's
     /// `start::say`: both attach at fid 0, but that one clunks fid 0 after, and the steward holds
     /// its own attached connection there (`Machine::consoled`), through which it mints the console
@@ -1229,7 +1503,16 @@ mod machine {
         let Ok(mut lend) = Lend::new(1) else { return };
         let Ok(console) = Connection::attach(Endpoint::from_handle(console), &mut lend) else { return };
         if let Ok(file) = console.open(&mut lend, "", mode::OWRITE) {
-            let _ = file.write_at(&mut lend, 0, line.as_bytes());
+            // A write carries at most the lend's iounit: a line longer than a page (an audit
+            // record naming a pushed item's bytes) goes in several.
+            let bytes = line.as_bytes();
+            let mut done = 0;
+            while done < bytes.len() {
+                match file.write_at(&mut lend, 0, &bytes[done..]) {
+                    Ok(n) if n > 0 => done += n,
+                    _ => break,
+                }
+            }
             let _ = file.close(&mut lend);
         }
     }
@@ -1283,6 +1566,16 @@ mod machine {
         true
     }
 
+    /// The operation of a call whose time the steward says, by its opcode: `end_lease` and
+    /// `submit` (libs/wire/tables/steward.md).
+    fn served_op(words: &redoubt_rt::ipc::Words) -> Option<&'static str> {
+        match words[0] {
+            9 => Some("submit"),
+            11 => Some("end_lease"),
+            _ => None,
+        }
+    }
+
     /// The core exited: said once, and the steward's exit code.
     fn core_exited(startup: &Startup) -> u32 {
         say(startup, "steward: the core exited\n");
@@ -1308,6 +1601,78 @@ mod machine {
                 }
             }
         }
+    }
+
+    /// `latency-probe` only: the probe's state (see [`LATENCY_LEASE_US`]).
+    #[cfg(feature = "latency-probe")]
+    #[derive(Default)]
+    struct Probe {
+        /// The timeout armed, and which: `false` the timer's, `true` the decision's.
+        due: Option<(u64, bool)>,
+        /// A probe lease whose `start_agent` was just answered, with the answer's time: the
+        /// timer is armed at the last point before the receive that waits on it, so the wake
+        /// measures the kernel's expiry to the steward running, not the steward's own work
+        /// after the reply (its audit and usage lines through consoled), which is the
+        /// `reply_wait` sample instead.
+        pending: Option<(u64, u64, u64)>,
+        /// The probe lease and the badge of the session that started it.
+        lease: u64,
+        badge: u64,
+        /// Samples taken since the last flush, by measure and group.
+        counts: BTreeMap<(&'static str, usize), u64>,
+        /// Flushes so far: the case's rounds, N = 1 and 2.
+        rounds: usize,
+    }
+
+    #[cfg(feature = "latency-probe")]
+    impl Probe {
+        /// One sample, printed as the stand-in prints it (tests/programs/src/sched.rs), under
+        /// the steward's console prefix the oracle cuts.
+        fn sample(&mut self, startup: &Startup, measure: &'static str, n: usize, end: u64, gross: u64) {
+            *self.counts.entry((measure, n)).or_default() += 1;
+            say(startup, &format!("steward: LATENCY-SAMPLE N={n} {measure} {end} {gross}\n"));
+        }
+
+        /// The counts, once the domain's leases are all gone: one line per measure and group.
+        /// After the second round's, the window's end, `LATENCY-END` with the steward's clock: the
+        /// oracle judges no destruction ending after it and no sample printed after it (the
+        /// marker-file exits that follow reap every lease's VM, none of them a sample).
+        fn flush(&mut self, startup: &Startup) {
+            for ((measure, n), count) in core::mem::take(&mut self.counts) {
+                say(startup, &format!("steward: LATENCY-COUNT N={n} {measure} {count}\n"));
+            }
+            self.rounds += 1;
+            if self.rounds == 2 {
+                let now = redoubt_rt::handle::time_now().unwrap_or(0);
+                say(startup, &format!("steward: LATENCY-END {now}\n"));
+            }
+        }
+    }
+
+    /// `latency-probe` only: the live leases, `lease` itself among them (the case's N: the
+    /// spinners beside the probe's or the deadline's lease), the sample's group; a lease the core
+    /// has already let go of counts itself in.
+    #[cfg(feature = "latency-probe")]
+    fn others(steward: &Steward<Handle, u64>, lease: u64) -> usize {
+        let index = inspect::index(&steward.store);
+        let live = leases_live(steward);
+        if index.ids.contains_key(&lease) { live } else { live + 1 }
+    }
+
+    #[cfg(feature = "latency-probe")]
+    fn leases_live(steward: &Steward<Handle, u64>) -> usize {
+        inspect::domains(&steward.store).map(|(_, d)| d.leases.len()).sum()
+    }
+
+    /// `latency-probe` only: the probe lease a `start_agent` from `badge` just started, if the
+    /// newest lease of its domain asked for exactly [`LATENCY_LEASE_US`].
+    #[cfg(feature = "latency-probe")]
+    fn probe_lease(steward: &Steward<Handle, u64>, badge: u64) -> Option<u64> {
+        let index = inspect::index(&steward.store);
+        let route = index.routes.get(&badge)?;
+        let state = inspect::domain(&steward.store, &route.domain)?;
+        let (id, lease) = state.leases.iter().max_by_key(|(_, l)| l.number)?;
+        (lease.lease == LATENCY_LEASE_US).then_some(*id)
     }
 
     /// Serves until the endpoint is destroyed.
@@ -1345,6 +1710,7 @@ mod machine {
             held: BTreeMap::new(),
             next_key: 0,
             carved: BTreeMap::new(),
+            homes: BTreeMap::new(),
             replaced: BTreeMap::new(),
             accounts: Vec::new(),
             own_lines: Own::default(),
@@ -1353,6 +1719,8 @@ mod machine {
             agent_quota: 0,
             program_len: 0,
             relay_len: 0,
+            crossing_len: 0,
+            crossing_pages: 0,
             hello: Endpoint::create().ok(),
             hellos: 0,
             relay_vm: None,
@@ -1368,6 +1736,8 @@ mod machine {
             reader_work,
             reader_hand,
             readers: Watchers::default(),
+            #[cfg(feature = "latency-probe")]
+            last_destroy: None,
         };
         // The kernel's count of what `users` holds as this instance starts: 0, at boot and after
         // `init` emptied a dead steward's carves.
@@ -1402,6 +1772,7 @@ mod machine {
         machine.session_pages = steward.sizes.session.pages;
         machine.agent_pages = steward.sizes.agent.pages;
         machine.agent_quota = steward.sizes.agent_quota;
+        machine.crossing_pages = steward.sizes.crossing.pages;
         if let Some((_, cons)) = startup.namespace().find(|(path, _)| *path == "/dev/cons") {
             machine.consoled = Connection::attach(Endpoint::from_handle(cons), &mut machine.lend).ok();
         }
@@ -1412,6 +1783,17 @@ mod machine {
             }
             if let Ok(stat) = conn.stat(&mut machine.lend, RELAY) {
                 machine.relay_len = stat.length as usize;
+            }
+            if let Ok(stat) = conn.stat(&mut machine.lend, CROSSING) {
+                machine.crossing_len = stat.length as usize;
+            }
+        }
+        // The case is over: this instance and the five after it exit at once, and init reboots.
+        #[cfg(feature = "latency-probe")]
+        if let Some(console) = steward.own.console.clone() {
+            if matches!(machine.home_stat(&console, LATENCY_DONE), Ok(Some(_))) {
+                say(startup, "steward: latency-probe: the case is done, exiting for the reboot\n");
+                return LATENCY_EXIT;
             }
         }
         let Ok(report) = own.mint(NonZeroU64::new(EXITS).expect("EXITS is not 0"), None) else {
@@ -1435,6 +1817,8 @@ mod machine {
         // `sshd`'s `watch` calls, held unanswered while this instance runs: its end fails each
         // with `Dead` (R4b), and so tells `sshd` its sessions are over.
         let mut watches: Vec<Request> = Vec::new();
+        #[cfg(feature = "latency-probe")]
+        let mut probe = Probe::default();
         loop {
             // The idle timer: a detached context past its principal's bound ends (servers/steward.md,
             // "Contexts"); the receive below waits no longer than the next one's bound.
@@ -1463,6 +1847,61 @@ mod machine {
                 None => wait,
             };
             let wait = [idle, due].into_iter().flatten().fold(wait, u64::min);
+            #[cfg(feature = "latency-probe")]
+            let wait = match probe.due {
+                Some((at, _)) => {
+                    wait.min(at.saturating_sub(redoubt_rt::handle::time_now().unwrap_or(at)).max(1))
+                }
+                None => wait,
+            };
+            // The probe's samples are counted out when the round's leases are gone and the case
+            // has marked the round's end (at N = 1 no spinner outlives a probe lease, so the
+            // leases are gone after each one: the marker, not the count, closes a round); while
+            // the counts wait for it, the receive below looks again within half a second. After
+            // the case's two rounds, its marker file ends this instance for the reboot.
+            #[cfg(feature = "latency-probe")]
+            let wait = if !probe.counts.is_empty() && leases_live(&steward) == 0 {
+                let marker = format!("{LATENCY_ROUND}{}", probe.rounds + 1);
+                let marked = steward
+                    .own
+                    .console
+                    .clone()
+                    .is_some_and(|console| matches!(machine.home_stat(&console, &marker), Ok(Some(_))));
+                if marked {
+                    probe.flush(startup);
+                    wait
+                } else {
+                    wait.min(LATENCY_POLL_US)
+                }
+            } else {
+                wait
+            };
+            #[cfg(feature = "latency-probe")]
+            if probe.rounds >= 2 && probe.due.is_none() {
+                if let Some(console) = steward.own.console.clone() {
+                    if matches!(machine.home_stat(&console, LATENCY_DONE), Ok(Some(_))) {
+                        say(startup, "steward: latency-probe: the case is done, exiting for the reboot\n");
+                        return LATENCY_EXIT;
+                    }
+                }
+            }
+            // The probe's timer, armed here and nowhere earlier: the steward is about to wait.
+            #[cfg(feature = "latency-probe")]
+            let wait = match probe.pending.take() {
+                Some((lease, badge, replied)) => {
+                    let now = redoubt_rt::handle::time_now().unwrap_or(replied);
+                    let n = others(&steward, lease);
+                    probe.sample(startup, "reply_wait", n, now, now.saturating_sub(replied));
+                    probe = Probe {
+                        due: Some((now.saturating_add(LATENCY_TIMER_US), false)),
+                        lease,
+                        badge,
+                        ..probe
+                    };
+                    wait.min(LATENCY_TIMER_US)
+                }
+                None => wait,
+            };
             match own.receive(wait, 0) {
                 Ok(Event::Call(request)) if watches_call(&request.caller, &request.words) => {
                     // One per `sshd` instance; a restarted `sshd`'s comes before the abandoned
@@ -1473,10 +1912,28 @@ mod machine {
                 }
                 Ok(Event::Call(mut request)) => {
                     let (caller, words, handles) = (request.caller, request.words, request.handles);
+                    let began = redoubt_rt::handle::time_now().unwrap_or(0);
                     let mut serving = Serving::new(&mut steward, &mut machine);
                     let outcome = answer_with(&mut serving, &caller, &words, &handles, request.lend());
                     let (outputs, exited) = (core::mem::take(&mut serving.outputs), serving.exited);
                     let deferred = core::mem::take(&mut serving.after);
+                    // The steward's own time on the two calls whose cost the responsiveness
+                    // targets bound (kernel/scheduling.md, "Responsiveness"; servers/steward.md,
+                    // "Residual risks": steward work is paid by the steward): `end_lease` and
+                    // `submit`, from the call's arrival to its answer, said once each.
+                    if let Some(op) = served_op(&words) {
+                        let took = redoubt_rt::handle::time_now().unwrap_or(began).saturating_sub(began);
+                        say(startup, &format!("steward: served {op} in {took} us\n"));
+                    }
+                    // A probe lease started: the timer is armed at the loop's next receive, the
+                    // reply's time kept for the `reply_wait` sample.
+                    #[cfg(feature = "latency-probe")]
+                    if words[0] == 10 && outcome.words[0] == 0 {
+                        if let Some(lease) = probe_lease(&steward, caller.badge) {
+                            let replied = redoubt_rt::handle::time_now().unwrap_or(0);
+                            probe.pending = Some((lease, caller.badge, replied));
+                        }
+                    }
                     // What the call did is said before it is answered, so its records come
                     // before anything the caller says of the answer.
                     after(startup, &mut steward, &mut usage, Some(outputs));
@@ -1522,7 +1979,7 @@ mod machine {
                         Some(object) => {
                             let name = steward
                                 .lease_name(object.id)
-                                .unwrap_or_else(|| format!("{:?} {}", object.kind, object.id));
+                                .unwrap_or_else(|| redoubt_steward_server::drive::named(&object));
                             (object, name, true)
                         }
                         None => match steward.ended(key) {
@@ -1530,8 +1987,15 @@ mod machine {
                             None => continue,
                         },
                     };
+                    // A crossing's program is named by its crossing: it ends with its budget's
+                    // destruction once its one item is done ("Declassification and push").
+                    let what = if object.kind == redoubt_steward::effect::Kind::Crossing {
+                        "crossing"
+                    } else {
+                        "lease"
+                    };
                     let line = format!(
-                        "steward: lease {name} of {}/{} {cause} {}\n",
+                        "steward: {what} {name} of {}/{} {cause} {}\n",
                         object.domain.account(),
                         labels(object.domain.labels().as_slice()),
                         delivery.words[2]
@@ -1539,6 +2003,19 @@ mod machine {
                     say(startup, &line);
                     if !running {
                         continue;
+                    }
+                    // A lease the kernel's deadline took: its notice's arrival against the
+                    // deadline, while the core still holds the lease.
+                    #[cfg(feature = "latency-probe")]
+                    if object.kind == redoubt_steward::effect::Kind::Lease && delivery.words[1] == 3 {
+                        let deadline = inspect::domain(&steward.store, &object.domain)
+                            .and_then(|d| d.leases.get(&object.id))
+                            .map(|l| l.deadline);
+                        let now = redoubt_rt::handle::time_now().unwrap_or(0);
+                        if let Some(deadline) = deadline.filter(|d| *d <= now) {
+                            let n = others(&steward, object.id);
+                            probe.sample(startup, "deadline_notice", n, now, now - deadline);
+                        }
                     }
                     let outputs = steward.event(&mut machine, EventKind::Exited { object }, 0).ok();
                     if !after(startup, &mut steward, &mut usage, outputs) {
@@ -1559,6 +2036,35 @@ mod machine {
                     }
                 }
                 Ok(_) => {}
+                // The probe's wake: the timer's, then the decision's, on which the probe lease
+                // ends by the steward's own event.
+                #[cfg(feature = "latency-probe")]
+                Err(Error::Timeout)
+                    if probe.due.is_some_and(|(at, _)| at <= redoubt_rt::handle::time_now().unwrap_or(0)) =>
+                {
+                    let Some((at, deciding)) = probe.due.take() else { continue };
+                    let woke = redoubt_rt::handle::time_now().unwrap_or(at);
+                    let n = others(&steward, probe.lease);
+                    if !deciding {
+                        probe.sample(startup, "timer_wake", n, woke, woke.saturating_sub(at));
+                        probe.due = Some((woke.saturating_add(LATENCY_DECIDE_US), true));
+                        continue;
+                    }
+                    probe.sample(startup, "decision_wake", n, woke, woke.saturating_sub(at));
+                    machine.last_destroy = None;
+                    let (badge, lease) = (probe.badge, probe.lease);
+                    let outputs = steward.event(&mut machine, EventKind::EndLease { badge, lease }, 0).ok();
+                    if let Some((end, gross)) = machine.last_destroy.take() {
+                        probe.sample(startup, "destroy_call", n, end, gross);
+                    }
+                    if !after(startup, &mut steward, &mut usage, outputs) {
+                        return core_exited(startup);
+                    }
+                }
+                // The probe's look for the round's marker, half a second on: the loop's top
+                // looks again.
+                #[cfg(feature = "latency-probe")]
+                Err(Error::Timeout) if !probe.counts.is_empty() && leases_live(&steward) == 0 => {}
                 // The timers' own wakes: the loop's top ends what is due, and runs the cleanup
                 // steps whose retry has come.
                 Err(Error::Timeout) if [idle, due].into_iter().flatten().any(|t| t <= wait) => {}

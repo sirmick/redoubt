@@ -74,6 +74,10 @@ name = "piped"
 package = "redoubt-piped"
 
 [[entry]]
+name = "crossing"
+package = "redoubt-crossing"
+
+[[entry]]
 name = "beamlet-hello"
 package = "redoubt-beamlet-programs"
 
