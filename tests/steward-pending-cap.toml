@@ -64,13 +64,20 @@ steps = [
     { expect = '\([0-9]+\)> ' },
     # The session ends itself through the steward (a closed channel alone would leave the
     # context detached, its request pending): the steward drops its request before it destroys
-    # the budget, and ends the channel, so ssh exits clean. A marker printed first, so the whole
-    # line was read before the exit step closes the input, and end_session right behind it: the
-    # close reaches the steward as sshd's channel_closed tens of milliseconds later (the network,
-    # ssh's EOF, sshd's call), and a detach first would end the channel with the request pending.
-    { send = "IO.puts(\"bye\"); Redoubt.Wire.Client.Steward.end_session(c)\n" },
+    # the budget, and ends the channel, so ssh exits clean. Two races sit around that end. The
+    # flush: the end destroys the shell's VM and its console relay with whatever they still hold,
+    # so a console write made before it may never be relayed (train 50: the marker and the end on
+    # one line, the line echoed, no `bye`, ssh exited 0; typed alone, the end line loses even its
+    # own echo). So the marker is its own line, matched, and the prompt after it, before the end is
+    # typed. The close: an `exit` step closes the input first, which on this terminal discards the
+    # end line when ssh has not read it yet, and a close that does arrive detaches the context
+    # before the end runs in it; so the end is followed by `ended`: the input stays open until the
+    # box has ended the session and ssh has gone on its own.
+    { send = "IO.puts(\"bye\")\n" },
     { expect = '^bye$' },
-    { exit = 0 },
+    { expect = '\([0-9]+\)> ' },
+    { send = "Redoubt.Wire.Client.Steward.end_session(c)\n" },
+    { ended = 0 },
     { mark = "alice-gone" },
 ]
 

@@ -1255,7 +1255,7 @@ The guest's own claims about the network are never trusted.
 
 ### Sessions and the loopback server
 
-<details><summary>Status: built · tested (19)</summary>
+<details><summary>Status: built · tested (20)</summary>
 
 - bench:bench-ssh-loopback
 - bench:bench-ssh-loopback-openssh
@@ -1275,6 +1275,7 @@ The guest's own claims about the network are never trusted.
 - host:testbench::the_keeper_waits_to_the_deadline
 - host:testbench::resize_needs_a_pty
 - host:testbench::only_marks_follow_exit
+- host:testbench::ended_keeps_the_input_open_until_sshs_own_exit
 - host:testbench::no_other_child_inherits_a_sessions_terminal
 
 </details>
@@ -1306,14 +1307,20 @@ steps = [
     { idle = 60 },               # with [idle]: type nothing for 60 s while the bench measures
     { within = 30 },             # the next step must finish within 30 s, before the case's deadline
     { exit = 0 },                # close input, read until ssh exits, require this status
-    { mark = "alice-gone" },     # only marks follow `exit`: this session's ssh is gone
+    { ended = 0 },               # or: input open, read until ssh exits on its own, require this status
+    { mark = "alice-gone" },     # only marks follow `exit` or `ended`: this session's ssh is gone
 ]
 ssh_args = ["-W", "host:9"]  # optional: more ssh arguments, before the host
 command = "echo hi"          # optional: a command (with `-s`, a subsystem) in place of a shell
 ```
 
-Every session's exit status is checked and all of its output passes `forbid`; a session that fails
-stops the others. Its log notes each `expect` that matched and when, in seconds after its `ssh`
+A session the box ends, after a line it must act on (a call that ends the session, say), follows
+that line with `ended`, not `exit`: `exit` closes the input first, and with `pty = true` that
+close hangs up the terminal `ssh` reads and discards what it has not read yet, so the line may
+never leave the host; the box's end of a channel whose input is still open has nothing to race.
+`exit` stays for the sessions the bench itself closes. The log notes when the end came, as it
+does an `expect`'s match. Every session's exit status is checked and all of its output passes
+`forbid`; a session that fails stops the others. Its log notes each `expect` that matched and when, in seconds after its `ssh`
 started, and the bench prints under the case's result those matched before the session first
 typed: a login's latency to its first prompt, re-measured by every run
 ([sshd](servers/sshd.md#sessions-over-ssh)). A `pty = true` session's `ssh` reads its input from a pseudo-terminal the bench
