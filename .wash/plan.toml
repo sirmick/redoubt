@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 460
+revision = 462
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -2485,8 +2485,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "STEWARD3"
   needs = ["STEWARD3Z"]
   body = "Ruling: .wash/local/STEWARD3Z-ruling.md 'Q2'. Found by STEWARD4's six-principal manifest (keyd buckets=10, consoled 9, bootfsd 10, ipd 11, walfsd:data 10, walfsd:alice-secrets 9, erofsd:system 10 by init's rule, 7 domains + system callers): every shared server checks limits(buckets).fits(COST, BUDGET) against a compiled constant that holds six (erofsd 1.5 MiB, bootfsd 1 MiB, walfsd 4 MiB: 'the image's six buckets and not a seventh'), so each refuses to start and init reboots. Rule: a shared server's usable budget is its entry's pages x PAGE_SIZE less its heap cap and stack, checked at start with Limits::fits against buckets=N (BAD_LIMITS, init reboots, unchanged); the entry rule on walfsd.md takes its derivation form: an entry's pages are what its count of buckets at their caps needs plus heap cap and stack, rounded up to 256; a case's manifest sizes by the same rule, never by what its case uses. The manifest is the one source; the count enters the rule; no maximum is picked. The image's entries keep their pages where the arithmetic already holds (walfsd 1,280 pages = 1,202 of budget, six buckets and a seventh); the latency manifest's entries are recomputed (walfsd ~1,614 -> 1,792). Scope: erofsd, bootfsd, walfsd, littlefsd, keyd, ipd (consoled is 3Z's); each page's admission paragraph with the derivation and the image's arithmetic; init.md's entry rule; the bench host test holds every manifest in the tree to pages >= the count's need, beside 3Q's terms; steward-latency regains N = 4 and 16 and scheduling.md's 'With the real steward' table is completed beside the stand-in's 1/4/16 (coordinated with STEWARD4 through the orchestrator; the gate moves here from 3Z). Gates: the servers' host tests, the steward set, walfsd-quota, aio-many-reads-two, the six-principal boot, both widths; docs; the size budget. Size M; Tier A (admission); steward-red reviews."
-  state = "active"
-  revision = 428
+  state = "done"
+  revision = 462
 
 [[node]]
   id = "B81"
