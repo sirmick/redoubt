@@ -53,12 +53,16 @@ pub const SOCKETS_PER_REQUEST: usize = MAX_BACKLOG as usize;
 /// Before a request: reserves, for its caller's bucket and share, as many `State` units as the
 /// admission gives, up to [`SOCKETS_PER_REQUEST`], for the sockets the request may make. Only a
 /// 9P request can make one; any other reserves nothing, so a `grant` or `new_connection` finds
-/// the admission as it was.
+/// the admission as it was. A connection granted for another account moves into that account's
+/// bucket at its first request (servers/serving.md, `admit`): that move comes first, or this
+/// reservation would fill the bucket it is moving into and the skeleton would refuse the request;
+/// a move the bucket really has no room for is refused by the skeleton, not here.
 pub fn open_sockets<N: Netif, E: Entropy>(
     nine: &mut NineServer<NetFs<N, E>>,
     caller: &Caller,
     words: &Words,
 ) {
+    let _ = nine.arrived(caller);
     let charge = nine.charge_of(caller);
     nine.fs.charge = Some(charge.0);
     if *words == WORDS_9P {

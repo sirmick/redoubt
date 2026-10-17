@@ -238,7 +238,10 @@ calls, 4 connections, 8 sockets, and 128 multiplexed requests and 32 pages they 
 ([serving](serving.md#multiplexed-connections)) per bucket. A socket is one `State` unit,
 reserved around each request that may make one and held until the socket is gone, lingering
 included, so one badge
-cannot take all its bucket's sockets. Every bucket at its cap must fit `ipd`'s 8 MiB budget, less 1 MiB for
+cannot take all its bucket's sockets. A connection granted for a session is admitted in the
+session's account from its first request ([serving](serving.md#admit)); that move comes before
+the request's reservation, which would otherwise fill the bucket it moves into. Every bucket at
+its cap must fit `ipd`'s 8 MiB budget, less 1 MiB for
 its own use, or `ipd` does not start.
 
 ### Sequence numbers and the link

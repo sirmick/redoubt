@@ -11,8 +11,10 @@
 //!   itself included: whatever the others hold, a share always leaves room for one more share's worth. So an
 //!   agent flooding its sponsor's bucket alone gets half of it, and its sponsor can still take a third. The
 //!   unit of a share is the caller's badge; the 9P skeleton counts a connection a client minted for itself in
-//!   the share of the connection it minted it from, so minting more connections gains nothing
-//!   ([`crate::server::ninep`], Connections).
+//!   the share of the connection it minted it from, so minting more connections gains nothing, and a
+//!   connection minted for another account in that account's bucket from its first request, a pending slot of
+//!   the minter's until then, so the minter's share bounds its mints and the holder's caps bound what it
+//!   holds ([`crate::server::ninep`], Admission).
 //! - **Caps sized to fit**: at most [`Limits::buckets`] buckets hold anything at once, so that every bucket
 //!   at its cap fits the server's budget ([`Limits::fits`]) and the calls they may hold open sum to less than
 //!   `MAX_OPEN_CALLS` with headroom (checked by [`Admission::new`]). Multiplexed requests and their pages

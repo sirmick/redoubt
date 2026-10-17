@@ -16,9 +16,15 @@ use redoubt_rt::server::{Cost, Limits};
 /// manifest's `buckets=N`. A call is answered as it arrives; what is held is a multiplexed
 /// connection's completion call (`InFlight`, one per session, so two lets a share hold one), its
 /// requests (`Requests`), and the pages their transfers brought (`Pages`): nothing is written
-/// here, so two pages, the most one batch of requests needs.
+/// here, so two pages, the most one batch of requests needs. The connections (`State`) are what
+/// a manifest lets one account hold at the system volume at once, whoever minted them
+/// (servers/serving.md, `admit`): two per session the steward starts, its shell's and its
+/// relay's, for the console session, the cap of live contexts per label set and one spare for a
+/// context detaching while another attaches, and one per lease; the bench holds the cap to at
+/// least the largest such sum over the tree's manifests (tools/testbench,
+/// `the_servers_admit_what_a_manifest_lets_one_account_hold`): 2 x (1 + 3 + 1) + 1.
 pub const fn limits(buckets: u32) -> Limits {
-    Limits { buckets, in_flight: 2, files: 32, state: 8, requests: 64, pages: 2 }
+    Limits { buckets, in_flight: 2, files: 32, state: 11, requests: 64, pages: 2 }
 }
 /// What one of each costs, in bytes: a completion call holds its caller's lend, charged to this
 /// server until it replies (kernel/ipc.md R3), `MAX_LEND_PAGES` pages at worst; a fid is its table
@@ -27,11 +33,11 @@ pub const fn limits(buckets: u32) -> Limits {
 pub const COST: Cost =
     Cost { in_flight: 64 * 1024, file: 2048, state: 512, request: REQUEST_STATE, page: PAGE_SIZE as u64 };
 /// The bytes of this server's budget its clients may use between them. A bucket at its caps costs
-/// 2 completion calls at 64 KiB, 32 fids at 2 KiB, 8 connections at 512 bytes, 64 requests at 256
-/// and 2 pages at 4 KiB: 225 280 bytes, so 6 fit here (1 351 680). Every session reads the system
-/// volume on a connection the steward makes for it, so each principal's domain is a bucket beside
-/// the steward's: the image's three principals' four domains and the steward take 5, and a case's
-/// extra client the sixth.
+/// 2 completion calls at 64 KiB, 32 fids at 2 KiB, 11 connections at 512 bytes, 64 requests at 256
+/// and 2 pages at 4 KiB: 226 816 bytes, so 6 fit here (1 360 896) and not a seventh (1 587 712).
+/// Every session reads the system volume on connections the steward makes for it, admitted in the
+/// session's account, so each principal's domain is a bucket beside the steward's: the image's
+/// three principals' four domains and the steward take 5, and a case's extra client the sixth.
 pub const BUDGET: u64 = 1536 * 1024;
 
 /// The `Rerror` texts `erofsd` adds to the skeleton's fixed set, `littlefsd`'s words for the same

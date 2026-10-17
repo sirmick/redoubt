@@ -1,0 +1,150 @@
+description = "Four sessions and four leases hold system-volume connections at once under two principals (docs/servers/serving.md, \"admit\" and R26; docs/servers/erofsd.md; docs/servers/steward.md, \"Authority\"): the steward mints every session's two system-volume connections (its shell's and its relay's) and every lease's one through its one root badge at erofsd:system, and each is admitted in its own account's bucket from its first request, not in the steward's share. Alice's console session and alice.a, bob and bob.b log in, alice.a and bob each start two spinning agents on ten-minute leases, and every session evaluates an expression while all four leases are live: twelve steward-minted system-volume connections at once, where the steward's share held eight in all and refused the fifth session or the fourth lease its connection (\"steward: a step failed (Refused)\", the login refused). The sponsors end their leases and every session exits. The verdicts are the steward's audit, sshd's lines and each session's own output and exit status (rule F)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The image's programs (steward-three-contexts's list, the steward as shipped), with this case's
+# manifest: three-contexts' with room for two sessions and two leases per principal.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-bootfsd", bin = "bootfsd" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-verityd", bin = "verityd" },
+    { package = "redoubt-netd", bin = "netd" },
+    { package = "redoubt-ipd", bin = "ipd" },
+    { package = "redoubt-walfsd", bin = "walfsd" },
+    { package = "redoubt-erofsd", bin = "erofsd" },
+    { package = "beamlet-redoubt", bin = "beamlet", workspace = "userland/otp" },
+    { package = "redoubt-piped", bin = "piped" },
+    { package = "redoubt-steward-server", bin = "steward" },
+    { package = "redoubt-sshd", bin = "sshd" },
+    { package = "redoubt-consrelay", bin = "consrelay" },
+]
+# The image needs 1 GiB: the principals' budgets, each holding two shell VMs' sessions and two
+# leases, do not fit the users budget 256 MiB leaves (docs/kernel/budgets.md).
+memory_mib = 1024
+# Four shell VMs and four lease VMs booted in turn (steward-context-cap's bound per VM).
+timeout_secs = 2400
+expect = [
+    '^init: started sshd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
+    '^init: started steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+    # Alice's console session, typed below.
+    '\{:c, :console\}',
+]
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    '^init: .* (exited|faulted|was killed)',
+    'init: restarted',
+    'EXCEPTION',
+    'steward: the core exited',
+    'steward: a step failed',
+    'sshd: login .*: refused',
+    'sshd: every slot is busy',
+    ':eio',
+    ':refused',
+]
+# The marks order the logins and the leases, so the steward's lines come in one order: alice.a's
+# two leases, then bob's two, then bob.b's login beside all four.
+expect_after = [
+    '^\[con [0-9a-f]{16}\] sshd: login alice\.a: session [0-9a-f]{16}, labels \[\]$',
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{\} at [0-9]+: AgentStarted \{ lease: [0-9]+, sponsor: 0, parent: None, deadline: [0-9]+ \}',
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{\} at [0-9]+: AgentStarted \{ lease: [0-9]+, sponsor: 0, parent: None, deadline: [0-9]+ \}',
+    '^\[con [0-9a-f]{16}\] sshd: login bob: session [0-9a-f]{16}, labels \[\]$',
+    '^\[con [0-9a-f]{16}\] steward: audit 1002/\{\} at [0-9]+: AgentStarted \{ lease: [0-9]+, sponsor: 1, parent: None, deadline: [0-9]+ \}',
+    '^\[con [0-9a-f]{16}\] steward: audit 1002/\{\} at [0-9]+: AgentStarted \{ lease: [0-9]+, sponsor: 1, parent: None, deadline: [0-9]+ \}',
+    '^\[con [0-9a-f]{16}\] sshd: login bob\.b: session [0-9a-f]{16}, labels \[\]$',
+]
+
+# Alice's second session: stages `spin` for her agents, starts two on ten-minute leases, and
+# evaluates beside bob's two sessions and his two leases; then ends hers.
+[[session]]
+user = "alice.a"
+pty = true
+steps = [
+    { expect = '/home/alice \([0-9]+\)> ' },
+    { send = "{:ok, c} = Redoubt.Contexts.connection(); {:stage, File.mkdir_p(\"/home/alice/project/out\"), File.write(\"/home/alice/project/in\", \"spin\")}\n" },
+    { expect = '\{:stage, :ok, :ok\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "leases = for _ <- 1..2, do: ({:ok, %{lease: l}} = Redoubt.Wire.Client.Steward.start_agent(c, 600_000_000); l); {:leases, length(leases)}\n" },
+    { expect = '\{:leases, 2\}' },
+    { expect = '\([0-9]+\)> ' },
+    { mark = "a-leases" },
+    { wait = "bb-up" },
+    { send = "{:a, :four_sessions}\n" },
+    { expect = '\{:a, :four_sessions\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:ended, Enum.map(leases, &Redoubt.Wire.Client.Steward.end_lease(c, &1))}\n" },
+    { expect = '\{:ended, \[ok: %\{\}, ok: %\{\}\]\}' },
+    { expect = '\([0-9]+\)> ' },
+    { mark = "a-done" },
+    { send = "exit\n" },
+    { exit = 0 },
+]
+
+# Bob's first session: the same, after alice's leases are up.
+[[session]]
+user = "bob"
+pty = true
+steps = [
+    # Waited before the connection, so his login follows alice's leases in the console's order.
+    { wait = "a-leases" },
+    { expect = '/home/bob \([0-9]+\)> ' },
+    { send = "{:ok, c} = Redoubt.Contexts.connection(); {:stage, File.mkdir_p(\"/home/bob/project/out\"), File.write(\"/home/bob/project/in\", \"spin\")}\n" },
+    { expect = '\{:stage, :ok, :ok\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "leases = for _ <- 1..2, do: ({:ok, %{lease: l}} = Redoubt.Wire.Client.Steward.start_agent(c, 600_000_000); l); {:leases, length(leases)}\n" },
+    { expect = '\{:leases, 2\}' },
+    { expect = '\([0-9]+\)> ' },
+    { mark = "b-leases" },
+    { wait = "bb-up" },
+    { send = "{:b, :four_sessions}\n" },
+    { expect = '\{:b, :four_sessions\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:ended, Enum.map(leases, &Redoubt.Wire.Client.Steward.end_lease(c, &1))}\n" },
+    { expect = '\{:ended, \[ok: %\{\}, ok: %\{\}\]\}' },
+    { expect = '\([0-9]+\)> ' },
+    { mark = "b-done" },
+    { send = "exit\n" },
+    { exit = 0 },
+]
+
+# Bob's second session, the fourth, logging in beside three sessions and four leases: the
+# twelfth steward-minted system-volume connection, which the steward's share of eight refused.
+[[session]]
+user = "bob.b"
+pty = true
+steps = [
+    { wait = "b-leases" },
+    { expect = '/home/bob \([0-9]+\)> ' },
+    { send = "{:bb, :four_sessions}\n" },
+    { expect = '\{:bb, :four_sessions\}' },
+    { expect = '\([0-9]+\)> ' },
+    { mark = "bb-up" },
+    { wait = "a-done" },
+    { wait = "b-done" },
+    { send = "exit\n" },
+    { exit = 0 },
+]
+
+# Alice's console session, once its banner is out: typed ahead of its prompt.
+[[input]]
+after = 'Redoubt shell, on Elixir'
+send = "{:c, :console}\n"
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/steward/many-sessions.manifest.json" }
+verity = "image/userland.toml"
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]
+forward = [22]

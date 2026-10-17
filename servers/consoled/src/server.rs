@@ -9,7 +9,7 @@ use redoubt_rt::abi::PAGE_SIZE;
 use redoubt_rt::handle::Mmio;
 use redoubt_rt::ipc::Caller;
 use redoubt_rt::server::ninep::{FileServer, FileStat, NineError, Qid, REQUEST_STATE, Read, mode};
-use redoubt_rt::server::{Cost, Limits};
+use redoubt_rt::server::{Cost, Limits, Override};
 
 use crate::uart::Uart;
 
@@ -44,14 +44,50 @@ pub fn size_arg(args: &[&str]) -> Result<Option<(u16, u16)>, ()> {
 /// buckets at their caps would not fit [`BUDGET`], or whose parked reads together would not stay
 /// under `MAX_OPEN_CALLS` with its headroom ([`redoubt_rt::server::Admission::new`] checks that).
 ///
-/// A bucket holds `MAX_THREADS` minted connections: `init` starts at most `MAX_THREADS - 1`
-/// servers, one thread watching each, and mints every one of their consoles through its one root
-/// badge here, so that badge's one bucket must hold them all (servers/consoled.md, "Started by
-/// `init`"). Their fids are charged to that bucket too, so it holds [`CONSOLE_FIDS`] for each of
-/// those consoles and for `init`'s own.
+/// A bucket is one account's, and holds the consoles one account can hold here at once, whoever
+/// minted them (servers/serving.md, `admit`): the steward mints the UART session's console for
+/// the console principal through its own (a context over `ssh` gets the console its relay
+/// serves, not one here; a lease gets none: the steward's slot table), so that is one, plus the
+/// spare every derivation keeps for a session ending while its successor starts:
+/// [`CONSOLES_PER_ACCOUNT`]. Each console is a share of the bucket, and a share may take one more
+/// only while it holds less than `limit / (n + 1)`, n the shares holding (servers/serving.md, "A
+/// fair share per badge"), so the fids are what lets the last console open its [`CONSOLE_FIDS`]
+/// while the others hold theirs: `CONSOLE_FIDS x (CONSOLES_PER_ACCOUNT + 1)`, where
+/// `CONSOLE_FIDS x CONSOLES_PER_ACCOUNT` would leave the successor of an ended session, whose
+/// console still holds its two until the steward's cleanup gives it back, one fid of two. The
+/// connections need no such room: a share may always take one, and a console is one. `init`'s
+/// bucket is the exception, by [`init_override`].
 pub const fn limits(buckets: u32) -> Limits {
+    Limits {
+        buckets,
+        in_flight: 2,
+        files: CONSOLE_FIDS * (CONSOLES_PER_ACCOUNT + 1),
+        state: CONSOLES_PER_ACCOUNT,
+        requests: 80,
+        pages: 2,
+    }
+}
+
+/// The consoles one account holds here at once: the console principal's UART session's, minted
+/// by the steward, and one spare; the bench holds it to at least that over the tree's manifests
+/// (tools/testbench, `the_servers_admit_what_a_manifest_lets_one_account_hold`).
+pub const CONSOLES_PER_ACCOUNT: u32 = 2;
+
+/// `init`'s root badge here: `init` mints its own first badge at each server it calls, the first
+/// not handed to anyone at that endpoint, and refuses a manifest handing `consoled` to any server
+/// (servers/consoled.md, "Started by `init`"), so `init`'s is always the first.
+pub const INIT_BADGE: u64 = 1;
+
+/// The caps of `init`'s own bucket, in place of [`limits`]' per-bucket caps
+/// ([`redoubt_rt::server::Override`]): `init` starts at most `MAX_THREADS - 1` servers, one
+/// thread watching each, and mints every one of their consoles through its one root badge here,
+/// so that badge's one bucket must hold them all, and every one of them, a system caller whose
+/// chain was minted through `init`'s badge, is charged to it however it is used (the steward's
+/// own console among them). Their fids are charged to that bucket too, [`CONSOLE_FIDS`] for each
+/// of those consoles and for `init`'s own. The parked calls keep the default.
+pub const fn init_override() -> Override {
     let consoles = redoubt_rt::abi::MAX_THREADS as u32;
-    Limits { buckets, in_flight: 2, files: CONSOLE_FIDS * consoles, state: consoles, requests: 80, pages: 2 }
+    Override { badge: INIT_BADGE, in_flight: 2, files: CONSOLE_FIDS * consoles, state: consoles }
 }
 
 /// The fids one console client holds open: the root its namespace attaches
@@ -65,11 +101,14 @@ pub const CONSOLE_FIDS: u32 = 2;
 pub const COST: Cost =
     Cost { in_flight: 64 * 1024, file: 256, state: 256, request: REQUEST_STATE, page: PAGE_SIZE as u64 };
 /// The bytes of this server's budget its clients may use between them; its manifest entry gives
-/// it the budget, and the program refuses limits that would not fit. A bucket at its caps costs
-/// 2 parked calls at 64 KiB, `MAX_THREADS` connections at 256 bytes with 2 fids each at 256, 80
-/// requests at 256 and 2 pages at 4 KiB, so one account-0 share holds 64 batched reads: 183 552
-/// bytes with `MAX_THREADS` at 31, so 11 buckets fit, and 355 584 at 255, so 5 do; the image's
-/// manifest asks for 4.
+/// it the budget, and the program refuses limits that would not fit, by the worst case of
+/// [`redoubt_rt::server::Admission::fits`]: `init`'s bucket at its override's caps and every
+/// other at the defaults. A default bucket at its caps costs 2 parked calls at 64 KiB, 2
+/// connections at 256 bytes and 6 fids at 256, 80 requests at 256 and 2 pages at 4 KiB:
+/// 161 792 bytes. `init`'s costs the same but for `MAX_THREADS` connections with 2 fids each:
+/// 355 584 bytes at 255 (rv64), 183 552 at 31 (rv32). So 2 MiB holds `init`'s and 10 default
+/// buckets on rv64 (1 973 504 bytes; an eleventh, 2 135 296, does not fit) and `init`'s and 11 on
+/// rv32 (1 963 264; a twelfth, 2 125 056, does not); the image's manifest asks for 5.
 pub const BUDGET: u64 = 2 * 1024 * 1024;
 
 /// Bytes of the prefix a minted connection's lines start with: `[con `, the id in 16 lowercase

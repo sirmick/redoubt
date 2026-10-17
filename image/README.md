@@ -39,7 +39,10 @@ The sources of the signed boot bundle and the disk images; what they produce goe
   `walfsd` at once is that cap, the console session, a lease and one spare for a context
   detaching while another attaches, 6 for alice, and the server's constant is the largest such
   sum over the tree's manifests, 6 ([walfsd](../docs/servers/walfsd.md#serving)); the two
-  `walfsd` entries' 1,280 pages are that page's entry rule. The shell,
+  `walfsd` entries' 1,280 pages are that page's entry rule. The connections the steward mints
+  for her sessions and leases are hers to hold by the same rule, at every server: at the system
+  volume two per session and one per lease, 11 at most, which is `erofsd`'s cap per bucket
+  ([erofsd](../docs/servers/erofsd.md)). The shell,
   `Redoubt.Shell`, is started by the
   steward as the console principal's session (`console: "alice"`) on the UART, and as each SSH
   login's session on port 22 ([steward](../docs/servers/steward.md#authentication-and-sessions)).

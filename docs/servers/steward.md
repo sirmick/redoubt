@@ -1095,7 +1095,12 @@ Status: built · partly tested: the `keyd` grant for `audit` comes with the audi
   besides `init` that holds a `system`-class budget handle
   ([R33 (no server holds a system budget)](init.md#r33-no-server-holds-a-system-budget)).
 - It holds connections to the servers it builds namespaces from, and a `keyd` grant for the
-  `audit` purpose. It never holds the host key's badge: the manifest hands that to `sshd`.
+  `audit` purpose. It never holds the host key's badge: the manifest hands that to `sshd`. Its
+  own share at each server holds only what it calls on itself: its kept connections (the home
+  carves, the fresh ones it keeps) and, pending, what it has minted for a session or a lease that
+  has not yet made its first request; from that request the connection is admitted in the
+  session's or the lease's account ([serving](serving.md#admit)), so the steward's share caps
+  nothing a principal holds.
 - It holds no keys and signs nothing itself, and parses no ELF. Its one cryptographic function
   is the request binding hash ([the policy core](#guards-and-effects)).
 - It filters every request by the caller's labels, as the kernel attached them; a labelled caller
