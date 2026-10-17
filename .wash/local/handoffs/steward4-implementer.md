@@ -1,0 +1,9 @@
+STEWARD4 handoff: /home/mcloonan/redoubt/.wash/local/handoffs/steward4-implementer.md (full text there).
+
+Branch: wp-STEWARD4 at 240f8b3c8, one WIP commit on main 0b3fcfd28 to fold into the one `steward:` commit; tree clean. A rv64 steward-declassify run was in flight (log target/jobs/rv64-steward-declassify.log): read its verdict first. Rebase onto main after train 46 (STEWARD3Y: end batch replies after DestroyBudget, cleanup.rs queue): my drive.rs changes are event()'s crossing forget + sweep_items, step()'s Read/Write + CreateBudget account, crossed/principal_of/split/named/OUT.
+
+Traps: never kill by pattern (my shell killed itself); make's rc is masked by the pipe; the Read step's `Refused` hid three causes (unpublished program in `public` lists, EmptyImage launch, a mint below the vault root which R25 forbids the unlabelled steward: connection at the root, program walks); crossing budget 128 pages; init fuzz::ENTRIES must list crossing; latency manifest pins contexts.max=3; docs checker wants full first citations and no Open in built sections; fmt needs +nightly.
+
+Green: crossing crate (4 tests), steward server (41), init (68), testbench case:: (16) and sched_oracle (63), docs gate, unsafe-budget rv64, nightly fmt. Not run: size-budget (provisional ceilings 2990/2785/190), elixir-oracles, rv32, steward-push, steward-latency, the steward set.
+
+Next: 1 case verdicts (declassify both, push both, steward set); 2 steward-latency per Q9 (LATENCY-END marker, case writes latency-done after it, oracle ignores after marker, ring check, report length before sweep); 3 scheduling.md paragraph + table, steward residual number (declassify submit 96 ms rv64); 4 case 3 after B79 (brief B79-brief-from-steward4.md); 5 size-budget after fold, Size budget lines, rebase; 6 report file, reviewer steward-red-4. Rulings Q1-Q9 applied as listed in the file.

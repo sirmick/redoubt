@@ -1,67 +1,48 @@
-# Architect handoff (architect-15, 2026-10-06)
+# Architect handoff (architect-17, 2026-10-16, checkpoint at 70 % context)
 
-## Working rules that held
+File copy: .wash/local/handoffs/architect.md (identical).
 
-- Messages to the orchestrator and on QA threads: at most 2000 bytes, counted strictly; aim for 1,700. Detail goes in a file under `.wash/local/` and the message names it. Several of mine bounced on length; trim before sending.
-- Review-only checks: never Write, Edit or redirect into any file.
-- Page edits I make land in the root working tree (main) uncommitted, or as a patch under `.wash/local/` when the root tree must stay clean for merges; the orchestrator commits them as docs after an editor pass. Pages carry no dates, no package IDs, no decision IDs; a planned section has exactly one `**Open:**` line; a built section none; `mutation:` names must exist in `model/src/mutation.rs` (the checker reads them); every `### R<n>` heading needs a SECURITY.md row (C7); links must resolve on the base they are committed to (C6). The checker: `cargo test -p redoubt-doccheck --test docs -- --skip the_book_builds` (mdbook is absent on this host: `the_book_builds` fails for that alone; the dev image has it). Running `cargo testbench docs` through the pool (`jobserver share`) hung 30 minutes once; the direct test takes a second.
-- `plan_set` cannot edit an active node (the whole call is rejected); hand the orchestrator the body text instead. A QA thread needs an existing plan node; a `decision_request` needs an existing thread; decision_refs go on with a guarded action (`assign` with `expected_revision`), not `reply`.
-- `member_update` with `assignment_results` is at most 2000 bytes too, and an assignment resolves once: later detail goes by message.
-- A member key that handed off is inactive: an atomic multi-message send to it fails whole.
+## Branch state
 
-## Rulings in force, and where
+No branch of mine. I work in the project root on `main` and committed nothing: every artefact is a file under `.wash/local/` (rulings, briefs, this handoff) or a plan node. The root working tree carries the orchestrator's uncommitted `.wash/` edits, not mine. Nothing is lost if this process ends now.
 
-### Scheduling (SCHED1, RECON1, LIFT1)
-- `.wash/local/SCHED1-coverage-ruling.md`: the positive-lead category is structural at 1 ms (a weight-1000 waker clears at most one or two spinners); the category became lead > 0 with `ahead` a reported witness; the 10 ms control's non-vacuity needs `ahead >= 8` for 25 wakes.
-- `.wash/local/SCHED1-control-ruling.md`: the 10 ms control that cannot take its samples counts as the negative when the failing line is `CLUSTER-FAIL branch=2 result=0` with index >= 1 and N net of audits > 50,000 µs, trace required; the toml's `\[cluster\] FAIL` forbid removed so the ring is dumped.
-- `.wash/local/SCHED1-five-cases-ruling.md`, sections in order: (1) the slice is SCHED1's mechanism on trial, no R-rule names its length; only `sched-ties`' guest order was an accident (rebuild as one kernel entry, or oracle only); the share cases judge by ratio of counts (R12's relative claim) with useful work vs 10 ms reported beside; (2) addendum: the per-switch cost is a finding against a page gap (no stated slice-end cost); (3) after the release measurement: cost inherent, the reconcile's; (4) scope and sequence: the fix is its own package, the slice-end billing to the descheduled budget is per Charging (:203, :228), the page sentence for "Charging"; (5) debt-lift: option (c), the page's "at most one round" softened to the oracle-proven arithmetic (full replacement sentence in point 2), `sched-debt-lift` judges S's first wake by no-other-budget-picked-twice, LIFT1 is the follow-up node.
-- Owner's decision (IPC3-wake-latency, 4b03db73): keep 1 ms; merge SCHED1 now with the loss a stated residual; RECON1 next.
-- `.wash/local/RECON1-brief.md` (node RECON1, needs SCHED1): the cost is `Queue::raise_floor`'s unconditional walks reading each queued budget's 7-word State through checked frame reads (4-9 walks per slice end, ~28 µs per queued budget in release); fix: `raise_floor` only when the floor can rise, `(pass, tie)` cached in the queue's slots and audited against the frame in the checked build; gate under 3 µs per queued budget per slice end, the fixed L=0 term (100-155 µs: traps, two SBI ecalls) excluded; fixture `sched-large-weight` useful work within 0.85 of 10 ms. The attribution section is filled from `reconcile-finding.md`.
-- LIFT1 (node, needs SCHED1): a construction that puts a fresh lift of about a round on a small shared parent; may find the one-round claim false.
+## Traps (read before anything else)
 
-### Steward (STEWARD2/3/4), `.wash/local/STEWARD2-implementer.md` dated sections
-- Q1 (a): sub-budgets an equal share of top per label set (the core's carves); `label_sets[].budget` dropped from the manifest.
-- Q2 (a): `keyd []`; the core's keyd-key guard is vacuous on the box (init's and sshd's holds checks are live): a residual.
-- Q3: a binding table in the server over fixed slots (6 after Q4: 0 bootfsd, 1 home fsd, 2 labelled fsd, 3 ipd, 4 console, 5 system volume read-only); a slot bound to nothing for a domain class is produced without a call.
-- Q5 and Q5' : init appends the steward's own lines after the core's manifest lines: `label "NAME" id=N`, `home "P" handle=fsd:data path=/home/alice`, `vault "P" labels=[7] handle=fsd:alice-secrets`, `net "P" PREFIX:PORTS...`, `console "PRINCIPAL"` (last, at most one, absent = no console session). Write `fsd:` until FSN1.
-- The R41 departure: connections carry no revocation scope (`new_connection` has none); accepted for sessions, written as R41's Open item; the mechanism is STEWARD3's checkpoint question (its brief has it).
-- The image is streamed 64 pages at a time (INIT5), never held.
-- `ended`: consol opcode 18, no fields, a send; the steward sends it on the login's console connection when the session ends; sshd treats it as the session's end; consoled releases the minted connection; page sentences in the brief.
-- The restart, corrected: init cannot remake `users` (class is inherited); a restarted steward finding `users` not empty exits; five restarts reboot; residual on steward.md "Failure and restart" plus a new `docs/todo/empty-a-budget.md` (a kernel ABI follow-up, not STEWARD3's). Case 5's session-badge login is host-only.
-- Point-1 rulings: `libs/sha256` (keyd's reviewed SHA-256 shared by keyd, init, the core; `sha2` out of `libs/steward`); init refuses a key in two roles across principals.
-- Owner's decision (QA steward-console-principal, commit edd953085): the manifest's `console` names the principal; init refuses a name that is no principal.
-- Not mine: the orchestrator's handoff instruction names `expect_after` and bootfsd `BUDGET` among STEWARD2's items; I did not rule them. Look in STEWARD2's report and the orchestrator's messages before assuming a ruling exists.
-- STEWARD3's brief: `.wash/local/STEWARD3-implementer.md` (plus the R41 design question appended); STEWARD4's: `.wash/local/STEWARD4-implementer.md`. Sessions are M1's (sessions.md).
+- Message sizes: a QA-thread or orchestrator message is at most 2000 bytes, counted strictly; aim for 1,700. A `plan_set` node body is at most 2000 bytes and a title at most 200 bytes: titles over ~150 characters bounce. Put the detail in a file and name it.
+- `plan_set` with `needs` blocks the node until those are done; for nodes meant to run beside an active package set `needs: []` (I once blocked five nodes on B50 by mistake).
+- Do not tell the orchestrator a node is drafted until the `plan_set` returned the tree.
+- Rulings go on the QA thread (`thread_id` + `reply_to`); the orchestrator and the implementer both read it; the thread is the record.
+- Every ruling is a file in `.wash/local/` the thread message names; amendments are appended to the same file. Implementers build from the file.
+- Owner territory (decision_request): a new native, a new wire opcode, a kernel ABI or 9P change, a target or its definition moving, a page leaving the book, sessions per principal resizing. Mine: a serving-library rule, a wire-table field in Redoubt's own sideband (`ninep_common`, the steward's table), an admission derivation, a page sentence.
+- Facts from implementers can be wrong (STEWARD3R's "stamped root" was not): read the lines they cite before ruling.
+- `plan.toml` is rewritten by agentd (hand edits revert); `.wash/local` files are the durable medium; the steward core (libs/steward) moves only with its Elixir oracle and the model's reach table together; a model generator change must draw no extra random values.
 
-### Volumes and file servers
-- VOL1 merged (main bd6f768f6 and later). `VOL1-absent-vs-refused` resolved: `ClientError::NotFound`, `Error::Rerror(Name)`.
-- Owner's decisions (QA pack-writable-volumes, resolved; pages committed 9a3dfcc89): the read-only system volume moves to EROFS (uncompressed subset) served by `erofsd`; littlefs stays for every writable volume; `fsd` is renamed `littlefsd` (FSN1); a writable SSD file system is later. Pages: `docs/servers/erofsd.md`, README.md "Naming" (Open: `fsd` still carries its role's name until FSN1), fsd.md's Purpose paragraph.
-- `.wash/local/FSN1-implementer.md` (node FSN1, needs VOL1 and MEM2, both done: launchable): the mechanical rename, three commits; STEWARD2 rebases over it.
-- `.wash/local/EROFS1-implementer.md` (node EROFS1, needs VOL1, BOOT1, FSN1): libs/erofs + servers/erofsd on bootfsd's pattern, Redoubt's own writer with erofs-utils 1.9 as a host oracle (on `scripts/setup.sh`'s one prerequisites list; oracle cases skip as the bench's named `Unusable`, which fails unless `--allow-skip`); it carries BOOT1's step 2 (verityd's LRU sized from the EROFS profile, the boot-time target 1.5x rounded up to 10 s gated in `userland-boot`, the before/after table: littlefs 1016.7 | 534.7 s guest; the per-read cost beside BOOT1's 0.85 M / 1.62 M instructions).
-- `.wash/local/BOOT1-implementer.md`: now measurement only (its step 1; BOOT1's report found 96.7 % of littlefs reads are root-directory metadata).
-- `.wash/local/VOL2-implementer.md` (node VOL2, needs VOL1): the signed root, VOL1's step 2.
+## Open threads and their state
 
-### Process and tooling
-- Shared-host rule on docs/testbench.md "On a shared host" (commits 7760bb18d, 46cb2f0ca, plus the loopback refinement): verdicts by the clock a case measures with; `bench-ssh-loopback-deadlock` and `bench-ssh-guest` alone; 13 loopback cases class (ii); the probe is preflight.
-- B10 done (model thread bound; the keeper's deadline wait).
-- Integration trains: committed by the orchestrator as 7dbbb1c70 from `.wash/local/trains-rule.patch` (short gate, trains of three or six hours, no revert on an unpublished train, a conflicting rebase returns to review). The smoke set named: userland-boot, init-boot, bench-net-peer, ipc-outcomes; its ~15 min bound to be measured at the first train (the net cases' 0.5 s records looked like skips).
-- BENCH-parallel-verdicts and BENCH-shared-host-classes resolved.
+- STEWARD4-crossing (STEWARD4 implementer 2, active): Q1-Q12 ruled, all in `.wash/local/STEWARD4-ruling.md` (Q1 init's confine change in scope; Q2 crossing stamped with the labelled side's account; Q3 latency-probe in the steward binary under three conditions; Q4 too_big by a pre-stat; Q9 the trace dump via six probe exits with a LATENCY-END marker and a ring check, (b) refused; Q10 the confinement check skips exempt servers, bounded by the sentence in the file; Q11 spinners over six principals, overtaken by Q12; Q12 the box admits eight steward-minted system-volume connections: STEWARD4 measures N = 1, 2, 3 under alice alone, the table beside the stand-in's 1/4/16 with the stated sentence; the fix is STEWARD3Z). Awaiting: the trace account of the first latency round (rv64 N=1: decision wake p50 28.7 / max 45 ms vs 25/95; timer wake p50 75 / max 77 ms vs 15/50; deadline notice p50 368 / max 397 ms vs p99 40; destroy call-to-return 292/310 ms vs 51). My reading, not yet sent: the timer-wake miss is not a destruction-size matter; look at the real steward's budget weight and share against the spinner VMs (the stand-in had weight 1000 from `system`); the deadline-notice and destroy misses are the cost of destroying a beamlet VM (sizes.agent, 5,248 pages) instead of small budgets. When the account comes: targets do not move for a measurement; if the measured quantity is a different thing (a VM's destruction), the page frames it so beside the unchanged table and the finding is a node (R10's cost scales with the subtree: K9's rule); a target or its definition moving is the owner's. B79 landed on train 47; 3Y on train 48; the implementer rebases twice.
+- STEWARD3Z-admission (just launched on `.wash/local/STEWARD3Z-implementer.md`, reviewer steward-red-4): primary lever the serving library's re-homing of a minted connection to the first caller's account bucket (pending slots bounded by the minter's share), fallback a root badge per principal; consoled's limits from the manifest. Expect questions on the pending pool's R26 bound and the hotspot with STEWARD4 (drive.rs, the latency manifest).
+- B80 (open, not mine so far): rv32 beamlet-schedulers-one-hart-mttcg's ratio follows the host's load; a shared-host-rule question may come.
+- Closed this session: B51-completion-hold, B62-design, STEWARD3R-scope (with the (a1) amendment), STEWARD3A-notice ((a2)), STEWARD3A-sponsored-login ((A) + Q3 + Q4), STEWARD3B-channel, STEWARD3C-shared-restart, STEWARD3X-rebind (Q1-Q5, Q4 amended).
 
-### Hardware direction and SMP
-- `docs/beyond/fpga-platform.md` rewritten card-first (commit 6d0ce2090): XC7K480T first, 4 cores scaled by measurement, barrel a gated experiment, SpinalHDL TileLink, rust-vmm/VFIO backend, measurement gates, Open items (ROM-key custody, the in-flight-frame invariant beside R11).
-- R78 (fair kernel entry) planned on main (6d0ce2090); its built text for SMP1's docs commit is `.wash/local/R78-built-text.md` (section, diagnostic clause `sched-test-and-set-entry`, SECURITY row, residual bullet). SMP1's brief has dated sections: Q1 (a) libs/stride gains a running set and per-hart runners, the model's set is SMP2's; Q2 the context pointer and current PID/TID into the per-hart block (memory-layout.md page lines); Q4 the `HART_STACKS` window (slot 0 the boot hart's, `MAX_HARTS` 8); the ticket lock note. m2-usable-shell.md "Several harts" steps 3, 5-7 rewritten.
+## Files I own
 
-## Open questions I expect next
-- SCHED1 red round 6; the IPC3/SCHED1 merge order (SCHED1 first, IPC3 rebases) and the Charging sentence landing; RECON1's launch after SCHED1 (its gate and fixture fixed; its attribution filled).
-- SMP1's rebase onto main (R78 planned → built with the same words) and the `--smp N` flag (B7 owns main.rs: ask before adding; per-case `smp = [2]` is step 1's form).
-- STEWARD2 points 3-4 reviews (the wire table `libs/wire/tables/steward.md`, the session batch, the sshd box binary); then STEWARD3's R41 mechanism checkpoint.
-- FSN1 is launchable now; EROFS1 after FSN1 and BOOT1's merge; BOOT1's step-1 merge after VOL1 (done) in a train.
-- K19's brief (after IPC3 merges; `destroy-simplify.md`) and BEAM6's brief (when MEM2 is near: MEM2 is done, so soon) are owed by the Architect; ASID1's line references recheck was never done.
-- The trains' first run: measure the smoke set.
+`.wash/local/`: B51-ruling.md, B62-ruling.md, AGT4-brief.md, AGT4-ruling.md, STEWARD3R-ruling.md, STEWARD3A-Q1-ruling.md, STEWARD3A-Q2-ruling.md (also Q3, Q4), STEWARD3B-ruling.md, STEWARD3C-Q1-ruling.md, STEWARD3X-ruling.md, STEWARD4-ruling.md (Q1-Q12), STEWARD4-implementer-2026-10-16.md (the refreshed brief; the 2026-10-05 one stays), STEWARD3Z-implementer.md. Nodes drafted: B66-B78, ATK2-ATK9, AGT4, the STEWARD3 split (3R/3A/3B/3C), 3Q, 3S, 3X, 3Y, 3Z.
 
-## What a successor must not redo
-- Do not re-derive the SCHED1 rulings or re-open the slice: the owner decided (b). Do not re-ask the console principal, the writable volumes, or the naming: decided. Do not re-cut STEWARD2/3/4, VOL2, BOOT1, EROFS1, FSN1, RECON1, LIFT1, B10: cut and briefed. Do not rewrite the shared-host or trains rules: committed. Do not restate R78: its built text exists.
-- Do not touch `docs/testbench.md`'s root-tree line about trains if it is still there: it is the orchestrator's.
+## Standing rules I applied
+
+- Pages carry no dates, package ids or decision ids; a built section has no `**Open:**`; a planned section exactly one; every `### R<n>` has a SECURITY.md row; `mutation:` names exist in `model/src/mutation.rs`; links resolve on the committed base.
+- A number on a page shows the arithmetic that produces it; declarations are twice the measured peak; a bound is measured once on both widths, never guessed.
+- Targets never move for a measurement; a miss is a finding. Admission constants are derived from the manifest (3Q), stated as the derivation, held by a bench host test.
+- Cutoff vs cleanup (3R): destroying a scope or budget is the cutoff; disconnects and `ended` sends are cleanup, deferred and short-bounded (3Y), never on the serving loop with a full timeout.
+- A wait is bounded by its own deadline (B62); the client's completion call has no clock (B51); the fake kernel's tick is quiescent (B74).
+- A test-only feature in a Tier A binary is acceptable only as `restart-probe` is: off by default, named on the page, a host test that nothing enables it but its case, raising only existing core events.
+- A flaky test is a bug; a failure beside other work is no verdict; a case orders on events, not the host's clock.
+- The owner decides product and capacity choices; design mechanics are mine; every ruling says which.
+
+## The owner's M3 order and what I see next
+
+STEWARD3 done (3Z open). STEWARD4 active. Then by the plan: `sshd` (vault sessions over SSH), BEAM5 (gen_tcp over /net), the agent-suite, model-replay. Follow-ups the session surfaced: leases re-bound after a server restart (3X's (c)); a `leases` listing for sponsors; the agent principal sized by its own `sizes` entry; the read-only connection no server takes; slot 5 (`erofsd:system`) restart leaving sessions dead; kernel-attack-gaps' remaining pages (ATK5-ATK9 drafted; the owner asked for no attack-gap packages ahead of agent work).
 
 ## What consumed my context
-Reading whole evidence files and long page sections; the plan tree printed in full by every `plan_set`/`plan_get` (unavoidable); re-sending messages that bounced on length (trim first).
+
+The plan tree printed in full by every `plan_set` (~10 KB each, ~25 calls, a third of them resubmits for a title or body over the limit); reading implementers' question files and reports whole where a section would have done; message bounces on length. Write node titles under 150 characters and bodies under 1,800 bytes on the first try; read question files by section; keep every ruling's detail in its file.
