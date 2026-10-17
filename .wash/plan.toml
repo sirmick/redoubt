@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 415
+revision = 426
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -2466,8 +2466,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "STEWARD3"
   needs = ["STEWARD3Q"]
   body = "Brief: .wash/local/STEWARD3Z-implementer.md; rulings .wash/local/STEWARD3Z-ruling.md (Q1 consoled's caps by who holds them, (A); Q2 the six-principal boot and the latency table move to STEWARD3V). Found by STEWARD4's latency case (STEWARD4-ruling.md 'Q12'): admit.rs counts a connection a client mints in the share of the connection it minted from, so every connection the steward mints at erofsd:system (a session's shell and relay, a lease's) is a State of the steward's own share there, cap 8: the box holds eight steward-minted system-volume connections in all, a fifth session or a fourth lease refused on today's image; 3Q's per-account derivation missed the minter's share. consoled's per-bucket cap is init's need applied to every bucket, so its 2 MiB holds five. Lever: the serving library admits a connection minted for another account in that account's bucket from its first request, holding one of the minter's pending slots until then (R26 bounds a mint flood by the minter's share); fallback, a root badge per principal per shared server, only if the primary cannot be made sound. consoled: the default bucket's state derived from what one account holds, init's root badge alone at MAX_THREADS by with_overrides, the fit's arithmetic on the page. Gates: rt host tests (pending pool, the move at first call, the flood bound, the free at disconnect); steward-many-sessions on a three-principal manifest (four sessions and four leases hold system-volume connections at once); the steward set, aio-many-reads-two, walfsd-quota both widths; 3Q's admission host test extended. Not here (STEWARD3V): the six-principal boot, steward-latency at N = 4 and 16, the other shared servers' budgets. Pages: serving.md, consoled.md, init.md, steward.md Authority, SECURITY.md R26/R77. Files: libs/rt/src/server, servers/consoled, servers/init, tests/. Hotspot with STEWARD4: drive.rs (no edits to its files). Tier A: steward-red-4. Size M."
-  state = "active"
-  revision = 404
+  state = "done"
+  revision = 426
 
 [[node]]
   id = "STEWARD3W"
@@ -2530,5 +2530,14 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "AGENTS"
   body = "Seen on trains 45 (rv32), 51 (rv32) and 51b (rv64), 2026-10-16/17: `job-interrupt-native timed out waiting for /(^|\\] )\\{:after_exec, true, \\{:error, :not_running\\}\\}$/` at 450 s, each time PASS alone in 4.2-4.6 s on the same tree. The case (tests/job-interrupt-native.toml; JOB1's Job.kill and the interrupt over the console) sends an interrupt to a native job and expects the job gone (`{:error, :not_running}` after the exec); under load the line never comes: either the interrupt is lost or late when the host starves QEMU, or a host-clock wait inside the shell's job path (Redoubt.Job, the console's interrupt delivery, the native stage's exit) runs out, or the expect's pattern misses a split line (B49's shape). Transcripts: .tmp/train-45/fail-rv32-job-interrupt-native.transcript.log, .tmp/train-51/transcript-rv32-job-interrupt-native.log, .tmp/train-51b/transcript-rv64-job-interrupt-native.log. Work: reproduce beside a load (a concurrent q build or parallel case set) and keep the console log; find whether the job ended and the line was lost, or the job never ended; fix on events (B4/B70's rule), or make the case's expectation the kernel's answer rather than a shell line, or move the case to the alone class with the reason on the page; prove 10x under load + 5x alone both widths. Files: tests/job-interrupt-native.toml, userland/shell (Redoubt.Job) or userland/native if the path is the shell's, docs/userland/shell.md 'Jobs'. Tier B (a case's verdict; the shell's job path if it moves), reviewer kernel-red-3 (steward-red-4 if the shell moves). Size S. Until it lands, a timeout of this case alone on a train is a known flake, rerun alone."
+  state = "done"
+  revision = 423
+
+[[node]]
+  id = "B85"
+  title = "beamlet-redoubt's console host test input_nobody_reads_holds_no_idle_and_waits_for_the_next_reader fails under a whole bench's load (train 52; CONW1's report saw it) and passes alone"
+  template = "package"
+  parent = "AGENTS"
+  body = "Seen on train 52 (beamlet-lookup-host, 15.5 s: `redoubt/tests/console.rs` test input_nobody_reads_holds_no_idle_and_waits_for_the_next_reader panicked at console.rs:154:9 'the idle returned on input nobody reads' and :56:31) and recorded in .wash/local/CONW1-report.md:66 before: the same test failing under load, passing alone (5/5 alone on 3Z's tree; the fixture grants the console with a badge below FIRST_MINTED_BADGE, so 3Z's admission move is not in its path). B81 moved tests/system.rs to the fake kernel's held clock; console.rs still waits on the host's clock for the idle. Work: find the wait (the idle's bound; the test's assertion window) and move console.rs's tests to the held clock as B81 did for system.rs (Fake::hold_clock/tick at quiescence; B70/B74's rule), or make the test's expectation an event; prove 10x under load + 5x alone. Transcript: .tmp/train-52/transcript-rv64-beamlet-lookup-host.log (the failures block B81 now keeps). Files: userland/otp/redoubt/tests/console.rs (and its fixture), docs/userland/beamlet.md if the status line names the tests. Tier B (a test's verdict), reviewer kernel-red-3. Size S. Until it lands, this host test failing on a train is a known flake, rerun alone."
   state = "todo"
-  revision = 414
+  revision = 425
