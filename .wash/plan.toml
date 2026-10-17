@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 467
+revision = 478
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -172,8 +172,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   needs = ["steward", "SSH1"]
   body = "docs/servers/sshd.md (the box's platform, approve@box; the core is SSH1's); docs/userland/sessions.md"
-  state = "todo"
-  revision = 2
+  state = "done"
+  revision = 468
 
 [[node]]
   id = "steward"
@@ -655,9 +655,9 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "AGENTS"
   needs = ["BEAM3"]
-  body = "docs/userland/beamlet.md#beamlet-on-redoubt: gen_tcp over a backend that opens /net/tcp/clone and reads and writes the data file, framing in Erlang. M1's attack suite needs a session's TCP (the loopback login row, R59). Brief to come."
-  state = "todo"
-  revision = 2
+  body = "docs/userland/beamlet.md#beamlet-on-redoubt: gen_tcp over a backend that opens /net/tcp/clone and reads and writes the data file, framing in Erlang. M1's attack suite needs a session's TCP (the loopback login row, R59). Brief: .wash/local/BEAM5-implementer.md; ruling .wash/local/wave-2026-10-18-rulings.md 'BEAM5'. Tier B unless a native is added (then re-tiered), size M, one reviewer: the red team, since the loopback-login attack case lands with it. Design: beamlet_tcp's transport is the session's /net when the namespace has one (clone, ctl, data, remote through the VM's hub; every socket ipd's then, loopback addresses included: R59 is ipd's refusal); without a /net (a lease, a host test) the in-VM loopback stand-in stays, one VM being one trust domain. Connect by IPv4 tuple only; a name is nxdomain until the resolver. Cases: a session's shell connects to the bench's peer and echoes (verdict the peer's); the loopback login row of m3-agents.md: a session's connect to the box's own sshd is refused by ipd (verdict ipd's); a lease's connect fails as having no network; beamlet host tests of the backend's framing and waits."
+  state = "active"
+  revision = 469
 
 [[node]]
   id = "INIT5"
@@ -2568,3 +2568,59 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "Found by STEWARD3W's steward-latency N = 3 round on rv32 at two harts (twice, before and after STEWARD3U), first read as erofsd:system taking nobody's call. The block-trace (a test-only kernel instrument this node adds, off in every default build) showed the steward's calls out all return within 1.43 s and it waits to receive on its own endpoint, the read path's servers run whenever asked, and a kernel lost wake is refuted: the wedge is the verified system-volume read path (erofsd, verityd, blkd) under two concurrent VM code loads, verityd's four data blocks thrashing with no read-ahead, the shell's own load starved past start_agent's 5 s bound. Fix: verityd's data cache is sized from its manifest entry's heap (half the cap less a derived reserve, floor four), and a request's cold run is read ahead in one read bounded by MAX_SECTORS and the cache's size (up to five blkd calls at the two-page lend), every block hash-checked before it is kept; blkd reads fall from 2704 to 924 on the case and rounds N = 1 and 2 complete on rv32 at two harts. Round three does not: launch beside two spinners takes 5.3 to 5.7 s against 3.9 s alone (rv64: 2.2 to 3.3 s), and a larger cache cuts reads further without moving it, so the remaining cause is compute, two equal-weight module decodes and the shell's share under icount at two harts; the rv32 two-hart N = 3 and 4 rows are stated missed with that cause, the target unmoved. verity:system's heap grows 100 to 118 pages (init's rule: twice the measured peak) in the image and every memory-checked manifest; budget 256 unchanged. Residuals: the steward's mints at shared servers wait within FOREVER (bounded disconnects, unbounded mints; max observed 1.43 s), its own node; whether a session's load outranks a lease's under the scheduler, the Architect's. Report .wash/local/B88-report.md. Tier A; reviewer kernel-red-3. Size M."
   state = "done"
   revision = 467
+
+[[node]]
+  id = "SSH3"
+  title = "sshd's connections are bounded in time before login and sized by the manifest, so no network client holds a slot for long and one principal's slots are the manifest's"
+  template = "package"
+  parent = "AGENTS"
+  body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'The sshd step and SSH3'. Brief: .wash/local/SSH3-implementer.md. Tier A (sshd), size S, reviewer steward-red-4 or the orchestrator's sshd red. The sshd step's two items (approve@box, vault sessions over SSH) are built with their cases; this is the one follow-up its residual names ('Connections are first come, first served ... how many one principal may hold is not decided'). Rule: a connection that has not authenticated within a bound is closed, the bound measured (twice the slowest login the bench records, the arithmetic on sshd.md), so a slot is held before login for at most that; the slot count follows the manifest's buckets=N for sshd as every server's limits do (3Q, 3V), bounded by ipd's parked calls a bucket (the accept and one parked read per slot), with the arithmetic on sshd.md; after login a principal's channels are bounded by R82 already (a login past the cap is refused and the connection ends). Cases: a client that connects and never authenticates is closed at the bound and the slot serves the next login (verdict: the next login's session, not the attacker); a manifest sizing sshd's slots boots and holds them; sshd-host tests for the bound. Lowest priority of the wave: behind the agent-suite if slots are short."
+  state = "active"
+  revision = 470
+
+[[node]]
+  id = "STEWARD5"
+  title = "The steward's loop never waits on a shared server: cleanup steps run on a thread of its own, their outcomes come back as events"
+  template = "package"
+  parent = "AGENTS"
+  needs = ["STEWARD6"]
+  body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'F1'. Brief: .wash/local/STEWARD5-implementer.md. Tier A (the steward's loop), size M, reviewer steward-red-4; after STEWARD6 (same file). Found by STEWARD3V's and 3W's latency rounds: a cleanup step's one attempt at a busy erofsd:system (100 ms, 3Y's bound at the loop's top) landing in a sample's window misses the timer wake's p99 (50 ms) by construction: one sample per round at N = 3 and 4 on both widths at one hart (69-93 ms), 148 ms at two on rv64. Options (a) a target-derived bound and (c) non-blocking calls refused in the ruling. Rule: the cleanup queue (due, retries, parked: 3W unchanged) is owned by a cleanup thread of the steward's, as its crossing watchers are; each step runs there with the client library's call bound; the loop hands it steps, wake(server) and forget(server), and takes each outcome back as a message on its own endpoint and says the line (3U's queue). A mint at a server with parked steps: wake, mint, and if refused wait one mint bound (STEWARD6's) for the thread's report and retry once (3W's test kept). The loop's top makes no call to a shared server. Cost: one thread and one lend page, the arithmetic on the page and in every memory-checked manifest. Acceptance: steward-latency N = 3 and 4 at one hart meet the timer wake's p99 on both widths and reply_wait carries no 100 ms retry; the steward set and steward-server-restart unchanged. Pages: steward.md 'Failure and restart', scheduling.md 'With the real steward' re-measured."
+  state = "todo"
+  revision = 468
+
+[[node]]
+  id = "STEWARD6"
+  title = "The steward's calls to shared servers inside a batch are bounded: a server that does not answer in time fails the step, never holds the loop"
+  template = "package"
+  parent = "AGENTS"
+  body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'F3'. Brief: .wash/local/STEWARD6-implementer.md. Tier A (the steward), size S, reviewer steward-red-4. Found as B88's residual: the steward's mints (unattached -> Connection::new -> FOREVER), its launch step's image reads from erofsd:system and a push's source reads wait without bound, while its disconnects (3Y) and console writes (3U) are bounded; max observed 1.43 s under two spinner VMs. Rule: every call the steward makes to a shared server inside a batch is made within one bound, SERVER_US; a call the server did not take in time fails the step, the batch's existing failure path answers the caller (failed to start_agent and submit, a login refused) and nothing retries inside the steward. The bound is measured, not guessed: twice the worst per-call wait under steward-latency's load on both widths, rounded up to a second, stated on steward.md 'Residual risks' beside the relay bounds. Host tests with a server that never answers (a mint, the image read, a push's source); the steward set unchanged in verdict; steward-latency N = 1 unmoved. Pages: steward.md (residual, one clause under sessions), agents.md 'Leases' one clause. First of the pair: STEWARD5 shares bin/steward.rs."
+  state = "active"
+  revision = 471
+
+[[node]]
+  id = "STEWARD7"
+  title = "A principal's leases are derived from the manifest: the admission caps' lease term is what its unlabelled share holds in agent budgets; steward-latency at N = 16"
+  template = "package"
+  parent = "AGENTS"
+  body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'F2' (STEWARD3V-budgets Q4). Brief: .wash/local/STEWARD7-implementer.md. Tier A (admission caps in every shared server; the bench's derivation), size S-M, reviewer steward-red-4. Found by STEWARD3V part 2: 3Q's per-account caps add a lease term of 1 (the bench test's LEASES, 'no manifest names it'), so one session with N leases (2 + N at erofsd:system, 1 + N at its home and /boot) is admitted for N <= 7 and N = 16 is refused its eighth home connection. Rule: the term is derived as the context cap is (R82): leases(p) = min(share_pages / sizes.agent.pages, share_processes / sizes.agent.processes) over the principal's unlabelled share as init's holds derives it; an upper bound, since sessions carved from the share only lower it and a sponsored principal's sessions are leases of it; the kernel's carve (R7) refuses past it, so the steward gains no rule and the core no row. steward.md 'Leases' states it as arithmetic (image: alice 7); the bench test and the servers' limits take the term; entries follow STEWARD3V's rule where a bucket grows. The latency manifest's alice is sized by the rule for N = 16 if memory_mib affords it by the memory rule's arithmetic (about 190,722 pages for her), else the largest N the rule gives is recorded with its arithmetic beside the stand-in's column (owner question, conditional). Not a compiled constant raised to a case's N, not a new manifest field."
+  state = "active"
+  revision = 472
+
+[[node]]
+  id = "STEWARD8"
+  title = "A lease's launch under load is a measured quantity: start_agent's client bound is derived from it, and the rv32 two-hart rounds at N = 3 and 4 are measured"
+  template = "package"
+  parent = "AGENTS"
+  needs = ["STEWARD5", "STEWARD6"]
+  body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'F4' (B88's residual). Brief: .wash/local/STEWARD8-implementer.md. Tier B (the Elixir client, the shell's call, a toml, pages), size S, one reviewer: the editor, the red team if the steward is touched. Runs when STEWARD5 and STEWARD6 are on main, so scheduling.md's table is re-measured once. Found by B88: on rv32 at two harts a lease VM's launch beside two spinners takes 5.3-5.7 s and the shell's start_agent answers timeout; the 5 s is @timeout 5000 in libs/wire/elixir/lib/client.ex, the client's bound for every steward call, a platform constant no page states as a target; no page bounds a launch. Rule: the launch is stated and measured as end_lease's 589 ms is (steward.md 'Residual risks'): start_agent's served time alone and beside N - 1 spinners, both widths, one and two harts, from the steward's served lines; the shell's start_agent passes the client a bound of its own, twice the worst launch measured beside the spinners the case runs, rounded up to a second (call/5 takes a timeout; 5 s stays for short calls). Then the rv32 two-hart rounds at N = 3 and 4 run and their rows are measured; a miss there is a scheduler finding, not a timeout's. Drafted under the image's weights (session 100, agent 50, steward 100; the case's steward 1,000): the owner's weight answers change the number, not the design; the launching lease's share against its sponsor's spinners is asked in the owner file."
+  state = "todo"
+  revision = 468
+
+[[node]]
+  id = "IPD1"
+  title = "ipd parks a request strictly shorter than its clients wait: data and ctl reads below the hub's FILE_WAIT_US, so a late answer never carries bytes"
+  template = "package"
+  parent = "AGENTS"
+  body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'BEAM5 Q1'. Tier A (ipd), size S, reviewer kernel-red-3 or the orchestrator's ipd red; no brief: the ruling is the whole scope. Found by BEAM5's implementer: the VM's hub gives a request up at FILE_WAIT_US (10 s) and drops a later answer (files.rs give_up); ipd parks a data read up to DATA_WAIT_US (30 s) and answers it with the bytes when they arrive, so bytes a peer sends 10-30 s into a quiet read are lost to the stream. Rule: a server parks a request strictly shorter than its clients' wait, by a stated margin: DATA_WAIT_US and CTL_WAIT_US come down below FILE_WAIT_US (8 s against 10 s, the margin the kernel's delivery of a reply; the arithmetic on ipd.md 'Pinned and abandoned calls' and files.md 'Files over 9P'); bytes arriving after ipd's timeout wait in its buffer for the next read, which the client makes at once. Cases: ipd's host test of the park bound; net-tcp, net-pinned, sshd-loopback-* unchanged in verdict, both widths. BEAM5's echo case lands on it."
+  state = "done"
+  revision = 478
