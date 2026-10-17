@@ -42,9 +42,9 @@ gap as `reply_wait`; the window ends at `LATENCY-END` after the second round's c
 oracle takes as its edge (nothing after it judged), the rounds closed by marker files the
 session writes; the case ends by the steward's marker-file exits and init's reboot, which dumps
 the ring (2.1-2.9 million records, none dropped). Findings, not tunings: N = 4 and 16 are not
-reachable (the box admits eight steward-minted system-volume connections, the steward's own
-share at erofsd:system: serving.md and consoled.md residuals; the follow-up gives the steward a
-badge per principal); N = 3 is not reached (a cleanup step dropped at a busy server leaks a
+measured (when the case was written the box admitted eight steward-minted system-volume
+connections, the steward's own share at erofsd:system; a minted connection is now admitted in
+its account from its first request, so those rounds await a run); N = 3 is not reached (a cleanup step dropped at a busy server leaks a
 State; the cleanup step's parking is the follow-up); the timer wake's p50 misses at every width
 and hart count and, at two harts, the decision wake's p50 and the deadline notice's p99, the
 steward reaching its wait with its reply's console round trips on its pass (the loop's console
@@ -55,8 +55,8 @@ name, until the loop's console writes are fixed: a whole bench is a verdict on t
 
 Pages: steward.md (Declassification and push built, R42, the protocol, the manifest lines, the
 console lines, both probes, the residual's numbers), init.md (The confinement check and R34
-built with case 3, the exempt holder), SECURITY.md (R42, R34), serving.md and consoled.md
-(residuals), scheduling.md (With the real steward), testbench.md, sessions.md, shell.md,
+built with case 3, the exempt holder), SECURITY.md (R42, R34), scheduling.md (With the real
+steward), testbench.md, sessions.md, shell.md,
 agents.md, servers/README.md, walfsd.md, littlefsd.md, libs/wire/tables/crossing.md,
 plan/m3-agents.md. Cases: steward-declassify, steward-push, steward-confined-push,
 steward-latency (both widths); the nine steward cases listing their programs gain the crossing

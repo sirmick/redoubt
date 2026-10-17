@@ -1,6 +1,7 @@
 # STEWARD4 report (implementer)
 
-Branch `wp-STEWARD4` = 3497d27ca, one `steward:` commit on main 68c4b2904 (train 48), 65 files;
+Branch `wp-STEWARD4` = b09135def (the final message), one `steward:` commit on
+main 82a026733 (train 55: 3Z, B81-B86), 63 files, +3397/-154; in review (steward-red-4);
 the commit message (.wash/local/steward4-commit.txt) is the account. Brief: `STEWARD4-implementer-2026-10-16.md`; rulings:
 `STEWARD4-ruling.md` (Q1-Q7, Q9), thread `STEWARD4-crossing` (Q8 second disk; Q10 the confined
 check and an exempt steward's handed endpoint, Q11 leases against the admission caps: both open).
@@ -60,24 +61,30 @@ check and an exempt steward's handed endpoint, Q11 leases against the admission 
   manifest needs Q10: init's check counts an exempt steward handed `walfsd:alice-secrets` as an
   unlabelled user of a labelled endpoint.
 
-## Gates (2026-10-17; every command through `scripts/q run` / `scripts/jobs.mk`)
+## Gates (2026-10-17, on the rebased tree 79827b45a = b09135def's tree; every command through `scripts/q run` / `scripts/jobs.mk`)
+
+Outputs: `.wash/local/steward4-logs/reverify-a.out` (host tests, fmt, budgets, docs, oracles,
+the four new cases both widths, launched 07:05Z, done 07:57Z), `steward-set-2.out` (the rest of
+the steward set, both widths, done 07:48Z), `reverify-latency-rv64-alone` (the rv64 latency rerun
+alone, 08:46Z-08:56Z; its verdict and console logs `reverify-alone-rv64-steward-latency.*`); the
+rv32 latency verdict `reverify-rv32-steward-latency.verdict.log`.
 
 | Gate | Command | Result |
 | --- | --- | --- |
-| steward-declassify rv64 / rv32 | `make -f scripts/jobs.mk set CASES="steward-declassify"` | PASS 11.1 s / 12.4 s |
-| steward-push rv64 / rv32 | `make -f scripts/jobs.mk set CASES="steward-push"` | PASS 20.2 s / 18.9 s |
-| steward-confined-push rv64 / rv32 | `make -f scripts/jobs.mk set CASES="steward-confined-push"` | PASS 16.4 s / 14.6 s (B79's `[vault]`) |
-| the steward set (33 cases, both widths, latency aside) | `make -f scripts/jobs.mk -k set CASES="..."` (list in target/jobs/steward-set.list) | 64/64 PASS: 46 first, the nine refused cases 17/18 after their programs lists gained `redoubt-crossing`, steward-server-restart rv32 PASS alone (its one fail: bob's lockout login succeeded beside nine running cases) |
-| steward-latency rv64 one hart | `make -f scripts/jobs.mk rv64/steward-latency` | the full run: all counts 16, LATENCY-END, 6 exits, reboot, trace 2,705,994 records dropped 0, ~6 min wall; the verdict failed on the counts' order in expect_after (fixed); the oracle's figures from the one-hart rerun pending |
-| steward-latency rv64 two harts | same | FAIL early in round 1: `Launch` of a lease `NotPermitted` after the kernel killed the previous deadline lease's VM on the other hart (kernel/src/process.rs `p.started() or !p.alive()`): asked the Architect whether the case gates at one hart |
-| steward-latency rv32, the sweep | | not yet run (the shape settled first) |
-| host: steward server 47, init 69, crossing 4, testbench case:: and sched_oracle 63 | `cargo test -p ...` through q | ok |
-| elixir-oracles | `make -f scripts/jobs.mk rv64/elixir-oracles` | PASS 17.6 s |
-| shell ExUnit | `q run -- bash -c 'cd userland/shell && mix test'` (toolchains on PATH) | 314 passed, 70 skipped |
-| docs | `make -f scripts/jobs.mk docs` | PASS (after the register's R34 row was aligned) |
-| unsafe-budget rv64 | `make -f scripts/jobs.mk rv64/unsafe-budget` | PASS |
-| size-budget | `make -f scripts/jobs.mk rv64/size-budget` | ceilings set to the measured lines: libs/wire 4153 (raised, the generated crossing codec), servers/steward 3082 (2527 on main + the package), servers/crossing 185, servers/init 2785; to re-run on the final tree |
-| fmt | `q run -- cargo +nightly fmt --check` | clean |
+| host: steward server 3+4+4+47, init 23+1+69, crossing 4, testbench 224 (case::, sched_oracle, the probe's builder) | `cargo test -p ...` through q | ok, all |
+| fmt | `cargo +nightly fmt --check` through q | FMT-OK |
+| size-budget | `make -f scripts/jobs.mk size-budget` | PASS (main's rt 4048, consoled 423, ipd 2926; mine wire 4153, steward 3113, crossing 185, init 2785) |
+| unsafe-budget | `make -f scripts/jobs.mk unsafe-budget` | PASS |
+| docs | `make -f scripts/jobs.mk docs` | PASS 2.6 s |
+| elixir-oracles | `make -f scripts/jobs.mk elixir-oracles` | PASS 4.1 s |
+| steward-declassify rv64 / rv32 | `make -f scripts/jobs.mk set CASES="steward-declassify steward-push steward-confined-push steward-latency"` | PASS 11.7 s / 10.8 s |
+| steward-push rv64 / rv32 | same | PASS 20.1 s / 24.4 s |
+| steward-confined-push rv64 / rv32 | same | PASS 21.4 s / 20.7 s |
+| the steward set (31 cases, both widths, the four above aside; two rv32 host-test targets run once) | `make -f scripts/jobs.mk set CASES="..."` | 60/60 PASS, `set rc=0`, no rerun needed (steward-server-restart rv64 17.4 s, rv32 PASS beside the others this time) |
+| steward-latency rv64, one and two harts | `make -f scripts/jobs.mk rv64/steward-latency` (FAIL on its targets by design: `whole_run = false`, run by name until STEWARD3U) | beside the set: one hart FAIL on the timer wake's p50 only (2,129,673 records); two harts FAIL `record 1759160: a device interrupt returned without its claim` (the two-hart trace finding, at the pinned seed for the first time, under the set's load). Alone (08:46Z): both traces accepted; one hart net µs p50/p99 N = 1 / N = 2: timer wake 23395/24114, 26072/27766 (p50 missed); decision wake 4098/8433, 5593/11876; deadline notice p99 27119, 30280; reply_wait p50 56001, 34429; R10 p99 9664 µs; lease end 11876 + 9664 = 21540 µs met; 2,132,764 records. Two harts: timer wake 41576/63907, 39868/43016 (p50 missed); decision wake 30648/43698 (N = 1 p50 missed), 20238/35767; deadline notice p99 47500, 51288 (missed); reply_wait p50 115807, 94274; R10 p99 9745; lease end 43698 + 9745 = 53443 µs met; 2,550,239 records. scheduling.md's rv64 rows within a millisecond |
+| steward-latency rv32, one and two harts | same, `rv32/` (in reverify-a) | FAIL by design, traces accepted: one hart timer wake 53322/56180, 26174/27946 (p50 missed); decision wake 5359/6101, 6556/8681; deadline notice p99 27369, 29169; reply_wait p50 34708, 36833; R10 p99 9622; lease end 18303 µs met; 2,304,416 records. Two harts: timer wake 61625/83478, 60234/64714 (p50 missed); decision wake 58546/67701, 42129/50351 (p50 missed both N); deadline notice p99 80100, 81769 (missed); reply_wait p50 153000, 161736; R10 p99 9755; lease end 77456 µs met; 2,902,629 records. The page's rv32 rows within a millisecond |
+| the sweep | `q run --cores 4 --ports 2 -- cargo testbench steward-latency --arch W --sweep A..B --jobs 2` | rv64 1..10 done before the rebase (below); rv64 11..20 and rv32 1..20 run during the review, appended below |
+| shell ExUnit | `cd userland/shell && mix test` through q (before the rebase; the shell is untouched by the rebase) | 314 passed, 70 skipped |
 
 Steward work measured (the `served` lines): `submit` at most 96 ms (declassify rv64), 100 ms (push rv64), 95 ms (rv32); `end_lease` of a VM lease at most 589 ms (rv64, one hart, checked build under icount); on steward.md's residual.
 
@@ -279,16 +286,48 @@ a `Timeout` with no timer due); the poll has its own arm, rerunning.
   (both widths): findings against the steward's loop, 3U's. Memory 1536 MiB (2048 wrapped rv32's
   address space). The rv64 sweep (seeds 1..20, both harts, two boots at a time) runs; rv32's
   follows; each is "once, when the case lands".
+- Train 54 (3Z) checks: the crossing program opens no console (servers/crossing: no `say`, no
+  `/dev/cons` lookup), so consoled's new default bucket of 2 consoles / 6 fids does not concern
+  it; the latency manifest's consoled `buckets=5` is the image's. 3Z touched none of this
+  package's code paths; its pages serving.md, consoled.md and steward.md changed where my
+  residual bullets sit (consoled.md's pool paragraph is rewritten by 3Z: my "The pool is a
+  constant" bullet must be re-read against it, likely withdrawn, since 3Z sizes the buckets);
+  tests/size-budget.toml: rt 4048, consoled 423, ipd 2926 are main's, untouched by me.
+- The sweep's first attempt (`--sweep 1..20 --jobs 2`) collapsed: seed 1 ran (one hart within a
+  millisecond of seed 3: timer wake 23353/23938 and 24898/27320, decision wake 4087/6972 and
+  5579/11679, deadline notice p99 29566/28713, reply_wait 55911/34389 p50; two harts: the oracle
+  rejected the trace, `record 2149984: a device interrupt returned without its claim`, a
+  two-hart trace finding for the bench or the kernel, seed 1), then seeds 2-20 died at 0.1 s:
+  the second concurrent boot was given host port 23000 again (`hostfwd ... Could not set up`),
+  so `--jobs 2` with one forwarded port collides. Rerun serially in two halves (1..10, 11..20);
+  log of the collapse: .wash/local/steward4-logs/sweep-rv64-jobs2-collapsed.log.
+- `--keep-failed` conflicts with `--sweep` (tools/testbench/src/main.rs: the flag's
+  `conflicts_with_all` names `sweep`), so a sweep cannot keep a failing seed's console log and
+  trace; seed 1's rejected two-hart trace is kept only by replaying the seed by name
+  (`TESTBENCH_QEMU_SEED=1 cargo testbench steward-latency --arch rv64 --keep-failed DIR`), to be
+  run on the rebased tree during the review and copied to $REDOUBT_TMP/steward4-logs/ by name.
+  Seed 3's accepted two-hart trace is kept there as latency-rv64-seed3-smp2-trace.log.
+- rv64 sweep, seeds 1..10, serial (`.wash/local/steward4-logs/sweep-rv64-a.log`, 94 min): one
+  hart, net µs p50/p99 at N = 1 and N = 2 across the ten seeds: timer wake p50 23324-23379 and
+  24849-26059 (p99 23932-24091, 27314-29822); decision wake p50 3232-4090 and 5456-6078 (p99
+  6972-8380, 10562-12856); deadline notice p99 26529-30008 and 28587-31349: every seed misses
+  the timer wake's p50 and meets everything else, as seed 3 does. Two harts: the oracle rejected
+  six of ten traces (`record N: a device interrupt returned without its claim`, seeds 1-4, 8, 9):
+  a two-hart trace finding; the four accepted (5, 6, 7, 10): timer wake p50 40377-44010 and
+  38964-39409 (p99 to 77160), decision wake p50 31920-38150 (N = 1, missed) and 19660-20133
+  (N = 2), deadline notice p99 46398-48818 and 48252-58172 (missed): seed 3's two-hart row is
+  typical. Seeds 11..20 and rv32 run during the review.
 - Runs queued: the weight-1000 run with the old arming (for the record), then the re-armed probe
   at weight 1000 (the case's) and at weight 100 (the comparison the Architect raises with the
   owner), verdicts and logs under .wash/local/steward4-logs/.
 
-## State (2026-10-16 ~23:55Z, head a2eb892e6 = three WIP commits on 68c4b2904, uncommitted:
-the four-principal latency manifest and toml, the two push tomls' order, erin's key and two
-homes removed)
+## State (2026-10-17 ~09:00Z, head b09135def, one commit on main 82a026733, tree clean)
 
-Running: steward-latency rv64, steward-push and steward-confined-push both widths. Then: the
-latency figures and the first run's length/ring check on the thread, scheduling.md's paragraph
-and table, the pages' confined status to built with case 3, size-budget exact ceilings (libs/wire
-raised for the generated codec), the steward set both widths, the fold into one `steward:`
-commit, the report. Console logs kept in `.tmp/steward4-logs/`.
+In review (steward-red-4). Every gate above green on the rebased tree; steward-latency FAILs its
+targets by design (`whole_run = false`), its figures the page's. Findings carried for others:
+B82 (a lease shorter than its launch: the steward's semantics, with the Architect), B86 (the
+sweep's port collapse, on main), the two-hart trace finding (`a device interrupt returned without
+its claim`: six of ten rv64 sweep seeds, and now seed 3 once under the set's load; accepted
+alone), the 3W leak at round 3, 3U's reply_wait. Remaining sweep halves (rv64 11..20, rv32 1..20)
+and the seed-1 `--keep-failed` replay run during the review on this tree and are appended here.
+Console logs under `.wash/local/steward4-logs/`.
