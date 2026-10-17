@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 458
+revision = 460
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -2557,8 +2557,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "AGENTS"
   body = "Seen by STEWARD4's steward-latency sweep on rv64 at two harts (2026-10-17; .wash/local/steward4-logs/sweep-rv64-a.log; the handoff .wash/local/handoffs/steward4-implementer-2.md 'Sweep so far'): seeds 1-4, 8 and 9 of 1..10 have their trace rejected by sched_oracle with `record N: a device interrupt returned without its claim` (e.g. record 2149984 at seed 1); the four accepted traces read like seed 3's row on scheduling.md; one hart accepts every seed. The sweep keeps no failing log (--keep-failed conflicts with --sweep), so the rejected trace must be re-made: `TESTBENCH_QEMU_SEED=1 cargo testbench steward-latency --arch rv64 --keep-failed <dir>` under `q run` in a STEWARD4-or-later tree (the case, its probe and manifest are STEWARD4's; it lands first). Work: reproduce and keep one rejected trace; find whether the kernel's interrupt path at two harts can return from a device interrupt without claiming it (IRQ1's per-hart PLIC contexts, B56/IDLE2's idle path, SMP6's lock-to-decide: a hart taking an interrupt another hart already claimed, or a spurious interrupt returned as a device one), or the trace records the claim on the other hart's record stream so the oracle's pairing is wrong (B24/B58's shape: a recording or oracle fault, not the kernel's); the answer named from the trace lines; the fix where it belongs (kernel/src's interrupt path with its rule on devices.md/scheduling.md and a two-hart kernel case, or the oracle's pairing with a host test), both widths. Until it lands, the two-hart rows of steward-latency rest on the accepted seeds and the page says so (STEWARD4 states it). Files: kernel/src (irq, idle), tools/testbench's sched_oracle, docs/kernel/devices.md or scheduling.md. Tier A (kernel); reviewer kernel-red-3. Size M."
-  state = "active"
-  revision = 443
+  state = "done"
+  revision = 460
 
 [[node]]
   id = "B88"
