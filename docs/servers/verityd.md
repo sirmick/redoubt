@@ -170,23 +170,30 @@ matters: a file server that cannot size its range exits, and would be restarted.
 
 ### Memory and cost
 
-<details><summary>Status: built · tested (3)</summary>
+<details><summary>Status: built · tested (5)</summary>
 
 - bench:boot-profile
 - bench:boot-profile-unverified
+- bench:init-boot
 - host:redoubt-verityd::the_last_block_and_the_tree_cache_save_reads
+- host:redoubt-verityd::the_data_cache_is_sized_from_the_manifests_heap
 
 </details>
 
-- **Memory is fixed,** whatever the volume's size: the top block, pinned at start; a cache of 32
-  checked tree blocks and one of 4 checked data blocks, each least recently used out first
-  ([below](#a-cache-of-checked-data-blocks)); and a 2-page lend at `blkd`.
+- **Memory is fixed at start,** whatever the volume's size: the top block, pinned; a cache of 32
+  checked tree blocks and one of checked data blocks sized from the manifest's heap cap, each
+  least recently used out first ([below](#a-cache-of-checked-data-blocks)); a read-ahead buffer
+  and the reply's scratch, one `blkd` read (8 blocks) each; and a 2-page lend at `blkd`. The
+  image's `verity:system` runs with a heap cap of 118 pages and peaks at 58 on both widths, 59
+  where a block fails and the line naming it is formed (`userland-boot`'s flipped block;
+  [the memory budget](../testbench.md#the-memory-budget)).
 - **A block is checked from the top down.** The lowest block on its path already held (the top
   always is) gives the digest the next block down must hash to; a block fetched is checked before
   it is kept. A level-1 block held costs one hash per data block.
-- **Per block the file server reads:** one more call and a copy of at most 4 KiB. The tree's reads
-  are about 1/128 more, mostly cached. Its weight is ordinary, like the file servers': each request
-  is a bounded amount of work, at most 8 blocks.
+- **Per block the file server reads:** a copy of at most 4 KiB, and one more read (up to five
+  `blkd` calls at the two-page lend) per run of cold blocks a request asks for, not per block ([read-ahead](#a-cache-of-checked-data-blocks)).
+  The tree's reads are about 1/128 more, mostly cached. Its weight is ordinary, like the file
+  servers': each request is a bounded amount of work, at most 8 blocks.
 - **Measured** by bench:boot-profile and bench:boot-profile-unverified: what verification costs
   the boot, verified against unverified, on littlefs and on EROFS, is
   [beamlet's table](../userland/beamlet.md#beamlet-on-redoubt).
@@ -197,27 +204,48 @@ matters: a file server that cannot size its range exits, and would be restarted.
   `opt-level = "z"` (the root `Cargo.toml`): at the workspace's `"s"` its verification inlines
   into about 900 KB on rv32, more than a verifier's budget holds; at `"z"` it is about 20 KB, and
   the check is slower for it (the loader's bundle check by under 7% per byte).
-- **Read-ahead is not done** ([below](#a-cache-of-checked-data-blocks)).
 
 ### A cache of checked data blocks
 
-<details><summary>Status: built · tested (2)</summary>
+<details><summary>Status: built · tested (4)</summary>
 
 - bench:boot-profile
 - host:redoubt-verityd::the_data_cache_holds_the_last_blocks_least_recently_used_out
+- host:redoubt-verityd::the_data_cache_is_sized_from_the_manifests_heap
+- host:redoubt-verityd::two_readers_share_the_hot_set_and_read_ahead_their_runs_with_the_manifest_cache
 
 </details>
 
-The last 4 data blocks checked are kept, least recently used out first, in place of the one
+The data blocks checked last are kept, least recently used out first, in place of the one
 last-block buffer: a block asked for again while it is held is neither read nor hashed again.
 On EROFS a file's blocks are read once each, in order, but `erofsd` reads the same few blocks
 again and again: a directory's blocks at every walk, and the blocks holding the inodes. By its
 512th read in the rv64 boot profile (boot-stats build, seed 1) `verityd` was asked for 849 data
-blocks: one block held 100 of them (12 %), 4 hold 197 (23 %) and 8 would hold 289 (34 %). 4
-blocks, 16 KiB, are what is built.
+blocks: one block held 100 of them (12 %), 4 hold 197 (23 %) and 8 would hold 289 (34 %).
 
-Read-ahead (8 blocks per `blkd` call, hashed and cached) is not built: `erofsd` already reads a
-file's blocks in one call of up to 64 sectors, which `verityd` splits into block reads at `blkd`.
+**The cache's size is the manifest's,** not a compiled constant: the memory budget holds a
+server's heap cap to twice its peak, so half the entry's `heap_pages` is the peak the instance
+may reach, and the data cache takes that half less what the rest of the heap holds (the tree
+cache, the read-ahead buffer and the scratch, 8 blocks each, the top block, about 3 pages of
+bookkeeping and 4 of margin: 56), never fewer than 4 blocks, the floor a host test or a launch
+with no cap gets. The image's cap of 118 pages affords the floor; a cap of 166 would afford 27.
+
+**Read-ahead** reads a request's run of consecutive blocks not held, a file's cold data, from
+`blkd` in one read of at most 8 blocks (at the two-page lend, up to five `blkd` calls of 15
+sectors) and at most the cache's size, hashes each through the tree before it is kept, and
+serves the run from the cache; a block that does not check fails the request, the checked
+blocks before it stay kept, and the rest is read again next time. `erofsd` asks a file's blocks in one
+call of up to 64 sectors, which `verityd` once split into a `blkd` call per block. Two VMs
+loading code at once through one `erofsd` are two readers of this one cache: in the host test,
+each walking a twelve-block hot set a block at a time and then reading a file's eight cold
+blocks, eight files each, the floor of 4 holds none of the hot set between the readers (0 of 320
+blocks asked held, 229 `blkd` reads), and 27 blocks with read-ahead hold 180 and read 33. On the
+box, in a `boot-stats` build of `steward-latency` at two harts on rv32 (seed 3), the round with
+two spinner VMs asked 1,802 data blocks for 1,511 `blkd` reads with the 4-block cache and a read
+per block; read-ahead cuts the reads by two thirds (2,704 to 924 by the 1,024th request served,
+the floor's hit rate 19 to 20 %), and a 27-block cache beside it to 784 (24 %), a 92-block one to
+624 (41 %), without moving that round's outcome
+([responsiveness](../kernel/scheduling.md#responsiveness)): the floor is what the image pays for.
 
 ## Authority
 

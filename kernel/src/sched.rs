@@ -1249,6 +1249,22 @@ pub mod trace {
     #[cfg(feature = "inflight-trace")]
     pub const SHOT: u8 = b's';
 
+    /// With `block-trace` (the two-hart wedge diagnostic): a thread blocked in
+    /// [`crate::message`]'s `settle`, the one place a thread blocks. The budget's id, and in the
+    /// pass field the wait kind in bits 32 and up (1 send, 2 reply, 3 receive, 4 sleep, 5 irq;
+    /// `message::Wait`) and the endpoint frame it waits on in the low 32 bits (0 for none). The
+    /// hart is in the kind byte as for every record. It shows whether a wedged budget waits to
+    /// receive a call that never arrives, or is blocked in a call out: the oracle never sees it,
+    /// since it is gated out of every judged build (no case sets `block-trace`).
+    #[cfg(feature = "block-trace")]
+    pub const BLOCKED: u8 = b'@';
+
+    /// Record a thread's block ([`BLOCKED`]), under `block-trace`.
+    #[cfg(feature = "block-trace")]
+    pub fn blocked(budget: u64, wait: u64, endpoint_frame: u64) {
+        record(BLOCKED, budget, u128::from(wait) << 32 | u128::from(endpoint_frame));
+    }
+
     /// Frames the ring takes (64 MiB, 256 MiB with `sched-trace-large`), and the records they hold.
     const PAGES: usize = if cfg!(feature = "sched-trace-large") { 65536 } else { 16384 };
     const PER_PAGE: usize = redoubt_sys::PAGE_SIZE / 32;

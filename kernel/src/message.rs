@@ -697,6 +697,14 @@ fn settle(
         }
         crate::time::note_timeout(s.deadline, mm.budget_of(pid).map(|f| mm.budget_id(f)));
     }
+    // The two-hart wedge diagnostic: which budget blocks here, waiting on what. Gated out of
+    // every judged build (no case sets `block-trace`).
+    #[cfg(feature = "block-trace")]
+    crate::sched::trace::blocked(
+        mm.budget_of(pid).map_or(0, |f| mm.budget_id(f)),
+        s.wait as u64,
+        s.endpoint.map_or(0, |e| u64::from(e.frame)),
+    );
     // `can_resume: false` is what takes this thread off the ready list (ptable.rs).
     ss.activate_process_thread(tid, KERNEL_PID, 0, false).expect("the kernel can always run");
     Ok(None)

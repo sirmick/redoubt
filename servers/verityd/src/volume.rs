@@ -6,10 +6,13 @@
 //! manifest's key with the loader's Ed25519 (`ed25519-compact`), its version held to the floor,
 //! and only then are N and the root taken from it, as a pinned volume's come from the manifest.
 //!
-//! **Memory is fixed, whatever the volume's size:** the top tree block, pinned at start;
-//! [`TREE_CACHE`] tree blocks, each kept only once it was checked against the block above it; and
-//! [`DATA_CACHE`] checked data blocks, least recently used out first, so a block read again (a
-//! directory block, the block holding a file's inode) is hashed and fetched once while it is held.
+//! **Memory is fixed at start, whatever the volume's size:** the top tree block, pinned;
+//! [`TREE_CACHE`] tree blocks, each kept only once it was checked against the block above it; a
+//! cache of checked data blocks sized from the heap the manifest gives the instance ([`Caps`]),
+//! least recently used out first, so a block read again (a directory block, the block holding a
+//! file's inode) is hashed and fetched once while it is held; and one `blkd` read's worth of
+//! read-ahead, a client's run of cold blocks fetched in one read, up to five `blkd` calls at the
+//! two-page lend ([`Volume::load`]).
 //!
 //! **A block is checked from the top down.** The lowest block on its path that is already held
 //! (the top always is) gives the digest the next block down must hash to; each block fetched is
@@ -24,14 +27,57 @@ use redoubt_verity::{
     BLOCK, DIGEST, Geometry, Hash, RootBlock, SECTORS_PER_BLOCK, leaf, node, root, root_block_at, slot,
 };
 
-use crate::{Fault, Mode, Range, Size};
+use crate::server::MAX_SECTORS;
+use crate::{Fault, Mode, Range, SECTOR, Size};
 
-/// Tree blocks kept after they were checked, beside the pinned top: 128 KiB.
+/// The fewest tree blocks kept beside the pinned top, when no budget is given (host tests): 128 KiB.
 pub const TREE_CACHE: usize = 32;
-/// Checked data blocks kept: 16 KiB. Sized from the EROFS boot profile: by the 512th read, 1, 4 and
-/// 8 blocks held 100, 197 and 289 of 849 blocks asked for (servers/verityd.md, "A cache of checked
-/// data blocks"); 8 is the next cut.
+/// The fewest checked data blocks kept, when no budget is given (host tests): 16 KiB. One reader's
+/// EROFS boot profile held 100, 197 and 289 of 849 blocks asked in 1, 4 and 8 (servers/verityd.md,
+/// "A cache of checked data blocks"); under two readers the data cache is sized from the manifest
+/// instead ([`Caps::from_heap`]), since two readers' working sets thrash a four-block cache.
 pub const DATA_CACHE: usize = 4;
+
+/// The data blocks one `blkd` read carries, `MAX_SECTORS` (64) sectors' worth: the most blocks one
+/// read-ahead reads at once (a client's run of consecutive cold blocks, which `erofsd` asks in one
+/// call of up to that many sectors), so the round trips a two-reader load pays fall with the cold
+/// run, not one read a block (servers/verityd.md, "A cache of checked data blocks"). Derived from
+/// the `blkd` limit, not a bound of its own; read-ahead is bounded again by the cache the manifest
+/// affords ([`Volume::load`]).
+const READAHEAD_BLOCKS: usize = MAX_SECTORS as usize / SECTORS_PER_BLOCK as usize;
+
+/// What [`Caps::from_heap`] keeps of the heap's affordable half ([`Caps::from_heap`]) for
+/// everything but the data cache, so the peak stays under half the manifest's cap: the tree cache
+/// (32), the read-ahead run and the server's scratch (one `blkd` read, 8 blocks, each), the top
+/// tree block (1), the bookkeeping the boot profile measured (about 3), and a few pages of margin.
+/// Measured on `init-boot`'s memory dump (docs/testbench.md, "The memory budget").
+const HEAP_RESERVE_BLOCKS: usize = 32 + 8 + 8 + 1 + 3 + 4;
+
+/// How many blocks the tree and data caches hold. The tree cache stays at [`TREE_CACHE`] (one
+/// reader's tree path fits it and a second reader's is the same few blocks, servers/verityd.md);
+/// the data cache takes the rest of the heap the manifest affords.
+#[derive(Clone, Copy)]
+pub struct Caps {
+    pub tree: usize,
+    pub data: usize,
+}
+
+impl Caps {
+    /// The floors, for a host test or a launch with no heap cap in its startup block.
+    pub const DEFAULT: Caps = Caps { tree: TREE_CACHE, data: DATA_CACHE };
+
+    /// The caps the heap cap `heap_pages` (the manifest's, through init) affords: the tree cache,
+    /// then the data cache fills half the heap less the reserve. The memory budget gate holds a
+    /// server's heap cap to twice its peak (docs/testbench.md, "The memory budget"), so the peak
+    /// the manifest can hold is half the cap; the data cache takes that half beyond everything else
+    /// the heap holds ([`HEAP_RESERVE_BLOCKS`]), never below [`DATA_CACHE`]. A heap too small for
+    /// more than the floor keeps the floor.
+    pub fn from_heap(heap_pages: Option<usize>) -> Caps {
+        let Some(pages) = heap_pages else { return Caps::DEFAULT };
+        let data = (pages / 2).saturating_sub(HEAP_RESERVE_BLOCKS).max(DATA_CACHE);
+        Caps { tree: TREE_CACHE, data }
+    }
+}
 
 /// Why the volume is refused at start: every read then fails, and `verityd` stays up.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -120,19 +166,37 @@ fn zeroed(len: usize) -> Option<Vec<u8>> {
     Some(v)
 }
 
-/// Checked blocks, `N` of them, least recently used out first: the tree's and the data's.
-struct Cache<const N: usize> {
-    tags: [Option<u64>; N],
-    used: [u64; N],
+/// Checked blocks, `n` of them, least recently used out first: the tree's and the data's. The
+/// count is sized from the manifest at start ([`Caps`]), not compiled, so a server with more of
+/// its budget holds a bigger working set; the tags and the block bytes are one heap allocation
+/// each, both tried fallibly.
+struct Cache {
+    tags: Vec<Option<u64>>,
+    used: Vec<u64>,
     clock: u64,
     blocks: Vec<u8>,
 }
 
-impl<const N: usize> Cache<N> {
-    /// An empty cache over `blocks`, `N` blocks of bytes.
-    fn new(blocks: Vec<u8>) -> Cache<N> { Cache { tags: [None; N], used: [0; N], clock: 0, blocks } }
+impl Cache {
+    /// An empty cache of `n` blocks, its tags and `n * BLOCK` bytes reserved; `None` if either
+    /// allocation fails, so the start check refuses for no memory.
+    fn new(n: usize) -> Option<Cache> {
+        let mut tags = Vec::new();
+        tags.try_reserve_exact(n).ok()?;
+        tags.resize(n, None);
+        let mut used = Vec::new();
+        used.try_reserve_exact(n).ok()?;
+        used.resize(n, 0);
+        let blocks = zeroed(n * BLOCK)?;
+        Some(Cache { tags, used, clock: 0, blocks })
+    }
+
+    fn cap(&self) -> usize { self.tags.len() }
 
     fn bytes(&self, i: usize) -> &[u8] { &self.blocks[i * BLOCK..(i + 1) * BLOCK] }
+
+    /// Whether block `n` is held, without marking it used: for read-ahead's run detection.
+    fn holds(&self, n: u64) -> bool { self.tags.iter().any(|t| *t == Some(n)) }
 
     /// The slot holding tree block `n`, marked used.
     fn find(&mut self, n: u64) -> Option<usize> {
@@ -144,7 +208,7 @@ impl<const N: usize> Cache<N> {
 
     /// A slot to read a block into, emptied: a free one, else the least recently used.
     fn victim(&mut self) -> usize {
-        let i = (0..N).min_by_key(|&i| (self.tags[i].is_some(), self.used[i])).unwrap_or(0);
+        let i = (0..self.cap()).min_by_key(|&i| (self.tags[i].is_some(), self.used[i])).unwrap_or(0);
         self.tags[i] = None;
         i
     }
@@ -171,13 +235,15 @@ struct Tree<R> {
     range: R,
     geometry: Geometry,
     top: Vec<u8>,
-    cache: Cache<TREE_CACHE>,
+    cache: Cache,
     #[cfg(any(test, feature = "boot-stats"))]
     counts: Counts,
 }
 
 impl<R: Range> Tree<R> {
-    /// Reads block `n` of the range into `out`, one block.
+    /// Reads the blocks from `n` into `out` (one block, or a read-ahead run of at most one `blkd`
+    /// read's [`READAHEAD_BLOCKS`]) in one `blkd` read, up to five calls at the two-page lend.
+    /// Each is checked by the caller before it is trusted or kept.
     fn read(&mut self, n: u64, out: &mut [u8]) -> Result<(), Bad> {
         #[cfg(any(test, feature = "boot-stats"))]
         {
@@ -234,7 +300,10 @@ impl<R: Range> Tree<R> {
 pub struct Volume<R> {
     tree: Tree<R>,
     /// The data blocks checked most recently, and their bytes.
-    data: Cache<DATA_CACHE>,
+    data: Cache,
+    /// A read-ahead run's bytes, at most one `blkd` read (several calls at the lend's size),
+    /// checked into the cache ([`Volume::load`]).
+    ra: Vec<u8>,
 }
 
 /// A signed volume's N and root, from the root block in the last whole block of the range
@@ -268,7 +337,7 @@ impl<R: Range> Volume<R> {
     /// the root block does ([`signed`]). Then `info` must size the range no shorter than the
     /// data and tree (for a signed volume, before its root block), and the top tree block must
     /// hash, with N, to the root.
-    pub fn open(mut range: R, mode: &Mode) -> (Result<Volume<R>, Refusal>, u64) {
+    pub fn open(mut range: R, mode: &Mode, caps: Caps) -> (Result<Volume<R>, Refusal>, u64) {
         let size = range.info();
         let (geometry, root_, end) = match *mode {
             Mode::Pinned { root, geometry } => (geometry, root, size.map(|s| s.sectors)),
@@ -277,7 +346,7 @@ impl<R: Range> Volume<R> {
                 Err((why, sectors)) => return (Err(why), sectors),
             },
         };
-        (Volume::check(range, end, geometry, &root_), geometry.data_blocks() * SECTORS_PER_BLOCK)
+        (Volume::check(range, end, geometry, &root_, caps), geometry.data_blocks() * SECTORS_PER_BLOCK)
     }
 
     /// The start check once N and the root are known: the data and tree end by `end`, and the
@@ -287,13 +356,17 @@ impl<R: Range> Volume<R> {
         end: Result<u64, Fault>,
         geometry: Geometry,
         root_: &Hash,
+        caps: Caps,
     ) -> Result<Volume<R>, Refusal> {
         if end.map_err(|_| Refusal::NoInfo)? < geometry.total_sectors() {
             return Err(Refusal::Truncated);
         }
-        let (Some(mut top), Some(blocks), Some(data)) =
-            (zeroed(BLOCK), zeroed(TREE_CACHE * BLOCK), zeroed(DATA_CACHE * BLOCK))
-        else {
+        let (Some(mut top), Some(tree_cache), Some(data), Some(ra)) = (
+            zeroed(BLOCK),
+            Cache::new(caps.tree),
+            Cache::new(caps.data),
+            zeroed(MAX_SECTORS as usize * SECTOR as usize),
+        ) else {
             return Err(Refusal::NoMemory);
         };
         range.read(geometry.top() * SECTORS_PER_BLOCK, &mut top).map_err(|_| Refusal::Unread)?;
@@ -304,37 +377,57 @@ impl<R: Range> Volume<R> {
             range,
             geometry,
             top,
-            cache: Cache::new(blocks),
+            cache: tree_cache,
             #[cfg(any(test, feature = "boot-stats"))]
             counts: Counts { reads: 1, ..Counts::default() },
         };
-        Ok(Volume { tree, data: Cache::new(data) })
+        Ok(Volume { tree, data, ra })
     }
 
-    /// Data block `b`, checked; a block that does not check is never returned, and is read again
-    /// next time.
-    pub fn block(&mut self, b: u64) -> Result<&[u8], Bad> {
-        #[cfg(any(test, feature = "boot-stats"))]
-        {
-            self.tree.counts.requests += 1;
-        }
-        if let Some(i) = self.data.find(b) {
-            #[cfg(any(test, feature = "boot-stats"))]
-            {
-                self.tree.counts.held += 1;
-            }
-            return Ok(self.data.bytes(i));
-        }
-        if b >= self.tree.geometry.data_blocks() {
+    /// Makes block `b` checked and held, ready for [`Volume::peek`], and returns the last block it
+    /// made ready (`>= b`, at most `last`): `b` if it was already held, else the last of the run it
+    /// read. A run of consecutive missing blocks (a file's cold data) through `last` is read from
+    /// `blkd` in one read of at most one read-ahead run and the cache (up to five `blkd` calls at
+    /// the two-page lend), each checked against the tree and kept; the bound on the cache keeps
+    /// the run from putting out its own blocks before the caller reads them. A block that does
+    /// not check, or is past the volume, is an error: the checked blocks before it stay kept and
+    /// the rest is read again next time.
+    pub fn load(&mut self, b: u64, last: u64) -> Result<u64, Bad> {
+        let blocks = self.tree.geometry.data_blocks();
+        if b >= blocks {
             return Err(Bad::Data(b));
         }
-        let i = self.data.victim();
-        let bytes = &mut self.data.blocks[i * BLOCK..(i + 1) * BLOCK];
-        self.tree.read(b, bytes)?;
-        self.tree.check(b, &leaf(bytes))?;
-        self.data.keep(i, b);
-        Ok(self.data.bytes(i))
+        if self.data.find(b).is_some() {
+            #[cfg(any(test, feature = "boot-stats"))]
+            {
+                self.tree.counts.requests += 1;
+                self.tree.counts.held += 1;
+            }
+            return Ok(b);
+        }
+        let cap = READAHEAD_BLOCKS.min(self.data.cap());
+        let mut run = 1u64;
+        while b + run <= last && b + run < blocks && (run as usize) < cap && !self.data.holds(b + run) {
+            run += 1;
+        }
+        self.tree.read(b, &mut self.ra[..run as usize * BLOCK])?;
+        for k in 0..run {
+            #[cfg(any(test, feature = "boot-stats"))]
+            {
+                self.tree.counts.requests += 1;
+            }
+            let bytes = &self.ra[k as usize * BLOCK..(k as usize + 1) * BLOCK];
+            self.tree.check(b + k, &leaf(bytes))?;
+            let i = self.data.victim();
+            self.data.blocks[i * BLOCK..(i + 1) * BLOCK].copy_from_slice(bytes);
+            self.data.keep(i, b + k);
+        }
+        Ok(b + run - 1)
     }
+
+    /// Data block `b`, held and checked by a [`Volume::load`] that reached it; `None` if it is not
+    /// held (the caller reads the blocks a load made ready before the next load can put them out).
+    pub fn peek(&mut self, b: u64) -> Option<&[u8]> { self.data.find(b).map(|i| self.data.bytes(i)) }
 
     #[cfg(any(test, feature = "boot-stats"))]
     pub fn counts(&self) -> Counts { self.tree.counts }

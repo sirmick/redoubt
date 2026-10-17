@@ -17,6 +17,7 @@ use redoubt_rt::handle::Endpoint;
 use redoubt_rt::start::say;
 use redoubt_rt::startup::Startup;
 use redoubt_verityd::server::Said;
+use redoubt_verityd::volume::Caps;
 use redoubt_verityd::{Args, Verityd, parse_args};
 
 redoubt_rt::entry!(serve);
@@ -33,7 +34,10 @@ pub fn serve(startup: &Startup) -> u32 {
     let Some(volume) = startup.handle(VOLUME) else { return NO_VOLUME };
     // Two pages lent to each call: a block of sectors, and the message around it.
     let Ok(range) = Blkd::new(Endpoint::from_handle(volume), 2) else { return NO_VOLUME };
-    let mut server = Verityd::new(range, &mode, labels);
+    // The data cache is sized from the heap the manifest gives this instance, so two VMs reading
+    // the system volume at once do not thrash a fixed four-block cache (docs/servers/verityd.md).
+    let caps = Caps::from_heap(startup.heap_pages());
+    let mut server = Verityd::new(range, &mode, labels, caps);
     let tell = |line: Said| say(startup, &alloc::format!("{line}\n"));
     if let Some(line) = server.take_line() {
         tell(line);

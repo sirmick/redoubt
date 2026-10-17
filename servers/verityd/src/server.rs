@@ -29,7 +29,7 @@ use redoubt_rt::wire::proto::blkd::{
 };
 use redoubt_verity::SECTORS_PER_BLOCK;
 
-use crate::volume::{Bad, Refusal, Volume};
+use crate::volume::{Bad, Caps, Refusal, Volume};
 use crate::{Mode, Range, SECTOR};
 /// The one badge `verityd` serves: the volume's, which `init` mints for its `littlefsd`.
 pub const BADGE: u64 = 1;
@@ -82,12 +82,14 @@ pub struct Verityd<R> {
 }
 
 impl<R: Range> Verityd<R> {
-    /// Checks `range` against `mode` ([`Volume::open`]), and serves it under `labels`.
-    pub fn new(range: R, mode: &Mode, labels: Vec<u64>) -> Verityd<R> {
+    /// Checks `range` against `mode` ([`Volume::open`]), and serves it under `labels`, its caches
+    /// sized by `caps` (from the manifest's heap, [`Caps::from_heap`]; the host tests pass the
+    /// floor, [`Caps::DEFAULT`]).
+    pub fn new(range: R, mode: &Mode, labels: Vec<u64>, caps: Caps) -> Verityd<R> {
         let mut scratch = Vec::new();
         let bytes = MAX_SECTORS as usize * SECTOR as usize;
         let (volume, sectors) = match (scratch.try_reserve_exact(bytes), mode) {
-            (Ok(()), _) => Volume::open(range, mode),
+            (Ok(()), _) => Volume::open(range, mode, caps),
             (Err(_), Mode::Pinned { geometry, .. }) => {
                 (Err(Refusal::NoMemory), geometry.data_blocks() * SECTORS_PER_BLOCK)
             }
@@ -177,13 +179,14 @@ impl<R: Range> Verityd<R> {
         let end = sector.checked_add(u64::from(count)).filter(|end| *end <= self.sectors);
         let end = end.ok_or(ErrorCode::OutOfRange)?;
         let volume = self.volume.as_mut().map_err(|_| ErrorCode::Failed)?;
+        let last_block = (end - 1) / SECTORS_PER_BLOCK;
         let (mut at, mut s) = (0, sector);
         while s < end {
             let b = s / SECTORS_PER_BLOCK;
-            let off = (s % SECTORS_PER_BLOCK) as usize * SECTOR as usize;
-            let n = (end.min((b + 1) * SECTORS_PER_BLOCK) - s) as usize * SECTOR as usize;
-            match volume.block(b) {
-                Ok(block) => self.scratch[at..at + n].copy_from_slice(&block[off..off + n]),
+            // Make block `b` and the run of cold blocks after it that this request needs ready in
+            // one `blkd` read, then copy out every block the run reached before the next read.
+            let upto = match volume.load(b, last_block) {
+                Ok(upto) => upto,
                 Err(bad) => {
                     if self.last_bad != Some(bad) {
                         self.said = Some(Said::Bad(bad));
@@ -191,9 +194,23 @@ impl<R: Range> Verityd<R> {
                     }
                     return Err(ErrorCode::Failed);
                 }
+            };
+            while s < end && s / SECTORS_PER_BLOCK <= upto {
+                let bb = s / SECTORS_PER_BLOCK;
+                let off = (s % SECTORS_PER_BLOCK) as usize * SECTOR as usize;
+                let n = (end.min((bb + 1) * SECTORS_PER_BLOCK) - s) as usize * SECTOR as usize;
+                let Some(block) = volume.peek(bb) else {
+                    let bad = Bad::Data(bb);
+                    if self.last_bad != Some(bad) {
+                        self.said = Some(Said::Bad(bad));
+                        self.last_bad = Some(bad);
+                    }
+                    return Err(ErrorCode::Failed);
+                };
+                self.scratch[at..at + n].copy_from_slice(&block[off..off + n]);
+                at += n;
+                s += (n / SECTOR as usize) as u64;
             }
-            at += n;
-            s += (n / SECTOR as usize) as u64;
         }
         #[cfg(feature = "boot-stats")]
         {
