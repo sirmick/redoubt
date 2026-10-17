@@ -289,17 +289,42 @@ impl<B: Copy, H: Copy> Steward<B, H> {
     /// cutoff is the scope's destroy, and a cleanup call a busy or recovering server does not
     /// take would hold the loop for its whole bound (servers/steward.md, "Failure and restart").
     fn give_back<K: Kernel<Budget = B, Handle = H>>(&mut self, kernel: &mut K, h: H) {
+        let server = kernel.server_of(h);
         kernel.release(h);
-        self.cleanup.push(h, kernel.now());
+        self.cleanup.push(h, server, kernel.now());
     }
 
     /// Runs the cleanup steps due now, each within the steward's own send bound, up to the first
-    /// that times out, which is retried at a later turn up to the cap and then dropped
-    /// ([`crate::cleanup`]); returns when the earliest remaining step is due (now, when the turn
-    /// stopped short), so the loop wakes for it.
+    /// that times out, which is retried at a later turn up to the cap and then parked until its
+    /// server answers ([`crate::cleanup`]); returns when the earliest remaining step is due
+    /// (now, when the turn stopped short), so the loop wakes for it; a parked step has no time.
     pub fn cleanup<K: Kernel<Budget = B, Handle = H>>(&mut self, kernel: &mut K) -> Option<u64> {
         let now = kernel.now();
-        self.cleanup.run(now, |h, last| kernel.clean(h, last))
+        self.cleanup.run(now, |h, parks| kernel.clean(h, parks))
+    }
+
+    /// A mint at a server with steps parked there runs them first (the mint needs the record a
+    /// step frees; the first timeout stops them, so the mint pays one bound at most), and a mint
+    /// the server answered, taken or refused, wakes what is still parked there for the next turn
+    /// ([`crate::cleanup`]). `slot` names the server as [`Kernel::server_at`] does.
+    fn minting<K: Kernel<Budget = B, Handle = H>, T>(
+        &mut self,
+        kernel: &mut K,
+        owner: &Object,
+        slot: Option<u16>,
+        mint: impl FnOnce(&mut K) -> Result<T, Error>,
+    ) -> Result<T, Error> {
+        let at = if self.cleanup.parked() > 0 { kernel.server_at(owner, slot) } else { None };
+        if let Some(server) = &at {
+            self.cleanup.run_parked(server, |h| kernel.clean(h, false));
+        }
+        let made = mint(kernel);
+        if let Some(server) = &at {
+            if !matches!(made, Err(Error::Timeout)) {
+                self.cleanup.wake(server);
+            }
+        }
+        made
     }
 
     /// Tells the session routed by `badge` that `lease` ended, on the notices endpoint its launch
@@ -322,6 +347,7 @@ impl<B: Copy, H: Copy> Steward<B, H> {
         connection: Handle,
     ) {
         kernel.reconnected(server, connection);
+        self.cleanup.forget(server);
         let sessions: Vec<(Object, H)> = self.notices.iter().map(|(o, n)| (o.clone(), *n)).collect();
         for (object, n) in sessions {
             for slot in kernel.slots_at(&object, server) {
@@ -351,7 +377,11 @@ impl<B: Copy, H: Copy> Steward<B, H> {
         }
         let owner = Object { domain: route.domain, kind: route.kind, id: route.id };
         let scope = self.budget(&Token { owner: owner.clone(), slot: SCOPE })?;
-        let Some((key, handle, at)) = kernel.rebind(&owner, slot, scope)? else { return Ok(None) };
+        let Some((key, handle, at)) =
+            self.minting(kernel, &owner, Some(slot), |k| k.rebind(&owner, slot, scope))?
+        else {
+            return Ok(None);
+        };
         let token =
             Token { owner, slot: CONNECTIONS + 1 + u8::try_from(slot).map_err(|_| Error::InvalidArgument)? };
         if let Some(Made::Connection(Some(old))) = self.made.insert(token, Made::Connection(Some(key))) {
@@ -422,7 +452,9 @@ impl<B: Copy, H: Copy> Steward<B, H> {
                     // The session's requests come back on the steward's own endpoint, routed by
                     // this badge.
                     Server::Steward => Some(kernel.mint(*badge, scope)?),
-                    Server::Shared(slot) => kernel.connect(owner, *slot, scope)?,
+                    Server::Shared(slot) => {
+                        self.minting(kernel, owner, Some(*slot), |k| k.connect(owner, *slot, scope))?
+                    }
                 };
                 self.made.insert(token.clone(), Made::Connection(h));
                 Ok(Produced::Connection)
@@ -514,7 +546,8 @@ impl<B: Copy, H: Copy> Steward<B, H> {
                 match through {
                     Some(budget) => {
                         let budget = self.budget(budget)?;
-                        let (pid, key, bytes) = kernel.cross(owner, budget, &path, None)?;
+                        let (pid, key, bytes) =
+                            self.minting(kernel, owner, None, |k| k.cross(owner, budget, &path, None))?;
                         self.crossed(owner, pid, key);
                         Ok(Produced::Bytes(bytes))
                     }
@@ -534,7 +567,8 @@ impl<B: Copy, H: Copy> Steward<B, H> {
                 match through {
                     Some(budget) => {
                         let budget = self.budget(budget)?;
-                        let (pid, key, _) = kernel.cross(owner, budget, &path, Some(bytes))?;
+                        let (pid, key, _) = self
+                            .minting(kernel, owner, None, |k| k.cross(owner, budget, &path, Some(bytes)))?;
                         self.crossed(owner, pid, key);
                     }
                     None => {

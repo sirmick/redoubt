@@ -804,11 +804,11 @@ its `Rflush`, never after.
   `state` for the steward's badge is below the connections one batch mints would refuse the batch
   at its mint, not at the account's cap. The caps are sized above a batch, and the account's own
   cap binds once the connection is in use.
-- **A disconnect dropped at a busy server leaks its connection's admission.** The steward's
-  deferred cleanup retries a server's disconnect four times a second apart and then drops it with
-  a console line ([the steward](steward.md#failure-and-restart)); a connection so dropped keeps its `State`
-  in the account's bucket it was admitted in until the server's restart. Parking that step
-  instead of dropping it is a follow-up.
+- **A disconnect a busy server does not take holds its connection's admission until the server
+  answers.** The steward's deferred cleanup retries a server's disconnect four times a second
+  apart and then parks it ([the steward](steward.md#failure-and-restart)); a connection so parked
+  keeps its `State` in the account's bucket it was admitted in until the server answers a call of
+  the steward's, or restarts.
 - **Rollback ends at provisional state.** A client that abandons a request after the server
   performed a non-provisional effect (a file write) keeps the effect without learning of it.
 - **Admission counts objects, not bytes.** Bytes are the file server's to meter (`littlefsd`'s and

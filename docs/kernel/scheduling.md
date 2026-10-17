@@ -795,26 +795,44 @@ path. N = 4 and 16 are not measured here: when the case was written the box admi
 eight steward-minted system-volume connections, the steward's own share at `erofsd:system`; a
 connection the steward mints is now admitted in its account from its first request
 ([serving](../servers/serving.md#admit)), so the stand-in's columns at 4 and 16 stand alone
-until the case runs there. N = 3 is not reached: a cleanup step dropped
-at a busy server leaks a `State` there and the eighth is refused
-([steward](../servers/steward.md#failure-and-restart)). Measured at seed 3, net µs p50/p99 at
-N = 1 / N = 2; each lease destroyed is a VM budget of 5,248 pages, and the gross figures beside
+until the case runs there. N = 3 was not reached while a cleanup step a busy server did not
+take was dropped, leaking a `State` there until the eighth was refused; the step is parked and
+retried at the server's next answer now
+([steward](../servers/steward.md#failure-and-restart)), and the round runs: at one hart on both
+widths and at two on rv64, where the `parked after 4 attempts` line appears one to four times a
+run, each for a lease's `disconnect` at `erofsd:system` under the two spinners, and the next
+lease's connection there is minted all the same. Measured at seed 3, net µs p50/p99 at
+N = 1 / N = 2 / N = 3; each lease destroyed is a VM budget of 5,248 pages, and the gross figures beside
 the deadline notice and the destroy call carry 300-500 ms of the checked build's audits after
 such a destruction (subtracted, as every target is net):
 
-| Measure (net µs, N = 1 / 2) | rv64, 1 hart | rv32, 1 hart | rv64, 2 harts | rv32, 2 harts |
+| Measure (net µs, N = 1 / 2 / 3) | rv64, 1 hart | rv32, 1 hart | rv64, 2 harts | rv32, 2 harts |
 | --- | --- | --- | --- | --- |
-| steward timer wake (p50/p99) | 1962/3250, 734/1448 | 753/1323, 1198/2735 | 7985/8017, 3372/23534 | 3579/6510, 37249/42998: p50 missed at N = 2 |
-| steward decision wake (p50/p99) | 1138/11072, 17291/21974 | 23739/38447, 1233/40484 | 1946/18788, 2323/4594 | 2470/4637, 2679/6342 |
-| deadline notice (p99) | 11103, 10386 | 10752, 11996 | 11400, 11998 | 11433, 23443 |
-| `budget_destroy`, call to return (p50/p99) | 6053/7210, 6075/8359 | 6702/7851, 6731/13740 | 8000/8639, 8237/10750 | 9201/9912, 10257/13914 |
-| R10, 65 destructions (p99) | 9664 | 9622 | 9744 | 9751 |
-| a lease's end (worst decision wake p99 + R10) | 21974 + 9664 = 31638 | 40484 + 9622 = 50106 | 18788 + 9744 = 28532 | 6342 + 9751 = 16093 |
-| reply to the next receive (p50/p99, no target) | 6470/6498, 6544/9354 | 6795/6827, 8194/8237 | 17913/42748, 17409/21366 | 69380/70922, 28961/80391 |
+| steward timer wake (p50/p99) | 1947/3252, 795/1853, 1142/56360: p99 missed at N = 3 | 708/1317, 1194/1406, 773/1255 | 7987/8018, 2549/23488, 2809/147557: p99 missed at N = 3 | not reached |
+| steward decision wake (p50/p99) | 1121/11418, 17265/20798, 913/3094 | 23740/35167, 1233/40490, 1202/19442 | 1949/9492, 1973/22099, 7205/54354 | not reached |
+| deadline notice (p99) | 9183, 12087, 11602 | 11327, 13769, 12339 | 12268, 12899, 10501 | not reached |
+| `budget_destroy`, call to return (p50/p99) | 6048/8700, 6077/6179, 6055/8538 | 6705/7853, 6733/13612, 5860/9305 | 7998/8627, 8529/9779, 7375/10131 | not reached |
+| R10, 99 destructions (p99) | 9679 | 9650 | 9761 | not reached |
+| a lease's end (worst decision wake p99 + R10) | 20798 + 9679 = 30477 | 40490 + 9650 = 50140 | 54354 + 9761 = 64115 | not reached |
+| reply to the next receive (p50/p99, no target) | 6474/6497, 6555/6614, 7703/122760 | 6789/6836, 8199/8690, 8845/55943 | 17911/42891, 17409/32193, 19807/112295 | not reached |
 
-The real steward meets every target at one hart on both widths, and at two harts on rv64; on
-rv32 at two harts the timer wake's p50 at N = 2 misses (every sample near 40 ms, the one
-spinner's VM live). Before the steward's console lines were queued and written through one kept
+The real steward meets every target at one hart on rv32, and at one hart and two on rv64 but
+for the timer wake's p99 at N = 3: one sample of sixteen (56 and 148 ms; the next largest under
+4 and 24 ms) whose window holds the loop's cleanup turn retrying a `disconnect` the busy
+`erofsd:system` did not take, one 100 ms bound at the loop's top by the queue's turn rule
+([steward](../servers/steward.md#failure-and-restart)); the same retry shows in that round's
+reply-to-receive p99 (123, 56 and 112 ms). It is the cost of a step the server has not taken
+yet, paid once per retry until the step parks, and the parked step costs the loop nothing
+after. On rv32 at two harts the N = 3 round is not reached: twice at this seed the shell's
+`start_agent` for the round's second or third probe lease was answered `timeout` by its own
+client library (its 5 s call bound plus 5 s for a call thread) and the round's loop died on the
+match; the steward had not taken the call, its own `disconnect` calls at `erofsd:system` had
+timed out four times just before, and nothing on the box printed for about 580 s until the two
+spinners' ten-minute leases ended, after which the steward served the exit notices as usual. So
+`erofsd:system` took nobody's call for that long under two spinner VMs at two harts on rv32,
+and the finding is the server's or the kernel's, not the steward's loop; the two-hart rv32 row
+rests on no run of this shape and is not reached until it is (its two-round figures are in the
+merge history). Before the steward's console lines were queued and written through one kept
 fid at the loop's turn ([steward](../servers/steward.md#failure-and-restart)), the steward
 reached its wait with the console round trips of the reply it had just given on its pass (each
 line an attach, open, write and close at `consoled`), the timer wake's p50 missed on every width
@@ -822,11 +840,12 @@ and hart count (23 to 61 ms), and at two harts the decision wake's p50 and the d
 p99 missed too; the reply-to-receive gap was 34-56 ms at one hart and 94-162 at two. Now a call's
 records go before its reply, one write each, and the gap (the last row, recorded, no target) is
 the loop's own work and the reply's hand-over to the caller, with no console call in it. The
-two-hart figures are gated as the stand-in's are; the rv32 miss is a finding against the two-hart
-scheduler at this seed, not the steward's loop, and the oracle rejects the rv32 two-hart trace
-one run in two at this seed (`a device interrupt returned without its claim`, the two-hart trace
-finding), so the row stands on a run whose trace it accepted. The case stays out of the
-whole run, by name, until the two-hart rows pass on both widths. The 65 destructions judged are
+two-hart figures are gated as the stand-in's are; before the round at N = 3 ran, the rv32
+two-hart row missed the timer wake's p50 at N = 2 (every sample near 40 ms, the one spinner's VM
+live), a finding against the two-hart scheduler at this seed, and the oracle rejects the rv32
+two-hart trace one run in two at this seed (`a device interrupt returned without its claim`, the
+two-hart trace finding). The case stays out of the
+whole run, by name, until the two-hart rows pass on both widths. The 99 destructions judged are
 those before the probe's `LATENCY-END`; the sixteen after it (the marker-file exits reaping the
 leases) are recorded and not judged.
 

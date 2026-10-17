@@ -1338,7 +1338,7 @@ detached again ends by its first detach's clock, before its bound.
 
 ## Failure and restart
 
-Status: built · partly tested: `steward-restart` proves the release of a dead steward's connections by count at `bootfsd`, `erofsd:system`, `walfsd:data` and `ipd`, and at `littlefsd:alice-secrets` only by the code they share, since it opens no vault session; a shared server's restart is re-bound on the machine at `walfsd:data`, and at the vault's server and `ipd` by the code they share and the host test · tested: bench:steward-restart, bench:steward-restart-ssh, bench:steward-restart-reboot, bench:steward-session-ends, bench:steward-server-restart, host:redoubt-steward-server::users_not_empty_is_a_start_failure_before_any_carve, host:redoubt-steward-server::watch_is_held_only_from_sshd_and_malformed_on_any_other_badge, host:redoubt-steward-server::a_servers_restart_tells_its_sessions_and_a_session_rebinds_its_slot, host:redoubt-steward-server::every_operation_on_another_badge_class_is_malformed, host:redoubt-init::a_restart_strands_the_stewards_connections_at_the_endpoints_the_server_receives_on, host:redoubt-init::the_outcome_of_the_hand_over_is_said_in_blames_words, bench:steward-blame-lockout, host:redoubt-steward-server::a_session_s_end_is_answered_before_any_cleanup_call, host:redoubt-steward-server::an_ended_session_s_pending_request_is_withdrawn_before_the_end_s_reply, host:redoubt-steward-server::a_cleanup_step_that_times_out_is_retried_then_dropped, host:redoubt-steward-server::a_turn_stops_at_its_first_timed_out_step, host:redoubt-steward-server::a_cleanup_step_the_server_refuses_or_cannot_take_is_done_at_once, host:redoubt-steward-server::the_cleanup_queue_holds_each_released_connection_once, host:redoubt-steward-server::a_console_line_is_one_write_on_the_kept_fid, host:redoubt-steward-server::a_console_line_the_console_did_not_take_costs_one_bound_and_keeps_the_order, host:redoubt-steward-server::the_console_fid_is_re_opened_after_a_failed_write_and_the_lines_dropped_are_said, host:redoubt-steward-server::the_exit_s_last_turn_writes_the_lines_left_within_one_bound
+Status: built · partly tested: `steward-restart` proves the release of a dead steward's connections by count at `bootfsd`, `erofsd:system`, `walfsd:data` and `ipd`, and at `littlefsd:alice-secrets` only by the code they share, since it opens no vault session; a shared server's restart is re-bound on the machine at `walfsd:data`, and at the vault's server and `ipd` by the code they share and the host test · tested: bench:steward-restart, bench:steward-restart-ssh, bench:steward-restart-reboot, bench:steward-session-ends, bench:steward-server-restart, host:redoubt-steward-server::users_not_empty_is_a_start_failure_before_any_carve, host:redoubt-steward-server::watch_is_held_only_from_sshd_and_malformed_on_any_other_badge, host:redoubt-steward-server::a_servers_restart_tells_its_sessions_and_a_session_rebinds_its_slot, host:redoubt-steward-server::every_operation_on_another_badge_class_is_malformed, host:redoubt-init::a_restart_strands_the_stewards_connections_at_the_endpoints_the_server_receives_on, host:redoubt-init::the_outcome_of_the_hand_over_is_said_in_blames_words, bench:steward-blame-lockout, host:redoubt-steward-server::a_session_s_end_is_answered_before_any_cleanup_call, host:redoubt-steward-server::an_ended_session_s_pending_request_is_withdrawn_before_the_end_s_reply, host:redoubt-steward-server::a_cleanup_step_that_times_out_is_retried_then_parked, host:redoubt-steward-server::a_turn_stops_at_its_first_timed_out_step, host:redoubt-steward-server::a_cleanup_step_the_server_refuses_or_cannot_take_is_done_at_once, host:redoubt-steward-server::the_cleanup_queue_holds_each_released_connection_once, host:redoubt-steward-server::a_console_line_is_one_write_on_the_kept_fid, host:redoubt-steward-server::a_console_line_the_console_did_not_take_costs_one_bound_and_keeps_the_order, host:redoubt-steward-server::the_console_fid_is_re_opened_after_a_failed_write_and_the_lines_dropped_are_said, host:redoubt-steward-server::the_exit_s_last_turn_writes_the_lines_left_within_one_bound, host:redoubt-steward-server::a_parked_step_runs_at_the_servers_next_answered_call, host:redoubt-steward-server::a_mint_at_a_server_with_parked_steps_runs_them_first_and_succeeds_where_it_was_refused, host:redoubt-steward-server::reconnected_forgets_a_servers_parked_steps, host:redoubt-steward-server::a_never_answering_server_costs_no_bound_once_its_steps_are_parked, bench:steward-latency
 
 - **The steward is part of the trusted base; its crash is a bug.** If it dies, `init` reaps
   `users`, which logs every session out and ends every lease, and restarts the steward; the
@@ -1402,19 +1402,35 @@ Status: built · partly tested: `steward-restart` proves the release of a dead s
   did not take in time is retried no sooner than a second later, up to four attempts, which span at least 3.4 s:
   past `init`'s 3 s bound on a restarted server's first answer
   ([init](init.md#fresh-connections-per-child)), so a server that has not served by then is
-  lost to `init` too. The fourth failure drops the step with a console line (`steward: disconnect
-  12 at walfsd:data dropped after 4 attempts: the server did not take it`), and the server's
-  admission for that connection is then freed only by its own restart: the residual. Any other
+  lost to `init` too, and its restart frees what the step would have. The fourth failure parks
+  the step with a console line (`steward: disconnect 12 at walfsd:data parked after 4 attempts:
+  retried when the server answers`), since the count tells a lost server from a busy one only
+  for the lost: a busy server answers other callers, `init` sees it alive and nothing restarts
+  it, so a step dropped there would leave the server's admission for the connection taken
+  until a restart that never comes (seen under two agents reading the system volume: a lease's
+  `disconnect` at `erofsd:system` dropped, and the next lease's connection there refused on the
+  share's eighth `State`). A parked step has no timer and costs the loop nothing while its
+  server does not answer; it runs again at the loop's turn once a call of the steward's to that
+  server completed within its bound (a mint there taken or refused, a step there done), and
+  before a mint the steward makes at a server with parked steps, which needs the record a step
+  frees: those steps run first, stopping at the first that times out, so the mint pays one
+  bound at most, a turn's rule. `reconnected` for a server forgets its parked steps with its
+  records. The residual is narrower: a step a server did not take in four attempts waits for
+  that server's next answer or its restart. Any other
   outcome ends a step at once: an `ended` to a channel `sshd` already closed is taken or fails
   `Dead`, never retried; a connection at a server that restarted since has no record left
   (`reconnected` forgot it) and nothing to tell. The queue is bounded by the connections live
   sessions and leases hold: a connection enters once, when its owner's end releases it or a
   `rebind` replaces it (one step per call), at most the slots plus four per session (its badge,
   a connection per slot, its relay's control connection, the attached channel console and its
-  notices send right) and the slots plus one per lease, and leaves done or dropped within the
-  retries' span. The bound is argued, not enforced: the queue has no cap; it drains at every
+  notices send right) and the slots plus one per lease, and leaves done; a parked step is a
+  queued step that has not left, so the bound covers it unchanged. The bound is argued, not
+  enforced: the queue has no cap; it drains at every
   turn its servers answer, and a session re-binding at a server that is not taking its steps
-  queues nothing more, since the mint there fails too. Before this, each `disconnect`
+  queues nothing more, since the mint there fails too. The order of the loop's turn: the idle
+  timer's ends, then the cleanup queue's turn, its parked steps among the due ones, then the
+  console lines queued since the last turn (the next bullet), then the receive; so a step's own
+  line goes in the step's turn, and each queue costs the turn one bound at most. Before this, each `disconnect`
   and `ended` ran inside the end batch with the call's full second, during which the steward
   served nobody: measured on `steward-server-restart`, the `ended` waited its second when `sshd`
   had closed the channel first (it was calling the steward itself then) or was busy, a
