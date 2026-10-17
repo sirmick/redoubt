@@ -481,13 +481,16 @@ fn serve(endpoint: Handle, pid: usize, input: Box<dyn std::io::Read + Send>, str
     let Ok(wake) = endpoint.mint(NonZeroU64::new(INPUT).expect("non-zero"), None) else { return 2 };
     let Ok(resized) = endpoint.mint(NonZeroU64::new(INPUT).expect("non-zero"), None) else { return 2 };
     window.lock().expect("the window").wake = Some(resized.handle());
-    std::thread::spawn(move || fake().as_process(pid, move || feed(input, &typed, &wake)));
+    std::thread::spawn(move || feed(pid, input, &typed, &wake));
     server.run_around(&endpoint, Readers(Parked::new(FOREVER)))
 }
 
 /// The input thread: reads the device into the console's input, waking the server after each
-/// read, then marks the end.
-fn feed(mut input: Box<dyn std::io::Read + Send>, typed: &Mutex<Input>, wake: &Endpoint) {
+/// read, then marks the end. A thread of the fake only while it wakes the server: blocked in the
+/// device's read it is the host's, so a tick of a held clock (`Fake::tick`), which waits for every
+/// thread of the fake to reach a wait, does not wait on a keyboard nobody types on.
+fn feed(pid: usize, mut input: Box<dyn std::io::Read + Send>, typed: &Mutex<Input>, wake: &Endpoint) {
+    let f = fake();
     let mut buf = [0u8; 16];
     loop {
         let n = match input.read(&mut buf) {
@@ -495,12 +498,12 @@ fn feed(mut input: Box<dyn std::io::Read + Send>, typed: &Mutex<Input>, wake: &E
             Ok(n) => n,
         };
         typed.lock().expect("the input").bytes.extend(&buf[..n]);
-        if wake.send(&[0; 4], &[], None, FOREVER).is_err() {
+        if f.as_process(pid, || wake.send(&[0; 4], &[], None, FOREVER)).is_err() {
             return;
         }
     }
     typed.lock().expect("the input").ended = true;
-    let _ = wake.send(&[0; 4], &[], None, FOREVER);
+    let _ = f.as_process(pid, || wake.send(&[0; 4], &[], None, FOREVER));
 }
 
 /// What a parked call waits for: input, or a change of size since the count it saw.
