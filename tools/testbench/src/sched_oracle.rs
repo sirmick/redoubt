@@ -3379,9 +3379,12 @@ pub fn audit_inside(audits: &[(u64, u64)], from: u64, to: u64) -> u64 {
 
 /// The measures a program times on `time_now` and prints sample by sample, each a window
 /// `[end - gross, end]` in µs: `LATENCY-SAMPLE <group> <measure> <end> <gross>`, the group being
-/// what the program judges apart (`N=16`); `destroy_call` is `budget_destroy` call to return. With them, how
-/// many it took of each (`LATENCY-COUNT <group> <measure> <n>`), so a window lost on the way fails the check.
-const MEASURES: [&str; 5] = ["driver_wake", "timer_wake", "decision_wake", "deadline_notice", "destroy_call"];
+/// what the program judges apart (`N=16`); `destroy_call` is `budget_destroy` call to return, and
+/// `reply_wait` the real steward's own work from a reply to its next receive (both recorded, no
+/// target). With them, how many it took of each (`LATENCY-COUNT <group> <measure> <n>`), so a
+/// window lost on the way fails the check.
+const MEASURES: [&str; 6] =
+    ["driver_wake", "timer_wake", "decision_wake", "deadline_notice", "destroy_call", "reply_wait"];
 
 /// The walks a `walk-trace` kernel brackets, by their ids 1 to 3, each with a `<name>_max_us`
 /// bound: a receive's pump, a timer expiry's own walk, and a reconcile.
@@ -6107,6 +6110,11 @@ mod tests {
         assert!(run(&prefixed, "decision_wake_p99_us=5").is_err_and(|e| e.contains("target missed")));
         let other = audited("[con 0123456789abcdef] sshd: LATENCY-SAMPLE N=4 decision_wake 9 6\n");
         assert!(run(&other, "decision_wake_p99_us=10").is_err_and(|e| e.contains("no decision_wake sample")));
+        let gap = audited(
+            "[con 0123456789abcdef] steward: LATENCY-SAMPLE N=1 reply_wait 9 6\n\
+             [con 0123456789abcdef] steward: LATENCY-COUNT N=1 reply_wait 1\n",
+        );
+        assert!(run(&gap, "").is_ok_and(|s| s.contains("reply_wait")), "{:?}", run(&gap, ""));
         let short = audited("[con 0123] steward: LATENCY-COUNT N=4 decision_wake 0\n");
         assert!(run(&short, "decision_wake_p99_us=10").is_err_and(|e| e.contains("no decision_wake sample")));
     }

@@ -93,8 +93,9 @@ mod machine {
     const PROBE_DELAY: u64 = 14_000_000;
     /// Test-only, for the bench's `steward-latency` (feature `latency-probe`, off in every
     /// default build; kernel/scheduling.md, "Responsiveness"): a lease asked for exactly
-    /// [`LATENCY_LEASE_US`] is the probe's. After its `start_agent` is answered the steward arms a
-    /// timeout of [`LATENCY_TIMER_US`] and prints its wake as a `timer_wake` sample (`time_now`
+    /// [`LATENCY_LEASE_US`] is the probe's. After its `start_agent` is answered the steward prints
+    /// the answer to its next receive as a `reply_wait` sample (its own work after the reply),
+    /// arms there a timeout of [`LATENCY_TIMER_US`] and prints its wake as a `timer_wake` sample (`time_now`
     /// less the deadline it armed), then one of [`LATENCY_DECIDE_US`] whose wake is a
     /// `decision_wake` sample, on which it ends the lease itself (the core's `EndLease` on the
     /// badge that started it, no new row or effect) and prints its `budget_destroy` call to
@@ -1608,6 +1609,12 @@ mod machine {
     struct Probe {
         /// The timeout armed, and which: `false` the timer's, `true` the decision's.
         due: Option<(u64, bool)>,
+        /// A probe lease whose `start_agent` was just answered, with the answer's time: the
+        /// timer is armed at the last point before the receive that waits on it, so the wake
+        /// measures the kernel's expiry to the steward running, not the steward's own work
+        /// after the reply (its audit and usage lines through consoled), which is the
+        /// `reply_wait` sample instead.
+        pending: Option<(u64, u64, u64)>,
         /// The probe lease and the badge of the session that started it.
         lease: u64,
         badge: u64,
@@ -1878,6 +1885,23 @@ mod machine {
                     }
                 }
             }
+            // The probe's timer, armed here and nowhere earlier: the steward is about to wait.
+            #[cfg(feature = "latency-probe")]
+            let wait = match probe.pending.take() {
+                Some((lease, badge, replied)) => {
+                    let now = redoubt_rt::handle::time_now().unwrap_or(replied);
+                    let n = others(&steward, lease);
+                    probe.sample(startup, "reply_wait", n, now, now.saturating_sub(replied));
+                    probe = Probe {
+                        due: Some((now.saturating_add(LATENCY_TIMER_US), false)),
+                        lease,
+                        badge,
+                        ..probe
+                    };
+                    wait.min(LATENCY_TIMER_US)
+                }
+                None => wait,
+            };
             match own.receive(wait, 0) {
                 Ok(Event::Call(request)) if watches_call(&request.caller, &request.words) => {
                     // One per `sshd` instance; a restarted `sshd`'s comes before the abandoned
@@ -1901,17 +1925,13 @@ mod machine {
                         let took = redoubt_rt::handle::time_now().unwrap_or(began).saturating_sub(began);
                         say(startup, &format!("steward: served {op} in {took} us\n"));
                     }
-                    // A probe lease started: the timer is armed from its reply.
+                    // A probe lease started: the timer is armed at the loop's next receive, the
+                    // reply's time kept for the `reply_wait` sample.
                     #[cfg(feature = "latency-probe")]
                     if words[0] == 10 && outcome.words[0] == 0 {
                         if let Some(lease) = probe_lease(&steward, caller.badge) {
-                            let now = redoubt_rt::handle::time_now().unwrap_or(0);
-                            probe = Probe {
-                                due: Some((now.saturating_add(LATENCY_TIMER_US), false)),
-                                lease,
-                                badge: caller.badge,
-                                ..probe
-                            };
+                            let replied = redoubt_rt::handle::time_now().unwrap_or(0);
+                            probe.pending = Some((lease, caller.badge, replied));
                         }
                     }
                     // What the call did is said before it is answered, so its records come

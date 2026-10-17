@@ -1448,7 +1448,8 @@ the last one's until the kernel says its caller is gone.
 `PROBE_EXIT`), off in every default build; the bench's `steward-restart` builds the steward with
 it. **The latency probe**, `latency-probe`, is the second such feature, built by `steward-latency`
 alone (the bench's host test `only_steward_latency_builds_the_latency_probe` holds it to that):
-the steward arms two timeouts after a probe lease's start and ends that lease by its own
+the steward prints a probe lease's start as a `reply_wait` sample (its answer to its next
+receive: its own audit and usage lines), arms two timeouts there and ends that lease by its own
 `EndLease` at the second, prints its wake, deadline-notice and `budget_destroy` samples for the
 bench's oracle, then `LATENCY-END` with its clock after the third round's counts (the window's
 end: the oracle judges no destruction ending after it and no sample printed after it), and exits
