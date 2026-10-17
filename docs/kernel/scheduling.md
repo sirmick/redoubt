@@ -1453,7 +1453,10 @@ alone; `lock-trace`, which implies the trace and records after each wait for the
 ticket and the sections ahead of it when drawn (`k`), for `irq-boot-hart-only`; `hold-trace`,
 which implies `lock-trace` and records each section of the kernel lock at its release, its ticks,
 cause and audits (`h`, `j`), for `sched-lock-contention`, `sched-lock-contention-4`,
-`sched-timer-entry` and `call-bounds`;
+`sched-timer-entry` and `call-bounds`; `block-trace`, which implies the trace and records each
+thread's block at the one place a thread blocks (`@`: the budget, its wait kind and the endpoint
+it waits on), for no case: a diagnostic run by hand, which told a budget waiting to receive a
+call that never came from one blocked in a call out ([responsiveness](#responsiveness));
 `irq-boot-hart-only`, whose boot hart alone
 takes device interrupts, for R78's negative case at two harts; `sched-inject-tie-fault`, a debug-only break of the tie rule that implies the trace;
 `sched-capped-holds-floor`, whose floor counts the capped budgets, for R12's negative case at two

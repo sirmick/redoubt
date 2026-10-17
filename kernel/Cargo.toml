@@ -50,6 +50,10 @@ lock-trace = ["sched-trace"]
 # cause and the audits inside it, so the oracle can say what each lock wait waited behind
 # (`sched-lock-contention`; kernel/scheduling.md, "Fair kernel entry is bounded by count").
 hold-trace = ["lock-trace"]
+# Test builds only: also record each thread's block (`settle`) with its wait kind and the endpoint
+# it waits on, so a two-hart wedge diagnostic can tell a budget waiting to receive a call that never
+# arrives from one blocked in a call out. Not in any judged build: the oracle rejects its record kind.
+block-trace = ["sched-trace"]
 # Debug only, never in a bench build but one recorded negative run: rank wakers behind queued
 # budgets of equal pass (the model's R12TieQueuedFirst), to show the oracle catches it.
 sched-inject-tie-fault = ["sched-trace"]
