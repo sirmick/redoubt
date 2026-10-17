@@ -309,7 +309,7 @@ flowchart TD
 
 ### Charging
 
-<details><summary>Status: built · tested (20)</summary>
+<details><summary>Status: built · tested (21)</summary>
 
 - bench:sched-sleep-gaming
 - bench:sched-irq-wake
@@ -323,6 +323,7 @@ flowchart TD
 - host:redoubt-stride::a_deschedule_charges_at_least_one_unit_and_a_destroy_only_what_ran
 - host:testbench::a_timer_interrupt_bills_the_budgets_whose_items_it_expired
 - host:testbench::a_device_interrupt_that_claims_nothing_bills_nobody
+- host:testbench::a_device_interrupt_a_deadline_preempts_before_its_claim_is_billed_as_claiming_nothing
 - mutation:R12ShortRunsFree
 - mutation:R12DropRemainder
 - mutation:R12ExitRunsFree
@@ -377,7 +378,13 @@ Kernel time is billed as well:
   and the interrupted spinner 19,476 and 31,488 for their returns); one with no device object, to nobody; a device
   interrupt that claims nothing, its source claimed first by another hart, is billed as a timer
   interrupt that ends no slice: the rest of it after its expiry is the budget its expiry billed
-  last, or nobody's, never the budget it interrupted;
+  last, or nobody's, never the budget it interrupted; so is one a deadline took at its entry: the
+  expiry every entry answers first destroyed a budget, and the entering thread gave up the hart
+  before the controller was asked ([preemption points](#preemption-points)), leaving the source
+  pending for the next entry. The trace records it with no claim, the destruction inside it and a
+  preempting return, and the oracle accepts a missing claim only so marked (the real steward's
+  two-hart traces, where a deadline passes while the other hart holds the lock, carry one or two
+  a run; one hart's none);
 - `kmain`'s pick and switch into a budget are paid by the budget picked, whatever ended the run
   before: a block or an exit is paid by its actor, a timer entry's handling by the budget it
   served, and the pick that follows by the budget it picks (a pick that cannot run leaves the

@@ -376,7 +376,10 @@ with a `fanout` two for its build while each of its jobs asks `q` for its own, a
 go quiet. A case target runs that case alone (`--exact`), from `target/prebuilt` when its width
 is there ([building once](#building-once)), else through `cargo testbench`; its output is
 `target/jobs/<arch>-<case>.log`, and a failing boot's console and session logs are kept beside
-it (`--keep-failed`), so a transcript is never lost to the run directories' pruning. A failing
+it (`--keep-failed`), so a transcript is never lost to the run directories' pruning; the
+scheduler oracle judges a kept console log again by hand, through its ignored host test
+(`SCHED_ORACLE_LOG=<log> SCHED_ORACLE_ARGS='<the case's post_check arguments>' cargo test -p
+testbench a_kept_log_judged_again -- --ignored --nocapture`). A failing
 `host-tests` case's log holds the test harness's failures block, from its `failures:` line: each
 failed test's panic and name and the `test result` line (a block past 400 lines keeps its first
 panics and the names list), then Cargo's line naming the test file that failed and how its binary
@@ -853,8 +856,10 @@ the old billing, fails that check in a recorded negative run. It records each de
 from user mode the same way (`x`), with its claim (`c`: the source, or 0 when another hart claimed
 it first), and checks that one that claims nothing is billed as a timer interrupt that ends no
 slice: after its expiry, to the budget the expiry billed last or to nobody, never to the budget it
-interrupted. It reports the timer interrupts that charged a budget other than the one they
-interrupted and those ticks: another budget's timer work in the interrupted budget's time on its
+interrupted; one a deadline answered at its entry preempted before its claim (a destruction
+inside it, `O` 2 and no `c`) the same way, and any other missing claim fails. It reports the
+timer interrupts that charged a budget other than the one they interrupted and those ticks:
+another budget's timer work in the interrupted budget's time on its
 hart ([timer](kernel/timer.md#r12-scheduling-for-timer-work)); with `foreign_timer_in=<share>:<N>`
 it bounds them inside that share's window, the ticks of timer interrupts from user mode that
 interrupted the judged budget (or one lifted into it) and charged a budget outside its marks, at
