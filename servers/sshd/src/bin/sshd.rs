@@ -9,7 +9,8 @@
 //!   only waits in `ipd` for the connection's bytes and hands each read to the driver as a call, answered
 //!   once the core has taken it, so a client that sends faster than its session reads is held in TCP, not in
 //!   this server. Nothing is shared between threads but handles; a call to `keyd` or the steward holds up
-//!   only its own connection.
+//!   only its own connection. How many slots there are is the manifest's `buckets=N`, and a connection that
+//!   has not logged in within `LOGIN_US` is closed (`redoubt_sshd::slot`).
 //! - **Login.** The core asks the platform once a key's signature has verified: the driver mints the
 //!   channel's console, a connection to its own `/dev/cons`, and sends it with the login; the steward
 //!   launches the session with it at `/dev/cons` and answers its id and labels, which the file then carries
@@ -50,7 +51,10 @@ mod machine {
     use redoubt_rt::wire::proto::{consol, keyd, net_ctl, steward};
     use redoubt_sshd::console::{Chan, Cons, Console, Consoles, File, LIMITS, Shared, qid};
     use redoubt_sshd::listener::{Again, again, status};
-    use redoubt_sshd::slot::{DATA, EOF, Read, Reader};
+    use redoubt_sshd::slot::{
+        DATA, DRIVER_STACK_PAGES, EOF, Gate, LOGIN_US, READER_STACK_PAGES, Read, Reader, WATCHER_STACK_PAGES,
+        slots,
+    };
     use redoubt_sshd::{
         Connection, ExchangeTranscript, Login, Platform, Progress, PublicKey, Refusal, Refused, Signature,
     };
@@ -63,6 +67,10 @@ mod machine {
     /// `keyd` gave no host key, or `ipd` would not listen, or stopped answering the listener. A
     /// server's own codes start at 4, past the runtime's (`redoubt_rt::exit`).
     pub const NOT_STARTED: u32 = 4;
+    /// No `buckets=N` in the arguments, or no budget in the startup block, or N slots' stacks do
+    /// not fit the budget (`redoubt_sshd::slot::slots`): the entry cannot be held, and `init`
+    /// restarts the server until its reboot rule.
+    pub const BAD_LIMITS: u32 = 5;
     /// Test-only, for the bench's `sshd-restart-detaches` (feature `restart-probe`, off in every
     /// default build, as the steward's, `littlefsd`'s and `netd`'s are): a login to the context
     /// [`PROBE_CONTEXT`], once its key has verified, ends this instance with this code, every
@@ -75,18 +83,11 @@ mod machine {
     /// The port SSH listens on, and how many connections `ipd` may hold for an accept.
     const PORT: u16 = 22;
     const BACKLOG: u8 = 4;
-    /// Connections served at once: one parked read each in `ipd`, beside the listener's accept,
-    /// within its default of five parked calls a bucket (servers/ipd.md, "Sizing").
-    const SLOTS: usize = 4;
+    /// The most slots a manifest can give: its `buckets=N` is at most the serving library's
+    /// bound. The slots in use are the manifest's N, the first N of [`BUSY`].
+    const MOST_SLOTS: usize = redoubt_rt::server::MAX_BUCKETS as usize;
     /// The largest packet `sunset` takes, each way.
     const BUF: usize = 35_000;
-    /// A driver's stack, in pages: `sunset` moves its exchange state by value a few times
-    /// (`redoubt_sshd`'s header). A whole login, client and server in one host thread, needs
-    /// more than 88 KiB and fits 96 KiB (x86_64, release); twice that. A slot's stacks have no
-    /// guard page between them, so one too small overwrites its neighbour's.
-    const DRIVER_STACK_PAGES: usize = 48;
-    const READER_STACK_PAGES: usize = 4;
-    const WATCHER_STACK_PAGES: usize = 4;
     /// One read from `ipd`, and the lend it travels to the driver in.
     const READ: usize = 4096;
 
@@ -127,7 +128,7 @@ mod machine {
 
     /// Which slots serve a connection: set by the main thread when it hands one over, cleared by
     /// the slot's driver when the connection is over.
-    static BUSY: [AtomicBool; SLOTS] = [const { AtomicBool::new(false) }; SLOTS];
+    static BUSY: [AtomicBool; MOST_SLOTS] = [const { AtomicBool::new(false) }; MOST_SLOTS];
     /// The steward's generation: how many of its `watch` calls have ended. A session logged in
     /// at an earlier one ran under a steward that is gone.
     static GENERATION: AtomicU32 = AtomicU32::new(0);
@@ -293,6 +294,8 @@ mod machine {
         /// The client's address, `a.b.c.d:port`, or empty if `ipd` did not say: only the
         /// steward's notes of a context's takeover show it.
         from: String,
+        /// The bound on the connection before it logs in.
+        gate: Gate,
     }
 
     /// What a parked call waits for: input or room on the channel, or a change of its window's
@@ -467,6 +470,7 @@ mod machine {
                     self.nine.fs.labels = labels;
                     self.console = Some(consoles);
                     self.session = Some((id, GENERATION.load(Ordering::Acquire)));
+                    self.gate.logged_in();
                     Ok(Console::new(self.nine.fs.chan.clone(), id, labelled))
                 }
                 refused => {
@@ -540,6 +544,7 @@ mod machine {
                     self.console = Some(consoles);
                     self.session = Some((channel, GENERATION.load(Ordering::Acquire)));
                     self.approval = true;
+                    self.gate.logged_in();
                     Ok(Console::new(self.nine.fs.chan.clone(), channel, false))
                 }
                 refused => {
@@ -597,7 +602,7 @@ mod machine {
             && open_at(&ipd, &mut lend, out, &format!("tcp/{sock}/data"));
         let started = opened && wake.send(&[ACCEPT, 0, 0, 0], &[], None, FOREVER).is_ok();
         if started {
-            let mut reader = drive(handed, endpoint, &ipd, &mut lend, out, from);
+            let mut reader = drive(handed, endpoint, &ipd, &mut lend, out, from, sock);
             close_socket(&ipd, &mut lend, ctl);
             // The reader ends with the socket; its last call says so, unless the driver took it
             // already (a client that hung up first): the slot is free once it is taken.
@@ -626,8 +631,11 @@ mod machine {
         }
     }
 
-    /// Runs the core over the socket until the connection is over. Returns the reader as the
-    /// driver heard it: whether its last call was taken already.
+    /// Runs the core over the socket until the connection is over: the client's or the server's
+    /// end, a failure, or the login bound passing on a connection not logged in, which is closed
+    /// without a word to the client, as every refusal before login is (servers/sshd.md, "A key is
+    /// tried twice"). Returns the reader as the driver heard it: whether its last call was taken
+    /// already.
     fn drive(
         handed: Handed,
         endpoint: &Endpoint,
@@ -635,6 +643,7 @@ mod machine {
         ipd_lend: &mut Lend,
         out: u32,
         from: String,
+        sock: u32,
     ) -> Reader {
         let mut reader = Reader::default();
         let chan: Shared = Rc::new(RefCell::new(Chan::default()));
@@ -656,6 +665,7 @@ mod machine {
             session: None,
             approval: false,
             from,
+            gate: Gate::new(redoubt_rt::handle::time_now().unwrap_or(0)),
         };
         slot.nine.requests_wait(FOREVER);
         let (mut inbuf, mut outbuf) = (vec![0u8; BUF], vec![0u8; BUF]);
@@ -665,6 +675,15 @@ mod machine {
         let mut pending: Vec<u8> = Vec::new();
         loop {
             let now = redoubt_rt::handle::time_now().unwrap_or(0);
+            // Not logged in within the bound: closed, whatever it sent or withheld, and the
+            // slot serves the next connection.
+            if slot.gate.due(now) {
+                slot.say(&format!(
+                    "sshd: connection {sock}: no login within {} s, closed\n",
+                    LOGIN_US / 1_000_000
+                ));
+                break;
+            }
             // A completion call whose hold ran out is answered empty, or the console's client
             // reads the server's silence as the session's end.
             slot.nine.expire(now);
@@ -736,7 +755,12 @@ mod machine {
                 break;
             }
             let before = redoubt_rt::handle::time_now().unwrap_or(0);
-            let timeout = slot.nine.next_deadline().map_or(FOREVER, |d| d.saturating_sub(before).max(1));
+            // The earlier of the console's next deadline and the login bound's, if it still runs.
+            let deadline = match (slot.nine.next_deadline(), slot.gate.deadline()) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            };
+            let timeout = deadline.map_or(FOREVER, |d| d.saturating_sub(before).max(1));
             let received = endpoint.receive(timeout, MAX_LEND_PAGES);
             // What came is served at the time it came, so a deadline it sets runs from then.
             let now = redoubt_rt::handle::time_now().unwrap_or(0);
@@ -868,12 +892,31 @@ mod machine {
 
     /// Listens, and hands each connection to an idle slot.
     pub fn serve(startup: &Startup) -> u32 {
+        let console = startup.namespace().find(|(path, _)| *path == "/dev/cons").map(|(_, h)| h);
+        // The slots are the manifest's, and their stacks must fit its budget, before anything
+        // else is asked (servers/sshd.md, "The box's platform").
+        let args: Vec<&str> = startup.args().collect();
+        let sized = redoubt_rt::server::buckets(&args).ok().zip(redoubt_rt::server::budget(startup));
+        let slots = match sized.map(|(buckets, budget)| slots(buckets, budget)) {
+            Some(Ok(slots)) => slots,
+            Some(Err(e)) => {
+                let why = format!(
+                    "sshd: {} slots need {} pages of stack; the budget holds {}\n",
+                    e.slots, e.need, e.have
+                );
+                say(console, &why);
+                return BAD_LIMITS;
+            }
+            None => {
+                say(console, "sshd: no buckets=N in the arguments, or no budget\n");
+                return BAD_LIMITS;
+            }
+        };
         let (Some(ipd), Some(keyd), Some(steward)) =
             (startup.handle("ipd"), startup.handle("keyd"), startup.handle("steward"))
         else {
             return NO_HANDLE;
         };
-        let console = startup.namespace().find(|(path, _)| *path == "/dev/cons").map(|(_, h)| h);
         let Ok(mut lend) = Lend::new(1) else { return NOT_STARTED };
         let keyd_ep = Endpoint::from_handle(keyd);
         let public = keyd::Message::PublicKey(keyd::PublicKey {});
@@ -905,8 +948,8 @@ mod machine {
             let _ = redoubt_rt::handle::sleep(LISTEN_RETRY_US);
         }
         // Each slot's two threads, started once.
-        let mut slots = Vec::new();
-        for s in 0..SLOTS {
+        let mut endpoints = Vec::new();
+        for s in 0..slots {
             let (Ok(endpoint), Ok(wake)) = (Endpoint::create(), Endpoint::create()) else {
                 return NOT_STARTED;
             };
@@ -927,9 +970,9 @@ mod machine {
             if started.is_err() {
                 return NOT_STARTED;
             }
-            slots.push(main);
+            endpoints.push(main);
         }
-        let watched: Vec<Handle> = slots.iter().map(|e: &Endpoint| e.handle()).collect();
+        let watched: Vec<Handle> = endpoints.iter().map(|e: &Endpoint| e.handle()).collect();
         if redoubt_rt::thread::spawn(Box::new(move || watcher(steward, watched)), WATCHER_STACK_PAGES)
             .is_err()
         {
@@ -941,11 +984,11 @@ mod machine {
             if state != LISTENING {
                 return NOT_STARTED;
             }
-            let idle = (0..SLOTS).find(|&s| {
+            let idle = (0..slots).find(|&s| {
                 BUSY[s].compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_ok()
             });
-            let handed_to =
-                idle.filter(|&s| slots[s].send(&[ACCEPT, u64::from(sock), 0, 0], &[], None, FOREVER).is_ok());
+            let handed_to = idle
+                .filter(|&s| endpoints[s].send(&[ACCEPT, u64::from(sock), 0, 0], &[], None, FOREVER).is_ok());
             if let Some(s) = handed_to {
                 say(console, &format!("sshd: connection {sock} on slot {s}\n"));
             }

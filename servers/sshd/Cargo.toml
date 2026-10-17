@@ -31,6 +31,9 @@ restart-probe = []
 heapless = { version = "=0.9.3", default-features = false }
 # The tests' stand-in for keyd signs keyd's own exchange hash.
 redoubt-keyd = { path = "../keyd" }
-# The listener's test waits in the real ipd, on the rt fake kernel.
+# The listener's test waits in the real ipd, on the rt fake kernel; the slots' test holds every
+# manifest's sshd entry against ipd's parked calls for it.
 redoubt-fake-kernel = { path = "../../libs/rt/fake" }
 redoubt-ipd = { path = "../ipd" }
+# The slots' test reads the manifests.
+serde_json = "=1.0.143"

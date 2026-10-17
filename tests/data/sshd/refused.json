@@ -1,0 +1,48 @@
+{
+  "devices": [
+    {"name": "uart0", "base": "268435456", "irq": 10, "dma": false},
+    {"name": "disk0", "base": "268468224", "irq": 8, "dma": true},
+    {"name": "net0", "base": "268464128", "irq": 7, "dma": true}
+  ],
+  "servers": [
+    {
+      "name": "keyd",
+      "program": "keyd",
+      "budget": {"pages": "256", "processes": 1, "weight": 100},
+      "receives": ["keyd"],
+      "args": ["host,ssh_host,1111111111111111111111111111111111111111111111111111111111111111", "audit,audit,2222222222222222222222222222222222222222222222222222222222222222", "buckets=4"]
+    },
+    {
+      "name": "consoled",
+      "program": "consoled",
+      "budget": {"pages": "1024", "processes": 1, "weight": 1000},
+      "devices": [{"device": "uart0", "as": "uart"}],
+      "receives": ["consoled"],
+      "args": ["buckets=4"]
+    },
+    {
+      "name": "bootfsd",
+      "program": "bootfsd",
+      "budget": {"pages": "640", "processes": 1, "weight": 100},
+      "receives": ["bootfsd"],
+      "args": ["buckets=4"]
+    },
+    {
+      "name": "sshd",
+      "program": "sshd",
+      "stack_pages": "4", "heap_pages": "700",
+      "budget": {"pages": "1024", "processes": 1, "weight": 100},
+      "args": ["buckets=4"]
+    }
+  ],
+  "public": [],
+  "labels": [],
+  "principals": [
+    {
+      "name": "alice",
+      "account": "1001",
+      "budget": {"pages": "4096", "processes": 1, "weight": 100},
+      "ssh_keys": ["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8g"]
+    }
+  ]
+}
