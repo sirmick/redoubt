@@ -40,7 +40,8 @@ impl Boot {
         let init = f.process(0, &[]);
         let founding = f.grant(server, receive, init, 1);
         let mut block = StartupBuilder::new(receive.index());
-        block.handle("bootfsd", receive).arg("buckets=4");
+        // The image's entry, as `init` writes it: 4 096 pages with a heap cap of 2 304.
+        block.handle("bootfsd", receive).budget_pages(4096).heap_pages(2304).arg("buckets=4");
         for (name, data) in BOOT {
             block.arg(&format!("{}:{name}", data.len()));
         }
@@ -101,7 +102,8 @@ impl Keyd {
         let server = f.process(0, &[]);
         let receive = f.endpoint(server);
         let mut block = StartupBuilder::new(receive.index());
-        block.handle("keyd", receive).arg("buckets=16");
+        // The image's entry, as `init` writes it: 256 pages with a heap cap of 8.
+        block.handle("keyd", receive).budget_pages(256).heap_pages(8).arg("buckets=16");
         block.arg(&format!("host,ssh_host,{}", "1".repeat(64))).arg(&format!("audit,audit,{AUDIT_SEED}"));
         let block = block.finish().unwrap();
         let thread = f.run(server, move || keyd_bin::serve(&Startup::parse(&block).unwrap()));

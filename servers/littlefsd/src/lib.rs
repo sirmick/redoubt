@@ -42,5 +42,5 @@ pub mod typed;
 pub mod volume;
 
 pub use redoubt_fileserver::args::{Args, BadArgs, parse_args};
-pub use server::{BUDGET, COST, Littlefsd, limits};
+pub use server::{COST, Littlefsd, limits};
 pub use volume::{Mounted, NoVolume, Range, mount};

@@ -68,7 +68,7 @@ against what was packed); `erofsd` skips it with every other attribute.
 
 ### Serving
 
-<details><summary>Status: built · tested (13)</summary>
+<details><summary>Status: built · tested (14)</summary>
 
 - bench:erofs-read-only
 - host:redoubt-erofsd::a_directory_lists_exactly_its_children_in_order_by_page
@@ -80,7 +80,8 @@ against what was packed); `erofsd` skips it with every other attribute.
 - host:redoubt-erofsd::stat_says_the_inode_and_the_name_it_was_walked_by
 - host:redoubt-erofsd::the_client_library_reads_the_volume_through_blkd
 - host:redoubt-erofsd::the_conformance_vectors_run_against_erofsd
-- host:redoubt-erofsd::the_limits_fit_the_budget
+- host:redoubt-erofsd::the_image_entry_holds_its_buckets
+- host:testbench::every_manifest_entry_holds_its_buckets_at_their_caps
 - host:redoubt-erofsd::the_volumes_labels_are_checked_on_every_node
 - host:redoubt-init::an_erofsd_entry_is_a_volume_server_as_a_littlefsd_one_is
 
@@ -89,8 +90,12 @@ against what was packed); `erofsd` skips it with every other attribute.
 `erofsd` is started by `init` as `littlefsd` is, one instance per read-only volume, with the same
 arguments (`endpoint=`, `buckets=`) and the same range: a `blkd` range for an unverified
 volume, a `verityd` range for a verified one ([blkd](blkd.md), [verityd](verityd.md)). Its
-clients share a 1.5 MiB budget: a bucket at its caps costs 226,816 bytes, so six fit, and every
-session's domain is one, beside the steward's ([the steward](steward.md#authentication-and-sessions)).
+clients share the budget its manifest entry gives, the entry's pages less its heap cap and stack,
+by the entry rule ([walfsd](walfsd.md#serving)): a bucket at its caps costs 226,816 bytes, and every
+session's domain is one, beside the steward's ([the steward](steward.md#authentication-and-sessions));
+the image's six (a case's extra client the sixth) are 1,360,896 bytes, 333 pages, which with the
+heap cap's 26 and the stack's 128 round to 512 of the image's 1,024, and the entry leaves 870 pages
+of budget, fifteen such buckets and not a sixteenth.
 A bucket holds 11 minted connections: what a manifest lets one account hold at the system volume
 at once, whoever minted them ([serving](serving.md#admit)), two per session the steward starts
 (its shell's and its relay's) for the console session, the cap of live contexts per label set and

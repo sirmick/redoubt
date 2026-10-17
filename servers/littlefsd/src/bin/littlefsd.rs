@@ -10,7 +10,7 @@ extern crate alloc;
 
 use redoubt_fileserver::program::{Started, start};
 use redoubt_littlefsd::typed::{Littlefsds, Typed};
-use redoubt_littlefsd::{BUDGET, COST, Littlefsd, limits, mount};
+use redoubt_littlefsd::{COST, Littlefsd, limits, mount};
 use redoubt_rt::server::ninep::NineServer;
 use redoubt_rt::server::typed::serve_call;
 use redoubt_rt::start::say;
@@ -26,7 +26,7 @@ pub const CORRUPT: &str = "littlefsd: the volume does not mount, and is served a
 /// Serves until the endpoint is destroyed.
 pub fn serve(startup: &Startup) -> u32 {
     // Two pages lent to each call: a block of sectors, and the message around it.
-    let fits = |buckets| limits(buckets).fits(&COST, BUDGET);
+    let fits = |buckets, budget| limits(buckets).fits(&COST, budget);
     let Started { endpoint, labels, buckets, range } = match start(startup, 2, fits) {
         Ok(started) => started,
         Err(code) => return code,

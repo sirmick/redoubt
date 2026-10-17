@@ -26,7 +26,8 @@ pub mod parked;
 pub mod typed;
 
 pub use admit::{
-    Admission, AdmitKey, Cost, Limits, MAX_BUCKETS, Override, Refused, Resource, Unsized, buckets, own_args,
+    Admission, AdmitKey, Cost, LAUNCHED_STACK_PAGES, Limits, MAX_BUCKETS, Override, Refused, Resource,
+    Unsized, buckets, budget, budget_of, own_args,
 };
 
 /// The reply words of a malformed request, in 9P calls and every typed protocol alike: status 1,

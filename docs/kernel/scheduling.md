@@ -789,7 +789,7 @@ trace: that half of the lease-end sum is the program's own report, not the kerne
 **With the real steward.** `steward-latency` measures the same quantities from the steward
 itself: alice's session holds N live leases, the probe's own lease or the kernel's deadline lease
 among them beside N - 1 spinning agents (`Redoubt.Agents.Echo spin`, each a beamlet VM of 5,248
-pages on a lease), N = 1 and 2, D = 16 of each kind per round; the steward's test-only probe arms
+pages on a lease), N = 1, 2 and 3, and 4 at one hart, D = 16 of each kind per round; the steward's test-only probe arms
 its timer at the last point before the receive that waits on it, prints its wake, its decision
 wake and its `budget_destroy` call to return, and the kernel's deadline notice, as the stand-in
 prints them; the post-check judges them net of audits with the targets above, unchanged, and
@@ -798,37 +798,40 @@ R10 from the trace. The load shapes differ: the stand-in's spinners were plain b
 the measured quantities are per lease end, whatever carries the load. The steward runs at the
 workload's weight, 1,000 under `system`, in the case's manifest. A lease's end is measured to its
 destruction and the notice to the sponsor: the servers' records are freed after, off the measured
-path. N = 4 and 16 are not measured here: when the case was written the box admitted at most
-eight steward-minted system-volume connections, the steward's own share at `erofsd:system`; a
-connection the steward mints is now admitted in its account from its first request
-([serving](../servers/serving.md#admit)), so the stand-in's columns at 4 and 16 stand alone
-until the case runs there. N = 3 was not reached while a cleanup step a busy server did not
+path. N = 4 is measured at one hart since every shared server's budget became its manifest
+entry's ([serving](../servers/serving.md#admit)); N = 16 is not reached: one principal's session
+with N leases holds 2 + N connections at `erofsd:system` and 1 + N at its home and `/boot`, and
+the per-account caps the manifests derive (11 and 8) admit N <= 7, so the stand-in's column at
+16 stands alone until a manifest sizes a principal's leases. N = 3 was not reached while a cleanup step a busy server did not
 take was dropped, leaking a `State` there until the eighth was refused; the step is parked and
 retried at the server's next answer now
 ([steward](../servers/steward.md#failure-and-restart)), and the round runs: at one hart on both
 widths and at two on rv64, where the `parked after 4 attempts` line appears one to four times a
 run, each for a lease's `disconnect` at `erofsd:system` under the two spinners, and the next
 lease's connection there is minted all the same. Measured at seed 3, net µs p50/p99 at
-N = 1 / N = 2 / N = 3; each lease destroyed is a VM budget of 5,248 pages, and the gross figures beside
+N = 1 / 2 / 3 / 4 at one hart and 1 / 2 / 3 at two; each lease destroyed is a VM budget of 5,248 pages, and the gross figures beside
 the deadline notice and the destroy call carry 300-500 ms of the checked build's audits after
 such a destruction (subtracted, as every target is net):
 
-| Measure (net µs, N = 1 / 2 / 3) | rv64, 1 hart | rv32, 1 hart | rv64, 2 harts | rv32, 2 harts |
+| Measure (net µs, N = 1 / 2 / 3 / 4 at one hart, 1 / 2 / 3 at two) | rv64, 1 hart | rv32, 1 hart | rv64, 2 harts | rv32, 2 harts |
 | --- | --- | --- | --- | --- |
-| steward timer wake (p50/p99) | 1947/3252, 795/1853, 1142/56360: p99 missed at N = 3 | 708/1317, 1194/1406, 773/1255 | 7987/8018, 2549/23488, 2809/147557: p99 missed at N = 3 | not reached |
-| steward decision wake (p50/p99) | 1121/11418, 17265/20798, 913/3094 | 23740/35167, 1233/40490, 1202/19442 | 1949/9492, 1973/22099, 7205/54354 | not reached |
-| deadline notice (p99) | 9183, 12087, 11602 | 11327, 13769, 12339 | 12268, 12899, 10501 | not reached |
-| `budget_destroy`, call to return (p50/p99) | 6048/8700, 6077/6179, 6055/8538 | 6705/7853, 6733/13612, 5860/9305 | 7998/8627, 8529/9779, 7375/10131 | not reached |
-| R10, 99 destructions (p99) | 9679 | 9650 | 9761 | not reached |
-| a lease's end (worst decision wake p99 + R10) | 20798 + 9679 = 30477 | 40490 + 9650 = 50140 | 54354 + 9761 = 64115 | not reached |
-| reply to the next receive (p50/p99, no target) | 6474/6497, 6555/6614, 7703/122760 | 6789/6836, 8199/8690, 8845/55943 | 17911/42891, 17409/32193, 19807/112295 | not reached |
+| steward timer wake (p50/p99) | 1945/3250, 671/1446, 1232/77617, 1369/92789: p99 missed at N = 3 and 4 | 707/1314, 1175/1412, 778/68679, 1309/92904: p99 missed at N = 3 and 4 | 7987/8018, 2549/23488, 2809/147557: p99 missed at N = 3 | not reached |
+| steward decision wake (p50/p99) | 1122/11417, 17024/20804, 902/3095, 1143/89372 | 23764/24149, 1172/40494, 1233/2200, 871/66450 | 1949/9492, 1973/22099, 7205/54354 | not reached |
+| deadline notice (p99) | 10353, 13202, 11554, 12120 | 11897, 12055, 12183, 10893 | 12268, 12899, 10501 | not reached |
+| `budget_destroy`, call to return (p50/p99) | 6008/8339, 6078/7521, 6060/9819, 6038/8620 | 6702/7898, 6417/8007, 6441/7188, 6789/9094 | 7998/8627, 8529/9779, 7375/10131 | not reached |
+| R10 (p99; 134 destructions at one hart, 99 at two) | 9666 | 9622 | 9761 | not reached |
+| a lease's end (worst decision wake p99 + R10) | 89372 + 9666 = 99038 | 66450 + 9622 = 76072 | 54354 + 9761 = 64115 | not reached |
+| reply to the next receive (p50/p99, no target) | 6471/6493, 6554/6633, 7705/124110, 27802/65333 | 6786/6839, 8189/9170, 9766/134595, 10645/63756 | 17911/42891, 17409/32193, 19807/112295 | not reached |
 
-The real steward meets every target at one hart on rv32, and at one hart and two on rv64 but
-for the timer wake's p99 at N = 3: one sample of sixteen (56 and 148 ms; the next largest under
-4 and 24 ms) whose window holds the loop's cleanup turn retrying a `disconnect` the busy
-`erofsd:system` did not take, one 100 ms bound at the loop's top by the queue's turn rule
-([steward](../servers/steward.md#failure-and-restart)); the same retry shows in that round's
-reply-to-receive p99 (123, 56 and 112 ms). It is the cost of a step the server has not taken
+The real steward meets every target at one hart on both widths and at two on rv64 but for
+the timer wake's p99 at N = 3 and 4: one sample of sixteen (at one hart 78 and 93 ms on rv64,
+69 and 93 on rv32; 148 ms at two harts on rv64; the next largest under 4 and 24 ms) whose
+window holds the loop's cleanup turn retrying a `disconnect` the busy `erofsd:system` did not
+take, one 100 ms bound at the loop's top by the queue's turn rule
+([steward](../servers/steward.md#failure-and-restart)); the same retry shows in those rounds'
+reply-to-receive p99 (124 and 65 ms, 135 and 64, and 112 at two harts), and at N = 4 in the
+decision wake's p99 (89 and 66 ms, within its 95), where the lease the probe ends waits behind
+that turn. It is the cost of a step the server has not taken
 yet, paid once per retry until the step parks, and the parked step costs the loop nothing
 after. On rv32 at two harts the N = 3 round is not reached: twice at this seed the shell's
 `start_agent` for the round's second or third probe lease was answered `timeout` by its own

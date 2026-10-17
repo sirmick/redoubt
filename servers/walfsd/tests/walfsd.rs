@@ -138,7 +138,8 @@ impl Volume {
         let receive = f.endpoint(walfsd);
         let volume = f.grant(blkd, blkd_receive, walfsd, 1);
         let mut builder = StartupBuilder::new(receive.index().max(volume.index()));
-        builder.handle(ENDPOINT, receive).handle("volume", volume);
+        // The image's entry, as `init` writes it: 1 280 pages with a heap cap of 64.
+        builder.handle(ENDPOINT, receive).handle("volume", volume).budget_pages(1280).heap_pages(64);
         for arg in args {
             builder.arg(arg);
         }

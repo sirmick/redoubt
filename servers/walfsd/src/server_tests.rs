@@ -581,16 +581,25 @@ fn listing_a_directory_reads_it_once_per_window() {
     assert_eq!(t.server.fs.passes - passes, 200usize.div_ceil(64) as u32);
 }
 
-/// The budget holds the image's six buckets at their caps and not a seventh (`BUDGET`'s
-/// arithmetic): a bucket costs 626 688 bytes with six completion calls.
+/// The image's entry holds its buckets at their caps by the entry rule (servers/walfsd.md,
+/// "Serving"): a bucket costs 626 688 bytes with six completion calls, the image's six 3 760 128
+/// (918 pages), which with the heap cap's 64 and the stack's bound 128 rounds to the entry's
+/// 1 280; the entry leaves 1 088 pages of budget, seven such buckets and not an eighth.
 #[test]
-fn the_limits_fit_the_budget() {
+fn the_image_entry_holds_its_buckets() {
     let bucket = u64::from(limits(1).in_flight) * COST.in_flight
         + 32 * COST.file
         + 8 * COST.state
         + 128 * COST.request
         + 32 * COST.page;
     assert_eq!(bucket, 626_688);
-    assert!(limits(6).fits(&COST, BUDGET));
-    assert!(!limits(7).fits(&COST, BUDGET));
+    assert_eq!(limits(1).need(&COST), Some(bucket));
+    assert_eq!(limits(6).need(&COST), Some(3_760_128));
+    let page = PAGE_SIZE as u64;
+    assert_eq!(3_760_128u64.div_ceil(page) + 64 + redoubt_rt::server::LAUNCHED_STACK_PAGES, 1110);
+    let budget = redoubt_rt::server::budget_of(1280, 64);
+    assert_eq!(budget, 1088 * page);
+    assert!(limits(6).fits(&COST, budget));
+    assert!(limits(7).fits(&COST, budget));
+    assert!(!limits(8).fits(&COST, budget));
 }

@@ -1770,6 +1770,70 @@ mod tests {
         }
     }
 
+    /// A shared server's usable budget is its manifest entry's pages less its heap cap and its
+    /// stack, and every bucket at its caps must fit it or the server does not start
+    /// (`redoubt_rt::server::budget`; servers/serving.md, `admit`). So the entry rule
+    /// (servers/walfsd.md, "Serving") holds for every entry in the tree: its pages are at least
+    /// what its `buckets=N` at their caps need, plus its heap cap and the stack's bound; a
+    /// manifest sizes by the rule, never by what its case happens to use. The servers whose
+    /// programs derive their budget from the block: `erofsd`, `bootfsd`, `walfsd`, `littlefsd`,
+    /// `keyd` and `ipd`.
+    #[test]
+    fn every_manifest_entry_holds_its_buckets_at_their_caps() {
+        use redoubt_rt::server::{LAUNCHED_STACK_PAGES, Limits, buckets};
+        let number = |v: &serde_json::Value| -> u64 {
+            v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse().ok())).unwrap_or_else(|| panic!("{v}"))
+        };
+        let page = redoubt_sys::PAGE_SIZE as u64;
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let mut found = vec![root.join("image/manifest.json")];
+        manifests_under(&root.join("tests/data"), &mut found);
+        let mut checked = 0;
+        for path in found {
+            if !path.extension().is_some_and(|e| e == "json") {
+                continue;
+            }
+            let Ok(json) = serde_json::from_slice::<serde_json::Value>(&std::fs::read(&path).unwrap()) else {
+                continue;
+            };
+            for server in json["servers"].as_array().into_iter().flatten() {
+                let args: Vec<&str> =
+                    server["args"].as_array().into_iter().flatten().filter_map(|a| a.as_str()).collect();
+                // An entry with no count is an `init` refusal case's; `init` says what is wrong with it.
+                let Ok(count) = buckets(&args) else { continue };
+                let need = |limits: Limits, cost| limits.need(cost).unwrap();
+                let need = match server["program"].as_str() {
+                    Some("erofsd") => need(redoubt_erofsd::limits(count), &redoubt_erofsd::COST),
+                    Some("bootfsd") => need(redoubt_bootfsd::limits(count), &redoubt_bootfsd::COST),
+                    Some("walfsd") => need(redoubt_walfsd::limits(count), &redoubt_walfsd::COST),
+                    Some("littlefsd") => need(redoubt_littlefsd::limits(count), &redoubt_littlefsd::COST),
+                    Some("keyd") => need(redoubt_keyd::limits(count), &redoubt_keyd::COST),
+                    // `ipd` sizes from its overrides too; a budget that is never the bound gives
+                    // the worst case's cost.
+                    Some("ipd") => match redoubt_ipd::args::parse(args.iter().copied()) {
+                        Ok(config) => config.sizing(u64::MAX).unwrap().need,
+                        Err(_) => continue,
+                    },
+                    _ => continue,
+                };
+                let pages = number(&server["budget"]["pages"]);
+                let heap = server.get("heap_pages").map_or(0, number);
+                let least = need.div_ceil(page) + heap + LAUNCHED_STACK_PAGES;
+                assert!(
+                    pages >= least,
+                    "{path:?} {}: {pages} pages hold fewer than its {count} buckets at their caps need \
+                     ({need} bytes, {} pages) beside a heap cap of {heap} and the stack's bound of \
+                     {LAUNCHED_STACK_PAGES}: at least {least}, {} by the entry rule",
+                    server["name"],
+                    need.div_ceil(page),
+                    least.next_multiple_of(256)
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked >= 6 * 20, "the tree's manifests were not found ({checked} entries)");
+    }
+
     /// A case out of the whole run runs only when named in full; any other case as before.
     #[test]
     fn a_case_out_of_the_whole_run_runs_only_by_name() {

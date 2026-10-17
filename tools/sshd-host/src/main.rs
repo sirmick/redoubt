@@ -27,7 +27,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use console::Console;
 use redoubt_keyd::keys::Keys;
-use redoubt_keyd::server::{BUDGET, COST, KeyServer, answer_with, limits};
+use redoubt_keyd::server::{COST, KeyServer, answer_with, limits};
 use redoubt_rt::abi::{Error, Handle, Labels, ReceivedHandles};
 use redoubt_rt::ipc::Caller;
 use redoubt_rt::server::minted::Minter;
@@ -88,7 +88,9 @@ impl Host {
         let keys = Keys::from_args([keyfile::host_key_arg("host", seed)].iter().map(String::as_str))
             .map_err(|e| anyhow::anyhow!("keyd refused the host key: {e:?}"))?;
         let public = *keys.get(0).context("no host key")?.public();
-        let keyd = KeyServer::new(keys, limits(16), &COST, BUDGET, 1)
+        // The image's `keyd` entry's budget (256 pages, a heap cap of 8), as the program derives
+        // it from its startup block.
+        let keyd = KeyServer::new(keys, limits(16), &COST, redoubt_rt::server::budget_of(256, 8), 1)
             .map_err(|_| anyhow::anyhow!("keyd's limits"))?;
         Ok((Host { keyd, logins, log }, public))
     }

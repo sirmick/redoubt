@@ -8,7 +8,7 @@
 
 extern crate alloc;
 
-use redoubt_erofsd::{BUDGET, COST, Erofsd, limits};
+use redoubt_erofsd::{COST, Erofsd, limits};
 use redoubt_fileserver::program::{Started, start};
 use redoubt_rt::server::ninep::{NineServer, refuse_malformed};
 use redoubt_rt::start::say;
@@ -24,7 +24,7 @@ pub const CORRUPT: &str = "erofsd: the volume does not read as EROFS, and is ser
 /// Serves until the endpoint is destroyed.
 pub fn serve(startup: &Startup) -> u32 {
     // Nine pages lent to each call: the most sectors one read carries, and the message around them.
-    let fits = |buckets| limits(buckets).fits(&COST, BUDGET);
+    let fits = |buckets, budget| limits(buckets).fits(&COST, budget);
     let Started { endpoint, labels, buckets, range } = match start(startup, 9, fits) {
         Ok(started) => started,
         Err(code) => return code,

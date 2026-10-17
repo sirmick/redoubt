@@ -244,9 +244,16 @@ fn the_published_bytes_are_bounded() {
 }
 
 /// Every bucket at its cap fits the budget the manifest gives this server (servers/serving.md R26):
-/// the image's 5 buckets and one more, and no more than [`BUDGET`] pays for.
+/// the image's six at their caps by the entry rule (servers/walfsd.md, "Serving"): a bucket is
+/// 165 888 bytes, six 995 328 (243 pages), and the entry of 4 096 pages with a heap cap of 2 304
+/// leaves 1 664 pages of budget, forty-one such buckets and not a forty-second.
 #[test]
-fn the_limits_fit_the_budget() {
-    assert!(limits(6).fits(&COST, BUDGET));
-    assert!(!limits(7).fits(&COST, BUDGET));
+fn the_image_entry_holds_its_buckets() {
+    assert_eq!(limits(1).need(&COST), Some(165_888));
+    assert_eq!(limits(6).need(&COST), Some(995_328));
+    let budget = redoubt_rt::server::budget_of(4096, 2304);
+    assert_eq!(budget, 1664 * PAGE_SIZE as u64);
+    assert!(limits(6).fits(&COST, budget));
+    assert!(limits(41).fits(&COST, budget));
+    assert!(!limits(42).fits(&COST, budget));
 }

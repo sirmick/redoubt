@@ -16,7 +16,7 @@ session read from the bundle?" is the list it was built from, not a filter it ap
 
 ### Serving `/boot`
 
-<details><summary>Status: built · tested (10)</summary>
+<details><summary>Status: built · tested (11)</summary>
 
 - bench:r4-host-tests
 - bench:bootfsd-build
@@ -27,7 +27,8 @@ session read from the bundle?" is the list it was built from, not a filter it ap
 - host:redoubt-bootfsd::the_directory_lists_exactly_the_public_list_in_order
 - host:redoubt-bootfsd::the_conformance_vectors_run_against_bootfsd
 - host:redoubt-bootfsd::serving_connection_rolls_back_discard_missing_capability_and_error
-- host:redoubt-bootfsd::the_limits_fit_the_budget
+- host:redoubt-bootfsd::the_image_entry_holds_its_buckets
+- host:testbench::every_manifest_entry_holds_its_buckets_at_their_caps
 
 </details>
 
@@ -48,10 +49,14 @@ endpoint also serves `ninep_common` ([wire](wire.md#ninep_common)).
 - **Admission** ([R26 (admission fairness)](serving.md#r26-admission-fairness)): at most 32 open
   fids, 8 minted connections, 2 multiplexed connections' completion calls, 64 of their requests
   and 2 pages they brought ([serving](serving.md#multiplexed-connections)) per (account, label
-  set), and per badge for account 0, across at most `buckets=N` of those at once, sized to fit its
-  1 MiB budget: a bucket at its caps costs 165,888 bytes, so six fit, and the image needs five
-  (`init`, the steward, and alice's `{}` and `{alice-secrets}` and bob's `{}` domains), so each
-  more principal's domain costs one more; a block with no `buckets=N`, or one the budget cannot
+  set), and per badge for account 0, across at most `buckets=N` of those at once, sized to fit
+  the budget its manifest entry gives, the entry's pages less its heap cap and stack, by the entry
+  rule ([walfsd](walfsd.md#serving)): a bucket at its caps costs 165,888 bytes; the image needs
+  five (`init`, the steward, and alice's `{}` and `{alice-secrets}` and bob's `{}` domains) and
+  asks six, a case's extra client the sixth, 995,328 bytes or 243 pages, which with the heap cap's
+  2,304 (the published entries live there) and the stack's 128 round to 2,816 of the image's
+  4,096; the entry leaves 1,664 pages of budget, forty-one such buckets, so each more principal's
+  domain costs one more; a block with no `buckets=N` or no budget, or a count the budget cannot
   hold, and `bootfsd` does not start ([init](init.md#the-boot-manifest)).
 
 ### Filling it

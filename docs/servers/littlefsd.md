@@ -23,7 +23,7 @@ a flash medium, and for the cases that ask for a littlefs volume.
 
 ### Volumes, connections and labels
 
-<details><summary>Status: built · tested (37)</summary>
+<details><summary>Status: built · tested (38)</summary>
 
 - bench:littlefsd-boot
 - bench:littlefsd-confined-labelled
@@ -32,7 +32,8 @@ a flash medium, and for the cases that ask for a littlefs volume.
 - bench:littlefsd-large-directory
 - bench:littlefsd-one-volume
 - host:testbench::the_servers_admit_what_a_manifest_lets_one_account_hold
-- host:redoubt-littlefsd::the_limits_fit_the_budget
+- host:testbench::every_manifest_entry_holds_its_buckets_at_their_caps
+- host:redoubt-littlefsd::the_manifests_entry_holds_its_buckets
 - host:redoubt-littlefsd::attach_walk_open_read_write
 - host:redoubt-littlefsd::files_and_directories_survive_a_remount
 - host:redoubt-littlefsd::a_removed_files_other_fids_get_removed
@@ -118,9 +119,12 @@ a flash medium, and for the cases that ask for a littlefs volume.
 - **Admission** is the serving library's, per (account, label set) with a fair share per badge
   ([R26 (admission fairness)](serving.md#r26-admission-fairness)): 32 fids, 8 minted
   connections, 6 multiplexed connections' completion calls, 128 of their requests and 32 pages
-  they brought ([serving](serving.md#multiplexed-connections)) per bucket, sized to fit a 3 MiB
-  budget (a bucket at its caps is 626,688 bytes; the manifests' four take 2,506,752 and a fifth
-  fits); a `disconnect` frees a client's fids. The completion calls are not a guess: a bucket is
+  they brought ([serving](serving.md#multiplexed-connections)) per bucket, sized to fit the
+  budget its manifest entry gives, the entry's pages less its heap cap and stack, by the entry rule
+  ([walfsd](walfsd.md#serving)): a bucket at its caps is 626,688 bytes; the manifests' four take
+  2,506,752, 612 pages, which with no heap cap and the stack's 128 round to 768 of their entries'
+  1,024, and the entry leaves 896 pages of budget, five such buckets and not a sixth; a
+  `disconnect` frees a client's fids. The completion calls are not a guess: a bucket is
   one account's, so they are what a manifest lets one account have open at once, its console
   session, its cap of live contexts per label set, its leases and one spare for a context
   detaching while another attaches (its connection lives until the relay ends), and the bench

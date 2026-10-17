@@ -1,0 +1,91 @@
+description = "A manifest of six principals boots, and the sixth logs in (docs/servers/serving.md, \"admit\"; docs/servers/walfsd.md, \"Serving\"; docs/servers/init.md, \"The boot manifest\"): every shared server's usable budget is its manifest entry's pages less its heap cap and stack, so a manifest asking ten buckets of keyd, bootfsd and erofsd:system, eleven of ipd, ten and nine of the two walfsd volumes and nine of consoled starts every server, where a budget fixed in each program held six and init rebooted at the first refusal. The entries are sized by the entry rule (walfsd's volumes at 1,792 pages for ten and nine buckets), never by what this case uses. Alice's console session comes up and erin, the sixth principal, logs in over ssh, evaluates an expression and exits. The verdicts are init's lines, sshd's login line and erin's own output and exit status (rule F)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The image's programs (steward-many-sessions's list), with this case's manifest: six principals
+# with a home each, alice labelled as the image has her.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-bootfsd", bin = "bootfsd" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-verityd", bin = "verityd" },
+    { package = "redoubt-netd", bin = "netd" },
+    { package = "redoubt-ipd", bin = "ipd" },
+    { package = "redoubt-walfsd", bin = "walfsd" },
+    { package = "redoubt-erofsd", bin = "erofsd" },
+    { package = "beamlet-redoubt", bin = "beamlet", workspace = "userland/otp" },
+    { package = "redoubt-piped", bin = "piped" },
+    { package = "redoubt-steward-server", bin = "steward" },
+    { package = "redoubt-sshd", bin = "sshd" },
+    { package = "redoubt-consrelay", bin = "consrelay" },
+]
+# The image needs 1 GiB: six principals' budgets, each holding a shell VM's session, do not fit
+# the users budget 256 MiB leaves (docs/kernel/budgets.md).
+memory_mib = 1024
+# Two shell VMs booted in turn (steward-context-cap's bound per VM).
+timeout_secs = 1200
+expect = [
+    '^init: started keyd$',
+    '^init: started consoled, and writes through it$',
+    '^init: started bootfsd, console [0-9a-f]{16}$',
+    '^init: started ipd, console [0-9a-f]{16}$',
+    '^init: started walfsd:data, console [0-9a-f]{16}$',
+    '^init: started walfsd:alice-secrets, console [0-9a-f]{16}$',
+    '^init: started erofsd:system, console [0-9a-f]{16}$',
+    '^init: started sshd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
+    '^init: started steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+    # Alice's console session, typed below.
+    '\{:c, :console\}',
+]
+# The sessions start once `expect` has matched: erin's login is asked for here.
+expect_after = [
+    '^\[con [0-9a-f]{16}\] sshd: login erin: session [0-9a-f]{16}, labels \[\]$',
+]
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    '^init: .* (exited|faulted|was killed)',
+    'init: restarted',
+    'EXCEPTION',
+    'steward: the core exited',
+    'steward: a step failed',
+    'sshd: login .*: refused',
+    ':eio',
+    ':refused',
+]
+
+# Erin, the sixth principal: her login takes a bucket at every shared server.
+[[session]]
+user = "erin"
+pty = true
+steps = [
+    { expect = '/home/erin \([0-9]+\)> ' },
+    { send = "{:erin, :sixth}\n" },
+    { expect = '\{:erin, :sixth\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "exit\n" },
+    { exit = 0 },
+]
+
+# Alice's console session, once its banner is out: typed ahead of its prompt.
+[[input]]
+after = 'Redoubt shell, on Elixir'
+send = "{:c, :console}\n"
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/steward/six-principals.manifest.json" }
+verity = "image/userland.toml"
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]
+forward = [22]

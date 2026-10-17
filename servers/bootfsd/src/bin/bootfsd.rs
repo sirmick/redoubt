@@ -11,7 +11,7 @@ extern crate alloc;
 
 use alloc::vec::Vec;
 
-use redoubt_bootfsd::server::{BUDGET, BootFs, Bootfs, COST, limits};
+use redoubt_bootfsd::server::{BootFs, Bootfs, COST, limits};
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::server::ninep::NineServer;
 use redoubt_rt::server::own_args;
@@ -22,8 +22,10 @@ redoubt_rt::entry!(serve);
 
 /// The startup block named no endpoint for `bootfsd` to receive on.
 pub const NO_ENDPOINT: u32 = 2;
-/// No `buckets=N` in the arguments, or one whose buckets at their caps do not fit the budget or
-/// the open-call headroom: the manifest sized this server wrongly, and it does not guess.
+/// No `buckets=N` in the arguments, a startup block naming no budget, or a count whose buckets at
+/// their caps do not fit the budget (the entry's pages less its heap cap and stack,
+/// `redoubt_rt::server::budget`) or the open-call headroom: the manifest sized this server
+/// wrongly, and it does not guess.
 pub const BAD_LIMITS: u32 = 4;
 /// The `public` list in the arguments was refused
 /// ([`redoubt_bootfsd::SetupError`]): too many entries, one without a canonical `LENGTH:` before
@@ -43,7 +45,8 @@ pub fn serve(startup: &Startup) -> u32 {
     let Ok(buckets) = redoubt_rt::server::buckets(&args) else { return BAD_LIMITS };
     let limits = limits(buckets);
     let Ok(fs) = BootFs::new(own_args(&args)) else { return BAD_PUBLIC_LIST };
-    if !limits.fits(&COST, BUDGET) {
+    let Some(budget) = redoubt_rt::server::budget(startup) else { return BAD_LIMITS };
+    if !limits.fits(&COST, budget) {
         return BAD_LIMITS;
     }
     let Ok(random) = redoubt_rt::handle::random_u64() else { return NO_RANDOM };

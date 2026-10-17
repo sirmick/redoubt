@@ -35,8 +35,11 @@ redoubt-rt = { path = "../../libs/rt" } # the heap record's format
 redoubt-model = { path = "../../model" }
 # The admission constants the shared servers hold a bucket to (case.rs): the writable volume
 # servers' completion calls, and every server's minted connections, must be what the tree's
-# manifests let one account have open at once, whoever minted them.
+# manifests let one account have open at once, whoever minted them; and every manifest entry's
+# pages must hold its count of buckets at their caps beside its heap cap and stack.
 redoubt-walfsd = { path = "../../servers/walfsd" }
 redoubt-erofsd = { path = "../../servers/erofsd" }
 redoubt-bootfsd = { path = "../../servers/bootfsd" }
 redoubt-consoled = { path = "../../servers/consoled" }
+redoubt-keyd = { path = "../../servers/keyd" }
+redoubt-ipd = { path = "../../servers/ipd" }

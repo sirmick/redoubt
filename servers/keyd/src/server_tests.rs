@@ -29,6 +29,10 @@ const LOGIN_SEED: &str = "333333333333333333333333333333333333333333333333333333
 /// machine it is one word of the kernel's CSPRNG (servers/serving.md R27).
 const TEST_RANDOM: u64 = 0x1234_5678_9abc_def0;
 
+/// The image's `keyd` entry's budget: 256 pages with a heap cap of 8 (image/manifest.json), as
+/// the program derives it from its startup block (`redoubt_rt::server::budget`).
+const IMAGE_BUDGET: u64 = redoubt_rt::server::budget_of(256, 8);
+
 /// The root badges, in manifest order (servers/keyd.md, "Keys and purposes").
 const HOST_BADGE: u64 = 1;
 const AUDIT_BADGE: u64 = 2;
@@ -36,7 +40,7 @@ const AUDIT_BADGE: u64 = 2;
 fn server() -> KeyServer {
     let args = [format!("host,ssh_host,{HOST_SEED}"), format!("audit,audit,{AUDIT_SEED}")];
     let keys = Keys::from_args(args.iter().map(String::as_str)).unwrap();
-    KeyServer::new(keys, limits(16), &COST, BUDGET, TEST_RANDOM).unwrap()
+    KeyServer::new(keys, limits(16), &COST, IMAGE_BUDGET, TEST_RANDOM).unwrap()
 }
 
 fn caller(badge: u64, account: u64, labels: &[u64]) -> Caller {
@@ -814,20 +818,29 @@ fn one_requests_work_is_bounded() {
 }
 
 /// The limits this build ships are the ones servers/serving.md R26 asks for: every bucket at its
-/// cap fits the budget, the open calls they allow leave the headroom, and a cap can seat a share.
+/// cap fits the budget the image's entry gives (the entry rule, servers/walfsd.md "Serving"), the
+/// open calls they allow leave the headroom, and a cap can seat a share.
 #[test]
-fn the_limits_are_sized_as_containment_says() {
-    assert!(limits(16).fits(&COST, BUDGET));
+fn the_image_entry_holds_its_buckets() {
+    // A bucket at its caps is 8 grants at 512 bytes; the image's six take 24 576, six pages, and
+    // with the heap cap's 8 and the stack's bound 128 the rule rounds to the entry's 256, which
+    // leaves 120 pages of budget: more buckets than `MAX_BUCKETS` allows.
+    assert_eq!(limits(1).need(&COST), Some(4096));
+    assert_eq!(limits(6).need(&COST), Some(24_576));
+    assert_eq!(IMAGE_BUDGET, 120 * redoubt_rt::abi::PAGE_SIZE as u64);
+    assert!(limits(redoubt_rt::server::MAX_BUCKETS).fits(&COST, IMAGE_BUDGET));
     let keys = || Keys::from_args([format!("k,audit,{AUDIT_SEED}")].iter().map(String::as_str)).unwrap();
-    assert!(KeyServer::new(keys(), limits(16), &COST, BUDGET, TEST_RANDOM).is_ok());
+    assert!(KeyServer::new(keys(), limits(16), &COST, IMAGE_BUDGET, TEST_RANDOM).is_ok());
     // Every bucket at its cap: what the budget must cover, and one byte less is refused rather
     // than rounded (servers/serving.md R26).
-    let need = u64::from(limits(16).buckets) * u64::from(limits(16).state) * COST.state;
-    assert!(need <= BUDGET, "the shipped budget covers the shipped caps");
+    let need = limits(16).need(&COST).unwrap();
+    assert_eq!(need, u64::from(limits(16).buckets) * u64::from(limits(16).state) * COST.state);
     assert!(KeyServer::new(keys(), limits(16), &COST, need, TEST_RANDOM).is_ok());
     assert!(KeyServer::new(keys(), limits(16), &COST, need - 1, TEST_RANDOM).is_err());
     // A cap of one cannot seat a share and its sponsor.
-    assert!(KeyServer::new(keys(), Limits { state: 1, ..limits(16) }, &COST, BUDGET, TEST_RANDOM).is_err());
+    assert!(
+        KeyServer::new(keys(), Limits { state: 1, ..limits(16) }, &COST, IMAGE_BUDGET, TEST_RANDOM).is_err()
+    );
     // `keyd` parks no calls, so it asks for no open calls beyond the ones it is answering.
     assert_eq!(limits(16).in_flight, 0);
     assert_eq!(limits(16).open_calls(), 0);

@@ -16,14 +16,16 @@
 //!   the minter's until then, so the minter's share bounds its mints and the holder's caps bound what it
 //!   holds ([`crate::server::ninep`], Admission).
 //! - **Caps sized to fit**: at most [`Limits::buckets`] buckets hold anything at once, so that every bucket
-//!   at its cap fits the server's budget ([`Limits::fits`]) and the calls they may hold open sum to less than
-//!   `MAX_OPEN_CALLS` with headroom (checked by [`Admission::new`]). Multiplexed requests and their pages
-//!   ([`Resource::Requests`], [`Resource::Pages`]) are sends, not open calls, so they are outside that
-//!   headroom, and only the budget bounds them. A bucket beyond that is refused. Stated residual: a server
-//!   sized for fewer buckets than it serves refuses the latecomers, which tells them that others hold state -
-//!   across accounts, and between the label sets of one account, where it is a channel out of a vault
-//!   (servers/serving.md, "Residual risks"). Sizing closes it: a server's manifest sizes its bucket count to
-//!   the (account, label set)s it serves, so the cap never binds in normal use.
+//!   at its cap fits the server's budget ([`Limits::fits`] against [`budget`], the manifest entry's pages
+//!   less the heap cap and the stack: the manifest sizes the budget as it sizes the count) and the calls they
+//!   may hold open sum to less than `MAX_OPEN_CALLS` with headroom (checked by [`Admission::new`]).
+//!   Multiplexed requests and their pages ([`Resource::Requests`], [`Resource::Pages`]) are sends, not open
+//!   calls, so they are outside that headroom, and only the budget bounds them. A bucket beyond that is
+//!   refused. Stated residual: a server sized for fewer buckets than it serves refuses the latecomers, which
+//!   tells them that others hold state - across accounts, and between the label sets of one account, where it
+//!   is a channel out of a vault (servers/serving.md, "Residual risks"). Sizing closes it: a server's
+//!   manifest sizes its bucket count to the (account, label set)s it serves, so the cap never binds in normal
+//!   use.
 //! - **Caps big enough for a share to mean anything**: a non-zero cap is at least [`SMALLEST_CAP`], so that
 //!   one badge alone can never fill its bucket (its share is at most half of it) and a second badge - the
 //!   sponsor an agent shares the bucket with - always finds a slot. With three or more badges a bucket can
@@ -144,9 +146,8 @@ impl Limits {
     /// The calls every bucket at its cap holds open together.
     pub fn open_calls(&self) -> u64 { u64::from(self.buckets) * u64::from(self.in_flight) }
 
-    /// Whether every bucket at its cap fits `budget` bytes: the server's own use comes on top,
-    /// and a server's budget must also cover lends of abandoned calls (kernel/ipc.md R3).
-    pub fn fits(&self, cost: &Cost, budget: u64) -> bool {
+    /// What every bucket at its cap costs together, in bytes; `None` past `u64`.
+    pub fn need(&self, cost: &Cost) -> Option<u64> {
         let one = [
             u64::from(self.in_flight).checked_mul(cost.in_flight),
             u64::from(self.files).checked_mul(cost.file),
@@ -155,8 +156,36 @@ impl Limits {
             u64::from(self.pages).checked_mul(cost.page),
         ];
         let bucket = one.iter().try_fold(0u64, |sum, part| sum.checked_add((*part)?));
-        bucket.and_then(|b| b.checked_mul(u64::from(self.buckets))).is_some_and(|all| all <= budget)
+        bucket.and_then(|b| b.checked_mul(u64::from(self.buckets)))
     }
+
+    /// Whether every bucket at its cap fits `budget` bytes ([`budget`]: the server's entry less
+    /// its heap cap and stack); a server's budget must also cover lends of abandoned calls
+    /// (kernel/ipc.md R3).
+    pub fn fits(&self, cost: &Cost, budget: u64) -> bool { self.need(cost).is_some_and(|all| all <= budget) }
+}
+
+/// The largest first-thread stack a launcher may give a program, in pages: the loader stub's
+/// `MAX_STACK_PAGES` (servers/init.md, "Stacks"). A program does not learn its own stack's size
+/// (the startup block carries its budget's pages and its heap cap, not its stack), so
+/// [`budget`] counts the stack at this bound.
+pub const LAUNCHED_STACK_PAGES: u64 = 128;
+
+/// A shared server's usable budget, in bytes, from its startup block (servers/serving.md,
+/// `admit`; servers/walfsd.md, the entry rule): its entry's pages less its heap cap and its
+/// stack at [`LAUNCHED_STACK_PAGES`], the bound the program knows, times the page. `None` when
+/// the launcher named no budget: such a server refuses to start, as one not told its buckets
+/// does, since a budget fixed in code cannot follow the manifest. What is left is what every
+/// bucket at its caps must fit ([`Limits::fits`], [`Admission::fits`]).
+pub fn budget(startup: &crate::startup::Startup) -> Option<u64> {
+    let heap = startup.heap_pages().map_or(0, |pages| pages as u64);
+    startup.budget_pages().map(|pages| budget_of(pages, heap))
+}
+
+/// [`budget`]'s arithmetic, for an entry of `pages` with a heap cap of `heap_pages` (0 for an
+/// uncapped heap, which the budget alone bounds).
+pub const fn budget_of(pages: u64, heap_pages: u64) -> u64 {
+    pages.saturating_sub(heap_pages).saturating_sub(LAUNCHED_STACK_PAGES) * redoubt_sys::PAGE_SIZE as u64
 }
 
 /// Admission was refused: the bucket or the share is at its limit for that resource, too many
@@ -276,10 +305,13 @@ impl Admission {
         Ok(admission)
     }
 
-    /// Whether the worst case fits `budget` bytes: as in [`Admission::with_overrides`], each
-    /// override slot at the larger of its cap and the default, per resource, and every other slot
-    /// at the default.
-    pub fn fits(&self, cost: &Cost, budget: u64) -> bool {
+    /// Whether the worst case fits `budget` bytes ([`need`](Self::need)).
+    pub fn fits(&self, cost: &Cost, budget: u64) -> bool { self.need(cost).is_some_and(|all| all <= budget) }
+
+    /// What the worst case costs, in bytes: as in [`Admission::with_overrides`], each override
+    /// slot at the larger of its cap and the default, per resource, and every other slot at the
+    /// default; `None` past `u64`.
+    pub fn need(&self, cost: &Cost) -> Option<u64> {
         let multiplexed = u64::from(self.limits.requests)
             .checked_mul(cost.request)
             .zip(u64::from(self.limits.pages).checked_mul(cost.page))
@@ -298,7 +330,7 @@ impl Admission {
         let rest = u64::from(self.limits.buckets.saturating_sub(self.overrides.len() as u32));
         let others = one(self.limits.in_flight, self.limits.files, self.limits.state)
             .and_then(|b| b.checked_mul(rest));
-        named.zip(others).and_then(|(a, b)| a.checked_add(b)).is_some_and(|all| all <= budget)
+        named.zip(others).and_then(|(a, b)| a.checked_add(b))
     }
 
     pub fn limits(&self) -> &Limits { &self.limits }
@@ -575,6 +607,30 @@ mod tests {
         assert!(l.fits(&cost, need));
         assert!(!l.fits(&cost, need - 1));
         assert!(!Limits { buckets: u32::MAX, ..l }.fits(&Cost { file: u64::MAX, ..cost }, u64::MAX));
+        assert_eq!(l.need(&cost), Some(need));
+        assert_eq!(Limits { buckets: u32::MAX, ..l }.need(&Cost { file: u64::MAX, ..cost }), None);
+    }
+
+    /// A server's budget is its entry's pages less its heap cap and its stack at the launched
+    /// bound (the startup block carries no stack), times the page; a block naming no budget
+    /// gives none, and an uncapped heap takes nothing off.
+    #[test]
+    fn a_servers_budget_is_its_entrys_pages_less_its_heap_cap_and_stack() {
+        use crate::startup::{Startup, StartupBuilder};
+        let page = redoubt_sys::PAGE_SIZE as u64;
+        assert_eq!(budget_of(1280, 64), (1280 - 64 - LAUNCHED_STACK_PAGES) * page);
+        assert_eq!(budget_of(1024, 0), (1024 - LAUNCHED_STACK_PAGES) * page);
+        assert_eq!(budget_of(LAUNCHED_STACK_PAGES, 0), 0);
+        assert_eq!(budget_of(100, 200), 0);
+        let block = |heap: u32, pages: u64| {
+            StartupBuilder::new(0).heap_pages(heap).budget_pages(pages).finish().unwrap()
+        };
+        let capped = block(64, 1280);
+        assert_eq!(budget(&Startup::parse(&capped).unwrap()), Some(budget_of(1280, 64)));
+        let uncapped = block(0, 1024);
+        assert_eq!(budget(&Startup::parse(&uncapped).unwrap()), Some(budget_of(1024, 0)));
+        let none = block(64, 0);
+        assert_eq!(budget(&Startup::parse(&none).unwrap()), None);
     }
 
     use alloc::vec;

@@ -95,7 +95,8 @@ with nothing below it.
     355,584 bytes at 255 (rv64) and 183,552 at 31 (rv32). The 2 MiB budget holds `init`'s and
     10 default buckets on rv64 (1,973,504; an eleventh does not fit) and `init`'s and 11 on rv32
     (1,963,264); the image's manifest asks for 5. The entry's pages follow the entry rule
-    ([walfsd](walfsd.md#serving)): 512 of budget, 24 of heap and 6 of stack, within its 1,024.
+    ([walfsd](walfsd.md#serving)) with this constant as the budget: 512 of it, 24 of heap and the
+    stack's bound of 128, 664, so 768 within its 1,024.
   - *The count*: `buckets=N` is the manifest's principal domains plus one for `init`, whose
     bucket every system caller's console shares; the steward's own console is `init`'s minting
     and counts there, not as a bucket of its own.

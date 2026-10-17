@@ -11,7 +11,7 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 use redoubt_keyd::keys::Keys;
-use redoubt_keyd::server::{BUDGET, COST, KeyServer, limits};
+use redoubt_keyd::server::{COST, KeyServer, limits};
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::server::own_args;
 use redoubt_rt::startup::Startup;
@@ -20,8 +20,10 @@ redoubt_rt::entry!(serve);
 
 /// The startup block named no endpoint for `keyd` to receive on.
 pub const NO_ENDPOINT: u32 = 2;
-/// No `buckets=N` in the arguments, or one whose buckets at their caps do not fit the budget or
-/// the open-call headroom: the manifest sized this server wrongly, and it does not guess.
+/// No `buckets=N` in the arguments, a startup block naming no budget, or a count whose buckets at
+/// their caps do not fit the budget (the entry's pages less its heap cap and stack,
+/// `redoubt_rt::server::budget`) or the open-call headroom: the manifest sized this server
+/// wrongly, and it does not guess.
 pub const BAD_LIMITS: u32 = 4;
 /// A key argument was refused ([`redoubt_keyd::keys::KeyError`]): not `name,purpose,seed`, a
 /// name outside the manifest's rule, an unknown purpose, a seed that is not 64 lower-case hex
@@ -45,7 +47,8 @@ pub fn serve(startup: &Startup) -> u32 {
     // A predictable first granted badge would be a hole across a restart (servers/serving.md
     // R27), so a `keyd` that cannot draw one does not start.
     let Ok(random) = redoubt_rt::handle::random_u64() else { return NO_RANDOM };
-    let Ok(mut server) = KeyServer::new(keys, limits(buckets), &COST, BUDGET, random) else {
+    let Some(budget) = redoubt_rt::server::budget(startup) else { return BAD_LIMITS };
+    let Ok(mut server) = KeyServer::new(keys, limits(buckets), &COST, budget, random) else {
         return BAD_LIMITS;
     };
     let endpoint = Endpoint::from_handle(handle);

@@ -116,8 +116,13 @@ const ENDPOINT: &str = "erofsd:system";
 
 impl Volume {
     /// `erofsd` receiving on `erofsd:system` with exactly `args`, on a range holding `bytes`;
-    /// with `volume` false, no range handle at all.
-    fn start(mut bytes: Vec<u8>, args: &[&str], volume: bool) -> Volume {
+    /// with `volume` false, no range handle at all. Its budget is the image's entry.
+    fn start(bytes: Vec<u8>, args: &[&str], volume: bool) -> Volume {
+        Volume::start_with_budget(bytes, args, volume, Some(1024))
+    }
+
+    /// [`Volume::start`] with a budget of `budget` pages in the block, or none.
+    fn start_with_budget(mut bytes: Vec<u8>, args: &[&str], volume: bool, budget: Option<u64>) -> Volume {
         bytes.resize(bytes.len().next_multiple_of(SECTOR), 0);
         let f = fake();
         let disk: Shared = Arc::new(Mutex::new(Disk { bytes, ..Disk::default() }));
@@ -141,7 +146,11 @@ impl Volume {
         let receive = f.endpoint(erofsd);
         let range = f.grant(blkd, blkd_receive, erofsd, 1);
         let mut builder = StartupBuilder::new(receive.index().max(range.index()));
-        builder.handle(ENDPOINT, receive);
+        // The image's entry, as `init` writes it: so many pages with a heap cap of 26.
+        builder.handle(ENDPOINT, receive).heap_pages(26);
+        if let Some(pages) = budget {
+            builder.budget_pages(pages);
+        }
         if volume {
             builder.handle("volume", range);
         }
@@ -307,6 +316,14 @@ fn arguments_it_does_not_understand_or_no_range_stop_it_before_serving() {
     ] {
         let volume = Volume::start(system(), args, true);
         assert_eq!(volume.thread.join().unwrap(), program::BAD_ARGS, "{args:?}");
+    }
+    // A block naming no budget, or one whose pages less the heap cap and the stack's bound hold
+    // fewer than its count's buckets (six at 226 816 bytes are 333 pages): it does not guess a
+    // budget either (servers/walfsd.md, the entry rule).
+    for budget in [None, Some(26 + 128 + 332)] {
+        let args = &["endpoint=erofsd:system", "buckets=6"];
+        let volume = Volume::start_with_budget(system(), args, true, budget);
+        assert_eq!(volume.thread.join().unwrap(), program::BAD_ARGS, "{budget:?} pages");
     }
     let volume = Volume::start(system(), &["endpoint=erofsd:system", "buckets=4"], false);
     assert_eq!(volume.thread.join().unwrap(), program::NO_VOLUME);

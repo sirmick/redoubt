@@ -72,10 +72,12 @@ pub const fn limits(buckets: u32) -> Limits {
 /// badged handle in the kernel, rounded up generously.
 pub const COST: Cost = Cost { in_flight: 0, file: 0, state: 512, request: 0, page: 0 };
 
-/// The bytes of `keyd`'s budget its clients may use between them; its manifest entry gives it
-/// the budget, and [`KeyServer::new`] refuses limits that would not fit
-/// (`limits(buckets).fits(&COST, BUDGET)`).
-pub const BUDGET: u64 = 256 * 1024;
+// The budget every bucket at its caps must fit is the manifest entry's: its pages less its heap
+// cap and stack (`redoubt_rt::server::budget`), which [`KeyServer::new`] checks, never a count in
+// this code. A bucket at its caps costs 8 grants at 512 bytes, 4 096; the image's 6 take 24 576,
+// 6 pages; with the heap cap's 8 and the stack's bound 128, rounded up to 256, the entry rule
+// gives 256, the image's entry, which leaves 120 pages of budget: more such buckets than
+// `MAX_BUCKETS` allows (`the_image_entry_holds_its_buckets`).
 
 /// `keyd`: its keys, the capabilities it has granted, and its admission.
 pub struct KeyServer {
