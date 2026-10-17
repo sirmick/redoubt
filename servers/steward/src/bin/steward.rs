@@ -27,8 +27,9 @@
 //! its top, before it receives again, each within [`CLEANUP_US`]: a `disconnect` by id at the
 //! server that minted it, or `ended` on `sshd`'s channel console. A step a busy or recovering
 //! server does not take in time ends the turn (the rest stay due for the next, after one
-//! receive), is retried at a later turn and dropped after the cap with a line; the loop never
-//! waits more than one such bound on a server while it serves nobody.
+//! receive), is retried at a later turn and parked after the cap with a line, until a call of
+//! the steward's at that server is answered or the server restarts; the loop never waits more
+//! than one such bound on a server while it serves nobody.
 //!
 //! **The console lines at the loop's turn** (the same page): every line the steward says is
 //! queued ([`Console`], the library's `redoubt_steward_server::console`) and written through one
@@ -111,8 +112,8 @@ mod machine {
     /// arrival less the deadline as `deadline_notice`. Each sample's group is the count of the
     /// live leases, itself among them (`N=2`); the counts go out as `LATENCY-COUNT` lines when
     /// the leases are all gone and the case has written the round's marker ([`LATENCY_ROUND`]
-    /// and the round's number) in the console principal's home, and after the second round's,
-    /// `LATENCY-END` with the steward's clock, the window's end. A steward that finds
+    /// and the round's number) in the console principal's home, and after the last round's
+    /// ([`LATENCY_ROUNDS`]), `LATENCY-END` with the steward's clock, the window's end. A steward that finds
     /// [`LATENCY_DONE`] in the console
     /// principal's home at its start exits [`LATENCY_EXIT`] at once: six such exits trip init's
     /// reboot rule, whose reset dumps the kernel's trace the bench's oracle reads.
@@ -126,6 +127,9 @@ mod machine {
     const LATENCY_DONE: &str = "latency-done";
     #[cfg(feature = "latency-probe")]
     const LATENCY_ROUND: &str = "latency-round-";
+    /// The case's rounds: N = 1, 2 and 3 live leases.
+    #[cfg(feature = "latency-probe")]
+    const LATENCY_ROUNDS: usize = 3;
     #[cfg(feature = "latency-probe")]
     const LATENCY_POLL_US: u64 = 500_000;
     #[cfg(feature = "latency-probe")]
@@ -207,6 +211,10 @@ mod machine {
     /// the same reason; a line it did not take stays queued for a later turn
     /// (`redoubt_steward_server::console`).
     const CONSOLE_US: u64 = NOTICE_US;
+    /// The names a cleanup step's server goes by in the queue where the steward reaches it by no
+    /// handle name: its own console's server, and `sshd` for a channel console told `ended`.
+    const CONSOLED_NAME: &str = "consoled";
+    const SSHD_NAME: &str = "sshd";
     /// Open approval channels at most, and so reader threads at most (servers/steward.md, "The
     /// powerbox and approvals"): the steward's bound on its own threads beside the watchers,
     /// declared as theirs is. An open past it is refused, and the person's `ssh approve@box`
@@ -555,7 +563,7 @@ mod machine {
             let server = self.unattached(name)?;
             let scope = Budget::from_handle(scope);
             let (endpoint, id) =
-                server.new_connection(&mut self.lend, root, 0, Some(&scope)).map_err(|_| Error::Refused)?;
+                server.new_connection(&mut self.lend, root, 0, Some(&scope)).map_err(minted)?;
             Ok(Some(self.hold(endpoint.handle(), Some((Via::Server(name.into()), id)), false)))
         }
 
@@ -566,8 +574,7 @@ mod machine {
                 return Ok(Nine::new(Endpoint::from_handle(*handle)));
             }
             let server = self.unattached(name)?;
-            let (endpoint, _) =
-                server.new_connection(&mut self.lend, root, quota, None).map_err(|_| Error::Refused)?;
+            let (endpoint, _) = server.new_connection(&mut self.lend, root, quota, None).map_err(minted)?;
             self.carved.insert(key.into(), (endpoint.handle(), name.into()));
             Ok(Nine::new(endpoint))
         }
@@ -588,9 +595,8 @@ mod machine {
         ) -> Result<Option<u64>, Error> {
             let kept = self.carve(key, name, root, quota)?;
             let scope = Budget::from_handle(scope);
-            let (endpoint, id) = kept
-                .new_connection(&mut self.lend, below, below_quota, Some(&scope))
-                .map_err(|_| Error::Refused)?;
+            let (endpoint, id) =
+                kept.new_connection(&mut self.lend, below, below_quota, Some(&scope)).map_err(minted)?;
             Ok(Some(self.hold(endpoint.handle(), Some((Via::Carved(key.into()), id)), false)))
         }
 
@@ -778,7 +784,10 @@ mod machine {
                             let scope = Budget::from_handle(scope);
                             let (endpoint, id) = cons
                                 .new_connection(&mut self.lend, "", 0, Some(&scope))
-                                .map_err(|_| Error::Refused)?;
+                                .map_err(|e| match e {
+                                    redoubt_client::Error::Sys(Error::Timeout) => Error::Timeout,
+                                    _ => Error::Refused,
+                                })?;
                             Ok(Some(self.hold(endpoint.handle(), Some((Via::Console, id)), false)))
                         }
                         (None, None) => Ok(None),
@@ -815,13 +824,13 @@ mod machine {
         /// Gives the connection held under `key` back to its server within [`CLEANUP_US`]:
         /// `ended` for `sshd`'s channel console (servers/steward.md, "Authentication and
         /// sessions"), else `disconnect` by its id through what minted it. A server that did not
-        /// take the call in time is `Timeout`, and the record stays for the retry; on the last
-        /// attempt it goes anyway, with a line (the server's admission for the connection is
-        /// then freed by its own restart). A connection at a server that restarted since has
-        /// no record here ([`Machine::reconnected`]), and a server the steward no longer
-        /// reaches nothing to tell: both are done. The cleanup after a scope's end, never the
-        /// cutoff (R41).
-        fn clean(&mut self, key: u64, last: bool) -> Result<(), Error> {
+        /// take the call in time is `Timeout`, and the record stays for the retry; on the
+        /// attempt that parks the step a line says so, once (the step runs again when that
+        /// server answers a call of the steward's, or goes with its restart). A connection at a
+        /// server that restarted since has no record here ([`Machine::reconnected`]), and a
+        /// server the steward no longer reaches nothing to tell: both are done. The cleanup
+        /// after a scope's end, never the cutoff (R41).
+        fn clean(&mut self, key: u64, parks: bool) -> Result<(), Error> {
             let Some(held) = self.held.get(&key) else { return Ok(()) };
             let (told, what) = match (held.console, held.handle, &held.via) {
                 (true, Some(handle), _) => {
@@ -852,24 +861,65 @@ mod machine {
                                     _ => Error::Refused,
                                 })
                             });
-                            (told, "consoled")
+                            (told, CONSOLED_NAME)
                         }
                     };
                     (told.unwrap_or(Ok(())), format!("disconnect {id} at {at}"))
                 }
                 _ => (Ok(()), String::new()),
             };
-            match told {
-                Err(Error::Timeout) if !last => return Err(Error::Timeout),
-                Err(Error::Timeout) => self.out.say(&format!(
-                    "steward: {what} dropped after {TRIES} attempts: the server did not take it\n"
-                )),
-                _ => {}
+            if let Err(Error::Timeout) = told {
+                if parks {
+                    self.out.say(&format!(
+                        "steward: {what} parked after {TRIES} attempts: retried when the server answers\n"
+                    ));
+                }
+                return Err(Error::Timeout);
             }
             if let Some(Held { handle: Some(handle), .. }) = self.held.remove(&key) {
                 let _ = close(handle);
             }
             Ok(())
+        }
+
+        /// By what minted the connection: the carve's server for one minted through a kept
+        /// carve, `consoled` for the UART session's console, `sshd` for its channel console.
+        fn server_of(&self, key: u64) -> Option<String> {
+            let held = self.held.get(&key)?;
+            if held.console {
+                return Some(String::from(SSHD_NAME));
+            }
+            match &held.via.as_ref()?.0 {
+                Via::Server(name) => Some(name.clone()),
+                Via::Carved(k) => self.carved.get(k).map(|(_, s)| s.clone()),
+                Via::Console => Some(String::from(CONSOLED_NAME)),
+            }
+        }
+
+        /// The binding table's server for the slot, as [`Machine::connect`] mints; the console
+        /// slot's is `consoled` only when no channel console waits to be handed over (a channel's
+        /// is `sshd`'s, minted by nobody here); the vault's handle name for a crossing's.
+        fn server_at(&self, owner: &Object, slot: Option<u16>) -> Option<String> {
+            let principal = self.principal(&owner.domain)?;
+            let labels = owner.domain.labels().as_slice();
+            let Some(slot) = slot else {
+                return self.own_lines.vault(&principal, labels).map(|v| v.handle.clone());
+            };
+            let bound = binding(
+                &self.own_lines,
+                &principal,
+                labels,
+                Child::of(owner.kind, labels),
+                slot,
+                self.agent_quota,
+            )?;
+            match bound.how {
+                How::Console if self.console.is_none() && self.relay_vm.is_none() => {
+                    Some(String::from(CONSOLED_NAME))
+                }
+                How::Console => None,
+                how => how.server().map(String::from),
+            }
         }
 
         /// The child is started with copies of the connections held under `connections`; the
@@ -1396,6 +1446,16 @@ mod machine {
         fn now(&mut self) -> u64 { redoubt_rt::handle::time_now().unwrap_or(0) }
     }
 
+    /// A mint's failure as the kernel's error: a server that did not take the call within the
+    /// client's bound is `Timeout` and has answered nothing (a step parked there stays parked);
+    /// one that refused, or answered nothing readable, `Refused`.
+    fn minted(e: redoubt_rt::client::ClientError) -> Error {
+        match e {
+            redoubt_rt::client::ClientError::Sys(Error::Timeout) => Error::Timeout,
+            _ => Error::Refused,
+        }
+    }
+
     /// `disconnect` by `id` through `nine`, within [`CLEANUP_US`], as the kernel's error: a server
     /// that did not take the call is `Timeout`; one that refused, or answered nothing readable,
     /// `Refused`.
@@ -1709,7 +1769,7 @@ mod machine {
         badge: u64,
         /// Samples taken since the last flush, by measure and group.
         counts: BTreeMap<(&'static str, usize), u64>,
-        /// Flushes so far: the case's rounds, N = 1 and 2.
+        /// Flushes so far: the case's rounds ([`LATENCY_ROUNDS`]).
         rounds: usize,
     }
 
@@ -1723,7 +1783,7 @@ mod machine {
         }
 
         /// The counts, once the domain's leases are all gone: one line per measure and group.
-        /// After the second round's, the window's end, `LATENCY-END` with the steward's clock: the
+        /// After the last round's, the window's end, `LATENCY-END` with the steward's clock: the
         /// oracle judges no destruction ending after it and no sample printed after it (the
         /// marker-file exits that follow reap every lease's VM, none of them a sample).
         fn flush(&mut self, out: &mut Console) {
@@ -1731,7 +1791,7 @@ mod machine {
                 out.say(&format!("steward: LATENCY-COUNT N={n} {measure} {count}\n"));
             }
             self.rounds += 1;
-            if self.rounds == 2 {
+            if self.rounds == LATENCY_ROUNDS {
                 let now = redoubt_rt::handle::time_now().unwrap_or(0);
                 out.say(&format!("steward: LATENCY-END {now}\n"));
             }
@@ -1962,7 +2022,7 @@ mod machine {
             // has marked the round's end (at N = 1 no spinner outlives a probe lease, so the
             // leases are gone after each one: the marker, not the count, closes a round); while
             // the counts wait for it, the receive below looks again within half a second. After
-            // the case's two rounds, its marker file ends this instance for the reboot.
+            // the case's rounds, its marker file ends this instance for the reboot.
             #[cfg(feature = "latency-probe")]
             let wait = if !probe.counts.is_empty() && leases_live(&steward) == 0 {
                 let marker = format!("{LATENCY_ROUND}{}", probe.rounds + 1);
@@ -1983,7 +2043,7 @@ mod machine {
                 wait
             };
             #[cfg(feature = "latency-probe")]
-            if probe.rounds >= 2 && probe.due.is_none() {
+            if probe.rounds >= LATENCY_ROUNDS && probe.due.is_none() {
                 if let Some(console) = steward.own.console.clone() {
                     if matches!(machine.home_stat(&console, LATENCY_DONE), Ok(Some(_))) {
                         machine.out.say("steward: latency-probe: the case is done, exiting for the reboot\n");

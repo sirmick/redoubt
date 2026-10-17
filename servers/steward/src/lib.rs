@@ -83,10 +83,19 @@ pub trait Kernel {
     /// The server is told to free what it held for the connection (`disconnect` by its id, or
     /// `ended` for `sshd`'s channel console: servers/steward.md, "Failure and restart"), within
     /// the steward's own send bound, never the call's. `Err(Timeout)` when the server did not
-    /// take the call in time: the record is kept for a retry, unless `last`, when it goes
-    /// anyway, said on the console. Any other outcome ends the step: a connection whose server
-    /// restarted since has no record left and nothing to tell.
-    fn clean(&mut self, handle: Self::Handle, last: bool) -> Result<(), Error>;
+    /// take the call in time: the record is kept for the retry, and when `parks` (the attempt
+    /// past which the step waits for the server's next answer: [`cleanup`]) the console says
+    /// so, once. Any other outcome ends the step: a connection whose server restarted since has
+    /// no record left and nothing to tell.
+    fn clean(&mut self, handle: Self::Handle, parks: bool) -> Result<(), Error>;
+    /// The server [`Kernel::clean`] tells for `handle`, by the name the steward reaches it
+    /// under (`consoled` for a console it minted, `sshd` for the channel console); none for a
+    /// connection nobody is told.
+    fn server_of(&self, handle: Self::Handle) -> Option<String>;
+    /// The server a connection for `owner`'s child at `slot` is minted at ([`Kernel::connect`],
+    /// [`Kernel::rebind`]), or its domain's vault's for `None` (a crossing's: [`Kernel::cross`]),
+    /// by the same name; none where the slot binds nothing minted at a server.
+    fn server_at(&self, owner: &Object, slot: Option<u16>) -> Option<String>;
     /// Starts `owner`'s child in `budget` through the loader stub (a session's VM, or an agent's
     /// for a lease), with the connections the batch made in slot order (the steward's first),
     /// told the session's `context` (`None` for the console's session or an agent); returns its
@@ -358,8 +367,13 @@ impl<B: Copy, H> Steward<B, H> {
     /// every object the core still knows. What an object's end leaves is nothing of its own.
     pub fn holding(&self) -> usize { self.made.len() }
 
-    /// How many connections given back still wait for their server to be told.
+    /// How many connections given back still wait for their server to be told, parked ones
+    /// included.
     pub fn pending(&self) -> usize { self.cleanup.len() }
+
+    /// How many of those are parked: their server took none of [`cleanup::TRIES`] attempts, and
+    /// they wait for its next answer or its restart.
+    pub fn parked(&self) -> usize { self.cleanup.parked() }
 }
 
 /// Starts the steward from its manifest lines: the core's boot, then its carve under `users`.
