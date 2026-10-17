@@ -833,16 +833,33 @@ reply-to-receive p99 (124 and 65 ms, 135 and 64, and 112 at two harts), and at N
 decision wake's p99 (89 and 66 ms, within its 95), where the lease the probe ends waits behind
 that turn. It is the cost of a step the server has not taken
 yet, paid once per retry until the step parks, and the parked step costs the loop nothing
-after. On rv32 at two harts the N = 3 round is not reached: twice at this seed the shell's
-`start_agent` for the round's second or third probe lease was answered `timeout` by its own
-client library (its 5 s call bound plus 5 s for a call thread) and the round's loop died on the
-match; the steward had not taken the call, its own `disconnect` calls at `erofsd:system` had
-timed out four times just before, and nothing on the box printed for about 580 s until the two
-spinners' ten-minute leases ended, after which the steward served the exit notices as usual. So
-`erofsd:system` took nobody's call for that long under two spinner VMs at two harts on rv32,
-and the finding is the server's or the kernel's, not the steward's loop; the two-hart rv32 row
-rests on no run of this shape and is not reached until it is (its two-round figures are in the
-merge history). Before the steward's console lines were queued and written through one kept
+after. On rv32 at two harts the N = 3 round is not reached, and the cause is named. A lease
+VM's launch, the steward's batch and the VM's load of its code from the verified system volume,
+measured as the gap between consecutive `AgentStarted` audit lines less the session's 1.5 s
+sleep, takes 3.5 to 4 s of guest time there alone and beside one spinner, against the shell's
+5 s `start_agent` bound (its client library answers `timeout` at the bound, plus 5 s for a call
+thread); beside two spinners, each a VM of the weight of the one launching, the launching VM is
+one of three equal runnables on two harts, its share two thirds of a hart, and the launch runs
+past the bound (5.3 to 5.7 s): the client answers `timeout`, the round's loop dies on the
+match, and the steward, which had not taken that call, waits to receive on its own endpoint
+until the spinners' leases end, its `disconnect` calls at `erofsd:system` having timed out four
+times and parked just before. A block trace (`block-trace`) of the wedge showed where every
+budget waited: the steward's every call out returned within 1.43 s, its only long waits were
+receives on its own endpoint, and the read path's servers (`erofsd:system`, `verity:system`,
+`blkd:system`) ran whenever a reader asked and went idle when the loads were done; so the
+finding is neither a steward call nor a lost wake. The read path was the first suspect and is
+cheaper now: `verityd` sizes its data cache from its manifest's heap and reads a request's run
+of cold blocks in one `blkd` read, up to five calls at the two-page lend ([verityd](../servers/verityd.md#a-cache-of-checked-data-blocks)),
+which cut its `blkd` reads by two thirds in a `boot-stats` build of this case at this seed, and
+a cache three times the image's cut them further, without moving the round or the launch. It
+is compute, not the volume's reads: at two harts on rv64 the same launch takes 2.2 s alone and
+3.3 s beside two spinners, the same two-thirds share under the bound, and at one hart on rv32
+2.5 s alone and 3.2 to 5.1 s beside two, so the round is reached wherever the bound holds the
+share. What would reach it on rv32 at two harts is the launching VM's share against the
+spinners' (one lease's weight beside another's, under one session), a question for the
+scheduler's design and not for a server; the two-hart rv32 row rests on no complete run and is
+not reached until one lands (its two-round figures are in the merge history), and the round at
+N = 4 after it is not reached there either. Before the steward's console lines were queued and written through one kept
 fid at the loop's turn ([steward](../servers/steward.md#failure-and-restart)), the steward
 reached its wait with the console round trips of the reply it had just given on its pass (each
 line an attach, open, write and close at `consoled`), the timer wake's p50 missed on every width

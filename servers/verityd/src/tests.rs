@@ -425,17 +425,17 @@ fn the_data_cache_holds_the_last_blocks_least_recently_used_out() {
 }
 
 /// The data cache's size follows the manifest's heap cap, half of which is the peak the memory
-/// budget lets a server reach: a cap of 150 pages affords 27 blocks beyond the reserve, a cap of
+/// budget lets a server reach: a cap of 166 pages affords 27 blocks beyond the reserve, a cap of
 /// 100 or none at all the floor of [`DATA_CACHE`]; and a server opened with 27 holds 27, going
 /// back to every one of them reading and hashing nothing.
 #[test]
 fn the_data_cache_is_sized_from_the_manifests_heap() {
     assert_eq!(Caps::from_heap(None).data, DATA_CACHE);
     assert_eq!(Caps::from_heap(Some(100)).data, DATA_CACHE);
-    assert_eq!(Caps::from_heap(Some(150)).data, 27);
-    assert_eq!(Caps::from_heap(Some(150)).tree, TREE_CACHE);
+    assert_eq!(Caps::from_heap(Some(166)).data, 27);
+    assert_eq!(Caps::from_heap(Some(166)).tree, TREE_CACHE);
     let (g, bytes, root) = packed(64, 0);
-    let mut s = server_caps(g, bytes.clone(), &root, &[], Caps::from_heap(Some(150)));
+    let mut s = server_caps(g, bytes.clone(), &root, &[], Caps::from_heap(Some(166)));
     for b in (0..27).chain((0..27).rev()) {
         assert_eq!(
             ask(&mut s, &littlefsd(), &read(b * SECTORS_PER_BLOCK, 1)),
@@ -444,6 +444,70 @@ fn the_data_cache_is_sized_from_the_manifests_heap() {
     }
     let c = s.counts().unwrap();
     assert_eq!((c.requests, c.held, c.checked), (54, 27, 27));
+}
+
+/// Two readers over one volume, as two VMs loading code through one `erofsd`'s `verityd`: each
+/// walks a shared hot set of directory and inode blocks one block at a time, then reads its own
+/// file's run of cold data blocks in one request, interleaved. A four-block data cache cannot hold
+/// the twelve-block hot set between the two readers, so almost every re-read of it misses and is
+/// fetched and hashed again, and each cold block is its own `blkd` call (the rv32 two-hart
+/// wedge). A data cache sized from the manifest's heap holds the hot set, so the re-reads hit; and
+/// read-ahead reads each file's cold run in one `blkd` read (up to five calls at the two-page
+/// lend). Interleaving, not two servers:
+/// `verityd` has one client, `erofsd`, and one cache the readers share.
+#[test]
+fn two_readers_share_the_hot_set_and_read_ahead_their_runs_with_the_manifest_cache() {
+    const HOT: u64 = 12; // the directory and inode blocks every walk re-reads, one at a time
+    const FILES: u64 = 8; // files each reader loads in turn
+    const COLD: u32 = 8; // the cold data blocks of each file, read in one request (read-ahead)
+    let (g, bytes, root) = packed(1024, 0);
+    let run = |caps: Caps| {
+        let mut s = server_caps(g, bytes.clone(), &root, &[], caps);
+        for f in 0..FILES {
+            // Reader A then reader B: each walks the hot set a block at a time, then reads its
+            // file's run of cold blocks in one request.
+            for base in [100u64, 500] {
+                for h in 0..HOT {
+                    ask(&mut s, &littlefsd(), &read(h * SECTORS_PER_BLOCK, 1));
+                }
+                let first = base + f * u64::from(COLD);
+                ask(&mut s, &littlefsd(), &read(first * SECTORS_PER_BLOCK, COLD * SECTORS_PER_BLOCK as u32));
+            }
+        }
+        s.counts().unwrap()
+    };
+    let big_caps = Caps::from_heap(Some(166)); // a heap cap that affords 27 data blocks
+    let small = run(Caps::DEFAULT);
+    let big = run(big_caps);
+    std::eprintln!(
+        "two-readers: small(data={}) req {} held {} checked {} blkd {} | big(data={}) req {} held {} checked {} blkd {}",
+        Caps::DEFAULT.data,
+        small.requests,
+        small.held,
+        small.checked,
+        small.reads,
+        big_caps.data,
+        big.requests,
+        big.held,
+        big.checked,
+        big.reads,
+    );
+    // The same blocks asked either way.
+    assert_eq!(small.requests, big.requests);
+    // The four-block cache thrashes the twelve-block hot set under two readers: under a third hit.
+    assert!(3 * small.held < small.requests, "small held {}/{}", small.held, small.requests);
+    // The manifest-sized cache holds the hot set: every hot pass after the first of each reader
+    // hits in full.
+    let hot_rereads = HOT * (FILES * 2 - 1);
+    assert!(big.held >= hot_rereads, "big held {} < hot re-reads {}", big.held, hot_rereads);
+    // Far fewer blkd reads: the cache spares the hot re-reads and read-ahead folds each cold run
+    // into one read, so the two-reader load pays a fraction of the round trips.
+    assert!(3 * big.reads < small.reads, "big blkd {} not under a third of small {}", big.reads, small.reads);
+    // Per-read bound: each cold run of COLD blocks costs read-ahead one blkd read (up to five calls
+    // at the two-page lend), so the blkd reads a file's run adds are a handful (one data read and
+    // the few tree blocks its checks need), never one a block.
+    let runs = FILES * 2; // one cold run per file per reader
+    assert!(big.reads < runs * 4, "big blkd {} too many for {} read-ahead runs", big.reads, runs);
 }
 
 #[test]

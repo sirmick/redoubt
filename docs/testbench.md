@@ -1794,7 +1794,7 @@ additional client from the merged manifest.
 | `walfsd:data` | 28,616 | 14 | 15 | 64 |
 | `walfsd:alice-secrets` | 28,616 | 14 | 15 | 64 |
 | `blkd:system` | 4,520 | 3 | 17 | 34 |
-| `verity:system` | 8,264 | 5 | 50 | 100 |
+| `verity:system` | 8,264 | 5 | 59 | 118 |
 | `erofsd:system` | 9,704 | 5 | 13 | 26 |
 | `steward` | 16,392 | 9 | 15 | 30 |
 | `sshd` | 5,256 | 4 | 56 | 384 |

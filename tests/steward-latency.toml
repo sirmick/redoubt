@@ -9,9 +9,12 @@ qemu_seed = 3
 # one hart and 1, 2 and 3 at two; every target is met but the timer wake's p99 at N = 3 and 4 at
 # one hart on both widths (one sample each, the window holding the loop's cleanup turn parking a
 # disconnect the busy system volume did not take) and at N = 3 at two harts on rv64; on rv32 at
-# two harts the N = 3 round is not reached (the system volume takes nobody's call under the two
-# spinners until their leases end, and the shell's start_agent times out); a whole bench is a
-# verdict on the tree, not a dashboard; it runs by name.
+# two harts the N = 3 round is not reached (a lease VM's launch there takes 3.5 s of the shell's
+# 5 s start_agent bound alone, and beside two spinners it is a third runnable of equal weight on
+# two harts, so the launch runs over the bound and the round's loop dies: compute, not the
+# verified system volume's reads, which read-ahead at verityd cut by two thirds without moving
+# it; kernel/scheduling.md, "Responsiveness"); a whole bench is a verdict on the tree, not a
+# dashboard; it runs by name.
 whole_run = false
 # The image's programs, the steward built with its test-only latency-probe (servers/steward,
 # src/bin/steward.rs, Probe), and the crossing program the image publishes. The latency manifest

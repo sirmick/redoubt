@@ -188,4 +188,4 @@ max_lines = 856
 [[crate]]
 name = "servers/verityd"
 paths = ["servers/verityd/src"]
-max_lines = 549
+max_lines = 580
