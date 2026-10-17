@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 414
+revision = 415
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -2503,8 +2503,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "AGENTS"
   body = "Seen by STEWARD4's steward-latency on rv64 at two harts, twice at the 16th/17th lease: `a step failed (NotPermitted): Launch { .. kind: Lease .. slot: 2 }` straight after the kernel terminated the previous deadline lease's VM. Suspected a kernel race; the cause (.wash/local/B82-report.md): the steward sets a lease's deadline at the batch's start (carve_lease) and the Launch step (image read from erofsd, map, start) takes ~1.25 s guest time at one hart and ~2.46 s at two (icount counts both harts' instructions), so the case's 2 s kernel-deadline leases died between process_create and process_start; R10 destroyed the budget, the thread-less child was terminated, map/start answered NotPermitted. Evidence: AgentStarted deadline-at 6.54-6.57 s (two harts) vs 7.73-7.76 s (one) on a 9 s term; reproduced at one hart with 100 ms leases. The three race candidates ruled out. Delivered: tests/deadline-in-launch (a 300 ms lease from system; after the term map and start answer NotPermitted, the handle is BadHandle, the killed notice blames nobody, a witness in another budget draws another PID (R20), usage returns to before (I10)), both widths at smp 1 and 2; budgets.md 'Deadlines' names the window. No kernel change. STEWARD4's case lengthens its kernel-deadline leases (5 s) and records the two-hart row. Open design question for architect-2 (thread B82-launch-race): a lease's term from the agent's start, a launch floor, or the page stating the term runs from the request. Ruling: STEWARD4-ruling.md 'Q13'. Tier A (kernel case); kernel-red-3 reviews. Size S."
-  state = "reported"
-  revision = 413
+  state = "done"
+  revision = 415
 
 [[node]]
   id = "STEWARD3U"
