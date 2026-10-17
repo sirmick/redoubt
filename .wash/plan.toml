@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 455
+revision = 458
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -2539,8 +2539,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "AGENTS"
   body = "Seen on train 52 (beamlet-lookup-host, 15.5 s: `redoubt/tests/console.rs` test input_nobody_reads_holds_no_idle_and_waits_for_the_next_reader panicked at console.rs:154:9 'the idle returned on input nobody reads' and :56:31) and recorded in .wash/local/CONW1-report.md:66 before: the same test failing under load, passing alone (5/5 alone on 3Z's tree; the fixture grants the console with a badge below FIRST_MINTED_BADGE, so 3Z's admission move is not in its path). B81 moved tests/system.rs to the fake kernel's held clock; console.rs still waits on the host's clock for the idle. Work: find the wait (the idle's bound; the test's assertion window) and move console.rs's tests to the held clock as B81 did for system.rs (Fake::hold_clock/tick at quiescence; B70/B74's rule), or make the test's expectation an event; prove 10x under load + 5x alone. Transcript: .tmp/train-52/transcript-rv64-beamlet-lookup-host.log (the failures block B81 now keeps). Files: userland/otp/redoubt/tests/console.rs (and its fixture), docs/userland/beamlet.md if the status line names the tests. Tier B (a test's verdict), reviewer kernel-red-3. Size S. Until it lands, this host test failing on a train is a known flake, rerun alone."
-  state = "active"
-  revision = 429
+  state = "done"
+  revision = 458
 
 [[node]]
   id = "B86"
@@ -2566,5 +2566,5 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "AGENTS"
   body = "Seen by STEWARD3W's steward-latency N = 3 round on rv32 at two harts, twice (2026-10-17): before and after STEWARD3U's bounded console writes (so not the console-hold wedge first suspected): the steward's cleanup disconnects at erofsd:system time out (parked after four), the shell's start_agent for the next lease gets the client's 5 s `timeout` while the steward had taken no call, and nothing prints for ~570 s until the spinners' deadline kills; rv64 at two harts and rv32 at one hart complete the same round. The implementer's reading: erofsd:system (the read-only system volume server; its two spinner VMs read code from it) takes nobody's call under two spinner VMs at two harts on rv32. Logs: .tmp/STEWARD3W/latency-logs/stall2-* (the console, the session logs). Work: reproduce (`TESTBENCH_QEMU_SEED=3 cargo testbench steward-latency --arch rv32 --keep-failed <dir>` at two harts under q, LATENCY_ROUNDS 3) and find who is stuck: erofsd's serving loop (a receive that never returns at two harts: IPC3's per-endpoint delivery, the hub's waiters, verityd's block checks under two readers), the kernel (a lost wake, a timer on the wrong hart: SCHED4, B87's interrupt-claim shape), or the steward (a call of its own outside any batch): name it from the trace and the logs; the fix where it belongs with a two-hart case both widths (or one width if rv64 cannot show it, said why); the steward-latency rv32 two-hart row regained. Related: B87 (two-hart trace rejections). Files: servers/erofsd, libs/rt serving, kernel/src as the cause dictates; docs where the rule lives. Tier A; reviewer kernel-red-3 (steward-red-4 if the steward). Size M."
-  state = "todo"
-  revision = 452
+  state = "active"
+  revision = 456
