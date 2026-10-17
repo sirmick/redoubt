@@ -79,7 +79,10 @@ the prompt shows where it is: `/home/alice (1)> `. The console's session, an SSH
 vault session start the same way, a vault session's home being its principal's as well (what it
 may write there is the label's business, [vault sessions](sessions.md#vault-sessions)). A
 session told no home, or whose home cannot be entered, says so once, `** no home to start in
-(:enoent); this session starts in /`, and starts at `/`. The start is information acted on, not
+(:enoent); this session starts in /`, and starts at `/`; a vault session told no home in a
+confined boot says instead `** no home in this label set: a push is the way in; this session
+starts in /` ([the steward](../servers/steward.md#declassification-and-push)). The start is
+information acted on, not
 authority: the shell can only move where the session's handles already reach. A VM that is no
 session, as on a host, starts where it is and says nothing.
 

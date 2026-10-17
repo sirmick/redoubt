@@ -35,7 +35,7 @@ use core::fmt;
 use redoubt_rt::abi::{BudgetSpec, Error, FOREVER};
 pub use redoubt_steward::consts::SLOTS;
 use redoubt_steward::domain::Domain;
-use redoubt_steward::effect::{Object, Step};
+use redoubt_steward::effect::{Kind, Object, Step};
 use redoubt_steward::manifest::{Lines, Sizes};
 use redoubt_steward::{Policy, Store};
 
@@ -156,10 +156,51 @@ pub trait Kernel {
     fn attach(&mut self, relay: Self::Handle, note: &str) -> Result<Self::Handle, Error>;
     /// `relay` writes `note` to its channel and lets it go.
     fn detach(&mut self, relay: Self::Handle, note: &str) -> Result<(), Error>;
+    /// A crossing's one item (servers/steward.md, "Declassification and push"): the `crossing`
+    /// program launched in `budget`, which carries exactly `owner`'s labels, with one connection
+    /// to `owner`'s domain's vault at its root, minted in `budget` as its scope (R41), and
+    /// called once: `read` for the item at `path`, answered with its bytes, or `write` of `bytes`
+    /// as it (`None` reads). The program, labelled, walks to the item: the steward, unlabelled,
+    /// may mint at the vault's root alone, since a mint below it walks the path with the
+    /// caller's labels (R25). Returns the process id, the key the connection is held under (given
+    /// back after the budget is destroyed: the cleanup, never the cutoff) and the bytes read.
+    fn cross(
+        &mut self,
+        owner: &Object,
+        budget: Self::Budget,
+        path: &str,
+        bytes: Option<&[u8]>,
+    ) -> Result<(u64, Option<Self::Handle>, Vec<u8>), Error>;
+    /// The length of `path` in `principal`'s home, through the steward's own kept connection
+    /// there; `None` for no such file.
+    fn home_stat(&mut self, principal: &str, path: &str) -> Result<Option<u64>, Error>;
+    /// `path` in `principal`'s home, read whole by the steward itself: at most `max` bytes, an
+    /// error past them.
+    fn home_read(&mut self, principal: &str, path: &str, max: usize) -> Result<Vec<u8>, Error>;
+    /// `bytes` written by the steward itself as the new file `path` in `principal`'s home, its
+    /// directory made if missing; never over a file that is there.
+    fn home_write(&mut self, principal: &str, path: &str, bytes: &[u8]) -> Result<(), Error>;
     /// A word from the kernel's generator.
     fn random(&mut self) -> Result<u64, Error>;
     /// Microseconds since boot.
     fn now(&mut self) -> u64;
+}
+
+/// The most a push moves (servers/steward.md, "Declassification and push"): fifteen pages of the
+/// steward's sixteen-page lend, the sixteenth for the item's name and the message's lengths, so
+/// the snapshot travels to the writer in one call.
+pub const PUSH_MAX: usize = 15 * 4096;
+
+/// An item a request names by an id the server drew: the path it stands for, in the vault of the
+/// request's labelled side (a declassified item, a push's target) or in the submitter's home (a
+/// push's source), kept for the request's life. The path is the requester's text, shown on the
+/// screen beside the core's line and never part of the binding hash, which covers the ids and the
+/// snapshot: what is approved is the bytes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Item {
+    /// The request, once the core has drawn its id; none while its submission is decided.
+    pub request: Option<Object>,
+    pub path: String,
 }
 
 /// Why the steward did not start: it says it once and exits.
@@ -234,9 +275,67 @@ pub struct Steward<B, H> {
     console_session: Option<u64>,
     /// Each step that failed since the server last said them, with the kernel's error.
     pub failed: Vec<(Step, Error)>,
+    /// Each item a pending request names, by the id the server drew for it.
+    items: BTreeMap<u64, Item>,
 }
 
 impl<B: Copy, H> Steward<B, H> {
+    /// The name of the principal whose account is `account`, if the manifest has one.
+    pub fn principal_name(&self, account: u64) -> Option<String> {
+        redoubt_steward::inspect::fixed(&self.store)
+            .principals
+            .iter()
+            .find(|p| p.account.get() == account)
+            .map(|p| p.name.clone())
+    }
+
+    /// The account of the session or lease routed by `badge`.
+    pub fn account_of(&self, badge: u64) -> Option<u64> {
+        redoubt_steward::inspect::index(&self.store).routes.get(&badge).map(|r| r.domain.account().get())
+    }
+
+    /// Keeps `path` as item `id`'s, for the request being submitted.
+    pub fn item(&mut self, id: u64, path: String) { self.items.insert(id, Item { request: None, path }); }
+
+    /// The items of the submission being decided are request `request`'s, now that the core has
+    /// drawn its id and holds it in its domain.
+    fn items_of_request(&mut self, request: u64) {
+        let Some(domain) = redoubt_steward::inspect::domains(&self.store)
+            .find(|(_, s)| s.requests.contains_key(&request))
+            .map(|(d, _)| d.clone())
+        else {
+            return;
+        };
+        let object = Object { domain, kind: Kind::Request, id: request };
+        for i in self.items.values_mut().filter(|i| i.request.is_none()) {
+            i.request = Some(object.clone());
+        }
+    }
+
+    /// Drops the items of requests the core no longer holds (answered, denied, dropped with
+    /// their session, or refused at submission): the tables emit no `forget` for a request, so
+    /// the server reads the store for what is gone.
+    fn sweep_items(&mut self) {
+        let store = &self.store;
+        self.items.retain(|_, i| {
+            i.request.as_ref().is_some_and(|o| {
+                redoubt_steward::inspect::domain(store, &o.domain).is_some_and(|s| s.has(Kind::Request, o.id))
+            })
+        });
+    }
+
+    /// The items request `request` names, by id, with their paths.
+    pub fn items_named(&self, request: u64) -> Vec<(u64, &str)> {
+        self.items
+            .iter()
+            .filter(|(_, i)| i.request.as_ref().is_some_and(|o| o.id == request))
+            .map(|(id, i)| (*id, i.path.as_str()))
+            .collect()
+    }
+
+    /// How many items pending requests name.
+    pub fn items_held(&self) -> usize { self.items.len() }
+
     /// The label ids a login's label names: none for `""`, the manifest's id for a label it
     /// names, `None` for any other.
     pub fn label(&self, name: &str) -> Option<Vec<u64>> {
@@ -327,5 +426,6 @@ pub fn start<K: Kernel>(
         screens: BTreeMap::new(),
         console_session: None,
         failed: Vec::new(),
+        items: BTreeMap::new(),
     })
 }

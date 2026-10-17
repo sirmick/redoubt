@@ -14,6 +14,8 @@
 //! - `net "PRINCIPAL" PREFIX:PORTS ...`: the principal's network scope, in the manifest's form (`PORTS` a
 //!   comma list, or `*` for every port), which goes to `ipd`'s `grant` as one connect rule per port (or one
 //!   for every port), at most `ipd`'s eight.
+//! - `confined`: the manifest sets `confined` (servers/init.md, "The confinement check"): a labelled
+//!   session's home slot is left unbound, and a push is its way in ("Declassification and push").
 //!
 //! Strict as the core's lines are: each field once and no other, a name quoted with the trace
 //! grammar's escapes, and a malformed line is a start failure naming its number.
@@ -66,11 +68,13 @@ pub struct Own {
     pub vaults: Vec<Vault>,
     pub nets: Vec<Net>,
     pub console: Option<String>,
+    pub confined: bool,
 }
 
 /// Whether `line` is one of the steward's own, rather than the core's.
 pub fn is_own(line: &str) -> bool {
-    ["label ", "home ", "vault ", "net ", "console "].iter().any(|h| line.starts_with(h))
+    line == "confined"
+        || ["label ", "home ", "vault ", "net ", "console "].iter().any(|h| line.starts_with(h))
 }
 
 /// The `key=value` fields of `toks`, each of `keys` once, in `keys`' order, and no other.
@@ -126,6 +130,15 @@ impl Own {
     pub fn line(&mut self, line: &str) -> Result<(), String> {
         let toks = tokens(line)?;
         let (head, rest) = toks.split_first().ok_or("an empty line")?;
+        if *head == "confined" {
+            if !rest.is_empty() {
+                return Err("`confined` stands alone".into());
+            }
+            if core::mem::replace(&mut self.confined, true) {
+                return Err("a second `confined`".into());
+            }
+            return Ok(());
+        }
         let (who, rest) = rest.split_first().ok_or("a line names its subject")?;
         match *head {
             "label" => {
@@ -206,14 +219,16 @@ impl Own {
 /// and sessions"; userland/sessions.md, "What a session is told"): `principal=NAME`; `label=NAME:ID` for each
 /// label of its set, in the set's order; `context=NAME` for a named context, none for the principal's
 /// default one or the console's session; and `home=/PATH`, where slot 1 binds the principal's home, for a
-/// labelled session as for a plain one, none for a principal with no home. Fixed for the VM's life, and
+/// labelled session as for a plain one, none for a principal with no home or for a labelled session in
+/// a confined boot, whose home slot binds nothing ([`binding`]). Fixed for the VM's life, and
 /// information only: what the session can reach is its connections, whatever these say.
 pub fn session_args(own: &Own, principal: &str, labels: &[u64], context: Option<&str>) -> Vec<String> {
     // init's check gave every label of a set a name line; one without would have no name.
     let name = |id: &u64| own.labels.iter().find(|(_, l)| l == id).map_or("", |(n, _)| n.as_str());
+    let confined = own.confined && !labels.is_empty();
     let labels = labels.iter().map(|id| format!("label={}:{id}", name(id)));
     let context = context.filter(|c| !c.is_empty()).map(|c| format!("context={c}"));
-    let home = own.home(principal).map(|h| format!("home={}", h.path));
+    let home = own.home(principal).filter(|_| !confined).map(|h| format!("home={}", h.path));
     core::iter::once(format!("principal={principal}")).chain(labels).chain(context).chain(home).collect()
 }
 
@@ -306,7 +321,11 @@ pub fn binds(child: Child, slot: u16) -> bool {
 }
 
 /// The binding table, for `principal`'s `child` with `labels`, at `slot`: none where the slot
-/// binds nothing for it, which makes no call and gives the child no entry.
+/// binds nothing for it, which makes no call and gives the child no entry. In a confined boot a
+/// labelled session's home slot is one such: the home is a shared unlabelled volume, which a
+/// labelled domain reads nothing of there (servers/init.md R34); its input is a push
+/// (servers/steward.md, "Declassification and push"). `/boot` and the system volume, read-only
+/// code the confinement check does not count for a labelled domain, stay bound.
 pub fn binding(
     own: &Own,
     principal: &str,
@@ -337,6 +356,7 @@ pub fn binding(
             at: Some(PROJECT_AT.into()),
             name: None,
         }),
+        1 if own.confined && child == (Child::Session { labelled: true }) => None,
         1 => own.home(principal).map(|h| Bound {
             how: How::Carved {
                 key: format!("home {principal}"),

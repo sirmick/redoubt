@@ -3,6 +3,8 @@
 //! protocol"): its start from the manifest lines, and each call through the protocol, the core
 //! and the batches it names.
 
+use std::collections::BTreeMap;
+
 use redoubt_rt::abi::{BudgetSpec, Error, FOREVER, Handle, ReceivedHandles};
 use redoubt_rt::ipc::Caller;
 use redoubt_rt::wire::proto::steward::{
@@ -142,6 +144,29 @@ enum Call {
         slot: u16,
         scope: usize,
     },
+    /// The crossing program run in `budget` for a domain with `labels`, its connection at the
+    /// vault's root, reading the item at `path` or writing `write` as it; the handles made are
+    /// its connection's key, then its process.
+    Cross {
+        budget: usize,
+        labels: Vec<u64>,
+        path: String,
+        write: Option<Vec<u8>>,
+    },
+    /// The steward's own look at, read of, or write to a file in a principal's home.
+    HomeStat {
+        principal: String,
+        path: String,
+    },
+    HomeRead {
+        principal: String,
+        path: String,
+    },
+    HomeWrite {
+        principal: String,
+        path: String,
+        bytes: Vec<u8>,
+    },
 }
 
 /// Budget and handle `i` are the `i`th the kernel made; `USERS` is the one the steward holds.
@@ -166,6 +191,13 @@ struct Recorder {
     clean: Option<Error>,
     /// Microseconds the clock has been moved on by, beside the words drawn.
     clock: u64,
+    /// The files in the principals' homes, by principal and path: what the steward itself reads
+    /// and writes.
+    homes: BTreeMap<(String, String), Vec<u8>>,
+    /// The vault's items, by path: what a crossing's program reads, and where it writes.
+    vault: BTreeMap<String, Vec<u8>>,
+    /// The crossing program dies, times out or answers wrongly: its call fails with this.
+    cross_fails: Option<Error>,
 }
 
 impl Recorder {
@@ -339,6 +371,61 @@ impl Kernel for Recorder {
     fn detach(&mut self, relay: usize, note: &str) -> Result<(), Error> {
         self.calls.push(Call::Detach { relay, note: note.into() });
         self.detach.map_or(Ok(()), Err)
+    }
+
+    /// The crossing's program: the vault's item at `path` read, or `bytes` written as it; the
+    /// connection's key is made first, the process after.
+    fn cross(
+        &mut self,
+        owner: &Object,
+        budget: usize,
+        path: &str,
+        bytes: Option<&[u8]>,
+    ) -> Result<(u64, Option<usize>, Vec<u8>), Error> {
+        self.calls.push(Call::Cross {
+            budget,
+            labels: owner.domain.labels().as_slice().to_vec(),
+            path: path.into(),
+            write: bytes.map(<[u8]>::to_vec),
+        });
+        if let Some(e) = self.cross_fails {
+            return Err(e);
+        }
+        let key = self.make()?;
+        let pid = self.make()? as u64;
+        let read = match bytes {
+            Some(bytes) => {
+                self.vault.insert(path.into(), bytes.to_vec());
+                Vec::new()
+            }
+            None => self.vault.get(path).cloned().ok_or(Error::Refused)?,
+        };
+        Ok((pid, Some(key), read))
+    }
+
+    fn home_stat(&mut self, principal: &str, path: &str) -> Result<Option<u64>, Error> {
+        self.calls.push(Call::HomeStat { principal: principal.into(), path: path.into() });
+        Ok(self.homes.get(&(principal.into(), path.into())).map(|b| b.len() as u64))
+    }
+
+    fn home_read(&mut self, principal: &str, path: &str, max: usize) -> Result<Vec<u8>, Error> {
+        self.calls.push(Call::HomeRead { principal: principal.into(), path: path.into() });
+        let bytes = self.homes.get(&(principal.into(), path.into())).ok_or(Error::Refused)?;
+        if bytes.len() > max { Err(Error::TooLarge) } else { Ok(bytes.clone()) }
+    }
+
+    fn home_write(&mut self, principal: &str, path: &str, bytes: &[u8]) -> Result<(), Error> {
+        self.calls.push(Call::HomeWrite {
+            principal: principal.into(),
+            path: path.into(),
+            bytes: bytes.to_vec(),
+        });
+        let key = (principal.to_string(), path.to_string());
+        if self.homes.contains_key(&key) {
+            return Err(Error::Busy);
+        }
+        self.homes.insert(key, bytes.to_vec());
+        Ok(())
     }
 
     fn random(&mut self) -> Result<u64, Error> {
@@ -1946,4 +2033,369 @@ fn notes_are_rendered_by_their_requesters_labels_and_a_dead_sessions_requests_ar
     k.calls.clear();
     let _ = call(&mut s, &mut k, APPROVAL, Message::Pending(Pending { channel: c }));
     assert_eq!(screens(&k, c), ["no approval is waiting for alice\r\n"]);
+}
+
+// ---- declassification and push ----
+
+/// A vault session's badge: alice in `{alice-secrets}`.
+fn vault_session(s: &mut Steward<usize, usize>, k: &mut Recorder) -> u64 {
+    let Ok(Reply::Login(r)) = call(s, k, SSHD, login("alice", "alice-secrets", &ALICE_KEY)) else { panic!() };
+    let badge = badge_of(s, r.session);
+    k.calls.clear();
+    badge
+}
+
+/// The budget the crossing program ran in, by its `Cross` call.
+fn crossing_budget(calls: &[Call]) -> usize {
+    calls
+        .iter()
+        .find_map(|c| match c {
+            Call::Cross { budget, .. } => Some(*budget),
+            _ => None,
+        })
+        .expect("a crossing")
+}
+
+/// The `Create`, `Cross`, `Destroy` and `Release` calls among `calls`, in order: a crossing's
+/// batch and its cleanup, the rest (the screen, the notices) left out.
+fn crossing_calls(calls: &[Call]) -> Vec<Call> {
+    calls
+        .iter()
+        .filter(|c| {
+            matches!(c, Call::Create { .. } | Call::Cross { .. } | Call::Destroy(_) | Call::Release(_))
+        })
+        .cloned()
+        .collect()
+}
+
+/// A declassification (servers/steward.md, "Declassification and push"; R42): the vault
+/// session's `submit` opens a read crossing, a budget under `users` with exactly the item's
+/// labels and the domain's account, the `crossing` program's one read through it, the budget
+/// destroyed and its connection given back after; the screen shows the whole item with the path
+/// as the requester's text; the approval copies exactly the snapshot to `~/out/<name>`, by the
+/// steward's own write and no read of the vault, audited with the reader's budget; the item's
+/// path is forgotten with the request.
+#[test]
+fn a_declassification_reads_through_a_crossing_and_its_approval_copies_the_snapshot_out() {
+    let mut k = Recorder::default();
+    k.vault.insert("notes/memo".into(), b"forty bytes of text, printable, as asked".to_vec());
+    let mut s = started(&mut k);
+    let v = vault_session(&mut s, &mut k);
+    let c = open_channel(&mut s, &mut k, &ALICE_APPROVAL_KEY).unwrap();
+    k.calls.clear();
+    let held = s.holding();
+    let labels = label_bytes(&[7]);
+    let (reply, outputs) = call_outputs(&mut s, &mut k, v, submit(2, &labels, 0, "notes/memo", ""));
+    let Ok(Reply::Submit(r)) = reply else { panic!("{reply:?}") };
+    assert_eq!(records(&outputs), [Record::Submitted { request: r.request }]);
+    assert_eq!(k.calls[0], Call::HomeStat { principal: "alice".into(), path: "out/memo".into() });
+    let budget = crossing_budget(&k.calls);
+    assert_eq!(
+        crossing_calls(&k.calls),
+        [
+            Call::Create { parent: USERS, pages: 2, processes: 1, labels: vec![7], account: 1001 },
+            Call::Cross { budget, labels: vec![7], path: "notes/memo".into(), write: None },
+            Call::Destroy(budget),
+            Call::Release(budget + 1),
+        ],
+        "{:?}",
+        k.calls
+    );
+    assert!(!k.calls.iter().any(|c| matches!(c, Call::HomeRead { .. })), "the steward never reads the vault");
+    let screen = screens(&k, c).pop().expect("the channel is redrawn");
+    assert!(
+        screen.contains("declassify item ")
+            && screen.contains("of labels [7]: \"forty bytes of text, printable, as asked\""),
+        "{screen}"
+    );
+    assert!(screen.contains(": path (the requester's text) \"notes/memo\"\r\n"), "{screen}");
+    assert_eq!(s.items_held(), 1);
+    // The item changes after the submission: what lands is the snapshot (R42).
+    k.vault.insert("notes/memo".into(), b"changed since".to_vec());
+    let (_, code) = shown(&k, c, r.request);
+    k.calls.clear();
+    let approve = Message::Approve(Approve { channel: c, request: r.request, hash: &code });
+    let (reply, outputs) = call_outputs(&mut s, &mut k, APPROVAL, approve);
+    assert!(matches!(reply, Ok(Reply::Approve(_))), "{reply:?}");
+    assert_eq!(
+        k.calls.iter().filter(|c| !matches!(c, Call::Screen { .. })).cloned().collect::<Vec<_>>(),
+        [Call::HomeWrite {
+            principal: "alice".into(),
+            path: "out/memo".into(),
+            bytes: b"forty bytes of text, printable, as asked".to_vec(),
+        }],
+        "the copy out is the steward's own write of the snapshot, and nothing else"
+    );
+    let reader = budget as u64;
+    assert!(
+        records(&outputs).iter().any(|x| matches!(x, Record::Declassified { request, bytes, reader: b } if *request == r.request && bytes == b"forty bytes of text, printable, as asked" && *b == reader)),
+        "{:?}",
+        records(&outputs)
+    );
+    assert_eq!(
+        k.homes.get(&("alice".into(), "out/memo".into())).map(Vec::as_slice),
+        Some(&b"forty bytes of text, printable, as asked"[..])
+    );
+    assert_eq!(s.items_held(), 0, "the item's path goes with the request");
+    assert_eq!(s.holding(), held, "nothing of the crossing is held");
+    // The landing is taken now: a second declassification of the same name is `in_use`, before
+    // any budget is carved.
+    k.calls.clear();
+    let again = call(&mut s, &mut k, v, submit(2, &labels, 0, "notes/memo", ""));
+    assert_eq!(again.unwrap_err(), ErrorCode::InUse);
+    assert!(crossing_calls(&k.calls).is_empty(), "{:?}", k.calls);
+    assert_eq!(s.items_held(), 0);
+}
+
+/// An item over `DECLASSIFY_MAX` is `too_big` and one that is not printable text
+/// `not_printable`, each at submission, by the core's `item_fits` on the snapshot the crossing
+/// read; the crossing is destroyed and nothing is kept.
+#[test]
+fn an_item_too_big_or_not_printable_is_refused_at_submission_and_the_crossing_destroyed() {
+    let mut k = Recorder::default();
+    k.vault.insert("big".into(), vec![b'x'; 300]);
+    k.vault.insert("binary".into(), vec![0x01, 0x02, b'a']);
+    let mut s = started(&mut k);
+    let v = vault_session(&mut s, &mut k);
+    let held = s.holding();
+    let labels = label_bytes(&[7]);
+    for (path, code) in [("big", ErrorCode::TooBig), ("binary", ErrorCode::NotPrintable)] {
+        k.calls.clear();
+        assert_eq!(call(&mut s, &mut k, v, submit(2, &labels, 0, path, "")).unwrap_err(), code);
+        let calls = crossing_calls(&k.calls);
+        assert!(
+            matches!(
+                calls.as_slice(),
+                [Call::Create { .. }, Call::Cross { .. }, Call::Destroy(_), Call::Release(_)]
+            ),
+            "{calls:?}"
+        );
+        assert_eq!(s.items_held(), 0, "{path}");
+        assert_eq!(s.holding(), held, "{path}");
+    }
+    // A path that does not clean (an empty one, the root, a name the path grammar refuses) names
+    // nothing, and an unlabelled session declassifies nothing.
+    for bad in ["", "/", ".", "a\u{0}b"] {
+        assert_eq!(
+            call(&mut s, &mut k, v, submit(2, &labels, 0, bad, "")).unwrap_err(),
+            ErrorCode::Unknown,
+            "{bad:?}"
+        );
+    }
+    let u = alice_session(&mut s, &mut k);
+    assert_eq!(call(&mut s, &mut k, u, submit(2, &labels, 0, "big", "")).unwrap_err(), ErrorCode::NotOwner);
+}
+
+/// A reader that dies (the crossing program's call fails): the crossing runs `Failed`, then
+/// `destroy_partial` in `Closing`, and the submission is `failed`; nothing of it is held.
+#[test]
+fn a_reader_that_dies_fails_the_submission_and_the_partial_crossing_is_destroyed() {
+    let mut k = Recorder { cross_fails: Some(Error::Dead), ..Recorder::default() };
+    let mut s = started(&mut k);
+    let v = vault_session(&mut s, &mut k);
+    let held = s.holding();
+    let labels = label_bytes(&[7]);
+    assert_eq!(call(&mut s, &mut k, v, submit(2, &labels, 0, "memo", "")).unwrap_err(), ErrorCode::Failed);
+    let budget = crossing_budget(&k.calls);
+    assert_eq!(
+        crossing_calls(&k.calls),
+        [
+            Call::Create { parent: USERS, pages: 2, processes: 1, labels: vec![7], account: 1001 },
+            Call::Cross { budget, labels: vec![7], path: "memo".into(), write: None },
+            Call::Destroy(budget),
+        ]
+    );
+    assert_eq!(s.failed.len(), 1, "the failed step is said once: {:?}", s.failed);
+    assert_eq!(s.items_held(), 0);
+    assert_eq!(s.holding(), held);
+}
+
+/// A push (servers/steward.md, "Declassification and push"; R42): the unlabelled session's
+/// `submit` has the steward read the source itself, from the submitter's home; the screen shows
+/// the source and target by id with their paths, the size and the digest, never the bytes; the
+/// approval opens a write crossing in the target's domain, exactly the target's labels and the
+/// account, the program's one write of the snapshot, the budget destroyed and its connection
+/// given back; audited `Pushed` in the target's domain. A vault session cannot push, another
+/// principal cannot push into alice's labels, a source over `PUSH_MAX` is `too_big` and a missing
+/// one `unknown`, each before any budget is carved.
+#[test]
+fn a_push_reads_the_source_unlabelled_and_its_approval_writes_through_a_crossing() {
+    let mut k = Recorder::default();
+    let bytes = vec![0xA5u8; 4096];
+    k.homes.insert(("alice".into(), "in".into()), bytes.clone());
+    k.homes.insert(("alice".into(), "huge".into()), vec![0u8; redoubt_steward_server::PUSH_MAX + 1]);
+    k.homes.insert(("bob".into(), "in".into()), bytes.clone());
+    let mut s = started(&mut k);
+    let u = alice_session(&mut s, &mut k);
+    let v = vault_session(&mut s, &mut k);
+    let c = open_channel(&mut s, &mut k, &ALICE_APPROVAL_KEY).unwrap();
+    let labels = label_bytes(&[7]);
+    // The refusals first: none carves a budget or reads anything.
+    k.calls.clear();
+    assert_eq!(
+        call(&mut s, &mut k, v, submit(3, &labels, 0, "in\nsecret/in", "")).unwrap_err(),
+        ErrorCode::NotOwner
+    );
+    assert_eq!(
+        call(&mut s, &mut k, u, submit(3, &labels, 0, "huge\nsecret/in", "")).unwrap_err(),
+        ErrorCode::TooBig
+    );
+    assert_eq!(
+        call(&mut s, &mut k, u, submit(3, &labels, 0, "missing\nsecret/in", "")).unwrap_err(),
+        ErrorCode::Unknown
+    );
+    assert_eq!(call(&mut s, &mut k, u, submit(3, &labels, 0, "in", "")).unwrap_err(), ErrorCode::Unknown);
+    let Ok(Reply::Login(b)) = call(&mut s, &mut k, SSHD, bob_in("")) else { panic!() };
+    let bob = badge_of(&s, b.session);
+    assert_eq!(
+        call(&mut s, &mut k, bob, submit(3, &labels, 0, "in\nsecret/in", "")).unwrap_err(),
+        ErrorCode::NotOwner
+    );
+    assert!(
+        crossing_calls(&k.calls)
+            .iter()
+            .all(|c| !matches!(c, Call::Create { parent: USERS, .. } | Call::Cross { .. })),
+        "{:?}",
+        k.calls
+    );
+    assert_eq!(s.items_held(), 0);
+    k.calls.clear();
+    let (reply, outputs) = call_outputs(&mut s, &mut k, u, submit(3, &labels, 0, "in\nsecret/in", "a push"));
+    let Ok(Reply::Submit(r)) = reply else { panic!("{reply:?}") };
+    assert_eq!(records(&outputs), [Record::Submitted { request: r.request }]);
+    assert_eq!(
+        k.calls
+            .iter()
+            .filter(|c| !matches!(c, Call::Screen { .. } | Call::NotifyApproval(_)))
+            .cloned()
+            .collect::<Vec<_>>(),
+        [
+            Call::HomeStat { principal: "alice".into(), path: "in".into() },
+            Call::HomeRead { principal: "alice".into(), path: "in".into() },
+        ],
+        "the steward reads the source itself, and nothing crosses yet"
+    );
+    let screen = screens(&k, c).pop().expect("the channel is redrawn");
+    assert!(screen.contains("push unlabelled item ") && screen.contains(" (4096 bytes, sha256 "), "{screen}");
+    assert!(screen.contains(" of labels [7]; reason (untrusted): \"a push\""), "{screen}");
+    assert!(screen.contains(": path (the requester's text) \"in\"\r\n"), "{screen}");
+    assert!(screen.contains(": path (the requester's text) \"secret/in\"\r\n"), "{screen}");
+    assert!(!screen.contains("\u{a5}"), "no bytes on the screen");
+    assert_eq!(s.items_held(), 2);
+    let (_, code) = shown(&k, c, r.request);
+    k.calls.clear();
+    let approve = Message::Approve(Approve { channel: c, request: r.request, hash: &code });
+    let (reply, outputs) = call_outputs(&mut s, &mut k, APPROVAL, approve);
+    assert!(matches!(reply, Ok(Reply::Approve(_))), "{reply:?}");
+    let budget = crossing_budget(&k.calls);
+    assert_eq!(
+        crossing_calls(&k.calls),
+        [
+            Call::Create { parent: USERS, pages: 2, processes: 1, labels: vec![7], account: 1001 },
+            Call::Cross { budget, labels: vec![7], path: "secret/in".into(), write: Some(bytes.clone()) },
+            Call::Destroy(budget),
+            Call::Release(budget + 1),
+        ],
+        "{:?}",
+        k.calls
+    );
+    assert_eq!(k.vault.get("secret/in"), Some(&bytes));
+    let pushed = records(&outputs).into_iter().find(|r| matches!(r, Record::Pushed { .. })).expect("Pushed");
+    assert!(
+        matches!(&pushed, Record::Pushed { request, bytes: b, writer, .. } if *request == r.request && *b == bytes && *writer == budget as u64),
+        "{pushed:?}"
+    );
+    let domain = outputs
+        .iter()
+        .find_map(|o| match o {
+            Output::Audit(a) if matches!(a.record(), Record::Pushed { .. }) => Some(a.domain().clone()),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(domain.labels().as_slice(), [7], "audited in the target's domain");
+    assert_eq!(s.items_held(), 0);
+}
+
+/// A writer that fails after some bytes: the crossing runs `Failed`, `audit_push_failed`, then
+/// `destroy_partial`; the vault is left as it is, which the page states (the next push
+/// overwrites the partial file).
+#[test]
+fn a_writer_that_fails_is_audited_and_the_partial_crossing_destroyed() {
+    let mut k = Recorder::default();
+    k.homes.insert(("alice".into(), "in".into()), vec![1u8; 16]);
+    let mut s = started(&mut k);
+    let u = alice_session(&mut s, &mut k);
+    let c = open_channel(&mut s, &mut k, &ALICE_APPROVAL_KEY).unwrap();
+    let labels = label_bytes(&[7]);
+    let Ok(Reply::Submit(r)) = call(&mut s, &mut k, u, submit(3, &labels, 0, "in\nin", "")) else { panic!() };
+    let (_, code) = shown(&k, c, r.request);
+    let held = s.holding();
+    k.cross_fails = Some(Error::Timeout);
+    k.calls.clear();
+    let approve = Message::Approve(Approve { channel: c, request: r.request, hash: &code });
+    let (reply, outputs) = call_outputs(&mut s, &mut k, APPROVAL, approve);
+    assert!(matches!(reply, Ok(Reply::Approve(_))), "the approval stands; the crossing failed: {reply:?}");
+    assert!(
+        matches!(
+            crossing_calls(&k.calls).as_slice(),
+            [Call::Create { .. }, Call::Cross { write: Some(_), .. }, Call::Destroy(_)]
+        ),
+        "{:?}",
+        k.calls
+    );
+    assert!(
+        records(&outputs)
+            .iter()
+            .any(|x| matches!(x, Record::PushFailed { request } if *request == r.request)),
+        "{:?}",
+        records(&outputs)
+    );
+    assert_eq!(s.items_held(), 0);
+    assert_eq!(s.holding(), held);
+}
+
+/// A denied or dropped request forgets its items too.
+#[test]
+fn a_denied_requests_items_are_forgotten() {
+    let mut k = Recorder::default();
+    k.homes.insert(("alice".into(), "in".into()), vec![1u8; 16]);
+    let mut s = started(&mut k);
+    let u = alice_session(&mut s, &mut k);
+    let c = open_channel(&mut s, &mut k, &ALICE_APPROVAL_KEY).unwrap();
+    let labels = label_bytes(&[7]);
+    let Ok(Reply::Submit(r)) = call(&mut s, &mut k, u, submit(3, &labels, 0, "in\nin", "")) else { panic!() };
+    assert_eq!(s.items_held(), 2);
+    let deny = Message::Deny(Deny { channel: c, request: r.request });
+    assert!(matches!(call(&mut s, &mut k, APPROVAL, deny), Ok(Reply::Deny(_))));
+    assert_eq!(s.items_held(), 0);
+    let Ok(Reply::Submit(_)) = call(&mut s, &mut k, u, submit(3, &labels, 0, "in\nin", "")) else { panic!() };
+    assert_eq!(s.items_held(), 2);
+    assert!(matches!(call(&mut s, &mut k, u, Message::EndSession(EndSession {})), Ok(Reply::EndSession(_))));
+    assert_eq!(s.items_held(), 0, "a dead session's requests are dropped, their items with them");
+}
+
+/// In a confined boot (servers/init.md, "The confinement check"; R34) a labelled session's home
+/// slot binds nothing and its VM is told no home: a push is its way in; an unlabelled session's
+/// home is bound as ever.
+#[test]
+fn a_confined_boot_leaves_a_labelled_sessions_home_unbound() {
+    use redoubt_steward_server::own::{Bound, Child, Own, binding, session_args};
+    let mut own = Own::default();
+    own.line("label \"alice-secrets\" id=7").unwrap();
+    own.line("home \"alice\" handle=walfsd:data path=/home/alice quota=8388608").unwrap();
+    own.line("vault \"alice\" labels=[7] handle=littlefsd:alice-secrets").unwrap();
+    let home = |own: &Own, child| binding(own, "alice", &[7], child, 1, 0).map(|b: Bound| b.at);
+    assert_eq!(home(&own, Child::Session { labelled: true }), Some(Some("/home/alice".into())));
+    assert!(session_args(&own, "alice", &[7], None).contains(&"home=/home/alice".to_string()));
+    own.line("confined").unwrap();
+    assert!(own.confined);
+    assert_eq!(home(&own, Child::Session { labelled: true }), None);
+    assert!(!session_args(&own, "alice", &[7], None).iter().any(|a| a.starts_with("home=")));
+    assert_eq!(
+        binding(&own, "alice", &[], Child::Session { labelled: false }, 1, 0).map(|b| b.at),
+        Some(Some("/home/alice".into()))
+    );
+    assert!(session_args(&own, "alice", &[], None).contains(&"home=/home/alice".to_string()));
+    assert_eq!(own.line("confined"), Err("a second `confined`".into()));
+    assert_eq!(Own::default().line("confined now"), Err("`confined` stands alone".into()));
 }

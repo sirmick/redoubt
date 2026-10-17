@@ -1079,8 +1079,9 @@ fn label_ids(m: &Manifest, names: &[String]) -> Vec<u64> {
 /// The steward's own lines, after the core's (servers/steward.md, "The manifest lines"): each
 /// label's name and id; each principal's home, at the handle of its volume's server; the labelled
 /// volume of each label set it works under that has one; its network scope, in the manifest's
-/// prefix-and-ports form (`*` for every port); and the console's principal, if the manifest names
-/// one.
+/// prefix-and-ports form (`*` for every port); the console's principal, if the manifest names
+/// one; and `confined` when the manifest sets it, so the steward leaves a labelled session's home
+/// unbound ("The confinement check").
 pub fn steward_own_lines(m: &Manifest) -> Vec<String> {
     let q = |s: &str| quote(s.as_bytes());
     let mut out: Vec<String> = m.labels.iter().map(|l| format!("label {} id={}", q(&l.name), l.id)).collect();
@@ -1116,6 +1117,9 @@ pub fn steward_own_lines(m: &Manifest) -> Vec<String> {
     }
     if let Some(c) = &m.console {
         out.push(format!("console {}", q(c)));
+    }
+    if m.confined {
+        out.push("confined".into());
     }
     out
 }

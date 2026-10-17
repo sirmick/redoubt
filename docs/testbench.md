@@ -787,7 +787,10 @@ and 509, in a recorded negative run. The traced kernel stamps each audit's start
 and end (records `U` and `V`: which audit, and the time). The program prints each latency
 sample's window, its end on `time_now` and its length (`LATENCY-SAMPLE <group> <measure> <end>
 <gross>`) and how many it took of each, so a window lost on the way fails the check, and it
-judges none of them. `sched_oracle` subtracts the audit time inside each window,
+judges none of them. A program whose run goes on past its measurement marks the window's end,
+`LATENCY-END <time>` on the kernel's clock: `sched_oracle` then judges no sample printed after it
+and no destruction ending after it, reporting their count (the real steward's `steward-latency`,
+whose marker-file exits reap every lease). `sched_oracle` subtracts the audit time inside each window,
 counting only the part of an audit that falls in it, and then applies the case's bounds
 (`deadline_notice_p99_us=40000`). It reports the gross, the net and the audit time beside each
 target ([responsiveness](kernel/scheduling.md#responsiveness)). A share is the kernel's
@@ -1775,7 +1778,7 @@ additional client from the merged manifest.
 | --- | ---: | ---: | ---: | ---: |
 | `keyd` | 7,368 | 4 | 4 | 8 |
 | `consoled` | 10,384 | 6 | 11 | 22 |
-| `bootfsd` | 7,320 | 4 | 1,089 | 2,304 (the image publishes `beamlet`, `piped` and `consrelay`, and the cap follows each manifest's own published total) |
+| `bootfsd` | 7,320 | 4 | 1,089 | 2,304 (the image publishes `beamlet`, `piped`, `consrelay` and `crossing`, and the cap follows each manifest's own published total) |
 | `blkd` | 4,520 | 3 | 19 | 38 |
 | `netd` | 4,296 | 3 | 2 | 4 |
 | `ipd` | 13,672 | 7 | 37 | 74 |

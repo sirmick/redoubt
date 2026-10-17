@@ -249,6 +249,13 @@ max_unsafe = 0
 max_undocumented = 0
 
 [[budget]]
+# The steward's reader or writer of one item forbids unsafe code: one call, one connection.
+name = "crossing"
+paths = ["servers/crossing/src"]
+max_unsafe = 0
+max_undocumented = 0
+
+[[budget]]
 # The wire codecs are linked into the runtime, so they run on target. The crate says
 # `#![forbid(unsafe_code)]`, so this can only stay at 0.
 name = "redoubt-wire (protocol codecs)"

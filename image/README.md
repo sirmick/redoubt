@@ -4,7 +4,7 @@ The sources of the signed boot bundle and the disk images; what they produce goe
 `target/image/`. The bundle is on [boot](../docs/kernel/boot.md) and [init](../docs/servers/init.md).
 
 - `boot.toml`: the bundle's entries in order, the kernel, `init`, the servers (the steward and
-  `sshd` among them), `beamlet`, `piped` and the manifest. `./mkimage` packs it with the bench's builder into `target/image/redoubt.bundle`, and
+  `sshd` among them), `beamlet`, `piped`, `consrelay`, `crossing` and the manifest. `./mkimage` packs it with the bench's builder into `target/image/redoubt.bundle`, and
   the `init-boot` case boots the same bundle. The builder writes the userland volume's root and
   block count into the manifest it packs, from its own pack of `userland.toml`.
 - `manifest.json`: the boot manifest `init` reads, with thirteen servers, including `walfsd:data`

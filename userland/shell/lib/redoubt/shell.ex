@@ -94,8 +94,10 @@ defmodule Redoubt.Shell do
   Starts the session in its home, the directory `identity` (what the steward told the session,
   `redoubt:identity/0`) names: the working directory moves there, and the prompt shows it. A
   session told no home, or whose home cannot be entered, says so once and starts where the VM
-  did, `/`, where nothing is writable. A VM that is no session (`nil`, on a host) starts where
-  it is, and nothing is said.
+  did, `/`, where nothing is writable; a labelled session told no home is one in a confined
+  boot, whose home slot the steward left unbound, and its line says that a push is the way in
+  (docs/servers/steward.md, "Declassification and push"). A VM that is no session (`nil`, on a
+  host) starts where it is, and nothing is said.
 
   Returns `{:ok, home}`, `{:error, reason}` for a session that could not start in its home, or
   `:none` for a VM that is no session.
@@ -117,7 +119,14 @@ defmodule Redoubt.Shell do
           {:error, _reason} -> "?"
         end
 
-      Printer.text("** no home to start in (#{inspect(reason)}); this session starts in #{here}")
+      case {reason, Map.get(identity, :labels, [])} do
+        {:no_home, [_ | _]} ->
+          Printer.text("** no home in this label set: a push is the way in; this session starts in #{here}")
+
+        _ ->
+          Printer.text("** no home to start in (#{inspect(reason)}); this session starts in #{here}")
+      end
+
       result
     end
   end

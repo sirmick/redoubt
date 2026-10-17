@@ -1,0 +1,127 @@
+description = "Declassification (docs/servers/steward.md, \"Declassification and push\" and R42; docs/servers/sshd.md, \"approve@box\"): alice's vault session writes a 40-byte text item in her vault and submits it for declassification (`submit` kind 2, `what` its path); the steward, unlabelled, never reads the vault: it carves a reader budget under users with exactly the item's labels and her account, launches the crossing program in it with one connection to the vault rooted at the item's directory, minted in that budget, calls it once for the item, and destroys the budget, whose process exits once its call is answered or is killed with the budget if still running (the steward's crossing line); the snapshot is hashed and the request frozen; a 300-byte item is refused too_big and a binary one not_printable at submission, each after its own read crossing; `ssh approve@box` with alice's approval key shows the whole item, the hash, the code and the item's path as the requester's text; the vault session changes the item between the submission and the approval; `approve <id> <code>` lands exactly the snapshot at ~/out/memo in alice's unlabelled home by the steward's own write, never a re-read, which her unlabelled session reads back byte for byte; a second declassification to the same landing is in_use. The verdicts are the steward's audit lines (Submitted, Approved, Declassified naming the snapshot and the reader budget), its crossing and served lines, the steward's answers as the shells printed them, the bytes the steward wrote on the channel as sshd relayed them, and the file alice's plain session reads (rule F)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+recipe = "image/boot.toml"
+# The image needs 1 GiB: the principals' budgets, each holding shell VMs' sessions, do not fit
+# the users budget 256 MiB leaves (docs/kernel/budgets.md).
+memory_mib = 1024
+# Three logins and the approval terminal.
+timeout_secs = 1800
+expect = [
+    '^init: started sshd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
+    '^init: started steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+]
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    '^init: .* (exited|faulted|was killed)',
+    'init: restarted',
+    'EXCEPTION',
+    'steward: a step failed',
+    'steward: the core exited',
+    'sshd: login alice.*: refused',
+]
+# The two refused items each ran a read crossing, destroyed once its program answered (the
+# program exits on its own after its one call, or the destruction kills it first); the accepted
+# one is submitted in the vault's domain, its crossing destroyed too; the approval copies the
+# snapshot out, audited with the reader budget's id; the steward says its own time on each submit.
+expect_after = [
+    '^\[con [0-9a-f]{16}\] steward: crossing [0-9]+ of 1001/\{7\} (exited 0|was killed [0-9]+)$',
+    '^\[con [0-9a-f]{16}\] steward: crossing [0-9]+ of 1001/\{7\} (exited 0|was killed [0-9]+)$',
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{7\} at [0-9]+: Submitted \{ request: [0-9]+ \}',
+    '^\[con [0-9a-f]{16}\] steward: crossing [0-9]+ of 1001/\{7\} (exited 0|was killed [0-9]+)$',
+    '^\[con [0-9a-f]{16}\] sshd: login approve: approval channel [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{7\} at [0-9]+: Approved \{ request: [0-9]+, principal: 0, key: [1-9][0-9]*, hash: \[',
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{7\} at [0-9]+: Declassified \{ request: [0-9]+, bytes: \[102, 111, 114, 116, 121, 32, 98, 121, 116, 101, 115, .*\], reader: [1-9][0-9]* \}',
+    '^\[con [0-9a-f]{16}\] steward: served submit in [0-9]+ us$',
+]
+
+# Alice's vault session stages the three items and submits each; the answers are tagged, so a
+# pattern matches the shell's printed value and never the echo of the line typed. Between the
+# submission and the approval it changes the item: what lands is the snapshot.
+[[session]]
+user = "alice+alice-secrets"
+name = "alice-vault"
+pty = true
+steps = [
+    { expect = '/home/alice \([0-9]+\)> ' },
+    { send = "{:stage, File.mkdir_p(\"/vault/notes\"), File.write(\"/vault/notes/memo\", \"forty bytes of text, printable, as asked\"), File.write(\"/vault/notes/big\", String.duplicate(\"x\", 300)), File.write(\"/vault/notes/binary\", <<1, 2, 3>>)}\n" },
+    { expect = '\{:stage, :ok, :ok, :ok, :ok\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:ok, c} = Redoubt.Contexts.connection(); {:big, Redoubt.Wire.Client.Steward.submit(c, 2, <<7::little-64>>, 0, 0, 0, \"notes/big\", \"\")}\n" },
+    { expect = '\{:big, \{:error, :too_big\}\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:binary, Redoubt.Wire.Client.Steward.submit(c, 2, <<7::little-64>>, 0, 0, 0, \"notes/binary\", \"\")}\n" },
+    { expect = '\{:binary, \{:error, :not_printable\}\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:memo, Redoubt.Wire.Client.Steward.submit(c, 2, <<7::little-64>>, 0, 0, 0, \"notes/memo\", \"\")}\n" },
+    # The steward's `approval_waiting` on this session's notices endpoint: the request's labels
+    # are the vault's, so the vault session is told, printed by the shell's listener in its own
+    # order against the reply (before it in the runs seen), so one pattern takes either order; the
+    # prompt may have gone by inside it, so the next line is sent without waiting for one.
+    { expect = '(?s)\[an approval is waiting\].*\{:memo, \{:ok, %\{request: [0-9]+\}\}\}|\{:memo, \{:ok, %\{request: [0-9]+\}\}\}.*\[an approval is waiting\]' },
+    { send = "{:changed, File.write(\"/vault/notes/memo\", \"changed since the submission: not what lands\")}\n" },
+    { expect = '\{:changed, :ok\}' },
+    { expect = '\([0-9]+\)> ' },
+    { mark = "modified" },
+    { wait = "landed" },
+    { send = "{:again, Redoubt.Wire.Client.Steward.submit(c, 2, <<7::little-64>>, 0, 0, 0, \"notes/memo\", \"\")}\n" },
+    { expect = '\{:again, \{:error, :in_use\}\}' },
+    { expect = '\([0-9]+\)> ' },
+    { mark = "vault-done" },
+    { exit = 0 },
+]
+
+# Alice's unlabelled session reads what landed in her home: the snapshot, byte for byte, in
+# ~/out, which the steward made; it is told of no approval (the request's labels are not its).
+[[session]]
+user = "alice"
+pty = true
+forbid = ['an approval is waiting']
+steps = [
+    { expect = '/home/alice \([0-9]+\)> ' },
+    { wait = "approved" },
+    { send = "{:landed, Enum.find_value(1..60, fn _ -> case File.read(\"/home/alice/out/memo\") do {:ok, t} -> t; _ -> Process.sleep(1000); nil end end)}\n" },
+    { expect = '\{:landed, "forty bytes of text, printable, as asked"\}' },
+    { expect = '\([0-9]+\)> ' },
+    { mark = "landed" },
+    { wait = "vault-done" },
+    { exit = 0 },
+]
+
+# The approval terminal, with alice's approval key, once the item has been changed: the screen
+# shows the snapshot whole, the hash, the code and the path; the code approves; the next screen
+# is empty. Nothing on this channel is a session's: every byte is the steward's.
+[[session]]
+user = "approve"
+name = "approver"
+key = "alice-approval"
+pty = true
+forbid = ['\x1b', 'changed since the submission']
+steps = [
+    { wait = "modified" },
+    { expect = 'pending approvals for alice:' },
+    { expect = 'request ([0-9a-f]{16}) hash ([0-9a-f]{64}) code ([0-9a-f]{8})' },
+    { expect = 'request from alice \(session-[0-9]+, labels \[7\]\): declassify item [0-9]+ of labels \[7\]: "forty bytes of text, printable, as asked"; reason withheld \(labelled requester\)' },
+    { expect = 'item [0-9]+: path \(the requester.s text\) "notes/memo"' },
+    { expect = 'type: approve <id> <hash or code> \| deny <id> \| pending' },
+    { send = "approve $1 $3\n" },
+    { expect = 'approved ([0-9a-f]{16})' },
+    { mark = "approved" },
+    { send = "pending\n" },
+    { expect = 'no approval is waiting for alice' },
+    { wait = "vault-done" },
+    { exit = 0 },
+]
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]
+forward = [22]

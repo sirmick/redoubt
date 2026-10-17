@@ -462,7 +462,9 @@ typed operations, so a client names no format:
   ([R26 (admission fairness)](serving.md#r26-admission-fairness)), the completion calls per
   bucket derived from what a manifest lets one account have open at once, and the connections
   the account's whoever minted them, the steward's share holding only its kept carves
-  ([littlefsd](littlefsd.md#volumes-connections-and-labels)); its budget, 4 MiB, holds the
+  ([littlefsd](littlefsd.md#volumes-connections-and-labels)); a crossing's program
+  ([the steward](steward.md#declassification-and-push)) makes plain calls, no completion call,
+  and holds one connection record of the account's bucket for at most a second; its budget, 4 MiB, holds the
   image's six buckets at their caps (6 × 626,688 bytes) and not a seventh. **An entry's pages
   are what the server may hold at its limits:** that budget, its heap cap and its stack, rounded
   up to 256 pages: 1,024 + 64 + 14, so 1,280 for every `walfsd` entry in the tree, whatever its

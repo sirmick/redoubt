@@ -86,6 +86,12 @@ name = "piped"
 package = "redoubt-piped"
 
 [[entry]]
+name = "crossing"
+# The steward's reader or writer of one declassified or pushed item, launched in a budget
+# carrying the item's labels (docs/servers/steward.md, "Declassification and push").
+package = "redoubt-crossing"
+
+[[entry]]
 name = "manifest"
 path = "image/manifest.json"
 # The userland volume's root and data blocks, from the pack of image/userland.toml: the signed

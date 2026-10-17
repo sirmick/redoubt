@@ -28,6 +28,12 @@ restart-probe = []
 # embedder that hands the first labelled context's relay every other context's channel too
 # (src/bin/steward.rs, probe_cross).
 label-probe = []
+# Test-only, for the bench's steward-latency case, and off in every default build: the steward
+# arms timeouts after a probe lease's start, ends that lease itself at the second, prints its wake
+# and deadline-notice samples for the bench's oracle, and exits at its start when the case's
+# marker file is in the console principal's home, so init's reboot rule dumps the kernel's trace
+# (src/bin/steward.rs, Probe; kernel/scheduling.md, "Responsiveness").
+latency-probe = []
 
 [dev-dependencies]
 # The fuzz body, for the tests in tests/.

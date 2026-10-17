@@ -80,7 +80,7 @@
       "receives": ["erofsd:system"],
       "args": ["endpoint=erofsd:system", "buckets=5"] },
     { "name": "steward", "program": "steward",
-      "stack_pages": "9", "heap_pages": "32",
+      "stack_pages": "9", "heap_pages": "128",
       "budget": { "pages": "1024", "processes": 1, "weight": 100 },
       "receives": ["steward"],
       "handed": [ { "endpoint": "bootfsd", "badge": "7" }, { "endpoint": "erofsd:system", "badge": "7" },
@@ -93,7 +93,7 @@
       "handed": [ { "endpoint": "ipd", "badge": "6" }, { "endpoint": "keyd", "badge": "1" },
                   { "endpoint": "steward", "badge": "1" } ] }
   ],
-  "public": ["beamlet", "piped", "consrelay"],
+  "public": ["beamlet", "piped", "consrelay", "crossing"],
   "labels": [ { "name": "alice-secrets", "owner": "alice", "id": "7" } ],
   "principals": [
     { "name": "alice", "account": "1001",
@@ -112,7 +112,7 @@
     "sizes": { "session": { "pages": "11392", "processes": 10, "weight": 100 },
                "agent": { "pages": "4096", "processes": 1, "weight": 50 },
                "sub_agent": { "pages": "1024", "processes": 1, "weight": 10 },
-               "crossing": { "pages": "64", "processes": 1, "weight": 1 },
+               "crossing": { "pages": "128", "processes": 1, "weight": 1 },
                "cost": "1" } },
   "console": "alice"
 }

@@ -25,8 +25,8 @@ use redoubt_steward::event::{Content, EventKind};
 use redoubt_steward::hash::key_id;
 use redoubt_steward::inspect;
 
-use crate::drive::{Exited, MINTED};
-use crate::{Kernel, Steward};
+use crate::drive::{Exited, MINTED, OUT, split};
+use crate::{Kernel, PUSH_MAX, Steward};
 
 /// `sshd`'s root badge: logins, channel ends and approval channels opening and closing.
 pub const SSHD: u64 = 1;
@@ -183,6 +183,32 @@ impl<'a, K: Kernel> Serving<'a, K> {
             label_bytes: Vec::new(),
         }
     }
+
+    /// The principal whose session or lease `badge` routes: the submitter, whose home a
+    /// declassification lands in and a push's source is read from. A badge the core does not
+    /// route, or an account with no principal, is `unknown`.
+    fn principal_of(&self, badge: u64) -> Result<String, ErrorCode> {
+        self.steward.account_of(badge).and_then(|a| self.steward.principal_name(a)).ok_or(ErrorCode::Unknown)
+    }
+
+    /// A fresh item id for `path`, in the minted range as every word the server hands the core
+    /// (R27, R36), the request's once the core answers the submission, dropped with a refusal.
+    fn item(&mut self, path: String) -> Result<u64, ErrorCode> {
+        let id = self.kernel.random().map_err(|_| ErrorCode::Failed)? | MINTED;
+        self.steward.item(id, path);
+        Ok(id)
+    }
+}
+
+/// A path a submission names, cleaned: its components valid names (`redoubt_rt::path::clean`),
+/// joined by `/`, relative to the volume's root; `None` for one that does not clean or is the
+/// root itself.
+pub fn item_path(what: &str) -> Option<String> {
+    let names = redoubt_rt::path::clean(what).ok()?;
+    if names.is_empty() {
+        return None;
+    }
+    Some(names.join("/"))
 }
 
 /// The reply token every call gets: the core answers it, at once or when its batch is done, and
@@ -354,15 +380,47 @@ where
             ),
             // A request to the powerbox (servers/steward.md, "The powerbox and approvals"): the
             // structured content by its kind, and the requester's reason; the core freezes it
-            // and answers its id. A declassification or a push (kinds 2 and 3) is STEWARD4's:
-            // until then it is `unknown`, as an operation not yet bound.
+            // and answers its id. A declassification (kind 2) names its item by `what`, a path
+            // in the vault; a push (kind 3) names its source and target by `what`, the source's
+            // path in the submitter's home, a newline, the target's path in the vault
+            // ("Declassification and push"). The server draws the ids the core hashes and keeps
+            // the paths beside them for the request's life; a path that does not clean is
+            // `unknown`, as an item nobody holds. Before the core sees it: a declassification
+            // whose landing `~/out/<name>` is taken is `in_use`, never overwritten; a push whose
+            // source is missing is `unknown`, one over `PUSH_MAX` `too_big` (the step's read is
+            // bounded too: a source grown past it between is `failed`).
             Message::Submit(m) => {
+                let labels: Vec<u64> = redoubt_rt::wire::labels::decode(m.labels).collect();
                 let content = match m.kind {
                     0 => Content::Note { what: m.what.into() },
-                    1 => Content::Agent {
-                        labels: redoubt_rt::wire::labels::decode(m.labels).collect(),
-                        lease: m.lease,
-                    },
+                    1 => Content::Agent { labels, lease: m.lease },
+                    2 => {
+                        let path = item_path(m.what).ok_or(ErrorCode::Unknown)?;
+                        let principal = self.principal_of(caller.badge)?;
+                        let landing = alloc::format!("{OUT}/{}", split(&path).1);
+                        match self.kernel.home_stat(&principal, &landing) {
+                            Ok(None) => {}
+                            Ok(Some(_)) => return Err(ErrorCode::InUse),
+                            Err(_) => return Err(ErrorCode::Failed),
+                        }
+                        let item = self.item(path)?;
+                        Content::Declassify { labels, item }
+                    }
+                    3 => {
+                        let (source, target) = m.what.split_once('\n').ok_or(ErrorCode::Unknown)?;
+                        let source = item_path(source).ok_or(ErrorCode::Unknown)?;
+                        let target = item_path(target).ok_or(ErrorCode::Unknown)?;
+                        let principal = self.principal_of(caller.badge)?;
+                        match self.kernel.home_stat(&principal, &source) {
+                            Ok(Some(n)) if n as usize <= PUSH_MAX => {}
+                            Ok(Some(_)) => return Err(ErrorCode::TooBig),
+                            Ok(None) => return Err(ErrorCode::Unknown),
+                            Err(_) => return Err(ErrorCode::Failed),
+                        }
+                        let source = self.item(source)?;
+                        let item = self.item(target)?;
+                        Content::Push { source, target: labels, item }
+                    }
                     _ => return Err(ErrorCode::Unknown),
                 };
                 (EventKind::Submit { badge: caller.badge, content, reason: m.reason.into() }, None)
