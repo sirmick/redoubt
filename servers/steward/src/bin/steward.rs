@@ -29,6 +29,13 @@
 //! server does not take in time ends the turn (the rest stay due for the next, after one
 //! receive), is retried at a later turn and dropped after the cap with a line; the loop never
 //! waits more than one such bound on a server while it serves nobody.
+//!
+//! **The console lines at the loop's turn** (the same page): every line the steward says is
+//! queued ([`Console`], the library's `redoubt_steward_server::console`) and written through one
+//! fid kept open at `consoled`, a line one write within [`CONSOLE_US`], at two points: before a
+//! call's reply, so a call's records come before anything its caller says of the answer, and at
+//! the loop's top after the cleanup steps, for every other event's lines. Either turn stops at
+//! the first line the console did not take in time, the rest queued in order for the next.
 
 #![cfg_attr(target_os = "none", no_std, no_main)]
 
@@ -43,11 +50,11 @@ mod machine {
     use core::num::NonZeroU64;
     use core::sync::atomic::{AtomicU32, Ordering};
 
-    use redoubt_client::file::Connection;
+    use redoubt_client::file::{Connection, ROOT};
     use redoubt_client::launch::Launch;
     use redoubt_client::typed;
     use redoubt_rt::abi::{BudgetSpec, Error, FOREVER, Handle, MAX_LEND_PAGES};
-    use redoubt_rt::client::{Connection as Nine, Lend};
+    use redoubt_rt::client::{ClientError, Connection as Nine, Lend};
     use redoubt_rt::handle::{Budget, Endpoint, close};
     use redoubt_rt::ipc::{Buffer, Event, Request};
     use redoubt_rt::server::ninep::{DMDIR, mode};
@@ -62,6 +69,7 @@ mod machine {
     use redoubt_steward::inspect;
     use redoubt_steward_server::approval::{Line, Lines, parse};
     use redoubt_steward_server::cleanup::TRIES;
+    use redoubt_steward_server::console::{Queue, Sink};
     use redoubt_steward_server::own::{
         Bound, Child, How, IPD, Own, SYSTEM, binding, lease_args, session_args,
     };
@@ -195,6 +203,10 @@ mod machine {
     /// second). A server busy or recovering past it is retried at a later turn
     /// (`redoubt_steward_server::cleanup`).
     const CLEANUP_US: u64 = NOTICE_US;
+    /// How long a console line's write waits for `consoled` to take it (µs): the same bound, for
+    /// the same reason; a line it did not take stays queued for a later turn
+    /// (`redoubt_steward_server::console`).
+    const CONSOLE_US: u64 = NOTICE_US;
     /// Open approval channels at most, and so reader threads at most (servers/steward.md, "The
     /// powerbox and approvals"): the steward's bound on its own threads beside the watchers,
     /// declared as theirs is. An open past it is refused, and the person's `ssh approve@box`
@@ -399,6 +411,8 @@ mod machine {
 
     struct Machine<'s> {
         startup: &'s Startup<'s>,
+        /// The steward's console: the lines it says, and the fid they go through.
+        out: &'s mut Console,
         lend: Lend,
         own: Endpoint,
         /// Each server the steward was handed, attached once, by its handle name.
@@ -508,7 +522,7 @@ mod machine {
                 "steward: label-probe: the labelled relay was handed another channel: {}\n",
                 told.is_ok()
             );
-            say(self.startup, &line);
+            self.out.say(&line);
         }
 
         /// The handle the steward reaches the server named `name` by: the one `init` handed it
@@ -847,10 +861,9 @@ mod machine {
             };
             match told {
                 Err(Error::Timeout) if !last => return Err(Error::Timeout),
-                Err(Error::Timeout) => say(
-                    self.startup,
-                    &format!("steward: {what} dropped after {TRIES} attempts: the server did not take it\n"),
-                ),
+                Err(Error::Timeout) => self.out.say(&format!(
+                    "steward: {what} dropped after {TRIES} attempts: the server did not take it\n"
+                )),
                 _ => {}
             }
             if let Some(Held { handle: Some(handle), .. }) = self.held.remove(&key) {
@@ -1179,10 +1192,9 @@ mod machine {
                 Err((what, e)) => {
                     let _ = close(console);
                     let _ = close(reader);
-                    say(
-                        self.startup,
-                        &format!("steward: approval channel {channel:016x} not served: {what} ({e:?})\n"),
-                    );
+                    self.out.say(&format!(
+                        "steward: approval channel {channel:016x} not served: {what} ({e:?})\n"
+                    ));
                     Err(e)
                 }
             }
@@ -1230,10 +1242,8 @@ mod machine {
                 Ok(n)
             });
             if let Err(e) = written {
-                say(
-                    self.startup,
-                    &format!("steward: a screen on channel {channel:016x} was not written: {e:?}\n"),
-                );
+                self.out
+                    .say(&format!("steward: a screen on channel {channel:016x} was not written: {e:?}\n"));
             }
         }
 
@@ -1494,26 +1504,101 @@ mod machine {
         }
     }
 
-    /// Says `line` on the console `init` gave the steward, if it has one. Not the runtime's
-    /// `start::say`: both attach at fid 0, but that one clunks fid 0 after, and the steward holds
-    /// its own attached connection there (`Machine::consoled`), through which it mints the console
-    /// session's; the client library's attach never clunks it.
-    fn say(startup: &Startup, line: &str) {
-        let Some((_, console)) = startup.namespace().find(|(path, _)| *path == "/dev/cons") else { return };
-        let Ok(mut lend) = Lend::new(1) else { return };
-        let Ok(console) = Connection::attach(Endpoint::from_handle(console), &mut lend) else { return };
-        if let Ok(file) = console.open(&mut lend, "", mode::OWRITE) {
-            // A write carries at most the lend's iounit: a line longer than a page (an audit
-            // record naming a pushed item's bytes) goes in several.
-            let bytes = line.as_bytes();
-            let mut done = 0;
-            while done < bytes.len() {
-                match file.write_at(&mut lend, 0, &bytes[done..]) {
-                    Ok(n) if n > 0 => done += n,
-                    _ => break,
+    /// The steward's console (servers/steward.md, "Failure and restart"): the lines it says,
+    /// queued in order, and the fid they are written through, kept open on the connection `init`
+    /// gave it at `/dev/cons` with its one lent page. Not the runtime's `start::say`, which
+    /// attaches and clunks per line: the connection is attached once, here, and the UART
+    /// session's console is minted through it ([`Machine::consoled`]), so no second `Tversion`
+    /// ends the kept fid.
+    struct Console {
+        lines: Queue,
+        /// None when `init` gave the steward no console: its lines go nowhere.
+        at: Option<Out>,
+    }
+
+    /// The kept connection's side of the queue: its calls bounded by [`CONSOLE_US`] through a
+    /// second client on the same connection (the attached one's calls are not bounded: a mint).
+    struct Out {
+        conn: Connection,
+        nine: Nine,
+        lend: Lend,
+        fid: Option<u32>,
+    }
+
+    impl Console {
+        fn new(startup: &Startup) -> Console {
+            let at = startup.namespace().find(|(path, _)| *path == "/dev/cons").and_then(|(_, handle)| {
+                let mut lend = Lend::new(1).ok()?;
+                let conn = Connection::attach(Endpoint::from_handle(handle), &mut lend).ok()?;
+                let nine = Nine::within(Endpoint::from_handle(handle), CONSOLE_US);
+                Some(Out { conn, nine, lend, fid: None })
+            });
+            Console { lines: Queue::default(), at }
+        }
+
+        /// The attached connection, through which the UART session's console is minted.
+        fn connection(&self) -> Option<Connection> { self.at.as_ref().map(|o| o.conn.clone()) }
+
+        /// Queues `line`, written at the next turn.
+        fn say(&mut self, line: &str) {
+            if self.at.is_some() {
+                self.lines.push(String::from(line));
+            }
+        }
+
+        /// A turn at `now` (`redoubt_steward_server::console::Queue::run`): when the next may run.
+        fn turn(&mut self, now: u64) -> Option<u64> {
+            let out = self.at.as_mut()?;
+            self.lines.run(now, out)
+        }
+
+        /// The last turn, at the steward's exit: every line queued, up to the first the console
+        /// did not take.
+        fn flush(&mut self) {
+            if let Some(out) = self.at.as_mut() {
+                self.lines.flush(out);
+            }
+        }
+    }
+
+    impl Sink for Out {
+        fn open(&mut self) -> Result<(), Error> {
+            // A fid the console refused a write on is gone there (a restarted `consoled` knows
+            // none of its clients' fids) and goes back to the pool here; one that timed out may
+            // still be the server's, and stays taken, as the client library keeps such a fid.
+            let fid = self.conn.take_fid().map_err(|_| Error::OutOfMemory)?;
+            let opened = self
+                .nine
+                .walk(&mut self.lend, ROOT, fid, "")
+                .and_then(|_| self.nine.open(&mut self.lend, fid, mode::OWRITE));
+            match opened {
+                Ok(_) => {
+                    if let Some(old) = self.fid.replace(fid) {
+                        self.conn.free_fid(old);
+                    }
+                    Ok(())
+                }
+                Err(e) => {
+                    if !matches!(e, ClientError::Sys(Error::Timeout)) {
+                        self.conn.free_fid(fid);
+                    }
+                    Err(sys(e))
                 }
             }
-            let _ = file.close(&mut lend);
+        }
+
+        fn write(&mut self, bytes: &[u8]) -> Result<usize, Error> {
+            let fid = self.fid.ok_or(Error::BadHandle)?;
+            self.nine.write(&mut self.lend, fid, 0, bytes).map_err(sys)
+        }
+    }
+
+    /// A client error as the queue reads it: the call's own error (a `Timeout` keeps the line),
+    /// anything else a refusal.
+    fn sys(e: ClientError) -> Error {
+        match e {
+            ClientError::Sys(e) | ClientError::Pages(e) => e,
+            _ => Error::Refused,
         }
     }
 
@@ -1524,10 +1609,10 @@ mod machine {
 
     /// Audit records are console lines until the audit file (M3); so is a console session the
     /// steward could not open.
-    fn deliver(startup: &Startup, outputs: Vec<Output>) {
+    fn deliver(out: &mut Console, outputs: Vec<Output>) {
         for o in outputs {
             if let Output::Reply { answer, .. } = &o {
-                say(startup, &format!("steward: the console session did not open: {answer:?}\n"));
+                out.say(&format!("steward: the console session did not open: {answer:?}\n"));
             }
             if let Output::Audit(a) = o {
                 let d = a.domain();
@@ -1538,31 +1623,31 @@ mod machine {
                     a.at(),
                     a.record()
                 );
-                say(startup, &line);
+                out.say(&line);
             }
         }
     }
 
     /// Says each batch step that failed, with the kernel's error: the core's answer names only
     /// `Failed`.
-    fn failed(startup: &Startup, steward: &mut Steward<Handle, u64>) {
+    fn failed(out: &mut Console, steward: &mut Steward<Handle, u64>) {
         for (step, error) in core::mem::take(&mut steward.failed) {
-            say(startup, &format!("steward: a step failed ({error:?}): {step:?}\n"));
+            out.say(&format!("steward: a step failed ({error:?}): {step:?}\n"));
         }
     }
 
     /// What an event did, said: its failed steps, its outputs, and the sub-budgets that changed;
     /// with no outputs, false: the core exited.
     fn after(
-        startup: &Startup,
+        out: &mut Console,
         steward: &mut Steward<Handle, u64>,
         usage: &mut BTreeMap<u32, (u64, u64)>,
         outputs: Option<Vec<Output>>,
     ) -> bool {
         let Some(outputs) = outputs else { return false };
-        failed(startup, steward);
-        deliver(startup, outputs);
-        tree(startup, steward, usage);
+        failed(out, steward);
+        deliver(out, outputs);
+        tree(out, steward, usage);
         true
     }
 
@@ -1577,14 +1662,14 @@ mod machine {
     }
 
     /// The core exited: said once, and the steward's exit code.
-    fn core_exited(startup: &Startup) -> u32 {
-        say(startup, "steward: the core exited\n");
+    fn core_exited(out: &mut Console) -> u32 {
+        out.say("steward: the core exited\n");
         CORE_EXITED
     }
 
     /// What each domain's sub-budget holds, said when it changes: the kernel's count of the
     /// pages and processes carved from it, which a session's budget takes and its end gives back.
-    fn tree(startup: &Startup, steward: &Steward<Handle, u64>, last: &mut BTreeMap<u32, (u64, u64)>) {
+    fn tree(out: &mut Console, steward: &Steward<Handle, u64>, last: &mut BTreeMap<u32, (u64, u64)>) {
         for c in &steward.carved {
             for (d, sub) in &c.subs {
                 let Ok(u) = Budget::from_handle(*sub).usage() else { continue };
@@ -1597,7 +1682,7 @@ mod machine {
                         now.0,
                         now.1
                     );
-                    say(startup, &line);
+                    out.say(&line);
                 }
             }
         }
@@ -1609,6 +1694,10 @@ mod machine {
     struct Probe {
         /// The timeout armed, and which: `false` the timer's, `true` the decision's.
         due: Option<(u64, bool)>,
+        /// The timer woke: the decision's timeout is armed at the last point before the receive
+        /// that waits on it, as the timer's is, so its wake measures the kernel's expiry to the
+        /// steward running and not the steward's own lines written before it waits.
+        decide: bool,
         /// A probe lease whose `start_agent` was just answered, with the answer's time: the
         /// timer is armed at the last point before the receive that waits on it, so the wake
         /// measures the kernel's expiry to the steward running, not the steward's own work
@@ -1628,23 +1717,23 @@ mod machine {
     impl Probe {
         /// One sample, printed as the stand-in prints it (tests/programs/src/sched.rs), under
         /// the steward's console prefix the oracle cuts.
-        fn sample(&mut self, startup: &Startup, measure: &'static str, n: usize, end: u64, gross: u64) {
+        fn sample(&mut self, out: &mut Console, measure: &'static str, n: usize, end: u64, gross: u64) {
             *self.counts.entry((measure, n)).or_default() += 1;
-            say(startup, &format!("steward: LATENCY-SAMPLE N={n} {measure} {end} {gross}\n"));
+            out.say(&format!("steward: LATENCY-SAMPLE N={n} {measure} {end} {gross}\n"));
         }
 
         /// The counts, once the domain's leases are all gone: one line per measure and group.
         /// After the second round's, the window's end, `LATENCY-END` with the steward's clock: the
         /// oracle judges no destruction ending after it and no sample printed after it (the
         /// marker-file exits that follow reap every lease's VM, none of them a sample).
-        fn flush(&mut self, startup: &Startup) {
+        fn flush(&mut self, out: &mut Console) {
             for ((measure, n), count) in core::mem::take(&mut self.counts) {
-                say(startup, &format!("steward: LATENCY-COUNT N={n} {measure} {count}\n"));
+                out.say(&format!("steward: LATENCY-COUNT N={n} {measure} {count}\n"));
             }
             self.rounds += 1;
             if self.rounds == 2 {
                 let now = redoubt_rt::handle::time_now().unwrap_or(0);
-                say(startup, &format!("steward: LATENCY-END {now}\n"));
+                out.say(&format!("steward: LATENCY-END {now}\n"));
             }
         }
     }
@@ -1675,8 +1764,15 @@ mod machine {
         (lease.lease == LATENCY_LEASE_US).then_some(*id)
     }
 
-    /// Serves until the endpoint is destroyed.
+    /// Serves until the endpoint is destroyed; the lines left unsaid at the exit go last.
     pub fn serve(startup: &Startup) -> u32 {
+        let mut out = Console::new(startup);
+        let code = run(startup, &mut out);
+        out.flush();
+        code
+    }
+
+    fn run(startup: &Startup, out: &mut Console) -> u32 {
         let (Some(users), Some(endpoint)) = (startup.handle("users"), startup.handle("steward")) else {
             return NO_HANDLE;
         };
@@ -1689,22 +1785,24 @@ mod machine {
             .ok()
             .and_then(|w| w.mint(NonZeroU64::new(WORK).expect("WORK is not 0"), None).ok().map(|s| (w, s)))
         else {
-            say(startup, "steward: cannot make its watchers' work endpoint\n");
+            out.say("steward: cannot make its watchers' work endpoint\n");
             return NOT_STARTED;
         };
         let Some((reader_work, reader_hand)) = Endpoint::create()
             .ok()
             .and_then(|w| w.mint(NonZeroU64::new(HAND).expect("HAND is not 0"), None).ok().map(|s| (w, s)))
         else {
-            say(startup, "steward: cannot make its readers' work endpoint\n");
+            out.say("steward: cannot make its readers' work endpoint\n");
             return NOT_STARTED;
         };
+        let consoled = out.connection();
         let mut machine = Machine {
             startup,
+            out,
             lend,
             own: Endpoint::from_handle(endpoint),
             servers: BTreeMap::new(),
-            consoled: None,
+            consoled,
             console: None,
             relay_console: None,
             held: BTreeMap::new(),
@@ -1740,27 +1838,33 @@ mod machine {
             last_destroy: None,
         };
         // The kernel's count of what `users` holds as this instance starts: 0, at boot and after
-        // `init` emptied a dead steward's carves.
+        // `init` emptied a dead steward's carves. The start's lines go as they are said, not at
+        // the loop's first turn: a steward that dies in its console session's launch
+        // (`steward-restart-reboot`) has said what `users` held and what it carved.
         if let Ok(u) = Budget::from_handle(users).usage() {
-            say(
-                startup,
-                &format!("steward: users holds {} pages, {} processes\n", u.pages_usage, u.processes_usage),
-            );
+            machine.out.say(&format!(
+                "steward: users holds {} pages, {} processes\n",
+                u.pages_usage, u.processes_usage
+            ));
+            machine.out.turn(0);
         }
         let mut steward: Steward<Handle, u64> = match start(&lines, users, &mut machine) {
             Ok(s) => s,
             Err(e) => {
-                say(startup, &format!("{e}\n"));
+                machine.out.say(&format!("{e}\n"));
                 return NOT_STARTED;
             }
         };
         for c in &steward.carved {
             let subs: Vec<String> = c.subs.iter().map(|(d, _)| labels(d.labels().as_slice())).collect();
-            say(
-                startup,
-                &format!("steward: carved users/{} account {}: {}\n", c.name, c.account, subs.join(" ")),
-            );
+            machine.out.say(&format!(
+                "steward: carved users/{} account {}: {}\n",
+                c.name,
+                c.account,
+                subs.join(" ")
+            ));
         }
+        machine.out.turn(0);
         // Every principal's account and name, a sponsored principal's too: its sessions are
         // carved under its sponsor's, but their namespace and arguments are its own.
         machine.accounts = inspect::fixed(&steward.store)
@@ -1773,9 +1877,6 @@ mod machine {
         machine.agent_pages = steward.sizes.agent.pages;
         machine.agent_quota = steward.sizes.agent_quota;
         machine.crossing_pages = steward.sizes.crossing.pages;
-        if let Some((_, cons)) = startup.namespace().find(|(path, _)| *path == "/dev/cons") {
-            machine.consoled = Connection::attach(Endpoint::from_handle(cons), &mut machine.lend).ok();
-        }
         // A box with no program for its sessions starts them all failed: the steward still runs.
         if let Ok(conn) = machine.server("bootfsd") {
             if let Ok(stat) = conn.stat(&mut machine.lend, PROGRAM) {
@@ -1792,25 +1893,25 @@ mod machine {
         #[cfg(feature = "latency-probe")]
         if let Some(console) = steward.own.console.clone() {
             if matches!(machine.home_stat(&console, LATENCY_DONE), Ok(Some(_))) {
-                say(startup, "steward: latency-probe: the case is done, exiting for the reboot\n");
+                machine.out.say("steward: latency-probe: the case is done, exiting for the reboot\n");
                 return LATENCY_EXIT;
             }
         }
         let Ok(report) = own.mint(NonZeroU64::new(EXITS).expect("EXITS is not 0"), None) else {
-            say(startup, "steward: cannot mint its exit reports' badge\n");
+            machine.out.say("steward: cannot mint its exit reports' badge\n");
             return NOT_STARTED;
         };
         REPORT.store(report.handle().index(), Ordering::Release);
         let Ok(done) = own.mint(NonZeroU64::new(READER_DONE).expect("READER_DONE is not 0"), None) else {
-            say(startup, "steward: cannot mint its readers' badge\n");
+            machine.out.say("steward: cannot mint its readers' badge\n");
             return NOT_STARTED;
         };
         READER_REPORT.store(done.handle().index(), Ordering::Release);
         let mut usage = BTreeMap::new();
-        tree(startup, &steward, &mut usage);
+        tree(machine.out, &steward, &mut usage);
         let outputs = steward.open_console(&mut machine).ok();
-        if !after(startup, &mut steward, &mut usage, outputs) {
-            return core_exited(startup);
+        if !after(machine.out, &mut steward, &mut usage, outputs) {
+            return core_exited(machine.out);
         }
         #[cfg(feature = "restart-probe")]
         let probe_at = redoubt_rt::handle::time_now().unwrap_or(0).saturating_add(PROBE_DELAY);
@@ -1825,16 +1926,19 @@ mod machine {
             let now = redoubt_rt::handle::time_now().unwrap_or(0);
             if steward.store.next_idle().is_some_and(|t| t <= now) {
                 let outputs = steward.event(&mut machine, EventKind::Idle, 0).ok();
-                if !after(startup, &mut steward, &mut usage, outputs) {
-                    return core_exited(startup);
+                if !after(machine.out, &mut steward, &mut usage, outputs) {
+                    return core_exited(machine.out);
                 }
             }
             let idle = steward.store.next_idle().map(|t| t.saturating_sub(now).max(1));
             // The cleanup steps due: each connection an end gave back since the last turn, and
             // the retries whose time has come, each within CLEANUP_US, up to the first that
             // times out; the receive below wakes for the next retry, or at once for the steps
-            // a timeout left due.
+            // a timeout left due. Then the console lines queued since the last turn (the
+            // steps' own among them), each within CONSOLE_US, up to the first the console did
+            // not take; the receive wakes for that line's retry.
             let due = steward.cleanup(&mut machine).map(|t| t.saturating_sub(now).max(1));
+            let line_due = machine.out.turn(now).map(|t| t.saturating_sub(now).max(1));
             #[cfg(feature = "restart-probe")]
             let wait = probe_at.saturating_sub(redoubt_rt::handle::time_now().unwrap_or(probe_at));
             #[cfg(not(feature = "restart-probe"))]
@@ -1846,7 +1950,7 @@ mod machine {
                 }
                 None => wait,
             };
-            let wait = [idle, due].into_iter().flatten().fold(wait, u64::min);
+            let wait = [idle, due, line_due].into_iter().flatten().fold(wait, u64::min);
             #[cfg(feature = "latency-probe")]
             let wait = match probe.due {
                 Some((at, _)) => {
@@ -1868,7 +1972,9 @@ mod machine {
                     .clone()
                     .is_some_and(|console| matches!(machine.home_stat(&console, &marker), Ok(Some(_))));
                 if marked {
-                    probe.flush(startup);
+                    probe.flush(machine.out);
+                    // The counts go now, not at the next event's turn.
+                    machine.out.turn(now);
                     wait
                 } else {
                     wait.min(LATENCY_POLL_US)
@@ -1880,18 +1986,19 @@ mod machine {
             if probe.rounds >= 2 && probe.due.is_none() {
                 if let Some(console) = steward.own.console.clone() {
                     if matches!(machine.home_stat(&console, LATENCY_DONE), Ok(Some(_))) {
-                        say(startup, "steward: latency-probe: the case is done, exiting for the reboot\n");
+                        machine.out.say("steward: latency-probe: the case is done, exiting for the reboot\n");
                         return LATENCY_EXIT;
                     }
                 }
             }
             // The probe's timer, armed here and nowhere earlier: the steward is about to wait.
+            // The sample's own line waits for the next turn, the timer's wake.
             #[cfg(feature = "latency-probe")]
             let wait = match probe.pending.take() {
                 Some((lease, badge, replied)) => {
                     let now = redoubt_rt::handle::time_now().unwrap_or(replied);
                     let n = others(&steward, lease);
-                    probe.sample(startup, "reply_wait", n, now, now.saturating_sub(replied));
+                    probe.sample(machine.out, "reply_wait", n, now, now.saturating_sub(replied));
                     probe = Probe {
                         due: Some((now.saturating_add(LATENCY_TIMER_US), false)),
                         lease,
@@ -1901,6 +2008,15 @@ mod machine {
                     wait.min(LATENCY_TIMER_US)
                 }
                 None => wait,
+            };
+            // The decision's, the same way, once the timer's wake and its line are behind.
+            #[cfg(feature = "latency-probe")]
+            let wait = if core::mem::take(&mut probe.decide) {
+                let now = redoubt_rt::handle::time_now().unwrap_or(0);
+                probe.due = Some((now.saturating_add(LATENCY_DECIDE_US), true));
+                wait.min(LATENCY_DECIDE_US)
+            } else {
+                wait
             };
             match own.receive(wait, 0) {
                 Ok(Event::Call(request)) if watches_call(&request.caller, &request.words) => {
@@ -1923,7 +2039,7 @@ mod machine {
                     // `submit`, from the call's arrival to its answer, said once each.
                     if let Some(op) = served_op(&words) {
                         let took = redoubt_rt::handle::time_now().unwrap_or(began).saturating_sub(began);
-                        say(startup, &format!("steward: served {op} in {took} us\n"));
+                        machine.out.say(&format!("steward: served {op} in {took} us\n"));
                     }
                     // A probe lease started: the timer is armed at the loop's next receive, the
                     // reply's time kept for the `reply_wait` sample.
@@ -1935,21 +2051,24 @@ mod machine {
                         }
                     }
                     // What the call did is said before it is answered, so its records come
-                    // before anything the caller says of the answer.
-                    after(startup, &mut steward, &mut usage, Some(outputs));
+                    // before anything the caller says of the answer: a turn of the console
+                    // queue, one write per line within the bound; a line the console did not
+                    // take waits for the loop's turn, and the reply does not.
+                    after(machine.out, &mut steward, &mut usage, Some(outputs));
+                    machine.out.turn(redoubt_rt::handle::time_now().unwrap_or(began));
                     let _ = finish(request, &outcome);
                     // A console a refused login or approval open brought is not kept.
                     machine.console(None, None);
                     machine.approval_consoles(None, None);
                     if exited {
-                        return core_exited(startup);
+                        return core_exited(machine.out);
                     }
                     // An approval channel's first screen, now that its `sshd` thread is free to
                     // take the write.
                     for kind in deferred {
                         let outputs = steward.event(&mut machine, kind, 0).ok();
-                        if !after(startup, &mut steward, &mut usage, outputs) {
-                            return core_exited(startup);
+                        if !after(machine.out, &mut steward, &mut usage, outputs) {
+                            return core_exited(machine.out);
                         }
                     }
                 }
@@ -2000,7 +2119,7 @@ mod machine {
                         labels(object.domain.labels().as_slice()),
                         delivery.words[2]
                     );
-                    say(startup, &line);
+                    machine.out.say(&line);
                     if !running {
                         continue;
                     }
@@ -2014,12 +2133,12 @@ mod machine {
                         let now = redoubt_rt::handle::time_now().unwrap_or(0);
                         if let Some(deadline) = deadline.filter(|d| *d <= now) {
                             let n = others(&steward, object.id);
-                            probe.sample(startup, "deadline_notice", n, now, now - deadline);
+                            probe.sample(machine.out, "deadline_notice", n, now, now - deadline);
                         }
                     }
                     let outputs = steward.event(&mut machine, EventKind::Exited { object }, 0).ok();
-                    if !after(startup, &mut steward, &mut usage, outputs) {
-                        return core_exited(startup);
+                    if !after(machine.out, &mut steward, &mut usage, outputs) {
+                        return core_exited(machine.out);
                     }
                 }
                 Ok(Event::Send(delivery)) => close_delivery(&delivery),
@@ -2030,8 +2149,8 @@ mod machine {
                     watches.retain(|w| w.id() != id);
                     if watches.len() < before {
                         let outputs = steward.event(&mut machine, EventKind::SshdGone, 0).ok();
-                        if !after(startup, &mut steward, &mut usage, outputs) {
-                            return core_exited(startup);
+                        if !after(machine.out, &mut steward, &mut usage, outputs) {
+                            return core_exited(machine.out);
                         }
                     }
                 }
@@ -2046,19 +2165,19 @@ mod machine {
                     let woke = redoubt_rt::handle::time_now().unwrap_or(at);
                     let n = others(&steward, probe.lease);
                     if !deciding {
-                        probe.sample(startup, "timer_wake", n, woke, woke.saturating_sub(at));
-                        probe.due = Some((woke.saturating_add(LATENCY_DECIDE_US), true));
+                        probe.sample(machine.out, "timer_wake", n, woke, woke.saturating_sub(at));
+                        probe.decide = true;
                         continue;
                     }
-                    probe.sample(startup, "decision_wake", n, woke, woke.saturating_sub(at));
+                    probe.sample(machine.out, "decision_wake", n, woke, woke.saturating_sub(at));
                     machine.last_destroy = None;
                     let (badge, lease) = (probe.badge, probe.lease);
                     let outputs = steward.event(&mut machine, EventKind::EndLease { badge, lease }, 0).ok();
                     if let Some((end, gross)) = machine.last_destroy.take() {
-                        probe.sample(startup, "destroy_call", n, end, gross);
+                        probe.sample(machine.out, "destroy_call", n, end, gross);
                     }
-                    if !after(startup, &mut steward, &mut usage, outputs) {
-                        return core_exited(startup);
+                    if !after(machine.out, &mut steward, &mut usage, outputs) {
+                        return core_exited(machine.out);
                     }
                 }
                 // The probe's look for the round's marker, half a second on: the loop's top
@@ -2067,7 +2186,7 @@ mod machine {
                 Err(Error::Timeout) if !probe.counts.is_empty() && leases_live(&steward) == 0 => {}
                 // The timers' own wakes: the loop's top ends what is due, and runs the cleanup
                 // steps whose retry has come.
-                Err(Error::Timeout) if [idle, due].into_iter().flatten().any(|t| t <= wait) => {}
+                Err(Error::Timeout) if [idle, due, line_due].into_iter().flatten().any(|t| t <= wait) => {}
                 #[cfg(feature = "label-probe")]
                 Err(Error::Timeout) if machine.probe_due.is_some() => machine.probe_hand(),
                 #[cfg(feature = "restart-probe")]

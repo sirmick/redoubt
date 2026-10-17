@@ -20,6 +20,7 @@ extern crate alloc;
 
 pub mod approval;
 pub mod cleanup;
+pub mod console;
 pub mod drive;
 #[cfg(feature = "fuzz")]
 pub mod fuzz;
