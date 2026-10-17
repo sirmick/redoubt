@@ -15,7 +15,7 @@ use redoubt_verity::{BLOCK, Geometry, Hash, RootBlock, SECTORS_PER_BLOCK, build}
 
 use super::*;
 use crate::server::{BADGE, MAX_SECTORS, Said, answer_with};
-use crate::volume::{Bad, DATA_CACHE, TREE_CACHE};
+use crate::volume::{Bad, Caps, DATA_CACHE, TREE_CACHE};
 
 const LEND: usize = 64 * 1024;
 
@@ -61,10 +61,15 @@ fn packed(n: u64, slack: usize) -> (Geometry, Vec<u8>, Hash) {
 }
 
 fn server(g: Geometry, bytes: Vec<u8>, root: &Hash, labels: &[u64]) -> Verityd<Fake> {
+    server_caps(g, bytes, root, labels, Caps::DEFAULT)
+}
+
+fn server_caps(g: Geometry, bytes: Vec<u8>, root: &Hash, labels: &[u64], caps: Caps) -> Verityd<Fake> {
     Verityd::new(
         Fake { bytes, reads: 0, fail: false },
         &Mode::Pinned { root: *root, geometry: g },
         labels.to_vec(),
+        caps,
     )
 }
 
@@ -83,7 +88,12 @@ fn signed(n: u64, slack: usize, version: u64, keys: &KeyPair) -> (Geometry, Vec<
 }
 
 fn signed_server(bytes: Vec<u8>, key: &KeyPair, floor: u64) -> Verityd<Fake> {
-    Verityd::new(Fake { bytes, reads: 0, fail: false }, &Mode::Signed { key: *key.pk, floor }, vec![])
+    Verityd::new(
+        Fake { bytes, reads: 0, fail: false },
+        &Mode::Signed { key: *key.pk, floor },
+        vec![],
+        Caps::DEFAULT,
+    )
 }
 
 fn caller(badge: u64, labels: &[u64]) -> Caller {
@@ -237,8 +247,12 @@ fn a_wrong_root_or_top_is_refused() {
     // The root pins the block count: the same disk under a smaller count does not open.
     let fewer = Geometry::new(128).unwrap();
     assert_eq!(server(fewer, bytes.clone(), &root, &[]).refused(), Some(Refusal::Root));
-    let mut dead =
-        Verityd::new(Fake { bytes, reads: 0, fail: true }, &Mode::Pinned { root, geometry: g }, vec![]);
+    let mut dead = Verityd::new(
+        Fake { bytes, reads: 0, fail: true },
+        &Mode::Pinned { root, geometry: g },
+        vec![],
+        Caps::DEFAULT,
+    );
     assert_eq!(dead.refused(), Some(Refusal::NoInfo));
     assert_eq!(
         ask(&mut dead, &littlefsd(), &Message::Info(Info {})),
@@ -408,6 +422,28 @@ fn the_data_cache_holds_the_last_blocks_least_recently_used_out() {
     ask(&mut s, &littlefsd(), &read(0, 1));
     let c3 = s.counts().unwrap();
     assert_eq!((c3.checked, c3.held), (n + 2, n + 1));
+}
+
+/// The data cache's size follows the manifest's heap cap, half of which is the peak the memory
+/// budget lets a server reach: a cap of 150 pages affords 27 blocks beyond the reserve, a cap of
+/// 100 or none at all the floor of [`DATA_CACHE`]; and a server opened with 27 holds 27, going
+/// back to every one of them reading and hashing nothing.
+#[test]
+fn the_data_cache_is_sized_from_the_manifests_heap() {
+    assert_eq!(Caps::from_heap(None).data, DATA_CACHE);
+    assert_eq!(Caps::from_heap(Some(100)).data, DATA_CACHE);
+    assert_eq!(Caps::from_heap(Some(150)).data, 27);
+    assert_eq!(Caps::from_heap(Some(150)).tree, TREE_CACHE);
+    let (g, bytes, root) = packed(64, 0);
+    let mut s = server_caps(g, bytes.clone(), &root, &[], Caps::from_heap(Some(150)));
+    for b in (0..27).chain((0..27).rev()) {
+        assert_eq!(
+            ask(&mut s, &littlefsd(), &read(b * SECTORS_PER_BLOCK, 1)),
+            sectors(&bytes, b * SECTORS_PER_BLOCK, 1)
+        );
+    }
+    let c = s.counts().unwrap();
+    assert_eq!((c.requests, c.held, c.checked), (54, 27, 27));
 }
 
 #[test]

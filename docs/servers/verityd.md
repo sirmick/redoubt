@@ -170,17 +170,21 @@ matters: a file server that cannot size its range exits, and would be restarted.
 
 ### Memory and cost
 
-<details><summary>Status: built · tested (3)</summary>
+<details><summary>Status: built · tested (5)</summary>
 
 - bench:boot-profile
 - bench:boot-profile-unverified
+- bench:init-boot
 - host:redoubt-verityd::the_last_block_and_the_tree_cache_save_reads
+- host:redoubt-verityd::the_data_cache_is_sized_from_the_manifests_heap
 
 </details>
 
-- **Memory is fixed,** whatever the volume's size: the top block, pinned at start; a cache of 32
-  checked tree blocks and one of 4 checked data blocks, each least recently used out first
-  ([below](#a-cache-of-checked-data-blocks)); and a 2-page lend at `blkd`.
+- **Memory is fixed at start,** whatever the volume's size: the top block, pinned; a cache of 32
+  checked tree blocks and one of checked data blocks sized from the manifest's heap cap, each
+  least recently used out first ([below](#a-cache-of-checked-data-blocks)); the reply's scratch,
+  one `blkd` read (8 blocks); and a 2-page lend at `blkd`. The image's `verity:system` runs with
+  a heap cap of 100 pages and peaks at 50 ([the memory budget](../testbench.md#the-memory-budget)).
 - **A block is checked from the top down.** The lowest block on its path already held (the top
   always is) gives the digest the next block down must hash to; a block fetched is checked before
   it is kept. A level-1 block held costs one hash per data block.
@@ -201,20 +205,31 @@ matters: a file server that cannot size its range exits, and would be restarted.
 
 ### A cache of checked data blocks
 
-<details><summary>Status: built · tested (2)</summary>
+<details><summary>Status: built · tested (3)</summary>
 
 - bench:boot-profile
 - host:redoubt-verityd::the_data_cache_holds_the_last_blocks_least_recently_used_out
+- host:redoubt-verityd::the_data_cache_is_sized_from_the_manifests_heap
 
 </details>
 
-The last 4 data blocks checked are kept, least recently used out first, in place of the one
+The data blocks checked last are kept, least recently used out first, in place of the one
 last-block buffer: a block asked for again while it is held is neither read nor hashed again.
 On EROFS a file's blocks are read once each, in order, but `erofsd` reads the same few blocks
 again and again: a directory's blocks at every walk, and the blocks holding the inodes. By its
 512th read in the rv64 boot profile (boot-stats build, seed 1) `verityd` was asked for 849 data
-blocks: one block held 100 of them (12 %), 4 hold 197 (23 %) and 8 would hold 289 (34 %). 4
-blocks, 16 KiB, are what is built.
+blocks: one block held 100 of them (12 %), 4 hold 197 (23 %) and 8 would hold 289 (34 %).
+
+**The cache's size is the manifest's,** not a compiled constant: the memory budget holds a
+server's heap cap to twice its peak, so half the entry's `heap_pages` is the peak the instance
+may reach, and the data cache takes that half less what the rest of the heap holds (the tree
+cache and the scratch, 40 blocks, the top block, about 3 pages of bookkeeping and 4 of margin:
+48), never fewer than 4 blocks, the floor a host test or a launch with no cap gets. The image's
+cap of 100 pages affords the floor; a cap of 150 would afford 27. Two VMs loading code at once
+through one `erofsd` are two readers of this one cache, and a four-block cache holds none of the
+directory and inode blocks they share between them: in a `boot-stats` build of
+`steward-latency` at two harts on rv32 (seed 3), its round with two spinner VMs asked 1,802
+data blocks and held 313 (17 %), 1,489 fetched and hashed again.
 
 Read-ahead (8 blocks per `blkd` call, hashed and cached) is not built: `erofsd` already reads a
 file's blocks in one call of up to 64 sectors, which `verityd` splits into block reads at `blkd`.

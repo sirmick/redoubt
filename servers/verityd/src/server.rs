@@ -29,7 +29,7 @@ use redoubt_rt::wire::proto::blkd::{
 };
 use redoubt_verity::SECTORS_PER_BLOCK;
 
-use crate::volume::{Bad, Refusal, Volume};
+use crate::volume::{Bad, Caps, Refusal, Volume};
 use crate::{Mode, Range, SECTOR};
 /// The one badge `verityd` serves: the volume's, which `init` mints for its `littlefsd`.
 pub const BADGE: u64 = 1;
@@ -82,12 +82,14 @@ pub struct Verityd<R> {
 }
 
 impl<R: Range> Verityd<R> {
-    /// Checks `range` against `mode` ([`Volume::open`]), and serves it under `labels`.
-    pub fn new(range: R, mode: &Mode, labels: Vec<u64>) -> Verityd<R> {
+    /// Checks `range` against `mode` ([`Volume::open`]), and serves it under `labels`, its caches
+    /// sized by `caps` (from the manifest's heap, [`Caps::from_heap`]; the host tests pass the
+    /// floor, [`Caps::DEFAULT`]).
+    pub fn new(range: R, mode: &Mode, labels: Vec<u64>, caps: Caps) -> Verityd<R> {
         let mut scratch = Vec::new();
         let bytes = MAX_SECTORS as usize * SECTOR as usize;
         let (volume, sectors) = match (scratch.try_reserve_exact(bytes), mode) {
-            (Ok(()), _) => Volume::open(range, mode),
+            (Ok(()), _) => Volume::open(range, mode, caps),
             (Err(_), Mode::Pinned { geometry, .. }) => {
                 (Err(Refusal::NoMemory), geometry.data_blocks() * SECTORS_PER_BLOCK)
             }
