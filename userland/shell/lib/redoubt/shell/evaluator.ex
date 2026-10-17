@@ -40,12 +40,15 @@ defmodule Redoubt.Shell.Evaluator do
     shell = self()
     heap = %{size: Keyword.get(limits, :max_heap_words, @max_heap_words), kill: true, error_logger: false}
 
-    {pid, ref} =
-      Process.spawn(fn -> evaluate(shell, quoted, binding, env) end, [:monitor, max_heap_size: heap])
-
+    # The driver is told before the line's process exists: a feed it asks for
+    # (`Redoubt.Shell.Driver.open_feed/0`) is opened only for a line being evaluated, so the
+    # telling must reach the driver before anything of the line's can.
     token = make_ref()
     driver = Keyword.get(limits, :driver)
     if driver, do: send(driver, {:redoubt_eval, :running, self(), token})
+
+    {pid, ref} =
+      Process.spawn(fn -> evaluate(shell, quoted, binding, env) end, [:monitor, max_heap_size: heap])
 
     try do
       receive do

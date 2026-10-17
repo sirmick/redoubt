@@ -417,6 +417,31 @@ defmodule Redoubt.Shell.DriverTest do
     ends(driver)
   end
 
+  # A native program's feeder asks for the feed once the stages are launched, so under load its
+  # ask can come after the interrupt that ended the line, while the line's processes still go:
+  # opened then, the feed would take the next line typed and the shell would never see it.
+  test "a feed asked for after the interrupt ended its line, or at the prompt, is refused and the next line is the shell's" do
+    {driver, terminal} = start()
+    type(driver, "x = 1\r")
+    type(driver, "Stream.cycle([1]) |> Stream.run()\r")
+    Process.sleep(300)
+    type(driver, "\x03")
+    terminal = screen(terminal, &(Terminal.text(&1) =~ ~r/\^C$/m))
+    send(driver, {:redoubt_feed, :open, self()})
+    assert_receive {:redoubt_feed, :refused}, 5_000
+    type(driver, "x + 1\r")
+    terminal = screen(terminal, &(Terminal.text(&1) =~ ~r/^2$/m))
+    assert Terminal.text(terminal) =~ ~r/^2$/m
+    # At the prompt, no line evaluated: refused too.
+    send(driver, {:redoubt_feed, :open, self()})
+    assert_receive {:redoubt_feed, :refused}, 5_000
+    type(driver, "x + 2\r")
+    terminal = screen(terminal, &(Terminal.text(&1) =~ ~r/^3$/m))
+    assert Terminal.text(terminal) =~ ~r/^3$/m
+    type(driver, "exit\r")
+    ends(driver)
+  end
+
   test "a feed's end leaves what is typed after it to the shell" do
     {driver, terminal} = start()
     # The line takes one fed line and ends, holding the feed no more.
