@@ -142,3 +142,82 @@ below), on main 68c4b2904; `git status --short | wc -l` = 0; fmt check clean.
 - **P2** (the ipd line): confirmed by the orchestrator, no change.
 
 Next: the rebase onto main's tip when the orchestrator sends its hash.
+
+## Fold 2 (steward3z-fixer, 2026-10-16): rebase onto main 7e6dbb3bb (train 51)
+
+`git rebase --onto 7e6dbb3bb 68c4b2904 wp-STEWARD3Z`: clean, no conflicts; head **e1d7337d0**, one
+commit, tree diff against main 23 files / +678 −66 as before; `git status --short | wc -l` = 0.
+Main had not touched tests/size-budget.toml or docs/testbench.md since 68c4b2904, so the sum rule
+leaves the ceilings as the commit set them (libs/rt 4048, consoled 423, ipd 2926; the gate reads
+each at exactly its ceiling). Logs under `/home/mcloonan/redoubt/.tmp/STEWARD3Z/`.
+
+| gate | command | result |
+| --- | --- | --- |
+| every guest rt-linking package, rv64 and rv32 | `q run --cores 8 -- cargo build --release --target <triple> <guest-pkgs.txt: 26 packages>` | exit 0 both, 0 errors; the only non-vendor warnings are main's two (init check.rs:1154, kernel-half-attack.rs:64) (`rebase-build-<triple>.log`) |
+| fake-kernel, testbench (host) | `q run --cores 4 -- cargo check -p redoubt-fake-kernel -p testbench --all-targets` | exit 0 (`rebase-host-check.log`) |
+| rt host tests | `q run --cores 4 -- cargo test -p redoubt-rt` | exit 0, 171 passed, 0 failed across every target (lib 90) (`rt-host-tests.log`) |
+| fmt | `cargo +nightly fmt --all --check` | clean |
+| cases | `make -k -f scripts/jobs.mk set CASES="steward-many-sessions init-boot" rv64/steward-pending-cap rv64/docs rv64/size-budget rv64/unsafe-budget` | exit 0: steward-many-sessions PASS rv64 20.6 s / rv32 18.9 s; init-boot PASS rv64 6.8 s / rv32 6.8 s; steward-pending-cap PASS rv64 12.1 s; docs PASS; size-budget PASS; unsafe-budget PASS (`rebase-cases.log`, `target/jobs/<w>-<case>.log`) |
+
+A first guest build with the full list failed on `testbench` and `redoubt-fake-kernel` (host-only,
+std); they were checked on the host instead. The `.smp1*.log` files beside rv64-steward-many-sessions
+in target/jobs are the previous member's diagnostic runs (18:30), not this pass's.
+
+## Fold 3 (steward3z-fixer-2, 2026-10-16): train 52 regression
+
+Head **5726591d3** (e1d7337d0 re-amended) on main 7e6dbb3bb; `git status --short | wc -l` = 0;
+25 files / +784 −78 against main. Logs under `/home/mcloonan/redoubt/.tmp/STEWARD3Z/fix3-*.log`.
+
+### Causes
+
+1. **beamlet-natives-attack and pipe-carries (both widths): consoled's fid cap left the second
+   VM one fid.** Both failing programs are the *second* VM `beamlet-session` launches in alice's
+   account. The tester minted each VM's console (`fresh`, beamlet-session.rs:153) and never
+   disconnected it; under the move rule the first VM's console settled in alice's bucket with its
+   2 fids and stayed there after the VM died (consoled hears nothing until a disconnect). With the
+   package's `files: CONSOLE_FIDS * CONSOLES_PER_ACCOUNT` = 4 the fair share
+   (admit.rs:331-335: `held >= limit / (others + 2)`, 4/3 = 1) let the second VM's share one fid:
+   its attach passed, its `cons` open was `TOO_MANY`, so beamlet ended code 1 with no line (the
+   same shape as the labelled VM's expected end). Alone, a VM got 4/2 = 2, which is why the first
+   VM in every case passed. Proof: the new consoled host test, run before the fix:
+   `its successor's console attaches and opens beside it: Rerror(TooMany)`
+   (`fix3-consoled-before.log`).
+2. **Same cause, second part: the derivation forgot the share divisor.** The page's own
+   "spare for a session ending while its successor starts" cannot work at 4 fids: the ending
+   console holds 2 until the steward's cleanup gives it back, so the successor needs
+   `limit / 3 >= CONSOLE_FIDS`, i.e. `files = CONSOLE_FIDS × (CONSOLES_PER_ACCOUNT + 1)` = 6. The
+   `state` cap of 2 needs no such room (a share may always take one, `.max(1)`). Fixed in
+   `servers/consoled/src/server.rs` `limits` with the derivation in its doc; the fit's bytes moved
+   (a default bucket 161,280 → 161,792; rv64 10 defaults 1,973,504, rv32 11 1,963,264; the
+   bucket counts do not move); consoled.md's Admission bullet and fit updated, the new test added
+   to the page's list (13 → 14). The tester now gives an ended VM's four connections (and the
+   caller's console) back after `budget.destroy()`, as the steward's cleanup does (R41): without
+   that a case with three VMs in one label set would still hit the 2-console cap, and the cases
+   should run under the derived caps as the steward's sessions do. The bench host test gained the
+   fid term (`files >= CONSOLE_FIDS × (need + 1)`).
+3. **beamlet-lookup-host: not this package's.** The fixture grants the session's console with
+   `f.grant(console.pid, console.endpoint, pid, 0x20 + pid)` (userland/otp/redoubt/src/fixture.rs:197):
+   a kernel grant with a badge below `FIRST_MINTED_BADGE`, so `arrived` (ninep.rs) returns at its
+   first line and nothing moves; the fixture's limits are its own (fixture.rs:474-475, files 4 /
+   state 4, untouched). The failing assertion is a clock one (`p.idle(Some(deadline))` returned
+   early, console.rs:154), and CONW1-report.md:66 records this same test failing under a whole
+   bench's load and passing 3/3 alone before 3Z existed. Here: 5/5 alone (0.20 s each) and PASS
+   inside the gate set (87.6 s). A load flake of the fake kernel's clock, for a bug entry if the
+   orchestrator wants one.
+
+### Gates (all through `scripts/q run` / `scripts/jobs.mk`)
+
+| gate | result |
+| --- | --- |
+| consoled host tests (`cargo test -p redoubt-consoled`) | 16 + 5 + 1 passed, 0 failed (new test among them) |
+| rt host tests (`cargo test -p redoubt-rt`) | 171 passed, 0 failed |
+| testbench `the_servers_admit_what_a_manifest_lets_one_account_hold` | 1 passed |
+| guest builds, redoubt-beamlet-programs + redoubt-consoled, rv64 and rv32 | rc 0, no warnings |
+| fmt (`cargo +nightly fmt --all --check`) | clean |
+| `make -k set CASES="beamlet-natives-attack pipe-carries beamlet-serve beamlet-launch beamlet-natives pipe-eight pipe-hostile-output pipe-interrupted pipe-never-reads pipe-no-authority pipe-sixty-four pipe-stage-handle job-interrupt-line job-interrupt-native job-interrupt-ssh job-kill beamlet-footprint steward-many-sessions init-boot" rv64/beamlet-lookup-host rv64/docs rv64/size-budget rv64/unsafe-budget` | 42/42 PASS, make rc 0 (`fix3-cases.log`, `target/jobs/`) |
+| size-budget | libs/rt 4048/4048, consoled 423/423, ipd 2926/2926: the `Size budget:` lines stand |
+
+Pages checked: consoled.md (changed), serving.md (the share rule is stated there, cited; no
+change), SECURITY.md R26 row (rt tests only; no change), steward.md, erofsd.md, init.md,
+docs/userland/beamlet.md (names no tester connection behaviour; no change), testbench.md (no
+change). The rule did not move; architect-2 was not asked.
