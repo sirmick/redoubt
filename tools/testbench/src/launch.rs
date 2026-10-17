@@ -246,7 +246,8 @@ pub fn command(
     ] {
         std::fs::create_dir_all(root.join(dir))?;
     }
-    let (devices, _) = qemu::virtio_devices(boot, disk, packed.userland.as_ref(), &[port])?;
+    let (devices, _) =
+        qemu::virtio_devices(boot, disk, packed.userland.as_ref(), qemu::HostPorts::Given(&[port]))?;
     let image = Image {
         machine,
         firmware,
@@ -550,7 +551,8 @@ mod tests {
     fn the_ssh_line_names_the_forwarded_port() {
         let boot: Boot = toml::from_str("programs = []\nexpect = []\n[net]\nforward = [22]\n").unwrap();
         let disk = std::env::temp_dir().join(format!("testbench-launch-forward-{}", std::process::id()));
-        let (args, forwards) = qemu::virtio_devices(&boot, &disk, None, &[2200]).unwrap();
+        let (args, forwards) =
+            qemu::virtio_devices(&boot, &disk, None, qemu::HostPorts::Given(&[2200])).unwrap();
         assert_eq!(forwards, [(22, 2200)]);
         assert!(args.iter().any(|a| a.contains("hostfwd=tcp:127.0.0.1:2200-:22")), "{args:?}");
         assert_eq!(

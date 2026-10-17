@@ -179,20 +179,25 @@ fn parse_seeds(text: &str) -> Result<Seeds, String> {
     Ok(Seeds(seeds))
 }
 
-/// A `--sweep`: one case booted once per seed on each of its targets, `jobs` boots at a time.
+/// A `--sweep`: one case booted once per seed on each of its targets, `jobs` boots at a time,
+/// the boot in slot `k` forwarding on `ports[k]`, its own slice of the job's lease.
 struct Sweep<'a> {
     case: &'a Case,
     seeds: Vec<u64>,
     jobs: usize,
+    ports: Vec<Option<qemu::Ports>>,
 }
 
 /// The sweep `args` asks for, if any, or why it is refused, before anything builds. `replay` is
-/// TESTBENCH_QEMU_SEED, and `parallelism` the host's.
+/// TESTBENCH_QEMU_SEED, `parallelism` the host's, and `lease` the job's host ports under q
+/// (`REDOUBT_PORTS`), which the sweep must be able to cut into `--jobs` slices of the case's
+/// forwards: a lease too short is refused here, naming the ask, so no two boots share a port.
 fn sweep<'a>(
     args: &Args,
     cases: &'a [Case],
     replay: Option<String>,
     parallelism: usize,
+    lease: Option<qemu::Ports>,
 ) -> Result<Option<Sweep<'a>>> {
     let Some(Seeds(seeds)) = &args.sweep else { return Ok(None) };
     if let Some(replay) = replay {
@@ -212,7 +217,28 @@ fn sweep<'a>(
     if let Some(only) = args.arch.as_deref().filter(|only| !case.arch.iter().any(|a| a == only)) {
         bail!("{}: --arch {only} is not one of its targets ({})", case.name, case.arch.join(", "));
     }
-    Ok(Some(Sweep { case, seeds: seeds.clone(), jobs }))
+    // The host ports one boot forwards: its TCP forwards and its poke.
+    let per = boot.net.as_ref().map_or(0, |net| net.forward.len() + usize::from(net.poke.is_some()));
+    let ports = match lease {
+        Some(lease) if per > 0 => {
+            let slices = lease.slices(jobs, per).with_context(|| {
+                format!(
+                    "--jobs {jobs} boots {per} forwarded port{} each, {} in all, and REDOUBT_PORTS={}-{} \
+                     leases {}: ask `q run --ports {}`",
+                    if per == 1 { "" } else { "s" },
+                    jobs * per,
+                    lease.lo,
+                    lease.hi,
+                    lease.count(),
+                    jobs * per
+                )
+            })?;
+            slices.into_iter().map(Some).collect()
+        }
+        // No lease: each boot asks the OS. Nothing to forward: the lease is not touched.
+        _ => vec![None; jobs],
+    };
+    Ok(Some(Sweep { case, seeds: seeds.clone(), jobs, ports }))
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -363,7 +389,7 @@ fn main() -> Result<()> {
     }
     let parallelism = std::thread::available_parallelism().map_or(1, |n| n.get());
     let replay = std::env::var("TESTBENCH_QEMU_SEED").ok();
-    if let Some(sweep) = sweep(&args, &cases, replay, parallelism)? {
+    if let Some(sweep) = sweep(&args, &cases, replay, parallelism, qemu::Ports::leased()?)? {
         return run_sweep(&builder, &sweep, args.arch.as_deref(), &logs, &missing);
     }
 
@@ -590,12 +616,15 @@ fn run_sweep(
     }
     let boots: Vec<(u64, &Built)> =
         sweep.seeds.iter().flat_map(|seed| built.iter().map(move |ready| (*seed, ready))).collect();
-    let runs = in_parallel(&boots, sweep.jobs, |&(seed, ready)| {
+    let runs = in_parallel(&boots, sweep.jobs, |slot, &(seed, ready)| {
         let mut notes = Vec::new();
         let dir = seed_dir(logs, seed, ready.target.name);
-        let results = std::fs::create_dir(&dir)
-            .with_context(|| format!("creating {}", dir.display()))
-            .and_then(|()| boot_case(builder, ready, Some(seed), &dir, None, &mut |line| notes.push(line)));
+        // The slot's ports: no other boot holds them while this one runs.
+        let ports = sweep.ports[slot];
+        let results =
+            std::fs::create_dir(&dir).with_context(|| format!("creating {}", dir.display())).and_then(|()| {
+                boot_case(builder, ready, Some(seed), ports, &dir, None, &mut |line| notes.push(line))
+            });
         SeedRun { seed, arch: ready.target.name, notes, results }
     });
     let arches: Vec<&str> = built.iter().map(|ready| ready.target.name).collect();
@@ -608,15 +637,18 @@ fn run_sweep(
     Ok(())
 }
 
-/// Run `work` on every item, up to `jobs` at once; the results come in the order they finished.
-fn in_parallel<T: Sync, R: Send>(items: &[T], jobs: usize, work: impl Fn(&T) -> R + Sync) -> Vec<R> {
+/// Run `work` on every item, up to `jobs` at once, in slots `0..jobs`: no two items run in one
+/// slot at once, so what a slot holds (a sweep's port slice) is one item's at a time. The
+/// results come in the order they finished.
+fn in_parallel<T: Sync, R: Send>(items: &[T], jobs: usize, work: impl Fn(usize, &T) -> R + Sync) -> Vec<R> {
     let next = std::sync::atomic::AtomicUsize::new(0);
     let done = std::sync::Mutex::new(Vec::with_capacity(items.len()));
     std::thread::scope(|scope| {
-        for _ in 0..jobs.min(items.len()) {
-            scope.spawn(|| {
+        for slot in 0..jobs.min(items.len()) {
+            let (next, done, work) = (&next, &done, &work);
+            scope.spawn(move || {
                 while let Some(item) = items.get(next.fetch_add(1, std::sync::atomic::Ordering::Relaxed)) {
-                    let result = work(item);
+                    let result = work(slot, item);
                     done.lock().unwrap().push(result);
                 }
             });
@@ -817,7 +849,10 @@ fn run_case(
 ) -> Result<Results> {
     match build_case(builder, case, target, logs, missing, prebuilt)? {
         Ok(ready) => {
-            boot_case(builder, &ready, qemu_seed(ready.boot)?, logs, kept, &mut |line| println!("{line}"))
+            let ports = qemu::Ports::leased()?;
+            boot_case(builder, &ready, qemu_seed(ready.boot)?, ports, logs, kept, &mut |line| {
+                println!("{line}")
+            })
         }
         Err(results) => Ok(results),
     }
@@ -1073,12 +1108,14 @@ fn prebuild(workspace: &Path, verbose: bool, dir: &Path, cases: &[&Case], arch: 
     Ok(())
 }
 
-/// Boot a built case once per hart count with guest seed `seed`, keeping its files in `logs`.
-/// `out` takes the lines it prints before its results.
+/// Boot a built case once per hart count with guest seed `seed`, its forwards on host ports
+/// from `ports` (the job's lease, or this boot's slice of it in a sweep; the OS's with none),
+/// keeping its files in `logs`. `out` takes the lines it prints before its results.
 fn boot_case(
     builder: &Builder,
     built: &Built,
     seed: Option<u64>,
+    ports: Option<qemu::Ports>,
     logs: &Path,
     keep: Option<&Path>,
     out: &mut dyn FnMut(String),
@@ -1104,8 +1141,10 @@ fn boot_case(
                 "a launch case boots launch's line, with no seed"
             );
             let (mut devices, forwards) = match boot.launch {
-                true => (Vec::new(), vec![(22, qemu::host_ports(1, false)?.0[0])]),
-                false => qemu::virtio_devices(boot, &disk, userland.as_ref(), &[])?,
+                true => (Vec::new(), vec![(22, qemu::host_ports(ports, 1, false)?.0[0])]),
+                false => {
+                    qemu::virtio_devices(boot, &disk, userland.as_ref(), qemu::HostPorts::Leased(ports))?
+                }
             };
             if let Some(icount) = &boot.icount {
                 devices.extend(["-icount".into(), icount.clone(), "-rtc".into(), "clock=vm".into()]);
@@ -1412,7 +1451,7 @@ mod tests {
             case("timer", "kind = 'boot'\nprograms = []\nexpect = []\n"),
         ];
         let plan = |argv: &[&str], replay: Option<&str>| {
-            sweep(&args(argv).unwrap(), &cases, replay.map(String::from), 4)
+            sweep(&args(argv).unwrap(), &cases, replay.map(String::from), 4, None)
                 .map(|s| s.map(|s| (&s.case.name, s.jobs)))
         };
         let refused = |argv: &[&str], replay: Option<&str>, why: &str| {
@@ -1439,6 +1478,54 @@ mod tests {
             plan(&["sched", "--sweep", "1..4", "--arch", "rv32"], None).unwrap(),
             Some((&"sched".to_string(), 1))
         );
+    }
+
+    /// A sweep of a case with forwards cuts the job's lease into one slice per `--jobs` slot,
+    /// disjoint, the first at the range's start where a lone boot takes its ports, so a serial
+    /// sweep forwards as a single run does; a lease too short for the slices is refused before
+    /// anything builds, naming the ask; outside q, or with nothing to forward, there is no slice.
+    #[test]
+    fn a_sweeps_boots_hold_disjoint_slices_of_the_lease() {
+        let seeded = "kind = 'boot'\nprograms = []\nexpect = []\nqemu_seed = 1\n";
+        let cases = [case("ssh", &format!("{seeded}[net]\nforward = [22]\n")), case("sched", seeded)];
+        let plan = |argv: &[&str], lease: Option<&str>| {
+            let lease = lease.map(|range| qemu::Ports::parse(range).unwrap());
+            sweep(&args(argv).unwrap(), &cases, None, 4, lease).map(|s| s.unwrap().ports)
+        };
+        let slice = |lo, hi| Some(qemu::Ports { lo, hi });
+        assert_eq!(
+            plan(&["ssh", "--sweep", "1..4"], Some("23000-23000")).unwrap(),
+            vec![slice(23000, 23000)]
+        );
+        assert_eq!(
+            plan(&["ssh", "--sweep", "1..4", "--jobs", "2"], Some("23000-23001")).unwrap(),
+            vec![slice(23000, 23000), slice(23001, 23001)]
+        );
+        let short = format!(
+            "{:#}",
+            plan(&["ssh", "--sweep", "1..4", "--jobs", "2"], Some("23000-23000")).unwrap_err()
+        );
+        assert!(short.contains("--jobs 2 boots 1 forwarded port each, 2 in all"), "{short}");
+        assert!(short.contains("REDOUBT_PORTS=23000-23000 leases 1: ask `q run --ports 2`"), "{short}");
+        assert_eq!(plan(&["ssh", "--sweep", "1..4", "--jobs", "2"], None).unwrap(), vec![None, None]);
+        assert_eq!(
+            plan(&["sched", "--sweep", "1..4", "--jobs", "2"], Some("23000-23000")).unwrap(),
+            vec![None, None]
+        );
+    }
+
+    /// Two boots running at once sit in different slots, so they hold different slices of the
+    /// lease; a serial sweep runs every boot in slot 0, on the ports a lone boot takes.
+    #[test]
+    fn two_boots_at_once_run_in_different_slots() {
+        // Neither boot passes the gate until the other is running beside it.
+        let gate = std::sync::Barrier::new(2);
+        let slots = in_parallel(&[1, 2], 2, |slot, _| {
+            gate.wait();
+            slot
+        });
+        assert_eq!(slots.into_iter().collect::<HashSet<_>>(), HashSet::from([0, 1]));
+        assert_eq!(in_parallel(&[1, 2, 3], 1, |slot, _| slot), vec![0, 0, 0]);
     }
 
     /// `--exact` takes the one case its filter names, out of the whole run or not, and no case

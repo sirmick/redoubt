@@ -271,34 +271,81 @@ pub fn shell_quote(s: &str) -> String {
 /// A forwarded port, (guest port, host port): each TCP `forward`, then the UDP poke's.
 pub type Forward = (u16, u16);
 
-/// The host ports one boot forwards: `tcp` of them for the TCP forwards, in order, then the
-/// poke's UDP port when `udp`. Under `scripts/q` the job holds a range of ports no other lease
-/// has (`REDOUBT_PORTS=lo-hi`, `q run --ports N`), and the ports are taken from its start, so
-/// two boots at once cannot meet on one; the variable names a range too small for the boot is
-/// an error (the recipe asked for too few). Outside q the OS picks them ([`free_ports`],
-/// [`peer::free_udp_port`]), with that path's race.
-pub fn host_ports(tcp: usize, udp: bool) -> Result<(Vec<u16>, Option<u16>)> {
-    match std::env::var("REDOUBT_PORTS") {
-        Ok(range) => leased_ports(&range, tcp, udp),
-        Err(_) => Ok((free_ports(tcp)?, udp.then(peer::free_udp_port).transpose()?)),
+/// A run of leased host ports, `lo..=hi`: the job's whole lease under `scripts/q`
+/// (`REDOUBT_PORTS=lo-hi`, `q run --ports N`), or one boot's slice of it in a sweep.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Ports {
+    pub lo: u16,
+    pub hi: u16,
+}
+
+impl Ports {
+    /// The job's lease, if it runs under q, from `REDOUBT_PORTS`.
+    pub fn leased() -> Result<Option<Self>> {
+        std::env::var("REDOUBT_PORTS").ok().map(|range| Self::parse(&range)).transpose()
+    }
+
+    /// `lo-hi`, inclusive, as q writes it.
+    pub fn parse(range: &str) -> Result<Self> {
+        range
+            .split_once('-')
+            .and_then(|(lo, hi)| Some((lo.trim().parse::<u16>().ok()?, hi.trim().parse::<u16>().ok()?)))
+            .filter(|(lo, hi)| lo <= hi)
+            .map(|(lo, hi)| Self { lo, hi })
+            .with_context(|| format!("REDOUBT_PORTS={range:?}: not a lo-hi range"))
+    }
+
+    pub fn count(self) -> usize { usize::from(self.hi - self.lo) + 1 }
+
+    /// `count` disjoint slices of `per` ports each (at least one), from the start, or `None` when
+    /// the range is too short: a sweep gives each of its concurrent boots one, so no two meet on
+    /// a port.
+    pub fn slices(self, count: usize, per: usize) -> Option<Vec<Self>> {
+        (count * per <= self.count()).then(|| {
+            (0..count)
+                .map(|slot| {
+                    let lo = self.lo + u16::try_from(slot * per).unwrap();
+                    Self { lo, hi: lo + u16::try_from(per - 1).unwrap() }
+                })
+                .collect()
+        })
+    }
+
+    /// The ports one boot forwards, taken from the range's start: `tcp` of them for the TCP
+    /// forwards, in order, then the poke's UDP port when `udp`. A range too small for the boot
+    /// is an error (the job asked q for too few).
+    fn take(self, tcp: usize, udp: bool) -> Result<(Vec<u16>, Option<u16>)> {
+        let need = tcp + usize::from(udp);
+        ensure!(
+            self.count() >= need,
+            "REDOUBT_PORTS={}-{}: {} ports leased, this boot forwards {need}",
+            self.lo,
+            self.hi,
+            self.count()
+        );
+        let mut ports = (self.lo..=self.hi).take(need);
+        Ok((ports.by_ref().take(tcp).collect(), ports.next()))
     }
 }
 
-/// [`host_ports`] inside the leased `range`, `lo-hi` inclusive.
-fn leased_ports(range: &str, tcp: usize, udp: bool) -> Result<(Vec<u16>, Option<u16>)> {
-    let (lo, hi) = range
-        .split_once('-')
-        .and_then(|(lo, hi)| Some((lo.trim().parse::<u16>().ok()?, hi.trim().parse::<u16>().ok()?)))
-        .filter(|(lo, hi)| lo <= hi)
-        .with_context(|| format!("REDOUBT_PORTS={range:?}: not a lo-hi range"))?;
-    let need = tcp + usize::from(udp);
-    ensure!(
-        usize::from(hi - lo) + 1 >= need,
-        "REDOUBT_PORTS={range}: {} ports leased, this boot forwards {need}",
-        hi - lo + 1
-    );
-    let mut ports = (lo..=hi).take(need);
-    Ok((ports.by_ref().take(tcp).collect(), ports.next()))
+/// Where one boot's forwarded host ports come from.
+#[derive(Clone, Copy, Debug)]
+pub enum HostPorts<'a> {
+    /// The TCP forwards' ports, given by the caller (`launch`, whose boot has no poke).
+    Given(&'a [u16]),
+    /// Taken from the start of a leased range ([`Ports`]), so two boots holding disjoint ranges
+    /// cannot meet on one; or, with no lease, picked by the OS ([`free_ports`],
+    /// [`peer::free_udp_port`]), with that path's race.
+    Leased(Option<Ports>),
+}
+
+/// The host ports one boot forwards: `tcp` of them for the TCP forwards, in order, then the
+/// poke's UDP port when `udp`, from `lease` or the OS ([`HostPorts::Leased`]).
+pub fn host_ports(lease: Option<Ports>, tcp: usize, udp: bool) -> Result<(Vec<u16>, Option<u16>)> {
+    match lease {
+        Some(range) => range.take(tcp, udp),
+        None => Ok((free_ports(tcp)?, udp.then(peer::free_udp_port).transpose()?)),
+    }
 }
 
 /// `count` distinct TCP ports on the loopback interface that nothing was listening on a
@@ -335,14 +382,14 @@ pub const VAULT_BUS: &str = "virtio-mmio-bus.4";
 /// QEMU arguments for a case's virtio devices, for one boot: creates the disk afresh at `disk`,
 /// so no boot sees another's writes, unless it is kept and there already (`Disk::keep`), when
 /// its layout must be a fresh disk's; the vault disk, if the case has one, the same way beside
-/// it; and forwards from `ports`, the host ports in the forwards' order, or with none given from
-/// free ones. The userland disk is copied beside it from `userland`, the run's one pack
-/// ([`crate::build::Builder::userland`]), with the case's damage, and attached read-only.
+/// it; and forwards on the host ports `ports` gives or leases. The userland disk is copied beside
+/// it from `userland`, the run's one pack ([`crate::build::Builder::userland`]), with the case's
+/// damage, and attached read-only.
 pub fn virtio_devices(
     boot: &Boot,
     disk: &Path,
     userland: Option<&Staged>,
-    ports: &[u16],
+    ports: HostPorts,
 ) -> Result<(Vec<String>, Vec<Forward>)> {
     let mut args = Vec::new();
     if boot.disk.is_some() || boot.net.is_some() || boot.userland.is_some() {
@@ -397,8 +444,8 @@ pub fn virtio_devices(
         // guest speaks only IPv4, and slirp would otherwise advertise itself as an IPv6 router.
         let mut netdev = "user,id=net0,restrict=on,ipv6=off".to_string();
         let (hosts, udp) = match ports {
-            [] => host_ports(net.forward.len(), net.poke.is_some())?,
-            given => {
+            HostPorts::Leased(lease) => host_ports(lease, net.forward.len(), net.poke.is_some())?,
+            HostPorts::Given(given) => {
                 ensure!(
                     given.len() == net.forward.len(),
                     "{} host ports for {} forwards",
@@ -1241,15 +1288,15 @@ mod tests {
     fn a_kept_disk_is_attached_as_it_is() {
         let disk = std::env::temp_dir().join(format!("testbench-qemu-kept-{}.img", std::process::id()));
         let kept = boot("[disk]\nsize_kib = 64\nkeep = true\n");
-        virtio_devices(&kept, &disk, None, &[]).unwrap();
+        virtio_devices(&kept, &disk, None, HostPorts::Leased(None)).unwrap();
         assert_eq!(std::fs::metadata(&disk).unwrap().len(), 64 * 1024, "made the first time");
         let mut files = vec![0u8; 64 * 1024];
         files[..16].copy_from_slice(b"a person's files");
         std::fs::write(&disk, &files).unwrap();
-        let (args, _) = virtio_devices(&kept, &disk, None, &[]).unwrap();
+        let (args, _) = virtio_devices(&kept, &disk, None, HostPorts::Leased(None)).unwrap();
         assert_eq!(std::fs::read(&disk).unwrap(), files);
         assert!(args.iter().any(|a| a.contains(&disk.display().to_string())));
-        virtio_devices(&boot("[disk]\nsize_kib = 64\n"), &disk, None, &[]).unwrap();
+        virtio_devices(&boot("[disk]\nsize_kib = 64\n"), &disk, None, HostPorts::Leased(None)).unwrap();
         assert_eq!(std::fs::read(&disk).unwrap(), vec![0; 64 * 1024], "afresh when not kept");
         std::fs::remove_file(&disk).ok();
     }
@@ -1260,18 +1307,18 @@ mod tests {
     fn a_kept_disk_of_another_layout_is_refused() {
         let disk = std::env::temp_dir().join(format!("testbench-qemu-layout-{}.img", std::process::id()));
         let two = boot("[disk]\nsize_kib = 64\npartitions = 2\nkeep = true\n");
-        virtio_devices(&two, &disk, None, &[]).unwrap();
+        virtio_devices(&two, &disk, None, HostPorts::Leased(None)).unwrap();
         let mut bytes = std::fs::read(&disk).unwrap();
         let end = bytes.len();
         bytes[end - 16..].copy_from_slice(b"a person's files");
         std::fs::write(&disk, &bytes).unwrap();
-        virtio_devices(&two, &disk, None, &[]).unwrap();
+        virtio_devices(&two, &disk, None, HostPorts::Leased(None)).unwrap();
         assert_eq!(std::fs::read(&disk).unwrap(), bytes, "the same table: attached as it is");
         let three = boot("[disk]\nsize_kib = 64\npartitions = 3\nkeep = true\n");
-        let why = virtio_devices(&three, &disk, None, &[]).unwrap_err().to_string();
+        let why = virtio_devices(&three, &disk, None, HostPorts::Leased(None)).unwrap_err().to_string();
         assert!(why.contains("its partition table differs") && why.contains("--fresh-disk"), "{why}");
         let bigger = boot("[disk]\nsize_kib = 128\npartitions = 2\nkeep = true\n");
-        let why = virtio_devices(&bigger, &disk, None, &[]).unwrap_err().to_string();
+        let why = virtio_devices(&bigger, &disk, None, HostPorts::Leased(None)).unwrap_err().to_string();
         assert!(why.contains("65536 bytes, not 131072"), "{why}");
         assert_eq!(std::fs::read(&disk).unwrap(), bytes, "never reformatted");
         std::fs::remove_file(&disk).ok();
@@ -1298,11 +1345,11 @@ mod tests {
         );
         std::fs::write(&recipe, text).unwrap();
         let kept = boot(&format!("[disk]\nrecipe = {:?}\nkeep = true\n", recipe));
-        virtio_devices(&kept, &disk, None, &[]).unwrap();
+        virtio_devices(&kept, &disk, None, HostPorts::Leased(None)).unwrap();
         let packed = std::fs::read(&disk).unwrap();
-        virtio_devices(&kept, &disk, None, &[]).unwrap();
+        virtio_devices(&kept, &disk, None, HostPorts::Leased(None)).unwrap();
         volume(bytes + 4096);
-        let why = format!("{:#}", virtio_devices(&kept, &disk, None, &[]).unwrap_err());
+        let why = format!("{:#}", virtio_devices(&kept, &disk, None, HostPorts::Leased(None)).unwrap_err());
         assert!(why.contains("is not attached") && why.contains(&format!("bytes {}", bytes + 4096)), "{why}");
         assert_eq!(std::fs::read(&disk).unwrap(), packed, "left as it is");
         std::fs::remove_dir_all(dir).unwrap();
@@ -1319,7 +1366,8 @@ mod tests {
         let call = CALLS.fetch_add(1, Ordering::Relaxed);
         let disk =
             std::env::temp_dir().join(format!("testbench-qemu-test-{}-{call}.img", std::process::id()));
-        let (args, _) = virtio_devices(&boot(devices), &disk, None, &[]).expect("device arguments");
+        let (args, _) =
+            virtio_devices(&boot(devices), &disk, None, HostPorts::Leased(None)).expect("device arguments");
         std::fs::remove_file(&disk).ok();
         std::fs::remove_dir_all(disk.with_extension("peers")).ok();
         args
@@ -1527,12 +1575,12 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let disk = dir.join("boot.img");
         let one = "[disk]\nsize_kib = 64\npartitions = 1\n[net]\n";
-        let (without, _) = virtio_devices(&boot(one), &disk, None, &[]).unwrap();
+        let (without, _) = virtio_devices(&boot(one), &disk, None, HostPorts::Leased(None)).unwrap();
         let (with, _) = virtio_devices(
             &boot(&format!("{one}[vault]\nsize_kib = 128\npartitions = 2\n")),
             &disk,
             None,
-            &[],
+            HostPorts::Leased(None),
         )
         .unwrap();
         let vault = disk.with_extension("vault.img");
@@ -1571,7 +1619,7 @@ mod tests {
         let staged = Staged { objects: stage, image: image.clone(), verified };
         let disk = dir.join("boot.img");
         let case = "[disk]\nsize_kib = 64\n[userland]\nrecipe = \"image/userland.toml\"\nflip = \"Elixir.Version.beam\"\n";
-        let (args, _) = virtio_devices(&boot(case), &disk, Some(&staged), &[]).unwrap();
+        let (args, _) = virtio_devices(&boot(case), &disk, Some(&staged), HostPorts::Leased(None)).unwrap();
         let drive = format!(
             "if=none,format=raw,id=disk1,readonly=on,file={}",
             disk.with_extension("userland.img").display()
@@ -1598,7 +1646,8 @@ mod tests {
     fn a_poke_gets_a_udp_forward() {
         let case = "[net]\nforward = [8000]\n[net.poke]\nport = 47000\npayload = 'x'\nafter = 'go'\n";
         let disk = std::env::temp_dir().join(format!("testbench-qemu-poke-{}.img", std::process::id()));
-        let (args, forwards) = virtio_devices(&boot(case), &disk, None, &[]).expect("device arguments");
+        let (args, forwards) =
+            virtio_devices(&boot(case), &disk, None, HostPorts::Leased(None)).expect("device arguments");
         let netdev = args.iter().find(|a| a.starts_with("user,")).expect("a user-mode netdev");
         let (guest, host) = forwards[1];
         assert_eq!((forwards.len(), forwards[0].0, guest), (2, 8000, 47000));
@@ -1611,18 +1660,35 @@ mod tests {
     /// is refused rather than overrun, as is one that is not `lo-hi`.
     #[test]
     fn leased_ports_come_from_the_range_in_order() {
-        assert_eq!(leased_ports("23000-23001", 1, true).unwrap(), (vec![23000], Some(23001)));
-        assert_eq!(leased_ports("23000-23001", 2, false).unwrap(), (vec![23000, 23001], None));
-        assert_eq!(leased_ports("23005-23005", 0, true).unwrap(), (vec![], Some(23005)));
-        assert_eq!(leased_ports("23005-23005", 0, false).unwrap(), (vec![], None));
-        let short = leased_ports("23000-23000", 1, true).unwrap_err().to_string();
+        let leased = |range: &str, tcp, udp| Ports::parse(range).unwrap().take(tcp, udp);
+        assert_eq!(leased("23000-23001", 1, true).unwrap(), (vec![23000], Some(23001)));
+        assert_eq!(leased("23000-23001", 2, false).unwrap(), (vec![23000, 23001], None));
+        assert_eq!(leased("23005-23005", 0, true).unwrap(), (vec![], Some(23005)));
+        assert_eq!(leased("23005-23005", 0, false).unwrap(), (vec![], None));
+        let short = leased("23000-23000", 1, true).unwrap_err().to_string();
         assert!(short.contains("1 ports leased, this boot forwards 2"), "{short}");
         for bad in ["23000", "23001-23000", "x-y", ""] {
-            assert!(
-                leased_ports(bad, 1, false).unwrap_err().to_string().contains("not a lo-hi range"),
-                "{bad}"
-            );
+            assert!(Ports::parse(bad).unwrap_err().to_string().contains("not a lo-hi range"), "{bad}");
         }
+    }
+
+    /// A lease slices into disjoint runs from its start, one per concurrent boot, each taking
+    /// its own ports; one slice of a range is the range's start, what a lone boot takes; a range
+    /// too short for the slices asked gives none rather than a shared port.
+    #[test]
+    fn a_lease_slices_into_disjoint_ranges_or_none() {
+        let lease = Ports::parse("23000-23005").unwrap();
+        let slice = |lo, hi| Ports { lo, hi };
+        assert_eq!(lease.slices(1, 1), Some(vec![slice(23000, 23000)]));
+        assert_eq!(lease.slices(2, 1), Some(vec![slice(23000, 23000), slice(23001, 23001)]));
+        assert_eq!(
+            lease.slices(3, 2),
+            Some(vec![slice(23000, 23001), slice(23002, 23003), slice(23004, 23005)])
+        );
+        assert_eq!(lease.slices(2, 2).unwrap()[1].take(1, true).unwrap(), (vec![23002], Some(23003)));
+        assert_eq!(lease.slices(1, 2).unwrap()[0].take(2, false).unwrap(), lease.take(2, false).unwrap());
+        assert_eq!(lease.slices(4, 2), None);
+        assert_eq!(Ports::parse("23000-23000").unwrap().slices(2, 1), None);
     }
 
     /// The guest reaches nothing outside QEMU: every network is `restrict=on`, the wider one a
