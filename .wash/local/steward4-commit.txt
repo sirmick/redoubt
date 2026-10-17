@@ -1,0 +1,75 @@
+steward: declassification and push through a crossing budget, the confined deployment's way in, and the responsiveness targets measured with the real steward
+
+An item leaves a label set only by a granted approval, read through a crossing budget carrying
+exactly the item's labels and copied out as the approved snapshot, never re-read (R42); input
+enters a confined domain only by a push the label's owner submits from an unlabelled session and
+approves at approve@box.
+
+The crossing: `servers/crossing`, one program with a mode (`crossing read|write`, wire table
+libs/wire/tables/crossing.md, opcodes 1-2), launched by the steward into a `sizes.crossing`
+budget (128 pages: the steward's sixteen-page lend maps into it beside the stub and the image)
+stamped with the labelled side's account, with one connection to the vault's walfsd minted in
+the crossing budget's scope (R41) at the vault's root (a mint below the root walks with the
+caller's labels, which the unlabelled steward has not: the labelled program walks to the item),
+bounded by CROSSING_LIFE; it serves one call and exits, or is killed with the budget. The
+steward's drive runs the core's Read and Write steps and nothing else; the request is frozen on
+the snapshot's hash; a declassified item lands at ~/out/<name> in the submitter's unlabelled home
+(an existing file is `in_use`, never overwritten); a push's source is read by the unlabelled
+steward itself, snapshotted, hashed and shown on the screen by size and digest, bounded by
+PUSH_MAX (61,440 bytes: fifteen lend pages, the sixteenth for the path and lengths), `too_big` by
+a stat before the core; a writer that fails after some bytes leaves the vault's short file, the
+next push overwrites it. The steward's heap is 128 pages in the image's and the steward
+manifests (PENDING_CAP pushes' snapshots beside a read's buffer; 32 failed one 4 KiB push's read
+on rv64). The steward says `served submit|end_lease in N us` on each (steward.md's residual:
+submit at most 100 ms rv64 / 95 ms rv32, a VM lease's end at most 589 ms on rv64 at one hart).
+
+Confined deployments: init's confinement check counts a home's volume for the principal's
+unlabelled domain alone, since the steward binds a home to unlabelled sessions only under
+`confined` (one of init's own lines to the steward); a labelled session is told no home and the
+shell says so in one line; an exempt server (the steward, sshd) handed an endpoint is not counted
+as its user, the session it mints for is, the server's R25 check and the steward's binding rule
+holding independently of init's count (init.md's sentence); alice's net leaves the confined
+manifest. steward-confined-push boots a two-disk confined manifest on B79's disk2 (the vault on
+its own labelled blkd): the vault session starts at `/`, the push lands, the vault reads it back.
+
+The targets with the real steward: steward-latency (a test-only `latency-probe` in the
+steward's binary, built by that case alone: a bench host test holds it to that) measures the
+steward's timer wake, decision wake and budget_destroy call, the kernel's deadline notice and
+R10 from the trace, net of the checked build's audits, at N = 1 and 2 live leases of alice's
+(the probe's or the deadline's among them) on both widths at one hart and two; the probe arms
+its timer at the last point before the receive that waits on it and prints the reply-to-receive
+gap as `reply_wait`; the window ends at `LATENCY-END` after the second round's counts, which the
+oracle takes as its edge (nothing after it judged), the rounds closed by marker files the
+session writes; the case ends by the steward's marker-file exits and init's reboot, which dumps
+the ring (2.1-2.9 million records, none dropped). Findings, not tunings: N = 4 and 16 are not
+reachable (the box admits eight steward-minted system-volume connections, the steward's own
+share at erofsd:system: serving.md and consoled.md residuals; the follow-up gives the steward a
+badge per principal); N = 3 is not reached (a cleanup step dropped at a busy server leaks a
+State; the cleanup step's parking is the follow-up); the timer wake's p50 misses at every width
+and hart count and, at two harts, the decision wake's p50 and the deadline notice's p99, the
+steward reaching its wait with its reply's console round trips on its pass (the loop's console
+writes are the follow-up). The kernel-deadline leases are 5 s: a 2 s lease died inside its own
+launch at two harts (B82). Every other target is met; the table and the sentences are on
+scheduling.md "Responsiveness". The case is out of the whole run (`whole_run = false`), run by
+name, until the loop's console writes are fixed: a whole bench is a verdict on the tree.
+
+Pages: steward.md (Declassification and push built, R42, the protocol, the manifest lines, the
+console lines, both probes, the residual's numbers), init.md (The confinement check and R34
+built with case 3, the exempt holder), SECURITY.md (R42, R34), serving.md and consoled.md
+(residuals), scheduling.md (With the real steward), testbench.md, sessions.md, shell.md,
+agents.md, servers/README.md, walfsd.md, littlefsd.md, libs/wire/tables/crossing.md,
+plan/m3-agents.md. Cases: steward-declassify, steward-push, steward-confined-push,
+steward-latency (both widths); the nine steward cases listing their programs gain the crossing
+program the image publishes. Host tests: crossing (4), the steward server (47), init (69), the
+bench (the probe's builder, the oracle's marker and prefix). The shell's ExUnit case extended.
+
+Size budget: libs/wire: the generated crossing codec (read, write, their replies and errors),
+4003 to 4153.
+Size budget: servers/steward: the crossing's launch and one call, the Read and Write steps and
+their items, the confined binding, the served lines, the latency probe (feature-gated), 2527 to
+3113.
+Size budget: servers/crossing: the new program, one call on one connection, 0 to 185.
+Size budget: servers/init: the volume rule's unlabelled-domain count, the confined line and the
+exempt holder, 2779 to 2785.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>

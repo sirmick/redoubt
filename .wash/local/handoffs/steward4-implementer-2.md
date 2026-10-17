@@ -2,8 +2,8 @@
 
 ## Branch state
 
-`wp-STEWARD4` at 9529aeed9 = eight WIP commits on main 68c4b2904 (train 48: B79 + STEWARD3Y);
-tree clean. Fold them into ONE `steward:` commit before the report (subject `steward: ...`, the
+`wp-STEWARD4` at 3497d27ca = ONE `steward:` commit on main 68c4b2904 (train 48: B79 + STEWARD3Y),
+folded (message in .wash/local/steward4-commit.txt); tree clean; size-budget PASS. Amend, never add commits (subject `steward: ...`, the
 full account, the `Size budget: <crate>: <why>, A to B` paragraphs, last line `Co-Authored-By:
 Claude Fable 5.1 <noreply@anthropic.com>`). Report file: `.wash/local/STEWARD4-report.md` (every
 figure and finding, the gates table, the deviations). Rulings Q1-Q17: `.wash/local/STEWARD4-ruling.md`
@@ -81,6 +81,13 @@ figure and finding, the gates table, the deviations). Rulings Q1-Q17: `.wash/loc
   VM lease <= 589 ms (rv64, one hart).
 
 ## Then
+
+After train 54 (STEWARD3Z) publishes: rebase onto its main (the orchestrator gives the hash);
+expect the sum rule on tests/size-budget.toml (rt 4048, consoled 423, ipd 2926 on main after
+3Z: our raises as deltas over them), and check the crossing program's console fits consoled's
+new default bucket of 2 consoles / 6 fids (init's override otherwise); the latency manifest's
+consoled bucket count is the image's. steward-latency is `whole_run = false` until 3U.
+
 
 size-budget rerun and exact ceilings; docs; fmt; fold; `git status --short | wc -l` = 0; reply
 to the orchestrator with head and gates; reviewer steward-red-4; tell the orchestrator when the

@@ -1,6 +1,7 @@
-# STEWARD4 report (implementer, in progress)
+# STEWARD4 report (implementer)
 
-Branch `wp-STEWARD4` on main 0b3fcfd28. Brief: `STEWARD4-implementer-2026-10-16.md`; rulings:
+Branch `wp-STEWARD4` = 3497d27ca, one `steward:` commit on main 68c4b2904 (train 48), 65 files;
+the commit message (.wash/local/steward4-commit.txt) is the account. Brief: `STEWARD4-implementer-2026-10-16.md`; rulings:
 `STEWARD4-ruling.md` (Q1-Q7, Q9), thread `STEWARD4-crossing` (Q8 second disk; Q10 the confined
 check and an exempt steward's handed endpoint, Q11 leases against the admission caps: both open).
 
@@ -261,6 +262,23 @@ a `Timeout` with no timer due); the poll has its own arm, rerunning.
   5 s leases, `smp = [1, 2]`, `gate_harts=2`, the steward at 1000 in the latency manifest. The
   toml and the probe (LATENCY-END after the second round's counts, the exit check at two rounds)
   are cut to two rounds; the confirming rv64 run (both harts) and the rv32 run are in flight.
+- Two rounds, rv64, both harts reached the oracle (weight 1000, re-armed, 5 s leases): one hart
+  met everything but the timer wake p50 (23.4/25.9 ms); two harts missed the timer wake p50
+  (42.7/39.2), the decision wake p50 at N = 1 (37.2 ms) and the deadline notice p99 (49.7/51.3
+  ms), reply_wait doubling to 116/94 ms p50 (icount counts both harts): reported to architect-2
+  as 3U's quantity. rv32 booted to nothing for 90 minutes: `memory_mib = 2048` at RAM base
+  0x8000_0000 wraps the 32-bit address space; now 1536 MiB for both widths (the comment carries
+  the arithmetic); rv32 then rv64 rerun on the final toml.
+- Final shape, all four boots to the oracle (seed 3; net µs p50/p99 at N = 1 / N = 2); the table
+  is on scheduling.md. reply_wait (the reply to the next receive: eight consoled calls and two
+  lend maps per start_agent; STEWARD3U's quantity, the fix named here, not on the page): rv64 one
+  hart 55934/56179, 34375/37311; rv64 two harts 115672/120059, 95162/113787; rv32 one hart
+  34588/34815, 36823/39169; rv32 two harts 157016/160713, 163609/170030. The misses: the timer
+  wake's p50 at every width and hart count (the loop's console work on the steward's pass); at
+  two harts also the decision wake's p50 (rv64 N = 1; rv32 both N) and the deadline notice's p99
+  (both widths): findings against the steward's loop, 3U's. Memory 1536 MiB (2048 wrapped rv32's
+  address space). The rv64 sweep (seeds 1..20, both harts, two boots at a time) runs; rv32's
+  follows; each is "once, when the case lands".
 - Runs queued: the weight-1000 run with the old arming (for the record), then the re-armed probe
   at weight 1000 (the case's) and at weight 100 (the comparison the Architect raises with the
   owner), verdicts and logs under .wash/local/steward4-logs/.
