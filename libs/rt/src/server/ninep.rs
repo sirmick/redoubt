@@ -34,9 +34,14 @@
 //! badge. A connection a client mints for itself counts in the share of the connection it minted
 //! it through (the share goes up the chain while the requester is the same client), so a client
 //! gains nothing by minting more connections; a connection someone else minted for it (the
-//! steward, for a lease's agent) is a share of its own. Account 0 is keyed by badge, so there
-//! every connection counts in the bucket of the root badge its chain was minted through, whoever
-//! holds it ([`super::minted::Minted::key`]).
+//! steward, for a session or a lease's agent) is a share of its own, **in its own account's
+//! bucket from its first request**: minted, it is pending, a `State` of its minter's share, and
+//! the first request on it (a T-message, a `ninep_common` one or a typed one) moves that `State` to the
+//! caller's bucket and share, where the caller's caps apply, or is refused if they are full
+//! (`arrived`). So a flood of mints is bounded by the minter's share until somebody calls, and the
+//! steward's own share holds only what the steward itself calls on. Account 0 is keyed by badge,
+//! so there every connection counts in the bucket of the root badge its chain was minted
+//! through, whoever holds it ([`super::minted::Minted::key`]), and nothing moves.
 //!
 //! **Byte quotas** (servers/littlefsd.md, "Quotas") are the file server's. The skeleton only carries
 //! `new_connection`'s `quota` to [`FileServer::minted`], which may refuse the grant, and tells the
@@ -553,6 +558,13 @@ impl<S: FileServer> NineServer<S> {
             return finish(request, &Outcome { words, send: Handles::new(), close: handles }).map(|_| None);
         }
         if !NINEP_COMMON_OPCODES.contains(&words[0]) {
+            // A typed request is a request too: it settles a pending connection, and is refused
+            // when the caller's own bucket has no room for it, before the server sees it.
+            if self.arrived(&caller).is_err() {
+                let words = redoubt_wire::typed::error_reply(ErrorCode::Refused.code());
+                return finish(request, &Outcome { words, send: Handles::new(), close: handles })
+                    .map(|_| None);
+            }
             return own(self, request);
         }
         if missing {
@@ -594,8 +606,13 @@ impl<S: FileServer> NineServer<S> {
             send: none,
             close: *handles,
         };
+        // A `ninep_common` request is a request: it settles a pending connection as a T-message
+        // does, and is refused the same way when the caller's own bucket has no room for it.
+        let decoded = decoded
+            .map_err(|_| ErrorCode::Malformed)
+            .and_then(|message| self.arrived(caller).map(|()| message).map_err(|_| ErrorCode::Refused));
         match decoded {
-            Err(_) => fail(ErrorCode::Malformed.code()),
+            Err(code) => fail(code.code()),
             Ok(ninep_common::Message::Disconnect(d)) => match self.disconnect(caller, d.id) {
                 Ok(()) => {
                     // An inline reply with no fields always encodes.
@@ -670,8 +687,45 @@ impl<S: FileServer> NineServer<S> {
         }
     }
 
+    /// The first request on a minted connection settles whose admission it holds (servers/
+    /// serving.md, `admit`): minted, its `State` sits in its minter's bucket and share, pending;
+    /// here it moves to the caller's (`Minted::key`, `Minted::share`: the account and label set
+    /// making the request, a share of its own when the minter was someone else), where that
+    /// account's caps apply, and the minter's slot goes back. A caller whose own bucket refuses
+    /// it is refused the request, `TOO_MANY`, and the connection stays pending for a later
+    /// request to try again; it is never left in nobody's bucket. A connection the minter
+    /// calls on itself, or any account-0 holder (keyed by the root badge its chain came
+    /// through), settles where it was charged and nothing moves. Settled once, a connection
+    /// later used under another key keeps its bucket: that key's own fids and calls are
+    /// charged to it as they always were.
+    ///
+    /// The skeleton calls it first for every request it serves. A server that charges the
+    /// caller's bucket **ahead** of handing the request to the skeleton (`ipd` reserves the
+    /// `State` units a request's sockets may take, up to the bucket's cap) calls it before that
+    /// charge, or its own reservation would fill the bucket the connection is about to move
+    /// into and the first request would be refused; the result may be ignored there, since the
+    /// skeleton refuses the request itself when the move is still pending.
+    pub fn arrived(&mut self, caller: &Caller) -> Result<(), NineError> {
+        if caller.badge < FIRST_MINTED_BADGE {
+            return Ok(());
+        }
+        let Some(from) = self.minted.pending(caller.badge) else { return Ok(()) };
+        let to = self.charge_of(caller);
+        // The same bucket is already the right one: it stays under the share it was taken
+        // under (a system caller's chain, keyed by its root; a client's own chain, folded).
+        if to.0 == from.0 {
+            self.minted.settle(caller.badge, from);
+            return Ok(());
+        }
+        self.admission.admit(to.0, to.1, Resource::State).map_err(|_| NineError::TOO_MANY)?;
+        self.admission.release(from.0, from.1, Resource::State);
+        self.minted.settle(caller.badge, to);
+        Ok(())
+    }
+
     /// The R-message for `body`; a reply's data borrows the server's scratch space.
     fn answer<'s>(&'s mut self, caller: &Caller, body: Body<'_>, room: usize) -> Result<Body<'s>, Held> {
+        self.arrived(caller)?;
         let key = self.conn_key(caller);
         match body {
             Body::Tversion { msize, version } => {

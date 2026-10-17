@@ -538,6 +538,60 @@ fn every_console_init_mints_attaches_and_opens_in_its_one_bucket() {
     assert_eq!(b.shut_down(), redoubt_rt::exit::OK);
 }
 
+/// A principal's bucket holds the consoles the steward mints for that account, two: a session's,
+/// and its successor's while the ended session's console still holds its fids (the steward's
+/// cleanup has not given it back yet), which attaches and opens `cons` beside it, so the fid cap
+/// leaves the later share `CONSOLE_FIDS` by the fair share's divisor (servers/serving.md, "A fair
+/// share per badge"). A third console in the account is refused at its first request and stays
+/// the steward's pending slot, and is admitted once the steward gives the first back.
+#[test]
+fn a_session_s_console_opens_beside_the_one_it_replaces_and_a_third_waits_for_one_to_go() {
+    let b = boot();
+    let f = fake();
+    // The steward: a system caller with a root badge of its own here, as `init` grants it.
+    let steward = f.process(0, &[]);
+    let own = f.grant(b.server, b.receive, steward, 2);
+    // A console minted for alice's session: pending, a slot of the steward's own bucket, and
+    // handed to a session of hers as `process_start` installs it.
+    let mint = |i: usize| -> (usize, Handle, u64) {
+        let (minted, id) = f.as_process(steward, || {
+            let c = Connection::new(Endpoint::from_handle(own));
+            let mut lend = Lend::new(4).unwrap();
+            let (minted, id) =
+                c.new_connection(&mut lend, "", 0, None).unwrap_or_else(|e| panic!("console {i}: {e:?}"));
+            (minted.handle(), id)
+        });
+        let session = f.process(1001, &[]);
+        (session, f.copy(steward, minted, session), id)
+    };
+    // The root, and `cons` walked from it and opened (redoubt_client's console).
+    let opens = |session: usize, conn: Handle| -> Result<(), ClientError> {
+        f.as_process(session, || {
+            let c = Connection::new(Endpoint::from_handle(conn));
+            let mut lend = Lend::new(4).unwrap();
+            c.attach(&mut lend, 0, "")?;
+            c.walk(&mut lend, 0, 1, "")?;
+            c.open(&mut lend, 1, mode::ORDWR).map(|_| ())
+        })
+    };
+    let (first, first_conn, first_id) = mint(0);
+    let (second, second_conn, _) = mint(1);
+    opens(first, first_conn).expect("the session's console attaches and opens");
+    // The session ends without clunking anything (its budget is destroyed; `consoled` hears
+    // nothing until the steward's cleanup disconnects): its successor's opens beside it.
+    opens(second, second_conn).expect("its successor's console attaches and opens beside it");
+    // Both moved to alice's bucket, the steward's own slots are free again and it mints a third
+    // for her; that is more than a principal holds here, so its first request is refused.
+    let (third, third_conn, _) = mint(2);
+    assert_eq!(opens(third, third_conn).unwrap_err(), ClientError::Rerror(ErrorName::TooMany));
+    // The steward's cleanup gives the ended session's console back, and the third is admitted.
+    f.as_process(steward, || {
+        Connection::new(Endpoint::from_handle(own)).disconnect(first_id, FOREVER).unwrap();
+    });
+    opens(third, third_conn).expect("once a console went back, the third attaches and opens");
+    assert_eq!(b.shut_down(), redoubt_rt::exit::OK);
+}
+
 /// Beyond 9P, `ninep_common` and `consol`'s `size` and `resize`, `consoled` refuses every typed
 /// opcode, `ended` as a call among them, and the handles such a request carries are closed with
 /// the refusal: a client repeating them cannot grow the server's handle table

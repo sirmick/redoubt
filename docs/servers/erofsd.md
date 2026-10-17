@@ -89,8 +89,14 @@ against what was packed); `erofsd` skips it with every other attribute.
 `erofsd` is started by `init` as `littlefsd` is, one instance per read-only volume, with the same
 arguments (`endpoint=`, `buckets=`) and the same range: a `blkd` range for an unverified
 volume, a `verityd` range for a verified one ([blkd](blkd.md), [verityd](verityd.md)). Its
-clients share a 1.5 MiB budget: a bucket at its caps costs 225,280 bytes, so six fit, and every
-session's domain is one, beside the steward's ([the steward](steward.md#authentication-and-sessions));
+clients share a 1.5 MiB budget: a bucket at its caps costs 226,816 bytes, so six fit, and every
+session's domain is one, beside the steward's ([the steward](steward.md#authentication-and-sessions)).
+A bucket holds 11 minted connections: what a manifest lets one account hold at the system volume
+at once, whoever minted them ([serving](serving.md#admit)), two per session the steward starts
+(its shell's and its relay's) for the console session, the cap of live contexts per label set and
+one spare for a context detaching while another attaches, and one per lease, held by the bench to
+at least the largest such sum over the tree's manifests, 2 × (1 + 3 + 1) + 1
+([walfsd](walfsd.md#serving), the same derivation);
 a `buckets=N` the budget cannot hold and `erofsd` does not start. At start it reads the superblock
 and the root inode, then serves:
 

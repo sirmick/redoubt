@@ -1609,6 +1609,14 @@ mod tests {
     /// what a label set's share holds, as `init` derives it), the leases per principal, and one
     /// spare for a context detaching while another attaches. The constant is the largest such sum
     /// over the tree's manifests, exactly: more would be a guess, fewer refuses a context its home.
+    ///
+    /// The connections a bucket holds are the account's too, whoever minted them: a connection
+    /// the steward mints for a session or a lease is admitted in that account's bucket from its
+    /// first request (servers/serving.md, `admit`). So every shared server's `state` is at least
+    /// what the steward mints for one account at it: at the system volume two per session (its
+    /// shell's and its relay's) and one per lease; at `/boot` and the home one per session and
+    /// per lease; at the console the UART session's and a spare. At least, not exactly: a
+    /// session's own mints count in the same bucket, so a server may keep room above the sum.
     #[test]
     fn the_servers_admit_what_a_manifest_lets_one_account_hold() {
         /// The steward's leases per principal (servers/steward.md, "Leases"); no manifest names it.
@@ -1630,6 +1638,7 @@ mod tests {
         let mut found = vec![root.join("image/manifest.json")];
         manifests(&root.join("tests/data"), &mut found);
         let mut largest = (0, PathBuf::new());
+        let mut most_sessions = (0, PathBuf::new());
         for path in found {
             let Ok(json) = serde_json::from_slice::<serde_json::Value>(&std::fs::read(&path).unwrap()) else {
                 continue;
@@ -1675,8 +1684,44 @@ mod tests {
                 if sum > largest.0 {
                     largest = (sum, path.clone());
                 }
+                if sum - LEASES > most_sessions.0 {
+                    most_sessions = (sum - LEASES, path.clone());
+                }
             }
         }
+        // The connections the steward mints for one account: what each server's `state` must hold.
+        let (sessions, path) = most_sessions;
+        let state = |limits: redoubt_rt::server::Limits| u64::from(limits.state);
+        assert!(
+            state(redoubt_erofsd::limits(1)) >= 2 * sessions + LEASES,
+            "erofsd's state holds fewer than {path:?}'s two per session and one per lease"
+        );
+        for (name, limits) in [
+            ("bootfsd", redoubt_bootfsd::limits(1)),
+            ("walfsd", redoubt_walfsd::limits(1)),
+            ("littlefsd", redoubt_littlefsd::limits(1)),
+        ] {
+            assert!(
+                state(limits) >= sessions + LEASES,
+                "{name}'s state holds fewer than {path:?}'s one per session and one per lease"
+            );
+        }
+        // At the console only the UART session's console is the steward's mint for a principal
+        // (a context over ssh gets its relay's, a lease none): one, and a spare.
+        let console_need = 1 + 1;
+        let consoled = redoubt_consoled::server::limits(1);
+        assert!(
+            state(consoled) >= console_need,
+            "consoled's state holds fewer than the console session's and a spare"
+        );
+        // Each console is a share of its account's bucket, and a share takes one more only while
+        // it holds less than `limit / (n + 1)`, n the shares holding (servers/serving.md, "A fair
+        // share per badge"): the last console opens its fids while the others hold theirs.
+        let fids = u64::from(redoubt_consoled::server::CONSOLE_FIDS);
+        assert!(
+            u64::from(consoled.files) >= fids * (console_need + 1),
+            "consoled's fids leave the last of {console_need} consoles fewer than its {fids}"
+        );
         let (sum, path) = largest;
         assert_eq!(
             u64::from(redoubt_walfsd::limits(1).in_flight),

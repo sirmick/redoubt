@@ -360,11 +360,15 @@ fn minted_connections_are_admitted_and_fold_into_the_share_they_came_from() {
     let (alice_conn, _) = t.connect(&mut k, &steward, "", 0).unwrap();
     let agent = caller(agent_conn, 1001, &[]);
     let mut mine = vec![agent_conn];
-    // Connections the agent mints for itself count in its own share: half the bucket's 8.
+    // Connections the agent mints for itself count in its own share: half the bucket's 8, the
+    // connection the steward minted for it among them from its first request (its first
+    // `new_connection` here), so three more, not four.
     while let Ok((c, _)) = t.connect(&mut k, &through(&agent, *mine.last().unwrap()), "", 0) {
         mine.push(c);
     }
-    assert_eq!(mine.len(), 1 + 4);
+    assert_eq!(mine.len(), 1 + 3);
+    assert_eq!(t.server.admission().held(AdmitKey::of(&agent), Resource::State), 4);
+    assert_eq!(t.server.admission().held(AdmitKey::of(&steward), Resource::State), 1, "alice's, pending");
     let mut fid = 0;
     for &c in &mine {
         loop {
@@ -383,6 +387,90 @@ fn minted_connections_are_admitted_and_fold_into_the_share_they_came_from() {
     t.walk(&alice, 0, 10, &["notes"]);
     t.open(&alice, 10, mode::OREAD).unwrap();
     assert_eq!(t.read(&alice, 10, 0, 5).unwrap(), b"hello");
+}
+
+/// servers/serving.md `admit`: a connection minted for another account is admitted in that
+/// account's bucket from its first request; until then it holds one of its minter's pending
+/// slots. The steward (account 0, root badge 9) mints eight: while nobody calls, its own share
+/// holds all eight and is refused the ninth, the pending pool's bound (R26); each account's first
+/// request moves its connection to that account's bucket, so once six accounts have called the
+/// steward holds two, and a second connection called on by the first account counts in that
+/// account's bucket, beside its first; the last one, never called on, goes back with the
+/// steward's disconnect, and its bucket, holding nothing, leaves the table.
+#[test]
+fn a_connection_minted_for_another_account_is_admitted_there_from_its_first_request() {
+    let mut t = T::with_limit(12);
+    let mut k = FakeKernel::new();
+    let steward = caller(9, 0, &[]);
+    let steward_key = AdmitKey::of(&steward);
+    let held = |t: &T, key| t.server.admission().held(key, Resource::State);
+    let mut minted = Vec::new();
+    for _ in 0..8 {
+        minted.push(t.connect(&mut k, &steward, "", 0).unwrap());
+    }
+    assert_eq!(
+        t.connect(&mut k, &steward, "", 0),
+        Err(REFUSED),
+        "the ninth: the minter's share bounds its mints"
+    );
+    assert_eq!(held(&t, steward_key), 8);
+    assert_eq!(t.server.admission().keys(), 1, "all pending, all the steward's");
+    for (i, &(badge, _)) in minted[..6].iter().enumerate() {
+        let who = caller(badge, 1001 + i as u64, &[]);
+        t.attach(&who, 0, "");
+        assert_eq!(held(&t, AdmitKey::of(&who)), 1, "account {}'s bucket holds it", who.account);
+        assert_eq!(held(&t, steward_key), 7 - i as u32, "and the steward's slot went back");
+    }
+    assert_eq!(t.server.admission().keys(), 7);
+    // The seventh, called on by the first account: its second, in its bucket beside the first.
+    let alice_again = caller(minted[6].0, 1001, &[]);
+    t.attach(&alice_again, 1, "");
+    assert_eq!(held(&t, AdmitKey::of(&alice_again)), 2);
+    assert_eq!(held(&t, steward_key), 1, "the eighth, pending");
+    // Settled once, a connection stays where it is: another request on it moves nothing.
+    t.clunk(&alice_again, 1);
+    t.attach(&alice_again, 1, "");
+    assert_eq!(held(&t, AdmitKey::of(&alice_again)), 2);
+    // Nobody ever calls on the eighth: the minter's disconnect frees its pending slot.
+    t.disconnect(&mut k, &steward, minted[7].1).unwrap();
+    assert_eq!(held(&t, steward_key), 0);
+    assert_eq!(t.server.admission().keys(), 6, "the steward's bucket, holding nothing, is gone");
+    // And a settled connection's disconnect gives its account's bucket back, not the steward's.
+    t.disconnect(&mut k, &steward, minted[6].1).unwrap();
+    assert_eq!(held(&t, AdmitKey::of(&alice_again)), 1);
+}
+
+/// A caller whose own bucket has no room is refused its first request, and the connection stays
+/// pending in its minter's share for a later request to try again; it is never in nobody's
+/// bucket, and the minter's share never keeps what an account has taken over.
+#[test]
+fn a_first_request_on_a_connection_its_account_cannot_hold_is_refused_and_it_stays_pending() {
+    let limits = Limits { buckets: 4, in_flight: 0, files: 12, state: 2, requests: 0, pages: 0 };
+    let mut t =
+        T { server: NineServer::new(MemFs::new(), limits, TEST_RANDOM).unwrap(), buf: vec![0; MSIZE] };
+    let mut k = FakeKernel::new();
+    let steward = caller(9, 0, &[]);
+    let held = |t: &T, who: &Caller| t.server.admission().held(AdmitKey::of(who), Resource::State);
+    let first = t.connect(&mut k, &steward, "", 0).unwrap();
+    let second = t.connect(&mut k, &steward, "", 0).unwrap();
+    let alice = |badge| caller(badge, 1001, &[]);
+    t.attach(&alice(first.0), 0, "");
+    t.attach(&alice(second.0), 0, "");
+    assert_eq!((held(&t, &alice(0)), held(&t, &steward)), (2, 0), "alice's bucket is at its cap");
+    // The steward's share is free again, so it mints a third for her; her bucket cannot take it.
+    let third = t.connect(&mut k, &steward, "", 0).unwrap();
+    let attach = || Body::Tattach { fid: 0, afid: NOFID, uname: "", aname: "" };
+    assert_eq!(t.err(&alice(third.0), attach()), "too many open files");
+    assert_eq!((held(&t, &alice(0)), held(&t, &steward)), (2, 1), "still pending, still the steward's");
+    assert_eq!(
+        t.connect(&mut k, &alice(third.0), "", 0),
+        Err(REFUSED),
+        "a common request is refused the same"
+    );
+    // Room made in her bucket, her next request settles it there.
+    t.disconnect(&mut k, &steward, first.1).unwrap();
+    t.attach(&alice(third.0), 0, "");
+    assert_eq!((held(&t, &alice(0)), held(&t, &steward)), (2, 0));
 }
 
 /// The attack on R26 (servers/serving.md) from account 0, which is keyed by badge: a system

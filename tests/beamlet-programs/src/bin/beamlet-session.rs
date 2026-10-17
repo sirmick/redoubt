@@ -8,7 +8,8 @@
 //! fresh system volume connection), and no more, unless the case asks: `keyd` by name for the
 //! generated client's call, and for the serving case an endpoint as `service`. What it runs is
 //! `/boot/beamlet-session.args`, since `init` passes a steward no arguments of the manifest's: each
-//! `vm=MODULE:FUNCTION` word is one VM, run to its end before the next; `labels=N[,N]` is the label
+//! `vm=MODULE:FUNCTION` word is one VM, run to its end before the next, its budget destroyed and
+//! its connections given back as the steward's cleanup gives a session's; `labels=N[,N]` is the label
 //! set of the VMs after it, and `processes=N` how many processes their sessions may hold (ten, as
 //! the image's sessions, unless it says); with `serve`, it also launches `/boot/beamlet-caller` with
 //! a badged handle to the served endpoint. Then it parks, as a steward must not exit.
@@ -148,9 +149,21 @@ impl Session {
         self.carve(sub, SESSION_PAGES, processes, SESSION_WEIGHT, labels, PRINCIPAL_ACCOUNT)
     }
 
-    /// A fresh connection to `server`, as the steward gives a session its own.
-    fn fresh(&mut self, server: &Connection) -> Result<Handle, Error> {
-        server.new_connection(&mut self.lend, "", 0, None).map(|(endpoint, _)| endpoint.handle())
+    /// A fresh connection to `server`, as the steward gives a session its own, and the id it is
+    /// given back by ([`Session::give_back`]).
+    fn fresh(&mut self, server: &Connection) -> Result<(Handle, u64), Error> {
+        server.new_connection(&mut self.lend, "", 0, None).map(|(endpoint, id)| (endpoint.handle(), id))
+    }
+
+    /// Gives `server` back the connection with `id` once its holder has ended and its budget is
+    /// destroyed, as the steward's cleanup does (servers/steward.md R41): a connection minted for
+    /// a session is admitted in the session's account at its first request (servers/serving.md,
+    /// `admit`), and the server hears nothing of the VM's end until this, so an ended VM's console
+    /// would otherwise sit in alice's bucket at `consoled`, holding its fids, beside the next VM's.
+    fn give_back(&mut self, server: &Connection, id: u64) {
+        if server.disconnect(id, FOREVER).is_err() {
+            self.say("FAIL: a connection was not given back");
+        }
     }
 
     /// Launches `/boot/NAME` in `budget` with what `child` gives it, and returns its job.
@@ -260,10 +273,10 @@ fn run(startup: &Startup) -> u32 {
             park();
         };
         // The session's own connections, fresh from their servers, as the steward gives them.
-        let (cons, boot, home, system) =
+        let (at_cons, at_boot, at_home, at_system) =
             (s.console.file().connection().clone(), s.boot.clone(), s.home.clone(), s.system.clone());
-        let (Ok(console), Ok(boot), Ok(home), Ok(system)) =
-            (s.fresh(&cons), s.fresh(&boot), s.fresh(&home), s.fresh(&system))
+        let (Ok((console, cons_id)), Ok((boot, boot_id)), Ok((home, home_id)), Ok((system, system_id))) =
+            (s.fresh(&at_cons), s.fresh(&at_boot), s.fresh(&at_home), s.fresh(&at_system))
         else {
             s.say("FAIL: no fresh connections");
             park();
@@ -301,7 +314,7 @@ fn run(startup: &Startup) -> u32 {
             )),
             Err(e) => s.say(&format!("FAIL: beamlet's notice: {e:?}")),
         }
-        if let Some((mut job, caller_budget)) = caller {
+        if let Some((mut job, caller_budget, caller_cons_id)) = caller {
             match job.wait(FOREVER) {
                 Ok(ended) => s.say(&format!(
                     "beamlet-caller ended: {:?}, code {}",
@@ -310,8 +323,14 @@ fn run(startup: &Startup) -> u32 {
                 Err(e) => s.say(&format!("FAIL: the caller's notice: {e:?}")),
             }
             let _ = caller_budget.destroy();
+            s.give_back(&at_cons, caller_cons_id);
         }
         let _ = budget.destroy();
+        for (server, id) in
+            [(&at_cons, cons_id), (&at_boot, boot_id), (&at_home, home_id), (&at_system, system_id)]
+        {
+            s.give_back(server, id);
+        }
     }
     s.say("done");
     park()
@@ -319,12 +338,12 @@ fn run(startup: &Startup) -> u32 {
 
 /// Launches `/boot/beamlet-caller` in a budget of its own under `users`, another principal's
 /// stand-in, with a badged handle to `service`.
-fn start_caller(s: &mut Session, service: &Endpoint) -> Option<(Job, Budget)> {
+fn start_caller(s: &mut Session, service: &Endpoint) -> Option<(Job, Budget, u64)> {
     let users = Budget::from_handle(s.users);
     let budget = s.carve(&users, CALLER_PAGES, 1, CALLER_WEIGHT, &[], CALLER_ACCOUNT).ok()?;
     let badged = service.mint(NonZeroU64::new(CALLER_BADGE)?, None).ok()?;
     let console = s.console.file().connection().clone();
-    let console = s.fresh(&console).ok()?;
+    let (console, cons_id) = s.fresh(&console).ok()?;
     let child = Child {
         namespace: alloc::vec![("/dev/cons", console)],
         handles: alloc::vec![("service", badged.handle())],
@@ -332,7 +351,7 @@ fn start_caller(s: &mut Session, service: &Endpoint) -> Option<(Job, Budget)> {
     };
     let job = s.launch("beamlet-caller", &budget, &child);
     match job {
-        Ok(job) => Some((job, budget)),
+        Ok(job) => Some((job, budget, cons_id)),
         Err(e) => {
             s.say(&format!("FAIL: beamlet-caller did not start: {e:?}"));
             None

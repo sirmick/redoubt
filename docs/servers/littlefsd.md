@@ -128,7 +128,11 @@ a flash medium, and for the cases that ask for a littlefs volume.
   1 + 1 under `steward-three-contexts`'s manifest, 1 + 2 + 1 + 1 under the image's
   ([image](../../image/README.md)). Fewer refused a principal's third live context its home.
   When a manifest's sum grows past the constant the host test fails by name, so the constant
-  moves with the manifests, never ahead of them.
+  moves with the manifests, never ahead of them. The connections are the account's by the same
+  rule, whoever minted them: a home connection the steward mints for a session or a lease is
+  admitted in that account's bucket from its first request ([serving](serving.md#admit)), so the
+  8 per bucket are held by the same host test to at least one per session and one per lease, and
+  the steward's own share holds only its kept carves.
 - **Metadata** lives in littlefs user attributes: what `stat` needs (mtime, qid version) and the
   per-file attributes of `get_attr` and `set_attr`. No access time is kept. A file's qid version
   moves with every write and truncation, so a client caching it sees the change. mtime is 0

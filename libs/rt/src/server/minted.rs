@@ -11,9 +11,15 @@
 //!   that received the id and nobody else: the same answer whether the id is somebody else's or nobody's.
 //! - A capability a client mints for itself counts in the share of the one it minted it through
 //!   ([`Minted::share`]), so minting more badges buys no bigger share (servers/serving.md R26).
+//! - A capability minted for another account is admitted in that account's bucket from its first request;
+//!   until then it is **pending**, holding one of its minter's slots ([`Minted::pending`],
+//!   [`Minted::settle`]), so a flood of mints is bounded by the minter's share before any first call, and
+//!   what the steward mints for a session or a lease is the session's or the lease's account's to hold, never
+//!   the steward's (servers/serving.md, `admit`).
 //!
 //! Admission is the server's: it admits one [`super::Resource::State`] before reserving, gives it
-//! back if the mint fails, and gives it back for each entry [`Minted::disconnect`] hands it.
+//! back if the mint fails, moves it at the first request on the capability, and gives it back for
+//! each entry [`Minted::disconnect`] hands it, from wherever it was charged by then.
 //!
 //! Badges below [`FIRST_MINTED_BADGE`] are the server's own, given meaning by whoever set the
 //! server up; a badge at or above it that is not in the table is no capability at all.
@@ -95,8 +101,11 @@ pub struct Entry<T> {
     /// The random id its requester was given; only they may disconnect it.
     id: u64,
     requester: Requester,
-    /// The bucket and share its admission was taken from.
+    /// The bucket and share its admission was taken from: the minter's until the first request
+    /// on it settles it ([`Minted::settle`]), then the account that made that request.
     charged: (AdmitKey, u64),
+    /// Whether a request has been made on it: until then it is pending, a slot of its minter's.
+    settled: bool,
     /// The badge it was minted through: it goes when that one goes.
     parent: u64,
     pub value: T,
@@ -239,10 +248,28 @@ impl<T> Minted<T> {
             id,
             requester,
             charged,
+            settled: false,
             parent: requester.badge,
             value,
         });
         Ok((handle, id, badge.get()))
+    }
+
+    /// The charge a pending capability holds: the minter's bucket and share, for the live
+    /// capability with `badge` that no request has yet been made on. `None` for a settled one,
+    /// and for a badge not in the table.
+    pub fn pending(&self, badge: u64) -> Option<(AdmitKey, u64)> {
+        self.entries.iter().find(|e| e.badge == badge && !e.settled).map(|e| e.charged)
+    }
+
+    /// Settles the capability with `badge` on `charged`, the bucket and share its first request
+    /// moved its admission to (the server admitted it there and released the minter's first):
+    /// what [`Entry::charged_to`] releases from then on. A badge not in the table settles nothing.
+    pub fn settle(&mut self, badge: u64, charged: (AdmitKey, u64)) {
+        if let Some(e) = self.entries.iter_mut().find(|e| e.badge == badge) {
+            e.charged = charged;
+            e.settled = true;
+        }
     }
 
     /// A random id no live capability has. `Failed` if the kernel's randomness fails, or every

@@ -460,7 +460,8 @@ typed operations, so a client names no format:
   directory, as on `littlefsd`, so listing n entries costs about n / 64 passes.
 - **Admission** is the serving library's, with `littlefsd`'s caps per bucket
   ([R26 (admission fairness)](serving.md#r26-admission-fairness)), the completion calls per
-  bucket derived from what a manifest lets one account have open at once
+  bucket derived from what a manifest lets one account have open at once, and the connections
+  the account's whoever minted them, the steward's share holding only its kept carves
   ([littlefsd](littlefsd.md#volumes-connections-and-labels)); its budget, 4 MiB, holds the
   image's six buckets at their caps (6 × 626,688 bytes) and not a seventh. **An entry's pages
   are what the server may hold at its limits:** that budget, its heap cap and its stack, rounded
