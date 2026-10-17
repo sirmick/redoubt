@@ -197,7 +197,7 @@ description says so ("verdict: survival only").
 
 ### The case file
 
-Status: built · partly tested: that an unknown field or table is refused is read from the code, not attacked by a case · tested: bench:bench-console-after-expect, bench:bench-poweroff-missing, host:testbench::a_case_out_of_the_whole_run_runs_only_by_name, host:testbench::host_tests_route_only_to_a_requested_workspace_and_forward_features, host:testbench::an_oracles_tools_must_be_on_the_path, host:testbench::sweep_seeds_are_ranges_or_lists, host:testbench::a_sweep_is_refused_before_anything_builds, host:testbench::sweep_boots_have_their_own_files, host:testbench::the_join_prints_in_seed_order_and_counts_failures, host:testbench::a_fanout_is_of_values_files_or_tests, host:testbench::a_job_passes_fails_or_runs_past_its_deadline, host:testbench::a_cpu_list_counts_its_ranges, host:testbench::a_failing_boots_logs_are_kept_under_its_jobs_name, bench:rt-miri, bench:model-mutations
+Status: built · partly tested: that an unknown field or table is refused is read from the code, not attacked by a case · tested: bench:bench-console-after-expect, bench:bench-poweroff-missing, host:testbench::a_case_out_of_the_whole_run_runs_only_by_name, host:testbench::host_tests_route_only_to_a_requested_workspace_and_forward_features, host:testbench::an_oracles_tools_must_be_on_the_path, host:testbench::sweep_seeds_are_ranges_or_lists, host:testbench::a_sweep_is_refused_before_anything_builds, host:testbench::sweep_boots_have_their_own_files, host:testbench::the_join_prints_in_seed_order_and_counts_failures, host:testbench::a_sweeps_boots_hold_disjoint_slices_of_the_lease, host:testbench::two_boots_at_once_run_in_different_slots, host:testbench::a_fanout_is_of_values_files_or_tests, host:testbench::a_job_passes_fails_or_runs_past_its_deadline, host:testbench::a_cpu_list_counts_its_ranges, host:testbench::a_failing_boots_logs_are_kept_under_its_jobs_name, bench:rt-miri, bench:model-mutations
 
 A case is one TOML file. Paths in it are relative to the workspace root, and an unknown field or
 table is an error, so a misspelling cannot silently drop a check. The one exception is a `programs`
@@ -262,7 +262,13 @@ timeout, so the read fails and the volume is poisoned; with `sleep` on, idle tim
 such a run repeats closely, not exactly; a time a case is held to comes with a sweep's spread.
 `--sweep SEEDS` runs one case once per seed (`1..20`, or `3,5,9`), from one build, and prints each
 seed's result in seed order and a summary line; each boot keeps its files in `seed-<N>-<arch>/`
-inside the run's directory. `--jobs J` boots up to J seeds at once. It is never the default; what a
+inside the run's directory. `--jobs J` boots up to J seeds at once. Under `scripts/q` the sweep
+cuts the job's port lease (`q run --ports N`, `REDOUBT_PORTS=lo-hi`) into J disjoint slices from
+its start, one per concurrent boot, and each boot forwards on its slice alone, so no two meet on
+a port; a lease shorter than J times the case's forwards (its `forward` ports and its poke) is
+refused before anything builds, naming the `--ports` to ask for, and no boot is ever handed a
+slice another holds. One boot at a time takes the range's start, as a single run does; outside
+q each boot asks the OS for its ports, with that path's race. `--jobs` is never the default; what a
 result under it is worth is the shared-host rule below. A timing gate runs one pinned seed and
 states its target from a sweep of seeds ([responsiveness](kernel/scheduling.md#responsiveness)).
 
@@ -302,7 +308,9 @@ sockets beside the boot, in wall time: its dials retry until the case's deadline
 stands and a failure is rerun alone, as for any host-clock wait. Its host ports come from the
 job's lease under `scripts/q` (`q run --ports N`, the forwards and the poke; the job sees
 `REDOUBT_PORTS=lo-hi`, a range no other lease holds, and the bench takes the forwards' ports from
-its start), so two such boots run side by side without meeting on a port; what remains under q
+its start), so two such boots run side by side without meeting on a port; a sweep's `--jobs J`
+boots are J such boots inside one lease, each on its own slice of it (the sweep paragraph
+above: the lease must hold J times the case's forwards, or the sweep is refused); what remains under q
 is a stranger to q taking a pooled port between the daemon's probe and QEMU's bind, which fails
 that boot loudly, as before. Outside q the bench
 picks a forwarded host port by binding and releasing it before QEMU takes it, so two such boots
@@ -1039,7 +1047,7 @@ a program reads it again through `/boot` once the manifest's `public` list names
 
 ### Disks and network cards
 
-<details><summary>Status: built · tested (37)</summary>
+<details><summary>Status: built · tested (38)</summary>
 
 - bench:bench-virtio-devices
 - bench:bench-virtio-legacy-off
@@ -1062,6 +1070,7 @@ a program reads it again through `/boot` once the manifest's `public` list names
 - host:testbench::each_disk_holds_the_volumes_on_its_device
 - bench:walfsd-boot
 - host:testbench::every_network_is_restricted
+- host:testbench::a_lease_slices_into_disjoint_ranges_or_none
 - host:testbench::virtio_devices_are_modern
 - host:testbench::the_userland_disk_sits_on_its_slot_read_only
 - host:testbench::the_userland_pack_is_deterministic_and_stages_each_object_by_name
@@ -1197,7 +1206,9 @@ to it, so nothing on the box can change it. The guest reaches nothing outside QE
 (`restrict=on`, checked for every `[net]` case): there is no outside peer, only forwarded
 connections coming in, unless a case adds one deliberately. Nor is it offered IPv6 (`ipv6=off`),
 which it does not speak: slirp would otherwise send it router advertisements. Each boot gets its
-own host ports, chosen by the operating system, so benches running side by side do not collide.
+own host ports, from the job's lease under `scripts/q` (a sweep's concurrent boots each from
+their own slice of it) and chosen by the operating system otherwise, so benches running side by
+side do not collide.
 
 ### Peers, dials and the capture
 
