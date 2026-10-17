@@ -1482,7 +1482,12 @@ so the case restarts it thirteen times, each time with that session and its conn
   approval key, and `sshd` refuses a key `keyd` holds before a login reaches the steward. The
   guard stays, exercised by the model and the traces.
 - **Steward work is paid by the steward.** A principal's requests cost the steward's budget and
-  time, bounded by its caps and per-request work, not by the requester's budget.
+  time, bounded by its caps and per-request work, not by the requester's budget. Measured by its
+  `served` lines (a call's arrival to its answer) on the bench's checked builds: at most 100 ms
+  per `submit` (a declassification's read crossing or a push's read of the source included; rv64,
+  95 ms on rv32, `steward-declassify` and `steward-push`) and 589 ms per `end_lease` of a lease
+  carrying a beamlet VM (rv64, one hart, under `icount`: `steward-latency`), the VM budget's
+  destruction being most of it ([responsiveness](../kernel/scheduling.md#responsiveness)).
 - **A context's relay holds the steward's one thread for a bounded time.** The steward waits up to
   2 s for a relay's `hello` at each SSH login that starts a context, and up to 1 s for each
   `attach` and `detach`, so a relay that never answers delays every other principal's call by that
