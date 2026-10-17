@@ -28,7 +28,9 @@ defmodule Redoubt.Shell.Driver do
   (`open_feed/0`): the lines typed go to it, edited as they are typed (a backspace takes back a
   character) and echoed through `Redoubt.Term`, and Ctrl+D on an empty line is the end of its
   input, not the shell's. The interrupt keys are never fed: they stay the shell's. The feed ends
-  when its process does, and what is typed after goes to `group` again.
+  when its process does, and what is typed after goes to `group` again. A feed opens only for a
+  line being evaluated: asked for at the prompt, or after the interrupt ended its line, it is
+  refused, so nothing typed for the next line can go to a program the interrupt is ending.
 
   While a line is evaluated, the shell tells the driver (`Redoubt.Shell.Evaluator`), and the
   interrupt, with no line being edited and no screen in front, ends that line: the driver draws
@@ -753,7 +755,11 @@ defmodule Redoubt.Shell.Driver do
     end
   end
 
-  defp open_feed(%{feed: nil, screen: nil, machine: nil} = state, pid) do
+  # A feed is the evaluating line's. Its process asks once the line's stages are launched, so
+  # its ask can arrive after the interrupt ended the line (`interrupt_line/1`), while the line's
+  # processes are still going: opened then, it would take the next line typed, meant for the
+  # prompt. With no line evaluated the ask is refused, as a screen's and a feed under another are.
+  defp open_feed(%{feed: nil, screen: nil, machine: nil, evaluating: %{}} = state, pid) do
     send(pid, {:redoubt_feed, :opened})
     %{state | feed: %{pid: pid, ref: Process.monitor(pid), line: "", cr: false}}
   end

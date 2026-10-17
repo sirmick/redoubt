@@ -415,7 +415,10 @@ What a job cannot do:
   screen that takes Ctrl+C still cannot take Ctrl+\\: the driver finds that byte in what was read
   before decoding any key, so neither an escape sequence begun before it nor a paste carries it
   to the screen. Under a screen that does not take Ctrl+C, the 0x03 byte is found the same way:
-  ESC then Ctrl+C is the interrupt, never the key Alt+Ctrl+C.
+  ESC then Ctrl+C is the interrupt, never the key Alt+Ctrl+C. Nor can a stage the interrupt is
+  ending take what is typed for the next line: the session feeds a stage only while its line is
+  evaluated, and a stage that asks for what is typed after the interrupt ended its line, which a
+  stage launched just before it does, is given nothing.
 - **Take the session's memory on the heap.** Every Erlang process the session starts, the
   evaluator, what a line spawns and every screen program, runs with Erlang's `max_heap_size` flag
   (killing), set to a fixed share of the session's budget, so a runaway allocation kills that
