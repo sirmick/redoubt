@@ -18,13 +18,14 @@ use redoubt_rt::wire::proto::bootfs::{self, Add, ErrorCode, Message, Reply, Seal
 /// longer than this is a manifest mistake, not something to serve.
 pub const MAX_ENTRIES: usize = 64;
 /// The most bytes `/boot` holds in total, across every entry: what bounds this server's own
-/// memory, since the bytes are its and not a client's. Its manifest budget must cover this and
-/// [`BUDGET`] together.
+/// memory, since the bytes are its and not a client's: its entry's heap cap holds them (the
+/// image's 2 304 pages), and its budget holds the buckets beside that cap.
 pub const MAX_BYTES: usize = 8 * 1024 * 1024;
 
 /// What admission lets each of `buckets` buckets hold (servers/serving.md R26); the count is the
 /// manifest's `buckets=N` ([`redoubt_rt::server::buckets`]), and the program refuses a count whose
-/// buckets at their caps would not fit [`BUDGET`]. A call is answered as it arrives; what is held
+/// buckets at their caps would not fit its entry's budget, the entry's pages less its heap cap and
+/// stack (`redoubt_rt::server::budget`). A call is answered as it arrives; what is held
 /// is a multiplexed connection's completion call (`InFlight`, one per session, so two lets a share
 /// hold one), its requests (`Requests`), and the pages their transfers brought (`Pages`): nothing is
 /// written here, so two pages, the most one batch of requests needs.
@@ -37,12 +38,14 @@ pub const fn limits(buckets: u32) -> Limits {
 /// record; a request its record; a page a page.
 pub const COST: Cost =
     Cost { in_flight: 64 * 1024, file: 256, state: 256, request: REQUEST_STATE, page: PAGE_SIZE as u64 };
-/// The bytes of this server's budget its clients may use between them, over and above
-/// [`MAX_BYTES`] of published entries. A bucket at its caps costs 2 completion calls at 64 KiB,
-/// 32 fids and 8 connections at 256 bytes, 64 requests at 256 and 2 pages at 4 KiB: 165 888 bytes,
-/// so 6 fit here (995 328), and the image's 5 (`init`, the steward and three principals' domains)
-/// take 829 440.
-pub const BUDGET: u64 = 1024 * 1024;
+// The budget every bucket at its caps must fit is the manifest entry's: its pages less its heap
+// cap and stack (`redoubt_rt::server::budget`), checked at start, never a count in this code. A
+// bucket at its caps costs 2 completion calls at 64 KiB, 32 fids and 8 connections at 256 bytes,
+// 64 requests at 256 and 2 pages at 4 KiB: 165 888 bytes; the image's 6 (`init`, the steward,
+// three principals' domains and a case's extra client) take 995 328, 243 pages; with the heap
+// cap's 2 304 and the stack's bound 128, rounded up to 256, the entry rule gives 2 816, and the
+// image's entry of 4 096 pages leaves 1 664 of budget, forty-one such buckets and not a
+// forty-second (`the_image_entry_holds_its_buckets`).
 
 /// Why an argument list was refused. Each one stops the server starting: a `/boot` that is not
 /// what the manifest named is worse than no `/boot` at all (TENETS.md 2, fail closed).

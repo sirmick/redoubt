@@ -14,7 +14,7 @@ use redoubt_rt::server::typed::serve_call;
 use redoubt_rt::start::say;
 use redoubt_rt::startup::Startup;
 use redoubt_walfsd::typed::{Typed, Walfsds};
-use redoubt_walfsd::{BUDGET, COST, Walfsd, limits, mount};
+use redoubt_walfsd::{COST, Walfsd, limits, mount};
 
 redoubt_rt::entry!(serve);
 
@@ -26,7 +26,7 @@ pub const CORRUPT: &str = "walfsd: the volume does not mount, and is served as c
 /// Serves until the endpoint is destroyed.
 pub fn serve(startup: &Startup) -> u32 {
     // Two pages lent to each call: a block of sectors, and the message around it.
-    let fits = |buckets| limits(buckets).fits(&COST, BUDGET);
+    let fits = |buckets, budget| limits(buckets).fits(&COST, budget);
     let Started { endpoint, labels, buckets, range } = match start(startup, 2, fits) {
         Ok(started) => started,
         Err(code) => return code,

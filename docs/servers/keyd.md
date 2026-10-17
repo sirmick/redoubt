@@ -136,13 +136,14 @@ library's minted table ([minted connections](serving.md#minted-connections)):
 
 ### Bounds and errors
 
-<details><summary>Status: built · tested (9)</summary>
+<details><summary>Status: built · tested (10)</summary>
 
 - bench:r4-host-tests
 - host:redoubt-keyd::one_requests_work_is_bounded
 - host:redoubt-keyd::a_flood_takes_only_the_flooders_share
 - host:redoubt-keyd::a_hostile_client_does_not_hurt_keyd_or_other_clients
-- host:redoubt-keyd::the_limits_are_sized_as_containment_says
+- host:redoubt-keyd::the_image_entry_holds_its_buckets
+- host:testbench::every_manifest_entry_holds_its_buckets_at_their_caps
 - host:redoubt-keyd::malformed_requests_are_refused_and_their_handles_closed
 - host:redoubt-keyd::a_one_way_message_is_dropped_and_its_handles_closed
 - host:redoubt-keyd::random_requests_never_panic
@@ -154,9 +155,12 @@ library's minted table ([minted connections](serving.md#minted-connections)):
   most `MAX_RECORD` (8 KiB); over it is `too_many`.
 - **Admission** counts the one thing a client can make `keyd` hold, its grants: at most 8 live
   grants per (account, label set), across at most `buckets=N` of those at once, sized to fit
-  `keyd`'s 256 KiB budget ([R26 (admission fairness)](serving.md#r26-admission-fairness)); a
-  block with no `buckets=N`, or one the budget cannot hold, and `keyd` does not start
-  ([init](init.md#the-boot-manifest)).
+  the budget its manifest entry gives, the entry's pages less its heap cap and stack, by the entry
+  rule ([walfsd](walfsd.md#serving); [R26 (admission fairness)](serving.md#r26-admission-fairness)):
+  a bucket at its caps is 4,096 bytes, the image's six 24,576, six pages, which with the heap cap's
+  8 and the stack's 128 round to the image's 256, and the entry leaves 120 pages of budget, more
+  such buckets than a server may have; a block with no `buckets=N` or no budget, or a count the
+  budget cannot hold, and `keyd` does not start ([init](init.md#the-boot-manifest)).
   `keyd` parks no calls and keeps no other per-caller state, so a flood of signing requests grows
   it by nothing and is bounded by the kernel's fair waiting.
 - **The label check.** `keyd`'s keys carry no labels, so anyone may read a public key or ask

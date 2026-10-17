@@ -33,11 +33,12 @@ fn launch(pid: usize, block: Vec<u8>, main: fn(&Startup) -> u32) -> std::thread:
     })
 }
 
-/// The block `init` writes for `bootfsd`: the endpoint it receives on, its bucket count, and the
-/// `public` list, each entry `LENGTH:NAME`.
+/// The block `init` writes for `bootfsd`: the endpoint it receives on, its budget (the image's
+/// entry: 4 096 pages with a heap cap of 2 304), its bucket count, and the `public` list, each
+/// entry `LENGTH:NAME`.
 fn block(receive: Handle, public: &[(&str, usize)]) -> Vec<u8> {
     let mut builder = StartupBuilder::new(receive.index());
-    builder.handle("bootfsd", receive).arg("buckets=4");
+    builder.handle("bootfsd", receive).budget_pages(4096).heap_pages(2304).arg("buckets=4");
     let sized: Vec<String> = public.iter().map(|(name, len)| format!("{len}:{name}")).collect();
     for entry in &sized {
         builder.arg(entry);
@@ -255,17 +256,38 @@ fn a_bad_public_list_stops_the_server() {
     let thread = launch(f.process(0, &[]), empty, bootfsd::serve);
     assert_eq!(thread.join().unwrap(), bootfsd::NO_ENDPOINT);
 
-    // A block that does not size it, or sizes it at nothing, or for more than its budget holds:
-    // it does not guess a count (servers/serving.md R26).
-    for sizing in [&[][..], &["buckets=0"], &["buckets=16", "buckets=16"], &["buckets=32"]] {
+    // A block that does not size it, or sizes it at nothing, or past the most a server may have,
+    // or names no budget, or one whose pages less the stack's bound hold fewer than its count's
+    // buckets (six at 165 888 bytes are 243 pages): it does not guess a count or a budget
+    // (servers/serving.md R26; servers/walfsd.md, the entry rule).
+    let image = Some(4096);
+    for (sizing, budget) in [
+        (&[][..], image),
+        (&["buckets=0"], image),
+        (&["buckets=16", "buckets=16"], image),
+        (&["buckets=33"], image),
+        (&["buckets=6"], None),
+        (&["buckets=6"], Some(128 + 242)),
+    ] {
         let server = f.process(0, &[]);
         let receive = f.endpoint(server);
         let mut builder = StartupBuilder::new(receive.index());
         builder.handle("bootfsd", receive);
+        if let Some(pages) = budget {
+            builder.budget_pages(pages);
+        }
         for arg in sizing {
             builder.arg(arg);
         }
         let thread = launch(server, builder.finish().unwrap(), bootfsd::serve);
-        assert_eq!(thread.join().unwrap(), bootfsd::BAD_LIMITS, "{sizing:?}");
+        assert_eq!(thread.join().unwrap(), bootfsd::BAD_LIMITS, "{sizing:?} in {budget:?} pages");
     }
+    // The same count in one page more serves.
+    let server = f.process(0, &[]);
+    let receive = f.endpoint(server);
+    let mut builder = StartupBuilder::new(receive.index());
+    builder.handle("bootfsd", receive).budget_pages(128 + 243).arg("buckets=6");
+    let thread = launch(server, builder.finish().unwrap(), bootfsd::serve);
+    f.destroy(server, receive);
+    assert_eq!(thread.join().unwrap(), redoubt_rt::exit::OK);
 }

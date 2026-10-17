@@ -32,13 +32,16 @@ pub const fn limits(buckets: u32) -> Limits {
 /// record and its root's node; a request its record; a page a page.
 pub const COST: Cost =
     Cost { in_flight: 64 * 1024, file: 2048, state: 512, request: REQUEST_STATE, page: PAGE_SIZE as u64 };
-/// The bytes of this server's budget its clients may use between them. A bucket at its caps costs
-/// 2 completion calls at 64 KiB, 32 fids at 2 KiB, 11 connections at 512 bytes, 64 requests at 256
-/// and 2 pages at 4 KiB: 226 816 bytes, so 6 fit here (1 360 896) and not a seventh (1 587 712).
-/// Every session reads the system volume on connections the steward makes for it, admitted in the
-/// session's account, so each principal's domain is a bucket beside the steward's: the image's
-/// three principals' four domains and the steward take 5, and a case's extra client the sixth.
-pub const BUDGET: u64 = 1536 * 1024;
+// The budget every bucket at its caps must fit is the manifest entry's: its pages less its heap
+// cap and stack (`redoubt_rt::server::budget`), checked at start, never a count in this code. A
+// bucket at its caps costs 2 completion calls at 64 KiB, 32 fids at 2 KiB, 11 connections at 512
+// bytes, 64 requests at 256 and 2 pages at 4 KiB: 226 816 bytes. Every session reads the system
+// volume on connections the steward makes for it, admitted in the session's account, so each
+// principal's domain is a bucket beside the steward's: the image's three principals' four domains
+// and the steward take 5, and a case's extra client the sixth, 1 360 896 bytes, 333 pages; with
+// the heap cap's 26 and the stack's bound 128, rounded up to 256, the entry rule gives 512, and
+// the image's entry of 1 024 pages leaves 870 of budget, fifteen such buckets and not a sixteenth
+// (`the_image_entry_holds_its_buckets`).
 
 /// The `Rerror` texts `erofsd` adds to the skeleton's fixed set, `littlefsd`'s words for the same
 /// things.

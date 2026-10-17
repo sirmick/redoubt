@@ -28,4 +28,4 @@ pub mod stats;
 
 pub use redoubt_fileserver::args::{Args, BadArgs, parse_args};
 pub use redoubt_fileserver::range::{Fault, Range};
-pub use server::{BUDGET, COST, Erofsd, limits};
+pub use server::{COST, Erofsd, limits};

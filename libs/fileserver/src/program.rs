@@ -5,15 +5,16 @@
 use alloc::vec::Vec;
 
 use redoubt_rt::handle::Endpoint;
-use redoubt_rt::server::{buckets, own_args};
+use redoubt_rt::server::{buckets, budget, own_args};
 use redoubt_rt::startup::Startup;
 
 use crate::args::{Args, parse_args};
 use crate::range::Blkd;
 
-/// No `buckets=N`, one whose buckets at their caps do not fit the budget, no `endpoint=NAME` or
-/// none the startup block holds a handle by, or an argument the server does not understand
-/// (`labels=` malformed, or anything else): it does not guess.
+/// No `buckets=N`, a block naming no budget or one whose buckets at their caps do not fit it
+/// (`redoubt_rt::server::budget`), no `endpoint=NAME` or none the startup block holds a handle
+/// by, or an argument the server does not understand (`labels=` malformed, or anything else): it
+/// does not guess.
 pub const BAD_ARGS: u32 = 4;
 /// No `volume` handle, or a range the server cannot serve: one it cannot size, or too small for
 /// its format.
@@ -35,16 +36,18 @@ pub struct Started {
 }
 
 /// Reads the arguments and handles in `startup`, refusing with [`BAD_ARGS`] what [`parse_args`]
-/// or `buckets=` refuse, an endpoint the block does not hold, and a bucket count `fits` says the
-/// budget cannot hold; and with [`NO_VOLUME`] a block without its `volume`. Built with
+/// or `buckets=` refuse, an endpoint the block does not hold, a block naming no budget, and a
+/// bucket count `fits` says the budget (the entry's pages less its heap cap and stack,
+/// [`budget`]) cannot hold; and with [`NO_VOLUME`] a block without its `volume`. Built with
 /// `one-volume-probe`, it tries R47 from inside before anything is served, and says what it
 /// found (src/probe.rs).
-pub fn start(startup: &Startup, pages: usize, fits: impl FnOnce(u32) -> bool) -> Result<Started, u32> {
+pub fn start(startup: &Startup, pages: usize, fits: impl FnOnce(u32, u64) -> bool) -> Result<Started, u32> {
     let args: Vec<&str> = startup.args().collect();
     let buckets = buckets(&args).map_err(|_| BAD_ARGS)?;
     let Args { endpoint: name, labels } = parse_args(own_args(&args)).map_err(|_| BAD_ARGS)?;
     let endpoint = startup.handle(name).map(Endpoint::from_handle).ok_or(BAD_ARGS)?;
-    if !fits(buckets) {
+    let budget = budget(startup).ok_or(BAD_ARGS)?;
+    if !fits(buckets, budget) {
         return Err(BAD_ARGS);
     }
     let volume = startup.handle("volume").ok_or(NO_VOLUME)?;

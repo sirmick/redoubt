@@ -95,7 +95,10 @@ and `init`'s only input. Its entries:
   allocation fails in the runtime before the kernel is asked. The budget stays the bound on
   everything else. `init` refuses 0, or a cap and stack the budget cannot hold. The bench requires
   each image server's cap to hold at least twice its largest heap peak
-  ([the memory budget](../testbench.md#the-memory-budget)).
+  ([the memory budget](../testbench.md#the-memory-budget)). A shared server's entry follows the
+  entry rule besides: its pages hold its `buckets=N` at their caps beside the heap cap and the
+  stack ([walfsd](walfsd.md#serving)), which the server checks at start from the budget and heap
+  cap its startup block carries, and refuses to start without.
 - **One entry per device.** A `devices` entry names one device, by its register region and its
   interrupt, and `init` hands that device's objects together to the one server that holds the
   entry. They go under the name the server's entry gives the device: `NAME` for the register region and `NAME-irq` for the

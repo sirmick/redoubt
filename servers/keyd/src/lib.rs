@@ -43,4 +43,4 @@ pub use redoubt_sha256 as sha256;
 pub mod ssh;
 
 pub use keys::{Keys, Purpose};
-pub use server::{BUDGET, COST, KeyServer, limits};
+pub use server::{COST, KeyServer, limits};

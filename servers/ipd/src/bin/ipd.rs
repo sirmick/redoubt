@@ -32,7 +32,8 @@ redoubt_rt::entry!(serve);
 pub const NO_ENDPOINT: u32 = 2;
 /// The startup block has no `netd` handle.
 pub const NO_NETD: u32 = 5;
-/// The arguments are not ones `ipd` will run with ([`args::parse`], [`args::Config::sizing`]).
+/// The arguments are not ones `ipd` will run with ([`args::parse`], [`args::Config::sizing`]),
+/// or the startup block names no budget for them to fit.
 pub const BAD_ARGS: u32 = 6;
 /// The kernel would give no random word for the minted badges.
 pub const NO_RESOURCES: u32 = 7;
@@ -60,7 +61,8 @@ fn now() -> u64 { redoubt_rt::handle::time_now().unwrap_or(u64::MAX) }
 pub fn serve(startup: &Startup) -> u32 {
     let Some(endpoint) = startup.handle(ENDPOINT).map(Endpoint::from_handle) else { return NO_ENDPOINT };
     let Ok(config) = args::parse(startup.args()) else { return BAD_ARGS };
-    let Ok(sizing) = config.sizing() else { return BAD_ARGS };
+    let Some(budget) = redoubt_rt::server::budget(startup) else { return BAD_ARGS };
+    let Ok(sizing) = config.sizing(budget) else { return BAD_ARGS };
     let Some(netd) = startup.handle(NETD).map(Endpoint::from_handle) else { return NO_NETD };
     let Ok(random) = redoubt_rt::handle::random_u64() else { return NO_RESOURCES };
 

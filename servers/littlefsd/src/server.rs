@@ -38,11 +38,13 @@ pub const fn limits(buckets: u32) -> Limits {
 /// its root's path; a request its record; a page a page.
 pub const COST: Cost =
     Cost { in_flight: 64 * 1024, file: 2048, state: 512, request: REQUEST_STATE, page: PAGE_SIZE as u64 };
-/// The bytes of this server's budget its clients may use between them. A bucket at its caps costs
-/// 6 completion calls at 64 KiB, 32 fids at 2 KiB, 8 connections at 512 bytes, 128 requests at 256
-/// and 32 pages at 4 KiB: 626 688 bytes, so the manifests' 4 buckets take 2 506 752, and 5 fit
-/// 3 MiB (3 133 440): 768 pages of the entry's 1 024.
-pub const BUDGET: u64 = 3 * 1024 * 1024;
+// The budget every bucket at its caps must fit is the manifest entry's: its pages less its heap
+// cap and stack (`redoubt_rt::server::budget`), checked at start, never a count in this code. A
+// bucket at its caps costs 6 completion calls at 64 KiB, 32 fids at 2 KiB, 8 connections at 512
+// bytes, 128 requests at 256 and 32 pages at 4 KiB: 626 688 bytes; the manifests' 4 buckets take
+// 2 506 752, 612 pages; with no heap cap and the stack's bound 128, rounded up to 256, the entry
+// rule gives 768, and their entries of 1 024 pages leave 896 of budget, five such buckets and not
+// a sixth (`the_manifests_entry_holds_its_buckets`).
 
 /// Test-only, for the bench's `littlefsd-restart` (feature `restart-probe`, off in every default build,
 /// as netd's is): a walk to this name ends the instance with [`PROBE_EXIT`] while it holds the

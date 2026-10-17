@@ -82,7 +82,7 @@
       "name": "erofsd:system",
       "program": "erofsd",
       "budget": {
-        "pages": "256",
+        "pages": "512",
         "processes": 1,
         "weight": 100
       },

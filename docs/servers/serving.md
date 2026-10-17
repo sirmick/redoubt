@@ -37,7 +37,7 @@ loop of its own, closing a send's handles with `close_delivery`: `consoled`, `ne
 
 ### `admit`
 
-<details><summary>Status: built · tested (14)</summary>
+<details><summary>Status: built · tested (15)</summary>
 
 - host:redoubt-rt::the_key_is_the_account_and_the_label_set
 - host:redoubt-rt::limits_are_per_key_and_per_resource
@@ -53,6 +53,7 @@ loop of its own, closing a send's handles with `close_delivery`: `consoled`, `ne
 - host:redoubt-rt::fits_counts_overrides_at_their_caps
 - host:redoubt-rt::a_connection_minted_for_another_account_is_admitted_there_from_its_first_request
 - host:redoubt-rt::a_first_request_on_a_connection_its_account_cannot_hold_is_refused_and_it_stays_pending
+- host:redoubt-rt::a_servers_budget_is_its_entrys_pages_less_its_heap_cap_and_stack
 
 </details>
 
@@ -99,8 +100,16 @@ open call, and each has its own share ([R26](#r26-admission-fairness)).
   that may hold anything at once. `Admission::new` refuses limits (`Unsized`) whose buckets could
   hold more open calls than `MAX_OPEN_CALLS` (256) less `OPEN_CALL_HEADROOM` (64), or with a
   non-zero cap below `SMALLEST_CAP` (2): below two, a lone badge's share is the whole bucket.
-  `Limits::fits` says whether every bucket at its cap fits a budget of so many bytes; a server
-  checks it against its own budget at start.
+  `Limits::fits` says whether every bucket at its cap fits a budget of so many bytes, and a
+  shared server checks it at start against the budget its manifest entry gives (`budget`): the
+  entry's pages less its heap cap and its stack, times the page, the heap cap and the budget read
+  from the startup block and the stack counted at the launched bound of 128 pages, since a program
+  does not learn its own; an uncapped heap takes nothing off, since the budget alone bounds it
+  and admission's records share those pages, which is the memory rule's business, not this
+  check's; a block naming no budget is refused as one naming no count is. So the
+  manifest is the one source, sizing the count and the budget together by the entry rule
+  ([walfsd](walfsd.md#serving)), and a larger manifest meets no wall in the code. `consoled`
+  checks a constant of its own in the budget's place ([consoled](consoled.md#devcons)).
 - **Overrides.** `Admission::with_overrides` gives named account-0 root badges (non-zero, below
   the minted range, each named once) caps of their own. The worst case, each override slot at the
   larger of its cap and the default, must still leave the headroom.

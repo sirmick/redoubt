@@ -692,7 +692,12 @@ fn volume_on(sectors: usize, args: &[&str], serving: Option<&Launched>) -> Volum
     };
     let range = f.grant(blkd, blkd_receive, pid, 1);
     let mut builder = StartupBuilder::new(receive.index().max(range.index()));
-    builder.handle("littlefsd:data", receive).handle("volume", range).arg("endpoint=littlefsd:data");
+    // The manifests' entry, as `init` writes it: 1 024 pages, no heap cap.
+    builder
+        .handle("littlefsd:data", receive)
+        .handle("volume", range)
+        .budget_pages(1024)
+        .arg("endpoint=littlefsd:data");
     for arg in args {
         builder.arg(arg);
     }

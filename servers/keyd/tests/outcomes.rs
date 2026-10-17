@@ -1,10 +1,14 @@
 use redoubt_fake_kernel::scripted as seam;
 use redoubt_keyd::keys::Keys;
-use redoubt_keyd::server::{BUDGET, COST, KeyServer, limits};
+use redoubt_keyd::server::{COST, KeyServer, limits};
 use redoubt_rt::abi::*;
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::ipc::Event;
 use redoubt_rt::wire::proto::keyd::{Grant, Message};
+
+/// The image's `keyd` entry's budget, 256 pages with a heap cap of 8, as the program derives it
+/// from its startup block (`redoubt_rt::server::budget`).
+const IMAGE_BUDGET: u64 = redoubt_rt::server::budget_of(256, 8);
 
 #[test]
 fn serving_grant_rolls_back_discard_missing_capability_and_error() {
@@ -21,7 +25,7 @@ fn serving_grant_rolls_back_discard_missing_capability_and_error() {
             ["host,ssh_host,1111111111111111111111111111111111111111111111111111111111111111"].into_iter(),
         )
         .unwrap();
-        let mut server = KeyServer::new(keys, limits(16), &COST, BUDGET, 0x1234_5678).unwrap();
+        let mut server = KeyServer::new(keys, limits(16), &COST, IMAGE_BUDGET, 0x1234_5678).unwrap();
         for _ in 0..20 {
             let first_reply = {
                 let mut state = kernel.0.lock().unwrap();
@@ -57,7 +61,7 @@ fn serving_grant_rolls_back_discard_missing_capability_and_error() {
         ["host,ssh_host,1111111111111111111111111111111111111111111111111111111111111111"].into_iter(),
     )
     .unwrap();
-    let mut server = KeyServer::new(keys, limits(16), &COST, BUDGET, 0x1234_5678).unwrap();
+    let mut server = KeyServer::new(keys, limits(16), &COST, IMAGE_BUDGET, 0x1234_5678).unwrap();
     {
         let mut s = kernel.0.lock().unwrap();
         s.reply = Err(Error::BadHandle);

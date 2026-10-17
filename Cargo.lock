@@ -1320,6 +1320,8 @@ dependencies = [
  "redoubt-client",
  "redoubt-consoled",
  "redoubt-erofsd",
+ "redoubt-ipd",
+ "redoubt-keyd",
  "redoubt-littlefsd",
  "redoubt-model",
  "redoubt-rt",

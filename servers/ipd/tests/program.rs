@@ -225,7 +225,8 @@ fn boot(buckets: u32) -> Net {
     let netd_for_ipd = f.grant(netd, netd_ep, ipd, NETD_CLIENT);
     let ingress = f.grant(ipd, ep, netd, INGRESS);
     let mut b = StartupBuilder::new(ep.index().max(netd_for_ipd.index()));
-    b.handle(ipd_bin::ENDPOINT, ep).handle(ipd_bin::NETD, netd_for_ipd);
+    // The image's entry, as `init` writes it: 4 096 pages with a heap cap of 74.
+    b.handle(ipd_bin::ENDPOINT, ep).handle(ipd_bin::NETD, netd_for_ipd).budget_pages(4096).heap_pages(74);
     for a in args(buckets) {
         b.arg(&a);
     }

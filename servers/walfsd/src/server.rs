@@ -41,13 +41,14 @@ pub const fn limits(buckets: u32) -> Limits {
 /// its root's path; a request its record; a page a page.
 pub const COST: Cost =
     Cost { in_flight: 64 * 1024, file: 2048, state: 512, request: REQUEST_STATE, page: PAGE_SIZE as u64 };
-/// The bytes of this server's budget its clients may use between them. A bucket at its caps costs
-/// 6 completion calls at 64 KiB, 32 fids at 2 KiB, 8 connections at 512 bytes, 128 requests at 256
-/// and 32 pages at 4 KiB: 626 688 bytes. The image's `walfsd:data` has 6 buckets, the three
-/// principals' four domains, the steward and a case's extra client, 3 760 128 bytes: 4 MiB holds
-/// them and not a seventh (4 386 816). That is 1 024 pages of the entry's 1 280, beside its 64 of
-/// heap and 14 of stack.
-pub const BUDGET: u64 = 4 * 1024 * 1024;
+// The budget every bucket at its caps must fit is the manifest entry's: its pages less its heap
+// cap and stack (`redoubt_rt::server::budget`), checked at start, never a count in this code. A
+// bucket at its caps costs 6 completion calls at 64 KiB, 32 fids at 2 KiB, 8 connections at 512
+// bytes, 128 requests at 256 and 32 pages at 4 KiB: 626 688 bytes. The image's `walfsd:data` has
+// 6 buckets, the three principals' four domains, the steward and a case's extra client,
+// 3 760 128 bytes, 918 pages; with the heap cap's 64 and the stack's bound 128, rounded up to 256,
+// the entry rule gives 1 280, the image's entry, which leaves 1 088 pages of budget: seven such
+// buckets and not an eighth (`the_image_entry_holds_its_buckets`).
 
 /// The attribute types a client's `set_attr` may not touch, 0 to 15, as on `littlefsd`, so a
 /// client sees one contract from both writable servers; walfs keeps nothing of `walfsd`'s in

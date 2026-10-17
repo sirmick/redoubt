@@ -198,12 +198,13 @@ listener's `ctl` read at the 60 s one, and the connection still works after.
 
 ### Sizing
 
-<details><summary>Status: built · tested (12)</summary>
+<details><summary>Status: built · tested (13)</summary>
 
 - host:redoubt-ipd::every_scope_and_the_milestone_parse
 - host:redoubt-ipd::anything_else_stops_ipd
 - host:redoubt-ipd::every_scope_and_the_milestone_fit
 - host:redoubt-ipd::the_worst_case_must_fit_or_ipd_does_not_start
+- host:testbench::every_manifest_entry_holds_its_buckets_at_their_caps
 - host:redoubt-ipd::clone_stops_at_the_buckets_socket_cap
 - host:redoubt-ipd::sockets_stop_at_the_buckets_cap
 - host:redoubt-ipd::an_agent_cannot_take_all_its_sponsors_sockets
@@ -241,8 +242,12 @@ included, so one badge
 cannot take all its bucket's sockets. A connection granted for a session is admitted in the
 session's account from its first request ([serving](serving.md#admit)); that move comes before
 the request's reservation, which would otherwise fill the bucket it moves into. Every bucket at
-its cap must fit `ipd`'s 8 MiB budget, less 1 MiB for
-its own use, or `ipd` does not start.
+its cap must fit the budget `ipd`'s manifest entry gives, the entry's pages less its heap cap and
+stack, by the entry rule ([walfsd](walfsd.md#serving)), or `ipd` does not start: a default bucket
+at its caps is 712,704 bytes, the image's seven 4,988,928, 1,218 pages, which with the heap cap's
+74 (the stack's tables and every socket's buffers live there) and the stack's 128 round to 1,536 of
+the image's 4,096; the entry leaves 3,894 pages of budget, which holds the overrides a manifest may
+add (`sshd`'s and the steward's beside five defaults are 6,668,288).
 
 ### Sequence numbers and the link
 

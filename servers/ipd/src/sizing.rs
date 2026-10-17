@@ -16,10 +16,6 @@ pub const DEFAULT_STATE: u32 = 4;
 /// transfers may hold: as `littlefsd`'s. Overrides keep them.
 pub const REQUESTS: u32 = 128;
 pub const PAGES: u32 = 32;
-/// The bytes `ipd` is sized to fit: every bucket at its cap, and the stack itself.
-pub const BUDGET: u64 = 8 << 20;
-/// What `ipd` itself takes before any client: code, the interface, the tables.
-pub const OWN_USE: u64 = 1 << 20;
 /// What one socket costs: its two buffers and smoltcp's state for it.
 pub const SOCKET_BYTES: u64 = 2 * crate::stack::BUFFER as u64 + 1024;
 /// What a parked call costs: the lend it holds (at most `MAX_LEND_PAGES`) until it is answered.
@@ -42,19 +38,24 @@ pub struct Sizing {
     pub caps: crate::fs::SocketCaps,
     /// The most sockets that can exist at once: every bucket at its cap.
     pub max_sockets: usize,
+    /// What every bucket at its cap costs together, in bytes: the entry rule's term
+    /// (servers/walfsd.md, "Serving"), which the budget held.
+    pub need: u64,
 }
 
 impl Config {
     /// Sizes `ipd` from its arguments, or refuses to start: the overrides must be root scope
     /// badges, and the worst case, every override's bucket and every other bucket at the defaults,
-    /// must leave `MAX_OPEN_CALLS`' headroom and fit [`BUDGET`].
+    /// must leave `MAX_OPEN_CALLS`' headroom and fit `budget` bytes, its manifest entry's pages
+    /// less its heap cap and stack ([`redoubt_rt::server::budget`]), which the heap cap, holding
+    /// the stack's tables and every socket's buffers, is beside.
     ///
     /// Sockets are `State` units ([`state_for`]), so the admission's own worst case covers their
     /// memory, each unit costed as a socket (a connection costs less), and a bucket's sockets are
     /// bounded by its units. The stack's bound on live sockets is those units at their worst: an
     /// override below the default can be idle while a default bucket takes its slot, so each
     /// override slot counts `max(its units, the default's)`, as the admission counts its caps.
-    pub fn sizing(&self) -> Result<Sizing, BadArgs> {
+    pub fn sizing(&self, budget: u64) -> Result<Sizing, BadArgs> {
         use redoubt_rt::server::{Admission, Cost, Limits, Override};
         let limits = Limits {
             buckets: self.buckets,
@@ -89,9 +90,8 @@ impl Config {
             request: redoubt_rt::server::ninep::REQUEST_STATE,
             page: redoubt_rt::abi::PAGE_SIZE as u64,
         };
-        if !admission.fits(&cost, BUDGET - OWN_USE) {
-            return Err(BadArgs("every bucket at its cap does not fit the budget"));
-        }
+        let need = admission.need(&cost).filter(|need| *need <= budget);
+        let Some(need) = need else { return Err(BadArgs("every bucket at its cap does not fit the budget")) };
         // The stack's own per-bucket count agrees with the admission's cap; the admission, with its
         // shares, is what binds.
         let caps = crate::fs::SocketCaps {
@@ -102,6 +102,6 @@ impl Config {
                 .map(|l| (l.badge, state_for(l.state, l.sockets) as usize))
                 .collect(),
         };
-        Ok(Sizing { admission, caps, max_sockets: max_sockets as usize })
+        Ok(Sizing { admission, caps, max_sockets: max_sockets as usize, need })
     }
 }

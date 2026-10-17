@@ -8,7 +8,7 @@
 use ed25519_compact::{PublicKey, Signature};
 use redoubt_fake_kernel::fake;
 use redoubt_keyd::keys::Keys;
-use redoubt_keyd::server::{BUDGET, COST, KeyServer, audit_digest, limits};
+use redoubt_keyd::server::{COST, KeyServer, audit_digest, limits};
 use redoubt_rt::abi::{FOREVER, Handle};
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::ipc::{Buffer, Event, Words};
@@ -39,6 +39,9 @@ const HOST_SEED: &str = "1111111111111111111111111111111111111111111111111111111
 const AUDIT_SEED: &str = "2222222222222222222222222222222222222222222222222222222222222222";
 const HOST_BADGE: u64 = 1;
 const AUDIT_BADGE: u64 = 2;
+/// The image's `keyd` entry's budget, 256 pages with a heap cap of 8, as the program derives it
+/// from its startup block (`redoubt_rt::server::budget`).
+const IMAGE_BUDGET: u64 = redoubt_rt::server::budget_of(256, 8);
 
 /// Runs `main` as `pid` with a startup block naming `handles`.
 fn launch(pid: usize, block: Vec<u8>, main: fn(&Startup) -> u32) -> std::thread::JoinHandle<u32> {
@@ -49,11 +52,11 @@ fn launch(pid: usize, block: Vec<u8>, main: fn(&Startup) -> u32) -> std::thread:
     })
 }
 
-/// The block `init` writes for `keyd`: the endpoint it receives on, its bucket count, and one
-/// argument per key.
+/// The block `init` writes for `keyd`: the endpoint it receives on, its budget (the image's
+/// entry: 256 pages with a heap cap of 8), its bucket count, and one argument per key.
 fn keyd_block(receive: Handle, keys: &[&str]) -> Vec<u8> {
     let mut builder = StartupBuilder::new(receive.index());
-    builder.handle("keyd", receive).arg("buckets=16");
+    builder.handle("keyd", receive).budget_pages(256).heap_pages(8).arg("buckets=16");
     for key in keys {
         builder.arg(key);
     }
@@ -277,17 +280,30 @@ fn bad_key_arguments_stop_keyd_starting() {
     let code = launch(pid, StartupBuilder::new(0).finish().unwrap(), keyd::serve).join().unwrap();
     assert_eq!(code, keyd::NO_ENDPOINT);
     // A block that does not size it, sizes it at nothing or past the most a server may have, or
-    // sizes it twice: it does not guess a count (servers/serving.md R26).
-    for sizing in [&[][..], &["buckets=0"], &["buckets=16", "buckets=16"], &["buckets=33"]] {
+    // sizes it twice, or names no budget, or one whose pages less the stack's bound hold fewer
+    // than its count's buckets (sixteen at 4 096 bytes are 16 pages): it does not guess a count
+    // or a budget (servers/serving.md R26; servers/walfsd.md, the entry rule).
+    let image = Some(256);
+    for (sizing, budget) in [
+        (&[][..], image),
+        (&["buckets=0"], image),
+        (&["buckets=16", "buckets=16"], image),
+        (&["buckets=33"], image),
+        (&["buckets=16"], None),
+        (&["buckets=16"], Some(128 + 15)),
+    ] {
         let pid = f.process(0, &[]);
         let receive = f.endpoint(pid);
         let mut builder = StartupBuilder::new(receive.index());
         builder.handle("keyd", receive);
+        if let Some(pages) = budget {
+            builder.budget_pages(pages);
+        }
         for arg in sizing {
             builder.arg(arg);
         }
         let code = launch(pid, builder.finish().unwrap(), keyd::serve).join().unwrap();
-        assert_eq!(code, keyd::BAD_LIMITS, "{sizing:?}");
+        assert_eq!(code, keyd::BAD_LIMITS, "{sizing:?} in {budget:?} pages");
     }
 }
 
@@ -343,7 +359,8 @@ fn a_stale_grant_does_not_name_a_new_key_after_a_restart() {
         let args: Vec<&str> = startup.args().collect();
         let keys = Keys::from_args(own_args(&args)).unwrap();
         // The first incarnation's own draw.
-        let mut server = KeyServer::new(keys, limits(16), &COST, BUDGET, 0x1111_1111_1111_1111).unwrap();
+        let mut server =
+            KeyServer::new(keys, limits(16), &COST, IMAGE_BUDGET, 0x1111_1111_1111_1111).unwrap();
         let endpoint = Endpoint::from_handle(handle);
         match endpoint.receive(FOREVER, 0) {
             Ok(Event::Call(request)) => {
@@ -375,7 +392,8 @@ fn a_stale_grant_does_not_name_a_new_key_after_a_restart() {
         let handle = startup.handle("keyd").unwrap();
         let args: Vec<&str> = startup.args().collect();
         let keys = Keys::from_args(own_args(&args)).unwrap();
-        let mut server = KeyServer::new(keys, limits(16), &COST, BUDGET, 0x2222_2222_2222_2222).unwrap();
+        let mut server =
+            KeyServer::new(keys, limits(16), &COST, IMAGE_BUDGET, 0x2222_2222_2222_2222).unwrap();
         let endpoint = Endpoint::from_handle(handle);
         loop {
             match endpoint.receive(FOREVER, 0) {
