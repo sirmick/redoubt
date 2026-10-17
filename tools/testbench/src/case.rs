@@ -650,9 +650,9 @@ impl Session {
     }
 }
 
-/// One step of a session. A session runs its steps in order; without an `exit`, the bench then
-/// ends the session as `{ exit = 0 }` does. Only `mark`s follow an `exit`: they tell other
-/// sessions this one's ssh is gone.
+/// One step of a session. A session runs its steps in order; without an `exit` or an `ended`,
+/// the bench then ends the session as `{ exit = 0 }` does. Only `mark`s follow either: they tell
+/// other sessions this one's ssh is gone.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Step {
@@ -668,6 +668,10 @@ pub enum Step {
     Wait(String),
     /// Close the session's input, read its output until ssh exits, and require this status.
     Exit(i32),
+    /// Keep the input open and read the output until ssh exits on its own, and require this
+    /// status: for a session the box ends, after a line it must act on. `exit` closes the input
+    /// first, and a terminal's close discards what ssh has not read of it yet.
+    Ended(i32),
     /// Set a `pty = true` session's terminal to `[cols, rows]`, which makes ssh send a
     /// `window-change` if the size changed.
     Resize([u16; 2]),
@@ -1238,9 +1242,9 @@ fn check_sessions(sessions: &[Session]) -> Result<()> {
                         "session {user} waits for mark {mark:?}, which no session sets"
                     )
                 }
-                Step::Exit(_) => ensure!(
+                Step::Exit(_) | Step::Ended(_) => ensure!(
                     session.steps[number + 1..].iter().all(|s| matches!(s, Step::Mark(_))),
-                    "session {user}: only `mark` may follow `exit`"
+                    "session {user}: only `mark` may follow `exit` or `ended`"
                 ),
                 Step::Resize(_) => ensure!(session.pty, "session {user}: `resize` needs `pty = true`"),
                 Step::Idle(seconds) => {
@@ -1486,15 +1490,19 @@ mod tests {
         assert!(err.contains("`resize` needs `pty = true`"), "{err}");
     }
 
-    /// Only marks follow a session's `exit`, so another session can wait for its ssh to be gone.
+    /// Only marks follow a session's `exit` or `ended`, so another session can wait for its ssh
+    /// to be gone.
     #[test]
     fn only_marks_follow_exit() {
         let session = |steps: &str| -> Session {
             toml::from_str(&format!("user = \"alice\"\nsteps = [{steps}]\n")).unwrap()
         };
         assert!(check_sessions(&[session("{ exit = 0 }, { mark = \"gone\" }")]).is_ok());
-        let err = check_sessions(&[session("{ exit = 0 }, { send = \"x\" }")]).unwrap_err().to_string();
-        assert!(err.contains("only `mark` may follow `exit`"), "{err}");
+        assert!(check_sessions(&[session("{ ended = 0 }, { mark = \"gone\" }")]).is_ok());
+        for steps in ["{ exit = 0 }, { send = \"x\" }", "{ ended = 0 }, { expect = \"x\" }"] {
+            let err = check_sessions(&[session(steps)]).unwrap_err().to_string();
+            assert!(err.contains("only `mark` may follow `exit` or `ended`"), "{err}");
+        }
     }
 
     /// Two sessions may log in as one user, a context's name included, when their names differ;

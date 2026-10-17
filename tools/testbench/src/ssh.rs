@@ -790,7 +790,7 @@ fn drive(
         })?;
     }
     // Every session ends with ssh's exit, so all of its output passes `forbid`.
-    if !session.steps.iter().any(|s| matches!(s, Step::Exit(_))) {
+    if !session.steps.iter().any(|s| matches!(s, Step::Exit(_) | Step::Ended(_))) {
         driver.step(&Step::Exit(0)).map_err(|stop| match stop {
             Stop::Failed(why) => Stop::Failed(format!("at the end: {why}")),
             other => other,
@@ -912,6 +912,28 @@ impl Driver<'_> {
                 if status.code() != Some(*expected) {
                     return Err(Stop::Failed(format!(
                         "ssh exited ({}), expected {expected}{}",
+                        describe(status),
+                        self.last()
+                    )));
+                }
+                Ok(())
+            }
+            Step::Ended(expected) => {
+                // The input stays open: the box ends the session, after a line it must act on,
+                // and a terminal's close would drop that line before ssh read it.
+                while self.status.is_none() {
+                    self.pump("ssh's own exit")?;
+                }
+                let status = self.status.unwrap();
+                // In the log, as an expect's match is: how long the end took to be acted on.
+                writeln!(
+                    self.log,
+                    "[ended {:.3} s after ssh started]",
+                    self.started.elapsed().as_secs_f64()
+                )?;
+                if status.code() != Some(*expected) {
+                    return Err(Stop::Failed(format!(
+                        "ssh exited ({}) on its own, expected {expected}{}",
                         describe(status),
                         self.last()
                     )));
@@ -1077,6 +1099,34 @@ mod tests {
         assert_eq!(String::from_utf8_lossy(&output.stderr), "");
         let log = std::fs::read_to_string(loopback_log(&dir, "case")).unwrap();
         assert_eq!(log, "Error: Broken pipe (os error 32)\n");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// `ended` keeps a session's input open until its program exits on its own, so a line typed
+    /// just before it reaches a program reading a terminal, and the status the program exits
+    /// with is the one required.
+    #[test]
+    fn ended_keeps_the_input_open_until_sshs_own_exit() {
+        let dir = std::env::temp_dir().join(format!("redoubt-ended-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let abort = AtomicBool::new(false);
+        let shared =
+            Shared { marks: Mutex::new(HashSet::new()), changed: Condvar::new(), abort: &abort, idle: None };
+        let run = |script: &str, log: &str| {
+            let session: Session = toml::from_str(
+                "user = \"alice\"\npty = true\nsteps = [{ send = \"x\\n\" }, { ended = 0 }]\n",
+            )
+            .unwrap();
+            let mut sh = Command::new("sh");
+            sh.args(["-c", script]);
+            drive(&session, sh, &dir.join(log), &shared, Instant::now() + Duration::from_secs(30))
+        };
+        // The program exits 0 only on the line typed right before `ended`.
+        assert!(run("read l; [ \"$l\" = x ]", "read").is_ok());
+        let Err(Stop::Failed(why)) = run("read l; exit 3", "status") else {
+            panic!("the status was not required")
+        };
+        assert!(why.contains("ssh exited (status 3) on its own, expected 0"), "{why}");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
