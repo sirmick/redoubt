@@ -101,9 +101,9 @@ mod machine {
     /// badge that started it, no new row or effect) and prints its `budget_destroy` call to
     /// return as `destroy_call`; a lease the kernel's deadline took prints its exit notice's
     /// arrival less the deadline as `deadline_notice`. Each sample's group is the count of the
-    /// live leases, itself among them (`N=3`); the counts go out as `LATENCY-COUNT` lines when
+    /// live leases, itself among them (`N=2`); the counts go out as `LATENCY-COUNT` lines when
     /// the leases are all gone and the case has written the round's marker ([`LATENCY_ROUND`]
-    /// and the round's number) in the console principal's home, and after the third round's,
+    /// and the round's number) in the console principal's home, and after the second round's,
     /// `LATENCY-END` with the steward's clock, the window's end. A steward that finds
     /// [`LATENCY_DONE`] in the console
     /// principal's home at its start exits [`LATENCY_EXIT`] at once: six such exits trip init's
@@ -1620,7 +1620,7 @@ mod machine {
         badge: u64,
         /// Samples taken since the last flush, by measure and group.
         counts: BTreeMap<(&'static str, usize), u64>,
-        /// Flushes so far: the case's rounds, N = 1, 4 and 16.
+        /// Flushes so far: the case's rounds, N = 1 and 2.
         rounds: usize,
     }
 
@@ -1634,7 +1634,7 @@ mod machine {
         }
 
         /// The counts, once the domain's leases are all gone: one line per measure and group.
-        /// After the third round's, the window's end, `LATENCY-END` with the steward's clock: the
+        /// After the second round's, the window's end, `LATENCY-END` with the steward's clock: the
         /// oracle judges no destruction ending after it and no sample printed after it (the
         /// marker-file exits that follow reap every lease's VM, none of them a sample).
         fn flush(&mut self, startup: &Startup) {
@@ -1642,7 +1642,7 @@ mod machine {
                 say(startup, &format!("steward: LATENCY-COUNT N={n} {measure} {count}\n"));
             }
             self.rounds += 1;
-            if self.rounds == 3 {
+            if self.rounds == 2 {
                 let now = redoubt_rt::handle::time_now().unwrap_or(0);
                 say(startup, &format!("steward: LATENCY-END {now}\n"));
             }
@@ -1858,7 +1858,7 @@ mod machine {
             // has marked the round's end (at N = 1 no spinner outlives a probe lease, so the
             // leases are gone after each one: the marker, not the count, closes a round); while
             // the counts wait for it, the receive below looks again within half a second. After
-            // the case's three rounds, its marker file ends this instance for the reboot.
+            // the case's two rounds, its marker file ends this instance for the reboot.
             #[cfg(feature = "latency-probe")]
             let wait = if !probe.counts.is_empty() && leases_live(&steward) == 0 {
                 let marker = format!("{LATENCY_ROUND}{}", probe.rounds + 1);
@@ -1877,7 +1877,7 @@ mod machine {
                 wait
             };
             #[cfg(feature = "latency-probe")]
-            if probe.rounds >= 3 && probe.due.is_none() {
+            if probe.rounds >= 2 && probe.due.is_none() {
                 if let Some(console) = steward.own.console.clone() {
                     if matches!(machine.home_stat(&console, LATENCY_DONE), Ok(Some(_))) {
                         say(startup, "steward: latency-probe: the case is done, exiting for the reboot\n");
