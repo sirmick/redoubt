@@ -57,10 +57,12 @@ file holds is typed, in the wire encoding ([wire](wire.md#the-encoding)), never 
   at most 8), `close` (the graceful end) or `abort`. A read returns the state (1 connecting,
   2 established, 3 closing, 4 closed, 5 listening) and, for a listener that accepted, the new
   socket's number; it **waits** while a connect is in progress or a listener has nothing accepted,
-  at most `CTL_WAIT_US` (60 s), then `timeout`.
+  at most `CTL_WAIT_US` (8 s), then `timeout`, and the client asks again.
 - **`data`**: the byte stream. A read waits while there is nothing to read, a write while the send
-  buffer (8 KiB) is full; either at most `DATA_WAIT_US` (30 s), then `timeout`, and the client asks
-  again. Waiting calls are parked ([parked calls](serving.md#parked-calls)).
+  buffer (8 KiB) is full; either at most `DATA_WAIT_US` (8 s), then `timeout`, and the client asks
+  again; bytes that arrive after a read's `timeout` wait in the socket's buffer for the next read.
+  Waiting calls are parked ([parked calls](serving.md#parked-calls)), for strictly less than their
+  clients wait ([pinned and abandoned calls](#pinned-and-abandoned-calls)).
 - **A socket lives** until `close`, `abort`, or the `disconnect` of its connection (which aborts
   every socket of it), then lingers at most 60 s before `ipd` resets it, plus TCP's TIME-WAIT; it
   stays charged to its owner until it is gone. An established socket without acknowledged progress
@@ -178,12 +180,13 @@ cannot even make a socket by reading `clone`, which the label check alone would 
 
 ### Pinned and abandoned calls
 
-<details><summary>Status: built · tested (4)</summary>
+<details><summary>Status: built · tested (5)</summary>
 
 - bench:net-pinned
 - host:redoubt-ipd::parked_calls_are_freed_when_abandoned_and_capped_by_the_share
 - host:redoubt-ipd::two_reads_one_byte_one_answer_and_ipd_goes_on
 - host:redoubt-ipd::an_accept_nobody_answers_ends_with_the_ctl_deadline
+- host:redoubt-ipd::a_data_read_with_nothing_coming_ends_with_the_data_deadline_and_late_bytes_wait_for_the_next
 
 </details>
 
@@ -192,9 +195,22 @@ Every waiting read or write is parked with a server-side deadline, in the caller
 the stack says it would not wait, and an abandoned one is answered at once. The stack is polled only
 right after a `receive` that returned something other than a call, so no call is current while
 smoltcp runs, and a crash inside it blames no parked caller
-([R21 (crash blame)](../kernel/processes.md#r21-crash-blame)). In `net-pinned` a client abandons
-64 parked reads, each answered and freed; a read with nothing coming ends at the 30 s deadline, a
-listener's `ctl` read at the 60 s one, and the connection still works after.
+([R21 (crash blame)](../kernel/processes.md#r21-crash-blame)).
+
+**A call is parked for strictly less than its client waits.** A client that gives up on a request
+drops the answer that comes later (the beamlet hub at `FILE_WAIT_US`, 10 s, retiring the fid:
+[files over 9P](../userland/files.md#files-over-9p)); a `data` read's answer carries bytes, which
+no retry can ask for again, so an answer dropped that way is lost to the stream. `ipd` therefore
+answers `timeout` first: `DATA_WAIT_US` and `CTL_WAIT_US` are 8 s, the 10 s less a 2 s margin,
+a round figure far above what it covers (the kernel's delivery of the reply, microseconds), so
+the only answer a client could drop is one whose delivery took longer than the margin. Bytes arriving after the `timeout` wait
+in the socket's buffer for the next read, which the client makes at once (`sshd`'s reader asks
+again on `timeout`; the hub answers its caller `etimedout`, who asks again; no Elixir `/net`
+reader exists today); `ctl` is asked again the same way, and finds the same state. In `net-pinned` a client abandons 64 parked reads, each answered and freed; a read
+with nothing coming ends at the `data` deadline, a listener's `ctl` read at the `ctl` one, and the
+connection still works after; the host test parks a read on an established connection, sees it
+wait at `DATA_WAIT_US - 1` and end at `DATA_WAIT_US`, then has the peer send and the next read
+answered at once with the bytes.
 
 ### Sizing
 

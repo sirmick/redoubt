@@ -312,7 +312,7 @@ impl Me {
     /// Pins `ipd` with abandoned calls (plan 6.5, `net-pinned`): `times` data reads on a quiet
     /// socket, each parked and then given up by this client's short timeout, so `ipd` must free
     /// every one (a leaked one fills this share's parked calls and the next read is refused at
-    /// once); then a read with no timeout of its own, which `ipd`'s 30 s deadline must end; then
+    /// once); then a read with no timeout of its own, which `ipd`'s 8 s deadline must end; then
     /// the echo still works.
     fn pin(&mut self, args: &Args) -> Result<(), u32> {
         self.c.attach(&mut self.lend, ROOT, "").map_err(|_| code::ATTACH)?;
@@ -342,7 +342,7 @@ impl Me {
         if &back[..] != &sent[..] {
             return Err(code::ECHO);
         }
-        // A listener nobody connects to: its `ctl` read (an accept) must end with ipd's 60 s
+        // A listener nobody connects to: its `ctl` read (an accept) must end with ipd's 8 s
         // `ctl` deadline, `timeout`, not wait for ever.
         let listener = self.socket()?;
         let listen = net_ctl::Message::Listen(net_ctl::Listen { port: code::PIN_LISTEN_PORT, backlog: 1 });

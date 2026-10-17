@@ -260,7 +260,7 @@ impl Judge {
     }
 
     /// Pinned (plan 6.5): 64 parked reads given up by their caller, one parked read ended by
-    /// `ipd`'s 30 s data deadline, the echo, then a listener's `ctl` read ended by `ipd`'s 60 s
+    /// `ipd`'s 8 s data deadline, the echo, then a listener's `ctl` read ended by `ipd`'s 8 s
     /// `ctl` deadline: the client's outcome is 0 only if every step held.
     fn pinned(&mut self) -> Result<(), String> {
         self.turn(badge::PIN)?;

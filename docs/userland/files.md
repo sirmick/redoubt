@@ -105,12 +105,17 @@ neither inside nor above one is `:enoent` ([sessions](sessions.md#namespaces)).
 - **Everything moves in pieces**: a read asks at most what one answer carries (the 64 KiB `msize`
   less its header), a write at most a page, each one request on the VM's hub
   ([asynchronous underneath](beamlet.md#asynchronous-underneath-synchronous-on-top)), so only the
-  Erlang process that asked waits for it. It waits at most `FILE_WAIT_US` (10 s, the file server's
-  own longest wait for a request) for each request, `busy` retries counted, and for a connection's
-  place at `MAX_WAITERS`; past that the operation fails with the name of what it waited for
-  (`etimedout` an answer, `ebusy` a share, `emfile` a place), the connection kept and a later
-  answer dropped. None of it waits on the VM's thread. The file server's `rename` is a typed call,
-  which no hub carries: it is made on the VM's thread.
+  Erlang process that asked waits for it. It waits at most `FILE_WAIT_US` (10 s) for each request,
+  `busy` retries counted, and for a connection's place at `MAX_WAITERS`; past that the operation
+  fails with the name of what it waited for (`etimedout` an answer, `ebusy` a share, `emfile` a
+  place), the connection kept and a later answer dropped. A server whose answer cannot be asked
+  for again therefore parks a request for strictly less than that, by a stated margin: `ipd`'s
+  `data` and `ctl` reads for `DATA_WAIT_US` and `CTL_WAIT_US`, 8 s, the 2 s margin the kernel's
+  delivery of the reply, so a read's `timeout` reaches the hub before the hub gives up, and the
+  bytes that arrive after it wait in the socket's buffer for the read made next
+  ([pinned and abandoned calls](../servers/ipd.md#pinned-and-abandoned-calls)). None of it waits
+  on the VM's thread. The file server's `rename` is a typed call, which no hub carries: it is made
+  on the VM's thread.
 - **Plain 9P2000**, with no Unix extensions: a `stat` has a name, a length, a modification time
   and a qid (the server's identity and version for the file), and nothing else. Custom
   per-file metadata is the file server's typed `set_attr` and `get_attr`, kept in the volume's
