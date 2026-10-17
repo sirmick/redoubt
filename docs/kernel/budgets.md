@@ -314,10 +314,11 @@ a number, and carries the sender budget's label set on every message.
 
 ### Deadlines
 
-<details><summary>Status: built · partly tested: a process that enters the kernel in a tight loop to put a deadline off is not attacked by a case; the destruction's billing departs from R10 and floods of weight-0 deadlines past 64 are not attacked · tested (5)</summary>
+<details><summary>Status: built · partly tested: a process that enters the kernel in a tight loop to put a deadline off is not attacked by a case; the destruction's billing departs from R10 and floods of weight-0 deadlines past 64 are not attacked · tested (6)</summary>
 
 - bench:sched-timer-flood
 - bench:budget-deadline
+- bench:deadline-in-launch
 - bench:budget
 - mutation:BudgetDeadlineIgnored
 - mutation:ExpireBudgetsFirst
@@ -346,7 +347,10 @@ off. So a deadline always destroys its budget, at the first kernel entry at or a
   whose server's budget dies at its own timeout gets `Timeout` with its lend consumed, not `Dead`
   with it returned.
 - The processes it kills get exit notices with cause `killed`, blaming nobody
-  ([processes](processes.md#exit-notices)).
+  ([processes](processes.md#exit-notices)). A process still being launched is one of them: a
+  deadline that passes between its `process_create` and its `process_start` kills it with no
+  thread ever run, and the launcher's next `process_map` or `process_start` answers
+  `NotPermitted`. A lease shorter than its launch never runs (`bench:deadline-in-launch`).
 - The destruction's whole cost is billed to the budget's parent, after its carve returns, or to
   the nearest ancestor with free weight above 0 ([R10](#r10-destruction)). A deadline is a
   preemption point.

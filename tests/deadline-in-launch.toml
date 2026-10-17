@@ -1,0 +1,19 @@
+description = "A budget's deadline passes while a process in it is being launched (kernel/budgets.md, \"Deadlines\", R10): created and given its image inside the term, the child has no thread yet when the lease expires; the kernel destroys the lease at the next entry, kills the child with it (a killed notice blaming nobody), and the launcher's next process_map and process_start answer NotPermitted; the lease's handle is revoked, the child's PID is not drawn again while its notice is pending (R20), and once the notice is taken the child's handle is gone and system's usage is what it was before the lease (I10). The steward's Launch step meets this when a lease's term is shorter than its launch; one hart, two as a sanity run (virtual time, checked build)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+icount = "shift=3,sleep=off"
+programs = ["deadline-in-launch"]
+smp = [1, 2]
+timeout_secs = 120
+expect = [
+    '^\[launch\] ok: the child was created and given its image before the deadline',
+    '^\[launch\] ok: after the deadline the launcher.s map and start answer NotPermitted',
+    '^\[launch\] ok: the lease.s handle is revoked',
+    '^\[launch\] ok: the child that never ran gets a killed notice blaming nobody',
+    '^\[launch\] ok: a process started while the notice was pending drew another PID',
+    '^\[launch\] ok: the child.s handle is gone .* and system.s usage restored',
+    '^DEADLINE-IN-LAUNCH TEST PASSED$',
+]
+forbid = ['\[launch\] FAIL']
+poweroff = true
