@@ -1186,8 +1186,10 @@ fn boot_case(
                 }
                 false => None,
             };
-            let verdict = qemu::run(&image, launched, boot, &builder.workspace, &forwards, log, out)?;
-            Ok(peer::finish_dials(verdict, dials))
+            let starters = dials.as_ref().map(peer::Dials::starters).unwrap_or_default();
+            let verdict =
+                qemu::run(&image, launched, boot, &builder.workspace, &forwards, starters, log, out)?;
+            Ok(peer::finish_dials(verdict, dials, out))
         };
         let outcome = match boot_once(&log)? {
             Verdict::Fail(why) => Outcome::Fail(why),
