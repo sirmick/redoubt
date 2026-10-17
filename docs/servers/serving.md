@@ -37,7 +37,7 @@ loop of its own, closing a send's handles with `close_delivery`: `consoled`, `ne
 
 ### `admit`
 
-<details><summary>Status: built · tested (15)</summary>
+<details><summary>Status: built · tested (16)</summary>
 
 - host:redoubt-rt::the_key_is_the_account_and_the_label_set
 - host:redoubt-rt::limits_are_per_key_and_per_resource
@@ -54,6 +54,7 @@ loop of its own, closing a send's handles with `close_delivery`: `consoled`, `ne
 - host:redoubt-rt::a_connection_minted_for_another_account_is_admitted_there_from_its_first_request
 - host:redoubt-rt::a_first_request_on_a_connection_its_account_cannot_hold_is_refused_and_it_stays_pending
 - host:redoubt-rt::a_servers_budget_is_its_entrys_pages_less_its_heap_cap_and_stack
+- host:testbench::every_servers_buckets_leave_the_open_call_headroom
 
 </details>
 
@@ -98,8 +99,14 @@ open call, and each has its own share ([R26](#r26-admission-fairness)).
   account's caps, and the steward's own share holds only what the steward itself calls on.
 - **Caps sized to fit.** `Limits` names each resource's cap per bucket and the number of buckets
   that may hold anything at once. `Admission::new` refuses limits (`Unsized`) whose buckets could
-  hold more open calls than `MAX_OPEN_CALLS` (256) less `OPEN_CALL_HEADROOM` (64), or with a
-  non-zero cap below `SMALLEST_CAP` (2): below two, a lone badge's share is the whole bucket.
+  hold more open calls than `MAX_OPEN_CALLS` (256) less `OPEN_CALL_HEADROOM` (64)
+  ([R4a (open calls)](../kernel/ipc.md#r4a-open-calls)), or with a
+  non-zero cap below `SMALLEST_CAP` (2): below two, a lone badge's share is the whole bucket. A
+  file server's per-account caps are derived from what the tree's manifests let one account hold
+  ([littlefsd](littlefsd.md#volumes-connections-and-labels)) and its count is each manifest's, so
+  the bench holds every entry of every manifest to the headroom
+  (`every_servers_buckets_leave_the_open_call_headroom`): a manifest past it fails the bench,
+  never its boot.
   `Limits::fits` says whether every bucket at its cap fits a budget of so many bytes, and a
   shared server checks it at start against the budget its manifest entry gives (`budget`): the
   entry's pages less its heap cap and its stack, times the page, the heap cap and the budget read

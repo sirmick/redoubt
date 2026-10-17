@@ -39,7 +39,7 @@
     {
       "name": "littlefsd",
       "program": "littlefsd",
-      "budget": {"pages": "1024", "processes": 1, "weight": 100},
+      "budget": {"pages": "1792", "processes": 1, "weight": 100},
       "volume": "data",
       "receives": ["littlefsd:data"],
       "args": ["endpoint=littlefsd:data", "buckets=4"]

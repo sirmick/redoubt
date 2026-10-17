@@ -32,7 +32,7 @@
     {
       "name": "walfsd",
       "program": "walfsd",
-      "budget": {"pages": "1280", "processes": 1, "weight": 100},
+      "budget": {"pages": "1792", "processes": 1, "weight": 100},
       "volume": "data",
       "receives": ["walfsd:data"],
       "args": ["endpoint=walfsd:data", "buckets=4"]

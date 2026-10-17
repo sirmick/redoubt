@@ -52,7 +52,7 @@
                "scope=4:c:0.0.0.0/0:1-65535", "buckets=4"] },
     { "name": "walfsd:data", "program": "walfsd",
       "stack_pages": "14", "heap_pages": "64",
-      "budget": { "pages": "1280", "processes": 1, "weight": 100 },
+      "budget": { "pages": "1792", "processes": 1, "weight": 100 },
       "volume": "data",
       "receives": ["walfsd:data"],
       "args": ["endpoint=walfsd:data", "buckets=4"] },

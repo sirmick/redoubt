@@ -318,9 +318,9 @@ fn arguments_it_does_not_understand_or_no_range_stop_it_before_serving() {
         assert_eq!(volume.thread.join().unwrap(), program::BAD_ARGS, "{args:?}");
     }
     // A block naming no budget, or one whose pages less the heap cap and the stack's bound hold
-    // fewer than its count's buckets (six at 226 816 bytes are 333 pages): it does not guess a
+    // fewer than its count's buckets (six at 235 520 bytes are 345 pages): it does not guess a
     // budget either (servers/walfsd.md, the entry rule).
-    for budget in [None, Some(26 + 128 + 332)] {
+    for budget in [None, Some(26 + 128 + 344)] {
         let args = &["endpoint=erofsd:system", "buckets=6"];
         let volume = Volume::start_with_budget(system(), args, true, budget);
         assert_eq!(volume.thread.join().unwrap(), program::BAD_ARGS, "{budget:?} pages");

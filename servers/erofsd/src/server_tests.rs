@@ -390,13 +390,13 @@ fn the_conformance_vectors_run_against_erofsd() {
 }
 
 /// The image's entry holds its buckets at their caps by the entry rule (servers/walfsd.md,
-/// "Serving"): a bucket is 226 816 bytes, the image's six 1 360 896 (333 pages), and the entry of
+/// "Serving"): a bucket is 235 520 bytes, the image's six 1 413 120 (345 pages), and the entry of
 /// 1 024 pages with a heap cap of 26 leaves 870 pages of budget, fifteen such buckets and not a
 /// sixteenth.
 #[test]
 fn the_image_entry_holds_its_buckets() {
-    assert_eq!(limits(1).need(&COST), Some(226_816));
-    assert_eq!(limits(6).need(&COST), Some(1_360_896));
+    assert_eq!(limits(1).need(&COST), Some(235_520));
+    assert_eq!(limits(6).need(&COST), Some(1_413_120));
     let budget = redoubt_rt::server::budget_of(1024, 26);
     assert_eq!(budget, 870 * PAGE_SIZE as u64);
     assert!(limits(6).fits(&COST, budget));

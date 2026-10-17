@@ -117,28 +117,39 @@ a flash medium, and for the cases that ask for a littlefs volume.
 - **Removing a file is not revocation.** It ends the file, not anyone's access to the volume;
   revocation is destroying the grant.
 - **Admission** is the serving library's, per (account, label set) with a fair share per badge
-  ([R26 (admission fairness)](serving.md#r26-admission-fairness)): 32 fids, 8 minted
-  connections, 6 multiplexed connections' completion calls, 128 of their requests and 32 pages
+  ([R26 (admission fairness)](serving.md#r26-admission-fairness)): 32 fids, 23 minted
+  connections, 21 multiplexed connections' completion calls, 128 of their requests and 32 pages
   they brought ([serving](serving.md#multiplexed-connections)) per bucket, sized to fit the
   budget its manifest entry gives, the entry's pages less its heap cap and stack, by the entry rule
-  ([walfsd](walfsd.md#serving)): a bucket at its caps is 626,688 bytes; the manifests' four take
-  2,506,752, 612 pages, which with no heap cap and the stack's 128 round to 768 of their entries'
-  1,024, and the entry leaves 896 pages of budget, five such buckets and not a sixth; a
+  ([walfsd](walfsd.md#serving)): a bucket at its caps is 1,617,408 bytes; the manifests' four take
+  6,469,632, 1,580 pages, which with no heap cap and the stack's 128 round to 1,792, their
+  entries', and the entry leaves 1,664 pages of budget, four such buckets and not a fifth; a
   `disconnect` frees a client's fids. The completion calls are not a guess: a bucket is
-  one account's, so they are what a manifest lets one account have open at once, its console
-  session, its cap of live contexts per label set, its leases and one spare for a context
-  detaching while another attaches (its connection lives until the relay ends), and the bench
-  holds the constant, `walfsd`'s too, to the largest such sum over the tree's manifests: 1 + 3 +
-  1 + 1 under `steward-three-contexts`'s manifest, 1 + 2 + 1 + 1 under the image's
+  one account's, and each live VM of the account at the server, a session's or a lease's, parks
+  one, so they are what a manifest lets one account have open at once. Sessions and leases of
+  one label set are carved from one share, the principal's fixed sub-budget
+  ([the steward](steward.md#fixed-sub-budgets-per-label-set)), an equal part of its budget per
+  label set less a budget's own cost, and the kernel's carve refuses past it
+  ([R7 (carving)](../kernel/budgets.md#r7-carving)); so what can be live at once is what the share carves
+  at once, its pages over the smaller of a session's and a lease's (`sizes.session.pages`,
+  `sizes.agent.pages`), and one spare for a context detaching while another attaches (its
+  connection lives until the relay ends), and the bench holds the constant, `walfsd`'s too, to
+  the largest such sum over the tree's manifests: 106,770 / 5,248 + 1 = 21 under
+  `steward-latency`'s manifest, 40,959 / 5,248 + 1 = 8 under the image's
   ([image](../../image/README.md)). Fewer refused a principal's third live context its home. A
   crossing's program, in a budget stamped with the account, makes plain calls and holds no
   completion call: one connection record (`State`) of the account's bucket for at most a second
   ([the steward](steward.md#declassification-and-push)).
   When a manifest's sum grows past the constant the host test fails by name, so the constant
-  moves with the manifests, never ahead of them. The connections are the account's by the same
-  rule, whoever minted them: a home connection the steward mints for a session or a lease is
-  admitted in that account's bucket from its first request ([serving](serving.md#admit)), so the
-  8 per bucket are held by the same host test to at least one per session and one per lease, and
+  moves with the manifests, never ahead of them; and every manifest's buckets at those caps must
+  leave the open-call headroom ([serving](serving.md#admit)), which the bench holds too
+  (`every_servers_buckets_leave_the_open_call_headroom`). The connections are the account's by
+  the same rule, whoever minted them: a home connection the steward mints for a session or a
+  lease is admitted in that account's bucket from its first request
+  ([serving](serving.md#admit)), so the 23 per bucket are held by the same host test to at least
+  one per session, the console session, the cap of live contexts per label set and a spare, and
+  one per lease, the leases what the share holds in `agent` budgets
+  ([the steward](steward.md#leases)): (1 + 3 + 1) + 18 under `steward-latency`'s manifest; and
   the steward's own share holds only its kept carves.
 - **Metadata** lives in littlefs user attributes: what `stat` needs (mtime, qid version) and the
   per-file attributes of `get_attr` and `set_attr`. No access time is kept. A file's qid version

@@ -91,16 +91,18 @@ against what was packed); `erofsd` skips it with every other attribute.
 arguments (`endpoint=`, `buckets=`) and the same range: a `blkd` range for an unverified
 volume, a `verityd` range for a verified one ([blkd](blkd.md), [verityd](verityd.md)). Its
 clients share the budget its manifest entry gives, the entry's pages less its heap cap and stack,
-by the entry rule ([walfsd](walfsd.md#serving)): a bucket at its caps costs 226,816 bytes, and every
+by the entry rule ([walfsd](walfsd.md#serving)): a bucket at its caps costs 235,520 bytes, and every
 session's domain is one, beside the steward's ([the steward](steward.md#authentication-and-sessions));
-the image's six (a case's extra client the sixth) are 1,360,896 bytes, 333 pages, which with the
+the image's six (a case's extra client the sixth) are 1,413,120 bytes, 345 pages, which with the
 heap cap's 26 and the stack's 128 round to 512 of the image's 1,024, and the entry leaves 870 pages
 of budget, fifteen such buckets and not a sixteenth.
-A bucket holds 11 minted connections: what a manifest lets one account hold at the system volume
+A bucket holds 28 minted connections: what a manifest lets one account hold at the system volume
 at once, whoever minted them ([serving](serving.md#admit)), two per session the steward starts
 (its shell's and its relay's) for the console session, the cap of live contexts per label set and
-one spare for a context detaching while another attaches, and one per lease, held by the bench to
-at least the largest such sum over the tree's manifests, 2 × (1 + 3 + 1) + 1
+one spare for a context detaching while another attaches, and one per lease, the leases what the
+principal's unlabelled share holds in `agent` budgets ([the steward](steward.md#leases)), held by
+the bench to at least the largest such sum over the tree's manifests, 2 × (1 + 3 + 1) + 18 under
+`steward-latency`'s manifest, 2 × (1 + 3 + 1) + 7 under the image's
 ([walfsd](walfsd.md#serving), the same derivation);
 a `buckets=N` the budget cannot hold and `erofsd` does not start. At start it reads the superblock
 and the root inode, then serves:

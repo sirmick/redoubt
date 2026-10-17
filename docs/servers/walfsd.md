@@ -363,7 +363,7 @@ and a `write` for each file, each the transactions it takes. It is deterministic
 
 ### Serving
 
-<details><summary>Status: built · tested (37)</summary>
+<details><summary>Status: built · tested (38)</summary>
 
 - bench:steward-three-contexts
 - bench:walfsd-boot
@@ -376,6 +376,7 @@ and a `write` for each file, each the transactions it takes. It is deterministic
 - host:redoubt-init::a_walfsd_entry_is_a_volume_server_as_a_littlefsd_one_is
 - host:testbench::the_servers_admit_what_a_manifest_lets_one_account_hold
 - host:testbench::every_manifest_entry_holds_its_buckets_at_their_caps
+- host:testbench::every_servers_buckets_leave_the_open_call_headroom
 - host:redoubt-walfsd::a_blank_range_is_formatted_and_only_a_blank_one
 - host:redoubt-walfsd::a_cut_at_every_write_of_a_write_and_a_rename_leaves_before_or_after
 - host:redoubt-walfsd::a_device_that_fails_makes_the_volume_corrupt_until_it_is_mounted_again
@@ -461,7 +462,9 @@ typed operations, so a client names no format:
   directory, as on `littlefsd`, so listing n entries costs about n / 64 passes.
 - **Admission** is the serving library's, with `littlefsd`'s caps per bucket
   ([R26 (admission fairness)](serving.md#r26-admission-fairness)), the completion calls per
-  bucket derived from what a manifest lets one account have open at once, and the connections
+  bucket derived from what a manifest lets one account have open at once (a parked call per live
+  VM of the account, what its unlabelled share carves at once in sessions and leases, and a
+  spare: the image's alice 40,959 / 5,248 + 1 = 8, the tree's largest 21), and the connections
   the account's whoever minted them, the steward's share holding only its kept carves
   ([littlefsd](littlefsd.md#volumes-connections-and-labels)); a crossing's program
   ([the steward](steward.md#declassification-and-push)) makes plain calls, no completion call,
@@ -473,10 +476,10 @@ typed operations, so a client names no format:
   conservative by the bound less the entry's stack), rounded up to 256; a case's manifest sizes by
   the same rule, never by what its case happens to use, and the bench holds every entry in the
   tree to it (`every_manifest_entry_holds_its_buckets_at_their_caps`). A bucket at its caps is
-  626,688 bytes: the image's `walfsd:data` with six is 3,760,128 bytes, 918 pages, which with its
-  heap cap of 64 and the stack's 128 is 1,110, so 1,280, the entry's, which leaves 1,088 pages of
-  budget, seven such buckets and not an eighth; `walfsd:alice-secrets` with five is 765 + 192 =
-  957, so 1,024 of its 1,280. An entry may keep more pages than the rule asks (the memory rule
+  1,617,408 bytes: the image's `walfsd:data` with six is 9,704,448 bytes, 2,370 pages, which with
+  its heap cap of 64 and the stack's 128 is 2,562, so 2,816, the entry's, which leaves 2,624 pages
+  of budget, six such buckets and not a seventh; `walfsd:alice-secrets` with five is 1,975 + 192 =
+  2,167, so 2,304, its entry. An entry may keep more pages than the rule asks (the memory rule
   below is the other bound), never fewer.
 - **Memory** is the format's ([Memory](#memory)), a node per fid (its path), the listing window,
   and the quota's records; the image declares the heap the memory scan measured

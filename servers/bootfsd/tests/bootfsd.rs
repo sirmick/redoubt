@@ -258,7 +258,7 @@ fn a_bad_public_list_stops_the_server() {
 
     // A block that does not size it, or sizes it at nothing, or past the most a server may have,
     // or names no budget, or one whose pages less the stack's bound hold fewer than its count's
-    // buckets (six at 165 888 bytes are 243 pages): it does not guess a count or a budget
+    // buckets (six at 169 728 bytes are 249 pages): it does not guess a count or a budget
     // (servers/serving.md R26; servers/walfsd.md, the entry rule).
     let image = Some(4096);
     for (sizing, budget) in [
@@ -267,7 +267,7 @@ fn a_bad_public_list_stops_the_server() {
         (&["buckets=16", "buckets=16"], image),
         (&["buckets=33"], image),
         (&["buckets=6"], None),
-        (&["buckets=6"], Some(128 + 242)),
+        (&["buckets=6"], Some(128 + 248)),
     ] {
         let server = f.process(0, &[]);
         let receive = f.endpoint(server);
@@ -286,7 +286,7 @@ fn a_bad_public_list_stops_the_server() {
     let server = f.process(0, &[]);
     let receive = f.endpoint(server);
     let mut builder = StartupBuilder::new(receive.index());
-    builder.handle("bootfsd", receive).budget_pages(128 + 243).arg("buckets=6");
+    builder.handle("bootfsd", receive).budget_pages(128 + 249).arg("buckets=6");
     let thread = launch(server, builder.finish().unwrap(), bootfsd::serve);
     f.destroy(server, receive);
     assert_eq!(thread.join().unwrap(), redoubt_rt::exit::OK);

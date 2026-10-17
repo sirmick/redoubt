@@ -766,6 +766,29 @@ or an agent with a person at the top of the chain.
 - **A lease the kernel's deadline took** reaches the steward as its process's exit notice with
   the budget already gone: the core's `DestroyBudget` on it is the end asked for, not a failed
   step, once that object's exit is in; on a budget whose process still runs it is one.
+- **A principal's live leases are bounded by its share.** Its leases and its sessions of one
+  label set are carved from that set's fixed sub-budget
+  ([fixed sub-budgets](#fixed-sub-budgets-per-label-set)), and the kernel's carve refuses past
+  it ([R7 (carving)](../kernel/budgets.md#r7-carving)); and an unlabelled lease's root is
+  `project`, minted below the home with `sizes.agent.quota` carved from the home's quota, which
+  its server refuses past ([walfsd](walfsd.md#quotas); a labelled lease's root is its vault,
+  no quota carve, [agents](../userland/agents.md#leases)). So a principal holds at most what
+  its unlabelled share holds in `agent` budgets, by pages, processes and weight, and what its
+  home's quota holds in `agent` quotas, the smallest:
+  `min(share_pages / sizes.agent.pages, share_processes / sizes.agent.processes, share_weight /
+  sizes.agent.weight, home_quota / sizes.agent.quota)`, the share an equal part of its budget
+  per label set, less a budget's own cost, as `init` derives the context cap
+  ([R82](#r82-the-context-cap)); a sponsored principal's is its sponsor's. It is an upper bound:
+  a lease is refused by whichever carve runs out first, the kernel's or the server's, the
+  sessions carved from the same share only lower what is left for leases, and a sponsored
+  principal's sessions are leases of that share. The
+  image's alice: 81,920 pages over two label sets, less one, is 40,959, over 5,248 is 7; 64
+  processes over two, over 2, is 16; weight 1,000 over two, over 50, is 10; her home's
+  8,388,608 bytes over a lease's 1,048,576 is 8: 7. Bob, with one
+  set: 32,767 over 5,248 is 6; 20 over 2 is 10; 500 over 50 is 10; 8 by his home: 6. The steward keeps no such
+  count and the manifest names none; the shared servers' per-account caps take the term, the
+  bench deriving it from every manifest in the tree
+  ([serving](serving.md#admit); `the_servers_admit_what_a_manifest_lets_one_account_hold`).
 
 - **An agent's budget sits under its sponsor's**, so it shares the sponsor's account: it is
   carved from the sponsor's fixed sub-budget for the lease's label set, never from a session's

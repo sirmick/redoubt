@@ -539,9 +539,9 @@ fn servers_that_do_not_fit_in_system_are_refused() {
     let mut machine = machine(&devices, &ENTRIES);
     let m = image();
     // keyd 256, consoled 1024, bootfsd 4096, the two blkds 512 each, verity:system 256, netd
-    // 1024, ipd 4096, walfsd:data 1280 (the entry rule of walfsd.md, "Serving"), erofsd:system
+    // 1024, ipd 4096, walfsd:data 2816 (the entry rule of walfsd.md, "Serving"), erofsd:system
     // 1024, and a page each for the budgets.
-    let pages = 256 + 1024 + 4096 + 512 * 2 + 256 + 1024 + 4096 + 1280 + 1024 + 10;
+    let pages = 256 + 1024 + 4096 + 512 * 2 + 256 + 1024 + 4096 + 2816 + 1024 + 10;
     machine.system.pages_limit = machine.system.pages_usage + pages - 1;
     assert_eq!(
         on(&m, &machine).unwrap_err(),

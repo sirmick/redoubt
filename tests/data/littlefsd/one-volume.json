@@ -33,7 +33,7 @@
     {
       "name": "littlefsd:a",
       "program": "littlefsd",
-      "budget": {"pages": "1024", "processes": 1, "weight": 100},
+      "budget": {"pages": "1792", "processes": 1, "weight": 100},
       "volume": "a",
       "receives": ["littlefsd:a"],
       "args": ["endpoint=littlefsd:a", "buckets=4"]
@@ -41,7 +41,7 @@
     {
       "name": "littlefsd:b",
       "program": "littlefsd",
-      "budget": {"pages": "1024", "processes": 1, "weight": 100},
+      "budget": {"pages": "1792", "processes": 1, "weight": 100},
       "volume": "b",
       "receives": ["littlefsd:b"],
       "args": ["endpoint=littlefsd:b", "buckets=4"]

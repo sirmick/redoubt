@@ -883,20 +883,20 @@ fn one_reply_costs_a_bounded_number_of_passes() {
 }
 
 /// The manifests' entry holds its buckets at their caps by the entry rule (servers/walfsd.md,
-/// "Serving"): a bucket costs 626 688 bytes with six completion calls, the manifests' four
-/// 2 506 752 (612 pages), and their entry of 1 024 pages with no heap cap leaves 896 pages of
-/// budget, five such buckets and not a sixth.
+/// "Serving"): a bucket costs 1 617 408 bytes with twenty-one completion calls, the manifests' four
+/// 6 469 632 (1 580 pages), and their entry of 1 792 pages with no heap cap leaves 1 664 pages of
+/// budget, four such buckets and not a fifth.
 #[test]
 fn the_manifests_entry_holds_its_buckets() {
     let bucket = u64::from(limits(1).in_flight) * COST.in_flight
         + 32 * COST.file
-        + 8 * COST.state
+        + 23 * COST.state
         + 128 * COST.request
         + 32 * COST.page;
-    assert_eq!(bucket, 626_688);
-    assert_eq!(limits(4).need(&COST), Some(2_506_752));
-    let budget = redoubt_rt::server::budget_of(1024, 0);
-    assert_eq!(budget, 896 * PAGE_SIZE as u64);
-    assert!(limits(5).fits(&COST, budget));
-    assert!(!limits(6).fits(&COST, budget));
+    assert_eq!(bucket, 1_617_408);
+    assert_eq!(limits(4).need(&COST), Some(6_469_632));
+    let budget = redoubt_rt::server::budget_of(1792, 0);
+    assert_eq!(budget, 1664 * PAGE_SIZE as u64);
+    assert!(limits(4).fits(&COST, budget));
+    assert!(!limits(5).fits(&COST, budget));
 }

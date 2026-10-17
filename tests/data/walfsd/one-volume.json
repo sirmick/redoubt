@@ -33,7 +33,7 @@
     {
       "name": "walfsd:a",
       "program": "walfsd",
-      "budget": {"pages": "1280", "processes": 1, "weight": 100},
+      "budget": {"pages": "1792", "processes": 1, "weight": 100},
       "volume": "a",
       "receives": ["walfsd:a"],
       "args": ["endpoint=walfsd:a", "buckets=4"]
@@ -41,7 +41,7 @@
     {
       "name": "walfsd:b",
       "program": "walfsd",
-      "budget": {"pages": "1280", "processes": 1, "weight": 100},
+      "budget": {"pages": "1792", "processes": 1, "weight": 100},
       "volume": "b",
       "receives": ["walfsd:b"],
       "args": ["endpoint=walfsd:b", "buckets=4"]

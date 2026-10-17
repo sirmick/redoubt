@@ -149,7 +149,7 @@
       "name": "littlefsd:data",
       "program": "littlefsd",
       "budget": {
-        "pages": "1024",
+        "pages": "1792",
         "processes": 1,
         "weight": 100
       },
