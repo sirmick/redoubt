@@ -1,8 +1,9 @@
 # B87 report: the two-hart "device interrupt returned without its claim" rejections
 
-Branch `wp-B87`, worktree `/home/mcloonan/redoubt/.worktrees/B87`, on main 75a2c8b62.
-Head: 242692350 `testbench: a device interrupt a deadline preempts before its claim is billed as
-one that claimed nothing`. One commit; `git status --short | wc -l` = 0. Kernel untouched.
+Branch `wp-B87`, worktree `/home/mcloonan/redoubt/.worktrees/B87`, rebased onto main d1c199e20.
+Head: 4d09f2e89 `testbench: a device interrupt a deadline preempts before its claim is billed as
+one that claimed nothing` (first committed as 242692350 on 75a2c8b62). One commit;
+`git status --short | wc -l` = 0. Kernel untouched.
 
 ## Reproduction (kept, under `$REDOUBT_TMP/B87`, i.e. `/home/mcloonan/redoubt/.tmp/B87`)
 
@@ -77,7 +78,34 @@ timer-wake target the two-hart rows already miss.
     waiting for {:round, 2, :done}`, 5400 s; the ssh log ends at `{:error, :timeout}` after
     `lease alice/agent-33 ended`), the handoff's known rv32 two-round hang, upstream of this
     package; its partial trace has no unclaimed device interrupt.
-  - rv32 seeds 3, 4: RV32-34-PENDING
+  - rv32 seeds 3, 4: the same hang as seed 2 (round 2, `step 9`, 5400 s each), no trace dumped
+    (the kernel prints it at the reboot the case never reached). So on rv32 at two harts only
+    seed 1 reached the oracle, and was accepted; the hang is not this package's (the oracle runs
+    after the boot) and predates it (the handoff's `latency-rv32-two-rounds-smp1-hung.log`).
+
+## Rebase and 3W
+
+Rebased onto origin/main d1c199e20 (train 58, STEWARD3W): head 4d09f2e89, clean. On the rebased
+tree: `cargo test -p testbench sched_oracle` 65 passed, 1 ignored; docs PASS; formatting PASS.
+3W changes the steward's turn order, not the kernel or its trace: the rejected spans are the
+kernel's deadline-at-entry path on a device interrupt, judged from kernel records alone, so 3W can
+change how often a lease's deadline passes while the other hart holds the lock (the frequency,
+0-2 a run), not the shape the oracle now accepts. Post-3W evidence (head 4d09f2e89, seed 2 at two harts, `post3w-<arch>-seed2/`): rv64 accepted,
+7128 device interrupts from user mode (3835 claiming nothing, 1 a deadline preempted before
+their claim), failing only on the known timer-wake target; rv32 hung again in round 2 (`step 9`,
+5400 s), no trace: 3W does not cure the rv32 two-hart hang. So 3W changes nothing in the shape
+the oracle rejected: the same one-per-run deadline-preempted device interrupt appears and is
+accepted.
+
+## For B88 (the rv32 two-hart stall)
+
+Nothing here shows a receiver never made runnable: every completed two-hart trace (rv64 seeds
+1-4, rv32 seed 1, the two kept rejected ones) passed the oracle's wake-floor and rank checks
+once the claim rule was fixed, and the rejected spans are a deadline's destruction inside a
+device interrupt, not a missing wake. The rv32 two-hart hangs (seeds 2-4, round 2) dumped no
+trace, so they are not evidence either way. No overlap with a kernel trace point: this diff
+touches `tools/testbench/src/sched_oracle.rs`, `docs/kernel/scheduling.md`, `docs/testbench.md`
+only.
 
 ## What I read
 

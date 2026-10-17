@@ -110,3 +110,45 @@ session's share), so the users budget of a 1 GiB machine holds them.
 - Fixtures that run a shared server's program on the host now write a budget: the servers' own
   tests, libs/client's, userland/otp/redoubt's. A fixture that forgets one hangs its test at the
   fake kernel's stuck-wait (60 s), which is how beamlet-lookup-host found the last one.
+
+## Part 2 (2026-10-17): rebased thrice, steward-latency at N = 4
+
+Head **06fafe674** on main 31d9c1f31 (B87), one commit (renewal of da8babfbc by range-diff);
+rebased in turn onto 75a2c8b62 (STEWARD4; walfsd.md's crossing clause and case.rs's
+`only_steward_latency_builds_the_latency_probe` merged beside mine; my bench test uses main's
+`manifests_under`), 9f1cff36c (3U), d1c199e20 (3W; the case and the probe rebuilt from main's
+three-round shape plus a fourth round) and 31d9c1f31 (B87, oracle only).
+
+- **The case:** `tests/steward-latency.toml` adds `round.(3, 16)` (N = 4: three spinners), the
+  N = 4 `LATENCY-COUNT` lines in `expect_after`, the description's N list and its N = 16 sentence
+  (not reached: 2 + N at erofsd:system and 1 + N at the home and /boot against the per-account caps
+  11 and 8, so N <= 7), `timeout_secs` 10800 (a first rv32 run under the builds' load took
+  ~100 minutes for three rounds; alone, 564 s). The probe (`servers/steward/src/bin/steward.rs`,
+  `latency-probe`): `LATENCY_ROUNDS` 3 -> 4. No other code.
+- **scheduling.md, "With the real steward":** the one-hart columns at N = 1 / 2 / 3 / 4 from one run
+  each at seed 3 (`latency4-rv64-smp1.log`, 565 s; `latency4-rv32-smp1.log`, 564 s; consoles
+  kept beside), the two-hart columns as 3W left them; R10's row names its destruction count per
+  hart count (134 at one, 99 at two); the paragraph names the timer wake's p99 miss at N = 3 and
+  4 on both widths at one hart (78/93 ms rv64, 69/93 rv32: the cleanup turn's retried disconnect,
+  3W's finding, the same one sample) and the decision wake's p99 at N = 4 (89 and 66 ms, within 95)
+  behind that turn; the 4/16 sentence is replaced by the N = 16 bound. Both runs FAIL on the
+  timer-wake p99 by design (`whole_run = false`, run by name).
+- **Q4 on thread STEWARD3V-budgets** (unanswered at this writing): N = 16 under one account is
+  refused by the per-account `state` caps, not by any budget; built on (a): measured N = 4,
+  recorded the bound. (b), a lease term of 16 in three `limits`, is a one-line change each if
+  ruled.
+- **Gates on 06fafe674:** fmt clean; docs PASS; size-budget PASS (rt 4059, fileserver 574;
+  steward's 3280 is 3U's: the probe's constant change is within it); unsafe-budget PASS; host
+  tests rt/fileserver/six servers/client/steward 519 passed on d1c199e20 (+ testbench and
+  steward 292 on this head: B87 touched the oracle only); guest builds 27 rt-linking packages
+  (crossing now among them) + the probe, both widths rc 0 (`guest6-*.log`, `probe-build5.log`);
+  the 29-case set + steward-six-principals both widths: 56/56 PASS, rc 0 (`gates2.log`; beamlet-lookup-host among them, 1 h 5 min wall).
+
+## Final head (renewal OK with notes, P3 folded)
+
+**0a2c18d36** on main 31d9c1f31: 06fafe674 with the case's header comment brought to what the
+page says (`git diff 06fafe674 0a2c18d36 --stat`: tests/steward-latency.toml, 7/7 lines, the
+comment only); docs PASS and fmt clean on it; every other gate as listed for 06fafe674 (the
+change is a comment). The rv32 one-hart N = 3 timer-wake miss is 3W's one-sample cleanup-turn
+window (console log line 720 after the parked-step line 716, inside the N = 3 round that precedes
+the fourth), not part 2's: answered to the orchestrator with the evidence.
