@@ -341,10 +341,12 @@ pub struct Summary {
     pub timer_empty: Vec<u64>,
     /// When each timer interrupt that found another budget's wait ended early came, µs.
     pub timer_stale_foreign: Vec<u64>,
-    /// Device interrupts from user mode checked, and those that claimed nothing (another hart
-    /// claimed the source first).
+    /// Device interrupts from user mode checked; those that claimed nothing (another hart claimed
+    /// the source first); and those a deadline answered at their entry preempted before their
+    /// claim.
     pub external_entries: usize,
     pub external_empty: usize,
+    pub external_preempted: usize,
     /// Each walk's span, µs (`M` to `m`, a `walk-trace` kernel's): a receive's pump, a timer
     /// interrupt's expiry and a reconcile, in trace order.
     pub walks: [Vec<(u64, u64)>; 3],
@@ -495,18 +497,40 @@ fn check_timer_entry(e: &TimerEntry, to_user: bool, sum: &mut Summary) -> Result
     Ok(())
 }
 
-/// Judge a device interrupt from user mode at its return: one that claimed nothing is billed as a
-/// timer interrupt that ends no slice, its expiry's last budget's after its expiry or nobody's,
-/// never the interrupted budget's for the claim (kernel/scheduling.md, "Charging"). One that
-/// claimed a source is counted: its handling is its device's owner's, which the trace does not
-/// name.
-fn check_external_entry(e: &TimerEntry, claim: Option<u64>, sum: &mut Summary) -> Result<(), String> {
+/// Judge a device interrupt from user mode at its return (`why`: its `O`'s pass field): one that
+/// claimed nothing is billed as a timer interrupt that ends no slice, its expiry's last budget's
+/// after its expiry or nobody's, never the interrupted budget's for the claim
+/// (kernel/scheduling.md, "Charging"). One that claimed a source is counted: its handling is its
+/// device's owner's, which the trace does not name. One with no claim at all is the entry a
+/// deadline took: the expiry every entry answers first destroyed a budget, and the entering
+/// thread gave up the hart before the controller was asked, so the source stays pending for the
+/// next entry (kernel/timer.md: a deadline is a preemption point). It is recorded with a
+/// destruction inside it and a preempting return, and billed as one that claimed nothing; a
+/// missing claim with either mark absent fails.
+fn check_external_entry(
+    e: &TimerEntry,
+    claim: Option<u64>,
+    why: u128,
+    sum: &mut Summary,
+) -> Result<(), String> {
     sum.external_entries += 1;
     match claim {
-        None => Err(format!("record {}: a device interrupt returned without its claim", e.seq)),
+        None if !(e.destruction && why == 2) => Err(format!(
+            "record {}: a device interrupt returned without its claim{}",
+            e.seq,
+            if e.destruction {
+                ", and not as the preemption a deadline's destruction at its entry makes"
+            } else {
+                ""
+            }
+        )),
         Some(irq) if irq != 0 => Ok(()),
-        Some(_) => {
-            sum.external_empty += 1;
+        _ => {
+            if claim.is_some() {
+                sum.external_empty += 1;
+            } else {
+                sum.external_preempted += 1;
+            }
             // As a timer interrupt's: an expired item's own bills come before its expiry's end.
             let last = e.expired.and_then(|(last, what)| (what != 0).then_some((last, what)));
             for &(payer, ticks, after) in e.charges.iter().filter(|c| c.1 > 0) {
@@ -752,7 +776,7 @@ pub fn check(records: &[Record]) -> Result<Summary, String> {
                     ));
                 }
                 match e.external {
-                    Some(claim) => check_external_entry(&e, claim, &mut sum)?,
+                    Some(claim) => check_external_entry(&e, claim, r.pass, &mut sum)?,
                     None => check_timer_entry(&e, r.pass == 1, &mut sum)?,
                 }
             }
@@ -4051,7 +4075,7 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
         kernel_time
     };
     let head = format!(
-        "sched_oracle: {} records, {} picks in rank order ({} in place), every wake at or above the floor, no pass falling but by a weight change; {} passing over a budget whose threads all ran on other harts; {} lifted out of the cap set, at most to the floor; {} lifts by the rule ({} with a leading parent and work to move); {} weight changes by the rule; R10 {n} destructions over up to {} object frames, µs p50/p99/max {p50}/{p99}/{max}, their threads' ending {t50}/{t99}/{tmax}, no audit inside one; {} audits, {audit_total} µs; {} timer interrupts billed by the rule ({} expiring, {} finding a wait ended early, {} ticks after expiry to the budget billed last; {} ending a slice, {} nobody's; {} charging another budget than the one interrupted, {} ticks); {} expiry charges outside an interrupt ({} at a call's entry, {} in `kmain`), {} ticks; {} device interrupts from user mode billed by the rule ({} claiming nothing){kernel_time}{lease_end}{after_end}",
+        "sched_oracle: {} records, {} picks in rank order ({} in place), every wake at or above the floor, no pass falling but by a weight change; {} passing over a budget whose threads all ran on other harts; {} lifted out of the cap set, at most to the floor; {} lifts by the rule ({} with a leading parent and work to move); {} weight changes by the rule; R10 {n} destructions over up to {} object frames, µs p50/p99/max {p50}/{p99}/{max}, their threads' ending {t50}/{t99}/{tmax}, no audit inside one; {} audits, {audit_total} µs; {} timer interrupts billed by the rule ({} expiring, {} finding a wait ended early, {} ticks after expiry to the budget billed last; {} ending a slice, {} nobody's; {} charging another budget than the one interrupted, {} ticks); {} expiry charges outside an interrupt ({} at a call's entry, {} in `kmain`), {} ticks; {} device interrupts from user mode billed by the rule ({} claiming nothing, {} a deadline preempted before their claim){kernel_time}{lease_end}{after_end}",
         records.len(),
         sum.picks,
         sum.picks_in_place,
@@ -4075,7 +4099,8 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
         sum.expiry_charges.iter().filter(|c| c.runner.is_none()).count(),
         sum.expiry_charges.iter().map(|c| c.ticks).sum::<u64>(),
         sum.external_entries,
-        sum.external_empty
+        sum.external_empty,
+        sum.external_preempted
     );
     let mut report = Vec::new();
     if let Some(proof) = wake_proof {
@@ -6706,7 +6731,11 @@ mod tests {
         ];
         for (n, head) in good.iter().enumerate() {
             let v = verdict(&[head.clone(), pick.to_vec()].concat());
-            let empty = if n < 3 { "(1 claiming nothing)" } else { "(0 claiming nothing)" };
+            let empty = if n < 3 {
+                "(1 claiming nothing, 0 a deadline preempted before their claim)"
+            } else {
+                "(0 claiming nothing, 0 a deadline preempted before their claim)"
+            };
             assert!(
                 v.as_ref()
                     .is_ok_and(|s| s
@@ -6731,6 +6760,57 @@ mod tests {
         ] {
             let v = verdict(&[head, pick.to_vec()].concat());
             assert!(v.as_ref().is_err_and(|e| e.contains("device interrupt")), "{what}: {v:?}");
+        }
+    }
+
+    /// A deadline answered at a device interrupt's entry destroys a budget and preempts the
+    /// entering thread before the controller is asked (kernel/timer.md: a deadline is a
+    /// preemption point), as the real steward's two-hart traces showed: the interrupt is
+    /// recorded with no claim, a destruction inside it and a preempting return, and is billed as
+    /// one that claimed nothing. Without the destruction, or returning otherwise than preempted,
+    /// a missing claim still fails.
+    #[test]
+    fn a_device_interrupt_a_deadline_preempts_before_its_claim_is_billed_as_claiming_nothing() {
+        let pick = [(2, 'W', 1, 5), (2, 'K', 1, 5)];
+        // Budget 1 is interrupted at 100 µs; the expiry destroys budget 7, billing 2 last (its
+        // own bills before the expiry's end), and the entry gives the hart to `kmain`.
+        let preempted = |tail: Vec<(u64, char, u64, u128)>| {
+            [
+                vec![(1, 'x', 1, 100), (1, 'X', 7, 101), (1, 'B', 2, 40), (1, 'Y', 7, 130), (1, 'E', 2, 1)],
+                tail,
+            ]
+            .concat()
+        };
+        let v = verdict(&[preempted(vec![(1, 'B', 2, 9), (1, 'O', 0, 2)]), pick.to_vec()].concat());
+        assert!(
+            v.as_ref().is_ok_and(|s| s.contains(
+                "1 device interrupts from user mode billed by the rule (0 claiming nothing, 1 a deadline preempted before their claim)"
+            )),
+            "{v:?}"
+        );
+        for (what, head) in [
+            ("the tail not the expiry's", preempted(vec![(1, 'B', 1, 9), (1, 'O', 0, 2)])),
+            ("returned to user mode", preempted(vec![(1, 'O', 0, 1)])),
+            // A device interrupt decides no slice, so this fails as a return belying its decision.
+            ("ended the slice", preempted(vec![(1, 'O', 0, 0)])),
+            ("no destruction", vec![(1, 'x', 1, 100), (1, 'E', 2, 1), (1, 'O', 0, 2)]),
+        ] {
+            let v = verdict(&[head, pick.to_vec()].concat());
+            assert!(v.as_ref().is_err_and(|e| e.contains("interrupt")), "{what}: {v:?}");
+        }
+    }
+
+    /// A kept console log (`--keep-failed`) judged again by hand: `SCHED_ORACLE_LOG` names it and
+    /// `SCHED_ORACLE_ARGS` carries the case's `post_check` arguments; the summary prints.
+    #[test]
+    #[ignore = "judges the log SCHED_ORACLE_LOG names"]
+    fn a_kept_log_judged_again() {
+        let log = std::env::var("SCHED_ORACLE_LOG").expect("SCHED_ORACLE_LOG names a kept console log");
+        let log = std::fs::read(&log).unwrap_or_else(|e| panic!("reading {log}: {e}"));
+        let args = std::env::var("SCHED_ORACLE_ARGS").unwrap_or_default();
+        match run(&String::from_utf8_lossy(&log), &args) {
+            Ok(summary) => println!("{summary}"),
+            Err(why) => panic!("{why}"),
         }
     }
 
