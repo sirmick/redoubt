@@ -30,11 +30,12 @@ use alloc::vec::Vec;
 use core::num::NonZeroU64;
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use redoubt_consoled::server::{BUDGET, COST, Console, limits, size_arg};
+use redoubt_consoled::server::{BUDGET, COST, Console, init_override, limits, size_arg};
 use redoubt_consoled::uart::Uart;
 use redoubt_rt::abi::{Error, FOREVER, Handle, Hold};
 use redoubt_rt::handle::{Endpoint, Irq, Mmio};
 use redoubt_rt::ipc::{Buffer, Delivery, Request};
+use redoubt_rt::server::Admission;
 use redoubt_rt::server::ninep::{
     Around, FIRST_MINTED_BADGE, NineError, NineServer, WORDS_9P, refuse, refuse_malformed,
 };
@@ -204,8 +205,12 @@ pub fn serve(startup: &Startup) -> u32 {
     uart.init();
     let args: Vec<&str> = startup.args().collect();
     let Ok(buckets) = redoubt_rt::server::buckets(&args) else { return BAD_LIMITS };
-    let limits = limits(buckets);
-    if !limits.fits(&COST, BUDGET) {
+    // Every bucket at the defaults but `init`'s, at its override's caps; the worst case of both
+    // must fit the budget and leave the open-call headroom.
+    let Ok(admission) = Admission::with_overrides(limits(buckets), &[init_override()]) else {
+        return BAD_LIMITS;
+    };
+    if !admission.fits(&COST, BUDGET) {
         return BAD_LIMITS;
     }
     let Ok(random) = redoubt_rt::handle::random_u64() else { return NO_RANDOM };
@@ -219,7 +224,7 @@ pub fn serve(startup: &Startup) -> u32 {
     let mut console = Console::new(uart);
     console.size = size;
     console.hold = Some(mmio);
-    let Ok(mut server) = NineServer::new(console, limits, random) else { return BAD_LIMITS };
+    let mut server = NineServer::with_admission(console, admission, random);
     // A console read, and a `resize`, wait on a person, so they have no deadline: what reclaims
     // one is its caller giving up, which arrives as an abandoned-call notice.
     let parked: Parked<Waiting> = Parked::new(FOREVER);

@@ -33,6 +33,10 @@ redoubt-rt = { path = "../../libs/rt" } # the heap record's format
 # The oracle's own evidence (sched_oracle.rs): traces from the executable model, with its tie
 # rules broken on purpose, must be rejected.
 redoubt-model = { path = "../../model" }
-# The admission constant each writable volume server holds a bucket to (case.rs): it must be what
-# the tree's manifests let one account have open at once.
+# The admission constants the shared servers hold a bucket to (case.rs): the writable volume
+# servers' completion calls, and every server's minted connections, must be what the tree's
+# manifests let one account have open at once, whoever minted them.
 redoubt-walfsd = { path = "../../servers/walfsd" }
+redoubt-erofsd = { path = "../../servers/erofsd" }
+redoubt-bootfsd = { path = "../../servers/bootfsd" }
+redoubt-consoled = { path = "../../servers/consoled" }

@@ -37,7 +37,7 @@ loop of its own, closing a send's handles with `close_delivery`: `consoled`, `ne
 
 ### `admit`
 
-<details><summary>Status: built · tested (12)</summary>
+<details><summary>Status: built · tested (14)</summary>
 
 - host:redoubt-rt::the_key_is_the_account_and_the_label_set
 - host:redoubt-rt::limits_are_per_key_and_per_resource
@@ -51,6 +51,8 @@ loop of its own, closing a send's handles with `close_delivery`: `consoled`, `ne
 - host:redoubt-rt::overrides_are_sized_and_checked
 - host:redoubt-rt::the_worst_order_never_passes_the_headroom
 - host:redoubt-rt::fits_counts_overrides_at_their_caps
+- host:redoubt-rt::a_connection_minted_for_another_account_is_admitted_there_from_its_first_request
+- host:redoubt-rt::a_first_request_on_a_connection_its_account_cannot_hold_is_refused_and_it_stays_pending
 
 </details>
 
@@ -81,6 +83,18 @@ open call, and each has its own share ([R26](#r26-admission-fairness)).
   half of it, and the sponsor can still take a third
   ([R26 (admission fairness)](#r26-admission-fairness)). An account-0 bucket is one badge, so it
   has one share and the bucket's cap is that share's.
+- **A minted connection is its holder's.** A connection minted for another account is admitted
+  in that account's bucket from its first request; until then it holds one of its minter's
+  pending slots. Minted, its `State` is charged to the minter's bucket and share, so a flood of
+  mints is bounded by the minter's share before anyone calls ([R26](#r26-admission-fairness)).
+  The first request on it, a T-message, a `ninep_common` one or a typed one, moves that `State`
+  to the caller's bucket and share, where the caller's caps apply: a caller whose bucket is full is
+  refused that request and the connection stays pending for the next. The same bucket (the
+  minter's own call, or any account-0 holder, keyed by the root its chain came through) settles
+  it where it is, and a connection settled once never moves again. A pending connection nobody
+  calls on goes back with its minter's `disconnect` or the scope's end. So what the steward mints
+  for a session or a lease is the session's or the lease's account's to hold, under that
+  account's caps, and the steward's own share holds only what the steward itself calls on.
 - **Caps sized to fit.** `Limits` names each resource's cap per bucket and the number of buckets
   that may hold anything at once. `Admission::new` refuses limits (`Unsized`) whose buckets could
   hold more open calls than `MAX_OPEN_CALLS` (256) less `OPEN_CALL_HEADROOM` (64), or with a
@@ -151,12 +165,15 @@ clients: a 9P server's connections (`new_connection`, `disconnect`) and a typed 
 - **Shares.** A capability a client mints for itself counts in the share of the one it minted it
   through (`Minted::share` walks up the chain while the requester is the same client), so minting
   more badges buys no bigger share. One minted by someone else for a client (the steward, for a
-  lease's agent) is a share of its own. Within account 0 every capability minted through a root
-  badge counts in that root's share however deep the chain; the code departs from that rule
-  (R26).
+  session or a lease's agent) is a share of its own, in that client's bucket from its first
+  request ([`admit`](#admit)): until then it is **pending**, charged to its minter (`pending`),
+  and the first request settles it on the caller's bucket and share (`settle`), which is what its
+  release names from then on. Within account 0 every capability minted through a root badge
+  counts in that root's share however deep the chain; the code departs from that rule (R26).
 
-The server admits one `State` before reserving, gives it back if the mint fails, and gives it
-back for each entry `disconnect` frees.
+The server admits one `State` before reserving, gives it back if the mint fails, moves it at the
+first request on the capability, and gives it back, from wherever it was charged by then, for
+each entry `disconnect` frees.
 
 ### Parked calls
 
@@ -628,12 +645,14 @@ holder's labels.
 
 ### R26 (admission fairness)
 
-<details><summary>Status: built · partly tested: the rule is attacked in host tests with the runtime's fake kernel, and no boot floods a real server · tested (14)</summary>
+<details><summary>Status: built · partly tested: the rule is attacked in host tests with the runtime's fake kernel, and no boot floods a real server · tested (16)</summary>
 
 - host:redoubt-rt::the_key_is_the_account_and_the_label_set
 - host:redoubt-rt::an_agent_flooding_a_bucket_leaves_its_sponsor_a_share
 - host:redoubt-rt::an_agent_flooding_a_bucket_leaves_its_sponsor_a_share_and_its_lease_end
 - host:redoubt-rt::self_minting_does_not_multiply_the_share
+- host:redoubt-rt::a_connection_minted_for_another_account_is_admitted_there_from_its_first_request
+- host:redoubt-rt::a_first_request_on_a_connection_its_account_cannot_hold_is_refused_and_it_stays_pending
 - host:redoubt-rt::an_account_0_chain_holds_one_bucket
 - host:redoubt-rt::an_account_0_rooted_chain_holds_one_bucket
 - host:redoubt-rt::caps_are_big_enough_for_a_share_to_mean_anything
@@ -657,7 +676,10 @@ one answered ahead of admission. Within account 0, every capability minted throu
 below `FIRST_MINTED_BADGE`, given by whoever set the server up) counts in that root's share, however
 many links deep and whoever holds it: a chain of self-mints spends one share, and system callers get
 separate shares only from separate root badges, which the manifest gives. A capability used under a
-non-zero account is keyed by that account. The kernel's
+non-zero account is keyed by that account, the connection itself included: one minted for it by
+another (the steward's, for a session or a lease) is pending in its minter's share until the
+account's first request on it, then in the account's own bucket ([`admit`](#admit)), so a
+minter's share bounds what it mints before anyone calls, and never what others hold. The kernel's
 [R2 (fair waiting)](../kernel/ipc.md#r2-fair-waiting) shares turns at the endpoint the same way;
 this rule shares what the server holds afterwards. `Minted::key` is the one fold every charge
 goes through: an account-0 caller's key names the root badge its chain was minted through, so the
@@ -773,7 +795,20 @@ its `Rflush`, never after.
   its session, which ends a session bound (at most `COLLECT_WAIT`) after its last completion call
   returned if none is parked.
 - **A dead launcher leaks its children's connections** until its own connection is freed; the leak
-  counts against its own account and label set, never another's.
+  counts against its own account and label set, never another's. A connection it minted that
+  nobody ever called on holds one of its pending slots the same way, until then.
+- **A minter's share bounds what it mints before anyone calls.** The steward mints every
+  session's and lease's connections through its one root badge at a server, so between a mint and
+  the first request on it that connection is a pending slot of the steward's share there: a
+  login batch's connections are pending only until the session's first reads, but a server whose
+  `state` for the steward's badge is below the connections one batch mints would refuse the batch
+  at its mint, not at the account's cap. The caps are sized above a batch, and the account's own
+  cap binds once the connection is in use.
+- **A disconnect dropped at a busy server leaks its connection's admission.** The steward's
+  deferred cleanup retries a server's disconnect four times a second apart and then drops it with
+  a console line ([the steward](steward.md#failure-and-restart)); a connection so dropped keeps its `State`
+  in the account's bucket it was admitted in until the server's restart. Parking that step
+  instead of dropping it is a follow-up.
 - **Rollback ends at provisional state.** A client that abandons a request after the server
   performed a non-provisional effect (a file write) keeps the effect without learning of it.
 - **Admission counts objects, not bytes.** Bytes are the file server's to meter (`littlefsd`'s and

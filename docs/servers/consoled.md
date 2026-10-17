@@ -61,16 +61,38 @@ with nothing below it.
 - **Beside 9P and `ninep_common`, `consol`'s `size` and `resize`** ([below](#the-consol-protocol)).
   Any other typed opcode, `ended` sent as a call among them, is answered `malformed`, and the
   handles it carried are closed.
-- **Admission:** at most 2 parked calls (waiting reads and `resize` calls together),
-  `MAX_THREADS` consoles' fids, `MAX_THREADS` connections,
-  and 80 multiplexed requests and 2 pages they brought
-  ([serving](serving.md#multiplexed-connections)) per (account, label set), across at most
-  `buckets=N` of those, sized to fit its 2 MiB budget; a block with no `buckets=N`, or one the
-  budget cannot hold, and `consoled` does not start ([init](init.md#the-boot-manifest)). The
-  connections, and their fids, scale with
-  `MAX_THREADS` because `init` mints every server's console through its one root badge, and
-  starts at most `MAX_THREADS - 1` servers ([started by `init`](#started-by-init)): each console,
-  and `init`'s own, holds 2 fids, the root it attaches and the `cons` file it opens.
+- **Admission:** per (account, label set), at most 2 parked calls (waiting reads and `resize`
+  calls together), 2 connections with 2 fids each, and 80 multiplexed requests and 2 pages they
+  brought ([serving](serving.md#multiplexed-connections)), across at most `buckets=N` of those;
+  `init`'s own bucket, by an override on its root badge, holds `MAX_THREADS` connections with 2
+  fids each instead. A block with no `buckets=N`, or one the budget cannot hold, and `consoled`
+  does not start ([init](init.md#the-boot-manifest)). The two kinds of bucket are derived, not
+  chosen:
+  - *A principal's bucket* holds the consoles the steward mints for that account here: the
+    console principal's UART session's, minted through the steward's own console (a context
+    over `ssh` gets the console its relay serves and a lease gets none: the steward's slot
+    table), admitted in the session's account from its first request
+    ([serving](serving.md#admit)), plus one spare for a session ending while its successor
+    starts: 2, with `CONSOLE_FIDS` (2) fids each, the root it attaches and the `cons` file it
+    opens. The bench holds the cap to at least that need over the tree's manifests
+    (tools/testbench, `the_servers_admit_what_a_manifest_lets_one_account_hold`).
+  - *`init`'s bucket* holds every server's console: `init` mints each through its one root
+    badge and starts at most `MAX_THREADS - 1` servers, and each of those consoles, a system
+    caller's whose chain came through `init`'s badge, is charged to `init`'s bucket however it
+    is used, the steward's own among them. `init`'s badge is always 1 here: `init` mints its own
+    first badge at each server it calls, the first not handed to anyone at that endpoint, and
+    refuses a manifest handing `consoled` to any server ([started by `init`](#started-by-init)).
+  - *The fit*, by the worst case of `Admission::with_overrides` (`init`'s bucket at its override's
+    caps, every other at the defaults): a default bucket at its caps costs 2 parked calls at
+    64 KiB, 2 connections at 256 bytes with 2 fids each at 256, 80 requests at 256 and 2 pages
+    at 4 KiB, 161,280 bytes; `init`'s the same with `MAX_THREADS` connections and their fids,
+    355,584 bytes at 255 (rv64) and 183,552 at 31 (rv32). The 2 MiB budget holds `init`'s and
+    10 default buckets on rv64 (1,968,384; an eleventh does not fit) and `init`'s and 11 on rv32
+    (1,957,632); the image's manifest asks for 5. The entry's pages follow the entry rule
+    ([walfsd](walfsd.md#serving)): 512 of budget, 24 of heap and 6 of stack, within its 1,024.
+  - *The count*: `buckets=N` is the manifest's principal domains plus one for `init`, whose
+    bucket every system caller's console shares; the steward's own console is `init`'s minting
+    and counts there, not as a bucket of its own.
 
 ### Two threads and the UART
 
