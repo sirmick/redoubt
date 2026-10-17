@@ -804,23 +804,31 @@ such a destruction (subtracted, as every target is net):
 
 | Measure (net µs, N = 1 / 2) | rv64, 1 hart | rv32, 1 hart | rv64, 2 harts | rv32, 2 harts |
 | --- | --- | --- | --- | --- |
-| steward timer wake (p50/p99) | 23362/24089, 25887/27735: p50 missed | 53310/57418, 26139/28116: missed | 40365/49236, 39183/45495: p50 missed | 58412/84010, 61174/66142: missed |
-| steward decision wake (p50/p99) | 4090/6996, 5560/12936 | 5327/6357, 6541/8264 | 28806/42572 (p50 missed), 19386/27335 | 55659/69864, 40849/45094: p50 missed |
-| deadline notice (p99) | 26623, 28447 | 29869, 29651 | 49511, 55108: missed | 80148, 86247: missed |
-| `budget_destroy`, call to return (p50/p99) | 4661/6009, 6018/8361 | 6703/9279, 5812/8934 | 7592/8740, 7502/10143 | 8488/11177, 9579/10446 |
-| R10, 65 destructions (p99) | 9664 | 9623 | 9746 | 9754 |
-| a lease's end (worst decision wake p99 + R10) | 12936 + 9664 = 22600 | 8264 + 9623 = 17887 | 42572 + 9746 = 52318 | 69864 + 9754 = 79618 |
+| steward timer wake (p50/p99) | 1962/3250, 734/1448 | 753/1323, 1198/2735 | 7985/8017, 3372/23534 | 3579/6510, 37249/42998: p50 missed at N = 2 |
+| steward decision wake (p50/p99) | 1138/11072, 17291/21974 | 23739/38447, 1233/40484 | 1946/18788, 2323/4594 | 2470/4637, 2679/6342 |
+| deadline notice (p99) | 11103, 10386 | 10752, 11996 | 11400, 11998 | 11433, 23443 |
+| `budget_destroy`, call to return (p50/p99) | 6053/7210, 6075/8359 | 6702/7851, 6731/13740 | 8000/8639, 8237/10750 | 9201/9912, 10257/13914 |
+| R10, 65 destructions (p99) | 9664 | 9622 | 9744 | 9751 |
+| a lease's end (worst decision wake p99 + R10) | 21974 + 9664 = 31638 | 40484 + 9622 = 50106 | 18788 + 9744 = 28532 | 6342 + 9751 = 16093 |
+| reply to the next receive (p50/p99, no target) | 6470/6498, 6544/9354 | 6795/6827, 8194/8237 | 17913/42748, 17409/21366 | 69380/70922, 28961/80391 |
 
-At one hart the real steward meets every target but its timer wake's p50: the steward reaches
-its wait with the console round trips of the reply it has just given on its pass (its audit and
-usage lines, each line an attach, open, write and close at `consoled`), and the wake pays for
-that work before it, by the rule above. At two harts, where `icount` counts both harts'
-instructions, the same work doubles and the decision wake at N = 1 and the deadline notice miss
-too; the two-hart figures are gated as the stand-in's are, and these misses are findings against
-the steward's loop, not the scheduler. The case runs by name, out of the whole run, until the
-loop's console cost is fixed. The 65 destructions judged are those before the probe's
-`LATENCY-END`; the sixteen after it (the marker-file exits reaping the leases) are recorded and
-not judged.
+The real steward meets every target at one hart on both widths, and at two harts on rv64; on
+rv32 at two harts the timer wake's p50 at N = 2 misses (every sample near 40 ms, the one
+spinner's VM live). Before the steward's console lines were queued and written through one kept
+fid at the loop's turn ([steward](../servers/steward.md#failure-and-restart)), the steward
+reached its wait with the console round trips of the reply it had just given on its pass (each
+line an attach, open, write and close at `consoled`), the timer wake's p50 missed on every width
+and hart count (23 to 61 ms), and at two harts the decision wake's p50 and the deadline notice's
+p99 missed too; the reply-to-receive gap was 34-56 ms at one hart and 94-162 at two. Now a call's
+records go before its reply, one write each, and the gap (the last row, recorded, no target) is
+the loop's own work and the reply's hand-over to the caller, with no console call in it. The
+two-hart figures are gated as the stand-in's are; the rv32 miss is a finding against the two-hart
+scheduler at this seed, not the steward's loop, and the oracle rejects the rv32 two-hart trace
+one run in two at this seed (`a device interrupt returned without its claim`, the two-hart trace
+finding), so the row stands on a run whose trace it accepted. The case stays out of the
+whole run, by name, until the two-hart rows pass on both widths. The 65 destructions judged are
+those before the probe's `LATENCY-END`; the sixteen after it (the marker-file exits reaping the
+leases) are recorded and not judged.
 
 **The sweep** (2026-09-27, seeds 1 to 16, on rv64 and rv32, `TESTBENCH_QEMU_SEED`; the gate runs
 seed 3, this sweep's worst, and no gate sets the variable). The steward decision wake, p50 / p99 in µs at N = 1, 4 and 16, and a lease's end (the

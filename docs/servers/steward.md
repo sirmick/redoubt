@@ -1338,7 +1338,7 @@ detached again ends by its first detach's clock, before its bound.
 
 ## Failure and restart
 
-Status: built · partly tested: `steward-restart` proves the release of a dead steward's connections by count at `bootfsd`, `erofsd:system`, `walfsd:data` and `ipd`, and at `littlefsd:alice-secrets` only by the code they share, since it opens no vault session; a shared server's restart is re-bound on the machine at `walfsd:data`, and at the vault's server and `ipd` by the code they share and the host test · tested: bench:steward-restart, bench:steward-restart-ssh, bench:steward-restart-reboot, bench:steward-session-ends, bench:steward-server-restart, host:redoubt-steward-server::users_not_empty_is_a_start_failure_before_any_carve, host:redoubt-steward-server::watch_is_held_only_from_sshd_and_malformed_on_any_other_badge, host:redoubt-steward-server::a_servers_restart_tells_its_sessions_and_a_session_rebinds_its_slot, host:redoubt-steward-server::every_operation_on_another_badge_class_is_malformed, host:redoubt-init::a_restart_strands_the_stewards_connections_at_the_endpoints_the_server_receives_on, host:redoubt-init::the_outcome_of_the_hand_over_is_said_in_blames_words, bench:steward-blame-lockout, host:redoubt-steward-server::a_session_s_end_is_answered_before_any_cleanup_call, host:redoubt-steward-server::an_ended_session_s_pending_request_is_withdrawn_before_the_end_s_reply, host:redoubt-steward-server::a_cleanup_step_that_times_out_is_retried_then_dropped, host:redoubt-steward-server::a_turn_stops_at_its_first_timed_out_step, host:redoubt-steward-server::a_cleanup_step_the_server_refuses_or_cannot_take_is_done_at_once, host:redoubt-steward-server::the_cleanup_queue_holds_each_released_connection_once
+Status: built · partly tested: `steward-restart` proves the release of a dead steward's connections by count at `bootfsd`, `erofsd:system`, `walfsd:data` and `ipd`, and at `littlefsd:alice-secrets` only by the code they share, since it opens no vault session; a shared server's restart is re-bound on the machine at `walfsd:data`, and at the vault's server and `ipd` by the code they share and the host test · tested: bench:steward-restart, bench:steward-restart-ssh, bench:steward-restart-reboot, bench:steward-session-ends, bench:steward-server-restart, host:redoubt-steward-server::users_not_empty_is_a_start_failure_before_any_carve, host:redoubt-steward-server::watch_is_held_only_from_sshd_and_malformed_on_any_other_badge, host:redoubt-steward-server::a_servers_restart_tells_its_sessions_and_a_session_rebinds_its_slot, host:redoubt-steward-server::every_operation_on_another_badge_class_is_malformed, host:redoubt-init::a_restart_strands_the_stewards_connections_at_the_endpoints_the_server_receives_on, host:redoubt-init::the_outcome_of_the_hand_over_is_said_in_blames_words, bench:steward-blame-lockout, host:redoubt-steward-server::a_session_s_end_is_answered_before_any_cleanup_call, host:redoubt-steward-server::an_ended_session_s_pending_request_is_withdrawn_before_the_end_s_reply, host:redoubt-steward-server::a_cleanup_step_that_times_out_is_retried_then_dropped, host:redoubt-steward-server::a_turn_stops_at_its_first_timed_out_step, host:redoubt-steward-server::a_cleanup_step_the_server_refuses_or_cannot_take_is_done_at_once, host:redoubt-steward-server::the_cleanup_queue_holds_each_released_connection_once, host:redoubt-steward-server::a_console_line_is_one_write_on_the_kept_fid, host:redoubt-steward-server::a_console_line_the_console_did_not_take_costs_one_bound_and_keeps_the_order, host:redoubt-steward-server::the_console_fid_is_re_opened_after_a_failed_write_and_the_lines_dropped_are_said, host:redoubt-steward-server::the_exit_s_last_turn_writes_the_lines_left_within_one_bound
 
 - **The steward is part of the trusted base; its crash is a bug.** If it dies, `init` reaps
   `users`, which logs every session out and ends every lease, and restarts the steward; the
@@ -1427,6 +1427,32 @@ Status: built · partly tested: `steward-restart` proves the release of a dead s
   `steward-blame-lockout` and `steward-server-restart` now forbid `lost` for a blame on both
   widths. Already here: a relay the destroy took is told nothing, since a call to it would only
   wait out its bound.
+- **The console lines go at the turn too, one write each.** Every line the steward says (an
+  audit record, a usage line, a lease's exit, a step's drop, a call's time, the probe's samples)
+  is queued (`servers/steward/src/console.rs`) and written through one fid it keeps open at
+  `consoled` for its life, opened once on the connection `init` gave it, with one lent page kept
+  for it: a line is one write within the same send bound (100 ms). Before this, each line was
+  a fresh one-page lend and an attach, open, write and close at `consoled`, so a `start_agent`'s
+  two lines (its record and the usage line) cost about eight calls and two lend maps after the
+  reply and held the loop 34-56 ms before its next receive at one hart, 94-162 ms at two
+  (`steward-latency`'s `reply_wait`). The queue drains in the order the lines were said, at two
+  points: before a call's reply, so a call's records come before anything its caller says of the
+  answer (the order the bench's cases match on: `sshd`'s `login` line after the steward's
+  `Login` record), and at the loop's top for every other event's lines, after the cleanup steps,
+  so that a step's own line goes in the same turn. Either drain stops at the first line the
+  console did not take in time, the rest queued for the next, so a busy `consoled` costs the
+  loop, or a caller, one bound per turn, and a turn costs at most one bound per queue. A line the
+  console did not take is tried again a second later, four attempts as a cleanup step's, then
+  dropped; a write it refused, or a dead console, drops every line queued, and the fid is opened
+  again at a later turn; a dropped line is counted, and the first line written once the console
+  answers says the count (`steward: 3 console lines dropped: the console did not take them`): no
+  line vanishes silently, though a write the console took but did not answer within the bound is
+  written again, so a line may appear twice. A restarted `consoled` knows none of its clients'
+  connections and `init` hands a running server no new one ([init](init.md#residual-risks)), so
+  after one the steward's writes are refused, its lines dropped and counted, until the steward
+  itself restarts. The queue's bound is argued, not enforced, as the cleanup queue's: an event
+  says at most two lines (its record and the usage line of the one domain it changed), a call's
+  time one, a step's drop one, and a turn raises one event and the steps due.
 
 **What a dead steward held at the shared servers goes with it.** `init` hands the steward a
 fresh connection at each server it is handed (`bootfsd`, the volumes' file servers, `ipd`), not
@@ -1454,7 +1480,7 @@ the last one's until the kernel says its caller is gone.
 it. **The latency probe**, `latency-probe`, is the second such feature, built by `steward-latency`
 alone (the bench's host test `only_steward_latency_builds_the_latency_probe` holds it to that):
 the steward prints a probe lease's start as a `reply_wait` sample (its answer to its next
-receive: its own audit and usage lines), arms two timeouts there and ends that lease by its own
+receive: its work after the reply, the call's records having gone before it), arms two timeouts there and ends that lease by its own
 `EndLease` at the second, prints its wake, deadline-notice and `budget_destroy` samples for the
 bench's oracle, then `LATENCY-END` with its clock after the third round's counts (the window's
 end: the oracle judges no destruction ending after it and no sample printed after it), and exits

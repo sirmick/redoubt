@@ -5,10 +5,11 @@ debug_assertions = true
 icount = "shift=3,sleep=off"
 # The guest seed the gate runs, sched-latency's; the sweep is recorded in the package's report.
 qemu_seed = 3
-# Out of the whole run until the steward's loop writes its console lines at its turn: the case
-# measures a standing finding against that loop (the timer wake's p50 misses by the reply's
-# console round trips, and at two harts the decision wake's p50 and the deadline notice's p99),
-# and a whole bench is a verdict on the tree, not a dashboard; it runs by name.
+# Out of the whole run until the two-hart rows pass on both widths: every target is met at one
+# hart on both widths and at two on rv64, but on rv32 at two harts the timer wake's p50 at N = 2
+# misses, and the oracle rejects that trace one run in two at this seed (a device interrupt
+# returned without its claim: the two-hart trace finding), and a whole bench is a verdict on the
+# tree, not a dashboard; it runs by name.
 whole_run = false
 # The image's programs, the steward built with its test-only latency-probe (servers/steward,
 # src/bin/steward.rs, Probe), and the crossing program the image publishes. The latency manifest

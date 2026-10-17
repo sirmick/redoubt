@@ -20,6 +20,7 @@ use redoubt_steward::effect::{Kind, Object, Output, Step};
 use redoubt_steward::event::EventKind;
 use redoubt_steward::hash::key_id;
 use redoubt_steward_server::cleanup::{RETRY_US, TRIES};
+use redoubt_steward_server::console::{Queue, Sink};
 use redoubt_steward_server::drive::MINTED;
 use redoubt_steward_server::own::{Child, binds};
 use redoubt_steward_server::protocol::{APPROVAL, INIT, SSHD, Serving, answer_with, watches};
@@ -1390,6 +1391,165 @@ fn the_cleanup_queue_holds_each_released_connection_once() {
     s.cleanup(&mut k);
     assert_eq!(cleaned(&k).len(), all.len());
     assert_eq!(s.pending(), 0);
+}
+
+/// A console that records what the steward's lines cost it (servers/steward.md, "Failure and
+/// restart"): each open of the fid and each write, and what it answers.
+#[derive(Default)]
+struct Paper {
+    calls: Vec<String>,
+    /// What every open answers, and every write: `Ok` unless a test says.
+    open: Option<Error>,
+    write: Option<Error>,
+    /// The most a write takes: a line longer goes in several.
+    iounit: Option<usize>,
+}
+
+impl Sink for Paper {
+    fn open(&mut self) -> Result<(), Error> {
+        self.calls.push("open".into());
+        self.open.map_or(Ok(()), Err)
+    }
+
+    fn write(&mut self, bytes: &[u8]) -> Result<usize, Error> {
+        let n = self.iounit.map_or(bytes.len(), |u| u.min(bytes.len()));
+        self.calls.push(format!("write {}", String::from_utf8_lossy(&bytes[..n])));
+        self.write.map_or(Ok(n), Err)
+    }
+}
+
+fn queued(lines: &[&str]) -> Queue {
+    let mut q = Queue::default();
+    for l in lines {
+        q.push((*l).into());
+    }
+    q
+}
+
+/// A line is one write on the fid the first turn opened and every later turn keeps: no attach,
+/// open or close per line; a line longer than the console's `iounit` goes in several writes,
+/// each of the rest.
+#[test]
+fn a_console_line_is_one_write_on_the_kept_fid() {
+    let mut p = Paper::default();
+    let mut q = queued(&["a\n", "b\n"]);
+    assert_eq!(q.run(0, &mut p), None, "nothing is left");
+    assert_eq!(p.calls, ["open", "write a\n", "write b\n"]);
+    q.push("c\n".into());
+    p.calls.clear();
+    assert_eq!(q.run(1, &mut p), None);
+    assert_eq!(p.calls, ["write c\n"], "the fid is kept: one call per line");
+    p.iounit = Some(3);
+    p.calls.clear();
+    q.push("long line\n".into());
+    assert_eq!(q.run(2, &mut p), None);
+    assert_eq!(p.calls, ["write lon", "write g l", "write ine", "write \n"]);
+}
+
+/// A write the console did not take within the bound (`Timeout`) ends the turn: one call, the
+/// line and every line behind it kept in order, the next attempt due `RETRY_US` later and no
+/// call before it; the console answering, the next turn writes them all in the order they were
+/// said. After `TRIES` attempts the line is dropped, counted, and the lines behind it go, the
+/// count said first.
+#[test]
+fn a_console_line_the_console_did_not_take_costs_one_bound_and_keeps_the_order() {
+    let mut p = Paper::default();
+    let mut q = queued(&["first\n", "second\n", "third\n"]);
+    p.write = Some(Error::Timeout);
+    let now = 1_000;
+    assert_eq!(q.run(now, &mut p), Some(now + RETRY_US), "the retry is due RETRY_US later");
+    assert_eq!(p.calls, ["open", "write first\n"], "one wait per turn");
+    assert_eq!(q.len(), 3, "the line and the lines behind it are kept");
+    p.calls.clear();
+    assert_eq!(q.run(now + RETRY_US - 1, &mut p), Some(now + RETRY_US));
+    assert!(p.calls.is_empty(), "not due yet: no call");
+    q.push("fourth\n".into());
+    p.write = None;
+    assert_eq!(q.run(now + RETRY_US, &mut p), None);
+    assert_eq!(p.calls, ["write first\n", "write second\n", "write third\n", "write fourth\n"], "in order");
+    assert_eq!(q.len(), 0);
+    // Dropped after TRIES attempts, said by its count before the next line.
+    let mut p = Paper::default();
+    let mut q = queued(&["lost\n", "kept\n"]);
+    p.write = Some(Error::Timeout);
+    let mut now = 0;
+    for attempt in 1..TRIES {
+        assert_eq!(q.run(now, &mut p), Some(now + RETRY_US), "attempt {attempt}");
+        now += RETRY_US;
+    }
+    assert_eq!(q.run(now, &mut p), Some(now), "the last attempt drops the line and the next is due now");
+    assert_eq!((q.len(), q.dropped()), (1, 1));
+    p.write = None;
+    p.calls.clear();
+    assert_eq!(q.run(now, &mut p), None);
+    assert_eq!(
+        p.calls,
+        ["write steward: 1 console lines dropped: the console did not take them\n", "write kept\n"]
+    );
+    assert_eq!(q.dropped(), 0);
+}
+
+/// A console that refuses a write or is gone (a restarted `consoled` knows none of its clients'
+/// fids: the kept fid is dead there) drops every line queued, counted, and the next turn opens
+/// the fid again, no sooner than `RETRY_US` later, and says the count first: a line goes only
+/// with a line saying so. A console that refuses the open too keeps costing one call a turn and
+/// nothing is kept for it.
+#[test]
+fn the_console_fid_is_re_opened_after_a_failed_write_and_the_lines_dropped_are_said() {
+    for error in [Error::Dead, Error::Refused] {
+        let mut p = Paper::default();
+        let mut q = queued(&["one\n", "two\n"]);
+        assert_eq!(q.run(0, &mut p), None);
+        p.write = Some(error);
+        q.push("three\n".into());
+        q.push("four\n".into());
+        p.calls.clear();
+        assert_eq!(q.run(10, &mut p), Some(10 + RETRY_US), "{error:?}: the re-open waits RETRY_US");
+        assert_eq!(p.calls, ["write three\n"], "{error:?}: one call, then the queue goes");
+        assert_eq!((q.len(), q.dropped()), (0, 2), "{error:?}: both lines dropped and counted");
+        p.open = Some(error);
+        p.write = None;
+        p.calls.clear();
+        q.push("five\n".into());
+        assert_eq!(q.run(10 + RETRY_US, &mut p), Some(10 + 2 * RETRY_US), "{error:?}: the open refused");
+        assert_eq!(p.calls, ["open"], "{error:?}: one call a turn while the console is gone");
+        assert_eq!((q.len(), q.dropped()), (0, 3));
+        p.open = None;
+        p.calls.clear();
+        q.push("six\n".into());
+        assert_eq!(q.run(10 + 2 * RETRY_US, &mut p), None, "{error:?}: the console answers again");
+        assert_eq!(
+            p.calls,
+            [
+                "open",
+                "write steward: 3 console lines dropped: the console did not take them\n",
+                "write six\n"
+            ],
+            "{error:?}: the fid opened again, the count first"
+        );
+        assert_eq!(q.dropped(), 0);
+    }
+}
+
+/// The last turn, at the steward's exit, writes every line whatever is due, up to the first
+/// the console did not take.
+#[test]
+fn the_exit_s_last_turn_writes_the_lines_left_within_one_bound() {
+    let mut p = Paper::default();
+    let mut q = queued(&["a\n", "b\n"]);
+    p.write = Some(Error::Timeout);
+    assert_eq!(q.run(0, &mut p), Some(RETRY_US));
+    p.write = None;
+    p.calls.clear();
+    q.flush(&mut p);
+    assert_eq!(p.calls, ["write a\n", "write b\n"], "not due, written anyway");
+    assert!(q.is_empty());
+    p.write = Some(Error::Timeout);
+    q.push("c\n".into());
+    q.push("d\n".into());
+    p.calls.clear();
+    q.flush(&mut p);
+    assert_eq!(p.calls, ["write c\n"], "one bound, then the steward is gone");
 }
 
 /// The badge a session's own calls come on: its route in the core's index.
