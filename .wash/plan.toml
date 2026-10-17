@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 427
+revision = 435
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -2485,8 +2485,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "STEWARD3"
   needs = ["STEWARD3Z"]
   body = "Ruling: .wash/local/STEWARD3Z-ruling.md 'Q2'. Found by STEWARD4's six-principal manifest (keyd buckets=10, consoled 9, bootfsd 10, ipd 11, walfsd:data 10, walfsd:alice-secrets 9, erofsd:system 10 by init's rule, 7 domains + system callers): every shared server checks limits(buckets).fits(COST, BUDGET) against a compiled constant that holds six (erofsd 1.5 MiB, bootfsd 1 MiB, walfsd 4 MiB: 'the image's six buckets and not a seventh'), so each refuses to start and init reboots. Rule: a shared server's usable budget is its entry's pages x PAGE_SIZE less its heap cap and stack, checked at start with Limits::fits against buckets=N (BAD_LIMITS, init reboots, unchanged); the entry rule on walfsd.md takes its derivation form: an entry's pages are what its count of buckets at their caps needs plus heap cap and stack, rounded up to 256; a case's manifest sizes by the same rule, never by what its case uses. The manifest is the one source; the count enters the rule; no maximum is picked. The image's entries keep their pages where the arithmetic already holds (walfsd 1,280 pages = 1,202 of budget, six buckets and a seventh); the latency manifest's entries are recomputed (walfsd ~1,614 -> 1,792). Scope: erofsd, bootfsd, walfsd, littlefsd, keyd, ipd (consoled is 3Z's); each page's admission paragraph with the derivation and the image's arithmetic; init.md's entry rule; the bench host test holds every manifest in the tree to pages >= the count's need, beside 3Q's terms; steward-latency regains N = 4 and 16 and scheduling.md's 'With the real steward' table is completed beside the stand-in's 1/4/16 (coordinated with STEWARD4 through the orchestrator; the gate moves here from 3Z). Gates: the servers' host tests, the steward set, walfsd-quota, aio-many-reads-two, the six-principal boot, both widths; docs; the size budget. Size M; Tier A (admission); steward-red reviews."
-  state = "todo"
-  revision = 387
+  state = "active"
+  revision = 428
 
 [[node]]
   id = "B81"
@@ -2539,5 +2539,14 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "AGENTS"
   body = "Seen on train 52 (beamlet-lookup-host, 15.5 s: `redoubt/tests/console.rs` test input_nobody_reads_holds_no_idle_and_waits_for_the_next_reader panicked at console.rs:154:9 'the idle returned on input nobody reads' and :56:31) and recorded in .wash/local/CONW1-report.md:66 before: the same test failing under load, passing alone (5/5 alone on 3Z's tree; the fixture grants the console with a badge below FIRST_MINTED_BADGE, so 3Z's admission move is not in its path). B81 moved tests/system.rs to the fake kernel's held clock; console.rs still waits on the host's clock for the idle. Work: find the wait (the idle's bound; the test's assertion window) and move console.rs's tests to the held clock as B81 did for system.rs (Fake::hold_clock/tick at quiescence; B70/B74's rule), or make the test's expectation an event; prove 10x under load + 5x alone. Transcript: .tmp/train-52/transcript-rv64-beamlet-lookup-host.log (the failures block B81 now keeps). Files: userland/otp/redoubt/tests/console.rs (and its fixture), docs/userland/beamlet.md if the status line names the tests. Tier B (a test's verdict), reviewer kernel-red-3. Size S. Until it lands, this host test failing on a train is a known flake, rerun alone."
-  state = "todo"
-  revision = 425
+  state = "active"
+  revision = 429
+
+[[node]]
+  id = "B86"
+  title = "A seed sweep's parallel boots inside one q lease bind the same host port: --jobs 2 hands the second boot port 23000 again (hostfwd in use) and every later seed dies at 0.1 s"
+  template = "package"
+  parent = "AGENTS"
+  body = "Seen by STEWARD4's steward-latency sweep (2026-10-17): `--jobs 2` under one `q run` lease: the second concurrent boot was handed host port 23000 again (QEMU: hostfwd in use), seeds 2-20 died at 0.1 s, the sweep collapsed after seed 1. B77 made every [net] case lease its ports from q (`q run --ports N`, REDOUBT_PORTS=lo-hi, the bench binding its forwards inside the range), but B6's sweep runs its boots in parallel inside ONE lease and either every boot takes the range's first port or the sweep asks for no ports at all. Work: read tools/testbench's sweep (B6) and port binding (B77): make a sweep with --jobs N ask its lease for N x (ports per boot) and hand each boot a disjoint slice of REDOUBT_PORTS, or run each boot under its own `q run --ports` lease; a bench host test that two concurrent boots of one sweep bind different ports; docs/testbench.md's sweep and ports paragraphs say the rule. Evidence: STEWARD4's report and .tmp/steward4-logs/ (the implementer gives the lease's REDOUBT_PORTS, the --jobs count and the ports each boot bound). Until it lands, sweeps run serially (--jobs 1). Files: tools/testbench (sweep, qemu port binding), scripts/q if the lease must grow, docs/testbench.md. Tier A tooling (the bench's device/port map), reviewer kernel-red-3. Size S."
+  state = "done"
+  revision = 435
