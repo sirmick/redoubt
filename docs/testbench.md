@@ -342,7 +342,11 @@ clock the host's: `beamlet-lookup-host`'s system tests once let a bind's `ATTACH
 timeout run against a fixture server under a whole bench's load, and about one train in two the
 host's second ran out first; they hold the fake's clock now (`Fake::hold_clock`), so each such
 bound, a retry's `RETRY_US` and a file operation's `FILE_WAIT_US` included, is a step the test
-takes once the state it waits on is reached, and the ten-second waits are gone with the race. The kinds that boot
+takes once the state it waits on is reached, and the ten-second waits are gone with the race. Its
+`console.rs` tests held the host's clock the same way — one, `input_nobody_reads_holds_no_idle…`,
+read the idle's 200 ms deadline against the host and under load a read's submit timeout ran out,
+queued the read, and woke the idle early — and hold the fake's clock too now, each deadline a step,
+the console server's session bound crossed by the ticks that cross it. The kinds that boot
 nothing (`build`, `fmt`, `no-cruft`, the size and `unsafe` budgets, the docs checker, the Elixir
 oracles) have no clock, and are verdicts anywhere, but for a `timeout_secs`: as for a boot, a
 host-tests job or an Elixir case that only ran out of its deadline beside other work is rerun

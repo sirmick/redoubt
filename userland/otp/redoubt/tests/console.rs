@@ -4,6 +4,13 @@
 //! the input is the end, a VM away from it past the server's session bound keeps it, a write
 //! answered `busy` goes again after the retry interval, and the console costs one waiter thread
 //! and no other.
+//!
+//! The fake's clock is held: a bound of the platform's or the hub's, a submit's `SUBMIT_TIMEOUT_US`
+//! for the server to take a request and the `RETRY_US` that caps every wait while one is queued, a
+//! write's retry, a waiter's hand-over, the console server's session bound, and an idle's own
+//! deadline, is a step a test takes once the state it waits on is reached, never a race against the
+//! host's clock, which under a whole bench's load once let a read's submit run out: the read was
+//! queued, and the idle that should have slept to its deadline returned at the retry interval.
 
 use std::io::Write;
 use std::sync::{Arc, Mutex};
@@ -11,8 +18,41 @@ use std::sync::{Arc, Mutex};
 use beamlet_redoubt::Redoubt;
 use beamlet_redoubt::fixture::{self, ConsoleServer, Dirs};
 use beamlet_vm::platform::{ConsoleInput, Platform};
-use redoubt_client::aio::RETRY_US;
+use redoubt_client::aio::{HAND_OVER_US, RETRY_US};
 use redoubt_fake_kernel::fake;
+use redoubt_rt::server::ninep::COLLECT_WAIT;
+
+/// A test's turn: the clock is the binary's, held once (`Fake::hold_clock`), and a tick is a step
+/// of every test's deadlines at once, taken only when every thread of the fake is in a wait; so
+/// the tests run one at a time, each taking its own steps. Held for the test's duration.
+fn turn() -> std::sync::MutexGuard<'static, ()> {
+    static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
+    let turn = ONE_AT_A_TIME.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    fake().hold_clock();
+    turn
+}
+
+/// Idles with nothing that should wake the VM: the one step to the deadline is taken by a helper
+/// thread once the VM waits on it (a tick waits for every thread of the fake to be in a wait, the
+/// VM's among them). An idle that returns with the clock short of the deadline returned on
+/// something else — the bug this guards — and fails with `why`.
+fn idle_to(p: &mut Redoubt, us: u64, why: &str) {
+    let deadline = p.monotonic_us() + us;
+    let step = std::thread::spawn(move || fake().tick(us));
+    p.idle(Some(deadline));
+    assert!(p.monotonic_us() >= deadline, "{why}");
+    step.join().unwrap();
+}
+
+/// Advances the clock to `us` from now, then idles: the idle returns at once, the deadline already
+/// reached, so a VM with nothing pending waits no longer than its deadline. No helper thread and
+/// no block, for a wait nothing but the clock could end.
+fn idle_past(p: &mut Redoubt, us: u64) {
+    let deadline = p.monotonic_us() + us;
+    fake().tick(us);
+    p.idle(Some(deadline));
+    assert!(p.monotonic_us() >= deadline);
+}
 
 /// The console server's screen, which a test reads back.
 #[derive(Clone, Default)]
@@ -43,6 +83,7 @@ fn with_platform_on(
     start: impl FnOnce(Box<dyn std::io::Read + Send>, Box<dyn Write + Send>) -> ConsoleServer,
     test: impl FnOnce(&mut Redoubt) + Send + 'static,
 ) -> (Vec<u8>, Vec<u64>) {
+    let _turn = turn();
     let f = fake();
     let screen = Screen::default();
     let console = start(Box::new(input), Box::new(screen.clone()));
@@ -149,9 +190,7 @@ fn input_nobody_reads_holds_no_idle_and_waits_for_the_next_reader() {
         keys.write_all(b"y").unwrap();
         p.idle(None);
         p.console_listening(false);
-        let deadline = p.monotonic_us() + 200_000;
-        p.idle(Some(deadline));
-        assert!(p.monotonic_us() >= deadline, "the idle returned on input nobody reads");
+        idle_to(p, 200_000, "the idle returned on input nobody reads");
         // A reader again: what was held first, then the rest.
         p.console_listening(true);
         assert_eq!(p.console_read(), ConsoleInput::Data(b"y".to_vec()));
@@ -168,15 +207,31 @@ fn input_nobody_reads_holds_no_idle_and_waits_for_the_next_reader() {
     });
 }
 
+/// A VM away from its console past the server's session bound keeps it: a read is parked at the
+/// server, and the hub's waiter keeps a completion call parked there to collect its answer. While
+/// the VM is away — it neither reads nor idles — the clock passes the bound. The server answers
+/// that parked completion call once the bound is reached and the waiter parks the next, so the
+/// session lives on; only a bound reached with no call parked ends it, as when a client dies.
 #[test]
 fn a_vm_busy_past_the_session_bound_keeps_its_console() {
     let (keyboard, mut keys) = std::io::pipe().unwrap();
     with_platform(keyboard, move |p| {
-        // A read parked at the server and a write's answer on its way, then the VM's thread is
-        // away from the platform longer than the console server's session bound.
+        // The read parks at the server, with the waiter's completion call to collect it; nothing
+        // is typed, so that call stays parked. The clock jumps to just under the bound (the call's
+        // deadline is not reached, so nothing is due), then crosses it a retry at a time, each step
+        // followed by the VM's look: the server answers its parked call a retry past the bound — a
+        // small overdue, so its reply still reaches the waiter, which parks the next — rather than
+        // one so stale the waiter has moved on and the session ends under it.
         assert_eq!(p.console_read(), ConsoleInput::Nothing);
-        p.console_write(b"> ");
-        std::thread::sleep(std::time::Duration::from_secs(12));
+        fake().tick(COLLECT_WAIT - RETRY_US);
+        let now = p.monotonic_us();
+        p.idle(Some(now));
+        let until = p.monotonic_us() + 5 * RETRY_US;
+        while p.monotonic_us() < until {
+            fake().tick(RETRY_US);
+            let now = p.monotonic_us();
+            p.idle(Some(now));
+        }
         keys.write_all(b"ls\n").unwrap();
         let mut read = Vec::new();
         while read != b"ls\n" {
@@ -201,10 +256,15 @@ fn a_write_answered_busy_goes_again_after_the_retry_interval() {
         |i, o| fixture::console_busy(i, o, 2),
         |p| {
             p.console_write(b"third time lucky\r\n");
-            // Idle past the two retries, as the VM does with nothing to run.
+            // Idle past the two retries, as the VM does with nothing to run: a step of the retry
+            // interval at a time, each followed by a look at what arrived (a tick waits for every
+            // other thread of the fake to be in a wait, so the answer to the write before it is
+            // there), so a retry that came due goes out.
             let until = p.monotonic_us() + 10 * RETRY_US;
             while p.monotonic_us() < until {
-                p.idle(Some(until));
+                fake().tick(RETRY_US);
+                let now = p.monotonic_us();
+                p.idle(Some(now));
             }
         },
     );
@@ -228,18 +288,14 @@ fn an_end_of_input_already_waiting_ends_the_idle_that_takes_it() {
         // The keyboard goes away: the read's answer is the end, queued at the VM's endpoint while
         // the VM is away.
         drop(keys);
-        std::thread::sleep(std::time::Duration::from_millis(300));
+        // Nobody steps the clock: the idle blocks on the end and returns short of its deadline, on
+        // the end (one that slept on it to the deadline would be called stuck).
         let deadline = p.monotonic_us() + 10_000_000;
         p.idle(Some(deadline));
-        assert!(
-            deadline.saturating_sub(p.monotonic_us()) > 5_000_000,
-            "the idle slept on the end it had taken"
-        );
+        assert!(p.monotonic_us() < deadline, "the idle slept on the end it had taken");
         assert_eq!(p.console_read(), ConsoleInput::Eof);
         // Read once, the end is no longer news: an idle after it sleeps to its deadline.
-        let deadline = p.monotonic_us() + 20_000;
-        p.idle(Some(deadline));
-        assert!(p.monotonic_us() >= deadline);
+        idle_past(p, 20_000);
     });
 }
 
@@ -253,6 +309,7 @@ fn the_console_s_size_is_its_server_s() {
 /// size reaches the VM through `console_resized`, once, and an idle returns for it.
 #[test]
 fn a_change_of_the_console_s_size_reaches_the_vm_once_reading_has_begun() {
+    let _turn = turn();
     let f = fake();
     let (keyboard, keys) = std::io::pipe().unwrap();
     let console = fixture::console_channel(Box::new(keyboard), Box::new(Screen::default()));
@@ -285,22 +342,14 @@ fn a_change_of_the_console_s_size_reaches_the_vm_once_reading_has_begun() {
 }
 
 #[test]
-fn idling_with_a_deadline_returns_by_it() {
-    with_platform(std::io::empty(), |p| {
-        let deadline = p.monotonic_us() + 20_000;
-        p.idle(Some(deadline));
-        assert!(p.monotonic_us() >= deadline);
-    });
-}
+fn idling_with_a_deadline_returns_by_it() { with_platform(std::io::empty(), |p| idle_past(p, 20_000)); }
 
 #[test]
 fn after_the_console_ends_idling_still_waits_for_its_deadline() {
     with_platform(std::io::empty(), |p| {
         assert_eq!(read_to_end(p), b"");
         // A timer after the end, a logger's or a sleep's: the VM sleeps until it, not spinning.
-        let deadline = p.monotonic_us() + 20_000;
-        p.idle(Some(deadline));
-        assert!(p.monotonic_us() >= deadline);
+        idle_past(p, 20_000);
     });
 }
 
@@ -311,6 +360,7 @@ fn there_is_no_wall_clock() { with_platform(std::io::empty(), |p| assert_eq!(p.s
 /// starts without one and serves the console as one that has gone.
 #[test]
 fn without_a_console_writes_are_dropped_reads_end_and_the_size_is_unknown() {
+    let _turn = turn();
     let f = fake();
     let (pid, block) = fixture::lease(&[], &[]);
     let vm = f.run(pid, move || {
@@ -327,9 +377,7 @@ fn without_a_console_writes_are_dropped_reads_end_and_the_size_is_unknown() {
         assert_eq!(p.console_read(), ConsoleInput::Eof);
         // Nothing will arrive: the idle returns, and a timer's deadline still holds it.
         p.idle(None);
-        let deadline = p.monotonic_us() + 20_000;
-        p.idle(Some(deadline));
-        assert!(p.monotonic_us() >= deadline);
+        idle_past(&mut p, 20_000);
         assert_eq!(p.requests(), 0);
         0
     });
@@ -340,6 +388,7 @@ fn without_a_console_writes_are_dropped_reads_end_and_the_size_is_unknown() {
 /// the result line has nowhere to go.
 #[test]
 fn a_vm_without_a_console_runs_its_module_to_exit() {
+    let _turn = turn();
     let f = fake();
     let (pid, block) = fixture::lease(&[], &[]);
     let fixtures = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../vm/tests/fixtures");
