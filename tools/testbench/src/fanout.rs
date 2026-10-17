@@ -14,7 +14,7 @@ use std::time::Instant;
 
 use anyhow::{Context, Result};
 
-use crate::build::{Builder, TestBinary, last_lines, libtest_args};
+use crate::build::{Builder, TestBinary, last_lines, libtest_args, test_failure};
 use crate::case::{Each, Fanout, HostTests};
 
 /// The exit statuses of a command `timeout` ended, here and for an Elixir case: by TERM, or by
@@ -311,7 +311,7 @@ fn run_one(
         Ok(status) if timeout.is_some() && status.code().is_some_and(|c| TIMED_OUT.contains(&c)) => {
             Some(format!("ran past its deadline of {} s", timeout.unwrap_or_default()))
         }
-        Ok(status) => Some(format!("{status}:\n      {}", last_lines(&text, 12))),
+        Ok(status) => Some(format!("{status}:\n      {}", test_failure(&text, ""))),
     };
     Ended { value: job.value, failure, wall, tests }
 }

@@ -66,7 +66,7 @@ use redoubt_rt::abi::{FOREVER, Handle, PAGE_SIZE};
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::ipc::Buffer;
 use redoubt_rt::startup::Startup;
-pub use serve::LAUNCH_BADGE;
+pub use serve::{LAUNCH_BADGE, REQUEST_WAIT_US};
 
 use crate::io::Io;
 
