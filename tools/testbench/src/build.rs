@@ -429,12 +429,46 @@ impl Builder {
         if output.status.success() {
             return Ok(None);
         }
-        // The last lines carry the failed assertion and the test's name; the rest is noise.
         let out = String::from_utf8_lossy(&output.stdout);
         let err = String::from_utf8_lossy(&output.stderr);
-        Ok(Some(last_lines(&[out.trim(), err.trim()].join("\n"), 12)))
+        Ok(Some(test_failure(&out, &err)))
     }
 }
+
+/// How many lines of a failures block are kept at most: a block past it keeps its head, the
+/// first failures' panics, and its tail, the names list and the `test result` line.
+const FAILURES_KEPT: usize = 400;
+
+/// What a failed `cargo test` is reported by, in the case's log: the harness's failures block
+/// from `stdout` (from its first `failures:` line: each failed test's panic, then the names and
+/// the `test result` line), or `stdout`'s last lines when a binary ended without one (a crash);
+/// then Cargo's own account from `stderr`, its last `error` line on (which test file failed, and
+/// how the binary ended), never its warnings. A train's run directory is pruned; this block is
+/// what the kept job log holds of the failure.
+pub fn test_failure(stdout: &str, stderr: &str) -> String {
+    let out: Vec<&str> = stdout.trim().lines().collect();
+    let mut kept: Vec<&str> = match out.iter().position(|line| *line == "failures:") {
+        Some(first) => out[first..].to_vec(),
+        None => tail(&out, 12).to_vec(),
+    };
+    let elision;
+    if kept.len() > FAILURES_KEPT {
+        elision = format!("... {} lines omitted ...", kept.len() - FAILURES_KEPT);
+        let end = kept.split_off(kept.len() - 20);
+        kept.truncate(FAILURES_KEPT - 20);
+        kept.push(&elision);
+        kept.extend(end);
+    }
+    let err: Vec<&str> = stderr.trim().lines().collect();
+    kept.extend(match err.iter().rposition(|line| line.starts_with("error")) {
+        Some(last) => &err[last..],
+        None => tail(&err, 3),
+    });
+    kept.join("\n      ")
+}
+
+/// The last `n` of `lines`.
+fn tail<'a>(lines: &'a [&'a str], n: usize) -> &'a [&'a str] { &lines[lines.len().saturating_sub(n)..] }
 
 /// What a host-tests case tells its test binaries: its `filter`s, then a `--skip` for each of its
 /// `skip`s.
@@ -703,6 +737,64 @@ mod tests {
         assert_eq!(root, format!("0{}", &"ab".repeat(32)[1..]));
         let other = Verified { name: "data".into(), ..v };
         assert!(pin_roots(image.as_slice(), &[other], false).is_err(), "data is not verified");
+    }
+
+    /// A failed `cargo test` is kept by its failures block, the failed test's panic and name and
+    /// the `test result` line, and Cargo's line naming the test file, not by the warnings Cargo
+    /// printed last (train 49's beamlet-lookup-host log held twelve of those and no test name).
+    #[test]
+    fn a_host_tests_failure_keeps_the_failures_block_and_not_cargos_warnings() {
+        let stdout = "\nrunning 27 tests\n..........F................\nfailures:\n\n\
+            ---- a_fresh_connection_at_the_bound_waits_for_an_ended_waiters_hand_over stdout ----\n\n\
+            thread 'a_fresh_connection_at_the_bound_waits_for_an_ended_waiters_hand_over' panicked at \
+            redoubt/tests/system.rs:351:13:\nthe VM's thread was held\n\n\nfailures:\n    \
+            a_fresh_connection_at_the_bound_waits_for_an_ended_waiters_hand_over\n\n\
+            test result: FAILED. 26 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.80s\n\n";
+        let warning = "warning: use of deprecated constant `core::i32::MAX`: replaced by the `MAX` associated constant on this type";
+        let stderr = format!(
+            "{}\nerror: test failed, to rerun pass `-p beamlet-redoubt --test system`\n",
+            vec![format!("{warning}\n   --> vm/src/bif/erlang.rs:1:1\n    |\n    = note: `#[warn(deprecated)]` on by default\n"); 20].join("")
+        );
+        let kept = test_failure(stdout, &stderr);
+        assert!(kept.starts_with("failures:\n      \n      ---- a_fresh_connection_at_the_bound"), "{kept}");
+        assert!(kept.contains("the VM's thread was held"), "{kept}");
+        assert!(kept.contains("test result: FAILED. 26 passed; 1 failed"), "{kept}");
+        assert!(
+            kept.ends_with("error: test failed, to rerun pass `-p beamlet-redoubt --test system`"),
+            "{kept}"
+        );
+        assert!(!kept.contains("warning"), "{kept}");
+        assert!(
+            kept.lines().skip(1).all(|line| line.starts_with("      ")),
+            "continuation lines indent:\n{kept}"
+        );
+
+        // A binary that crashed printed no block: its last lines, then how Cargo saw it end.
+        let crashed = "\nrunning 3 tests\n..\n";
+        let stderr = format!(
+            "{warning}\nerror: test failed, to rerun pass `-p beamlet-vm --test system`\n\nCaused by:\n  \
+             process didn't exit successfully: `target/debug/deps/system-1` (signal: 6, SIGABRT: process abort signal)\n"
+        );
+        let kept = test_failure(crashed, &stderr);
+        assert_eq!(
+            kept,
+            "running 3 tests\n      ..\n      error: test failed, to rerun pass `-p beamlet-vm --test system`\n      \n      \
+             Caused by:\n        process didn't exit successfully: `target/debug/deps/system-1` (signal: 6, SIGABRT: process abort signal)"
+        );
+
+        // A block past the bound keeps its first panics and its names list, and says what it dropped.
+        let long = format!(
+            "running 500 tests\nfailures:\n{}\nfailures:\n    t0\n    t1\n\ntest result: FAILED.",
+            (0..600)
+                .map(|i| format!("---- t{i} stdout ----\nthread 't{i}' panicked"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        let kept = test_failure(&long, "error: test failed");
+        assert!(kept.starts_with("failures:\n      ---- t0 stdout ----"), "{kept}");
+        assert!(kept.contains("... 806 lines omitted ..."), "{kept}");
+        assert!(kept.ends_with("test result: FAILED.\n      error: test failed"), "{kept}");
+        assert_eq!(kept.lines().count(), FAILURES_KEPT + 2, "{kept}");
     }
 
     /// A Miri case runs the named test files under nightly Miri with isolation off; a plain case

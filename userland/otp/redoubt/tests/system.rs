@@ -4,18 +4,23 @@
 //! typed call goes out on a pool thread and comes back as an event; a served endpoint's requests
 //! arrive with their caller's badge, account and labels, and one never answered is answered by the
 //! serve thread at its deadline; a launch's end comes back as an event naming its job.
+//!
+//! The fake's clock is held: a bound of the platform's, a bind's `ATTACH_US`, a call's timeout, a
+//! file operation's `FILE_WAIT_US` or a retry's `RETRY_US` after a place frees, is a step a test
+//! takes once the state it waits on is reached, never a race against the host's clock, which
+//! under a whole bench's load once ran a bind's second out before the fixture server answered.
 
 use std::sync::{Arc, Mutex};
 
 use beamlet_redoubt::fixture::{self, Dirs, Volume};
 use beamlet_redoubt::io::MAX_WAITERS;
-use beamlet_redoubt::system::HAND_US;
-use beamlet_redoubt::system::MAX_BINDINGS;
-use beamlet_redoubt::{FILE_WAIT_US, Redoubt};
+use beamlet_redoubt::system::{ATTACH_US, HAND_US, MAX_BINDINGS};
+use beamlet_redoubt::{FILE_WAIT_US, REQUEST_WAIT_US, Redoubt};
 use beamlet_vm::platform::{
     BudgetSpec, Event, FileError, Files, Identity, Launch, Message, Object, OpenMode, Platform, Refused,
     System,
 };
+use redoubt_client::aio::RETRY_US;
 use redoubt_fake_kernel::fake;
 use redoubt_rt::abi::{FOREVER, Handle};
 use redoubt_rt::handle::Endpoint;
@@ -26,12 +31,23 @@ use redoubt_rt::startup::Startup;
 /// The asker the tests' calls are made as.
 const ME: u64 = 7;
 
+/// A test's turn: the clock is the binary's, held once (`Fake::hold_clock`), and a tick is a step
+/// of every test's deadlines at once, taken only when every thread of the fake is in a wait; so
+/// the tests run one at a time, each taking its own steps. Held for the test's duration.
+fn turn() -> std::sync::MutexGuard<'static, ()> {
+    static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
+    let turn = ONE_AT_A_TIME.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    fake().hold_clock();
+    turn
+}
+
 /// Runs `test` on a platform with `/dev/cons`, a blank volume at `/home/alice`, and what `extra`
 /// hands it (by name), on an unlabelled session process (the console serves no labelled one).
 fn with_session(
     extra: impl FnOnce(usize) -> Vec<(&'static str, Handle)> + Send + 'static,
     test: impl FnOnce(&mut Redoubt, usize) + Send + 'static,
 ) {
+    let _turn = turn();
     let f = fake();
     let console = fixture::console(Box::new(std::io::empty()), Box::new(Screen::default()));
     let volume: Volume = fixture::volume(2048, &["buckets=4"]);
@@ -115,12 +131,83 @@ fn ask<T>(
     }
 }
 
+/// As [`ask`], for a call the server answers `busy`: each answer is followed by a retry
+/// [`RETRY_US`] later on the clock, so the wait steps the clock ([`step_until`]), and a server
+/// that is never free is given up on at [`FILE_WAIT_US`] of steps. Not for a server at work: a
+/// step is taken at every quiescent instant, a server's own calls among them, so its work would
+/// run the clock out.
+fn ask_stepping<T>(
+    p: &mut Redoubt,
+    mut call: impl FnMut(&mut Redoubt) -> Result<T, FileError>,
+) -> Result<T, FileError> {
+    loop {
+        p.asker(Some(ME));
+        let r = call(p);
+        p.asker(None);
+        if r.as_ref().err() != Some(&FileError::Later) {
+            return r;
+        }
+        // `finished` hands each answer over once: looked at once a step.
+        let answered = step_until(p, 2 * FILE_WAIT_US, |p| p.finished() == Some(ME));
+        assert!(answered, "no answer in twice FILE_WAIT_US of steps");
+    }
+}
+
+/// Makes `call` as [`ME`], which parks (`Later`); takes the one step to its bound, [`FILE_WAIT_US`],
+/// as the clock does on the machine; and returns what the operation then answers.
+fn park_and_expire<T>(
+    p: &mut Redoubt,
+    mut call: impl FnMut(&mut Redoubt) -> Result<T, FileError>,
+) -> Result<T, FileError> {
+    p.asker(Some(ME));
+    let r = call(p);
+    p.asker(None);
+    assert!(matches!(r, Err(FileError::Later)), "the call did not park");
+    fake().tick(FILE_WAIT_US);
+    while p.finished() != Some(ME) {
+        p.idle(None);
+    }
+    p.asker(Some(ME));
+    let r = call(p);
+    p.asker(None);
+    r
+}
+
+/// Lets whatever is in flight land, as a session's idle between requests does: ten steps of the
+/// clock, each followed by a look at what arrived, so a retry that was due goes out and an answer
+/// that was coming is taken.
+fn settle(p: &mut Redoubt) {
+    for _ in 0..10 {
+        fake().tick(20_000);
+        let now = p.monotonic_us();
+        p.idle(Some(now));
+    }
+}
+
+/// Steps the clock by [`RETRY_US`] at a time, looking at what arrived after each as the VM's
+/// idle does, until `done` holds or `bound` µs have passed; whether it held. A tick waits for
+/// every other thread of the fake to be in a wait, so what a thread was about to send, a
+/// waiter's hand-over, has been sent by the look that follows.
+fn step_until(p: &mut Redoubt, bound: u64, mut done: impl FnMut(&mut Redoubt) -> bool) -> bool {
+    let until = p.monotonic_us() + bound;
+    while !done(p) {
+        if p.monotonic_us() >= until {
+            return false;
+        }
+        fake().tick(RETRY_US);
+        let now = p.monotonic_us();
+        p.idle(Some(now));
+    }
+    true
+}
+
 fn message(words: [u64; 4], buffer: Option<&[u8]>) -> Message {
     Message { words, buffer: buffer.map(<[u8]>::to_vec), handles: Vec::new() }
 }
 
 #[test]
 fn the_labels_are_the_kernels_stamp_on_the_vms_own_send() {
+    let _turn = turn();
     let f = fake();
     for labels in [&[][..], &[5, 9]] {
         // The console of the session's own label set, which the session may write.
@@ -140,6 +227,7 @@ fn the_labels_are_the_kernels_stamp_on_the_vms_own_send() {
 
 #[test]
 fn a_labelled_sessions_child_takes_its_labels_and_runs() {
+    let _turn = turn();
     let f = fake();
     for labels in [&[][..], &[5, 9]] {
         let console =
@@ -278,11 +366,7 @@ fn servers_bound_and_ended_one_after_another_never_run_out_of_waiters() {
                 assert_eq!(volumes.lock().unwrap().remove(0).stop(), redoubt_rt::exit::OK);
                 // As a session idles between pipelines: the ended server's waiter hands over its
                 // end, which the VM takes, and the hub lets the waiter go.
-                let until = p.monotonic_us() + 5_000_000;
-                while p.waiters() != waiters && p.monotonic_us() < until {
-                    let soon = p.monotonic_us() + 10_000;
-                    p.idle(Some(soon));
-                }
+                step_until(p, 5_000_000, |p| p.waiters() == waiters);
                 assert_eq!(p.waiters(), waiters, "server {i}: its waiter handed its end over");
                 // The waiter closes its handle as it returns, just after that: waited for, not
                 // sampled.
@@ -334,34 +418,34 @@ fn a_fresh_connection_at_the_bound_waits_for_an_ended_waiters_hand_over() {
             }
             assert_eq!(p.waiters(), MAX_WAITERS);
             // A fresh server needs a place while every one is held; the servers holding them end
-            // a moment later, as a session's ended pipeds do under load, their waiters' hand-overs
-            // still to come when the request is made.
+            // once the request is made, as a session's ended pipeds do under load, their waiters'
+            // hand-overs still to come when it is.
             let ending: Vec<Volume> = (0..places).map(|_| volumes.lock().unwrap().remove(0)).collect();
+            let (end, told) = std::sync::mpsc::channel();
             let ender = std::thread::spawn(move || {
-                std::thread::sleep(std::time::Duration::from_millis(100));
+                told.recv().unwrap();
                 ending.into_iter().map(Volume::stop).collect::<Vec<_>>()
             });
             let (fresh, _) = p.lookup(&format!("s{places}")).unwrap();
             p.bind("/fresh", &fresh).unwrap();
-            // The call does not hold the VM's thread for the hand-over: it answers `Later` at once.
-            let started = std::time::Instant::now();
+            // The call does not hold the VM's thread for the hand-over: it answers `Later` while
+            // every place is still held, the servers holding them not yet told to end.
             p.asker(Some(ME));
             assert_eq!(p.make_dir("/fresh/p"), Err(FileError::Later));
             p.asker(None);
-            assert!(
-                started.elapsed() < std::time::Duration::from_micros(HAND_US),
-                "the VM's thread was held"
-            );
+            assert_eq!(p.waiters(), MAX_WAITERS, "a place was free");
+            end.send(()).unwrap();
+            // Served once a hand-over frees a place: the servers end and their waiters hand over
+            // (steps of the clock between looks, nothing at work meanwhile), the request goes out
+            // `RETRY_US` later, the one step the test then takes, and the fresh server answers.
+            assert!(step_until(p, 5_000_000, |p| p.waiters() < MAX_WAITERS), "no place freed");
+            f.tick(RETRY_US);
             while p.finished() != Some(ME) {
                 p.idle(None);
             }
             p.asker(Some(ME));
             assert_eq!(p.make_dir("/fresh/p"), Ok(()));
             p.asker(None);
-            assert!(
-                started.elapsed() >= std::time::Duration::from_millis(100),
-                "served before the hand-over"
-            );
             assert!(ender.join().unwrap().iter().all(|code| *code == redoubt_rt::exit::OK));
             assert_eq!(volumes.lock().unwrap().remove(0).stop(), redoubt_rt::exit::OK);
         },
@@ -387,12 +471,7 @@ fn a_fresh_connection_past_the_bound_is_refused_emfile_and_the_live_ones_still_s
             }
             let (fresh, _) = p.lookup(&format!("s{places}")).unwrap();
             p.bind("/fresh", &fresh).unwrap();
-            let started = std::time::Instant::now();
-            assert_eq!(ask(p, |p| p.make_dir("/fresh/p")), Err(FileError::Emfile));
-            assert!(
-                started.elapsed() >= std::time::Duration::from_micros(FILE_WAIT_US),
-                "failed before the bound"
-            );
+            assert_eq!(park_and_expire(p, |p| p.make_dir("/fresh/p")), Err(FileError::Emfile));
             assert_eq!(ask(p, |p| p.make_dir("/s0/q")), Ok(()));
             for _ in 0..=places {
                 assert_eq!(volumes.lock().unwrap().remove(0).stop(), redoubt_rt::exit::OK);
@@ -420,20 +499,12 @@ fn a_request_unanswered_past_file_wait_fails_etimedout_and_the_connection_still_
             let out = ask(p, |p| p.open("/sink/out", how)).unwrap();
             // The sink holds the read: the request is taken and stays unanswered.
             hold.store(true, std::sync::atomic::Ordering::SeqCst);
-            let started = std::time::Instant::now();
-            assert_eq!(ask(p, |p| p.read(held, 16)), Err(FileError::Etimedout));
-            assert!(
-                started.elapsed() >= std::time::Duration::from_micros(FILE_WAIT_US),
-                "failed before the bound"
-            );
-            // The answer comes late, to no one; the connection serves the next request.
+            assert_eq!(park_and_expire(p, |p| p.read(held, 16)), Err(FileError::Etimedout));
+            // The answer comes late, to no one; the connection serves the next request. Until the
+            // sink lets the read go it holds the connection's one request, so a write made before
+            // then is `busy` and retried `RETRY_US` later: steps the test takes.
             hold.store(false, std::sync::atomic::Ordering::SeqCst);
-            let until = p.monotonic_us() + 200_000;
-            while p.monotonic_us() < until {
-                let step = p.monotonic_us() + 20_000;
-                p.idle(Some(step));
-            }
-            assert_eq!(ask(p, |p| p.write(out, b"still here")), Ok(()));
+            assert_eq!(ask_stepping(p, |p| p.write(out, b"still here")), Ok(()));
             assert_eq!(taken.lock().unwrap().as_slice(), b"still here");
             p.close(held);
             p.close(out);
@@ -458,20 +529,12 @@ fn a_request_busy_past_file_wait_fails_busy() {
             p.bind("/sink", &sink).unwrap();
             let how = OpenMode { write: true, ..OpenMode::default() };
             let out = ask(p, |p| p.open("/sink/out", how)).unwrap();
-            let started = std::time::Instant::now();
-            assert_eq!(ask(p, |p| p.write(out, b"never taken")), Err(FileError::Ebusy));
-            assert!(
-                started.elapsed() >= std::time::Duration::from_micros(FILE_WAIT_US),
-                "failed before the bound"
-            );
+            // Every `busy` is followed by a retry `RETRY_US` later (`ask_stepping` takes each
+            // step), until the bound, `FILE_WAIT_US` of them later.
+            let begun = p.monotonic_us();
+            assert_eq!(ask_stepping(p, |p| p.write(out, b"never taken")), Err(FileError::Ebusy));
+            assert!(p.monotonic_us() - begun >= FILE_WAIT_US, "failed before the bound");
             // A retry in flight at the bound still reaches the server; after that, none does.
-            let settle = |p: &mut Redoubt| {
-                let until = p.monotonic_us() + 200_000;
-                while p.monotonic_us() < until {
-                    let step = p.monotonic_us() + 20_000;
-                    p.idle(Some(step));
-                }
-            };
             settle(p);
             let tried = writes.lock().unwrap().len();
             assert!(tried > 1, "the write was retried: {tried} tries");
@@ -590,7 +653,12 @@ fn a_forgotten_connections_requests_reach_no_later_holder_of_its_index() {
             let how = OpenMode { write: true, create: true, ..OpenMode::default() };
             let file = ask(p, |p| p.open("/dev/pipe/f", how)).unwrap();
             let waiters = p.waiters();
+            // The fake does not run the child, so the server outlives its budget here, and the
+            // destroy waits `HAND_US` for a hand-over that does not come (`Io::forget`): the one
+            // step the test takes, once the destroy waits on it.
+            let bound = std::thread::spawn(move || f.tick(HAND_US));
             p.budget_destroy(&first).unwrap();
+            bound.join().unwrap();
             let (_, event) = next(p);
             assert!(matches!(event, Event::Exit { job: 1, cause: "killed", .. }));
             // A second server, which the test plays: it answers two calls, each with a handle it
@@ -636,9 +704,11 @@ fn a_forgotten_connections_requests_reach_no_later_holder_of_its_index() {
             // The stale file's clunk, as its term's collection sends it: refused on the ended
             // session; sent, it would go out on the index and reach the second server.
             p.close(file);
+            // Nothing is awaited: ten looks at what arrived, a moment of the host's apart, so a
+            // request that was sent anyway has reached the probe by the last.
             for _ in 0..10 {
-                let soon = p.monotonic_us() + 10_000;
-                p.idle(Some(soon));
+                let now = p.monotonic_us();
+                p.idle(Some(now));
                 std::thread::sleep(std::time::Duration::from_millis(5));
             }
             assert_eq!(
@@ -651,13 +721,8 @@ fn a_forgotten_connections_requests_reach_no_later_holder_of_its_index() {
             let before = f.held(pid).0;
             assert_eq!(volume.stop(), redoubt_rt::exit::OK);
             // The VM takes the waiter's last hand-over by idling, and the hub lets it go; then the
-            // waiter closes its handle, on its thread: waited for, not sampled. The bounds are
-            // synchronization: the whole binary's tests run beside this one.
-            let until = p.monotonic_us() + 5_000_000;
-            while p.waiters() == waiters && p.monotonic_us() < until {
-                let soon = p.monotonic_us() + 10_000;
-                p.idle(Some(soon));
-            }
+            // waiter closes its handle, on its thread: waited for, not sampled.
+            step_until(p, 5_000_000, |p| p.waiters() != waiters);
             assert_ne!(p.waiters(), waiters, "the waiter handed its end over");
             let closed = f.wait_held(pid, before - 1, std::time::Duration::from_secs(5));
             assert!(closed, "the waiter's handle, closed as it returned; the VM holds {}", f.held(pid).0);
@@ -680,11 +745,15 @@ fn a_bind_to_a_server_that_never_answers_is_refused_within_its_bound() {
             let endpoint = f.endpoint(silent);
             vec![("silent", f.copy(silent, endpoint, pid))]
         },
-        |p, _| {
+        move |p, _| {
             let (silent, _) = p.lookup("silent").unwrap();
-            let begun = std::time::Instant::now();
+            let begun = p.monotonic_us();
+            // The attach's bound is the one step the test takes, once the bind waits on it: a tick
+            // waits for every thread of the fake, the VM's included, to be in a wait.
+            let bound = std::thread::spawn(move || f.tick(ATTACH_US));
             assert_eq!(p.bind("/s", &silent).err(), Some(Refused("not_a_connection")));
-            assert!(begun.elapsed() < std::time::Duration::from_secs(5), "{:?}", begun.elapsed());
+            bound.join().unwrap();
+            assert_eq!(p.monotonic_us() - begun, ATTACH_US, "refused at its bound, not before");
         },
     );
 }
@@ -856,14 +925,15 @@ fn a_request_already_waiting_ends_the_idle_that_takes_it() {
             // idles: long enough for the serve thread on any host; too short, and the wake-up
             // arrives during the idle instead, which is the easy case.
             std::thread::sleep(std::time::Duration::from_millis(300));
+            // On the held clock an idle that slept on the request it had taken would wait for a
+            // change that never comes, and the fake would call the test stuck: returning is the
+            // verdict.
             let deadline = p.monotonic_us() + 10_000_000;
             p.idle(Some(deadline));
-            let left = deadline.saturating_sub(p.monotonic_us());
             let (_, Event::Request { request, .. }) = p.poll().expect("the idle handed the request over")
             else {
                 panic!("not a request")
             };
-            assert!(left > 5_000_000, "the idle slept on the request it had taken");
             p.reply(&request.unwrap(), message([0, 5, 0, 0], None)).unwrap();
             assert_eq!(caller.join().unwrap(), 5);
         },
@@ -892,8 +962,10 @@ fn a_request_never_answered_is_answered_by_the_serve_thread_at_its_deadline() {
                 reply.words[0] as u32
             });
             let (_, event) = next(p);
-            // Dropped unanswered: the VM holds nothing, and the thread answers it `malformed`.
+            // Dropped unanswered: the VM holds nothing, and the thread answers it `malformed` at
+            // its deadline, `REQUEST_WAIT_US` from its parking: the step the test takes.
             drop(event);
+            f.tick(REQUEST_WAIT_US);
             assert_eq!(caller.join().unwrap(), 1);
         },
     );
@@ -987,6 +1059,8 @@ fn a_sessions_identity_is_read_from_its_arguments() {
 /// none, as one under `init`, that it is no session.
 #[test]
 fn the_platform_tells_a_session_its_identity() {
+    // This session's turn; `with_session` below takes its own.
+    let turn = turn();
     let f = fake();
     let console = fixture::console(Box::new(std::io::empty()), Box::new(std::io::sink()));
     let volume = fixture::volume(2048, &["buckets=4"]);
@@ -1003,6 +1077,7 @@ fn the_platform_tells_a_session_its_identity() {
     assert_eq!(volume.stop(), redoubt_rt::exit::OK);
     f.destroy(console.pid, console.endpoint);
     let _ = console.thread.join();
+    drop(turn);
     with_session(|_| Vec::new(), |p, _| assert_eq!(p.identity(), None));
 }
 

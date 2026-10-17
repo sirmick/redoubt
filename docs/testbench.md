@@ -328,7 +328,13 @@ after a hold boundary (the steward's SSH session cases): a stall of the guest of
 more at the boundary reads, inside the guest, as the server's silence past its promise, so the
 session's completion call times out and the session ends as at Ctrl-D. A `host-tests` case whose crates assert no bound measures nothing with the host's clock; it may
 run beside other work, and the rule asks that its test threads be bounded then
-(`RUST_TEST_THREADS`), so that it cannot oversubscribe the host by itself. The kinds that boot
+(`RUST_TEST_THREADS`), so that it cannot oversubscribe the host by itself. A bound the platform
+under test keeps on the kernel's clock is such a bound too when the kernel is the fake's and its
+clock the host's: `beamlet-lookup-host`'s system tests once let a bind's `ATTACH_US` and a call's
+timeout run against a fixture server under a whole bench's load, and about one train in two the
+host's second ran out first; they hold the fake's clock now (`Fake::hold_clock`), so each such
+bound, a retry's `RETRY_US` and a file operation's `FILE_WAIT_US` included, is a step the test
+takes once the state it waits on is reached, and the ten-second waits are gone with the race. The kinds that boot
 nothing (`build`, `fmt`, `no-cruft`, the size and `unsafe` budgets, the docs checker, the Elixir
 oracles) have no clock, and are verdicts anywhere, but for a `timeout_secs`: as for a boot, a
 host-tests job or an Elixir case that only ran out of its deadline beside other work is rerun
@@ -358,7 +364,11 @@ with a `fanout` two for its build while each of its jobs asks `q` for its own, a
 go quiet. A case target runs that case alone (`--exact`), from `target/prebuilt` when its width
 is there ([building once](#building-once)), else through `cargo testbench`; its output is
 `target/jobs/<arch>-<case>.log`, and a failing boot's console and session logs are kept beside
-it (`--keep-failed`), so a transcript is never lost to the run directories' pruning. A case
+it (`--keep-failed`), so a transcript is never lost to the run directories' pruning. A failing
+`host-tests` case's log holds the test harness's failures block, from its `failures:` line: each
+failed test's panic and name and the `test result` line (a block past 400 lines keeps its first
+panics and the names list), then Cargo's line naming the test file that failed and how its binary
+ended, never the warnings Cargo printed last (train 49 kept twelve of those and no test name). A case
 with no `arch` boots nothing, so it runs under `rv64/<case>` alone, and `rv32/<case>` does
 nothing. Case targets may run at once (`set CASES="..."` runs a set on both widths) only while
 each still takes its own lease, the quiet ones run alone on the quiet set and the `[net]` ones hold
