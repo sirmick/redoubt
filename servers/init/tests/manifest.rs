@@ -147,8 +147,8 @@ fn the_image_manifest_passes_and_its_plan_is_what_the_boot_follows() {
     // Four domains (alice's {} and {alice-secrets}, bob's {}, agent's {}) at every shared server,
     // beside its system callers: init and sshd at keyd; init at consoled; init and the steward at
     // bootfsd; netd, the steward and sshd at ipd; the steward at walfsd:data,
-    // walfsd:alice-secrets and erofsd.
-    assert_eq!(plan.buckets, vec![(0, 6), (1, 5), (2, 6), (5, 7), (6, 5), (7, 5), (10, 5)]);
+    // walfsd:alice-secrets and erofsd; nobody at sshd, whose buckets are its slots.
+    assert_eq!(plan.buckets, vec![(0, 6), (1, 5), (2, 6), (5, 7), (6, 5), (7, 5), (10, 5), (12, 4)]);
     // No handed item names consoled or bootfsd: init's own badge at each is 1. sshd is handed
     // keyd's 1, the host key's, so init's there is 2. At the steward it is the protocol's 3,
     // the class `blame` is accepted on.

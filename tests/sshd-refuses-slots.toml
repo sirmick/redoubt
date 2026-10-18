@@ -1,0 +1,26 @@
+description = "sshd refuses an entry whose budget cannot hold its slots (docs/servers/sshd.md, \"Sessions over SSH\", the box's platform; docs/servers/init.md, \"Restarts and reboots\"): a manifest gives sshd buckets=4, four slots whose stacks are 212 pages, in the image's entry of 1,024 pages but with a 700-page heap cap, which with the first stack's bound of 128 leaves 196 (a smaller entry would not hold the program's image, and init could not start it at all); sshd says the arithmetic and exits before it asks anything of keyd, ipd or the steward, init restarts it until its reboot rule and reboots. The verdicts are sshd's line, init's bare exit, restart and reboot lines, and the loader's first line, which only a reset of the machine prints again (rule F)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+icount = "shift=3,sleep=off"
+# The real init, keyd, consoled and bootfsd, and sshd on the entry below.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-bootfsd", bin = "bootfsd" },
+    { package = "redoubt-sshd", bin = "sshd" },
+]
+timeout_secs = 30
+expect = [
+    '^init: started sshd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] sshd: 4 slots need 212 pages of stack; the budget holds 196$',
+    '^init: sshd \(PID [0-9]+\) exited, code 5$',
+    '^init: restarted sshd, console [0-9a-f]{16}$',
+    '^init: rebooting: sshd was restarted 5 times within 60 seconds$',
+    '^loader: Redoubt rv(64|32) loader, boot hart 0$',
+]
+forbid = ['init: refused the boot', 'sshd: listening']
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/sshd/refused.json" }

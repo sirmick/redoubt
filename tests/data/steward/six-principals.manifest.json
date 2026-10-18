@@ -51,7 +51,7 @@
       "receives": ["ipd"],
       "handed": [ { "endpoint": "netd", "badge": "5" } ],
       "args": ["addr=10.0.2.15/24", "gateway=10.0.2.2", "ingress=3",
-               "scope=4:c:0.0.0.0/0:1-65535", "scope=6:l:22", "buckets=11"] },
+               "scope=4:c:0.0.0.0/0:1-65535", "scope=6:l:22", "limits=6:9:4:10", "buckets=11"] },
     { "name": "walfsd:data", "program": "walfsd",
       "stack_pages": "14", "heap_pages": "64",
       "budget": { "pages": "1792", "processes": 1, "weight": 100 },
@@ -91,7 +91,8 @@
       "stack_pages": "4", "heap_pages": "384",
       "budget": { "pages": "1024", "processes": 1, "weight": 100 },
       "handed": [ { "endpoint": "ipd", "badge": "6" }, { "endpoint": "keyd", "badge": "1" },
-                  { "endpoint": "steward", "badge": "1" } ] }
+                  { "endpoint": "steward", "badge": "1" } ],
+      "args": ["buckets=8"] }
   ],
   "public": ["beamlet", "piped", "consrelay"],
   "labels": [ { "name": "alice-secrets", "owner": "alice", "id": "7" } ],

@@ -1224,13 +1224,16 @@ side do not collide.
 
 ### Peers, dials and the capture
 
-<details><summary>Status: built · tested (13)</summary>
+<details><summary>Status: built · tested (16)</summary>
 
 - bench:bench-net-peer
 - bench:bench-net-peer-twice
 - bench:bench-net-peer-count
 - bench:bench-net-peer-pcap-empty
 - bench:netd-restart
+- bench:sshd-login-bound
+- host:testbench::a_dial_with_a_line_waits_for_it
+- host:testbench::a_held_dial_ends_when_the_far_side_closes
 - host:testbench::a_poke_gets_a_udp_forward
 - host:testbench::peers_are_judged_on_records_and_capture
 - host:testbench::a_capture_is_read_fail_closed
@@ -1258,6 +1261,8 @@ connections = 1
 port = 8000
 send = "hello\n"
 expect = "hello\n"
+after = '^\[con [0-9a-f]{16}\] judge is up$'   # optional: dial only once a console line matches
+until_closed = true          # optional: then hold the connection until the guest closes it
 
 [net.poke]                   # one UDP datagram into the guest, sent when a console line matches
 port = 47000
@@ -1272,6 +1277,14 @@ after = '^\[con [0-9a-f]{16}\] judge knows netd.s instance: poke it$'
 - **The poke** is one UDP datagram, sent once, through a host port QEMU forwards to its guest port,
   when a console line first matches its `after`: a trigger from outside that nothing resends, as
   TCP would. `netd-restart` faults `netd` with it, through a test-only feature.
+- **A dial** is a TCP connection the bench makes into the guest through a forwarded port, retried
+  every 100 ms until one connection echoes `expect` for `send`, from the boot's start or, with
+  `after`, from the console line that matches it; one never echoed by the deadline fails the
+  case, with what came. With `until_closed` the bench then keeps the connection, typing nothing,
+  until the guest closes it, and notes under the case's result how long it was held; one still
+  open at the deadline fails. That is a client that connects and never goes on, which the guest
+  must end itself: `sshd-login-bound` holds every `sshd` slot that way and the verdict is the
+  login the box then serves, never the dials, which write nothing on the console.
 - **The network.** A case with peers widens slirp's network to a /16 in which its host, resolver
   and the guest's address stay where they were; the peers sit outside the /24 the guest is
   configured for, reached through its gateway. `restrict=on` still holds.
@@ -1772,7 +1785,8 @@ question there is whether the work fits, not what the server's size should be
 The standard image is scanned after `init-boot`, `userland-boot` and `userland-read-only` on both
 widths, and after `steward-session-ends` and `steward-ssh-two-principals`, whose SSH logins are the
 most its servers do. Its declarations are twice the largest peak across those runs: each stack
-rounded up to pages, each heap cap in pages. `sshd` is sized for its four slots busy at once: its
+rounded up to pages, each heap cap in pages. `sshd` is sized for its four slots (its entry's
+`buckets=4`, [sshd](servers/sshd.md#sessions-over-ssh)) busy at once: its
 heap held 8 pages at boot, 54 with one login (rv32, before the boot pack) and 56 with two at once,
 so at most 46 a connection, and its cap is twice 8 pages and four connections, 384. Its declared
 stack is a page over twice its peak. `consoled`'s row is from the runs once it serves each

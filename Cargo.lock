@@ -875,6 +875,7 @@ dependencies = [
  "redoubt-ipd",
  "redoubt-keyd",
  "redoubt-rt",
+ "serde_json",
  "sunset",
 ]
 

@@ -18,6 +18,11 @@
 //! - **The poke.** A `[net.poke]` is one UDP datagram the bench sends into the guest through a host port QEMU
 //!   forwards to its guest port, when a console line first matches its `after`: a trigger from outside the
 //!   guest that nothing resends, as a TCP segment would be.
+//! - **Dials.** A `[[net.dial]]` is a TCP connection the bench makes into the guest through a forwarded port,
+//!   from the boot's start or, with `after`, from the console line that matches it, retried until one
+//!   connection echoes `expect` for `send`. With `until_closed` the bench then holds the connection, typing
+//!   nothing, until the far side closes it, and notes how long it was held: a client that connects and never
+//!   goes on, which the guest must end itself.
 //!
 //! What a case with peers must show: every peer counted exactly its `connections`, both in the
 //! records and in the capture (distinct source ports of SYNs to it), no SYN from the guest to a
@@ -35,6 +40,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail, ensure};
+use regex::Regex;
 
 use crate::case::{Dial, Net};
 use crate::qemu::{Forward, Verdict};
@@ -231,13 +237,21 @@ fn count_records(dir: &Path) -> Result<BTreeMap<SocketAddrV4, u32>, String> {
 /// Connections the bench makes into the guest through its forwarded ports, while it boots.
 pub struct Dials {
     stop: Arc<AtomicBool>,
-    running: Vec<(String, JoinHandle<Result<(), String>>)>,
+    /// Each dial with an `after`: its pattern, and the flag the console raises when a line
+    /// matches it, which lets the dial go.
+    starters: Vec<(Regex, Arc<AtomicBool>)>,
+    running: Vec<(String, JoinHandle<Result<Option<Duration>, String>>)>,
 }
 
+/// A dial's pause between tries, and between looks at its starter.
+const DIAL_PAUSE: Duration = Duration::from_millis(100);
+
 impl Dials {
-    /// Starts every `[[net.dial]]`, each retrying until it is answered or `deadline` passes.
+    /// Starts every `[[net.dial]]`, each retrying until it is answered or `deadline` passes; one
+    /// with an `after` first waits for its line ([`Dials::starters`]).
     pub fn start(net: &Net, forwards: &[Forward], deadline: Instant) -> Result<Dials> {
         let stop = Arc::new(AtomicBool::new(false));
+        let mut starters = Vec::new();
         let mut running = Vec::new();
         for dial in &net.dial {
             let host = forwards
@@ -245,62 +259,118 @@ impl Dials {
                 .find(|(guest, _)| *guest == dial.port)
                 .map(|(_, host)| *host)
                 .with_context(|| format!("dial to guest port {}: not in net.forward", dial.port))?;
+            let go = Arc::new(AtomicBool::new(dial.after.is_none()));
+            if let Some(after) = &dial.after {
+                let after =
+                    Regex::new(after).with_context(|| format!("dial to guest port {}: after", dial.port))?;
+                starters.push((after, go.clone()));
+            }
             let (dial, stop) = (dial.clone(), stop.clone());
             let name = format!("dial :{}", dial.port);
-            running.push((name, std::thread::spawn(move || dial_until(&dial, host, deadline, &stop))));
+            running.push((name, std::thread::spawn(move || dial_until(&dial, host, deadline, &stop, &go))));
         }
-        Ok(Dials { stop, running })
+        Ok(Dials { stop, starters, running })
     }
 
-    /// Stops the dials still trying and says why the first unanswered one failed.
-    fn finish(self) -> Option<String> {
+    /// The dials' `after` patterns with their flags, for the console to raise (`qemu::run`).
+    pub fn starters(&self) -> Vec<(Regex, Arc<AtomicBool>)> { self.starters.clone() }
+
+    /// Stops the dials still trying; says how long each held dial was held, and why the first
+    /// unanswered one failed.
+    fn finish(self, out: &mut dyn FnMut(String)) -> Option<String> {
         self.stop.store(true, Ordering::Relaxed);
         let mut failure = None;
         for (name, thread) in self.running {
             let result = thread.join().unwrap_or_else(|_| Err("the dial panicked".into()));
-            if let (Err(why), None) = (result, &failure) {
-                failure = Some(format!("{name}: {why}"));
+            match result {
+                Ok(Some(held)) => out(format!(
+                    "      {name}: held {:.2} s until the far side closed it",
+                    held.as_secs_f64()
+                )),
+                Ok(None) => {}
+                Err(why) if failure.is_none() => failure = Some(format!("{name}: {why}")),
+                Err(_) => {}
             }
         }
         failure
     }
 }
 
-/// Dials the guest port forwarded to `host` until one connection echoes `dial.expect` for
-/// `dial.send`. Before the guest listens, slirp takes the connection and then closes it, which is
-/// only a retry.
-fn dial_until(dial: &Dial, host: u16, deadline: Instant, stop: &AtomicBool) -> Result<(), String> {
+/// Dials the guest port forwarded to `host`, once `go` is raised, until one connection echoes
+/// `dial.expect` for `dial.send` (and, with `until_closed`, is then closed by the far side:
+/// returns how long it was held). Before the guest listens, slirp takes the connection and then
+/// closes it, which is only a retry.
+fn dial_until(
+    dial: &Dial,
+    host: u16,
+    deadline: Instant,
+    stop: &AtomicBool,
+    go: &AtomicBool,
+) -> Result<Option<Duration>, String> {
     let mut last = String::from("never connected");
     while Instant::now() < deadline && !stop.load(Ordering::Relaxed) {
+        if !go.load(Ordering::Relaxed) {
+            last = format!("its line /{}/ never came", dial.after.as_deref().unwrap_or(""));
+            std::thread::sleep(DIAL_PAUSE);
+            continue;
+        }
         match dial_once(dial, host, deadline) {
-            Ok(()) => return Ok(()),
+            Ok(held) => return Ok(held),
             Err(why) => last = why,
         }
-        std::thread::sleep(Duration::from_millis(100));
+        std::thread::sleep(DIAL_PAUSE);
     }
     Err(format!("{:?} was not echoed as {:?}: {last}", dial.send, dial.expect))
 }
 
-fn dial_once(dial: &Dial, host: u16, deadline: Instant) -> Result<(), String> {
+/// One try: connect, send, read until the echo is in; then, with `until_closed`, read on until
+/// the far side closes (end of file, or a reset) or the deadline passes, which fails.
+fn dial_once(dial: &Dial, host: u16, deadline: Instant) -> Result<Option<Duration>, String> {
     let to = std::net::SocketAddr::from(([127, 0, 0, 1], host));
+    let connected = Instant::now();
     let mut stream = TcpStream::connect_timeout(&to, Duration::from_secs(1)).map_err(|e| e.to_string())?;
     stream.write_all(dial.send.as_bytes()).map_err(|e| e.to_string())?;
     let mut got = Vec::new();
     let mut buf = [0u8; 1024];
-    while !got.windows(dial.expect.len().max(1)).any(|w| w == dial.expect.as_bytes()) {
+    let mut echoed = false;
+    loop {
+        if !echoed && got.windows(dial.expect.len().max(1)).any(|w| w == dial.expect.as_bytes()) {
+            if !dial.until_closed {
+                return Ok(None);
+            }
+            echoed = true;
+        }
         let left = deadline.saturating_duration_since(Instant::now());
         if left.is_zero() {
-            return Err(format!("got {:?} by the deadline", String::from_utf8_lossy(&got)));
+            let got = String::from_utf8_lossy(&got);
+            return Err(match echoed {
+                true => format!(
+                    "still open at the deadline, {:.2} s after it connected",
+                    connected.elapsed().as_secs_f64()
+                ),
+                false => format!("got {got:?} by the deadline"),
+            });
         }
         stream.set_read_timeout(Some(left.min(Duration::from_millis(500)))).map_err(|e| e.to_string())?;
-        match stream.read(&mut buf) {
-            Ok(0) => return Err(format!("closed after {:?}", String::from_utf8_lossy(&got))),
-            Ok(n) => got.extend_from_slice(&buf[..n]),
-            Err(e) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => {}
+        let closed = match stream.read(&mut buf) {
+            Ok(0) => true,
+            Ok(n) => {
+                got.extend_from_slice(&buf[..n]);
+                false
+            }
+            Err(e) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => {
+                false
+            }
+            Err(e) if echoed && e.kind() == std::io::ErrorKind::ConnectionReset => true,
             Err(e) => return Err(e.to_string()),
+        };
+        if closed {
+            return match echoed {
+                true => Ok(Some(connected.elapsed())),
+                false => Err(format!("closed after {:?}", String::from_utf8_lossy(&got))),
+            };
         }
     }
-    Ok(())
 }
 
 // --- The capture --------------------------------------------------------------------------------
@@ -431,10 +501,10 @@ pub fn inspect(frames: &[&[u8]], self_forbidden: &[(Ipv4Addr, u8)]) -> Result<Se
 
 // --- The judgment -------------------------------------------------------------------------------
 
-/// Stops a boot's dials once it has run, and (only if the boot passed so far) fails it for the
-/// first dial that was never answered.
-pub fn finish_dials(verdict: Verdict, dials: Option<Dials>) -> Verdict {
-    let dialled = dials.and_then(Dials::finish);
+/// Stops a boot's dials once it has run, notes each held dial's hold under the case, and (only
+/// if the boot passed so far) fails it for the first dial that was never answered.
+pub fn finish_dials(verdict: Verdict, dials: Option<Dials>, out: &mut dyn FnMut(String)) -> Verdict {
+    let dialled = dials.and_then(|d| d.finish(out));
     match (verdict, dialled) {
         (Verdict::Pass(_), Some(why)) => Verdict::Fail(why),
         (verdict, _) => verdict,
@@ -718,10 +788,72 @@ mod tests {
         });
         // Only a guard against a hang: a dial that is echoed returns at once.
         let guard = Instant::now() + Duration::from_secs(60);
-        let echo = Dial { port: 8000, send: "hello".into(), expect: "hello".into() };
-        assert_eq!(dial_until(&echo, port, guard, &AtomicBool::new(false)), Ok(()));
-        let other = Dial { port: 8000, send: "hello".into(), expect: "goodbye".into() };
-        let err = dial_until(&other, port, guard, &echoed).unwrap_err();
+        let go = AtomicBool::new(true);
+        let echo = dial("hello", "hello");
+        assert_eq!(dial_until(&echo, port, guard, &AtomicBool::new(false), &go), Ok(None));
+        let other = dial("hello", "goodbye");
+        let err = dial_until(&other, port, guard, &echoed, &go).unwrap_err();
         assert!(err.contains("\"hello\""), "{err}");
+    }
+
+    fn dial(send: &str, expect: &str) -> Dial {
+        Dial { port: 8000, send: send.into(), expect: expect.into(), after: None, until_closed: false }
+    }
+
+    /// A dial with an `after` connects only once its flag is raised: before, it fails at the
+    /// deadline naming the line it waited for, and connects nothing.
+    #[test]
+    fn a_dial_with_a_line_waits_for_it() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        listener.set_nonblocking(true).unwrap();
+        let waiting = Dial { after: Some("^ready$".into()), ..dial("hello", "hello") };
+        let soon = Instant::now() + Duration::from_millis(300);
+        let err =
+            dial_until(&waiting, port, soon, &AtomicBool::new(false), &AtomicBool::new(false)).unwrap_err();
+        assert!(err.contains("its line /^ready$/ never came"), "{err}");
+        assert!(listener.accept().is_err(), "nothing connected while the line had not come");
+        // Raised, it dials as any other.
+        std::thread::spawn(move || {
+            listener.set_nonblocking(false).unwrap();
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 16];
+            let n = stream.read(&mut buf).unwrap();
+            stream.write_all(&buf[..n]).unwrap();
+        });
+        let guard = Instant::now() + Duration::from_secs(60);
+        let went = dial_until(&waiting, port, guard, &AtomicBool::new(false), &AtomicBool::new(true));
+        assert_eq!(went, Ok(None));
+    }
+
+    /// A held dial ends when the far side closes, with the hold's length; one the far side keeps
+    /// open past the deadline fails, saying so.
+    #[test]
+    fn a_held_dial_ends_when_the_far_side_closes() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let hold = Duration::from_millis(400);
+        std::thread::spawn(move || {
+            for (i, stream) in listener.incoming().take(2).enumerate() {
+                let mut stream = stream.unwrap();
+                let mut buf = [0u8; 16];
+                let n = stream.read(&mut buf).unwrap();
+                stream.write_all(&buf[..n]).unwrap();
+                // The first connection is closed after `hold`; the second is kept open for good.
+                if i == 0 {
+                    std::thread::sleep(hold);
+                    drop(stream);
+                } else {
+                    std::mem::forget(stream);
+                }
+            }
+        });
+        let held = Dial { until_closed: true, ..dial("hello", "hello") };
+        let guard = Instant::now() + Duration::from_secs(60);
+        let went = dial_until(&held, port, guard, &AtomicBool::new(false), &AtomicBool::new(true)).unwrap();
+        assert!(went.is_some_and(|d| d >= hold), "{went:?}");
+        let soon = Instant::now() + Duration::from_millis(800);
+        let err = dial_until(&held, port, soon, &AtomicBool::new(false), &AtomicBool::new(true)).unwrap_err();
+        assert!(err.contains("still open at the deadline"), "{err}");
     }
 }

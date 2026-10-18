@@ -130,10 +130,17 @@ Miri both crates take their portable Rust paths. Those two assembly blocks are r
 
 ### Sessions over SSH
 
-<details><summary>Status: built · tested (23)</summary>
+<details><summary>Status: built · tested (30)</summary>
 
 - bench:steward-ssh-resize
 - bench:steward-ssh-two-principals
+- bench:sshd-login-bound
+- bench:sshd-refuses-slots
+- host:redoubt-sshd::the_bound_is_twice_the_slowest_login_rounded_up
+- host:redoubt-sshd::a_connection_not_logged_in_is_closed_at_the_bound_and_not_before
+- host:redoubt-sshd::a_connection_logged_in_is_never_closed_by_the_bound
+- host:redoubt-sshd::the_image_entry_holds_its_slots
+- host:redoubt-sshd::every_manifests_slots_fit_ipds_parked_calls
 - bench:steward-context-login
 - host:redoubt-sshd::the_login_grammar
 - host:redoubt-sshd::a_user_name_outside_the_grammar_reaches_the_steward_as_nobody
@@ -234,12 +241,40 @@ Miri both crates take their portable Rust paths. Those two assembly blocks are r
   the steward opened for the label's owner, and only a pty channel its owner authenticated: no
   forwarding, no subsystems, no `exec` on a labelled channel. No other sink has an owner exemption
   ([R67 (a channel keeps its labels)](#r67-a-channel-keeps-its-labels)).
-- **The box's platform** serves four connections at once, each on two threads started once: a
-  driver that runs the core, serves the channel's `/dev/cons` and makes the connection's calls
-  to `keyd`, the steward and `ipd`, and a reader that waits in `ipd` for the client's bytes and
-  hands each read to the driver. A call to `keyd` or the steward holds up only its own
-  connection; a fifth connection is closed when it arrives. A slot is free again once the
-  reader's last call for its connection is taken, whichever side ended the connection first.
+- **The box's platform** serves as many connections at once as its manifest entry's `buckets=N`
+  says, each in a slot of two threads started once: a driver that runs the core, serves the
+  channel's `/dev/cons` and makes the connection's calls to `keyd`, the steward and `ipd`, and a
+  reader that waits in `ipd` for the client's bytes and hands each read to the driver. A call to
+  `keyd` or the steward holds up only its own connection; a connection beyond the slots is closed
+  when it arrives. A slot is free again once the reader's last call for its connection is taken,
+  whichever side ended the connection first.
+  - **The slots are the manifest's.** `init` sizes N as it sizes every shared server's count: at
+    least the (account, label set)s the manifest declares, one channel for each at once, four in
+    the image ([init](init.md#the-boot-manifest)). `sshd` reads N with the serving library's
+    parser and refuses an entry it cannot hold, as every server does: the slots' stacks must fit
+    the entry's budget, its pages less its heap cap and its first stack's bound of 128
+    ([serving](serving.md#admit)). A slot's two stacks are 48 pages for the driver (a whole
+    login in one thread needs more than 88 KiB and fits 96 KiB; twice that) and 4 for the reader,
+    and the steward's watcher takes 4, so N slots take 52 N + 4 pages: the image's four take 212
+    of the 512 its entry leaves (1,024 less the heap cap's 384 and the 128), and nine would fit
+    where ten would not. An entry that does not fit is left at once with a line saying the
+    arithmetic, before `keyd`, `ipd` or the steward is asked, and `init` restarts it until its
+    reboot rule. Each slot also keeps one read parked at `ipd` beside the listener's accept, so
+    N + 1 is at most the parked calls `ipd`'s bucket for `sshd` allows, 5 by default, or a
+    manifest's `limits=` for `sshd`'s badge there ([ipd](ipd.md#sizing)): four slots and the
+    accept are the default's five. `sshd` does not read `ipd`'s entry, so that bound is held by
+    a host test over every manifest in the tree, which parses `ipd`'s arguments as `ipd` does; a
+    manifest with more domains raises `ipd`'s cap for `sshd` with it.
+  - **Before login a slot is held for a bounded time.** A connection that has not logged in
+    within the bound is closed, and the slot serves the next; the client is told nothing, as
+    every refusal before login is uniform. The bound is twice the slowest login the bench
+    records, rounded up to a second: from `ssh`'s start to the shell's prompt, one run of each
+    case on each width, `launch-system` took 2.01 s (rv64) and 1.70 s (rv32), and
+    `steward-ssh-two-principals` 2.00 s and 1.78 s for alice, then 2.41 s and 2.06 s for bob
+    beside her running session; twice 2.41 s is 4.82 s, so the bound is 5 s. After login the
+    connection is a channel, bounded by its session: a login past the context cap is refused and
+    the connection ends ([R82 (the context cap)](steward.md#r82-the-context-cap)), so no rule on
+    how many connections one principal may hold is needed, and none is kept.
 - **The steward's end.** `sshd` keeps one `watch` call at the steward, which the steward holds
   unanswered while it runs. When the steward ends, the call ends with it (`Dead`,
   [R4b (a server dies)](../kernel/ipc.md#r4b-a-server-dies), or an answer as it exits), and
@@ -436,9 +471,12 @@ Status: built · tested: bench:sshd-restart-detaches, host:redoubt-sshd::a_refus
 - **The key exchange is not post-quantum.** Traffic recorded now could be read by whoever later
   breaks X25519. A post-quantum exchange (`mlkem768x25519-sha256`) changes the transcript `keyd`
   signs.
-- **Connections are first come, first served.** `sshd` serves four connections at once, whoever
-  opened them, and closes any beyond; how many one principal may hold is not decided, so one
-  principal's open connections can keep another's logins out until they end.
+- **Connections are first come, first served.** `sshd` serves its manifest's count of connections
+  at once, whoever opened them, and closes any beyond. A connection that never logs in holds a
+  slot for at most the login bound, and a principal's channels are bounded by its context cap
+  (R82), so the slots a client can hold are bounded in time and in number; but within those
+  bounds a principal's open connections still keep another's logins out until they end, and
+  nothing favours a principal with no session over one with several.
 
 ## Why
 

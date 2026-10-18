@@ -616,6 +616,13 @@ pub struct Dial {
     pub send: String,
     /// What must come back on the same connection.
     pub expect: String,
+    /// Dial only once a console line matches this pattern (the shown text, as the poke's
+    /// `after`); without it, from the boot's start.
+    pub after: Option<String>,
+    /// Once the echo is in, keep the connection and read until the far side closes it; one still
+    /// open at the deadline fails the case. Without it, the connection is dropped at the echo.
+    #[serde(default)]
+    pub until_closed: bool,
 }
 
 #[derive(Debug, Deserialize)]

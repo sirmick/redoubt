@@ -1,0 +1,89 @@
+description = "A connection that never logs in holds an sshd slot for at most the login bound, and the slots then serve a principal's login (docs/servers/sshd.md, \"Sessions over SSH\", the box's platform): once the console's shell is up, four clients connect to port 22, read sshd's banner and then send nothing, holding every slot of the image's four; sshd closes each at the bound, saying so, and alice then logs in over SSH and gets her prompt. The verdicts are sshd's lines for the four slots taken and the four closes, then the steward's and sshd's lines for alice's login and her session's prompt (rule F): the holders are the bench's own connections, which write nothing on the console, and no line of theirs is a verdict; the bench notes under the result how long each was held before the box closed it"
+arch = ["rv64", "rv32"]
+kind = "boot"
+recipe = "image/boot.toml"
+# The image needs 1 GiB: the principals' budgets, each holding a shell VM's session, do not fit
+# the users budget 256 MiB leaves (docs/kernel/budgets.md).
+memory_mib = 1024
+# One login that boots a shell VM, after the holders' five seconds.
+timeout_secs = 900
+# The holders connect once the console's shell is up, so their four slots and four closes come
+# in one order before alice's ssh starts, which waits for every line here.
+expect = [
+    '^init: started sshd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
+    '^init: started steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+    '^\[con [0-9a-f]{16}\] sshd: connection [0-9]+ on slot [0-3]$',
+    '^\[con [0-9a-f]{16}\] sshd: connection [0-9]+ on slot [0-3]$',
+    '^\[con [0-9a-f]{16}\] sshd: connection [0-9]+ on slot [0-3]$',
+    '^\[con [0-9a-f]{16}\] sshd: connection [0-9]+ on slot [0-3]$',
+    '^\[con [0-9a-f]{16}\] sshd: connection [0-9]+: no login within 5 s, closed$',
+    '^\[con [0-9a-f]{16}\] sshd: connection [0-9]+: no login within 5 s, closed$',
+    '^\[con [0-9a-f]{16}\] sshd: connection [0-9]+: no login within 5 s, closed$',
+    '^\[con [0-9a-f]{16}\] sshd: connection [0-9]+: no login within 5 s, closed$',
+]
+# Every slot was a holder's, and every slot was given back: alice's login met no busy slot, and
+# nothing logged in before her.
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    '^init: .* (exited|faulted|was killed)',
+    'init: restarted',
+    'EXCEPTION',
+    'sshd: login .*: refused',
+    'sshd: every slot is busy',
+]
+expect_after = [
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{\} at [0-9]+: Login \{ session: [0-9]+, principal: 0, key: [1-9]',
+    '^\[con [0-9a-f]{16}\] sshd: login alice: session [0-9a-f]{16}, labels \[\]$',
+]
+
+[[session]]
+user = "alice"
+steps = [
+    { expect = '\([0-9]+\)> ' },
+    { send = "\"alice-\" <> \"marker\"\n" },
+    { expect = '"alice-marker"' },
+    { exit = 0 },
+]
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]
+forward = [22]
+
+# The holders: each sends a client's version line, reads the server's, and then nothing, until
+# the box closes the connection; one still open at the case's deadline fails it.
+[[net.dial]]
+port = 22
+send = "SSH-2.0-holder\r\n"
+expect = "SSH-2.0-"
+after = 'Redoubt shell, on Elixir '
+until_closed = true
+
+[[net.dial]]
+port = 22
+send = "SSH-2.0-holder\r\n"
+expect = "SSH-2.0-"
+after = 'Redoubt shell, on Elixir '
+until_closed = true
+
+[[net.dial]]
+port = 22
+send = "SSH-2.0-holder\r\n"
+expect = "SSH-2.0-"
+after = 'Redoubt shell, on Elixir '
+until_closed = true
+
+[[net.dial]]
+port = 22
+send = "SSH-2.0-holder\r\n"
+expect = "SSH-2.0-"
+after = 'Redoubt shell, on Elixir '
+until_closed = true

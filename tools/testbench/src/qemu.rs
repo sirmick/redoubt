@@ -629,6 +629,9 @@ struct Console {
     /// The poke not sent yet: the line it waits for, the host port QEMU forwards to the guest's,
     /// and its payload (`peer::poke`).
     poke: Option<(Regex, u16, String)>,
+    /// The dials waiting for a line: each one's pattern and the flag that lets it go
+    /// (`peer::Dials::starters`).
+    starters: Vec<(Regex, Arc<AtomicBool>)>,
     stdin: ChildStdin,
     /// Whether the guest has printed a line yet.
     seen: bool,
@@ -774,19 +777,26 @@ impl Console {
         if let Some((_, host, payload)) = self.poke.take_if(|(after, _, _)| after.is_match(&line)) {
             peer::poke(host, &payload).context("sending the poke")?;
         }
+        for (after, go) in &self.starters {
+            if after.is_match(&line) {
+                go.store(true, Ordering::Relaxed);
+            }
+        }
         Ok(Line::Text(line))
     }
 }
 
 /// Boot `image` and judge it by `boot`. `forwards` are the host ports from `virtio_devices`.
 /// `launched`: launch's command line for `image`, booted as it is, and the key its sessions log
-/// in with (`launch.rs`).
+/// in with (`launch.rs`). `starters`: the dials waiting for a console line, let go when it comes
+/// (`peer::Dials::starters`).
 pub fn run(
     image: &Image,
     launched: Option<(Command, &Path)>,
     boot: &Boot,
     workspace: &Path,
     forwards: &[Forward],
+    starters: Vec<(Regex, Arc<AtomicBool>)>,
     log: &Path,
     out: &mut dyn FnMut(String),
 ) -> Result<Verdict> {
@@ -852,6 +862,7 @@ pub fn run(
         capture,
         inputs,
         poke,
+        starters,
         stdin,
         seen: false,
         done,
