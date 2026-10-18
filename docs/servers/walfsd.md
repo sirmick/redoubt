@@ -488,9 +488,10 @@ typed operations, so a client names no format:
 
 ### Quotas
 
-<details><summary>Status: built · tested (10)</summary>
+<details><summary>Status: built · tested (11)</summary>
 
 - bench:walfsd-quota
+- bench:walfsd-pools
 - host:redoubt-walfsd::a_copy_past_the_quota_is_no_space
 - host:redoubt-walfsd::a_mint_at_a_stale_root_records_nothing
 - host:redoubt-walfsd::a_mint_the_room_cannot_take_is_refused_and_disconnect_gives_it_back

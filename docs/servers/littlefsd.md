@@ -408,9 +408,10 @@ nothing else: no other volume, no other partition, no device. A read-only volume
 
 ### R48 (a quota per attach root)
 
-<details><summary>Status: built · tested (3)</summary>
+<details><summary>Status: built · tested (4)</summary>
 
 - bench:littlefsd-quota
+- bench:walfsd-pools
 - host:redoubt-littlefsd::a_write_past_one_roots_quota_is_refused_while_another_still_writes
 - host:redoubt-littlefsd::a_root_with_quota_0_cannot_create_but_can_read_and_remove
 
