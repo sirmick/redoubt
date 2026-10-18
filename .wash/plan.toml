@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 519
+revision = 524
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -2603,8 +2603,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "AGENTS"
   body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'F2' (STEWARD3V-budgets Q4). Brief: .wash/local/STEWARD7-implementer.md. Tier A (admission caps in every shared server; the bench's derivation), size S-M, reviewer steward-red-4. Found by STEWARD3V part 2: 3Q's per-account caps add a lease term of 1 (the bench test's LEASES, 'no manifest names it'), so one session with N leases (2 + N at erofsd:system, 1 + N at its home and /boot) is admitted for N <= 7 and N = 16 is refused its eighth home connection. Rule: the term is derived as the context cap is (R82): leases(p) = min(share_pages / sizes.agent.pages, share_processes / sizes.agent.processes) over the principal's unlabelled share as init's holds derives it; an upper bound, since sessions carved from the share only lower it and a sponsored principal's sessions are leases of it; the kernel's carve (R7) refuses past it, so the steward gains no rule and the core no row. steward.md 'Leases' states it as arithmetic (image: alice 7); the bench test and the servers' limits take the term; entries follow STEWARD3V's rule where a bucket grows. The latency manifest's alice is sized by the rule for N = 16 if memory_mib affords it by the memory rule's arithmetic (about 190,722 pages for her), else the largest N the rule gives is recorded with its arithmetic beside the stand-in's column (owner question, conditional). Not a compiled constant raised to a case's N, not a new manifest field."
-  state = "active"
-  revision = 472
+  state = "done"
+  revision = 524
 
 [[node]]
   id = "STEWARD8"
@@ -2613,8 +2613,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   needs = ["STEWARD5", "STEWARD6"]
   body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'F4' (B88's residual). Brief: .wash/local/STEWARD8-implementer.md. Tier B (the Elixir client, the shell's call, a toml, pages), size S, one reviewer: the editor, the red team if the steward is touched. Runs when STEWARD5 and STEWARD6 are on main, so scheduling.md's table is re-measured once. Found by B88: on rv32 at two harts a lease VM's launch beside two spinners takes 5.3-5.7 s and the shell's start_agent answers timeout; the 5 s is @timeout 5000 in libs/wire/elixir/lib/client.ex, the client's bound for every steward call, a platform constant no page states as a target; no page bounds a launch. Rule: the launch is stated and measured as end_lease's 589 ms is (steward.md 'Residual risks'): start_agent's served time alone and beside N - 1 spinners, both widths, one and two harts, from the steward's served lines; the shell's start_agent passes the client a bound of its own, twice the worst launch measured beside the spinners the case runs, rounded up to a second (call/5 takes a timeout; 5 s stays for short calls). Then the rv32 two-hart rounds at N = 3 and 4 run and their rows are measured; a miss there is a scheduler finding, not a timeout's. Drafted under the image's weights (session 100, agent 50, steward 100; the case's steward 1,000): the owner's weight answers change the number, not the design; the launching lease's share against its sponsor's spinners is asked in the owner file."
-  state = "todo"
-  revision = 468
+  state = "active"
+  revision = 520
 
 [[node]]
   id = "IPD1"
