@@ -55,7 +55,7 @@ Bob, attacking Alice.
 | Server authority: no server's startup block holds its budget, a manifest granting one is refused, and no server can destroy a session | [R33 (no server holds a system budget)](../servers/init.md#r33-no-server-holds-a-system-budget) | `init-refuses-budget-handle`; that no server can destroy a session is the steward's, not yet |
 | `process_create` with a badged exit endpoint, to aim exit notices and blame at a server | R21 | `process-attack` |
 | A reused PID carries authority | [R20 (PID reuse)](../kernel/processes.md#r20-pid-reuse) | `pid-reuse-authority` |
-| Loopback login: a session connects to the box's own `sshd` with a key `keyd` holds | [R59 (never the box's own addresses)](../servers/ipd.md#r59-never-the-boxs-own-addresses) | `net-attacks` for `ipd`'s refusal; the login not yet |
+| Loopback login: a session connects to the box's own `sshd` with a key `keyd` holds | [R59 (never the box's own addresses)](../servers/ipd.md#r59-never-the-boxs-own-addresses) | `session-tcp-loopback`: a session's `gen_tcp` connect to the box's loopback and listed address on port 22 is refused by `ipd`, no SYN leaves the box (the capture) and the peer counts only the control; `net-attacks` for the whole refusal set |
 | No leaky state: while a vault session works, an unlabelled observer sees no change in usage, request and session ids, message ids, PIDs, file versions, qids, directory listings, audit records or approval notifications, and cannot write, truncate, create or remove anything in the vault's volume | R37, R25 | not yet |
 | Hostile launch: a malformed ELF or startup block from a user parent hurts only the child | [R32 (a hostile image hurts only its process)](../servers/init.md#r32-a-hostile-image-hurts-only-its-process), [R31 (startup block checked whole)](../servers/init.md#r31-startup-block-checked-whole) | `stub-launch` for a malformed ELF, `process-attack` for malformed startup records at `process_start`; from a user parent, the steward's, not yet |
 | Approval flood: requests hit the per-(account, label set) cap; the steward and Alice's approval screen are unaffected | R38, R26 | `steward-pending-cap` |
@@ -78,8 +78,6 @@ cases for what it builds.
    ones, and its numbers must stay within the target.
 - **`sshd`.** Vault sessions and `approve@box` ([sshd](../servers/sshd.md#approvebox),
   [sessions](../userland/sessions.md#vault-sessions)).
-- **TCP in a session.** `gen_tcp` over `/net`, which the loopback login case needs
-  ([beamlet](../userland/beamlet.md#beamlet-on-redoubt)).
 - **The agent and the attack suite.** Alice's agent as its own principal under a lease, with
    delegation that only narrows ([agents](../userland/agents.md)), launching native programs from
    a session ([native programs](../userland/native.md#launching-from-a-session)), and every "not
@@ -107,6 +105,9 @@ and no network scope, logged in by `agent-login`; in that session the agent comp
 from a string, keeps its `.beam` in its home and loads it again from the bytes, by
 `shell-compile` ([development](../userland/development.md#the-compilers-on-beamlet)); and
 `start_agent` and `end_lease` run on the machine ([the image](../../image/README.md);
-[the steward](../servers/steward.md#leases)). What the milestone
+[the steward](../servers/steward.md#leases)). A session's VM has TCP: `gen_tcp` over the
+session's `/net` at `ipd`, every socket `ipd`'s, so the loopback login above is `ipd`'s refusal
+and a lease, with no `/net`, has no network (`session-tcp-echo`, `session-tcp-loopback`;
+[beamlet](../userland/beamlet.md#beamlet-on-redoubt)). What the milestone
 builds on: the steward's principals, sub-budgets and sessions, and `sshd` on the box, from
 [M1 (sessions over SSH, kept apart)](m1-separation.md).

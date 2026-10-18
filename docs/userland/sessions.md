@@ -190,7 +190,8 @@ What the label changes, per the label rule of the servers ([labels](../servers/R
   can read Alice's home volume and cannot write a byte to it.
 - **It cannot send** to an unlabelled process at all
   ([R1 (flow)](../kernel/ipc.md#r1-flow)), and servers that are sinks refuse it: `ipd` (the TCP/IP
-  server) refuses every labelled caller, so a vault session has no network.
+  server) refuses every labelled caller, so a vault session has no network, and its `gen_tcp`
+  connect is `{error, eacces}`, the refusal's name ([beamlet](beamlet.md#beamlet-on-redoubt)).
 
 What it shows on the SSH channel reaches only Alice, who owns the label; `sshd` keeps each channel's
 labels, and a labelled channel is its owner's terminal only, with no forwarding, no subsystems (so

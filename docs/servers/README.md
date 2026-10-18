@@ -295,19 +295,22 @@ is one crate beside the serving library, `redoubt-fileserver`
 
 ### `netd` and `ipd`
 
-Status: built · tested: bench:net-tcp, bench:net-attacks
+Status: built · tested: bench:net-tcp, bench:net-attacks, bench:session-tcp-echo
 
 `netd`, the network card's driver, moves Ethernet frames between the card and one client, `ipd`.
 `ipd`, the TCP/IP server, serves the `/net` tree to its callers, each scoped to the prefixes and
 ports its badge allows ([ipd](ipd.md), [netd](netd.md)). A test program in the first program's
 place launches the real `netd` and `ipd` through the loader stub and starts the cases' clients:
 `net-tcp` carries TCP both ways through them, and `net-attacks` shows a scope's refusals
-from the bench's own network peers.
+from the bench's own network peers. A session's VM reaches `ipd` through the `/net` of its
+namespace: `gen_tcp` over the tree's files, by address
+([beamlet](../userland/beamlet.md#beamlet-on-redoubt); `session-tcp-echo`).
 
 ```mermaid
 flowchart LR
+    S[a session's VM: gen_tcp over /net] --> IP[ipd]
     P[a person's session] -. name-scoped TCP .-> R[resolver]
-    R -. pinned connection .-> IP[ipd]
+    R -. pinned connection .-> IP
     A[agent] -. gateway capability .-> G[gatewayd]
     G -. TLS .-> T[tlsd]
     T -. TCP .-> IP

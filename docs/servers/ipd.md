@@ -359,11 +359,13 @@ while its control to the scoped host succeeds.
 
 ### R59 (never the box's own addresses)
 
-Status: built · tested: bench:net-attacks, bench:bench-net-self-unrefused, host:redoubt-ipd::the_self_set
+Status: built · tested: bench:net-attacks, bench:bench-net-self-unrefused, bench:session-tcp-loopback, host:redoubt-ipd::the_self_set
 
 No connection reaches an address of the box itself, whatever its scope: `ipd`'s own address,
 loopback, broadcast, multicast and every `self=` prefix are refused before the scope is consulted.
-So a hijacked session cannot reach `approve@box` or any other service of the box over the network.
+So a hijacked session cannot reach `approve@box` or any other service of the box over the network:
+in `session-tcp-loopback` a session's `gen_tcp` connect to the box's own `sshd`, at its loopback
+and its listed address, is refused and the capture shows no SYN to either.
 
 ### R60 (a sink refuses labels)
 

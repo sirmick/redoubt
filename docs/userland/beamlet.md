@@ -522,12 +522,12 @@ to the VM (`console_resized`), whose `idle` returns for it. There is no wall clo
 
 ### beamlet on Redoubt
 
-Status: built · partly tested: programs and `/net` are not built · tested: bench:beamlet-natives, bench:beamlet-reduction-rate, bench:beamlet-schedulers-mttcg, bench:beamlet-schedulers-one-hart, bench:shell-compile-module, bench:shell-compile, host:beamlet-vm::two_schedulers_lose_nothing_across_the_system_lock, host:beamlet-vm::schedulers_go_offline_and_online_again, host:beamlet-redoubt::two_schedulers_lose_nothing_across_the_system_lock, host:beamlet-redoubt::four_schedulers_lose_nothing_either, host:beamlet-redoubt::without_the_argument_the_vm_has_one_scheduler, host:beamlet-redoubt::the_count_is_one_decimal_argument_capped_and_one_otherwise, host:beamlet-redoubt::the_io_report_counts_the_schedulers, host:beamlet-redoubt::without_a_console_writes_are_dropped_reads_end_and_the_size_is_unknown, host:beamlet-redoubt::a_vm_without_a_console_runs_its_module_to_exit, bench:beamlet-boot, bench:beamlet-console, bench:beamlet-files, bench:boot-profile, bench:boot-profile-unverified, bench:pack-outside-module, bench:pack-bad-truncated, bench:pack-bad-wrong-length, bench:pack-bad-wrong-name, bench:beamlet-heap-flood, bench:beamlet-budget-flood, bench:userland-boot, bench:userland-bad-start, bench:userland-read-only, bench:verity-flipped-tree, bench:verity-wrong-root, host:beamlet-redoubt::a_module_is_its_file_and_a_failed_read_is_refused, host:beamlet-redoubt::not_found_at_the_open_is_absent_and_every_other_error_is_refused_by_name, host:beamlet-redoubt::verified_module_lookup_propagates_found_absent_and_refused, host:beamlet-redoubt::verified_application_lookup_propagates_found_absent_and_refused, host:beamlet-redoubt::a_packed_module_comes_from_the_pack_and_any_other_from_the_volume, host:beamlet-redoubt::a_pack_with_a_bad_entry_is_refused_whole, host:testbench::the_boot_pack_is_deterministic_sorted_and_only_of_the_objects, host:beamlet-vm::the_search_is_flat_in_the_pattern_count, host:beamlet-vm::the_matcher_finds_what_every_pattern_at_every_byte_finds
+Status: built · partly tested: programs are not built · tested: bench:session-tcp-echo, bench:session-tcp-loopback, host:beamlet-redoubt::a_connect_is_clone_ctl_and_data_and_the_peers_end_is_closed, host:beamlet-redoubt::active_mode_delivers_what_arrives_and_the_end, host:beamlet-redoubt::refusals_are_named_and_a_failed_socket_is_given_back, host:beamlet-redoubt::a_listener_accepts_through_ctl, host:beamlet-redoubt::a_read_the_server_times_out_is_asked_again, host:beamlet-redoubt::without_a_net_the_in_vm_loopback_still_serves, bench:beamlet-natives, bench:beamlet-reduction-rate, bench:beamlet-schedulers-mttcg, bench:beamlet-schedulers-one-hart, bench:shell-compile-module, bench:shell-compile, host:beamlet-vm::two_schedulers_lose_nothing_across_the_system_lock, host:beamlet-vm::schedulers_go_offline_and_online_again, host:beamlet-redoubt::two_schedulers_lose_nothing_across_the_system_lock, host:beamlet-redoubt::four_schedulers_lose_nothing_either, host:beamlet-redoubt::without_the_argument_the_vm_has_one_scheduler, host:beamlet-redoubt::the_count_is_one_decimal_argument_capped_and_one_otherwise, host:beamlet-redoubt::the_io_report_counts_the_schedulers, host:beamlet-redoubt::without_a_console_writes_are_dropped_reads_end_and_the_size_is_unknown, host:beamlet-redoubt::a_vm_without_a_console_runs_its_module_to_exit, bench:beamlet-boot, bench:beamlet-console, bench:beamlet-files, bench:boot-profile, bench:boot-profile-unverified, bench:pack-outside-module, bench:pack-bad-truncated, bench:pack-bad-wrong-length, bench:pack-bad-wrong-name, bench:beamlet-heap-flood, bench:beamlet-budget-flood, bench:userland-boot, bench:userland-bad-start, bench:userland-read-only, bench:verity-flipped-tree, bench:verity-wrong-root, host:beamlet-redoubt::a_module_is_its_file_and_a_failed_read_is_refused, host:beamlet-redoubt::not_found_at_the_open_is_absent_and_every_other_error_is_refused_by_name, host:beamlet-redoubt::verified_module_lookup_propagates_found_absent_and_refused, host:beamlet-redoubt::verified_application_lookup_propagates_found_absent_and_refused, host:beamlet-redoubt::a_packed_module_comes_from_the_pack_and_any_other_from_the_volume, host:beamlet-redoubt::a_pack_with_a_bad_entry_is_refused_whole, host:testbench::the_boot_pack_is_deterministic_sorted_and_only_of_the_objects, host:beamlet-vm::the_search_is_flat_in_the_pattern_count, host:beamlet-vm::the_matcher_finds_what_every_pattern_at_every_byte_finds
 
 On Redoubt, beamlet is a native program. Its built `Platform` adapter uses the client library
 ([native programs](native.md#the-client-library)) for the console, files, verified code lookup
-and the system natives, and the kernel's calls for the clock and randomness. The network and
-program adapters remain planned.
+and the system natives, and the kernel's calls for the clock and randomness. The program
+adapter remains planned.
 
 | Method | On Redoubt |
 | --- | --- |
@@ -543,9 +543,62 @@ program adapters remain planned.
 | `programs` | the client library's `launch`: native programs in carved budgets ([native programs](native.md)); planned, as ports. Launching is the `launch/1` native's |
 | `system` | the namespace's files and named handles, typed calls on a pool of threads, served endpoints on a thread each, budgets from the named handle `budget`, the kernel's label stamp, and `launch` ([natives](#natives)) |
 
-TCP is Plan 9's `/net`, served by `ipd`: `gen_tcp` works unchanged over a backend that opens
-`/net/tcp/clone` and reads and writes the data file, and framing stays in Erlang, so the Rust side
-only moves bytes ([ipd](../servers/ipd.md)). The size is asked afresh because the only console
+TCP is Plan 9's `/net`, served by `ipd` ([ipd](../servers/ipd.md#the-net-tree)): `gen_tcp`
+works unchanged over a backend in Erlang, `beamlet_tcp`, embedded in the VM
+([`vm/lib/beamlet_tcp.erl`](../../userland/otp/vm/lib/beamlet_tcp.erl)), and the Rust side only
+moves bytes. When the namespace holds a `/net`, a socket is a process that reads
+`/net/tcp/clone` for its number, writes `connect(addr, port)` to its `ctl` in the wire encoding
+(the generated codec, [wire](../servers/wire.md#wire-tables-and-the-generator)), reads `ctl` until the state is
+established, and moves bytes through `data`: each a file operation through the VM's hub like
+any other ([files](files.md#files-over-9p)), a reader process per socket for what arrives,
+writes from the socket process. Framing, packet modes and the active-mode mailbox stay in
+Erlang; the hub's `etimedout` on a wait is asked again, and 0 bytes is the peer's end
+(`tcp_closed`, or `{error, closed}` to a `recv`). There is no backpressure: the reader drains
+the socket as bytes arrive and a passive socket's unread bytes accumulate in the socket process,
+bounded only by the VM's budget. `close` is `ctl close`, and a socket process
+that dies has its socket aborted by its reader, so nothing of `ipd`'s outlives it.
+- **Every socket is `ipd`'s then, loopback addresses included.** The loopback inside the VM
+  is not consulted: a connect to `127.0.0.1` or to the box's own address is `ipd`'s refusal
+  ([R59 (never the box's own addresses)](../servers/ipd.md#r59-never-the-boxs-own-addresses)),
+  and a refusal keeps the name `ipd` gave it, by the error table's last column
+  ([wire](../servers/wire.md#error-names)): `eacces` for the box's own addresses, for a labelled
+  caller ([R60 (a sink refuses labels)](../servers/ipd.md#r60-a-sink-refuses-labels)) and for
+  an address or port outside the scope; a connect the stack could not complete (nobody
+  answering, a reset) reads back as the closed state, `econnrefused`. `session-tcp-loopback`
+  connects to the box's own `sshd` at its loopback and its listed address and the capture shows
+  no SYN to either; `session-tcp-echo` echoes through the bench's peer in each packet mode.
+- **A session's sockets are its share of `ipd`'s admission** ([sizing](../servers/ipd.md#sizing)):
+  a `State` unit each, as its `/net` connection is one, within its account's bucket divided
+  among the account's sessions, and a socket closed by the session keeps its unit through TCP's
+  TIME-WAIT (10 s). Past the share a connect is `{error, emfile}`, `ipd`'s `too_many`; at the
+  image's defaults a session with a console session beside it has three sockets, so a client
+  that opens and closes connections in quick succession reuses one instead, as
+  `session-tcp-echo` does.
+- **Addresses are IPv4 tuples.** A name is `{error, nxdomain}` until the resolver
+  ([name-scoped connections](../servers/ipd.md#name-scoped-connections)); an IPv6 tuple is
+  `eafnosupport`.
+- **`listen` is `ipd`'s listen rule** ([scopes](../servers/ipd.md#scopes-and-grants)): a scope
+  without one, as a session's in the image, answers `{error, eacces}`; one with it listens, at
+  most 8 in the backlog, and `accept` is a read of the listener's `ctl` that `ipd` holds until
+  a connection arrives, the new socket's `remote` its peer name.
+- **Without a `/net`** (a lease, a VM on the fake kernel) a loopback network inside the one VM
+  stands in: `listen` registers a port, `connect` to a loopback address finds it, and any other
+  address is `{error, enetunreach}`, since the VM has no network ([agents](agents.md#leases)).
+  One VM is one trust domain, so the stand-in adds no authority: it reaches only the VM's own
+  processes.
+- **Not inet.** `sockname` of a socket of `ipd`'s is `{error, enotsup}`: `ipd` does not tell a
+  socket its own address and port, and nothing is invented; a listener's is `{0,0,0,0}` and its
+  port.
+
+The waits fit together because a server parks a request strictly shorter than its clients wait
+for it: `ipd` holds a `data` or `ctl` read 8 s against the hub's 10 s
+([ipd](../servers/ipd.md#the-net-tree), [files](files.md#files-over-9p)), so a read the hub
+gives up has already been answered `timeout`, the client asks again, and bytes arriving between
+wait in the socket's buffer for the next read; the host test
+`a_read_the_server_times_out_is_asked_again` runs the backend against a `/net` that keeps the
+rule and feeds the bytes after the timeout.
+
+The size is asked afresh because the only console
 whose size changes is an SSH channel, and a cached size would answer a redraw with the size from
 before the change; a caller that wants to be told of a change uses the parked `resize` call
 ([the shell](shell.md)).

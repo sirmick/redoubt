@@ -15,8 +15,12 @@
 //! stream for its device: the host's terminal, or a pipe in a test. What runs over it, the
 //! platform and the client library, is what runs on Redoubt; `consoled`'s own device handling is
 //! its host tests' and the machine's.
+//!
+//! **The `/net` is a script** ([`net`]): `ipd`'s tree served over the same skeleton, its
+//! connects, refusals and bytes written by the test, so the VM's `gen_tcp` backend is tested
+//! against the files it reads and writes without a stack.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::io::{Read as _, Write};
 use std::num::NonZeroU64;
 use std::path::PathBuf;
@@ -39,6 +43,7 @@ use redoubt_rt::wire::Error as WireError;
 use redoubt_rt::wire::proto::blkd::{
     self, ErrorCode as BlkdError, FlushReply, InfoReply, Message as BlkdMessage, ReadReply, WriteReply,
 };
+use redoubt_rt::wire::proto::net_ctl;
 
 use crate::{Modules, Unloaded};
 
@@ -584,6 +589,386 @@ impl Around<Stream> for Readers {
 
 /// Parses a startup block as the fake process it was written for would.
 pub fn startup(block: &[u8]) -> Startup<'_> { Startup::parse(block).expect("a startup block") }
+
+// ---- a scripted `/net` ----
+
+/// What a scripted `/net` was asked, in order.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum NetSeen {
+    /// A socket made by a read of `clone`.
+    Clone(u32),
+    /// `connect(addr, port)` written to a socket's ctl.
+    Connect(u32, [u8; 4], u16),
+    /// `listen(port, backlog)` written to a socket's ctl.
+    Listen(u32, u16, u8),
+    Close(u32),
+    Abort(u32),
+    /// Bytes written to a socket's data.
+    Wrote(u32, Vec<u8>),
+}
+
+/// A socket of the script's, by what `ctl` reads for it.
+#[derive(Default)]
+struct NetSock {
+    state: u32,
+    /// What a read of `data` takes, in order.
+    inbound: VecDeque<u8>,
+    /// The peer has ended: a read with nothing left takes 0 bytes.
+    ended: bool,
+    remote: ([u8; 4], u16),
+    /// A listener's accepted sockets not yet reported by a read of its ctl.
+    accepted: VecDeque<u32>,
+    /// When each read of its data or ctl was held ([`NetScript::holds`]).
+    holds: Vec<u64>,
+}
+
+/// How long a read of `data` or `ctl` is held before it is answered `timeout`: a server holds a
+/// request strictly shorter than its clients wait for it (`FILE_WAIT_US`, 10 s), so that the
+/// client asks again and no late answer is dropped.
+pub const NET_WAIT_US: u64 = 8_000_000;
+
+/// The script of a `/net` served as `ipd` serves its tree (docs/servers/ipd.md, "The `/net`
+/// tree"), short of a stack: a `connect` to an address in `reach` is established at once and to
+/// any other reads back closed, an address in `own` is refused by name before anything else, a
+/// read of `data` with nothing to read is held, 0 bytes once the peer has ended, and a write is
+/// taken whole, echoed back when `echo` is set. The test feeds and ends a socket's stream and
+/// hands a listener an accepted socket, then wakes the server.
+pub struct NetScript {
+    pub reach: Vec<([u8; 4], u16)>,
+    pub own: Vec<[u8; 4]>,
+    pub echo: bool,
+    pub seen: Vec<NetSeen>,
+    sockets: BTreeMap<u32, NetSock>,
+    /// The test fed or ended something since the server last served its held reads again.
+    dirty: bool,
+}
+
+impl NetScript {
+    /// Bytes the peer of socket `n` sent.
+    pub fn feed(&mut self, n: u32, bytes: &[u8]) {
+        if let Some(s) = self.sockets.get_mut(&n) {
+            s.inbound.extend(bytes);
+            self.dirty = true;
+        }
+    }
+
+    /// The peer of socket `n` ended its side.
+    pub fn end(&mut self, n: u32) {
+        if let Some(s) = self.sockets.get_mut(&n) {
+            s.ended = true;
+            self.dirty = true;
+        }
+    }
+
+    /// A connection from `remote` accepted at listener `n`: the new socket's number.
+    pub fn accept(&mut self, n: u32, remote: ([u8; 4], u16)) -> u32 {
+        let m = (1..).find(|m| !self.sockets.contains_key(m)).expect("a free number");
+        self.sockets.insert(m, NetSock { state: 2, remote, ..NetSock::default() });
+        if let Some(l) = self.sockets.get_mut(&n) {
+            l.accepted.push_back(m);
+            self.dirty = true;
+        }
+        m
+    }
+
+    /// When (`time_now`, µs) each read of socket `n`'s data or ctl was held for want of
+    /// anything to answer. A request is served again each time the server is woken, so one
+    /// read may be held several times; a hold past a request's deadline is another request's,
+    /// the first having been answered `timeout`.
+    pub fn holds(&self, n: u32) -> Vec<u64> {
+        self.sockets.get(&n).map(|s| s.holds.clone()).unwrap_or_default()
+    }
+}
+
+/// A `/net` served from a script, on the fake kernel.
+pub struct NetServer {
+    pub pid: usize,
+    pub endpoint: Handle,
+    pub thread: JoinHandle<u32>,
+    pub script: Arc<Mutex<NetScript>>,
+    wake: Handle,
+}
+
+impl NetServer {
+    /// Has the server look at its script again: what the test fed or ended answers the reads
+    /// held for it.
+    pub fn wake(&self) {
+        let wake = Endpoint::from_handle(self.wake);
+        let _ = fake().as_process(self.pid, || wake.send(&[0; 4], &[], None, FOREVER));
+    }
+}
+
+/// Starts a [`NetServer`] that reaches `reach`, refuses `own`, and echoes when `echo`.
+pub fn net(reach: &[([u8; 4], u16)], own: &[[u8; 4]], echo: bool) -> NetServer {
+    let f = fake();
+    let pid = f.process(0, &[]);
+    let endpoint = f.endpoint(pid);
+    let script = Arc::new(Mutex::new(NetScript {
+        reach: reach.to_vec(),
+        own: own.to_vec(),
+        echo,
+        seen: Vec::new(),
+        sockets: BTreeMap::new(),
+        dirty: false,
+    }));
+    let (wake_tx, wake_rx) = std::sync::mpsc::channel();
+    let served = Arc::clone(&script);
+    let thread = f.run(pid, move || {
+        let endpoint = Endpoint::from_handle(endpoint);
+        let Ok(wake) = endpoint.mint(NonZeroU64::new(INPUT).expect("non-zero"), None) else { return 2 };
+        wake_tx.send(wake.handle()).expect("the test waits for the wake handle");
+        // `ipd`'s shape of share: requests to spare for the reads it holds.
+        let limits = Limits { buckets: 4, in_flight: 16, files: 64, state: 16, requests: 80, pages: 2 };
+        let random = redoubt_rt::handle::random_u64().unwrap_or(1);
+        let Ok(mut server) = NineServer::new(NetFs(served), limits, random) else { return 1 };
+        server.requests_wait(NET_WAIT_US);
+        server.run_around(&endpoint, NetReads)
+    });
+    let wake = wake_rx.recv().expect("the wake handle");
+    NetServer { pid, endpoint, thread, script, wake }
+}
+
+/// The tree's nodes: `/`, `/tcp`, `/tcp/clone` and a socket's directory and files.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NetNode {
+    Root,
+    Tcp,
+    Clone,
+    Dir(u32),
+    Ctl(u32),
+    Data(u32),
+    Remote(u32),
+}
+
+fn net_qid(node: NetNode) -> Qid {
+    let (kind, path) = match node {
+        NetNode::Root => (0x80, 0),
+        NetNode::Tcp => (0x80, 1),
+        NetNode::Clone => (0, 2),
+        NetNode::Dir(n) => (0x80, 16 + u64::from(n) * 4),
+        NetNode::Ctl(n) => (0, 17 + u64::from(n) * 4),
+        NetNode::Data(n) => (0, 18 + u64::from(n) * 4),
+        NetNode::Remote(n) => (0, 19 + u64::from(n) * 4),
+    };
+    Qid { kind, version: 0, path }
+}
+
+fn net_name(node: NetNode) -> String {
+    match node {
+        NetNode::Root => "/".into(),
+        NetNode::Tcp => "tcp".into(),
+        NetNode::Clone => "clone".into(),
+        NetNode::Dir(n) => n.to_string(),
+        NetNode::Ctl(_) => "ctl".into(),
+        NetNode::Data(_) => "data".into(),
+        NetNode::Remote(_) => "remote".into(),
+    }
+}
+
+struct NetFs(Arc<Mutex<NetScript>>);
+
+impl NetFs {
+    fn script(&self) -> std::sync::MutexGuard<'_, NetScript> { self.0.lock().expect("the script") }
+}
+
+/// A `net_ctl` error as `ipd` names it in an `Rerror`.
+fn net_error(name: &'static str) -> NineError { NineError(name) }
+
+impl FileServer for NetFs {
+    type Node = NetNode;
+
+    fn attach(&mut self, _: &Caller, _aname: &str) -> Result<(NetNode, Qid), NineError> {
+        Ok((NetNode::Root, net_qid(NetNode::Root)))
+    }
+
+    fn labels(&self, _: &NetNode) -> &[u64] { &[] }
+
+    fn walk(&mut self, _: &Caller, dir: &NetNode, name: &str) -> Result<(NetNode, Qid), NineError> {
+        let node = match (dir, name) {
+            (NetNode::Root, "tcp") => NetNode::Tcp,
+            (NetNode::Tcp, "clone") => NetNode::Clone,
+            (NetNode::Tcp, _) => {
+                let n: u32 = name.parse().map_err(|_| NineError::NOT_FOUND)?;
+                if !self.script().sockets.contains_key(&n) {
+                    return Err(NineError::NOT_FOUND);
+                }
+                NetNode::Dir(n)
+            }
+            (NetNode::Dir(n), "ctl") => NetNode::Ctl(*n),
+            (NetNode::Dir(n), "data") => NetNode::Data(*n),
+            (NetNode::Dir(n), "remote") => NetNode::Remote(*n),
+            (NetNode::Root | NetNode::Dir(_), _) => return Err(NineError::NOT_FOUND),
+            _ => return Err(NineError::NOT_DIR),
+        };
+        Ok((node, net_qid(node)))
+    }
+
+    /// As `ipd`: only `ctl` and `data` take writes.
+    fn open(&mut self, _: &Caller, node: &NetNode, m: u8) -> Result<Qid, NineError> {
+        let writes = matches!(m & 3, mode::OWRITE | mode::ORDWR) || m & mode::OTRUNC != 0;
+        if writes && !matches!(node, NetNode::Ctl(_) | NetNode::Data(_)) {
+            return Err(NineError::PERMISSION);
+        }
+        Ok(net_qid(*node))
+    }
+
+    fn read(&mut self, _: &Caller, node: &NetNode, offset: u64, out: &mut [u8]) -> Result<Read, NineError> {
+        let mut script = self.script();
+        match *node {
+            NetNode::Clone => {
+                if offset != 0 {
+                    return Ok(Read::Done(0));
+                }
+                let n = (1..).find(|n| !script.sockets.contains_key(n)).expect("a free number");
+                script.sockets.insert(n, NetSock::default());
+                script.seen.push(NetSeen::Clone(n));
+                let out = out.get_mut(..4).ok_or(NineError::TOO_SMALL)?;
+                out.copy_from_slice(&n.to_le_bytes());
+                Ok(Read::Done(4))
+            }
+            NetNode::Ctl(n) => {
+                let sock = script.sockets.get_mut(&n).ok_or_else(|| net_error("state"))?;
+                let m = if sock.state == 5 {
+                    let Some(m) = sock.accepted.pop_front() else {
+                        sock.holds.push(redoubt_rt::handle::time_now().unwrap_or(0));
+                        return Ok(Read::Wait);
+                    };
+                    m
+                } else {
+                    n
+                };
+                let out = out.get_mut(..8).ok_or(NineError::TOO_SMALL)?;
+                out[..4].copy_from_slice(&sock.state.to_le_bytes());
+                out[4..].copy_from_slice(&m.to_le_bytes());
+                Ok(Read::Done(8))
+            }
+            NetNode::Data(n) => {
+                let sock = script.sockets.get_mut(&n).ok_or_else(|| net_error("state"))?;
+                if sock.state != 2 && sock.state != 3 {
+                    return Err(net_error("state"));
+                }
+                if sock.inbound.is_empty() {
+                    if sock.ended {
+                        return Ok(Read::Done(0));
+                    }
+                    sock.holds.push(redoubt_rt::handle::time_now().unwrap_or(0));
+                    return Ok(Read::Wait);
+                }
+                let k = out.len().min(sock.inbound.len());
+                for (slot, byte) in out[..k].iter_mut().zip(sock.inbound.drain(..k)) {
+                    *slot = byte;
+                }
+                Ok(Read::Done(k))
+            }
+            NetNode::Remote(n) => {
+                if offset != 0 {
+                    return Ok(Read::Done(0));
+                }
+                let sock = script.sockets.get(&n).ok_or_else(|| net_error("state"))?;
+                let out = out.get_mut(..6).ok_or(NineError::TOO_SMALL)?;
+                out[..4].copy_from_slice(&sock.remote.0);
+                out[4..].copy_from_slice(&sock.remote.1.to_le_bytes());
+                Ok(Read::Done(6))
+            }
+            NetNode::Root | NetNode::Tcp | NetNode::Dir(_) => Err(NineError::NOT_SUPPORTED),
+        }
+    }
+
+    fn write(&mut self, _: &Caller, node: &NetNode, _offset: u64, data: &[u8]) -> Result<usize, NineError> {
+        let mut script = self.script();
+        match *node {
+            NetNode::Ctl(n) => {
+                let op = net_ctl::Message::decode_file(data).map_err(|_| NineError::BAD_MESSAGE)?;
+                if !script.sockets.contains_key(&n) {
+                    return Err(net_error("state"));
+                }
+                match op {
+                    net_ctl::Message::Connect(c) => {
+                        let addr: [u8; 4] = c.addr.try_into().map_err(|_| NineError::BAD_MESSAGE)?;
+                        script.seen.push(NetSeen::Connect(n, addr, c.port));
+                        if script.own.contains(&addr) {
+                            return Err(net_error("not_permitted"));
+                        }
+                        let reached = script.reach.contains(&(addr, c.port));
+                        let sock = script.sockets.get_mut(&n).expect("checked above");
+                        if sock.state != 0 {
+                            return Err(net_error("state"));
+                        }
+                        sock.state = if reached { 2 } else { 4 };
+                        sock.remote = (addr, c.port);
+                    }
+                    net_ctl::Message::Listen(l) => {
+                        script.seen.push(NetSeen::Listen(n, l.port, l.backlog));
+                        if l.backlog > 8 {
+                            return Err(net_error("too_many"));
+                        }
+                        let sock = script.sockets.get_mut(&n).expect("checked above");
+                        if sock.state != 0 {
+                            return Err(net_error("state"));
+                        }
+                        sock.state = 5;
+                    }
+                    net_ctl::Message::Close(_) => {
+                        script.seen.push(NetSeen::Close(n));
+                        let sock = script.sockets.get_mut(&n).expect("checked above");
+                        // The graceful end: what is left to read is read, then the socket goes.
+                        sock.state = if sock.state == 2 { 3 } else { 4 };
+                    }
+                    net_ctl::Message::Abort(_) => {
+                        script.seen.push(NetSeen::Abort(n));
+                        script.sockets.remove(&n);
+                    }
+                }
+                Ok(data.len())
+            }
+            NetNode::Data(n) => {
+                let echo = script.echo;
+                let sock = script.sockets.get_mut(&n).ok_or_else(|| net_error("state"))?;
+                if sock.state != 2 {
+                    return Err(net_error("state"));
+                }
+                if echo {
+                    sock.inbound.extend(data);
+                }
+                script.seen.push(NetSeen::Wrote(n, data.to_vec()));
+                Ok(data.len())
+            }
+            _ => Err(NineError::PERMISSION),
+        }
+    }
+
+    fn stat(&mut self, _: &Caller, node: &NetNode) -> Result<FileStat, NineError> {
+        let mode = if net_qid(*node).kind & 0x80 != 0 { 0o040_555 } else { 0o666 };
+        Ok(FileStat { qid: net_qid(*node), mode, mtime: 0, length: 0, name: net_name(*node) })
+    }
+
+    fn dir_entry(
+        &mut self,
+        _: &Caller,
+        _: &NetNode,
+        _: u64,
+    ) -> Result<Option<(NetNode, FileStat)>, NineError> {
+        Ok(None)
+    }
+}
+
+/// Beside the skeleton's loop: the hub's requests are multiplexed, so a read the file server
+/// asks to hold stays with the skeleton, which serves it again on `wake` and answers it
+/// `timeout` at [`NET_WAIT_US`], as `ipd`'s does; the test's feeding sets the script dirty and
+/// wakes the server, whose next turn serves the held reads again.
+struct NetReads;
+
+impl Around<NetFs> for NetReads {
+    fn call(&mut self, server: &mut NineServer<NetFs>, request: Request, _now: u64) {
+        let _ = server.serve_with(request, |_, request| refuse_malformed(request).map(|()| None));
+    }
+
+    fn turn(&mut self, server: &mut NineServer<NetFs>, now: u64) {
+        if std::mem::take(&mut server.fs.script().dirty) {
+            server.wake(now);
+        }
+    }
+}
 
 // ---- the home volume ----
 

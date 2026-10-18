@@ -62,7 +62,7 @@ authentication and default policy, not mechanism ([the steward](../servers/stewa
 
 ### Leases
 
-Status: built · partly tested: a lease's grants are its sponsor's `~/project` and the system volume, and the read root is writable until a server takes a read-only connection; the task-scoped grants and gateways are later · tested: bench:steward-lease-ends, bench:steward-end-lease, bench:steward-sub-agent-dies-with-agent, bench:agent-login
+Status: built · partly tested: a lease's grants are its sponsor's `~/project` and the system volume, and the read root is writable until a server takes a read-only connection; the task-scoped grants and gateways are later · tested: bench:steward-lease-ends, bench:steward-end-lease, bench:steward-sub-agent-dies-with-agent, bench:agent-login, bench:session-tcp-loopback
 
 A **lease** is a budget with a deadline, made by the steward for an agent or a session. When the
 deadline passes, the kernel destroys the budget and everything in it; the sponsor can end it
@@ -103,6 +103,11 @@ sooner. A lease is task-scoped: "read `~/project`, write `~/project/out`, the `m
   is dropped, a read answers the end of the input, so an agent's output has nowhere to go but
   `/project/out`. How its VM ended is the steward's console line
   (`steward: lease alice/agent-1 of 1001/{} exited 0`), never the agent's.
+- **A lease has no network.** Its namespace holds no `/net`, so its VM's `gen_tcp` has only the
+  loopback inside the VM ([beamlet](beamlet.md#beamlet-on-redoubt)): a connect to any other
+  address is `{error, enetunreach}`, and the bench's peer sees nothing from it
+  (`session-tcp-loopback`). An agent reaches outside the box only through its gateway
+  capabilities, later ([gatewayd](../servers/gatewayd.md)).
 - **A lease is not re-bound.** When a shared server restarts, the steward tells its sessions on
   their `notices` endpoints and each shell re-binds its home
   ([the steward](../servers/steward.md#failure-and-restart)); a lease's VM has no such
