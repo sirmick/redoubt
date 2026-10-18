@@ -654,8 +654,10 @@ holder's labels.
 
 ### R26 (admission fairness)
 
-<details><summary>Status: built · partly tested: the rule is attacked in host tests with the runtime's fake kernel, and no boot floods a real server · tested (16)</summary>
+<details><summary>Status: built · partly tested: the rule is attacked in host tests with the runtime's fake kernel, and two boots flood a real walfsd while a second bucket keeps its share · tested (18)</summary>
 
+- bench:walfsd-flood-turn
+- bench:vault-flood-turn
 - host:redoubt-rt::the_key_is_the_account_and_the_label_set
 - host:redoubt-rt::an_agent_flooding_a_bucket_leaves_its_sponsor_a_share
 - host:redoubt-rt::an_agent_flooding_a_bucket_leaves_its_sponsor_a_share_and_its_lease_end
@@ -718,12 +720,13 @@ agree on a badge with probability 2^-62 per badge, not with certainty.
 
 ### R28 (parked-call accounting)
 
-<details><summary>Status: built · partly tested: attacked in host tests with the runtime's fake kernel; `consoled` and `ipd`, which park, are attacked only in part in a boot · tested (4)</summary>
+<details><summary>Status: built · partly tested: attacked in host tests with the runtime's fake kernel; `consoled` and `ipd`, which park, are attacked only in part in a boot, though `ipd` is now flooded from a session too · tested (5)</summary>
 
 - host:redoubt-rt::parking_is_admitted_per_bucket_and_share
 - host:redoubt-rt::parked_calls_are_served_abandoned_and_expired
 - host:redoubt-rt::a_waiting_write_is_parked_abandoned_and_expired
 - bench:net-pinned
+- bench:net-pinned-ssh
 
 </details>
 

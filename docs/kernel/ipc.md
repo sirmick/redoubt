@@ -280,10 +280,13 @@ exiting budget to the owner of the exit endpoint; one that fails the rule is dro
 
 ### R2 (fair waiting)
 
-<details><summary>Status: built · partly tested: how groups are keyed (account, label set, and budget for account 0) is attacked only in the model, and turns between groups on the kernel only as one label set's order beside a vault's turn and a served group going behind one already waiting; the IPC case fills one group's cap · tested (10)</summary>
+<details><summary>Status: built · partly tested: how groups are keyed (account, label set, and budget for account 0) is attacked only in the model, and turns between groups on the kernel only as one label set's order beside a vault's turn and a served group going behind one already waiting; the IPC case fills one group's cap, and three boots flood a real server and keep the victim's group its turn · tested (13)</summary>
 
 - bench:redoubt-ipc
 - bench:ipc-fair-label-sets
+- bench:walfsd-flood-turn
+- bench:vault-flood-turn
+- bench:blkd-fairness
 - host:redoubt-model::steward_noninterference
 - host:redoubt-model::one_cursor_scenario
 - mutation:R2FifoAcrossAccounts
@@ -406,7 +409,7 @@ other handles arrive, and the caller's `call` returns `OutOfMemory` with the rep
 
 ### R4a (open calls)
 
-Status: built · tested: bench:redoubt-ipc, mutation:R4aOpenCallsPerThread, mutation:R4aFullTakesNothing
+Status: built · tested: bench:redoubt-ipc, bench:net-pinned-ssh, mutation:R4aOpenCallsPerThread, mutation:R4aFullTakesNothing
 
 Taking a call opens it and charges one page to the receiving process's budget; `reply` closes
 it and frees the page. A process holding `MAX_OPEN_CALLS` (256) open calls takes no more: calls
