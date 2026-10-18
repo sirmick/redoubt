@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 505
+revision = 514
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -2649,5 +2649,14 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "agent-suite"
   body = "Brief: .wash/local/ATK12-implementer.md; ruling .wash/local/wave-2026-10-18-rulings.md 'The agent-suite step'. Tier A (attack cases; the bench), size M, reviewer: a red (the orchestrator's pick). Builds three rows of docs/plan/m3-agents.md 'A scripted hostile user': (1) walfsd-pools: bob fills his home to its quota and opens fids until his cap, refused by name, while alice's saves succeed and walfsd's budget holds no more pages than before (R48, R26); (2) session-hostile-launch: alice's session launches a malformed ELF from her home and a program whose image is cut short; each refusal names itself, the child alone is hurt and her session answers on (R31, R32); (3) vault-no-leak: alice's unlabelled session records a stated list of observables (her sub-budget's usage, a request id, a session id, the PID of a program it launches, her home's qids, versions and listings) before, while and after her vault session writes files, launches a program and submits a request; nothing it records changes with the vault's work, and it cannot write, truncate, create or remove in the vault's volume (R37, R25, R36). The observable list is the case's claim and is on the page; an observable that does change is a finding reported to the Architect with its mechanism, never removed from the list to pass. Pages: m3-agents.md rows, littlefsd.md and walfsd.md R48, init.md R31/R32, steward.md R37 status lines, SECURITY.md rows. No server or kernel code."
-  state = "active"
-  revision = 497
+  state = "done"
+  revision = 511
+
+[[node]]
+  id = "ATK13"
+  title = "The last two scripted rows: a labelled agent has no sink, and keyd signs no relayed blob (its boot arm resolved)"
+  template = "package"
+  parent = "agent-suite"
+  body = "Brief: .wash/local/ATK13-implementer.md; ruling .wash/local/wave-2026-10-18-rulings.md 'agent-suite wave B'. Tier A (attack cases; the bench), size S, reviewer: a red (the orchestrator's pick). Turns the two remaining 'not yet' rows of docs/plan/m3-agents.md into their honest state under today's image. (1) R60, the labelled-agent sink row, becomes a boot case steward-labelled-agent-no-sink, built on steward-approve-box's path (a labelled agent approved at approve@box, running in its vault): the agent's :gen_tcp.connect gets enetunreach (its lease namespace holds no /net, as session-tcp-loopback shows for an unlabelled lease), and ipd's refusal of a labelled caller is the backstop, cited to net-attacks (R60); the verdict is the agent's result file in its vault and the absence of any frame to the bench peer (rule F). (2) R44, the keyd relayed-blob row: no boot arm is reachable in the image, since no session or lease holds a keyd badge (keyd's purposes are sshd's ssh_host and the steward's audit; keys in leases are M6); the row resolves on m3-agents.md by citing keyd's host tests (a_relayed_ssh_user_auth_blob_is_never_what_gets_signed and R44's set) and stating why no boot arm exists, with a normal login's end-to-end verification (the client checks the host signature over the exchange it computed) as the boot evidence that keyd signs only its own digest. Pages: m3-agents.md rows, agents.md R60-adjacent and keyd.md R44 status lines, SECURITY.md R60 row. No server, kernel or steward code."
+  state = "reported"
+  revision = 514
