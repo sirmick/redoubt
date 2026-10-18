@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 517
+revision = 519
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -2585,8 +2585,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   needs = ["STEWARD6"]
   body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'F1'. Brief: .wash/local/STEWARD5-implementer.md. Tier A (the steward's loop), size M, reviewer steward-red-4; after STEWARD6 (same file). Found by STEWARD3V's and 3W's latency rounds: a cleanup step's one attempt at a busy erofsd:system (100 ms, 3Y's bound at the loop's top) landing in a sample's window misses the timer wake's p99 (50 ms) by construction: one sample per round at N = 3 and 4 on both widths at one hart (69-93 ms), 148 ms at two on rv64. Options (a) a target-derived bound and (c) non-blocking calls refused in the ruling. Rule: the cleanup queue (due, retries, parked: 3W unchanged) is owned by a cleanup thread of the steward's, as its crossing watchers are; each step runs there with the client library's call bound; the loop hands it steps, wake(server) and forget(server), and takes each outcome back as a message on its own endpoint and says the line (3U's queue). A mint at a server with parked steps: wake, mint, and if refused wait one mint bound (STEWARD6's) for the thread's report and retry once (3W's test kept). The loop's top makes no call to a shared server. Cost: one thread and one lend page, the arithmetic on the page and in every memory-checked manifest. Acceptance: steward-latency N = 3 and 4 at one hart meet the timer wake's p99 on both widths and reply_wait carries no 100 ms retry; the steward set and steward-server-restart unchanged. Pages: steward.md 'Failure and restart', scheduling.md 'With the real steward' re-measured."
-  state = "active"
-  revision = 517
+  state = "done"
+  revision = 519
 
 [[node]]
   id = "STEWARD6"
