@@ -1185,15 +1185,17 @@ Status: built · partly tested: the `keyd` grant for `audit` comes with the audi
 
 ### R36 (unpredictable ids)
 
-Status: built · tested: bench:steward-session-ends, host:redoubt-steward-server::a_login_runs_the_session_batch_and_answers_the_session
+Status: built · tested: bench:steward-session-ends, bench:vault-no-leak, host:redoubt-steward-server::a_login_runs_the_session_batch_and_answers_the_session
 
 Every id the steward hands out (session, request, connection) is a random 64-bit word from a keyed
 generator, never a counter. So no principal learns how many sessions or requests another started.
-The model found the leak with sequential ids and checks the rule (`PolicySequentialIds`).
+The model found the leak with sequential ids and checks the rule (`PolicySequentialIds`); on the
+machine, an unlabelled session's two request ids, with its vault session's request between them,
+are three distinct words and the second is no successor of the first (`vault-no-leak`).
 
 ### R37 (vault non-interference)
 
-Status: built · tested: bench:steward-vault-session, bench:steward-sub-budget-flood, bench:vault-flood-turn, bench:shell-contexts, host:redoubt-steward-server::a_vault_login_carves_from_the_vault_s_sub_budget_and_has_no_network, host:redoubt-steward::a_session_sees_and_ends_its_own_domain_s_contexts_only, host:redoubt-steward-server::a_session_lists_detaches_and_ends_its_own_domain_s_contexts
+Status: built · tested: bench:steward-vault-session, bench:steward-sub-budget-flood, bench:vault-flood-turn, bench:vault-no-leak, bench:shell-contexts, host:redoubt-steward-server::a_vault_login_carves_from_the_vault_s_sub_budget_and_has_no_network, host:redoubt-steward::a_session_sees_and_ends_its_own_domain_s_contexts_only, host:redoubt-steward-server::a_session_lists_detaches_and_ends_its_own_domain_s_contexts
 
 A vault session's work (item writes, requests, calls to a shared server) changes nothing an
 unlabelled session observes: its results, the usage of `users`, of every principal's budget and
@@ -1212,6 +1214,21 @@ vault sends. The crashes P10 replays are ones an unlabelled session's call cause
 crashes on its own, or on a vault's call, is a stated residual
 ([residual risks](#residual-risks)): which call it holds, and when it takes the calls queued
 before, is service timing.
+
+**What an unlabelled session can observe**, the list `vault-no-leak` records in alice's unlabelled
+session before and after her vault session writes files in its volume, launches a program and
+submits a request, and prints equal: its own budget's limits and processes in use, and that a probe
+carve of 2048 pages succeeds; its contexts, by name and state; its home's listing, with each
+entry's kind, size and mtime; a launch of a program, its ending and its budget's use. Beside the
+list: no approval notice but its own requests' reaches it (the steward notifies the sessions whose
+labels include the request's); its request ids and the vault's are distinct random words
+([R36](#r36-unpredictable-ids)); and its writes, creates, removes and truncates in the vault's
+volume are `enoent` before and after, the namespace giving it no connection there, which
+[R25 (the label check)](serving.md#r25-the-label-check) would refuse at the server if it had one.
+This is every observable a session has: message ids, PIDs, qids, file versions and audit records
+are not reachable from a session today (a launch is a reference, a stat gives size, kind and
+times, and no unlabelled read of the audit exists), so they are not on the list; exposing a PID or
+a qid to a session would be its own change, judged against this rule.
 
 ### R38 (out-of-band approval)
 

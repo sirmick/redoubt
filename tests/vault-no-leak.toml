@@ -1,0 +1,132 @@
+description = "No leaky state while a vault works (docs/servers/steward.md, R37 and R36; docs/servers/serving.md, R25): alice's unlabelled SSH session records a stated list of observables, then her vault session (alice+alice-secrets) writes files in its volume, execs /boot/beamlet-hello and submits one for declassification, and the unlabelled session records the list again and compares. The list: its own budget's limits and processes used, and that a probe carve of 4096 pages succeeds; its contexts, by name and state; its home's listing, with each entry's kind, size and mtime; a launch of beamlet-hello, its ending and its budget's use; that no approval notice but its own submits' reaches it (the step after the vault's work is anchored at the start of the unread output and admits no notice line); and that its own two requests' ids and the vault's are three distinct words. It also cannot write, create, remove or truncate in the vault's volume, before or after: no binding, enoent. The verdicts are the unlabelled session's own values and the equality it prints, the steward's audit lines and the bench's distinct check (rule F)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+# The image's bundle with beamlet-hello public in /boot (steward-vault-launch's).
+recipe = "tests/data/steward/vault-launch.boot.toml"
+# The principal's budgets, each holding a shell VM's session, need 1 GiB, as steward-vault-session.
+memory_mib = 1024
+# Two logins open together, each a shell VM, three launches and three submits: steward-vault-launch's
+# two logins and two execs pass in about 40 s; four times that with the submits, rounded up.
+timeout_secs = 600
+expect = [
+    '^init: started sshd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
+    '^init: started steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+]
+# Three requests, two unlabelled and the vault's between: three ids, no two the same (R36).
+distinct = ['steward: audit 1001/\{[0-9]*\} at [0-9]+: Submitted \{ request: ([0-9]+) \}']
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    '^init: .* (exited|faulted|was killed)',
+    'init: restarted',
+    'EXCEPTION',
+    'steward: the core exited',
+    'steward: a step failed',
+    'sshd: login .*: refused',
+]
+# The unlabelled session's request, the vault's, the unlabelled session's again: three Submitted
+# records, each audited in the request's label set, {7} for all three, since the unlabelled
+# session's are pushes into the vault, audited where they land, not where they were asked for.
+expect_after = [
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{7\} at [0-9]+: Submitted \{ request: [0-9]+ \}',
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{7\} at [0-9]+: Submitted \{ request: [0-9]+ \}',
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{7\} at [0-9]+: Submitted \{ request: [0-9]+ \}',
+]
+
+# The vault session: its work is what the unlabelled session must not see.
+[[session]]
+user = "alice+alice-secrets"
+name = "vault"
+pty = true
+steps = [
+    { expect = '\([0-9]+\)> ' },
+    { mark = "vault-up" },
+    { wait = "observed-before" },
+    { send = "{:stage, File.mkdir_p(\"/vault/notes\"), File.write(\"/vault/notes/memo\", \"forty bytes of text, printable, as asked\"), File.write(\"/vault/notes/second\", String.duplicate(\"y\", 4096)), File.mkdir_p(\"/vault/secret\")}\n" },
+    { expect = '\{:stage, :ok, :ok, :ok, :ok\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "exec(\"beamlet-hello\", [\"from\", \"the\", \"vault\"])\n" },
+    { expect = 'beamlet-hello: from the vault' },
+    { expect = '\{:exited, 3\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:ok, c} = Redoubt.Contexts.connection(); {:memo, Redoubt.Wire.Client.Steward.submit(c, 2, <<7::little-64>>, 0, 0, 0, \"notes/memo\", \"\")}\n" },
+    # The notice for a labelled request reaches the sessions whose labels include its own: this one.
+    { expect = '(?s)\[an approval is waiting\].*\{:memo, \{:ok, %\{request: [0-9]+\}\}\}|\{:memo, \{:ok, %\{request: [0-9]+\}\}\}.*\[an approval is waiting\]' },
+    { expect = '\([0-9]+\)> ' },
+    { mark = "vault-done" },
+    { wait = "plain-done" },
+    { exit = 0 },
+]
+
+# The unlabelled observer. Each answer is tagged, so a pattern matches the value printed and never
+# the echo of the line typed.
+[[session]]
+user = "alice"
+name = "plain"
+steps = [
+    { wait = "vault-up" },
+    { expect = '\([0-9]+\)> ' },
+    # The probe carves 2048 pages, half the session's free room at its prompt (about 4,100 of
+    # 11,392): a carve of the whole room starves the VM's own heap, which it answers by exiting.
+    { send = "obs = fn -> {:ok, b} = Redoubt.Budget.own(); {:ok, u} = Redoubt.Budget.usage(b); {:ok, p} = Redoubt.Budget.carve(pages: 2048, processes: 1, weight: 1); probe = Redoubt.Budget.destroy(p); {:ok, cs} = Redoubt.Contexts.list(); ls = Enum.sort(File.ls!(\"/home/alice\")); %{limits: {elem(u.pages, 0), elem(u.processes, 0)}, procs: elem(u.processes, 1), probe: probe, contexts: Enum.map(cs, &{&1.name, &1.state}), home: Enum.map(ls, fn n -> s = File.stat!(\"/home/alice/\" <> n); {n, s.type, s.size, s.mtime} end)} end\n" },
+    { expect = '#Function<' },
+    # Write, create, remove and truncate in the vault's volume: the unlabelled namespace has no
+    # binding there, so each is enoent before any server is asked (the server's own check is R25).
+    { send = "probe = fn -> [File.write(\"/vault/leak\", \"x\"), File.mkdir(\"/vault/d\"), File.rm(\"/vault/notes/memo\"), File.open(\"/vault/notes/memo\", [:write])] |> Enum.map(&elem(&1, 1)) end; {:vault_probe, probe.()}\n" },
+    { expect = '\{:vault_probe, \[:enoent, :enoent, :enoent, :enoent\]\}' },
+    { send = "before = obs.(); {:b_budget, before.limits, before.procs, before.probe}\n" },
+    { expect = '\{:b_budget, \{[0-9]+, [0-9]+\}, [0-9]+, :ok\}' },
+    { send = "{:b_contexts, before.contexts}\n" },
+    { expect = '\{:b_contexts, \[\{"", :attached\}\]\}' },
+    { send = "{:b_home, before.home}\n" },
+    { expect = '\{:b_home, \[\{"hello", :regular, 13, \{\{[0-9, ]+\}, \{[0-9, ]+\}\}\}\]\}' },
+    { send = "exec(\"beamlet-hello\", [\"before\"])\n" },
+    { expect = 'beamlet-hello: before' },
+    { expect = '\{\{:exited, 3\}, %\{pages: \{256, [0-9]+\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:ok, c} = Redoubt.Contexts.connection(); req1 = Redoubt.Wire.Client.Steward.submit(c, 3, <<7::little-64>>, 0, 0, 0, \"hello\\nsecret/in\", \"\"); {:req1, req1}\n" },
+    # Its own request's notice reaches it, and the answer: in either order.
+    { expect = '(?s)\[an approval is waiting\].*\{:req1, \{:ok, %\{request: [0-9]+\}\}\}|\{:req1, \{:ok, %\{request: [0-9]+\}\}\}.*\[an approval is waiting\]' },
+    { expect = '\([0-9]+\)> ' },
+    { mark = "observed-before" },
+    { wait = "vault-done" },
+    # From the prompt matched above to this answer, nothing but the shell's redraw of the typed
+    # line (escape sequences and the line's own text) and the answer: a `[` outside an escape
+    # sequence, as a notice line for the vault's request, `[an approval is waiting]`, begins,
+    # fails the match and so the case.
+    { send = "{:quiet, 1}\n" },
+    { expect = '\A(?:[^\[]|\x1b\[[0-9;]*[A-Za-z])*\{:quiet, 1\}' },
+    { send = "after_ = obs.(); {:same, after_ == before}\n" },
+    { expect = '\{:same, true\}' },
+    { send = "{:a_budget, after_.limits, after_.procs, after_.probe}\n" },
+    { expect = '\{:a_budget, \{[0-9]+, [0-9]+\}, [0-9]+, :ok\}' },
+    { send = "{:a_home, after_.home}\n" },
+    { expect = '\{:a_home, \[\{"hello", :regular, 13, \{\{[0-9, ]+\}, \{[0-9, ]+\}\}\}\]\}' },
+    { send = "{:vault_probe_after, probe.()}\n" },
+    { expect = '\{:vault_probe_after, \[:enoent, :enoent, :enoent, :enoent\]\}' },
+    { send = "exec(\"beamlet-hello\", [\"after\"])\n" },
+    { expect = 'beamlet-hello: after' },
+    { expect = '\{\{:exited, 3\}, %\{pages: \{256, [0-9]+\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "req2 = Redoubt.Wire.Client.Steward.submit(c, 3, <<7::little-64>>, 0, 0, 0, \"hello\\nsecret/in2\", \"\"); {:req2, req2}\n" },
+    { expect = '(?s)\[an approval is waiting\].*\{:req2, \{:ok, %\{request: [0-9]+\}\}\}|\{:req2, \{:ok, %\{request: [0-9]+\}\}\}.*\[an approval is waiting\]' },
+    { expect = '\([0-9]+\)> ' },
+    # Its two ids are random words (R36): the second is no successor of the first, by one or by
+    # two, as a counter the vault's request moved between them would make it.
+    { send = "{:ok, %{request: a}} = req1; {:ok, %{request: b}} = req2; {:ids, a, b, b - a in [1, 2]}\n" },
+    { expect = '\{:ids, [0-9]+, [0-9]+, false\}' },
+    { mark = "plain-done" },
+    { exit = 0 },
+]
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]
+forward = [22]
