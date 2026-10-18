@@ -285,28 +285,22 @@ impl<B: Copy, H: Copy> Steward<B, H> {
     }
 
     /// Gives connection `h` back: the steward's own copy goes now ([`Kernel::release`]), and its
-    /// server is told at the loop's turn ([`Steward::cleanup`]), never from inside an event: the
-    /// cutoff is the scope's destroy, and a cleanup call a busy or recovering server does not
-    /// take would hold the loop for its whole bound (servers/steward.md, "Failure and restart").
+    /// server is told by the cleanup thread ([`Kernel::clean`]), never from inside an event and
+    /// never by the loop: the cutoff is the scope's destroy, and a cleanup call a busy or
+    /// recovering server does not take would hold whoever makes it for the call's whole bound
+    /// (servers/steward.md, "Failure and restart").
     fn give_back<K: Kernel<Budget = B, Handle = H>>(&mut self, kernel: &mut K, h: H) {
-        let server = kernel.server_of(h);
         kernel.release(h);
-        self.cleanup.push(h, server, kernel.now());
+        kernel.clean(h);
     }
 
-    /// Runs the cleanup steps due now, each within the steward's own send bound, up to the first
-    /// that times out, which is retried at a later turn up to the cap and then parked until its
-    /// server answers ([`crate::cleanup`]); returns when the earliest remaining step is due
-    /// (now, when the turn stopped short), so the loop wakes for it; a parked step has no time.
-    pub fn cleanup<K: Kernel<Budget = B, Handle = H>>(&mut self, kernel: &mut K) -> Option<u64> {
-        let now = kernel.now();
-        self.cleanup.run(now, |h, parks| kernel.clean(h, parks))
-    }
-
-    /// A mint at a server with steps parked there runs them first (the mint needs the record a
-    /// step frees; the first timeout stops them, so the mint pays one bound at most), and a mint
-    /// the server answered, taken or refused, wakes what is still parked there for the next turn
-    /// ([`crate::cleanup`]). `slot` names the server as [`Kernel::server_at`] does.
+    /// A mint at a server with steps parked there wakes them first, since the mint needs the
+    /// record a step frees, and the thread runs them meanwhile; a mint the server refuses all
+    /// the same fails its step, and the caller is told, as a mint the server does not take in
+    /// time is (nothing retries inside the steward: the caller's next attempt finds the record
+    /// freed). A mint the server answered, taken or refused, wakes what is still parked there
+    /// ([`crate::cleanup`]); a `Timeout` is no answer and wakes nothing. `slot` names the server
+    /// as [`Kernel::server_at`] does.
     fn minting<K: Kernel<Budget = B, Handle = H>, T>(
         &mut self,
         kernel: &mut K,
@@ -314,14 +308,14 @@ impl<B: Copy, H: Copy> Steward<B, H> {
         slot: Option<u16>,
         mint: impl FnOnce(&mut K) -> Result<T, Error>,
     ) -> Result<T, Error> {
-        let at = if self.cleanup.parked() > 0 { kernel.server_at(owner, slot) } else { None };
-        if let Some(server) = &at {
-            self.cleanup.run_parked(server, |h| kernel.clean(h, false));
+        let at = kernel.server_at(owner, slot);
+        if let Some(server) = at.as_deref().filter(|server| kernel.parked_at(server)) {
+            kernel.wake(server);
         }
         let made = mint(kernel);
-        if let Some(server) = &at {
+        if let Some(server) = at.as_deref() {
             if !matches!(made, Err(Error::Timeout)) {
-                self.cleanup.wake(server);
+                kernel.wake(server);
             }
         }
         made
@@ -347,7 +341,7 @@ impl<B: Copy, H: Copy> Steward<B, H> {
         connection: Handle,
     ) {
         kernel.reconnected(server, connection);
-        self.cleanup.forget(server);
+        kernel.forget(server);
         let sessions: Vec<(Object, H)> = self.notices.iter().map(|(o, n)| (o.clone(), *n)).collect();
         for (object, n) in sessions {
             for slot in kernel.slots_at(&object, server) {
@@ -504,7 +498,7 @@ impl<B: Copy, H: Copy> Steward<B, H> {
             // process a `DestroyBudget` before this step took (a lockout's end batch, a dead VM's)
             // is gone with its budget: there is nobody to tell, and a call would only wait out its
             // bound while the steward serves nobody (servers/steward.md, "Failure and restart").
-            // The console's `ended` to `sshd` is cleanup, run at the loop's turn.
+            // The console's `ended` to `sshd` is cleanup, the cleanup thread's.
             Step::Detach { relay, console, note } => {
                 let told = match self.made.get(relay) {
                     Some(Made::Relay(pid, _)) if !self.pids.contains_key(pid) => Ok(()),

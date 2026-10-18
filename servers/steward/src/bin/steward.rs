@@ -21,22 +21,35 @@
 //!
 //! A slot bound to nothing makes no call and gives the child no entry, so its path is `:enoent`.
 //!
-//! **Cleanup at the loop's turn** (servers/steward.md, "Failure and restart"): an end batch is
-//! answered once `DestroyBudget` has run, the cutoff; each connection it gave back is a step in
-//! the library's queue (`redoubt_steward_server::cleanup`), and the loop runs the steps due at
-//! its top, before it receives again, each within [`CLEANUP_US`]: a `disconnect` by id at the
-//! server that minted it, or `ended` on `sshd`'s channel console. A step a busy or recovering
-//! server does not take in time ends the turn (the rest stay due for the next, after one
-//! receive), is retried at a later turn and parked after the cap with a line, until a call of
-//! the steward's at that server is answered or the server restarts; the loop never waits more
-//! than one such bound on a server while it serves nobody.
+//! **The cleanup thread** (servers/steward.md, "Failure and restart"): an end batch is answered
+//! once `DestroyBudget` has run, the cutoff; each connection it gave back is a step in the
+//! library's queue (`redoubt_steward_server::cleanup`), shared with one thread of the steward's
+//! under a lock, which makes every step's call ([`cleanup_thread`]): a `disconnect` by id at
+//! the server that minted it, or `ended` on `sshd`'s channel console, each within the client
+//! library's own call bound ([`STEP_US`]). The loop only hands steps over, wakes or forgets a
+//! server's, and takes each step's fate back as a message on its own endpoint (badge
+//! [`CLEANUP`]), saying the parked step's line; it makes no call to a shared server at its top,
+//! so a server that never answers costs it nothing. The thread idles in a call on the same
+//! badge, which the loop holds and answers when a step is due or handed over: the loop never
+//! sends to the thread, since a send waits for its receiver and the thread may be inside a
+//! server's bound. Two rules keep it sound. The loop is the one arbiter of the queue's wake-ups:
+//! every hand-over, wake and forget goes into the queue under its lock, and the answer to the
+//! idle call is only a wake, given when the loop holds that call; a hand-over either precedes
+//! the loop's take of the call, which then finds a step due and is answered at once, or follows
+//! it and answers it, so none is lost, and a thread mid-step takes the next due step itself
+//! before it idles. And the lock is never held across a call: each thread holds it for one
+//! queue operation at a time (a guard temporary), never around a system call, so a thread stuck
+//! in a server's bound holds no lock, and the loop's receive runs outside it. The thread is of
+//! the steward's own process and cannot die alone: a panic on it ends the steward, which `init`
+//! restarts empty, and its only return is the loop's endpoint gone; a thread has no exit notice
+//! to take, so there is no restart path and no orphaned queue.
 //!
 //! **The console lines at the loop's turn** (the same page): every line the steward says is
 //! queued ([`Console`], the library's `redoubt_steward_server::console`) and written through one
 //! fid kept open at `consoled`, a line one write within [`CONSOLE_US`], at two points: before a
 //! call's reply, so a call's records come before anything its caller says of the answer, and at
-//! the loop's top after the cleanup steps, for every other event's lines. Either turn stops at
-//! the first line the console did not take in time, the rest queued in order for the next.
+//! the loop's top, for every other event's lines. Either turn stops at the first line the
+//! console did not take in time, the rest queued in order for the next.
 //!
 //! **The calls out inside a batch** (the same page, "Residual risks"): every connection the
 //! steward makes to a shared server (the attached ones of [`Machine::server`], the unattached
@@ -51,24 +64,28 @@ extern crate alloc;
 
 #[cfg(target_os = "none")]
 mod machine {
+    use alloc::boxed::Box;
     use alloc::collections::BTreeMap;
     use alloc::format;
     use alloc::string::String;
+    use alloc::sync::Arc;
     use alloc::vec::Vec;
     use core::num::NonZeroU64;
     use core::sync::atomic::{AtomicU32, Ordering};
 
     use redoubt_client::file::{Connection, ROOT};
+    use redoubt_client::grants::RELEASE_TIMEOUT;
     use redoubt_client::launch::Launch;
     use redoubt_client::typed;
-    use redoubt_rt::abi::{BudgetSpec, Error, FOREVER, Handle, MAX_LEND_PAGES};
+    use redoubt_rt::abi::{BudgetSpec, Error, FOREVER, Handle, Handles, MAX_LEND_PAGES};
     use redoubt_rt::client::{ClientError, Connection as Nine, Lend};
     use redoubt_rt::handle::{Budget, Endpoint, close};
-    use redoubt_rt::ipc::{Buffer, Event, Request};
+    use redoubt_rt::ipc::{Buffer, Delivery, Event, Request};
     use redoubt_rt::server::ninep::{DMDIR, mode};
-    use redoubt_rt::server::typed::finish;
+    use redoubt_rt::server::typed::{Outcome, finish};
     use redoubt_rt::server::{close_delivery, own_args};
     use redoubt_rt::startup::Startup;
+    use redoubt_rt::sync::Mutex;
     use redoubt_rt::wire::proto::{consol, consrelay, crossing, ipd, steward};
     use redoubt_steward::consts::CROSSING_LIFE;
     use redoubt_steward::domain::Domain;
@@ -76,7 +93,7 @@ mod machine {
     use redoubt_steward::event::EventKind;
     use redoubt_steward::inspect;
     use redoubt_steward_server::approval::{Line, Lines, parse};
-    use redoubt_steward_server::cleanup::TRIES;
+    use redoubt_steward_server::cleanup::{Fate, Queue as Cleanup, TRIES};
     use redoubt_steward_server::console::{Queue, Sink};
     use redoubt_steward_server::own::{
         Bound, Child, How, IPD, Own, SYSTEM, binding, lease_args, session_args,
@@ -217,19 +234,35 @@ mod machine {
     /// How long a `lease_ended` send waits for the session's VM to take it (µs): past it the
     /// notice is dropped, and the steward is never held by a session that does not read.
     const NOTICE_US: u64 = 100_000;
-    /// How long a cleanup step waits for its server to take the call (µs): the steward's own
-    /// send bound, [`NOTICE_US`], never the client library's call timeout (`RELEASE_TIMEOUT`, a
-    /// second). A server busy or recovering past it is retried at a later turn
-    /// (`redoubt_steward_server::cleanup`).
-    const CLEANUP_US: u64 = NOTICE_US;
-    /// How long a console line's write waits for `consoled` to take it (µs): the same bound, for
-    /// the same reason; a line it did not take stays queued for a later turn
-    /// (`redoubt_steward_server::console`).
+    /// How long a console line's write waits for `consoled` to take it (µs): the steward's own
+    /// send bound, [`NOTICE_US`], for the same reason; a line it did not take stays queued for a
+    /// later turn (`redoubt_steward_server::console`).
     const CONSOLE_US: u64 = NOTICE_US;
+    /// How long a cleanup step's call waits for its server (µs): the client library's own call
+    /// bound, a launcher's release of a dead child's grants, since the thread that makes it
+    /// holds nobody up; a step the server did not take in it is retried and parked as the
+    /// queue says (`redoubt_steward_server::cleanup`).
+    const STEP_US: u64 = RELEASE_TIMEOUT;
     /// The names a cleanup step's server goes by in the queue where the steward reaches it by no
     /// handle name: its own console's server, and `sshd` for a channel console told `ended`.
     const CONSOLED_NAME: &str = "consoled";
     const SSHD_NAME: &str = "sshd";
+    /// A root badge of the steward's own, below the minted range and none of the protocol's
+    /// roles: the cleanup thread reports each step's fate on it (a send, [`DONE`], [`PARKED`]
+    /// or [`FAILED`] in the third word) and idles in a call on it, which the loop holds until a
+    /// step is due or handed over and answers with [`GO`].
+    const CLEANUP: u64 = 6;
+    const DONE: u64 = 0;
+    const PARKED: u64 = 1;
+    const FAILED: u64 = 2;
+    const GO: u64 = 1;
+    /// The cleanup thread's stack, in pages: it locks the queue, encodes an inline `disconnect`
+    /// or `ended` and makes the call, lending nothing. Twice its measured peak, rounded up to a
+    /// page: 1,432 bytes on rv64 and 1,168 on rv32 (`stack steward thread 1`,
+    /// `steward-session-ends`; docs/testbench.md, "The memory budget"), twice 1,432 is 2,864,
+    /// one page. With its thread page and the lock's endpoint page it is the three pages the
+    /// steward's manifest entry grew by.
+    const CLEANUP_STACK_PAGES: usize = 1;
     /// Open approval channels at most, and so reader threads at most (servers/steward.md, "The
     /// powerbox and approvals"): the steward's bound on its own threads beside the watchers,
     /// declared as theirs is. An open past it is refused, and the person's `ssh approve@box`
@@ -305,6 +338,67 @@ mod machine {
         Server(String),
         Carved(String),
         Console,
+    }
+
+    /// A cleanup step as the thread runs it: the connection's key in [`Machine::held`], the
+    /// endpoint the call goes to and the id it names there, or `ended` on a channel's console.
+    #[derive(Clone, Copy)]
+    struct Job {
+        key: u64,
+        at: Handle,
+        id: u64,
+        ended: bool,
+    }
+
+    impl Job {
+        /// The step's one call, within [`STEP_US`]: a server that did not take it is `Timeout`;
+        /// one that refused it, or answered nothing readable, `Refused`.
+        fn tell(&self) -> Result<(), Error> {
+            let at = Endpoint::from_handle(self.at);
+            if self.ended {
+                let m = consol::Message::Ended(consol::Ended {})
+                    .encode(&mut [])
+                    .map_err(|_| Error::InvalidArgument)?;
+                return at.send(&m, &[], None, STEP_US).map_err(|(e, _)| e);
+            }
+            Nine::new(at).disconnect(self.id, STEP_US).map_err(|e| match e {
+                ClientError::Sys(e) => e,
+                _ => Error::Refused,
+            })
+        }
+    }
+
+    /// The cleanup thread (`redoubt_steward_server::cleanup`): takes the steps due from the
+    /// queue it shares with the loop, in order, makes each one's call outside the lock, settles
+    /// its fate under it and reports every fate but a retry's to the loop as a send on
+    /// [`CLEANUP`]; with nothing due it calls the loop on the same badge and waits for the
+    /// answer, which comes when a step is due or handed over. It ends with the steward: a report
+    /// that fails is the loop gone.
+    fn cleanup_thread(queue: Arc<Mutex<Cleanup<Job>>>, report: u32) {
+        let report = Endpoint::from_handle(h(report));
+        loop {
+            loop {
+                let now = redoubt_rt::handle::time_now().unwrap_or(0);
+                let Some((job, _)) = queue.lock().take(now) else { break };
+                let told = job.tell();
+                let now = redoubt_rt::handle::time_now().unwrap_or(now);
+                let Some((job, fate)) = queue.lock().settle(told, now) else { continue };
+                let (fate, detail) = match fate {
+                    Fate::Retry => continue,
+                    Fate::Done => (DONE, 0),
+                    Fate::Parked(tries) => (PARKED, u64::from(tries)),
+                    Fate::Failed(e) => (FAILED, e as u64),
+                };
+                // The key in two machine words: a word is 32 bits on rv32.
+                let words = [job.key & 0xffff_ffff, job.key >> 32, fate, detail];
+                if report.send(&words, &[], None, FOREVER).is_err() {
+                    return;
+                }
+            }
+            if report.call(&[GO, 0, 0, 0], &[], None, FOREVER).into_result().is_err() {
+                return;
+            }
+        }
     }
 
     /// An approval channel's reader (servers/steward.md, "The powerbox and approvals"): `arg` is
@@ -503,6 +597,13 @@ mod machine {
         reader_work: Endpoint,
         reader_hand: Endpoint,
         readers: Watchers,
+        /// The cleanup queue, shared with the cleanup thread ([`cleanup_thread`]).
+        cleanup: Arc<Mutex<Cleanup<Job>>>,
+        /// The thread's idle call, held while nothing is due for it.
+        idle: Option<Request>,
+        /// Handles a server's restart retired, which the thread may still be calling on: closed
+        /// once it has reported since, when it is past any call it had out.
+        retired: Vec<Handle>,
         /// `latency-probe` only: the last `budget_destroy`'s end and length (µs), the probe's
         /// `destroy_call` sample.
         #[cfg(feature = "latency-probe")]
@@ -830,9 +931,9 @@ mod machine {
 
         /// The steward's own copy of a connection minted in the owner's scope goes now: the
         /// scope's end frees its index for the next handle installed ([`Held`]), and the server
-        /// is told at the loop's turn ([`Machine::clean`]). A copy the steward itself still uses
-        /// (`sshd`'s channel console, a relay's control connection, a notices send right) is none
-        /// of the scope's, and stays until its step is done.
+        /// is told by the cleanup thread ([`Machine::clean`]). A copy the steward itself still
+        /// uses (`sshd`'s channel console, a relay's control connection, a notices send right)
+        /// is none of the scope's, and stays until its step is done.
         fn release(&mut self, key: u64) {
             if let Some(Held { handle, via: Some(_), .. }) = self.held.get_mut(&key) {
                 if let Some(handle) = handle.take() {
@@ -841,80 +942,52 @@ mod machine {
             }
         }
 
-        /// Gives the connection held under `key` back to its server within [`CLEANUP_US`]:
-        /// `ended` for `sshd`'s channel console (servers/steward.md, "Authentication and
-        /// sessions"), else `disconnect` by its id through what minted it. A server that did not
-        /// take the call in time is `Timeout`, and the record stays for the retry; on the
-        /// attempt that parks the step a line says so, once (the step runs again when that
-        /// server answers a call of the steward's, or goes with its restart). A connection at a
-        /// server that restarted since has no record here ([`Machine::reconnected`]), and a
-        /// server the steward no longer reaches nothing to tell: both are done. The cleanup
-        /// after a scope's end, never the cutoff (R41).
-        fn clean(&mut self, key: u64, parks: bool) -> Result<(), Error> {
-            let Some(held) = self.held.get(&key) else { return Ok(()) };
-            let (told, what) = match (held.console, held.handle, &held.via) {
-                (true, Some(handle), _) => {
-                    let ended = consol::Message::Ended(consol::Ended {})
-                        .encode(&mut [])
-                        .map_err(|_| Error::InvalidArgument)
-                        .and_then(|m| {
-                            Endpoint::from_handle(handle).send(&m, &[], None, CLEANUP_US).map_err(|(e, _)| e)
-                        });
-                    (ended, String::from("ended to sshd's channel"))
-                }
+        /// Hands the connection held under `key` to the cleanup thread as a step: `ended` on
+        /// `sshd`'s channel console (servers/steward.md, "Authentication and sessions"), else
+        /// `disconnect` by its id at the endpoint of what minted it, resolved now. The record
+        /// stays until the thread reports the step done or failed ([`Machine::cleanup_done`]),
+        /// so a parked step's line can still name it. A connection nobody is told (a badge, a
+        /// notices send right, a relay's control connection), or one at a server the steward no
+        /// longer reaches, is done here with no step. The cleanup after a scope's end, never
+        /// the cutoff (R41); no call to a server is made on this thread.
+        fn clean(&mut self, key: u64) {
+            let Some(held) = self.held.get(&key) else { return };
+            let job = match (held.console, held.handle, &held.via) {
+                (true, Some(at), _) => Some((Job { key, at, id: 0, ended: true }, String::from(SSHD_NAME))),
                 (_, _, Some((via, id))) => {
-                    let (told, at) = match via {
-                        Via::Server(name) => {
-                            (self.unattached(name).ok().map(|n| disconnect(&n, *id)), name.as_str())
-                        }
-                        Via::Carved(k) => {
-                            let kept = self.carved.get(k);
-                            (
-                                kept.map(|(h, _)| disconnect(&Nine::new(Endpoint::from_handle(*h)), *id)),
-                                kept.map_or(k.as_str(), |(_, s)| s.as_str()),
-                            )
-                        }
-                        Via::Console => {
-                            let told = self.consoled.as_ref().map(|c| {
-                                c.disconnect(*id, CLEANUP_US).map_err(|e| match e {
-                                    redoubt_client::Error::Sys(e) => e,
-                                    _ => Error::Refused,
-                                })
-                            });
-                            (told, CONSOLED_NAME)
-                        }
+                    let at = match via {
+                        Via::Server(name) => self.named(name),
+                        Via::Carved(k) => self.carved.get(k).map(|(h, _)| *h),
+                        Via::Console => self.consoled.as_ref().map(|c| c.endpoint().handle()),
                     };
-                    (told.unwrap_or(Ok(())), format!("disconnect {id} at {at}"))
+                    at.zip(self.server_of(key))
+                        .map(|(at, server)| (Job { key, at, id: *id, ended: false }, server))
                 }
-                _ => (Ok(()), String::new()),
+                _ => None,
             };
-            if let Err(Error::Timeout) = told {
-                if parks {
-                    self.out.say(&format!(
-                        "steward: {what} parked after {TRIES} attempts: retried when the server answers\n"
-                    ));
+            match job {
+                Some((job, server)) => {
+                    let now = redoubt_rt::handle::time_now().unwrap_or(0);
+                    self.cleanup.lock().push(job, server, now);
+                    self.ring();
                 }
-                return Err(Error::Timeout);
+                None => {
+                    if let Some(Held { handle: Some(handle), .. }) = self.held.remove(&key) {
+                        let _ = close(handle);
+                    }
+                }
             }
-            if let Some(Held { handle: Some(handle), .. }) = self.held.remove(&key) {
-                let _ = close(handle);
-            }
-            Ok(())
         }
 
-        /// By what minted the connection: the carve's server for one minted through a kept
-        /// carve, `consoled` for the UART session's console, `sshd` for its channel console.
-        fn server_of(&self, key: u64) -> Option<String> {
-            let held = self.held.get(&key)?;
-            if held.console {
-                return Some(String::from(SSHD_NAME));
-            }
-            match &held.via.as_ref()?.0 {
-                Via::Server(name) => Some(name.clone()),
-                Via::Carved(k) => self.carved.get(k).map(|(_, s)| s.clone()),
-                Via::Console => Some(String::from(CONSOLED_NAME)),
+        fn parked_at(&self, server: &str) -> bool { self.cleanup.lock().parked_at(server) > 0 }
+
+        fn wake(&mut self, server: &str) {
+            if self.cleanup.lock().wake(server) {
+                self.ring();
             }
         }
+
+        fn forget(&mut self, server: &str) { self.cleanup.lock().forget(server); }
 
         /// The binding table's server for the slot, as [`Machine::connect`] mints; the console
         /// slot's is `consoled` only when no channel console waits to be handed over (a channel's
@@ -1271,12 +1344,15 @@ mod machine {
         }
 
         /// The new connection stands in for the startup block's handle (a second restart's for
-        /// the first's, closed). What was minted at the old instance is dead there: the attached
+        /// the first's, retired). What was minted at the old instance is dead there: the attached
         /// connection, the carves kept at it and every child's connection, held by ids the new
-        /// instance never drew; their records go, and nothing is disconnected.
+        /// instance never drew; their records go, and nothing is disconnected. The old handles
+        /// are retired, not closed: the cleanup thread may have a step's call out on one, and
+        /// the loop forgets the server's queued steps right after this ([`Kernel::forget`]), so
+        /// its next report is past any such call ([`Machine::retired_closed`]).
         fn reconnected(&mut self, server: &str, connection: Handle) {
             if let Some(old) = self.replaced.insert(server.into(), connection) {
-                let _ = close(old);
+                self.retired.push(old);
             }
             self.servers.remove(server);
             let carved_there: Vec<String> =
@@ -1284,7 +1360,7 @@ mod machine {
             for key in &carved_there {
                 self.homes.remove(key);
                 if let Some((handle, _)) = self.carved.remove(key) {
-                    let _ = close(handle);
+                    self.retired.push(handle);
                 }
             }
             let dead = |held: &Held| match &held.via {
@@ -1487,14 +1563,101 @@ mod machine {
         }
     }
 
-    /// `disconnect` by `id` through `nine`, within [`CLEANUP_US`], as the kernel's error: a server
-    /// that did not take the call is `Timeout`; one that refused, or answered nothing readable,
-    /// `Refused`.
-    fn disconnect(nine: &Nine, id: u64) -> Result<(), Error> {
-        nine.disconnect(id, CLEANUP_US).map_err(|e| match e {
-            redoubt_rt::client::ClientError::Sys(e) => e,
-            _ => Error::Refused,
-        })
+    impl Machine<'_> {
+        /// By what minted the connection: the carve's server for one minted through a kept
+        /// carve, `consoled` for the UART session's console, `sshd` for its channel console.
+        fn server_of(&self, key: u64) -> Option<String> {
+            let held = self.held.get(&key)?;
+            if held.console {
+                return Some(String::from(SSHD_NAME));
+            }
+            match &held.via.as_ref()?.0 {
+                Via::Server(name) => Some(name.clone()),
+                Via::Carved(k) => self.carved.get(k).map(|(_, s)| s.clone()),
+                Via::Console => Some(String::from(CONSOLED_NAME)),
+            }
+        }
+
+        /// Answers the thread's idle call, if it is held: the thread takes the steps due.
+        fn ring(&mut self) {
+            if let Some(request) = self.idle.take() {
+                let go = Outcome { words: [GO, 0, 0, 0], send: Handles::new(), close: Handles::new() };
+                let _ = finish(request, &go);
+            }
+        }
+
+        /// The thread's idle call: held until a step is due or handed over, and answered at
+        /// once if one is already, since a hand-over between the thread's last look at the
+        /// queue and this call found nothing to answer.
+        fn cleanup_idle(&mut self, request: Request) {
+            self.retired_closed();
+            if let Some(stale) = self.idle.replace(request) {
+                let _ = finish(
+                    stale,
+                    &Outcome { words: [GO, 0, 0, 0], send: Handles::new(), close: Handles::new() },
+                );
+            }
+            let now = redoubt_rt::handle::time_now().unwrap_or(0);
+            if self.cleanup.lock().due().is_some_and(|t| t <= now) {
+                self.ring();
+            }
+        }
+
+        /// At the loop's top: answers the held idle call if the thread's earliest step is due,
+        /// else says when it is, for the loop's wait. A retry runs no sooner than its time, and
+        /// no later than the loop's next turn after it.
+        fn cleanup_tick(&mut self, now: u64) -> Option<u64> {
+            let due = if self.idle.is_some() { self.cleanup.lock().due() } else { None };
+            match due {
+                Some(t) if t <= now => {
+                    self.ring();
+                    None
+                }
+                due => due,
+            }
+        }
+
+        /// A step's fate, reported by the thread: a done or failed step's record goes with the
+        /// steward's copy of its handle; a step parked on the attempt that parks it is said,
+        /// once, as the fates arrive, so the lines keep the steps' order. A step whose record a
+        /// server's restart forgot meanwhile has nothing left to say.
+        fn cleanup_done(&mut self, delivery: &Delivery) {
+            self.retired_closed();
+            let key = delivery.words[0] | (delivery.words[1] << 32);
+            if delivery.words[2] == PARKED {
+                if delivery.words[3] == u64::from(TRIES) {
+                    if let Some(what) = self.what(key) {
+                        self.out.say(&format!(
+                            "steward: {what} parked after {TRIES} attempts: retried when the server answers\n"
+                        ));
+                    }
+                }
+                return;
+            }
+            if let Some(Held { handle: Some(handle), .. }) = self.held.remove(&key) {
+                let _ = close(handle);
+            }
+        }
+
+        /// A step as its line names it: `ended to sshd's channel`, or `disconnect <id> at
+        /// <server>`.
+        fn what(&self, key: u64) -> Option<String> {
+            let held = self.held.get(&key)?;
+            if held.console {
+                return Some(String::from("ended to sshd's channel"));
+            }
+            let id = held.via.as_ref()?.1;
+            Some(format!("disconnect {id} at {}", self.server_of(key)?))
+        }
+
+        /// Closes the handles a restart retired, on the thread's next report or idle call: it
+        /// makes one call at a time, between reports, so it is past any call it had out on
+        /// them, and takes no step at a restarted server after its steps were forgotten.
+        fn retired_closed(&mut self) {
+            for handle in self.retired.drain(..) {
+                let _ = close(handle);
+            }
+        }
     }
 
     impl Machine<'_> {
@@ -1888,6 +2051,7 @@ mod machine {
             return NOT_STARTED;
         };
         let consoled = out.connection();
+        let cleanup = Arc::new(Mutex::new(Cleanup::default()));
         let mut machine = Machine {
             startup,
             out,
@@ -1926,6 +2090,9 @@ mod machine {
             reader_work,
             reader_hand,
             readers: Watchers::default(),
+            cleanup: Arc::clone(&cleanup),
+            idle: None,
+            retired: Vec::new(),
             #[cfg(feature = "latency-probe")]
             last_destroy: None,
         };
@@ -1999,6 +2166,20 @@ mod machine {
             return NOT_STARTED;
         };
         READER_REPORT.store(done.handle().index(), Ordering::Release);
+        // The cleanup thread, with its badge on the steward's endpoint; the lock's endpoint is
+        // made now, so the two threads' first contention costs nothing later.
+        let Ok(report) = own.mint(NonZeroU64::new(CLEANUP).expect("CLEANUP is not 0"), None) else {
+            machine.out.say("steward: cannot mint its cleanup thread's badge\n");
+            return NOT_STARTED;
+        };
+        cleanup.prepare();
+        let index = report.handle().index();
+        if redoubt_rt::thread::spawn(Box::new(move || cleanup_thread(cleanup, index)), CLEANUP_STACK_PAGES)
+            .is_err()
+        {
+            machine.out.say("steward: cannot start its cleanup thread\n");
+            return NOT_STARTED;
+        }
         let mut usage = BTreeMap::new();
         tree(machine.out, &steward, &mut usage);
         let outputs = steward.open_console(&mut machine).ok();
@@ -2023,13 +2204,12 @@ mod machine {
                 }
             }
             let idle = steward.store.next_idle().map(|t| t.saturating_sub(now).max(1));
-            // The cleanup steps due: each connection an end gave back since the last turn, and
-            // the retries whose time has come, each within CLEANUP_US, up to the first that
-            // times out; the receive below wakes for the next retry, or at once for the steps
-            // a timeout left due. Then the console lines queued since the last turn (the
+            // The cleanup thread's retries: a step whose time has come is the thread's to run,
+            // answered its idle call; the receive below wakes for the next. No call to a
+            // server is made here. Then the console lines queued since the last turn (the
             // steps' own among them), each within CONSOLE_US, up to the first the console did
             // not take; the receive wakes for that line's retry.
-            let due = steward.cleanup(&mut machine).map(|t| t.saturating_sub(now).max(1));
+            let step_due = machine.cleanup_tick(now).map(|t| t.saturating_sub(now).max(1));
             let line_due = machine.out.turn(now).map(|t| t.saturating_sub(now).max(1));
             #[cfg(feature = "restart-probe")]
             let wait = probe_at.saturating_sub(redoubt_rt::handle::time_now().unwrap_or(probe_at));
@@ -2042,7 +2222,7 @@ mod machine {
                 }
                 None => wait,
             };
-            let wait = [idle, due, line_due].into_iter().flatten().fold(wait, u64::min);
+            let wait = [idle, step_due, line_due].into_iter().flatten().fold(wait, u64::min);
             #[cfg(feature = "latency-probe")]
             let wait = match probe.due {
                 Some((at, _)) => {
@@ -2111,6 +2291,8 @@ mod machine {
                 wait
             };
             match own.receive(wait, 0) {
+                // The cleanup thread's idle call, held until a step is due or handed over.
+                Ok(Event::Call(request)) if request.caller.badge == CLEANUP => machine.cleanup_idle(request),
                 Ok(Event::Call(request)) if watches_call(&request.caller, &request.words) => {
                     // One per `sshd` instance; a restarted `sshd`'s comes before the abandoned
                     // one's notice. More is a fault of `sshd`'s, refused as it arrives.
@@ -2163,6 +2345,11 @@ mod machine {
                             return core_exited(machine.out);
                         }
                     }
+                }
+                // A cleanup step's fate: its record goes, or its parked line is said.
+                Ok(Event::Send(delivery)) if delivery.caller.badge == CLEANUP => {
+                    close_delivery(&delivery);
+                    machine.cleanup_done(&delivery);
                 }
                 // A reader's report: its channel ended, and it waits for the next.
                 Ok(Event::Send(delivery)) if delivery.caller.badge == READER_DONE => {
@@ -2276,9 +2463,10 @@ mod machine {
                 // looks again.
                 #[cfg(feature = "latency-probe")]
                 Err(Error::Timeout) if !probe.counts.is_empty() && leases_live(&steward) == 0 => {}
-                // The timers' own wakes: the loop's top ends what is due, and runs the cleanup
-                // steps whose retry has come.
-                Err(Error::Timeout) if [idle, due, line_due].into_iter().flatten().any(|t| t <= wait) => {}
+                // The timers' own wakes: the loop's top ends what is due, hands the thread the
+                // retries whose time has come, and writes the lines due.
+                Err(Error::Timeout)
+                    if [idle, step_due, line_due].into_iter().flatten().any(|t| t <= wait) => {}
                 #[cfg(feature = "label-probe")]
                 Err(Error::Timeout) if machine.probe_due.is_some() => machine.probe_hand(),
                 #[cfg(feature = "restart-probe")]

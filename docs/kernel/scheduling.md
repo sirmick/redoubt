@@ -815,25 +815,28 @@ such a destruction (subtracted, as every target is net):
 
 | Measure (net µs, N = 1 / 2 / 3 / 4 at one hart, 1 / 2 / 3 at two) | rv64, 1 hart | rv32, 1 hart | rv64, 2 harts | rv32, 2 harts |
 | --- | --- | --- | --- | --- |
-| steward timer wake (p50/p99) | 1945/3250, 671/1446, 1232/77617, 1369/92789: p99 missed at N = 3 and 4 | 707/1314, 1175/1412, 778/68679, 1309/92904: p99 missed at N = 3 and 4 | 7987/8018, 2549/23488, 2809/147557: p99 missed at N = 3 | not reached |
-| steward decision wake (p50/p99) | 1122/11417, 17024/20804, 902/3095, 1143/89372 | 23764/24149, 1172/40494, 1233/2200, 871/66450 | 1949/9492, 1973/22099, 7205/54354 | not reached |
-| deadline notice (p99) | 10353, 13202, 11554, 12120 | 11897, 12055, 12183, 10893 | 12268, 12899, 10501 | not reached |
-| `budget_destroy`, call to return (p50/p99) | 6008/8339, 6078/7521, 6060/9819, 6038/8620 | 6702/7898, 6417/8007, 6441/7188, 6789/9094 | 7998/8627, 8529/9779, 7375/10131 | not reached |
-| R10 (p99; 134 destructions at one hart, 99 at two) | 9666 | 9622 | 9761 | not reached |
-| a lease's end (worst decision wake p99 + R10) | 89372 + 9666 = 99038 | 66450 + 9622 = 76072 | 54354 + 9761 = 64115 | not reached |
-| reply to the next receive (p50/p99, no target) | 6471/6493, 6554/6633, 7705/124110, 27802/65333 | 6786/6839, 8189/9170, 9766/134595, 10645/63756 | 17911/42891, 17409/32193, 19807/112295 | not reached |
+| steward timer wake (p50/p99) | 2085/3151, 850/1736, 1244/2297, 641/953 | 1047/1460, 1215/1508, 867/1268, 1208/3421 | 7987/8018, 2549/23488, 2809/147557: p99 missed at N = 3, before the cleanup thread | not reached |
+| steward decision wake (p50/p99) | 1150/11227, 16547/21849, 672/3999, 900/2165 | 24226/26261, 668/1417, 1198/1421, 718/2990 | 1949/9492, 1973/22099, 7205/54354 | not reached |
+| deadline notice (p99) | 12633, 13645, 10460, 11423 | 10864, 11670, 10731, 10751 | 12268, 12899, 10501 | not reached |
+| `budget_destroy`, call to return (p50/p99) | 6059/9512, 6078/8375, 5049/10183, 6042/8751 | 7840/10257, 5364/7733, 5872/10020, 7099/10828 | 7998/8627, 8529/9779, 7375/10131 | not reached |
+| R10 (p99; 134 destructions at one hart, 99 at two) | 9699 | 9657 | 9761 | not reached |
+| a lease's end (worst decision wake p99 + R10) | 21849 + 9699 = 31548 | 26261 + 9657 = 35918 | 54354 + 9761 = 64115 | not reached |
+| reply to the next receive (p50/p99, no target) | 6459/6694, 6533/6560, 7664/9191, 6652/9310 | 6761/6792, 6978/9439, 6929/8874, 7128/10085 | 17911/42891, 17409/32193, 19807/112295 | not reached |
 
-The real steward meets every target at one hart on both widths and at two on rv64 but for
-the timer wake's p99 at N = 3 and 4: one sample of sixteen (at one hart 78 and 93 ms on rv64,
-69 and 93 on rv32; 148 ms at two harts on rv64; the next largest under 4 and 24 ms) whose
-window holds the loop's cleanup turn retrying a `disconnect` the busy `erofsd:system` did not
-take, one 100 ms bound at the loop's top by the queue's turn rule
-([steward](../servers/steward.md#failure-and-restart)); the same retry shows in those rounds'
-reply-to-receive p99 (124 and 65 ms, 135 and 64, and 112 at two harts), and at N = 4 in the
-decision wake's p99 (89 and 66 ms, within its 95), where the lease the probe ends waits behind
-that turn. It is the cost of a step the server has not taken
-yet, paid once per retry until the step parks, and the parked step costs the loop nothing
-after. On rv32 at two harts the N = 3 round is not reached, and the cause is named. A lease
+The real steward meets every target at one hart on both widths, N = 1 to 4, the one-hart
+columns one run each at seed 3 with the cleanup steps on the steward's own thread
+([steward](../servers/steward.md#failure-and-restart)): the timer wake's p99 at N = 3 and 4 is
+2.3 and 1.0 ms on rv64, 1.3 and 3.4 ms on rv32, and the reply-to-receive p99 in those rounds
+9.2 and 9.3 ms, 8.9 and 10.1 ms, with no 100 ms retry in any sample. Before the thread, the
+loop ran the cleanup steps at its top within its 100 ms send bound, and one sample of sixteen
+in each of those rounds (78 and 93 ms on rv64, 69 and 93 on rv32; the next largest under 4 and
+24 ms) held one attempt at a `disconnect` the busy `erofsd:system` did not take, so the p99
+(50 ms) was missed by construction; the same retry showed in those rounds' reply-to-receive p99
+(124 and 65 ms, 135 and 64) and at N = 4 in the decision wake's (89 and 66 ms, within its 95),
+where the lease the probe ends waited behind that turn. The two-hart rv64 column is from before
+the thread and keeps its one miss, the same retry (148 ms, 112 in the reply-to-receive row); it
+is re-measured when the two-hart rows next run. On rv32 at two harts the N = 3 round is not
+reached, and the cause is named. A lease
 VM's launch, the steward's batch and the VM's load of its code from the verified system volume,
 measured as the gap between consecutive `AgentStarted` audit lines less the session's 1.5 s
 sleep, takes 3.5 to 4 s of guest time there alone and beside one spinner, against the shell's

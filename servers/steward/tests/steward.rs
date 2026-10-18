@@ -19,7 +19,7 @@ use redoubt_steward::domain::Domain;
 use redoubt_steward::effect::{Kind, Object, Output, Step};
 use redoubt_steward::event::EventKind;
 use redoubt_steward::hash::key_id;
-use redoubt_steward_server::cleanup::{RETRY_US, TRIES};
+use redoubt_steward_server::cleanup::{Fate, Queue as Cleanup, RETRY_US, TRIES};
 use redoubt_steward_server::console::{Queue, Sink};
 use redoubt_steward_server::drive::MINTED;
 use redoubt_steward_server::own::{Child, binds};
@@ -84,12 +84,18 @@ enum Call {
     },
     Console(Option<u32>),
     Release(usize),
-    /// A connection's server told, at the loop's turn: `parks` on the attempt past which the
+    /// A connection handed to the cleanup thread by the loop: no call to its server.
+    Hand(usize),
+    /// A connection's server told, by the cleanup thread: `parks` on the attempt past which the
     /// step waits for the server's next answer.
     Clean {
         handle: usize,
         parks: bool,
     },
+    /// The loop woke a server's parked steps (a mint there, answered or about to be made), or
+    /// forgot a restarted server's.
+    Wake(String),
+    Forget(String),
     Launch {
         kind: Kind,
         budget: usize,
@@ -193,6 +199,10 @@ struct Recorder {
     /// The servers that take no cleanup step (`Timeout`) while named here, answering every
     /// other call.
     busy: Vec<String>,
+    /// The cleanup queue the loop hands steps to and the cleanup thread runs
+    /// ([`Recorder::thread`]): the machine shares it with its thread under a lock; here the
+    /// thread runs when a test, or the loop's wait for its report, says.
+    cleanup: Cleanup<usize>,
     /// The servers that take no call of the steward's within its bound (`SERVER_US`) while
     /// named here: a mint there, a launch whose image is read there (`bootfsd`), a home's stat
     /// or read there (`walfsd:data`) is `Timeout`.
@@ -253,6 +263,42 @@ impl Recorder {
         self.at.insert(made, server.into());
         Ok(made)
     }
+
+    /// The cleanup thread's turn: every step due now, in order, each one call at its server
+    /// (`Timeout` while the server is busy, else the record goes), settled as the queue says;
+    /// the fates it reports to the loop (every one but a retry's). The machine's thread runs on
+    /// its own and makes one call at a time; here it runs when a test says, so a test sees the
+    /// loop's turn and the thread's apart.
+    fn thread(&mut self) -> Vec<(usize, Fate)> {
+        let now = self.now();
+        let mut fates = Vec::new();
+        while let Some((handle, tries)) = self.cleanup.take(now) {
+            self.calls.push(Call::Clean { handle, parks: tries == TRIES });
+            let told = self.tell(handle);
+            if let Some(fate) = self.cleanup.settle(told, now).filter(|(_, f)| *f != Fate::Retry) {
+                fates.push(fate);
+            }
+        }
+        fates
+    }
+
+    /// A step's call at its server.
+    fn tell(&mut self, handle: usize) -> Result<(), Error> {
+        if let Some(e) = self.clean {
+            return Err(e);
+        }
+        if self.at.get(&handle).is_some_and(|s| self.busy.contains(s)) {
+            return Err(Error::Timeout);
+        }
+        self.at.remove(&handle);
+        Ok(())
+    }
+
+    /// The connections handed over whose servers are still to be told, parked ones included.
+    fn pending(&self) -> usize { self.cleanup.len() }
+
+    /// How many of those are parked.
+    fn parked(&self) -> usize { self.cleanup.parked() }
 }
 
 impl Kernel for Recorder {
@@ -310,19 +356,30 @@ impl Kernel for Recorder {
 
     fn release(&mut self, handle: usize) { self.calls.push(Call::Release(handle)); }
 
-    fn clean(&mut self, handle: usize, parks: bool) -> Result<(), Error> {
-        self.calls.push(Call::Clean { handle, parks });
-        if let Some(e) = self.clean {
-            return Err(e);
+    /// A connection with a server's record is a step of the thread's; one nobody is told (a
+    /// badge, a notices send right, a relay's control connection) is done here.
+    fn clean(&mut self, handle: usize) {
+        self.calls.push(Call::Hand(handle));
+        if let Some(server) = self.at.get(&handle).cloned() {
+            let now = self.now();
+            self.cleanup.push(handle, server, now);
         }
-        if self.at.get(&handle).is_some_and(|s| self.busy.contains(s)) {
-            return Err(Error::Timeout);
-        }
-        self.at.remove(&handle);
-        Ok(())
     }
 
-    fn server_of(&self, handle: usize) -> Option<String> { self.at.get(&handle).cloned() }
+    fn parked_at(&self, server: &str) -> bool { self.cleanup.parked_at(server) > 0 }
+
+    /// Recorded when it wakes something: with nothing parked there it is a look at the queue,
+    /// as the machine's is.
+    fn wake(&mut self, server: &str) {
+        if self.cleanup.wake(server) {
+            self.calls.push(Call::Wake(server.into()));
+        }
+    }
+
+    fn forget(&mut self, server: &str) {
+        self.calls.push(Call::Forget(server.into()));
+        self.cleanup.forget(server);
+    }
 
     fn server_at(&self, owner: &Object, slot: Option<u16>) -> Option<String> {
         let labels = owner.domain.labels().as_slice().to_vec();
@@ -875,6 +932,7 @@ fn a_login_to_an_attached_context_takes_it_over() {
                 note: "[context work taken over from 203.0.113.7:40022 at up 0h00m]\r\n".into()
             },
             Call::Release(kept),
+            Call::Hand(kept),
             Call::Attach {
                 relay,
                 note: "[context work: reattached; taken over from 198.51.100.2:51234]\r\n".into(),
@@ -1092,7 +1150,8 @@ fn a_servers_restart_tells_its_sessions_and_a_session_rebinds_its_slot() {
     let mut endpoints: Vec<usize> = homes.iter().map(|(n, _)| *n).collect();
     endpoints.dedup();
     assert_eq!(endpoints.len(), 3, "each on its own notices endpoint");
-    assert_eq!(k.calls.len(), 4, "nothing else: {:?}", k.calls);
+    assert_eq!(k.calls.len(), 5, "nothing else but the server's steps forgotten: {:?}", k.calls);
+    assert_eq!(k.calls[1], Call::Forget("walfsd:data".into()));
     k.calls.clear();
     let m = Message::Reconnected(Reconnected { server: "littlefsd:alice-secrets" });
     let Ok(Reply::Reconnected(_)) = call(&mut s, &mut k, INIT, m) else { panic!() };
@@ -1109,8 +1168,12 @@ fn a_servers_restart_tells_its_sessions_and_a_session_rebinds_its_slot() {
         "{:?}",
         k.calls
     );
-    assert!(matches!(k.calls[1], Call::Release(_)), "the dead connection's record goes: {:?}", k.calls);
-    assert_eq!(k.calls.len(), 2);
+    assert!(
+        matches!(k.calls[1..], [Call::Release(a), Call::Hand(b)] if a == b),
+        "the dead connection's record goes, its step the thread's: {:?}",
+        k.calls
+    );
+    assert_eq!(k.calls.len(), 3);
     assert_eq!(s.holding(), before, "the new connection takes the dead one's token");
     for slot in [2, 4, 5, 6] {
         let e = call(&mut s, &mut k, u, Message::Rebind(Rebind { slot })).unwrap_err();
@@ -1199,7 +1262,7 @@ fn closing_the_channel_detaches_the_context_and_a_login_reattaches() {
     k.calls.clear();
     let closed = call(&mut s, &mut k, SSHD, Message::ChannelClosed(ChannelClosed { session: r.session }));
     assert!(closed.is_ok(), "{closed:?} {:?}", k.calls);
-    assert_eq!(k.calls, [Call::Detach { relay, note: String::new() }, Call::Release(kept)]);
+    assert_eq!(k.calls, [Call::Detach { relay, note: String::new() }, Call::Release(kept), Call::Hand(kept)]);
     assert!(s.exited(pid).is_some(), "the VM runs on");
     // Again: the attachment is gone.
     let again = call(&mut s, &mut k, SSHD, Message::ChannelClosed(ChannelClosed { session: r.session }));
@@ -1226,7 +1289,7 @@ fn sshd_gone_detaches_every_attached_context() {
     let pid = k.made as u64;
     k.calls.clear();
     s.event(&mut k, redoubt_steward::event::EventKind::SshdGone, 0).unwrap();
-    assert_eq!(k.calls, [Call::Detach { relay: 8, note: String::new() }, Call::Release(9)]);
+    assert_eq!(k.calls, [Call::Detach { relay: 8, note: String::new() }, Call::Release(9), Call::Hand(9)]);
     assert!(s.exited(pid).is_some());
     k.calls.clear();
     s.event(&mut k, redoubt_steward::event::EventKind::SshdGone, 0).unwrap();
@@ -1285,11 +1348,27 @@ fn released(k: &Recorder) -> Vec<usize> {
     k.calls.iter().filter_map(|c| if let Call::Release(h) = c { Some(*h) } else { None }).collect()
 }
 
+/// The steps the cleanup thread ran, in order: no event of the loop's makes one.
 fn cleaned(k: &Recorder) -> Vec<(usize, bool)> {
     k.calls
         .iter()
         .filter_map(|c| if let Call::Clean { handle, parks } = c { Some((*handle, *parks)) } else { None })
         .collect()
+}
+
+/// The connections the loop handed to the thread, in order.
+fn handed(k: &Recorder) -> Vec<usize> {
+    k.calls.iter().filter_map(|c| if let Call::Hand(h) = c { Some(*h) } else { None }).collect()
+}
+
+/// The servers the loop woke, in order.
+fn woken(k: &Recorder) -> Vec<&str> {
+    k.calls.iter().filter_map(|c| if let Call::Wake(s) = c { Some(s.as_str()) } else { None }).collect()
+}
+
+/// The mints of connections at the system volume (slot 5) the loop made.
+fn mints_at_system(k: &Recorder) -> usize {
+    k.calls.iter().filter(|c| matches!(c, Call::Connect { slot: 5, .. })).count()
 }
 
 /// A session logged in and ended by its own `end_session`, with the kernel's record cleared
@@ -1301,10 +1380,11 @@ fn ended_session(s: &mut Steward<usize, usize>, k: &mut Recorder, principal: &st
     assert!(matches!(call(s, k, badge, Message::EndSession(EndSession {})), Ok(Reply::EndSession(_))));
 }
 
-/// The end batch is answered once its scope is destroyed, the cutoff; the servers are told at
-/// the loop's turn (servers/steward.md, "Failure and restart"): no `clean` runs inside the event,
-/// every connection the end released waits in the queue, and one turn tells them all, once each,
-/// in the order they were released.
+/// The end batch is answered once its scope is destroyed, the cutoff; the servers are told by
+/// the cleanup thread (servers/steward.md, "Failure and restart"): no `clean` runs inside the
+/// event, every connection the end released is handed over once, in the order it was released,
+/// and the thread's turn tells each that has a server, once; a connection nobody is told is done
+/// at the hand-over.
 #[test]
 fn a_session_s_end_is_answered_before_any_cleanup_call() {
     let mut k = Recorder::default();
@@ -1313,14 +1393,42 @@ fn a_session_s_end_is_answered_before_any_cleanup_call() {
     let released = released(&k);
     assert!(released.len() >= 6, "{:?}", k.calls);
     assert!(cleaned(&k).is_empty(), "no server is told inside the event: {:?}", k.calls);
-    assert_eq!(s.pending(), released.len());
+    assert_eq!(handed(&k), released, "each connection handed over once, in order: {:?}", k.calls);
+    let told: Vec<usize> = released.iter().copied().filter(|h| k.at.contains_key(h)).collect();
+    assert!(told.len() >= 5 && told.len() < released.len(), "{told:?} of {released:?}");
+    assert_eq!(k.pending(), told.len(), "the steps are the connections with a server");
     k.calls.clear();
-    assert_eq!(s.cleanup(&mut k), None, "nothing is left to retry");
-    assert_eq!(cleaned(&k), released.iter().map(|&h| (h, false)).collect::<Vec<_>>());
-    assert_eq!(s.pending(), 0);
+    assert_eq!(k.cleanup.due(), Some(k.now()), "due at once");
+    k.thread();
+    assert_eq!(cleaned(&k), told.iter().map(|&h| (h, false)).collect::<Vec<_>>());
+    assert_eq!((k.pending(), k.cleanup.due()), (0, None), "nothing is left to retry");
     k.calls.clear();
-    assert_eq!(s.cleanup(&mut k), None);
+    assert!(k.thread().is_empty());
     assert!(k.calls.is_empty(), "an empty queue makes no call");
+}
+
+/// The loop's turn makes no call to a shared server, whatever the thread's steps meet
+/// (servers/steward.md, "Failure and restart"): with the system volume never answering, bob's
+/// end hands its steps over and calls nobody; the thread's turn makes the calls and gets no
+/// answer; alice's login and end, events of the loop's, make no cleanup call either and wait for
+/// nothing, since nothing is parked yet; every cleanup call recorded is the thread's.
+#[test]
+fn the_loops_turn_makes_no_call_to_a_server_that_never_answers() {
+    let mut k = Recorder::default();
+    let mut s = started(&mut k);
+    k.busy = vec!["erofsd:system".into()];
+    ended_session(&mut s, &mut k, "bob", &BOB_KEY);
+    assert!(cleaned(&k).is_empty() && !handed(&k).is_empty(), "{:?}", k.calls);
+    k.calls.clear();
+    k.thread();
+    let system = released(&k).len();
+    assert!(!cleaned(&k).is_empty(), "the thread's turn made the calls: {:?}", k.calls);
+    assert_eq!(k.pending(), 1, "the one the busy server did not take is kept: {:?}", k.calls);
+    k.calls.clear();
+    ended_session(&mut s, &mut k, "alice", &ALICE_KEY);
+    assert!(cleaned(&k).is_empty(), "no cleanup call inside the loop's events: {:?}", k.calls);
+    assert!(woken(&k).is_empty(), "nothing parked: nothing woken: {:?}", k.calls);
+    assert_eq!(system, 0, "the step's record is the thread's business alone");
 }
 
 /// What the end batch defers is the servers' side alone: the core's events of the end, a
@@ -1335,7 +1443,7 @@ fn an_ended_session_s_pending_request_is_withdrawn_before_the_end_s_reply() {
     let Ok(Reply::Submit(r)) = call(&mut s, &mut k, u, submit(0, &[], 0, "", "mine")) else { panic!() };
     k.calls.clear();
     assert!(matches!(call(&mut s, &mut k, u, Message::EndSession(EndSession {})), Ok(Reply::EndSession(_))));
-    assert!(cleaned(&k).is_empty() && s.pending() > 0, "the servers are still to be told: {:?}", k.calls);
+    assert!(cleaned(&k).is_empty() && k.pending() > 0, "the servers are still to be told: {:?}", k.calls);
     let c = open_channel(&mut s, &mut k, &ALICE_APPROVAL_KEY).unwrap();
     let screen = screens(&k, c).pop().expect("the channel's first screen");
     assert!(
@@ -1346,23 +1454,16 @@ fn an_ended_session_s_pending_request_is_withdrawn_before_the_end_s_reply() {
     assert!(screen.starts_with("no approval is waiting for alice"), "{screen}");
 }
 
-/// One round of attempts at `steps` due steps whose servers all time out: a turn tells one step
-/// and leaves the rest due now, so the round is as many turns as steps; the last turn's due.
-fn round(s: &mut Steward<usize, usize>, k: &mut Recorder, steps: usize) -> Option<u64> {
-    let now = k.now();
-    let mut due = None;
-    for turn in 0..steps {
-        let before = cleaned(k).len();
-        due = s.cleanup(k);
-        assert_eq!(cleaned(k).len(), before + 1, "turn {turn}: one timed-out step per turn");
-        if turn + 1 < steps {
-            assert!(due.is_some_and(|t| t <= now), "turn {turn}: the steps behind it stay due: {due:?}");
-        }
-    }
-    due
+/// One turn of the thread at `steps` due steps whose servers all time out: each is tried once,
+/// and the thread moves on; the queue's next due after it.
+fn round(k: &mut Recorder, steps: usize) -> Option<u64> {
+    let before = cleaned(k).len();
+    k.thread();
+    assert_eq!(cleaned(k).len(), before + steps, "every due step tried once: {:?}", k.calls);
+    k.cleanup.due()
 }
 
-/// A step whose server does not take the call within the steward's send bound (`Timeout`) is
+/// A step whose server does not take the call within the client's call bound (`Timeout`) is
 /// kept and retried no sooner than `RETRY_US` later, up to `TRIES` attempts, the last told it
 /// parks; then the step is parked: still held, due at no time. A turn before the retry is due
 /// makes no call.
@@ -1371,85 +1472,86 @@ fn a_cleanup_step_that_times_out_is_retried_then_parked() {
     let mut k = Recorder::default();
     let mut s = started(&mut k);
     ended_session(&mut s, &mut k, "bob", &BOB_KEY);
-    let pending = s.pending();
+    let pending = k.pending();
     assert!(pending > 0);
     k.clean = Some(Error::Timeout);
     k.calls.clear();
     let now = k.now();
-    let due = round(&mut s, &mut k, pending);
+    let due = round(&mut k, pending);
     assert_eq!(due, Some(now + RETRY_US), "the retry is due RETRY_US after the attempt");
-    assert_eq!(cleaned(&k).len(), pending);
     assert!(cleaned(&k).iter().all(|&(_, last)| !last));
-    assert_eq!(s.pending(), pending, "a timed-out step is kept");
+    assert_eq!(k.pending(), pending, "a timed-out step is kept");
     k.calls.clear();
     k.clock += RETRY_US - 1;
-    assert_eq!(s.cleanup(&mut k), due);
+    assert!(k.thread().is_empty());
     assert!(k.calls.is_empty(), "not due yet: no call");
     for attempt in 2..=TRIES {
         k.clock += RETRY_US;
         k.calls.clear();
-        let next = round(&mut s, &mut k, pending);
+        let next = round(&mut k, pending);
         let last = attempt == TRIES;
-        assert_eq!(cleaned(&k).len(), pending, "attempt {attempt}");
         assert!(cleaned(&k).iter().all(|&(_, l)| l == last), "attempt {attempt}: {:?}", k.calls);
         if last {
             assert_eq!(
-                (next, s.pending(), s.parked()),
+                (next, k.pending(), k.parked()),
                 (None, pending, pending),
                 "parked after TRIES attempts"
             );
         } else {
-            assert!(next.is_some() && s.pending() == pending, "attempt {attempt} is kept");
+            assert!(next.is_some() && k.pending() == pending, "attempt {attempt} is kept");
         }
     }
 }
 
-/// A turn stops at its first step the server did not take in time: the steps behind it stay
-/// due now, untold, so the loop receives before it waits on a server again, and a turn costs it
-/// one send bound at most; the next turn, its servers answering, tells every other step.
+/// A step the server did not take in time holds nobody: the thread moves on to the steps behind
+/// it in the same turn, since no caller waits on it now, and the timed-out one is due a second
+/// later in its place, the only one left.
 #[test]
-fn a_turn_stops_at_its_first_timed_out_step() {
+fn a_timed_out_step_does_not_hold_the_steps_behind_it() {
     let mut k = Recorder::default();
     let mut s = started(&mut k);
     ended_session(&mut s, &mut k, "bob", &BOB_KEY);
-    let pending = s.pending();
+    let pending = k.pending();
     assert!(pending >= 2);
-    let first = released(&k)[0];
-    k.clean = Some(Error::Timeout);
+    let first = *released(&k).iter().find(|h| k.at.contains_key(h)).unwrap();
+    k.busy = vec![k.at[&first].clone()];
     k.calls.clear();
     let now = k.now();
-    assert_eq!(s.cleanup(&mut k), Some(now), "the steps behind the timed-out one are due now");
-    assert_eq!(cleaned(&k), vec![(first, false)], "one wait per turn: {:?}", k.calls);
-    assert_eq!(s.pending(), pending, "the timed-out step is kept, the rest untouched");
-    k.clean = None;
+    k.thread();
+    assert_eq!(cleaned(&k).len(), pending, "every step tried in the one turn: {:?}", k.calls);
+    assert_eq!(cleaned(&k)[0], (first, false), "the timed-out one first, in its order");
+    assert_eq!((k.pending(), k.cleanup.due()), (1, Some(now + RETRY_US)), "only its retry is left");
+    k.busy.clear();
+    k.clock += RETRY_US;
     k.calls.clear();
-    assert_eq!(s.cleanup(&mut k), Some(now + RETRY_US), "only the retry is left");
-    assert_eq!(cleaned(&k).len(), pending - 1, "the next turn tells every other step: {:?}", k.calls);
-    assert_eq!(s.pending(), 1);
+    assert_eq!(k.thread(), vec![(first, Fate::Done)]);
+    assert_eq!(k.pending(), 0);
 }
 
 /// Any outcome but `Timeout` ends a step at once: an `ended` to a channel `sshd` already closed
-/// fails `Dead` and is never retried, and a `disconnect` the server refuses is done too.
+/// fails `Dead` and is never retried, and a `disconnect` the server refuses is done too; the
+/// loop is told the fate, and says nothing of it.
 #[test]
 fn a_cleanup_step_the_server_refuses_or_cannot_take_is_done_at_once() {
     for error in [Error::Dead, Error::Refused] {
         let mut k = Recorder::default();
         let mut s = started(&mut k);
         ended_session(&mut s, &mut k, "bob", &BOB_KEY);
-        let pending = s.pending();
+        let pending = k.pending();
         k.clean = Some(error);
         k.calls.clear();
-        assert_eq!(s.cleanup(&mut k), None);
+        let fates = k.thread();
         assert_eq!(cleaned(&k).len(), pending);
-        assert_eq!(s.pending(), 0, "{error:?} ends the step");
+        assert!(fates.iter().all(|(_, f)| *f == Fate::Failed(error)), "{fates:?}");
+        assert_eq!((k.pending(), k.cleanup.due()), (0, None), "{error:?} ends the step");
     }
 }
 
 /// The queue's bound (servers/steward.md, "Failure and restart"): a connection enters once, when
 /// its owner's end releases it, so the queue never holds more than the connections the ended
 /// objects held, at most `SLOTS + 4` per session (its badge, a connection per slot, its relay's
-/// control connection, the attached channel console and its notices send right); a turn empties
-/// it, and an object's second end queues nothing.
+/// control connection, the attached channel console and its notices send right); a turn of the
+/// thread empties it, and an object's second end queues nothing.
 #[test]
 fn the_cleanup_queue_holds_each_released_connection_once() {
     let mut k = Recorder::default();
@@ -1459,17 +1561,75 @@ fn the_cleanup_queue_holds_each_released_connection_once() {
         ended_session(&mut s, &mut k, principal, key);
         let released = released(&k);
         assert!(released.len() <= SLOTS as usize + 4, "{principal}: {released:?}");
+        assert_eq!(handed(&k), released, "{principal}: each handed over once");
         all.extend(released);
     }
     let mut unique = all.clone();
     unique.sort_unstable();
     unique.dedup();
     assert_eq!(unique.len(), all.len(), "each connection once: {all:?}");
-    assert_eq!(s.pending(), all.len());
+    let told = all.iter().filter(|h| k.at.contains_key(h)).count();
+    assert_eq!(k.pending(), told);
     k.calls.clear();
-    s.cleanup(&mut k);
-    assert_eq!(cleaned(&k).len(), all.len());
-    assert_eq!(s.pending(), 0);
+    k.thread();
+    assert_eq!(cleaned(&k).len(), told);
+    assert_eq!(k.pending(), 0);
+}
+
+/// A step whose call the server never answers holds nothing but its own record: the thread has
+/// one call out and takes no other step meanwhile, the loop's events go on and hand their steps
+/// over, and the server's restart forgets the rest of its steps while the one out stays out
+/// (its call returns within its bound, whatever the server did).
+#[test]
+fn a_step_that_never_completes_holds_only_itself() {
+    let mut k = Recorder::default();
+    let mut s = started(&mut k);
+    ended_session(&mut s, &mut k, "bob", &BOB_KEY);
+    let now = k.now();
+    let (out, tries) = k.cleanup.take(now).expect("the first step");
+    assert_eq!((out, tries), (*released(&k).iter().find(|h| k.at.contains_key(h)).unwrap(), 1));
+    let server = k.at[&out].clone();
+    assert!(k.cleanup.take(now).is_none(), "one call at a time: nothing else is taken while it is out");
+    let before = k.pending();
+    ended_session(&mut s, &mut k, "alice", &ALICE_KEY);
+    assert!(k.pending() > before, "the loop went on and handed alice's steps over");
+    assert!(cleaned(&k).is_empty(), "and made no call");
+    let queued = k.pending();
+    let m = Message::Reconnected(Reconnected { server: &server });
+    assert!(matches!(call(&mut s, &mut k, INIT, m), Ok(Reply::Reconnected(_))));
+    let now = k.now();
+    assert!(k.pending() < queued, "the server's queued steps are forgotten: {:?}", k.calls);
+    assert!(k.cleanup.take(now).is_none(), "the step out stays out, and nothing else is taken while it is");
+    assert_eq!(
+        k.cleanup.settle(Err(Error::Dead), now),
+        Some((out, Fate::Failed(Error::Dead))),
+        "its late answer settles it"
+    );
+}
+
+/// A step that completes after the loop moved on is settled then: its late answer ends it, the
+/// thread moves on to what the loop handed over meanwhile, and nothing is lost or run twice.
+#[test]
+fn a_step_that_completes_after_the_loop_moved_on_is_settled_then() {
+    let mut k = Recorder::default();
+    let mut s = started(&mut k);
+    ended_session(&mut s, &mut k, "bob", &BOB_KEY);
+    let now = k.now();
+    let (out, _) = k.cleanup.take(now).expect("the first step");
+    ended_session(&mut s, &mut k, "alice", &ALICE_KEY);
+    let pending = k.pending();
+    k.calls.clear();
+    let now = k.now();
+    assert_eq!(k.cleanup.settle(Ok(()), now), Some((out, Fate::Done)));
+    assert_eq!(k.pending(), pending - 1);
+    k.thread();
+    assert_eq!(
+        cleaned(&k).len(),
+        pending - 1,
+        "the rest ran once each, the settled one not again: {:?}",
+        k.calls
+    );
+    assert_eq!(k.pending(), 0);
 }
 
 /// A console that records what the steward's lines cost it (servers/steward.md, "Failure and
@@ -1640,13 +1800,23 @@ fn parked_at(s: &mut Steward<usize, usize>, k: &mut Recorder, server: &str) -> u
         .iter()
         .find(|h| k.at.get(h).map(String::as_str) == Some(server))
         .expect("the session held a connection at the server");
-    while s.parked() == 0 {
-        s.cleanup(k);
+    let mut fates = Vec::new();
+    while k.parked() == 0 {
+        fates.extend(k.thread());
         k.clock += RETRY_US;
     }
-    s.cleanup(k);
-    assert_eq!((s.pending(), s.parked()), (1, 1), "{:?}", k.calls);
-    assert_eq!(cleaned(k).iter().filter(|(_, parks)| *parks).count(), 1, "said once: {:?}", k.calls);
+    assert!(k.thread().is_empty());
+    assert_eq!((k.pending(), k.parked()), (1, 1), "{:?}", k.calls);
+    assert_eq!(
+        cleaned(k).iter().filter(|(_, parks)| *parks).count(),
+        1,
+        "the parking attempt, once: {:?}",
+        k.calls
+    );
+    assert_eq!(
+        fates.iter().filter(|(h, _)| *h == handle).collect::<Vec<_>>(),
+        [&(handle, Fate::Parked(TRIES))]
+    );
     k.calls.clear();
     handle
 }
@@ -1658,28 +1828,36 @@ fn position(k: &Recorder, c: impl Fn(&Call) -> bool) -> usize {
 
 /// A parked step runs again when its server answers a call of the steward's (servers/steward.md,
 /// "Failure and restart"). Bob's `disconnect` at `erofsd:system` is parked. Alice's login mints
-/// there: the parked step runs before the mint (its server still takes no step: one bound) and
-/// the mint, taken, wakes it for the next turn, where it times out again and is parked again,
-/// with no second line. Then the server takes steps again: alice's end's step there is done at
-/// the turn, and bob's runs in that turn, after it; nothing is left.
+/// there: the loop wakes the parked step before the mint and again on the mint's answer, making
+/// no cleanup call of its own; the thread runs the step (its server still takes none: one bound,
+/// the thread's) and parks it again, past the attempt that says the line, so with no second
+/// line. Then the server takes steps again: alice's end's step there is done, and bob's, woken
+/// by it, runs after it; nothing is left.
 #[test]
 fn a_parked_step_runs_at_the_servers_next_answered_call() {
     let mut k = Recorder::default();
     let mut s = started(&mut k);
     let bobs = parked_at(&mut s, &mut k, "erofsd:system");
     let Ok(Reply::Login(a)) = call(&mut s, &mut k, SSHD, login("alice", "", &ALICE_KEY)) else { panic!() };
-    assert_eq!(cleaned(&k), vec![(bobs, false)], "the parked step ran before the mint, once: {:?}", k.calls);
-    let step = position(&k, |c| matches!(c, Call::Clean { .. }));
-    let mint = position(&k, |c| matches!(c, Call::Connect { slot: 5, .. }));
-    assert!(step < mint, "before the mint: {:?}", k.calls);
+    assert!(cleaned(&k).is_empty(), "the loop made no cleanup call: {:?}", k.calls);
+    assert_eq!(
+        woken(&k),
+        ["erofsd:system"],
+        "woken before the mint; its answer finds nothing parked: {:?}",
+        k.calls
+    );
+    assert!(
+        position(&k, |c| matches!(c, Call::Wake(_)))
+            < position(&k, |c| matches!(c, Call::Connect { slot: 5, .. }))
+    );
     k.calls.clear();
-    assert_eq!(s.cleanup(&mut k), None, "woken by the mint's answer: the turn ran it and parked it again");
-    assert_eq!(cleaned(&k), vec![(bobs, false)]);
-    assert_eq!((s.pending(), s.parked()), (1, 1));
+    assert_eq!(k.thread(), vec![(bobs, Fate::Parked(TRIES + 1))], "run once by the thread, parked again");
+    assert_eq!(cleaned(&k), vec![(bobs, false)], "past the attempt that says the line");
+    assert_eq!((k.pending(), k.parked()), (1, 1));
     k.calls.clear();
     for _ in 0..3 {
         k.clock += RETRY_US;
-        assert_eq!(s.cleanup(&mut k), None);
+        assert!(k.thread().is_empty());
     }
     assert!(cleaned(&k).is_empty(), "parked: no attempt on a timer: {:?}", k.calls);
     k.busy.clear();
@@ -1692,22 +1870,24 @@ fn a_parked_step_runs_at_the_servers_next_answered_call() {
     let alices =
         *released(&k).iter().find(|h| k.at.get(h).map(String::as_str) == Some("erofsd:system")).unwrap();
     k.calls.clear();
-    assert_eq!(s.cleanup(&mut k), None);
+    k.thread();
     let done = cleaned(&k);
     let answered = done.iter().position(|&(h, _)| h == alices).expect("alice's step there");
     let retried = done.iter().position(|&(h, _)| h == bobs).expect("bob's parked step");
     assert!(answered < retried, "the server's answer first, then the parked step: {done:?}");
-    assert_eq!((s.pending(), s.parked()), (0, 0));
+    assert_eq!((k.pending(), k.parked()), (0, 0));
     assert_eq!(k.records("erofsd:system"), 0, "the server was told of every connection");
 }
 
-/// A mint at a server with parked steps runs them first, since it needs the record a step frees
-/// (servers/steward.md, "Failure and restart"). Bob's step at `erofsd:system` is parked and his
-/// connection's record fills the server; alice's login there runs the step (the server still
-/// takes none: one bound) and its mint is refused, so the login fails; when the server takes
-/// steps again the same login runs the step first, the record goes and the mint succeeds.
+/// A mint at a server with parked steps wakes them first, since it needs the record a step frees,
+/// and waits for nothing: refused all the same, it fails its step and the caller is told, as a
+/// mint the server does not take in time is (servers/steward.md, "Failure and restart"). Bob's
+/// step at `erofsd:system` is parked and his connection's record fills the server; alice's
+/// login there wakes it, the mint is refused once and the login fails; the thread's turn runs
+/// the step (the server still takes none: parked again); when the server takes steps again the
+/// next login wakes it, the thread frees the record, and the login after it succeeds.
 #[test]
-fn a_mint_at_a_server_with_parked_steps_runs_them_first_and_succeeds_where_it_was_refused() {
+fn a_mint_at_a_server_with_parked_steps_wakes_them_and_the_login_after_succeeds() {
     let mut k = Recorder::default();
     let mut s = started(&mut k);
     let bobs = parked_at(&mut s, &mut k, "erofsd:system");
@@ -1716,29 +1896,32 @@ fn a_mint_at_a_server_with_parked_steps_runs_them_first_and_succeeds_where_it_wa
     k.cap = Some(("erofsd:system".into(), full));
     let e = call(&mut s, &mut k, SSHD, login("alice", "", &ALICE_KEY)).unwrap_err();
     assert_eq!(e, ErrorCode::Failed, "the mint is refused at the leaked record");
-    assert_eq!(cleaned(&k), vec![(bobs, false)], "the parked step ran first: {:?}", k.calls);
+    assert!(cleaned(&k).is_empty(), "the loop made no cleanup call and waited for none: {:?}", k.calls);
     assert!(
-        position(&k, |c| matches!(c, Call::Clean { .. }))
+        position(&k, |c| matches!(c, Call::Wake(_)))
             < position(&k, |c| matches!(c, Call::Connect { slot: 5, .. }))
     );
-    // The refusal is an answer: the step is woken for the turn, times out there and is parked
-    // again; the failed batch's own connections are given back and told.
+    assert_eq!(mints_at_system(&k), 1, "refused once, not retried: {:?}", k.calls);
+    // The refusal is an answer: the failed batch's own connections are handed over, and the
+    // thread's next turn tells them and parks bob's again.
     k.calls.clear();
-    s.cleanup(&mut k);
-    assert_eq!(cleaned(&k), vec![(bobs, false)], "{:?}", k.calls);
-    assert_eq!(s.cleanup(&mut k), None);
-    assert_eq!((s.pending(), s.parked()), (1, 1), "still parked: the server took no step");
+    let fates = k.thread();
+    assert!(fates.contains(&(bobs, Fate::Parked(TRIES + 1))), "{fates:?}");
+    assert!(k.thread().is_empty());
+    assert_eq!((k.pending(), k.parked()), (1, 1), "still parked: the server took no step");
     k.busy.clear();
+    k.calls.clear();
+    let e = call(&mut s, &mut k, SSHD, login("alice", "", &ALICE_KEY)).unwrap_err();
+    assert_eq!(e, ErrorCode::Failed, "the record is still there until the thread runs: {:?}", k.calls);
+    let fates = k.thread();
+    assert!(fates.contains(&(bobs, Fate::Done)), "woken by the mint, run by the thread: {fates:?}");
+    assert!(fates.iter().all(|(_, f)| *f == Fate::Done), "and the failed batch's steps with it: {fates:?}");
     k.calls.clear();
     let Ok(Reply::Login(_)) = call(&mut s, &mut k, SSHD, login("alice", "", &ALICE_KEY)) else {
         panic!("the parked step freed the record: {:?}", k.calls)
     };
-    assert_eq!(cleaned(&k), vec![(bobs, false)]);
-    assert!(
-        position(&k, |c| matches!(c, Call::Clean { .. }))
-            < position(&k, |c| matches!(c, Call::Connect { slot: 5, .. }))
-    );
-    assert_eq!((s.pending(), s.parked()), (0, 0));
+    assert_eq!(mints_at_system(&k), 1);
+    assert_eq!((k.pending(), k.parked()), (0, 0));
     assert_eq!(k.records("erofsd:system"), full, "bob's record went, alice's took its place");
 }
 
@@ -1756,29 +1939,50 @@ fn reconnected_forgets_a_servers_parked_steps() {
         *released(k).iter().find(|h| k.at.get(h).map(String::as_str) == Some(server)).unwrap()
     };
     let (home, system) = (at(&k, "walfsd:data"), at(&k, "erofsd:system"));
-    while s.parked() < 2 {
-        s.cleanup(&mut k);
+    while k.parked() < 2 {
+        k.thread();
         k.clock += RETRY_US;
     }
-    s.cleanup(&mut k);
-    assert_eq!((s.pending(), s.parked()), (2, 2), "{:?}", k.calls);
+    assert!(k.thread().is_empty());
+    assert_eq!((k.pending(), k.parked()), (2, 2), "{:?}", k.calls);
     k.calls.clear();
     let m = Message::Reconnected(Reconnected { server: "walfsd:data" });
     let Ok(Reply::Reconnected(_)) = call(&mut s, &mut k, INIT, m) else { panic!() };
-    assert_eq!((s.pending(), s.parked()), (1, 1), "the home's step is forgotten: {:?}", k.calls);
-    // The servers take steps again: alice's login mints at the system volume, so the step
-    // parked there runs before it; nothing ever runs for the forgotten one.
+    assert_eq!((k.pending(), k.parked()), (1, 1), "the home's step is forgotten: {:?}", k.calls);
+    assert!(k.calls.contains(&Call::Forget("walfsd:data".into())), "{:?}", k.calls);
+    // The servers take steps again: alice's login mints at the system volume, so the loop wakes
+    // the step parked there and the thread runs it; nothing ever runs for the forgotten one.
     k.busy.clear();
     k.calls.clear();
     let Ok(Reply::Login(_)) = call(&mut s, &mut k, SSHD, login("alice", "", &ALICE_KEY)) else { panic!() };
-    assert_eq!(cleaned(&k), vec![(system, false)], "the system volume's parked step ran: {:?}", k.calls);
-    assert_eq!(s.cleanup(&mut k), None);
+    assert_eq!(k.thread(), vec![(system, Fate::Done)], "the system volume's parked step ran: {:?}", k.calls);
+    assert_eq!(cleaned(&k), vec![(system, false)]);
     assert!(!cleaned(&k).iter().any(|&(h, _)| h == home), "the forgotten step never runs: {:?}", k.calls);
     assert!(k.at.contains_key(&home), "its record died with the old instance, told nothing");
-    assert_eq!((s.pending(), s.parked()), (0, 0));
+    assert_eq!((k.pending(), k.parked()), (0, 0));
 }
 
-/// A server that never answers again costs the loop nothing once its steps are parked: no
+/// A restarted server's steps still due, not yet parked, die with its records the same way:
+/// bob's step at `walfsd:data` has not been tried when `init` reports the restart, and it is
+/// never run.
+#[test]
+fn reconnected_forgets_a_servers_due_steps_too() {
+    let mut k = Recorder::default();
+    let mut s = started(&mut k);
+    ended_session(&mut s, &mut k, "bob", &BOB_KEY);
+    let home = *released(&k).iter().find(|h| k.at.get(h).map(String::as_str) == Some("walfsd:data")).unwrap();
+    let pending = k.pending();
+    let m = Message::Reconnected(Reconnected { server: "walfsd:data" });
+    let Ok(Reply::Reconnected(_)) = call(&mut s, &mut k, INIT, m) else { panic!() };
+    assert_eq!(k.pending(), pending - 1, "{:?}", k.calls);
+    k.calls.clear();
+    k.thread();
+    assert!(!cleaned(&k).iter().any(|&(h, _)| h == home), "never run: {:?}", k.calls);
+    assert!(k.at.contains_key(&home));
+    assert_eq!(k.pending(), 0);
+}
+
+/// A server that never answers again costs nobody anything once its steps are parked: no
 /// attempt on a timer, no bound per turn, no wake; the step is held, once, until the server
 /// answers or restarts.
 #[test]
@@ -1788,10 +1992,11 @@ fn a_never_answering_server_costs_no_bound_once_its_steps_are_parked() {
     parked_at(&mut s, &mut k, "erofsd:system");
     for _ in 0..10 {
         k.clock += RETRY_US;
-        assert_eq!(s.cleanup(&mut k), None, "nothing is due at any time");
+        assert!(k.thread().is_empty(), "nothing is due at any time");
+        assert_eq!(k.cleanup.due(), None);
     }
     assert!(k.calls.is_empty(), "no call: {:?}", k.calls);
-    assert_eq!((s.pending(), s.parked()), (1, 1), "held once");
+    assert_eq!((k.pending(), k.parked()), (1, 1), "held once");
 }
 
 /// The badge a session's own calls come on: its route in the core's index.
@@ -1856,7 +2061,11 @@ fn a_session_lists_detaches_and_ends_its_own_domain_s_contexts() {
     assert!(!routed, "a ended");
     k.calls.clear();
     assert!(call(&mut s, &mut k, badge, Message::Detach(Detach {})).is_ok());
-    assert!(matches!(k.calls.as_slice(), [Call::Detach { .. }, Call::Release(_)]), "{:?}", k.calls);
+    assert!(
+        matches!(k.calls.as_slice(), [Call::Detach { .. }, Call::Release(_), Call::Hand(_)]),
+        "{:?}",
+        k.calls
+    );
     assert_eq!(call(&mut s, &mut k, badge, Message::Detach(Detach {})).unwrap_err(), ErrorCode::Unknown);
     // On `sshd`'s badge they are malformed.
     assert_eq!(call(&mut s, &mut k, SSHD, Message::Contexts(Contexts {})).unwrap_err(), ErrorCode::Malformed);
@@ -2812,9 +3021,9 @@ fn made_and_destroyed(k: &Recorder, before: usize) -> bool {
 /// A mint the server does not take within the steward's bound (`SERVER_US`, `Timeout`) fails
 /// the login's step and nothing else (servers/steward.md, "Residual risks"): the batch is rolled
 /// back, every budget it made destroyed, the step is said with the kernel's error, and the next
-/// caller is served. A `Timeout` is no answer: a step parked at that server is not woken by it
-/// (the mint ran the parked step first, as any mint there does), and runs again only when the
-/// server answers.
+/// caller is served. A `Timeout` is no answer: the step parked at that server was woken before
+/// the mint, as before any mint there, and is not woken again by the timeout; it runs again only
+/// when the server answers.
 #[test]
 fn a_mint_the_server_does_not_take_in_time_fails_the_step_and_the_next_caller_is_served() {
     let mut k = Recorder::default();
@@ -2830,15 +3039,21 @@ fn a_mint_the_server_does_not_take_in_time_fails_the_step_and_the_next_caller_is
     );
     assert!(k.deadlines.len() > before, "the batch got as far as its budgets");
     assert!(made_and_destroyed(&k, before), "every budget the batch made is destroyed: {:?}", k.calls);
-    assert_eq!(cleaned(&k), vec![(bobs, false)], "the parked step ran before the mint, once: {:?}", k.calls);
+    assert!(cleaned(&k).is_empty(), "the loop made no cleanup call: {:?}", k.calls);
+    assert_eq!(woken(&k), ["erofsd:system"], "woken before the mint; a timeout wakes nothing: {:?}", k.calls);
+    assert_eq!(mints_at_system(&k), 1, "not retried");
     k.calls.clear();
-    s.cleanup(&mut k);
-    assert!(
-        !cleaned(&k).iter().any(|(h, _)| *h == bobs),
-        "a timeout is no answer: the parked step is not woken: {:?}",
+    let fates = k.thread();
+    assert_eq!(
+        cleaned(&k).iter().filter(|(h, _)| *h == bobs).count(),
+        1,
+        "the woken step ran once: {:?}",
         k.calls
     );
-    assert_eq!(s.parked(), 1, "still parked");
+    assert!(fates.contains(&(bobs, Fate::Parked(TRIES + 1))), "and is parked again: {fates:?}");
+    k.calls.clear();
+    assert!(k.thread().is_empty(), "not woken again by the timeout: {:?}", k.calls);
+    assert_eq!(k.parked(), 1, "still parked");
     k.stalled.clear();
     k.busy.clear();
     k.calls.clear();
@@ -2846,7 +3061,8 @@ fn a_mint_the_server_does_not_take_in_time_fails_the_step_and_the_next_caller_is
         matches!(call(&mut s, &mut k, SSHD, bob_in("")), Ok(Reply::Login(_))),
         "the next caller is served"
     );
-    assert_eq!((s.pending(), s.parked()), (0, 0), "the server's answer ran bob's step: {:?}", k.calls);
+    k.thread();
+    assert_eq!((k.pending(), k.parked()), (0, 0), "the server's answer ran bob's step: {:?}", k.calls);
 }
 
 /// A launch whose read of the image the server does not take in time fails the lease's step the

@@ -6,9 +6,11 @@ icount = "shift=3,sleep=off"
 # The guest seed the gate runs, sched-latency's; the sweep is recorded in the package's report.
 qemu_seed = 3
 # Out of the whole run until its rows pass on both widths: four rounds, N = 1, 2, 3 and 4 at
-# one hart and 1, 2 and 3 at two; every target is met but the timer wake's p99 at N = 3 and 4 at
-# one hart on both widths (one sample each, the window holding the loop's cleanup turn parking a
-# disconnect the busy system volume did not take) and at N = 3 at two harts on rv64; on rv32 at
+# one hart and 1, 2 and 3 at two; every target is met at one hart on both widths now that the
+# cleanup steps run on the steward's own thread (before, one sample at N = 3 and 4 held the
+# loop's 100 ms attempt at a disconnect the busy system volume did not take); at two harts on
+# rv64 the timer wake's p99 at N = 3 missed the same way before the thread and is not yet
+# re-measured; on rv32 at
 # two harts the N = 3 round is not reached (a lease VM's launch there takes 3.5 s of the shell's
 # 5 s start_agent bound alone, and beside two spinners it is a third runnable of equal weight on
 # two harts, so the launch runs over the bound and the round's loop dies: compute, not the

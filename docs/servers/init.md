@@ -984,9 +984,9 @@ Status: built · partly tested: the runtime's exit on a refused block is read fr
 - **A blame can be lost.** If the steward does not take `init`'s blame within its timeout, the
   crash is reported on the console but counts toward no lockout. A session's end no longer
   holds the steward past that timeout: the end is answered once its scope is destroyed, and its
-  `ended` to `sshd` and its disconnects run at the steward's turn, each within its own 100 ms
-  send bound ([steward](steward.md#failure-and-restart)); `steward-blame-lockout` and
-  `steward-server-restart` forbid `lost` for a blame.
+  `ended` to `sshd` and its disconnects are the steward's cleanup thread's, each within the
+  client's call bound, never the loop's ([steward](steward.md#failure-and-restart));
+  `steward-blame-lockout` and `steward-server-restart` forbid `lost` for a blame.
 - **A new connection can be lost the same way.** If the steward does not take `init`'s
   `reconnected` within its second, the restarted server's sessions keep their dead connections
   and the steward mints no home there until its own restart; `init` says so and retries nothing
