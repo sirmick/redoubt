@@ -728,7 +728,7 @@ u16)` ([failure and restart](#failure-and-restart)).
 
 ### Leases
 
-Status: built · partly tested: a lease's roots are its sponsor's `~/project` and the system volume (the task-scoped grants and `gatewayd` are later) · tested: bench:steward-lease-ends, bench:steward-end-lease, bench:steward-sub-agent-dies-with-agent, bench:agent-login, host:redoubt-steward-server::start_agent_runs_the_lease_batch_and_answers_the_lease, host:redoubt-steward-server::end_lease_from_the_sponsor_destroys_the_lease_and_tells_her_sessions, host:redoubt-steward-server::a_leases_deadline_ends_it_without_a_failed_step, host:redoubt-steward-server::a_login_as_the_sponsored_principal_is_a_lease_of_its_sponsors, host:redoubt-steward::a_sponsored_principals_session_is_a_lease_of_its_sponsors, host:redoubt-steward::sponsor_session_and_notify_sponsor
+Status: built · partly tested: a lease's roots are its sponsor's `~/project` and the system volume (the task-scoped grants and `gatewayd` are later) · tested: bench:steward-lease-ends, bench:steward-end-lease, bench:steward-sub-agent-dies-with-agent, bench:agent-login, bench:steward-agent-escape, bench:steward-lease-cut, bench:steward-agent-flood, host:redoubt-steward-server::start_agent_runs_the_lease_batch_and_answers_the_lease, host:redoubt-steward-server::end_lease_from_the_sponsor_destroys_the_lease_and_tells_her_sessions, host:redoubt-steward-server::a_leases_deadline_ends_it_without_a_failed_step, host:redoubt-steward-server::a_login_as_the_sponsored_principal_is_a_lease_of_its_sponsors, host:redoubt-steward::a_sponsored_principals_session_is_a_lease_of_its_sponsors, host:redoubt-steward::sponsor_session_and_notify_sponsor
 
 An agent is its own principal, never an impersonation, with an accountable **sponsor**: a person,
 or an agent with a person at the top of the chain.
@@ -818,7 +818,7 @@ until [R41](#r41-narrowing-by-revocation-scope)'s scope lands.
 
 ### The powerbox and approvals
 
-Status: built · partly tested: a labelled agent's request, a note, a declassification and a push are submitted, rendered, approved and denied on the machine · tested: bench:steward-approve-box, bench:steward-declassify, bench:steward-push, bench:steward-screen-inert, bench:steward-pending-cap, host:redoubt-steward-server::a_request_is_rendered_bound_to_its_screen_and_its_approval_starts_the_labelled_agent, host:redoubt-steward-server::notes_are_rendered_by_their_requesters_labels_and_a_dead_sessions_requests_are_gone, host:redoubt-steward-server::an_approval_channel_opens_on_the_approval_key_alone, host:redoubt-steward-server::the_three_commands_parse, host:redoubt-steward-server::the_fuzz_corpus_still_passes, mutation:PolicyApproveIgnoresHash, mutation:PolicyApproveWithLoginKey, mutation:PolicyNoPendingCap
+Status: built · partly tested: a labelled agent's request, a note, a declassification and a push are submitted, rendered, approved and denied on the machine · tested: bench:steward-approve-box, bench:steward-declassify, bench:steward-push, bench:steward-screen-inert, bench:steward-pending-cap, bench:steward-vault-note, host:redoubt-steward-server::a_request_is_rendered_bound_to_its_screen_and_its_approval_starts_the_labelled_agent, host:redoubt-steward-server::notes_are_rendered_by_their_requesters_labels_and_a_dead_sessions_requests_are_gone, host:redoubt-steward-server::an_approval_channel_opens_on_the_approval_key_alone, host:redoubt-steward-server::the_three_commands_parse, host:redoubt-steward-server::the_fuzz_corpus_still_passes, mutation:PolicyApproveIgnoresHash, mutation:PolicyApproveWithLoginKey, mutation:PolicyNoPendingCap
 
 The **powerbox** grants authority a principal lacks and confirms a principal's own high-stakes
 steps: an agent asking its sponsor, a principal asking the holder of a shared resource, a new
@@ -1215,7 +1215,7 @@ before, is service timing.
 
 ### R38 (out-of-band approval)
 
-Status: built · partly tested: declassification and push, the other approved contents, are STEWARD4's · tested: bench:steward-approve-box, bench:steward-screen-inert, bench:steward-pending-cap, host:redoubt-steward-server::a_request_is_rendered_bound_to_its_screen_and_its_approval_starts_the_labelled_agent, host:redoubt-steward-server::an_approval_channel_opens_on_the_approval_key_alone, mutation:PolicyApproveIgnoresHash, mutation:PolicyApproveWithLoginKey, mutation:PolicyApproveOtherChannel, mutation:PolicyShowLabelledToAll, mutation:PolicyRenderNotWhitelisted, mutation:PolicyLabelledFreeTextShown, mutation:PolicyNotifyLabelledToAll
+Status: built · partly tested: declassification and push, the other approved contents, are STEWARD4's · tested: bench:steward-approve-box, bench:steward-screen-inert, bench:steward-pending-cap, bench:steward-vault-note, host:redoubt-steward-server::a_request_is_rendered_bound_to_its_screen_and_its_approval_starts_the_labelled_agent, host:redoubt-steward-server::an_approval_channel_opens_on_the_approval_key_alone, mutation:PolicyApproveIgnoresHash, mutation:PolicyApproveWithLoginKey, mutation:PolicyApproveOtherChannel, mutation:PolicyShowLabelledToAll, mutation:PolicyRenderNotWhitelisted, mutation:PolicyLabelledFreeTextShown, mutation:PolicyNotifyLabelledToAll
 
 An approval takes effect only if it came through `approve@box` with the approver's own approval
 key, named the frozen request's id and content hash, and grants no label or authority the approver
@@ -1224,7 +1224,7 @@ text.
 
 ### R39 (leases end)
 
-Status: built · tested: bench:steward-lease-ends, bench:steward-end-lease, bench:steward-sub-agent-dies-with-agent, bench:agent-login, host:redoubt-steward::a_sponsored_principals_session_is_a_lease_of_its_sponsors, mutation:PolicyUnboundedLease, mutation:PolicyEndLeaseFromVault, mutation:PolicySponsoredEndedByAnyone, mutation:PolicySponsoredVaultLogin
+Status: built · tested: bench:steward-lease-ends, bench:steward-end-lease, bench:steward-sub-agent-dies-with-agent, bench:agent-login, bench:steward-agent-escape, bench:steward-lease-cut, host:redoubt-steward::a_sponsored_principals_session_is_a_lease_of_its_sponsors, mutation:PolicyUnboundedLease, mutation:PolicyEndLeaseFromVault, mutation:PolicySponsoredEndedByAnyone, mutation:PolicySponsoredVaultLogin
 
 Every lease's budget has a deadline at most `MAX_LEASE` away, an expired lease is gone, and its
 sponsor can always end it, ahead of admission, however hard the agent floods the servers they
@@ -1243,7 +1243,7 @@ on it fall within ten minutes, no new session of it starts for the next ten minu
 
 ### R41 (narrowing by revocation scope)
 
-Status: built · partly tested: the attack case handing a server a session's budget, and a lease's connections ending at its deadline, are STEWARD3A's with the leases · tested: host:redoubt-rt::a_connection_minted_in_a_scope_ends_when_the_scope_is_destroyed, host:redoubt-rt::a_connection_is_minted_in_the_scope_its_requester_sends, host:redoubt-ipd::a_granted_connection_in_a_scope_ends_when_the_scope_is_destroyed, host:redoubt-ipd::a_grant_is_minted_in_the_revocation_scope_it_brings, host:redoubt-steward-server::a_session_s_end_destroys_its_budget_before_it_releases_its_connections, host:redoubt-init::the_steward_s_entry_alone_is_given_the_manifest_lines
+Status: built · partly tested: the attack case handing a server a session's budget, and a lease's connections ending at its deadline, are STEWARD3A's with the leases · tested: host:redoubt-rt::a_connection_minted_in_a_scope_ends_when_the_scope_is_destroyed, host:redoubt-rt::a_connection_is_minted_in_the_scope_its_requester_sends, host:redoubt-ipd::a_granted_connection_in_a_scope_ends_when_the_scope_is_destroyed, host:redoubt-ipd::a_grant_is_minted_in_the_revocation_scope_it_brings, host:redoubt-steward-server::a_session_s_end_destroys_its_budget_before_it_releases_its_connections, host:redoubt-init::the_steward_s_entry_alone_is_given_the_manifest_lines, bench:steward-agent-escape, bench:steward-lease-cut
 
 A server that narrows a session's connection to that session's life holds a revocation scope made
 for it, never a budget holding processes. So a compromised server can revoke what it minted,

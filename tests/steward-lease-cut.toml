@@ -1,0 +1,83 @@
+description = "A lease cut mid-write does not take walfsd with it (docs/plan/m3-agents.md, \"A scripted hostile agent\"; docs/kernel/ipc.md, R3; docs/kernel/budgets.md, R10; docs/servers/steward.md, \"Leases\", R39 and R41): alice's SSH session writes a canary to her `~/project/out`, writes `writeloop` to `~/project/in` and starts an agent; the agent writes a page-sized buffer to `/project/out/churn` in a tight loop, so a `Twrite` lend to walfsd is almost always in flight; alice, once the agent's `started` marker is there, ends the lease with `end_lease` mid-write, and the kernel destroys the agent's budget while walfsd holds its lent pages. walfsd frees the abandoned lend and serves on (R3): it does not fault, alice reads her canary back whole, and her own home connection still answers a fresh write and read; the steward audits the lease's end and her sub-budget is back to her sessions. The verdicts are walfsd's survival (no `init:` fault line), alice's canary and fresh file read back by her own session, the steward's audit and usage lines, and the notice the shell printed (rule F)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+recipe = "image/boot.toml"
+# The image needs 1 GiB: the principals' budgets, each holding shell VMs' sessions and a lease,
+# do not fit the users budget 256 MiB leaves (docs/kernel/budgets.md).
+memory_mib = 1024
+# A login and an agent's VM, one after the other.
+timeout_secs = 1500
+expect = [
+    '^init: started sshd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
+    '^init: started steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+]
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    # walfsd is a server under init: a fault, exit or kill of it would be an init line, and R3
+    # says the abandoned lend must not cause one.
+    '^init: .* (exited|faulted|was killed)',
+    'init: restarted',
+    'EXCEPTION',
+    'steward: a step failed',
+    'steward: the core exited',
+    'sshd: login .*: refused',
+]
+# One lease carved from alice's unlabelled sub-budget (two processes more while it runs, her two
+# sessions again once it ends): the end_lease destroys it mid-write, and walfsd serves on.
+expect_after = [
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{\} at [0-9]+: AgentStarted \{ lease: [0-9]+, sponsor: 0, parent: None, deadline: [0-9]+ \}',
+    '^\[con [0-9a-f]{16}\] steward: users/alice/\{\} holds [0-9]+ pages, 22 processes$',
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{\} at [0-9]+: LeaseEnded \{ lease: [0-9]+ \}',
+    '^\[con [0-9a-f]{16}\] steward: users/alice/\{\} holds [0-9]+ pages, 20 processes$',
+]
+
+# Alice stages the canary and the agent's order, starts the agent, waits for its `started` marker
+# (the agent is then looping writes to /project), and ends the lease mid-write. She then reads her
+# canary back whole and writes and reads a fresh file in her home: walfsd served both, so it kept
+# serving through the abandoned lend. Every answer is tagged, so a pattern matches the shell's
+# printed value and never the echo of the line typed.
+[[session]]
+user = "alice"
+pty = true
+steps = [
+    { expect = '/home/alice \([0-9]+\)> ' },
+    { send = "{:stage, File.mkdir_p(\"/home/alice/project/out\"), File.write(\"/home/alice/project/out/canary\", \"whole\\n\"), File.write(\"/home/alice/project/in\", \"writeloop\")}\n" },
+    { expect = '\{:stage, :ok, :ok, :ok\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:ok, c} = Redoubt.Contexts.connection(); {:ok, %{lease: l}} = Redoubt.Wire.Client.Steward.start_agent(c, 600_000_000); {:lease, is_integer(l)}\n" },
+    { expect = '\{:lease, true\}' },
+    { expect = '\([0-9]+\)> ' },
+    { mark = "agent-started" },
+    # The agent is looping writes once its marker is there.
+    { send = "{:looping, Enum.find_value(1..120, fn _ -> case File.read(\"/home/alice/project/out/started\") do {:ok, \"churning\\n\"} -> true; _ -> Process.sleep(1000); nil end end)}\n" },
+    { expect = '\{:looping, true\}' },
+    { expect = '\([0-9]+\)> ' },
+    # The cut, mid-write: a Twrite lend is in flight, and the kernel destroys the agent's budget.
+    { send = "{:ended, Redoubt.Wire.Client.Steward.end_lease(c, l)}\n" },
+    { expect = '\[lease alice/agent-1 ended\]' },
+    { expect = '\{:ended, \{:ok, %\{\}\}\}' },
+    { expect = '\([0-9]+\)> ' },
+    # walfsd served on: alice reads her canary back whole, and a fresh write and read of her home
+    # answer. Her own session's reads, never the agent's output (rule F).
+    { send = "{:whole, File.read(\"/home/alice/project/out/canary\")}\n" },
+    { expect = '\{:whole, \{:ok, "whole\\n"\}\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:fresh, File.write(\"/home/alice/after\", \"ok\"), File.read(\"/home/alice/after\")}\n" },
+    { expect = '\{:fresh, :ok, \{:ok, "ok"\}\}' },
+    { expect = '\([0-9]+\)> ' },
+    { mark = "alice-done" },
+    { exit = 0 },
+]
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]
+forward = [22]
