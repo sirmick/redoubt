@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 486
+revision = 492
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -2594,8 +2594,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "AGENTS"
   body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'F3'. Brief: .wash/local/STEWARD6-implementer.md. Tier A (the steward), size S, reviewer steward-red-4. Found as B88's residual: the steward's mints (unattached -> Connection::new -> FOREVER), its launch step's image reads from erofsd:system and a push's source reads wait without bound, while its disconnects (3Y) and console writes (3U) are bounded; max observed 1.43 s under two spinner VMs. Rule: every call the steward makes to a shared server inside a batch is made within one bound, SERVER_US; a call the server did not take in time fails the step, the batch's existing failure path answers the caller (failed to start_agent and submit, a login refused) and nothing retries inside the steward. The bound is measured, not guessed: twice the worst per-call wait under steward-latency's load on both widths, rounded up to a second, stated on steward.md 'Residual risks' beside the relay bounds. Host tests with a server that never answers (a mint, the image read, a push's source); the steward set unchanged in verdict; steward-latency N = 1 unmoved. Pages: steward.md (residual, one clause under sessions), agents.md 'Leases' one clause. First of the pair: STEWARD5 shares bin/steward.rs."
-  state = "active"
-  revision = 471
+  state = "done"
+  revision = 492
 
 [[node]]
   id = "STEWARD7"
