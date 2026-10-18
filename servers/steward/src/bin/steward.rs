@@ -37,6 +37,13 @@
 //! call's reply, so a call's records come before anything its caller says of the answer, and at
 //! the loop's top after the cleanup steps, for every other event's lines. Either turn stops at
 //! the first line the console did not take in time, the rest queued in order for the next.
+//!
+//! **The calls out inside a batch** (the same page, "Residual risks"): every connection the
+//! steward makes to a shared server (the attached ones of [`Machine::server`], the unattached
+//! ones it mints through, the carves it keeps and its file connections at them, `ipd`'s typed
+//! `grant`, its own console at `consoled`) is made `within` [`SERVER_US`], so no call inside a
+//! batch waits on a server without bound: a call the server did not take in time fails its step
+//! with `Timeout`, the batch's failure path answers the caller, and nothing here retries.
 
 #![cfg_attr(target_os = "none", no_std, no_main)]
 
@@ -164,6 +171,14 @@ mod machine {
     /// (µs): the steward never waits without bound on code in a context's budget.
     const HELLO_US: u64 = 2_000_000;
     const RELAY_US: u64 = 1_000_000;
+    /// How long a call to a shared server inside a batch waits for its answer (µs): a mint by
+    /// `new_connection`, a launch's reads of the image, a push's `stat` and read of its source,
+    /// `ipd`'s `grant`, the console session's mint. Twice the worst single call measured under
+    /// `steward-latency` on both widths, 1.66 s (a lease's `/project` carved below the home at
+    /// `walfsd`, rv32, one hart, beside three spinning agents), rounded up to a second
+    /// (servers/steward.md, "Residual risks"). A call not taken in time fails its step through
+    /// the batch's own failure path, and nothing here retries: the caller does.
+    const SERVER_US: u64 = 4_000_000;
     /// `label-probe` only: how long after an attach the probe hands the channel's console to
     /// another relay (µs): `sshd` is free again once the login is answered, and the channel's own
     /// relay has opened its console by then.
@@ -544,8 +559,8 @@ mod machine {
                 return Ok(conn.clone());
             }
             let handle = self.named(name).ok_or(Error::BadHandle)?;
-            let conn = Connection::attach(Endpoint::from_handle(handle), &mut self.lend)
-                .map_err(|_| Error::Refused)?;
+            let conn = Connection::attach_within(Endpoint::from_handle(handle), &mut self.lend, SERVER_US)
+                .map_err(called)?;
             self.servers.insert(name.into(), conn.clone());
             Ok(conn)
         }
@@ -554,7 +569,7 @@ mod machine {
         /// need no fid, and the steward may not read a labelled volume's root itself (R25).
         fn unattached(&self, name: &str) -> Result<Nine, Error> {
             let handle = self.named(name).ok_or(Error::BadHandle)?;
-            Ok(Nine::new(Endpoint::from_handle(handle)))
+            Ok(Nine::within(Endpoint::from_handle(handle), SERVER_US))
         }
 
         /// A fresh connection to `name`'s server rooted at `root`, minted in `scope`, held until
@@ -571,12 +586,12 @@ mod machine {
         /// bytes the first time it is needed.
         fn carve(&mut self, key: &str, name: &str, root: &str, quota: u64) -> Result<Nine, Error> {
             if let Some((handle, _)) = self.carved.get(key) {
-                return Ok(Nine::new(Endpoint::from_handle(*handle)));
+                return Ok(Nine::within(Endpoint::from_handle(*handle), SERVER_US));
             }
             let server = self.unattached(name)?;
             let (endpoint, _) = server.new_connection(&mut self.lend, root, quota, None).map_err(minted)?;
             self.carved.insert(key.into(), (endpoint.handle(), name.into()));
-            Ok(Nine::new(endpoint))
+            Ok(Nine::within(endpoint, SERVER_US))
         }
 
         /// A fresh connection at `below` the root of the one kept for `key`, minted in `scope`,
@@ -615,7 +630,7 @@ mod machine {
             }
             let kept = self.carve(&key, &h.handle, &h.path, h.quota)?;
             let conn =
-                Connection::attach(kept.into_endpoint(), &mut self.lend).map_err(|_| Error::Refused)?;
+                Connection::attach_within(kept.into_endpoint(), &mut self.lend, SERVER_US).map_err(called)?;
             self.homes.insert(key, conn.clone());
             Ok(conn)
         }
@@ -623,17 +638,25 @@ mod machine {
         /// Reads `buf.len()` bytes of the program `path` at `at`, through `bootfsd`.
         fn read_program(&mut self, path: &str, at: usize, buf: &mut [u8]) -> Result<(), Error> {
             let conn = self.server("bootfsd")?;
-            let file = conn.open(&mut self.lend, path, mode::OREAD).map_err(|_| Error::Refused)?;
+            let file = conn.open(&mut self.lend, path, mode::OREAD).map_err(called)?;
             let mut done = 0;
+            let mut failed = None;
             while done < buf.len() {
-                let read = file.read_at(&mut self.lend, (at + done) as u64, &mut buf[done..]);
-                match read {
-                    Ok(0) | Err(_) => break,
+                match file.read_at(&mut self.lend, (at + done) as u64, &mut buf[done..]) {
+                    Ok(0) => break,
                     Ok(n) => done += n,
+                    Err(e) => {
+                        failed = Some(called(e));
+                        break;
+                    }
                 }
             }
             let _ = file.close(&mut self.lend);
-            if done == buf.len() { Ok(()) } else { Err(Error::InvalidArgument) }
+            match failed {
+                Some(e) => Err(e),
+                None if done == buf.len() => Ok(()),
+                None => Err(Error::InvalidArgument),
+            }
         }
 
         /// Holds `handle` for a child under a new key, with what disconnects it, if anything,
@@ -757,17 +780,18 @@ mod machine {
                 How::Grant { scope: net } => {
                     let conn = self.server(IPD)?;
                     let grant = ipd::Message::Grant(ipd::Grant { scope: &net });
-                    let made = typed::call::<ipd::Protocol, _>(
+                    let made = typed::call_within::<ipd::Protocol, _>(
                         conn.endpoint(),
                         &mut self.lend,
                         &grant,
                         &[scope],
+                        SERVER_US,
                         |r, got| match r {
                             ipd::Reply::Grant(g) => got.take(0).map(|h| (h, g.id)),
                             _ => None,
                         },
                     );
-                    let (handle, id) = made.ok().flatten().ok_or(Error::Refused)?;
+                    let (handle, id) = made.map_err(called)?.ok_or(Error::Refused)?;
                     Ok(Some(self.hold(handle, Some((Via::Server(String::from(IPD)), id)), false)))
                 }
                 How::Console => {
@@ -782,12 +806,8 @@ mod machine {
                         // The UART session's, minted at the steward's own console in the scope.
                         (None, Some(cons)) => {
                             let scope = Budget::from_handle(scope);
-                            let (endpoint, id) = cons
-                                .new_connection(&mut self.lend, "", 0, Some(&scope))
-                                .map_err(|e| match e {
-                                    redoubt_client::Error::Sys(Error::Timeout) => Error::Timeout,
-                                    _ => Error::Refused,
-                                })?;
+                            let (endpoint, id) =
+                                cons.new_connection(&mut self.lend, "", 0, Some(&scope)).map_err(called)?;
                             Ok(Some(self.hold(endpoint.handle(), Some((Via::Console, id)), false)))
                         }
                         (None, None) => Ok(None),
@@ -1378,13 +1398,13 @@ mod machine {
             match home.stat(&mut self.lend, path) {
                 Ok(stat) => Ok(Some(stat.length)),
                 Err(redoubt_client::Error::Rerror(_)) => Ok(None),
-                Err(_) => Err(Error::Refused),
+                Err(e) => Err(called(e)),
             }
         }
 
         fn home_read(&mut self, principal: &str, path: &str, max: usize) -> Result<Vec<u8>, Error> {
             let home = self.home(principal)?;
-            let file = home.open(&mut self.lend, path, mode::OREAD).map_err(|_| Error::Refused)?;
+            let file = home.open(&mut self.lend, path, mode::OREAD).map_err(called)?;
             let mut out = Vec::new();
             out.try_reserve(max + 1).map_err(|_| Error::OutOfMemory)?;
             out.resize(max + 1, 0);
@@ -1394,8 +1414,8 @@ mod machine {
                 match file.read_at(&mut self.lend, done as u64, &mut out[done..]) {
                     Ok(0) => break,
                     Ok(n) => done += n,
-                    Err(_) => {
-                        read = Err(Error::Refused);
+                    Err(e) => {
+                        read = Err(called(e));
                         break;
                     }
                 }
@@ -1419,19 +1439,21 @@ mod machine {
             let (dir, name) = redoubt_steward_server::drive::split(path);
             if !dir.is_empty() && home.stat(&mut self.lend, dir).is_err() {
                 let (parent, leaf) = redoubt_steward_server::drive::split(dir);
-                let made = home
-                    .create(&mut self.lend, parent, leaf, DMDIR | 0o755, mode::OREAD)
-                    .map_err(|_| Error::Refused)?;
+                let made =
+                    home.create(&mut self.lend, parent, leaf, DMDIR | 0o755, mode::OREAD).map_err(called)?;
                 let _ = made.close(&mut self.lend);
             }
-            let file =
-                home.create(&mut self.lend, dir, name, 0o644, mode::OWRITE).map_err(|_| Error::Refused)?;
+            let file = home.create(&mut self.lend, dir, name, 0o644, mode::OWRITE).map_err(called)?;
             let mut done = 0;
             let mut wrote = Ok(());
             while done < bytes.len() {
                 match file.write_at(&mut self.lend, done as u64, &bytes[done..]) {
-                    Ok(0) | Err(_) => {
+                    Ok(0) => {
                         wrote = Err(Error::Refused);
+                        break;
+                    }
+                    Err(e) => {
+                        wrote = Err(called(e));
                         break;
                     }
                     Ok(n) => done += n,
@@ -1452,6 +1474,15 @@ mod machine {
     fn minted(e: redoubt_rt::client::ClientError) -> Error {
         match e {
             redoubt_rt::client::ClientError::Sys(Error::Timeout) => Error::Timeout,
+            _ => Error::Refused,
+        }
+    }
+
+    /// A file client call's failure as the kernel's error, as [`minted`] maps a mint's: a server
+    /// that did not take the call within [`SERVER_US`] is `Timeout`; anything else `Refused`.
+    fn called(e: redoubt_client::Error) -> Error {
+        match e {
+            redoubt_client::Error::Sys(Error::Timeout) => Error::Timeout,
             _ => Error::Refused,
         }
     }
@@ -1577,7 +1608,7 @@ mod machine {
     }
 
     /// The kept connection's side of the queue: its calls bounded by [`CONSOLE_US`] through a
-    /// second client on the same connection (the attached one's calls are not bounded: a mint).
+    /// second client on the same connection (the attached one's, a mint, by [`SERVER_US`]).
     struct Out {
         conn: Connection,
         nine: Nine,
@@ -1589,7 +1620,8 @@ mod machine {
         fn new(startup: &Startup) -> Console {
             let at = startup.namespace().find(|(path, _)| *path == "/dev/cons").and_then(|(_, handle)| {
                 let mut lend = Lend::new(1).ok()?;
-                let conn = Connection::attach(Endpoint::from_handle(handle), &mut lend).ok()?;
+                let conn =
+                    Connection::attach_within(Endpoint::from_handle(handle), &mut lend, SERVER_US).ok()?;
                 let nine = Nine::within(Endpoint::from_handle(handle), CONSOLE_US);
                 Some(Out { conn, nine, lend, fid: None })
             });

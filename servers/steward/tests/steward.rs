@@ -193,6 +193,10 @@ struct Recorder {
     /// The servers that take no cleanup step (`Timeout`) while named here, answering every
     /// other call.
     busy: Vec<String>,
+    /// The servers that take no call of the steward's within its bound (`SERVER_US`) while
+    /// named here: a mint there, a launch whose image is read there (`bootfsd`), a home's stat
+    /// or read there (`walfsd:data`) is `Timeout`.
+    stalled: Vec<String>,
     /// Each connection made at a server, by the handle made, until the server is told it is
     /// gone: the server's records.
     at: BTreeMap<usize, String>,
@@ -293,6 +297,7 @@ impl Kernel for Recorder {
             return Ok(None);
         }
         match Self::server_of_slot(slot) {
+            Some(server) if self.stalled.iter().any(|s| s == server) => Err(Error::Timeout),
             Some(server) => self.made_at(server).map(Some),
             None => self.make().map(Some),
         }
@@ -335,6 +340,10 @@ impl Kernel for Recorder {
         connections: &[Option<usize>],
         context: Option<&str>,
     ) -> Result<(u64, Option<usize>), Error> {
+        // The image is read from `bootfsd` before anything of the process exists.
+        if self.stalled.iter().any(|s| s == "bootfsd") {
+            return Err(Error::Timeout);
+        }
         // A session's VM is given a notices endpoint; the handle made is its send right. Made
         // before the process, so the last thing a login makes is its pid.
         let notices = if owner.kind == Kind::Session { Some(self.make()?) } else { None };
@@ -466,11 +475,17 @@ impl Kernel for Recorder {
 
     fn home_stat(&mut self, principal: &str, path: &str) -> Result<Option<u64>, Error> {
         self.calls.push(Call::HomeStat { principal: principal.into(), path: path.into() });
+        if self.stalled.iter().any(|s| s == "walfsd:data") {
+            return Err(Error::Timeout);
+        }
         Ok(self.homes.get(&(principal.into(), path.into())).map(|b| b.len() as u64))
     }
 
     fn home_read(&mut self, principal: &str, path: &str, max: usize) -> Result<Vec<u8>, Error> {
         self.calls.push(Call::HomeRead { principal: principal.into(), path: path.into() });
+        if self.stalled.iter().any(|s| s == "walfsd:data") {
+            return Err(Error::Timeout);
+        }
         let bytes = self.homes.get(&(principal.into(), path.into())).ok_or(Error::Refused)?;
         if bytes.len() > max { Err(Error::TooLarge) } else { Ok(bytes.clone()) }
     }
@@ -2785,4 +2800,95 @@ fn a_confined_boot_leaves_a_labelled_sessions_home_unbound() {
     assert!(session_args(&own, "alice", &[], None).contains(&"home=/home/alice".to_string()));
     assert_eq!(own.line("confined"), Err("a second `confined`".into()));
     assert_eq!(Own::default().line("confined now"), Err("`confined` stands alone".into()));
+}
+
+/// The first budget made since `before` (the batch's own, whose destruction takes the scope
+/// made inside it) was destroyed since.
+fn made_and_destroyed(k: &Recorder, before: usize) -> bool {
+    let (first, _) = k.deadlines[before];
+    k.calls.iter().any(|c| matches!(c, Call::Destroy(d) if *d == first))
+}
+
+/// A mint the server does not take within the steward's bound (`SERVER_US`, `Timeout`) fails
+/// the login's step and nothing else (servers/steward.md, "Residual risks"): the batch is rolled
+/// back, every budget it made destroyed, the step is said with the kernel's error, and the next
+/// caller is served. A `Timeout` is no answer: a step parked at that server is not woken by it
+/// (the mint ran the parked step first, as any mint there does), and runs again only when the
+/// server answers.
+#[test]
+fn a_mint_the_server_does_not_take_in_time_fails_the_step_and_the_next_caller_is_served() {
+    let mut k = Recorder::default();
+    let mut s = started(&mut k);
+    let bobs = parked_at(&mut s, &mut k, "erofsd:system");
+    let before = k.deadlines.len();
+    k.stalled = vec!["erofsd:system".into()];
+    let e = call(&mut s, &mut k, SSHD, login("alice", "", &ALICE_KEY)).unwrap_err();
+    assert_eq!(e, ErrorCode::Failed, "the step the bound failed fails the login");
+    assert!(
+        matches!(core::mem::take(&mut s.failed).as_slice(), [(_, Error::Timeout)]),
+        "one failed step, with the kernel's error"
+    );
+    assert!(k.deadlines.len() > before, "the batch got as far as its budgets");
+    assert!(made_and_destroyed(&k, before), "every budget the batch made is destroyed: {:?}", k.calls);
+    assert_eq!(cleaned(&k), vec![(bobs, false)], "the parked step ran before the mint, once: {:?}", k.calls);
+    k.calls.clear();
+    s.cleanup(&mut k);
+    assert!(
+        !cleaned(&k).iter().any(|(h, _)| *h == bobs),
+        "a timeout is no answer: the parked step is not woken: {:?}",
+        k.calls
+    );
+    assert_eq!(s.parked(), 1, "still parked");
+    k.stalled.clear();
+    k.busy.clear();
+    k.calls.clear();
+    assert!(
+        matches!(call(&mut s, &mut k, SSHD, bob_in("")), Ok(Reply::Login(_))),
+        "the next caller is served"
+    );
+    assert_eq!((s.pending(), s.parked()), (0, 0), "the server's answer ran bob's step: {:?}", k.calls);
+}
+
+/// A launch whose read of the image the server does not take in time fails the lease's step the
+/// same way: `start_agent` answers `failed`, the lease's budgets are destroyed, and the sponsor's
+/// next `start_agent` is served.
+#[test]
+fn a_launch_whose_image_read_is_not_taken_in_time_fails_start_agent() {
+    let mut k = Recorder::default();
+    let mut s = started(&mut k);
+    let u = alice_session(&mut s, &mut k);
+    let before = k.deadlines.len();
+    k.stalled = vec!["bootfsd".into()];
+    let e = call(&mut s, &mut k, u, Message::StartAgent(StartAgent { lease: 60_000_000 })).unwrap_err();
+    assert_eq!(e, ErrorCode::Failed);
+    assert!(matches!(core::mem::take(&mut s.failed).as_slice(), [(_, Error::Timeout)]));
+    assert!(k.deadlines.len() > before && made_and_destroyed(&k, before), "{:?}", k.calls);
+    k.stalled.clear();
+    k.calls.clear();
+    assert!(matches!(
+        call(&mut s, &mut k, u, Message::StartAgent(StartAgent { lease: 60_000_000 })),
+        Ok(Reply::StartAgent(_))
+    ));
+}
+
+/// A push whose source's server does not take the steward's `stat` in time answers `failed`
+/// before any budget is carved; the same push is served when the server answers again.
+#[test]
+fn a_push_whose_source_server_does_not_answer_in_time_answers_failed() {
+    let mut k = Recorder::default();
+    k.homes.insert(("alice".into(), "in".into()), vec![0xA5u8; 64]);
+    let mut s = started(&mut k);
+    let u = alice_session(&mut s, &mut k);
+    open_channel(&mut s, &mut k, &ALICE_APPROVAL_KEY).unwrap();
+    let labels = label_bytes(&[7]);
+    k.stalled = vec!["walfsd:data".into()];
+    k.calls.clear();
+    let e = call(&mut s, &mut k, u, submit(3, &labels, 0, "in\nsecret/in", "")).unwrap_err();
+    assert_eq!(e, ErrorCode::Failed);
+    assert!(k.creates().is_empty() && s.failed.is_empty(), "refused before any batch: {:?}", k.calls);
+    k.stalled.clear();
+    assert!(matches!(
+        call(&mut s, &mut k, u, submit(3, &labels, 0, "in\nsecret/in", "")),
+        Ok(Reply::Submit(_))
+    ));
 }
