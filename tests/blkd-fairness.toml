@@ -1,0 +1,97 @@
+description = "System fairness at the shared block server: a busy walfsd:data does not fill blkd's WAIT_CAP for walfsd:alice-secrets (docs/plan/m3-agents.md, \"A scripted hostile user\"; docs/kernel/ipc.md, R2): the image boots with sshd on port 22, its data volume and alice's labelled volume each served by its own walfsd on one blkd (image/disk.toml). Bob's session writes large files through walfsd:data without end from several processes, so walfsd:data's calls to blkd never pause; alice's vault session, alice+alice-secrets, writes a file in its labelled volume through walfsd:alice-secrets and reads it back, each operation returning within the bound. The two walfsd instances are account-0 callers of blkd keyed by their own budgets, so R2 at blkd gives each its turn and a flood through one leaves the other its cap: walfsd:data's load never takes walfsd:alice-secrets's turn. The verdicts are the sizes alice's vault shell prints within the bound (rule F); bob's shell shows only its process count. Every printed value is tagged so a pattern matches the printed value and never the echo of the line typed"
+arch = ["rv64", "rv32"]
+kind = "boot"
+recipe = "image/boot.toml"
+# The image needs 1 GiB: the principals' budgets, each holding a shell VM's session, do not fit
+# the users budget 256 MiB leaves (docs/kernel/budgets.md).
+memory_mib = 1024
+# A vault login and bob's login, each a shell VM, then bob floods walfsd:data with large writes
+# while the vault session runs eight probes through walfsd:alice-secrets.
+timeout_secs = 1500
+expect = [
+    '^init: started sshd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
+    '^init: started steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{\} at [0-9]+: Login ',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+]
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    '^init: .* (exited|faulted|was killed)',
+    'init: restarted',
+    'EXCEPTION',
+    'steward: a step failed',
+    'sshd: login .*: refused',
+]
+
+# Alice's vault session, the victim: it writes a 64 KiB file in its labelled volume through
+# walfsd:alice-secrets and reads it back, both reaching blkd, printing the operation's own elapsed
+# ms, which is the verdict: under 4,000, twice the worst single probe operation measured once per
+# width under bob's flood of walfsd:data on the same blkd (1.50 s on rv64, 1.48 s on rv32), rounded
+# up to a second, the bench's rule for a measured bound, and far below a starved operation, because
+# R2 at blkd keys the two walfsd budgets apart. The 20 s step bound is the bench's margin for the
+# line to arrive over ssh on a loaded host, no part of the claim. A probe over 4,000 ms is the
+# finding (R2 at blkd broken), never retried and never loosened.
+[[session]]
+user = "alice+alice-secrets"
+pty = true
+forbid = ['\*\* \(']
+steps = [
+    { expect = '\([0-9]+\)> ' },
+    { send = "d = :binary.copy(<<0>>, 65536); probe = fn n -> t = System.monotonic_time(:millisecond); File.write!(\"/vault/probe\", d); s = byte_size(File.read!(\"/vault/probe\")); {n, s, System.monotonic_time(:millisecond) - t} end; {:setup, byte_size(d)}\n" },
+    { expect = '\{:setup, 65536\}' },
+    { mark = "vault-ready" },
+    { wait = "flooding" },
+    { send = "probe.(1)\n" },
+    { within = 20 },
+    { expect = '\{1, 65536, [0-3]?[0-9]{1,3}\}' },
+    { send = "probe.(2)\n" },
+    { within = 20 },
+    { expect = '\{2, 65536, [0-3]?[0-9]{1,3}\}' },
+    { send = "probe.(3)\n" },
+    { within = 20 },
+    { expect = '\{3, 65536, [0-3]?[0-9]{1,3}\}' },
+    { send = "probe.(4)\n" },
+    { within = 20 },
+    { expect = '\{4, 65536, [0-3]?[0-9]{1,3}\}' },
+    { send = "probe.(5)\n" },
+    { within = 20 },
+    { expect = '\{5, 65536, [0-3]?[0-9]{1,3}\}' },
+    { send = "probe.(6)\n" },
+    { within = 20 },
+    { expect = '\{6, 65536, [0-3]?[0-9]{1,3}\}' },
+    { send = "probe.(7)\n" },
+    { within = 20 },
+    { expect = '\{7, 65536, [0-3]?[0-9]{1,3}\}' },
+    { send = "probe.(8)\n" },
+    { within = 20 },
+    { expect = '\{8, 65536, [0-3]?[0-9]{1,3}\}' },
+    { mark = "vault-done" },
+    { exit = 0 },
+]
+
+# Bob, the attacker: he floods walfsd:data with large writes from several processes, each
+# overwriting its own 512 KiB file without pause, so walfsd:data hammers the shared blkd. His home
+# quota holds the live bytes (6 x 512 KiB under his 8 MiB); his shell reports only its process count.
+[[session]]
+user = "bob"
+steps = [
+    { wait = "vault-ready" },
+    { expect = '\([0-9]+\)> ' },
+    { send = "big = :binary.copy(<<0>>, 524288); n = (for i <- 1..6, do: spawn(fn -> Stream.repeatedly(fn -> File.write(\"/home/bob/flood#{i}\", big) end) |> Enum.each(fn _ -> :ok end) end)) |> length(); {:flooding, n}\n" },
+    { expect = '\{:flooding, 6\}' },
+    { mark = "flooding" },
+    { wait = "vault-done" },
+    { exit = 0 },
+]
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]
+forward = [22]

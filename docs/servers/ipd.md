@@ -180,9 +180,10 @@ cannot even make a socket by reading `clone`, which the label check alone would 
 
 ### Pinned and abandoned calls
 
-<details><summary>Status: built · tested (5)</summary>
+<details><summary>Status: built · tested (6)</summary>
 
 - bench:net-pinned
+- bench:net-pinned-ssh
 - host:redoubt-ipd::parked_calls_are_freed_when_abandoned_and_capped_by_the_share
 - host:redoubt-ipd::two_reads_one_byte_one_answer_and_ipd_goes_on
 - host:redoubt-ipd::an_accept_nobody_answers_ends_with_the_ctl_deadline
@@ -205,12 +206,16 @@ answers `timeout` first: `DATA_WAIT_US` and `CTL_WAIT_US` are 8 s, the 10 s less
 a round figure far above what it covers (the kernel's delivery of the reply, microseconds), so
 the only answer a client could drop is one whose delivery took longer than the margin. Bytes arriving after the `timeout` wait
 in the socket's buffer for the next read, which the client makes at once (`sshd`'s reader asks
-again on `timeout`; the hub answers its caller `etimedout`, who asks again; no Elixir `/net`
-reader exists today); `ctl` is asked again the same way, and finds the same state. In `net-pinned` a client abandons 64 parked reads, each answered and freed; a read
+again on `timeout`; the hub answers its caller `etimedout`, who asks again; a session's `gen_tcp`
+read abandons its parked read when the caller's own `recv` timeout fires, and parks the next read
+when the caller asks again); `ctl` is asked again the same way, and finds the same state. In
+`net-pinned` a client abandons 64 parked reads, each answered and freed; a read
 with nothing coming ends at the `data` deadline, a listener's `ctl` read at the `ctl` one, and the
 connection still works after; the host test parks a read on an established connection, sees it
 wait at `DATA_WAIT_US - 1` and end at `DATA_WAIT_US`, then has the peer send and the next read
-answered at once with the bytes.
+answered at once with the bytes. `net-pinned-ssh` runs the same abandon-and-free from a session's
+`gen_tcp` over `/net`: 64 reads a 20 ms `recv` abandons, Bob's SSH login reaching its prompt
+through the churn, then Alice's echo on the same connection.
 
 ### Sizing
 

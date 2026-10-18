@@ -1193,7 +1193,7 @@ The model found the leak with sequential ids and checks the rule (`PolicySequent
 
 ### R37 (vault non-interference)
 
-Status: built · tested: bench:steward-vault-session, bench:steward-sub-budget-flood, bench:shell-contexts, host:redoubt-steward-server::a_vault_login_carves_from_the_vault_s_sub_budget_and_has_no_network, host:redoubt-steward::a_session_sees_and_ends_its_own_domain_s_contexts_only, host:redoubt-steward-server::a_session_lists_detaches_and_ends_its_own_domain_s_contexts
+Status: built · tested: bench:steward-vault-session, bench:steward-sub-budget-flood, bench:vault-flood-turn, bench:shell-contexts, host:redoubt-steward-server::a_vault_login_carves_from_the_vault_s_sub_budget_and_has_no_network, host:redoubt-steward::a_session_sees_and_ends_its_own_domain_s_contexts_only, host:redoubt-steward-server::a_session_lists_detaches_and_ends_its_own_domain_s_contexts
 
 A vault session's work (item writes, requests, calls to a shared server) changes nothing an
 unlabelled session observes: its results, the usage of `users`, of every principal's budget and
