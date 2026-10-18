@@ -101,6 +101,20 @@ Logs under `/home/mcloonan/redoubt/.tmp/STEWARD7/`. Head: see the end of this fi
    unchanged (1,580 + 192 = 1,772; littlefsd 1,580 + 128 = 1,708); `state` and erofsd/bootsfd
    unchanged (the lease term stays 18, the quota binding). Ten manifests moved again.
 
+3. **At one hart the round's 30th launch is refused at `erofsd:system`: parked disconnects hold
+   the account's `State`.** Each five-second probe lease's end under fifteen spinners leaves its
+   `disconnect` at the system volume parked after four attempts (the server starved of the
+   hart: sixteen VMs of weight 50 beside it), each a `State` of alice's bucket the server has
+   not released; live are 2 × 2 (two sessions) + 15 spinners + 1 probe lease = 20 of the cap's
+   28, and the ninth parked disconnect refuses the next lease's connect there. A finding of
+   the parked-step rule under this load (the 3W residual at scale), not a tuning: the one-hart
+   N = 16 row is stated unreached with this cause. At two harts the round completes (every one
+   of its 31 launches; eight disconnects parked there too).
+4. **The case numbered its fifth round 16.** `round.(15, 8)` wrote `latency-round-16` and
+   printed `{:round, 16, :done}`, so the probe (waiting for `latency-round-5`) never flushed
+   the N = 16 counts and the session waited out the 3 h bound after the round had finished.
+   The closure takes the round's number explicitly now (`round.(15, 8, 5)`).
+
 ## Rebases and work outside the owned paths
 
 - Rebased onto 9a6600ede (train 63, IPD1) and 472c5840a (train 64, SSH3), both clean: SSH3's

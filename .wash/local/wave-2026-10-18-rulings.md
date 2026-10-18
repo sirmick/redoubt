@@ -432,6 +432,53 @@ then whether gatewayd itself needs an owner decision before agent-suite can comp
 reading these should know: the "not yet" rows for the harness-driven agent (Agent.start/prompt)
 stay not yet; these cases drive agents by `start_agent` and `~/project/in` as the built cases do.
 
+### F2 finding (STEWARD7 N=16, one hart rv64): the read path starves under 16 agent VMs
+
+At one hart the fifth round's 30th launch is refused at `erofsd:system`: 20 live connections of
+the cap's 28, plus eight ended probe leases' disconnects parked after four attempts — the server
+starved of the hart by sixteen lease VMs of weight 50, 3W's residual at scale. **A finding,
+stated, not a node, and the row is unreached, not moved** (the implementer is right).
+
+The orchestrator's three candidates, ruled:
+- **Not the admission term (c).** A parked disconnect genuinely holds the server's slot: the
+  server has not processed it, so the `State` unit is really still held. Counting it free would
+  over-admit and the server itself would refuse. Sizing the cap with headroom for in-flight ends
+  does not help either: under starvation the zombie-disconnect window is unbounded, so no finite
+  headroom suffices — a larger cap just admits more VMs to starve the server further. The term is
+  honest.
+- **Not STEWARD5 (b).** The cleanup thread keeps the loop responsive while the slots are held
+  (the important property: the box stays live and the 30th launch's `failed` is correct, the
+  server really being full), but it cannot give a starved server CPU, so the slots still linger.
+  STEWARD5 is not the fix; it makes the refusal clean, not absent.
+- **It is a weight/capacity matter (a), owner-adjacent.** The read-path servers
+  (`erofsd:system`, `verityd`, `blkd`) at weight 100 cannot drain ended leases' disconnects as
+  fast as leases end while sixteen VMs of weight 50 (800 total) share one hart. Draining must
+  keep pace with ending, which is CPU, which is weight. At two harts every launch completed, so
+  the gated two-hart N=16 row is the measured one; one hart with 16 agent VMs is intentional
+  oversubscription, and the row is stated unreached with that cause, as rv32-two-hart-N=3 is
+  (B88). No target moves.
+
+No node now. Whether a shared server's weight should scale to serve N agent VMs is folded into
+the owner's open weight decision (Q1/Q2): a data point added there. If the owner's answer wants
+it, the node is a weight change (the image's read-path weights), not STEWARD5's and not the
+admission term's. This also confirms the STEWARD5(b) transient reaches `failed` under one-hart
+oversubscription; the latency case states the one-hart N=16 row unreached rather than retrying.
+
+## agent-suite wave B (2026-10-19)
+
+The two rows ATK10 left are sound now, as one small package **ATK13** (Tier A, S): (1) the R60
+labelled-agent sink row becomes a boot case on `steward-approve-box`'s path (a labelled agent
+has no `/net`, the namespace the first wall and R60 the backstop, cited to `net-attacks`); (2)
+the R44 keyd relayed-blob row has **no boot arm reachable** in the image (no attacker holds a
+keyd badge until M6's keys-in-leases), so it resolves on the page by citing keyd's host tests and
+a login's end-to-end host-signature verification. No manufactured case.
+
+Everything else the step needs — the agent harness, the pi-small loop, the escape room — is
+M5-status and needs **gatewayd**, an owner decision (owner Q5). Residuals check: the loop-bound
+finding is STEWARD5 (in flight), the FOREVER mints are STEWARD6 (done), sockets per session is
+owner Q4, SSH3 and IPD1 are merged. So after ATK13, **nothing but the gateway remains** for
+agent-suite, and that is the owner's to decide before the second wave.
+
 ## Order and parallelism (five in flight)
 
 1. STEWARD6 (S) then STEWARD5 (M), one implementer in sequence or two with 5 rebasing on 6.

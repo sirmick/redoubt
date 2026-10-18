@@ -1,0 +1,14 @@
+# Architect's agent-suite wave B (architect-5, 2026-10-19): the one attack-case package that is
+# sound under today's image without the gateway. The rest of the step's remaining work (the agent
+# harness, the pi-small loop, the escape room) is M5-status and needs gatewayd, which is an owner
+# decision: owner Q5 in .wash/local/owner-questions-2026-10-18.md. New node only; the orchestrator
+# merges it. Ruling: .wash/local/wave-2026-10-18-rulings.md "agent-suite wave B".
+
+[[node]]
+  id = "ATK13"
+  title = "The last two scripted rows: a labelled agent has no sink, and keyd signs no relayed blob (its boot arm resolved)"
+  template = "package"
+  parent = "agent-suite"
+  needs = []
+  body = "Brief: .wash/local/ATK13-implementer.md; ruling .wash/local/wave-2026-10-18-rulings.md 'agent-suite wave B'. Tier A (attack cases; the bench), size S, reviewer: a red (the orchestrator's pick). Turns the two remaining 'not yet' rows of docs/plan/m3-agents.md into their honest state under today's image. (1) R60, the labelled-agent sink row, becomes a boot case steward-labelled-agent-no-sink, built on steward-approve-box's path (a labelled agent approved at approve@box, running in its vault): the agent's :gen_tcp.connect gets enetunreach (its lease namespace holds no /net, as session-tcp-loopback shows for an unlabelled lease), and ipd's refusal of a labelled caller is the backstop, cited to net-attacks (R60); the verdict is the agent's result file in its vault and the absence of any frame to the bench peer (rule F). (2) R44, the keyd relayed-blob row: no boot arm is reachable in the image, since no session or lease holds a keyd badge (keyd's purposes are sshd's ssh_host and the steward's audit; keys in leases are M6); the row resolves on m3-agents.md by citing keyd's host tests (a_relayed_ssh_user_auth_blob_is_never_what_gets_signed and R44's set) and stating why no boot arm exists, with a normal login's end-to-end verification (the client checks the host signature over the exchange it computed) as the boot evidence that keyd signs only its own digest. Pages: m3-agents.md rows, agents.md R60-adjacent and keyd.md R44 status lines, SECURITY.md R60 row. No server, kernel or steward code."
+  state = "todo"

@@ -25,6 +25,18 @@ says in one sentence that the image runs it at 100.
 Cost of the change: one number in `image/manifest.json` and the memory-checked manifests, the
 page's sentence, a train. No node is blocked on it.
 
+**Data point (STEWARD7's N=16 run, bearing on this and Q2):** at one hart a read-path server at
+weight 100 (`erofsd:system`) starves under sixteen lease VMs of weight 50 (800 total on one
+hart) — it cannot drain ended leases' disconnects as fast as leases end, so their slots linger
+and a new launch is refused though logically there is room. At two harts it keeps pace. This is
+oversubscription, not a bug, and the one-hart N=16 row is stated unreached (no target moves). But
+if the agentic workload is meant to run many agent VMs beside the shared servers on few harts,
+the read-path weights (not just the steward's) are the lever. A single answer that sets the
+trusted/shared servers' weights relative to N agent VMs of weight 50 would settle Q1, Q2 and this
+together; my recommendation stays steward 1,000, and I would raise the read-path servers
+(`erofsd:system`, `verityd`, `blkd`) only if a measured agent workload on the target hart count
+shows them starving there, not for this one-hart oversubscription.
+
 ## Q2. A launching lease's share against its sponsor's spinning leases (B88's residual)
 
 On rv32 at two harts a lease VM's launch beside two spinner leases takes 5.3–5.7 s (3.9 s
@@ -75,6 +87,36 @@ sized to it (each socket's buffers live there).
   you answer.
 - Alternatives: raise the default sockets per bucket for every account (every deployment pays
   the heap); or leave three and state it on sessions.md as what a session gets.
+
+## Q5. gatewayd and the agent-suite's second wave (the harness, the loop, the escape room)
+
+The `agent-suite` step's attack cases and Alice's scripted agent under a lease are built or
+buildable now (ATK10–13, and the kernel/steward halves). What remains of the step — the agent
+harness (`Redoubt.Agent.start/prompt`), the pi-small agent loop, and the escape room — is marked
+**M5 (self-hosted development)** on agents.md and in m5-self-hosted.md (steps 2, 6, 7), because
+each needs `gatewayd`: the loop streams the model through a `gatewayd` capability, the harness
+grants `gateway:`, the escape room records B's egress through it. `gatewayd` is a new egress
+server that holds credentials and speaks TLS (R65/R66) — the allowed-egress wall, owner
+territory. So the step cannot complete past the attack suite without a decision on gatewayd.
+
+- **Recommendation: keep the harness, loop and escape room at M5, as the book places them, and
+  close `agent-suite` now at the attack suite + scripted agents.** The milestone's goal
+  ("every property backed by an attack case, the attack suite passes") is met by ATK10–13 and
+  the built halves; the agentic loop is the next milestone's, where real model egress belongs.
+- **If you want the agentic loop pulled into M3 now** (the project's north star — the most
+  capable agents running and attacked): build gatewayd **loopback first** — its capability shape,
+  R65/R66 checks, name-allowlist, the label sink and the request log, with the "model" a bench
+  peer and no real TLS or API key — so the harness, loop and escape room can be built and
+  attacked at once; the real TLS-and-keys gateway to one provider lands with M5's model egress.
+  This sequences the risk: the capability machinery and the escape room (the highest-value test)
+  come now; the credential-holding TLS server comes when real egress is wanted. I would then
+  draft gatewayd-loopback (Tier A, owner territory for the new server's wire and scope) and the
+  harness/loop/escape-room wave against it.
+- Alternative: build the full gatewayd (TLS, keys, one provider) now — the largest option, and
+  it needs the provider and resolver choices the owner has not set.
+
+Your one answer (keep M5 / loopback-first in M3 / full gatewayd in M3) sets the step's second
+wave; until then I draft nothing past ATK13 for `agent-suite`.
 
 ## Noted, no question
 
