@@ -62,7 +62,7 @@ authentication and default policy, not mechanism ([the steward](../servers/stewa
 
 ### Leases
 
-Status: built · partly tested: a lease's grants are its sponsor's `~/project` and the system volume, and the read root is writable until a server takes a read-only connection; the task-scoped grants and gateways are later · tested: bench:steward-lease-ends, bench:steward-end-lease, bench:steward-sub-agent-dies-with-agent, bench:agent-login, bench:session-tcp-loopback
+Status: built · partly tested: a lease's grants are its sponsor's `~/project` and the system volume, and the read root is writable until a server takes a read-only connection; the task-scoped grants and gateways are later · tested: bench:steward-lease-ends, bench:steward-end-lease, bench:steward-sub-agent-dies-with-agent, bench:agent-login, bench:session-tcp-loopback, bench:steward-agent-escape, bench:steward-lease-cut
 
 A **lease** is a budget with a deadline, made by the steward for an agent or a session. When the
 deadline passes, the kernel destroys the budget and everything in it; the sponsor can end it
@@ -136,7 +136,7 @@ never fires: a sub-agent's budget inside an agent's never outlives it.
 
 ### An agent cannot crowd out its sponsor
 
-Status: built · partly tested: runs on the host, in the serving library · tested: host:redoubt-rt::an_agent_flooding_a_bucket_leaves_its_sponsor_a_share_and_its_lease_end, host:redoubt-rt::an_agent_flooding_a_bucket_leaves_its_sponsor_a_share
+Status: built · partly tested: the share and the lease-end-under-flood run on the host, in the serving library; the boot arm times the sponsor's own calls under the flood · tested: host:redoubt-rt::an_agent_flooding_a_bucket_leaves_its_sponsor_a_share_and_its_lease_end, host:redoubt-rt::an_agent_flooding_a_bucket_leaves_its_sponsor_a_share, bench:steward-agent-flood
 
 An agent shares its sponsor's account, so its calls count against its sponsor's admission limits
 for that label set. Inside them, the serving library's admission gives every badge a fair share,

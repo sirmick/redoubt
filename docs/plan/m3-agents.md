@@ -27,14 +27,14 @@ Alice's leased agent, trying to get out.
 
 | Attack | Rules | Bench case |
 | --- | --- | --- |
-| Read outside its `/work`, or reach the network | [R25 (the label check)](../servers/serving.md#r25-the-label-check), [R41 (narrowing by revocation scope)](../servers/steward.md#r41-narrowing-by-revocation-scope) | not yet |
+| Write outside its `/project`, or reach the network: the case judges the writes by alice's canaries; that its reads, listings and network lookup are refused rests on the lease's namespace holding only `/project`, `/boot` and the system volume, host-tested | [R25 (the label check)](../servers/serving.md#r25-the-label-check), [R41 (narrowing by revocation scope)](../servers/steward.md#r41-narrowing-by-revocation-scope) | `steward-agent-escape` |
 | A labelled agent reaches a sink not cleared for its labels | [R60 (a sink refuses labels)](../servers/ipd.md#r60-a-sink-refuses-labels) | `net-attacks` for `ipd`; the agent's case not yet |
-| Outlive its lease: expiry destroys everything, the handles it passed on and its sub-agents included | [R39 (leases end)](../servers/steward.md#r39-leases-end), [R10 (destruction)](../kernel/budgets.md#r10-destruction) | `budget-deadline`, `budget-destroy-attack` for the kernel; the lease case not yet |
-| Ask for a lease longer than `MAX_LEASE` | R39 | not yet |
-| Spoof the approval screen (control, bidi and format characters, swapped requests); send free text from a vault | [R38 (out-of-band approval)](../servers/steward.md#r38-out-of-band-approval) | `steward-screen-inert`, `steward-approve-box` (a stale hash); free text from a vault is the server's host test `notes_are_rendered_by_their_requesters_labels_and_a_dead_sessions_requests_are_gone`, the boot case not yet |
-| Use its sponsor's 9P connection instead of the fresh one it was given | R41 | not yet |
+| Outlive its lease: expiry destroys everything, the handles it passed on and its sub-agents included | [R39 (leases end)](../servers/steward.md#r39-leases-end), [R10 (destruction)](../kernel/budgets.md#r10-destruction) | `budget-deadline`, `budget-destroy-attack` for the kernel; the lease case `steward-lease-cut` |
+| Ask for a lease longer than `MAX_LEASE` | R39 | `steward-agent-escape` |
+| Spoof the approval screen (control, bidi and format characters, swapped requests); send free text from a vault | [R38 (out-of-band approval)](../servers/steward.md#r38-out-of-band-approval) | `steward-screen-inert`, `steward-approve-box` (a stale hash); free text from a vault is the server's host test `notes_are_rendered_by_their_requesters_labels_and_a_dead_sessions_requests_are_gone`, the boot case `steward-vault-note` |
+| Use its sponsor's 9P connection instead of the fresh one it was given | R41 | `steward-agent-escape` |
 | Slow Bob beyond its weight | [R12 (scheduling)](../kernel/scheduling.md#r12-scheduling) | `sched-share`, `sched-sleep-gaming`, `sched-timer-flood` |
-| Flood the steward and `walfsd` until Alice cannot open a file or end its lease | [R26 (admission fairness)](../servers/serving.md#r26-admission-fairness) | not yet in a boot |
+| Flood the steward and `walfsd` until Alice cannot open a file or end its lease | [R26 (admission fairness)](../servers/serving.md#r26-admission-fairness) | `steward-agent-flood` |
 | Have `keyd` sign arbitrary bytes (an SSH user-auth blob relayed from its peer) | [R44 (one key, one purpose, keyd's own digest)](../servers/keyd.md#r44-one-key-one-purpose-keyds-own-digest) | not yet in a boot |
 
 ### A scripted hostile user

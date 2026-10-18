@@ -1,0 +1,108 @@
+description = "A vault's free text never reaches the approval screen (docs/plan/m3-agents.md, \"A scripted hostile agent\"; docs/servers/steward.md, \"The powerbox and approvals\" and R38): this is the boot arm of the server's host test `notes_are_rendered_by_their_requesters_labels_and_a_dead_sessions_requests_are_gone`, which covers the rendering; here the two notes travel the real path, submit to screen, on the machine. Alice's unlabelled session submits a note whose text and reason are the requester's free text (a terminal escape in the text); `ssh approve@box` with alice's approval key shows it quoted, escaped and marked untrusted. Alice's vault session (labelled alice-secrets) then submits a note whose text and reason are a secret; the screen shows a note with its text and reason withheld as a labelled requester's, and the secret's bytes are nowhere on the channel: a labelled requester's free text would be a channel out of the vault. The verdicts are the bytes the steward wrote on the approval channel as sshd relayed them, read by the approver's output and its forbid over them, and the steward's Submitted audit lines (rule F); the approver denies each note after reading it, so each screen holds exactly one request"
+arch = ["rv64", "rv32"]
+kind = "boot"
+recipe = "image/boot.toml"
+# The image needs 1 GiB: the principals' budgets, each holding shell VMs' sessions, do not fit the
+# users budget 256 MiB leaves (docs/kernel/budgets.md).
+memory_mib = 1024
+# Three logins (alice, her vault, the approval terminal) one after the other.
+timeout_secs = 1500
+expect = [
+    '^init: started sshd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
+    '^init: started steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+]
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    '^init: .* (exited|faulted|was killed)',
+    'init: restarted',
+    'EXCEPTION',
+    'steward: a step failed',
+    'steward: the core exited',
+    'sshd: login .*: refused',
+]
+# The unlabelled note in alice's domain (1001/{}), then the vault note in her alice-secrets domain
+# (1001/{7}): both reach the steward.
+expect_after = [
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{\} at [0-9]+: Submitted \{ request: [0-9]+ \}',
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{7\} at [0-9]+: Submitted \{ request: [0-9]+ \}',
+]
+
+# Alice's unlabelled session submits a note with free text (an ESC [ 31 m in the text) and a
+# reason, then waits. Every answer is tagged, so a pattern matches the shell's printed value and
+# never the echo of the line typed.
+[[session]]
+user = "alice"
+pty = true
+steps = [
+    { expect = '/home/alice \([0-9]+\)> ' },
+    { send = "{:ok, c} = Redoubt.Contexts.connection(); {:note, Redoubt.Wire.Client.Steward.submit(c, 0, <<>>, 0, 0, 0, \"ship it \\e[31m\", \"please\")}\n" },
+    { expect = '\{:note, \{:ok, %\{request: [0-9]+\}\}\}' },
+    { expect = '\([0-9]+\)> ' },
+    { mark = "unlabelled-in" },
+    { wait = "both-read" },
+    { exit = 0 },
+]
+
+# Alice's vault session submits a note whose text and reason are a secret, once the approver has
+# read and denied the unlabelled one. A labelled requester's free text is withheld on the screen,
+# so VAULTSECRET must never appear on the approval channel.
+[[session]]
+user = "alice+alice-secrets"
+name = "alice-vault"
+pty = true
+steps = [
+    { wait = "unlabelled-read" },
+    { expect = '/home/alice \([0-9]+\)> ' },
+    { send = "{:ok, c} = Redoubt.Contexts.connection(); {:note, Redoubt.Wire.Client.Steward.submit(c, 0, <<>>, 0, 0, 0, \"VAULTSECRET in text\", \"VAULTSECRET in reason\")}\n" },
+    { expect = '\{:note, \{:ok, %\{request: [0-9]+\}\}\}' },
+    { expect = '\([0-9]+\)> ' },
+    { mark = "vault-in" },
+    { wait = "both-read" },
+    { exit = 0 },
+]
+
+# The approval terminal, with alice's approval key. It reads each note in turn, denies it so the
+# next screen holds only the other, and its forbid runs over every line until ssh exits: no ESC,
+# and never the vault's secret. The unlabelled note's text is shown with the ESC escaped to `?`
+# (render.rs: a whitelist of printable ASCII), its reason quoted, both marked untrusted; the vault
+# note's text and reason are withheld as a labelled requester's. Nothing on this channel is a
+# session's: every byte is the steward's.
+[[session]]
+user = "approve"
+name = "approver"
+key = "alice-approval"
+pty = true
+forbid = ['\x1b', 'VAULTSECRET']
+steps = [
+    { wait = "unlabelled-in" },
+    { expect = 'pending approvals for alice:' },
+    { expect = 'request ([0-9a-f]{16}) hash [0-9a-f]{64} code [0-9a-f]{8}' },
+    { expect = 'request from alice \(session-[0-9]+, labels \[\]\): a note \(untrusted\): "ship it \?\[31m"; reason \(untrusted\): "please"' },
+    { expect = 'type: approve <id> <hash or code> \| deny <id> \| pending' },
+    { send = "deny $1\n" },
+    { expect = 'denied [0-9a-f]{16}' },
+    { mark = "unlabelled-read" },
+    { wait = "vault-in" },
+    { send = "pending\n" },
+    { expect = 'pending approvals for alice:' },
+    { expect = 'request ([0-9a-f]{16}) hash [0-9a-f]{64} code [0-9a-f]{8}' },
+    { expect = 'request from alice \(session-[0-9]+, labels \[7\]\): a note \(text withheld: labelled requester\); reason withheld \(labelled requester\)' },
+    { expect = 'type: approve <id> <hash or code> \| deny <id> \| pending' },
+    { send = "deny $1\n" },
+    { expect = 'denied [0-9a-f]{16}' },
+    { mark = "both-read" },
+    { exit = 0 },
+]
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]
+forward = [22]

@@ -1,0 +1,80 @@
+description = "A flooding agent does not lock its sponsor out (docs/plan/m3-agents.md, \"A scripted hostile agent\"; docs/servers/serving.md, R26 and \"admit\"): alice writes `flood` to `~/project/in` and starts an agent; the agent spawns many processes, each looping for ever, that flood walfsd:data with whole writes to `/project` and the steward with `submit` on the lease's own badge. Alice, once the agent's `flooding` marker is there, opens a file in her home and ends the lease, each timed in her own session: her open is a walfsd call on her own badge, served in her turn within a fair share of admission beside the agent's flooding badge (R26: a fair share per badge within a bucket), and her `end_lease` is answered ahead of admission, straight from the steward's receive loop. Each call is served in alice's turn, not eventually: the verdict is the in-guest elapsed ms her session prints, asserted by the pattern's digits under a bound twice the worst measured once per width under full load (the toml's comment states both numbers and the arithmetic), and the steward's audit (rule F); nothing the agent wrote is read. The agent and alice share alice's account but hold different badges, so this is R26's per-badge share, not a cross-account test"
+arch = ["rv64", "rv32"]
+kind = "boot"
+recipe = "image/boot.toml"
+# The image needs 1 GiB: the principals' budgets, each holding shell VMs' sessions and a lease,
+# do not fit the users budget 256 MiB leaves (docs/kernel/budgets.md).
+memory_mib = 1024
+# A login and the flooding agent's VM.
+timeout_secs = 1500
+expect = [
+    '^init: started sshd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
+    '^init: started steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+]
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    '^init: .* (exited|faulted|was killed)',
+    'init: restarted',
+    'EXCEPTION',
+    'steward: a step failed',
+    'steward: the core exited',
+    'sshd: login .*: refused',
+]
+expect_after = [
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{\} at [0-9]+: AgentStarted \{ lease: [0-9]+, sponsor: 0, parent: None, deadline: [0-9]+ \}',
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{\} at [0-9]+: LeaseEnded \{ lease: [0-9]+ \}',
+]
+
+# Alice starts the flooding agent, waits for its `flooding` marker (its 32 writer and 8 submitter
+# processes are then looping against walfsd and the steward), and times two of her own calls under
+# the flood, each printing its own elapsed ms. The verdict is those digits: each call is served in
+# alice's turn, within a fair share, not eventually. The bounds are twice the worst call measured
+# once per width under full machine load (open: rv64 146 ms, rv32 130 ms; end_lease: rv64 775 ms,
+# rv32 92 ms), the worst doubled and rounded up to a second: open 2*146 = 292 -> 1 s (the digits
+# under 1000), end_lease 2*775 = 1550 -> 2 s (the digits under 2000). The `within` on the asserting
+# step is only the margin for the line to reach the bench over ssh on a loaded host (20 s); it is no
+# part of the claim, which is the in-guest ms. Every answer is tagged, so a pattern matches the
+# shell's printed value and never the echo of the line typed.
+[[session]]
+user = "alice"
+pty = true
+steps = [
+    { expect = '/home/alice \([0-9]+\)> ' },
+    { send = "{:stage, File.mkdir_p(\"/home/alice/project/out\"), File.write(\"/home/alice/project/in\", \"flood\")}\n" },
+    { expect = '\{:stage, :ok, :ok\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:ok, c} = Redoubt.Contexts.connection(); {:ok, %{lease: l}} = Redoubt.Wire.Client.Steward.start_agent(c, 600_000_000); {:lease, is_integer(l)}\n" },
+    { expect = '\{:lease, true\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:flooding, Enum.find_value(1..120, fn _ -> case File.read(\"/home/alice/project/out/started\") do {:ok, \"flooding\\n\"} -> true; _ -> Process.sleep(1000); nil end end)}\n" },
+    { expect = '\{:flooding, true\}' },
+    { expect = '\([0-9]+\)> ' },
+    # Her open under the flood, its own elapsed ms: a walfsd call on her own badge, served in her
+    # turn. The digits assert the bound (under 1000 ms); `within` is only the ssh-arrival margin.
+    { send = "t = System.monotonic_time(:millisecond); r = File.read(\"/home/alice/hello\"); IO.puts(\"flood-open-ms #{System.monotonic_time(:millisecond) - t} #{match?({:ok, _}, r)}\")\n" },
+    { within = 20 },
+    { expect = '^flood-open-ms [0-9]{1,3} true' },
+    { expect = '\([0-9]+\)> ' },
+    # Her end_lease under the flood, its own served ms: answered ahead of admission. The digits
+    # assert the bound (under 2000 ms); `within` is only the ssh-arrival margin.
+    { send = "t = System.monotonic_time(:millisecond); e = Redoubt.Wire.Client.Steward.end_lease(c, l); IO.puts(\"flood-endlease-ms #{System.monotonic_time(:millisecond) - t} #{inspect(e)}\")\n" },
+    { expect = '\[lease alice/agent-1 ended\]' },
+    { within = 20 },
+    { expect = '^flood-endlease-ms 1?[0-9]{1,3} \{:ok, %\{\}\}' },
+    { expect = '\([0-9]+\)> ' },
+    { mark = "alice-done" },
+    { exit = 0 },
+]
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]
+forward = [22]

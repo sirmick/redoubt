@@ -51,6 +51,13 @@ defmodule Redoubt.Agents.Echo do
 
   defp run("spin"), do: spin()
 
+  # The scripted hostile agents, each a module beside this one that reads the same `/project/in`
+  # order and writes the same `/project/out/result`, driven by `start_agent` as this one is
+  # (docs/plan/m3-agents.md, "A scripted hostile agent").
+  defp run("escape"), do: Redoubt.Agents.Escape.run()
+  defp run("writeloop"), do: Redoubt.Agents.Churn.run()
+  defp run("flood"), do: Redoubt.Agents.Flood.run()
+
   defp run("sub " <> ms) do
     with {ms, ""} <- Integer.parse(ms),
          {:ok, budget} <- Redoubt.Budget.carve(pages: 768, processes: 1, weight: 1, deadline_ms: ms),

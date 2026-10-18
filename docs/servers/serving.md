@@ -627,7 +627,7 @@ changes) parks like a 9P read. Its admission, deadline, `serve` and abandonment 
 
 ### R25 (the label check)
 
-<details><summary>Status: built · tested (9)</summary>
+<details><summary>Status: built · tested (10)</summary>
 
 - host:redoubt-rt::matches_the_set_definition
 - host:redoubt-rt::properties
@@ -638,6 +638,7 @@ changes) parks like a 9P read. Its admission, deadline, `serve` and abandonment 
 - host:redoubt-rt::a_mint_at_its_own_root_reads_nothing
 - bench:net-attacks
 - bench:littlefsd-label-check
+- bench:steward-agent-escape
 
 </details>
 

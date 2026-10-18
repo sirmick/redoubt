@@ -1,0 +1,85 @@
+description = "A scripted hostile agent cannot get out of its lease (docs/plan/m3-agents.md, \"A scripted hostile agent\"; docs/userland/agents.md, \"Leases\" and \"Delegation only narrows\"; docs/servers/steward.md, \"Leases\", R41 and R39; docs/servers/serving.md, R25): alice's SSH session stages two canaries in her home (`~/notes.txt` and `~/project/out/canary`), writes `escape` to `~/project/in` and starts an agent; the agent, in a namespace holding only `/project`, `/boot` and the system volume, tries in turn to read, write and list outside `/project` (`/home/alice/notes.txt`, `/home/bob`), to write the read-only system volume (`/boot/x`), to reach the console (`/dev/cons`) and the network (`/net/tcp/clone`), to start a sibling and to use the lease operations its badge does not hold (`start_agent`, in-bound and past `MAX_LEASE`, both answered `unknown` to a lease's badge: R41), and to bind and look up paths it was never given; each is refused in place, and it writes the record to `/project/out/result` and idles. Alice's own session asks for a lease past `MAX_LEASE` and is refused `bad_lease` (R39), then ends the agent's lease and reads her canaries back: their bytes are unchanged, so the agent wrote nothing of her home. The canaries judge the agent's writes; that its reads, listings and network lookup were refused (a read that succeeded would leave the canaries as they are) rests on the lease's namespace holding only `/project`, `/boot` and the system volume with its 9P root at `~/project`, which host tests hold. The verdicts are alice's canaries, read back by her own session; the steward's audit, which carries one `AgentStarted` for the lease and its `LeaseEnded` and no other grant; the steward's usage counts; and the `bad_lease` answer to alice's over-long lease, the `unknown` to the agent's lease calls, read as the shells printed them (rule F). The agent's `result` is read only as progress, never as a verdict"
+arch = ["rv64", "rv32"]
+kind = "boot"
+recipe = "image/boot.toml"
+# The image needs 1 GiB: the principals' budgets, each holding shell VMs' sessions and a lease,
+# do not fit the users budget 256 MiB leaves (docs/kernel/budgets.md).
+memory_mib = 1024
+# A login and an agent's VM, one after the other.
+timeout_secs = 1500
+expect = [
+    '^init: started sshd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
+    '^init: started steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+]
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    '^init: .* (exited|faulted|was killed)',
+    'init: restarted',
+    'EXCEPTION',
+    'steward: a step failed',
+    'steward: the core exited',
+    'sshd: login .*: refused',
+]
+# One lease carved from alice's unlabelled sub-budget (the lease's two processes more while it
+# runs, her two sessions again once it ends) and one `AgentStarted`/`LeaseEnded` pair: the agent's
+# own `start_agent` calls are `unknown` to a lease's badge and carve nothing, so the audit holds no
+# grant for the agent beyond its own lease.
+expect_after = [
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{\} at [0-9]+: AgentStarted \{ lease: [0-9]+, sponsor: 0, parent: None, deadline: [0-9]+ \}',
+    '^\[con [0-9a-f]{16}\] steward: users/alice/\{\} holds [0-9]+ pages, 22 processes$',
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{\} at [0-9]+: LeaseEnded \{ lease: [0-9]+ \}',
+    '^\[con [0-9a-f]{16}\] steward: users/alice/\{\} holds [0-9]+ pages, 20 processes$',
+]
+
+# Alice stages the canaries and the agent's order, starts the agent, waits for its record (the
+# agent has no console in a lease, so the file is the only sign it ran), and reads the record as
+# progress. Then she asks for a lease past MAX_LEASE (24 h in microseconds, 86_400_000_000; one
+# more is refused), ends the agent's lease, and reads her canaries back unchanged. Every answer is
+# tagged, so a pattern matches the shell's printed value and never the echo of the line typed.
+[[session]]
+user = "alice"
+pty = true
+steps = [
+    { expect = '/home/alice \([0-9]+\)> ' },
+    { send = "{:stage, File.mkdir_p(\"/home/alice/project/out\"), File.write(\"/home/alice/notes.txt\", \"secret\\n\"), File.write(\"/home/alice/project/out/canary\", \"canary\\n\"), File.write(\"/home/alice/project/in\", \"escape\")}\n" },
+    { expect = '\{:stage, :ok, :ok, :ok, :ok\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:ok, c} = Redoubt.Contexts.connection(); {:ok, %{lease: l}} = Redoubt.Wire.Client.Steward.start_agent(c, 600_000_000); {:lease, is_integer(l)}\n" },
+    { expect = '\{:lease, true\}' },
+    { expect = '\([0-9]+\)> ' },
+    { mark = "agent-started" },
+    # Progress, not a verdict: the agent's record names every attempt it made and the refusal each
+    # got; the bench reads it only to show the agent ran and tried.
+    { send = "{:record, Enum.find_value(1..120, fn _ -> case File.read(\"/home/alice/project/out/result\") do {:ok, t} when t != \"\" -> t; _ -> Process.sleep(1000); nil end end) |> is_binary()}\n" },
+    { expect = '\{:record, true\}' },
+    { expect = '\([0-9]+\)> ' },
+    # R39: alice's own session, which may start agents, is refused a lease past MAX_LEASE rather
+    # than shortened silently.
+    { send = "{:over, Redoubt.Wire.Client.Steward.start_agent(c, 86_400_000_001)}\n" },
+    { expect = '\{:over, \{:error, :bad_lease\}\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:ended, Redoubt.Wire.Client.Steward.end_lease(c, l)}\n" },
+    { expect = '\[lease alice/agent-1 ended\]' },
+    { expect = '\{:ended, \{:ok, %\{\}\}\}' },
+    { expect = '\([0-9]+\)> ' },
+    # The verdict: alice reads her own canaries back, and their bytes are exactly what she staged;
+    # the agent reached nothing of her home.
+    { send = "{:canaries, File.read(\"/home/alice/notes.txt\"), File.read(\"/home/alice/project/out/canary\")}\n" },
+    { expect = '\{:canaries, \{:ok, "secret\\n"\}, \{:ok, "canary\\n"\}\}' },
+    { expect = '\([0-9]+\)> ' },
+    { mark = "alice-done" },
+    { exit = 0 },
+]
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]
+forward = [22]
