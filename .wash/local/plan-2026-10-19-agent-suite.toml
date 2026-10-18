@@ -1,0 +1,37 @@
+# Architect's first wave of the `agent-suite` step (architect-5, 2026-10-19): three attack-case
+# packages under `agent-suite` (docs/plan/m3-agents.md "Attack suite"), each turning a group of
+# that page's "not yet" rows into bench cases with system verdicts (rule F). None touches the
+# steward's binary, its loop files or the latency manifest (STEWARD5's and STEWARD7's); each
+# runs beside them. New nodes only: the orchestrator merges them into .wash/plan.toml.
+# Rulings and the step's remaining nodes (not drafted yet): .wash/local/wave-2026-10-18-rulings.md
+# "The agent-suite step". Briefs: .wash/local/<ID>-implementer.md.
+# Order: all three in parallel (disjoint cases and agent modules; m3-agents.md's table is the one
+# shared file: each edits its own rows). Reviewer per node: a red reviewer, the orchestrator's pick
+# (kernel-red-3 or steward-red-4); ATK10 and ATK11 read the steward's lines, ATK12 the kernel's.
+
+[[node]]
+  id = "ATK10"
+  title = "The scripted hostile agent: a lease tries to get out, and every row of its table gets its case"
+  template = "package"
+  parent = "agent-suite"
+  needs = []
+  body = "Brief: .wash/local/ATK10-implementer.md; ruling .wash/local/wave-2026-10-18-rulings.md 'The agent-suite step'. Tier A (attack cases; the bench), size M, reviewer: a red (the orchestrator's pick). Builds docs/plan/m3-agents.md 'A scripted hostile agent': the rows marked not yet become cases, each judged by a party the agent cannot impersonate: (1) steward-agent-escape: the agent reads and writes outside /project, binds, calls the steward's operations from a lease's badge, looks for /net and a console, and asks for a lease past MAX_LEASE from its sponsor's side; verdicts: alice's canary files and listings unchanged, the servers' and steward's refusal lines, no grant in the audit (R25, R41, R39); (2) steward-lease-cut: the sponsor ends a lease while the agent writes to /project in a loop, so walfsd holds its lent pages when the budget dies; walfsd serves on, alice's project reads back whole, the lease's connection is gone and alice's own still works (R3, R10, R39, R41); (3) steward-agent-flood: the agent floods walfsd:data through /project and the steward through its badge from many processes; alice opens a file in her home and ends the lease, both answered within the case's bound (R26); (4) steward-vault-note: a vault session's free text in a request is not shown on approve@box, an unlabelled session's is quoted and marked (R38; the boot arm of the host test). Scripted agents are modules beside Redoubt.Agents.Echo, driven by ~/project/in. Pages: m3-agents.md rows, agents.md and steward.md status lines, SECURITY.md rows. No steward, kernel or server code."
+  state = "todo"
+
+[[node]]
+  id = "ATK11"
+  title = "The scripted hostile user at the shared servers: Bob and Alice's vault flood walfsd, blkd and ipd, and Alice is served in her turn"
+  template = "package"
+  parent = "agent-suite"
+  needs = []
+  body = "Brief: .wash/local/ATK11-implementer.md; ruling .wash/local/wave-2026-10-18-rulings.md 'The agent-suite step'. Tier A (attack cases; the bench), size M, reviewer: a red (the orchestrator's pick). Builds the fairness rows of docs/plan/m3-agents.md 'A scripted hostile user', each judged from the victim's side: (1) walfsd-flood-turn: bob's session floods walfsd:data from as many processes as his VM's hub admits while alice's session reads and writes her home, each operation answered within the bound the case states and derives (R2, R26); (2) vault-flood-turn: alice's vault session floods walfsd:data (it may read the unlabelled volume) while alice's unlabelled session's operations are answered as in (1): a vault's queued calls leave its owner's unlabelled turn and cap unaffected (R2, R37); (3) blkd-fairness: bob writes large files through walfsd:data without end while alice's vault session writes and reads back in walfsd:alice-secrets, both servers on one blkd (R2); (4) net-pinned-ssh: alice's shell parks 64 gen_tcp reads at ipd that its own short timeouts abandon while bob logs in over SSH and alice's echo to the peer still works (R28, R4a). Bounds are measured once on both widths and stated with their arithmetic in each toml's comment; a miss is a finding, not a tuning. Pages: m3-agents.md rows, serving.md, ipc.md R2 and ipd.md status lines, SECURITY.md rows. No server code."
+  state = "todo"
+
+[[node]]
+  id = "ATK12"
+  title = "Resources, launch and leaky state: shared pools, a hostile launch from a session, and what an unlabelled observer sees while a vault works"
+  template = "package"
+  parent = "agent-suite"
+  needs = []
+  body = "Brief: .wash/local/ATK12-implementer.md; ruling .wash/local/wave-2026-10-18-rulings.md 'The agent-suite step'. Tier A (attack cases; the bench), size M, reviewer: a red (the orchestrator's pick). Builds three rows of docs/plan/m3-agents.md 'A scripted hostile user': (1) walfsd-pools: bob fills his home to its quota and opens fids until his cap, refused by name, while alice's saves succeed and walfsd's budget holds no more pages than before (R48, R26); (2) session-hostile-launch: alice's session launches a malformed ELF from her home and a program whose image is cut short; each refusal names itself, the child alone is hurt and her session answers on (R31, R32); (3) vault-no-leak: alice's unlabelled session records a stated list of observables (her sub-budget's usage, a request id, a session id, the PID of a program it launches, her home's qids, versions and listings) before, while and after her vault session writes files, launches a program and submits a request; nothing it records changes with the vault's work, and it cannot write, truncate, create or remove in the vault's volume (R37, R25, R36). The observable list is the case's claim and is on the page; an observable that does change is a finding reported to the Architect with its mechanism, never removed from the list to pass. Pages: m3-agents.md rows, littlefsd.md and walfsd.md R48, init.md R31/R32, steward.md R37 status lines, SECURITY.md rows. No server or kernel code."
+  state = "todo"

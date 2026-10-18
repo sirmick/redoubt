@@ -241,6 +241,66 @@ call past the bound; the step fails and the caller is told. The rv32 one-hart N 
 on the shell's 5 s `start_agent` bound (5.1 s in B88, borderline) is F4's: STEWARD8's one-hart
 rows are in scope too (its brief to be amended when the report names the log).
 
+### F1 addendum (thread STEWARD5-handover): the hand-over shape
+
+The implementer is right that a `send` blocks until taken (it carries a timeout), so handing a
+step to the thread by send would make the loop wait transitively. The shape confirmed:
+
+- **Confirmed.** A shared `cleanup::Queue` under `redoubt_rt::sync::Mutex`, held only for the
+  O(1) take/settle critical sections and **never across a Connection call** (the thread takes a
+  step under the lock, drops it, makes the 1 s `disconnect`, re-takes it to record the fate);
+  the thread idles in an open call on the loop's endpoint; the loop hands a step over by
+  **reply** (non-blocking, R13) and takes fates as they arrive. The loop is the single arbiter
+  of when the thread is woken, so no wake is lost. This departs from F1's "events" letter but
+  serves its intent — the loop never blocks on a shared server — better than sends, which block.
+- **Q1 (reply non-blocking in every state): yes, with one rule.** A reply to an open call never
+  blocks the replier; if the thread died its call is abandoned and the reply is dropped locally,
+  still non-blocking. So the loop must not *depend* on the thread being parked: it always
+  enqueues under the lock, and the reply is only a wake used when the loop knows the thread is
+  parked; a thread mid-step picks up the next step itself from the shared queue when it returns,
+  before re-parking. A dead cleanup thread is a steward bug handled like any watched child: the
+  loop takes its exit notice, restarts it, and the queue (the loop's own memory, under the
+  Mutex) persists with its parked steps. Host test: the loop turns while the thread is blocked
+  in a step; and the thread restarts with its queue intact.
+- **Q2 (await_cleanup): amended — refused as proposed.** A window that receives only the
+  thread's events for up to SERVER_US (4 s) reintroduces the stall F1 removes: a decision wake
+  (target p99 95 ms) or timer wake (50 ms) arriving in it waits up to 4 s, two orders over. The
+  mint-on-parked-steps case is handled event-driven instead: on a fast `Refused` with parked
+  steps at that server, the loop signals the thread to run that server's steps first (reprioritise
+  the shared queue under the lock) and **retries the mint on later turns when the thread reports
+  a freed step**, serving every other event in between; if no slot is freed within SERVER_US of
+  the first Refused, the step fails and the caller is told (STEWARD6's rule, same words). No
+  thread-only window; the loop's full receive runs throughout. This is what keeps the targets.
+- **Q3 (the Mutex on the loop's turn): safe, with the discipline tested.** Because the lock is
+  never held across a call, a stuck thread is stuck inside a `disconnect`, not holding the lock;
+  the loop's lock acquisitions are O(1). Confirm the lock is dropped before the loop's receive.
+  3W's "a mint pays at most one bound, a turn's rule" becomes, off-loop: the mint pays nothing
+  synchronously; its slot is freed by the thread or the step fails within SERVER_US.
+
+Cost (3 pages, image entry 1024 → 1027): accepted; the thread stack is 1,432 B rv64 / 1,168
+rv32, twice is under one page both widths (verified). budgets.md and testbench.md follow. Module
+doc states the single-arbiter invariant and the no-lock-across-a-call rule.
+
+**Addendum 2 (the implementer's refinements, confirmed):**
+- Q1, dead thread: accepted correction. A thread of the steward's process cannot die alone —
+  the kernel's exit notices are per process, a panic on the cleanup thread ends the steward, and
+  init restarts it (reaping `users`), so there is no thread exit to take and no restart path; the
+  queue is never orphaned (a restarted steward starts with an empty one, which is right). State
+  this in the module doc in place of the "watched child" wording.
+- Q2: it is genuinely (a) park-and-retry vs (b) fail-now — "retry the same call on a later turn"
+  is parking the call, so my addendum's wording implied (a). **Ruled (b).** (a) breaks the
+  steward's load-bearing no-park invariant (protocol.rs: it answers every call as it arrives and
+  parks none, part of R26's fairness), double-audits a login (a failed record then a success for
+  one login), and keeps consoles. (b) keeps STEWARD6's rule verbatim (a server that does not free
+  a slot in time → failed step, caller told) and the no-park invariant; nothing retries inside
+  the steward; 3W's test becomes "the login after it succeeds". The caller (sshd, the shell's
+  harness, the person) retries, the established pattern. The transient (a slot released to the
+  cleanup thread but its disconnect not yet done) only bites if the share is at cap AND a reuse
+  comes within one disconnect bound (~1 s); STEWARD7's derived caps plus the latency rounds'
+  ≥1.5 s sleeps give the thread its slack, so no spurious `failed` in a reachable row. If
+  measurement shows a transient in a reachable row, the case's driver gets a bounded retry (a
+  realistic harness), never a design change. Flag to STEWARD7 so it expects no spurious failure.
+
 ## F4. A lease's launch under load: a measured quantity with a derived bound → STEWARD8
 
 **Finding.** On rv32 at two harts a lease VM's launch beside two spinners takes 5.3–5.7 s and the
@@ -346,6 +406,31 @@ toolchain. One condition: the test's compile is through `scripts/q run` like eve
    A pty case ends its session with `exit` at the prompt and then the bench's `ended` step
    (B83); without a pty the input's end is the shell's end of file, which is why the cases run
    so. No node.
+
+## The agent-suite step (first wave, 2026-10-19): ATK10, ATK11, ATK12
+
+Scope is clear from docs/plan/m3-agents.md: the step turns that page's "not yet" rows into bench
+cases and builds Alice's agent under a lease, the agent harness and the escape room. The harness
+(`Redoubt.Agent`), the agent loop (`pi`-small) and the escape room are M5-status on agents.md
+("Status: planned · M5"); they wait for gatewayd and the model gateway and are **not** this
+wave. What is built today and only lacks its attack cases: leases, sub-agents, the powerbox,
+crash blame, vault sessions, the loopback refusal (session-tcp-loopback), and the kernel's half
+of fairness and launch. So the first wave is three attack-case packages, each a group of
+m3-agents.md's rows, each judged by rule F, none touching the steward binary, its loop files or
+the latency manifest (STEWARD5/STEWARD7 own those):
+
+- **ATK10** the scripted hostile agent (escape, lease-cut, flood, vault note);
+- **ATK11** the scripted hostile user at the shared servers (walfsd/blkd/ipd fairness, R37);
+- **ATK12** resources, hostile launch, leaky state (R48, R31/R32, R37/R36).
+
+All three run in parallel beside STEWARD5/7/8: disjoint cases and agent modules; the one shared
+file is m3-agents.md's table, each editing only its own rows. No owner decision is needed for
+these three: every rule they attack is built and stated. The harness, the loop and the escape
+room are a **later wave** of the step, after gatewayd (owner territory: a new egress server,
+R65/R66); I will draft them when the orchestrator asks and the gateway's scope is set, and flag
+then whether gatewayd itself needs an owner decision before agent-suite can complete. A reviewer
+reading these should know: the "not yet" rows for the harness-driven agent (Agent.start/prompt)
+stay not yet; these cases drive agents by `start_agent` and `~/project/in` as the built cases do.
 
 ## Order and parallelism (five in flight)
 
