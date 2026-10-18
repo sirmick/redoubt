@@ -301,8 +301,10 @@ so the steward still holds no key.
   the same way as `steward: crossing ID of ACCOUNT/LABELS exited 0`, ID the crossing's: the
   program exits once its one call is answered, or `was killed CODE` when its budget's
   destruction came first ([declassification and push](#declassification-and-push)). It
-  says its own time on each `end_lease` and `submit`, `steward: served submit in N us`, from the
-  call's arrival to its answer ([residual risks](#residual-risks)).
+  says its own time on each `end_lease`, `start_agent` and `submit`, `steward: served submit in
+  N us`, from the call's arrival to its answer, one queued console line per call, so a lease's
+  launch is measured at the steward and not inferred from the gaps between its audit lines
+  ([residual risks](#residual-risks)).
 - **The model** binds the same crate to the kernel model, in place of its own copy of the
   policy, so the property families (P1 to P18) and the mutations attack the code that ships. The
   model's families drive events; its checks read the core's state through a read-only
