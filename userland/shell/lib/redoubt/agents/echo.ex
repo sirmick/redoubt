@@ -57,6 +57,7 @@ defmodule Redoubt.Agents.Echo do
   defp run("escape"), do: Redoubt.Agents.Escape.run()
   defp run("writeloop"), do: Redoubt.Agents.Churn.run()
   defp run("flood"), do: Redoubt.Agents.Flood.run()
+  defp run("nosink"), do: Redoubt.Agents.NoSink.run()
 
   defp run("sub " <> ms) do
     with {ms, ""} <- Integer.parse(ms),
