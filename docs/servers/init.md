@@ -832,9 +832,10 @@ kernel
 
 ### R31 (startup block checked whole)
 
-<details><summary>Status: built · tested (8)</summary>
+<details><summary>Status: built · tested (9)</summary>
 
 - bench:rt-host-tests
+- bench:session-hostile-launch
 - host:redoubt-rt::hostile_blocks_are_refused
 - host:redoubt-rt::fields_hold_whole_entries
 - host:redoubt-rt::handle_names_follow_the_manifest_rule
@@ -853,9 +854,10 @@ read two ways, or a name no rule allows.
 
 ### R32 (a hostile image hurts only its process)
 
-<details><summary>Status: built · partly tested: on target the kernel's own refusal masks the stub's overlap checks, which only host tests pin · tested (10)</summary>
+<details><summary>Status: built · partly tested: on target the kernel's own refusal masks the stub's overlap checks, which only host tests pin · tested (11)</summary>
 
 - bench:stub-launch
+- bench:session-hostile-launch
 - host:stub::plan_refuses_a_segment_overlapping_an_excluded_range
 - host:stub::plan_refuses_writable_and_executable
 - host:stub::plan_refuses_two_segments_that_overlap_each_other
@@ -875,7 +877,13 @@ over the stack) makes the child exit too. So a hostile image can at most exit or
 it was going to become. `stub-launch` launches hostile images on both widths and checks that each
 only exits or faults the child, that the parent's budget returns to the same usage after each,
 and that a well-formed child still runs afterwards and finds the image copy unmapped. A segment
-the child's budget cannot hold exits 112, and the same image runs in a budget that holds it. The
+the child's budget cannot hold exits 112, and the same image runs in a budget that holds it.
+`session-hostile-launch` launches hostile images from a user's session, through the launch native
+([native programs](../userland/native.md#launching-from-a-session)): an image cut to 40 bytes, one
+cut in half and one of zeros, read from her home, each exit the child 111 with its budget holding
+nothing; an empty image and a startup block naming a handle outside the rule are the client's
+refusals before any kernel call; the session's processes in use are the same after, and a
+well-formed program runs. The
 stub's parser was fuzzed for an hour; its kept corpus (`stub/fuzz/seeds/plan`) reruns in the
 stub's host tests.
 
