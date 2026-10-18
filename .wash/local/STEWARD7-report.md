@@ -1,7 +1,10 @@
 # STEWARD7 report (steward7-implementer)
 
-Branch `wp-STEWARD7` on main f28960f34; worktree `/home/mcloonan/redoubt/.worktrees/STEWARD7`.
-Logs under `/home/mcloonan/redoubt/.tmp/STEWARD7/`. Head: see the end of this file.
+Branch `wp-STEWARD7`, head **99c0e1f32** on main 7c820a5c6 (train 71); worktree
+`/home/mcloonan/redoubt/.worktrees/STEWARD7`; logs under `/home/mcloonan/redoubt/.tmp/STEWARD7/`.
+Three commits: 5bd6ae1b2 (the term, the caps, the entries, the pages), 168898246 (the latency
+case and its manifest, scheduling.md), 99c0e1f32 (the admit.rs comment, outside the owned
+paths). `git status --short | wc -l` = 0; 58 files against main.
 
 ## Rulings built on
 
@@ -39,38 +42,41 @@ Logs under `/home/mcloonan/redoubt/.tmp/STEWARD7/`. Head: see the end of this fi
 | server | term | cap before → after | bucket bytes before → after | entry (image) |
 | --- | --- | --- | --- | --- |
 | erofsd `state` | 2 × (1 + 3 + 1) + 18 | 11 → 28 | 226,816 → 235,520 | 1,024 holds (512 by the rule; 15 buckets, not 16) |
-| walfsd `in_flight` | 95,377 / 5,248 + 1 | 6 → 19 | 626,688 → 1,486,336 | `walfsd:data` 1,280 → 2,560 (6 buckets, not 7); `alice-secrets` 1,280 → 2,048 |
+| walfsd `in_flight` | 106,770 / 5,248 + 1 (pages; 52 / 2, 1,100 / 50 looser) | 6 → 21 | 626,688 → 1,617,408 | `walfsd:data` 1,280 → 2,816 (6 buckets, not 7); `alice-secrets` 1,280 → 2,304 |
 | walfsd `state` | (1 + 3 + 1) + 18 | 8 → 23 | (above) | |
-| littlefsd `in_flight` / `state` | as walfsd | 6 → 19 / 8 → 23 | 626,688 → 1,486,336 | 1,024 → 1,792 (4 buckets, not 5) |
+| littlefsd `in_flight` / `state` | as walfsd | 6 → 21 / 8 → 23 | 626,688 → 1,617,408 | 1,024 → 1,792 (4 buckets, not 5) |
 | bootfsd `state` | (1 + 3 + 1) + 18 | 8 → 23 | 165,888 → 169,728 | 4,096 holds (2,816 by the rule; 40 buckets, not 41) |
 
-  The largest terms come from the latency manifest's alice (share 95,377 pages, 48 processes,
-  weight 1,000: leases 18, carves 18 + 1); the image's alice gives 7 and 8.
+  The largest terms come from the latency manifest's alice (share 106,770 pages, 52 processes,
+  weight 1,100, home 18 MiB: leases min(20, 26, 22, 18) = 18, carves min(20, 26, 22) + 1 = 21);
+  the image's alice gives 7 and 8 (her home's 8 MiB / 1 MiB = 8 does not bind).
 - **Entries by the entry rule** (`every_manifest_entry_holds_its_buckets_at_their_caps` names
-  each): walfsd 4 buckets 1,280 → 1,792 (1,452 + 64 + 128 = 1,644 → 1,792; with no heap cap
-  1,580 → 1,792), 5 → 2,048 (1,815 + 192 = 2,007), 6 → 2,560 (2,178 + 192 = 2,370), 9 → 3,584
-  (3,266 + 192), 10 → 3,840 (3,629 + 192); littlefsd 4 buckets 1,024 → 1,792 (1,452 + 128 =
-  1,580). Manifests moved (31): `image/manifest.json` (+2,048 pages), `tests/data/steward/`
-  confined, latency, many-sessions, three-contexts, vault-launch (+2,048 each), idle (+1,280),
-  six-principals (+3,840: 1,792 → 3,840 and 3,584), `boot-profile/manifest-unverified` (+2,048),
-  `pipe/manifest` (+1,280), `beamlet/` files, launch, natives, natives-attack, pipe, serve (+512
-  or +768), `beamlet-footprint`, `beamlet-compile-footprint` (+512), `aio/boot`, `verity/signed`,
-  `littlefsd/` boot, confined, label-check, large-directory, one-volume (×2), `walfsd/` boot,
-  confined, label-check, own, one-volume (×2), two-disks (×2) (+512 or +768 each). erofsd and
-  bootfsd entries are unchanged everywhere.
+  each; a bucket 1,617,408 bytes): walfsd 4 buckets 1,280 → 1,792 (1,580 + 64 + 128 = 1,772 →
+  1,792; with no heap cap 1,708 → 1,792), 5 → 2,304 (1,975 + 192 = 2,167), 6 → 2,816 (2,370 +
+  192 = 2,562), 9 → 3,840 (3,554 + 192 = 3,746); littlefsd 4 buckets 1,024 → 1,792 (1,580 +
+  128 = 1,708). Manifests moved (31): `image/manifest.json` (+2,560 pages), `tests/data/steward/`
+  confined, latency, many-sessions, three-contexts, vault-launch (+2,560 each), idle (+1,792),
+  six-principals (`walfsd:data` to its nine buckets, both entries 1,792 → 3,840: +4,096),
+  `boot-profile/manifest-unverified` (+2,560), `pipe/manifest` (+1,792), `beamlet/` files,
+  launch, natives, natives-attack, pipe, serve (+512 or +768), `beamlet-footprint`,
+  `beamlet-compile-footprint` (+512), `aio/boot`, `verity/signed`, `littlefsd/` boot, confined,
+  label-check, large-directory, one-volume (×2), `walfsd/` boot, confined, label-check, own,
+  one-volume (×2), two-disks (×2) (+512 or +768 each). erofsd and bootfsd entries are unchanged
+  everywhere.
 - **System budgets hold.** The 1 GiB cases (`system` ≈ 64,200 pages at the kernel's split):
-  the image's manifest 19,469 pages of servers (+2,048: init-boot, the steward set,
-  steward-many-sessions, three-contexts, vault-launch, confined), six-principals 22,285
-  (+3,840), pipe-eight 18,701 (+1,280). The 512 MiB footprint cases (`system` ≈ 31,000):
+  the image's manifest 19,981 pages of servers (+2,560: init-boot, the steward set,
+  steward-many-sessions, three-contexts, vault-launch, confined), six-principals 22,541
+  (+4,096), pipe-eight 19,213 (+1,792). The 512 MiB footprint cases (`system` ≈ 31,000):
   22,411 (+512). The 256 MiB cases (`system` ≈ 15,000): the beamlet manifests 10,248 (+768),
   the walfsd/littlefsd/aio/verity ones at most 6,151 (+1,536). The latency case's `users`:
   241,605 pages on rv32 (241,707 on rv64), alice 190,757 and bob 32,769.
 - **Host fixtures** give the programs the new entries: erofsd's refusal test one page short of
   345, bootfsd's of 249 (and 249 serves), walfsd's 2,560 / 64, littlefsd's and
   `userland/otp/redoubt`'s 1,792.
-- **The latency case:** alice 190,756 pages, 96 processes, weight 2,000 (her share: 95,377
-  pages = 11,393 + 16 × 5,249 + 0 spare; 48 processes ≥ 10 + 32; weight 1,000 ≥ 100 + 800;
-  the kernel carved eight leases at weight 1,000 and refused the ninth); `round.(15, 8)`, its
+- **The latency case:** alice 213,542 pages, 104 processes, weight 2,200, home 18 MiB; bob
+  16,384 pages, agent's home 4 MiB (her share: 106,770 pages = 2 × 11,393 + 16 × 5,249, two
+  sessions; 52 processes ≥ 20 + 32; weight 1,100 ≥ 200 + 800; sixteen 1 MiB project carves);
+  `round.(15, 8, 5)`, its
   two `LATENCY-COUNT N=16 … 8` lines, the description's N list and D; `LATENCY_ROUNDS` 4 → 5
   (one constant, `servers/steward/src/bin/steward.rs`, kept alone in its hunk; STEWARD6 shares
   the file). `memory_mib` stays 1536.
@@ -143,6 +149,23 @@ parked after four attempts, each a `State` the server has not released (23 disco
 in that run, 31 in the one-hart run, which the server took back in time). Which hart count hits
 it is a load race: the earlier rv64 run refused at one hart and completed at two.
 
+rv32 (`latency-rv32-*.log`, same tip): one hart, the fifth round's sixteenth launch done, then
+the SSH session's shell lost its own modules (`beamlet: Elixir.Exception not loaded: its file
+could not be read: failed`, five such, then `** (EXIT) the evaluation ended`): seventeen VMs of
+alice's account (two sessions, fifteen spinners) share `erofsd:system`'s bucket caps of 64
+requests and 2 pages by fair share (`limit / (n + 1)`, at least one), and behind fifteen
+spinners at one hart the shell's page-carrying reads were `busy` past the hub's 10 s give-up;
+the round's loop died and the session waited out the bound. Two harts: the N = 3 round unreached
+as before (the launch over the 5 s bound beside two spinners: STEWARD8's). So the N = 16 column
+is measured on rv64 at one hart and stated unreached elsewhere, each with its cause.
+
+5. **A bucket's `requests` and `pages` caps at the system volume are not derived from the
+   account's VM count** (finding, not built here; raised to the Architect as a follow-up): erofsd
+   sizes two pages "the most one batch of requests needs" per bucket, but a bucket is one
+   account's and every live VM of the account reads through it; at N = 16 seventeen shares
+   divide two pages. The same per-account derivation this package gave `state` and `in_flight`
+   would give `pages`/`requests` a VM-count term.
+
 ## Rebases and work outside the owned paths
 
 - Rebased onto 9a6600ede (train 63, IPD1) and 472c5840a (train 64, SSH3), both clean: SSH3's
@@ -175,4 +198,22 @@ no change.
 | `set CASES=docs` (`docs1.log`, then `gates2.log`) | FAIL on four citation forms (C5's `R7 (carving)` / `R4a (open calls)`, walfsd.md's status count), fixed in the caps commit; rerun PASS |
 | 46-case set both widths: every `steward-*` boot case, agent-login, aio-many-reads-two, walfsd-quota, init-boot, beamlet-launch, beamlet-lookup-host, beamlet-footprint, pipe-carries, pipe-eight, littlefsd-boot, walfsd-boot, littlefsd-one-volume, verity-signed (`gates1.log`, `gates1.cases`) | 90 of 91 runs PASS; `beamlet-lookup-host` FAIL (`a_vm_busy_past_the_session_bound_keeps_its_console`, a console-timing host test under 45 concurrent cases; log kept as `lookup-host-fail1.log`; rerun alone in `gates2.log`: PASS) |
 | size-budget, unsafe-budget (`budgets1.log`) | PASS, PASS (no `Size budget:` line moved: the servers' constants and the bench's tests change no guest binary's size) |
-| steward-latency | (pending: queued behind STEWARD6's run) |
+| steward-latency, by name, both widths, both hart counts (`latency-{rv64,rv32}-*.log`, run from 5923f7bc8 before train 71) | FAIL by design (out of the whole run): rv64 one hart ran all five rounds, the N = 16 column measured, timer wake p50/p99 missed there; rv64 two harts, rv32 one hart and rv32 two harts unreached at N = 16 (and rv32 two harts at N = 3 as before), each with its cause above |
+| after the rebase onto 7c820a5c6 (99c0e1f32): docs, formatting, size-budget, unsafe-budget (`gates10.log`, `gates11.log`); host tests testbench, steward-server, init, walfsd, littlefsd, erofsd, bootfsd, sshd (`host12.log`) | all PASS / green (37 test binaries) |
+| 16-case set both widths on 99c0e1f32: steward-six-principals, many-sessions, three-contexts, lease-ends, end-lease, ssh-two-principals, agent-login, init-boot, walfsd-quota, aio-many-reads-two, beamlet-launch, beamlet-lookup-host, littlefsd-boot, walfsd-boot, pipe-eight, verity-signed (`gates12.log`) | 31 of 31 runs PASS (beamlet-lookup-host is host-only) |
+
+Not run: the whole bench (the train's); steward-latency on the rebased tree (STEWARD5's cleanup
+thread and STEWARD6's bound landed after my runs; the last to land, STEWARD8, re-measures the
+table and holds the slot now).
+
+## Open risks and residuals
+
+- The derived caps leave no slack for the steward's deferred cleanup: an ended lease's
+  `disconnect` parked at a starved server holds a `State` the derivation does not count (finding
+  3). Whether STEWARD5's cleanup thread changes that at N = 16 is unmeasured here.
+- erofsd's per-bucket `requests` and `pages` are not derived from the account's VM count
+  (finding 5): N = 16 on rv32 at one hart loses the session's shell to it.
+- The N = 16 round at two harts is long: the rv64 two-hart run that completed it took most of
+  the 3 h bound; `timeout_secs` stays 10800 (the bound is the case's, a miss is a finding).
+- Which hart count hits the parked-disconnect refusal is a load race; a rerun may move the
+  "not reached" rows between hart counts.

@@ -464,6 +464,69 @@ it, the node is a weight change (the image's read-path weights), not STEWARD5's 
 admission term's. This also confirms the STEWARD5(b) transient reaches `failed` under one-hart
 oversubscription; the latency case states the one-hart N=16 row unreached rather than retrying.
 
+### F4 refinements (thread STEWARD8-bound)
+
+(a) **Source: the `served start_agent` line, added by STEWARD5, not STEWARD8.** The implementer
+is right that `served_op` prints only `submit` and `end_lease`, and that AgentStarted-gap-less-
+sleep overstates (STEWARD7's 6.8 s gap with no 5 s timeout is the shell VM's own share and its
+sleep's lag, not the steward's service). The steward's arrival-to-answer for start_agent is what
+the client's bound should cover, so it is the source; state B88's gap beside it only where it
+differs by more than the sleep's rounding, as a cross-check. The one line `10 => Some("start_
+agent")` is a Tier A steward edit and outside STEWARD8's Tier B: fold it into STEWARD5 (in flight,
+already in `bin/steward.rs`), or the orchestrator adds it; STEWARD8 measures from it once on main.
+My brief's "a served line already exists" was wrong — this corrects it.
+
+(b) **Home: option (1), with a page note.** `launch_timeout/0` beside `timeout/0` in
+`libs/wire/elixir/lib/client.ex`, the arithmetic beside the 5 s it is derived against; the latency
+case passes it as start_agent's third argument; `timeout/0` (5 s) stays the default for every
+call, start_agent's generic path included. Add: agents.md's harness section states that launching
+an agent uses the launch bound, so the M5 harness (`Redoubt.Agent.start`) inherits it and does
+not reintroduce 5 s. escape.ex's probe (a lease's badge calling start_agent, refused `unknown` at
+once) keeps 5 s — it never launches, so it needs no long bound; change it only if it has a real
+launch (check). Not (2) now: a per-message default timeout in the steward wire table is the
+durable fix and is the Architect's remit (the steward's own table, not the owner's), but it is a
+generator and table-format change; deferred until start_agent callers proliferate, noted on the
+page as the follow-up. Not (3): no shell lease module exists today.
+
+### F2 findings 4 and 5 (STEWARD7 completion)
+
+**Finding 5 (rv32 one hart N=16: the shell loses its modules at erofsd).** Not a correctness
+finding, and not the same as finding 3. The reads are honestly `busy` (R26's fair share
+`limit/(n+1)` is honored — each of 17 VMs gets its share), the hub retries and returns `failed`
+at its own 10 s; the server loses no read. But it is also not mere CPU starvation: even with
+infinite CPU, 17 VMs sharing a 2-page bucket by fair share get ~1 page each, so a page-carrying
+read whose need exceeds that share cannot complete whatever the hart does. The real cause is a
+**derivation gap**: STEWARD7 gave `state` and `in_flight` a VM-count term but `pages` and
+`requests` kept their per-batch constant (erofsd's "the most one batch needs", 2), so they do
+not scale with an account's concurrent VM count. Ruled: **stated unreached now, a node only if
+the owner's agentic-workload decision commits to many agent VMs of one account reading a shared
+volume at once.** Then it is a package in my remit (complete the derivation: `pages`/`requests`
+gain the VM-count term, as `state`/`in_flight` did), Tier A, at the cost of every server's heap —
+so it waits for the requirement (the gateway/harness wave and owner Q1/Q2), not this
+oversubscription. One check for the implementer that would flip it to a node now: if at a
+**supported** configuration (the image's per-account VM count, not N=16) a single page-carrying
+read's need exceeds a VM's fair share, that is a liveness bug and its own node; confirm it bites
+only at N far above the image's concurrent-VM count.
+
+**Finding 4 (rv64 two harts N=16: 29th launch refused, 20 live + 8 parked disconnects).**
+STEWARD7's latency runs are from 5923f7bc8, **before STEWARD5's cleanup thread** (train 71), so
+finding 4 is the old on-loop cleanup under a two-hart lease-end burst, not a finding about the
+current system. Ruled: re-measure under STEWARD5. **CLOSED** (STEWARD8, tree 0d8d9d463, STEWARD5
+in): steward-latency PASS at both hart counts, every round reached including N=16, every target
+met, 0 `parked after` lines, all 31 launches of the two-hart N=16 round served. The off-loop
+cleanup thread (F1) drains the two-hart end burst the old on-loop cleanup could not; finding 4 was
+the pre-STEWARD5 model. No node.
+
+**Finding 5 — CLOSED, no node.** STEWARD8's check: a waiting module walk pins one page and the
+fair share always allows one (the `.max(1)` floor), so a read's need never exceeds its share at
+any VM count; the bucket's ceiling of two page-carrying requests per (account, label set) per
+volume is a drain-rate matter, not a liveness bug at the image's nine VMs. Stated unreached as
+ruled; the `pages`/`requests` VM-count term stays a would-be node only if the owner's agentic
+workload commits to many concurrent agent VMs per account (owner Q1/Q2), unchanged.
+
+(STEWARD8's start_agent `served` figures for F4's bound: one hart 1.70 s alone / 3.13 s beside 15
+spinners; two harts 2.67 s / 3.72 s. The launch_timeout derives from the worst, 2×3.72 → ~8 s.)
+
 ## agent-suite wave B (2026-10-19)
 
 The two rows ATK10 left are sound now, as one small package **ATK13** (Tier A, S): (1) the R60

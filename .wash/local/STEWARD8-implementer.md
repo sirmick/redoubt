@@ -1,8 +1,9 @@
 # STEWARD8: a lease's launch under load is a measured quantity; start_agent's bound follows it
 
-Node STEWARD8 (parent AGENTS). Tier B (the Elixir client, the shell's call, a toml, pages); one
-reviewer: the editor, the red team if the steward is touched. Size S. Starts when STEWARD5 and
-STEWARD6 are on main. Ruling: `.wash/local/wave-2026-10-18-rulings.md` "F4"; evidence
+Node STEWARD8 (parent AGENTS). Tier A (STEWARD8 adds the steward's `served start_agent`
+line as its first commit: `10 => Some("start_agent")` in `served_op`, one console write per launch
+through 3U's queue, stated on steward.md; the rest is the Elixir client, the shell's call, a toml,
+pages). Reviewer steward-red-4. Size S. Starts when STEWARD5 and STEWARD6 are on main (both are). Ruling: `.wash/local/wave-2026-10-18-rulings.md` "F4"; evidence
 `.wash/local/B88-report.md` ("The launch time"), scheduling.md "With the real steward".
 
 ## Context rules (read these first)
