@@ -35,14 +35,16 @@ The sources of the signed boot bundle and the disk images; what they produce goe
   console's relay, `piped` and up to 7 stages of a pipeline, and a lease 2, its VM and one
   sub-agent's process: alice's 64 give each label set 32, three sessions and a lease, and bob's
   20 two sessions. The cap of live contexts follows: alice three per set (the console's session
-  and the agent's count among her `{}` ones), bob two; what one account may have open at
-  `walfsd` at once is that cap, the console session, a lease and one spare for a context
-  detaching while another attaches, 6 for alice, and the server's constant is the largest such
-  sum over the tree's manifests, 6 ([walfsd](../docs/servers/walfsd.md#serving)); the two
-  `walfsd` entries' 1,280 pages are that page's entry rule. The connections the steward mints
+  and the agent's count among her `{}` ones), bob two; her live leases are at most what her
+  `{}` share holds in `agent` budgets, 40,959 over 5,248, 7 ([steward](../docs/servers/steward.md#leases));
+  what one account may have open at `walfsd` at once is a parked call per live VM, what that
+  share carves at once in sessions and leases, 7, and one spare for a context detaching while
+  another attaches, 8 for alice, and the server's constant is the largest such sum over the
+  tree's manifests, 21 ([walfsd](../docs/servers/walfsd.md#serving)); the two `walfsd` entries'
+  2,816 and 2,304 pages are that page's entry rule. The connections the steward mints
   for her sessions and leases are hers to hold by the same rule, at every server: at the system
-  volume two per session and one per lease, 11 at most, which is `erofsd`'s cap per bucket
-  ([erofsd](../docs/servers/erofsd.md)). The shell,
+  volume two per session and one per lease, 2 × 5 + 7 = 17 for her, under `erofsd`'s cap per
+  bucket, 28, the tree's largest ([erofsd](../docs/servers/erofsd.md)). The shell,
   `Redoubt.Shell`, is started by the
   steward as the console principal's session (`console: "alice"`) on the UART, and as each SSH
   login's session on port 22 ([steward](../docs/servers/steward.md#authentication-and-sessions)).

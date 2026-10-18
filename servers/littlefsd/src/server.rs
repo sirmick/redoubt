@@ -21,16 +21,22 @@ use crate::volume::{BLOCK, Blocks, Mounted, Range};
 /// manifest's `buckets=N`. A call is answered as it arrives; what is held is a multiplexed
 /// connection's completion call (`InFlight`, one per session), its requests (`Requests`) and the
 /// pages their transfers brought (`Pages`). A bucket is one account's (serving.md "Buckets"), so
-/// `in_flight` is what a manifest lets one account have open at once: its console session, its
-/// cap of live contexts per label set, its leases, and one spare for a context detaching while
-/// another attaches (its connection lives until the relay ends); the bench holds it to the
-/// largest such sum over the tree's manifests (tools/testbench,
-/// `the_servers_admit_what_a_manifest_lets_one_account_hold`): 1 + 3 + 1 + 1. A crossing's
+/// `in_flight` is what a manifest lets one account have open at once, a completion call per live
+/// VM of the account here, its sessions' and its leases': what the principal's unlabelled share
+/// carves at once, its pages over the smaller of a session's and a lease's (`sizes.session.pages`
+/// and `sizes.agent.pages`, the kernel's carve refusing past it), and one spare for a context
+/// detaching while another attaches (its connection lives until the relay ends); the bench holds
+/// it to the largest such sum over the tree's manifests (tools/testbench,
+/// `the_servers_admit_what_a_manifest_lets_one_account_hold`): 106 770 / 5 248 + 1 = 20 + 1. The
+/// connections (`State`) are the account's whoever minted them: one per session, the console
+/// session, the cap of live contexts per label set and a spare, and one per lease, the leases
+/// what the share holds in `agent` budgets (servers/steward.md, "Leases"): (1 + 3 + 1) + 18, held
+/// by the same test to at least the tree's largest. A crossing's
 /// program (servers/steward.md, "Declassification and push"), in a budget stamped with the
 /// account, makes plain calls and holds no completion call: one `State` of the bucket for at
 /// most a second, which no sum here counts.
 pub const fn limits(buckets: u32) -> Limits {
-    Limits { buckets, in_flight: 6, files: 32, state: 8, requests: 128, pages: 32 }
+    Limits { buckets, in_flight: 21, files: 32, state: 23, requests: 128, pages: 32 }
 }
 /// What one of each costs, in bytes: a completion call holds its caller's lend, charged to this
 /// server until it replies (kernel/ipc.md R3), `MAX_LEND_PAGES` pages at worst; a fid is its
@@ -40,11 +46,11 @@ pub const COST: Cost =
     Cost { in_flight: 64 * 1024, file: 2048, state: 512, request: REQUEST_STATE, page: PAGE_SIZE as u64 };
 // The budget every bucket at its caps must fit is the manifest entry's: its pages less its heap
 // cap and stack (`redoubt_rt::server::budget`), checked at start, never a count in this code. A
-// bucket at its caps costs 6 completion calls at 64 KiB, 32 fids at 2 KiB, 8 connections at 512
-// bytes, 128 requests at 256 and 32 pages at 4 KiB: 626 688 bytes; the manifests' 4 buckets take
-// 2 506 752, 612 pages; with no heap cap and the stack's bound 128, rounded up to 256, the entry
-// rule gives 768, and their entries of 1 024 pages leave 896 of budget, five such buckets and not
-// a sixth (`the_manifests_entry_holds_its_buckets`).
+// bucket at its caps costs 21 completion calls at 64 KiB, 32 fids at 2 KiB, 23 connections at 512
+// bytes, 128 requests at 256 and 32 pages at 4 KiB: 1 617 408 bytes; the manifests' 4 buckets take
+// 6 469 632, 1 580 pages; with no heap cap and the stack's bound 128, rounded up to 256, the entry
+// rule gives 1 792, their entries, which leave 1 664 pages of budget, four such buckets and not a
+// fifth (`the_manifests_entry_holds_its_buckets`).
 
 /// Test-only, for the bench's `littlefsd-restart` (feature `restart-probe`, off in every default build,
 /// as netd's is): a walk to this name ends the instance with [`PROBE_EXIT`] while it holds the

@@ -151,9 +151,9 @@ mod machine {
     const LATENCY_DONE: &str = "latency-done";
     #[cfg(feature = "latency-probe")]
     const LATENCY_ROUND: &str = "latency-round-";
-    /// The case's rounds: N = 1, 2, 3 and 4 live leases.
+    /// The case's rounds: N = 1, 2, 3, 4 and 16 live leases.
     #[cfg(feature = "latency-probe")]
-    const LATENCY_ROUNDS: usize = 4;
+    const LATENCY_ROUNDS: usize = 5;
     #[cfg(feature = "latency-probe")]
     const LATENCY_POLL_US: u64 = 500_000;
     #[cfg(feature = "latency-probe")]

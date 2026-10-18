@@ -20,11 +20,12 @@ use redoubt_rt::server::{Cost, Limits};
 /// a manifest lets one account hold at the system volume at once, whoever minted them
 /// (servers/serving.md, `admit`): two per session the steward starts, its shell's and its
 /// relay's, for the console session, the cap of live contexts per label set and one spare for a
-/// context detaching while another attaches, and one per lease; the bench holds the cap to at
-/// least the largest such sum over the tree's manifests (tools/testbench,
-/// `the_servers_admit_what_a_manifest_lets_one_account_hold`): 2 x (1 + 3 + 1) + 1.
+/// context detaching while another attaches, and one per lease, the leases what the principal's
+/// unlabelled share holds in `agent` budgets (servers/steward.md, "Leases"); the bench holds the
+/// cap to at least the largest such sum over the tree's manifests (tools/testbench,
+/// `the_servers_admit_what_a_manifest_lets_one_account_hold`): 2 x (1 + 3 + 1) + 18.
 pub const fn limits(buckets: u32) -> Limits {
-    Limits { buckets, in_flight: 2, files: 32, state: 11, requests: 64, pages: 2 }
+    Limits { buckets, in_flight: 2, files: 32, state: 28, requests: 64, pages: 2 }
 }
 /// What one of each costs, in bytes: a completion call holds its caller's lend, charged to this
 /// server until it replies (kernel/ipc.md R3), `MAX_LEND_PAGES` pages at worst; a fid is its table
@@ -34,11 +35,11 @@ pub const COST: Cost =
     Cost { in_flight: 64 * 1024, file: 2048, state: 512, request: REQUEST_STATE, page: PAGE_SIZE as u64 };
 // The budget every bucket at its caps must fit is the manifest entry's: its pages less its heap
 // cap and stack (`redoubt_rt::server::budget`), checked at start, never a count in this code. A
-// bucket at its caps costs 2 completion calls at 64 KiB, 32 fids at 2 KiB, 11 connections at 512
-// bytes, 64 requests at 256 and 2 pages at 4 KiB: 226 816 bytes. Every session reads the system
+// bucket at its caps costs 2 completion calls at 64 KiB, 32 fids at 2 KiB, 28 connections at 512
+// bytes, 64 requests at 256 and 2 pages at 4 KiB: 235 520 bytes. Every session reads the system
 // volume on connections the steward makes for it, admitted in the session's account, so each
 // principal's domain is a bucket beside the steward's: the image's three principals' four domains
-// and the steward take 5, and a case's extra client the sixth, 1 360 896 bytes, 333 pages; with
+// and the steward take 5, and a case's extra client the sixth, 1 413 120 bytes, 345 pages; with
 // the heap cap's 26 and the stack's bound 128, rounded up to 256, the entry rule gives 512, and
 // the image's entry of 1 024 pages leaves 870 of budget, fifteen such buckets and not a sixteenth
 // (`the_image_entry_holds_its_buckets`).

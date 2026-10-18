@@ -1612,11 +1612,16 @@ mod tests {
     }
 
     /// `walfsd` and `littlefsd` admit per bucket, and a bucket is one account's (servers/serving.md,
-    /// "Buckets"), so their `in_flight` is what a manifest lets one account have open at once: the
-    /// console session, the cap of live contexts per label set (the manifest's `contexts.max`, or
-    /// what a label set's share holds, as `init` derives it), the leases per principal, and one
-    /// spare for a context detaching while another attaches. The constant is the largest such sum
-    /// over the tree's manifests, exactly: more would be a guess, fewer refuses a context its home.
+    /// "Buckets"), so their `in_flight` is what a manifest lets one account have open at once: a
+    /// parked completion call per live VM of the account at the server, its sessions' and its
+    /// leases', and one spare for a context detaching while another attaches. Sessions and leases
+    /// are carved from one share, the principal's unlabelled sub-budget as `init`'s `holds`
+    /// derives it (an equal part of its budget per label set, less a budget's own cost), so what
+    /// can be live at once is what the share carves at once: the share's pages over the smaller
+    /// of a session's and a lease's (`sizes.session.pages`, `sizes.agent.pages`), and likewise
+    /// its processes and its weight, the smallest, the kernel's carve (kernel/budgets.md R7)
+    /// refusing past each. The constant is the largest such sum over the tree's manifests,
+    /// exactly: more would be a guess, fewer refuses a context its home.
     ///
     /// The connections a bucket holds are the account's too, whoever minted them: a connection
     /// the steward mints for a session or a lease is admitted in that account's bucket from its
@@ -1625,10 +1630,17 @@ mod tests {
     /// shell's and its relay's) and one per lease; at `/boot` and the home one per session and
     /// per lease; at the console the UART session's and a spare. At least, not exactly: a
     /// session's own mints count in the same bucket, so a server may keep room above the sum.
+    /// The sessions are the console session, the cap of live contexts per label set (the
+    /// manifest's `contexts.max`, or what a label set's share holds) and the spare; the leases
+    /// per principal are derived as the context cap is (servers/steward.md, "Leases"): what its
+    /// unlabelled share holds in `agent` budgets, by pages, processes and weight, and what its
+    /// home's quota holds in `agent` quotas (an unlabelled lease's root is carved from it), the
+    /// smallest. Each term is an upper bound on its own, enforced by the kernel's carve or
+    /// walfsd's and not by the steward, and their sum is one too: the sessions carved from the
+    /// share only lower what is left for leases, and a sponsored principal's sessions are leases
+    /// of that share.
     #[test]
     fn the_servers_admit_what_a_manifest_lets_one_account_hold() {
-        /// The steward's leases per principal (servers/steward.md, "Leases"); no manifest names it.
-        const LEASES: u64 = 1;
         fn manifests(dir: &Path, found: &mut Vec<PathBuf>) {
             for entry in std::fs::read_dir(dir).unwrap() {
                 let path = entry.unwrap().path();
@@ -1646,7 +1658,7 @@ mod tests {
         let mut found = vec![root.join("image/manifest.json")];
         manifests(&root.join("tests/data"), &mut found);
         let mut largest = (0, PathBuf::new());
-        let mut most_sessions = (0, PathBuf::new());
+        let (mut system_state, mut home_state) = ((0, PathBuf::new()), (0, PathBuf::new()));
         for path in found {
             let Ok(json) = serde_json::from_slice::<serde_json::Value>(&std::fs::read(&path).unwrap()) else {
                 continue;
@@ -1657,7 +1669,12 @@ mod tests {
             else {
                 continue;
             };
-            let session = (number(&sizes["session"]["pages"]), number(&sizes["session"]["processes"]));
+            let size = |name: &str| {
+                let size = &sizes[name];
+                (number(&size["pages"]), number(&size["processes"]), number(&size["weight"]))
+            };
+            let (session, agent) = (size("session"), size("agent"));
+            let agent_quota = sizes["agent"].get("quota").map(number).filter(|q| *q > 0);
             let cost = number(&sizes["cost"]);
             let console = u64::from(json.get("console").is_some());
             for p in principals {
@@ -1685,33 +1702,53 @@ mod tests {
                     }
                 }
                 let n = sets.len() as u64;
-                let pages = (number(&budget["pages"]) / n).saturating_sub(cost) / session.0.max(1);
-                let processes = (number(&budget["processes"]) / n) / session.1.max(1);
-                let cap = p.pointer("/contexts/max").map_or(pages.min(processes).min(16), number);
-                let sum = console + cap + LEASES + 1;
-                if sum > largest.0 {
-                    largest = (sum, path.clone());
-                }
-                if sum - LEASES > most_sessions.0 {
-                    most_sessions = (sum - LEASES, path.clone());
-                }
+                let share = (number(&budget["pages"]) / n).saturating_sub(cost);
+                let (processes, weight) = (number(&budget["processes"]) / n, number(&budget["weight"]) / n);
+                let holds = (share / session.0.max(1)).min(processes / session.1.max(1));
+                let cap = p.pointer("/contexts/max").map_or(holds.min(16), number);
+                // An unlabelled lease's root is `project`, minted below the sponsor's home with
+                // `sizes.agent.quota` carved from `home_quota`, which walfsd refuses past
+                // (servers/steward.md, "Leases"): a fourth carve a lease needs.
+                let by_quota = match (owner.get("home_quota").map(number), agent_quota) {
+                    (Some(home), Some(quota)) => home / quota,
+                    _ => u64::MAX,
+                };
+                let leases = (share / agent.0.max(1))
+                    .min(processes / agent.1.max(1))
+                    .min(weight / agent.2.max(1))
+                    .min(by_quota);
+                let sessions = console + cap + 1;
+                let most = |most: &mut (u64, PathBuf), need: u64| {
+                    if need > most.0 {
+                        *most = (need, path.clone());
+                    }
+                };
+                // What the share carves at once in VMs: by pages, processes and weight, each
+                // VM at least the smaller size's, the smallest; a spare for a detaching context.
+                let carves = (share / session.0.min(agent.0).max(1))
+                    .min(processes / session.1.min(agent.1).max(1))
+                    .min(weight / session.2.min(agent.2).max(1));
+                most(&mut largest, carves + 1);
+                most(&mut system_state, 2 * sessions + leases);
+                most(&mut home_state, sessions + leases);
             }
         }
         // The connections the steward mints for one account: what each server's `state` must hold.
-        let (sessions, path) = most_sessions;
         let state = |limits: redoubt_rt::server::Limits| u64::from(limits.state);
+        let (need, path) = system_state;
         assert!(
-            state(redoubt_erofsd::limits(1)) >= 2 * sessions + LEASES,
-            "erofsd's state holds fewer than {path:?}'s two per session and one per lease"
+            state(redoubt_erofsd::limits(1)) >= need,
+            "erofsd's state holds fewer than {path:?}'s two per session and one per lease, {need}"
         );
+        let (need, path) = home_state;
         for (name, limits) in [
             ("bootfsd", redoubt_bootfsd::limits(1)),
             ("walfsd", redoubt_walfsd::limits(1)),
             ("littlefsd", redoubt_littlefsd::limits(1)),
         ] {
             assert!(
-                state(limits) >= sessions + LEASES,
-                "{name}'s state holds fewer than {path:?}'s one per session and one per lease"
+                state(limits) >= need,
+                "{name}'s state holds fewer than {path:?}'s one per session and one per lease, {need}"
             );
         }
         // At the console only the UART session's console is the steward's mint for a principal
@@ -1734,13 +1771,67 @@ mod tests {
         assert_eq!(
             u64::from(redoubt_walfsd::limits(1).in_flight),
             sum,
-            "walfsd's in_flight is not {path:?}'s sum"
+            "walfsd's in_flight is not what {path:?}'s share carves at once and a spare"
         );
         assert_eq!(
             u64::from(redoubt_littlefsd::limits(1).in_flight),
             sum,
-            "littlefsd's in_flight is not {path:?}'s sum"
+            "littlefsd's in_flight is not what {path:?}'s share carves at once and a spare"
         );
+    }
+
+    /// A server holding `MAX_OPEN_CALLS` open calls takes no more (kernel/ipc.md R4a), so the
+    /// serving library refuses limits whose buckets at their caps could hold more than that less
+    /// `OPEN_CALL_HEADROOM` (servers/serving.md, `admit`), and a server so refused does not start.
+    /// The caps are the tree's largest per-account needs and the count each manifest's, so the
+    /// product is held here, for every entry of every manifest: a manifest past the headroom
+    /// fails the bench, never its boot.
+    #[test]
+    fn every_servers_buckets_leave_the_open_call_headroom() {
+        use redoubt_rt::server::{Admission, buckets};
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let mut found = vec![root.join("image/manifest.json")];
+        manifests_under(&root.join("tests/data"), &mut found);
+        let mut checked = 0;
+        for path in found {
+            if !path.extension().is_some_and(|e| e == "json") {
+                continue;
+            }
+            let Ok(json) = serde_json::from_slice::<serde_json::Value>(&std::fs::read(&path).unwrap()) else {
+                continue;
+            };
+            for server in json["servers"].as_array().into_iter().flatten() {
+                let args: Vec<&str> =
+                    server["args"].as_array().into_iter().flatten().filter_map(|a| a.as_str()).collect();
+                let Ok(count) = buckets(&args) else { continue };
+                // Each as its program sizes itself: `consoled` with `init`'s override, `ipd` with
+                // its arguments' overrides, the rest from their count alone.
+                let sized = match server["program"].as_str() {
+                    Some("erofsd") => Admission::new(redoubt_erofsd::limits(count)).is_ok(),
+                    Some("bootfsd") => Admission::new(redoubt_bootfsd::limits(count)).is_ok(),
+                    Some("walfsd") => Admission::new(redoubt_walfsd::limits(count)).is_ok(),
+                    Some("littlefsd") => Admission::new(redoubt_littlefsd::limits(count)).is_ok(),
+                    Some("keyd") => Admission::new(redoubt_keyd::limits(count)).is_ok(),
+                    Some("consoled") => Admission::with_overrides(
+                        redoubt_consoled::server::limits(count),
+                        &[redoubt_consoled::server::init_override()],
+                    )
+                    .is_ok(),
+                    Some("ipd") => match redoubt_ipd::args::parse(args.iter().copied()) {
+                        Ok(config) => config.sizing(u64::MAX).is_ok(),
+                        Err(_) => continue,
+                    },
+                    _ => continue,
+                };
+                assert!(
+                    sized,
+                    "{path:?} {}: {count} buckets at their caps hold more open calls than the headroom leaves",
+                    server["name"]
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked >= 7 * 20, "the tree's manifests were not found ({checked} entries)");
     }
 
     /// The steward's test-only `latency-probe` (servers/steward.md, "Failure and restart") is

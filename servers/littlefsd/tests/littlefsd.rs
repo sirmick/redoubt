@@ -152,8 +152,8 @@ impl Volume {
         let receive = f.endpoint(littlefsd);
         let volume = f.grant(blkd, blkd_receive, littlefsd, 1);
         let mut builder = StartupBuilder::new(receive.index().max(volume.index()));
-        // The manifests' entry, as `init` writes it: 1 024 pages, no heap cap.
-        builder.handle(ENDPOINT, receive).handle("volume", volume).budget_pages(1024);
+        // The manifests' entry, as `init` writes it: 1 792 pages, no heap cap.
+        builder.handle(ENDPOINT, receive).handle("volume", volume).budget_pages(1792);
         for arg in args {
             builder.arg(arg);
         }
