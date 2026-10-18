@@ -221,7 +221,8 @@ pub fn own_args<'a>(args: &'a [&'a str]) -> impl Iterator<Item = &'a str> + 'a {
 }
 
 /// Caps for the bucket of one account-0 root badge, in place of [`Limits`]' per-bucket caps
-/// (`ipd` gives `sshd` room for a parked accept and two calls per session, and the
+/// (`ipd` gives `sshd` room for a parked accept and one call per slot, its slots its entry's
+/// `buckets=N`, the bound N + 1 held by `sshd`'s host test over every manifest; and the
 /// steward room for its grants). Multiplexed requests and their pages keep the default caps. It applies only
 /// to a caller with account 0 calling on exactly this badge: a server cannot know a badge's account when it
 /// reads its arguments, and a client with an account never lands in a badge's bucket (`AdmitKey::of`).
