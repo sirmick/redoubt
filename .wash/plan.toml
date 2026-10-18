@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 514
+revision = 517
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -2586,7 +2586,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["STEWARD6"]
   body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'F1'. Brief: .wash/local/STEWARD5-implementer.md. Tier A (the steward's loop), size M, reviewer steward-red-4; after STEWARD6 (same file). Found by STEWARD3V's and 3W's latency rounds: a cleanup step's one attempt at a busy erofsd:system (100 ms, 3Y's bound at the loop's top) landing in a sample's window misses the timer wake's p99 (50 ms) by construction: one sample per round at N = 3 and 4 on both widths at one hart (69-93 ms), 148 ms at two on rv64. Options (a) a target-derived bound and (c) non-blocking calls refused in the ruling. Rule: the cleanup queue (due, retries, parked: 3W unchanged) is owned by a cleanup thread of the steward's, as its crossing watchers are; each step runs there with the client library's call bound; the loop hands it steps, wake(server) and forget(server), and takes each outcome back as a message on its own endpoint and says the line (3U's queue). A mint at a server with parked steps: wake, mint, and if refused wait one mint bound (STEWARD6's) for the thread's report and retry once (3W's test kept). The loop's top makes no call to a shared server. Cost: one thread and one lend page, the arithmetic on the page and in every memory-checked manifest. Acceptance: steward-latency N = 3 and 4 at one hart meet the timer wake's p99 on both widths and reply_wait carries no 100 ms retry; the steward set and steward-server-restart unchanged. Pages: steward.md 'Failure and restart', scheduling.md 'With the real steward' re-measured."
   state = "active"
-  revision = 493
+  revision = 517
 
 [[node]]
   id = "STEWARD6"
@@ -2658,5 +2658,5 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "agent-suite"
   body = "Brief: .wash/local/ATK13-implementer.md; ruling .wash/local/wave-2026-10-18-rulings.md 'agent-suite wave B'. Tier A (attack cases; the bench), size S, reviewer: a red (the orchestrator's pick). Turns the two remaining 'not yet' rows of docs/plan/m3-agents.md into their honest state under today's image. (1) R60, the labelled-agent sink row, becomes a boot case steward-labelled-agent-no-sink, built on steward-approve-box's path (a labelled agent approved at approve@box, running in its vault): the agent's :gen_tcp.connect gets enetunreach (its lease namespace holds no /net, as session-tcp-loopback shows for an unlabelled lease), and ipd's refusal of a labelled caller is the backstop, cited to net-attacks (R60); the verdict is the agent's result file in its vault and the absence of any frame to the bench peer (rule F). (2) R44, the keyd relayed-blob row: no boot arm is reachable in the image, since no session or lease holds a keyd badge (keyd's purposes are sshd's ssh_host and the steward's audit; keys in leases are M6); the row resolves on m3-agents.md by citing keyd's host tests (a_relayed_ssh_user_auth_blob_is_never_what_gets_signed and R44's set) and stating why no boot arm exists, with a normal login's end-to-end verification (the client checks the host signature over the exchange it computed) as the boot evidence that keyd signs only its own digest. Pages: m3-agents.md rows, agents.md R60-adjacent and keyd.md R44 status lines, SECURITY.md R60 row. No server, kernel or steward code."
-  state = "reported"
-  revision = 514
+  state = "done"
+  revision = 515
