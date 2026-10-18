@@ -1,0 +1,104 @@
+description = "Shared pools on a walfs volume (docs/servers/littlefsd.md, R48; docs/servers/walfsd.md, \"Quotas\"; docs/servers/serving.md, R26): bob fills his 8 MiB home on the data volume until walfsd refuses him enospc, then opens handles on one file until walfsd refuses him by name, too many open files (emfile as the shell prints it; 15 are admitted, his bucket's share of the server's files under R26), and holds them; alice saves 64 KiB files to her home on the same volume while he fills and while he holds his handles, stats each and reads one back. The verdicts are alice's saves as her session prints them, walfsd's refusals of bob as his shell prints them, and the bench's memory scan of walfsd:data's heap after the flood, within its cap (rule F): a quota is per attach root, and a handle flood is admitted up to its cap and no further"
+arch = ["rv64", "rv32"]
+kind = "boot"
+recipe = "image/boot.toml"
+# The image needs 1 GiB: the principals' budgets, each holding a shell VM's session, do not fit
+# the users budget 256 MiB leaves (docs/kernel/budgets.md).
+memory_mib = 1024
+# The scan after the verdict: walfsd:data's heap peak, with bob's handles held and his home full,
+# must leave an eighth of its cap unused; the cap is sized by walfsd-quota's runs, this case asks
+# whether the flood fits (docs/testbench.md, "The memory budget").
+memory = true
+heap_fits = true
+# Two logins, each a shell VM, about 8 MiB written through walfsd and 30 s of held handles: bob's
+# fill took 80 s on rv32 beside other work, his whole session 150 s; four times that, as a bound.
+timeout_secs = 600
+expect = [
+    '^init: started sshd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
+    '^init: started steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+]
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    '^init: .* (exited|faulted|was killed)',
+    'init: restarted',
+    'EXCEPTION',
+    'sshd: login .*: refused',
+    'sshd: every slot is busy',
+]
+
+# Alice, the victim: her saves are the verdict, each tagged so a pattern matches the value printed
+# and never the echo of the line typed.
+[[session]]
+user = "alice"
+steps = [
+    { expect = '\([0-9]+\)> ' },
+    # A save: 64 KiB written, its size stat'd and read back, and the elapsed ms of the three.
+    { send = "save = fn path -> {us, r} = :timer.tc(fn -> :ok = File.write(path, :binary.copy(<<1>>, 65536)); {File.stat!(path).size, byte_size(File.read!(path))} end); {r, div(us, 1000)} end\n" },
+    { expect = '#Function<' },
+    { mark = "alice-up" },
+    { wait = "bob-filling" },
+    # Each save's ms is under 5 s: twice the worst measured once per width (1,735 ms on rv64 and
+    # 2,408 ms on rv32, both while bob filled, beside other work) rounded up to a second, the
+    # larger width's for both. `within` is the bench's margin for the line to arrive over ssh on
+    # a loaded host, no part of the claim.
+    { send = "{:while_filling, save.(\"/home/alice/a\")}\n" },
+    { within = 20 },
+    { expect = '\{:while_filling, \{\{65536, 65536\}, [0-4]?[0-9]{1,3}\}\}' },
+    { mark = "alice-saved-1" },
+    { wait = "bob-full" },
+    { send = "{:after_fill, save.(\"/home/alice/b\")}\n" },
+    { within = 20 },
+    { expect = '\{:after_fill, \{\{65536, 65536\}, [0-4]?[0-9]{1,3}\}\}' },
+    { wait = "bob-flooding" },
+    { send = "{:while_flooded, save.(\"/home/alice/c\")}\n" },
+    { within = 20 },
+    { expect = '\{:while_flooded, \{\{65536, 65536\}, [0-4]?[0-9]{1,3}\}\}' },
+    { mark = "alice-saved-2" },
+    { wait = "bob-done" },
+    { send = "{:after_flood, save.(\"/home/alice/d\")}\n" },
+    { within = 20 },
+    { expect = '\{:after_flood, \{\{65536, 65536\}, [0-4]?[0-9]{1,3}\}\}' },
+    { send = "{:listing, Enum.sort(File.ls!(\"/home/alice\"))}\n" },
+    { expect = '\{:listing, \["a", "b", "c", "d", "hello"\]\}' },
+    { exit = 0 },
+]
+
+# Bob, the attacker, on the same volume: his lines are progress (the refusal must be the right
+# one), never the verdict.
+[[session]]
+user = "bob"
+steps = [
+    { wait = "alice-up" },
+    { expect = '\([0-9]+\)> ' },
+    { send = "fill = fn path, kib -> {:ok, f} = File.open(path, [:write, :binary]); c = :binary.copy(<<0>>, 65536); r = Enum.reduce_while(1..div(kib, 64), 0, fn _, n -> case :file.write(f, c) do :ok -> {:cont, n + 64}; e -> {:halt, {n, e}} end end); File.close(f); r end\n" },
+    { expect = '#Function<' },
+    { send = "{:bob_full, fill.(\"/home/bob/x\", 9216)}\n" },
+    { mark = "bob-filling" },
+    { expect = '\{:bob_full, \{[0-9]+, \{:error, :enospc\}\}\}' },
+    { mark = "bob-full" },
+    { wait = "alice-saved-1" },
+    # Handles on one file until walfsd refuses, held open while alice saves (30 s), then closed:
+    # the count admitted and the refusal, both from walfsd.
+    { send = "{:flood, (fn -> {opened, refused} = Enum.reduce_while(1..200, {[], nil}, fn _, {fs, _} -> case File.open(\"/home/bob/hello\", [:read, :binary]) do {:ok, f} -> {:cont, {[f | fs], nil}}; e -> {:halt, {fs, e}} end end); Process.sleep(30_000); Enum.each(opened, &File.close/1); {length(opened), refused} end).()}\n" },
+    { mark = "bob-flooding" },
+    { expect = '\{:flood, \{[0-9]+, \{:error, :emfile\}\}\}' },
+    { wait = "alice-saved-2" },
+    # His home is still full: a create needs an entry's share, and is refused.
+    { send = "{:bob_again, File.write(\"/home/bob/y\", \"one more\")}\n" },
+    { expect = '\{:bob_again, \{:error, :enospc\}\}' },
+    { mark = "bob-done" },
+    { exit = 0 },
+]
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]
+forward = [22]
