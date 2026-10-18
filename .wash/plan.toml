@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 478
+revision = 486
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -656,8 +656,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   needs = ["BEAM3"]
   body = "docs/userland/beamlet.md#beamlet-on-redoubt: gen_tcp over a backend that opens /net/tcp/clone and reads and writes the data file, framing in Erlang. M1's attack suite needs a session's TCP (the loopback login row, R59). Brief: .wash/local/BEAM5-implementer.md; ruling .wash/local/wave-2026-10-18-rulings.md 'BEAM5'. Tier B unless a native is added (then re-tiered), size M, one reviewer: the red team, since the loopback-login attack case lands with it. Design: beamlet_tcp's transport is the session's /net when the namespace has one (clone, ctl, data, remote through the VM's hub; every socket ipd's then, loopback addresses included: R59 is ipd's refusal); without a /net (a lease, a host test) the in-VM loopback stand-in stays, one VM being one trust domain. Connect by IPv4 tuple only; a name is nxdomain until the resolver. Cases: a session's shell connects to the bench's peer and echoes (verdict the peer's); the loopback login row of m3-agents.md: a session's connect to the box's own sshd is refused by ipd (verdict ipd's); a lease's connect fails as having no network; beamlet host tests of the backend's framing and waits."
-  state = "active"
-  revision = 469
+  state = "done"
+  revision = 486
 
 [[node]]
   id = "INIT5"
@@ -2575,8 +2575,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "AGENTS"
   body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'The sshd step and SSH3'. Brief: .wash/local/SSH3-implementer.md. Tier A (sshd), size S, reviewer steward-red-4 or the orchestrator's sshd red. The sshd step's two items (approve@box, vault sessions over SSH) are built with their cases; this is the one follow-up its residual names ('Connections are first come, first served ... how many one principal may hold is not decided'). Rule: a connection that has not authenticated within a bound is closed, the bound measured (twice the slowest login the bench records, the arithmetic on sshd.md), so a slot is held before login for at most that; the slot count follows the manifest's buckets=N for sshd as every server's limits do (3Q, 3V), bounded by ipd's parked calls a bucket (the accept and one parked read per slot), with the arithmetic on sshd.md; after login a principal's channels are bounded by R82 already (a login past the cap is refused and the connection ends). Cases: a client that connects and never authenticates is closed at the bound and the slot serves the next login (verdict: the next login's session, not the attacker); a manifest sizing sshd's slots boots and holds them; sshd-host tests for the bound. Lowest priority of the wave: behind the agent-suite if slots are short."
-  state = "active"
-  revision = 470
+  state = "done"
+  revision = 482
 
 [[node]]
   id = "STEWARD5"
