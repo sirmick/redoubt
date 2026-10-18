@@ -92,7 +92,10 @@ sooner. A lease is task-scoped: "read `~/project`, write `~/project/out`, the `m
   below the home with the `agent` size's `quota` (1 MiB in the image) carved from the home's and
   given back at the lease's end: among the lease's sizes, since a root below a home with no quota
   holds nothing ([walfsd](../servers/walfsd.md#quotas)); a `~/project` already holding more
-  refuses the lease, and `start_agent` answers `failed`.
+  refuses the lease, and `start_agent` answers `failed`. So does a server that does not answer
+  one of the lease batch's calls (the carve, a mint, the image's reads) within the steward's
+  bound, `SERVER_US`: the lease is rolled back and the sponsor asks again
+  ([the steward](../servers/steward.md#residual-risks)).
 - **A labelled agent's `/project` is its label set's vault**: the vault is the task's scope, and
   [R25 (the label check)](../servers/serving.md#r25-the-label-check) lets the agent touch nothing
   of the unlabelled `~/project`; an unlabelled agent's is its

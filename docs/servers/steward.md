@@ -474,7 +474,7 @@ Status: built · tested: bench:steward-home-quota, bench:init-refuses-overcommit
 
 ### Authentication and sessions
 
-<details><summary>Status: built · partly tested: a session's badge sending `login` is refused in a host test only (a session runs only beamlet) · tested (9)</summary>
+<details><summary>Status: built · partly tested: a session's badge sending `login` is refused in a host test only (a session runs only beamlet) · tested (10)</summary>
 
 - bench:userland-boot
 - bench:steward-ssh-two-principals
@@ -483,6 +483,7 @@ Status: built · tested: bench:steward-home-quota, bench:init-refuses-overcommit
 - bench:steward-session-ends
 - host:redoubt-steward-server::a_login_runs_the_session_batch_and_answers_the_session
 - host:redoubt-steward-server::a_refused_login_makes_nothing
+- host:redoubt-steward-server::a_mint_the_server_does_not_take_in_time_fails_the_step_and_the_next_caller_is_served
 - host:redoubt-steward-server::the_console_session_opens_at_the_start_and_again_when_it_ends
 - host:redoubt-steward-server::sessions_coming_and_going_reuse_the_watchers
 
@@ -494,7 +495,9 @@ Status: built · tested: bench:steward-home-quota, bench:init-refuses-overcommit
   A login carries two connections to its channel's console: the steward keeps the first and
   hands the second to the context's relay ([contexts](#contexts)). When the channel is let go,
   the steward tells the first `ended`, then releases it; only that one ends the channel
-  ([sshd](sshd.md#sessions-over-ssh)).
+  ([sshd](sshd.md#sessions-over-ssh)). A login whose server does not answer one of the batch's
+  calls within `SERVER_US` is refused, and the person logs in again
+  ([residual risks](#residual-risks)).
 - **A session** is processes started with capabilities derived from the principal's set, never
   more. The steward carves the session budget from the right sub-budget, with the principal's
   account and the session's labels, gives it a namespace of fresh connections it asked each server
@@ -1542,6 +1545,25 @@ so the case restarts it thirteen times, each time with that session and its conn
   much, outside [R26 (admission fairness)](serving.md#r26-admission-fairness), which orders calls
   but cannot shorten one in service. The relay runs in the context's budget and shares the VM's
   CPU, so a VM that keeps its harts busy slows its own relay's answers toward those bounds.
+- **A call to a shared server inside a batch holds the loop at most `SERVER_US`, 4 s.** Every
+  connection the steward makes to a shared server is made within that bound: its attached ones,
+  the ones it mints through, the carves it keeps and its own file connections at them, `ipd`'s
+  `grant`, the console session's mint at `consoled`. A call the server did not take in time
+  fails its step; the batch's own failure path answers the caller (`failed` to `start_agent` and
+  `submit`, a refused login), the core rolls the batch back, and nothing inside the steward
+  retries: the sponsor or the person does. The bound is derived from the box serving its load,
+  every caller alive: twice the worst single call measured under `steward-latency` in its
+  completed rounds on both widths, 1.66 s, a lease's `/project` carved below the home at
+  `walfsd` on rv32 at one hart in the round with three spinning agents (rv32 at two harts
+  1.50 s, rv64 at two 1.06 s and at one 0.64 s; the worst operation a `stat` of three calls,
+  1.62 s): 2 × 1.66 s = 3.32 s, rounded up to 4 s, under every caller's own bound (the shell's
+  5 s `start_agent`, `sshd`'s 30 s login), so a step the bound fails is told to a caller still
+  waiting. It is never reached on a quiet box, and a mint's `Timeout` wakes no step parked at
+  that server (a timeout is no answer: [failure and restart](#failure-and-restart)). The
+  residual: a hart saturated by lease VMs of the sponsor's weight puts a shared server's call
+  past the bound (on rv32, with three spinning agents left running after the case's own loop
+  had died, a `stat` at `walfsd` took 4 to 10 s); the step fails and the caller is told, and the
+  steward's own probe poll, no batch, only polls again.
 - **Blame follows the current call.** A request that corrupts a server which crashes later, while
   serving someone else, blames the wrong account, and one that crashes an idle thread later blames
   nobody; the consequence is a logout or a restart, not data loss.
