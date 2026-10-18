@@ -1,0 +1,135 @@
+description = "A labelled agent has no sink (docs/plan/m3-agents.md, \"A scripted hostile agent\"; docs/userland/agents.md, \"Leases\"; docs/servers/ipd.md, R60): alice's agent, on its lease, submits a request for an agent labelled alice-secrets, and alice approves it at `approve@box` with the code the screen showed, so the labelled agent runs in its vault (its /project is the alice-secrets volume) on the order her vault session staged there, `nosink`. The agent looks for a network: its namespace table holds no `/net` and the clone path resolves to nothing, its connect to the bench's peer at 10.0.9.101:80 and to the box's listed address 10.0.2.15:22 are `enetunreach` and its connect to the loopback address finds no listener, each answered inside its own VM, so no request of the agent's reaches `ipd`, which would refuse a labelled caller before reading it (R60, `net-attacks`): the namespace is the first wall and `ipd` the second. In the same boot alice's unlabelled session, which holds a `/net`, reaches the bench's other peer at 10.0.9.100:80 and is echoed: the positive control. The verdicts are the peers' counts (one connection to the control's address, from alice; none to the agent's), the steward's audit (Submitted, Approved naming the key and hash, AgentStarted and LeaseEnded in 1001/{7}), its usage counts (two processes more while the labelled lease runs, gone when it ends) and the record the agent wrote into the vault, read back by alice's vault session (rule F); the agent has no console and prints nothing the case reads"
+arch = ["rv64", "rv32"]
+kind = "boot"
+recipe = "image/boot.toml"
+# The image needs 1 GiB: the principals' budgets, each holding shell VMs' sessions and leases,
+# do not fit the users budget 256 MiB leaves (docs/kernel/budgets.md).
+memory_mib = 1024
+# Three logins, two agents' VMs and the approval terminal.
+timeout_secs = 1800
+expect = [
+    '^init: started sshd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
+    '^init: started steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+]
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    '^init: .* (exited|faulted|was killed)',
+    'init: restarted',
+    'EXCEPTION',
+    'steward: a step failed',
+    'steward: the core exited',
+    'sshd: login .*: refused',
+]
+# The request is submitted (its records in the target's domain, 1001/{7}), the approval channel
+# opens and the request is approved: the labelled lease is carved from alice's {7} sub-budget
+# beside her vault session's ten processes (two more while it runs), runs its order to the end and
+# exits on its own, and the lease ends.
+expect_after = [
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{7\} at [0-9]+: Submitted \{ request: [0-9]+ \}',
+    '^\[con [0-9a-f]{16}\] sshd: login approve: approval channel [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{7\} at [0-9]+: Approved \{ request: [0-9]+, principal: 0, key: [1-9][0-9]*, hash: \[',
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{7\} at [0-9]+: AgentStarted \{ lease: [0-9]+, sponsor: 0, parent: None, deadline: [0-9]+ \}',
+    '^\[con [0-9a-f]{16}\] steward: users/alice/\{7\} holds [0-9]+ pages, 12 processes$',
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{7\} at [0-9]+: LeaseEnded \{ lease: [0-9]+ \}',
+    '^\[con [0-9a-f]{16}\] steward: users/alice/\{7\} holds [0-9]+ pages, 10 processes$',
+]
+
+# Alice's unlabelled session is the positive control: with a `/net` of its own it reaches the
+# bench's peer and is echoed, so the peer the agent cannot reach is one the box can. Then she
+# stages her agent's input (a request for an agent labelled 7, alice-secrets, for ten minutes)
+# and starts it; her shell prints the notice when the request is in. Every answer is tagged, so a
+# pattern matches the shell's printed value and never the echo of the line typed.
+[[session]]
+user = "alice"
+pty = true
+forbid = ['\*\* \(']
+steps = [
+    { expect = '/home/alice \([0-9]+\)> ' },
+    { send = "{:control, (fn -> {:ok, s} = :gen_tcp.connect({10, 0, 9, 100}, 80, [:binary, active: false], 20000); :ok = :gen_tcp.send(s, \"control\"); r = :gen_tcp.recv(s, 7, 20000); :gen_tcp.close(s); r end).()}\n" },
+    { expect = '\{:control, \{:ok, "control"\}\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:stage, File.mkdir_p(\"/home/alice/project/out\"), File.write(\"/home/alice/project/in\", \"agent 7 600000 reach the network\")}\n" },
+    { expect = '\{:stage, :ok, :ok\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:ok, c} = Redoubt.Contexts.connection(); {:lease, Redoubt.Wire.Client.Steward.start_agent(c, 600_000_000)}\n" },
+    { expect = '\{:lease, \{:ok, %\{lease: [0-9]+, name: "agent-1"\}\}\}' },
+    { expect = '\([0-9]+\)> ' },
+    # The steward's `approval_waiting` on this session's notices endpoint, printed by the shell.
+    { expect = '\[an approval is waiting\]' },
+    { mark = "waiting" },
+    { wait = "vault-done" },
+    { exit = 0 },
+]
+
+# Alice's vault session stages the labelled agent's order in the vault, which is the labelled
+# lease's /project, and reads the record it wrote there once the approval started it: no `/net`
+# in its table, nothing at the clone path, the peer and the box's listed address unreachable and
+# the loopback refused, every answer the agent's own VM's. The read is the vault's, from a volume
+# the agent cannot leave; what the agent could not do is the peers' count.
+[[session]]
+user = "alice+alice-secrets"
+name = "alice-vault"
+pty = true
+forbid = ['\*\* \(']
+steps = [
+    { expect = '/home/alice \([0-9]+\)> ' },
+    { send = "{:stage, File.mkdir_p(\"/vault/out\"), File.write(\"/vault/in\", \"nosink\")}\n" },
+    { expect = '\{:stage, :ok, :ok\}' },
+    { expect = '\([0-9]+\)> ' },
+    { wait = "waiting" },
+    { mark = "vault-staged" },
+    { wait = "approved" },
+    { send = "{:result, Enum.find_value(1..120, fn _ -> case File.read(\"/vault/out/result\") do {:ok, t} when t != \"\" -> t; _ -> Process.sleep(1000); nil end end)}\n" },
+    { expect = '\{:result,\s+"\[net: false, net_clone: \{:error, :[a-z_]+\}, far: \{:error, :enetunreach\}, listed: \{:error, :enetunreach\}, loopback: \{:error, :econnrefused\}\]\\n"\}' },
+    { expect = '\([0-9]+\)> ' },
+    { mark = "vault-done" },
+    { exit = 0 },
+]
+
+# The approval terminal, with alice's approval key: the steward's screen, and the code the screen
+# showed approving the request. Nothing on this channel is a session's: every byte is the
+# steward's.
+[[session]]
+user = "approve"
+name = "approver"
+key = "alice-approval"
+pty = true
+forbid = ['\x1b']
+steps = [
+    { wait = "vault-staged" },
+    { expect = 'pending approvals for alice:' },
+    { expect = 'request ([0-9a-f]{16}) hash ([0-9a-f]{64}) code ([0-9a-f]{8})' },
+    { expect = 'request from alice \(agent-1, labels \[\]\): start an agent labelled \[7\] for 10 min; reason \(untrusted\): "reach the network"' },
+    { expect = 'type: approve <id> <hash or code> \| deny <id> \| pending' },
+    { send = "approve $1 $3\n" },
+    { expect = 'approved ([0-9a-f]{16})' },
+    { mark = "approved" },
+    { wait = "vault-done" },
+    { exit = 0 },
+]
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]
+forward = [22]
+# The box's own sshd, by its loopback and its listed address: no SYN may reach either. The
+# capture is a bound beside the peer's count; the agent's record of `enetunreach` is its own
+# word, read as progress.
+self_forbidden = ["127.0.0.0/8", "10.0.2.15/32"]
+
+# Alice's control reaches its peer once; the labelled agent's peer hears nothing.
+[[net.peer]]
+addr = "10.0.9.100:80"
+connections = 1
+
+[[net.peer]]
+addr = "10.0.9.101:80"
+connections = 0
