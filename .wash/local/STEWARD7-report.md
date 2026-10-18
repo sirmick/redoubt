@@ -115,6 +115,34 @@ Logs under `/home/mcloonan/redoubt/.tmp/STEWARD7/`. Head: see the end of this fi
    the N = 16 counts and the session waited out the 3 h bound after the round had finished.
    The closure takes the round's number explicitly now (`round.(15, 8, 5)`).
 
+## The N = 16 column (seed 3, run from the tip 5923f7bc8; logs `latency-rv64-*.log`)
+
+rv64, one hart (662 s wall; every round ran; `latency-rv64-smp1-console.log`, oracle in
+`latency-rv64-job.log`): N = 16, D = 8, net µs p50/p99:
+
+| measure | N = 16, rv64, 1 hart | verdict |
+| --- | --- | --- |
+| steward timer wake | 54,549 / 57,268 (gross 100,266 / 116,636) | p50 and p99 missed (15,000 / 50,000) |
+| steward decision wake | 7,291 / 38,682 | met |
+| deadline notice (p99) | 15,675 | met |
+| `budget_destroy`, call to return | 4,738 / 7,138 | no target |
+| R10 (p99; 165 destructions) | 9,699 | met |
+| a lease's end (worst decision wake p99 + R10) | 65,872 (N = 4's) + 9,699 = 75,571 | met |
+| reply to the next receive | 51,601 / 61,578 | no target |
+
+This run's N = 1 … 4 cells differ from the page's (one run each at the seed; STEWARD5 re-measures
+the one-hart columns when it lands after this); its timer-wake p99 misses at N = 3 and 4 are the
+known cleanup-turn window (51 and 76 ms). The N = 16 timer wake is missed at p50 and p99 alike:
+with fifteen spinner VMs of weight 50 runnable beside it, the steward's timer wake waits behind
+whole slices of the queue (the stand-in's table saw the same shape at N = 16 on one hart before
+the real steward existed: a wake never preempts), and the reply-to-receive gap rises to 52 ms
+with it; a finding, not a tuning. rv64, two harts: not reached. The round's 29th launch was
+refused its connection at `erofsd:system`: 20 live connections of the cap's 28 (two sessions'
+four, fifteen spinners', the probe lease's) and eight ended probe leases' `disconnect` there
+parked after four attempts, each a `State` the server has not released (23 disconnects parked
+in that run, 31 in the one-hart run, which the server took back in time). Which hart count hits
+it is a load race: the earlier rv64 run refused at one hart and completed at two.
+
 ## Rebases and work outside the owned paths
 
 - Rebased onto 9a6600ede (train 63, IPD1) and 472c5840a (train 64, SSH3), both clean: SSH3's
