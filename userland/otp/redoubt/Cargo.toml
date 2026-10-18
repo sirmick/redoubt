@@ -56,3 +56,7 @@ required-features = ["fake"]
 [[test]]
 name = "schedulers"
 required-features = ["fake"]
+
+[[test]]
+name = "tcp"
+required-features = ["fake"]

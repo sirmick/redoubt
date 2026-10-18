@@ -1,0 +1,86 @@
+description = "The loopback login attack and a lease's missing network (docs/plan/m3-agents.md, \"A scripted hostile user\"; docs/servers/ipd.md, R59; docs/userland/agents.md, \"Leases\"): the image boots with sshd on port 22. Alice logs in and her shell's :gen_tcp.connect to the box's own sshd, at its loopback address and at its listed address 10.0.2.15, port 22, is refused by ipd before any packet is sent, the box's own addresses being refused whatever the scope; her connect to the bench's peer at 10.0.9.100:80 in the same session is the positive control and echoes. Then agent logs in, a lease of alice's with no /net in its namespace, and its connect to the same peer fails as having no network. The verdicts are the capture (no SYN to the box's own addresses, exactly one SYN to the peer, from alice) and the peer's count of 1, and the steward's exit line for the agent's lease (rule F); the errors the shells print are information. Every printed value is tagged so a pattern never matches the echo of the line typed"
+arch = ["rv64", "rv32"]
+kind = "boot"
+recipe = "image/boot.toml"
+# The image needs 1 GiB: the principals' budgets, each holding a shell VM's session, do not fit
+# the users budget 256 MiB leaves (docs/kernel/budgets.md).
+memory_mib = 1024
+# Two logins, one after the other, each booting a shell VM.
+timeout_secs = 1500
+expect = [
+    '^init: started sshd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
+    '^init: started steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{\} at [0-9]+: Login ',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+]
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    '^init: .* (exited|faulted|was killed)',
+    'init: restarted',
+    'EXCEPTION',
+    'steward: a step failed',
+    'sshd: login .*: refused',
+]
+# Alice logs in first and agent once she has her results, and the agent's session ends before
+# alice's, so the lines come in one order: the agent's lease exit line is the agent's, not hers.
+expect_after = [
+    '^\[con [0-9a-f]{16}\] sshd: login alice: session [0-9a-f]{16}, labels \[\]$',
+    '^\[con [0-9a-f]{16}\] sshd: login agent: session [0-9a-f]{16}, labels \[\]$',
+    '^\[con [0-9a-f]{16}\] steward: lease agent/session-[0-9]+ of 100[13]/\{\} exited 0$',
+]
+
+[[session]]
+user = "alice"
+forbid = ['\*\* \(']
+steps = [
+    { expect = '/home/alice \([0-9]+\)> ' },
+    { send = "{:control, (fn -> {:ok, s} = :gen_tcp.connect({10, 0, 9, 100}, 80, [:binary, active: false], 20000); :ok = :gen_tcp.send(s, \"control\"); r = :gen_tcp.recv(s, 7, 20000); :gen_tcp.close(s); r end).()}\n" },
+    { expect = '\{:control, \{:ok, "control"\}\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:loopback, :gen_tcp.connect({127, 0, 0, 1}, 22, [:binary], 20000)}\n" },
+    { expect = '\{:loopback, \{:error, :eacces\}\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:listed, :gen_tcp.connect({10, 0, 2, 15}, 22, [:binary], 20000)}\n" },
+    { expect = '\{:listed, \{:error, :eacces\}\}' },
+    { expect = '\([0-9]+\)> ' },
+    { mark = "alice-done" },
+    { wait = "agent-gone" },
+    { exit = 0 },
+]
+
+[[session]]
+user = "agent"
+forbid = ['\*\* \(']
+steps = [
+    { wait = "alice-done" },
+    { expect = '/home/agent \([0-9]+\)> ' },
+    { send = "{:net, Enum.any?(Redoubt.Namespace.table(), &(elem(&1, 0) == \"/net\"))}\n" },
+    { expect = '\{:net, false\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:far, :gen_tcp.connect({10, 0, 9, 100}, 80, [:binary], 20000)}\n" },
+    { expect = '\{:far, \{:error, :enetunreach\}\}' },
+    { expect = '\([0-9]+\)> ' },
+    { exit = 0 },
+    { mark = "agent-gone" },
+]
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]
+forward = [22]
+# The box's own sshd, by its loopback and its listed address: no SYN may reach either. The
+# capture is a bound, not the proof: the proof that ipd and not the in-VM stand-in refused the
+# connect is the shell's eacces line the expects below require.
+self_forbidden = ["127.0.0.0/8", "10.0.2.15/32"]
+
+# Alice's control reaches the peer once; the agent's connect never does.
+[[net.peer]]
+addr = "10.0.9.100:80"
+connections = 1
