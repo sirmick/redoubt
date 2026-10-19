@@ -288,7 +288,12 @@ client library's one typed call over the generated codec is the binding, one cal
   protocol's error code by its table's name, a codec's refusal (`:bad_handles`, `:short_fields`), or
   why the call was not made (`:busy`, `:timeout`, `:disconnected`). The wait for the reply is bounded
   by the call's timeout and a margin for a call that waits for one of the platform's threads; a
-  reply later than that stays in the caller's mailbox until it drops it. An error reply, or one that does
+  reply later than that stays in the caller's mailbox until it drops it. The timeout is the
+  function's last argument, the shared client's 5 s by default; a call measured past that passes
+  its own, as the steward's `start_agent` is passed `Redoubt.Wire.Client.launch_timeout/0`
+  ([the steward](steward.md#residual-risks)). A per-message default in the protocol's table,
+  emitted by the generator, is the durable form once more than one message needs it; until then
+  the one constant lives beside the default it is derived against. An error reply, or one that does
   not decode, keeps none of the handles it brought: they are dropped, and closed when collected
   ([R13 (one outcome per call)](../kernel/ipc.md#r13-one-outcome-per-call)).
 - **No policy.** A generated function makes the call its message describes and nothing more;

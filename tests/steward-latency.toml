@@ -5,24 +5,27 @@ debug_assertions = true
 icount = "shift=3,sleep=off"
 # The guest seed the gate runs, sched-latency's; the sweep is recorded in the package's report.
 qemu_seed = 3
-# Out of the whole run until its rows pass on both widths: five rounds, N = 1, 2, 3, 4 and 16 at
-# one hart and 1, 2 and 3 at two; every target is met at one hart on both widths up to N = 4 now
-# that the cleanup steps run on the steward's own thread (before, one sample at N = 3 and 4 held
-# the loop's 100 ms attempt at a disconnect the busy system volume did not take); at N = 16 on
-# rv64 at one hart the steward's timer wake misses its p50 and p99 behind fifteen spinner VMs'
-# slices, the other targets met; at two harts on rv64 the N = 16 round's 29th launch was refused
-# its system-volume connection, ended leases' disconnects there parked and holding the account's
-# records (a load race either hart count can hit), and the timer wake's p99 at N = 3 missed the
-# same way before the thread and is not yet re-measured; on rv32 at one hart the N = 16 round's
-# session lost its shell to the system volume: seventeen VMs of one account share its bucket's
-# two pages and 64 requests by fair share, and the shell's module reads behind fifteen spinners
-# failed at the hub's give-up; on rv32 at
-# two harts the N = 3 round is not reached (a lease VM's launch there takes 3.5 s of the shell's
-# 5 s start_agent bound alone, and beside two spinners it is a third runnable of equal weight on
-# two harts, so the launch runs over the bound and the round's loop dies: compute, not the
-# verified system volume's reads, which read-ahead at verityd cut by two thirds without moving
-# it; kernel/scheduling.md, "Responsiveness"); a whole bench is a verdict on the tree, not a
-# dashboard; it runs by name.
+# Out of the whole run until its rows pass on both widths: five rounds, N = 1, 2, 3, 4 and 16;
+# every target is met on rv64 at one and two harts up to N = 16 and on rv32 at one hart up to
+# N = 4 now that the cleanup steps run on the steward's own thread (before, one sample at N = 3
+# and 4 held the loop's 100 ms attempt at a disconnect the busy system volume did not take, and
+# at N = 16 the timer wake waited behind that turn). A lease's launch is a measured call: the
+# session passes start_agent the client's launch bound, 14 s, twice the worst launch the
+# steward's `served start_agent` lines gave under these rounds on both widths at one and two
+# harts (6.64 s, rv32 at two harts, the N = 16 round's launch beside fourteen spinners; 5.851 s
+# at one hart beside three), 13.28 s rounded up to a second, where the 5 s bound of a short call
+# once ended the rv32 rounds at N = 4 (one hart) and N = 3 (two harts): compute, the launching
+# VM's share of the harts beside spinners of its own weight, not the verified system volume's
+# reads, which read-ahead at verityd cut by two thirds without moving it (kernel/scheduling.md,
+# "Responsiveness"); a round a launch runs past the bound in is a scheduler finding on that page,
+# never a longer bound. On rv32 the N = 16 round is not reached at either hart count: beside
+# fifteen spinners a launch there (5.2 s at one hart, up to 6.3 s at two) outlives the round's
+# five-second leases, so at one hart the deadline leases die inside their launch (no deadline
+# notice, the round's counts short of D) and at two the kernel refuses a Launch into a lease
+# past its deadline, `a step failed`, forbidden below; the lease length derived from the
+# measured launch is the case's follow-up. The rv32 two-hart rounds at N = 1 to 4 complete under
+# the bound but are judged only by a run that reaches the reset's trace dump. A whole bench is a
+# verdict on the tree, not a dashboard; it runs by name.
 whole_run = false
 # The image's programs, the steward built with its test-only latency-probe (servers/steward,
 # src/bin/steward.rs, Probe), and the crossing program the image publishes. The latency manifest
@@ -120,7 +123,7 @@ steps = [
     { send = "{:ok, c} = Redoubt.Contexts.connection(); {:stage, File.mkdir_p(\"/home/alice/project/out\"), File.write(\"/home/alice/project/in\", \"spin\")}\n" },
     { expect = '\{:stage, :ok, :ok\}' },
     { expect = '\([0-9]+\)> ' },
-    { send = "start = fn us -> {:ok, %{lease: l}} = Redoubt.Wire.Client.Steward.start_agent(c, us); l end; round = fn n, d, r -> spinners = for _ <- 1..n//1, do: start.(600_000_000); Process.sleep(5000); for _ <- 1..d, do: (start.(9_000_000); Process.sleep(1500)); for _ <- 1..d, do: (start.(5_000_000); Process.sleep(7000)); Enum.each(spinners, &Redoubt.Wire.Client.Steward.end_lease(c, &1)); File.write(\"/home/alice/latency-round-#{r}\", \"round over\"); Process.sleep(3000); {:round, r, :done} end; round.(0, 16, 1)\n" },
+    { send = "start = fn us -> {:ok, %{lease: l}} = Redoubt.Wire.Client.Steward.start_agent(c, us, Redoubt.Wire.Client.launch_timeout()); l end; round = fn n, d, r -> spinners = for _ <- 1..n//1, do: start.(600_000_000); Process.sleep(5000); for _ <- 1..d, do: (start.(9_000_000); Process.sleep(1500)); for _ <- 1..d, do: (start.(5_000_000); Process.sleep(7000)); Enum.each(spinners, &Redoubt.Wire.Client.Steward.end_lease(c, &1)); File.write(\"/home/alice/latency-round-#{r}\", \"round over\"); Process.sleep(3000); {:round, r, :done} end; round.(0, 16, 1)\n" },
     { expect = '\{:round, 1, :done\}' },
     { expect = '\([0-9]+\)> ' },
     { send = "round.(1, 16, 2)\n" },

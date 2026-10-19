@@ -22,7 +22,8 @@ defmodule :redoubt do
 end
 
 defmodule Redoubt.Wire.ClientTest do
-  alias Redoubt.Wire.Client.{Keyd, NinepCommon}
+  alias Redoubt.Wire.Client
+  alias Redoubt.Wire.Client.{Keyd, NinepCommon, Steward}
 
   @doc "Runs every check, printing one line each, `client NAME: ok` or `FAIL`; returns `:ok` or `:failed`."
   def start do
@@ -85,6 +86,21 @@ defmodule Redoubt.Wire.ClientTest do
        fn ->
          answer(fn _ -> raise "no call is made" end)
          same(Keyd.release(:keyd, -1), {:error, :bad_value})
+       end},
+      {"a launch passes the client its own bound, longer than a short call's",
+       fn ->
+         true = Client.launch_timeout() > Client.timeout()
+         bound = Client.launch_timeout()
+         answer(fn {:steward, [10, 8, 0, 0], <<9_000_000::little-64>>, [], ^bound} ->
+           {:ok, {[0, 14, 0, 0], <<7::little-64, 4::little-16, "name">>, []}}
+         end)
+
+         same(Steward.start_agent(:steward, 9_000_000, bound), {:ok, %{lease: 7, name: "name"}})
+       end},
+      {"a launch the platform times out at its bound is `timeout`, as any call",
+       fn ->
+         answer(fn {:steward, _, _, [], 14_000} -> {:error, :timeout} end)
+         same(Steward.start_agent(:steward, 9_000_000, Client.launch_timeout()), {:error, :timeout})
        end}
     ]
   end
