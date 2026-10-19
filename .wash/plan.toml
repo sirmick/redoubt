@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 539
+revision = 546
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -2687,5 +2687,24 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   needs = ["STEWARD10"]
   body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'STEWARD10 review notes'. Brief: .wash/local/STEWARD11-implementer.md. Tier A (the steward's serving path), size S, reviewer steward-red-5. STEWARD10 guarded the lease and crossing destroy-by-index paths (the deadline-as-witness rule: a destroy reads kernel.now()=t immediately before, and at t >= d the kernel owns it so the steward never destroys by that possibly-recycled index). drive.rs:550 `Made::Scope(b) => (b, FOREVER)` still destroys a scope by index unguarded (FOREVER means t < d always, so it always destroys by index). Unreachable today — scopes are never destroyed by handle (effects.rs names the budget token, confirmed in STEWARD10's review) — but the next change that makes it reachable would reintroduce STEWARD10's wrong-object-destruction silently. Rule: apply STEWARD10's guard to the Scope arm too (a scope carries no deadline, so its witness is simply that its handle is still the scope the record names — a BadHandle/WrongObject there is benign as in STEWARD10, and a destroy is attempted only when the record's handle is current), so the invariant 'the steward never destroys by an index R10 may have recycled' holds at every destroy-by-index site in drive.rs by construction, not everywhere-but-one. The exact form (the guard, or a BadHandle-benign + WrongObject-tripwire as STEWARD10 settled) is the implementer's, matching STEWARD10's shape. Host test: the Scope arm does not destroy a recycled index (a scope record whose index was reused yields no wrong destruction; the reused object survives, the verdict its liveness in the fake kernel). steward.md's cleanup bullet states the invariant holds at every site. No kernel change; no page claim moves beyond the bullet's wording."
+  state = "reported"
+  revision = 546
+
+[[node]]
+  id = "B89"
+  title = "sshd-login-bound orders on the accepts it saw: each dial follows the previous connection's `on slot` line, so all four are up before any closes"
+  template = "package"
+  parent = "AGENTS"
+  body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'B89'. Brief: .wash/local/B89-implementer.md. Tier B (the bench case only, unless a slot is genuinely held — then it re-tiers to an SSH3 finding), size S, one reviewer (the orchestrator's pick). Found train 74 run 2: sshd-login-bound on rv32 timed out at 900 s waiting for a fourth `no login within 5 s, closed` line. Console: connections 1, 2, 3 accepted on slots 0-2, closed at 5 s, then the fourth dial (held 11.60 s by the bench peer against the others' 5.9 s) was accepted only after slot 0 freed, as a reused `connection 1 on slot 0`, so no fourth distinct accept line appeared. The case's expect list (four `on slot` lines then four closures) assumes all four are accepted before any closes — a timing assumption the loaded rv32 host broke; a case orders on events, not the host's clock. Fix: the case dials each connection after the previous one's `on slot` line (all four quick dials complete well within the 5 s bound, so all four stay open and are accepted on slots 0-3 before any closes), then expects four closures; or it orders on the accepts it actually saw. The slot count is right (buckets=4; slot 3 was simply never reached because only three were concurrent), so this is Tier B. If, once the dials are serialized, the fourth connection still cannot get a distinct slot (slot 3 unreachable with three closed), that is a genuine held-slot finding and an SSH3 correctness issue: stop and raise it to the Architect rather than papering it. Pages: none (a case fix); docs/servers/sshd.md unchanged unless the slot behaviour is wrong. Gates: the case both widths, run alone and in a loaded set, 20 runs green beside a loaded host (the flaky-test bar); set CASES=formatting, docs."
+  state = "done"
+  revision = 544
+
+[[node]]
+  id = "STEWARD12"
+  title = "A burst of expiring leases does not delay the last sponsor notice by the per-exit bookkeeping: the steward sends lease_ended before each exit's cleanup, audit and console lines"
+  template = "package"
+  parent = "AGENTS"
+  needs = ["STEWARD9", "STEWARD11"]
+  body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'STEWARD12'. Brief: .wash/local/STEWARD12-implementer.md. Tier A (the steward's loop; a responsiveness target under a burst), size S-M, reviewer steward-red (the orchestrator's pick). Found by STEWARD9: when N lease deadlines fire together the steward processes the N Exited events serially at ~70 ms each (the per-exit cleanup, the LeaseEnded audit, the console lines), so the last lease_ended notice reaches the sponsor ~N x 70 ms after its deadline (net p99 1.1-1.2 s at a 16-lease burst, against the deadline_notice target 40 ms); the per-notice target holds (a single expiry is 10 ms). The sponsor being told promptly that a lease ended is a human-control promise (agents.md 'Leases'; the sponsor can always end a lease and is told when one ends), so the burst must not push the notice behind the bookkeeping. Rule: on a burst of Exited events the steward sends the lease_ended notices FIRST (the cheap send to each sponsor's notices endpoint), then does the per-exit cleanup (already a thread's, STEWARD5), the LeaseEnded audit and the console lines (already queued, STEWARD3U) for each; so the last notice's latency is ~N x (one send) not ~N x 70 ms. Measure the burst's last-notice p99 before and after on steward-latency (a clustered-expiry variant or a new small case), both widths, stating the before/after and the per-send cost; the deadline_notice target is then met under a burst, not only per-notice. If notices-first alone does not reach 40 ms at the image's realistic burst size, state the residual (the burst size at which it holds) rather than moving the target. Pages: steward.md 'Failure and restart'/'Residual risks' (the burst's notice cost and the notices-first rule); scheduling.md 'With the real steward' (the burst finding, then its fix). No kernel change. Needs STEWARD9 (the case and scheduling.md's burst row) and STEWARD11 (drive.rs) merged: it touches the same files."
   state = "todo"
-  revision = 539
+  revision = 545
