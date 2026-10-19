@@ -36,8 +36,16 @@ pub const MAX_LABELS: usize = 16;
 pub const MAX_NAME: usize = 4096;
 /// The longest program image a launch copies (8 MiB).
 pub const MAX_IMAGE: usize = 8 << 20;
-/// The longest a call waits for its reply, in milliseconds: its pool thread's deadline.
-pub const MAX_CALL_MS: u64 = 5_000;
+/// The longest a call waits for its reply, in milliseconds: its pool thread's deadline, the
+/// ceiling on the timeout a caller may ask for (a shorter one is the caller's to pass). It is the
+/// longest call the system makes, a lease's launch under load: twice the worst `start_agent` the
+/// steward served under `steward-latency`'s rounds on both widths at one and two harts, 6.64 s
+/// (rv32, two harts, the N = 16 round's launch beside fourteen spinning leases; 5.851 s at one
+/// hart beside three), 13.28 s rounded up to a second; the Elixir client's `launch_timeout/0` is
+/// the same number (docs/servers/steward.md, "Residual risks"). A VM that asks for the whole of
+/// it holds one of its own `CALL_THREADS` that long: one VM is one trust domain, so the cost is
+/// its own.
+pub const MAX_CALL_MS: u64 = 14_000;
 
 /// Runs `f` on the platform's system calls, with only the platform locked while it runs.
 fn with_system<T>(c: &mut Ctx, f: impl FnOnce(&mut dyn System) -> Result<T, Refused>) -> Result<T, Refused> {
