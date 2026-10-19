@@ -527,6 +527,62 @@ workload commits to many concurrent agent VMs per account (owner Q1/Q2), unchang
 (STEWARD8's start_agent `served` figures for F4's bound: one hart 1.70 s alone / 3.13 s beside 15
 spinners; two harts 2.67 s / 3.72 s. The launch_timeout derives from the worst, 2×3.72 → ~8 s.)
 
+### F4 — the VM's call ceiling (thread STEWARD8-bound): MAX_CALL_MS is the longest call
+
+beamlet's `call` native refuses a timeout above `MAX_CALL_MS` (5 s, `bif/system.rs`), so the
+client cannot pass the launch bound — the 5 s client constant was that cap restated. Ruled
+**(1)**: `MAX_CALL_MS` becomes the launch bound, derived as the longest call the system makes (a
+lease's launch under load), measured over **both widths** (2× the worst `served start_agent`
+rounded up to a second; rv32 included — so the number is the measurement's, 8–12 s, not a picked
+12). `launch_timeout/0` and `MAX_CALL_MS` are the **same number** (the client's constant is the
+native's ceiling, which is the longest call). Why (1) is sound and small: `MAX_CALL_MS` is the
+VM's ceiling on its **own** calls, and a VM is one trust domain — it caps the timeout a caller may
+*request*, not any call's default, so short calls still pass their own short timeouts, and a VM
+over-using the ceiling holds only its **own** call-pool threads (hurts itself, no cross-domain
+reach). The 5 s was a guess; the measurement corrects it. `MAX_QUEUED` unchanged.
+
+Not (b) (the orchestrator's: keep the general cap 5 s, a per-call higher ceiling the launch path
+alone elects). It is cleaner than (3) — the caller elects "a long call", the native stays
+protocol-agnostic — but the general 5 s cap's independent value is small: a crashed server returns
+`Dead` at once (R4b), so the cap only bites when a server is alive-but-slow (overload), where the
+VM's operations are already slow; it does not justify a second ceiling and a selector on the
+platform boundary. There is one longest call (the launch), and the ceiling is it — the cleaner
+invariant for the book, one derived number ("the longest a call waits is the launch bound"). If
+interactivity measurement later shows the raised general cap hurts the shell under overload, (b)
+is the refinement then, not pre-emptively.
+
+Not (3): a per-opcode cap puts a steward opcode into the platform native, which encodes no
+protocol today — a layering violation. Not (2) now: making start_agent asynchronous at the
+steward (answer at once, the launch's outcome by a notice) is the durable shape if long
+synchronous calls proliferate, but it is a steward **protocol** change out of this node's scope;
+recorded as the follow-up (a launch is a long operation that arguably should not be a synchronous
+call; when there are several such, (2) is the fix).
+
+Pages: beamlet.md's constants row and the natives' paragraph state the derivation ("the longest
+call the system makes: a lease's launch under load, measured") in place of "5 s". The implementer
+greps for other dependents of the 5 s / `MAX_CALL_MS` (Tier A). Whose edit: cohesive with STEWARD8
+(same number, same measurement), so STEWARD8's second platform edit, with the beamlet reviewer
+added for `userland/otp/vm`; the orchestrator's call.
+
+### STEWARD9: the latency case's deadline lease follows the measured launch
+
+STEWARD8's verification found the latency case's 5 s kernel-deadline lease (sized to twice an
+older two-hart launch) now dies inside its own launch (launch 6.62 s rv32 two-hart; B82:
+NotPermitted, a forbidden line ends the boot), so the rv32 N=3/4 rows that now complete cannot be
+judged. Ruled: **a small node, STEWARD9 (Tier B, toml + a page sentence), not folded into
+async-start_agent.** The deadline-during-launch is B82's kernel behaviour, independent of whether
+start_agent is synchronous, so it stands alone. The case's deadline lease and post-sleep are
+derived from the measured worst launch over both widths — the same measurement STEWARD8 took, so
+the case's derived numbers (launch_timeout, MAX_CALL_MS, the deadline lease) all come from one
+launch measurement: lease = 2× the worst launch (~14 s, one value both widths) so a deadline fires
+on a running VM (the notice's quantity); the sleep ~16 s so the notice is recorded before the next
+round. State it in the toml comment and scheduling.md; the rv32 N=3/4 (and N=16 where reached)
+deadline-notice rows are then measured. needs STEWARD8 (same file). Caveat in the brief: if the
+deadline class is a probe constant in the steward binary, not a toml value, it is Tier A and
+folds into a steward package — the implementer checks first. Plan: plan-2026-10-19-steward9.toml;
+brief STEWARD9-implementer.md. rv64 already PASSes every round (worst launch 3.95 s); this is the
+rv32 rows' last blocker.
+
 ## agent-suite wave B (2026-10-19)
 
 The two rows ATK10 left are sound now, as one small package **ATK13** (Tier A, S): (1) the R60

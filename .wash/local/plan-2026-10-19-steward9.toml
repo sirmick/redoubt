@@ -1,0 +1,16 @@
+# Architect, 2026-10-19: one small node found by STEWARD8's verification. The latency case's
+# deadline lease (5 s) was sized to twice an older two-hart launch; the launch now measures
+# 6.62 s (rv32, two harts, beside three spinners), so the deadline lease dies inside its own
+# launch (B82: a lease's deadline runs from its request) and the rv32 N = 3/4 (and N = 16)
+# deadline-notice rows cannot be judged. The case's parameters must follow the measured launch.
+# Ruling: .wash/local/wave-2026-10-18-rulings.md "STEWARD9". Needs STEWARD8 (its measured launch,
+# and it edits steward-latency.toml: no concurrent edit). New node only.
+
+[[node]]
+  id = "STEWARD9"
+  title = "The latency case's deadline lease is derived from the measured launch, so a lease outlives its own launch and its deadline notice is judged"
+  template = "package"
+  parent = "AGENTS"
+  needs = ["STEWARD8"]
+  body = "Brief: .wash/local/STEWARD9-implementer.md; ruling .wash/local/wave-2026-10-18-rulings.md 'STEWARD9'. Tier B (tests/steward-latency.toml parameters and a page sentence; no code), size S, one reviewer (the orchestrator's pick). Found by STEWARD8: the case's kernel-deadline lease is 5 s, set to twice an older two-hart launch; the launch now measures 6.62 s on rv32 at two harts beside three spinners (~5 s beside fifteen at one hart), so in the N = 16 rounds a launch outlives its own 5 s lease and the deadline passes inside the launch (B82: NotPermitted, a forbidden line ends the boot before the trace dump), so the rv32 N = 3/4 rows that now complete cannot be judged net of audits. Fix: the deadline lease and the sleep after it are derived from the measured worst launch over both widths (the same measurement STEWARD8 took for launch_timeout/MAX_CALL_MS): the lease = 2x the worst launch (~14 s), so it reliably outlives the launch and its deadline fires on a running VM (the quantity the deadline notice measures); the post-sleep (~16 s) so the deadline fires and its notice is recorded before the next round. The round grows ~2.5 min on rv32; timeout_secs stays the case's bound. State the derivation in the toml's comment and on scheduling.md where the case's parameters are described; the rv32 N = 3/4 (and N = 16 where reached) deadline-notice rows are then measured. Not folded into the async-start_agent follow-up: the deadline-during-launch is B82's kernel behaviour, independent of whether start_agent is synchronous, so it stands alone."
+  state = "todo"
