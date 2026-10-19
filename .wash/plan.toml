@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 546
+revision = 547
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -2687,8 +2687,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   needs = ["STEWARD10"]
   body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'STEWARD10 review notes'. Brief: .wash/local/STEWARD11-implementer.md. Tier A (the steward's serving path), size S, reviewer steward-red-5. STEWARD10 guarded the lease and crossing destroy-by-index paths (the deadline-as-witness rule: a destroy reads kernel.now()=t immediately before, and at t >= d the kernel owns it so the steward never destroys by that possibly-recycled index). drive.rs:550 `Made::Scope(b) => (b, FOREVER)` still destroys a scope by index unguarded (FOREVER means t < d always, so it always destroys by index). Unreachable today — scopes are never destroyed by handle (effects.rs names the budget token, confirmed in STEWARD10's review) — but the next change that makes it reachable would reintroduce STEWARD10's wrong-object-destruction silently. Rule: apply STEWARD10's guard to the Scope arm too (a scope carries no deadline, so its witness is simply that its handle is still the scope the record names — a BadHandle/WrongObject there is benign as in STEWARD10, and a destroy is attempted only when the record's handle is current), so the invariant 'the steward never destroys by an index R10 may have recycled' holds at every destroy-by-index site in drive.rs by construction, not everywhere-but-one. The exact form (the guard, or a BadHandle-benign + WrongObject-tripwire as STEWARD10 settled) is the implementer's, matching STEWARD10's shape. Host test: the Scope arm does not destroy a recycled index (a scope record whose index was reused yields no wrong destruction; the reused object survives, the verdict its liveness in the fake kernel). steward.md's cleanup bullet states the invariant holds at every site. No kernel change; no page claim moves beyond the bullet's wording."
-  state = "reported"
-  revision = 546
+  state = "done"
+  revision = 547
 
 [[node]]
   id = "B89"
