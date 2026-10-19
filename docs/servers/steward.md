@@ -778,8 +778,9 @@ or an agent with a person at the top of the chain.
   installed in its table between that read and the call and none can take the index; a reply
   that one day carries a handle rechecks this argument. Before this, the destroy was made and its
   `BadHandle` tolerated on a lease whose process was gone, which held only while deadlines came
-  one at a time: several leases expiring together (`steward-latency`'s clustered deadlines)
-  recycle the freed index before the notice is served, and a destroy by it found another kind of
+  one at a time: several leases expiring together (seen when `steward-latency`'s deadline
+  leases overlapped, before they ran one at a time) recycle the freed index before the notice
+  is served, and a destroy by it found another kind of
   object (`WrongObject`, a failed step) or would have destroyed another lease's budget with no
   error. An `end_lease` served after the deadline but before the notice makes no destroy either;
   one on a live lease destroys it as before, and a handle that answers `BadHandle` before its
@@ -1595,7 +1596,9 @@ the last one's until the kernel says its caller is gone.
 **The restart probe** is a test-only feature, `restart-probe` (`src/bin/steward.rs`,
 `PROBE_EXIT`), off in every default build; the bench's `steward-restart` builds the steward with
 it. **The latency probe**, `latency-probe`, is the second such feature, built by `steward-latency`
-alone (the bench's host test `only_steward_latency_builds_the_latency_probe` holds it to that):
+and its two companions, `steward-latency-n4` and `steward-latency-n16` (the rounds at N = 4 and
+N = 16, each on a trace ring of its own), and nothing else (the bench's host test
+`only_steward_latency_builds_the_latency_probe` holds it to those three):
 the steward prints a probe lease's start as a `reply_wait` sample (its answer to its next
 receive: its work after the reply, the call's records having gone before it), arms two timeouts there and ends that lease by its own
 `EndLease` at the second, prints its wake, deadline-notice and `budget_destroy` samples for the

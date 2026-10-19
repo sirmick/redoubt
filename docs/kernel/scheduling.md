@@ -589,10 +589,12 @@ got 0.
 
 ### Responsiveness
 
-<details><summary>Status: built · tested (21)</summary>
+<details><summary>Status: built · tested (23)</summary>
 
 - bench:sched-latency
 - bench:steward-latency
+- bench:steward-latency-n4
+- bench:steward-latency-n16
 - bench:sched-lock-contention
 - bench:sched-lock-contention-4
 - bench:sched-lock-contention-4-mttcg
@@ -789,7 +791,38 @@ trace: that half of the lease-end sum is the program's own report, not the kerne
 **With the real steward.** `steward-latency` measures the same quantities from the steward
 itself: alice's session holds N live leases, the probe's own lease or the kernel's deadline lease
 among them beside N - 1 spinning agents (`Redoubt.Agents.Echo spin`, each a beamlet VM of 5,248
-pages on a lease), N = 1, 2, 3, 4 and 16, D = 16 of each kind per round and 8 at N = 16; the steward's test-only probe arms
+pages on a lease), N = 1, 2, 3, 4 and 16, D = 16 of each kind per round and 8 at N = 16; a round's
+deadline leases run one at a time beside the spinners, each a sample of its own lease grouped at N,
+the deadline lease twice that round's worst launch over both widths at one and two harts, rounded
+up to a second, so the deadline falls on a running VM and never inside the launch (a deadline runs
+from the time the steward sets as the launch's batch starts, and a lease shorter than its launch
+dies before its VM runs, [budgets](budgets.md#deadlines)): N = 1 8 s, N = 2 10 s, N = 3 11 s,
+N = 4 and N = 16 14 s (2 × 3.84 / 4.47 / 5.09 / 6.62 / 6.64 s; N = 2 rounds to 10 not 9 because the
+probe tells its own lease by 9 s, so no measured lease may be 9 s). Each deadline lease is followed
+by a sleep of the lease plus a second — the margin over the kernel's R10 destruction (≤ 30 ms) that
+frees alice's pages — both the guest's clock under `icount`, so the next lease is requested only
+after the previous is gone, which also holds the N = 16 carve, where alice's share leaves room for
+one measured lease beside the fifteen spinners. One at a time, not a burst: `deadline_notice` is a
+single lease's notice latency (the exit notice's arrival, when the steward's loop dequeues the
+`Exited` event, less the deadline; target 40 ms). A burst of D deadlines firing together hands the
+steward D `Exited` events at once, dequeued serially (about 70 ms each: the cleanup, the
+`LeaseEnded` audit, the console lines), so the last notice is about D × 70 ms late — measured 1.12
+to 1.22 s at p99 for D = 16, against 10 ms when the notices come one at a time; that is the
+steward's serial dequeue under a burst, not a single notice's latency, and the steward sending a
+batch's notices ahead of the per-exit work is its own change, not this case's. **The residual
+under load:** `deadline_notice` is clean only with the steward idle when the deadline fires — the
+quantity this case measures, one lease at a time. A launch in flight holds the serve loop inside a
+synchronous `start_agent` (2-6 s), so a deadline that fires during one waits behind it, up to the
+launch bound; the steward running the slow part of a launch off the loop, so the loop can take the
+notice meanwhile, is a separate change. The case measures the per-notice quantity, one lease at a
+time. The trace ring (256 MiB, 8,388,608 records) is per boot, and a single boot of all five rounds
+overran it at two harts, a boot of N = 1 to 4 too (the rounds record about 1.0 / 2.2 / 2.4 / 3.1 /
+1.5 M at N = 1 / 2 / 3 / 4 / 16, and on rv32 N = 1 to 3 alone fill 6.0 M at two harts), so the
+rounds run as three boots judged on their own rings: `steward-latency` runs N = 1, 2 and 3,
+`steward-latency-n4` the round at N = 4 and `steward-latency-n16` the round at N = 16, on rv64
+alone (below). The probe ends each boot's window on the `latency-done` marker the case writes after
+its last round, so one build serves a three-round boot and a one-round boot alike. The steward's
+test-only probe arms
 its timer at the last point before the receive that waits on it, prints its wake, its decision
 wake and its `budget_destroy` call to return, and the kernel's deadline notice, as the stand-in
 prints them; the post-check judges them net of audits with the targets above, unchanged, and
@@ -821,22 +854,25 @@ N = 1 / 2 / 3 / 4 / 16; each lease destroyed is a VM budget of 5,248 pages, and 
 the deadline notice and the destroy call carry 300-500 ms of the checked build's audits after
 such a destruction (subtracted, as every target is net):
 
-| Measure (net µs, N = 1 / 2 / 3 / 4 / 16; D = 8 at 16) | rv64, 1 hart | rv32, 1 hart | rv64, 2 harts | rv32, 2 harts |
+| Measure (net µs, N = 1 / 2 / 3 / 4 / 16; D = 8 at 16) | rv64, 1 hart | rv32, 1 hart | rv64, 2 harts | rv32, 2 harts (`--smp 2`, recorded, not gated) |
 | --- | --- | --- | --- | --- |
-| steward timer wake (p50/p99) | 949/1582, 731/1622, 1215/3234, 1016/2704, 1075/1123 | 744/1307, 1203/1409, 902/2023, 1197/2819; N = 16 not reached | 2287/2674, 1741/23961, 1872/5121, 2169/4397, 2998/32911 | N = 1 to 4 run under the launch bound, not judged; N = 16 not reached |
-| steward decision wake (p50/p99) | 1144/8292, 17451/21855, 772/2958, 832/2379, 612/1621 | 24262/28092, 1190/2221, 752/1729, 720/1289 | 2105/13506, 2167/5012, 4740/19255, 2297/25963, 3929/12712 | not judged |
-| deadline notice (p99) | 10542, 16530, 11379, 14791, 13573 | 9942, 15047, 14739, 11666 | 9803, 13503, 13736, 13516, 18113 | not judged |
-| `budget_destroy`, call to return (p50/p99) | 6012/7254, 6081/9569, 6058/8961, 6116/9380, 6130/7278 | 7844/9861, 5285/8868, 6624/10784, 7570/9034 | 8005/8928, 8587/8961, 7381/9009, 8486/9737, 8191/11906 | not judged |
-| R10 (p99; 165 destructions) | 9698 | 9650 | 10093 | not judged |
-| a lease's end (worst decision wake p99 + R10) | 21855 + 9698 = 31553 | 28092 + 9650 = 37742 | 25963 + 10093 = 36056 | not judged |
-| reply to the next receive (p50/p99, no target) | 8562/8827, 8657/10119, 9799/12870, 8850/13190, 11903/11940 | 8910/8969, 9233/10319, 10253/15829, 9686/14303 | 43648/47378, 22910/32610, 24024/32431, 25053/35021, 24616/37143 | not judged |
+| steward timer wake (p50/p99) | 965/1944, 789/3472, 1227/2555, 821/5165, 599/1405 | 727/1579, 1242/1843, 888/1167, 801/1507; N = 16 not run (a spinner dies, below) | 1761/5085, 2867/23003, 1901/4066, 2336/7692, 3592/5357 | 5563/5636, **31831**/35239 (the p50 missed, below), 4160/5396, 3284/40940; N = 16 not run |
+| steward decision wake (p50/p99) | 1156/8292, 17425/20974, 645/2230, 965/2000, 736/1532 | 24235/28493, 1199/40468, 1011/1624, 775/1888 | 3474/18540, 1696/21203, 9798/25163, 3265/25254, 14107/29787 | 3963/4517, 4583/39824, 21757/40031, 3112/41174 |
+| deadline notice (p99) | 13990, 13257, 12148, 13439, 10552 | 8267, 15761, 10989, 11815 | 9916, 13679, 9514, 12272, 9646 | 13021, 13996, 12731, 13997 |
+| `budget_destroy`, call to return (p50/p99) | 6012/8329, 6081/8372, 5016/8412, 5468/8354, 6204/8762 | 6710/10251, 5360/8315, 6404/7910, 6460/9557 | 8178/9787, 8390/11010, 7938/10401, 7800/11411, 7545/9390 | 11738/13577, 11350/14014, 11316/13198, 10016/16204 |
+| R10 (p99; the boots at N = 1 to 3 / 4 / 16, 99 / 35 / 31 destructions) | 9695 / 9716 / 4800 | 9651 / 9682 | 10042 / 9804 / 5490 | 9801 / 10063 |
+| a lease's end (worst decision wake p99 + R10, per boot) | 20974 + 9695 = 30669; 2000 + 9716 = 11716; 1532 + 4800 = 6332 | 40468 + 9651 = 50119; 1888 + 9682 = 11570 | 25163 + 10042 = 35205; 25254 + 9804 = 35058; 29787 + 5490 = 35277 | 40031 + 9801 = 49832; 41174 + 10063 = 51237 |
+| reply to the next receive (p50/p99, no target) | 8560/8679, 8722/9777, 9861/11494, 8699/10986, 11809/15021 | 8894/8949, 9278/11920, 9344/10578, 10614/12382 | 43647/48305, 23133/25010, 23952/36940, 26169/37061, 24355/32217 | 77231/80354, 39057/84666, 38811/50840, 39781/48369 |
 
-The real steward meets every target on rv64 at one and two harts, N = 1 to 16, and on rv32 at
+Each boot's trace fit its ring with nothing dropped: 4,841,622 / 2,876,371 / 1,022,850 records
+of 8,388,608 for the boots at N = 1 to 3 / 4 / 16 on rv64 at one hart, 5,525,840 / 3,711,105 /
+1,363,142 at two; 5,005,142 / 2,963,667 on rv32 at one hart, 5,979,365 / 3,932,389 at two. The
+real steward meets every target on rv64 at one and two harts, N = 1 to 16, and on rv32 at
 one hart, N = 1 to 4, each column one run at seed 3 with the cleanup steps on the steward's own
 thread ([steward](../servers/steward.md#failure-and-restart)): the timer wake's p99 at N = 3 and
-4 is 3.2 and 2.7 ms on rv64, 2.0 and 2.8 ms on rv32, and the reply-to-receive p99 in those rounds
-12.9 and 13.2 ms, 15.8 and 14.3 ms, with no 100 ms retry in any sample. At N = 16 on rv64 at one
-hart the timer wake meets its targets, 1.1 ms at p50 and p99 (54.5 and 57.3 ms when the round
+4 is 2.6 and 5.2 ms on rv64, 1.2 and 1.5 ms on rv32, and the reply-to-receive p99 in those rounds
+11.5 and 11.0 ms, 10.6 and 12.4 ms, with no 100 ms retry in any sample. At N = 16 on rv64 at one
+hart the timer wake meets its targets, 0.6 ms at p50 and 1.4 at p99 (54.5 and 57.3 ms when the round
 first ran, from the tree before the thread, where the wake waited behind whole slices of the
 fifteen spinner VMs: the cleanup steps' turn, not the spinners', was the slice it waited for),
 and at two harts the N = 16 round's thirty-one launches are all served, with no `parked after`
@@ -890,21 +926,33 @@ column's rows at N = 1 to 4 are this run's; the launch's own spread beside three
 rv32 at one hart is 2.76 to 5.85 s over the thirteen launches of the round the bound was
 derived from, with no step of the steward's differing between them.
 
-**The N = 16 round on rv32 is not reached, at either hart count, and the cause is the case's
-lease against the measured launch.** The round's five-second leases, the kernel's deadline
-samples, were sized as twice a two-hart launch when that launch was 2.5 s; beside fifteen
-spinners a launch on rv32 is 5.2 s at one hart and 5.7 to 6.3 s at two, longer than the lease.
-At one hart the deadline leases die inside their own launch, so the round has no deadline-notice
-sample and its probe leases (nine seconds) few, 5 of 8, and one of the fifteen spinner VMs
-exited mid-round with code 1, its module reads at the system volume failing behind the others
-(the account's two page-carrying requests at the volume shared by seventeen VMs, past the hub's
-10 s give-up: the derivation gap stated under the N = 16 column), after which the samples group
-at N = 15; the deadline notice's p99 there is 45.1 ms over the eight samples that lived, a miss.
-At two harts the tenth launch beside fifteen, served 5.68 s, fails its `Launch` step
-`NotPermitted`: the lease's deadline has passed before its process is made, which the case
-forbids (`steward: a step failed`), and the boot ends there. A deadline lease sized from the
-measured launch, as the client's bound is, is the case's follow-up; no target moves, and the
-bound stays what the measurement gave. Before the steward's console lines were queued and written through one kept
+**Two rv32 rows are findings, not targets met.** With the deadline lease derived from the
+launch every round completes on rv64 at one and two harts and on rv32 at one hart up to N = 4,
+each boot's reset dumping a trace the oracle judges whole (`dropped 0`); before it, the round's
+five-second leases, sized as twice a two-hart launch when that launch was 2.5 s, died inside
+their own launch on rv32 (5.2 s beside fifteen spinners at one hart, 5.7 to 6.3 s at two), at
+one hart with no deadline-notice sample and at two harts with a `Launch` the kernel refused
+`NotPermitted`, the deadline passed before the process was made. The round at N = 16 still does
+not complete on rv32: beside fifteen spinners one spinner VM exits 1 before the round's first
+deadline notice, its module reads at the system volume failing behind the other fourteen's (the
+account's two page-carrying requests at the volume shared by seventeen VMs, past the VM's
+`FILE_WAIT_US` give-up, 10 s: the derivation gap stated under the N = 16 column, reaching a VM's
+death rather than a slow launch), after which the samples group at N = 15 around the dead VM
+(the deadline notice's p99 over the eight that lived about 45 ms, on a round that had lost a
+VM). So `steward-latency-n16` runs on rv64 alone and the rv32 N = 16 column says so; a lease VM
+dying of a starved code read is the read path's own finding — whether the read is to complete
+under the account's load or the VM to outlive its timeout — and the round runs on rv32 when it
+lands. At two harts on rv32 the N = 1 to 3 boot reaches the reset and is judged for the first
+time, and the N = 2 round misses the timer wake's p50, 31.8 ms against 15 (its p99 35.2 ms,
+met), the same within 30 µs over five boots (31,855, 31,835, 31,825, 31,832 and 31,831 µs),
+every other target of the boot met with `dropped 0` and the kernel lock waited for in 249 of
+1000 ticks; N = 1 is 5.6 ms and N = 3 4.2 ms, so the miss is the one-spinner round's: a kernel lock-contention finding at
+two harts (a wake can wait for the kernel lock there, [R78](#r78-fair-kernel-entry) and
+[residual risks](#residual-risks)), to be taken up on its own — why the round with one spinner,
+then a fix or a stated residual. The table carries the rv32 two-hart rows with their numbers,
+and rv32 is gated at one hart until it lands, rv64 at both. The `a device interrupt returned
+without its claim` rejection of the rv32 two-hart trace, one run in two at this seed before, met
+neither rv32 two-hart boot here. Before the steward's console lines were queued and written through one kept
 fid at the loop's turn ([steward](../servers/steward.md#failure-and-restart)), the steward
 reached its wait with the console round trips of the reply it had just given on its pass (each
 line an attach, open, write and close at `consoled`), the timer wake's p50 missed on every width
@@ -912,14 +960,12 @@ and hart count (23 to 61 ms), and at two harts the decision wake's p50 and the d
 p99 missed too; the reply-to-receive gap was 34-56 ms at one hart and 94-162 at two. Now a call's
 records go before its reply, one write each, and the gap (the last row, recorded, no target) is
 the loop's own work and the reply's hand-over to the caller, with no console call in it. The
-two-hart figures are gated as the stand-in's are; before the round at N = 3 ran, the rv32
-two-hart row missed the timer wake's p50 at N = 2 (every sample near 40 ms, the one spinner's VM
-live), a finding against the two-hart scheduler at this seed, and the oracle rejects the rv32
-two-hart trace one run in two at this seed (`a device interrupt returned without its claim`, the
-two-hart trace finding). The case stays out of the
-whole run, by name, until the two-hart rows pass on both widths. The 99 destructions judged are
-those before the probe's `LATENCY-END`; the sixteen after it (the marker-file exits reaping the
-leases) are recorded and not judged.
+two-hart figures are gated as the stand-in's are, and the rv32 two-hart row's miss of the timer
+wake's p50 at N = 2, every sample near 40 ms with the one spinner's VM live before the round at
+N = 3 ran, is the finding above, judged now. The cases stay out of the whole run, by name, until
+the two-hart rows pass on both widths. The destructions judged are those before the probe's
+`LATENCY-END` (99 in the N = 1 to 3 boot, 165 over the three); the sixteen after it in each boot
+(the marker-file exits reaping the leases) are recorded and not judged.
 
 **The sweep** (2026-09-27, seeds 1 to 16, on rv64 and rv32, `TESTBENCH_QEMU_SEED`; the gate runs
 seed 3, this sweep's worst, and no gate sets the variable). The steward decision wake, p50 / p99 in µs at N = 1, 4 and 16, and a lease's end (the
@@ -1197,10 +1243,12 @@ Status: built · tested: bench:sched-carve-inflation, bench:legacy-gone, host:re
 
 ### R12 (scheduling)
 
-<details><summary>Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search, `map_fixed`'s range, `process_create` and, after RAM fills, a one-page `map_anon`, `budget_create` and a rolled-back `process_create` (with a recorded negative run, `alloc-first-fit`); beyond the memory calls, for `endpoint_create`, `mint`, `close`, `thread_create` and `thread_exit`, `call` and `reply`, a `receive` of a queued message, `time_now` and `budget_usage` against a hostile budget's full handle table, two thousand endpoints and 250 parked threads (`bench:call-bounds`); and at full occupancy, every PID in use with every thread, for a delivery, a timer expiry ending 250 waits at once and the reconcile that wakes their 250 budgets (over 8-seed sweeps, 7.8 ms on rv64 and 6.8 to 9.1 ms on rv32, bounded at 10 ms: the sweeps' worst and a tenth) and a destruction (at most 17.1 ms on rv64, 18.2 ms on rv32) (`bench:worst-walk`) · tested (66)</summary>
+<details><summary>Status: built · partly tested: the bound on a call's kernel time is attacked only for `map_anon`'s search, `map_fixed`'s range, `process_create` and, after RAM fills, a one-page `map_anon`, `budget_create` and a rolled-back `process_create` (with a recorded negative run, `alloc-first-fit`); beyond the memory calls, for `endpoint_create`, `mint`, `close`, `thread_create` and `thread_exit`, `call` and `reply`, a `receive` of a queued message, `time_now` and `budget_usage` against a hostile budget's full handle table, two thousand endpoints and 250 parked threads (`bench:call-bounds`); and at full occupancy, every PID in use with every thread, for a delivery, a timer expiry ending 250 waits at once and the reconcile that wakes their 250 budgets (over 8-seed sweeps, 7.8 ms on rv64 and 6.8 to 9.1 ms on rv32, bounded at 10 ms: the sweeps' worst and a tenth) and a destruction (at most 17.1 ms on rv64, 18.2 ms on rv32) (`bench:worst-walk`) · tested (68)</summary>
 
 - bench:sched-share
 - bench:steward-latency
+- bench:steward-latency-n4
+- bench:steward-latency-n16
 - bench:sched-share-release
 - bench:sched-capped
 - bench:sched-capped-mttcg
