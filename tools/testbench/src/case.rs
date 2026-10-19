@@ -307,9 +307,9 @@ pub struct Boot {
     /// data entries instead of `programs` and `file`: `image/boot.toml`, so that the bundle
     /// `./mkimage` packs is the one a case boots ([`Recipe`]).
     pub recipe: Option<PathBuf>,
-    /// Hart counts to run with. One run per entry.
+    /// Hart counts to run with. One run per entry, on every width or per width ([`Smp`]).
     #[serde(default = "default_smp")]
-    pub smp: Vec<u32>,
+    pub smp: Smp,
     /// The hart counts stand under `--smp`: a case that can judge what it is about only at its own
     /// counts says so, and why, in a comment beside the key.
     #[serde(default)]
@@ -892,7 +892,42 @@ pub struct Input {
     pub send: String,
 }
 
-fn default_smp() -> Vec<u32> { vec![1] }
+/// A boot case's hart counts: one list for every width it runs on (`smp = [1, 4]`), or one per
+/// width (`smp = { rv64 = [1, 2], rv32 = [1] }`) where one width's count is a finding and the
+/// case must not go into a copy of itself for the other. A width the map leaves out runs the
+/// default, `[1]`; a key that is not one of the case's `arch`, and an empty list, are refused
+/// (`Case::check`): a case leaves a width out of `arch`, never boots it zero times.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(untagged)]
+pub enum Smp {
+    List(Vec<u32>),
+    PerWidth(BTreeMap<String, Vec<u32>>),
+}
+
+/// The hart counts of a case that gives none, and of a width its map leaves out.
+const DEFAULT_SMP: &[u32] = &[1];
+
+impl Smp {
+    /// The counts a boot on `arch` runs at, one boot each.
+    pub fn for_width(&self, arch: &str) -> &[u32] {
+        match self {
+            Smp::List(counts) => counts,
+            Smp::PerWidth(widths) => widths.get(arch).map_or(DEFAULT_SMP, Vec::as_slice),
+        }
+    }
+
+    /// Every list the field gives, with the width it is for (none for the list form).
+    fn lists(&self) -> Vec<(Option<&str>, &[u32])> {
+        match self {
+            Smp::List(counts) => vec![(None, counts.as_slice())],
+            Smp::PerWidth(widths) => {
+                widths.iter().map(|(w, counts)| (Some(w.as_str()), counts.as_slice())).collect()
+            }
+        }
+    }
+}
+
+fn default_smp() -> Smp { Smp::List(DEFAULT_SMP.to_vec()) }
 
 fn default_timeout() -> f64 { 60.0 }
 
@@ -903,7 +938,7 @@ impl Boot {
     /// bounded by `timeout_secs_smp` where the case gives one.
     pub fn with_harts(&mut self, harts: Option<u32>) {
         if let Some(n) = harts.filter(|_| !self.keep_smp) {
-            self.smp = vec![n];
+            self.smp = Smp::List(vec![n]);
             self.timeout_secs = self.timeout_secs_smp.unwrap_or(self.timeout_secs);
         }
     }
@@ -987,6 +1022,15 @@ impl Case {
                     ensure!(!boot.poweroff, "memory needs a running guest after its verdict");
                 }
                 ensure!(boot.memory || !boot.heap_fits, "heap_fits needs memory");
+                for (width, counts) in boot.smp.lists() {
+                    if let Some(width) = width {
+                        ensure!(
+                            self.arch.iter().any(|a| a == width),
+                            "smp names {width}, which is not one of the case's arch"
+                        );
+                    }
+                    ensure!(!counts.is_empty(), "smp needs a hart count: leave a width out of arch instead");
+                }
                 for pattern in &boot.distinct_across_boots {
                     let groups = regex::Regex::new(pattern)?.captures_len();
                     ensure!(groups >= 2, "distinct_across_boots /{pattern}/ needs a capture group");
@@ -1293,21 +1337,86 @@ mod tests {
         };
         let mut plain = boot("smp = [1, 4]");
         plain.with_harts(None);
-        assert_eq!(plain.smp, [1, 4]);
+        assert_eq!(plain.smp, Smp::List(vec![1, 4]));
         plain.with_harts(Some(2));
-        assert_eq!(plain.smp, [2]);
+        assert_eq!(plain.smp, Smp::List(vec![2]));
         let mut default = boot("");
         default.with_harts(Some(2));
-        assert_eq!(default.smp, [2]);
+        assert_eq!(default.smp, Smp::List(vec![2]));
         let mut kept = boot("smp = [1]\nkeep_smp = true\ntimeout_secs_smp = 90");
         kept.with_harts(Some(2));
-        assert_eq!((kept.smp.as_slice(), kept.timeout_secs), ([1].as_slice(), 60.0));
+        assert_eq!((kept.smp.for_width("rv64"), kept.timeout_secs), ([1].as_slice(), 60.0));
         // A case slower on several harts takes its own bound under `--smp`, and only then.
         let mut slow = boot("timeout_secs = 20\ntimeout_secs_smp = 90");
         slow.with_harts(None);
         assert_eq!(slow.timeout_secs, 20.0);
         slow.with_harts(Some(2));
         assert_eq!(slow.timeout_secs, 90.0);
+    }
+
+    /// `smp` is one list of hart counts for every width, or a list per width; a width the map
+    /// names must be one the case runs on, and no list is empty, so a misspelt width or a
+    /// count-less one cannot leave a width unbooted in silence.
+    #[test]
+    fn smp_is_one_list_or_a_list_per_width() {
+        let case = |fields: &str| {
+            let text = format!(
+                "description = \"d\"\narch = ['rv64', 'rv32']\nkind = \"boot\"\nprograms = ['p']\nexpect = []\n{fields}"
+            );
+            toml::from_str::<Case>(&text)
+        };
+        let smp = |fields: &str| match case(fields).unwrap().kind {
+            Kind::Boot(boot) => boot.smp,
+            _ => panic!("a boot case"),
+        };
+        assert_eq!(smp(""), Smp::List(vec![1]));
+        assert_eq!(smp("smp = [1, 4]"), Smp::List(vec![1, 4]));
+        let both = Smp::PerWidth(BTreeMap::from([("rv64".into(), vec![1, 2]), ("rv32".into(), vec![1])]));
+        assert_eq!(smp("smp = { rv64 = [1, 2], rv32 = [1] }"), both);
+        assert!(case("smp = { rv64 = [1, 2], rv32 = [1] }").unwrap().check().is_ok());
+        assert!(case("smp = { rv64 = [1, 2] }").unwrap().check().is_ok(), "a width left out");
+        assert!(
+            case("smp = { rv64 = [1, 2], rv23 = [1] }").unwrap().check().is_err(),
+            "not a width of the case"
+        );
+        assert!(
+            case("smp = { rv64 = [1, 2], rv32 = [] }").unwrap().check().is_err(),
+            "a width booted zero times"
+        );
+        assert!(case("smp = []").unwrap().check().is_err(), "a case booted zero times");
+        assert!(case("smp = 2").is_err(), "neither form");
+        assert!(case("smp = { rv64 = 2 }").is_err(), "a count where a list goes");
+    }
+
+    /// A boot on a width runs the counts the field gives that width: the one list on either,
+    /// the width's own from the map, the default where the map leaves it out; `--smp N` replaces
+    /// a map as it does a list.
+    #[test]
+    fn a_boot_runs_its_widths_own_hart_counts() {
+        let one = Smp::List(vec![1, 4]);
+        assert_eq!((one.for_width("rv64"), one.for_width("rv32")), ([1, 4].as_slice(), [1, 4].as_slice()));
+        let mut both = Smp::PerWidth(BTreeMap::from([("rv64".into(), vec![1, 2]), ("rv32".into(), vec![1])]));
+        assert_eq!((both.for_width("rv64"), both.for_width("rv32")), ([1, 2].as_slice(), [1].as_slice()));
+        let Smp::PerWidth(widths) = &mut both else { unreachable!() };
+        widths.remove("rv32");
+        assert_eq!(both.for_width("rv32"), [1]);
+        let mut boot = Boot {
+            smp: both,
+            ..match toml::from_str::<Case>(
+                "description = \"d\"\nkind = \"boot\"\nprograms = ['p']\nexpect = []",
+            )
+            .unwrap()
+            .kind
+            {
+                Kind::Boot(boot) => boot,
+                _ => panic!("a boot case"),
+            }
+        };
+        boot.with_harts(Some(3));
+        assert_eq!(
+            (boot.smp.for_width("rv64"), boot.smp.for_width("rv32")),
+            ([3].as_slice(), [3].as_slice())
+        );
     }
 
     /// A fanout's jobs are values in a variable over one test file, the test files, or the tests;

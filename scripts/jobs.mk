@@ -42,7 +42,7 @@
 #   fanned  a host-tests case with a `fanout`: 2 cores to build, and each job asks q for its own
 #   bounded other host-tests cases and the Elixir oracles (they build beamlet): 4 cores
 #           (RUST_TEST_THREADS follows the lease)
-#   boot    everything else: one core per guest hart (the case's largest smp), icount-pinned,
+#   boot    everything else: one core per guest hart (the case's largest smp on that width), icount-pinned,
 #           a verdict beside anything; a timeout_secs expiry beside other work is rerun alone
 
 SHELL := /bin/bash
@@ -73,8 +73,9 @@ hostonly := $(sort $(basename $(notdir $(shell grep -LE '^arch *=' tests/*.toml)
 byname := $(sort $(basename $(notdir $(shell grep -lE '^whole_run *= *false' tests/*.toml))))
 logs := target/jobs
 prebuilt := target/prebuilt
-# cores for a boot case: its largest smp value (default 1)
-smp = $(or $(lastword $(sort $(shell grep -oE '[0-9]+' <<< "$$(grep -E '^smp *=' tests/$(1).toml 2>/dev/null)"))),1)
+# cores for a boot case on a width: its largest smp value there (default 1): the one list, or the
+# width's own in the per-width form (`smp = { rv64 = [1, 2], rv32 = [1] }`; a width left out runs 1)
+smp = $(or $(lastword $(sort $(shell line=$$(grep -E '^smp *=' tests/$(1).toml 2>/dev/null); [[ $$line == *'{'* ]] && line=$$(grep -oE '\b$(2) *= *\[[^]]*\]' <<< "$$line"); grep -oE '[0-9]+' <<< "$${line#*=}"))),1)
 # host ports a net case forwards: every port in its `forward` lists plus one per poke; `--ports N` for q, or nothing
 ports = $(if $(filter-out 0,$(1)),--ports $(1))
 ports_of = $(call ports,$(shell grep -oE '[0-9]+' <<< "$$(grep -E '^forward *=' tests/$(1).toml 2>/dev/null)" | wc -l | xargs -I{} expr {} + $$(grep -cE '^\[net\.poke\]' tests/$(1).toml 2>/dev/null)))
@@ -106,13 +107,13 @@ echo "$@ rc=$$rc ($(2))"; exit $$rc
 endef
 
 $(addprefix rv64/,$(boot)) $(addprefix rv32/,$(filter-out $(hostonly),$(boot))): %:
-	$(call case_recipe,--cores $(call smp,$(@F)),boot)
+	$(call case_recipe,--cores $(call smp,$(@F),$(@D)),boot)
 
 $(addprefix rv64/,$(quiet)) $(addprefix rv32/,$(filter-out $(hostonly),$(quiet))): %:
 	$(call case_recipe,--quiet,quiet)
 
 $(addprefix rv64/,$(net)) $(addprefix rv32/,$(filter-out $(hostonly),$(net))): %:
-	$(call case_recipe,--cores $(call smp,$(@F)) $(call ports_of,$(@F)),net)
+	$(call case_recipe,--cores $(call smp,$(@F),$(@D)) $(call ports_of,$(@F)),net)
 
 $(addprefix rv64/,$(fanned)) $(addprefix rv32/,$(filter-out $(hostonly),$(fanned))): %:
 	$(call case_recipe,--cores 2,fanned)
