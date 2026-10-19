@@ -1,0 +1,21 @@
+# Architect, 2026-10-19: STEWARD9's two-hart sequential run surfaced the real deadline_notice
+# mechanism: a lease's deadline fires while the steward is INSIDE a 2-6 s synchronous start_agent
+# launch, so the notice waits behind the launch. The latency case avoids it by sequencing (the
+# steward idle at each deadline), but in production launches and deadlines overlap constantly, so
+# the deadline_notice target (40 ms, a human-control promise that the sponsor is told promptly)
+# is unmet whenever a launch is in flight. STEWARD12 (notices-first) does not help when the loop
+# is inside the launch. This is the bigger fix: the launch does not hold the loop. It touches
+# STEWARD10's "no install off the loop" premise (a launch thread installs the child's handles),
+# so it is designed on the settled STEWARD10/STEWARD5 base; the brief follows that design.
+# Ruling: .wash/local/wave-2026-10-18-rulings.md "STEWARD13". A sibling of STEWARD12, not a
+# widening. Until it lands, scheduling.md states the residual (deadline_notice is clean with the
+# steward idle at the deadline; a launch in flight delays it up to the launch bound).
+
+[[node]]
+  id = "STEWARD13"
+  title = "A launch does not hold the steward's loop: the loop serves deadline notices, timer wakes and calls while an agent is launching"
+  template = "package"
+  parent = "AGENTS"
+  needs = ["STEWARD10", "STEWARD12"]
+  body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'STEWARD13'. Brief: to follow (the Architect designs it on the settled STEWARD10/STEWARD5 base before launch). Tier A (the steward's loop), size M, reviewer steward-red-5. Found by STEWARD9's two-hart sequential run: the deadline_notice delay is not simultaneous deadlines but the steward LAUNCHING a later lease synchronously (image read from erofsd + map + process_start, 2-6 s) when an earlier deadline fires; the notice waits behind the launch. The latency case sequences so the steward is idle at each deadline (meeting 40 ms), but in production launches and deadlines overlap, so the deadline_notice human-control target is unmet whenever a launch is in flight. notices-first (STEWARD12) does not help when the loop is inside start_agent. Direction: the launch's slow part runs off the loop (a launch thread, the STEWARD5 single-arbiter pattern: the loop hands the launch over, serves deadlines/notices/calls meanwhile, and replies to start_agent when the thread reports completion, so start_agent's synchronous contract is unchanged and no caller or wire changes); the alternative is the launch yielding to the loop on the loop's own thread between I/O waits. The design question the Architect settles first: a launch thread installs the child's handles, which touches STEWARD10's 'no install off the loop' premise (steward-red-5's note), so the deadline-witness guard's argument must be re-shown to hold with a launch thread, or the installs kept on the loop with only the I/O off it. No start_agent protocol change (not the deferred async-start_agent); start_agent still replies when launched. Cases: a concurrent-launch latency variant where a deadline fires during a launch meets deadline_notice; the steward set unchanged; STEWARD10's guard host test green. Pages: steward.md, scheduling.md."
+  state = "todo"

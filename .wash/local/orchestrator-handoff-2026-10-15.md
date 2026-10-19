@@ -613,3 +613,19 @@ STEWARD12 in the plan (needs STEWARD9 + STEWARD11: same files, steward.rs/drive.
 ~13:03Z STEWARD11 reported (3d248be61, one commit on 5bfbd2270) -> steward-red-5; train 76 = STEWARD11 alone on 20b77f280 (.tmp/train-76/run.sh prepared, msg.txt after accept). STEWARD9 re-tiered B (probe reverted; N=2 lease 10 s to avoid the probe's 9 s sentinel) -> train 77. Then STEWARD12.
 
 ~13:05Z STEWARD11 OK (steward-red-5), accepted. TRAIN 76 = STEWARD11 alone: head f792bf3c8 on 20b77f280, .tmp/train-76 running. On green: ff main, push, push wp-STEWARD11, remove worktree+branch, save.sh (STEWARD9 dirty may refuse), give STEWARD9 the hash to rebase before its gates.
+
+~13:33Z TRAIN 76 PUBLISHED (STEWARD11) merge f792bf3c8 on 20b77f280, main dfbf2eeba (+save.sh plan commit if any); 770 PASS rc=0 (13:05-13:31Z); wp-STEWARD11 pushed, worktree+branch removed; save.sh clean (wash-local pushed). Next: STEWARD9 rebases onto origin/main -> steward-red-5 -> train 77; then launch STEWARD12 (brief .wash/local/STEWARD12-implementer.md, steward-red-5).
+
+~15:20Z STEWARD9 ruling: (W) two boots (N=1-4, N=16) each on its own ring; probe ends its window on the latency-done marker (LATENCY_ROUNDS const gone) -> carries steward code, Tier A in name, steward-red-5. STEWARD12 stays narrow (notices-first). STEWARD13 (a launch does not hold the loop; needs STEWARD10, STEWARD12; brief after they land) added to the plan from plan-2026-10-19-steward13.toml. Order: STEWARD9 -> train 77 -> STEWARD12 -> STEWARD13.
+
+~20:01Z STEWARD9: rv64 green both cases; rv32 N=2 timer_wake spike rerunning alone; rv32 N=16 spinner VM dies (module reads time out; STEWARD8 finding 5) -> Architect (a): three cases (N=1-3; N=4; N=16 rv64-only), rv32 row names READ1. READ1 added to the plan from plan-2026-10-19-read1.toml (Tier A, investigation-first, needs none; brief after measurement). Launch READ1 once STEWARD9 is at review (its measurement boots many VMs; one latency-class slot at a time); reviewer pick: kernel-red-3.
+
+~20:21Z STEWARD9 rv32 two-hart N=2 timer_wake 31.8 ms vs 15 deterministic -> Architect (a): node SCHED5 (drafted as SCHED1, id taken; body trimmed to <2000 B), kernel lock contention R78; BENCH1 (per-width smp field) added and LAUNCHED (bench1-implementer on dfbf2eeba, kernel-red-3). Sequencing: BENCH1 -> train 77; STEWARD9 rebases, adopts the field -> train 78; READ1 launches at STEWARD9 review; STEWARD12 after STEWARD9; STEWARD13 after 12; SCHED5 brief after measurement (Architect).
+
+~20:25Z steward9-implementer checkpointed at 62% (WIP cbf4ae16e: three cases functional, probe marker-end, prose stale) and ended; steward9-implementer-2 launched with handoff_from. Old assignment bfb82f679c left open (nudge): watch for plan_accept refusal later.
+
+~20:30Z BENCH1 reported (dbca8d046 on dfbf2eeba, one commit: Smp enum, per-width map, two host tests, jobs.mk macro, testbench.md) -> kernel-red-3; train 77 = BENCH1 alone (.tmp/train-77/run.sh prepared). STEWARD9 (impl 2) adopts the field after 77 publishes.
+
+~20:33Z BENCH1 OK (kernel-red-3), accepted. TRAIN 77 = BENCH1 alone: head dffaab186 on dfbf2eeba, .tmp/train-77 running. On green: ff main, push, push wp-BENCH1, remove worktree+branch, save.sh, give steward9-implementer-2 the hash to rebase and adopt the per-width smp.
+
+~21:01Z Train 77 run 1: 769 PASS, 1 FAIL deadline-flood-billed-traced-mttcg rv64 smp=2 (MTTCG host-time case; clause foreign_timer_in ≤ 10/1000, log .tmp/train-77/fail-rv64-deadline-flood-billed-traced-mttcg.log); rerunning alone x3 (rerun*-rv64-deadline-flood.log). BENCH1 touches no kernel; list-form smp unchanged.

@@ -1,0 +1,16 @@
+# Architect, 2026-10-19: STEWARD9's rv32 N=16 run reached STEWARD8's finding 5 for the first
+# time with a liveness consequence: a lease VM dies when its module reads at the system volume
+# (erofsd -> verityd -> blkd) time out (the VM hub's FILE_WAIT_US, 10 s) under its account's
+# concurrent load (16 VMs). The read path cannot serve 16 concurrent module loaders fast enough on
+# rv32, so a read fails and the VM crashes (its module does not load). rv64 passes N=16. A system
+# finding, not the case's. Ruling: .wash/local/wave-2026-10-18-rulings.md "READ1". The orchestrator
+# assigns the id/series (a read-path package; B88 was its sibling). Needs nothing of STEWARD12/13.
+
+[[node]]
+  id = "READ1"
+  title = "A lease VM does not die from module-read starvation: the verified read path serves an account's concurrent module loads within the VM's read bound, or the VM survives a slow read"
+  template = "package"
+  parent = "AGENTS"
+  needs = []
+  body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'READ1'. Brief: to follow (investigation-first; the Architect settles the fix on the measurement). Tier A (the verified read path: erofsd, verityd, blkd; possibly the VM's read resilience), size M, reviewer a red (the orchestrator's pick). Found by STEWARD9 on rv32 at N=16: a spinner VM dies mid-round because its module reads at the system volume time out (the VM hub's FILE_WAIT_US, 10 s) behind the other VMs' reads — STEWARD8's finding 5 (the read path's per-(account, label set) pages/requests ceiling does not scale with the account's concurrent VM count; B88 sized verityd's cache and read-ahead for two loaders, not sixteen) reaching a liveness consequence. rv64 passes N=16; a full rv32 system is beyond M6 (tenets), so the goal is NOT 'rv32 N=16 passes' but 'a lease VM does not DIE from module-read starvation under its account's concurrent load' — it may be slow, not dead — and a stated supported concurrent-VM count per account at the system volume, measured on both widths. Investigation: measure the N at which a VM's module read times out to death, both widths and hart counts; the levers are the pages/requests VM-count term (finding 5's derivation completion, the Architect's remit), verityd's cache/read-ahead sized for N loaders (a B88 extension), the read path's weight, and the VM's resilience to a slow module read (does a timed-out read have to kill the VM, or can it retry past FILE_WAIT_US for a code read it cannot proceed without). The implementer measures and brings the fix choice back to the Architect; do not assume one lever. Cases: a boot of N concurrent VMs of one account loading code at the system volume, none dying, up to the stated supported N both widths; the measured fatal N before/after. Pages: verityd.md / erofsd.md (the drain rate and the supported N), scheduling.md (STEWARD9's rv32 N=16 row names this), serving.md if the pages/requests term moves. STEWARD9 does not wait for it."
+  state = "todo"

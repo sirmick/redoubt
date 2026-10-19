@@ -738,6 +738,90 @@ that rounds to 9 s collides with; a robust marker (a distinct token on the probe
 remove the fragility — a test-infra follow-up for the next latency-probe touch (STEWARD12 touches
 steward.rs but its scope is notices-first, so not there unless cheap), not blocking.
 
+### STEWARD9 ring (two harts) + STEWARD13 (the launch holds the loop)
+
+**Ring: (W) two boots.** Sequential-all passes rv64 one hart (deadline_notice 10-14 ms, dropped
+0) but overruns the ring at two harts (~14 % over; the hybrid's headroom was the cluster's). Run
+the case as two boots — N=1-4 and N=16 (two tomls or one parameterised) — each judged by the
+oracle on its own per-boot ring; no kernel change, no target or D moved, the table's meaning
+unchanged, the one-hart rows stand. Not (X) trim the sleep (3 % margin, fragile), not (Y) a larger
+ring (a kernel resource, must not grow for one case; rv32 maxed), not (Z) fewer D (weakens p99).
+STEWARD9's two boots (N=1-4, N=16) share the manifest and recipes (the bench has no rounds
+argument). (W) is not pure toml: the probe prints LATENCY-END on a compile-time LATENCY_ROUNDS=5,
+so a 4-round boot never ends its window. Ruled: end the window on the `latency-done` marker the
+case already writes after its last round — the probe reads the marker instead of counting rounds,
+so the **case owns its round count** and the LATENCY_ROUNDS magic constant goes (a robustness gain,
+the same fragility class as the length sentinel, here fully retired). That re-tiers STEWARD9 to
+**Tier A** for the few probe lines (steward-red-5; no kernel, D, target or ring change), superseding
+the earlier probe-revert-to-B.
+
+**The launch-holds-the-loop finding → STEWARD13 (sibling of STEWARD12, not a widening).** The real
+deadline_notice delay is a lease's deadline firing while the steward is inside a 2-6 s synchronous
+start_agent launch — the notice waits behind the launch. The latency case sequences around it (the
+steward idle at each deadline, meeting 40 ms), but in production launches and deadlines overlap, so
+the deadline_notice human-control target is unmet whenever a launch is in flight. notices-first
+(STEWARD12) does not help when the loop is *inside* start_agent, so STEWARD12 stays narrow (the
+simultaneous-deadline burst bookkeeping, still a real independent gain) and the launch fix is
+**STEWARD13**: the launch's slow part runs off the loop (a launch thread, STEWARD5's single-arbiter
+pattern — the loop serves deadlines/notices meanwhile and replies to start_agent on completion, so
+start_agent's synchronous contract is unchanged; NOT the deferred async-start_agent protocol
+change). Design question I settle first on the settled base: a launch thread installs the child's
+handles, which touches STEWARD10's "no install off the loop" premise (steward-red-5's note 1) — the
+deadline-witness guard must be re-shown to hold with a launch thread, or the installs kept on the
+loop with only the I/O off it. So STEWARD13 needs STEWARD10 and STEWARD12, and its brief follows
+my design. Until it lands, scheduling.md states the residual: deadline_notice is clean with the
+steward idle at the deadline (the sequential measurement); a launch in flight delays it up to the
+launch bound. Plan: plan-2026-10-19-steward13.toml.
+
+### STEWARD9 rv32 N=16 → (a) + READ1 (the drain-rate finding reaches VM death)
+
+rv64 is complete (both cases pass both hart counts, dropped 0, deadline_notice met). On rv32 at
+N=16 a spinner VM dies mid-round: its module reads at the system volume time out (the VM hub's
+10 s) behind the other VMs' reads — STEWARD8's finding 5 (the read path's per-account pages/
+requests ceiling does not scale with the concurrent VM count) reaching a liveness consequence
+(a VM dies, not just slows). Ruled **(a):** the N=16 round is measured on rv64; rv32's N=16 row
+states the cause and names READ1. Not (b) (tolerating N=15 passes a case on a dead VM — dishonest;
+and "unjudged inside the case" is just (a)'s stated row), not (c) (blocks STEWARD9 on an unsized
+package). The bench conditions only at case level (arch), not per step, and N=4 cannot rejoin N=1-3 on rv32
+(that is the overrun they split from; rv32 N=1-3 alone is 5.99 M of 8.39 M), so (a) is **three
+cases**: steward-latency (N=1,2,3, both widths), steward-latency-n4 (N=4, both widths, fits alone),
+steward-latency-n16 (N=16, `arch=["rv64"]`; rv32 blocked by the drain rate, its row on scheduling.md
+naming the cause and READ1). rv64 runs three boots, rv32 two. The `arch` field cleanly expresses
+"N=16 is rv64-only"; no per-step width condition needed. Evidence sharpening READ1: a spinner VM
+`exited 1` (crashed, not killed/ended) before the first N=16 deadline notice — its module reads
+past the hub's 10 s give-up — so one READ1 lever is concrete: a timed-out code read **kills** the
+VM (it exits 1), and READ1 must decide whether it should (the VM surviving a slow code read) or the
+read must complete (the read-path capacity).
+
+**READ1 (drafted, the orchestrator ids it; a read-path package, B88's sibling; needs nothing of
+STEWARD12/13).** A lease VM must not DIE from module-read starvation under its account's concurrent
+load. Scoped carefully: the goal is NOT "rv32 N=16 passes" (a full rv32 system is beyond M6; rv64
+passes N=16) but "no VM death from starvation" + a stated supported concurrent-VM count per
+account at the system volume, which could bite rv64 at higher N too. Investigation-first: measure
+the fatal N both widths; the levers are the pages/requests VM-count term (finding 5, my remit),
+verityd's cache/read-ahead for N loaders (a B88 extension), the read-path weight, and the VM's
+resilience to a slow code read (must a timed-out read kill the VM?). The implementer measures and
+brings the fix choice back to me. Plan: plan-2026-10-19-read1.toml; brief follows the measurement.
+
+### STEWARD9 rv32 two-hart: SCHED5 (timer_wake) + BENCH1 (per-width smp)
+
+rv32 at two harts has a deterministic N=2 timer_wake p50 miss (31.8 ms vs 15; N=1 5.6, N=3 5.2;
+everything else met, dropped 0; lock-wait 249/1000), pre-existing and first judged now (STEWARD8
+never reached the reset on rv32 two harts). rv64 both harts and rv32 one hart pass everything.
+Ruled **(a):** it is a kernel lock-contention finding (scheduling.md's "a wake can wait for the
+kernel lock at 2 harts" residual, R78), **a node of its own, SCHED5** (kernel scheduler,
+investigation-first — why N=2/one-spinner specifically; fix or stated residual), not STEWARD9's.
+STEWARD9 states the rv32 two-hart rows as findings with their numbers on scheduling.md and gates
+rv32 at **one hart** until SCHED5 lands. Not (b) (don't scope-creep STEWARD9 into a kernel
+investigation).
+
+Bench mechanics: arch and smp are case-level fields, so "rv32 one hart, rv64 both" needs a
+**per-width smp** (BENCH1: `smp = { rv64 = [1,2], rv32 = [1] }`, the list staying the default),
+reusable (the latency cases, and B88/STEWARD8 wanted the same), rather than a duplicated rv64-only
+two-hart toml. BENCH1 is a small Tier A bench node; STEWARD9 uses it for clean gating (or carries a
+stated smp and adopts it when it lands). Both drafted: plan-2026-10-19-sched-bench.toml; the
+orchestrator ids them. SCHED5 and READ1 are the two rv32 findings the latency table names.
+
 ## agent-suite wave B (2026-10-19)
 
 The two rows ATK10 left are sound now, as one small package **ATK13** (Tier A, S): (1) the R60
