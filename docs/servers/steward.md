@@ -730,7 +730,7 @@ u16)` ([failure and restart](#failure-and-restart)).
 
 ### Leases
 
-Status: built · partly tested: a lease's roots are its sponsor's `~/project` and the system volume (the task-scoped grants and `gatewayd` are later) · tested: bench:steward-lease-ends, bench:steward-end-lease, bench:steward-sub-agent-dies-with-agent, bench:agent-login, bench:steward-agent-escape, bench:steward-lease-cut, bench:steward-agent-flood, host:redoubt-steward-server::start_agent_runs_the_lease_batch_and_answers_the_lease, host:redoubt-steward-server::end_lease_from_the_sponsor_destroys_the_lease_and_tells_her_sessions, host:redoubt-steward-server::a_leases_deadline_ends_it_without_a_failed_step, host:redoubt-steward-server::a_login_as_the_sponsored_principal_is_a_lease_of_its_sponsors, host:redoubt-steward::a_sponsored_principals_session_is_a_lease_of_its_sponsors, host:redoubt-steward::sponsor_session_and_notify_sponsor
+Status: built · partly tested: a lease's roots are its sponsor's `~/project` and the system volume (the task-scoped grants and `gatewayd` are later) · tested: bench:steward-lease-ends, bench:steward-end-lease, bench:steward-sub-agent-dies-with-agent, bench:agent-login, bench:steward-agent-escape, bench:steward-lease-cut, bench:steward-agent-flood, host:redoubt-steward-server::start_agent_runs_the_lease_batch_and_answers_the_lease, host:redoubt-steward-server::end_lease_from_the_sponsor_destroys_the_lease_and_tells_her_sessions, host:redoubt-steward-server::a_leases_deadline_ends_it_without_a_failed_step, host:redoubt-steward-server::a_leases_index_recycled_for_a_new_budget_before_its_notice_is_not_destroyed_as_it, host:redoubt-steward-server::a_leases_index_recycled_for_a_connection_fails_no_step, host:redoubt-steward-server::an_end_lease_after_the_deadline_makes_no_destroy_by_the_revoked_handle, host:redoubt-steward-server::a_login_as_the_sponsored_principal_is_a_lease_of_its_sponsors, host:redoubt-steward::a_sponsored_principals_session_is_a_lease_of_its_sponsors, host:redoubt-steward::sponsor_session_and_notify_sponsor
 
 An agent is its own principal, never an impersonation, with an accountable **sponsor**: a person,
 or an agent with a person at the top of the chain.
@@ -766,8 +766,24 @@ or an agent with a person at the top of the chain.
   not held: the core forgets a notice no session can take. The same endpoint carries
   `server_restarted` ([failure and restart](#failure-and-restart)).
 - **A lease the kernel's deadline took** reaches the steward as its process's exit notice with
-  the budget already gone: the core's `DestroyBudget` on it is the end asked for, not a failed
-  step, once that object's exit is in; on a budget whose process still runs it is one.
+  the budget already gone and the steward's handle to it revoked, its table index free for the
+  next handle the steward installs: the core's `DestroyBudget` on it is the end asked for, done
+  already by the kernel, and the steward never makes it by that handle. The steward keeps each
+  budget with the deadline it minted it with, reads the clock right before any destroy, and
+  makes none once the deadline has passed: the kernel destroys a budget at the first entry at or
+  after its deadline, before anything else, and never before
+  ([deadlines](../userland/agents.md#a-leases-end-is-the-kernels)), nothing but the deadline revokes a
+  budget handle the steward holds, and no reply the steward's threads take carries a handle (the
+  cleanup thread's disconnect and ended, the reader threads' calls at consoled), so no handle is
+  installed in its table between that read and the call and none can take the index; a reply
+  that one day carries a handle rechecks this argument. Before this, the destroy was made and its
+  `BadHandle` tolerated on a lease whose process was gone, which held only while deadlines came
+  one at a time: several leases expiring together (`steward-latency`'s clustered deadlines)
+  recycle the freed index before the notice is served, and a destroy by it found another kind of
+  object (`WrongObject`, a failed step) or would have destroyed another lease's budget with no
+  error. An `end_lease` served after the deadline but before the notice makes no destroy either;
+  one on a live lease destroys it as before, and a handle that answers `BadHandle` before its
+  deadline is a handle the steward lost: a failed step.
 - **A principal's live leases are bounded by its share.** Its leases and its sessions of one
   label set are carved from that set's fixed sub-budget
   ([fixed sub-budgets](#fixed-sub-budgets-per-label-set)), and the kernel's carve refuses past
@@ -1394,6 +1410,14 @@ Status: built · partly tested: `steward-restart` proves the release of a dead s
   `init`'s reboot.
 - **A session crashes:** the steward destroys its budget and tells its console `ended`; `sshd`
   closes its channel; nobody else is affected.
+- **A budget the kernel's deadline took** (a lease's, a crossing's) is destroyed once, by the
+  kernel, which revoked the steward's handle to it and freed the index. The deadline the steward
+  minted is its witness: at or past it the destruction is the kernel's, and the steward's own
+  `DestroyBudget` for the budget, at the exit notice, at an `end_lease` after the deadline or in
+  a forget, makes no call by that handle, since the index may name a newer object by then; ahead
+  of it the handle still names the budget, and the destroy is the steward's
+  ([leases](#leases)). The connections it gives back are the cleanup thread's steps as for any
+  end.
 - **A reader or writer budget** outlives nothing: it has a deadline, `CROSSING_LIFE`, and the
   steward destroys it when its one item is done, or when its program fails; its connection is
   given back after ([declassification and push](#declassification-and-push)).

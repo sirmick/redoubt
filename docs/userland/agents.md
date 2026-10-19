@@ -113,7 +113,7 @@ sooner. A lease is task-scoped: "read `~/project`, write `~/project/out`, the `m
   without one ([beamlet](beamlet.md#beamlet-on-redoubt)): what the agent writes to the console
   is dropped, a read answers the end of the input, so an agent's output has nowhere to go but
   `/project/out`. How its VM ended is the steward's console line
-  (`steward: lease alice/agent-1 of 1001/{} exited 0`), never the agent's.
+  (`steward: lease alice/agent-1 7303562901476581370 of 1001/{} exited 0`, the lease's id beside its name), never the agent's.
 - **A lease has no network.** Its namespace holds no `/net`, so its VM's `gen_tcp` has only the
   loopback inside the VM ([beamlet](beamlet.md#beamlet-on-redoubt)): a connect to any other
   address is `{error, enetunreach}`, and the bench's peer sees nothing from it

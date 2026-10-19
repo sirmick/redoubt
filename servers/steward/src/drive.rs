@@ -41,7 +41,10 @@ const CONSOLE: ReplyTo = 2;
 
 /// What a step made, kept under its token until the core forgets its owner.
 pub enum Made<B, H> {
-    Budget(B),
+    /// A budget, with the deadline it was minted with: past it the kernel has destroyed the
+    /// budget and revoked this handle (R10), and the handle is never used again
+    /// ([`Steward::destroy`]).
+    Budget(B, u64),
     Scope(B),
     /// A connection the session's namespace holds, or none for a slot bound to nothing.
     Connection(Option<H>),
@@ -400,8 +403,33 @@ impl<B: Copy, H: Copy> Steward<B, H> {
 
     fn budget(&self, token: &Token) -> Result<B, Error> {
         match self.made.get(token) {
-            Some(Made::Budget(b) | Made::Scope(b)) => Ok(*b),
+            Some(Made::Budget(b, _) | Made::Scope(b)) => Ok(*b),
             _ => Err(Error::BadHandle),
+        }
+    }
+
+    /// Destroys budget `b`, minted with `deadline`, by its handle only while the steward knows
+    /// the handle still names it. The kernel destroys a budget whose deadline has passed at its
+    /// next entry, before anything else (R10; `kernel/src/time.rs`), revoking every handle to it
+    /// and freeing the steward's index for the next handle the steward installs: a destroy by
+    /// that index afterwards would find the index free (`BadHandle`), another kind of object
+    /// (`WrongObject`), or another budget, which it would destroy with no error. So the clock is
+    /// read right before the call, and the two calls are the loop's, back to back, with no
+    /// install between them (no reply the steward's threads take carries a handle; one that did
+    /// would recheck this): with the deadline still ahead the handle is the budget's, since
+    /// nothing but the deadline revokes a budget handle the steward holds, and the kernel takes
+    /// a budget at its deadline, never before; with it passed the kernel has taken the budget
+    /// already, and no call is made. A `BadHandle` with the deadline passing between the read
+    /// and the call is the same end (the kernel's expiry ran first at the call's entry, and the
+    /// index was still free); one with the deadline still ahead is a handle the steward lost,
+    /// a failure, as any other error is.
+    fn destroy<K: Kernel<Budget = B, Handle = H>>(kernel: &mut K, b: B, deadline: u64) -> Result<(), Error> {
+        if kernel.now() >= deadline {
+            return Ok(());
+        }
+        match kernel.destroy(b) {
+            Err(Error::BadHandle) if kernel.now() >= deadline => Ok(()),
+            destroyed => destroyed,
         }
     }
 
@@ -424,7 +452,7 @@ impl<B: Copy, H: Copy> Steward<B, H> {
                 };
                 let spec = spec(limits, labels.as_slice(), account, deadline.unwrap_or(FOREVER))?;
                 let b = kernel.create(parent, &spec)?;
-                self.made.insert(token.clone(), Made::Budget(b));
+                self.made.insert(token.clone(), Made::Budget(b, spec.deadline));
                 Ok(Produced::Budget(kernel.budget_id(b)))
             }
             // A zero-limit budget: it holds nothing and runs nothing, so a server given it can
@@ -513,19 +541,18 @@ impl<B: Copy, H: Copy> Steward<B, H> {
                     Err(e) => Err(e),
                 }
             }
-            // The owner's process is ending: its exit notice is late from here on. A lease the
-            // kernel's deadline took is already gone, its handle revoked with it (R10), and its
-            // `Exited` reaches here with no process left: that destroy's `BadHandle` is the end
-            // the core asked for, not a failure. On a budget whose process still runs it is one.
+            // The owner's process is ending: its exit notice is late from here on. A budget the
+            // kernel's deadline took (a lease's at its `Exited`, or at an `end_lease` served
+            // after the deadline but before the notice) is destroyed already, and never by the
+            // handle the steward kept ([`Steward::destroy`]): the end the core asked for is done.
             Step::DestroyBudget { budget } => {
-                let b = self.budget(budget)?;
-                let running = self.pids.values().any(|o| o == owner);
+                let (b, deadline) = match self.made.get(budget) {
+                    Some(Made::Budget(b, deadline)) => (*b, *deadline),
+                    Some(Made::Scope(b)) => (*b, FOREVER),
+                    _ => return Err(Error::BadHandle),
+                };
                 self.end_pids(owner);
-                match kernel.destroy(b) {
-                    Ok(()) => {}
-                    Err(Error::BadHandle) if !running => {}
-                    Err(e) => return Err(e),
-                }
+                Self::destroy(kernel, b, deadline)?;
                 self.made.remove(budget);
                 Ok(Produced::Done)
             }
@@ -606,8 +633,8 @@ impl<B: Copy, H: Copy> Steward<B, H> {
         for t in mine {
             match self.made.remove(&t) {
                 Some(Made::Connection(Some(h)) | Made::Relay(_, h)) => connections.push(h),
-                Some(Made::Budget(b)) => {
-                    let _ = kernel.destroy(b);
+                Some(Made::Budget(b, deadline)) => {
+                    let _ = Self::destroy(kernel, b, deadline);
                 }
                 _ => {}
             }
