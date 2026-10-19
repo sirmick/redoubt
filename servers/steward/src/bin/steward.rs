@@ -2366,10 +2366,11 @@ mod machine {
                     let _ = close(h(key as u32));
                     machine.watchers.reported();
                     // How the process ended, said once, under the name the notice gives it
-                    // (`alice/agent-1`), so the two lines correlate: a session's VM has its own
-                    // console and a lease's has none (servers/steward.md, "Leases"). A process
-                    // whose object the core let go of first (a lease `end_lease` ended, its VM
-                    // killed with its budget) gets its line and no event.
+                    // (`alice/agent-1`) and the object's id, so the line correlates with the
+                    // notice and with the audit records, which name the id: a session's VM has
+                    // its own console and a lease's has none (servers/steward.md, "Leases"). A
+                    // process whose object the core let go of first (a lease `end_lease` ended,
+                    // its VM killed with its budget) gets its line and no event.
                     let cause = match delivery.words[1] {
                         1 => "exited",
                         2 => "faulted",
@@ -2388,15 +2389,16 @@ mod machine {
                             None => continue,
                         },
                     };
-                    // A crossing's program is named by its crossing: it ends with its budget's
-                    // destruction once its one item is done ("Declassification and push").
-                    let what = if object.kind == redoubt_steward::effect::Kind::Crossing {
-                        "crossing"
+                    // A crossing's program is named by its crossing, which is its id: it ends
+                    // with its budget's destruction once its one item is done ("Declassification
+                    // and push"). A lease's name is its human one, so its id follows it.
+                    let (what, id) = if object.kind == redoubt_steward::effect::Kind::Crossing {
+                        ("crossing", String::new())
                     } else {
-                        "lease"
+                        ("lease", format!(" {}", object.id))
                     };
                     let line = format!(
-                        "steward: {what} {name} of {}/{} {cause} {}\n",
+                        "steward: {what} {name}{id} of {}/{} {cause} {}\n",
                         object.domain.account(),
                         labels(object.domain.labels().as_slice()),
                         delivery.words[2]

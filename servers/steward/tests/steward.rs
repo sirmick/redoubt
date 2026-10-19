@@ -3,7 +3,7 @@
 //! protocol"): its start from the manifest lines, and each call through the protocol, the core
 //! and the batches it names.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use redoubt_rt::abi::{BudgetSpec, Error, FOREVER, Handle, ReceivedHandles};
 use redoubt_rt::ipc::Caller;
@@ -189,8 +189,19 @@ struct Recorder {
     detach: Option<Error>,
     /// Each budget made, with the deadline it was asked for.
     deadlines: Vec<(usize, u64)>,
-    /// Budgets the kernel's deadline took: a `destroy` of one is `BadHandle`, its handle revoked.
-    gone: Vec<usize>,
+    /// Each budget's parent.
+    parents: BTreeMap<usize, usize>,
+    /// The budgets live: made and not destroyed, by the steward or by the kernel's deadline.
+    budgets: BTreeSet<usize>,
+    /// The handle indices the kernel freed when a deadline took a budget
+    /// ([`Recorder::deadline_takes`]): the next handle made takes the lowest, as the kernel's
+    /// table does. (A destroy the steward makes frees its index on the machine too; not
+    /// modelled: the steward drops the record as it destroys, so nothing of its looks that index
+    /// up again, and the tests' handle numbers stay the kernel's order of making.)
+    free: Vec<usize>,
+    /// Budgets whose handle the steward lost before their deadline (a bug): a `destroy` of one is
+    /// `BadHandle`.
+    lost: Vec<usize>,
     /// Every reader thread is taken: the next channel cannot be served.
     channels_full: bool,
     /// What every cleanup step's server answers: `Ok` unless a test says (`Timeout`: the server
@@ -228,8 +239,26 @@ impl Recorder {
         if self.fail_at == Some(self.made) {
             return Err(Error::OutOfMemory);
         }
+        if let Some(lowest) = self.free.iter().min().copied() {
+            self.free.retain(|i| *i != lowest);
+            return Ok(lowest);
+        }
         self.made += 1;
         Ok(self.made)
+    }
+
+    /// The kernel's deadline takes `budget` (R10): it and every budget below it are destroyed,
+    /// their handles revoked and the indices freed for the next handle made. Only once the
+    /// clock has passed the deadline the budget was made with, as the kernel's expiry runs.
+    fn deadline_takes(&mut self, budget: usize) {
+        let (_, deadline) = self.deadlines.iter().find(|d| d.0 == budget).expect("a budget made");
+        assert!(*deadline <= self.now(), "the kernel takes a budget at its deadline, never before");
+        let mut doomed = vec![budget];
+        while let Some(b) = doomed.pop() {
+            doomed.extend(self.parents.iter().filter(|(_, p)| **p == b).map(|(c, _)| *c));
+            assert!(self.budgets.remove(&b), "budget {b} was live");
+            self.free.push(b);
+        }
     }
 
     fn creates(&self) -> Vec<&Call> {
@@ -308,6 +337,8 @@ impl Kernel for Recorder {
     fn create(&mut self, parent: usize, spec: &BudgetSpec) -> Result<usize, Error> {
         let made = self.make()?;
         self.deadlines.push((made, spec.deadline));
+        self.parents.insert(made, parent);
+        self.budgets.insert(made);
         self.calls.push(Call::Create {
             parent,
             pages: spec.pages,
@@ -320,9 +351,19 @@ impl Kernel for Recorder {
 
     fn empty(&mut self, _budget: usize) -> Result<bool, Error> { Ok(!self.users_busy) }
 
+    /// As the kernel answers a `budget_destroy` by index: a free index is `BadHandle`, an index
+    /// holding no budget `WrongObject`, and a budget's index destroys that budget, whichever it
+    /// is now.
     fn destroy(&mut self, budget: usize) -> Result<(), Error> {
         self.calls.push(Call::Destroy(budget));
-        if self.gone.contains(&budget) { Err(Error::BadHandle) } else { Ok(()) }
+        if self.free.contains(&budget) || self.lost.contains(&budget) {
+            return Err(Error::BadHandle);
+        }
+        if !self.deadlines.iter().any(|d| d.0 == budget) {
+            return Err(Error::WrongObject);
+        }
+        self.budgets.remove(&budget);
+        Ok(())
     }
 
     fn budget_id(&self, budget: usize) -> u64 { budget as u64 }
@@ -2243,48 +2284,133 @@ fn end_lease_from_the_sponsor_destroys_the_lease_and_tells_her_sessions() {
     assert!(s.failed.is_empty());
 }
 
+/// The budget of the lease started last: the one made with a deadline (its scope follows, for
+/// ever).
+fn leased(k: &Recorder) -> usize { k.deadlines.iter().rev().find(|d| d.1 != FOREVER).map(|d| d.0).unwrap() }
+
+/// A lease started for `us` microseconds by `u`: its id, its budget's handle and its pid.
+fn lease_for(s: &mut Steward<usize, usize>, k: &mut Recorder, u: u64, us: u64) -> (u64, usize, u64) {
+    let Ok(Reply::StartAgent(a)) = call(s, k, u, Message::StartAgent(StartAgent { lease: us })) else {
+        panic!()
+    };
+    let budget = leased(k);
+    let pid = (1..200).find(|p| s.exited(*p).is_some_and(|o| o.id == a.lease)).expect("the lease's process");
+    (a.lease, budget, pid)
+}
+
 /// A lease the kernel's deadline took: its process's exit notice arrives with the budget gone,
-/// and the core's `DestroyBudget` on it is the end asked for, not a failed step; the sponsor is
-/// told all the same.
+/// and the core's `DestroyBudget` on it is the end asked for, done already: the steward makes no
+/// destroy by the handle the deadline revoked, and no step fails; the sponsor is told all the
+/// same. A budget whose handle answers `BadHandle` before its deadline is a handle the steward
+/// lost, and that step fails.
 #[test]
 fn a_leases_deadline_ends_it_without_a_failed_step() {
     let mut k = Recorder::default();
     let mut s = started(&mut k);
     let u = alice_session(&mut s, &mut k);
-    let Ok(Reply::StartAgent(a)) =
-        call(&mut s, &mut k, u, Message::StartAgent(StartAgent { lease: 2_000_000 }))
-    else {
-        panic!()
-    };
-    // The lease's budget: the one made with a deadline (its scope follows, for ever).
-    let leased = |k: &Recorder| k.deadlines.iter().rev().find(|d| d.1 != FOREVER).map(|d| d.0).unwrap();
-    let budget = leased(&k);
-    let pid = pid_of(&s, Kind::Lease);
-    k.gone.push(budget);
+    let (lease, budget, pid) = lease_for(&mut s, &mut k, u, 2_000_000);
+    k.clock += 2_000_000;
+    k.deadline_takes(budget);
     k.calls.clear();
     let object = s.exited(pid).unwrap();
     let outputs = s.event(&mut k, EventKind::Exited { object }, 0).unwrap();
     assert!(s.failed.is_empty(), "{:?}", s.failed);
-    assert!(k.calls.contains(&Call::Destroy(budget)), "{:?}", k.calls);
-    assert!(k.calls.iter().any(
-        |c| matches!(c, Call::Notify { lease, name, .. } if *lease == a.lease && name == "alice/agent-1")
-    ));
+    assert!(!k.calls.iter().any(|c| matches!(c, Call::Destroy(_))), "{:?}", k.calls);
+    assert!(
+        k.calls.iter().any(
+            |c| matches!(c, Call::Notify { lease: l, name, .. } if *l == lease && name == "alice/agent-1")
+        )
+    );
     assert!(
         !outputs.iter().any(|o| matches!(o, Output::Notice { .. })),
         "the notice went, it is not left over"
     );
-    // A destroy refused on a budget whose process still runs is a failed step.
-    let Ok(Reply::StartAgent(a)) =
-        call(&mut s, &mut k, u, Message::StartAgent(StartAgent { lease: 2_000_000 }))
-    else {
-        panic!()
-    };
-    k.gone.push(leased(&k));
-    let Ok(Reply::EndLease(_)) = call(&mut s, &mut k, u, Message::EndLease(EndLease { lease: a.lease }))
-    else {
+    assert!(k.calls.iter().any(|c| matches!(c, Call::Release(_))), "its connections are given back");
+    let (lease, budget, _) = lease_for(&mut s, &mut k, u, 2_000_000);
+    k.lost.push(budget);
+    let Ok(Reply::EndLease(_)) = call(&mut s, &mut k, u, Message::EndLease(EndLease { lease })) else {
         panic!()
     };
     assert_eq!(s.failed.len(), 1);
+}
+
+/// A lease's deadline passes and the kernel takes its budget, revoking the steward's handle and
+/// freeing its index, which a new lease's budget takes before the first's exit notice reaches
+/// the steward (several leases expiring close together do this): the first's `DestroyBudget`
+/// is not made by that index, and the new budget survives in the kernel. The verdict is the
+/// fake kernel's: the new budget is live after the notice, and its own `end_lease` destroys it.
+#[test]
+fn a_leases_index_recycled_for_a_new_budget_before_its_notice_is_not_destroyed_as_it() {
+    let mut k = Recorder::default();
+    let mut s = started(&mut k);
+    let u = alice_session(&mut s, &mut k);
+    let (first, budget, pid) = lease_for(&mut s, &mut k, u, 2_000_000);
+    k.clock += 2_000_000;
+    k.deadline_takes(budget);
+    let (second, recycled, _) = lease_for(&mut s, &mut k, u, 60_000_000);
+    assert_eq!(recycled, budget, "the new lease's budget took the freed index");
+    assert!(k.budgets.contains(&recycled));
+    k.calls.clear();
+    let object = s.exited(pid).unwrap();
+    s.event(&mut k, EventKind::Exited { object }, 0).unwrap();
+    assert!(s.failed.is_empty(), "{:?}", s.failed);
+    assert!(k.budgets.contains(&recycled), "the new budget survives the old lease's end");
+    assert!(!k.calls.contains(&Call::Destroy(recycled)), "{:?}", k.calls);
+    assert!(k.calls.iter().any(|c| matches!(c, Call::Notify { lease, .. } if *lease == first)));
+    k.calls.clear();
+    let Ok(Reply::EndLease(_)) = call(&mut s, &mut k, u, Message::EndLease(EndLease { lease: second }))
+    else {
+        panic!()
+    };
+    assert!(k.calls.contains(&Call::Destroy(recycled)), "{:?}", k.calls);
+    assert!(!k.budgets.contains(&recycled));
+    assert!(s.failed.is_empty(), "{:?}", s.failed);
+}
+
+/// The freed index taken by something that is no budget (a session re-binding its slot at a
+/// restarted server): the old lease's end is no `WrongObject`, no failed step.
+#[test]
+fn a_leases_index_recycled_for_a_connection_fails_no_step() {
+    let mut k = Recorder::default();
+    let mut s = started(&mut k);
+    let u = alice_session(&mut s, &mut k);
+    let (_, budget, pid) = lease_for(&mut s, &mut k, u, 2_000_000);
+    k.clock += 2_000_000;
+    k.deadline_takes(budget);
+    let m = Message::Reconnected(Reconnected { server: "walfsd:data" });
+    let Ok(Reply::Reconnected(_)) = call(&mut s, &mut k, INIT, m) else { panic!() };
+    let Ok(Reply::Rebind(_)) = call(&mut s, &mut k, u, Message::Rebind(Rebind { slot: 1 })) else { panic!() };
+    assert_eq!(k.at.get(&budget).map(String::as_str), Some("walfsd:data"), "the connection took the index");
+    k.calls.clear();
+    let object = s.exited(pid).unwrap();
+    s.event(&mut k, EventKind::Exited { object }, 0).unwrap();
+    assert!(s.failed.is_empty(), "{:?}", s.failed);
+    assert!(!k.calls.iter().any(|c| matches!(c, Call::Destroy(_))), "{:?}", k.calls);
+    assert_eq!(k.at.get(&budget).map(String::as_str), Some("walfsd:data"), "the connection is untouched");
+}
+
+/// An `end_lease` served after the lease's deadline passed, before its exit notice: the kernel
+/// has the budget already, so the end batch makes no destroy by the revoked handle, whatever
+/// took its index; the late notice then gets its line and no event.
+#[test]
+fn an_end_lease_after_the_deadline_makes_no_destroy_by_the_revoked_handle() {
+    let mut k = Recorder::default();
+    let mut s = started(&mut k);
+    let u = alice_session(&mut s, &mut k);
+    let (first, budget, pid) = lease_for(&mut s, &mut k, u, 2_000_000);
+    k.clock += 2_000_000;
+    k.deadline_takes(budget);
+    let (_, recycled, _) = lease_for(&mut s, &mut k, u, 60_000_000);
+    assert_eq!(recycled, budget);
+    k.calls.clear();
+    let Ok(Reply::EndLease(_)) = call(&mut s, &mut k, u, Message::EndLease(EndLease { lease: first })) else {
+        panic!()
+    };
+    assert!(s.failed.is_empty(), "{:?}", s.failed);
+    assert!(!k.calls.iter().any(|c| matches!(c, Call::Destroy(_))), "{:?}", k.calls);
+    assert!(k.budgets.contains(&recycled), "the new budget survives");
+    assert!(s.exited(pid).is_none());
+    assert!(s.ended(pid).is_some_and(|(o, name)| o.id == first && name == "alice/agent-1"));
 }
 
 /// A login as the sponsored principal is a lease of its sponsor's: its session's budget is
