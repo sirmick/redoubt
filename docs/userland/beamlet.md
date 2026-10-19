@@ -955,8 +955,12 @@ with no `System`, the host CLI's, answers each `{error, not_supported}`; the hos
   that lends one and `nil` for an inline one; the reply's buffer is the bytes its word 1 says at
   the front of the lend. No hub carries a typed call, and no scheduler waits for one: a pool of
   `CALL_THREADS` threads makes them, `MAX_QUEUED` more wait, and past that a call is `busy`; each
-  is bounded by its timeout, at most `MAX_CALL_MS`. The caller waits in `receive`, as for any
-  message. **`send(Handle, {Words, Buffer, Handles})`** is one way, waiting at most
+  is bounded by its timeout, at most `MAX_CALL_MS`, a ceiling on what a caller may ask and not
+  any call's default: the generated clients pass 5 s for a short call and the ceiling itself for
+  the one call measured past it, a lease's launch ([wire](../servers/wire.md#generated-clients)),
+  and a timeout above the ceiling is `badarg` before any call is made. A VM that asks for the
+  whole of it holds one of its own call threads that long, a cost inside its own trust domain.
+  The caller waits in `receive`, as for any message. **`send(Handle, {Words, Buffer, Handles})`** is one way, waiting at most
   `SEND_TIMEOUT_US` for its receiver.
   The natives encode nothing of a protocol: the generated clients do
   ([wire](../servers/wire.md#generated-clients)).
@@ -1028,7 +1032,7 @@ walked past its cap, and no binary is copied past its own:
 | `MAX_MESSAGE_HANDLES`, `MAX_LABELS` | 4 handles a message, 16 labels a spec, and a message's 4 words | [`bif/system.rs`](../../userland/otp/vm/src/bif/system.rs) |
 | `MAX_START_HANDLES`, `MAX_ARGS` | 128 namespace entries and named handles together, 128 arguments | [`bif/system.rs`](../../userland/otp/vm/src/bif/system.rs) |
 | `MAX_BUFFER`, `MAX_IMAGE`, `MAX_NAME` | 64 KiB a message's buffer, 8 MiB an image, 4 KiB a path, name or argument | [`bif/system.rs`](../../userland/otp/vm/src/bif/system.rs) |
-| `MAX_CALL_MS` | 5 s, the longest a call waits | [`bif/system.rs`](../../userland/otp/vm/src/bif/system.rs) |
+| `MAX_CALL_MS` | 14 s, the longest a call may ask to wait: the system's longest call, a lease's launch under load, twice the worst `start_agent` the steward served under the bench's rounds on both widths (6.64 s, rv32 at two harts; 5.851 s at one), rounded up to a second; the Elixir client's `launch_timeout/0` is the same number ([the steward](../servers/steward.md#residual-risks)) | [`bif/system.rs`](../../userland/otp/vm/src/bif/system.rs) |
 | `CALL_THREADS`, `MAX_QUEUED` | 2 calls out at once, 64 waiting | [`pool.rs`](../../userland/otp/redoubt/src/pool.rs) |
 | `SEND_TIMEOUT_US`, `ATTACH_US`, `HAND_US` | 1 ms a send waits for its receiver, 1 s each of a bind's attach calls, 1 s a thread of the platform's to take its work (one that does not has ended, and is set aside) | [`system.rs`](../../userland/otp/redoubt/src/system.rs) |
 | `MAX_SERVED`, `REQUEST_WAIT_US` | 2 endpoints served, 5 s a request waits for its answer | [`serve.rs`](../../userland/otp/redoubt/src/serve.rs) |

@@ -10,8 +10,9 @@
 //! - **The words go through a slot of atomics** the two share ([`Slot`]): the VM fills it and sends the
 //!   thread one word; the thread makes the call, fills it with the outcome, and wakes the VM on its own
 //!   endpoint through a badge minted for that thread ([`BADGE`] + its index).
-//! - **Every call is bounded by its timeout**, at most the natives' 5 s: a server that never answers holds
-//!   one thread that long, and no more.
+//! - **Every call is bounded by its timeout**, at most the natives' `MAX_CALL_MS` (14 s, the launch bound,
+//!   docs/userland/beamlet.md "Natives"): a server that never answers holds one thread that long, and no
+//!   more.
 
 use alloc::collections::VecDeque;
 use alloc::sync::Arc;

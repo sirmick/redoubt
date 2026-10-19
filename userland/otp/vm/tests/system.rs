@@ -291,9 +291,11 @@ fn the_table_lists_path_name_and_handle() {
 fn a_calls_reply_arrives_as_a_message_with_its_handles_as_resources() {
     let (result, calls) = run("call");
     assert_eq!(result, format!("{{[0,3,0,0],{},true,{{ok,{{[0,3,0,0],nil,[]}}}}}}", text("key")));
-    // Words, buffer and handles reach the platform as given; the timeout in microseconds.
+    // Words, buffer and handles reach the platform as given; the timeout in microseconds, the
+    // ceiling (MAX_CALL_MS, the launch bound) included; one past it is badarg (`wrong_types`).
     assert_eq!(calls[1], "call keyd [3, 0, 0, 0] Some([97, 115, 107]) [\"keyd\"] 1000000");
     assert_eq!(calls[2], "call keyd [4, 0, 0, 0] None [] 0");
+    assert_eq!(calls[3], "call keyd [4, 0, 0, 0] None [] 14000000");
 }
 
 #[test]

@@ -1906,11 +1906,12 @@ mod machine {
         true
     }
 
-    /// The operation of a call whose time the steward says, by its opcode: `end_lease` and
-    /// `submit` (libs/wire/tables/steward.md).
+    /// The operation of a call whose time the steward says, by its opcode: `end_lease`,
+    /// `start_agent` and `submit` (libs/wire/tables/steward.md).
     fn served_op(words: &redoubt_rt::ipc::Words) -> Option<&'static str> {
         match words[0] {
             9 => Some("submit"),
+            10 => Some("start_agent"),
             11 => Some("end_lease"),
             _ => None,
         }
@@ -2307,10 +2308,12 @@ mod machine {
                     let outcome = answer_with(&mut serving, &caller, &words, &handles, request.lend());
                     let (outputs, exited) = (core::mem::take(&mut serving.outputs), serving.exited);
                     let deferred = core::mem::take(&mut serving.after);
-                    // The steward's own time on the two calls whose cost the responsiveness
-                    // targets bound (kernel/scheduling.md, "Responsiveness"; servers/steward.md,
-                    // "Residual risks": steward work is paid by the steward): `end_lease` and
-                    // `submit`, from the call's arrival to its answer, said once each.
+                    // The steward's own time on the three calls whose cost the pages bound
+                    // (kernel/scheduling.md, "Responsiveness"; servers/steward.md, "Residual
+                    // risks": steward work is paid by the steward): `end_lease`, `submit` and
+                    // `start_agent`, a launch's time measured here and not inferred from the
+                    // gaps between its audit lines, from the call's arrival to its answer, said
+                    // once each.
                     if let Some(op) = served_op(&words) {
                         let took = redoubt_rt::handle::time_now().unwrap_or(began).saturating_sub(began);
                         machine.out.say(&format!("steward: served {op} in {took} us\n"));

@@ -21,13 +21,16 @@ bind() ->
 %% The table: path, name and handle.
 table() -> [{Path, Name, is_reference(H)} || {Path, Name, H} <- redoubt:ns()].
 
-%% A call's reply arrives as a message, its handles new resources.
+%% A call's reply arrives as a message, its handles new resources; a timeout of the ceiling
+%% itself (MAX_CALL_MS, the launch bound) is made.
 call() ->
     {ok, K, _} = redoubt:ns_lookup(<<"keyd">>),
     {ok, Ref} = redoubt:call(K, {[3, 0, 0, 0], <<"ask">>, [K]}, 1000),
     {ok, Ref2} = redoubt:call(K, {[4, 0, 0, 0], nil, []}, 0),
+    {ok, Ref3} = redoubt:call(K, {[4, 0, 0, 0], nil, []}, 14000),
     R1 = receive {reply, Ref, R} -> R after 1000 -> none end,
     R2 = receive {reply, Ref2, Q} -> Q after 1000 -> none end,
+    R2 = receive {reply, Ref3, Q3} -> Q3 after 1000 -> none end,
     {ok, {Words, Buffer, [Got]}} = R1,
     {Words, Buffer, is_reference(Got), R2}.
 
@@ -94,7 +97,8 @@ wrong_types() ->
      t(fun() -> redoubt:call(H, {[1, 0, 0, -1], nil, []}, 0) end),
      t(fun() -> redoubt:call(H, {[1, 0, 0, 0], "text", []}, 0) end),
      t(fun() -> redoubt:call(H, {[1, 0, 0, 0], nil, [self()]}, 0) end),
-     t(fun() -> redoubt:call(H, {[1, 0, 0, 0], nil, []}, 5001) end),
+     %% One past the ceiling, MAX_CALL_MS.
+     t(fun() -> redoubt:call(H, {[1, 0, 0, 0], nil, []}, 14001) end),
      t(fun() -> redoubt:send(H, [1, 0, 0, 0]) end),
      t(fun() -> redoubt:budget_create(#{pages => 1, processes => 1}) end),
      t(fun() -> redoubt:budget_create(#{pages => 1, processes => 1, weight => 1, colour => red}) end),

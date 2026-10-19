@@ -96,6 +96,14 @@ sooner. A lease is task-scoped: "read `~/project`, write `~/project/out`, the `m
   one of the lease batch's calls (the carve, a mint, the image's reads) within the steward's
   bound, `SERVER_US`: the lease is rolled back and the sponsor asks again
   ([the steward](../servers/steward.md#residual-risks)).
+- **A launch takes seconds under load, and its caller waits for it.** `start_agent` is the one
+  steward call measured past the client's 5 s bound for a short call: its served time beside
+  the sponsor's other leases spinning is at worst 6.64 s under the bench's rounds, so the
+  client passes it a bound of its own, 14 s, twice that worst rounded up to a second
+  (`Redoubt.Wire.Client.launch_timeout/0`; the figures on
+  [the steward](../servers/steward.md#residual-risks)). A launch past it is `timeout`, as any
+  call, and a scheduler finding on [scheduling](../kernel/scheduling.md#responsiveness), never
+  a longer bound.
 - **A labelled agent's `/project` is its label set's vault**: the vault is the task's scope, and
   [R25 (the label check)](../servers/serving.md#r25-the-label-check) lets the agent touch nothing
   of the unlabelled `~/project`; an unlabelled agent's is its
@@ -249,7 +257,11 @@ would silently eat lease time.
 **The steward makes the lease.** The harness asks; the steward places the lease under the
 sponsor's budget for that label set, checks that every grant is the same as or narrower than what
 the launcher holds, refuses a term over `MAX_LEASE` rather than clamping it, and records the
-grant with the principal chain ([the steward](../servers/steward.md)).
+grant with the principal chain ([the steward](../servers/steward.md)). `Agent.start` waits for
+the launch with the client's launch bound, `Redoubt.Wire.Client.launch_timeout/0`, not the 5 s
+of a short call: a launch beside the sponsor's other leases is measured in seconds
+([leases](#leases)), and a harness that reintroduced the short bound would time out under the
+load the bench runs.
 - **Grants are closed, typed terms**, the same terms the steward's lease request carries.
   `labels:` is its own option, because adding a label needs an approval. The kinds are:
   - `read: PATH` and `write: PATH`, each a path in the launcher's namespace; `write` does not imply

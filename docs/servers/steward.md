@@ -301,8 +301,10 @@ so the steward still holds no key.
   the same way as `steward: crossing ID of ACCOUNT/LABELS exited 0`, ID the crossing's: the
   program exits once its one call is answered, or `was killed CODE` when its budget's
   destruction came first ([declassification and push](#declassification-and-push)). It
-  says its own time on each `end_lease` and `submit`, `steward: served submit in N us`, from the
-  call's arrival to its answer ([residual risks](#residual-risks)).
+  says its own time on each `end_lease`, `start_agent` and `submit`, `steward: served submit in
+  N us`, from the call's arrival to its answer, one queued console line per call, so a lease's
+  launch is measured at the steward and not inferred from the gaps between its audit lines
+  ([residual risks](#residual-risks)).
 - **The model** binds the same crate to the kernel model, in place of its own copy of the
   policy, so the property families (P1 to P18) and the mutations attack the code that ships. The
   model's families drive events; its checks read the core's state through a read-only
@@ -1605,7 +1607,25 @@ so the case restarts it thirteen times, each time with that session and its conn
   per `submit` (a declassification's read crossing or a push's read of the source included; rv64,
   95 ms on rv32, `steward-declassify` and `steward-push`) and 589 ms per `end_lease` of a lease
   carrying a beamlet VM (rv64, one hart, under `icount`: `steward-latency`), the VM budget's
-  destruction being most of it ([responsiveness](../kernel/scheduling.md#responsiveness)).
+  destruction being most of it ([responsiveness](../kernel/scheduling.md#responsiveness)); and
+  per `start_agent`, the batch that carves the lease, mints its connections and reads its
+  program from the verified system volume, 1.70 s alone and 3.05 s beside three of the sponsor's
+  leases spinning on rv64 at one hart (2.67 and 3.62 s at two; beside fifteen 3.13 and 3.72 s),
+  2.28 and 5.85 s on rv32 at one hart, 3.86 s alone and 5.15 s beside two at two
+  (`steward-latency`'s rounds, the worst of each group, one run at the seed). The launch is the
+  one call measured past the client library's 5 s bound for a short call, so its caller passes
+  a bound of its own, derived: twice the worst launch measured over both runs, 6.64 s on rv32 at
+  two harts, the N = 16 round's launch beside fourteen spinners (5.851 s at one hart; the table
+  on [responsiveness](../kernel/scheduling.md#responsiveness)), 2 × 6.64 s = 13.28 s, rounded
+  up to 14 s (`Redoubt.Wire.Client.launch_timeout/0`; the short bound stays for every
+  other call); a launch past it is `timeout` to the caller and a scheduler finding on the
+  responsiveness page, never a longer bound. Eleven bench cases and the escape probe
+  (`agents/escape.ex`) call `start_agent` at the 5 s default, each a launch alone or beside
+  few: alone on rv32 at two harts a launch measures 3.84–3.86 s, so a `timeout` there is that
+  default's, covered by the per-message default [wire](wire.md#generated-clients) names as the
+  follow-up. The steward's own cost is the batch's calls at the shared servers, each within
+  `SERVER_US` below; the rest of the seconds is the launching VM's share of the harts beside
+  the spinners.
 - **A context's relay holds the steward's one thread for a bounded time.** The steward waits up to
   2 s for a relay's `hello` at each SSH login that starts a context, and up to 1 s for each
   `attach` and `detach`, so a relay that never answers delays every other principal's call by that
@@ -1623,9 +1643,9 @@ so the case restarts it thirteen times, each time with that session and its conn
   completed rounds on both widths, 1.66 s, a lease's `/project` carved below the home at
   `walfsd` on rv32 at one hart in the round with three spinning agents (rv32 at two harts
   1.50 s, rv64 at two 1.06 s and at one 0.64 s; the worst operation a `stat` of three calls,
-  1.62 s): 2 × 1.66 s = 3.32 s, rounded up to 4 s, under every caller's own bound (the shell's
-  5 s `start_agent`, `sshd`'s 30 s login), so a step the bound fails is told to a caller still
-  waiting. It is never reached on a quiet box, and a mint's `Timeout` wakes no step parked at
+  1.62 s): 2 × 1.66 s = 3.32 s, rounded up to 4 s, under every caller's own bound (the client
+  library's 5 s for a short call and 14 s for `start_agent`, `sshd`'s 30 s login), so a step
+  the bound fails is told to a caller still waiting. It is never reached on a quiet box, and a mint's `Timeout` wakes no step parked at
   that server (a timeout is no answer: [failure and restart](#failure-and-restart)). The
   residual: a hart saturated by lease VMs of the sponsor's weight puts a shared server's call
   past the bound (on rv32, with three spinning agents left running after the case's own loop
