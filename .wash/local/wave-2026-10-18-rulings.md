@@ -684,6 +684,60 @@ serialized, the fourth still cannot get a distinct slot, that is a genuine held-
 correctness finding to raise, not paper over. Plan: plan-2026-10-19-b89.toml; brief
 B89-implementer.md. The orchestrator assigns the B-number.
 
+### STEWARD9 N=16 spacing and the "session cannot observe its own lease's end" finding
+
+My carve-success-ordered spacing is not implementable in scope (a failed carve is fatal and ends
+the boot; lease_ended op 17 is consumed by the shell's notices listener, not session code; no
+lease-liveness op; only a contexts poll, which pollutes the measured phase). Ruled: **the derived
+wait** — the next measured lease requested 14 s (the deadline it set, from the request per B82) +
+1 s (the margin over R10's ≤30 ms destroy that frees alice's pages), guest clock under icount, so
+deterministic, not a wall-clock guess (the memory "order on events" rule targets non-deterministic
+*host* timing; a guest-time wait derived from the minted deadline + R10's p99 is not that, and is
+what the case's Process.sleeps already are). Not (B) the contexts poll (it adds steward calls into
+the measured deadline phase). The toml comment states the derivation and why no event is available.
+
+The finding **"a session cannot observe its own lease's end"** is real but not a node now: it is an
+M5 agent-harness concern (owner Q5). The harness's design answer is `Agent.status` (a steward
+poll, already on agents.md) or the shell forwarding lease_ended to session code — not something to
+add for a test. Recorded as a **harness-wave follow-up**; if the owner pulls the harness into M3
+(Q5), I design session-visible lease completion then. Do not change the shell or add an op for the
+latency case.
+
+### STEWARD9 measurement shape + STEWARD12 (the burst-notice finding)
+
+My clustered shape measured the wrong quantity: a burst of 16 simultaneous expirations inflates
+the LAST notice by the serial per-exit dequeue (~N×70 ms), which is not the deadline_notice
+target's quantity (a single lease's notice latency). The sequential N=16 round meets the target
+(10 ms), proving the quantity is fine measured one notice at a time. Ruled **(A): sequential-all**
+— drop clustering entirely, every round's deadline leases run one at a time with a per-round
+derived spacing (2× that round's worst launch + 1 s), uniform across N, measuring the per-notice
+target (met everywhere); it fits the ring (the hybrid's ~490 s headroom shows it). Not (B) (measure
+the kernel's delivery — a narrower quantity that hides the steward's notice latency), not (C)
+(fewer D weakens p99 and does not fix the burst), not (D) (the target is NOT missed for its defined
+per-notice quantity, so accepting a "miss" would mislabel a burst phenomenon).
+
+The cluster-burst is a real finding and **becomes a node, STEWARD12** (Tier A, steward-red, S–M):
+a burst of N expiring leases costs the last sponsor notice ~N×70 ms at the steward's loop, because
+the notice is sent after each exit's cleanup/audit/console lines. Fix: send the lease_ended notices
+FIRST for a batch of exits, then the per-exit bookkeeping (cleanup is STEWARD5's thread, lines are
+STEWARD3U's queue, already off the critical path; hoist the notice ahead of the ~70 ms that
+remains). This protects the deadline_notice target under a burst — the human-control promise that
+the sponsor is told promptly when a lease ends (several agents' leases expiring together, the
+production shape I named at STEWARD10). Not blocking STEWARD9 (which measures the per-notice target
+sequentially and passes). Plan: plan-2026-10-19-steward12.toml; brief STEWARD12-implementer.md.
+scheduling.md records the burst finding until STEWARD12 lands.
+
+**STEWARD9 follow-ups (FYI, accepted):** with clustering gone at most one deadline lease is live,
+so the probe's class grouping and LATENCY_DEADLINE_US are unneeded — the probe reverts to its
+original shape and STEWARD9 becomes toml + scheduling.md only, Tier B (steward-red-5). N=2's
+derived deadline lease rounds to exactly 9 s, which collides with the probe's own-lease length
+sentinel (LATENCY_LEASE_US = 9 s), so N=2's lease is 10 s — a stated deviation from the house
+round-up, still ≥ 2× the launch, with the cause in the toml and the row. **Noted finding, not a
+node now:** the probe identifies its own lease by a magic length (9 s), which any derived lease
+that rounds to 9 s collides with; a robust marker (a distinct token on the probe's lease) would
+remove the fragility — a test-infra follow-up for the next latency-probe touch (STEWARD12 touches
+steward.rs but its scope is notices-first, so not there unless cheap), not blocking.
+
 ## agent-suite wave B (2026-10-19)
 
 The two rows ATK10 left are sound now, as one small package **ATK13** (Tier A, S): (1) the R60

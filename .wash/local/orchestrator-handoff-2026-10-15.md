@@ -597,3 +597,19 @@ Memories written this session: docs-gate-is-the-bench-case, save-sh-plan-commit-
 ~16:40Z: STEWARD11 drafted and applied (Tier A, S, steward-red-5, needs STEWARD10: the Scope arm guarded like the lease/crossing arms; defense-in-depth). Launch after train 74 publishes, beside STEWARD9.
 ~17:15Z: train 74 run 1 green (770, on 4a6270efe; logs .tmp/train-74/run1). Run 2 = 41090437b + 832d7308a (final; prose + doc-comment diff only) with the accepted trailers, head ab8d08551, bench started. Publish on green, wake STEWARD9, launch STEWARD11.
 ~17:50Z: train 74 run 2: 769 pass, 1 FAIL sshd-login-bound rv32 (900 s): only 3 of 4 dials accepted at once (slots 0-2), the 4th held 11.6 s in the backlog, accepted as 'connection 1 on slot 0' after the first closed -> no 4th distinct close line. SSH3's case, not STEWARD10's (passed in run 1). Logs .tmp/train-74/fail-rv32-sshd-login-bound*.log. Rerunning alone 3x; Architect asked for a B node (case ordering on accepts / a held slot).
+
+## ~18:30Z (bench clock 11:40-12:11 run 2): TRAIN 74 PUBLISHED (STEWARD10) main 5bfbd2270 = origin (run 2: 769 pass + sshd-login-bound rv32 flake, 6/6 alone; run 1 770 on the pre-fold head); wp-STEWARD10 pushed, worktree+branch removed; save.sh ran. Next: wake STEWARD9 (rebase onto 5bfbd2270, run the table), launch STEWARD11 from 5bfbd2270. sshd-login-bound finding with the Architect for a B node. Owner: Q5, Q1, Q2, Q4; B53.
+
+~18:45Z B89 (Architect: sshd-login-bound case-ordering flake, Tier B, size S) in the plan via nodes upsert (plan_set from refused: STEWARD9 assignment open, WASH-R41); b89-implementer launched from 5bfbd2270, reviewer kernel-red-3. In flight: STEWARD9 (resuming), STEWARD11, B89.
+
+~12:37Z B89 OK (kernel-red-3), accepted. TRAIN 75 = B89 alone: head f03759b0b on 5bfbd2270, .tmp/train-75 running (one toml). STEWARD9 (N=16 derived wait, Architect informed) and STEWARD11 go to train 76. On green: ff main, push, remove .worktrees/B89 + wp-B89 after pushing it, save.sh.
+
+~13:00Z STEWARD9: clustered deadlines queue the notices (p99 ~1.2 s vs 40 ms, ~70 ms per exit at the loop); Architect: sequential-all with per-round derived spacing (the per-notice quantity), clustering dropped; burst = STEWARD12 (Architect drafting plan-2026-10-19-steward12.toml: notices first, then per-exit work). Train 75 still benching.
+
+STEWARD12 in the plan (needs STEWARD9 + STEWARD11: same files, steward.rs/drive.rs, steward-latency toml, scheduling.md); launch from the train that publishes both, reviewer steward-red-5, brief .wash/local/STEWARD12-implementer.md.
+
+~13:02Z TRAIN 75 PUBLISHED (B89) main 20b77f280 (merge f03759b0b on 5bfbd2270); 770 PASS rc=0 (12:37-13:02Z); wp-B89 pushed, worktree+branch removed. Next: STEWARD9 + STEWARD11 reports -> steward-red-5 -> train 76 from 20b77f280; then launch STEWARD12 (brief .wash/local/STEWARD12-implementer.md, steward-red-5).
+
+~13:03Z STEWARD11 reported (3d248be61, one commit on 5bfbd2270) -> steward-red-5; train 76 = STEWARD11 alone on 20b77f280 (.tmp/train-76/run.sh prepared, msg.txt after accept). STEWARD9 re-tiered B (probe reverted; N=2 lease 10 s to avoid the probe's 9 s sentinel) -> train 77. Then STEWARD12.
+
+~13:05Z STEWARD11 OK (steward-red-5), accepted. TRAIN 76 = STEWARD11 alone: head f792bf3c8 on 20b77f280, .tmp/train-76 running. On green: ff main, push, push wp-STEWARD11, remove worktree+branch, save.sh (STEWARD9 dirty may refuse), give STEWARD9 the hash to rebase before its gates.

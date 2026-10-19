@@ -1,0 +1,18 @@
+# Architect, 2026-10-19: STEWARD9's clustered rounds exposed a real steward responsiveness
+# finding. When a burst of N lease deadlines fire together, the steward dequeues the N Exited
+# events serially at ~70 ms each (cleanup, the LeaseEnded audit, the console lines), so the last
+# lease_ended notice reaches the sponsor ~N x 70 ms after its deadline (net p99 1.1-1.2 s at N=16
+# against the 40 ms deadline_notice target). The per-notice target holds (the sequential N=16
+# round meets it at 10 ms); it is the burst that misses. The production shape I named when
+# STEWARD10 was found: several agents' leases expiring together (a sponsor ending many, a shared
+# deadline). Ruling: .wash/local/wave-2026-10-18-rulings.md "STEWARD12". Not blocking STEWARD9
+# (which measures the per-notice target sequentially, option A, and passes).
+
+[[node]]
+  id = "STEWARD12"
+  title = "A burst of expiring leases does not delay the last sponsor notice by the per-exit bookkeeping: the steward sends lease_ended before each exit's cleanup, audit and console lines"
+  template = "package"
+  parent = "AGENTS"
+  needs = []
+  body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'STEWARD12'. Brief: .wash/local/STEWARD12-implementer.md. Tier A (the steward's loop; a responsiveness target under a burst), size S-M, reviewer steward-red (the orchestrator's pick). Found by STEWARD9: when N lease deadlines fire together the steward processes the N Exited events serially at ~70 ms each (the per-exit cleanup, the LeaseEnded audit, the console lines), so the last lease_ended notice reaches the sponsor ~N x 70 ms after its deadline (net p99 1.1-1.2 s at a 16-lease burst, against the deadline_notice target 40 ms); the per-notice target holds (a single expiry is 10 ms). The sponsor being told promptly that a lease ended is a human-control promise (agents.md 'Leases'; the sponsor can always end a lease and is told when one ends), so the burst must not push the notice behind the bookkeeping. Rule: on a burst of Exited events the steward sends the lease_ended notices FIRST (the cheap send to each sponsor's notices endpoint), then does the per-exit cleanup (already a thread's, STEWARD5), the LeaseEnded audit and the console lines (already queued, STEWARD3U) for each; so the last notice's latency is ~N x (one send) not ~N x 70 ms. Measure the burst's last-notice p99 before and after on steward-latency (a clustered-expiry variant or a new small case), both widths, stating the before/after and the per-send cost; the deadline_notice target is then met under a burst, not only per-notice. If notices-first alone does not reach 40 ms at the image's realistic burst size, state the residual (the burst size at which it holds) rather than moving the target. Pages: steward.md 'Failure and restart'/'Residual risks' (the burst's notice cost and the notices-first rule); scheduling.md 'With the real steward' (the burst finding, then its fix). No kernel change."
+  state = "todo"

@@ -132,3 +132,6 @@ wave; until then I draft nothing past ATK13 for `agent-suite`.
   one it is re-tiered and comes back as a question.
 - B53 (awaiting the owner, per the orchestrator's log) is not the Architect's and is not
   repeated here.
+
+## Follow-up (Architect, 2026-10-19, STEWARD9): a session cannot observe its own lease's end
+lease_ended (op 17) is consumed by the shell's notices listener; no lease-liveness op. The latency case uses a guest-clock derived wait (deadline 14 s + 1 s over R10) at N = 16. Design answer belongs to the agent harness (Q5): Agent.status poll or the shell forwarding lease_ended to session code. Not a node until the harness wave.
