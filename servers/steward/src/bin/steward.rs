@@ -136,9 +136,11 @@ mod machine {
     /// arrival less the deadline as `deadline_notice`. Each sample's group is the count of the
     /// live leases, itself among them (`N=2`); the counts go out as `LATENCY-COUNT` lines when
     /// the leases are all gone and the case has written the round's marker ([`LATENCY_ROUND`]
-    /// and the round's number) in the console principal's home, and after the last round's
-    /// ([`LATENCY_ROUNDS`]), `LATENCY-END` with the steward's clock, the window's end. A steward that finds
-    /// [`LATENCY_DONE`] in the console
+    /// and the round's number) in the console principal's home. The case owns its round count:
+    /// after its last round it writes [`LATENCY_DONE`], on which the probe prints `LATENCY-END`
+    /// with the steward's clock, the window's end, and exits [`LATENCY_EXIT`] for the reboot (no
+    /// compile-time round count, so one build serves a four-round boot and a one-round boot
+    /// alike). A steward that finds [`LATENCY_DONE`] in the console
     /// principal's home at its start exits [`LATENCY_EXIT`] at once: six such exits trip init's
     /// reboot rule, whose reset dumps the kernel's trace the bench's oracle reads.
     #[cfg(feature = "latency-probe")]
@@ -151,9 +153,6 @@ mod machine {
     const LATENCY_DONE: &str = "latency-done";
     #[cfg(feature = "latency-probe")]
     const LATENCY_ROUND: &str = "latency-round-";
-    /// The case's rounds: N = 1, 2, 3, 4 and 16 live leases.
-    #[cfg(feature = "latency-probe")]
-    const LATENCY_ROUNDS: usize = 5;
     #[cfg(feature = "latency-probe")]
     const LATENCY_POLL_US: u64 = 500_000;
     #[cfg(feature = "latency-probe")]
@@ -1965,7 +1964,7 @@ mod machine {
         badge: u64,
         /// Samples taken since the last flush, by measure and group.
         counts: BTreeMap<(&'static str, usize), u64>,
-        /// Flushes so far: the case's rounds ([`LATENCY_ROUNDS`]).
+        /// Flushes so far: the case's rounds, counted by its markers, not a fixed total.
         rounds: usize,
     }
 
@@ -1979,18 +1978,15 @@ mod machine {
         }
 
         /// The counts, once the domain's leases are all gone: one line per measure and group.
-        /// After the last round's, the window's end, `LATENCY-END` with the steward's clock: the
-        /// oracle judges no destruction ending after it and no sample printed after it (the
-        /// marker-file exits that follow reap every lease's VM, none of them a sample).
+        /// The window's end is `LATENCY-END`, printed when the case marks itself done, not after a
+        /// fixed round count; the oracle judges no destruction ending after it and no sample
+        /// printed after it (the marker-file exits that follow reap every lease's VM, none of them
+        /// a sample).
         fn flush(&mut self, out: &mut Console) {
             for ((measure, n), count) in core::mem::take(&mut self.counts) {
                 out.say(&format!("steward: LATENCY-COUNT N={n} {measure} {count}\n"));
             }
             self.rounds += 1;
-            if self.rounds == LATENCY_ROUNDS {
-                let now = redoubt_rt::handle::time_now().unwrap_or(0);
-                out.say(&format!("steward: LATENCY-END {now}\n"));
-            }
         }
     }
 
@@ -2255,10 +2251,24 @@ mod machine {
             } else {
                 wait
             };
+            // The case marks itself done after its last round; with that round flushed (no counts
+            // held, no timer armed) and its leases gone, the window ends here: `LATENCY-END`, then
+            // the exit for the reboot. The round count is the case's, read from its markers, not a
+            // constant. The marker is looked for only between a round's flush and the next round's
+            // first launch: a `stat` at the home on every idle turn fell inside the first probe
+            // lease's `reply_wait` window of each round (a 170 to 570 ms sample on rv64 and rv32,
+            // against 9 ms for the rest), so the look is gated on a flushed round with no lease
+            // live, where no sample's window is open.
             #[cfg(feature = "latency-probe")]
-            if probe.rounds >= LATENCY_ROUNDS && probe.due.is_none() {
+            if probe.rounds > 0
+                && probe.due.is_none()
+                && probe.counts.is_empty()
+                && leases_live(&steward) == 0
+            {
                 if let Some(console) = steward.own.console.clone() {
                     if matches!(machine.home_stat(&console, LATENCY_DONE), Ok(Some(_))) {
+                        let now = redoubt_rt::handle::time_now().unwrap_or(0);
+                        machine.out.say(&format!("steward: LATENCY-END {now}\n"));
                         machine.out.say("steward: latency-probe: the case is done, exiting for the reboot\n");
                         return LATENCY_EXIT;
                     }

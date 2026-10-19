@@ -1944,8 +1944,10 @@ mod tests {
     }
 
     /// The steward's test-only `latency-probe` (servers/steward.md, "Failure and restart") is
-    /// built by `steward-latency`'s recipe and by nothing else in the tree: the probe ends leases
-    /// by the steward's own decision and exits on a marker file, which no other case may meet.
+    /// built by `steward-latency`'s recipe and its two companions' (the rounds at N = 4 and
+    /// N = 16, each on a trace ring of its own) and by nothing else in the tree: the probe ends
+    /// leases by the steward's own decision and exits on a marker file, which no other case may
+    /// meet.
     #[test]
     fn only_steward_latency_builds_the_latency_probe() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -1958,7 +1960,8 @@ mod tests {
                 enabling.push(path.file_name().unwrap().to_string_lossy().into_owned());
             }
         }
-        assert_eq!(enabling, ["steward-latency.toml"]);
+        enabling.sort();
+        assert_eq!(enabling, ["steward-latency-n16.toml", "steward-latency-n4.toml", "steward-latency.toml"]);
         for dir in ["image", "tests/data"] {
             let mut found = Vec::new();
             manifests_under(&root.join(dir), &mut found);
