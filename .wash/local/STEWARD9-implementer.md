@@ -36,15 +36,29 @@ so the case's derived numbers all come from the one launch measurement:
 - **deadline lease = 2 × the worst launch** (both widths; ~14 s for 6.62 s), one value used on
   both widths (the larger), so a deadline reliably fires on a running VM — the quantity the
   deadline notice measures (the time from the lease's deadline to the sponsor's `killed` notice);
-- **the sleep after the deadline lease** long enough for the deadline to fire and its notice to
-  be recorded before the next round (~16 s), so no round's notice is lost into the next.
+- **the deadline leases overlap; the round waits once.** Do **not** sleep a full deadline after
+  each of the 16 deadline leases serially — that inflates the run to ~1746 s of guest time and
+  overruns the sched-trace ring (it stops at ~1394 s on rv32, dumps `dropped N`, and the oracle
+  judges nothing: the ring records 4.2–7.8 k records a guest second whatever runs, so it scales
+  with wall time, and the ring must not grow for one case — it is a kernel resource and rv32's
+  memory is at its 1536 limit). Instead launch the deadline leases close together, let their
+  deadlines fire as a cluster, and have the round wait **once** for the cluster's notices; the
+  deadline notice is still measured per lease (concurrent expiry is the more realistic load and
+  moves no target). A five-round run then fits well inside the ring.
 
-State the derivation in the toml's comment (the lease and the sleep as functions of the measured
-launch, the worst-launch number and the arithmetic) and on `scheduling.md` where the case's
-parameters are described. The round grows ~2.5 min on rv32; `timeout_secs` stays the case's bound
-(a miss is a finding, not a tuning). With this, the rv32 N = 3/4 (and N = 16 where reached)
-deadline-notice rows are measured net of audits and the table filled; fill them from one run each
-at the pinned seed on both widths, as the other rows are.
+State the derivation in the toml's comment (the lease as 2× the worst launch; the per-round wait,
+not per lease) and on `scheduling.md` where the case's parameters are described. `timeout_secs`
+stays the case's bound (a miss is a finding). With this, the rv32 N = 3/4 (and N = 16 where
+reached) deadline-notice rows are measured net of audits and the table filled; fill them from one
+run each at the pinned seed on both widths, as the other rows are.
+
+**If the deadline leases' sequencing is in the probe** (`servers/steward/src/bin/steward.rs`, the
+`latency-probe` arming), not the toml's Elixir, that part is Tier A: stop and tell the
+orchestrator, which re-tiers this package (still one small package, steward-red-4 then). If no
+five-round shape keeps the run inside the ring (measure the record rate and the per-round time
+first), stop and tell the orchestrator before changing the kernel trace: the fallback is a Tier A
+trace that records only from the first round's marker and only the event classes the oracle judges
+(the destructions and wakes), which is a different node.
 
 ## Tier B check (the reviewer)
 

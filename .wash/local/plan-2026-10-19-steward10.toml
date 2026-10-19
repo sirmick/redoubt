@@ -1,0 +1,16 @@
+# Architect, 2026-10-19: a Tier A correctness finding surfaced by STEWARD9's concurrent deadline
+# leases. The steward's queued DestroyBudget cleanup for a deadline-killed lease can run after R10
+# revoked its handle and install_handle recycled the index; the stale index then names a different
+# object. WrongObject (a non-budget at the index) is the loud form the test hit; the silent form —
+# the index reused by a different BUDGET handle (a new lease) — makes budget_handle answer Ok and
+# the steward destroy the WRONG LIVE budget. A real production scenario (several leases expiring
+# together), not just the test. Ruling: .wash/local/wave-2026-10-18-rulings.md "STEWARD10".
+
+[[node]]
+  id = "STEWARD10"
+  title = "A deadline-killed lease's DestroyBudget cleanup keys on the budget's identity, so a handle index R10 revoked and recycled is never destroyed as the wrong object"
+  template = "package"
+  parent = "AGENTS"
+  needs = []
+  body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'STEWARD10'. Brief: .wash/local/STEWARD10-implementer.md. Tier A (the steward's serving path; a wrong-object destruction), size S-M, reviewer steward-red-5. Found by STEWARD9's concurrent deadline leases: a lease's R10 deadline destroys its budget and revokes the steward's handle, freeing its table index; install_handle (lowest free index) reuses it for a newer object before the queued DestroyBudget cleanup (drive.rs:520) runs; the cleanup resolves the stale index to that object. drive.rs:526 tolerates BadHandle for a gone, not-running lease, but a recycled index gives WrongObject (a non-budget there), a forbidden 'a step failed (WrongObject)', and worse, a different budget there (a new lease, the common case) makes budget_handle answer Ok and the steward destroy the wrong live budget with no error (budget_at's I1 assert guards only the slot's self-consistency, not the steward's intent). A real production scenario (several leases expiring together), not a test artifact. Rule: the cleanup keys on the budget's identity (the BudgetRef id minted) and is cancelled/skipped when it is gone, covering BadHandle, WrongObject and the different-budget case uniformly; prefer the steward-only form (on a deadline-killed exit, cancel that budget's pending DestroyBudget step under STEWARD5's queue lock, the single-arbiter loop cancelling before reuse; no kernel change). A kernel non-fatal 'destroy only if id X' is the alternative, adjacent to the owner's handle-generations question: raised only if the steward-only cancel cannot be race-free. Host test: a lease's index recycled for a new budget before its cleanup runs and the new budget survives (verdict its liveness). STEWARD9's overlapping-deadline reshape depends on this: order it first or concurrently; until then STEWARD9's deadline rows stay unjudged."
+  state = "todo"

@@ -1,0 +1,16 @@
+# Architect, 2026-10-19: a bench-ordering finding from train 74 run 2 (STEWARD10's tree; the case
+# is SSH3's, green in run 1 and SSH3's gates). sshd-login-bound on rv32 assumes all four
+# unauthenticated connections are accepted before any closes; under the loaded host the bench peer
+# held the fourth dial 11.60 s, so only three were concurrent (slots 0-2; slot 3 never used) and
+# the late fourth reused slot 0 after connection 1 closed, so no fourth distinct `on slot` line
+# ever appeared and the case timed out at 900 s. A case-ordering flake, not a slot bug. Ruling:
+# .wash/local/wave-2026-10-18-rulings.md "B89". The orchestrator assigns the B-number.
+
+[[node]]
+  id = "B89"
+  title = "sshd-login-bound orders on the accepts it saw: each dial follows the previous connection's `on slot` line, so all four are up before any closes"
+  template = "package"
+  parent = "AGENTS"
+  needs = []
+  body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'B89'. Brief: .wash/local/B89-implementer.md. Tier B (the bench case only, unless a slot is genuinely held — then it re-tiers to an SSH3 finding), size S, one reviewer (the orchestrator's pick). Found train 74 run 2: sshd-login-bound on rv32 timed out at 900 s waiting for a fourth `no login within 5 s, closed` line. Console: connections 1, 2, 3 accepted on slots 0-2, closed at 5 s, then the fourth dial (held 11.60 s by the bench peer against the others' 5.9 s) was accepted only after slot 0 freed, as a reused `connection 1 on slot 0`, so no fourth distinct accept line appeared. The case's expect list (four `on slot` lines then four closures) assumes all four are accepted before any closes — a timing assumption the loaded rv32 host broke; a case orders on events, not the host's clock. Fix: the case dials each connection after the previous one's `on slot` line (all four quick dials complete well within the 5 s bound, so all four stay open and are accepted on slots 0-3 before any closes), then expects four closures; or it orders on the accepts it actually saw. The slot count is right (buckets=4; slot 3 was simply never reached because only three were concurrent), so this is Tier B. If, once the dials are serialized, the fourth connection still cannot get a distinct slot (slot 3 unreachable with three closed), that is a genuine held-slot finding and an SSH3 correctness issue: stop and raise it to the Architect rather than papering it. Pages: none (a case fix); docs/servers/sshd.md unchanged unless the slot behaviour is wrong. Gates: the case both widths, run alone and in a loaded set, 20 runs green beside a loaded host (the flaky-test bar); set CASES=formatting, docs."
+  state = "todo"

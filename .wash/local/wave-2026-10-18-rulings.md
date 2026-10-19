@@ -583,6 +583,107 @@ folds into a steward package — the implementer checks first. Plan: plan-2026-1
 brief STEWARD9-implementer.md. rv64 already PASSes every round (worst launch 3.95 s); this is the
 rv32 rows' last blocker.
 
+**STEWARD9 amendment (thread STEWARD8-bound): the sleep is per round, not per lease.** My "sleep
+so the deadline fires before the next round" was read as a 16 s serial sleep after each of 16
+deadline leases, which inflated the run to ~1746 s of guest time and overran the sched-trace ring
+(it stops at ~1394 s on rv32, dumping `dropped 1536145`, so the oracle judges nothing; the ring
+records 4.2–7.8 k scheduler-tick records a guest second whatever runs, so it scales with wall
+time). Corrected: the deadline leases **overlap** — launch them without a full serial deadline
+wait each, let their deadlines fire as a cluster, and the round waits **once** for the cluster's
+notices; the deadline notice is still measured per lease (concurrent expiry is, if anything, the
+more realistic load, and no target moves). That cuts the deadline phase from ~16×16 s to ~one
+deadline per round, so a five-round run fits well inside the ring with the lease at 2× the worst
+launch. The ring stays sized for the kernel's cases: it is a kernel resource and must not grow for
+one case (and cannot on rv32, memory at 1536). Ruled: **(c)**, this reshaping.
+
+Tier: if the deadline leases' sequencing is the toml's Elixir, STEWARD9 stays Tier B; if it is in
+the probe (`bin/steward.rs`, the `latency-probe` arming), that part is Tier A and the orchestrator
+re-tiers STEWARD9 — still one small package. **Fallback if no five-round shape fits the ring:**
+(b) as a Tier A node, a trace that records only from the first round's marker **and only the event
+classes the latency oracle judges** (the destructions for R10 and the wakes), not every scheduler
+tick — the trace serving its oracle, the ring size unchanged. **Last resort (d):** the
+deadline-notice rows alone stated unjudged with R10 from a per-destruction sub-window (STEWARD4
+Q9's precedent), never the whole table. **Not (a):** the ring is not sized by one case and rv32
+cannot grow it.
+
+### STEWARD10: the stale-handle-index wrong-destruction (thread STEWARD8-bound)
+
+STEWARD9's concurrent deadline leases surfaced a Tier A correctness bug, and the finding
+under-reports it. Verified in the kernel: a handle's `Object::Budget(BudgetRef{frame, id})`
+carries a generation `id`, and `budget_at` (handle.rs:152) asserts only that the handle *at the
+slot* is self-consistent (I1), **not** that the steward's index still means the lease it intended.
+A lease's R10 deadline revokes the steward's handle and frees its table index; `install_handle`
+(lowest free index) reuses it; the queued DestroyBudget cleanup (drive.rs:520) then resolves the
+stale index to the newer object. The reported `WrongObject` (a non-budget at the index) is the
+**loud** form drive.rs:526 fails on. The **silent** form is catastrophic: a different **budget**
+at the index (a new lease — the common case, since launches are leases) makes `budget_handle`
+return `Ok` and the steward **destroy the wrong live budget with no error**. drive.rs:526's
+`BadHandle if !running` was correct only while sequential deadlines freed each index before the
+next launch.
+
+**Ruled: a node, STEWARD10 (Tier A, steward-red-5, S–M), NOT option (a).** Swallowing `WrongObject`
+hides the loud form and does nothing for the silent one. The steward must never destroy a budget
+by a bare index R10 may have revoked and recycled. The cleanup keys on the budget's identity (the
+`BudgetRef` id the steward minted) and is cancelled/skipped when it is gone, covering `BadHandle`,
+`WrongObject` and the different-budget case uniformly. Prefer the **steward-only** form: on a
+lease's deadline-killed exit (the kernel already destroyed it) cancel that budget's pending
+DestroyBudget step under STEWARD5's queue lock, the single-arbiter loop cancelling before it
+installs any handle that could take the freed index — no kernel change. A kernel "destroy index i
+only if it still names id X, non-fatally" is the alternative and is adjacent to the owner's
+handle-generations question: raise it to me (then the owner) only if the steward-only cancel
+cannot be made race-free. This is a **real production scenario** (several agents' leases expiring
+together), not a test artifact. Plan: plan-2026-10-19-steward10.toml; brief
+STEWARD10-implementer.md.
+
+**Interaction with STEWARD9:** the overlapping-deadline reshape (c) that fits the ring is exactly
+what fires deadlines concurrently and recycles handles, so STEWARD9 depends on STEWARD10. Order
+STEWARD10 first (or concurrently); STEWARD9's overlapping shape lands on it, and until then
+STEWARD9's deadline rows stay unjudged (the orchestrator's framing). STEWARD10 stands on its own
+merits regardless of the test.
+
+**STEWARD10 mechanism amended (implementer's facts).** The cancel-under-lock I ruled does not map
+onto the code: DestroyBudget is inline in drive.rs `step()` (Exited, an end_lease batch, forget()),
+not a STEWARD5 queue step, and the steward cannot read the kernel's BudgetRef id. Superseded by
+the **deadline as the identity witness**, which is better (it covers end_lease/forget served after
+d, which a notice-cancel could not) and needs no kernel change: `Made::Budget` carries its
+deadline `d`; a destroy reads `kernel.now()`=`t` immediately before, no install between (only the
+loop installs); `t >= d` → the kernel owns it, drop the record, never destroy by index (the whole
+safety guard: the only unsafe outcome, Ok on a recycled budget, cannot occur); `t < d, Ok` → the
+original; `t < d, BadHandle` → benign (gone), a diagnostic only if every legitimate before-deadline
+end provably removes its record inline; WrongObject → an unreachable invariant tripwire. Same in
+forget() (crossings, CROSSING_LIFE). The kernel "destroy-if-id-matches" alternative is not needed.
+Brief updated to this shape.
+
+**STEWARD10 review notes (steward-red-5, OK with notes), both into STEWARD10, not STEWARD9:**
+(1) The premise "the loop alone installs handles" is wider than the kernel gives — handles install
+at a receiver's receive and a server's reply entry (ipc.md), so a reader thread's consoled calls
+or the cleanup thread's disconnect/ended would install one if a reply carried a handle; none does
+today. State it as a named premise on steward.md's cleanup bullet (the guard rests on no reply the
+steward's threads take carrying a handle; if one ever does, the no-install-in-the-window argument
+must be rechecked). This is STEWARD10's own premise on STEWARD10's own page, so it goes in
+STEWARD10's page fold now, not a later package. (2) drive.rs:550 `Made::Scope(b) => (b, FOREVER)`
+destroys a scope unguarded (FOREVER → always destroy by index); unreachable today (effects.rs
+names the budget token, scopes are never destroyed by handle), but apply the guard / a BadHandle
+tripwire there too so the invariant "no destroy by a possibly-stale index" holds **uniformly by
+construction**, not everywhere-but-one-unreachable-path (which the next person who makes it
+reachable reintroduces silently). Fold into STEWARD10 if steward-red-5 re-oks a few lines; else a
+named follow-up for the next steward package — **not STEWARD9** (a drive.rs guard is Tier A steward
+code, outside the latency-case node). Neither blocks STEWARD10's merge.
+
+### B89: sshd-login-bound orders on the accepts it saw
+
+Train 74 run 2 (rv32): sshd-login-bound (SSH3's) timed out waiting for a fourth close line. The
+bench peer held the fourth dial 11.60 s, so only three connections were concurrent (slots 0-2;
+slot 3 never used) and the late fourth reused slot 0 after connection 1 closed — no fourth
+distinct accept. The case's expect list assumes all four are accepted before any closes, a timing
+assumption the loaded rv32 host broke. Ruled a small B node (Tier B, size S): the case serializes
+the dials (each after the previous's `on slot` line, so all four are up on slots 0-3 before any
+reaches the 5 s bound) or orders on the accepts seen; `buckets=4` is right (slot 3 was simply
+never reached), so it is a case-ordering flake, not a slot bug. Escalation named: if, once
+serialized, the fourth still cannot get a distinct slot, that is a genuine held-slot SSH3
+correctness finding to raise, not paper over. Plan: plan-2026-10-19-b89.toml; brief
+B89-implementer.md. The orchestrator assigns the B-number.
+
 ## agent-suite wave B (2026-10-19)
 
 The two rows ATK10 left are sound now, as one small package **ATK13** (Tier A, S): (1) the R60
