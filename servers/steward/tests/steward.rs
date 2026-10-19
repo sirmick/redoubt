@@ -16,7 +16,8 @@ use redoubt_rt::wire::proto::steward::{
 use redoubt_steward::audit::Record;
 use redoubt_steward::consts::{BLAME_COUNT, BLAME_WINDOW, MAX_LEASE};
 use redoubt_steward::domain::Domain;
-use redoubt_steward::effect::{Kind, Object, Output, Step};
+use redoubt_steward::effect::{Batch, Kind, Object, Output, Step, Token};
+use redoubt_steward::effects::SCOPE;
 use redoubt_steward::event::EventKind;
 use redoubt_steward::hash::key_id;
 use redoubt_steward_server::cleanup::{Fate, Queue as Cleanup, RETRY_US, TRIES};
@@ -253,7 +254,20 @@ impl Recorder {
     fn deadline_takes(&mut self, budget: usize) {
         let (_, deadline) = self.deadlines.iter().find(|d| d.0 == budget).expect("a budget made");
         assert!(*deadline <= self.now(), "the kernel takes a budget at its deadline, never before");
-        let mut doomed = vec![budget];
+        self.takes(vec![budget]);
+    }
+
+    /// The steward's destroy of `budget` took every budget below it too, as the kernel's does,
+    /// their handles revoked and the indices freed for the next handle made; the budget's own
+    /// index stays taken, as [`Recorder::free`] says.
+    fn destroy_took(&mut self, budget: usize) {
+        assert!(!self.budgets.contains(&budget), "budget {budget} was destroyed");
+        let children = self.parents.iter().filter(|(_, p)| **p == budget).map(|(c, _)| *c).collect();
+        self.takes(children);
+    }
+
+    /// Every budget in `doomed` and every budget below it leaves the live set, its index freed.
+    fn takes(&mut self, mut doomed: Vec<usize>) {
         while let Some(b) = doomed.pop() {
             doomed.extend(self.parents.iter().filter(|(_, p)| **p == b).map(|(c, _)| *c));
             assert!(self.budgets.remove(&b), "budget {b} was live");
@@ -2411,6 +2425,79 @@ fn an_end_lease_after_the_deadline_makes_no_destroy_by_the_revoked_handle() {
     assert!(k.budgets.contains(&recycled), "the new budget survives");
     assert!(s.exited(pid).is_none());
     assert!(s.ended(pid).is_some_and(|(o, name)| o.id == first && name == "alice/agent-1"));
+}
+
+/// The scope made in `budget`: its one child with no deadline of its own.
+fn scope_of(k: &Recorder, budget: usize) -> usize {
+    let scopes = k.deadlines.iter().filter(|d| d.1 == FOREVER).map(|d| d.0);
+    scopes.filter(|s| k.parents.get(s) == Some(&budget)).last().expect("the budget's scope")
+}
+
+/// A `DestroyBudget` of `owner`'s token at `slot`, as a batch of its own: the core never asks
+/// for a scope's, so the steps here are the test's.
+fn destroy_step(owner: &Object, slot: u8) -> Batch {
+    Batch {
+        owner: owner.clone(),
+        steps: vec![Step::DestroyBudget { budget: Token { owner: owner.clone(), slot } }],
+    }
+}
+
+/// A scope is destroyed by its handle as a budget is, with its parent's deadline the witness,
+/// since it was minted with none and the kernel takes it with its parent: a lease the deadline
+/// took, its scope's index recycled for a new lease's scope before the notice, makes no
+/// destroy by it, and the new scope is live in the kernel after (the verdict); ahead of the
+/// deadline a scope's destroy is by its handle, as before. The core names only budgets in its
+/// `DestroyBudget`s today, so the scope's step is the test's own batch.
+#[test]
+fn a_scopes_index_recycled_after_its_leases_deadline_is_not_destroyed_as_it() {
+    let mut k = Recorder::default();
+    let mut s = started(&mut k);
+    let u = alice_session(&mut s, &mut k);
+    let (_, budget, pid) = lease_for(&mut s, &mut k, u, 2_000_000);
+    let scope = scope_of(&k, budget);
+    let destroy_scope = destroy_step(&s.exited(pid).unwrap(), SCOPE);
+    k.clock += 2_000_000;
+    k.deadline_takes(budget);
+    let (_, recycled, _) = lease_for(&mut s, &mut k, u, 60_000_000);
+    assert_eq!(recycled, budget, "the new lease's budget took the freed index");
+    assert_eq!(scope_of(&k, recycled), scope, "and its scope the old scope's");
+    k.calls.clear();
+    s.run(&mut k, &destroy_scope).unwrap();
+    assert!(k.budgets.contains(&scope), "the new lease's scope survives");
+    assert!(!k.calls.iter().any(|c| matches!(c, Call::Destroy(_))), "{:?}", k.calls);
+    let (_, budget, pid) = lease_for(&mut s, &mut k, u, 2_000_000);
+    let scope = scope_of(&k, budget);
+    k.calls.clear();
+    s.run(&mut k, &destroy_step(&s.exited(pid).unwrap(), SCOPE)).unwrap();
+    assert!(k.calls.contains(&Call::Destroy(scope)), "{:?}", k.calls);
+    assert!(!k.budgets.contains(&scope), "ahead of the deadline the scope is destroyed by its handle");
+    assert!(s.failed.is_empty(), "{:?}", s.failed);
+}
+
+/// The steward's own destroy of a budget takes its scope with it too, its index freed for the
+/// next handle, which a new lease's budget takes: a destroy of the scope asked for after that,
+/// its parent's record gone, makes no call by its handle, and the budget at the index is live
+/// after (the verdict).
+#[test]
+fn a_scopes_index_recycled_after_its_budgets_destroy_is_not_destroyed_as_it() {
+    // The batch's budget slot, `BUDGET` in the core's effects.rs, which is its own.
+    const BUDGET: u8 = 0;
+    let mut k = Recorder::default();
+    let mut s = started(&mut k);
+    let u = alice_session(&mut s, &mut k);
+    let (_, budget, pid) = lease_for(&mut s, &mut k, u, 60_000_000);
+    let scope = scope_of(&k, budget);
+    let owner = s.exited(pid).unwrap();
+    s.run(&mut k, &destroy_step(&owner, BUDGET)).unwrap();
+    assert!(k.calls.contains(&Call::Destroy(budget)), "{:?}", k.calls);
+    k.destroy_took(budget);
+    let (_, recycled, _) = lease_for(&mut s, &mut k, u, 60_000_000);
+    assert_eq!(recycled, scope, "the new lease's budget took the scope's index");
+    k.calls.clear();
+    s.run(&mut k, &destroy_step(&owner, SCOPE)).unwrap();
+    assert!(k.budgets.contains(&recycled), "the new lease's budget survives");
+    assert!(!k.calls.iter().any(|c| matches!(c, Call::Destroy(_))), "{:?}", k.calls);
+    assert!(s.failed.is_empty(), "{:?}", s.failed);
 }
 
 /// A login as the sponsored principal is a lease of its sponsor's: its session's budget is

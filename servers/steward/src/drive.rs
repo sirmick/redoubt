@@ -45,7 +45,10 @@ pub enum Made<B, H> {
     /// budget and revoked this handle (R10), and the handle is never used again
     /// ([`Steward::destroy`]).
     Budget(B, u64),
-    Scope(B),
+    /// A revocation scope, with the token of the budget it was made in: minted with no deadline
+    /// of its own, it ends with that budget, at its deadline or at the steward's own destroy of
+    /// it, and that is when this handle is revoked ([`Steward::deadline_of`]).
+    Scope(B, Token),
     /// A connection the session's namespace holds, or none for a slot bound to nothing.
     Connection(Option<H>),
     Process(u64),
@@ -387,8 +390,9 @@ impl<B: Copy, H: Copy> Steward<B, H> {
         Ok(Some((handle, at)))
     }
 
-    /// Runs `batch`'s steps in order, stopping at the first that fails.
-    fn run<K: Kernel<Budget = B, Handle = H>>(
+    /// Runs `batch`'s steps in order, stopping at the first that fails: every batch an event
+    /// names runs here, and a host test runs a batch of its own.
+    pub fn run<K: Kernel<Budget = B, Handle = H>>(
         &mut self,
         kernel: &mut K,
         batch: &Batch,
@@ -403,8 +407,22 @@ impl<B: Copy, H: Copy> Steward<B, H> {
 
     fn budget(&self, token: &Token) -> Result<B, Error> {
         match self.made.get(token) {
-            Some(Made::Budget(b, _) | Made::Scope(b)) => Ok(*b),
+            Some(Made::Budget(b, _) | Made::Scope(b, _)) => Ok(*b),
             _ => Err(Error::BadHandle),
+        }
+    }
+
+    /// The deadline past which the kernel has taken the budget `token` names and revoked the
+    /// steward's handle to it, the witness [`Steward::destroy`] takes: a budget's own; a scope's
+    /// is its parent's, since a scope is minted with none and the kernel destroys a budget's
+    /// whole subtree with it; and none for a scope whose parent the steward destroyed already,
+    /// which went with it, its index free or another object's since. So every destroy by a
+    /// handle the steward keeps has the same guard, whatever kind of record names it.
+    fn deadline_of(&self, token: &Token) -> Option<u64> {
+        match self.made.get(token)? {
+            Made::Budget(_, deadline) => Some(*deadline),
+            Made::Scope(_, parent) => self.deadline_of(parent),
+            _ => None,
         }
     }
 
@@ -422,7 +440,9 @@ impl<B: Copy, H: Copy> Steward<B, H> {
     /// already, and no call is made. A `BadHandle` with the deadline passing between the read
     /// and the call is the same end (the kernel's expiry ran first at the call's entry, and the
     /// index was still free); one with the deadline still ahead is a handle the steward lost,
-    /// a failure, as any other error is.
+    /// a failure, as any other error is. A scope's `deadline` is its parent's, and the
+    /// steward's own destroy of the parent revokes the scope's handle too: then the parent's
+    /// record is gone, and [`Steward::deadline_of`] gives no deadline to destroy by.
     fn destroy<K: Kernel<Budget = B, Handle = H>>(kernel: &mut K, b: B, deadline: u64) -> Result<(), Error> {
         if kernel.now() >= deadline {
             return Ok(());
@@ -462,7 +482,7 @@ impl<B: Copy, H: Copy> Steward<B, H> {
                 let parent = self.budget(budget)?;
                 let zero = Limits::default();
                 let s = kernel.create(parent, &spec(&zero, owner.domain.labels().as_slice(), 0, FOREVER)?)?;
-                self.made.insert(scope.token().clone(), Made::Scope(s));
+                self.made.insert(scope.token().clone(), Made::Scope(s, budget.clone()));
                 Ok(Produced::Scope)
             }
             // Every connection is minted in the object's scope, so the scope's end ends it in
@@ -545,14 +565,14 @@ impl<B: Copy, H: Copy> Steward<B, H> {
             // kernel's deadline took (a lease's at its `Exited`, or at an `end_lease` served
             // after the deadline but before the notice) is destroyed already, and never by the
             // handle the steward kept ([`Steward::destroy`]): the end the core asked for is done.
+            // A scope is destroyed the same way, by its parent's deadline, and a scope whose
+            // parent the steward destroyed is gone with it: no call by its handle either.
             Step::DestroyBudget { budget } => {
-                let (b, deadline) = match self.made.get(budget) {
-                    Some(Made::Budget(b, deadline)) => (*b, *deadline),
-                    Some(Made::Scope(b)) => (*b, FOREVER),
-                    _ => return Err(Error::BadHandle),
-                };
+                let b = self.budget(budget)?;
                 self.end_pids(owner);
-                Self::destroy(kernel, b, deadline)?;
+                if let Some(deadline) = self.deadline_of(budget) {
+                    Self::destroy(kernel, b, deadline)?;
+                }
                 self.made.remove(budget);
                 Ok(Produced::Done)
             }
