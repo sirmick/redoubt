@@ -1126,7 +1126,7 @@ fn boot_case(
         out(format!("      qemu seed {seed} (TESTBENCH_QEMU_SEED={seed} replays it)"));
     }
     let mut results = Vec::new();
-    for smp in &boot.smp {
+    for smp in boot.smp.for_width(target.name) {
         let run_started = Instant::now();
         let log = boot_log(logs, name, target.name, *smp);
         // Every boot gets fresh devices: a new disk, new host ports.

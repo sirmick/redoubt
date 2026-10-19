@@ -197,7 +197,7 @@ description says so ("verdict: survival only").
 
 ### The case file
 
-Status: built · partly tested: that an unknown field or table is refused is read from the code, not attacked by a case · tested: bench:bench-console-after-expect, bench:bench-poweroff-missing, host:testbench::a_case_out_of_the_whole_run_runs_only_by_name, host:testbench::host_tests_route_only_to_a_requested_workspace_and_forward_features, host:testbench::an_oracles_tools_must_be_on_the_path, host:testbench::sweep_seeds_are_ranges_or_lists, host:testbench::a_sweep_is_refused_before_anything_builds, host:testbench::sweep_boots_have_their_own_files, host:testbench::the_join_prints_in_seed_order_and_counts_failures, host:testbench::a_sweeps_boots_hold_disjoint_slices_of_the_lease, host:testbench::two_boots_at_once_run_in_different_slots, host:testbench::a_fanout_is_of_values_files_or_tests, host:testbench::a_job_passes_fails_or_runs_past_its_deadline, host:testbench::a_cpu_list_counts_its_ranges, host:testbench::a_failing_boots_logs_are_kept_under_its_jobs_name, bench:rt-miri, bench:model-mutations
+Status: built · partly tested: that an unknown field or table is refused is read from the code, not attacked by a case · tested: bench:bench-console-after-expect, bench:bench-poweroff-missing, host:testbench::a_case_out_of_the_whole_run_runs_only_by_name, host:testbench::host_tests_route_only_to_a_requested_workspace_and_forward_features, host:testbench::an_oracles_tools_must_be_on_the_path, host:testbench::sweep_seeds_are_ranges_or_lists, host:testbench::a_sweep_is_refused_before_anything_builds, host:testbench::sweep_boots_have_their_own_files, host:testbench::the_join_prints_in_seed_order_and_counts_failures, host:testbench::a_sweeps_boots_hold_disjoint_slices_of_the_lease, host:testbench::two_boots_at_once_run_in_different_slots, host:testbench::smp_is_one_list_or_a_list_per_width, host:testbench::a_boot_runs_its_widths_own_hart_counts, host:testbench::a_fanout_is_of_values_files_or_tests, host:testbench::a_job_passes_fails_or_runs_past_its_deadline, host:testbench::a_cpu_list_counts_its_ranges, host:testbench::a_failing_boots_logs_are_kept_under_its_jobs_name, bench:rt-miri, bench:model-mutations
 
 A case is one TOML file. Paths in it are relative to the workspace root, and an unknown field or
 table is an error, so a misspelling cannot silently drop a check. The one exception is a `programs`
@@ -219,7 +219,7 @@ programs = [                 # the first in init's place, the rest started by it
     { otp = "io" },                                # an OTP module's .beam from the pinned toolchain (a bundle file's)
     { zeros = 6291456 },                           # that many zero bytes, an entry only its length matters for (a bundle file's)
 ]
-smp = [1, 4]                 # one boot per hart count (default [1])
+smp = [1, 4]                 # one boot per hart count (default [1]), or per width (below)
 keep_smp = true              # the counts stand under `--smp N` (a comment says why)
 timeout_secs_smp = 90        # the bound under `--smp N` instead (a comment says why)
 memory_mib = 32              # guest RAM (default 256)
@@ -247,6 +247,14 @@ A `boot` case also takes `allow_panic`, `tamper_bundle`, `sign_bare_archive`, `s
 `[[session]]` ([SSH sessions](#ssh-sessions)), `must_fail` ([self-checks](#self-checks)), and
 `poweroff_status`: the QEMU exit status a `poweroff` case requires (0 by default; 255 for an SBI
 system failure, which a rejection case asks for).
+
+`smp` is one list for every width the case runs on, or a list per width:
+`smp = { rv64 = [1, 2], rv32 = [1] }` boots rv64 at one and two harts and rv32 at one, for a case
+whose count on one width is a finding of its own, so that the other width's run does not go into
+a copy of the case. A width the map leaves out runs the default, `[1]`; a key that is not one of
+the case's `arch`, and an empty list in either form, are refused before anything builds (a case
+leaves a width out of `arch`, never boots it zero times). `jobs.mk` leases the width's own
+largest count, and `--smp N` replaces a map as it does a list.
 
 With `icount`, QEMU runs the guest at a fixed instruction rate, skips idle time to the next timer
 deadline and puts the RTC on the same clock (`-rtc clock=vm`). A time a case asserts is then a

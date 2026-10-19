@@ -24,7 +24,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::build::Builder;
-use crate::case::{Boot, Case, Kind};
+use crate::case::{Boot, Case, Kind, Smp};
 use crate::prebuilt::Packed;
 use crate::qemu::{self, Image};
 use crate::target::Machine;
@@ -81,7 +81,7 @@ pub fn system(builder: &Builder, workspace: &Path, logs: &Path, ask: &System) ->
 
     let mut case = Case::load(&workspace.join(CASE))?;
     let Kind::Boot(boot) = &mut case.kind else { bail!("{CASE} is not a boot case") };
-    boot.smp = vec![ask.smp];
+    boot.smp = Smp::List(vec![ask.smp]);
     boot.login_key = Some(public);
     boot.agent_key = Some(agent_public);
     let kept =
