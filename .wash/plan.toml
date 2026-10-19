@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 553
+revision = 557
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -2668,8 +2668,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   needs = ["STEWARD8", "STEWARD10"]
   body = "Brief: .wash/local/STEWARD9-implementer.md; ruling .wash/local/wave-2026-10-18-rulings.md 'STEWARD9'. Tier B (tests/steward-latency.toml parameters and a page sentence; no code), size S, one reviewer (the orchestrator's pick). Found by STEWARD8: the case's kernel-deadline lease is 5 s, set to twice an older two-hart launch; the launch now measures 6.62 s on rv32 at two harts beside three spinners (~5 s beside fifteen at one hart), so in the N = 16 rounds a launch outlives its own 5 s lease and the deadline passes inside the launch (B82: NotPermitted, a forbidden line ends the boot before the trace dump), so the rv32 N = 3/4 rows that now complete cannot be judged net of audits. Fix: the deadline lease and the sleep after it are derived from the measured worst launch over both widths (the same measurement STEWARD8 took for launch_timeout/MAX_CALL_MS): the lease = 2x the worst launch (~14 s), so it reliably outlives the launch and its deadline fires on a running VM (the quantity the deadline notice measures); the post-sleep (~16 s) so the deadline fires and its notice is recorded before the next round. The round grows ~2.5 min on rv32; timeout_secs stays the case's bound. State the derivation in the toml's comment and on scheduling.md where the case's parameters are described; the rv32 N = 3/4 (and N = 16 where reached) deadline-notice rows are then measured. Not folded into the async-start_agent follow-up: the deadline-during-launch is B82's kernel behaviour, independent of whether start_agent is synchronous, so it stands alone."
-  state = "active"
-  revision = 533
+  state = "done"
+  revision = 556
 
 [[node]]
   id = "STEWARD10"
@@ -2706,8 +2706,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   needs = ["STEWARD9", "STEWARD11"]
   body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'STEWARD12'. Brief: .wash/local/STEWARD12-implementer.md. Tier A (the steward's loop; a responsiveness target under a burst), size S-M, reviewer steward-red (the orchestrator's pick). Found by STEWARD9: when N lease deadlines fire together the steward processes the N Exited events serially at ~70 ms each (the per-exit cleanup, the LeaseEnded audit, the console lines), so the last lease_ended notice reaches the sponsor ~N x 70 ms after its deadline (net p99 1.1-1.2 s at a 16-lease burst, against the deadline_notice target 40 ms); the per-notice target holds (a single expiry is 10 ms). The sponsor being told promptly that a lease ended is a human-control promise (agents.md 'Leases'; the sponsor can always end a lease and is told when one ends), so the burst must not push the notice behind the bookkeeping. Rule: on a burst of Exited events the steward sends the lease_ended notices FIRST (the cheap send to each sponsor's notices endpoint), then does the per-exit cleanup (already a thread's, STEWARD5), the LeaseEnded audit and the console lines (already queued, STEWARD3U) for each; so the last notice's latency is ~N x (one send) not ~N x 70 ms. Measure the burst's last-notice p99 before and after on steward-latency (a clustered-expiry variant or a new small case), both widths, stating the before/after and the per-send cost; the deadline_notice target is then met under a burst, not only per-notice. If notices-first alone does not reach 40 ms at the image's realistic burst size, state the residual (the burst size at which it holds) rather than moving the target. Pages: steward.md 'Failure and restart'/'Residual risks' (the burst's notice cost and the notices-first rule); scheduling.md 'With the real steward' (the burst finding, then its fix). No kernel change. Needs STEWARD9 (the case and scheduling.md's burst row) and STEWARD11 (drive.rs) merged: it touches the same files."
-  state = "todo"
-  revision = 545
+  state = "active"
+  revision = 557
 
 [[node]]
   id = "STEWARD13"
@@ -2725,8 +2725,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "AGENTS"
   body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'READ1'. Brief: to follow (investigation-first; the Architect settles the fix on the measurement). Tier A (the verified read path: erofsd, verityd, blkd; possibly the VM's read resilience), size M, reviewer a red (the orchestrator's pick). Found by STEWARD9 on rv32 at N=16: a spinner VM dies mid-round because its module reads at the system volume time out (the VM hub's FILE_WAIT_US, 10 s) behind the other VMs' reads — STEWARD8's finding 5 (the read path's per-(account, label set) pages/requests ceiling does not scale with the account's concurrent VM count; B88 sized verityd's cache and read-ahead for two loaders, not sixteen) reaching a liveness consequence. rv64 passes N=16; a full rv32 system is beyond M6 (tenets), so the goal is NOT 'rv32 N=16 passes' but 'a lease VM does not DIE from module-read starvation under its account's concurrent load' — it may be slow, not dead — and a stated supported concurrent-VM count per account at the system volume, measured on both widths. Investigation: measure the N at which a VM's module read times out to death, both widths and hart counts; the levers are the pages/requests VM-count term (finding 5's derivation completion, the Architect's remit), verityd's cache/read-ahead sized for N loaders (a B88 extension), the read path's weight, and the VM's resilience to a slow module read (does a timed-out read have to kill the VM, or can it retry past FILE_WAIT_US for a code read it cannot proceed without). The implementer measures and brings the fix choice back to the Architect; do not assume one lever. Cases: a boot of N concurrent VMs of one account loading code at the system volume, none dying, up to the stated supported N both widths; the measured fatal N before/after. Pages: verityd.md / erofsd.md (the drain rate and the supported N), scheduling.md (STEWARD9's rv32 N=16 row names this), serving.md if the pages/requests term moves. STEWARD9 does not wait for it."
-  state = "todo"
-  revision = 549
+  state = "active"
+  revision = 555
 
 [[node]]
   id = "BENCH1"
