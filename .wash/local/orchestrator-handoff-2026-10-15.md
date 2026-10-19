@@ -629,3 +629,9 @@ STEWARD12 in the plan (needs STEWARD9 + STEWARD11: same files, steward.rs/drive.
 ~20:33Z BENCH1 OK (kernel-red-3), accepted. TRAIN 77 = BENCH1 alone: head dffaab186 on dfbf2eeba, .tmp/train-77 running. On green: ff main, push, push wp-BENCH1, remove worktree+branch, save.sh, give steward9-implementer-2 the hash to rebase and adopt the per-width smp.
 
 ~21:01Z Train 77 run 1: 769 PASS, 1 FAIL deadline-flood-billed-traced-mttcg rv64 smp=2 (MTTCG host-time case; clause foreign_timer_in ≤ 10/1000, log .tmp/train-77/fail-rv64-deadline-flood-billed-traced-mttcg.log); rerunning alone x3 (rerun*-rv64-deadline-flood.log). BENCH1 touches no kernel; list-form smp unchanged.
+
+~21:04Z TRAIN 77 PUBLISHED (BENCH1) merge dffaab186 on dfbf2eeba, main e740361ae; run 1 769 PASS + deadline-flood-billed-traced-mttcg rv64 smp2 flake (6/6 alone, logs in .tmp/train-77); wp-BENCH1 pushed, worktree+branch removed; save.sh clean. steward9-implementer-2 given the hash: rebase, per-width smp in the tomls, gated runs, report -> steward-red-5 -> train 78. Then READ1 launch (at review), STEWARD12 after 78, STEWARD13, SCHED5 (brief pending).
+
+~21:54Z STEWARD9 reported (a633a84d4, 3 commits on e740361ae) -> steward-red-5; train 78 = STEWARD9 alone (.tmp/train-78/run.sh prepared). READ1 launched (read1-implementer, investigation phase, measurement -> Architect on QA thread READ1; reviewer kernel-red-3 later).
+
+~21:59Z STEWARD9 OK with notes (steward-red-5); P2 (B82 in a toml comment) folded by me via --fixup + autosquash -> head 13fe5a229; docs+formatting rerun PASS; accepted (old assignment did not block). TRAIN 78 = STEWARD9 alone: head b7e03328d on e740361ae, .tmp/train-78 running. STEWARD12 launched from b7e03328d (rebase onto origin/main at publish). On green: ff main, push, push wp-STEWARD9, remove worktree+branch, save.sh, give steward12-implementer the hash.

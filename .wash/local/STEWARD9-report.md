@@ -1,8 +1,8 @@
 # STEWARD9 report (steward9-implementer-2)
 
-Branch `wp-STEWARD9` on origin/main `dfbf2eeba` (train 76, STEWARD11 in). Worktree
+Branch `wp-STEWARD9`, head `a633a84d4`, three commits on origin/main `e740361ae` (train 77, BENCH1 in). Worktree
 `/home/mcloonan/redoubt/.worktrees/STEWARD9`. Tier A (a few lines of the steward's test-only
-latency probe), reviewer steward-red-5. Head: see the end (filled at completion).
+latency probe), reviewer steward-red-5. Commits: `bfb4b73a8` steward (the probe), `f2eeacae0` testbench (the three cases, the host test), `a633a84d4` docs.
 
 ## What the node does
 
@@ -75,13 +75,48 @@ the rounds are three boots: N = 1–3, N = 4 (3.1 M records alone), N = 16 (rv64
 Plus the WrongObject wrong-destruction the cluster exposed → STEWARD10 (done; STEWARD11 the
 Scope arm). Evidence `.tmp/STEWARD9/cluster-wrongobject-finding.md`.
 
-## Runs (seed 3, one run per column; the oracle's lines in the job logs named)
+## Runs (seed 3, one run per column; every boot `SCHED-TRACE-END … dropped 0`)
 
-FILLED AT COMPLETION.
+All through `scripts/q` (jobs.mk targets; the rv32 two-hart boots `testbench --exact --arch rv32 <case> --smp 2`
+on the prebuilt). The run quoted by the table is the head's binaries and tomls (tree `db395cc63`, which differs
+from the head only in scheduling.md's text): logs `.worktrees/STEWARD9/.tmp/STEWARD9/final2/` (`rv64-make.log`,
+`rv32-make.log`, the `rv*-steward-latency*.log` job logs, `rv32-*-smp2.log`, `kept/` the failing rv32 two-hart
+boot's console). An earlier full set on the same shape (before the probe's stat fix) is in `final1/`, and the set
+that found the stat regression in `final/`.
 
-## Gates
+| case | rv64 1 hart | rv64 2 harts | rv32 1 hart | rv32 2 harts (`--smp 2`, recorded) |
+| --- | --- | --- | --- | --- |
+| steward-latency (N = 1, 2, 3) | PASS 540.9 s, 4,841,622 records (42 % margin) | PASS 589.9 s, 5,525,840 (34 %) | PASS 937.1 s, 5,005,142 (40 %) | FAIL 711.3 s: N = 2 timer_wake p50 31,831 µs (finding 4); everything else met; 5,979,365 (29 %) |
+| steward-latency-n4 (N = 4) | PASS 368.9 s, 2,876,371 (66 %) | PASS 454.5 s, 3,711,105 (56 %) | PASS 530.7 s, 2,963,667 (65 %) | PASS 409.2 s, 3,932,389 (53 %) |
+| steward-latency-n16 (N = 16, rv64 only) | PASS 155.8 s, 1,022,850 (88 %) | PASS 187.7 s, 1,363,142 (84 %) | not run (finding 3) | not run |
 
-FILLED AT COMPLETION.
+deadline_notice p99 met in every round on every column (8.3 to 15.9 ms against 40); the table on scheduling.md has
+every row. The rv32 two-hart N = 2 timer_wake p50 reproduced five times over the day within 30 µs (31,855, 31,835,
+31,825, 31,832, 31,831 µs).
+
+**Regression found and fixed on the branch (not on main):** the marker-end probe's first form looked for the
+`latency-done` marker (a `stat` at the home) on every idle loop turn; that call landed inside each round's first
+probe lease's `reply_wait` window, a 170 to 570 ms sample against ~9 ms for the rest (both widths; `final/`
+logs, `reply_wait` p99 166–381 ms). The look is now gated on a flushed round with no lease live, where no sample's
+window is open; `reply_wait` p99 is back to 8.7–15 ms at one hart (the two-hart p50 of ~43 ms at N = 1 was in
+STEWARD8's table too). This is why the five cases ran twice today.
+
+## Gates (all through q; exit codes from the make summaries)
+
+- `set CASES=formatting` PASS, `set CASES=docs` PASS — on the head (`.tmp/STEWARD9/gates2/head-docs-fmt.log`), after a
+  first formatting FAIL on the probe's long `if` line (fixed; `gates2/gates-make.log` has the second set).
+- `size-budget` PASS, `unsafe-budget` PASS (no `unsafe` touched; the probe lost a constant and gained a condition).
+- `host-tests` PASS (the testbench's own tests, `only_steward_latency_builds_the_latency_probe` with the three
+  cases), `steward-host-tests` PASS.
+- The steward set, 39 cases both widths (every `tests/steward-*.toml` but the three latency cases and
+  steward-host-tests): 77 targets rc=0, `set: 39 cases` (`gates2/steward-set-make.log`; one case is host-only).
+- Release checks: `cargo check --release -p redoubt-steward-server --bin steward` for riscv64gc and riscv32imac,
+  with and without `--features latency-probe`: rc=0 all four (`gates/release-checks.log`).
+- The three latency cases as gated (above).
+- Not run: the whole bench (the train's); the sweep of seeds (the page's sweep table is STEWARD4's and unchanged).
+
+The boot cases and the steward set ran on tree `db395cc63`; the head differs from it only in
+`docs/kernel/scheduling.md` (the table's numbers from that run), so the guest binaries are those runs'.
 
 ## Documentation check
 
@@ -97,6 +132,10 @@ FILLED AT COMPLETION.
 
 ## Open
 
-- BENCH1's per-width `smp` (rv64 [1, 2], rv32 [1]) goes into the three tomls once its hash is
-  given; until then the tomls carry `smp = [1, 2]` with the gate stated in their comments, and
-  `rv32/steward-latency` fails at two harts on finding 4 by design.
+- The per-width `smp = { rv64 = [1, 2], rv32 = [1] }` is in steward-latency and steward-latency-n4
+  (BENCH1's form); steward-latency-n16 is `arch = ["rv64"]` with `smp = [1, 2]`.
+- Reading: the three tomls were read in full; steward.rs, case.rs, scheduling.md, steward.md and SECURITY.md by
+  their changed regions and the whole diff of each commit, not cover to cover.
+- The four tiny differences between this run and the previous one (e.g. rv32 one-hart N = 2 decision_wake p99
+  40.5 against 2.2 ms the run before, one sample of 16, met) are the host side's ssh timing; the targets held in
+  both.
