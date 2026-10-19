@@ -7,17 +7,20 @@ recipe = "image/boot.toml"
 memory_mib = 1024
 # One login that boots a shell VM, after the holders' five seconds.
 timeout_secs = 900
-# The holders connect once the console's shell is up, so their four slots and four closes come
-# in one order before alice's ssh starts, which waits for every line here.
+# The holders connect one after another, each once the previous one's slot line is on the
+# console (the dials below), so the four are accepted on slots 0 to 3, the lowest free each
+# time, before the first reaches its bound, and the four closes follow; alice's ssh starts
+# after every line here. Dialed at once, a loaded host can deliver one SYN seconds after the
+# others, after a slot has already been given back, and that holder takes the freed slot.
 expect = [
     '^init: started sshd, console [0-9a-f]{16}$',
     '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
     '^init: started steward, console [0-9a-f]{16}$',
     '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
-    '^\[con [0-9a-f]{16}\] sshd: connection [0-9]+ on slot [0-3]$',
-    '^\[con [0-9a-f]{16}\] sshd: connection [0-9]+ on slot [0-3]$',
-    '^\[con [0-9a-f]{16}\] sshd: connection [0-9]+ on slot [0-3]$',
-    '^\[con [0-9a-f]{16}\] sshd: connection [0-9]+ on slot [0-3]$',
+    '^\[con [0-9a-f]{16}\] sshd: connection [0-9]+ on slot 0$',
+    '^\[con [0-9a-f]{16}\] sshd: connection [0-9]+ on slot 1$',
+    '^\[con [0-9a-f]{16}\] sshd: connection [0-9]+ on slot 2$',
+    '^\[con [0-9a-f]{16}\] sshd: connection [0-9]+ on slot 3$',
     '^\[con [0-9a-f]{16}\] sshd: connection [0-9]+: no login within 5 s, closed$',
     '^\[con [0-9a-f]{16}\] sshd: connection [0-9]+: no login within 5 s, closed$',
     '^\[con [0-9a-f]{16}\] sshd: connection [0-9]+: no login within 5 s, closed$',
@@ -59,7 +62,9 @@ stage = "tests/data/steward/stage"
 forward = [22]
 
 # The holders: each sends a client's version line, reads the server's, and then nothing, until
-# the box closes the connection; one still open at the case's deadline fails it.
+# the box closes the connection; one still open at the case's deadline fails it. The first
+# dials once the console's shell is up; each of the others once sshd has said the previous
+# one's slot, so no holder's SYN is in flight while another's slot is already free.
 [[net.dial]]
 port = 22
 send = "SSH-2.0-holder\r\n"
@@ -71,19 +76,19 @@ until_closed = true
 port = 22
 send = "SSH-2.0-holder\r\n"
 expect = "SSH-2.0-"
-after = 'Redoubt shell, on Elixir '
+after = 'sshd: connection [0-9]+ on slot 0$'
 until_closed = true
 
 [[net.dial]]
 port = 22
 send = "SSH-2.0-holder\r\n"
 expect = "SSH-2.0-"
-after = 'Redoubt shell, on Elixir '
+after = 'sshd: connection [0-9]+ on slot 1$'
 until_closed = true
 
 [[net.dial]]
 port = 22
 send = "SSH-2.0-holder\r\n"
 expect = "SSH-2.0-"
-after = 'Redoubt shell, on Elixir '
+after = 'sshd: connection [0-9]+ on slot 2$'
 until_closed = true
