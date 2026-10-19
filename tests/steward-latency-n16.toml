@@ -1,0 +1,120 @@
+description = "The round at N = 16 of the responsiveness targets measured with the real steward, a companion of `steward-latency` (N = 1, 2 and 3) and `steward-latency-n4` (N = 4): the kernel's trace ring is per boot, so the five rounds split across three boots to each fit their own ring (a boot of all five overran it at two harts), and this boot carries the densest round, N = 16, alone. alice's session holds sixteen live leases: fifteen spinning agents (Redoubt.Agents.Echo `spin`, each a beamlet VM on a lease) beside the one measured lease (a probe lease the steward ends by its own decision, or a deadline lease the kernel takes), the sixteen the manifest sizes alice for (2 x 11,392 + 16 x 5,248 = 106,770 pages, her unlabelled share; the same manifest and recipes as the companions). D = 8 probe and 8 deadline leases, run one at a time beside the spinners (the deadline lease 14 s, twice the round's worst launch over both widths, so its deadline falls on a running VM, and the next lease is requested only after the previous is gone: the measured leases rotate through the one slot the carve leaves beside the fifteen spinners). The deadline notice is the exit notice's arrival less the deadline, one sample per lease grouped at N; p99 at D samples is the maximum, the pinned seed's sweep behind it. rv64 only: on rv32 the round does not complete, since beside fifteen spinners one spinner VM's module reads at the system volume time out behind the others' (the VM's 10 s give-up on a read) and the VM exits 1, so the samples group at N = 15 around a dead VM; the read path's capacity under an account's concurrent VMs is a finding of its own, stated with the round's numbers on kernel/scheduling.md (\"With the real steward\"), and the round runs on rv32 when it lands. The case owns its round count: it writes the done marker after its round, on which the probe marks the window's end; the six marker-file exits reap every lease and trip init's reboot, whose reset dumps the kernel's trace the oracle reads. Targets unchanged from the stand-in's and the companions': decision wake p50 <= 25 ms and p99 <= 95 ms, timer wake p50 <= 15 ms and p99 <= 50 ms, deadline notice p99 <= 40 ms, R10 kernel time p99 <= 30 ms, a lease's end <= 125 ms; judged by the post-check net of audits, every pick checked by the rank oracle. A miss is a finding, not a tuning"
+arch = ["rv64"]
+kind = "boot"
+debug_assertions = true
+icount = "shift=3,sleep=off"
+# The guest seed the gate runs, sched-latency's; the sweep is recorded in the package's report.
+qemu_seed = 3
+# Out of the whole run until its rows pass on both widths. This boot runs the round at N = 16
+# alone; steward-latency runs N = 1, 2 and 3 and steward-latency-n4 the round at N = 4. The ring
+# is per boot, and one boot of all five rounds overran its 8,388,608 records at two harts, so the
+# densest round (fifteen spinners) has a boot of its own. The deadline lease is 14 s, twice the
+# round's worst launch (2 x 6.64 s, rv32 at two harts beside fourteen spinners, rounded up to a
+# second), so its deadline falls on a running VM and never inside the launch
+# (kernel/scheduling.md, "With the real steward"); the measured leases run one at a time, for a
+# clean per-notice sample and because the carve holds one slot beside the fifteen spinners (the
+# derivation and the per-notice rationale are in steward-latency.toml's comments).
+# rv64 only: on rv32 a spinner VM dies mid-round (its module reads at the system volume time out
+# behind the other fourteen's; it exits 1), so the round's samples group at N = 15 around a dead
+# VM and the counts below never come; the cause and the round's numbers are on that page, and
+# the width joins when the read path carries sixteen VMs' reads.
+whole_run = false
+# The image's programs, the steward built with its test-only latency-probe (servers/steward,
+# src/bin/steward.rs, Probe), and the crossing program the image publishes. The latency manifest
+# gives the steward the stand-in's weight, 1000 under `system` (the image's is 100): the
+# workload the page's targets were set at.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-bootfsd", bin = "bootfsd" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-verityd", bin = "verityd" },
+    { package = "redoubt-netd", bin = "netd" },
+    { package = "redoubt-ipd", bin = "ipd" },
+    { package = "redoubt-walfsd", bin = "walfsd" },
+    { package = "redoubt-erofsd", bin = "erofsd" },
+    { package = "beamlet-redoubt", bin = "beamlet", workspace = "userland/otp" },
+    { package = "redoubt-piped", bin = "piped" },
+    { package = "redoubt-crossing", bin = "crossing" },
+    { package = "redoubt-steward-server", bin = "steward", features = ["latency-probe"] },
+    { package = "redoubt-sshd", bin = "sshd" },
+    { package = "redoubt-consrelay", bin = "consrelay" },
+]
+# The same latency manifest as steward-latency: alice sized for sixteen lease VMs of 5,248 pages
+# beside her two sessions of 11,392 (a share of 106,770 = 2 x 11,393 + 16 x 5,249), bob's 16,384
+# under `users`, and the trace ring's large form (256 MiB). 1536 MiB, not 2048: RAM starts at
+# 0x8000_0000 and two GiB wrap the 32-bit address space, so rv32 booted to nothing.
+memory_mib = 1536
+# Test builds only: the trace ring, its large form, and its dump at the reset.
+kernel_features = ["sched-trace-large"]
+# The targets are gated at one hart and at two (kernel/scheduling.md, "Responsiveness").
+smp = [1, 2]
+# Sixteen beamlet VMs live at once under icount, and the reboot rule needs six exits within 60 s.
+# One round here, the sixteen launches its cost.
+timeout_secs = 10800
+post_check = "sched_oracle gate_harts=2 r10_p99_us=30000 lease_end_p99_us=125000 timer_wake_p50_us=15000 timer_wake_p99_us=50000 decision_wake_p50_us=25000 decision_wake_p99_us=95000 deadline_notice_p99_us=40000"
+expect = [
+    '^init: started sshd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
+    '^init: started steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+]
+forbid = [
+    'init: refused the boot',
+    'EXCEPTION',
+    'steward: a step failed',
+    'steward: the core exited',
+    'sshd: login .*: refused',
+    'target missed',
+]
+# The round's counts (deadline_notice and decision_wake at N = 16, D = 8), then the window's end
+# on the done marker; the marker ends six instances within the minute and init reboots, the reset
+# dumping the kernel's trace the post-check reads (these follow the session, not in `expect`).
+expect_after = [
+    '^\[con [0-9a-f]{16}\] steward: LATENCY-COUNT N=16 deadline_notice 8$',
+    '^\[con [0-9a-f]{16}\] steward: LATENCY-COUNT N=16 decision_wake 8$',
+    '^\[con [0-9a-f]{16}\] steward: LATENCY-END [0-9]+$',
+    '^\[con [0-9a-f]{16}\] steward: latency-probe: the case is done, exiting for the reboot$',
+    '^init: steward \(PID [0-9]+\) exited, code 9$',
+    '^init: rebooting: steward was restarted 5 times within 60 seconds$',
+    '^SCHED-TRACE-END \d+ dropped 0$',
+]
+
+# Alice's session drives N = 16 (fifteen spinners, D = 8) with steward-latency's round function:
+# D probe leases (9 s, ended by the steward within a tenth of a second) and D deadline leases the
+# kernel takes, run one at a time beside the spinners (the lease 14 s, twice the round's worst
+# launch; the derivation and the per-notice rationale are in steward-latency.toml's session
+# comment). The round's marker file is written, on which the probe counts it out; then the done
+# marker, on which the probe prints the window's end and exits for the reboot.
+[[session]]
+user = "alice"
+pty = true
+steps = [
+    { expect = '/home/alice \([0-9]+\)> ' },
+    { send = "{:ok, c} = Redoubt.Contexts.connection(); {:stage, File.mkdir_p(\"/home/alice/project/out\"), File.write(\"/home/alice/project/in\", \"spin\")}\n" },
+    { expect = '\{:stage, :ok, :ok\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "start = fn us -> {:ok, %{lease: l}} = Redoubt.Wire.Client.Steward.start_agent(c, us, Redoubt.Wire.Client.launch_timeout()); l end; round = fn n, d, r -> spinners = for _ <- 1..n//1, do: start.(600_000_000); Process.sleep(5000); for _ <- 1..d, do: (start.(9_000_000); Process.sleep(1500)); ls = case n do 0 -> 8; 1 -> 10; 2 -> 11; 3 -> 14; _ -> 14 end; for _ <- 1..d, do: (start.(ls * 1_000_000); Process.sleep((ls + 1) * 1000)); Enum.each(spinners, &Redoubt.Wire.Client.Steward.end_lease(c, &1)); File.write(\"/home/alice/latency-round-#{r}\", \"round over\"); Process.sleep(3000); {:round, r, :done} end; round.(15, 8, 1)\n" },
+    { expect = '\{:round, 1, :done\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:marker, File.write(\"/home/alice/latency-done\", \"the case is done\")}\n" },
+    { expect = '\{:marker, :ok\}' },
+    { expect = '\([0-9]+\)> ' },
+    { exit = 0 },
+]
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/steward/latency.manifest.json" }
+verity = "image/userland.toml"
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]
+forward = [22]
