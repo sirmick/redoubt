@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 524
+revision = 531
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -2613,8 +2613,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   needs = ["STEWARD5", "STEWARD6"]
   body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'F4' (B88's residual). Brief: .wash/local/STEWARD8-implementer.md. Tier B (the Elixir client, the shell's call, a toml, pages), size S, one reviewer: the editor, the red team if the steward is touched. Runs when STEWARD5 and STEWARD6 are on main, so scheduling.md's table is re-measured once. Found by B88: on rv32 at two harts a lease VM's launch beside two spinners takes 5.3-5.7 s and the shell's start_agent answers timeout; the 5 s is @timeout 5000 in libs/wire/elixir/lib/client.ex, the client's bound for every steward call, a platform constant no page states as a target; no page bounds a launch. Rule: the launch is stated and measured as end_lease's 589 ms is (steward.md 'Residual risks'): start_agent's served time alone and beside N - 1 spinners, both widths, one and two harts, from the steward's served lines; the shell's start_agent passes the client a bound of its own, twice the worst launch measured beside the spinners the case runs, rounded up to a second (call/5 takes a timeout; 5 s stays for short calls). Then the rv32 two-hart rounds at N = 3 and 4 run and their rows are measured; a miss there is a scheduler finding, not a timeout's. Drafted under the image's weights (session 100, agent 50, steward 100; the case's steward 1,000): the owner's weight answers change the number, not the design; the launching lease's share against its sponsor's spinners is asked in the owner file."
-  state = "active"
-  revision = 520
+  state = "done"
+  revision = 531
 
 [[node]]
   id = "IPD1"
@@ -2660,3 +2660,13 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "Brief: .wash/local/ATK13-implementer.md; ruling .wash/local/wave-2026-10-18-rulings.md 'agent-suite wave B'. Tier A (attack cases; the bench), size S, reviewer: a red (the orchestrator's pick). Turns the two remaining 'not yet' rows of docs/plan/m3-agents.md into their honest state under today's image. (1) R60, the labelled-agent sink row, becomes a boot case steward-labelled-agent-no-sink, built on steward-approve-box's path (a labelled agent approved at approve@box, running in its vault): the agent's :gen_tcp.connect gets enetunreach (its lease namespace holds no /net, as session-tcp-loopback shows for an unlabelled lease), and ipd's refusal of a labelled caller is the backstop, cited to net-attacks (R60); the verdict is the agent's result file in its vault and the absence of any frame to the bench peer (rule F). (2) R44, the keyd relayed-blob row: no boot arm is reachable in the image, since no session or lease holds a keyd badge (keyd's purposes are sshd's ssh_host and the steward's audit; keys in leases are M6); the row resolves on m3-agents.md by citing keyd's host tests (a_relayed_ssh_user_auth_blob_is_never_what_gets_signed and R44's set) and stating why no boot arm exists, with a normal login's end-to-end verification (the client checks the host signature over the exchange it computed) as the boot evidence that keyd signs only its own digest. Pages: m3-agents.md rows, agents.md R60-adjacent and keyd.md R44 status lines, SECURITY.md R60 row. No server, kernel or steward code."
   state = "done"
   revision = 515
+
+[[node]]
+  id = "STEWARD9"
+  title = "The latency case's deadline lease is derived from the measured launch, so a lease outlives its own launch and its deadline notice is judged"
+  template = "package"
+  parent = "AGENTS"
+  needs = ["STEWARD8"]
+  body = "Brief: .wash/local/STEWARD9-implementer.md; ruling .wash/local/wave-2026-10-18-rulings.md 'STEWARD9'. Tier B (tests/steward-latency.toml parameters and a page sentence; no code), size S, one reviewer (the orchestrator's pick). Found by STEWARD8: the case's kernel-deadline lease is 5 s, set to twice an older two-hart launch; the launch now measures 6.62 s on rv32 at two harts beside three spinners (~5 s beside fifteen at one hart), so in the N = 16 rounds a launch outlives its own 5 s lease and the deadline passes inside the launch (B82: NotPermitted, a forbidden line ends the boot before the trace dump), so the rv32 N = 3/4 rows that now complete cannot be judged net of audits. Fix: the deadline lease and the sleep after it are derived from the measured worst launch over both widths (the same measurement STEWARD8 took for launch_timeout/MAX_CALL_MS): the lease = 2x the worst launch (~14 s), so it reliably outlives the launch and its deadline fires on a running VM (the quantity the deadline notice measures); the post-sleep (~16 s) so the deadline fires and its notice is recorded before the next round. The round grows ~2.5 min on rv32; timeout_secs stays the case's bound. State the derivation in the toml's comment and on scheduling.md where the case's parameters are described; the rv32 N = 3/4 (and N = 16 where reached) deadline-notice rows are then measured. Not folded into the async-start_agent follow-up: the deadline-during-launch is B82's kernel behaviour, independent of whether start_agent is synchronous, so it stands alone."
+  state = "todo"
+  revision = 525
