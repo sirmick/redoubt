@@ -73,9 +73,6 @@ pub struct Pending {
 }
 
 impl Pending {
-    /// The object whose batch waits.
-    pub(crate) fn owner(&self) -> &Object { &self.batch.owner }
-
     /// Whether the batch carves a budget from `domain`'s fixed sub-budget: its own domain's for
     /// a session or a lease, the sponsor's for a sponsored principal's session (R39).
     pub(crate) fn carves_from(&self, domain: &redoubt_steward::domain::Domain) -> bool {
@@ -115,108 +112,132 @@ impl<B: Copy, H: Copy> Steward<B, H> {
         kind: EventKind,
         reply: ReplyTo,
     ) -> Result<Vec<Output>, Exited> {
-        if self.holds(&kind) {
-            if reply != 0 {
-                self.awaiting.insert(reply);
-            }
-            self.held.push((kind, reply));
-            return Ok(Vec::new());
-        }
+        self.events(kernel, alloc::vec![(kind, reply)])
+    }
+
+    /// The `Exited` events of processes whose exit notices arrived together, as one batch: every
+    /// exit is decided and its sponsor's `lease_ended` notice sent before any exit's bookkeeping
+    /// runs (the end batch and the `Done` it raises, the forgets, the records delivered after),
+    /// so the last notice of a burst of N waits behind N - 1 sends, not N - 1 exits' work
+    /// (servers/steward.md, "Failure and restart"). The core sees what it would one exit at a
+    /// time: an `Exited` moves its object to `Ending` by its own row, and the `Done` that ends it
+    /// follows its own batch; the other exits' decisions between them are other objects' rows,
+    /// which read nothing of it. One object's exit is [`Steward::event`]'s.
+    pub fn exits<K: Kernel<Budget = B, Handle = H>>(
+        &mut self,
+        kernel: &mut K,
+        objects: Vec<Object>,
+    ) -> Result<Vec<Output>, Exited> {
+        self.events(kernel, objects.into_iter().map(|object| (EventKind::Exited { object }, 0)).collect())
+    }
+
+    /// `heads` decided in order, each sending its notices as it is decided; then each head's
+    /// effects run in order with every event that follows from them (its batches' `Done`s, the
+    /// `Pending` of a channel it redraws), decided as they come to the front, before the next
+    /// head's. A batch of one is one event.
+    fn events<K: Kernel<Budget = B, Handle = H>>(
+        &mut self,
+        kernel: &mut K,
+        heads: Vec<(EventKind, ReplyTo)>,
+    ) -> Result<Vec<Output>, Exited> {
         let mut outputs = Vec::new();
         let mut reopen = false;
-        // The approval channels this event redraws (a `Pending` of theirs ran), and the screens
+        // The approval channels these events redraw (a `Pending` of theirs ran), and the screens
         // the core rendered on each: written as one block per channel at the end.
         let mut redrawn = BTreeSet::new();
         let mut screens: BTreeMap<u64, Vec<Rendered>> = BTreeMap::new();
-        let mut queue = alloc::collections::VecDeque::new();
-        queue.push_back((kind, reply));
-        while let Some((kind, reply)) = queue.pop_front() {
-            if let EventKind::Pending { channel } = &kind {
-                redrawn.insert(*channel);
-            }
-            // The object's process is gone before the core decides its exit: a destroy the core
-            // then asks for may find the budget gone too (a lease the kernel's deadline took).
-            if let EventKind::Exited { object } = &kind {
-                self.pids.retain(|_, o| o != object);
-            }
-            let mut random = [0; RANDOM_WORDS];
-            for w in &mut random {
-                // A generator that fails gives no words, and the core exits rather than number
-                // anything (R36).
-                *w = kernel.random().map_or(0, |r| r | MINTED);
-            }
-            let event = Event { now: kernel.now(), random, reply, kind };
-            let Effects { outputs: out, batches, exit } = decide(&mut self.store, event);
-            if exit {
-                return Err(Exited);
-            }
-            for o in out {
-                // The core answered the token: its call waits no longer.
-                if let Output::Reply { to, .. } = &o {
-                    self.awaiting.remove(to);
+        let mut decided = Vec::with_capacity(heads.len());
+        for (kind, reply) in heads {
+            // A head of an object whose batch waits at its launch is held for the launch
+            // thread's report, its caller parked ([`Steward::holds`]); the rest are decided.
+            if self.holds(&kind) {
+                if reply != 0 {
+                    self.awaiting.insert(reply);
                 }
-                match o {
-                    Output::Forget(object) => {
-                        reopen |= self.console_session == Some(object.id) && object.kind == Kind::Session;
-                        self.forget(kernel, &object);
+                self.held.push((kind, reply));
+                continue;
+            }
+            decided.push(self.decided(kernel, kind, reply, &mut redrawn)?);
+        }
+        for effects in decided {
+            let mut effects = Some(effects);
+            let mut queue = alloc::collections::VecDeque::new();
+            loop {
+                let Effects { outputs: out, batches, exit: _ } = match effects.take() {
+                    Some(e) => e,
+                    None => match queue.pop_front() {
+                        Some((kind, reply)) => self.decided(kernel, kind, reply, &mut redrawn)?,
+                        None => break,
+                    },
+                };
+                for o in out {
+                    // The core answered the token: its call waits no longer.
+                    if let Output::Reply { to, .. } = &o {
+                        self.awaiting.remove(to);
                     }
-                    // A submission is a request now: the items its call drew are the request's,
-                    // before any screen names them.
-                    Output::Reply { to, answer: Answer::Request { id } } => {
-                        self.items_of_request(id);
-                        outputs.push(Output::Reply { to, answer: Answer::Request { id } });
-                    }
-                    Output::Reply { to: CONSOLE, answer } => {
-                        self.console_session = match answer {
-                            Answer::Session { id, .. } => Some(id),
-                            _ => None,
-                        };
-                        // A console that cannot start is said once, not retried in a loop.
-                        if self.console_session.is_none() {
-                            outputs.push(Output::Reply { to: CONSOLE, answer });
+                    match o {
+                        Output::Forget(object) => {
+                            reopen |= self.console_session == Some(object.id) && object.kind == Kind::Session;
+                            self.forget(kernel, &object);
                         }
-                    }
-                    // The sponsor's notice goes now, while the lease is still in the store to be
-                    // named; what it says is the lease's name alone.
-                    Output::Notice { to: Notified::Session(badge), notice: Notice::LeaseEnded { lease } } => {
-                        self.notify(kernel, badge, lease);
-                    }
-                    Output::Notice { to: Notified::Session(badge), notice: Notice::ApprovalWaiting } => {
-                        if let Some(n) = self.notices_of(badge) {
-                            kernel.notify_approval(n);
+                        // A submission is a request now: the items its call drew are the
+                        // request's, before any screen names them.
+                        Output::Reply { to, answer: Answer::Request { id } } => {
+                            self.items_of_request(id);
+                            outputs.push(Output::Reply { to, answer: Answer::Request { id } });
                         }
+                        Output::Reply { to: CONSOLE, answer } => {
+                            self.console_session = match answer {
+                                Answer::Session { id, .. } => Some(id),
+                                _ => None,
+                            };
+                            // A console that cannot start is said once, not retried in a loop.
+                            if self.console_session.is_none() {
+                                outputs.push(Output::Reply { to: CONSOLE, answer });
+                            }
+                        }
+                        Output::Notice { to: Notified::Session(badge), notice: Notice::ApprovalWaiting } => {
+                            if let Some(n) = self.notices_of(badge) {
+                                kernel.notify_approval(n);
+                            }
+                        }
+                        // An approval channel of the requester's principal is open: it is
+                        // redrawn, which renders the request on it (servers/steward.md, "The
+                        // powerbox and approvals").
+                        Output::Notice {
+                            to: Notified::Channel(channel),
+                            notice: Notice::ApprovalWaiting,
+                        } => {
+                            queue.push_back((EventKind::Pending { channel }, 0));
+                        }
+                        Output::Screen { channel, screen } => {
+                            screens.entry(channel).or_default().push(screen)
+                        }
+                        o => outputs.push(o),
                     }
-                    // An approval channel of the requester's principal is open: it is redrawn,
-                    // which renders the request on it (servers/steward.md, "The powerbox and
-                    // approvals").
-                    Output::Notice { to: Notified::Channel(channel), notice: Notice::ApprovalWaiting } => {
-                        queue.push_back((EventKind::Pending { channel }, 0));
+                }
+                for batch in batches {
+                    let object = batch.owner.clone();
+                    match self.run_from(kernel, batch, 0, Vec::new()) {
+                        Ran::Done(result) => queue.push_back((EventKind::Done { object, result }, 0)),
+                        Ran::Pending(pending) => self.suspend(pending),
                     }
-                    Output::Screen { channel, screen } => screens.entry(channel).or_default().push(screen),
-                    o => outputs.push(o),
                 }
-            }
-            for batch in batches {
-                let object = batch.owner.clone();
-                match self.run_from(kernel, batch, 0, Vec::new()) {
-                    Ran::Done(result) => queue.push_back((EventKind::Done { object, result }, 0)),
-                    Ran::Pending(pending) => self.suspend(pending),
+                // A crossing's final state removes it with no `forget` of the tables': what its
+                // steps made (its connection, a budget a failed destroy left) is dropped once the
+                // core no longer holds it, after the batches of this decision, so a copy out or a
+                // write still finds its item's path; the items of requests gone go the same way.
+                let gone: BTreeSet<Object> = self
+                    .made
+                    .keys()
+                    .map(|t| t.owner.clone())
+                    .chain(self.pids.values().cloned())
+                    .filter(|o| o.kind == Kind::Crossing)
+                    .filter(|o| !self.store.domain(&o.domain).is_some_and(|d| d.has(Kind::Crossing, o.id)))
+                    .collect();
+                for object in gone {
+                    self.forget(kernel, &object);
                 }
-            }
-            // A crossing's final state removes it with no `forget` of the tables': what its
-            // steps made (its connection, a budget a failed destroy left) is dropped once the
-            // core no longer holds it, after the batches of this decision, so a copy out or a
-            // write still finds its item's path; the items of requests gone go the same way.
-            let gone: BTreeSet<Object> = self
-                .made
-                .keys()
-                .map(|t| t.owner.clone())
-                .chain(self.pids.values().cloned())
-                .filter(|o| o.kind == Kind::Crossing)
-                .filter(|o| !self.store.domain(&o.domain).is_some_and(|d| d.has(Kind::Crossing, o.id)))
-                .collect();
-            for object in gone {
-                self.forget(kernel, &object);
             }
         }
         // A submission's items are bound to its request when the core answers it, which for a
@@ -234,6 +255,46 @@ impl<B: Copy, H: Copy> Steward<B, H> {
             outputs.extend(self.open_console(kernel)?);
         }
         Ok(outputs)
+    }
+
+    /// `kind` decided: the core's effects, less the `lease_ended` notices, which go now, as the
+    /// decision is made and ahead of everything else it asks for, while the lease is still in
+    /// the store to be named (what the notice says is the lease's name alone). The core asking
+    /// for the steward's exit is `Err`, nothing of the decision carried out.
+    fn decided<K: Kernel<Budget = B, Handle = H>>(
+        &mut self,
+        kernel: &mut K,
+        kind: EventKind,
+        reply: ReplyTo,
+        redrawn: &mut BTreeSet<u64>,
+    ) -> Result<Effects, Exited> {
+        if let EventKind::Pending { channel } = &kind {
+            redrawn.insert(*channel);
+        }
+        // The object's process is gone before the core decides its exit: a destroy the core
+        // then asks for may find the budget gone too (a lease the kernel's deadline took).
+        if let EventKind::Exited { object } = &kind {
+            self.pids.retain(|_, o| o != object);
+        }
+        let mut random = [0; RANDOM_WORDS];
+        for w in &mut random {
+            // A generator that fails gives no words, and the core exits rather than number
+            // anything (R36).
+            *w = kernel.random().map_or(0, |r| r | MINTED);
+        }
+        let event = Event { now: kernel.now(), random, reply, kind };
+        let mut effects = decide(&mut self.store, event);
+        if effects.exit {
+            return Err(Exited);
+        }
+        effects.outputs.retain(|o| match o {
+            Output::Notice { to: Notified::Session(badge), notice: Notice::LeaseEnded { lease } } => {
+                self.notify(kernel, *badge, *lease);
+                false
+            }
+            _ => true,
+        });
+        Ok(effects)
     }
 
     /// The screen an approval channel shows (servers/steward.md, "The powerbox and approvals";
