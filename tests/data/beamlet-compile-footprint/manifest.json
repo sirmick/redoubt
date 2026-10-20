@@ -44,7 +44,7 @@
       "handed": [ { "endpoint": "ipd", "badge": "3" } ],
       "args": ["client=5"] },
     { "name": "ipd", "program": "ipd",
-      "stack_pages": "4", "heap_pages": "8",
+      "stack_pages": "4", "heap_pages": "278",
       "budget": { "pages": "4096", "processes": 1, "weight": 100 },
       "receives": ["ipd"],
       "handed": [ { "endpoint": "netd", "badge": "5" } ],

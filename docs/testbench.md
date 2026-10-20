@@ -108,8 +108,10 @@ under [the case file](#the-case-file)).
 </details>
 
 A boot case passes when every `expect` pattern matches a console line, in order, no `forbid`
-pattern ever matches, and the boot ends as the case says. Three patterns are always forbidden:
-`PANIC`, `TEST FAILED` and `WARNING: INSECURE`. After the last `expect`, and any sessions, the bench
+pattern ever matches, and the boot ends as the case says. Four patterns are always forbidden:
+`PANIC`, `TEST FAILED`, `WARNING: INSECURE`, and `ipd: an invariant broke`, the line `ipd` says
+if a socket's buffers ever fail to fit its heap, reachable only at a residual of its sizing that no
+case reaches ([ipd](servers/ipd.md#sizing)). After the last `expect`, and any sessions, the bench
 keeps reading for 50 ms (1 s in a checked build), so a forbidden line right after the last expected
 one still fails the case. With `poweroff = true` it reads instead until QEMU exits, and requires the
 exit status the case names (0 by default; 255 for an SBI system failure). A boot that ends, or
@@ -124,7 +126,7 @@ character but tab, DEL among them, and trailing space after them. Nothing is dra
 return does not take the line back to its start, and the prefix the log server or `consoled` gave
 the line stays first: no program's text can be shown in front of it. `expect`, `expect_after`,
 `[[input]]` and the poke's `after`, and `distinct_across_boots` match the shown line. `forbid`, the
-three always forbidden, and the checks on the reporter's `PASSED` and `DONE` lines see both the
+four always forbidden, and the checks on the reporter's `PASSED` and `DONE` lines see both the
 line as it came and as it is shown, so a forbidden word split by a sequence is caught, and so is a
 raw sequence a case forbids (`'\x1b'`). The console log keeps every line as it came, and `distinct`
 and a `post_check` read that log.
@@ -1835,7 +1837,12 @@ rounded up to pages, each heap cap in pages. `sshd` is sized for its four slots 
 `buckets=4`, [sshd](servers/sshd.md#sessions-over-ssh)) busy at once: its
 heap held 8 pages at boot, 54 with one login (rv32, before the boot pack) and 56 with two at once,
 so at most 46 a connection, and its cap is twice 8 pages and four connections, 384. Its declared
-stack is a page over twice its peak. `consoled`'s row is from the runs once it serves each
+stack is a page over twice its peak. `ipd`'s cap is not twice its peak either: it holds a base of
+twice its peak apart from its socket tables, 2 × 37 = 74 pages, and every socket its buckets may
+charge, its buffers, its slot and its table entries, 108 × 4.25 = 459 pages, since a socket the
+heap could not hold would fail an allocation in a shared server ([ipd](servers/ipd.md#sizing)).
+Its peak of 61 pages holds those tables, sized at start for its 108 sockets, 24 pages beside the 37
+of everything else. `consoled`'s row is from the runs once it serves each
 session's console as a multiplexed session. The two `walfsd` rows are one server's, from six runs of
 `walfsd-quota`, three on each width, which writes through it, as the image's memory cases do not
 (their boots peak at 16,040 bytes of stack and 9 heap pages); its heap cap is also above what a
@@ -1850,7 +1857,7 @@ additional client from the merged manifest.
 | `bootfsd` | 7,320 | 4 | 1,089 | 2,304 (the image publishes `beamlet`, `piped`, `consrelay` and `crossing`, and the cap follows each manifest's own published total) |
 | `blkd` | 4,520 | 3 | 19 | 38 |
 | `netd` | 4,296 | 3 | 2 | 4 |
-| `ipd` | 13,672 | 7 | 37 | 74 |
+| `ipd` | 13,768 | 7 | 61 | 533 (twice its peak apart from its socket tables, 74, and its buckets' 108 sockets' buffers, which the cap must hold, [ipd](servers/ipd.md#sizing)) |
 | `walfsd:data` | 28,616 | 14 | 15 | 64 |
 | `walfsd:alice-secrets` | 28,616 | 14 | 15 | 64 |
 | `blkd:system` | 4,520 | 3 | 17 | 34 |

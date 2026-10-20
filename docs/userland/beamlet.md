@@ -570,10 +570,13 @@ that dies has its socket aborted by its reader, so nothing of `ipd`'s outlives i
 - **A session's sockets are its share of `ipd`'s admission** ([sizing](../servers/ipd.md#sizing)):
   a `State` unit each, as its `/net` connection is one, within its account's bucket divided
   among the account's sessions, and a socket closed by the session keeps its unit through TCP's
-  TIME-WAIT (10 s). Past the share a connect is `{error, emfile}`, `ipd`'s `too_many`; at the
-  image's defaults a session with a console session beside it has three sockets, so a client
-  that opens and closes connections in quick succession reuses one instead, as
-  `session-tcp-echo` does.
+  TIME-WAIT (10 s). Past the share a connect is `{error, emfile}`, `ipd`'s `too_many`. The
+  image's `ipd` gives alice's account 32 sockets, 4 + 32 = 36 units, so her session with her
+  console session beside it has 36 / 3 = 12, its connection and 11 sockets: eleven connections
+  opened and closed in quick succession all succeed, and the twelfth while they linger is
+  `emfile` (`session-tcp-churn`). A principal without an override has the defaults, 12 / 3 = 4
+  beside a console session, so 3 sockets, and a client that opens and closes connections in
+  quick succession reuses one instead, as `session-tcp-echo` does.
 - **Addresses are IPv4 tuples.** A name is `{error, nxdomain}` until the resolver
   ([name-scoped connections](../servers/ipd.md#name-scoped-connections)); an IPv6 tuple is
   `eafnosupport`.

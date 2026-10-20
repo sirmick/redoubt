@@ -40,7 +40,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use redoubt_rt::server::AdmitKey;
-use smoltcp::iface::{Config, Interface, SocketHandle, SocketSet};
+use smoltcp::iface::{Config, Interface, SocketHandle, SocketSet, SocketStorage};
 use smoltcp::socket::tcp::{self, State};
 use smoltcp::time::{Duration, Instant};
 use smoltcp::wire::{
@@ -195,6 +195,16 @@ struct Entry {
     share: u64,
 }
 
+/// What a socket holds of the heap beyond its buffers: its slot in smoltcp's set and two table
+/// entries, the table being held to twice `max_sockets` entries (a socket's own, and listeners',
+/// which may outlast their backlog), past which a socket or a listen is refused `too_many`; both
+/// tables are sized at start so neither grows: within what [`crate::sizing::SOCKET_BYTES`] allows
+/// beside the two buffers, 1,024 bytes, on either width.
+const _: () = assert!(
+    size_of::<SocketStorage<'static>>() + 2 * size_of::<Entry>()
+        <= crate::sizing::SOCKET_BYTES as usize - 2 * BUFFER
+);
+
 impl Entry {
     /// A listener on `port` its owner still holds.
     fn listens_on(&self, port: u16) -> bool {
@@ -233,9 +243,13 @@ pub struct Stack<N: Netif, E: Entropy> {
     next_id: u64,
     /// The most sockets that may exist at once, every bucket at its cap.
     max_sockets: usize,
+    /// The most entries the table may hold: twice `max_sockets`, its capacity from the start.
+    max_entries: usize,
     meter: Meter,
     /// (bucket, share) of each metered socket removed, for the server to give back.
     freed: Vec<(AdmitKey, u64)>,
+    /// A socket's buffers did not fit the heap ([`Stack::new_socket`]).
+    heap_short: bool,
 }
 
 fn instant(us: u64) -> Instant { Instant::from_micros(i64::try_from(us).unwrap_or(i64::MAX)) }
@@ -253,12 +267,16 @@ impl<N: Netif, E: Entropy> Stack<N, E> {
             net,
             mac: None,
             iface: None,
-            sockets: SocketSet::new(vec![]),
-            table: Vec::new(),
+            // Sized once for every socket that may exist, so neither table grows while serving
+            // (servers/ipd.md, "Sizing"; the bound below `Entry`).
+            sockets: SocketSet::new(Vec::with_capacity(max_sockets)),
+            table: Vec::with_capacity(2 * max_sockets),
             next_id: 1,
             max_sockets,
+            max_entries: 2 * max_sockets,
             meter: Meter::Closed,
             freed: Vec::new(),
+            heap_short: false,
         }
     }
 
@@ -393,23 +411,40 @@ impl<N: Netif, E: Entropy> Stack<N, E> {
     }
 
     /// Whether `more` sockets may be charged to `key`, whose bucket's cap is `cap`: under that
-    /// cap and the whole stack's, and paid for by the request's reservation.
+    /// cap and the whole stack's, paid for by the request's reservation, and with room for an
+    /// entry each in the table.
     fn room(&self, key: AdmitKey, cap: usize, more: usize) -> bool {
         let paid = match self.meter {
             Meter::Off => true,
             Meter::Closed => more == 0,
             Meter::Open(room) => room.key == key && room.left >= more,
         };
-        paid && self.charged(key) + more <= cap && self.live() + more <= self.max_sockets
+        paid && self.charged(key) + more <= cap
+            && self.live() + more <= self.max_sockets
+            && self.table.len() + more <= self.max_entries
     }
 
-    fn new_socket(&mut self) -> SocketHandle {
-        let socket = tcp::Socket::new(
-            tcp::SocketBuffer::new(vec![0; BUFFER]),
-            tcp::SocketBuffer::new(vec![0; BUFFER]),
-        );
-        self.sockets.add(socket)
+    /// A smoltcp socket with its two buffers, or `too_many` if the heap cannot hold them. The heap
+    /// cap holds every socket the buckets may charge (servers/ipd.md, "Sizing"), so only the
+    /// skeleton's records past their stated residual can make it fail ("Residual risks"): an
+    /// invariant broken, refused, never a panic, and noted for the program to say
+    /// ([`Stack::take_heap_short`]).
+    fn new_socket(&mut self) -> Result<SocketHandle, CtlError> {
+        let buffer = || {
+            let mut bytes = Vec::new();
+            bytes.try_reserve_exact(BUFFER).ok()?;
+            bytes.resize(BUFFER, 0);
+            Some(tcp::SocketBuffer::new(bytes))
+        };
+        let (Some(rx), Some(tx)) = (buffer(), buffer()) else {
+            self.heap_short = true;
+            return Err(CtlError::TooMany);
+        };
+        Ok(self.sockets.add(tcp::Socket::new(rx, tx)))
     }
+
+    /// Whether a socket's buffers failed to fit the heap since last asked.
+    pub fn take_heap_short(&mut self) -> bool { core::mem::take(&mut self.heap_short) }
 
     fn push(&mut self, owner: Owner, group: u64, n: Option<u32>, kind: Kind, share: u64) -> u64 {
         let id = self.next_id;
@@ -436,7 +471,7 @@ impl<N: Netif, E: Entropy> Stack<N, E> {
             return Err(CtlError::TooMany);
         }
         let n = self.lowest_free(owner);
-        let handle = self.new_socket();
+        let handle = self.new_socket()?;
         let share = self.pay(owner, 1);
         self.push(owner, group, Some(n), Kind::Fresh(handle), share);
         Ok(n)
@@ -538,8 +573,24 @@ impl<N: Netif, E: Entropy> Stack<N, E> {
             return Err(CtlError::InUse);
         }
         // The socket `clone` made is the first of the backlog; the rest need room.
-        if !self.room(owner.key, cap, usize::from(backlog) - 1) {
+        // The rest of the backlog needs room for its sockets, and every socket of it, the first
+        // included, an entry of its own beside the listener's.
+        let entries = self.table.len() + usize::from(backlog);
+        if !self.room(owner.key, cap, usize::from(backlog) - 1) || entries > self.max_entries {
             return Err(CtlError::TooMany);
+        }
+        // The rest of the backlog is made before anything changes, so a failure changes nothing.
+        let mut rest = Vec::new();
+        for _ in 1..backlog {
+            match self.new_socket() {
+                Ok(handle) => rest.push(handle),
+                Err(e) => {
+                    for handle in rest {
+                        self.sockets.remove(handle);
+                    }
+                    return Err(e);
+                }
+            }
         }
         let listener = self.table[i].id;
         self.table[i].kind = Kind::Listener { port, backlog };
@@ -547,9 +598,7 @@ impl<N: Netif, E: Entropy> Stack<N, E> {
         let first_share = self.table[i].share;
         let share = self.pay(owner, usize::from(backlog) - 1);
         let mut handles = vec![(first, first_share)];
-        for _ in 1..backlog {
-            handles.push((self.new_socket(), share));
-        }
+        handles.extend(rest.into_iter().map(|handle| (handle, share)));
         for (handle, share) in handles {
             self.push(owner, group, None, Kind::Backlog { listener, handle, half_open_since: None }, share);
             self.relisten(handle, port);
@@ -671,7 +720,7 @@ impl<N: Netif, E: Entropy> Stack<N, E> {
             if !self.room(owner.key, cap, 1) {
                 break;
             }
-            let handle = self.new_socket();
+            let Ok(handle) = self.new_socket() else { break };
             let share = self.pay(owner, 1);
             self.push(
                 owner,

@@ -1,0 +1,59 @@
+description = "A person's sockets at ipd are the manifest's (docs/servers/ipd.md, \"Sizing\"; docs/servers/serving.md, \"Overrides\" and R26; docs/userland/beamlet.md, \"beamlet on Redoubt\"): the image's ipd gives alice's account 32 sockets (account=1001:5:4:32), her bucket's State units 4 + 32 = 36, and alice logs in over SSH beside her console session, whose /net connection holds one unit in a share of its own. So her SSH session's share is 36 / 3 = 12 units, its own /net connection one of them: 11 sockets, where the image's defaults gave her 3. In one shell expression her session opens, echoes through and closes 11 connections to the bench's peer at 10.0.9.100:80 in succession, each closed socket keeping its unit through TCP's TIME-WAIT (10 s), and then connects a twelfth while the eleven linger, which ipd refuses too_many (the shell's {:error, :emfile}) before any SYN leaves the box; the shell prints the count, the refusal and the milliseconds the whole took, under the 10 s TIME-WAIT for the refusal to be the share's. The verdicts are the peer's, which counts exactly 11 connections, and the capture's 11 SYNs to it and none to the box's own addresses (rule F): eleven succeeded and the twelfth never left ipd. At the image's old caps (no account override) the fourth connect is refused, and the session's match fails"
+arch = ["rv64", "rv32"]
+kind = "boot"
+recipe = "image/boot.toml"
+# The image needs 1 GiB: the principals' budgets, each holding a shell VM's session, do not fit
+# the users budget 256 MiB leaves (docs/kernel/budgets.md).
+memory_mib = 1024
+# One login, booting a shell VM, and eleven connections through the peer.
+timeout_secs = 1500
+expect = [
+    '^init: started sshd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
+    '^init: started steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] steward: audit 1001/\{\} at [0-9]+: Login ',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+]
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    '^init: .* (exited|faulted|was killed)',
+    'init: restarted',
+    'EXCEPTION',
+    'steward: a step failed',
+    'sshd: login .*: refused',
+]
+expect_after = [
+    '^\[con [0-9a-f]{16}\] sshd: login alice: session [0-9a-f]{16}, labels \[\]$',
+]
+
+[[session]]
+user = "alice"
+forbid = ['\*\* \(']
+# Eleven in succession, each echoed and closed, then a twelfth while they linger in TIME-WAIT:
+# her share is 36 / 3 = 12 units beside her console session's share, less her /net connection's
+# (docs/servers/ipd.md, "Sizing"). A failed connect or echo is a MatchError, which the forbid
+# catches; the tag keeps the pattern off the echo of the line typed.
+steps = [
+    { expect = '/home/alice \([0-9]+\)> ' },
+    { send = "{:churn, (fn -> t = :erlang.monotonic_time(:millisecond); n = Enum.count(1..11, fn i -> {:ok, s} = :gen_tcp.connect({10, 0, 9, 100}, 80, [:binary, active: false], 20000); m = \"churn #{i}\"; :ok = :gen_tcp.send(s, m); {:ok, ^m} = :gen_tcp.recv(s, byte_size(m), 20000); :ok = :gen_tcp.close(s) end); past = :gen_tcp.connect({10, 0, 9, 100}, 80, [:binary, active: false], 20000); ms = :erlang.monotonic_time(:millisecond) - t; {n, past, ms < 10000, ms} end).()}\n" },
+    { expect = '\{:churn, \{11, \{:error, :emfile\}, true, [0-9]+\}\}' },
+    { expect = '\([0-9]+\)> ' },
+    { exit = 0 },
+]
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]
+forward = [22]
+# ipd refuses the box's own addresses whatever the scope (docs/servers/ipd.md, R59).
+self_forbidden = ["127.0.0.0/8", "10.0.2.15/32"]
+
+[[net.peer]]
+addr = "10.0.9.100:80"
+connections = 11

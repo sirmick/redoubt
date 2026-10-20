@@ -16,12 +16,16 @@ fuzz_target!(|data: &[u8]| {
         assert!(!badges[..i].contains(b), "a badge twice");
     }
     for l in &config.limits {
-        assert!(config.scopes.iter().any(|(b, _)| *b == l.badge));
+        // A `limits=` badge has a scope; an `account=` account is non-zero, with badge 0.
+        match l.account {
+            0 => assert!(config.scopes.iter().any(|(b, _)| *b == l.badge)),
+            _ => assert_eq!(l.badge, 0),
+        }
     }
     let mask = redoubt_ipd::scope::mask(config.len);
     assert!(config.addr & mask != config.addr || config.len == 32);
     for p in &config.selfs {
         assert_eq!(p.addr() & redoubt_ipd::scope::mask(p.len()), p.addr());
     }
-    let _ = config.sizing();
+    let _ = config.sizing(u64::MAX, 0);
 });
