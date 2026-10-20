@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 617
+revision = 4
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -48,7 +48,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "milestone"
   body = "docs/plan/m1-separation.md. Alice and Bob log in over SSH (and on the console) into Elixir sessions on QEMU, each in fixed sub-budgets per label set, with files (read-only system, writable /home and /vault), kept apart and attack-tested; a dead steward restarts without a reboot; the scheduler's targets hold. The steward's second half (leases, agents, the powerbox, approvals, declassification, crash blame), the agent and the attack suite, approve@box and vault sessions over SSH, gen_tcp and the model on the real kernel moved to M3 (agents, approvals and the attack suite), after M2, on the owner's word (2026-10-07). Remaining: STEWARD2, K23, K26, WFS2, BOOT2, BEAM4's cases, K27, K29, BEAM12, BEAM13."
   state = "done"
-  revision = 4
+  revision = 2
 
 [[node]]
   id = "M2"
@@ -57,7 +57,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["M1"]
   body = "docs/plan/m2-usable-shell.md. The near-term goal (owner, 2026-10-07). Two tracks: the shell (built on the host first, then on Redoubt) and several harts (SMP3, then SMP2). The host shell track (shell-host) starts now, ahead of M1, on the owner's word; the on-Redoubt shell steps follow M1. Closed by the owner 2026-10-15: both tracks are built (shell host steps 1-6 and Redoubt steps 1-5; several harts steps 1-5); SMP5 (magazines) stays parked and step 7 gated on measurement; ATK2, ATK3, ATK4 and B72 finish as they are, and no further kernel-attack-gaps package is admitted ahead of AGENT0 and STEWARD3."
   state = "done"
-  revision = 213
+  revision = 2
 
 [[node]]
   id = "M3"
@@ -114,7 +114,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["init", "API1"]
   body = "docs/userland/beamlet.md#beamlet-on-redoubt; docs/userland/shell.md#the-shell-in-a-session (Redoubt.Shell, not IEx). Packages BEAM1-BEAM5 under it; cut by architect-10, BEAM1's brief at .wash/local/BEAM1-implementer.md."
   state = "done"
-  revision = 4
+  revision = 2
 
 [[node]]
   id = "fsd"
@@ -124,7 +124,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["init", "FSD3"]
   body = "docs/servers/fsd.md (packages FSD1, FSD2, FSD3); docs/userland/files.md#files-over-9p (its beamlet half is beamlet-redoubt's)"
   state = "done"
-  revision = 4
+  revision = 2
 
 [[node]]
   id = "gate"
@@ -173,7 +173,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["steward", "SSH1"]
   body = "docs/servers/sshd.md (the box's platform, approve@box; the core is SSH1's); docs/userland/sessions.md"
   state = "done"
-  revision = 468
+  revision = 2
 
 [[node]]
   id = "steward"
@@ -183,7 +183,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["STEWARD1", "FSD3", "BEAM2", "INIT3", "SSH1"]
   body = "docs/servers/steward.md; docs/userland/sessions.md; docs/servers/sshd.md#sessions-over-ssh. M1's half of the steward: STEWARD2 (principals, sub-budgets, sessions on the console and over SSH), K23 (restart), K26 (sshd after a restart). STEWARD3 and STEWARD4 moved to M3 (agents, approvals and the attack suite)."
   state = "done"
-  revision = 4
+  revision = 2
 
 [[node]]
   id = "FMT1"
@@ -657,7 +657,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["BEAM3"]
   body = "docs/userland/beamlet.md#beamlet-on-redoubt: gen_tcp over a backend that opens /net/tcp/clone and reads and writes the data file, framing in Erlang. M1's attack suite needs a session's TCP (the loopback login row, R59). Brief: .wash/local/BEAM5-implementer.md; ruling .wash/local/wave-2026-10-18-rulings.md 'BEAM5'. Tier B unless a native is added (then re-tiered), size M, one reviewer: the red team, since the loopback-login attack case lands with it. Design: beamlet_tcp's transport is the session's /net when the namespace has one (clone, ctl, data, remote through the VM's hub; every socket ipd's then, loopback addresses included: R59 is ipd's refusal); without a /net (a lease, a host test) the in-VM loopback stand-in stays, one VM being one trust domain. Connect by IPv4 tuple only; a name is nxdomain until the resolver. Cases: a session's shell connects to the bench's peer and echoes (verdict the peer's); the loopback login row of m3-agents.md: a session's connect to the box's own sshd is refused by ipd (verdict ipd's); a lease's connect fails as having no network; beamlet host tests of the backend's framing and waits."
   state = "done"
-  revision = 486
+  revision = 2
 
 [[node]]
   id = "INIT5"
@@ -894,7 +894,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["STEWARD2", "BEAM4", "IPC3", "SCHED1"]
   body = "The steward's second half, split into children (2026-10-16): STEWARD3R (R41's mechanism, design first), STEWARD3A (leases and agents), STEWARD3B (the powerbox at approve@box), STEWARD3C (crash blame). The brief they share: .wash/local/STEWARD3-implementer.md (architect-15; its points 1-3, cases 1-8, page lines, owned paths). The step is done when steward.md's Leases, The powerbox and approvals and Crash blame sections and R38-R41 read built · tested, and AGENT0's agent principal runs under a lease with its harness unchanged."
   state = "done"
-  revision = 376
+  revision = 2
 
 [[node]]
   id = "STEWARD4"
@@ -904,7 +904,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["STEWARD3", "K19"]
   body = "Brief: .wash/local/STEWARD4-implementer.md (architect-15). Tier A, size M. docs/servers/steward.md#declassification-and-push, R42; docs/servers/init.md#the-confinement-check; docs/kernel/scheduling.md#responsiveness (targets unchanged; a new case steward-latency beside sched-latency; a miss is a finding, not a tuning)."
   state = "done"
-  revision = 453
+  revision = 2
   overrides = ["2026-10-16: started by Orchestrator before STEWARD3 (todo): STEWARD4's need STEWARD3 closes with STEWARD3Y (small, launching after train 45); the brief refresh is design work ahead of the build, per the owner's M3 order", "2026-10-16: started by Orchestrator before STEWARD3 (todo): STEWARD4 needs STEWARD3, which closes with STEWARD3Y (size S, launched now in parallel); the owner wants parallel work; STEWARD4 rebases onto 3Y when it lands (hotspot drive.rs/Machine)", "2026-10-16: started by Orchestrator before STEWARD3 (todo): STEWARD4 needs STEWARD3, which closes with STEWARD3Y (on train 46 now); continuation of the first implementer's work"]
 
 [[node]]
@@ -1304,7 +1304,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["M2"]
   body = "docs/plan/m3-agents.md. Moved out of M1 on the owner's word (2026-10-07), to run after M2. First, on the owner's word (2026-10-15), AGENT0: agentic control over SSH, a sponsor-run agent whose loop is on the host and whose body is a principal's session in the box; then the steward's second half (leases and agents, the powerbox at approve@box, crash blame: STEWARD3; declassification and push, the responsiveness targets with the real steward: STEWARD4), sshd's vault sessions and approve@box, gen_tcp (BEAM5), Alice's agent under a lease and the scripted hostile agent and user (the attack suite), and the model's traces replayed on the real kernel. Node ids M3, M4, M5 keep their ids; their titles are M4, M5, M6."
   state = "todo"
-  revision = 213
+  revision = 2
 
 [[node]]
   id = "PLAN2"
@@ -1888,7 +1888,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["B45"]
   body = "From B45: on the machine, printing a 1 MiB line takes about 2 minutes (Text.visible plus the encoder). Profile on beamlet (which of grapheme walking, escaping, measuring, encoding dominates), make the common case (printable ASCII/UTF-8 with no controls) a fast path, and set a throughput target with a case. Escaping path: Tier A. Merged in train 17 as a4c093827 (wp-B46 1d3177086; steward-red OK with notes): runs of printable text drawn forty times faster, ASCII 28.6K/25.6K B/s, 400-char redraw 57/66 ms, floors 12K B/s and 250 ms in shell-output-rate and shell-long-output. The node's state lagged the merge until 2026-10-15. Residuals: B60."
   state = "done"
-  revision = 47
+  revision = 2
   overrides = ["2026-10-09: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the shell track runs ahead of its acceptance", "2026-10-10: started by Orchestrator before M1 (reported): owner 2026-10-09: finish M2's open packages; M1 is reported and the shell track runs ahead of its acceptance"]
 
 [[node]]
@@ -1909,7 +1909,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["IDLE1", "SCHED4"]
   body = "Reopened 2026-10-15 after acceptance at 87553025a: train 26's whole bench (B52 + IDLE2 on 146db8897) failed rv64 sched-capped at 3 harts, and the alone rerun failed it again (2 of 3 rv64 smp=3 runs; smp=2 and 4 pass; rv32 passes): the `late` phase's three equal-share budgets, expected 333 each (283..383), read late-a 271-272 and late-b/-c 342-404; late-a's lock waits 8.9M of 19.4M ticks in the window (train 25's bench showed the same clause under load; alone it passed then). Evidence: .tmp/train-26/fail-alone-rv64-sched-capped.log, .tmp/train-26/sched-capped-run/ (the run dir, kept), .tmp/train-26/fail-rv64-sched-capped.log (the bench's). IDLE2 is out of train 26 (B52 publishes alone); its branch wp-IDLE2 87553025a is frozen until the cause is named: the one-hart timer placement is the suspect (a payer-nowhere item's covering hart serving timeouts for the budget that lost share?). QA thread IDLE2-sched-capped with kernel-red-2. Original: the kernel at rest: the lock changes hands ~10/s with every hart halted and the timer is re-armed 2.5x per interrupt; the idle ceilings come down. Reports .wash/local/IDLE2-report.md; design and verdicts on IDLE2-design."
   state = "done"
-  revision = 100
+  revision = 2
 
 [[node]]
   id = "SCHED4"
@@ -1919,7 +1919,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["SCHED3"]
   body = "SCHED3's B1 was dropped by ruling (.wash/qa/sched3-b1-evidence.md; .wash/local/architect-questions.md 'SCHED3 B1') with a trigger: it returns if the oracle's report-only count of timer entries billed to a budget other than the one interrupted reaches 1 % of a victim's charged pool in a gate case. Met on wp-SCHED3 before merge: deadline-flood-billed-traced rv64 at 2 harts, 16 deadlines, 87 of 96 destructions on hart 0 under the victim, 89 entries, 833,543 ticks, ~17 % of 4.99M charged; victim 482 of 1000 (passes). Placement depends on timing alone. Form, as the Architect amended the ruling: the branch's (the global earliest item and its payer, None on a tie; rearm reads runner_ids(), O(harts); no scan of the deadlines on the switch path), NOT a per-budget cached minimum. Code: .wash/local/SCHED3-B1-33eaaf326.patch (wp-SCHED3's WIP 33eaaf326). Build the failing negative from this placement (`timer-any-hart` must fail where the count is gated), gate the count in deadline-flood-billed-traced and sched-exit-churn at 2 harts, measure deadline-notice latency before and after on both widths (baseline p99 4.6/5.1/4.6 ms rv64, 6.2/6.1/5.2 ms rv32; within one section), timer.md and scheduling.md say the rule; device interrupts stay IRQ1's residual. Kernel: Tier A, the kernel red; model rule and mutation if a rule changes."
   state = "done"
-  revision = 78
+  revision = 2
 
 [[node]]
   id = "B47"
@@ -1949,7 +1949,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["NSCR1"]
   body = "From NSCR1: the session decodes a program's cells frames a cell at a time in Elixir (Cells.reduce/3) after a whole-frame decode into a list of maps failed a 2.7 MB allocation under a frame flood and killed the session VM. The cell-at-a-time path costs about 0.5 s per full 30 KB frame on both widths, so the decoder, not the 1 MiB/s bound, paces floods, and a full-screen native program redraws at about 2 frames/s. Add a beamlet native that decodes a frame straight into the host's screen buffer (the same checks as the Elixir decoder, held to the same vectors; refused never repaired; bounded by the buffer's size), keep the Elixir decoder as the reference the vectors hold it to, and gate a frames-per-second floor with a case. userland/otp and the drawing path: Tier A, the steward/beamlet red."
   state = "done"
-  revision = 13
+  revision = 2
   overrides = ["2026-10-12: started by Orchestrator before M1 (reported): M1 is reported, not done, by the owner's milestone split (2026-10-07); M2's packages proceed on it"]
 
 [[node]]
@@ -1960,7 +1960,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["B47"]
   body = "From B47's report (.wash/local/B47-report.md, 'Open'): each pipeline binds piped's connection into the session's namespace (Redoubt.Pipes, /dev/pipe) and a sys.known entry with its handle stays after the pipeline ends and piped's budget is destroyed; with B47's Life the stale handle closes nothing, but the entry and the slot are never returned, so a long session leaks one per pipeline until a table fills. Find the owner of the entry (the bind, the Pipes server, the Known table), return it when the pipeline's job ends (or reuse one piped per session if that is the design: say which on native.md), host test that a thousand pipelines leave the table where it started, and extend pipe-eight or add a sibling that runs 64 in one session on both widths. Acts with the session's authority: main, Tier A, the steward red."
   state = "done"
-  revision = 74
+  revision = 2
 
 [[node]]
   id = "K31"
@@ -1991,7 +1991,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["B47"]
   body = "From B47's review (steward-red, .wash/qa/B47-stale-close.md and the B47 renewal): B47's Life covers the handles the VM minted and those returned through servers launched under a budget, but a request's handles arrive with no Life because the kernel tells a receiver badge, account and labels, never the sender's budget. So a program in a VM-carved budget that holds a VM-served endpoint (Elixir can pass one in launch.handles; no shell path does today) and sends a handle it minted can, after its budget is destroyed, make a later collection close a reused index in the session's own table: not the startup handles (console, steward, namespace are Owned::kept, never freed), but a sibling job's budget (its destroy then fails, pages leak), a piped or stage connection, or the VM's internal endpoints (a waiter's wake, a serve thread's, a job's exit endpoint), which can hang or break the session. No widening beyond the session, but more than such a program is given. Guard: when launch.handles passes a served endpoint into a launch in a carved budget, mint a fresh badge on the receive right the VM holds (serve.rs mints there already) and map badge -> that budget's Life; a request's handles from that badge go under the Life, or are closed eagerly at the budget's end. Host test: a launched program sends a minted handle, its budget is destroyed, a collection closes nothing at that index; a machine case under pipe-eight's setup. beamlet.md's residual becomes the rule. userland/otp: Tier A, the steward red. The kernel handle generation (owner's decision pending) is the construction fix for the whole class; this is the VM's own guard either way."
   state = "done"
-  revision = 171
+  revision = 2
 
 [[node]]
   id = "K32"
@@ -2011,7 +2011,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   body = "Seen in train 17's whole bench on 98b866854 (CTX2, B47, B46, B49): steward-home-quota failed on rv64 and rv32 alike at step 9, `File.rm(\"/home/alice/a\")` after alice's home reached enospc answered `{:error, :eio}` (the alice ssh log shows it), and the case waited for `{:rm, :ok}` to its 610 s deadline. Alone, the same case passes in ~225 s on c7efc9b67 and a4c093827 (bisect, .tmp/train-17b/bisect.log), so the failure needs the bench's load (the net class runs one at a time, beside boots). An rm answering eio is wrong under any load: find where eio arises (walfsd's write path when the volume is full and a request is slow or retried; beamlet's files.rs retry after a busy answer (BEAM11); B47's Io release of an ended connection racing a late message; the 9P client's timeout mapped to eio) with a trace of the failing run (reproduce by running the case beside two or three boots), fix it, and make the case's wait for the rm bounded by its own step deadline rather than the case's. Both widths. Tier A if the fix is in a server or beamlet's platform (steward-red), else Tier B."
   state = "done"
-  revision = 112
+  revision = 2
 
 [[node]]
   id = "B52"
@@ -2020,7 +2020,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   body = "Two instances so far: (1) ./test-shell has a test that fails about 2 runs in 30 on main: find the race and make it a verdict. (2) 2026-10-15, B48's report: beamlet-redoubt's B47 waiters test and B48's hub test settle their first handle count and each failed once by an early sample under the full suite (Fake::served_child now replaces the global last_launched in the tests). Both: find the race, make the test wait on the event it means, not on a sample."
   state = "done"
-  revision = 87
+  revision = 2
 
 [[node]]
   id = "B53"
@@ -2029,7 +2029,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   body = "The orchestrator could not run .wash/save.sh for most of 2026-10-09/10: step 3 pushes main fast-forward unconditionally, and main held a train whose bench had not run (SWARM: a push follows the train's bench), so saving .wash/local meant copying save.sh's step 5 by hand. Also, step 1 refuses on any dirty worktree, including members' scratch worktrees under .tmp (measurement exports), which stalled saves for hours. Add `--local-only` (steps 4 and 5: wp-* branches and the wash-local snapshot; never main), make step 1 ignore worktrees under .tmp/ (scratch by the project's rule) while still refusing dirty .worktrees/*, and say both on SWARM.md 'Saving and resuming' and PROJECT.md. Tooling: Tier B, one reviewer; the owner owns save.sh so the change is proposed to the owner before merge."
   state = "reported"
-  revision = 57
+  revision = 2
 
 [[node]]
   id = "B54"
@@ -2038,7 +2038,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   body = "Noted by kernel-red while reviewing K32 (its K32 result): run directly as `cargo test -p redoubt-doccheck` in the reviewer's shell, c11_code, untracked_code_is_not_checked and narrow_cases_fire fail with 'C11 did not fire', while `cargo testbench docs` passes in the same worktree. C11 checks package ids in code; its fixtures appear to depend on the environment (a git checkout state, the tmp dir, the working directory). Reproduce both ways, find the dependence, and make the tests pass from any directory and shell the project supports (through q too); say on docs/testbench.md how doccheck's tests are run. Tests/tooling only: Tier B, one reviewer."
   state = "done"
-  revision = 77
+  revision = 2
 
 [[node]]
   id = "K33"
@@ -2048,7 +2048,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["K31"]
   body = "From K31's measurement (.wash/local/K31-report.md): after K31's cuts a timer entry costs ~9,000 instructions on rv64 (13,200 rv32), and about half is the structural round trip when the slice ends and the same budget is picked again: leave(kmain) with deschedule (~3.6k), kmain's pick (~6.7k before K31's cursor fix), the switch trap and leave(VM). Design question first (the Architect, or the orchestrator while it is blocked): when the slice ends and the runnable set has not changed, can the hart re-pick in place (the stride's pass advanced, the cursor moved) without descheduling through kmain, and what does the model need to keep R12's shares and the preemption points (scheduling.md) provable? Then build it with the oracle's per-entry bound (sched-timer-entry) lowered to the new measurement with margin, the sched-* set at 1 and 2 harts both widths unchanged in verdict, reduction-rate moving up again. Kernel and stride: Tier A, the kernel red; model rule and mutation if a rule changes."
   state = "done"
-  revision = 36
+  revision = 2
   overrides = ["2026-10-12: started by Orchestrator before M1 (reported): M1 is reported, not done, by the owner's milestone split (2026-10-07); M2's kernel packages proceed on it"]
 
 [[node]]
@@ -2058,7 +2058,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   body = "Seen in the whole benches of trains 15 and 18 (2026-10-09/10): bench-elixir-oracles-broken-guard, a bounded-class host case that builds beamlet and runs libs/steward/elixir/run-traces --break not_locked, 'ran past the case's deadline of 46 s' beside the rest of the bench, then passed alone in 1.9 s and 2.4 s. Twice per day it costs the orchestrator a rerun under the shared-host rule. Find what the deadline measures (the beamlet build under load? the oracle itself?), split the build out of the timed part (the bounded class's 4 cores against a saturated machine) or move the case to the quiet class, and set its deadline from the measured alone time with a stated margin; docs/testbench.md's class table says why. Tests/tooling: Tier B, one reviewer."
   state = "done"
-  revision = 6
+  revision = 2
   overrides = ["2026-10-12: started by Orchestrator before M1 (reported): M1 is reported, not done, by the owner's milestone split (2026-10-07); M2's packages proceed on it"]
 
 [[node]]
@@ -2078,7 +2078,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["CONW2"]
   body = "Reopened 2026-10-14 after acceptance at cd40d1eb2: train 22's whole bench failed beamlet-reduction-rate, beamlet-schedulers-mttcg and beamlet-schedulers-one-hart-mttcg on both widths, alone too. The kernel's fall line `mem: frames in flight 0, at most N` is printed between consoled's `[con ID] ` prefix and the program's text (the system goes idle during the cases' sleep loops, so the drain falls then), and the case's `^\\[con ID\\] :timed$` never matches. Evidence: .worktrees/train-20/target/testbench/run-2587263-1792018359801758854/beamlet-reduction-rate-rv64-smp1.log line 62-64. Any kernel line can split a consoled line this way; B57's is the first that fires during a session. Removed from train 22; the fix and the rule it needs (a consoled line is one UART write, or a kernel line waits for the console's line) are with kernel-red-2 on QA thread B57-split-line. Original: launch-idle's window opens on a host clock while R81's login drain may still run; open it once frames in flight reach 0, and print the drain beside it. Reports: .wash/local/B57-report.md, reviews .wash/local/B57-review-2026-10-14.md and kernel-red-2's round 2 result."
   state = "done"
-  revision = 52
+  revision = 2
   overrides = ["2026-10-12: started by Orchestrator before M1 (reported), M1 (reported): M1 is reported, not done, by the owner's milestone split (2026-10-07); M2's packages proceed on it"]
 
 [[node]]
@@ -2089,7 +2089,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["M1"]
   body = "Found by K31's implementer (2026-10-10, .wash/local/K31-report.md 'sched-wake-no-preempt-harts'): with a 2,500 us nap, rv64 sched-wake-no-preempt-harts fails 'wake took hart' although the kernel rightly ended the slice: the trace record O carries slice_over as sampled when the entry began, not the decision irq.rs takes after the expiry walk, so a slice ending inside a long entry is recorded as not over (pass 2) and the oracle reads a wake that took a hart. sched-trace feature only, a few lines: record the kernel's own slice_over decision. Then lengthen the case's nap (2,500 us) so the sleeper's wake lands mid-slice and witnesses the wake-no-preempt property regardless of the call phase (K31 kept CALL_US 50 as the small fix; its toml quotes the counts). Pages: docs/kernel/scheduling.md (the trace record, wake-no-preempt), docs/testbench.md (the scheduler oracle). Gate: sched-wake-no-preempt-harts both widths with the long nap, >= 5 runs, mid-slice witnesses present; the recorded wake-preempts negative still fails. Tier B, kernel-red (trace only)."
   state = "done"
-  revision = 7
+  revision = 2
 
 [[node]]
   id = "B59"
@@ -2098,7 +2098,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   body = "Found by the owner by hand on 2026-10-14 on `./launch --system`'s console session: `ed(\"notes.txt\")`, Ctrl+S, dialog `Not saved: :enoent`. The VM starts with cwd `/` (userland/otp/vm/src/vm.rs:575) and nothing sets it at a session's start; only the `cd/1` helper (shell/helpers.ex:34) ever does. The root holds only the bound slots, so every relative file command fails until `cd(\"/home/alice\")`. Fix: a session starts in its principal's home (the steward binds it for console, SSH and vault sessions alike: servers/steward/src/own.rs:264-271; a vault session's home is still its home), the prompt shows it, and a session whose home is absent or unreadable starts in `/` and says so once. Case: the launch-system or a console case runs `File.write` of a bare name at the prompt and reads it back from /home/alice; a negative with no home line. Pages: docs/userland/shell.md (the loop, session commands), docs/userland/sessions.md if it states the start directory. Tier: shell track, steward-red reviews (what a session reaches at start is unchanged: a cwd adds no authority). Size S."
   state = "done"
-  revision = 26
+  revision = 2
 
 [[node]]
   id = "CONW2"
@@ -2107,7 +2107,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "smp"
   body = "Ruled on QA B57-split-line (kernel-red-2, 2026-10-14) after train 22's bench failed three beamlet timing cases: consoled's hold covers a write, a program's line spans writes (the shell sends \"\\r\" then \":timed\\r\\n\"), and between writes nobody holds, so a free kernel line (B57's fall line; a kill line; any) prints at once after the `[con ID] ` prefix and the next write continues bare. consoled.md promises a program's line is never bare. Design (b57-implementer-3, ruled binding): one bit each way on console_hold, the kernel never waits: Release(3) says 'line open' (cleared by Release(2) or the kernel's own \"\\r\\n\"); a free kernel line with a line open writes \"\\r\\n\" first and goes out whole, and notes `wrote`; Take answers 'kernel wrote since' (cleared only by that Take) and consoled re-emits the prefix. State in Output under PRINTER; held lines, Line::Full and the 4 KiB bound unchanged; a refused Take keeps today's behaviour; consoled takes and releases once at start and a refusal is an exit code named in consoled.md. Proof: case console-kernel-line-mid-line (write `half`, end a child, write `rest\\n`: expect `[con ID] half`, the kill line, `[con ID] rest`; forbid `^rest$`), both widths at 2 harts; beamlet-reduction-rate, beamlet-schedulers-mttcg, -one-hart-mttcg green at CONW2's head; conhold host tests for the two bits; redoubt-sys round-trip tests; the model's rule if it has one. Pages: docs/kernel/devices.md 'The console's one writer', docs/servers/consoled.md. Touches redoubt-sys, kernel, conhold, rt, consoled, model: Tier A, kernel-red-2 reviews. B57 needs this, its code unchanged; its three cases rerun on CONW2's head before it rejoins a train. Branch wp-CONW2 from 691646841."
   state = "done"
-  revision = 51
+  revision = 2
 
 [[node]]
   id = "B60"
@@ -2117,7 +2117,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["B46"]
   body = "Residual from B46 (merged in train 17 as a4c093827; .wash/local/B46-report.md 'Residuals'): the fast path covers printable runs whose width is one column per code point; CJK, marks and emoji fall back to measuring each grapheme, and the per-stage profile and the 1 MiB-line time on the machine were last measured before BEAM19 and K33. Re-profile at today's main both widths; if the wide/combining path dominates a realistic text, give it a run path of its own with a floor in shell-output-rate; otherwise record the numbers and close. Escaping path: Tier A, steward-red. Not opened on 2026-10-15: a candidate for the owner's polish list."
   state = "done"
-  revision = 126
+  revision = 2
 
 [[node]]
   id = "B61"
@@ -2127,7 +2127,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["B48"]
   body = "Found by B48's pipe-sixty-four on rv32 beside other work (.wash/local/B48-report.md 'Round 2'): one pipeline in about 64, at a random index, gets {:refused, {:mkdir, :eio}} on the fresh piped's first request; the cause is Io::connect (beamlet-redoubt) refusing TooManyThreads when all MAX_WAITERS=6 hub connections belong to ended pipeds whose waiters have not yet handed over their ends: a timing limit, not B48's change (the control at cf9074eae fails the same). Fix direction: a bounded wait at MAX_WAITERS (connect waits for a waiter to hand over, within the request's own deadline) or the ended connection's waiter hands over before the destroy returns; say which on beamlet.md; a host test that provokes 7 fresh connections before any waiter hands over; pipe-sixty-four leaves the quiet class once the limit is gone. Tier A (the hub is the session's I/O): steward-red. Size S."
   state = "done"
-  revision = 97
+  revision = 2
 
 [[node]]
   id = "B62"
@@ -2137,7 +2137,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["B61", "B51"]
   body = "The gap two packages name (2026-10-15). B61: Io::connect at MAX_WAITERS waits HAND_US (1 s) for an ended piped's waiter to hand over; under heavy load a hand-over took longer and the seventh fresh piped was refused Emfile though no live server held its place (pipe-sixty-four rv32 beside a whole bench, 1 run in 3), so the case stays in the quiet class. B51's ruling (QA B51-completion-hold): the client's completion call has no clock; a Hub::wait caller overshoots its deadline by a stall; a wedged server holds its clients until it dies. Both want a bound tied to the request's own deadline, and beamlet's files layer (userland/otp/redoubt/src/files.rs, Io) carries none: a File call has no deadline to tie to. Design first (the Architect): where a request's deadline lives (the Elixir caller's timeout? the session's? a per-call option?), what a hub wait does at it (answer late-busy, refuse, or hand back), and whether the kernel's R28 parked-call accounting is touched. Then build; pipe-sixty-four leaves the quiet class when it closes. Tier A: steward-red. Size M."
   state = "done"
-  revision = 114
+  revision = 2
   overrides = ["2026-10-15: started by Orchestrator before B51 (reported): B61 and B51 are accepted and merged in train 27 (a22f121cd), on the bench now; B62 builds on that head and rebases onto main at the publish", "2026-10-15: started by Orchestrator before B51 (reported): B51 is published on main 1dd0acb27 (train 27); its node lags the publish"]
 
 [[node]]
@@ -2148,7 +2148,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["SCHED4"]
   body = "Found 2026-10-15 while pinning IDLE2's train failure (QA IDLE2-sched-capped; .wash/local/IDLE2-report.md 'Reopened'; logs .tmp/IDLE2/pin/): on main 146db8897, rv64 sched-capped alone on the quiet cores fails 2 of 5 runs at smp=3 (second-a 277 or second-b 280 against 283..383; smp 2 and 4 pass 10/10; rv32 passes); IDLE2's head fails 3 of 5 the same way. In the second window no timeout fires; every interrupt is a slice end of the hart's own runner; the three slice ends meet at the lock each slice in a fixed order, a slice-end section is ~6.3-6.6k ticks, and the heavy budget on the last hart waits 23-45 % of its hart behind the others' sections. Share is charged over all charged net of lock waits, so the budget on the last hart reads 276-340: under icount the order is QEMU's turn order, fixed once set (K31's 'A hart waits for QEMU's turns' residual), which the toml concedes at 2 harts (the twin judges smp=[2] only); the second-cap clause at 3 harts has the same exposure and no twin. Trains 25 and 26 both hit it under load. Fix as kernel-red-2's ruling on IDLE2-sched-capped sets out: the host-clock twin judges at 3 (smp [2,3], quiet class, five runs quoted), the icount case records there (hart_shares_from raised), a case change under K31, no bound widened. Tier A (a kernel case's judging): kernel-red. Size S."
   state = "done"
-  revision = 106
+  revision = 2
 
 [[node]]
   id = "B64"
@@ -2158,7 +2158,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["B60"]
   body = "B60's reading (.wash/local/B60-report.md, 2026-10-15): a realistic page (82-byte lines, one CJK word, one emoji, one accented name) draws at 7,200/6,400 B/s against its ASCII twin's 10,400/9,300; its five lone graphemes and two run restarts explain under a third of the gap; the rest is per-piece: every line is a piece, and Text.visible and Width.run each walk the first 64 code points in Erlang before the binary fast path takes over. Lever: start the run path at the piece's first byte when the piece is printable (one check, not 64 steps), or share one prologue between the two passes. Measure with shell-text-profile (B60's case) before and after; a floor on the page text in shell-output-rate if the gain holds. Escaping path: Tier A, steward-red-2 reviews. Opened 2026-10-15 13:15Z on the owner's standing 'keep working through M2' (b64-implementer, wp-B64 from 47b0d98ea); report at .wash/local/B64-report.md."
   state = "done"
-  revision = 136
+  revision = 2
 
 [[node]]
   id = "B65"
@@ -2168,7 +2168,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["B60"]
   body = "Found by B60's measurement (.wash/local/B60-report.md, 2026-10-15; steward-red-2's P2-1): a function defined at the prompt runs in the evaluator (erl_eval) and each call costs ~3.6 ms plus ~0.18 µs per byte of the binaries bound in its environment, so a walk over a large binary is quadratic: 50 ms a step at 256 KiB (350x a compiled step), hours for the whole. Not the shell's encoder (B60 measured compiled walks linear at 141-422 µs a grapheme). Find where the per-byte cost arises (the bindings copied per call? the binary re-matched? beamlet's erl_eval or term copying), bound it or make large bindings references, with a host measurement on beamlet and a sentence in shell.md's evaluator section; until then shell.md names the trap (B60 points at it). Tier B (the evaluator is OTP's; beamlet's platform if the cost is the VM's). Size S-M."
   state = "done"
-  revision = 128
+  revision = 2
   overrides = ["2026-10-15: started by Orchestrator before B60 (reported): B60 is reviewed OK with notes and one docs amend from acceptance; B65 waits on its head only for one shell.md sentence"]
 
 [[node]]
@@ -2178,7 +2178,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   body = "Owner, 2026-10-15: `./launch --system`, then the printed `ssh -p 2222 -i .tmp/launch/id_ed25519 alice@localhost`, answered 'Connection refused' while the serial console was alive. 'Refused' means nothing listened on the host's 127.0.0.1:2222: not the guest's sshd (a guest not yet listening resets or hangs the connection, QEMU holds the host port from its start). Candidates, by reading: (1) the ssh typed before QEMU ran (the build takes minutes; launch prints the line before building, tools/testbench/src/launch.rs:112-123); (2) the forward absent from the QEMU line launch ran (qemu.rs:329-332 adds hostfwd from the case's [net] forward = [22], tests/launch-system.toml:52; `scripts/q run` may have changed what ran: launch:88-99); (3) `localhost` resolving to ::1 first (the forward is 127.0.0.1 only; ssh falls through to 127.0.0.1, so this alone does not refuse). Step 1: reproduce with the owner's exact command on this host, both with and without the q daemon, and read the `+ qemu-system...` line launch echoed (ask the owner for their terminal's text if the first run passes). Step 2, whatever step 1 finds: launch proves the forward after QEMU starts (a connect to 127.0.0.1:port that gets the guest's reset or sshd's banner, then prints 'port 2222 forwards to the guest') and prints the ssh line again then, not only before the build; GETTING-STARTED.md:122-128 says when to try it; a host test holds launch.rs's printed line to the port the forward uses. If step 1 finds a defect, it is fixed here with its own case. Files: tools/testbench/src/launch.rs, launch, GETTING-STARTED.md; none of B50's. Tier A (the bench's launch path is what a person boots): kernel-red-2. Size S."
   state = "done"
-  revision = 152
+  revision = 2
 
 [[node]]
   id = "B67"
@@ -2187,7 +2187,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   body = "Owner's M1 polish list: login latency. The bench writes each ssh session's time to its first matched prompt in the session log (tools/testbench/src/ssh.rs:807-810, 'the login's latency for its first prompt'), and no page or case reads it: `grep -ri latency docs` finds nothing about a login. Step 1: from the logs of the last three trains' launch-system and steward-ssh-two-principals runs, both widths (`.tmp/train-*/`), tabulate the first prompt's latency (alice alone; alice beside bob), and split it with the console's lines: sshd's handshake (`sshd: login ... session`), the steward's carve and VM start, the VM's first prompt. Step 2: state the figures on docs/servers/sshd.md 'Sessions over SSH' (a sentence with both widths, where they come from, and which stage dominates) and in docs/plan/m2-usable-shell.md's polish list; a case-level record: launch-system's toml gains a comment with the figures and the log line that holds them, and the bench's report prints the first-prompt latency beside the case's time for every session (ssh.rs: the number is already computed; one line in the report), so every train re-measures it. No ceiling is asserted until two trains agree within 20 %; then a `within` on the prompt expect in launch-system at 1.5x the slower width, as sched cases bound their timings. Files: tools/testbench/src/ssh.rs (report only), tests/launch-system.toml, docs/servers/sshd.md, docs/plan/m2-usable-shell.md; none of B50's. Tier B (a measurement and a report line; the ceiling is a case change): kernel-red-2 reviews the bench change. Size S."
   state = "done"
-  revision = 147
+  revision = 2
 
 [[node]]
   id = "B68"
@@ -2196,7 +2196,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   body = "docs/todo/beamlet-bignum-bounds.md: `crypto:mod_pow/3`, `generate_key(dh, ...)` and `compute_key(dh, ...)` (userland/otp/crypto/src/pk.rs:155 dh_params, :177, :193, :202) run num-bigint's modpow on the caller's numbers, bounded only by the VM's bignum limit (2^24 bits). A native is not preempted by reductions: a megabyte modulus and exponent hold the scheduler thread, and every process on it, for minutes; it stays inside the session (budget weight shares the CPU) but a key file or peer parameter the session reads can hang its tools, as RSA keys did before from_components checked sizes. Lever: hold P and the modulus to a stated width (OpenSSL's OPENSSL_DH_MAX_MODULUS_BITS is 10,000 bits; RSA's limit here is 8,192), and each exponent and base to the modulus's width, before any modpow; an oversized operand is refused as the RSA size refusal is, never a panic. Gates: a host test per native with an oversized modulus and exponent showing the refusal comes at once (under 10 ms where the unbounded call takes seconds; measure the negative once and quote it); the crypto difftests still agree with BEAM on every in-range vector; the bound stated in beamlet.md 'Limits inside one VM' beside the RSA size, and the todo page deleted in the same commit. Files: userland/otp/crypto, its tests, beamlet.md's limits table (B50 edits beamlet.md's Life section: rebase, no overlap in lines). Tier A (a session's liveness against hostile input): steward-red-2. Size S."
   state = "done"
-  revision = 161
+  revision = 2
 
 [[node]]
   id = "B69"
@@ -2205,7 +2205,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   body = "docs/todo/shell-invisible-format.md (shell.md:557 and SECURITY.md:254 carry the residual): the guard draws every ASCII and 8-bit control, DEL and the bidi controls as text (userland/shell/lib/redoubt/term/text.ex:32 control?/1; userland/native/cells/src/lib.rs:96 forbidden()), but the invisible format characters (U+00AD, U+200B..U+200D, U+2060..U+2064, U+FEFF, the plane-14 tags) and the line/paragraph separators pass: `rm report.txt` and `rm re​port.txt` draw the same, and a tag sequence carries text the person never sees. Architect's rule for the one open point: U+200D is drawn as `<U+200D>` everywhere except inside an extended grapheme cluster that is an emoji ZWJ sequence (Extended_Pictographic ZWJ Extended_Pictographic...), where the cluster is one symbol and draws as one, as today; every other character above is drawn `<U+XXXX>` wherever it stands, as U+009B is, and never held by a cell's symbol. Build: control?/1 and forbidden() gain the set (one shared table, stated once beside the cells vectors), the grapheme walk keeps the emoji exception, a vector in userland/native/cells/vectors.json and a test per character hold both decoders to it (the existing `no_control_character_is_ever_a_symbol` stops counting U+2028 as good), a shell test shows the two `rm` lines draw differently and a woman-technologist ZWJ sequence still draws as one two-column symbol. Gates: ./test-shell on both VMs, the cells vectors, shell-output-rate unchanged within noise (one range test per code point on the existing path), the residual leaves shell.md and SECURITY.md, the todo page deleted. Files: userland/shell term, userland/native/cells, shell.md, SECURITY.md; none of B50's. Tier A (the terminal guard is authority over what the person sees): steward-red-2, on main, not the shell branch. Size S."
   state = "done"
-  revision = 172
+  revision = 2
 
 [[node]]
   id = "B70"
@@ -2214,7 +2214,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   body = "docs/todo/parked-write-clock.md: libs/rt/tests/parked_write.rs `a_waiting_write_is_parked_abandoned_and_expired` (LONGEST 300 ms at :57, the client's 50 ms at :106, the deadline assertion at :122) failed 14 of 20 runs in a loop on a loaded host (load 100-170) and 0 of 15 directly; the fake kernel reads the host's clock and the test races two waits on it, as parked.rs does. Which assertion fails is unknown: the panic was not captured. Two windows fit: a client stalled past 300 ms gets the server's Rerror instead of its own Timeout; a client whose 50 ms passes before the server parks the write abandons a call that was never parked. A flaky test is a bug (TENETS 6), and trains run every host test beside a bench. Step 1: run the loaded loop through q beside a train's bench (`q run` on the general cores, 20 runs) with the panic captured, name the assertion and the window on the todo page. Step 2: order the test on events, not time: the first write is abandoned only after the server has parked it (a signal from the fake server), and the server's deadline is a step on a clock the test drives (the fake kernel's time_now made settable for this test, as the model's clock is), or each wait is on the parked state with no deadline racing it; parked.rs gets the same treatment where it shares the shape. Gates: 20 runs in a row in the loaded loop, the rt host tests and fuzz target unchanged otherwise, the todo page deleted and serving.md's R28 test list unchanged in names. Files: libs/rt/tests/parked_write.rs, parked.rs, the fake kernel's clock in libs/rt; none of B50's. Tier A (libs/rt): steward-red-2 (an rt host test, no bench case). Size S."
   state = "done"
-  revision = 165
+  revision = 2
 
 [[node]]
   id = "B71"
@@ -2224,7 +2224,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["B69"]
   body = "From B69's gates (.wash/local/B69-report.md 'Follow-ons'): adding 18 entries to the shell's control pattern (70 -> 88) cost shell-output-rate 5-8 % on both widths (ascii 34,500 -> 32,100 B/s rv64); on the BEAM the two patterns cost the same. Cause, by reading userland/otp/vm/src/bif/binary.rs: `find` (:151) tests every pattern at every byte, O(len x patterns x pattern length); `patterns` (:126) re-collects the list into fresh Vecs on every call, and `compile_pattern` (:190) only wraps the list in {bm, P}, so a compiled pattern buys nothing; `bytes_of` copies the haystack per call too. The escaping path (Text.visible, the terminal guard) runs this on every piece, so every pattern the guard gains costs the shell's output rate. Lever: `compile_pattern` builds a real matcher the VM keeps (a resource or an opaque term the BIF recognises): a first-byte table (256 entries, each the patterns starting with that byte, longest first) is enough for the guard's single-code-point patterns and keeps leftmost-longest; Aho-Corasick if the table does not reach O(len) on the realistic page. An uncompiled pattern list builds the matcher per call (BEAM does the same). The haystack is read in place, not copied, where the term is one contiguous binary. Gates: a host measurement in userland/otp/vm tests (match over 64 KiB with 1, 8, 88 patterns: time per byte flat in the pattern count, quoted before/after); the binary difftests agree with BEAM on match/matches/split/replace, leftmost-longest and scope included; shell-output-rate's four rates re-measured on the machine both widths, the gain quoted in shell.md's profile bullet beside B64's, and the floors raised only if two runs agree; beamlet.md names compile_pattern as a real compile. Files: userland/otp/vm/src/bif/binary.rs and its tests, shell.md, beamlet.md's BIF notes; none of B50's or B69's once B69 merges. Tier A (the escaping path's rate depends on it): steward-red-2. Size S-M."
   state = "done"
-  revision = 181
+  revision = 2
   overrides = ["2026-10-15: started by Orchestrator before B69 (active): B71's need on B69 is the final rate measurement only; the files are disjoint (binary.rs vs the shell's text.ex), so the matcher work starts now and the shell rates are taken after B69 merges"]
 
 [[node]]
@@ -2234,7 +2234,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   body = "docs/todo/kernel-attack-gaps.md 'scheduling.md', eight lines, the most of any page: round-robin among one budget's threads; an interrupt's wake not preempting and another budget's deadline preempting; tie clauses 1 and 4 checked on the target only when a run happens to tie; interrupt handling billed to the device object's owner; budget_destroy call-to-return recorded, not asserted; R12's kernel-time bound attacked only for map_anon's search and map_fixed's range; R23 (no test channels) with no case building the production kernel and scanning it for the trace; a picked thread dying before the switch and a full queue. Lever: one case per line where a case can see the claim (the sched-* pattern: a tester under init, icount, the scheduler oracle over the trace, judged net of audits per B5/B15), a host test or model mutation where only those can (the tie clauses), and R23 as a bench self-check: build the production kernel once per bench and grep its binary for the trace's strings and symbols (a planted one must fail it: the negative). Each case's clause states what it proves and quotes its first measurement both widths; a line that cannot be attacked on QEMU (the shared-host and icount rules) is restated on the page as what it is and stays on the todo page with the reason. Gates: every new case passes 5 runs in its class both widths; no bound widened; the page's status lines drop 'partly tested' where a case now holds the claim; the scheduling.md section of the todo page is emptied, each line's fate stated. Files: tests/*.toml, the tester programs under tests/, model/src/mutation.rs where a mutation is added (no extra RNG draws), docs/kernel/scheduling.md, docs/SECURITY.md rows. Tier A (kernel cases): kernel-red-2. Size M. Launchable while smp is quiet; SMP5 stays parked."
   state = "done"
-  revision = 266
+  revision = 2
 
 [[node]]
   id = "ATK3"
@@ -2243,7 +2243,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   body = "docs/todo/kernel-attack-gaps.md 'devices.md', seven lines: the one page a device object costs its owner is not measured; a 17th DMA device (MAX_DMA_DEVICES 16) getting no object, and dma_alloc's MAX_RUNS (32) per device, are reached by no case; reset before pooling is attacked only in the model; the loader's refusal of a device tree with no console or a console with no interrupt is not attacked; R5 (interrupts): completing the claim before masking, and billing interrupt time to the IRQ object's owner, are not attacked (QEMU's 16550 raises per byte); R18 (device authority): a malformed Devs entry and a Grnt boot argument are not refused by any case; destroying a device object's owner budget (IRQ waiters get Dead, source masked, handles swept) and a device handle closing when its stamping budget dies are not attacked. Lever: the kernel tester under init with a crafted argument block (as the boot cases pass bad blocks today) for the loader's and R18's refusals (expected kernel failure, as sum-clear's); a tester that creates 17 DMA devices and 33 runs and expects the refusals; the device-object page measured by a budget's pages before and after, asserted exactly; the owner's destruction with a waiter parked on its IRQ, judged by the waiter's Dead and the oracle's masked source; R5's order argued from the trace where QEMU cannot raise it (stated as such on the page). Gates: each case 5 runs both widths in its class; no bound widened; devices.md status lines updated; the section emptied with each line's fate. Files: tests/*.toml, tests/ testers, kernel/ only if a refusal is found missing (then its own commit with the model's rule), docs/kernel/devices.md, SECURITY.md. Tier A (kernel cases): kernel-red-2. Size M."
   state = "done"
-  revision = 193
+  revision = 2
 
 [[node]]
   id = "ATK4"
@@ -2252,7 +2252,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   body = "docs/todo/kernel-attack-gaps.md 'boot.md', seven lines: the bench never falling back to QEMU's own firmware is not attacked; the kernel's refusals of a malformed block (a tag past the end, a second MREx, a bad Devs entry, a Grnt tag) are not attacked; R16 (image confinement): an image cut short inside its segment data and a writable-and-executable segment are not attacked, and the truncated-image case runs on rv64 only; R17 (fail closed): a short or missing seed, a missing timebase, an initrd under 64 bytes are not attacked (every QEMU boot supplies them); R15/R17's two signature cases run on rv64 only; a 17th DMA device (devices.md's line, taken there); a reboot through system_reset (the chain rerun, the bundle verified again) is not attacked. Lever: the bench's boot cases already pass crafted images and blocks (the truncated-image and signature cases): widen each to both widths and add one crafted input per refusal, each an expected kernel failure with the kernel's named reason as the verdict (rule F), the firmware fallback as a bench host test on the QEMU line (no -bios default), and system_reset as a case that reboots once through the tester and expects the chain's lines twice with the bundle's verification line both times. Gates: each case 5 runs both widths; the rv64-only cases run on rv32 and their toml comments say why they did not before; boot.md status lines updated; the section emptied with each line's fate (the DMA line to ATK3). Files: tests/*.toml, the image-crafting helpers in tools/testbench, docs/kernel/boot.md, SECURITY.md; kernel/ only if a refusal is found missing. Tier A (kernel and verified-boot cases): kernel-red-2. Size M."
   state = "done"
-  revision = 211
+  revision = 2
 
 [[node]]
   id = "B72"
@@ -2261,7 +2261,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   body = "docs/todo/beamlet-budget-from-startup.md: beamlet sizes its heap, ETS and persistent_term limits from `budget_pages=N` (userland/otp/redoubt/src/bin/beamlet.rs:62-66; beamlet.md:187), which nothing checks against the budget init or the steward gives it: arguments are opaque to init, the steward computes it from its own sizes (servers/steward/src/bin/steward.rs:514-515), and the only guard is the bench's host test every_beamlet_is_told_its_own_budget (tools/testbench/src/case.rs:1491), which reads manifests in the tree and nothing written elsewhere. N above the budget makes a flood reach the backstop and end the VM instead of the process; N below kills legitimate processes. Lever: the startup block (libs/rt/src/startup.rs, VERSION 2, already carries heap_pages the same way) gains `budget_pages` (0 for none); the launcher fills it from the budget it created (init: servers/init/src/check.rs:1120-1131 and the launch path; the steward's launch at steward.rs:544 and launch_relay; beamlet's own `launch` for children, beamlet.md:873); beamlet reads `startup.budget_pages()` and the argument goes from every manifest, the steward and the bench's generator; a block with 0 is the exit code beamlet gives a missing argument today. VERSION goes to 3. Gates: the block's layout changes, so every bin linking redoubt_rt is built and its host tests run before any boot (servers, tests/net, userland natives: the consumer sweep), then init-boot, launch-system, beamlet-footprint, steward-home-quota both widths; the bench's host test becomes 'no manifest names budget_pages'; init's host tests take a block with the field; beamlet.md's limits section and init.md's startup block table say where N comes from; the todo page is deleted. Files: libs/rt/src/startup.rs, servers/init, servers/steward, userland/otp/redoubt (beamlet.rs, the launch native), image manifests, tools/testbench/src/case.rs, beamlet.md, init.md. Tier A (a runtime contract and the VM's limits): steward-red-2. Size M."
   state = "done"
-  revision = 202
+  revision = 2
 
 [[node]]
   id = "B73"
@@ -2270,7 +2270,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   body = "docs/todo/qmp-socket-private-dir.md (testbench.md:1589-1590 carries the note): a boot case with memory = true starts QEMU with -qmp at <tmp>/redoubt-qmp-<pid>-<n>.sock (tools/testbench/src/qemu.rs:862-865: the bench's pid and its boot count), created under the bench's umask; with umask 002 any member of the bench user's group can connect while the case runs, and whoever holds QMP stops the guest, writes its memory and saves its RAM to any file the bench's user can write; a file left at the predicted name makes QEMU fail to start, a failure with no verdict. Lever: each run makes a private directory with mkdtemp (mode 0700) under $REDOUBT_TMP (the no-/tmp rule) and creates the socket inside it, so only the bench's user reaches it whatever the umask; the directory and socket go when the run ends however it ends (the same removal path that drops the socket today). Gates: a host test checks the directory's mode is 0700 and the socket path fits a Unix socket's 108 bytes under the longest REDOUBT_TMP the tree uses; the memory-budget cases (launch-idle, beamlet-footprint) run once both widths; the umask note leaves testbench.md and the todo page is deleted in the same commit. Files: tools/testbench/src/qemu.rs and its tests, docs/testbench.md. Tier B (bench tooling, no guest code): kernel-red-2. Size XS."
   state = "done"
-  revision = 186
+  revision = 2
 
 [[node]]
   id = "AGENT0"
@@ -2279,7 +2279,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   body = "Owner, 2026-10-15: the fastest talking agent runs its model loop on the sponsor's host and its body in the box as an ordinary M1 principal over SSH, confined by M1's walls (own sub-budget, own home, labels, no /net); STEWARD3 later turns the same agent into a leased one with narrowed grants without changing the harness. Three packages: AGT1 (the agent principal in the image), AGT2 (the shell's non-interactive mode, the harness's eval channel), AGT3 (compile and load on the box); AGT4 added on the way (a compile faulted the session's VM: miniz's compressor on the stack). The host-side loop is outside the box (tools/, a build-host script under tenet 3) and is the owner's; docs/userland/agents.md#the-agent-harness and #the-agent-loop stay planned for M5 and are not amended by this step. Briefs: .wash/local/AGT1-implementer.md, AGT2-implementer.md, AGT3-implementer.md, AGT4-brief.md. Done 2026-10-16: trains 36 (AGT1, AGT2) and 37 (AGT4, AGT3) on origin/main."
   state = "done"
-  revision = 264
+  revision = 2
 
 [[node]]
   id = "AGT1"
@@ -2288,7 +2288,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENT0"
   body = "Brief: .wash/local/AGT1-implementer.md. Tier A (the manifest and the steward's principals; docs/servers/init.md#the-manifest, docs/servers/steward.md#principals), size S. Pages: docs/userland/sessions.md (the principals of the image), image/README.md, GETTING-STARTED.md (launch --system's ssh line for agent@). Case: a login as agent over SSH reaches its prompt in /home/agent, finds /home/alice enoent, and has no /net; launch-system's expectations extended."
   state = "done"
-  revision = 233
+  revision = 2
 
 [[node]]
   id = "AGT2"
@@ -2297,7 +2297,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENT0"
   body = "Brief: .wash/local/AGT2-implementer.md. Tier B (the shell, inside one session's budget), size S-M, shell track. Page: docs/userland/shell.md (a new section under The loop or The shell in a session). Host tests under ./test-shell, one bench case driving a session over SSH through the mode with a multi-line result and a crashing line, verdicts from the shell's printed values (rule F)."
   state = "done"
-  revision = 265
+  revision = 2
 
 [[node]]
   id = "AGT3"
@@ -2307,7 +2307,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["AGT1", "AGT4"]
   body = "Brief: .wash/local/AGT3-implementer.md. Tier B (the session's own VM and files), size S. Page: docs/userland/development.md#the-compilers-on-beamlet (status line: built, partly tested: host only -> tested in a boot), docs/plan/m5-self-hosted.md if it names the gap. Case: a session over SSH as agent compiles a module from a string, writes its .beam to /home/agent, purges and reloads it from the file, calls it; and the same on rv32. Verdicts from the shell's printed values and the file server's answers."
   state = "done"
-  revision = 262
+  revision = 2
 
 [[node]]
   id = "AGT4"
@@ -2316,7 +2316,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENT0"
   body = "Brief: .wash/local/AGT4-brief.md. AGT2's finding (.wash/local/AGT2-report.md 'Finding'): a three-line `defmodule` at the shell prompt over SSH, in or out of the machine mode, ends the session's VM: `PROGRAM HALT: CPU Exception on PID 420: Store page fault of 0x7ffecae8 at 0x002e2b70`; a probe at the plain prompt faults identically (deterministic); host beamlet compiles the block; no machine case compiles a module. The address: the first thread's stack sits under 0x8000_0000 (memory-layout.md:224-226); 0x7ffecae8 is 79,127 bytes, 19.4 pages, below the top, and the steward launches a session VM's first thread with SESSION_STACK_PAGES = 18 (steward.rs:105-107: twice the 36,136-byte peak beamlet-footprint measured, which compiles nothing; helper schedulers get SCHEDULER_STACK_PAGES = 18, lib.rs:648-650). So the first scheduler's native stack overflowed: the compile needs over 72 KiB where the term walks are iterative and something on the compile path is not. Step 1: addr2line 0x002e2b70 on the packed ELF both widths; on the host, the same block under a stack-peak probe names the recursion and its depth. Step 2: (a) make that path iterative if it is one path; else (b) the stack declared from a new peak by the page's rule (twice the largest peak): beamlet-footprint gains a compile, both constants follow, the steward's heap-cap arithmetic (11,092 of 11,136 pages) recomputed on the page and in the code. No separate compile thread: the compiler is Erlang code on a scheduler. Gates: a machine case shell-compile-module (the defmodule typed over SSH and called, both widths, 5 runs); beamlet-footprint with the new peak quoted; the shell set; size-budget; steward-ssh-two-principals once; init.md 'Stacks', testbench.md's memory-budget paragraph and beamlet.md updated. Files: userland/otp (vm, redoubt lib.rs), servers/steward/src/bin/steward.rs, tests/, the three pages. Tier A (a session limit moves, or the interpreter): steward-red-2. Size S-M. Blocks AGT3 and AGENT0."
   state = "done"
-  revision = 259
+  revision = 2
 
 [[node]]
   id = "B74"
@@ -2325,7 +2325,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   body = "Train 34's bench (a43b72b13; .tmp/train-34b/fail-rv64-rt-miri.log): libs/rt/tests/parked_write.rs `a_waiting_write_is_parked_abandoned_and_expired` under Miri panics at :159 (`late.join().unwrap()`), the `late` client having died of the fake's guard 'a wait only a change can end saw none in the fake kernel for 60s' (libs/rt/fake/src/lib.rs:619-646) after 60.96 s; trains 32 and 33 passed; B70 put the test on a held clock the test ticks. By reading, the ordering has a hole and Miri's scheduler finds it: `until(parks == 2)` (:157) observes the park, not the server's next `receive`; a receive's deadline is `now + timeout` at the call (lib.rs:615-617) and `tick` only adds to the clock (:607-612), so a tick taken between the park and the receive leaves the server a deadline one LONGEST past the tick that nothing reaches, and the client (FOREVER) waits until the guard fires. Miri load reaching 60 host seconds is the other reading; the first makes it moot. Step 1: reproduce under Miri alone and loaded (20 runs each, through q), and show the hole natively by a forced yield between the park and the receive, naming the reading. Step 2, the fix in the fake, never a longer timeout: a tick on a held clock is taken only when every other thread of the fake is in `wait` (the fake counts threads alive and waiting; `tick` blocks until they agree: a quiescent step), so a tick always ends the waits it was written to end; the guard's panic names the clock's time and the waits outstanding. parked.rs and beamlet-redoubt's fake suite (26 tests) get the rule for free. Gates: rt-miri alone 20/20 and beside a bench 20/20; `cargo test -p redoubt-rt`; B70's 20-run loaded loop; beamlet-redoubt's fake suite; the fake's doc states the quiescent tick; no host timeout lengthened. Files: libs/rt/fake/src/lib.rs, libs/rt/tests/parked_write.rs, parked.rs, the page describing the fake kernel's clock. Tier A (libs/rt's fake): steward-red-2. Size S."
   state = "done"
-  revision = 237
+  revision = 2
 
 [[node]]
   id = "B75"
@@ -2334,7 +2334,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   body = "libs/rt/src/thread.rs:25 says it: 'No guard page below it: a stack that overflows writes over whatever is mapped below'; `spawn` (:33-41) takes `Buffer::new(stack_pages)` and hands it to thread_create. AGT4 found the cost: a helper scheduler's overflow corrupted the heap silently and rv64 died later with an illegal instruction, while the first thread's overflow faulted at once at its unmapped page (memory-layout.md:224-226); beamlet-compile-footprint paints the first thread only, so a helper's peak is unmeasured. Lever: the runtime places every spawned stack with an unmapped page below it, by whichever the ABI allows without a kernel change: a mapping of stack_pages + 1 whose lowest page is given back (unmapped) before the thread starts, or a fixed placement leaving a hole below (map_anon's area, memory-layout.md); the guard costs no frame, one page of address space; the sentence on thread.rs and native.md says so and the 'no guard page' sentence goes. The painted-stack measurement (MEM1's launcher) extends to spawned stacks so beamlet-compile-footprint and the memory scan report each scheduler's peak, and SCHEDULER_STACK_PAGES is sized from the largest. Gates: a host test and a boot case thread-stack-guard: a spawned thread overflows on purpose and the kernel's fault line names it at the guard, the process ending there, no later crash; beamlet-footprint and beamlet-compile-footprint both widths with the helper peaks quoted; the rt host tests; the kernel's address-space cases unchanged. Files: libs/rt/src/thread.rs, libs/rt/src/buffer or map, tools/testbench's memory scan, docs/userland/native.md, docs/userland/beamlet.md. Tier A (libs/rt, every program's threads): steward-red-2. Size S."
   state = "done"
-  revision = 273
+  revision = 2
 
 [[node]]
   id = "STEWARD3A"
@@ -2343,7 +2343,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "STEWARD3"
   body = "Brief: .wash/local/STEWARD3-implementer.md point 1, cases 1-3 and 8's host tests. The core already decides leases (STEWARD0/1); the server lacks the operations. Build: `start_agent` from an unlabelled session's badge answers Lease {id, name} with the batch (CreateBudget under the sponsor's sub-budget for the label set with the lease's limits, labels and deadline, at most MAX_LEASE, refused longer, never shortened; Connect to the lease's roots; Launch of beamlet with the agent's module; the exit notice to the steward); the lease ends by deadline (the kernel's destruction, the steward's Exited from the notice), by `end_lease` from any of the sponsor's unlabelled sessions answered from the receive loop ahead of admission, or by blame (STEWARD3C); each path runs notify_sponsor, a send on the sponsor sessions' steward connections that beamlet surfaces as a message and the shell prints, naming the lease and never why. Connections end by the launcher's disconnect until STEWARD3R lands (R41 stays Open with its words). Conversion from AGENT0: the manifest's `agent` principal (AGT1: own key, home, sub-budget, 'sponsored by alice in name') gains a `sponsor` line init checks; a login as agent is the sponsor's lease, its session budget carved under alice's sub-budget with deadline MAX_LEASE, so alice's sessions can end_lease it and receive its end; AGT2's machine mode and AGT3's compile run inside it unchanged (agent-login, launch-system and the AGT3 case pass as they are, plus the notice when the lease ends). Cases: steward-lease-ends, steward-end-lease (p99 125 ms call-to-notice, net of audits), steward-sub-agent-dies-with-agent; host: end_lease answered under a flood, the new badge classes. Pages: steward.md Leases to built, R39, Authority; agents.md's lease sections; sessions.md; init.md's manifest (sponsor); SECURITY.md R39; libs/wire/tables/steward.md. Tier A: steward-red-2. Size M."
   state = "done"
-  revision = 338
+  revision = 2
 
 [[node]]
   id = "STEWARD3B"
@@ -2353,7 +2353,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["STEWARD3A"]
   body = "Brief: .wash/local/STEWARD3-implementer.md point 2, cases 4-6 and the fuzz target of 8. Build: `submit` from a session's or agent's badge carries the structured Content (an agent in a label set, a note; declassify and push are STEWARD4's) and the reason; the core freezes it, draws id and binding hash, checks the pending cap and fair share, answers Request {id}; its notify reaches only channels whose labels include the request's. sshd recognises the user `approve`, authenticates with the principal's approval key only (the core's approval_key guard, holds first; a login key refused), opens the approval channel at the steward (ApprovalOpened on sshd's root badge) and serves it as a consol console whose other end is the steward: the steward writes the core's rendered screens (printable ASCII only, render.rs) and reads `approve <id> <hash>` and `deny <id>`; a hash not the last screen's is HashMismatch to the channel only, never to the requester; the close is ApprovalClosed. A granted labelled agent runs STEWARD3A's batch from the approval row. Cases: steward-approve-box (the labelled agent granted and running; the wrong hash refused; the login key refused by sshd), steward-screen-inert (64 chars of ANSI, bidi and format in the reason: no 0x1B and nothing outside 0x20..0x7E in the relayed bytes), steward-pending-cap (PENDING_CAP + 1 refused Cap; a second agent's fair share; a dead session's requests gone); host: the channel's line parser as a fuzz target. Pages: steward.md The powerbox and approvals, R38, R42, Authority (the channel's badge class); sshd.md approve@box and R67 to built; sessions.md approve@; SECURITY.md rows; the wire table. Keys: an approval key per principal in tests/keys and the manifest. Tier A: steward-red-2. Size M."
   state = "done"
-  revision = 348
+  revision = 2
 
 [[node]]
   id = "STEWARD3C"
@@ -2363,7 +2363,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["STEWARD3A"]
   body = "Brief: .wash/local/STEWARD3-implementer.md point 3, case 7 and the blame timeout of 8. The kernel's blame reaches init through the exit notice (R21, built); init's restart machine has the blame half planned (init.md 'Restarts and reboots'). Build: `blame(account, labels, server)` accepted on init's root badge class only; the core counts per (account, label set) and at BLAME_COUNT within BLAME_WINDOW answers a lockout: DestroyBudget for every session and lease of that domain (STEWARD3A's leases included), a refusal of new sessions for it until the window passes, both audited as console lines (STEWARD2's residual stands until M4); the steward answers init within its blame timeout, and a blame it cannot take in time is init's console line, not a restart loop. Case steward-blame-lockout: bob's session crashes walfsd three times within the window with a named real fault, or the bench's fault injection if one exists (the case says which; a fault that does not exist is a design question, not an invention); every budget of bob's {} is destroyed, his next login is refused until the window passes (virtual time advanced), alice's session is untouched, walfsd restarted by init; a second run with the crash from bob's vault session leaves his unlabelled session untouched (R40 keys by label set). Host: the blame timeout; the lockout's refusal tells nothing apart (rule 3's refusals). Pages: steward.md Crash blame and R40 to built, 'Failure and restart' residual ('the steward's restart ends every session'), init.md's blame half, SECURITY.md R40, agents.md's blame bullet. Tier A: steward-red-2. Size S."
   state = "done"
-  revision = 341
+  revision = 2
   overrides = ["2026-10-16: started by Orchestrator before STEWARD3A (active): STEWARD3A is accepted; it is active only for its train-42 fix (an amend); 3C's base is its accepted content"]
 
 [[node]]
@@ -2373,7 +2373,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "STEWARD3"
   body = "The design question handed from STEWARD2 (.wash/local/STEWARD3-implementer.md '2026-10-06: a design question'; steward.md R41 'Open'; the R41 departure accepted for sessions in the Architect's handoff): `new_connection(root, quota)` carries no scope and only the process that makes a handle stamps it, so the steward's CreateScope budget (zero limits inside a lease) binds nothing; a lease's connections today end by the launcher's disconnect at the lease's end (agents.md 'When a lease ends'). Step 1 (the Architect, before any build): the ruling, with the page line for steward.md R41 and the kernel or protocol page it touches, between (a) a scope handle a server accepts at new_connection and ends connections by (a serving-library change in libs/rt, every file server's for free; a wire-table field), and (b) a disconnect-by-scope the steward drives (no server change; the steward must know every connection it minted). A choice that changes the kernel's ABI or the 9P wire goes to the owner by decision_request with both; a serving-library-only mechanism is the Architect's. Step 2: the build per the ruling, with a host test in libs/rt (a connection made in a scope ends when the scope's budget is destroyed, its fids freed, its sibling in another scope untouched) and R41's status and SECURITY.md row. STEWARD3A builds leases whose connections end by the launcher's disconnect until this lands, and R41 stays Open with this node's words. Files: docs/servers/steward.md R41, docs/servers/serving.md, libs/rt/src/server (if (a)), libs/wire/tables/steward.md, servers/steward. Tier A (authority over connections): steward-red-2. Size S (design) + S (build)."
   state = "done"
-  revision = 279
+  revision = 2
 
 [[node]]
   id = "STEWARD3S"
@@ -2383,7 +2383,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["STEWARD3R"]
   body = "STEWARD3R's residual under R41 (.wash/local/STEWARD3R-ruling.md 'Cases, settled', point 2): `new_connection(root, quota, scope)` mints every 9P connection (fsd, consoled, carved homes) in the session's or lease's scope, so destroying the scope ends it in every table at once; ipd's typed `grant` (How::Grant in the steward's drive, libs/wire/tables/ipd.md) has no scope field, so a network connection ends only when the steward's cleanup disconnect reaches ipd, and a copy forwarded by a hijacked agent lives until then. Lever: the grant gains an optional `scope: handle[0] budget` as op 2 did; ipd mints the granted connection with it through the same Minter path; the steward passes the scope through Kernel::connect for Server::Net as for Shared. Gates: the rt host test's twin for ipd's grant (a granted connection in scope S dies with S, a sibling in T serves); the net cases once both widths (bench-net-peer, the ipd cases that grant); R41's residual leaves steward.md and SECURITY.md's row says every connection kind; the wire table's row. Files: libs/wire/tables/ipd.md, servers/ipd, servers/steward's drive, docs/servers/steward.md, ipd.md. Tier A (authority over connections): steward-red-2. Size S."
   state = "done"
-  revision = 292
+  revision = 2
 
 [[node]]
   id = "B76"
@@ -2392,7 +2392,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   body = "Seen in train 35's bench (main 32a448875-based) and train 39's (42437cdaf), and once alone in three on the train 39 head (then 0.8 s twice; .tmp/train-39/fail-rv64-aio-many-reads-two.log, .tmp/train-39/aio-alone/): rv64 aio-many-reads-two times out at 90 s waiting for the burst's `64 of 64 reads answered on 2 connection(s)...` line (tests/aio-many-reads-two.toml:18); rv32 passes in 0.7 s every time. AIO1's case: the hub keeps 64 reads outstanding over two littlefsd connections with a waiter thread each, the reader idle in receive on its own endpoint (native.md 'Many requests at once'). B8 fixed the rv32 flake (TEST FAILED: receive: Timeout at ~21 s); this is the rv64 twin with another shape: no FAILED line, a wait that never ends. The failing transcript was not kept: run dirs rotate and the job log holds the result line only. Step 0, the bench: a failing case's console and session logs are copied beside its job log (scripts/jobs.mk, the testbench's run dir), shown by a dry run. Step 1: 50 runs alone (`q run`, one general core) with transcripts kept, both widths; name the rate. Step 2: name the wait from the transcript (the waiter-to-reader hand-over at HAND_OVER_US, a wake-up send not taken, an empty completion call never re-parked, the second program's read parked behind the burst); the fix is in the hub (libs/client/src/aio.rs) or the case's ordering, never a longer deadline alone; B51's and B62's rules are the frame: a hang past them is a bug. Gates: 50/50 alone both widths; the aio cases and bench-net-peer once; client-host-tests. Files: libs/client/src/aio.rs and tests, tests/aio-many-reads-two.toml, scripts/jobs.mk, tools/testbench, docs/userland/native.md. Tier A (the hub is every session's I/O): steward-red-2, the bench copy in the same review. Size S."
   state = "done"
-  revision = 290
+  revision = 2
 
 [[node]]
   id = "STEWARD3Q"
@@ -2401,7 +2401,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "STEWARD3"
   body = "Found by STEWARD3A (.wash/local/STEWARD3A-questions.md 'Q4', wall 1; evidence .tmp/STEWARD3A/exp11, exp12 in its worktree): walfsd's `limits` (servers/walfsd/src/server.rs; littlefsd the same) admit `in_flight: 2` multiplexed sessions per bucket, and a bucket is keyed by account (serving.md 'Buckets', R26). Alice's console and SSH sessions hold both, so a lease of hers (her account by design) has its session-opening collect answered REFUSED in 3 ms and every file op is Eio; the same cap refuses her third live context its home, which the manifest allows (contexts cap 3): a latent defect no case exercises. With in_flight 4 the lease's read succeeds. Lever: the cap is what the manifest lets one account hold at once, stated as a derivation: 1 console session + the contexts cap + the leases per principal + 1 spare for a context detaching while another attaches (its connection lives until the relay ends); the image gives 6. A bench host test holds each server's constant to the largest such sum over the tree's manifests (every_beamlet_is_told_its_own_budget's pattern). `Limits::fits` against BUDGET with buckets=6: 6 x (364,544 + 262,144) = 3.76 MB > 3 MiB, so BUDGET and both servers' heap caps rise, the arithmetic on walfsd.md, littlefsd.md (admission lines, the limits doc comment) and image/README.md. Cases: steward-three-contexts (alice's three contexts live, each reading and writing its home, both widths); STEWARD3A's lease cases run on this branch until it merges. Gates: walfsd-quota, steward-home-quota, steward-context-cap, the memory scan for both servers (peak under half the new cap), both widths; the host test. Files: servers/walfsd, servers/littlefsd, libs/fileserver if the limits are shared, tools/testbench, image/manifest.json and tests/data manifests' heap_pages, docs/servers/walfsd.md, littlefsd.md, serving.md, image/README.md. Tier A (a shared server's admission): steward-red-2. Size S."
   state = "done"
-  revision = 310
+  revision = 2
 
 [[node]]
   id = "B77"
@@ -2410,7 +2410,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   body = "Measured on train 40 (B76 + STEWARD3S, 704 pass, ~5.5 h wall; `scripts/q log`): 30 cases took lock=net, summed wait 12,360 s (3.4 h), the longest 1,353 s for rv32 bench-net-peer (a 0.5 s case) while members' net gates (STEWARD3A, 3Q) held the lock; non-net waits summed 1,690 s. What the lock guards (testbench.md:301-303): the bench picks a forwarded host port by binding and releasing it (qemu.rs:275-284 free_ports; the poke's UDP port) before QEMU binds it, so two boots at once may race for a port. Nothing else in a [net] case is shared: peers are guestfwd to a helper with no host listener (peer.rs:5-9), the capture a per-boot pcap, slirp per QEMU. Lever: `q run --ports N` leases N host ports no other lease holds (REDOUBT_PORTS=lo-hi in the job's environment, released with the job, also on a kill); the bench binds its forwards and the poke inside the range when the variable is set (free_ports stays outside q); jobs.mk's net recipe takes `--ports` and drops `--lock net`. A train's net tail and a member's net gate then run side by side. Class (ii) on testbench.md stays: bench-ssh-guest and bench-ssh-loopback-deadlock (timeout expectations) and the host-clock cases run alone for their own reasons, none for a port; the page says the race is gone under q. Gates: the net cases both widths through q (bench-net-peer, net-tcp, net-attacks, the pcap cases, the loopback set); two members' net gates beside a bench once, no port failure; a train's net tail wall time and summed wait before/after from `q log`, quoted; q's tests for the lease (no overlap; freed with the job). Files: scripts/q, scripts/jobs.mk, tools/testbench/src/qemu.rs, peer.rs, docs/testbench.md. Tier B (bench and pool): kernel-red-2. Size S-M. Launchable beside 3A/3Q; the q daemon's restart lands at a train boundary, the orchestrator's call."
   state = "done"
-  revision = 302
+  revision = 2
 
 [[node]]
   id = "STEWARD3X"
@@ -2420,7 +2420,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["STEWARD3Q"]
   body = "Found by STEWARD3C (.wash/local/STEWARD3C-questions.md Q1; ruling .wash/local/STEWARD3C-Q1-ruling.md): a shared server restarts with empty tables (R27), so the steward's kept fresh connection at walfsd:data (init.md 'Fresh connections per child') is dead, every later login fails its home step, and every live session's home connection is dead too; init has no way to hand a running server a new connection (init.md's consoled residual, the file servers' and ipd's as well). m3-agents.md's crash-blame row ('Alice is unaffected when walfsd panics') assumes this mechanism. Lever, one path for every shared server: (1) init, after restarting a server, makes the steward a new fresh connection there and calls the steward's root-class `reconnected(server, connection: handle[0])`; the steward replaces its kept connection; the records below the dead one died with the instance, so nothing leaks and init's release at the steward's exit still frees everything. (2) The steward sends `server_restarted(server)` on the `notices` endpoint of every session the server served. (3) A session re-binds: `rebind(slot)` from its badge mints a new connection below the new kept one, in the session's scope; the shell re-opens the binding on the notice; a session that never re-binds keeps `enotconn`. consoled's restart follows the same path or is stated as not covered. Cases: steward-server-restart (bob's write cuts walfsd:data; alice's and bob's sessions re-bind and read their homes; a login after the restart succeeds; three cuts reach R40's lockout on the machine, closing 3C's residual); host: init's call, the steward's rows, the oracle traces. Pages: steward.md 'Failure and restart' (the residual becomes the rule), init.md, agents.md, m3-agents.md's row, SECURITY.md R40 to tested. Files: servers/init, servers/steward, libs/steward (rows, oracle, model), the wire table, the shell's binding code, tests/. Tier A: steward-red-2. Size M."
   state = "done"
-  revision = 353
+  revision = 2
 
 [[node]]
   id = "B78"
@@ -2429,7 +2429,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "M2"
   body = "STEWARD3C's report (.wash/local/STEWARD3C-report.md:98-101): the search index reached 10,000,112 bytes with its prose and mdbook warns above 10 MB; `the_book_builds` (tools/doccheck/tests/docs.rs:19) fails on any WARN, so the implementer trimmed ~600 bytes to pass, and the next package adding a sentence fails the same way. The book's markdown is ~1.6 MB (testbench.md 136 KB, scheduling.md 125 KB, beamlet.md 105 KB the largest); elasticlunr's index is several times the text, and `[output.html.search]` (docs/book.toml) sets only `enable`. Lever, measured not guessed: build the index with each of mdbook's own knobs (`expand = false`, which drops prefix expansion and is the largest saving; `heading-split-level`; `teaser-word-count`) and record the index bytes and whether a search for a rule name (R41, `budget_pages`, `walfsd`) still finds its section; pick the smallest index whose search still finds those, aiming at least 30 % under the 10 MB WARN. Then the rule: a doccheck test reads the built index's size and fails at a stated ceiling below mdbook's WARN with the size and the three largest pages named, so a future failure says what grew instead of 'WARN'; docs/README.md states the ceiling and the headroom rule (evidence, tables and measurements beyond a page's argument go to .wash/local or a case comment, not the page; no page is split or removed here: a page leaving the book is the owner's). Gates: `cargo test -p redoubt-doccheck --test docs` green on the dev image (mdbook present), the three searches shown found, the index size quoted before and after, the ceiling test's negative (a fixture book over the ceiling fails naming its pages). Files: docs/book.toml, tools/doccheck/tests/docs.rs and a fixture, docs/README.md. Tier B (docs tooling): kernel-red-2. Size S."
   state = "done"
-  revision = 334
+  revision = 2
 
 [[node]]
   id = "STEWARD3Y"
@@ -2439,7 +2439,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["STEWARD3X"]
   body = "Found by STEWARD3X in steward-blame-lockout (.wash/local/STEWARD3X-ruling.md 'Q4 amended'; 3X's report names the stall): a session's end batch waited its full RELEASE_TIMEOUT (1 s) on the `ended` send to sshd's channel console after sshd had closed the channel first, and init's blame arriving then was lost; the same shape holds for an end batch's disconnect at a not-yet-serving server (walfsd's recovery, 580-953 ms measured). Every cleanup call in an end batch (the `ended` send, each server's disconnect) runs on the steward's loop with the call's full timeout, and during it the steward serves nobody (logins, blame, end_lease ahead of admission included). STEWARD3R's rule already separates cutoff from cleanup: destroying the scope is the cutoff; `ended` and the disconnects free records and never are the cutoff. Lever: the end batch replies after DestroyBudget; the cleanup calls become deferred steps the Machine keeps in a bounded queue and runs at its loop's turn, each bounded short (the steward's own send bound, not RELEASE_TIMEOUT), a timed-out one retried at the next turn with a stated retry cap, then dropped with a console line (a server's admission for that connection is then freed only by its own restart: the residual that remains; an `ended` to a channel sshd already closed needs no retry). The queue is bounded by the connections live sessions and leases hold, stated. Gates: host (the end's reply precedes any cleanup call; a timed-out step is retried then dropped with the line; the queue's bound); steward-blame-lockout and steward-server-restart with no blame lost and `lost` forbidden (the stall before/after quoted, both widths); steward-session-ends, steward-lease-ends and steward-end-lease's 125 ms p99 unchanged or better. Pages: steward.md 'Failure and restart' and init.md 'Residual risks' (3X's residual becomes the rule), the Machine's doc comment. Files: servers/steward (the Machine, drive.rs), tests/, docs. Tier A: steward-red-2. Size S."
   state = "done"
-  revision = 374
+  revision = 2
 
 [[node]]
   id = "B79"
@@ -2448,7 +2448,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   body = "Found by STEWARD4 (thread STEWARD4-crossing Q8; the implementer's need in .wash/local/B79-brief-from-steward4.md): the bench attaches one writable `[disk]` (disk0, bus 7) and the read-only userland disk (bus 5): tools/testbench/src/qemu.rs:349-409, docs/testbench.md 'Disks and network cards'. A confined manifest cannot put the unlabelled home volume and the vault on one disk (R34's device rule: one blkd, two label sets; servers/init confine.rs:132), so STEWARD4's confined-push boot case cannot boot. Build: a `[vault]` recipe beside `[disk]` (its own recipe/stage, `disk2` on a free virtio-mmio bus, the manifest device line, `devices_sit_on_fixed_slots` extended), the case toml key, testbench.md's section and the devices table; a host test that a recipe with both disks places them on their fixed slots and one without `[vault]` is unchanged; one existing case gains `[vault]` as proof of a boot with two writable disks (blkd:data and blkd:vault), both widths. Nothing else moves: no kernel, no init, no steward. Files: tools/testbench, docs/testbench.md, tests/<one case>.toml. Tier A tooling (the bench's device map), reviewer kernel-red-3. Size S. Consumer: STEWARD4 case 3 (rebases onto this or lands its boot case in a follow-up)."
   state = "done"
-  revision = 371
+  revision = 2
 
 [[node]]
   id = "B80"
@@ -2457,7 +2457,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   body = "Found on train 48 (STEWARD3Y) and reproduced alone on main's tip 69aa50dd3 in the train worktree: rv32 `ratio 82 one 386566 two 465804 schedulers 2` (alone, main), `ratio 81 one 381169 two 467637` (alone, 3Y's tree), `ratio 81 one 382509 two 470400` (train 48 under load); rv64 PASS each time; the same tree passed the case under train 47's bench load. tests/beamlet-schedulers-one-hart-mttcg.toml judges two schedulers on one guest hart against one and forbids a ratio under 90 (docs/userland/beamlet.md 'Several schedulers': two schedulers cost little on one hart). Under mttcg the two scheduler threads are two host threads; with q's lease (how many host cores does the case get?) and an idle host, the second scheduler runs on a second host core while the guest sees one hart, so 'two' outruns 'one' and the ratio reads low; under a loaded host the threads contend and the ratio reads ~100. Find what the case measures and make it a verdict: pin the guest's threads to one host core for this case (q run --cores 1, or the bench's taskset for mttcg one-hart cases), or judge the reduction counts on the guest's own clock (icount), or restate the page's claim and the floor with the arithmetic; rv64 passing while rv32 fails needs its explanation too. Transcripts: .tmp/train-48/transcript-rv32-schedulers-alone-main.log, -alone-3y.log, transcript-rv32-beamlet-schedulers-one-hart-mttcg.log (train 48). Files: tests/beamlet-schedulers-one-hart-mttcg.toml, tools/testbench (if the pinning is the bench's), docs/userland/beamlet.md, docs/testbench.md. Tier B (a case's verdict), reviewer kernel-red-3. Size S. Consumer: every train (the case is in the whole bench; until fixed a rv32 failure of it alone is a known flake, recorded on the train)."
   state = "done"
-  revision = 386
+  revision = 2
 
 [[node]]
   id = "STEWARD3Z"
@@ -2467,7 +2467,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["STEWARD3Q"]
   body = "Brief: .wash/local/STEWARD3Z-implementer.md; rulings .wash/local/STEWARD3Z-ruling.md (Q1 consoled's caps by who holds them, (A); Q2 the six-principal boot and the latency table move to STEWARD3V). Found by STEWARD4's latency case (STEWARD4-ruling.md 'Q12'): admit.rs counts a connection a client mints in the share of the connection it minted from, so every connection the steward mints at erofsd:system (a session's shell and relay, a lease's) is a State of the steward's own share there, cap 8: the box holds eight steward-minted system-volume connections in all, a fifth session or a fourth lease refused on today's image; 3Q's per-account derivation missed the minter's share. consoled's per-bucket cap is init's need applied to every bucket, so its 2 MiB holds five. Lever: the serving library admits a connection minted for another account in that account's bucket from its first request, holding one of the minter's pending slots until then (R26 bounds a mint flood by the minter's share); fallback, a root badge per principal per shared server, only if the primary cannot be made sound. consoled: the default bucket's state derived from what one account holds, init's root badge alone at MAX_THREADS by with_overrides, the fit's arithmetic on the page. Gates: rt host tests (pending pool, the move at first call, the flood bound, the free at disconnect); steward-many-sessions on a three-principal manifest (four sessions and four leases hold system-volume connections at once); the steward set, aio-many-reads-two, walfsd-quota both widths; 3Q's admission host test extended. Not here (STEWARD3V): the six-principal boot, steward-latency at N = 4 and 16, the other shared servers' budgets. Pages: serving.md, consoled.md, init.md, steward.md Authority, SECURITY.md R26/R77. Files: libs/rt/src/server, servers/consoled, servers/init, tests/. Hotspot with STEWARD4: drive.rs (no edits to its files). Tier A: steward-red-4. Size M."
   state = "done"
-  revision = 426
+  revision = 2
 
 [[node]]
   id = "STEWARD3W"
@@ -2476,7 +2476,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "STEWARD3"
   body = "Ruling: .wash/local/STEWARD3W-ruling.md. Seen in STEWARD4's latency run (round 3, two spinner VMs at erofsd:system): a lease's disconnect timed out four times in 3Y's cleanup queue and was dropped, so its State stayed in the share at erofsd:system until a restart that never came, and the eighth lease connect was refused (4 of 5 runs at seed 3: STEWARD4's report). TRIES/RETRY_US were calibrated for a recovering server (four tries span init's 3 s SERVER_TIMEOUT); a busy server answers others, init sees it alive, and the count is a wrong proxy for lost. Rule: the fourth timeout parks the step; a parked step runs at the loop's turn after any call to that server completed within its bound, and before a mint the steward makes at that server while steps are parked there (at most one bound, a turn's rule); reconnected for that server forgets its parked steps; a server that never answers costs no bound per turn once parked; the queue's argued bound covers parked steps unchanged. The 100 ms send bound stays: persistence, not width. Pages: steward.md's cleanup paragraph and residual sentence; the console line becomes 'parked after 4 attempts: retried when the server answers'; SECURITY.md R41 row if tests change; scheduling.md's real-steward table regains its N = 3 row (STEWARD4 ships it as 'not reached' naming this leak). Host tests: a parked step runs at the next answered call; a mint at a server with parked steps runs them first and succeeds where it was refused; reconnected forgets parked steps; a never-answering server costs no bound; each connection held once. Bench: steward-latency at N = 3 both widths completes with no parked line outliving the round; steward-server-restart unchanged. Files: servers/steward/src/cleanup.rs, drive.rs, lib.rs, tests/, docs/kernel/scheduling.md's row. Hotspot: STEWARD4's drive.rs and latency manifest; starts after STEWARD4 lands. Size S; Tier A; steward-red-4 reviews."
   state = "done"
-  revision = 455
+  revision = 2
 
 [[node]]
   id = "STEWARD3V"
@@ -2486,7 +2486,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["STEWARD3Z"]
   body = "Ruling: .wash/local/STEWARD3Z-ruling.md 'Q2'. Found by STEWARD4's six-principal manifest (keyd buckets=10, consoled 9, bootfsd 10, ipd 11, walfsd:data 10, walfsd:alice-secrets 9, erofsd:system 10 by init's rule, 7 domains + system callers): every shared server checks limits(buckets).fits(COST, BUDGET) against a compiled constant that holds six (erofsd 1.5 MiB, bootfsd 1 MiB, walfsd 4 MiB: 'the image's six buckets and not a seventh'), so each refuses to start and init reboots. Rule: a shared server's usable budget is its entry's pages x PAGE_SIZE less its heap cap and stack, checked at start with Limits::fits against buckets=N (BAD_LIMITS, init reboots, unchanged); the entry rule on walfsd.md takes its derivation form: an entry's pages are what its count of buckets at their caps needs plus heap cap and stack, rounded up to 256; a case's manifest sizes by the same rule, never by what its case uses. The manifest is the one source; the count enters the rule; no maximum is picked. The image's entries keep their pages where the arithmetic already holds (walfsd 1,280 pages = 1,202 of budget, six buckets and a seventh); the latency manifest's entries are recomputed (walfsd ~1,614 -> 1,792). Scope: erofsd, bootfsd, walfsd, littlefsd, keyd, ipd (consoled is 3Z's); each page's admission paragraph with the derivation and the image's arithmetic; init.md's entry rule; the bench host test holds every manifest in the tree to pages >= the count's need, beside 3Q's terms; steward-latency regains N = 4 and 16 and scheduling.md's 'With the real steward' table is completed beside the stand-in's 1/4/16 (coordinated with STEWARD4 through the orchestrator; the gate moves here from 3Z). Gates: the servers' host tests, the steward set, walfsd-quota, aio-many-reads-two, the six-principal boot, both widths; docs; the size budget. Size M; Tier A (admission); steward-red reviews."
   state = "done"
-  revision = 462
+  revision = 2
 
 [[node]]
   id = "B81"
@@ -2495,7 +2495,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   body = "Seen on trains 44 (first run), 46 and 49 (2026-10-16/17), each time `beamlet-lookup-host  host tests failed` after 46-76 s, and PASS alone each time. Cause (.wash/local/B81-report.md): beamlet-redoubt --test system ran the platform's bounds (FILE_WAIT_US, ATTACH_US, HAND_US, REQUEST_WAIT_US, RETRY_US) on the host's clock, so under load a bind ran out its second before the fixture server answered (1 in 40); busy loops inside the lease do not reproduce it (9/9), so the quiet class was no verdict. Fix: system.rs holds the fake kernel's clock (B4/B70's mechanism, libs/rt/tests/held_clock.rs); tests take a turn and tick each bound once the platform waits on it, at quiescence; host-clock asserts removed; 27/27 in 24-27 s (was 46). (2) The bench keeps a host-test case's failures block (panics, names, result, Cargo's last error line, never warnings) in target/jobs/<w>-<case>.log; docs/testbench.md says what is kept. Files: userland/beamlet-redoubt/tests/system.rs, tools/testbench (build::test_failure, cargo_test, fanout), docs/testbench.md. Tier B (a case's verdict and the bench's logs), reviewer kernel-red-3. Size M (grew from S: the held-clock conversion)."
   state = "done"
-  revision = 400
+  revision = 2
 
 [[node]]
   id = "B82"
@@ -2504,7 +2504,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   body = "Seen by STEWARD4's steward-latency on rv64 at two harts, twice at the 16th/17th lease: `a step failed (NotPermitted): Launch { .. kind: Lease .. slot: 2 }` straight after the kernel terminated the previous deadline lease's VM. Suspected a kernel race; the cause (.wash/local/B82-report.md): the steward sets a lease's deadline at the batch's start (carve_lease) and the Launch step (image read from erofsd, map, start) takes ~1.25 s guest time at one hart and ~2.46 s at two (icount counts both harts' instructions), so the case's 2 s kernel-deadline leases died between process_create and process_start; R10 destroyed the budget, the thread-less child was terminated, map/start answered NotPermitted. Evidence: AgentStarted deadline-at 6.54-6.57 s (two harts) vs 7.73-7.76 s (one) on a 9 s term; reproduced at one hart with 100 ms leases. The three race candidates ruled out. Delivered: tests/deadline-in-launch (a 300 ms lease from system; after the term map and start answer NotPermitted, the handle is BadHandle, the killed notice blames nobody, a witness in another budget draws another PID (R20), usage returns to before (I10)), both widths at smp 1 and 2; budgets.md 'Deadlines' names the window. No kernel change. STEWARD4's case lengthens its kernel-deadline leases (5 s) and records the two-hart row. Open design question for architect-2 (thread B82-launch-race): a lease's term from the agent's start, a launch floor, or the page stating the term runs from the request. Ruling: STEWARD4-ruling.md 'Q13'. Tier A (kernel case); kernel-red-3 reviews. Size S."
   state = "done"
-  revision = 415
+  revision = 2
 
 [[node]]
   id = "STEWARD3U"
@@ -2513,7 +2513,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "STEWARD3"
   body = "Ruling: .wash/local/STEWARD4-ruling.md 'Q15', 'Q16'. Found by STEWARD4's steward-latency: at weight 1,000 the real steward meets every target but the timer wake (p50 23-61 ms against 15 across widths and hart counts; at two harts the decision wake's p50 and the deadline notice's p99 too): the probe's timer expires while the steward is still writing its lines after start_agent's reply. `say` makes each console line a fresh one-page Lend, then attach, open, write and close at consoled (four round trips), two lines per start: about eight consoled calls per start, bounded only by consoled's turn. Rule: the steward keeps one console fid open for its life (opened at start and again after consoled's restart, as 3X re-binds), the lent page kept with it; a line is one write. Lines are a queue drained in order at the loop's turn, each write within the steward's send bound (100 ms), the turn stopping at the first that times out as the cleanup queue does (3Y): a busy consoled costs the loop one bound per turn. The queue's bound is argued; a line is dropped only with a line saying so; a batch's audit lines land in order. Page: steward.md 'Failure and restart' beside the cleanup queue; SECURITY.md rows if tests change. Measure: the re-armed probe's reply-to-receive gap, p99 at N = 1, both widths, on scheduling.md's real-steward table. Host tests: one call per line on the kept fid; a timeout costs one bound, lines stay queued; consoled's restart re-opens and drains; batch order. Bench: steward-latency meets its targets at N = 1, 2 both widths and returns to the whole run (STEWARD4 ships it whole_run = false until this lands); steward-server-restart; the steward set both widths. Files: servers/steward (say, drive.rs, lib.rs; not the core), tests/steward-latency.toml, scheduling.md's table. Hotspot: STEWARD4's drive.rs; start after STEWARD4 lands; shares the loop's turn with STEWARD3W (order the two queues on the page). Size S-M; Tier A; steward-red-4."
   state = "done"
-  revision = 449
+  revision = 2
 
 [[node]]
   id = "B83"
@@ -2522,7 +2522,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   body = "Seen on train 50 (B81, a tree with no steward or shell change), both widths: `session alice: step 26: ssh exited (status 0) while waiting for /^bye$/`; alice's log shows the line echoed and no `bye`: end_session destroyed the session before the shell's console write of `bye` was relayed. STEWARD3Y's regression fix put `IO.puts(\"bye\"); end_session(c)` on one line so the bench's exit step would not close the channel between a marker and the end (the detach race); that traded one race for another. Fix (tests/steward-pending-cap.toml, the end steps): three steps: send `IO.puts(\"bye\")`, expect `^bye$`, then send `Redoubt.Wire.Client.Steward.end_session(c)` as its own step, then `{ exit = 0 }`: the marker is matched before the end, and the bench sends the end before its exit step closes the input (one IPC against the close's network + EOF + call, the margin STEWARD3Y's review accepted), so neither the detach nor the flush can precede the end; the case comment says why. Check every steward case that ends a session the same way (grep end_session in tests/steward-*.toml) and apply the same shape where a marker precedes the end on one line. Gates: steward-pending-cap 5x both widths alone and 2x beside a load; the other touched cases both widths; formatting. Transcripts: .tmp/train-50/rv64-steward-pending-cap.smp1-alice.ssh.log, transcript-rv64-steward-pending-cap.log. Tier B (a case's verdict), reviewer steward-red-4. Size S."
   state = "done"
-  revision = 411
+  revision = 2
 
 [[node]]
   id = "B84"
@@ -2531,7 +2531,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   body = "Seen on trains 45 (rv32), 51 (rv32) and 51b (rv64), 2026-10-16/17: `job-interrupt-native timed out waiting for /(^|\\] )\\{:after_exec, true, \\{:error, :not_running\\}\\}$/` at 450 s, each time PASS alone in 4.2-4.6 s on the same tree. The case (tests/job-interrupt-native.toml; JOB1's Job.kill and the interrupt over the console) sends an interrupt to a native job and expects the job gone (`{:error, :not_running}` after the exec); under load the line never comes: either the interrupt is lost or late when the host starves QEMU, or a host-clock wait inside the shell's job path (Redoubt.Job, the console's interrupt delivery, the native stage's exit) runs out, or the expect's pattern misses a split line (B49's shape). Transcripts: .tmp/train-45/fail-rv32-job-interrupt-native.transcript.log, .tmp/train-51/transcript-rv32-job-interrupt-native.log, .tmp/train-51b/transcript-rv64-job-interrupt-native.log. Work: reproduce beside a load (a concurrent q build or parallel case set) and keep the console log; find whether the job ended and the line was lost, or the job never ended; fix on events (B4/B70's rule), or make the case's expectation the kernel's answer rather than a shell line, or move the case to the alone class with the reason on the page; prove 10x under load + 5x alone both widths. Files: tests/job-interrupt-native.toml, userland/shell (Redoubt.Job) or userland/native if the path is the shell's, docs/userland/shell.md 'Jobs'. Tier B (a case's verdict; the shell's job path if it moves), reviewer kernel-red-3 (steward-red-4 if the shell moves). Size S. Until it lands, a timeout of this case alone on a train is a known flake, rerun alone."
   state = "done"
-  revision = 423
+  revision = 2
 
 [[node]]
   id = "B85"
@@ -2540,7 +2540,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   body = "Seen on train 52 (beamlet-lookup-host, 15.5 s: `redoubt/tests/console.rs` test input_nobody_reads_holds_no_idle_and_waits_for_the_next_reader panicked at console.rs:154:9 'the idle returned on input nobody reads' and :56:31) and recorded in .wash/local/CONW1-report.md:66 before: the same test failing under load, passing alone (5/5 alone on 3Z's tree; the fixture grants the console with a badge below FIRST_MINTED_BADGE, so 3Z's admission move is not in its path). B81 moved tests/system.rs to the fake kernel's held clock; console.rs still waits on the host's clock for the idle. Work: find the wait (the idle's bound; the test's assertion window) and move console.rs's tests to the held clock as B81 did for system.rs (Fake::hold_clock/tick at quiescence; B70/B74's rule), or make the test's expectation an event; prove 10x under load + 5x alone. Transcript: .tmp/train-52/transcript-rv64-beamlet-lookup-host.log (the failures block B81 now keeps). Files: userland/otp/redoubt/tests/console.rs (and its fixture), docs/userland/beamlet.md if the status line names the tests. Tier B (a test's verdict), reviewer kernel-red-3. Size S. Until it lands, this host test failing on a train is a known flake, rerun alone."
   state = "done"
-  revision = 458
+  revision = 2
 
 [[node]]
   id = "B86"
@@ -2549,7 +2549,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   body = "Seen by STEWARD4's steward-latency sweep (2026-10-17): `--jobs 2` under one `q run` lease: the second concurrent boot was handed host port 23000 again (QEMU: hostfwd in use), seeds 2-20 died at 0.1 s, the sweep collapsed after seed 1. B77 made every [net] case lease its ports from q (`q run --ports N`, REDOUBT_PORTS=lo-hi, the bench binding its forwards inside the range), but B6's sweep runs its boots in parallel inside ONE lease and either every boot takes the range's first port or the sweep asks for no ports at all. Work: read tools/testbench's sweep (B6) and port binding (B77): make a sweep with --jobs N ask its lease for N x (ports per boot) and hand each boot a disjoint slice of REDOUBT_PORTS, or run each boot under its own `q run --ports` lease; a bench host test that two concurrent boots of one sweep bind different ports; docs/testbench.md's sweep and ports paragraphs say the rule. Evidence: STEWARD4's report and .tmp/steward4-logs/ (the implementer gives the lease's REDOUBT_PORTS, the --jobs count and the ports each boot bound). Until it lands, sweeps run serially (--jobs 1). Files: tools/testbench (sweep, qemu port binding), scripts/q if the lease must grow, docs/testbench.md. Tier A tooling (the bench's device/port map), reviewer kernel-red-3. Size S."
   state = "done"
-  revision = 435
+  revision = 2
 
 [[node]]
   id = "B87"
@@ -2558,7 +2558,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   body = "Seen by STEWARD4's steward-latency sweep on rv64 at two harts (2026-10-17; .wash/local/steward4-logs/sweep-rv64-a.log; the handoff .wash/local/handoffs/steward4-implementer-2.md 'Sweep so far'): seeds 1-4, 8 and 9 of 1..10 have their trace rejected by sched_oracle with `record N: a device interrupt returned without its claim` (e.g. record 2149984 at seed 1); the four accepted traces read like seed 3's row on scheduling.md; one hart accepts every seed. The sweep keeps no failing log (--keep-failed conflicts with --sweep), so the rejected trace must be re-made: `TESTBENCH_QEMU_SEED=1 cargo testbench steward-latency --arch rv64 --keep-failed <dir>` under `q run` in a STEWARD4-or-later tree (the case, its probe and manifest are STEWARD4's; it lands first). Work: reproduce and keep one rejected trace; find whether the kernel's interrupt path at two harts can return from a device interrupt without claiming it (IRQ1's per-hart PLIC contexts, B56/IDLE2's idle path, SMP6's lock-to-decide: a hart taking an interrupt another hart already claimed, or a spurious interrupt returned as a device one), or the trace records the claim on the other hart's record stream so the oracle's pairing is wrong (B24/B58's shape: a recording or oracle fault, not the kernel's); the answer named from the trace lines; the fix where it belongs (kernel/src's interrupt path with its rule on devices.md/scheduling.md and a two-hart kernel case, or the oracle's pairing with a host test), both widths. Until it lands, the two-hart rows of steward-latency rest on the accepted seeds and the page says so (STEWARD4 states it). Files: kernel/src (irq, idle), tools/testbench's sched_oracle, docs/kernel/devices.md or scheduling.md. Tier A (kernel); reviewer kernel-red-3. Size M."
   state = "done"
-  revision = 460
+  revision = 2
 
 [[node]]
   id = "B88"
@@ -2567,7 +2567,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   body = "Found by STEWARD3W's steward-latency N = 3 round on rv32 at two harts (twice, before and after STEWARD3U), first read as erofsd:system taking nobody's call. The block-trace (a test-only kernel instrument this node adds, off in every default build) showed the steward's calls out all return within 1.43 s and it waits to receive on its own endpoint, the read path's servers run whenever asked, and a kernel lost wake is refuted: the wedge is the verified system-volume read path (erofsd, verityd, blkd) under two concurrent VM code loads, verityd's four data blocks thrashing with no read-ahead, the shell's own load starved past start_agent's 5 s bound. Fix: verityd's data cache is sized from its manifest entry's heap (half the cap less a derived reserve, floor four), and a request's cold run is read ahead in one read bounded by MAX_SECTORS and the cache's size (up to five blkd calls at the two-page lend), every block hash-checked before it is kept; blkd reads fall from 2704 to 924 on the case and rounds N = 1 and 2 complete on rv32 at two harts. Round three does not: launch beside two spinners takes 5.3 to 5.7 s against 3.9 s alone (rv64: 2.2 to 3.3 s), and a larger cache cuts reads further without moving it, so the remaining cause is compute, two equal-weight module decodes and the shell's share under icount at two harts; the rv32 two-hart N = 3 and 4 rows are stated missed with that cause, the target unmoved. verity:system's heap grows 100 to 118 pages (init's rule: twice the measured peak) in the image and every memory-checked manifest; budget 256 unchanged. Residuals: the steward's mints at shared servers wait within FOREVER (bounded disconnects, unbounded mints; max observed 1.43 s), its own node; whether a session's load outranks a lease's under the scheduler, the Architect's. Report .wash/local/B88-report.md. Tier A; reviewer kernel-red-3. Size M."
   state = "done"
-  revision = 467
+  revision = 2
 
 [[node]]
   id = "SSH3"
@@ -2576,7 +2576,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'The sshd step and SSH3'. Brief: .wash/local/SSH3-implementer.md. Tier A (sshd), size S, reviewer steward-red-4 or the orchestrator's sshd red. The sshd step's two items (approve@box, vault sessions over SSH) are built with their cases; this is the one follow-up its residual names ('Connections are first come, first served ... how many one principal may hold is not decided'). Rule: a connection that has not authenticated within a bound is closed, the bound measured (twice the slowest login the bench records, the arithmetic on sshd.md), so a slot is held before login for at most that; the slot count follows the manifest's buckets=N for sshd as every server's limits do (3Q, 3V), bounded by ipd's parked calls a bucket (the accept and one parked read per slot), with the arithmetic on sshd.md; after login a principal's channels are bounded by R82 already (a login past the cap is refused and the connection ends). Cases: a client that connects and never authenticates is closed at the bound and the slot serves the next login (verdict: the next login's session, not the attacker); a manifest sizing sshd's slots boots and holds them; sshd-host tests for the bound. Lowest priority of the wave: behind the agent-suite if slots are short."
   state = "done"
-  revision = 482
+  revision = 2
 
 [[node]]
   id = "STEWARD5"
@@ -2586,7 +2586,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["STEWARD6"]
   body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'F1'. Brief: .wash/local/STEWARD5-implementer.md. Tier A (the steward's loop), size M, reviewer steward-red-4; after STEWARD6 (same file). Found by STEWARD3V's and 3W's latency rounds: a cleanup step's one attempt at a busy erofsd:system (100 ms, 3Y's bound at the loop's top) landing in a sample's window misses the timer wake's p99 (50 ms) by construction: one sample per round at N = 3 and 4 on both widths at one hart (69-93 ms), 148 ms at two on rv64. Options (a) a target-derived bound and (c) non-blocking calls refused in the ruling. Rule: the cleanup queue (due, retries, parked: 3W unchanged) is owned by a cleanup thread of the steward's, as its crossing watchers are; each step runs there with the client library's call bound; the loop hands it steps, wake(server) and forget(server), and takes each outcome back as a message on its own endpoint and says the line (3U's queue). A mint at a server with parked steps: wake, mint, and if refused wait one mint bound (STEWARD6's) for the thread's report and retry once (3W's test kept). The loop's top makes no call to a shared server. Cost: one thread and one lend page, the arithmetic on the page and in every memory-checked manifest. Acceptance: steward-latency N = 3 and 4 at one hart meet the timer wake's p99 on both widths and reply_wait carries no 100 ms retry; the steward set and steward-server-restart unchanged. Pages: steward.md 'Failure and restart', scheduling.md 'With the real steward' re-measured."
   state = "done"
-  revision = 519
+  revision = 2
 
 [[node]]
   id = "STEWARD6"
@@ -2595,7 +2595,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'F3'. Brief: .wash/local/STEWARD6-implementer.md. Tier A (the steward), size S, reviewer steward-red-4. Found as B88's residual: the steward's mints (unattached -> Connection::new -> FOREVER), its launch step's image reads from erofsd:system and a push's source reads wait without bound, while its disconnects (3Y) and console writes (3U) are bounded; max observed 1.43 s under two spinner VMs. Rule: every call the steward makes to a shared server inside a batch is made within one bound, SERVER_US; a call the server did not take in time fails the step, the batch's existing failure path answers the caller (failed to start_agent and submit, a login refused) and nothing retries inside the steward. The bound is measured, not guessed: twice the worst per-call wait under steward-latency's load on both widths, rounded up to a second, stated on steward.md 'Residual risks' beside the relay bounds. Host tests with a server that never answers (a mint, the image read, a push's source); the steward set unchanged in verdict; steward-latency N = 1 unmoved. Pages: steward.md (residual, one clause under sessions), agents.md 'Leases' one clause. First of the pair: STEWARD5 shares bin/steward.rs."
   state = "done"
-  revision = 492
+  revision = 2
 
 [[node]]
   id = "STEWARD7"
@@ -2604,7 +2604,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'F2' (STEWARD3V-budgets Q4). Brief: .wash/local/STEWARD7-implementer.md. Tier A (admission caps in every shared server; the bench's derivation), size S-M, reviewer steward-red-4. Found by STEWARD3V part 2: 3Q's per-account caps add a lease term of 1 (the bench test's LEASES, 'no manifest names it'), so one session with N leases (2 + N at erofsd:system, 1 + N at its home and /boot) is admitted for N <= 7 and N = 16 is refused its eighth home connection. Rule: the term is derived as the context cap is (R82): leases(p) = min(share_pages / sizes.agent.pages, share_processes / sizes.agent.processes) over the principal's unlabelled share as init's holds derives it; an upper bound, since sessions carved from the share only lower it and a sponsored principal's sessions are leases of it; the kernel's carve (R7) refuses past it, so the steward gains no rule and the core no row. steward.md 'Leases' states it as arithmetic (image: alice 7); the bench test and the servers' limits take the term; entries follow STEWARD3V's rule where a bucket grows. The latency manifest's alice is sized by the rule for N = 16 if memory_mib affords it by the memory rule's arithmetic (about 190,722 pages for her), else the largest N the rule gives is recorded with its arithmetic beside the stand-in's column (owner question, conditional). Not a compiled constant raised to a case's N, not a new manifest field."
   state = "done"
-  revision = 524
+  revision = 2
 
 [[node]]
   id = "STEWARD8"
@@ -2614,7 +2614,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["STEWARD5", "STEWARD6"]
   body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'F4' (B88's residual). Brief: .wash/local/STEWARD8-implementer.md. Tier B (the Elixir client, the shell's call, a toml, pages), size S, one reviewer: the editor, the red team if the steward is touched. Runs when STEWARD5 and STEWARD6 are on main, so scheduling.md's table is re-measured once. Found by B88: on rv32 at two harts a lease VM's launch beside two spinners takes 5.3-5.7 s and the shell's start_agent answers timeout; the 5 s is @timeout 5000 in libs/wire/elixir/lib/client.ex, the client's bound for every steward call, a platform constant no page states as a target; no page bounds a launch. Rule: the launch is stated and measured as end_lease's 589 ms is (steward.md 'Residual risks'): start_agent's served time alone and beside N - 1 spinners, both widths, one and two harts, from the steward's served lines; the shell's start_agent passes the client a bound of its own, twice the worst launch measured beside the spinners the case runs, rounded up to a second (call/5 takes a timeout; 5 s stays for short calls). Then the rv32 two-hart rounds at N = 3 and 4 run and their rows are measured; a miss there is a scheduler finding, not a timeout's. Drafted under the image's weights (session 100, agent 50, steward 100; the case's steward 1,000): the owner's weight answers change the number, not the design; the launching lease's share against its sponsor's spinners is asked in the owner file."
   state = "done"
-  revision = 531
+  revision = 2
 
 [[node]]
   id = "IPD1"
@@ -2623,7 +2623,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'BEAM5 Q1'. Tier A (ipd), size S, reviewer kernel-red-3 or the orchestrator's ipd red; no brief: the ruling is the whole scope. Found by BEAM5's implementer: the VM's hub gives a request up at FILE_WAIT_US (10 s) and drops a later answer (files.rs give_up); ipd parks a data read up to DATA_WAIT_US (30 s) and answers it with the bytes when they arrive, so bytes a peer sends 10-30 s into a quiet read are lost to the stream. Rule: a server parks a request strictly shorter than its clients' wait, by a stated margin: DATA_WAIT_US and CTL_WAIT_US come down below FILE_WAIT_US (8 s against 10 s, the margin the kernel's delivery of a reply; the arithmetic on ipd.md 'Pinned and abandoned calls' and files.md 'Files over 9P'); bytes arriving after ipd's timeout wait in its buffer for the next read, which the client makes at once. Cases: ipd's host test of the park bound; net-tcp, net-pinned, sshd-loopback-* unchanged in verdict, both widths. BEAM5's echo case lands on it."
   state = "done"
-  revision = 478
+  revision = 2
 
 [[node]]
   id = "ATK10"
@@ -2632,7 +2632,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "agent-suite"
   body = "Brief: .wash/local/ATK10-implementer.md; ruling .wash/local/wave-2026-10-18-rulings.md 'The agent-suite step'. Tier A (attack cases; the bench), size M, reviewer: a red (the orchestrator's pick). Builds docs/plan/m3-agents.md 'A scripted hostile agent': the rows marked not yet become cases, each judged by a party the agent cannot impersonate: (1) steward-agent-escape: the agent reads and writes outside /project, binds, calls the steward's operations from a lease's badge, looks for /net and a console, and asks for a lease past MAX_LEASE from its sponsor's side; verdicts: alice's canary files and listings unchanged, the servers' and steward's refusal lines, no grant in the audit (R25, R41, R39); (2) steward-lease-cut: the sponsor ends a lease while the agent writes to /project in a loop, so walfsd holds its lent pages when the budget dies; walfsd serves on, alice's project reads back whole, the lease's connection is gone and alice's own still works (R3, R10, R39, R41); (3) steward-agent-flood: the agent floods walfsd:data through /project and the steward through its badge from many processes; alice opens a file in her home and ends the lease, both answered within the case's bound (R26); (4) steward-vault-note: a vault session's free text in a request is not shown on approve@box, an unlabelled session's is quoted and marked (R38; the boot arm of the host test). Scripted agents are modules beside Redoubt.Agents.Echo, driven by ~/project/in. Pages: m3-agents.md rows, agents.md and steward.md status lines, SECURITY.md rows. No steward, kernel or server code."
   state = "done"
-  revision = 505
+  revision = 2
 
 [[node]]
   id = "ATK11"
@@ -2641,7 +2641,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "agent-suite"
   body = "Brief: .wash/local/ATK11-implementer.md; ruling .wash/local/wave-2026-10-18-rulings.md 'The agent-suite step'. Tier A (attack cases; the bench), size M, reviewer: a red (the orchestrator's pick). Builds the fairness rows of docs/plan/m3-agents.md 'A scripted hostile user', each judged from the victim's side: (1) walfsd-flood-turn: bob's session floods walfsd:data from as many processes as his VM's hub admits while alice's session reads and writes her home, each operation answered within the bound the case states and derives (R2, R26); (2) vault-flood-turn: alice's vault session floods walfsd:data (it may read the unlabelled volume) while alice's unlabelled session's operations are answered as in (1): a vault's queued calls leave its owner's unlabelled turn and cap unaffected (R2, R37); (3) blkd-fairness: bob writes large files through walfsd:data without end while alice's vault session writes and reads back in walfsd:alice-secrets, both servers on one blkd (R2); (4) net-pinned-ssh: alice's shell parks 64 gen_tcp reads at ipd that its own short timeouts abandon while bob logs in over SSH and alice's echo to the peer still works (R28, R4a). Bounds are measured once on both widths and stated with their arithmetic in each toml's comment; a miss is a finding, not a tuning. Pages: m3-agents.md rows, serving.md, ipc.md R2 and ipd.md status lines, SECURITY.md rows. No server code."
   state = "done"
-  revision = 501
+  revision = 2
 
 [[node]]
   id = "ATK12"
@@ -2650,7 +2650,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "agent-suite"
   body = "Brief: .wash/local/ATK12-implementer.md; ruling .wash/local/wave-2026-10-18-rulings.md 'The agent-suite step'. Tier A (attack cases; the bench), size M, reviewer: a red (the orchestrator's pick). Builds three rows of docs/plan/m3-agents.md 'A scripted hostile user': (1) walfsd-pools: bob fills his home to its quota and opens fids until his cap, refused by name, while alice's saves succeed and walfsd's budget holds no more pages than before (R48, R26); (2) session-hostile-launch: alice's session launches a malformed ELF from her home and a program whose image is cut short; each refusal names itself, the child alone is hurt and her session answers on (R31, R32); (3) vault-no-leak: alice's unlabelled session records a stated list of observables (her sub-budget's usage, a request id, a session id, the PID of a program it launches, her home's qids, versions and listings) before, while and after her vault session writes files, launches a program and submits a request; nothing it records changes with the vault's work, and it cannot write, truncate, create or remove in the vault's volume (R37, R25, R36). The observable list is the case's claim and is on the page; an observable that does change is a finding reported to the Architect with its mechanism, never removed from the list to pass. Pages: m3-agents.md rows, littlefsd.md and walfsd.md R48, init.md R31/R32, steward.md R37 status lines, SECURITY.md rows. No server or kernel code."
   state = "done"
-  revision = 511
+  revision = 2
 
 [[node]]
   id = "ATK13"
@@ -2659,7 +2659,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "agent-suite"
   body = "Brief: .wash/local/ATK13-implementer.md; ruling .wash/local/wave-2026-10-18-rulings.md 'agent-suite wave B'. Tier A (attack cases; the bench), size S, reviewer: a red (the orchestrator's pick). Turns the two remaining 'not yet' rows of docs/plan/m3-agents.md into their honest state under today's image. (1) R60, the labelled-agent sink row, becomes a boot case steward-labelled-agent-no-sink, built on steward-approve-box's path (a labelled agent approved at approve@box, running in its vault): the agent's :gen_tcp.connect gets enetunreach (its lease namespace holds no /net, as session-tcp-loopback shows for an unlabelled lease), and ipd's refusal of a labelled caller is the backstop, cited to net-attacks (R60); the verdict is the agent's result file in its vault and the absence of any frame to the bench peer (rule F). (2) R44, the keyd relayed-blob row: no boot arm is reachable in the image, since no session or lease holds a keyd badge (keyd's purposes are sshd's ssh_host and the steward's audit; keys in leases are M6); the row resolves on m3-agents.md by citing keyd's host tests (a_relayed_ssh_user_auth_blob_is_never_what_gets_signed and R44's set) and stating why no boot arm exists, with a normal login's end-to-end verification (the client checks the host signature over the exchange it computed) as the boot evidence that keyd signs only its own digest. Pages: m3-agents.md rows, agents.md R60-adjacent and keyd.md R44 status lines, SECURITY.md R60 row. No server, kernel or steward code."
   state = "done"
-  revision = 515
+  revision = 2
 
 [[node]]
   id = "STEWARD9"
@@ -2669,7 +2669,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["STEWARD8", "STEWARD10"]
   body = "Brief: .wash/local/STEWARD9-implementer.md; ruling .wash/local/wave-2026-10-18-rulings.md 'STEWARD9'. Tier B (tests/steward-latency.toml parameters and a page sentence; no code), size S, one reviewer (the orchestrator's pick). Found by STEWARD8: the case's kernel-deadline lease is 5 s, set to twice an older two-hart launch; the launch now measures 6.62 s on rv32 at two harts beside three spinners (~5 s beside fifteen at one hart), so in the N = 16 rounds a launch outlives its own 5 s lease and the deadline passes inside the launch (B82: NotPermitted, a forbidden line ends the boot before the trace dump), so the rv32 N = 3/4 rows that now complete cannot be judged net of audits. Fix: the deadline lease and the sleep after it are derived from the measured worst launch over both widths (the same measurement STEWARD8 took for launch_timeout/MAX_CALL_MS): the lease = 2x the worst launch (~14 s), so it reliably outlives the launch and its deadline fires on a running VM (the quantity the deadline notice measures); the post-sleep (~16 s) so the deadline fires and its notice is recorded before the next round. The round grows ~2.5 min on rv32; timeout_secs stays the case's bound. State the derivation in the toml's comment and on scheduling.md where the case's parameters are described; the rv32 N = 3/4 (and N = 16 where reached) deadline-notice rows are then measured. Not folded into the async-start_agent follow-up: the deadline-during-launch is B82's kernel behaviour, independent of whether start_agent is synchronous, so it stands alone."
   state = "done"
-  revision = 556
+  revision = 2
 
 [[node]]
   id = "STEWARD10"
@@ -2678,7 +2678,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'STEWARD10'. Brief: .wash/local/STEWARD10-implementer.md. Tier A (the steward's serving path; a wrong-object destruction), size S-M, reviewer steward-red-5. Found by STEWARD9's concurrent deadline leases: a lease's R10 deadline destroys its budget and revokes the steward's handle, freeing its table index; install_handle (lowest free index) reuses it for a newer object before the queued DestroyBudget cleanup (drive.rs:520) runs; the cleanup resolves the stale index to that object. drive.rs:526 tolerates BadHandle for a gone, not-running lease, but a recycled index gives WrongObject (a non-budget there), a forbidden 'a step failed (WrongObject)', and worse, a different budget there (a new lease, the common case) makes budget_handle answer Ok and the steward destroy the wrong live budget with no error (budget_at's I1 assert guards only the slot's self-consistency, not the steward's intent). A real production scenario (several leases expiring together), not a test artifact. Rule: the cleanup keys on the budget's identity (the BudgetRef id minted) and is cancelled/skipped when it is gone, covering BadHandle, WrongObject and the different-budget case uniformly; prefer the steward-only form (on a deadline-killed exit, cancel that budget's pending DestroyBudget step under STEWARD5's queue lock, the single-arbiter loop cancelling before reuse; no kernel change). A kernel non-fatal 'destroy only if id X' is the alternative, adjacent to the owner's handle-generations question: raised only if the steward-only cancel cannot be race-free. Host test: a lease's index recycled for a new budget before its cleanup runs and the new budget survives (verdict its liveness). STEWARD9's overlapping-deadline reshape depends on this: order it first or concurrently; until then STEWARD9's deadline rows stay unjudged."
   state = "done"
-  revision = 538
+  revision = 2
 
 [[node]]
   id = "STEWARD11"
@@ -2688,7 +2688,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["STEWARD10"]
   body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'STEWARD10 review notes'. Brief: .wash/local/STEWARD11-implementer.md. Tier A (the steward's serving path), size S, reviewer steward-red-5. STEWARD10 guarded the lease and crossing destroy-by-index paths (the deadline-as-witness rule: a destroy reads kernel.now()=t immediately before, and at t >= d the kernel owns it so the steward never destroys by that possibly-recycled index). drive.rs:550 `Made::Scope(b) => (b, FOREVER)` still destroys a scope by index unguarded (FOREVER means t < d always, so it always destroys by index). Unreachable today — scopes are never destroyed by handle (effects.rs names the budget token, confirmed in STEWARD10's review) — but the next change that makes it reachable would reintroduce STEWARD10's wrong-object-destruction silently. Rule: apply STEWARD10's guard to the Scope arm too (a scope carries no deadline, so its witness is simply that its handle is still the scope the record names — a BadHandle/WrongObject there is benign as in STEWARD10, and a destroy is attempted only when the record's handle is current), so the invariant 'the steward never destroys by an index R10 may have recycled' holds at every destroy-by-index site in drive.rs by construction, not everywhere-but-one. The exact form (the guard, or a BadHandle-benign + WrongObject-tripwire as STEWARD10 settled) is the implementer's, matching STEWARD10's shape. Host test: the Scope arm does not destroy a recycled index (a scope record whose index was reused yields no wrong destruction; the reused object survives, the verdict its liveness in the fake kernel). steward.md's cleanup bullet states the invariant holds at every site. No kernel change; no page claim moves beyond the bullet's wording."
   state = "done"
-  revision = 547
+  revision = 2
 
 [[node]]
   id = "B89"
@@ -2697,7 +2697,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'B89'. Brief: .wash/local/B89-implementer.md. Tier B (the bench case only, unless a slot is genuinely held — then it re-tiers to an SSH3 finding), size S, one reviewer (the orchestrator's pick). Found train 74 run 2: sshd-login-bound on rv32 timed out at 900 s waiting for a fourth `no login within 5 s, closed` line. Console: connections 1, 2, 3 accepted on slots 0-2, closed at 5 s, then the fourth dial (held 11.60 s by the bench peer against the others' 5.9 s) was accepted only after slot 0 freed, as a reused `connection 1 on slot 0`, so no fourth distinct accept line appeared. The case's expect list (four `on slot` lines then four closures) assumes all four are accepted before any closes — a timing assumption the loaded rv32 host broke; a case orders on events, not the host's clock. Fix: the case dials each connection after the previous one's `on slot` line (all four quick dials complete well within the 5 s bound, so all four stay open and are accepted on slots 0-3 before any closes), then expects four closures; or it orders on the accepts it actually saw. The slot count is right (buckets=4; slot 3 was simply never reached because only three were concurrent), so this is Tier B. If, once the dials are serialized, the fourth connection still cannot get a distinct slot (slot 3 unreachable with three closed), that is a genuine held-slot finding and an SSH3 correctness issue: stop and raise it to the Architect rather than papering it. Pages: none (a case fix); docs/servers/sshd.md unchanged unless the slot behaviour is wrong. Gates: the case both widths, run alone and in a loaded set, 20 runs green beside a loaded host (the flaky-test bar); set CASES=formatting, docs."
   state = "done"
-  revision = 544
+  revision = 2
 
 [[node]]
   id = "STEWARD12"
@@ -2707,7 +2707,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["STEWARD9", "STEWARD11"]
   body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'STEWARD12'. Brief: .wash/local/STEWARD12-implementer.md. Tier A (the steward's loop; a responsiveness target under a burst), size S-M, reviewer steward-red (the orchestrator's pick). Found by STEWARD9: when N lease deadlines fire together the steward processes the N Exited events serially at ~70 ms each (the per-exit cleanup, the LeaseEnded audit, the console lines), so the last lease_ended notice reaches the sponsor ~N x 70 ms after its deadline (net p99 1.1-1.2 s at a 16-lease burst, against the deadline_notice target 40 ms); the per-notice target holds (a single expiry is 10 ms). The sponsor being told promptly that a lease ended is a human-control promise (agents.md 'Leases'; the sponsor can always end a lease and is told when one ends), so the burst must not push the notice behind the bookkeeping. Rule: on a burst of Exited events the steward sends the lease_ended notices FIRST (the cheap send to each sponsor's notices endpoint), then does the per-exit cleanup (already a thread's, STEWARD5), the LeaseEnded audit and the console lines (already queued, STEWARD3U) for each; so the last notice's latency is ~N x (one send) not ~N x 70 ms. Measure the burst's last-notice p99 before and after on steward-latency (a clustered-expiry variant or a new small case), both widths, stating the before/after and the per-send cost; the deadline_notice target is then met under a burst, not only per-notice. If notices-first alone does not reach 40 ms at the image's realistic burst size, state the residual (the burst size at which it holds) rather than moving the target. Pages: steward.md 'Failure and restart'/'Residual risks' (the burst's notice cost and the notices-first rule); scheduling.md 'With the real steward' (the burst finding, then its fix). No kernel change. Needs STEWARD9 (the case and scheduling.md's burst row) and STEWARD11 (drive.rs) merged: it touches the same files."
   state = "done"
-  revision = 563
+  revision = 2
 
 [[node]]
   id = "STEWARD13"
@@ -2716,8 +2716,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   needs = ["STEWARD10", "STEWARD12"]
   body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'STEWARD13' and 'STEWARD13 design'. Brief: .wash/local/STEWARD13-implementer.md. Tier A (the steward's loop and launch), size M, reviewer steward-red-5. Found by STEWARD9's two-hart sequential run: the deadline_notice delay is the steward LAUNCHING a later lease synchronously (image streamed from erofsd + map + process_start, 1.7-6.6 s) when an earlier deadline fires; the notice waits behind the launch, so the 40 ms human-control target is unmet whenever a launch is in flight. Design (settled): a launch thread, serial FIFO, STEWARD5's hand-over by reply; the loop prepares (endpoints, handles), the thread runs Launch::streamed().start(), the loop finishes (watch, keep, made/pids) and only then pushes the batch's Done to the core (event.rs Done { object, result }; drive.rs:147); no core change, no wire change, start_agent still replies when launched. STEWARD10's premise re-shown: one install lock held by the loop across its now()+destroy pair and by the thread across start() except inside the read closure (dropped for every server call), so no install interleaves with the guard; the thread creates no budget. Events of the launching object held in order until the report, every other object served. Residual stated: a batch's mints still hold the loop within SERVER_US. Cases: a new overlap case (a deadline fires inside another lease's launch; deadline_notice judged only when the trace shows the overlap; run on main first to record the miss); host tests of the pending batch, the held events, the lock discipline; the steward set and the latency cases unchanged. Pages: steward.md, scheduling.md, erofsd.md/walfsd.md's in_flight if moved."
-  state = "reported"
-  revision = 605
+  state = "done"
+  revision = 3
 
 [[node]]
   id = "READ1"
@@ -2726,7 +2726,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'READ1'. Brief: to follow (investigation-first; the Architect settles the fix on the measurement). Tier A (the verified read path: erofsd, verityd, blkd; possibly the VM's read resilience), size M, reviewer a red (the orchestrator's pick). Found by STEWARD9 on rv32 at N=16: a spinner VM dies mid-round because its module reads at the system volume time out (the VM hub's FILE_WAIT_US, 10 s) behind the other VMs' reads — STEWARD8's finding 5 (the read path's per-(account, label set) pages/requests ceiling does not scale with the account's concurrent VM count; B88 sized verityd's cache and read-ahead for two loaders, not sixteen) reaching a liveness consequence. rv64 passes N=16; a full rv32 system is beyond M6 (tenets), so the goal is NOT 'rv32 N=16 passes' but 'a lease VM does not DIE from module-read starvation under its account's concurrent load' — it may be slow, not dead — and a stated supported concurrent-VM count per account at the system volume, measured on both widths. Investigation: measure the N at which a VM's module read times out to death, both widths and hart counts; the levers are the pages/requests VM-count term (finding 5's derivation completion, the Architect's remit), verityd's cache/read-ahead sized for N loaders (a B88 extension), the read path's weight, and the VM's resilience to a slow module read (does a timed-out read have to kill the VM, or can it retry past FILE_WAIT_US for a code read it cannot proceed without). The implementer measures and brings the fix choice back to the Architect; do not assume one lever. Cases: a boot of N concurrent VMs of one account loading code at the system volume, none dying, up to the stated supported N both widths; the measured fatal N before/after. Pages: verityd.md / erofsd.md (the drain rate and the supported N), scheduling.md (STEWARD9's rv32 N=16 row names this), serving.md if the pages/requests term moves. STEWARD9 does not wait for it."
   state = "done"
-  revision = 574
+  revision = 2
 
 [[node]]
   id = "BENCH1"
@@ -2735,7 +2735,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'STEWARD9 rv32 two-hart'. Tier A (the bench), size S, reviewer the orchestrator's pick (a bench/kernel red). The bench conditions arch and smp at case level only (one smp list for all of a case's widths), so a case that must run rv64 at [1,2] and rv32 at [1] — the latency cases (rv32 two-hart is a finding, SCHED5/READ1), and B88/STEWARD8 wanted the same — can only be expressed today by duplicating a rv64-only two-hart toml. Rule: the case's smp may be given per width (a map form beside the list, e.g. smp = { rv64 = [1, 2], rv32 = [1] }; the list form stays the default for both), parsed by the bench and honoured by the runner, documented on testbench.md with the one example; a width absent from the map runs the default or is skipped as the field says. Reusable: the latency cases, B88 and STEWARD8's cases use it in place of duplicated tomls. Cases: a bench host test of the per-width parse and the runner honouring it; steward-latency (its three cases) gating rv64 [1,2] and rv32 [1] with no duplicated toml. Pages: docs/testbench.md (the smp field, the per-width form, the one example). No kernel or steward change. STEWARD9 depends on it only for the clean gating; if it lands after STEWARD9 the cases carry a stated smp and adopt the field when it is in."
   state = "done"
-  revision = 553
+  revision = 2
 
 [[node]]
   id = "SCHED5"
@@ -2743,8 +2743,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "AGENTS"
   body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'STEWARD9 rv32 two-hart' (drafted there as SCHED1; that id was taken, so SCHED5) and 'STEWARD13 rv32 one-hart N = 1 decision_wake' (the second row). Brief: to follow (investigation-first; the brief covers both rows). Tier A (kernel scheduler / timer programming), size M, reviewer kernel-red-4. Row 1 (STEWARD9): at rv32 two harts the N=2 round's timer_wake p50 is 31.8 ms against 15 (31,855 then 31,835 us on a rerun alone, icount-deterministic), N=1 5.6 ms and N=3 5.2 ms; lock-wait 249/1000 in that round; one spinner live on the other hart. Row 2 (STEWARD13): at rv32 one hart the N=1 decision_wake p50 moved 24.2 -> 30.4 ms when the launch moved off the loop: a 30 ms receive timeout sleeps 53-62 ms with exactly one runnable VM and 1-3 ms beside a second, the steward idle in the window; the thread moved the receive ~10 ms earlier and the phase landed the sample over instead of under. Hypothesis: a sleeper's timeout does not end the running VM's slice, the timer armed for the slice's end rather than the nearest timeout, visible only when nothing else switches. Investigation: the kernel's timer programming against the slice with one runnable VM (the trace: the timeout's arming, the slice end, the wake); why N=2/one spinner specifically; whether R78's fair-entry order or the timer's arming bounds the wake, or it is a stated residual with its numbers. The implementer measures and brings fix-or-residual to the Architect. The cells are recorded, not judged, by STEWARD9 and STEWARD13 until this lands; no target moves. Pages: scheduling.md 'Responsiveness'/'Residual risks', kernel/timer.md if the arming moves. Logs .tmp/STEWARD9/rv32-14-FAIL-timerwake.log; STEWARD13's report."
-  state = "active"
-  revision = 606
+  state = "todo"
+  revision = 4
 
 [[node]]
   id = "SHELLN1"
@@ -2753,7 +2753,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'STEWARD12 burst finding'. Brief: .wash/local/SHELLN1-implementer.md. Tier B (the shell, inside one session's budget), size S, reviewer the orchestrator's pick. Found by STEWARD12: under a burst of N concurrent lease expirations the steward's lease_ended send is a rendezvous with the sponsor's shell VM, and the shell takes each notice only AFTER printing the previous '[lease ended]' through the relay, so the last notice reaches the sponsor ~N x the shell's take after the deadline (581 ms of sends at D=6, up to 2.2 s deferral at D=16 two harts), and one send of six was LOST on rv64/1 (a send past the steward's NOTICE_US 100 ms is dropped). The deadline_notice target is the sponsor TOLD less the deadline, so the sponsor's consumption rate is on the measured path and it is the shell's to fix. Rule: Redoubt.Shell.Notices takes each lease_ended (and server_restarted) send promptly (receive, enqueue, print '[lease ended]' asynchronously) so the steward's send completes in ms whatever the print/relay costs; the shell prints the queued notices in order on its own. This brings a burst's last notice to ~N x (ms) within the steward's NOTICE_US, so no notice is lost, and the steward's loop is not blocked on the slow rendezvous. Cases: steward-deadline-burst (STEWARD12's, lands first) with the shell change: the last notice within a stated ms bound, all N '[lease ended]' lines present, both widths; a host test of the listener taking before printing (the shell's ExUnit). Pages: shell.md (take-then-print), scheduling.md / steward.md (the burst residual replaced by the measured bound). No steward, kernel or wire change. Measure after: whether the steward's sends still block the loop enough to want a notice thread (STEWARD12's (2)) or it is subsumed. Depends on STEWARD12's case for its gate; the listener and its host test start on main."
   state = "done"
-  revision = 570
+  revision = 2
 
 [[node]]
   id = "WRITE1"
@@ -2763,7 +2763,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["READ1"]
   body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'READ1 gate verdict + WRITE1' and 'WRITE1 identification' (the Architect's correction). Framed on READ1's inference that an agent's File.write hung with its bytes on the volume; the identification (.wash/local/WRITE1-identification.md: 7 boots, 68 agents, N = 4/12/16, host clock in run 7) found no hang: every write returned, the hub's give-up answered at its bound, the file ends at the line BEFORE the stalled step (the bytes never reached the volume) and the stall was the virtual clock's idle skip (the rule testbench.md states since the lease-code-load finding). What stands: (i) files.md states the one-answer rule PER REQUEST (every hub request ends in exactly one answer within FILE_WAIT_US plus the reply margin) and that a File operation's bound is the sum over its 5-6 requests (47 s seen), a host test holding it; (ii) the VM's asker waiting FOREVER on the hub is right by construction (a VM-side timeout would be a second mechanism for one rule and hide a hub bug), stated; (iii) a give-up on a walked fid hands the result to the caller FIRST and clunks after, off the caller's path (the clunk is cleanup), since the clunk before the handover made the bound 2x FILE_WAIT_US, a violation of (i); host test: a give-up answers within the bound while the clunk's server never answers. Pages: walfsd.md's hang sentence replaced by the correction, its throughput sentence kept (decision 3's finding); files.md. Case: on the host clock, every write answered and the file's content exactly the :ok lines. Tier A (the hub, strict beamlet review by kernel-red-4), size S."
   state = "done"
-  revision = 608
+  revision = 2
 
 [[node]]
   id = "WAKE1"
@@ -2772,7 +2772,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'SHELLN1 lands + WAKE1' and 'WAKE1 cause and fix' (the Architect's correction). Framed on the shell's measurement as an idle VM not woken by the forward; the identification (.wash/local/WAKE1-identification.md) found the VM BUSY in the burst (runnable throughout, 61 % of the window the checked kernel's audits), taking a forward once per 2,000-reduction slice (107 ms median, 126 p90), while beamlet's serve thread blocked in a FOREVER forward of each notice and so could not take the steward's next send, which is what dropped at NOTICE_US; the idle receive and the forward share one endpoint; a waiting receiver is woken in the sender's entry (2.9 ms median); on main's unsplit listener the inline print added ~300 ms per notice. Fix (settled): the hub never blocks its serve thread on the VM: completions and notices go into a bounded queue of the hub's (the bound derived and stated on beamlet.md: the call pool's outstanding calls plus the notices the steward can send a session), the VM woken once (a non-blocking wake or the existing poll finding the queue), the serve thread returning straight to its receive; a full queue blocks the forward as today, the stated residual; no change to the VM's poll cadence (the slice under audits is a bench condition, stated; release has no audits). Acceptance: the steward's send taken at once whatever the VM does (no drop at NOTICE_US unless the serve thread is gone); a burst's N notices queued before the VM's next poll so the last of N costs one slice; the burst cases assert a derived bound (2x worst rounded up) in place of the residual; an idle VM unchanged; on main's unsplit listener all N notices taken at one poll. The `#` budget_create record stays behind the block-trace feature, documented; the shell stamps go. Tier A (beamlet's hub, strict review by kernel-red-4), size S-M. No target moves."
   state = "done"
-  revision = 588
+  revision = 2
 
 [[node]]
   id = "KILL1"
@@ -2781,7 +2781,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'READ1 gate + KILL1'. Brief: to follow the reproduction (investigation-first; the Architect settles the fix on it). Tier A (the steward's destroy path, possibly the kernel's budget/process charging), size S-M, reviewers steward-red-5 AND kernel-red-3 (one arm each). Found by READ1's lease-code-load: sixteen leases of one account exit 0 close together and one is `was killed 0` the instant a neighbour's end batch runs: a live lease's budget destroyed by another lease's DestroyBudget, the deadline still ahead (so STEWARD10's witness lets the destroy through: t < d, Ok, the index no longer names the budget the record was made for). Reproduce first on the fake kernel (servers/steward/tests): sixteen leases ending by process exit close together, the fake kernel asserting each destroy hits the budget created for that step's lease, the verdict the kernel's. Arms, excluded in order (the ruling spells them out): (i) steward: a lease's budget handle index closed or revoked before its end and reused by a later lease's budget; (ii) steward: the exit watcher's index-to-owner map (pids) stale across a reused index; (iii) kernel: a process placed in or charged to another lease's budget. STEWARD10's 'display artifact' (`agent-N was killed 0` twice) is re-examined as this bug's first sighting. Rule to hold: no destroy by a handle the steward keeps reaches an object other than the one the record was made for, on EVERY end path (deadline, end_lease, process exit, blame), by construction: the witness extended to identity, or the record re-validated, as the cause decides; a kernel arm is raised to the Architect. Acceptance: the fake-kernel test; lease-code-load's sixteen `exited 0` and no `killed` on both widths and hart counts (READ1's case, excluded from the whole run until this lands, never weakened); the steward set unchanged. Pages: steward.md 'Leases'/'Failure and restart', SECURITY.md R10/R39/R41 rows."
   state = "done"
-  revision = 579
+  revision = 2
 
 [[node]]
   id = "B90"
@@ -2790,7 +2790,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'WAKE1 landed; its four findings' (3): tenet 6, a flaky test is a bug, fixed not retried. Shell track, Tier B, size S, one reviewer (the orchestrator's pick). Found by WAKE1's gates: ./test-shell's console tests hung once in the package's run and the hang reproduced on main 1 in 10 (.wash/local/WAKE1-report.md names the run and the test group). Do: reproduce on main (q run -- ./test-shell, the console tests, 20 runs, logs kept), find the race (the test or the shell: a wait on the host's clock, a fixture answering before the driver is ready, a console reader left with queued input; B38/B52 are the prior shapes), fix the test or the shell and state which, show 20 clean runs beside a loaded host; the shell's host tests, docs and formatting gates; the page sentence if the shell's behaviour was the cause (shell.md or the console's page). No case-content or steward change."
   state = "done"
-  revision = 592
+  revision = 2
 
 [[node]]
   id = "BENCH2"
@@ -2799,7 +2799,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'WAKE1 landed; its four findings' (4): the gap is the gate's, not the file's. Bench, Tier B, size S, reviewer kernel-red-4. Found by WAKE1: main's own userland agent module echo.ex is unformatted (mix format would change it) yet `make -f scripts/jobs.mk set CASES=formatting` passes, so the gate's Elixir coverage misses some .ex/.exs files (the agents' modules under the shell or the userland tree; find the exact set the gate formats and the set it does not). Do: the gate runs the Elixir formatter over every .ex and .exs in the tree (list the roots it walks on testbench.md's formatting paragraph), echo.ex and any other file it now catches formatted in the same change (formatting only, no semantic change: the diff is whitespace), the gate green on the head; a host test or a negative run showing an unformatted .ex under the agents' path fails the gate; docs gate. No case-content change beyond formatting."
   state = "done"
-  revision = 590
+  revision = 2
 
 [[node]]
   id = "STEWARD14"
@@ -2809,7 +2809,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["WAKE1"]
   body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'WAKE1 landed; its four findings' (2). Brief: the ruling and this body. Tier A (the steward's loop), size S, investigation-first, reviewer steward-red-5. Found by WAKE1: with the hub's forwards queue in, the steward's lease_ended sends return 37-131 ms apart, the steward's own per-exit work (cleanup hand-over, the LeaseEnded audit, the console lines) now the serial cost of a burst's last notice (the last of six 1.11-1.28 s, of sixteen 1.83-2.51 s). STEWARD12's notices-first (reflog 57bff2058 on the old wp-STEWARD12: the loop sends a batch's lease_ended notices first, then does each exit's bookkeeping) was built, measured at 16 ms of 1.4 s and withdrawn because the FORWARD was the gate; WAKE1 removed that gate, so the same shape would move a burst's last notice from N x (37-131 ms) toward N x a send's return. Do: re-apply that shape on WAKE1's base, measure steward-deadline-burst and -16 on both widths and hart counts before and after (the send-return spacing, the last notice gross and net, none lost), and land it only if the derived burst bound (2x worst rounded up, today 3 s / 6 s) shrinks materially, the bounds and the pages (steward.md Failure and restart / Residual risks, scheduling.md) following the measurement; else record the measurement in the report and on the page and land nothing. The kernel's N destructions before the first notice stay a stated kernel residual. No target moves; the steward set and the latency cases unchanged."
   state = "done"
-  revision = 612
+  revision = 2
 
 [[node]]
   id = "B91"
@@ -2818,7 +2818,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'Two bench facts' (1): a flaky test is a bug. Investigation-first, shell-free; Tier B if the bench's, Tier A (kernel-red) if the kernel case's or the kernel's; size S. Found in trains 80 and 82 and once in train 82's reruns: smp-evict-mttcg (rv64 or rv32 at two harts) fails 'guest exited while waiting for /^shootdown: PID \\d+ stopped on hart/: QEMU exited with exit status 0' at 1.1-1.2 s, passing the other times (about one boot in eight alone). The failing boot's full console decides among three arms: (i) the shootdown line IS in the output but after the bench stopped reading: the console reader does not drain to EOF after the guest exits before judging (bench); (ii) the line is absent and the guest exited 0: the kernel case ends on the primary hart without joining the hart that prints it (a kernel-case ordering bug); (iii) the line was written but the UART not drained before the shutdown call: the kernel's exit racing its flush; fail loud means the last line is flushed. Do: reproduce with the failing boot's full console kept, name the arm, fix by construction (drain to EOF / join before exit / flush before shutdown), show the case green over 40 boots per width at two harts (logs kept); the fix's negative shown once if the kernel's. The orchestrator re-tiers once the arm is known. Pages: testbench.md (the reader's rule) or the kernel case's page / boot.md (the exit's flush), as the arm decides. Also carries, if BENCH2 did not: testbench.md states beside the timed bounds the condition they hold under (one whole bench at a time, QEMU exclusive during it)."
   state = "done"
-  revision = 599
+  revision = 2
 
 [[node]]
   id = "B92"
@@ -2827,7 +2827,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'Two bench facts' (2): the timed cases' bounds are the box's under the stated condition (one whole bench at a time, QEMU exclusive during it, the owner's rule of 2026-10-05), and members' boots beside a train broke it in train 82 (three walfsd timed steps past their bound under the bench, all passing alone twice). Tooling, Tier B, size S, reviewer kernel-red-4. Do: scripts/q already leases cores and ports and takes named locks (`q run --lock NAME`); scripts/jobs.mk's whole-bench targets (all-rv64, all-rv32, and the set form when it runs a whole class) take one machine-wide `qemu` lock for the run's duration, and every single boot case (the set form for single cases, the sweep, ./launch's bench use) takes the same lock shared or waits: a boot started while a train holds the lock waits with a line saying so (which train, since when), never fails; host-only cases (formatting, docs, host tests, Miri) do not take it; the lock is released on the train's exit by any path (the q lease's end, not a trap). State it on testbench.md beside the timed bounds (the condition and how the tooling holds it) and in the scheduler section; a host test of jobs.mk's lock taking if the bench's own tests cover jobs.mk, else a scripted check in the report. No case-content change."
   state = "done"
-  revision = 603
+  revision = 2
 
 [[node]]
   id = "B93"
@@ -2836,7 +2836,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   body = "Found by WRITE1's beamlet-set gate and raised by kernel-red-4: rv32 beamlet-agent-footprint failed once under the set's load and passed 3/3 alone; the case's `keep` agent sleeps (`Process.sleep(:infinity)`) and the VM exits Deadlock when the boot outlives the scan, where the idle-lease rule (docs/userland/agents.md: a lease agent that must stay alive spins, never sleeps forever, since a VM with nothing runnable exits) says spin. A flaky case is a bug (tenet 6). Shell track, Tier B, size S, one reviewer (the orchestrator's pick). Do: reproduce (the case under load, 20 runs, logs kept), make the keep agent follow the idle-lease rule (spin on the pattern the agents' page states, or whatever that rule names), 20 clean runs under load both widths, the case's comment stating why; agents.md unchanged unless the rule is stated incompletely. No kernel, steward or hub change."
   state = "done"
-  revision = 615
+  revision = 2
 
 [[node]]
   id = "B94"
@@ -2845,8 +2845,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   needs = ["WRITE1"]
   body = "Train 86 (WRITE1 alone, 777 of 778 green): rv64 lease-writes failed at 198.9 s, the session's ssh 'closed by remote host' right after {:started, 16} (alice holds 106,770 pages, 52 processes), no guest line after the sixteenth start_agent; rv32 passed in 533 s. Logs: .tmp/train-86/fail/ (job, console, ssh). WRITE1-identification.md runs 4-5 saw the same signature under the virtual clock and named a socket timer; the case is on the host clock (forward), where the report said it was not seen. The timer: servers/ipd/src/stack.rs IDLE_TIMEOUT 60 s with KEEP_ALIVE 30 s on every TCP socket (ipd.md: an established socket 60 s without progress is reset). So for 60 s of wall time no keep-alive answer reached the socket while the one-hart guest ran sixteen writing VMs: a starved or lost RX path in the guest (virtio-net wake, ipd's turn under R12, the console/sshd path) or slirp on the host. Identification first, no tuning: reproduce under load (the beamlet set or two whole-class sets beside it, kept logs, the ipd and sshd console lines on, a watchdog on the session's socket state), name the component that stalled and for how long, then a brief; a kernel or ipd fix is Tier A. The case's bound, deadline and N do not move; a miss is a finding. Reviewer kernel-red-4."
-  state = "active"
-  revision = 617
+  state = "todo"
+  revision = 4
 
 [[node]]
   id = "B95"
@@ -2855,4 +2855,4 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   body = "Found by B93's load passes, read by kernel-red-4: beamlet-files failed once per width beside a repeating 8-case boot set (16 jobs a pass); logs .tmp/B93/side/. The window is B26's: init restarts beamlet after its exit 0 (side/rv64:68-69) and the replay's lines land in the bench's GRACE after the last expect. The signature is new: the replay's write answers `files: wrote: {error,eio}` (side/rv64:72) and the restarted VM raises, where B26's eexist at make_dir is already covered by the start-time removal. Two questions, investigation first, no tuning: (1) why a write to walfsd:data returns eio under that load (walfsd's write path, the hub's error mapping, or the volume's state after the first run's exit while its connection is still being released), reproduced with kept logs and the server's console lines, then a brief if it is a server or hub change (Tier A); (2) whether the four cases whose VM exits 0 and is replayed by init should end at their exit (the case's own end, no replay inside the grace) rather than race the grace, stated on testbench.md if the bench changes. Bench/servers, size S. No bound widened; a miss is a finding. Reviewer kernel-red-4."
   state = "todo"
-  revision = 616
+  revision = 2
