@@ -188,7 +188,7 @@ pub fn parse(log: &str) -> Result<Vec<Record>, String> {
             return Err(bad());
         }
         let kind = f[2].chars().next().ok_or_else(bad)?;
-        if f[2].len() != 1 || !"WRDPKLlefrqwAaGgvNnXYZUVTtIBEOMmCSJHQFukzxchjy0pidbos=$".contains(kind) {
+        if f[2].len() != 1 || !"WRDPKLlefrqwAaGgvNnXYZUVTtIBEOMmCSJHQFukzxchjy0pidbos=$@~#".contains(kind) {
             return Err(bad());
         }
         records.push(Record {
@@ -994,6 +994,10 @@ pub fn check(records: &[Record]) -> Result<Summary, String> {
                 }
                 sum.picks += 1;
             }
+            // `block-trace`'s blocks, wakes and budget creations: a diagnostic no judged build
+            // records, so a log that carries them is judged with them ignored rather than
+            // refused, as a block-trace log once was.
+            '@' | '~' | '#' => {}
             _ => unreachable!("parse admits only these kinds"),
         }
         // The floor: the lowest queued pass, never lowered. The kernel raises it after a reconcile's

@@ -1265,6 +1265,36 @@ pub mod trace {
         record(BLOCKED, budget, u128::from(wait) << 32 | u128::from(endpoint_frame));
     }
 
+    /// With `block-trace`: a thread's wait answered ([`crate::message`]'s `wake`). The budget's
+    /// id, and in the pass field the wait kind in bits 32 to 39 as [`BLOCKED`] has it, bit 40 set
+    /// when the wait timed out, bit 41 set when the thread never blocked (answered in its own
+    /// call), and the endpoint frame in the low 32 bits. Beside [`BLOCKED`] it says whether a
+    /// receiver with a deadline was woken by a send or by its timer, in which entry, and how
+    /// long a block lasted.
+    #[cfg(feature = "block-trace")]
+    pub const WOKEN: u8 = b'~';
+
+    /// Record a thread's wake ([`WOKEN`]), under `block-trace`.
+    #[cfg(feature = "block-trace")]
+    pub fn woken(budget: u64, wait: u64, timed_out: bool, running: bool, endpoint_frame: u64) {
+        let flags = u128::from(timed_out) << 40 | u128::from(running) << 41;
+        record(WOKEN, budget, u128::from(wait) << 32 | flags | u128::from(endpoint_frame));
+    }
+
+    /// With `block-trace`: a budget created by `budget_create` ([`CREATED`]). The new budget's id,
+    /// and in the pass field its parent's id in bits 32 and up and the creating process's PID in
+    /// the low 32 bits: a session's budget is read off the trace as the one the steward's process
+    /// carves at its login, in order, and a lease's likewise, where the trace alone could only
+    /// infer which budget a session's VM was. The oracle admits the kind and judges nothing by it.
+    #[cfg(feature = "block-trace")]
+    pub const CREATED: u8 = b'#';
+
+    /// Record a budget's creation ([`CREATED`]), under `block-trace`.
+    #[cfg(feature = "block-trace")]
+    pub fn created(budget: u64, parent: u64, pid: u64) {
+        record(CREATED, budget, u128::from(parent) << 32 | u128::from(pid));
+    }
+
     /// Frames the ring takes (64 MiB, 256 MiB with `sched-trace-large`), and the records they hold.
     const PAGES: usize = if cfg!(feature = "sched-trace-large") { 65536 } else { 16384 };
     const PER_PAGE: usize = redoubt_sys::PAGE_SIZE / 32;

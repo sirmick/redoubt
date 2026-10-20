@@ -933,6 +933,8 @@ impl MemoryManager {
         let account = if p.account != 0 { p.account } else { spec.account };
         let child = self.new_budget(Some(pf), &BudgetSpec { account, ..*spec }, p.class, labels)?;
         let id = self.budget(child).id;
+        #[cfg(feature = "block-trace")]
+        crate::sched::trace::created(id, p.id, u64::from(pid.get()));
         // R9: stamped with the caller's budget. The table may have to grow, charged to the caller
         // after the carve (the caller's budget may be the parent); if it cannot, undo.
         let stamp = BudgetRef { frame: caller, id: self.budget(caller).id };
