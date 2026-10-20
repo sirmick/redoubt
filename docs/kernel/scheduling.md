@@ -811,25 +811,29 @@ returned — less the deadline; target 40 ms; the send adds 10 to 14 ms to the d
 sampled at, measured as the first notice of each burst below with the shell idle; the table's
 deadline notice row is re-measured at the send, 14 to 32 ms where the dequeue read 8 to 16). A burst of D
 deadlines firing together hands the steward D `Exited` events at once, and the sponsor is told of
-the last of them about D times the loop's work for one exit after the first: measured by
-`steward-deadline-burst` (six leases on one shared deadline, both widths) and
-`steward-deadline-burst-16` (sixteen, rv64), each lease's notice the send's return less that
-lease's own deadline; the first 0.4 to 0.85 s gross (22 to 103 ms net of the checked build's
-audits) after it — the kernel destroying the six or sixteen VM budgets at its one entry at the
-deadline before any exit notice goes out, each within R10 — then each send returning 37 to 68 ms
-after the previous on rv64 at one hart, 42 to 86 on rv32 and 73 to 131 at two harts, the
-steward's own work per exit (18 ms of its time in a 41 ms gap on a traced boot, the checked
-kernel's audits the rest); the last of six 1.11 to 1.28 s gross after its deadline (0.17 to
-0.31 s net), the last of sixteen 1.83 to 2.51 s (0.45 to 0.93 s net), one run per column at the
-seed, every notice's line printed by the session; the cases assert twice the worst rounded up,
-3 s and 6 s, and every line. The sends themselves once set the pace: beamlet's serve thread
-forwarded each to the session's VM by a send that waited for the VM to take it, a VM busy in
-Erlang took one per scheduler turn, and the sends returned 40 to 300 ms apart, the last of six
-1.5 to 1.8 s and of sixteen 2.1 to 2.8 s after the deadline, one of six or of sixteen lost at
-the steward's bound on rv64 at one hart; the steward's ordering (its notices ahead of the exits'
-bookkeeping, 16 ms of the 1.4 s) and the shell's listener (receiving and queueing, printing in
-another process) were each built, measured and found to move nothing, and a block trace placed
-the wait in that forward, which the thread's queue removes
+the last of them about D times the core's decision of one exit after the first, every notice of
+the burst sent before any exit's bookkeeping: measured by `steward-deadline-burst` (six leases
+on one shared deadline, both widths) and `steward-deadline-burst-16` (sixteen, rv64), each
+lease's notice the send's return less that lease's own deadline; the first 0.43 to 0.96 s gross
+(32 to 149 ms net of the checked build's audits) after it — the kernel destroying the six or
+sixteen VM budgets at its one entry at the deadline before any exit notice goes out, each within
+R10, and the loop then taking the reports together — then each send returning 13 to 77 ms after
+the previous, the decision of the next exit; the worst of six 0.91 to 1.12 s gross after its
+deadline (0.13 to 0.16 s net), the worst of sixteen 1.42 to 1.47 s (0.33 to 0.43 s net), one
+run per column at the seed, every notice's line printed by the session; the cases assert twice
+the worst rounded up, 3 s at both sizes, and every line; the exits' bookkeeping follows the
+sends, 17 to 297 ms of effects and then 0.17 to 0.78 s of console lines at the loop's next
+turn. With the bookkeeping between the sends they returned 40 to 145 ms apart, the loop's work
+for one exit (18 ms of its own time in a 41 ms gap on a traced boot, the checked kernel's audits
+the rest), the worst of six 1.13 to 1.43 s and of sixteen 1.8 to 2.5 s. The sends themselves
+once set the pace: beamlet's serve thread forwarded each to the session's VM by a send that
+waited for the VM to take it, a VM busy in Erlang took one per scheduler turn, and the sends
+returned 40 to 300 ms apart, the last of six 1.5 to 1.8 s and of sixteen 2.1 to 2.8 s after the
+deadline, one of six or of sixteen lost at the steward's bound on rv64 at one hart; under that
+gate the steward's ordering (its notices ahead of the exits' bookkeeping, 16 ms of the 1.4 s
+then, kept now) and the shell's listener (receiving and queueing, printing in another process)
+were each built, measured and found to move nothing, and a block trace placed the wait in that
+forward, which the thread's queue removes
 ([the steward](../servers/steward.md#failure-and-restart),
 [beamlet](../userland/beamlet.md#the-forwards-queue)). What the sponsor sees is the shell's
 print of each notice, 250 to 370 ms a line through the relay. **The

@@ -1,4 +1,4 @@
-description = "The sixteen-lease burst, a companion of `steward-deadline-burst` (docs/servers/steward.md, \"Failure and restart\"; docs/kernel/scheduling.md, \"With the real steward\"): alice's session starts D = 16 spinning agents (Redoubt.Agents.Echo `spin`, each a beamlet VM on a lease) with one shared deadline, the sixteen the latency manifest sizes her for (2 x 11,392 + 16 x 5,248 = 106,770 pages, her unlabelled share), so the kernel takes all sixteen at once and the steward is handed sixteen exits together, the shape under which the burst's cost was found. The probe prints each lease's deadline notice, the sponsor told (the `lease_ended` send returned) less that lease's deadline, grouped at the leases live as each exit is dequeued (sixteen down to one), each bounded at 6 s, twice the worst measured at one and two harts rounded up to a second, and the session must print all sixteen `[lease ended]` lines: measured, the first notice comes 0.84 s after its deadline (93 to 103 ms net of the checked build's audits) behind the sixteen destructions at the deadline's entry, then each send returns 38 to 103 ms after the previous at one hart and 82 to 131 at two, the steward's own work per exit, the last of sixteen 1.8 to 2.5 s after its deadline (0.45 to 0.93 s net); before beamlet's serve thread queued each notice for the VM the sends waited for the VM's take once a scheduler turn, the last 2.1 to 2.8 s and one of sixteen lost at one hart. The shared deadline is 120 s from the first start: twice the sixteen launches' worst total (each launch beside the spinners before it, up to 3.72 s on rv64 at two harts beside fifteen), so every lease's VM runs when the deadline falls and the steward is idle at it. rv64 only: beside many spinners on rv32 a spinner VM's module reads at the system volume time out behind the others' and the VM exits 1 before any deadline, a finding of the read path stated on kernel/scheduling.md with the latency round at N = 16; the realistic burst runs on both widths in the companion"
+description = "The sixteen-lease burst, a companion of `steward-deadline-burst` (docs/servers/steward.md, \"Failure and restart\"; docs/kernel/scheduling.md, \"With the real steward\"): alice's session starts D = 16 spinning agents (Redoubt.Agents.Echo `spin`, each a beamlet VM on a lease) with one shared deadline, the sixteen the latency manifest sizes her for (2 x 11,392 + 16 x 5,248 = 106,770 pages, her unlabelled share), so the kernel takes all sixteen at once and the steward is handed sixteen exits together, the shape under which the burst's cost was found. The probe prints each lease's deadline notice, the sponsor told (the `lease_ended` send returned) less that lease's deadline, grouped by each exit's place in the burst (sixteen down to one), each bounded at 3 s, twice the worst measured at one and two harts rounded up to a second, and the session must print all sixteen `[lease ended]` lines: measured, the first notice comes 0.92 to 0.96 s after its deadline (120 to 149 ms net of the checked build's audits) behind the sixteen destructions at the deadline's entry and the loop's take of the sixteen reports, then each send returns 13 to 77 ms after the previous, the core's decision of the next exit alone, since the loop sends every notice of a burst before any exit's bookkeeping, the worst of sixteen 1.42 to 1.47 s after its deadline (0.33 to 0.43 s net). With each exit's bookkeeping between the sends they returned 38 to 145 ms apart and the worst of sixteen was 1.8 to 2.5 s, bounded at 6 s; before beamlet's serve thread queued each notice for the VM the sends waited for the VM's take once a scheduler turn, the last 2.1 to 2.8 s and one of sixteen lost at one hart. The shared deadline is 120 s from the first start: twice the sixteen launches' worst total (each launch beside the spinners before it, up to 3.72 s on rv64 at two harts beside fifteen), so every lease's VM runs when the deadline falls and the steward is idle at it. rv64 only: beside many spinners on rv32 a spinner VM's module reads at the system volume time out behind the others' and the VM exits 1 before any deadline, a finding of the read path stated on kernel/scheduling.md with the latency round at N = 16; the realistic burst runs on both widths in the companion"
 arch = ["rv64"]
 kind = "boot"
 debug_assertions = true
@@ -57,28 +57,28 @@ forbid = [
     'sshd: login .*: refused',
     'target missed',
 ]
-# The burst's samples, each under 6 s (twice the worst measured, 2.51 s at two harts, rounded up
-# to a second: the digits admit up to 5,999,999 us), in the order the exits are served, sixteen
-# down to one; then the counts, one deadline notice in each group; then the window's end on the
-# done marker, which ends six instances within the minute, and init reboots, the reset dumping
-# the kernel's trace the post-check reads.
+# The burst's samples, each under 3 s (twice the worst measured, 1.47 s at two harts, rounded up
+# to a second: the digits admit up to 2,999,999 us), in the order the exits are served, each
+# lease's place in the burst from sixteen down to one; then the counts, one deadline notice in
+# each group; then the window's end on the done marker, which ends six instances within the
+# minute, and init reboots, the reset dumping the kernel's trace the post-check reads.
 expect_after = [
-    '^\[con [0-9a-f]{16}\] steward: LATENCY-SAMPLE N=16 deadline_notice [0-9]+ ([0-9]{1,6}|[1-5][0-9]{6})$',
-    '^\[con [0-9a-f]{16}\] steward: LATENCY-SAMPLE N=15 deadline_notice [0-9]+ ([0-9]{1,6}|[1-5][0-9]{6})$',
-    '^\[con [0-9a-f]{16}\] steward: LATENCY-SAMPLE N=14 deadline_notice [0-9]+ ([0-9]{1,6}|[1-5][0-9]{6})$',
-    '^\[con [0-9a-f]{16}\] steward: LATENCY-SAMPLE N=13 deadline_notice [0-9]+ ([0-9]{1,6}|[1-5][0-9]{6})$',
-    '^\[con [0-9a-f]{16}\] steward: LATENCY-SAMPLE N=12 deadline_notice [0-9]+ ([0-9]{1,6}|[1-5][0-9]{6})$',
-    '^\[con [0-9a-f]{16}\] steward: LATENCY-SAMPLE N=11 deadline_notice [0-9]+ ([0-9]{1,6}|[1-5][0-9]{6})$',
-    '^\[con [0-9a-f]{16}\] steward: LATENCY-SAMPLE N=10 deadline_notice [0-9]+ ([0-9]{1,6}|[1-5][0-9]{6})$',
-    '^\[con [0-9a-f]{16}\] steward: LATENCY-SAMPLE N=9 deadline_notice [0-9]+ ([0-9]{1,6}|[1-5][0-9]{6})$',
-    '^\[con [0-9a-f]{16}\] steward: LATENCY-SAMPLE N=8 deadline_notice [0-9]+ ([0-9]{1,6}|[1-5][0-9]{6})$',
-    '^\[con [0-9a-f]{16}\] steward: LATENCY-SAMPLE N=7 deadline_notice [0-9]+ ([0-9]{1,6}|[1-5][0-9]{6})$',
-    '^\[con [0-9a-f]{16}\] steward: LATENCY-SAMPLE N=6 deadline_notice [0-9]+ ([0-9]{1,6}|[1-5][0-9]{6})$',
-    '^\[con [0-9a-f]{16}\] steward: LATENCY-SAMPLE N=5 deadline_notice [0-9]+ ([0-9]{1,6}|[1-5][0-9]{6})$',
-    '^\[con [0-9a-f]{16}\] steward: LATENCY-SAMPLE N=4 deadline_notice [0-9]+ ([0-9]{1,6}|[1-5][0-9]{6})$',
-    '^\[con [0-9a-f]{16}\] steward: LATENCY-SAMPLE N=3 deadline_notice [0-9]+ ([0-9]{1,6}|[1-5][0-9]{6})$',
-    '^\[con [0-9a-f]{16}\] steward: LATENCY-SAMPLE N=2 deadline_notice [0-9]+ ([0-9]{1,6}|[1-5][0-9]{6})$',
-    '^\[con [0-9a-f]{16}\] steward: LATENCY-SAMPLE N=1 deadline_notice [0-9]+ ([0-9]{1,6}|[1-5][0-9]{6})$',
+    '^\[con [0-9a-f]{16}\] steward: LATENCY-SAMPLE N=16 deadline_notice [0-9]+ ([0-9]{1,6}|[12][0-9]{6})$',
+    '^\[con [0-9a-f]{16}\] steward: LATENCY-SAMPLE N=15 deadline_notice [0-9]+ ([0-9]{1,6}|[12][0-9]{6})$',
+    '^\[con [0-9a-f]{16}\] steward: LATENCY-SAMPLE N=14 deadline_notice [0-9]+ ([0-9]{1,6}|[12][0-9]{6})$',
+    '^\[con [0-9a-f]{16}\] steward: LATENCY-SAMPLE N=13 deadline_notice [0-9]+ ([0-9]{1,6}|[12][0-9]{6})$',
+    '^\[con [0-9a-f]{16}\] steward: LATENCY-SAMPLE N=12 deadline_notice [0-9]+ ([0-9]{1,6}|[12][0-9]{6})$',
+    '^\[con [0-9a-f]{16}\] steward: LATENCY-SAMPLE N=11 deadline_notice [0-9]+ ([0-9]{1,6}|[12][0-9]{6})$',
+    '^\[con [0-9a-f]{16}\] steward: LATENCY-SAMPLE N=10 deadline_notice [0-9]+ ([0-9]{1,6}|[12][0-9]{6})$',
+    '^\[con [0-9a-f]{16}\] steward: LATENCY-SAMPLE N=9 deadline_notice [0-9]+ ([0-9]{1,6}|[12][0-9]{6})$',
+    '^\[con [0-9a-f]{16}\] steward: LATENCY-SAMPLE N=8 deadline_notice [0-9]+ ([0-9]{1,6}|[12][0-9]{6})$',
+    '^\[con [0-9a-f]{16}\] steward: LATENCY-SAMPLE N=7 deadline_notice [0-9]+ ([0-9]{1,6}|[12][0-9]{6})$',
+    '^\[con [0-9a-f]{16}\] steward: LATENCY-SAMPLE N=6 deadline_notice [0-9]+ ([0-9]{1,6}|[12][0-9]{6})$',
+    '^\[con [0-9a-f]{16}\] steward: LATENCY-SAMPLE N=5 deadline_notice [0-9]+ ([0-9]{1,6}|[12][0-9]{6})$',
+    '^\[con [0-9a-f]{16}\] steward: LATENCY-SAMPLE N=4 deadline_notice [0-9]+ ([0-9]{1,6}|[12][0-9]{6})$',
+    '^\[con [0-9a-f]{16}\] steward: LATENCY-SAMPLE N=3 deadline_notice [0-9]+ ([0-9]{1,6}|[12][0-9]{6})$',
+    '^\[con [0-9a-f]{16}\] steward: LATENCY-SAMPLE N=2 deadline_notice [0-9]+ ([0-9]{1,6}|[12][0-9]{6})$',
+    '^\[con [0-9a-f]{16}\] steward: LATENCY-SAMPLE N=1 deadline_notice [0-9]+ ([0-9]{1,6}|[12][0-9]{6})$',
     '^\[con [0-9a-f]{16}\] steward: LATENCY-COUNT N=1 deadline_notice 1$',
     '^\[con [0-9a-f]{16}\] steward: LATENCY-COUNT N=2 deadline_notice 1$',
     '^\[con [0-9a-f]{16}\] steward: LATENCY-COUNT N=3 deadline_notice 1$',
