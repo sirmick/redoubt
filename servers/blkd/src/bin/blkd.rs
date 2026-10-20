@@ -15,12 +15,16 @@
 //! one `blkd` runs per disk, and one argument per labelled volume, `labels.P=ID,...` for GPT entry
 //! P ([`redoubt_blkd::args`]), parsed against the table before anything is served; an argument it
 //! cannot take stops it with [`BAD_ARGS`].
+//!
+//! **It says why it marks its device broken,** once, on its console (servers/blkd.md, "A lie is
+//! permanent"): every later request is `failed`, and a client sees no more than that.
 
 #![cfg_attr(target_os = "none", no_std, no_main)]
 
 extern crate alloc;
 
 use redoubt_blkd::args::parse_args;
+use redoubt_blkd::disk::Broke;
 use redoubt_blkd::kernel::Device;
 use redoubt_blkd::server::BlockServer;
 use redoubt_blkd::{Disk, read_partitions};
@@ -53,6 +57,9 @@ pub const NO_PARTITIONS: u32 = 7;
 /// guessed, or a range under labels it misread.
 pub const BAD_ARGS: u32 = 4;
 
+/// How the line starts that says why the device is marked broken.
+pub const BROKE: &str = "blkd: the device is marked broken: ";
+
 /// Serves until the endpoint is destroyed.
 pub fn serve(startup: &Startup) -> u32 {
     let Ok(args) = parse_args(startup.args()) else { return BAD_ARGS };
@@ -64,13 +71,17 @@ pub fn serve(startup: &Startup) -> u32 {
         return NO_DEVICE;
     };
     let Ok(mut disk) = Disk::new(device) else { return NO_DISK };
-    let Ok(roots) = read_partitions(&mut disk) else { return NO_PARTITIONS };
+    let Ok(roots) = read_partitions(&mut disk) else {
+        say_broke(startup, disk.take_broke());
+        return NO_PARTITIONS;
+    };
     let Ok(labels) = args.range_labels(&roots) else { return BAD_ARGS };
     let mut server = BlockServer::new(disk, roots, labels);
     let endpoint = Endpoint::from_handle(handle);
     // The handler answers every call; what it returns is dropped.
     redoubt_rt::server::serve(&endpoint, |request| {
         let served = server.serve(request);
+        say_broke(startup, server.take_broke());
         // Test-only: the boot's counts, said on the console.
         #[cfg(feature = "boot-stats")]
         if let Some((reads, sectors)) = server.take_stats() {
@@ -79,4 +90,11 @@ pub fn serve(startup: &Startup) -> u32 {
         }
         served
     })
+}
+
+/// Says what broke the device, if it has just broken.
+fn say_broke(startup: &Startup, broke: Option<Broke>) {
+    if let Some(broke) = broke {
+        redoubt_rt::start::say(startup, &alloc::format!("{BROKE}{broke}\n"));
+    }
 }

@@ -24,13 +24,14 @@
 //! - `len` must not exceed the bytes the device was given to write. It is otherwise unused: the number of
 //!   bytes copied back out is always this driver's own.
 //!
-//! Anything else ends the request with [`DeviceError::Io`], and [`crate::disk::Disk`] then
-//! refuses every later request rather than keep talking to a device that has lied.
+//! Anything else ends the request with [`DeviceError::Io`], naming the rule broken, and
+//! [`crate::disk::Disk`] then refuses every later request rather than keep talking to a device
+//! that has lied.
 
 use redoubt_rt::abi::PAGE_SIZE;
 
 use crate::transport::Transport;
-use crate::virtio::{self, DATA_LEN, DeviceError, REQUEST_TIMEOUT_US, reg};
+use crate::virtio::{self, DATA_LEN, DeviceError, Lie, REQUEST_TIMEOUT_US, reg};
 
 /// Descriptors in the ring. Three is the longest chain `blkd` builds (header, data, status) and
 /// the ring must be a power of two (§2.7), so four it is. A larger ring would only hold requests
@@ -112,10 +113,23 @@ pub struct Queue {
     next_avail: u16,
     /// The value `used.idx` must show when the next request completes.
     next_used: u16,
+    /// The clock when the outstanding request began waiting for its completion, for the line a
+    /// timeout says: `None` once a completion is accepted, so no later error borrows its span.
+    waited_from: Option<u64>,
 }
 
 impl Queue {
-    pub const fn new() -> Queue { Queue { next_avail: 0, next_used: 0 } }
+    pub const fn new() -> Queue { Queue { next_avail: 0, next_used: 0, waited_from: None } }
+
+    /// When the outstanding request began waiting for its completion ([`Transport::now_us`]), if
+    /// one is waiting or was given up on.
+    pub fn waited_from(&self) -> Option<u64> { self.waited_from }
+
+    /// Whether the used ring has moved past the last completion this driver accepted: after a
+    /// timeout, whether the device did complete and the wait ended first, or never completed.
+    pub fn moved(&self, t: &impl Transport) -> Result<bool, DeviceError> {
+        Ok(t.dma_read_u16(USED_IDX_OFF)? != self.next_used)
+    }
 
     /// Points the device at the rings and makes queue 0 ready (§4.2.3.2).
     ///
@@ -220,7 +234,9 @@ impl Queue {
     /// ([`crate::disk::Disk`]) marks the device broken and never submits again, so a completion
     /// that arrives afterwards is read by nobody.
     pub fn complete(&mut self, t: &impl Transport, writable: u32) -> Result<u32, DeviceError> {
-        let deadline = t.now_us().saturating_add(REQUEST_TIMEOUT_US);
+        let from = t.now_us();
+        self.waited_from = Some(from);
+        let deadline = from.saturating_add(REQUEST_TIMEOUT_US);
         loop {
             // The interrupt may have arrived (and been consumed) before this driver got here, so
             // the ring is looked at first, and again after every wake.
@@ -246,9 +262,10 @@ impl Queue {
             }
         }
         let idx = t.dma_read_u16(USED_IDX_OFF)?;
-        if idx != self.next_used.wrapping_add(1) {
+        let want = self.next_used.wrapping_add(1);
+        if idx != want {
             // More than one entry (for requests never sent), a step backwards, or a jump.
-            return Err(DeviceError::Io);
+            return Err(DeviceError::Io(Lie::UsedIndex { want, got: idx }));
         }
         // The slot comes from this driver's counter, never from the device.
         let slot = usize::from(self.next_used % QUEUE_SIZE);
@@ -256,9 +273,10 @@ impl Queue {
         let id = t.dma_read_u32(at)?;
         let len = t.dma_read_u32(at + 4)?;
         if id != HEAD || len > writable {
-            return Err(DeviceError::Io);
+            return Err(DeviceError::Io(Lie::UsedEntry { id, len }));
         }
         self.next_used = idx;
+        self.waited_from = None;
         Ok(len)
     }
 }

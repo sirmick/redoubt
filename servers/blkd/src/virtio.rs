@@ -126,15 +126,26 @@ pub enum DeviceError {
     /// The device answered the request with virtio-blk status `IOERR` or `UNSUPP`: a failure it
     /// is entitled to report, so the request fails and the device is not broken.
     Rejected,
-    /// The device failed the request, or said something the protocol does not allow: a used index
-    /// that did not advance by one, an entry for a descriptor `blkd` did not submit, a length
-    /// larger than the buffers it was given, or a status byte outside the three §5.2.6 defines.
-    Io,
+    /// The device said something the protocol does not allow; the [`Lie`] says which.
+    Io(Lie),
     /// The device did not complete a request before [`REQUEST_TIMEOUT_US`].
     Timeout,
     /// A request was made after one of the above. The device stays broken for the life of the
     /// process: `init` restarts `blkd`, which resets the device from the beginning.
     Broken,
+}
+
+/// Which rule of the protocol a device broke, so the line `blkd` says when it marks the device
+/// broken names it (servers/blkd.md, "Device lies").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Lie {
+    /// The used index did not advance by exactly one: `got`, where the driver expected `want`.
+    UsedIndex { want: u16, got: u16 },
+    /// The used entry named a descriptor `blkd` did not submit, or a length larger than the
+    /// buffers the device was given to write.
+    UsedEntry { id: u32, len: u32 },
+    /// A status byte outside the three §5.2.6 defines.
+    Status(u8),
 }
 
 impl From<Fault> for DeviceError {
