@@ -764,10 +764,11 @@ or an agent with a person at the top of the chain.
   (`alice/agent-3`, `agent/session-7`) and never why; the shell prints `[lease NAME ended]`. A
   session whose VM does not take the send in the steward's bound misses it, and the steward is
   not held: the core forgets a notice no session can take. Leases ending together are told one
-  send at a time, each taken at once by beamlet's serve thread, which queues it for the VM and
-  takes the next ([beamlet](../userland/beamlet.md#the-forwards-queue)), so the last of a burst
-  is late by the steward's own work per exit, not by the VM's take, and none is missed while the
-  queue has room, a full queue holding the thread until the VM's poll
+  send at a time, every notice of the burst ahead of any exit's bookkeeping, each send taken at
+  once by beamlet's serve thread, which queues it for the VM and takes the next
+  ([beamlet](../userland/beamlet.md#the-forwards-queue)), so the last of a burst is late by the
+  core's decisions of the exits before it, not by their bookkeeping or the VM's take, and none is
+  missed while the queue has room, a full queue holding the thread until the VM's poll
   ([failure and restart](#failure-and-restart)). The same endpoint carries
   `server_restarted` ([failure and restart](#failure-and-restart)).
 - **A launch runs on the steward's launch thread, and the loop serves meanwhile.** The slow
@@ -1439,7 +1440,7 @@ detached again ends by its first detach's clock, before its bound.
 
 ## Failure and restart
 
-Status: built · partly tested: `steward-restart` proves the release of a dead steward's connections by count at `bootfsd`, `erofsd:system`, `walfsd:data` and `ipd`, and at `littlefsd:alice-secrets` only by the code they share, since it opens no vault session; a shared server's restart is re-bound on the machine at `walfsd:data`, and at the vault's server and `ipd` by the code they share and the host test · tested: bench:steward-restart, bench:steward-restart-ssh, bench:steward-restart-reboot, bench:steward-session-ends, bench:steward-server-restart, host:redoubt-steward-server::users_not_empty_is_a_start_failure_before_any_carve, host:redoubt-steward-server::watch_is_held_only_from_sshd_and_malformed_on_any_other_badge, host:redoubt-steward-server::a_servers_restart_tells_its_sessions_and_a_session_rebinds_its_slot, host:redoubt-steward-server::every_operation_on_another_badge_class_is_malformed, host:redoubt-init::a_restart_strands_the_stewards_connections_at_the_endpoints_the_server_receives_on, host:redoubt-init::the_outcome_of_the_hand_over_is_said_in_blames_words, bench:steward-blame-lockout, host:redoubt-steward-server::a_session_s_end_is_answered_before_any_cleanup_call, host:redoubt-steward-server::an_ended_session_s_pending_request_is_withdrawn_before_the_end_s_reply, host:redoubt-steward-server::a_cleanup_step_that_times_out_is_retried_then_parked, host:redoubt-steward-server::a_timed_out_step_does_not_hold_the_steps_behind_it, host:redoubt-steward-server::a_cleanup_step_the_server_refuses_or_cannot_take_is_done_at_once, host:redoubt-steward-server::the_cleanup_queue_holds_each_released_connection_once, host:redoubt-steward-server::the_loops_turn_makes_no_call_to_a_server_that_never_answers, host:redoubt-steward-server::a_step_that_never_completes_holds_only_itself, host:redoubt-steward-server::a_step_that_completes_after_the_loop_moved_on_is_settled_then, host:redoubt-steward-server::reconnected_forgets_a_servers_due_steps_too, host:redoubt-steward-server::a_console_line_is_one_write_on_the_kept_fid, host:redoubt-steward-server::a_console_line_the_console_did_not_take_costs_one_bound_and_keeps_the_order, host:redoubt-steward-server::the_console_fid_is_re_opened_after_a_failed_write_and_the_lines_dropped_are_said, host:redoubt-steward-server::the_exit_s_last_turn_writes_the_lines_left_within_one_bound, host:redoubt-steward-server::a_parked_step_runs_at_the_servers_next_answered_call, host:redoubt-steward-server::a_mint_at_a_server_with_parked_steps_wakes_them_and_the_login_after_succeeds, host:redoubt-steward-server::reconnected_forgets_a_servers_parked_steps, host:redoubt-steward-server::a_never_answering_server_costs_no_bound_once_its_steps_are_parked, host:redoubt-steward-server::a_scopes_index_recycled_after_its_leases_deadline_is_not_destroyed_as_it, host:redoubt-steward-server::a_scopes_index_recycled_after_its_budgets_destroy_is_not_destroyed_as_it, bench:steward-latency, bench:steward-deadline-burst, bench:steward-deadline-burst-16, bench:steward-launch-overlap, host:redoubt-steward-server::the_destroy_pair_runs_under_the_install_lock_and_nothing_installs_under_it
+Status: built · partly tested: `steward-restart` proves the release of a dead steward's connections by count at `bootfsd`, `erofsd:system`, `walfsd:data` and `ipd`, and at `littlefsd:alice-secrets` only by the code they share, since it opens no vault session; a shared server's restart is re-bound on the machine at `walfsd:data`, and at the vault's server and `ipd` by the code they share and the host test · tested: bench:steward-restart, bench:steward-restart-ssh, bench:steward-restart-reboot, bench:steward-session-ends, bench:steward-server-restart, host:redoubt-steward-server::users_not_empty_is_a_start_failure_before_any_carve, host:redoubt-steward-server::watch_is_held_only_from_sshd_and_malformed_on_any_other_badge, host:redoubt-steward-server::a_servers_restart_tells_its_sessions_and_a_session_rebinds_its_slot, host:redoubt-steward-server::every_operation_on_another_badge_class_is_malformed, host:redoubt-init::a_restart_strands_the_stewards_connections_at_the_endpoints_the_server_receives_on, host:redoubt-init::the_outcome_of_the_hand_over_is_said_in_blames_words, bench:steward-blame-lockout, host:redoubt-steward-server::a_session_s_end_is_answered_before_any_cleanup_call, host:redoubt-steward-server::an_ended_session_s_pending_request_is_withdrawn_before_the_end_s_reply, host:redoubt-steward-server::a_cleanup_step_that_times_out_is_retried_then_parked, host:redoubt-steward-server::a_timed_out_step_does_not_hold_the_steps_behind_it, host:redoubt-steward-server::a_cleanup_step_the_server_refuses_or_cannot_take_is_done_at_once, host:redoubt-steward-server::the_cleanup_queue_holds_each_released_connection_once, host:redoubt-steward-server::the_loops_turn_makes_no_call_to_a_server_that_never_answers, host:redoubt-steward-server::a_step_that_never_completes_holds_only_itself, host:redoubt-steward-server::a_step_that_completes_after_the_loop_moved_on_is_settled_then, host:redoubt-steward-server::reconnected_forgets_a_servers_due_steps_too, host:redoubt-steward-server::a_console_line_is_one_write_on_the_kept_fid, host:redoubt-steward-server::a_console_line_the_console_did_not_take_costs_one_bound_and_keeps_the_order, host:redoubt-steward-server::the_console_fid_is_re_opened_after_a_failed_write_and_the_lines_dropped_are_said, host:redoubt-steward-server::the_exit_s_last_turn_writes_the_lines_left_within_one_bound, host:redoubt-steward-server::a_parked_step_runs_at_the_servers_next_answered_call, host:redoubt-steward-server::a_mint_at_a_server_with_parked_steps_wakes_them_and_the_login_after_succeeds, host:redoubt-steward-server::reconnected_forgets_a_servers_parked_steps, host:redoubt-steward-server::a_never_answering_server_costs_no_bound_once_its_steps_are_parked, host:redoubt-steward-server::a_scopes_index_recycled_after_its_leases_deadline_is_not_destroyed_as_it, host:redoubt-steward-server::a_scopes_index_recycled_after_its_budgets_destroy_is_not_destroyed_as_it, bench:steward-latency, bench:steward-deadline-burst, bench:steward-deadline-burst-16, bench:steward-launch-overlap, host:redoubt-steward-server::the_destroy_pair_runs_under_the_install_lock_and_nothing_installs_under_it, host:redoubt-steward-server::a_bursts_notices_all_go_before_any_exits_bookkeeping
 
 - **The steward is part of the trusted base; its crash is a bug.** If it dies, `init` reaps
   `users`, which logs every session out and ends every lease, and restarts the steward; the
@@ -1610,34 +1611,44 @@ Status: built · partly tested: `steward-restart` proves the release of a dead s
   itself restarts. The queue's bound is argued, not enforced, as the cleanup queue's: an event
   says at most two lines (its record and the usage line of the one domain it changed), a call's
   time one, a step's drop one, and a turn raises one event and the steps due.
-- **A burst of exits tells the sponsor one send at a time, and the steward's own work per exit
-  is the cost.** Leases whose deadlines fall together hand the loop their exits together, and each
-  exit's `lease_ended` goes to the sponsor's session as the exit is decided, one send within the
-  same 100 ms bound ([leases](#leases)). Measured by `steward-deadline-burst` (six leases on one
-  deadline, both widths) and `steward-deadline-burst-16` (sixteen, rv64), each lease's notice
-  being the `lease_ended` send's return less that lease's own deadline: the first 0.4 to 0.85 s
-  after its deadline (22 to 103 ms net of the checked build's audits), the kernel destroying every
-  budget the deadline took at its one entry before any exit notice is delivered, N destructions
-  and their frames, each within R10 ([responsiveness](../kernel/scheduling.md#responsiveness));
-  then each send returning 37 to 68 ms after the previous on rv64 at one hart, 42 to 86 on rv32
-  and 73 to 131 at two harts, the loop's work for one exit (its event and effects, its record and
-  its console lines: 18 ms of the steward's own time in a 41 ms gap on a traced boot, the checked
-  kernel's audits the rest), so the last of six is told 1.1 to 1.3 s after its deadline (0.17 to
-  0.31 s net) and the last of sixteen 1.8 to 2.5 s (0.45 to 0.93 s net), every lease's `[lease
-  ended]` line printed, over five boots at one and two harts; the cases assert twice the worst
-  rounded up, 3 s and 6 s, and every line. The send itself no longer waits: beamlet's serve
-  thread once forwarded each notice by a send that waited for the session's VM to take it, which
-  a VM busy in Erlang did once a scheduler turn, so the sends returned 40 to 300 ms apart, the
-  last of six 1.5 to 1.8 s and of sixteen 2.1 to 2.8 s after the deadline, and one of six or of
-  sixteen was lost at the bound on rv64 at one hart (the session printed five lines of six);
-  neither the steward's ordering (the burst's notices ahead of every exit's bookkeeping, built and
-  measured at 16 ms of the 1.4 s) nor the shell's listener (one that only received and queued,
-  printing in another process, built and measured) moved it, and a block trace placed it: the
-  serve thread blocked in its forward while the VM ran. The thread now queues each notice and
-  returns to its receive ([beamlet](../userland/beamlet.md#the-forwards-queue)). What remains on
-  the sponsor's side is the shell: its listener prints each notice inline through the relay, 250
-  to 370 ms a line, so the last line of six is drawn 2.3 to 2.6 s after the deadline and of
-  sixteen 6.1 to 6.6 s ([residual risks](#residual-risks)).
+- **A burst of exits tells the sponsor one send at a time, every notice ahead of the exits'
+  bookkeeping.** Leases whose deadlines fall together hand the loop their exits together: the
+  loop takes every exit report already waiting with the first, with no wait, decides each exit in
+  order and sends its `lease_ended` to the sponsor's session as it is decided, one send within
+  the same 100 ms bound ([leases](#leases)), and only then runs each exit's effects in order (its
+  end batch and the `Done` it raises, its forgets, its records, its console lines at the loop's
+  next turn); any other event the take finds waits for the next turn in its order, and an exit of
+  an object whose batch waits at its launch is held as a single one is. Measured by
+  `steward-deadline-burst` (six leases on one deadline, both widths) and
+  `steward-deadline-burst-16` (sixteen, rv64), each lease's notice being the `lease_ended` send's
+  return less that lease's own deadline: the first 0.43 to 0.96 s after its deadline (32 to 149
+  ms net of the checked build's audits), the kernel destroying every budget the deadline took at
+  its one entry before any exit notice is delivered, N destructions and their frames, each within
+  R10 ([responsiveness](../kernel/scheduling.md#responsiveness)), and the loop then taking the N
+  reports; then each send returning 13 to 77 ms after the previous, the core's decision of one
+  exit, so the worst of six is told 0.91 to 1.12 s after its deadline (0.13 to 0.16 s net) and
+  the worst of sixteen 1.42 to 1.47 s (0.33 to 0.43 s net), every lease's `[lease ended]` line
+  printed, at one and two harts; the cases assert twice the worst rounded up, 3 s at both sizes,
+  and every line. The bookkeeping follows the sends: the exits' effects 17 to 297 ms for the
+  whole burst, then its console lines 0.17 to 0.78 s at the loop's next turn ([residual
+  risks](#residual-risks)). With the bookkeeping between the sends they returned 40 to 145 ms
+  apart, the loop's work for one exit (its event and effects, its record and its console lines:
+  18 ms of the steward's own time in a 41 ms gap on a traced boot, the checked kernel's audits
+  the rest), the worst of six 1.13 to 1.43 s and of sixteen 1.8 to 2.5 s, bounded at 3 and 6 s.
+  The send itself no longer waits: beamlet's serve thread once forwarded each notice by a send
+  that waited for the session's VM to take it, which a VM busy in Erlang did once a scheduler
+  turn, so the sends returned 40 to 300 ms apart, the last of six 1.5 to 1.8 s and of sixteen
+  2.1 to 2.8 s after the deadline, and one of six or of sixteen was lost at the bound on rv64 at
+  one hart (the session printed five lines of six); under that gate neither the steward's
+  ordering (built then, measured at 16 ms of the 1.4 s and withdrawn, kept now that the gate is
+  gone) nor the shell's listener (one that only received and queued, printing in another process,
+  built and measured) moved it, and a block trace placed it: the serve thread blocked in its
+  forward while the VM ran. The thread now queues each notice and returns to its receive
+  ([beamlet](../userland/beamlet.md#the-forwards-queue)). What remains on the sponsor's side is
+  the shell: its listener prints each notice inline through the relay, 250 to 370 ms a line
+  (measured with the sends 37 to 131 ms apart: the last line of six drawn 2.3 to 2.6 s after the
+  deadline and of sixteen 6.1 to 6.6 s), the print's pace and not the steward's setting them
+  ([residual risks](#residual-risks)).
 - **A launch runs on the launch thread, under the install lock.** The second thread the
   steward starts ([leases](#leases)) installs handles of its own: the child's process at
   `process_create` and the fresh pages of each batch of the image before they are moved into the
@@ -1778,17 +1789,22 @@ so the case restarts it thirteen times, each time with that session and its conn
   from, so the bound stands.
 - **A burst of expiring leases is told at the steward's pace and shown at the shell's.** N
   leases taken by one deadline cost the last `lease_ended` the kernel's N destructions at the
-  deadline's entry (0.4 to 0.85 s to the first notice, 22 to 103 ms net of the checked build's
-  audits, each within R10) and then the loop's work per exit, 37 to 131 ms each: the last of six
-  told 1.1 to 1.3 s after its deadline, of sixteen 1.8 to 2.5 s, bounded at 3 and 6 s, the send
-  itself taken at once by beamlet's serve thread ([failure and restart](#failure-and-restart)). A
-  notice is lost only if the session's VM is gone, or its forwards queue is full, 128 entries
-  against the sixteen leases, the binding slots and the approvals one steward can tell a session
-  of ([beamlet](../userland/beamlet.md#the-forwards-queue)). The sponsor sees the shell print
-  them, one every 250 to 370 ms through the relay, the last of six 2.3 to 2.6 s after the
-  deadline and of sixteen 6.1 to 6.6 s: the shell's print, which took nothing from the steward's
-  side while the serve thread was the gate and is the visible term now that it is not. The
-  per-notice target, 40 ms, is met one lease at a time
+  deadline's entry (0.43 to 0.96 s to the first notice, 32 to 149 ms net of the checked build's
+  audits, each within R10) and then the core's decision of each exit, 13 to 77 ms a send, every
+  notice going before any exit's bookkeeping: the worst of six told 0.91 to 1.12 s after its
+  deadline, of sixteen 1.42 to 1.47 s, bounded at 3 s, the send itself taken at once by
+  beamlet's serve thread ([failure and restart](#failure-and-restart)). The bookkeeping the
+  notices no longer wait for still holds the loop after them: the exits' effects 17 to 297 ms
+  for the burst and its console lines 0.17 to 0.78 s at the loop's next turn, which a call or
+  event arriving among the burst waits behind; and the first notice of sixteen waits the loop's
+  take of the sixteen reports, about 0.1 s more than one exit's. A notice is lost only if the
+  session's VM is gone, or its forwards queue is full, 128 entries against the sixteen leases,
+  the binding slots and the approvals one steward can tell a session of
+  ([beamlet](../userland/beamlet.md#the-forwards-queue)). The sponsor sees the shell print them,
+  one every 250 to 370 ms through the relay (measured with the sends 37 to 131 ms apart: the
+  last of six 2.3 to 2.6 s after the deadline and of sixteen 6.1 to 6.6 s): the shell's print,
+  which took nothing from the steward's side while the serve thread was the gate and is the
+  visible term now that it is not. The per-notice target, 40 ms, is met one lease at a time
   ([responsiveness](../kernel/scheduling.md#responsiveness)); the image's own burst is at most
   three to five leases, alice's unlabelled share beside her sessions.
 - **A context's relay holds the steward's one thread for a bounded time.** The steward waits up to

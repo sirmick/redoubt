@@ -1391,9 +1391,11 @@ reductions), so the thread could not take its endpoint's next message until then
 the steward's `lease_ended` sends to one session was taken a turn each, 40 to 300 ms apart, the
 last of six returning 1.5 to 1.8 s after the deadline and of sixteen 2.1 to 2.8 s, and one send
 was lost at the steward's 100 ms bound on rv64 at one hart. With the queue each send returns as
-soon as the thread takes it, 37 to 68 ms after the previous at one hart on rv64, 42 to 86 on
-rv32 and 73 to 131 at two harts, the steward's own work per exit between them; the last of six
-1.1 to 1.3 s after its deadline and of sixteen 1.8 to 2.5 s, none lost over five boots
+soon as the thread takes it: when the queue landed, 37 to 68 ms after the previous at one hart
+on rv64, 42 to 86 on rv32 and 73 to 131 at two harts, the steward's own work per exit between
+them, the last of six 1.1 to 1.3 s after its deadline and of sixteen 1.8 to 2.5 s, none lost
+over five boots; since the steward sends a burst's notices before any exit's effects the
+figures are its page's ([steward.md, "Failure and restart"](../servers/steward.md#failure-and-restart))
 (`steward-deadline-burst`, `steward-deadline-burst-16`). On a block trace of the six-lease burst
 the thread's one wake to the idle VM is taken in the thread's own kernel entry and no send of
 the VM's process blocks on its wake endpoint for the notices after it, where before each forward

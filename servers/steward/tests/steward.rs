@@ -2772,6 +2772,73 @@ fn a_leases_deadline_ends_it_without_a_failed_step() {
     assert_eq!(s.failed.len(), 1);
 }
 
+/// Exits that arrived together, the leases a shared deadline took: every sponsor notice goes
+/// before any exit's bookkeeping (no connection given back, no step handed over, no destroy
+/// ahead of the last notice), each lease's once and in the exits' order; every exit's record
+/// comes out; and one exit through the burst path makes the calls one through the event path
+/// makes. The core sees the same rows either way: an exit moves its lease to `Ending` by itself,
+/// and its `Done` follows its own batch.
+#[test]
+fn a_bursts_notices_all_go_before_any_exits_bookkeeping() {
+    let mut k = Recorder::default();
+    let mut s = started(&mut k);
+    let u = alice_session(&mut s, &mut k);
+    let leases: Vec<(u64, usize, u64)> = (0..3).map(|_| lease_for(&mut s, &mut k, u, 2_000_000)).collect();
+    k.clock += 2_000_000;
+    for (_, budget, _) in &leases {
+        k.deadline_takes(*budget);
+    }
+    k.calls.clear();
+    let objects: Vec<Object> = leases.iter().map(|(_, _, pid)| s.exited(*pid).unwrap()).collect();
+    let outputs = s.exits(&mut k, objects).unwrap();
+    assert!(s.failed.is_empty(), "{:?}", s.failed);
+    let names: Vec<&str> = k
+        .calls
+        .iter()
+        .filter_map(|c| match c {
+            Call::Notify { name, .. } => Some(name.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        names,
+        ["alice/agent-1", "alice/agent-2", "alice/agent-3"],
+        "each lease's notice once, in order"
+    );
+    let last_notice = k.calls.iter().rposition(|c| matches!(c, Call::Notify { .. })).unwrap();
+    let first_work = k
+        .calls
+        .iter()
+        .position(|c| matches!(c, Call::Release(_) | Call::Hand(_) | Call::Destroy(_)))
+        .expect("the exits give their connections back");
+    assert!(last_notice < first_work, "a notice waited behind another exit's work: {:?}", k.calls);
+    let ended = outputs
+        .iter()
+        .filter(|o| matches!(o, Output::Audit(a) if matches!(a.record(), Record::LeaseEnded { .. })))
+        .count();
+    assert_eq!(ended, 3, "every exit's record: {outputs:?}");
+    for (lease, _, pid) in &leases {
+        assert!(s.exited(*pid).is_none() && s.lease_name(*lease).is_none(), "the lease is gone");
+    }
+    // One exit each way: the same calls in the same order.
+    let shape = |calls: &[Call]| calls.iter().map(std::mem::discriminant).collect::<Vec<_>>();
+    let (_, budget, pid) = lease_for(&mut s, &mut k, u, 2_000_000);
+    k.clock += 2_000_000;
+    k.deadline_takes(budget);
+    k.calls.clear();
+    let object = s.exited(pid).unwrap();
+    s.exits(&mut k, vec![object]).unwrap();
+    let burst = shape(&k.calls);
+    let (_, budget, pid) = lease_for(&mut s, &mut k, u, 2_000_000);
+    k.clock += 2_000_000;
+    k.deadline_takes(budget);
+    k.calls.clear();
+    let object = s.exited(pid).unwrap();
+    s.event(&mut k, EventKind::Exited { object }, 0).unwrap();
+    assert_eq!(burst, shape(&k.calls), "one exit is one exit");
+    assert!(s.failed.is_empty(), "{:?}", s.failed);
+}
+
 /// A lease's deadline passes and the kernel takes its budget, revoking the steward's handle and
 /// freeing its index, which a new lease's budget takes before the first's exit notice reaches
 /// the steward (several leases expiring close together do this): the first's `DestroyBudget`

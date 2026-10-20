@@ -812,11 +812,11 @@ mod machine {
         /// `destroy_call` sample.
         #[cfg(feature = "latency-probe")]
         last_destroy: Option<(u64, u64)>,
-        /// `latency-probe` only: when the last `lease_ended` send returned, and for which lease,
-        /// the end of the probe's `deadline_notice` sample: the sponsor told, not the exit
-        /// dequeued, since under a burst the send is where the time goes.
+        /// `latency-probe` only: when each lease's `lease_ended` send returned, by lease, the
+        /// end of the probe's `deadline_notice` sample: the sponsor told, not the exit
+        /// dequeued, since under a burst the send is where the time goes; taken by the sample.
         #[cfg(feature = "latency-probe")]
-        notified: Option<(u64, u64)>,
+        notified: BTreeMap<u64, u64>,
     }
 
     impl Machine<'_> {
@@ -1483,9 +1483,7 @@ mod machine {
             let Ok(words) = m.encode(&mut page) else { return };
             let _ = Endpoint::from_handle(notices).send(&words, &[], Some(page), NOTICE_US);
             #[cfg(feature = "latency-probe")]
-            {
-                self.notified = Some((lease, redoubt_rt::handle::time_now().unwrap_or(0)));
-            }
+            self.notified.insert(lease, redoubt_rt::handle::time_now().unwrap_or(0));
         }
 
         fn notify_approval(&mut self, notices: u64) {
@@ -2279,6 +2277,11 @@ mod machine {
         counts: BTreeMap<(&'static str, usize), u64>,
         /// Flushes so far: the case's rounds, counted by its markers, not a fixed total.
         rounds: usize,
+        /// A burst of exits just served: how many, when the first report was taken, when the
+        /// last notice's send returned and when the exits' effects were done (µs), said with
+        /// the console turn's time for the burst's lines at the loop's next top: the most any
+        /// event or wake that arrived among the burst waited behind it.
+        burst: Option<(usize, u64, u64, u64)>,
     }
 
     #[cfg(feature = "latency-probe")]
@@ -2415,7 +2418,7 @@ mod machine {
             #[cfg(feature = "latency-probe")]
             last_destroy: None,
             #[cfg(feature = "latency-probe")]
-            notified: None,
+            notified: BTreeMap::new(),
         };
         // The kernel's count of what `users` holds as this instance starts: 0, at boot and after
         // `init` emptied a dead steward's carves. The start's lines go as they are said, not at
@@ -2533,6 +2536,10 @@ mod machine {
         let mut watches: Vec<Request> = Vec::new();
         #[cfg(feature = "latency-probe")]
         let mut probe = Probe::default();
+        // Events taken off the endpoint ahead of their turn: a burst of exit notices is gathered
+        // with no wait (below), and whatever else that found waits here for the loop's next turn,
+        // in the order it arrived.
+        let mut pending: VecDeque<Event> = VecDeque::new();
         loop {
             // The idle timer: a detached context past its principal's bound ends (servers/steward.md,
             // "Contexts"); the receive below waits no longer than the next one's bound.
@@ -2551,6 +2558,18 @@ mod machine {
             // not take; the receive wakes for that line's retry.
             let step_due = machine.cleanup_tick(now).map(|t| t.saturating_sub(now).max(1));
             let line_due = machine.out.turn(now).map(|t| t.saturating_sub(now).max(1));
+            // The burst's cost on the loop, its lines' turn included, said once per burst of
+            // more than one exit (one exit is the latency cases' shape, said by their samples).
+            #[cfg(feature = "latency-probe")]
+            if let Some((n, taken, notified, done)) = probe.burst.take().filter(|b| b.0 > 1) {
+                let turned = redoubt_rt::handle::time_now().unwrap_or(now);
+                machine.out.say(&format!(
+                    "steward: burst of {n} exits: notices {} us, effects {} us, lines {} us\n",
+                    notified.saturating_sub(taken),
+                    done.saturating_sub(notified),
+                    turned.saturating_sub(now)
+                ));
+            }
             #[cfg(feature = "restart-probe")]
             let wait = probe_at.saturating_sub(redoubt_rt::handle::time_now().unwrap_or(probe_at));
             #[cfg(not(feature = "restart-probe"))]
@@ -2644,7 +2663,11 @@ mod machine {
             } else {
                 wait
             };
-            match own.receive(wait, 0) {
+            let received = match pending.pop_front() {
+                Some(event) => Ok(event),
+                None => own.receive(wait, 0),
+            };
+            match received {
                 // The cleanup thread's idle call, held until a step is due or handed over.
                 Ok(Event::Call(request)) if request.caller.badge == CLEANUP => machine.cleanup_idle(request),
                 // The launch thread's, held until a launch is queued.
@@ -2756,81 +2779,118 @@ mod machine {
                     close_delivery(&delivery);
                     machine.readers.reported();
                 }
-                // A watcher's report: the exit endpoint it watched, now done with.
+                // A watcher's report: the exit endpoint it watched, now done with. The reports
+                // already waiting behind it are taken with it, with no wait, as one burst: the
+                // leases a shared deadline took together hand the loop their exits together, and
+                // their sponsors' notices all go before any exit's bookkeeping, so the last
+                // notice of N is N decisions behind its deadline (13 to 77 ms each) and not N
+                // exits' work (40 to 145 ms each: the end batch, the record, the console lines
+                // at the loop's next turn; servers/steward.md, "Failure and restart", measured
+                // by `steward-deadline-burst`). Any other event the gathering finds waits in
+                // `pending` for the next turn, in its order; an exit of an object whose batch
+                // waits at its launch is held by the drive as a single one is.
                 Ok(Event::Send(delivery)) if delivery.caller.badge == EXITS => {
-                    close_delivery(&delivery);
-                    let key = delivery.words[0] as u64;
-                    let _ = close(h(key as u32));
-                    machine.watchers.reported();
-                    // How the process ended, said once, under the name the notice gives it
-                    // (`alice/agent-1`) and the object's id, so the line correlates with the
-                    // notice and with the audit records, which name the id: a session's VM has
-                    // its own console and a lease's has none (servers/steward.md, "Leases"). A
-                    // process whose object the core let go of first (a lease `end_lease` ended,
-                    // its VM killed with its budget) gets its line and no event.
-                    let cause = match delivery.words[1] {
-                        1 => "exited",
-                        2 => "faulted",
-                        3 => "was killed",
-                        _ => "ended",
-                    };
-                    let (object, name, running) = match steward.exited(key) {
-                        Some(object) => {
-                            let name = steward
-                                .lease_name(object.id)
-                                .unwrap_or_else(|| redoubt_steward_server::drive::named(&object));
-                            (object, name, true)
+                    #[cfg(feature = "latency-probe")]
+                    let taken = redoubt_rt::handle::time_now().unwrap_or(0);
+                    let mut burst = alloc::vec![delivery];
+                    loop {
+                        match own.receive(0, 0) {
+                            Ok(Event::Send(d)) if d.caller.badge == EXITS => burst.push(d),
+                            Ok(event) => pending.push_back(event),
+                            Err(_) => break,
                         }
-                        None => match steward.ended(key) {
-                            Some((object, name)) => (object, name, false),
-                            None => continue,
-                        },
-                    };
-                    // A crossing's program is named by its crossing, which is its id: it ends
-                    // with its budget's destruction once its one item is done ("Declassification
-                    // and push"). A lease's name is its human one, so its id follows it.
-                    let (what, id) = if object.kind == redoubt_steward::effect::Kind::Crossing {
-                        ("crossing", String::new())
-                    } else {
-                        ("lease", format!(" {}", object.id))
-                    };
-                    let line = format!(
-                        "steward: {what} {name}{id} of {}/{} {cause} {}\n",
-                        object.domain.account(),
-                        labels(object.domain.labels().as_slice()),
-                        delivery.words[2]
-                    );
-                    machine.out.say(&line);
-                    if !running {
+                    }
+                    // The objects whose exit is the core's to decide, in the reports' order, and
+                    // for the probe each lease's deadline and group.
+                    let mut exits: Vec<redoubt_steward::effect::Object> = Vec::with_capacity(burst.len());
+                    #[cfg(feature = "latency-probe")]
+                    let mut deadlines: Vec<(u64, u64, usize)> = Vec::new();
+                    for delivery in burst {
+                        close_delivery(&delivery);
+                        let key = delivery.words[0] as u64;
+                        let _ = close(h(key as u32));
+                        machine.watchers.reported();
+                        // How the process ended, said once, under the name the notice gives it
+                        // (`alice/agent-1`) and the object's id, so the line correlates with the
+                        // notice and with the audit records, which name the id: a session's VM
+                        // has its own console and a lease's has none (servers/steward.md,
+                        // "Leases"). A process whose object the core let go of first (a lease
+                        // `end_lease` ended, its VM killed with its budget) gets its line and no
+                        // event; a second process of an object already in the burst gets
+                        // neither, as it gets none once the first's decision has let the
+                        // object's processes go.
+                        let cause = match delivery.words[1] {
+                            1 => "exited",
+                            2 => "faulted",
+                            3 => "was killed",
+                            _ => "ended",
+                        };
+                        let (object, name, running) = match steward.exited(key) {
+                            Some(object) if exits.contains(&object) => continue,
+                            Some(object) => {
+                                let name = steward
+                                    .lease_name(object.id)
+                                    .unwrap_or_else(|| redoubt_steward_server::drive::named(&object));
+                                (object, name, true)
+                            }
+                            None => match steward.ended(key) {
+                                Some((object, name)) => (object, name, false),
+                                None => continue,
+                            },
+                        };
+                        // A crossing's program is named by its crossing, which is its id: it
+                        // ends with its budget's destruction once its one item is done
+                        // ("Declassification and push"). A lease's name is its human one, so its
+                        // id follows it.
+                        let (what, id) = if object.kind == redoubt_steward::effect::Kind::Crossing {
+                            ("crossing", String::new())
+                        } else {
+                            ("lease", format!(" {}", object.id))
+                        };
+                        let line = format!(
+                            "steward: {what} {name}{id} of {}/{} {cause} {}\n",
+                            object.domain.account(),
+                            labels(object.domain.labels().as_slice()),
+                            delivery.words[2]
+                        );
+                        machine.out.say(&line);
+                        if !running {
+                            continue;
+                        }
+                        // A lease the kernel's deadline took: its deadline and group, read while
+                        // the core still holds the lease and every lease of the burst is live,
+                        // so the group is the leases live less the exits gathered before it: its
+                        // place in the burst, D down to 1, the group a dequeue one exit at a time
+                        // gave it; the sample is the notice's send against the deadline, below.
+                        #[cfg(feature = "latency-probe")]
+                        if object.kind == redoubt_steward::effect::Kind::Lease && delivery.words[1] == 3 {
+                            let deadline = inspect::domain(&steward.store, &object.domain)
+                                .and_then(|d| d.leases.get(&object.id))
+                                .map(|l| l.deadline);
+                            let now = redoubt_rt::handle::time_now().unwrap_or(0);
+                            if let Some(deadline) = deadline.filter(|d| *d <= now) {
+                                let group = others(&steward, object.id).saturating_sub(exits.len()).max(1);
+                                deadlines.push((object.id, deadline, group));
+                            }
+                        }
+                        exits.push(object);
+                    }
+                    if exits.is_empty() {
                         continue;
                     }
-                    // A lease the kernel's deadline took: its deadline and group, read while
-                    // the core still holds the lease; the sample is the sponsor told (its
-                    // `lease_ended` send returned) less the deadline, below, since under a
-                    // burst of exits the send is where a notice's time goes
-                    // (kernel/scheduling.md, "With the real steward").
                     #[cfg(feature = "latency-probe")]
-                    let deadline =
-                        if object.kind == redoubt_steward::effect::Kind::Lease && delivery.words[1] == 3 {
-                            let now = redoubt_rt::handle::time_now().unwrap_or(0);
-                            inspect::domain(&steward.store, &object.domain)
-                                .and_then(|d| d.leases.get(&object.id))
-                                .map(|l| l.deadline)
-                                .filter(|d| *d <= now)
-                                .map(|d| (object.id, d, others(&steward, object.id)))
-                        } else {
-                            None
-                        };
+                    let n = exits.len();
                     #[cfg(feature = "latency-probe")]
-                    {
-                        machine.notified = None;
-                    }
-                    let outputs = steward.event(&mut machine, EventKind::Exited { object }, 0).ok();
+                    machine.notified.clear();
+                    let outputs = steward.exits(&mut machine, exits).ok();
+                    // The deadline notice: the sponsor told (the `lease_ended` send returned)
+                    // less the deadline, one sample per lease; a lease whose sponsor has no
+                    // notices endpoint is no sample.
                     #[cfg(feature = "latency-probe")]
-                    if let (Some((lease, deadline, n)), Some((sent_for, sent))) =
-                        (deadline, machine.notified.take())
-                    {
-                        if sent_for == lease {
+                    let notified = machine.notified.values().copied().max().unwrap_or(taken);
+                    #[cfg(feature = "latency-probe")]
+                    for (lease, deadline, n) in deadlines {
+                        if let Some(sent) = machine.notified.remove(&lease) {
                             probe.sample(
                                 machine.out,
                                 "deadline_notice",
@@ -2842,6 +2902,11 @@ mod machine {
                     }
                     if !after(&mut machine, &mut steward, &mut usage, outputs) {
                         return core_exited(machine.out);
+                    }
+                    #[cfg(feature = "latency-probe")]
+                    {
+                        let done = redoubt_rt::handle::time_now().unwrap_or(notified);
+                        probe.burst = Some((n, taken, notified, done));
                     }
                 }
                 Ok(Event::Send(delivery)) => close_delivery(&delivery),
