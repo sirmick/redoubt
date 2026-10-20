@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 7
+revision = 33
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1303,8 +1303,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "milestone"
   needs = ["M2"]
   body = "docs/plan/m3-agents.md. Moved out of M1 on the owner's word (2026-10-07), to run after M2. First, on the owner's word (2026-10-15), AGENT0: agentic control over SSH, a sponsor-run agent whose loop is on the host and whose body is a principal's session in the box; then the steward's second half (leases and agents, the powerbox at approve@box, crash blame: STEWARD3; declassification and push, the responsiveness targets with the real steward: STEWARD4), sshd's vault sessions and approve@box, gen_tcp (BEAM5), Alice's agent under a lease and the scripted hostile agent and user (the attack suite), and the model's traces replayed on the real kernel. Node ids M3, M4, M5 keep their ids; their titles are M4, M5, M6."
-  state = "active"
-  revision = 7
+  state = "reported"
+  revision = 9
 
 [[node]]
   id = "PLAN2"
@@ -2856,3 +2856,39 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "Found by B93's load passes, read by kernel-red-4: beamlet-files failed once per width beside a repeating 8-case boot set (16 jobs a pass); logs .tmp/B93/side/. The window is B26's: init restarts beamlet after its exit 0 (side/rv64:68-69) and the replay's lines land in the bench's GRACE after the last expect. The signature is new: the replay's write answers `files: wrote: {error,eio}` (side/rv64:72) and the restarted VM raises, where B26's eexist at make_dir is already covered by the start-time removal. Two questions, investigation first, no tuning: (1) why a write to walfsd:data returns eio under that load (walfsd's write path, the hub's error mapping, or the volume's state after the first run's exit while its connection is still being released), reproduced with kept logs and the server's console lines, then a brief if it is a server or hub change (Tier A); (2) whether the four cases whose VM exits 0 and is replayed by init should end at their exit (the case's own end, no replay inside the grace) rather than race the grace, stated on testbench.md if the bench changes. Bench/servers, size S. No bound widened; a miss is a finding. Reviewer kernel-red-4."
   state = "todo"
   revision = 2
+
+[[node]]
+  id = "IPD2"
+  title = "A person's sockets at ipd are the manifest's: an account override in ipd's arguments, alice's account at 32 sockets, ipd's entry re-derived by the rule"
+  template = "package"
+  parent = "AGENTS"
+  body = "Owner Q4 (.wash/local/owner-questions-2026-10-18.md, 'Owner's answers'); ruling .wash/local/wave-2026-10-18-rulings.md 'Owner's answers 2026-10-20'. Brief: .wash/local/IPD2-implementer.md. Tier A (ipd's admission and sizing, the serving library's override rule), size M (not S: limits= overrides account-0 root badges only, and a session's /net is admitted in its account's bucket, so the mechanism the question assumed does not reach a session), red review (kernel-red-4 or the orchestrator's ipd red) + simplifier + editor. Base origin/main 453a48bfc. Rule: ipd arg account=ACCOUNT:INFLIGHT:STATE:SOCKETS gives a non-zero account's unlabelled bucket its own caps; libs/rt Override gains the account key, worst case and share rule unchanged; TIME-WAIT counting stands; the image gets account=1001:5:4:32, bob none. Sizing re-derived on ipd.md and servers/ipd/tests/sizing.rs (State 36, fids min(72, 64), 17,408 B a socket, heap cap against max_sockets; a gap today is a finding first). Cases: host tests (parse, unlabelled-only, sizing); a new boot case both widths: alice's SSH session beside the console opens and closes more than the old three connections within TIME-WAIT, all answered (peer's verdict), and the connect past her derived share is emfile (ipd's too_many); session-tcp-*, net-*, sshd-refuses-slots, steward-six-principals unchanged. Pages: ipd.md 'Sizing', serving.md 'Overrides', beamlet.md's 'three sockets' sentence, testbench.md memory table if the heap moves. Hotspots: libs/rt/src/server/admit.rs (sweep every consumer), servers/ipd, image/manifest.json (ipd entry). Independent of SCHED5, B94, B95, WEIGHT1."
+  state = "reported"
+  revision = 33
+
+[[node]]
+  id = "WEIGHT1"
+  title = "The image runs the steward at 1,000 under system, the weight the responsiveness targets are measured at"
+  template = "package"
+  parent = "AGENTS"
+  body = "Owner Q1 (.wash/local/owner-questions-2026-10-18.md, 'Owner's answers'); ruling .wash/local/wave-2026-10-18-rulings.md 'Owner's answers 2026-10-20'. Brief: .wash/local/WEIGHT1-implementer.md. Tier A (a system weight in the trusted base's manifest, R12), size S, reviewer kernel-red-4. Base origin/main 453a48bfc. Change: the steward entry's weight 100 -> 1000 in image/manifest.json and every tests/data manifest copying it (grep; latency.manifest.json already 1000); system's sum stated. Pages: scheduling.md 'With the real steward' (the image now runs the steward at the workload's weight; the table's condition matches the image), the latency tomls' '(the image's is 100)' comments go, and steward.md 'Residual risks' gains owner Q2's rule with its reason (a lease runs at its agent weight for its life, no launch weight: a flood of launches would take CPU from running agents). Gate: short gate; both widths every case whose manifest changed plus steward-end-lease, steward-lease-ends, agent-login, deadline-in-launch, sshd-login-bound, steward-six-principals, steward-restart, boot-profile, beamlet-reduction-rate, beamlet-schedulers-one-hart, session-tcp-echo, shell-compile; a page figure outside its stated spread is re-measured, no bound moves. Hotspot: image/manifest.json (steward entry; IPD2 edits ipd's entry in the same file). Independent of SCHED5, B94, B95, IPD2."
+  state = "done"
+  revision = 15
+
+[[node]]
+  id = "B96"
+  title = "beamlet.md's boot-profile prompt row is about 2.5 s stale: main measures 10.35/8.49 s (rv64) and 11.76/9.90 s (rv32) where the page says 13.1/10.9 and 14.7/12.4"
+  template = "package"
+  parent = "AGENTS"
+  body = "Found by WEIGHT1's gate (.wash/local/WEIGHT1-report.md) at 453a48bfc, before WEIGHT1's change; confirmed by weight1-red P3-2. Re-measure the boot profile's prompt row on both widths at main (the recipe beamlet.md names), update the row with its spread, and find which merge moved it (likely BEAM19/B88/READ1-era read-path work) so the page's attribution is right. No bound moves unless a stated target depends on the row. Docs and measurement only: Tier B, one reviewer (editor)."
+  state = "todo"
+  revision = 16
+
+[[node]]
+  id = "B97"
+  title = "An empty listener at ipd costs its holder nothing but takes a slot in the one shared socket table: a listen-scope holder can fill it and every bucket's next socket is refused too many"
+  template = "package"
+  parent = "AGENTS"
+  body = "Raised by IPD2's red review (round 2, P3, minor). After IPD2 the table is held to 2 x max_sockets; a listener whose backlog was accepted while its bucket was full stays with no backlog, no unit and no charge, yet keeps a table slot. Only a listen-scope holder (the image's sshd, badge 6) can do it, never a person; it is a cross-bucket refusal (an observable bit), not a crash. Either charge an empty listener's entry to its holder's bucket, or state it as a residual on ipd.md 'Residual risks' with the arithmetic. Tier A (ipd admission), small; red review."
+  state = "todo"
+  revision = 29
