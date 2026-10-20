@@ -1786,7 +1786,9 @@ so the case restarts it thirteen times, each time with that session and its conn
   earlier one ([leases](#leases)); with the launches on the thread the worst served in these
   rounds is 4.82 s (rv64 at one hart, the N = 16 round beside fifteen spinners; 3.74 s at two
   harts, 3.53 s on rv32 at one in its rounds to N = 3), under the 6.64 s the bound derives
-  from, so the bound stands.
+  from, so the bound stands. A launching lease runs at the `agent` weight it keeps for its life,
+  never above its sponsor's running leases, since a launch weight would let a flood of launches
+  take CPU from running agents: the launch's measured cost and the bound derived from it stand.
 - **A burst of expiring leases is told at the steward's pace and shown at the shell's.** N
   leases taken by one deadline cost the last `lease_ended` the kernel's N destructions at the
   deadline's entry (0.43 to 0.96 s to the first notice, 32 to 149 ms net of the checked build's
