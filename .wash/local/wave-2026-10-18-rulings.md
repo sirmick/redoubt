@@ -1147,3 +1147,44 @@ mechanism" on erofsd.md, scheduling.md, steward.md Residual risks) are corrected
 sixteen on the host clock with the clock finding named to testbench.md; SECURITY.md unchanged.
 KILL1 closes on that (Tier A for the kernel test file; kernel-red-4). STEWARD10's "display
 artifact" stays unexplained, not attributed to this.
+
+### WAKE1 cause and fix (2026-10-20): the serve thread's blocking forward, not the VM's idle
+
+`.wash/local/WAKE1-identification.md` (rv64/1 burst boot under block-trace + shell stamps). The
+session VM's budget is read (a `#` block-trace record at budget_create: id, parent, pid). My arms:
+(i) excluded (idle receive and forward share one endpoint, frame 31395); (ii) excluded (a waiting
+receiver is woken in the sender's entry; idle wake → pick 2.9 ms median, 10.6 worst); (iii) not as
+stated (the serve thread is runnable, 1–38 ms to its pick). **What holds: the VM is not idle in
+the burst** — runnable throughout, the hart never idles (SHELLN1's "idle" was the return to kmain
+before a pick); 61 % of the window is the checked kernel's audits, the VM 26–28 % of the rest; a
+busy VM takes a forward only at its next scheduler turn (a zero-wait poll per 2,000-reduction
+slice): blocked forwards waited 107 ms median, 126 p90 — SHELLN1's 43–193 ms. The serve thread
+forwards each notice with a FOREVER rendezvous and only then receives the steward's next, so the
+steward's send waits on the VM's poll and drops at NOTICE_US (the lost notice). On main's unsplit
+listener recv − send is 76–866 ms, +~300 ms a notice where the inline print is attributed; with
+the split the printer still spends the same VM reductions, so totals did not move (SHELLN1's
+table) — the revert stands. (c) An idle VM's reply carries no wait (File.read: 2.8 ms of ~1 s);
+busy, forwards block 3.4 ms median (worst 102/298 ms).
+
+**Ruled: the fix is the hub's forward, not the VM's cadence.** The serve thread never blocks on
+the VM: completions and notices go into a bounded queue of the hub's, the VM woken once (a
+non-blocking wake on the shared endpoint — R13's reply shape, or the existing poll finding the
+queue), and the serve thread goes straight back to its receive. Bound stated: the hub's call pool
+(one completion per outstanding call) plus the notices the steward can send a session (its live
+leases by the carve term, `server_restarted`, approval), the arithmetic on beamlet.md; a full
+queue blocks the forward as today, stated as the residual. Consequences: the steward's send is
+taken at once whatever the VM does (no drop at NOTICE_US unless the serve thread itself is gone);
+a burst's N notices are all queued before the VM's next poll, so the last of N costs one slice,
+not N (the burst cases then assert a derived bound, 2× worst rounded up, and the
+deadline_notice-under-burst residual is replaced by the measurement); an idle VM is unchanged
+(2.8 ms). Not: the VM polling more often (its own CPU, and under the checked kernel's audits the
+slice is the cost — a bench condition, stated), not a target move. The 2,000-reduction slice at
+27 % share under audits is the bench's shape; release has no audits — state the row's condition.
+
+Instrumentation: the `#` budget_create trace record STAYS (behind the existing block-trace
+feature, one record per create, the identification depended on it; documented on the trace's
+page); the shell stamps go; analyze.py/chain.py stay in the worktree's .tmp, not the tree.
+Tier: beamlet's hub (strict beamlet review), size S–M; pages beamlet.md (the completion queue,
+its bound), steward.md "Leases"/"Residual risks" (the NOTICE_US loss sentence), scheduling.md
+(the burst row). Confirm with the fix on main's unsplit listener that the print no longer gates a
+take (all N taken at one poll, prints after), so SHELLN1 stays closed.
