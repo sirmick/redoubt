@@ -7,7 +7,9 @@ mod common;
 use common::*;
 use redoubt_ipd::link::LinkFault;
 use redoubt_ipd::scope::ip;
-use redoubt_ipd::stack::{CtlError, EPHEMERAL, LINGER_US, Ready, Status, WaitFor};
+use redoubt_ipd::stack::{
+    CtlError, EPHEMERAL, IDLE_TIMEOUT, KEEP_ALIVE, LINGER_US, Owner, PROBES, Ready, Status, WaitFor,
+};
 
 const CAP: usize = 16;
 
@@ -419,6 +421,71 @@ fn a_lingering_socket_is_bounded() {
     w.nine.fs.stack.release(who, n, true, w.now).unwrap();
     w.run_for(LINGER_US + 1_000_000, 1_000_000);
     assert_eq!(w.nine.fs.stack.charged(who.key), 0, "still charged after the linger");
+}
+
+/// An established socket with nothing to send: its owner and number.
+fn silent_socket(w: &mut World) -> (Owner, u32) {
+    let _listener = w.peer.listen(7);
+    let who = owner(&caller(5, 1, &[]));
+    let n = w.nine.fs.stack.allocate(who, 5, CAP).unwrap();
+    w.nine.fs.stack.connect(who, n, &anywhere(), LAN_HOST, 7, w.now).unwrap();
+    assert_eq!(settle(w, who, n), (Status::Established, n));
+    (who, n)
+}
+
+fn status(w: &mut World, who: Owner, n: u32) -> Status {
+    match w.nine.fs.stack.status(who, n, CAP) {
+        Ok(Ready::Now((status, _))) => status,
+        other => panic!("socket {n}: {other:?}"),
+    }
+}
+
+/// A silent socket's keep-alives: `PROBES` of them within the timeout, so it lives through
+/// `PROBES - 1` answers lost in a row (`netd`'s drop of a frame `ipd` did not take in time), and
+/// `PROBES` lost in a row end it at the timeout.
+#[test]
+fn a_silent_socket_survives_all_but_its_last_lost_keep_alive_answer() {
+    let mut w = World::unmetered(64);
+    let (who, n) = silent_socket(&mut w);
+    // All but the last probe's answer lost in a row: the last one's arrives before the timeout.
+    w.wire.borrow_mut().lost = PROBES as u32 - 1;
+    let sent = w.wire.borrow().sent.len();
+    w.run_for(IDLE_TIMEOUT.total_micros() + 5_000_000, 1_000_000);
+    assert_eq!(w.wire.borrow().lost, 0, "every loss was spent on a probe's answer");
+    assert_eq!(status(&mut w, who, n), Status::Established, "ended with an answer still to come");
+    assert!(w.wire.borrow().sent.len() - sent >= PROBES as usize, "fewer than {PROBES} probes");
+    // Every probe's answer lost: no frame in for the whole timeout, and it ends.
+    w.wire.borrow_mut().lost = PROBES as u32;
+    w.run_for(IDLE_TIMEOUT.total_micros() + 5_000_000, 1_000_000);
+    assert_eq!(status(&mut w, who, n), Status::Closed, "lived a timeout with no frame in");
+}
+
+/// `ipd` getting no turn right after a probe whose answer was lost: the socket lives if its next
+/// turn comes before the timeout since the last frame in (it probes then and takes the answer),
+/// and ends if it comes at the timeout.
+#[test]
+fn a_silent_socket_lives_through_a_stall_after_a_lost_answer_until_its_timeout() {
+    let mut w = World::unmetered(64);
+    let (who, n) = silent_socket(&mut w);
+    let timeout = IDLE_TIMEOUT.total_micros();
+    for (next_turn, lives) in [(timeout - 1_000_000, true), (timeout, false)] {
+        // The last frame in: the handshake's, then the answer to the probe that ended the stall.
+        let heard = w.now;
+        w.wire.borrow_mut().lost = 1;
+        for _ in 0..timeout / 100_000 {
+            if w.wire.borrow().lost == 0 {
+                break;
+            }
+            w.run_for(100_000, 100_000);
+        }
+        assert_eq!(w.wire.borrow().lost, 0, "no probe within the timeout");
+        assert!(w.now - heard >= KEEP_ALIVE.total_micros(), "probed before the keep-alive");
+        // No turn from the lost answer until `next_turn` after the last frame in.
+        w.now = heard + next_turn;
+        w.pump();
+        let status = status(&mut w, who, n);
+        assert_eq!(status == Status::Established, lives, "{status:?} after its turn {next_turn} us on");
+    }
 }
 
 /// No link: `netd` says its device is broken, connects and listens answer `unreachable`, and the

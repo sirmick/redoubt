@@ -18,7 +18,7 @@ at all.
 
 ### The `/net` tree
 
-<details><summary>Status: built · tested (13)</summary>
+<details><summary>Status: built · tested (15)</summary>
 
 - bench:net-tcp
 - bench:ipd-host-tests
@@ -31,6 +31,8 @@ at all.
 - host:redoubt-ipd::a_far_host_is_reached_through_the_gateway
 - host:redoubt-ipd::a_write_waits_while_the_send_buffer_is_full
 - host:redoubt-ipd::a_listener_accepts_its_backlog_and_listens_again
+- host:redoubt-ipd::a_silent_socket_survives_all_but_its_last_lost_keep_alive_answer
+- host:redoubt-ipd::a_silent_socket_lives_through_a_stall_after_a_lost_answer_until_its_timeout
 - host:redoubt-ipd::the_conformance_vectors_run_against_ipd
 - host:redoubt-ipd::a_client_connects_and_echoes_through_the_program
 
@@ -65,8 +67,29 @@ file holds is typed, in the wire encoding ([wire](wire.md#the-encoding)), never 
   clients wait ([pinned and abandoned calls](#pinned-and-abandoned-calls)).
 - **A socket lives** until `close`, `abort`, or the `disconnect` of its connection (which aborts
   every socket of it), then lingers at most 60 s before `ipd` resets it, plus TCP's TIME-WAIT; it
-  stays charged to its owner until it is gone. An established socket without acknowledged progress
-  for 60 s is ended; a half-open one gives its slot back after 3 s.
+  stays charged to its owner until it is gone. An established socket that hears nothing from its
+  peer for 60 s (`IDLE_TIMEOUT`) is ended; a half-open one gives its slot back after 3 s.
+- **A silent socket is probed** so that a lost frame does not end it. Frames are lost on the way
+  in: `netd` drops one `ipd` has not taken within 50 ms ([netd](netd.md#serving-ipd)), and nothing
+  sends a probe's answer again; two such drops in a minute is the most the bench has shown
+  plausible under load. A keep-alive goes out after 15 s without a frame sent (`KEEP_ALIVE`: the
+  timeout over `PROBES` + 1, `PROBES` = 3), so three probes go out before the timeout, and a
+  silent socket lives through two lost answers in a row. It also lives through `ipd` getting no
+  turn right after a probe whose answer it lost, if its next turn comes before the timeout since
+  the last frame in, under 45 s after that probe: it probes then and takes the answer. Measured
+  against that margin under a whole rv64 class's load (`lease-writes`' idle session, probed every
+  30 s then): `netd` dropped one frame, during boot, `ipd` never woke a second or more past a
+  deadline, and every answer came within a millisecond but one, which the host took 4.15 s to
+  send.
+- **What a probe costs.** One probe is `ipd`'s timer wake, its `transmit` call to `netd`, the
+  card's interrupt for the answer, `netd`'s receive thread's send to `ipd`, and `ipd`'s wake: on
+  an idle four-hart box about 66 cross-hart interrupts and 84 SBI calls in all, measured in
+  `launch-idle` with the keep-alive at 10 s (an idle SSH session's socket, six probes a minute
+  against two). At four probes a
+  minute the busiest hart there reads 2.9 to 3.5 interrupts a second against 2.4 to 2.8 at two,
+  under its ceiling of 3.8. That is the box's cost of any one small frame and its answer at rest,
+  not the probe's, and is a finding of its own; the probe interval follows from the loss model
+  above, not from it.
 - **Ports.** A listened port belongs to its connection and the connections `new_connection` minted
   from it, not to grants; an ephemeral port is drawn at random and drawn again if in use.
 - **What is not there:** no IPv6, DHCP, DNS, UDP, raw or ICMP sockets, and no fragment reassembly (a
@@ -82,7 +105,7 @@ stateDiagram-v2
     Listening --> Listening: accept, a new socket N
     Established --> Closing: ctl close, or the peer ends
     Closing --> Closed: done, or linger 60 s
-    Established --> Closed: ctl abort, disconnect,<br/>or 60 s without progress
+    Established --> Closed: ctl abort, disconnect,<br/>or 60 s with nothing from the peer
     Closed --> [*]: gone, its State unit returned
 ```
 *Figure: a TCP socket's states as its `ctl` file reports them.*
@@ -458,7 +481,7 @@ tests run in an unedited copy outside the tree.
 
 | Run | Result |
 | --- | --- |
-| `ipd`: `args`, `ctl_deadline`, `fs`, `grant_undo`, `isn`, `program`, `scope`, `sizing`, `stack`, `sweep`, `vectors` | pass |
+| `ipd`: `args`, `ctl_deadline`, `fs`, `grant_undo`, `isn`, `program`, `scope`, `sizing`, `stack`, `sweep`, `vectors` | pass, before `stack`'s two keep-alive tests, which have not run under Miri |
 | smoltcp 0.14.0, its library tests | 156 pass; `storage::assembler::test_random` alone runs too long under Miri to finish |
 | managed 0.8.0 | 30 pass |
 | heapless 0.9.3 | 216 pass; the `pool` tests cannot run (inline assembly, which Miri does not interpret; smoltcp does not use `pool`) |
@@ -510,6 +533,17 @@ Status: built · tested: host:redoubt-ipd::no_link_is_unreachable_until_it_comes
   since none reaches this residual. Counting the records in the heap term too is the follow-up.
 - **A shared `ipd` is shared state.** Its clients share one stack's memory, timers and link; where
   that matters, each trust domain gets its own `ipd`.
+- **Probes scale with an account's sockets.** Each silent socket probes four times a minute, and
+  each probe costs the box about 66 cross-hart interrupts and 84 SBI calls
+  ([what a probe costs](#the-net-tree)): alice's 32 sockets, all silent, are about 2.1 probes a
+  second, some 140 interrupts and 180 SBI calls a second across the machine, paid by `ipd`,
+  `netd` and the kernel. The manifest bounds it: the account's socket cap times the probe rate
+  times the per-probe cost. The servers that pay it run at their weights
+  ([R12 (scheduling)](../kernel/scheduling.md#r12-scheduling)), the card's interrupt is billed to
+  the device's owner ([R5 (interrupts)](../kernel/devices.md#r5-interrupts)), the cross-hart wakes
+  are the kernel's, and the per-probe cost is the box's per-packet cost at rest, where it comes
+  down. That one person raises a shared server's cost within the cap the owner granted is how R12
+  bounds a server's work for a client, by the server's weight, not charged to the client.
 - **smoltcp is vendored code.** It is read and built from the tree, not fetched, but a bug in it is a
   bug in `ipd`; it is fuzzed only through `ipd`'s own targets, and its `unsafe` is checked by
   recorded Miri runs, not by a bench case ([under Miri](#under-miri)).
