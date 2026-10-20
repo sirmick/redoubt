@@ -810,29 +810,28 @@ returned — less the deadline; target 40 ms; the send adds 10 to 14 ms to the d
 sampled at, measured as the first notice of each burst below with the shell idle; the table's
 deadline notice row is re-measured at the send, 14 to 32 ms where the dequeue read 8 to 16). A burst of D
 deadlines firing together hands the steward D `Exited` events at once, and the sponsor is told of
-the last of them about D times the shell's take of one notice after the first: measured by
+the last of them about D times the loop's work for one exit after the first: measured by
 `steward-deadline-burst` (six leases on one shared deadline, both widths) and
-`steward-deadline-burst-16` (sixteen, rv64), the first notice 0.3 to 0.8 s gross (22 to 88 ms net
-of the checked build's audits) after the deadline — the kernel destroying the six or sixteen VM
-budgets at its one entry at the deadline before any exit notice goes out, each within R10 — then
-each notice 40 to 300 ms behind the previous (85 to 300 ms on average over a boot), the `lease_ended` send a rendezvous the sponsor's
-session VM takes late; the last of
-six 1.53 to 1.79 s gross after the deadline (0.34 to 0.56 s net), the last of sixteen 2.11 to
-2.76 s (0.55 to 1.00 s net), one run per column at the seed. The steward's own work between two
-exits is 3 to 6 ms (the end batch, the record; the console lines at the next turn 30 to 50 ms per
-exit), so sending the burst's notices ahead of every exit's bookkeeping, built and measured, moved
-the last notice by 16 ms of the 1.4 s and is not in the tree; nor is the shell's print the take:
-a listener that only received and queued each notice, printing in another process, was built
-and measured at the same seed and moved nothing. With the guest clock stamped in the shell, each
-notice reached the shell's listener 43 to 193 ms after the steward's send had returned (the
-send complete when beamlet's serve thread took it), and the next send returned about when that
-receive happened: the serve thread waits in its forward to the VM's own wake endpoint until the
-VM takes it, and the VM, asleep in its platform's idle with the hart idle and no wake record for
-its budget until a timer, takes it that late, consistent with its idle not ended by the forward. The burst cases record the quantity with no
-bound, and the residual is the VM's take of the forward until beamlet's idle and wake path is
-found and fixed, its own package ([the steward](../servers/steward.md#residual-risks)). One
-notice of six (once in five boots), and one of sixteen (once), was lost on rv64 at one hart, a send the VM did not take within
-the steward's bound, its sample the bound's expiry rather than the sponsor told. **The
+`steward-deadline-burst-16` (sixteen, rv64), each lease's notice the send's return less that
+lease's own deadline; the first 0.4 to 0.85 s gross (22 to 103 ms net of the checked build's
+audits) after it — the kernel destroying the six or sixteen VM budgets at its one entry at the
+deadline before any exit notice goes out, each within R10 — then each send returning 37 to 68 ms
+after the previous on rv64 at one hart, 42 to 86 on rv32 and 73 to 131 at two harts, the
+steward's own work per exit (18 ms of its time in a 41 ms gap on a traced boot, the checked
+kernel's audits the rest); the last of six 1.11 to 1.28 s gross after its deadline (0.17 to
+0.31 s net), the last of sixteen 1.83 to 2.51 s (0.45 to 0.93 s net), one run per column at the
+seed, every notice's line printed by the session; the cases assert twice the worst rounded up,
+3 s and 6 s, and every line. The sends themselves once set the pace: beamlet's serve thread
+forwarded each to the session's VM by a send that waited for the VM to take it, a VM busy in
+Erlang took one per scheduler turn, and the sends returned 40 to 300 ms apart, the last of six
+1.5 to 1.8 s and of sixteen 2.1 to 2.8 s after the deadline, one of six or of sixteen lost at
+the steward's bound on rv64 at one hart; the steward's ordering (its notices ahead of the exits'
+bookkeeping, 16 ms of the 1.4 s) and the shell's listener (receiving and queueing, printing in
+another process) were each built, measured and found to move nothing, and a block trace placed
+the wait in that forward, which the thread's queue removes
+([the steward](../servers/steward.md#failure-and-restart),
+[beamlet](../userland/beamlet.md#the-forwards-queue)). What the sponsor sees is the shell's
+print of each notice, 250 to 370 ms a line through the relay. **The
 residual under load:** `deadline_notice` is clean only with the steward idle when the deadline
 fires — the quantity this case measures, one lease at a time. A launch in flight holds the serve
 loop inside a synchronous `start_agent` (2-6 s), so a deadline that fires during one waits behind
@@ -1594,8 +1593,14 @@ which implies `lock-trace` and records each section of the kernel lock at its re
 cause and audits (`h`, `j`), for `sched-lock-contention`, `sched-lock-contention-4`,
 `sched-timer-entry` and `call-bounds`; `block-trace`, which implies the trace and records each
 thread's block at the one place a thread blocks (`@`: the budget, its wait kind and the endpoint
-it waits on), for no case: a diagnostic run by hand, which told a budget waiting to receive a
-call that never came from one blocked in a call out ([responsiveness](#responsiveness));
+it waits on), each wait's end (`~`: the budget, the wait kind, whether it timed out or was
+answered without blocking, and the endpoint, so a block's length and what ended it are read)
+and each budget's creation (`#`: the new budget's id, its parent's and the creating process's
+PID, so a session's or a lease's budget is read off the trace as the one the steward carves at
+its login rather than inferred), for no case: a diagnostic run by hand, which told a
+budget waiting to receive a call that never came from one blocked in a call out
+([responsiveness](#responsiveness)), and placed a burst of the steward's notices between
+beamlet's serve thread and its VM ([the steward](../servers/steward.md#failure-and-restart));
 `irq-boot-hart-only`, whose boot hart alone
 takes device interrupts, for R78's negative case at two harts; `sched-inject-tie-fault`, a debug-only break of the tie rule that implies the trace;
 `sched-capped-holds-floor`, whose floor counts the capped budgets, for R12's negative case at two

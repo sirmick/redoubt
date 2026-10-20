@@ -764,8 +764,10 @@ or an agent with a person at the top of the chain.
   (`alice/agent-3`, `agent/session-7`) and never why; the shell prints `[lease NAME ended]`. A
   session whose VM does not take the send in the steward's bound misses it, and the steward is
   not held: the core forgets a notice no session can take. Leases ending together are told one
-  send at a time, each waiting for the session's VM to take it, which it does 40 to 190 ms after
-  the send completes, so the last of a burst is late by that take and one may be missed
+  send at a time, each taken at once by beamlet's serve thread, which queues it for the VM and
+  takes the next ([beamlet](../userland/beamlet.md#the-forwards-queue)), so the last of a burst
+  is late by the steward's own work per exit, not by the VM's take, and none is missed while the
+  queue has room, a full queue holding the thread until the VM's poll
   ([failure and restart](#failure-and-restart)). The same endpoint carries
   `server_restarted` ([failure and restart](#failure-and-restart)).
 - **A lease the kernel's deadline took** reaches the steward as its process's exit notice with
@@ -1574,39 +1576,34 @@ Status: built · partly tested: `steward-restart` proves the release of a dead s
   itself restarts. The queue's bound is argued, not enforced, as the cleanup queue's: an event
   says at most two lines (its record and the usage line of the one domain it changed), a call's
   time one, a step's drop one, and a turn raises one event and the steps due.
-- **A burst of exits tells the sponsor one send at a time, and the send is the cost.** Leases
-  whose deadlines fall together hand the loop their exits together, and each exit's
-  `lease_ended` goes to the sponsor's session as the exit is decided, one send within the same
-  100 ms bound ([leases](#leases)). Measured by `steward-deadline-burst` (six leases on one
-  deadline, both widths) and `steward-deadline-burst-16` (sixteen, rv64), each notice's send
-  returns 10 to 14 ms after its exit is decided while the shell is idle, then 40 to 300 ms
-  after the previous for each notice after the first (85 to 300 ms on average over a boot): the send is a rendezvous, and the
-  session's VM takes each one late, so the sponsor is told of the last of N about N times that
-  take after the first (the last of six 1.5 to 1.8 s after the deadline and the last of sixteen 2.1
-  to 2.8 s; 0.34 to 0.56 and 0.55 to 1.0 s net of the checked build's audits). The exits' own work on the
-  loop is small beside it (16 to 35 ms for all six or sixteen at one hart; their console lines
-  at the next turn 0.2 to 0.8 s): sending the burst's notices ahead of every exit's bookkeeping
-  was built, measured at 16 ms of the 1.4 s, and not kept. Nor is the take the shell's print:
-  a shell whose listener only received and queued each notice, printing in another process, was
-  built and measured on both hart counts at the same seed and moved nothing (gaps of 60 to 380
-  ms as before, one of sixteen still lost). With the guest clock stamped in the shell, each
-  notice reached the shell's listener 43 to 193 ms after the steward's send had returned, and
-  the next send returned about when that receive happened: the send completes when beamlet's
-  serve thread takes it, that thread then forwards it to the VM's own wake endpoint and waits
-  there until the VM takes the forward, and the VM, asleep in its platform's idle with the hart
-  idle and no wake record for its budget until a timer, does not take it for that long. So the
-  gate is the VM's take of the forward (beamlet's idle and wake path, or the kernel's waking of
-  a receiver with a deadline; its own package, investigation first), not the listener, not the
-  print and not the steward; the shell's print follows its receive by a further 0.15 to 1 s
-  and gates nothing. Until that lands a burst's last notice is the VM's take, and a send the VM does
-  not take within the bound is lost, as one of six was on rv64 at one hart once in three runs,
-  under the withdrawn ordering (the session printed five `[lease ended]` lines; the steward's
-  records name all six); a dropped send still yields a sample, the bound's expiry rather than the
-  sponsor told, so a lost notice reads as a 100 ms sample. Before the first notice the
-  kernel destroys every budget the deadline took at its one entry, N destructions and their
-  frames before any exit notice is delivered: 0.3 to 0.8 s from the deadline to the first
-  notice, 22 to 88 ms of it net of the checked build's audits
-  ([responsiveness](../kernel/scheduling.md#responsiveness)).
+- **A burst of exits tells the sponsor one send at a time, and the steward's own work per exit
+  is the cost.** Leases whose deadlines fall together hand the loop their exits together, and each
+  exit's `lease_ended` goes to the sponsor's session as the exit is decided, one send within the
+  same 100 ms bound ([leases](#leases)). Measured by `steward-deadline-burst` (six leases on one
+  deadline, both widths) and `steward-deadline-burst-16` (sixteen, rv64), each lease's notice
+  being the `lease_ended` send's return less that lease's own deadline: the first 0.4 to 0.85 s
+  after its deadline (22 to 103 ms net of the checked build's audits), the kernel destroying every
+  budget the deadline took at its one entry before any exit notice is delivered, N destructions
+  and their frames, each within R10 ([responsiveness](../kernel/scheduling.md#responsiveness));
+  then each send returning 37 to 68 ms after the previous on rv64 at one hart, 42 to 86 on rv32
+  and 73 to 131 at two harts, the loop's work for one exit (its event and effects, its record and
+  its console lines: 18 ms of the steward's own time in a 41 ms gap on a traced boot, the checked
+  kernel's audits the rest), so the last of six is told 1.1 to 1.3 s after its deadline (0.17 to
+  0.31 s net) and the last of sixteen 1.8 to 2.5 s (0.45 to 0.93 s net), every lease's `[lease
+  ended]` line printed, over five boots at one and two harts; the cases assert twice the worst
+  rounded up, 3 s and 6 s, and every line. The send itself no longer waits: beamlet's serve
+  thread once forwarded each notice by a send that waited for the session's VM to take it, which
+  a VM busy in Erlang did once a scheduler turn, so the sends returned 40 to 300 ms apart, the
+  last of six 1.5 to 1.8 s and of sixteen 2.1 to 2.8 s after the deadline, and one of six or of
+  sixteen was lost at the bound on rv64 at one hart (the session printed five lines of six);
+  neither the steward's ordering (the burst's notices ahead of every exit's bookkeeping, built and
+  measured at 16 ms of the 1.4 s) nor the shell's listener (one that only received and queued,
+  printing in another process, built and measured) moved it, and a block trace placed it: the
+  serve thread blocked in its forward while the VM ran. The thread now queues each notice and
+  returns to its receive ([beamlet](../userland/beamlet.md#the-forwards-queue)). What remains on
+  the sponsor's side is the shell: its listener prints each notice inline through the relay, 250
+  to 370 ms a line, so the last line of six is drawn 2.3 to 2.6 s after the deadline and of
+  sixteen 6.1 to 6.6 s ([residual risks](#residual-risks)).
 
 **What a dead steward held at the shared servers goes with it.** `init` hands the steward a
 fresh connection at each server it is handed (`bootfsd`, the volumes' file servers, `ipd`), not
@@ -1705,20 +1702,21 @@ so the case restarts it thirteen times, each time with that session and its conn
   follow-up. The steward's own cost is the batch's calls at the shared servers, each within
   `SERVER_US` below; the rest of the seconds is the launching VM's share of the harts beside
   the spinners.
-- **A burst of expiring leases tells the sponsor late, at the session VM's take.** N leases
-  taken by one deadline cost the last `lease_ended` about N times the VM's take of one
-  notice (85 to 300 ms each on average, measured; the last of six 1.5 to 1.8 s and of sixteen
-  up to 2.8 s after the deadline), after the kernel's N destructions at the deadline's entry
-  (0.3 to 0.8 s to the first notice, 22 to 88 ms net of the checked build's audits, each within
-  R10); and a notice the VM does not take within the steward's
-  100 ms bound is lost, once in six (in one boot of five) and once in sixteen on rv64 at one hart, its sample the
-  bound's expiry ([failure and restart](#failure-and-restart)). Neither the steward's ordering
-  nor the shell's listener moves it, both built and measured: the lag is between beamlet's
-  serve thread forwarding the notice to the VM's wake endpoint and the VM taking it, the hart
-  idle meanwhile, consistent with the VM's idle not ended by the forward until a timer; beamlet's idle and wake
-  path is where it is found, its own package. The per-notice target, 40 ms, is met
-  one lease at a time ([responsiveness](../kernel/scheduling.md#responsiveness)); the image's
-  own burst is at most three to five leases, alice's unlabelled share beside her sessions.
+- **A burst of expiring leases is told at the steward's pace and shown at the shell's.** N
+  leases taken by one deadline cost the last `lease_ended` the kernel's N destructions at the
+  deadline's entry (0.4 to 0.85 s to the first notice, 22 to 103 ms net of the checked build's
+  audits, each within R10) and then the loop's work per exit, 37 to 131 ms each: the last of six
+  told 1.1 to 1.3 s after its deadline, of sixteen 1.8 to 2.5 s, bounded at 3 and 6 s, the send
+  itself taken at once by beamlet's serve thread ([failure and restart](#failure-and-restart)). A
+  notice is lost only if the session's VM is gone, or its forwards queue is full, 128 entries
+  against the sixteen leases, the binding slots and the approvals one steward can tell a session
+  of ([beamlet](../userland/beamlet.md#the-forwards-queue)). The sponsor sees the shell print
+  them, one every 250 to 370 ms through the relay, the last of six 2.3 to 2.6 s after the
+  deadline and of sixteen 6.1 to 6.6 s: the shell's print, which took nothing from the steward's
+  side while the serve thread was the gate and is the visible term now that it is not. The
+  per-notice target, 40 ms, is met one lease at a time
+  ([responsiveness](../kernel/scheduling.md#responsiveness)); the image's own burst is at most
+  three to five leases, alice's unlabelled share beside her sessions.
 - **A context's relay holds the steward's one thread for a bounded time.** The steward waits up to
   2 s for a relay's `hello` at each SSH login that starts a context, and up to 1 s for each
   `attach` and `detach`, so a relay that never answers delays every other principal's call by that

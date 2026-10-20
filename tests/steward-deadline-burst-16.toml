@@ -1,4 +1,4 @@
-description = "The sixteen-lease burst, a companion of `steward-deadline-burst` (docs/servers/steward.md, \"Failure and restart\"; docs/kernel/scheduling.md, \"With the real steward\"): alice's session starts D = 16 spinning agents (Redoubt.Agents.Echo `spin`, each a beamlet VM on a lease) with one shared deadline, the sixteen the latency manifest sizes her for (2 x 11,392 + 16 x 5,248 = 106,770 pages, her unlabelled share), so the kernel takes all sixteen at once and the steward is handed sixteen exits together, the shape under which the burst's cost was found. The probe prints each lease's deadline notice, the sponsor told (the `lease_ended` send returned) less the deadline, grouped at the leases live as each exit is dequeued (sixteen down to one), recorded with no bound, as the companion explains: measured, the last notice of sixteen comes 2.1 to 2.8 s after the deadline (0.55 to 1.0 s net of the checked build's audits) at one and two harts, the first 0.36 to 0.83 s (38 to 88 ms net) behind the sixteen destructions at the deadline's entry, then each notice 85 to 160 ms behind the previous on average, the sponsor's shell taking each `lease_ended` only once it has printed the one before. The shared deadline is 120 s from the first start: twice the sixteen launches' worst total (each launch beside the spinners before it, up to 3.72 s on rv64 at two harts beside fifteen), so every lease's VM runs when the deadline falls and the steward is idle at it. rv64 only: beside many spinners on rv32 a spinner VM's module reads at the system volume time out behind the others' and the VM exits 1 before any deadline, a finding of the read path stated on kernel/scheduling.md with the latency round at N = 16; the realistic burst runs on both widths in the companion"
+description = "The sixteen-lease burst, a companion of `steward-deadline-burst` (docs/servers/steward.md, \"Failure and restart\"; docs/kernel/scheduling.md, \"With the real steward\"): alice's session starts D = 16 spinning agents (Redoubt.Agents.Echo `spin`, each a beamlet VM on a lease) with one shared deadline, the sixteen the latency manifest sizes her for (2 x 11,392 + 16 x 5,248 = 106,770 pages, her unlabelled share), so the kernel takes all sixteen at once and the steward is handed sixteen exits together, the shape under which the burst's cost was found. The probe prints each lease's deadline notice, the sponsor told (the `lease_ended` send returned) less that lease's deadline, grouped at the leases live as each exit is dequeued (sixteen down to one), each bounded at 6 s, twice the worst measured at one and two harts rounded up to a second, and the session must print all sixteen `[lease ended]` lines: measured, the first notice comes 0.84 s after its deadline (93 to 103 ms net of the checked build's audits) behind the sixteen destructions at the deadline's entry, then each send returns 38 to 103 ms after the previous at one hart and 82 to 131 at two, the steward's own work per exit, the last of sixteen 1.8 to 2.5 s after its deadline (0.45 to 0.93 s net); before beamlet's serve thread queued each notice for the VM the sends waited for the VM's take once a scheduler turn, the last 2.1 to 2.8 s and one of sixteen lost at one hart. The shared deadline is 120 s from the first start: twice the sixteen launches' worst total (each launch beside the spinners before it, up to 3.72 s on rv64 at two harts beside fifteen), so every lease's VM runs when the deadline falls and the steward is idle at it. rv64 only: beside many spinners on rv32 a spinner VM's module reads at the system volume time out behind the others' and the VM exits 1 before any deadline, a finding of the read path stated on kernel/scheduling.md with the latency round at N = 16; the realistic burst runs on both widths in the companion"
 arch = ["rv64"]
 kind = "boot"
 debug_assertions = true
@@ -57,11 +57,28 @@ forbid = [
     'sshd: login .*: refused',
     'target missed',
 ]
-# The burst's counts: one deadline notice in each group from sixteen down to one, the leases
-# live as each exit is dequeued; then the window's end on the done marker, which ends six
-# instances within the minute, and init reboots, the reset dumping the kernel's trace the
-# post-check reads.
+# The burst's samples, each under 6 s (twice the worst measured, 2.51 s at two harts, rounded up
+# to a second: the digits admit up to 5,999,999 us), in the order the exits are served, sixteen
+# down to one; then the counts, one deadline notice in each group; then the window's end on the
+# done marker, which ends six instances within the minute, and init reboots, the reset dumping
+# the kernel's trace the post-check reads.
 expect_after = [
+    '^\[con [0-9a-f]{16}\] steward: LATENCY-SAMPLE N=16 deadline_notice [0-9]+ ([0-9]{1,6}|[1-5][0-9]{6})$',
+    '^\[con [0-9a-f]{16}\] steward: LATENCY-SAMPLE N=15 deadline_notice [0-9]+ ([0-9]{1,6}|[1-5][0-9]{6})$',
+    '^\[con [0-9a-f]{16}\] steward: LATENCY-SAMPLE N=14 deadline_notice [0-9]+ ([0-9]{1,6}|[1-5][0-9]{6})$',
+    '^\[con [0-9a-f]{16}\] steward: LATENCY-SAMPLE N=13 deadline_notice [0-9]+ ([0-9]{1,6}|[1-5][0-9]{6})$',
+    '^\[con [0-9a-f]{16}\] steward: LATENCY-SAMPLE N=12 deadline_notice [0-9]+ ([0-9]{1,6}|[1-5][0-9]{6})$',
+    '^\[con [0-9a-f]{16}\] steward: LATENCY-SAMPLE N=11 deadline_notice [0-9]+ ([0-9]{1,6}|[1-5][0-9]{6})$',
+    '^\[con [0-9a-f]{16}\] steward: LATENCY-SAMPLE N=10 deadline_notice [0-9]+ ([0-9]{1,6}|[1-5][0-9]{6})$',
+    '^\[con [0-9a-f]{16}\] steward: LATENCY-SAMPLE N=9 deadline_notice [0-9]+ ([0-9]{1,6}|[1-5][0-9]{6})$',
+    '^\[con [0-9a-f]{16}\] steward: LATENCY-SAMPLE N=8 deadline_notice [0-9]+ ([0-9]{1,6}|[1-5][0-9]{6})$',
+    '^\[con [0-9a-f]{16}\] steward: LATENCY-SAMPLE N=7 deadline_notice [0-9]+ ([0-9]{1,6}|[1-5][0-9]{6})$',
+    '^\[con [0-9a-f]{16}\] steward: LATENCY-SAMPLE N=6 deadline_notice [0-9]+ ([0-9]{1,6}|[1-5][0-9]{6})$',
+    '^\[con [0-9a-f]{16}\] steward: LATENCY-SAMPLE N=5 deadline_notice [0-9]+ ([0-9]{1,6}|[1-5][0-9]{6})$',
+    '^\[con [0-9a-f]{16}\] steward: LATENCY-SAMPLE N=4 deadline_notice [0-9]+ ([0-9]{1,6}|[1-5][0-9]{6})$',
+    '^\[con [0-9a-f]{16}\] steward: LATENCY-SAMPLE N=3 deadline_notice [0-9]+ ([0-9]{1,6}|[1-5][0-9]{6})$',
+    '^\[con [0-9a-f]{16}\] steward: LATENCY-SAMPLE N=2 deadline_notice [0-9]+ ([0-9]{1,6}|[1-5][0-9]{6})$',
+    '^\[con [0-9a-f]{16}\] steward: LATENCY-SAMPLE N=1 deadline_notice [0-9]+ ([0-9]{1,6}|[1-5][0-9]{6})$',
     '^\[con [0-9a-f]{16}\] steward: LATENCY-COUNT N=1 deadline_notice 1$',
     '^\[con [0-9a-f]{16}\] steward: LATENCY-COUNT N=2 deadline_notice 1$',
     '^\[con [0-9a-f]{16}\] steward: LATENCY-COUNT N=3 deadline_notice 1$',
@@ -89,7 +106,8 @@ expect_after = [
 # for the shared deadline less the time since the first start, on the guest's clock; a sleep of
 # the shared deadline and three seconds from the last launch's return; the round's marker, on
 # which the probe counts the burst out; the done marker, on which it prints the window's end and
-# exits for the reboot (the derivation is in steward-deadline-burst.toml's session comment).
+# exits for the reboot (the derivation is in steward-deadline-burst.toml's session comment); the
+# sixteen `[lease alice/agent-N ended]` lines the shell prints are expected before the result.
 [[session]]
 user = "alice"
 pty = true
@@ -99,6 +117,22 @@ steps = [
     { expect = '\{:stage, :ok, :ok\}' },
     { expect = '\([0-9]+\)> ' },
     { send = "start = fn us -> {:ok, %{lease: l}} = Redoubt.Wire.Client.Steward.start_agent(c, us, Redoubt.Wire.Client.launch_timeout()); l end; burst = fn d, ms -> t0 = System.monotonic_time(:millisecond); for _ <- 1..d, do: start.((ms - (System.monotonic_time(:millisecond) - t0)) * 1000); Process.sleep(ms + 3000); File.write(\"/home/alice/latency-round-1\", \"round over\"); Process.sleep(3000); {:burst, d, :done} end; burst.(16, 120_000)\n" },
+    { expect = '\[lease alice/agent-[0-9]+ ended\]' },
+    { expect = '\[lease alice/agent-[0-9]+ ended\]' },
+    { expect = '\[lease alice/agent-[0-9]+ ended\]' },
+    { expect = '\[lease alice/agent-[0-9]+ ended\]' },
+    { expect = '\[lease alice/agent-[0-9]+ ended\]' },
+    { expect = '\[lease alice/agent-[0-9]+ ended\]' },
+    { expect = '\[lease alice/agent-[0-9]+ ended\]' },
+    { expect = '\[lease alice/agent-[0-9]+ ended\]' },
+    { expect = '\[lease alice/agent-[0-9]+ ended\]' },
+    { expect = '\[lease alice/agent-[0-9]+ ended\]' },
+    { expect = '\[lease alice/agent-[0-9]+ ended\]' },
+    { expect = '\[lease alice/agent-[0-9]+ ended\]' },
+    { expect = '\[lease alice/agent-[0-9]+ ended\]' },
+    { expect = '\[lease alice/agent-[0-9]+ ended\]' },
+    { expect = '\[lease alice/agent-[0-9]+ ended\]' },
+    { expect = '\[lease alice/agent-[0-9]+ ended\]' },
     { expect = '\{:burst, 16, :done\}' },
     { expect = '\([0-9]+\)> ' },
     { send = "{:marker, File.write(\"/home/alice/latency-done\", \"the case is done\")}\n" },

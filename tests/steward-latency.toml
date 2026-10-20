@@ -146,13 +146,13 @@ expect_after = [
 # Why one at a time, not a burst: deadline_notice is a single lease's notice latency, the
 # sponsor told (the steward's lease_ended send returned) less the deadline, target 40 ms. A burst
 # of D deadlines firing together hands the steward D Exited events at once, and the sponsor is
-# told of the last about D x the VM's take of one forwarded notice after the first (85 to 300 ms each on
-# average: the send completes only when the sponsor's VM takes beamlet's forward of it), after
-# the kernel's D destructions at the deadline's entry; measured by steward-deadline-burst and its
-# companion (1.5 to 1.8 s for the last of six, 2.1 to 2.8 s for the last of sixteen, from the deadline;
-# kernel/scheduling.md records it) -- the sponsor's rate under a burst, not a single notice's
-# latency, which this case measures one lease at a time (it meets 40 ms; the N = 16 round did at
-# 10 ms when the rest were a burst). Sequential-all fits the trace ring (256 MiB, 8,388,608 records; kernel/src/sched.rs),
+# told of the last about D x the steward's own work for one exit after the first (37 to 131 ms
+# each: beamlet's serve thread takes each send at once and queues it for the VM), after the
+# kernel's D destructions at the deadline's entry; measured by steward-deadline-burst and its
+# companion (1.1 to 1.3 s for the last of six, 1.8 to 2.5 s for the last of sixteen, from the
+# lease's deadline; kernel/scheduling.md records it) -- the steward's pace under a burst, not a
+# single notice's latency, which this case measures one lease at a time (it meets 40 ms; the
+# N = 16 round did at 10 ms when the rest were a burst). Sequential-all fits the trace ring (256 MiB, 8,388,608 records; kernel/src/sched.rs),
 # the window's end well inside it (the per-round lease short where the launch is small keeps the
 # idle down). timeout_secs is the case's bound and does not move.
 [[session]]
