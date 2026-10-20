@@ -717,3 +717,35 @@ WRITE1 and WAKE1 nodes retitled to the rulings (active-node upsert works; WASH-R
 ~07:38Z Train 82 (WAKE1) in progress: 3 FAIL so far: walfsd-pools rv64, walfsd-flood-turn both widths (timed-step expects "within the step's own bound"; ATK11-shape latency cases through the hub). Possible WAKE1 regression (the hub's completions now via the queue to a busy VM) or load (members' boots beside the train). Rerun alone after the train; if 3/3 fail alone -> finding for the Architect before publish.
 
 ~07:57Z Train 82 (WAKE1) run 1: 771 PASS, 5 FAIL: walfsd-pools rv64, walfsd-flood-turn both widths (timed steps past their bound), steward-session-ends rv32 (ssh 255 waiting for reattached at 973 s), smp-evict-mttcg rv32 (known class). Reruns alone x2 running (rerun*-*.log in .tmp/train-82). If the walfsd latency cases fail alone: WAKE1 regression (hub completions to a busy VM now via the queue?) -> Architect, not published.
+
+~08:04Z TRAIN 82 PUBLISHED (WAKE1 a242a6e08; run 1 771 PASS + 5 FAIL all passing alone x2 except smp-evict-mttcg rv64 1/2 (known class; flagged to the Architect as a B candidate)) main 74a83e2f9; wp-WAKE1 pushed, worktree+branch removed; save.sh clean (wp-WRITE1 pushed by hand with lease). STEWARD14 launched (steward14-implementer on 74a83e2f9, steward-red-5). STEWARD13/WRITE1 told the hash. Train 83 = BENCH2 + B90 (+STEWARD13/WRITE1 when reviewed): start when STEWARD13 reports or soon.
+
+~08:05Z TRAIN 83 = BENCH2 (c32178bd8) + B90 (10f27228f) on 74a83e2f9, head 97eb9fdfe (testbench.md auto-merged), .tmp/train-83 running. STEWARD13/WRITE1/STEWARD14 -> train 84+. On green: ff main, push, push wp-BENCH2 + wp-B90, remove both worktrees/branches, save.sh, hashes to STEWARD13/WRITE1/STEWARD14.
+
+~08:06Z Architect on the two bench facts: (1) smp-evict-mttcg early exit = B91 (investigation-first; launched, b91-implementer; tier follows the arm; kernel-red-4); (2) timed bounds hold under "one bench alone, QEMU exclusive": sentence via B91/BENCH2; q has --lock but nothing takes a qemu lock -> B92 (whole-bench targets hold a machine-wide qemu lock; single boots wait) added, launches when a slot frees. Active: STEWARD13, WRITE1, STEWARD14, B91.
+
+~08:33Z TRAIN 83 PUBLISHED (BENCH2 c32178bd8 + B90 10f27228f on 74a83e2f9, head 97eb9fdfe) main 5ced0b2b3; 776 PASS rc=0 (08:04-08:31Z); both wp branches pushed, worktrees+branches removed; save.sh refused (B91/STEWARD14 dirty), main pushed. Hashes to STEWARD13/WRITE1/STEWARD14/B91; B92 launched (b92-implementer on 5ced0b2b3, kernel-red-4). Active 5: STEWARD13, WRITE1, STEWARD14, B91, B92. Queued: SCHED5.
+
+~08:44Z B91 done (62bc7eaa7 on 5ced0b2b3: the judge spins on the writer's page-mapping heartbeat via budget_usage; baseline 8/80 FAIL -> 120/120 PASS; testbench.md condition sentence) -> kernel-red-4. Train 84 = B91 (+ STEWARD13/WRITE1/STEWARD14/B92 as reviewed); .tmp/train-84 prepared.
+
+~08:46Z B91 OK (kernel-red-4, two P3; rate folded) -> head 7bc68b656; accepted. TRAIN 84 = B91 alone on 5ced0b2b3 (.tmp/train-84 running). STEWARD13/WRITE1/STEWARD14/B92 -> train 85+.
+
+~08:55Z STEWARD13 done (9c67f214d on 5ced0b2b3, 3 commits: launch thread + pending batch + held events + per-call tokens + install lock; overlap case + oracle flag/record cell; pages; size 3580->4035) -> steward-red-5. Train 85 = STEWARD13 (+WRITE1/STEWARD14/B92 as reviewed) after train 84 publishes.
+
+~09:00Z STEWARD13 OK (steward-red-5, one cosmetic P3: tree() suppresses a domain usage line while its launch pends); accepted. Train 85 = STEWARD13 after train 84 publishes (.tmp/train-85 prepared); tell STEWARD14 to rebase onto it then.
+
+~09:06Z B92 done (44a929d3a on 5ced0b2b3: q --share, --cores 0, held-job line, adoption across restart; jobs.mk whole runs hold qemu exclusively via qemu-held, single boots --share; q-test 29) -> kernel-red-4. PUBLISH NOTE: after B92 merges, restart the machine daemon (q stop; q daemon) so the lock exists; it adopts running jobs. Train 85 = STEWARD13 (+B92 if OK in time) after 84.
+
+~09:10Z B92 OK with notes (kernel-red-4); P2 folded (cmd_run exports REDOUBT_Q=SOCK so test daemons never adopt machine boots) -> head eee304c63, q-test 29 PASS; accepted. Train 85 = STEWARD13 + B92 after train 84; then `scripts/q stop; scripts/q daemon` once.
+
+~09:16Z TRAIN 84 PUBLISHED (B91 7bc68b656) main ca2d0966a; 776 PASS rc=0 (08:46-09:15Z); wp-B91 pushed, worktree+branch removed. Next: train 85 = STEWARD13 (9c67f214d) + B92 (eee304c63) on the tip; then q daemon restart.
+
+~09:16Z TRAIN 85 = STEWARD13 (9c67f214d) + B92 (eee304c63) on ca2d0966a, head bd72986d9, .tmp/train-85 running (the train itself runs under the OLD daemon: the lock does not exist until the restart after publish).
+
+~09:17Z WRITE1 status: no VM-own wait wedge (the unreturned agents were never served after an early hub connection failure; Echo's refused-input idle); the agent retries its input read on etimedout (bounded); lease-writes round A green both widths; rounds B/C running; squashed to 3 commits on 5ced0b2b3 (cf498e116), rebase onto ca2d0966a after round C, host suite + one round + beamlet set when no train runs -> report -> kernel-red-4.
+
+~10:00Z Train 85 run 1: 772 PASS + 4 FAIL: shell-compile and agent-login both widths time out on the steward post-session usage line (users/alice/{} holds N pages, 20|30 processes): STEWARD13 regression (the reviewer's "cosmetic" P3: tree() suppresses the usage line while a launch pends). steward13-fixer launched on wp-STEWARD13 (rebase onto ca2d0966a, fix + host test, the two cases both widths, autosquash). B92 unaffected. Train 85 run 2 after the fix + steward-red-5 renewal.
+
+~10:10Z STEWARD13 regression fixed (5fbcf52bf on ca2d0966a): launching_in keyed on the pending batch owner's domain, but a sponsored session is carved from the sponsor's sub-budget, so alice's usage line printed early (before the Done + Login audit), not suppressed; Pending::carves_from fixes it; host test negative; both cases PASS both widths; size 4039. -> steward-red-5 renewal; then train 85 run 2 (STEWARD13 5fbcf52bf + B92 eee304c63 on ca2d0966a).
+
+~10:11Z STEWARD13 renewal OK (steward-red-5: "my P3 should have been a P2 naming the two cases"). TRAIN 85 run 2 = STEWARD13 5fbcf52bf + B92 eee304c63 on ca2d0966a, head 607f3736b (run 1 logs in .tmp/train-85/run1).

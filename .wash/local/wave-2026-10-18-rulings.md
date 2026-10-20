@@ -1295,3 +1295,86 @@ bisects of the steward's phase cannot change the owner. The 20 ms timer wake at 
 threaded (0.8 inline) is within its 15 ms p50, stated. Notes closed: the loop's stack growth is
 the late-answer path (boxing the pending batch, 18,472 B); the worst served start_agent 4.82 s
 under the 6.64 s the bound derives from — the bound stands.
+
+### Two bench facts (2026-10-20): smp-evict-mttcg's flake → a B node; walfsd timed steps under load → the condition, not a node
+
+1. **smp-evict-mttcg fails ~1 in 8 alone** ("guest exited while waiting for the shootdown line,
+   QEMU exited with status 0" at 1.1–1.2 s). A flaky test is a bug (tenet 6): **a B node**,
+   investigation-first, shell-free. Three arms, excluded by the failing boot's full console: (i)
+   the line is in the captured output but after the bench stopped reading — the bench's console
+   reader does not drain to EOF after the guest exits before judging (bench, Tier B); (ii) the
+   line is absent and the guest exited 0 — the kernel case ends on the primary hart without
+   joining the hart that prints the shootdown line (a kernel-case ordering bug, Tier A,
+   kernel-red); (iii) the line was written but the UART was not drained before the shutdown call
+   (the kernel's exit racing its console flush — fail loud means the last line is flushed; Tier A,
+   kernel-red). Whichever: the fix by construction (drain to EOF; join before exit; flush before
+   shutdown) with the case rerun at the 1-in-8 rate shown green over enough boots to say so.
+2. **Train 82's three walfsd latency steps failing under the whole bench beside three members'
+   boots, passing alone twice both widths: not a node.** The timed cases' bounds are the box's
+   under the stated condition — one whole bench at a time, QEMU exclusive during it (the owner's
+   rule of 2026-10-05; members' host-only work pinned to the other cores) — and the boots beside
+   the train broke the condition. WAKE1 publishes on the rerun evidence, rightly. Two
+   consequences: the condition goes on testbench.md beside the timed cases' bounds if it is not
+   there (a sentence; BENCH2 is live and may carry it), so ATK11's bounds are read as "under one
+   bench alone"; and if `q` cannot express "a whole bench holds QEMU" today, a Tier B tooling node
+   (S) to make it so is justified by this being the recurring failure mode — the orchestrator's
+   call, knowing q. The walfsd timed cases flaking first under sharing is expected: they are the
+   bench's tightest timed bounds, which is what makes them the gate.
+(Ids: (1) B91, investigation-first, arm to me before the fix. (2) B92, Tier B tooling S: the
+whole-bench targets hold a machine-wide qemu lock via `q run --lock`, single boots wait with a
+line naming the train, host-only cases exempt; the condition sentence rides with B91 unless
+BENCH2 carries it.)
+
+### B91 arm (2026-10-20): the kernel case's ordering; spin on the writer's progress, not the clock
+
+`.tmp/B91/phase1-arm.md`. Not the reader, not the flush: the console runs to TEST PASSED; the
+shootdown line is absent because the kernel never printed it — ptable's evict prints only when
+`hart::shootdown` asked a hart, and at the destroy no other hart ran the writer. The judge's
+`wait_ms(5)` is a receive timeout whose deadline re-arm lands on the first hart to re-arm, often
+the writer's at its 1 ms slice end; kmain's expiry wakes the judge there and the pick gives it
+that hart; the writer is Ready on no hart while wake_idle IPIs the idle hart; the judge destroys
+at once, racing that pick. Identical under icount, so only MTTCG shows it.
+
+**Ruled: the mechanism is right, the condition is not yet.** Spin, not sleep — the judge holds
+its hart by construction, no deadline another hart can serve — is the right mechanism. But a 5 ms
+clock alone asserts what the case must observe: that the writer is running on another hart at
+the destroy. Order on the event: the writer publishes its progress (a counter it bumps each pass
+over the mapping, with its hart id), and the judge spins (`sched::spin_until`'s shape, no sleep)
+until it has seen the counter advance — two increments, so the writer is actively running
+elsewhere now, not merely fetched — then destroys; the clock is only the failure bound (the
+case's own timeout, loud). With one runnable thread on the other hart and the judge spinning on
+its own, nothing displaces the writer between the observation and the destroy, so the shootdown
+is asked by construction and the line is deterministic under MTTCG too. smp-evict.rs only, Tier
+A (a kernel case), kernel-red-4, no kernel line moves. Acceptance: the 40-boot baseline's failure
+rate, then 40 boots green after, both widths at two harts; the case's comment states why it
+spins and what it waits for (the memory rule: order on events, not the host clock).
+
+### WRITE1's gate finding (2026-10-20): a give-up leaks its fid; the clunk follows the request
+
+lease-writes (sixteen writers, host clock) lost 1–3 agents in 6 of 10 boots; with the loud exit
+the status names it: exit 104, the input read refused `emfile` six times. Mechanism (files.rs
+`give_up`): a request given up on IN FLIGHT has its fid "retired as a lost reply's is" and is
+never clunked, so every etimedout write under the data volume's throughput (decision 3's dozens
+a boot) leaves one fid held at walfsd and one burnt in the client's pool; sixteen agents'
+timeouts drain the account's working pool (71 less twenty roots) until walfsd answers `too many
+open files` to whoever walks next — the late starters' first read of /project/in.
+
+**Ruled: in WRITE1, Tier A as the rest — the same rule's second half.** Every hub request ends in
+one answer to its caller AND every fid it walked is let go: a give-up on an in-flight request
+queues a Clunk for its fid as a closed file's (Owner::Close), after the request in the
+connection's order; the server serves in order, so the clunk lands after the late answer (a failed
+Rwalk leaves no fid and the clunk's `unknown fid` frees the client's); the pool recovers. files.md's
+"retired" sentence becomes "clunked after it". Host test: a request unanswered past the bound,
+then let go — the server's clunk count rises and the fid is reused. Not a lower N (designing to
+pass), not an agent tolerating `emfile` (hiding a leak). **One check:** the claim "the server
+serves in order so the clunk lands after the late answer" must be a rule the serving library
+states (serving.md, per-connection order) — cite it; if a server may answer out of order (parked
+completion calls at walfsd/littlefsd), the clunk is instead issued when the hub takes and drops
+the late answer (the hub knows that moment), so it never precedes the request it closes. Either
+way the sentence on files.md says which.
+(Landed in the second form: the mux serves in order but goes on past a request the file server
+holds (ninep_mux.rs fill), so the hub keeps a given-up request as Owner::GivenUp and clunks at the
+moment it takes and drops the late answer — a walked fid as a closed file's; a walk in flight
+clunked only if its Rwalk walked every name, else its number returned; an open handle's fid never
+the operation's. files.md says so; host test a_fid_given_up_on_is_clunked_when_its_late_answer_comes
+fails on the code before. Head 88ce8464e, train 84.)

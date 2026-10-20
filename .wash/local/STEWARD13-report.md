@@ -1,8 +1,11 @@
 # STEWARD13 report: a launch does not hold the steward's loop
 
 Branch `wp-STEWARD13`, worktree `/home/mcloonan/redoubt/.worktrees/STEWARD13`, on origin/main
-`ddafcad7d` (train 80). Head: see the final section (the WIP commits are rebuilt into logical
-commits before acceptance). Tier A (the steward's loop and launch), reviewer steward-red-5.
+`5ced0b2b3` (train 83). Three commits: `4318b3d24` steward (the thread, the pending
+batch, the held events, the parked calls, the install lock, the host tests, the manifests, the
+size ceiling with its line), `5db148845` testbench (the overlap case, the probe's window, the
+oracle's overlap flag and recorded cell, the latency toml), `9c67f214d` docs; head `9c67f214d`.
+Not pushed (implementers never push). Tier A (the steward's loop and launch), reviewer steward-red-5.
 Rulings: `.wash/local/wave-2026-10-18-rulings.md` 'STEWARD13' and 'STEWARD13 design'; brief
 `.wash/local/STEWARD13-implementer.md`. Evidence under `.worktrees/STEWARD13/.tmp/STEWARD13/`:
 `before/` (the overlap case on the unchanged loop: `make.log`, the job logs, the run dirs with
@@ -180,12 +183,15 @@ the paragraph on scheduling.md ('With the real steward'). Detail:
   vault-launch, vault-session, sub-budget-flood, session-ends, host-tests PASS on both widths;
   rv64 `steward-latency` at one and two harts, `-n4` and `-n16` at both PASS (`rerun2/C.log`,
   whole consoles under `rerun2/consoles/`).
-- The final set on `6d876309b` (`final/make.log`): the 40 steward cases but `-n4`/`-n16`,
-  `steward-launch-overlap`, both burst cases, `steward-latency` both widths (the recorded cell),
-  userland-boot, init-boot, docs, formatting, size-budget, unsafe-budget: see the final section.
-- Not rerun on the last two commits: `steward-latency-n4` and `-n16` (passed on `74ca3bfea`,
-  which differs by the usage line's timing and the oracle's `width=` argument, neither in their
-  judged quantities).
+- The set on `6d876309b` (train 81's base; `final/make.log`, 50 cases, -j8): 96 PASS, the one
+  FAIL `size-budget` for the ceiling the usage-line rule moved (4,024 → 4,035, carried in the
+  steward commit); rv32 `steward-latency` PASS with its recorded cell printed as `p50 <= 25000:
+  missed, recorded, not judged`.
+- On the rebuilt head (train 82's base `c325e1232`, then train 83's `9c67f214d`): host tests 75 and 66, the four binary
+  checks, `set CASES="formatting docs size-budget unsafe-budget"` all PASS (`gates4.log`, `gates5.log` with steward-host-tests on the train-83 head); the
+  boot set (every `steward-*` case, `steward-launch-overlap`, both bursts with WAKE1's bounds,
+  the three latency cases, userland-boot, init-boot, both widths) runs once train 83's bench is
+  done (BENCH2 and B90 landed meanwhile; rebased again, nothing of theirs touched): `final3/make.log`, its verdicts in the final section below.
 
 ## Documentation check (summaries)
 
@@ -215,3 +221,55 @@ the paragraph on scheduling.md ('With the real steward'). Detail:
 - The thread's read closure discipline (the lock dropped inside every read) is shown by
   construction in `start_job` and by the bench, not by a host test: the closure runs the real
   `Launch::start`, which makes kernel calls.
+
+## Final: the boot set on the head `9c67f214d` (train 83's base)
+
+`make -k -j8 -f scripts/jobs.mk set CASES=...` (`.worktrees/STEWARD13/.tmp/STEWARD13/final3/
+make.log`, `set.txt`, the consoles under `final3/consoles/`): 48 cases, 98 verdicts, 98 PASS,
+0 FAIL: every `steward-*` case both widths (the three latency cases at their gated widths and
+hart counts, both burst cases with WAKE1's bounds, `steward-launch-overlap`, `steward-server-
+restart`, `steward-session-ends`), `userland-boot`, `init-boot`. The overlap case on this head:
+`deadline_notice` net p50 / p99 15.2 / 20.3 ms (rv64, one hart), 15.8 / 21.4 (rv64, two),
+29.3 / 33.3 (rv32), every deadline inside a launch window. rv32 `steward-latency`'s recorded
+cell: `N=1 decision_wake net p50 32,257 µs: p50 <= 25000: missed, recorded, not judged`; every
+other cell of every round met. The whole bench is the train's.
+
+## Regression after review (2026-10-20, steward13-fixer)
+
+Train 85 failed `shell-compile` and `agent-login` on both widths, timing out on the post-session
+usage line `steward: users/alice/{} holds N pages, 20|30 processes` (job logs
+`.tmp/train-85/fail-{rv64,rv32}-{shell-compile,agent-login}.log`). The kept consoles show the
+line not suppressed but printed early: before the lease's `audit 1003/{} ... Login` record
+(agent-login rv64: `holds 34179 pages, 30 processes` right after sshd's `session ... ended`
+lines, the audit after it), so the case's `expect_after` for a line following the record waited
+for a change that never came.
+
+**Cause.** `Steward::launching_in(domain)` (`servers/steward/src/lib.rs`) keyed on the pending
+batch's owner's domain. A sponsored principal's session (agent, R39) is carved from its sponsor's
+unlabelled sub-budget (`carve_session`: `Parent::Sub(sponsor_domain)`), so the launching object's
+domain is `1003/{}` while the budget whose count rose is `users/alice/{}`; `tree()` did not skip
+alice's domain, and the next event's `after` (the console session's `Done` in shell-compile,
+alice's channel close in agent-login) printed her line before the lease's `Done` and its record.
+Unsponsored sessions and `start_agent` leases carve from their own domain, which is why every
+`steward-*` case passed.
+
+**Fix** (head `5fbcf52bf`, rebased on `ca2d0966a`, squashed into the steward and docs commits):
+`Pending::carves_from(domain)` (`drive.rs`: any `CreateBudget { parent: Parent::Sub(d) }` step
+with `d == domain`), `launching_in` uses it; `tree()`'s and `launching_in`'s doc comments; the
+page's "Leases" bullet gains the clause (the usage line of the domain the batch carves from, its
+own or the sponsor's, is said with the `Done`, after the record); the Leases status line names the
+test. The design holds (the line is said when the launch completes, after the record, as the
+inline launch ordered them); only the domain was wrong. Host test
+`a_sponsored_logins_launch_defers_the_sponsors_usage_line_until_its_report` (login as agent with
+`launch_pends`: `launching_in(alice/{})` true and `launching_in(agent/{})` false while the launch
+pends, false after the report, one `Login` record): fails on the old condition
+(`.worktrees/STEWARD13/.tmp/STEWARD13-fix/host-negative.log`, "the sponsor's sub-budget is carved
+while the launch waits"), passes on the fix. Size: servers/steward 4035 -> 4039 (the sum rule; the
+`Size budget:` line in the steward commit), the commit message gaining the sentence.
+
+**Gates** (`.worktrees/STEWARD13/.tmp/STEWARD13-fix/`): `cargo test -p redoubt-steward-server`
+76 passed (`host2.log`); `set CASES='formatting docs'` PASS (`gates1.log` docs, `gates2.log`
+formatting after nightly fmt of lib.rs); `set CASES='size-budget shell-compile agent-login'`
+PASS all five: size-budget, agent-login rv32 7.1 s / rv64 7.8 s, shell-compile rv32 8.7 s /
+rv64 9.7 s (`gates5.log`). The tree after the reword is identical to the autosquashed one
+(`git diff --stat c6acfa450 HEAD` empty). Not run: the whole bench (the train's).
