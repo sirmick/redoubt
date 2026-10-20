@@ -1,5 +1,5 @@
 # Not named rustfmt.toml: rustfmt would take that as the configuration for everything under tests/.
-description = "Every Rust source is formatted with the repository's rustfmt.toml under nightly: the workspace and each cargo workspace outside it"
+description = "Every Rust source is formatted with the repository's rustfmt.toml under nightly (the workspace and each cargo workspace outside it), and every Elixir source with its project's .formatter.exs"
 kind = "fmt"
 roots = [
     ".",
@@ -29,3 +29,20 @@ reason = "RustSBI, upstream's code with its own rustfmt.toml; only built here, n
 [[skip]]
 path = "tools/doccheck/tests/fixtures/good"
 reason = "the docs checker's input: its layout (a multi-line cfg_attr) is what the checker is tested on"
+
+# Every .ex and .exs git tracks or has not ignored, from the deepest root above it: the shell's
+# under its own .formatter.exs, the rest under the repository's.
+[elixir]
+roots = [".", "userland/shell"]
+
+[[elixir.skip]]
+path = "libs/wire/elixir/proto"
+reason = "redoubt-wire-gen's output from libs/wire/tables; the generator is its one definition and its test holds it to that"
+
+[[elixir.skip]]
+path = "libs/wire/elixir/client"
+reason = "redoubt-wire-gen's output, as proto/ is"
+
+[[elixir.skip]]
+path = "libs/steward/elixir/gen"
+reason = "redoubt-steward-gen's output from libs/steward/tables; its test holds it to that"

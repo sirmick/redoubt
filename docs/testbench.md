@@ -1951,7 +1951,7 @@ covers anything fails the case too.
 
 ## The formatting gate
 
-Status: built · partly tested: that a skip with no reason, or one that names no workspace, fails is read from the code, not run by a self-check · tested: bench:formatting, host:testbench::only_tracked_workspaces_are_reported, host:testbench::diff_headers_of_both_rustfmt_forms_name_the_file
+Status: built · partly tested: that a skip with no reason, or one that names no workspace, fails is read from the code, not run by a self-check · tested: bench:formatting, host:testbench::only_tracked_workspaces_are_reported, host:testbench::diff_headers_of_both_rustfmt_forms_name_the_file, host:testbench::every_elixir_file_is_walked_from_its_deepest_root
 
 `formatting.toml` holds the tree to [the formatting rule](../CONTRIBUTING.md#formatting): in each
 cargo workspace root it names (the main workspace, each host-only fuzz or oracle crate that is its
@@ -1965,6 +1965,22 @@ in `rustfmt.toml`'s `ignore`: the generator is their one definition, and its own
 its output. Without nightly rustfmt the case fails, unless
 `--allow-skip`. The case file is not called `rustfmt.toml`: rustfmt would read it as the
 configuration for everything under `tests/`.
+
+The Elixir is held the same way, and by the file rather than by the project: the case lists every
+`.ex` and `.exs` git tracks or has not ignored (so a file about to be added counts, wherever it
+is put) and runs `mix format --check-formatted` on them, under the pinned toolchain, from the
+deepest of the `[elixir]` roots above each, which is where its `.formatter.exs` is: the
+repository root, whose `.formatter.exs` (110 columns, as `rustfmt.toml` sets) covers the
+steward's and the wire's Elixir, the OTP test programs, the bench's script and the docs
+checker's fixtures; and `userland/shell`, the shell's own. Each root must hold a
+`.formatter.exs`, and one anywhere else is a finding, as a configuration the walk would not use;
+a file under no root is one too. Three directories are skipped with their reason, as the Rust
+codecs are: `libs/wire/elixir/proto` and `client`, `redoubt-wire-gen`'s output, and
+`libs/steward/elixir/gen`, `redoubt-steward-gen`'s; each generator's test holds its files to its
+output. A skip over no Elixir, or without a reason, fails. Before this walk only the shell's
+`./test-shell` ran `mix format`, over the shell's own inputs, and the bench ran none: the
+steward's reference, the wire's hand-written Elixir and the OTP test programs went unformatted
+for as long as they existed. Without the pinned `mix` the case fails, unless `--allow-skip`.
 
 ## The docs checker
 
