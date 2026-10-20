@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 use beamlet_redoubt::fixture::{self, Dirs, Volume};
 use beamlet_redoubt::io::MAX_WAITERS;
 use beamlet_redoubt::system::{ATTACH_US, HAND_US, MAX_BINDINGS};
-use beamlet_redoubt::{FILE_WAIT_US, REQUEST_WAIT_US, Redoubt};
+use beamlet_redoubt::{FILE_WAIT_US, MAX_FORWARDS, REQUEST_WAIT_US, Redoubt};
 use beamlet_vm::platform::{
     BudgetSpec, Event, FileError, Files, Identity, Launch, Message, Object, OpenMode, Platform, Refused,
     System,
@@ -936,6 +936,138 @@ fn a_request_already_waiting_ends_the_idle_that_takes_it() {
             };
             p.reply(&request.unwrap(), message([0, 5, 0, 0], None)).unwrap();
             assert_eq!(caller.join().unwrap(), 5);
+        },
+    );
+}
+
+/// A client's one-way sends to a served endpoint are each taken by the serve thread at once,
+/// whatever the VM does: here it polls nothing while sixteen are sent, as a VM busy in Erlang
+/// polls once a scheduler turn, and all sixteen arrive at its one poll after, in order. (The
+/// thread once forwarded each send by a `send` that waited for the VM to take it, so the second
+/// send waited for the VM's turn, and a burst of the steward's `lease_ended` sends was taken one
+/// turn each, the last of N about N turns late, one lost at the steward's bound.)
+#[test]
+fn sixteen_sends_are_taken_at_once_and_arrive_at_one_poll() {
+    let f = fake();
+    let client = f.process(2002, &[5]);
+    let served = Arc::new(Mutex::new(None));
+    let given = Arc::clone(&served);
+    with_session(
+        move |pid| {
+            let receive = f.endpoint(pid);
+            *given.lock().unwrap() = Some(f.grant(pid, receive, client, 33));
+            vec![("service", receive)]
+        },
+        move |p, _| {
+            let (service, _) = p.lookup("service").unwrap();
+            p.serve(ME, &service).unwrap();
+            let to = served.lock().unwrap().unwrap();
+            let sender = f.run(client, move || {
+                let e = Endpoint::from_handle(to);
+                for n in 1..=16 {
+                    e.send(&[n, 0, 0, 0], &[], None, FOREVER).unwrap();
+                }
+                0
+            });
+            // The clock is held, so a send waiting for the serve thread would wait for good:
+            // every send taken is the verdict, and the host's 300 ms is for the threads to run.
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            assert!(sender.is_finished(), "the sixteen sends were taken with the VM not polling");
+            assert_eq!(sender.join().unwrap(), 0);
+            // The VM's poll: idling finds the queue and returns at once, with everything in it.
+            let deadline = p.monotonic_us() + 1_000_000;
+            p.idle(Some(deadline));
+            for n in 1..=16 {
+                let (asker, Event::Request { request, badge, message, .. }) =
+                    p.poll().expect("all sixteen arrive")
+                else {
+                    panic!("not a request")
+                };
+                assert_eq!((asker, badge, message.words[0]), (ME, 33, n));
+                assert!(request.is_none(), "a send is nobody's call");
+            }
+            assert!(p.poll().is_none());
+        },
+    );
+}
+
+/// A send to a served endpoint while the VM is in its idle receive ends the idle: the serve thread
+/// sees the VM idle and wakes it, where a running VM is left to its poll. (On the held clock an
+/// idle not woken would wait for a deadline that never comes.)
+#[test]
+fn a_send_to_a_served_endpoint_wakes_an_idle_vm() {
+    let f = fake();
+    let client = f.process(2002, &[5]);
+    let served = Arc::new(Mutex::new(None));
+    let given = Arc::clone(&served);
+    with_session(
+        move |pid| {
+            let receive = f.endpoint(pid);
+            *given.lock().unwrap() = Some(f.grant(pid, receive, client, 33));
+            vec![("service", receive)]
+        },
+        move |p, _| {
+            let (service, _) = p.lookup("service").unwrap();
+            p.serve(ME, &service).unwrap();
+            let to = served.lock().unwrap().unwrap();
+            let sender = f.run(client, move || {
+                // The host's 300 ms: the VM is in its idle receive by then, on any host.
+                std::thread::sleep(std::time::Duration::from_millis(300));
+                Endpoint::from_handle(to).send(&[9, 0, 0, 0], &[], None, FOREVER).unwrap();
+                0
+            });
+            let deadline = p.monotonic_us() + 10_000_000;
+            p.idle(Some(deadline));
+            let (_, Event::Request { message, .. }) = p.poll().expect("the send ended the idle") else {
+                panic!("not a request")
+            };
+            assert_eq!(message.words[0], 9);
+            assert_eq!(sender.join().unwrap(), 0);
+        },
+    );
+}
+
+/// The queue is bounded: with `MAX_FORWARDS` queued and the VM not polling, the serve thread
+/// waits for the VM's poll before it takes the next send, so a client's send past that waits
+/// too, as every send once did; the poll takes the whole queue, and the rest follow at the next.
+#[test]
+fn a_full_forwards_queue_holds_the_next_send_until_the_vms_poll() {
+    let f = fake();
+    let client = f.process(2002, &[5]);
+    let served = Arc::new(Mutex::new(None));
+    let given = Arc::clone(&served);
+    with_session(
+        move |pid| {
+            let receive = f.endpoint(pid);
+            *given.lock().unwrap() = Some(f.grant(pid, receive, client, 33));
+            vec![("service", receive)]
+        },
+        move |p, _| {
+            let (service, _) = p.lookup("service").unwrap();
+            p.serve(ME, &service).unwrap();
+            let to = served.lock().unwrap().unwrap();
+            // The queue's worth, one the thread takes and holds for want of room, and one more,
+            // which waits for the thread.
+            let total = MAX_FORWARDS as u64 + 2;
+            let sender = f.run(client, move || {
+                let e = Endpoint::from_handle(to);
+                for n in 1..=total {
+                    e.send(&[n, 0, 0, 0], &[], None, FOREVER).unwrap();
+                }
+                0
+            });
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            assert!(!sender.is_finished(), "the send past the full queue waits for the VM's poll");
+            let mut taken = 0;
+            while taken < total {
+                let deadline = p.monotonic_us() + 10_000_000;
+                p.idle(Some(deadline));
+                while let Some((_, Event::Request { message, .. })) = p.poll() {
+                    taken += 1;
+                    assert_eq!(message.words[0], taken, "in order");
+                }
+            }
+            assert_eq!(sender.join().unwrap(), 0);
         },
     );
 }

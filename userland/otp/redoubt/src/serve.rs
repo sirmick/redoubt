@@ -7,10 +7,16 @@
 //!   with the one status every protocol has, `malformed` (code 1), and its admission given back. So a request
 //!   the Erlang side never answers is ended by the thread, never held by the VM, and a caller whose bucket or
 //!   share is full is answered at once, `malformed` too.
-//! - **To the VM through a wake-up**: the call's words, badge, account, labels and handles (by number: the
-//!   thread is of the same process, and the handles are the VM's from then on) in a header, and its lent
-//!   bytes after it, as the transfer of one `send` to the VM's endpoint through a badge minted for the thread
-//!   ([`BADGE`] + its index). A `send` to the endpoint goes the same way, with nothing to answer.
+//! - **To the VM through a queue, never a wait on it**: the call's words, badge, account, labels and handles
+//!   (by number: the thread is of the same process, and the handles are the VM's from then on) and a copy of
+//!   its lent bytes go into the forwards queue the VM takes at its poll ([`Forwards`], bounded by
+//!   [`MAX_FORWARDS`]), and the thread goes straight back to its receive. A VM in its idle receive is woken
+//!   by one send through a badge minted for the thread ([`BADGE`] + its index) carrying nothing; a busy one
+//!   finds the queue at its next poll. Once the thread forwarded each request by a `send` to the VM's
+//!   endpoint that waited for the VM to take it: a VM busy in Erlang took one per scheduler turn, and a burst
+//!   of the steward's `lease_ended` sends was taken one turn each, the last of N about N turns late and one
+//!   lost at the steward's bound (docs/userland/beamlet.md, "The forwards queue"). A `send` to the endpoint
+//!   goes the same way, with nothing to answer.
 //! - **`reply/2` goes back on the served endpoint itself**, as a `send` through a badge the VM minted from
 //!   its receive right ([`SELF`]): only the VM holds it, so the thread takes a send with that badge as an
 //!   answer and any other as a request. The answer names the call by the number the thread gave it; an answer
@@ -21,12 +27,14 @@
 //!   do, and go under its [`Life`], so a collection closes nothing at their indices once the kernel has freed
 //!   them (docs/userland/beamlet.md, "Handles are resource terms").
 
+use alloc::collections::VecDeque;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::num::NonZeroU64;
 
 use beamlet_vm::platform::{Event, Message, Object, Refused};
-use redoubt_rt::abi::{FOREVER, Handle, Handles, MAX_LABELS, MAX_LEND_PAGES, MAX_MSG_HANDLES, PAGE_SIZE};
+use beamlet_vm::sync::Lock;
+use redoubt_rt::abi::{FOREVER, Handle, Handles, MAX_LEND_PAGES, PAGE_SIZE};
 use redoubt_rt::handle::{Budget, Endpoint, time_now};
 use redoubt_rt::ipc::{Buffer, Delivery, Request};
 use redoubt_rt::server::parked::Parked;
@@ -56,18 +64,66 @@ pub const REQUEST_WAIT_US: u64 = 5_000_000;
 /// The serve thread's stack, in pages.
 const STACK_PAGES: usize = 4;
 
-/// The bytes of a request's or an answer's header, before its lent bytes.
+/// The bytes of an answer's header, before its lent bytes.
 const HEADER: usize = 256;
 
-/// The longest lent part a request or an answer carries: what fits the transfer after the header.
+/// The longest lent part a request or an answer carries: what fits an answer's transfer after the
+/// header, and the same for a request, whose bytes are copied into the forwards queue.
 pub const MAX_BYTES: usize = MAX_LEND_PAGES * PAGE_SIZE - HEADER;
 
-/// A wake-up's first word: a call, or a one-way send.
-const CALL: u64 = 0xca11;
-const SEND: u64 = 0x5e4d;
+/// A serve thread's wake-up's first word: the VM's forwards queue has something for it.
+const WAKE: u64 = 0x3a4e;
 
 /// The admission of a served endpoint: a few callers, a few requests each.
 const LIMITS: Limits = Limits { buckets: 8, in_flight: 4, files: 0, state: 0, requests: 0, pages: 0 };
+
+/// The calls one served endpoint's admission parks at once, each forwarded once: its buckets
+/// times the requests in flight per bucket.
+const PARKED: usize = (LIMITS.buckets * LIMITS.in_flight) as usize;
+
+/// The one-way sends one served endpoint holds for the VM beyond its parked calls: what the
+/// steward can send a session before its VM polls (docs/servers/steward.md, "Leases": one
+/// `lease_ended` per live lease of the sponsor's, sixteen under the latency manifest, one
+/// `server_restarted` per slot of the session's binding table, and `approval_waiting`), with
+/// room over it.
+pub const SENDS: usize = 32;
+
+/// The most requests and sends the serve threads hold for the VM's take: per served endpoint, its
+/// parked calls and [`SENDS`] one-way sends. A thread finding the queue full waits for the VM's
+/// next poll, as every forward once did (docs/userland/beamlet.md, "The forwards queue").
+pub const MAX_FORWARDS: usize = MAX_SERVED * (PARKED + SENDS);
+
+/// How long a wake of an idling VM waits to be taken (µs) before the thread looks again whether
+/// the VM still says it idles: the wake is taken at once by a VM in its idle receive, and this is
+/// the step while the VM is between saying so and entering it.
+const WAKE_US: u64 = 1_000;
+
+/// A request or a one-way send a serve thread took, for the VM: which thread's, the call's number
+/// (none for a send), the caller's badge, account and labels, its words, its handles, the VM's
+/// from here on by number, and a copy of its lent bytes.
+struct Forwarded {
+    thread: usize,
+    number: Option<u64>,
+    badge: u64,
+    account: u64,
+    labels: Vec<u64>,
+    words: [u64; 4],
+    handles: Vec<Handle>,
+    buffer: Option<Vec<u8>>,
+}
+
+/// What the serve threads hand the VM, taken at its poll ([`Served::take`]), and whether the VM
+/// is in its idle receive or about to enter it, told under the same lock as the queue is pushed
+/// and looked at, so a thread that queues sees the VM idle, or the VM's last look before its
+/// receive sees the queue: never both miss.
+pub(crate) struct Forwards {
+    queue: Lock<Queue>,
+}
+
+struct Queue {
+    items: VecDeque<Forwarded>,
+    idle: bool,
+}
 
 /// A request the VM has, behind its resource: where to answer it.
 pub(crate) struct Pending {
@@ -102,10 +158,17 @@ impl Thread {
     }
 }
 
-/// The endpoints served.
-#[derive(Default)]
+/// The endpoints served, and the queue their threads forward through.
 pub(crate) struct Served {
     threads: Vec<Thread>,
+    forwards: Arc<Forwards>,
+}
+
+impl Default for Served {
+    fn default() -> Served {
+        let queue = Lock::new(Queue { items: VecDeque::new(), idle: false });
+        Served { threads: Vec::new(), forwards: Arc::new(Forwards { queue }) }
+    }
 }
 
 impl Served {
@@ -131,9 +194,11 @@ impl Served {
         let receive = Endpoint::from_handle(endpoint);
         // Only a receive right mints: anything else is refused here, by the kernel.
         let answer = receive.mint(NonZeroU64::new(SELF).ok_or(Refused("protocol"))?, None).map_err(name)?;
-        let i = self.threads.len() as u64;
-        let woken = wake.mint(NonZeroU64::new(BADGE + i).ok_or(Refused("protocol"))?, None).map_err(name)?;
-        let body = alloc::boxed::Box::new(move || serve(receive, woken));
+        let i = self.threads.len();
+        let badge = NonZeroU64::new(BADGE + i as u64).ok_or(Refused("protocol"))?;
+        let woken = wake.mint(badge, None).map_err(name)?;
+        let forwards = Arc::clone(&self.forwards);
+        let body = alloc::boxed::Box::new(move || serve(receive, woken, &forwards, i));
         redoubt_rt::thread::spawn(body, STACK_PAGES).map_err(name)?;
         self.threads.push(Thread {
             asker,
@@ -172,32 +237,66 @@ impl Served {
         Some(Ok(minted))
     }
 
-    /// Takes a serve thread's wake-up as a request for its asker; anything else is handed back.
-    pub(crate) fn deliver(&mut self, delivery: Delivery) -> Result<(u64, Event), Delivery> {
+    /// Whether a wake-up is a serve thread's: it carries nothing, the forwards are in the queue.
+    pub(crate) fn woken(&self, delivery: &Delivery) -> bool {
         let i = delivery.caller.badge.wrapping_sub(BADGE) as usize;
-        let kind = delivery.words[0];
-        let (Some(thread), true) = (self.threads.get(i), kind == CALL || kind == SEND) else {
-            return Err(delivery);
-        };
-        let Some(bytes) = delivery.transfer.as_deref() else { return Err(delivery) };
-        let (badge, account) = (delivery.words[2], delivery.words[3]);
-        let life = thread.life(badge);
-        let header = words_of(bytes);
-        let labels = header[1..1 + (header[0] as usize).min(MAX_LABELS)].to_vec();
-        let words = [header[17], header[18], header[19], header[20]];
-        let handles = (0..(header[21] as usize).min(MAX_MSG_HANDLES))
-            .filter_map(|h| Handle::new(header[22 + h] as u32))
-            .map(|h| Cap::returned(h, life.clone()))
-            .collect();
-        let buffer = match header[26] {
-            u64::MAX => None,
-            n => Some(bytes[HEADER..HEADER + (n as usize).min(MAX_BYTES)].to_vec()),
-        };
-        let request = (kind == CALL).then(|| {
-            Arc::new(Pending { answer: Arc::clone(&thread.answer), number: delivery.words[1] }) as Object
-        });
-        let message = Message { words, buffer, handles };
-        Ok((thread.asker, Event::Request { request, badge, account, labels, message }))
+        i < self.threads.len() && delivery.words[0] == WAKE
+    }
+
+    /// The VM is about to idle (`true`), or has woken (`false`): what a serve thread that queues
+    /// meanwhile goes by ([`Forwards`]). Said before the VM's last look at the queue, which is
+    /// [`Served::take`] too.
+    pub(crate) fn idle(&self, idle: bool) { self.forwards.queue.lock().idle = idle; }
+
+    /// Takes what the serve threads queued, each as a request for its thread's asker, onto
+    /// `events`. The handles arrive as resources that die with the request's badge's launch, as
+    /// [`Thread::life`] says.
+    pub(crate) fn take(&mut self, events: &mut VecDeque<(u64, Event)>) {
+        let taken = core::mem::take(&mut self.forwards.queue.lock().items);
+        for f in taken {
+            let Some(thread) = self.threads.get(f.thread) else { continue };
+            let life = thread.life(f.badge);
+            let handles = f.handles.into_iter().map(|h| Cap::returned(h, life.clone())).collect();
+            let request = f
+                .number
+                .map(|number| Arc::new(Pending { answer: Arc::clone(&thread.answer), number }) as Object);
+            let message = Message { words: f.words, buffer: f.buffer, handles };
+            let (badge, account, labels) = (f.badge, f.account, f.labels);
+            events.push_back((thread.asker, Event::Request { request, badge, account, labels, message }));
+        }
+    }
+}
+
+/// Hands `forwarded` to the VM: queued, and the VM woken once if it idles. A full queue holds the
+/// thread until the VM's poll takes a wake and makes room, as every forward once held it; `false`
+/// if the VM is gone.
+fn hand(forwards: &Forwards, wake: &Endpoint, forwarded: Forwarded) -> bool {
+    let mut forwarded = Some(forwarded);
+    let idle = loop {
+        let mut q = forwards.queue.lock();
+        if q.items.len() < MAX_FORWARDS {
+            q.items.extend(forwarded.take());
+            break q.idle;
+        }
+        drop(q);
+        if wake.send(&[WAKE, 0, 0, 0], &[], None, FOREVER).is_err() {
+            return false;
+        }
+    };
+    if !idle {
+        // A running VM finds the queue at its next poll.
+        return true;
+    }
+    // The VM is in its idle receive, or about to enter it: the wake is taken at once, or waits
+    // for the receive in steps of WAKE_US while the VM still says it idles. A VM that woke on its
+    // own meanwhile says it does not, and takes the queue at its poll.
+    loop {
+        match wake.send(&[WAKE, 0, 0, 0], &[], None, WAKE_US) {
+            Ok(()) => return true,
+            Err((redoubt_rt::abi::Error::Timeout, _)) if forwards.queue.lock().idle => {}
+            Err((redoubt_rt::abi::Error::Timeout, _)) => return true,
+            Err(_) => return false,
+        }
     }
 }
 
@@ -234,9 +333,9 @@ fn put_words(bytes: &mut [u8], words: &[u64; 32]) {
     }
 }
 
-/// A serve thread: takes the endpoint's calls and sends, hands each to the VM, and answers what the
-/// VM answers.
-fn serve(endpoint: Endpoint, wake: Endpoint) {
+/// Serve thread `i`: takes the endpoint's calls and sends, hands each to the VM through the
+/// forwards queue, and answers what the VM answers.
+fn serve(endpoint: Endpoint, wake: Endpoint, forwards: &Forwards, i: usize) {
     let Ok(mut admission) = Admission::new(LIMITS) else { return };
     let mut parked: Parked<u64> = Parked::new(REQUEST_WAIT_US);
     let mut next: u64 = 1;
@@ -255,24 +354,20 @@ fn serve(endpoint: Endpoint, wake: Endpoint) {
             redoubt_rt::ipc::Event::Call(mut request) => {
                 let key = (AdmitKey::of(&request.caller), request.caller.badge);
                 let number = next;
-                let carried: Vec<Handle> = request.handles.as_slice().iter().flatten().copied().collect();
-                let Some(pages) = forward(&mut request, &carried) else {
+                let Some(forwarded) = forward(&mut request, i, number) else {
                     // Refused on drop: what it carried is closed.
                     drop(request);
                     continue;
                 };
-                let caller = request.caller.clone();
                 if let Err(not) = parked.park(&mut admission, request, key, number, now) {
-                    carried.iter().for_each(|h| {
+                    forwarded.handles.iter().for_each(|h| {
                         let _ = redoubt_rt::handle::close(*h);
                     });
                     refuse(not.0);
                     continue;
                 }
                 next += 1;
-                let woke =
-                    wake.send(&[CALL, number, caller.badge, caller.account], &[], Some(pages), FOREVER);
-                if woke.is_err() {
+                if !hand(forwards, &wake, forwarded) {
                     return;
                 }
             }
@@ -280,12 +375,11 @@ fn serve(endpoint: Endpoint, wake: Endpoint) {
                 answer(&mut parked, &mut admission, &delivery);
             }
             redoubt_rt::ipc::Event::Send(delivery) => {
-                let Some(pages) = forward_send(&delivery) else {
+                let Some(forwarded) = forward_send(&delivery, i) else {
                     close_delivery(&delivery);
                     continue;
                 };
-                let (badge, account) = (delivery.caller.badge, delivery.caller.account);
-                if wake.send(&[SEND, 0, badge, account], &[], Some(pages), FOREVER).is_err() {
+                if !hand(forwards, &wake, forwarded) {
                     return;
                 }
             }
@@ -303,51 +397,58 @@ fn refuse(mut request: Request) {
     let _ = finish(request, &Outcome { words: MALFORMED, send: Handles::new(), close: Handles::new() });
 }
 
-/// The header and lent bytes of `request`, for the VM; its handles are the VM's from here on.
-/// `None` if they do not fit, or there is no memory for them.
-fn forward(request: &mut Request, carried: &[Handle]) -> Option<Buffer> {
+/// Call `number` on thread `i`, as the VM takes it; its handles are the VM's from here on. `None`
+/// if its bytes do not fit.
+fn forward(request: &mut Request, i: usize, number: u64) -> Option<Forwarded> {
     let caller = request.caller.clone();
     let words = request.words;
+    let handles: Vec<Handle> = request.handles.as_slice().iter().flatten().copied().collect();
     let lent = request.lend();
     let bytes = (!lent.is_empty()).then(|| &lent[..(words[1] as usize).min(lent.len())]);
-    let pages = pack(&caller.labels, &words, carried, bytes)?;
+    let forwarded = pack(&caller, i, Some(number), &words, handles, bytes)?;
     request.handles = redoubt_rt::abi::ReceivedHandles::new();
-    Some(pages)
+    Some(forwarded)
 }
 
-fn forward_send(delivery: &Delivery) -> Option<Buffer> {
-    let carried: Vec<Handle> = delivery.handles.as_slice().iter().flatten().copied().collect();
+/// A one-way send on thread `i`, as the VM takes it.
+fn forward_send(delivery: &Delivery, i: usize) -> Option<Forwarded> {
+    let handles: Vec<Handle> = delivery.handles.as_slice().iter().flatten().copied().collect();
     let bytes = delivery.transfer.as_deref().map(|t| &t[..(delivery.words[1] as usize).min(t.len())]);
-    pack(&delivery.caller.labels, &delivery.words, &carried, bytes)
+    pack(&delivery.caller, i, None, &delivery.words, handles, bytes)
 }
 
-/// A request's header and bytes in fresh pages.
+/// A request's parts and a copy of its bytes, for the queue.
 fn pack(
-    labels: &redoubt_rt::abi::Labels,
+    caller: &redoubt_rt::ipc::Caller,
+    thread: usize,
+    number: Option<u64>,
     words: &[u64; 4],
-    handles: &[Handle],
+    handles: Vec<Handle>,
     bytes: Option<&[u8]>,
-) -> Option<Buffer> {
-    let len = bytes.map_or(0, <[u8]>::len);
-    if len > MAX_BYTES {
+) -> Option<Forwarded> {
+    if bytes.is_some_and(|b| b.len() > MAX_BYTES) {
         return None;
     }
-    let mut header = [0u64; 32];
-    let labels = labels.as_slice();
-    header[0] = labels.len() as u64;
-    header[1..1 + labels.len()].copy_from_slice(labels);
-    header[17..21].copy_from_slice(words);
-    header[21] = handles.len() as u64;
-    for (i, h) in handles.iter().enumerate() {
-        header[22 + i] = u64::from(h.index());
-    }
-    header[26] = if bytes.is_some() { len as u64 } else { u64::MAX };
-    let mut pages = Buffer::new((HEADER + len).div_ceil(PAGE_SIZE)).ok()?;
-    put_words(&mut pages, &header);
-    if let Some(bytes) = bytes {
-        pages[HEADER..HEADER + len].copy_from_slice(bytes);
-    }
-    Some(pages)
+    Some(Forwarded {
+        thread,
+        number,
+        badge: caller.badge,
+        account: caller.account,
+        labels: caller.labels.as_slice().to_vec(),
+        words: *words,
+        handles,
+        // A copy the heap refuses is a refused forward, as the lend's own buffer was: the
+        // allocator returns null past the cap and the VM has no handler for a failed allocation.
+        buffer: match bytes {
+            Some(b) => {
+                let mut copy = Vec::new();
+                copy.try_reserve_exact(b.len()).ok()?;
+                copy.extend_from_slice(b);
+                Some(copy)
+            }
+            None => None,
+        },
+    })
 }
 
 /// The VM's answer in `delivery`: the parked call it names, answered with its words, the handles

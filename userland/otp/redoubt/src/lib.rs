@@ -66,7 +66,7 @@ use redoubt_rt::abi::{FOREVER, Handle, PAGE_SIZE};
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::ipc::Buffer;
 use redoubt_rt::startup::Startup;
-pub use serve::{LAUNCH_BADGE, REQUEST_WAIT_US};
+pub use serve::{LAUNCH_BADGE, MAX_FORWARDS, REQUEST_WAIT_US};
 
 use crate::io::Io;
 
@@ -528,7 +528,17 @@ impl Platform for Redoubt {
             }
             None => FOREVER,
         };
+        // The serve threads are told the VM idles before its last look at their queue: one that
+        // queued before the look is found by it, one that queues after sees the VM idle and
+        // wakes it (serve.rs, `Forwards`).
+        self.sys.idle(true);
+        self.sys.collect();
+        if self.sys.has_events() {
+            self.sys.idle(false);
+            return;
+        }
         self.io.wait(retry.map_or(timeout, |r| r.min(timeout)));
+        self.sys.idle(false);
         self.dispatch();
     }
 
