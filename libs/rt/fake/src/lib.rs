@@ -25,9 +25,10 @@
 //! the most pages a process held at once (`Fake::held_peak`). Its clock is the host's until a test
 //! holds it (`Fake::hold_clock`) and moves it itself (`Fake::tick`), so a deadline, a server's own
 //! or a call's timeout, is a step the test takes and never a race against the host. A tick is a
-//! quiescent step: it is taken only once every other thread of the fake is in a wait, so it ends
-//! the waits the test wrote it to end and never falls between a server's reading of the time and
-//! the receive that reading gave its deadline.
+//! quiescent step: it is taken only once every other thread of the fake is in a wait (a thread a
+//! change has woken is not, until it waits again), so it ends the waits the test wrote it to end
+//! and never falls between a server's reading of the time and the receive that reading gave its
+//! deadline, nor between a change and the reaction of the thread it woke.
 //!
 //! It also has what a driver needs: device objects (`Fake::mmio` and `Fake::irq`), `map_device`
 //! over a page of host memory a test can read and write as if it were registers, `receive` on an
@@ -223,9 +224,13 @@ struct State {
     /// unfinished line ([`Fake::console_line_ended`]).
     console_ended: HashSet<usize>,
     /// The threads of the fake ([`Counted`]) alive, and how many of them are in `wait`: a tick
-    /// of the held clock is taken only when every one but the ticker's is ([`Fake::tick`]).
+    /// of the held clock is taken only when every one but the ticker's is ([`Fake::tick`]). A
+    /// change ([`Fake::change`]) wakes every waiter, so it counts none of them until each waits
+    /// again; `changes` counts the changes, so a wait that ended for another reason (its
+    /// deadline, a spurious wake) can tell it is still counted and discount itself.
     alive: usize,
     waiting: usize,
+    changes: u64,
 }
 
 pub struct Fake {
@@ -365,7 +370,7 @@ impl Fake {
         let Ok(Object::Irq(index)) = lookup(&s, owner, irq) else { panic!("not an irq handle") };
         s.devices[index].fired = true;
         s.devices[index].masked = true;
-        self.changed.notify_all();
+        self.change(&mut s);
     }
 
     /// Whether the device's interrupt source is masked, which only `receive` unmasks (R5).
@@ -397,7 +402,7 @@ impl Fake {
         let mut s = self.lock();
         let ep = as_endpoint(&s, owner, handle).unwrap();
         s.endpoints[ep.id].dead = true;
-        self.changed.notify_all();
+        self.change(&mut s);
     }
 
     /// How many handles `pid` holds, and how many pages it has mapped.
@@ -581,7 +586,7 @@ impl Fake {
         let mut s = self.lock();
         let Ok(Object::Process(index)) = lookup(&s, owner, process) else { panic!("not a process handle") };
         end(&mut s, index, Cause::Exited, code);
-        self.changed.notify_all();
+        self.change(&mut s);
     }
 
     /// The system calls `pid` made, by name, in order.
@@ -690,9 +695,16 @@ impl Fake {
     /// parked, a count reached) and not its next `receive`, whose deadline is read at the call;
     /// a tick taken between the two would leave that receive a deadline one timeout past the
     /// tick, which no later tick reaches, and its caller waiting for ever. Microseconds natively,
-    /// the gap is wide under Miri. The rule for a test, then: across a tick, keep no thread of the
-    /// fake busy outside a wait (no host sleep, channel or join on it). A thread that reaches no
-    /// wait in [`STUCK`] fails the tick, naming the clock's time and the waits outstanding.
+    /// the gap is wide under Miri. A thread a change has woken is not in a wait, whether or not
+    /// the host has run it yet: it is counted again only when it waits again, so a tick never
+    /// falls between a change and the reaction of the thread it woke (a server's reply handed over
+    /// one tick late each time let a retry fall past a test's last tick, on a loaded host). That
+    /// wait is bounded by construction: a woken thread either takes the lock back and waits
+    /// again, or ends (its `run` returns, `thread_exit`, `process_exit`, a panic), and an end
+    /// counts it out ([`Fake::uncount`]), so no tick waits for a thread that is not coming back.
+    /// The rule for a test, then: across a tick, keep no thread of the fake busy outside a wait (no
+    /// host sleep, channel or join on it). A thread that reaches no wait in [`STUCK`] fails the
+    /// tick, naming the clock's time and the waits outstanding.
     pub fn tick(&self, dt: u64) {
         let mut s = self.lock();
         assert!(self.held.load(Ordering::Acquire), "a tick of a clock the test does not hold");
@@ -710,6 +722,14 @@ impl Fake {
             }
         }
         self.clock.fetch_add(dt, Ordering::AcqRel);
+        self.change(&mut s);
+    }
+
+    /// Something a wait may be waiting for changed: every waiter is woken, and none counts as
+    /// waiting until it waits again ([`Fake::tick`]).
+    fn change(&self, s: &mut State) {
+        s.changes += 1;
+        s.waiting = 0;
         self.changed.notify_all();
     }
 
@@ -739,6 +759,7 @@ impl Fake {
             "a wait in the fake kernel from a thread that is none of its own"
         );
         g.waiting += 1;
+        let changes = g.changes;
         self.quiet.notify_all();
         let (mut g, stuck) = match host {
             Some(host) => (self.changed.wait_timeout(g, host).unwrap_or_else(|e| e.into_inner()).0, false),
@@ -750,7 +771,11 @@ impl Fake {
                 (g, waited.timed_out())
             }
         };
-        g.waiting -= 1;
+        // A change discounted every waiter as it woke them; a wait that ended otherwise is still
+        // counted.
+        if g.changes == changes {
+            g.waiting -= 1;
+        }
         if stuck {
             let (waiting, others, now) = (g.waiting, g.alive.saturating_sub(1), self.now());
             let clock = if self.held.load(Ordering::Acquire) { "held" } else { "host's" };
@@ -1062,7 +1087,7 @@ unsafe impl redoubt_rt::Transport for Fake {
                 lookup(&s, pid, handle)?;
                 s.processes[pid].handles[handle.index() as usize] = None;
                 // A test may wait for this close (`wait_held`).
-                self.changed.notify_all();
+                self.change(&mut s);
                 Ok(Return::Nothing)
             }
             Call::Call { endpoint, body_rec, lend, timeout } => {
@@ -1110,7 +1135,7 @@ unsafe impl redoubt_rt::Transport for Fake {
                 if delivered {
                     s.replies.insert(msg_id.get(), (body.words, handles));
                 }
-                self.changed.notify_all();
+                self.change(&mut s);
                 Ok(Return::Reply(ReplyOutcome { delivered, installed }))
             }
             Call::TimeNow => Ok(Return::Time(self.now())),
@@ -1266,7 +1291,7 @@ unsafe impl redoubt_rt::Transport for Fake {
                         }
                     }
                 }
-                self.changed.notify_all();
+                self.change(&mut s);
                 Ok(Return::Nothing)
             }
             // The fake prints no kernel lines, so a hold has nothing to make wait: the handle is
@@ -1337,7 +1362,7 @@ impl Fake {
         if let Some(p) = pages {
             s.given_up.insert(id.get(), (pid, p.addr, p.npages.get() * PAGE_SIZE));
         }
-        self.changed.notify_all();
+        self.change(&mut s);
         let deadline = self.deadline(timeout);
         let mut guard = Some(s);
         let result = loop {
@@ -1378,7 +1403,7 @@ impl Fake {
                 // server replies, and the server is told.
                 if let Some(&(receiver, endpoint, _)) = s.open.get(&id.get()) {
                     s.notices.push_back((receiver, endpoint, id.get()));
-                    self.changed.notify_all();
+                    self.change(s);
                     return Ok(abandon(s, pid, receiver, id, pages, Error::Timeout));
                 }
                 if !is_call {
@@ -1404,7 +1429,7 @@ impl Fake {
         // An IRQ handle: unmask the source (R5), then wait for it to fire.
         if let Object::Irq(index) = lookup(guard.as_ref().unwrap(), pid, from)? {
             guard.as_mut().unwrap().devices[index].masked = false;
-            self.changed.notify_all();
+            self.change(guard.as_mut().unwrap());
             loop {
                 let s = guard.as_mut().unwrap();
                 if std::mem::take(&mut s.devices[index].fired) {
@@ -1455,7 +1480,7 @@ impl Fake {
                     s.taken.insert(p.id.get());
                     MessageKind::Send { transfer: p.pages }
                 };
-                self.changed.notify_all();
+                self.change(s);
                 let handles: Vec<Option<Handle>> = handles.into_iter().map(Some).collect();
                 let body =
                     ReceivedBody { words: p.words, handles: ReceivedHandles::from_slice(&handles).unwrap() };
