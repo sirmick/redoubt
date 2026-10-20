@@ -10,6 +10,9 @@ kind = "boot"
 # takes the lock is not driven by a case (it needs 3+ harts and a creation queued ahead of the
 # shot-down hart); the kernel tests the hart's own mark, not the process table, and a checked
 # build stops if a shot-down hart would resume user mode.
+# The shootdown line is asked by construction: the judge destroys B only once B's page count, the
+# writer's heartbeat, has grown twice under its spinning watch, so the writer runs on the other
+# hart at the destroy (the multi-threaded twin's comment has what a sleep in its place cost).
 # Built with the checks on (docs/testbench.md, "Checked builds"): the free-list audit and the
 # stale mask's audit are the checked kernel's.
 debug_assertions = true

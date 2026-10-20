@@ -1,11 +1,19 @@
 //! Several harts add no reach (kernel/memory.md, "Residual risks"; `bench:smp-evict`), at 2 harts.
 //!
 //! **The shootdown at a destruction.** A writer in budget B stores into its own pages without
-//! end, on one hart. The judge, on the other, destroys B; a checker already waiting in budget C
-//! then maps pages, which take B's freed frames (frames are given out lowest first), and reads
-//! them for a while: every word must stay zero. A kernel that frees B's frames while the writer's
-//! hart still holds B's translations lets its stores land in C's pages, which the checker sees,
-//! or the checked build's free-list audit trips.
+//! end, on one hart, and maps one more page at each pass: B's page count is the writer's
+//! heartbeat, which the judge reads with `budget_usage`. The judge, on the other hart, spins
+//! until it has seen that count grow twice, so the writer is running on the other hart at that
+//! moment and not merely runnable, and then destroys B at once. It does not sleep for the
+//! writer: a sleep's end is a deadline the writer's hart may serve, and the pick there gives the
+//! judge the writer's hart and leaves the writer ready on no hart while the judge destroys B,
+//! which shoots nothing down (the kernel's line names the harts it stopped, and the case expects
+//! it). Spinning, the judge keeps its hart; the writer is the only other runnable thread, so its
+//! slice ends pick it again where it is, and nothing moves it between the second count and the
+//! destroy. A checker already waiting in budget C then maps pages, which take B's freed frames
+//! (frames are given out lowest first), and reads them for a while: every word must stay zero. A
+//! kernel that frees B's frames while the writer's hart still holds B's translations lets its
+//! stores land in C's pages, which the checker sees, or the checked build's free-list audit trips.
 //!
 //! **The stale mask.** A process P maps a page, touches it, waits, unmaps it and waits again, over
 //! and over, so that its budget runs now on one hart and now on the other. Last, it unmaps its
@@ -28,7 +36,15 @@ use test_programs::spawn;
 const WAIT: u64 = 5_000_000;
 /// The writer's pages.
 const WRITTEN: usize = 16;
-/// The checker's pages: every frame B held, and many more.
+/// The passes at which the writer maps one more page, its heartbeat for the judge. The judge
+/// needs two beats after it starts watching: measured over 80 boots under multi-threaded TCG, it
+/// had them within the writer's first sixteen beats, once by its 127th; the rest are headroom for
+/// a slow wake of the judge, past which the writer runs on beating no more and the judge's watch
+/// ends at `WAIT`, failing the case loudly. B's frames at the destroy are its image, its written
+/// pages and its beats, under `CHECKED`.
+const BEATS: usize = 400;
+/// The checker's pages: every frame B held (its image, its written pages and its beats), and
+/// many more.
 const CHECKED: usize = 512;
 /// How long the checker watches its pages, in ms.
 const WATCH_MS: u64 = 50;
@@ -50,6 +66,12 @@ extern "C" fn writer(_: usize) -> ! {
     let mut n: u64 = 0;
     loop {
         n = n.wrapping_add(1);
+        // The heartbeat: one more page of B at each of the first `BEATS` passes.
+        if n <= BEATS as u64 {
+            if let Ok(beat) = rd::map_anon(rd::PAGE_SIZE, rd::rw()) {
+                rd::poke(beat, n);
+            }
+        }
         for i in 0..words {
             rd::poke(pages + i * 8, 0x5a5a_0000_0000_0000 | n);
         }
@@ -131,8 +153,20 @@ pub extern "C" fn _start() -> ! {
     spawn::spawn(&image, budget, exit, writer as *const () as usize, &[], &[inbox]).expect("the writer");
     let writer_ready = ready(inbox);
     b.check(checker_ready && writer_ready, format_args!("the writer is writing and the checker waiting"));
-    // The writer runs on the other hart meanwhile.
-    test_programs::wait_ms(5);
+    // The writer runs on the other hart now: its heartbeat, B's page count, grew twice while this
+    // thread kept its own hart (module docs: watched spinning, never slept for). The clock bounds
+    // only the watch, loudly.
+    let pages = |budget| rd::usage(budget).map(|u| u.pages_usage).unwrap_or(0);
+    let deadline = rd::time_now().unwrap_or(0) + WAIT;
+    let (mut seen, mut beats) = (pages(budget), 0);
+    while beats < 2 && rd::time_now().unwrap_or(u64::MAX) < deadline {
+        let now = pages(budget);
+        if now > seen {
+            seen = now;
+            beats += 1;
+        }
+    }
+    b.check(beats == 2, format_args!("the writer was seen running on the other hart ({} pages in B)", seen));
     rd::destroy(budget).expect("destroying B");
     let _ = rd::send(go, &rd::body([GO, 0, 0, 0]), None, WAIT);
     let dirty = match rd::receive(Some(inbox), WAIT, 0) {

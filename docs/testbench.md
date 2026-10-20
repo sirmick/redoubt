@@ -314,7 +314,11 @@ exactly). Its one exposure to the host's clock is `timeout_secs`, the bench's de
 boot: a case that only ran out of that deadline beside other work has no verdict, and is rerun
 alone. A boot case without `icount` (68 of them) keeps the host's clock in the guest, so load
 lengthens every wait it makes: its pass is a verdict unless what it expects is a timeout or a
-bound on a time, and a failure beside other work has no verdict until it fails alone. A `[net]`
+bound on a time, and a failure beside other work has no verdict until it fails alone. Every
+bound a case states on a time, a step's, a probe's or a notice's, is the box's under one
+condition, one whole bench at a time with QEMU its alone for the run and any other work on the
+machine host-only and off the bench's cores: measured under it, held to under it, and a bound
+missed beside another boot is no verdict until the case misses it under it. A `[net]`
 table by itself changes neither class: an empty one gives the guest a card that reaches
 nothing, and binds no host port. A table with a `forward`, a `poke`, a peer or a dial puts host
 sockets beside the boot, in wall time: its dials retry until the case's deadline, so a pass
