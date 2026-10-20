@@ -1,0 +1,154 @@
+description = "Sixteen agents of one account write to the data volume at once, beside their loads from the system volume, and every write is answered (docs/userland/files.md, \"Files over 9P\": every hub request ends in exactly one answer to its caller within its bound, an operation's bound the sum of its requests'; docs/servers/walfsd.md, \"Residual risks\"): alice's SSH session starts sixteen agents back to back, the leases her share carves beside her two sessions, each a beamlet VM that loads 27 modules and appends a line to a file of its own under her project directory after each, every line saying what the write before it answered, and returns, so its VM exits 0, whatever its writes answered. The verdict is the steward's console, sixteen `exited 0` lines and no lease ended by its deadline or killed, which an agent stopped inside a write would be; and the files, read by the session once the sixteen have ended: every write an agent was told succeeded is in its file (a line reporting `{:ok, _}` for the write before it has that line before it), while a write the hub answered `etimedout` may still have landed, its answer served late and dropped after the caller had its own, which the rule allows and the session counts. The data volume's throughput under the load is the finding stated on walfsd.md, not this case's claim: a write answered `etimedout` at the bound is an answer"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+# The host's clock, as a case with a `forward` keeps (docs/testbench.md, "The case file"): the
+# case judges answers and counts, not times, and under the virtual clock an idle guest's clock
+# skips to its next armed deadline, which with every agent waiting on the volume is a lease's
+# end or a socket's timer, so a lease is destroyed unended and the session's connection closes.
+# The guest seed steward-latency's gate runs.
+qemu_seed = 3
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-bootfsd", bin = "bootfsd" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-verityd", bin = "verityd" },
+    { package = "redoubt-netd", bin = "netd" },
+    { package = "redoubt-ipd", bin = "ipd" },
+    { package = "redoubt-walfsd", bin = "walfsd" },
+    { package = "redoubt-erofsd", bin = "erofsd" },
+    { package = "beamlet-redoubt", bin = "beamlet", workspace = "userland/otp", features = ["exit-kinds"] },
+    { package = "redoubt-piped", bin = "piped" },
+    { package = "redoubt-crossing", bin = "crossing" },
+    { package = "redoubt-steward-server", bin = "steward" },
+    { package = "redoubt-sshd", bin = "sshd" },
+    { package = "redoubt-consrelay", bin = "consrelay" },
+]
+# steward-latency's manifest and RAM: alice sized by the carve for sixteen leases beside her two
+# sessions, the most the file servers hold connections for at one account.
+# beamlet naming its exits (`exit-kinds`, test-only and off in every default build): an agent
+# whose input could not be read exits with a status naming the error, which the forbid below
+# shows rather than a lease idle to its deadline.
+memory_mib = 1536
+# One hart: the write path is one server's, serialised by its volume, so a second hart moves
+# nothing this case judges (the read path's hart counts are lease-code-load's).
+smp = [1]
+# On the host's clock sixteen such agents ended within 550 s of the first launch with the
+# machine otherwise idle; beside other boots the guest runs slower on the same clock, and the
+# last agent's read of its input can be answered `etimedout` for minutes before it goes through
+# (the data volume's throughput, walfsd.md), so the session waits twenty minutes for the first
+# lease's end and five for each after it.
+timeout_secs = 2400
+expect = [
+    '^init: started sshd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
+    '^init: started steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+]
+# The sixteen agents' ends, in whatever order their writes finish, each by its own return.
+expect_after = [
+    '^\[con [0-9a-f]{16}\] steward: lease alice/agent-[0-9]+ [0-9]+ of 1001/\{\} exited 0$',
+    '^\[con [0-9a-f]{16}\] steward: lease alice/agent-[0-9]+ [0-9]+ of 1001/\{\} exited 0$',
+    '^\[con [0-9a-f]{16}\] steward: lease alice/agent-[0-9]+ [0-9]+ of 1001/\{\} exited 0$',
+    '^\[con [0-9a-f]{16}\] steward: lease alice/agent-[0-9]+ [0-9]+ of 1001/\{\} exited 0$',
+    '^\[con [0-9a-f]{16}\] steward: lease alice/agent-[0-9]+ [0-9]+ of 1001/\{\} exited 0$',
+    '^\[con [0-9a-f]{16}\] steward: lease alice/agent-[0-9]+ [0-9]+ of 1001/\{\} exited 0$',
+    '^\[con [0-9a-f]{16}\] steward: lease alice/agent-[0-9]+ [0-9]+ of 1001/\{\} exited 0$',
+    '^\[con [0-9a-f]{16}\] steward: lease alice/agent-[0-9]+ [0-9]+ of 1001/\{\} exited 0$',
+    '^\[con [0-9a-f]{16}\] steward: lease alice/agent-[0-9]+ [0-9]+ of 1001/\{\} exited 0$',
+    '^\[con [0-9a-f]{16}\] steward: lease alice/agent-[0-9]+ [0-9]+ of 1001/\{\} exited 0$',
+    '^\[con [0-9a-f]{16}\] steward: lease alice/agent-[0-9]+ [0-9]+ of 1001/\{\} exited 0$',
+    '^\[con [0-9a-f]{16}\] steward: lease alice/agent-[0-9]+ [0-9]+ of 1001/\{\} exited 0$',
+    '^\[con [0-9a-f]{16}\] steward: lease alice/agent-[0-9]+ [0-9]+ of 1001/\{\} exited 0$',
+    '^\[con [0-9a-f]{16}\] steward: lease alice/agent-[0-9]+ [0-9]+ of 1001/\{\} exited 0$',
+    '^\[con [0-9a-f]{16}\] steward: lease alice/agent-[0-9]+ [0-9]+ of 1001/\{\} exited 0$',
+    '^\[con [0-9a-f]{16}\] steward: lease alice/agent-[0-9]+ [0-9]+ of 1001/\{\} exited 0$',
+]
+# A lease ended by its deadline or killed is an agent that never returned: a write unanswered.
+forbid = [
+    'init: refused the boot',
+    'steward: the core exited',
+    'sshd: login .*: refused',
+    'steward: lease alice/agent-[0-9]+ [0-9]+ of 1001/\{\} (exited [1-9][0-9]*|faulted|was killed)',
+    'not loaded',
+    'EXCEPTION',
+]
+
+# Alice's session: the project's input `loadwrite` and the output directory staged, the shell's
+# own later needs loaded before any agent is, then the sixteen agents back to back (thirty-minute
+# leases, longer than any agent's work, so a lease ending on its own is an agent that never
+# returned), then the sixteen notices of their ends, each landing on the idle prompt's line.
+# Then the files: for each, its lines, how many report the write before them `{:ok, _}`, and
+# which of those lines are missing (none), printed for the log; the `:answered` line is the
+# check over all sixteen.
+[[session]]
+user = "alice"
+pty = true
+steps = [
+    { expect = '/home/alice \([0-9]+\)> ' },
+    { send = "{:ok, c} = Redoubt.Contexts.connection(); {:stage, File.mkdir_p(\"/home/alice/project/out\"), File.write(\"/home/alice/project/in\", \"loadwrite\")}\n" },
+    { expect = '\{:stage, :ok, :ok\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "out = \"/home/alice/project/out\"; {:ok, []} = File.ls(out); {:error, _} = File.read(out <> \"/none\"); true = String.contains?(\"2 x prev={:ok, 1}\", \"prev={:ok,\"); 1 = \"1 born\" |> String.split(\" \") |> hd() |> String.to_integer(); [] = [1] -- [1]; true = Enum.all?([]); {:warm, length(String.split(\"a\\n\", \"\\n\", trim: true)) - 1}\n" },
+    { expect = '\{:warm, 0\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "start = fn i -> t0 = :erlang.system_time(:microsecond); r = Redoubt.Wire.Client.Steward.start_agent(c, 1_800_000_000, Redoubt.Wire.Client.launch_timeout()); IO.puts(\"WRITES launch #{i} at #{t0} took #{:erlang.system_time(:microsecond) - t0} us #{inspect(r)}\"); r end; check = fn f -> {:ok, t} = File.read(out <> \"/\" <> f); lines = String.split(t, \"\\n\", trim: true); steps = for l <- lines, do: l |> String.split(\" \") |> hd() |> String.to_integer(); oks = for l <- lines, String.contains?(l, \"prev={:ok,\"), do: (l |> String.split(\" \") |> hd() |> String.to_integer()) - 1; missing = oks -- steps; IO.puts(\"WRITES \" <> f <> \" lines=#{length(lines)} ok=#{length(oks)} missing=#{inspect(missing)}\"); missing == [] end; :defined\n" },
+    { expect = ':defined' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "leases = for i <- 1..16, do: start.(i); {:started, Enum.count(leases, &match?({:ok, _}, &1))}\n" },
+    { expect = '\{:started, 16\}' },
+    { within = 1200 },
+    { expect = '\[lease alice/agent-[0-9]+ ended\]' },
+    { within = 300 },
+    { expect = '\[lease alice/agent-[0-9]+ ended\]' },
+    { within = 300 },
+    { expect = '\[lease alice/agent-[0-9]+ ended\]' },
+    { within = 300 },
+    { expect = '\[lease alice/agent-[0-9]+ ended\]' },
+    { within = 300 },
+    { expect = '\[lease alice/agent-[0-9]+ ended\]' },
+    { within = 300 },
+    { expect = '\[lease alice/agent-[0-9]+ ended\]' },
+    { within = 300 },
+    { expect = '\[lease alice/agent-[0-9]+ ended\]' },
+    { within = 300 },
+    { expect = '\[lease alice/agent-[0-9]+ ended\]' },
+    { within = 300 },
+    { expect = '\[lease alice/agent-[0-9]+ ended\]' },
+    { within = 300 },
+    { expect = '\[lease alice/agent-[0-9]+ ended\]' },
+    { within = 300 },
+    { expect = '\[lease alice/agent-[0-9]+ ended\]' },
+    { within = 300 },
+    { expect = '\[lease alice/agent-[0-9]+ ended\]' },
+    { within = 300 },
+    { expect = '\[lease alice/agent-[0-9]+ ended\]' },
+    { within = 300 },
+    { expect = '\[lease alice/agent-[0-9]+ ended\]' },
+    { within = 300 },
+    { expect = '\[lease alice/agent-[0-9]+ ended\]' },
+    { within = 300 },
+    { expect = '\[lease alice/agent-[0-9]+ ended\]' },
+    { within = 300 },
+    { send = "{:ok, files} = File.ls(out); {:answered, Enum.all?(Enum.map(Enum.sort(files), check)), length(files)}\n" },
+    { expect = '\{:answered, true, 16\}' },
+    { expect = '\([0-9]+\)> ' },
+    { exit = 0 },
+]
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/steward/latency.manifest.json" }
+verity = "image/userland.toml"
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]
+forward = [22]

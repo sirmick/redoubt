@@ -845,7 +845,8 @@ exiting: a tampered disk must not become a restart loop that reboots the machine
 ([agents](agents.md#leases)), waiting would be silent, a budget held to its deadline with nothing
 said: it exits, and its exit code, the one thing the steward's `lease … exited` line carries
 ([the steward](../servers/steward.md#leases)), is the diagnostic, 1 in a default build and the
-end's own code in the test-only `exit-kinds` build (bench:lease-bad-start). That exit is an exit,
+end's own code in the test-only `exit-kinds` build (bench:lease-bad-start), a halt's the status
+the process gave (an agent whose input could not be read, bench:lease-writes). That exit is an exit,
 not a fault: crash blame is `init`'s, for a server it restarted whose exit notice names a faulting
 thread's current call ([init](../servers/init.md#restarts-and-reboots)), and a lease's VM is the
 steward's launch, so its exits count toward no lockout

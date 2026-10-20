@@ -748,10 +748,11 @@ pub const HALTED: u32 = 13;
 pub const NOT_READ: u32 = 15;
 
 /// The exit code for one of those ends: 1 for each, the code every default build exits with.
-/// Test-only (`exit-kinds`, off in every default build): the end's own code, since a lease's
-/// VM has no console to say its last line on and its exit code is the one thing the steward
-/// says of it (servers/steward.md, "Leases"), so a case counting dead agents learns how each
-/// died (`lease-code-load`).
+/// Test-only (`exit-kinds`, off in every default build): the end's own code, and for a halt
+/// the status the process gave (`HALTED` for a status of 0 or one no code holds), since a
+/// lease's VM has no console to say its last line on and its exit code is the one thing the
+/// steward says of it (servers/steward.md, "Leases"), so a case counting dead agents learns how
+/// each died (`lease-code-load`, `lease-writes`).
 pub fn exit_kind(kind: u32) -> u32 { if cfg!(feature = "exit-kinds") { kind } else { 1 } }
 
 /// Runs `module:function()` in a new VM on the platform of the process started with `startup`,
@@ -798,7 +799,9 @@ pub fn run(
             Err(e) => {
                 let kind = match e {
                     RunError::Deadlock => STUCK,
-                    RunError::Halted(_) => HALTED,
+                    RunError::Halted(status) => {
+                        u32::try_from(status).ok().filter(|s| *s > 0).unwrap_or(HALTED)
+                    }
                 };
                 (format!("beamlet: {e:?}"), exit_kind(kind))
             }

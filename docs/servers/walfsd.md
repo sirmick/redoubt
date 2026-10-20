@@ -680,14 +680,17 @@ Status: built · tested: bench:walfsd-power-loss, bench:walfsd-corrupt-volume, b
   its input fails the same way. This is the write path's throughput, `walfsd`'s requests each
   finding their file by path and writing their transaction behind the others', and the hub's
   one request at a time per connection, not the fid admission above, which is sized now: a
-  finding of its own, open until the agentic workload needs a bound on a write's latency. And
-  under the same load a write can wait past that bound for good: with four such agents on rv64
-  at one hart, one or two of them stopped inside a write whose bytes had reached the volume (the
-  file held the lines of the very write the agent never returned from) and made no further
-  progress in 2,000 s of guest time, the VM alive and its lease unended, in two boots with and
-  without the client library's retry; the measurement's agents that left a file of their first
-  lines and no more were the same. A write's completion that never comes back to the VM is a
-  liveness finding of the hub's completion path or `walfsd`'s, not of the read path, and open.
+  finding of its own, open until the agentic workload needs a bound on a write's latency. On
+  the host's clock, twelve such agents writing a line after each load had 224 of their 348
+  writes served and the rest answered `etimedout`, each within its own bound
+  (bench:lease-writes, whose claim is the answer, not the rate). What that measurement first
+  took for a write whose completion never came back (an agent of four stopped after a line,
+  its VM alive for 2,000 s of guest time) was the virtual clock's doing, not this server's or
+  the hub's: an idle guest's clock skips to its next armed deadline
+  ([the test bench](../testbench.md#the-case-file)), and the file ended at the line *before*
+  the stalled step, so no served write's answer was lost. Every hub request ends in exactly one
+  answer to its caller within its bound, by construction
+  ([files](../userland/files.md#files-over-9p)).
 
 ## Why
 
