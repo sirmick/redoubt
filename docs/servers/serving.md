@@ -360,6 +360,12 @@ connection; the client half is the client library's hub
   and a live client keeps a completion call parked whenever it has requests outstanding.
   Deadlines are judged at the loop's turn, so a session or a held request may be judged late by
   the work before it in that turn, never early.
+  A restarted entry on the same badge meets its predecessor's multiplexed session: it lasts the
+  session bound with no call parked, and every completion call the successor makes is parked on
+  it and answered with what the predecessor left pending, or empty, resetting the bound, so a
+  successor that retries its connect faster than the bound never gets a session; the
+  predecessor's `InFlight`, `Requests` and `Pages` stay held until the session ends. Its fids go
+  at the successor's `Tversion`; the session does not.
 - **Crash blame.** Requests are served with the completion call as the thread's current call, so
   a crash while serving them blames their client
   ([R21 (crash blame)](../kernel/processes.md#r21-crash-blame)).
