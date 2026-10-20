@@ -146,8 +146,8 @@ expect_after = [
 # Why one at a time, not a burst: deadline_notice is a single lease's notice latency, the
 # sponsor told (the steward's lease_ended send returned) less the deadline, target 40 ms. A burst
 # of D deadlines firing together hands the steward D Exited events at once, and the sponsor is
-# told of the last about D x the shell's take of one notice after the first (85 to 300 ms each on average:
-# the send is a rendezvous the shell takes only once it has printed the previous notice), after
+# told of the last about D x the VM's take of one forwarded notice after the first (85 to 300 ms each on
+# average: the send completes only when the sponsor's VM takes beamlet's forward of it), after
 # the kernel's D destructions at the deadline's entry; measured by steward-deadline-burst and its
 # companion (1.5 to 1.8 s for the last of six, 2.1 to 2.8 s for the last of sixteen, from the deadline;
 # kernel/scheduling.md records it) -- the sponsor's rate under a burst, not a single notice's
