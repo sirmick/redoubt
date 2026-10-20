@@ -1,7 +1,7 @@
 # WRITE1 report
 
-Branch `wp-WRITE1`, three commits on origin/main ca2d0966a (train 84), head **7c7db483f**:
-`2163fb484` beamlet (the hub), `562e9f4e3` shell + testbench (the agent, the case), `7c7db483f` docs.
+Branch `wp-WRITE1`, three commits on origin/main dc75a30eb (train 85), head **3fda9d68c**:
+`175981635` beamlet (the hub), `616b762ad` shell + testbench (the agent, the case), `3fda9d68c` docs.
 Identification: `.wash/local/WRITE1-identification.md`; the rulings: `wave-2026-10-18-rulings.md`
 "WRITE1 identification" and "WRITE1's gate finding". Evidence logs under
 `/home/mcloonan/redoubt/.tmp/WRITE1/` (`repro1..7`, `gate1`, `gate2`, `diag8..13`, `roundA..H-*`,
@@ -73,14 +73,14 @@ operation's bound is the sum over its requests.**
 
 | what | command | result |
 | --- | --- | --- |
-| beamlet-redoubt host tests | `q run --cores 4 -- cargo test -p beamlet-redoubt --features fake -- --test-threads=1` (userland/otp) | rc 0; 95 passed, 0 failed (`suite-final3.log`); under B90's tick |
+| beamlet-redoubt host tests | `q run --cores 4 -- cargo test -p beamlet-redoubt --features fake -- --test-threads=1` (userland/otp) | rc 0; 95 passed, 0 failed on the final tree (`suite-final4.log`); under B90's tick |
 | the new tests on the old code | same, files.rs at the branch base, one test each | FAILED as intended (`old-giveup.log`, `old-givenup.log`) |
 | mix format / compile | `mix format --check-formatted`, `MIX_ENV=prod mix compile` (userland/shell, pinned toolchain) | rc 0, no warnings |
-| docs | `make -f scripts/jobs.mk set CASES=docs` | rv64/docs rc=0 (on 88ce8464e) |
-| formatting | `set CASES=formatting` | rv64/formatting rc=0 (on 88ce8464e, the new mix-format gate included) |
-| unsafe budget | `set CASES=unsafe-budget` | rc=0 (on 88ce8464e) |
-| size budget | `set CASES=size-budget` | rc=0 (on 88ce8464e) |
-| lease-writes ×3 both widths | `set CASES=lease-writes` | rounds G, H on 88ce8464e (the hub as now): PASS rv64 546/538 s, rv32 543/536 s; round D on d48b3e51d (before the given-up clunk): PASS 380/368 s; in the beamlet set (beside its other boots): FAIL both widths, `agent-16 exited 101` (input read `etimedout` six times), the reason the agent now tries thirty times; round J on 7c7db483f: (filled below) |
+| docs | `make -f scripts/jobs.mk set CASES=docs` | rv64/docs rc=0 on the final tree (round K) |
+| formatting | `set CASES=formatting` | rv64/formatting rc=0 on the final tree (round K; the mix-format gate included) |
+| unsafe budget | `set CASES=unsafe-budget` | rc=0 (on 88ce8464e; the hub unchanged since) |
+| size budget | `set CASES=size-budget` | rc=0 (on 88ce8464e; the hub unchanged since) |
+| lease-writes ×3 both widths | `set CASES=lease-writes` | rounds G, H on 88ce8464e (the hub as now): PASS rv64 546/538 s, rv32 543/536 s; round D on d48b3e51d (before the given-up clunk): PASS 380/368 s; in the beamlet set (beside its other boots): FAIL both widths, `agent-16 exited 101` (input read `etimedout` six times), the reason the agent now tries thirty times; round J on 7c7db483f: PASS rv64 551 s, rv32 513 s; round K on the final head 3fda9d68c (train 85, B92's q): PASS rv64 555 s, rv32 631 s. Six green rounds per width on the hub as it is, one failed round (beside the set's load) that the thirty tries answer |
 | the beamlet set | `scripts/shell-cases origin/main` minus `steward-latency*` (excluded by my brief): 97 cases, `make -k set CASES=...` | 194 verdicts, 191 green; failed: lease-writes ×2 (above) and `rv32/beamlet-agent-footprint` once at 2.6 s — a race of that case's own (below), passing 3 of 3 rerun alone and in every recent train |
 
 Rounds before the given-up clunk, for the record: A (d48b…'s predecessor) PASS both; B lost 1–2

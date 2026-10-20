@@ -1378,3 +1378,13 @@ moment it takes and drops the late answer — a walked fid as a closed file's; a
 clunked only if its Rwalk walked every name, else its number returned; an open handle's fid never
 the operation's. files.md says so; host test a_fid_given_up_on_is_clunked_when_its_late_answer_comes
 fails on the code before. Head 88ce8464e, train 84.)
+
+### State (2026-10-20): trains 84 (B91) and 85 (STEWARD13 + B92) published, main dc75a30eb
+
+q holds the qemu lock for a train now. STEWARD13's reviewer-noted "cosmetic" usage-line
+deferral proved a regression in train 85 (a sponsored session carves from its sponsor's
+sub-budget, so the sponsor's line printed before the launch's report); fixed (the deferral keys
+on the carve's domain). Lesson for my notes: an ordering change in the steward's launch path is
+never cosmetic — a line's place is a claim the bench reads. SCHED5 phase 1 launched: both rows on
+main with the kept trace, the arm from the timer's arming against the slice, to me before any
+kernel change; its brief follows that measurement.
