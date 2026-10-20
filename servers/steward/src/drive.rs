@@ -20,7 +20,7 @@ use redoubt_steward::event::{Event, EventKind};
 use redoubt_steward::manifest::Limits;
 use redoubt_steward::{Effects, decide, inspect};
 
-use crate::{Kernel, PUSH_MAX, Steward};
+use crate::{Kernel, Launched, PUSH_MAX, Steward};
 
 /// The slot of a crossing's one connection among its owner's tokens: given back after the
 /// crossing's budget is destroyed, as a session's are (R41's order).
@@ -36,8 +36,9 @@ pub const OUT: &str = "out";
 pub const MINTED: u64 = 1 << 63;
 
 /// The reply token of the console session's event: its answer names the session the steward
-/// reopens when it ends. A protocol call's token is 1.
-const CONSOLE: ReplyTo = 2;
+/// reopens when it ends. A protocol call's token is 1 for a host test's one call at a time; the
+/// server draws its calls' tokens above this one, since several may wait at once.
+pub const CONSOLE: ReplyTo = 2;
 
 /// What a step made, kept under its token until the core forgets its owner.
 pub enum Made<B, H> {
@@ -61,16 +62,66 @@ pub enum Made<B, H> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Exited;
 
+/// A batch stopped at its `Launch` step while the launch thread runs the launch
+/// (servers/steward.md, "Leases"): the batch, the step's index, what the steps before it
+/// produced, and the thread's job. [`Steward::launched`] finishes it when the thread reports.
+pub struct Pending {
+    batch: Batch,
+    step: usize,
+    produced: Vec<Produced>,
+    job: u64,
+}
+
+impl Pending {
+    /// The object whose batch waits.
+    pub(crate) fn owner(&self) -> &Object { &self.batch.owner }
+
+    /// Whether the batch carves a budget from `domain`'s fixed sub-budget: its own domain's for
+    /// a session or a lease, the sponsor's for a sponsored principal's session (R39).
+    pub(crate) fn carves_from(&self, domain: &redoubt_steward::domain::Domain) -> bool {
+        self.batch
+            .steps
+            .iter()
+            .any(|s| matches!(s, Step::CreateBudget { parent: Parent::Sub(d), .. } if d == domain))
+    }
+}
+
+/// An event held for a launching object, with its reply token.
+pub type Held = (EventKind, ReplyTo);
+
+/// How a batch's run ended: with its outcome, the core's `Done`; or stopped at a launch the
+/// thread runs, its outcome a later event.
+pub enum Ran {
+    Done(Result<Vec<Produced>, StepFailed>),
+    Pending(Pending),
+}
+
+/// What one step did: what it made, or a launch handed to the thread as this job.
+enum Stepped {
+    Made(Produced),
+    Launching(u64),
+}
+
 impl<B: Copy, H: Copy> Steward<B, H> {
     /// Decides `kind`, with `reply` the caller's token (0 for none), runs every batch that follows
     /// and returns the outputs for the server to deliver: replies, notices, screens, audit
-    /// records. What the core forgets is dropped here.
+    /// records. What the core forgets is dropped here. A batch stopped at its launch is kept
+    /// for the launch thread's report, its `Done` and its caller's reply coming then
+    /// ([`Steward::launched`]); an event of an object whose batch waits is held until then
+    /// ([`Steward::holds`]) and the caller parked, its token among [`Steward::awaits`].
     pub fn event<K: Kernel<Budget = B, Handle = H>>(
         &mut self,
         kernel: &mut K,
         kind: EventKind,
         reply: ReplyTo,
     ) -> Result<Vec<Output>, Exited> {
+        if self.holds(&kind) {
+            if reply != 0 {
+                self.awaiting.insert(reply);
+            }
+            self.held.push((kind, reply));
+            return Ok(Vec::new());
+        }
         let mut outputs = Vec::new();
         let mut reopen = false;
         // The approval channels this event redraws (a `Pending` of theirs ran), and the screens
@@ -100,6 +151,10 @@ impl<B: Copy, H: Copy> Steward<B, H> {
                 return Err(Exited);
             }
             for o in out {
+                // The core answered the token: its call waits no longer.
+                if let Output::Reply { to, .. } = &o {
+                    self.awaiting.remove(to);
+                }
                 match o {
                     Output::Forget(object) => {
                         reopen |= self.console_session == Some(object.id) && object.kind == Kind::Session;
@@ -143,8 +198,10 @@ impl<B: Copy, H: Copy> Steward<B, H> {
             }
             for batch in batches {
                 let object = batch.owner.clone();
-                let result = self.run(kernel, &batch);
-                queue.push_back((EventKind::Done { object, result }, 0));
+                match self.run_from(kernel, batch, 0, Vec::new()) {
+                    Ran::Done(result) => queue.push_back((EventKind::Done { object, result }, 0)),
+                    Ran::Pending(pending) => self.suspend(pending),
+                }
             }
             // A crossing's final state removes it with no `forget` of the tables': what its
             // steps made (its connection, a budget a failed destroy left) is dropped once the
@@ -390,19 +447,147 @@ impl<B: Copy, H: Copy> Steward<B, H> {
         Ok(Some((handle, at)))
     }
 
-    /// Runs `batch`'s steps in order, stopping at the first that fails: every batch an event
-    /// names runs here, and a host test runs a batch of its own.
-    pub fn run<K: Kernel<Budget = B, Handle = H>>(
+    /// Runs `batch`'s steps in order, stopping at the first that fails or at a launch the
+    /// thread runs: every batch an event names runs here, and a host test runs a batch of its
+    /// own.
+    pub fn run<K: Kernel<Budget = B, Handle = H>>(&mut self, kernel: &mut K, batch: Batch) -> Ran {
+        self.run_from(kernel, batch, 0, Vec::new())
+    }
+
+    /// [`Steward::run`] from step `from`, with `produced` what the steps before it made.
+    fn run_from<K: Kernel<Budget = B, Handle = H>>(
         &mut self,
         kernel: &mut K,
-        batch: &Batch,
-    ) -> Result<Vec<Produced>, StepFailed> {
-        let mut produced = Vec::new();
-        for (step, s) in batch.steps.iter().enumerate() {
-            let made = self.step(kernel, &batch.owner, s).inspect_err(|e| self.failed.push((s.clone(), *e)));
-            produced.push(made.map_err(|e| StepFailed { step, error: e as u32 })?);
+        batch: Batch,
+        from: usize,
+        mut produced: Vec<Produced>,
+    ) -> Ran {
+        for step in from..batch.steps.len() {
+            let s = batch.steps[step].clone();
+            match self.step(kernel, &batch.owner, &s) {
+                Ok(Stepped::Made(made)) => produced.push(made),
+                Ok(Stepped::Launching(job)) => {
+                    return Ran::Pending(Pending { batch, step, produced, job });
+                }
+                Err(e) => {
+                    self.failed.push((s, e));
+                    return Ran::Done(Err(StepFailed { step, error: e as u32 }));
+                }
+            }
         }
-        Ok(produced)
+        Ran::Done(Ok(produced))
+    }
+
+    /// Keeps a batch stopped at its launch, and the token of the call its `Done` will answer
+    /// (the core's, stored with the object; none for a granted lease, and the console's for the
+    /// console session, which the server never parks).
+    fn suspend(&mut self, pending: Pending) {
+        let owner = &pending.batch.owner;
+        let reply = inspect::domain(&self.store, &owner.domain).and_then(|d| match owner.kind {
+            Kind::Session => d.sessions.get(&owner.id).map(|s| s.reply),
+            Kind::Lease => d.leases.get(&owner.id).map(|l| l.reply),
+            _ => None,
+        });
+        if let Some(reply) = reply.filter(|r| *r != 0) {
+            self.awaiting.insert(reply);
+        }
+        self.pending.push(pending);
+    }
+
+    /// Whether `kind` is an event of `object` that the core takes only once `object`'s batch
+    /// is done: its process's exit, the end of it as a lease, its channel's close, and `sshd`'s
+    /// end while it is a session (which detaches every attached context, the starting one's
+    /// attachment among them). The tables mark each `unreachable` in `Starting`, since the
+    /// embedder once ran every launch inside the event; a blame's `LockedOut`, the idle timer
+    /// and a login taking a starting context over have rows there and are served.
+    fn names(kind: &EventKind, object: &Object) -> bool {
+        match kind {
+            EventKind::Exited { object: o } => o == object,
+            EventKind::EndLease { lease, .. } => *lease == object.id,
+            EventKind::ChannelClosed { session } => object.kind == Kind::Session && *session == object.id,
+            EventKind::SshdGone => object.kind == Kind::Session,
+            _ => false,
+        }
+    }
+
+    /// Whether `kind` names an object whose batch waits at its launch: held until the launch
+    /// thread reports, in arrival order, as today's order had it wait behind the launch. Every
+    /// other object's events are served meanwhile: a deadline's exit and its notice, a timer's
+    /// wake, another lease's `end_lease`, answered ahead and at once as the protocol says.
+    fn holds(&self, kind: &EventKind) -> bool {
+        self.pending.iter().any(|p| Self::names(kind, &p.batch.owner))
+    }
+
+    /// The launch thread reported job `job` (servers/steward.md, "Leases"): the loop finishes
+    /// the step the batch stopped at, keeping the process and a session's notices send right as
+    /// a launch that started inline is kept, runs the batch's remaining steps, and only then
+    /// hands the batch's outcome to the core as its `Done`, so the core sees the events of the
+    /// object in the order it always did; a launch the thread failed fails the step as any
+    /// step's failure does, and the core rolls the batch back. The events held for the object
+    /// are then replayed in the order they came. Returns everything to deliver, replies to
+    /// parked calls among them.
+    pub fn launched<K: Kernel<Budget = B, Handle = H>>(
+        &mut self,
+        kernel: &mut K,
+        job: u64,
+    ) -> Result<Vec<Output>, Exited> {
+        let finished = kernel.launched(job);
+        let Some(i) = self.pending.iter().position(|p| p.job == job) else {
+            // No batch waits for it, which the tables exclude; what a child started holds
+            // ends with the budget its forget destroyed, and the steward keeps nothing.
+            if let Ok((_, Some(n))) = finished {
+                self.give_back(kernel, n);
+            }
+            return Ok(Vec::new());
+        };
+        let Pending { batch, step, mut produced, .. } = self.pending.remove(i);
+        let owner = batch.owner.clone();
+        let ran = match finished {
+            Ok((pid, notices)) => {
+                self.started(kernel, &owner, &batch.steps[step], pid, notices);
+                produced.push(Produced::Process(pid));
+                self.run_from(kernel, batch, step + 1, produced)
+            }
+            Err(e) => {
+                self.failed.push((batch.steps[step].clone(), e));
+                Ran::Done(Err(StepFailed { step, error: e as u32 }))
+            }
+        };
+        let mut outputs = match ran {
+            Ran::Done(result) => self.event(kernel, EventKind::Done { object: owner.clone(), result }, 0)?,
+            Ran::Pending(pending) => {
+                self.suspend(pending);
+                return Ok(Vec::new());
+            }
+        };
+        let (mine, rest): (Vec<Held>, Vec<Held>) =
+            core::mem::take(&mut self.held).into_iter().partition(|(kind, _)| Self::names(kind, &owner));
+        self.held = rest;
+        for (kind, reply) in mine {
+            outputs.extend(self.event(kernel, kind, reply)?);
+        }
+        Ok(outputs)
+    }
+
+    /// `owner`'s child started, as `step` asked: its process is kept under the step's token and
+    /// among the running ones; a session's notices send right under the session, an older one
+    /// given back.
+    fn started<K: Kernel<Budget = B, Handle = H>>(
+        &mut self,
+        kernel: &mut K,
+        owner: &Object,
+        step: &Step,
+        pid: u64,
+        notices: Option<H>,
+    ) {
+        let Step::Launch { token, .. } = step else { return };
+        self.made.insert(token.clone(), Made::Process(pid));
+        self.pids.insert(pid, owner.clone());
+        if let Some(n) = notices {
+            if let Some(old) = self.notices.insert(owner.clone(), n) {
+                self.give_back(kernel, old);
+            }
+        }
     }
 
     fn budget(&self, token: &Token) -> Result<B, Error> {
@@ -433,8 +618,10 @@ impl<B: Copy, H: Copy> Steward<B, H> {
     /// that index afterwards would find the index free (`BadHandle`), another kind of object
     /// (`WrongObject`), or another budget, which it would destroy with no error. So the clock is
     /// read right before the call, and the two calls are the loop's, back to back, with no
-    /// install between them (no reply the steward's threads take carries a handle; one that did
-    /// would recheck this): with the deadline still ahead the handle is the budget's, since
+    /// install between them (no reply the steward's threads take carries a handle, and the
+    /// launch thread installs only under the install lock the pair holds,
+    /// [`Kernel::without_installs`]; a reply that one day carries a handle would recheck
+    /// this): with the deadline still ahead the handle is the budget's, since
     /// nothing but the deadline revokes a budget handle the steward holds, and the kernel takes
     /// a budget at its deadline, never before; with it passed the kernel has taken the budget
     /// already, and no call is made. A `BadHandle` with the deadline passing between the read
@@ -444,13 +631,15 @@ impl<B: Copy, H: Copy> Steward<B, H> {
     /// steward's own destroy of the parent revokes the scope's handle too: then the parent's
     /// record is gone, and [`Steward::deadline_of`] gives no deadline to destroy by.
     fn destroy<K: Kernel<Budget = B, Handle = H>>(kernel: &mut K, b: B, deadline: u64) -> Result<(), Error> {
-        if kernel.now() >= deadline {
-            return Ok(());
-        }
-        match kernel.destroy(b) {
-            Err(Error::BadHandle) if kernel.now() >= deadline => Ok(()),
-            destroyed => destroyed,
-        }
+        kernel.without_installs(|kernel| {
+            if kernel.now() >= deadline {
+                return Ok(());
+            }
+            match kernel.destroy(b) {
+                Err(Error::BadHandle) if kernel.now() >= deadline => Ok(()),
+                destroyed => destroyed,
+            }
+        })
     }
 
     fn step<K: Kernel<Budget = B, Handle = H>>(
@@ -458,8 +647,8 @@ impl<B: Copy, H: Copy> Steward<B, H> {
         kernel: &mut K,
         owner: &Object,
         step: &Step,
-    ) -> Result<Produced, Error> {
-        match step {
+    ) -> Result<Stepped, Error> {
+        let made = match step {
             // A budget under `users` (a crossing's) is stamped with its domain's account, as
             // boot stamps a principal's top budget: it bills to the owner (R8), its crash is
             // blamed on the domain (R40), and its connection falls in the account's bucket at
@@ -501,7 +690,7 @@ impl<B: Copy, H: Copy> Steward<B, H> {
                 self.made.insert(token.clone(), Made::Connection(h));
                 Ok(Produced::Connection)
             }
-            Step::Launch { token, budget, connections } => {
+            Step::Launch { token: _, budget, connections } => {
                 let b = self.budget(budget)?;
                 let mut held = Vec::new();
                 for c in connections {
@@ -513,15 +702,15 @@ impl<B: Copy, H: Copy> Steward<B, H> {
                 let session = self.store.domain(&owner.domain).and_then(|d| d.sessions.get(&owner.id));
                 let context =
                     session.filter(|_| owner.kind == Kind::Session).and_then(|s| s.context.as_deref());
-                let (pid, notices) = kernel.launch(owner, b, &held, context)?;
-                self.made.insert(token.clone(), Made::Process(pid));
-                self.pids.insert(pid, owner.clone());
-                if let Some(n) = notices {
-                    if let Some(old) = self.notices.insert(owner.clone(), n) {
-                        self.give_back(kernel, old);
+                // The launch thread runs the launch: the batch stops here, and the step is
+                // finished when it reports ([`Steward::launched`]).
+                match kernel.launch(owner, b, &held, context)? {
+                    Launched::Pending(job) => return Ok(Stepped::Launching(job)),
+                    Launched::Started(pid, notices) => {
+                        self.started(kernel, owner, step, pid, notices);
+                        Ok(Produced::Process(pid))
                     }
                 }
-                Ok(Produced::Process(pid))
             }
             Step::LaunchRelay { token, budget } => {
                 let b = self.budget(budget)?;
@@ -620,7 +809,8 @@ impl<B: Copy, H: Copy> Steward<B, H> {
                 }
                 Ok(Produced::Done)
             }
-        }
+        };
+        made.map(Stepped::Made)
     }
 
     /// The crossing program ran for `owner`: its process is `owner`'s, for the exit line, and its

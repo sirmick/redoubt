@@ -44,6 +44,29 @@
 //! restarts empty, and its only return is the loop's endpoint gone; a thread has no exit notice
 //! to take, so there is no restart path and no orphaned queue.
 //!
+//! **The launch thread** (servers/steward.md, "Leases"): a session's or a lease's launch is the
+//! loop's longest work by far, the VM's image streamed from the system volume into the child's
+//! pages and `process_start`, seconds under load, and a deadline's exit notice that arrived
+//! meanwhile waited behind it. So the loop prepares a launch (the exit endpoint, a session's
+//! notices endpoint, the handles and names the child is given: every handle exists before the
+//! hand-over) and hands the rest to one thread of its own as a self-contained job
+//! ([`launch_thread`]), which runs `Launch::streamed(..).start()` as the loop did, serially and in
+//! order, and reports each job's end as a send on badge [`LAUNCH`]; the loop then finishes the
+//! launch (the steward's copies closed, the exit watched, the notices send right kept) and the
+//! library pushes the batch's `Done` to the core ([`redoubt_steward_server::drive`]). The
+//! hand-over is the cleanup thread's: the thread idles in a call on the same badge, which the
+//! loop answers when a job is queued, and the queue's lock is held for one operation at a time.
+//! The thread touches nothing of [`Machine`]'s tables, and creates no budget. The **install
+//! lock** keeps the deadline witness's premise: the loop's clock read and destroy of a kept
+//! budget handle run back to back with no handle installed between them, and the thread
+//! installs handles (`process_create`, each page batch); so the thread holds the lock across
+//! `start()` and drops it inside each read of the image, the one server call on its path, and
+//! the loop holds it across the pair ([`Kernel::without_installs`]): no install of the thread's
+//! lands between the read and the destroy, and the lock is never held across a call to a
+//! server. The caller of a `start_agent` or a `login` waits as before: its call is parked and
+//! answered when the launch is done ([`Machine::parked`]); the calls and events of every other
+//! object are served meanwhile, and only the launching object's own wait with it.
+//!
 //! **The console lines at the loop's turn** (the same page): every line the steward says is
 //! queued ([`Console`], the library's `redoubt_steward_server::console`) and written through one
 //! fid kept open at `consoled`, a line one write within [`CONSOLE_US`], at two points: before a
@@ -65,7 +88,7 @@ extern crate alloc;
 #[cfg(target_os = "none")]
 mod machine {
     use alloc::boxed::Box;
-    use alloc::collections::BTreeMap;
+    use alloc::collections::{BTreeMap, VecDeque};
     use alloc::format;
     use alloc::string::String;
     use alloc::sync::Arc;
@@ -89,18 +112,21 @@ mod machine {
     use redoubt_rt::wire::proto::{consol, consrelay, crossing, ipd, steward};
     use redoubt_steward::consts::CROSSING_LIFE;
     use redoubt_steward::domain::Domain;
-    use redoubt_steward::effect::{Object, Output};
+    use redoubt_steward::effect::{Answer, Object, Output, ReplyTo};
     use redoubt_steward::event::EventKind;
     use redoubt_steward::inspect;
     use redoubt_steward_server::approval::{Line, Lines, parse};
     use redoubt_steward_server::cleanup::{Fate, Queue as Cleanup, TRIES};
     use redoubt_steward_server::console::{Queue, Sink};
+    use redoubt_steward_server::drive::CONSOLE as CONSOLE_REPLY;
     use redoubt_steward_server::own::{
         Bound, Child, How, IPD, Own, SYSTEM, binding, lease_args, session_args,
     };
-    use redoubt_steward_server::protocol::{APPROVAL, Serving, answer_with, watches as watches_call};
+    use redoubt_steward_server::protocol::{
+        APPROVAL, Serving, answer_late, answer_with, watches as watches_call,
+    };
     use redoubt_steward_server::watchers::Watchers;
-    use redoubt_steward_server::{Kernel, SLOTS, Steward, start};
+    use redoubt_steward_server::{Kernel, Launched, SLOTS, Steward, start};
 
     /// The stub's own flat binary (`build.rs`).
     static STUB_BIN: &[u8] = include_bytes!(env!("STUB_BIN"));
@@ -262,6 +288,17 @@ mod machine {
     /// one page. With its thread page and the lock's endpoint page it is the three pages the
     /// steward's manifest entry grew by.
     const CLEANUP_STACK_PAGES: usize = 1;
+    /// A root badge of the steward's own, below the minted range and none of the protocol's
+    /// roles: the launch thread reports each launch's end on it (a send naming the job) and
+    /// idles in a call on it, which the loop holds until a launch is queued and answers with
+    /// [`GO`].
+    const LAUNCH: u64 = 7;
+    /// The launch thread's stack, in pages: it assembles the launch from the job, reads the
+    /// image through its own lend a batch at a time and makes the launch's kernel calls, the
+    /// depth the loop's launch had. Twice its measured peak, rounded up to a page: 4,840 bytes
+    /// on rv64 and 3,808 on rv32 (`stack steward thread 2`, `steward-session-ends`;
+    /// docs/testbench.md, "The memory budget"), twice 4,840 is 9,680, three pages.
+    const LAUNCH_STACK_PAGES: usize = 3;
     /// Open approval channels at most, and so reader threads at most (servers/steward.md, "The
     /// powerbox and approvals"): the steward's bound on its own threads beside the watchers,
     /// declared as theirs is. An open past it is refused, and the person's `ssh approve@box`
@@ -397,6 +434,154 @@ mod machine {
             if report.call(&[GO, 0, 0, 0], &[], None, FOREVER).into_result().is_err() {
                 return;
             }
+        }
+    }
+
+    /// What the loop hands the launch thread and what the thread hands back, under one lock
+    /// held for one operation at a time, never across a call: the jobs in the order they were
+    /// handed over, which the thread runs in that order, and each finished job's process, or the
+    /// error that failed its launch, until the loop takes it.
+    #[derive(Default)]
+    struct Launches {
+        jobs: VecDeque<LaunchJob>,
+        done: BTreeMap<u64, Result<Handle, Error>>,
+    }
+
+    /// A launch as the thread runs it, self-contained: the child's budget and exit endpoint,
+    /// the connection the image is read through (the loop's attached one at `bootfsd`, which
+    /// several threads call on at once), its length, the handles and names the child is given,
+    /// its arguments and its sizes. Nothing of [`Machine`]'s tables.
+    struct LaunchJob {
+        id: u64,
+        budget: Handle,
+        exit: Handle,
+        program: Connection,
+        len: usize,
+        handles: Vec<(String, Handle)>,
+        namespace: Vec<(String, Handle)>,
+        args: Vec<String>,
+        heap: u32,
+        vm_pages: u64,
+    }
+
+    /// What the loop keeps of a launch it prepared, to finish it on the thread's report: the
+    /// exit endpoint, a session's notices endpoint (the receive right, closed once the VM holds
+    /// its copy, and the send right, kept), and the keys of the connections the child was given,
+    /// whose copies of the steward's go once it runs.
+    struct Launching {
+        exit: Handle,
+        notices: Option<(Handle, Handle)>,
+        keys: Vec<u64>,
+    }
+
+    /// A call the loop holds for its answer: a `start_agent` or `login` whose launch the thread
+    /// runs, or a call held for the launching object; answered when the core replies to its
+    /// token, with its arrival time for the `served` line.
+    struct Parked {
+        request: Request,
+        /// How many handles the call came with: a login's two consoles, taken at the call.
+        handles: usize,
+        began: u64,
+    }
+
+    /// The launch thread: takes the jobs the loop queued, in order, runs each launch under the
+    /// install lock but inside its reads of the image ([`start_job`]), leaves the result for the
+    /// loop and reports it as a send on [`LAUNCH`]; with no job queued it calls the loop on the
+    /// same badge and waits for the answer, which comes when one is. Its lend is its own, the
+    /// loop's size, so a page batch is read in as many reads as the loop read it. It ends with
+    /// the steward: a report that fails is the loop gone.
+    fn launch_thread(launches: Arc<Mutex<Launches>>, install: Arc<Mutex<()>>, report: u32) {
+        let report = Endpoint::from_handle(h(report));
+        let Ok(mut lend) = Lend::new(LEND_PAGES) else { return };
+        loop {
+            loop {
+                let Some(job) = launches.lock().jobs.pop_front() else { break };
+                let id = job.id;
+                let started = start_job(job, &install, &mut lend);
+                launches.lock().done.insert(id, started);
+                if report.send(&[id, 0, 0, 0], &[], None, FOREVER).is_err() {
+                    return;
+                }
+            }
+            if report.call(&[GO, 0, 0, 0], &[], None, FOREVER).into_result().is_err() {
+                return;
+            }
+        }
+    }
+
+    /// One launch, as the loop made it before: the image streamed from the system volume a
+    /// batch at a time into fresh pages moved into the child, the stub, the stack and the
+    /// startup block placed, and `process_start`. The install lock is held from before the
+    /// first install (`process_create`) to after the last call, except inside each read of the
+    /// image, which drops it on entry and takes it again on return: every install of the
+    /// thread's is under the lock, and the lock is never held across a call to a server. The
+    /// process handle of a child that started; a launch the kernel refused closed its process
+    /// already and left none, and the error is the step's.
+    fn start_job(job: LaunchJob, install: &Mutex<()>, lend: &mut Lend) -> Result<Handle, Error> {
+        let mut held = Some(install.lock());
+        let mut read = |at: usize, buf: &mut [u8]| {
+            held = None;
+            let read = read_from(&job.program, lend, PROGRAM, at, buf);
+            held = Some(install.lock());
+            read
+        };
+        let started = {
+            let mut launch = Launch::streamed(
+                STUB_BIN,
+                job.len,
+                &mut read,
+                Budget::from_handle(job.budget),
+                Endpoint::from_handle(job.exit),
+            );
+            for (name, handle) in &job.handles {
+                launch.handle(name, *handle);
+            }
+            for (at, handle) in &job.namespace {
+                launch.namespace(at, *handle);
+            }
+            launch.stack_pages(SESSION_STACK_PAGES).heap_pages(job.heap).budget_pages(job.vm_pages);
+            for arg in &job.args {
+                launch.arg(arg);
+            }
+            launch.start()
+        };
+        drop(held);
+        match started {
+            Ok(started) => Ok(started.process().handle()),
+            Err(failed) => Err(match failed.error {
+                redoubt_client::Error::Sys(e) => e,
+                _ => Error::Refused,
+            }),
+        }
+    }
+
+    /// Reads `buf.len()` bytes of the program `path` at `at` through `conn`, with `lend`: the
+    /// loop's reads of a relay's or a crossing's image, and the launch thread's of a VM's.
+    fn read_from(
+        conn: &Connection,
+        lend: &mut Lend,
+        path: &str,
+        at: usize,
+        buf: &mut [u8],
+    ) -> Result<(), Error> {
+        let file = conn.open(lend, path, mode::OREAD).map_err(called)?;
+        let mut done = 0;
+        let mut failed = None;
+        while done < buf.len() {
+            match file.read_at(lend, (at + done) as u64, &mut buf[done..]) {
+                Ok(0) => break,
+                Ok(n) => done += n,
+                Err(e) => {
+                    failed = Some(called(e));
+                    break;
+                }
+            }
+        }
+        let _ = file.close(lend);
+        match failed {
+            Some(e) => Err(e),
+            None if done == buf.len() => Ok(()),
+            None => Err(Error::InvalidArgument),
         }
     }
 
@@ -603,6 +788,26 @@ mod machine {
         /// Handles a server's restart retired, which the thread may still be calling on: closed
         /// once it has reported since, when it is past any call it had out.
         retired: Vec<Handle>,
+        /// The install lock ([`Kernel::without_installs`]): held by the loop across its clock
+        /// read and destroy of a kept budget handle, and by the launch thread across its
+        /// installs ([`start_job`]).
+        install: Arc<Mutex<()>>,
+        /// The launches queued for the thread and the ones it finished ([`launch_thread`]).
+        launches: Arc<Mutex<Launches>>,
+        /// The launch thread's idle call, held while no launch is queued for it.
+        launch_idle: Option<Request>,
+        /// Each launch handed to the thread and not yet finished, by job, and the last job
+        /// drawn.
+        launching: BTreeMap<u64, Launching>,
+        next_job: u64,
+        /// The calls held for their answer, by the reply token the core answers them on, and
+        /// the last token drawn: above the console session's, each call's own while it waits.
+        parked: BTreeMap<ReplyTo, Parked>,
+        next_reply: ReplyTo,
+        /// `latency-probe` only: the longest the loop waited for the install lock so far (µs),
+        /// said as it grows.
+        #[cfg(feature = "latency-probe")]
+        lock_waited: u64,
         /// `latency-probe` only: the last `budget_destroy`'s end and length (µs), the probe's
         /// `destroy_call` sample.
         #[cfg(feature = "latency-probe")]
@@ -740,28 +945,10 @@ mod machine {
             Ok(conn)
         }
 
-        /// Reads `buf.len()` bytes of the program `path` at `at`, through `bootfsd`.
+        /// Reads `buf.len()` bytes of the program `path` at `at`, through `bootfsd`, on the loop.
         fn read_program(&mut self, path: &str, at: usize, buf: &mut [u8]) -> Result<(), Error> {
             let conn = self.server("bootfsd")?;
-            let file = conn.open(&mut self.lend, path, mode::OREAD).map_err(called)?;
-            let mut done = 0;
-            let mut failed = None;
-            while done < buf.len() {
-                match file.read_at(&mut self.lend, (at + done) as u64, &mut buf[done..]) {
-                    Ok(0) => break,
-                    Ok(n) => done += n,
-                    Err(e) => {
-                        failed = Some(called(e));
-                        break;
-                    }
-                }
-            }
-            let _ = file.close(&mut self.lend);
-            match failed {
-                Some(e) => Err(e),
-                None if done == buf.len() => Ok(()),
-                None => Err(Error::InvalidArgument),
-            }
+            read_from(&conn, &mut self.lend, path, at, buf)
         }
 
         /// Holds `handle` for a child under a new key, with what disconnects it, if anything,
@@ -1019,16 +1206,17 @@ mod machine {
             }
         }
 
-        /// The child is started with copies of the connections held under `connections`; the
-        /// steward's own copies are closed once it runs, so that a scope's end leaves no stale
-        /// index here ([`Held`]).
+        /// The launch prepared on the loop and handed to the launch thread: the child's exit
+        /// endpoint, a session's notices endpoint, the copies of the connections held under
+        /// `connections` it is given, its names and arguments; the thread streams the image and
+        /// starts it ([`start_job`]), and [`Machine::launched`] finishes it on the report.
         fn launch(
             &mut self,
             owner: &Object,
             budget: Handle,
             connections: &[Option<u64>],
             context: Option<&str>,
-        ) -> Result<(u64, Option<u64>), Error> {
+        ) -> Result<Launched<u64>, Error> {
             // The steward's badge and the shared slots, resolved on the stack: the launch is
             // the steward's heap peak, and this adds nothing to it.
             let keys = connections;
@@ -1042,6 +1230,10 @@ mod machine {
             let bound: Vec<Option<Bound>> = (0..SLOTS)
                 .map(|s| binding(&self.own_lines, &principal, labels, child, s, self.agent_quota))
                 .collect();
+            // The connection the thread reads the image through: the loop's at `bootfsd`,
+            // attached once; a restart of that server since the hand-over fails the reads, and
+            // the launch, as it failed the loop's.
+            let program = self.server("bootfsd")?;
             let exit = Endpoint::create()?;
             let exit_handle = exit.handle();
             // A session's notices endpoint (servers/steward.md, "Leases"): the VM is given the
@@ -1054,7 +1246,7 @@ mod machine {
                     })?;
                     let send = receive.mint(NonZeroU64::new(NOTICES).expect("NOTICES is not 0"), None);
                     match send {
-                        Ok(send) => Some((receive, send)),
+                        Ok(send) => Some((receive.handle(), send.handle())),
                         Err(e) => {
                             let _ = close(receive.handle());
                             let _ = close(exit_handle);
@@ -1075,78 +1267,107 @@ mod machine {
                     SHELL,
                 ),
             };
-            let endpoint = format!("endpoint={SYSTEM}");
-            let len = self.program_len;
-            let schedulers = format!("schedulers={SESSION_SCHEDULERS}");
             // The heap capped at what the VM's share holds beside each scheduler's stack and
             // thread page, its locks' endpoints and the process's own page (servers/init.md,
             // "Heaps").
             let threads = (SESSION_STACK_PAGES + 1) * SESSION_SCHEDULERS + SESSION_LOCK_PAGES;
-            let heap = vm_pages.saturating_sub(threads as u64 + 1);
+            let heap = u32::try_from(vm_pages.saturating_sub(threads as u64 + 1)).unwrap_or(u32::MAX);
             // The steward's badge first, then the shared slots in order.
             let slot = |i: usize| connections.get(i + 1).copied().flatten();
-            let started = {
-                let mut read = |at: usize, buf: &mut [u8]| self.read_program(PROGRAM, at, buf);
-                let mut launch =
-                    Launch::streamed(STUB_BIN, len, &mut read, Budget::from_handle(budget), exit);
-                if let Some(steward) = connections.first().copied().flatten() {
-                    launch.handle("steward", steward);
+            let mut handles = Vec::new();
+            let mut namespace = Vec::new();
+            if let Some(steward) = connections.first().copied().flatten() {
+                handles.push((String::from("steward"), steward));
+            }
+            handles.push((String::from("budget"), budget));
+            if let Some((receive, _)) = notices {
+                handles.push((String::from(NOTICES_HANDLE), receive));
+            }
+            for (i, b) in bound.iter().enumerate() {
+                let (Some(b), Some(conn)) = (b, slot(i)) else { continue };
+                if let Some(name) = b.name {
+                    handles.push((String::from(name), conn));
                 }
-                launch.handle("budget", budget);
-                if let Some((receive, _)) = &notices {
-                    launch.handle(NOTICES_HANDLE, receive.handle());
+                if let Some(at) = &b.at {
+                    namespace.push((at.clone(), conn));
                 }
-                for (i, b) in bound.iter().enumerate() {
-                    let (Some(b), Some(conn)) = (b, slot(i)) else { continue };
-                    if let Some(name) = b.name {
-                        launch.handle(name, conn);
-                    }
-                    if let Some(at) = &b.at {
-                        launch.namespace(at, conn);
-                    }
-                }
-                launch
-                    .stack_pages(SESSION_STACK_PAGES)
-                    .heap_pages(u32::try_from(heap).unwrap_or(u32::MAX))
-                    .budget_pages(vm_pages);
-                told.iter().fold(launch.arg(&endpoint).arg(&schedulers), |l, arg| l.arg(arg)).arg(module);
-                launch.start()
+            }
+            let mut args =
+                alloc::vec![format!("endpoint={SYSTEM}"), format!("schedulers={SESSION_SCHEDULERS}")];
+            args.extend(told);
+            args.push(String::from(module));
+            self.next_job += 1;
+            let id = self.next_job;
+            let keys = keys.iter().flatten().copied().collect();
+            self.launching.insert(id, Launching { exit: exit_handle, notices, keys });
+            let job = LaunchJob {
+                id,
+                budget,
+                exit: exit_handle,
+                program,
+                len: self.program_len,
+                handles,
+                namespace,
+                args,
+                heap,
+                vm_pages,
             };
-            // The VM holds its copy of the receive right now, or the launch failed: the steward
-            // keeps only the send right, and only for a VM that started.
-            let send = notices.map(|(receive, send)| {
-                let _ = close(receive.handle());
-                send.handle()
+            self.launches.lock().jobs.push_back(job);
+            self.ring_launch();
+            Ok(Launched::Pending(id))
+        }
+
+        /// The rest of the launch, on the thread's report: the steward's copies go (the
+        /// process handle, since the process ends with its budget and its notice comes to the
+        /// exit endpoint; the notices receive right, which the VM holds its copy of now; the
+        /// connections the child was given, but for a channel's console, which `release` still
+        /// tells `ended`), the exit is watched and the notices send right kept, so that a
+        /// scope's end leaves no stale index here ([`Held`]). A launch the thread failed, or
+        /// an exit nobody can watch, leaves nothing: the exit endpoint and the send right close.
+        fn launched(&mut self, job: u64) -> Result<(u64, Option<u64>), Error> {
+            let kept = self.launching.remove(&job).ok_or(Error::BadHandle)?;
+            let started = self.launches.lock().done.remove(&job).unwrap_or(Err(Error::BadHandle));
+            let send = kept.notices.map(|(receive, send)| {
+                let _ = close(receive);
+                send
             });
-            let job = started.map_err(|failed| {
-                let _ = close(exit_handle);
+            let dropped = |e: Error| {
+                let _ = close(kept.exit);
                 if let Some(s) = send {
                     let _ = close(s);
                 }
-                match failed.error {
-                    redoubt_client::Error::Sys(e) => e,
-                    _ => Error::Refused,
-                }
-            })?;
-            // The process ends with its budget; its notice comes to the exit endpoint.
-            let _ = close(job.process().handle());
-            // The child holds its copies now: the steward's go, but for a channel's console,
-            // which `release` still tells `ended`.
-            for key in keys.iter().flatten() {
+                e
+            };
+            let process = started.map_err(dropped)?;
+            let _ = close(process);
+            for key in &kept.keys {
                 if let Some(held) = self.held.get_mut(key).filter(|h| !h.console) {
                     if let Some(handle) = held.handle.take() {
                         let _ = close(handle);
                     }
                 }
             }
-            if let Err(e) = self.watch_exit(exit_handle) {
-                let _ = close(exit_handle);
-                if let Some(s) = send {
-                    let _ = close(s);
+            self.watch_exit(kept.exit).map_err(dropped)?;
+            Ok((u64::from(kept.exit.index()), send.map(|s| self.keep(s))))
+        }
+
+        /// The lock's worst wait on the loop is one stretch of the thread's between two reads
+        /// of the image: a page batch's pages made, a `map` of them into the child, or
+        /// `process_start`, kernel work; the probe says the longest so far.
+        fn without_installs<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+            let install = Arc::clone(&self.install);
+            #[cfg(feature = "latency-probe")]
+            let began = redoubt_rt::handle::time_now().unwrap_or(0);
+            let _held = install.lock();
+            #[cfg(feature = "latency-probe")]
+            {
+                let waited = redoubt_rt::handle::time_now().unwrap_or(began).saturating_sub(began);
+                if waited > self.lock_waited {
+                    self.lock_waited = waited;
+                    self.out.say(&format!("steward: install lock waited {waited} us, the most so far\n"));
                 }
-                return Err(e);
             }
-            Ok((u64::from(exit_handle.index()), send.map(|s| self.keep(s))))
+            f(self)
         }
 
         /// The relay is launched from `/boot` in the context's budget with a hello badge of its
@@ -1666,6 +1887,59 @@ mod machine {
                 let _ = close(handle);
             }
         }
+
+        /// Answers the launch thread's idle call, if it is held: the thread takes the jobs
+        /// queued.
+        fn ring_launch(&mut self) {
+            if let Some(request) = self.launch_idle.take() {
+                let go = Outcome { words: [GO, 0, 0, 0], send: Handles::new(), close: Handles::new() };
+                let _ = finish(request, &go);
+            }
+        }
+
+        /// The launch thread's idle call: held until a launch is queued, and answered at once
+        /// if one is already, since a hand-over between the thread's last look at the queue and
+        /// this call found nothing to answer ([`Machine::cleanup_idle`]'s rule).
+        fn launch_idle(&mut self, request: Request) {
+            if let Some(stale) = self.launch_idle.replace(request) {
+                let _ = finish(
+                    stale,
+                    &Outcome { words: [GO, 0, 0, 0], send: Handles::new(), close: Handles::new() },
+                );
+            }
+            if !self.launches.lock().jobs.is_empty() {
+                self.ring_launch();
+            }
+        }
+
+        /// Holds `request`, answered on `reply` when the core replies to that token.
+        fn park(&mut self, reply: ReplyTo, request: Request, began: u64) {
+            let handles = request.handles.as_slice().len();
+            self.parked.insert(reply, Parked { request, handles, began });
+        }
+
+        /// The core replied `answer` on `reply`: the call parked for it is answered, as it
+        /// would have been at once, its `served` line said first (the call's arrival to its
+        /// answer, a launch's wait in the thread's queue included). The badge of a `start_agent`
+        /// answered with its lease, for the probe.
+        fn answer(&mut self, steward: &Steward<Handle, u64>, reply: ReplyTo, answer: Answer) -> Option<u64> {
+            let Some(Parked { mut request, handles, began }) = self.parked.remove(&reply) else {
+                return None;
+            };
+            let (caller, words) = (request.caller, request.words);
+            let outcome = answer_late(steward, &caller, &words, handles, request.lend(), answer);
+            let now = redoubt_rt::handle::time_now().unwrap_or(began);
+            if let Some(op) = served_op(&words) {
+                self.out.say(&format!("steward: served {op} in {} us\n", now.saturating_sub(began)));
+            }
+            #[cfg(feature = "latency-probe")]
+            if words[0] == 10 {
+                self.out.say(&format!("steward: LATENCY-LAUNCH {began} {now}\n"));
+            }
+            self.out.turn(now);
+            let _ = finish(request, &outcome);
+            (words[0] == 10 && outcome.words[0] == 0).then_some(caller.badge)
+        }
     }
 
     impl Machine<'_> {
@@ -1902,16 +2176,40 @@ mod machine {
     /// What an event did, said: its failed steps, its outputs, and the sub-budgets that changed;
     /// with no outputs, false: the core exited.
     fn after(
-        out: &mut Console,
+        machine: &mut Machine<'_>,
         steward: &mut Steward<Handle, u64>,
         usage: &mut BTreeMap<u32, (u64, u64)>,
         outputs: Option<Vec<Output>>,
     ) -> bool {
         let Some(outputs) = outputs else { return false };
-        failed(out, steward);
-        deliver(out, outputs);
-        tree(out, steward, usage);
+        failed(machine.out, steward);
+        deliver(machine.out, outputs);
+        tree(machine.out, steward, usage);
         true
+    }
+
+    /// [`after`], for an event that may answer parked calls (a launch's report: the `Done`'s
+    /// reply, the held events' replies): the event's lines go first, as a call's records go
+    /// before its reply, then each parked call is answered. The badges of the `start_agent`s
+    /// answered with their lease, for the probe; `None` when the core exited.
+    fn settle(
+        machine: &mut Machine<'_>,
+        steward: &mut Steward<Handle, u64>,
+        usage: &mut BTreeMap<u32, (u64, u64)>,
+        outputs: Option<Vec<Output>>,
+    ) -> Option<Vec<u64>> {
+        let outputs = outputs?;
+        let (replies, rest): (Vec<Output>, Vec<Output>) = outputs
+            .into_iter()
+            .partition(|o| matches!(o, Output::Reply { to, .. } if machine.parked.contains_key(to)));
+        after(machine, steward, usage, Some(rest));
+        let mut started = Vec::new();
+        for reply in replies {
+            if let Output::Reply { to, answer } = reply {
+                started.extend(machine.answer(steward, to, answer));
+            }
+        }
+        Some(started)
     }
 
     /// The operation of a call whose time the steward says, by its opcode: `end_lease`,
@@ -1933,9 +2231,15 @@ mod machine {
 
     /// What each domain's sub-budget holds, said when it changes: the kernel's count of the
     /// pages and processes carved from it, which a session's budget takes and its end gives back.
+    /// A domain a waiting batch carves from (its own object's, or a sponsored principal's
+    /// session's sponsor) is said once the launch is reported, so its carve's line follows the
+    /// batch's record, the order a launch on the loop gave them (the cases match on it).
     fn tree(out: &mut Console, steward: &Steward<Handle, u64>, last: &mut BTreeMap<u32, (u64, u64)>) {
         for c in &steward.carved {
             for (d, sub) in &c.subs {
+                if steward.launching_in(d) {
+                    continue;
+                }
                 let Ok(u) = Budget::from_handle(*sub).usage() else { continue };
                 let now = (u.pages_usage, u64::from(u.processes_usage));
                 if last.insert(sub.index(), now).is_some_and(|was| was != now) {
@@ -2099,6 +2403,15 @@ mod machine {
             cleanup: Arc::clone(&cleanup),
             idle: None,
             retired: Vec::new(),
+            install: Arc::new(Mutex::new(())),
+            launches: Arc::new(Mutex::new(Launches::default())),
+            launch_idle: None,
+            launching: BTreeMap::new(),
+            next_job: 0,
+            parked: BTreeMap::new(),
+            next_reply: CONSOLE_REPLY,
+            #[cfg(feature = "latency-probe")]
+            lock_waited: 0,
             #[cfg(feature = "latency-probe")]
             last_destroy: None,
             #[cfg(feature = "latency-probe")]
@@ -2188,10 +2501,29 @@ mod machine {
             machine.out.say("steward: cannot start its cleanup thread\n");
             return NOT_STARTED;
         }
+        // The launch thread, with its badge; its locks' endpoints are made now too. Before the
+        // console session, whose launch is its first job.
+        let Ok(report) = own.mint(NonZeroU64::new(LAUNCH).expect("LAUNCH is not 0"), None) else {
+            machine.out.say("steward: cannot mint its launch thread's badge\n");
+            return NOT_STARTED;
+        };
+        machine.install.prepare();
+        machine.launches.prepare();
+        let (launches, install, index) =
+            (Arc::clone(&machine.launches), Arc::clone(&machine.install), report.handle().index());
+        if redoubt_rt::thread::spawn(
+            Box::new(move || launch_thread(launches, install, index)),
+            LAUNCH_STACK_PAGES,
+        )
+        .is_err()
+        {
+            machine.out.say("steward: cannot start its launch thread\n");
+            return NOT_STARTED;
+        }
         let mut usage = BTreeMap::new();
         tree(machine.out, &steward, &mut usage);
         let outputs = steward.open_console(&mut machine).ok();
-        if !after(machine.out, &mut steward, &mut usage, outputs) {
+        if !after(&mut machine, &mut steward, &mut usage, outputs) {
             return core_exited(machine.out);
         }
         #[cfg(feature = "restart-probe")]
@@ -2207,7 +2539,7 @@ mod machine {
             let now = redoubt_rt::handle::time_now().unwrap_or(0);
             if steward.store.next_idle().is_some_and(|t| t <= now) {
                 let outputs = steward.event(&mut machine, EventKind::Idle, 0).ok();
-                if !after(machine.out, &mut steward, &mut usage, outputs) {
+                if !after(&mut machine, &mut steward, &mut usage, outputs) {
                     return core_exited(machine.out);
                 }
             }
@@ -2315,6 +2647,8 @@ mod machine {
             match own.receive(wait, 0) {
                 // The cleanup thread's idle call, held until a step is due or handed over.
                 Ok(Event::Call(request)) if request.caller.badge == CLEANUP => machine.cleanup_idle(request),
+                // The launch thread's, held until a launch is queued.
+                Ok(Event::Call(request)) if request.caller.badge == LAUNCH => machine.launch_idle(request),
                 Ok(Event::Call(request)) if watches_call(&request.caller, &request.words) => {
                     // One per `sshd` instance; a restarted `sshd`'s comes before the abandoned
                     // one's notice. More is a fault of `sshd`'s, refused as it arrives.
@@ -2325,24 +2659,42 @@ mod machine {
                 Ok(Event::Call(mut request)) => {
                     let (caller, words, handles) = (request.caller, request.words, request.handles);
                     let began = redoubt_rt::handle::time_now().unwrap_or(0);
-                    let mut serving = Serving::new(&mut steward, &mut machine);
+                    // The call's own reply token: a `start_agent`'s or a `login`'s answer comes
+                    // when the launch thread is done, and other calls are answered meanwhile.
+                    machine.next_reply += 1;
+                    let reply = machine.next_reply;
+                    let mut serving = Serving::with_reply(&mut steward, &mut machine, reply);
                     let outcome = answer_with(&mut serving, &caller, &words, &handles, request.lend());
-                    let (outputs, exited) = (core::mem::take(&mut serving.outputs), serving.exited);
+                    let (outputs, exited, parked) =
+                        (core::mem::take(&mut serving.outputs), serving.exited, serving.parked);
                     let deferred = core::mem::take(&mut serving.after);
                     // The steward's own time on the three calls whose cost the pages bound
                     // (kernel/scheduling.md, "Responsiveness"; servers/steward.md, "Residual
                     // risks": steward work is paid by the steward): `end_lease`, `submit` and
                     // `start_agent`, a launch's time measured here and not inferred from the
                     // gaps between its audit lines, from the call's arrival to its answer, said
-                    // once each.
-                    if let Some(op) = served_op(&words) {
-                        let took = redoubt_rt::handle::time_now().unwrap_or(began).saturating_sub(began);
-                        machine.out.say(&format!("steward: served {op} in {took} us\n"));
+                    // once each: here for a call answered at once, at the answer for a parked
+                    // one ([`Machine::answer`]), whose time then includes the launch's wait in
+                    // the thread's queue behind an earlier launch.
+                    if !parked {
+                        if let Some(op) = served_op(&words) {
+                            let now = redoubt_rt::handle::time_now().unwrap_or(began);
+                            machine
+                                .out
+                                .say(&format!("steward: served {op} in {} us\n", now.saturating_sub(began)));
+                            // The launch's window, for the oracle's overlap check: a deadline
+                            // notice is judged only when its deadline fell inside a
+                            // `start_agent`'s arrival-to-answer.
+                            #[cfg(feature = "latency-probe")]
+                            if words[0] == 10 {
+                                machine.out.say(&format!("steward: LATENCY-LAUNCH {began} {now}\n"));
+                            }
+                        }
                     }
                     // A probe lease started: the timer is armed at the loop's next receive, the
                     // reply's time kept for the `reply_wait` sample.
                     #[cfg(feature = "latency-probe")]
-                    if words[0] == 10 && outcome.words[0] == 0 {
+                    if !parked && words[0] == 10 && outcome.words[0] == 0 {
                         if let Some(lease) = probe_lease(&steward, caller.badge) {
                             let replied = redoubt_rt::handle::time_now().unwrap_or(0);
                             probe.pending = Some((lease, caller.badge, replied));
@@ -2351,10 +2703,15 @@ mod machine {
                     // What the call did is said before it is answered, so its records come
                     // before anything the caller says of the answer: a turn of the console
                     // queue, one write per line within the bound; a line the console did not
-                    // take waits for the loop's turn, and the reply does not.
-                    after(machine.out, &mut steward, &mut usage, Some(outputs));
+                    // take waits for the loop's turn, and the reply does not. A parked call is
+                    // kept, unanswered, for the core's reply to its token.
+                    after(&mut machine, &mut steward, &mut usage, Some(outputs));
                     machine.out.turn(redoubt_rt::handle::time_now().unwrap_or(began));
-                    let _ = finish(request, &outcome);
+                    if parked {
+                        machine.park(reply, request, began);
+                    } else {
+                        let _ = finish(request, &outcome);
+                    }
                     // A console a refused login or approval open brought is not kept.
                     machine.console(None, None);
                     machine.approval_consoles(None, None);
@@ -2365,7 +2722,7 @@ mod machine {
                     // take the write.
                     for kind in deferred {
                         let outputs = steward.event(&mut machine, kind, 0).ok();
-                        if !after(machine.out, &mut steward, &mut usage, outputs) {
+                        if !after(&mut machine, &mut steward, &mut usage, outputs) {
                             return core_exited(machine.out);
                         }
                     }
@@ -2374,6 +2731,25 @@ mod machine {
                 Ok(Event::Send(delivery)) if delivery.caller.badge == CLEANUP => {
                     close_delivery(&delivery);
                     machine.cleanup_done(&delivery);
+                }
+                // The launch thread's report: the loop finishes the launch, the core takes the
+                // batch's outcome and the events held for the object, and the calls parked for
+                // their replies are answered.
+                Ok(Event::Send(delivery)) if delivery.caller.badge == LAUNCH => {
+                    close_delivery(&delivery);
+                    let outputs = steward.launched(&mut machine, delivery.words[0]).ok();
+                    let Some(started) = settle(&mut machine, &mut steward, &mut usage, outputs) else {
+                        return core_exited(machine.out);
+                    };
+                    #[cfg(feature = "latency-probe")]
+                    for badge in started {
+                        if let Some(lease) = probe_lease(&steward, badge) {
+                            let replied = redoubt_rt::handle::time_now().unwrap_or(0);
+                            probe.pending = Some((lease, badge, replied));
+                        }
+                    }
+                    #[cfg(not(feature = "latency-probe"))]
+                    let _ = started;
                 }
                 // A reader's report: its channel ended, and it waits for the next.
                 Ok(Event::Send(delivery)) if delivery.caller.badge == READER_DONE => {
@@ -2464,7 +2840,7 @@ mod machine {
                             );
                         }
                     }
-                    if !after(machine.out, &mut steward, &mut usage, outputs) {
+                    if !after(&mut machine, &mut steward, &mut usage, outputs) {
                         return core_exited(machine.out);
                     }
                 }
@@ -2472,11 +2848,13 @@ mod machine {
                 // A held `watch` whose caller is gone: an `sshd` that ended, and every channel
                 // with it, so every attached context is detached (servers/steward.md, R80).
                 Ok(Event::Abandoned(id)) => {
+                    // A parked call whose caller is gone is dropped: its reply has nobody.
+                    machine.parked.retain(|_, p| p.request.id() != id);
                     let before = watches.len();
                     watches.retain(|w| w.id() != id);
                     if watches.len() < before {
                         let outputs = steward.event(&mut machine, EventKind::SshdGone, 0).ok();
-                        if !after(machine.out, &mut steward, &mut usage, outputs) {
+                        if !after(&mut machine, &mut steward, &mut usage, outputs) {
                             return core_exited(machine.out);
                         }
                     }
@@ -2503,7 +2881,7 @@ mod machine {
                     if let Some((end, gross)) = machine.last_destroy.take() {
                         probe.sample(machine.out, "destroy_call", n, end, gross);
                     }
-                    if !after(machine.out, &mut steward, &mut usage, outputs) {
+                    if !after(&mut machine, &mut steward, &mut usage, outputs) {
                         return core_exited(machine.out);
                     }
                 }
