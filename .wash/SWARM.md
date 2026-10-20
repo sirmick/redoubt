@@ -476,10 +476,13 @@ its own handoff in `.wash/local/`; another agent must be able to continue withou
    first and record unfinished checkpoints rather than continuing development.
 3. Apply the [publishing](#publishing) check. `.wash/save.sh` commits `.wash/plan.toml` and
    `.wash/qa/` on `main` as one `plan:` commit if they changed, pushes `main` and every `wp-`
-   branch (fast-forward only; it refuses a dirty
-   worktree or a diverged branch), and snapshots `.wash/local/`'s working files onto
-   `wash-local` (files under a megabyte; console captures and logs stay behind). Run it with
-   `--dry-run` first to see what it will do.
+   branch (fast-forward only; it refuses a dirty package worktree under `.worktrees/` or a
+   diverged branch; a scratch worktree under `.tmp/`, a measurement or a negative, is not looked
+   at), and snapshots `.wash/local/`'s working files onto `wash-local` (files under a megabyte;
+   console captures and logs stay behind). When `main` holds a train whose bench has not run,
+   or the plan commit is not wanted yet, `--local-only` does only the `wp-` branches and the
+   `wash-local` snapshot and leaves `main` alone, neither committed to nor pushed. Run it with
+   `--dry-run` first to see what it will do; it composes with `--local-only`.
 4. Verify the saved remote heads for `main`, each unfinished package and `wash-local`. The
    orchestrator reports the commits saved locally and remotely, members' paused state, and any
    refused, excluded or unsaved work. A partial save is reported as partial. For a project pause,

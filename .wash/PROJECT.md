@@ -175,7 +175,9 @@ work, use blanket git staging in a shared worktree, restart Wash or replace live
 - Before any pause the owner announces, and at the end of a working day, follow
   [saving and resuming](SWARM.md#saving-and-resuming): stop new assignments, checkpoint writers,
   verify members are paused, write member and orchestrator handoffs, review publication, save
-  and verify the remote heads. If pushing is forbidden, preserve local checkpoints and report
-  the missing remote backup. Do not call a partial save complete.
+  and verify the remote heads. If `main` may not be published yet (a train before its bench),
+  save with `.wash/save.sh --local-only`: the `wp-` branches and `.wash/local` go out, `main`
+  stays; scratch worktrees under `.tmp/` never block a save. If pushing is forbidden, preserve
+  local checkpoints and report the missing remote backup. Do not call a partial save complete.
 - Only on a requested teardown, save the work, then call `workspace_end` (with `confirm:true`
   while nodes are open). Teardown is not permission to restart Wash or discard worktrees.
