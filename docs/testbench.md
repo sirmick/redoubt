@@ -1857,9 +1857,11 @@ under a manifest of its own, beside a stand-in that takes its hello, and scans i
 serves, since it reserves every buffer before then. Its first thread's stack peaked at 8,360 bytes
 on rv64 and 7,392 on rv32, its heap at 22 pages on both; the steward launches it with a 5-page
 stack and a 44-page heap cap ([consrelay](servers/consrelay.md#the-bound)). The steward's own
-cleanup thread is the one thread it spawns painted (`stack steward thread 1`): its stack peaked at
-1,432 bytes on rv64 and 1,168 on rv32 in `steward-session-ends`, and the steward gives it one page,
-twice 1,432 being 2,864 ([the steward](servers/steward.md#failure-and-restart)).
+cleanup thread and launch thread are the two threads it spawns painted (`stack steward thread 1`
+and `thread 2`): in `steward-session-ends` the cleanup thread's stack peaked at 1,432 bytes on
+rv64 and 1,168 on rv32, and the steward gives it one page, twice 1,432 being 2,864; the launch
+thread's at 4,840 and 3,808, and it gets three pages, twice 4,840 being 9,680
+([the steward](servers/steward.md#failure-and-restart)).
 
 This is a measurement of the paths the case drove. Other requests or deeper call paths may
 need more stack or heap, and any guest, including another server, can forge the public paint

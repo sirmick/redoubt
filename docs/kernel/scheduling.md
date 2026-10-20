@@ -589,7 +589,7 @@ got 0.
 
 ### Responsiveness
 
-<details><summary>Status: built · tested (25)</summary>
+<details><summary>Status: built · tested (26)</summary>
 
 - bench:sched-latency
 - bench:steward-latency
@@ -597,6 +597,7 @@ got 0.
 - bench:steward-latency-n16
 - bench:steward-deadline-burst
 - bench:steward-deadline-burst-16
+- bench:steward-launch-overlap
 - bench:sched-lock-contention
 - bench:sched-lock-contention-4
 - bench:sched-lock-contention-4-mttcg
@@ -832,11 +833,19 @@ the wait in that forward, which the thread's queue removes
 ([the steward](../servers/steward.md#failure-and-restart),
 [beamlet](../userland/beamlet.md#the-forwards-queue)). What the sponsor sees is the shell's
 print of each notice, 250 to 370 ms a line through the relay. **The
-residual under load:** `deadline_notice` is clean only with the steward idle when the deadline
-fires — the quantity this case measures, one lease at a time. A launch in flight holds the serve
-loop inside a synchronous `start_agent` (2-6 s), so a deadline that fires during one waits behind
-it, up to the launch bound; the steward running the slow part of a launch off the loop, so the
-loop can take the notice meanwhile, is a separate change. The case measures the per-notice
+deadline inside a launch:** these rounds have the steward idle at each deadline, and a
+launch in flight once held the serve loop inside a synchronous `start_agent` (2-6 s), so a
+deadline that fired during one waited behind it. `steward-launch-overlap` stages that overlap
+(a lease's deadline one second inside another lease's launch, five times a boot, both widths;
+judged only when the trace shows the deadline inside the launch's arrival-to-answer window,
+else a failing verdict): with the launch on the loop the notice came 0.36 to 0.58 s net after
+the deadline (0.76 to 1.5 s gross, the launch's remainder: rv64 at one hart, two harts, rv32
+at one); with the steward's launch thread running the launch while the loop serves, the sponsor
+is told 16 to 36 ms net after it (p99 20 / 36 / 19 ms on the same three boots, target 40 ms
+met), the loop's worst wait on the thread's install lock 33 µs, 5.2 ms and 50 µs
+([the steward](../servers/steward.md#leases)). What still holds the loop inside a lease's batch
+is its mints at the shared servers, within `SERVER_US` (4 s; 1.66 s worst measured): a deadline
+inside a mint waits for it, a residual on the steward's page. The case measures the per-notice
 quantity, one lease at a
 time. The trace ring (256 MiB, 8,388,608 records) is per boot, and a single boot of all five rounds
 overran it at two harts, a boot of N = 1 to 4 too (the rounds record about 1.0 / 2.2 / 2.4 / 3.1 /
@@ -880,7 +889,7 @@ such a destruction (subtracted, as every target is net):
 | Measure (net µs, N = 1 / 2 / 3 / 4 / 16; D = 8 at 16) | rv64, 1 hart | rv32, 1 hart | rv64, 2 harts | rv32, 2 harts (`--smp 2`, recorded, not gated) |
 | --- | --- | --- | --- | --- |
 | steward timer wake (p50/p99) | 965/1944, 789/3472, 1227/2555, 821/5165, 599/1405 | 727/1579, 1242/1843, 888/1167, 801/1507; N = 16 not run (a spinner dies, below) | 1761/5085, 2867/23003, 1901/4066, 2336/7692, 3592/5357 | 5563/5636, **31831**/35239 (the p50 missed, below), 4160/5396, 3284/40940; N = 16 not run |
-| steward decision wake (p50/p99) | 1156/8292, 17425/20974, 645/2230, 965/2000, 736/1532 | 24235/28493, 1199/40468, 1011/1624, 775/1888 | 3474/18540, 1696/21203, 9798/25163, 3265/25254, 14107/29787 | 3963/4517, 4583/39824, 21757/40031, 3112/41174 |
+| steward decision wake (p50/p99) | 1156/8292, 17425/20974, 645/2230, 965/2000, 736/1532 | 30376/33376 (N = 1, recorded, not judged: below; 24235/28493 with the launch on the loop), 1202/1440, 969/2299, 775/1888 | 3474/18540, 1696/21203, 9798/25163, 3265/25254, 14107/29787 | 3963/4517, 4583/39824, 21757/40031, 3112/41174 |
 | deadline notice (p99; the sponsor's send returned, re-measured) | 17882, 18016, 19734, 18813, 14349 | 16303, 17365, 15288, 17349 | 30393, 32398, 24567, 27239, 29907 | 13021, 13996, 12731, 13997 (at the dequeue, not re-measured) |
 | `budget_destroy`, call to return (p50/p99) | 6012/8329, 6081/8372, 5016/8412, 5468/8354, 6204/8762 | 6710/10251, 5360/8315, 6404/7910, 6460/9557 | 8178/9787, 8390/11010, 7938/10401, 7800/11411, 7545/9390 | 11738/13577, 11350/14014, 11316/13198, 10016/16204 |
 | R10 (p99; the boots at N = 1 to 3 / 4 / 16, 99 / 35 / 31 destructions) | 9695 / 9716 / 4800 | 9651 / 9682 | 10042 / 9804 / 5490 | 9801 / 10063 |
@@ -990,7 +999,21 @@ records go before its reply, one write each, and the gap (the last row, recorded
 the loop's own work and the reply's hand-over to the caller, with no console call in it. The
 two-hart figures are gated as the stand-in's are, and the rv32 two-hart row's miss of the timer
 wake's p50 at N = 2, every sample near 40 ms with the one spinner's VM live before the round at
-N = 3 ran, is the finding above, judged now. The cases stay out of the whole run, by name, until
+N = 3 ran, is the finding above, judged now. **The same finding at one hart on rv32, one cell:**
+the decision wake at N = 1 is a bare 30 ms receive timeout that sleeps 53 to 62 ms with exactly
+one lease VM running (the round's own, just launched and spinning) and wakes 1 to 3 ms late
+beside a second, the steward doing nothing in the window; it measured 24,235 / 28,493 µs with
+the launch on the steward's loop, 0.8 ms under the 25 ms p50, and 30,376 / 33,376 with the
+launch on the steward's launch thread ([the steward](../servers/steward.md#leases)), whose
+report lands the loop's receive about 10 ms earlier against the VM's first run; the same tree
+with the launch put back on the loop measured 23,300 / 31,843, so the thread moved the phase of
+a pathological wake, not the wake (the 20 ms timer wake at N = 1 is 2.2 to 3 ms late with the
+thread, 0.8 without, within its 15 ms). The cell is recorded, not judged (`record=` on the case,
+the target unmoved; the table above carries both numbers), the one-runnable-VM timeout wake
+being the scheduler finding above: a sleeper's timeout that does not end the running VM's slice,
+the timer apparently armed for the slice's end rather than the nearest timeout, visible only
+when nothing else switches. Landing the phase under by putting `process_start` back on the loop
+would be designing to pass an anomalous wake, and is not done. The cases stay out of the whole run, by name, until
 the two-hart rows pass on both widths. The destructions judged are those before the probe's
 `LATENCY-END` (99 in the N = 1 to 3 boot, 165 over the three); the sixteen after it in each boot
 (the marker-file exits reaping the leases) are recorded and not judged.
