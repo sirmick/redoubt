@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 593
+revision = 596
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -2808,5 +2808,23 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   needs = ["WAKE1"]
   body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'WAKE1 landed; its four findings' (2). Brief: the ruling and this body. Tier A (the steward's loop), size S, investigation-first, reviewer steward-red-5. Found by WAKE1: with the hub's forwards queue in, the steward's lease_ended sends return 37-131 ms apart, the steward's own per-exit work (cleanup hand-over, the LeaseEnded audit, the console lines) now the serial cost of a burst's last notice (the last of six 1.11-1.28 s, of sixteen 1.83-2.51 s). STEWARD12's notices-first (reflog 57bff2058 on the old wp-STEWARD12: the loop sends a batch's lease_ended notices first, then does each exit's bookkeeping) was built, measured at 16 ms of 1.4 s and withdrawn because the FORWARD was the gate; WAKE1 removed that gate, so the same shape would move a burst's last notice from N x (37-131 ms) toward N x a send's return. Do: re-apply that shape on WAKE1's base, measure steward-deadline-burst and -16 on both widths and hart counts before and after (the send-return spacing, the last notice gross and net, none lost), and land it only if the derived burst bound (2x worst rounded up, today 3 s / 6 s) shrinks materially, the bounds and the pages (steward.md Failure and restart / Residual risks, scheduling.md) following the measurement; else record the measurement in the report and on the page and land nothing. The kernel's N destructions before the first notice stay a stated kernel residual. No target moves; the steward set and the latency cases unchanged."
+  state = "active"
+  revision = 594
+
+[[node]]
+  id = "B91"
+  title = "smp-evict-mttcg's guest exits before the bench sees its shootdown line about one boot in eight: the console drained to its end, the printing hart joined, or the last line flushed"
+  template = "package"
+  parent = "AGENTS"
+  body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'Two bench facts' (1): a flaky test is a bug. Investigation-first, shell-free; Tier B if the bench's, Tier A (kernel-red) if the kernel case's or the kernel's; size S. Found in trains 80 and 82 and once in train 82's reruns: smp-evict-mttcg (rv64 or rv32 at two harts) fails 'guest exited while waiting for /^shootdown: PID \\d+ stopped on hart/: QEMU exited with exit status 0' at 1.1-1.2 s, passing the other times (about one boot in eight alone). The failing boot's full console decides among three arms: (i) the shootdown line IS in the output but after the bench stopped reading: the console reader does not drain to EOF after the guest exits before judging (bench); (ii) the line is absent and the guest exited 0: the kernel case ends on the primary hart without joining the hart that prints it (a kernel-case ordering bug); (iii) the line was written but the UART not drained before the shutdown call: the kernel's exit racing its flush; fail loud means the last line is flushed. Do: reproduce with the failing boot's full console kept, name the arm, fix by construction (drain to EOF / join before exit / flush before shutdown), show the case green over 40 boots per width at two harts (logs kept); the fix's negative shown once if the kernel's. The orchestrator re-tiers once the arm is known. Pages: testbench.md (the reader's rule) or the kernel case's page / boot.md (the exit's flush), as the arm decides. Also carries, if BENCH2 did not: testbench.md states beside the timed bounds the condition they hold under (one whole bench at a time, QEMU exclusive during it)."
+  state = "active"
+  revision = 596
+
+[[node]]
+  id = "B92"
+  title = "A whole-bench run holds the machine's QEMU lease and every other boot waits for it, so the timed cases' bounds are measured under the condition they state"
+  template = "package"
+  parent = "AGENTS"
+  body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'Two bench facts' (2): the timed cases' bounds are the box's under the stated condition (one whole bench at a time, QEMU exclusive during it, the owner's rule of 2026-10-05), and members' boots beside a train broke it in train 82 (three walfsd timed steps past their bound under the bench, all passing alone twice). Tooling, Tier B, size S, reviewer kernel-red-4. Do: scripts/q already leases cores and ports and takes named locks (`q run --lock NAME`); scripts/jobs.mk's whole-bench targets (all-rv64, all-rv32, and the set form when it runs a whole class) take one machine-wide `qemu` lock for the run's duration, and every single boot case (the set form for single cases, the sweep, ./launch's bench use) takes the same lock shared or waits: a boot started while a train holds the lock waits with a line saying so (which train, since when), never fails; host-only cases (formatting, docs, host tests, Miri) do not take it; the lock is released on the train's exit by any path (the q lease's end, not a trap). State it on testbench.md beside the timed bounds (the condition and how the tooling holds it) and in the scheduler section; a host test of jobs.mk's lock taking if the bench's own tests cover jobs.mk, else a scripted check in the report. No case-content change."
   state = "todo"
-  revision = 585
+  revision = 595
