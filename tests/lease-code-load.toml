@@ -1,0 +1,166 @@
+description = "Sixteen agents of one account load code at the system volume at once and every one finishes, none refused (docs/servers/erofsd.md, \"Serving\"; docs/servers/serving.md, \"admit\"; docs/servers/walfsd.md, \"Serving\"): alice's SSH session starts sixteen agents back to back, the leases her share carves beside her two sessions, each a beamlet VM that reads its boot pack and start module as every lease's VM does, then loads 27 more modules from the volume, so each agent loads beside the fifteen others, and ends: it returns, so its VM exits 0, or halts on the first module the volume refuses. The verdict is the steward's console: sixteen `lease alice/agent-N ... exited 0` lines, no exit that is not 0 (the shell's notice for each lease's end is the session's own wait, in whatever order the loads finish), and the shell's view of both volumes while the sixteen hold their connections, a module load of its own at the system volume served and a read of a missing file under its project directory answered `enoent`, admitted at the data volume. The agents write nothing to the data volume: a write there under the account's load is slow and can wait past its bound, a finding of that volume's and not of the read path this case gates. Before the root fid left the fair share, the fourteenth lease of an account made every module load of every VM of the account refused `too many open files`; erofsd's and verityd's counts at powers of two of requests are the case's output"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+# Guest time, with `sleep` on, the rule for a case with a disk (docs/testbench.md, "The case
+# file"): the agents do not spin while they load, so with every VM waiting on the disk at once
+# the guest is idle, and `sleep=off` warped its clock into blkd's own request timeout, failing
+# every agent's boot-pack read at verityd's 2048th read under this seed, both runs alike.
+icount = "shift=3"
+# The guest seed steward-latency's gate runs.
+qemu_seed = 3
+# By name only until a lease's end no longer takes a neighbour's: in every boot so far fifteen of
+# the sixteen exit 0 and one is `was killed 0` the instant the lease that ended just before it is
+# destroyed, with no end of its own first, which the forbid below fails the case on; a lease ends
+# at its deadline or its sponsor's word and at nothing else (docs/servers/steward.md, R39), so the
+# kill is that rule's failure, found by this case and open, not the read path's. When it is
+# closed this case is the proof and joins the whole run.
+whole_run = false
+# steward-latency's programs with the probe left off the steward, the volume's two servers
+# counting (`boot-stats`) and beamlet naming its exits (`exit-kinds`), each test-only and off in
+# every default build.
+programs = [
+    { package = "redoubt-init", bin = "init" },
+    { package = "redoubt-keyd", bin = "keyd" },
+    { package = "redoubt-consoled", bin = "consoled" },
+    { package = "redoubt-bootfsd", bin = "bootfsd" },
+    { package = "redoubt-blkd", bin = "blkd" },
+    { package = "redoubt-verityd", bin = "verityd", features = ["boot-stats"] },
+    { package = "redoubt-netd", bin = "netd" },
+    { package = "redoubt-ipd", bin = "ipd" },
+    { package = "redoubt-walfsd", bin = "walfsd" },
+    { package = "redoubt-erofsd", bin = "erofsd", features = ["boot-stats"] },
+    { package = "beamlet-redoubt", bin = "beamlet", workspace = "userland/otp", features = ["exit-kinds"] },
+    { package = "redoubt-piped", bin = "piped" },
+    { package = "redoubt-crossing", bin = "crossing" },
+    { package = "redoubt-steward-server", bin = "steward" },
+    { package = "redoubt-sshd", bin = "sshd" },
+    { package = "redoubt-consrelay", bin = "consrelay" },
+]
+# steward-latency's manifest and RAM: alice sized by the carve for sixteen leases beside her two
+# sessions, the most the file servers hold connections for at one account.
+memory_mib = 1536
+# Both hart counts on both widths: the read path's servers share the harts with the agents.
+smp = [1, 2]
+# Sixteen VMs starting and loading at once under icount take the better part of an hour of guest
+# time at one hart; the session waits up to an hour for the first lease's end and ten minutes
+# for each after it.
+timeout_secs = 7200
+expect = [
+    '^init: started sshd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
+    '^init: started steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+]
+# The sixteen agents' ends, in whatever order their loads finish, from the session's start.
+expect_after = [
+    '^\[con [0-9a-f]{16}\] steward: lease alice/agent-[0-9]+ [0-9]+ of 1001/\{\} exited 0$',
+    '^\[con [0-9a-f]{16}\] steward: lease alice/agent-[0-9]+ [0-9]+ of 1001/\{\} exited 0$',
+    '^\[con [0-9a-f]{16}\] steward: lease alice/agent-[0-9]+ [0-9]+ of 1001/\{\} exited 0$',
+    '^\[con [0-9a-f]{16}\] steward: lease alice/agent-[0-9]+ [0-9]+ of 1001/\{\} exited 0$',
+    '^\[con [0-9a-f]{16}\] steward: lease alice/agent-[0-9]+ [0-9]+ of 1001/\{\} exited 0$',
+    '^\[con [0-9a-f]{16}\] steward: lease alice/agent-[0-9]+ [0-9]+ of 1001/\{\} exited 0$',
+    '^\[con [0-9a-f]{16}\] steward: lease alice/agent-[0-9]+ [0-9]+ of 1001/\{\} exited 0$',
+    '^\[con [0-9a-f]{16}\] steward: lease alice/agent-[0-9]+ [0-9]+ of 1001/\{\} exited 0$',
+    '^\[con [0-9a-f]{16}\] steward: lease alice/agent-[0-9]+ [0-9]+ of 1001/\{\} exited 0$',
+    '^\[con [0-9a-f]{16}\] steward: lease alice/agent-[0-9]+ [0-9]+ of 1001/\{\} exited 0$',
+    '^\[con [0-9a-f]{16}\] steward: lease alice/agent-[0-9]+ [0-9]+ of 1001/\{\} exited 0$',
+    '^\[con [0-9a-f]{16}\] steward: lease alice/agent-[0-9]+ [0-9]+ of 1001/\{\} exited 0$',
+    '^\[con [0-9a-f]{16}\] steward: lease alice/agent-[0-9]+ [0-9]+ of 1001/\{\} exited 0$',
+    '^\[con [0-9a-f]{16}\] steward: lease alice/agent-[0-9]+ [0-9]+ of 1001/\{\} exited 0$',
+    '^\[con [0-9a-f]{16}\] steward: lease alice/agent-[0-9]+ [0-9]+ of 1001/\{\} exited 0$',
+    '^\[con [0-9a-f]{16}\] steward: lease alice/agent-[0-9]+ [0-9]+ of 1001/\{\} exited 0$',
+]
+forbid = [
+    'init: refused the boot',
+    'steward: the core exited',
+    'sshd: login .*: refused',
+    'steward: lease alice/agent-[0-9]+ [0-9]+ of 1001/\{\} (exited [1-9][0-9]*|faulted|was killed)',
+    'not loaded',
+    'EXCEPTION',
+]
+
+# Alice's session. The project's input `load`, and the shell's own later needs loaded before
+# any agent is (`warm`), so no load of its own falls inside the storm. Then the sixteen agents
+# back to back (thirty-minute leases, so none ends on its own inside the case; every launch must
+# be served), then the sixteen notices of their ends in the session's own stream, each landing
+# on the idle prompt's line, the first within an hour of guest time and each after it within ten
+# minutes. The agents end in whatever order their loads finish, so neither the console's exit
+# lines nor the notices name the agents in an order; the sixteen `exited 0` lines are sixteen
+# distinct leases all the same, since a lease exits once and its line prints once, and the
+# forbid closes every other end. The notices ride on delivery, which a burst can lose (a send
+# past the steward's notice bound is dropped); sixteen ends staggered by their loads are no
+# burst, and a lost one fails its bounded step loudly, the bench naming the step, so the count
+# short and the names seen are in the session's log: with sixteen `exited 0` lines on the console
+# that is the notice path's finding, not the read path's. Then, with nothing of the account's
+# left at the volumes but the two sessions, the gate line: the shell's own load of a module it
+# has not held at the system volume, and a read of a missing file under the project directory
+# (`enoent` while walfsd admits the shell, `emfile` when it does not); then the logout.
+[[session]]
+user = "alice"
+pty = true
+steps = [
+    { expect = '/home/alice \([0-9]+\)> ' },
+    { send = "{:ok, c} = Redoubt.Contexts.connection(); {:stage, File.mkdir_p(\"/home/alice/project/out\"), File.write(\"/home/alice/project/in\", \"load\")}\n" },
+    { expect = '\{:stage, :ok, :ok\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "out = \"/home/alice/project/out\"; {:error, _} = File.read(out <> \"/none\"); true = match?({:module, _}, {:module, Enum}); {:warm, Enum.count([])}\n" },
+    { expect = '\{:warm, 0\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "start = fn i -> t0 = :erlang.system_time(:microsecond); r = Redoubt.Wire.Client.Steward.start_agent(c, 1_800_000_000, Redoubt.Wire.Client.launch_timeout()); IO.puts(\"LOAD launch #{i} at #{t0} took #{:erlang.system_time(:microsecond) - t0} us #{inspect(r)}\"); r end; :defined\n" },
+    { expect = ':defined' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "leases = for i <- 1..16, do: start.(i); {:started, Enum.count(leases, &match?({:ok, _}, &1))}\n" },
+    { expect = '\{:started, 16\}' },
+    { within = 3600 },
+    { expect = '\[lease alice/agent-[0-9]+ ended\]' },
+    { within = 600 },
+    { expect = '\[lease alice/agent-[0-9]+ ended\]' },
+    { within = 600 },
+    { expect = '\[lease alice/agent-[0-9]+ ended\]' },
+    { within = 600 },
+    { expect = '\[lease alice/agent-[0-9]+ ended\]' },
+    { within = 600 },
+    { expect = '\[lease alice/agent-[0-9]+ ended\]' },
+    { within = 600 },
+    { expect = '\[lease alice/agent-[0-9]+ ended\]' },
+    { within = 600 },
+    { expect = '\[lease alice/agent-[0-9]+ ended\]' },
+    { within = 600 },
+    { expect = '\[lease alice/agent-[0-9]+ ended\]' },
+    { within = 600 },
+    { expect = '\[lease alice/agent-[0-9]+ ended\]' },
+    { within = 600 },
+    { expect = '\[lease alice/agent-[0-9]+ ended\]' },
+    { within = 600 },
+    { expect = '\[lease alice/agent-[0-9]+ ended\]' },
+    { within = 600 },
+    { expect = '\[lease alice/agent-[0-9]+ ended\]' },
+    { within = 600 },
+    { expect = '\[lease alice/agent-[0-9]+ ended\]' },
+    { within = 600 },
+    { expect = '\[lease alice/agent-[0-9]+ ended\]' },
+    { within = 600 },
+    { expect = '\[lease alice/agent-[0-9]+ ended\]' },
+    { within = 600 },
+    { expect = '\[lease alice/agent-[0-9]+ ended\]' },
+    { send = "{:gate, match?({:module, :sofs}, Code.ensure_loaded(:sofs)), File.read(out <> \"/none\")}\n" },
+    { expect = '\{:gate, true, \{:error, :enoent\}\}' },
+    { expect = '\([0-9]+\)> ' },
+    { exit = 0 },
+]
+
+[[file]]
+name = "manifest"
+from = { path = "tests/data/steward/latency.manifest.json" }
+verity = "image/userland.toml"
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]
+forward = [22]
