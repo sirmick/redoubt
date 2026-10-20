@@ -950,16 +950,21 @@ five-second leases, sized as twice a two-hart launch when that launch was 2.5 s,
 their own launch on rv32 (5.2 s beside fifteen spinners at one hart, 5.7 to 6.3 s at two), at
 one hart with no deadline-notice sample and at two harts with a `Launch` the kernel refused
 `NotPermitted`, the deadline passed before the process was made. The round at N = 16 still does
-not complete on rv32: beside fifteen spinners one spinner VM exits 1 before the round's first
-deadline notice, its module reads at the system volume failing behind the other fourteen's (the
-account's two page-carrying requests at the volume shared by seventeen VMs, past the VM's
-`FILE_WAIT_US` give-up, 10 s: the derivation gap stated under the N = 16 column, reaching a VM's
-death rather than a slow launch), after which the samples group at N = 15 around the dead VM
-(the deadline notice's p99 over the eight that lived about 45 ms, on a round that had lost a
-VM). So `steward-latency-n16` runs on rv64 alone and the rv32 N = 16 column says so; a lease VM
-dying of a starved code read is the read path's own finding — whether the read is to complete
-under the account's load or the VM to outlive its timeout — and the round runs on rv32 when it
-lands. At two harts on rv32 the N = 1 to 3 boot reaches the reset and is judged for the first
+not complete on rv32 when it was measured: beside fifteen spinners one spinner VM exited 1
+before the round's first deadline notice, after which the samples grouped at N = 15 around the
+dead VM (the deadline notice's p99 over the eight that lived about 45 ms, on a round that had
+lost a VM). The cause was found and closed on the read path: not the drain rate but admission,
+the file servers' fid cap of 32 fair-shared with every connection's root fid in the share, so
+that at sixteen connections of one account (two sessions' and fourteen leases') no VM of the
+account could load a module, and the spinner launched last died inside its start module's read
+([erofsd](../servers/erofsd.md#serving)); the root is a fixed cost outside the share now and
+the caps are derived from the connections, and sixteen agents of one account launch and load
+all their modules on both widths at one and two harts (bench:lease-code-load), fifteen of them
+exiting 0 and the sixteenth killed by the lease end just before its own, a finding of the
+steward's lease end that keeps the case out of the whole run until it is closed
+([the steward](../servers/steward.md#residual-risks)). `steward-latency-n16` still runs on
+rv64 alone: its rv32 round was not re-measured with the cap, and the column says so until it
+is. At two harts on rv32 the N = 1 to 3 boot reaches the reset and is judged for the first
 time, and the N = 2 round misses the timer wake's p50, 31.8 ms against 15 (its p99 35.2 ms,
 met), the same within 30 µs over five boots (31,855, 31,835, 31,825, 31,832 and 31,831 µs),
 every other target of the boot met with `dropped 0` and the kernel lock waited for in 249 of

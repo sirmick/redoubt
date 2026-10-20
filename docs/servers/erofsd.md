@@ -68,7 +68,7 @@ against what was packed); `erofsd` skips it with every other attribute.
 
 ### Serving
 
-<details><summary>Status: built · tested (14)</summary>
+<details><summary>Status: built · tested (16)</summary>
 
 - bench:erofs-read-only
 - host:redoubt-erofsd::a_directory_lists_exactly_its_children_in_order_by_page
@@ -84,6 +84,8 @@ against what was packed); `erofsd` skips it with every other attribute.
 - host:testbench::every_manifest_entry_holds_its_buckets_at_their_caps
 - host:redoubt-erofsd::the_volumes_labels_are_checked_on_every_node
 - host:redoubt-init::an_erofsd_entry_is_a_volume_server_as_a_littlefsd_one_is
+- host:testbench::the_file_servers_fid_caps_leave_every_connection_its_root_and_working_share
+- bench:lease-code-load
 
 </details>
 
@@ -91,11 +93,11 @@ against what was packed); `erofsd` skips it with every other attribute.
 arguments (`endpoint=`, `buckets=`) and the same range: a `blkd` range for an unverified
 volume, a `verityd` range for a verified one ([blkd](blkd.md), [verityd](verityd.md)). Its
 clients share the budget its manifest entry gives, the entry's pages less its heap cap and stack,
-by the entry rule ([walfsd](walfsd.md#serving)): a bucket at its caps costs 235,520 bytes, and every
+by the entry rule ([walfsd](walfsd.md#serving)): a bucket at its caps costs 286,720 bytes, and every
 session's domain is one, beside the steward's ([the steward](steward.md#authentication-and-sessions));
-the image's six (a case's extra client the sixth) are 1,413,120 bytes, 345 pages, which with the
-heap cap's 26 and the stack's 128 round to 512 of the image's 1,024, and the entry leaves 870 pages
-of budget, fifteen such buckets and not a sixteenth.
+the image's six (a case's extra client the sixth) are 1,720,320 bytes, 420 pages, which with the
+heap cap's 26 and the stack's 128 round to 768 of the image's 1,024, and the entry leaves 870 pages
+of budget, twelve such buckets and not a thirteenth.
 A bucket holds 28 minted connections: what a manifest lets one account hold at the system volume
 at once, whoever minted them ([serving](serving.md#admit)), two per session the steward starts
 (its shell's and its relay's) for the console session, the cap of live contexts per label set and
@@ -103,9 +105,35 @@ one spare for a context detaching while another attaches, and one per lease, the
 principal's unlabelled share holds in `agent` budgets ([the steward](steward.md#leases)), held by
 the bench to at least the largest such sum over the tree's manifests, 2 × (1 + 3 + 1) + 18 under
 `steward-latency`'s manifest, 2 × (1 + 3 + 1) + 7 under the image's
-([walfsd](walfsd.md#serving), the same derivation);
-a `buckets=N` the budget cannot hold and `erofsd` does not start. At start it reads the superblock
-and the root inode, then serves:
+([walfsd](walfsd.md#serving), the same derivation). A bucket holds 57 fids, derived from the same
+connections ([serving](serving.md#admit)): each holds its root fid for its life, a fixed cost
+outside the fair share, and beside it one working fid at a time, a module file walked, opened,
+read and clunked by the VM's one reader, so the cap is the 28 roots and a pool of one per
+connection and one over, 28 + 29, which the share `max(1, pool / (holders + 1))` divides into
+exactly one each with every connection holding. **The account's concurrent VMs at the system
+volume** are bounded by this and nothing else on the read path: before the root left the share,
+sixteen connections of one account (two sessions' and fourteen leases') at the cap of 32 held one
+fid each, the root, and no VM of the account could load a module, so a lease's VM died or
+parked by where the refusal landed and the supported count was thirteen leases beside two
+sessions, seven for anything the shell's hub needed at the data volume
+([walfsd](walfsd.md#serving)); now every connection the manifest lets the account hold has its
+root and its working fid, so the supported count is the manifest's own lease term, the sixteen
+leases `steward-latency`'s alice carves beside her two sessions and the image's seven with
+margin, held by bench:lease-code-load (sixteen agents of one account loading 27 modules each at
+once, every one ending by its own exit and none refused, on both widths at one and two harts).
+What that case found beyond the read path keeps it out of the whole run for now: in every boot
+all sixteen launch and load and fifteen exit 0, and one is killed the instant the lease that
+ended just before it is destroyed, with no end of its own first, a lease's end taking a
+neighbour's VM, which is a failure of the lease's own rule, that it ends at its deadline or its
+sponsor's word ([the steward](steward.md#residual-risks)), open and not of the read path: every
+agent that exited had loaded all 27 modules, none was refused. The read path
+is slow under that load, never a death's cause: beside three to eleven others a lease's VM
+starts (its boot pack of about 3.8 MB and its start module) in 35–140 s on either width at one
+hart and 43–143 s at two, loads at 30–85 KB/s per VM after that, and launches in 1.3–11.5 s
+([scheduling](../kernel/scheduling.md#responsiveness)); `verityd` holds about a tenth of the
+blocks asked and read-ahead gives about 2.2 blocks a `blkd` read
+([verityd](verityd.md#a-cache-of-checked-data-blocks)). A `buckets=N` the budget cannot hold
+and `erofsd` does not start. At start it reads the superblock and the root inode, then serves:
 
 - `attach`, `walk`, `open` for reading, `read`, `stat`, directory reads and `clunk`, with the
   serving library's 9P skeleton, admission and label check as every file server

@@ -1296,7 +1296,7 @@ A sponsored principal's session is a lease of its sponsor's under the same rule.
 
 ### R40 (blame by label set)
 
-Status: built · tested: bench:steward-blame-lockout, bench:steward-server-restart, host:redoubt-steward-server::three_blames_in_the_window_lock_the_domain_out_until_the_window_passes, host:redoubt-steward::blame_window_and_not_locked, mutation:PolicyBlameNoWindow, mutation:PolicyNoLockout
+Status: built · tested: bench:steward-blame-lockout, bench:steward-server-restart, host:redoubt-steward-server::three_blames_in_the_window_lock_the_domain_out_until_the_window_passes, host:redoubt-steward::blame_window_and_not_locked, host:redoubt-steward::a_leases_exit_is_its_end_and_no_blame, mutation:PolicyBlameNoWindow, mutation:PolicyNoLockout
 
 An (account, label set)'s sessions and leases are ended exactly when three server crashes blamed
 on it fall within ten minutes, no new session of it starts for the next ten minutes, and no other
@@ -1641,6 +1641,15 @@ so the case restarts it thirteen times, each time with that session and its conn
 
 ## Residual risks
 
+- **A lease's end can take a neighbouring lease's VM.** With sixteen leases of one account
+  ending by their VMs' own exits close together (bench:lease-code-load, both widths at one and
+  two harts, every boot), fifteen end as [R39](#r39-leases-end) says and one VM is killed, the
+  kernel's word for a budget destroyed with the process in it, the instant the lease that ended
+  just before it is destroyed, with no end of its own first: the end's destroy reached a budget
+  the step did not name (a handle or index lost early and reused by a later lease's, or the
+  process charged to another lease's budget), a failure of R39 that no case had the shape to
+  reach before, since no other case has many leases exit by themselves. Open; the case runs by
+  name until it is closed and is then its proof.
 - **A login's refusals are uniform in content, not in time.** An unknown principal or label set
   is refused before any machine runs; a wrong key for a known principal runs the blame and session
   machines before `login_key` refuses it, and nothing is counted. The difference is inside one

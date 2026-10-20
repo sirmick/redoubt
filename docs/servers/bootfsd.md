@@ -46,8 +46,10 @@ endpoint also serves `ninep_common` ([wire](wire.md#ninep_common)).
 - **Unlabelled.** Every entry carries no labels, so every caller, labelled or not, may read it.
 - **Every byte is already there.** A read never waits; an offset past the end reads nothing. Entries
   never change, so every qid version is 0.
-- **Admission** ([R26 (admission fairness)](serving.md#r26-admission-fairness)): at most 32 open
-  fids, 23 minted connections, 2 multiplexed connections' completion calls, 64 of their requests
+- **Admission** ([R26 (admission fairness)](serving.md#r26-admission-fairness)): at most 47 open
+  fids (the 23 connections' roots, each a fixed cost outside the share, and a pool of one working
+  fid per connection and one over, an entry walked, opened, read and clunked:
+  [serving](serving.md#admit)), 23 minted connections, 2 multiplexed connections' completion calls, 64 of their requests
   and 2 pages they brought ([serving](serving.md#multiplexed-connections)) per (account, label
   set), and per badge for account 0, across at most `buckets=N` of those at once, sized to fit
   the budget its manifest entry gives, the entry's pages less its heap cap and stack, by the entry
@@ -58,11 +60,11 @@ endpoint also serves `ninep_common` ([wire](wire.md#ninep_common)).
   ([the steward](steward.md#leases)), held by the bench to at least the largest such sum over
   the tree's manifests, (1 + 3 + 1) + 18 under `steward-latency`'s
   (`the_servers_admit_what_a_manifest_lets_one_account_hold`). A bucket at its caps costs
-  169,728 bytes; the image needs
+  173,568 bytes; the image needs
   five (`init`, the steward, and alice's `{}` and `{alice-secrets}` and bob's `{}` domains) and
-  asks six, a case's extra client the sixth, 1,018,368 bytes or 249 pages, which with the heap cap's
+  asks six, a case's extra client the sixth, 1,041,408 bytes or 255 pages, which with the heap cap's
   2,304 (the published entries live there) and the stack's 128 round to 2,816 of the image's
-  4,096; the entry leaves 1,664 pages of budget, forty such buckets, so each more principal's
+  4,096; the entry leaves 1,664 pages of budget, thirty-nine such buckets, so each more principal's
   domain costs one more; a block with no `buckets=N` or no budget, or a count the budget cannot
   hold, and `bootfsd` does not start ([init](init.md#the-boot-manifest)).
 

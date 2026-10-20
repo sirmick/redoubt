@@ -246,6 +246,12 @@ per block; read-ahead cuts the reads by two thirds (2,704 to 924 by the 1,024th 
 the floor's hit rate 19 to 20 %), and a 27-block cache beside it to 784 (24 %), a 92-block one to
 624 (41 %), without moving that round's outcome
 ([responsiveness](../kernel/scheduling.md#responsiveness)): the floor is what the image pays for.
+Under sixteen VMs of one account loading code at once (bench:lease-code-load, both widths) the
+cache holds about a tenth of the blocks asked (11,700 asked, 1,100 to 1,250 held at the 4,096th
+request) and read-ahead gives about 2.2 blocks a `blkd` read (4,750 reads); the account's VMs
+load at 30–85 KB/s each. The rate is the read path's, never a death's cause: what bounded the
+account's concurrent VMs was `erofsd`'s fid admission, now derived from the connections
+([erofsd](erofsd.md#serving)).
 
 ## Authority
 

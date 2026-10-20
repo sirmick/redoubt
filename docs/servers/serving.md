@@ -80,11 +80,30 @@ open call, and each has its own share ([R26](#r26-admission-fairness)).
   bucket the steward needs.
 - **A fair share per badge.** Within a bucket each badge is a **share**, and the bucket is the
   ceiling. A share may take one more of a resource only while it holds less than
-  `limit / (n + 1)` of it (and at least one), where n is the number of shares in the bucket
-  holding that resource, itself included. So an agent flooding its sponsor's bucket alone gets
-  half of it, and the sponsor can still take a third
-  ([R26 (admission fairness)](#r26-admission-fairness)). An account-0 bucket is one badge, so it
-  has one share and the bucket's cap is that share's.
+  `pool / (n + 1)` of it (and at least one), where n is the number of shares in the bucket
+  holding that resource, itself included, and the pool is the cap less the bucket's fixed costs
+  (below). So an agent flooding its sponsor's bucket alone gets half of it, and the sponsor can
+  still take a third ([R26 (admission fairness)](#r26-admission-fairness)). An account-0 bucket
+  is one badge, so it has one share and the bucket's cap is that share's.
+- **A fixed cost is outside the share.** What a client holds for its connection's life whatever
+  it does is charged to the bucket's cap and never to its share: the root fid a connection's
+  first `Tattach` makes (`Admission::admit_fixed`; a later attach is a working fid like a walk's,
+  or a client would hold a bucket by attaching again and again). The share is over the
+  **working** fids beside it, so a connection holding only its root can always walk while the
+  bucket has room, and a file server's fid cap is derived so that every connection the account
+  may hold there has its root and its working need: `n + w (n + 1)`, n the connections (the
+  `state` cap's own sum, so the roots alone never fill the bucket) and w the most working fids
+  one connection needs at once, one at the system volume and `/boot` (a file walked, opened, read
+  and clunked by the VM's one reader), two at the home (the shell's hub keeps its working
+  directory beside the fid of the request in hand): `erofsd` 28 + 29 = 57, `walfsd` and
+  `littlefsd` 23 + 2 × 24 = 71, `bootfsd` 23 + 24 = 47, held by the bench over every manifest
+  (`the_file_servers_fid_caps_leave_every_connection_its_root_and_working_share`). Before the
+  root left the share, sixteen connections of one account at the system volume's cap of 32 held
+  one fid each, the root, and none of the account's VMs could load a module. A refusal of the
+  moment, `too_many` while another connection of the account holds the share's working fid or
+  the kernel's `busy` at a full queue, is tried again by the client library's file connection
+  before it is the caller's, eight times at waits doubling from 10 ms within the connection's
+  own timeout (`redoubt_client::file`).
 - **A minted connection is its holder's.** A connection minted for another account is admitted
   in that account's bucket from its first request; until then it holds one of its minter's
   pending slots. Minted, its `State` is charged to the minter's bucket and share, so a flood of
@@ -662,13 +681,17 @@ holder's labels.
 
 ### R26 (admission fairness)
 
-<details><summary>Status: built · partly tested: the rule is attacked in host tests with the runtime's fake kernel, and three boots flood a real walfsd while a second bucket keeps its share, one holding handles to its bucket's share while another account saves · tested (19)</summary>
+<details><summary>Status: built · partly tested: the rule is attacked in host tests with the runtime's fake kernel, and three boots flood a real walfsd while a second bucket keeps its share, one holding handles to its bucket's share while another account saves, and sixteen agents of one account load code at once with every connection its root and working share · tested (23)</summary>
 
 - bench:walfsd-flood-turn
 - bench:vault-flood-turn
 - bench:walfsd-pools
+- bench:lease-code-load
 - host:redoubt-rt::the_key_is_the_account_and_the_label_set
 - host:redoubt-rt::an_agent_flooding_a_bucket_leaves_its_sponsor_a_share
+- host:redoubt-rt::a_root_fid_is_a_fixed_cost_outside_the_share
+- host:testbench::the_file_servers_fid_caps_leave_every_connection_its_root_and_working_share
+- host:redoubt-client::an_admission_refusal_of_the_moment_is_tried_again
 - host:redoubt-rt::an_agent_flooding_a_bucket_leaves_its_sponsor_a_share_and_its_lease_end
 - host:redoubt-rt::self_minting_does_not_multiply_the_share
 - host:redoubt-rt::a_connection_minted_for_another_account_is_admitted_there_from_its_first_request
@@ -688,7 +711,8 @@ holder's labels.
 
 One client cannot use up a shared server that serves others. What a client holds in a server is
 counted per (account, label set), and per badge for account 0; within a bucket of a non-zero account
-each badge may hold less than `limit / (n + 1)` (at least one), so a lone badge never fills its
+each badge may hold less than `pool / (n + 1)` (at least one) of the resource beyond the bucket's
+fixed costs, a connection's root fid among them ([`admit`](#admit)), so a lone badge never fills its
 bucket and a second always finds room; minting more badges for oneself buys no bigger share; and
 every bucket at its cap together holds fewer open calls than `MAX_OPEN_CALLS` by at least
 `OPEN_CALL_HEADROOM`, so the server keeps room to take calls beyond what its clients hold, including
