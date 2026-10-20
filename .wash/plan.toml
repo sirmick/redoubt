@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 605
+revision = 616
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -2743,8 +2743,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "AGENTS"
   body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'STEWARD9 rv32 two-hart' (drafted there as SCHED1; that id was taken, so SCHED5) and 'STEWARD13 rv32 one-hart N = 1 decision_wake' (the second row). Brief: to follow (investigation-first; the brief covers both rows). Tier A (kernel scheduler / timer programming), size M, reviewer kernel-red-4. Row 1 (STEWARD9): at rv32 two harts the N=2 round's timer_wake p50 is 31.8 ms against 15 (31,855 then 31,835 us on a rerun alone, icount-deterministic), N=1 5.6 ms and N=3 5.2 ms; lock-wait 249/1000 in that round; one spinner live on the other hart. Row 2 (STEWARD13): at rv32 one hart the N=1 decision_wake p50 moved 24.2 -> 30.4 ms when the launch moved off the loop: a 30 ms receive timeout sleeps 53-62 ms with exactly one runnable VM and 1-3 ms beside a second, the steward idle in the window; the thread moved the receive ~10 ms earlier and the phase landed the sample over instead of under. Hypothesis: a sleeper's timeout does not end the running VM's slice, the timer armed for the slice's end rather than the nearest timeout, visible only when nothing else switches. Investigation: the kernel's timer programming against the slice with one runnable VM (the trace: the timeout's arming, the slice end, the wake); why N=2/one spinner specifically; whether R78's fair-entry order or the timer's arming bounds the wake, or it is a stated residual with its numbers. The implementer measures and brings fix-or-residual to the Architect. The cells are recorded, not judged, by STEWARD9 and STEWARD13 until this lands; no target moves. Pages: scheduling.md 'Responsiveness'/'Residual risks', kernel/timer.md if the arming moves. Logs .tmp/STEWARD9/rv32-14-FAIL-timerwake.log; STEWARD13's report."
-  state = "todo"
-  revision = 593
+  state = "active"
+  revision = 606
 
 [[node]]
   id = "SHELLN1"
@@ -2762,8 +2762,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   needs = ["READ1"]
   body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'READ1 gate verdict + WRITE1' and 'WRITE1 identification' (the Architect's correction). Framed on READ1's inference that an agent's File.write hung with its bytes on the volume; the identification (.wash/local/WRITE1-identification.md: 7 boots, 68 agents, N = 4/12/16, host clock in run 7) found no hang: every write returned, the hub's give-up answered at its bound, the file ends at the line BEFORE the stalled step (the bytes never reached the volume) and the stall was the virtual clock's idle skip (the rule testbench.md states since the lease-code-load finding). What stands: (i) files.md states the one-answer rule PER REQUEST (every hub request ends in exactly one answer within FILE_WAIT_US plus the reply margin) and that a File operation's bound is the sum over its 5-6 requests (47 s seen), a host test holding it; (ii) the VM's asker waiting FOREVER on the hub is right by construction (a VM-side timeout would be a second mechanism for one rule and hide a hub bug), stated; (iii) a give-up on a walked fid hands the result to the caller FIRST and clunks after, off the caller's path (the clunk is cleanup), since the clunk before the handover made the bound 2x FILE_WAIT_US, a violation of (i); host test: a give-up answers within the bound while the clunk's server never answers. Pages: walfsd.md's hang sentence replaced by the correction, its throughput sentence kept (decision 3's finding); files.md. Case: on the host clock, every write answered and the file's content exactly the :ok lines. Tier A (the hub, strict beamlet review by kernel-red-4), size S."
-  state = "active"
-  revision = 582
+  state = "done"
+  revision = 608
 
 [[node]]
   id = "WAKE1"
@@ -2808,8 +2808,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   needs = ["WAKE1"]
   body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'WAKE1 landed; its four findings' (2). Brief: the ruling and this body. Tier A (the steward's loop), size S, investigation-first, reviewer steward-red-5. Found by WAKE1: with the hub's forwards queue in, the steward's lease_ended sends return 37-131 ms apart, the steward's own per-exit work (cleanup hand-over, the LeaseEnded audit, the console lines) now the serial cost of a burst's last notice (the last of six 1.11-1.28 s, of sixteen 1.83-2.51 s). STEWARD12's notices-first (reflog 57bff2058 on the old wp-STEWARD12: the loop sends a batch's lease_ended notices first, then does each exit's bookkeeping) was built, measured at 16 ms of 1.4 s and withdrawn because the FORWARD was the gate; WAKE1 removed that gate, so the same shape would move a burst's last notice from N x (37-131 ms) toward N x a send's return. Do: re-apply that shape on WAKE1's base, measure steward-deadline-burst and -16 on both widths and hart counts before and after (the send-return spacing, the last notice gross and net, none lost), and land it only if the derived burst bound (2x worst rounded up, today 3 s / 6 s) shrinks materially, the bounds and the pages (steward.md Failure and restart / Residual risks, scheduling.md) following the measurement; else record the measurement in the report and on the page and land nothing. The kernel's N destructions before the first notice stay a stated kernel residual. No target moves; the steward set and the latency cases unchanged."
-  state = "active"
-  revision = 594
+  state = "done"
+  revision = 612
 
 [[node]]
   id = "B91"
@@ -2828,3 +2828,31 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'Two bench facts' (2): the timed cases' bounds are the box's under the stated condition (one whole bench at a time, QEMU exclusive during it, the owner's rule of 2026-10-05), and members' boots beside a train broke it in train 82 (three walfsd timed steps past their bound under the bench, all passing alone twice). Tooling, Tier B, size S, reviewer kernel-red-4. Do: scripts/q already leases cores and ports and takes named locks (`q run --lock NAME`); scripts/jobs.mk's whole-bench targets (all-rv64, all-rv32, and the set form when it runs a whole class) take one machine-wide `qemu` lock for the run's duration, and every single boot case (the set form for single cases, the sweep, ./launch's bench use) takes the same lock shared or waits: a boot started while a train holds the lock waits with a line saying so (which train, since when), never fails; host-only cases (formatting, docs, host tests, Miri) do not take it; the lock is released on the train's exit by any path (the q lease's end, not a trap). State it on testbench.md beside the timed bounds (the condition and how the tooling holds it) and in the scheduler section; a host test of jobs.mk's lock taking if the bench's own tests cover jobs.mk, else a scripted check in the report. No case-content change."
   state = "done"
   revision = 603
+
+[[node]]
+  id = "B93"
+  title = "beamlet-agent-footprint's keep agent sleeps instead of spinning, so its VM exits Deadlock when the boot outlives the scan and the case fails about one run in several under load"
+  template = "package"
+  parent = "AGENTS"
+  body = "Found by WRITE1's beamlet-set gate and raised by kernel-red-4: rv32 beamlet-agent-footprint failed once under the set's load and passed 3/3 alone; the case's `keep` agent sleeps (`Process.sleep(:infinity)`) and the VM exits Deadlock when the boot outlives the scan, where the idle-lease rule (docs/userland/agents.md: a lease agent that must stay alive spins, never sleeps forever, since a VM with nothing runnable exits) says spin. A flaky case is a bug (tenet 6). Shell track, Tier B, size S, one reviewer (the orchestrator's pick). Do: reproduce (the case under load, 20 runs, logs kept), make the keep agent follow the idle-lease rule (spin on the pattern the agents' page states, or whatever that rule names), 20 clean runs under load both widths, the case's comment stating why; agents.md unchanged unless the rule is stated incompletely. No kernel, steward or hub change."
+  state = "done"
+  revision = 615
+
+[[node]]
+  id = "B94"
+  title = "lease-writes loses its session under a whole bench's load: ipd resets the ssh connection after 60 s without a keep-alive answer while sixteen agents write on one hart, with no guest line"
+  template = "package"
+  parent = "AGENTS"
+  needs = ["WRITE1"]
+  body = "Train 86 (WRITE1 alone, 777 of 778 green): rv64 lease-writes failed at 198.9 s, the session's ssh 'closed by remote host' right after {:started, 16} (alice holds 106,770 pages, 52 processes), no guest line after the sixteenth start_agent; rv32 passed in 533 s. Logs: .tmp/train-86/fail/ (job, console, ssh). WRITE1-identification.md runs 4-5 saw the same signature under the virtual clock and named a socket timer; the case is on the host clock (forward), where the report said it was not seen. The timer: servers/ipd/src/stack.rs IDLE_TIMEOUT 60 s with KEEP_ALIVE 30 s on every TCP socket (ipd.md: an established socket 60 s without progress is reset). So for 60 s of wall time no keep-alive answer reached the socket while the one-hart guest ran sixteen writing VMs: a starved or lost RX path in the guest (virtio-net wake, ipd's turn under R12, the console/sshd path) or slirp on the host. Identification first, no tuning: reproduce under load (the beamlet set or two whole-class sets beside it, kept logs, the ipd and sshd console lines on, a watchdog on the session's socket state), name the component that stalled and for how long, then a brief; a kernel or ipd fix is Tier A. The case's bound, deadline and N do not move; a miss is a finding. Reviewer kernel-red-4."
+  state = "todo"
+  revision = 613
+
+[[node]]
+  id = "B95"
+  title = "beamlet-files' replay under a 16-job load writes to walfsd:data and gets eio: a new signature in B26's restart window, and four replaying cases race the bench's grace"
+  template = "package"
+  parent = "AGENTS"
+  body = "Found by B93's load passes, read by kernel-red-4: beamlet-files failed once per width beside a repeating 8-case boot set (16 jobs a pass); logs .tmp/B93/side/. The window is B26's: init restarts beamlet after its exit 0 (side/rv64:68-69) and the replay's lines land in the bench's GRACE after the last expect. The signature is new: the replay's write answers `files: wrote: {error,eio}` (side/rv64:72) and the restarted VM raises, where B26's eexist at make_dir is already covered by the start-time removal. Two questions, investigation first, no tuning: (1) why a write to walfsd:data returns eio under that load (walfsd's write path, the hub's error mapping, or the volume's state after the first run's exit while its connection is still being released), reproduced with kept logs and the server's console lines, then a brief if it is a server or hub change (Tier A); (2) whether the four cases whose VM exits 0 and is replayed by init should end at their exit (the case's own end, no replay inside the grace) rather than race the grace, stated on testbench.md if the bench changes. Bench/servers, size S. No bound widened; a miss is a finding. Reviewer kernel-red-4."
+  state = "todo"
+  revision = 616
