@@ -28,7 +28,7 @@ pub mod own;
 pub mod protocol;
 pub mod watchers;
 
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt;
@@ -36,11 +36,11 @@ use core::fmt;
 use redoubt_rt::abi::{BudgetSpec, Error, FOREVER};
 pub use redoubt_steward::consts::SLOTS;
 use redoubt_steward::domain::Domain;
-use redoubt_steward::effect::{Kind, Object, Step};
+use redoubt_steward::effect::{Kind, Object, ReplyTo, Step};
 use redoubt_steward::manifest::{Lines, Sizes};
 use redoubt_steward::{Policy, Store};
 
-use crate::drive::{MadeMap, spec};
+use crate::drive::{Held, MadeMap, Pending, spec};
 use crate::own::{Own, is_own};
 
 /// The kernel and client calls the steward makes, so host tests can stand in for them. The
@@ -99,16 +99,34 @@ pub trait Kernel {
     fn server_at(&self, owner: &Object, slot: Option<u16>) -> Option<String>;
     /// Starts `owner`'s child in `budget` through the loader stub (a session's VM, or an agent's
     /// for a lease), with the connections the batch made in slot order (the steward's first),
-    /// told the session's `context` (`None` for the console's session or an agent); returns its
-    /// process id and, for a session, the send right of the `notices` endpoint its VM was given
-    /// the receive right of, which [`Kernel::notify`] sends on (servers/steward.md, "Leases").
+    /// told the session's `context` (`None` for the console's session or an agent). The machine
+    /// prepares the launch here (the child's exit endpoint and, for a session, its `notices`
+    /// endpoint: every handle the child is given exists now) and hands the slow part, the image
+    /// streamed into the child's pages and `process_start`, to its launch thread:
+    /// [`Launched::Pending`] with the job, reported through [`Kernel::launched`]
+    /// (servers/steward.md, "Leases"). A kernel that launches inline answers
+    /// [`Launched::Started`] with the process id and, for a session, the send right of the
+    /// `notices` endpoint its VM was given the receive right of, which [`Kernel::notify`] sends on.
     fn launch(
         &mut self,
         owner: &Object,
         budget: Self::Budget,
         connections: &[Option<Self::Handle>],
         context: Option<&str>,
-    ) -> Result<(u64, Option<Self::Handle>), Error>;
+    ) -> Result<Launched<Self::Handle>, Error>;
+    /// The launch thread reported job `job`: the loop finishes it, closing its copies of what
+    /// the child was given, watching the child's exit and keeping a session's notices send
+    /// right, and answers as [`Launched::Started`] would; or the thread's error, the step's
+    /// failure, with nothing of the launch left behind (the exit endpoint and the send right
+    /// closed; a process that never started ends with its budget, which the core's rollback
+    /// destroys).
+    fn launched(&mut self, job: u64) -> Result<(u64, Option<Self::Handle>), Error>;
+    /// Runs `f` with the install lock held: the launch thread installs no handle in the
+    /// steward's table meanwhile (it holds the same lock across every install of its own and
+    /// drops it inside each read of the image, so the lock is never held across a call to a
+    /// server). The clock read and the destroy of [`drive::Steward::destroy`] run inside it, the
+    /// one pair the deadline witness guards; `f` makes kernel calls only, never one to a server.
+    fn without_installs<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T;
     /// Sends `lease_ended` for `lease`, named `name`, on a session's notices endpoint: one way,
     /// bounded, never retried. A send that does not go is dropped: the steward is never held by
     /// a session that does not read.
@@ -195,6 +213,14 @@ pub trait Kernel {
     fn random(&mut self) -> Result<u64, Error>;
     /// Microseconds since boot.
     fn now(&mut self) -> u64;
+}
+
+/// What [`Kernel::launch`] answered: the child started, with its process id and, for a session,
+/// its notices send right; or the launch handed to the launch thread as job `job`, which the
+/// loop finishes on the thread's report ([`drive::Steward::launched`]).
+pub enum Launched<H> {
+    Started(u64, Option<H>),
+    Pending(u64),
 }
 
 /// The most a push moves (servers/steward.md, "Declassification and push"): fifteen pages of the
@@ -286,6 +312,19 @@ pub struct Steward<B, H> {
     pub failed: Vec<(Step, Error)>,
     /// Each item a pending request names, by the id the server drew for it.
     items: BTreeMap<u64, Item>,
+    /// Each batch stopped at its `Launch` step while the launch thread runs the launch, in the
+    /// order the launches were handed over (the thread runs them in that order); its `Done`
+    /// reaches the core when the thread reports ([`drive::Steward::launched`]). A starting
+    /// object leaves the core only by that `Done` (the tables' `Starting` rows), so no batch
+    /// here is ever forgotten under the thread.
+    pending: Vec<Pending>,
+    /// The events of a launching object that came while its batch waited, in arrival order,
+    /// replayed after its `Done` ([`drive::Steward::launched`]).
+    held: Vec<Held>,
+    /// The reply tokens of the calls whose answer is still to come: a `start_agent`'s or
+    /// `login`'s whose launch the thread runs, a held call's; the server parks such a call and
+    /// answers it from the reply the core later makes to its token.
+    awaiting: BTreeSet<ReplyTo>,
 }
 
 impl<B: Copy, H> Steward<B, H> {
@@ -365,6 +404,21 @@ impl<B: Copy, H> Steward<B, H> {
     /// How many things the steps made are held: budgets, scopes, connections and processes of
     /// every object the core still knows. What an object's end leaves is nothing of its own.
     pub fn holding(&self) -> usize { self.made.len() }
+
+    /// How many batches wait at their `Launch` step for the launch thread's report.
+    pub fn launching(&self) -> usize { self.pending.len() }
+
+    /// Whether a batch carving from `domain`'s sub-budget waits at its launch: the server says
+    /// the domain's usage line once the launch is reported, after the batch's record, as a
+    /// launch on the loop had them ordered. The budget is the batch's, not the owner's domain's:
+    /// a sponsored principal's session is carved from its sponsor's unlabelled sub-budget, so
+    /// the sponsor's line is the one that waits.
+    pub fn launching_in(&self, domain: &Domain) -> bool { self.pending.iter().any(|p| p.carves_from(domain)) }
+
+    /// Whether the call answered on token `reply` is still to be answered: its batch waits at
+    /// its launch, or the event it raised is held for a launching object. The server parks the
+    /// call and answers it from the core's later reply to the token.
+    pub fn awaits(&self, reply: ReplyTo) -> bool { self.awaiting.contains(&reply) }
 }
 
 /// Starts the steward from its manifest lines: the core's boot, then its carve under `users`.
@@ -432,5 +486,8 @@ pub fn start<K: Kernel>(
         console_session: None,
         failed: Vec::new(),
         items: BTreeMap::new(),
+        pending: Vec::new(),
+        held: Vec::new(),
+        awaiting: BTreeSet::new(),
     })
 }

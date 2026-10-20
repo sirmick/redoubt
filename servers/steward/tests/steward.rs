@@ -22,10 +22,10 @@ use redoubt_steward::event::EventKind;
 use redoubt_steward::hash::key_id;
 use redoubt_steward_server::cleanup::{Fate, Queue as Cleanup, RETRY_US, TRIES};
 use redoubt_steward_server::console::{Queue, Sink};
-use redoubt_steward_server::drive::MINTED;
+use redoubt_steward_server::drive::{MINTED, Ran};
 use redoubt_steward_server::own::{Child, binds};
-use redoubt_steward_server::protocol::{APPROVAL, INIT, SSHD, Serving, answer_with, watches};
-use redoubt_steward_server::{Kernel, SLOTS, StartError, Steward, start};
+use redoubt_steward_server::protocol::{APPROVAL, INIT, SSHD, Serving, answer_late, answer_with, watches};
+use redoubt_steward_server::{Kernel, Launched, SLOTS, StartError, Steward, start};
 
 const USERS: usize = 0;
 const SERVERS: &str = "servers 6";
@@ -103,6 +103,11 @@ enum Call {
         connections: Vec<Option<usize>>,
         context: Option<String>,
     },
+    /// The launch thread's report for a job, finished by the loop.
+    Launched(u64),
+    /// The install lock taken and released around the destroy pair.
+    Locked,
+    Unlocked,
     /// A context's relay started in `budget`; its control connection is the handle made.
     LaunchRelay {
         budget: usize,
@@ -246,10 +251,21 @@ struct Recorder {
     vault: BTreeMap<String, Vec<u8>>,
     /// The crossing program dies, times out or answers wrongly: its call fails with this.
     cross_fails: Option<Error>,
+    /// Every launch is the launch thread's: `launch` hands it over as a job and the test
+    /// reports it with `Steward::launched`, as the machine's loop does on the thread's report.
+    launch_pends: bool,
+    /// The jobs handed over so far, and the notices send right made for each still to report.
+    jobs: u64,
+    launching: BTreeMap<u64, (Option<usize>, Vec<usize>)>,
+    /// What the thread reports for every launch: `Ok` unless a test says.
+    launch_fails: Option<Error>,
+    /// The install lock is held: the loop's destroy pair runs, and nothing installs.
+    locked: bool,
 }
 
 impl Recorder {
     fn make(&mut self) -> Result<usize, Error> {
+        assert!(!self.locked, "no handle is installed while the install lock is held for the destroy pair");
         if self.fail_at == Some(self.made) {
             return Err(Error::OutOfMemory);
         }
@@ -407,6 +423,10 @@ impl Kernel for Recorder {
     /// holding no budget `WrongObject`, and a budget's index destroys that budget, whichever it
     /// is now.
     fn destroy(&mut self, budget: usize) -> Result<(), Error> {
+        assert!(
+            self.locked,
+            "a destroy by a kept handle is made under the install lock, beside its clock read"
+        );
         self.calls.push(Call::Destroy(budget));
         if self.free.contains(&budget) || self.lost.contains(&budget) {
             return Err(Error::BadHandle);
@@ -507,25 +527,22 @@ impl Kernel for Recorder {
         Self::server_of_slot(slot).map(String::from)
     }
 
+    /// Inline unless a test says the launches pend (`launch_pends`): then, as the machine's,
+    /// the notices endpoint is made now and the process by [`Recorder::launched`] when the
+    /// test says the thread reported.
     fn launch(
         &mut self,
         owner: &Object,
         budget: usize,
         connections: &[Option<usize>],
         context: Option<&str>,
-    ) -> Result<(u64, Option<usize>), Error> {
-        // The image is read from `bootfsd` before anything of the process exists.
-        if self.stalled.iter().any(|s| s == "bootfsd") {
-            return Err(Error::Timeout);
-        }
+    ) -> Result<Launched<usize>, Error> {
         // A session's VM is given a notices endpoint; the handle made is its send right. Made
         // before the process, so the last thing a login makes is its pid.
         let notices = if owner.kind == Kind::Session { Some(self.make()?) } else { None };
         if let Some(n) = notices {
             self.holds(n);
         }
-        // The pid the machine answers is the exit endpoint's index, the handle made for it.
-        let pid = self.make()? as u64;
         let context = context.map(String::from);
         self.calls.push(Call::Launch {
             kind: owner.kind,
@@ -533,11 +550,54 @@ impl Kernel for Recorder {
             connections: connections.to_vec(),
             context,
         });
-        // The child holds its copies now: the steward's go (`bin/steward.rs`, `launch`).
-        for c in connections.iter().flatten() {
-            self.closes(*c);
+        let given: Vec<usize> = connections.iter().flatten().copied().collect();
+        if self.launch_pends {
+            self.jobs += 1;
+            self.launching.insert(self.jobs, (notices, given));
+            return Ok(Launched::Pending(self.jobs));
+        }
+        // The image is read from `bootfsd` before anything of the process exists.
+        if self.stalled.iter().any(|s| s == "bootfsd") {
+            return Err(Error::Timeout);
+        }
+        // The pid the machine answers is the exit endpoint's index, the handle made for it.
+        let pid = self.make()? as u64;
+        // The child holds its copies now: the steward's go (`bin/steward.rs`, `launched`).
+        for c in given {
+            self.closes(c);
+        }
+        Ok(Launched::Started(pid, notices))
+    }
+
+    /// The thread's report for `job`: the process, or the launch failed as `launch_fails` says
+    /// (the budget gone under it, a read the server did not take), the notices send right
+    /// closed with it; the steward's copies of what the child was given go as it starts.
+    fn launched(&mut self, job: u64) -> Result<(u64, Option<usize>), Error> {
+        let (notices, given) = self.launching.remove(&job).expect("a job the loop handed over");
+        self.calls.push(Call::Launched(job));
+        if let Some(e) = self.launch_fails {
+            if let Some(n) = notices {
+                self.closes(n);
+            }
+            return Err(e);
+        }
+        let pid = self.make()? as u64;
+        for c in given {
+            self.closes(c);
         }
         Ok((pid, notices))
+    }
+
+    /// Recorded as a bracket, so a test sees what ran inside it: the destroy pair and nothing
+    /// that installs a handle ([`Recorder::make`] refuses one under the lock).
+    fn without_installs<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+        assert!(!self.locked, "the install lock is not re-entered");
+        self.locked = true;
+        self.calls.push(Call::Locked);
+        let out = f(self);
+        self.calls.push(Call::Unlocked);
+        self.locked = false;
+        out
     }
 
     fn notify(&mut self, notices: usize, lease: u64, name: &str) {
@@ -881,8 +941,12 @@ fn call_outputs(
     }
     // A reply that carries a handle (`rebind`'s connection) decodes only with it counted.
     let reply = Reply::decode(opcode, &outcome.words, &buf, outcome.send.as_slice().len()).unwrap();
-    // Owned copies of what the tests read: a login's session and labels.
-    let reply = reply.map(|r| match r {
+    (reply.map(owned), outputs)
+}
+
+/// An owned copy of what the tests read of a reply: a login's session and labels, a lease's name.
+fn owned(r: Reply<'_>) -> Reply<'static> {
+    match r {
         Reply::Login(l) => Reply::Login(LoginReply {
             session: l.session,
             name: Box::leak(l.name.to_string().into_boxed_str()),
@@ -912,8 +976,297 @@ fn call_outputs(
         Reply::Reconnected(_) => Reply::Reconnected(ReconnectedReply {}),
         Reply::Rebind(r) => Reply::Rebind(RebindReply { at: Box::leak(r.at.to_string().into_boxed_str()) }),
         _ => panic!("a reply these tests do not read"),
-    });
-    (reply, outputs)
+    }
+}
+
+/// A call the server parks (`Serving::parked`): its event's reply is still to come, so nothing
+/// is answered now. The call's caller, words and lend, for [`late`].
+fn call_parked(
+    s: &mut Steward<usize, usize>,
+    k: &mut Recorder,
+    badge: u64,
+    m: Message<'_>,
+    reply: u64,
+) -> (Caller, redoubt_rt::ipc::Words, Vec<u8>) {
+    let inline = matches!(m, Message::EndLease(_) | Message::ChannelClosed(_));
+    let mut buf = if inline { Vec::new() } else { vec![0u8; 4096] };
+    let words = m.encode(&mut buf).unwrap();
+    let caller = Caller { badge, account: 0, labels: Default::default() };
+    let mut handles = ReceivedHandles::new();
+    if matches!(m, Message::Login(_)) {
+        handles.push(Handle::new(CONSOLE)).unwrap();
+        handles.push(Handle::new(CONSOLE + 1)).unwrap();
+    }
+    let mut serving = Serving::with_reply(s, k, reply);
+    answer_with(&mut serving, &caller, &words, &handles, &mut buf);
+    assert!(serving.parked, "the call is parked for its reply");
+    assert!(serving.steward.awaits(reply));
+    (caller, words, buf)
+}
+
+/// Answers a parked call from `outputs`, the core's reply on `reply` among them, as the loop does
+/// on a launch's report: the reply, decoded.
+fn late(
+    s: &Steward<usize, usize>,
+    parked: &(Caller, redoubt_rt::ipc::Words, Vec<u8>),
+    outputs: &[Output],
+    reply: u64,
+) -> Result<Reply<'static>, ErrorCode> {
+    let answer = outputs
+        .iter()
+        .find_map(|o| match o {
+            Output::Reply { to, answer } if *to == reply => Some(answer.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("a reply on {reply} among {outputs:?}"));
+    let (caller, words, buf) = parked;
+    let mut buf = buf.clone();
+    let handles = if words[0] == 1 { 2 } else { 0 };
+    let outcome = answer_late(s, caller, words, handles, &mut buf, answer);
+    Reply::decode(words[0] as u32, &outcome.words, &buf, 0).unwrap().map(owned)
+}
+
+/// The id of the one lease of alice's that is still starting (its batch at its launch): the
+/// caller does not know it yet, since its reply is to come.
+fn starting_lease(s: &Steward<usize, usize>) -> u64 {
+    redoubt_steward::inspect::domains(&s.store)
+        .flat_map(|(_, d)| d.leases.values())
+        .find(|l| l.state == redoubt_steward::gen::lease::State::Starting)
+        .map(|l| l.id)
+        .expect("a starting lease")
+}
+
+/// A launch is the launch thread's: `start_agent`'s batch stops at its `Launch` step with the
+/// lease's budget, scope and connections made, the call is parked, and the lease is answered
+/// when the thread's report is finished on the loop: the process kept, the batch's `Done` to
+/// the core, the reply on the call's own token.
+#[test]
+fn a_launch_runs_on_the_thread_and_the_lease_is_answered_when_it_reports() {
+    let mut k = Recorder::default();
+    let mut s = started(&mut k);
+    let u = alice_session(&mut s, &mut k);
+    k.launch_pends = true;
+    let before = s.holding();
+    let parked = call_parked(&mut s, &mut k, u, Message::StartAgent(StartAgent { lease: 60_000_000 }), 3);
+    assert_eq!(s.launching(), 1);
+    assert!(matches!(k.calls.last(), Some(Call::Launch { kind: Kind::Lease, .. })), "{:?}", k.calls);
+    assert!(s.failed.is_empty());
+    let job = k.jobs;
+    let outputs = s.launched(&mut k, job).unwrap();
+    assert_eq!(k.calls.last(), Some(&Call::Launched(1)));
+    let Ok(Reply::StartAgent(a)) = late(&s, &parked, &outputs, 3) else { panic!("{outputs:?}") };
+    assert_eq!(a.name, "agent-1");
+    assert!(s.exited(pid_of(&s, Kind::Lease)).is_some_and(|o| o.id == a.lease), "the process is kept");
+    assert_eq!(s.launching(), 0);
+    assert!(!s.awaits(3));
+    assert_eq!(
+        s.holding(),
+        before + 10,
+        "the budget, the scope, the steward's badge, a connection record per slot and the process"
+    );
+    // The outputs are the batch's records: the agent's start is audited once.
+    assert_eq!(records(&outputs).iter().filter(|r| matches!(r, Record::AgentStarted { .. })).count(), 1);
+}
+
+/// While a launch waits on the thread, every other object is served: a deadline takes another
+/// lease, and its exit is decided and the sponsor told before the launch reports; the idle
+/// timer's event runs; another lease's `end_lease` is answered at once. Then the launch's
+/// report answers its own call.
+#[test]
+fn a_deadline_exit_of_another_lease_is_decided_and_its_notice_sent_while_a_launch_waits() {
+    let mut k = Recorder::default();
+    let mut s = started(&mut k);
+    let u = alice_session(&mut s, &mut k);
+    let (first, budget, pid) = lease_for(&mut s, &mut k, u, 2_000_000);
+    let (second, _, _) = lease_for(&mut s, &mut k, u, 60_000_000);
+    k.launch_pends = true;
+    let parked = call_parked(&mut s, &mut k, u, Message::StartAgent(StartAgent { lease: 60_000_000 }), 3);
+    k.clock += 2_000_000;
+    k.deadline_takes(budget);
+    k.calls.clear();
+    let object = s.exited(pid).unwrap();
+    s.event(&mut k, EventKind::Exited { object }, 0).unwrap();
+    assert!(
+        k.calls.iter().any(|c| matches!(c, Call::Notify { lease, .. } if *lease == first)),
+        "{:?}",
+        k.calls
+    );
+    assert!(s.failed.is_empty(), "{:?}", s.failed);
+    s.event(&mut k, EventKind::Idle, 0).unwrap();
+    k.calls.clear();
+    let Ok(Reply::EndLease(_)) = call(&mut s, &mut k, u, Message::EndLease(EndLease { lease: second }))
+    else {
+        panic!()
+    };
+    assert!(
+        k.calls.iter().any(|c| matches!(c, Call::Destroy(_))),
+        "answered and done at once: {:?}",
+        k.calls
+    );
+    assert_eq!(s.launching(), 1, "the launch still waits");
+    let job = k.jobs;
+    let outputs = s.launched(&mut k, job).unwrap();
+    let Ok(Reply::StartAgent(a)) = late(&s, &parked, &outputs, 3) else { panic!("{outputs:?}") };
+    assert_eq!(a.name, "agent-3");
+}
+
+/// The usage line a waiting launch defers is the carved-from domain's, not the owner's: a login
+/// as the sponsored principal carves its session from alice's unlabelled sub-budget, so alice's
+/// line waits for the launch's report (printed after the batch's `Login` record, the order the
+/// cases match on) and agent's own domain, which has no sub-budget, is not what waits; once the
+/// launch is reported nothing waits. On the loop-run launch every line followed its record.
+#[test]
+fn a_sponsored_logins_launch_defers_the_sponsors_usage_line_until_its_report() {
+    let mut k = Recorder::default();
+    let mut s = started(&mut k);
+    k.launch_pends = true;
+    let alice = Domain::new(1001.try_into().unwrap(), redoubt_steward::domain::Labels::empty());
+    let agent = Domain::new(1003.try_into().unwrap(), redoubt_steward::domain::Labels::empty());
+    let parked = call_parked(&mut s, &mut k, SSHD, login("agent", "", &AGENT_KEY), 3);
+    assert_eq!(s.launching(), 1);
+    assert!(s.launching_in(&alice), "the sponsor's sub-budget is carved while the launch waits");
+    assert!(!s.launching_in(&agent), "the sponsored principal has no sub-budget to say");
+    let job = k.jobs;
+    let outputs = s.launched(&mut k, job).unwrap();
+    let Ok(Reply::Login(r)) = late(&s, &parked, &outputs, 3) else { panic!("{outputs:?}") };
+    assert_eq!(r.name, "session-1");
+    assert!(!s.launching_in(&alice));
+    assert_eq!(records(&outputs).iter().filter(|r| matches!(r, Record::Login { .. })).count(), 1);
+}
+
+/// The launching lease's own `end_lease` (a sponsor that guessed its id) is held, its call
+/// parked, and served after the launch's report, in order: the lease is answered started, then
+/// ended and its sponsor told, as the two calls would have been served one after the other.
+#[test]
+fn the_launching_leases_own_end_lease_is_held_and_served_after_the_report() {
+    let mut k = Recorder::default();
+    let mut s = started(&mut k);
+    let u = alice_session(&mut s, &mut k);
+    k.launch_pends = true;
+    let start = call_parked(&mut s, &mut k, u, Message::StartAgent(StartAgent { lease: 60_000_000 }), 3);
+    let lease = starting_lease(&s);
+    k.calls.clear();
+    let end = call_parked(&mut s, &mut k, u, Message::EndLease(EndLease { lease }), 4);
+    assert!(k.calls.is_empty(), "held: nothing ran for it: {:?}", k.calls);
+    let job = k.jobs;
+    let outputs = s.launched(&mut k, job).unwrap();
+    let Ok(Reply::StartAgent(a)) = late(&s, &start, &outputs, 3) else { panic!("{outputs:?}") };
+    assert_eq!(a.lease, lease);
+    let Ok(Reply::EndLease(_)) = late(&s, &end, &outputs, 4) else { panic!("{outputs:?}") };
+    let replies: Vec<u64> = outputs
+        .iter()
+        .filter_map(|o| if let Output::Reply { to, .. } = o { Some(*to) } else { None })
+        .collect();
+    assert_eq!(replies, [3, 4], "the start answered before the end");
+    let launched = k.calls.iter().position(|c| matches!(c, Call::Launched(_))).unwrap();
+    let destroyed = k.calls.iter().position(|c| matches!(c, Call::Destroy(_))).unwrap();
+    assert!(launched < destroyed, "{:?}", k.calls);
+    assert!(k.calls.iter().any(|c| matches!(c, Call::Notify { lease: l, .. } if *l == lease)));
+    assert!(s.failed.is_empty() && s.launching() == 0 && !s.awaits(4));
+}
+
+/// A launch the thread fails (the budget gone under it, a read the server did not take) fails
+/// the step as any step's failure does: `failed` to the caller, the core's rollback destroying
+/// what the batch made, nothing of the lease held.
+#[test]
+fn a_launch_the_thread_fails_answers_failed_and_rolls_the_batch_back() {
+    let mut k = Recorder::default();
+    let mut s = started(&mut k);
+    let u = alice_session(&mut s, &mut k);
+    let before = s.holding();
+    k.launch_pends = true;
+    k.launch_fails = Some(Error::NotPermitted);
+    let parked = call_parked(&mut s, &mut k, u, Message::StartAgent(StartAgent { lease: 60_000_000 }), 3);
+    let budget = leased(&k);
+    k.calls.clear();
+    let job = k.jobs;
+    let outputs = s.launched(&mut k, job).unwrap();
+    assert_eq!(late(&s, &parked, &outputs, 3).unwrap_err(), ErrorCode::Failed);
+    assert!(matches!(s.failed.as_slice(), [(Step::Launch { .. }, Error::NotPermitted)]), "{:?}", s.failed);
+    assert!(k.calls.contains(&Call::Destroy(budget)), "{:?}", k.calls);
+    assert_eq!(s.holding(), before, "nothing of the lease is held");
+    assert_eq!(s.launching(), 0);
+}
+
+/// A second `start_agent` while a launch waits: its batch runs to its launch and queues behind
+/// the first, both calls parked, and each is answered by its own report, in order.
+#[test]
+fn a_second_start_agent_during_a_launch_queues_and_both_are_answered_in_order() {
+    let mut k = Recorder::default();
+    let mut s = started(&mut k);
+    let u = alice_session(&mut s, &mut k);
+    k.launch_pends = true;
+    let first = call_parked(&mut s, &mut k, u, Message::StartAgent(StartAgent { lease: 60_000_000 }), 3);
+    let second = call_parked(&mut s, &mut k, u, Message::StartAgent(StartAgent { lease: 60_000_000 }), 4);
+    assert_eq!(s.launching(), 2);
+    let outputs = s.launched(&mut k, 1).unwrap();
+    let Ok(Reply::StartAgent(a)) = late(&s, &first, &outputs, 3) else { panic!("{outputs:?}") };
+    assert_eq!(a.name, "agent-1");
+    assert!(!outputs.iter().any(|o| matches!(o, Output::Reply { to: 4, .. })), "the second still waits");
+    assert!(s.awaits(4));
+    let outputs = s.launched(&mut k, 2).unwrap();
+    let Ok(Reply::StartAgent(b)) = late(&s, &second, &outputs, 4) else { panic!("{outputs:?}") };
+    assert_eq!(b.name, "agent-2");
+    assert_eq!(s.launching(), 0);
+}
+
+/// A login's launch runs on the thread too, the login parked; `sshd`'s end meanwhile, which
+/// detaches every attached context, is held while a session starts (the core takes a starting
+/// session's detach only after its `Done`) and runs after the report: the login is answered,
+/// then the new context is detached.
+#[test]
+fn sshd_s_end_waits_for_a_logins_launch_and_detaches_the_context_after() {
+    let mut k = Recorder::default();
+    let mut s = started(&mut k);
+    k.launch_pends = true;
+    let parked = call_parked(&mut s, &mut k, SSHD, login("bob", "", &BOB_KEY), 3);
+    k.calls.clear();
+    s.event(&mut k, EventKind::SshdGone, 0).unwrap();
+    assert!(k.calls.is_empty(), "held: {:?}", k.calls);
+    let job = k.jobs;
+    let outputs = s.launched(&mut k, job).unwrap();
+    let Ok(Reply::Login(r)) = late(&s, &parked, &outputs, 3) else { panic!("{outputs:?}") };
+    assert!(r.session >= MINTED);
+    let launched = k.calls.iter().position(|c| matches!(c, Call::Launched(_))).unwrap();
+    let detached = k.calls.iter().position(|c| matches!(c, Call::Detach { .. })).expect("detached after");
+    assert!(launched < detached, "{:?}", k.calls);
+    assert!(s.exited(pid_of(&s, Kind::Session)).is_some(), "the VM runs on, detached");
+}
+
+/// The deadline witness's pair, the clock read and the destroy by a kept handle, runs under
+/// the install lock, with nothing between them and no handle installed under it (the fake
+/// kernel refuses one): a live lease's end destroys inside the bracket; a lease the deadline
+/// took makes no destroy inside it.
+#[test]
+fn the_destroy_pair_runs_under_the_install_lock_and_nothing_installs_under_it() {
+    let mut k = Recorder::default();
+    let mut s = started(&mut k);
+    let u = alice_session(&mut s, &mut k);
+    let (lease, budget, _) = lease_for(&mut s, &mut k, u, 60_000_000);
+    k.calls.clear();
+    let Ok(Reply::EndLease(_)) = call(&mut s, &mut k, u, Message::EndLease(EndLease { lease })) else {
+        panic!()
+    };
+    let locked = k.calls.iter().position(|c| *c == Call::Locked).unwrap();
+    assert_eq!(
+        &k.calls[locked..locked + 3],
+        &[Call::Locked, Call::Destroy(budget), Call::Unlocked],
+        "{:?}",
+        k.calls
+    );
+    let (_, budget, pid) = lease_for(&mut s, &mut k, u, 2_000_000);
+    k.clock += 2_000_000;
+    k.deadline_takes(budget);
+    k.calls.clear();
+    let object = s.exited(pid).unwrap();
+    s.event(&mut k, EventKind::Exited { object }, 0).unwrap();
+    let locked = k.calls.iter().position(|c| *c == Call::Locked).unwrap();
+    assert_eq!(
+        &k.calls[locked..locked + 2],
+        &[Call::Locked, Call::Unlocked],
+        "no destroy by the revoked handle: {:?}",
+        k.calls
+    );
 }
 
 fn login<'a>(principal: &'a str, label: &'a str, key: &'a [u8]) -> Message<'a> {
@@ -2560,6 +2913,14 @@ fn scope_of(k: &Recorder, budget: usize) -> usize {
     scopes.filter(|s| k.parents.get(s) == Some(&budget)).last().expect("the budget's scope")
 }
 
+/// Runs a batch of the test's own, one no launch stops.
+fn ran(s: &mut Steward<usize, usize>, k: &mut Recorder, batch: Batch) -> Result<(), ()> {
+    match s.run(k, batch) {
+        Ran::Done(result) => result.map(|_| ()).map_err(|_| ()),
+        Ran::Pending(_) => panic!("a batch with no launch step"),
+    }
+}
+
 /// A `DestroyBudget` of `owner`'s token at `slot`, as a batch of its own: the core never asks
 /// for a scope's, so the steps here are the test's.
 fn destroy_step(owner: &Object, slot: u8) -> Batch {
@@ -2589,13 +2950,14 @@ fn a_scopes_index_recycled_after_its_leases_deadline_is_not_destroyed_as_it() {
     assert_eq!(recycled, budget, "the new lease's budget took the freed index");
     assert_eq!(scope_of(&k, recycled), scope, "and its scope the old scope's");
     k.calls.clear();
-    s.run(&mut k, &destroy_scope).unwrap();
+    ran(&mut s, &mut k, destroy_scope).unwrap();
     assert!(k.budgets.contains(&scope), "the new lease's scope survives");
     assert!(!k.calls.iter().any(|c| matches!(c, Call::Destroy(_))), "{:?}", k.calls);
     let (_, budget, pid) = lease_for(&mut s, &mut k, u, 2_000_000);
     let scope = scope_of(&k, budget);
     k.calls.clear();
-    s.run(&mut k, &destroy_step(&s.exited(pid).unwrap(), SCOPE)).unwrap();
+    let live = destroy_step(&s.exited(pid).unwrap(), SCOPE);
+    ran(&mut s, &mut k, live).unwrap();
     assert!(k.calls.contains(&Call::Destroy(scope)), "{:?}", k.calls);
     assert!(!k.budgets.contains(&scope), "ahead of the deadline the scope is destroyed by its handle");
     assert!(s.failed.is_empty(), "{:?}", s.failed);
@@ -2615,13 +2977,13 @@ fn a_scopes_index_recycled_after_its_budgets_destroy_is_not_destroyed_as_it() {
     let (_, budget, pid) = lease_for(&mut s, &mut k, u, 60_000_000);
     let scope = scope_of(&k, budget);
     let owner = s.exited(pid).unwrap();
-    s.run(&mut k, &destroy_step(&owner, BUDGET)).unwrap();
+    ran(&mut s, &mut k, destroy_step(&owner, BUDGET)).unwrap();
     assert!(k.calls.contains(&Call::Destroy(budget)), "{:?}", k.calls);
     k.destroy_took(budget);
     let (_, recycled, _) = lease_for(&mut s, &mut k, u, 60_000_000);
     assert_eq!(recycled, scope, "the new lease's budget took the scope's index");
     k.calls.clear();
-    s.run(&mut k, &destroy_step(&owner, SCOPE)).unwrap();
+    ran(&mut s, &mut k, destroy_step(&owner, SCOPE)).unwrap();
     assert!(k.budgets.contains(&recycled), "the new lease's budget survives");
     assert!(!k.calls.iter().any(|c| matches!(c, Call::Destroy(_))), "{:?}", k.calls);
     assert!(s.failed.is_empty(), "{:?}", s.failed);

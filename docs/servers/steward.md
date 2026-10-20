@@ -730,7 +730,7 @@ u16)` ([failure and restart](#failure-and-restart)).
 
 ### Leases
 
-Status: built · partly tested: a lease's roots are its sponsor's `~/project` and the system volume (the task-scoped grants and `gatewayd` are later) · tested: bench:steward-lease-ends, bench:steward-end-lease, bench:steward-sub-agent-dies-with-agent, bench:agent-login, bench:steward-agent-escape, bench:steward-lease-cut, bench:steward-agent-flood, host:redoubt-steward-server::start_agent_runs_the_lease_batch_and_answers_the_lease, host:redoubt-steward-server::end_lease_from_the_sponsor_destroys_the_lease_and_tells_her_sessions, host:redoubt-steward-server::a_leases_deadline_ends_it_without_a_failed_step, host:redoubt-steward-server::a_leases_index_recycled_for_a_new_budget_before_its_notice_is_not_destroyed_as_it, host:redoubt-steward-server::a_leases_index_recycled_for_a_connection_fails_no_step, host:redoubt-steward-server::an_end_lease_after_the_deadline_makes_no_destroy_by_the_revoked_handle, host:redoubt-steward-server::a_login_as_the_sponsored_principal_is_a_lease_of_its_sponsors, host:redoubt-steward::a_sponsored_principals_session_is_a_lease_of_its_sponsors, host:redoubt-steward::sponsor_session_and_notify_sponsor
+Status: built · partly tested: a lease's roots are its sponsor's `~/project` and the system volume (the task-scoped grants and `gatewayd` are later) · tested: bench:steward-lease-ends, bench:steward-end-lease, bench:steward-sub-agent-dies-with-agent, bench:agent-login, bench:steward-agent-escape, bench:steward-lease-cut, bench:steward-agent-flood, host:redoubt-steward-server::start_agent_runs_the_lease_batch_and_answers_the_lease, host:redoubt-steward-server::end_lease_from_the_sponsor_destroys_the_lease_and_tells_her_sessions, host:redoubt-steward-server::a_leases_deadline_ends_it_without_a_failed_step, host:redoubt-steward-server::a_leases_index_recycled_for_a_new_budget_before_its_notice_is_not_destroyed_as_it, host:redoubt-steward-server::a_leases_index_recycled_for_a_connection_fails_no_step, host:redoubt-steward-server::an_end_lease_after_the_deadline_makes_no_destroy_by_the_revoked_handle, host:redoubt-steward-server::a_login_as_the_sponsored_principal_is_a_lease_of_its_sponsors, host:redoubt-steward::a_sponsored_principals_session_is_a_lease_of_its_sponsors, host:redoubt-steward::sponsor_session_and_notify_sponsor, bench:steward-launch-overlap, host:redoubt-steward-server::a_launch_runs_on_the_thread_and_the_lease_is_answered_when_it_reports, host:redoubt-steward-server::a_deadline_exit_of_another_lease_is_decided_and_its_notice_sent_while_a_launch_waits, host:redoubt-steward-server::the_launching_leases_own_end_lease_is_held_and_served_after_the_report, host:redoubt-steward-server::a_launch_the_thread_fails_answers_failed_and_rolls_the_batch_back, host:redoubt-steward-server::a_second_start_agent_during_a_launch_queues_and_both_are_answered_in_order, host:redoubt-steward-server::sshd_s_end_waits_for_a_logins_launch_and_detaches_the_context_after, host:redoubt-steward-server::a_sponsored_logins_launch_defers_the_sponsors_usage_line_until_its_report
 
 An agent is its own principal, never an impersonation, with an accountable **sponsor**: a person,
 or an agent with a person at the top of the chain.
@@ -770,6 +770,38 @@ or an agent with a person at the top of the chain.
   queue has room, a full queue holding the thread until the VM's poll
   ([failure and restart](#failure-and-restart)). The same endpoint carries
   `server_restarted` ([failure and restart](#failure-and-restart)).
+- **A launch runs on the steward's launch thread, and the loop serves meanwhile.** The slow
+  part of a lease's or a session's launch, the VM's image streamed from the system volume into
+  the child's pages and `process_start`, is seconds under load (the `served start_agent`
+  figures under [residual risks](#residual-risks)), and a deadline's exit notice that arrived
+  while the loop was inside it waited behind it. So the loop prepares the launch (the exit
+  endpoint, a session's `notices` endpoint, every handle and name the child is given: all of it
+  exists before the hand-over) and hands the rest to one thread of its own as a self-contained
+  job, which runs the launches serially, in the order they were handed over, and reports each
+  as a send on the loop's endpoint; the loop finishes it (its own copies closed, the exit
+  watched, the notices send right kept) and only then gives the core the batch's `Done`, so
+  the core sees the object's events in the order it always did (`servers/steward/src/drive.rs`,
+  `Steward::launched`); the usage line of the domain the batch carves from (its own, or the
+  sponsor's for a sponsored principal's session) is said then too, after the batch's record, as
+  the inline launch ordered them. The caller's `start_agent` or `login` is parked and answered
+  when the launch is done: its contract is unchanged, and its `served` time now counts a
+  launch's wait in the thread's queue behind an earlier one (before, a second call was not even
+  received until the first launch returned, so no caller waits longer than it did). While a
+  launch waits the loop serves every other object: a deadline's exit and its `lease_ended`, the
+  idle timer, a blame, and another lease's `end_lease`, still answered ahead and at once; the
+  one call the loop holds a reply for is the launching object's own (`end_lease` naming the starting lease,
+  its channel's close, `sshd`'s end while a session starts), held in arrival order and replayed
+  after the launch's report, at most the launch bound later, since the core takes those only
+  once the batch is done. A launch the thread fails (the lease's own deadline inside its launch,
+  a read the server did not take within `SERVER_US`) fails the step as any step fails: the
+  core rolls the batch back and the caller is told `failed`, and nothing of the launch is left.
+  The thread touches nothing of the steward's tables and creates no budget; the handles it
+  installs are under the install lock ([failure and restart](#failure-and-restart)). Measured by
+  `steward-launch-overlap` (a lease's deadline one second inside another lease's launch, five
+  times a boot): the sponsor told 16 to 36 ms net after the deadline (p99 20, 36 and 19 ms on
+  rv64 at one and two harts and rv32 at one), against 0.36 to 0.58 s net (0.76 to 1.5 s gross,
+  the launch's remainder) with the launch on the loop
+  ([responsiveness](../kernel/scheduling.md#responsiveness)).
 - **A lease the kernel's deadline took** reaches the steward as its process's exit notice with
   the budget already gone and the steward's handle to it revoked, its table index free for the
   next handle the steward installs: the core's `DestroyBudget` on it is the end asked for, done
@@ -778,10 +810,12 @@ or an agent with a person at the top of the chain.
   makes none once the deadline has passed: the kernel destroys a budget at the first entry at or
   after its deadline, before anything else, and never before
   ([deadlines](../userland/agents.md#a-leases-end-is-the-kernels)), nothing but the deadline revokes a
-  budget handle the steward holds, and no reply the steward's threads take carries a handle (the
-  cleanup thread's disconnect and ended, the reader threads' calls at consoled), so no handle is
-  installed in its table between that read and the call and none can take the index; a reply
-  that one day carries a handle rechecks this argument. Before this, the destroy was made and its
+  budget handle the steward holds, no reply the steward's threads take carries a handle (the
+  cleanup thread's disconnect and ended, the reader threads' calls at consoled), and the launch
+  thread installs its handles only under the install lock the loop holds across that read and
+  the call ([failure and restart](#failure-and-restart)), so no handle is installed in its table
+  between the two and none can take the index; a reply that one day carries a handle rechecks
+  this argument. Before this, the destroy was made and its
   `BadHandle` tolerated on a lease whose process was gone, which held only while deadlines came
   one at a time: several leases expiring together (seen when `steward-latency`'s deadline
   leases overlapped, before they ran one at a time) recycle the freed index before the notice
@@ -1405,7 +1439,7 @@ detached again ends by its first detach's clock, before its bound.
 
 ## Failure and restart
 
-Status: built · partly tested: `steward-restart` proves the release of a dead steward's connections by count at `bootfsd`, `erofsd:system`, `walfsd:data` and `ipd`, and at `littlefsd:alice-secrets` only by the code they share, since it opens no vault session; a shared server's restart is re-bound on the machine at `walfsd:data`, and at the vault's server and `ipd` by the code they share and the host test · tested: bench:steward-restart, bench:steward-restart-ssh, bench:steward-restart-reboot, bench:steward-session-ends, bench:steward-server-restart, host:redoubt-steward-server::users_not_empty_is_a_start_failure_before_any_carve, host:redoubt-steward-server::watch_is_held_only_from_sshd_and_malformed_on_any_other_badge, host:redoubt-steward-server::a_servers_restart_tells_its_sessions_and_a_session_rebinds_its_slot, host:redoubt-steward-server::every_operation_on_another_badge_class_is_malformed, host:redoubt-init::a_restart_strands_the_stewards_connections_at_the_endpoints_the_server_receives_on, host:redoubt-init::the_outcome_of_the_hand_over_is_said_in_blames_words, bench:steward-blame-lockout, host:redoubt-steward-server::a_session_s_end_is_answered_before_any_cleanup_call, host:redoubt-steward-server::an_ended_session_s_pending_request_is_withdrawn_before_the_end_s_reply, host:redoubt-steward-server::a_cleanup_step_that_times_out_is_retried_then_parked, host:redoubt-steward-server::a_timed_out_step_does_not_hold_the_steps_behind_it, host:redoubt-steward-server::a_cleanup_step_the_server_refuses_or_cannot_take_is_done_at_once, host:redoubt-steward-server::the_cleanup_queue_holds_each_released_connection_once, host:redoubt-steward-server::the_loops_turn_makes_no_call_to_a_server_that_never_answers, host:redoubt-steward-server::a_step_that_never_completes_holds_only_itself, host:redoubt-steward-server::a_step_that_completes_after_the_loop_moved_on_is_settled_then, host:redoubt-steward-server::reconnected_forgets_a_servers_due_steps_too, host:redoubt-steward-server::a_console_line_is_one_write_on_the_kept_fid, host:redoubt-steward-server::a_console_line_the_console_did_not_take_costs_one_bound_and_keeps_the_order, host:redoubt-steward-server::the_console_fid_is_re_opened_after_a_failed_write_and_the_lines_dropped_are_said, host:redoubt-steward-server::the_exit_s_last_turn_writes_the_lines_left_within_one_bound, host:redoubt-steward-server::a_parked_step_runs_at_the_servers_next_answered_call, host:redoubt-steward-server::a_mint_at_a_server_with_parked_steps_wakes_them_and_the_login_after_succeeds, host:redoubt-steward-server::reconnected_forgets_a_servers_parked_steps, host:redoubt-steward-server::a_never_answering_server_costs_no_bound_once_its_steps_are_parked, host:redoubt-steward-server::a_scopes_index_recycled_after_its_leases_deadline_is_not_destroyed_as_it, host:redoubt-steward-server::a_scopes_index_recycled_after_its_budgets_destroy_is_not_destroyed_as_it, bench:steward-latency, bench:steward-deadline-burst, bench:steward-deadline-burst-16
+Status: built · partly tested: `steward-restart` proves the release of a dead steward's connections by count at `bootfsd`, `erofsd:system`, `walfsd:data` and `ipd`, and at `littlefsd:alice-secrets` only by the code they share, since it opens no vault session; a shared server's restart is re-bound on the machine at `walfsd:data`, and at the vault's server and `ipd` by the code they share and the host test · tested: bench:steward-restart, bench:steward-restart-ssh, bench:steward-restart-reboot, bench:steward-session-ends, bench:steward-server-restart, host:redoubt-steward-server::users_not_empty_is_a_start_failure_before_any_carve, host:redoubt-steward-server::watch_is_held_only_from_sshd_and_malformed_on_any_other_badge, host:redoubt-steward-server::a_servers_restart_tells_its_sessions_and_a_session_rebinds_its_slot, host:redoubt-steward-server::every_operation_on_another_badge_class_is_malformed, host:redoubt-init::a_restart_strands_the_stewards_connections_at_the_endpoints_the_server_receives_on, host:redoubt-init::the_outcome_of_the_hand_over_is_said_in_blames_words, bench:steward-blame-lockout, host:redoubt-steward-server::a_session_s_end_is_answered_before_any_cleanup_call, host:redoubt-steward-server::an_ended_session_s_pending_request_is_withdrawn_before_the_end_s_reply, host:redoubt-steward-server::a_cleanup_step_that_times_out_is_retried_then_parked, host:redoubt-steward-server::a_timed_out_step_does_not_hold_the_steps_behind_it, host:redoubt-steward-server::a_cleanup_step_the_server_refuses_or_cannot_take_is_done_at_once, host:redoubt-steward-server::the_cleanup_queue_holds_each_released_connection_once, host:redoubt-steward-server::the_loops_turn_makes_no_call_to_a_server_that_never_answers, host:redoubt-steward-server::a_step_that_never_completes_holds_only_itself, host:redoubt-steward-server::a_step_that_completes_after_the_loop_moved_on_is_settled_then, host:redoubt-steward-server::reconnected_forgets_a_servers_due_steps_too, host:redoubt-steward-server::a_console_line_is_one_write_on_the_kept_fid, host:redoubt-steward-server::a_console_line_the_console_did_not_take_costs_one_bound_and_keeps_the_order, host:redoubt-steward-server::the_console_fid_is_re_opened_after_a_failed_write_and_the_lines_dropped_are_said, host:redoubt-steward-server::the_exit_s_last_turn_writes_the_lines_left_within_one_bound, host:redoubt-steward-server::a_parked_step_runs_at_the_servers_next_answered_call, host:redoubt-steward-server::a_mint_at_a_server_with_parked_steps_wakes_them_and_the_login_after_succeeds, host:redoubt-steward-server::reconnected_forgets_a_servers_parked_steps, host:redoubt-steward-server::a_never_answering_server_costs_no_bound_once_its_steps_are_parked, host:redoubt-steward-server::a_scopes_index_recycled_after_its_leases_deadline_is_not_destroyed_as_it, host:redoubt-steward-server::a_scopes_index_recycled_after_its_budgets_destroy_is_not_destroyed_as_it, bench:steward-latency, bench:steward-deadline-burst, bench:steward-deadline-burst-16, bench:steward-launch-overlap, host:redoubt-steward-server::the_destroy_pair_runs_under_the_install_lock_and_nothing_installs_under_it
 
 - **The steward is part of the trusted base; its crash is a bug.** If it dies, `init` reaps
   `users`, which logs every session out and ends every lease, and restarts the steward; the
@@ -1604,6 +1638,41 @@ Status: built · partly tested: `steward-restart` proves the release of a dead s
   the sponsor's side is the shell: its listener prints each notice inline through the relay, 250
   to 370 ms a line, so the last line of six is drawn 2.3 to 2.6 s after the deadline and of
   sixteen 6.1 to 6.6 s ([residual risks](#residual-risks)).
+- **A launch runs on the launch thread, under the install lock.** The second thread the
+  steward starts ([leases](#leases)) installs handles of its own: the child's process at
+  `process_create` and the fresh pages of each batch of the image before they are moved into the
+  child, between its reads of the image at the system volume. The deadline witness above rests
+  on no handle being installed between the loop's clock read and its destroy, so one lock, the
+  install lock, is held by the loop across that pair (two kernel calls, microseconds) and by the
+  thread across the whole of a launch's `start` except inside each read of the image, which drops
+  it on entry and takes it again on return: every install of the thread's is under the lock, no
+  install lands between the pair, and the lock is never held across a call to a server
+  (the cleanup thread's rule). The loop's worst wait for it is one stretch of the thread's between
+  two reads, a batch's pages made and moved in or `process_start`, kernel work: measured on
+  `steward-launch-overlap`, 33 µs on rv64 at one hart, 50 µs on rv32 and 5.2 ms on rv64 at two
+  harts (the thread's install on the other hart), said by the probe as it grows: the loop's
+  cost of the lock, beside the 50 ms timer-wake p99 the page's targets hold it to. Defence in
+  depth, beside the lock: the thread creates no budget, so the silent form of a wrong destroy (a
+  newer budget at a recycled index) is unreachable from its installs whatever the lock does; the
+  lock removes the loud form. The launch thread's hand-over is the cleanup thread's: it idles in
+  a call on the loop's endpoint, which the loop answers when a job is queued, the queue under a
+  lock held for one operation at a time, and it reports with a send; it reads the image through
+  the loop's attached connection at `bootfsd`, which several threads call on at once, with a
+  lend of its own, the loop's size, so a page batch costs the four reads it cost the loop. What
+  the thread costs: a stack of three pages (twice its measured peak, 4,840 bytes on rv64 and
+  3,808 on rv32, `stack steward thread 2` in `steward-session-ends`; twice 4,840 is 9,680), its
+  thread page, its sixteen-page lend, the two locks' endpoint pages, one page for a notice the
+  loop sends while the thread holds a batch (before, no notice went during a launch), and one
+  more page of the loop's own stack, whose peak grew from 17,560 to 18,536 bytes (18,616 in a
+  later run; twice it, 37,232, is ten pages where nine held 17,560) though the launch left it:
+  the growth is the late answer's path, the report's arm answering a parked call (the kept
+  request, the call decoded again, the typed reply and its outcome, frames the loop did not
+  have), not the batch kept while the launch runs (boxing it left the peak at 18,472): twenty-four pages the
+  steward's entry grew by in the image's manifest, 1,027 to 1,051
+  ([the memory budget](../testbench.md#the-memory-budget)). A launch that overlaps another
+  lease's exit now shares the harts with the exit's work instead of delaying it: on
+  `steward-launch-overlap` the longest `served start_agent` grew from 2.03 to 2.52 s (rv64, one
+  hart), 2.63 to 2.91 s (two) and 2.58 to 3.08 s (rv32), the work moved, not added.
 
 **What a dead steward held at the shared servers goes with it.** `init` hands the steward a
 fresh connection at each server it is handed (`bootfsd`, the volumes' file servers, `ipd`), not
@@ -1701,7 +1770,12 @@ so the case restarts it thirteen times, each time with that session and its conn
   default's, covered by the per-message default [wire](wire.md#generated-clients) names as the
   follow-up. The steward's own cost is the batch's calls at the shared servers, each within
   `SERVER_US` below; the rest of the seconds is the launching VM's share of the harts beside
-  the spinners.
+  the spinners. A `served start_agent` is the call's arrival to its answer, so since the
+  launches run on the launch thread it includes a launch's wait in the thread's queue behind an
+  earlier one ([leases](#leases)); with the launches on the thread the worst served in these
+  rounds is 4.82 s (rv64 at one hart, the N = 16 round beside fifteen spinners; 3.74 s at two
+  harts, 3.53 s on rv32 at one in its rounds to N = 3), under the 6.64 s the bound derives
+  from, so the bound stands.
 - **A burst of expiring leases is told at the steward's pace and shown at the shell's.** N
   leases taken by one deadline cost the last `lease_ended` the kernel's N destructions at the
   deadline's entry (0.4 to 0.85 s to the first notice, 22 to 103 ms net of the checked build's
@@ -1741,7 +1815,11 @@ so the case restarts it thirteen times, each time with that session and its conn
   residual: a hart saturated by lease VMs of the sponsor's weight puts a shared server's call
   past the bound (on rv32, with three spinning agents left running after the case's own loop
   had died, a `stat` at `walfsd` took 4 to 10 s); the step fails and the caller is told, and the
-  steward's own probe poll, no batch, only polls again.
+  steward's own probe poll, no batch, only polls again. A lease batch's mints (its `Connect`
+  steps, `new_connection` at the shared servers) still run on the loop within this bound, 1.66 s
+  worst measured, so a deadline that fires inside a mint waits for it; the launch, the batch's
+  seconds, runs off the loop ([leases](#leases)), and the install lock would let a whole batch
+  follow it (a budget installed under the same lock) if a measurement showed the mints bite.
 - **Blame follows the current call.** A request that corrupts a server which crashes later, while
   serving someone else, blames the wrong account, and one that crashes an idle thread later blames
   nobody; the consequence is a logout or a restart, not data loss.

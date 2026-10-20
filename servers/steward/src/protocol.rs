@@ -20,6 +20,7 @@ use redoubt_rt::wire::proto::steward::{
     DenyReply, DetachReply, EndContextReply, EndLeaseReply, EndSessionReply, ErrorCode, LoginReply, Message,
     PendingReply, RebindReply, ReconnectedReply, Reply, StartAgentReply, SubmitReply,
 };
+use redoubt_steward::effect::ReplyTo;
 use redoubt_steward::effect::{Answer, Output, Refusal};
 use redoubt_steward::event::{Content, EventKind};
 use redoubt_steward::hash::key_id;
@@ -105,7 +106,7 @@ pub fn ahead(caller: &Caller, words: &Words) -> bool {
 }
 
 /// A label set as the protocol carries it ([`redoubt_rt::wire::labels`]).
-fn label_bytes(ids: &[u64]) -> Vec<u8> { redoubt_rt::wire::labels::encode(ids).collect() }
+fn label_bytes_of(ids: &[u64]) -> Vec<u8> { redoubt_rt::wire::labels::encode(ids).collect() }
 
 fn error(r: Refusal) -> ErrorCode {
     match r {
@@ -166,19 +167,38 @@ pub struct Serving<'a, K: Kernel> {
     pub after: Vec<EventKind>,
     /// The core exited: the server ends once this call is answered.
     pub exited: bool,
+    /// The call's answer is still to come (its batch waits at its launch, or its event is held
+    /// for a launching object: `Steward::awaits`): the server keeps the call unanswered and
+    /// answers it with [`answer_late`] when the core replies to its token.
+    pub parked: bool,
+    /// The token the core answers this call on.
+    reply: ReplyTo,
     /// The reply's strings, which the reply borrows.
     name: String,
     label_bytes: Vec<u8>,
 }
 
 impl<'a, K: Kernel> Serving<'a, K> {
+    /// A call answered on [`CALL`]: a host test's, one at a time.
     pub fn new(steward: &'a mut Steward<K::Budget, K::Handle>, kernel: &'a mut K) -> Self {
+        Serving::with_reply(steward, kernel, CALL)
+    }
+
+    /// A call answered on `reply`, a token of the server's own, unique among the calls it may
+    /// hold at once.
+    pub fn with_reply(
+        steward: &'a mut Steward<K::Budget, K::Handle>,
+        kernel: &'a mut K,
+        reply: ReplyTo,
+    ) -> Self {
         Serving {
             steward,
             kernel,
             outputs: Vec::new(),
             after: Vec::new(),
             exited: false,
+            parked: false,
+            reply,
             name: String::new(),
             label_bytes: Vec::new(),
         }
@@ -211,9 +231,98 @@ pub fn item_path(what: &str) -> Option<String> {
     Some(names.join("/"))
 }
 
-/// The reply token every call gets: the core answers it, at once or when its batch is done, and
-/// the server runs each batch before it receives again.
+/// The reply token a host test's call gets: the core answers it at once or when its batch is
+/// done. The server's calls get tokens of their own ([`Serving::with_reply`]), since a batch
+/// stopped at its launch is done at a later event, and other calls are served meanwhile.
 const CALL: u64 = 1;
+
+/// The reply, by the call and what the core answered on its token.
+fn replied<'s>(
+    answer: Option<Answer>,
+    ok: Option<Reply<'s>>,
+    login_labels: &[u64],
+    name: &'s mut String,
+    label_bytes: &'s mut Vec<u8>,
+) -> Result<Typed<Reply<'s>>, ErrorCode> {
+    match (answer, ok) {
+        (Some(Answer::Contexts(list)), None) => {
+            *name = listing(&list);
+            Ok(Typed::new(Reply::Contexts(ContextsReply { list: name })))
+        }
+        (Some(Answer::Session { id, name: n }), None) => {
+            *name = n;
+            *label_bytes = label_bytes_of(login_labels);
+            let reply = LoginReply { session: id, name, labels: label_bytes };
+            Ok(Typed::new(Reply::Login(reply)))
+        }
+        (Some(Answer::Lease { id, name: n }), None) => {
+            *name = n;
+            Ok(Typed::new(Reply::StartAgent(StartAgentReply { lease: id, name })))
+        }
+        (Some(Answer::Request { id }), None) => Ok(Typed::new(Reply::Submit(SubmitReply { request: id }))),
+        // A notice the core takes without an answer (a channel's close) is answered empty;
+        // the core answers only its refusal.
+        (Some(Answer::Ok) | None, Some(reply)) => Ok(Typed::new(reply)),
+        (Some(Answer::Refused(r)), _) => Err(error(r)),
+        // An answer this operation has no reply for, or none: the core's unknown.
+        _ => Err(ErrorCode::Unknown),
+    }
+}
+
+/// A parked call's server: answers the call as it was decoded with what the core replied to
+/// its token, as [`Serving`] would have answered it at once.
+struct Late<'a, B, H> {
+    steward: &'a Steward<B, H>,
+    answer: Option<Answer>,
+    name: String,
+    label_bytes: Vec<u8>,
+}
+
+impl<B: Copy, H> TypedServer<StewardProtocol> for Late<'_, B, H> {
+    fn handle<'s>(
+        &'s mut self,
+        _caller: &Caller,
+        request: Message<'_>,
+        _handles: &[KernelHandle],
+    ) -> Result<Typed<Reply<'s>>, ErrorCode> {
+        // The calls a launch or a held event may park: a login's or a `start_agent`'s batch
+        // waits at its launch; an `end_lease` or `channel_closed` naming the launching object
+        // is held ([`Steward::holds`]).
+        let (login_labels, ok) = match &request {
+            Message::Login(m) => (self.steward.label(m.label).unwrap_or_default(), None),
+            Message::StartAgent(_) => (Vec::new(), None),
+            Message::EndLease(_) => (Vec::new(), Some(Reply::EndLease(EndLeaseReply {}))),
+            Message::ChannelClosed(_) => (Vec::new(), Some(Reply::ChannelClosed(ChannelClosedReply {}))),
+            _ => return Err(ErrorCode::Unknown),
+        };
+        replied(self.answer.take(), ok, &login_labels, &mut self.name, &mut self.label_bytes)
+    }
+}
+
+/// Answers a parked call ([`Serving::parked`]) now that the core replied `answer` on its token:
+/// `words` and `buf` are the call's as it came (the call's lend, which the reply is written
+/// over, as an answer at once is) and `handles` how many handles came with it, which the
+/// server took at the call (a login's two consoles); the outcome is finished on the call the
+/// server kept.
+pub fn answer_late<B: Copy, H>(
+    steward: &Steward<B, H>,
+    caller: &Caller,
+    words: &Words,
+    handles: usize,
+    buf: &mut [u8],
+    replied: Answer,
+) -> Outcome {
+    let none = Handles::new();
+    let mut late = Late { steward, answer: Some(replied), name: String::new(), label_bytes: Vec::new() };
+    let words = match Message::decode(words, buf, handles) {
+        Ok(request) => match late.handle(caller, request, &[]) {
+            Ok(typed) => Reply::encode(&typed.reply, buf).unwrap_or_else(|_| ErrorCode::Malformed.encode()),
+            Err(code) => code.encode(),
+        },
+        Err(_) => ErrorCode::Malformed.encode(),
+    };
+    Outcome { words, send: none, close: Handles::new() }
+}
 
 impl<K: Kernel> TypedServer<StewardProtocol> for Serving<'_, K>
 where
@@ -429,7 +538,7 @@ where
             // every badge: nothing else is unbound.
             _ => return Err(ErrorCode::Unknown),
         };
-        let outputs = match self.steward.event(self.kernel, kind, CALL) {
+        let outputs = match self.steward.event(self.kernel, kind, self.reply) {
             Ok(outputs) => outputs,
             Err(Exited) => {
                 self.exited = true;
@@ -439,9 +548,16 @@ where
         let mut answer = None;
         for o in outputs {
             match o {
-                Output::Reply { to: CALL, answer: a } => answer = Some(a),
+                Output::Reply { to, answer: a } if to == self.reply => answer = Some(a),
                 o => self.outputs.push(o),
             }
+        }
+        // No answer yet, and one to come: the call's batch waits at its launch, or its event
+        // is held for a launching object. The server keeps the call; the outcome here is not
+        // sent.
+        if answer.is_none() && self.steward.awaits(self.reply) {
+            self.parked = true;
+            return Err(ErrorCode::Failed);
         }
         // The channel is open in the core: the server takes its consoles and starts its reader,
         // and redraws it once this call is answered, so the person sees what waits. A channel
@@ -455,31 +571,7 @@ where
             self.after.push(EventKind::Pending { channel });
             return Ok(Typed::new(Reply::ApprovalOpened(ApprovalOpenedReply { channel })));
         }
-        match (answer, ok) {
-            (Some(Answer::Contexts(list)), None) => {
-                self.name = listing(&list);
-                Ok(Typed::new(Reply::Contexts(ContextsReply { list: &self.name })))
-            }
-            (Some(Answer::Session { id, name }), None) => {
-                self.name = name;
-                self.label_bytes = label_bytes(&login_labels);
-                let reply = LoginReply { session: id, name: &self.name, labels: &self.label_bytes };
-                Ok(Typed::new(Reply::Login(reply)))
-            }
-            (Some(Answer::Lease { id, name }), None) => {
-                self.name = name;
-                Ok(Typed::new(Reply::StartAgent(StartAgentReply { lease: id, name: &self.name })))
-            }
-            (Some(Answer::Request { id }), None) => {
-                Ok(Typed::new(Reply::Submit(SubmitReply { request: id })))
-            }
-            // A notice the core takes without an answer (a channel's close) is answered empty;
-            // the core answers only its refusal.
-            (Some(Answer::Ok) | None, Some(reply)) => Ok(Typed::new(reply)),
-            (Some(Answer::Refused(r)), _) => Err(error(r)),
-            // An answer this operation has no reply for, or none: the core's unknown.
-            _ => Err(ErrorCode::Unknown),
-        }
+        replied(answer, ok, &login_labels, &mut self.name, &mut self.label_bytes)
     }
 }
 

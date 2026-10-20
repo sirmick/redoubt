@@ -3450,6 +3450,60 @@ fn latency_end(log: &str) -> Result<Option<u64>, String> {
     Ok(end)
 }
 
+/// The `start_agent` windows the steward printed, `LATENCY-LAUNCH <arrival> <answer>` in µs on
+/// its clock, each a launch's arrival at the steward to its answer, up to the window's end.
+fn launches(log: &str) -> Result<Vec<(u64, u64)>, String> {
+    let mut windows = Vec::new();
+    for line in log.lines().map(|line| unprefixed(line.trim_end_matches('\r'))) {
+        if line.starts_with("LATENCY-END ") {
+            break;
+        }
+        let Some(rest) = line.strip_prefix("LATENCY-LAUNCH ") else { continue };
+        let bad = || format!("malformed {line:?}");
+        let f: Vec<u64> =
+            rest.split_whitespace().map(|v| v.parse::<u64>().map_err(|_| bad())).collect::<Result<_, _>>()?;
+        match f[..] {
+            [arrival, answer] if arrival <= answer => windows.push((arrival, answer)),
+            _ => return Err(bad()),
+        }
+    }
+    Ok(windows)
+}
+
+/// `deadline_notice_in_launch=1`: every deadline notice's deadline (its window's start) fell
+/// inside a printed launch window, so the notice was sent while a launch was in flight: the
+/// quantity `steward-launch-overlap` judges. A notice outside every window, or no window at all,
+/// is a failing verdict, not a pass (the overlap the case stages did not happen).
+fn deadline_notices_in_launches(
+    samples: &BTreeMap<(usize, &str), Vec<(u64, u64)>>,
+    launches: &[(u64, u64)],
+) -> Result<String, String> {
+    let m = MEASURES.iter().position(|x| *x == "deadline_notice").expect("a measure");
+    let notices: Vec<u64> = samples
+        .range((m, "")..(m + 1, ""))
+        .flat_map(|(_, w)| w.iter().map(|(end, gross)| end - gross))
+        .collect();
+    if notices.is_empty() {
+        return Err("deadline_notice_in_launch is set, but the log holds no deadline_notice sample".into());
+    }
+    if launches.is_empty() {
+        return Err("deadline_notice_in_launch is set, but the log holds no LATENCY-LAUNCH window".into());
+    }
+    for d in &notices {
+        if !launches.iter().any(|(a, b)| a <= d && d <= b) {
+            return Err(format!(
+                "deadline_notice_in_launch: the deadline at {d} µs fell inside no start_agent window ({} windows: {launches:?})",
+                launches.len()
+            ));
+        }
+    }
+    Ok(format!(
+        "{} deadline notices, each with its deadline inside one of {} start_agent windows",
+        notices.len(),
+        launches.len()
+    ))
+}
+
 /// Keeps the entries of `v` whose `mask` is set: the destructions' vectors stay aligned.
 fn keep<T>(v: &mut Vec<T>, mask: &[bool]) {
     let mut i = 0;
@@ -3649,7 +3703,12 @@ fn sections(sections: &[Section], waits: &[(u64, u64, u64)]) -> String {
 /// mark weight `mark`, its device's owner ([`check_irq_billed_to`]); `deadline_preempts=N` needs
 /// every timer interrupt that destroyed another budget by its deadline to preempt its runner, and
 /// N of them ([`check_deadline_preempts`]). A `CALL-BOUNDS` line in the log is judged on a
-/// `hold-trace` kernel's sections ([`check_call_bounds`]).
+/// `hold-trace` kernel's sections ([`check_call_bounds`]). `deadline_notice_in_launch=1` needs
+/// every deadline notice's deadline inside a `LATENCY-LAUNCH` window the steward printed
+/// ([`deadline_notices_in_launches`]). `record=<width>:<harts>:<group>:<measure>:<quantile>`
+/// names one cell the case records rather than judges (the bench appends the boot's `width=`):
+/// its number and target are printed, a miss there is no verdict, and the finding that owns it
+/// is on the page.
 pub fn run(log: &str, args: &str) -> Result<String, String> {
     let records = parse(log)?;
     let mut sum = check(&records)?;
@@ -3690,7 +3749,23 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
     let mut carve_return = false;
     let mut round = false;
     let mut lift_delay = false;
+    // The boot's width, which the bench appends, and the cells a case records rather than
+    // judges: `record=<width>:<harts>:<group>:<measure>:<quantile>`, a finding owned elsewhere,
+    // its target unmoved.
+    let mut width: Option<&str> = None;
+    let mut recorded: Vec<&str> = Vec::new();
     for arg in args.split_whitespace() {
+        if let Some(w) = arg.strip_prefix("width=") {
+            width = Some(w);
+            continue;
+        }
+        if let Some(cell) = arg.strip_prefix("record=") {
+            if cell.split(':').count() != 5 {
+                return Err(format!("malformed record cell {arg:?}: width:harts:group:measure:quantile"));
+            }
+            recorded.push(cell);
+            continue;
+        }
         if arg == "cluster" {
             if cluster {
                 return Err("duplicate cluster check".into());
@@ -3772,6 +3847,7 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
             "irq_wake_no_preempt",
             "irq_billed_to",
             "deadline_preempts",
+            "deadline_notice_in_launch",
         ]
         .contains(&name)
             || measure.is_some_and(|m| MEASURES.contains(&m))
@@ -3913,6 +3989,9 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
     }
     // Each measure in each group, net of the audits inside its windows.
     let (mut lines, mut missed, mut decision_p99) = (Vec::new(), false, None::<u64>);
+    if bounds.contains_key("deadline_notice_in_launch") {
+        lines.push(deadline_notices_in_launches(&samples, &launches(log)?)?);
+    }
     // The old control's cluster envelope targets: whether any of them missed.
     let mut cluster_missed = false;
     for (m, measure) in MEASURES.iter().enumerate() {
@@ -3950,10 +4029,30 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
             let stats =
                 |v: &mut Vec<u64>| (percentile(v, 50), percentile(v, 99), v.last().copied().unwrap_or(0));
             let ((g50, g99, gmax), (n50, n99, nmax)) = (stats(&mut gross), stats(&mut net));
+            // A cell the case records, not judges: its number and target are printed, its miss
+            // is nobody's verdict here (a finding on the scheduling page owns it).
+            let cell = |q: &str| {
+                width.is_some_and(|w| {
+                    recorded.iter().any(|r| *r == format!("{w}:{harts}:{group}:{measure}:{q}"))
+                })
+            };
             let judged: Vec<(String, bool)> = want
                 .iter()
                 .filter_map(|(q, b)| {
-                    b.map(|b| (format!("{q} <= {b}"), if *q == "p50" { n50 } else { n99 } <= *b))
+                    b.map(|b| {
+                        let ok = if *q == "p50" { n50 } else { n99 } <= *b;
+                        if cell(q) {
+                            (
+                                format!(
+                                    "{q} <= {b}: {}, recorded, not judged",
+                                    if ok { "met" } else { "missed" }
+                                ),
+                                true,
+                            )
+                        } else {
+                            (format!("{q} <= {b}"), ok)
+                        }
+                    })
                 })
                 .collect();
             let met = judged.iter().all(|(_, ok)| *ok);
@@ -6111,6 +6210,52 @@ mod tests {
         let n16 =
             "N=16 driver_wake (1): net p50/p99/max 50/50/50 µs, gross 50/50/50, audits 0 µs: target missed";
         assert!(v.as_ref().is_err_and(|e| e.contains(n1) && e.contains(n16)), "{v:?}");
+        // `deadline_notice_in_launch=1`: each notice's deadline (its window's start) inside a
+        // printed start_agent window; outside every window, or with none printed, a failing
+        // verdict, and without the flag the windows are not looked at.
+        let overlapped = audited(
+            "LATENCY-LAUNCH 90 120\nLATENCY-LAUNCH 150 400\n\
+             LATENCY-SAMPLE N=2 deadline_notice 160 60\nLATENCY-SAMPLE N=2 deadline_notice 235 35\n\
+             LATENCY-COUNT N=2 deadline_notice 2\n",
+        );
+        let ok = run(&overlapped, "deadline_notice_in_launch=1 deadline_notice_p99_us=40");
+        assert!(
+            ok.as_ref().is_ok_and(|s| s
+                .contains("2 deadline notices, each with its deadline inside one of 2 start_agent windows")),
+            "{ok:?}"
+        );
+        let outside = audited(
+            "LATENCY-LAUNCH 150 400\nLATENCY-SAMPLE N=2 deadline_notice 160 60\nLATENCY-COUNT N=2 deadline_notice 1\n",
+        );
+        assert!(
+            run(&outside, "deadline_notice_in_launch=1")
+                .is_err_and(|e| e.contains("deadline at 100 µs fell inside no start_agent window"))
+        );
+        assert!(run(&outside, "").is_ok());
+        let none =
+            audited("LATENCY-SAMPLE N=2 deadline_notice 160 60\nLATENCY-COUNT N=2 deadline_notice 1\n");
+        assert!(
+            run(&none, "deadline_notice_in_launch=1").is_err_and(|e| e.contains("no LATENCY-LAUNCH window"))
+        );
+        let backwards = audited(
+            "LATENCY-LAUNCH 5 4\nLATENCY-SAMPLE N=2 deadline_notice 160 60\nLATENCY-COUNT N=2 deadline_notice 1\n",
+        );
+        assert!(run(&backwards, "deadline_notice_in_launch=1").is_err_and(|e| e.contains("malformed")));
+        // A recorded cell: named with the boot's width and hart count, its miss is printed and
+        // is no verdict; another width's or hart count's cell, or no width, judges as before.
+        let one = audited("LATENCY-SAMPLE N=1 timer_wake 160 60\nLATENCY-COUNT N=1 timer_wake 1\n");
+        let kept = run(&one, "timer_wake_p99_us=5 width=rv32 record=rv32:1:N=1:timer_wake:p99");
+        assert!(
+            kept.as_ref().is_ok_and(|s| s.contains("p99 <= 5: missed, recorded, not judged")),
+            "{kept:?}"
+        );
+        assert!(run(&one, "timer_wake_p99_us=5 width=rv64 record=rv32:1:N=1:timer_wake:p99").is_err());
+        assert!(run(&one, "timer_wake_p99_us=5 width=rv32 record=rv32:2:N=1:timer_wake:p99").is_err());
+        assert!(run(&one, "timer_wake_p99_us=5 record=rv32:1:N=1:timer_wake:p99").is_err());
+        assert!(
+            run(&one, "timer_wake_p99_us=5 width=rv32 record=rv32:1:timer_wake:p99")
+                .is_err_and(|e| e.contains("malformed record cell"))
+        );
         // A bound with no sample, a malformed sample, an unknown measure.
         assert!(run(&audited(""), "timer_wake_p99_us=5").is_err_and(|e| e.contains("no timer_wake sample")));
         assert!(run(&audited("LATENCY-SAMPLE N=1 timer_wake 5\n"), "").is_err());
