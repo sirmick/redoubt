@@ -1,0 +1,292 @@
+1:  24cbee6d3 = 1:  24cbee6d3 serving: an override may key an account's unlabelled bucket, and ipd's account= argument names one
+2:  da1b2338a ! 2:  279eac93d ipd: alice's account gets 32 sockets, and ipd's heap holds every socket it may make
+    @@ Commit message
+         heap cap has it derived so, and the bench's per-entry check holds them to it. As a backstop,
+         `new_socket` reserves its buffers fallibly: a failure answers `too_many`, a `listen` whose backlog
+         cannot be made changes nothing, and ipd says `ipd: an invariant broke: ...` once, a line every boot
+    -    case forbids; sizing makes it unreachable. smoltcp's socket set and ipd's socket table are sized at
+    -    start for every socket, so neither grows while serving: a slot of 432 bytes and two entries of 240
+    -    on 64-bit, 912 of the 1,024 bytes `SOCKET_BYTES` allows beside the buffers, which the build asserts.
+    +    case forbids. smoltcp's socket set and ipd's socket table are sized at start, so neither grows while
+    +    serving: the set for every socket, a slot of 432 bytes on 64-bit, and the table for twice as many
+    +    entries of 240, since a listener whose backlog was accepted while its bucket was full keeps its
+    +    entry and no socket; past that a socket or a `listen` is refused `too_many` where the table grew
+    +    without bound before (a host test drives listeners past the sockets). A slot and two entries are 912
+    +    of the 1,024 bytes `SOCKET_BYTES` allows beside the buffers, which the build asserts.
+         `Sizing::heap_holds` and `Sizing::budget_need` are the one statement of the heap and budget terms,
+    -    for ipd's start and the bench's check alike. The skeleton's fid, connection and request records
+    -    are on the heap but costed in the budget; they grow fallibly, so a heap they fill refuses
+    -    `no_memory`, a residual ipd.md states with its arithmetic. ipd's args fuzz target, which still
+    -    called `sizing()` with no arguments and asserted a scope for every `limits=` entry, takes the new
+    -    signature and lets an `account=` entry have none.
+    +    for ipd's start and the bench's check alike. The skeleton's fid, connection and request records are
+    +    on the heap but costed in the budget; they grow fallibly, so a heap they fill refuses `no_memory`,
+    +    and past the base's margin they can leave a socket's buffers no room, the one way the backstop's
+    +    line is reachable: a residual ipd.md states with its arithmetic, which no case reaches. ipd's args
+    +    fuzz target, which still called `sizing()` with no arguments and asserted a scope for every
+    +    `limits=` entry, takes the new signature and lets an `account=` entry have none.
+     
+         The image gives alice's account `account=1001:5:4:32`, bob none: 36 `State` units, 64 fids. Seven
+         buckets need 3,602,432 bytes (880 pages) and 108 sockets a heap of 74 + 459 = 533 pages, 1,541 of
+    @@ Commit message
+         36 / 3 = 12 units, 11 sockets, where the defaults gave 3. session-tcp-churn, both widths: she
+         opens, echoes and closes 11 connections to the bench's peer, and the twelfth, while they linger in
+         TIME-WAIT, is refused emfile; the peer counts 11 connections and the capture 11 SYNs. ipd.md,
+    -    serving.md's R26, beamlet.md, testbench.md's memory table (ipd's heap cap; re-measured on rv64, its stack peak
+    -    13,768 bytes, and its heap peak 61 pages, 37 as before and 24 of socket tables now sized at start)
+    -    and SECURITY.md follow.
+    +    serving.md's R26, beamlet.md, testbench.md's memory table (ipd's heap cap; re-measured on rv64,
+    +    its stack peak 13,768 bytes, and its heap peak 61 pages, 37 as before and 24 of socket tables now
+    +    sized at start) and SECURITY.md follow.
+     
+    -    Size budget: servers/ipd: the heap term and its start check, the socket tables sized at start,
+    -    and the fallible socket backstop with its once-said line, forty-seven lines
+    +    Size budget: servers/ipd: the heap term and its start check, the socket tables sized at start
+    +    and bounded, and the fallible socket backstop with its once-said line, fifty-two lines
+     
+         Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+     
+    @@ docs/servers/ipd.md: through the churn, then Alice's echo on the same connection
+      ### Sizing
+      
+     -<details><summary>Status: built · tested (15)</summary>
+    -+<details><summary>Status: built · tested (19)</summary>
+    ++<details><summary>Status: built · tested (20)</summary>
+      
+      - host:redoubt-ipd::every_scope_and_the_milestone_parse
+      - host:redoubt-ipd::anything_else_stops_ipd
+    @@ docs/servers/ipd.md: through the churn, then Alice's echo on the same connection
+     +- host:redoubt-ipd::a_heap_that_cannot_hold_every_socket_stops_ipd
+     +- host:redoubt-ipd::a_heap_cap_short_of_its_sockets_stops_ipd_before_it_serves
+     +- host:redoubt-ipd::a_socket_the_heap_cannot_hold_is_refused_and_noted
+    ++- host:redoubt-ipd::a_full_table_refuses_a_listen_or_a_socket
+      - host:testbench::every_manifest_entry_holds_its_buckets_at_their_caps
+      - host:redoubt-ipd::clone_stops_at_the_buckets_socket_cap
+      - host:redoubt-ipd::sockets_stop_at_the_buckets_cap
+    @@ docs/servers/ipd.md: reserved around each request that may make one and held unt
+     +stack's 128 the entry needs 1,541 of its 4,096 (`sshd`'s and the steward's overrides beside five
+     +defaults need 4,775,936 bytes of budget). A heap short of its sockets would fail an allocation in
+     +the middle of a request, a panic, and one person could stop `ipd` for everyone. smoltcp's socket
+    -+set and `ipd`'s socket table are sized at start for every socket, so neither grows while serving: a
+    -+socket holds its slot, 432 bytes on 64-bit, and at most two entries of 240, its own and a
+    -+listener's (a listener lasts only while its backlog holds a socket), 912 of the 1,024 bytes
+    -+`SOCKET_BYTES` allows beside its buffers, a bound the build asserts on each width; the image's 108
+    -+sockets' tables are 98,496 bytes, held from the start. The bench
+    ++set and `ipd`'s socket table are sized at start, so neither grows while serving: the set for every
+    ++socket, a slot of 432 bytes on 64-bit, and the table for twice as many entries of 240, a socket's
+    ++own and listeners', since a listener whose backlog was accepted while its bucket was full keeps
+    ++its entry and no socket; past that a socket or a `listen` is refused `too_many`. A slot and two
+    ++entries are 912 of the 1,024 bytes `SOCKET_BYTES` allows beside a socket's buffers, a bound the
+    ++build asserts on each width; the image's 108 sockets' tables are 98,496 bytes, held from the
+    ++start. The bench
+     +holds every manifest's `ipd` entry to the rule
+     +(`every_manifest_entry_holds_its_buckets_at_their_caps`), and `ipd` refuses at start.
+     +
+     +**A backstop, not the policy.** Should a socket's buffers ever fail to fit, the socket is refused
+     +`too_many`, a `listen` whose backlog cannot be made changes nothing, and `ipd` says once
+    -+`ipd: an invariant broke: the heap could not hold a socket's buffers`. Sizing makes the line
+    -+unreachable, so every boot case forbids it ([the test bench](../testbench.md)).
+    ++`ipd: an invariant broke: the heap could not hold a socket's buffers`. The line is reachable only
+    ++at the records' residual ([residual risks](#residual-risks)), which no case reaches, so every boot
+    ++case forbids it ([the test bench](../testbench.md)).
+      
+      ### Sequence numbers and the link
+      
+    @@ docs/servers/ipd.md: tests run in an unedited copy outside the tree.
+     -- **Bad arguments, or limits that do not fit its budget:** `ipd` exits before serving.
+     +- **Bad arguments, limits that do not fit its budget, or a heap cap that does not hold every
+     +  socket's buffers ([sizing](#sizing)):** `ipd` exits before serving.
+    -+- **A socket's buffers do not fit the heap:** sizing makes it unreachable; should it happen, the
+    ++- **A socket's buffers do not fit the heap:** reachable only at the records' residual
+    ++  ([residual risks](#residual-risks)); should it happen, the
+     +  socket is refused `too_many` and `ipd` says once that an invariant broke. The decision is a
+     +  backstop, not a panic, because a failed allocation in a shared server would stop it for every
+     +  client, and the line makes the broken invariant a failure every boot case sees.
+    @@ docs/servers/ipd.md: Status: built · tested: host:redoubt-ipd::no_link_is_unrea
+     +  every cap hold 391,168 bytes of them, 95.5 pages (a default bucket's 24 fids, 12 units and 128
+     +  requests are 51,200 bytes, alice's 64, 36 and 128 are 83,968), against the 37 pages the base
+     +  leaves above `ipd`'s measured peak. Every such record grows its table fallibly, so a heap they
+    -+  fill refuses the request `no_memory`, a refusal of the moment, never a panic; the sockets' own
+    -+  heap is held apart. Counting the records in the heap term too is the follow-up.
+    ++  fill refuses the request `no_memory`, a refusal of the moment, never a panic. It is one heap, so
+    ++  records past that margin, several buckets at their request caps together and never one person's
+    ++  alone, can also leave a socket's buffers no room: the socket is refused `too_many` and `ipd`
+    ++  says its invariant line, which is reachable only here. Every boot case still forbids the line,
+    ++  since none reaches this residual. Counting the records in the heap term too is the follow-up.
+      - **A shared `ipd` is shared state.** Its clients share one stack's memory, timers and link; where
+        that matters, each trust domain gets its own `ipd`.
+      - **smoltcp is vendored code.** It is read and built from the tree, not fetched, but a bug in it is a
+    @@ docs/testbench.md: under [the case file](#the-case-file)).
+     -`PANIC`, `TEST FAILED` and `WARNING: INSECURE`. After the last `expect`, and any sessions, the bench
+     +pattern ever matches, and the boot ends as the case says. Four patterns are always forbidden:
+     +`PANIC`, `TEST FAILED`, `WARNING: INSECURE`, and `ipd: an invariant broke`, the line `ipd` says
+    -+if a socket's buffers ever fail to fit its heap, which its sizing makes unreachable
+    -+([ipd](servers/ipd.md#sizing)). After the last `expect`, and any sessions, the bench
+    ++if a socket's buffers ever fail to fit its heap, reachable only at a residual of its sizing that no
+    ++case reaches ([ipd](servers/ipd.md#sizing)). After the last `expect`, and any sessions, the bench
+      keeps reading for 50 ms (1 s in a checked build), so a forbidden line right after the last expected
+      one still fails the case. With `poweroff = true` it reads instead until QEMU exits, and requires the
+      exit status the case names (0 by default; 255 for an SBI system failure). A boot that ends, or
+    @@ servers/ipd/src/bin/ipd.rs: pub const NO_ENDPOINT: u32 = 2;
+      /// The kernel would give no random word for the minted badges.
+      pub const NO_RESOURCES: u32 = 7;
+      
+    -+/// Said once if a socket's buffers ever fail to fit the heap: sizing makes that unreachable
+    -+/// (servers/ipd.md, "Sizing"), so it is an invariant broken, the socket refused `too_many`.
+    ++/// Said once if a socket's buffers ever fail to fit the heap: an invariant broken, reachable only
+    ++/// at the records' residual (servers/ipd.md, "Residual risks"), the socket refused `too_many`.
+     +pub const HEAP_SHORT: &str = "ipd: an invariant broke: the heap could not hold a socket's buffers\n";
+     +
+      /// The startup-block names of `ipd`'s handles (servers/init.md, "The startup block").
+    @@ servers/ipd/src/stack.rs: struct Entry {
+          share: u64,
+      }
+      
+    -+/// What a socket holds of the heap beyond its buffers: its slot in smoltcp's set and at most two
+    -+/// table entries, its own and a listener's (a listener lasts only while its backlog holds a socket),
+    -+/// both tables sized for every socket at start so neither grows: within what
+    -+/// [`crate::sizing::SOCKET_BYTES`] allows beside the two buffers, 1,024 bytes, on either width.
+    ++/// What a socket holds of the heap beyond its buffers: its slot in smoltcp's set and two table
+    ++/// entries, the table being held to twice `max_sockets` entries (a socket's own, and listeners',
+    ++/// which may outlast their backlog), past which a socket or a listen is refused `too_many`; both
+    ++/// tables are sized at start so neither grows: within what [`crate::sizing::SOCKET_BYTES`] allows
+    ++/// beside the two buffers, 1,024 bytes, on either width.
+     +const _: () = assert!(
+     +    size_of::<SocketStorage<'static>>() + 2 * size_of::<Entry>()
+     +        <= crate::sizing::SOCKET_BYTES as usize - 2 * BUFFER
+    @@ servers/ipd/src/stack.rs: struct Entry {
+          /// A listener on `port` its owner still holds.
+          fn listens_on(&self, port: u16) -> bool {
+     @@ servers/ipd/src/stack.rs: pub struct Stack<N: Netif, E: Entropy> {
+    +     next_id: u64,
+    +     /// The most sockets that may exist at once, every bucket at its cap.
+    +     max_sockets: usize,
+    ++    /// The most entries the table may hold: twice `max_sockets`, its capacity from the start.
+    ++    max_entries: usize,
+          meter: Meter,
+          /// (bucket, share) of each metered socket removed, for the server to give back.
+          freed: Vec<(AdmitKey, u64)>,
+    @@ servers/ipd/src/stack.rs: impl<N: Netif, E: Entropy> Stack<N, E> {
+     +            table: Vec::with_capacity(2 * max_sockets),
+                  next_id: 1,
+                  max_sockets,
+    ++            max_entries: 2 * max_sockets,
+                  meter: Meter::Closed,
+                  freed: Vec::new(),
+     +            heap_short: false,
+    @@ servers/ipd/src/stack.rs: impl<N: Netif, E: Entropy> Stack<N, E> {
+          }
+      
+     @@ servers/ipd/src/stack.rs: impl<N: Netif, E: Entropy> Stack<N, E> {
+    -         paid && self.charged(key) + more <= cap && self.live() + more <= self.max_sockets
+    +     }
+    + 
+    +     /// Whether `more` sockets may be charged to `key`, whose bucket's cap is `cap`: under that
+    +-    /// cap and the whole stack's, and paid for by the request's reservation.
+    ++    /// cap and the whole stack's, paid for by the request's reservation, and with room for an
+    ++    /// entry each in the table.
+    +     fn room(&self, key: AdmitKey, cap: usize, more: usize) -> bool {
+    +         let paid = match self.meter {
+    +             Meter::Off => true,
+    +             Meter::Closed => more == 0,
+    +             Meter::Open(room) => room.key == key && room.left >= more,
+    +         };
+    +-        paid && self.charged(key) + more <= cap && self.live() + more <= self.max_sockets
+    ++        paid && self.charged(key) + more <= cap
+    ++            && self.live() + more <= self.max_sockets
+    ++            && self.table.len() + more <= self.max_entries
+          }
+      
+     -    fn new_socket(&mut self) -> SocketHandle {
+    @@ servers/ipd/src/stack.rs: impl<N: Netif, E: Entropy> Stack<N, E> {
+     -            tcp::SocketBuffer::new(vec![0; BUFFER]),
+     -        );
+     -        self.sockets.add(socket)
+    -+    /// A smoltcp socket with its two buffers, or `too_many` if the heap cannot hold them. Sizing
+    -+    /// makes that unreachable (the heap cap holds every socket the buckets may charge,
+    -+    /// servers/ipd.md, "Sizing"), so a failure is an invariant broken: refused, never a panic,
+    -+    /// and noted for the program to say ([`Stack::take_heap_short`]).
+    ++    /// A smoltcp socket with its two buffers, or `too_many` if the heap cannot hold them. The heap
+    ++    /// cap holds every socket the buckets may charge (servers/ipd.md, "Sizing"), so only the
+    ++    /// skeleton's records past their stated residual can make it fail ("Residual risks"): an
+    ++    /// invariant broken, refused, never a panic, and noted for the program to say
+    ++    /// ([`Stack::take_heap_short`]).
+     +    fn new_socket(&mut self) -> Result<SocketHandle, CtlError> {
+     +        let buffer = || {
+     +            let mut bytes = Vec::new();
+    @@ servers/ipd/src/stack.rs: impl<N: Netif, E: Entropy> Stack<N, E> {
+              self.push(owner, group, Some(n), Kind::Fresh(handle), share);
+              Ok(n)
+     @@ servers/ipd/src/stack.rs: impl<N: Netif, E: Entropy> Stack<N, E> {
+    -         if !self.room(owner.key, cap, usize::from(backlog) - 1) {
+    +             return Err(CtlError::InUse);
+    +         }
+    +         // The socket `clone` made is the first of the backlog; the rest need room.
+    +-        if !self.room(owner.key, cap, usize::from(backlog) - 1) {
+    ++        // The rest of the backlog needs room for its sockets, and every socket of it, the first
+    ++        // included, an entry of its own beside the listener's.
+    ++        let entries = self.table.len() + usize::from(backlog);
+    ++        if !self.room(owner.key, cap, usize::from(backlog) - 1) || entries > self.max_entries {
+                  return Err(CtlError::TooMany);
+              }
+     +        // The rest of the backlog is made before anything changes, so a failure changes nothing.
+    @@ servers/ipd/tests/sizing.rs: fn the_worst_case_must_fit_or_ipd_does_not_start()
+     +    );
+      }
+     
+    + ## servers/ipd/tests/stack.rs ##
+    +@@ servers/ipd/tests/stack.rs: fn syn_to(port: u16) -> smoltcp::wire::TcpRepr<'static> {
+    +         payload: &[],
+    +     }
+    + }
+    ++
+    ++/// A listener whose backlog was accepted while its bucket was full keeps its entry and no socket,
+    ++/// so listeners can outnumber sockets: the table is held to twice the sockets (4 here, for 2), and a
+    ++/// listen or a socket past it is refused `too_many`, never a table that grows.
+    ++#[test]
+    ++fn a_full_table_refuses_a_listen_or_a_socket() {
+    ++    let mut w = World::unmetered(2);
+    ++    let who = owner(&caller(22, 0, &[]));
+    ++    for (i, port) in [22u16, 23, 24].into_iter().enumerate() {
+    ++        let n = w.nine.fs.stack.allocate(who, 22, 1).unwrap();
+    ++        w.nine.fs.stack.listen(who, n, &listen_scope(22, 25), port, 1, 1).unwrap();
+    ++        let _peer = w.peer.connect(GATEWAY, 41000 + i as u16, port);
+    ++        w.run_for(200_000, 10_000);
+    ++        // Accepted at a cap of 1: the backlog cannot be refilled, so the listener has none.
+    ++        let Ok(Ready::Now((Status::Listening, m))) = w.nine.fs.stack.status(who, n, 1) else {
+    ++            panic!("no accept on {port}")
+    ++        };
+    ++        w.nine.fs.stack.release(who, m, false, w.now).unwrap();
+    ++        w.run_for(200_000, 10_000);
+    ++        assert_eq!(w.nine.fs.stack.live(), 0, "the accepted socket is gone; its listener stays");
+    ++    }
+    ++    // Three listeners hold three entries: a socket takes the fourth, and its listen, which would
+    ++    // need a fifth, is refused; with the table full so is another socket.
+    ++    let n = w.nine.fs.stack.allocate(who, 22, 1).unwrap();
+    ++    assert_eq!(w.nine.fs.stack.listen(who, n, &listen_scope(22, 25), 25, 1, 1), Err(CtlError::TooMany));
+    ++    w.nine.fs.stack.release(who, n, false, w.now).unwrap();
+    ++    assert_eq!(w.nine.fs.stack.allocate(who, 22, 2), Err(CtlError::TooMany));
+    ++}
+    +
+      ## tests/data/beamlet-compile-footprint/manifest.json ##
+     @@
+            "handed": [ { "endpoint": "ipd", "badge": "3" } ],
+    @@ tests/size-budget.toml: max_lines = 1590
+      name = "servers/ipd"
+      paths = ["servers/ipd/src"]
+     -max_lines = 2926
+    -+max_lines = 2973
+    ++max_lines = 2978
+      
+      [[crate]]
+      name = "servers/init"
+    @@ tools/testbench/src/case.rs: use std::path::{Path, PathBuf};
+     -/// Output that fails any boot test, on top of the case's own `forbid` list.
+     -pub const ALWAYS_FORBIDDEN: &[&str] = &["PANIC", "TEST FAILED", "WARNING: INSECURE"];
+     +/// Output that fails any boot test, on top of the case's own `forbid` list. `ipd`'s line for a
+    -+/// socket its heap could not hold is one: sizing makes it unreachable (servers/ipd.md, "Sizing").
+    ++/// socket its heap could not hold is one: reachable only at a residual of its sizing that no case
+    ++/// reaches (servers/ipd.md, "Sizing").
+     +pub const ALWAYS_FORBIDDEN: &[&str] =
+     +    &["PANIC", "TEST FAILED", "WARNING: INSECURE", "ipd: an invariant broke"];
+      

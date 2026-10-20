@@ -1388,3 +1388,49 @@ on the carve's domain). Lesson for my notes: an ordering change in the steward's
 never cosmetic — a line's place is a claim the bench reads. SCHED5 phase 1 launched: both rows on
 main with the kept trace, the arm from the timer's arming against the slice, to me before any
 kernel change; its brief follows that measurement.
+
+## Owner's answers 2026-10-20 → WEIGHT1, IPD2 (architect-oct20)
+
+- **Q1 → WEIGHT1.** The image's steward at 1,000 under `system`, and every manifest copying the
+  image's steward entry. init.md "Weights" already says 1000: the image was the outlier. Brief
+  `.wash/local/WEIGHT1-implementer.md`. Tier A (system weight, R12), S, kernel-red-4.
+- **Q2 → a line in WEIGHT1.** "No launch weight" becomes a rule sentence with its reason on
+  steward.md "Residual risks" (the launch bullet): the pages state the launch's measured share but
+  not the decision.
+- **Q4 → IPD2.** The recommendation said the mechanism existed (`limits=` per scope badge); it does
+  not reach a session: `limits=` overrides account-0 root badges only, and a session's `/net`,
+  minted by the steward's grant, is admitted in the session's account bucket from its first
+  request (serving.md). Ruling: an account override, `account=ACCOUNT:INFLIGHT:STATE:SOCKETS` in
+  `ipd`'s args, applied to the account's unlabelled bucket (ipd refuses labelled callers, R60);
+  the serving library's `Override` gains the account key, the worst-case rule unchanged; the share
+  rule within the bucket unchanged; the number lives in ipd's args alone (the manifest is the one
+  source, as for sshd and the steward), no principal key, no init/steward change. The image:
+  `account=1001:5:4:32`. Fids bind live sockets at 64/2 less dirs; TIME-WAIT holds no fid. The
+  heap cap's claim to hold every socket's buffers is checked against max_sockets × 17,408; a gap
+  today is a finding first. Size M, not S. Brief `.wash/local/IPD2-implementer.md`.
+- **Q5.** No line needed: agents.md (harness, loop, escape room "planned · M5") and
+  m5-self-hosted.md (steps 2, 6, 7) already place them. Noted for the editor, not a node: agents.md's
+  "Delegation only narrows", "Labels and vaults", "No credentials in agent memory" still read
+  "planned · M3" though much is built (sub-agents, labelled-agent-no-sink); a status-line pass.
+
+## IPD2-sizing: the heap cap does not hold the sockets (architect-oct20)
+
+Finding (.wash/local/IPD2-sizing.md): ipd.md says the heap cap holds every socket's buffers;
+it holds about 8 above the idle peak, and past that `new_socket` panics: a user can crash a
+shared server, and the image's own defaults (alice 3+3, bob 5) reach it. Ruling: options 1 + 3,
+inside IPD2 (not a separate B node: IPD2 is the package that rewrites this arithmetic, and its new
+case is the attack that crashes ipd on main).
+1. **Count each socket once, where it lives.** ipd refuses to start unless heap_pages x page >=
+   the base (the measured working set at twice its peak, 74 pages today) + max_sockets x
+   SOCKET_BYTES. In the same change the budget term costs a `State` unit as a connection
+   (CONNECTION_BYTES), not as a socket: the buffers are the heap term's. If that Cost change
+   reaches past ipd's sizing, keep the double count and name it a residual on ipd.md instead.
+   Every manifest with an ipd entry gets heap_pages derived the same way; the bench's
+   per-entry manifest check counts the heap term. Owned paths widen to those manifests and that
+   check.
+2. **A backstop, not a channel.** `new_socket` reserves fallibly: a failure answers `too_many` and
+   prints one ipd line saying an invariant broke. With (1) that line is unreachable, so the boot
+   cases forbid it.
+3. **Pages.** The rule and its arithmetic go on ipd.md "Sizing", with "Bad arguments, or limits
+   that do not fit its budget" extended to the heap; testbench.md's memory table gets ipd's row;
+   SECURITY.md gets an R26 row if a row names this crash. Size L.

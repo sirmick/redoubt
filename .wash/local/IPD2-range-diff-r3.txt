@@ -1,0 +1,31 @@
+1:  24cbee6d3 = 1:  24cbee6d3 serving: an override may key an account's unlabelled bucket, and ipd's account= argument names one
+2:  279eac93d ! 2:  bebc40b22 ipd: alice's account gets 32 sockets, and ipd's heap holds every socket it may make
+    @@ Commit message
+         fuzz target, which still called `sizing()` with no arguments and asserted a scope for every
+         `limits=` entry, takes the new signature and lets an `account=` entry have none.
+     
+    -    The image gives alice's account `account=1001:5:4:32`, bob none: 36 `State` units, 64 fids. Seven
+    +    The image gives alice's account `account=1001:5:4:32`, bob none, and the boot profile's unverified
+    +    copy of the image takes the same entry: 36 `State` units, 64 fids. Seven
+         buckets need 3,602,432 bytes (880 pages) and 108 sockets a heap of 74 + 459 = 533 pages, 1,541 of
+         the entry's 4,096 with the stack. Her SSH session beside her console session has a share of
+         36 / 3 = 12 units, 11 sockets, where the defaults gave 3. session-tcp-churn, both widths: she
+    @@ tests/data/boot-profile/manifest-unverified.json
+            "args": ["client=5"] },
+          { "name": "ipd", "program": "ipd",
+     -      "stack_pages": "7", "heap_pages": "74",
+    -+      "stack_pages": "7", "heap_pages": "431",
+    ++      "stack_pages": "7", "heap_pages": "533",
+            "budget": { "pages": "4096", "processes": 1, "weight": 100 },
+            "receives": ["ipd"],
+            "handed": [ { "endpoint": "netd", "badge": "5" } ],
+    +       "args": ["addr=10.0.2.15/24", "gateway=10.0.2.2", "ingress=3",
+    +-               "scope=4:c:0.0.0.0/0:1-65535", "scope=6:l:22", "buckets=7"] },
+    ++               "scope=4:c:0.0.0.0/0:1-65535", "scope=6:l:22", "buckets=7",
+    ++               "account=1001:5:4:32"] },
+    +     { "name": "walfsd:data", "program": "walfsd",
+    +       "stack_pages": "14", "heap_pages": "64",
+    +       "budget": { "pages": "2816", "processes": 1, "weight": 100 },
+     
+      ## tests/data/pipe/manifest.json ##
+     @@

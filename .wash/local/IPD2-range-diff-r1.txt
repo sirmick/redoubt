@@ -1,0 +1,274 @@
+1:  24cbee6d3 = 1:  24cbee6d3 serving: an override may key an account's unlabelled bucket, and ipd's account= argument names one
+2:  62c048249 ! 2:  da1b2338a ipd: alice's account gets 32 sockets, and ipd's heap holds every socket it may make
+    @@ Commit message
+         heap cap has it derived so, and the bench's per-entry check holds them to it. As a backstop,
+         `new_socket` reserves its buffers fallibly: a failure answers `too_many`, a `listen` whose backlog
+         cannot be made changes nothing, and ipd says `ipd: an invariant broke: ...` once, a line every boot
+    -    case forbids; sizing makes it unreachable.
+    +    case forbids; sizing makes it unreachable. smoltcp's socket set and ipd's socket table are sized at
+    +    start for every socket, so neither grows while serving: a slot of 432 bytes and two entries of 240
+    +    on 64-bit, 912 of the 1,024 bytes `SOCKET_BYTES` allows beside the buffers, which the build asserts.
+    +    `Sizing::heap_holds` and `Sizing::budget_need` are the one statement of the heap and budget terms,
+    +    for ipd's start and the bench's check alike. The skeleton's fid, connection and request records
+    +    are on the heap but costed in the budget; they grow fallibly, so a heap they fill refuses
+    +    `no_memory`, a residual ipd.md states with its arithmetic. ipd's args fuzz target, which still
+    +    called `sizing()` with no arguments and asserted a scope for every `limits=` entry, takes the new
+    +    signature and lets an `account=` entry have none.
+     
+         The image gives alice's account `account=1001:5:4:32`, bob none: 36 `State` units, 64 fids. Seven
+         buckets need 3,602,432 bytes (880 pages) and 108 sockets a heap of 74 + 459 = 533 pages, 1,541 of
+    @@ Commit message
+         36 / 3 = 12 units, 11 sockets, where the defaults gave 3. session-tcp-churn, both widths: she
+         opens, echoes and closes 11 connections to the bench's peer, and the twelfth, while they linger in
+         TIME-WAIT, is refused emfile; the peer counts 11 connections and the capture 11 SYNs. ipd.md,
+    -    serving.md's R26, beamlet.md, testbench.md's memory table (ipd's heap cap, and its stack peak
+    -    re-measured at 13,736 bytes on rv64, its heap peak unchanged at 37 pages) and SECURITY.md follow.
+    +    serving.md's R26, beamlet.md, testbench.md's memory table (ipd's heap cap; re-measured on rv64, its stack peak
+    +    13,768 bytes, and its heap peak 61 pages, 37 as before and 24 of socket tables now sized at start)
+    +    and SECURITY.md follow.
+     
+    -    Size budget: servers/ipd: the `account=` argument, the heap term and its start check, and the
+    -    fallible socket backstop with its once-said line, forty lines
+    +    Size budget: servers/ipd: the heap term and its start check, the socket tables sized at start,
+    +    and the fallible socket backstop with its once-said line, forty-seven lines
+     
+         Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+     
+    @@ docs/servers/ipd.md: reserved around each request that may make one and held unt
+     +**Each socket is counted once, where it lives.** A socket's buffers are two 8 KiB heap blocks of
+     +two pages each, with smoltcp's state for it (432 bytes on 64-bit): `SOCKET_BYTES`, 17,408 bytes,
+     +4.25 pages, is what a socket costs the heap. So the heap cap holds a base, `HEAP_BASE_PAGES` = 74,
+    -+twice `ipd`'s largest measured heap peak ([the memory budget](../testbench.md#the-memory-budget)),
+    -+and every socket that can exist at once, `max_sockets` × `SOCKET_BYTES`. The budget, the entry's
+    ++twice `ipd`'s largest measured heap peak apart from its socket tables, 37 pages
+    ++([the memory budget](../testbench.md#the-memory-budget)), and every socket that can exist at once,
+    ++`max_sockets` × `SOCKET_BYTES`. The budget, the entry's
+     +pages less its heap cap and stack, holds every bucket at its caps by the entry rule
+     +([walfsd](walfsd.md#serving)), a `State` unit at a connection's 512 bytes, the buffers being the
+     +heap's. `ipd` does not start unless both hold; with no heap cap, the budget holds the sockets'
+    @@ docs/servers/ipd.md: reserved around each request that may make one and held unt
+     +at their worst are 6 × 12 + 36 = 108, so the heap cap is 74 + 108 × 4.25 = 533 pages, and with the
+     +stack's 128 the entry needs 1,541 of its 4,096 (`sshd`'s and the steward's overrides beside five
+     +defaults need 4,775,936 bytes of budget). A heap short of its sockets would fail an allocation in
+    -+the middle of a request, a panic, and one person could stop `ipd` for everyone. The socket table's
+    -+own growth, 432 bytes a socket, doubling, is inside the base's margin over the peak. The bench
+    ++the middle of a request, a panic, and one person could stop `ipd` for everyone. smoltcp's socket
+    ++set and `ipd`'s socket table are sized at start for every socket, so neither grows while serving: a
+    ++socket holds its slot, 432 bytes on 64-bit, and at most two entries of 240, its own and a
+    ++listener's (a listener lasts only while its backlog holds a socket), 912 of the 1,024 bytes
+    ++`SOCKET_BYTES` allows beside its buffers, a bound the build asserts on each width; the image's 108
+    ++sockets' tables are 98,496 bytes, held from the start. The bench
+     +holds every manifest's `ipd` entry to the rule
+     +(`every_manifest_entry_holds_its_buckets_at_their_caps`), and `ipd` refuses at start.
+     +
+    @@ docs/servers/ipd.md: tests run in an unedited copy outside the tree.
+     -- **Bad arguments, or limits that do not fit its budget:** `ipd` exits before serving.
+     +- **Bad arguments, limits that do not fit its budget, or a heap cap that does not hold every
+     +  socket's buffers ([sizing](#sizing)):** `ipd` exits before serving.
+    ++- **A socket's buffers do not fit the heap:** sizing makes it unreachable; should it happen, the
+    ++  socket is refused `too_many` and `ipd` says once that an invariant broke. The decision is a
+    ++  backstop, not a panic, because a failed allocation in a shared server would stop it for every
+    ++  client, and the line makes the broken invariant a failure every boot case sees.
+      - **`netd` fails:** `ipd` answers `unreachable` and asks `netd` again with backoff; it stays up.
+      - **A client disconnects:** every socket of the connection is aborted and its charges returned.
+      - **`ipd` restarts:** every socket is gone; clients ask for fresh connections
+    +@@ docs/servers/ipd.md: Status: built · tested: host:redoubt-ipd::no_link_is_unreachable_until_it_comes
+    + - **Connection rates are observable.** Unlabelled principals sharing one `ipd` can see each other's
+    +   connection rate in admission-slot occupancy and CPU and queue timing; no label boundary is crossed,
+    +   since labelled callers are refused.
+    ++- **The skeleton's records are costed in the budget, and live in the heap.** Fids, minted
+    ++  connections and multiplexed requests are records on `ipd`'s heap, while sizing costs them in the
+    ++  budget's term (512, 512 and 256 bytes), not the heap's. At those costs the image's buckets at
+    ++  every cap hold 391,168 bytes of them, 95.5 pages (a default bucket's 24 fids, 12 units and 128
+    ++  requests are 51,200 bytes, alice's 64, 36 and 128 are 83,968), against the 37 pages the base
+    ++  leaves above `ipd`'s measured peak. Every such record grows its table fallibly, so a heap they
+    ++  fill refuses the request `no_memory`, a refusal of the moment, never a panic; the sockets' own
+    ++  heap is held apart. Counting the records in the heap term too is the follow-up.
+    + - **A shared `ipd` is shared state.** Its clients share one stack's memory, timers and link; where
+    +   that matters, each trust domain gets its own `ipd`.
+    + - **smoltcp is vendored code.** It is read and built from the tree, not fetched, but a bug in it is a
+     
+      ## docs/servers/serving.md ##
+     @@ docs/servers/serving.md: holder's labels.
+    @@ docs/testbench.md: character but tab, DEL among them, and trailing space after t
+      line as it came and as it is shown, so a forbidden word split by a sequence is caught, and so is a
+      raw sequence a case forbids (`'\x1b'`). The console log keeps every line as it came, and `distinct`
+      and a `post_check` read that log.
+    +@@ docs/testbench.md: rounded up to pages, each heap cap in pages. `sshd` is sized for its four slots
+    + `buckets=4`, [sshd](servers/sshd.md#sessions-over-ssh)) busy at once: its
+    + heap held 8 pages at boot, 54 with one login (rv32, before the boot pack) and 56 with two at once,
+    + so at most 46 a connection, and its cap is twice 8 pages and four connections, 384. Its declared
+    +-stack is a page over twice its peak. `consoled`'s row is from the runs once it serves each
+    ++stack is a page over twice its peak. `ipd`'s cap is not twice its peak either: it holds a base of
+    ++twice its peak apart from its socket tables, 2 × 37 = 74 pages, and every socket its buckets may
+    ++charge, its buffers, its slot and its table entries, 108 × 4.25 = 459 pages, since a socket the
+    ++heap could not hold would fail an allocation in a shared server ([ipd](servers/ipd.md#sizing)).
+    ++Its peak of 61 pages holds those tables, sized at start for its 108 sockets, 24 pages beside the 37
+    ++of everything else. `consoled`'s row is from the runs once it serves each
+    + session's console as a multiplexed session. The two `walfsd` rows are one server's, from six runs of
+    + `walfsd-quota`, three on each width, which writes through it, as the image's memory cases do not
+    + (their boots peak at 16,040 bytes of stack and 9 heap pages); its heap cap is also above what a
+     @@ docs/testbench.md: additional client from the merged manifest.
+      | `bootfsd` | 7,320 | 4 | 1,089 | 2,304 (the image publishes `beamlet`, `piped`, `consrelay` and `crossing`, and the cap follows each manifest's own published total) |
+      | `blkd` | 4,520 | 3 | 19 | 38 |
+      | `netd` | 4,296 | 3 | 2 | 4 |
+     -| `ipd` | 13,672 | 7 | 37 | 74 |
+    -+| `ipd` | 13,736 | 7 | 37 | 533 (twice its peak, 74, and its buckets' 108 sockets' buffers, which the cap must hold, [ipd](servers/ipd.md#sizing)) |
+    ++| `ipd` | 13,768 | 7 | 61 | 533 (twice its peak apart from its socket tables, 74, and its buckets' 108 sockets' buffers, which the cap must hold, [ipd](servers/ipd.md#sizing)) |
+      | `walfsd:data` | 28,616 | 14 | 15 | 64 |
+      | `walfsd:alice-secrets` | 28,616 | 14 | 15 | 64 |
+      | `blkd:system` | 4,520 | 3 | 17 | 34 |
+    @@ servers/ipd/src/sizing.rs: pub const DEFAULT_STATE: u32 = 4;
+      pub const REQUESTS: u32 = 128;
+      pub const PAGES: u32 = 32;
+     -/// What one socket costs: its two buffers and smoltcp's state for it.
+    -+/// What one socket costs the heap: its two buffers, a large block of two pages each, and
+    -+/// smoltcp's state for it (432 bytes on 64-bit) with `ipd`'s entry, generously.
+    ++/// What one socket costs the heap: its two buffers, a large block of two pages each, and its slot
+    ++/// in smoltcp's set with two entries of `ipd`'s table, 912 bytes on 64-bit (asserted in
+    ++/// `crate::stack`), both tables sized at start.
+      pub const SOCKET_BYTES: u64 = 2 * crate::stack::BUFFER as u64 + 1024;
+    -+/// The heap `ipd` holds beside its sockets' buffers, in pages: twice its largest measured heap
+    -+/// peak (testbench.md, "The memory budget"), its own tables and records.
+    ++/// The heap `ipd` holds beside its sockets, in pages: twice its largest measured heap peak apart
+    ++/// from its socket tables, 37 pages (testbench.md, "The memory budget").
+     +pub const HEAP_BASE_PAGES: u64 = 74;
+      /// What a parked call costs: the lend it holds (at most `MAX_LEND_PAGES`) until it is answered.
+      pub const PARKED_BYTES: u64 = redoubt_rt::abi::MAX_LEND_PAGES as u64 * redoubt_rt::abi::PAGE_SIZE as u64;
+    @@ servers/ipd/src/sizing.rs: pub struct Sizing {
+          pub need: u64,
+     +    /// The least heap cap, in pages, that holds every socket beside the base ([`heap_pages_for`]).
+     +    pub heap_pages: u64,
+    ++}
+    ++
+    ++impl Sizing {
+    ++    /// Whether a heap cap of `heap_pages` holds every socket beside the base; with no cap (0) the
+    ++    /// budget holds them instead ([`Sizing::budget_need`]).
+    ++    pub fn heap_holds(&self, heap_pages: u64) -> bool { heap_pages == 0 || heap_pages >= self.heap_pages }
+    ++
+    ++    /// What the budget must hold beside a heap cap of `heap_pages`: every bucket at its caps, and
+    ++    /// with no cap (0) every socket's heap as well.
+    ++    pub fn budget_need(&self, heap_pages: u64) -> u64 {
+    ++        match heap_pages {
+    ++            0 => self.need.saturating_add(self.heap_pages.saturating_mul(PAGE)),
+    ++            _ => self.need,
+    ++        }
+    ++    }
+      }
+      
+      impl Config {
+    @@ servers/ipd/src/sizing.rs: impl Config {
+              };
+              let need = admission.need(&cost).filter(|need| *need <= budget);
+              let Some(need) = need else { return Err(BadArgs("every bucket at its cap does not fit the budget")) };
+    -+        let least = heap_pages_for(max_sockets);
+    -+        let held = match heap_pages {
+    -+            0 => least
+    -+                .checked_mul(PAGE)
+    -+                .and_then(|heap| heap.checked_add(need))
+    -+                .is_some_and(|all| all <= budget),
+    -+            cap => cap >= least,
+    -+        };
+    -+        if !held {
+    -+            return Err(BadArgs("the heap does not hold every socket's buffers"));
+    -+        }
+              // The stack's own per-bucket count agrees with the admission's cap; the admission, with its
+              // shares, is what binds.
+              let caps = crate::fs::SocketCaps { default: default as usize, overrides: overrides.clone() };
+     -        Ok(Sizing { admission, caps, max_sockets: max_sockets as usize, need })
+    -+        Ok(Sizing { admission, caps, max_sockets: max_sockets as usize, need, heap_pages: least })
+    ++        let heap = heap_pages_for(max_sockets);
+    ++        let sizing = Sizing { admission, caps, max_sockets: max_sockets as usize, need, heap_pages: heap };
+    ++        if !sizing.heap_holds(heap_pages) || sizing.budget_need(heap_pages) > budget {
+    ++            return Err(BadArgs("the heap does not hold every socket's buffers"));
+    ++        }
+    ++        Ok(sizing)
+          }
+      }
+     
+      ## servers/ipd/src/stack.rs ##
+    +@@ servers/ipd/src/stack.rs: use alloc::vec;
+    + use alloc::vec::Vec;
+    + 
+    + use redoubt_rt::server::AdmitKey;
+    +-use smoltcp::iface::{Config, Interface, SocketHandle, SocketSet};
+    ++use smoltcp::iface::{Config, Interface, SocketHandle, SocketSet, SocketStorage};
+    + use smoltcp::socket::tcp::{self, State};
+    + use smoltcp::time::{Duration, Instant};
+    + use smoltcp::wire::{
+    +@@ servers/ipd/src/stack.rs: struct Entry {
+    +     share: u64,
+    + }
+    + 
+    ++/// What a socket holds of the heap beyond its buffers: its slot in smoltcp's set and at most two
+    ++/// table entries, its own and a listener's (a listener lasts only while its backlog holds a socket),
+    ++/// both tables sized for every socket at start so neither grows: within what
+    ++/// [`crate::sizing::SOCKET_BYTES`] allows beside the two buffers, 1,024 bytes, on either width.
+    ++const _: () = assert!(
+    ++    size_of::<SocketStorage<'static>>() + 2 * size_of::<Entry>()
+    ++        <= crate::sizing::SOCKET_BYTES as usize - 2 * BUFFER
+    ++);
+    ++
+    + impl Entry {
+    +     /// A listener on `port` its owner still holds.
+    +     fn listens_on(&self, port: u16) -> bool {
+     @@ servers/ipd/src/stack.rs: pub struct Stack<N: Netif, E: Entropy> {
+          meter: Meter,
+          /// (bucket, share) of each metered socket removed, for the server to give back.
+    @@ servers/ipd/src/stack.rs: pub struct Stack<N: Netif, E: Entropy> {
+      
+      fn instant(us: u64) -> Instant { Instant::from_micros(i64::try_from(us).unwrap_or(i64::MAX)) }
+     @@ servers/ipd/src/stack.rs: impl<N: Netif, E: Entropy> Stack<N, E> {
+    +             net,
+    +             mac: None,
+    +             iface: None,
+    +-            sockets: SocketSet::new(vec![]),
+    +-            table: Vec::new(),
+    ++            // Sized once for every socket that may exist, so neither table grows while serving
+    ++            // (servers/ipd.md, "Sizing"; the bound below `Entry`).
+    ++            sockets: SocketSet::new(Vec::with_capacity(max_sockets)),
+    ++            table: Vec::with_capacity(2 * max_sockets),
+    +             next_id: 1,
+                  max_sockets,
+                  meter: Meter::Closed,
+                  freed: Vec::new(),
+    @@ tests/size-budget.toml: max_lines = 1590
+      name = "servers/ipd"
+      paths = ["servers/ipd/src"]
+     -max_lines = 2926
+    -+max_lines = 2966
+    ++max_lines = 2973
+      
+      [[crate]]
+      name = "servers/init"
+    @@ tools/testbench/src/case.rs: mod tests {
+     -                        Ok(config) => config.sizing(u64::MAX).unwrap().need,
+     +                        Ok(config) => {
+     +                            let sizing = config.sizing(u64::MAX, 0).unwrap();
+    -+                            match server.get("heap_pages").map_or(0, number) {
+    -+                                0 => sizing.need + sizing.heap_pages * page,
+    -+                                heap => {
+    -+                                    assert!(
+    -+                                        heap >= sizing.heap_pages,
+    -+                                        "{path:?} {}: a heap cap of {heap} pages holds fewer than its {} \
+    -+                                         sockets' buffers beside the base: at least {}",
+    -+                                        server["name"],
+    -+                                        sizing.max_sockets,
+    -+                                        sizing.heap_pages
+    -+                                    );
+    -+                                    sizing.need
+    -+                                }
+    -+                            }
+    ++                            let heap = server.get("heap_pages").map_or(0, number);
+    ++                            assert!(
+    ++                                sizing.heap_holds(heap),
+    ++                                "{path:?} {}: a heap cap of {heap} pages holds fewer than its {} sockets' \
+    ++                                 buffers beside the base: at least {}",
+    ++                                server["name"],
+    ++                                sizing.max_sockets,
+    ++                                sizing.heap_pages
+    ++                            );
+    ++                            sizing.budget_need(heap)
+     +                        }
+                              Err(_) => continue,
+                          },
