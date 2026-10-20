@@ -81,7 +81,7 @@
       "args": ["endpoint=erofsd:system", "buckets=6"] },
     { "name": "steward", "program": "steward",
       "stack_pages": "9", "heap_pages": "128",
-      "budget": { "pages": "1024", "processes": 1, "weight": 100 },
+      "budget": { "pages": "1024", "processes": 1, "weight": 1000 },
       "receives": ["steward"],
       "handed": [ { "endpoint": "bootfsd", "badge": "7" }, { "endpoint": "erofsd:system", "badge": "7" },
                   { "endpoint": "walfsd:data", "badge": "7" },
