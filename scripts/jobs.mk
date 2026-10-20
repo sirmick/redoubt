@@ -28,6 +28,19 @@
 #                              rv64/<case> and rv32/<case>); add -k to run every one past a failure
 #   list / list-classes        the case names; every class's members
 #
+# The machine's QEMU lock (docs/testbench.md "On a shared host"): a whole bench (cases-*, quiet-*,
+# all-*, or a set holding every case of the boot, quiet or net class) is what the timed cases'
+# bounds are measured under, with QEMU its alone for the run, so one make invocation of those
+# targets holds q's `qemu` lock exclusively from before its first case to its own exit (the
+# `qemu-held` target: a lock-only lease, `q run --cores 0 --lock qemu`, whose command ends when
+# this make's pid is gone, so the hold ends with the lease by any exit path, a killed make
+# included); a second whole bench waits for the first. Every single boot case (a case with an
+# `arch`, run by name or by a smaller set) takes the lock shared, `q run --share qemu`: single
+# boots run beside each other as before, and one started while a whole bench holds the lock
+# waits, printing one line naming the holder and since when (in its log, and echoed with its
+# result), then runs; it never fails for the wait. A case that boots nothing (no `arch`, or a host-tests or Elixir kind) takes no lock. A
+# boot by hand (`cargo testbench --smp N` sweeps, `./launch`) takes it shared the same way.
+#
 # Classes (docs/testbench.md "On a shared host"):
 #   quiet   host-clock cases: crates asserting wall-clock bounds (rt, client, r4),
 #           bench-ssh-guest and the loopback deadline case (they expect a timeout), and the
@@ -71,6 +84,14 @@ boot := $(filter-out $(quiet) $(net) $(fanned) $(bounded),$(cases))
 hostonly := $(sort $(basename $(notdir $(shell grep -LE '^arch *=' tests/*.toml))))
 # cases out of the whole run: only by their own target
 byname := $(sort $(basename $(notdir $(shell grep -lE '^whole_run *= *false' tests/*.toml))))
+# a whole bench: a whole-run target among the goals, or a set holding every case of a boot class
+covers = $(if $(filter-out $(CASES),$(1)),,yes)
+whole := $(filter cases-rv64 cases-rv32 quiet-rv64 quiet-rv32 all-rv64 all-rv32,$(MAKECMDGOALS)) \
+	$(if $(and $(filter set,$(MAKECMDGOALS)),$(or $(call covers,$(boot)),$(call covers,$(quiet)),$(call covers,$(net)))),set)
+whole := $(strip $(whole))
+# the QEMU lock a case's lease takes: shared for a single boot, nothing under a whole bench (it
+# holds the lock) or for a case that boots nothing
+share = $(if $(whole)$(filter $(1),$(hostonly)),,--share qemu)
 logs := target/jobs
 prebuilt := target/prebuilt
 # cores for a boot case on a width: its largest smp value there (default 1): the one list, or the
@@ -80,7 +101,7 @@ smp = $(or $(lastword $(sort $(shell line=$$(grep -E '^smp *=' tests/$(1).toml 2
 ports = $(if $(filter-out 0,$(1)),--ports $(1))
 ports_of = $(call ports,$(shell grep -oE '[0-9]+' <<< "$$(grep -E '^forward *=' tests/$(1).toml 2>/dev/null)" | wc -l | xargs -I{} expr {} + $$(grep -cE '^\[net\.poke\]' tests/$(1).toml 2>/dev/null)))
 
-.PHONY: list list-classes docs prebuilt build-rv64 build-rv32 cases-rv64 cases-rv32 quiet-rv64 quiet-rv32 all-rv64 all-rv32 set \
+.PHONY: list list-classes docs prebuilt build-rv64 build-rv32 cases-rv64 cases-rv32 quiet-rv64 quiet-rv32 all-rv64 all-rv32 set qemu-held \
 	$(addprefix rv64/,$(cases)) $(addprefix rv32/,$(cases))
 
 list:
@@ -98,22 +119,35 @@ prebuilt:
 build-rv64 build-rv32: build-%:
 	@mkdir -p $(logs); $(q) run --cores 8 --name build-$* -- ./build --arch $* --programs > $(logs)/build-$*.log 2>&1; rc=$$?; tail -2 $(logs)/build-$*.log; echo "build-$* rc=$$rc"; exit $$rc
 
+# The whole bench's hold. The lease's command prints `held` once it runs, which is once the
+# lock is this make's, and the recipe returns then, so no case of the run starts before; the
+# command then outlives nothing but this make (the recipe's parent), and the lease, so the hold,
+# ends with it however it ends. A q client waiting for another bench's hold prints the line.
+qemu-held:
+	@exec 3< <($(q) run --cores 0 --lock qemu --name "bench $(notdir $(CURDIR))" -- bash -c 'echo held; while kill -0 "$$1" 2>/dev/null; do sleep 1; done' _ $$PPID)
+	read -r held <&3; echo "qemu lock held for this run ($(CURDIR)) from $$(date -u +%H:%M:%SZ)"
+
+ifneq ($(whole),)
+$(addprefix rv64/,$(cases)) $(addprefix rv32/,$(cases)): | qemu-held
+endif
+
 define case_recipe
 @mkdir -p $(logs); w=$(@D); c=$(@F)
 bench=(cargo testbench); [ -f $(prebuilt)/$$w/index.json ] && bench=($(prebuilt)/testbench --prebuilt $(prebuilt))
 $(q) run $(1) --name $$w/$$c -- "$${bench[@]}" --exact --arch $$w $$c --keep-failed $(logs) > $(logs)/$$w-$$c.log 2>&1; rc=$$?
+grep -m1 -E '^q: .* waits for the .* lock' $(logs)/$$w-$$c.log || true
 grep -E '^(PASS|FAIL|SKIP)' $(logs)/$$w-$$c.log || tail -5 $(logs)/$$w-$$c.log
 echo "$@ rc=$$rc ($(2))"; exit $$rc
 endef
 
 $(addprefix rv64/,$(boot)) $(addprefix rv32/,$(filter-out $(hostonly),$(boot))): %:
-	$(call case_recipe,--cores $(call smp,$(@F),$(@D)),boot)
+	$(call case_recipe,--cores $(call smp,$(@F),$(@D)) $(call share,$(@F)),boot)
 
 $(addprefix rv64/,$(quiet)) $(addprefix rv32/,$(filter-out $(hostonly),$(quiet))): %:
-	$(call case_recipe,--quiet,quiet)
+	$(call case_recipe,--quiet $(call share,$(@F)),quiet)
 
 $(addprefix rv64/,$(net)) $(addprefix rv32/,$(filter-out $(hostonly),$(net))): %:
-	$(call case_recipe,--cores $(call smp,$(@F),$(@D)) $(call ports_of,$(@F)),net)
+	$(call case_recipe,--cores $(call smp,$(@F),$(@D)) $(call ports_of,$(@F)) $(call share,$(@F)),net)
 
 $(addprefix rv64/,$(fanned)) $(addprefix rv32/,$(filter-out $(hostonly),$(fanned))): %:
 	$(call case_recipe,--cores 2,fanned)

@@ -3,10 +3,12 @@
 
     q daemon [--cores 0-23] [--quiet 20-23] [--ports 23000-23999]
                                              the scheduler (one per machine; `q ping` checks)
-    q run [--cores N] [--quiet] [--lock NAME] [--ports N] [--prio P] [--tenant T] [--name S] -- <cmd...>
+    q run [--cores N] [--quiet] [--lock NAME] [--share NAME] [--ports N] [--prio P] [--tenant T]
+          [--name S] -- <cmd...>
                                              wait for a lease of N cores, run <cmd> pinned to them
                                              (taskset), exit with its code; the lease ends with
-                                             this process, however it ends
+                                             this process, however it ends; --cores 0 leases no
+                                             core and pins nothing: a job that only holds a lock
     q ls                                     the core map, the running jobs, the queue, and a line
                                              per tenant (what it has running and waiting; a make
                                              submits its targets as it reaches them, so a stream's
@@ -24,7 +26,17 @@ TMPDIR, since /tmp may be a RAM filesystem that a sweep's scratch fills.
 Classes are flags, not names to learn:
   --quiet     a host-clock case: runs alone on the reserved quiet core set, one at a time
               among quiet jobs, while everything else keeps running on the general cores
-  --lock NAME a named mutex (one at a time among the jobs naming it, shared otherwise)
+  --lock NAME a named lock, taken exclusively: the job runs alone among every job naming the
+              lock either way, and from the moment it waits no new --share taker of the lock
+              starts ahead of it, so a stream of sharers cannot hold it off; the whole-bench
+              targets of jobs.mk hold `qemu` so for the run, as a lock-only job (--cores 0)
+  --share NAME the same lock taken shared: sharers run beside each other and wait while an
+              exclusive taker holds the lock or waits for it (a single boot case takes `qemu`
+              so, and so runs beside other single boots but never beside a whole bench). A job
+              held on a lock prints one line on stderr naming who holds it and since when, then
+              runs when it is free; it never fails for the wait. A lock is never taken inside a
+              job holding it shared: with an exclusive taker waiting, the inner take would wait
+              on the outer
   --ports N   N consecutive host ports no other lease holds, from the daemon's pool (--ports on
               the daemon, default 23000-23999, below Linux's ephemeral range); the job gets them
               as REDOUBT_PORTS=lo-hi and the bench binds its forwards inside the range, so two
@@ -39,8 +51,8 @@ Classes are flags, not names to learn:
   are at least half its ask (it only runs slower); below that the free cores are held for it,
   and after 180 s it takes whatever is free, so a hold never outlasts the jobs it waits on.
   A restarted daemon adopts the jobs still running under the old one (their taskset pins, and
-  the REDOUBT_PORTS in their environment) and frees their cores and ports as they exit, so a
-  restart never double-books the machine.
+  the REDOUBT_PORTS, Q_LOCK and Q_SHARE in their environment) and frees their cores, ports and
+  locks as they exit, so a restart never double-books the machine or forgets a hold.
   --tenant T  who is asking (default: the worktree, from cwd); tenants share the machine
               round-robin so one cannot starve the rest
 
@@ -119,8 +131,23 @@ def port_free(port):
 # ----------------------------------------------------------------------------- daemon
 
 
+def process_start(pid):
+    """When the process started, as a time.time() value: its start in clock ticks since boot
+    (field 22 of /proc/<pid>/stat, after the parenthesised name) plus the boot time; now if
+    /proc does not say."""
+    try:
+        with open(f"/proc/{pid}/stat") as f:
+            ticks = int(f.read().rsplit(")", 1)[1].split()[19])
+        with open("/proc/stat") as f:
+            btime = int(next(l for l in f if l.startswith("btime")).split()[1])
+        return btime + ticks / os.sysconf("SC_CLK_TCK")
+    except (OSError, ValueError, IndexError, StopIteration):
+        return time.time()
+
+
 class Job:
-    __slots__ = ("conn", "req", "seq", "t_in", "t_start", "cores", "ports", "quiet", "lock", "tenant")
+    __slots__ = ("conn", "req", "seq", "t_in", "t_start", "cores", "ports", "quiet", "lock", "share",
+                 "tenant", "told")
 
     def __init__(self, conn, req, seq):
         self.conn = conn
@@ -132,11 +159,13 @@ class Job:
         self.ports = None  # (lo, hi) once leased
         self.quiet = bool(req.get("quiet"))
         self.lock = req.get("lock") or None
+        self.share = req.get("share") or None
         self.tenant = req.get("tenant") or "?"
+        self.told = False  # the one waiting line a held job is sent
 
     @property
     def want(self):
-        return max(1, int(self.req.get("cores") or 1))
+        return max(0, int(self.req.get("cores") if self.req.get("cores") is not None else 1))
 
     @property
     def want_ports(self):
@@ -146,6 +175,7 @@ class Job:
     def tags(self):
         """The lease's marks for a log or status line."""
         return (f"{' quiet' if self.quiet else ''}{' lock=' + self.lock if self.lock else ''}"
+                f"{' share=' + self.share if self.share else ''}"
                 f"{' ports=%d-%d' % self.ports if self.ports else ''}")
 
     @property
@@ -156,6 +186,12 @@ class Job:
     def name(self):
         return str(self.req.get("name") or " ".join(self.req.get("cmd") or [])[:60])
 
+    def holder(self, waiting=False):
+        """Who this job is, for the line a job held behind it is sent: its tenant, name and
+        cwd, and since when it has held (or waited for) the lock."""
+        return {"tenant": self.tenant, "name": self.name, "cwd": self.req.get("cwd") or "?",
+                "since": self.t_in if waiting else self.t_start, "waiting": waiting}
+
 
 class Daemon:
     def __init__(self, all_cores, quiet_cores, ports):
@@ -165,11 +201,12 @@ class Daemon:
         self.pool = ports  # (lo, hi): the host ports this daemon leases
         self.leased_ports = set()  # every port under a running or adopted lease
         self.quiet_busy = None  # the one quiet job
-        self.locks = {}  # name -> job
+        self.locks = {}  # name -> the job holding it exclusively
+        self.shared = {}  # name -> the jobs holding it shared
         self.waiting = []  # Job, in arrival order
         self.running = {}  # conn -> Job
         self.bufs = {}  # conn -> partial line
-        self.adopted = {}  # pid -> (cores, ports) of a job inherited from a previous daemon
+        self.adopted = {}  # pid -> (cores, ports, Job) of a job inherited from a previous daemon
         self.seq = 0
         self.sel = selectors.DefaultSelector()
         self.log = open(LOG, "a", buffering=1)
@@ -198,9 +235,27 @@ class Daemon:
                 return (port - n + 1, port)
         return None
 
+    def lock_blocker(self, job):
+        """The job that keeps `job` off its lock, or None. An exclusive taker waits for the
+        exclusive holder, then for every sharer; a sharer waits for the exclusive holder, and
+        for an exclusive taker already waiting (writers go first, so a stream of single boots
+        cannot hold a whole bench off)."""
+        if job.lock:
+            if job.lock in self.locks:
+                return self.locks[job.lock]
+            sharers = self.shared.get(job.lock)
+            return min(sharers, key=lambda j: j.t_start) if sharers else None
+        if job.share:
+            if job.share in self.locks:
+                return self.locks[job.share]
+            for j in self.order():
+                if j is not job and j.lock == job.share:
+                    return j
+        return None
+
     def held(self, job):
         """What a job waits on besides cores: its lock, or ports the pool cannot give now."""
-        if job.lock and job.lock in self.locks:
+        if self.lock_blocker(job) is not None:
             return True
         return job.want_ports > 0 and self.find_ports(job.want_ports) is None
 
@@ -244,6 +299,19 @@ class Daemon:
                     self.start(job, sorted(self.free))
                 else:
                     blocked_general = True
+        for job in list(self.waiting):
+            # One line to a job held on a lock, naming who holds it (or waits ahead of it) and
+            # since when, so a member sees why its boot has not started.
+            if job.told or not job.req.get("notify"):
+                continue
+            blocker = self.lock_blocker(job)
+            if blocker is not None:
+                job.told = True
+                try:
+                    job.conn.sendall((json.dumps({"waiting": job.lock or job.share,
+                                                  "holder": blocker.holder(blocker.t_start is None)}) + "\n").encode())
+                except OSError:
+                    self.finish(job.conn)
 
     def start(self, job, cores):
         if job.want_ports:
@@ -258,16 +326,29 @@ class Daemon:
             self.quiet_busy = job
         else:
             self.free -= set(cores)
-        if job.lock:
-            self.locks[job.lock] = job
+        self.take(job)
         self.running[job.conn] = job
         try:
-            job.conn.sendall((json.dumps({"cores": cores, "ports": job.ports}) + "\n").encode())
+            job.conn.sendall((json.dumps({"cores": cores, "ports": job.ports, "share": job.share}) + "\n").encode())
         except OSError:
             self.finish(job.conn)
             return
         self.logline(f"start  {job.tenant} {job.name!r} cores={fmt_cores(cores)}{job.tags}"
                      f" waited={job.t_start - job.t_in:.1f}s")
+
+    def take(self, job):
+        if job.lock:
+            self.locks[job.lock] = job
+        if job.share:
+            self.shared.setdefault(job.share, set()).add(job)
+
+    def release(self, job):
+        if job.lock and self.locks.get(job.lock) is job:
+            del self.locks[job.lock]
+        if job.share and job in self.shared.get(job.share, ()):
+            self.shared[job.share].discard(job)
+            if not self.shared[job.share]:
+                del self.shared[job.share]
 
     def finish(self, conn):
         job = self.running.pop(conn, None)
@@ -282,8 +363,7 @@ class Daemon:
                 self.quiet_busy = None
             else:
                 self.free |= set(job.cores)
-            if job.lock and self.locks.get(job.lock) is job:
-                del self.locks[job.lock]
+            self.release(job)
             if job.ports:
                 self.leased_ports -= set(range(job.ports[0], job.ports[1] + 1))
             self.logline(f"end    {job.tenant} {job.name!r} cores={fmt_cores(job.cores)}{job.tags}"
@@ -304,8 +384,8 @@ class Daemon:
                  f" up {int(now - self.t0)}s"]
         if self.adopted:
             lines.append(f"adopted from the previous daemon: {len(self.adopted)} jobs on "
-                         f"{fmt_cores(c for cs, _ in self.adopted.values() for c in cs)}"
-                         f"{', ports ' + fmt_cores(p for _, ps in self.adopted.values() for p in ps) if any(ps for _, ps in self.adopted.values()) else ''}")
+                         f"{fmt_cores(c for cs, _, _ in self.adopted.values() for c in cs)}"
+                         f"{', ports ' + fmt_cores(p for _, ps, _ in self.adopted.values() for p in ps) if any(ps for _, ps, _ in self.adopted.values()) else ''}")
         lines.append(f"running {len(self.running)}:")
         for j in sorted(self.running.values(), key=lambda j: j.t_start):
             lines.append(f"  {fmt_cores(j.cores):>6}  {int(now - j.t_start):>5}s  {j.tenant:<18} {j.name}"
@@ -314,9 +394,16 @@ class Daemon:
         for j in self.order():
             lines.append(f"  want {j.want:>2}  {int(now - j.t_in):>5}s  p{j.prio} {j.tenant:<18} {j.name}"
                          f"{'  [quiet]' if j.quiet else ''}{'  lock=' + j.lock if j.lock else ''}"
+                         f"{'  share=' + j.share if j.share else ''}"
                          f"{'  ports=%d' % j.want_ports if j.want_ports else ''}")
-        if self.locks:
-            lines.append("locks: " + ", ".join(sorted(self.locks)))
+        for name in sorted(set(self.locks) | set(self.shared)):
+            if name in self.locks:
+                h = self.locks[name]
+                lines.append(f"lock {name}: held by {h.tenant} {h.name!r} ({h.req.get('cwd') or '?'})"
+                             f" since {time.strftime('%H:%M:%S', time.localtime(h.t_start))}"
+                             f" ({int(now - h.t_start)}s)")
+            else:
+                lines.append(f"lock {name}: shared by {len(self.shared[name])}")
         by = {}
         for j in self.running.values():
             r = by.setdefault(j.tenant, [0, 0, 0, 0])
@@ -377,10 +464,11 @@ class Daemon:
             self.finish(conn)
 
     def adopt(self):
-        """Mark the cores and ports of jobs still running under a previous daemon as busy until
-        they exit: the children of every `q run` client, by their CPU affinity (taskset execs the
-        command, so the pin is read from /proc, not from a cmdline) and the REDOUBT_PORTS in
-        their environment (the client sets it for the command, so it is the lease's)."""
+        """Mark the cores, ports and locks of jobs still running under a previous daemon as busy
+        until they exit: the children of every `q run` client, by their CPU affinity (taskset
+        execs the command, so the pin is read from /proc, not from a cmdline) and the
+        REDOUBT_PORTS, Q_LOCK and Q_SHARE in their environment (the client sets them for the
+        command, so they are the lease's); a lock-only job has no pin and is known by its lock."""
         import glob
         runners = set()
         for pid_dir in glob.glob("/proc/[0-9]*"):
@@ -406,29 +494,46 @@ class Daemon:
             except (OSError, ValueError, IndexError):
                 continue
             cores = [c for c in parse_cores(allowed) if c in self.general]
-            if not cores or len(cores) == len(self.general):
-                continue  # unpinned or the whole machine: not one of ours
-            # The ports are best effort: another user's environ is unreadable, and its cores
-            # are still adopted (a job of another user holds no pool port of ours anyway).
+            if len(cores) == len(self.general):
+                cores = []  # the whole machine: no pin of ours
+            # The ports and locks are best effort: another user's environ is unreadable, and its
+            # cores are still adopted (a job of another user holds no pool port or lock of ours).
             try:
                 with open(pid_dir + "/environ", "rb") as f:
                     env = dict(kv.split(b"=", 1) for kv in f.read().split(b"\0") if b"=" in kv)
             except (OSError, ValueError):
                 env = {}
+            if env.get(b"REDOUBT_Q", SOCK.encode()).decode(errors="replace") != SOCK:
+                continue  # a client of another daemon (a q-test's, on a socket of its own)
+            lock = env.get(b"Q_LOCK", b"").decode(errors="replace") or None
+            share = env.get(b"Q_SHARE", b"").decode(errors="replace") or None
+            if not cores and not lock and not share:
+                continue  # unpinned and holding nothing: not one of ours
             leased = parse_range(env.get(b"REDOUBT_PORTS", b"").decode(errors="replace"))
             ports = [p for p in range(leased[0], leased[1] + 1) if self.pool[0] <= p <= self.pool[1]] if leased else []
             pid = int(pid_dir.rsplit("/", 1)[1])
+            # The hold is recorded as a job of its own, so a waiting job's line can name it: its
+            # cwd and name from /proc, its start from the process's.
+            try:
+                cwd = os.readlink(pid_dir + "/cwd")
+            except OSError:
+                cwd = "?"
+            job = Job(None, {"name": b" ".join(a for a in argv[:3] if a).decode(errors="replace")[:60], "cwd": cwd,
+                             "tenant": default_tenant(cwd), "lock": lock, "share": share}, 0)
+            job.t_start = process_start(pid)
             self.free -= set(cores)
             self.leased_ports |= set(ports)
-            self.adopted[pid] = (cores, ports)
+            self.take(job)
+            self.adopted[pid] = (cores, ports, job)
             self.logline(f"adopt  pid {pid} cores={fmt_cores(cores)}{' ports=' + fmt_cores(ports) if ports else ''}"
-                         f" {b' '.join(argv[:3]).decode(errors='replace')[:60]!r}")
+                         f"{' lock=' + lock if lock else ''}{' share=' + share if share else ''} {job.name!r}")
 
     def reap_adopted(self):
-        for pid, (cores, ports) in list(self.adopted.items()):
+        for pid, (cores, ports, job) in list(self.adopted.items()):
             if not os.path.exists(f"/proc/{pid}"):
                 self.free |= set(cores)
                 self.leased_ports -= set(ports)
+                self.release(job)
                 del self.adopted[pid]
                 self.logline(f"freed  pid {pid} cores={fmt_cores(cores)}{' ports=' + fmt_cores(ports) if ports else ''}"
                              f" (adopted job ended)")
@@ -504,9 +609,12 @@ def cmd_run(a, cmd):
         print("q run: no command", file=sys.stderr)
         return 2
     cwd = os.getcwd()
-    req = {"op": "run", "cores": a.cores, "quiet": a.quiet, "lock": a.lock, "ports": a.ports,
-           "prio": a.prio, "tenant": a.tenant or default_tenant(cwd), "name": a.name,
-           "pid": os.getpid(), "cwd": cwd, "cmd": cmd}
+    if a.lock and a.share:
+        print("q run: --lock and --share name one lock each way; take it one way", file=sys.stderr)
+        return 2
+    req = {"op": "run", "cores": a.cores, "quiet": a.quiet, "lock": a.lock, "share": a.share,
+           "ports": a.ports, "prio": a.prio, "tenant": a.tenant or default_tenant(cwd), "name": a.name,
+           "pid": os.getpid(), "cwd": cwd, "cmd": cmd, "notify": True}
     # A lease request survives a daemon restart: resubmit until one answers (up to RETRY_S).
     deadline = time.time() + RETRY_S
     lease = None
@@ -515,12 +623,25 @@ def cmd_run(a, cmd):
             s = connect()
             s.sendall((json.dumps(req) + "\n").encode())
             buf = b""
-            while b"\n" not in buf:
-                chunk = s.recv(4096)
-                if not chunk:
-                    raise ConnectionResetError("the daemon went away before the lease")
-                buf += chunk
-            lease = json.loads(buf.partition(b"\n")[0])
+            while lease is None:
+                while b"\n" not in buf:
+                    chunk = s.recv(4096)
+                    if not chunk:
+                        raise ConnectionResetError("the daemon went away before the lease")
+                    buf += chunk
+                line, _, buf = buf.partition(b"\n")
+                msg = json.loads(line)
+                if "cores" in msg:
+                    lease = msg
+                elif "waiting" in msg:
+                    # Held on a lock: the one line saying by whom and since when.
+                    h = msg["holder"]
+                    since = time.strftime("%H:%M:%S", time.localtime(h["since"]))
+                    ago = int(time.time() - h["since"])
+                    print(f"q: {a.name or 'the job'} waits for the {msg['waiting']} lock: "
+                          f"{h['tenant']} {h['name']!r} ({h['cwd']}) has "
+                          f"{'waited for it' if h['waiting'] else 'held it'} since {since}"
+                          f" ({ago // 60} min {ago % 60} s); it runs when the lock is free", file=sys.stderr)
         except OSError as e:
             if time.time() > deadline:
                 print(f"q: no daemon at {SOCK} ({e}); start one with `q daemon`", file=sys.stderr)
@@ -534,14 +655,28 @@ def cmd_run(a, cmd):
             s.close()
             req["lock"] = PORT_LOCK
             lease = None
+    if a.share and "share" not in lease:
+        # A daemon from before --share knows no shared take: the job runs beside whatever runs,
+        # as before the lock, and says so.
+        print(f"q: the daemon at {SOCK} knows no shared lock; running {a.name or 'the job'} without"
+              f" --share {a.share} (restart the daemon: `q stop`, `q daemon`)", file=sys.stderr)
     cores = lease["cores"]
     n = len(cores)
     env = dict(os.environ)
     for k in ("MAKEFLAGS", "MFLAGS", "MAKELEVEL", "CARGO_MAKEFLAGS"):
         env.pop(k, None)
-    env["CARGO_BUILD_JOBS"] = str(n)
+    env["CARGO_BUILD_JOBS"] = str(max(1, n))
     env["RUST_TEST_THREADS"] = str(max(1, n))
     env["Q_CORES"] = fmt_cores(cores)
+    # The daemon this lease is from, so only a restart of THIS daemon adopts the job (a test
+    # daemon never adopts a machine boot as its sharer), and the lock the lease holds; never a
+    # parent lease's.
+    env["REDOUBT_Q"] = SOCK
+    for k, v in (("Q_LOCK", a.lock), ("Q_SHARE", a.share)):
+        if v:
+            env[k] = v
+        else:
+            env.pop(k, None)
     if lease.get("ports"):
         env["REDOUBT_PORTS"] = "%d-%d" % tuple(lease["ports"])
     else:
@@ -551,7 +686,8 @@ def cmd_run(a, cmd):
     os.makedirs(scratch, exist_ok=True)
     env["REDOUBT_TMP"] = scratch
     env["TMPDIR"] = scratch
-    argv = ["taskset", "-c", ",".join(map(str, cores))] + cmd
+    # A lock-only lease (--cores 0) pins nothing: the command is the hold, not work.
+    argv = (["taskset", "-c", ",".join(map(str, cores))] if cores else []) + cmd
     # Keep the socket open for the whole run: the lease is the connection. The command runs
     # in a process group of its own, so a signal to this client ends everything it started
     # (a bench's QEMU and test binaries included), never leaving orphans on freed cores.
@@ -630,6 +766,7 @@ def main():
         p.add_argument("--cores", type=int, default=1)
         p.add_argument("--quiet", action="store_true")
         p.add_argument("--lock", default=None)
+        p.add_argument("--share", default=None)
         p.add_argument("--ports", type=int, default=0)
         p.add_argument("--prio", type=int, default=int(os.environ.get("Q_PRIO", "5")))
         p.add_argument("--tenant", default=None)
