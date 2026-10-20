@@ -335,7 +335,8 @@ loopback session with a 30 s connect timeout) runs once before any case and deci
 host can serve the kind, never a case's verdict. So a loopback case that asserts no time (13 of
 the 14) passes as a verdict, and a failure that is only its deadline is rerun alone. A case
 that measures with the host's clock is a verdict only alone: the rule asks that no other
-invocation and no build run beside it. Those are a `host-tests` case whose crates' tests assert
+invocation and no build run beside it, and for a whole bench `scripts/jobs.mk` holds that rather
+than asks it, through the scheduler's `qemu` lock (the `scripts/q` paragraph below). Those are a `host-tests` case whose crates' tests assert
 a wall-clock bound (`redoubt-rt`, `redoubt-client`, `redoubt-keyd` and `redoubt-consoled` do;
 `redoubt-ipd`, `redoubt-model` and `testbench` only read the clock), which no tolerance would
 make load-proof; a boot case whose bound is a ratio of two host times (`sched-lock-contention-4-mttcg`:
@@ -382,7 +383,30 @@ machine-wide `--lock net` ran every such case in turn (train 40: 30 cases, 12,36
 waiting, 1,353 s once for a 0.5 s case); a lease ends with the
 client process, so a killed job frees its cores and ports, and a restarted daemon adopts the
 jobs still running, their pins and their ranges, until they end (`scripts/q-test` checks the
-lease on a daemon of its own). A job's scratch goes to `$REDOUBT_TMP`, by
+lease on a daemon of its own). `--lock NAME` takes a named lock exclusively and `--share NAME`
+the same lock shared: sharers run beside each other, an exclusive taker runs alone among the
+jobs naming the lock, and from the moment it waits no new sharer starts ahead of it, so a
+stream of sharers cannot hold it off. The lock `qemu` is how the condition every bound on a time
+holds under, one whole bench at a time with QEMU its alone, is held rather than asked: a whole
+bench (`jobs.mk`'s `cases-*`, `quiet-*` and `all-*` targets, and a `set` holding every case of
+the boot, quiet or net class) takes it exclusively as a lock-only lease (`q run --cores 0 --lock
+qemu`, the `qemu-held` target) before its first case and keeps it to the make invocation's own
+exit, the lease's command ending when make's pid is gone, so the hold ends with the lease by any
+exit path, a killed make or a dead train included, never by a trap or a file; a second whole
+bench waits for the first. Every single boot case, a case with an `arch` run by name or in a
+smaller set, a sweep by hand (`q run --share qemu --cores M -- cargo testbench --smp N`) and
+`launch`'s boot take it shared: single boots run beside each other as before, and one started
+while a whole bench holds the lock waits, printing one line naming the holder (its tenant, its
+name and its checkout) and since when, then runs when the hold ends; it never fails for the
+wait. Under the whole bench's own make its cases take no lock, since the make holds it, and a
+case that boots nothing (no `arch`: the host-tests, Elixir, build, formatting and docs cases)
+takes none: what it measures the lock does not protect, and the quiet set keeps the host-clock
+host tests off the bench's cores. A restarted daemon adopts a running hold as it adopts cores
+and ports (`Q_LOCK` and `Q_SHARE` in the job's environment), `q ls` names the holder and since
+when, and a daemon from before the shared take runs a `--share` job unlocked and says so, as it
+does for ports (restart it). `scripts/q-test` checks the lock as it checks the lease: the
+sharers beside each other, the waits, the line, the hold's end with its client and its
+adoption. A job's scratch goes to `$REDOUBT_TMP`, by
 default `.tmp` at the checkout's root, which git ignores, so removing the checkout removes it;
 the job gets it as `TMPDIR` too, since a host's `/tmp` may be a RAM filesystem a sweep would
 fill. `scripts/jobs.mk` names every case as a make
@@ -411,7 +435,7 @@ the core map and the queue; `q log` the recent jobs with the time each waited an
 `cargo testbench --smp N` boots every boot case once at `N` harts instead of its own counts, but
 a case that keeps them (`keep_smp`), and bounds it by `timeout_secs_smp` where a case gives one;
 since `jobs.mk` leases a case's cores from its own counts,
-such a sweep runs as `q run --cores M -- cargo testbench --smp N`, `M` at least `N`.
+such a sweep runs as `q run --share qemu --cores M -- cargo testbench --smp N`, `M` at least `N`.
 
 **The heavy host cases.** What each costs on the 24-core build host, and the deadline it has
 (each a measured run and a third, unless its row says otherwise):

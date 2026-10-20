@@ -159,8 +159,10 @@ printed: it is the image's development host key, the same at every launch.
   it back.
 - **The port** is on 127.0.0.1 only, and the guest reaches nothing outside QEMU.
 - **The build and the boot** each run under a lease of the machine scheduler, `scripts/q`, when its
-  daemon runs: the boot holds a core per hart, and `launch` says so before QEMU's lease is
-  waited for. Without a daemon, `launch` says so too and runs both at once.
+  daemon runs: the boot holds a core per hart and takes the machine's QEMU lock shared, so it
+  waits while a whole bench holds it (q prints one line saying which and since when), and
+  `launch` says so before QEMU's lease is waited for. Without a daemon, `launch` says so too and
+  runs both at once.
 
 Things to try once you have a prompt:
 
