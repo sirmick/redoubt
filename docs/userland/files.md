@@ -45,7 +45,7 @@ of it; per-file metadata through the server's `set_attr` and `get_attr` is plann
 
 ### Files over 9P
 
-<details><summary>Status: built · partly tested: the host tests run beamlet's platform against the real `littlefsd` on the fake kernel, and OTP's `prim_file` over the natives runs in a boot in bench:beamlet-files; Elixir's `File` over them runs in a session once the steward's sessions do · tested (28)</summary>
+<details><summary>Status: built · partly tested: the host tests run beamlet's platform against the real `littlefsd` on the fake kernel, and OTP's `prim_file` over the natives runs in a boot in bench:beamlet-files; Elixir's `File` over them runs in a session once the steward's sessions do · tested (32)</summary>
 
 - host:beamlet-redoubt::files_are_written_read_listed_renamed_and_removed
 - host:beamlet-redoubt::a_rename_the_volume_refuses_is_eacces
@@ -63,6 +63,9 @@ of it; per-file metadata through the server's `set_attr` and `get_attr` is plann
 - host:beamlet-redoubt::a_close_answered_busy_is_retried_and_its_fid_is_kept_until_the_clunk_is_served
 - host:beamlet-redoubt::a_request_unanswered_past_file_wait_fails_etimedout_and_the_connection_still_serves
 - host:beamlet-redoubt::a_request_busy_past_file_wait_fails_busy
+- host:beamlet-redoubt::an_operations_bound_is_the_sum_of_its_requests
+- host:beamlet-redoubt::a_give_up_on_a_walked_fid_answers_its_asker_before_the_clunk
+- host:beamlet-redoubt::a_fid_given_up_on_is_clunked_when_its_late_answer_comes
 - host:beamlet-redoubt::a_stat_reports_only_what_9p_has
 - host:beamlet-redoubt::what_has_no_9p_field_is_refused_visibly
 - host:beamlet-redoubt::a_field_set_on_a_missing_file_is_enoent
@@ -75,6 +78,7 @@ of it; per-file metadata through the server's `set_attr` and `get_attr` is plann
 - host:beamlet-vm::a_message_does_not_end_a_wait_for_a_file
 - host:beamlet-vm::a_process_killed_while_it_waits_has_its_operation_dropped
 - bench:beamlet-files
+- bench:lease-writes
 
 </details>
 
@@ -105,14 +109,30 @@ neither inside nor above one is `:enoent` ([sessions](sessions.md#namespaces)).
 - **Everything moves in pieces**: a read asks at most what one answer carries (the 64 KiB `msize`
   less its header), a write at most a page, each one request on the VM's hub
   ([asynchronous underneath](beamlet.md#asynchronous-underneath-synchronous-on-top)), so only the
-  Erlang process that asked waits for it. It waits at most `FILE_WAIT_US` (10 s) for each request,
-  `busy` retries counted, and for a connection's place at `MAX_WAITERS`; past that the operation
-  fails with the name of what it waited for (`etimedout` an answer, `ebusy` a share, `emfile` a
-  place), the connection kept and a later answer dropped. A server whose answer cannot be asked
-  for again therefore parks a request for strictly less than that, by a stated margin: `ipd`'s
-  `data` and `ctl` reads for `DATA_WAIT_US` and `CTL_WAIT_US`, 8 s, the 2 s margin the kernel's
-  delivery of the reply, so a read's `timeout` reaches the hub before the hub gives up, and the
-  bytes that arrive after it wait in the socket's buffer for the read made next
+  Erlang process that asked waits for it.
+- **Every hub request ends in exactly one answer to its caller, within its bound.** The
+  operation waits at most `FILE_WAIT_US` (10 s) for each request, `busy` retries counted, and
+  for a connection's place at `MAX_WAITERS`; past that it fails with the name of what it waited
+  for (`etimedout` an answer, `ebusy` a share, `emfile` a place), the connection kept and a
+  later answer dropped, after the caller has its own; the fid that request walked or held is
+  clunked then, as a closed file's is, or its number given back if the walk it asked for failed,
+  so the server lets go of every fid the hub gave up on and the connection's pool recovers (a
+  give-up that kept the fid leaked one at the server and one in the pool per `etimedout`, and
+  under sixteen agents' timeouts drained the account's working pool until the server refused
+  the late starters' first read). The bound is each request's, so an
+  operation's is the sum over its requests: a write to append is a walk, a create or open, a
+  stat, a write per page and a clunk, five or six requests, and one of them took 47 s to fail
+  under sixteen agents' load before it was answered. A fid the operation still holds at its end
+  (a walk whose open the server refused, a request given up on while it waited to go again) is
+  clunked as a closed file's is, off the caller's path: the answer is the caller's at the bound,
+  and the clunk is cleanup, the fid given back when the server answers it. The VM's own calls,
+  its code loading, wait in place with no bound of their own: the hub answers by construction,
+  and a second clock on the same wait would hide a fault of the hub's as a timeout of the VM's.
+  A server whose answer cannot be asked for again therefore parks a request for strictly less
+  than the bound, by a stated margin: `ipd`'s `data` and `ctl` reads for `DATA_WAIT_US` and
+  `CTL_WAIT_US`, 8 s, the 2 s margin the kernel's delivery of the reply, so a read's `timeout`
+  reaches the hub before the hub gives up, and the bytes that arrive after it wait in the
+  socket's buffer for the read made next
   ([pinned and abandoned calls](../servers/ipd.md#pinned-and-abandoned-calls)). None of it waits
   on the VM's thread. The file server's `rename` is a typed call, which no hub carries: it is made
   on the VM's thread.
