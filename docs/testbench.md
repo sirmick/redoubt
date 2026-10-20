@@ -359,7 +359,12 @@ takes once the state it waits on is reached, and the ten-second waits are gone w
 `console.rs` tests held the host's clock the same way — one, `input_nobody_reads_holds_no_idle…`,
 read the idle's 200 ms deadline against the host and under load a read's submit timeout ran out,
 queued the read, and woke the idle early — and hold the fake's clock too now, each deadline a step,
-the console server's session bound crossed by the ticks that cross it. The kinds that boot
+the console server's session bound crossed by the ticks that cross it. A tick is taken only once
+every other thread of the fake is in a wait, and a thread a change has woken counts as waiting
+only when it waits again: before that, a tick could fall between a server's answer and the
+waiter's hand-over of it whenever the host had not yet run the waiter, and on a loaded host the
+busy-retry test's retry fell past its last tick and the platform's end waited for it on a clock
+nobody moved, about one `./test-shell` run in ten. The kinds that boot
 nothing (`build`, `fmt`, `no-cruft`, the size and `unsafe` budgets, the docs checker, the Elixir
 oracles) have no clock, and are verdicts anywhere, but for a `timeout_secs`: as for a boot, a
 host-tests job or an Elixir case that only ran out of its deadline beside other work is rerun
