@@ -266,12 +266,20 @@ impl Served {
     pub fn start(
         own: impl FnMut(&mut NineServer<Files>, Request) -> Result<(), Error> + Send + 'static,
     ) -> Served {
+        // Room in one client's share for every fid a connection can hold.
+        Served::start_with(128, own)
+    }
+
+    /// As [`Served::start`], with `files` fids per bucket.
+    pub fn start_with(
+        files: u32,
+        own: impl FnMut(&mut NineServer<Files>, Request) -> Result<(), Error> + Send + 'static,
+    ) -> Served {
         let f = fake();
         let server = f.process(0, &[]);
         let receive = f.endpoint(server);
         let thread = f.run(server, move || {
-            // Room in one client's share for every fid a connection can hold.
-            let limits = Limits { buckets: 8, in_flight: 0, files: 128, state: 8, requests: 0, pages: 0 };
+            let limits = Limits { buckets: 8, in_flight: 0, files, state: 8, requests: 0, pages: 0 };
             let mut nine = NineServer::new(Files::new(), limits, 0x5eed).unwrap();
             let endpoint = Endpoint::from_handle(receive);
             let mut own = own;

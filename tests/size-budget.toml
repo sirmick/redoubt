@@ -66,12 +66,12 @@ max_lines = 93
 [[crate]]
 name = "libs/client"
 paths = ["libs/client/src"]
-max_lines = 1124
+max_lines = 1142
 
 [[crate]]
 name = "libs/rt"
 paths = ["libs/rt/src"]
-max_lines = 4059
+max_lines = 4106
 
 [[crate]]
 name = "libs/wire"

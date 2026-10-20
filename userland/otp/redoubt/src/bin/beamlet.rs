@@ -20,8 +20,9 @@
 //! `erofsd` that reads the volume through its `verityd` ([`beamlet_redoubt::userland`]), and before
 //! them the volume's boot pack, read whole once at start ([`beamlet_redoubt::pack`]). A volume that
 //! does not attach, a pack that cannot be read or is malformed, or a start module that cannot be
-//! read, parks it: it says why and waits, never exiting, so a tampered disk is not a restart loop
-//! that reboots the machine.
+//! read, ends it by its console: with one it says why and waits, never exiting, so a tampered
+//! disk is not a restart loop that reboots the machine; without one (a lease's VM) it exits, its
+//! code the diagnostic, rather than hold its budget in silence ([`end`]).
 
 #![cfg_attr(target_os = "none", no_std, no_main)]
 // On the host the program is only built, never run (`redoubt_rt::entry!`).
@@ -99,25 +100,25 @@ fn start(startup: &Startup) -> u32 {
         say(startup, &format!("beamlet: no {volume} handle"));
         return USAGE;
     };
-    // A volume served as corrupt refuses every attach: it parks, as a start module that does
-    // not load does.
+    // A volume served as corrupt refuses every attach: the VM ends as one whose start module
+    // does not load does (`end`).
     let mut files = match System::attach(Endpoint::from_handle(system)) {
         Ok(files) => files,
-        Err(e) => park(startup, &format!("beamlet: {volume} did not attach: {e:?}; parked")),
+        Err(e) => return end(startup, &format!("beamlet: {volume} did not attach: {e:?}")),
     };
     // The boot pack, read whole before anything else: a pack that cannot be read, or does not
-    // check, parks the VM as a start module that cannot load does.
+    // check, ends the VM as a start module that cannot load does.
     let pack = match files.read_pack() {
         Ok(bytes) => match Pack::parse(bytes) {
             Ok(pack) => Some(pack),
-            Err(why) => park(startup, &format!("beamlet: {} refused: {why}; parked", pack::FILE)),
+            Err(why) => return end(startup, &format!("beamlet: {} refused: {why}", pack::FILE)),
         },
         Err(Unread::Absent) => {
             say(startup, &format!("beamlet: no {} on the userland volume", pack::FILE));
             None
         }
         Err(Unread::Failed(why)) => {
-            park(startup, &format!("beamlet: {} not loaded: {why}; parked", pack::FILE))
+            return end(startup, &format!("beamlet: {} not loaded: {why}", pack::FILE));
         }
     };
     #[cfg(feature = "boot-stats")]
@@ -134,7 +135,7 @@ fn start(startup: &Startup) -> u32 {
     }
     let mut modules = Disk::with_pack(files, pack);
     // The start module, read before the VM runs anything, unless the pack holds it: if it cannot
-    // load, the VM parks.
+    // load, the VM ends.
     let start_file = format!("{module}.beam");
     let packed = modules.packs(&start_file);
     let start = if packed { Ok(Vec::new()) } else { modules.load(&start_file) };
@@ -144,7 +145,7 @@ fn start(startup: &Startup) -> u32 {
             say(startup, &format!("beamlet: {module} is not on the userland volume"));
             return USAGE;
         }
-        Err(Unloaded::Refused(why)) => park(startup, &format!("beamlet: {module} not loaded: {why}; parked")),
+        Err(Unloaded::Refused(why)) => return end(startup, &format!("beamlet: {module} not loaded: {why}")),
     }
     // Where the start module is: the boot pack, or its own file on the volume.
     let from = if packed { "the boot pack" } else { volume };
@@ -168,22 +169,39 @@ fn heap_pages() -> Option<(u64, u64)> {
 #[cfg(not(target_os = "none"))]
 fn heap_pages() -> Option<(u64, u64)> { None }
 
-/// Says `line` and waits for good: a disk that would only fail again is never a restart loop.
-fn park(startup: &Startup, line: &str) -> ! {
-    say(startup, line);
-    loop {
-        let _ = sleep(FOREVER);
+/// Ends a VM that cannot start, its volume not attached or its boot pack or start module not
+/// read, by what it has to say so on (docs/userland/beamlet.md, "beamlet on Redoubt"). With a
+/// console, it says `line` there and waits for good: the line is read where it was said, and a
+/// disk that would only fail again is never a restart loop that reboots the machine. Without
+/// one, a lease's VM (docs/userland/agents.md, "Leases"), waiting would be silent, a budget held
+/// to its deadline with nothing said: it exits, and its exit code, the one thing the steward's
+/// `lease ... exited` line carries, is the diagnostic, 1 in a default build and
+/// [`beamlet_redoubt::NOT_READ`] under `exit-kinds`.
+fn end(startup: &Startup, line: &str) -> u32 {
+    match console(startup) {
+        Some(console) => {
+            beamlet_redoubt::say(&console, &format!("{line}; parked"));
+            loop {
+                let _ = sleep(FOREVER);
+            }
+        }
+        None => beamlet_redoubt::exit_kind(beamlet_redoubt::NOT_READ),
     }
+}
+
+/// The VM's console, `/dev/cons` in its namespace, if it has one that answers.
+fn console(startup: &Startup) -> Option<Console> {
+    let open = || -> Result<Console, Error> {
+        let mut lend = Lend::new(1)?;
+        Console::open(&Namespace::from_startup(startup, &mut lend)?, &mut lend)
+    };
+    open().ok()
 }
 
 /// Says why it is exiting on its console, before there is a VM to: as best it can, since a
 /// console that does not answer leaves nobody to tell.
 fn say(startup: &Startup, line: &str) {
-    let open = || -> Result<Console, Error> {
-        let mut lend = Lend::new(1)?;
-        Console::open(&Namespace::from_startup(startup, &mut lend)?, &mut lend)
-    };
-    if let Ok(console) = open() {
+    if let Some(console) = console(startup) {
         beamlet_redoubt::say(&console, line);
     }
 }

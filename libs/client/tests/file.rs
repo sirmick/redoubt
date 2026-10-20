@@ -7,7 +7,7 @@ mod common;
 use std::sync::Arc;
 
 use common::{BOOT, Boot, QUOTA, Served};
-use redoubt_client::file::Connection;
+use redoubt_client::file::{ADMISSION_RETRIES, Connection};
 use redoubt_client::{Error, Lend, Name, Refusal};
 use redoubt_fake_kernel::fake;
 use redoubt_rt::handle::Endpoint;
@@ -286,6 +286,63 @@ fn an_rerror_keeps_its_name_not_found_against_the_rest() {
         // `home` is there but not empty: the server's `permission denied`.
         assert_eq!(conn.remove(&mut lend, "home"), Err(Error::Rerror(Name::NotPermitted)));
         conn.open(&mut lend, "home/a/note", mode::OREAD).unwrap().close(&mut lend).unwrap();
+    });
+    served.stop();
+}
+
+/// An admission refusal of the moment is tried again, and rides out (servers/serving.md,
+/// `admit`): at a cap of three fids a lone connection holds its root, the fixed cost, and one
+/// working fid, the share of the two left; a second open while the first file is held is
+/// refused `too_many` by the server, and the library tries again at doubling waits, so once the
+/// first file closes within the bound the open succeeds; one held past the bound is the caller's
+/// `too_many` after the eight tries, 2.55 s.
+#[test]
+fn an_admission_refusal_of_the_moment_is_tried_again() {
+    let served = Served::start_with(3, |_, request| {
+        drop(request);
+        Ok(())
+    });
+    let (client, conn) = served.client(1001, 1);
+    let shared = fake().as_process(client, || {
+        let mut lend = Lend::new(1).unwrap();
+        Arc::new(Connection::attach(Endpoint::from_handle(conn), &mut lend).unwrap())
+    });
+    let holder = Arc::clone(&shared);
+    let held = fake().run(client, move || {
+        let mut lend = Lend::new(1).unwrap();
+        let file = holder.open(&mut lend, "home/a/note", mode::OREAD).unwrap();
+        // Past the first two tries (10 and 20 ms), inside the third.
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        file.close(&mut lend).unwrap();
+        0
+    });
+    fake().as_process(client, || {
+        let mut lend = Lend::new(1).unwrap();
+        // Wait for the holder to hold: its open is the connection's one working fid.
+        while fake().calls(client).len() < 4 {
+            std::thread::yield_now();
+        }
+        let before = fake().calls(client).len();
+        let file = shared.open(&mut lend, "home/b/secret", mode::OREAD).unwrap();
+        assert!(
+            fake().calls(client).len() > before + 2,
+            "a walk refused at least once before the one served"
+        );
+        file.close(&mut lend).unwrap();
+    });
+    assert_eq!(held.join().unwrap(), 0);
+    fake().as_process(client, || {
+        let mut lend = Lend::new(1).unwrap();
+        let file = shared.open(&mut lend, "home/a/note", mode::OREAD).unwrap();
+        let before = fake().calls(client).len();
+        assert_eq!(
+            shared.open(&mut lend, "home/b/secret", mode::OREAD).err(),
+            Some(Error::Rerror(Name::TooMany)),
+            "held past the bound, the refusal is the caller's"
+        );
+        // Nine walks, and between them the eight waits, each a receive the fake kernel counts.
+        assert_eq!(fake().calls(client).len(), before + 1 + 2 * ADMISSION_RETRIES as usize);
+        file.close(&mut lend).unwrap();
     });
     served.stop();
 }

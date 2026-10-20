@@ -35,9 +35,16 @@ pub const MAX_BYTES: usize = 8 * 1024 * 1024;
 /// attaches, and one per lease, the leases what the principal's unlabelled share holds in
 /// `agent` budgets (servers/steward.md, "Leases"); the bench holds the cap to at least the
 /// largest such sum over the tree's manifests (tools/testbench,
-/// `the_servers_admit_what_a_manifest_lets_one_account_hold`): (1 + 3 + 1) + 18.
+/// `the_servers_admit_what_a_manifest_lets_one_account_hold`): (1 + 3 + 1) + 18. The fids
+/// (`Files`) follow from the same connections: each holds its root fid for its life, a fixed cost
+/// outside the fair share (servers/serving.md, `admit`), and beside it one working fid at a time,
+/// the entry walked, opened, read and clunked; the share over the working fids is
+/// `max(1, pool / (holders + 1))` with every connection holding, so the pool is one per
+/// connection and one over, and the cap the roots beside it: 23 + 1 x (23 + 1) = 47, held by the
+/// same test to at least that
+/// (`the_file_servers_fid_caps_leave_every_connection_its_root_and_working_share`).
 pub const fn limits(buckets: u32) -> Limits {
-    Limits { buckets, in_flight: 2, files: 32, state: 23, requests: 64, pages: 2 }
+    Limits { buckets, in_flight: 2, files: 47, state: 23, requests: 64, pages: 2 }
 }
 /// What one of each costs, in bytes: a completion call holds its caller's lend, charged to this
 /// server until it replies (kernel/ipc.md R3), `MAX_LEND_PAGES` pages at worst; a fid is its table
@@ -47,11 +54,11 @@ pub const COST: Cost =
     Cost { in_flight: 64 * 1024, file: 256, state: 256, request: REQUEST_STATE, page: PAGE_SIZE as u64 };
 // The budget every bucket at its caps must fit is the manifest entry's: its pages less its heap
 // cap and stack (`redoubt_rt::server::budget`), checked at start, never a count in this code. A
-// bucket at its caps costs 2 completion calls at 64 KiB, 32 fids and 23 connections at 256 bytes,
-// 64 requests at 256 and 2 pages at 4 KiB: 169 728 bytes; the image's 6 (`init`, the steward,
-// three principals' domains and a case's extra client) take 1 018 368, 249 pages; with the heap
+// bucket at its caps costs 2 completion calls at 64 KiB, 47 fids and 23 connections at 256 bytes,
+// 64 requests at 256 and 2 pages at 4 KiB: 173 568 bytes; the image's 6 (`init`, the steward,
+// three principals' domains and a case's extra client) take 1 041 408, 255 pages; with the heap
 // cap's 2 304 and the stack's bound 128, rounded up to 256, the entry rule gives 2 816, and the
-// image's entry of 4 096 pages leaves 1 664 of budget, forty such buckets and not a forty-first
+// image's entry of 4 096 pages leaves 1 664 of budget, thirty-nine such buckets and not a fortieth
 // (`the_image_entry_holds_its_buckets`).
 
 /// Why an argument list was refused. Each one stops the server starting: a `/boot` that is not

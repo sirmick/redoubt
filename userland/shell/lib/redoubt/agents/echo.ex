@@ -10,6 +10,10 @@ defmodule Redoubt.Agents.Echo do
   - `keep TEXT`: writes `TEXT` to `/project/out/result` and waits for ever: the echo path kept
     alive for `beamlet-agent-footprint` to measure, an agent that has done its work and idles;
   - `spin`: loops for ever, so only its deadline or the sponsor's `end_lease` ends it;
+  - `load`: loads each module of a fixed list from the system volume and ends: it returns, so
+    the VM exits 0, or halts on the first module the volume refuses, an exit that is not 0; it
+    writes nothing, so its verdict is the steward's line for its lease alone: the agent of
+    `lease-code-load`, which starts many of them at once;
   - `sub MS`: carves a sub-budget of its own with a deadline `MS` milliseconds away, longer than
     its lease's, launches `piped` from `/boot` in it as the session's pipes do (`Redoubt.Pipes`),
     a server that lives until its budget ends, and loops: the lease's end takes the sub-budget
@@ -50,6 +54,8 @@ defmodule Redoubt.Agents.Echo do
   end
 
   defp run("spin"), do: spin()
+
+  defp run("load"), do: load()
 
   # The scripted hostile agents, each a module beside this one that reads the same `/project/in`
   # order and writes the same `/project/out/result`, driven by `start_agent` as this one is
@@ -106,6 +112,42 @@ defmodule Redoubt.Agents.Echo do
   end
 
   defp spin, do: spin()
+
+  # The modules `load` reads, none of them in the boot pack or on this agent's own path to here,
+  # the largest of Elixir's and OTP's first: 253 KB down to 6 KB in the pinned toolchain, 2.2 MB
+  # in all before the stage strips them; the VM's start reads more than that in the boot pack
+  # alone.
+  @loads [
+    Base, Macro, DateTime, Code.Formatter, Module, Calendar.ISO, Stream, Inspect.Algebra,
+    Protocol, NaiveDateTime, Regex, URI, Version, OptionParser, MapSet, Range, Tuple,
+    :erl_lint, :sofs, :erl_eval, :epp, :json, :uri_string, :erl_pp, :calendar, :gb_sets, :filename
+  ]
+
+  # Each module of `@loads` the VM does not hold yet is loaded from the system volume, beside
+  # the loads of the agents started with it; then the agent returns, and the VM exits 0, the
+  # steward's line for the lease saying so. Anything else halts the VM, an exit that is not 0: a
+  # module the volume refuses or answers as another, and any exception. The rescue is part of
+  # the verdict, not a guard: an exception out of the start function ends the VM with 0, which
+  # the case would read as a pass. Nothing is written to `/project`: a write
+  # there under the account's load is slow and can wait past its bound (docs/servers/walfsd.md,
+  # "Residual risks"), a finding of the data volume's, which the agent's verdict keeps off the
+  # system volume's.
+  defp load do
+    try do
+      Enum.each(@loads, fn module ->
+        case Code.ensure_loaded(module) do
+          {:module, ^module} -> :ok
+          _ -> :erlang.halt(1)
+        end
+      end)
+
+      :ok
+    rescue
+      _ -> :erlang.halt(2)
+    catch
+      _, _ -> :erlang.halt(2)
+    end
+  end
 
   # The result written, if it can be; then the lease's end.
   defp wait(text) do

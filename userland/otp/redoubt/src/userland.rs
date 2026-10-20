@@ -36,16 +36,46 @@ pub enum Unread {
 
 /// What a refusal by the volume's file server means for a lookup, by the error's name
 /// (servers/wire.md, "Error names"): `not_found` at the open is absent; any other refusal, and any
-/// on a read, failed, with the reason beamlet says, naming the error.
+/// on a read, failed, with the reason beamlet says, naming the error: the server's own, the
+/// kernel's refusal of the call by its name (kernel/ipc.md: `busy` is R2's cap on one group's
+/// queued messages), or a reply that was no answer.
 pub fn unread(e: Error, at_open: bool) -> Unread {
     Unread::Failed(match e {
         Error::Rerror(Name::NotFound) if at_open => return Unread::Absent,
         Error::Rerror(Name::NotFound) => "its file could not be read: not_found",
         Error::Rerror(Name::Corrupt) => "its file could not be read: corrupt",
         Error::Rerror(Name::Other) => "its file could not be read: other",
+        Error::Rerror(Name::TooMany) => "its file could not be read: too_many",
+        Error::Rerror(Name::Busy) => "its file could not be read: busy",
+        Error::Rerror(Name::Timeout) => "its file could not be read: timeout",
+        Error::Rerror(Name::NotPermitted) => "its file could not be read: not_permitted",
+        Error::Rerror(_) => "its file could not be read: refused",
         Error::Disconnected => "its file could not be read: disconnected",
-        _ => "its file could not be read: failed",
+        Error::Sys(e) => kernel_said(e),
+        Error::Wire(_) | Error::Unexpected => "its file could not be read: the reply was no answer",
+        Error::Server(_) | Error::Refused(_) => "its file could not be read: failed",
     })
+}
+
+/// The kernel's refusal of a read's call, by the error's name, as one line's static reason.
+fn kernel_said(e: redoubt_rt::abi::Error) -> &'static str {
+    use redoubt_rt::abi::Error as E;
+    match e {
+        E::BadHandle => "its file could not be read: the kernel said bad_handle",
+        E::WrongObject => "its file could not be read: the kernel said wrong_object",
+        E::InvalidArgument => "its file could not be read: the kernel said invalid_argument",
+        E::OutOfMemory => "its file could not be read: the kernel said out_of_memory",
+        E::OutOfProcesses => "its file could not be read: the kernel said out_of_processes",
+        E::TooManyThreads => "its file could not be read: the kernel said too_many_threads",
+        E::NotPermitted => "its file could not be read: the kernel said not_permitted",
+        E::ClassDenied => "its file could not be read: the kernel said class_denied",
+        E::LabelDenied => "its file could not be read: the kernel said label_denied",
+        E::Busy => "its file could not be read: the kernel said busy",
+        E::Refused => "its file could not be read: the kernel said refused",
+        E::TooLarge => "its file could not be read: the kernel said too_large",
+        E::Timeout => "its file could not be read: the kernel said timeout",
+        E::Dead => "its file could not be read: the kernel said dead",
+    }
 }
 
 /// Where the files are: the userland volume's file server on the machine.

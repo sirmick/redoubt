@@ -117,12 +117,15 @@ a flash medium, and for the cases that ask for a littlefs volume.
 - **Removing a file is not revocation.** It ends the file, not anyone's access to the volume;
   revocation is destroying the grant.
 - **Admission** is the serving library's, per (account, label set) with a fair share per badge
-  ([R26 (admission fairness)](serving.md#r26-admission-fairness)): 32 fids, 23 minted
+  ([R26 (admission fairness)](serving.md#r26-admission-fairness)): 71 fids (the 23 connections'
+  roots, each a fixed cost outside the share, and a pool of two working fids per connection and
+  two over, the shell's hub's working directory and the fid of its request in hand:
+  [serving](serving.md#admit)), 23 minted
   connections, 21 multiplexed connections' completion calls, 128 of their requests and 32 pages
   they brought ([serving](serving.md#multiplexed-connections)) per bucket, sized to fit the
   budget its manifest entry gives, the entry's pages less its heap cap and stack, by the entry rule
-  ([walfsd](walfsd.md#serving)): a bucket at its caps is 1,617,408 bytes; the manifests' four take
-  6,469,632, 1,580 pages, which with no heap cap and the stack's 128 round to 1,792, their
+  ([walfsd](walfsd.md#serving)): a bucket at its caps is 1,697,280 bytes; the manifests' four take
+  6,789,120, 1,658 pages, which with no heap cap and the stack's 128 round to 1,792, their
   entries', and the entry leaves 1,664 pages of budget, four such buckets and not a fifth; a
   `disconnect` frees a client's fids. The completion calls are not a guess: a bucket is
   one account's, and each live VM of the account at the server, a session's or a lease's, parks

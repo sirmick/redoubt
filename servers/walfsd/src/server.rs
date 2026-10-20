@@ -37,9 +37,18 @@ use crate::volume::{BLOCK, Blocks, Mounted, Range, Why};
 /// by the same test to at least the tree's largest. A crossing's
 /// program (servers/steward.md, "Declassification and push"), in a budget stamped with the
 /// account, makes plain calls and holds no completion call: one `State` of the bucket for at
-/// most a second, which no sum here counts.
+/// most a second, which no sum here counts. The fids (`Files`) follow from the same connections:
+/// each holds its root fid for its life, a fixed cost outside the fair share (servers/serving.md,
+/// `admit`), and beside it its working fids, two for the shell's hub (its working directory and
+/// the fid of the request in hand) and one for a lease's; the share over the working fids is
+/// `max(1, pool / (holders + 1))` with every connection holding, so the pool is two per
+/// connection and two over, the hub's need for each, and the cap the roots beside it:
+/// 23 + 2 x (23 + 1) = 71, held by the same test to at least that
+/// (`the_file_servers_fid_caps_leave_every_connection_its_root_and_working_share`). Before the
+/// root left the share, the hub lost its working fid (`emfile`) from the eighth lease of its
+/// account beside two sessions.
 pub const fn limits(buckets: u32) -> Limits {
-    Limits { buckets, in_flight: 21, files: 32, state: 23, requests: 128, pages: 32 }
+    Limits { buckets, in_flight: 21, files: 71, state: 23, requests: 128, pages: 32 }
 }
 /// What one of each costs, in bytes: a completion call holds its caller's lend, charged to this
 /// server until it replies (kernel/ipc.md R3), `MAX_LEND_PAGES` pages at worst; a fid is its
@@ -49,10 +58,10 @@ pub const COST: Cost =
     Cost { in_flight: 64 * 1024, file: 2048, state: 512, request: REQUEST_STATE, page: PAGE_SIZE as u64 };
 // The budget every bucket at its caps must fit is the manifest entry's: its pages less its heap
 // cap and stack (`redoubt_rt::server::budget`), checked at start, never a count in this code. A
-// bucket at its caps costs 21 completion calls at 64 KiB, 32 fids at 2 KiB, 23 connections at 512
-// bytes, 128 requests at 256 and 32 pages at 4 KiB: 1 617 408 bytes. The image's `walfsd:data` has
+// bucket at its caps costs 21 completion calls at 64 KiB, 71 fids at 2 KiB, 23 connections at 512
+// bytes, 128 requests at 256 and 32 pages at 4 KiB: 1 697 280 bytes. The image's `walfsd:data` has
 // 6 buckets, the three principals' four domains, the steward and a case's extra client,
-// 9 704 448 bytes, 2 370 pages; with the heap cap's 64 and the stack's bound 128, rounded up to
+// 10 183 680 bytes, 2 487 pages; with the heap cap's 64 and the stack's bound 128, rounded up to
 // 256, the entry rule gives 2 816, the image's entry, which leaves 2 624 pages of budget: six such
 // buckets and not a seventh (`the_image_entry_holds_its_buckets`).
 

@@ -1,0 +1,66 @@
+description = "The attack: one bit flipped in the userland volume's data of a lease's start module, Elixir.Redoubt.Agents.Echo, a module the boot pack does not hold and the shell never loads, while the signed manifest pins the volume's root (docs/userland/beamlet.md, \"beamlet on Redoubt\"; docs/servers/steward.md, \"Leases\"; docs/kernel/boot.md, R75; docs/servers/verityd.md, R76). Alice's session boots and starts an agent; its VM has no console, so when verityd refuses the block and erofsd fails the start module's read, the VM exits rather than waiting in silence with its budget held to its deadline, and the steward says so: `lease alice/agent-1 ... exited 1`, the lease ended by the VM's own end within the session's wait, not by its ten-minute deadline. The verdicts are verityd's check against the signed root and the steward's line (rule F); the shell's own start, read from the pack, is unharmed"
+arch = ["rv64", "rv32"]
+kind = "boot"
+recipe = "image/boot.toml"
+# The image needs 1 GiB: the principals' budgets, each holding the shell VM's session, do not fit
+# the users budget 256 MiB leaves (docs/kernel/budgets.md).
+memory_mib = 1024
+timeout_secs = 900
+expect = [
+    '^init: started sshd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
+    '^init: started steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+]
+# verityd says its line before it fails the read; the steward's line follows the VM's exit.
+expect_after = [
+    '^\[con [0-9a-f]{16}\] verityd: block [0-9]+ does not match the tree$',
+    '^\[con [0-9a-f]{16}\] steward: lease alice/agent-1 [0-9]+ of 1001/\{\} exited 1$',
+]
+forbid = [
+    'init: refused the boot',
+    '^init: .* (exited|faulted|was killed)',
+    'init: restarted',
+    'init: rebooting',
+    'steward: the core exited',
+    'sshd: login .*: refused',
+    'verityd: the volume is refused',
+    'parked',
+]
+
+# Alice starts the agent and waits for the lease's end notice, which the VM's exit brings well
+# inside its deadline; the `within` is the session's own bound on that wait. The notice lands on
+# the idle prompt's line, so the next command follows it with no prompt expected between. Once
+# the lease's VM has read the flipped block, erofsd serves the whole volume as corrupt until it
+# starts again (docs/servers/erofsd.md, "Failure and restart"): the console session's shell,
+# which gets the notice too, says what it can no longer load, and the SSH shell's later steps
+# need nothing it has not loaded. Every answer is tagged, so a pattern matches the printed value
+# and never the echo of the line typed.
+[[session]]
+user = "alice"
+pty = true
+steps = [
+    { expect = '/home/alice \([0-9]+\)> ' },
+    { send = "{:stage, File.mkdir_p(\"/home/alice/project/out\"), File.write(\"/home/alice/project/in\", \"spin\")}\n" },
+    { expect = '\{:stage, :ok, :ok\}' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:ok, c} = Redoubt.Contexts.connection(); {:ok, %{lease: l}} = Redoubt.Wire.Client.Steward.start_agent(c, 600_000_000); {:lease, l > 0}\n" },
+    { expect = '\{:lease, true\}' },
+    { within = 300 },
+    { expect = '\[lease alice/agent-1 ended\]' },
+    { send = "{:ended, Redoubt.Wire.Client.Steward.end_lease(c, l)}\n" },
+    { expect = '\{:ended, \{:error, :unknown\}\}' },
+    { expect = '\([0-9]+\)> ' },
+    { exit = 0 },
+]
+
+[userland]
+recipe = "image/userland.toml"
+flip = "Elixir.Redoubt.Agents.Echo.beam"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]
+forward = [22]

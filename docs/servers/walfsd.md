@@ -363,7 +363,7 @@ and a `write` for each file, each the transactions it takes. It is deterministic
 
 ### Serving
 
-<details><summary>Status: built · tested (38)</summary>
+<details><summary>Status: built · tested (39)</summary>
 
 - bench:steward-three-contexts
 - bench:walfsd-boot
@@ -373,6 +373,7 @@ and a `write` for each file, each the transactions it takes. It is deterministic
 - bench:walfsd-host-tests
 - bench:walfsd-label-check
 - bench:walfsd-reboot
+- bench:lease-code-load
 - host:redoubt-init::a_walfsd_entry_is_a_volume_server_as_a_littlefsd_one_is
 - host:testbench::the_servers_admit_what_a_manifest_lets_one_account_hold
 - host:testbench::every_manifest_entry_holds_its_buckets_at_their_caps
@@ -476,11 +477,26 @@ typed operations, so a client names no format:
   conservative by the bound less the entry's stack), rounded up to 256; a case's manifest sizes by
   the same rule, never by what its case happens to use, and the bench holds every entry in the
   tree to it (`every_manifest_entry_holds_its_buckets_at_their_caps`). A bucket at its caps is
-  1,617,408 bytes: the image's `walfsd:data` with six is 9,704,448 bytes, 2,370 pages, which with
-  its heap cap of 64 and the stack's 128 is 2,562, so 2,816, the entry's, which leaves 2,624 pages
-  of budget, six such buckets and not a seventh; `walfsd:alice-secrets` with five is 1,975 + 192 =
-  2,167, so 2,304, its entry. An entry may keep more pages than the rule asks (the memory rule
-  below is the other bound), never fewer.
+  1,697,280 bytes: the image's `walfsd:data` with six is 10,183,680 bytes, 2,487 pages, which with
+  its heap cap of 64 and the stack's 128 is 2,679, so 2,816, the entry's, which leaves 2,624 pages
+  of budget, six such buckets and not a seventh; `walfsd:alice-secrets` with five is 2,072 + 192 =
+  2,264, so 2,304, its entry; an entry of four buckets is 1,658 + 192 = 1,850, so 2,048, and one
+  of nine 3,730 + 192 = 3,922, so 4,096. An entry may keep more pages than the rule asks (the
+  memory rule below is the other bound), never fewer.
+- **Fids.** A bucket holds 71, derived from the same connections ([serving](serving.md#admit)):
+  each holds its root fid for its life, a fixed cost outside the fair share, and beside it its
+  working fids, two for the shell's hub (its working directory and the fid of the request in
+  hand) and one for a lease's VM, so the cap is the 23 roots and a pool of two per connection and
+  two over, 23 + 2 × 24, which the share `max(1, pool / (holders + 1))` divides into two each
+  with every connection holding. Before the root left the share, the hub lost its working fid
+  at this volume (`emfile`) from the eighth lease of its account beside two sessions, and at the
+  system volume's cap of 32 the account's VMs could load nothing from the fourteenth; the
+  supported count is now the manifest's own lease term, held by bench:lease-code-load
+  ([erofsd](erofsd.md#serving)): every lease's VM attaches its `/project` at launch (its
+  namespace attaches each entry of its startup block once, [beamlet](../userland/beamlet.md#beamlet-on-redoubt)),
+  so the sixteen leases hold sixteen roots here beside the two sessions' and read their input
+  through their hubs, and the shell's probe shows its own hub still admitted with all sixteen
+  attached.
 - **Memory** is the format's ([Memory](#memory)), a node per fid (its path), the listing window,
   and the quota's records; the image declares the heap the memory scan measured
   ([testbench](../testbench.md#the-memory-budget)).
@@ -656,6 +672,22 @@ Status: built · tested: bench:walfsd-power-loss, bench:walfsd-corrupt-volume, b
   `walfsd`.
 - **A shared `walfsd` is shared state,** as a shared `littlefsd` is
   ([littlefsd](littlefsd.md#residual-risks)).
+- **A write to the data volume under the account's concurrent load is slow, and can time out.**
+  Measured with four to twelve agents of one account loading code and writing their results at
+  once (bench:lease-code-load's measurement, both widths): an agent's 2 KB write to its project
+  directory through the shell's hub took 8–29 s, and two of seven reached the hub's 10 s give-up
+  (`etimedout`, [beamlet](../userland/beamlet.md#natives)) and failed; an agent's read of
+  its input fails the same way. This is the write path's throughput, `walfsd`'s requests each
+  finding their file by path and writing their transaction behind the others', and the hub's
+  one request at a time per connection, not the fid admission above, which is sized now: a
+  finding of its own, open until the agentic workload needs a bound on a write's latency. And
+  under the same load a write can wait past that bound for good: with four such agents on rv64
+  at one hart, one or two of them stopped inside a write whose bytes had reached the volume (the
+  file held the lines of the very write the agent never returned from) and made no further
+  progress in 2,000 s of guest time, the VM alive and its lease unended, in two boots with and
+  without the client library's retry; the measurement's agents that left a file of their first
+  lines and no more were the same. A write's completion that never comes back to the VM is a
+  liveness finding of the hub's completion path or `walfsd`'s, not of the read path, and open.
 
 ## Why
 

@@ -23,9 +23,18 @@ use redoubt_rt::server::{Cost, Limits};
 /// context detaching while another attaches, and one per lease, the leases what the principal's
 /// unlabelled share holds in `agent` budgets (servers/steward.md, "Leases"); the bench holds the
 /// cap to at least the largest such sum over the tree's manifests (tools/testbench,
-/// `the_servers_admit_what_a_manifest_lets_one_account_hold`): 2 x (1 + 3 + 1) + 18.
+/// `the_servers_admit_what_a_manifest_lets_one_account_hold`): 2 x (1 + 3 + 1) + 18. The fids
+/// (`Files`) follow from the same connections: each holds its root fid for its life, a fixed cost
+/// outside the fair share (servers/serving.md, `admit`), and beside it one working fid at a time
+/// here, a module file walked, opened, read and clunked by the VM's one reader (the shell's hub
+/// is at the data volume); the share over the working fids is `max(1, pool / (holders + 1))`
+/// with every connection holding, so the pool is one per connection and one over, and the cap
+/// the roots beside it: 28 + 1 x (28 + 1) = 57, held by the same test to at least that
+/// (`the_file_servers_fid_caps_leave_every_connection_its_root_and_working_share`). Before the
+/// root left the share, sixteen connections of one account at a cap of 32 held one fid each, the
+/// root, and none of the account's VMs could load a module.
 pub const fn limits(buckets: u32) -> Limits {
-    Limits { buckets, in_flight: 2, files: 32, state: 28, requests: 64, pages: 2 }
+    Limits { buckets, in_flight: 2, files: 57, state: 28, requests: 64, pages: 2 }
 }
 /// What one of each costs, in bytes: a completion call holds its caller's lend, charged to this
 /// server until it replies (kernel/ipc.md R3), `MAX_LEND_PAGES` pages at worst; a fid is its table
@@ -35,13 +44,13 @@ pub const COST: Cost =
     Cost { in_flight: 64 * 1024, file: 2048, state: 512, request: REQUEST_STATE, page: PAGE_SIZE as u64 };
 // The budget every bucket at its caps must fit is the manifest entry's: its pages less its heap
 // cap and stack (`redoubt_rt::server::budget`), checked at start, never a count in this code. A
-// bucket at its caps costs 2 completion calls at 64 KiB, 32 fids at 2 KiB, 28 connections at 512
-// bytes, 64 requests at 256 and 2 pages at 4 KiB: 235 520 bytes. Every session reads the system
+// bucket at its caps costs 2 completion calls at 64 KiB, 57 fids at 2 KiB, 28 connections at 512
+// bytes, 64 requests at 256 and 2 pages at 4 KiB: 286 720 bytes. Every session reads the system
 // volume on connections the steward makes for it, admitted in the session's account, so each
 // principal's domain is a bucket beside the steward's: the image's three principals' four domains
-// and the steward take 5, and a case's extra client the sixth, 1 413 120 bytes, 345 pages; with
-// the heap cap's 26 and the stack's bound 128, rounded up to 256, the entry rule gives 512, and
-// the image's entry of 1 024 pages leaves 870 of budget, fifteen such buckets and not a sixteenth
+// and the steward take 5, and a case's extra client the sixth, 1 720 320 bytes, 420 pages; with
+// the heap cap's 26 and the stack's bound 128, rounded up to 256, the entry rule gives 768, and
+// the image's entry of 1 024 pages leaves 870 of budget, twelve such buckets and not a thirteenth
 // (`the_image_entry_holds_its_buckets`).
 
 /// The `Rerror` texts `erofsd` adds to the skeleton's fixed set, `littlefsd`'s words for the same

@@ -1748,8 +1748,16 @@ mod tests {
     /// walfsd's and not by the steward, and their sum is one too: the sessions carved from the
     /// share only lower what is left for leases, and a sponsored principal's sessions are leases
     /// of that share.
-    #[test]
-    fn the_servers_admit_what_a_manifest_lets_one_account_hold() {
+    struct Holds {
+        carves: (u64, PathBuf),
+        system: (u64, PathBuf),
+        home: (u64, PathBuf),
+    }
+
+    /// The sums above, each the largest over the tree's manifests with the manifest that gives
+    /// it: what the share carves at once in VMs and a spare, the connections at the system
+    /// volume, and the connections at the home and `/boot`.
+    fn what_one_account_holds() -> Holds {
         fn manifests(dir: &Path, found: &mut Vec<PathBuf>) {
             for entry in std::fs::read_dir(dir).unwrap() {
                 let path = entry.unwrap().path();
@@ -1842,6 +1850,12 @@ mod tests {
                 most(&mut home_state, sessions + leases);
             }
         }
+        Holds { carves: largest, system: system_state, home: home_state }
+    }
+
+    #[test]
+    fn the_servers_admit_what_a_manifest_lets_one_account_hold() {
+        let Holds { carves: largest, system: system_state, home: home_state } = what_one_account_holds();
         // The connections the steward mints for one account: what each server's `state` must hold.
         let state = |limits: redoubt_rt::server::Limits| u64::from(limits.state);
         let (need, path) = system_state;
@@ -1887,6 +1901,33 @@ mod tests {
             sum,
             "littlefsd's in_flight is not what {path:?}'s share carves at once and a spare"
         );
+    }
+
+    /// The fids a bucket holds follow from the same connections (servers/serving.md, `admit`):
+    /// each holds its root fid for its life, a fixed cost outside the fair share, and the share
+    /// is over the working fids beside it, `max(1, pool / (holders + 1))`, so with every
+    /// connection of the account holding, a pool of `w (n + 1)` leaves each exactly `w`. A file
+    /// server's `files` is at least the tree's largest `n + w (n + 1)`: at the system volume and
+    /// `/boot` `w` is one, a file walked, opened, read and clunked by the VM's one reader; at the
+    /// home it is two, the shell's hub keeping its working directory beside the fid of the
+    /// request in hand. And the roots alone never fill a bucket: `state` connections hold
+    /// `state` roots, fewer than `files`.
+    #[test]
+    fn the_file_servers_fid_caps_leave_every_connection_its_root_and_working_share() {
+        let Holds { system, home, .. } = what_one_account_holds();
+        for (name, limits, (n, path), w) in [
+            ("erofsd", redoubt_erofsd::limits(1), &system, 1),
+            ("bootfsd", redoubt_bootfsd::limits(1), &home, 1),
+            ("walfsd", redoubt_walfsd::limits(1), &home, 2),
+            ("littlefsd", redoubt_littlefsd::limits(1), &home, 2),
+        ] {
+            let need = n + w * (n + 1);
+            assert!(
+                u64::from(limits.files) >= need,
+                "{name}'s fids leave {path:?}'s {n} connections fewer than a root and {w} working each, {need}"
+            );
+            assert!(limits.files > limits.state, "{name}'s roots alone could fill its fids");
+        }
     }
 
     /// A server holding `MAX_OPEN_CALLS` open calls takes no more (kernel/ipc.md R4a), so the

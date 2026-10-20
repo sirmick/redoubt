@@ -522,7 +522,7 @@ to the VM (`console_resized`), whose `idle` returns for it. There is no wall clo
 
 ### beamlet on Redoubt
 
-Status: built · partly tested: programs are not built · tested: bench:session-tcp-echo, bench:session-tcp-loopback, host:beamlet-redoubt::a_connect_is_clone_ctl_and_data_and_the_peers_end_is_closed, host:beamlet-redoubt::active_mode_delivers_what_arrives_and_the_end, host:beamlet-redoubt::refusals_are_named_and_a_failed_socket_is_given_back, host:beamlet-redoubt::a_listener_accepts_through_ctl, host:beamlet-redoubt::a_read_the_server_times_out_is_asked_again, host:beamlet-redoubt::without_a_net_the_in_vm_loopback_still_serves, bench:beamlet-natives, bench:beamlet-reduction-rate, bench:beamlet-schedulers-mttcg, bench:beamlet-schedulers-one-hart, bench:shell-compile-module, bench:shell-compile, host:beamlet-vm::two_schedulers_lose_nothing_across_the_system_lock, host:beamlet-vm::schedulers_go_offline_and_online_again, host:beamlet-redoubt::two_schedulers_lose_nothing_across_the_system_lock, host:beamlet-redoubt::four_schedulers_lose_nothing_either, host:beamlet-redoubt::without_the_argument_the_vm_has_one_scheduler, host:beamlet-redoubt::the_count_is_one_decimal_argument_capped_and_one_otherwise, host:beamlet-redoubt::the_io_report_counts_the_schedulers, host:beamlet-redoubt::without_a_console_writes_are_dropped_reads_end_and_the_size_is_unknown, host:beamlet-redoubt::a_vm_without_a_console_runs_its_module_to_exit, bench:beamlet-boot, bench:beamlet-console, bench:beamlet-files, bench:boot-profile, bench:boot-profile-unverified, bench:pack-outside-module, bench:pack-bad-truncated, bench:pack-bad-wrong-length, bench:pack-bad-wrong-name, bench:beamlet-heap-flood, bench:beamlet-budget-flood, bench:userland-boot, bench:userland-bad-start, bench:userland-read-only, bench:verity-flipped-tree, bench:verity-wrong-root, host:beamlet-redoubt::a_module_is_its_file_and_a_failed_read_is_refused, host:beamlet-redoubt::not_found_at_the_open_is_absent_and_every_other_error_is_refused_by_name, host:beamlet-redoubt::verified_module_lookup_propagates_found_absent_and_refused, host:beamlet-redoubt::verified_application_lookup_propagates_found_absent_and_refused, host:beamlet-redoubt::a_packed_module_comes_from_the_pack_and_any_other_from_the_volume, host:beamlet-redoubt::a_pack_with_a_bad_entry_is_refused_whole, host:testbench::the_boot_pack_is_deterministic_sorted_and_only_of_the_objects, host:beamlet-vm::the_search_is_flat_in_the_pattern_count, host:beamlet-vm::the_matcher_finds_what_every_pattern_at_every_byte_finds
+Status: built · partly tested: programs are not built · tested: bench:session-tcp-echo, bench:session-tcp-loopback, host:beamlet-redoubt::a_connect_is_clone_ctl_and_data_and_the_peers_end_is_closed, host:beamlet-redoubt::active_mode_delivers_what_arrives_and_the_end, host:beamlet-redoubt::refusals_are_named_and_a_failed_socket_is_given_back, host:beamlet-redoubt::a_listener_accepts_through_ctl, host:beamlet-redoubt::a_read_the_server_times_out_is_asked_again, host:beamlet-redoubt::without_a_net_the_in_vm_loopback_still_serves, bench:beamlet-natives, bench:beamlet-reduction-rate, bench:beamlet-schedulers-mttcg, bench:beamlet-schedulers-one-hart, bench:shell-compile-module, bench:shell-compile, host:beamlet-vm::two_schedulers_lose_nothing_across_the_system_lock, host:beamlet-vm::schedulers_go_offline_and_online_again, host:beamlet-redoubt::two_schedulers_lose_nothing_across_the_system_lock, host:beamlet-redoubt::four_schedulers_lose_nothing_either, host:beamlet-redoubt::without_the_argument_the_vm_has_one_scheduler, host:beamlet-redoubt::the_count_is_one_decimal_argument_capped_and_one_otherwise, host:beamlet-redoubt::the_io_report_counts_the_schedulers, host:beamlet-redoubt::without_a_console_writes_are_dropped_reads_end_and_the_size_is_unknown, host:beamlet-redoubt::a_vm_without_a_console_runs_its_module_to_exit, bench:beamlet-boot, bench:beamlet-console, bench:beamlet-files, bench:boot-profile, bench:boot-profile-unverified, bench:pack-outside-module, bench:pack-bad-truncated, bench:pack-bad-wrong-length, bench:pack-bad-wrong-name, bench:beamlet-heap-flood, bench:beamlet-budget-flood, bench:userland-boot, bench:userland-bad-start, bench:lease-bad-start, bench:userland-read-only, bench:verity-flipped-tree, bench:verity-wrong-root, host:beamlet-redoubt::a_module_is_its_file_and_a_failed_read_is_refused, host:beamlet-redoubt::not_found_at_the_open_is_absent_and_every_other_error_is_refused_by_name, host:beamlet-redoubt::verified_module_lookup_propagates_found_absent_and_refused, host:beamlet-redoubt::verified_application_lookup_propagates_found_absent_and_refused, host:beamlet-redoubt::a_packed_module_comes_from_the_pack_and_any_other_from_the_volume, host:beamlet-redoubt::a_pack_with_a_bad_entry_is_refused_whole, host:testbench::the_boot_pack_is_deterministic_sorted_and_only_of_the_objects, host:beamlet-vm::the_search_is_flat_in_the_pattern_count, host:beamlet-vm::the_matcher_finds_what_every_pattern_at_every_byte_finds
 
 On Redoubt, beamlet is a native program. Its built `Platform` adapter uses the client library
 ([native programs](native.md#the-client-library)) for the console, files, verified code lookup
@@ -832,14 +832,29 @@ boot pack, then the volume's file, then the code path. Once every entry has been
 prompt, the boot pack's allocation goes; a module it holds that is never called keeps it, at most
 the pack's size. A boot pack the volume does not hold is said once on the console and the lookups go
 to the files; one that cannot be read, or does not check, is said once, naming the boot pack and
-why, and beamlet waits as below. The boot pack is per VM and read-only: no sharing of its pages
+why, and beamlet ends as below. The boot pack is per VM and read-only: no sharing of its pages
 between VMs, no byte cache in the steward, no decoded snapshot, no pack per profile. It is a file of
 the verified volume ([R75 (verified userland)](../kernel/boot.md#r75-verified-userland)), never
 written at run time.
 
 If the volume does not attach, because `erofsd` serves it as corrupt, the boot pack cannot be read
-or does not check, or the module it is told to start cannot load, it says why on its console and
-waits without exiting: a tampered disk must not become a restart loop that reboots the machine.
+or does not check, or the module it is told to start cannot load, what it does is decided by its
+console. With one (a session's VM, or one `init` starts), it says why there and waits without
+exiting: a tampered disk must not become a restart loop that reboots the machine
+(bench:userland-bad-start, bench:pack-bad-truncated). Without one, a lease's VM
+([agents](agents.md#leases)), waiting would be silent, a budget held to its deadline with nothing
+said: it exits, and its exit code, the one thing the steward's `lease … exited` line carries
+([the steward](../servers/steward.md#leases)), is the diagnostic, 1 in a default build and the
+end's own code in the test-only `exit-kinds` build (bench:lease-bad-start). That exit is an exit,
+not a fault: crash blame is `init`'s, for a server it restarted whose exit notice names a faulting
+thread's current call ([init](../servers/init.md#restarts-and-reboots)), and a lease's VM is the
+steward's launch, so its exits count toward no lockout
+([R40 (blame by label set)](../servers/steward.md#r40-blame-by-label-set)): a sponsor's retry of a lease that cannot start
+costs its own budget and nothing else
+(host:redoubt-steward::a_leases_exit_is_its_end_and_no_blame). A read refused by the
+volume's admission for the moment is tried again before it counts as refused
+([the client library](../servers/serving.md#admit)): a VM loading beside its account's other VMs
+rides out the moment.
 
 Each label set that runs beamlet reads its own attachment of the userland image through its own
 `blkd`, `verityd` and `erofsd`, all carrying that set

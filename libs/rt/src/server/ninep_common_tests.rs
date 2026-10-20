@@ -352,8 +352,9 @@ fn unasked_handles_are_closed_and_other_opcodes_are_malformed() {
 fn minted_connections_are_admitted_and_fold_into_the_share_they_came_from() {
     // The attack on R26 (servers/serving.md) on a 9P server: an agent in its sponsor's bucket
     // floods it with fids, through as many connections as it can mint for itself; its sponsor
-    // still opens files.
-    let mut t = T::with_limit(12);
+    // still opens files. The cap is the derived one for the bucket's eight connections at one
+    // working fid each beside their roots, 8 + (8 + 1) (servers/serving.md, `admit`).
+    let mut t = T::with_limit(17);
     let mut k = FakeKernel::new();
     let steward = caller(9, 0, &[]);
     let (agent_conn, _) = t.connect(&mut k, &steward, "", 0).unwrap();
@@ -379,7 +380,13 @@ fn minted_connections_are_admitted_and_fold_into_the_share_they_came_from() {
             fid += 1;
         }
     }
-    assert_eq!(fid, 6, "the agent's connections together hold its share: half of 12");
+    // Each connection's first attach is its root, a fixed cost outside the share, four in all;
+    // the first connection took half the working fids while its root was the only one, 8 of 16,
+    // and the others' attaches beyond their roots are refused: the agent keeps what it holds,
+    // 12 of 17, and takes no more.
+    assert_eq!(fid, 12, "the agent's four roots and the eight working fids its first connection took");
+    // Alice's root is hers whatever the agent holds, and beside it a third of the twelve working
+    // fids the five roots leave: two more attaches and a walk.
     let alice = caller(alice_conn, 1001, &[]);
     for fid in 0..3 {
         t.attach(&alice, fid, "");

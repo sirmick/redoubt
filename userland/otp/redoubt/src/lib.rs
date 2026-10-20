@@ -54,7 +54,7 @@ use alloc::vec::Vec;
 use beamlet_vm::bif::NativeSpec;
 use beamlet_vm::memory::HeapPages;
 use beamlet_vm::platform::{ConsoleInput, Files, Identity, Lookup, Platform, PlatformError, System};
-use beamlet_vm::vm::{Config, Limits};
+use beamlet_vm::vm::{Config, Limits, RunError};
 use beamlet_vm::{Class, Vm};
 pub use files::{FILE_WAIT_US, posix};
 pub use jobs::MAX_JOBS;
@@ -725,10 +725,30 @@ pub fn limits(budget_pages: Option<u64>) -> Limits {
     limits
 }
 
+/// How a VM that ends without its start function's value ends: no platform could be made, the
+/// start module did not start, the watched process can never run again (`Deadlock`), a process
+/// called `erlang:halt`, or a read the VM cannot start without was refused before there was a
+/// VM ([`NOT_READ`]: the volume did not attach, the boot pack or the start module could not be
+/// read, on a VM with no console to say so on). An exception out of the start function is none
+/// of these: its line is said and the exit is 0.
+pub const NO_PLATFORM: u32 = 14;
+pub const NOT_STARTED: u32 = 11;
+pub const STUCK: u32 = 12;
+pub const HALTED: u32 = 13;
+pub const NOT_READ: u32 = 15;
+
+/// The exit code for one of those ends: 1 for each, the code every default build exits with.
+/// Test-only (`exit-kinds`, off in every default build): the end's own code, since a lease's
+/// VM has no console to say its last line on and its exit code is the one thing the steward
+/// says of it (servers/steward.md, "Leases"), so a case counting dead agents learns how each
+/// died (`lease-code-load`).
+pub fn exit_kind(kind: u32) -> u32 { if cfg!(feature = "exit-kinds") { kind } else { 1 } }
+
 /// Runs `module:function()` in a new VM on the platform of the process started with `startup`,
 /// with the natives the shell's modules need, and writes how it ended to the console, if it has
 /// one: the value it returned, or the exception that ended it. The result is the process's exit
-/// code: 0 once the function ran, however it ended; 1 if the VM could not start it or failed. The VM's limits
+/// code: 0 once the function ran, however it ended; 1 if the VM could not start it or failed
+/// (under `exit-kinds`, the end's own code, [`exit_kind`]). The VM's limits
 /// are sized to its budget, `budget_pages`, if the embedder knows it ([`limits`]; on the machine
 /// the startup block carries it, `Startup::budget_pages`). With
 /// `report_memory`, the VM prints its memory breakdown when it first waits for console input.
@@ -741,7 +761,7 @@ pub fn run(
     report_memory: Option<HeapPages>,
 ) -> u32 {
     // Without a platform there is nowhere to say why.
-    let Ok(platform) = Redoubt::new(startup, modules) else { return 1 };
+    let Ok(platform) = Redoubt::new(startup, modules) else { return exit_kind(NO_PLATFORM) };
     let console = platform.console.clone();
     let natives: &'static [NativeSpec] = Box::leak(
         [beamlet_crypto::NATIVES, beamlet_re::NATIVES, beamlet_screen::NATIVES].concat().into_boxed_slice(),
@@ -751,7 +771,10 @@ pub fn run(
     vm.set_schedulers(schedulers(startup.args()));
     vm.set_helper_stack_pages(SCHEDULER_STACK_PAGES);
     let (line, code) = match vm.spawn(module, function, |_| Vec::new()) {
-        Err(e) => (format!("beamlet: {module}:{function} did not start: {:?} {}", e.class, e.reason), 1),
+        Err(e) => (
+            format!("beamlet: {module}:{function} did not start: {:?} {}", e.class, e.reason),
+            exit_kind(NOT_STARTED),
+        ),
         Ok(first) => match vm.run(first) {
             Ok(Ok(value)) => (format!("{value}"), 0),
             Ok(Err(e)) => {
@@ -762,7 +785,13 @@ pub fn run(
                 };
                 (format!("{{'EXCEPTION',{class},{}}}", e.reason), 0)
             }
-            Err(e) => (format!("beamlet: {e:?}"), 1),
+            Err(e) => {
+                let kind = match e {
+                    RunError::Deadlock => STUCK,
+                    RunError::Halted(_) => HALTED,
+                };
+                (format!("beamlet: {e:?}"), exit_kind(kind))
+            }
         },
     };
     // The platform's end sends what the VM wrote first, so the line comes after it.
