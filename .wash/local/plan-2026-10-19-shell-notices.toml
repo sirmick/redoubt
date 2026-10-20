@@ -1,0 +1,15 @@
+# Architect, 2026-10-19: STEWARD12's measurement showed the burst deadline_notice is bounded by
+# the SPONSOR's take rate, not the steward's loop: the shell takes one lease_ended notice per
+# [lease ended] print through the relay, so a burst's last notice is ~N x the shell's take after
+# the deadline, and one notice can be LOST (a send past NOTICE_US dropped). The fix is the shell's,
+# not the steward's. Ruling: .wash/local/wave-2026-10-18-rulings.md "STEWARD12 burst finding".
+# The orchestrator assigns the id/series (a shell node, Tier B). Needs nothing.
+
+[[node]]
+  id = "SHELLN1"
+  title = "The shell's notices listener takes a lease_ended before it prints: a burst of expiring leases is told to the sponsor in ms, and no notice is lost"
+  template = "package"
+  parent = "AGENTS"
+  needs = []
+  body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'STEWARD12 burst finding'. Tier B (the shell, inside one session's budget), size S, reviewer the shell/editor (the orchestrator's pick). Found by STEWARD12: under a burst of N concurrent lease expirations the steward's lease_ended send is a rendezvous with the sponsor's shell VM, and the shell takes each notice only AFTER printing the previous '[lease ended]' through the relay, so the last notice reaches the sponsor ~N x the shell's take after the deadline (581 ms of sends at D=6, up to 2.2 s deferral at D=16 two harts), and one send of six was LOST on rv64/1 (a send past the steward's NOTICE_US 100 ms is dropped). The deadline_notice target is the sponsor TOLD less the deadline, so the sponsor's consumption rate is on the measured path and it is the shell's to fix. Rule: Redoubt.Shell.Notices takes each lease_ended (and server_restarted) send promptly — receive it, enqueue it, and print '[lease ended]' asynchronously — so the steward's send completes in ms whatever the print/relay costs; the shell prints the queued notices in order on its own. This brings a burst's last notice to ~N x (ms) within the steward's NOTICE_US, so no notice is lost, and the steward's loop is not blocked on the slow rendezvous (largely fixing STEWARD12's point-2 deferral). Cases: steward-deadline-burst (STEWARD12's) with the shell change: the last notice within a stated ms bound, all N '[lease ended]' lines present (none lost), both widths; a host test of the listener taking before printing (the shell's ExUnit). Pages: shell.md (the notices listener's take-then-print), scheduling.md / steward.md (the burst residual replaced by the measured bound after this). No steward, kernel or wire change. Measure after: whether the steward's sends still block the loop enough to want a notice thread (STEWARD12's (2)) or it is subsumed."
+  state = "todo"

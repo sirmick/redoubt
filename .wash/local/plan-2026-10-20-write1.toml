@@ -1,0 +1,19 @@
+# Architect, 2026-10-20: READ1's phase-2 gate (its first shape, agents writing timing files to
+# /project) found a liveness bug distinct from READ1's admission death and from decision 3's slow
+# writes: at N = 4 on rv64 one hart one or two of four agents stop for good inside a File.write to
+# /project whose bytes HAD reached walfsd (the file holds the write's own lines) — no exit, no
+# progress in 2,000 s guest, in two boots with and without the client retry; phase 1's born-only
+# files were the same shape. A write's completion never comes back to the VM, past the hub's own
+# 10 s give-up (FILE_WAIT_US). Ruling: .wash/local/wave-2026-10-18-rulings.md "READ1 gate verdict
+# + WRITE1". READ1 states it on walfsd.md "Residual risks" and keeps the data volume out of its
+# verdict; this node is the fix. The orchestrator assigns the id (WRITE1 provisional). Needs READ1
+# only for the page's residual sentence it replaces; nothing of the steward chain.
+
+[[node]]
+  id = "WRITE1"
+  title = "A VM always returns from a write to /project: a completed write's completion reaches the caller, or the hub's give-up answers it — never a silent stop to the lease's deadline"
+  template = "package"
+  parent = "AGENTS"
+  needs = ["READ1"]
+  body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'READ1 gate verdict + WRITE1'. Brief: to follow the measurement (investigation-first; the Architect settles the fix on it). Tier A (the VM's file hub, userland/otp files.rs, and walfsd's write/completion path), size S-M, reviewer kernel-red-3 or the orchestrator's walfsd red. Found by READ1's gate: an agent's File.write to /project whose bytes reached walfsd never returns to the VM (no exit, no error, no progress for 2,000 s guest), at N = 4 rv64 one hart, with and without the client's bounded retry; evidence .worktrees/READ1/.tmp/READ1/diag4*, gate-rv64-1. A liveness bug: in production the lease burns to its deadline doing nothing, its sponsor told nothing. It is NOT decision 3's slow write (a throughput finding, an answered etimedout) and NOT READ1's admission death (a refused fid): the write was served and its completion lost. First measurement, hub vs walfsd, for one hung write: did walfsd send the Rwrite; did the hub give up at FILE_WAIT_US (files.rs give_up retires the fid, drops a later answer); was the Elixir caller answered by either. The three outcomes name the owner (walfsd's write path or its parked completion call, STEWARD7's in_flight; the hub's give-up not answering its caller, IPD1's rule from the other side; beamlet's call path) — the ruling spells them out. Rule to hold whichever it is: every hub request ends in exactly one answer to its caller within FILE_WAIT_US + the reply margin; walfsd's longest write service stated against it. Cases: the hung shape reproduced as a boot case (N writers to /project, every write answered, the file's bytes checked), both widths; a host test of the hub's give-up answering its caller when the reply is late. Pages: walfsd.md 'Residual risks' (READ1's stated finding replaced by the rule), files.md 'Files over 9P' (the one-answer rule). READ1 does not wait for it."
+  state = "todo"

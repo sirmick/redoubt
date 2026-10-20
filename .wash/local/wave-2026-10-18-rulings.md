@@ -822,6 +822,28 @@ two-hart toml. BENCH1 is a small Tier A bench node; STEWARD9 uses it for clean g
 stated smp and adopts it when it lands). Both drafted: plan-2026-10-19-sched-bench.toml; the
 orchestrator ids them. SCHED5 and READ1 are the two rv32 findings the latency table names.
 
+### STEWARD12 burst finding → SHELLN1 (the real fix is the sponsor's take rate)
+
+STEWARD12's measurement reframed the burst: the ~70 ms per exit is the lease_ended SEND (a
+rendezvous), not the bookkeeping (effects 16 ms). The shell takes one notice per '[lease ended]'
+print through the relay, so a burst's last notice is ~N x the shell's take after the deadline, and
+one notice was LOST (a send past NOTICE_US dropped). So notices-first (STEWARD12) cannot cut the
+burst, and the deadline_notice under a burst is bounded by the SPONSOR's consumption, the shell's
+to fix. Ruled **(1):** STEWARD12 lands the burst cases recording deadline_notice with no bound and
+the residual stated (N x the sponsor's take); notices-first is near-no-op (16 ms of 581 ms) — keep
+or revert per the reviewer (I lean revert). The per-notice deadline_notice TARGET still gates via
+STEWARD9's sequential rows.
+
+**The real fix: SHELLN1 (Tier B shell, drafted).** The shell's notices listener takes each
+lease_ended before it prints (receive, enqueue, print async), so the send completes in ms, a
+burst's last notice is within NOTICE_US (no loss), AND the loop is not blocked on the rendezvous
+(largely subsuming STEWARD12's point-2 deferral and its (2) sends-off-loop — measure after before
+building a notice thread). Not (3) (STEWARD12 does not widen into the shell; SHELLN1 is its own
+node). **Kernel finding:** the first notice waits ~590 ms because the kernel destroys N expired
+budgets at one entry before any notice (R10 batched); state it as a residual (a burst's first
+notice waits ~N x R10), a kernel node (incremental deadline destruction) only if it matters.
+Plan: plan-2026-10-19-shell-notices.toml; the orchestrator ids SHELLN1.
+
 ## agent-suite wave B (2026-10-19)
 
 The two rows ATK10 left are sound now, as one small package **ATK13** (Tier A, S): (1) the R60
@@ -845,3 +867,39 @@ agent-suite, and that is the owner's to decide before the second wave.
 4. SSH3 (S) in parallel, lowest priority.
 5. STEWARD8 (S) when 5 and 6 are on main: it re-measures the table once.
 `agent-suite` opens when the orchestrator closes `sshd`.
+
+## READ1 gate verdict + WRITE1 (thread READ1, 2026-10-20, architect-6)
+
+**The gate's verdict channel: right.** The first shape (agents writing timing files to `/project`,
+the shell counting done lines) made the data volume's write path part of the verdict and hit the
+hang below. The reshaped gate: Echo's load writes nothing, loads the 27 modules and exits 0 or
+halts non-zero on a refused one; the verdict is the **steward's console** — sixteen
+`lease alice/agent-N ... exited 0` lines, one per distinct name, any non-zero exit forbidden — the
+session waiting on its sixteen lease-end notices, then the shell's probes at both volumes; N = 16
+on the latency manifest, both widths, smp [1, 2]. The steward's line is the party the VM cannot
+impersonate (rule F's shape, though this is a capacity gate, not an attack case), and the probes
+are the account-wide check decision 5 asked for. Three conditions: (1) the expect list names the
+sixteen agents, not sixteen lines; (2) Echo's load must not be able to swallow a refused load as
+exit 0 (each module's load checked, non-zero on any failure); (3) the data volume's half of the
+derived cap (walfsd 71, the hub's w = 2) is exercised only if the leases still attach `/project`
+at launch (their root fids held) — confirm from the launch that Echo's VM attaches the home as
+phase 1's `/project attach -> exit 14` showed; if not, say on the page that the data-volume cap
+is held by the host test and the shell's probe alone, not by sixteen attached leases.
+
+**The write-completion hang: a node now, WRITE1 (the orchestrator ids it).** An agent that never
+returns from a write whose bytes reached walfsd is a liveness bug, not a throughput finding: in
+production the lease burns to its deadline doing nothing and its sponsor is told nothing — the
+human-control promise weakened without a line. Distinct from decision 3 (slow writes, an answered
+`etimedout`) and from READ1's admission death (a refused fid): the write was served and its
+completion lost, past the hub's own 10 s give-up, so some path fails to answer its caller. First
+measurement, hub vs walfsd, for one hung write: did walfsd send the Rwrite; did the hub give up
+at `FILE_WAIT_US` (`give_up` retires the fid and drops a later answer); was the Elixir caller
+answered by either. The three outcomes name the owner — walfsd's write path or its per-connection
+parked completion call (STEWARD7's `in_flight`); the hub's give-up not answering the caller
+(IPD1's rule from the other side: a late reply may be dropped only after the caller was answered);
+or beamlet's call path losing an answer. The rule to hold whichever it is: every hub request ends
+in exactly one answer to its caller within `FILE_WAIT_US` plus the reply margin. READ1 lands with
+the finding stated on walfsd.md "Residual risks" and the data volume out of its verdict; WRITE1
+replaces the sentence with the rule. Tier A (files.rs + walfsd), S–M, investigation-first, the
+brief after the measurement; `needs = ["READ1"]` for the page sentence only. Plan:
+`plan-2026-10-20-write1.toml`. Not folded into READ1: a different mechanism, already M–L.
