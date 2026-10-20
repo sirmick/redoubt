@@ -816,16 +816,23 @@ the last of them about D times the shell's take of one notice after the first: m
 of the checked build's audits) after the deadline — the kernel destroying the six or sixteen VM
 budgets at its one entry at the deadline before any exit notice goes out, each within R10 — then
 each notice 40 to 300 ms behind the previous (85 to 300 ms on average over a boot), the `lease_ended` send a rendezvous the sponsor's
-shell takes only once it has printed the previous `[lease ended]` through its relay; the last of
+session VM takes late; the last of
 six 1.53 to 1.79 s gross after the deadline (0.34 to 0.56 s net), the last of sixteen 2.11 to
 2.76 s (0.55 to 1.00 s net), one run per column at the seed. The steward's own work between two
 exits is 3 to 6 ms (the end batch, the record; the console lines at the next turn 30 to 50 ms per
 exit), so sending the burst's notices ahead of every exit's bookkeeping, built and measured, moved
-the last notice by 16 ms of the 1.4 s and is not in the tree; the burst cases record the quantity
-with no bound, and the residual is the sponsor's rate until the shell takes a notice before it
-prints the one before ([the steward](../servers/steward.md#residual-risks)). One notice of six
-was lost on rv64 at one hart in one run of three, a send the shell did not take within the steward's bound,
-its sample the bound's expiry rather than the sponsor told. **The
+the last notice by 16 ms of the 1.4 s and is not in the tree; nor is the shell's print the take:
+a listener that only received and queued each notice, printing in another process, was built
+and measured at the same seed and moved nothing. With the guest clock stamped in the shell, each
+notice reached the shell's listener 43 to 193 ms after the steward's send had returned (the
+send complete when beamlet's serve thread took it), and the next send returned about when that
+receive happened: the serve thread waits in its forward to the VM's own wake endpoint until the
+VM takes it, and the VM, asleep in its platform's idle with the hart idle and no wake record for
+its budget until a timer, takes it that late, consistent with its idle not ended by the forward. The burst cases record the quantity with no
+bound, and the residual is the VM's take of the forward until beamlet's idle and wake path is
+found and fixed, its own package ([the steward](../servers/steward.md#residual-risks)). One
+notice of six (once in five boots), and one of sixteen (once), was lost on rv64 at one hart, a send the VM did not take within
+the steward's bound, its sample the bound's expiry rather than the sponsor told. **The
 residual under load:** `deadline_notice` is clean only with the steward idle when the deadline
 fires — the quantity this case measures, one lease at a time. A launch in flight holds the serve
 loop inside a synchronous `start_agent` (2-6 s), so a deadline that fires during one waits behind
