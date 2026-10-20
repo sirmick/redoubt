@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 596
+revision = 603
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -2716,8 +2716,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   needs = ["STEWARD10", "STEWARD12"]
   body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'STEWARD13' and 'STEWARD13 design'. Brief: .wash/local/STEWARD13-implementer.md. Tier A (the steward's loop and launch), size M, reviewer steward-red-5. Found by STEWARD9's two-hart sequential run: the deadline_notice delay is the steward LAUNCHING a later lease synchronously (image streamed from erofsd + map + process_start, 1.7-6.6 s) when an earlier deadline fires; the notice waits behind the launch, so the 40 ms human-control target is unmet whenever a launch is in flight. Design (settled): a launch thread, serial FIFO, STEWARD5's hand-over by reply; the loop prepares (endpoints, handles), the thread runs Launch::streamed().start(), the loop finishes (watch, keep, made/pids) and only then pushes the batch's Done to the core (event.rs Done { object, result }; drive.rs:147); no core change, no wire change, start_agent still replies when launched. STEWARD10's premise re-shown: one install lock held by the loop across its now()+destroy pair and by the thread across start() except inside the read closure (dropped for every server call), so no install interleaves with the guard; the thread creates no budget. Events of the launching object held in order until the report, every other object served. Residual stated: a batch's mints still hold the loop within SERVER_US. Cases: a new overlap case (a deadline fires inside another lease's launch; deadline_notice judged only when the trace shows the overlap; run on main first to record the miss); host tests of the pending batch, the held events, the lock discipline; the steward set and the latency cases unchanged. Pages: steward.md, scheduling.md, erofsd.md/walfsd.md's in_flight if moved."
-  state = "active"
-  revision = 566
+  state = "done"
+  revision = 601
 
 [[node]]
   id = "READ1"
@@ -2817,8 +2817,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "AGENTS"
   body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'Two bench facts' (1): a flaky test is a bug. Investigation-first, shell-free; Tier B if the bench's, Tier A (kernel-red) if the kernel case's or the kernel's; size S. Found in trains 80 and 82 and once in train 82's reruns: smp-evict-mttcg (rv64 or rv32 at two harts) fails 'guest exited while waiting for /^shootdown: PID \\d+ stopped on hart/: QEMU exited with exit status 0' at 1.1-1.2 s, passing the other times (about one boot in eight alone). The failing boot's full console decides among three arms: (i) the shootdown line IS in the output but after the bench stopped reading: the console reader does not drain to EOF after the guest exits before judging (bench); (ii) the line is absent and the guest exited 0: the kernel case ends on the primary hart without joining the hart that prints it (a kernel-case ordering bug); (iii) the line was written but the UART not drained before the shutdown call: the kernel's exit racing its flush; fail loud means the last line is flushed. Do: reproduce with the failing boot's full console kept, name the arm, fix by construction (drain to EOF / join before exit / flush before shutdown), show the case green over 40 boots per width at two harts (logs kept); the fix's negative shown once if the kernel's. The orchestrator re-tiers once the arm is known. Pages: testbench.md (the reader's rule) or the kernel case's page / boot.md (the exit's flush), as the arm decides. Also carries, if BENCH2 did not: testbench.md states beside the timed bounds the condition they hold under (one whole bench at a time, QEMU exclusive during it)."
-  state = "active"
-  revision = 596
+  state = "done"
+  revision = 599
 
 [[node]]
   id = "B92"
@@ -2826,5 +2826,5 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "AGENTS"
   body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'Two bench facts' (2): the timed cases' bounds are the box's under the stated condition (one whole bench at a time, QEMU exclusive during it, the owner's rule of 2026-10-05), and members' boots beside a train broke it in train 82 (three walfsd timed steps past their bound under the bench, all passing alone twice). Tooling, Tier B, size S, reviewer kernel-red-4. Do: scripts/q already leases cores and ports and takes named locks (`q run --lock NAME`); scripts/jobs.mk's whole-bench targets (all-rv64, all-rv32, and the set form when it runs a whole class) take one machine-wide `qemu` lock for the run's duration, and every single boot case (the set form for single cases, the sweep, ./launch's bench use) takes the same lock shared or waits: a boot started while a train holds the lock waits with a line saying so (which train, since when), never fails; host-only cases (formatting, docs, host tests, Miri) do not take it; the lock is released on the train's exit by any path (the q lease's end, not a trap). State it on testbench.md beside the timed bounds (the condition and how the tooling holds it) and in the scheduler section; a host test of jobs.mk's lock taking if the bench's own tests cover jobs.mk, else a scripted check in the report. No case-content change."
-  state = "todo"
-  revision = 595
+  state = "done"
+  revision = 603
