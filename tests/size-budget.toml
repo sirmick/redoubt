@@ -183,7 +183,7 @@ max_lines = 1142
 [[crate]]
 name = "servers/walfsd"
 paths = ["servers/walfsd/src"]
-max_lines = 856
+max_lines = 901
 
 [[crate]]
 name = "servers/verityd"

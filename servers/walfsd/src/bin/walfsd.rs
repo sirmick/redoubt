@@ -22,6 +22,9 @@ pub use redoubt_fileserver::program::{BAD_ARGS, NO_RANDOM, NO_VOLUME};
 
 /// The line `walfsd` says when it serves its volume as corrupt.
 pub const CORRUPT: &str = "walfsd: the volume does not mount, and is served as corrupt\n";
+/// How the line starts that says why, after [`CORRUPT`]: the step, walfs's error and the range's
+/// reason (`redoubt_walfsd::volume::Unmounted`).
+pub const UNMOUNTED: &str = "walfsd: why it does not mount: ";
 
 /// Serves until the endpoint is destroyed.
 pub fn serve(startup: &Startup) -> u32 {
@@ -41,6 +44,9 @@ pub fn serve(startup: &Startup) -> u32 {
     let walfsd = Walfsd::new(mounted, labels, console);
     if walfsd.is_corrupt() {
         say(startup, CORRUPT);
+        if let Some(unmounted) = walfsd.unmounted() {
+            say(startup, &alloc::format!("{UNMOUNTED}{unmounted}\n"));
+        }
     }
     // Test-only: the volume checked whole at every start (src/cut.rs).
     #[cfg(feature = "cut-after-write")]

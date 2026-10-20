@@ -18,7 +18,7 @@ use redoubt_rt::start::say_on;
 use redoubt_rt::wire::proto::littlefsd::ErrorCode;
 use walfs::{Error as FsError, FileHandle, FileType, Filesystem, Metadata, OpenOptions};
 
-use crate::volume::{BLOCK, Blocks, Mounted, Range, Why};
+use crate::volume::{BLOCK, Blocks, Mounted, Range, Step, Unmounted, Why};
 
 /// What admission lets each of `buckets` buckets hold (servers/serving.md R26); the count is the
 /// manifest's `buckets=N`. A call is answered as it arrives; what is held is a multiplexed
@@ -210,6 +210,8 @@ pub struct Walfsd<R: Range> {
     window: Window,
     /// Why the range's last request faulted ([`Blocks`]), for the line a poisoning says.
     why: Rc<Cell<Option<Why>>>,
+    /// Why the volume did not mount, when it did not.
+    unmounted: Option<Unmounted>,
     /// The console `init` gave this server, if it has one: where a poisoning is said.
     console: Option<Handle>,
     /// The line said when the volume was poisoned, once; `None` while it is not.
@@ -224,17 +226,21 @@ impl<R: Range> Walfsd<R> {
     /// `console`. The volume root's quota is the data region's bytes, and it holds what is on the
     /// volume, counted now; a volume that does not count is served as corrupt.
     pub fn new(mounted: Mounted<R>, labels: Vec<u64>, console: Option<Handle>) -> Walfsd<R> {
-        let (fs, read_only, room, share, held, why) = match mounted {
+        let (fs, read_only, room, share, held, why, unmounted) = match mounted {
             Mounted::Files { mut fs, read_only, why } => {
                 let room = u64::from(fs.data_blocks()) * u64::from(BLOCK);
                 // Inode 0 and the root are never an entry's.
                 let share = room.div_ceil(u64::from(fs.inode_count().saturating_sub(2).max(1)));
                 match tally(&mut fs, "", share, &[]) {
-                    Ok((held, _)) => (Some(fs), read_only, room, share, held, why),
-                    Err(_) => (None, read_only, 0, 0, 0, why),
+                    Ok((held, _)) => (Some(fs), read_only, room, share, held, why, None),
+                    Err(error) => {
+                        let reason = if error == FsError::Io { why.get() } else { None };
+                        let unmounted = Unmounted { step: Step::Count, error, why: reason };
+                        (None, read_only, 0, 0, 0, why, Some(unmounted))
+                    }
                 }
             }
-            Mounted::Corrupt(_) => (None, false, 0, 0, 0, Rc::new(Cell::new(None))),
+            Mounted::Corrupt(unmounted) => (None, false, 0, 0, 0, Rc::new(Cell::new(None)), Some(unmounted)),
         };
         Walfsd {
             fs,
@@ -246,6 +252,7 @@ impl<R: Range> Walfsd<R> {
             changes: 0,
             window: Window::default(),
             why,
+            unmounted,
             console,
             poisoned: None,
             #[cfg(test)]
@@ -271,6 +278,9 @@ impl<R: Range> Walfsd<R> {
         }
         self.poisoned = Some(line);
     }
+
+    /// Why the volume did not mount, if it did not: said beside the corrupt line at start.
+    pub fn unmounted(&self) -> Option<Unmounted> { self.unmounted }
 
     /// Whether the volume is served as corrupt: every attach refused with `corrupt`.
     pub fn is_corrupt(&self) -> bool { self.fs.is_none() }

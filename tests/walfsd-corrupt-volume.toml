@@ -1,4 +1,4 @@
-description = "A volume of noise is served as corrupt (servers/walfsd.md, \"Serving\", R49): init starts blkd and a walfsd for a partition holding noise; walfsd does not format it, says on its console that it serves the volume as corrupt, and stays up; a client handed a root badge at walfsd is refused at each of three attaches by the same instance, and the boot goes on with no restart"
+description = "A volume of noise is served as corrupt (servers/walfsd.md, \"Serving\", R49): init starts blkd and a walfsd for a partition holding noise; walfsd does not format it, says on its console that it serves the volume as corrupt and why (walfs's mount refused the bytes; blkd never marked its device broken), and stays up; a client handed a root badge at walfsd is refused at each of three attaches by the same instance, and the boot goes on with no restart"
 arch = ["rv64", "rv32"]
 kind = "boot"
 # The real init, the servers the manifest names, and littlefsd-client, which holds no Reset right, so
@@ -16,11 +16,12 @@ expect = [
     '^init: the manifest is checked: 5 servers, bound \d+ pages$',
     '^init: started walfsd, console [0-9a-f]{16}$',
     '^\[con [0-9a-f]{16}\] walfsd: the volume does not mount, and is served as corrupt$',
+    '^\[con [0-9a-f]{16}\] walfsd: why it does not mount: mounting: Corrupt$',
     '^\[con [0-9a-f]{16}\] littlefsd-client was refused at each of 3 attaches$',
     '^\[con [0-9a-f]{16}\] littlefsd-client TEST PASSED$',
 ]
 # A corrupt volume must not become a restart loop: nothing ends and nothing restarts.
-forbid = ['init: refused the boot', '^init: .* (exited|faulted|was killed)', 'init: restarted', 'init: rebooting', 'littlefsd-client TEST FAILED']
+forbid = ['init: refused the boot', '^init: .* (exited|faulted|was killed)', 'init: restarted', 'init: rebooting', 'littlefsd-client TEST FAILED', 'blkd: the device is marked broken']
 reporter = "client"
 
 [[file]]

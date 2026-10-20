@@ -636,13 +636,17 @@ each, with the volume check finding nothing.
 
 ## Failure and restart
 
-Status: built · tested: bench:walfsd-power-loss, bench:walfsd-corrupt-volume, bench:walfsd-reboot, host:redoubt-walfsd::a_poisoned_volume_says_so_once, host:redoubt-fileserver::a_fault_says_why
+Status: built · tested: bench:walfsd-power-loss, bench:walfsd-corrupt-volume, bench:walfsd-reboot, host:redoubt-walfsd::a_poisoned_volume_says_so_once, host:redoubt-walfsd::a_mount_that_fails_says_why, host:redoubt-fileserver::a_fault_says_why
 
 - **`walfsd` crashes:** its clients' calls get `Dead`, `init` restarts it on the same endpoint
   ([init](init.md#restarts-and-reboots)), and its mount recovers a cut transaction from the log,
   so the volume is as of its last committed transaction. Clients ask for fresh connections.
 - **The medium is corrupt:** a volume that does not mount is served as corrupt, never exited on;
-  a damaged block fails the requests that read it.
+  a damaged block fails the requests that read it. After its corrupt line `walfsd` says why,
+  `walfsd: why it does not mount: <step>: <error>[: <reason>]`: the step that failed (reading
+  blocks 0 and 1, blank and read-only, formatting the blank range, mounting, or counting what it
+  holds), walfs's error, and for an I/O error the reason its range client noted. An I/O error here
+  is the range failing, so `blkd`'s own line says why; `Corrupt` is bytes walfs refused.
 - **An I/O error from `blkd`** poisons the volume until `walfsd` starts again, whose mount
   recovers what the error left. `walfsd` says so once on its console,
   `walfsd: volume poisoned: <operation>: <reason>`, with the reason its range client noted: the
