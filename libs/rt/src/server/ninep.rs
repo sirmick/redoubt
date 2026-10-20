@@ -31,11 +31,14 @@
 //!
 //! **Admission** ([`Admission`]): fids ([`Resource::Files`]) and minted connections
 //! ([`Resource::State`]) are charged to the caller's (account, label set), with a fair share per
-//! badge. A connection a client mints for itself counts in the share of the connection it minted
-//! it through (the share goes up the chain while the requester is the same client), so a client
-//! gains nothing by minting more connections; a connection someone else minted for it (the
-//! steward, for a session or a lease's agent) is a share of its own, **in its own account's
-//! bucket from its first request**: minted, it is pending, a `State` of its minter's share, and
+//! badge. The root fid `Tattach` makes is held for the connection's life, so it is charged as a
+//! fixed cost outside the share ([`Admission::admit_fixed`]), and the share is over the fids
+//! walked from it: a connection always has its root and a working fid beside it, and the file
+//! servers' fid caps are derived so (servers/serving.md, `admit`). A connection a client mints for itself
+//! counts in the share of the connection it minted it through (the share goes up the chain while the
+//! requester is the same client), so a client gains nothing by minting more connections; a connection someone
+//! else minted for it (the steward, for a session or a lease's agent) is a share of its own, **in its own
+//! account's bucket from its first request**: minted, it is pending, a `State` of its minter's share, and
 //! the first request on it (a T-message, a `ninep_common` one or a typed one) moves that `State` to the
 //! caller's bucket and share, where the caller's caps apply, or is refused if they are full
 //! (`arrived`). So a flood of mints is bounded by the minter's share until somebody calls, and the
@@ -369,6 +372,10 @@ struct ConnKey {
 struct Fid<N> {
     /// Every step from the attach root (first) to where the fid rests (last); never empty.
     steps: Vec<(N, Qid)>,
+    /// The connection's first `Tattach` fid, held for its life: a fixed cost of its client's
+    /// bucket, outside the fair share ([`Admission::admit_fixed`]). A fid walked from it, even
+    /// to the root itself, and any later attach are working fids under the share.
+    root: bool,
     /// The mode it was opened with, if it is open.
     open: Option<u8>,
     /// Where the next directory read continues: (byte offset, entry index).
@@ -743,14 +750,18 @@ impl<S: FileServer> NineServer<S> {
                 if afid != NOFID {
                     return Err(NineError::NO_AUTH.into());
                 }
-                self.reserve_fid(caller, fid)?;
+                // A connection's first attached fid is its root, the fixed cost; any other
+                // attach is a working fid under the share, or a client would hold a bucket's
+                // fids by attaching again and again, outside every share.
+                let root = self.conn(&key).is_none_or(|i| !self.conns[i].fids.iter().any(|(_, f)| f.root));
+                self.reserve_fid(caller, fid, root)?;
                 let attached = self.root(caller, aname).and_then(|(node, qid)| {
                     let mut steps = Vec::new();
                     steps.try_reserve(1).map_err(|_| NineError::NO_MEMORY)?;
                     steps.push((node, qid));
-                    Ok((Fid { steps, open: None, dir_next: (0, 0) }, qid))
+                    Ok((Fid { steps, root, open: None, dir_next: (0, 0) }, qid))
                 });
-                let (state, qid) = self.unreserve_on_error(caller, attached)?;
+                let (state, qid) = self.unreserve_on_error(caller, attached, root)?;
                 self.insert_fid(caller, fid, state)?;
                 Ok(Body::Rattach { qid })
             }
@@ -1009,7 +1020,7 @@ impl<S: FileServer> NineServer<S> {
         while let Some(i) = conns.iter().position(|c| c.key.badge == gone.badge) {
             let conn = conns.swap_remove(i);
             for (_, fid) in conn.fids {
-                admission.release(conn.key.client, conn.share, Resource::Files);
+                Self::release_fid(admission, conn.key.client, conn.share, fid.root);
                 fs.clunk(&fid.node());
             }
         }
@@ -1036,7 +1047,7 @@ impl<S: FileServer> NineServer<S> {
         let mut steps = copy_steps(&f.steps)?;
         let charged = newfid != fid;
         if charged {
-            self.reserve_fid(caller, newfid)?;
+            self.reserve_fid(caller, newfid, false)?;
         }
         let mut walked = 0;
         for name in names {
@@ -1050,14 +1061,14 @@ impl<S: FileServer> NineServer<S> {
                 // The first name failing is an error; a later one ends the walk short.
                 Err(e) => {
                     if charged {
-                        self.unreserve(caller);
+                        self.unreserve(caller, false);
                     }
                     return if walked == 0 { Err(e) } else { Ok(walked) };
                 }
             }
         }
         if charged {
-            self.insert_fid(caller, newfid, Fid { steps, open: None, dir_next: (0, 0) })?;
+            self.insert_fid(caller, newfid, Fid { steps, root: false, open: None, dir_next: (0, 0) })?;
         } else {
             self.fid_mut(&key, fid)?.steps = steps;
         }
@@ -1198,9 +1209,10 @@ impl<S: FileServer> NineServer<S> {
         self.conn(&self.conn_key(caller)).map_or_else(|| self.share(caller), |i| self.conns[i].share)
     }
 
-    /// Checks that `fid` can be added to the connection and charges it to the client: all before
+    /// Checks that `fid` can be added to the connection and charges it to the client, a `root`
+    /// (`Tattach`'s) as a fixed cost outside the fair share and any other under it: all before
     /// the server does any work for it. Undone by `insert_fid` failing or `unreserve`.
-    fn reserve_fid(&mut self, caller: &Caller, fid: u32) -> Result<(), NineError> {
+    fn reserve_fid(&mut self, caller: &Caller, fid: u32, root: bool) -> Result<(), NineError> {
         let key = self.conn_key(caller);
         if caller.badge >= FIRST_MINTED_BADGE && self.minted.get(caller.badge).is_none() {
             return Err(NineError::NO_CONNECTION);
@@ -1212,23 +1224,39 @@ impl<S: FileServer> NineServer<S> {
             return Err(NineError::TOO_MANY);
         }
         let share = self.fid_share(caller);
-        self.admission.admit(key.client, share, Resource::Files).map_err(|_| NineError::TOO_MANY)
+        let admitted = if root {
+            self.admission.admit_fixed(key.client, share, Resource::Files)
+        } else {
+            self.admission.admit(key.client, share, Resource::Files)
+        };
+        admitted.map_err(|_| NineError::TOO_MANY)
     }
 
-    fn unreserve(&mut self, caller: &Caller) {
+    fn unreserve(&mut self, caller: &Caller, root: bool) {
         let share = self.fid_share(caller);
-        self.admission.release(self.minted.key(caller), share, Resource::Files);
+        Self::release_fid(&mut self.admission, self.minted.key(caller), share, root);
     }
 
     fn unreserve_on_error<T>(
         &mut self,
         caller: &Caller,
         result: Result<T, NineError>,
+        root: bool,
     ) -> Result<T, NineError> {
         if result.is_err() {
-            self.unreserve(caller);
+            self.unreserve(caller, root);
         }
         result
+    }
+
+    /// Gives a fid's charge back to the share it was taken from, a root's as the fixed cost it
+    /// was.
+    fn release_fid(admission: &mut Admission, client: AdmitKey, share: u64, root: bool) {
+        if root {
+            admission.release_fixed(client, share, Resource::Files);
+        } else {
+            admission.release(client, share, Resource::Files);
+        }
     }
 
     /// Adds a reserved fid; on failure (no memory) its reservation is released.
@@ -1254,7 +1282,7 @@ impl<S: FileServer> NineServer<S> {
             Err(_) => {
                 // A connection pushed above with no fids must not stay.
                 self.conns.retain(|c| !c.fids.is_empty());
-                self.admission.release(key.client, share, Resource::Files);
+                Self::release_fid(&mut self.admission, key.client, share, state.root);
                 Err(NineError::NO_MEMORY)
             }
         }
@@ -1275,7 +1303,7 @@ impl<S: FileServer> NineServer<S> {
 
     /// A fid is gone: release its charge and clunk the node it rested on.
     fn drop_fid(&mut self, client: AdmitKey, share: u64, fid: Fid<S::Node>) {
-        self.admission.release(client, share, Resource::Files);
+        Self::release_fid(&mut self.admission, client, share, fid.root);
         self.fs.clunk(&fid.node());
     }
 

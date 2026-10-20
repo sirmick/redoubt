@@ -393,29 +393,32 @@ fn fids_are_bounded_per_connection_and_per_account() {
         t.err(&a, Body::Twalk { fid: 0, newfid: 999, wnames: Names::new(&[]).unwrap() }),
         "too many open files"
     );
-    // The same account on another connection has its fair share of the account's limit: a
-    // third of it, with alice holding fids too.
+    // The same account on another connection has its first attach as its root, a fixed cost
+    // outside the share, and beside it its fair share of the working fids, the cap less the two
+    // roots, a third of them with alice holding hers: (128 - 2) / 3 = 42, later attaches among
+    // them.
     let a2 = caller(2, 1001, &[]);
-    for fid in 0..42 {
+    for fid in 0..43 {
         t.attach(&a2, fid, "");
     }
     assert_eq!(
-        t.err(&a2, Body::Tattach { fid: 42, afid: NOFID, uname: "", aname: "" }),
+        t.err(&a2, Body::Tattach { fid: 43, afid: NOFID, uname: "", aname: "" }),
         "too many open files"
     );
     // Another account is not affected.
     let b = caller(3, 2002, &[]);
     t.attach(&b, 0, "");
-    // Clunking gives the charge back; Tversion clunks every fid of the connection.
+    // Clunking gives the charge back, a root's as the fixed cost it was, so the next attach is
+    // the connection's root again; Tversion clunks every fid of the connection.
     t.clunk(&a2, 0);
-    t.attach(&a2, 42, "");
+    t.attach(&a2, 43, "");
     let clunked = t.server.fs.clunked.len();
     assert!(matches!(t.rpc(&a, Body::Tversion { msize: 1 << 20, version: "9P2000" }),
         Body::Rversion { msize, version: "9P2000" } if msize == MSIZE as u32));
     assert_eq!(t.server.fids(&alice()), 0);
     assert_eq!(t.server.fs.clunked.len(), clunked + MAX_FIDS);
-    // Alone again in its bucket, a2's share is half of it.
-    t.attach(&a2, 43, "");
+    // Alone again in its bucket, a2's share of the working fids is half of them.
+    t.attach(&a2, 44, "");
     t.attach(&a2, 11 + 1000, "");
     let a2_fids = t.server.fids(&a2) as u32;
     assert_eq!(t.server.admission().held(AdmitKey::of(&a2), Resource::Files), a2_fids);
@@ -601,7 +604,8 @@ fn dot_dot_costs_no_server_work_and_admission_comes_first() {
     assert_eq!(t.walk(&a, 1, 2, &[".."; 16]), vec![1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
     assert_eq!(t.server.fs.walks, walks, "`..` asked the server nothing");
     t.walk(&a, 0, 3, &[]);
-    // The account is at its share of 4: nothing more reaches the server.
+    // The account holds its root and its share of the working fids, (8 - 1) / 2 = 3: nothing
+    // more reaches the server, a second attach among it.
     let (attaches, walks) = (t.server.fs.attaches, t.server.fs.walks);
     for _ in 0..10 {
         assert_eq!(

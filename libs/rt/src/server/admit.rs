@@ -15,6 +15,13 @@
 //!   connection minted for another account in that account's bucket from its first request, a pending slot of
 //!   the minter's until then, so the minter's share bounds its mints and the holder's caps bound what it
 //!   holds ([`crate::server::ninep`], Admission).
+//! - **A fixed cost is outside the share** ([`Admission::admit_fixed`]): what a client holds for its
+//!   connection's life whatever it does, the 9P root fid `Tattach` makes, is charged to the bucket's total
+//!   and never to the fair share, which is over the rest, the **working** units, and is taken from the cap
+//!   less the fixed costs the bucket holds: a share holding only its fixed costs can always take one working
+//!   unit while the bucket has room (at least one), so a connection can always walk beside its root. The cap
+//!   is derived so the pool divided among every connection of the bucket leaves each its working need
+//!   (servers/serving.md, `admit`).
 //! - **Caps sized to fit**: at most [`Limits::buckets`] buckets hold anything at once, so that every bucket
 //!   at its cap fits the server's budget ([`Limits::fits`] against [`budget`], the manifest entry's pages
 //!   less the heap cap and the stack: the manifest sizes the budget as it sizes the count) and the calls they
@@ -252,8 +259,23 @@ impl Override {
 pub struct Admission {
     limits: Limits,
     overrides: Vec<Override>,
-    buckets: Vec<(AdmitKey, [u32; RESOURCES])>,
-    shares: Vec<(AdmitKey, u64, [u32; RESOURCES])>,
+    buckets: Vec<(AdmitKey, Counts)>,
+    shares: Vec<(AdmitKey, u64, Counts)>,
+}
+
+/// What one bucket, or one share of it, holds of each [`Resource`]: all of it, and the part that
+/// is fixed cost ([`Admission::admit_fixed`]), outside the fair share.
+#[derive(Clone, Copy, Debug, Default)]
+struct Counts {
+    held: [u32; RESOURCES],
+    fixed: [u32; RESOURCES],
+}
+
+impl Counts {
+    /// What is held under the fair share: all but the fixed costs.
+    fn working(&self, r: usize) -> u32 { self.held[r] - self.fixed[r] }
+
+    fn nothing(&self) -> bool { self.held.iter().all(|c| *c == 0) }
 }
 
 impl Admission {
@@ -348,22 +370,40 @@ impl Admission {
         self.shares.iter().position(|(k, s, _)| *k == key && *s == share)
     }
 
-    /// Takes one `resource` for `share` (a badge) in `key`'s bucket, or refuses.
+    /// Takes one `resource` for `share` (a badge) in `key`'s bucket under the fair share, or
+    /// refuses.
     pub fn admit(&mut self, key: AdmitKey, share: u64, resource: Resource) -> Result<(), Refused> {
+        self.take(key, share, resource, false)
+    }
+
+    /// Takes one `resource` for `share` in `key`'s bucket as a fixed cost: counted against the
+    /// bucket's cap and never against the fair share, which is over what the bucket's cap leaves
+    /// beyond its fixed costs. For what a client holds for its connection's life whatever it
+    /// does, the 9P root fid, so that a connection always has its root and a working share beside
+    /// it. Given back with [`Admission::release_fixed`].
+    pub fn admit_fixed(&mut self, key: AdmitKey, share: u64, resource: Resource) -> Result<(), Refused> {
+        self.take(key, share, resource, true)
+    }
+
+    fn take(&mut self, key: AdmitKey, share: u64, resource: Resource, fixed: bool) -> Result<(), Refused> {
         let r = resource as usize;
         let limit = self.cap(key, resource);
         let bucket = self.bucket(key);
-        let total = bucket.map_or(0, |i| self.buckets[i].1[r]);
+        let total = bucket.map_or(0, |i| self.buckets[i].1.held[r]);
         if total >= limit || (bucket.is_none() && self.buckets.len() >= self.limits.buckets as usize) {
             return Err(Refused);
         }
         let entry = self.share(key, share);
-        let held = entry.map_or(0, |i| self.shares[i].2[r]);
-        if !key.per_badge() {
-            // The shares holding this resource, this one included, plus room for one more.
-            let others = self.shares.iter().filter(|(k, s, c)| *k == key && *s != share && c[r] > 0).count();
+        if !fixed && !key.per_badge() {
+            // The fair share is of the cap less the bucket's fixed costs, among the shares holding
+            // working units of this resource, this one included, plus room for one more; at least
+            // one, so a share holding only its fixed costs can take one while the bucket has room.
+            let pool = limit - bucket.map_or(0, |i| self.buckets[i].1.fixed[r]);
+            let held = entry.map_or(0, |i| self.shares[i].2.working(r));
+            let others =
+                self.shares.iter().filter(|(k, s, c)| *k == key && *s != share && c.working(r) > 0).count();
             let divisor = u32::try_from(others).unwrap_or(u32::MAX).saturating_add(2);
-            if held >= (limit / divisor).max(1) {
+            if held >= (pool / divisor).max(1) {
                 return Err(Refused);
             }
         }
@@ -372,15 +412,19 @@ impl Admission {
         self.buckets.try_reserve(need_bucket).map_err(|_| Refused)?;
         self.shares.try_reserve(need_share).map_err(|_| Refused)?;
         let bucket = bucket.unwrap_or_else(|| {
-            self.buckets.push((key, [0; RESOURCES]));
+            self.buckets.push((key, Counts::default()));
             self.buckets.len() - 1
         });
         let entry = entry.unwrap_or_else(|| {
-            self.shares.push((key, share, [0; RESOURCES]));
+            self.shares.push((key, share, Counts::default()));
             self.shares.len() - 1
         });
-        self.buckets[bucket].1[r] += 1;
-        self.shares[entry].2[r] += 1;
+        for counts in [&mut self.buckets[bucket].1, &mut self.shares[entry].2] {
+            counts.held[r] += 1;
+            if fixed {
+                counts.fixed[r] += 1;
+            }
+        }
         Ok(())
     }
 
@@ -388,29 +432,44 @@ impl Admission {
     /// Releasing what was never taken is a server bug; it changes nothing rather than
     /// underflowing.
     pub fn release(&mut self, key: AdmitKey, share: u64, resource: Resource) {
+        self.give(key, share, resource, false);
+    }
+
+    /// Gives back one `resource` taken by [`Admission::admit_fixed`] with the same key and share;
+    /// as [`Admission::release`], one never taken changes nothing.
+    pub fn release_fixed(&mut self, key: AdmitKey, share: u64, resource: Resource) {
+        self.give(key, share, resource, true);
+    }
+
+    fn give(&mut self, key: AdmitKey, share: u64, resource: Resource, fixed: bool) {
         let r = resource as usize;
         let (Some(bucket), Some(entry)) = (self.bucket(key), self.share(key, share)) else { return };
-        if self.shares[entry].2[r] == 0 {
+        let have = if fixed { self.shares[entry].2.fixed[r] } else { self.shares[entry].2.working(r) };
+        if have == 0 {
             return;
         }
-        self.shares[entry].2[r] -= 1;
-        self.buckets[bucket].1[r] = self.buckets[bucket].1[r].saturating_sub(1);
-        if self.shares[entry].2.iter().all(|c| *c == 0) {
+        for counts in [&mut self.buckets[bucket].1, &mut self.shares[entry].2] {
+            counts.held[r] = counts.held[r].saturating_sub(1);
+            if fixed {
+                counts.fixed[r] = counts.fixed[r].saturating_sub(1);
+            }
+        }
+        if self.shares[entry].2.nothing() {
             self.shares.swap_remove(entry);
         }
-        if self.buckets[bucket].1.iter().all(|c| *c == 0) {
+        if self.buckets[bucket].1.nothing() {
             self.buckets.swap_remove(bucket);
         }
     }
 
-    /// How much of `resource` `key`'s bucket holds.
+    /// How much of `resource` `key`'s bucket holds, fixed costs included.
     pub fn held(&self, key: AdmitKey, resource: Resource) -> u32 {
-        self.bucket(key).map_or(0, |i| self.buckets[i].1[resource as usize])
+        self.bucket(key).map_or(0, |i| self.buckets[i].1.held[resource as usize])
     }
 
-    /// How much of `resource` one share of `key`'s bucket holds.
+    /// How much of `resource` one share of `key`'s bucket holds, fixed costs included.
     pub fn held_by(&self, key: AdmitKey, share: u64, resource: Resource) -> u32 {
-        self.share(key, share).map_or(0, |i| self.shares[i].2[resource as usize])
+        self.share(key, share).map_or(0, |i| self.shares[i].2.held[resource as usize])
     }
 
     /// How many buckets hold anything.
@@ -720,5 +779,64 @@ mod tests {
         // default, 2 x 10 + 2 x 1), and 2 x 100 + 2 x 10 + 2 x 1 for the other bucket.
         assert!(a.fits(&cost, 1244));
         assert!(!a.fits(&cost, 1243));
+    }
+
+    /// A fixed cost (a connection's root fid) is outside the fair share: with the cap derived
+    /// as `n + w (n + 1)` for `n` connections of working need `w`, every connection holds its
+    /// root and `w` working fids beside it, and one holding only its root can always take one
+    /// while the bucket has room. Under the old rule the roots were the share: sixteen
+    /// connections of one account at a cap of 32 held one fid each, the root, and none could walk.
+    #[test]
+    fn a_root_fid_is_a_fixed_cost_outside_the_share() {
+        let alice = key(1001);
+        // n = 3 connections of need 2: a cap of 3 + 2 x 4 = 11.
+        let mut a = Admission::new(caps(4, 0, 11, 0)).unwrap();
+        for conn in 1..=3 {
+            a.admit_fixed(alice, conn, Resource::Files).unwrap();
+        }
+        assert_eq!(a.held(alice, Resource::Files), 3);
+        // Each takes its two working fids beside the root, in turn, whatever the others hold.
+        for conn in 1..=3 {
+            for _ in 0..2 {
+                a.admit(alice, conn, Resource::Files).unwrap();
+            }
+            assert_eq!(a.held_by(alice, conn, Resource::Files), 3, "root + 2");
+        }
+        // The pool of 8 over four is 2: a third working fid is refused, the bucket not full.
+        assert_eq!(a.admit(alice, 1, Resource::Files), Err(Refused));
+        assert_eq!(a.held(alice, Resource::Files), 9);
+        // A working fid given back is a working slot again, for its own share and no other's
+        // third.
+        a.release(alice, 1, Resource::Files);
+        assert_eq!(a.admit(alice, 2, Resource::Files), Err(Refused), "2 holds its share already");
+        assert_eq!(a.admit(alice, 1, Resource::Files), Ok(()));
+        // A fourth connection past the derivation still gets its root and, by the floor, one
+        // working fid: (11 - 4) / 5 = 1, and no second.
+        a.admit_fixed(alice, 4, Resource::Files).unwrap();
+        assert_eq!(a.admit(alice, 4, Resource::Files), Ok(()));
+        assert_eq!(a.admit(alice, 4, Resource::Files), Err(Refused));
+        assert_eq!(a.held(alice, Resource::Files), 11, "the cap is the ceiling");
+        // A root given back frees a root's slot; a release of a working fid by a share holding
+        // only its root changes nothing.
+        a.release(alice, 4, Resource::Files);
+        a.release(alice, 4, Resource::Files);
+        assert_eq!(a.held_by(alice, 4, Resource::Files), 1, "its root stays");
+        a.release_fixed(alice, 4, Resource::Files);
+        assert_eq!(a.held_by(alice, 4, Resource::Files), 0);
+        assert_eq!(a.held(alice, Resource::Files), 9);
+        // The collapse the rule closes: sixteen connections at a cap of 32, each walking once.
+        let mut old = Admission::new(caps(4, 0, 32, 0)).unwrap();
+        for conn in 1..=16 {
+            old.admit_fixed(alice, conn, Resource::Files).unwrap();
+        }
+        for conn in 1..=16 {
+            assert_eq!(old.admit(alice, conn, Resource::Files), Ok(()), "connection {conn} walks");
+        }
+        assert_eq!(old.held(alice, Resource::Files), 32);
+        // An account-0 bucket has no shares: a fixed cost counts against its cap alone.
+        let daemon = key(0);
+        old.admit_fixed(daemon, 0, Resource::Files).unwrap();
+        while old.admit(daemon, 0, Resource::Files).is_ok() {}
+        assert_eq!(old.held(daemon, Resource::Files), 32);
     }
 }
