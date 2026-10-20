@@ -264,7 +264,7 @@ checker runs every 512 steps and at the end.
 
 ## Scripted contracts
 
-<details><summary>Status: built · tested (7)</summary>
+<details><summary>Status: built · tested (8)</summary>
 
 - host:redoubt-model::ipc_completion_table_and_rollback
 - host:redoubt-model::sparse_committed_reply_mask_is_positional
@@ -273,6 +273,7 @@ checker runs every 512 steps and at the end.
 - host:redoubt-model::deaf_device_quarantines_the_co_holder_too
 - host:redoubt-model::partial_overlap_is_refused_whole
 - host:redoubt-model::a_destruction_delivers_at_its_end
+- host:redoubt-model::a_siblings_destroy_spares_its_neighbours
 
 </details>
 
@@ -293,6 +294,11 @@ from the completion table, not from the model's output. They cover:
 - a destruction delivers nothing until its end: a notice owed during it goes to the receiver that
   survives, not to one the destruction ends later, and a send stamped with the dying budget fails
   with `Dead`;
+- a destruction among live siblings ends exactly its own subtree: sixteen children of one parent
+  with a process each, every one reporting to one endpoint, end as a sponsor's leases do (the
+  process exits 0, the notice is taken, the budget destroyed), in five orders, and after every end
+  each other child still holds its budget, which counts its one process, and its process
+  (`model/tests/destroy_contracts.rs`);
 - DMA frames stay held through `unmap`, return to the pool only after a confirmed reset, and are
   quarantined, with the co-holder's, when a reset is not confirmed
   (`model/tests/dma_contracts.rs`);
