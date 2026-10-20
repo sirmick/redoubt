@@ -14,6 +14,9 @@ defmodule Redoubt.Agents.Echo do
     the VM exits 0, or halts on the first module the volume refuses, an exit that is not 0; it
     writes nothing, so its verdict is the steward's line for its lease alone: the agent of
     `lease-code-load`, which starts many of them at once;
+  - `loadwrite`: the loads of `load`, with a line appended to a file of its own under
+    `/project/out` after each, saying what the write before it answered; it returns whatever its
+    writes answered: the agent of `lease-writes`, which starts many at once and reads the files;
   - `sub MS`: carves a sub-budget of its own with a deadline `MS` milliseconds away, longer than
     its lease's, launches `piped` from `/boot` in it as the session's pipes do (`Redoubt.Pipes`),
     a server that lives until its budget ends, and loops: the lease's end takes the sub-budget
@@ -27,9 +30,12 @@ defmodule Redoubt.Agents.Echo do
     milliseconds, the reason `TEXT` after them, writes the answer and waits: the sponsor approves
     it at `approve@box`, and the labelled agent runs in its vault.
 
-  An input it cannot read, or does not understand, is written to `/project/out/result` as the
-  error it was, and the agent waits for its lease to end: it has no console to say more on, and
-  its sponsor ends it or its deadline does.
+  An input that is not there, or that it does not understand, is written to `/project/out/result`
+  as the error it was, and the agent waits for its lease to end: it has no console to say more
+  on, and its sponsor ends it or its deadline does. An input whose read fails otherwise (a
+  timeout or a refusal: the data volume under the account's launch storm) is asked for again a
+  few times, and then the VM exits with a status naming the error (`unread_code/1`): nothing of
+  the agent's could be written, and the steward's line for the lease is what its sponsor sees.
   """
 
   @input "/project/in"
@@ -37,12 +43,50 @@ defmodule Redoubt.Agents.Echo do
   @piped "/boot/piped"
 
   @doc "beamlet's entry point (`beamlet ... Elixir.Redoubt.Agents.Echo`)."
+  # How many times the input is asked for again when its read fails for a reason other than its
+  # absence: a read of the data volume beside the account's other agents' writes can be answered
+  # `etimedout` for minutes (docs/servers/walfsd.md, "Residual risks": the volume's throughput
+  # under the account's load), and an agent that gave up at the first would idle for its lease's
+  # life with nothing done. Each try is a `File.read`, three or four hub requests each bounded
+  # by the hub, so a try's worst is their sum and thirty tries up to about twenty minutes, past
+  # the case's first wait; thirty is the six tries seen under the account's load plus headroom,
+  # not a derived figure; then the exit below.
+  @input_tries 30
+  # The status a VM ends with when its input could not be read in `@input_tries` tries and the
+  # error was not its absence: `@unread` plus the error's code, the one line the sponsor sees of
+  # a lease with no console (1 under a default build of beamlet, the status itself under
+  # `exit-kinds`).
+  @unread 100
+
   def start do
-    case File.read(@input) do
+    case read_input(@input_tries) do
       {:ok, text} -> run(String.trim(text))
       {:error, reason} -> wait("in: #{inspect(reason)}")
     end
   end
+
+  defp read_input(tries) do
+    case File.read(@input) do
+      {:error, :enoent} = none ->
+        none
+
+      {:error, _} when tries > 1 ->
+        Process.sleep(1_000)
+        read_input(tries - 1)
+
+      {:error, reason} ->
+        :erlang.halt(@unread + unread_code(reason))
+
+      ok ->
+        ok
+    end
+  end
+
+  defp unread_code(:etimedout), do: 1
+  defp unread_code(:eio), do: 2
+  defp unread_code(:ebusy), do: 3
+  defp unread_code(:emfile), do: 4
+  defp unread_code(_), do: 9
 
   defp run("echo" <> _rest = text), do: finish(text)
 
@@ -56,6 +100,8 @@ defmodule Redoubt.Agents.Echo do
   defp run("spin"), do: spin()
 
   defp run("load"), do: load()
+
+  defp run("loadwrite"), do: load_write()
 
   # The scripted hostile agents, each a module beside this one that reads the same `/project/in`
   # order and writes the same `/project/out/result`, driven by `start_agent` as this one is
@@ -171,6 +217,38 @@ defmodule Redoubt.Agents.Echo do
     catch
       _, _ -> :erlang.halt(2)
     end
+  end
+
+  # The loads of `load`, with a line appended to a file of this agent's own under `/project/out`
+  # after each: its step, the module and its load's answer and time, and the answer the write
+  # before it got with its time, so the file says which of the agent's writes the volume took
+  # and which the hub answered otherwise (docs/userland/files.md, "Files over 9P": every request
+  # is answered, the operation's bound the sum of its requests'). The agent returns whatever its
+  # writes answered: the agent of `lease-writes`, which starts many of them at once and reads the
+  # files.
+  defp load_write do
+    born = :erlang.system_time(:microsecond)
+    out = "/project/out/load-#{born}"
+    File.mkdir_p("/project/out")
+
+    append = fn step, line ->
+      t0 = :erlang.system_time(:microsecond)
+      r = File.write(out, "#{step} #{line}\n", [:append])
+      {r, :erlang.system_time(:microsecond) - t0}
+    end
+
+    first = append.(1, "born #{born}")
+
+    last =
+      Enum.reduce(Enum.with_index(@loads, 2), first, fn {module, step}, previous ->
+        t0 = :erlang.system_time(:microsecond)
+        r = Code.ensure_loaded(module)
+        us = :erlang.system_time(:microsecond) - t0
+        append.(step, "#{inspect(module)} #{us} us #{inspect(r)} prev=#{inspect(previous)}")
+      end)
+
+    append.(length(@loads) + 2, "done #{:erlang.system_time(:microsecond)} prev=#{inspect(last)}")
+    :ok
   end
 
   # The result written, if it can be; then the lease's end.
