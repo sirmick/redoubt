@@ -10,7 +10,7 @@ qemu_seed = 3
 whole_run = false
 # The image's programs, the steward built with its test-only latency-probe (servers/steward,
 # src/bin/steward.rs, Probe), and the crossing program the image publishes. The latency manifest
-# gives the steward the stand-in's weight, 1000 under `system` (the image's is 100): the
+# gives the steward the stand-in's weight, 1000 under `system`, the image's own: the
 # workload the page's targets were set at.
 programs = [
     { package = "redoubt-init", bin = "init" },

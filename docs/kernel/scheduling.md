@@ -865,7 +865,8 @@ prints them; the post-check judges them net of audits with the targets above, un
 R10 from the trace. The load shapes differ: the stand-in's spinners were plain budgets of weight
 100 under `users`, the steward's are lease VMs under alice's share, each a `sizes.agent` budget;
 the measured quantities are per lease end, whatever carries the load. The steward runs at the
-workload's weight, 1,000 under `system`, in the case's manifest. A lease's end is measured to its
+workload's weight, 1,000 under `system`, the image's own, so the targets are measured at the
+weight the image runs the steward at. A lease's end is measured to its
 destruction and the notice to the sponsor: the servers' records are freed after, off the measured
 path. N = 4 is measured at one hart since every shared server's budget became its manifest
 entry's ([serving](../servers/serving.md#admit)), and the round at N = 16 runs since the
