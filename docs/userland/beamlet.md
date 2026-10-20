@@ -658,7 +658,7 @@ Measured in that build under `icount` (`shift=3`, sleep on) with seed 1, in gues
 | EROFS, with the boot pack | 12.4 s | 9.9 s | 12.0 s | 9.6 s |
 | EROFS, with the boot pack, the shell the steward's console session, to the driver's first read | 15.4 s | 13.2 s | 17.6 s | 15.3 s |
 | the same, 16-page lends for the public entry's push and the session's stream, to the first prompt drawn | 14.7 s | 12.2 s | 16.3 s | 13.7 s |
-| the same, the shell's commands loaded when first called, a boot pack of 78 entries | 13.1 s | 10.9 s | 14.7 s | 12.4 s |
+| the same, the shell's commands loaded when first called, a boot pack of 78 entries | 10.3 s | 8.5 s | 11.8 s | 9.9 s |
 
 On littlefs 99 % of the boot was in the VM's 96 lookups: `littlefsd` found each file's name in the
 volume's root directory again two or three times for every 9P operation, 77,710 block reads of 673
@@ -673,31 +673,32 @@ blocks, 157 runs of a file's blocks) in 209 calls to `blkd` of 2.46 MB. (That bu
 call `erofsd` made to `blkd`, and the whole sectors it carried; `erofsd`'s `boot-stats` now
 counts each read it asks of its range, whatever calls the range client splits it into, and the
 bytes it asks for.) Reading the pack takes 3.6 s verified and 1.2 s unverified, and the VM's work
-after it, decoding the modules as they are called, 8.0 s; the verified prompt is the same across
-seeds 1 to 5. On littlefs the prompt with the boot pack is at 152 s verified, since `littlefsd`
-finds the file again for each read.
+after it, decoding the modules as they are called, 8.0 s. On littlefs the prompt with the boot
+pack is at 152 s verified, since `littlefsd` finds the file again for each read.
 
 Since the steward starts the shell as the console principal's session
 ([the steward](../servers/steward.md#authentication-and-sessions)), the verified first prompt on
-rv64 comes at 14.7 s: `init` has started its servers by 0.6 s, and pushes beamlet's 4 MB public
-entry to `bootfsd` until 1.9 s, when it starts the steward; from 1.9 to 5.8 s the steward carves
-the session's budget, streams its image from `bootfsd` into the new process in the client
-library's launch batches of 64 pages ([native programs](native.md#the-client-library)), and the VM
-reads its boot pack; from 5.8 to 11.8 s the shell's application starts, until its driver takes
-the console; from 11.8 to 14.7 s the shell starts under the driver, to its banner and first
-prompt. Unverified the same points are at 1.8, 3.6, 9.5 and 12.2 s. On rv32 the steward starts
-at 2.3 s, the boot pack is read by 6.6 s, the driver reads at 13.2 s and the prompt comes at
-16.3 s; unverified at 2.2, 4.4, 10.9 and 13.7 s. The push and the stream are calls of the same
-cost whatever they carry, about 2.5 ms each in this build: before `init` and the steward lent 16
-pages a call (one page of a public entry per `add`, a 9P read of 8 KiB), they were 1,024 and about
-512 calls, and the steward started at 3.1 s and the shell's driver read at 13.7 s on rv64 (4.0
-and 15.7 s on rv32). The `add` carries 32 KiB, a power of two, so `bootfsd`'s entry doubles onto
-4 MiB and its heap's peak stays half its cap. Since the shell's commands are loaded when first
-called, its start loads fewer modules: the driver reads at 11.3 s and the first prompt comes at
-13.1 s on rv64 (10.9 s unverified), and at 12.7 and 14.7 s on rv32 (12.4 s unverified).
+rv64 comes at 10.3 s: `init` has started its servers and pushed beamlet's 4 MB public entry to
+`bootfsd` by 1.6 s, when it starts the steward; from 1.6 to 4.4 s the steward carves the
+session's budget, streams its image from `bootfsd` into the new process in the client library's
+launch batches of 64 pages ([native programs](native.md#the-client-library)), and the VM reads
+its boot pack; from 4.4 to 8.4 s the shell's application starts, until its driver takes the
+console; from 8.4 to 10.3 s the shell starts under the driver, to its banner and first prompt.
+Unverified the same points are at 1.5, 2.9, 6.7 and 8.5 s. On rv32 the steward starts at 1.9 s,
+the boot pack is read by 5.1 s, the driver reads at 9.6 s and the prompt comes at 11.8 s;
+unverified at 1.9, 3.5, 8.0 and 9.9 s. The push and the stream are calls of the same cost
+whatever they carry, so `init` and the steward lend 16 pages a call: the `add` carries 32 KiB, a
+power of two, so `bootfsd`'s entry doubles onto 4 MiB and its heap's peak stays half its cap. The
+shell's commands are loaded when first called, so its start loads few modules. The kernel's
+audits and fault reports hold no other hart, and a slice's end pays for its own work, not for
+checked calls, whole budgets and three timer arms; each takes about 2 s off the prompt on both
+widths. The row is seed 1, whose runs differ by under 0.03 s; in a whole run of the bench the
+unverified prompts came within 0.03 s of it. Across seeds 1 to 4 the prompt moves by under
+0.08 s; seed 5 is the slowest, at 10.9 and 8.8 s on rv64 and 12.3 and 10.2 s on rv32.
 
-**The boot-time target:** in this build, the prompt within 20 s of guest time, verified and
-unverified, on both widths: the slowest measured prompt plus a tenth, rounded up to 5 s.
+**The boot-time target:** in this build, the prompt within 15 s of guest time, verified and
+unverified, on both widths: the slowest measured prompt plus a tenth, rounded up to 5 s, here
+seed 5's verified prompt on rv32, 12.3 s, so 13.5 s, rounded up to 15 s.
 `boot-profile` and `boot-profile-unverified` fail past it, and run in every whole run of the bench.
 
 **How fast compiled code runs.** In the console session of the image's boot, under `icount`
