@@ -20,7 +20,7 @@ use beamlet_vm::platform::{
     BudgetSpec, Event, FileError, Files, Identity, Launch, Message, Object, OpenMode, Platform, Refused,
     System,
 };
-use redoubt_client::aio::RETRY_US;
+use redoubt_client::aio::{MAX_WRITE, RETRY_US};
 use redoubt_fake_kernel::fake;
 use redoubt_rt::abi::{FOREVER, Handle};
 use redoubt_rt::handle::Endpoint;
@@ -30,6 +30,8 @@ use redoubt_rt::startup::Startup;
 
 /// The asker the tests' calls are made as.
 const ME: u64 = 7;
+/// A second asker, for an operation beside [`ME`]'s.
+const OTHER: u64 = 8;
 
 /// A test's turn: the clock is the binary's, held once (`Fake::hold_clock`), and a tick is a step
 /// of every test's deadlines at once, taken only when every thread of the fake is in a wait; so
@@ -541,6 +543,169 @@ fn a_request_busy_past_file_wait_fails_busy() {
             settle(p);
             assert_eq!(writes.lock().unwrap().len(), tried, "a retry went on past the failure");
             p.close(out);
+        },
+    );
+    f.destroy(sink.pid, sink.endpoint);
+    let _ = sink.thread.join();
+}
+
+/// A request given up on in flight leaves its fid to be clunked when the server's late answer
+/// comes: a read of a walked file held past the bound fails `etimedout`, and once the sink lets
+/// the read go the hub drops its answer and clunks the walked fid, so the server lets it go and
+/// the connection's pool recovers; a give-up that kept the fid leaked one per timeout.
+#[test]
+fn a_fid_given_up_on_is_clunked_when_its_late_answer_comes() {
+    let f = fake();
+    let sink = fixture::sink(0);
+    let (hold, clunks) = (Arc::clone(&sink.hold_reads), Arc::clone(&sink.clunks));
+    let (server, endpoint) = (sink.pid, sink.endpoint);
+    with_session(
+        move |pid| vec![("sink", f.grant(server, endpoint, pid, 0x60))],
+        move |p, _| {
+            let (sink, _) = p.lookup("sink").unwrap();
+            p.bind("/sink", &sink).unwrap();
+            // The walk and the open are answered; the read is held: the operation gives up at
+            // the bound with the walked fid in the server's hands.
+            hold.store(true, std::sync::atomic::Ordering::SeqCst);
+            p.asker(Some(ME));
+            assert_eq!(p.read_file("/sink/out", 64).err(), Some(FileError::Later));
+            p.asker(None);
+            assert!(step_until(p, 2 * FILE_WAIT_US, |p| p.finished() == Some(ME)), "no answer");
+            p.asker(Some(ME));
+            assert_eq!(p.read_file("/sink/out", 64), Err(FileError::Etimedout));
+            p.asker(None);
+            assert_eq!(clunks.lock().unwrap().len(), 0);
+            // The read let go: its answer comes to no one, and the fid is clunked after it.
+            hold.store(false, std::sync::atomic::Ordering::SeqCst);
+            let how = OpenMode { write: true, ..OpenMode::default() };
+            let out = ask_stepping(p, |p| p.open("/sink/out", how)).unwrap();
+            assert!(
+                step_until(p, FILE_WAIT_US, |_| clunks.lock().unwrap().len() == 1),
+                "the fid was not clunked"
+            );
+            // The connection serves on, and the number is back in the pool.
+            assert_eq!(ask(p, |p| p.read_file("/sink/out", 64)), Ok(Vec::new()));
+            p.close(out);
+        },
+    );
+    f.destroy(sink.pid, sink.endpoint);
+    let _ = sink.thread.join();
+}
+
+/// A `File` operation is several hub requests, each bounded by `FILE_WAIT_US` on its own, so the
+/// operation's bound is their sum: a write of two pieces whose first the server answers only
+/// after nine tenths of the bound, and whose second it never answers, fails `etimedout` after
+/// nearly twice the bound, not at one, the second request's clock having begun at its own send.
+#[test]
+fn an_operations_bound_is_the_sum_of_its_requests() {
+    let f = fake();
+    let sink = fixture::sink(0);
+    let (hold, let_through) = (Arc::clone(&sink.hold_writes), Arc::clone(&sink.let_writes));
+    let taken = Arc::clone(&sink.taken);
+    let (server, endpoint) = (sink.pid, sink.endpoint);
+    with_session(
+        move |pid| vec![("sink", f.grant(server, endpoint, pid, 0x60))],
+        move |p, _| {
+            let (sink, _) = p.lookup("sink").unwrap();
+            p.bind("/sink", &sink).unwrap();
+            let how = OpenMode { write: true, ..OpenMode::default() };
+            let out = ask(p, |p| p.open("/sink/out", how)).unwrap();
+            let data = vec![7u8; 2 * MAX_WRITE];
+            hold.store(true, std::sync::atomic::Ordering::SeqCst);
+            p.asker(Some(ME));
+            assert_eq!(p.pwrite(out, 0, &data), Err(FileError::Later));
+            p.asker(None);
+            let begun = p.monotonic_us();
+            // The first piece waits at the server for nine tenths of the bound. Then it is let
+            // through, and served when the next request reaches the server: another asker's
+            // stat, itself `busy` while the piece holds the connection's one request.
+            fake().tick(FILE_WAIT_US * 9 / 10);
+            let_through.store(1, std::sync::atomic::Ordering::SeqCst);
+            p.asker(Some(OTHER));
+            assert_eq!(p.info("/sink/out", false).err(), Some(FileError::Later));
+            p.asker(None);
+            // The first piece answered, the second sent and held for good: the operation fails
+            // at the second's own bound, nearly twice the first's from its start.
+            assert!(step_until(p, 2 * FILE_WAIT_US, |p| p.finished() == Some(ME)), "no answer");
+            p.asker(Some(ME));
+            assert_eq!(p.pwrite(out, 0, &data), Err(FileError::Etimedout));
+            p.asker(None);
+            let took = p.monotonic_us() - begun;
+            assert!(
+                took >= FILE_WAIT_US * 19 / 10,
+                "failed at {took} us, before the second request's own bound"
+            );
+            assert_eq!(taken.lock().unwrap().len(), MAX_WRITE, "the first piece reached the server");
+            p.close(out);
+        },
+    );
+    f.destroy(sink.pid, sink.endpoint);
+    let _ = sink.thread.join();
+}
+
+/// A request given up on while it waits to go again on a walked fid (`busy` again and again:
+/// `ebusy`) answers its asker at the bound, and the fid's clunk follows as a closed file's does,
+/// off the asker's path: the server never takes the clunk here, its one request held by a read,
+/// and the asker has its answer all the same; the fid goes back once the clunk is served.
+#[test]
+fn a_give_up_on_a_walked_fid_answers_its_asker_before_the_clunk() {
+    let f = fake();
+    let sink = fixture::sink(0);
+    let (hold, busy_opens) = (Arc::clone(&sink.hold_reads), Arc::clone(&sink.busy_opens));
+    let clunks = Arc::clone(&sink.clunks);
+    let (server, endpoint) = (sink.pid, sink.endpoint);
+    with_session(
+        move |pid| vec![("sink", f.grant(server, endpoint, pid, 0x60))],
+        move |p, _| {
+            let (sink, _) = p.lookup("sink").unwrap();
+            p.bind("/sink", &sink).unwrap();
+            let held = ask(p, |p| p.open("/sink/out", OpenMode::default())).unwrap();
+            busy_opens.store(u32::MAX, std::sync::atomic::Ordering::SeqCst);
+            let how = OpenMode { write: true, ..OpenMode::default() };
+            p.asker(Some(ME));
+            assert_eq!(p.open("/sink/out", how), Err(FileError::Later));
+            p.asker(None);
+            // One step: the walk is answered, the open `busy`, its retry due. Then a held read
+            // takes the connection's one request, so the retries, and the clunk at the end, are
+            // `busy` at the server.
+            fake().tick(RETRY_US);
+            let now = p.monotonic_us();
+            p.idle(Some(now));
+            hold.store(true, std::sync::atomic::Ordering::SeqCst);
+            p.asker(Some(OTHER));
+            assert_eq!(p.read(held, 16).err(), Some(FileError::Later));
+            p.asker(None);
+            let begun = p.monotonic_us();
+            assert!(
+                step_until(p, FILE_WAIT_US + RETRY_US, |p| p.finished() == Some(ME)),
+                "the asker waited past the bound, for the clunk"
+            );
+            p.asker(Some(ME));
+            assert_eq!(p.open("/sink/out", how), Err(FileError::Ebusy));
+            p.asker(None);
+            assert!(p.monotonic_us() - begun >= FILE_WAIT_US - RETRY_US, "failed before the bound");
+            assert_eq!(
+                clunks.lock().unwrap().len(),
+                0,
+                "the clunk was served while its server held the request"
+            );
+            // The read let go: the clunk's next retry has the request served and is served
+            // after it, and the fid goes back. The read's asker was answered at its own bound
+            // meanwhile, the read itself or `etimedout`, as the hub's rule has it.
+            hold.store(false, std::sync::atomic::Ordering::SeqCst);
+            busy_opens.store(0, std::sync::atomic::Ordering::SeqCst);
+            assert!(
+                step_until(p, 2 * FILE_WAIT_US, |_| clunks.lock().unwrap().len() == 1),
+                "the clunk never served"
+            );
+            p.asker(Some(OTHER));
+            let read = p.read(held, 16);
+            p.asker(None);
+            assert!(
+                matches!(read, Ok(_) | Err(FileError::Etimedout)),
+                "the read's asker was not answered: {read:?}"
+            );
+            p.close(held);
         },
     );
     f.destroy(sink.pid, sink.endpoint);

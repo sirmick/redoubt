@@ -172,6 +172,20 @@ enum Owner {
     Op(u64),
     /// A closed file's clunk, on its hub connection: its fid goes back on the answer.
     Close(Connection, Conn, u32),
+    /// A request its operation gave up on ([`Table::give_up`]): its answer, when it comes, is
+    /// dropped, and the fid it concerned is dealt with then, by what the request was.
+    GivenUp(Connection, Conn, u32, Left),
+}
+
+/// What a given-up request leaves at the server once answered: the fid of a walk in flight,
+/// which exists if the walk of this many names went through; the operation's walked fid, which
+/// exists whatever the answer; or no fid of the operation's (an open file's, which stays its
+/// handle's).
+#[derive(Clone, Copy)]
+enum Left {
+    Walking(usize),
+    Walked,
+    Nothing,
 }
 
 /// A closed file's clunk the server answered `busy`: sent again when its retry is due, the fid
@@ -270,10 +284,13 @@ impl Table {
     /// at `MAX_WAITERS`: `emfile`, it never held one. A share, `busy` again and again: `ebusy`,
     /// the retry stops. An answer: `etimedout`, the server's own name for it. A request in
     /// flight at the bound (the first send, or a retry the server has not answered yet) is left
-    /// to the server: its answer, if it ever comes, finds no owner and is dropped, and its fid is
-    /// retired as a lost reply's is, so no later walk reaches a fid the server may still hold. A
-    /// request parked for its retry was never taken: a walk's fid is freed, a walked fid is
-    /// clunked. The connection is kept.
+    /// to the server, and is no longer the operation's ([`Owner::GivenUp`]): its answer, when it
+    /// comes, is dropped, and the fid it concerned is clunked then as a closed file's is, or its
+    /// number given back if the walk it asked for failed ([`Table::take`]), so the server lets
+    /// go of every fid the hub gave up on and the connection's pool recovers; one whose answer
+    /// never comes ends with the connection. A request parked for its retry was never taken: a
+    /// walk's fid is freed, a walked fid is clunked as a closed file's is ([`Table::go_on`]),
+    /// after the caller has its answer. The connection is kept.
     fn give_up(&mut self, op: &mut Op) {
         let Some((ask, tag)) = op.out.take() else { return };
         op.deadline = None;
@@ -282,7 +299,20 @@ impl Table {
             None => FileError::Emfile,
             Some(hub) => {
                 if !parked {
-                    self.requests.retain(|(c, t, _)| !(*c == hub && *t == tag));
+                    let left = match (&ask, op.walked) {
+                        (Ask::Walk(names), _) => Some(Left::Walking(names.len())),
+                        // The fid's own end is in flight: its answer is a closed file's.
+                        (Ask::Clunk | Ask::Remove, _) => None,
+                        (_, true) => Some(Left::Walked),
+                        (_, false) => Some(Left::Nothing),
+                    };
+                    let (conn, fid) = (op.conn.clone(), op.fid);
+                    if let Some(entry) = self.requests.iter_mut().find(|(c, t, _)| *c == hub && *t == tag) {
+                        entry.2 = match left {
+                            Some(left) => Owner::GivenUp(conn, hub, fid, left),
+                            None => Owner::Close(conn, hub, fid),
+                        };
+                    }
                     op.walked = false;
                 }
                 if op.busied { FileError::Ebusy } else { FileError::Etimedout }
@@ -317,6 +347,26 @@ impl Table {
                 Outcome::Ended | Outcome::Flushed => {}
                 _ => conn.free_fid(fid),
             },
+            // The late answer of a request given up on: dropped, and the fid it leaves at the
+            // server clunked, as a closed file's, now that the server has answered what came
+            // before the clunk; a walk that failed, or was refused `busy`, made none.
+            Owner::GivenUp(conn, hub, fid, left) => {
+                let exists = match (left, &done.outcome) {
+                    (_, Outcome::Ended | Outcome::Flushed) | (Left::Nothing, _) => None,
+                    (Left::Walked, _) => Some(true),
+                    (Left::Walking(_), Outcome::Busy | Outcome::Rerror(_)) => Some(false),
+                    (Left::Walking(names), Outcome::Reply(bytes)) => Some(matches!(
+                        Message::decode(bytes),
+                        Ok(Message { body: Body::Rwalk { qids }, .. }) if qids.as_slice().len() == names
+                    )),
+                    (Left::Walking(_), _) => Some(false),
+                };
+                match exists {
+                    Some(true) => self.clunk(io, conn, hub, fid),
+                    Some(false) => conn.free_fid(fid),
+                    None => {}
+                }
+            }
             Owner::Op(asker) => {
                 if let Some(mut op) = self.ops.remove(&asker) {
                     let reply = op.out.take().map(|(ask, _)| (reply(&ask, done), ask));
@@ -374,7 +424,7 @@ impl Table {
             _ => {}
         }
         if op.result.is_some() {
-            // The clunk after the end: the result stands.
+            // A remove's answer after a refusal of its own: the result stands.
             return;
         }
         // A create refused, for an open that may find the file there (a served file a server does
@@ -548,17 +598,24 @@ impl Table {
         op.result = Some(Ok(Answer::Done));
     }
 
-    /// Sends what `op` asks next, or ends it: its result, then a clunk of the fid it walked. An ask
-    /// answered `busy` waits here until its retry is due, and [`Table::pump`] sends it. An
-    /// operation without a hub connection yet takes one first; with every waiter's place held it
-    /// parks the same way, asking again at the retry interval until a hand-over frees a place or
-    /// its wait reaches [`FILE_WAIT_US`] ([`Table::give_up`]): a refusal of the VM's own, before
-    /// a byte is sent, and never on the VM's thread.
+    /// Sends what `op` asks next, or ends it with its result. A fid it still holds walked at its
+    /// end (an open the server refused, a request given up on while parked for its retry) is
+    /// clunked as a closed file's is, off the asker's path: its answer is the asker's within the
+    /// one request's bound, and the clunk is cleanup, the fid given back when the server answers
+    /// it (docs/userland/files.md, "Files over 9P"). An ask answered `busy` waits here until its
+    /// retry is due, and [`Table::pump`] sends it. An operation without a hub connection yet takes
+    /// one first; with every waiter's place held it parks the same way, asking again at the retry
+    /// interval until a hand-over frees a place or its wait reaches [`FILE_WAIT_US`]
+    /// ([`Table::give_up`]): a refusal of the VM's own, before a byte is sent, and never on the
+    /// VM's thread.
     fn go_on(&mut self, io: &mut Io, asker: u64, mut op: Op) {
         loop {
             let now = crate::now();
             if op.out.is_none() && op.result.is_some() && op.walked {
-                op.out = Some((Ask::Clunk, 0));
+                op.walked = false;
+                if let Some(hub) = op.hub {
+                    self.clunk(io, op.conn.clone(), hub, op.fid);
+                }
             }
             if op.out.is_some() && op.retry_at.is_some_and(|at| now < at) {
                 self.ops.insert(asker, op);
@@ -708,9 +765,15 @@ impl Table {
     /// Closes `handle`: its fid is clunked, and goes back on the answer.
     fn close_handle(&mut self, handle: u64, io: &mut Io) {
         let Some(open) = self.open.remove(&handle) else { return };
-        // Not sent: the fid stays in use until the connection ends, as a dropped file's does.
-        if let Ok(tag) = send(io, open.hub, open.fid, &Ask::Clunk) {
-            self.requests.push((open.hub, tag, Owner::Close(open.conn, open.hub, open.fid)));
+        self.clunk(io, open.conn, open.hub, open.fid);
+    }
+
+    /// Clunks `fid` on `hub`, nobody waiting for the answer: the fid goes back when it comes
+    /// ([`Owner::Close`]), or on the connection's end. Not sent: the fid stays in use until the
+    /// connection ends, as a dropped file's does.
+    fn clunk(&mut self, io: &mut Io, conn: Connection, hub: Conn, fid: u32) {
+        if let Ok(tag) = send(io, hub, fid, &Ask::Clunk) {
+            self.requests.push((hub, tag, Owner::Close(conn, hub, fid)));
         }
     }
 

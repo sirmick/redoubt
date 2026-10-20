@@ -24,7 +24,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::io::{Read as _, Write};
 use std::num::NonZeroU64;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
@@ -33,7 +33,8 @@ use redoubt_rt::abi::{Error, FOREVER, Handle};
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::ipc::{Caller, Event, Request, Words};
 use redoubt_rt::server::ninep::{
-    Around, FileServer, FileStat, NineError, NineServer, Qid, Read, WORDS_9P, mode, refuse, refuse_malformed,
+    Around, FileServer, FileStat, NineError, NineServer, Qid, Read, WORDS_9P, Write as Served, mode, refuse,
+    refuse_malformed,
 };
 use redoubt_rt::server::parked::{NotParked, Parked};
 use redoubt_rt::server::typed::{Answer, Protocol, TypedServer, serve_call};
@@ -340,6 +341,13 @@ pub struct SinkServer {
     pub hold_reads: Arc<AtomicBool>,
     /// When each clunk was served (`time_now`, µs): a fid the server let go of.
     pub clunks: Arc<Mutex<Vec<u64>>>,
+    /// While set, a write of `out` waits as a held read does, except the next `let_writes` of
+    /// them, which are served: so a test can answer one piece of a write and hold the next.
+    pub hold_writes: Arc<AtomicBool>,
+    pub let_writes: Arc<AtomicU32>,
+    /// How many opens are still answered `busy`, as a server over its share answers: a walked
+    /// fid whose next request never gets through.
+    pub busy_opens: Arc<AtomicU32>,
 }
 
 /// Starts a [`SinkServer`] answering the first `busy` writes `busy`.
@@ -351,12 +359,18 @@ pub fn sink(busy: u32) -> SinkServer {
     let taken = Arc::new(Mutex::new(Vec::new()));
     let hold_reads = Arc::new(AtomicBool::new(false));
     let clunks = Arc::new(Mutex::new(Vec::new()));
+    let hold_writes = Arc::new(AtomicBool::new(false));
+    let let_writes = Arc::new(AtomicU32::new(0));
+    let busy_opens = Arc::new(AtomicU32::new(0));
     let sink = Sink {
         busy,
         writes: Arc::clone(&writes),
         taken: Arc::clone(&taken),
         hold_reads: Arc::clone(&hold_reads),
         clunks: Arc::clone(&clunks),
+        hold_writes: Arc::clone(&hold_writes),
+        let_writes: Arc::clone(&let_writes),
+        busy_opens: Arc::clone(&busy_opens),
     };
     let thread = f.run(pid, move || {
         // `consoled`'s page share, and a share of one request: a second request outstanding on
@@ -369,7 +383,18 @@ pub fn sink(busy: u32) -> SinkServer {
         server.requests_wait(FOREVER);
         server.run(&Endpoint::from_handle(endpoint), |_, request| refuse_malformed(request))
     });
-    SinkServer { pid, endpoint, thread, writes, taken, hold_reads, clunks }
+    SinkServer {
+        pid,
+        endpoint,
+        thread,
+        writes,
+        taken,
+        hold_reads,
+        clunks,
+        hold_writes,
+        let_writes,
+        busy_opens,
+    }
 }
 
 /// The sink's nodes: its root directory, and `out`.
@@ -385,6 +410,9 @@ struct Sink {
     taken: Arc<Mutex<Vec<u8>>>,
     hold_reads: Arc<AtomicBool>,
     clunks: Arc<Mutex<Vec<u64>>>,
+    hold_writes: Arc<AtomicBool>,
+    let_writes: Arc<AtomicU32>,
+    busy_opens: Arc<AtomicU32>,
 }
 
 fn sink_qid(node: Node) -> Qid {
@@ -411,7 +439,13 @@ impl FileServer for Sink {
         }
     }
 
+    /// Opened; `busy` while the fixture is told to be, as a server over its share answers.
     fn open(&mut self, _: &Caller, node: &Node, _open_mode: u8) -> Result<Qid, NineError> {
+        let busy = self.busy_opens.load(Ordering::SeqCst);
+        if busy > 0 {
+            self.busy_opens.store(busy - 1, Ordering::SeqCst);
+            return Err(NineError::BUSY);
+        }
         Ok(sink_qid(*node))
     }
 
@@ -440,6 +474,25 @@ impl FileServer for Sink {
         }
         self.taken.lock().expect("the bytes").extend_from_slice(data);
         Ok(data.len())
+    }
+
+    /// While the test holds writes, a write of `out` waits as a held read does, but for the
+    /// next `let_writes` of them.
+    fn write_or_wait(
+        &mut self,
+        caller: &Caller,
+        node: &Node,
+        offset: u64,
+        data: &[u8],
+    ) -> Result<Served, NineError> {
+        if *node == Node::Out && self.hold_writes.load(Ordering::SeqCst) {
+            let let_through = self.let_writes.load(Ordering::SeqCst);
+            if let_through == 0 {
+                return Ok(Served::Wait);
+            }
+            self.let_writes.store(let_through - 1, Ordering::SeqCst);
+        }
+        self.write(caller, node, offset, data).map(Served::Done)
     }
 
     fn stat(&mut self, _: &Caller, node: &Node) -> Result<FileStat, NineError> {
