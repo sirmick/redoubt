@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 576
+revision = 578
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -2762,8 +2762,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   needs = ["READ1"]
   body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'READ1 gate verdict + WRITE1'. Brief: to follow the measurement (investigation-first; the Architect settles the fix on it). Tier A (the VM's file hub, userland/otp files.rs, and walfsd's write/completion path), size S-M, reviewer kernel-red-3 or the orchestrator's walfsd red. Found by READ1's gate: an agent's File.write to /project whose bytes reached walfsd never returns to the VM (no exit, no error, no progress for 2,000 s guest), at N = 4 rv64 one hart, with and without the client's bounded retry; evidence .worktrees/READ1/.tmp/READ1/diag4*, gate-rv64-1. A liveness bug: in production the lease burns to its deadline doing nothing, its sponsor told nothing. It is NOT decision 3's slow write (a throughput finding, an answered etimedout) and NOT READ1's admission death (a refused fid): the write was served and its completion lost. First measurement, hub vs walfsd, for one hung write: did walfsd send the Rwrite; did the hub give up at FILE_WAIT_US (files.rs give_up retires the fid, drops a later answer); was the Elixir caller answered by either. The three outcomes name the owner (walfsd's write path or its parked completion call, STEWARD7's in_flight; the hub's give-up not answering its caller, IPD1's rule from the other side; beamlet's call path), the ruling spells them out. Rule to hold whichever it is: every hub request ends in exactly one answer to its caller within FILE_WAIT_US + the reply margin; walfsd's longest write service stated against it. Cases: the hung shape reproduced as a boot case (N writers to /project, every write answered, the file's bytes checked), both widths; a host test of the hub's give-up answering its caller when the reply is late. Pages: walfsd.md 'Residual risks' (READ1's stated finding replaced by the rule), files.md 'Files over 9P' (the one-answer rule). READ1 does not wait for it."
-  state = "todo"
-  revision = 564
+  state = "active"
+  revision = 577
 
 [[node]]
   id = "WAKE1"
@@ -2780,5 +2780,5 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "AGENTS"
   body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'READ1 gate + KILL1'. Brief: to follow the reproduction (investigation-first; the Architect settles the fix on it). Tier A (the steward's destroy path, possibly the kernel's budget/process charging), size S-M, reviewers steward-red-5 AND kernel-red-3 (one arm each). Found by READ1's lease-code-load: sixteen leases of one account exit 0 close together and one is `was killed 0` the instant a neighbour's end batch runs: a live lease's budget destroyed by another lease's DestroyBudget, the deadline still ahead (so STEWARD10's witness lets the destroy through: t < d, Ok, the index no longer names the budget the record was made for). Reproduce first on the fake kernel (servers/steward/tests): sixteen leases ending by process exit close together, the fake kernel asserting each destroy hits the budget created for that step's lease, the verdict the kernel's. Arms, excluded in order (the ruling spells them out): (i) steward: a lease's budget handle index closed or revoked before its end and reused by a later lease's budget; (ii) steward: the exit watcher's index-to-owner map (pids) stale across a reused index; (iii) kernel: a process placed in or charged to another lease's budget. STEWARD10's 'display artifact' (`agent-N was killed 0` twice) is re-examined as this bug's first sighting. Rule to hold: no destroy by a handle the steward keeps reaches an object other than the one the record was made for, on EVERY end path (deadline, end_lease, process exit, blame), by construction: the witness extended to identity, or the record re-validated, as the cause decides; a kernel arm is raised to the Architect. Acceptance: the fake-kernel test; lease-code-load's sixteen `exited 0` and no `killed` on both widths and hart counts (READ1's case, excluded from the whole run until this lands, never weakened); the steward set unchanged. Pages: steward.md 'Leases'/'Failure and restart', SECURITY.md R10/R39/R41 rows."
-  state = "active"
-  revision = 576
+  state = "reported"
+  revision = 578
