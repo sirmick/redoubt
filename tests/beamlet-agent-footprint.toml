@@ -1,4 +1,4 @@
-description = "What an agent's VM holds (docs/servers/steward.md, \"Leases\"; docs/userland/beamlet.md, \"What the VM holds at its prompt\"): the image's servers boot with beamlet started by init as a lease's VM is, running the agent module `Redoubt.Agents.Echo` with the session's two schedulers and no shell, its project root the data volume's root with the staged input `keep hello`, so it takes the echo path (reads the input, writes `out/result`, reads it back) and then idles as an agent that has done its work does: the bench's memory scan, from the guest's RAM after the agent says the result is written, states the VM's heap peak over that run, `heap beamlet PEAK of CAP pages`, which the image's `sizes.agent` is set from (twice the peak plus what the VM holds outside the heap, rounded up to 128; image/README.md). The verdict is the scan's line, with beamlet's line that the agent module was loaded and the agent's that it wrote (rule F)"
+description = "What an agent's VM holds (docs/servers/steward.md, \"Leases\"; docs/userland/beamlet.md, \"What the VM holds at its prompt\"): the image's servers boot with beamlet started by init as a lease's VM is, running the agent module `Redoubt.Agents.Echo` with the session's two schedulers and no shell, its project root the data volume's root with the staged input `keep hello`, so it takes the echo path (reads the input, writes `out/result`, reads it back) and then idles as an agent that has done its work and must stay alive does, spinning (docs/userland/agents.md, \"Leases\"): the bench's memory scan, from the guest's RAM after the agent says the result is written, states the VM's heap peak over that run, `heap beamlet PEAK of CAP pages`, which the image's `sizes.agent` is set from (twice the peak plus what the VM holds outside the heap, rounded up to 128; image/README.md). The verdict is the scan's line, with beamlet's line that the agent module was loaded and the agent's that it wrote (rule F)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 # The image's programs; the manifest is the image's servers with beamlet started by init
@@ -27,7 +27,12 @@ expect = [
     # agent holds (the file module it then calls is the boot pack's, loaded unlogged).
     'Elixir\.Redoubt\.Agents\.Echo read from',
     # The agent read its staged input, `keep hello`, and wrote the result: the echo path done,
-    # the VM idle. The scan that follows measures that.
+    # the VM idle. The scan that follows measures that. The agent idles spinning, as a lease's
+    # agent that must stay alive does (docs/userland/agents.md, "Leases"): a VM with nothing
+    # runnable, no timer pending and nothing it waits on exits, and the bench reads the console
+    # under the forbids for a grace after this line before it stops the guest, so an agent that
+    # slept instead exited inside it one run in several under load, and `init`'s line for the
+    # exit failed the case.
     'agent: result written',
 ]
 forbid = [

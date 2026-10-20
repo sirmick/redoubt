@@ -7,8 +7,10 @@ defmodule Redoubt.Agents.Echo do
 
   - `echo`: writes the input back to `/project/out/result` and exits, so the sponsor sees the
     lease end on its own;
-  - `keep TEXT`: writes `TEXT` to `/project/out/result` and waits for ever: the echo path kept
-    alive for `beamlet-agent-footprint` to measure, an agent that has done its work and idles;
+  - `keep TEXT`: writes `TEXT` to `/project/out/result` and idles for ever, spinning as every
+    live path here does: the echo path kept alive for `beamlet-agent-footprint` to measure, an
+    agent that has done its work and must stay alive (docs/userland/agents.md, "Leases": a VM
+    with nothing runnable, no timer pending and nothing it waits on exits);
   - `spin`: loops for ever, so only its deadline or the sponsor's `end_lease` ends it;
   - `load`: loads each module of a fixed list from the system volume and ends: it returns, so
     the VM exits 0, or halts on the first module the volume refuses, an exit that is not 0; it
@@ -91,11 +93,13 @@ defmodule Redoubt.Agents.Echo do
   defp run("echo" <> _rest = text), do: finish(text)
 
   # The echo path, then idle: what `beamlet-agent-footprint` measures, an agent that has done
-  # its work and waits.
-  defp run("keep " <> text) do
-    finish(text)
-    Process.sleep(:infinity)
-  end
+  # its work and waits. It waits as the live paths do, spinning: an agent that must stay alive
+  # keeps a process runnable, since a VM with nothing runnable, no timer pending and nothing it
+  # waits on exits (`beamlet: Deadlock`), and a lease's VM's exit is its lease's end
+  # (docs/userland/agents.md, "Leases"). `Process.sleep(:infinity)` is a receive with no timer:
+  # a `keep` that slept exited as soon as its result was written, and the footprint case failed
+  # whenever `init`'s line for that exit reached the bench inside the grace after the agent's.
+  defp run("keep " <> text), do: wait(text)
 
   defp run("spin"), do: spin()
 

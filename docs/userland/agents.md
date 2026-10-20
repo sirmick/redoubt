@@ -85,6 +85,15 @@ sooner. A lease is task-scoped: "read `~/project`, write `~/project/out`, the `m
   However it ended, the sponsor's unlabelled sessions are told: the shell prints
   `[lease NAME ended]` from the steward's `lease_ended` send, naming the lease and never why
   ([the steward](../servers/steward.md#leases)).
+- **An agent that must stay alive keeps a process runnable.** A VM with nothing runnable, no
+  timer pending and nothing it waits on exits, `beamlet: Deadlock`, an exit that is not 0
+  ([beamlet](beamlet.md#beamlet-on-redoubt)), and a lease's VM's exit is its lease's end as the
+  steward reads it, said as `exited CODE` ([the steward](../servers/steward.md#leases)). So an
+  agent that has done its work and must live to its deadline or its sponsor's `end_lease` idles
+  by a busy recursion, never by a receive with no timeout and no sender: `Process.sleep(:infinity)`
+  is one, and an agent that slept so ended as soon as it slept. The echo agent's live paths and
+  the scripted agents that outlive their work idle that way; one whose work is done returns,
+  and that exit, 0, is its lease's end on purpose.
 - **The image's `agent` is a sponsored principal**: its login is a lease of alice's, carved from
   her unlabelled share for `MAX_LEASE`, which her sessions can end and are told the end of; the
   harness that drives it runs inside the lease unchanged.
