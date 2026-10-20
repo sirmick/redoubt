@@ -34,9 +34,16 @@ use crate::volume::{BLOCK, Blocks, Mounted, Range};
 /// by the same test to at least the tree's largest. A crossing's
 /// program (servers/steward.md, "Declassification and push"), in a budget stamped with the
 /// account, makes plain calls and holds no completion call: one `State` of the bucket for at
-/// most a second, which no sum here counts.
+/// most a second, which no sum here counts. The fids (`Files`) follow from the same connections
+/// as on `walfsd`: each holds its root fid for its life, a fixed cost outside the fair share
+/// (servers/serving.md, `admit`), and beside it its working fids, two for the shell's hub (its
+/// working directory and the fid of the request in hand) and one for a lease's; the share over
+/// the working fids is `max(1, pool / (holders + 1))` with every connection holding, so the pool
+/// is two per connection and two over, and the cap the roots beside it: 23 + 2 x (23 + 1) = 71,
+/// held by the same test to at least that
+/// (`the_file_servers_fid_caps_leave_every_connection_its_root_and_working_share`).
 pub const fn limits(buckets: u32) -> Limits {
-    Limits { buckets, in_flight: 21, files: 32, state: 23, requests: 128, pages: 32 }
+    Limits { buckets, in_flight: 21, files: 71, state: 23, requests: 128, pages: 32 }
 }
 /// What one of each costs, in bytes: a completion call holds its caller's lend, charged to this
 /// server until it replies (kernel/ipc.md R3), `MAX_LEND_PAGES` pages at worst; a fid is its
@@ -46,9 +53,9 @@ pub const COST: Cost =
     Cost { in_flight: 64 * 1024, file: 2048, state: 512, request: REQUEST_STATE, page: PAGE_SIZE as u64 };
 // The budget every bucket at its caps must fit is the manifest entry's: its pages less its heap
 // cap and stack (`redoubt_rt::server::budget`), checked at start, never a count in this code. A
-// bucket at its caps costs 21 completion calls at 64 KiB, 32 fids at 2 KiB, 23 connections at 512
-// bytes, 128 requests at 256 and 32 pages at 4 KiB: 1 617 408 bytes; the manifests' 4 buckets take
-// 6 469 632, 1 580 pages; with no heap cap and the stack's bound 128, rounded up to 256, the entry
+// bucket at its caps costs 21 completion calls at 64 KiB, 71 fids at 2 KiB, 23 connections at 512
+// bytes, 128 requests at 256 and 32 pages at 4 KiB: 1 697 280 bytes; the manifests' 4 buckets take
+// 6 789 120, 1 658 pages; with no heap cap and the stack's bound 128, rounded up to 256, the entry
 // rule gives 1 792, their entries, which leave 1 664 pages of budget, four such buckets and not a
 // fifth (`the_manifests_entry_holds_its_buckets`).
 

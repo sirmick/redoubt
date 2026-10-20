@@ -60,7 +60,7 @@
       "args": ["endpoint=walfsd:data", "buckets=5"] },
     { "name": "walfsd:alice-secrets", "program": "walfsd",
       "stack_pages": "14", "heap_pages": "64",
-      "budget": { "pages": "1792", "processes": 1, "weight": 100 },
+      "budget": { "pages": "2048", "processes": 1, "weight": 100 },
       "volume": "alice-secrets", "labels": ["alice-secrets"],
       "receives": ["walfsd:alice-secrets"],
       "args": ["endpoint=walfsd:alice-secrets", "buckets=4"] },
