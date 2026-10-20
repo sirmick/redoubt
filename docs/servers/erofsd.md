@@ -121,12 +121,11 @@ root and its working fid, so the supported count is the manifest's own lease ter
 leases `steward-latency`'s alice carves beside her two sessions and the image's seven with
 margin, held by bench:lease-code-load (sixteen agents of one account loading 27 modules each at
 once, every one ending by its own exit and none refused, on both widths at one and two harts).
-What that case found beyond the read path keeps it out of the whole run for now: in every boot
-all sixteen launch and load and fifteen exit 0, and one is killed the instant the lease that
-ended just before it is destroyed, with no end of its own first, a lease's end taking a
-neighbour's VM, which is a failure of the lease's own rule, that it ends at its deadline or its
-sponsor's word ([the steward](steward.md#residual-risks)), open and not of the read path: every
-agent that exited had loaded all 27 modules, none was refused. The read path
+The case runs on the host's clock: under the virtual clock every boot launched and loaded all
+sixteen and ended fifteen, the sixteenth destroyed at its own deadline the instant the guest
+idled with no nearer timer, the bench's clock finding and not the read path's
+([the test bench](../testbench.md#the-case-file)); on the host's clock every boot ends all
+sixteen. The read path
 is slow under that load, never a death's cause: beside three to eleven others a lease's VM
 starts (its boot pack of about 3.8 MB and its start module) in 35–140 s on either width at one
 hart and 43–143 s at two, loads at 30–85 KB/s per VM after that, and launches in 1.3–11.5 s

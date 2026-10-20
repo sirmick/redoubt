@@ -1651,15 +1651,15 @@ so the case restarts it thirteen times, each time with that session and its conn
 
 ## Residual risks
 
-- **A lease's end can take a neighbouring lease's VM.** With sixteen leases of one account
-  ending by their VMs' own exits close together (bench:lease-code-load, both widths at one and
-  two harts, every boot), fifteen end as [R39](#r39-leases-end) says and one VM is killed, the
-  kernel's word for a budget destroyed with the process in it, the instant the lease that ended
-  just before it is destroyed, with no end of its own first: the end's destroy reached a budget
-  the step did not name (a handle or index lost early and reused by a later lease's, or the
-  process charged to another lease's budget), a failure of R39 that no case had the shape to
-  reach before, since no other case has many leases exit by themselves. Open; the case runs by
-  name until it is closed and is then its proof.
+- **Under the bench's virtual clock a live lease ends at its deadline as soon as the guest
+  idles.** With sixteen leases of one account ending by their VMs' own exits (bench:lease-code-load,
+  both widths at one and two harts), the guest first idles with no timer armed nearer than the
+  oldest live lease's deadline, and an idle guest's clock skips to it
+  ([the test bench](../testbench.md#the-case-file)): that lease is destroyed at its deadline and
+  reported `was killed 0`, [R39](#r39-leases-end) kept, the kernel's walk shown bounded to the
+  destroyed budget (its chain holding exactly its own VM's process). The case runs on the host's
+  clock, where every boot ends all sixteen; a steward case under the virtual clock whose guest
+  can idle while a lease is live expects the lease's end.
 - **A login's refusals are uniform in content, not in time.** An unknown principal or label set
   is refused before any machine runs; a wrong key for a known principal runs the blame and session
   machines before `login_key` refuses it, and nothing is counted. The difference is inside one

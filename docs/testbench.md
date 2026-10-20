@@ -263,11 +263,16 @@ It does not make a run repeat on its own: QEMU fills the guest's boot RNG seed f
 every boot, the kernel draws PIDs from it, and that moves every later event. `qemu_seed = N` pins
 it (QEMU `-seed N`, which fills the device tree's `/chosen/rng-seed`), and with `icount` a run then
 repeats exactly. The bench prints the seed before the result, and `TESTBENCH_QEMU_SEED=M` replaces
-the pinned seed of every case that has one, to replay a run or to sweep. A case with a disk keeps
-`sleep` on (`icount = "shift=3"`): with `sleep=off` an idle guest's clock jumps to the next
-deadline, which while `blkd` waits for the host's virtio completion is its own 10 s request
-timeout, so the read fails and the volume is poisoned; with `sleep` on, idle time is the host's, so
-such a run repeats closely, not exactly; a time a case is held to comes with a sweep's spread.
+the pinned seed of every case that has one, to replay a run or to sweep. An idle guest's clock
+skips to its next armed timer deadline, `sleep` on or off: with `sleep=off` at once, so while
+`blkd` waits for the host's virtio completion the next deadline is its own 10 s request timeout,
+the read fails and the volume is poisoned, which is why a case with a disk keeps `sleep` on
+(`icount = "shift=3"`); with `sleep` on the skip was measured too, once the guest idled with no
+timer armed nearer than a lease's deadline 1,337 s ahead, which it reached inside a 295 s boot,
+the lease destroyed at it as its rule says. So a case under the virtual clock whose guest can
+idle while a lease it means to outlive the case is live either runs on the host's clock or
+expects the lease's end; with `sleep` on such a run repeats closely, not exactly, and a time a
+case is held to comes with a sweep's spread.
 `--sweep SEEDS` runs one case once per seed (`1..20`, or `3,5,9`), from one build, and prints each
 seed's result in seed order and a summary line; each boot keeps its files in `seed-<N>-<arch>/`
 inside the run's directory. `--jobs J` boots up to J seeds at once. Under `scripts/q` the sweep
