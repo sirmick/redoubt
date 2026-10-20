@@ -5,7 +5,9 @@
 use std::collections::BTreeMap;
 
 use redoubt_steward::audit::{Audit, Record};
-use redoubt_steward::consts::{BLAME_WINDOW, DECLASSIFY_MAX, MAX_LEASE, PENDING_CAP, RANDOM_WORDS};
+use redoubt_steward::consts::{
+    BLAME_COUNT, BLAME_WINDOW, DECLASSIFY_MAX, MAX_LEASE, PENDING_CAP, RANDOM_WORDS,
+};
 use redoubt_steward::domain::{Domain, Labels};
 use redoubt_steward::effect::{
     Answer, Bytes, Kind, Notice, Notified, Object, Output, Parent, Produced, Refusal, Rendered, Step,
@@ -1045,6 +1047,26 @@ fn a_lease_ends_at_its_deadline_or_its_process_exit() {
     r.call(EventKind::Exited { object });
     assert_eq!(r.sessions_in(&d(1001, &[])), 1);
     assert_eq!(r.notices(from).len(), 1);
+}
+
+/// A lease's VM that exits, cleanly or with a code (one that could not read its start module:
+/// docs/userland/beamlet.md, "beamlet on Redoubt"), ends its lease and nothing more: an exit is
+/// not a fault, so however many leases of a domain exit inside the blame window, none is blamed
+/// (R40) and the domain is not locked out; its sponsor starts the next.
+#[test]
+fn a_leases_exit_is_its_end_and_no_blame() {
+    let mut r = Rig::new();
+    let (_, u) = r.login("alice", &[], 11).unwrap();
+    for _ in 0..2 * BLAME_COUNT {
+        let (lease, _) = r.agent(u, SECOND).unwrap();
+        r.call(EventKind::Exited { object: Object { domain: d(1001, &[]), kind: Kind::Lease, id: lease } });
+        r.now += SECOND;
+    }
+    assert!(r.records(|x| matches!(x, Record::Blamed)).is_empty());
+    assert!(r.records(|x| matches!(x, Record::LockedOut { .. })).is_empty());
+    assert_eq!(r.sessions_in(&d(1001, &[])), 1, "the session stays, every lease ended");
+    assert!(r.login("alice", &[], 11).is_ok());
+    assert!(r.agent(u, SECOND).is_ok());
 }
 
 #[test]

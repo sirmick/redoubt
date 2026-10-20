@@ -81,6 +81,9 @@ fn not_found_at_the_open_is_absent_and_every_other_error_is_refused_by_name() {
             unread(Error::Disconnected, at_open),
             Unread::Failed("its file could not be read: disconnected")
         );
-        assert_eq!(unread(Error::Unexpected, at_open), Unread::Failed("its file could not be read: failed"));
+        assert_eq!(
+            unread(Error::Unexpected, at_open),
+            Unread::Failed("its file could not be read: the reply was no answer")
+        );
     }
 }
