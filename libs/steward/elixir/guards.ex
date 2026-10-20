@@ -243,10 +243,17 @@ defmodule Redoubt.Steward.Guards do
   # unlabelled one; each crosses a label.
   def exact_labels(cx) do
     case request(cx) do
-      nil -> {:error, :Unknown}
-      %{content: {:declassify, l, _}} -> ok_if(Steward.labels(l) == labels(cx) and labels(cx) != [], :NotOwner)
-      %{content: {:push, _, t, _}} -> ok_if(labels(cx) == [] and t != [], :NotOwner)
-      _ -> :ok
+      nil ->
+        {:error, :Unknown}
+
+      %{content: {:declassify, l, _}} ->
+        ok_if(Steward.labels(l) == labels(cx) and labels(cx) != [], :NotOwner)
+
+      %{content: {:push, _, t, _}} ->
+        ok_if(labels(cx) == [] and t != [], :NotOwner)
+
+      _ ->
+        :ok
     end
   end
 

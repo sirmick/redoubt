@@ -58,14 +58,18 @@ defmodule Redoubt.Wire do
 
   @doc "Encodes a request in the file framing: `{:ok, bytes}`."
   def encode_file(message, layouts, enc) do
-    encoding(message, fn op, io ->
-      # A file carries no handles: only a message that needs none can be written into one.
-      {_name, _shape, handles, optional} = Map.fetch!(layouts, op)
-      if handles - optional != 0, do: throw({:wire, :bad_handles})
-      bytes = IO.iodata_to_binary([<<op::little-32>>, io])
-      if byte_size(bytes) > @msize, do: throw({:wire, :too_large})
-      {:ok, bytes}
-    end, enc)
+    encoding(
+      message,
+      fn op, io ->
+        # A file carries no handles: only a message that needs none can be written into one.
+        {_name, _shape, handles, optional} = Map.fetch!(layouts, op)
+        if handles - optional != 0, do: throw({:wire, :bad_handles})
+        bytes = IO.iodata_to_binary([<<op::little-32>>, io])
+        if byte_size(bytes) > @msize, do: throw({:wire, :too_large})
+        {:ok, bytes}
+      end,
+      enc
+    )
   end
 
   defp encoding({name, fields}, frame, enc) when is_atom(name) and is_map(fields) do

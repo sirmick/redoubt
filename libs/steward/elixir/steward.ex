@@ -103,9 +103,15 @@ defmodule Redoubt.Steward do
     owned = labels(p.owned)
 
     cond do
-      p.account == 0 or p.contexts.max == 0 or p.account in accounts or p.name in names -> :refused
-      Enum.any?(domains, fn {_, l} -> l == nil end) or owned == nil -> :refused
-      length(Enum.uniq(domains)) != length(domains) -> :refused
+      p.account == 0 or p.contexts.max == 0 or p.account in accounts or p.name in names ->
+        :refused
+
+      Enum.any?(domains, fn {_, l} -> l == nil end) or owned == nil ->
+        :refused
+
+      length(Enum.uniq(domains)) != length(domains) ->
+        :refused
+
       true ->
         q = %{
           name: p.name,
@@ -581,8 +587,11 @@ defmodule Redoubt.Steward do
 
   defp external(store, %{kind: {:end_session, badge}} = e, out) do
     case route(store, badge) do
-      %{kind: :session} = by -> done(run(store, out, e, by.domain, :session, by.id, :end_session, %{caller: by}))
-      _ -> unknown(store, e, out)
+      %{kind: :session} = by ->
+        done(run(store, out, e, by.domain, :session, by.id, :end_session, %{caller: by}))
+
+      _ ->
+        unknown(store, e, out)
     end
   end
 
@@ -735,7 +744,8 @@ defmodule Redoubt.Steward do
   defp internal(store, e, {:locked_out, {d, kind, id}}, out) when kind in [:session, :lease],
     do: done(run(store, out, e, d, kind, id, :locked_out))
 
-  defp internal(store, e, {:attach, {d, :session, id}}, out), do: done(run(store, out, e, d, :session, id, :attach))
+  defp internal(store, e, {:attach, {d, :session, id}}, out),
+    do: done(run(store, out, e, d, :session, id, :attach))
 
   defp internal(store, e, {:session_ended, {d, :request, id}}, out) do
     {_, store, out} = run(store, out, e, d, :request, id, :session_ended)

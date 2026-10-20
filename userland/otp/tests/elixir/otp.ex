@@ -35,8 +35,12 @@ defmodule OtpTest do
 
   defp wait_restart(old) do
     case Process.whereis(:named_counter) do
-      pid when is_pid(pid) and pid != old -> :restarted
-      _ -> Process.sleep(1); wait_restart(old)
+      pid when is_pid(pid) and pid != old ->
+        :restarted
+
+      _ ->
+        Process.sleep(1)
+        wait_restart(old)
     end
   end
 end

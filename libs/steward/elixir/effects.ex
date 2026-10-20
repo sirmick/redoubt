@@ -91,7 +91,11 @@ defmodule Redoubt.Steward.Effects do
         deadline = add(cx.event.now, l.lease)
         cx = update(cx, :leases, &%{&1 | deadline: deadline})
         limits = cx.store.fixed.sizes.agent
-        step(cx, {:create_budget, token(cx, @budget), {:sub, cx.domain}, limits, elem(cx.domain, 1), deadline})
+
+        step(
+          cx,
+          {:create_budget, token(cx, @budget), {:sub, cx.domain}, limits, elem(cx.domain, 1), deadline}
+        )
     end
   end
 
@@ -111,7 +115,8 @@ defmodule Redoubt.Steward.Effects do
   # The connections, each narrowed to the scope this batch made: the steward's, routed by the
   # object's badge, and a fresh-badged one per shared server.
   def connect(cx) do
-    scope = cx.out.steps |> Enum.reverse() |> Enum.find_value(&match?({:create_scope, _, _}, &1) && elem(&1, 1))
+    scope =
+      cx.out.steps |> Enum.reverse() |> Enum.find_value(&(match?({:create_scope, _, _}, &1) && elem(&1, 1)))
 
     if scope do
       cx = step(cx, {:connect, token(cx, @connections), scope, :steward, badge(cx)})
@@ -183,7 +188,12 @@ defmodule Redoubt.Steward.Effects do
         now = cx.event.now
 
         cx =
-          update(cx, :sessions, &%{&1 | attachment: attachment, from: from, key: key, reply: reply, since: now, idle: nil})
+          update(
+            cx,
+            :sessions,
+            &%{&1 | attachment: attachment, from: from, key: key, reply: reply, since: now, idle: nil}
+          )
+
         cx = put_in(cx.store.attachments[attachment], {cx.domain, cx.id})
         step(cx, {:attach, token(cx, @relay), token(cx, @console), note})
     end
@@ -267,7 +277,9 @@ defmodule Redoubt.Steward.Effects do
 
   # The object runs: its badge routes to it, and it gets its number in its domain (R37).
   def route(cx) do
-    {count, field} = if cx.kind == :session, do: {:sessions_started, :sessions}, else: {:agents_started, :leases}
+    {count, field} =
+      if cx.kind == :session, do: {:sessions_started, :sessions}, else: {:agents_started, :leases}
+
     cx = update_in(cx.store.domains[cx.domain], &Map.update!(&1, count, fn n -> n + 1 end))
     n = Map.fetch!(Guards.state(cx), count)
 
@@ -407,7 +419,9 @@ defmodule Redoubt.Steward.Effects do
         {account, l} = cx.domain
 
         sessions =
-          for {b, {{a, dl}, _, _}} <- Enum.sort(cx.store.routes), a == account, Steward.includes?(dl, l),
+          for {b, {{a, dl}, _, _}} <- Enum.sort(cx.store.routes),
+              a == account,
+              Steward.includes?(dl, l),
               do: {:session, b}
 
         channels =
@@ -437,8 +451,11 @@ defmodule Redoubt.Steward.Effects do
 
   def audit_approved(cx) do
     case {Guards.request(cx), channel_of(cx)} do
-      {r, c} when r != nil and c != nil -> audit_in(cx, r.audit, {:approved, r.id, c.principal, c.key, r.hash})
-      _ -> cx
+      {r, c} when r != nil and c != nil ->
+        audit_in(cx, r.audit, {:approved, r.id, c.principal, c.key, r.hash})
+
+      _ ->
+        cx
     end
   end
 

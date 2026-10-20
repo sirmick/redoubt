@@ -27,7 +27,8 @@ defmodule Redoubt.Steward.Render do
   # A lease in human units: "2 h 5 min", "90 s", "250 ms".
   def human(us) do
     {h, m, s, ms} =
-      {div(us, 3_600_000_000), rem(div(us, 60_000_000), 60), rem(div(us, 1_000_000), 60), rem(div(us, 1000), 1000)}
+      {div(us, 3_600_000_000), rem(div(us, 60_000_000), 60), rem(div(us, 1_000_000), 60),
+       rem(div(us, 1000), 1000)}
 
     case {h, m, s} do
       {0, 0, 0} -> "#{ms} ms"
@@ -102,7 +103,18 @@ defmodule Redoubt.Steward.Render do
       end
 
     snapshot = if r.snapshot == nil, do: <<0>>, else: [<<1>>, bytes(r.snapshot)]
-    data = ["redoubt.steward.request.v1", <<0>>, le(account), words(labels), le(r.id), content, snapshot, bytes(r.reason)]
+
+    data = [
+      "redoubt.steward.request.v1",
+      <<0>>,
+      le(account),
+      words(labels),
+      le(r.id),
+      content,
+      snapshot,
+      bytes(r.reason)
+    ]
+
     :crypto.hash(:sha256, IO.iodata_to_binary(data))
   end
 end
