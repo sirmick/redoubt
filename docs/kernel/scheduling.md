@@ -966,10 +966,10 @@ that at sixteen connections of one account (two sessions' and fourteen leases') 
 account could load a module, and the spinner launched last died inside its start module's read
 ([erofsd](../servers/erofsd.md#serving)); the root is a fixed cost outside the share now and
 the caps are derived from the connections, and sixteen agents of one account launch and load
-all their modules on both widths at one and two harts (bench:lease-code-load), fifteen of them
-exiting 0 and the sixteenth killed by the lease end just before its own, a finding of the
-steward's lease end that keeps the case out of the whole run until it is closed
-([the steward](../servers/steward.md#residual-risks)). `steward-latency-n16` still runs on
+all their modules on both widths at one and two harts and every one exits 0
+(bench:lease-code-load, on the host's clock: under the virtual clock the guest, idle for an
+instant with no nearer timer, reached the oldest live lease's deadline, [the test bench](../testbench.md#the-case-file)).
+`steward-latency-n16` still runs on
 rv64 alone: its rv32 round was not re-measured with the cap, and the column says so until it
 is. At two harts on rv32 the N = 1 to 3 boot reaches the reset and is judged for the first
 time, and the N = 2 round misses the timer wake's p50, 31.8 ms against 15 (its p99 35.2 ms,

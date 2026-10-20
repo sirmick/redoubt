@@ -203,6 +203,19 @@ struct Recorder {
     /// Budgets whose handle the steward lost before their deadline (a bug): a `destroy` of one is
     /// `BadHandle`.
     lost: Vec<usize>,
+    /// The machine's handle table modelled whole, as the kernel keeps it: every copy the machine
+    /// closes frees its index for the next handle made (the connections a launch hands its child,
+    /// `launch`; a kept right given back, `release` and `clean`; the exit endpoint the loop closes
+    /// at the notice, [`Recorder::exit_taken`]), and a destroy revokes the budget's own handle and
+    /// its children's (`destroy`). Off, the tests' handle numbers stay the kernel's order of
+    /// making, as [`Recorder::free`] says; on for the tests that look for a confusion across a
+    /// reused index.
+    recycles: bool,
+    /// With `recycles`: the connections and rights the steward still holds a copy of.
+    held: BTreeSet<usize>,
+    /// With `recycles`: the budget the next `destroy` must hit, the one made for the lease whose
+    /// step runs (the kernel's verdict); `None` once it did.
+    expect_destroy: Option<usize>,
     /// Every reader thread is taken: the next channel cannot be served.
     channels_full: bool,
     /// What every cleanup step's server answers: `Ok` unless a test says (`Timeout`: the server
@@ -272,6 +285,31 @@ impl Recorder {
             doomed.extend(self.parents.iter().filter(|(_, p)| **p == b).map(|(c, _)| *c));
             assert!(self.budgets.remove(&b), "budget {b} was live");
             self.free.push(b);
+            // A freed index is the next handle's, whatever kind: its place in the tree goes.
+            if self.recycles {
+                self.parents.remove(&b);
+            }
+        }
+    }
+
+    /// With `recycles`: the loop closed the exit endpoint `pid` names, at its watcher's report,
+    /// before the exit's event; its index is free for the next handle made.
+    fn exit_taken(&mut self, pid: u64) {
+        assert!(self.recycles);
+        self.free.push(pid as usize);
+    }
+
+    /// With `recycles`: `handle` is a copy the steward holds; a close of it frees its index.
+    fn holds(&mut self, handle: usize) {
+        if self.recycles {
+            self.held.insert(handle);
+        }
+    }
+
+    /// With `recycles`: the steward's copy of `handle` goes, if it still held one.
+    fn closes(&mut self, handle: usize) {
+        if self.recycles && self.held.remove(&handle) {
+            self.free.push(handle);
         }
     }
 
@@ -373,6 +411,22 @@ impl Kernel for Recorder {
         if self.free.contains(&budget) || self.lost.contains(&budget) {
             return Err(Error::BadHandle);
         }
+        if self.recycles {
+            // The index names what the kernel put there last: a budget, or another kind of
+            // object (a connection, an exit endpoint).
+            if !self.budgets.contains(&budget) {
+                return Err(Error::WrongObject);
+            }
+            if let Some(expected) = self.expect_destroy.take() {
+                assert_eq!(
+                    budget, expected,
+                    "the destroy by handle hit budget {budget}, not budget {expected}, the one made for the lease whose step this is"
+                );
+            }
+            // R10: the budget and everything below it go, their handles revoked everywhere.
+            self.takes(vec![budget]);
+            return Ok(());
+        }
         if !self.deadlines.iter().any(|d| d.0 == budget) {
             return Err(Error::WrongObject);
         }
@@ -384,6 +438,7 @@ impl Kernel for Recorder {
 
     fn mint(&mut self, badge: u64, stamp: usize) -> Result<usize, Error> {
         let made = self.make()?;
+        self.holds(made);
         self.calls.push(Call::Mint { badge, stamp });
         Ok(made)
     }
@@ -397,11 +452,13 @@ impl Kernel for Recorder {
         if !binds {
             return Ok(None);
         }
-        match Self::server_of_slot(slot) {
-            Some(server) if self.stalled.iter().any(|s| s == server) => Err(Error::Timeout),
-            Some(server) => self.made_at(server).map(Some),
-            None => self.make().map(Some),
-        }
+        let made = match Self::server_of_slot(slot) {
+            Some(server) if self.stalled.iter().any(|s| s == server) => return Err(Error::Timeout),
+            Some(server) => self.made_at(server)?,
+            None => self.make()?,
+        };
+        self.holds(made);
+        Ok(Some(made))
     }
 
     fn console(&mut self, handle: Option<Handle>, relay: Option<Handle>) {
@@ -409,7 +466,10 @@ impl Kernel for Recorder {
         self.calls.push(Call::Console(handle.map(|h| h.index())));
     }
 
-    fn release(&mut self, handle: usize) { self.calls.push(Call::Release(handle)); }
+    fn release(&mut self, handle: usize) {
+        self.calls.push(Call::Release(handle));
+        self.closes(handle);
+    }
 
     /// A connection with a server's record is a step of the thread's; one nobody is told (a
     /// badge, a notices send right, a relay's control connection) is done here.
@@ -418,6 +478,8 @@ impl Kernel for Recorder {
         if let Some(server) = self.at.get(&handle).cloned() {
             let now = self.now();
             self.cleanup.push(handle, server, now);
+        } else {
+            self.closes(handle);
         }
     }
 
@@ -459,6 +521,10 @@ impl Kernel for Recorder {
         // A session's VM is given a notices endpoint; the handle made is its send right. Made
         // before the process, so the last thing a login makes is its pid.
         let notices = if owner.kind == Kind::Session { Some(self.make()?) } else { None };
+        if let Some(n) = notices {
+            self.holds(n);
+        }
+        // The pid the machine answers is the exit endpoint's index, the handle made for it.
         let pid = self.make()? as u64;
         let context = context.map(String::from);
         self.calls.push(Call::Launch {
@@ -467,6 +533,10 @@ impl Kernel for Recorder {
             connections: connections.to_vec(),
             context,
         });
+        // The child holds its copies now: the steward's go (`bin/steward.rs`, `launch`).
+        for c in connections.iter().flatten() {
+            self.closes(*c);
+        }
         Ok((pid, notices))
     }
 
@@ -540,6 +610,7 @@ impl Kernel for Recorder {
 
     fn launch_relay(&mut self, _domain: &Domain, budget: usize) -> Result<(u64, usize), Error> {
         let control = self.make()?;
+        self.holds(control);
         self.calls.push(Call::LaunchRelay { budget, control });
         Ok((control as u64, control))
     }
@@ -2425,6 +2496,62 @@ fn an_end_lease_after_the_deadline_makes_no_destroy_by_the_revoked_handle() {
     assert!(k.budgets.contains(&recycled), "the new budget survives");
     assert!(s.exited(pid).is_none());
     assert!(s.ended(pid).is_some_and(|(o, name)| o.id == first && name == "alice/agent-1"));
+}
+
+/// Sixteen leases of one account started back to back, as `lease-code-load` starts them, each
+/// a budget, a scope, a badge, three connections and an exit endpoint in the steward's table,
+/// the handles it holds for the child closed at the launch; then every lease ends by its own
+/// exit, close together, in each order the gate's boots ended them (the two-hart rv64 boot:
+/// agent-1 to agent-10, then agent-14, after which agent-11 was reported killed there; the rv32
+/// boots: 1 to 13, 16, 14, then 15 reported killed; and 1 to 13, 16, 15, then 14), the machine's table
+/// modelled whole (`recycles`: every close frees its index for the next handle made, a destroy
+/// revokes the budget's handle and its scope's, the exit endpoint is closed before the exit's
+/// event). The verdict is the fake kernel's: every `DestroyBudget` destroys the budget created
+/// for the lease whose exit it ends, and every lease still running has its budget live after
+/// it; and the pids map names, at each notice, the lease whose exit endpoint reported.
+#[test]
+fn sixteen_leases_ending_by_exit_each_destroy_their_own_budget_and_no_other() {
+    let orders: [[usize; 16]; 3] = [
+        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 14, 11, 12, 13, 15, 16],
+        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 16, 14, 15],
+        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 16, 15, 14],
+    ];
+    for order in orders {
+        let mut k = Recorder { recycles: true, ..Recorder::default() };
+        let mut s = started(&mut k);
+        let u = alice_session(&mut s, &mut k);
+        let leases: Vec<(u64, usize, u64)> =
+            (0..16).map(|_| lease_for(&mut s, &mut k, u, 1_800_000_000)).collect();
+        let budgets: BTreeSet<usize> = leases.iter().map(|l| l.1).collect();
+        assert_eq!(budgets.len(), 16, "sixteen distinct budget handles: {leases:?}");
+        assert!(budgets.iter().all(|b| k.budgets.contains(b)));
+        let pids: BTreeSet<u64> = leases.iter().map(|l| l.2).collect();
+        assert_eq!(pids.len(), 16, "sixteen distinct exit endpoints: {leases:?}");
+        let mut running: BTreeSet<usize> = (1..=16).collect();
+        for n in order {
+            let (lease, budget, pid) = leases[n - 1];
+            running.remove(&n);
+            k.exit_taken(pid);
+            k.expect_destroy = Some(budget);
+            k.calls.clear();
+            let object = s
+                .exited(pid)
+                .unwrap_or_else(|| panic!("agent-{n}'s exit endpoint {pid} names a running one"));
+            assert_eq!(object.id, lease, "the pids map names agent-{n} at its own exit endpoint's report");
+            s.event(&mut k, EventKind::Exited { object }, 0).unwrap();
+            assert!(s.failed.is_empty(), "agent-{n}: {:?}", s.failed);
+            let destroys = k.calls.iter().filter(|c| matches!(c, Call::Destroy(_))).count();
+            assert_eq!(destroys, 1, "agent-{n}'s end is one destroy by handle: {:?}", k.calls);
+            assert_eq!(k.expect_destroy, None, "agent-{n}'s destroy was made");
+            assert!(!k.budgets.contains(&budget), "agent-{n}'s budget is gone");
+            for m in &running {
+                let (_, b, p) = leases[m - 1];
+                assert!(k.budgets.contains(&b), "agent-{m}'s budget {b} survives agent-{n}'s end");
+                assert!(s.exited(p).is_some_and(|o| o.id == leases[m - 1].0), "agent-{m} still runs");
+            }
+            assert!(k.calls.iter().any(|c| matches!(c, Call::Notify { lease: l, .. } if *l == lease)));
+        }
+    }
 }
 
 /// The scope made in `budget`: its one child with no deadline of its own.

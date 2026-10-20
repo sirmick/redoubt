@@ -2,20 +2,15 @@ description = "Sixteen agents of one account load code at the system volume at o
 arch = ["rv64", "rv32"]
 kind = "boot"
 debug_assertions = true
-# Guest time, with `sleep` on, the rule for a case with a disk (docs/testbench.md, "The case
-# file"): the agents do not spin while they load, so with every VM waiting on the disk at once
-# the guest is idle, and `sleep=off` warped its clock into blkd's own request timeout, failing
-# every agent's boot-pack read at verityd's 2048th read under this seed, both runs alike.
-icount = "shift=3"
-# The guest seed steward-latency's gate runs.
+# The host's clock, as a case with a `forward` keeps (docs/testbench.md, "The case file"): the
+# case judges counts (sixteen launched, every module loaded, sixteen exits 0), not times, and
+# under the virtual clock an idle guest's clock skips to its next armed deadline, which once the
+# agents' loads leave the guest idle with no nearer timer is the oldest lease's thirty-minute
+# deadline, so that lease is destroyed at it and reported `was killed 0`, with no end of its own
+# first: fifteen exits of sixteen in every boot, `sleep` on or off. On the host's clock every
+# boot ends all sixteen.
+# The guest seed steward-latency's gate runs; on the host's clock a run repeats closely.
 qemu_seed = 3
-# By name only until a lease's end no longer takes a neighbour's: in every boot so far fifteen of
-# the sixteen exit 0 and one is `was killed 0` the instant the lease that ended just before it is
-# destroyed, with no end of its own first, which the forbid below fails the case on; a lease ends
-# at its deadline or its sponsor's word and at nothing else (docs/servers/steward.md, R39), so the
-# kill is that rule's failure, found by this case and open, not the read path's. When it is
-# closed this case is the proof and joins the whole run.
-whole_run = false
 # steward-latency's programs with the probe left off the steward, the volume's two servers
 # counting (`boot-stats`) and beamlet naming its exits (`exit-kinds`), each test-only and off in
 # every default build.
@@ -42,10 +37,12 @@ programs = [
 memory_mib = 1536
 # Both hart counts on both widths: the read path's servers share the harts with the agents.
 smp = [1, 2]
-# Sixteen VMs starting and loading at once under icount take the better part of an hour of guest
-# time at one hart; the session waits up to an hour for the first lease's end and ten minutes
-# for each after it.
-timeout_secs = 7200
+# On the host's clock the whole boot, the sixteen launches and loads included, takes 72 to 85 s
+# on either width at one or two harts (twelve boots): four times the slowest, with the margin a
+# loaded host adds to a wait on its clock. The session waits four minutes for the first lease's
+# end (measured 27 to 34 s after the sixteenth agent started, twelve session logs) and two for
+# each after it (the sixteen ends span 18 to 23 s, the widest gap between two 5.7 s).
+timeout_secs = 400
 expect = [
     '^init: started sshd, console [0-9a-f]{16}$',
     '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
@@ -82,13 +79,13 @@ forbid = [
 
 # Alice's session. The project's input `load`, and the shell's own later needs loaded before
 # any agent is (`warm`), so no load of its own falls inside the storm. Then the sixteen agents
-# back to back (thirty-minute leases, so none ends on its own inside the case; every launch must
-# be served), then the sixteen notices of their ends in the session's own stream, each landing
-# on the idle prompt's line, the first within an hour of guest time and each after it within ten
-# minutes. The agents end in whatever order their loads finish, so neither the console's exit
-# lines nor the notices name the agents in an order; the sixteen `exited 0` lines are sixteen
-# distinct leases all the same, since a lease exits once and its line prints once, and the
-# forbid closes every other end. The notices ride on delivery, which a burst can lose (a send
+# back to back (thirty-minute leases, so none reaches its deadline inside the case on the host's
+# clock; every launch must be served), then the sixteen notices of their ends in the session's
+# own stream, each landing on the idle prompt's line, the first within four minutes and each
+# after it within two. The agents end in whatever order their loads finish, so neither the
+# console's exit lines nor the notices name the agents in an order; the sixteen `exited 0` lines
+# are sixteen distinct leases all the same, since a lease exits once and its line prints once,
+# and the forbid closes every other end. The notices ride on delivery, which a burst can lose (a send
 # past the steward's notice bound is dropped); sixteen ends staggered by their loads are no
 # burst, and a lost one fails its bounded step loudly, the bench naming the step, so the count
 # short and the names seen are in the session's log: with sixteen `exited 0` lines on the console
@@ -112,37 +109,37 @@ steps = [
     { expect = '\([0-9]+\)> ' },
     { send = "leases = for i <- 1..16, do: start.(i); {:started, Enum.count(leases, &match?({:ok, _}, &1))}\n" },
     { expect = '\{:started, 16\}' },
-    { within = 3600 },
+    { within = 240 },
     { expect = '\[lease alice/agent-[0-9]+ ended\]' },
-    { within = 600 },
+    { within = 120 },
     { expect = '\[lease alice/agent-[0-9]+ ended\]' },
-    { within = 600 },
+    { within = 120 },
     { expect = '\[lease alice/agent-[0-9]+ ended\]' },
-    { within = 600 },
+    { within = 120 },
     { expect = '\[lease alice/agent-[0-9]+ ended\]' },
-    { within = 600 },
+    { within = 120 },
     { expect = '\[lease alice/agent-[0-9]+ ended\]' },
-    { within = 600 },
+    { within = 120 },
     { expect = '\[lease alice/agent-[0-9]+ ended\]' },
-    { within = 600 },
+    { within = 120 },
     { expect = '\[lease alice/agent-[0-9]+ ended\]' },
-    { within = 600 },
+    { within = 120 },
     { expect = '\[lease alice/agent-[0-9]+ ended\]' },
-    { within = 600 },
+    { within = 120 },
     { expect = '\[lease alice/agent-[0-9]+ ended\]' },
-    { within = 600 },
+    { within = 120 },
     { expect = '\[lease alice/agent-[0-9]+ ended\]' },
-    { within = 600 },
+    { within = 120 },
     { expect = '\[lease alice/agent-[0-9]+ ended\]' },
-    { within = 600 },
+    { within = 120 },
     { expect = '\[lease alice/agent-[0-9]+ ended\]' },
-    { within = 600 },
+    { within = 120 },
     { expect = '\[lease alice/agent-[0-9]+ ended\]' },
-    { within = 600 },
+    { within = 120 },
     { expect = '\[lease alice/agent-[0-9]+ ended\]' },
-    { within = 600 },
+    { within = 120 },
     { expect = '\[lease alice/agent-[0-9]+ ended\]' },
-    { within = 600 },
+    { within = 120 },
     { expect = '\[lease alice/agent-[0-9]+ ended\]' },
     { send = "{:gate, match?({:module, :sofs}, Code.ensure_loaded(:sofs)), File.read(out <> \"/none\")}\n" },
     { expect = '\{:gate, true, \{:error, :enoent\}\}' },

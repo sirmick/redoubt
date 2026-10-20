@@ -1,6 +1,6 @@
 use redoubt_model::{
     invariants::Checker,
-    kernel::{Boot, DeviceKind, Kernel, Note, Object, Step},
+    kernel::{Boot, DeviceKind, Kernel, Limits, Note, Object, Step},
     mutation::Mutation,
     policy::{self, HashRef, PolicyOp, ReqRef, Run},
     spec::*,
@@ -192,6 +192,96 @@ pub fn reap_empties_and_keeps(mutation: Option<Mutation>) -> Result<(), String> 
     let Ret::Handle(ep) = w.value(1, Syscall::EndpointCreate)? else { return Err("endpoint".into()) };
     expect(w.result(1, Syscall::BudgetReap { h: ep })? == Err(Error::WrongObject), "not a budget")?;
     trace_roundtrip(&w, mutation)
+}
+
+/// R10 for one sibling among many: a budget destroyed beside its live siblings ends exactly its
+/// own subtree. Sixteen children of one parent hold a process each, every one reporting to init's
+/// endpoint E, as a sponsor's leases do; each ends as a lease ending by exit does: its process
+/// exits 0, init takes the notice, then destroys the budget. After every end each child still
+/// running holds its budget, which counts its one process, and its process; and every child's
+/// end is still its own to make, its notice `exited`. The orders tried are the ends by the
+/// children's numbers in start order: the first three are a load's (the ends in start order to
+/// the tenth, then the fourteenth; to the thirteenth, then the sixteenth and the fourteenth; to the
+/// thirteenth, then the sixteenth and the fifteenth), then newest first, then the two ends
+/// interleaved; the rest end in start order after each.
+pub fn sibling_destroy_spares_neighbours(mutation: Option<Mutation>) -> Result<(), String> {
+    const N: usize = 16;
+    let orders: [&[usize]; 5] = [
+        &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 14],
+        &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 16, 14],
+        &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 16, 15],
+        &[16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1],
+        &[1, 16, 2, 15, 3, 14, 4, 13, 5, 12, 6, 11, 7, 10, 8, 9],
+    ];
+    let handle = |r: Ret| match r {
+        Ret::Handle(h) => Ok(h),
+        r => Err(format!("expected a handle, got {r:?}")),
+    };
+    // The default boot's `users` holds 12 processes: this one holds the sixteen and their parent.
+    let default = Boot::default();
+    let boot = Boot {
+        root: Limits { processes: 48, ..default.root },
+        users: Limits { processes: 32, ..default.users },
+        ..default
+    };
+    for order in orders {
+        let mut w = World::booted(&boot, mutation);
+        let e = handle(w.value(1, Syscall::EndpointCreate)?)?;
+        let carve = Syscall::BudgetCreate {
+            parent: 3,
+            pages: 13 * N as u64,
+            processes: N as u64,
+            weight: 2 * N as u64,
+            labels: vec![],
+            account: 0,
+            deadline: FOREVER,
+        };
+        let parent = handle(w.value(1, carve)?)?;
+        // Each child: its budget handle, and its process's pid and tid.
+        let mut children = Vec::new();
+        for _ in 0..N {
+            let child = Syscall::BudgetCreate {
+                parent,
+                pages: 12,
+                processes: 1,
+                weight: 2,
+                labels: vec![],
+                account: 0,
+                deadline: FOREVER,
+            };
+            let budget = handle(w.value(1, child)?)?;
+            let (pid, tid) = spawn(&mut w, budget, e)?;
+            children.push((budget, pid, tid));
+        }
+        let rest = (1..=N).filter(|n| !order.contains(n));
+        let mut ended = Vec::new();
+        for n in order.iter().copied().chain(rest) {
+            let (budget, pid, tid) = children[n - 1];
+            w.op(Op::Sys { pid, tid, call: Syscall::ProcessExit { code: 0 } })?;
+            let took = w.value(1, Syscall::Receive { h: Some(e), timeout: FOREVER, max_transfer: 0 })?;
+            expect(
+                matches!(took, Ret::ExitNotice { pid: p, cause: Cause::Exited, code: 0, .. } if p == pid),
+                &format!("child {n}'s end is its own exit, in {order:?}"),
+            )?;
+            w.result(1, Syscall::BudgetDestroy { h: budget })?.map_err(|e| format!("destroy {n}: {e:?}"))?;
+            ended.push(n);
+            for (m, (b, p, _)) in children.iter().enumerate().map(|(i, c)| (i + 1, c)) {
+                if ended.contains(&m) {
+                    continue;
+                }
+                let usage = w.result(1, Syscall::BudgetUsage { h: *b })?;
+                expect(
+                    matches!(usage, Ok(Ret::Usage(Counters { processes_usage: 1, .. })))
+                        && w.k.processes.contains_key(p),
+                    &format!("child {m} still runs after child {n}'s end, in {order:?}"),
+                )?;
+            }
+        }
+        if mutation.is_none() {
+            trace::check(&trace::record(&boot, &w.ops, None)?, None)?;
+        }
+    }
+    Ok(())
 }
 
 /// R10: a destruction delivers nothing until its end. Budget B holds K, which reports to init's
