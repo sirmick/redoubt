@@ -129,3 +129,9 @@ the session's wait on sixteen lease-ended notices (set check or not) rides on no
 has STEWARD12's lost-notice residual (a send past NOTICE_US dropped) until SHELLN1; the exits are
 staggered by load-finish, so a loss is unlikely, but a lost notice must fail the case loudly
 (bounded wait, a line), never hang it to the bench timeout.
+Final (2026-10-20): wp-READ1 85afec5f8, 88-case set green both widths, landed as ruled (case
+unchanged, `whole_run = false` with the reason, pages state fifteen of sixteen and the mechanism).
+The kill reproduces on all four configurations with the victim varying (agent-11/12/14/15), always
+the instant a neighbour's lease ended, before any end of its own: KILL1's evidence at
+`.tmp/READ1-evidence/` (gate10, gate13). The rv64 one-hart SSH close was seen once and did not
+recur: recorded as seen once, unreproduced — not a finding, not yet explained either.

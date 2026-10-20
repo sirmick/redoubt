@@ -903,3 +903,247 @@ the finding stated on walfsd.md "Residual risks" and the data volume out of its 
 replaces the sentence with the rule. Tier A (files.rs + walfsd), S–M, investigation-first, the
 brief after the measurement; `needs = ["READ1"]` for the page sentence only. Plan:
 `plan-2026-10-20-write1.toml`. Not folded into READ1: a different mechanism, already M–L.
+
+## STEWARD13 design (2026-10-20, architect-6): the launch off the loop under the install lock
+
+Brief: `.wash/local/STEWARD13-implementer.md`. Read before designing: `drive.rs` 60–180 (the
+decide loop, `run`, `Done` pushed at :147), 429–525 (the guard, the `Launch` step);
+`bin/steward.rs` 1025–1150 (`Machine::launch`); `libs/client/src/launch.rs` 173–303 (`start`,
+`place`); steward.md 770–789 (STEWARD10's premise).
+
+**The hinge.** The core already takes a batch's outcome as a later event, `Done { object,
+result }` (`event.rs:123`), which the drive pushes right after `run`. So a batch can suspend at
+its `Launch` step with no core change: the drive defers `Done` until a launch thread reports;
+the core sees today's events in today's order per object.
+
+**The premise re-shown, not weakened.** The thread's installs are `Process::create`, one
+`Buffer::new` per page batch (consumed by `map`) and `process_start` — kernel calls, with the
+erofsd read in the steward's own closure between them. Rule: one `Mutex` (the install lock) held
+by the loop across its `now()`+`destroy` pair and by the thread across `start()` except inside
+the read closure, which drops it (STEWARD5's "never across a server call"). No install can
+interleave with the pair; the loop's worst wait is one between-reads kernel stretch, measured
+and stated. Defence in depth: the thread creates no budget, so the silent form is unreachable
+regardless; the lock removes the loud `WrongObject` form. steward.md's premise sentence grows
+one clause. No `libs/client` change (the closure is the steward's); if an installing call has no
+read to release around, it comes back to me as a design change.
+
+**Shape.** Prepare on the loop (endpoints, handles — cheap installs), launch on one serial FIFO
+thread (hand-over by reply, STEWARD5's arbiter), finish on the loop (watch, keep, `made`/`pids`,
+remaining steps, then `Done`). Serial launches leave a caller's wait as today (the second call
+was not even received before), so STEWARD8's bound stands; `served start_agent` now includes
+the queue wait, said where the line is defined. Events of the launching object are held in
+order and replayed after the report (default: no core change, today's order) unless the core's
+oracle is shown to accept them between a batch and its `Done`; every other object is served.
+Re-statement of protocol.rs's no-park: another lease's `end_lease` is still answered ahead and
+at once; the launching object's own waits at most the launch bound. A deadline during its own
+launch fails the launch as today (B82). Exit notices pending on the endpoint are kept, so the
+later `watch_exit` is the same window as today, longer — confirmed from ipc.md, not assumed.
+
+**Residual stated, not fixed:** a lease batch's mints (`Connect`) still run on the loop within
+`SERVER_US` (1.66 s worst, STEWARD6), so a deadline inside a mint still waits. The overlap case
+puts the deadline inside the launch — this package's quantity. The install lock makes a whole
+batch off the loop possible later (a budget install under the same lock); a follow-up I name if
+the measurement shows mints bite.
+
+**Case.** A new boot case (working name `steward-launch-overlap`): lease A spinning with
+STEWARD9's per-width derived deadline; B's `start_agent` at A's deadline − 1 s on the guest
+clock so B's launch (≥ 1.7 s on every supported row) spans A's deadline; judged only when the
+trace shows the overlap, else a loud failing line; run on main first to record the miss. Tier A,
+M, steward-red-5. Cost: one thread, one lend page, `in_flight` +1 at erofsd if counted.
+
+### SHELLN1 measurement (2026-10-20): the burst is NOT the shell's print — my ruling's cause was wrong
+
+The listener split (receive, decode, queue to a printer; host-tested) moved nothing: first/last
+notice before → after, D=6 rv64/1 595k/1424k → 526k/1556k µs, rv64/2 489k/1451k → 471k/1228k,
+rv32/1 640k/1543k → 643k/1719k; D=16 rv64/1 673k/1842k → 872k/2175k, rv64/2 972k/1925k →
+890k/2602k; gaps between send returns still 60–380 ms (D=16 one hart alternating 60–70 and
+110–180 ms); one of sixteen dropped at NOTICE_US on rv64/1. By beamlet's code the serve thread
+forwards each send to the VM's wake endpoint (FOREVER rendezvous) before receiving the steward's
+next, and the VM takes wake-ups with a zero-wait receive from idle and from console_read on every
+scheduler next(), so the take was never behind the print. Table: `.worktrees/SHELLN1/.tmp/SHELLN1/
+burst-finding.md`. **My SHELLN1 ruling attributed the burst to the shell's print rate; the
+measurement corrects it.** Candidates left: the VM not reaching next()/idle for 60+ ms (a long
+native or slice at icount), the kernel not running the VM's thread after the serve thread's send,
+the send's own cost.
+
+Ruled: (1) yes, one diagnostic boot (rv64/1) with test-only guest-clock stamps at the listener's
+receive and the printer's print beside the probe's send returns, to split "VM not taking" from
+"steward/kernel side"; a measurement before any further ruling. (2) SHELLN1 is held until (1) is
+in. The split lands only if it moves a measured quantity or a rule requires it; "correct in
+itself" (a notice no longer waits on a re-bind or the relay) is a claim to measure in the same
+boot, not a reason — tenet 1, deleting beats adding. If the take is within a turn whatever the
+listener does, the split is reverted and SHELLN1 closes as a finding (the node's premise wrong,
+the cause named with its node); if the VM's take is the lag, the fix is beamlet's wake/take path,
+a beamlet node, not the listener; if the lag is before the VM's receive, it is the steward's send
+or the kernel's scheduling of the receiver, a kernel/steward node. The burst cases' residual is
+restated with the measured cause either way; the dropped notice (a sponsor never told) stays a
+finding and lands with the cause's node.
+
+### SHELLN1 lands + WAKE1 (2026-10-20): the burst is the VM's idle not ended by the forward
+
+Diagnostic (rv64 both hart counts, guest-clock stamps; `.worktrees/SHELLN1/.tmp/SHELLN1/
+burst-finding.md` "The diagnostic boot", `diag/timeline-smp{1,2}.txt`): per notice, send return
+→ listener receive 43–193 ms; send N+1 returns about when recv N happens (the serve thread sits
+in its FOREVER forward until the VM takes it, then receives the next); the print backlogs (150–
+966 ms) and gates nothing; the hart is idle through the gaps (no runner 62 and 28 times in the
+two longest); no wake record for the VM's budget inside the lag, only the periodic budgets'
+timers. So the gate is the VM's take of the forward: the VM's idle is not ended by the forwarded
+notice until a timer or console wake does. Not the listener, not the print, not the steward's
+send. The re-bind benefit could not be provoked: unmeasured.
+
+**Ruled. SHELLN1 lands as revert + finding:** the split is reverted (it never ran in a gate and
+moved nothing; code that moves no measured quantity does not land), the test-only stamps are
+gone (they are), the burst cases stay as STEWARD12 left them, and the page sentences SHELLN1 and
+STEWARD12 wrote — "the sponsor's rate until the shell takes a notice before it prints the one
+before" (steward.md "Failure and restart"/"Residual risks", scheduling.md) — are corrected: the
+cost is between the serve thread's forward and the VM's take while the hart is idle, the VM's
+idle not ended by the forward, named to WAKE1. That correction is SHELLN1's deliverable (docs +
+the burst-finding file as evidence); the orchestrator closes the node on it. My SHELLN1 ruling's
+cause was wrong and is recorded as such above.
+
+**WAKE1 (the orchestrator ids it), investigation-first, Tier A** (beamlet's platform idle/wake
+path; kernel if that arm bites; beamlet's strict reviewer). First make the session VM's budget
+id readable in the trace (SHELLN1 could only infer it), then exclude in order: (i) beamlet — the
+idle receive waits on an endpoint other than the forward's target, or is a timer wait that
+`take_completed`'s zero-wait receive polls only when the VM runs; (ii) kernel — a receiver
+waiting with a deadline not woken at once by a send (cite or add the ipc case that shows it is,
+before touching beamlet); (iii) the serve thread not runnable between receive and forward. The
+wider claim to measure: every completion to an idle VM (a call's reply, console input) would
+carry the same wait — one before/after of a reply to an idle shell. Acceptance: recv − send at
+the kernel's delivery, the last of N within 2× worst rounded up, no drop at NOTICE_US (the loss
+was the take), the VM's wake inside the send in the trace. Plan: `plan-2026-10-20-wake1.toml`.
+
+### READ1 gate + KILL1 (2026-10-20): a lease's clean end kills a neighbouring lease
+
+READ1's full set is green (88 cases both widths, 162 PASS; lease-bad-start both widths). Its gate
+`lease-code-load`: in every completed boot sixteen agents launch (2.3–3.3 s), load all 27 modules,
+fifteen exit 0 in load order, and the sixteenth is `was killed 0` the instant a neighbour's lease
+ended (rv64/2: agent-14 exits 0 → LeaseEnded → `agent-11 was killed 0`; rv32/1 agent-14's end
+kills agent-15; rv32/2 agent-15's kills agent-14). `killed` is R10's word (budget.rs:1383): a
+budget destroyed with its process in it. So one lease's DestroyBudget reached another live lease's
+budget with the deadline still ahead — the silent wrong-destruction STEWARD10 guarded only for
+deadline-killed leases (t ≥ d), here on the process-exit end path where the witness passes (t < d,
+Ok on an index that no longer names the record's budget). rv64/1 failed differently (the guest
+closed the SSH connection after the sixteenth launch, the shell idle, no process died): rerun
+alone; a reproduction is a second finding, named. Evidence `.wash/local/READ1-gate-finding.md`,
+`.tmp/READ1/evidence/gate10/`.
+
+**Ruled (b): READ1 lands now.** Its claim is verified — sixteen launched, none refused, every
+module loaded at the derived caps — and the kill is another rule's failure (R39: a lease ends at
+ITS deadline or ITS sponsor's word; closure: a destroy reaching an object the step did not name).
+`lease-code-load` lands unchanged (the forbid on any non-zero end is its claim; no "fifteen of
+sixteen" acceptance), excluded from the whole run by the bench's existing means (the implementer
+states which) until KILL1 lands, when it is KILL1's acceptance too; the pages' rows state fifteen
+of sixteen and the finding by name. Not (a): the bug is on main regardless; holding the Files-cap
+fix buys no safety.
+
+**KILL1 (the orchestrator ids it), top priority, Tier A, steward-red-5 and kernel-red-3 (one arm
+each), investigation-first.** Reproduce on the fake kernel first (sixteen leases ending by process
+exit close together, the fake kernel asserting each destroy hits the budget created for that
+step's lease — the kernel's verdict). Arms in order: (i) a lease's budget handle index closed or
+revoked before its end (a wrong close in `give_back`, the held copies, the exit endpoint, the
+notices right, `forget`; a scope destroy revoking it) and the index reused by a later lease's
+budget, so the earlier record names the later budget — consistent with agent-14's end killing
+agent-11 if agent-11 was created after agent-14's handle was lost; (ii) the exit watcher's
+index→owner map (`pids`, keyed by exit-endpoint index) stale across a reused index; (iii) the
+kernel placing or charging a process to another lease's budget. STEWARD10's "display artifact"
+(`agent-N was killed 0` twice for two ids) is likely this bug's first sighting and is
+re-examined, not cosmetic. Rule to hold by construction on every end path: no destroy by a kept
+handle reaches an object other than the one the record was made for — the witness extended to
+identity or the record re-validated, as the cause decides; a kernel arm comes to me. Plan:
+`plan-2026-10-20-kill1.toml`. **STEWARD13 shares drive.rs's destroy path:** the orchestrator orders
+them (KILL1's reproduction on main first; STEWARD13's implementer told the finding, since the
+install-lock argument assumes a record's handle names its budget until the deadline — the very
+assumption this breaks).
+
+### KILL1 phase 1 (2026-10-20): the steward's arms excluded; the kernel arm stands
+
+`.wash/local/KILL1-identification.md`, WIP 04235700e. (a) A Recorder `recycles` mode models the
+table whole; sixteen leases ending by exit in the gate's three orders, the fake kernel asserting
+each destroy hits its own lease's budget: PASSES on main; a mutation closing the budget's own copy
+at launch fails at once (teeth). (b) Arm (i) excluded (every `close(` closes from its own record;
+the victim was created BEFORE the killer in two of three boots, so no record of the killer's can
+name a later budget); arm (ii) excluded (pid = exit-endpoint index, closed only in the EXITS
+handler right before `exited`, the lines right at every report). Arm (iii) stands by elimination
+and by the log's order: `killed` comes only from `destroy_subtree`'s kill walk; in every normal exit
+the kernel's `Terminating` precedes the exited line; for the kill, `Terminating PID 60` comes
+AFTER the killer's audit, holds (one lease's carve exactly) and its `[lease ended]` — after the
+killer's whole event, destroy included. The victim is always the lowest lease in start order still
+running; deadlines normal. STEWARD13's premise: nothing false. STEWARD10's display artifact: no
+surviving log.
+
+**Ruled:** the kernel arm, Tier A kernel, kernel-red-3 reviews; steward-red-5's arm is closed.
+Evidence next, in this order: (1) the kernel model first (docs/kernel/model.md): sibling budgets
+with a process each under one parent, destroyed one at a time in the gate's orders, the oracle
+asserting no process outside the destroyed subtree is killed — if the model reaches it, that is
+the kernel's own verdict and the fix's test; (2) if the model cannot reach it, the test-only kernel
+probe as proposed (feature-gated as `latency-probe` is): each destroy's top budget id, each killed
+PID's counted budget (frame and generation), and the killer's and victim's positions in the
+parent's children list (the victim being the lowest still-running sibling suggests the kill walk
+leaving the destroyed subtree — a sibling link read after unlink, or a process matched to a
+budget by a reused slot/frame rather than its generation). The probe is removed or kept behind
+the feature per the kernel's convention; the lease-code-load boot with it is the measurement. The
+severity stands (a destroy reaching a sibling's process is R10/closure); a fix lands with the
+model case that would have caught it.
+(Correction: kernel-red-3 rotated at 70 %; **kernel-red-4** reviews KILL1's kernel arm.
+kill1-implementer-2 launched on the evidence order; KILL1 rebases onto train 80 (READ1 + SHELLN1),
+which brings lease-code-load into its tree.)
+
+### STEWARD13 checkpoint (2026-10-20): the design holds; three notes
+
+Host tests green. `Kernel::launch` → `Launched::{Started, Pending(job)}`; the drive stops at a
+pending Launch (`Pending {batch, step, produced, job}`, FIFO); `launched(job)` finishes the step,
+runs the remaining steps (none in any table's batch), pushes `Done`, replays the object's held
+events in order. Held set: `Exited{object}`, `EndLease{lease==id}`, `ChannelClosed{session==id}`,
+`SshdGone` while a session launch pends (its Detach would hit a Starting session). The core serves
+LockedOut, Idle, Attach (refuse_in_use) and a session's EndLease (refuse) between a batch and its
+Done; nothing in Starting emits a second batch. Each call gets its own reply token; a call with no
+reply yet is parked and answered from the Done's/replay's `Output::Reply` into its own lend; served
+start_agent said at the late answer. Lock: `Kernel::without_installs` wraps the now()+destroy pair;
+the thread holds the Mutex across start() and drops it inside the read closure; no libs/client
+change. Measured: lock wait max 33 µs rv64/1, 50 µs rv32, 5.2 ms rv64/2; thread stack 4,840 /
+3,808 B → 3 pages; loop peak 18,536 B → 10 pages; entry 1,027 → 1,051. Overlap case: before
+0.36–0.58 s net on all three boots; after p99 20/36/19 ms net, every deadline inside a launch
+window. Launches overlapping an exit grew 0.3–0.5 s.
+
+Notes (not objections): (1) the loop's stack peak GREW with the launch moved off it — explain
+in the report what holds it now (the pending state, the replay) — a growth where a shrink was
+expected is stated, not just declared. (2) The launch bound is derived (2× worst rounded up); with
+overlapping exits adding 0.3–0.5 s, re-take the worst launch over both widths and show whether
+the arithmetic still gives 8 s — the number follows the measurement, a target does not. (3) The
+5.2 ms two-hart lock wait goes on the page as the measured cost beside the 50 ms timer-wake p99.
+
+### KILL1 cause (2026-10-20): not a wrong destruction — the virtual clock reached the lease's deadline
+
+`.wash/local/KILL1-cause.md`. (1) The model's sibling contract (16 children ending by exit in the
+gate's three orders and two more) passes; the model cannot reach a walk leaving a subtree. (2) A
+kernel probe (feature `kill-probe`) on lease-code-load rv64/2, three boots: the destroyed top IS
+the victim's own budget, its chain exactly the victim's process, the parent's list intact,
+`deadline true`. R10 and R39 hold: the lease ended at ITS deadline. (3) The deadline is start +
+1.8e9 µs as set; the guest clock jumped to it (audit before `at 575133051`, expiry `now
+1912083242` for `deadline 1912083218`; 295 s wall) with every hart idle and nothing nearer armed
+(hint = this deadline). QEMU icount skips an idle guest to its next timer deadline; testbench.md
+says `sleep on` keeps idle time the host's, and the jump happened with sleep on. The victim is the
+oldest lease because its deadline is earliest; the kill follows a neighbour's end because that is
+when the guest first idles with only lease deadlines armed. (4) The same case on the host clock:
+PASS in 78 s, sixteen exited 0.
+
+**My KILL1 ruling framed a wrong destruction; the measurement says the kernel and the steward did
+exactly what R10/R39 say. Recorded as corrected.** The finding is the bench's: under the virtual
+clock a fully idle guest with only lease deadlines pending reaches them, and the page's `sleep on`
+claim is false as measured.
+
+**Ruled.** (a) lease-code-load runs on the host clock (a `forward` case by testbench.md's own rule
+for what such a case keeps), the reason in its comment: it judges counts (sixteen launched, loaded,
+exited 0), not timings, and under the virtual clock an idle guest reaches a live lease's deadline;
+`whole_run` back on. Not another shape: arming a timer to defeat the skip would be designing to
+pass. (b) testbench.md's `sleep on` sentence is withdrawn and replaced by the measured behaviour
+(an idle guest's clock skips to its next armed deadline, sleep on or off, on the bench's QEMU),
+plus the rule it implies for case authors: a case under the virtual clock whose guest can idle
+with a live lease either runs on the host clock or expects the lease's end. (c) The probe is
+removed (tenet 1: it served its identification; KILL1-cause.md keeps how); the model's sibling
+contract stays as a kept test with teeth. (d) The rows READ1 wrote ("fifteen of sixteen, R39 by
+mechanism" on erofsd.md, scheduling.md, steward.md Residual risks) are corrected to sixteen of
+sixteen on the host clock with the clock finding named to testbench.md; SECURITY.md unchanged.
+KILL1 closes on that (Tier A for the kernel test file; kernel-red-4). STEWARD10's "display
+artifact" stays unexplained, not attributed to this.

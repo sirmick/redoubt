@@ -124,7 +124,7 @@ but never the cause: start-up 35–143 s beside others, 30–85 KB/s per agent, 
 | `lease-bad-start` rv64 one hart (`gates4.log`) | PASS 7.2 s |
 | `lease-code-load` first shape (files written, `done` counted), rv64 one hart (`gates2.log`, `gate-rv64-1/`) | FAIL by the write-completion hang above and a wait too short: reshaped |
 | diagnostics at N = 4 (`gates3.log` with retry, `gates4.log` without; `diag4/`, `diag4b/`) | 3 of 4 and 2 of 4 agents finished, the rest stopped in a write to `/project` |
-| the full set (`gates5.cases`: formatting, docs, size-budget, unsafe-budget, host-tests, the 14 build cases, every steward-* boot case but latency, erofs*, walfsd*, littlefsd-boot/host-tests, verity-signed/flipped-tree, beamlet-launch, agent-login, the pack-bad-* and userland-bad-start park cases, lease-bad-start, lease-code-load; both widths; `gates5.log`) | running |
+| the full set (`gates5.cases`, 88 cases: formatting, docs, size-budget, unsafe-budget, host-tests, the 14 build cases, every steward-* boot case but latency, erofs*, walfsd*, littlefsd-boot/host-tests, verity-signed/flipped-tree, beamlet-launch, agent-login, the pack-bad-* and userland-bad-start park cases, lease-bad-start, lease-code-load; both widths; `gates9.log`, after `gates5`–`gates8` were stopped for fixes: the size-budget ceilings of libs/rt 4059 → 4106 and libs/client 1124 → 1142 with their `Size budget:` lines, a C5 citation, Echo's rescue, the set check's removal) | 162 PASS, no FAIL, for every case but `lease-code-load`, whose two boots sat idle: its sixteen `exited 0` lines were in `expect`, which the bench waits for before the sessions start (testbench.md: `expect_after` is matched from the sessions' start); moved, and the case rerun alone (`gates10.log`) |
 
 Not run, by instruction: the steward-latency cases (STEWARD12 holds the machine's slot); the whole
 bench (the train's).
@@ -140,6 +140,78 @@ R40's list gains the no-blame test), docs/servers/init.md (the restart rule unch
 stays for a VM with a console), docs/kernel/boot.md R75 (its attack cases unchanged and still
 pass), docs/testbench.md (no case-count or memory table moved), SECURITY.md (R26's and R40's
 Tested-by match their rules' status lines). No other summary states the fid cap or the park.
+
+## The gate's finding, in full: a lease killed by a neighbouring lease's end
+
+Evidence: `/home/mcloonan/redoubt/.tmp/READ1-evidence/gate10/` (kept outside the worktree; also
+`.tmp/READ1/evidence/`). Each boot: sixteen launches served in 2.3–3.3 s; the agents load their
+boot pack, start module and 27 modules; exits in load order. `[!] Terminating process with PID`
+is the kernel's teardown line (ptable.rs); `killed` is R10's word, a budget destroyed with the
+process in it (budget.rs ~1383).
+
+- **rv64, two harts** (`lease-code-load-rv64-smp2.log`): agent-1 … agent-10 `exited 0` (PIDs
+  190, 92, 160, 431, 443, 376, 402, 156, 295, 302, the kernel's PIDs are scattered), then
+  `Terminating PID 240` → `agent-14 … exited 0` → `audit … LeaseEnded { 16623406186255813947 }`
+  → `users/alice/{} holds 49031 pages, 30 processes` → `[lease alice/agent-14 ended]` →
+  `Terminating PID 60` → `steward: lease alice/agent-11 10450144148343146291 of 1001/{} was
+  killed 0`. No `LeaseEnded` of agent-11 before the kill; its only audit before is its
+  `AgentStarted` at 123 s.
+- **rv32, one hart** (`…-rv32-smp1.log`): agent-1 … agent-13, agent-16, then `Terminating PID
+  206` → `agent-14 … exited 0` → `LeaseEnded { 15553233338283223574 }` → notices for agent-16
+  and agent-14 → `Terminating PID 126` → `agent-15 16947612341351898320 … was killed 0`.
+- **rv32, two harts** (`…-rv32-smp2.log`): agent-1 … agent-13, agent-16, then `Terminating PID
+  153` → `agent-15 … exited 0` → `LeaseEnded { 11594772929181668709 }` → notices → `Terminating
+  PID 419` → `agent-14 12891400669314026987 … was killed 0`.
+- **rv64, one hart** (`…-rv64-smp1.log`, `…-alice.ssh.log`): the sixteen launches, `{:started,
+  16}` at 20.1 s, the prompt `(5)>`, then `Connection to 127.0.0.1 closed by remote host`, ssh
+  status 255; the console: `sshd: a connection's input ended` right after, no `Terminating`
+  line at all (no process died), no session exit; the other three boots idled at the same prompt
+  for minutes without it. Rerun alone (`gates13.log`) to tell a flake from a finding.
+
+Reading: the victim is killed the instant the preceding lease's budget is destroyed, so one
+lease's clean end destroys another lease's VM: the steward's `destroy_budget` reaching the wrong
+budget (a token or handle to another lease's; the recycled-scope-index tests under steward.md's
+"Failure and restart" guard a sibling path), or the kernel charging one VM's process object to
+another lease's budget (R10's "same doomed subtree" clause). Sixteen lease VMs exiting by
+themselves close together is a shape no case had, which is why the exit verdict surfaced it.
+Not the read path: every agent that exited had loaded all 27 modules, none was refused.
+
+**Rerun alone, rv64 (`gates13.log`, `READ1-evidence/gate13/`):** one hart: agent-1 … agent-11,
+agent-14 exit 0, then agent-14's end → `Terminating PID 37` → `agent-12 … was killed 0`; two
+harts: agent-1 … agent-11, agent-16, agent-15 exit 0, then `Terminating PID 321` → `agent-12 …
+was killed 0`. The SSH close of the first one-hart boot did not recur (`sshd: a connection's
+input ended` 0 times): a flake of that boot, not a finding. So the kill is on all four
+configurations, the victim varying (11, 12, 14, 15).
+
+**Ruled (b), the Architect on thread READ1:** READ1 lands; the kill is R39's failure (a lease
+ends at its deadline or its sponsor's word), its node KILL1 (the Architect's
+`plan-2026-10-20-kill1.toml`); `lease-code-load` lands unchanged in its claim (any non-zero end
+forbidden), out of the whole run by `whole_run = false` with the reason in its comment, and is
+KILL1's acceptance when it lands; erofsd.md, scheduling.md and steward.md (Residual risks, R39's
+page) state fifteen of sixteen and the mechanism.
+
+## The gate's finding (blocking the gate, not the read path)
+
+`.wash/local/READ1-gate-finding.md`: in every completed boot of `lease-code-load` fifteen agents
+exit 0 and the sixteenth is `was killed 0` the instant the lease ended just before it is
+destroyed, with no `LeaseEnded` of its own first — a lease's clean end destroying a neighbouring
+lease's VM (the steward's `destroy_budget` reaching the wrong budget, or the kernel's R10 charge).
+The decision (wait for its node, or land with the case out of the whole run and the rows stating
+fifteen of sixteen) is the Architect's, asked on thread READ1. rv64 one hart failed differently
+(the guest closed the SSH connection while the shell idled at its prompt; rerun alone to tell).
+
+## Commits (as squashed, base 4f381d216; the tree identical to the WIP's)
+
+94134ca75 admission · 927272095 file servers · 9f9a63fe3 client · 5e2b95359 beamlet ·
+0066838bc testbench (the gate, `whole_run = false` with its reason) · 85afec5f8 docs (the head;
+the three rows on the kill folded in by autosquash; docs, formatting and size-budget rerun on it:
+`gates14.log` PASS). The plan below is what each carries.
+The squashed tree is byte-identical to the WIP the gates ran on (`git diff 4f381d216 HEAD`
+md5 `adb73ac1…` both ways); gates9's 162 passes ran on 138901b0c, which differs from it only in
+`lease-code-load.toml` (the sixteen lines moved to `expect_after`, comments) and a comment in
+`echo.ex`; size-budget, docs and formatting were rerun on the squashed branch (`gates11.log`,
+`gates12.log`: PASS; the first squash had moved `servers/littlefsd`'s ceiling by a blind edit,
+caught by size-budget and redone with an exact one).
 
 ## Commits (the squash, in this order)
 

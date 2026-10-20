@@ -1,0 +1,20 @@
+# Architect, 2026-10-20: SHELLN1's diagnostic boot (rv64, both hart counts; .worktrees/SHELLN1/
+# .tmp/SHELLN1/burst-finding.md "The diagnostic boot") located the lease_ended burst's cost: the
+# lag is between the steward's send RETURNING (the serve thread took it) and the shell VM's
+# listener RECEIVING it, 43-193 ms per notice, while the hart is IDLE (no runner in the two
+# longest gaps), the serve thread is blocked in its FOREVER forward to the VM's wake endpoint,
+# and the trace shows no wake record for the VM's budget inside the lag — only the periodic
+# budgets' timers. The forwarded notice does not end the VM's idle; the VM takes it at its next
+# timer or console wake. Not the shell's print (SHELLN1's premise, reverted), not the steward's
+# send. Ruling: .wash/local/wave-2026-10-18-rulings.md "SHELLN1 lands + WAKE1". The orchestrator
+# assigns the id (WAKE1 provisional) and the reviewer (beamlet's strict review; kernel-red if
+# the kernel arm bites). Needs nothing; SHELLN1 closes beside it.
+
+[[node]]
+  id = "WAKE1"
+  title = "A completion forwarded to an idle VM ends its idle at once: the serve thread's forward wakes the VM's scheduler within the kernel's delivery, not at its next timer"
+  template = "package"
+  parent = "AGENTS"
+  needs = []
+  body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'SHELLN1 lands + WAKE1'. Brief: to follow the identification (investigation-first; the Architect settles the fix on it). Tier A (beamlet's platform idle/wake path; the kernel's receive-with-deadline wake if that arm bites), size S-M. Found by SHELLN1's diagnostic: each lease_ended notice waits 43-193 ms between the serve thread's take and the VM's listener receiving it, the hart idle, the serve thread blocked in its FOREVER forward to the VM's wake endpoint, no wake record for the VM's budget until a timer. Three arms, excluded in order from the trace with the session VM's budget id READ (first make the probe or a boot line name it; SHELLN1 could only infer it): (i) beamlet: the idle sleep (a receive with the next timer deadline) waits on an endpoint other than the one the serve thread forwards to, or is a timer wait polled by take_completed's zero-wait receive only when the VM runs; (ii) kernel: a receiver waiting with a deadline is not woken by a send at once — cite or add the ipc host/boot case that shows it is, before touching beamlet; (iii) the serve thread not runnable between its receive and its forward (its budget, its lock). Fix per arm: (i) one endpoint for idle and forwards, or the forward wakes the sleeper; (ii) a kernel node of its own, raised to the Architect; (iii) beamlet's serve path. Wider claim to measure, not assume: EVERY completion forwarded to an idle VM (a call's reply, console input) would carry the same wait, so one measurement of a reply to an idle shell before/after. Acceptance: the burst cases' recv - send falls to the kernel's delivery (ms), the last of N within a derived bound (2x worst rounded up), no notice dropped at NOTICE_US (the loss was the take); sched-trace shows the VM's wake inside the send. Pages: beamlet.md (the idle/wake rule), steward.md/scheduling.md's burst residual replaced by the measured figures. No target moves."
+  state = "todo"

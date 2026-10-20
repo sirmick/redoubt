@@ -1,0 +1,22 @@
+# Architect, 2026-10-20: READ1's gate (lease-code-load, sixteen leases of one account exiting 0
+# by themselves close together, a shape no case had) found that a lease's CLEAN END destroys a
+# neighbouring lease's VM: agent-14 exits 0 -> its LeaseEnded -> `agent-11 was killed 0` (rv64
+# two harts; rv32 one hart agent-14's end kills agent-15; rv32 two harts agent-15's kills agent-14).
+# `killed` is the kernel's R10 word (budget.rs:1383, a budget destroyed with its process in it),
+# so the steward's DestroyBudget for one lease reached another lease's live budget — the silent
+# wrong-destruction STEWARD10 guarded only for deadline-killed leases, reached here on the
+# process-exit end path with the deadline still ahead. Evidence: .wash/local/READ1-gate-finding.md,
+# /home/mcloonan/redoubt/.tmp/READ1/evidence/gate10/. Ruling: .wash/local/wave-2026-10-18-rulings.md
+# "READ1 gate + KILL1". The orchestrator ids it (KILL1 provisional). Top priority: a sponsor's
+# agent killed by another lease's end breaks human control (R39: a lease ends at ITS deadline or
+# ITS sponsor's word) and capability closure (a destroy reaching an object the step did not name).
+# Same file as STEWARD13 (drive.rs's destroy path): the orchestrator orders them; STEWARD13 told.
+
+[[node]]
+  id = "KILL1"
+  title = "A lease's end destroys that lease's budget and no other: the steward's destroy by handle names the budget the step was queued for, on every end path, under sixteen leases ending together"
+  template = "package"
+  parent = "AGENTS"
+  needs = []
+  body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'READ1 gate + KILL1'. Brief: to follow the reproduction (investigation-first; the Architect settles the fix on it). Tier A (the steward's destroy path, possibly the kernel's budget/process charging), size S-M, reviewers steward-red-5 AND kernel-red-3 (one arm each). Found by READ1's lease-code-load: sixteen leases of one account exit 0 close together and one is `was killed 0` the instant a neighbour's end batch runs — a live lease's budget destroyed by another lease's DestroyBudget, the deadline still ahead (so STEWARD10's witness lets the destroy through: t < d, Ok, the index no longer names the budget the record was made for). Reproduce first on the fake kernel (servers/steward/tests): sixteen leases ending by process exit close together, the fake kernel asserting each destroy hits the budget created for that step's lease — the verdict the kernel's. Arms, excluded in order (the ruling spells them out): (i) steward — a lease's budget handle index closed or revoked before its end and reused by a later lease's budget; (ii) steward — the exit watcher's index-to-owner map (pids) stale across a reused index; (iii) kernel — a process placed in or charged to another lease's budget. STEWARD10's 'display artifact' (`agent-N was killed 0` twice) is re-examined as this bug's first sighting. Rule to hold: no destroy by a handle the steward keeps reaches an object other than the one the record was made for, on EVERY end path (deadline, end_lease, process exit, blame), by construction — the witness extended to identity, or the record re-validated, as the cause decides; a kernel arm is raised to the Architect. Acceptance: the fake-kernel test; lease-code-load's sixteen `exited 0` and no `killed` on both widths and hart counts (READ1's case, excluded from the whole run until this lands, never weakened); the steward set unchanged. Pages: steward.md 'Leases'/'Failure and restart', SECURITY.md R10/R39/R41 rows."
+  state = "todo"

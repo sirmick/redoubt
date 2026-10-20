@@ -652,3 +652,33 @@ READ1: read1-implementer completed its phase-1 assignment (ephemeral -> retires)
 ~00:43Z STEWARD12 OK with notes (steward-red-5): P2 (lost notice overclaimed: seen once in three runs, second run's logs were copies) and P3 (a dropped send still samples at the bound's expiry) folded into the docs commit -> head 42b78d616; docs PASS; accepted. TRAIN 79 = STEWARD12 alone: head on 4f381d216, .tmp/train-79 running. On green: publish, push wp-STEWARD12, remove worktree+branch, save.sh, give shelln1-implementer the hash (burst gate), launch STEWARD13 when the Architect's brief lands.
 
 ~00:59Z READ1: gate verdict re-shaped (steward exit lines, data volume out; Architect yes with 3 conditions). WRITE1 added to the plan (a completed write's completion never returns to the VM; investigation-first; needs READ1 for the page sentence; kernel-red-3). Launch WRITE1 after READ1 publishes (shares READ1's worktree evidence: copy .worktrees/READ1/.tmp/READ1/diag4* and gate-rv64-1 to .tmp/WRITE1-evidence before removing READ1's worktree!).
+
+~01:10Z TRAIN 79 PUBLISHED (STEWARD12) merge 817f58689 on 4f381d216, main c01146946; 770 PASS rc=0 (00:43-01:09Z, beside READ1's 88-case set, no flake); wp-STEWARD12 pushed, worktree+branch removed; save.sh clean. shelln1-implementer given the hash (rebase, burst gate). Next: READ1 report -> kernel-red-3 -> train 80; SHELLN1 -> steward-red-5 -> train 81; STEWARD13 brief (Architect, now that STEWARD10+12 landed) -> launch; SCHED5, WRITE1 briefs pending.
+
+~01:18Z STEWARD13 brief ready (Architect: serial FIFO launch thread, Done deferred, install lock; STEWARD13-implementer.md); node body updated; steward13-implementer launched from c01146946, steward-red-5. In flight now: READ1, SHELLN1, STEWARD13. Pending briefs: SCHED5, WRITE1.
+
+~01:38Z SHELLN1 diagnostic: the lag is the VM's take of the forward (hart idle, serve thread blocked in its FOREVER forward, no wake record until a timer). Architect: SHELLN1 lands as revert + finding (page sentences corrected, naming WAKE1); WAKE1 added to the plan (investigation-first; beamlet idle/wake path or kernel receive wake) and wake1-implementer launched from c01146946, kernel-red-3. In flight: READ1, SHELLN1 (closing), STEWARD13, WAKE1.
+
+~01:40Z SHELLN1 done as revert + finding (8c5411655, one docs commit on c01146946) -> steward-red-5; evidence copied to .wash/local/SHELLN1-burst-finding.md and .tmp/SHELLN1-evidence (for WAKE1). Plan: train 80 = READ1 + SHELLN1 together when READ1 is OK.
+
+~01:43Z SHELLN1 OK with notes (steward-red-5): P2 (two case files' stale cause) + P3 (loss qualifier; "consistent with") folded, head 4876172a0; accepted. Train 80 = READ1 (pending review) + SHELLN1; trailers kept in .tmp/train-80/shelln1-trailers.txt.
+
+~02:22Z READ1 gate: a live lease's VM killed by a neighbouring lease's clean end (R39 failure; STEWARD10 witness lets it through, t<d). Architect: READ1 lands now (b), lease-code-load unchanged but excluded from the whole run until KILL1; KILL1 added (top priority, investigation-first, steward-red-5 + kernel-red-3) and kill1-implementer launched from c01146946; steward13-implementer warned (shared drive.rs destroy path; premise under test). In flight: READ1 (squash/report), STEWARD13, WAKE1, KILL1; SHELLN1 accepted waiting for train 80.
+
+~02:36Z READ1 phase 2 done (85afec5f8 on 4f381d216; 6 commits); I rebased wp-READ1 onto c01146946 -> 95f95f018 (clean), host gates PASS; -> kernel-red-3. Evidence at .tmp/READ1-evidence (for KILL1/WRITE1). Train 80 = READ1 + SHELLN1 (4876172a0) on c01146946 after the verdict.
+
+~02:41Z READ1 OK (kernel-red-3), accepted. TRAIN 80 = READ1 (95f95f018) + SHELLN1 (4876172a0) on c01146946, head 84ba5f772 (docs auto-merged clean), .tmp/train-80 running. On green: ff main, plan commit (stage .wash/plan.toml + .wash/qa), push, push wp-READ1 + wp-SHELLN1, remove both worktrees/branches, save.sh; then launch WRITE1 (needs READ1; evidence .tmp/READ1-evidence), tell KILL1/STEWARD13/WAKE1 the hash. kernel-red-3 at 70%: handoff -> kernel-red-4 next.
+
+~02:42Z kernel-red-3 ended at 70% (handoff .wash/local/handoffs/kernel-red-3.md, 11.8 KB: method, traps B88/IPD1/..., READ1 OK delivered); kernel-red-4 launched from it (reviewer; KILL1 kernel arm, WRITE1, WAKE1).
+
+~02:54Z KILL1 phase 1 (.wash/local/KILL1-identification.md; WIP 04235700e test with teeth, passes on main): steward arms (i),(ii) excluded; kernel arm (iii) by elimination + log order (destroy_subtree kill walk kills the next lease in start order). With the Architect on READ1; implementer retires (phase 2 relaunch after the ruling; kernel-red-4 reviews the kernel arm).
+
+~02:56Z KILL1 ruled Tier A kernel (Architect: model first, then feature-gated probe; cause before fix; fix by construction). kill1-implementer-2 launched (kernel arm) from wp-KILL1 WIP 04235700e; reviewer kernel-red-4.
+
+~03:09Z Train 80 run 1: 770 PASS + 2 FAIL: beamlet-lookup-host (host tests; B81/B85 stuck-guard flake class) and smp-evict-mttcg rv64 smp2 (guest exited at 1.2 s before the shootdown line; MTTCG class); logs .tmp/train-80/fail-*; rerunning both alone x3 (rerun*-*.log).
+
+~03:15Z Train 80 run 1 reruns: smp-evict-mttcg 6/6 PASS alone (flake); beamlet-lookup-host 3/3 FAIL alone: READ1 renamed Unexpected's unread text, tests/userland.rs:84 still expected "failed" (beamlet host tests were not in READ1's gate set). Folded the expectation into READ1's beamlet commit (autosquash, nightly fmt) -> head e8806303a; formatting/docs/beamlet-lookup-host PASS. Train 80 run 2 = READ1 e8806303a + SHELLN1 4876172a0 on c01146946 (run1 logs in .tmp/train-80/run1); kernel-red-4 asked for a renewal on the 4-line fold.
+
+~03:45Z TRAIN 80 PUBLISHED (READ1 e8806303a + SHELLN1 4876172a0 on c01146946; run 2 head 42f9272a0) main ddafcad7d; 772 PASS rc=0 (03:15-03:43Z); wp-READ1/wp-SHELLN1 pushed, worktrees+branches removed; save.sh refused (KILL1 dirty), main pushed. KILL1/STEWARD13/WAKE1 told the hash; WRITE1 launched (write1-implementer, investigation-first, kernel-red-4). Next: KILL1 cause -> Architect -> fix; STEWARD13 report -> steward-red-5 -> train 81; WAKE1 identification; SCHED5 brief pending.
+
+~03:53Z KILL1 cause (.wash/local/KILL1-cause.md): NOT a kernel/steward bug. Each kill is the victim lease's OWN deadline: under icount with sleep=on the guest clock warped from ~575 s to the deadline at an all-idle instant (QEMU advances virtual time to the next armed timer when idle); on the host clock the case passes 16/16 in 78 s. Remedy is the case's clock; with the Architect on READ1. Branches rebased on ddafcad7d (wp-KILL1 f2eadc401; kill1-probe 0237ceb2a).
