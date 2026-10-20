@@ -589,12 +589,14 @@ got 0.
 
 ### Responsiveness
 
-<details><summary>Status: built · tested (23)</summary>
+<details><summary>Status: built · tested (25)</summary>
 
 - bench:sched-latency
 - bench:steward-latency
 - bench:steward-latency-n4
 - bench:steward-latency-n16
+- bench:steward-deadline-burst
+- bench:steward-deadline-burst-16
 - bench:sched-lock-contention
 - bench:sched-lock-contention-4
 - bench:sched-lock-contention-4-mttcg
@@ -803,18 +805,33 @@ by a sleep of the lease plus a second — the margin over the kernel's R10 destr
 frees alice's pages — both the guest's clock under `icount`, so the next lease is requested only
 after the previous is gone, which also holds the N = 16 carve, where alice's share leaves room for
 one measured lease beside the fifteen spinners. One at a time, not a burst: `deadline_notice` is a
-single lease's notice latency (the exit notice's arrival, when the steward's loop dequeues the
-`Exited` event, less the deadline; target 40 ms). A burst of D deadlines firing together hands the
-steward D `Exited` events at once, dequeued serially (about 70 ms each: the cleanup, the
-`LeaseEnded` audit, the console lines), so the last notice is about D × 70 ms late — measured 1.12
-to 1.22 s at p99 for D = 16, against 10 ms when the notices come one at a time; that is the
-steward's serial dequeue under a burst, not a single notice's latency, and the steward sending a
-batch's notices ahead of the per-exit work is its own change, not this case's. **The residual
-under load:** `deadline_notice` is clean only with the steward idle when the deadline fires — the
-quantity this case measures, one lease at a time. A launch in flight holds the serve loop inside a
-synchronous `start_agent` (2-6 s), so a deadline that fires during one waits behind it, up to the
-launch bound; the steward running the slow part of a launch off the loop, so the loop can take the
-notice meanwhile, is a separate change. The case measures the per-notice quantity, one lease at a
+single lease's notice latency (the sponsor told — the steward's `lease_ended` send to its session
+returned — less the deadline; target 40 ms; the send adds 10 to 14 ms to the dequeue it was once
+sampled at, measured as the first notice of each burst below with the shell idle; the table's
+deadline notice row is re-measured at the send, 14 to 32 ms where the dequeue read 8 to 16). A burst of D
+deadlines firing together hands the steward D `Exited` events at once, and the sponsor is told of
+the last of them about D times the shell's take of one notice after the first: measured by
+`steward-deadline-burst` (six leases on one shared deadline, both widths) and
+`steward-deadline-burst-16` (sixteen, rv64), the first notice 0.3 to 0.8 s gross (22 to 88 ms net
+of the checked build's audits) after the deadline — the kernel destroying the six or sixteen VM
+budgets at its one entry at the deadline before any exit notice goes out, each within R10 — then
+each notice 40 to 300 ms behind the previous (85 to 300 ms on average over a boot), the `lease_ended` send a rendezvous the sponsor's
+shell takes only once it has printed the previous `[lease ended]` through its relay; the last of
+six 1.53 to 1.79 s gross after the deadline (0.34 to 0.56 s net), the last of sixteen 2.11 to
+2.76 s (0.55 to 1.00 s net), one run per column at the seed. The steward's own work between two
+exits is 3 to 6 ms (the end batch, the record; the console lines at the next turn 30 to 50 ms per
+exit), so sending the burst's notices ahead of every exit's bookkeeping, built and measured, moved
+the last notice by 16 ms of the 1.4 s and is not in the tree; the burst cases record the quantity
+with no bound, and the residual is the sponsor's rate until the shell takes a notice before it
+prints the one before ([the steward](../servers/steward.md#residual-risks)). One notice of six
+was lost on rv64 at one hart in one run of three, a send the shell did not take within the steward's bound,
+its sample the bound's expiry rather than the sponsor told. **The
+residual under load:** `deadline_notice` is clean only with the steward idle when the deadline
+fires — the quantity this case measures, one lease at a time. A launch in flight holds the serve
+loop inside a synchronous `start_agent` (2-6 s), so a deadline that fires during one waits behind
+it, up to the launch bound; the steward running the slow part of a launch off the loop, so the
+loop can take the notice meanwhile, is a separate change. The case measures the per-notice
+quantity, one lease at a
 time. The trace ring (256 MiB, 8,388,608 records) is per boot, and a single boot of all five rounds
 overran it at two harts, a boot of N = 1 to 4 too (the rounds record about 1.0 / 2.2 / 2.4 / 3.1 /
 1.5 M at N = 1 / 2 / 3 / 4 / 16, and on rv32 N = 1 to 3 alone fill 6.0 M at two harts), so the
@@ -858,7 +875,7 @@ such a destruction (subtracted, as every target is net):
 | --- | --- | --- | --- | --- |
 | steward timer wake (p50/p99) | 965/1944, 789/3472, 1227/2555, 821/5165, 599/1405 | 727/1579, 1242/1843, 888/1167, 801/1507; N = 16 not run (a spinner dies, below) | 1761/5085, 2867/23003, 1901/4066, 2336/7692, 3592/5357 | 5563/5636, **31831**/35239 (the p50 missed, below), 4160/5396, 3284/40940; N = 16 not run |
 | steward decision wake (p50/p99) | 1156/8292, 17425/20974, 645/2230, 965/2000, 736/1532 | 24235/28493, 1199/40468, 1011/1624, 775/1888 | 3474/18540, 1696/21203, 9798/25163, 3265/25254, 14107/29787 | 3963/4517, 4583/39824, 21757/40031, 3112/41174 |
-| deadline notice (p99) | 13990, 13257, 12148, 13439, 10552 | 8267, 15761, 10989, 11815 | 9916, 13679, 9514, 12272, 9646 | 13021, 13996, 12731, 13997 |
+| deadline notice (p99; the sponsor's send returned, re-measured) | 17882, 18016, 19734, 18813, 14349 | 16303, 17365, 15288, 17349 | 30393, 32398, 24567, 27239, 29907 | 13021, 13996, 12731, 13997 (at the dequeue, not re-measured) |
 | `budget_destroy`, call to return (p50/p99) | 6012/8329, 6081/8372, 5016/8412, 5468/8354, 6204/8762 | 6710/10251, 5360/8315, 6404/7910, 6460/9557 | 8178/9787, 8390/11010, 7938/10401, 7800/11411, 7545/9390 | 11738/13577, 11350/14014, 11316/13198, 10016/16204 |
 | R10 (p99; the boots at N = 1 to 3 / 4 / 16, 99 / 35 / 31 destructions) | 9695 / 9716 / 4800 | 9651 / 9682 | 10042 / 9804 / 5490 | 9801 / 10063 |
 | a lease's end (worst decision wake p99 + R10, per boot) | 20974 + 9695 = 30669; 2000 + 9716 = 11716; 1532 + 4800 = 6332 | 40468 + 9651 = 50119; 1888 + 9682 = 11570 | 25163 + 10042 = 35205; 25254 + 9804 = 35058; 29787 + 5490 = 35277 | 40031 + 9801 = 49832; 41174 + 10063 = 51237 |

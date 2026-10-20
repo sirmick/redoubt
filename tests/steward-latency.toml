@@ -143,16 +143,16 @@ expect_after = [
 # (2 x 11,392 + 16 x 5,248 = 106,770 pages) leaves room for one measured lease beside the fifteen
 # spinners: one at a time is the manifest's own sizing, not a shortfall.
 #
-# Why one at a time, not a burst: deadline_notice is a single lease's notice latency, the exit
-# notice's arrival (when the steward's loop dequeues the Exited event) less the deadline, target
-# 40 ms. A burst of D deadlines firing together would hand the steward D Exited events at once,
-# dequeued serially (~70 ms each: cleanup, the LeaseEnded audit, the console lines), so the last
-# notice is ~D x 70 ms late (measured 1.12 to 1.22 s p99 at D = 16; kernel/scheduling.md records
-# it) -- the steward's serial dequeue under a burst, not a single notice's latency. Measured one
-# at a time it meets 40 ms (the N = 16 round did at 10 ms when the rest were a burst). A burst is a
-# real production shape (several agents' leases expiring together) and the steward sending the
-# batch's notices ahead of the per-exit work is its own node; this case measures the per-notice
-# quantity. Sequential-all fits the trace ring (256 MiB, 8,388,608 records; kernel/src/sched.rs),
+# Why one at a time, not a burst: deadline_notice is a single lease's notice latency, the
+# sponsor told (the steward's lease_ended send returned) less the deadline, target 40 ms. A burst
+# of D deadlines firing together hands the steward D Exited events at once, and the sponsor is
+# told of the last about D x the shell's take of one notice after the first (85 to 300 ms each on average:
+# the send is a rendezvous the shell takes only once it has printed the previous notice), after
+# the kernel's D destructions at the deadline's entry; measured by steward-deadline-burst and its
+# companion (1.5 to 1.8 s for the last of six, 2.1 to 2.8 s for the last of sixteen, from the deadline;
+# kernel/scheduling.md records it) -- the sponsor's rate under a burst, not a single notice's
+# latency, which this case measures one lease at a time (it meets 40 ms; the N = 16 round did at
+# 10 ms when the rest were a burst). Sequential-all fits the trace ring (256 MiB, 8,388,608 records; kernel/src/sched.rs),
 # the window's end well inside it (the per-round lease short where the launch is small keeps the
 # idle down). timeout_secs is the case's bound and does not move.
 [[session]]

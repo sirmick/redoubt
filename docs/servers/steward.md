@@ -763,7 +763,9 @@ or an agent with a person at the top of the chain.
   right and closes it with the session), naming the lease as `<principal>/<name>`
   (`alice/agent-3`, `agent/session-7`) and never why; the shell prints `[lease NAME ended]`. A
   session whose VM does not take the send in the steward's bound misses it, and the steward is
-  not held: the core forgets a notice no session can take. The same endpoint carries
+  not held: the core forgets a notice no session can take. Leases ending together are told one
+  send at a time, each waiting for the shell to take it, so the last of a burst is late by the
+  shell's own rate and one may be missed ([failure and restart](#failure-and-restart)). The same endpoint carries
   `server_restarted` ([failure and restart](#failure-and-restart)).
 - **A lease the kernel's deadline took** reaches the steward as its process's exit notice with
   the budget already gone and the steward's handle to it revoked, its table index free for the
@@ -1400,7 +1402,7 @@ detached again ends by its first detach's clock, before its bound.
 
 ## Failure and restart
 
-Status: built · partly tested: `steward-restart` proves the release of a dead steward's connections by count at `bootfsd`, `erofsd:system`, `walfsd:data` and `ipd`, and at `littlefsd:alice-secrets` only by the code they share, since it opens no vault session; a shared server's restart is re-bound on the machine at `walfsd:data`, and at the vault's server and `ipd` by the code they share and the host test · tested: bench:steward-restart, bench:steward-restart-ssh, bench:steward-restart-reboot, bench:steward-session-ends, bench:steward-server-restart, host:redoubt-steward-server::users_not_empty_is_a_start_failure_before_any_carve, host:redoubt-steward-server::watch_is_held_only_from_sshd_and_malformed_on_any_other_badge, host:redoubt-steward-server::a_servers_restart_tells_its_sessions_and_a_session_rebinds_its_slot, host:redoubt-steward-server::every_operation_on_another_badge_class_is_malformed, host:redoubt-init::a_restart_strands_the_stewards_connections_at_the_endpoints_the_server_receives_on, host:redoubt-init::the_outcome_of_the_hand_over_is_said_in_blames_words, bench:steward-blame-lockout, host:redoubt-steward-server::a_session_s_end_is_answered_before_any_cleanup_call, host:redoubt-steward-server::an_ended_session_s_pending_request_is_withdrawn_before_the_end_s_reply, host:redoubt-steward-server::a_cleanup_step_that_times_out_is_retried_then_parked, host:redoubt-steward-server::a_timed_out_step_does_not_hold_the_steps_behind_it, host:redoubt-steward-server::a_cleanup_step_the_server_refuses_or_cannot_take_is_done_at_once, host:redoubt-steward-server::the_cleanup_queue_holds_each_released_connection_once, host:redoubt-steward-server::the_loops_turn_makes_no_call_to_a_server_that_never_answers, host:redoubt-steward-server::a_step_that_never_completes_holds_only_itself, host:redoubt-steward-server::a_step_that_completes_after_the_loop_moved_on_is_settled_then, host:redoubt-steward-server::reconnected_forgets_a_servers_due_steps_too, host:redoubt-steward-server::a_console_line_is_one_write_on_the_kept_fid, host:redoubt-steward-server::a_console_line_the_console_did_not_take_costs_one_bound_and_keeps_the_order, host:redoubt-steward-server::the_console_fid_is_re_opened_after_a_failed_write_and_the_lines_dropped_are_said, host:redoubt-steward-server::the_exit_s_last_turn_writes_the_lines_left_within_one_bound, host:redoubt-steward-server::a_parked_step_runs_at_the_servers_next_answered_call, host:redoubt-steward-server::a_mint_at_a_server_with_parked_steps_wakes_them_and_the_login_after_succeeds, host:redoubt-steward-server::reconnected_forgets_a_servers_parked_steps, host:redoubt-steward-server::a_never_answering_server_costs_no_bound_once_its_steps_are_parked, host:redoubt-steward-server::a_scopes_index_recycled_after_its_leases_deadline_is_not_destroyed_as_it, host:redoubt-steward-server::a_scopes_index_recycled_after_its_budgets_destroy_is_not_destroyed_as_it, bench:steward-latency
+Status: built · partly tested: `steward-restart` proves the release of a dead steward's connections by count at `bootfsd`, `erofsd:system`, `walfsd:data` and `ipd`, and at `littlefsd:alice-secrets` only by the code they share, since it opens no vault session; a shared server's restart is re-bound on the machine at `walfsd:data`, and at the vault's server and `ipd` by the code they share and the host test · tested: bench:steward-restart, bench:steward-restart-ssh, bench:steward-restart-reboot, bench:steward-session-ends, bench:steward-server-restart, host:redoubt-steward-server::users_not_empty_is_a_start_failure_before_any_carve, host:redoubt-steward-server::watch_is_held_only_from_sshd_and_malformed_on_any_other_badge, host:redoubt-steward-server::a_servers_restart_tells_its_sessions_and_a_session_rebinds_its_slot, host:redoubt-steward-server::every_operation_on_another_badge_class_is_malformed, host:redoubt-init::a_restart_strands_the_stewards_connections_at_the_endpoints_the_server_receives_on, host:redoubt-init::the_outcome_of_the_hand_over_is_said_in_blames_words, bench:steward-blame-lockout, host:redoubt-steward-server::a_session_s_end_is_answered_before_any_cleanup_call, host:redoubt-steward-server::an_ended_session_s_pending_request_is_withdrawn_before_the_end_s_reply, host:redoubt-steward-server::a_cleanup_step_that_times_out_is_retried_then_parked, host:redoubt-steward-server::a_timed_out_step_does_not_hold_the_steps_behind_it, host:redoubt-steward-server::a_cleanup_step_the_server_refuses_or_cannot_take_is_done_at_once, host:redoubt-steward-server::the_cleanup_queue_holds_each_released_connection_once, host:redoubt-steward-server::the_loops_turn_makes_no_call_to_a_server_that_never_answers, host:redoubt-steward-server::a_step_that_never_completes_holds_only_itself, host:redoubt-steward-server::a_step_that_completes_after_the_loop_moved_on_is_settled_then, host:redoubt-steward-server::reconnected_forgets_a_servers_due_steps_too, host:redoubt-steward-server::a_console_line_is_one_write_on_the_kept_fid, host:redoubt-steward-server::a_console_line_the_console_did_not_take_costs_one_bound_and_keeps_the_order, host:redoubt-steward-server::the_console_fid_is_re_opened_after_a_failed_write_and_the_lines_dropped_are_said, host:redoubt-steward-server::the_exit_s_last_turn_writes_the_lines_left_within_one_bound, host:redoubt-steward-server::a_parked_step_runs_at_the_servers_next_answered_call, host:redoubt-steward-server::a_mint_at_a_server_with_parked_steps_wakes_them_and_the_login_after_succeeds, host:redoubt-steward-server::reconnected_forgets_a_servers_parked_steps, host:redoubt-steward-server::a_never_answering_server_costs_no_bound_once_its_steps_are_parked, host:redoubt-steward-server::a_scopes_index_recycled_after_its_leases_deadline_is_not_destroyed_as_it, host:redoubt-steward-server::a_scopes_index_recycled_after_its_budgets_destroy_is_not_destroyed_as_it, bench:steward-latency, bench:steward-deadline-burst, bench:steward-deadline-burst-16
 
 - **The steward is part of the trusted base; its crash is a bug.** If it dies, `init` reaps
   `users`, which logs every session out and ends every lease, and restarts the steward; the
@@ -1571,6 +1573,30 @@ Status: built · partly tested: `steward-restart` proves the release of a dead s
   itself restarts. The queue's bound is argued, not enforced, as the cleanup queue's: an event
   says at most two lines (its record and the usage line of the one domain it changed), a call's
   time one, a step's drop one, and a turn raises one event and the steps due.
+- **A burst of exits tells the sponsor one send at a time, and the send is the cost.** Leases
+  whose deadlines fall together hand the loop their exits together, and each exit's
+  `lease_ended` goes to the sponsor's session as the exit is decided, one send within the same
+  100 ms bound ([leases](#leases)). Measured by `steward-deadline-burst` (six leases on one
+  deadline, both widths) and `steward-deadline-burst-16` (sixteen, rv64), each notice's send
+  returns 10 to 14 ms after its exit is decided while the shell is idle, then 40 to 300 ms
+  after the previous for each notice after the first (85 to 300 ms on average over a boot): the send is a rendezvous, and the shell's
+  notices listener takes the next one only once it has printed the previous `[lease NAME
+  ended]` through its relay, so the sponsor is told of the last of N about N times its own take
+  after the first (the last of six 1.5 to 1.8 s after the deadline and the last of sixteen 2.1
+  to 2.8 s; 0.34 to 0.56 and 0.55 to 1.0 s net of the checked build's audits). The exits' own work on the
+  loop is small beside it (16 to 35 ms for all six or sixteen at one hart; their console lines
+  at the next turn 0.2 to 0.8 s): sending the burst's notices ahead of every exit's bookkeeping
+  was built, measured at 16 ms of the 1.4 s, and not kept. What would bring a send back to
+  milliseconds is the shell taking a notice before it prints the one before, on the shell's
+  side; until then a burst's last notice is the sponsor's own rate, and a send the shell does
+  not take within the bound is lost, as one of six was on rv64 at one hart once in three runs,
+  under the withdrawn ordering (the session printed five `[lease ended]` lines; the steward's
+  records name all six); a dropped send still yields a sample, the bound's expiry rather than the
+  sponsor told, so a lost notice reads as a 100 ms sample. Before the first notice the
+  kernel destroys every budget the deadline took at its one entry, N destructions and their
+  frames before any exit notice is delivered: 0.3 to 0.8 s from the deadline to the first
+  notice, 22 to 88 ms of it net of the checked build's audits
+  ([responsiveness](../kernel/scheduling.md#responsiveness)).
 
 **What a dead steward held at the shared servers goes with it.** `init` hands the steward a
 fresh connection at each server it is handed (`bootfsd`, the volumes' file servers, `ipd`), not
@@ -1597,11 +1623,13 @@ the last one's until the kernel says its caller is gone.
 `PROBE_EXIT`), off in every default build; the bench's `steward-restart` builds the steward with
 it. **The latency probe**, `latency-probe`, is the second such feature, built by `steward-latency`
 and its two companions, `steward-latency-n4` and `steward-latency-n16` (the rounds at N = 4 and
-N = 16, each on a trace ring of its own), and nothing else (the bench's host test
-`only_steward_latency_builds_the_latency_probe` holds it to those three):
+N = 16, each on a trace ring of its own), by `steward-deadline-burst` and `steward-deadline-burst-16`
+(leases expiring together), and nothing else (the bench's host test
+`only_steward_latency_builds_the_latency_probe` holds it to those five):
 the steward prints a probe lease's start as a `reply_wait` sample (its answer to its next
 receive: its work after the reply, the call's records having gone before it), arms two timeouts there and ends that lease by its own
-`EndLease` at the second, prints its wake, deadline-notice and `budget_destroy` samples for the
+`EndLease` at the second, prints its wake, deadline-notice (the sponsor's `lease_ended` send
+returned, less the deadline) and `budget_destroy` samples for the
 bench's oracle, then `LATENCY-END` with its clock after the third round's counts (the window's
 end: the oracle judges no destruction ending after it and no sample printed after it), and exits
 at its start when the case's marker file is in the console principal's home, so `init`'s reboot
@@ -1658,6 +1686,17 @@ so the case restarts it thirteen times, each time with that session and its conn
   follow-up. The steward's own cost is the batch's calls at the shared servers, each within
   `SERVER_US` below; the rest of the seconds is the launching VM's share of the harts beside
   the spinners.
+- **A burst of expiring leases tells the sponsor late, at the sponsor's own rate.** N leases
+  taken by one deadline cost the last `lease_ended` about N times the shell's take of one
+  notice (85 to 300 ms each on average, measured; the last of six 1.5 to 1.8 s and of sixteen
+  up to 2.8 s after the deadline), after the kernel's N destructions at the deadline's entry
+  (0.3 to 0.8 s to the first notice, 22 to 88 ms net of the checked build's audits, each within
+  R10); and a notice the shell does not take within the steward's
+  100 ms bound is lost, once in six on rv64 at one hart in one run of three, its sample the
+  bound's expiry ([failure and restart](#failure-and-restart)). The steward's ordering does not move it; the
+  shell taking notices faster than it prints them would. The per-notice target, 40 ms, is met
+  one lease at a time ([responsiveness](../kernel/scheduling.md#responsiveness)); the image's
+  own burst is at most three to five leases, alice's unlabelled share beside her sessions.
 - **A context's relay holds the steward's one thread for a bounded time.** The steward waits up to
   2 s for a relay's `hello` at each SSH login that starts a context, and up to 1 s for each
   `attach` and `detach`, so a relay that never answers delays every other principal's call by that
