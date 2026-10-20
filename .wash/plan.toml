@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 616
+revision = 617
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -2845,8 +2845,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   needs = ["WRITE1"]
   body = "Train 86 (WRITE1 alone, 777 of 778 green): rv64 lease-writes failed at 198.9 s, the session's ssh 'closed by remote host' right after {:started, 16} (alice holds 106,770 pages, 52 processes), no guest line after the sixteenth start_agent; rv32 passed in 533 s. Logs: .tmp/train-86/fail/ (job, console, ssh). WRITE1-identification.md runs 4-5 saw the same signature under the virtual clock and named a socket timer; the case is on the host clock (forward), where the report said it was not seen. The timer: servers/ipd/src/stack.rs IDLE_TIMEOUT 60 s with KEEP_ALIVE 30 s on every TCP socket (ipd.md: an established socket 60 s without progress is reset). So for 60 s of wall time no keep-alive answer reached the socket while the one-hart guest ran sixteen writing VMs: a starved or lost RX path in the guest (virtio-net wake, ipd's turn under R12, the console/sshd path) or slirp on the host. Identification first, no tuning: reproduce under load (the beamlet set or two whole-class sets beside it, kept logs, the ipd and sshd console lines on, a watchdog on the session's socket state), name the component that stalled and for how long, then a brief; a kernel or ipd fix is Tier A. The case's bound, deadline and N do not move; a miss is a finding. Reviewer kernel-red-4."
-  state = "todo"
-  revision = 613
+  state = "active"
+  revision = 617
 
 [[node]]
   id = "B95"
