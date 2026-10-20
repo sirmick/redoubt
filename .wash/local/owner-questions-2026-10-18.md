@@ -135,3 +135,6 @@ wave; until then I draft nothing past ATK13 for `agent-suite`.
 
 ## Follow-up (Architect, 2026-10-19, STEWARD9): a session cannot observe its own lease's end
 lease_ended (op 17) is consumed by the shell's notices listener; no lease-liveness op. The latency case uses a guest-clock derived wait (deadline 14 s + 1 s over R10) at N = 16. Design answer belongs to the agent harness (Q5): Agent.status poll or the shell forwarding lease_ended to session code. Not a node until the harness wave.
+
+## Follow-up (Architect, 2026-10-20, WAKE1): the shell's per-line print cost
+A [lease ended] line costs 250-370 ms against consoled's 6.5 ms per reply, now the visible term of a burst's last notice. Not a node yet: entry condition is one measurement, a shell print at idle on the release build and where the time goes (VM reductions, the relay, consoled); then a shell-track node if it is the print path's own. Harness wave (Q5): the listener's take rate matters again when session code reacts to lease ends.

@@ -1188,3 +1188,110 @@ Tier: beamlet's hub (strict beamlet review), size S–M; pages beamlet.md (the c
 its bound), steward.md "Leases"/"Residual risks" (the NOTICE_US loss sentence), scheduling.md
 (the burst row). Confirm with the fix on main's unsplit listener that the print no longer gates a
 take (all N taken at one poll, prints after), so SHELLN1 stays closed.
+
+### WRITE1 identification (2026-10-20): the hang did not exist — the premise withdrawn
+
+`.wash/local/WRITE1-identification.md`, `.tmp/WRITE1/repro1..7`. Seven boots, 68 agent VMs
+writing to /project beside loads (N = 4, 12, 16; rv64/1), every agent under a watchdog naming the
+step and the hub's state after 120 s without progress: no watchdog fired; every File.write
+returned (:ok or {:error, :etimedout}); walfsd says every write it serves; on the host clock
+(N = 12) all 12 exited 0, 224 of 348 writes served, the rest etimedout at the hub's give-up. None
+of my three outcomes: the hub answers its caller at the bound. diag4/4b (virtual clock, before
+READ1's fix) were misread — the file ends at the line BEFORE the stalled step, so that write's
+bytes never reached the volume — and train 81's rule (an idle guest's clock skips to the next
+armed deadline) covers them, showing here as 11 leases killed at their deadline and two sessions'
+sockets closed. **My WRITE1 node was framed on READ1's inference ("the file holds the write's own
+lines"); the inference was wrong and so was the node's premise. Recorded as corrected.**
+
+**Ruled.** WRITE1 lands as the rule, not a fix of a hang: (i) **in** — a File.write is 5–6 hub
+requests, each bounded by FILE_WAIT_US, so a write's worst is their sum (47 s seen before
+etimedout); files.md states the one-answer rule PER REQUEST (every hub request ends in exactly
+one answer to its caller within FILE_WAIT_US plus the reply margin) and that a File operation's
+bound is the sum over its requests; held by a host test. (ii) **out as code** — the VM's asker
+waiting FOREVER on the hub is right: the hub answers by construction (the rule above and its
+test); a VM-side timeout would be a second mechanism for one rule and would hide a hub bug as a
+VM timeout (one obvious way; size for the need). State it as the reason the asker has no bound.
+(iii) **in, by construction** — a give-up on a walked fid hands the result to the caller FIRST
+and clunks the fid after, off the caller's path (the clunk is cleanup: the same shape as R41's
+"the destroy is the cutoff, cleanup only frees records" and STEWARD5's thread); today's
+clunk-before-handover makes the caller's bound 2× FILE_WAIT_US, a violation of (i). Host test:
+a give-up answers within FILE_WAIT_US + margin while the clunk's server never answers. Pages:
+walfsd.md's hang sentence (READ1's stated finding) replaced by the correction (the stall was the
+virtual clock reaching a lease's deadline; no write's completion was lost); the throughput
+sentence KEPT (224/348 served under 12 writers is decision 3's real finding, a node only if a
+write SLA is needed); files.md as above. Case: the boot case on the host clock, every write
+answered (:ok or etimedout) and the file's content exactly the :ok lines — small; the watchdog
+infrastructure goes. Not the diag4 rebuild on the pre-fix tree: the file evidence and train 81's
+rule suffice. Tier A (the hub, strict beamlet review), size S; the node's title and body are
+corrected by the orchestrator to the rule.
+
+### WAKE1 landed; its four findings (2026-10-20)
+
+WAKE1 (5ca6ccd96, kernel-red-4; `.wash/local/WAKE1-report.md`): the hub's bounded forwards queue
+(128 = 2 × (32 parked + 32 sends)) and one wake; sends return 37–131 ms apart (the steward's
+per-exit work), last of six 1.11–1.28 s (was 1.53–1.79), of sixteen 1.83–2.51 (was 2.11–2.76),
+none lost; burst bounds asserted 3 s / 6 s.
+
+1. **The shell's inline print (250–370 ms a `[lease ended]` line) is now the visible term.** Not
+   a node, not SHELLN1 revived: the split would move the listener's receive stamps (not a judged
+   quantity) and nothing the sponsor sees — the lines still print serially at the same cost; the
+   steward's send and the loss are already fixed by the queue. The finding is the per-line cost
+   itself (40× consoled's 6.5 ms per reply): a follow-up whose entry condition is one measurement,
+   the cost of a shell print at idle on the release build and where it goes (VM reductions vs the
+   relay vs consoled); a shell-track node if it is the print path's own. The listener's take rate
+   matters again for the M5 harness (session code reacting to lease ends): owner Q5's wave.
+2. **The steward's per-exit work (37–131 ms a send) is the remaining serial cost → a node.**
+   STEWARD12's notices-first was built, measured at 16 ms of 1.4 s and not kept because the
+   forward was the gate; WAKE1 removed that gate, so the same change would now move a burst's
+   last notice from N × (37–131 ms) toward N × a send's return. Investigation-first, Tier A
+   steward, S, steward-red-5: re-apply 57bff2058's shape on WAKE1's base, measure the burst
+   cases; land if the derived burst bound shrinks materially, else record. The kernel's N
+   destructions before the first notice (~590 ms) stay a kernel residual.
+3. **`./test-shell`'s console tests hang 1 in 10 on main → a node** (tenet 6: a flaky test is a
+   bug, fixed, not retried). Shell track, Tier B, S: reproduce at 1 in 10, fix the test or the
+   shell, state which.
+4. **`echo.ex` unformatted on main, the fmt gate not covering it → a node.** The gap is the
+   gate's: `set CASES=formatting` covers every .ex/.exs in the tree (the agents' modules
+   included); echo.ex formatted in the same change. Bench, S.
+(Ids: (2) STEWARD14, needs WAKE1, steward-red-5; (3) B90, shell track, steward-red-5; (4) BENCH2,
+kernel-red-4. (1) a recorded follow-up beside owner Q5.)
+
+### B90 cause (2026-10-20): the fake kernel's held clock, not the shell
+
+`Fake::tick` counts a thread as in a wait until it reacquires the lock after its condvar returns,
+so a thread the change already notified still counts; on a loaded host the VM thread takes all
+ten ticks before the waiter is scheduled, and the test stalls in Drop on a console write whose
+busy answer was handed over after the last tick. B38's rule ("a tick ends the waits the test
+wrote it to end") was stated, not built. Fix in `libs/rt/fake` only: every change bumps a
+generation and zeroes the waiting count; a waiter re-counts itself only when it waits again; a
+tick waits until every notified thread has resumed. A fake test failing on main, the consumer
+sweep, B38's rule restated on testbench.md and the fake's doc comment. Re-tiered A (shared test
+infrastructure), kernel-red-4. No objection. One check: the tick's wait on "every notified thread
+has resumed" must be bounded by construction — a notified thread either reacquires or exits, and
+an exit must account as a resume, so no tick can wait for a thread that will never come back;
+the fake's doc comment states it and a test shows a notified thread exiting does not hold a tick.
+
+### STEWARD13 rv32 one-hart N = 1 decision_wake (2026-10-20) → SCHED5's second row
+
+`.wash/local/STEWARD13-finding-rv32-decision-wake.md`. Every gate passes both widths but one
+cell: steward-latency rv32/1 N = 1 decision_wake net p50 30.4 ms (p99 33.4) against 25 (page
+before: 24.2/28.5); N = 2/3 1.2/1.0 ms, rv64 both hart counts met. Bisected: the same tree with
+the launch inline on the loop gives 23.3 ms, so the shift is the launch off the loop, at one
+spinner only. In BOTH forms the wake is pathological: a 30 ms receive timeout sleeps 53–62 ms
+with one lease VM running, 1–3 ms beside a second VM; the steward does nothing in the window.
+The thread moves the loop's receive ~10 ms earlier relative to the VM's first run.
+
+**Ruled (a), the node being SCHED5, not a new one.** The signature is SCHED5's (rv32, a timeout
+wake with exactly one runnable VM: its N = 2 two-hart timer_wake is one spinner on the other
+hart): a sleeper's timeout not ending the running VM's slice — the timer apparently armed for the
+slice's end, not the nearest timeout — surfacing only when nothing else switches. SCHED5's scope
+gains the row and the sharper hypothesis; its measurement is the timer programming against the
+slice with one runnable VM. The rv32/1 N = 1 decision_wake cell is recorded, not judged, the toml
+and scheduling.md stating the target, before/after, the bisect and the owning node (STEWARD9's
+last-resort form, a cell never the table; STEWARD4 Q9's precedent). **Not (b):** moving
+process_start back onto the loop to restore the phase would be designing to pass an anomalous
+wake — the inline 23.3 ms was 53–62 ms of sleep landing a sample under the target by phase; and
+bisects of the steward's phase cannot change the owner. The 20 ms timer wake at 2.2–3 ms
+threaded (0.8 inline) is within its 15 ms p50, stated. Notes closed: the loop's stack growth is
+the late-answer path (boxing the pending batch, 18,472 B); the worst served start_agent 4.82 s
+under the 6.64 s the bound derives from — the bound stands.

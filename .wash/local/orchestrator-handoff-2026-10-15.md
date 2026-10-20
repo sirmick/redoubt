@@ -688,3 +688,32 @@ READ1: read1-implementer completed its phase-1 assignment (ephemeral -> retires)
 ~04:19Z KILL1 OK with notes (kernel-red-4); folds (toml derivation from logs; scheduling.md wording; assert id) -> head 2a5e23e57; accepted. TRAIN 81 = KILL1 alone on ddafcad7d (.tmp/train-81 running). STEWARD13 -> train 82 when reviewed.
 
 ~05:26Z WAKE1 phase 1 (.wash/local/WAKE1-identification.md; WIP a04108b06 test-only: block-trace ~ and # records, oracle admits them, shell stamps): arms (i),(ii) excluded; (iii) partly; what holds: the VM is NOT idle in the burst (runnable throughout; 61% of the window checked-kernel audits; the VM gets 26-28% of the rest); a busy VM takes a forward only at its next scheduler turn (poll per 2000-reduction slice): blocked forwards 107 ms median / 126 p90; on main the inline print adds ~300 ms per notice. With the Architect (STEWARD8-bound); implementer retires; phase 2 after the ruling.
+
+~05:27Z TRAIN 81 PUBLISHED (KILL1 2a5e23e57; benched head 6153dce32 on ddafcad7d, re-merged on save.sh's plan commit 29bed76b2 as ed44424f2, tree identical outside .wash) main 24507bec1; 776 PASS rc=0 (04:19-05:25Z, slow beside members' boots); wp-KILL1 pushed, worktree+branch removed; save.sh clean. STEWARD13/WRITE1 told the hash. WAKE1 phase 1 with the Architect. Next: STEWARD13 report -> steward-red-5 -> train 82; WAKE1/WRITE1 rulings -> phase 2 launches; SCHED5 brief.
+
+~05:28Z WAKE1 ruled (Architect, "WAKE1 cause and fix"): the hub's forward is the fix (bounded queue, serve thread never blocks on the VM, one wake), not the VM cadence; burst cases get a derived bound. wake1-implementer-2 launched from wp-WAKE1 a04108b06 (rebase onto 24507bec1); kernel-red-4.
+
+~06:20Z WRITE1 phase 1 (.wash/local/WRITE1-identification.md): the write hang did NOT reproduce (7 boots, 68 agents, N=4/12/16, host clock in run 7); every write returned, the give-up answered at the bound; READ1's diag4 evidence explained by the virtual-clock idle skip + a bad inference. Residual findings: the bound is per request (a File.write = 5-6 requests, up to 47 s to etimedout); the VM's own asker waits FOREVER on code-path reads; a give-up on a walked fid is 2x FILE_WAIT_US. With the Architect (READ1).
+
+~06:22Z WRITE1 ruled (Architect, "WRITE1 identification"): no hang (READ1 inference misread; idle-clock skip); lands as the rule: per-request one-answer on files.md + sum bound, give-up answers before clunk (2x bound fixed), FOREVER asker stated right, walfsd.md hang sentence corrected, throughput kept; host-clock case; Tier A hub, S, kernel-red-4. Node retitled. Implementer continuing.
+WRITE1 and WAKE1 nodes retitled to the rulings (active-node upsert works; WASH-R42).
+
+~06:55Z WAKE1 phase 2 done (5ca6ccd96, 3 commits on 24507bec1: block-trace records test-only, the hub's bounded forwards queue (MAX_FORWARDS 128) + wake, burst bounds 3 s / 6 s + pages) -> kernel-red-4. Findings in its report: the shell's inline print (250-370 ms/line) now the visible term; the steward's per-exit work the remaining serial cost; test-shell console-tests flake on main 1/10; main's echo.ex unformatted. Train 82 = STEWARD13 + WAKE1 (+ WRITE1 if ready) when reviewed (.tmp/train-82/run.sh prepared).
+
+~06:58Z WAKE1 findings ruled: STEWARD14 (notices-first re-measured on the queue; needs WAKE1; after train 82), B90 (test-shell console flake; launched, steward-red-5), BENCH2 (fmt gate covers every .ex/.exs; launched, kernel-red-4); the print cost a follow-up (owner-questions file). Active: STEWARD13, WRITE1, WAKE1 (review), B90, BENCH2.
+
+~07:09Z WAKE1 OK with notes (kernel-red-4); folds (fallible copy, page bound, steward.md wording, oracle comment) -> head a242a6e08; prebuilt + serve/burst/host gates PASS; accepted; renewal asked. TRAIN 82 = WAKE1 alone on 24507bec1 (.tmp/train-82 running). STEWARD13/WRITE1/B90/BENCH2 -> train 83+.
+
+~07:10Z kernel-red-4 renewal OK WAKE1 a242a6e08. WRITE1: the clean gate (lease-writes, host clock, 16 writers) FAILS both widths 14/16: two VM THREADS wedge (Erlang watchdog never fires) in the hub's one unbounded wait, run's io.wait(FOREVER) for the VM-own asker (code-path reads), which retry_in never bounds so the give-up cannot run for it; boot 9 bounds it under the probe; if a wedge becomes an answered timeout, (ii) is IN as the same mechanism; to the Architect then.
+
+~07:21Z BENCH2 done (c32178bd8 on 24507bec1, 2 commits: 14 .ex formatted whitespace-only + root .formatter.exs; the gate runs mix format --check-formatted per deepest root over every .ex/.exs, skips generated; host test; negative kept) -> kernel-red-4. Cause: the bench ran no Elixir formatter at all. Train 83 candidates: BENCH2 (+STEWARD13, B90, WRITE1 as reviewed).
+
+~07:22Z BENCH2 OK (kernel-red-4, two P3 notes, no fold); accepted; train 83 candidate (.tmp/train-83 prepared) with STEWARD13/B90/WRITE1 as they clear. Train 82 (WAKE1) still benching.
+
+~07:35Z B90 done (10f27228f on 24507bec1, one commit in libs/rt/fake + 3 held_clock tests + testbench.md/doc comment; console tests 20/20 on 1/2/4-core leases; 15 consumer crates pass) -> kernel-red-4. Train 83 candidates: BENCH2 (accepted), B90, STEWARD13, WRITE1.
+
+~07:37Z B90 OK (kernel-red-4, no fold); accepted; train 83 with BENCH2 (+STEWARD13/WRITE1 as they clear) after train 82 publishes.
+
+~07:38Z Train 82 (WAKE1) in progress: 3 FAIL so far: walfsd-pools rv64, walfsd-flood-turn both widths (timed-step expects "within the step's own bound"; ATK11-shape latency cases through the hub). Possible WAKE1 regression (the hub's completions now via the queue to a busy VM) or load (members' boots beside the train). Rerun alone after the train; if 3/3 fail alone -> finding for the Architect before publish.
+
+~07:57Z Train 82 (WAKE1) run 1: 771 PASS, 5 FAIL: walfsd-pools rv64, walfsd-flood-turn both widths (timed steps past their bound), steward-session-ends rv32 (ssh 255 waiting for reattached at 973 s), smp-evict-mttcg rv32 (known class). Reruns alone x2 running (rerun*-*.log in .tmp/train-82). If the walfsd latency cases fail alone: WAKE1 regression (hub completions to a busy VM now via the queue?) -> Architect, not published.

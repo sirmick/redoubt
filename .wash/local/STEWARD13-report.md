@@ -87,9 +87,12 @@ rv32 at one, against the 40 ms target; every deadline inside B's launch window
   `the_destroy_pair_runs_under_the_install_lock_and_nothing_installs_under_it`. STEWARD10's and
   STEWARD11's guard tests pass unchanged (now under the lock bracket). `Steward::run` returns
   `Ran` and takes the batch by value (the tests' `ran` helper).
-- **Memory**: the launch thread's stack 4,840 B on rv64 / 3,808 on rv32 (`stack steward
-  thread 2`, `steward-session-ends`) → 3 pages; the loop's first-thread peak 18,536 B (was
-  17,560) → `stack_pages` 9 → 10; the entry 1,027 → 1,051 in `image/manifest.json` and
+- **Memory**: the launch thread's stack 4,840–4,888 B on rv64 / 3,808–3,856 on rv32 (`stack
+  steward thread 2`, `steward-session-ends`) → 3 pages; the loop's first-thread peak 18,536 B
+  (18,472–18,616 over the runs; was 17,560) → `stack_pages` 9 → 10: the growth is the late
+  answer's path (the report's arm answering a parked call: the kept request, the call decoded
+  again, the typed reply and its outcome), not the pending batch (boxing it left the peak at
+  18,472), stated on the page; the entry 1,027 → 1,051 in `image/manifest.json` and
   `tests/data/boot-profile/manifest-unverified.json` (3 + 1 thread page + 16 lend + 2 lock
   endpoint pages + 1 notice page beside a batch + 1 stack page). The test manifests keep the
   steward at 1,024 as STEWARD5 left them (none memory-checked; the cases pass on them).
@@ -109,6 +112,12 @@ rv32 at one, against the 40 ms target; every deadline inside B's launch window
   the steward's 1,051).
 
 ## Measurements (seed 3, one run per boot)
+
+The launch bound (Architect's note): the worst `served start_agent` over the whole consoles of
+these runs is 4.82 s (rv64 one hart, the N = 16 round beside fifteen spinners; 3.74 s at two
+harts, 3.53 s on rv32 in its rounds to N = 3), under the 6.64 s the 14 s bound derives from
+(2 × 6.64 = 13.28 → 14); the bound stands, stated on the page. The lock wait figures are on the
+page beside the timer-wake target.
 
 | boot | before: deadline_notice net p99 (gross) | after: net p50 / p99 (gross p99) | B's launch, before → after (min–max) | lock wait, worst |
 | --- | --- | --- | --- | --- |
@@ -133,9 +142,50 @@ holds whatever KILL1 finds about the pair itself; (3) the thread installs proces
 handles only, never a budget, so a recycled index it takes can never be a budget's. If KILL1
 moves the destroy path, the `without_installs` wrapper moves with it, nothing else here.
 
-## Gates (exit codes)
+## The one row that does not meet its target: ruled recorded, not judged
 
-Filled in when the whole set ends: see the final section.
+`steward-latency` on rv32 at one hart, round N = 1, `decision_wake` net p50 30,376 µs (p99
+33,376) against 25 ms, run alone (`rerun2/B.log`; 32,314 under the eight-QEMU set); N = 2 and
+N = 3 are 1,202 / 1,440 and 969 / 2,299 as before, and rv64 meets every round at one and two
+harts. The page's cell was 24,235 / 28,493, 0.8 ms under. Bisected with one boot (`exp1/`): the
+same tree with the launch run inline on the loop (thread idle, tokens, parking, held events,
+lock all in) gives 23,300 / 31,843, and the 20 ms timer wake 828 µs where the threaded run gives
+2.2–3 ms; so the shift is the launch running off the loop, at one spinner only. In both forms the
+wake is pathological: a 30 ms receive timeout sleeping 53 to 62 ms with exactly one lease VM
+running, 1 to 3 ms beside a second, the steward doing nothing in the window. The Architect ruled
+(thread STEWARD8-bound; rulings 'STEWARD13 rv32 one-hart N = 1 decision_wake'): the cell is
+recorded, not judged, the owner is SCHED5 (a sleeper's timeout not ending the running VM's slice),
+not a longer target and not `process_start` back on the loop to land the phase under. Built as
+the oracle's `record=<width>:<harts>:<group>:<measure>:<quantile>` (the bench appends the boot's
+`width=`; a unit test), `record=rv32:1:N=1:decision_wake:p50` on `tests/steward-latency.toml`
+with the comment stating target, before/after, bisect and owner (no node id), and the cell and
+the paragraph on scheduling.md ('With the real steward'). Detail:
+`.wash/local/STEWARD13-finding-rv32-decision-wake.md`.
+
+## Gates (exit codes; every command through `scripts/jobs.mk` under q)
+
+- Host: `cargo test -p redoubt-steward-server`: 75 passed (KILL1's sixteen-leases test among
+  them), rc 0; `cargo test -p testbench -- sched_oracle only_steward_latency`: 66 passed, rc 0.
+- Release checks of the steward binary, rv64 and rv32, with and without `latency-probe`: rc 0.
+- `set CASES="formatting docs"`: PASS on the final pages (`gates3.log`); `size-budget` PASS with
+  the ceiling 3580 → 4024 (the `Size budget:` line is in the steward commit); `unsafe-budget`
+  PASS.
+- The whole set on `ff04e0b04` (`gates/make.log`, 52 cases, -j8): 78 PASS; eleven lease cases
+  and `steward-context-login` failed, the lease cases on the usage line printing before the
+  batch's record for a parked or granted launch (fixed: `tree` skips a domain while a batch of
+  its waits at its launch), context-login a host-load flake (passes alone, 7 s); rv32
+  `steward-latency` the finding above.
+- Reruns on the fixed code (`rerun1/`, `rerun2/`, `rerun3/`): every lease case, context-login,
+  approve-box, labelled-agent-no-sink, ssh-two-principals, sub-agent-dies-with-agent,
+  vault-launch, vault-session, sub-budget-flood, session-ends, host-tests PASS on both widths;
+  rv64 `steward-latency` at one and two harts, `-n4` and `-n16` at both PASS (`rerun2/C.log`,
+  whole consoles under `rerun2/consoles/`).
+- The final set on `6d876309b` (`final/make.log`): the 40 steward cases but `-n4`/`-n16`,
+  `steward-launch-overlap`, both burst cases, `steward-latency` both widths (the recorded cell),
+  userland-boot, init-boot, docs, formatting, size-budget, unsafe-budget: see the final section.
+- Not rerun on the last two commits: `steward-latency-n4` and `-n16` (passed on `74ca3bfea`,
+  which differs by the usage line's timing and the oracle's `width=` argument, neither in their
+  judged quantities).
 
 ## Documentation check (summaries)
 
