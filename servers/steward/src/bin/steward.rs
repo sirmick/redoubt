@@ -607,6 +607,11 @@ mod machine {
         /// `destroy_call` sample.
         #[cfg(feature = "latency-probe")]
         last_destroy: Option<(u64, u64)>,
+        /// `latency-probe` only: when the last `lease_ended` send returned, and for which lease,
+        /// the end of the probe's `deadline_notice` sample: the sponsor told, not the exit
+        /// dequeued, since under a burst the send is where the time goes.
+        #[cfg(feature = "latency-probe")]
+        notified: Option<(u64, u64)>,
     }
 
     impl Machine<'_> {
@@ -1256,6 +1261,10 @@ mod machine {
             let m = steward::Message::LeaseEnded(steward::LeaseEnded { lease, name });
             let Ok(words) = m.encode(&mut page) else { return };
             let _ = Endpoint::from_handle(notices).send(&words, &[], Some(page), NOTICE_US);
+            #[cfg(feature = "latency-probe")]
+            {
+                self.notified = Some((lease, redoubt_rt::handle::time_now().unwrap_or(0)));
+            }
         }
 
         fn notify_approval(&mut self, notices: u64) {
@@ -2092,6 +2101,8 @@ mod machine {
             retired: Vec::new(),
             #[cfg(feature = "latency-probe")]
             last_destroy: None,
+            #[cfg(feature = "latency-probe")]
+            notified: None,
         };
         // The kernel's count of what `users` holds as this instance starts: 0, at boot and after
         // `init` emptied a dead steward's carves. The start's lines go as they are said, not at
@@ -2417,20 +2428,42 @@ mod machine {
                     if !running {
                         continue;
                     }
-                    // A lease the kernel's deadline took: its notice's arrival against the
-                    // deadline, while the core still holds the lease.
+                    // A lease the kernel's deadline took: its deadline and group, read while
+                    // the core still holds the lease; the sample is the sponsor told (its
+                    // `lease_ended` send returned) less the deadline, below, since under a
+                    // burst of exits the send is where a notice's time goes
+                    // (kernel/scheduling.md, "With the real steward").
                     #[cfg(feature = "latency-probe")]
-                    if object.kind == redoubt_steward::effect::Kind::Lease && delivery.words[1] == 3 {
-                        let deadline = inspect::domain(&steward.store, &object.domain)
-                            .and_then(|d| d.leases.get(&object.id))
-                            .map(|l| l.deadline);
-                        let now = redoubt_rt::handle::time_now().unwrap_or(0);
-                        if let Some(deadline) = deadline.filter(|d| *d <= now) {
-                            let n = others(&steward, object.id);
-                            probe.sample(machine.out, "deadline_notice", n, now, now - deadline);
-                        }
+                    let deadline =
+                        if object.kind == redoubt_steward::effect::Kind::Lease && delivery.words[1] == 3 {
+                            let now = redoubt_rt::handle::time_now().unwrap_or(0);
+                            inspect::domain(&steward.store, &object.domain)
+                                .and_then(|d| d.leases.get(&object.id))
+                                .map(|l| l.deadline)
+                                .filter(|d| *d <= now)
+                                .map(|d| (object.id, d, others(&steward, object.id)))
+                        } else {
+                            None
+                        };
+                    #[cfg(feature = "latency-probe")]
+                    {
+                        machine.notified = None;
                     }
                     let outputs = steward.event(&mut machine, EventKind::Exited { object }, 0).ok();
+                    #[cfg(feature = "latency-probe")]
+                    if let (Some((lease, deadline, n)), Some((sent_for, sent))) =
+                        (deadline, machine.notified.take())
+                    {
+                        if sent_for == lease {
+                            probe.sample(
+                                machine.out,
+                                "deadline_notice",
+                                n,
+                                sent,
+                                sent.saturating_sub(deadline),
+                            );
+                        }
+                    }
                     if !after(machine.out, &mut steward, &mut usage, outputs) {
                         return core_exited(machine.out);
                     }
