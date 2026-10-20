@@ -18,8 +18,9 @@ use redoubt_rt::wire::proto::bootfs::{self, Add, ErrorCode, Message, Reply, Seal
 /// longer than this is a manifest mistake, not something to serve.
 pub const MAX_ENTRIES: usize = 64;
 /// The most bytes `/boot` holds in total, across every entry: what bounds this server's own
-/// memory, since the bytes are its and not a client's: its entry's heap cap holds them (the
-/// image's 2 304 pages), and its budget holds the buckets beside that cap.
+/// memory, since the bytes are its and not a client's: its entry's heap cap holds them, twice
+/// over, and what admission lets clients make the skeleton hold (the image's 2 510 pages,
+/// servers/bootfsd.md, "Heap"), and its budget holds the buckets beside that cap.
 pub const MAX_BYTES: usize = 8 * 1024 * 1024;
 
 /// What admission lets each of `buckets` buckets hold (servers/serving.md R26); the count is the
@@ -57,9 +58,9 @@ pub const COST: Cost =
 // bucket at its caps costs 2 completion calls at 64 KiB, 47 fids and 23 connections at 256 bytes,
 // 64 requests at 256 and 2 pages at 4 KiB: 173 568 bytes; the image's 6 (`init`, the steward,
 // three principals' domains and a case's extra client) take 1 041 408, 255 pages; with the heap
-// cap's 2 304 and the stack's bound 128, rounded up to 256, the entry rule gives 2 816, and the
-// image's entry of 4 096 pages leaves 1 664 of budget, thirty-nine such buckets and not a fortieth
-// (`the_image_entry_holds_its_buckets`).
+// cap's 2 510 and the stack's bound 128, rounded up to 256, the entry rule gives 3 072, and the
+// image's entry of 4 096 pages leaves 1 458 of budget, thirty-four such buckets and not a
+// thirty-fifth (`the_image_entry_holds_its_buckets`).
 
 /// Why an argument list was refused. Each one stops the server starting: a `/boot` that is not
 /// what the manifest named is worse than no `/boot` at all (TENETS.md 2, fail closed).

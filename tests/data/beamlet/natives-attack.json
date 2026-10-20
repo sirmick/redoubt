@@ -84,7 +84,7 @@
       "args": [
         "buckets=4"
       ],
-      "heap_pages": "2176"
+      "heap_pages": "2329"
     },
     {
       "name": "blkd",
