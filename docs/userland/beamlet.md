@@ -988,7 +988,9 @@ with no `System`, the host CLI's, answers each `{error, not_supported}`; the hos
   library's deadline, `REQUEST_WAIT_US`
   ([R28 (parked-call accounting)](../servers/serving.md#r28-parked-call-accounting)); it reaches the
   serving process as `{request, Request, Badge, Account, Labels, {Words, Buffer, Handles}}`, `Request`
-  `nil` for a one-way send. **`reply(Request, {Words, Buffer, Handles})`** answers it once. A request
+  `nil` for a one-way send; each request or send the thread takes goes into the VM's forwards
+  queue and the thread is back at its receive at once, the VM taking the queue at its next poll
+  or woken if it idles ([the forwards queue](#the-forwards-queue)). **`reply(Request, {Words, Buffer, Handles})`** answers it once. A request
   the Erlang side never answers is ended by that thread at its deadline and its admission given
   back: the VM holds nothing for it. These are calls, not 9P, so the multiplexed connections' rule
   ([R77 (multiplexed requests)](../servers/serving.md#r77-multiplexed-requests)) is not this one's.
@@ -1278,9 +1280,12 @@ modifiers the cell protocol's bits; a `Rect` is `{X, Y, W, H}`.
 
 ### Asynchronous underneath, synchronous on top
 
-<details><summary>Status: built · tested (9)</summary>
+<details><summary>Status: built · tested (12)</summary>
 
 - host:beamlet-redoubt::the_console_is_one_hub_connection_with_one_waiter
+- host:beamlet-redoubt::sixteen_sends_are_taken_at_once_and_arrive_at_one_poll
+- host:beamlet-redoubt::a_send_to_a_served_endpoint_wakes_an_idle_vm
+- host:beamlet-redoubt::a_full_forwards_queue_holds_the_next_send_until_the_vms_poll
 - host:beamlet-redoubt::a_read_waits_for_typing_without_holding_the_vm
 - host:beamlet-redoubt::a_vm_busy_past_the_session_bound_keeps_its_console
 - host:beamlet-redoubt::two_askers_wait_at_once_and_each_gets_its_own_answer
@@ -1353,6 +1358,55 @@ synchronous in the VM; a server that stops answering one of them stops the VM. A
 from its endpoint that long, past a server's session bound, keeps its sessions: each waiter holds
 what arrives meanwhile and keeps calling ([a busy caller](native.md#many-requests-at-once)). The
 serving natives and a job's exit notice are [launching's](#natives) (planned).
+
+#### The forwards queue
+
+A served endpoint's thread never waits on the VM. Each call or send it takes is queued, with a
+copy of its lent bytes, in the VM's forwards queue (`serve.rs`, `Forwards`), and the thread is
+back at its receive at once; the VM takes the whole queue at its next poll, the poll that takes
+the hub's completions, each entry reaching its serving process as a request. A VM in its idle
+`receive` is woken by one send through the thread's badge, carrying nothing: the VM says it is
+about to idle under the queue's own lock, before its last look at the queue, so a thread that
+queues after that look sees the VM idle and wakes it, and one that queued before is found by the
+look; the wake waits at most `WAKE_US` (1 ms) at a time and only while the VM still says it
+idles, so a VM that woke on its own meanwhile is left to its poll. The queue is bounded:
+`MAX_FORWARDS` = `MAX_SERVED` (2) x (the calls one endpoint's admission parks, 8 buckets of 4 =
+32, each forwarded once, + `SENDS` = 32 one-way sends) = 128. The sends are what the steward can
+send a session before its VM polls: one `lease_ended` per live lease of the sponsor's (sixteen
+under the latency manifest), one `server_restarted` per slot of its binding table,
+`approval_waiting`, with room over it ([the steward](../servers/steward.md#leases)). A thread
+that finds the queue full waits for the VM's next poll before it takes its endpoint's next
+message, as every forward once did
+(`a_full_forwards_queue_holds_the_next_send_until_the_vms_poll`): the residual, and the one way a
+sender's bounded send to a served endpoint still expires with the serve thread alive.
+The queue's worst hold is 128 entries of a lend's `MAX_BYTES` each, 65,280 bytes, so 2,040 pages
+of the session VM's heap (a cap of 11,220 pages holding the scanned peak twice, no forward in
+that scan), copied as the thread takes the message; a copy the heap refuses refuses the
+forward, as the lend's own buffer once did, never a failed allocation in the VM.
+
+Once the thread forwarded each message by a `send` to the VM's endpoint that waited for the VM
+to take it, and a VM busy in Erlang took one per scheduler turn (its zero-wait poll each 2,000
+reductions), so the thread could not take its endpoint's next message until then: a burst of
+the steward's `lease_ended` sends to one session was taken a turn each, 40 to 300 ms apart, the
+last of six returning 1.5 to 1.8 s after the deadline and of sixteen 2.1 to 2.8 s, and one send
+was lost at the steward's 100 ms bound on rv64 at one hart. With the queue each send returns as
+soon as the thread takes it, 37 to 68 ms after the previous at one hart on rv64, 42 to 86 on
+rv32 and 73 to 131 at two harts, the steward's own work per exit between them; the last of six
+1.1 to 1.3 s after its deadline and of sixteen 1.8 to 2.5 s, none lost over five boots
+(`steward-deadline-burst`, `steward-deadline-burst-16`). On a block trace of the six-lease burst
+the thread's one wake to the idle VM is taken in the thread's own kernel entry and no send of
+the VM's process blocks on its wake endpoint for the notices after it, where before each forward
+blocked there 107 ms median until the VM's next turn. A reply to an idle VM is unchanged (a file
+read from an idle shell 1.0 to 1.3 s on the checked, traced kernel under `icount`, as before;
+beside a spinning process 1.4 to 1.6 s, the read's own VM work at half the reductions). The VM's
+poll cadence is unchanged: a busy VM still takes the queue once a turn, which under the checked
+kernel's audits (about 60 % of a hart in the burst) is 100 to 140 ms at a session's quarter
+share, a bench condition (a release kernel has no audits); a waiter's hand-over of a completion
+to a busy VM still waits for that turn, one send a batch, 10 to 135 ms on the same trace. What
+the sponsor sees is the shell's print of each notice, which its listener makes inline through
+the relay at 250 to 370 ms each, so the last `[lease ended]` line of six is drawn 2.3 to 2.6 s
+after the deadline and of sixteen 6.1 to 6.6 s: the shell's, not the hub's
+([the steward](../servers/steward.md#residual-risks)).
 
 Residual: each connection costs its waiter thread, since a thread waits on one endpoint at a time;
 one thread waiting on several at once would be kernel work ([IPC](../kernel/ipc.md)).

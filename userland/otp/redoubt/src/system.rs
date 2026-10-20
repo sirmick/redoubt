@@ -229,16 +229,13 @@ impl Sys {
     /// Whether an event waits for the VM to poll it.
     pub(crate) fn has_events(&self) -> bool { !self.events.is_empty() }
 
-    /// Takes a wake-up of the system calls' threads; anything else is handed back.
+    /// Takes a wake-up of the system calls' threads; anything else is handed back. A serve
+    /// thread's says only that its queue has something, which [`Sys::collect`] takes.
     pub(crate) fn deliver(&mut self, wake: &Endpoint, delivery: Delivery) -> Option<Delivery> {
         let delivery = self.pool.deliver(wake, delivery)?;
-        let delivery = match self.served.deliver(delivery) {
-            Ok(event) => {
-                self.events.push_back(event);
-                return None;
-            }
-            Err(delivery) => delivery,
-        };
+        if self.served.woken(&delivery) {
+            return None;
+        }
         match self.jobs.deliver(delivery) {
             Ok(event) => {
                 self.events.push_back(event);
@@ -248,12 +245,17 @@ impl Sys {
         }
     }
 
-    /// Moves what has ended to the events the VM polls.
+    /// Moves what has ended, and what the serve threads queued, to the events the VM polls.
     pub(crate) fn collect(&mut self) {
         while let Some((asker, call, result)) = self.pool.ended() {
             self.events.push_back((asker, Event::Reply { call, result }));
         }
+        self.served.take(&mut self.events);
     }
+
+    /// The VM is about to idle, or has woken: told to the serve threads, which wake an idling VM
+    /// for what they queue and leave a running one to its poll (serve.rs).
+    pub(crate) fn idle(&self, idle: bool) { self.served.idle(idle); }
 
     fn find(&self, handle: Handle) -> Option<usize> {
         self.known.iter().position(|k| k.owned.handle == handle)

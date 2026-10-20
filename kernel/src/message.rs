@@ -620,6 +620,21 @@ fn is_running(ss: &ProcessTable, pid: Pid, tid: TID) -> bool {
 /// Hand a thread its result. One that was blocked goes back on the ready list; the thread making
 /// the call was never off it.
 fn wake(ss: &mut ProcessTable, mm: &MemoryManager, pid: Pid, tid: TID, result: Result<Return, Error>) {
+    // The wait-and-wake diagnostic, beside `settle`'s block record: gated out of every judged
+    // build (no case sets `block-trace`).
+    #[cfg(feature = "block-trace")]
+    {
+        let s = slot(mm, pid, tid);
+        if s.wait != Wait::None {
+            crate::sched::trace::woken(
+                mm.budget_of(pid).map_or(0, |f| mm.budget_id(f)),
+                s.wait as u64,
+                matches!(result, Err(Error::Timeout)),
+                is_running(ss, pid, tid),
+                s.endpoint.map_or(0, |e| u64::from(e.frame)),
+            );
+        }
+    }
     unlist(mm, pid, tid);
     untime(mm, pid, tid);
     set_tword(mm, pid, tid, W_WAIT, Wait::None as u64);
