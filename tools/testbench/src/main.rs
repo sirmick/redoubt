@@ -1215,7 +1215,7 @@ fn boot_case(
         // Cases without a `post_check` or peers are judged exactly as before.
         let peers = boot.net.as_ref().is_some_and(|net| !net.peer.is_empty());
         let outcome = match outcome {
-            Outcome::Pass if boot.post_check.is_some() || peers => post_check(boot, &log, out)?,
+            Outcome::Pass if boot.post_check.is_some() || peers => post_check(boot, target.name, &log, out)?,
             other => other,
         };
         let outcome = judge(boot.must_fail.as_deref(), outcome)?;
@@ -1240,7 +1240,7 @@ fn qemu_seed(boot: &case::Boot) -> Result<Option<u64>> {
 
 /// Run a case's `post_check` (a name, then its arguments) over the console log of a boot that
 /// passed. `out` takes the line a check prints.
-fn post_check(boot: &case::Boot, log: &Path, out: &mut dyn FnMut(String)) -> Result<Outcome> {
+fn post_check(boot: &case::Boot, width: &str, log: &Path, out: &mut dyn FnMut(String)) -> Result<Outcome> {
     // A network with peers: the peers' counts and the capture of this boot (`peer.rs`).
     if let Some(net) = boot.net.as_ref().filter(|net| !net.peer.is_empty()) {
         if let Err(why) = peer::judge_peers(net, &peer::Files::beside(&log.with_extension("img"))) {
@@ -1251,8 +1251,11 @@ fn post_check(boot: &case::Boot, log: &Path, out: &mut dyn FnMut(String)) -> Res
     let text = String::from_utf8_lossy(&text);
     let check = boot.post_check.as_deref().unwrap_or("");
     let (name, args) = check.split_once(' ').unwrap_or((check, ""));
+    // The oracle is told the boot's width: a cell a case records rather than judges names it
+    // (`record=<width>:<harts>:<group>:<measure>:<quantile>`).
+    let widened = format!("{args} width={width}");
     Ok(match (!check.is_empty()).then_some(name) {
-        Some("sched_oracle") => match sched_oracle::run(&text, args) {
+        Some("sched_oracle") => match sched_oracle::run(&text, &widened) {
             Ok(summary) => {
                 out(format!("      {summary}"));
                 Outcome::Pass

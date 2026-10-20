@@ -2003,9 +2003,9 @@ mod tests {
     /// The steward's test-only `latency-probe` (servers/steward.md, "Failure and restart") is
     /// built by `steward-latency`'s recipe and its two companions' (the rounds at N = 4 and
     /// N = 16, each on a trace ring of its own), by the deadline-burst case's and its companion's
-    /// (six leases on both widths, sixteen on rv64), and by nothing else in the tree: the probe
-    /// ends leases by the steward's own decision and exits on a marker file, which no other case
-    /// may meet.
+    /// (six leases on both widths, sixteen on rv64), by the launch-overlap case's (a deadline
+    /// inside another lease's launch), and by nothing else in the tree: the probe ends leases by
+    /// the steward's own decision and exits on a marker file, which no other case may meet.
     #[test]
     fn only_steward_latency_builds_the_latency_probe() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -2026,7 +2026,8 @@ mod tests {
                 "steward-deadline-burst.toml",
                 "steward-latency-n16.toml",
                 "steward-latency-n4.toml",
-                "steward-latency.toml"
+                "steward-latency.toml",
+                "steward-launch-overlap.toml"
             ]
         );
         for dir in ["image", "tests/data"] {
