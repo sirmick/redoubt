@@ -1,6 +1,6 @@
 # Redoubt
 
-<img src="logo.svg" width="96" alt="Redoubt">
+<img src="art-prisoner.png" width="624" alt="Redoubt: a star fort on a crag, a small monster behind the bars of its gate">
 
 [Read the book](https://sirmick.github.io/redoubt/) · [the tour](docs/TOUR.md)
 
