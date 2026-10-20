@@ -328,6 +328,21 @@ impl Ports {
     }
 }
 
+/// What a guest's flush of a writable disk costs the host (docs/testbench.md, "Disks and network
+/// cards").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Flush {
+    /// The bench's case disks: `cache=unsafe`, so a guest's flush costs no host fsync. A case's
+    /// disk is made afresh for each boot and the guest's writes are kept in order in the host's page
+    /// cache, so a QEMU exit (all a case's power loss is) loses nothing; what the host's writeback
+    /// would cost no longer reaches `blkd`'s `REQUEST_TIMEOUT_US`, which a guest flush queued
+    /// behind gigabytes of it missed (servers/blkd.md, "Device lies").
+    Free,
+    /// `./launch`: QEMU's default, `cache=writeback`, where a guest's flush is an fdatasync on the
+    /// image. Its disks and its host are the user's.
+    Host,
+}
+
 /// Where one boot's forwarded host ports come from.
 #[derive(Clone, Copy, Debug)]
 pub enum HostPorts<'a> {
@@ -382,14 +397,15 @@ pub const VAULT_BUS: &str = "virtio-mmio-bus.4";
 /// QEMU arguments for a case's virtio devices, for one boot: creates the disk afresh at `disk`,
 /// so no boot sees another's writes, unless it is kept and there already (`Disk::keep`), when
 /// its layout must be a fresh disk's; the vault disk, if the case has one, the same way beside
-/// it; and forwards on the host ports `ports` gives or leases. The userland disk is copied beside
-/// it from `userland`, the run's one pack ([`crate::build::Builder::userland`]), with the case's
-/// damage, and attached read-only.
+/// it; and forwards on the host ports `ports` gives or leases. The writable disks' flushes cost
+/// the host what `flush` says. The userland disk is copied beside it from `userland`, the run's
+/// one pack ([`crate::build::Builder::userland`]), with the case's damage, and attached read-only.
 pub fn virtio_devices(
     boot: &Boot,
     disk: &Path,
     userland: Option<&Staged>,
     ports: HostPorts,
+    flush: Flush,
 ) -> Result<(Vec<String>, Vec<Forward>)> {
     let mut args = Vec::new();
     if boot.disk.is_some() || boot.net.is_some() || boot.userland.is_some() {
@@ -404,7 +420,11 @@ pub fn virtio_devices(
         make_disk(spec, path)?;
         // QEMU's option syntax separates with commas; a comma inside a value is doubled.
         let file = path.display().to_string().replace(',', ",,");
-        args.extend(["-drive".into(), format!("if=none,format=raw,id={id},file={file}")]);
+        let cache = match flush {
+            Flush::Free => ",cache=unsafe",
+            Flush::Host => "",
+        };
+        args.extend(["-drive".into(), format!("if=none,format=raw,id={id},file={file}{cache}")]);
         args.extend(["-device".into(), format!("virtio-blk-device,drive={id},bus={bus}")]);
     }
     if let Some(spec) = &boot.userland {
@@ -1299,15 +1319,16 @@ mod tests {
     fn a_kept_disk_is_attached_as_it_is() {
         let disk = std::env::temp_dir().join(format!("testbench-qemu-kept-{}.img", std::process::id()));
         let kept = boot("[disk]\nsize_kib = 64\nkeep = true\n");
-        virtio_devices(&kept, &disk, None, HostPorts::Leased(None)).unwrap();
+        virtio_devices(&kept, &disk, None, HostPorts::Leased(None), Flush::Free).unwrap();
         assert_eq!(std::fs::metadata(&disk).unwrap().len(), 64 * 1024, "made the first time");
         let mut files = vec![0u8; 64 * 1024];
         files[..16].copy_from_slice(b"a person's files");
         std::fs::write(&disk, &files).unwrap();
-        let (args, _) = virtio_devices(&kept, &disk, None, HostPorts::Leased(None)).unwrap();
+        let (args, _) = virtio_devices(&kept, &disk, None, HostPorts::Leased(None), Flush::Free).unwrap();
         assert_eq!(std::fs::read(&disk).unwrap(), files);
         assert!(args.iter().any(|a| a.contains(&disk.display().to_string())));
-        virtio_devices(&boot("[disk]\nsize_kib = 64\n"), &disk, None, HostPorts::Leased(None)).unwrap();
+        virtio_devices(&boot("[disk]\nsize_kib = 64\n"), &disk, None, HostPorts::Leased(None), Flush::Free)
+            .unwrap();
         assert_eq!(std::fs::read(&disk).unwrap(), vec![0; 64 * 1024], "afresh when not kept");
         std::fs::remove_file(&disk).ok();
     }
@@ -1318,18 +1339,22 @@ mod tests {
     fn a_kept_disk_of_another_layout_is_refused() {
         let disk = std::env::temp_dir().join(format!("testbench-qemu-layout-{}.img", std::process::id()));
         let two = boot("[disk]\nsize_kib = 64\npartitions = 2\nkeep = true\n");
-        virtio_devices(&two, &disk, None, HostPorts::Leased(None)).unwrap();
+        virtio_devices(&two, &disk, None, HostPorts::Leased(None), Flush::Free).unwrap();
         let mut bytes = std::fs::read(&disk).unwrap();
         let end = bytes.len();
         bytes[end - 16..].copy_from_slice(b"a person's files");
         std::fs::write(&disk, &bytes).unwrap();
-        virtio_devices(&two, &disk, None, HostPorts::Leased(None)).unwrap();
+        virtio_devices(&two, &disk, None, HostPorts::Leased(None), Flush::Free).unwrap();
         assert_eq!(std::fs::read(&disk).unwrap(), bytes, "the same table: attached as it is");
         let three = boot("[disk]\nsize_kib = 64\npartitions = 3\nkeep = true\n");
-        let why = virtio_devices(&three, &disk, None, HostPorts::Leased(None)).unwrap_err().to_string();
+        let why = virtio_devices(&three, &disk, None, HostPorts::Leased(None), Flush::Free)
+            .unwrap_err()
+            .to_string();
         assert!(why.contains("its partition table differs") && why.contains("--fresh-disk"), "{why}");
         let bigger = boot("[disk]\nsize_kib = 128\npartitions = 2\nkeep = true\n");
-        let why = virtio_devices(&bigger, &disk, None, HostPorts::Leased(None)).unwrap_err().to_string();
+        let why = virtio_devices(&bigger, &disk, None, HostPorts::Leased(None), Flush::Free)
+            .unwrap_err()
+            .to_string();
         assert!(why.contains("65536 bytes, not 131072"), "{why}");
         assert_eq!(std::fs::read(&disk).unwrap(), bytes, "never reformatted");
         std::fs::remove_file(&disk).ok();
@@ -1356,11 +1381,14 @@ mod tests {
         );
         std::fs::write(&recipe, text).unwrap();
         let kept = boot(&format!("[disk]\nrecipe = {:?}\nkeep = true\n", recipe));
-        virtio_devices(&kept, &disk, None, HostPorts::Leased(None)).unwrap();
+        virtio_devices(&kept, &disk, None, HostPorts::Leased(None), Flush::Free).unwrap();
         let packed = std::fs::read(&disk).unwrap();
-        virtio_devices(&kept, &disk, None, HostPorts::Leased(None)).unwrap();
+        virtio_devices(&kept, &disk, None, HostPorts::Leased(None), Flush::Free).unwrap();
         volume(bytes + 4096);
-        let why = format!("{:#}", virtio_devices(&kept, &disk, None, HostPorts::Leased(None)).unwrap_err());
+        let why = format!(
+            "{:#}",
+            virtio_devices(&kept, &disk, None, HostPorts::Leased(None), Flush::Free).unwrap_err()
+        );
         assert!(why.contains("is not attached") && why.contains(&format!("bytes {}", bytes + 4096)), "{why}");
         assert_eq!(std::fs::read(&disk).unwrap(), packed, "left as it is");
         std::fs::remove_dir_all(dir).unwrap();
@@ -1377,8 +1405,8 @@ mod tests {
         let call = CALLS.fetch_add(1, Ordering::Relaxed);
         let disk =
             std::env::temp_dir().join(format!("testbench-qemu-test-{}-{call}.img", std::process::id()));
-        let (args, _) =
-            virtio_devices(&boot(devices), &disk, None, HostPorts::Leased(None)).expect("device arguments");
+        let (args, _) = virtio_devices(&boot(devices), &disk, None, HostPorts::Leased(None), Flush::Free)
+            .expect("device arguments");
         std::fs::remove_file(&disk).ok();
         std::fs::remove_dir_all(disk.with_extension("peers")).ok();
         args
@@ -1577,6 +1605,27 @@ mod tests {
         }
     }
 
+    /// A case's writable disks cost the host no fsync on a guest's flush (`cache=unsafe`), so the
+    /// host's writeback never reaches `blkd`'s request bound; `./launch`'s keep QEMU's default.
+    #[test]
+    fn a_cases_disks_cost_the_host_no_fsync_and_launchs_keep_the_default() {
+        let dir = std::env::temp_dir().join(format!("testbench-qemu-flush-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let disk = dir.join("boot.img");
+        let case = boot("[disk]\nsize_kib = 64\n[vault]\nsize_kib = 64\n");
+        let drives = |flush| -> Vec<String> {
+            let (args, _) = virtio_devices(&case, &disk, None, HostPorts::Leased(None), flush).unwrap();
+            args.windows(2).filter(|w| w[0] == "-drive").map(|w| w[1].clone()).collect()
+        };
+        let bench = drives(Flush::Free);
+        assert_eq!(bench.len(), 2);
+        assert!(bench.iter().all(|d| d.ends_with(",cache=unsafe")), "{bench:?}");
+        let launch = drives(Flush::Host);
+        assert_eq!(launch.len(), 2);
+        assert!(launch.iter().all(|d| !d.contains("cache=")), "{launch:?}");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     /// A case's vault disk is a second writable disk beside its data disk, `<disk>.vault.img`,
     /// laid out by its own table, on its own slot; a case without `[vault]` gets the very same
     /// arguments as before there was one.
@@ -1586,12 +1635,14 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let disk = dir.join("boot.img");
         let one = "[disk]\nsize_kib = 64\npartitions = 1\n[net]\n";
-        let (without, _) = virtio_devices(&boot(one), &disk, None, HostPorts::Leased(None)).unwrap();
+        let (without, _) =
+            virtio_devices(&boot(one), &disk, None, HostPorts::Leased(None), Flush::Free).unwrap();
         let (with, _) = virtio_devices(
             &boot(&format!("{one}[vault]\nsize_kib = 128\npartitions = 2\n")),
             &disk,
             None,
             HostPorts::Leased(None),
+            Flush::Free,
         )
         .unwrap();
         let vault = disk.with_extension("vault.img");
@@ -1599,7 +1650,7 @@ mod tests {
         assert_eq!(std::fs::metadata(&vault).unwrap().len(), 128 * 1024);
         let sectors = 128 * 1024 / crate::disk::SECTOR;
         assert_eq!(std::fs::read(&vault).unwrap(), crate::disk::gpt_disk(sectors, 2));
-        let drive = format!("if=none,format=raw,id=disk2,file={}", vault.display());
+        let drive = format!("if=none,format=raw,id=disk2,file={},cache=unsafe", vault.display());
         let device = format!("virtio-blk-device,drive=disk2,bus={VAULT_BUS}");
         let added: Vec<_> = with.iter().filter(|a| !without.contains(a)).collect();
         assert_eq!(added, [&drive, &device], "{with:?}");
@@ -1630,7 +1681,8 @@ mod tests {
         let staged = Staged { objects: stage, image: image.clone(), verified };
         let disk = dir.join("boot.img");
         let case = "[disk]\nsize_kib = 64\n[userland]\nrecipe = \"image/userland.toml\"\nflip = \"Elixir.Version.beam\"\n";
-        let (args, _) = virtio_devices(&boot(case), &disk, Some(&staged), HostPorts::Leased(None)).unwrap();
+        let (args, _) =
+            virtio_devices(&boot(case), &disk, Some(&staged), HostPorts::Leased(None), Flush::Free).unwrap();
         let drive = format!(
             "if=none,format=raw,id=disk1,readonly=on,file={}",
             disk.with_extension("userland.img").display()
@@ -1657,8 +1709,8 @@ mod tests {
     fn a_poke_gets_a_udp_forward() {
         let case = "[net]\nforward = [8000]\n[net.poke]\nport = 47000\npayload = 'x'\nafter = 'go'\n";
         let disk = std::env::temp_dir().join(format!("testbench-qemu-poke-{}.img", std::process::id()));
-        let (args, forwards) =
-            virtio_devices(&boot(case), &disk, None, HostPorts::Leased(None)).expect("device arguments");
+        let (args, forwards) = virtio_devices(&boot(case), &disk, None, HostPorts::Leased(None), Flush::Free)
+            .expect("device arguments");
         let netdev = args.iter().find(|a| a.starts_with("user,")).expect("a user-mode netdev");
         let (guest, host) = forwards[1];
         assert_eq!((forwards.len(), forwards[0].0, guest), (2, 8000, 47000));

@@ -235,7 +235,7 @@ expect = ['regex 1', 'regex 2']   # each must match a console line, in this orde
 forbid = ['regex']                # must never match
 poweroff = false             # true: the guest must power off after the last expect
 reporter = "checker"         # the program whose done() is the verdict (rule F)
-launch = false               # true: boot `./launch --system`'s own QEMU command line (launch-*)
+launch = false               # true: boot `./launch --system`'s QEMU command line (launch-*), its disks cache=unsafe
 post_check = "sched_oracle"  # a host-side check of the console after a passing boot
 
 [[input]]                    # typed on the console once a line matches `after`
@@ -1107,7 +1107,7 @@ a program reads it again through `/boot` once the manifest's `public` list names
 
 ### Disks and network cards
 
-<details><summary>Status: built · tested (38)</summary>
+<details><summary>Status: built · tested (40)</summary>
 
 - bench:bench-virtio-devices
 - bench:bench-virtio-legacy-off
@@ -1147,6 +1147,8 @@ a program reads it again through `/boot` once the manifest's `public` list names
 - host:testbench::a_kept_disk_is_attached_as_it_is
 - host:testbench::a_kept_disk_of_another_layout_is_refused
 - host:testbench::a_kept_disk_is_held_to_its_recipe_s_manifest
+- host:testbench::a_cases_disks_cost_the_host_no_fsync_and_launchs_keep_the_default
+- host:testbench::a_launch_case_differs_from_launch_only_in_its_disks_cache
 
 </details>
 
@@ -1192,6 +1194,20 @@ it, by the second (`distinct_across_boots`): `launch-keep-disk` writes a file at
 boot and reads it in the next, as `./launch --system --keep-disk` keeps a person's disk between
 launches. A kept disk whose size or partition table is not the one a fresh disk would have is
 refused, never reformatted.
+
+A case's writable disks are attached `cache=unsafe`: a guest's flush costs the host no fsync. A
+case's disk is made afresh for each boot (or kept for its second), and the guest's writes reach
+the host's page cache in order either way, so a QEMU exit loses nothing, and that exit is all a
+case's power loss is (`walfsd-power-loss` cuts inside the guest). Under QEMU's default,
+`cache=writeback`, a guest's flush is an fdatasync on the image, which queues behind whatever
+the host is writing back: with a host writer looping 2 GB and an fsync beside it (I/O pressure 53
+to 78 %), `beamlet-files` failed 3 of 10 boots on each width, `blkd` marking its device broken on
+a flush with no completion in 10.0 s, its `REQUEST_TIMEOUT_US`
+([blkd](servers/blkd.md#device-lies)); under the bench's own load (2.8 %) it failed none of 20. So
+the host's writeback is the bench's, not the box's, and never reaches that bound. A `launch = true`
+case's disks are the bench's too, so they are attached the same way, the one flag in which its
+command line differs from `./launch`'s. `./launch` keeps QEMU's default: its disks and its host are
+the user's, and how it should flush them is not decided here.
 
 A manifest's volume that gives `bytes` ([init](servers/init.md#home-quotas)) must be exactly
 its partition's size, which `init` never reads. A recipe names the manifest its disk serves
@@ -1423,7 +1439,10 @@ pipes. `resize` sets that terminal's size and signals `ssh` (`SIGWINCH`), which 
 `window-change` if the size changed. The terminal is the client's input and never a verdict. With `net.host_key` set, `ssh` refuses any other host key. Test keys live in
 `tests/keys/`; they are public and marked not for production, and a boot manifest that lists one
 must never ship. A `launch = true` case (`launch-system`) boots the command line `./launch
---system` builds, unchanged, and its sessions log in with a key made beside the bundle when it is
+--system` builds, unchanged but for one flag: its writable disks are attached `cache=unsafe`, as
+every case's are, where `./launch` keeps QEMU's default; the host's fsync policy is the host's, not
+the command line's ([disks](#disks-and-network-cards)), and
+`a_launch_case_differs_from_launch_only_in_its_disks_cache` holds the two to that one flag. Its sessions log in with a key made beside the bundle when it is
 packed, which alice alone holds in that bundle's manifest, as `launch` gives her the checkout's key
 ([try the system](../GETTING-STARTED.md#try-the-system)). The `ssh-loopback` kind runs sessions against a server that `ssh` starts itself
 for each session as its `ProxyCommand`, so nothing listens on a port: Redoubt's `sshd` on its host
@@ -1505,7 +1524,7 @@ boots QEMU's own OpenSBI: the rule that only RustSBI boots is Redoubt's.
 
 What an idle Redoubt costs its host is measured from outside the guest. A `launch = true` case
 with an `[idle]` table and one session step `{ idle = N }` boots `./launch --system`'s command
-line; when the session reaches the step, it types nothing for N seconds, still reading its output,
+line (its disks `cache=unsafe`, the one flag a launch case changes); when the session reaches the step, it types nothing for N seconds, still reading its output,
 and the bench measures that window:
 - **Traps, from QEMU's own log.** `-nographic` multiplexes QEMU's monitor on the console, so the
   bench types Ctrl-A c, `logfile <case>.int.log` and `log int`, and Ctrl-A c back, when the window

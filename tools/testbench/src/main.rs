@@ -1142,9 +1142,13 @@ fn boot_case(
             );
             let (mut devices, forwards) = match boot.launch {
                 true => (Vec::new(), vec![(22, qemu::host_ports(ports, 1, false)?.0[0])]),
-                false => {
-                    qemu::virtio_devices(boot, &disk, userland.as_ref(), qemu::HostPorts::Leased(ports))?
-                }
+                false => qemu::virtio_devices(
+                    boot,
+                    &disk,
+                    userland.as_ref(),
+                    qemu::HostPorts::Leased(ports),
+                    qemu::Flush::Free,
+                )?,
             };
             if let Some(icount) = &boot.icount {
                 devices.extend(["-icount".into(), icount.clone(), "-rtc".into(), "clock=vm".into()]);
@@ -1180,8 +1184,16 @@ fn boot_case(
             let identity = launch::case_identity(bundle);
             let launched = match boot.launch {
                 true => {
-                    let qemu =
-                        launch::command(machine, firmware, &built.packed, boot, &disk, *smp, forwards[0].1)?;
+                    let qemu = launch::command(
+                        machine,
+                        firmware,
+                        &built.packed,
+                        boot,
+                        &disk,
+                        *smp,
+                        forwards[0].1,
+                        qemu::Flush::Free,
+                    )?;
                     Some((qemu, identity.as_path()))
                 }
                 false => None,

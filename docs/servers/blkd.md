@@ -310,6 +310,11 @@ Status: built · partly tested: the exits without a device, a disk or a partitio
   or a device that ignores its addresses, can write anywhere in RAM: a compromised kernel.
 - **A slow or lying device holds the disk** for up to `REQUEST_TIMEOUT_US` (10 seconds) before it is
   marked broken; with one request outstanding, every client waits meanwhile.
+- **On a virtualised disk the bound measures the host too.** A guest's flush on QEMU's default
+  cache is an fdatasync on the host's image file, so a host busy writing back can hold one past
+  `REQUEST_TIMEOUT_US`, and `blkd` marks an honest device broken, as on a disk that slow. The
+  bench attaches its case disks so that a flush costs the host nothing
+  ([the bench's disks](../testbench.md#disks-and-network-cards)).
 - **A torn write is the device's to keep.** littlefs's power-loss safety needs a torn write to
   persist a prefix of its sectors; `blkd` sends whole sectors in order but cannot make a device
   that tears differently honour that.
