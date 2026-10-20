@@ -138,3 +138,12 @@ lease_ended (op 17) is consumed by the shell's notices listener; no lease-livene
 
 ## Follow-up (Architect, 2026-10-20, WAKE1): the shell's per-line print cost
 A [lease ended] line costs 250-370 ms against consoled's 6.5 ms per reply, now the visible term of a burst's last notice. Not a node yet: entry condition is one measurement, a shell print at idle on the release build and where the time goes (VM reductions, the relay, consoled); then a shell-track node if it is the print path's own. Harness wave (Q5): the listener's take rate matters again when session code reacts to lease ends.
+
+## Owner's answers (2026-10-20, through the orchestrator: "roll with the recommendations")
+
+- **Q1:** steward weight 1,000 under `system` in the image. A node: the image's and the memory-checked manifests' number, scheduling.md's sentence, a train.
+- **Q2:** no. A lease's share is the manifest's `agent` weight for its life; no launch weight. STEWARD8's derived bound stands.
+- **Q4:** alice's `net` scope gets `limits` with 32 sockets; ipd's entry re-derived by the rule, the arithmetic on ipd.md; bob unchanged. A node (Tier A, S).
+- **Q5:** keep the harness, the loop and the escape room at M5 as the book places them; `agent-suite` closes at the attack suite and the scripted agents (ATK10-13).
+- **B53:** yes; merged in train 87.
+- **SMP5:** stays parked until the lock split (the owner's 2026-10-12 ruling).
