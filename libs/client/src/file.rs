@@ -11,6 +11,14 @@
 //! Nothing is buffered or cached: one read or write is one request of at most the lend's
 //! `iounit`, and every open walks from the root, so a rename, a removal or a revoked connection
 //! shows on the next open.
+//!
+//! A request that takes a fid at the server, the attach and every walk, can be refused by its
+//! admission for the moment rather than for good: `too_many` while another connection of the
+//! account holds the share's working fid (servers/serving.md, `admit`), or the kernel's `busy`
+//! while the server's queue is full of the account's other VMs. Such a refusal is tried again
+//! after a wait that doubles from [`RETRY_US`], [`ADMISSION_RETRIES`] times, within the
+//! connection's own timeout if it has one, and only then is the caller's; a VM loading a module
+//! beside its account's other VMs rides out the moment instead of failing the load.
 
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
@@ -18,16 +26,42 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use redoubt_rt::abi::FOREVER;
-use redoubt_rt::client::{self, Lend};
-use redoubt_rt::handle::{Budget, Endpoint};
+use redoubt_rt::abi::{self, FOREVER};
+use redoubt_rt::client::{self, ClientError, Lend};
+use redoubt_rt::handle::{Budget, Endpoint, sleep};
 use redoubt_rt::server::ninep::MAX_FIDS;
-use redoubt_rt::wire::ninep::{self, Qid};
+use redoubt_rt::wire::ninep::{self, ErrorName, Qid};
 
 use crate::error::{Error, Refusal};
 
 /// The root's fid, attached when the connection is made: where a walk through a hub starts.
 pub const ROOT: u32 = 0;
+/// How many times a request refused by admission for the moment is tried again.
+pub const ADMISSION_RETRIES: u32 = 8;
+/// The wait before the first of those tries, in µs; each later wait is twice the one before, so
+/// the eight together are 2.55 s.
+pub const RETRY_US: u64 = 10_000;
+
+/// Makes a fid-taking request, trying it again after an admission refusal of the moment
+/// (`too_many` from the server, `busy` from the kernel): [`ADMISSION_RETRIES`] times, each after
+/// twice the wait before, from [`RETRY_US`], while the waits so far stay within `timeout`, the
+/// connection's own bound on a call. Any other outcome, and the last refusal, is the caller's.
+fn admitted<T>(timeout: u64, mut request: impl FnMut() -> Result<T, ClientError>) -> Result<T, ClientError> {
+    let (mut wait, mut waited) = (RETRY_US, 0u64);
+    for _ in 0..ADMISSION_RETRIES {
+        match request() {
+            Err(ClientError::Rerror(ErrorName::TooMany) | ClientError::Sys(abi::Error::Busy))
+                if waited.saturating_add(wait) <= timeout =>
+            {
+                let _ = sleep(wait);
+                waited += wait;
+                wait *= 2;
+            }
+            outcome => return outcome,
+        }
+    }
+    request()
+}
 /// Words of the fid bitmap: 32-bit, so rv32 has the atomics.
 const WORDS: usize = MAX_FIDS.div_ceil(32);
 
@@ -84,7 +118,7 @@ impl Connection {
     pub fn attach_within(endpoint: Endpoint, lend: &mut Lend, timeout: u64) -> Result<Connection, Error> {
         let nine = client::Connection::within(endpoint, timeout);
         nine.version(lend)?;
-        nine.attach(lend, ROOT, "")?;
+        admitted(timeout, || nine.attach(lend, ROOT, ""))?;
         Ok(Connection(Arc::new(Inner { nine, fids: Fids::new() })))
     }
 
@@ -164,11 +198,12 @@ impl Connection {
         Ok(self.0.nine.disconnect(id, timeout)?)
     }
 
-    /// A free fid walked from the root along `path`. A failed walk leaves the fid unused
-    /// (intro(5)), so it goes back unless the walk's fate is unknown.
+    /// A free fid walked from the root along `path`, tried again after an admission refusal of
+    /// the moment ([`admitted`]). A failed walk leaves the fid unused (intro(5)), so it goes back
+    /// unless the walk's fate is unknown.
     fn walk(&self, lend: &mut Lend, path: &str) -> Result<(u32, Qid), Error> {
         let fid = self.0.fids.take()?;
-        let walked = self.0.nine.walk(lend, ROOT, fid, path);
+        let walked = admitted(self.0.nine.timeout, || self.0.nine.walk(lend, ROOT, fid, path));
         if walked.is_err() {
             self.settle(fid, &walked);
         }
