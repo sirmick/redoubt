@@ -12,21 +12,25 @@
 //!   ([`redoubt_rt::server::buckets`]), as every shared server's is.
 //! - `limits=BADGE:INFLIGHT:STATE:SOCKETS`: caps for one scope badge's bucket in place of the defaults, at
 //!   most 8.
+//! - `account=ACCOUNT:INFLIGHT:STATE:SOCKETS`: the same caps for one non-zero account's unlabelled bucket, at
+//!   most 8.
 //!
 //! Numbers are decimal without leading zeros. Badges are nonzero, below 2^63 (the minted range),
 //! and each appears once: the ingress badge is not a scope badge, and a `limits` badge must be
-//! one.
+//! one. An `account` account is nonzero and appears once.
 
 use alloc::vec::Vec;
 
 use crate::scope::{MAX_RULES, Ports, Prefix, Rule, Scope, ip, mask};
 
-/// The most `self=`, `scope=` and `limits=` arguments of each kind.
+/// The most `self=`, `scope=`, `limits=` and `account=` arguments of each kind.
 pub const MAX_EACH: usize = 8;
 
-/// One `limits=` argument.
+/// One `limits=` argument (`account` 0) or `account=` argument (`badge` 0), keyed as the serving
+/// library's override is ([`redoubt_rt::server::Override`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Limit {
+    pub account: u64,
     pub badge: u64,
     pub in_flight: u32,
     pub state: u32,
@@ -101,23 +105,30 @@ pub fn parse<'a>(args: impl Iterator<Item = &'a str>) -> Result<Config, BadArgs>
                 }
                 scopes.push((b, scope(rules)?));
             }
-            "limits" => {
-                if limits.len() == MAX_EACH {
-                    return Err(BadArgs("too many limits="));
+            "limits" | "account" => {
+                let accounts = key == "account";
+                if limits.iter().filter(|l| (l.account != 0) == accounts).count() == MAX_EACH {
+                    return Err(BadArgs("too many limits= or account="));
                 }
                 let parts: Vec<&str> = value.split(':').collect();
-                let [b, in_flight, state, sockets] = parts[..] else {
-                    return Err(BadArgs("limits= needs four fields"));
+                let [who, in_flight, state, sockets] = parts[..] else {
+                    return Err(BadArgs("limits= and account= need four fields"));
+                };
+                let (account, badge) = if accounts {
+                    (number(who).ok().filter(|a| *a != 0).ok_or(BadArgs("an account must be nonzero"))?, 0)
+                } else {
+                    (0, badge(who)?)
                 };
                 let small = |s: &str| number(s).ok().and_then(|n| u32::try_from(n).ok()).filter(|n| *n <= 64);
                 let limit = Limit {
-                    badge: badge(b)?,
+                    account,
+                    badge,
                     in_flight: small(in_flight).ok_or(BadArgs("limits= in_flight"))?,
                     state: small(state).ok_or(BadArgs("limits= state"))?,
                     sockets: small(sockets).ok_or(BadArgs("limits= sockets"))?,
                 };
-                if limits.iter().any(|l| l.badge == limit.badge) {
-                    return Err(BadArgs("a limits badge given twice"));
+                if limits.iter().any(|l| (l.account, l.badge) == (account, badge)) {
+                    return Err(BadArgs("a limits badge or account given twice"));
                 }
                 limits.push(limit);
             }
@@ -142,7 +153,7 @@ pub fn parse<'a>(args: impl Iterator<Item = &'a str>) -> Result<Config, BadArgs>
     if scopes.iter().any(|(b, _)| *b == ingress) {
         return Err(BadArgs("the ingress badge has a scope"));
     }
-    if limits.iter().any(|l| !scopes.iter().any(|(b, _)| *b == l.badge)) {
+    if limits.iter().any(|l| l.account == 0 && !scopes.iter().any(|(b, _)| *b == l.badge)) {
         return Err(BadArgs("a limits badge has no scope"));
     }
     Ok(Config { addr, len, gateway, selfs, ingress, scopes, buckets, limits })

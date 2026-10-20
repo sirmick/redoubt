@@ -219,11 +219,13 @@ through the churn, then Alice's echo on the same connection.
 
 ### Sizing
 
-<details><summary>Status: built · tested (13)</summary>
+<details><summary>Status: built · tested (15)</summary>
 
 - host:redoubt-ipd::every_scope_and_the_milestone_parse
 - host:redoubt-ipd::anything_else_stops_ipd
+- host:redoubt-ipd::an_account_override_parses_and_is_refused_malformed_zero_twice_or_past_eight
 - host:redoubt-ipd::every_scope_and_the_milestone_fit
+- host:redoubt-ipd::the_images_account_override_fits
 - host:redoubt-ipd::the_worst_case_must_fit_or_ipd_does_not_start
 - host:testbench::every_manifest_entry_holds_its_buckets_at_their_caps
 - host:redoubt-ipd::clone_stops_at_the_buckets_socket_cap
@@ -249,10 +251,12 @@ it serves:
 - `buckets=N`: admission buckets, 1 to 32, required, parsed by the serving library as every
   shared server's is ([init](init.md#the-boot-manifest));
 - `limits=BADGE:INFLIGHT:STATE:SOCKETS`: caps for one scope badge's bucket in place of the defaults,
-  at most 8 (an account-0 override, [serving](serving.md#admit)).
+  at most 8 (an account-0 override, [serving](serving.md#admit));
+- `account=ACCOUNT:INFLIGHT:STATE:SOCKETS`: the same caps for one non-zero account's unlabelled
+  bucket, at most 8 (an account override, [serving](serving.md#admit)).
 
 Numbers are decimal without leading zeros; badges are non-zero, below `FIRST_MINTED_BADGE`, and
-each appears once.
+each appears once; an `account=` account is non-zero and appears once.
 
 **Admission.** Fids, minted connections, parked calls and sockets all go through the skeleton's
 admission ([R26 (admission fairness)](serving.md#r26-admission-fairness)): by default 5 parked

@@ -48,7 +48,7 @@ fn every_scope_and_the_milestone_parse() {
 
     let m = run(MILESTONE).unwrap();
     assert_eq!(m.scope_of(5).unwrap().rules(), &[Rule::Listen(Ports::new(22, 22).unwrap())]);
-    assert_eq!(m.limits[0], Limit { badge: 5, in_flight: 23, state: 0, sockets: 20 });
+    assert_eq!(m.limits[0], Limit { account: 0, badge: 5, in_flight: 23, state: 0, sockets: 20 });
     // Not sized, ipd does not start: there is no default count (servers/serving.md R26).
     assert!(parse(["addr=10.0.2.15/24", "ingress=3"].into_iter()).is_err());
     assert_eq!(run(&["addr=10.0.2.15/24", "ingress=3"]).unwrap().buckets, 4);
@@ -114,4 +114,35 @@ fn anything_else_stops_ipd() {
     let mut many = vec!["addr=10.0.2.15/24", "ingress=3"];
     many.extend(std::iter::repeat_n("self=10.0.9.0/24", 9));
     assert!(run(&many).is_err());
+}
+
+/// `account=ACCOUNT:INFLIGHT:STATE:SOCKETS` (servers/ipd.md, "Sizing"): caps for a non-zero
+/// account's unlabelled bucket, parsed as `limits=` is; the account needs no scope, appears once,
+/// and at most 8 are given, beside at most 8 `limits=`.
+#[test]
+fn an_account_override_parses_and_is_refused_malformed_zero_twice_or_past_eight() {
+    let base = ["addr=10.0.2.15/24", "ingress=3", "scope=4:l:22", "limits=4:2:2:2"];
+    let with = |extra: &[&str]| run(&[&base[..], extra].concat());
+    let c = with(&["account=1001:5:4:32"]).unwrap();
+    assert_eq!(c.limits[1], Limit { account: 1001, badge: 0, in_flight: 5, state: 4, sockets: 32 });
+    // An account and a badge of the same number are different buckets.
+    assert!(with(&["account=4:5:4:32"]).is_ok());
+    for bad in [
+        "account=0:5:4:32",
+        "account=01001:5:4:32",
+        "account=-1:5:4:32",
+        "account=18446744073709551616:5:4:32",
+        "account=1001:5:4",
+        "account=1001:5:4:32:1",
+        "account=1001:65:4:32",
+        "account=1001:5:4:65",
+        "account=:5:4:32",
+    ] {
+        assert!(with(&[bad]).is_err(), "{bad} was accepted");
+    }
+    assert!(with(&["account=1001:5:4:32", "account=1001:2:2:2"]).is_err(), "twice");
+    let accounts: Vec<String> = (1..=9).map(|a| format!("account={a}:2:2:2")).collect();
+    let accounts: Vec<&str> = accounts.iter().map(String::as_str).collect();
+    assert!(with(&accounts[..8]).is_ok(), "eight, beside a limits=");
+    assert!(with(&accounts).is_err(), "nine");
 }

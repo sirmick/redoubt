@@ -83,10 +83,6 @@ impl AdmitKey {
         AdmitKey { account: caller.account, badge, labels, count }
     }
 
-    /// The badge an account-0 key's bucket belongs to (a root badge, [`super::minted::Minted::key`]);
-    /// `None` for any other account.
-    pub fn root(&self) -> Option<u64> { self.per_badge().then_some(self.badge) }
-
     /// This account-0 key moved to the bucket of `root`, the badge its caller's capability was
     /// minted through ([`super::minted::Minted::key`]).
     pub(super) fn rooted(self, root: u64) -> AdmitKey { AdmitKey { badge: root, ..self } }
@@ -227,14 +223,20 @@ pub fn own_args<'a>(args: &'a [&'a str]) -> impl Iterator<Item = &'a str> + 'a {
     args.iter().copied().filter(|arg| !arg.starts_with(BUCKETS))
 }
 
-/// Caps for the bucket of one account-0 root badge, in place of [`Limits`]' per-bucket caps
-/// (`ipd` gives `sshd` room for a parked accept and one call per slot, its slots its entry's
-/// `buckets=N`, the bound N + 1 held by `sshd`'s host test over every manifest; and the
-/// steward room for its grants). Multiplexed requests and their pages keep the default caps. It applies only
-/// to a caller with account 0 calling on exactly this badge: a server cannot know a badge's account when it
-/// reads its arguments, and a client with an account never lands in a badge's bucket (`AdmitKey::of`).
+/// Caps for one bucket in place of [`Limits`]' per-bucket caps, keyed as [`AdmitKey`] is: an
+/// account-0 root badge's bucket (`account` 0, `badge` the root badge: `ipd` gives `sshd` room
+/// for a parked accept and one call per slot, its slots its entry's `buckets=N`, the bound N + 1
+/// held by `sshd`'s host test over every manifest; and the steward room for its grants), or a
+/// non-zero account's unlabelled bucket (`badge` 0: `ipd` gives a person's account the sockets
+/// the manifest names, as the root-badge form gives a daemon its own). Multiplexed requests and
+/// their pages keep the default caps. A root-badge override applies only to a caller with
+/// account 0 calling on exactly this badge: a server cannot know a badge's account when it reads
+/// its arguments, and a client with an account never lands in a badge's bucket (`AdmitKey::of`).
+/// An account override applies to that account's bucket with no labels and to none of its
+/// labelled ones, which keep the defaults.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Override {
+    pub account: u64,
     pub badge: u64,
     pub in_flight: u32,
     pub files: u32,
@@ -242,6 +244,11 @@ pub struct Override {
 }
 
 impl Override {
+    /// Whether `key`'s bucket is this override's.
+    pub fn covers(&self, key: &AdmitKey) -> bool {
+        key.account == self.account && key.badge == self.badge && (self.account == 0 || key.count == 0)
+    }
+
     fn of(&self, resource: Resource) -> Option<u32> {
         match resource {
             Resource::InFlight => Some(self.in_flight),
@@ -293,9 +300,10 @@ impl Admission {
         Ok(Admission { limits, overrides: Vec::new(), buckets: Vec::new(), shares: Vec::new() })
     }
 
-    /// Admission under `limits`, with `overrides` for named account-0 root badges. Refused
-    /// ([`Unsized`]) unless every badge is a root one (nonzero, below the minted range) and named
-    /// once, there are no more overrides than buckets, every cap is 0 or at least
+    /// Admission under `limits`, with `overrides` for named account-0 root badges and non-zero
+    /// accounts' unlabelled buckets. Refused ([`Unsized`]) unless every override names a root
+    /// badge (nonzero, below the minted range) with account 0, or a non-zero account with badge 0,
+    /// each bucket once, there are no more overrides than buckets, every cap is 0 or at least
     /// [`SMALLEST_CAP`], and the **worst case** holds no more open calls than `MAX_OPEN_CALLS`
     /// less the headroom.
     ///
@@ -308,9 +316,10 @@ impl Admission {
         let first_minted = super::minted::FIRST_MINTED_BADGE;
         for (i, o) in overrides.iter().enumerate() {
             let caps = [o.in_flight, o.files, o.state];
-            if o.badge == 0
-                || o.badge >= first_minted
-                || overrides[..i].iter().any(|p| p.badge == o.badge)
+            let root = o.account == 0 && o.badge != 0 && o.badge < first_minted;
+            let account = o.account != 0 && o.badge == 0;
+            if !(root || account)
+                || overrides[..i].iter().any(|p| (p.account, p.badge) == (o.account, o.badge))
                 || caps.iter().any(|cap| (1..SMALLEST_CAP).contains(cap))
             {
                 return Err(Unsized);
@@ -358,9 +367,9 @@ impl Admission {
 
     pub fn limits(&self) -> &Limits { &self.limits }
 
-    /// `key`'s cap for `resource`: an override's, for an account-0 root badge that has one.
+    /// `key`'s cap for `resource`: an override's, for a bucket that has one ([`Override::covers`]).
     fn cap(&self, key: AdmitKey, resource: Resource) -> u32 {
-        let named = self.overrides.iter().find(|o| key.account == 0 && key.badge == o.badge);
+        let named = self.overrides.iter().find(|o| o.covers(&key));
         named.and_then(|o| o.of(resource)).unwrap_or(self.limits.of(resource))
     }
 
@@ -702,7 +711,7 @@ mod tests {
     /// An override gives exactly its badge's bucket its caps, for account-0 callers only.
     #[test]
     fn an_override_is_its_root_badge_s_alone() {
-        let sshd = Override { badge: 3, in_flight: 24, files: 32, state: 20 };
+        let sshd = Override { account: 0, badge: 3, in_flight: 24, files: 32, state: 20 };
         let mut a = Admission::with_overrides(caps(5, 5, 8, 4), &[sshd]).unwrap();
         // sshd's bucket takes 24 calls; the 25th is refused.
         for _ in 0..24 {
@@ -717,12 +726,34 @@ mod tests {
         }
     }
 
+    /// An account override gives that account's unlabelled bucket its caps, shared among its
+    /// badges as any bucket is; a labelled bucket of the same account, another account, and an
+    /// account-0 badge of the same number keep the defaults.
+    #[test]
+    fn an_account_override_is_its_unlabelled_bucket_s_alone() {
+        let alice = Override { account: 1001, badge: 0, in_flight: 5, files: 64, state: 36 };
+        let mut a = Admission::with_overrides(caps(7, 5, 24, 12), &[alice]).unwrap();
+        // Two sessions, one holding a unit: the other's share is 36 / 3 = 12, where at the
+        // default it would be 12 / 3 = 4.
+        let unlabelled = key(1001);
+        a.admit(unlabelled, 1, Resource::State).unwrap();
+        let taken = (0..40).take_while(|_| a.admit(unlabelled, 2, Resource::State).is_ok()).count();
+        assert_eq!(taken, 12);
+        let vault = AdmitKey::of(&caller(1001, &[7]));
+        for other in [vault, key(1002), root(1001, 0)] {
+            assert!(!alice.covers(&other), "{other:?}");
+            let taken = (0..40).take_while(|_| a.admit(other, 2, Resource::State).is_ok()).count();
+            assert!(taken <= 12, "{other:?}: {taken}, past the default cap");
+        }
+        assert!(alice.covers(&unlabelled));
+    }
+
     /// Worst-case sizing: overrides plus every other bucket at the default must leave the
     /// open-call headroom; bad badges and small caps are refused.
     #[test]
     fn overrides_are_sized_and_checked() {
         let limits = caps(6, 5, 8, 4);
-        let o = |badge, in_flight| Override { badge, in_flight, files: 8, state: 4 };
+        let o = |badge, in_flight| Override { account: 0, badge, in_flight, files: 8, state: 4 };
         let bound = (MAX_OPEN_CALLS - OPEN_CALL_HEADROOM) as u32;
         // The milestone manifest: sshd 23, the steward 2 (a slot of 5 at worst), four more at 5.
         assert!(Admission::with_overrides(limits, &[o(1, 23), o(2, 2)]).is_ok());
@@ -737,6 +768,23 @@ mod tests {
         {
             assert_eq!(Admission::with_overrides(limits, &bad).err(), Some(Unsized), "{bad:?}");
         }
+        // An account's bucket is named by its account with badge 0, once; it takes a slot as a
+        // root badge's does, and its caps count in the worst case as one's do.
+        let account = |account, badge| Override { account, badge, in_flight: 5, files: 8, state: 4 };
+        assert!(Admission::with_overrides(limits, &[o(1, 23), account(1001, 0)]).is_ok());
+        assert!(Admission::with_overrides(limits, &[account(1, 0), o(1, 2)]).is_ok(), "account 1, badge 1");
+        for bad in [
+            vec![account(1001, 3)],
+            vec![account(1001, 0), account(1001, 0)],
+            vec![Override { in_flight: 1, ..account(1001, 0) }],
+            vec![account(1001, 0); 7],
+        ] {
+            assert_eq!(Admission::with_overrides(limits, &bad).err(), Some(Unsized), "{bad:?}");
+        }
+        let big = Override { in_flight: bound - 25, ..account(1001, 0) };
+        assert!(Admission::with_overrides(limits, &[big]).is_ok(), "(bound - 25) + 5 x 5 = bound");
+        let past = Override { in_flight: bound - 24, ..account(1001, 0) };
+        assert_eq!(Admission::with_overrides(limits, &[past]).err(), Some(Unsized));
     }
 
     /// A red-team case: whatever order the badges come in, admission
@@ -746,7 +794,7 @@ mod tests {
     #[test]
     fn the_worst_order_never_passes_the_headroom() {
         let limits = caps(6, 5, 8, 4);
-        let o = |badge, in_flight| Override { badge, in_flight, files: 8, state: 4 };
+        let o = |badge, in_flight| Override { account: 0, badge, in_flight, files: 8, state: 4 };
         let root = |badge| AdmitKey::of(&Caller { badge, account: 0, labels: Default::default() });
         let bound = (MAX_OPEN_CALLS - OPEN_CALL_HEADROOM) as u32;
         for overrides in [
@@ -771,9 +819,11 @@ mod tests {
     #[test]
     fn fits_counts_overrides_at_their_caps() {
         let limits = caps(2, 2, 2, 2);
-        let a =
-            Admission::with_overrides(limits, &[Override { badge: 1, in_flight: 10, files: 0, state: 0 }])
-                .unwrap();
+        let a = Admission::with_overrides(
+            limits,
+            &[Override { account: 0, badge: 1, in_flight: 10, files: 0, state: 0 }],
+        )
+        .unwrap();
         let cost = Cost { in_flight: 100, file: 10, state: 1, request: 0, page: 0 };
         // 10 x 100 for the override (its files and state below the default count at the
         // default, 2 x 10 + 2 x 1), and 2 x 100 + 2 x 10 + 2 x 1 for the other bucket.

@@ -45,8 +45,8 @@ pub struct Sizing {
 
 impl Config {
     /// Sizes `ipd` from its arguments, or refuses to start: the overrides must be root scope
-    /// badges, and the worst case, every override's bucket and every other bucket at the defaults,
-    /// must leave `MAX_OPEN_CALLS`' headroom and fit `budget` bytes, its manifest entry's pages
+    /// badges or non-zero accounts, and the worst case, every override's bucket and every other bucket at the
+    /// defaults, must leave `MAX_OPEN_CALLS`' headroom and fit `budget` bytes, its manifest entry's pages
     /// less its heap cap and stack ([`redoubt_rt::server::budget`]), which the heap cap, holding
     /// the stack's tables and every socket's buffers, is beside.
     ///
@@ -68,6 +68,7 @@ impl Config {
         let mut overrides = Vec::new();
         for l in &self.limits {
             overrides.push(Override {
+                account: l.account,
                 badge: l.badge,
                 in_flight: l.in_flight,
                 files: files_for(l.sockets),
@@ -94,14 +95,7 @@ impl Config {
         let Some(need) = need else { return Err(BadArgs("every bucket at its cap does not fit the budget")) };
         // The stack's own per-bucket count agrees with the admission's cap; the admission, with its
         // shares, is what binds.
-        let caps = crate::fs::SocketCaps {
-            default: default as usize,
-            overrides: self
-                .limits
-                .iter()
-                .map(|l| (l.badge, state_for(l.state, l.sockets) as usize))
-                .collect(),
-        };
+        let caps = crate::fs::SocketCaps { default: default as usize, overrides: overrides.clone() };
         Ok(Sizing { admission, caps, max_sockets: max_sockets as usize, need })
     }
 }

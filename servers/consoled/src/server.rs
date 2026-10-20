@@ -87,7 +87,7 @@ pub const INIT_BADGE: u64 = 1;
 /// of those consoles and for `init`'s own. The parked calls keep the default.
 pub const fn init_override() -> Override {
     let consoles = redoubt_rt::abi::MAX_THREADS as u32;
-    Override { badge: INIT_BADGE, in_flight: 2, files: CONSOLE_FIDS * consoles, state: consoles }
+    Override { account: 0, badge: INIT_BADGE, in_flight: 2, files: CONSOLE_FIDS * consoles, state: consoles }
 }
 
 /// The fids one console client holds open: the root its namespace attaches
