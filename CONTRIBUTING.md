@@ -57,6 +57,19 @@ The whole tree is formatted this way, and the bench's `formatting` case fails on
 not ([the formatting gate](docs/testbench.md#the-formatting-gate)). A crate that is its own cargo
 workspace (the fuzz crates, `userland/otp`) is formatted from its own directory.
 
+Elixir is formatted with `mix format` under the pinned toolchain (`. userland/otp/tools/env.sh`),
+to the repository's [`.formatter.exs`](.formatter.exs) (110 columns too) or, under
+`userland/shell`, the shell's own; the root's names the shell as a subdirectory, so `mix format`
+from the root formats every Elixir file in the tree. The bench's `formatting` case runs it over
+every `.ex` and `.exs` git tracks or has not ignored, wherever the file is, but the generated
+modules (`libs/wire/elixir/proto` and `client`, `libs/steward/elixir/gen`), which are their
+generators' output.
+
+```sh
+. userland/otp/tools/env.sh && mix format            # the whole tree
+. userland/otp/tools/env.sh && mix format path/to/file.ex
+```
+
 ## Commits
 
 This is the one definition of a commit; the history keeps it throughout.

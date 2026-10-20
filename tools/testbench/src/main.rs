@@ -447,7 +447,7 @@ fn main() -> Result<()> {
         }
         if let Kind::Fmt(gate) = &case.kind {
             let started = Instant::now();
-            let outcome = match fmt::available() {
+            let outcome = match fmt::available(&workspace) {
                 Err(why) => missing(why),
                 Ok(()) => match fmt::check(&workspace, gate)? {
                     None => Outcome::Pass,

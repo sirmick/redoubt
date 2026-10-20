@@ -43,7 +43,8 @@ defmodule Redoubt.Wire.VectorsTest do
   defp unhex(hex), do: Base.decode16!(hex, case: :lower)
 
   # The first word-1 bytes of what arrived: what a buffer message re-encodes to.
-  defp prefix(words, buffer), do: if(buffer == <<>>, do: <<>>, else: binary_part(buffer, 0, Enum.at(words, 1)))
+  defp prefix(words, buffer),
+    do: if(buffer == <<>>, do: <<>>, else: binary_part(buffer, 0, Enum.at(words, 1)))
 
   defp check(["ok", h, w0, w1, w2, w3, buf | rest]) do
     {ws, buffer} = {words([w0, w1, w2, w3]), unhex(buf)}
@@ -82,8 +83,11 @@ defmodule Redoubt.Wire.VectorsTest do
     bytes = unhex(hex)
 
     case Example.decode_file(bytes) do
-      {:ok, {name, fields} = m} -> expect(render(name, fields, :request), rest, Example.encode_file(m), {:ok, bytes})
-      other -> {:fail, other}
+      {:ok, {name, fields} = m} ->
+        expect(render(name, fields, :request), rest, Example.encode_file(m), {:ok, bytes})
+
+      other ->
+        {:fail, other}
     end
   end
 

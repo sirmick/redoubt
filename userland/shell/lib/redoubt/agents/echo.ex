@@ -118,9 +118,33 @@ defmodule Redoubt.Agents.Echo do
   # in all before the stage strips them; the VM's start reads more than that in the boot pack
   # alone.
   @loads [
-    Base, Macro, DateTime, Code.Formatter, Module, Calendar.ISO, Stream, Inspect.Algebra,
-    Protocol, NaiveDateTime, Regex, URI, Version, OptionParser, MapSet, Range, Tuple,
-    :erl_lint, :sofs, :erl_eval, :epp, :json, :uri_string, :erl_pp, :calendar, :gb_sets, :filename
+    Base,
+    Macro,
+    DateTime,
+    Code.Formatter,
+    Module,
+    Calendar.ISO,
+    Stream,
+    Inspect.Algebra,
+    Protocol,
+    NaiveDateTime,
+    Regex,
+    URI,
+    Version,
+    OptionParser,
+    MapSet,
+    Range,
+    Tuple,
+    :erl_lint,
+    :sofs,
+    :erl_eval,
+    :epp,
+    :json,
+    :uri_string,
+    :erl_pp,
+    :calendar,
+    :gb_sets,
+    :filename
   ]
 
   # Each module of `@loads` the VM does not hold yet is loaded from the system volume, beside

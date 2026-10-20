@@ -45,8 +45,9 @@ pub enum Kind {
     /// No leftover of a dropped interface, no silenced dead code, no unread Cargo feature, one
     /// literal definition of each shared constant (`cruft.rs`). Not a boot; reads the sources.
     NoCruft(NoCruft),
-    /// Every Rust source formatted with the repository's `rustfmt.toml` under nightly
-    /// (`fmt.rs`). Not a boot; runs `cargo +nightly fmt --check`.
+    /// Every Rust source formatted with the repository's `rustfmt.toml` under nightly, and every
+    /// Elixir source with its project's `.formatter.exs` (`fmt.rs`). Not a boot; runs
+    /// `cargo +nightly fmt --check` and `mix format --check-formatted`.
     Fmt(Fmt),
     /// `cargo test` for host crates, so the suite runs the unit tests that no boot can reach:
     /// a constant both the loader and the bench agree on is right in the machine's eyes even
@@ -173,6 +174,21 @@ pub struct Fmt {
     /// `cargo +nightly fmt --all --check`.
     pub roots: Vec<String>,
     /// Workspace roots left unformatted, each with its reason.
+    #[serde(default)]
+    pub skip: Vec<Skip>,
+    /// The Elixir: every `.ex` and `.exs` in the tree, under `mix format`.
+    pub elixir: ElixirFmt,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ElixirFmt {
+    /// Directories with a `.formatter.exs`, relative to the workspace root (`.` for it). Every
+    /// `.ex` and `.exs` git tracks or has not ignored is checked with `mix format --check-formatted`
+    /// from the deepest root above it, so under that root's configuration; a `.formatter.exs` in
+    /// no root is a finding, as a file under no root is.
+    pub roots: Vec<String>,
+    /// Directories whose Elixir is a generator's output, left to it, each with its reason.
     #[serde(default)]
     pub skip: Vec<Skip>,
 }
@@ -2099,7 +2115,8 @@ mod tests {
     #[test]
     fn a_case_out_of_the_whole_run_runs_only_by_name() {
         let case = |name: &str, whole_run: &str| -> Case {
-            let text = format!("description = \"d\"\nkind = \"fmt\"\nroots = []\n{whole_run}");
+            let text =
+                format!("description = \"d\"\nkind = \"fmt\"\nroots = []\n{whole_run}[elixir]\nroots = []\n");
             Case { name: name.into(), ..toml::from_str(&text).unwrap() }
         };
         let usual = case("sched-share", "");

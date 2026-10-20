@@ -17,7 +17,7 @@ defmodule CompilerTest do
     {value, _binding} = Code.eval_string("a + b * c", a: 1, b: 2, c: 3)
     quoted = Code.string_to_quoted!("fn x -> x + 1 end")
 
-    {mod, mod.double([1, 2, 3]), mod.bump(struct(mod, name: "n")).count,
-     mod.describe(7), mod.describe(:x), value, Macro.to_string(quoted)}
+    {mod, mod.double([1, 2, 3]), mod.bump(struct(mod, name: "n")).count, mod.describe(7), mod.describe(:x),
+     value, Macro.to_string(quoted)}
   end
 end

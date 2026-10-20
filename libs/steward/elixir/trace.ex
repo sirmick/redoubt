@@ -105,7 +105,10 @@ defmodule Redoubt.Steward.Trace do
 
   defp split_items(<<>>, acc, "", _, _), do: Enum.reverse(acc)
   defp split_items(<<>>, acc, cur, _, _), do: Enum.reverse([cur | acc])
-  defp split_items(<<?\\, c, r::binary>>, acc, cur, d, true), do: split_items(r, acc, cur <> <<?\\, c>>, d, true)
+
+  defp split_items(<<?\\, c, r::binary>>, acc, cur, d, true),
+    do: split_items(r, acc, cur <> <<?\\, c>>, d, true)
+
   defp split_items(<<?", r::binary>>, acc, cur, d, q), do: split_items(r, acc, cur <> "\"", d, not q)
   defp split_items(<<?(, r::binary>>, acc, cur, d, false), do: split_items(r, acc, cur <> "(", d + 1, false)
   defp split_items(<<?), r::binary>>, acc, cur, d, false), do: split_items(r, acc, cur <> ")", d - 1, false)
@@ -309,7 +312,10 @@ defmodule Redoubt.Steward.Trace do
 
     c =
       Enum.map(carves, fn {account, top, subs} ->
-        ["carve account=#{account} top=#{lim(top)}\n" | Enum.map(subs, fn {d, l} -> "carve-sub #{dom(d)} #{lim(l)}\n" end)]
+        [
+          "carve account=#{account} top=#{lim(top)}\n"
+          | Enum.map(subs, fn {d, l} -> "carve-sub #{dom(d)} #{lim(l)}\n" end)
+        ]
       end)
 
     [principals, fixed, c]
@@ -322,7 +328,11 @@ defmodule Redoubt.Steward.Trace do
   defp answer({:refused, why}), do: "refused #{why}"
 
   defp answer({:contexts, list}) do
-    l = Enum.map_join(list, ",", fn {n, a, age} -> "#{qs(n)}:#{if a, do: "attached", else: "detached"}:#{age}" end)
+    l =
+      Enum.map_join(list, ",", fn {n, a, age} ->
+        "#{qs(n)}:#{if a, do: "attached", else: "detached"}:#{age}"
+      end)
+
     "contexts [#{l}]"
   end
 

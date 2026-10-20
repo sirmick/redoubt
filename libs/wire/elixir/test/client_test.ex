@@ -91,6 +91,7 @@ defmodule Redoubt.Wire.ClientTest do
        fn ->
          true = Client.launch_timeout() > Client.timeout()
          bound = Client.launch_timeout()
+
          answer(fn {:steward, [10, 8, 0, 0], <<9_000_000::little-64>>, [], ^bound} ->
            {:ok, {[0, 14, 0, 0], <<7::little-64, 4::little-16, "name">>, []}}
          end)
