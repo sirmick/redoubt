@@ -339,7 +339,7 @@ fuzz_target!(|data: &[u8]| {
     *machine() = Machine::default();
     // Badge 1, account 0, has its own caps (an override), no larger than the default
     // so the checks below hold for every bucket.
-    let overrides = [Override { badge: 1, in_flight: 0, files: 10, state: 3 }];
+    let overrides = [Override { account: 0, badge: 1, in_flight: 0, files: 10, state: 3 }];
     let admission = Admission::with_overrides(LIMITS, &overrides).unwrap();
     let mut server = NineServer::with_admission(Tree { data: Default::default() }, admission, 0);
     let mut kernel = Kernel { minted: Vec::new(), rng: 0x2545_f491_4f6c_dd1d, refuses: false };

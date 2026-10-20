@@ -71,7 +71,7 @@ max_lines = 1142
 [[crate]]
 name = "libs/rt"
 paths = ["libs/rt/src"]
-max_lines = 4106
+max_lines = 4110
 
 [[crate]]
 name = "libs/wire"
@@ -163,7 +163,7 @@ max_lines = 1590
 [[crate]]
 name = "servers/ipd"
 paths = ["servers/ipd/src"]
-max_lines = 2926
+max_lines = 2978
 
 [[crate]]
 name = "servers/init"

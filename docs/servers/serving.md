@@ -37,7 +37,7 @@ loop of its own, closing a send's handles with `close_delivery`: `consoled`, `ne
 
 ### `admit`
 
-<details><summary>Status: built · tested (16)</summary>
+<details><summary>Status: built · tested (17)</summary>
 
 - host:redoubt-rt::the_key_is_the_account_and_the_label_set
 - host:redoubt-rt::limits_are_per_key_and_per_resource
@@ -48,6 +48,7 @@ loop of its own, closing a send's handles with `close_delivery`: `consoled`, `ne
 - host:redoubt-rt::caps_fit_the_budget
 - host:redoubt-rt::released_keys_leave_the_table
 - host:redoubt-rt::an_override_is_its_root_badge_s_alone
+- host:redoubt-rt::an_account_override_is_its_unlabelled_bucket_s_alone
 - host:redoubt-rt::overrides_are_sized_and_checked
 - host:redoubt-rt::the_worst_order_never_passes_the_headroom
 - host:redoubt-rt::fits_counts_overrides_at_their_caps
@@ -136,9 +137,14 @@ open call, and each has its own share ([R26](#r26-admission-fairness)).
   manifest is the one source, sizing the count and the budget together by the entry rule
   ([walfsd](walfsd.md#serving)), and a larger manifest meets no wall in the code. `consoled`
   checks a constant of its own in the budget's place ([consoled](consoled.md#devcons)).
-- **Overrides.** `Admission::with_overrides` gives named account-0 root badges (non-zero, below
-  the minted range, each named once) caps of their own. The worst case, each override slot at the
-  larger of its cap and the default, must still leave the headroom.
+- **Overrides.** `Admission::with_overrides` gives named buckets caps of their own, each named
+  once and keyed as `AdmitKey` is (`Override::covers`): an account-0 root badge's (non-zero, below
+  the minted range), so a daemon's capacity is its manifest's per daemon; or a non-zero account's
+  unlabelled bucket, so a person's capacity is the manifest's per account (`ipd`'s `account=`,
+  [ipd](ipd.md#sizing)), whatever badges the account's sessions call through. A labelled bucket
+  of the account keeps the defaults. The fair share within an overridden bucket is the same rule.
+  The worst case, each override slot at the larger of its cap and the default, must still leave
+  the headroom.
 - **Refusal.** `admit` refuses when the bucket or the share is at its cap, when a new bucket is
   needed and `buckets` already hold something, or when there is no memory to track one more.
   Tables grow with `try_reserve`, and room for both entries is made before either changes, so a
@@ -681,12 +687,13 @@ holder's labels.
 
 ### R26 (admission fairness)
 
-<details><summary>Status: built · partly tested: the rule is attacked in host tests with the runtime's fake kernel, and three boots flood a real walfsd while a second bucket keeps its share, one holding handles to its bucket's share while another account saves, and sixteen agents of one account load code at once with every connection its root and working share · tested (23)</summary>
+<details><summary>Status: built · partly tested: the rule is attacked in host tests with the runtime's fake kernel, and boots flood a real walfsd while a second bucket keeps its share, one holding handles to its bucket's share while another account saves, sixteen agents of one account load code at once with every connection its root and working share, and a session opens and closes sockets at `ipd` to its share of its account's override and is refused the next · tested (25)</summary>
 
 - bench:walfsd-flood-turn
 - bench:vault-flood-turn
 - bench:walfsd-pools
 - bench:lease-code-load
+- bench:session-tcp-churn
 - host:redoubt-rt::the_key_is_the_account_and_the_label_set
 - host:redoubt-rt::an_agent_flooding_a_bucket_leaves_its_sponsor_a_share
 - host:redoubt-rt::a_root_fid_is_a_fixed_cost_outside_the_share
@@ -706,6 +713,7 @@ holder's labels.
 - host:redoubt-consoled::a_console_with_no_device_does_not_start
 - host:redoubt-keyd::bad_key_arguments_stop_keyd_starting
 - host:redoubt-ipd::every_scope_and_the_milestone_parse
+- host:redoubt-ipd::a_heap_that_cannot_hold_every_socket_stops_ipd
 
 </details>
 
@@ -733,6 +741,9 @@ its own resource, `Requests`, until its answer is delivered ([R77](#r77-multiple
 How many buckets a shared server has is `buckets=N` in its startup block, parsed
 once by the serving library with no default: a server not told, or told a count outside 1 to 32
 or its budget, does not start, so no count is fixed in code where the manifest cannot follow it.
+What a server holds for its buckets must fit where it lives: `ipd`'s sockets' buffers are its
+heap's, and it does not start with a heap cap that cannot hold every socket its buckets may charge
+([ipd](ipd.md#sizing)), since a socket past it would stop `ipd` for every client.
 
 ### R27 (badge allocation)
 

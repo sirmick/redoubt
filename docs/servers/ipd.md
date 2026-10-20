@@ -219,12 +219,18 @@ through the churn, then Alice's echo on the same connection.
 
 ### Sizing
 
-<details><summary>Status: built · tested (13)</summary>
+<details><summary>Status: built · tested (20)</summary>
 
 - host:redoubt-ipd::every_scope_and_the_milestone_parse
 - host:redoubt-ipd::anything_else_stops_ipd
+- host:redoubt-ipd::an_account_override_parses_and_is_refused_malformed_zero_twice_or_past_eight
 - host:redoubt-ipd::every_scope_and_the_milestone_fit
+- host:redoubt-ipd::the_images_account_override_fits
 - host:redoubt-ipd::the_worst_case_must_fit_or_ipd_does_not_start
+- host:redoubt-ipd::a_heap_that_cannot_hold_every_socket_stops_ipd
+- host:redoubt-ipd::a_heap_cap_short_of_its_sockets_stops_ipd_before_it_serves
+- host:redoubt-ipd::a_socket_the_heap_cannot_hold_is_refused_and_noted
+- host:redoubt-ipd::a_full_table_refuses_a_listen_or_a_socket
 - host:testbench::every_manifest_entry_holds_its_buckets_at_their_caps
 - host:redoubt-ipd::clone_stops_at_the_buckets_socket_cap
 - host:redoubt-ipd::sockets_stop_at_the_buckets_cap
@@ -233,6 +239,7 @@ through the churn, then Alice's echo on the same connection.
 - host:redoubt-ipd::a_lingering_socket_is_bounded
 - host:redoubt-ipd::a_disconnect_aborts_and_returns_the_charges
 - host:redoubt-ipd::a_half_open_connection_gives_its_slot_back
+- bench:session-tcp-churn
 - fuzz:redoubt-ipd/args
 
 </details>
@@ -249,10 +256,12 @@ it serves:
 - `buckets=N`: admission buckets, 1 to 32, required, parsed by the serving library as every
   shared server's is ([init](init.md#the-boot-manifest));
 - `limits=BADGE:INFLIGHT:STATE:SOCKETS`: caps for one scope badge's bucket in place of the defaults,
-  at most 8 (an account-0 override, [serving](serving.md#admit)).
+  at most 8 (an account-0 override, [serving](serving.md#admit));
+- `account=ACCOUNT:INFLIGHT:STATE:SOCKETS`: the same caps for one non-zero account's unlabelled
+  bucket, at most 8 (an account override, [serving](serving.md#admit)).
 
 Numbers are decimal without leading zeros; badges are non-zero, below `FIRST_MINTED_BADGE`, and
-each appears once.
+each appears once; an `account=` account is non-zero and appears once.
 
 **Admission.** Fids, minted connections, parked calls and sockets all go through the skeleton's
 admission ([R26 (admission fairness)](serving.md#r26-admission-fairness)): by default 5 parked
@@ -262,13 +271,54 @@ reserved around each request that may make one and held until the socket is gone
 included, so one badge
 cannot take all its bucket's sockets. A connection granted for a session is admitted in the
 session's account from its first request ([serving](serving.md#admit)); that move comes before
-the request's reservation, which would otherwise fill the bucket it moves into. Every bucket at
-its cap must fit the budget `ipd`'s manifest entry gives, the entry's pages less its heap cap and
-stack, by the entry rule ([walfsd](walfsd.md#serving)), or `ipd` does not start: a default bucket
-at its caps is 712,704 bytes, the image's seven 4,988,928, 1,218 pages, which with the heap cap's
-74 (the stack's tables and every socket's buffers live there) and the stack's 128 round to 1,536 of
-the image's 4,096; the entry leaves 3,894 pages of budget, which holds the overrides a manifest may
-add (`sshd`'s and the steward's beside five defaults are 6,668,288).
+the request's reservation, which would otherwise fill the bucket it moves into.
+
+**A person's sockets are the manifest's.** `account=` gives one account's unlabelled bucket caps
+of its own, as `limits=` gives a daemon's root badge its own. A session's `/net` is minted by the
+steward's grant and admitted in its account's bucket from its first request, so the account's
+sessions divide that bucket by the fair share, the number in `ipd`'s arguments alone. A labelled
+bucket of the account keeps the defaults, since `ipd` refuses labelled callers
+([R60 (a sink refuses labels)](#r60-a-sink-refuses-labels)) and it holds no socket, and an agent
+never holds one. The image gives alice's account `account=1001:5:4:32` and bob none: her bucket
+has 4 + 32 = 36 `State` units, and its fids are `files_for(32)`, 2 × 32 + 8 = 72, held to the
+skeleton's 64 a connection. So the fids bind her live sockets below 32 (a `ctl` and a `data` fid
+each, beside her directories), while a closed socket in TIME-WAIT holds its unit and no fid, which
+is the churn the override is for. Each session's `/net` connection is one unit in a share of its
+own, so her SSH session beside her console session has 36 / 3 = 12 units, its connection and 11
+sockets; at the defaults it is 12 / 3 = 4, so 3 sockets (`session-tcp-churn` opens and closes 11 in
+succession and is refused the twelfth while they linger).
+
+**Each socket is counted once, where it lives.** A socket's buffers are two 8 KiB heap blocks of
+two pages each, with smoltcp's state for it (432 bytes on 64-bit): `SOCKET_BYTES`, 17,408 bytes,
+4.25 pages, is what a socket costs the heap. So the heap cap holds a base, `HEAP_BASE_PAGES` = 74,
+twice `ipd`'s largest measured heap peak apart from its socket tables, 37 pages
+([the memory budget](../testbench.md#the-memory-budget)), and every socket that can exist at once,
+`max_sockets` × `SOCKET_BYTES`. The budget, the entry's
+pages less its heap cap and stack, holds every bucket at its caps by the entry rule
+([walfsd](walfsd.md#serving)), a `State` unit at a connection's 512 bytes, the buffers being the
+heap's. `ipd` does not start unless both hold; with no heap cap, the budget holds the sockets'
+heap beside the buckets. In the image: a default bucket at its caps is 509,952 bytes (5 parked
+calls of 64 KiB, 24 fids and 12 units of 512, 128 multiplexed requests of 256 and their 32 pages),
+alice's 40 fids and 24 units more, 542,720, the seven together 3,602,432, 880 pages. Its sockets
+at their worst are 6 × 12 + 36 = 108, so the heap cap is 74 + 108 × 4.25 = 533 pages, and with the
+stack's 128 the entry needs 1,541 of its 4,096 (`sshd`'s and the steward's overrides beside five
+defaults need 4,775,936 bytes of budget). A heap short of its sockets would fail an allocation in
+the middle of a request, a panic, and one person could stop `ipd` for everyone. smoltcp's socket
+set and `ipd`'s socket table are sized at start, so neither grows while serving: the set for every
+socket, a slot of 432 bytes on 64-bit, and the table for twice as many entries of 240, a socket's
+own and listeners', since a listener whose backlog was accepted while its bucket was full keeps
+its entry and no socket; past that a socket or a `listen` is refused `too_many`. A slot and two
+entries are 912 of the 1,024 bytes `SOCKET_BYTES` allows beside a socket's buffers, a bound the
+build asserts on each width; the image's 108 sockets' tables are 98,496 bytes, held from the
+start. The bench
+holds every manifest's `ipd` entry to the rule
+(`every_manifest_entry_holds_its_buckets_at_their_caps`), and `ipd` refuses at start.
+
+**A backstop, not the policy.** Should a socket's buffers ever fail to fit, the socket is refused
+`too_many`, a `listen` whose backlog cannot be made changes nothing, and `ipd` says once
+`ipd: an invariant broke: the heap could not hold a socket's buffers`. The line is reachable only
+at the records' residual ([residual risks](#residual-risks)), which no case reaches, so every boot
+case forbids it ([the test bench](../testbench.md)).
 
 ### Sequence numbers and the link
 
@@ -418,9 +468,15 @@ tests run in an unedited copy outside the tree.
 
 ## Failure and restart
 
-Status: built · tested: host:redoubt-ipd::no_link_is_unreachable_until_it_comes_back, host:redoubt-ipd::anything_else_stops_ipd, host:redoubt-ipd::a_disconnect_aborts_and_returns_the_charges
+Status: built · tested: host:redoubt-ipd::no_link_is_unreachable_until_it_comes_back, host:redoubt-ipd::anything_else_stops_ipd, host:redoubt-ipd::a_heap_cap_short_of_its_sockets_stops_ipd_before_it_serves, host:redoubt-ipd::a_disconnect_aborts_and_returns_the_charges
 
-- **Bad arguments, or limits that do not fit its budget:** `ipd` exits before serving.
+- **Bad arguments, limits that do not fit its budget, or a heap cap that does not hold every
+  socket's buffers ([sizing](#sizing)):** `ipd` exits before serving.
+- **A socket's buffers do not fit the heap:** reachable only at the records' residual
+  ([residual risks](#residual-risks)); should it happen, the
+  socket is refused `too_many` and `ipd` says once that an invariant broke. The decision is a
+  backstop, not a panic, because a failed allocation in a shared server would stop it for every
+  client, and the line makes the broken invariant a failure every boot case sees.
 - **`netd` fails:** `ipd` answers `unreachable` and asks `netd` again with backoff; it stays up.
 - **A client disconnects:** every socket of the connection is aborted and its charges returned.
 - **`ipd` restarts:** every socket is gone; clients ask for fresh connections
@@ -441,6 +497,17 @@ Status: built · tested: host:redoubt-ipd::no_link_is_unreachable_until_it_comes
 - **Connection rates are observable.** Unlabelled principals sharing one `ipd` can see each other's
   connection rate in admission-slot occupancy and CPU and queue timing; no label boundary is crossed,
   since labelled callers are refused.
+- **The skeleton's records are costed in the budget, and live in the heap.** Fids, minted
+  connections and multiplexed requests are records on `ipd`'s heap, while sizing costs them in the
+  budget's term (512, 512 and 256 bytes), not the heap's. At those costs the image's buckets at
+  every cap hold 391,168 bytes of them, 95.5 pages (a default bucket's 24 fids, 12 units and 128
+  requests are 51,200 bytes, alice's 64, 36 and 128 are 83,968), against the 37 pages the base
+  leaves above `ipd`'s measured peak. Every such record grows its table fallibly, so a heap they
+  fill refuses the request `no_memory`, a refusal of the moment, never a panic. It is one heap, so
+  records past that margin, several buckets at their request caps together and never one person's
+  alone, can also leave a socket's buffers no room: the socket is refused `too_many` and `ipd`
+  says its invariant line, which is reachable only here. Every boot case still forbids the line,
+  since none reaches this residual. Counting the records in the heap term too is the follow-up.
 - **A shared `ipd` is shared state.** Its clients share one stack's memory, timers and link; where
   that matters, each trust domain gets its own `ipd`.
 - **smoltcp is vendored code.** It is read and built from the tree, not fetched, but a bug in it is a

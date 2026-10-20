@@ -225,8 +225,10 @@ fn boot(buckets: u32) -> Net {
     let netd_for_ipd = f.grant(netd, netd_ep, ipd, NETD_CLIENT);
     let ingress = f.grant(ipd, ep, netd, INGRESS);
     let mut b = StartupBuilder::new(ep.index().max(netd_for_ipd.index()));
-    // The image's entry, as `init` writes it: 4 096 pages with a heap cap of 74.
-    b.handle(ipd_bin::ENDPOINT, ep).handle(ipd_bin::NETD, netd_for_ipd).budget_pages(4096).heap_pages(74);
+    // An entry as `init` writes it: 4 096 pages, as the image's, with the heap cap the rule
+    // derives for these buckets' sockets, 12 each at the defaults (servers/ipd.md, "Sizing").
+    let heap = redoubt_ipd::sizing::heap_pages_for(u64::from(buckets) * 12) as u32;
+    b.handle(ipd_bin::ENDPOINT, ep).handle(ipd_bin::NETD, netd_for_ipd).budget_pages(4096).heap_pages(heap);
     for a in args(buckets) {
         b.arg(&a);
     }
@@ -241,6 +243,34 @@ fn boot(buckets: u32) -> Net {
     let (p, s) = (peer.clone(), stop.clone());
     let wire = f.run(netd, move || carry(Endpoint::from_handle(ingress), rx, p, s));
     Net { ipd, ep, netd, netd_ep, _ingress: ingress, thread, stop, peer, wire, netd_thread, transmitted }
+}
+
+/// servers/ipd.md, "Sizing": a heap cap that cannot hold every socket's buffers beside the base
+/// stops `ipd` before it serves, `BAD_ARGS`: the old 74, and the derived cap less a page.
+#[test]
+fn a_heap_cap_short_of_its_sockets_stops_ipd_before_it_serves() {
+    let f = fake();
+    let least = redoubt_ipd::sizing::heap_pages_for(6 * 12) as u32;
+    for heap in [74, least - 1] {
+        let ipd = f.process(0, &[]);
+        let ep = f.endpoint(ipd);
+        let netd = f.process(0, &[]);
+        let netd_ep = f.endpoint(netd);
+        let netd_for_ipd = f.grant(netd, netd_ep, ipd, NETD_CLIENT);
+        let mut b = StartupBuilder::new(ep.index().max(netd_for_ipd.index()));
+        b.handle(ipd_bin::ENDPOINT, ep)
+            .handle(ipd_bin::NETD, netd_for_ipd)
+            .budget_pages(4096)
+            .heap_pages(heap);
+        for a in args(6) {
+            b.arg(&a);
+        }
+        let block = b.finish().unwrap();
+        let code = f.run(ipd, move || ipd_bin::serve(&Startup::parse(&block).unwrap())).join().unwrap();
+        assert_eq!(code, ipd_bin::BAD_ARGS, "a heap cap of {heap} pages");
+        f.destroy(ipd, ep);
+        f.destroy(netd, netd_ep);
+    }
 }
 
 impl Net {

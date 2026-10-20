@@ -33,10 +33,14 @@ pub const NO_ENDPOINT: u32 = 2;
 /// The startup block has no `netd` handle.
 pub const NO_NETD: u32 = 5;
 /// The arguments are not ones `ipd` will run with ([`args::parse`], [`args::Config::sizing`]),
-/// or the startup block names no budget for them to fit.
+/// or the startup block names no budget, or a heap cap that cannot hold their sockets.
 pub const BAD_ARGS: u32 = 6;
 /// The kernel would give no random word for the minted badges.
 pub const NO_RESOURCES: u32 = 7;
+
+/// Said once if a socket's buffers ever fail to fit the heap: an invariant broken, reachable only
+/// at the records' residual (servers/ipd.md, "Residual risks"), the socket refused `too_many`.
+pub const HEAP_SHORT: &str = "ipd: an invariant broke: the heap could not hold a socket's buffers\n";
 
 /// The startup-block names of `ipd`'s handles (servers/init.md, "The startup block").
 pub const ENDPOINT: &str = "ipd";
@@ -62,7 +66,8 @@ pub fn serve(startup: &Startup) -> u32 {
     let Some(endpoint) = startup.handle(ENDPOINT).map(Endpoint::from_handle) else { return NO_ENDPOINT };
     let Ok(config) = args::parse(startup.args()) else { return BAD_ARGS };
     let Some(budget) = redoubt_rt::server::budget(startup) else { return BAD_ARGS };
-    let Ok(sizing) = config.sizing(budget) else { return BAD_ARGS };
+    let heap_pages = startup.heap_pages().map_or(0, |pages| pages as u64);
+    let Ok(sizing) = config.sizing(budget, heap_pages) else { return BAD_ARGS };
     let Some(netd) = startup.handle(NETD).map(Endpoint::from_handle) else { return NO_NETD };
     let Ok(random) = redoubt_rt::handle::random_u64() else { return NO_RESOURCES };
 
@@ -73,7 +78,12 @@ pub fn serve(startup: &Startup) -> u32 {
 
     let (mut next_info, mut backoff) = (0, INFO_BACKOFF);
     let mut poll_now = false;
+    let mut said_heap_short = false;
     loop {
+        if ipd.nine.fs.stack.take_heap_short() && !said_heap_short {
+            redoubt_rt::start::say(startup, HEAP_SHORT);
+            said_heap_short = true;
+        }
         let t = now();
         ipd.expire(t);
         // No link: ask `netd` again, with backoff. `ipd` never exits on a link fault.

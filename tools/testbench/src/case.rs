@@ -6,8 +6,11 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail, ensure};
 use serde::Deserialize;
 
-/// Output that fails any boot test, on top of the case's own `forbid` list.
-pub const ALWAYS_FORBIDDEN: &[&str] = &["PANIC", "TEST FAILED", "WARNING: INSECURE"];
+/// Output that fails any boot test, on top of the case's own `forbid` list. `ipd`'s line for a
+/// socket its heap could not hold is one: reachable only at a residual of its sizing that no case
+/// reaches (servers/ipd.md, "Sizing").
+pub const ALWAYS_FORBIDDEN: &[&str] =
+    &["PANIC", "TEST FAILED", "WARNING: INSECURE", "ipd: an invariant broke"];
 
 /// What a test program's verdict line says, after its name.
 pub const PASSED: &str = "TEST PASSED";
@@ -1984,7 +1987,7 @@ mod tests {
                     )
                     .is_ok(),
                     Some("ipd") => match redoubt_ipd::args::parse(args.iter().copied()) {
-                        Ok(config) => config.sizing(u64::MAX).is_ok(),
+                        Ok(config) => config.sizing(u64::MAX, 0).is_ok(),
                         Err(_) => continue,
                     },
                     _ => continue,
@@ -2055,7 +2058,8 @@ mod tests {
     /// what its `buckets=N` at their caps need, plus its heap cap and the stack's bound; a
     /// manifest sizes by the rule, never by what its case happens to use. The servers whose
     /// programs derive their budget from the block: `erofsd`, `bootfsd`, `walfsd`, `littlefsd`,
-    /// `keyd` and `ipd`.
+    /// `keyd` and `ipd`; `ipd`'s heap cap holds every socket's buffers besides
+    /// (servers/ipd.md, "Sizing").
     #[test]
     fn every_manifest_entry_holds_its_buckets_at_their_caps() {
         use redoubt_rt::server::{LAUNCHED_STACK_PAGES, Limits, buckets};
@@ -2087,9 +2091,22 @@ mod tests {
                     Some("littlefsd") => need(redoubt_littlefsd::limits(count), &redoubt_littlefsd::COST),
                     Some("keyd") => need(redoubt_keyd::limits(count), &redoubt_keyd::COST),
                     // `ipd` sizes from its overrides too; a budget that is never the bound gives
-                    // the worst case's cost.
+                    // the worst case's cost. Its sockets' buffers are the heap's: a heap cap holds
+                    // them, and an uncapped heap's are the budget's beside the buckets.
                     Some("ipd") => match redoubt_ipd::args::parse(args.iter().copied()) {
-                        Ok(config) => config.sizing(u64::MAX).unwrap().need,
+                        Ok(config) => {
+                            let sizing = config.sizing(u64::MAX, 0).unwrap();
+                            let heap = server.get("heap_pages").map_or(0, number);
+                            assert!(
+                                sizing.heap_holds(heap),
+                                "{path:?} {}: a heap cap of {heap} pages holds fewer than its {} sockets' \
+                                 buffers beside the base: at least {}",
+                                server["name"],
+                                sizing.max_sockets,
+                                sizing.heap_pages
+                            );
+                            sizing.budget_need(heap)
+                        }
                         Err(_) => continue,
                     },
                     _ => continue,

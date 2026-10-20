@@ -24,7 +24,7 @@ use alloc::vec::Vec;
 
 use redoubt_rt::ipc::Caller;
 use redoubt_rt::server::ninep::{DMDIR, FileServer, FileStat, NineError, QTDIR, Qid, Read, Write, mode};
-use redoubt_rt::server::{Admission, AdmitKey, Resource};
+use redoubt_rt::server::{Admission, AdmitKey, Override, Resource};
 use redoubt_rt::wire::proto::net_ctl;
 
 use crate::link::Netif;
@@ -116,24 +116,20 @@ struct Minted {
     group: u64,
 }
 
-/// The sockets one bucket may hold: the default, or a root badge's override (account 0 only). Set
-/// to the bucket's `State` units (`crate::sizing`), in which sockets are paid; the admission, with
-/// its shares, is what binds, and this count only agrees with it.
+/// The sockets one bucket may hold: the default, or the `State` cap of the admission's override
+/// for it (an account-0 root badge's, or an account's unlabelled bucket's). Set to the bucket's
+/// `State` units (`crate::sizing`), in which sockets are paid; the admission, with its shares, is
+/// what binds, and this count only agrees with it.
 #[derive(Clone, Debug, Default)]
 pub struct SocketCaps {
     pub default: usize,
-    pub overrides: Vec<(u64, usize)>,
+    pub overrides: Vec<Override>,
 }
 
 impl SocketCaps {
-    /// The cap of the bucket `key`: an account-0 root badge's override, or the default.
+    /// The cap of the bucket `key`: its override's `State` cap, or the default.
     pub fn of(&self, key: AdmitKey) -> usize {
-        if let Some(root) = key.root() {
-            if let Some((_, cap)) = self.overrides.iter().find(|(badge, _)| *badge == root) {
-                return *cap;
-            }
-        }
-        self.default
+        self.overrides.iter().find(|o| o.covers(&key)).map_or(self.default, |o| o.state as usize)
     }
 }
 

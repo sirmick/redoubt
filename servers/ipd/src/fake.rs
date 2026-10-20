@@ -316,20 +316,21 @@ impl World {
                 .unwrap(),
             ),
         ];
-        // As `crate::sizing` sets them: a bucket's `State` units (4 + 8, and the listener's 0 + 20).
-        let caps = SocketCaps { default: 12, overrides: vec![(LISTENER, 20)] };
-        let mut fs = NetFs::new(stack, &roots, caps);
-        fs.now = now;
         // As the program sizes itself (`crate::sizing`): sockets are `State` units, so a bucket
-        // holds 4 connections and 8 sockets' worth, and the listener badge 20 sockets'.
+        // holds 4 connections and 8 sockets' worth, and the listener badge 20 sockets'; the
+        // stack's caps are those units (4 + 8, and the listener's 0 + 20).
         let state = crate::sizing::state_for(4, 8);
         let limits = Limits { buckets: 8, in_flight: 5, files: 24, state, requests: 0, pages: 0 };
         let listener = Override {
+            account: 0,
             badge: LISTENER,
             in_flight: 5,
             files: crate::sizing::files_for(20),
             state: crate::sizing::state_for(0, 20),
         };
+        let caps = SocketCaps { default: state as usize, overrides: vec![listener] };
+        let mut fs = NetFs::new(stack, &roots, caps);
+        fs.now = now;
         let admission = Admission::with_overrides(limits, &[listener]).unwrap();
         let nine = NineServer::with_admission(fs, admission, 0);
         World { nine, wire, peer: Peer::new(now), now, seeds, fail_random: fail, rng }

@@ -534,3 +534,31 @@ fn syn_to(port: u16) -> smoltcp::wire::TcpRepr<'static> {
         payload: &[],
     }
 }
+
+/// A listener whose backlog was accepted while its bucket was full keeps its entry and no socket,
+/// so listeners can outnumber sockets: the table is held to twice the sockets (4 here, for 2), and a
+/// listen or a socket past it is refused `too_many`, never a table that grows.
+#[test]
+fn a_full_table_refuses_a_listen_or_a_socket() {
+    let mut w = World::unmetered(2);
+    let who = owner(&caller(22, 0, &[]));
+    for (i, port) in [22u16, 23, 24].into_iter().enumerate() {
+        let n = w.nine.fs.stack.allocate(who, 22, 1).unwrap();
+        w.nine.fs.stack.listen(who, n, &listen_scope(22, 25), port, 1, 1).unwrap();
+        let _peer = w.peer.connect(GATEWAY, 41000 + i as u16, port);
+        w.run_for(200_000, 10_000);
+        // Accepted at a cap of 1: the backlog cannot be refilled, so the listener has none.
+        let Ok(Ready::Now((Status::Listening, m))) = w.nine.fs.stack.status(who, n, 1) else {
+            panic!("no accept on {port}")
+        };
+        w.nine.fs.stack.release(who, m, false, w.now).unwrap();
+        w.run_for(200_000, 10_000);
+        assert_eq!(w.nine.fs.stack.live(), 0, "the accepted socket is gone; its listener stays");
+    }
+    // Three listeners hold three entries: a socket takes the fourth, and its listen, which would
+    // need a fifth, is refused; with the table full so is another socket.
+    let n = w.nine.fs.stack.allocate(who, 22, 1).unwrap();
+    assert_eq!(w.nine.fs.stack.listen(who, n, &listen_scope(22, 25), 25, 1, 1), Err(CtlError::TooMany));
+    w.nine.fs.stack.release(who, n, false, w.now).unwrap();
+    assert_eq!(w.nine.fs.stack.allocate(who, 22, 2), Err(CtlError::TooMany));
+}
