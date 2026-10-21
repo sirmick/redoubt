@@ -1,0 +1,377 @@
+1:  abdf96713 ! 1:  14ce70dca blkd: say once why the device is marked broken
+    @@ Commit message
+         and says it once: "blkd: the device is marked broken: <request>: <why>".
+         The line follows the reply, so no client waits on it.
+     
+    -    Size budget: servers/blkd: the broken line, what broke the device kept as a Broke with its request, the Lie a protocol violation names, and the wait and used ring a timeout reports (69 lines)
+    +    Size budget: servers/blkd: the broken line, what broke the device kept as a Broke with its request, the Lie a protocol violation names, and the wait and used ring a timeout reports, its span only its own (73 lines)
+     
+         Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+     
+    @@ servers/blkd/src/disk.rs: impl<T: Transport> Disk<T> {
+      
+     -    /// Marks the device broken and returns the error that did it.
+     +    /// Marks the device broken and returns the error that did it, keeping why for
+    -+    /// [`Disk::take_broke`]. A timeout costs one more read of the clock and of the used ring.
+    ++    /// [`Disk::take_broke`]. A timeout costs one more read of the clock and of the used ring; its
+    ++    /// span is the outstanding request's wait, and a timeout with none (only the queue's wait times
+    ++    /// out today) says no span rather than another request's.
+          fn break_on(&mut self, error: DeviceError) -> DeviceError {
+     -        self.broken = true;
+     +        if self.broke.is_none() {
+    -+            let waited = (error == DeviceError::Timeout).then(|| {
+    -+                let us = self.transport.now_us().saturating_sub(self.queue.waited_from());
+    ++            let from = self.queue.waited_from().filter(|_| error == DeviceError::Timeout);
+    ++            debug_assert!(error != DeviceError::Timeout || from.is_some(), "a timeout with no wait");
+    ++            let waited = from.map(|from| {
+    ++                let us = self.transport.now_us().saturating_sub(from);
+     +                (us, self.queue.moved(&self.transport).unwrap_or(false))
+     +            });
+     +            let (kind, sector, sectors) = self.request;
+    @@ servers/blkd/src/queue.rs: pub struct Queue {
+          next_avail: u16,
+          /// The value `used.idx` must show when the next request completes.
+          next_used: u16,
+    -+    /// The clock when the last request began waiting for its completion, for the line a timeout
+    -+    /// says.
+    -+    waited_from: u64,
+    ++    /// The clock when the outstanding request began waiting for its completion, for the line a
+    ++    /// timeout says: `None` once a completion is accepted, so no later error borrows its span.
+    ++    waited_from: Option<u64>,
+      }
+      
+      impl Queue {
+     -    pub const fn new() -> Queue { Queue { next_avail: 0, next_used: 0 } }
+    -+    pub const fn new() -> Queue { Queue { next_avail: 0, next_used: 0, waited_from: 0 } }
+    ++    pub const fn new() -> Queue { Queue { next_avail: 0, next_used: 0, waited_from: None } }
+     +
+    -+    /// When the last request began waiting for its completion ([`Transport::now_us`]).
+    -+    pub fn waited_from(&self) -> u64 { self.waited_from }
+    ++    /// When the outstanding request began waiting for its completion ([`Transport::now_us`]), if
+    ++    /// one is waiting or was given up on.
+    ++    pub fn waited_from(&self) -> Option<u64> { self.waited_from }
+     +
+     +    /// Whether the used ring has moved past the last completion this driver accepted: after a
+     +    /// timeout, whether the device did complete and the wait ended first, or never completed.
+    @@ servers/blkd/src/queue.rs: impl Queue {
+          /// that arrives afterwards is read by nobody.
+          pub fn complete(&mut self, t: &impl Transport, writable: u32) -> Result<u32, DeviceError> {
+     -        let deadline = t.now_us().saturating_add(REQUEST_TIMEOUT_US);
+    -+        self.waited_from = t.now_us();
+    -+        let deadline = self.waited_from.saturating_add(REQUEST_TIMEOUT_US);
+    ++        let from = t.now_us();
+    ++        self.waited_from = Some(from);
+    ++        let deadline = from.saturating_add(REQUEST_TIMEOUT_US);
+              loop {
+                  // The interrupt may have arrived (and been consumed) before this driver got here, so
+                  // the ring is looked at first, and again after every wake.
+    @@ servers/blkd/src/queue.rs: impl Queue {
+     +            return Err(DeviceError::Io(Lie::UsedEntry { id, len }));
+              }
+              self.next_used = idx;
+    ++        self.waited_from = None;
+              Ok(len)
+    +     }
+    + }
+     
+      ## servers/blkd/src/server.rs ##
+     @@ servers/blkd/src/server.rs: use redoubt_rt::wire::proto::blkd::{
+    @@ tests/size-budget.toml: max_lines = 780
+      name = "servers/blkd"
+      paths = ["servers/blkd/src"]
+     -max_lines = 1656
+    -+max_lines = 1725
+    ++max_lines = 1729
+      
+      [[crate]]
+      # Includes the test-only feature restart-probe (src/restart_probe.rs and its two uses), off
+2:  ebb9720f0 = 2:  2fec5d97d walfsd: say why a volume does not mount
+3:  417d9b226 ! 3:  ecaeae89f testbench: a case's disks cost the host no fsync
+    @@ Commit message
+         own load (2.8 %) it failed none of 20. The host's writeback is the
+         bench's, not the box's.
+     
+    -    A case's writable disks are now attached cache=unsafe. A case's disk is
+    -    made afresh for each boot, or kept for its second, and the guest's writes
+    -    reach the host's page cache in order either way, so a QEMU exit, all a
+    -    case's power loss is, loses nothing. ./launch keeps QEMU's default: its
+    -    disks and its host are the user's. blkd's page states that on a
+    -    virtualised disk its bound measures the host too, and beamlet-files
+    -    forbids blkd's broken line, so such a failure names its cause.
+    +    A case's writable disks are now attached cache=unsafe, launch cases'
+    +    included. A case's disk is made afresh for each boot, or kept for its
+    +    second, and the guest's writes reach the host's page cache in order
+    +    either way, so a QEMU exit, all a case's power loss is, loses nothing.
+    +    ./launch keeps QEMU's default: its disks and its host are the user's. So
+    +    a launch case boots ./launch's command line but for that one flag, which
+    +    the page and each launch case state, and a host test holds the two
+    +    command lines to it.
+    +
+    +    blkd's page states that on a virtualised disk its bound measures the
+    +    host too, and beamlet-files forbids blkd's broken line, so such a failure
+    +    names its cause. The flood cases' 4,000 ms bounds were derived from
+    +    worsts measured with the disk flushing to the host; they say so, and are
+    +    re-measured at the next train, unmoved until then.
+     
+         Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+     
+    @@ docs/servers/blkd.md: Status: built · partly tested: the exits without a device
+        that tears differently honour that.
+     
+      ## docs/testbench.md ##
+    +@@ docs/testbench.md: expect = ['regex 1', 'regex 2']   # each must match a console line, in this orde
+    + forbid = ['regex']                # must never match
+    + poweroff = false             # true: the guest must power off after the last expect
+    + reporter = "checker"         # the program whose done() is the verdict (rule F)
+    +-launch = false               # true: boot `./launch --system`'s own QEMU command line (launch-*)
+    ++launch = false               # true: boot `./launch --system`'s QEMU command line (launch-*), its disks cache=unsafe
+    + post_check = "sched_oracle"  # a host-side check of the console after a passing boot
+    + 
+    + [[input]]                    # typed on the console once a line matches `after`
+     @@ docs/testbench.md: a program reads it again through `/boot` once the manifest's `public` list names
+      
+      ### Disks and network cards
+      
+     -<details><summary>Status: built · tested (38)</summary>
+    -+<details><summary>Status: built · tested (39)</summary>
+    ++<details><summary>Status: built · tested (40)</summary>
+      
+      - bench:bench-virtio-devices
+      - bench:bench-virtio-legacy-off
+    @@ docs/testbench.md: a program reads it again through `/boot` once the manifest's
+      - host:testbench::a_kept_disk_of_another_layout_is_refused
+      - host:testbench::a_kept_disk_is_held_to_its_recipe_s_manifest
+     +- host:testbench::a_cases_disks_cost_the_host_no_fsync_and_launchs_keep_the_default
+    ++- host:testbench::a_launch_case_differs_from_launch_only_in_its_disks_cache
+      
+      </details>
+      
+    @@ docs/testbench.md: boot and reads it in the next, as `./launch --system --keep-d
+     +to 78 %), `beamlet-files` failed 3 of 10 boots on each width, `blkd` marking its device broken on
+     +a flush with no completion in 10.0 s, its `REQUEST_TIMEOUT_US`
+     +([blkd](servers/blkd.md#device-lies)); under the bench's own load (2.8 %) it failed none of 20. So
+    -+the host's writeback is the bench's, not the box's, and never reaches that bound. `./launch` keeps
+    -+QEMU's default: its disks and its host are the user's, and how it should flush them is not
+    -+decided here.
+    ++the host's writeback is the bench's, not the box's, and never reaches that bound. A `launch = true`
+    ++case's disks are the bench's too, so they are attached the same way, the one flag in which its
+    ++command line differs from `./launch`'s. `./launch` keeps QEMU's default: its disks and its host are
+    ++the user's, and how it should flush them is not decided here.
+     +
+      A manifest's volume that gives `bytes` ([init](servers/init.md#home-quotas)) must be exactly
+      its partition's size, which `init` never reads. A recipe names the manifest its disk serves
+      (`manifest = "image/manifest.json"`), and the pack is refused if a volume's `bytes` differs from
+    +@@ docs/testbench.md: pipes. `resize` sets that terminal's size and signals `ssh` (`SIGWINCH`), which
+    + `window-change` if the size changed. The terminal is the client's input and never a verdict. With `net.host_key` set, `ssh` refuses any other host key. Test keys live in
+    + `tests/keys/`; they are public and marked not for production, and a boot manifest that lists one
+    + must never ship. A `launch = true` case (`launch-system`) boots the command line `./launch
+    +---system` builds, unchanged, and its sessions log in with a key made beside the bundle when it is
+    ++--system` builds, unchanged but for one flag: its writable disks are attached `cache=unsafe`, as
+    ++every case's are, where `./launch` keeps QEMU's default; the host's fsync policy is the host's, not
+    ++the command line's ([disks](#disks-and-network-cards)), and
+    ++`a_launch_case_differs_from_launch_only_in_its_disks_cache` holds the two to that one flag. Its sessions log in with a key made beside the bundle when it is
+    + packed, which alice alone holds in that bundle's manifest, as `launch` gives her the checkout's key
+    + ([try the system](../GETTING-STARTED.md#try-the-system)). The `ssh-loopback` kind runs sessions against a server that `ssh` starts itself
+    + for each session as its `ProxyCommand`, so nothing listens on a port: Redoubt's `sshd` on its host
+    +@@ docs/testbench.md: boots QEMU's own OpenSBI: the rule that only RustSBI boots is Redoubt's.
+    + 
+    + What an idle Redoubt costs its host is measured from outside the guest. A `launch = true` case
+    + with an `[idle]` table and one session step `{ idle = N }` boots `./launch --system`'s command
+    +-line; when the session reaches the step, it types nothing for N seconds, still reading its output,
+    ++line (its disks `cache=unsafe`, the one flag a launch case changes); when the session reaches the step, it types nothing for N seconds, still reading its output,
+    + and the bench measures that window:
+    + - **Traps, from QEMU's own log.** `-nographic` multiplexes QEMU's monitor on the console, so the
+    +   bench types Ctrl-A c, `logfile <case>.int.log` and `log int`, and Ctrl-A c back, when the window
+     
+      ## tests/beamlet-files.toml ##
+     @@ tests/beamlet-files.toml: forbid = [
+    @@ tests/beamlet-files.toml: forbid = [
+          'beamlet: .* not loaded',
+          # A first run finds a fresh volume, and the end-time cleanup means a replay finds one too.
+     
+    + ## tests/blkd-fairness.toml ##
+    +@@ tests/blkd-fairness.toml: forbid = [
+    + # R2 at blkd keys the two walfsd budgets apart. The 20 s step bound is the bench's margin for the
+    + # line to arrive over ssh on a loaded host, no part of the claim. A probe over 4,000 ms is the
+    + # finding (R2 at blkd broken), never retried and never loosened.
+    ++# The worsts were measured with the disk flushing to the host's file (QEMU's default cache);
+    ++# the bench's disks no longer do (docs/testbench.md "Disks and network cards"), so the bound is
+    ++# looser than its rule against what a probe now costs: it is re-measured at the next train, and
+    ++# does not move until then.
+    + [[session]]
+    + user = "alice+alice-secrets"
+    + pty = true
+    +
+    + ## tests/launch-idle.toml ##
+    +@@ tests/launch-idle.toml: arch = ["rv64", "rv32"]
+    + kind = "boot"
+    + recipe = "image/boot.toml"
+    + # Boot launch's own command line; the bench reaches QEMU's log through its monitor.
+    ++# launch's command line but for one flag: its disks are attached cache=unsafe, as every case's
+    ++# are, where ./launch keeps QEMU's default (docs/testbench.md "Disks and network cards").
+    + launch = true
+    + smp = [4]
+    + # The machine launch boots: four harts, launch's default.
+    +
+    + ## tests/launch-keep-disk.toml ##
+    +@@ tests/launch-keep-disk.toml: arch = ["rv64", "rv32"]
+    + kind = "boot"
+    + recipe = "image/boot.toml"
+    + # Boot launch's own command line, twice, on the kept disk.
+    ++# launch's command line but for one flag: its disks are attached cache=unsafe, as every case's
+    ++# are, where ./launch keeps QEMU's default (docs/testbench.md "Disks and network cards").
+    + launch = true
+    + smp = [4]
+    + # The machine launch boots: four harts, launch's default.
+    +
+    + ## tests/launch-system.toml ##
+    +@@ tests/launch-system.toml: arch = ["rv64", "rv32"]
+    + kind = "boot"
+    + recipe = "image/boot.toml"
+    + # Boot launch's own command line, alice logging in with a key made when the bundle is packed.
+    ++# launch's command line but for one flag: its disks are attached cache=unsafe, as every case's
+    ++# are, where ./launch keeps QEMU's default (docs/testbench.md "Disks and network cards").
+    + launch = true
+    + # The machine launch boots: four harts, launch's default.
+    + smp = [4]
+    +
+    + ## tests/vault-flood-turn.toml ##
+    +@@ tests/vault-flood-turn.toml: forbid = [
+    + # a measured bound, and far below a starved operation. The 20 s step bound is the bench's margin
+    + # for the line to arrive over ssh on a loaded host, no part of the claim. A probe over 4,000 ms is
+    + # the finding (R2 or R37 broken), never retried and never loosened.
+    ++# The worsts were measured with the disk flushing to the host's file (QEMU's default cache);
+    ++# the bench's disks no longer do (docs/testbench.md "Disks and network cards"), so the bound is
+    ++# looser than its rule against what a probe now costs: it is re-measured at the next train, and
+    ++# does not move until then.
+    + [[session]]
+    + user = "alice"
+    + forbid = ['\*\* \(']
+    +
+    + ## tests/walfsd-flood-turn.toml ##
+    +@@ tests/walfsd-flood-turn.toml: forbid = [
+    + # operation, which would not return while bob floods without end. The 20 s step bound is the
+    + # bench's margin for the line to arrive over ssh on a loaded host, no part of the claim. A probe
+    + # over 4,000 ms is the finding (R2 or R26 broken), never retried and never loosened.
+    ++# The worsts were measured with the disk flushing to the host's file (QEMU's default cache);
+    ++# the bench's disks no longer do (docs/testbench.md "Disks and network cards"), so the bound is
+    ++# looser than its rule against what a probe now costs: it is re-measured at the next train, and
+    ++# does not move until then.
+    + [[session]]
+    + user = "alice"
+    + forbid = ['\*\* \(']
+    +
+      ## tools/testbench/src/launch.rs ##
+    +@@ tools/testbench/src/launch.rs: pub fn system(builder: &Builder, workspace: &Path, logs: &Path, ask: &System) ->
+    +     let firmware = crate::rustsbi_prototyper(target).map_err(|why| anyhow::anyhow!(why))?;
+    +     let disk = kept.clone().unwrap_or_else(|| logs.join(format!("{}-{}.img", case.name, target.name)));
+    +     let made = !disk.exists();
+    +-    let qemu = command(machine, &firmware, &packed, boot, &disk, ask.smp, ask.ssh_port)?;
+    ++    let qemu = command(machine, &firmware, &packed, boot, &disk, ask.smp, ask.ssh_port, qemu::Flush::Host)?;
+    +     let fingerprint = host_key_fingerprint(&std::fs::read(packed.bundle.with_extension("manifest.json"))?)?;
+    + 
+    +     eprintln!("+ {}", qemu::shell_line(&qemu));
+    +@@ tools/testbench/src/launch.rs: pub fn prove_forward(port: u16, qemu: &mut Child) -> Result<Answer> {
+    + 
+    + /// The QEMU command that boots the launch machine's `packed` image at `smp` harts, its disk
+    + /// packed afresh at `disk` (or, kept, as it is there) and the guest's port 22 forwarded from the
+    +-/// host's `port`: what `./launch --system` boots, and the `launch-system` case.
+    ++/// host's `port`: what `./launch --system` boots, and the `launch-system` case. The two differ only
+    ++/// in `flush`: `./launch` passes [`qemu::Flush::Host`], its disks and its host being the user's,
+    ++/// and a launch case [`qemu::Flush::Free`], as every case's disks are (docs/testbench.md, "Disks and
+    ++/// network cards").
+    ++#[allow(clippy::too_many_arguments)]
+    + pub fn command(
+    +     machine: &Machine,
+    +     firmware: &str,
+    +@@ tools/testbench/src/launch.rs: pub fn command(
+    +     disk: &Path,
+    +     smp: u32,
+    +     port: u16,
+    ++    flush: qemu::Flush,
+    + ) -> Result<Command> {
+    +     // The principals' homes and the vault's tree, as `./mkimage` makes them: the disk's stages.
+    +     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+     @@ tools/testbench/src/launch.rs: pub fn command(
+    -     ] {
+              std::fs::create_dir_all(root.join(dir))?;
+          }
+    --    let (devices, _) =
+    +     let (devices, _) =
+     -        qemu::virtio_devices(boot, disk, packed.userland.as_ref(), qemu::HostPorts::Given(&[port]))?;
+    -+    let (devices, _) = qemu::virtio_devices(
+    -+        boot,
+    -+        disk,
+    -+        packed.userland.as_ref(),
+    -+        qemu::HostPorts::Given(&[port]),
+    -+        qemu::Flush::Host,
+    -+    )?;
+    ++        qemu::virtio_devices(boot, disk, packed.userland.as_ref(), qemu::HostPorts::Given(&[port]), flush)?;
+          let image = Image {
+              machine,
+              firmware,
+    +@@ tools/testbench/src/launch.rs: fn from_nul_separated(bytes: &[u8]) -> Result<Command> {
+    + mod tests {
+    +     use super::*;
+    + 
+    ++    /// A launch case boots `./launch`'s command line but for one flag: its writable disks cost the
+    ++    /// host no fsync (`cache=unsafe`), where `./launch` keeps QEMU's default. Nothing else differs.
+    ++    #[test]
+    ++    fn a_launch_case_differs_from_launch_only_in_its_disks_cache() {
+    ++        let target = &crate::target::TARGETS[0];
+    ++        let machine = target.machine.as_ref().expect("a bootable target");
+    ++        let packed = Packed { loader: "loader".into(), bundle: "bundle".into(), userland: None };
+    ++        let boot: Boot = toml::from_str(
+    ++            "programs = []\nexpect = []\n[disk]\nsize_kib = 64\n[vault]\nsize_kib = 64\n[net]\nforward = [22]\n",
+    ++        )
+    ++        .unwrap();
+    ++        let dir = std::env::temp_dir().join(format!("testbench-launch-flush-{}", std::process::id()));
+    ++        std::fs::create_dir_all(&dir).unwrap();
+    ++        let disk = dir.join("boot.img");
+    ++        let line = |flush| -> Vec<String> {
+    ++            let qemu = command(machine, "firmware", &packed, &boot, &disk, 2, 2200, flush).unwrap();
+    ++            qemu.get_args().map(|a| a.to_string_lossy().into_owned()).collect()
+    ++        };
+    ++        let (by_hand, case) = (line(qemu::Flush::Host), line(qemu::Flush::Free));
+    ++        assert_eq!(by_hand.len(), case.len(), "{by_hand:?}\n{case:?}");
+    ++        let differ: Vec<_> = by_hand.iter().zip(&case).filter(|(h, c)| h != c).collect();
+    ++        assert_eq!(differ.len(), 2, "the two writable disks' drives, and nothing else: {differ:?}");
+    ++        for (h, c) in differ {
+    ++            assert!(h.starts_with("if=none,") && !h.contains("cache="), "{h}");
+    ++            assert_eq!(*c, format!("{h},cache=unsafe"));
+    ++        }
+    ++        std::fs::remove_dir_all(dir).unwrap();
+    ++    }
+    ++
+    +     /// The fingerprint of the image's host key, seed 11..11, is the one `ssh-keygen -lf` prints
+    +     /// for its public key:
+    +     /// `ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINBKsjJ0K7SrOhNovUYV5ObQIkq3GgFrr4UgozLJd4c3`.
+     @@ tools/testbench/src/launch.rs: mod tests {
+              let boot: Boot = toml::from_str("programs = []\nexpect = []\n[net]\nforward = [22]\n").unwrap();
+              let disk = std::env::temp_dir().join(format!("testbench-launch-forward-{}", std::process::id()));
+    @@ tools/testbench/src/main.rs: fn boot_case(
+                  };
+                  if let Some(icount) = &boot.icount {
+                      devices.extend(["-icount".into(), icount.clone(), "-rtc".into(), "clock=vm".into()]);
+    +@@ tools/testbench/src/main.rs: fn boot_case(
+    +             let identity = launch::case_identity(bundle);
+    +             let launched = match boot.launch {
+    +                 true => {
+    +-                    let qemu =
+    +-                        launch::command(machine, firmware, &built.packed, boot, &disk, *smp, forwards[0].1)?;
+    ++                    let qemu = launch::command(
+    ++                        machine,
+    ++                        firmware,
+    ++                        &built.packed,
+    ++                        boot,
+    ++                        &disk,
+    ++                        *smp,
+    ++                        forwards[0].1,
+    ++                        qemu::Flush::Free,
+    ++                    )?;
+    +                     Some((qemu, identity.as_path()))
+    +                 }
+    +                 false => None,
+     
+      ## tools/testbench/src/qemu.rs ##
+     @@ tools/testbench/src/qemu.rs: impl Ports {

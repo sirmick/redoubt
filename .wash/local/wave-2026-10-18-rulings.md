@@ -1795,3 +1795,57 @@ bounded (K34); the contention cases and the self-check record, not judge, until 
 re-judges them as part of its acceptance; SCHED5's own cells (the rv32 steward-latency rows) are
 judged as before. If the corrected hammer leaves the positive meeting on a width, judge there.
 No target moves.
+
+### B97-shape: an empty listener's entry is charged to its holder's bucket (architect-oct20)
+
+Approved as proposed: `room()` and `listen()` check the key's own entries (lingering included)
+against 2 x cap(key) in place of the whole table against max_entries; the global check stays as
+the backstop for the window between a disconnect and the next poll's sweep. Arithmetic on
+ipd.md "Sizing": a bucket's sockets <= cap and a listener with a backlog holds a charged backlog
+socket, so legitimate use never passes 2 x cap; only empty listeners past it are refused, on the
+holder's own bucket; live keys are at most the buckets, each counted in max_sockets at
+max(cap, default), so the sum over live keys <= 2 x max_sockets and the table's size stands.
+A State unit per empty listener rejected (the accept that empties it has no reservation to pay
+from; refusing it would break sshd at its cap). Host tests as proposed (A fills with empty
+listeners, B still gets its socket: red on d66839252); no attack case (only a listen scope, the
+image's sshd, reaches it: stated on the page). Per-key counting is a scan of at most 216 entries
+or a kept count: the simplifier's call. Tier A, small, red review as the node says.
+
+### SCHED5: the corrected hammer confirms it; the contention family records until K34 (architect-oct20)
+
+With the hammer covering the window (.wash/local/SCHED5-cover.md) every loaded wake waits one
+whole search, phase-locked: n = 16 reads 21.4/21.9 ms rv64 and 16.0/16.5 rv32 (search alone 22.6
+and 17.0), above the 15 ms p50 target; n = 8 worse. The shortest refused search under the cap is
+above the target on both widths, so the two-hart contention gate's wake targets are unmeetable
+under the cap by R78's one-section bound until the search is bounded (K34). Approved: the page
+says so with the trace's reason and the numbers (re-measured alone once, since the page's
+figures come from the stated condition: the runs beside train 89 are guest time, but the page
+states figures under one condition); the family (sched-lock-contention, -4, -4-mttcg,
+irq-boot-hart-only) records its wake figures in the `record=` form and keeps ticket order and the
+other oracle checks judged; the self-check's must_fail is recorded with them (a negative cannot be
+judged while its positive is not); the hammer at n = 16; SCHED5's own rv32 cells judged. K34's
+acceptance re-judges the family and the self-check at the targets. The earlier 1.2 ms pass: one
+sentence in the report (the hammer ended before the window; the coverage check forbids it).
+
+### B98-cause, launch cases (servers-red P1) (architect-oct20)
+
+My ruling assumed launch-kind cases took cache=unsafe; they do not (launch::command passes
+Flush::Host). Ruling (a): thread a Flush through launch::command, the bench passing Free, ./launch
+keeping Host. Same reasoning: a launch case's disks are the bench's, fresh per boot, and
+launch-keep-disk's second boot reads the same page cache. What a launch case proves is ./launch's
+command line, not the host's fsync policy. The one difference is stated on the page and in each
+case's comment, and a host test asserts launch::command differs from ./launch's line only in that
+flag. Gate: launch-keep-disk, launch-system, launch-idle both widths under B98's injected writer,
+10 runs each, 0 failures; launch-idle also alone (its host-cores ceiling must not move). P3s
+folded: the flood cases' 4,000 ms bounds get a comment now and are re-measured next train (no
+bound moves until then); Broke.waited's span fixed.
+
+### SCHED5: rv32 two harts gated; the deadline-notice cell → B103 (architect-oct21)
+
+Both of SCHED5's cells fixed (row 2: 528 µs net from 32.5 ms; row 1: 4.0 and 4.3 ms from the
+base's 38.0). The rv32 two-hart deadline-notice p99 misses 40 ms on head and base alike (43.4 /
+45.3 / 56.5 and 41.9 / 41.9 / 56.1 at N = 1-3): never judged there before (smp rv32 = [1]; the
+page's 13-14 ms were at the dequeue). Ruling (a): gate rv32 at [1, 2], that cell
+record=rv32:2:N=k:deadline_notice:p99 for k = 1-3, both sets of numbers and the fixed rows on
+scheduling.md, no target moves. B103 (todo, needs SCHED5) traces and fixes or states it; its
+acceptance removes the record= and judges the cell.
