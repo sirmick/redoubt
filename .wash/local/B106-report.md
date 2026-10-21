@@ -130,3 +130,21 @@ Gates on eefad8a99 (prebuilt rc=0): size-budget, docs, model-mutations (29.1 s),
 P3-1 and the "Dead, not BadHandle" promise wait for K36: on its landing, rebase and correct
 ipc.md R4b and io.rs `Io::forget` to promise Dead. SCHED5 also bumps Mutation::ALL: the second to
 land takes 179 and the summed model ceiling.
+
+## Round 3 (rebased onto K36; sched5-red OK with notes)
+
+Rebased onto K36 7f9f1af91; head 679c7362a (kernel db8bd93f2). Mutation::ALL 179 (K36 177 + 2);
+ceilings summed (kernel 10889, libs/sys 1049, libs/rt 4130, model 11496). Dropped what K36 covers
+(the served send right kept unclosed: every term now closes, dead or live). Dead promised in ipc.md
+R4b and io.rs `Io::forget`; the fake makes handles to an endpoint dying with its owner dead entries.
+P3-1 (fake module doc restated with dead entries) and P3-2 (the kernel's system-class exemption
+stated at the fake's label check: every fake process is user-class; no class flag) folded.
+Host gates on 679c7362a: both widths build; workspace tests build; 108 binaries ok (--no-fail-fast);
+beamlet-redoubt all ok; the three mutations (R9EndpointInAnyBudget, R1EndpointOwnerLabelsIgnored,
+I17SweptIndexFreed) caught at seed 0.
+Flake seen once, not B106's: redoubt-client `an_admission_refusal_of_the_moment_is_tried_again`
+("a walk refused at least once before the one served", 0.08 s vs 2.6 s normally) on the first
+pinned run; 5/5 alone and green in the full rerun; libs/client untouched; log
+.tmp/B106/p3-host-fail.log.
+Pending: rebase onto K36's fixed head; then the load run (boot set, docs, size-budget,
+model-host-tests, model-mutations) after train 94's rerun.
