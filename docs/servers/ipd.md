@@ -242,7 +242,7 @@ through the churn, then Alice's echo on the same connection.
 
 ### Sizing
 
-<details><summary>Status: built · tested (20)</summary>
+<details><summary>Status: built · tested (22)</summary>
 
 - host:redoubt-ipd::every_scope_and_the_milestone_parse
 - host:redoubt-ipd::anything_else_stops_ipd
@@ -254,6 +254,8 @@ through the churn, then Alice's echo on the same connection.
 - host:redoubt-ipd::a_heap_cap_short_of_its_sockets_stops_ipd_before_it_serves
 - host:redoubt-ipd::a_socket_the_heap_cannot_hold_is_refused_and_noted
 - host:redoubt-ipd::a_full_table_refuses_a_listen_or_a_socket
+- host:redoubt-ipd::empty_listeners_fill_only_their_own_bucket
+- host:redoubt-ipd::the_table_backstops_buckets_past_max_sockets
 - host:testbench::every_manifest_entry_holds_its_buckets_at_their_caps
 - host:redoubt-ipd::clone_stops_at_the_buckets_socket_cap
 - host:redoubt-ipd::sockets_stop_at_the_buckets_cap
@@ -330,7 +332,19 @@ the middle of a request, a panic, and one person could stop `ipd` for everyone. 
 set and `ipd`'s socket table are sized at start, so neither grows while serving: the set for every
 socket, a slot of 432 bytes on 64-bit, and the table for twice as many entries of 240, a socket's
 own and listeners', since a listener whose backlog was accepted while its bucket was full keeps
-its entry and no socket; past that a socket or a `listen` is refused `too_many`. A slot and two
+its entry and no socket. Those entries are charged to their bucket, as a lingering socket is: a
+bucket holds at most twice its cap of entries, lingering ones included, its cap being its `State`
+units, in which its sockets are paid, and past that its own socket or `listen` is refused
+`too_many`. Its sockets are at most its cap, and a listener with
+a backlog holds a charged backlog socket of its own, so a bucket's own use never passes twice its
+cap: only empty listeners past it are refused, and to the bucket that made them. The live buckets
+are at most `buckets=`, each counted in `max_sockets` at the larger of its cap and the default, so
+together they hold at most twice `max_sockets` entries, the table's size. The table's own bound is
+a backstop, reachable only between a connection's end and the next poll's sweep of its released
+empty listeners, should another bucket take its slot meanwhile; the stack is polled only after
+a receive that returned no call ([pinned and abandoned calls](#pinned-and-abandoned-calls)), so a
+steady stream of calls lengthens that window. Only a listen scope can leave a
+listener empty, the image's `sshd`, never a session, so the host tests are its attack. A slot and two
 entries are 912 of the 1,024 bytes `SOCKET_BYTES` allows beside a socket's buffers, a bound the
 build asserts on each width; the image's 108 sockets' tables are 98,496 bytes, held from the
 start. The bench
@@ -481,7 +495,7 @@ tests run in an unedited copy outside the tree.
 
 | Run | Result |
 | --- | --- |
-| `ipd`: `args`, `ctl_deadline`, `fs`, `grant_undo`, `isn`, `program`, `scope`, `sizing`, `stack`, `sweep`, `vectors` | pass, before `stack`'s two keep-alive tests, which have not run under Miri |
+| `ipd`: `args`, `ctl_deadline`, `fs`, `grant_undo`, `isn`, `program`, `scope`, `sizing`, `stack`, `sweep`, `vectors` | pass, before `stack`'s two keep-alive tests and its three tests of the table's bounds, which have not run under Miri |
 | smoltcp 0.14.0, its library tests | 156 pass; `storage::assembler::test_random` alone runs too long under Miri to finish |
 | managed 0.8.0 | 30 pass |
 | heapless 0.9.3 | 216 pass; the `pool` tests cannot run (inline assembly, which Miri does not interpret; smoltcp does not use `pool`) |
