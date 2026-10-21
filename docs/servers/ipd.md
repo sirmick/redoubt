@@ -83,11 +83,13 @@ file holds is typed, in the wire encoding ([wire](wire.md#the-encoding)), never 
   send.
 - **What a probe costs.** One probe is `ipd`'s timer wake, its `transmit` call to `netd`, the
   card's interrupt for the answer, `netd`'s receive thread's send to `ipd`, and `ipd`'s wake: on
-  an idle four-hart box about 66 cross-hart interrupts and 84 SBI calls in all, measured in
-  `launch-idle` with the keep-alive at 10 s (an idle SSH session's socket, six probes a minute
-  against two). At four probes a
-  minute the busiest hart there reads 2.9 to 3.5 interrupts a second against 2.4 to 2.8 at two,
-  under its ceiling of 3.8. That is the box's cost of any one small frame and its answer at rest,
+  an idle four-hart box about 7 to 13 cross-hart interrupts and 18 to 19 SBI calls in all,
+  measured in `launch-idle` against the keep-alive at 30 s, three windows a width alone: 0.5 to
+  0.9 interrupts and 1.2 to 1.3 SBI calls a second more, counted as four more probes a minute, so
+  two silent sockets at four probes a minute against two; with one such socket a probe costs twice
+  that. With a lock release that woke every waiting hart the same comparison
+  read about 66 and 84 a probe. At four probes a minute the busiest hart there reads 3.0 to 3.2
+  interrupts a second against 2.1 to 3.1 at two, under its ceiling of 3.8. That is the box's cost of any one small frame and its answer at rest,
   not the probe's, and is a finding of its own; the probe interval follows from the loss model
   above, not from it.
 - **Ports.** A listened port belongs to its connection and the connections `new_connection` minted
@@ -231,7 +233,11 @@ the only answer a client could drop is one whose delivery took longer than the m
 in the socket's buffer for the next read, which the client makes at once (`sshd`'s reader asks
 again on `timeout`; the hub answers its caller `etimedout`, who asks again; a session's `gen_tcp`
 read abandons its parked read when the caller's own `recv` timeout fires, and parks the next read
-when the caller asks again); `ctl` is asked again the same way, and finds the same state. In
+when the caller asks again); `ctl` is asked again the same way, and finds the same state. The
+margin has a price at rest: a request parked for nothing ends every 8 s, not every 30 or 60, and is
+asked again. An idle box with one SSH session keeps two parked, `sshd`'s reader on the session's
+connection and its listener's accept: in `bench:launch-idle` that is 2.2 to 2.3 system calls a
+second from user mode, 8.3 where the 30 and 60 s waits gave 6.0 to 6.1. In
 `net-pinned` a client abandons 64 parked reads, each answered and freed; a read
 with nothing coming ends at the `data` deadline, a listener's `ctl` read at the `ctl` one, and the
 connection still works after; the host test parks a read on an established connection, sees it
@@ -548,9 +554,9 @@ Status: built · tested: host:redoubt-ipd::no_link_is_unreachable_until_it_comes
 - **A shared `ipd` is shared state.** Its clients share one stack's memory, timers and link; where
   that matters, each trust domain gets its own `ipd`.
 - **Probes scale with an account's sockets.** Each silent socket probes four times a minute, and
-  each probe costs the box about 66 cross-hart interrupts and 84 SBI calls
+  each probe costs the box about 7 to 13 cross-hart interrupts and 18 to 19 SBI calls
   ([what a probe costs](#the-net-tree)): alice's 32 sockets, all silent, are about 2.1 probes a
-  second, some 140 interrupts and 180 SBI calls a second across the machine, paid by `ipd`,
+  second, some 15 to 28 interrupts and 40 SBI calls a second across the machine, paid by `ipd`,
   `netd` and the kernel. The manifest bounds it: the account's socket cap times the probe rate
   times the per-probe cost. The servers that pay it run at their weights
   ([R12 (scheduling)](../kernel/scheduling.md#r12-scheduling)), the card's interrupt is billed to
