@@ -29,6 +29,10 @@ use crate::userland::Staged;
 /// The bench's own binary in a prebuilt directory.
 pub const BINARY: &str = "testbench";
 const INDEX: &str = "index.json";
+/// The git command that prints the tree's uncommitted changes to tracked files: what `git diff
+/// HEAD --binary` prints under git's default configuration, renames found (`-M`) as it finds them,
+/// with none of the index refresh `git diff` makes and none of the `diff.*` settings it follows.
+const CHANGES: [&str; 5] = ["diff-index", "-p", "--binary", "-M", "HEAD"];
 
 /// A boot case's pieces, packed for one target: what it boots, every boot alike.
 #[derive(Clone)]
@@ -79,6 +83,9 @@ struct VerifiedRecord {
 
 /// The tree a prebuilt directory was made from: a digest of its commit, its uncommitted changes
 /// to tracked files, and the names and bytes of its untracked files that git does not ignore.
+/// Each git command only reads. The changes come from `git diff-index`, not `git diff`: `git diff`
+/// refreshes the index and so takes `.git/index.lock`, which a run killed inside it leaves behind
+/// to block every later commit.
 pub fn fingerprint(workspace: &Path) -> Result<String> {
     let git = |args: &[&str]| -> Result<Vec<u8>> {
         let output = Command::new("git").current_dir(workspace).args(args).output().context("running git")?;
@@ -92,7 +99,7 @@ pub fn fingerprint(workspace: &Path) -> Result<String> {
     };
     let mut digest = Sha256::new();
     digest.update(git(&["rev-parse", "HEAD"])?);
-    digest.update(git(&["diff", "HEAD", "--binary"])?);
+    digest.update(git(&CHANGES)?);
     for name in git(&["ls-files", "--others", "--exclude-standard", "-z"])?.split(|&b| b == 0) {
         if name.is_empty() {
             continue;
@@ -336,6 +343,99 @@ mod tests {
         assert_ne!(untracked, edited);
         std::fs::write(dir.join("new"), "2").unwrap();
         assert_ne!(fingerprint(&dir).unwrap(), untracked, "an untracked file's bytes did not move it");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The fingerprint never writes the index, so a run killed inside it leaves no
+    /// `.git/index.lock`: with a tracked file's times moved since the index recorded them, where
+    /// `git diff` refreshes the index and rewrites it, the index's bytes stay as they were; and the
+    /// moved times, the file's bytes unchanged, leave the fingerprint as it was before them.
+    #[test]
+    fn the_fingerprint_writes_no_index() {
+        let dir = std::env::temp_dir().join(format!("testbench-fingerprint-lock-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let git = |args: &[&str]| {
+            let status = Command::new("git")
+                .current_dir(&dir)
+                .args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"])
+                .args(args)
+                .output()
+                .unwrap()
+                .status;
+            assert!(status.success(), "git {args:?}");
+        };
+        git(&["init", "-q"]);
+        std::fs::write(dir.join("tracked"), "a").unwrap();
+        git(&["add", "tracked"]);
+        git(&["commit", "-q", "-m", "x"]);
+        let before = fingerprint(&dir).unwrap();
+        let then = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        std::fs::File::options().write(true).open(dir.join("tracked")).unwrap().set_modified(then).unwrap();
+        let index = std::fs::read(dir.join(".git/index")).unwrap();
+        assert_eq!(fingerprint(&dir).unwrap(), before, "moved times alone moved it");
+        assert!(std::fs::read(dir.join(".git/index")).unwrap() == index, "the fingerprint rewrote the index");
+        assert!(!dir.join(".git/index.lock").exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The changes the fingerprint reads are what `git diff HEAD --binary` prints under git's
+    /// default configuration: an edit, a staged new file, a deletion, a staged rename with an edit,
+    /// a mode change and a binary file's edit.
+    #[test]
+    fn the_fingerprints_changes_are_git_diffs() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("testbench-fingerprint-diff-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let git = |args: &[&str]| {
+            let output = Command::new("git")
+                .current_dir(&dir)
+                .args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"])
+                .args([
+                    "-c",
+                    "diff.renames=true",
+                    "-c",
+                    "diff.noprefix=false",
+                    "-c",
+                    "diff.mnemonicPrefix=false",
+                ])
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "git {args:?}");
+            output.stdout
+        };
+        let lines = |n: usize| (1..=n).map(|i| format!("{i}\n")).collect::<String>();
+        git(&["init", "-q"]);
+        std::fs::write(dir.join("edited"), lines(50)).unwrap();
+        std::fs::write(dir.join("renamed"), lines(40)).unwrap();
+        std::fs::write(dir.join("binary"), b"x\0y").unwrap();
+        std::fs::write(dir.join("deleted"), "d\n").unwrap();
+        std::fs::write(dir.join("mode"), "m\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "x"]);
+        std::fs::write(dir.join("edited"), lines(51)).unwrap();
+        git(&["mv", "renamed", "moved"]);
+        std::fs::write(dir.join("moved"), lines(41)).unwrap();
+        git(&["add", "moved"]);
+        std::fs::write(dir.join("binary"), b"x\0z").unwrap();
+        std::fs::remove_file(dir.join("deleted")).unwrap();
+        std::fs::set_permissions(dir.join("mode"), std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(dir.join("added"), "new\n").unwrap();
+        git(&["add", "added"]);
+        let changes = git(&CHANGES);
+        let text = String::from_utf8_lossy(&changes);
+        for header in [
+            "rename from renamed",
+            "new file mode",
+            "deleted file mode",
+            "new mode 100755",
+            "GIT binary patch",
+        ] {
+            assert!(text.contains(header), "no {header:?} in:\n{text}");
+        }
+        assert!(changes == git(&["diff", "HEAD", "--binary"]), "diff-index and diff differ");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

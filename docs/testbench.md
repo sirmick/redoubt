@@ -48,7 +48,7 @@ whole path, as two recipes may share a file name.
 
 ### Building once
 
-Status: built · tested: host:testbench::an_index_survives_its_rename_and_names_its_tree, host:testbench::the_fingerprint_follows_the_trees_changes, host:testbench::an_exact_filter_runs_one_case, host:testbench::userland_recipes_of_one_name_stage_apart, host:testbench::a_build_asked_for_again_in_a_run_is_not_run_again
+Status: built · tested: host:testbench::an_index_survives_its_rename_and_names_its_tree, host:testbench::the_fingerprint_follows_the_trees_changes, host:testbench::the_fingerprint_writes_no_index, host:testbench::the_fingerprints_changes_are_git_diffs, host:testbench::an_exact_filter_runs_one_case, host:testbench::userland_recipes_of_one_name_stage_apart, host:testbench::a_build_asked_for_again_in_a_run_is_not_run_again
 
 A run builds what it boots: `cargo run` of the bench, then a cargo build of the kernel, the loader
 and each program, a check that costs about 30 ms when nothing changed and waits on the build
@@ -84,10 +84,12 @@ from a directory another workspace made is refused naming it, and so is one from
 before a change, never a silent test of old code, so the directory is made again after any
 change. What git ignores is not in the fingerprint: the pinned toolchains (`toolchains/`, or
 where `BEAMLET_TOOLCHAINS` points) and a Mix project's `_build` (`userland/shell/_build/`); a
-change to those needs a prebuild by hand. The other kinds run as
-always, with their own cargo where they have one (`host-tests`). `scripts/jobs.mk` makes the
-directory (`prebuilt`) and runs every case target from it when it is there ("On a shared host"
-under [the case file](#the-case-file)).
+change to those needs a prebuild by hand. Taking the fingerprint only reads the tree: it asks
+`git diff-index -M` for the changes, what `git diff` prints, renames included, but without its
+refresh of the index, which holds `.git/index.lock`, left behind to refuse every later commit
+when a run is killed inside it. The other kinds run as always, with their own cargo where they
+have one (`host-tests`). `scripts/jobs.mk` makes the directory (`prebuilt`) and runs every case
+target from it when it is there ("On a shared host" under [the case file](#the-case-file)).
 
 ## Verdicts
 
