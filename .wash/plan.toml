@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 168
+revision = 181
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -2994,8 +2994,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "AGENTS"
   body = "Found by B100's attack case (.wash/local/B100-report.md, Observations 1; logs .tmp/B100/run1/): on rv64 `for i <- 0..9361, into: <<>>, do: <<...>>` typed at alice's shell ended her VM with `memory allocation of 3269248 bytes failed` (a Rust panic, exit 101); rv32 passed. beamlet.md 'beamlet on Redoubt' states the shape as a residual for several floods at once or a native's single large allocation: the limits are measurements caught afterwards, and the budget's backstop ends the VM. But this is the VM's own binary construction from one expression, below the 2^27-word process limit and above the session's free pages (a sixteenth is 696 pages, 2.85 MB), so a person's one line logs them out where BEAM would kill the process. Rule to hold: an allocation one Erlang process asks the VM for (a binary's construction or growth, a tuple, a list's copy) is checked against that process's heap limit and the VM's free pages before it is made; past either, the process is killed as max_heap_size kills it (exit reason, an error report the shell prints), and the VM serves on. A native's own allocation and several processes at once stay the stated backstop. Investigation first: where the binary builder allocates (beamlet-vm's bs_* and comprehension into: <<>>), why rv64 and not rv32 (a growth doubling past the pages on one width), and which other single-allocation paths a process can drive the same way. Cases: a host test per path (the process killed, the VM alive); the B100 line at the shell on both widths, the session printing the process's exit and answering the next line. Pages: beamlet.md's limits paragraph and the residual's wording narrowed to what remains. Tier B (beamlet, inside one session's budget), size S-M, one reviewer: the red team (a session's availability)."
-  state = "active"
-  revision = 160
+  state = "done"
+  revision = 181
 
 [[node]]
   id = "B106"
@@ -3005,7 +3005,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["K36"]
   body = "Found by SCHED5's implementer (.wash/local/SCHED5-pipe64-identification.md): userland/otp/redoubt/src/jobs.rs served() makes piped's receive endpoint in the session VM, so the session's budget owns it; when piped's budget is destroyed only piped-owned endpoints' queues and piped's own calls fail, so a VM waiter that calls the endpoint after piped died blocks in the kernel for ever (no Dead wake names it), its place among MAX_WAITERS 6 is never freed, and every later pipeline waits FILE_WAIT_US and fails emfile. Pre-existing race (base 3/3 pass rv32 pipe-sixty-four), widened by SCHED5's timing (head 3/6): SCHED5 is held until this lands. io.rs Io::forget's doc ('the call fails at once') is false in this window. Options: (1) the child's endpoint owned by the child's budget, so destruction fails its queue and revokes the handle (implementer's recommendation); (2) the VM keeps the receive right and drains on forget; (3) the kernel fails calls on an endpoint with no receive right left; (4) a waiter timeout does not help. Architect rules the shape on thread B106-shape. Tier A; red review; a host test on the fake that fails on main, and pipe-sixty-four rv32 x10 alone on SCHED5's head as the witness."
   state = "reported"
-  revision = 154
+  revision = 178
 
 [[node]]
   id = "K36"
@@ -3013,5 +3013,5 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "AGENTS"
   body = "Ruled by the Architect on B106-shape (rulings file 'B106 review (sched5-red P1-1)'), from sched5-red's P1-1 on B106: the kernel frees a swept handle's index at once and install_handle takes the lowest free index, so a holder's later call through the old index can reach a new, unrelated object (the VM's hub waiter calling the next piped's endpoint). Rule: a swept handle stays as a dead entry; every call returns Dead; handle_close frees it; the index is not reused until then. Revocation stays complete (I2: the entry names nothing); I1 untouched; a copy in a message not yet received still arrives as 0. Cost: a dead entry holds its slot until closed. First deliverable, before code: a survey to the Architect of every holder relying on a swept index vanishing (init's closed-copy checks and device quarantine, the steward's stale-index guards, servers holding client-stamped copies, the VM and the hub, the model's I2), and whether every sweep needs dead entries or only endpoint and process sweeps. Tier A, M-L; kernel-red + simplifier + editor. B106 needs K36; SCHED5 needs B106."
-  state = "reported"
-  revision = 158
+  state = "done"
+  revision = 176
