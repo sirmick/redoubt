@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 141
+revision = 158
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -1304,7 +1304,7 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   needs = ["M2"]
   body = "docs/plan/m3-agents.md. Moved out of M1 on the owner's word (2026-10-07), to run after M2. First, on the owner's word (2026-10-15), AGENT0: agentic control over SSH, a sponsor-run agent whose loop is on the host and whose body is a principal's session in the box; then the steward's second half (leases and agents, the powerbox at approve@box, crash blame: STEWARD3; declassification and push, the responsiveness targets with the real steward: STEWARD4), sshd's vault sessions and approve@box, gen_tcp (BEAM5), Alice's agent under a lease and the scripted hostile agent and user (the attack suite), and the model's traces replayed on the real kernel. Node ids M3, M4, M5 keep their ids; their titles are M4, M5, M6."
   state = "reported"
-  revision = 9
+  revision = 157
 
 [[node]]
   id = "PLAN2"
@@ -2957,8 +2957,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "AGENTS"
   body = "Found by B94's cost measurement and servers-red's P2-1 (.wash/local/B94-idle-cost.md, .tmp/B94/idle/4): base 3e6f29443 reads 2.4-2.8 interrupts/s on the busiest hart in launch-idle, alone, where the ceiling of 3.8 was set at twice 1.6-1.9 (87553025a, 2026-10-14, the one-hart-per-timeout rule), the 30 s keep-alive on both sides. Also (B98's gate, ecaeae89f): beside an injected host writer launch-idle read 3.83-5.31/s and failed 8/20 on interrupts_per_hart alone (never host_cores or user_ecalls), passing 6/6 alone; the window does no disk I/O, so the guest's interrupt rate itself rises with host load. Ruling .wash/local/wave-2026-10-18-rulings.md 'B94 review (servers-red P2-1, P2-2)'. The ceiling does not move; a host-clock case's miss beside other work is no verdict until it misses alone. Investigation-first: (1) bisect the drift by train between 87553025a and 3e6f29443 with launch-idle alone on a quiet machine, both widths, per-hart and per-kind rates kept (m_software hand-offs, timer, external); name the merge and the mechanism (a new periodic wake, a timer re-armed more often, a hand-off per wake that IDLE2 removed coming back, a server polling); (2) say why the rate grows with host load: which interrupts multiply when the guest's clock is stretched (late timers re-armed in bursts, a deadline caught up in steps, a periodic wake counted per host tick); a guest-side cause is fixed, a QEMU-side one stated. Then fix or state, the number on the page. No ceiling moves; judged by launch-idle alone, twelve alternating rounds as B94 measured. Tier A (kernel or a driver; Tier B only if a userland timer), size S-M, reviewer kernel-red-4. Independent of K35 and B94."
-  state = "active"
-  revision = 141
+  state = "done"
+  revision = 149
 
 [[node]]
   id = "B102"
@@ -3002,6 +3002,16 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   title = "A call to a dead stage's session-owned endpoint blocks for ever: piped's death fails nothing queued there, and the stuck waiter holds a hub place"
   template = "package"
   parent = "AGENTS"
+  needs = ["K36"]
   body = "Found by SCHED5's implementer (.wash/local/SCHED5-pipe64-identification.md): userland/otp/redoubt/src/jobs.rs served() makes piped's receive endpoint in the session VM, so the session's budget owns it; when piped's budget is destroyed only piped-owned endpoints' queues and piped's own calls fail, so a VM waiter that calls the endpoint after piped died blocks in the kernel for ever (no Dead wake names it), its place among MAX_WAITERS 6 is never freed, and every later pipeline waits FILE_WAIT_US and fails emfile. Pre-existing race (base 3/3 pass rv32 pipe-sixty-four), widened by SCHED5's timing (head 3/6): SCHED5 is held until this lands. io.rs Io::forget's doc ('the call fails at once') is false in this window. Options: (1) the child's endpoint owned by the child's budget, so destruction fails its queue and revokes the handle (implementer's recommendation); (2) the VM keeps the receive right and drains on forget; (3) the kernel fails calls on an endpoint with no receive right left; (4) a waiter timeout does not help. Architect rules the shape on thread B106-shape. Tier A; red review; a host test on the fake that fails on main, and pipe-sixty-four rv32 x10 alone on SCHED5's head as the witness."
-  state = "active"
-  revision = 136
+  state = "reported"
+  revision = 154
+
+[[node]]
+  id = "K36"
+  title = "A handle a destruction sweeps stays in its holder's table as a dead entry: every call through it returns Dead, and its index is not reused until the holder closes it"
+  template = "package"
+  parent = "AGENTS"
+  body = "Ruled by the Architect on B106-shape (rulings file 'B106 review (sched5-red P1-1)'), from sched5-red's P1-1 on B106: the kernel frees a swept handle's index at once and install_handle takes the lowest free index, so a holder's later call through the old index can reach a new, unrelated object (the VM's hub waiter calling the next piped's endpoint). Rule: a swept handle stays as a dead entry; every call returns Dead; handle_close frees it; the index is not reused until then. Revocation stays complete (I2: the entry names nothing); I1 untouched; a copy in a message not yet received still arrives as 0. Cost: a dead entry holds its slot until closed. First deliverable, before code: a survey to the Architect of every holder relying on a swept index vanishing (init's closed-copy checks and device quarantine, the steward's stale-index guards, servers holding client-stamped copies, the VM and the hub, the model's I2), and whether every sweep needs dead entries or only endpoint and process sweeps. Tier A, M-L; kernel-red + simplifier + editor. B106 needs K36; SCHED5 needs B106."
+  state = "reported"
+  revision = 158
