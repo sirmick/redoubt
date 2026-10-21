@@ -8,8 +8,8 @@ version = "0.9.38"
 resolver = "2"
 
 # The kernel is a `no_std` binary for the machine only, and has no host tests: its rules are
-# tested on the target by the bench, and its pure parts through `redoubt-stride` and the model
-# (docs/kernel/model.md). So `cargo test` over the workspace builds nothing here.
+# tested on the target by the bench, and its pure parts through `redoubt-stride`, `redoubt-ticket`
+# and the model (docs/kernel/model.md). So `cargo test` over the workspace builds nothing here.
 [[bin]]
 name = "redoubt-kernel"
 path = "src/main.rs"
@@ -28,6 +28,7 @@ redoubt-ipclist = { path = "../libs/ipclist" }
 redoubt-layout = { path = "../libs/layout" }
 redoubt-stride = { path = "../libs/stride" }
 redoubt-sys = { path = "../libs/sys" }
+redoubt-ticket = { path = "../libs/ticket" }
 
 [features]
 # Implied by every test-only feature below; the kernel refuses to compile it without debug

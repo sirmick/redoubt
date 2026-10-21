@@ -1463,7 +1463,7 @@ It is attacked three ways:
 
 ### R78 (fair kernel entry)
 
-Status: built · tested: bench:smp-boot, bench:smp-lock-wait, bench:sched-lock-contention, bench:sched-lock-contention-4, bench:sched-lock-contention-4-mttcg, bench:irq-boot-hart-only, host:testbench::lock_waits_take_the_lock_in_ticket_order
+Status: built · tested: bench:smp-boot, bench:smp-lock-wait, bench:smp-lock-wait-4-mttcg, bench:sched-lock-contention, bench:sched-lock-contention-4, bench:sched-lock-contention-4-mttcg, bench:irq-boot-hart-only, host:testbench::lock_waits_take_the_lock_in_ticket_order, host:redoubt-ticket::no_hart_halts_past_its_turn_and_a_release_wakes_only_the_hart_it_serves, host:redoubt-ticket::a_halt_ended_with_no_wake_marks_again_and_is_still_woken
 
 On several harts, kernel entry is fair across them: the one kernel lock is a FIFO ticket lock,
 so a hart that arrives at the kernel waits behind at most `MAX_HARTS` - 1 kernel sections, never
@@ -1475,9 +1475,12 @@ harts ([several harts](../plan/m2-usable-shell.md#several-harts)).
 
 The lock (`kernel/src/cell.rs`, `TicketLock`) draws a ticket with a relaxed `fetch_add`, waits
 until `serving` reads it (acquire), and releases by `serving + 1`. A hart waits halted, not
-spinning: it marks itself in the lock's `halted` set, reads `serving` again and, if its turn has
-not come, halts (`wfi`) until an interrupt is pending; the release sends each marked hart the
-reschedule interrupt (through the firmware, SBI), and the woken hart reads `serving` again. The
+spinning: it records its ticket, marks itself in the lock's `halted` set, reads `serving` again
+and, if its turn has not come, halts (`wfi`) until an interrupt is pending; the release sends the
+reschedule interrupt (through the firmware, SBI) to the one marked hart whose ticket it serves,
+and the woken hart reads `serving` again. Every other waiter's turn has not come, and woken it
+would only halt again: a release that woke every marked hart spent 36 % of the lock's hand-off
+interrupts at rest on such harts (`bench:launch-idle`'s trap log). The
 halt waits for the reschedule interrupt alone: the timer's and a device's are masked in `sie` for
 it (`arch::halt_for_ipi`), since a hart without the lock cannot take them, and one pending would
 end every halt at once and turn the wait into a spin. A hart whose awaited interrupt is already
@@ -1486,13 +1489,28 @@ hart regardless and, under `icount`, runs it again only after every other hart's
 (`arch::halt_masking`), which cost an idle hart woken by `sched-lock-contention-4`'s alarm
 28.5 ms. A checked build counts the halts it skips, and `sched-lock-contention` requires some at
 two and at four harts (95 to 182 a run). A hart halted in `kmain`'s idle is not in the lock's set
-and no release wakes it; since a timeout whose payer runs nowhere is armed on one hart
-([the hart timer](timer.md#the-hart-timer)), the machine at rest no longer hands the lock around
+and no release wakes it: a wake that chooses it sends it the reschedule interrupt at once
+(`hart::wake_idle`), and it may then halt on the lock its waker holds, 15 to 22 % of the lock's
+hand-off interrupts at rest. That is the price of getting the woken hart into the lock's queue
+before its waker can take the lock again: sent at the release instead, the interrupt let the
+waker retake the lock and run the woken thread itself, and the woken hart found nothing
+(`timer-flood-at-rest`: 668 and 666 such sections against its bound of 20). Since a timeout
+whose payer runs nowhere is armed on one hart ([the hart timer](timer.md#the-hart-timer)), the machine at rest no longer hands the lock around
 for its sleeps: at the prompt the lock changed hands 5 to 6 times a second with every hart
-halted, each hand-off an interrupt, and changes hands 1.7 to 1.9 times a second with the rule,
-each for a woken thread's own work (`bench:launch-idle`). The
-mark, the read, the release's store and its read of the set are sequentially consistent, so either
-the release sees the mark or the waiter sees the new ticket: no hart halts past its turn. Under
+halted, each hand-off an interrupt. With the rule, and the release waking the hart it serves, a
+hart halts on the lock at rest 3.4 to 3.5 times a second across the machine, each for a woken
+thread's own work; a release that wakes every waiting hart makes it 5.0 to 5.2
+(`bench:launch-idle`, [the machine at rest](../testbench.md#the-machine-at-rest)). The
+record, the mark, the read, the release's store and its reads of the set and the tickets are
+sequentially consistent, so they fall in one order: either the release reads the set after the
+mark, and sees it and the ticket recorded before it, or before, and then the waiter's read, after
+its mark, sees the new ticket: no hart halts past its turn. `redoubt-ticket` holds the record, the
+mark and the release's choice, and its host tests run a release beside a wait over all 597 orders
+of their steps, a later ticket's hart halted beside them, and over all 5,961 when the waiter's halt
+may also end once with no wake, as a shootdown's interrupt ends it, and it marks itself again: no
+hart is left halted past its turn, and none but the served one is woken. A crate built to read
+`serving` before the mark or to wake nobody fails both, in recorded negative runs
+(`cargo test -p redoubt-ticket --features read-before-mark`, and `--features wake-none`). Under
 QEMU's `icount`, where the harts take turns on one host thread and the clock counts every running
 hart's instructions, a spinning hart would spend its turns and the guest's time while the holder
 waited for them, and a halted one gives them up. Spinning cost every case at two harts:
@@ -1523,7 +1541,11 @@ at once may take at most three times as long. Halted they take 1.87 s against 1.
 4.87 s against 1.97 s on rv32: each hand-off of the lock is an interrupt through the firmware,
 dearer on rv32. A kernel whose waiting hart spins (`sched-spin-entry`, a debug-only kernel
 feature) fails it on both widths in a recorded negative run: 250 s against 1.25 s on rv64, 170 s
-against 1.97 s on rv32.
+against 1.97 s on rv32. At two harts one hart waits at a time, so a release has no choice of whom
+to wake; `bench:smp-lock-wait-4-mttcg` makes the calls on four harts that run at once, where the
+calls at once may take at most 2.2 times the calls in turn. Alone, twenty runs a width, they take
+1.74 to 1.85 times; a kernel whose release wakes every waiting hart takes 2.51 to 2.70, and all
+forty of its runs fail it, the recorded negative runs.
 
 `bench:sched-lock-contention` holds the order in time, under R12's costliest call: on every hart
 but one a budget asks in a loop for a `map_anon` refused after a search of the whole area

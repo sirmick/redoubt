@@ -1,0 +1,15 @@
+[package]
+name = "redoubt-ticket"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "The kernel lock's waits (docs/kernel/scheduling.md, R78): a waiting hart's mark and ticket, and the one hart a release wakes, host-tested over every interleaving"
+
+# No dependencies: the kernel links this, so it is TCB.
+[dependencies]
+
+[features]
+# Recorded negatives (docs/kernel/scheduling.md, R78), each failing the interleaving test: the
+# waiter reads `serving` before it marks itself, or the release wakes nobody.
+read-before-mark = []
+wake-none = []
