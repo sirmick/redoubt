@@ -1,0 +1,18 @@
+1:  4076cd34d ! 1:  f43fbebb2 ipd: a silent socket lives through two lost keep-alive answers
+    @@ docs/servers/ipd.md: Status: built · tested: host:redoubt-ipd::no_link_is_unrea
+     +  second, some 140 interrupts and 180 SBI calls a second across the machine, paid by `ipd`,
+     +  `netd` and the kernel. The manifest bounds it: the account's socket cap times the probe rate
+     +  times the per-probe cost. The servers that pay it run at their weights
+    -+  ([R12 (scheduling)](../kernel/scheduling.md#r12-scheduling)), the kernel's interrupt work is
+    -+  billed to the device's owner ([R5 (interrupts)](../kernel/devices.md#r5-interrupts)), and the
+    -+  per-probe cost is the box's per-packet cost at rest, where it comes down. That one person raises
+    -+  a shared server's cost within the cap the owner granted is how R12 bounds a server's work for a
+    -+  client, by the server's weight, not charged to the client.
+    ++  ([R12 (scheduling)](../kernel/scheduling.md#r12-scheduling)), the card's interrupt is billed to
+    ++  the device's owner ([R5 (interrupts)](../kernel/devices.md#r5-interrupts)), the cross-hart wakes
+    ++  are the kernel's, and the per-probe cost is the box's per-packet cost at rest, where it comes
+    ++  down. That one person raises a shared server's cost within the cap the owner granted is how R12
+    ++  bounds a server's work for a client, by the server's weight, not charged to the client.
+      - **smoltcp is vendored code.** It is read and built from the tree, not fetched, but a bug in it is a
+        bug in `ipd`; it is fuzzed only through `ipd`'s own targets, and its `unsafe` is checked by
+        recorded Miri runs, not by a bench case ([under Miri](#under-miri)).

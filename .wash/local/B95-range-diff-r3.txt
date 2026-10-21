@@ -1,0 +1,26 @@
+1:  effcfdc49 ! 1:  0b16e9b1a rt: a multiplexed session's bound runs from its answer, and a held request's deadline is judged when it is reached
+    @@ Commit message
+         held one is judged at the time it is reached. The paths that serve
+         without a system call (the fuzz target's) keep their one time.
+     
+    +    Size budget: libs/rt: a session's deadline read afresh as its answer goes out, and a pending request's mark that the file server held it, so only a held request is judged against its deadline, 4110 to 4118.
+    +
+         Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+     
+      ## docs/servers/serving.md ##
+    @@ libs/rt/tests/mux_held.rs (new)
+     +    f.destroy(server, receive);
+     +    assert_eq!(thread.join().unwrap(), 0);
+     +}
+    +
+    + ## tests/size-budget.toml ##
+    +@@ tests/size-budget.toml: max_lines = 1142
+    + [[crate]]
+    + name = "libs/rt"
+    + paths = ["libs/rt/src"]
+    +-max_lines = 4110
+    ++max_lines = 4118
+    + 
+    + [[crate]]
+    + name = "libs/wire"
+2:  8e8dd63b1 = 2:  09e7125f6 serving: a restarted entry on the same badge meets its predecessor's multiplexed session

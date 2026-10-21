@@ -1,6 +1,6 @@
 # Environment and rules for every member launched 2026-10-20
 
-Main is 453a48bfc (train 87: STEWARD14, B93, B53). Your branch `wp-<PKG>` starts there in `.worktrees/<PKG>`.
+Main is 3e6f29443 (train 88: WEIGHT1, IPD2; the steward at 1,000, ipd's account override and heap check). Your branch `wp-<PKG>` starts there in `.worktrees/<PKG>`.
 
 ## Shell
 
@@ -95,3 +95,11 @@ commits, the paths read, findings numbered P1/P2/P3. Read in the implementer's w
   log you need right after the run.
 - Timing cases judged under load: a failure that passes alone is rerun alone before it is called
   a finding; say which.
+
+## Load runs are serialized (wave of 2026-10-20 evening)
+
+Several members run in this wave. Any run that loads the machine on purpose (a whole bench, two
+whole-class sets, a repeating boot set of 8 or more jobs, or anything asking `q` for more than 8
+cores) waits for the orchestrator's go: send a progress note "load run: <what>, <jobs>, ~<min>"
+and set waiting; you get an instruction when the machine is yours. Single cases and small sets
+(at most 4 jobs) need no go.

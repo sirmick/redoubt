@@ -1,0 +1,96 @@
+1:  f07c53cfe ! 1:  4076cd34d ipd: a silent socket lives through two lost keep-alive answers
+    @@ Commit message
+         the timeout stays 60 s. The host tests lose answers on the fake wire
+         (all but the last survive, all end it) and stall ipd's turns after a
+         lost answer (a turn before the timeout survives, one at it ends it).
+    -    ipd.md states the tolerance, the loss model, and what one probe costs
+    -    an idle box.
+    +    ipd.md states the tolerance, the loss model, what one probe costs an
+    +    idle box, and how the probes scale with an account's sockets;
+    +    testbench.md says what launch-idle's ceiling now catches.
+     
+         Size budget: servers/ipd: the probe count and the keep-alive's derivation from the timeout, with their documentation, and the fake wire's lost-frame knob the keep-alive tests drive.
+     
+    @@ docs/servers/ipd.md: file holds is typed, in the wire encoding ([wire](wire.md#t
+     +- **What a probe costs.** One probe is `ipd`'s timer wake, its `transmit` call to `netd`, the
+     +  card's interrupt for the answer, `netd`'s receive thread's send to `ipd`, and `ipd`'s wake: on
+     +  an idle four-hart box about 66 cross-hart interrupts and 84 SBI calls in all, measured in
+    -+  `launch-idle` (an idle SSH session's socket, six probes a minute against two). At four probes a
+    ++  `launch-idle` with the keep-alive at 10 s (an idle SSH session's socket, six probes a minute
+    ++  against two). At four probes a
+     +  minute the busiest hart there reads 2.9 to 3.5 interrupts a second against 2.4 to 2.8 at two,
+     +  under its ceiling of 3.8. That is the box's cost of any one small frame and its answer at rest,
+     +  not the probe's, and is a finding of its own; the probe interval follows from the loss model
+    @@ docs/servers/ipd.md: stateDiagram-v2
+          Closed --> [*]: gone, its State unit returned
+      ```
+      *Figure: a TCP socket's states as its `ctl` file reports them.*
+    +@@ docs/servers/ipd.md: tests run in an unedited copy outside the tree.
+    + 
+    + | Run | Result |
+    + | --- | --- |
+    +-| `ipd`: `args`, `ctl_deadline`, `fs`, `grant_undo`, `isn`, `program`, `scope`, `sizing`, `stack`, `sweep`, `vectors` | pass |
+    ++| `ipd`: `args`, `ctl_deadline`, `fs`, `grant_undo`, `isn`, `program`, `scope`, `sizing`, `stack`, `sweep`, `vectors` | pass, before `stack`'s two keep-alive tests, which have not run under Miri |
+    + | smoltcp 0.14.0, its library tests | 156 pass; `storage::assembler::test_random` alone runs too long under Miri to finish |
+    + | managed 0.8.0 | 30 pass |
+    + | heapless 0.9.3 | 216 pass; the `pool` tests cannot run (inline assembly, which Miri does not interpret; smoltcp does not use `pool`) |
+    +@@ docs/servers/ipd.md: Status: built · tested: host:redoubt-ipd::no_link_is_unreachable_until_it_comes
+    +   since none reaches this residual. Counting the records in the heap term too is the follow-up.
+    + - **A shared `ipd` is shared state.** Its clients share one stack's memory, timers and link; where
+    +   that matters, each trust domain gets its own `ipd`.
+    ++- **Probes scale with an account's sockets.** Each silent socket probes four times a minute, and
+    ++  each probe costs the box about 66 cross-hart interrupts and 84 SBI calls
+    ++  ([what a probe costs](#the-net-tree)): alice's 32 sockets, all silent, are about 2.1 probes a
+    ++  second, some 140 interrupts and 180 SBI calls a second across the machine, paid by `ipd`,
+    ++  `netd` and the kernel. The manifest bounds it: the account's socket cap times the probe rate
+    ++  times the per-probe cost. The servers that pay it run at their weights
+    ++  ([R12 (scheduling)](../kernel/scheduling.md#r12-scheduling)), the kernel's interrupt work is
+    ++  billed to the device's owner ([R5 (interrupts)](../kernel/devices.md#r5-interrupts)), and the
+    ++  per-probe cost is the box's per-packet cost at rest, where it comes down. That one person raises
+    ++  a shared server's cost within the cap the owner granted is how R12 bounds a server's work for a
+    ++  client, by the server's weight, not charged to the client.
+    + - **smoltcp is vendored code.** It is read and built from the tree, not fetched, but a bug in it is a
+    +   bug in `ipd`; it is fuzzed only through `ipd`'s own targets, and its `unsafe` is checked by
+    +   recorded Miri runs, not by a bench case ([under Miri](#under-miri)).
+     
+      ## docs/servers/netd.md ##
+     @@ docs/servers/netd.md: policy. Everything above the link is `ipd`'s.
+    @@ docs/servers/netd.md: policy. Everything above the link is `ipd`'s.
+      The table: [libs/wire/tables/netif.md](../../libs/wire/tables/netif.md).
+      
+     
+    + ## docs/testbench.md ##
+    +@@ docs/testbench.md: window-to-window spread: 3.8 interrupts a second on the busiest hart (1.6 to 1.9
+    + system calls from user mode (6.0 to 6.1), and 0.01 host cores, the measure's own resolution
+    + (0.001 to 0.002). Before the one-hart rule the busiest hart took 3.4 to 3.5 a second, three
+    + quarters of them the kernel lock's hand-off interrupts, each timeout waking every hart
+    +-([the hart timer](kernel/timer.md#the-hart-timer)).
+    ++([the hart timer](kernel/timer.md#the-hart-timer)). The box has since risen with nothing in the
+    ++case changed: alone, three windows a width read 2.4 to 2.8 on the busiest hart, and three more
+    ++2.9 to 3.5 with `ipd` probing a silent socket every 15 s
+    ++([what a probe costs](servers/ipd.md#the-net-tree)). So the ceiling now catches a rise of about a
+    ++tenth, not a doubling. The rise since the ceiling was set is a finding of its own, and the box's
+    ++per-packet cost at rest is where the headroom comes back; the ceiling stays where it was set. A
+    ++miss beside other work is no verdict until the case misses alone, as for any host-clock case.
+    + 
+    + The window never holds the zeroing of the frames in flight
+    + ([frames in flight](kernel/memory.md#frames-in-flight)): about 35,000, which the boot and the
+    +
+      ## servers/ipd/src/fake.rs ##
+     @@ servers/ipd/src/fake.rs: pub struct Wire {
+          pub selfset: Option<SelfSet>,
+    @@ servers/ipd/tests/stack.rs: fn a_lingering_socket_is_bounded() {
+     +        // The last frame in: the handshake's, then the answer to the probe that ended the stall.
+     +        let heard = w.now;
+     +        w.wire.borrow_mut().lost = 1;
+    -+        while w.wire.borrow().lost > 0 {
+    ++        for _ in 0..timeout / 100_000 {
+    ++            if w.wire.borrow().lost == 0 {
+    ++                break;
+    ++            }
+     +            w.run_for(100_000, 100_000);
+     +        }
+    ++        assert_eq!(w.wire.borrow().lost, 0, "no probe within the timeout");
+     +        assert!(w.now - heard >= KEEP_ALIVE.total_micros(), "probed before the keep-alive");
+     +        // No turn from the lost answer until `next_turn` after the last frame in.
+     +        w.now = heard + next_turn;

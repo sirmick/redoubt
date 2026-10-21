@@ -1434,3 +1434,364 @@ case is the attack that crashes ipd on main).
 3. **Pages.** The rule and its arithmetic go on ipd.md "Sizing", with "Bad arguments, or limits
    that do not fit its budget" extended to the heap; testbench.md's memory table gets ipd's row;
    SECURITY.md gets an R26 row if a row names this crash. Size L.
+
+## SCHED5-cause: a user call's kernel section is at most about a slice (architect-oct20)
+
+Finding (.wash/local/SCHED5-identification.md): both rows are one kernel section, the stub's
+`map_fixed` of beamlet's 835-page text (39.8 ms on rv32, checked), held with interrupts off; every
+range call is linear in its pages at ~48 µs a page on rv32, so any VM's large map, unmap or load
+holds every wake (and every other hart, R78) for its length. R12 permits the linear term today.
+
+**Ruling: option (a), by construction; (b) is not in SCHED5; (c) only for R10, which already has
+its own target.** The principle (TENETS: responsiveness is a measured target under a named
+workload, but what a hostile caller can hold the kernel for must be bounded by construction, as
+`MAX_LEND_PAGES` 16 bounds a lend for the same reason) is: **no call a process can make holds the
+kernel longer than about a slice.** So:
+
+1. **Every call that takes a range** (`map_anon`, `map_fixed`, `unmap`, `set_flags`,
+   `process_map`; lend and transfer are capped already) refuses a range over `MAX_RANGE_PAGES`
+   pages by arithmetic before any walk or charge, with the error a lend past `MAX_LEND_PAGES`
+   gets (a new kind only if the caller cannot tell it apart where it matters, and then the
+   contract names it). An ABI constant beside `MAX_LEND_PAGES`; if the derivation gives 16, the
+   simplifier says whether one constant serves both, with both reasons on the page.
+2. **The derivation, not the number:** the largest power of two whose worst section (a
+   `map_fixed` whose every page table is absent, so the tables are allocated in it) measures
+   within one `SLICE_US` (1 ms) on the slower width in the checked build. Today's per-page cost
+   says 16 (0.76 ms; 32 is 1.5 ms); the implementer measures and states it on memory.md R22 with
+   the per-page figures. A wake then waits at most a slice and a section of a slice's order for
+   anything a user can do. R12's sentence changes: the linear term becomes "at most
+   `MAX_RANGE_PAGES` pages, a constant"; R10 stays the one named exception, bounded by its target.
+3. **Callers chunk.** The stub maps each segment in chunks (one `map_fixed` per chunk; a chunk's
+   `OutOfMemory` fails the child as today). The rt heap keeps a large block one contiguous range:
+   it may `map_anon` the first chunk and extend with `map_fixed` at the following addresses
+   (memory.md allows `map_fixed` in `map_anon`'s area), undoing the chunks already mapped when one
+   fails; `unmap`/`set_flags` loop. Grep every caller of the five calls (libs/rt, stub, beamlet's
+   platform, tests/programs); the fake kernel enforces the same cap so a host test meets it.
+4. **The model** gets the rule in its contracts (R22's), a mutation that ignores the cap, and no
+   extra RNG draw in gen.rs (the memory rule: a lens drawn `any()` is now refused when over the
+   cap, which is the contract). Mutation deadlines re-checked.
+5. **Cases:** the ABI refusal on both widths; an attack case: a hostile process issuing range
+   calls at the cap in a tight loop while the sched-latency stand-in's wakes are measured, the
+   wake targets met (the verdict the stand-in's); the kernel's memory set re-run
+   (`map-fixed-attack`, `map-anon-search-bound`, `map-fixed-tables*`, `scan-bounds`,
+   `process-map-*`); the launch's cost re-measured (835/16 calls at ~12,000 instructions an
+   entry is ~5 ms on a ~4 s launch, stated); the two rv32 cells re-measured and judged, no target
+   moves; the model's host tests and mutation sweep; the memory cases' heap peaks (the chunked
+   heap must not raise a cap).
+6. **(b)**, the three walks a page: recorded on memory.md's residuals with the per-page figures as
+   a cost, not a bound; a node of its own only if the launch time is wanted lower. Not here.
+
+Tier A (kernel, libs/rt, stub, model), size L, reviewers kernel-red-4 + simplifier + editor.
+Pages: memory.md R22 and the five calls' table, scheduling.md R12 and "With the real steward"
+(the cells), budgets.md's R10 sentence if it cites R12's term, the ABI constants where
+`MAX_LEND_PAGES` is documented, SECURITY.md's R12/R22 rows.
+
+## B95-cause: the mux's session bound runs from the answer; a dead instance's state at a restart (architect-oct20)
+
+Finding (.wash/local/B95-identification.md): `pump` sets a session's deadline from a `now` read
+before `fill`, so a fill of the bound or longer (walfsd's is COLLECT_WAIT, 10 s) ends the session
+at its answer; the hub reads the next OPENED as the connection's end and the VM's volume is eio for
+its life; the stranded fresh session outlives the VM, and init's restart of beamlet, handed the
+same badge number, lands its connect on it (empty answer, not OPENED: Unexpected, eio).
+
+Rulings:
+1. **(1) now, in B95.** The deadline, and a pending request's timeout, are judged at the time
+   the answer is sent: the stated rule (serving.md "The end": "since the last returned"; the host
+   test "its whole bound from that answer"). A host test on the fake kernel's held clock: a fill
+   longer than the bound leaves the session its whole bound from the answer. Every bin linking
+   redoubt_rt is built and its host tests run before any boot (the runtime-change rule).
+2. **The natural load run is required** (the orchestrator gives the go: the beamlet set as B93's
+   passes, diagnostic lines on, logs kept), because the design answer differs: (a) a fill ≥ bound
+   is closed by (1); (b) a live waiter not re-calling within the bound under load means the
+   session bound misfires on a live client, and the answer is then (3): the hub keeps the
+   connection and fails only what was outstanding (`Ended`), plus why the waiter starved. (b) is
+   a follow-up node, not B95's; (2) is out: the dead instance's session is its launcher's to
+   release, not the hub's to patch.
+3. **A new node (the Architect drafts it): a restarted entry does not meet its predecessor's
+   state.** init re-mints the same badge number for the next instance (init.rs `start`), and a
+   shared server keys fids, admission and the mux session by that badge: the dead instance's
+   session lasts to its bound and its fids and admission for ever, and the next instance inherits
+   both. The rule exists (serving.md "A client dies": connections stay until the launcher
+   disconnects them; wire.md "A launcher releases its child's grants"); init honours it for the
+   steward's fresh connections only. Design: init releases a dead instance's state at every
+   server it was handed a root badge for, before the relaunch (a typed release through the
+   re-minted badge that frees the root's own fids, session and admission, as `disconnect_all`
+   frees what it minted), or the restart is handed fresh connections as the steward is. Tier A
+   (init, libs/rt), S-M. B95 states it as a residual on serving.md with the window and the fid
+   arithmetic (walfsd's per-bucket fids against what one beamlet instance holds, times init's
+   restart count).
+4. **Q2: (a).** The replay inside the grace is the case's stated condition (its comment) and the
+   same-badge restart it exercises found B26 and B95: keep it. (b) removes the coverage; (c) is
+   not warranted: `poweroff` and the grace exist for this. testbench.md unchanged. After (1) the
+   replay must be clean on both widths; a forbidden line in the grace stays the verdict.
+
+### B95-cause, corrected premise (architect-oct20)
+
+The implementer's check: fids do not outlive a dead instance past its successor's attach: the
+plain path's `Tversion` drops every fid of the key (ninep.rs `answer`, intro(5) version), and
+beamlet attaches with one before `Hub::connect` (the hub's contract: an attached connection).
+What outlives it is the **mux session** alone: InFlight and its pending requests' Requests and
+Pages, to the session bound, and the bound is extended by every hold-0 completion call the
+successor's connect makes (parked, answered empty, `pump` resetting the deadline), so a successor
+retrying connect faster than the bound never gets a session. INIT6 is re-scoped to the one
+obvious fix: **a `Tversion` on either path ends the key's mux session as it drops its fids** (the
+mux path already ends it as a protocol error; the plain path says "a new session on this
+connection: every fid on it goes" and must mean everything). No change to init; init.md's Restart
+bullet is reworded to the truth (a root-badge instance's state at a server goes at its
+successor's `Tversion`; the console and the steward's fresh connections at init's disconnect).
+Size S, libs/rt + a case + the pages. B95's residual sentence names the window as the implementer
+wrote it, closed by the rule above when it lands (no id on the page).
+
+## B94-cause: an idle socket's liveness tolerates the losses the design declares (architect-oct20)
+
+Finding (.wash/local/B94-identification.md): ipd's established sockets carry smoltcp's 60 s
+timeout (from the last segment in) and a 30 s keep-alive (from the last segment out), checked
+timeout-first, so an idle session lives on one probe and one answer per 30 s: one lost answer, or
+one ipd turn missed between T+30 and T+60, resets a live session. netd drops a frame ipd has not
+taken within 50 ms "as on any wire" (netd.md): the design declares the loss path on which the
+liveness check tolerates nothing. Not reproduced under a side load; 1 in 1 whole bench.
+
+Ruling:
+1. **A fix is ruled without a reproduction.** The page claims "an established socket without
+   acknowledged progress for 60 s is ended"; the mechanism ends one after a single lost answer,
+   which is not 60 s without progress. That is the code departing from the page on a loss path
+   the book itself states, and a shared server resetting a live session is a defect whatever the
+   rate. Option **(a)**: the keep-alive interval derived from the timeout over a stated probe
+   count, `KEEP_ALIVE = IDLE_TIMEOUT / 6` (10 s): five probes before the timeout; the socket
+   survives four consecutive lost answers, or an ipd stall of 50 s; the timeout stays 60 s (no
+   bound moves). Stated on ipd.md with the arithmetic and the loss model (netd's 50 ms drop, an
+   ipd turn missed). (b) is out: per-socket probe counting in ipd for what smoltcp's two timers
+   express. (c) is out: a residual would record a known defect against a declared loss path.
+2. **Cost measured, not assumed:** an idle socket now wakes ipd six times a minute; `launch-idle`
+   and the idle ceilings (IDLE1/B56's cases) unchanged, the probe's cost per socket stated beside
+   the rule; a host test of the stack on the fake clock: four lost answers survive, five end it,
+   a 50 s stall survives, a 60 s one ends it.
+3. **The exclusive run stays**, as the measurement that names the loss source, and its reading is
+   as the implementer wrote: a netd drop (the declared path), an ipd wake 30 s late (a scheduling
+   finding: a shared server starved on one hart under sixteen VMs, the owner's Q1 data point again,
+   brought to the Architect with the numbers, not fixed in B94), the ACK missing from the capture
+   (host/slirp: a bench residual), a FIN from sshd (another bug, its own node). On a pass: 0 in 1,
+   the worst ipd lateness and netd drops as the measured margin, on the page beside the tolerance.
+   The case's bound, deadline and N do not move.
+
+Tier A (servers/ipd), size S, reviewer kernel-red-4 as assigned. Pages: ipd.md "A socket lives"
+and "Sizing"/residuals as touched; netd.md's drop sentence cross-referenced; SECURITY.md rows if
+tests change.
+
+## B95's side findings → B98, B99 (architect-oct20)
+
+1. **walfsd's mount fails under load, with no reason, and the box reboots → B98 (new, Tier A).**
+   Not B51 (a completion call's clock), not B26 (the replay), not INIT6 (the mux session). The
+   console (.tmp/B95/load/rv32-02.kept.smp1.log:48) has walfsd's "does not mount, and is served as
+   corrupt" and no blkd line: blkd prints nothing when it marks its device broken (disk.rs "Broken
+   stays broken"), and walfsd prints no reason for a failed mount (the read's error or the check
+   that failed). The likely path is blkd's REQUEST_TIMEOUT_US (10 s) missed under host load (a
+   disk case's guest clock follows the host's while the guest idles on a virtio completion), the
+   device marked broken for ever by a deliberate rule whose reason is a lie, not a slow host;
+   IPD2's "volume poisoned: create: blkd answered Failed" is the same signature. The cascade after
+   it (beamlet exits 1 five times, init reboots) is init's rule as designed, not a finding.
+   Investigation-first: (i) blkd says when and why it marks a device broken (timeout or which
+   lie), walfsd says why a mount failed; (ii) reproduce under the same load with the lines on;
+   (iii) if it is the timeout under host load: the design question is the bound's clock, the same
+   shape as B94's, brought to the Architect with the numbers (no bound moves in the node); if the
+   reads returned wrong bytes, a kernel/driver finding, top priority. Reviewer kernel-red-4.
+2. **bootfsd's heap cap fails its check under load → B99 (new, Tier B, editor).** userland-boot
+   rv32, six of six under the load set: "heap needs 2308 pages for twice its 1154-page peak,
+   capped at 2304"; alone it passes. The cap is twice an idle-measured peak (B35/B42 set it at the
+   rule's value, 2 × 1152); the peak carries a load-dependent term the derivation does not: the
+   pages of requests outstanding at once (bootfsd admits pages 2 and in_flight 2 a bucket; more
+   clients overlap under load) and any Vec growth they trigger. The guest reports the failure in
+   guest time, so under the shared-host rule it is a verdict, not a flake. Fix: derive the cap as
+   the entries' size plus the admission's worst-case per-request term, stated on bootfsd's page
+   and in the manifest's comment, with the memory cases' measured peaks under load beside it; or,
+   if the term cannot be derived, twice the worst measured under the load set with that stated.
+   Re-tier to A if bootfsd's code changes.
+
+### SCHED5: map_anon's placement search, the hammer, the heap's termination (architect-oct20)
+
+1. **The search is the second named exception, and gets a node of its own (K34).** After the cap,
+   every range call's pages are bounded by `MAX_RANGE_PAGES`; `map_anon`'s (and `map_device`'s,
+   `dma_alloc`'s, a received message's) placement search is bounded by the area's constant
+   (65,536 pages, 9.6 ms in the checked build when every table is present), which a process can
+   make every one of its own calls pay by taking a page in each 64 KiB window of its own area:
+   ten slices per call, at will. SCHED5 states it beside R10 as the second exception, with its
+   measured number (option (a)); K34 bounds it by construction: a per-process free-run summary over
+   the placement area kept in step with the page tables (a page is free only if its entry is
+   empty: reservations and both sides of a loan are taken), read a word a level as the frame
+   bitmap is, so a placement costs a constant small against a slice whatever the area holds; or a
+   search that resumes where it left off across the process's entries, if the summary's memory
+   per process is not worth it. Tier A (kernel), size M, kernel-red-4. Not in SCHED5.
+2. **The hammer.** The contention cases keep the whole-area worst case with 16-page requests by
+   taking a page in every 64 KiB window of the hammer's area (4,096 pages a hammer budget in place
+   of 512, the budget grown to hold them): the same search length as before, so the recorded
+   figures compare; the toml's comment states the derivation and the page's sentence on the
+   hammer's shape follows. A figure that moves is re-recorded, no target moves.
+3. **The heap's termination is the one-pass rule, not a count.** "At most 16 gaps" would fail a
+   large block that fits past the sixteenth gap, the regression option (ii) was ruled out for. The
+   loop ends when the first-chunk address, having wrapped, reaches the first attempt's: the
+   kernel's own answer. The retries' cost in a fragmented area is the process's own, each call
+   bounded, and K34 makes each cheap.
+
+### B95 review (servers-red): fresh requests are served, never timed out (architect-oct20)
+
+P2: a request's deadline bounds a request the file server asked to hold; a request not yet tried
+is tried once, in order, whatever the clock says, and a tried, waiting request is judged at the
+time of the judgment. A fill slow on one request may not turn its untried siblings into timeouts
+(the client has no clock on the server's time). Folded into B95 with a mux_held assertion.
+P3-2: INIT6 also covers the successor collecting the predecessor's pending answers and the
+stranded admission carrying over (added to its brief and body). P3-1 (expire's stale now after a
+long pump): not a node; judging late by at most a fill, never early, once every deadline is set
+from a fresh read; the one-line re-read folded into B95 if it is one, else a sentence.
+
+### B94: the keep-alive's idle cost; the per-packet cross-hart cost → K35 (architect-oct20)
+
+Measured (.wash/local/B94-idle-cost.md): KEEP_ALIVE 10 s costs launch-idle's busiest hart about
++1.1 interrupts/s (four more probes a minute on one socket), over its 3.8/s ceiling in 2 of 6
+rounds and in the one quiet round; the rise is m_software on all four harts: about 66 interrupts
+and 84 SBI calls per probe across the machine, ipd itself waking once. Ruling:
+1. **Option (2): KEEP_ALIVE = IDLE_TIMEOUT / 4 = 15 s**: three probes before the timeout, two
+   consecutive lost answers or an ipd stall of 45 s tolerated; the declared loss model is one
+   dropped frame per ipd stall past 50 ms, and two such in a minute under load is the worst the
+   bench has shown plausible; the cost about +0.5/s on the busiest hart, under the ceiling, which
+   does not move (it is a target set from measurement). Re-measure as the table was made,
+   alternating against base, the quiet rounds the ones that count; if it still crosses the
+   ceiling in a quiet round, stop and come back. State the tolerance, the cost per probe and the
+   per-probe path on ipd.md beside the rule.
+2. **(3) is out**: lengthening the timeout to fit probes moves a stated bound (a dead peer's
+   socket held twice as long, a capacity cost to every account) for the idle budget's sake.
+3. **(4) is a node, K35**: 66 cross-hart interrupts and 84 SBI calls to send one small frame and
+   take its answer is the box's per-packet cost at rest, paid by every packet of every idle
+   session, not the probe's; the chain (ipd's timer wake, transmit to netd, the card's interrupt,
+   netd's receive thread's send, ipd's wake) should cost a handful of wakes. Tier A (kernel's
+   wake/IPI path, netd, ipd), M, kernel-red-4; after B94. When it lands, the probe interval is
+   not re-derived unless the loss model changes.
+
+### SCHED5: the search's true worst (architect-oct20)
+
+Finding (.wash/local/SCHED5-search-finding.md, base kernel): a refused `map_anon` costs one
+page-table walk per candidate start, so its cost follows the starts, 65,536 / n for a page pinned
+per n-page window: 22 / 35 / 61 / 114 ms on rv64 (16 / 24 / 38 / 68 on rv32) for n = 16 / 8 / 4
+/ 2. "9.6 ms worst" was one shape. A lease's budget buys about 25-30 ms a call; 128 MiB about
+114 ms. Rulings:
+1. **Pages:** SCHED5 states the table and the per-start cost on memory.md R22 (and the figure
+   wherever it is repeated: scheduling.md R12/R78, SECURITY.md), the worst measured 114 ms, and
+   what a budget of a given size buys; the exception is named with that number, not 9.6. K34
+   stays its own node (a different structure; SCHED5 is L already) and **moves up**: launched
+   as soon as SCHED5 lands, ahead of anything else on the kernel's memory path. Its brief gains
+   the per-start cause: one walk per start is the constant factor, a search that walks once and
+   iterates entries (the resumed form) or the summary removes it.
+2. **map-anon-search-bound:** (a), stated. The old bound was derived from a shape the cap makes
+   unbuildable, so the case changes shape of necessity, not to pass: it builds the densest refused
+   shape its own budget affords (state n and the pages pinned), asserts twice the measured worst
+   rounded up (n = 16: 22.4 ms → 45 ms; the wake bound likewise from the measured lateness), and
+   the page says the bound is that shape's, with the table beside it for what a larger budget
+   buys. K34 re-derives both down. (b) would leave the search unguarded until K34.
+3. **Contention cases:** hammers pin before the window; `search_alone` moves into a hammer-sized
+   child so its refusals are the search's, not its budget's (a measurement measures what it
+   claims); the figures re-recorded, no target moves; `irq-boot-hart-only` is a negative control:
+   a negative that passes proves nothing, so it must fail again, for the stated reason, before
+   SCHED5 is reviewed, and the reason it stopped failing is in the report.
+
+### SCHED5: the contention family's hammer is chosen by its self-check (architect-oct20)
+
+irq-boot-hart-only is sched-lock-contention's self-check (same load, interrupts on the boot hart
+alone, must_fail on the driver wake's target). At n = 16 it passes on rv64: the gate at that load
+no longer catches IRQ1's removal there. Rule: the family's hammer is the densest pin shape at
+which, on both widths, the positive meets its targets and the negative misses them; one hammer
+definition, n stated with the derivation, figures re-recorded, no target moves. The earlier
+"n = 16 so the figures compare" yields. If no n separates them on a width, that is a finding
+stated with the numbers, re-examined when K34 lands.
+
+### B94 review (servers-red P2-1, P2-2): the idle ceiling's headroom; the probes' scaling (architect-oct20)
+
+P2-1. testbench.md says launch-idle's ceilings are twice the measured worst (1.6-1.9 when set,
+2026-10-14) and so catch a cost that doubles. Main before B94 already reads 2.4-2.8, B94 2.9-3.5
+against 3.8. Ruling: **keep 3.8**; the page restates the truth: set at twice 1.6-1.9; main now
+measures 2.4-2.8 and with the keep-alive at 15 s 2.9-3.5, so the ceiling now catches a rise of
+about a tenth, not a doubling; the rise since it was set is a finding of its own (B101), and the
+per-packet cost (K35) is where headroom comes back. Re-deriving to 7 would hide the doubling of
+base the ceiling exists to catch; holding a live-session correctness fix for an efficiency node is
+backwards. launch-idle's verdict rule is the host-clock one already on the page: a miss beside
+other work is no verdict until it misses alone; B94's twelve alone rounds are the verdict.
+**B101 (new, Tier A investigation, kernel-red-4):** the idle box's busiest hart rose from 1.6-1.9
+to 2.4-2.8 interrupts/s between the ceiling's setting (87553025a, 2026-10-14) and 3e6f29443, with
+the 30 s keep-alive on both sides: bisect by train with launch-idle alone, name the merge and the
+mechanism (m_software hand-offs, timer re-arms, a new periodic wake), fix or state; no ceiling
+moves. Independent of K35 (the per-packet chain) and B94.
+
+P2-2. The scaling (about 66 IPIs a probe, four a minute per silent socket, up to an account's
+socket cap: alice's 32 about 140 IPIs/s machine-wide, paid by ipd, netd and the kernel) is a
+residual, not a node: it is bounded by the manifest (the owner's socket cap times the derived
+probe rate times the per-probe constant), the servers that pay it are weighted (R12 bounds a
+server's work; the kernel's interrupt work is billed to the device's owner), and K35 shrinks the
+constant. State the arithmetic on ipd.md beside the cost. Charging a server's work to its client
+is R12's settled design and is not reopened here.
+
+### SCHED5: the self-check at n = 8 (architect-oct20)
+
+No n separates the pair on rv64: at n = 16 the negative meets (p99 44.6), at n = 8 the positive
+misses p50 (34.0 ms, a whole 35.6 ms search). Ruling: trace n = 8 on rv64 first, one boot: a wake
+landing inside a section and served on the hart IRQ1 lets take the interrupt should wait about
+half a section at p50; a whole section says the woken driver waits for the busy hart's section
+end while another hart idles, or the interrupt is taken only at a boundary: a scheduler finding
+the gate found, not a gap in the gate. (a) If so, a new node (K36) with the numbers, and SCHED5
+takes the implementer's proposal (family at n = 16; rv32's self-check judged; rv64's stated as a
+finding with the reason; re-examined with K34 and K36). (b) If the full-section wait is
+inherent, the proposal stands with the reason on the page. No target moves. The launcher's batch
+stays 64 pages, split into range calls by the runtime: a launch costs nothing measurable (2.29 s
+rv32 median, the base's; a 16-page batch read 3.65 s), stated beside the cap.
+
+## B98-cause: a slow host is not a lying device; the bench's disks do not fsync the host (architect-oct20)
+
+Reproduced (.tmp/B98/cause-numbers.md): under injected host I/O pressure (dd + fsync on the ext4
+holding the case images; PSI io 53-78 %) beamlet-files failed 3/10 a width; blkd marked its
+device broken on a flush with no completion in 10.0 s; walfsd's mount said "formatting the blank
+range: Io: blkd answered Failed". No byte wrong. The guest's flush is QEMU's fdatasync
+(cache=writeback) queued behind the host's writeback; no icount, so 10 s of host time. Natural
+load (PSI 2.8 %) did not reproduce it in 20 runs. FILE_WAIT_US (10 s) gave one etimedout the same
+way (a walfs transaction is several writes and four flushes).
+
+Rulings:
+1. **The box's rule stands.** blkd's "a lie is permanent" has a stated reason that is sound for
+   DMA (a completion for a request no longer tracked), and a 10 s flush on the box's own SSD is a
+   broken device. The refinement (1) (fail the request, keep it tracked until the device answers,
+   permanence only for protocol violations) is not built now: it would not rescue the volume
+   either (walfsd poisons on a Failed write, correctly), and it answers a condition the box's
+   hardware does not present. It becomes a node only if real hardware shows slow-but-honest
+   devices. No bound moves.
+2. **The bench owns it: (2).** A case's disk is fresh per boot and the guest's flush ordering is
+   honoured in the host's page cache either way (a QEMU exit loses nothing; the power-loss case
+   simulates loss by QEMU's exit, not the host's), so the bench's case disks run `cache=unsafe`:
+   a guest flush costs no host fsync and the host's writeback pressure no longer reaches blkd's
+   bound. launch-keep-disk's second boot reads the same file from the same page cache. `./launch`
+   (the owner's hand runs) keeps writeback: its disks are the user's and its host is the user's;
+   stated, not decided here. testbench.md's disk section states the setting and the reason with
+   the numbers (3/10 at PSI 53-78 %, 0/20 at 2.8 %); blkd.md says that on a virtualised disk the
+   bound measures the host too, which is why the bench does not fsync it.
+3. **FILE_WAIT_US: the same answer.** It does not move for a host artefact; a walfs transaction
+   that exceeds it on the box's own disk would be a finding of its own.
+4. **The reason lines stay** (blkd's broken line with its cause and numbers; walfsd's mount
+   reason): they are what made this identification possible, and they are B98's deliverable
+   beside the bench change. The console lines are contracts: the cases that forbid or expect them
+   are named in the report.
+
+Tier A as assigned (blkd/walfsd lines), the bench change Tier B inside it; reviewer unchanged.
+
+### SCHED5: the n = 8 trace; the hammer must cover the window (architect-oct20)
+
+Trace (.wash/local/SCHED5-trace-n8.md): IRQ1 works (the idle hart takes the alarm and runs the
+driver); the whole-section wait is the driver's own `receive` queued in ticket order behind the
+hammer's next search, phase-locked: R78's one-section bound, inherent under one lock. But the
+hammer covered only 105 of 200 samples, so the gate's p50 mixed loaded and unloaded wakes, and
+n = 16's 1.2 ms p50 is untraced: a hammer that does not load the samples passes the positive
+for the wrong reason. Ruling: (1) the hammer covers the whole window (searches until the window
+ends, pins kept), at every n; (2) re-measure n = 16 and n = 8 at two harts, both widths, with the
+trace saying what fraction of wakes fell inside a section; (3) then the self-check rule applies on
+the corrected hammer. Expected: under the cap the shortest refused search is n = 16's (22 ms rv64,
+16 rv32), above the 15 ms p50 target, so a phase-locked continuous hammer makes the positive miss
+at every buildable n by R78's own bound, whatever the interrupt routing. If so, the page says it:
+the two-hart contention gate's wake targets are unmeetable under the cap until the search is
+bounded (K34); the contention cases and the self-check record, not judge, until K34, which
+re-judges them as part of its acceptance; SCHED5's own cells (the rv32 steward-latency rows) are
+judged as before. If the corrected hammer leaves the positive meeting on a width, judge there.
+No target moves.
