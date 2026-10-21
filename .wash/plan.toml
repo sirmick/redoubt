@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 103
+revision = 141
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -2743,8 +2743,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "AGENTS"
   body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'STEWARD9 rv32 two-hart' (drafted there as SCHED1; that id was taken, so SCHED5) and 'STEWARD13 rv32 one-hart N = 1 decision_wake' (the second row). Brief: to follow (investigation-first; the brief covers both rows). Tier A (kernel scheduler / timer programming), size M, reviewer kernel-red-4. Row 1 (STEWARD9): at rv32 two harts the N=2 round's timer_wake p50 is 31.8 ms against 15 (31,855 then 31,835 us on a rerun alone, icount-deterministic), N=1 5.6 ms and N=3 5.2 ms; lock-wait 249/1000 in that round; one spinner live on the other hart. Row 2 (STEWARD13): at rv32 one hart the N=1 decision_wake p50 moved 24.2 -> 30.4 ms when the launch moved off the loop: a 30 ms receive timeout sleeps 53-62 ms with exactly one runnable VM and 1-3 ms beside a second, the steward idle in the window; the thread moved the receive ~10 ms earlier and the phase landed the sample over instead of under. Hypothesis: a sleeper's timeout does not end the running VM's slice, the timer armed for the slice's end rather than the nearest timeout, visible only when nothing else switches. Investigation: the kernel's timer programming against the slice with one runnable VM (the trace: the timeout's arming, the slice end, the wake); why N=2/one spinner specifically; whether R78's fair-entry order or the timer's arming bounds the wake, or it is a stated residual with its numbers. The implementer measures and brings fix-or-residual to the Architect. The cells are recorded, not judged, by STEWARD9 and STEWARD13 until this lands; no target moves. Pages: scheduling.md 'Responsiveness'/'Residual risks', kernel/timer.md if the arming moves. Logs .tmp/STEWARD9/rv32-14-FAIL-timerwake.log; STEWARD13's report."
-  state = "active"
-  revision = 39
+  state = "reported"
+  revision = 137
 
 [[node]]
   id = "SHELLN1"
@@ -2948,8 +2948,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   needs = ["B95"]
   body = "Found by B99 (.wash/local/B99-report.md, finding): libs/rt's ninep_mux stored() builds the list of a send's messages before admission, so one session's send of 16 lent pages packed with minimal 7-byte messages makes about 240 pages of heap at any shared 9P server (bootfsd, walfsd, littlefsd, erofsd), outside every budget and cap. Suggested: cap the list at MAX_TAGS (or admit before listing). Needs B95 (same file, ninep_mux.rs). Tier A (serving library, shared servers' memory), S; red review; a host test that fails on main and an attack case from a session. Architect to confirm the shape."
-  state = "todo"
-  revision = 71
+  state = "done"
+  revision = 133
 
 [[node]]
   id = "B101"
@@ -2957,8 +2957,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "AGENTS"
   body = "Found by B94's cost measurement and servers-red's P2-1 (.wash/local/B94-idle-cost.md, .tmp/B94/idle/4): base 3e6f29443 reads 2.4-2.8 interrupts/s on the busiest hart in launch-idle, alone, where the ceiling of 3.8 was set at twice 1.6-1.9 (87553025a, 2026-10-14, the one-hart-per-timeout rule), the 30 s keep-alive on both sides. Also (B98's gate, ecaeae89f): beside an injected host writer launch-idle read 3.83-5.31/s and failed 8/20 on interrupts_per_hart alone (never host_cores or user_ecalls), passing 6/6 alone; the window does no disk I/O, so the guest's interrupt rate itself rises with host load. Ruling .wash/local/wave-2026-10-18-rulings.md 'B94 review (servers-red P2-1, P2-2)'. The ceiling does not move; a host-clock case's miss beside other work is no verdict until it misses alone. Investigation-first: (1) bisect the drift by train between 87553025a and 3e6f29443 with launch-idle alone on a quiet machine, both widths, per-hart and per-kind rates kept (m_software hand-offs, timer, external); name the merge and the mechanism (a new periodic wake, a timer re-armed more often, a hand-off per wake that IDLE2 removed coming back, a server polling); (2) say why the rate grows with host load: which interrupts multiply when the guest's clock is stretched (late timers re-armed in bursts, a deadline caught up in steps, a periodic wake counted per host tick); a guest-side cause is fixed, a QEMU-side one stated. Then fix or state, the number on the page. No ceiling moves; judged by launch-idle alone, twelve alternating rounds as B94 measured. Tier A (kernel or a driver; Tier B only if a userland timer), size S-M, reviewer kernel-red-4. Independent of K35 and B94."
-  state = "todo"
-  revision = 101
+  state = "active"
+  revision = 141
 
 [[node]]
   id = "B102"
@@ -2966,8 +2966,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "AGENTS"
   body = "Train 89 (72c20688c): rv32 steward-context-login FAIL 1500.2 s, session bob.work+x step 1 timed out waiting for 'again-in'; the reattach printed `{:ended, {:error, :timeout}}` for `:redoubt.send(... /dev/cons ...)`. Passes 5/5 alone on the same head both widths (6.4-7.2 s). Read by B95's implementer (.wash/local/B95-report.md 'steward-context-login'): the VM's `ended` is a raw one-way send (word 0 = 18) with beamlet send/2's SEND_TIMEOUT_US = 1,000 us rendezvous (system.rs:43, 451-463); on a context the receiver is consrelay (the relay that survives detach; consrelay.rs:551-575: expire, its turn, receive), in receive only between turns; on one loaded rv32 hart a turn over 1 ms is ordinary. Not B95's mux (sends are one-way; consrelay's request deadlines are FOREVER). Logs: .tmp/train-89/fail-rv32-steward-context-login.log and the two .ssh.log beside it. Investigation: is a 1 ms rendezvous the right contract for a console's `ended` send, or should the sender retry or block; why one failed send leaves the case hanging rather than failing at once. Bench/shell or beamlet, S; Tier A if beamlet's send contract changes."
-  state = "todo"
-  revision = 90
+  state = "done"
+  revision = 113
 
 [[node]]
   id = "B103"
@@ -2978,3 +2978,30 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "Found by SCHED5 (thread SCHED5-cause; ruling .wash/local/wave-2026-10-18-rulings.md 'SCHED5: rv32 two harts gated'). steward-latency on rv32 at two harts, each boot alone, deadline notice p99 net at N = 1 / 2 / 3: SCHED5's head 43.4 / 45.3 / 56.5 ms, base d66839252 41.9 / 41.9 / 56.1, target 40 (the sponsor told: the steward's lease_ended send returned, less the deadline). Pre-existing: the cell was never judged on rv32 at two harts (smp rv32 = [1] until SCHED5), and the page's 13-14 ms there were taken at the dequeue, before the notice was re-measured at the send. SCHED5 gates rv32 at [1, 2] with this cell recorded (record=rv32:2:N=k:deadline_notice:p99, k = 1-3) and the finding on scheduling.md. Investigation-first, no tuning: trace one rv32 two-hart boot (block-trace, hold-trace), take the worst notices apart into the kernel's destruction at the deadline (R10), the exit notice's delivery, the steward's turn to dequeue it (its weight is 1,000 since WEIGHT1), the send to the session and its return; compare the same parts at one hart (meets) and on rv64 at two harts (meets); name the term that grows at two harts on rv32 (a lock wait behind another hart's section as in SCHED5, an audit, the send's rendezvous). Then a fix, or the finding stated with its parts if it is a bound of R78's shape, brought to the Architect. Acceptance: the record= removed and the cell judged at 40 ms, or the stated finding approved. No target moves. Tier A if a kernel or steward change follows, else a page edit; size S-M; reviewer kernel-red-4. Needs SCHED5 (the gate and the record form)."
   state = "todo"
   revision = 100
+
+[[node]]
+  id = "B104"
+  title = "The bench's fingerprint git diff takes the index lock and leaves .git/index.lock behind when a run is killed: later git commands fail until it is removed by hand"
+  template = "package"
+  parent = "AGENTS"
+  body = "Found by SCHED5's implementer (.wash/local/SCHED5-report.md, open items): tools/testbench's tree fingerprint runs `git diff` (and similar) which refreshes the index and takes .git/index.lock; a run killed mid-fingerprint (a session end, a q stop) leaves an empty lock, seen six times on 2026-10-20/21 in the root and in worktrees, each blocking commits until removed by hand. Fix: run the fingerprint's git commands with --no-optional-locks (GIT_OPTIONAL_LOCKS=0), so a read never writes the index; a host test that the fingerprint leaves no lock. Also (B100's report, Observations 2): testbench.md 'Which cases run in guest time' states 145 of 226 boot cases, 38, 8 and 68; the tree has 351 boot cases, 187 under icount. Recount every figure in that paragraph by script, state the script's command in the report, and update the paragraph. Tooling and docs, Tier B, S; one reviewer (editor)."
+  state = "todo"
+  revision = 127
+
+[[node]]
+  id = "B105"
+  title = "One line typed at the shell ends the session's VM: a 3 MiB binary built by a comprehension fails the allocator and beamlet panics (exit 101) instead of the process meeting its heap limit"
+  template = "package"
+  parent = "AGENTS"
+  body = "Found by B100's attack case (.wash/local/B100-report.md, Observations 1; logs .tmp/B100/run1/): on rv64 `for i <- 0..9361, into: <<>>, do: <<...>>` typed at alice's shell ended her VM with `memory allocation of 3269248 bytes failed` (a Rust panic, exit 101); rv32 passed. beamlet.md 'beamlet on Redoubt' states the shape as a residual for several floods at once or a native's single large allocation: the limits are measurements caught afterwards, and the budget's backstop ends the VM. But this is the VM's own binary construction from one expression, below the 2^27-word process limit and above the session's free pages (a sixteenth is 696 pages, 2.85 MB), so a person's one line logs them out where BEAM would kill the process. Rule to hold: an allocation one Erlang process asks the VM for (a binary's construction or growth, a tuple, a list's copy) is checked against that process's heap limit and the VM's free pages before it is made; past either, the process is killed as max_heap_size kills it (exit reason, an error report the shell prints), and the VM serves on. A native's own allocation and several processes at once stay the stated backstop. Investigation first: where the binary builder allocates (beamlet-vm's bs_* and comprehension into: <<>>), why rv64 and not rv32 (a growth doubling past the pages on one width), and which other single-allocation paths a process can drive the same way. Cases: a host test per path (the process killed, the VM alive); the B100 line at the shell on both widths, the session printing the process's exit and answering the next line. Pages: beamlet.md's limits paragraph and the residual's wording narrowed to what remains. Tier B (beamlet, inside one session's budget), size S-M, one reviewer: the red team (a session's availability)."
+  state = "todo"
+  revision = 126
+
+[[node]]
+  id = "B106"
+  title = "A call to a dead stage's session-owned endpoint blocks for ever: piped's death fails nothing queued there, and the stuck waiter holds a hub place"
+  template = "package"
+  parent = "AGENTS"
+  body = "Found by SCHED5's implementer (.wash/local/SCHED5-pipe64-identification.md): userland/otp/redoubt/src/jobs.rs served() makes piped's receive endpoint in the session VM, so the session's budget owns it; when piped's budget is destroyed only piped-owned endpoints' queues and piped's own calls fail, so a VM waiter that calls the endpoint after piped died blocks in the kernel for ever (no Dead wake names it), its place among MAX_WAITERS 6 is never freed, and every later pipeline waits FILE_WAIT_US and fails emfile. Pre-existing race (base 3/3 pass rv32 pipe-sixty-four), widened by SCHED5's timing (head 3/6): SCHED5 is held until this lands. io.rs Io::forget's doc ('the call fails at once') is false in this window. Options: (1) the child's endpoint owned by the child's budget, so destruction fails its queue and revokes the handle (implementer's recommendation); (2) the VM keeps the receive right and drains on forget; (3) the kernel fails calls on an endpoint with no receive right left; (4) a waiter timeout does not help. Architect rules the shape on thread B106-shape. Tier A; red review; a host test on the fake that fails on main, and pipe-sixty-four rv32 x10 alone on SCHED5's head as the witness."
+  state = "active"
+  revision = 136
