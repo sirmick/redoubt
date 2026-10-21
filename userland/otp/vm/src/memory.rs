@@ -51,6 +51,22 @@ pub type HeapPages = fn() -> Option<(u64, u64)>;
 /// The page of Redoubt's runtime heap.
 const PAGE: usize = 4096;
 
+/// The capacities a growing buffer asks the allocator for, in turn, to hold `needed` where it
+/// holds `capacity`: twice that, then a half, a quarter and an eighth more, none past `most`
+/// unless `needed` is, nor below `needed`. Never less than an eighth more: a buffer grown by
+/// slivers is copied whole at each, its copying growing with the square of its size, so a
+/// growth refused even at an eighth is its caller's to answer, by a collection or a kill.
+pub fn growths(capacity: usize, needed: usize, most: usize) -> impl Iterator<Item = usize> {
+    let mut last = usize::MAX;
+    [1, 2, 4, 8].into_iter().filter_map(move |d| {
+        let c = capacity.saturating_add(capacity / d).min(most).max(needed);
+        (c < last).then(|| {
+            last = c;
+            c
+        })
+    })
+}
+
 /// The bytes Redoubt's runtime heap holds for an allocation of `n` bytes (libs/rt/src/heap.rs):
 /// a power-of-two class from 16 to 2,048 bytes, or whole pages. On a host, a model of the machine.
 pub fn held(n: usize) -> usize {
@@ -136,9 +152,13 @@ pub fn footprint(sys: &mut System, heap_pages: HeapPages) -> Vec<String> {
     }
 
     let [mut heaps, mut live, mut rest, mut binaries] = [Row::default(); 4];
+    let killed = Term::Atom(sys.atoms.killed);
     for p in sys.procs.present_mut() {
         heaps.add(p.heap.len(), p.heap.capacity() * size_of::<Term>());
-        p.collect();
+        // One the allocator will not let it collect ends when it next runs, as it would have.
+        if !p.collect() {
+            p.pending_exit = Some(killed);
+        }
         live.add(p.heap.len(), p.heap.capacity() * size_of::<Term>());
         binaries.add(0, p.heap.offheap_bytes());
         rest.add(1, size_of::<Process>());
@@ -191,4 +211,26 @@ pub fn footprint(sys: &mut System, heap_pages: HeapPages) -> Vec<String> {
         ));
     }
     lines
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::vec::Vec;
+
+    use super::growths;
+
+    /// A buffer asks for twice what it holds, then less in steps, and never less than an eighth
+    /// more unless one request needs it: refused there, its caller collects or kills.
+    #[test]
+    fn a_growth_is_never_a_sliver() {
+        let steps: Vec<usize> = growths(1600, 1601, usize::MAX).collect();
+        assert_eq!(steps, [3200, 2400, 2000, 1800]);
+        // The limit caps room to grow into, never what is needed.
+        assert_eq!(growths(1600, 1601, 2100).collect::<Vec<_>>(), [2100, 2000, 1800]);
+        assert_eq!(growths(1600, 5000, 2100).collect::<Vec<_>>(), [5000]);
+        // A request past an eighth is asked for as itself.
+        assert_eq!(growths(1600, 2200, usize::MAX).collect::<Vec<_>>(), [3200, 2400, 2200]);
+        // An empty buffer asks for what it needs.
+        assert_eq!(growths(0, 64, usize::MAX).collect::<Vec<_>>(), [64]);
+    }
 }

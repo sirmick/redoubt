@@ -50,7 +50,7 @@ fn deep_terms_are_handled_iteratively() {
         let owned = OwnedTerm::new(&h, a);
         assert!(compare(owned.heap(), owned.term(), &h, b, true) == Ordering::Equal);
         let mut roots = [a, b];
-        let mut gc = h.collect(0);
+        let mut gc = h.collect(0).unwrap();
         for r in roots.iter_mut() {
             gc.root(r);
         }
@@ -69,7 +69,7 @@ fn collection_keeps_what_is_reachable_and_sharing() {
     let _dead_bin = h.binary(&[1; 5000]);
     let mut roots = [pair, bin];
     let before = h.len();
-    let mut gc = h.collect(0);
+    let mut gc = h.collect(0).unwrap();
     for r in roots.iter_mut() {
         gc.root(r);
     }
@@ -125,7 +125,7 @@ fn literals_are_shared_not_copied() {
     assert_eq!(b.as_bits(inner[1]).unwrap().to_bytes().as_ref(), b"literal");
     // A collection leaves literals where they are.
     let mut roots = [u];
-    let mut gc = b.collect(0);
+    let mut gc = b.collect(0).unwrap();
     gc.root(&mut roots[0]);
     gc.finish();
     assert_eq!(b.len(), 3);
@@ -172,7 +172,7 @@ fn slices_share_one_offheap_entry() {
     let copied = copy(&h, list, &mut dst);
     assert_eq!(dst.offheap_bytes(), 100_010);
     let mut root = copied;
-    let mut gc = dst.collect(0);
+    let mut gc = dst.collect(0).unwrap();
     gc.root(&mut root);
     gc.finish();
     assert_eq!(dst.offheap_bytes(), 100_010);
@@ -200,17 +200,17 @@ fn a_resources_declared_size_counts_as_its_holders_memory() {
     dst.resized(old, 400_000);
     assert_eq!(dst.held_bytes(), 400_000);
     assert_eq!(h.held_bytes(), 100_000, "another holder counts the new size from its next collection");
-    let mut gc = h.collect(0);
+    let mut gc = h.collect(0).unwrap();
     let mut kept = pair;
     gc.root(&mut kept);
     gc.finish();
     assert_eq!(h.held_bytes(), 400_000);
 
-    let mut gc = dst.collect(0);
+    let mut gc = dst.collect(0).unwrap();
     gc.root(&mut root);
     gc.finish();
     assert_eq!(dst.held_bytes(), 400_000);
-    let gc = dst.collect(0);
+    let gc = dst.collect(0).unwrap();
     gc.finish();
     assert_eq!(dst.held_bytes(), 0, "nothing holds it");
 }

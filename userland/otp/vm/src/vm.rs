@@ -15,7 +15,7 @@ use crate::interp::{self, Stop};
 use crate::loader::{self, LoadError};
 use crate::module::Module;
 use crate::platform::{ConsoleInput, Lookup, Platform};
-use crate::process::{Class, Cp, Exception, Io, Process, State};
+use crate::process::{Class, Cp, Exception, Io, Process, Room, State};
 use crate::sched::Sched;
 use crate::sync::{Lock, Sendable, Wakeup};
 use crate::term::{Heap, Holdings, Literals, OwnedTerm, Pid, Ref, Resource, Store, Term, copy};
@@ -1316,6 +1316,14 @@ impl System {
             *profile.entry(crate::interp::where_is(&p, 3)).or_default() += 1;
         }
         self.stats.context_switches += 1;
+        // A process that stopped for an allocation it asked for is collected now, and asks again
+        // when it runs (`Process::ask`).
+        if p.room == Room::Wanted && matches!(stop, Stop::Yield) {
+            p.room = Room::Collected;
+            if !p.collect() {
+                stop = Stop::Exit(Err(Exception::exit(Term::Atom(self.atoms.killed))));
+            }
+        }
         if matches!(stop, Stop::Yield | Stop::Wait) && self.over_memory(&mut p) {
             stop = Stop::Exit(Err(Exception::exit(Term::Atom(self.atoms.killed))));
         }
@@ -1349,20 +1357,17 @@ impl System {
 
     /// Whether `p` must be killed for holding too much memory. A heap over a limit is collected
     /// first: what counts is what is live, as with BEAM's `max_heap_size`.
+    /// A heap the allocator will not let it collect is over too.
     fn over_memory(&mut self, p: &mut Process) -> bool {
         let vm_limit = self.limits.max_heap_words;
-        let own = p.max_heap;
-        let over = |p: &Process| {
-            let usage = crate::memory::process(p);
-            let used = if own.include_shared_binaries { usage.total_words() } else { usage.words };
-            usage.total_words() > vm_limit || (own.size > 0 && used > own.size && own.kill)
-        };
-        if !over(p) {
+        if p.within(vm_limit, 0) {
             return false;
         }
-        p.collect();
+        if !p.collect() {
+            return true;
+        }
         p.usage = crate::memory::process(p);
-        over(p)
+        !p.within(vm_limit, 0)
     }
 
     fn fire_timers(&mut self) {

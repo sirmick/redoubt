@@ -561,6 +561,18 @@ impl Heap {
     /// Cells in use.
     pub fn len(&self) -> usize { self.terms.len() }
 
+    /// Drop everything this heap holds, its off-heap values with it.
+    pub fn clear(&mut self) {
+        self.terms = Vec::new();
+        self.offheap = Vec::new();
+        self.offheap_index.clear();
+        self.offheap_bytes = 0;
+        self.held_bytes = 0;
+    }
+
+    /// Cells held and not in use: what can be built without growing.
+    pub fn spare(&self) -> usize { self.terms.capacity() - self.terms.len() }
+
     /// Cells held, in use or not (for memory reports).
     pub fn capacity(&self) -> usize { self.terms.capacity() }
 
@@ -793,9 +805,36 @@ impl Heap {
 
     // ---- building ----
 
+    /// Make room for `cells` more cells, so building them grows nothing: `true` if the heap has
+    /// them or the allocator gives them now, else `false` with nothing changed. It asks for room
+    /// to grow into, twice the cells it holds and less in steps, but never past `most` and never
+    /// a sliver ([`crate::memory::growths`]). A growth that comes here is never `Vec`'s own,
+    /// whose refusal ends the VM.
+    pub fn try_room(&mut self, cells: usize, most: usize) -> bool {
+        let (len, capacity) = (self.terms.len(), self.terms.capacity());
+        if capacity - len >= cells {
+            return true;
+        }
+        let needed = len.saturating_add(cells);
+        crate::memory::growths(capacity, needed, most).any(|c| self.terms.try_reserve_exact(c - len).is_ok())
+    }
+
+    /// Room for `cells` more cells on a path that cannot fail: as [`Heap::try_room`], and past
+    /// its refusals, exactly what is needed, whose refusal is the allocator's backstop. The next
+    /// safe point finds no headroom and collects or kills ([`crate::process::Process`]).
+    #[cold]
+    fn grow(&mut self, cells: usize) {
+        if !self.try_room(cells, usize::MAX) {
+            self.terms.reserve_exact(cells);
+        }
+    }
+
     fn push_object(&mut self, kind: Kind, cells: &[Term]) -> Ptr {
         let at = self.terms.len();
         let len = u32::try_from(cells.len()).expect("an object is under 2^32 cells");
+        if self.terms.capacity() - at <= cells.len() {
+            self.grow(cells.len() + 1);
+        }
         self.terms.push(Term::Header(Header { kind, len }));
         self.terms.extend_from_slice(cells);
         Ptr::own(at)
@@ -825,12 +864,58 @@ impl Heap {
 
     pub fn cons(&mut self, head: Term, tail: Term) -> Term {
         let at = self.terms.len();
+        if self.terms.capacity() - at < 2 {
+            self.grow(2);
+        }
         self.terms.push(head);
         self.terms.push(tail);
         Term::Cons(Ptr::own(at))
     }
 
     pub fn tuple(&mut self, elems: &[Term]) -> Term { Term::Tuple(self.push_object(Kind::Tuple, elems)) }
+
+    /// A tuple of `n` copies of `value`, built in place.
+    pub fn tuple_filled(&mut self, n: usize, value: Term) -> Term {
+        let at = self.terms.len();
+        let len = u32::try_from(n).expect("an object is under 2^32 cells");
+        if self.spare() <= n {
+            self.grow(n + 1);
+        }
+        self.terms.push(Term::Header(Header { kind: Kind::Tuple, len }));
+        self.terms.resize(at + 1 + n, value);
+        Term::Tuple(Ptr::own(at))
+    }
+
+    /// The elements of tuple `t`, to change: only for a tuple just built, which nothing else
+    /// refers to yet.
+    pub fn fresh_tuple_mut(&mut self, t: Term) -> Option<&mut [Term]> {
+        let Term::Tuple(p) = t else { return None };
+        if p.space != 0 {
+            return None;
+        }
+        let Term::Header(h) = self.terms[p.at()] else { unreachable!("an object starts with a header") };
+        Some(&mut self.terms[p.at() + 1..p.at() + 1 + h.len as usize])
+    }
+
+    /// A copy of the first `n` cells of list `t`, which has at least `n`, ending in `tail`. Built
+    /// front to back, each cell pointing at the next, so no copy of the elements is held aside.
+    pub fn copy_list(&mut self, mut t: Term, n: usize, tail: Term) -> Term {
+        if n == 0 {
+            return tail;
+        }
+        let base = self.terms.len();
+        if self.spare() < 2 * n {
+            self.grow(2 * n);
+        }
+        for i in 1..=n {
+            let (head, rest) = self.as_cons(t).expect("a list of n cells");
+            let next = if i == n { tail } else { Term::Cons(Ptr::own(base + 2 * i)) };
+            self.terms.push(head);
+            self.terms.push(next);
+            t = rest;
+        }
+        Term::Cons(Ptr::own(base))
+    }
 
     /// A proper list of `items`.
     pub fn list(&mut self, items: impl IntoIterator<Item = Term, IntoIter: DoubleEndedIterator>) -> Term {
@@ -971,12 +1056,18 @@ impl Heap {
     /// A bitstring of `len` bits over `bytes`, put back into the entry they were taken from by
     /// [`Heap::take_for_append`].
     pub fn finish_append(&mut self, entry: u32, bytes: Vec<u8>, len: usize) -> Term {
+        self.put_back(entry, bytes);
+        Term::Bits(self.push_object(Kind::Bits, &[Term::OffHeap(entry), Term::Int(0), Term::Int(len as i64)]))
+    }
+
+    /// Put the bytes taken by [`Heap::take_for_append`] back into their entry, appended to or
+    /// not.
+    pub fn put_back(&mut self, entry: u32, bytes: Vec<u8>) {
         self.offheap_bytes += bytes.len();
         let OffHeap::Bytes(arc) = &mut self.offheap[entry as usize] else {
             unreachable!("taken for appending")
         };
         *Arc::get_mut(arc).expect("taken for appending") = bytes;
-        Term::Bits(self.push_object(Kind::Bits, &[Term::OffHeap(entry), Term::Int(0), Term::Int(len as i64)]))
     }
 
     /// A match state over the bitstring `bits`, at `pos`.

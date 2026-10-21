@@ -1,0 +1,56 @@
+description = "The allocations beamlet checks before it makes them, asked for by lines typed at the shell, end those lines and never the session's VM (docs/userland/beamlet.md, \"Limits inside one VM\"): alice's SSH session builds a 65,534-byte binary with a comprehension, whose evaluation doubles its process's heap into a 3 MiB request under the process's limit but past the pages her VM has left on rv64; it answers or its process is killed as max_heap_size kills a process, by what the allocator gives. Then a 3,000,000-byte binary, past the process's limit of a sixteenth of the VM's budget (2,850,816 bytes) on both widths, is refused before it is made and the shell prints the evaluation's end, killed; then a third line is answered by the same VM. The verdict is the session's own output: the VM never panics and the session answers after both. Without the check the case fails on both widths: rv64's VM panics at the first line (a failed allocation of 3.4 MiB), and rv32 answers the second instead of killing it"
+arch = ["rv64", "rv32"]
+kind = "boot"
+recipe = "image/boot.toml"
+# The image needs 1 GiB: the principals' budgets, each holding a shell VM's session, do not fit
+# the users budget 256 MiB leaves (docs/kernel/budgets.md).
+memory_mib = 1024
+# One login, a shell VM, three lines: a mux flood's bound for one.
+timeout_secs = 150
+expect = [
+    '^init: started sshd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
+    '^init: started steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+]
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    '^init: .* (exited|faulted|was killed)',
+    'init: restarted',
+    'EXCEPTION',
+    'steward: the core exited',
+    'steward: a step failed',
+    'sshd: login .*: refused',
+]
+
+# Each answer is tagged, so a pattern matches what the shell printed and never the echo. The
+# comprehension's line may answer or be killed, by the pages the VM has then; only the VM's end is
+# forbidden, which its panic would print to her session.
+[[session]]
+user = "alice"
+forbid = ['panicked', 'memory allocation of']
+steps = [
+    { expect = '\([0-9]+\)> ' },
+    { send = "m = for i <- 0..9361, into: <<>>, do: <<7::32-little, 120, rem(i, 256)::16-little>>; {:built, byte_size(m)}\n" },
+    { within = 60 },
+    { expect = '(\{:built, 65534\}|the evaluation ended: :killed)' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:big, byte_size(:binary.copy(<<0>>, 3_000_000))}\n" },
+    { expect = 'the evaluation ended: :killed' },
+    { expect = '\([0-9]+\)> ' },
+    { send = "{:after, 1 + 1}\n" },
+    { expect = '\{:after, 2\}' },
+    { expect = '\([0-9]+\)> ' },
+    { exit = 0 },
+]
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]
+forward = [22]

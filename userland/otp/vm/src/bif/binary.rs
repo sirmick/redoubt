@@ -75,7 +75,12 @@ pub fn copy(c: &mut Ctx, a: &[Term]) -> R {
     if bytes.len().saturating_mul(n).saturating_mul(8) > c.sys().limits.max_binary_bits {
         return Err(c.system_limit());
     }
-    Ok(c.binary(&bytes.repeat(n)))
+    let mut out = c.buffer(bytes.len() * n)?;
+    for _ in 0..n {
+        out.extend_from_slice(&bytes);
+    }
+    let len = out.len() * 8;
+    Ok(crate::bits::Builder::from_parts(out, len).finish(c.heap_mut()))
 }
 
 pub fn bin_to_list(c: &mut Ctx, a: &[Term]) -> R {
@@ -89,7 +94,8 @@ pub fn bin_to_list(c: &mut Ctx, a: &[Term]) -> R {
         },
         _ => part_range(c, &a[1], &a[2], size)?,
     };
-    Ok(c.list((lo..hi).map(|i| Term::Int(b.byte(i) as i64)).collect::<Vec<_>>()))
+    c.room(2 * (hi - lo))?;
+    Ok((lo..hi).rev().fold(Term::Nil, |acc, i| c.cons(Term::Int(b.byte(i) as i64), acc)))
 }
 
 pub fn list_to_bin(c: &mut Ctx, a: &[Term]) -> R { super::erlang::list_to_binary(c, a) }

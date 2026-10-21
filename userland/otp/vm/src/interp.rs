@@ -14,7 +14,7 @@ use crate::bits::{self, Builder};
 use crate::loader::{MAX_Y_REGS, X_REGS};
 use crate::module::{Arg, InstrView, Module};
 use crate::opcodes as op;
-use crate::process::{Class, Cp, Exception, Frame, Handler, Process};
+use crate::process::{Ask, Class, Cp, Exception, Frame, Handler, Process, Room};
 use crate::sched::{Code, Sched};
 use crate::term::{Bits, FunView, Heap, Term};
 use crate::vm::{System, Target};
@@ -36,6 +36,9 @@ pub enum Fault {
     BadCode(&'static str),
     /// The process exceeded a resource limit (its stack). Ends the process; cannot be caught.
     Limit(&'static str),
+    /// An allocation the process asked for is past its heap limit or refused by the allocator,
+    /// after a collection ([`Process::ask`]). Kills it, as `max_heap_size` does.
+    Memory,
 }
 
 impl From<Exception> for Fault {
@@ -65,6 +68,10 @@ pub struct Resume {
 }
 
 pub fn run(sys: &mut Sched<'_>, p: &mut Process) -> Stop {
+    // Killed while it was not running, by a collection the allocator refused (`memory::footprint`).
+    if let Some(reason) = p.pending_exit.take() {
+        return Stop::Exit(Err(Exception::exit(reason)));
+    }
     let mut instructions = 0usize;
     let mut module = p.pc.module;
     let mut resume = p.resume.take();
@@ -81,11 +88,18 @@ pub fn run(sys: &mut Sched<'_>, p: &mut Process) -> Stop {
             sys.refresh(p);
         }
         // Between instructions every term the process holds is a root, so this is a safe point.
-        p.maybe_collect();
+        if !p.maybe_collect(sys.limits.max_heap_words) {
+            return killed(sys);
+        }
         let result = match resume.take() {
             Some(r) => call_mfa_with(sys, p, &r.module, &r.function, r.arity, r.kind, Some(r.native)),
             None => step(sys, p, module),
         };
+        // A collection made for an allocation serves only the instruction that asked for it, which
+        // has now run again.
+        if p.room == Room::Collected {
+            p.room = Room::Free;
+        }
         if let Some(reason) = p.pending_exit.take() {
             return Stop::Exit(Err(Exception::exit(reason)));
         }
@@ -116,7 +130,25 @@ pub fn run(sys: &mut Sched<'_>, p: &mut Process) -> Stop {
                 let reason = p.heap.tuple(&parts);
                 return Stop::Exit(Err(Exception::exit(reason)));
             }
+            Err(Fault::Memory) => return killed(sys),
         }
+    }
+}
+
+/// The end of a process killed for memory: the exit a process over `max_heap_size` takes.
+fn killed(sys: &Sched<'_>) -> Stop { Stop::Exit(Err(Exception::exit(Term::Atom(sys.atoms.killed)))) }
+
+/// What an instruction does with the answer to an allocation it asked for ([`Process::ask`]):
+/// `Ok(true)` to go on; `Ok(false)` to stop with `Stop::Yield`, having changed nothing, and run
+/// again after a collection (the program counter is back on it); `Err` to kill the process.
+fn asked(p: &mut Process, ask: Ask) -> R<bool> {
+    match ask {
+        Ask::Granted => Ok(true),
+        Ask::Collect => {
+            p.pc.pc -= 1;
+            Ok(false)
+        }
+        Ask::Refused => Err(Fault::Memory),
     }
 }
 
@@ -297,6 +329,14 @@ fn run_native(
     // A native may have made literals (`persistent_term:put`) or loaded code whose literals it
     // returns.
     sys.refresh(p);
+    // One refused an allocation it asked for (`Ctx::room`): the process is killed, or it is
+    // called again after a collection, whatever it returned.
+    if p.room == Room::Refused {
+        return Err(Fault::Memory);
+    }
+    if p.retry {
+        return Ok(Term::Nil);
+    }
     match result {
         Ok(t) => Ok(t),
         Err(mut e) => {
@@ -969,6 +1009,13 @@ fn step(sys: &mut Sched<'_>, p: &mut Process, module: &'static Module) -> R<Flow
                 *slot = as_value(&mut p.heap, t);
             }
             match run_native(sys, p, n, (&imp.module, &imp.function), &args[..nargs]) {
+                Ok(_) if p.retry => {
+                    // Not finished yet (`Ctx::retry`): the instruction runs again, its operands
+                    // unchanged, when the process next runs.
+                    p.retry = false;
+                    p.pc.pc = here;
+                    return Ok(Flow::Stop(Stop::Yield));
+                }
                 Ok(t) => dst(p, ins, first + 1 + nargs, t)?,
                 // A guard BIF with a fail label fails the guard instead of raising.
                 Err(Fault::Raise(_)) if fail.is_some() => jump(p, fail)?,
@@ -1628,6 +1675,9 @@ fn bs_create_bin(sys: &mut Sched<'_>, p: &mut Process, ins: &InstrView<'_>, modu
                 match (p.heap.as_bigint(v), size_t.as_usize()) {
                     // Check the size before building, so a huge segment fails without allocating.
                     (Some(v), Some(n)) if n.checked_mul(unit).is_some_and(|b| room(&out, b)) => {
+                        if !bits_room(sys, p, &mut out, n * unit)? {
+                            return Ok(Flow::Stop(Stop::Yield));
+                        }
                         out.push_integer(&v, n * unit, little);
                         true
                     }
@@ -1657,12 +1707,18 @@ fn bs_create_bin(sys: &mut Sched<'_>, p: &mut Process, ins: &InstrView<'_>, modu
                         if unit > 1 && b.len % unit != 0 {
                             false
                         } else {
+                            if !bits_room(sys, p, &mut out, b.len)? {
+                                return Ok(Flow::Stop(Stop::Yield));
+                            }
                             out.push_bits(&b);
                             true
                         }
                     } else {
                         match size_t.as_usize().and_then(|n| n.checked_mul(unit)) {
                             Some(bits_wanted) if bits_wanted <= b.len => {
+                                if !bits_room(sys, p, &mut out, bits_wanted)? {
+                                    return Ok(Flow::Stop(Stop::Yield));
+                                }
                                 out.push_bits_prefix(&b, bits_wanted);
                                 true
                             }
@@ -1718,12 +1774,27 @@ fn bs_create_bin(sys: &mut Sched<'_>, p: &mut Process, ins: &InstrView<'_>, modu
             match p.heap.take_for_append(base) {
                 Some((entry, bytes, len)) => {
                     let mut b = Builder::from_parts(bytes, len);
+                    if b.spare_bits() < tail.len {
+                        // The whole binary counts: its bytes are out of the heap's count while taken.
+                        let words = (len + tail.len).div_ceil(64) as u64;
+                        let limit = sys.limits.max_heap_words;
+                        let ask =
+                            p.ask(limit, words, |_, most| b.try_reserve(tail.len, most.saturating_mul(16)));
+                        if ask != Ask::Granted {
+                            p.heap.put_back(entry, b.into_parts().0);
+                            asked(p, ask)?;
+                            return Ok(Flow::Stop(Stop::Yield));
+                        }
+                    }
                     b.push_bits(&tail);
                     let (bytes, len) = b.into_parts();
                     p.heap.finish_append(entry, bytes, len)
                 }
                 None => {
                     let mut b = Builder::new();
+                    if !bits_room(sys, p, &mut b, base_len + tail.len)? {
+                        return Ok(Flow::Stop(Stop::Yield));
+                    }
                     b.push_bits(&p.heap.as_bits(base).expect("checked above"));
                     b.push_bits(&tail);
                     b.finish(&mut p.heap)
@@ -1733,6 +1804,18 @@ fn bs_create_bin(sys: &mut Sched<'_>, p: &mut Process, ins: &InstrView<'_>, modu
     };
     dst(p, ins, 4, result)?;
     Ok(Flow::Next)
+}
+
+/// Room in `out` for `bits` more, asked for only when it must grow ([`asked`]): the binary's
+/// bytes so far and those count toward the process's limit.
+fn bits_room(sys: &Sched<'_>, p: &mut Process, out: &mut Builder, bits: usize) -> R<bool> {
+    if out.spare_bits() >= bits {
+        return Ok(true);
+    }
+    let words = out.bit_len().saturating_add(bits).div_ceil(64) as u64;
+    let ask =
+        p.ask(sys.limits.max_heap_words, words, |_, most| out.try_reserve(bits, most.saturating_mul(16)));
+    asked(p, ask)
 }
 
 // ---- binary matching ----

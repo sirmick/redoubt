@@ -187,6 +187,38 @@ impl Dictionary {
 /// Cells a heap may grow to before its first collection.
 pub const MIN_HEAP_CELLS: usize = 1024;
 
+/// Cells a heap keeps free at every safe point, so that an instruction building no more than
+/// this never grows it: few, as every process keeps them (a kilobyte, about the slack a heap
+/// growing by doubling has anyway). One that builds more of a size the process chose asks first
+/// ([`Process::ask`]); one whose size its code fixes (a tuple written out in it) grows the heap
+/// as the safe point does, room to grow into first and then exactly what it needs, and only a
+/// refusal of both is the allocator's backstop.
+pub const HEADROOM_CELLS: usize = 64;
+
+/// Where a process stands with an allocation it asked for ([`Process::ask`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Room {
+    #[default]
+    Free,
+    /// Refused for now: the scheduler collects the heap at the end of the slice, and the
+    /// instruction or native that asked runs again.
+    Wanted,
+    /// Collected for it: asked again and refused again, the process is killed.
+    Collected,
+    /// Refused after the collection: the process is to be killed.
+    Refused,
+}
+
+/// The answer to [`Process::ask`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Ask {
+    Granted,
+    /// Stop without changing anything and run again after a collection.
+    Collect,
+    /// Over a limit, or refused by the allocator, even after a collection: kill the process.
+    Refused,
+}
+
 /// Off-heap binary bytes a heap may reference before its first collection. Large binaries
 /// cost the heap only a cell or two, so they get a budget of their own (BEAM's virtual heap).
 pub const MIN_BINARY_BYTES: usize = 1 << 20;
@@ -241,6 +273,8 @@ pub struct Process {
     pub retry: bool,
     /// The native call to make again, with its arguments still in the x registers.
     pub resume: Option<crate::interp::Resume>,
+    /// An allocation asked for and not yet granted ([`Process::ask`]).
+    pub room: Room,
     /// Where it stands with a file operation the platform finishes later.
     pub io: Io,
     /// Processes this one spawned during its time slice, which join the run queue when the
@@ -301,6 +335,7 @@ impl Process {
             timeout_pc: 0,
             timed_out: false,
             retry: false,
+            room: Room::Free,
             resume: None,
             io: Io::Idle,
             spawned: Vec::new(),
@@ -324,18 +359,87 @@ impl Process {
 }
 
 impl Process {
-    /// Collect the heap if it has outgrown its threshold. Called only between instructions,
-    /// when every term the process holds is in one of the places listed here.
-    pub fn maybe_collect(&mut self) {
-        if self.heap.len() >= self.gc_at || self.heap.offheap_bytes() >= self.gc_bytes_at {
-            self.collect();
+    /// Collect the heap if it has outgrown its threshold, and keep [`HEADROOM_CELLS`] free. Called
+    /// only between instructions, when every term the process holds is in one of the places
+    /// listed here. `false` if the allocator refuses the room even after a collection: the
+    /// process is to be killed. `vm_limit` is the VM's limit on a process, in words.
+    #[inline]
+    pub fn maybe_collect(&mut self, vm_limit: u64) -> bool {
+        let due = self.heap.len() >= self.gc_at || self.heap.offheap_bytes() >= self.gc_bytes_at;
+        if !due && self.heap.spare() >= HEADROOM_CELLS {
+            return true;
         }
+        self.collect_and_keep_headroom(due, vm_limit)
     }
 
-    /// Collect the heap now.
-    pub fn collect(&mut self) {
+    #[cold]
+    fn collect_and_keep_headroom(&mut self, due: bool, vm_limit: u64) -> bool {
+        if due && !self.collect() {
+            return false;
+        }
+        if self.heap.spare() >= HEADROOM_CELLS {
+            return true;
+        }
+        let most = self.most_cells(vm_limit);
+        self.heap.try_room(HEADROOM_CELLS, most)
+            || (self.collect() && self.heap.try_room(HEADROOM_CELLS, most))
+    }
+
+    /// Ask for an allocation of `words` (in the VM's 8-byte words) before making it, as BEAM
+    /// collects before a large allocation: granted if the process stays within its limits
+    /// counting it and `alloc` (which makes the allocation, or reserves room for it, and says
+    /// whether the allocator gave it) succeeds. Otherwise the first time the process is to stop
+    /// with nothing changed and run the asking instruction again after a collection; the second
+    /// time, it is to be killed, as a process over `max_heap_size` is.
+    pub fn ask(&mut self, vm_limit: u64, words: u64, alloc: impl FnOnce(&mut Heap, usize) -> bool) -> Ask {
+        // A collection made for the asking instruction serves all it asks for until it ends,
+        // when the interpreter clears it.
+        let collected = self.room == Room::Collected;
+        let most = self.most_cells(vm_limit);
+        // No more than the headroom every heap keeps is checked against the limit at the end of
+        // the slice, as the heap's own growth is.
+        let small = words <= 2 * HEADROOM_CELLS as u64;
+        if (small || self.within(vm_limit, words)) && alloc(&mut self.heap, most) {
+            return Ask::Granted;
+        }
+        if collected {
+            self.room = Room::Refused;
+            return Ask::Refused;
+        }
+        self.room = Room::Wanted;
+        Ask::Collect
+    }
+
+    /// Ask for room for `cells` more heap cells ([`Process::ask`]).
+    pub fn ask_cells(&mut self, vm_limit: u64, cells: usize) -> Ask {
+        self.ask(vm_limit, 2 * cells as u64, |heap, most| heap.try_room(cells, most))
+    }
+
+    /// Whether the process stays within the VM's limit and its own `max_heap_size` holding
+    /// `words` more than it does.
+    pub fn within(&self, vm_limit: u64, words: u64) -> bool {
+        let usage = crate::memory::process(self);
+        let own = self.max_heap;
+        let total = usage.total_words().saturating_add(words);
+        let used = if own.include_shared_binaries { total } else { usage.words.saturating_add(words) };
+        total <= vm_limit && !(own.size > 0 && used > own.size && own.kill)
+    }
+
+    /// The most cells the heap may grow to by itself: its limit's worth. Room to grow into is
+    /// asked for only up to here, so its capacity does not run ahead of what it may hold.
+    fn most_cells(&self, vm_limit: u64) -> usize {
+        let own = self.max_heap;
+        let words = if own.size > 0 && own.kill { own.size.min(vm_limit) } else { vm_limit };
+        usize::try_from(words / 2).unwrap_or(usize::MAX)
+    }
+
+    /// Collect the heap now. `false` if the allocator refuses the copy: the process is to be
+    /// killed. Refused at the start, the heap is untouched; refused halfway, the process's terms
+    /// are half moved, so it is left holding none (its registers, stack, mailbox and dictionary
+    /// emptied with its heap), and nothing can read one before it ends.
+    pub fn collect(&mut self) -> bool {
         let live_guess = self.gc_at / 2;
-        let mut gc = self.heap.collect(live_guess);
+        let Some(mut gc) = self.heap.collect(live_guess) else { return false };
         for t in self.x.iter_mut() {
             gc.root(t);
         }
@@ -351,13 +455,26 @@ impl Process {
         if let Some(t) = self.pending_exit.as_mut() {
             gc.root(t);
         }
-        gc.finish();
+        if !gc.finish() {
+            self.heap.clear();
+            self.x.fill(Term::Nil);
+            self.stack.clear();
+            self.frames.clear();
+            self.handlers.clear();
+            self.mailbox.clear();
+            self.save = 0;
+            self.dictionary = Dictionary::default();
+            self.pending_exit = None;
+            self.resume = None;
+            return false;
+        }
         // Allow as much new allocation as the collection had to scan (what survived and the
         // roots), so collecting costs a constant share of the work however deep the stack is.
         let roots = self.x.len() + self.stack.len() + self.mailbox.len() + self.dictionary.len();
         let live = self.heap.len();
         self.gc_at = live + MIN_HEAP_CELLS.max(live + roots);
         self.gc_bytes_at = MIN_BINARY_BYTES.max(self.heap.offheap_bytes() * 2);
+        true
     }
 
     /// Refresh the heap's view of the literal chunks (after code was loaded).

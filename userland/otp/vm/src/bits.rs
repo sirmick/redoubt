@@ -44,6 +44,24 @@ impl Builder {
 
     pub fn bit_len(&self) -> usize { self.len }
 
+    /// Bits that can be pushed without growing.
+    pub fn spare_bits(&self) -> usize { (self.bytes.capacity() * 8).saturating_sub(self.len) }
+
+    /// Make room for `bits` more, so pushing them grows nothing: `true` if there is room or the
+    /// allocator gives it now, else `false` with nothing changed. It asks for room to grow into,
+    /// twice the bytes it holds and less in steps, but never past `most` bytes and never a sliver
+    /// ([`crate::memory::growths`]): a binary's growth whose refusal is its builder's, never
+    /// `Vec`'s, which ends the VM.
+    pub fn try_reserve(&mut self, bits: usize, most: usize) -> bool {
+        if self.spare_bits() >= bits {
+            return true;
+        }
+        let Some(needed) = self.len.checked_add(bits).map(|b| b.div_ceil(8)) else { return false };
+        let len = self.bytes.len();
+        crate::memory::growths(self.bytes.capacity(), needed, most)
+            .any(|c| self.bytes.try_reserve_exact(c - len).is_ok())
+    }
+
     pub fn push_bit(&mut self, bit: bool) {
         if self.len.is_multiple_of(8) {
             self.bytes.push(0);
