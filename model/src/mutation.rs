@@ -187,6 +187,10 @@ pub enum Mutation {
     /// `map_fixed` walks the page tables of its range before refusing pages its budget cannot pay
     /// for.
     R22MapFixedWalksFirst,
+    /// A range call takes a range of any length, not at most `MAX_RANGE_PAGES` pages.
+    R22RangeCapIgnored,
+    /// `map_anon` of a run longer than a range searches for the range it maps, not the whole run.
+    R22MapAnonSearchesRange,
     /// Publishes no lend despite a supplied buffer.
     IpcWrongLend,
     /// Hides a committed partial reply behind its error.
@@ -444,7 +448,7 @@ pub enum Mutation {
 }
 
 impl Mutation {
-    pub const ALL: [Mutation; 179] = {
+    pub const ALL: [Mutation; 181] = {
         use Mutation::*;
         [
             R1SkipLabelCheck,
@@ -519,6 +523,8 @@ impl Mutation {
             DeviceInfoWrongKind,
             R20NoticePidReused,
             R22MapFixedWalksFirst,
+            R22RangeCapIgnored,
+            R22MapAnonSearchesRange,
             IpcWrongLend,
             IpcDropPartial,
             IpcFalseDelivery,
@@ -702,7 +708,7 @@ impl Mutation {
             R81InFlightAllocatable | R81CommitUnzeroed => "R81",
             R18DeviceByNumber | DeviceInfoWrongKind => "R18",
             R20NoticePidReused => "R20",
-            R22MapFixedWalksFirst => "R22",
+            R22MapFixedWalksFirst | R22RangeCapIgnored | R22MapAnonSearchesRange => "R22",
             R12PriorityById
             | R12IgnoreWeight
             | R12WakeBanksCredit

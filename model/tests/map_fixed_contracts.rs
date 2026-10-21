@@ -50,12 +50,11 @@ fn map_fixed_near_user_top_does_not_starve_map_anon() {
     assert!(matches!(r, Ok(Ret::Addr(_))), "map_anon after a high map_fixed: {r:?}");
 }
 
-/// A hostile huge `len` must be refused promptly: the overlap check is one `BTreeMap` range
-/// lookup and the pages-vs-budget check runs before `tables_needed` ever walks the range. The
-/// range matches the boot bench's (4 GiB to the top of user space, about 2^26 pages). The work is
-/// counted, not timed: the refusal is arithmetic and takes no step over the range, while a
-/// regression to `tables_needed` first walks all 2^26 pages, and one to the overlap check first
-/// counts its lookups. A count no load on the machine changes.
+/// A hostile huge `len` must be refused promptly: a range over `MAX_RANGE_PAGES` is `TooLarge` by
+/// arithmetic, before the overlap check or `tables_needed` walks it (R22). The range matches the
+/// boot bench's (4 GiB to the top of user space, about 2^26 pages). The work is counted, not
+/// timed: the refusal takes no step over the range, while a regression to either walk first
+/// counts its steps. A count no load on the machine changes.
 #[test]
 fn huge_len_is_refused_promptly() {
     let mut w = World::new(None);
@@ -63,7 +62,7 @@ fn huge_len_is_refused_promptly() {
     let steps = w.k.ghost.map_steps;
     let addr = 0x1_0000_0000;
     let r = call(&mut w, 1, Syscall::MapFixed { addr, len: USER_TOP - addr, flags: FLAG_R });
-    assert_eq!(r, Err(Error::OutOfMemory));
+    assert_eq!(r, Err(Error::TooLarge));
     assert_eq!(w.k.budgets[&1].pages_used, before);
     let steps = w.k.ghost.map_steps - steps;
     assert_eq!(steps, 0, "the refusal took {steps} steps over its range");
@@ -82,8 +81,8 @@ fn used(w: &World) -> u64 { w.k.budgets[&w.k.processes[&1].budget].pages_used }
 /// `page_table_charge`. `[4 GiB - PAGE, 4 GiB + PAGE)` is the last page of the fourth gigabyte
 /// and the first of the fifth, both empty, so each page needs a level-1 table (one per
 /// gigabyte) and a level-0 table (one per 2 MiB): 2 pages + 4 tables = 6. The budget is filled
-/// to exactly 5 free first, with 2 MiB filler tables in gigabyte 2: once a table exists each
-/// page in it costs exactly one.
+/// to exactly 5 free first, with 2 MiB filler tables in gigabyte 2, a range at most at a time:
+/// once a table exists each page in it costs exactly one.
 #[test]
 fn page_tables_half_of_the_charge_check() {
     const AT: u64 = 0x1_0000_0000 - PAGE_SIZE;
@@ -106,7 +105,7 @@ fn page_tables_half_of_the_charge_check() {
         } else {
             FILL + (filled / SLOTS) * SPAN + (1 + filled % SLOTS) * PAGE_SIZE
         };
-        let len = if addr % SPAN == 0 { 1 } else { short.min(SLOTS - filled % SLOTS) };
+        let len = if addr % SPAN == 0 { 1 } else { short.min(SLOTS - filled % SLOTS).min(MAX_RANGE_PAGES) };
         assert_eq!(
             call(&mut w, 1, Syscall::MapFixed { addr, len: len * PAGE_SIZE, flags: FLAG_R | FLAG_W }),
             Ok(Ret::Unit)

@@ -126,8 +126,11 @@ fn a_receivers_message_area_is_4_mib() {
     let (ep, _, server) = w.setup().unwrap();
     // The receiver (process 1 itself) fills all but one page of its message area.
     let area = 0x40_0000 / PAGE_SIZE;
-    let fill = Syscall::MapFixed { addr: DEFAULT_MESSAGE_BASE, len: (area - 1) * PAGE_SIZE, flags: FLAG_R };
-    assert_eq!(w.result(1, fill).unwrap(), Ok(Ret::Unit));
+    for first in (0..area - 1).step_by(MAX_RANGE_PAGES as usize) {
+        let len = MAX_RANGE_PAGES.min(area - 1 - first) * PAGE_SIZE;
+        let fill = Syscall::MapFixed { addr: DEFAULT_MESSAGE_BASE + first * PAGE_SIZE, len, flags: FLAG_R };
+        assert_eq!(w.result(1, fill).unwrap(), Ok(Ret::Unit));
+    }
     let Ok(base) = addr(&mut w, Syscall::MapAnon { len: 2 * PAGE_SIZE, flags: FLAG_R | FLAG_W }) else {
         panic!("map_anon")
     };
@@ -168,17 +171,75 @@ fn a_device_has_32_dma_runs() {
     assert!(addr(&mut w, alloc(other)).is_ok());
 }
 
+/// `init`'s budget's free pages.
+fn free(w: &World) -> u64 {
+    let b = &w.k.budgets[&1];
+    b.pages_limit - b.pages_used
+}
+
 #[test]
 fn map_fixed_refuses_pages_it_cannot_pay_for_before_an_overlap() {
-    // More pages than `init`'s budget holds, over a page it has mapped: the pages alone come
-    // first (R22), so the error is `OutOfMemory`, not the overlap's `InvalidArgument`.
+    // More pages than `init`'s budget has free, within the range cap, over a page it has mapped:
+    // the pages alone come first (R22), so the error is `OutOfMemory`, not the overlap's
+    // `InvalidArgument`.
     let over = |mutation| {
         let mut w = World::new(mutation);
         assert_eq!(addr(&mut w, Syscall::MapAnon { len: PAGE_SIZE, flags: FLAG_R }), Ok(DEFAULT_BASE));
-        let len = (w.k.budgets[&1].pages_limit + 1) * PAGE_SIZE;
+        // Spend the budget down to under a range's worth of pages, a range at a time.
+        let range = MAX_RANGE_PAGES * PAGE_SIZE;
+        while free(&w) > MAX_RANGE_PAGES
+            && addr(&mut w, Syscall::MapAnon { len: range, flags: FLAG_R }).is_ok()
+        {}
+        while free(&w) >= MAX_RANGE_PAGES {
+            addr(&mut w, Syscall::MapAnon { len: PAGE_SIZE, flags: FLAG_R }).unwrap();
+        }
+        let len = (free(&w) + 1) * PAGE_SIZE;
         w.result(1, Syscall::MapFixed { addr: DEFAULT_BASE, len, flags: FLAG_R }).unwrap()
     };
     assert_eq!(over(None), Err(Error::OutOfMemory));
     // With the overlap checked first, the call answers the overlap.
     assert_eq!(over(Some(Mutation::R22MapFixedWalksFirst)), Err(Error::InvalidArgument));
+}
+
+#[test]
+fn a_range_over_the_cap_is_too_large_before_any_other_check_but_its_shape() {
+    // Each range call but `map_anon`, one page over `MAX_RANGE_PAGES`, at an address nothing maps
+    // and with flags 0: the size comes after the range's shape and before the flags, the source and
+    // the budget (kernel/abi.md's rows, R22). At the cap, the same calls reach their next check.
+    let over = (MAX_RANGE_PAGES + 1) * PAGE_SIZE;
+    let at = MAX_RANGE_PAGES * PAGE_SIZE;
+    let calls = |len| {
+        [
+            Syscall::MapFixed { addr: 0x1000_0000, len, flags: 0 },
+            Syscall::Unmap { addr: 0x1000_0000, len },
+            Syscall::SetFlags { addr: 0x1000_0000, len, flags: 0 },
+        ]
+    };
+    let mut w = World::new(None);
+    for call in calls(over) {
+        assert_eq!(w.result(1, call.clone()).unwrap(), Err(Error::TooLarge), "{call:?}");
+    }
+    for call in calls(at) {
+        assert_eq!(w.result(1, call.clone()).unwrap(), Err(Error::InvalidArgument), "{call:?}");
+    }
+    // A misshapen range is the shape's error, whatever its size.
+    let ragged = Syscall::Unmap { addr: 0x1000_0000, len: over + 12 };
+    assert_eq!(w.result(1, ragged).unwrap(), Err(Error::InvalidArgument));
+    // With the cap ignored, a range over it is walked: R22's ghost check sees it.
+    let mut w = World::new(Some(Mutation::R22RangeCapIgnored));
+    let caught = w.result(1, calls(over)[1].clone()).expect_err("the walk is a violation");
+    assert!(caught.contains("R22:"), "{caught}");
+}
+
+#[test]
+fn map_anon_takes_a_run_longer_than_a_range_and_maps_one_range_of_it() {
+    // `map_anon`'s length is a run's, the one range argument that may exceed the cap (R22): over it,
+    // the call reaches its flags as at it, and with flags it maps the run's first range alone.
+    let over = (MAX_RANGE_PAGES + 1) * PAGE_SIZE;
+    let mut w = World::new(None);
+    assert_eq!(w.result(1, Syscall::MapAnon { len: over, flags: 0 }).unwrap(), Err(Error::InvalidArgument));
+    let at = addr(&mut w, Syscall::MapAnon { len: over, flags: FLAG_R | FLAG_W }).unwrap() / PAGE_SIZE;
+    let mapped: Vec<u64> =
+        w.k.processes[&1].space.range(at..at + MAX_RANGE_PAGES + 1).map(|(v, _)| *v).collect();
+    assert_eq!(mapped, (at..at + MAX_RANGE_PAGES).collect::<Vec<_>>());
 }

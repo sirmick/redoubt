@@ -12,6 +12,9 @@ pub const MAX_MSG_HANDLES: usize = 4;
 pub const MAX_HANDLES: u64 = 4096;
 /// Pages in one lend.
 pub const MAX_LEND_PAGES: u64 = 16;
+/// Pages one range call may name (`map_fixed`, `unmap`, `set_flags`, `process_map`), and the most
+/// `map_anon` maps of the run it places.
+pub const MAX_RANGE_PAGES: u64 = 16;
 /// Threads per process.
 pub const MAX_THREADS: u64 = 255;
 /// Labels per budget.
