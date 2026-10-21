@@ -293,8 +293,8 @@ a disk or a userland disk (38 cases; the rule for a disk is above); host sockets
 `poke`, a peer or a dial (8); input the host types on the console, `[[input]]` (4; under `icount`
 the rv32 UART lost a burst of it); and a run whose purpose is the host's
 time (`asid-cost-host`, `sched-latency-tcg`, `timeouts-tcg`, and `smp-evict-mttcg`,
-`smp-shootdown-mttcg`, `console-one-writer`, `sched-lock-contention-4-mttcg` and
-`beamlet-schedulers-mttcg`, which need QEMU's multi-threaded TCG; its one-hart twin
+`smp-shootdown-mttcg`, `console-one-writer`, `sched-lock-contention-4-mttcg`,
+`smp-lock-wait-4-mttcg` and `beamlet-schedulers-mttcg`, which need QEMU's multi-threaded TCG; its one-hart twin
 `beamlet-schedulers-one-hart` runs in guest time, since on one hart what it measures is the
 instructions two schedulers' switching costs). Several harts do not keep a case
 on the host's clock: under `icount` QEMU runs the harts in turn on one host thread, and a hart
@@ -346,7 +346,9 @@ than asks it, through the scheduler's `qemu` lock (the `scripts/q` paragraph bel
 a wall-clock bound (`redoubt-rt`, `redoubt-client`, `redoubt-keyd` and `redoubt-consoled` do;
 `redoubt-ipd`, `redoubt-model` and `testbench` only read the clock), which no tolerance would
 make load-proof; a boot case whose bound is a ratio of two host times (`sched-lock-contention-4-mttcg`:
-a stalled vCPU thread lengthens a wake but not the search it is counted in; `beamlet-schedulers-mttcg`:
+a stalled vCPU thread lengthens a wake but not the search it is counted in; `smp-lock-wait-4-mttcg`:
+a stalled vCPU thread lengthens the calls at once, which wait on four, more than the calls in turn;
+`beamlet-schedulers-mttcg`:
 a stalled vCPU thread lengthens one of the two runs it compares, and on the quiet set's four cores
 alone its one-hart twin read 81 to 95 for a ratio that is 94 in guest time, which is why that twin
 runs under `icount`); a case whose expectation is a timeout (`bench-ssh-guest`, and
@@ -1552,13 +1554,18 @@ window-to-window spread: 3.8 interrupts a second on the busiest hart (1.6 to 1.9
 system calls from user mode (6.0 to 6.1), and 0.01 host cores, the measure's own resolution
 (0.001 to 0.002). Before the one-hart rule the busiest hart took 3.4 to 3.5 a second, three
 quarters of them the kernel lock's hand-off interrupts, each timeout waking every hart
-([the hart timer](kernel/timer.md#the-hart-timer)). The box has since risen with nothing in the
-case changed: alone, three windows a width read 2.4 to 2.8 on the busiest hart, and three more
-2.9 to 3.5 with `ipd` probing a silent socket every 15 s
-([what a probe costs](servers/ipd.md#the-net-tree)). So the ceiling now catches a rise of about a
-tenth, not a doubling. The rise since the ceiling was set is a finding of its own, and the box's
-per-packet cost at rest is where the headroom comes back; the ceiling stays where it was set. A
-miss beside other work is no verdict until the case misses alone, as for any host-clock case.
+([the hart timer](kernel/timer.md#the-hart-timer)). The box at rest
+takes more than those windows read: alone, three windows a width, the busiest hart takes 3.0 to
+3.2 interrupts a second; the machine as a whole takes 3.4 to 3.5 of the kernel lock's hand-offs
+a second and about 1.5 wakes of idle harts; and user mode makes 9.7 system calls a second, 2.2 to
+2.3 of them `ipd`'s parked requests asked again every 8 s
+([pinned and abandoned calls](servers/ipd.md#pinned-and-abandoned-calls)), and more its probes of
+a silent socket every 15 s ([what a probe costs](servers/ipd.md#the-net-tree)). The case's comment
+gives the windows each figure comes from. So the ceiling catches a rise of about a fifth, not a
+doubling; the box's per-packet cost at rest is where more headroom comes back. Beside a host
+writer the busiest hart reads more, and the one rate that multiplies is the lock's hand-offs:
+kernel sections stretch in wall time and more harts find the lock held. A miss beside other work
+is no verdict until the case misses alone, as for any host-clock case.
 
 The window never holds the zeroing of the frames in flight
 ([frames in flight](kernel/memory.md#frames-in-flight)): about 35,000, which the boot and the
