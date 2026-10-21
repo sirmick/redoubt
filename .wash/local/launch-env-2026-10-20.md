@@ -1,6 +1,6 @@
 # Environment and rules for every member launched 2026-10-20
 
-Main is 820d5e5ff (train 90: B97, B98; the bench's disks are cache=unsafe). Your branch `wp-<PKG>` starts there in `.worktrees/<PKG>`.
+Main is 4750dd61c (train 92: B101, the kernel lock wakes only the next ticket). Your branch `wp-<PKG>` starts there in `.worktrees/<PKG>`.
 
 ## Shell
 
