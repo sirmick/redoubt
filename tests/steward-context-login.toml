@@ -54,14 +54,20 @@ steps = [
 [[session]]
 user = "bob.work"
 name = "bob.work-again"
-forbid = ['default-marker']
+# A send the relay never took fails here at once, naming this session.
+forbid = ['default-marker', '\{:ended, \{:error']
 steps = [
     { wait = "work-up" },
     { expect = '\[context work: reattached; taken over from [0-9.]+:[0-9]+\]' },
     # The VM tries to end its channel with `consol`'s `ended` (opcode 18) on its console: only
-    # the steward's connection can, so the session stays and answers below.
-    { send = "{:ended, :redoubt.send(elem(:redoubt.ns_lookup(\"/dev/cons\"), 1), {[18, 0, 0, 0], nil, []})}\n" },
-    { expect = '\{:ended, :ok\}' },
+    # the steward's connection can, so the session stays and answers below. `send/2` waits 1 ms
+    # for its receiver (docs/userland/beamlet.md), one slice: the relay takes a send only between
+    # its turns, so under load one try can time out, and the sender owns the retry. It tries for
+    # 2 s (2,000 slices, a bound on the relay's turn, not on the sleep) and prints how many tries
+    # landed it. This case is the only caller of `:redoubt.send`.
+    { send = "{:ended, (fn -> cons = elem(:redoubt.ns_lookup(\"/dev/cons\"), 1); until = System.monotonic_time(:millisecond) + 2000; Enum.reduce_while(Stream.iterate(1, &(&1 + 1)), nil, fn n, _ -> case :redoubt.send(cons, {[18, 0, 0, 0], nil, []}) do :ok -> {:halt, {:ok, n}}; {:error, :timeout} = e -> if System.monotonic_time(:millisecond) < until, do: (Process.sleep(10); {:cont, e}), else: {:halt, e}; e -> {:halt, e} end end) end).()}\n" },
+    { within = 60 },
+    { expect = '\{:ended, \{:ok, [0-9]+\}\}' },
     { send = "String.upcase(work)\n" },
     { expect = '"WORK-MARKER"' },
     { mark = "again-in" },
