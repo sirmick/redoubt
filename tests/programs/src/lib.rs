@@ -15,6 +15,7 @@ use core::fmt::Write;
 
 pub mod bundle;
 pub mod console;
+pub mod lock_wait;
 pub mod logsrv;
 pub mod rd;
 pub mod sched;

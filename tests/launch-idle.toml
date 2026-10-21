@@ -68,6 +68,14 @@ steps = [
 # set_timer calls at 5.8 and 5.3 a second against 3.3. That kernel passes the ceiling below too:
 # it is not this case's negative (timer-flood-at-rest's is). The host-cores ceiling stays at
 # 0.01: the measure's resolution over 60 s is 1/6000 of a core, so 0.002 is about twelve ticks.
+# Measured again on 2026-10-21, alone (docs/testbench.md, "The machine at rest"): the kernel these
+# ceilings were set on reads 2.3 to 2.4 on the busiest hart, two windows a width, so the windows
+# above were lower than the box gives; the ceilings stay. With the kernel lock's release waking
+# only the hart it serves, three windows a width read 3.0 to 3.2, the lock's hand-offs 3.4 to 3.5
+# a second, user calls 9.7 and 0.004 host cores; the kernel before it, in alternating rounds, read
+# 2.8 to 3.9 (one window over 3.8, alone) and hand-offs 5.0 to 5.2. User calls rose from 6.0 to
+# 8.3 when ipd's wait for a parked request fell to 8 s. Beside a host writer, with the release
+# waking every waiting hart, the busiest hart read up to 5.3, the hand-offs 7.4 a second.
 [idle]
 interrupts_per_hart = 3.8
 user_ecalls = 12.2

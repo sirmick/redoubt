@@ -287,11 +287,12 @@ programs DMA without hardware to confine it ([devices](devices.md)). Lines are e
 | `paging`, the Sv32/Sv39 page-table types | `libs/paging/src` | 625 | 12 |
 | `redoubt-layout`, the kernel-half map and PIDs | `libs/layout/src` | 225 | 0 |
 | `redoubt-stride`, the scheduling rules | `libs/stride/src` | 2,143 (831 of them host tests) | 0 |
+| `redoubt-ticket`, the kernel lock's waits | `libs/ticket/src` | 332 (229 of them host tests) | 0 |
 | `redoubt-signing`, the bundle signature preimage | `libs/signing/src` | 149 | 0 |
 | `blkd`, the virtio-blk driver (DMA) | `servers/blkd/src` | 3,410 | 4 |
 | `netd`, the virtio-net driver (DMA) | `servers/netd/src` | 2,430 | 8 |
 
-Without the firmware, the TCB Redoubt writes is 28,921 lines. The kernel's `unsafe` is split
+Without the firmware, the TCB Redoubt writes is 29,253 lines. The kernel's `unsafe` is split
 three ways in the ratchet:
 
 | Ratchet budget | What its `unsafe` does | `unsafe` (pinned) |
@@ -303,7 +304,7 @@ three ways in the ratchet:
 Trap entry and context restore are `global_asm!` in `arch/riscv/asm.rs`, which the ratchet lists
 but which holds no `unsafe` keyword. `redoubt-sys`'s three are the `ecall` itself, the
 `unsafe trait Transport` whose contract the runtime's `unsafe` rests on, and `Ecall`'s
-implementation of it. `redoubt-layout`, `redoubt-stride` and `redoubt-signing` say
+implementation of it. `redoubt-layout`, `redoubt-stride`, `redoubt-ticket` and `redoubt-signing` say
 `#![forbid(unsafe_code)]`, so their budgets can only stay at 0.
 
 The `unsafe` counts on this page are kept true by the docs checker: every count in a
@@ -358,6 +359,7 @@ two, where a file serves two mechanisms).
 | `libs/paging` (`paging`) | typed Sv32/Sv39 page tables, shared with the loader | [memory layout](memory-layout.md) |
 | `libs/layout` (`redoubt-layout`) | the kernel-half address map and PIDs, shared with the loader | [memory layout](memory-layout.md) |
 | `libs/stride` (`redoubt-stride`) | the stride rules the scheduler applies | [scheduling](scheduling.md) |
+| `libs/ticket` (`redoubt-ticket`) | the kernel lock's waits: which hart a release wakes | [scheduling](scheduling.md#r78-fair-kernel-entry) |
 | `libs/signing` (`redoubt-signing`) | the signature preimage the loader checks | [boot](boot.md) |
 | `loader/` | verifies the bundle, places the kernel and `init` | [boot](boot.md) |
 | `model/` (`redoubt-model`) | the executable model, its invariants and mutations | [model](model.md), [invariants](invariants.md) |

@@ -47,7 +47,7 @@
 #           cases whose VM session, its console on the hub's hold, must still be alive after
 #           a hold boundary (a host stall of a second or more at the boundary ends it), and the
 #           multi-threaded TCG cases, whose harts are host threads (sched-lock-contention-4-mttcg
-#           bounds a host time): `q run --quiet`, one at a time on the reserved cores while the
+#           and smp-lock-wait-4-mttcg bound host times): `q run --quiet`, one at a time on the reserved cores while the
 #           rest of the machine keeps running
 #   net     a [net] table opening host sockets: each leases the host ports its boot forwards
 #           (the TCP forwards and the poke) from q (`--ports N`, REDOUBT_PORTS=lo-hi), so two
@@ -72,7 +72,7 @@ quiet += steward-ssh-idle launch-idle
 # waiter can take longer than the VM's 1 s wait to hand its end over, and the seventh fresh piped
 # is refused emfile (tests/pipe-sixty-four.toml).
 quiet += pipe-sixty-four
-quiet += sched-lock-contention-4-mttcg sched-capped-mttcg smp-evict-mttcg smp-shootdown-mttcg sched-wake-no-preempt-harts-mttcg
+quiet += sched-lock-contention-4-mttcg smp-lock-wait-4-mttcg sched-capped-mttcg smp-evict-mttcg smp-shootdown-mttcg sched-wake-no-preempt-harts-mttcg
 quiet += deadline-placement deadline-flood-billed-traced-mttcg sched-exit-churn-mttcg
 quiet += beamlet-schedulers-mttcg
 quiet := $(filter $(cases),$(quiet))

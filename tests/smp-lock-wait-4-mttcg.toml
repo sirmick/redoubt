@@ -1,0 +1,19 @@
+description = "smp-lock-wait at four harts where the harts run at once (multi-threaded TCG, no icount): four threads of one process making system calls at once on four harts take at most 2.2 times the same calls made in turn on one, every hand-off of the kernel lock a halted hart's wake: a release that woke every waiting hart, of whom all but one halt again, does not fit (R78) (host time, checked build, four harts)"
+arch = ["rv64", "rv32"]
+kind = "boot"
+debug_assertions = true
+programs = ["smp-lock-wait-4"]
+smp = [4]
+# Four harts are the case: at two, one hart waits at a time, and a release has no choice of whom
+# to wake.
+keep_smp = true
+# Alone on q's quiet cores, twenty runs a width: 1.74 to 1.85 times (median 1.80 on both widths)
+# with the release waking the hart it serves; 2.51 to 2.70 (medians 2.64 rv64, 2.54 rv32) with the
+# release waking every waiting hart, all forty failing 2.2, the recorded negative runs. 2.2 sits
+# near the middle of the gap.
+# Host time: a verdict only alone, on q's quiet cores (scripts/jobs.mk; docs/testbench.md, "On a
+# shared host").
+timeout_secs = 300
+expect = ['^SMP-LOCK-WAIT TEST PASSED$']
+forbid = ['\[lock-wait\] FAIL']
+poweroff = true

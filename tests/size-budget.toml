@@ -6,7 +6,7 @@ kind = "size-budget"
 [[crate]]
 name = "kernel"
 paths = ["kernel/src"]
-max_lines = 10848
+max_lines = 10844
 
 [[crate]]
 name = "loader"
@@ -47,6 +47,11 @@ max_lines = 173
 name = "libs/conhold"
 paths = ["libs/conhold/src"]
 max_lines = 95
+
+[[crate]]
+name = "libs/ticket"
+paths = ["libs/ticket/src"]
+max_lines = 63
 
 [[crate]]
 name = "libs/ipclist"
