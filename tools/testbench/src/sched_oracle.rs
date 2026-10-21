@@ -1497,6 +1497,41 @@ fn check_call_bounds(log: &str, sections: &[Section]) -> Result<Option<String>, 
     )))
 }
 
+/// **No range call holds the kernel past its bound** (kernel/memory.md, R22), with `hold-trace`:
+/// the program prints a window of `rdtime` ticks and the bound (`RANGE-SECTIONS <start> <end>
+/// <bound>`, one slice in ticks), and every kernel section of `map_anon`, `map_fixed`, `unmap`,
+/// `set_flags` or `process_map` inside the window, net of audits, is held to the bound. At least
+/// one `map_fixed` must be in it. `None` without the line.
+fn check_range_sections(log: &str, sections: &[Section]) -> Result<Option<String>, String> {
+    use redoubt_sys::Number::{MapAnon, MapFixed, ProcessMap, SetFlags, Unmap};
+    let Some(line) = log.lines().map(|l| l.trim_end_matches('\r')).find(|l| l.starts_with("RANGE-SECTIONS "))
+    else {
+        return Ok(None);
+    };
+    let f: Vec<u64> =
+        line["RANGE-SECTIONS ".len()..].split_whitespace().filter_map(|x| x.parse().ok()).collect();
+    let [start, end, bound] = f[..] else { return Err(format!("malformed {line:?}")) };
+    let ranges = [MapAnon, MapFixed, Unmap, SetFlags, ProcessMap].map(|n| n as u64);
+    let mut longest = BTreeMap::<u64, (u64, usize)>::new();
+    for s in sections.iter().filter(|s| ranges.contains(&s.cause) && s.from >= start && s.to <= end) {
+        let net = s.to - s.from - s.audits;
+        if net > bound {
+            return Err(format!(
+                "range sections: a `{}` held the lock {net} ticks net of audits, above the bound of {bound}",
+                cause_name(s.cause)
+            ));
+        }
+        let e = longest.entry(s.cause).or_default();
+        *e = (e.0.max(net), e.1 + 1);
+    }
+    if !longest.contains_key(&(MapFixed as u64)) {
+        return Err("range sections: no `map_fixed` in the window".into());
+    }
+    let each: Vec<_> =
+        longest.iter().map(|(c, (net, n))| format!("{} {n}, longest {net}", cause_name(*c))).collect();
+    Ok(Some(format!("range sections: every one within {bound} ticks net of audits: {}", each.join("; "))))
+}
+
 /// The fixture fixes both the start order and the sample plan. This parser rejects missing or
 /// repeated setup acknowledgements and altered plans before any W is classified.
 fn cluster_plan(log: &str) -> Result<(u64, u64, u64, u64), String> {
@@ -3887,6 +3922,7 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
         .map(|n| check_deadline_preempts(&records, *n as usize))
         .transpose()?;
     let call_bounds_proof = check_call_bounds(log, &sum.sections)?;
+    let range_sections_proof = check_range_sections(log, &sum.sections)?;
     if cluster_old_control && !cluster {
         return Err("cluster_old_control requires cluster".into());
     }
@@ -4235,7 +4271,10 @@ pub fn run(log: &str, args: &str) -> Result<String, String> {
     if let Some(proof) = lift_delay_proof {
         report.push(proof);
     }
-    for proof in [irq_wake_proof, irq_bill_proof, deadline_proof, call_bounds_proof].into_iter().flatten() {
+    for proof in [irq_wake_proof, irq_bill_proof, deadline_proof, call_bounds_proof, range_sections_proof]
+        .into_iter()
+        .flatten()
+    {
         report.push(proof);
     }
     for (name, (net, audits)) in WALKS.iter().zip(walks) {
@@ -7427,6 +7466,37 @@ mod tests {
         own[2] = ('X', 7, 100);
         own[3] = ('Y', 7, 150);
         assert!(check_deadline_preempts(&one_hart(&own), 1).is_err_and(|e| e.contains("wanted at least 1")));
+    }
+
+    /// A range call's sections inside the window are held to the bound net of audits, and the
+    /// window must hold a `map_fixed`.
+    #[test]
+    fn range_sections_are_held_to_their_bound() {
+        use redoubt_sys::Number::{MapFixed, Receive, Unmap};
+        let section = |from, to, cause: redoubt_sys::Number, audits| Section {
+            from,
+            to,
+            hart: 0,
+            cause: cause as u64,
+            audits,
+        };
+        let log = "RANGE-SECTIONS 100 1000 50\n";
+        // Within the bound net of audits, and a longer section outside the window or of another
+        // call, pass.
+        let sections = [
+            section(100, 150, MapFixed, 0),
+            section(200, 280, Unmap, 30),
+            section(300, 900, Receive, 0),
+            section(1000, 2000, MapFixed, 0),
+        ];
+        let ok = check_range_sections(log, &sections).unwrap().unwrap();
+        assert!(ok.contains("map_fixed 1, longest 50") && ok.contains("unmap 1, longest 50"), "{ok}");
+        // One tick over is refused, as is a window with no `map_fixed`.
+        let over = [section(100, 151, MapFixed, 0)];
+        assert!(check_range_sections(log, &over).is_err_and(|e| e.contains("above the bound of 50")));
+        assert!(check_range_sections(log, &sections[1..3]).is_err_and(|e| e.contains("no `map_fixed`")));
+        assert!(check_range_sections("no line\n", &sections).unwrap().is_none());
+        assert!(check_range_sections("RANGE-SECTIONS 1 2\n", &sections).is_err());
     }
 
     /// Each call's longest section after the fill is held to the factor of its empty-system

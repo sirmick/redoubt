@@ -33,24 +33,26 @@ by what the caller has, because the kernel runs a call to its end with interrupt
 
 | Call | Arguments -> result | What it does |
 | --- | --- | --- |
-| `map_anon` | len, flags -> addr | Map `len` bytes of zeroed pages at an address the kernel chooses, each backed and charged to the caller's budget at once. |
+| `map_anon` | len, flags -> addr | Place a run of `len` bytes at an address the kernel chooses, where all of it is free, and map its first `MAX_RANGE_PAGES` pages at most, zeroed, each backed and charged to the caller's budget at once. The rest of the run is free when it returns, for the caller to map with `map_fixed`; nothing holds it so ([R22](#r22-range-cost)). |
 | `map_fixed` | addr, len, flags | The same, at exactly `addr`. Never replaces a mapping ([below](#map_fixed)). |
 | `unmap` | addr, len | Remove the caller's own pages. A RAM frame goes back to the free pool and its charge to the budget; a device's registers or a `dma_alloc` page only lose the mapping. |
 | `set_flags` | addr, len, flags | Give each of the caller's own pages exactly these permissions. It may add a permission as well as drop one. |
 | `process_map` | h(process), src, dst, len, flags | Move the caller's own RAM pages, contents and all, into a process that has not started, at `dst`, with `flags`. The child's budget pays for them and for the page tables that map them ([processes](processes.md)). |
 
-A range is page-aligned and non-empty, and for every call but `map_anon` it lies below
-`USER_AREA_END` (the end of user space: 0x8000_0000, 2 GiB, on rv32; 0x40_0000_0000, 256 GiB,
-on rv64). Flags are `READ`, `WRITE` and `EXECUTE`: at least one, never `WRITE` with
-`EXECUTE`, never `WRITE` without `READ`. "The caller's own page" is a live user mapping that is
-neither side of a loan and is credited to the caller in the kernel's frame ownership table (or
-is a `dma_alloc` page of its own, or device registers it mapped). Only the RAM among them can
-be made executable ([R11](#r11-memory)). A reservation not yet touched is not a mapping.
+A range is page-aligned and non-empty, at most `MAX_RANGE_PAGES` (16) pages long except `map_anon`'s
+length, which is a run's ([R22](#r22-range-cost)), and for every call but `map_anon` it lies below
+`USER_AREA_END` (the end of user space: 0x8000_0000, 2 GiB, on rv32; 0x40_0000_0000, 256 GiB, on
+rv64). Flags are `READ`, `WRITE` and `EXECUTE`: at least one, never `WRITE` with `EXECUTE`, never
+`WRITE` without `READ`. "The caller's own page" is a live user mapping that is neither side of a
+loan and is credited to the caller in the kernel's frame ownership table (or is a `dma_alloc` page
+of its own, or device registers it mapped). Only the RAM among them can be made executable
+([R11](#r11-memory)). A reservation not yet touched is not a mapping.
 
 Each call checks the whole range before it changes any page, so an error leaves every mapping
 as it was and charges nothing. `process_map` counts the untouched pages of its source among what
 the call must pay for, and backs them only once nothing can refuse it.
-The errors are `InvalidArgument` and `OutOfMemory`, and for `process_map` also `BadHandle`,
+The errors are `InvalidArgument`, `TooLarge` (a range over `MAX_RANGE_PAGES`, except `map_anon`'s length) and
+`OutOfMemory`, and for `process_map` also `BadHandle`,
 `WrongObject` and `NotPermitted` (the child has started). The order of the checks, the same in
 the kernel and the [model](model.md), is in the
 [ABI reference](abi.md#errors-and-the-order-of-checks).
@@ -140,8 +142,8 @@ A frame waits for its zeroing on one of two lists the freeing hart keeps:
    in a process's space and has yet to shoot that process down. The list holds the frame's number,
    never anything in the frame, since a store through a stale translation could still change it.
    The call's shootdown ([residual risks](#residual-risks)) moves the process's staged frames on;
-   a call that frees more than the 64 a hart stages shoots the process down early, once for every
-   64.
+   a destruction that frees more than the 64 a hart stages shoots the process down early, once for
+   every 64 (a range call frees at most `MAX_RANGE_PAGES`, [R22](#r22-range-cost)).
 2. **Pending,** once no hart can store to it: an ended process's frames (its harts left its space
    before its frames were freed), a kernel object's (never mapped), and the staged ones after
    their shootdown. The list is linked through one word of each frame, the word a destruction
@@ -254,8 +256,10 @@ searching from the start of the run it placed last to the last start that fits, 
 area's start. Every start up to the last one that fits is tried, so a run that fits only at the
 area's end is found, and so is the whole of an empty area; every run placed lies inside the
 area. A page is free only if its entry is empty: a reservation or either side of a loan is
-taken. A request that finds no run, or is larger than the area, is `OutOfMemory`. The search
-looks at each page of the area at most once ([R22](#r22-range-cost)).
+taken. A request that finds no run, or is larger than the area, is `OutOfMemory`. `map_anon`
+searches for the whole run its length names and maps only the run's first `MAX_RANGE_PAGES`
+pages, so the rest is free when it returns: placement, not a promise, since nothing holds it
+free. The search looks at each page of the area at most once ([R22](#r22-range-cost)).
 `map_device` and `dma_alloc` place their mappings the same way ([devices](devices.md#map_device)). A
 receiver's lends and transfers land in a second area, 4 MiB from `DEFAULT_MESSAGE_BASE`
 (0x4000_0000), found the same way. The rest of the user layout is on
@@ -538,28 +542,96 @@ device registers, is read-write and never executable.
 
 ### R22 (range cost)
 
-Status: built · tested: bench:map-fixed-attack, bench:map-anon-search-bound, host:redoubt-model::huge_len_is_refused_promptly
+Status: built · tested: bench:map-fixed-attack, bench:map-anon-search-bound, bench:sched-range-hammer, host:redoubt-model::huge_len_is_refused_promptly, host:redoubt-model::a_range_over_the_cap_is_too_large_before_any_other_check_but_its_shape, host:redoubt-model::map_anon_takes_a_run_longer_than_a_range_and_maps_one_range_of_it, mutation:R22RangeCapIgnored, mutation:R22MapAnonSearchesRange
 
-A call that takes a range costs what the page tables hold and what the budget can pay for,
-never what the length asks. A process could otherwise ask for a huge range for free, and the
-kernel, running the call to its end with interrupts off, would stall every other process.
-- `unmap`, `set_flags` and `process_map` check the range page by page and stop at the first
-  page that is not the caller's, so their cost follows what is mapped there.
-- `map_fixed` first refuses a range the budget cannot pay for by arithmetic alone, before any
-  walk. It then checks overlap by walking the page-table tree and skipping every absent subtree
-  whole: at most the root entries the range spans, plus `ENTRIES` (512 on Sv39, 1024 on Sv32)
-  for each table present in it, and only then counts page tables. A `map_fixed` of the whole of
-  user space, which no budget in the case can pay for, is refused well inside the case's 10 ms
-  bound, over mappings or not.
+A call that takes a range holds the kernel at most about a slice, whatever the length asks, and
+costs what the page tables hold and what the budget can pay for. The kernel runs a call to its end
+with interrupts off, so every wake on the call's hart, and every other hart's entry
+([R78 (fair kernel entry)](scheduling.md#r78-fair-kernel-entry)), waits for it.
+- `map_fixed`, `unmap`, `set_flags` and `process_map` each name at most `MAX_RANGE_PAGES` pages:
+  a longer range is `TooLarge`, by arithmetic, after the range's shape and before any walk or
+  charge, as a lend past `MAX_LEND_PAGES` is. `map_anon`'s length is a run's, the one range
+  argument that may be longer: it places the whole run by its search (below) and maps at most the
+  run's first `MAX_RANGE_PAGES` pages, so the call holds the kernel for the search and a range, or
+  maps nothing (`OutOfMemory`). The number is derived: the
+  largest power of two whose worst section, a `map_fixed` whose every page table is absent so
+  the call makes them (two on Sv32 across a root entry, four on Sv39 across a gigabyte), measures
+  within one slice (`SLICE_US`, 1 ms) on the slower width, in a checked build under virtual time.
+  Timed from user mode around the call, 16 pages took 1,012 µs on rv32 (970 net of the timing's
+  own 42) and 780 µs on rv64, and 32 pages 1,768 and 1,413, so 16. A range call costs about
+  47 µs a page on rv32 and 40 on rv64 ([residual risks](#residual-risks)). `process_map` of 16
+  pages takes about as long, 994 µs net on rv32 and 963 on rv64, with one overrun: from untouched
+  reservation pages, which it backs and zeroes inside the call, 16 take 1,765 µs net on rv32 and
+  1,445 on rv64, 1.4 to 1.8 slices. Only the process the loader starts holds reservations (`init`;
+  a process started by `process_start` has none), so no user process can build that shape; were
+  reservations ever to reach another process, the overrun would need a bound of its own. It equals
+  `MAX_LEND_PAGES` by measurement, not by definition: a lend's cap bounds what a call carries
+  and the 9P `msize`, this one what a range call holds the kernel for.
+  `bench:sched-range-hammer` holds it from the kernel's trace: a budget maps and unmaps in a
+  loop the longest range the kernel takes, every table made afresh each time, and every range
+  call's lock section is within the slice net of audits (774 µs at most on rv32, 761 on rv64),
+  while the latency workload's driver stand-in beside it wakes in at most 1.2 ms at p50 and 2.3 ms
+  at p99 against 15 and 50. Asked first for 2,048 pages, the hammer is refused; a kernel that
+  took them whole fails the case, holding the lock 96.8 ms a call on rv32 in a recorded negative
+  run. A longer range is its caller's to split: the loader stub maps each segment a range at a
+  time, so beamlet's 835-page text, which one call would hold the kernel 39.8 ms for on rv32
+  (21.2 ms on rv64, [scheduling](scheduling.md#responsiveness)), is 53 calls; and the runtime
+  maps, moves and unmaps a range at a time and keeps a long run one run: the kernel's `map_anon`
+  places it, and `map_fixed` maps the ranges after the first
+  ([`redoubt-rt`](../userland/native.md#redoubt-rt-the-native-runtime)). A launch's batch is
+  64 pages ([`init`](../servers/init.md#launching-through-the-loader-stub)), split into range
+  calls by the runtime: a launch takes 2.29 s at the median on rv32 at one hart, as it does
+  without the cap, where 16-page batches take 3.65 s.
+- Within a range, `unmap`, `set_flags` and `process_map` check the range page by page and stop
+  at the first page that is not the caller's, so their cost follows what is mapped there.
+- `map_fixed` refuses pages the budget cannot pay for by arithmetic, before any walk. It then
+  checks overlap by walking the page-table tree and skipping every absent subtree whole, and only
+  then counts page tables. A `map_fixed` of the whole of user space is refused by its length
+  well inside the case's 10 ms bound, over mappings or not.
 - A lend or transfer checks at most the pages mapped in its range, and a lend is at most
   `MAX_LEND_PAGES` (16).
-- `map_anon`'s search, which also places `map_device`, `dma_alloc` and a received message,
-  never tests a start twice: when a page is taken, the next start tried is the page after it,
-  and a missing page table skips its whole span. So it looks at each page of its fixed area at
-  most once, 65536 for `map_anon`'s and 1024 for the message area, whatever the request asks.
-  With every page table of the area present, the worst case, a refusal takes about 9.6 ms in a
-  checked build under virtual time; the case bounds it at 12 ms, and a timer wake during it at
-  15 ms.
+- `map_anon`'s search, which also places `map_device`, `dma_alloc` and a received message, is
+  one of three kernel costs a slice does not bound, with R10's
+  ([budgets](budgets.md#r10-destruction)) and a device owner's allocation (below), and the one a
+  process can make each of its own calls pay. It never tests a start twice:
+  when a page is taken, the next start tried is the page after it, and a missing page table skips
+  its whole span. So it looks at each page of its fixed area at most once, 65,536 for
+  `map_anon`'s and 1024 for the message area, whatever the request asks. But each start it tries
+  costs a walk of its own, so a refusal's cost follows the starts, not only the pages read: a
+  process with a page taken in every n-page window of its area makes each refused n-page request
+  try 65,536 / n starts. In a checked build under virtual time, with every page table present
+  (worst of three runs, about 5.4 µs a start on rv64 and 4.0 on rv32):
+
+  | n | pages taken | rv32 | rv64 |
+  | --- | --- | --- | --- |
+  | 16 | 4,096 | 16.4 ms | 22.1 ms |
+  | 8 | 8,192 | 23.7 ms | 35.2 ms |
+  | 4 | 16,384 | 38.4 ms | 61.3 ms |
+  | 2 | 32,768 | 67.8 ms | 113.6 ms |
+
+  The worst measured is 114 ms, and what a process can make it cost is what its budget can take:
+  a lease's 5,248 pages hold at most a page in every 13-page window, about 5,000 starts, so at
+  most about 27 ms a call on rv64 at the table's cost a start; a budget of 128 MiB, 32,768 pages, holds n =
+  2's shape, about 114 ms. `bench:map-anon-search-bound` builds the densest refused shape its own
+  budget affords with requests at the cap, n = 16 (4,096 pages taken), and bounds that shape: a
+  refusal under 45 ms and a timer wake during it under 45 ms, twice the worst its own run
+  measured (22.4 ms on rv64; `sched-lock-contention`'s search alone reads 22.6), rounded up. The bound is that shape's; the table says what a larger budget buys. A
+  `map_anon` of a run longer than a range searches for the whole run, and tries no more starts
+  than a shorter request does (at most 65,536 less the run's pages, plus one), so it adds no new
+  worst; it maps a range at most. Bounding the
+  search by construction (a search that walks once and iterates the entries, or a summary of the
+  area's free runs kept with the page tables, read a word a level as the frame bitmap is) is
+  planned.
+- A device owner's `dma_alloc` and `map_device` are the third: each is linear in the pages it
+  asks for, `dma_alloc`'s bounded by the DMA pool (1,024 pages, about 48 ms on rv32 in a checked
+  build at the per-page cost above) and `map_device`'s by the device's register region. Only a
+  driver `init`'s manifest names holds a device handle that can make them, and the image's
+  drivers call them once each, when they open their device at start or at a restart, for
+  constant sizes: `blkd` 9 DMA pages, `netd` 9 for each of its two queues, and one `map_device`
+  of each device's registers: in one rv32 boot's trace, checked build, each `dma_alloc` held the
+  kernel 304 to 325 µs and each `map_device` at most 548 µs, all within a slice. So a running
+  box pays it only when a driver restarts, a failure path counted against `init`'s restart rule
+  ([init](../servers/init.md#restarts-and-reboots)).
 
 ## Failure and restart
 
@@ -598,6 +670,16 @@ kernel, running the call to its end with interrupts off, would stall every other
 
 ## Residual risks
 
+- **A range call's pages cost three walks each.** `map_fixed` walks the page tables once to check
+  the range is free, once to make the tables it needs and once to map each page, and takes each
+  frame from the bitmap: about 47 µs a page on rv32 and 40 on rv64 in a checked build, which is
+  what sets `MAX_RANGE_PAGES` at 16 ([R22](#r22-range-cost)). A cheaper page would raise the cap
+  and make a launch's loading faster; the loader stub's 835-page text takes 53 calls.
+- **`map_anon`'s search is up to about a hundred slices** ([R22](#r22-range-cost)): a process
+  whose area holds a page in every n-page window makes each of its own refused n-page `map_anon`
+  calls try 65,536 / n starts, a walk each: 22 ms on rv64 at n = 16 and 114 ms at n = 2 in a
+  checked build, as much as its budget can pay to take the pages. Every wake on its hart waits
+  for it (`bench:sched-lock-contention` hammers it).
 - **`map_fixed` can fill `map_anon`'s area.** A process that maps the whole area with
   `map_fixed` makes its own later `map_anon` calls fail with `OutOfMemory`. It harms only that
   process. The same for the runtime's thread-stack area

@@ -147,8 +147,9 @@ pub const WORDS: usize = 4;
 pub const MAX_MSG_HANDLES: usize = 4;
 /// Pages in one lend (= the 9P `msize`, 64 KiB; servers/wire.md).
 pub const MAX_LEND_PAGES: usize = 16;
-/// Pages one range call may name (`map_anon`, `map_fixed`, `unmap`, `set_flags`, `process_map`):
-/// the most whose worst kernel section fits one slice (kernel/memory.md, R22).
+/// Pages one range call may name (`map_fixed`, `unmap`, `set_flags`, `process_map`), and the most
+/// `map_anon` maps of the run it places: the most whose worst kernel section fits one slice
+/// (kernel/memory.md, R22).
 pub const MAX_RANGE_PAGES: usize = 16;
 
 /// The ranges of at most `MAX_RANGE_PAGES` pages that cover `[addr, addr + len)`, in order, as

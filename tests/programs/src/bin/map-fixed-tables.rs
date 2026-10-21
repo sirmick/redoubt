@@ -1,4 +1,4 @@
-//! `tables_needed` across gigabytes on Sv39 and across root entries on Sv32 (R22;
+//! `tables_needed` across a gigabyte on Sv39 and across a root entry on Sv32 (R22;
 //! kernel/memory.md, `map_fixed`).
 //!
 //! `tables_needed` (kernel/src/arch/riscv/mem.rs) once deduplicated missing tables by their
@@ -6,23 +6,21 @@
 //! level-0 tables at index 0 of consecutive gigabytes, with every table between them present,
 //! were counted as one, and the mapping loop's `alloc_page` `.expect` panicked the kernel. Now
 //! that a table mapping nothing is freed (kernel/memory.md, "Page tables"), no table is ever
-//! present inside a free range, so that shape cannot be built from userspace any more. What
-//! stays is the exact count across the boundary, and the setup shows `unmap` freeing tables.
+//! present inside a free range, and a range names at most `MAX_RANGE_PAGES` pages (R22), so that
+//! shape cannot be built from userspace any more. What stays is the exact count across the
+//! boundary, and the setup shows `unmap` freeing tables.
 //!
-//! The range is `[3 GiB + 2 MiB - rd::PAGE_SIZE, 4 GiB + rd::PAGE_SIZE)`: 261634 pages, which
-//! need 515 tables: gigabyte 3's level-1 table and its 512 level-0 tables, and gigabyte 4's
-//! level-1 table and its first level-0 table. With `free == pages + 514` the pages check passes
-//! and the page-tables check must refuse: OutOfMemory, nothing charged. Only this tight half
-//! runs. The exact half zeroes 1 GiB, about a minute under QEMU. It is the one program the
-//! tester starts, so its own budget (slot 3) is all of `system`'s free pages bar one, and
-//! `memory_mib = 4608` because `system` gets a quarter of RAM (budget.rs, `boot_budgets`) and must
-//! be able to afford the pages; `root` in `init`'s place could not. The guest touches only
-//! ~130 MiB.
+//! The range is a range call's most, `MAX_RANGE_PAGES` pages, its middle at 4 GiB: gigabyte 3's
+//! level-1 table and its last level-0 table, and gigabyte 4's level-1 table and its first level-0
+//! table, 4 tables. With `free == pages + 3` the pages check passes and the page-tables check
+//! must refuse: OutOfMemory, nothing charged. It is the one program the tester starts, so its own
+//! budget (slot 3) is all of `system`'s free pages bar one; `root` in `init`'s place could not
+//! hold the setup's tables.
 //!
-//! Sv32 has one level below the root, whose index never recurs along a range, and no RAM for a
-//! 1 GiB range (`tests/map-fixed-tables-rv32.toml`). Its form is the same two checks over three
-//! 4 MiB root entries: the setup opens and frees a leaf table in each, and a range from the last
-//! page of the first to the first page of the third needs 3 tables.
+//! Sv32 has one level below the root, whose index never recurs along a range
+//! (`tests/map-fixed-tables-rv32.toml`). Its form is the same two checks over 4 MiB root entries:
+//! the setup opens and frees a leaf table in each of three, and a range across the first
+//! boundary needs 2 tables.
 #![no_std]
 #![no_main]
 
@@ -61,7 +59,7 @@ fn fill_to(target: u64, fill: usize, span: usize, tables: usize) {
             continue;
         }
         let (table, slot) = (filled / slots, filled % slots);
-        let n = short.min(slots - slot);
+        let n = short.min(slots - slot).min(rd::MAX_RANGE_PAGES);
         rd::map_fixed(fill + table * span + (1 + slot) * rd::PAGE_SIZE, n * rd::PAGE_SIZE, rd::rw())
             .expect("fill");
         filled += n;
@@ -94,14 +92,14 @@ mod case {
         rd::unmap(G4 + SPAN, rd::PAGE_SIZE).expect("unmap");
         check(out, usage_pages() == before, "unmap freed every page table the setup made");
 
-        const TABLES: u64 = 515;
-        let at = G3 + SPAN - rd::PAGE_SIZE;
-        let pages = ((G4 + rd::PAGE_SIZE - at) / rd::PAGE_SIZE) as u64;
+        const TABLES: u64 = 4;
+        let pages = rd::MAX_RANGE_PAGES as u64;
+        let at = G4 - pages as usize / 2 * rd::PAGE_SIZE;
         // The filler: gigabyte 2.
         fill_to(pages + TABLES - 1, 0x8000_0000, SPAN, (1 << 30) / SPAN);
         let before = usage_pages();
         let r = rd::map_fixed(at, pages as usize * rd::PAGE_SIZE, rd::rw());
-        check(out, r == Err(Error::OutOfMemory), "one page table short across two gigabytes is refused");
+        check(out, r == Err(Error::OutOfMemory), "one page table short across a gigabyte is refused");
         check(out, usage_pages() == before, "nothing charged");
     }
 }
@@ -126,14 +124,14 @@ mod case {
         }
         check(out, usage_pages() == before, "unmap freed every page table the setup made");
 
-        const TABLES: u64 = 3;
-        let at = R0 + SPAN - rd::PAGE_SIZE;
-        let pages = ((R0 + 2 * SPAN + rd::PAGE_SIZE - at) / rd::PAGE_SIZE) as u64;
+        const TABLES: u64 = 2;
+        let pages = rd::MAX_RANGE_PAGES as u64;
+        let at = R0 + SPAN - pages as usize / 2 * rd::PAGE_SIZE;
         // The filler: between the image and the message area.
         fill_to(pages + TABLES - 1, 0x3000_0000, SPAN, 0x1000_0000 / SPAN);
         let before = usage_pages();
         let r = rd::map_fixed(at, pages as usize * rd::PAGE_SIZE, rd::rw());
-        check(out, r == Err(Error::OutOfMemory), "one page table short across three root entries is refused");
+        check(out, r == Err(Error::OutOfMemory), "one page table short across a root entry is refused");
         check(out, usage_pages() == before, "nothing charged");
     }
 }

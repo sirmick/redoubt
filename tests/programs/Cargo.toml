@@ -113,6 +113,7 @@ bin = [
     { name = "sched-lift-delay", test = false },
     { name = "sched-lock-contention", test = false },
     { name = "sched-lock-contention-4", test = false },
+    { name = "sched-range-hammer", test = false },
     { name = "sched-round-robin", test = false },
     { name = "sched-server-busy", test = false },
     { name = "sched-share", test = false },

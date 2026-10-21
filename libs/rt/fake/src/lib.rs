@@ -57,9 +57,9 @@ use std::time::{Duration, Instant};
 
 use redoubt_rt::abi::{
     BODY_SLOTS, BUDGET_SPEC_SLOTS, Body, BudgetSpec, Call, CallOutcome, Cause, Error, ExitNotice, FOREVER,
-    Handle, Handles, Hold, Labels, LendDisposition, MAX_START_HANDLES, MemFlags, Message, MessageKind,
-    MintSource, PAGE_SIZE, Pages, RECEIVED_SLOTS, Received, ReceivedBody, ReceivedHandles, ReplyOutcome,
-    Return, range_cap,
+    Handle, Handles, Hold, Labels, LendDisposition, MAX_RANGE_PAGES, MAX_START_HANDLES, MemFlags, Message,
+    MessageKind, MintSource, PAGE_SIZE, Pages, RECEIVED_SLOTS, Received, ReceivedBody, ReceivedHandles,
+    ReplyOutcome, Return, range_cap,
 };
 use redoubt_rt::ipc::{Request, Words};
 use redoubt_rt::server::typed::{Outcome, finish};
@@ -898,19 +898,24 @@ fn end(s: &mut State, index: usize, cause: Cause, code: u32) {
     s.exits_due.push_back((exit, notice));
 }
 
+/// The pages of a process's placement area ([`Area`]), for a test that fills it.
+pub const AREA_PAGES: usize = Area::PAGES;
+
 /// A process's placement area, which its `MapAnon` searches as the kernel searches its own
-/// (kernel/memory.md, "Where `map_anon` puts pages"): first fit from the start of the run placed
-/// last, then from the area's start, so that `MapFixed` meets the pages `MapAnon` placed, as the
-/// kernel's does. One anonymous host mapping, made at the process's first `MapAnon` and never
-/// unmapped (its address is kept in `State::anon`); a page is zeroed as it is mapped. The processes
-/// share the host's address space, so a page of one's area is free to every process's `MapFixed`
-/// until it is taken.
+/// (kernel/memory.md, "Where `map_anon` puts pages"): first fit of the whole run from the start of
+/// the run placed last, then from the area's start, mapping the run's first range at most, so
+/// that `MapFixed` can extend the run at the pages after it, as the runtime does
+/// (`redoubt_rt::handle::map_anon`). One anonymous host mapping, made at the process's first
+/// `MapAnon` and never unmapped (its address is kept in `State::anon`); a page is zeroed as it is
+/// mapped. The processes share the host's address space, so a page of one's area is free to every
+/// process's `MapFixed` until it is taken.
 ///
 /// Not under Miri, which checks each access to an allocation against every pointer and thread
 /// that touched it: one area shared by a test's every run made `rt-miri`'s
 /// `heap_over_map_anon` run past five minutes, against under a minute with an allocation a run.
-/// There each `MapAnon` run is an allocation of its own, as it was before areas, and only a whole
-/// run is unmapped or moved, so `rt-miri` tests no range call split a range at a time.
+/// There each `MapAnon` run is an allocation of its own, as it was before areas, of the range it
+/// maps: `rt-miri` maps no run longer than a range, which `MapFixed` would have to extend, and
+/// splits no range call a range at a time, since only a whole run is unmapped or moved there.
 #[derive(Default)]
 struct Area {
     base: usize,
@@ -975,9 +980,10 @@ impl Area {
         true
     }
 
-    /// The first free run of `n` pages, first fit from the rover, then from the start; its address.
-    fn place(&mut self, n: usize) -> Option<usize> {
-        let fits = |a: &Area, at: usize| at + n <= Self::PAGES && a.taken[at..at + n].iter().all(|t| !*t);
+    /// The first free run of `run` pages, first fit from the rover, then from the start, of which
+    /// the first `n` are taken; its address.
+    fn place(&mut self, run: usize, n: usize) -> Option<usize> {
+        let fits = |a: &Area, at: usize| at + run <= Self::PAGES && a.taken[at..at + run].iter().all(|t| !*t);
         let at = (self.rover..Self::PAGES).chain(0..self.rover).find(|&at| fits(self, at))?;
         self.take(at, n);
         self.rover = at;
@@ -1114,6 +1120,8 @@ unsafe impl redoubt_rt::Transport for Fake {
                 if len == 0 || len % PAGE_SIZE != 0 {
                     return Err(Error::InvalidArgument);
                 }
+                // A run's first range at most is mapped (kernel/memory.md, R22).
+                let (run, len) = (len, len.min(MAX_RANGE_PAGES * PAGE_SIZE));
                 let mut s = self.lock();
                 if cfg!(miri) {
                     let layout = Layout::from_size_align(len, PAGE_SIZE).map_err(|_| Error::OutOfMemory)?;
@@ -1129,7 +1137,7 @@ unsafe impl redoubt_rt::Transport for Fake {
                 let State { processes, anon, .. } = &mut *s;
                 let area = &mut processes[pid].area;
                 area.base(anon);
-                let addr = area.place(len / PAGE_SIZE).ok_or(Error::OutOfMemory)?;
+                let addr = area.place(run / PAGE_SIZE, len / PAGE_SIZE).ok_or(Error::OutOfMemory)?;
                 s.processes[pid].map(addr, len);
                 Ok(Return::Addr(addr))
             }

@@ -488,6 +488,7 @@ pub fn process_map(
     // (kernel/abi.md): not W+X, and not writable without readable. It comes before the source
     // is backed, so a refused call leaves nothing charged (kernel/memory.md).
     let pages = whole_pages(src, dst, len)?;
+    redoubt_sys::range_cap(len)?;
     crate::mem::check_map_flags(flags)?;
     // The source must be the caller's own RAM, mapped and not lent out, or a reservation of its
     // own not yet touched. Checked whole before any page moves, because a later failure would

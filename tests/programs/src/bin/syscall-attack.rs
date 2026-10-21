@@ -15,14 +15,14 @@ pub extern "C" fn _start() -> ! {
     // in the destination once computed the region end minus the size, which underflowed; the
     // kernel now refuses it while decoding.
     const BIG: usize = 5 << 20;
-    let big = rd::map_anon(BIG, rd::rw()).expect("couldn't map 5 MiB");
+    let big = rd::map_anon_run(BIG, rd::rw()).expect("couldn't map 5 MiB");
     let lend = rd::call_waiting(
         rd::LOG,
         &rd::body([op::PRINT, 0, 0, 0]),
         rd::pages(big, BIG / rd::PAGE_SIZE),
         rd::FOREVER,
     );
-    rd::unmap(big, BIG).expect("couldn't unmap the 5 MiB range");
+    rd::unmap_run(big, BIG).expect("couldn't unmap the 5 MiB range");
     log!(logger, "[syscall] oversized lend -> {:?}", lend.map(|_| ()));
 
     // Survived every attempt; the checker powers off under its own PID.

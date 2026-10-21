@@ -23,7 +23,7 @@ extern "C" fn parked(_arg: usize) -> ! { test_programs::park() }
 /// The child: every stack first, then a call, so its budget moves only for the threads between
 /// that call and the next; then it reports what the kernel answered and exits.
 extern "C" fn holder(_arg: usize) -> ! {
-    let stacks = rd::map_anon(MAX_THREADS * rd::PAGE_SIZE, rd::rw()).expect("the stacks");
+    let stacks = rd::map_anon_run(MAX_THREADS * rd::PAGE_SIZE, rd::rw()).expect("the stacks");
     rd::call(PARENT, &rd::body([0; 4]), None, WAIT).expect("the stacks are mapped");
     // The initial thread holds one TID; every other one is created here, each on its own page.
     // One bit per TID 0..=MAX_THREADS.

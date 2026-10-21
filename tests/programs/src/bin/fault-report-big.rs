@@ -22,7 +22,7 @@ fn leave(_arg: usize) {
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     let mut logger = Logger::connect();
-    rd::map_anon(PAGES * rd::PAGE_SIZE, rd::rw()).expect("couldn't map the pages");
+    rd::map_anon_run(PAGES * rd::PAGE_SIZE, rd::rw()).expect("couldn't map the pages");
     log!(logger, "[big] mapped {} pages; faulting", PAGES);
     rd::thread(leave, 0).expect("couldn't spawn the leaving thread");
     rd::call_waiting(rd::BOOT_ENDPOINT, &rd::body([HELD, 0, 0, 0]), None, rd::FOREVER)

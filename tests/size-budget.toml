@@ -6,7 +6,7 @@ kind = "size-budget"
 [[crate]]
 name = "kernel"
 paths = ["kernel/src"]
-max_lines = 10889
+max_lines = 10899
 
 [[crate]]
 name = "loader"
@@ -21,7 +21,7 @@ max_lines = 364
 [[crate]]
 name = "libs/sys"
 paths = ["libs/sys/src"]
-max_lines = 1057
+max_lines = 1060
 
 [[crate]]
 name = "libs/layout"
@@ -76,7 +76,7 @@ max_lines = 1142
 [[crate]]
 name = "libs/rt"
 paths = ["libs/rt/src"]
-max_lines = 4144
+max_lines = 4182
 
 [[crate]]
 name = "libs/wire"

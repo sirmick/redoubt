@@ -291,21 +291,21 @@ fn launch(budget: u32, image: &[u8], image_len: usize, layout: Layout) -> Result
 
     // 3. Map the loader stub, a flat binary, read+exec, at its fixed address.
     let stub_pages = STUB_BIN.len().next_multiple_of(rd::PAGE_SIZE);
-    let scratch = rd::map_anon(stub_pages, rw).map_err(at("scratch for stub"))?;
+    let scratch = rd::map_anon_run(stub_pages, rw).map_err(at("scratch for stub"))?;
     copy_in(scratch, STUB_BIN);
-    rd::process_map(process, scratch, STUB_ENTRY, stub_pages, rd::MemFlags::READ | rd::MemFlags::EXECUTE)
+    rd::process_map_run(process, scratch, STUB_ENTRY, stub_pages, rd::MemFlags::READ | rd::MemFlags::EXECUTE)
         .map_err(at("map the stub"))?;
 
     // 4. Copy the program's ELF bytes in, read-write, as data.
     let image_pages = image.len().next_multiple_of(rd::PAGE_SIZE);
-    let scratch = rd::map_anon(image_pages, rw).map_err(at("scratch for image"))?;
+    let scratch = rd::map_anon_run(image_pages, rw).map_err(at("scratch for image"))?;
     copy_in(scratch, image);
-    rd::process_map(process, scratch, IMAGE_AT, image_pages, rw).map_err(at("map the image"))?;
+    rd::process_map_run(process, scratch, IMAGE_AT, image_pages, rw).map_err(at("map the image"))?;
 
     // A stack (`process_start`'s `sp`, the stub's own and then the started program's).
     let stack_len = STACK_PAGES * rd::PAGE_SIZE;
-    let stack_scratch = rd::map_anon(stack_len, rw).map_err(at("scratch for stack"))?;
-    rd::process_map(process, stack_scratch, layout.stack_top - stack_len, stack_len, rw)
+    let stack_scratch = rd::map_anon_run(stack_len, rw).map_err(at("scratch for stack"))?;
+    rd::process_map_run(process, stack_scratch, layout.stack_top - stack_len, stack_len, rw)
         .map_err(at("map the stack"))?;
 
     // The startup page, naming the image (servers/init.md, "The startup block").

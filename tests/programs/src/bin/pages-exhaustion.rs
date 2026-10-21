@@ -45,9 +45,9 @@ fn log_check(out: &mut MmioSerialPort, ok: bool, budget: &str) {
     assert!(ok, "{} not filled", budget);
 }
 
-/// Fill `budget`, the one this process runs in, to its limit. Big `map_anon` runs first, each
-/// leaving room for its page tables, then single pages into the table at `TABLE_AT`. Returns the
-/// error of the first single page refused.
+/// Fill `budget`, the one this process runs in, to its limit. `map_anon` of a range at a time
+/// first, leaving room for the page tables, then single pages into the table at `TABLE_AT`.
+/// Returns the error of the first single page refused.
 fn fill(budget: u32) -> Error {
     rd::map_fixed(TABLE_AT, PAGE_SIZE, rd::rw()).expect("open the last table");
     loop {
@@ -55,8 +55,8 @@ fn fill(budget: u32) -> Error {
         if free <= 32 {
             break;
         }
-        // A run of n pages needs at most n / 512 + 3 page tables.
-        let n = free - free / 256 - 8;
+        // The runs' n pages need at most n / 512 + 3 page tables.
+        let n = (free - free / 256 - 8).min(rd::MAX_RANGE_PAGES);
         rd::map_anon(n * PAGE_SIZE, rd::rw()).expect("a run the budget can pay for");
     }
     for slot in 1..=SLOTS {

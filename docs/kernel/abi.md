@@ -258,7 +258,7 @@ at 1.
 | 9 | `LabelDenied` | a flow [R1 (flow)](ipc.md#r1-flow) forbids |
 | 10 | `Busy` | the sender's group already has `WAIT_CAP` (32) messages queued on the endpoint ([R2 (fair waiting)](ipc.md#r2-fair-waiting)) |
 | 11 | `Refused` | the receiver's budget cannot pay for the message (R4) |
-| 12 | `TooLarge` | a count over its fixed limit: body handles, labels, the start list, a lend over `MAX_LEND_PAGES` (16), budget depth, `MAX_HANDLES` (4096) |
+| 12 | `TooLarge` | a count over its fixed limit: body handles, labels, the start list, a lend over `MAX_LEND_PAGES` (16), a range over `MAX_RANGE_PAGES` (16) except `map_anon`'s length, budget depth, `MAX_HANDLES` (4096) |
 | 13 | `Timeout` | a blocking call's timeout passed |
 | 14 | `Dead` | the object the call needs is gone: its endpoint was destroyed, its server died, or the handle it came through, or one it names, was revoked and is a dead entry ([handles](objects.md#handles), I17 (a swept index stays dead until closed)) |
 
@@ -335,16 +335,16 @@ list, in order.
 
 | Call | Decoding | Then |
 | --- | --- | --- |
-| `map_anon` | flags: `InvalidArgument` | `InvalidArgument` (len 0 or not page-aligned), `InvalidArgument` (flags 0, or W without R), `OutOfMemory` (no room in the placement area; then each page and its page tables) |
-| `unmap` | - | `InvalidArgument` (range: len 0, not page-aligned, wraps, or past `USER_AREA_END`), `InvalidArgument` (a page that is not a live mapping of the caller's, is either side of a lend, or is RAM not credited to the caller; the whole range before any page goes) |
-| `set_flags` | flags: `InvalidArgument` | `InvalidArgument` (range), `InvalidArgument` (flags 0), `InvalidArgument` (a page not the caller's own mapping, as for `unmap`, or `EXECUTE` on a page of device registers or a `dma_alloc` page; the whole range before any page changes), `InvalidArgument` (W without R) |
+| `map_anon` | flags: `InvalidArgument` | `InvalidArgument` (len 0 or not page-aligned), `InvalidArgument` (flags 0, or W without R), `OutOfMemory` (no room in the placement area for the whole run; then each page of its first range and its page tables) |
+| `unmap` | - | `InvalidArgument` (range: len 0, not page-aligned, wraps, or past `USER_AREA_END`), `TooLarge` (over `MAX_RANGE_PAGES`), `InvalidArgument` (a page that is not a live mapping of the caller's, is either side of a lend, or is RAM not credited to the caller; the whole range before any page goes) |
+| `set_flags` | flags: `InvalidArgument` | `InvalidArgument` (range), `TooLarge` (over `MAX_RANGE_PAGES`), `InvalidArgument` (flags 0), `InvalidArgument` (a page not the caller's own mapping, as for `unmap`, or `EXECUTE` on a page of device registers or a `dma_alloc` page; the whole range before any page changes), `InvalidArgument` (W without R) |
 | `map_device` | device: `BadHandle` | `BadHandle`, `WrongObject` (not an MMIO device), `OutOfMemory` (no room in the placement area, or the page tables) |
 | `dma_alloc` | device: `BadHandle` | `BadHandle`, `WrongObject` (not an MMIO device), `InvalidArgument` (pages 0), `NotPermitted` (the device has no DMA flag), `OutOfMemory` (all 32 of the device's runs in use; then the pages; then no contiguous frames; then the placement area and page tables) |
 | `thread_create` | - | `TooManyThreads`, `OutOfMemory` (the thread's page) |
 | `thread_exit` | - | - |
 | `process_exit` | code wider than 32 bits: `InvalidArgument` | - |
 | `process_create` | each handle: `BadHandle` | `BadHandle`, `WrongObject` (budget), `BadHandle`, `WrongObject` (exit endpoint), `InvalidArgument` (the budget's free weight is 0), `NotPermitted` (the exit endpoint's badge is not 0), `OutOfProcesses` (the budget's process limit, which the new PID counts against; with room there a free PID exists), `OutOfMemory` (the budget: page tables; then the caller: the process object), handle table |
-| `process_map` | process: `BadHandle`; flags: `InvalidArgument` | `BadHandle`, `WrongObject`, `InvalidArgument` (source or destination range), `InvalidArgument` (flags 0, or W without R), `InvalidArgument` (a source page unmapped, lent, not the caller's own RAM, or a `dma_alloc` page; untouched source pages are counted, and backed once nothing can refuse the call; the caller's budget too short to back them is this error), `NotPermitted` (the process has ended), `InvalidArgument` (a destination page occupied), `NotPermitted` (started), `OutOfMemory` (the child's budget: page tables, and the pages, or only the untouched source pages when the budget is the caller's) |
+| `process_map` | process: `BadHandle`; flags: `InvalidArgument` | `BadHandle`, `WrongObject`, `InvalidArgument` (source or destination range), `TooLarge` (over `MAX_RANGE_PAGES`), `InvalidArgument` (flags 0, or W without R), `InvalidArgument` (a source page unmapped, lent, not the caller's own RAM, or a `dma_alloc` page; untouched source pages are counted, and backed once nothing can refuse the call; the caller's budget too short to back them is this error), `NotPermitted` (the process has ended), `InvalidArgument` (a destination page occupied), `NotPermitted` (started), `OutOfMemory` (the child's budget: page tables, and the pages, or only the untouched source pages when the budget is the caller's) |
 | `process_start` | process: `BadHandle`; entry, stack pointer, argument: not checked; count over `MAX_START_HANDLES`: `TooLarge`; handle list: the record, then each slot `BadHandle` | `BadHandle`, `WrongObject`, `BadHandle` (each handle), `NotPermitted` (started or ended), `TooLarge` (the child's table past `MAX_HANDLES`), `OutOfMemory` (the child's budget: its first thread and table pages) |
 | `endpoint_create` | budget: `BadHandle` | `BadHandle`, `WrongObject` (budget), `NotPermitted` (the budget is not the caller's or below it), `LabelDenied` (R1: a caller not of class `system` whose labels do not include the budget's), `OutOfMemory` (the endpoint's page, charged to its owner), handle table |
 | `mint` | source: each half too wide `InvalidArgument` (both halves are read before the tag), then an unknown tag `InvalidArgument`, a message id of 0 `InvalidArgument`, or a handle of 0 or wider than 32 bits `BadHandle`; badge 0: `InvalidArgument`; budget: `BadHandle` | source: a message id that is not an open call of the caller's thread (a `send`'s id included) `InvalidArgument`, its endpoint or stamp gone `Dead`; or a handle `BadHandle`, `WrongObject` (not an endpoint); budget: `BadHandle`, `WrongObject`; `NotPermitted` (a handle source's badge is not 0), `NotPermitted` (the budget is not the default stamp or below it), handle table |
@@ -360,7 +360,7 @@ list, in order.
 | `time_now` | - | - |
 | `random` | - | - |
 | `system_reset` | device: `BadHandle`; kind: `InvalidArgument` | `BadHandle`, `WrongObject` (not the Reset device) |
-| `map_fixed` | flags: `InvalidArgument` | `InvalidArgument` (range: address or len not page-aligned, len 0, wraps, or past `USER_AREA_END`), `InvalidArgument` (flags 0, or W without R), `OutOfMemory` (the pages alone), `InvalidArgument` (overlaps any mapping or reservation of the caller's, lent pages included), `OutOfMemory` (the pages and the page tables they need); nothing mapped or charged on failure |
+| `map_fixed` | flags: `InvalidArgument` | `InvalidArgument` (range: address or len not page-aligned, len 0, wraps, or past `USER_AREA_END`), `TooLarge` (over `MAX_RANGE_PAGES`), `InvalidArgument` (flags 0, or W without R), `OutOfMemory` (the pages alone), `InvalidArgument` (overlaps any mapping or reservation of the caller's, lent pages included), `OutOfMemory` (the pages and the page tables they need); nothing mapped or charged on failure |
 | `device_info` | device: `BadHandle` | `BadHandle`, `WrongObject` (not a device object); nothing after these fails |
 | `budget_reap` | budget: `BadHandle` | `BadHandle`, `WrongObject`; nothing after these fails (a budget with no children returns 0) |
 | `console_hold` | device: `BadHandle`; hold: `InvalidArgument` | `BadHandle`, `WrongObject` (not the console's MMIO device), `Busy` (another process holds it); giving back a hold the caller does not have changes nothing |
@@ -375,10 +375,13 @@ record check and every later stage, whatever it then returns
 are decoded (a handle wider than 32 bits, a non-zero unused register) leaves the current call
 as it was.
 
-`map_fixed`'s order keeps its cost bounded: the charge for the pages alone comes before any
-walk, so a huge length the budget could never pay for is refused by arithmetic, and the overlap
-walk that follows skips page-table subtrees that are absent
-([R22 (range cost)](memory.md#r22-range-cost)).
+Every range call's length comes right after its range's shape: over `MAX_RANGE_PAGES` it is
+`TooLarge` by arithmetic, before any walk or charge, so no range call holds the kernel past its
+worst section at the cap, about a slice. `map_anon`'s length is a run's and is not refused for its
+size: it searches for the whole run and maps at most its first `MAX_RANGE_PAGES` pages. `map_fixed`'s order keeps its cost bounded within the
+cap too: the charge for the pages alone comes before any walk, so pages the budget could never
+pay for are refused by arithmetic, and the overlap walk that follows skips page-table subtrees
+that are absent ([R22 (range cost)](memory.md#r22-range-cost)).
 
 ## Unknown call numbers
 

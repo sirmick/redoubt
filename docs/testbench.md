@@ -636,7 +636,7 @@ parks when it is done, unless its exit is the point of its case.
 
 ### The scheduler oracle
 
-<details><summary>Status: built · tested (38)</summary>
+<details><summary>Status: built · tested (40)</summary>
 
 - bench:sched-ties
 - bench:sched-capped
@@ -644,6 +644,8 @@ parks when it is done, unless its exit is the point of its case.
 - bench:sched-lock-contention-4
 - bench:sched-lock-contention-4-mttcg
 - bench:sched-timer-entry
+- bench:sched-range-hammer
+- host:testbench::range_sections_are_held_to_their_bound
 - host:testbench::kernel_sections_say_what_the_lock_waits_waited_behind
 - host:testbench::the_driver_wake_is_judged_in_searches_of_its_own_run
 - host:testbench::a_pick_passes_over_only_a_budget_that_other_harts_run
@@ -738,9 +740,13 @@ every timer interrupt from user mode that destroyed another budget by its deadli
 kernel's ticks, a `factor` and a `floor`: for every system call made in the first, its longest
 section in the second, net of audits, is held to `factor` times its longest in the first or the
 `floor`; a call made in the second alone is reported; at least eight must be judged (`call-bounds`,
-[R12 (scheduling)](kernel/scheduling.md#r12-scheduling)). `sched-capped` runs the model's capped scenarios
-([model](kernel/model.md#scheduler-scenarios)) on the machine at two, three and four harts, each
-budget's share judged as below; `hart_shares_from=4` records the shares on a trace of fewer harts,
+[R12 (scheduling)](kernel/scheduling.md#r12-scheduling)). A `RANGE-SECTIONS` line names a window
+in the kernel's ticks and a bound: every section of `map_anon`, `map_fixed`, `unmap`, `set_flags`
+or `process_map` in it, net of audits, is held to the bound, one slice, and at least one
+`map_fixed` must be there (`sched-range-hammer`,
+[R22 (range cost)](kernel/memory.md#r22-range-cost)). `sched-capped` runs the model's capped
+scenarios ([model](kernel/model.md#scheduler-scenarios)) on the machine at two, three and four
+harts, each budget's share judged as below; `hart_shares_from=4` records the shares on a trace of fewer harts,
 since under `icount` QEMU's turns move them, and `sched-capped-mttcg` judges the two- and
 three-hart shares where the harts run at once ([QEMU's turns](kernel/scheduling.md#residual-risks)). It is itself checked against the model's ranks and against traces broken one clause at a
 time. The tracing kernel is a test build only
