@@ -140,6 +140,9 @@ struct Pending {
     tag: u16,
     /// When it is answered `TIMEOUT` if it is still waiting; `FOREVER` for none.
     deadline: u64,
+    /// The file server was asked and held it (`Waiting`): only then does its deadline count. A
+    /// request not yet tried is tried once, whatever the clock says, in its turn.
+    tried: bool,
     message: Stored,
     len: usize,
 }
@@ -380,7 +383,7 @@ impl<S: FileServer> NineServer<S> {
     pub fn collect_into(&mut self, caller: &Caller, lend: &mut [u8], now: u64) -> usize {
         let key = self.conn_key(caller);
         match self.mux.session(&key) {
-            Some(s) if self.mux.sessions[s].call.is_none() => self.fill(s, lend, now),
+            Some(s) if self.mux.sessions[s].call.is_none() => self.fill(s, lend, &mut { now }, |was| was),
             _ => 0,
         }
     }
@@ -418,7 +421,8 @@ impl<S: FileServer> NineServer<S> {
     /// pages it came in were not `paid` for), a flush acted on. `false` if it ended the session.
     fn take(&mut self, s: usize, message: Stored, len: usize, paid: bool, now: u64) -> bool {
         let key = self.mux.sessions[s].key;
-        let entry = Pending { key, tag: NOTAG, deadline: now.saturating_add(self.mux.wait), message, len };
+        let deadline = now.saturating_add(self.mux.wait);
+        let entry = Pending { key, tag: NOTAG, deadline, tried: false, message, len };
         // The frame holds a header (`message_size`), so the tag is there; a body that does not
         // decode is answered `Rerror` in its turn, as a call's would be.
         let tag = tag_of(entry.bytes()).unwrap_or(NOTAG);
@@ -531,7 +535,8 @@ impl<S: FileServer> NineServer<S> {
                 }
                 !due
             } else {
-                let late = self.mux.pending.iter().any(|p| p.key == session.key && p.deadline <= now);
+                let late =
+                    self.mux.pending.iter().any(|p| p.key == session.key && p.tried && p.deadline <= now);
                 !(late || due) || self.pump(s, now, due)
             };
             s += usize::from(alive);
@@ -541,9 +546,11 @@ impl<S: FileServer> NineServer<S> {
     /// The next time [`NineServer::expire`] has something to do.
     pub fn next_deadline(&self) -> Option<u64> {
         let sessions = self.mux.sessions.iter().map(|s| s.deadline);
-        // A request's deadline matters only while a completion call can take its timeout.
-        let parked =
-            |p: &&Pending| self.mux.session(&p.key).is_some_and(|s| self.mux.sessions[s].call.is_some());
+        // A request's deadline matters only once it waits, and while a completion call can take
+        // its timeout.
+        let parked = |p: &&Pending| {
+            p.tried && self.mux.session(&p.key).is_some_and(|s| self.mux.sessions[s].call.is_some())
+        };
         let requests = self.mux.pending.iter().filter(parked).map(|p| p.deadline);
         sessions.chain(requests).filter(|d| *d != FOREVER).min()
     }
@@ -559,12 +566,16 @@ impl<S: FileServer> NineServer<S> {
 
     /// Serves session `s`'s refused tags and requests into its parked completion call, and
     /// replies if anything was written, or if `empty` (its deadline). Returns whether the session
-    /// is still at `s`.
+    /// is still at `s`. The session's bound runs from the answer: serving may take the file
+    /// server longer than the bound (walfsd away on its device), and a bound counted from
+    /// before it, or before another session's fill in the same pass, would end the session at
+    /// its own answer.
     fn pump(&mut self, s: usize, now: u64, empty: bool) -> bool {
         let Some(mut call) = self.mux.sessions[s].call.take() else { return true };
         // A crash while serving these blames their client.
         let _ = call.serve();
-        let pos = self.fill(s, call.lend(), now);
+        let mut now = now;
+        let pos = self.fill(s, call.lend(), &mut now, |was| crate::handle::time_now().unwrap_or(was));
         if pos == 0 && !empty {
             self.mux.sessions[s].call = Some(call);
             return true;
@@ -575,13 +586,20 @@ impl<S: FileServer> NineServer<S> {
             self.end_session(s);
             return false;
         }
+        // Read afresh, whatever the fill asked: the caller's time is stale by every fill before
+        // this one in the same pass (`expire`, `wake`).
+        let now = crate::handle::time_now().unwrap_or(now);
         self.mux.sessions[s].deadline = now.saturating_add(self.mux.bound());
         true
     }
 
     /// Packs session `s`'s `busy` answers, then its requests in order, into `lend`; returns how
-    /// many bytes. Each request answered is gone, its admission released.
-    fn fill(&mut self, s: usize, lend: &mut [u8], now: u64) -> usize {
+    /// many bytes. Each request answered is gone, its admission released. A request not yet tried
+    /// is served whatever the clock says; one the file server held is answered `timeout` past its
+    /// deadline, judged at `now`, which `clock` moves on after every request the file server is
+    /// asked, so the judgment is made at the time it is made; `now` is left at the time of the
+    /// last.
+    fn fill(&mut self, s: usize, lend: &mut [u8], now: &mut u64, clock: impl Fn(u64) -> u64) -> usize {
         let session = &self.mux.sessions[s];
         let (key, caller, (bucket, share)) = (session.key, session.caller, session.charge);
         let mut pos = 0;
@@ -606,18 +624,20 @@ impl<S: FileServer> NineServer<S> {
             }
             let entry = self.mux.pending.remove(i);
             let out = &mut lend[pos..];
-            let answer = if entry.deadline <= now {
+            let answer = if entry.tried && entry.deadline <= *now {
                 write_reply(entry.tag, Err(Held::Error(NineError::TIMEOUT)), out)
             } else {
                 self.fs.serving(&caller, (bucket, share), &mut self.admission);
                 let answer = self.answer_into(&caller, entry.bytes(), out);
                 self.fs.served(&mut self.admission);
+                *now = clock(*now);
                 answer
             };
             if answer != Answer::Replied {
                 // Waiting (or, in a lend too small even for an `Rerror`, left for a larger one):
                 // back in its place, which the removal left room for.
-                self.mux.pending.insert(i, entry);
+                let tried = entry.tried || answer == Answer::Waiting;
+                self.mux.pending.insert(i, Pending { tried, ..entry });
                 i += 1;
                 continue;
             }

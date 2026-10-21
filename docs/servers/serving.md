@@ -272,7 +272,7 @@ stateDiagram-v2
 
 ### Multiplexed connections
 
-<details><summary>Status: built · partly tested: attacked in host tests with the runtime's fake kernel; a boot runs it only in `aio-many-reads` and `aio-many-reads-two` · tested (15)</summary>
+<details><summary>Status: built · partly tested: attacked in host tests with the runtime's fake kernel; a boot runs it only in `aio-many-reads` and `aio-many-reads-two` · tested (17)</summary>
 
 - bench:aio-many-reads
 - bench:aio-many-reads-two
@@ -284,6 +284,8 @@ stateDiagram-v2
 - host:redoubt-rt::death_with_requests_parked_frees_the_connection
 - host:redoubt-rt::a_death_between_completion_calls_is_found_at_the_session_bound
 - host:redoubt-rt::a_request_late_in_a_hold_leaves_the_session_its_whole_bound
+- host:redoubt-rt::a_fill_longer_than_the_bound_leaves_the_session_its_whole_bound_from_the_answer
+- host:redoubt-rt::a_session_answered_after_a_slow_fill_in_the_same_pass_has_its_whole_bound
 - host:redoubt-rt::a_flush_racing_a_completion_answers_once
 - host:redoubt-rt::a_flood_of_sends_at_wait_cap_never_blocks_the_server
 - host:redoubt-rt::a_reused_or_out_of_range_tag_ends_the_connection
@@ -328,7 +330,10 @@ connection; the client half is the client library's hub
   for the next call. A
   request the file server asks to hold (`Read::Wait`) stays where it is, served again at the next
   completion call, the next request, or the server's wake-up, and is answered `Rerror` "timeout"
-  at the server's deadline for it (none for `consoled`, whose reads wait on a person).
+  at the server's deadline for it (none for `consoled`, whose reads wait on a person). That
+  deadline bounds only a request the file server asked to hold, and is judged at the time it is
+  reached: a request not yet served is served first, in its turn, whatever the clock says, so one
+  slow request never turns those behind it into timeouts.
 - **Tags.** At most `MAX_TAGS` (256) are outstanding on a connection: a request's tag from its
   arrival until its answer is delivered. A tag in use or out of range, a message that does not
   frame, or a `Tversion` (whose tag is `NOTAG`) is a protocol error, which ends the session.
@@ -347,10 +352,20 @@ connection; the client half is the client library's hub
 - **The end.** The session ends when its completion call is abandoned (its client died or gave up:
   [R3 (lends and abandoned calls)](../kernel/ipc.md#r3-lends-and-abandoned-calls)), when a reply
   to it reaches nobody, at a protocol error, at the connection's `disconnect`, and when no
-  completion call has been parked for the session bound since the last returned. Every request
-  goes with it, its admission released, and a parked completion call is answered status 4. So a
-  client that dies between two completion calls is found at the session bound, and a live client
-  keeps a completion call parked whenever it has requests outstanding.
+  completion call has been parked for the session bound since the last returned. A call returns
+  with its answer, so the bound runs from the answer however long serving into it took (a
+  file server away on its device past the bound does not end the session it is answering).
+  Every request goes with it, its admission released, and a parked completion call is answered
+  status 4. So a client that dies between two completion calls is found at the session bound,
+  and a live client keeps a completion call parked whenever it has requests outstanding.
+  Deadlines are judged at the loop's turn, so a session or a held request may be judged late by
+  the work before it in that turn, never early.
+  A restarted entry on the same badge meets its predecessor's multiplexed session: it lasts the
+  session bound with no call parked, and every completion call the successor makes is parked on
+  it and answered with what the predecessor left pending, or empty, resetting the bound, so a
+  successor that retries its connect faster than the bound never gets a session; the
+  predecessor's `InFlight`, `Requests` and `Pages` stay held until the session ends. Its fids go
+  at the successor's `Tversion`; the session does not.
 - **Crash blame.** Requests are served with the completion call as the thread's current call, so
   a crash while serving them blames their client
   ([R21 (crash blame)](../kernel/processes.md#r21-crash-blame)).
