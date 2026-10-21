@@ -256,7 +256,7 @@ Status: built · tested: bench:redoubt-ipc-attack, mutation:R1ChecksReceiverNotO
 
 ### R1 (flow)
 
-<details><summary>Status: built · partly tested: a call or send between user budgets with different labels is attacked only in the model; on the target only a `budget_usage` read and an exit notice are · tested (6)</summary>
+<details><summary>Status: built · partly tested: a call or send between user budgets with different labels is attacked only in the model; on the target only a `budget_usage` read and an exit notice are · tested (7)</summary>
 
 - bench:process-attack
 - bench:process-review
@@ -264,6 +264,7 @@ Status: built · tested: bench:redoubt-ipc-attack, mutation:R1ChecksReceiverNotO
 - mutation:R1ChecksReceiverNotOwner
 - mutation:R1ExitNoticeIgnoresLabels
 - mutation:R1UsageIgnoresLabels
+- mutation:R1EndpointOwnerLabelsIgnored
 
 </details>
 

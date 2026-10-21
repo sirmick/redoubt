@@ -186,7 +186,8 @@ impl Names {
             S::MapDevice { h: x } => h(*x),
             S::DmaAlloc { h: x, npages } => format!("{} {npages}", h(*x)),
             S::ThreadCreate { entry, sp, arg } => format!("{entry:#x} {sp:#x} {arg}"),
-            S::ThreadExit | S::EndpointCreate | S::TimeNow | S::Random => String::new(),
+            S::ThreadExit | S::EndpointCreate { budget: None } | S::TimeNow | S::Random => String::new(),
+            S::EndpointCreate { budget: Some(b) } => h(*b),
             S::ProcessExit { code } => format!("{code}"),
             S::ProcessCreate { budget, exit_endpoint } => format!("{} {}", h(*budget), h(*exit_endpoint)),
             S::ProcessMap { process, src, dst, len, flags } => {
@@ -526,7 +527,7 @@ pub fn parse_call(t: &[Token]) -> Result<Syscall, String> {
         "process_start" => {
             S::ProcessStart { process: v(0)?, entry: v(1)?, sp: v(2)?, arg: v(3)?, handles: list(n(4)?)? }
         }
-        "endpoint_create" => S::EndpointCreate,
+        "endpoint_create" => S::EndpointCreate { budget: if a.is_empty() { None } else { opt(0)? } },
         "mint" => {
             let source = match n(0)? {
                 Token::Name { kind: NameKind::Msg, value, .. } => MintSource::Message(*value),

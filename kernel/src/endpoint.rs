@@ -20,13 +20,14 @@
 //! R2's groups are ordered by when their turns fall due, values of one counter that no two turns
 //! share, so the kernel never meets the tie R2 breaks by group key.
 //!
-//! The **owner** is the budget of the process that created it, which is what R1 compares a sender
-//! with (I7) and where the cost table charges the page.
+//! The **owner** is the budget `endpoint_create` named, or the creator's own, which is what R1
+//! compares a sender with (I7), where the cost table charges the page, and whose destruction ends
+//! it (R10).
 
 use redoubt_layout::Pid;
 use redoubt_sys::{Error, MAX_LABELS};
 
-use crate::budget::{Budget, BudgetFrame};
+use crate::budget::{Budget, BudgetFrame, Class, superset};
 use crate::handle::{BudgetRef, EndpointRef, Handle, Object};
 use crate::kframe;
 use crate::mem::MemoryManager;
@@ -65,8 +66,8 @@ impl Group {
 #[derive(Clone, Copy)]
 pub struct Endpoint {
     pub id: u64,
-    /// The budget of the process that created it: what R1 compares against (I7) and what pays
-    /// for the page.
+    /// The budget named at its creation, or the creator's: what R1 compares against (I7), what
+    /// pays for the page, and what it dies with.
     pub owner: BudgetRef,
 }
 
@@ -130,11 +131,22 @@ impl MemoryManager {
         Ok(EndpointRef { frame, id })
     }
 
-    /// `endpoint_create() -> h` (badge 0, the receive right; R9 stamps it with the caller's
-    /// budget).
-    pub fn endpoint_create(&mut self, pid: Pid) -> Result<u32, Error> {
+    /// `endpoint_create(budget?) -> h` (badge 0, the receive right; R9 stamps it with the
+    /// owner). The owner is the budget named, the caller's own or one below it, so the endpoint
+    /// dies with that budget; none names the caller's (kernel/objects.md).
+    pub fn endpoint_create(&mut self, pid: Pid, budget: Option<u32>) -> Result<u32, Error> {
         // As in `budget_create`: only the kernel has no account, and it makes no Redoubt calls.
-        let owner = self.budget_of(pid).ok_or(Error::NotPermitted)?;
+        let caller = self.budget_of(pid).ok_or(Error::NotPermitted)?;
+        let owner = budget.map_or(Ok(caller), |h| self.budget_handle(pid, h))?;
+        // Permission: a budget named only narrows, and the holder of the receive right takes
+        // what is sent to the owner, so that is a flow from the owner to the caller (R1, I7).
+        if !self.is_at_or_below(owner, caller) {
+            return Err(Error::NotPermitted);
+        }
+        let (c, o) = (self.budget(caller), self.budget(owner));
+        if c.class != Class::System && !superset(c.labels_of(), o.labels_of()) {
+            return Err(Error::LabelDenied);
+        }
         let e = self.new_endpoint(owner)?;
         let stamp = self.endpoint(e.frame).owner;
         self.install_handle(pid, Handle { object: Object::Endpoint(e), badge: 0, stamp })

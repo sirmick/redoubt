@@ -312,7 +312,7 @@ fn cursor_from(word: u64) -> Option<(Pid, usize)> {
 }
 
 /// `a ⊇ b`, both sorted.
-fn superset(a: &[u64], b: &[u64]) -> bool { b.iter().all(|x| a.binary_search(x).is_ok()) }
+pub(crate) fn superset(a: &[u64], b: &[u64]) -> bool { b.iter().all(|x| a.binary_search(x).is_ok()) }
 
 impl MemoryManager {
     // --- Frames of kernel objects -----------------------------------------------------------

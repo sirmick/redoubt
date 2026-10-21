@@ -311,7 +311,7 @@ system-class caller; `process-attack` runs a user-class process that tries to ad
 </details>
 
 Every flow of information the kernel carries obeys R1: messages, exit notices and `budget_usage`
-reads. A message is compared with its endpoint's **owner**, the budget that created it, whoever
+reads. A message is compared with its endpoint's **owner**, the budget it was made in, whoever
 takes it. So handing a receive right to another budget is delegation of the whole endpoint: what
 arrives there was checked against the owner's labels. Between user budgets a message needs equal
 label sets, so a receive right cannot travel between two user label sets; a system-class server

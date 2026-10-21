@@ -77,7 +77,10 @@ pub enum Syscall {
         arg: u64,
         handles: Vec<u64>,
     },
-    EndpointCreate,
+    /// `budget`: the owner, the caller's budget or one below it; none is the caller's.
+    EndpointCreate {
+        budget: Option<u64>,
+    },
     Mint {
         source: MintSource,
         badge: u64,
@@ -210,7 +213,7 @@ impl Syscall {
             Syscall::ProcessCreate { .. } => 9,
             Syscall::ProcessMap { .. } => 10,
             Syscall::ProcessStart { .. } => 11,
-            Syscall::EndpointCreate => 12,
+            Syscall::EndpointCreate { .. } => 12,
             Syscall::Mint { .. } => 13,
             Syscall::Call { .. } => 14,
             Syscall::Send { .. } => 15,

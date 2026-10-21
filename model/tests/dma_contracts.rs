@@ -50,7 +50,7 @@ fn budget(w: &mut World, parent: u64, pages: u64, processes: u64, weight: u64) -
 
 /// A process created in `budget` by `init`, not started: its handle and pid.
 fn process(w: &mut World, budget: u64) -> (u64, u64) {
-    let ep = handle(call(w, 1, 1, Syscall::EndpointCreate));
+    let ep = handle(call(w, 1, 1, Syscall::EndpointCreate { budget: None }));
     let s =
         w.op(Op::Sys { pid: 1, tid: 1, call: Syscall::ProcessCreate { budget, exit_endpoint: ep } }).unwrap();
     s.notes

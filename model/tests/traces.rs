@@ -79,6 +79,8 @@ fn a_rule_breaking_kernel_fails_replay() {
     texts.extend(common::contracts::bad_record_traces());
     // A notice owed during a destruction, with a receiver the destruction ends ahead of a survivor.
     texts.push(common::contracts::destruction_delivery_trace());
+    // An endpoint named into a budget with a label its user-class creator lacks.
+    texts.push(common::contracts::endpoint_create_trace());
     let mut missed = Vec::new();
     let invisible = |m: &Mutation| {
         m.is_policy()
@@ -137,7 +139,7 @@ fn lender_dies_mid_call() -> Vec<Op> {
     };
     // Where the client's `map_anon` places its buffer, and where the lend lands in the server.
     let (buf, lent) = (DEFAULT_BASE, DEFAULT_MESSAGE_BASE);
-    go(&mut k, init(Syscall::EndpointCreate)); // h:11
+    go(&mut k, init(Syscall::EndpointCreate { budget: None })); // h:11
     go(&mut k, init(budget(3, 1001))); // h:12 alice
     go(&mut k, init(budget(2, 0))); // h:13 server
     go(&mut k, init(Syscall::ProcessCreate { budget: 13, exit_endpoint: 11 })); // h:14

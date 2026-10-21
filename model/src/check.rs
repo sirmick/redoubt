@@ -414,8 +414,8 @@ pub fn flood(seed: u64, mutation: Option<Mutation>) -> Result<(), Failure> {
         Syscall::BudgetCreate { parent, pages, processes, weight, labels, account, deadline: FOREVER }
     };
     // init's slots: 1 root, 2 system, 3 users, 4 the Reset device.
-    let e =
-        handle(&run(&mut k, INIT_PID, 1, Syscall::EndpointCreate)?).ok_or_else(|| fail("endpoint".into()))?;
+    let e = handle(&run(&mut k, INIT_PID, 1, Syscall::EndpointCreate { budget: None })?)
+        .ok_or_else(|| fail("endpoint".into()))?;
     // The server pays a page for each open call (R6): room for MAX_OPEN_CALLS, and 136 besides.
     let (system_h, users_h, pages) = (2, 3, MAX_OPEN_CALLS + 136);
     let hs = handle(&run(&mut k, INIT_PID, 1, budget(pages, 2, 500, alloc::vec![], 0, system_h))?);

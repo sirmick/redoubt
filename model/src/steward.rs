@@ -227,12 +227,12 @@ impl Steward {
         };
         let mut k = Kernel::boot(&boot, mutation).map_err(|_| Denied::BadManifest)?;
         let init = Proc { pid: INIT_PID, tid: *k.processes[&INIT_PID].threads.first().unwrap() };
-        let e = handle(run(&mut k, init, Syscall::EndpointCreate)?.0)?;
+        let e = handle(run(&mut k, init, Syscall::EndpointCreate { budget: None })?.0)?;
         // init creates the server's endpoint and the steward's (servers/init.md), so their receive
         // rights are stamped `root` and the steward can narrow connections to scopes anywhere
         // (mint only narrows to the default stamp's descendants).
-        let srv = handle(run(&mut k, init, Syscall::EndpointCreate)?.0)?;
-        let own = handle(run(&mut k, init, Syscall::EndpointCreate)?.0)?;
+        let srv = handle(run(&mut k, init, Syscall::EndpointCreate { budget: None })?.0)?;
+        let own = handle(run(&mut k, init, Syscall::EndpointCreate { budget: None })?.0)?;
         // init's slots: 1 root, 2 system, 3 users. The steward gets users (1), system (2), the
         // server's endpoint (3) and its own (4).
         let ph = handle(run(&mut k, init, Syscall::ProcessCreate { budget: 2, exit_endpoint: e })?.0)?;
@@ -270,7 +270,7 @@ impl Steward {
             both_attached: None,
             notes: Vec::new(),
         };
-        st.exits = handle(st.sys(Syscall::EndpointCreate)?)?;
+        st.exits = handle(st.sys(Syscall::EndpointCreate { budget: None })?)?;
         st.start_server()?;
         for c in carves {
             let h = st.budget_create(USERS, limits(&c.top), &[], c.account.get(), FOREVER)?;

@@ -85,7 +85,7 @@ fn occupied_handle_pages_and_cap() {
     assert!(w.k.processes[&1].handles.contains_key(&next));
     w.k.handle_close(1, next).unwrap();
     assert_eq!(w.k.budgets[&1].pages_used, used - 2);
-    let ep = w.k.endpoint_create(1).unwrap();
+    let ep = w.k.endpoint_create(1, None).unwrap();
     while w.k.processes[&1].handles.len() < MAX_HANDLES as usize {
         w.k.mint(1, 1, MintSource::Handle(ep), 7, None).unwrap();
     }
@@ -97,7 +97,7 @@ fn contexts_are_separate_from_creator_object_on_both_widths() {
         let mut boot = Boot::default();
         boot.costs.contexts = contexts;
         let mut k = Kernel::boot(&boot, None).unwrap();
-        let ep = k.endpoint_create(1).unwrap();
+        let ep = k.endpoint_create(1, None).unwrap();
         let before_root = k.budgets[&1].pages_used;
         let before_child = k.budgets[&2].pages_used;
         let h = k.process_create(1, 2, ep).unwrap();
@@ -207,7 +207,7 @@ fn native_process_exit_with_live_lend_and_last_thread_blame() {
 #[test]
 fn pid_reuse_only_after_notice_receipt() {
     let mut k = Kernel::boot(&Boot::default(), None).unwrap();
-    let ep = k.endpoint_create(1).unwrap();
+    let ep = k.endpoint_create(1, None).unwrap();
     let mut seen = std::collections::BTreeSet::new();
     let mut reused = false;
     for _ in 0..1200 {
@@ -280,7 +280,7 @@ fn explicit_partial_and_current_call_traces() {
 fn exited_object_handles_and_queued_copies_live_until_notice_receipt() {
     let mut w = World::new(None);
     let (ep, h, receiver) = w.setup().unwrap();
-    let Ret::Handle(exit) = w.value(1, Syscall::EndpointCreate).unwrap() else { panic!() };
+    let Ret::Handle(exit) = w.value(1, Syscall::EndpointCreate { budget: None }).unwrap() else { panic!() };
     let memory = w.lend().unwrap();
     while w.k.processes[&1].handles.len() < 128 {
         w.k.mint(1, 1, MintSource::Handle(ep), 7, None).unwrap();
@@ -384,7 +384,7 @@ fn scheduler_stays_fair_past_the_old_pass_saturation_boundary() {
 fn sparse_committed_reply_mask_is_positional() {
     use redoubt_model::{ghost::Flow, invariants};
     let mut k = Kernel::boot(&Boot::default(), None).unwrap();
-    let ep = k.endpoint_create(1).unwrap();
+    let ep = k.endpoint_create(1, None).unwrap();
     let template = k.mint(1, 1, MintSource::Handle(ep), 7, None).unwrap();
     let before = k.processes[&1].handles.clone();
     let supplied = before[&template];
@@ -416,7 +416,7 @@ fn sparse_committed_reply_mask_is_positional() {
 #[test]
 fn process_map_destination_validation_precedes_started_state() {
     let mut w = World::new(None);
-    let Ret::Handle(ep) = w.value(1, Syscall::EndpointCreate).unwrap() else { panic!() };
+    let Ret::Handle(ep) = w.value(1, Syscall::EndpointCreate { budget: None }).unwrap() else { panic!() };
     let a = w.lend().unwrap();
     let b = w.lend().unwrap();
     let Ret::Handle(process) = w.value(1, Syscall::ProcessCreate { budget: 2, exit_endpoint: ep }).unwrap()

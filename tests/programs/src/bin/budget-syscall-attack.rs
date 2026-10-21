@@ -139,7 +139,8 @@ pub extern "C" fn _start() -> ! {
         call(Number::DmaAlloc, [999, 1, 0, 0, 0, 0, 0]),
         call(Number::SystemReset, [system as usize, 1, 0, 0, 0, 0, 0]),
         call(Number::SystemReset, [999, 9, 0, 0, 0, 0, 0]),
-        // `endpoint_create` takes no arguments: a stray register is malformed.
+        // `endpoint_create` takes one argument, a budget or 0: a stray register past it is
+        // malformed.
         call(Number::EndpointCreate, [0, 0, 0, 0, 0, 0, 1]),
         // `serve` decodes (id 0 first), then finds no such open call of this thread.
         call(Number::Serve, [0, 0, 0, 0, 0, 0, 0]),
@@ -156,6 +157,25 @@ pub extern "C" fn _start() -> ! {
         call(Number::Receive, [0, 0, 0, 0, scratch, 0, 0]),
     ];
     log!(logger, "[i14] other -> {:?}", other);
+    // `endpoint_create` naming a budget: `system`, above this program's own, is refused (an
+    // endpoint there would outlive the budget that made it); a handle it does not hold is
+    // `BadHandle`, an endpoint's `WrongObject`. One carved below its own is taken: the endpoint
+    // is that budget's, which pays its page, and destroying the budget leaves the receive right
+    // this program holds a dead entry: minting from it is `Dead`, and closing it frees it.
+    let mine = rd::endpoint_create().expect("an endpoint");
+    let below = rd::create(rd::OWN, &rd::spec(1, 0, 0)).expect("a budget below");
+    let owned = rd::endpoint_create_owned(Some(below));
+    let paid = rd::usage(below).map(|u| u.pages_usage);
+    let endpoints = [
+        rd::endpoint_create_owned(Some(system)).err(),
+        rd::endpoint_create_owned(Some(999)).err(),
+        rd::endpoint_create_owned(Some(mine)).err(),
+        owned.err(),
+        owned.ok().and_then(|h| rd::destroy(below).err().or_else(|| rd::mint_from_handle(h, 1, None).err())),
+        owned.ok().and_then(|h| rd::close(h).err()),
+    ];
+    log!(logger, "[i14] endpoint_create -> {:?}", endpoints);
+    log!(logger, "[i14] the budget below pays for its endpoint: {:?}", paid);
     let sandbox = rd::create(rd::OWN, &rd::spec(200, 0, 0)).expect("sandbox");
 
     // Random calls over hostile values. Never destroy or close slots 1-4: losing its own budget
@@ -204,7 +224,7 @@ pub extern "C" fn _start() -> ! {
         }
         // An endpoint lives until its owner budget is destroyed (R10), so thousands of them
         // would eat this program's own pages, which it needs to finish the attack. The
-        // targeted list above covers `endpoint_create`, whose only argument is that it has none.
+        // targeted lists above cover `endpoint_create` and its one argument.
         if number == Number::EndpointCreate {
             continue;
         }

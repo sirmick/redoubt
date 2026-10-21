@@ -24,6 +24,8 @@ expect = [
     '^\[pid 4\] \[i14\] budget_usage -> \[Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(BadHandle\)\]$',
     '^\[pid 4\] \[i14\] random -> \[Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), None\]$',
     '^\[pid 4\] \[i14\] other -> \[Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(BadHandle\), Some\(BadHandle\), Some\(InvalidArgument\), Some\(BadHandle\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(BadHandle\), Some\(WrongObject\), Some\(BadHandle\), Some\(WrongObject\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(InvalidArgument\), Some\(WrongObject\), Some\(Timeout\)\]$',
+    '^\[pid 4\] \[i14\] endpoint_create -> \[Some\(NotPermitted\), Some\(BadHandle\), Some\(WrongObject\), None, Some\(Dead\), None\]$',
+    '^\[pid 4\] \[i14\] the budget below pays for its endpoint: Ok\(1\)$',
     '^\[pid 4\] \[i14\] \d+ random calls: \d+ refused, 0 with an unknown result code$',
     '^\[pid 4\] \[i14\] attempts done$',
     '^\[pid 3\] \[victim\] mapped and touched 64 pages after the attack; every budget it holds within its limits: true$',

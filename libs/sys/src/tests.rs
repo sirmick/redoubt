@@ -50,7 +50,8 @@ fn sample_calls() -> Vec<Call> {
             handles_rec: 0,
             count: 0
         },
-        Call::EndpointCreate,
+        Call::EndpointCreate { budget: None },
+        Call::EndpointCreate { budget: Some(h(u32::MAX)) },
         Call::Mint { source: MintSource::Message(nz(BIG)), badge: nz(!BIG), budget: None },
         Call::Mint { source: MintSource::Handle(h(u32::MAX)), badge: nz(1), budget: Some(h(1)) },
         Call::Mint { source: MintSource::Message(nz(1)), badge: nz(u64::MAX), budget: Some(h(u32::MAX)) },
@@ -483,6 +484,11 @@ fn malformed_calls_are_refused() {
         decode([mint, 1, 5, 0, 1, 0, 0, 0]),
         Ok(Call::Mint { source: MintSource::Message(nz(5)), badge: nz(1), budget: None })
     );
+    let endpoint = Number::EndpointCreate as u64;
+    assert_eq!(decode([endpoint, 0, 0, 0, 0, 0, 0, 0]), Ok(Call::EndpointCreate { budget: None }));
+    assert_eq!(decode([endpoint, 3, 0, 0, 0, 0, 0, 0]), Ok(Call::EndpointCreate { budget: Some(h(3)) }));
+    assert_eq!(decode([endpoint, wide, 0, 0, 0, 0, 0, 0]), Err(Error::BadHandle), "wide budget");
+    assert_eq!(decode([endpoint, 0, 1, 0, 0, 0, 0, 0]), Err(Error::InvalidArgument), "endpoint_create, a2");
     let reply = Number::Reply as u64;
     assert_eq!(decode([reply, 0, 0, 0x5000, 0, 0, 0, 0]), Err(Error::InvalidArgument), "reply to id 0");
     let start = Number::ProcessStart as u64;
@@ -789,6 +795,9 @@ fn error_rows() {
     assert!(has(Number::BudgetCreate, &[ClassDenied, LabelDenied, TooLarge, OutOfProcesses]));
     assert!(lacks(Number::BudgetCreate, &[NotPermitted, Busy]));
     assert!(has(Number::Mint, &[Dead, NotPermitted]));
+    // A budget named only narrows, and only within the caller's label set (kernel/objects.md).
+    assert!(has(Number::EndpointCreate, &[BadHandle, Dead, WrongObject, NotPermitted, LabelDenied]));
+    assert!(lacks(Number::EndpointCreate, &[ClassDenied, Busy]));
     // A dead entry in a reply's handle list fails the reply, as in any list (I17).
     assert!(has(Number::Reply, &[InvalidArgument, BadHandle, Dead, TooLarge]));
     assert!(lacks(Number::Reply, &[OutOfMemory, Refused]));

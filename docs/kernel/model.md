@@ -319,7 +319,7 @@ A **mutation** is one deliberate break planted in the model. Each variant of `en
 `self.broken(Mutation::...)`: one site for most variants, two or three where the rule is kept in
 more than one place, and a direct comparison with the mutation for `AbandonNoticeMissing` and
 `R11LendStaysMapped`. With no mutation, the model is the specified kernel.
-`Mutation::ALL` lists all 177 variants. `Mutation::rule()` returns the ID each one breaks, as in
+`Mutation::ALL` lists all 179 variants. `Mutation::rule()` returns the ID each one breaks, as in
 the table below; the steward's variants, named `Policy...`, break the server rules the steward
 model checks. Each of those but four is one broken entry of the core's `Policy` table
 (`mutation::policy`), since the crate that ships has no mutation switch; the other four break the
@@ -365,7 +365,7 @@ model's embedder: its entropy, its admission, a volume's write check and the ser
 
 | ID | Variants | What they break |
 | --- | --- | --- |
-| [R1 (flow)](ipc.md#r1-flow) | `R1SkipLabelCheck`, `R1ExitNoticeIgnoresLabels`, `R1UsageIgnoresLabels`, `R1UsageExemptBySystemTarget`, `R1ExitExemptBySystemExiting`, `R1ChecksReceiverNotOwner`, `R1SenderClassFromStamp` | the label check on messages, exit notices and usage reads, and which side's class exempts it |
+| [R1 (flow)](ipc.md#r1-flow) | `R1SkipLabelCheck`, `R1ExitNoticeIgnoresLabels`, `R1UsageIgnoresLabels`, `R1UsageExemptBySystemTarget`, `R1ExitExemptBySystemExiting`, `R1ChecksReceiverNotOwner`, `R1SenderClassFromStamp`, `R1EndpointOwnerLabelsIgnored` | the label check on messages, exit notices and usage reads, and which side's class exempts it; an endpoint owned only within its creator's labels |
 | [R2 (fair waiting)](ipc.md#r2-fair-waiting) | `R2FifoAcrossAccounts`, `R2NoWaitCap`, `R2KeyByAccountOnly`, `R2KeyByStampLabels`, `R2SystemCallersShareGroup`, `R2OneCursor` | turns, the cap, how groups are keyed, and one label set's turns apart from another's |
 | [R3 (lends and abandoned calls)](ipc.md#r3-lends-and-abandoned-calls) | `R3UnmapAbandonedLend`, `R3ChargeStaysWithCaller`, `AbandonNoticeMissing`, `AbandonNoticeRepeated`, `BadRecordConsumesNotice`, `EndpointDestroyNoticeKept` | an abandoned lend's mapping and charge; the notice, once, kept for a good record, and none on a destroyed endpoint |
 | [R4 (delivery)](ipc.md#r4-delivery) | `R4IgnoreMaxTransfer`, `R4OverdrawOnDelivery` | `max_transfer`; paying for a delivery |
@@ -375,7 +375,7 @@ model's embedder: its entropy, its admission, a volume's write check and the ser
 | [R6 (charging)](budgets.md#r6-charging) | `R6ChargeAncestors`, `R6OwnPageChargedToItself`, `R6EndpointsFree`, `R6PageTablesFree`, `R6EmptyTableKept`, `R6OpenCallsFree`, `R6ProcessObjectFree`, `R6ProcessObjectChargedToBudget`, `R6LendChargedOnce`, `R6RootPageUncounted`, `R6PidUncountedAtEnd` | who pays for each object, and for how long a page table; `root`'s own page; how long a PID counts |
 | [R7 (carving)](budgets.md#r7-carving) | `R7NoCarveCheck`, `R7CarveToZeroFree`, `ProcessInWeightlessBudget` | carving within free limits; no process in a budget with free weight 0 |
 | [R8 (accounts)](budgets.md#r8-accounts) | `R8AccountFromArgument` | inheriting the parent's account |
-| [R9 (stamps)](objects.md#r9-stamps) | `R9ReceivedHandleRestamped`, `R9MintStampsCaller`, `R9MsgStampIsSenderBudget` | which budget a handle is stamped with |
+| [R9 (stamps)](objects.md#r9-stamps) | `R9ReceivedHandleRestamped`, `R9MintStampsCaller`, `R9MsgStampIsSenderBudget`, `R9EndpointInAnyBudget` | which budget a handle is stamped with; an endpoint owned only by its creator's budget or one below it |
 | [R10 (destruction)](budgets.md#r10-destruction) | `R10KeepForeignHandles`, `R10KeepCarvedLimits`, `R10SpareDescendantProcesses`, `R10ExitNoticesOutlivePayer`, `R10RevokedMessageDelivered`, `R10RevokedCallAnswered`, `R10SweptHandlesDropped`, `R10CreatorDeathSparesProcess`, `R10HeldPidsDropped`, `R10ReapDestroysParent`, `R10ReapKeepsCarve`, `R10ReapSkipsGrandchildren`, `R10DeliveredMidDestruction`, `BudgetDeadlineIgnored` | everything a destruction reaches, nothing delivered before its end, a deadline destroying the budget, and a reap destroying one child and keeping the budget |
 | [R11 (memory)](memory.md#r11-memory) | `R11NoZeroing`, `R11SetFlagsAllowsWx`, `R11SetFlagsAllowsWriteOnly`, `R11LendStaysMapped`, `R11MapFixedSkipsOverlap`, `R11ExecOnDeviceMemory`, `R11ProcessMapSkipsFlags` | zeroing a frame free since boot, W^X per mapping and per frame, write without read, lends unmapped, `map_fixed` never replacing, `process_map`'s own flag check |
 | [R81 (frames in flight)](memory.md#r81-frames-in-flight) | `R81InFlightAllocatable`, `R81CommitUnzeroed` | no allocation of a frame in flight, caught by the frames' own check (a free frame not zero, or also in flight), not by a page read stale; a frame freed only zero |

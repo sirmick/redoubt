@@ -263,7 +263,7 @@ impl Gen {
                 arg: self.any(),
                 handles: self.any_list(),
             },
-            10 => S::EndpointCreate,
+            10 => S::EndpointCreate { budget: None },
             11 => {
                 let source = if self.rng.pct(50) {
                     MintSource::Message(self.any())
@@ -357,7 +357,7 @@ impl Gen {
         self.setup += 1;
         // Two shared endpoints.
         if endpoints.len() < 2 && step < 4 {
-            return sys(Syscall::EndpointCreate);
+            return sys(Syscall::EndpointCreate { budget: None });
         }
         let made: Vec<u64> = k
             .budgets
@@ -490,7 +490,7 @@ impl Gen {
                     self.relay_from = Some((pid, e.id));
                     return self.relay_op(k);
                 }
-                return sys(pid, tid, Syscall::EndpointCreate);
+                return sys(pid, tid, Syscall::EndpointCreate { budget: None });
             }
         };
         let hx = |pid: u64, badge0: bool| {
@@ -841,7 +841,12 @@ impl Gen {
                     handles,
                 }
             }
-            31..=33 => Syscall::EndpointCreate,
+            // Now and then owned by the first budget the caller holds, its own, one below it or
+            // one it may not name: picked from the draw made, so no seed's sequence moves.
+            r @ 31..=33 => {
+                let held = k.processes[&pid].handles.iter().find(|(_, h)| is_budget(h)).map(|(i, _)| *i);
+                Syscall::EndpointCreate { budget: held.filter(|_| r == 33) }
+            }
             34..=38 => {
                 // Now and then another thread's open call (mint takes only the caller's own).
                 let others: Vec<u64> = k
@@ -1052,7 +1057,7 @@ mod subtree_regressions {
     fn scoped_sampling_progresses_with_copy_fault_inside_and_outside() {
         for (outside_fault, inside_fault) in [(true, false), (false, true), (true, true)] {
             let mut initial = Kernel::boot(&Boot::default(), None).unwrap();
-            let ep = initial.endpoint_create(INIT_PID).unwrap();
+            let ep = initial.endpoint_create(INIT_PID, None).unwrap();
             let h = initial.process_create(INIT_PID, SYSTEM, ep).unwrap();
             let Object::Process(pid) = initial.processes[&INIT_PID].handles[&h].object else { panic!() };
             initial.process_start(INIT_PID, h, 0, 0, 0, &[]).unwrap();

@@ -314,8 +314,9 @@ calls! {
     /// [`MAX_START_HANDLES`](crate::MAX_START_HANDLES), else `TooLarge`), one handle each
     /// ([`Handle::from_raw`]), copied into the child's slots 1..=count.
     ProcessStart = 11 "process_start" { process: Handle, entry: usize, sp: usize, arg: usize, handles_rec: usize, count: u32 };
-    /// -> `Handle`
-    EndpointCreate = 12 "endpoint_create";
+    /// -> `Handle`: the receive right. The endpoint is owned by and charged to `budget`, the
+    /// caller's own or one below it, or with none to the caller's budget (kernel/objects.md).
+    EndpointCreate = 12 "endpoint_create" { budget: Option<Handle> };
     /// -> `Handle`. The badge is never 0 (0 is the receive right).
     Mint = 13 "mint" { source: MintSource, badge: NonZeroU64, budget: Option<Handle> };
     /// `body_rec` is a [`Body`](crate::Body): the request going in, the reply coming out.
