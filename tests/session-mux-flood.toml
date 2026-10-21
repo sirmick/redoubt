@@ -1,0 +1,63 @@
+description = "One multiplexed send from a session costs a shared 9P server's heap no more than the requests it admits (docs/servers/serving.md, \"Multiplexed connections\" and R77; docs/servers/bootfsd.md, \"Serving /boot\"): alice's SSH session, in Elixir alone, mints a connection of its own at bootfsd from her /boot, so the multiplexed session is not her VM's, opens its session with a completion call, and sends one transfer through beamlet's send native: 65,534 bytes, the 16 pages of MAX_LEND_PAGES, packed with 9,362 header-only 7-byte T-messages tagged 0 to 255 and on again, so the 257th is a tag in use and ends the session. A second completion call is answered with a fresh session, bootfsd's word that the first ended, and the connection is disconnected. The verdict on the heap is the bench's, from bootfsd's own heap record in the guest's RAM (rule F; docs/testbench.md, \"The memory budget\"): its peak at most half its cap. A server that listed a send's messages before taking them held a list of 40 bytes a message on rv64 and 32 on rv32 for the send, with the list's move: on rv32 its peak was 1,335 pages, past half the cap of 2,510, where it is now 1,147; rv64's cap is sized from rv32's larger boot peak, so there the list's pages showed (1,177 against 942) within the cap, and rv32 is the width that can fail"
+arch = ["rv64", "rv32"]
+kind = "boot"
+recipe = "image/boot.toml"
+# The image needs 1 GiB: the principals' budgets, each holding a shell VM's session, do not fit
+# the users budget 256 MiB leaves (docs/kernel/budgets.md).
+memory_mib = 1024
+# bootfsd's heap record, read from the guest's RAM after the console verdict.
+memory = true
+# One login, a shell VM, one send: steward-vault-launch's bound for two.
+timeout_secs = 150
+expect = [
+    '^init: started sshd, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] sshd: listening on port 22$',
+    '^init: started steward, console [0-9a-f]{16}$',
+    '^\[con [0-9a-f]{16}\] Redoubt shell, on Elixir ',
+]
+forbid = [
+    'init: refused the boot',
+    'init: rebooting',
+    '^init: .* (exited|faulted|was killed)',
+    'init: restarted',
+    'EXCEPTION',
+    'steward: the core exited',
+    'steward: a step failed',
+    'sshd: login .*: refused',
+]
+
+# Each answer is tagged, so a pattern matches what the shell printed and never the echo. A
+# completion call's reply words are [0, 0, 1, 0] when it opens a session (OPENED in word 2). The
+# transfer is 36 copies of the 256 tags' messages and 146 more, 9,362: one comprehension over all
+# of them, typed at the shell, ended the session's VM on rv64 with a failed allocation of 3 MiB.
+# `send/2` waits 1 ms for its receiver (docs/userland/beamlet.md), one slice: bootfsd takes a
+# send only between its turns, so under load one try can time out, and the sender owns the retry.
+# It tries for 2 s (2,000 slices, a bound on bootfsd's turn, not on the sleep) and prints how many
+# tries landed it; a send never taken fails at once, by the session's forbid. The shell redraws
+# the typed line in pieces with no newline between them, so `{:flood, ` and the retry's
+# `{:error` share a line of its echo, always with a `}` between them; the answer has none before
+# its error.
+[[session]]
+user = "alice"
+forbid = ['\{:flood, [^}]*\{:error']
+steps = [
+    { expect = '\([0-9]+\)> ' },
+    { send = "alias Redoubt.Wire.Client.NinepCommon; boot = Enum.find_value(Redoubt.Namespace.table(), fn {\"/boot\", _, h} -> h; _ -> nil end); {:ok, %{conn: c, id: id}} = NinepCommon.new_connection(boot, \"\", 0); open = fn -> {:ok, r} = :redoubt.call(c, {[0, 1, 0, 0], :binary.copy(<<0>>, 4096), []}, 5000); receive do {:reply, ^r, {:ok, {w, _, _}}} -> w; {:reply, ^r, e} -> e after 10_000 -> :timeout end end; o = open.(); t = Enum.map(0..255, fn i -> <<7::32-little, 120, i::16-little>> end) |> IO.iodata_to_binary(); m = :binary.copy(t, 36) <> binary_part(t, 0, 146 * 7); until = System.monotonic_time(:millisecond) + 2000; s = Enum.reduce_while(Stream.iterate(1, &(&1 + 1)), nil, fn n, _ -> case :redoubt.send(c, {[0, byte_size(m), 0, 0], m, []}) do :ok -> {:halt, {:ok, n}}; {:error, :timeout} = e -> if System.monotonic_time(:millisecond) < until, do: (Process.sleep(10); {:cont, e}), else: {:halt, e}; e -> {:halt, e} end end); p = open.(); {d, _} = NinepCommon.disconnect(boot, id); {:flood, o, byte_size(m), s, p, d}\n" },
+    { within = 60 },
+    { expect = '\{:flood, \[0, 0, 1, 0\], 65534, \{:ok, [0-9]+\}, \[0, 0, 1, 0\], :ok\}' },
+    # Her session reads /boot on after it.
+    { send = "{:boot, byte_size(File.read!(\"/boot/beamlet\")) > 0}\n" },
+    { expect = '\{:boot, true\}' },
+    { expect = '\([0-9]+\)> ' },
+    { exit = 0 },
+]
+
+[userland]
+recipe = "image/userland.toml"
+
+[disk]
+recipe = "image/disk.toml"
+stage = "tests/data/steward/stage"
+
+[net]
+forward = [22]

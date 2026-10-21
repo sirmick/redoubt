@@ -64,7 +64,8 @@ steps = [
     # for its receiver (docs/userland/beamlet.md), one slice: the relay takes a send only between
     # its turns, so under load one try can time out, and the sender owns the retry. It tries for
     # 2 s (2,000 slices, a bound on the relay's turn, not on the sleep) and prints how many tries
-    # landed it. This case is the only caller of `:redoubt.send`.
+    # landed it. This case and `session-mux-flood`, which retries the same way, are the only
+    # callers of `:redoubt.send`.
     { send = "{:ended, (fn -> cons = elem(:redoubt.ns_lookup(\"/dev/cons\"), 1); until = System.monotonic_time(:millisecond) + 2000; Enum.reduce_while(Stream.iterate(1, &(&1 + 1)), nil, fn n, _ -> case :redoubt.send(cons, {[18, 0, 0, 0], nil, []}) do :ok -> {:halt, {:ok, n}}; {:error, :timeout} = e -> if System.monotonic_time(:millisecond) < until, do: (Process.sleep(10); {:cont, e}), else: {:halt, e}; e -> {:halt, e} end end) end).()}\n" },
     { within = 60 },
     { expect = '\{:ended, \{:ok, [0-9]+\}\}' },

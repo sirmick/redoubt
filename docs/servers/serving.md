@@ -272,10 +272,11 @@ stateDiagram-v2
 
 ### Multiplexed connections
 
-<details><summary>Status: built · partly tested: attacked in host tests with the runtime's fake kernel; a boot runs it only in `aio-many-reads` and `aio-many-reads-two` · tested (19)</summary>
+<details><summary>Status: built · partly tested: attacked in host tests with the runtime's fake kernel; a boot runs it only in `aio-many-reads` and `aio-many-reads-two`, and packs one send at `bootfsd` in `session-mux-flood` · tested (20)</summary>
 
 - bench:aio-many-reads
 - bench:aio-many-reads-two
+- bench:session-mux-flood
 - host:redoubt-rt::a_sends_pages_count_once_and_go_back_with_its_last_request
 - host:redoubt-rt::a_parked_read_sent_in_a_page_leaves_the_page_to_a_write
 - host:redoubt-rt::a_completion_call_is_held_at_most_its_hold_and_the_servers_bound
@@ -314,9 +315,15 @@ connection; the client half is the client library's hub
   where they lie, never listed: every one is framed first, so one that does not frame ends the
   session before any is taken, and then each is taken in turn, so a send's cost to the server's
   heap is the requests it admits, however many it packs (a transfer holds 9,362 of the shortest,
-  7 bytes). A send is never an open call, so the server takes requests even while it holds
-  `MAX_OPEN_CALLS` ([R4a (open calls)](../kernel/ipc.md#r4a-open-calls)), and it never waits on
-  the client: everything it says goes back as a reply.
+  7 bytes). Any program holding a connection can pack one, any session among them: its VM's hub
+  frames only its own requests, but beamlet's `send` native sends whatever words and up to
+  `MAX_BUFFER` (65,536) bytes its Elixir gives it, so the bound is the server's to keep. A boot
+  holds it at `bootfsd` (`session-mux-flood`), judged on its heap record: rv32 is the width that
+  can fail there, since the cap is sized from rv32's larger boot peak; rv64 shows the list's
+  pages (942 against 1,177 with it) within the cap. A send is never an open call, so the server
+  takes requests even while it holds `MAX_OPEN_CALLS`
+  ([R4a (open calls)](../kernel/ipc.md#r4a-open-calls)), and it never waits on the client:
+  everything it says goes back as a reply.
 - **The completion call** is a 9P call with words `[0, COLLECT, hold, 0]` (`COLLECT` is 1) and a
   lend: the server holds it at most `hold` µs or the **session bound**, whichever is shorter (the
   server's longest wait or `COLLECT_WAIT`, 10 s, whichever is shorter), and `hold` 0 answers at
@@ -808,8 +815,9 @@ a read with nothing coming ends at `ipd`'s deadline, and the connection still wo
 
 ### R77 (multiplexed requests)
 
-<details><summary>Status: built · partly tested: attacked in host tests with the runtime's fake kernel; no boot floods a real server with requests · tested (11)</summary>
+<details><summary>Status: built · partly tested: attacked in host tests with the runtime's fake kernel; no boot floods a real server with requests held, though one packs a send at `bootfsd` (`session-mux-flood`) · tested (12)</summary>
 
+- bench:session-mux-flood
 - host:redoubt-rt::a_never_polling_client_holds_only_its_share
 - host:redoubt-rt::a_sends_pages_count_once_and_go_back_with_its_last_request
 - host:redoubt-rt::death_with_requests_parked_frees_the_connection
