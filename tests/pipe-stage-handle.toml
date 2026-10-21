@@ -1,4 +1,4 @@
-description = "A stage's handle dies with the stage's budget and closes nothing else (docs/userland/beamlet.md, \"Handles are resource terms\"): the console session comes by a receive right of its own (a pipe-stage launched with serve hands its endpoint back) and serves it, then launches pipe-stage give in a carved budget with that endpoint among its handles. The stage gets a send right with a badge of the launch's own, not the receive right, and sends the session the receive right of an endpoint it made in its budget; the session destroys the budget, carves another, which the kernel gives the freed index, and collects the request's term: the second budget is still held. Then a pipeline runs as before and the session's budget is as it was. Every judged line is the session's"
+description = "A stage's handle dies with the stage's budget and closes nothing else (docs/userland/beamlet.md, \"Handles are resource terms\"): the console session comes by a receive right of its own (a pipe-stage launched with serve in the session's own budget, so its endpoint is the session's, hands it back) and serves it, then launches pipe-stage give in a carved budget with that endpoint among its handles. The stage gets a send right with a badge of the launch's own, not the receive right, and sends the session the receive right of an endpoint it made in its budget; the session destroys the budget, carves another, which the kernel gives the freed index, and collects the request's term: the second budget is still held. Then a pipeline runs as before and the session's budget is as it was. Every judged line is the session's"
 arch = ["rv64", "rv32"]
 kind = "boot"
 # The image's bundle with pipe-stage public in /boot, as pipe-eight's.
@@ -26,11 +26,13 @@ forbid = [
 after = 'Redoubt shell, on Elixir '
 send = "c = fn -> {:ok, o} = Redoubt.Budget.own(); {:ok, u} = Redoubt.Budget.usage(o); {u.weight, u.processes} end; {:base, before = c.()}\n"
 
-# A stage launched with `serve` answers one call with a copy of its receive right: the session's
-# own endpoint to serve, which outlives the stage's budget (the VM made it, charged to its own).
+# A stage launched with `serve` in the session's own budget answers one call with a copy of its
+# receive right: an endpoint made in the launch's budget, so the session's own to serve, which
+# outlives every budget the session carves (a stage served in a carved budget has an endpoint that
+# dies with it, docs/kernel/objects.md). The stage exits once it has answered.
 [[input]]
 after = '(^|\] )\{:base, \{\{'
-send = "{:ok, image} = File.read(\"/boot/pipe-stage\"); spec = %{pages: 256, processes: 1, weight: 1}; {:ok, b0} = Redoubt.Budget.carve(spec); {:ok, j0, conn} = :redoubt.launch(%{image: image, budget: b0, serve: \"ep\", args: [\"hand\", \"ep\"]}); {:ok, ref} = :redoubt.call(conn, {[0, 0, 0, 0], nil, []}, 2000); right = receive do {:reply, ^ref, {:ok, {_, _, [r]}}} -> r end; {:handed, Redoubt.Process.await(j0, 5000), Redoubt.Budget.destroy(b0)}\n"
+send = "{:ok, image} = File.read(\"/boot/pipe-stage\"); spec = %{pages: 256, processes: 1, weight: 1}; {:ok, own} = Redoubt.Budget.own(); {:ok, j0, conn} = :redoubt.launch(%{image: image, budget: own, serve: \"ep\", args: [\"hand\", \"ep\"]}); {:ok, ref} = :redoubt.call(conn, {[0, 0, 0, 0], nil, []}, 2000); right = receive do {:reply, ^ref, {:ok, {_, _, [r]}}} -> r end; {:handed, Redoubt.Process.await(j0, 5000), elem(Redoubt.Budget.usage(own), 0)}\n"
 
 # The shell evaluates each line in a fresh process, and a served endpoint's requests go to the
 # process that served it, so the serve and the receive are one line. The request's handle term

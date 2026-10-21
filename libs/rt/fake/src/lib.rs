@@ -20,11 +20,13 @@
 //! it, the caller's own or below it), and `budget_destroy`, which destroys the endpoints the budget
 //! and those below it own and leaves every handle to any of them, and every handle a process
 //! running in one made (`Fake::play`), a dead entry in every table: `Dead` to every call, its index
-//! held until its holder closes it, as the kernel's are (I17). It keeps what each child was given
-//! for a test to read back (`Fake::launched`); a child runs nothing, and a test ends it
-//! (`Fake::exit`), which sends its one exit notice. Every call is logged by name (`Fake::calls`), a
-//! test can have the next call of a name refused (`Fake::refuse`), or a later one
-//! (`Fake::refuse_after`), and it can read the most pages a process held at once
+//! held until its holder closes it, as the kernel's are (I17). It kills the processes running in
+//! them too: their open calls fail their callers `Dead` (R4b), and every call a killed process's
+//! host thread makes after fails `Dead`, which ends a played server's loop. It keeps what each
+//! child was given for a test to read back (`Fake::launched`); a child runs nothing, and a test
+//! ends it (`Fake::exit`), which sends its one exit notice. Every call is logged by name
+//! (`Fake::calls`), a test can have the next call of a name refused (`Fake::refuse`), or a later
+//! one (`Fake::refuse_after`), and it can read the most pages a process held at once
 //! (`Fake::held_peak`). Its clock is the host's until a test
 //! holds it (`Fake::hold_clock`) and moves it itself (`Fake::tick`), so a deadline, a server's own
 //! or a call's timeout, is a step the test takes and never a race against the host. A tick is a
@@ -138,6 +140,8 @@ struct Process {
     labels: Labels,
     /// The budget it runs in, if a test said so ([`Fake::play`]): what stamps the handles it makes.
     runs_in: Option<usize>,
+    /// Killed by its budget's destruction: every call it makes fails `Dead`.
+    killed: bool,
     /// Index 0 is never a handle.
     handles: Vec<Option<Object>>,
     /// Mapped ranges: address -> length.
@@ -327,6 +331,7 @@ impl Fake {
             account,
             labels,
             runs_in: None,
+            killed: false,
             handles: vec![None],
             mappings: HashMap::new(),
             peak: 0,
@@ -404,9 +409,13 @@ impl Fake {
         install(&mut s, to, ep)
     }
 
-    /// Destroys the endpoint: its receivers and blocked callers get `Dead`.
+    /// Destroys the endpoint: its receivers and blocked callers get `Dead`. One already destroyed
+    /// with the budget that owned it, its handle a dead entry, is left as it is.
     pub fn destroy(&self, owner: usize, handle: Handle) {
         let mut s = self.lock();
+        if s.processes[owner].killed && lookup(&s, owner, handle).is_err() {
+            return;
+        }
         let ep = as_endpoint(&s, owner, handle).unwrap();
         s.endpoints[ep.id].dead = true;
         self.change(&mut s);
@@ -958,6 +967,18 @@ unsafe impl redoubt_rt::Transport for Fake {
                 }
                 s.refusals[i].2 -= 1;
             }
+            // A killed process runs nothing on the machine; here its host thread runs on, and
+            // every call but an exit fails `Dead`.
+            if s.processes[pid].killed && !matches!(call, Call::ThreadExit | Call::ProcessExit { .. }) {
+                if let Call::Call { lend, .. } = call {
+                    return Ok(Return::Call(CallOutcome {
+                        status: Err(Error::Dead),
+                        lend: if lend.is_some() { LendDisposition::Returned } else { LendDisposition::None },
+                        reply_present: false,
+                    }));
+                }
+                return Err(Error::Dead);
+            }
         }
         match *call {
             Call::MapAnon { len, .. } => {
@@ -1314,7 +1335,13 @@ unsafe impl redoubt_rt::Transport for Fake {
                 for child in children {
                     end(&mut s, child, Cause::Killed, 0);
                 }
-                // The endpoints those budgets own die.
+                // The processes running there are killed (a test plays them; their host threads
+                // run on, every call failing `Dead`), and the endpoints those budgets own die.
+                for p in s.processes.iter_mut() {
+                    if p.runs_in.is_some_and(|b| gone.contains(&b)) {
+                        p.killed = true;
+                    }
+                }
                 let mut dying = HashSet::new();
                 for (id, e) in s.endpoints.iter_mut().enumerate() {
                     if e.owner.is_some_and(|b| gone.contains(&b)) {
@@ -1433,6 +1460,11 @@ impl Fake {
             } else if s.taken.remove(&id.get()) {
                 break Ok(Return::Nothing);
             }
+            // Its server was killed holding it: `Dead`, the lend back intact (R4b).
+            if s.open.get(&id.get()).is_some_and(|&(receiver, ..)| s.processes[receiver].killed) {
+                s.open.remove(&id.get());
+                break Err(Error::Dead);
+            }
             let queued = s.endpoints[ep.id].queue.iter().position(|p| p.id == id);
             if s.endpoints[ep.id].dead {
                 if let Some(i) = queued {
@@ -1501,7 +1533,7 @@ impl Fake {
         }
         loop {
             let s = guard.as_mut().unwrap();
-            if s.endpoints[ep.id].dead {
+            if s.endpoints[ep.id].dead || s.processes[pid].killed {
                 return Err(Error::Dead);
             }
             // Notices before messages.

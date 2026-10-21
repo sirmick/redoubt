@@ -25,6 +25,7 @@ use redoubt_fake_kernel::fake;
 use redoubt_rt::abi::{FOREVER, Handle};
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::ipc::Event as IpcEvent;
+use redoubt_rt::server::ninep::COLLECT_WAIT;
 use redoubt_rt::server::typed::{Outcome, finish};
 use redoubt_rt::startup::Startup;
 
@@ -726,7 +727,7 @@ fn serve_launch(p: &mut Redoubt, pid: usize, job: u64, launch: Launch) -> (Objec
 
 /// A server the VM launched with `serve` and bound at a prefix leaves nothing behind once its budget
 /// is destroyed: the prefix is unbound with the budget, before any term is dropped, and the VM's
-/// send right to it, the VM's own, is closed when its last term goes. A session's `piped` is one
+/// send right to it goes with the budget, whose endpoint it names. A session's `piped` is one
 /// such at every pipeline (docs/servers/piped.md), and after a thousand the namespace table and the
 /// VM's handles are where they started (each pipeline once left one entry and one handle for the
 /// VM's life).
@@ -775,9 +776,9 @@ fn a_served_servers_binding_and_handle_go_with_its_budget() {
                 assert_eq!(p.lookup("/dev/pipe/p").err(), Some(Refused("not_found")), "pipeline {i}");
                 assert_eq!(table(p), paths, "pipeline {i}");
                 // The terms gone, five handles leave what the VM held before the server was
-                // stopped: the budget's with the destroy, the job's exit endpoint and process
-                // handle with its exit, the send right with its last term, and the waiter's one,
-                // which it closes as it returns, on its thread: waited for, not sampled.
+                // stopped: the budget's and the send right with the destroy, the job's exit
+                // endpoint and process handle with its exit, and the waiter's one, which it
+                // closes as it returns, on its thread: waited for, not sampled.
                 drop(conn);
                 drop(budget);
                 let closed = f.wait_held(pid, before - 5, std::time::Duration::from_secs(5));
@@ -793,9 +794,8 @@ fn a_served_servers_binding_and_handle_go_with_its_budget() {
 
 /// A forgotten connection's hub session is ended at once: a request on it afterwards (a stale
 /// open file's clunk, at its term's collection) is refused rather than sent, so it reaches nobody.
-/// And while its waiter, which calls by the handle's index, has yet to hand its end over, the VM
-/// holds the handle though its last term is gone, so no later handle takes the index under the
-/// waiter; the hand-over lets it go.
+/// Its handle, which went with the server's budget, stays a dead entry until its last term is
+/// collected, so no later handle takes the index while a term of it may still be used.
 #[test]
 fn a_forgotten_connections_requests_reach_no_later_holder_of_its_index() {
     let f = fake();
@@ -803,34 +803,23 @@ fn a_forgotten_connections_requests_reach_no_later_holder_of_its_index() {
         move |pid| vec![("budget", f.budget(pid))],
         move |p, pid| {
             let spec = BudgetSpec { pages: 8, processes: 1, weight: 1, ..Default::default() };
-            let launch = |budget: &Object| Launch {
-                image: b"\x7fELF".to_vec(),
-                budget: budget.clone(),
-                namespace: vec![],
-                handles: vec![],
-                args: vec![],
-                stack_pages: None,
-                heap_pages: None,
-                serve: Some("serve".into()),
-            };
             let first = p.budget_create(&spec).unwrap();
-            let (conn, volume) = serve_launch(p, pid, 1, launch(&first));
+            let (conn, volume) = serve_launch(p, pid, 1, served_in(&first));
             p.bind("/dev/pipe", &conn).unwrap();
             let how = OpenMode { write: true, create: true, ..OpenMode::default() };
             let file = ask(p, |p| p.open("/dev/pipe/f", how)).unwrap();
             let waiters = p.waiters();
-            // The fake does not run the child, so the server outlives its budget here, and the
-            // destroy waits `HAND_US` for a hand-over that does not come (`Io::forget`): the one
-            // step the test takes, once the destroy waits on it.
-            let bound = std::thread::spawn(move || f.tick(HAND_US));
+            // The destroy kills the server (the fake's host thread runs on, refused everything),
+            // and its endpoint goes with its budget: the waiter's call parked there fails `Dead`,
+            // and the waiter hands its end over before the destroy returns.
             p.budget_destroy(&first).unwrap();
-            bound.join().unwrap();
+            assert_eq!(p.waiters(), waiters - 1, "the waiter handed its end over");
             let (_, event) = next(p);
             assert!(matches!(event, Event::Exit { job: 1, cause: "killed", .. }));
             // A second server, which the test plays: it answers two calls, each with a handle it
             // mints, and counts whatever reaches its endpoint after them.
             let second = p.budget_create(&spec).unwrap();
-            let again = p.launch(ME, 2, launch(&second)).unwrap().expect("a send right");
+            let again = p.launch(ME, 2, served_in(&second)).unwrap().expect("a send right");
             let probe = f.process(0, &[]);
             let receive = f.play(&f.served_child(pid).unwrap(), probe)[0];
             let stray = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -860,16 +849,15 @@ fn a_forgotten_connections_requests_reach_no_later_holder_of_its_index() {
             };
             // The first call starts the pool's thread, with the handles it keeps.
             let warm = returned(p, 3);
-            // The forgotten connection's last term gone, its handle stays the VM's while the waiter
-            // still calls by its index: the next handle the VM gets, the one the second server's
-            // reply brings, takes another.
+            // The waiter has handed its end over, so the forgotten connection's last term closes
+            // its dead entry, and the handle the second server's reply brings may take the index.
             let held = f.held(pid).0;
             drop(conn);
-            assert_eq!(f.held(pid).0, held, "the handle is held for the waiter");
+            assert_eq!(f.held(pid).0, held - 1, "the last term closes the dead entry");
             let reused = returned(p, 4);
-            assert_eq!(f.held(pid).0, held + 1);
+            assert_eq!(f.held(pid).0, held);
             // The stale file's clunk, as its term's collection sends it: refused on the ended
-            // session; sent, it would go out on the index and reach the second server.
+            // session; sent, it would go out on the index and reach whatever holds it now.
             p.close(file);
             // Nothing is awaited: ten looks at what arrived, a moment of the host's apart, so a
             // request that was sent anyway has reached the probe by the last.
@@ -883,22 +871,107 @@ fn a_forgotten_connections_requests_reach_no_later_holder_of_its_index() {
                 0,
                 "a request reached the new holder"
             );
-            drop((warm, reused));
-            // The server gone, the waiter returns, closing the handle it woke the VM through, and its
-            // hand-over lets the forgotten connection's handle go.
-            let before = f.held(pid).0;
-            assert_eq!(volume.stop(), redoubt_rt::exit::OK);
-            // The VM takes the waiter's last hand-over by idling, and the hub lets it go; then the
-            // waiter closes its handle, on its thread: waited for, not sampled.
-            step_until(p, 5_000_000, |p| p.waiters() != waiters);
-            assert_ne!(p.waiters(), waiters, "the waiter handed its end over");
-            let closed = f.wait_held(pid, before - 2, std::time::Duration::from_secs(5));
-            assert!(closed, "the waiter's handle and the held one, closed; the VM holds {}", f.held(pid).0);
-            drop(again);
+            drop((warm, reused, again));
+            let _ = volume.stop();
             p.budget_destroy(&second).unwrap();
             let (_, event) = next(p);
             assert!(matches!(event, Event::Exit { job: 2, cause: "killed", .. }));
-            f.destroy(probe, receive);
+        },
+    );
+}
+
+/// A launch of a server in `budget`, given its endpoint as `serve`.
+fn served_in(budget: &Object) -> Launch {
+    Launch {
+        image: b"\x7fELF".to_vec(),
+        budget: budget.clone(),
+        namespace: vec![],
+        handles: vec![],
+        args: vec![],
+        stack_pages: None,
+        heap_pages: None,
+        serve: Some("serve".into()),
+    }
+}
+
+/// Destroys `budget` as the VM does once its server has ended, the destroy's wait for the waiter's
+/// last hand-over bounded at [`HAND_US`]: a thread takes that one step of the clock once every
+/// thread of the fake waits, which is in the destroy only if the hand-over never comes, and
+/// otherwise once the session sleeps to the bound after it.
+fn destroy_within_hand_us(p: &mut Redoubt, budget: &Object) {
+    let until = p.monotonic_us() + HAND_US;
+    let bound = std::thread::spawn(|| fake().tick(HAND_US));
+    p.budget_destroy(budget).unwrap();
+    let now = p.monotonic_us();
+    if now < until {
+        let _ = redoubt_rt::handle::sleep(until - now);
+    }
+    bound.join().unwrap();
+}
+
+/// A served server's budget destroyed while its waiter holds an answer still to hand over, its next
+/// completion call not yet made: the endpoint went with the budget, so that call fails at once, the
+/// waiter hands its end over, and its place is free when the destroy returns. Once, the endpoint was
+/// the session's: the call waited on it for ever, the place was never given back, and a session's
+/// later pipelines failed `emfile`.
+#[test]
+fn a_served_servers_end_before_its_waiters_next_call_frees_the_place() {
+    let f = fake();
+    with_session(
+        move |pid| vec![("budget", f.budget(pid))],
+        move |p, pid| {
+            let spec = BudgetSpec { pages: 8, processes: 1, weight: 1, ..Default::default() };
+            let budget = p.budget_create(&spec).unwrap();
+            let (conn, volume) = serve_launch(p, pid, 1, served_in(&budget));
+            p.bind("/dev/pipe", &conn).unwrap();
+            assert_eq!(ask(p, |p| p.make_dir("/dev/pipe/a")), Ok(()));
+            let waiters = p.waiters();
+            // A request the server answers while the VM looks at nothing: the waiter takes the
+            // answer and waits to hand it over, its next call not made.
+            p.asker(Some(ME));
+            assert_eq!(p.make_dir("/dev/pipe/b"), Err(FileError::Later));
+            p.asker(None);
+            f.tick(0);
+            assert_eq!(f.calls(pid).last(), Some(&"send"), "the waiter waits to hand its answer over");
+            destroy_within_hand_us(p, &budget);
+            assert_eq!(p.waiters(), waiters - 1, "the waiter handed its end over within the destroy");
+            let (_, event) = next(p);
+            assert!(matches!(event, Event::Exit { job: 1, cause: "killed", .. }));
+            drop(conn);
+            let _ = volume.stop();
+        },
+    );
+}
+
+/// A served server's budget destroyed while its waiter's completion call waits on the endpoint,
+/// not taken: the endpoint went with the budget, so the call fails `Dead`, the waiter hands its end
+/// over, and its place is free when the destroy returns. The server receives nothing after it
+/// answers the waiter's call empty at the end of its hold (its next receive is refused), as one busy
+/// elsewhere when its budget ends does.
+#[test]
+fn a_served_servers_end_fails_its_waiters_queued_call() {
+    let f = fake();
+    with_session(
+        move |pid| vec![("budget", f.budget(pid))],
+        move |p, pid| {
+            let spec = BudgetSpec { pages: 8, processes: 1, weight: 1, ..Default::default() };
+            let budget = p.budget_create(&spec).unwrap();
+            let (conn, volume) = serve_launch(p, pid, 1, served_in(&budget));
+            p.bind("/dev/pipe", &conn).unwrap();
+            assert_eq!(ask(p, |p| p.make_dir("/dev/pipe/a")), Ok(()));
+            let waiters = p.waiters();
+            // The waiter's completion call is held to its end, answered empty, and made again; the
+            // server receives no more, so the call waits untaken.
+            f.refuse(volume.littlefsd, "receive", redoubt_rt::abi::Error::Dead);
+            f.tick(COLLECT_WAIT);
+            f.tick(0);
+            assert_eq!(f.queued(volume.littlefsd, volume.endpoint), 1, "the waiter's call waits untaken");
+            destroy_within_hand_us(p, &budget);
+            assert_eq!(p.waiters(), waiters - 1, "the waiter handed its end over within the destroy");
+            let (_, event) = next(p);
+            assert!(matches!(event, Event::Exit { job: 1, cause: "killed", .. }));
+            drop(conn);
+            let _ = volume.stop();
         },
     );
 }

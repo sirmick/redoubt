@@ -195,7 +195,9 @@ the multiplexed protocol a native client speaks written again in Elixir, every b
 through the interpreter. `piped` is the serving library's 9P skeleton with one small file server,
 started from `/boot` when a pipeline needs it and none is running, with the launch native's
 `serve` ([beamlet](beamlet.md#natives)), and ended, its budget destroyed, when the last pipeline
-holding it ends: nothing of it exists at the prompt.
+holding it ends: nothing of it exists at the prompt. Its endpoint is made in its budget, so its end
+fails every call the session still has for it, and the session's waiter on it gives its place back
+then ([R4b (a server dies)](../kernel/ipc.md#r4b-a-server-dies)).
 
 **A pipeline** (`Redoubt.Pipeline.run/2`, and the shell's `pipe/1` and `exec`):
 - **One budget per stage,** carved from the session's (256 pages, 1 process, weight 1, unless the
@@ -228,8 +230,8 @@ holding it ends: nothing of it exists at the prompt.
   (`pipe-eight` runs eight in one session): not its binding at `/dev/pipe` nor the VM's handle to
   it, which go with its budget ([beamlet](beamlet.md#natives); `pipe-sixty-four`, 64 in one
   session, finds the namespace table its size before the first and nothing at `/dev/pipe`), where
-  each pipeline once left one entry and one handle for the session's life. It holds 86 pages on rv64 and
-  83 on rv32 after `pipe-carries`' pipelines; the rest is what its clients' parked calls may lend
+  each pipeline once left one entry and one handle for the session's life. It holds 87 pages on rv64 and
+  84 on rv32 after `pipe-carries`' pipelines; the rest is what its clients' parked calls may lend
   it at worst, 552 pages for the two buckets admission needs at the least, which is why 512 would
   not do ([piped](../servers/piped.md#serving-pipes)). Starting it again costs about 60 ms under
   QEMU, which `pipe-carries` prints.
