@@ -353,6 +353,9 @@ pub fn loopback_usable(workspace: &Path, dir: &Path) -> Result<(), Unusable> {
 enum Stop {
     /// The case fails for this reason.
     Failed(String),
+    /// A wait for a mark timed out. The case fails, but the cause is the session that never set
+    /// the mark, so this neither stops the others nor is reported while one of them failed.
+    Waited(String),
     /// Another session failed first; this one only gave up.
     Aborted,
     /// The bench itself went wrong (ssh would not start, a log could not be written).
@@ -361,6 +364,17 @@ enum Stop {
 
 impl From<std::io::Error> for Stop {
     fn from(e: std::io::Error) -> Self { Stop::Broken(e.to_string()) }
+}
+
+impl Stop {
+    /// The same stop, its reason prefixed with where in the session it came (`step 3`).
+    fn at(self, place: &str) -> Self {
+        match self {
+            Stop::Failed(why) => Stop::Failed(format!("{place}: {why}")),
+            Stop::Waited(why) => Stop::Waited(format!("{place}: {why}")),
+            other => other,
+        }
+    }
 }
 
 /// State shared by the sessions of one case: marks set so far, and whether to give up.
@@ -412,7 +426,7 @@ impl Shared<'_> {
             }
             let left = deadline.saturating_duration_since(Instant::now());
             if left.is_zero() {
-                return Err(Stop::Failed(format!("timed out waiting for mark {mark:?}")));
+                return Err(Stop::Waited(format!("timed out waiting for mark {mark:?}")));
             }
             // Wake up now and then to notice the case being aborted from outside.
             marks = self.changed.wait_timeout(marks, left.min(Duration::from_millis(50))).unwrap().0;
@@ -443,15 +457,15 @@ impl Login {
     }
 }
 
-/// What `run` found: why the first failing session failed, if one did, and the login of every
-/// session that finished.
+/// What `run` found: why the case's sessions failed, if one did ([`report`]), and the login of
+/// every session that finished.
 pub struct Sessions {
     pub failed: Option<String>,
     pub logins: Vec<Login>,
 }
 
 /// Run `sessions` concurrently until each has done its steps and its ssh has exited. Returns
-/// why the first failing session failed, or None, and each session's login. Setting `abort`
+/// why they failed ([`report`]), or None, and each session's login. Setting `abort`
 /// makes them all give up. `idle` is told when an `idle` step starts and ends, and answers each
 /// edge once QEMU's log is on or off.
 #[allow(clippy::too_many_arguments)]
@@ -546,14 +560,30 @@ pub fn run(
         commands.push((session, ssh, log));
     }
 
-    let stops: Vec<Result<Vec<(String, f64)>, Stop>> = std::thread::scope(|scope| {
+    let stops = drive_all(commands, &shared, deadline);
+    // The keeper: no guest outlives its case's sessions.
+    let leftover = match server {
+        Server::Loopback { case_dir, .. } => leftover_guest(case_dir, deadline),
+        Server::Guest { .. } | Server::Redoubt { .. } => None,
+    };
+    let Sessions { failed, logins } = report(sessions, stops)?;
+    Ok(Sessions { failed: failed.or(leftover), logins })
+}
+
+/// What one session's drive came to: the `expect`s of its login, or why it stopped.
+type Driven = Result<Vec<(String, f64)>, Stop>;
+
+/// Drives each session on a thread of its own until all are done. A session that fails stops the
+/// others; one that only timed out waiting for a mark does not, so the session that never set it
+/// fails of its own, by its own step.
+fn drive_all(commands: Vec<(&Session, Command, PathBuf)>, shared: &Shared, deadline: Instant) -> Vec<Driven> {
+    std::thread::scope(|scope| {
         let threads: Vec<_> = commands
             .into_iter()
             .map(|(session, ssh, log)| {
-                let shared = &shared;
                 scope.spawn(move || {
                     let result = drive(session, ssh, &log, shared, deadline);
-                    if result.is_err() {
+                    if let Err(Stop::Failed(_) | Stop::Broken(_)) = result {
                         shared.fail();
                     }
                     result
@@ -561,13 +591,14 @@ pub fn run(
             })
             .collect();
         threads.into_iter().map(|t| t.join().expect("session thread panicked")).collect()
-    });
-    // The keeper: no guest outlives its case's sessions.
-    let leftover = match server {
-        Server::Loopback { case_dir, .. } => leftover_guest(case_dir, deadline),
-        Server::Guest { .. } | Server::Redoubt { .. } => None,
-    };
+    })
+}
+
+/// The case's verdict on its sessions: the first session, in the case's order, that failed of its
+/// own; failing that, the first that timed out waiting for a mark; and each finished login.
+fn report(sessions: &[Session], stops: Vec<Driven>) -> Result<Sessions> {
     let mut failure = None;
+    let mut waited = None;
     let mut logins = Vec::new();
     for (session, stop) in sessions.iter().zip(stops) {
         match stop {
@@ -575,13 +606,16 @@ pub fn run(
             Err(Stop::Failed(why)) => {
                 failure.get_or_insert(format!("session {}: {why}", session.name()));
             }
+            Err(Stop::Waited(why)) => {
+                waited.get_or_insert(format!("session {}: {why}", session.name()));
+            }
             Ok(matched) if !matched.is_empty() => {
                 logins.push(Login { session: session.name().to_string(), matched })
             }
             Ok(_) | Err(Stop::Aborted) => {}
         }
     }
-    Ok(Sessions { failed: failure.or(leftover), logins })
+    Ok(Sessions { failed: failure.or(waited), logins })
 }
 
 /// The least time a case's guests have to go once their sessions' ssh have exited, however near
@@ -724,10 +758,7 @@ fn drive(
     let first = session.steps.iter().take_while(|s| matches!(s, Step::Wait(_))).count();
     for (number, step) in session.steps[..first].iter().enumerate() {
         if let Step::Wait(mark) = step {
-            shared.wait(mark, deadline).map_err(|stop| match stop {
-                Stop::Failed(why) => Stop::Failed(format!("step {}: {why}", number + 1)),
-                other => other,
-            })?;
+            shared.wait(mark, deadline).map_err(|stop| stop.at(&format!("step {}", number + 1)))?;
         }
     }
     // A terminal session reads a terminal, so that ssh reports its size changes; its output stays
@@ -784,17 +815,11 @@ fn drive(
         captures: Vec::new(),
     };
     for (number, step) in session.steps.iter().enumerate().skip(first) {
-        driver.step(step).map_err(|stop| match stop {
-            Stop::Failed(why) => Stop::Failed(format!("step {}: {why}", number + 1)),
-            other => other,
-        })?;
+        driver.step(step).map_err(|stop| stop.at(&format!("step {}", number + 1)))?;
     }
     // Every session ends with ssh's exit, so all of its output passes `forbid`.
     if !session.steps.iter().any(|s| matches!(s, Step::Exit(_) | Step::Ended(_))) {
-        driver.step(&Step::Exit(0)).map_err(|stop| match stop {
-            Stop::Failed(why) => Stop::Failed(format!("at the end: {why}")),
-            other => other,
-        })?;
+        driver.step(&Step::Exit(0)).map_err(|stop| stop.at("at the end"))?;
     }
     let tail = std::mem::take(&mut driver.line);
     driver.check_line(&tail)?;
@@ -1127,6 +1152,41 @@ mod tests {
             panic!("the status was not required")
         };
         assert!(why.contains("ssh exited (status 3) on its own, expected 0"), "{why}");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A session stuck at an `expect` is the one the case's failure names, though a session before
+    /// it waits for a mark the stuck one never sets and times out at the same deadline: that
+    /// wait's timeout stops nothing, and is the verdict only when no session failed of its own.
+    #[test]
+    fn a_stuck_expect_is_named_before_a_mark_wait() {
+        let dir = std::env::temp_dir().join(format!("redoubt-stuck-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let abort = AtomicBool::new(false);
+        let shared =
+            Shared { marks: Mutex::new(HashSet::new()), changed: Condvar::new(), abort: &abort, idle: None };
+        let sessions: Vec<Session> = [
+            "user = \"bob\"\nname = \"waiter\"\nsteps = [{ wait = \"in\" }, { exit = 0 }]\n",
+            "user = \"bob\"\nname = \"stuck\"\nsteps = [{ expect = 'ok' }, { mark = \"in\" }]\n",
+        ]
+        .iter()
+        .map(|text| toml::from_str(text).unwrap())
+        .collect();
+        let commands = sessions
+            .iter()
+            .map(|session| {
+                let mut sh = Command::new("sh");
+                sh.args(["-c", "echo error; sleep 30"]);
+                (session, sh, dir.join(session.name()))
+            })
+            .collect();
+        let stops = drive_all(commands, &shared, Instant::now() + Duration::from_secs(2));
+        assert!(matches!(&stops[0], Err(Stop::Waited(_))), "the waiter was stopped");
+        let failed = report(&sessions, stops).unwrap().failed.expect("a failure");
+        assert_eq!(failed, "session stuck: step 1: timed out waiting for /ok/");
+        let waited = Err(Stop::Waited("step 1: timed out waiting for mark \"in\"".into()));
+        let failed = report(&sessions, vec![waited, Ok(Vec::new())]).unwrap().failed;
+        assert_eq!(failed.as_deref(), Some("session waiter: step 1: timed out waiting for mark \"in\""));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

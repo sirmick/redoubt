@@ -1365,7 +1365,7 @@ The guest's own claims about the network are never trusted.
 
 ### Sessions and the loopback server
 
-<details><summary>Status: built · tested (20)</summary>
+<details><summary>Status: built · tested (21)</summary>
 
 - bench:bench-ssh-loopback
 - bench:bench-ssh-loopback-openssh
@@ -1386,6 +1386,7 @@ The guest's own claims about the network are never trusted.
 - host:testbench::resize_needs_a_pty
 - host:testbench::only_marks_follow_exit
 - host:testbench::ended_keeps_the_input_open_until_sshs_own_exit
+- host:testbench::a_stuck_expect_is_named_before_a_mark_wait
 - host:testbench::no_other_child_inherits_a_sessions_terminal
 
 </details>
@@ -1430,7 +1431,10 @@ close hangs up the terminal `ssh` reads and discards what it has not read yet, s
 never leave the host; the box's end of a channel whose input is still open has nothing to race.
 `exit` stays for the sessions the bench itself closes. The log notes when the end came, as it
 does an `expect`'s match. Every session's exit status is checked and all of its output passes
-`forbid`; a session that fails stops the others. Its log notes each `expect` that matched and when, in seconds after its `ssh`
+`forbid`; a session that fails stops the others. A `wait` that times out fails the case but stops
+nothing, since the session that never set its mark is the one stuck: the case's failure names the
+first session, in the case's order, that failed of its own, and a mark's timeout only when none
+did. Its log notes each `expect` that matched and when, in seconds after its `ssh`
 started, and the bench prints under the case's result those matched before the session first
 typed: a login's latency to its first prompt, re-measured by every run
 ([sshd](servers/sshd.md#sessions-over-ssh)). A `pty = true` session's `ssh` reads its input from a pseudo-terminal the bench
