@@ -272,7 +272,7 @@ stateDiagram-v2
 
 ### Multiplexed connections
 
-<details><summary>Status: built · partly tested: attacked in host tests with the runtime's fake kernel; a boot runs it only in `aio-many-reads` and `aio-many-reads-two` · tested (17)</summary>
+<details><summary>Status: built · partly tested: attacked in host tests with the runtime's fake kernel; a boot runs it only in `aio-many-reads` and `aio-many-reads-two` · tested (19)</summary>
 
 - bench:aio-many-reads
 - bench:aio-many-reads-two
@@ -290,6 +290,8 @@ stateDiagram-v2
 - host:redoubt-rt::a_flood_of_sends_at_wait_cap_never_blocks_the_server
 - host:redoubt-rt::a_reused_or_out_of_range_tag_ends_the_connection
 - host:redoubt-rt::a_second_completion_call_is_refused
+- host:redoubt-rt::a_sends_messages_cost_the_servers_heap_nothing_each
+- host:redoubt-rt::a_send_that_ends_its_session_part_way_leaves_nothing_held
 - fuzz:redoubt-rt/ninep_server
 
 </details>
@@ -308,7 +310,11 @@ connection; the client half is the client library's hub
   width. A T-message that fits the words (24 bytes, three 64-bit words, on either width) is kept
   in the request's own record whichever way it came, copied out of its page as it is taken, so a
   page is held only by requests too long for that: on rv32, where every read comes in a page, a
-  read that waits (a console's, for typing) pins no page. A send is never an open call, so the server takes requests even while it holds
+  read that waits (a console's, for typing) pins no page. A send's T-messages are taken in order
+  where they lie, never listed: every one is framed first, so one that does not frame ends the
+  session before any is taken, and then each is taken in turn, so a send's cost to the server's
+  heap is the requests it admits, however many it packs (a transfer holds 9,362 of the shortest,
+  7 bytes). A send is never an open call, so the server takes requests even while it holds
   `MAX_OPEN_CALLS` ([R4a (open calls)](../kernel/ipc.md#r4a-open-calls)), and it never waits on
   the client: everything it says goes back as a reply.
 - **The completion call** is a 9P call with words `[0, COLLECT, hold, 0]` (`COLLECT` is 1) and a
@@ -802,7 +808,7 @@ a read with nothing coming ends at `ipd`'s deadline, and the connection still wo
 
 ### R77 (multiplexed requests)
 
-<details><summary>Status: built · partly tested: attacked in host tests with the runtime's fake kernel; no boot floods a real server with requests · tested (9)</summary>
+<details><summary>Status: built · partly tested: attacked in host tests with the runtime's fake kernel; no boot floods a real server with requests · tested (11)</summary>
 
 - host:redoubt-rt::a_never_polling_client_holds_only_its_share
 - host:redoubt-rt::a_sends_pages_count_once_and_go_back_with_its_last_request
@@ -813,16 +819,19 @@ a read with nothing coming ends at `ipd`'s deadline, and the connection still wo
 - host:redoubt-rt::a_flood_of_sends_at_wait_cap_never_blocks_the_server
 - host:redoubt-rt::a_reused_or_out_of_range_tag_ends_the_connection
 - host:redoubt-rt::a_second_completion_call_is_refused
+- host:redoubt-rt::a_sends_messages_cost_the_servers_heap_nothing_each
+- host:redoubt-rt::a_send_that_ends_its_session_part_way_leaves_nothing_held
 
 </details>
 
 A multiplexed connection's requests, and the pages they brought, are bounded by its admission
 shares of `Requests` and `Pages`, and a request whose answer is not yet delivered still counts. So a
 client that floods requests, or never collects their answers, holds no more of a server than one
-share, and its excess is answered `busy`, never queued without bound. A session ends, freeing
-every request it held, when its completion call is abandoned (the client died or gave up), or
-when no completion call has been parked for the session bound: the server's longest wait or
-`COLLECT_WAIT` (10 s), whichever is shorter. A flushed request is answered at most once, before
+share, and its excess is answered `busy`, never queued without bound; nor does a send cost the
+server's heap more than the requests it admits, however many messages it packs. A session ends,
+freeing every request it held, when its completion call is abandoned (the client died or gave
+up), or when no completion call has been parked for the session bound: the server's longest wait
+or `COLLECT_WAIT` (10 s), whichever is shorter. A flushed request is answered at most once, before
 its `Rflush`, never after.
 
 ## Failure and restart

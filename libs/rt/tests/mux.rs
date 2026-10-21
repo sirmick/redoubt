@@ -2,6 +2,8 @@
 //! R77): requests by `send`, completions through one long-poll call, every attack's verdict read
 //! from the server's own admission table and sessions, or from what the server answered.
 
+use std::alloc::{GlobalAlloc, Layout, System};
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::num::NonZeroU64;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -9,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use redoubt_fake_kernel::fake;
-use redoubt_rt::abi::{Error, FOREVER, Handle};
+use redoubt_rt::abi::{Error, FOREVER, Handle, MAX_LEND_PAGES, PAGE_SIZE};
 use redoubt_rt::client::{Connection, Lend};
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::ipc::{Buffer, Caller, Request, Words};
@@ -93,7 +95,46 @@ struct Seen {
     /// (`InFlight`), its requests (`Requests`) and their pages (`Pages`).
     held: Mutex<HashMap<u64, (u32, u32)>>,
     sessions: AtomicUsize,
+    /// The server thread's heap ([`THREAD_HEAP`]): bytes live, and the most at once since
+    /// [`heap_from_now`].
+    heap: Mutex<(isize, isize)>,
 }
+
+thread_local! {
+    /// This thread's heap as [`Counted`] sees it: bytes live (a block another thread took counts
+    /// against the thread that frees it), and the most live at once. A move counts both blocks, as
+    /// the runtime's heap, which has no realloc, holds both.
+    static THREAD_HEAP: Cell<(isize, isize)> = const { Cell::new((0, 0)) };
+}
+
+/// The system allocator, counted per thread: what a server's own handling of a send costs its heap.
+struct Counted;
+
+fn count(bytes: isize) {
+    let _ = THREAD_HEAP.try_with(|heap| {
+        let (live, peak) = heap.get();
+        heap.set((live + bytes, peak.max(live + bytes)));
+    });
+}
+
+// SAFETY: every call goes to the system allocator with the caller's own arguments; the count
+// beside it allocates nothing.
+unsafe impl GlobalAlloc for Counted {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        count(layout.size() as isize);
+        // SAFETY: GlobalAlloc's contract, passed on.
+        unsafe { System.alloc(layout) }
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        count(-(layout.size() as isize));
+        // SAFETY: GlobalAlloc's contract: `ptr` came from `alloc`, the system's, with `layout`.
+        unsafe { System.dealloc(ptr, layout) }
+    }
+}
+
+#[global_allocator]
+static COUNTED: Counted = Counted;
 
 impl Seen {
     fn held(&self, account: u64) -> u32 { self.held.lock().unwrap().get(&account).map_or(0, |h| h.0) }
@@ -124,6 +165,13 @@ impl Around<Files> for Publish {
     /// Published before each wait, after the deadlines, so what the last event or deadline did is
     /// seen.
     fn turn(&mut self, nine: &mut NineServer<Files>, _: u64) {
+        // Before the holdings, so a test that waits on them reads the heap of the same turn: what
+        // is live, and the most since the test last asked ([`heap_from_now`]).
+        let (live, peak) = THREAD_HEAP.with(Cell::get);
+        THREAD_HEAP.with(|heap| heap.set((live, live)));
+        let mut heap = self.seen.heap.lock().unwrap();
+        *heap = (live, heap.1.max(peak));
+        drop(heap);
         let mut held = self.seen.held.lock().unwrap();
         for (account, key) in &self.keys {
             let of = |r| nine.admission().held(*key, r);
@@ -686,5 +734,133 @@ fn a_parked_read_sent_in_a_page_leaves_the_page_to_a_write() {
     });
     assert_eq!(w.seen.peak(1012), 1 + 2 + 1, "the read, the write and the write's page");
     until("the write and its page went", || w.seen.held(1012) == 1 + 1);
+    w.end();
+}
+
+/// Sends `bytes`, T-messages end to end, in one transfer of the pages they need.
+fn send_transfer(ep: Handle, bytes: &[u8]) {
+    let mut pages = Buffer::new(bytes.len().div_ceil(PAGE_SIZE)).unwrap();
+    pages[..bytes.len()].copy_from_slice(bytes);
+    Endpoint::from_handle(ep)
+        .send(&[0, bytes.len() as u64, 0, 0], &[], Some(pages), FOREVER)
+        .map_err(|(e, _)| e)
+        .unwrap();
+}
+
+/// The server thread's live heap now, its peak counted from here: call it while the server waits.
+fn heap_from_now(w: &World) -> isize {
+    let mut heap = w.seen.heap.lock().unwrap();
+    heap.1 = heap.0;
+    heap.0
+}
+
+/// The most the server thread's heap held over `live` since [`heap_from_now`] returned it.
+fn heap_over(w: &World, live: isize) -> isize { w.seen.heap.lock().unwrap().1 - live }
+
+/// A transfer packs as many T-messages as its pages hold: `MAX_LEND_PAGES` of 7-byte ones are
+/// 9,362. They are taken where they lie, so what a send costs the server's heap is the requests
+/// it admits, not a record per message: under a page, where a list of them took 640 KiB, from any
+/// client (servers/serving.md, "A request").
+#[test]
+fn a_sends_messages_cost_the_servers_heap_nothing_each() {
+    let w = World::new();
+    let f = fake();
+    let (a, ha) = w.client(1013);
+    let room = MAX_LEND_PAGES * PAGE_SIZE;
+    // Header-only messages (a `Tclunk` short of its fid), tags 0 to 255 and on again: the 257th
+    // is a tag in use, which ends the session, and every one frames.
+    let tiny: Vec<u8> = (0..room / 7)
+        .flat_map(|i| {
+            let [lo, hi] = ((i % 256) as u16).to_le_bytes();
+            [7, 0, 0, 0, 120, lo, hi]
+        })
+        .collect();
+    f.as_process(a, || open_session(ha));
+    until("the session is held", || w.seen.held(1013) == 1);
+    let live = heap_from_now(&w);
+    f.as_process(a, || send_transfer(ha, &tiny));
+    until("the tag in use ended the session", || w.seen.sessions.load(Ordering::Acquire) == 0);
+    let tiny_over = heap_over(&w, live);
+    // A send of more than 256 can be well-formed too: each `Tflush` takes the tag the one before
+    // it freed, and frees that one's.
+    let mut chain = vec![0; room];
+    let (mut n, mut flushes) = (0, 0u16);
+    while room - n >= 9 {
+        let (tag, oldtag) = (flushes % 2, (flushes + 1) % 2);
+        n += Message { tag, body: Body::Tflush { oldtag } }.encode(&mut chain[n..]).unwrap();
+        flushes += 1;
+    }
+    chain.truncate(n);
+    f.as_process(a, || open_session(ha));
+    until("the session is held again", || w.seen.held(1013) == 1);
+    let live = heap_from_now(&w);
+    f.as_process(a, || {
+        send_transfer(ha, &chain);
+        assert_eq!(collect(ha), vec![((flushes - 1) % 2, Got::Flushed)], "the last flush alone is answered");
+    });
+    until("the flushes went", || w.seen.held(1013) == 1);
+    let chain_over = heap_over(&w, live);
+    // Messages too long for the words, a page of writes: the page and three are held, the rest
+    // answered busy.
+    let tags: Vec<u16> = (0..PAGE_SIZE as u16 / 55).collect();
+    let live = heap_from_now(&w);
+    f.as_process(a, || {
+        writes_in_one_transfer(ha, &tags, &vec![NOW_FID; tags.len()]);
+        let got = collect(ha);
+        assert_eq!(got.iter().filter(|(_, g)| *g == busy()).count(), tags.len() - 3);
+        assert_eq!(got.iter().filter(|(_, g)| *g == Got::Wrote(LONG.len() as u32)).count(), 3);
+    });
+    until("the writes and their page went", || w.seen.held(1013) == 1);
+    let long_over = heap_over(&w, live);
+    let page = PAGE_SIZE as isize;
+    assert!(
+        tiny_over < page && chain_over < page && long_over < page,
+        "the server's heap over a send: 7-byte messages {tiny_over}, flushes {chain_over}, writes {long_over} bytes"
+    );
+    w.end();
+}
+
+/// A send is taken in order up to a message that ends its session (a tag in use), and nothing of
+/// it is held after: its requests go with the session, and its pages with them, however far into
+/// it the end came. One whose last message does not frame ends the session the same way.
+#[test]
+fn a_send_that_ends_its_session_part_way_leaves_nothing_held() {
+    let w = World::new();
+    let f = fake();
+    let (a, ha) = w.client(1014);
+    let ended =
+        || f.run(a, move || u32::from(collect_raw(ha, FOREVER).map(|r| r.0[0]) == Ok(u64::from(ENDED))));
+    let write = |tag, fid| {
+        let mut bytes = [0; 64];
+        let n =
+            Message { tag, body: Body::Twrite { fid, offset: 0, data: LONG } }.encode(&mut bytes).unwrap();
+        bytes[..n].to_vec()
+    };
+    f.as_process(a, || open_session(ha));
+    let parked = ended();
+    until("the completion call is parked", || f.open_calls(w.server) == 1);
+    // A waiting write and an answered one, both holding the page, then a tag in use, then one
+    // more that is never looked at.
+    let send = [write(0, WAIT_FID), write(1, NOW_FID), write(0, NOW_FID), write(2, NOW_FID)].concat();
+    f.as_process(a, || send_transfer(ha, &send));
+    assert_eq!(parked.join().unwrap(), 1, "the parked call was answered ENDED");
+    until("the session ended", || w.seen.sessions.load(Ordering::Acquire) == 0);
+    assert_eq!(w.seen.held(1014), 0, "nothing of the send is held");
+    // A write, then a message whose size runs past the send: the session ends, nothing held.
+    f.as_process(a, || open_session(ha));
+    let parked = ended();
+    until("the completion call is parked again", || f.open_calls(w.server) == 1);
+    let send = [write(0, WAIT_FID), vec![64, 0, 0, 0, 118, 1, 0]].concat();
+    f.as_process(a, || send_transfer(ha, &send));
+    assert_eq!(parked.join().unwrap(), 1, "the parked call was answered ENDED");
+    until("the session ended again", || w.seen.sessions.load(Ordering::Acquire) == 0);
+    assert_eq!(w.seen.held(1014), 0, "nothing of the send is held");
+    // The share is whole: a page of two writes is held and served.
+    f.as_process(a, || {
+        open_session(ha);
+        writes_in_one_transfer(ha, &[0, 1], &[NOW_FID, NOW_FID]);
+        let wrote = || Got::Wrote(LONG.len() as u32);
+        assert_eq!(collect(ha), vec![(0, wrote()), (1, wrote())]);
+    });
     w.end();
 }
