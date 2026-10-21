@@ -390,5 +390,6 @@
 2:  1375a23a5 < -:  --------- docs: ipd's 8 s park costs an idle box a re-ask per parked request
 3:  0dba59657 < -:  --------- docs: the machine at rest says what launch-idle measures now and why
 -:  --------- > 2:  051dc3fd7 kernel: a release of the kernel lock wakes only the hart whose turn it serves
--:  --------- > 3:  cd80f5f0f docs: ipd's parked requests and probes cost what launch-idle reads now
--:  --------- > 4:  ff05a7f67 docs: the machine at rest says what launch-idle measures now and why
+-:  --------- > 3:  2eee47a91 kernel: a release of the kernel lock wakes only the hart whose turn it serves
+-:  --------- > 4:  e6c70ebc6 docs: ipd's parked requests and probes cost what launch-idle reads now
+-:  --------- > 5:  6cd24f599 docs: the machine at rest says what launch-idle measures now and why

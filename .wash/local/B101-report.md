@@ -1,9 +1,10 @@
 # B101: launch-idle's drift, and why the idle rate grows with host load
 
-Branch `wp-B101`, base 820d5e5ff, head 0dba59657:
-- 4b78610a8 kernel: a release of the kernel lock wakes only the hart whose turn it serves
-- 1375a23a5 docs: ipd's 8 s park costs an idle box a re-ask per parked request
-- 0dba59657 docs: the machine at rest says what launch-idle measures now and why
+Branch `wp-B101`, base 820d5e5ff, head 6859b4df2 (round 2; round 1 was 6cd24f599, range-diff
+`.wash/local/B101-range-diff-r2.txt`; round 0 0dba59657, `-r1.txt`):
+- 0285069ea kernel: a release of the kernel lock wakes only the hart whose turn it serves
+- de468b799 docs: ipd's parked requests and probes cost what launch-idle reads now
+- 6859b4df2 docs: the machine at rest says what launch-idle measures now and why
 
 Evidence notes: `.tmp/B101/notes.md`; raw windows `.tmp/B101/idle/{1,2,e1,e2,s3-*}/windows.txt`
 (each run's case log and QEMU trap log beside it); tools `.tmp/B101/bin/` (`idle.sh` runner,
@@ -152,3 +153,57 @@ Not run: a whole bench (the train's); the steward/SSH idle cases (`steward-ssh-i
   today's range; no change.
 - docs/kernel/timer.md, kernel/README.md (crate), README.md, GETTING-STARTED.md: no claim about
   the lock's wake (grep 'wake_halted\|each marked hart\|reschedule interrupt'); no change.
+
+## 7. Round 1 fold (red, simplifier, editor: all OK with notes)
+
+- RED P2-1: smp-lock-wait-4-mttcg, 20 alone runs a width each kernel, alternating, 80/80 no
+  company (`.tmp/B101/idle/s5`): branch rv64 1.74-1.85 (median 1.80), rv32 1.75-1.85 (1.80), 40/40
+  PASS; old lock rv64 2.57-2.70 (2.64), rv32 2.51-2.60 (2.54), 40/40 FAIL. Clean gap: 2.2 kept,
+  near its middle. Spread in the toml, the program's comment and R78.
+- RED P3-1: new host test `a_halt_ended_with_no_wake_marks_again_and_is_still_woken`: hart 1's
+  halt may end once with nothing pending (a shootdown's interrupt, one already pending), then it
+  marks and re-reads; 5,961 orders, pinned. Both negatives fail both tests.
+- RED P3-2: R78 names `cargo test -p redoubt-ticket --features read-before-mark` and
+  `--features wake-none`.
+- SIMPLIFIER P3-2 done: `release` returns `Option<usize>`; cell.rs wakes `1 << hart` only when
+  some. Kernel +2 lines: its ceiling is 10844 (main's 10848, still a fall). The first test's
+  order count is now 597 (the release stops at the matching ticket).
+- SIMPLIFIER P3-3 done: the redundant pending[2] check is gone (the release's own check covers
+  it).
+- SIMPLIFIER P3-1 declined: per-hart ticket slots for the mask need a waiting flag beside a
+  32-bit ticket (rv32imac has no 64-bit atomics), so a bit of the ticket or a second word, and the
+  release would read every slot instead of one word. The mask stays.
+- EDITOR P2:
+  - ipd.md's probe cost is restated from slot 3 (7-13 interrupts, 18-19 SBI calls a probe; 66 and
+    84 named as the old lock's), with the account scaling recomputed (15-28 interrupts, 40 SBI
+    calls a second).
+  - testbench.md and R78 state present measures only; the bases (the ceiling's own kernel, the
+    old lock, the loaded runs) moved to launch-idle.toml's comment.
+- EDITOR P3:
+  - 2.2 to 2.3 on both pages.
+  - R78 gives 3.4-3.5 hand-offs a second now, against 5.0-5.2 for the wake-all release; the
+    1.7-1.9 is gone.
+  - README: the table counts physical lines (layout's 225 matches; stride's 2,143 is stale
+    against its 2,456, left as found). The ticket row is now 332 (229 host tests); the total is
+    29,253.
+- Gates on the fold, all rc=0 (`.tmp/B101/gates/r1.txt`): the short gate 29/29, both widths where
+  boot (timer-flood-at-rest 4 / 4 against 20; smp-boot, smp-lock-wait, sched-lock-contention(-4),
+  irq-boot-hart-only, the smoke set), host-tests, docs, formatting, size (kernel 10844 of 10844,
+  libs/ticket 63 of 63, lowered from 67), unsafe. On the final head 6cd24f599 (comments and page
+  only since): prebuilt rc=0, docs, formatting rc=0.
+
+## 8. Round 2 fold (editor BLOCK on history; red, simplifier OK)
+
+- P1: round 1's folds had left two repeat kernel commits (00e9a0cb9, 051dc3fd7 under 2eee47a91:
+  my reset went back three commits, not to the base). Rebuilt from 820d5e5ff by path into three
+  commits; the kernel message carries the 20-run figures (1.74-1.85 against 2.51-2.70). The
+  head's tree differs from 6cd24f599 only by the three edits below. size-budget PASS at each
+  commit on its own (detached scratch worktree, `cargo testbench --exact size-budget` under q).
+- P3: ipd.md says the per-probe figures count four more probes a minute, so two silent sockets
+  at four against two each, and twice that a probe with one.
+- P3: testbench.md: the 3.4-3.5 hand-offs and 1.5 idle wakes are the machine's, worded apart from
+  the busiest hart's 3.0-3.2.
+- Simplifier cosmetic: the broken-release message prints the hart.
+- Gates on 6859b4df2: docs rc=0, formatting rc=0, `cargo test -p redoubt-ticket` 2 passed.
+- Local refs B101-r0/B101-r1 deleted. origin/wp-B101 still holds the old five-commit series; it
+  is the orchestrator's to update.

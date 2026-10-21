@@ -1,0 +1,104 @@
+1:  00e9a0cb9 ! 1:  0285069ea kernel: a release of the kernel lock wakes only the hart whose turn it serves
+    @@ Commit message
+     
+         smp-lock-wait runs at two harts, where one hart waits at a time and a
+         release has no choice; smp-lock-wait-4-mttcg runs it at four where the
+    -    harts run at once. There the calls at once take 1.75 to 1.87 times the
+    -    calls in turn, against 2.54 to 2.69 with the release waking every
+    -    waiting hart, so its bound of 2.2 catches the herd coming back. The kernel's size ceiling falls by the lines the
+    +    harts run at once. There the calls at once take 1.74 to 1.85 times the
+    +    calls in turn, twenty runs a width, against 2.51 to 2.70 with the
+    +    release waking every waiting hart, so its bound of 2.2 catches the herd
+    +    coming back. The kernel's size ceiling falls by the lines the
+         change saved.
+     
+         Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+    @@ docs/kernel/scheduling.md: at once may take at most three times as long. Halted
+     -against 1.97 s on rv32.
+     +against 1.97 s on rv32. At two harts one hart waits at a time, so a release has no choice of whom
+     +to wake; `bench:smp-lock-wait-4-mttcg` makes the calls on four harts that run at once, where the
+    -+calls at once may take at most 2.2 times the calls in turn. Alone, three runs a width, they take
+    -+1.75 to 1.87 times; a kernel whose release wakes every waiting hart, the lock as it was, takes
+    -+2.54 to 2.69 and fails it, in a recorded negative run.
+    ++calls at once may take at most 2.2 times the calls in turn. Alone, twenty runs a width, they take
+    ++1.74 to 1.85 times; a kernel whose release wakes every waiting hart takes 2.51 to 2.70, and all
+    ++forty of its runs fail it, the recorded negative runs.
+      
+      `bench:sched-lock-contention` holds the order in time, under R12's costliest call: on every hart
+      but one a budget asks in a loop for a `map_anon` refused after a search of the whole area
+    @@ libs/ticket/src/tests.rs (new)
+     +    }
+     +    if me == 0 {
+     +        let wake = waits.release_stepped(serving, &step);
+    -+        if wake.is_some_and(|hart| hart != 1) {
+    -+            sched.broke(format!("the release to ticket 1 woke hart {wake:?}"));
+    ++        if let Some(hart) = wake.filter(|&hart| hart != 1) {
+    ++            sched.broke(format!("the release to ticket 1 woke hart {hart}"));
+     +        }
+     +        step();
+     +        if let Some(hart) = wake {
+    @@ tests/programs/src/bin/smp-lock-wait-4.rs (new)
+     @@
+     +//! `smp-lock-wait` at four harts where the harts run at once (`bench:smp-lock-wait-4-mttcg`;
+     +//! [`test_programs::lock_wait`]): four threads' calls at once against the same calls in turn on
+    -+//! one hart. Alone on the quiet cores, three runs a width, they took 1.75 to 1.87 times as long
+    -+//! with the release waking the hart it serves, and 2.54 to 2.69 with the release waking every
+    ++//! one hart. Alone on the quiet cores, twenty runs a width, they take 1.74 to 1.85 times as long
+    ++//! with the release waking the hart it serves, and 2.51 to 2.70 with the release waking every
+     +//! waiting hart: so 2.2, which the second fails.
+     +
+     +#![no_std]
+    @@ tests/size-budget.toml: name = "libs/conhold"
+     +[[crate]]
+     +name = "libs/ticket"
+     +paths = ["libs/ticket/src"]
+    -+max_lines = 67
+    ++max_lines = 63
+     +
+      [[crate]]
+      name = "libs/ipclist"
+    @@ tests/smp-lock-wait-4-mttcg.toml (new)
+     +# Four harts are the case: at two, one hart waits at a time, and a release has no choice of whom
+     +# to wake.
+     +keep_smp = true
+    -+# Alone on q's quiet cores, three runs a width: 1.75 to 1.87 times (rv64 1.76 to 1.87, rv32 1.75
+    -+# to 1.79) with the release waking the hart it serves; 2.54 to 2.69 with the release waking every
+    -+# waiting hart (the kernel lock as it was), so 2.2 fails the second, in a recorded negative run.
+    ++# Alone on q's quiet cores, twenty runs a width: 1.74 to 1.85 times (median 1.80 on both widths)
+    ++# with the release waking the hart it serves; 2.51 to 2.70 (medians 2.64 rv64, 2.54 rv32) with the
+    ++# release waking every waiting hart, all forty failing 2.2, the recorded negative runs. 2.2 sits
+    ++# near the middle of the gap.
+     +# Host time: a verdict only alone, on q's quiet cores (scripts/jobs.mk; docs/testbench.md, "On a
+     +# shared host").
+     +timeout_secs = 300
+2:  051dc3fd7 < -:  --------- kernel: a release of the kernel lock wakes only the hart whose turn it serves
+3:  2eee47a91 < -:  --------- kernel: a release of the kernel lock wakes only the hart whose turn it serves
+4:  e6c70ebc6 ! 2:  de468b799 docs: ipd's parked requests and probes cost what launch-idle reads now
+    @@ docs/servers/ipd.md: file holds is typed, in the wire encoding ([wire](wire.md#t
+     -  minute the busiest hart there reads 2.9 to 3.5 interrupts a second against 2.4 to 2.8 at two,
+     -  under its ceiling of 3.8. That is the box's cost of any one small frame and its answer at rest,
+     +  an idle four-hart box about 7 to 13 cross-hart interrupts and 18 to 19 SBI calls in all,
+    -+  measured in `launch-idle` against the keep-alive at 30 s (an idle SSH session's socket, four
+    -+  probes a minute against two), three windows a width alone: 0.5 to 0.9 interrupts and 1.2 to 1.3
+    -+  SBI calls a second more. With a lock release that woke every waiting hart the same comparison
+    ++  measured in `launch-idle` against the keep-alive at 30 s, three windows a width alone: 0.5 to
+    ++  0.9 interrupts and 1.2 to 1.3 SBI calls a second more, counted as four more probes a minute, so
+    ++  two silent sockets at four probes a minute against two; with one such socket a probe costs twice
+    ++  that. With a lock release that woke every waiting hart the same comparison
+     +  read about 66 and 84 a probe. At four probes a minute the busiest hart there reads 3.0 to 3.2
+     +  interrupts a second against 2.1 to 3.1 at two, under its ceiling of 3.8. That is the box's cost of any one small frame and its answer at rest,
+        not the probe's, and is a finding of its own; the probe interval follows from the loss model
+5:  6cd24f599 ! 3:  6859b4df2 docs: the machine at rest says what launch-idle measures now and why
+    @@ docs/testbench.md: window-to-window spread: 3.8 interrupts a second on the busie
+     -miss beside other work is no verdict until the case misses alone, as for any host-clock case.
+     +([the hart timer](kernel/timer.md#the-hart-timer)). The box at rest
+     +takes more than those windows read: alone, three windows a width, the busiest hart takes 3.0 to
+    -+3.2 interrupts a second; across the machine the kernel lock's hand-offs are 3.4 to 3.5 of them
+    -+and wakes of idle harts about 1.5; and user mode makes 9.7 system calls a second, 2.2 to 2.3 of
+    -+them `ipd`'s parked requests asked again every 8 s
+    ++3.2 interrupts a second; the machine as a whole takes 3.4 to 3.5 of the kernel lock's hand-offs
+    ++a second and about 1.5 wakes of idle harts; and user mode makes 9.7 system calls a second, 2.2 to
+    ++2.3 of them `ipd`'s parked requests asked again every 8 s
+     +([pinned and abandoned calls](servers/ipd.md#pinned-and-abandoned-calls)), and more its probes of
+     +a silent socket every 15 s ([what a probe costs](servers/ipd.md#the-net-tree)). The case's comment
+     +gives the windows each figure comes from. So the ceiling catches a rise of about a fifth, not a

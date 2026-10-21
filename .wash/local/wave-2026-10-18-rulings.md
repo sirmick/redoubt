@@ -1946,3 +1946,75 @@ Pages: objects.md, ipc.md R4b (served children own their endpoint; init's root-o
 deliberate exception), native.md/beamlet.md served children, io.rs Io::forget's doc. R13 needs no
 line. Evidence: two fake-kernel host tests (death between answer and next call; a call queued
 untaken), red on main; pipe-sixty-four rv32 x10 alone on SCHED5's head; short gate. Tier A, red.
+
+### B106 review (sched5-red P1-1): a swept handle's index is not reused until its holder closes it → K36 (architect-oct21)
+
+B106's (a) makes a call after the death get BadHandle: R10's sweep frees the index and the next
+handle the VM installs (likely the next launch's endpoint_create) takes it, so a hub waiter
+mid hand-over can reach the next piped or an unrelated server. Before B106 the index stayed valid.
+This is the class STEWARD10/11 and KILL1 met in the steward (a recycled index acted on as the
+old object) and P3-1 here (close_served closing reused indices): the kernel frees a swept index
+at once, and every holder must prove it never acts by an index that may have been swept. (iii)
+cannot be proved in the VM: a userland check before a blocking call is a race, and the hub's
+waiter cannot hold a lock across a FOREVER call that only the destruction ends.
+
+Ruling (i), as a kernel rule, node K36: a handle that a destruction sweeps stays in its holder's
+table as a dead entry; every call through it returns Dead, close frees it, and the index is not
+reused until then. Revocation stays complete (the entry names nothing and grants nothing, I2);
+I1 is untouched (a dead entry is no object, so no lookup reaches a freed frame). A copy in a
+message not yet received still arrives as 0. Cost: a dead entry holds its slot against
+MAX_HANDLES until closed. Survey first (K36's first deliverable): every holder that relies on a
+swept index vanishing (init's closed-copy checks, the steward's stale-index guards, servers
+holding client-stamped copies, the model's I2), each either closing what it is told is dead or
+shown to; the survey says whether every sweep or only endpoint and process sweeps need it.
+B106 needs K36: its "Dead, not BadHandle" promise is K36's. B106's P2-1 (split
+R9EndpointInAnyBudget) folds now; P3-1 is closed by K36.
+
+### K36-survey: a sweep never frees an index; every consumer closes in K36 (architect-oct21)
+
+Survey: `.wash/local/K36-survey.md` (k36-implementer, main 7575a4267). Rulings on its five questions.
+
+1. **Scope: every live-table sweep (S1 budget chains, S2 process object freed, S3 device
+   destroyed).** One rule, "a sweep never frees an index": the hazard is the index, not the kind.
+   S1 budget handles are the STEWARD10/11 and KILL1 class; S2 lets a stale `process_start` or
+   `process_map` act on another unstarted child; S3 is init's quarantine check. `close_all_handles`
+   (the ender's own table) is not a sweep: no holder is left. Delivery-time nulling of a queued
+   copy (`is_live` → 0) is unchanged.
+2. **`budget_destroy(h)`'s own h goes dead like any other; rt's `Budget::destroy(self)` closes it
+   after the call.** No kernel exception. `budget_reap` keeps h (its budget lives). A deadline has
+   no caller: its handles go dead and each holder closes (the steward's `DestroyBudget`).
+3. **Agreed, as stated.** `handle_close` on a dead entry is `Ok` and frees the index (init's
+   close/close-again check keeps reading `BadHandle` second). Every other use of a dead index is
+   `Dead` and the call does nothing, a dead index as an argument included: a send's handle list
+   (nothing sent, nothing arrives as 0), `process_start`'s list, `mint`'s budget, `process_create`'s
+   exit endpoint. Order: `BadHandle` (0, past the table, empty slot), then `Dead`, then
+   `WrongObject`. A dead entry stores only its mark: no frame, id, badge or stamp and no chain link,
+   so I1 and I2 read it as nothing. It counts against `MAX_HANDLES` and keeps its table page charged
+   until closed: the cost, stated on objects.md.
+4. **Every consumer's close lands in K36**: init (own handles per restart, console connection,
+   instance budget), the steward (`DestroyBudget`, `Held`/notices/launched at a scope's end, the
+   `relay_vm` replacement), the VM's collection (a collected term closes its index; "gone, never
+   closed" goes), rt's `Budget::destroy`, the model, the steward host tests, the twelve bench
+   programs reading `BadHandle`. Reason: from the kernel change on each F is a leak into
+   `MAX_HANDLES` in a long-lived holder; a kernel contract change is built against every consumer
+   before any whole bench.
+5. **Retire the steward's install lock and clock witness in K36.** The destroy guard and the
+   recycled-index host tests change in K36 anyway, and a fence left standing needs a comment that
+   says why the obvious way fails (tenet 1); after K36 no honest comment exists. Condition: the
+   report states, every site read, that `without_installs` guards nothing but index reuse; if it
+   guards anything else, that part stays and the report says what.
+
+**The book.** A new invariant **I17 (a swept index stays dead until closed)** on
+`docs/kernel/invariants.md` after I16: the statement, kept-in (`handle.rs`'s dead mark; the three
+sweeps), the model contract and the mutation (the sweep frees the index: today's behaviour), the
+attacks (`budget-destroy-attack` now reads `Dead` while indices are not reused); I12 gains the
+pointer: a stale id cannot reach a later object, and a stale index cannot reach a later handle
+(I17). `docs/SECURITY.md`: the I17 row, its Tested-by equal to the section's list (C7). objects.md
+Handles: "lowest free index" becomes the lowest index neither live nor dead; "an index stays valid
+until it is closed, and a swept one stays dead until then"; the `handle_close` row and paragraph;
+the error order; the cost. budgets.md R10 step 6: "becomes a dead entry in every process's
+table; the holder's close frees the index". ipc.md R4: a dead handle in a send's list fails the
+send with `Dead`; the queued-copy rule unchanged. processes.md: `process_start`'s list. steward.md:
+the destroy rule is `Dead`; the lock's paragraph goes. The VM's served-children text (B106's pages)
+loses "gone, never closed". No owner choice: nothing here weakens a guarantee; derived from I1/I2,
+R10 and tenet 1. K36's body (active) needs no edit: its survey clause is answered here.

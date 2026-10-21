@@ -330,3 +330,34 @@ Gates at 42d50c520, each rc 0:
 
 Range-diff from 8106fb191: `.wash/local/SCHED5-range-diff-r3.txt`. Only commit 1 changed; the
 other three are `=`.
+
+## Witness on wp-B106 (head 08de6f1e5)
+
+`git rebase --onto wp-B106 820d5e5ff wp-SCHED5`. The base is wp-B106's head 31daa6c64 on main
+7575a4267. The pre-rebase head is kept as the local branch `sched5-pre-b106` (42d50c520).
+
+**Resolved in the rebase:**
+- `tests/size-budget.toml`: each ceiling summed from the base, plus B106's change, plus SCHED5's
+  own, in the commit that raises it:
+  - commit 1: libs/sys 1047, libs/rt 4193;
+  - commit 2: stub 364;
+  - commit 3: model 11463;
+  - commit 4: kernel 10864 (base 10848, +8 each), libs/sys 1050.
+
+  The kernel line merged without a conflict marker, because both branches set it to 10856. It was
+  summed by hand.
+- `Mutation::ALL` and docs/kernel/model.md's count: 176 at the base, and each branch added one, so
+  178. Git merged both branches' "177" silently. Fixed in the model commit.
+
+**pipe-sixty-four rv32, ten times alone at 067660b0b:** 10/10 PASS (17.7, 17.9, 17.9, 17.9, 18.0,
+18.1, 18.3, 18.5, 18.5, 18.8 s). Without B106 the head passed 3 of 6 and the train head 0 of 4.
+The hang is gone. 08de6f1e5 differs from 067660b0b only by the mutation count, which no boot
+image contains.
+
+**Gates:**
+- At 067660b0b, rc 0 each: size-budget, docs, formatting, unsafe-budget, rt-host-tests,
+  client-host-tests, beamlet-lookup-host (beamlet-vm and beamlet-redoubt), rt-miri and prebuilt.
+- At 067660b0b, host-tests and model-host-tests failed: the model did not compile (the 177/178
+  count above). Logs: `.tmp/SCHED5/witness/`.
+- At 08de6f1e5, rc 0 each: model-host-tests, host-tests, docs, formatting.
+- Not run: model-mutations, whose mutation list grew by one (B106's and SCHED5's together).
