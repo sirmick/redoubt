@@ -602,30 +602,69 @@ fn syn_to(port: u16) -> smoltcp::wire::TcpRepr<'static> {
     }
 }
 
+/// Makes an empty listener of `who`'s on `port`: listened with a backlog of one and accepted at a
+/// cap of 1, so the backlog cannot be refilled, and the accepted socket closed and gone.
+fn empty_listener(w: &mut World, who: Owner, port: u16) -> Result<(), CtlError> {
+    let n = w.nine.fs.stack.allocate(who, 22, 1)?;
+    w.nine.fs.stack.listen(who, n, &listen_scope(22, 40), port, 1, 1)?;
+    let _peer = w.peer.connect(GATEWAY, 41000 + port, port);
+    w.run_for(200_000, 10_000);
+    let Ok(Ready::Now((Status::Listening, m))) = w.nine.fs.stack.status(who, n, 1) else {
+        panic!("no accept on {port}")
+    };
+    w.nine.fs.stack.release(who, m, false, w.now).unwrap();
+    w.run_for(200_000, 10_000);
+    Ok(())
+}
+
 /// A listener whose backlog was accepted while its bucket was full keeps its entry and no socket,
-/// so listeners can outnumber sockets: the table is held to twice the sockets (4 here, for 2), and a
-/// listen or a socket past it is refused `too_many`, never a table that grows.
+/// so a bucket's entries are held to twice its cap (2 here, for a cap of 1), lingering ones
+/// included: a listen or a socket past them is refused `too_many`, never a table that grows.
 #[test]
 fn a_full_table_refuses_a_listen_or_a_socket() {
     let mut w = World::unmetered(2);
     let who = owner(&caller(22, 0, &[]));
-    for (i, port) in [22u16, 23, 24].into_iter().enumerate() {
-        let n = w.nine.fs.stack.allocate(who, 22, 1).unwrap();
-        w.nine.fs.stack.listen(who, n, &listen_scope(22, 25), port, 1, 1).unwrap();
-        let _peer = w.peer.connect(GATEWAY, 41000 + i as u16, port);
-        w.run_for(200_000, 10_000);
-        // Accepted at a cap of 1: the backlog cannot be refilled, so the listener has none.
-        let Ok(Ready::Now((Status::Listening, m))) = w.nine.fs.stack.status(who, n, 1) else {
-            panic!("no accept on {port}")
-        };
-        w.nine.fs.stack.release(who, m, false, w.now).unwrap();
-        w.run_for(200_000, 10_000);
-        assert_eq!(w.nine.fs.stack.live(), 0, "the accepted socket is gone; its listener stays");
-    }
-    // Three listeners hold three entries: a socket takes the fourth, and its listen, which would
-    // need a fifth, is refused; with the table full so is another socket.
+    empty_listener(&mut w, who, 22).unwrap();
+    assert_eq!(w.nine.fs.stack.live(), 0, "the accepted socket is gone; its listener stays");
+    // The listener holds one entry: a socket takes the second, and its listen, which would need a
+    // third, is refused; released, it lingers and still holds its entry, so another socket is too.
     let n = w.nine.fs.stack.allocate(who, 22, 1).unwrap();
     assert_eq!(w.nine.fs.stack.listen(who, n, &listen_scope(22, 25), 25, 1, 1), Err(CtlError::TooMany));
     w.nine.fs.stack.release(who, n, false, w.now).unwrap();
-    assert_eq!(w.nine.fs.stack.allocate(who, 22, 2), Err(CtlError::TooMany));
+    assert_eq!(w.nine.fs.stack.allocate(who, 22, 1), Err(CtlError::TooMany));
+    // Gone, it gives its entry back.
+    w.run_for(200_000, 10_000);
+    assert!(w.nine.fs.stack.allocate(who, 22, 1).is_ok());
+}
+
+/// Empty listeners are charged to their holder's bucket: one bucket filling its entries with them
+/// leaves the table room for every other bucket's sockets.
+#[test]
+fn empty_listeners_fill_only_their_own_bucket() {
+    let mut w = World::unmetered(2);
+    let sshd = owner(&caller(22, 0, &[]));
+    let other = owner(&caller(23, 0, &[]));
+    // As many empty listeners as it can, the last socket kept when its listen is refused.
+    for port in 22..30 {
+        if empty_listener(&mut w, sshd, port).is_err() {
+            break;
+        }
+    }
+    let n = w.nine.fs.stack.allocate(other, 23, 1).expect("another bucket's socket refused too_many");
+    w.nine.fs.stack.listen(other, n, &listen_scope(30, 30), 30, 1, 1).unwrap();
+    w.nine.fs.stack.audit().unwrap();
+}
+
+/// The table's own bound is the backstop: buckets whose caps together pass `max_sockets`, which
+/// admission never lets live at once, are still refused past twice `max_sockets` entries.
+#[test]
+fn the_table_backstops_buckets_past_max_sockets() {
+    let mut w = World::unmetered(1);
+    let a = owner(&caller(22, 0, &[]));
+    let b = owner(&caller(23, 0, &[]));
+    empty_listener(&mut w, a, 22).unwrap();
+    // b's bucket has room for its listener's two entries; the table, at 1 of 2, has not.
+    let n = w.nine.fs.stack.allocate(b, 23, 1).unwrap();
+    assert_eq!(w.nine.fs.stack.listen(b, n, &listen_scope(23, 23), 23, 1, 1), Err(CtlError::TooMany));
+    w.nine.fs.stack.audit().unwrap();
 }

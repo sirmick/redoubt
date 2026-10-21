@@ -15,7 +15,9 @@
 //! so the server reserves units for the caller around each request ([`Stack::open_room`]); a
 //! socket is made only from that reservation ([`Meter`]), records the share it was charged to, and
 //! gives its unit back only when it is removed ([`Stack::take_freed`]), so a bucket stays held
-//! while its sockets linger. Outside a request nothing can make a socket.
+//! while its sockets linger. Outside a request nothing can make a socket. Every entry of the table,
+//! a listener's too, is its owner's bucket's: a bucket holds at most twice its socket cap of them
+//! ([`Stack::entries_fit`]), so a listener left with no backlog costs its own bucket, never another.
 //!
 //! # Initial sequence numbers (servers/ipd.md R62)
 //! smoltcp draws an ISN from its interface's PRNG, which is seeded only when an interface is made.
@@ -418,7 +420,7 @@ impl<N: Netif, E: Entropy> Stack<N, E> {
 
     /// Whether `more` sockets may be charged to `key`, whose bucket's cap is `cap`: under that
     /// cap and the whole stack's, paid for by the request's reservation, and with room for an
-    /// entry each in the table.
+    /// entry each among the bucket's twice `cap` and in the table.
     fn room(&self, key: AdmitKey, cap: usize, more: usize) -> bool {
         let paid = match self.meter {
             Meter::Off => true,
@@ -427,7 +429,14 @@ impl<N: Netif, E: Entropy> Stack<N, E> {
         };
         paid && self.charged(key) + more <= cap
             && self.live() + more <= self.max_sockets
-            && self.table.len() + more <= self.max_entries
+            && self.entries_fit(key, cap, more)
+    }
+
+    /// Whether `more` entries fit `key`'s bucket, at most twice its cap, lingering ones included,
+    /// and the table, whose own bound is then a backstop (servers/ipd.md, "Sizing").
+    fn entries_fit(&self, key: AdmitKey, cap: usize, more: usize) -> bool {
+        let entries = self.table.iter().filter(|e| e.owner.key == key).count();
+        entries + more <= 2 * cap && self.table.len() + more <= self.max_entries
     }
 
     /// A smoltcp socket with its two buffers, or `too_many` if the heap cannot hold them. The heap
@@ -581,8 +590,8 @@ impl<N: Netif, E: Entropy> Stack<N, E> {
         // The socket `clone` made is the first of the backlog; the rest need room.
         // The rest of the backlog needs room for its sockets, and every socket of it, the first
         // included, an entry of its own beside the listener's.
-        let entries = self.table.len() + usize::from(backlog);
-        if !self.room(owner.key, cap, usize::from(backlog) - 1) || entries > self.max_entries {
+        let more = usize::from(backlog);
+        if !self.room(owner.key, cap, more - 1) || !self.entries_fit(owner.key, cap, more) {
             return Err(CtlError::TooMany);
         }
         // The rest of the backlog is made before anything changes, so a failure changes nothing.
