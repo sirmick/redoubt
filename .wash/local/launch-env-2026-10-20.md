@@ -1,6 +1,6 @@
 # Environment and rules for every member launched 2026-10-20
 
-Main is 3e6f29443 (train 88: WEIGHT1, IPD2; the steward at 1,000, ipd's account override and heap check). Your branch `wp-<PKG>` starts there in `.worktrees/<PKG>`.
+Main is 820d5e5ff (train 90: B97, B98; the bench's disks are cache=unsafe). Your branch `wp-<PKG>` starts there in `.worktrees/<PKG>`.
 
 ## Shell
 
@@ -103,3 +103,10 @@ whole-class sets, a repeating boot set of 8 or more jobs, or anything asking `q`
 cores) waits for the orchestrator's go: send a progress note "load run: <what>, <jobs>, ~<min>"
 and set waiting; you get an instruction when the machine is yours. Single cases and small sets
 (at most 4 jobs) need no go.
+
+## A change to image/manifest.json changes the boot profile's copy too
+
+tests/data/boot-profile/manifest-unverified.json must equal image/manifest.json less its
+verification (servers/init/tests/manifest.rs). Any edit to an image entry (heap, stack, args,
+weight) is made in that copy in the same commit, and `init-host-tests` is in the gate. Two trains
+failed on this.

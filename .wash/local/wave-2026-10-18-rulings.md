@@ -1849,3 +1849,100 @@ page's 13-14 ms were at the dequeue). Ruling (a): gate rv32 at [1, 2], that cell
 record=rv32:2:N=k:deadline_notice:p99 for k = 1-3, both sets of numbers and the fixed rows on
 scheduling.md, no target moves. B103 (todo, needs SCHED5) traces and fixes or states it; its
 acceptance removes the record= and judges the cell.
+
+### B100-shape: a send's messages are taken in place, never listed (architect-oct21)
+
+Approved B (two passes over the transfer, no list): A's cap would be a new protocol rule (Tflush
+frees its oldtag's bit as taken, so a send may legally carry more than 256 messages). Conditions:
+pass 1's cost is the transfer's own bytes (stated in the code); pass 2 stops cleanly where the
+session ends mid-transfer (messages before k taken, k on dropped with their pages' admission
+released; a host test); the counting-allocator heap test (full MAX_LEND_PAGES of 7-byte
+messages, tag reuse through Tflush, peak under one page; ~640 KiB on 820d5e5ff) plus the
+long-message path unchanged; the attack from a native program in a session's budget to bootfsd,
+verdict bootfsd's heap record peak, or the host test as the attack with the reason on the page.
+bootfsd.md's residual goes; serving.md 'A request' gains "taken in place, never listed".
+Tier A, small, red review.
+
+### B102-shape (architect-oct21)
+
+steward-context-login's one-way :redoubt.send(/dev/cons, ended) meets send/2's 1 ms receiver
+wait (one slice) while consrelay's serving thread is between turns; the only caller of one-way
+send in the tree is this case. Rulings: (A) the case's step retries until the relay takes it,
+bounded by time (2 s of tries at 10 ms, stated as 2,000 slices), printing the try count when it
+lands; send/2's contract and SEND_TIMEOUT_US unchanged. (B) fail fast: forbid {:ended, {:error
+per line, `within = 60` before the expect. (C) in B102: a mark-wait timeout does not abort the
+other sessions, and a failure ranks before a timeout so the report names the stuck session; host
+test; testbench.md's multi-session report sentence updated. Gate: 5 alone runs each width, docs,
+formatting, and a load run (10 each width beside the 8-case side set, orchestrator's go) with the
+try counts reported; a run needing more than half the bound's tries is a finding before merge.
+
+### SCHED5 review (sched5-red P2-1): device owners' dma_alloc and map_device (architect-oct21)
+
+(a): SCHED5 states a third bounded-but-not-sliced cost on R22, R12 and SECURITY.md: a device
+owner's dma_alloc and map_device, linear in the pages asked for, bounded by the DMA pool (1,024
+pages, ~48 ms rv32 checked at its worst) and the device's register region; only a driver init's
+manifest names holds the DMA-flagged handle, and the image's drivers call each once in open()
+(blkd/kernel.rs:66, netd/kernel.rs:146) for their measured sizes, so a running box pays it only
+at a driver's restart. Not (b): no hostile caller reaches them, and chunking would break
+dma_alloc's contiguity contract. A node only if a driver calls either while serving or with a
+size not a constant; a test or assertion holding the call to open() is the simplifier's call.
+The rt place() rover P2: fixed in SCHED5.
+
+### B100 attack case: a session reaches the raw send; bootfsd's stack (architect-oct21)
+
+A session sends the transfer itself (beamlet's send native, up to MAX_BUFFER), so serving.md says
+any session can, and the bound is the server's. The case: pure Elixir on image/boot.toml; the
+verdict bootfsd's heap record (rv32 fails on the base: 2,670 needed against 2,510; rv64 shows the
+gap but cannot fail, the cap sized from rv32's boot peak; stated). bootfsd's stack: (a) 4 → 5
+pages, twice rv64's 8,952-byte peak, in the image and every manifest whose memory case reaches
+the path (listed; others keep 4 with the reason); the memory table's row updated. Memory cases
+booting bootfsd re-run both widths.
+
+### B101-cause: the lock's release wakes the next ticket only; wake_idle after release (architect-oct21)
+
+Drift = IPD1's 8 s park (sshd's two reads re-asked: user ecalls 6.0 → 8.3/s; stated, IPD1's
+ruled margin) + the lock's hand-off: release wakes every marked hart though a ticket lock serves
+one (36-41 % of hand-off halts follow another), and wake_idle's interrupt is sent while the waker
+holds the lock (15-22 %); under host load sections stretch and the hand-off halts multiply.
+The ceiling's 1.6-1.9 does not reproduce at its own commit (2.1-2.5). Ruling: (i) the release
+wakes only the next ticket's hart: waiter records ticket, marks SeqCst, re-reads now_serving
+before halting; releaser advances now_serving SeqCst, reads marks, wakes the match; the argument
+on R78; an exhaustive interleaving host test and a mutation it catches; smp-lock-wait at 4 harts
+MTTCG. (ii) wake_idle's interrupts collected under the lock and sent at release. FIFO, the halt
+and the icount argument unchanged. Re-measure launch-idle twelve alternating alone rounds;
+testbench.md states the measured range and the ceiling's origin honestly; the ceiling does not
+move. Report B94's per-probe cost after (K35 starts from it). Tier A, kernel-red-4 + simplifier +
+editor.
+
+### SCHED5 fold (red P3-3): process_map from untouched reservations (architect-oct21)
+
+(a): R22 states the cap's one overrun: process_map from untouched reservation pages backs and
+zeroes them inside the call, 16 pages 1,765 µs net rv32 / 1,445 rv64 (~1.8 slices); only the
+loader's first process holds reservations (memory.md: process_start gives none), so no user
+process can build it. SECURITY.md's row says so. The derivation stays map_fixed's ((c) out:
+halving every cap and costing launches 60 % for a trusted start). (b) only if reservations ever
+reach another process; the page names that condition.
+
+### B101-cause, correction: (ii) withdrawn (architect-oct21)
+
+Deferring wake_idle's interrupt to the release failed timer-flood-at-rest on both widths (668 /
+666 sections that find nothing, bound 20): the waker's hart retakes the free lock and picks the
+woken budget itself, and the woken hart wakes to nothing. An idle wake exists to queue the woken
+hart before its waker retakes the lock. (ii) withdrawn; (i) stands. R78 keeps "a wake sends the
+interrupt at once, and the woken hart may halt on the lock", with one sentence: the 15-22 % of
+hand-off halts after an idle wake are that price, and deferring was measured to turn each into a
+wake for nothing (the case's numbers).
+
+### B106-shape: a served child's endpoint is owned by the child's budget (architect-oct21)
+
+jobs.rs served() makes the child's endpoint in the VM, so the session's budget owns it; piped's
+death fails neither a later call nor a queued untaken one, and the waiter blocks for ever.
+Ruling (1): the served child's endpoint is owned by the child's budget, so its destruction fails
+queued calls (endpoint_dying) and makes later calls Dead; a stamp-only fix would leave the queued
+window. Mechanism, implementer's choice with reason, Architect prefers (a): endpoint_create takes
+an optional budget handle at or below the caller's (owned by and charged to it; mutation and model
+contract), over (b) the child creating its own and returning the send right (a launch round trip).
+Pages: objects.md, ipc.md R4b (served children own their endpoint; init's root-owned endpoints the
+deliberate exception), native.md/beamlet.md served children, io.rs Io::forget's doc. R13 needs no
+line. Evidence: two fake-kernel host tests (death between answer and next call; a call queued
+untaken), red on main; pipe-sixty-four rv32 x10 alone on SCHED5's head; short gate. Tier A, red.

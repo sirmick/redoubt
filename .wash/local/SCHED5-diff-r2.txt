@@ -1,0 +1,5 @@
+ docs/SECURITY.md          |  2 +-
+ docs/kernel/memory.md     |  6 +++---
+ docs/kernel/scheduling.md | 13 +++++++------
+ libs/sys/src/lib.rs       |  1 +
+ 4 files changed, 12 insertions(+), 10 deletions(-)

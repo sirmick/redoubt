@@ -1,0 +1,227 @@
+1:  ae1acdd6f ! 1:  a9057be79 rt: range calls go a range at a time, and a long run is placed in one pass
+    @@ Commit message
+         held while searching.
+     
+         The launcher's batch stays 64 pages, moved a range at a time: 16-page
+    -    batches made a launch 60 % longer.
+    +    batches made a launch 60 % longer. The launcher's tests count a batch's
+    +    range calls.
+     
+         The fake kernel refuses a longer range as the kernel will, and places
+         runs in a per-process area as the kernel searches its own. Under Miri
+    @@ libs/client/src/launch.rs: pub const STACK_PAGES: usize = 16;
+      
+      /// The high half of each painted stack unit; the low half holds the server tag and unit index.
+     
+    + ## libs/client/tests/launch.rs ##
+    +@@ libs/client/tests/launch.rs: use redoubt_client::grants::{Grants, RELEASE_TIMEOUT};
+    + use redoubt_client::launch::{Job, Launch, PLACE_PAGES, STACK_PAGES, stack_paint};
+    + use redoubt_client::{Error, Lend, Name, Refusal, typed};
+    + use redoubt_fake_kernel::fake;
+    +-use redoubt_rt::abi::{Cause, Error as SysError, FOREVER, Handle, MAX_START_HANDLES, MemFlags, PAGE_SIZE};
+    ++use redoubt_rt::abi::{
+    ++    Cause, Error as SysError, FOREVER, Handle, MAX_START_HANDLES, MemFlags, PAGE_SIZE, range_chunks,
+    ++};
+    + use redoubt_rt::handle::{Budget, Endpoint};
+    + use redoubt_rt::ipc::Event;
+    + use redoubt_rt::server::ninep::mode;
+    +@@ libs/client/tests/launch.rs: fn launcher() -> (usize, Handle, Handle) {
+    + 
+    + fn h(i: u32) -> Handle { Handle::new(i).unwrap() }
+    + 
+    ++/// The range calls that move batches of these lengths from `dst` on, in order, `(address,
+    ++/// length)`: a batch is the launcher's unit, and the runtime moves each a range call's worth at a
+    ++/// time (kernel/memory.md, R22). The list no longer tells batches apart: the split is the
+    ++/// runtime's own `range_chunks`, and a whole batch is a whole number of ranges (`PLACE_PAGES`, 64,
+    ++/// is a multiple of 16), so batches of 64 pages and of 16 give the same calls. That the launcher
+    ++/// holds one batch at most rests on `held_peak`.
+    ++fn moved_in(dst: usize, batches: &[usize]) -> Vec<(usize, usize)> {
+    ++    let mut at = dst;
+    ++    let mut calls = Vec::new();
+    ++    for &len in batches {
+    ++        calls.extend(range_chunks(at, len));
+    ++        at += len;
+    ++    }
+    ++    calls
+    ++}
+    ++
+    + fn padded(bytes: &[u8], pages: usize) -> Vec<u8> {
+    +     let mut page = bytes.to_vec();
+    +     page.resize(pages * PAGE_SIZE, 0);
+    +@@ libs/client/tests/launch.rs: fn the_largest_stack_paints_through_its_last_unit_without_wrapping() {
+    +         launch.start().ok().unwrap()
+    +     });
+    +     let child = f.launched(launcher, job.process().handle());
+    ++    let stack = &child.maps[2..child.maps.len() - 1];
+    +     let mut index = 0;
+    +-    for (at, _, bytes) in &child.maps[2..4] {
+    ++    for (at, _, bytes) in stack {
+    +         assert_eq!(*at, STACK_TOP - MAX_STACK_PAGES * PAGE_SIZE + index * 8);
+    +         for unit in bytes.chunks_exact(8) {
+    +             assert_eq!(u64::from_le_bytes(unit.try_into().unwrap()), stack_paint(7, index as u16));
+    +@@ libs/client/tests/launch.rs: fn the_largest_stack_paints_through_its_last_unit_without_wrapping() {
+    +         }
+    +     }
+    +     assert_eq!(index, 1 << 16);
+    +-    assert_eq!(child.maps[4].0, STARTUP_AT);
+    ++    assert_eq!(child.maps.last().unwrap().0, STARTUP_AT);
+    + }
+    + 
+    + /// The attack: what `launch` refuses it refuses before any kernel call, so no half-made process
+    +@@ libs/client/tests/launch.rs: fn an_image_moves_one_batch_at_a_time() {
+    +         launch.start().ok().unwrap()
+    +     });
+    +     let child = f.launched(launcher, job.process().handle());
+    +-    let moves = &child.maps[1..5];
+    +     let batch = PLACE_PAGES * PAGE_SIZE;
+    +-    let at: Vec<_> = moves.iter().map(|(dst, flags, bytes)| (*dst, *flags, bytes.len())).collect();
+    +     let rw = MemFlags::READ | MemFlags::WRITE;
+    +-    assert_eq!(
+    +-        at,
+    +-        [
+    +-            (IMAGE_AT, rw, batch),
+    +-            (IMAGE_AT + batch, rw, batch),
+    +-            (IMAGE_AT + 2 * batch, rw, batch),
+    +-            (IMAGE_AT + 3 * batch, rw, PAGE_SIZE)
+    +-        ]
+    +-    );
+    ++    let image_calls = moved_in(IMAGE_AT, &[batch, batch, batch, PAGE_SIZE]);
+    ++    let moves = &child.maps[1..1 + image_calls.len()];
+    ++    let at: Vec<_> = moves.iter().map(|(dst, flags, bytes)| (*dst, *flags, bytes.len())).collect();
+    ++    assert_eq!(at, image_calls.iter().map(|&(dst, len)| (dst, rw, len)).collect::<Vec<_>>());
+    +     assert_eq!(moves.iter().flat_map(|(_, _, bytes)| bytes.iter().copied()).collect::<Vec<_>>(), image);
+    +-    let stack_at = STACK_TOP - (PLACE_PAGES + 1) * PAGE_SIZE;
+    +-    let stack: Vec<_> =
+    +-        child.maps[5..7].iter().map(|(dst, flags, bytes)| (*dst, *flags, bytes.len())).collect();
+    +-    assert_eq!(stack, [(stack_at, rw, batch), (stack_at + batch, rw, PAGE_SIZE)]);
+    +-    assert!(child.maps[5..7].iter().all(|(_, _, bytes)| bytes.iter().all(|b| *b == 0)));
+    +-    assert_eq!((child.maps[7].0, child.maps.len()), (STARTUP_AT, 8));
+    ++    let stack_calls = moved_in(STACK_TOP - (PLACE_PAGES + 1) * PAGE_SIZE, &[batch, PAGE_SIZE]);
+    ++    let stack_maps = &child.maps[1 + image_calls.len()..1 + image_calls.len() + stack_calls.len()];
+    ++    let stack: Vec<_> = stack_maps.iter().map(|(dst, flags, bytes)| (*dst, *flags, bytes.len())).collect();
+    ++    assert_eq!(stack, stack_calls.iter().map(|&(dst, len)| (dst, rw, len)).collect::<Vec<_>>());
+    ++    assert!(stack_maps.iter().all(|(_, _, bytes)| bytes.iter().all(|b| *b == 0)));
+    ++    let startup = 1 + image_calls.len() + stack_calls.len();
+    ++    assert_eq!((child.maps[startup].0, child.maps.len()), (STARTUP_AT, startup + 1));
+    +     assert_eq!(f.held_peak(launcher), held + PLACE_PAGES);
+    +     assert_eq!(f.held(launcher).1, held);
+    + }
+    +@@ libs/client/tests/launch.rs: fn a_refusal_on_the_third_batch_leaves_the_launcher_as_it_was() {
+    +     let held = f.held(launcher).1;
+    +     let calls = f.calls(launcher).len();
+    +     f.held_peak(launcher);
+    +-    // The stub's move and the image's first two go through.
+    +-    f.refuse_after(launcher, "process_map", 3, SysError::OutOfMemory);
+    ++    // The stub's move and the image's first two batches go through, and the third batch's first
+    ++    // range call is refused.
+    ++    let batch = PLACE_PAGES * PAGE_SIZE;
+    ++    let two_batches = moved_in(IMAGE_AT, &[batch, batch]);
+    ++    f.refuse_after(launcher, "process_map", 1 + two_batches.len(), SysError::OutOfMemory);
+    +     let failed = f.as_process(launcher, || {
+    +         Launch::new(STUB, &image, Budget::from_handle(budget), Endpoint::from_handle(exit))
+    +             .start()
+    +@@ libs/client/tests/launch.rs: fn a_refusal_on_the_third_batch_leaves_the_launcher_as_it_was() {
+    +     assert_eq!(failed.error, Error::Sys(SysError::OutOfMemory));
+    +     assert_eq!(failed.budget.handle(), budget);
+    +     let made = &f.calls(launcher)[calls..];
+    +-    assert_eq!(made.iter().filter(|call| **call == "process_map").count(), 4);
+    ++    assert_eq!(made.iter().filter(|call| **call == "process_map").count(), 2 + two_batches.len());
+    +     // The child, never started, holds the stub and the image's first two batches.
+    +     let [child] = &f.launched_in(launcher, budget)[..] else { panic!("one child in the budget") };
+    +     let moved: Vec<_> = child.maps.iter().map(|(dst, _, bytes)| (*dst, bytes.len())).collect();
+    +-    let batch = PLACE_PAGES * PAGE_SIZE;
+    +-    assert_eq!(moved, [(STUB_ENTRY, PAGE_SIZE), (IMAGE_AT, batch), (IMAGE_AT + batch, batch)]);
+    ++    assert_eq!(moved, [vec![(STUB_ENTRY, PAGE_SIZE)], two_batches].concat());
+    +     assert_eq!(child.start, None);
+    +     assert_eq!(f.held_peak(launcher), held + PLACE_PAGES);
+    +     assert_eq!(f.held(launcher).1, held);
+    +@@ libs/client/tests/launch.rs: fn a_refusal_on_the_third_batch_leaves_the_launcher_as_it_was() {
+    +     assert!(f.destroyed(launcher, budget));
+    + }
+    + 
+    ++/// A launch refused inside a batch, on its third batch's second range call, leaves that batch's
+    ++/// first range in the child beside the two moved batches, and gives the rest of the batch back:
+    ++/// the launcher's pages are as they were.
+    ++#[test]
+    ++fn a_refusal_inside_a_batch_leaves_its_moved_range_in_the_child() {
+    ++    let f = fake();
+    ++    let (launcher, budget, exit) = launcher();
+    ++    let image = vec![7u8; (3 * PLACE_PAGES + 1) * PAGE_SIZE];
+    ++    let held = f.held(launcher).1;
+    ++    let batch = PLACE_PAGES * PAGE_SIZE;
+    ++    let two_batches = moved_in(IMAGE_AT, &[batch, batch]);
+    ++    let third = moved_in(IMAGE_AT + 2 * batch, &[batch]);
+    ++    f.refuse_after(launcher, "process_map", 2 + two_batches.len(), SysError::OutOfMemory);
+    ++    let failed = f.as_process(launcher, || {
+    ++        Launch::new(STUB, &image, Budget::from_handle(budget), Endpoint::from_handle(exit))
+    ++            .start()
+    ++            .err()
+    ++            .unwrap()
+    ++    });
+    ++    assert_eq!(failed.error, Error::Sys(SysError::OutOfMemory));
+    ++    assert_eq!(failed.budget.handle(), budget);
+    ++    let [child] = &f.launched_in(launcher, budget)[..] else { panic!("one child in the budget") };
+    ++    let moved: Vec<_> = child.maps.iter().map(|(dst, _, bytes)| (*dst, bytes.len())).collect();
+    ++    assert_eq!(moved, [vec![(STUB_ENTRY, PAGE_SIZE)], two_batches, vec![third[0]]].concat());
+    ++    assert_eq!(child.start, None);
+    ++    assert_eq!(f.held(launcher).1, held);
+    ++    f.as_process(launcher, || failed.budget.destroy().unwrap());
+    ++    assert!(f.destroyed(launcher, budget));
+    ++}
+    ++
+    + /// The exit notice releases every grant the launcher made for the child, at every server: its
+    + /// `/boot` connection, a connection the child minted from it for a child of its own, and its
+    + /// `keyd` capability.
+    +@@ libs/client/tests/launch.rs: fn a_streamed_image_moves_as_held_bytes_do_and_is_read_only_where_it_is() {
+    +     let batch = PLACE_PAGES * PAGE_SIZE;
+    +     assert_eq!(asked, [(0, batch), (batch, batch), (2 * batch, PAGE_SIZE + 100)]);
+    +     let child = f.launched(launcher, job.process().handle());
+    +-    let moved: Vec<u8> = child.maps[1..4].iter().flat_map(|(_, _, bytes)| bytes.iter().copied()).collect();
+    ++    let image_calls = moved_in(IMAGE_AT, &[batch, batch, 2 * PAGE_SIZE]);
+    ++    let moves = &child.maps[1..1 + image_calls.len()];
+    ++    let at: Vec<_> = moves.iter().map(|(dst, _, bytes)| (*dst, bytes.len())).collect();
+    ++    assert_eq!(at, image_calls);
+    ++    let moved: Vec<u8> = moves.iter().flat_map(|(_, _, bytes)| bytes.iter().copied()).collect();
+    +     assert_eq!(moved, padded(&image, 2 * PLACE_PAGES + 2));
+    +     assert_eq!(f.held_peak(launcher), held + PLACE_PAGES);
+    +     assert_eq!(f.held(launcher).1, held);
+    +-    let startup = Startup::parse(&child.maps[5].2).unwrap();
+    ++    let startup = Startup::parse(&child.maps.last().unwrap().2).unwrap();
+    +     assert_eq!(startup.image(), Some((IMAGE_AT, image.len())));
+    + }
+    + 
+    +@@ libs/client/tests/launch.rs: fn a_failed_read_refuses_the_launch_at_its_batch() {
+    +     assert_eq!(failed.budget.handle(), budget);
+    +     let [child] = &f.launched_in(launcher, budget)[..] else { panic!("one child in the budget") };
+    +     assert_eq!(child.start, None);
+    +-    assert_eq!(child.maps.len(), 2, "the stub and the image's first batch");
+    ++    let first = moved_in(IMAGE_AT, &[PLACE_PAGES * PAGE_SIZE]);
+    ++    assert_eq!(child.maps.len(), 1 + first.len(), "the stub and the image's first batch");
+    +     assert_eq!(f.held(launcher).1, held);
+    + }
+    +
+      ## libs/rt/fake/src/lib.rs ##
+     @@ libs/rt/fake/src/lib.rs: use std::time::{Duration, Instant};
+      
+    @@ libs/rt/src/lib.rs: pub mod abi {
+     +        MAX_LEND_PAGES, MAX_MSG_HANDLES, MAX_OPEN_CALLS, MAX_RANGE_PAGES, MAX_START_HANDLES, MAX_THREADS,
+     +        MemFlags, Message, MessageKind, MintSource, NUMBER_BASE, Number, PAGE_SIZE, Pages, RECEIVED_SLOTS,
+     +        REGS, Received, ReceivedBody, ReceivedHandles, ReplyOutcome, ResetKind, Return, SLICE, STRIDE, Slot,
+    -+        USAGE_SLOTS, USER_AREA_END, Usage, WAIT_CAP, WORDS, decode_result, encode_result, rv32, rv64,
+    ++        USAGE_SLOTS, USER_AREA_END, Usage, WAIT_CAP, WORDS, decode_result, encode_result, range_chunks, rv32,
+    ++        rv64,
+          };
+      }
+      pub use redoubt_wire as wire;
+    @@ tests/size-budget.toml: max_lines = 1142
+      name = "libs/rt"
+      paths = ["libs/rt/src"]
+     -max_lines = 4118
+    -+max_lines = 4189
+    ++max_lines = 4190
+      
+      [[crate]]
+      name = "libs/wire"
+2:  5de5048a9 = 2:  2e9b5d380 stub: a segment is mapped, protected and unmapped a range at a time
+3:  89b380da4 = 3:  a1d11f6a7 model: a range over MAX_RANGE_PAGES is TooLarge, after its shape and before any walk
+4:  8106fb191 = 4:  42d50c520 kernel: no range call holds the kernel longer than about a slice

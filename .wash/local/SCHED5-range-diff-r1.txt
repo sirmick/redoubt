@@ -1,0 +1,1278 @@
+1:  2a7fa23aa ! 1:  be8268fcb rt: range calls go a range at a time, and a long run is placed in one pass
+    @@ Commit message
+         rt: range calls go a range at a time, and a long run is placed in one pass
+     
+         A range call is to name at most MAX_RANGE_PAGES pages, so that none
+    -    holds the kernel longer than about a slice. The runtime therefore
+    -    splits every range it is given: map_fixed, unmap and Process::map
+    -    issue one call a range, and a refused map_fixed unmaps the ranges
+    -    before it, so the call maps all of a run or none of it.
+    +    holds the kernel longer than about a slice. Every caller splits a
+    +    longer range the same way, with redoubt_sys::range_chunks beside the
+    +    constant. The runtime's map_fixed, unmap and Process::map issue one
+    +    call a range, and a refused map_fixed unmaps the ranges before it, so
+    +    the call maps all of a run or none of it.
+     
+         A heap block, a Buffer or init's arena must stay one run. map_anon of
+         more than a range maps its first range with the kernel's map_anon and
+         extends it with map_fixed. Where the kernel placed that first range in
+    -    a gap too short for the run, the range is kept as a filler so the
+    -    kernel's next search starts past it, and is given back once the next
+    -    first range is placed. The search ends as the kernel's own one pass
+    -    does, once the first ranges' addresses have wrapped back to the first:
+    -    the run lands where one call once put it. Every map_anon of the
+    -    process takes one lock, so no other placement moves the kernel's
+    -    search under it. The cost is one range more held while searching.
+    +    a gap too short for the run, what the run took of the gap is kept as a
+    +    filler, so the kernel's next search, starting at its first page,
+    +    passes the whole gap; it is given back once the next first range is
+    +    placed. Each gap is probed once, and the search ends as the kernel's
+    +    own one pass does, once the first ranges' addresses have wrapped back
+    +    to the first: the run lands where the kernel's search would put it.
+    +    Every map_anon of the process takes one lock, so no other placement
+    +    moves the kernel's search under it. The cost is at most one range more
+    +    held while searching.
+     
+         The launcher's batch stays 64 pages, moved a range at a time: 16-page
+         batches made a launch 60 % longer.
+    @@ Commit message
+         each run is its own allocation instead: one shared area made the heap
+         file run past five minutes, against under one.
+     
+    -    Size budget: libs/sys: MAX_RANGE_PAGES, the ABI constant the range calls are split by (R22)
+    +    Size budget: libs/sys: MAX_RANGE_PAGES and range_chunks, the constant the range calls are split by and the one split (R22)
+         Size budget: libs/rt: range calls a range at a time, and map_anon's one-pass placement of a run longer than a range under its lock (R22)
+     
+         Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+    @@ docs/userland/native.md: and `Redoubt.Job` and `Redoubt.Jobs` the shell's handle
+      ### `redoubt-rt`, the native runtime
+      
+     -<details><summary>Status: built · partly tested: the 9P client's walk limit and its checks of a reply's tag, type and counts are not attacked; only its closing of stray handles is · tested (33)</summary>
+    -+<details><summary>Status: built · partly tested: the 9P client's walk limit and its checks of a reply's tag, type and counts are not attacked; only its closing of stray handles is · tested (40)</summary>
+    ++<details><summary>Status: built · partly tested: the 9P client's walk limit and its checks of a reply's tag, type and counts are not attacked; only its closing of stray handles is · tested (41)</summary>
+      
+      - bench:rt-build
+      - bench:net-tcp
+    @@ docs/userland/native.md: and `Redoubt.Job` and `Redoubt.Jobs` the shell's handle
+      - host:redoubt-rt::a_refused_endpoint_leaves_a_working_lock
+     +- host:redoubt-rt::a_long_run_is_one_run_mapped_a_range_at_a_time
+     +- host:redoubt-rt::a_run_lands_in_the_first_gap_from_the_search_s_start_that_holds_it
+    ++- host:redoubt-rt::a_gap_longer_than_two_ranges_but_short_of_the_run_is_probed_once
+     +- host:redoubt-rt::a_run_before_the_search_s_start_is_found_after_the_wrap
+     +- host:redoubt-rt::a_run_no_gap_holds_is_out_of_memory_after_one_pass
+     +- host:redoubt-rt::a_page_taken_meanwhile_is_a_gap_and_the_search_goes_on
+    @@ docs/userland/native.md: the loader stub.
+      
+     +- **A long run is one run.** A range call names at most `MAX_RANGE_PAGES` (16) pages
+     +  ([R22 (range cost)](../kernel/memory.md#r22-range-cost)), so `map_anon` of more maps its first
+    -+  range with the kernel's `map_anon` and the rest with `map_fixed` after it, and the heap's large blocks, a
+    -+  `Buffer` and `init`'s arena are each still one run. Where the kernel placed the first range in
+    -+  a gap too short for the run (a page taken after it, or the placement area's end), that range is
+    -+  kept as a filler, so the kernel's next search starts there and passes it, and given back as soon
+    -+  as the next first range is placed; the search ends as the kernel's own one pass does, once the
+    -+  first ranges' addresses have wrapped and come back to the first's, with `OutOfMemory` and
+    -+  nothing mapped. So a run lands in the first gap from the kernel's search's start that holds it,
+    -+  where one call once placed it, but the call holds one range more than the run while it
+    -+  searches: a budget within a range of its limit may find `OutOfMemory` where one call
+    -+  succeeded. Every `map_anon` of the process takes one lock in the runtime, the heap's and a
+    -+  `Buffer`'s alike, so no other placement moves the kernel's search under one; a program on the
+    -+  runtime makes no `map_anon` of its own. `map_fixed`, `unmap` and `Process::map` go a range at a
+    -+  time too: a refused `map_fixed` unmaps the ranges before it, and a refused `Process::map`
+    -+  leaves the ranges it moved in the child, which has not started, and unmaps the rest.
+    ++  range with the kernel's `map_anon` and the rest with `map_fixed` after it, and the heap's large
+    ++  blocks, a `Buffer` and `init`'s arena are each still one run. Where the kernel placed the first
+    ++  range in a gap too short for the run (a page taken after it, or the placement area's end), what
+    ++  the run took of that gap is kept as a filler, so the kernel's next search, starting at its first
+    ++  page, passes the whole gap, and is given back as soon as the next first range is placed: each
+    ++  gap is probed once. The search ends as the kernel's own one pass does, once the first ranges'
+    ++  addresses have wrapped and come back to the first's, with `OutOfMemory` and nothing mapped. So
+    ++  a run lands in the first gap from the kernel's search's start that holds it, the kernel's own
+    ++  answer, and the call holds at most the run and one range while it searches: a budget within a
+    ++  range of its limit may find `OutOfMemory` though the run alone would fit it. Every `map_anon`
+    ++  of the process takes one lock in the runtime, the heap's and a `Buffer`'s alike, so no other
+    ++  placement moves the kernel's search under one; a program on the runtime makes no `map_anon` of
+    ++  its own. `map_fixed`, `unmap` and `Process::map` go a range at a time too
+    ++  (`redoubt_sys::range_chunks`): a refused `map_fixed` unmaps the ranges before it, and a
+    ++  refused `Process::map` leaves the ranges it moved in the child, which has not started, and
+    ++  unmaps the rest.
+      - **Start and end.** `entry!(run)` receives the startup page's address from the loader stub,
+        parses the block, and calls `run`; its return value is the exit code. A block that does not
+        parse exits with `BAD_STARTUP`. A panic prints its message once on `/dev/cons`, if the program
+    @@ libs/rt/src/handle.rs
+     -    BUDGET_SPEC_SLOTS, BudgetSpec, Call, DeviceInfo, Error, Handle, Hold, MAX_START_HANDLES, MemFlags,
+     -    PAGE_SIZE, ResetKind, Return, USAGE_SLOTS, Usage,
+     +    BUDGET_SPEC_SLOTS, BudgetSpec, Call, DeviceInfo, Error, Handle, Hold, MAX_RANGE_PAGES, MAX_START_HANDLES,
+    -+    MemFlags, PAGE_SIZE, ResetKind, Return, USAGE_SLOTS, Usage,
+    ++    MemFlags, PAGE_SIZE, ResetKind, Return, USAGE_SLOTS, Usage, range_chunks,
+      };
+      
+      use crate::ipc::Buffer;
+    @@ libs/rt/src/handle.rs: fn addr(result: Result<Return, Error>) -> Result<usize, E
+      
+     -/// Maps `len` bytes (whole pages) of zeroed memory; returns its address.
+     +/// The bytes one range call may name: `MAX_RANGE_PAGES` pages (kernel/memory.md, R22). A longer
+    -+/// range is the runtime's to split, a range at a time.
+    ++/// range is the runtime's to split, a range at a time ([`range_chunks`]).
+     +const RANGE: usize = MAX_RANGE_PAGES * PAGE_SIZE;
+     +
+    -+/// `[addr, addr + len)` as the ranges of at most [`RANGE`] bytes that cover it, in order: (start,
+    -+/// length).
+    -+fn ranges(addr: usize, len: usize) -> impl Iterator<Item = (usize, usize)> {
+    -+    (0..len).step_by(RANGE).map(move |done| (addr + done, (len - done).min(RANGE)))
+    -+}
+    -+
+     +/// Maps `len` bytes (whole pages) of zeroed memory; returns its address. One run, wherever its
+     +/// length: a run longer than one range call may name ([`RANGE`]) is placed by the kernel's
+     +/// `map_anon` of its first range and extended by `map_fixed` of the ranges after it
+     +/// (kernel/memory.md, R22). The kernel places that first range in the first gap from its rover
+     +/// that a range fits, which may be too short for the run (a page after it taken, or the placement
+    -+/// area's end, where the thread-stack area begins: [`crate::thread::STACKS_BASE`]). The run's
+    -+/// first range is then kept as a filler, so that the next search starts there and passes it, and
+    -+/// given back as soon as the next first range is placed: so the run lands in the first gap from
+    -+/// the rover that holds it, the kernel's own answer, and the call holds at most `len` and one
+    -+/// range of pages at once. A budget within a range of its limit may so find `OutOfMemory` where
+    -+/// one call once succeeded. The search ends as the kernel's one pass does: once the first ranges'
+    -+/// addresses have wrapped (one below the one before), one at or past the first's means no gap
+    -+/// holds the run, `OutOfMemory`, with nothing left mapped.
+    ++/// area's end, where the thread-stack area begins: [`crate::thread::STACKS_BASE`]). What the run
+    ++/// took of that gap is then kept as a filler, so that the next search, starting at its first page,
+    ++/// passes the whole gap, and is given back as soon as the next first range is placed: so the run
+    ++/// lands in the first gap from the rover that holds it, the kernel's own answer, each gap is
+    ++/// probed once, and the call holds at most `len` and one range of pages at once. A budget within
+    ++/// a range of its limit may so find `OutOfMemory` though the run alone would fit it. The search
+    ++/// ends as the kernel's one pass does: once the first ranges' addresses have wrapped (one below
+    ++/// the one before), one at or past the first's means no gap holds the run, `OutOfMemory`, with
+    ++/// nothing left mapped.
+     +///
+     +/// The process's every `map_anon` through the runtime takes one lock ([`Placing`]), the heap's and
+     +/// a [`crate::ipc::Buffer`]'s alike, so no other placement moves the kernel's rover under a
+    @@ libs/rt/src/handle.rs: fn addr(result: Result<Return, Error>) -> Result<usize, E
+     +    }
+     +    let mut filler = None;
+     +    let placed = place(len, flags, &mut filler);
+    -+    if let Some(at) = filler {
+    -+        let _ = unmap(at, RANGE);
+    ++    if let Some((at, n)) = filler {
+    ++        let _ = unmap(at, n);
+     +    }
+     +    placed
+     +}
+    @@ libs/rt/src/handle.rs: fn addr(result: Result<Return, Error>) -> Result<usize, E
+     +    fn drop(&mut self) { PLACING.store(false, Ordering::Release); }
+     +}
+     +
+    -+/// [`map_anon`]'s search for a run of `len` bytes, longer than a range: `filler` holds the first
+    -+/// range of the last gap found too short, for the caller to give back.
+    -+fn place(len: usize, flags: MemFlags, filler: &mut Option<usize>) -> Result<usize, Error> {
+    ++/// [`map_anon`]'s search for a run of `len` bytes, longer than a range: `filler` holds what the
+    ++/// run took of the last gap found too short, `(address, length)`, for the caller to give back.
+    ++fn place(len: usize, flags: MemFlags, filler: &mut Option<(usize, usize)>) -> Result<usize, Error> {
+     +    let (mut origin, mut last, mut wrapped) = (None, 0, false);
+     +    loop {
+     +        let first = addr(syscall(&Call::MapAnon { len: RANGE, flags }))?;
+    -+        if let Some(at) = filler.take() {
+    -+            let _ = unmap(at, RANGE);
+    ++        if let Some((at, n)) = filler.take() {
+    ++            let _ = unmap(at, n);
+     +        }
+     +        wrapped |= origin.is_some() && first < last;
+     +        if wrapped && origin.is_some_and(|o| first >= o) {
+    @@ libs/rt/src/handle.rs: fn addr(result: Result<Return, Error>) -> Result<usize, E
+     +        if done == len {
+     +            return Ok(first);
+     +        }
+    -+        if done > RANGE {
+    -+            let _ = unmap(first + RANGE, done - RANGE);
+    -+        }
+    -+        *filler = Some(first);
+    ++        *filler = Some((first, done));
+     +    }
+      }
+      
+    @@ libs/rt/src/handle.rs: fn addr(result: Result<Return, Error>) -> Result<usize, E
+     -/// `map_fixed`). The runtime's own: only [`crate::thread::spawn`] calls it, to place a thread's
+     -/// stack above its guard page, and the pages are adopted by a [`Buffer`] at once. Public, it
+     -/// would let a program fill the thread-stack area under the runtime's placement.
+    -+/// `map_fixed`). A range at a time ([`RANGE`]): a refused range unmaps those before it, so the
+    -+/// call maps all of `len` or none of it. The runtime's own: [`crate::thread::spawn`] calls it to
+    -+/// place a thread's stack above its guard page, and [`map_anon`] to extend a run, and the pages
+    ++/// `map_fixed`). A range at a time ([`range_chunks`]): a refused range unmaps those before it, so
+    ++/// the call maps all of `len` or none of it. The runtime's own: [`crate::thread::spawn`] calls it
+    ++/// to place a thread's stack above its guard page, and [`map_anon`] to extend a run, and the pages
+     +/// are adopted by a [`Buffer`] at once. Public, it would let a program fill the thread-stack area
+     +/// under the runtime's placement.
+      pub(crate) fn map_fixed(addr: usize, len: usize, flags: MemFlags) -> Result<(), Error> {
+     -    nothing(syscall(&Call::MapFixed { addr, len, flags }))
+    -+    if len % PAGE_SIZE != 0 || len == 0 {
+    -+        return nothing(syscall(&Call::MapFixed { addr, len, flags }));
+    -+    }
+    -+    for (at, n) in ranges(addr, len) {
+    ++    for (at, n) in range_chunks(addr, len) {
+     +        if let Err(e) = nothing(syscall(&Call::MapFixed { addr: at, len: n, flags })) {
+     +            if at > addr {
+     +                let _ = unmap(addr, at - addr);
+    @@ libs/rt/src/handle.rs: pub(crate) fn map_fixed(addr: usize, len: usize, flags: M
+      /// redoubt_rt::handle::set_flags(0x1000, 4096, redoubt_rt::abi::MemFlags::READ);
+      /// ```
+     +///
+    -+/// A range at a time ([`RANGE`]): a refused range stops the call, those before it unmapped. Its
+    -+/// callers unmap only what they hold whole, so a refusal means the pages were already gone.
+    -+/// Nothing (`len` 0) is the kernel's to refuse.
+    ++/// A range at a time ([`range_chunks`]): a refused range stops the call, those before it
+    ++/// unmapped. Its callers unmap only what they hold whole, so a refusal means the pages were
+    ++/// already gone.
+      pub(crate) fn unmap(addr: usize, len: usize) -> Result<(), Error> {
+     -    nothing(syscall(&Call::Unmap { addr, len }))
+    -+    if len == 0 {
+    -+        return nothing(syscall(&Call::Unmap { addr, len }));
+    -+    }
+    -+    for (at, n) in ranges(addr, len) {
+    -+        nothing(syscall(&Call::Unmap { addr: at, len: n }))?;
+    -+    }
+    -+    Ok(())
+    ++    range_chunks(addr, len).try_for_each(|(at, n)| nothing(syscall(&Call::Unmap { addr: at, len: n })))
+      }
+      
+      /// Starts a thread at `entry` with `arg` in its first argument register, on `stack`, which it
+    @@ libs/rt/src/handle.rs: impl Process {
+     -        let moved = nothing(syscall(&Call::ProcessMap { process: self.0, src: src.addr, dst, len, flags }));
+     -        if moved.is_err() {
+     -            drop(Buffer::adopt(src));
+    -+        for (at, n) in ranges(src.addr, len) {
+    ++        for (at, n) in range_chunks(src.addr, len) {
+     +            let to = dst + (at - src.addr);
+     +            if let Err(e) =
+     +                nothing(syscall(&Call::ProcessMap { process: self.0, src: at, dst: to, len: n, flags }))
+    @@ libs/rt/tests/ranges.rs (new)
+     @@
+     +//! A range call names at most `MAX_RANGE_PAGES` pages (kernel/memory.md, R22), and the runtime
+     +//! splits a longer one: `map_anon` of a long run maps its first range and extends it with
+    -+//! `map_fixed`, keeping the first range of a gap too short for the run as a filler while its
+    -+//! search goes on, and ends where the kernel's one pass would; unmapping gives a run back a range
+    -+//! at a time. The fake kernel refuses a longer range as the kernel does and searches each
+    ++//! `map_fixed`, keeping what it took of a gap too short for the run as a filler while its search
+    ++//! goes on, so each gap is probed once, and ends where the kernel's one pass would; unmapping gives a run
+    ++//! back a range at a time. The fake kernel refuses a longer range as the kernel does and searches each
+     +//! process's own area as the kernel searches it; raw `map_fixed` calls, which leave the search's
+     +//! start where it was, make the gaps, and its refusals stand in for a page another mapping takes.
+     +
+    @@ libs/rt/tests/ranges.rs (new)
+     +            f.mappings(pid).into_iter().filter(|(a, _)| *a >= at).collect::<Vec<_>>(),
+     +            ranges(at, RUN)
+     +        );
+    -+        assert!(f.held_peak(pid) <= held + RUN + MAX_RANGE_PAGES, "at most the run and one filler");
+    ++        assert!(f.held_peak(pid) <= held + RUN + MAX_RANGE_PAGES, "at most the run and one range");
+    ++        assert_eq!(f.held(pid).1, held + RUN, "the filler given back");
+    ++    });
+    ++}
+    ++
+    ++#[test]
+    ++fn a_gap_longer_than_two_ranges_but_short_of_the_run_is_probed_once() {
+    ++    let f = fake();
+    ++    let pid = f.process(1008, &[]);
+    ++    f.as_process(pid, || {
+    ++        // A gap of 39 pages after the first, then the rest of the area free: the run fills two
+    ++        // ranges of it and finds the 40th page taken. The filler keeps all it took, so the next
+    ++        // search passes the whole gap, not one range of it.
+    ++        let base = area(f, 40, 41);
+    ++        let (held, calls) = (f.held(pid).1, f.calls(pid).len());
+    ++        f.held_peak(pid);
+    ++        assert_eq!(map_anon(pages(RUN), rw()), Ok(base + pages(41)));
+    ++        assert_eq!(searches(f, pid, calls), 2, "the gap, then past it");
+    ++        assert!(f.held_peak(pid) <= held + RUN + MAX_RANGE_PAGES, "at most the run and one range");
+     +        assert_eq!(f.held(pid).1, held + RUN, "the filler given back");
+     +    });
+     +}
+    @@ libs/rt/tests/ranges.rs (new)
+     +        let held = f.held(pid).1;
+     +        f.held_peak(pid);
+     +        assert_eq!(map_anon(pages(RUN), rw()), Ok(base + pages(1)));
+    -+        assert!(f.held_peak(pid) <= held + RUN + MAX_RANGE_PAGES, "at most the run and one filler");
+    ++        assert!(f.held_peak(pid) <= held + RUN + MAX_RANGE_PAGES, "at most the run and one range");
+     +        assert_eq!(f.held(pid).1, held + RUN, "the filler given back");
+     +    });
+     +}
+    @@ libs/rt/tests/ranges.rs (new)
+     +        f.held_peak(pid);
+     +        assert_eq!(map_anon(pages(RUN), rw()), Err(Error::OutOfMemory));
+     +        assert_eq!(f.mappings(pid), before, "nothing left mapped");
+    -+        assert!(f.held_peak(pid) <= held + RUN + MAX_RANGE_PAGES, "at most the run and one filler");
+    ++        assert!(f.held_peak(pid) <= held + RUN + MAX_RANGE_PAGES, "at most the run and one range");
+     +        assert_eq!(searches(f, pid, calls), 3, "one pass, then the first gap again");
+     +    });
+     +}
+    @@ libs/rt/tests/ranges.rs (new)
+     +    let f = fake();
+     +    let pid = f.process(1005, &[]);
+     +    // The run's third range finds a page taken, as a mapping made in the moment would: the gap
+    -+    // holds two ranges, not the run.
+    ++    // holds two ranges, not the run, and both are the filler, given back a range at a time.
+     +    f.refuse_after(pid, "map_fixed", 1, Error::InvalidArgument);
+     +    f.as_process(pid, || {
+     +        let at = map_anon(pages(RUN), rw()).unwrap();
+     +        assert_eq!(f.mappings(pid), ranges(at, RUN), "the filler given back");
+     +        assert_eq!(
+     +            f.calls(pid),
+    -+            ["map_anon", "map_fixed", "map_fixed", "unmap", "map_anon", "unmap", "map_fixed", "map_fixed"]
+    ++            ["map_anon", "map_fixed", "map_fixed", "map_anon", "unmap", "unmap", "map_fixed", "map_fixed"]
+     +        );
+     +    });
+     +}
+    @@ libs/sys/src/lib.rs: pub const WORDS: usize = 4;
+     +/// Pages one range call may name (`map_anon`, `map_fixed`, `unmap`, `set_flags`, `process_map`):
+     +/// the most whose worst kernel section fits one slice (kernel/memory.md, R22).
+     +pub const MAX_RANGE_PAGES: usize = 16;
+    ++
+    ++/// The ranges of at most `MAX_RANGE_PAGES` pages that cover `[addr, addr + len)`, in order, as
+    ++/// `(start, length)`: how a caller splits a longer range into calls. An empty range is one,
+    ++/// `(addr, 0)`, for the kernel to refuse.
+    ++pub fn range_chunks(addr: usize, len: usize) -> impl Iterator<Item = (usize, usize)> {
+    ++    const RANGE: usize = MAX_RANGE_PAGES * PAGE_SIZE;
+    ++    (0..len.max(1)).step_by(RANGE).map(move |done| (addr + done, (len - done).min(RANGE)))
+    ++}
+      /// Threads per process.
+      pub const MAX_THREADS: usize = 255;
+      /// Labels per budget.
+    @@ tests/size-budget.toml: max_lines = 362
+      name = "libs/sys"
+      paths = ["libs/sys/src"]
+     -max_lines = 1040
+    -+max_lines = 1041
+    ++max_lines = 1045
+      
+      [[crate]]
+      name = "libs/layout"
+    @@ tests/size-budget.toml: max_lines = 1142
+      name = "libs/rt"
+      paths = ["libs/rt/src"]
+     -max_lines = 4118
+    -+max_lines = 4204
+    ++max_lines = 4189
+      
+      [[crate]]
+      name = "libs/wire"
+2:  558df8391 ! 2:  d2e8ceb44 stub: a segment is mapped, protected and unmapped a range at a time
+    @@ Metadata
+      ## Commit message ##
+         stub: a segment is mapped, protected and unmapped a range at a time
+     
+    -    A range call is to name at most MAX_RANGE_PAGES pages. The stub mapped
+    -    each segment, set its permissions and unmapped the image in one call
+    -    each, so beamlet's 835-page text was one map_fixed: a 39.8 ms kernel
+    -    section on rv32, with interrupts off, that every wake on the hart
+    -    waited out. Each of those calls now goes a range at a time. A refusal
+    -    stops the stub with the ranges before it mapped, and the exit that
+    -    follows ends them with the process, as a refused whole call did. An
+    -    empty range is still one call, for the kernel to refuse.
+    +    A range call is to name at most MAX_RANGE_PAGES pages. Mapped in one
+    +    call, beamlet's 835-page text is a 39.8 ms kernel section on rv32,
+    +    with interrupts off, that every wake on the hart waits out. The stub's
+    +    map_fixed, set_flags and unmap now go a range at a time, split by
+    +    range_chunks. A refusal stops the stub with the ranges before it
+    +    mapped, and the exit that follows ends them with the process, as a
+    +    refused whole call does. An empty range is still one call, for the
+    +    kernel to refuse.
+     
+         Size budget: stub: the range cap (R22), each segment mapped, protected and unmapped a range at a time
+     
+    @@ stub/src/main.rs
+      use core::panic::PanicInfo;
+      
+     -use redoubt_sys::{Call, Error, MemFlags, PAGE_SIZE, Return, syscall};
+    -+use redoubt_sys::{Call, Error, MAX_RANGE_PAGES, MemFlags, PAGE_SIZE, Return, syscall};
+    ++use redoubt_sys::{Call, Error, MemFlags, PAGE_SIZE, Return, range_chunks, syscall};
+      use stub::{Either, STUB_ENTRY, process_exit, read_image};
+      
+      /// Exit codes the stub itself uses. Distinct from anything the started program can produce:
+    @@ stub/src/main.rs: fn map_segment(segment: &stub::Segment) -> Result<(), Error> {
+      /// Maps zeroed pages at exactly `addr` in this process (kernel/memory.md, "`map_fixed`"). It never
+     -/// replaces a mapping: an occupied, unaligned or out-of-user-space range is `InvalidArgument` with
+     -/// nothing mapped.
+    -+/// replaces a mapping: an occupied, unaligned or out-of-user-space range is `InvalidArgument`. A
+    -+/// range at a time ([`each_range`]); a refused one leaves those before it mapped, which the exit
+    -+/// that follows ends with the process.
+    ++/// replaces a mapping: an occupied, unaligned or out-of-user-space range is `InvalidArgument`.
+    ++/// One range call names at most `MAX_RANGE_PAGES` pages (kernel/memory.md, R22), so a segment is
+    ++/// mapped, protected and unmapped a range at a time ([`range_chunks`]); a refused range leaves
+    ++/// those before it mapped, which the exit that follows ends with the process.
+      fn map_fixed(addr: usize, len: usize, flags: MemFlags) -> Result<(), Error> {
+     -    nothing(&Call::MapFixed { addr, len, flags })
+    -+    each_range(addr, len, |addr, len| nothing(&Call::MapFixed { addr, len, flags }))
+    -+}
+    -+
+    -+/// `call` on each range of at most `MAX_RANGE_PAGES` pages that covers `[addr, addr + len)`, in
+    -+/// order, stopping at the first refused: one range call names at most that many (kernel/memory.md,
+    -+/// R22), so a segment longer than it is mapped, protected and unmapped a range at a time. An empty
+    -+/// range is still one call, for the kernel to refuse.
+    -+fn each_range(
+    -+    addr: usize,
+    -+    len: usize,
+    -+    mut call: impl FnMut(usize, usize) -> Result<(), Error>,
+    -+) -> Result<(), Error> {
+    -+    const RANGE: usize = MAX_RANGE_PAGES * PAGE_SIZE;
+    -+    for done in (0..len.max(1)).step_by(RANGE) {
+    -+        call(addr + done, (len - done).min(RANGE))?;
+    -+    }
+    -+    Ok(())
+    ++    range_chunks(addr, len).try_for_each(|(addr, len)| nothing(&Call::MapFixed { addr, len, flags }))
+      }
+      
+      /// One system call expecting `Return::Nothing`, exactly as `redoubt_rt::handle`'s wrappers do
+    @@ stub/src/main.rs: fn nothing(call: &Call) -> Result<(), Error> {
+      
+      fn set_flags(addr: usize, len: usize, flags: MemFlags) -> Result<(), Error> {
+     -    nothing(&Call::SetFlags { addr, len, flags })
+    -+    each_range(addr, len, |addr, len| nothing(&Call::SetFlags { addr, len, flags }))
+    ++    range_chunks(addr, len).try_for_each(|(addr, len)| nothing(&Call::SetFlags { addr, len, flags }))
+      }
+      
+     -fn unmap(addr: usize, len: usize) -> Result<(), Error> { nothing(&Call::Unmap { addr, len }) }
+     +fn unmap(addr: usize, len: usize) -> Result<(), Error> {
+    -+    each_range(addr, len, |addr, len| nothing(&Call::Unmap { addr, len }))
+    ++    range_chunks(addr, len).try_for_each(|(addr, len)| nothing(&Call::Unmap { addr, len }))
+     +}
+      
+      /// Rounds `len` up to a whole number of pages.
+    @@ tests/size-budget.toml: max_lines = 922
+      name = "stub"
+      paths = ["stub/src"]
+     -max_lines = 362
+    -+max_lines = 375
+    ++max_lines = 364
+      
+      [[crate]]
+      name = "libs/sys"
+3:  0c152a8d3 = 3:  8573ce794 model: a range over MAX_RANGE_PAGES is TooLarge, after its shape and before any walk
+4:  edab94595 ! 4:  1986b1764 kernel: no range call holds the kernel longer than about a slice
+    @@ Commit message
+         call was linear in its pages at about 47 µs a page on rv32: any
+         process's large map, unmap or load held every wake on its hart, and
+         every other hart's entry, for its whole length. A lease's loader stub
+    -    mapping beamlet's text was one 39.8 ms section on rv32. map_anon,
+    -    map_fixed, unmap, set_flags and process_map now refuse a range over
+    -    MAX_RANGE_PAGES pages with TooLarge. The check is arithmetic, after
+    -    the range's shape and before any walk or charge, as a lend past
+    -    MAX_LEND_PAGES is refused.
+    +    mapping beamlet's text in one call is a 39.8 ms section on rv32.
+    +    map_anon, map_fixed, unmap, set_flags and process_map now refuse a
+    +    range over MAX_RANGE_PAGES pages with TooLarge. The check is
+    +    arithmetic, after the range's shape and before any walk or charge, as
+    +    a lend past MAX_LEND_PAGES is refused.
+     
+         The number is derived, not chosen. It is the largest power of two
+         whose worst section fits one slice on the slower width: a map_fixed
+    -    that makes every page table it needs. 16 pages took 1,012 µs on rv32
+    -    and 780 µs on rv64; 32 pages took 1,768 and 1,413 µs.
+    +    that makes every page table it needs. 16 pages took 1,012 µs on rv32,
+    +    970 net of the timing, and 780 µs on rv64; 32 pages took 1,768 and
+    +    1,413 µs. process_map of 16 pages takes as long from touched pages,
+    +    and about 1.8 slices from untouched reservation pages, which only the
+    +    loader's first process holds: the cap's one overrun, stated on the
+    +    page with the condition that would need a bound of its own.
+     
+    -    An attack case holds it from the kernel's own trace: a budget maps and
+    -    unmaps the longest range the kernel takes in a loop, beside the latency
+    -    driver. Every range call's lock section must stay within a slice net
+    -    of audits; a kernel without the cap held the lock 96.8 ms a call. The
+    -    memory cases make their setup a range at a time and test each call at
+    -    the cap. Both rv32 latency cells this section caused now pass:
+    -    steward-latency's one-hart decision wake reads 528 µs, and its
+    -    two-hart timer wake 4.0 ms. rv32 is gated at two harts as well, with
+    -    the deadline notice's p99 there recorded rather than judged: it misses
+    -    40 ms on the kernel before this change too.
+    +    An attack case holds the cap from the kernel's own trace: a budget
+    +    maps and unmaps the longest range the kernel takes in a loop, beside
+    +    the latency driver. Every range call's lock section must stay within a
+    +    slice net of audits; a kernel without the cap held the lock 96.8 ms a
+    +    call. The memory cases make their setup a range at a time and test
+    +    each call at the cap. Both rv32 latency cells this section caused now
+    +    pass: steward-latency's one-hart decision wake reads 528 µs, and its
+    +    two-hart timer wake about 4 ms. rv32 is gated at two harts as well,
+    +    with the deadline notice's p99 there recorded rather than judged: it
+    +    misses 40 ms on a kernel without the cap too.
+     
+    -    map_anon's placement search stays the one range cost besides
+    -    destruction that a slice does not bound. Each start it tries costs a
+    -    walk, so a process that pins a page in every few pages of its area
+    -    can make a refusal cost up to 114 ms. The pages state the measured
+    -    table. Under the cap the shortest refused search is longer than the
+    -    15 ms wake target, and the driver's receive waits behind one whole
+    -    search in ticket order, so the two-hart contention cases record their
+    -    wake figures until the search is bounded. Their hammer now covers every
+    -    driver sample, which the case checks.
+    +    Two kernel costs stay unsliced besides destruction, each stated with
+    +    its bound. map_anon's placement search costs a walk a start, so a
+    +    process that pins a page in every few pages of its area can make a
+    +    refusal cost up to 114 ms. Under the cap the shortest refused search
+    +    is longer than the 15 ms wake target, and the driver's receive waits
+    +    behind one whole search in ticket order, so the two-hart contention
+    +    cases record their wake figures until the search is bounded. Their
+    +    hammers pin before the window and cover every driver sample, which
+    +    the cases check. A device owner's dma_alloc and map_device are linear
+    +    in their pages, up to the 1,024-page DMA pool, but only the manifest's
+    +    drivers make them, once at start, for a few constant pages.
+     
+         Size budget: kernel: the range cap (R22), a refusal by arithmetic and its five calls
+         Size budget: libs/sys: the five range calls' TooLarge rows (R22)
+    @@ docs/SECURITY.md: lines planned. Side channels cross every box and are listed be
+      | A freed frame is no process's and not free until it is zeroed, by the hart that freed it or by an allocation, one hart at a time, after every hart that could store to it has flushed; every free frame is zero | [R81 (frames in flight)](kernel/memory.md#r81-frames-in-flight) | `kernel/src/reclaim.rs`, `kernel/src/mem.rs`, `kernel/src/arch/riscv/irq.rs` | bench:smp-inflight-race, mutation:R81InFlightAllocatable, mutation:R81CommitUnzeroed | built, partly tested | QEMU drops stale translations at a hart's next `satp` write, so the order that keeps a stale store out is checked from the trace ([more](kernel/memory.md#r81-frames-in-flight)) |
+      | The kernel's own mappings are never writable and executable | [R19 (kernel W^X)](kernel/memory.md#r19-kernel-wx) | `loader/src/paging.rs`, `kernel/src/arch/riscv/mem.rs`, `libs/paging/src/lib.rs` | bench:kernel-wx | built, partly tested | The physmap maps every user frame writable for the kernel ([more](kernel/memory.md#residual-risks)) |
+     -| A range call costs what the page tables need and the budget can pay, never what the length asks | [R22 (range cost)](kernel/memory.md#r22-range-cost) | `kernel/src/mem.rs`, `kernel/src/arch/riscv/mem.rs` | bench:map-fixed-attack, bench:map-anon-search-bound, host:redoubt-model::huge_len_is_refused_promptly | built | `map_anon`'s search is bounded by its area, not by what is mapped: about 9.6 ms at worst ([more](kernel/memory.md#r22-range-cost)) |
+    -+| A range call holds the kernel at most about a slice: at most `MAX_RANGE_PAGES` pages, costing what the page tables need and the budget can pay, never what the length asks | [R22 (range cost)](kernel/memory.md#r22-range-cost) | `kernel/src/mem.rs`, `kernel/src/process.rs`, `kernel/src/arch/riscv/mem.rs` | bench:map-fixed-attack, bench:map-anon-search-bound, bench:sched-range-hammer, host:redoubt-model::huge_len_is_refused_promptly, host:redoubt-model::a_range_over_the_cap_is_too_large_before_any_other_check_but_its_shape, mutation:R22RangeCapIgnored | built | `map_anon`'s search is bounded by its area, not by what is mapped, but costs a walk a start: up to 114 ms in a checked build, about 25-30 ms within a lease's budget ([more](kernel/memory.md#r22-range-cost)) |
+    ++| A range call holds the kernel at most about a slice: at most `MAX_RANGE_PAGES` pages, costing what the page tables need and the budget can pay, never what the length asks | [R22 (range cost)](kernel/memory.md#r22-range-cost) | `kernel/src/mem.rs`, `kernel/src/process.rs`, `kernel/src/arch/riscv/mem.rs` | bench:map-fixed-attack, bench:map-anon-search-bound, bench:sched-range-hammer, host:redoubt-model::huge_len_is_refused_promptly, host:redoubt-model::a_range_over_the_cap_is_too_large_before_any_other_check_but_its_shape, mutation:R22RangeCapIgnored | built | `map_anon`'s search is bounded by its area, not by what is mapped, but costs a walk a start: up to 114 ms in a checked build, about 27 ms within a lease's budget; a device owner's `dma_alloc` and `map_device` are linear in their pages, bounded by the 1,024-page DMA pool (about 48 ms on rv32), and made only by the manifest's drivers, once at start; `process_map` from untouched reservation pages, which only the loader's first process holds, takes about 1.8 slices at the cap ([more](kernel/memory.md#r22-range-cost)) |
+      | The kernel keeps `sstatus.SUM` and `sstatus.MXR` clear | [R24 (SUM and MXR clear)](kernel/memory-layout.md#r24-sum-and-mxr-clear) | `kernel/src/arch/riscv/asm.rs`, `kernel/src/arch/riscv/mod.rs` | bench:sum-clear | built, partly tested | No probe covers `MXR` ([more](kernel/memory-layout.md#residual-risks)) |
+      | **Kernel: budgets, scheduling and time** | | | | | |
+      | Every kernel object is charged to one budget, and a charge over the limit fails before anything changes | [R6 (charging)](kernel/budgets.md#r6-charging) | `kernel/src/budget.rs` | bench:budget, bench:budget-mem-churn, bench:budget-table-attack, bench:map-fixed-tables, bench:page-table-reclaim, bench:pages-exhaustion, bench:redoubt-tight, bench:process-attack, bench:pid-pinning-attack, bench:thread-limit, mutation:R6ChargeAncestors, mutation:R6OwnPageChargedToItself, mutation:R6EndpointsFree, mutation:R6PageTablesFree, mutation:R6EmptyTableKept, mutation:R6OpenCallsFree, mutation:R6ProcessObjectFree, mutation:R6ProcessObjectChargedToBudget, mutation:R6LendChargedOnce, mutation:R6RootPageUncounted, mutation:R6PidUncountedAtEnd | built, partly tested | An endpoint's page charge is attacked only in the model ([more](kernel/budgets.md#r6-charging)) |
+    @@ docs/kernel/memory.md: device registers, is read-write and never executable.
+     +  within one slice (`SLICE_US`, 1 ms) on the slower width, in a checked build under virtual time.
+     +  Timed from user mode around the call, 16 pages took 1,012 µs on rv32 (970 net of the timing's
+     +  own 42) and 780 µs on rv64, and 32 pages 1,768 and 1,413, so 16. A range call costs about
+    -+  47 µs a page on rv32 and 38 on rv64 ([residual risks](#residual-risks)). It equals
+    ++  47 µs a page on rv32 and 40 on rv64 ([residual risks](#residual-risks)). `process_map` of 16
+    ++  pages takes about as long, 994 µs net on rv32 and 963 on rv64, with one overrun: from untouched
+    ++  reservation pages, which it backs and zeroes inside the call, 16 take 1,765 µs net on rv32 and
+    ++  1,445 on rv64, about 1.8 slices. Only the process the loader starts holds reservations (`init`;
+    ++  a process started by `process_start` has none), so no user process can build that shape; were
+    ++  reservations ever to reach another process, the overrun would need a bound of its own. It equals
+     +  `MAX_LEND_PAGES` by measurement, not by definition: a lend's cap bounds what a call carries
+     +  and the 9P `msize`, this one what a range call holds the kernel for.
+     +  `bench:sched-range-hammer` holds it from the kernel's trace: a budget maps and unmaps in a
+     +  loop the longest range the kernel takes, every table made afresh each time, and every range
+     +  call's lock section is within the slice net of audits (774 µs at most on rv32, 761 on rv64),
+     +  while the latency workload's driver stand-in beside it wakes in at most 1.2 ms at p50 and 2.3 ms
+    -+  at p99 against 15 and 50. Asked first for 2,048 pages, the hammer is refused; a kernel that took them
+    -+  whole fails the case, holding the lock 96.8 ms a call on rv32 in a recorded negative run.
+    -+  Before the cap a lease's loader stub mapped beamlet's 835-page text in one call, a 39.8 ms
+    -+  section on rv32 (21.2 ms on rv64) that a wake beside it waited out
+    -+  ([scheduling](scheduling.md#responsiveness)). A longer range is its caller's to split: the
+    -+  loader stub maps each segment a range at a time, and the runtime maps, moves and unmaps a range
+    -+  at a time and keeps a long run one run
+    -+  ([`redoubt-rt`](../userland/native.md#redoubt-rt-the-native-runtime)). A launch's batch stays
+    ++  at p99 against 15 and 50. Asked first for 2,048 pages, the hammer is refused; a kernel that
+    ++  took them whole fails the case, holding the lock 96.8 ms a call on rv32 in a recorded negative
+    ++  run. A longer range is its caller's to split: the loader stub maps each segment a range at a
+    ++  time, so beamlet's 835-page text, which one call would hold the kernel 39.8 ms for on rv32
+    ++  (21.2 ms on rv64, [scheduling](scheduling.md#responsiveness)), is 53 calls; and the runtime
+    ++  maps, moves and unmaps a range at a time and keeps a long run one run
+    ++  ([`redoubt-rt`](../userland/native.md#redoubt-rt-the-native-runtime)). A launch's batch is
+     +  64 pages ([`init`](../servers/init.md#launching-through-the-loader-stub)), split into range
+    -+  calls by the runtime, so the cap costs a launch nothing measurable: 2.29 s at the median on rv32
+    -+  at one hart, the base's, where 16-page batches took 3.65 s.
+    ++  calls by the runtime: a launch takes 2.29 s at the median on rv32 at one hart, as it does
+    ++  without the cap, where 16-page batches take 3.65 s.
+     +- Within a range, `unmap`, `set_flags` and `process_map` check the range page by page and stop
+     +  at the first page that is not the caller's, so their cost follows what is mapped there.
+     +- `map_fixed` refuses pages the budget cannot pay for by arithmetic, before any walk. It then
+    @@ docs/kernel/memory.md: device registers, is read-write and never executable.
+     -  checked build under virtual time; the case bounds it at 12 ms, and a timer wake during it at
+     -  15 ms.
+     +- `map_anon`'s search, which also places `map_device`, `dma_alloc` and a received message, is
+    -+  the one range-call cost besides R10's ([budgets](budgets.md#r10-destruction)) that a slice does
+    -+  not bound, and a process can make each of its own calls pay it. It never tests a start twice:
+    ++  one of three kernel costs a slice does not bound, with R10's
+    ++  ([budgets](budgets.md#r10-destruction)) and a device owner's allocation (below), and the one a
+    ++  process can make each of its own calls pay. It never tests a start twice:
+     +  when a page is taken, the next start tried is the page after it, and a missing page table skips
+     +  its whole span. So it looks at each page of its fixed area at most once, 65,536 for
+     +  `map_anon`'s and 1024 for the message area, whatever the request asks. But each start it tries
+     +  costs a walk of its own, so a refusal's cost follows the starts, not only the pages read: a
+     +  process with a page taken in every n-page window of its area makes each refused n-page request
+     +  try 65,536 / n starts. In a checked build under virtual time, with every page table present
+    -+  (worst of three):
+    ++  (worst of three in one scratch run, about 5.4 µs a start on rv64 and 4.0 on rv32):
+     +
+     +  | n | pages taken | rv32 | rv64 |
+     +  | --- | --- | --- | --- |
+    @@ docs/kernel/memory.md: device registers, is read-write and never executable.
+     +  | 2 | 32,768 | 67.8 ms | 113.6 ms |
+     +
+     +  The worst measured is 114 ms, and what a process can make it cost is what its budget can take:
+    -+  a lease's budget buys about 25-30 ms a call, a 128 MiB budget about 114 ms.
+    -+  `bench:map-anon-search-bound` builds the densest refused shape its own 128 MiB budget affords
+    -+  with requests at the cap, n = 16 (4,096 pages taken), and bounds that shape: a refusal under
+    -+  45 ms and a timer wake during it under 45 ms, twice the worst measured (22.4 ms on rv64),
+    -+  rounded up. The bound is that shape's; the table says what a larger budget buys. Bounding the
+    ++  a lease's 5,248 pages hold at most a page in every 13-page window, about 5,000 starts, so about
+    ++  27 ms a call on rv64 at the table's cost a start; a budget of 128 MiB, 32,768 pages, holds n =
+    ++  2's shape, about 114 ms. `bench:map-anon-search-bound` builds the densest refused shape its own
+    ++  budget affords with requests at the cap, n = 16 (4,096 pages taken), and bounds that shape: a
+    ++  refusal under 45 ms and a timer wake during it under 45 ms, twice the worst its own run
+    ++  measured (22.4 ms on rv64; `sched-lock-contention`'s search alone reads 22.6), rounded up. The bound is that shape's; the table says what a larger budget buys. Bounding the
+     +  search by construction (a search that walks once and iterates the entries, or a summary of the
+     +  area's free runs kept with the page tables, read a word a level as the frame bitmap is) is
+     +  planned.
+    ++- A device owner's `dma_alloc` and `map_device` are the third: each is linear in the pages it
+    ++  asks for, `dma_alloc`'s bounded by the DMA pool (1,024 pages, about 48 ms on rv32 in a checked
+    ++  build at the per-page cost above) and `map_device`'s by the device's register region. Only a
+    ++  driver `init`'s manifest names holds a device handle that can make them, and the image's
+    ++  drivers call them once each, when they open their device at start or at a restart, for
+    ++  constant sizes: `blkd` 9 DMA pages, `netd` 9 for each of its two queues, and one `map_device`
+    ++  of each device's registers: in one rv32 boot's trace, checked build, each `dma_alloc` held the
+    ++  kernel 304 to 325 µs and each `map_device` at most 548 µs, all within a slice. So a running
+    ++  box pays it only when a driver restarts, a failure path counted against `init`'s restart rule
+    ++  ([init](../servers/init.md#restarts-and-reboots)).
+      
+      ## Failure and restart
+      
+    @@ docs/kernel/memory.md: kernel, running the call to its end with interrupts off,
+      
+     +- **A range call's pages cost three walks each.** `map_fixed` walks the page tables once to check
+     +  the range is free, once to make the tables it needs and once to map each page, and takes each
+    -+  frame from the bitmap: about 47 µs a page on rv32 and 38 on rv64 in a checked build, which is
+    ++  frame from the bitmap: about 47 µs a page on rv32 and 40 on rv64 in a checked build, which is
+     +  what sets `MAX_RANGE_PAGES` at 16 ([R22](#r22-range-cost)). A cheaper page would raise the cap
+     +  and make a launch's loading faster; the loader stub's 835-page text takes 53 calls.
+     +- **`map_anon`'s search is up to about a hundred slices** ([R22](#r22-range-cost)): a process
+    @@ docs/kernel/scheduling.md: got 0.
+      - bench:steward-latency
+      - bench:steward-latency-n4
+      - bench:steward-latency-n16
+    +@@ docs/kernel/scheduling.md: stated margin. The sweep's seeds and worst case are recorded here with the targe
+    + | driver wake: the RTC's time when the driver runs, less the alarm it set | p50 <= 15 ms, p99 <= 50 ms |
+    + | steward timer wake: `time_now` when it runs, less its timeout's deadline | p50 <= 15 ms, p99 <= 50 ms |
+    + | steward decision wake: the same, for the timeout after which it destroys a lease | p50 <= 25 ms, p99 <= 95 ms (from the fourth sweep below; the third sweep set the same 25 and 95 ms) |
+    +-| deadline notice: the lease's `killed` notice received, less the lease's deadline | p99 <= 40 ms (back from 54 ms when destruction scanned every object frame; [budgets](budgets.md#residual-risks)) |
+    ++| deadline notice: the lease's `killed` notice received, less the lease's deadline | p99 <= 40 ms (back from 54 ms when destruction scanned every object frame; [budgets](budgets.md#residual-risks)); on rv32 at two harts the real steward's reads 43 to 57 ms, recorded, not judged ([below](#responsiveness), [residual risks](#residual-risks)) |
+    + | R10 kernel time of one destruction, from the trace | p99 <= 30 ms (back from 39 ms when destruction scanned every object frame; [budgets](budgets.md#residual-risks)) |
+    + | a lease's end from the steward's decision: the worst decision-wake p99 + R10's p99 | <= 95 + 30 = 125 ms, asserted as one sum by the post-check |
+    + | `budget_destroy`, call to return | p99 <= 51 ms: one round at N = 16, R10's 30 ms plus (runnable budgets + 2) slices, 21 of 1 ms (`destroy_call_p99_us`, judged net of audits as the wakes are) |
+     @@ docs/kernel/scheduling.md: and 12.0 ms for the deadline notice, and a lease's end at most 9.8 and 16.6 ms;
+      rv32's driver wake at N = 16, 17.2 ms against 15 ms; rv64's is 12.6 ms. At four harts a wake can
+      wait for the kernel lock behind three sections ([residual risks](#residual-risks)).
+    @@ docs/kernel/scheduling.md: N = 1 / 2 / 3 / 4 / 16; each lease destroyed is a VM
+      such a destruction (subtracted, as every target is net):
+      
+     -| Measure (net µs, N = 1 / 2 / 3 / 4 / 16; D = 8 at 16) | rv64, 1 hart | rv32, 1 hart | rv64, 2 harts | rv32, 2 harts (`--smp 2`, recorded, not gated) |
+    -+| Measure (net µs, N = 1 / 2 / 3 / 4 / 16; D = 8 at 16) | rv64, 1 hart | rv32, 1 hart | rv64, 2 harts | rv32, 2 harts |
+    ++| Measure (net µs, N = 1 / 2 / 3 / 4 / 16; D = 8 at 16) | rv64, 1 hart | rv32, 1 hart | rv64, 2 harts | rv32, 2 harts (N = 4: an earlier run, not re-measured, not judged) |
+      | --- | --- | --- | --- | --- |
+     -| steward timer wake (p50/p99) | 965/1944, 789/3472, 1227/2555, 821/5165, 599/1405 | 727/1579, 1242/1843, 888/1167, 801/1507; N = 16 not run (a spinner dies, below) | 1761/5085, 2867/23003, 1901/4066, 2336/7692, 3592/5357 | 5563/5636, **31831**/35239 (the p50 missed, below), 4160/5396, 3284/40940; N = 16 not run |
+     -| steward decision wake (p50/p99) | 1156/8292, 17425/20974, 645/2230, 965/2000, 736/1532 | 30376/33376 (N = 1, recorded, not judged: below; 24235/28493 with the launch on the loop), 1202/1440, 969/2299, 775/1888 | 3474/18540, 1696/21203, 9798/25163, 3265/25254, 14107/29787 | 3963/4517, 4583/39824, 21757/40031, 3112/41174 |
+    @@ docs/kernel/scheduling.md: N = 1 / 2 / 3 / 4 / 16; each lease destroyed is a VM
+     -| R10 (p99; the boots at N = 1 to 3 / 4 / 16, 99 / 35 / 31 destructions) | 9695 / 9716 / 4800 | 9651 / 9682 | 10042 / 9804 / 5490 | 9801 / 10063 |
+     -| a lease's end (worst decision wake p99 + R10, per boot) | 20974 + 9695 = 30669; 2000 + 9716 = 11716; 1532 + 4800 = 6332 | 40468 + 9651 = 50119; 1888 + 9682 = 11570 | 25163 + 10042 = 35205; 25254 + 9804 = 35058; 29787 + 5490 = 35277 | 40031 + 9801 = 49832; 41174 + 10063 = 51237 |
+     -| reply to the next receive (p50/p99, no target) | 8560/8679, 8722/9777, 9861/11494, 8699/10986, 11809/15021 | 8894/8949, 9278/11920, 9344/10578, 10614/12382 | 43647/48305, 23133/25010, 23952/36940, 26169/37061, 24355/32217 | 77231/80354, 39057/84666, 38811/50840, 39781/48369 |
+    -+| steward timer wake (p50/p99) | 965/1944, 789/3472, 1227/2555, 821/5165, 599/1405 | 435/438, 552/555, 601/1231, 801/1507; N = 16 not run (a spinner dies, below) | 1761/5085, 2867/23003, 1901/4066, 2336/7692, 3592/5357 | 4751/5972, 4340/6680 (31831/35239 before the range cap: below), 4311/11628, 3284/40940; N = 16 not run |
+    -+| steward decision wake (p50/p99) | 1156/8292, 17425/20974, 645/2230, 965/2000, 736/1532 | 528/1029 (30376/33376 before the range cap: below), 1072/1551, 1035/1549, 775/1888 | 3474/18540, 1696/21203, 9798/25163, 3265/25254, 14107/29787 | 3385/4950, 3131/5362, 3026/4860, 3112/41174 |
+    ++| steward timer wake (p50/p99) | 965/1944, 789/3472, 1227/2555, 821/5165, 599/1405 | 435/438, 552/555, 601/1231, 801/1507; N = 16 not run (a spinner dies, below) | 1761/5085, 2867/23003, 1901/4066, 2336/7692, 3592/5357 | 4751/5972, 4340/6680, 4311/11628, 3284/40940; N = 16 not run |
+    ++| steward decision wake (p50/p99) | 1156/8292, 17425/20974, 645/2230, 965/2000, 736/1532 | 528/1029, 1072/1551, 1035/1549, 775/1888 | 3474/18540, 1696/21203, 9798/25163, 3265/25254, 14107/29787 | 3385/4950, 3131/5362, 3026/4860, 3112/41174 |
+     +| deadline notice (p99; the sponsor's send returned, re-measured) | 17882, 18016, 19734, 18813, 14349 | 16253, 17432, 18876, 17349 | 30393, 32398, 24567, 27239, 29907 | **43372**, **45317**, **56536** (recorded, not judged: below), 13997 (at the dequeue) |
+     +| `budget_destroy`, call to return (p50/p99) | 6012/8329, 6081/8372, 5016/8412, 5468/8354, 6204/8762 | 5468/8799, 6501/8884, 6739/8860, 6460/9557 | 8178/9787, 8390/11010, 7938/10401, 7800/11411, 7545/9390 | 12055/13673, 9636/12969, 9046/13885, 10016/16204 |
+     +| R10 (p99; the boots at N = 1 to 3 / 4 / 16, 99 / 35 / 31 destructions) | 9695 / 9716 / 4800 | 8796 / 9682 | 10042 / 9804 / 5490 | 8929 / 10063 |
+    @@ docs/kernel/scheduling.md: N = 1 / 2 / 3 / 4 / 16; each lease destroyed is a VM
+     -1,363,142 at two; 5,005,142 / 2,963,667 on rv32 at one hart, 5,979,365 / 3,932,389 at two. The
+     -real steward meets every target on rv64 at one and two harts, N = 1 to 16, and on rv32 at
+     -one hart, N = 1 to 4, each column one run at seed 3 with the cleanup steps on the steward's own
+    +-thread ([steward](../servers/steward.md#failure-and-restart)): the timer wake's p99 at N = 3 and
+     +1,363,142 at two; 5,105,172 / 2,963,667 on rv32 at one hart, 6,233,716 / 3,932,389 at two. The
+     +real steward meets every target on rv64 at one and two harts, N = 1 to 16, on rv32 at one
+    -+hart, N = 1 to 4, and on rv32 at two harts but the deadline notice's p99 (below), each column one run at seed 3 with the cleanup steps on the steward's own
+    - thread ([steward](../servers/steward.md#failure-and-restart)): the timer wake's p99 at N = 3 and
+    ++hart, N = 1 to 4, and on rv32 at two harts, N = 1 to 3, but the deadline notice's p99 (below),
+    ++each column one run at seed 3 with the cleanup steps on the steward's own thread ([steward](../servers/steward.md#failure-and-restart)): the timer wake's p99 at N = 3 and
+      4 is 2.6 and 5.2 ms on rv64, 1.2 and 1.5 ms on rv32, and the reply-to-receive p99 in those rounds
+      11.5 and 11.0 ms, 10.6 and 12.4 ms, with no 100 ms retry in any sample. At N = 16 on rv64 at one
+    + hart the timer wake meets its targets, 0.6 ms at p50 and 1.4 at p99 (54.5 and 57.3 ms when the round
+     @@ docs/kernel/scheduling.md: thirds without moving the launch. With the bound the rv32 rounds run: at one har
+      meet every target, and at two harts N = 1 to 4 complete for the first time, their rows not
+      judged, since that boot ends in the round after them before the reset dumps the trace the
+    @@ docs/kernel/scheduling.md: all their modules on both widths at one and two harts
+     -[residual risks](#residual-risks)), to be taken up on its own — why the round with one spinner,
+     -then a fix or a stated residual. The table carries the rv32 two-hart rows with their numbers,
+     -and rv32 is gated at one hart until it lands, rv64 at both. The `a device interrupt returned
+    -+is. At two harts on rv32 the N = 1 to 3 boot reaches the reset and is judged. Before the range
+    -+cap its N = 2 round missed the timer wake's p50, 31.8 ms against 15, the same within 30 µs over
+    -+five boots, and the kernel just before the cap reads 38.0 ms. The cause was the cell below's: a
+    -+lease's loader stub mapped beamlet's text in one 39.8 ms section. Under the cap it reads 4.0 and
+    -+4.3 ms in two runs, judged. **One two-hart rv32 cell is a finding, recorded, not judged:** the
+    -+deadline notice's p99 at N = 1 to 3 reads 43.4 / 45.3 / 56.5 ms, and the kernel before it 41.9 / 41.9 /
+    -+56.1, against 40 (the target unmoved). It was never judged there before: the column's earlier
+    -+13 to 14 ms were taken at the dequeue, before the re-measure at the send that the other columns
+    -+carry. Taking the notice apart term by term on that boot, against one hart and rv64 at two, is
+    -+its own package, which judges the cell. The `a device interrupt returned
+    - without its claim` rejection of the rv32 two-hart trace, one run in two at this seed before, met
+    - neither rv32 two-hart boot here. Before the steward's console lines were queued and written through one kept
+    +-without its claim` rejection of the rv32 two-hart trace, one run in two at this seed before, met
+    +-neither rv32 two-hart boot here. Before the steward's console lines were queued and written through one kept
+    ++is. At two harts on rv32 the N = 1 to 3 boot reaches the reset and is judged: its N = 2 round's
+    ++timer wake reads 4.0 and 4.3 ms at p50 in two runs, where the same boot on a kernel without the
+    ++range cap reads 38.0 ms, the wake falling due inside a lease's loader stub's one 39.8 ms
+    ++`map_fixed` of beamlet's text. **One two-hart rv32 cell is a finding, recorded, not judged:** the
+    ++deadline notice's p99 at N = 1 to 3 reads 43.4 / 45.3 / 56.5 ms, and on a kernel without the
+    ++range cap 41.9 / 41.9 / 56.1, against 40 (the target unmoved). It was never judged there: the
+    ++column's figures were taken at the dequeue until this boot, not at the send that the other
+    ++columns carry. Taking the notice apart term by term on that boot, against one hart and rv64 at
+    ++two, is its own package, which judges the cell. The `a device interrupt returned without its
+    ++claim` rejection of the rv32 two-hart trace, one run in two at this seed before, met neither
+    ++rv32 two-hart boot here. Before the steward's console lines were queued and written through one kept
+      fid at the loop's turn ([steward](../servers/steward.md#failure-and-restart)), the steward
+    + reached its wait with the console round trips of the reply it had just given on its pass (each
+    + line an attach, open, write and close at `consoled`), the timer wake's p50 missed on every width
+     @@ docs/kernel/scheduling.md: and hart count (23 to 61 ms), and at two harts the decision wake's p50 and the d
+      p99 missed too; the reply-to-receive gap was 34-56 ms at one hart and 94-162 at two. Now a call's
+      records go before its reply, one write each, and the gap (the last row, recorded, no target) is
+    @@ docs/kernel/scheduling.md: and hart count (23 to 61 ms), and at two harts the de
+     -when nothing else switches. Landing the phase under by putting `process_start` back on the loop
+     -would be designing to pass an anomalous wake, and is not done. The cases stay out of the whole run, by name, until
+     -the two-hart rows pass on both widths. The destructions judged are those before the probe's
+    -+two-hart figures are gated as the stand-in's are. **The one-hart rv32 cell was one kernel section.**
+    -+The decision wake at N = 1, a bare 30 ms receive timeout, measured 30,376 / 33,376 µs before the
+    -+range cap (24,235 / 28,493 with the launch on the steward's loop) and was recorded, not judged.
+    -+Its cause was a single section: a lease's loader stub mapped beamlet's 835-page text in one
+    -+`map_fixed`, 39.8 ms on rv32 with interrupts off, and the wake fell due inside it. Under the
+    -+range cap ([R22 (range cost)](memory.md#r22-range-cost)) the stub maps a range at a time, each
+    -+call within about a slice, and the cell reads 528 / 1,029 µs, judged with the rest. The cases
+    ++two-hart figures are gated as the stand-in's are. **The one-hart rv32 decision wake at N = 1 is one kernel
+    ++section's.** The wake, a bare 30 ms receive timeout, reads 528 / 1,029 µs, judged with the rest.
+    ++On a kernel without the range cap it reads about 30 ms at p50 (30,376 / 33,376 µs), over the
+    ++25 ms target: a lease's loader stub maps beamlet's 835-page text in one `map_fixed`, 39.8 ms on
+    ++rv32 with interrupts off, and the wake falls due inside it. With the cap
+    ++([R22 (range cost)](memory.md#r22-range-cost)) the stub maps a range at a time, each call within
+    ++about a slice. The cases
+     +stay out of the whole run, by name. The destructions judged are those before the probe's
+      `LATENCY-END` (99 in the N = 1 to 3 boot, 165 over the three); the sixteen after it in each boot
+      (the marker-file exits reaping the leases) are recorded and not judged.
+    @@ docs/kernel/scheduling.md: the picked thread's user time: it starts when the thr
+     +processes hold. `map_anon`'s search is linear in the fixed-size area it searches, a constant, and
+     +never in `len` (`bench:map-anon-search-bound`), but a walk for each start it tries, so a process
+     +that takes a page in every few pages of its own area makes each of its refusals cost up to 114 ms
+    -+in a checked build (n = 2 on rv64; about 25-30 ms within a lease's budget; the table is on
+    ++in a checked build (n = 2 on rv64; about 27 ms within a lease's 5,248 pages; the table is on
+     +[R22](memory.md#r22-range-cost)): with R10 ([budgets](budgets.md#r10-destruction)) it is one of
+    -+the two costs a slice does not bound. A RAM frame is taken from the free-frame bitmap and given
+    ++three costs a slice does not bound. The third is a device owner's `dma_alloc` and `map_device`,
+    ++linear in the pages asked for and bounded by the DMA pool (1,024 pages, about 48 ms on rv32 at
+    ++its worst) and the device's registers, which only a driver `init`'s manifest names can make, and
+    ++the image's drivers make once each at start or restart, for a few constant pages
+    ++([R22](memory.md#r22-range-cost)). A RAM frame is taken from the free-frame bitmap and given
+      back to it, so backing a page, a page table or an object costs no search of RAM, however much of it
+      is in use (`bench:scan-bounds`). A term linear in a fixed kernel constant (`MAX_PROCESS_COUNT`, the
+      platform's interrupt count, `MAX_DMA_DEVICES`, a fixed table size) is a constant. A term linear in
+    @@ docs/kernel/scheduling.md: feature) fails it on both widths in a recorded negati
+     +23.3/23.8 ms with a page in every 32 KiB, 35.6 and 24.4 ms a search). So the case records the
+     +wake beside the 15 and 50 ms targets, which do not move, rather than judging it, until the search
+     +is bounded ([residual risks](memory.md#residual-risks)), which re-judges the family and its
+    -+self-check. Before the cap a 512-page request was refused after a 9.6 ms search beside a page in
+    -+every 2 MiB span, and the wake met both targets: 8.5/10.6 ms on rv64 and 8.5/10.4 ms on rv32,
+    -+bimodal, under 2 ms when the alarm fell between two searches and about 10 ms inside one. With the
+    -+boot hart alone taking device interrupts they were 18.5/19.2 and 18.3/19.1 ms: the alarm waited
+    -+out the boot hart's search, and the woken hart drew its ticket after the searcher's next call.
+    -+`bench:irq-boot-hart-only` is that kernel (`irq-boot-hart-only`, a
+    -+debug-only feature) under the same case, the self-check of the targets: before the cap the
+    -+post-check had to fail it (20.2 ms gross p50 on both widths: its hammer landed on the boot hart).
+    -+A negative is judged only while its positive is, so under the cap it records its wake too, until
+    -+the search is bounded; a checked build's count at power-off still shows its boot hart claiming
+    -+all 201 and the other hart's context taking none (no claim, and no claim that found nothing). The count is each hart's: its claims, its claims that found nothing (it trapped
+    ++self-check. With the boot hart alone taking device interrupts a wake waits two searches, 44.1 ms
+    ++on rv64 and 33.3 ms on rv32 at p50 net: the alarm waits out the boot hart's search, and the
+    ++woken driver's `receive` then draws its ticket behind the next. `bench:irq-boot-hart-only` is
+    ++that kernel (`irq-boot-hart-only`, a debug-only feature) under the same case, the self-check of
+    ++the targets. A negative is judged only while its positive is, so it records its wake too, until
+    ++the search is bounded; a checked build's count at power-off shows its boot hart claiming all 201
+    ++and the other hart's context taking none (no claim, and no claim that found nothing). The count
+    ++is each hart's: its claims, its claims that found nothing (it trapped
+      for an alarm another hart claimed first) and their sum, the alarms its context took. The idle hart
+      wins the claims, and which hart idles follows the boot's timing (claims 200 and 1 in one
+      `sched-lock-contention` run; 29, 4, 168, 0 and 196, 1, 2, 2 in two `sched-lock-contention-4`
+    @@ docs/kernel/scheduling.md: feature) fails it on both widths in a recorded negati
+     -([residual risks](#residual-risks)): rv32's p50 moved between 5 and 22 ms when a slice's end was
+     -made cheaper. It is judged where the harts run at once:
+     +that every hart did. At four harts under `icount` the p50 and p99 wait for QEMU's turns and are
+    -+recorded there, not gated ([residual risks](#residual-risks)): before the cap rv32's p50 moved
+    -+between 5 and 22 ms when a slice's end was made cheaper; under it a wake waits about five
+    -+searches (113.0/113.5 ms on rv64, 86.1/86.6 ms on rv32). It is judged where the harts run at once:
+    ++recorded there, not gated ([residual risks](#residual-risks)): a wake waits about five searches
+    ++(113.0/113.5 ms on rv64, 86.1/86.6 ms on rv32). It is judged where the harts run at once:
+      `bench:sched-lock-contention-4-mttcg` runs the same program under QEMU's multi-threaded TCG, in
+      host time, and judges the driver wake's net p50 and p99 in searches of the same run alone, which
+      the program times before its children start (`one search alone`): at most three at p50 and eight
+    @@ docs/kernel/scheduling.md: feature) fails it on both widths in a recorded negati
+     -searches and a p99 of 2.0 to 3.0, but for one run of each width at 6.1 (rv64) and 5.1 (rv32);
+     -twenty on the general cores read p99s of 3.8 to 6.2 and 3.2 to 5.1 (a search alone about 1.5 to
+     -1.9 ms and 1.3 ms). The p99 bound, at twice the four-search claim, cannot see a wake one or two
+    -+searches and the one in progress. Before the cap, twenty runs alone on q's quiet cores read a p50
+    -+of 1.6 to 1.9 searches and a p99 of 2.0 to 3.0, but for one run of each width at 6.1 (rv64) and
+    -+5.1 (rv32); twenty on the general cores read p99s of 3.8 to 6.2 and 3.2 to 5.1 (a search alone
+    -+about 1.5 to 1.9 ms and 1.3 ms). Under the cap one quiet run of each width read a p50 of 2.5 and
+    -+2.2 searches and a p99 of 5.5 and 2.7 (a search alone 3.1 and 2.2 ms). The p99 bound, at twice the four-search claim, cannot see a wake one or two
+    - searches longer: the `irq-boot-hart-only` kernel under the same case reads p99s of 5.4 to 7.1
+    - searches and passes it. Its p50, 3.7 to 4.9 searches against IRQ1's 1.6 to 1.9, fails the p50
+    - bound in all four recorded runs, so the p50 is the gate that sees that regression. The 15 and 50 ms
+    +-searches longer: the `irq-boot-hart-only` kernel under the same case reads p99s of 5.4 to 7.1
+    +-searches and passes it. Its p50, 3.7 to 4.9 searches against IRQ1's 1.6 to 1.9, fails the p50
+    +-bound in all four recorded runs, so the p50 is the gate that sees that regression. The 15 and 50 ms
+     -targets are gated too, but on this host's TCG a search takes a fifth of its 9.6 ms of virtual
+     -time, so they hold for the twin as well (p99 7.5 to 10.9 ms); on hardware, where a search is its
+     -virtual length, the same count holds 50 ms while R12's costliest call stays under about 12 ms, and
+     -the twin's would not.
+    ++searches and the one in progress. A quiet run of each width reads a p50 of 2.5 and 2.2 searches
+    ++and a p99 of 5.5 and 2.7 (a search alone 3.1 and 2.2 ms). The bounds were set from twenty runs
+    ++alone on q's quiet cores at a 9.6 ms search shape (a p50 of 1.6 to 1.9 searches and a p99 of 2.0
+    ++to 3.0, but for one run of each width at 6.1 and 5.1). The p99 bound, at twice the four-search
+    ++claim, cannot see a wake one or two searches longer: in those runs the `irq-boot-hart-only`
+    ++kernel read p99s of 5.4 to 7.1 searches and passed it, and its p50, 3.7 to 4.9 searches, failed
+    ++the p50 bound in all four, so the p50 is the gate that sees that regression. The 15 and 50 ms
+     +targets are printed beside them and recorded, as at two harts: on this host's TCG a search takes
+     +a fraction of its virtual length, but on hardware, where a search is its virtual length, a wake
+     +behind one already misses the p50 target under the cap.
+    @@ docs/kernel/scheduling.md: budget waiting to receive a call that never came from
+      `sched-capped-holds-floor`, whose floor counts the capped budgets, for R12's negative case at two
+      harts; `sched-test-and-set-entry`, which replaces the kernel lock by test-and-set, and
+      `sched-spin-entry`, which makes a hart wait for it spinning, each for one of
+    +@@ docs/kernel/scheduling.md: panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
+    +   under the 10 ms slice and stay; a lease's end from the steward's decision is at most 22.8 ms in
+    +   the sweep against its 125 ms. A pinned seed repeats one run; a change that moves the phase can
+    +   land on a worse one than the sweep saw, which the margin covers and a new sweep re-measures.
+    ++- **The deadline notice misses its target on rv32 at two harts.** The real steward's notice reads
+    ++  43.4 / 45.3 / 56.5 ms at p99 at N = 1 to 3 against 40, and 41.9 / 41.9 / 56.1 on a kernel
+    ++  without the range cap, so the range cap neither causes nor cures it; the cell is recorded, not
+    ++  judged, and is taken apart term by term on its own, against one hart and rv64 at two, which
+    ++  then judges it ([responsiveness](#responsiveness)).
+    + - **Fair kernel entry is bounded by count, not time.** On several harts, R78 bounds the wait
+    +   for the kernel lock by `MAX_HARTS` - 1 kernel sections, each as long as the call or
+    +   destruction holding it: a long section delays every waiting hart by its length, which is one
+     @@ docs/kernel/scheduling.md: panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
+        which printed the process's map a line a page holding the lock (837 ms for 4096 pages); and
+        zeroing a frame a checked word at a time, five times a plain store loop. The wait for a
+    @@ docs/kernel/scheduling.md: panic inside `print!` ([boot](boot.md#failure-and-res
+        work is billed to its payer, and its interrupt is armed on the payer's hart where the payer
+        runs, so a one-thread victim on two harts, whom no pick can repay, no longer destroys a flood
+     @@ docs/kernel/scheduling.md: panic inside `print!` ([boot](boot.md#failure-and-restart)). Each of these impli
+    - - **A hart waits for QEMU's turns.** Under `icount` the harts take turns on one
+        host thread, and a hart in a kernel section keeps its turn to the section's end. A device's
+        line that rises while the idle hart is halted wakes it on time in virtual time, but the hart runs
+    --  only when the running hart's turn ends, and then draws its ticket behind up to three sections. In
+    +   only when the running hart's turn ends, and then draws its ticket behind up to three sections. In
+     -  `sched-lock-contention-4` that leaves the driver wake's p99 at 59.1 ms on rv64 and 58.7 ms on
+     -  rv32 (other runs read 49.7 and 40.6), and its p50 at 5 or 22 ms on rv32 as the kernel's
+     -  timing moves which turn the wake lands behind, so both are recorded there, not gated: every long
+    -+  only when the running hart's turn ends, and then draws its ticket behind up to three sections. Before
+    -+  the range cap, `sched-lock-contention-4` read the driver wake's p99 at 59.1 ms on rv64 and
+    -+  58.7 ms on rv32 (other runs read 49.7 and 40.6), and its p50 at 5 or 22 ms on rv32 as the
+    -+  kernel's timing moved which turn the wake landed behind, so both are recorded there, not gated: every long
+    ++  `sched-lock-contention-4` the driver wake's p50 and p99 follow which turn the wake lands behind
+    ++  as the kernel's timing moves, so both are recorded there, not gated: every long
+        idle halt began with nothing pending, and the kernel cannot shorten another hart's turn. On harts
+        that run at once the woken hart draws its ticket at the rise, and the four-hart p50 and p99 are
+     -  judged there, under QEMU's multi-threaded TCG ([R78](#r78-fair-kernel-entry)). Turns move
+    @@ tests/irq-boot-hart-only.toml
+     -must_fail = '(?s)driver_wake \(\d+\): net .*?target missed'
+      expect = [
+          '^kernel: irq-boot-hart-only: device interrupts reach the boot hart alone$',
+    ++    '^\[lock-contention\] ok: every hammer pinned its area before the window opened$',
+          '^\[lock-contention\] 1 hammers. searches refused: \d+$',
+          '^LATENCY-SAMPLE contention driver_wake \d+ \d+$',
+     +    '^\[lock-contention\] ok: every driver wake fell inside the hammers. window: the last at \d+ µs, the window.s end \d+$',
+    @@ tests/programs/Cargo.toml: bin = [
+          { name = "sched-server-busy", test = false },
+          { name = "sched-share", test = false },
+     
+    + ## tests/programs/src/bin/budget-victim.rs ##
+    +@@ tests/programs/src/bin/budget-victim.rs: pub extern "C" fn _start() -> ! {
+    +             && u.processes_usage <= u.processes_limit
+    +             && u.weight_carved <= u.weight_limit
+    +     });
+    +-    let at = rd::map_anon(victim::PAGES * rd::PAGE_SIZE, rd::rw()).expect("map_anon");
+    ++    let at = rd::map_anon_run(victim::PAGES * rd::PAGE_SIZE, rd::rw()).expect("map_anon");
+    +     for page in 0..victim::PAGES {
+    +         rd::poke(at + page * rd::PAGE_SIZE, page as u64);
+    +     }
+    +
+      ## tests/programs/src/bin/fault-report-big.rs ##
+     @@ tests/programs/src/bin/fault-report-big.rs: fn leave(_arg: usize) {
+      #[no_mangle]
+    @@ tests/programs/src/bin/fault-report-big.rs: fn leave(_arg: usize) {
+          rd::thread(leave, 0).expect("couldn't spawn the leaving thread");
+          rd::call_waiting(rd::BOOT_ENDPOINT, &rd::body([HELD, 0, 0, 0]), None, rd::FOREVER)
+     
+    + ## tests/programs/src/bin/lend-untouched.rs ##
+    +@@ tests/programs/src/bin/lend-untouched.rs: pub extern "C" fn _start() -> ! {
+    +     log!(logger, "[untouched] transfer {:?}", moved);
+    + 
+    +     // (5) More memory than the machine has RAM: the caller's error, not a kernel panic.
+    +-    let beyond = rd::map_anon(HUGE_PAGES * rd::PAGE_SIZE, rd::rw()).map(|_| ());
+    ++    let beyond = rd::map_anon_run(HUGE_PAGES * rd::PAGE_SIZE, rd::rw()).map(|_| ());
+    +     log!(logger, "[untouched] map beyond RAM: {:?}", beyond);
+    + 
+    +     // Survived every attempt. The clean power-off, which only this program can ask for, is the
+    +
+      ## tests/programs/src/bin/log-server.rs ##
+     @@ tests/programs/src/bin/log-server.rs: fn read_programs(bundle: &Bundle) -> Result<([Option<Program>; MAX_PROGRAMS], us
+      /// image from the bundle and a startup block at the stub's.
+    @@ tests/programs/src/bin/map-anon-search-bound.rs
+      
+      #![no_std]
+      #![no_main]
+    -@@ tests/programs/src/bin/map-anon-search-bound.rs: use test_programs::{Logger, checker, log};
+    + 
+    + use core::sync::atomic::{AtomicUsize, Ordering};
+    + 
+    +-use test_programs::rd::{self, Error};
+    ++use test_programs::rd::{self, Error, MAX_RANGE_PAGES};
+    + use test_programs::{Logger, checker, log};
+    + 
+    + /// The `map_anon` area: 256 MiB from here (memory-layout.md, "Regions").
+      const AREA: usize = 0x6000_0000;
+      const AREA_PAGES: usize = 0x1000_0000 / rd::PAGE_SIZE;
+      const AREA_END: usize = AREA + AREA_PAGES * rd::PAGE_SIZE;
+    @@ tests/programs/src/bin/map-anon-search-bound.rs: use test_programs::{Logger, che
+     -const HALF: usize = AREA_PAGES / 2;
+     -/// A leaf page table's span on Sv39 (half of one on Sv32).
+     -const SPAN: usize = 2 << 20;
+    -+/// The most pages one request may name.
+    -+const RANGE: usize = rd::MAX_RANGE_PAGES;
+      /// The sleeping thread's stack, outside the area.
+      const STACK: usize = 0x5000_0000;
+      
+    @@ tests/programs/src/bin/map-anon-search-bound.rs: fn inside(at: usize, npages: us
+     +/// The last page of every range-long window of the area but the last: each window keeps one page
+     +/// short of a range free, so the only run of a range that fits is the area's last window.
+     +fn pins() -> impl Iterator<Item = usize> {
+    -+    (AREA..AREA_END - pages(RANGE)).step_by(pages(RANGE)).map(|w| w + pages(RANGE - 1))
+    ++    (AREA..AREA_END - pages(MAX_RANGE_PAGES))
+    ++        .step_by(pages(MAX_RANGE_PAGES))
+    ++        .map(|w| w + pages(MAX_RANGE_PAGES - 1))
+     +}
+     +
+      extern "C" fn sleeper(_: usize) -> ! {
+    @@ tests/programs/src/bin/map-anon-search-bound.rs: extern "C" fn sleeper(_: usize)
+     -        rd::unmap(at, pages(AREA_PAGES)).unwrap();
+     +    let free = rd::free(rd::OWN);
+     +    // More than a request may name, in an empty area: refused by its length alone.
+    -+    let over = rd::map_anon(pages(RANGE + 1), rd::rw());
+    ++    let over = rd::map_anon(pages(MAX_RANGE_PAGES + 1), rd::rw());
+     +    // A range in the empty area: at its start.
+    -+    let first = rd::map_anon(pages(RANGE), rd::rw());
+    ++    let first = rd::map_anon(pages(MAX_RANGE_PAGES), rd::rw());
+     +    if let Ok(at) = first {
+    -+        rd::unmap(at, pages(RANGE)).unwrap();
+    ++        rd::unmap(at, pages(MAX_RANGE_PAGES)).unwrap();
+          }
+     -    // A run of half the area that fits only at its very end: one page pinned just below it
+     -    // leaves half less a page below.
+    @@ tests/programs/src/bin/map-anon-search-bound.rs: extern "C" fn sleeper(_: usize)
+     -    let end_fit = rd::map_anon(pages(HALF), rd::rw());
+     +    // A range that fits only at the area's very end: every window before it pinned.
+     +    pins().for_each(pin);
+    -+    let end_fit = rd::map_anon(pages(RANGE), rd::rw());
+    ++    let end_fit = rd::map_anon(pages(MAX_RANGE_PAGES), rd::rw());
+          if let Ok(at) = end_fit {
+     -        rd::unmap(at, pages(HALF)).unwrap();
+    -+        rd::unmap(at, pages(RANGE)).unwrap();
+    ++        rd::unmap(at, pages(MAX_RANGE_PAGES)).unwrap();
+          }
+     -    rd::unmap(pinned, rd::PAGE_SIZE).unwrap();
+     -    // The last placement is now high (half the area from the end). A run of half plus two pages
+    @@ tests/programs/src/bin/map-anon-search-bound.rs: extern "C" fn sleeper(_: usize)
+     +    // The last placement is now high (a range from the end), its start the last start that fits.
+     +    // One page pinned there blocks every start inside the area, so the request must be refused,
+     +    // not placed from above the last start and out past the area's end.
+    -+    let last_start = AREA_END - pages(RANGE);
+    ++    let last_start = AREA_END - pages(MAX_RANGE_PAGES);
+          pin(last_start);
+     -    let wrapped = rd::map_anon(pages(more), rd::rw());
+    -+    let wrapped = rd::map_anon(pages(RANGE), rd::rw());
+    ++    let wrapped = rd::map_anon(pages(MAX_RANGE_PAGES), rd::rw());
+          if let Ok(at) = wrapped {
+     -        rd::unmap(at, pages(more)).unwrap();
+    -+        rd::unmap(at, pages(RANGE)).unwrap();
+    ++        rd::unmap(at, pages(MAX_RANGE_PAGES)).unwrap();
+          }
+     -    rd::unmap(last_start, rd::PAGE_SIZE).unwrap();
+     -    Placement { whole, end_fit, wrapped }
+    @@ tests/programs/src/bin/map-anon-search-bound.rs: pub extern "C" fn _start() -> !
+     +    log!(out, "[search] ok: a request over the range cap is refused by its length");
+     +    assert_eq!(p.first, Ok(AREA), "a range in an empty area");
+     +    log!(out, "[search] ok: a range in the empty area is placed at its start");
+    -+    assert_eq!(p.end_fit, Ok(AREA_END - pages(RANGE)), "a range that fits only at the end");
+    ++    assert_eq!(p.end_fit, Ok(AREA_END - pages(MAX_RANGE_PAGES)), "a range that fits only at the end");
+          log!(out, "[search] ok: a run that fits only at the area's end is placed there");
+          assert_eq!(p.wrapped, Err(Error::OutOfMemory), "a wrap after a high placement");
+          log!(out, "[search] ok: after a high placement, a run that does not fit is refused");
+    @@ tests/programs/src/bin/map-anon-search-bound.rs: pub extern "C" fn _start() -> !
+              rd::receive(None, 100, 0).ok();
+          }
+     -    let elapsed = refusal_time(SPAN);
+    -+    let elapsed = refusal_time(pages(RANGE));
+    ++    let elapsed = refusal_time(pages(MAX_RANGE_PAGES));
+     +    log!(out, "[search] a refused search over every page table took {elapsed} us");
+          assert!(elapsed < REFUSAL_BOUND_US, "a refused search over every page table took {elapsed} us");
+     -    log!(out, "[search] ok: a refused search over every page table took {elapsed} us, under 12 ms");
+    @@ tests/programs/src/bin/map-anon-search-bound.rs: pub extern "C" fn _start() -> !
+      
+          // Placements that succeed land inside the area.
+     -    for npages in [1, 7, 64, SPAN / rd::PAGE_SIZE - 1] {
+    -+    pins().chain([AREA_END - pages(RANGE)]).for_each(|at| rd::unmap(at, rd::PAGE_SIZE).unwrap());
+    -+    for npages in [1, 7, RANGE] {
+    ++    pins().chain([AREA_END - pages(MAX_RANGE_PAGES)]).for_each(|at| rd::unmap(at, rd::PAGE_SIZE).unwrap());
+    ++    for npages in [1, 7, MAX_RANGE_PAGES] {
+              let at = rd::map_anon(pages(npages), rd::rw()).expect("a run that fits");
+              assert!(inside(at, npages), "{npages} pages at {at:#x}");
+              rd::unmap(at, pages(npages)).unwrap();
+    @@ tests/programs/src/bin/sched-range-hammer.rs (new)
+     +#[panic_handler]
+     +fn panic(info: &core::panic::PanicInfo) -> ! { test_programs::sched::panicked("range-hammer", info) }
+     
+    + ## tests/programs/src/bin/smp-evict.rs ##
+    +@@ tests/programs/src/bin/smp-evict.rs: extern "C" fn checker(_: usize) -> ! {
+    +     if !matches!(rd::receive(Some(2), WAIT, 0), Ok(Received::Message(m)) if m.body.words[0] == GO) {
+    +         rd::process_exit(1);
+    +     }
+    +-    let pages = rd::map_anon(CHECKED * rd::PAGE_SIZE, rd::rw()).unwrap_or_else(|_| rd::process_exit(2));
+    ++    let pages = rd::map_anon_run(CHECKED * rd::PAGE_SIZE, rd::rw()).unwrap_or_else(|_| rd::process_exit(2));
+    +     let words = CHECKED * rd::PAGE_SIZE / 8;
+    +     let start = rd::time_now().unwrap_or(0);
+    +     let mut dirty = 0usize;
+    +
+      ## tests/programs/src/bin/smp-inflight-race.rs ##
+     @@
+      //!   RAM is nearly full: the allocations below empty the bitmap, and take the frames in flight back on
+    @@ tests/programs/src/bin/smp-inflight-race.rs: pub extern "C" fn _start() -> ! {
+              b.check(filled, format_args!("a filler holds budget {parent}'s free pages but {keep}"));
+          }
+     
+    + ## tests/programs/src/bin/smp-shootdown.rs ##
+    +@@ tests/programs/src/bin/smp-shootdown.rs: extern "C" fn checker(_: usize) -> ! {
+    +     if !matches!(rd::receive(Some(2), WAIT, 0), Ok(Received::Message(m)) if m.body.words[0] == GO) {
+    +         rd::process_exit(1);
+    +     }
+    +-    let pages = rd::map_anon(CHECKED * rd::PAGE_SIZE, rd::rw()).unwrap_or_else(|_| rd::process_exit(2));
+    ++    let pages = rd::map_anon_run(CHECKED * rd::PAGE_SIZE, rd::rw()).unwrap_or_else(|_| rd::process_exit(2));
+    +     let words = CHECKED * rd::PAGE_SIZE / 8;
+    +     let start = rd::time_now().unwrap_or(0);
+    +     let mut dirty = 0usize;
+    +
+      ## tests/programs/src/bin/stub-launch.rs ##
+     @@ tests/programs/src/bin/stub-launch.rs: fn launch(budget: u32, image: &[u8], image_len: usize, layout: Layout) -> Result
+      
+    @@ tests/programs/src/bin/syscall-attack.rs: pub extern "C" fn _start() -> ! {
+      
+          // Survived every attempt; the checker powers off under its own PID.
+     
+    + ## tests/programs/src/bin/thread-limit.rs ##
+    +@@ tests/programs/src/bin/thread-limit.rs: extern "C" fn parked(_arg: usize) -> ! { test_programs::park() }
+    + /// The child: every stack first, then a call, so its budget moves only for the threads between
+    + /// that call and the next; then it reports what the kernel answered and exits.
+    + extern "C" fn holder(_arg: usize) -> ! {
+    +-    let stacks = rd::map_anon(MAX_THREADS * rd::PAGE_SIZE, rd::rw()).expect("the stacks");
+    ++    let stacks = rd::map_anon_run(MAX_THREADS * rd::PAGE_SIZE, rd::rw()).expect("the stacks");
+    +     rd::call(PARENT, &rd::body([0; 4]), None, WAIT).expect("the stacks are mapped");
+    +     // The initial thread holds one TID; every other one is created here, each on its own page.
+    +     // One bit per TID 0..=MAX_THREADS.
+    +
+      ## tests/programs/src/bin/touch-beyond-ram.rs ##
+     @@
+      //! Attack test, attacker role: map and touch far more anonymous memory than the machine has
+    @@ tests/programs/src/rd.rs: pub fn set_flags(addr: usize, len: usize, flags: MemFl
+          redoubt_sys::syscall(&Call::SetFlags { addr, len, flags }).map(|_| ())
+      }
+      
+    -+/// `call` on each range of at most `MAX_RANGE_PAGES` pages covering `[addr, addr + len)`, in
+    -+/// order, with its offset from `addr`, stopping at the first refused: one range call names at most
+    -+/// that many pages (kernel/memory.md, R22). For a case's setup that maps, moves or gives back more
+    -+/// than one call may name; the cases that test a range call itself make it whole.
+    -+pub fn each_range(len: usize, mut call: impl FnMut(usize, usize) -> Result<(), Error>) -> Result<(), Error> {
+    -+    const RANGE: usize = MAX_RANGE_PAGES * PAGE_SIZE;
+    -+    if len == 0 {
+    -+        return call(0, 0);
+    -+    }
+    -+    for done in (0..len).step_by(RANGE) {
+    -+        call(done, (len - done).min(RANGE))?;
+    -+    }
+    -+    Ok(())
+    ++/// `call` on each range of `[0, len)` a range call may name ([`redoubt_sys::range_chunks`]), as
+    ++/// offsets, stopping at the first refused: for a case's setup that maps, moves or gives back more
+    ++/// than one call may name (kernel/memory.md, R22); the cases that test a range call itself make it
+    ++/// whole.
+    ++fn each_range(len: usize, call: impl FnMut((usize, usize)) -> Result<(), Error>) -> Result<(), Error> {
+    ++    redoubt_sys::range_chunks(0, len).try_for_each(call)
+     +}
+     +
+     +/// One run of `len` bytes at an address the kernel chooses, however long: its first range by
+    @@ tests/programs/src/rd.rs: pub fn set_flags(addr: usize, len: usize, flags: MemFl
+     +pub fn map_anon_run(len: usize, flags: MemFlags) -> Result<usize, Error> {
+     +    let first = map_anon(len.min(MAX_RANGE_PAGES * PAGE_SIZE), flags)?;
+     +    let mut mapped = 0;
+    -+    let made = each_range(len, |at, n| {
+    ++    let made = each_range(len, |(at, n)| {
+     +        if at != 0 {
+     +            map_fixed(first + at, n, flags)?;
+     +        }
+    @@ tests/programs/src/rd.rs: pub fn set_flags(addr: usize, len: usize, flags: MemFl
+     +    }
+     +}
+     +
+    -+/// `map_fixed` of `[addr, addr + len)`, a range at a time ([`each_range`]).
+    -+pub fn map_fixed_run(addr: usize, len: usize, flags: MemFlags) -> Result<(), Error> {
+    -+    each_range(len, |at, n| map_fixed(addr + at, n, flags))
+    -+}
+    -+
+     +/// `unmap` of `[addr, addr + len)`, a range at a time ([`each_range`]).
+     +pub fn unmap_run(addr: usize, len: usize) -> Result<(), Error> {
+    -+    each_range(len, |at, n| unmap(addr + at, n))
+    ++    each_range(len, |(at, n)| unmap(addr + at, n))
+     +}
+     +
+      /// Read-write pages: what almost every caller wants.
+    @@ tests/programs/src/rd.rs: pub fn process_map(process: u32, src: usize, dst: usiz
+     +    len: usize,
+     +    flags: MemFlags,
+     +) -> Result<(), Error> {
+    -+    each_range(len, |at, n| process_map(process, src + at, dst + at, n, flags))
+    ++    each_range(len, |(at, n)| process_map(process, src + at, dst + at, n, flags))
+     +}
+     +
+      /// `process_start(h(process), entry, sp, arg, handles)`: the handles land in the child's
+    @@ tests/programs/src/sched.rs: pub enum Role {
+     -    /// Take a page in every 2 MiB span of the `map_anon` area, then ask for 2 MiB until the window
+     -    /// ends, each request refused after a search of the whole area, R12's costliest call
+     -    /// (`map-anon-search-bound`); report the refusals.
+    -+    /// Take a page in every span of the `map_anon` area ([`HAMMER_PAGES`] long) before the window,
+    ++    /// Take a page in every span of the `map_anon` area (`MAX_RANGE_PAGES` long) before the window,
+     +    /// then ask for a span until the window ends, each request refused after a search of the whole
+     +    /// area, R12's costliest call (`map-anon-search-bound`); report the refusals.
+          SearchHammer = 32,
+    @@ tests/programs/src/sched.rs: fn search_hammer(end: u64) -> u64 {
+     +
+     +/// The `map_anon` area and the span [`search_hammer`] asks for: the most a range call may name, so
+     +/// the shortest refused search a hammer can make (kernel/scheduling.md, R78). A refused search costs
+    -+/// a walk for each start it tries, so a page in every `HAMMER_PAGES` pages and a request of as many
+    -+/// makes it read the whole area through 65,536 / `HAMMER_PAGES` starts (kernel/memory.md, R22).
+    ++/// a walk for each start it tries, so a page in every `MAX_RANGE_PAGES` pages and a request of as
+    ++/// many makes it read the whole area through 65,536 / `MAX_RANGE_PAGES` starts (kernel/memory.md,
+    ++/// R22).
+      const SEARCH_AREA: core::ops::Range<usize> = 0x6000_0000..0x7000_0000;
+     -const SPAN: usize = 2 << 20;
+    -+const HAMMER_PAGES: usize = rd::MAX_RANGE_PAGES;
+    -+const SPAN: usize = HAMMER_PAGES * rd::PAGE_SIZE;
+    ++const SPAN: usize = rd::MAX_RANGE_PAGES * rd::PAGE_SIZE;
+     +/// The spans of the area.
+     +const SPANS: usize = (SEARCH_AREA.end - SEARCH_AREA.start) / SPAN;
+     +
+    @@ tests/programs/src/sched.rs: fn run_child(arg: usize, more: Option<fn(Option<Rol
+          if let Some(more) = more {
+              more(role, false);
+          }
+    -+    // A search hammer pins its area before its window, which then holds its searches alone.
+    -+    if matches!(role, Some(Role::SearchHammer)) {
+    ++    // A search hammer pins its area before its window, which then holds its searches alone: when
+    ++    // its pins were done, to tell its window they were.
+    ++    let pinned = matches!(role, Some(Role::SearchHammer)).then(|| {
+     +        let _ = fill_search_area();
+    -+    }
+    ++        ticks()
+    ++    });
+          let (start, end) = window();
+          let tpu = tpu();
+          set_end(end);
+     @@ tests/programs/src/sched.rs: fn run_child(arg: usize, more: Option<fn(Option<Role>, bool)>) -> ! {
+    +                 rd::send(1, &rd::body([rd::time_now().unwrap_or(0) as usize, 0, 0, 0]), None, rd::FOREVER);
+                  rd::process_exit(0)
+              }
+    ++        // `u64::MAX` if the pins ran into the window, whose searches were then not all the area's.
+    ++        Some(Role::SearchHammer) if pinned.is_some_and(|at| at > start) => u64::MAX,
+              Some(Role::SearchHammer) => search_hammer(end),
+     +        Some(Role::RangeHammer) => range_hammer(end),
+     +        Some(Role::SearchAlone) => search_alone(),
+    @@ tests/programs/src/sched.rs: pub fn lock_contention(hammers: usize) -> ! {
+     +    let (_, end) = b.go(10_000_000, window);
+          // The hammers' refusals and the driver's two reports.
+          let words = b.collect_words(hammers.len() + 2);
+    -     let refused: u64 = hammers.iter().map(|&i| join(words[i][0][0], words[i][0][1])).sum();
+    +-    let refused: u64 = hammers.iter().map(|&i| join(words[i][0][0], words[i][0][1])).sum();
+    ++    let counts = || hammers.iter().map(|&i| join(words[i][0][0], words[i][0][1]));
+    ++    b.check(
+    ++        counts().all(|n| n != u64::MAX),
+    ++        format_args!("every hammer pinned its area before the window opened"),
+    ++    );
+    ++    let refused: u64 = counts().filter(|n| *n != u64::MAX).sum();
+    +     b.note(format_args!("{} hammers' searches refused: {}", hammers.len(), refused));
+    +     let stat = |tag: usize| words[d].iter().find(|w| w[3] & 0xff == tag && w[3] >> 8 > 0).copied();
+    +     match stat(Stats::DRIVER_WAKE) {
+     @@ tests/programs/src/sched.rs: pub fn lock_contention(hammers: usize) -> ! {
+              None => b.check(false, format_args!("driver wake: no samples")),
+          }
+    @@ tests/programs/src/sched.rs: pub fn lock_contention(hammers: usize) -> ! {
+     +    let h = b.start(hammer, Role::RangeHammer, &[], &[]);
+     +    // The window in the kernel's ticks, counted from its boot as the sections are.
+     +    let start = b.now_us() * b.tpu;
+    -+    b.go(50_000, WINDOW);
+    ++    let (_, window_end) = b.go(50_000, WINDOW);
+     +    // The hammer's report and the driver's two.
+     +    let words = b.collect_words(3);
+     +    let end = (b.now_us() + 1) * b.tpu;
+    @@ tests/programs/src/sched.rs: pub fn lock_contention(hammers: usize) -> ! {
+     +        None => b.check(false, format_args!("driver wake: no samples")),
+     +    }
+     +    b.check(mapped > 0, format_args!("the hammer mapped its ranges"));
+    -+    let _ = b.samples(d, &words[d], format_args!("contention"));
+    ++    let last = b.samples(d, &words[d], format_args!("contention"));
+    ++    b.check(
+    ++        last <= window_end,
+    ++        format_args!(
+    ++            "every driver wake fell inside the hammer's window: the last at {last} µs, the window's end {window_end}"
+    ++        ),
+    ++    );
+     +    b.finish("SCHED-RANGE-HAMMER")
+     +}
+     +
+    @@ tests/sched-lock-contention-4-mttcg.toml: kernel_features = ["lock-trace"]
+      timeout_secs = 600
+      expect = [
+          '^\[lock-contention\] one search alone: p50 \d+ µs, max \d+ µs \(21 searches\)$',
+    ++    '^\[lock-contention\] ok: every hammer pinned its area before the window opened$',
+          '^\[lock-contention\] 3 hammers. searches refused: \d+$',
+          '^\[lock-contention\] driver wake: .*: gross, audits included; net in the post-check',
+          '^LATENCY-SAMPLE contention driver_wake \d+ \d+$',
+    @@ tests/sched-lock-contention-4.toml: kernel_features = ["hold-trace"]
+      post_check = "sched_oracle driver_wake_p50_us=15000 gate_harts=2"
+      timeout_secs = 1200
+      expect = [
+    ++    '^\[lock-contention\] ok: every hammer pinned its area before the window opened$',
+          '^\[lock-contention\] 3 hammers. searches refused: \d+$',
+          '^\[lock-contention\] driver wake: .*: gross, audits included; net in the post-check',
+          '^LATENCY-SAMPLE contention driver_wake \d+ \d+$',
+    @@ tests/sched-lock-contention.toml
+     -# `sched-lock-contention-4`'s.
+     +# `sched-lock-contention-4`'s. Each hammer asks for the most a range call may name
+     +# (`MAX_RANGE_PAGES`, 16 pages) after taking a page in every 64 KiB window of the `map_anon`
+    -+# area, 4,096 pages of its budget: no request fits, so each refusal still reads every page table
+    -+# of the area, the search a longer request once took past a page in every 2 MiB span.
+    ++# area, 4,096 pages of its budget, all pinned before the window: no request fits, so each refusal
+    ++# reads every page table of the area through 4,096 starts, the shortest refused search a request
+    ++# at the cap can be made to take (kernel/memory.md, R22).
+      smp = [2]
+      keep_smp = true
+      # Test builds only: the trace ring with each lock wait's ticket (never in a default kernel).
+    @@ tests/sched-lock-contention.toml: kernel_features = ["hold-trace"]
+     +post_check = "sched_oracle driver_wake_p50_us=15000 driver_wake_p99_us=50000 record=rv64:2:contention:driver_wake:p50 record=rv64:2:contention:driver_wake:p99 record=rv32:2:contention:driver_wake:p50 record=rv32:2:contention:driver_wake:p99"
+      timeout_secs = 1200
+      expect = [
+    ++    '^\[lock-contention\] ok: every hammer pinned its area before the window opened$',
+          '^\[lock-contention\] 1 hammers. searches refused: \d+$',
+          '^\[lock-contention\] driver wake: .*: gross, audits included; net in the post-check',
+          '^LATENCY-SAMPLE contention driver_wake \d+ \d+$',
+    @@ tests/sched-range-hammer.toml (new)
+     +    '^\[range-hammer\] driver wake: .*: gross, audits included; net in the post-check',
+     +    '^\[range-hammer\] ok: the hammer mapped its ranges$',
+     +    '^LATENCY-SAMPLE contention driver_wake \d+ \d+$',
+    ++    '^\[range-hammer\] ok: every driver wake fell inside the hammer.s window: the last at \d+ µs, the window.s end \d+$',
+     +    '^SCHED-RANGE-HAMMER TEST PASSED$',
+     +    '^SCHED-TRACE-END \d+ dropped 0$',
+     +]
+    @@ tests/size-budget.toml: kind = "size-budget"
+      
+      [[crate]]
+      name = "loader"
+    -@@ tests/size-budget.toml: max_lines = 375
+    +@@ tests/size-budget.toml: max_lines = 364
+      [[crate]]
+      name = "libs/sys"
+      paths = ["libs/sys/src"]
+    --max_lines = 1041
+    -+max_lines = 1044
+    +-max_lines = 1045
+    ++max_lines = 1048
+      
+      [[crate]]
+      name = "libs/layout"

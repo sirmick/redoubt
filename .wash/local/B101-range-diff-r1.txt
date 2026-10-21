@@ -1,0 +1,394 @@
+1:  4b78610a8 ! 1:  00e9a0cb9 kernel: a release of the kernel lock wakes only the hart whose turn it serves
+    @@ Commit message
+         sequentially consistent, so either the release reads the marks after the
+         waiter's mark, and sees it and the ticket recorded before it, or the
+         waiter's read of `serving` after its mark sees its turn. The wait set and
+    -    the release's choice are a small crate, redoubt-ticket, whose host test
+    -    runs a release beside a wait over all 863 orders of their steps; a crate
+    -    built to read `serving` before the mark, or to wake nobody, fails it.
+    +    the release's choice are a small crate, redoubt-ticket, whose host tests
+    +    run a release beside a wait over all 597 orders of their steps, and all
+    +    5,961 when the waiter's halt may also end once with no wake and it marks
+    +    itself again; a crate built to read `serving` before the mark, or to
+    +    wake nobody, fails both.
+     
+         A wake's interrupt to an idle hart still goes at once, and the woken hart
+         may halt on the lock its waker holds (15 to 22 % of the hand-off
+    @@ docs/SECURITY.md: lines planned. Side channels cross every box and are listed be
+      | Destroying a budget destroys everything below it, in a fixed order, and returns its resources to its parent; a reap does so for one child and keeps the budget | [R10 (destruction)](kernel/budgets.md#r10-destruction) | `kernel/src/budget.rs`, `kernel/src/time.rs` | bench:budget, bench:budget-destroy-attack, bench:budget-destroy-kills, bench:budget-destroy-growth, bench:budget-deadline, bench:deadline-flood-billed, bench:redoubt-revoke, bench:process-attack, bench:pid-pinning-attack, bench:endpoint-destroy-open-calls, bench:endpoint-destroy-full, bench:handle-chain-attack, bench:handle-chain-fault, bench:process-chain-fault, bench:sched-destroy-billing, bench:dma-reset-quarantine, bench:dma-destroy-quarantine, bench:budget-reap, host:redoubt-model::budget_lifecycles, host:redoubt-model::quarantine_charge_moves_to_a_parent_at_its_limit, host:redoubt-model::a_reap_destroys_one_child_and_keeps_the_budget, host:redoubt-model::a_destruction_delivers_at_its_end, mutation:R10KeepForeignHandles, mutation:R10KeepCarvedLimits, mutation:R10SpareDescendantProcesses, mutation:R10ExitNoticesOutlivePayer, mutation:R10RevokedMessageDelivered, mutation:R10RevokedCallAnswered, mutation:R10SweptHandlesDropped, mutation:R10CreatorDeathSparesProcess, mutation:R10HeldPidsDropped, mutation:R10ReapDestroysParent, mutation:R10ReapKeepsCarve, mutation:R10ReapSkipsGrandchildren, mutation:R10DeliveredMidDestruction, mutation:ExpireBudgetsFirst, mutation:BudgetDeadlineIgnored | built, partly tested | Destruction is uninterruptible kernel time; a process entering the kernel in a tight loop to put its deadline off is not attacked ([the timer's part](kernel/timer.md#r10-destruction-at-a-deadline-a-passed-deadline-comes-first), [more](kernel/budgets.md#residual-risks)) |
+      | A budget's CPU follows its free weight, in one queue with no priority | [R12 (scheduling)](kernel/scheduling.md#r12-scheduling) | `kernel/src/sched.rs`, `libs/stride/src/lib.rs` | bench:sched-share, bench:steward-latency, bench:steward-latency-n4, bench:steward-latency-n16, bench:sched-share-release, bench:sched-capped, bench:sched-capped-mttcg, bench:sched-capped-holds-floor, bench:sched-sleep-gaming, bench:sched-idle-gap, bench:sched-exit-churn, bench:sched-budget-churn, bench:sched-budget-churn-shell, bench:sched-carve-inflation, bench:sched-debt-lift, bench:sched-lift-delay, bench:sched-timer-flood, bench:sched-server-busy, bench:sched-large-weight, bench:sched-large-weight-release, bench:deadline-flood-billed, bench:deadline-flood-billed-traced, bench:deadline-flood-billed-traced-mttcg, bench:sched-exit-churn-mttcg, bench:deadline-placement, bench:sched-carve-return, bench:map-anon-search-bound, bench:scan-bounds, bench:call-bounds, bench:worst-walk, host:redoubt-stride::the_crate_and_the_model_agree, host:redoubt-stride::a_broken_model_disagrees, host:redoubt-stride::a_slice_end_reads_no_more_states_for_a_longer_queue, host:redoubt-stride::a_rank_out_of_step_with_its_frame_trips_the_audit, host:redoubt-model::scheduler_fairness, host:redoubt-model::scheduler_contracts_hold, mutation:R12PriorityById, mutation:R12IgnoreWeight, mutation:R12WakeBanksCredit, mutation:R12TieQueuedFirst, mutation:R12RequeueAhead, mutation:R12RequeueLifo, mutation:R12PreemptOnWake, mutation:R12TimeoutWakePreempts, mutation:R12NoFloorWhenIdle, mutation:R12ShortRunsFree, mutation:R12DropRemainder, mutation:R12ExitRunsFree, mutation:R12DestroyDropsDebt, mutation:R12CreateAtFloorOnly, mutation:R12LiftByMax, mutation:R12StrideWeightIsLimit, mutation:R12UnnormalizedLift, mutation:R12LiftCountsEntryWait, mutation:R12FoldAtNewWeight, mutation:R12NoMinimumCharge, mutation:R12DeadlineWorkUnbilled, mutation:R12RescaleOnlyOnReturn, mutation:R12SliceCountsExitWork, mutation:R12TimerWorkUnbilled, mutation:R12SwitchBilledToPrevious, mutation:R12CappedHoldsFloor, mutation:R12CapOnce, mutation:R12AllCappedHoldsFloor, mutation:R12UncapBanksCredit, mutation:R12UncapForfeitsWait, mutation:R12EmptyHoldsFloor, mutation:R12RequeueWaitsForCap, mutation:R12BlockLeavesAsRequeued, mutation:R12OneRunnerPerBudget, mutation:R12SpreadChargesOnce | built, partly tested | Server work is paid by the server's weight; wakeup is prompt but not bounded, and the steward decision-wake target is missed on rv64 ([the timer's part](kernel/timer.md#r12-scheduling-for-timer-work), [more](kernel/scheduling.md#residual-risks)) |
+     -| On several harts, a hart waits for kernel entry behind at most `MAX_HARTS` - 1 kernel sections: the kernel lock is FIFO, so no budget's harts can starve another's of the kernel | [R78 (fair kernel entry)](kernel/scheduling.md#r78-fair-kernel-entry) | `kernel/src/cell.rs` | bench:smp-boot, bench:smp-lock-wait, bench:sched-lock-contention, bench:sched-lock-contention-4, bench:sched-lock-contention-4-mttcg, bench:irq-boot-hart-only, host:testbench::lock_waits_take_the_lock_in_ticket_order | built | The bound is by hart count, not time; a long kernel section delays every waiting hart by its length, and at two harts a wake behind R12's costliest call waits about two of its sections ([more](kernel/scheduling.md#residual-risks)) |
+    -+| On several harts, a hart waits for kernel entry behind at most `MAX_HARTS` - 1 kernel sections: the kernel lock is FIFO, so no budget's harts can starve another's of the kernel | [R78 (fair kernel entry)](kernel/scheduling.md#r78-fair-kernel-entry) | `kernel/src/cell.rs` | bench:smp-boot, bench:smp-lock-wait, bench:smp-lock-wait-4-mttcg, bench:sched-lock-contention, bench:sched-lock-contention-4, bench:sched-lock-contention-4-mttcg, bench:irq-boot-hart-only, host:testbench::lock_waits_take_the_lock_in_ticket_order, host:redoubt-ticket::no_hart_halts_past_its_turn_and_a_release_wakes_only_the_hart_it_serves | built | The bound is by hart count, not time; a long kernel section delays every waiting hart by its length, and at two harts a wake behind R12's costliest call waits about two of its sections ([more](kernel/scheduling.md#residual-risks)) |
+    ++| On several harts, a hart waits for kernel entry behind at most `MAX_HARTS` - 1 kernel sections: the kernel lock is FIFO, so no budget's harts can starve another's of the kernel | [R78 (fair kernel entry)](kernel/scheduling.md#r78-fair-kernel-entry) | `kernel/src/cell.rs` | bench:smp-boot, bench:smp-lock-wait, bench:smp-lock-wait-4-mttcg, bench:sched-lock-contention, bench:sched-lock-contention-4, bench:sched-lock-contention-4-mttcg, bench:irq-boot-hart-only, host:testbench::lock_waits_take_the_lock_in_ticket_order, host:redoubt-ticket::no_hart_halts_past_its_turn_and_a_release_wakes_only_the_hart_it_serves, host:redoubt-ticket::a_halt_ended_with_no_wake_marks_again_and_is_still_woken | built | The bound is by hart count, not time; a long kernel section delays every waiting hart by its length, and at two harts a wake behind R12's costliest call waits about two of its sections ([more](kernel/scheduling.md#residual-risks)) |
+      | The production kernel carries no test-only diagnostic channel | [R23 (no test channels)](kernel/scheduling.md#r23-no-test-channels) | `kernel/src/sched.rs`, `kernel/Cargo.toml` | bench:bench-no-trace, bench:bench-trace-scan-catches, bench:bench-test-only-refused | built | Test builds carry more ([more](kernel/scheduling.md#residual-risks)) |
+      | **Kernel: processes and devices** | | | | | |
+      | A reused PID inherits nothing of the process that had it | [R20 (PID reuse)](kernel/processes.md#r20-pid-reuse) | `kernel/src/process.rs` | bench:pid-reuse-authority, bench:process-attack, bench:process-lifecycle, host:redoubt-model::pid_reuse_only_after_notice_receipt | built | PIDs are one global pool held by untaken notices ([more](kernel/processes.md#residual-risks)) |
+    @@ docs/kernel/README.md: programs DMA without hardware to confine it ([devices](de
+      | `paging`, the Sv32/Sv39 page-table types | `libs/paging/src` | 625 | 12 |
+      | `redoubt-layout`, the kernel-half map and PIDs | `libs/layout/src` | 225 | 0 |
+      | `redoubt-stride`, the scheduling rules | `libs/stride/src` | 2,143 (831 of them host tests) | 0 |
+    -+| `redoubt-ticket`, the kernel lock's waits | `libs/ticket/src` | 323 (216 of them host tests) | 0 |
+    ++| `redoubt-ticket`, the kernel lock's waits | `libs/ticket/src` | 332 (229 of them host tests) | 0 |
+      | `redoubt-signing`, the bundle signature preimage | `libs/signing/src` | 149 | 0 |
+      | `blkd`, the virtio-blk driver (DMA) | `servers/blkd/src` | 3,410 | 4 |
+      | `netd`, the virtio-net driver (DMA) | `servers/netd/src` | 2,430 | 8 |
+      
+     -Without the firmware, the TCB Redoubt writes is 28,921 lines. The kernel's `unsafe` is split
+    -+Without the firmware, the TCB Redoubt writes is 29,244 lines. The kernel's `unsafe` is split
+    ++Without the firmware, the TCB Redoubt writes is 29,253 lines. The kernel's `unsafe` is split
+      three ways in the ratchet:
+      
+      | Ratchet budget | What its `unsafe` does | `unsafe` (pinned) |
+    @@ docs/kernel/scheduling.md: It is attacked three ways:
+      ### R78 (fair kernel entry)
+      
+     -Status: built · tested: bench:smp-boot, bench:smp-lock-wait, bench:sched-lock-contention, bench:sched-lock-contention-4, bench:sched-lock-contention-4-mttcg, bench:irq-boot-hart-only, host:testbench::lock_waits_take_the_lock_in_ticket_order
+    -+Status: built · tested: bench:smp-boot, bench:smp-lock-wait, bench:smp-lock-wait-4-mttcg, bench:sched-lock-contention, bench:sched-lock-contention-4, bench:sched-lock-contention-4-mttcg, bench:irq-boot-hart-only, host:testbench::lock_waits_take_the_lock_in_ticket_order, host:redoubt-ticket::no_hart_halts_past_its_turn_and_a_release_wakes_only_the_hart_it_serves
+    ++Status: built · tested: bench:smp-boot, bench:smp-lock-wait, bench:smp-lock-wait-4-mttcg, bench:sched-lock-contention, bench:sched-lock-contention-4, bench:sched-lock-contention-4-mttcg, bench:irq-boot-hart-only, host:testbench::lock_waits_take_the_lock_in_ticket_order, host:redoubt-ticket::no_hart_halts_past_its_turn_and_a_release_wakes_only_the_hart_it_serves, host:redoubt-ticket::a_halt_ended_with_no_wake_marks_again_and_is_still_woken
+      
+      On several harts, kernel entry is fair across them: the one kernel lock is a FIFO ticket lock,
+      so a hart that arrives at the kernel waits behind at most `MAX_HARTS` - 1 kernel sections, never
+    @@ docs/kernel/scheduling.md: harts ([several harts](../plan/m2-usable-shell.md#sev
+     +and, if its turn has not come, halts (`wfi`) until an interrupt is pending; the release sends the
+     +reschedule interrupt (through the firmware, SBI) to the one marked hart whose ticket it serves,
+     +and the woken hart reads `serving` again. Every other waiter's turn has not come, and woken it
+    -+would only halt again: before, the release woke every marked hart, and at rest 36 % of the
+    -+lock's hand-off interrupts were such a hart halting again (`bench:launch-idle`'s trap log). The
+    ++would only halt again: a release that woke every marked hart spent 36 % of the lock's hand-off
+    ++interrupts at rest on such harts (`bench:launch-idle`'s trap log). The
+      halt waits for the reschedule interrupt alone: the timer's and a device's are masked in `sie` for
+      it (`arch::halt_for_ipi`), since a hart without the lock cannot take them, and one pending would
+      end every halt at once and turn the wait into a spin. A hart whose awaited interrupt is already
+    @@ docs/kernel/scheduling.md: hart regardless and, under `icount`, runs it again on
+     -each for a woken thread's own work (`bench:launch-idle`). The
+     -mark, the read, the release's store and its read of the set are sequentially consistent, so either
+     -the release sees the mark or the waiter sees the new ticket: no hart halts past its turn. Under
+    -+halted, each hand-off an interrupt, and 1.7 to 1.9 times a second with the rule when it was
+    -+measured (`bench:launch-idle`; the same kernel reads more today, [the machine at
+    -+rest](../testbench.md#the-machine-at-rest)). A hart halts on the lock at rest 3.4 to 3.5 times a
+    -+second with the release waking the hart it serves, against 5.0 to 5.2 when it woke every waiting
+    -+hart. The
+    ++halted, each hand-off an interrupt. With the rule, and the release waking the hart it serves, a
+    ++hart halts on the lock at rest 3.4 to 3.5 times a second across the machine, each for a woken
+    ++thread's own work; a release that wakes every waiting hart makes it 5.0 to 5.2
+    ++(`bench:launch-idle`, [the machine at rest](../testbench.md#the-machine-at-rest)). The
+     +record, the mark, the read, the release's store and its reads of the set and the tickets are
+     +sequentially consistent, so they fall in one order: either the release reads the set after the
+     +mark, and sees it and the ticket recorded before it, or before, and then the waiter's read, after
+     +its mark, sees the new ticket: no hart halts past its turn. `redoubt-ticket` holds the record, the
+    -+mark and the release's choice, and its host test runs a release beside a wait over all 863 orders
+    -+of their steps, a later ticket's hart halted beside them: no hart is left halted past its turn,
+    -+and none but the served one is woken. A crate built to read `serving` before the mark
+    -+(`read-before-mark`) or to wake nobody (`wake-none`) fails it, in recorded negative runs. Under
+    ++mark and the release's choice, and its host tests run a release beside a wait over all 597 orders
+    ++of their steps, a later ticket's hart halted beside them, and over all 5,961 when the waiter's halt
+    ++may also end once with no wake, as a shootdown's interrupt ends it, and it marks itself again: no
+    ++hart is left halted past its turn, and none but the served one is woken. A crate built to read
+    ++`serving` before the mark or to wake nobody fails both, in recorded negative runs
+    ++(`cargo test -p redoubt-ticket --features read-before-mark`, and `--features wake-none`). Under
+      QEMU's `icount`, where the harts take turns on one host thread and the clock counts every running
+      hart's instructions, a spinning hart would spend its turns and the guest's time while the holder
+      waited for them, and a halted one gives them up. Spinning cost every case at two harts:
+    @@ docs/kernel/scheduling.md: at once may take at most three times as long. Halted
+      `bench:sched-lock-contention` holds the order in time, under R12's costliest call: on every hart
+      but one a budget asks in a loop for a `map_anon` refused after a search of the whole area
+     
+    - ## docs/testbench.md ##
+    -@@ docs/testbench.md: a disk or a userland disk (38 cases; the rule for a disk is above); host sockets
+    - `poke`, a peer or a dial (8); input the host types on the console, `[[input]]` (4; under `icount`
+    - the rv32 UART lost a burst of it); and a run whose purpose is the host's
+    - time (`asid-cost-host`, `sched-latency-tcg`, `timeouts-tcg`, and `smp-evict-mttcg`,
+    --`smp-shootdown-mttcg`, `console-one-writer`, `sched-lock-contention-4-mttcg` and
+    --`beamlet-schedulers-mttcg`, which need QEMU's multi-threaded TCG; its one-hart twin
+    -+`smp-shootdown-mttcg`, `console-one-writer`, `sched-lock-contention-4-mttcg`,
+    -+`smp-lock-wait-4-mttcg` and `beamlet-schedulers-mttcg`, which need QEMU's multi-threaded TCG; its one-hart twin
+    - `beamlet-schedulers-one-hart` runs in guest time, since on one hart what it measures is the
+    - instructions two schedulers' switching costs). Several harts do not keep a case
+    - on the host's clock: under `icount` QEMU runs the harts in turn on one host thread, and a hart
+    -@@ docs/testbench.md: than asks it, through the scheduler's `qemu` lock (the `scripts/q` paragraph bel
+    - a wall-clock bound (`redoubt-rt`, `redoubt-client`, `redoubt-keyd` and `redoubt-consoled` do;
+    - `redoubt-ipd`, `redoubt-model` and `testbench` only read the clock), which no tolerance would
+    - make load-proof; a boot case whose bound is a ratio of two host times (`sched-lock-contention-4-mttcg`:
+    --a stalled vCPU thread lengthens a wake but not the search it is counted in; `beamlet-schedulers-mttcg`:
+    -+a stalled vCPU thread lengthens a wake but not the search it is counted in; `smp-lock-wait-4-mttcg`:
+    -+a stalled vCPU thread lengthens the calls at once, which wait on four, more than the calls in turn;
+    -+`beamlet-schedulers-mttcg`:
+    - a stalled vCPU thread lengthens one of the two runs it compares, and on the quiet set's four cores
+    - alone its one-hart twin read 81 to 95 for a ratio that is 94 in guest time, which is why that twin
+    - runs under `icount`); a case whose expectation is a timeout (`bench-ssh-guest`, and
+    -
+      ## kernel/Cargo.toml ##
+     @@ kernel/Cargo.toml: version = "0.9.38"
+      resolver = "2"
+    @@ kernel/src/cell.rs: impl TicketLock {
+     -            let halted = self.halted.load(Ordering::SeqCst);
+     -            if halted != 0 {
+     -                crate::arch::hart::wake_halted(halted as usize);
+    --            }
+     +            // Sequentially consistent against the waiter's record, mark and re-read
+     +            // ([`Self::wait_for_turn`]): either the release sees its mark and ticket, or its re-read
+     +            // sees the new ticket, so no hart halts past its turn (`redoubt-ticket`).
+    -+            crate::arch::hart::wake_halted(self.waits.release(&self.serving) as usize);
+    ++            if let Some(hart) = self.waits.release(&self.serving) {
+    ++                crate::arch::hart::wake_halted(1 << hart);
+    +             }
+              }
+              #[cfg(feature = "sched-test-and-set-entry")]
+              {
+    @@ libs/ticket/src/lib.rs (new)
+     +        self.wait_stepped(hart, ticket, serving, halt, &|| {})
+     +    }
+     +
+    -+    /// Advance `serving` by one, the lock's release, which only its holder makes; the harts to
+    -+    /// wake, a bit each: the marked hart whose ticket is now served, if any.
+    -+    pub fn release(&self, serving: &AtomicU32) -> u32 { self.release_stepped(serving, &|| {}) }
+    ++    /// Advance `serving` by one, the lock's release, which only its holder makes; the hart to wake:
+    ++    /// the marked hart whose ticket is now served, if any.
+    ++    pub fn release(&self, serving: &AtomicU32) -> Option<usize> { self.release_stepped(serving, &|| {}) }
+     +
+     +    /// [`Self::wait`], with `step` before each shared access (the host test's interleaving).
+     +    fn wait_stepped(
+    @@ libs/ticket/src/lib.rs (new)
+     +    }
+     +
+     +    /// [`Self::release`], with `step` before each shared access.
+    -+    fn release_stepped(&self, serving: &AtomicU32, step: &impl Fn()) -> u32 {
+    ++    fn release_stepped(&self, serving: &AtomicU32, step: &impl Fn()) -> Option<usize> {
+     +        step();
+     +        let next = serving.load(SeqCst).wrapping_add(1);
+     +        step();
+    @@ libs/ticket/src/lib.rs (new)
+     +        step();
+     +        let halted = self.halted.load(SeqCst);
+     +        if cfg!(feature = "wake-none") {
+    -+            return 0;
+    ++            return None;
+     +        }
+    -+        let mut wake = 0;
+    -+        for hart in (0..N).filter(|h| halted & 1 << h != 0) {
+    ++        (0..N).filter(|h| halted & 1 << h != 0).find(|&hart| {
+     +            step();
+    -+            if self.tickets[hart].load(SeqCst) == next {
+    -+                wake |= 1 << hart;
+    -+            }
+    -+        }
+    -+        wake
+    ++            self.tickets[hart].load(SeqCst) == next
+    ++        })
+     +    }
+     +}
+     
+    @@ libs/ticket/src/tests.rs (new)
+     +//! choices. Every access is sequentially consistent, so these orders are every execution the two
+     +//! sides have.
+     +//!
+    -+//! A halted hart runs again only once a wake is pending for it, as an interrupt stays pending
+    -+//! for a `wfi` (the kernel's halt returns at once then, and clears it). Checked in every run: hart 1
+    -+//! is never left halted with nothing to wake it (a lost wake-up), and the release wakes neither
+    -+//! hart 2, whose turn has not come, nor any hart that then finds its turn has not come.
+    ++//! A halted hart runs again once a wake is pending for it, as an interrupt stays pending for a `wfi`
+    ++//! (the kernel's halt returns at once then, and clears it). In the second test a halt may also end
+    ++//! once with no wake, as the kernel's does for a shootdown's interrupt or one that was already
+    ++//! pending, and the hart marks itself again. Checked in every run: hart 1 is never left halted
+    ++//! with nothing to wake it (a lost wake-up), and the release wakes neither hart 2, whose turn has
+    ++//! not come, nor any hart that then finds its turn has not come.
+     +
+     +extern crate std;
+     +
+    @@ libs/ticket/src/tests.rs (new)
+     +const HARTS: usize = 3;
+     +/// The harts that run: hart 2 stays halted.
+     +const RUN: usize = 2;
+    ++/// How many orders the steps have: with no halt ended without a wake, and with one.
+    ++const ORDERS: u32 = 597;
+    ++const ORDERS_SPURIOUS: u32 = 5_961;
+     +
+     +#[derive(Clone, Copy, PartialEq)]
+     +enum State {
+    @@ libs/ticket/src/tests.rs (new)
+     +    pending: Vec<bool>,
+     +    /// The hart the scheduler let run its next step.
+     +    granted: Option<usize>,
+    ++    /// Halts that may still end with no wake pending.
+    ++    spurious: u32,
+     +    /// A run found stuck: every hart still parked unwinds.
+     +    abort: bool,
+     +    /// What a run broke, in words.
+    @@ libs/ticket/src/tests.rs (new)
+     +    /// The world, whether or not an abandoned run's hart unwound holding it.
+     +    fn world(&self) -> MutexGuard<'_, World> { self.world.lock().unwrap_or_else(|e| e.into_inner()) }
+     +
+    -+    /// Park hart `me` before its next step (or halted), until the scheduler picks it.
+    -+    fn park(&self, me: usize, state: State) {
+    ++    /// Park hart `me` before its next step (or halted), until the scheduler picks it; for a halt,
+    ++    /// whether a wake ended it.
+    ++    fn park(&self, me: usize, state: State) -> bool {
+     +        let mut w = self.world();
+     +        w.states[me] = state;
+     +        self.turn.notify_all();
+    @@ libs/ticket/src/tests.rs (new)
+     +        }
+     +        w.granted = None;
+     +        w.states[me] = State::Running;
+    -+        if state == State::Halted {
+    -+            w.pending[me] = false;
+    ++        let woken = state == State::Halted && core::mem::take(&mut w.pending[me]);
+    ++        if state == State::Halted && !woken {
+    ++            w.spurious -= 1;
+     +        }
+     +        self.turn.notify_all();
+    ++        woken
+     +    }
+     +
+    -+    fn wake(&self, mask: u32) {
+    -+        let mut w = self.world();
+    -+        for hart in (0..HARTS).filter(|h| mask & 1 << h != 0) {
+    -+            w.pending[hart] = true;
+    -+        }
+    -+    }
+    ++    fn wake(&self, hart: usize) { self.world().pending[hart] = true }
+     +
+     +    fn broke(&self, what: String) { self.world().broken.push(what) }
+     +
+    @@ libs/ticket/src/tests.rs (new)
+     +                w = self.turn.wait(w).unwrap_or_else(|e| e.into_inner());
+     +            }
+     +            let ready: Vec<usize> = (0..HARTS)
+    -+                .filter(|&h| w.states[h] == State::AtStep || (w.states[h] == State::Halted && w.pending[h]))
+    ++                .filter(|&h| {
+    ++                    w.states[h] == State::AtStep
+    ++                        || (w.states[h] == State::Halted && (w.pending[h] || (h == 1 && w.spurious > 0)))
+    ++                })
+     +                .collect();
+     +            if ready.is_empty() {
+     +                let served = serving.load(SeqCst) as usize;
+    @@ libs/ticket/src/tests.rs (new)
+     +/// Hart `me` with ticket `me`: wait for its turn (hart 0 holds the lock already), and hart 0
+     +/// releases it.
+     +fn hart(me: usize, waits: &Waits<HARTS>, serving: &AtomicU32, sched: &Sched) {
+    -+    let step = || sched.park(me, State::AtStep);
+    ++    let step = || {
+    ++        sched.park(me, State::AtStep);
+    ++    };
+     +    let ticket = me as u32;
+     +    loop {
+     +        step();
+    @@ libs/ticket/src/tests.rs (new)
+     +            break;
+     +        }
+     +        let mut woken = false;
+    -+        waits.wait_stepped(
+    -+            me,
+    -+            ticket,
+    -+            serving,
+    -+            || {
+    -+                sched.park(me, State::Halted);
+    -+                woken = true;
+    -+            },
+    -+            &step,
+    -+        );
+    ++        waits.wait_stepped(me, ticket, serving, || woken = sched.park(me, State::Halted), &step);
+     +        if woken && serving.load(SeqCst) != ticket {
+     +            sched.broke(format!("hart {me} woken before its turn"));
+     +        }
+     +    }
+     +    if me == 0 {
+     +        let wake = waits.release_stepped(serving, &step);
+    -+        if wake & !(1 << 1) != 0 {
+    -+            sched.broke(format!("the release to ticket 1 woke {wake:#b}"));
+    ++        if wake.is_some_and(|hart| hart != 1) {
+    ++            sched.broke(format!("the release to ticket 1 woke hart {wake:?}"));
+     +        }
+     +        step();
+    -+        sched.wake(wake);
+    ++        if let Some(hart) = wake {
+    ++            sched.wake(hart);
+    ++        }
+     +    }
+     +    sched.done(me);
+     +}
+     +
+    -+/// One run, its choices following `prefix` and then the first ready hart; the choices made, each
+    -+/// with how many it had.
+    -+fn run_once(prefix: &[usize]) -> (Vec<(usize, usize)>, Result<(), String>) {
+    ++/// One run, its choices following `prefix` and then the first ready hart, hart 1's halt ending
+    ++/// with no wake up to `spurious` times; the choices made, each with how many it had.
+    ++fn run_once(prefix: &[usize], spurious: u32) -> (Vec<(usize, usize)>, Result<(), String>) {
+     +    let waits = Arc::new(Waits::<HARTS>::new());
+     +    // Hart 2 waits for ticket 2, halted.
+     +    waits.tickets[2].store(2, SeqCst);
+    @@ libs/ticket/src/tests.rs (new)
+     +            states,
+     +            pending: vec![false; HARTS],
+     +            granted: None,
+    ++            spurious,
+     +            abort: false,
+     +            broken: Vec::new(),
+     +        }),
+    @@ libs/ticket/src/tests.rs (new)
+     +        // A stuck run's parked harts unwind ("run abandoned"); the run's outcome says why.
+     +        let _ = thread.join();
+     +    }
+    -+    let w = sched.world();
+    -+    if outcome.is_ok() && !w.broken.is_empty() {
+    -+        outcome = Err(w.broken.join("; "));
+    -+    }
+    -+    if outcome.is_ok() && w.pending[2] {
+    -+        outcome = Err(String::from("hart 2 woken before its turn"));
+    ++    let broken = &sched.world().broken;
+    ++    if outcome.is_ok() && !broken.is_empty() {
+    ++        outcome = Err(broken.join("; "));
+     +    }
+     +    (made, outcome)
+     +}
+     +
+    -+#[test]
+    -+fn no_hart_halts_past_its_turn_and_a_release_wakes_only_the_hart_it_serves() {
+    ++/// Every order, each run's halts ending with no wake up to `spurious` times; how many there were.
+    ++fn every_order(spurious: u32) -> u32 {
+     +    let mut prefix = Vec::new();
+     +    let mut runs = 0u32;
+     +    loop {
+    -+        let (made, outcome) = run_once(&prefix);
+    ++        let (made, outcome) = run_once(&prefix, spurious);
+     +        runs += 1;
+     +        if let Err(why) = outcome {
+     +            panic!("run {runs}, choices {:?}: {why}", made.iter().map(|c| c.0).collect::<Vec<_>>());
+    @@ libs/ticket/src/tests.rs (new)
+     +        prefix = made[..at].iter().map(|c| c.0).collect();
+     +        prefix.push(made[at].0 + 1);
+     +    }
+    -+    // Every order of hart 0's 7 or 8 steps against hart 1's 6 or 7, its wake's turn included: a
+    ++    runs
+    ++}
+    ++
+    ++#[test]
+    ++fn no_hart_halts_past_its_turn_and_a_release_wakes_only_the_hart_it_serves() {
+    ++    // Every order of hart 0's 6 steps against hart 1's 6 or 7, its wake's turn included: a
+     +    // scheduler that stopped exploring early, or a step added to either side, shows here.
+    -+    assert_eq!(runs, 863, "orders explored");
+    ++    assert_eq!(every_order(0), ORDERS, "orders explored");
+    ++}
+    ++
+    ++#[test]
+    ++fn a_halt_ended_with_no_wake_marks_again_and_is_still_woken() {
+    ++    // The same, and hart 1's halt may end once with nothing pending, then mark and re-read again:
+    ++    // ten times the orders, from the second turn of its wait.
+    ++    assert_eq!(every_order(1), ORDERS_SPURIOUS, "orders explored");
+     +}
+     
+      ## scripts/jobs.mk ##
+    @@ tests/size-budget.toml: kind = "size-budget"
+      name = "kernel"
+      paths = ["kernel/src"]
+     -max_lines = 10848
+    -+max_lines = 10842
+    ++max_lines = 10844
+      
+      [[crate]]
+      name = "loader"
+2:  1375a23a5 < -:  --------- docs: ipd's 8 s park costs an idle box a re-ask per parked request
+3:  0dba59657 < -:  --------- docs: the machine at rest says what launch-idle measures now and why
+-:  --------- > 2:  051dc3fd7 kernel: a release of the kernel lock wakes only the hart whose turn it serves
+-:  --------- > 3:  cd80f5f0f docs: ipd's parked requests and probes cost what launch-idle reads now
+-:  --------- > 4:  ff05a7f67 docs: the machine at rest says what launch-idle measures now and why
