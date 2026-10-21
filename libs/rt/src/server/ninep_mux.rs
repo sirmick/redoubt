@@ -253,31 +253,33 @@ fn release_pages(admission: &mut super::Admission, (bucket, share): (AdmitKey, u
 
 fn plain(words: Words) -> Outcome { Outcome { words, send: Handles::new(), close: Handles::new() } }
 
-/// A send's T-messages: one in its words 1 to 3, or one or more end to end at the start of its
-/// transfer, word 1 their length. `None` if any does not frame.
-fn stored(delivery: Delivery) -> Option<Vec<(Stored, usize)>> {
-    let mut messages = Vec::new();
+/// A send's T-messages, framed: one in its words 1 to 3, or one or more end to end at the start of
+/// its transfer, its first `end` bytes (word 1).
+enum Sent {
+    Words([u8; WORDS_BYTES], usize),
+    /// The pages, where their messages end, and whether any is too long for the words, so that a
+    /// request will hold the pages.
+    Pages(Arc<Buffer>, usize, bool),
+}
+
+/// Frames `delivery`'s T-messages; `None` if any does not frame. Nothing is listed: the messages
+/// are taken where they lie, in a second walk ([`NineServer::take_all`]), so what a send costs the
+/// heap is only the requests admitted, however many messages it packs (MAX_LEND_PAGES of 7-byte
+/// ones are 9,362). The two walks are deliberate: the first reads the same bytes as the second, at
+/// most the transfer, and lets a message that does not frame end the session before any is taken;
+/// a list of the messages kept to spare it would cost the heap 40 bytes a message, outside every
+/// budget.
+fn framed(delivery: Delivery) -> Option<Sent> {
     match delivery.transfer {
         Some(pages) => {
             let end = usize::try_from(delivery.words[1]).ok().filter(|n| *n <= pages.len())?;
-            let pages = Arc::new(pages);
-            let mut at = 0;
+            let (mut at, mut long) = (0, false);
             while at < end {
                 let len = message_size(&pages[at..end]).ok()?;
-                messages.try_reserve(1).ok()?;
-                // One that fits the words is kept as if it had come in them, so the page is held
-                // only by requests too long for them: a read that waits pins no page on either
-                // width (on rv32 the words carry 12 bytes, and every read comes in a page).
-                let message = if len <= WORDS_BYTES {
-                    let mut bytes = [0; WORDS_BYTES];
-                    bytes[..len].copy_from_slice(&pages[at..at + len]);
-                    Stored::Words(bytes)
-                } else {
-                    Stored::Pages(pages.clone(), at)
-                };
-                messages.push((message, len));
+                long |= len > WORDS_BYTES;
                 at += len;
             }
+            Some(Sent::Pages(Arc::new(pages), end, long))
         }
         None => {
             let mut bytes = [0; WORDS_BYTES];
@@ -285,11 +287,9 @@ fn stored(delivery: Delivery) -> Option<Vec<(Stored, usize)>> {
                 chunk.copy_from_slice(&usize::try_from(*word).ok()?.to_le_bytes());
             }
             let len = message_size(&bytes[..IN_WORDS]).ok()?;
-            messages.try_reserve(1).ok()?;
-            messages.push((Stored::Words(bytes), len));
+            Some(Sent::Words(bytes, len))
         }
     }
-    Some(messages)
 }
 
 /// The length of the message just written at the front of `out`.
@@ -360,7 +360,7 @@ impl<S: FileServer> NineServer<S> {
         let key = self.conn_key(&delivery.caller);
         // Nothing is held for a connection without a session: the request is dropped.
         let s = self.mux.session(&key)?;
-        self.take_all(s, stored(delivery), now);
+        self.take_all(s, delivery, now);
         None
     }
 
@@ -375,7 +375,7 @@ impl<S: FileServer> NineServer<S> {
             handles: redoubt_sys::ReceivedHandles::new(),
             transfer: None,
         };
-        self.take_all(s, stored(delivery), now);
+        self.take_all(s, delivery, now);
     }
 
     /// What a parked completion call of `caller`'s would be given now, packed into `lend`, without
@@ -388,30 +388,44 @@ impl<S: FileServer> NineServer<S> {
         }
     }
 
-    /// Session `s`'s requests from one send, then what can be answered; `None` (one did not
-    /// frame) ends the session.
-    fn take_all(&mut self, s: usize, messages: Option<Vec<(Stored, usize)>>, now: u64) {
-        let Some(messages) = messages else { return self.end_session(s) };
-        let charge = self.mux.sessions[s].charge;
-        // The pages a send brought count once, before its requests, if any request still lives
-        // in them: refused, every request in it is answered busy, and the pages go now.
-        let batch = messages.iter().find_map(|(message, _)| match message {
-            Stored::Pages(pages, _) => Some(pages.clone()),
-            Stored::Words(_) => None,
-        });
-        let paid =
-            batch.as_ref().is_none_or(|pages| admit_pages(&mut self.admission, charge, pages.npages()));
-        let mut alive = true;
-        for (message, len) in messages {
-            if alive {
-                alive = self.take(s, message, len, paid, now);
+    /// Session `s`'s requests from one send, taken in order where they lie ([`framed`]), then what
+    /// can be answered. One that does not frame ends the session before any is taken; one that
+    /// ends it in [`NineServer::take`] (a tag in use) ends it there, and those after it are not
+    /// looked at.
+    fn take_all(&mut self, s: usize, delivery: Delivery, now: u64) {
+        let alive = match framed(delivery) {
+            None => return self.end_session(s),
+            Some(Sent::Words(bytes, len)) => self.take(s, Stored::Words(bytes), len, true, now),
+            Some(Sent::Pages(pages, end, long)) => {
+                let (charge, mut alive, mut at) = (self.mux.sessions[s].charge, true, 0);
+                // The pages a send brought count once, before its requests, if any request will
+                // live in them: refused, every request in it is answered busy, and the pages go now.
+                let paid = !long || admit_pages(&mut self.admission, charge, pages.npages());
+                while alive && at < end {
+                    // Framed in the first walk.
+                    let Ok(len) = message_size(&pages[at..end]) else { break };
+                    // One that fits the words is kept as if it had come in them, so the page is
+                    // held only by requests too long for them: a read that waits pins no page on
+                    // either width (on rv32 the words carry 12 bytes, and every read comes in a
+                    // page).
+                    let message = if len <= WORDS_BYTES {
+                        let mut bytes = [0; WORDS_BYTES];
+                        bytes[..len].copy_from_slice(&pages[at..at + len]);
+                        Stored::Words(bytes)
+                    } else {
+                        Stored::Pages(pages.clone(), at)
+                    };
+                    alive = self.take(s, message, len, paid, now);
+                    at += len;
+                }
+                // No request of the send holds its pages any more (all refused, or the session
+                // ended): they go back here.
+                if long && paid && Arc::strong_count(&pages) == 1 {
+                    release_pages(&mut self.admission, charge, pages.npages());
+                }
+                alive
             }
-        }
-        // No request of the send holds its pages any more (all refused, or the session ended):
-        // they go back here.
-        if let Some(pages) = batch.filter(|pages| paid && Arc::strong_count(pages) == 1) {
-            release_pages(&mut self.admission, charge, pages.npages());
-        }
+        };
         if alive {
             self.pump(s, now, false);
         }

@@ -93,12 +93,9 @@ endpoint also serves `ninep_common` ([wire](wire.md#ninep_common)).
   and its cap 2 × 1,152 + 206 = 2,510, where 1,152 is the boot peak its base is set from. Its
   measured peak is 1,141 pages on rv32 and 935 on rv64, the same alone and beside eight other
   cases, so the cap rests on the derived bound, not on a measured load. Every manifest's `bootfsd`
-  entry adds the same to twice its boot peak: four buckets 153, five 180, ten 312. One allocation is
-  outside it: a send's T-messages are listed before admission takes their pages, and a transfer of
-  `MAX_LEND_PAGES` of 7-byte messages lists 9,362 of 40 bytes, 240 pages with its move, from any
-  session, though a send of more than 256 ends its session. The second copy of the boot peak holds
-  it, so nothing fails, but a case that sent it would fail the bench's check of twice the peak; none
-  does.
+  entry adds the same to twice its boot peak: four buckets 153, five 180, ten 312. A send adds
+  nothing past its requests, however many messages it packs: they are taken where they lie, never
+  listed ([multiplexed connections](serving.md#multiplexed-connections)).
 
 ### Filling it
 
