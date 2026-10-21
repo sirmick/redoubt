@@ -602,6 +602,19 @@ impl Steward {
                 self.made.remove(budget);
                 let r = self.sys(Syscall::BudgetDestroy { h });
                 let _ = self.sys(Syscall::HandleClose { h });
+                // The object's scope was made in this budget and ended with it: its handle is a
+                // dead entry (I17), closed with the budget's.
+                let scopes: Vec<Token> = self
+                    .made
+                    .iter()
+                    .filter(|(t, m)| t.owner == budget.owner && matches!(m, Made::Scope(_)))
+                    .map(|(t, _)| t.clone())
+                    .collect();
+                for t in scopes {
+                    if let Some(Made::Scope(s)) = self.made.remove(&t) {
+                        let _ = self.sys(Syscall::HandleClose { h: s });
+                    }
+                }
                 r.map(|_| Produced::Done)
             }
             Step::Read { token, through, labels, item } => {

@@ -6,7 +6,7 @@ kind = "size-budget"
 [[crate]]
 name = "kernel"
 paths = ["kernel/src"]
-max_lines = 10844
+max_lines = 10881
 
 [[crate]]
 name = "loader"
@@ -21,7 +21,7 @@ max_lines = 362
 [[crate]]
 name = "libs/sys"
 paths = ["libs/sys/src"]
-max_lines = 1040
+max_lines = 1047
 
 [[crate]]
 name = "libs/layout"
@@ -76,7 +76,7 @@ max_lines = 1142
 [[crate]]
 name = "libs/rt"
 paths = ["libs/rt/src"]
-max_lines = 4118
+max_lines = 4127
 
 [[crate]]
 name = "libs/wire"
@@ -111,7 +111,7 @@ max_lines = 1691
 [[crate]]
 name = "model"
 paths = ["model/src"]
-max_lines = 11389
+max_lines = 11444
 
 [[crate]]
 name = "servers/keyd"
@@ -173,7 +173,7 @@ max_lines = 2988
 [[crate]]
 name = "servers/init"
 paths = ["servers/init/src"]
-max_lines = 2785
+max_lines = 2788
 
 [[crate]]
 name = "servers/erofsd"

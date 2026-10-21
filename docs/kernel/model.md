@@ -178,7 +178,9 @@ After every step, `Checker::check` (`model/src/invariants.rs`) runs its checks i
 - the objects' structure; the console's holder is a live process
   ([the console's one writer](devices.md#the-consoles-one-writer)); serving state;
 - handles: I1 (handles name live objects), I2 (revocation is complete),
-  I3 (minted badges are non-zero and narrow) and I4 (only badge-0 handles receive);
+  I3 (minted badges are non-zero and narrow) and I4 (only badge-0 handles receive), and
+  I17 (a swept index stays dead until closed), against the ghost's record of every index a sweep
+  closed;
 - charging: I5 (usage within limits), and R6 (charging)'s backing: `root`'s limit and its own
   page fit in the boot's `ram_frames`;
 - budgets: I6 (labels only grow downward) and I8 (class and account inherited);
@@ -317,14 +319,14 @@ A **mutation** is one deliberate break planted in the model. Each variant of `en
 `self.broken(Mutation::...)`: one site for most variants, two or three where the rule is kept in
 more than one place, and a direct comparison with the mutation for `AbandonNoticeMissing` and
 `R11LendStaysMapped`. With no mutation, the model is the specified kernel.
-`Mutation::ALL` lists all 176 variants. `Mutation::rule()` returns the ID each one breaks, as in
+`Mutation::ALL` lists all 177 variants. `Mutation::rule()` returns the ID each one breaks, as in
 the table below; the steward's variants, named `Policy...`, break the server rules the steward
 model checks. Each of those but four is one broken entry of the core's `Policy` table
 (`mutation::policy`), since the crate that ships has no mutation switch; the other four break the
 model's embedder: its entropy, its admission, a volume's write check and the server's start.
 
 - `every_rule_has_a_mutation` requires at least one variant for every kernel rule the model
-  holds (each R row of the table below, before the steward's) and for I16.
+  holds (each R row of the table below, before the steward's) and for I16 and I17.
 - `mutations_are_caught` plants each variant in turn. It runs the scripted IPC and scheduling
   contracts, the variant's steward scenario if it has one (below), then every property family,
   the one that pressures the rule first (`scheduler_fairness` for R12, the steward families for the `Policy` variants, `flood` for the open-call
@@ -390,6 +392,7 @@ model's embedder: its entropy, its admission, a volume's write check and the ser
 | [I8 (class and account inherited)](invariants.md#i8-class-and-account-inherited) | `ClassNotInherited` | a child's class is its parent's |
 | [I13 (every blocking call returns by its timeout)](invariants.md#i13-every-blocking-call-returns-by-its-timeout) | `TimeoutIgnoredWhileOthersRun`, `ExpireBudgetsFirst` | timeouts expire while others run; at one instant, timeouts before deadlines |
 | [I16 (DMA pages reset before reuse)](invariants.md#i16-dma-pages-reset-before-reuse) | `DmaFreeBeforeReset`, `DmaQuarantinedSlotCountsAsReset`, `DmaUnmapFrees`, `DmaQuarantineChargeDropped`, `DmaQuarantinedDeviceUsable`, `DmaResetClearsCoHolderReach` | pooling only after a confirmed reset, co-holders included; `unmap` keeping DMA frames; quarantine's charge and sweep |
+| [I17 (a swept index stays dead until closed)](invariants.md#i17-a-swept-index-stays-dead-until-closed) | `I17SweptIndexFreed` | a swept index left dead, never handed to a new handle, until its holder closes it |
 | [R33 (no server holds a system budget)](../servers/init.md#r33-no-server-holds-a-system-budget) | `PolicyServerHoldsSystemBudget` | the steward starts with no system-class budget handle |
 | [R35 (key separation)](../servers/init.md#r35-key-separation) | `PolicyLoginWithKeydKey`, `PolicyApproveWithLoginKey` | no login with a key `keyd` holds; no approval channel with a login key |
 | [R36 (unpredictable ids)](../servers/steward.md#r36-unpredictable-ids) | `PolicySequentialIds` | random ids |

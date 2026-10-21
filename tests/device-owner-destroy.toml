@@ -9,14 +9,14 @@ debug_assertions = true
 # Reset right dies with system, so the case ends on its lines.
 programs = ["device-owner-destroy"]
 timeout_secs = 20
-# The verdicts are the kernel's answers: Dead to the waiter, BadHandle from every device call and
-# from budget_usage on system. A kernel that left the source unmasked would show nothing a process
+# The verdicts are the kernel's answers: Dead to the waiter, Dead from every device call and from
+# budget_usage on system, each handle a dead entry (I17). A kernel that left the source unmasked would show nothing a process
 # can see (the page says so); one that panicked or stormed on the byte would not reach the last line.
 expect = [
     '^\[device-owner-destroy\] mapped the console$',
     '^\[device-owner-destroy\] destroying system, the owner of every device object, with a thread in receive on the console.s interrupt$',
     '^\[device-owner-destroy\] ok: the thread in receive on the console.s interrupt got Dead \(Ok\(\(\)\); waiter 1\)$',
-    '^\[device-owner-destroy\] ok: all [0-9]+ device handles are gone: map_device Err\(BadHandle\), receive on the irq Err\(BadHandle\), system_reset Err\(BadHandle\), and system Err\(BadHandle\)$',
+    '^\[device-owner-destroy\] ok: all [0-9]+ device handles are gone: map_device Err\(Dead\), receive on the irq Err\(Dead\), system_reset Err\(Dead\), and system Err\(Dead\)$',
     '^\[device-owner-destroy\] send a byte$',
     '^\[device-owner-destroy\] ok: a byte sent after the destruction reached the UART through the mapping made before it$',
     '^\[device-owner-destroy\] DEVICE OWNER DESTROY PASSED$',

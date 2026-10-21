@@ -186,9 +186,9 @@ fn deaf_device_quarantines_the_co_holder_too() {
     assert!(quarantined(&w, 6), "the first reset of the deaf device fails");
     assert_eq!(w.k.frames.values().filter(|f| f.quarantined).count(), 1);
     assert!(used(&mut w, b1) >= 1 && used(&mut w, b1) < held1, "the quarantined page stays charged");
-    // Every handle to it was swept, init's own copy included.
-    assert_eq!(call(&mut w, 1, 1, Syscall::DmaAlloc { h: DEAF, npages: 1 }), Err(Error::BadHandle));
-    assert_eq!(call(&mut w, 1, 1, Syscall::MapDevice { h: DEAF }), Err(Error::BadHandle));
+    // Every handle to it was swept, init's own copy included: a dead entry until closed (I17).
+    assert_eq!(call(&mut w, 1, 1, Syscall::DmaAlloc { h: DEAF, npages: 1 }), Err(Error::Dead));
+    assert_eq!(call(&mut w, 1, 1, Syscall::MapDevice { h: DEAF }), Err(Error::Dead));
 
     // The deaf device would now reset, but a quarantined slot never counts as reset. The
     // co-holder dies the other way, by a fault.

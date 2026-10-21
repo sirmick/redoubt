@@ -8,7 +8,8 @@
 //! `system`, not to the dying driver budget, so the destruction's one sweep, which keys on the
 //! owner, would leave a handle naming the frame it is about to free; and the second death's
 //! quarantine must not find and free the first device's already-deferred frame again. The
-//! destruction must return, every handle to either quarantined slot must be gone (`BadHandle`),
+//! destruction must return, every handle to either quarantined slot must be gone (`Dead`, a dead
+//! entry until closed: I17),
 //! and both runs' charges must move to the parent.
 //!
 //! It runs in `init`'s place, so it holds every device object, prints on the console it maps
@@ -134,10 +135,10 @@ pub extern "C" fn _start() -> ! {
     let allocated1 = rd::dma_alloc(deaf1, 1).map(|_| ());
     check!(
         out,
-        mapped0 == Err(Error::BadHandle)
-            && allocated0 == Err(Error::BadHandle)
-            && mapped1 == Err(Error::BadHandle)
-            && allocated1 == Err(Error::BadHandle),
+        mapped0 == Err(Error::Dead)
+            && allocated0 == Err(Error::Dead)
+            && mapped1 == Err(Error::Dead)
+            && allocated1 == Err(Error::Dead),
         "every handle to either quarantined slot is gone (map_device {:?}/{:?}, dma_alloc {:?}/{:?})",
         mapped0,
         mapped1,

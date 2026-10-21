@@ -354,10 +354,11 @@ pub extern "C" fn _start(_: usize) -> ! {
     let notice = parent.notice(&run);
     show(&mut out, "exited", &notice);
     check!(out, is(&notice, Cause::Exited, 7, 0, &[]), "process_exit(7) -> exited, code 7, nobody blamed");
-    // The object is gone with its notice, so the handle that named it is gone too (I1).
+    // The object is gone with its notice, so the handle that named it is gone too (I1): a dead
+    // entry until closed (I17).
     check!(
         out,
-        rd::usage(run.process) == Err(Error::BadHandle),
+        rd::usage(run.process) == Err(Error::Dead) && rd::close(run.process).is_ok(),
         "the process handle is closed once its notice is taken"
     );
 

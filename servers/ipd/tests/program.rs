@@ -541,12 +541,13 @@ fn a_granted_connection_in_a_scope_ends_when_the_scope_is_destroyed() {
     connects(child_s, handle_s);
     connects(child_t, handle_t);
 
-    // The scope goes: the connection in it is gone from the child's table and the steward's,
-    // with no word to `ipd`; the sibling still serves.
+    // The scope goes: the connection in it is dead in the child's table and the steward's, with
+    // no word to `ipd`, until each closes it (I17); the sibling still serves.
     f.as_process(steward, || Budget::from_handle(scope_s).destroy().unwrap());
-    assert_eq!(attach(child_s, handle_s), Err(ClientError::Sys(Error::BadHandle)));
-    assert_eq!(f.held(child_s).0, 0, "the child's only handle is gone");
-    assert_eq!(attach(steward, in_s), Err(ClientError::Sys(Error::BadHandle)), "the steward's copy too");
+    assert_eq!(attach(child_s, handle_s), Err(ClientError::Sys(Error::Dead)));
+    f.as_process(child_s, || redoubt_rt::handle::close(handle_s).unwrap());
+    assert_eq!(f.held(child_s).0, 0, "the child's only handle is gone once closed");
+    assert_eq!(attach(steward, in_s), Err(ClientError::Sys(Error::Dead)), "the steward's copy too");
     attach(steward, in_t).unwrap();
     connects(child_t, handle_t);
 

@@ -358,6 +358,9 @@ pub struct Process {
     pub threads: BTreeSet<u64>,
     /// The handle table: index -> handle. Index 0 is never used.
     pub handles: BTreeMap<u64, Handle>,
+    /// Dead entries: indices a sweep closed and the process has not (I17). Each names nothing,
+    /// answers `Dead`, holds its index and counts on its table page until `handle_close`.
+    pub dead: BTreeSet<u64>,
     /// Address space: virtual page number -> mapping.
     pub space: BTreeMap<u64, Mapping>,
     /// Page-table pages below the root: (level, key) -> pages of `space` under it.
@@ -380,6 +383,14 @@ pub struct Process {
     /// placed there last, where the next search starts (kernel/memory.md, "Where `map_anon` puts
     /// pages").
     pub placed: [u64; 2],
+}
+
+impl Process {
+    /// Every index the table holds, live or dead: what its pages are charged for.
+    pub fn indices(&self) -> impl Iterator<Item = u64> + '_ { self.handles.keys().chain(&self.dead).copied() }
+
+    /// Whether index `h` is taken, by a live handle or a dead entry (I17).
+    pub fn holds(&self, h: u64) -> bool { self.handles.contains_key(&h) || self.dead.contains(&h) }
 }
 
 /// What a blocked thread waits for.
@@ -724,6 +735,7 @@ impl Kernel {
                 started: true,
                 threads: BTreeSet::new(),
                 handles: BTreeMap::new(),
+                dead: BTreeSet::new(),
                 space: BTreeMap::new(),
                 tables: BTreeMap::new(),
                 exit_endpoint: None,
@@ -974,7 +986,11 @@ impl Kernel {
     // Handle tables.
 
     fn lookup(&self, pid: u64, h: u64) -> R<Handle> {
-        self.processes.get(&pid).and_then(|p| p.handles.get(&h)).copied().ok_or(Error::BadHandle)
+        let p = self.processes.get(&pid).ok_or(Error::BadHandle)?;
+        if p.dead.contains(&h) {
+            return Err(Error::Dead);
+        }
+        p.handles.get(&h).copied().ok_or(Error::BadHandle)
     }
 
     /// The device object `pid`'s handle `h` names. R18: a handle is the only way to a device;
@@ -1014,14 +1030,13 @@ impl Kernel {
     fn handle_slots(&self, pid: u64, count: usize) -> R<(Vec<u64>, u64)> {
         let p = self.processes.get(&pid).ok_or(Error::Dead)?;
         let mut slots = Vec::new();
-        let mut pages: BTreeSet<u64> =
-            p.handles.keys().map(|h| (h - 1) / self.costs.handles_per_page).collect();
+        let mut pages: BTreeSet<u64> = p.indices().map(|h| (h - 1) / self.costs.handles_per_page).collect();
         let before = pages.len();
         for h in 1..=MAX_HANDLES {
             if slots.len() == count {
                 break;
             }
-            if !p.handles.contains_key(&h) {
+            if !p.holds(h) {
                 slots.push(h);
                 pages.insert((h - 1) / self.costs.handles_per_page);
             }
@@ -1044,29 +1059,40 @@ impl Kernel {
         Ok(slots)
     }
 
+    /// Free index `h` of `pid`'s table, live or dead.
     fn remove_handle(&mut self, pid: u64, h: u64) {
         let Some(p) = self.processes.get_mut(&pid) else { return };
-        if p.handles.remove(&h).is_none() {
+        if p.handles.remove(&h).is_none() && !p.dead.remove(&h) {
             return;
         }
+        self.ghost.swept.remove(&(pid, h));
+        let p = &self.processes[&pid];
         let budget = p.budget;
         let page = (h - 1) / self.costs.handles_per_page;
-        let empty = !p.handles.keys().any(|i| (i - 1) / self.costs.handles_per_page == page);
+        let empty = !p.indices().any(|i| (i - 1) / self.costs.handles_per_page == page);
         if empty {
             self.uncharge(budget, 1);
         }
     }
 
-    /// Close every handle matching `pred`, wherever it is: process tables, processes' exit endpoint
-    /// references, and messages not yet received, where a closed handle stays in its place and
-    /// arrives as 0 (R10).
+    /// Close every handle matching `pred`, wherever it is: process tables, where each becomes a
+    /// dead entry until its holder closes it (I17), processes' exit endpoint references, and
+    /// messages not yet received, where a closed handle stays in its place and arrives as 0 (R10).
     fn sweep(&mut self, pred: impl Fn(&Handle) -> bool) {
+        let freed = self.broken(Mutation::I17SweptIndexFreed);
         let pids: Vec<u64> = self.processes.keys().copied().collect();
         for pid in pids {
             let doomed: Vec<u64> =
                 self.processes[&pid].handles.iter().filter(|(_, h)| pred(h)).map(|(i, _)| *i).collect();
             for i in doomed {
-                self.remove_handle(pid, i);
+                if freed {
+                    self.remove_handle(pid, i);
+                } else {
+                    let p = self.processes.get_mut(&pid).unwrap();
+                    p.handles.remove(&i);
+                    p.dead.insert(i);
+                }
+                self.ghost.swept.insert((pid, i));
             }
             let p = self.processes.get_mut(&pid).unwrap();
             if p.exit_endpoint.as_ref().is_some_and(&pred) {
@@ -1794,7 +1820,7 @@ impl Kernel {
                 slots.push(NO_HANDLE);
                 continue;
             }
-            while p.handles.contains_key(&next) {
+            while p.holds(next) {
                 next += 1;
             }
             p.handles.insert(next, *stamps.next().unwrap());
@@ -2018,9 +2044,10 @@ impl Kernel {
             }
         }
         let p = self.processes.remove(&pid).unwrap();
+        // Its table goes whole, dead entries with it.
+        self.ghost.swept.retain(|(holder, _)| *holder != pid);
         let table =
-            p.handles.keys().map(|h| (h - 1) / self.costs.handles_per_page).collect::<BTreeSet<_>>().len()
-                as u64;
+            p.indices().map(|h| (h - 1) / self.costs.handles_per_page).collect::<BTreeSet<_>>().len() as u64;
         self.uncharge(p.budget, table + self.page_table_cost() + self.costs.contexts);
         // Its PID keeps counting in its budget until its object is freed (R6).
         if self.broken(Mutation::R6PidUncountedAtEnd) {
@@ -3128,6 +3155,7 @@ impl Kernel {
                 started: false,
                 threads: BTreeSet::new(),
                 handles: BTreeMap::new(),
+                dead: BTreeSet::new(),
                 space: BTreeMap::new(),
                 tables: BTreeMap::new(),
                 exit_endpoint: Some(exit),
@@ -3782,9 +3810,13 @@ impl Kernel {
     }
 
     /// `handle_close(h)`.
+    /// A dead entry closes like a live handle, and its index is free again (I17).
     pub fn handle_close(&mut self, pid: u64, h: u64) -> R<()> {
         let h = decode_handle(h)?;
-        self.lookup(pid, h)?;
+        match self.lookup(pid, h) {
+            Ok(_) | Err(Error::Dead) => {}
+            Err(e) => return Err(e),
+        }
         self.remove_handle(pid, h);
         Ok(())
     }

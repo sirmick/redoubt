@@ -10,6 +10,8 @@ use redoubt_model::{
 #[test]
 fn ipc_completion_table_and_rollback() { ipc_contracts(None).unwrap(); }
 #[test]
+fn swept_index_stays_dead_until_closed() { swept_index_stays_dead(None).unwrap(); }
+#[test]
 fn initial_records_fail_without_delivery() {
     for record in [Record::Unmapped, Record::ReadOnly, Record::Borrowed, Record::Device] {
         let mut w = World::new(None);
@@ -329,9 +331,16 @@ fn exited_object_handles_and_queued_copies_live_until_notice_receipt() {
         panic!()
     };
     assert_eq!(notice_pid, pid);
+    // The object's page goes back; the two handles to it are dead entries, which keep their
+    // table page until init closes them (I17).
+    assert_eq!(w.k.budgets[&1].pages_used, before_receipt - 1);
+    for h in [ph, copy] {
+        assert!(!w.k.processes[&1].handles.contains_key(&h) && w.k.processes[&1].dead.contains(&h));
+        assert_eq!(w.k.process_start(1, h, 0, 0, 0, &[]), Err(Error::Dead));
+        assert_eq!(w.k.handle_close(1, h), Ok(()));
+        assert_eq!(w.k.handle_close(1, h), Err(Error::BadHandle));
+    }
     assert_eq!(w.k.budgets[&1].pages_used, before_receipt - 2);
-    assert!(!w.k.processes[&1].handles.contains_key(&ph));
-    assert!(!w.k.processes[&1].handles.contains_key(&copy));
     let Ret::Message(m) =
         w.value(receiver, Syscall::Receive { h: Some(ep), timeout: 0, max_transfer: 0 }).unwrap()
     else {

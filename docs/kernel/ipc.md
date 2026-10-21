@@ -407,6 +407,11 @@ A **reply is never refused**: its caller is blocked and has nowhere else to put 
 Reply handles that do not fit the caller are dropped, each 0 in its slot. The words and the
 other handles arrive, and the caller's `call` returns `OutOfMemory` with the reply `present`.
 
+The handles a message carries are looked up when it is sent: one that is a dead entry in the
+sender's table ([handles](objects.md#handles), I17 (a swept index stays dead until closed)) fails the `call`, `send` or `reply` with
+`Dead`, and nothing is sent. A copy already queued whose handle is revoked before delivery still
+arrives as 0 in its slot ([R10 (destruction)](budgets.md#r10-destruction)).
+
 ### R4a (open calls)
 
 Status: built · tested: bench:redoubt-ipc, bench:net-pinned-ssh, mutation:R4aOpenCallsPerThread, mutation:R4aFullTakesNothing

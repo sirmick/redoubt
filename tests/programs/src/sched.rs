@@ -1657,8 +1657,9 @@ fn lend_pattern(seq: u64, caller: u64, page: u64) -> u64 {
 
 fn usage_pages(budget: u32) -> u64 { rd::usage(budget).map(|u| u.pages_usage).unwrap_or(u64::MAX) }
 
-/// Whether a handle the steward held is gone after the budget that stamped or named it died.
-fn gone(handle: u32) -> bool { matches!(rd::usage(handle), Err(rd::Error::BadHandle)) }
+/// Whether a handle the steward held is gone after the budget that stamped or named it died: a
+/// dead entry, until [`Lease::close`] closes it (I17).
+fn gone(handle: u32) -> bool { matches!(rd::usage(handle), Err(rd::Error::Dead)) }
 
 /// A reply the caller no longer waits for: `discarded`, mask 0.
 fn discarded(msg_id: u64) -> bool {
@@ -2034,6 +2035,13 @@ struct Lease {
 impl Lease {
     /// Whether the lease and every handle the steward minted into it are gone.
     fn gone(&self) -> bool { gone(self.budget) && self.handles.iter().all(|&h| gone(h)) }
+
+    /// Closes the lease's dead entries, as the steward does at its end.
+    fn close(&self) {
+        for h in [self.budget].iter().chain(&self.handles) {
+            let _ = rd::close(*h);
+        }
+    }
 }
 
 /// Make a lease in `sessions` for `slot`, with `deadline` (`rd::FOREVER` for none), and start its agent: the
@@ -2278,6 +2286,7 @@ fn containment() -> ! {
         if !d.gone() {
             fails |= 2;
         }
+        d.close();
         victim_control(ctl, CT_END, 0, r);
         // H: the timeout that is the decision, then destroy.
         let before = now();
@@ -2296,6 +2305,7 @@ fn containment() -> ! {
         if !h.gone() {
             fails |= 2;
         }
+        h.close();
         victim_control(ctl, CT_END, 1, r);
         // I10: every lease of the round is gone and its notices taken, so sessions' usage is
         // exactly what it was before the round.

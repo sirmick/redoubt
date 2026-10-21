@@ -190,6 +190,9 @@ pub struct Ghost {
     /// device's own confirmed reset at the frame's holder's death (`dma_reset`), never by pooling
     /// or by another process's death.
     pub armed: BTreeMap<u64, BTreeSet<u64>>,
+    /// I17: every (holder, index) a sweep closed and the holder has not, kept apart from the
+    /// table's own dead set so that a sweep that frees the index shows.
+    pub swept: BTreeSet<(u64, u64)>,
     /// Violations found while a step ran (the checks run after it).
     pub violations: Vec<String>,
     /// Steps mapping calls have taken over their ranges, ever: one per page `tables_needed` walks

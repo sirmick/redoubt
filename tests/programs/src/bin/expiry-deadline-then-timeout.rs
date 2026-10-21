@@ -34,13 +34,13 @@ extern "C" fn child(arg: usize) -> ! {
             rd::process_exit(0)
         }
         // R: be told `D`, wait on an endpoint nobody sends on until just past it, then try the
-        // handle stamped with `X` and report.
+        // handle stamped with `X`, dead since (I17), and report.
         2 => {
             let Ok(Received::Message(m)) = rd::receive(Some(1), rd::FOREVER, 0) else { rd::process_exit(1) };
             let d = m.body.words[0] as u64 | (m.body.words[1] as u64) << 32;
             let r = rd::receive(Some(2), (d + 1).saturating_sub(now()), 0);
             let after = rd::send(3, &rd::body([0; 4]), None, 0);
-            let good = r == Err(Error::Timeout) && after == Err(Error::BadHandle);
+            let good = r == Err(Error::Timeout) && after == Err(Error::Dead);
             let _ = rd::send(4, &rd::body([usize::from(good), 0, 0, 0]), None, rd::FOREVER);
             rd::process_exit(0)
         }
@@ -131,7 +131,7 @@ pub extern "C" fn _start() -> ! {
     writeln!(
         out,
         "[expiry] {}: the lease ended at its deadline ({:?}), its process and the twin's two killed ({}), R exited ({})",
-        ok(gone == Some(Error::BadHandle) && killed == 3 && exited == 1),
+        ok(gone == Some(Error::Dead) && killed == 3 && exited == 1),
         gone,
         killed,
         exited

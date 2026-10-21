@@ -11,6 +11,7 @@
 //!   deadline, and every wake-up goes to the hub, whose completions the platform takes in turn.
 
 use alloc::collections::VecDeque;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::num::NonZeroU64;
 
@@ -20,7 +21,7 @@ use redoubt_client::file::Connection;
 use redoubt_rt::handle::Endpoint;
 use redoubt_rt::ipc::{Delivery, Event};
 
-use crate::system::HAND_US;
+use crate::system::{HAND_US, Owned};
 
 /// The most waiter threads the VM starts: one per connection of a session's namespace (bootfsd,
 /// the home volume, a labelled volume, `ipd`, the console, the system volume); a bind is one of
@@ -38,6 +39,11 @@ pub struct Io {
     /// Each hub connection, by the namespace connection it is a session on, or why its waiter could
     /// not start, which stands: its session is not opened again; and its waiter's badge.
     conns: Vec<(Connection, Result<Conn, Error>, u64)>,
+    /// The handle of each forgotten connection whose waiter has yet to hand its end over: the
+    /// waiter calls by the handle's index, owning none of its terms, so the handle is held here,
+    /// and its terms' collection cannot close it under the waiter and let a later handle take the
+    /// index (I17 keeps a dead index only until it is closed). Let go at the hand-over.
+    held: Vec<(Conn, Arc<Owned>)>,
     /// Requests handed to the hub so far.
     requests: u64,
     /// Wake-ups that are not the hub's (the system calls' threads'), for the platform.
@@ -50,6 +56,7 @@ impl Io {
             hub: Hub::new(),
             wake: Endpoint::create()?,
             conns: Vec::new(),
+            held: Vec::new(),
             requests: 0,
             others: VecDeque::new(),
         })
@@ -57,18 +64,20 @@ impl Io {
 
     /// The VM forgot `conn`: its server went with its budget (`budget_destroy`). Its hub connection
     /// is ended, so nothing more is sent on it: a request made on it after this, a stale file's
-    /// clunk at its term's collection, is refused, and never goes out on the handle's index, which
-    /// may be another handle's once its last term is collected (docs/userland/beamlet.md,
-    /// "Handles are resource terms"). The server is dead, so its waiter's completion call fails
-    /// at once and the waiter sends its last hand-over: the VM waits for it here, [`HAND_US`] at
-    /// most, and lets the connection go, so the place is free before the next server needs it.
-    /// Past the bound the place is let go when the hand-over comes ([`Io::connect`], its caller
-    /// parked). A connection the hub never opened has nothing to end.
-    pub(crate) fn forget(&mut self, conn: &Connection) {
+    /// clunk at its term's collection, is refused, and never goes out on the handle, which the
+    /// destruction left dead until its last term is collected and closes it (I17;
+    /// docs/userland/beamlet.md, "Handles are resource terms"). The server is dead, so its waiter's
+    /// completion call fails at once and the waiter sends its last hand-over: the VM waits for it here,
+    /// [`HAND_US`] at most, and lets the connection go, so the place is free before the next server needs
+    /// it. Past the bound the place is let go when the hand-over comes ([`Io::connect`], its caller
+    /// parked). Until the hand-over, `owned`, the connection's handle, is held (`held`). A
+    /// connection the hub never opened has nothing to end, and no waiter to hold the handle for.
+    pub(crate) fn forget(&mut self, conn: &Connection, owned: &Arc<Owned>) {
         let hub =
             self.conns.iter().find(|(k, _, _)| k.same(conn)).and_then(|(_, c, _)| c.as_ref().ok().copied());
         if let Some(c) = hub {
             self.hub.disconnect(c);
+            self.held.push((c, Arc::clone(owned)));
             self.hand_over(|io| !io.hub.waiting(c));
             self.reap();
         }
@@ -173,6 +182,9 @@ impl Io {
         if let Some(other) = self.hub.deliver(delivery) {
             self.others.push_back(other);
         }
+        // A waiter that has handed its end over calls no more: its handle may go.
+        let hub = &self.hub;
+        self.held.retain(|(c, _)| hub.waiting(*c));
     }
 }
 

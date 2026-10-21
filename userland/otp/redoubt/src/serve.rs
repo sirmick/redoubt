@@ -55,7 +55,8 @@ pub const SELF: u64 = u32::MAX as u64;
 
 /// The first badge minted for a launch given a served endpoint; each launch on that endpoint takes
 /// the next, below [`SELF`]. A request with a badge from here on that no live launch holds is one
-/// a destroyed launch's program sent before its budget went: what it brought is kept, never closed.
+/// a destroyed launch's program sent before its budget went: what it brought is closed when its
+/// terms go, dead or live (I17).
 pub const LAUNCH_BADGE: u64 = 0x8000_0000;
 
 /// The longest a request waits for its answer (µs): past it, the thread answers it.

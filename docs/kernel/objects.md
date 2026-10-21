@@ -52,7 +52,7 @@ and a DMA device also when its reset fails (Residual risks).
 
 ### Handles
 
-<details><summary>Status: built · tested (10)</summary>
+<details><summary>Status: built · tested (11)</summary>
 
 - bench:budget
 - bench:budget-table-attack
@@ -64,6 +64,7 @@ and a DMA device also when its reset fails (Residual risks).
 - bench:redoubt-ipc
 - bench:device
 - host:redoubt-sys::malformed_calls_are_refused
+- host:redoubt-model::swept_index_stays_dead_until_closed
 
 </details>
 
@@ -77,7 +78,8 @@ A handle is an index into the calling process's handle table. The slot at that i
 Indices start at 1. **Index 0 is never allocated**: in a register or a record slot it means "no
 handle", for an optional argument left out or a message slot whose handle was revoked. An index
 that is 0 where a handle is required, wider than 32 bits, or not in the caller's table is
-`BadHandle`; a handle of the wrong kind for the call is `WrongObject`. A process cannot read its
+`BadHandle`; a dead entry (below) is `Dead`; a handle of the wrong kind for the call is
+`WrongObject`, in that order. A process cannot read its
 table: it learns nothing of a handle's object, badge or stamp except by using it.
 
 A handle is four 64-bit words. A slot adds two chain entries of two words each (below), so it
@@ -106,8 +108,9 @@ title one slot: eight 64-bit words, 64 bytes, so 64 slots fill a 4 KiB table pag
 448-511: "stamp chain: next link"
 ```
 
-The kind is 0 for an empty slot, 1 a budget, 2 an endpoint, 3 a device, 4 a process. A link is 0
-for none, the head's frame with the top bit set, or the holder's PID and the index.
+The kind is 0 for an empty slot, 1 a budget, 2 an endpoint, 3 a device, 4 a process, and 5 a
+dead entry, whose other words are 0. A link is 0 for none, the head's frame with the top bit
+set, or the holder's PID and the index.
 *Figure: a handle as the kernel stores it. A compile-time check confirms every frame index fits
 its 28 bits.*
 
@@ -128,13 +131,15 @@ heads a budget's frame holds two more heads, of its charged chain and its counte
 objects; each process object carries a pair of links for each, beside
 the pair that puts it on its exit endpoint's lists ([what objects cost](#what-objects-cost)).
 
-A new handle takes the **lowest free index**. A table page is a frame of its own, allocated and
-charged one page to the process's budget when its first handle arrives, and freed when its last
-handle goes. Handles are never moved to fill holes, so an index stays valid until it is closed,
-and a table with holes costs one page per table page in use. A table already holding
-`MAX_HANDLES` handles refuses one more with `TooLarge`, which a caller can tell apart from its
-budget being unable to pay for the next table page (`OutOfMemory`). At delivery, a handle that
-would take the receiver past `MAX_HANDLES` is a cost it cannot pay, and the sender gets `Refused`
+A new handle takes the **lowest free index**, the lowest neither live nor dead. A table page is a
+frame of its own, allocated and charged one page to the process's budget when its first handle
+arrives, and freed when its last handle, live or dead, goes. Handles are never moved to fill holes,
+so an index stays valid until it is closed, and a swept one stays dead until then. A table with
+holes costs one page per table page in use. A dead entry counts against `MAX_HANDLES` and keeps its
+table page charged until its holder closes it. A table already holding `MAX_HANDLES` handles refuses
+one more with `TooLarge`, which a caller can tell apart from its budget being unable to pay for the
+next table page (`OutOfMemory`). At delivery, a handle that would take the receiver past
+`MAX_HANDLES` is a cost it cannot pay, and the sender gets `Refused`
 ([R4 (delivery)](ipc.md#r4-delivery)).
 
 ```mermaid
@@ -170,6 +175,16 @@ against its budget's. A mismatch would mean a handle outlived its object. The ch
 the kernel stops rather than use a frame that may hold something else
 (I1 (handles name live objects)).
 
+**Dead entries.** A destruction never frees an index in a live table. Each handle it closes, whether
+through a dying budget's chains, a freed process object's chain or a destroyed device's sweep,
+becomes a dead entry: the slot keeps only its kind, 5, with no object, badge, stamp or chain link,
+so it names nothing and grants nothing (I1, I2). Every call through a dead entry, or naming one in a
+list or as an argument, returns `Dead` and does nothing. `handle_close` frees it, and only then may
+the index be taken again (I17 (a swept index stays dead until closed)). So a holder that keeps an index cannot find another object there
+later, whatever happened to the one it named: it learns `Dead`, and closes. A table that ends whole
+(its process ending) takes its dead entries with it, and a copy of a revoked handle in a message not
+yet received still arrives as 0.
+
 ### Making, copying and closing handles
 
 <details><summary>Status: built · tested (5)</summary>
@@ -188,7 +203,7 @@ the kernel stops rather than use a frame that may hold something else
 | `budget_create` | h(parent), spec -> h | a new child budget ([budgets](budgets.md)) |
 | `process_create` | h(budget), h(exit endpoint) -> h | a new process object ([processes](processes.md)) |
 | `mint` | source, badge, h(budget) or none -> h | another handle to an existing endpoint, with a non-zero badge ([below](#mint)) |
-| `handle_close` | h | removed; the object is untouched |
+| `handle_close` | h | removed, or a dead entry freed; the object is untouched |
 
 Each call that makes a handle installs it at the lowest free index of the caller's table,
 stamped as [R9](#r9-stamps) says. If the table cannot take it (`TooLarge`, or `OutOfMemory` for
@@ -204,12 +219,12 @@ A copy is the same object, badge and stamp at a new index in another table. Copi
 none is the original, and closing one leaves the others. There is no call that copies a handle
 within one table.
 
-`handle_close(h)` removes the handle at index h, and frees its table page if it was the page's
-last; `BadHandle` if the caller holds no handle at h. It never destroys the object: a budget,
-endpoint or device lives on under its own rules, and a process handle closed early leaves the
-exit notice pending. The index is free again, and the process's next new handle may take it.
-When a process ends, every handle in its table closes. When a process object is freed, every
-handle to it closes, in every table.
+`handle_close(h)` removes the handle at index h, or frees the dead entry there, and frees its table
+page if it was the page's last; `BadHandle` if the caller holds nothing at h. It never destroys the
+object: a budget, endpoint or device lives on under its own rules, and a process handle closed
+early leaves the exit notice pending. The index is free again, and the process's next new handle
+may take it. When a process ends, every handle in its table closes. When a process object is
+freed, every handle to it closes, in every table, each a dead entry until its holder closes it.
 
 ### What objects cost
 
@@ -438,16 +453,18 @@ is being destroyed.
   ([R4b (a server dies)](ipc.md#r4b-a-server-dies)).
 - **A budget is destroyed:** every handle naming it or a budget below it, naming an endpoint,
   device or process object charged to one of them, or stamped with one of them, closes in every
-  table, and a copy in a message not yet received arrives as 0 (R10).
+  table, each a dead entry until its holder closes it (I17), and a copy in a message not yet
+  received arrives as 0 (R10). The handle `budget_destroy` was called through is one of them;
+  the runtime's `Budget::destroy` closes it.
 - **A process object is freed**, when its notice is received or dropped or its creator's budget
-  is destroyed: every handle to it closes.
+  is destroyed: every handle to it closes, a dead entry until its holder closes it.
 - **A creating call cannot install its handle:** the object is freed and its charge returned, so
   a refused create costs nothing.
 - **A handle whose object has gone** is a kernel bug, not an error a call returns. Every lookup
   compares ids, and on a mismatch the kernel stops rather than use a frame that may hold something
   else (I1). R10's sweeps keep it from happening (I2), and no argument to any call reaches it
-  (I14 (no call panics the kernel)); `budget-destroy-attack` reuses frames and indices after a
-  destruction to look for one.
+  (I14 (no call panics the kernel)); `budget-destroy-attack` reuses frames after a destruction,
+  its swept indices dead (I17), to look for one.
 
 ## Residual risks
 
@@ -465,6 +482,14 @@ is being destroyed.
 - **A budget handle cannot be narrowed.** Every holder may destroy the budget and everything
   below it: a handle to `system` is the right to end every system server, and a handle to `root`
   the right to end every process.
+- **A dead entry holds its slot.** A holder that never closes what a destruction swept keeps one
+  index and its share of a table page for each, against `MAX_HANDLES`, until it ends. A long-lived
+  holder closes them: `init` its handle at each server it restarts, the steward each budget and
+  scope its sessions and leases end with, the session's VM each handle's term as it is collected.
+  What a client can leave dead in the steward's table is bounded by its scope: the object's budget
+  and scope and the copies the steward keeps minted in the scope (its badge, a notices send right,
+  a relay's control connection, each connection until its launch), at most one batch's steps, all
+  closed at the object's end.
 - **A stale handle stops the machine.** The kernel's answer to a broken I1 is to stop. A bug in
   R10's chain walk would stop the kernel, and every process with it; it would not let a process use a
   freed object.

@@ -87,7 +87,7 @@ handle to it does not destroy it: its carve stays out of its parent (see Residua
 | Call | Arguments -> result | What it does |
 | --- | --- | --- |
 | `budget_create` | parent budget handle, spec record -> budget handle | Carve a child from the parent. The spec is `(pages, processes, weight, labels, account, deadline)` in `BUDGET_SPEC_SLOTS` (22) slots: three limits, a label count and `MAX_LABELS` label slots, the account and the deadline. |
-| `budget_destroy` | budget handle | Destroy the budget and everything below it ([R10](#r10-destruction)). If the caller runs in that subtree, or its process object is charged to a budget in it, the call never returns. |
+| `budget_destroy` | budget handle | Destroy the budget and everything below it ([R10](#r10-destruction)). If the caller runs in that subtree, or its process object is charged to a budget in it, the call never returns. Otherwise the handle it was called through is a dead entry after it, for the caller to close ([handles](objects.md#handles)). |
 | `budget_reap` | budget handle -> remaining | Destroy the budget's first child and everything below it ([R10](#r10-destruction)), keep the budget, and return how many children it still has. If the caller runs in that child's subtree, or its process object is charged to a budget in it, the call never returns. |
 | `budget_usage` | budget handle, usage record | Write the budget's limits and usage ([`budget_usage`](#budget_usage)). |
 
@@ -99,7 +99,7 @@ labels (`LabelDenied`, then `ClassDenied`); pages, counting the child's own page
 The new handle is stamped with the caller's budget (R9 (stamps)). If the caller's handle table
 cannot take it (`TooLarge` at `MAX_HANDLES`, or `OutOfMemory` for a new table page), the child is
 undone and the parent is as it was.
-`budget_destroy` and `budget_reap` fail only on their handle (`BadHandle`, `WrongObject`). Record
+`budget_destroy` and `budget_reap` fail only on their handle (`BadHandle`, `Dead`, `WrongObject`). Record
 checks come first for every call; the full rows are in the
 [ABI reference](abi.md#errors-and-the-order-of-checks).
 
@@ -603,9 +603,11 @@ this order:
 5. **Lift.** Each dying budget's work since it entered the queue moves to its parent, bottom-up
    ([scheduling](scheduling.md)).
 6. **Sweep.** Every handle that names a dying budget, or an endpoint, device or process object that
-   died with one, or that is stamped with a dying budget, is closed in every process's table. A
-   handle stamped with one inside a message not yet received arrives as 0 in its slot
-   ([IPC](ipc.md#what-receive-returns)).
+   died with one, or that is stamped with a dying budget, is closed in every process's table: it
+   becomes a dead entry there, `Dead` to every call, and the holder's close frees the index
+   (I17 (a swept index stays dead until closed), [handles](objects.md#handles)). The handle the
+   caller destroyed through is one of them. A handle stamped with one inside a message not yet
+   received arrives as 0 in its slot ([IPC](ipc.md#what-receive-returns)).
 7. **Return.** B's page, its page and process limits go back to its parent. The parent's usage is
    exactly what it was before B was created (I10 (create-destroy leaves the parent unchanged)),
    except for what step 8 moves onto it.

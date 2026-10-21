@@ -212,8 +212,11 @@ pub extern "C" fn _start() -> ! {
     let mut seen = [false; 512];
     let mut reused = false;
     for _ in 0..520 {
-        spawn::spawn(&image, budget, exit, child as *const () as usize, &[0], &[]).unwrap();
+        let run = spawn::spawn(&image, budget, exit, child as *const () as usize, &[0], &[]).unwrap();
         let n = notice(exit);
+        // The notice freed the object; its handle is a dead entry until closed (I17), and 520 of
+        // them would grow the parent's table.
+        rd::close(run.process).unwrap();
         assert_eq!(n.cause, Cause::Exited);
         reused |= seen[n.pid as usize];
         seen[n.pid as usize] = true;

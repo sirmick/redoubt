@@ -305,6 +305,7 @@ pub fn budget_lifecycle(seed: u64, mutation: Option<Mutation>) -> Result<(), Fai
     };
     // Start one process in the child with only the child's handle, if there is an endpoint to
     // name as its exit endpoint.
+    let mut process = None;
     if let Some(e) = exit {
         let s = step(
             &mut k,
@@ -315,6 +316,7 @@ pub fn budget_lifecycle(seed: u64, mutation: Option<Mutation>) -> Result<(), Fai
             let start =
                 Syscall::ProcessStart { process: proc_h, entry: 0, sp: 0, arg: 0, handles: alloc::vec![bh] };
             step(&mut k, Op::Sys { pid, tid, call: start }, &mut ops)?;
+            process = Some(proc_h);
         }
     }
     // Only threads inside the child's subtree act; no ticks, no interrupts.
@@ -329,12 +331,18 @@ pub fn budget_lifecycle(seed: u64, mutation: Option<Mutation>) -> Result<(), Fai
         return Ok(());
     }
     step(&mut k, Op::Sys { pid, tid, call: Syscall::BudgetDestroy { h: bh } }, &mut ops)?;
+    // The destruction left the creator's handle to the child a dead entry, holding its table
+    // page until closed (I17): the creator closes it, as the runtime's destroy does.
+    step(&mut k, Op::Sys { pid, tid, call: Syscall::HandleClose { h: bh } }, &mut ops)?;
     // The child's processes' objects are charged to their creator and stay until their notices
     // are received (I10: "once its processes' exit notices are received or dropped"): the creator
-    // receives them. A message arriving instead changes the creator's state, and the sequence
-    // proves nothing.
+    // receives them, and closes its process handle, dead since. A message arriving instead
+    // changes the creator's state, and the sequence proves nothing.
     if !drain(&mut k, &mut ops, &mut step)? {
         return Ok(());
+    }
+    if let Some(h) = process {
+        step(&mut k, Op::Sys { pid, tid, call: Syscall::HandleClose { h } }, &mut ops)?;
     }
     let after = snapshot(&k);
     if before != after {

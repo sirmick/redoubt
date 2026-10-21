@@ -121,12 +121,6 @@ pub trait Kernel {
     /// closed; a process that never started ends with its budget, which the core's rollback
     /// destroys).
     fn launched(&mut self, job: u64) -> Result<(u64, Option<Self::Handle>), Error>;
-    /// Runs `f` with the install lock held: the launch thread installs no handle in the
-    /// steward's table meanwhile (it holds the same lock across every install of its own and
-    /// drops it inside each read of the image, so the lock is never held across a call to a
-    /// server). The clock read and the destroy of [`drive::Steward::destroy`] run inside it, the
-    /// one pair the deadline witness guards; `f` makes kernel calls only, never one to a server.
-    fn without_installs<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T;
     /// Sends `lease_ended` for `lease`, named `name`, on a session's notices endpoint: one way,
     /// bounded, never retried. A send that does not go is dropped: the steward is never held by
     /// a session that does not read.

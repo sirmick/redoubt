@@ -92,15 +92,16 @@ pub extern "C" fn _start() -> ! {
         got
     );
 
-    // --- Every handle naming a device object is gone, and `system` with them -------------------
-    let gone = devices.clone().filter(|&h| rd::device_info(h) == Err(Error::BadHandle)).count();
+    // --- Every handle naming a device object is gone, and `system` with them: each a dead entry,
+    // `Dead` to every call until closed (I17) -----------------------------------------------------
+    let gone = devices.clone().filter(|&h| rd::device_info(h) == Err(Error::Dead)).count();
     let console = rd::map_device(rd::CONSOLE_MMIO).map(|_| ());
     let irq = rd::receive(Some(rd::CONSOLE_IRQ), 1000, 0).map(|_| ());
     let reset = rd::system_reset(rd::RESET, ResetKind::PowerOff);
     let system = rd::usage(rd::SYSTEM).map(|_| ());
     check!(
         out,
-        gone == answering && [console, irq, reset, system].iter().all(|r| *r == Err(Error::BadHandle)),
+        gone == answering && [console, irq, reset, system].iter().all(|r| *r == Err(Error::Dead)),
         "all {} device handles are gone: map_device {:?}, receive on the irq {:?}, system_reset {:?}, and system {:?}",
         gone,
         console,

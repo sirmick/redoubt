@@ -282,7 +282,9 @@ fn pending_record(c: &mut Checker, image: &spawn::Image) {
     assert_eq!(rd::usage(process), Err(Error::WrongObject));
     assert_eq!(rd::usage(rd::SYSTEM), Ok(pending));
     notice(exit, Cause::Killed, 0);
-    assert_eq!(rd::usage(process), Err(Error::BadHandle));
+    // The object freed, its handle is a dead entry until closed (I17).
+    assert_eq!(rd::usage(process), Err(Error::Dead));
+    rd::close(process).unwrap();
     assert_eq!(rd::usage(rd::SYSTEM), Ok(base));
     assert_eq!(rd::usage(rd::ROOT), Ok(own));
     c.check(true, "bad receive output preserves pending notice and process object");
@@ -313,7 +315,8 @@ fn late_record(c: &mut Checker) {
     assert_eq!(redoubt_sys::syscall(&receive), Err(Error::InvalidArgument));
     assert_eq!(rd::usage(process), Err(Error::WrongObject));
     notice(exit, Cause::Killed, 0);
-    assert_eq!(rd::usage(process), Err(Error::BadHandle));
+    assert_eq!(rd::usage(process), Err(Error::Dead));
+    rd::close(process).unwrap();
     rd::close(exit).unwrap();
     c.check(true, "late receive output failure preserves exit notice and process object");
 }
@@ -338,7 +341,8 @@ fn destroy_own_creator(c: &mut Checker, image: &spawn::Image) {
         // notice pump during creator teardown must not expose a notice that should be dropped.
         assert_eq!(rd::receive(Some(grandchild_exit), 200_000, 0), Err(Error::Timeout));
         notice(exit, Cause::Killed, 0);
-        assert_eq!(rd::usage(scope), Err(Error::BadHandle));
+        assert_eq!(rd::usage(scope), Err(Error::Dead));
+        rd::close(scope).unwrap();
         assert_eq!(rd::usage(external), Ok(baseline));
         assert_eq!(rd::receive(Some(grandchild_exit), 0, 0), Err(Error::Timeout));
         rd::destroy(external).unwrap();
@@ -397,7 +401,10 @@ fn stamps(c: &mut Checker, image: &spawn::Image) {
     c.check(true, "R8 account inheritance observed in kernel message metadata");
     rd::destroy(owner).unwrap();
     notice(exit, Cause::Killed, 0);
+    // Each a dead entry, whatever it named, until closed once (I17).
     for h in [budget_handle, endpoint_handle, process_handle] {
+        assert_eq!(rd::usage(h), Err(Error::Dead));
+        assert_eq!(rd::close(h), Ok(()));
         assert_eq!(rd::close(h), Err(Error::BadHandle));
     }
     // The external budget object survives; only its handle stamped by owner was revoked.

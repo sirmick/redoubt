@@ -56,14 +56,11 @@
 //! library pushes the batch's `Done` to the core ([`redoubt_steward_server::drive`]). The
 //! hand-over is the cleanup thread's: the thread idles in a call on the same badge, which the
 //! loop answers when a job is queued, and the queue's lock is held for one operation at a time.
-//! The thread touches nothing of [`Machine`]'s tables, and creates no budget. The **install
-//! lock** keeps the deadline witness's premise: the loop's clock read and destroy of a kept
-//! budget handle run back to back with no handle installed between them, and the thread
-//! installs handles (`process_create`, each page batch); so the thread holds the lock across
-//! `start()` and drops it inside each read of the image, the one server call on its path, and
-//! the loop holds it across the pair ([`Kernel::without_installs`]): no install of the thread's
-//! lands between the read and the destroy, and the lock is never held across a call to a
-//! server. The caller of a `start_agent` or a `login` waits as before: its call is parked and
+//! The thread touches nothing of [`Machine`]'s tables, and creates no budget. Its installs
+//! (`process_create`, each page batch) may land between anything the loop does: no index the
+//! loop holds can be taken by them, since a handle the kernel swept stays a dead entry until
+//! the steward closes it (kernel/invariants.md, I17). The caller of a `start_agent` or a `login`
+//! waits as before: its call is parked and
 //! answered when the launch is done ([`Machine::parked`]); the calls and events of every other
 //! object are served meanwhile, and only the launching object's own wait with it.
 //!
@@ -484,20 +481,19 @@ mod machine {
         began: u64,
     }
 
-    /// The launch thread: takes the jobs the loop queued, in order, runs each launch under the
-    /// install lock but inside its reads of the image ([`start_job`]), leaves the result for the
-    /// loop and reports it as a send on [`LAUNCH`]; with no job queued it calls the loop on the
-    /// same badge and waits for the answer, which comes when one is. Its lend is its own, the
-    /// loop's size, so a page batch is read in as many reads as the loop read it. It ends with
-    /// the steward: a report that fails is the loop gone.
-    fn launch_thread(launches: Arc<Mutex<Launches>>, install: Arc<Mutex<()>>, report: u32) {
+    /// The launch thread: takes the jobs the loop queued, in order, runs each launch
+    /// ([`start_job`]), leaves the result for the loop and reports it as a send on [`LAUNCH`]; with no job
+    /// queued it calls the loop on the same badge and waits for the answer, which comes when one is. Its
+    /// lend is its own, the loop's size, so a page batch is read in as many reads as the loop read it. It
+    /// ends with the steward: a report that fails is the loop gone.
+    fn launch_thread(launches: Arc<Mutex<Launches>>, report: u32) {
         let report = Endpoint::from_handle(h(report));
         let Ok(mut lend) = Lend::new(LEND_PAGES) else { return };
         loop {
             loop {
                 let Some(job) = launches.lock().jobs.pop_front() else { break };
                 let id = job.id;
-                let started = start_job(job, &install, &mut lend);
+                let started = start_job(job, &mut lend);
                 launches.lock().done.insert(id, started);
                 if report.send(&[id, 0, 0, 0], &[], None, FOREVER).is_err() {
                     return;
@@ -511,20 +507,10 @@ mod machine {
 
     /// One launch, as the loop made it before: the image streamed from the system volume a
     /// batch at a time into fresh pages moved into the child, the stub, the stack and the
-    /// startup block placed, and `process_start`. The install lock is held from before the
-    /// first install (`process_create`) to after the last call, except inside each read of the
-    /// image, which drops it on entry and takes it again on return: every install of the
-    /// thread's is under the lock, and the lock is never held across a call to a server. The
-    /// process handle of a child that started; a launch the kernel refused closed its process
-    /// already and left none, and the error is the step's.
-    fn start_job(job: LaunchJob, install: &Mutex<()>, lend: &mut Lend) -> Result<Handle, Error> {
-        let mut held = Some(install.lock());
-        let mut read = |at: usize, buf: &mut [u8]| {
-            held = None;
-            let read = read_from(&job.program, lend, PROGRAM, at, buf);
-            held = Some(install.lock());
-            read
-        };
+    /// startup block placed, and `process_start`. The process handle of a child that started; a launch the
+    /// kernel refused closed its process already and left none, and the error is the step's.
+    fn start_job(job: LaunchJob, lend: &mut Lend) -> Result<Handle, Error> {
+        let mut read = |at: usize, buf: &mut [u8]| read_from(&job.program, lend, PROGRAM, at, buf);
         let started = {
             let mut launch = Launch::streamed(
                 STUB_BIN,
@@ -545,7 +531,6 @@ mod machine {
             }
             launch.start()
         };
-        drop(held);
         match started {
             Ok(started) => Ok(started.process().handle()),
             Err(failed) => Err(match failed.error {
@@ -788,10 +773,6 @@ mod machine {
         /// Handles a server's restart retired, which the thread may still be calling on: closed
         /// once it has reported since, when it is past any call it had out.
         retired: Vec<Handle>,
-        /// The install lock ([`Kernel::without_installs`]): held by the loop across its clock
-        /// read and destroy of a kept budget handle, and by the launch thread across its
-        /// installs ([`start_job`]).
-        install: Arc<Mutex<()>>,
         /// The launches queued for the thread and the ones it finished ([`launch_thread`]).
         launches: Arc<Mutex<Launches>>,
         /// The launch thread's idle call, held while no launch is queued for it.
@@ -804,10 +785,6 @@ mod machine {
         /// the last token drawn: above the console session's, each call's own while it waits.
         parked: BTreeMap<ReplyTo, Parked>,
         next_reply: ReplyTo,
-        /// `latency-probe` only: the longest the loop waited for the install lock so far (µs),
-        /// said as it grows.
-        #[cfg(feature = "latency-probe")]
-        lock_waited: u64,
         /// `latency-probe` only: the last `budget_destroy`'s end and length (µs), the probe's
         /// `destroy_call` sample.
         #[cfg(feature = "latency-probe")]
@@ -1349,25 +1326,6 @@ mod machine {
             }
             self.watch_exit(kept.exit).map_err(dropped)?;
             Ok((u64::from(kept.exit.index()), send.map(|s| self.keep(s))))
-        }
-
-        /// The lock's worst wait on the loop is one stretch of the thread's between two reads
-        /// of the image: a page batch's pages made, a `map` of them into the child, or
-        /// `process_start`, kernel work; the probe says the longest so far.
-        fn without_installs<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
-            let install = Arc::clone(&self.install);
-            #[cfg(feature = "latency-probe")]
-            let began = redoubt_rt::handle::time_now().unwrap_or(0);
-            let _held = install.lock();
-            #[cfg(feature = "latency-probe")]
-            {
-                let waited = redoubt_rt::handle::time_now().unwrap_or(began).saturating_sub(began);
-                if waited > self.lock_waited {
-                    self.lock_waited = waited;
-                    self.out.say(&format!("steward: install lock waited {waited} us, the most so far\n"));
-                }
-            }
-            f(self)
         }
 
         /// The relay is launched from `/boot` in the context's budget with a hello badge of its
@@ -2406,7 +2364,6 @@ mod machine {
             cleanup: Arc::clone(&cleanup),
             idle: None,
             retired: Vec::new(),
-            install: Arc::new(Mutex::new(())),
             launches: Arc::new(Mutex::new(Launches::default())),
             launch_idle: None,
             launching: BTreeMap::new(),
@@ -2414,7 +2371,6 @@ mod machine {
             parked: BTreeMap::new(),
             next_reply: CONSOLE_REPLY,
             #[cfg(feature = "latency-probe")]
-            lock_waited: 0,
             #[cfg(feature = "latency-probe")]
             last_destroy: None,
             #[cfg(feature = "latency-probe")]
@@ -2510,15 +2466,10 @@ mod machine {
             machine.out.say("steward: cannot mint its launch thread's badge\n");
             return NOT_STARTED;
         };
-        machine.install.prepare();
         machine.launches.prepare();
-        let (launches, install, index) =
-            (Arc::clone(&machine.launches), Arc::clone(&machine.install), report.handle().index());
-        if redoubt_rt::thread::spawn(
-            Box::new(move || launch_thread(launches, install, index)),
-            LAUNCH_STACK_PAGES,
-        )
-        .is_err()
+        let (launches, index) = (Arc::clone(&machine.launches), report.handle().index());
+        if redoubt_rt::thread::spawn(Box::new(move || launch_thread(launches, index)), LAUNCH_STACK_PAGES)
+            .is_err()
         {
             machine.out.say("steward: cannot start its launch thread\n");
             return NOT_STARTED;

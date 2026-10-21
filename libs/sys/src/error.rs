@@ -65,7 +65,14 @@ const fn set(errors: &[Error]) -> Errors {
 
 impl Errors {
     const fn with(self, other: Errors) -> Errors { Errors(self.0 | other.0) }
+
+    const fn has(self, error: Error) -> bool { self.0 & 1 << error as u32 != 0 }
 }
+
+/// A call that names a handle, as its own or in a list, finds none at an index (`BadHandle`) or a
+/// dead entry there, one a destruction swept and its holder has not closed (`Dead`, I17), which
+/// fails the call before it does anything. `handle_close` alone frees a dead entry instead.
+const DEAD_ENTRY: Errors = set(&[Dead]);
 
 /// Every call can fail decoding in the general ways of stage 1: a non-zero unused register, a
 /// value too wide for its field.
@@ -83,7 +90,8 @@ const HANDLE_LIMIT: Errors = set(&[TooLarge]);
 impl Number {
     /// Whether this call can return `error`: the errors of its row in kernel/abi.md's error
     /// table (in what order they are checked is the spec's), plus decoding's general
-    /// `InvalidArgument`, and `OutOfMemory` for a call that adds a handle to its caller's table.
+    /// `InvalidArgument`, `OutOfMemory` for a call that adds a handle to its caller's table, and
+    /// `Dead` for one that names a handle.
     /// The kernel checks every error it returns against this in debug builds.
     pub fn can_return(self, error: Error) -> bool { self.errors().0 & 1 << error as u32 != 0 }
 
@@ -160,6 +168,11 @@ impl Number {
             Number::DeviceInfo => set(&[BadHandle, WrongObject]),
             // `WrongObject`: not the console's MMIO device. `Busy`: another process holds it.
             Number::ConsoleHold => set(&[BadHandle, WrongObject, Busy]),
+        };
+        let row = if row.has(BadHandle) && !matches!(self, Number::HandleClose) {
+            row.with(DEAD_ENTRY)
+        } else {
+            row
         };
         row.with(DECODING)
     }

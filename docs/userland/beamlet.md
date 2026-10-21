@@ -1065,15 +1065,14 @@ Handles are resource terms: unforgeable, collected, and never serialisable. A co
 inside the VM is the same connection (one badge, one client), so passing one to another Erlang
 process is sharing it. A handle no process holds is closed at the next collection; a budget's is
 closed and the budget lives on, since destruction is a call. A handle dies with the object it names
-or the budget that stamped it ([objects](../kernel/objects.md#r9-stamps)), and the kernel gives
-its index to the next handle the VM gets, so the VM marks a handle gone when it destroys the
-budget it came through, and a collection closes nothing at a gone handle's index. That covers the
-budget's own handle, and every handle the server launched with `serve` in that budget minted and
-returned to calls on it, since its mints are stamped with that budget (a pipeline's stage
-connections, which `piped` mints). The VM cannot tell a handle such a server minted from one it
-forwards, so a forwarded handle is marked gone too and is never closed: it stays in the VM's table
-until the VM ends, the price of never closing a reused index. The VM carves only from its own
-budget, so no budget it carved is below another. What is the VM's own goes the other way: the
+or the budget that stamped it ([objects](../kernel/objects.md#r9-stamps)), and stays in the VM's
+table as a dead entry, `Dead` to every call, until its last term is collected and closes it: the
+kernel gives its index to no other handle before ([handles](../kernel/objects.md#handles), I17 (a swept index stays dead until closed)).
+So a collection always closes what its term held, dead or live: the budget's own handle, every
+handle the server launched with `serve` in that budget minted and returned to calls on it, since
+its mints are stamped with that budget (a pipeline's stage connections, which `piped` mints), and
+a handle such a server forwarded rather than minted, which lives on. The VM carves only from its
+own budget, so no budget it carved is below another. What is the VM's own goes the other way: the
 send right a `launch` with `serve` gives it is to an endpoint the VM made, charged to the VM's
 budget, so the server's death leaves the slot to the VM, and it is closed when the right's last
 term goes. A handle the VM started with is known to the namespace for the VM's life; one a bind
@@ -1083,37 +1082,35 @@ unbinds its prefixes and ends its hub connection, and a session's `piped`, bound
 pipeline, leaves no entry and no handle behind (each once stayed for the session's life). The
 hub's session on the forgotten connection is ended as the budget is destroyed, so a request on it
 after (a stale file's clunk at its term's collection) is refused rather than sent: once the
-handle's last term is collected its index may be the next launch's send right, and a request
-sent on it then would reach that server, inside the session's own table. Tested:
-`a_destroyed_budgets_index_is_not_closed_when_its_term_is_collected`,
-`what_a_served_server_returned_goes_with_its_budget_and_is_not_closed_again`,
+handle is closed, its index may be the next launch's send right, and a request sent on it then
+would reach that server, inside the session's own table. Its waiter calls by the index too, owning
+no term, so the platform's I/O **holds a forgotten connection's handle until its waiter has handed
+its end over** (`Io::forget`): its terms' collection cannot close it while the waiter may still call,
+and no later handle takes the index under it. Tested: `a_destroyed_budgets_dead_entry_is_closed_when_its_term_is_collected`,
+`what_a_served_server_returned_goes_with_its_budget_and_is_closed_with_its_term`,
 `a_served_servers_binding_and_handle_go_with_its_budget` and
 `a_forgotten_connections_requests_reach_no_later_holder_of_its_index` on the host, against
-a fake kernel that frees those indices as the kernel does, and `pipe-eight` and `pipe-sixty-four`
-on the machine. A request's handles come with no budget: the kernel tells a receiver the sender's
+a fake kernel that keeps those indices dead as the kernel does, and `pipe-eight` and
+`pipe-sixty-four` on the machine. A request's handles come with no budget: the kernel tells a receiver the sender's
 badge, account and labels, never its budget, and a carved budget carries the session's account and
 labels. So a receive right the VM serves, given in a `launch`'s `handles` or `namespace` to a
 program in a budget the VM carved, goes to the program as a send right with a badge of that
 launch's own (`LAUNCH_BADGE` on, the next for each launch on that endpoint), minted from the
 receive right and stamped with the budget, never the receive right itself. What the program sends
 through it is stamped with its budget at best, as its own mints are, so the handles a request with
-that badge brings die with the budget and go under its Life: a program that sends a handle it
-minted and is then destroyed leaves a term whose collection closes nothing at the index the kernel
-has given on, be it a sibling job's budget or a connection of the session's. A handle such a
-program forwarded rather than minted is kept, never closed, as a server's is. The badge dies with
-the budget, so no request carries it after; one on its way to the VM as the budget went is known
-by its badge's range, and its handles kept. A badge in that range the VM did not mint (a holder of
-the receive right outside the VM mints what it likes) is taken for such a launch's, so what it
-brings is kept: a leak within the session's table, bounded as a forwarded handle's is, each
-such handle staying in the table until the VM ends, and never a close. Tested:
-`what_a_launched_program_sends_to_a_served_endpoint_goes_with_its_budget_and_is_not_closed_again`
+that badge brings die with the budget: a program that sends a handle it minted and is then
+destroyed leaves a dead entry, closed when its term is collected, and no index is given on
+meanwhile. A handle such a program forwarded rather than minted lives on, and is closed the same
+way. The badge dies with the budget, so no request carries it after; one on its way to the VM as
+the budget went is known by its badge's range, and what it brought is closed with its terms. So
+is what a badge in that range the VM did not mint brings (a holder of the receive right outside
+the VM mints what it likes). Tested:
+`what_a_launched_program_sends_to_a_served_endpoint_goes_with_its_budget_and_is_closed_with_its_term`
 on the host and `pipe-stage-handle` on the machine, where a stage given the session's served
 endpoint sends it the receive right of an endpoint it made, its budget is destroyed, and the
-budget carved next is still held once the term is collected. The residual: a handle revoked
-outside the VM, such as a grant whose stamp the steward destroys while the VM lives, is not known
-gone, and its index may be reused before its term is collected; collecting it then closes the
-handle that took the index, inside the session's own table. A generation in the handle word is to
-guard that, in work of its own. A handle cannot reach another VM in a
+budget carved next is still held once the term is collected. A handle revoked outside the VM, such
+as a grant whose stamp the steward destroys while the VM lives, is a dead entry the same way, and
+its term's collection closes that entry and nothing else. A handle cannot reach another VM in a
 message: the term format writes a resource as a plain reference, with no state behind it, so a
 decoded copy grants nothing, and a handle crosses between processes only in a kernel call that
 names it. Delegation is always `new_connection`, a typed call on a connection, not a native
@@ -1138,11 +1135,6 @@ Residuals:
   no status every protocol shares means a timeout, so its caller cannot tell the two apart.
 - A typed call whose caller exits is not cancelled: it holds its pool thread until its reply or
   its timeout, and the reply, with any handles it brought, is dropped and closed.
-- A forgotten connection's waiter calls on the server's handle by its index until the server's
-  death fails the call. Between two of its calls, the handle's last term could be collected and
-  the index given to the next launch's send right, so that one completion call reaches that
-  server, inside the session's own table. Holding the handle until the waiter has returned would
-  close that window; it stays, stated.
 - The six waiter places are a hard bound: a seventh live server a session uses at once is refused
   `emfile` after `FILE_WAIT_US` (10 s), and a session that needs seven servers at once has no way
   but to let one go first. The wait is the operation's, parked off the VM's thread: an ended

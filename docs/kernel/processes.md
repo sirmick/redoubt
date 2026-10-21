@@ -180,8 +180,9 @@ image and the startup block reach a process this way.
 copies) handle slots. It refuses, in this order, while decoding: a process handle of 0 or
 wider than 32 bits (`BadHandle`), a longer list (`TooLarge`) before reading it, an unreadable
 record (`InvalidArgument`), a slot of 0 or wider than 32 bits (`BadHandle`); then a process
-handle the caller does not hold or of another kind (`BadHandle`, `WrongObject`), any listed
-handle the caller does not hold (`BadHandle`), a process already started or ended, or with no
+handle the caller does not hold, a dead entry or of another kind (`BadHandle`, `Dead`,
+`WrongObject`), any listed handle the caller does not hold or a dead entry (`BadHandle`, `Dead`:
+[handles](objects.md#handles)), a process already started or ended, or with no
 budget left (`NotPermitted`), a child's table that would pass `MAX_HANDLES` (`TooLarge`), and a budget that
 cannot pay for the first thread and the handle-table pages (`OutOfMemory`). Then nothing
 fails:

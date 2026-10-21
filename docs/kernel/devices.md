@@ -522,10 +522,12 @@ the PLIC for itself alone.
 - **A driver dies mid-interrupt:** the source stays masked until the next `receive` by any
   holder of the IRQ handle.
 - **A device fails its reset:** it is quarantined, its object destroyed and its handles closed
-  everywhere; it is gone until reboot ([Quarantine](#quarantine)).
+  everywhere, each a dead entry, `Dead` to every call, until its holder closes it
+  ([handles](objects.md#handles), I17 (a swept index stays dead until closed)); it is gone until reboot ([Quarantine](#quarantine)).
 - **A device object's owner budget is destroyed:** each device object it owns is destroyed.
   Threads waiting in `receive` on an IRQ object get `Dead`, its source is masked, every handle
-  naming the object closes, and its page goes back ([R10](budgets.md#r10-destruction)). Nothing
+  naming the object closes, a dead entry until its holder closes it, and its page goes back
+  ([R10](budgets.md#r10-destruction)). Nothing
   makes a device object again, so the device is unreachable until reboot.
 - **The budget that stamped a device handle is destroyed:** that handle closes; the object and
   other holders' handles stay.

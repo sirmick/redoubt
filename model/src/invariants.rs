@@ -61,6 +61,7 @@ impl Checker {
         }
         serving(k)?;
         i1_i2_i3_i4_handles(k)?;
+        i17_swept_indices(k)?;
         i5_charging(k)?;
         ledger_backed(k)?;
         i6_i8_budgets(k)?;
@@ -798,6 +799,18 @@ fn serving(k: &Kernel) -> Check {
 /// I3: a minted handle's badge is non-zero and its stamp is its source's default stamp or a
 ///     descendant; a created handle is stamped with its creator's budget (R9).
 /// I4: badge-0 endpoint handles are `endpoint_create`'s results or copies of them.
+/// I17: an index a sweep closed stays a dead entry, live to no handle, until its holder closes it.
+fn i17_swept_indices(k: &Kernel) -> Check {
+    for &(pid, h) in &k.ghost.swept {
+        let Some(p) = k.processes.get(&pid) else { continue };
+        ensure!(
+            p.dead.contains(&h) && !p.handles.contains_key(&h),
+            "I17: process {pid}'s swept index {h} is not a dead entry"
+        );
+    }
+    Ok(())
+}
+
 fn i1_i2_i3_i4_handles(k: &Kernel) -> Check {
     for p in k.processes.values() {
         ensure!(!p.handles.contains_key(&NO_HANDLE), "I1: process {} uses handle index 0", p.pid);
@@ -866,8 +879,7 @@ fn i5_charging(k: &Kernel) -> Check {
         add(
             p.budget,
             page_tables(&p.space) * c.page_table
-                + p.handles.keys().map(|h| (h - 1) / c.handles_per_page).collect::<BTreeSet<_>>().len()
-                    as u64
+                + p.indices().map(|h| (h - 1) / c.handles_per_page).collect::<BTreeSet<_>>().len() as u64
                 + c.contexts
                 + p.threads.len() as u64 * c.thread,
         );
@@ -1084,10 +1096,12 @@ fn r4_delivery(k: &Kernel) -> Check {
 
 /// `device_info` (kernel/devices.md; R18): the answer is the `Devs` entry of the device the
 /// caller's handle names, read from its handle table and the device object; `WrongObject` if the
-/// handle names anything else; `BadHandle` if the caller holds no such handle.
+/// handle names anything else; `Dead` if a sweep closed it and the caller has not (I17, read from
+/// the ghost); `BadHandle` if the caller holds no such handle.
 fn device_info_answer(k: &Kernel, pid: u64, h: u64, got: &Result<Ret, Error>) -> Check {
     let held = k.processes.get(&pid).and_then(|p| p.handles.get(&h));
     let want = match held.map(|h| h.object) {
+        None if k.ghost.swept.contains(&(pid, h)) => Err(Error::Dead),
         None => Err(Error::BadHandle),
         Some(Object::Device(d)) => Ok(match k.devices[&d].kind {
             DeviceKind::Mmio { base, pages, dma, .. } => {

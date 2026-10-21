@@ -284,12 +284,13 @@ fn a_connection_minted_in_a_scope_ends_when_the_scope_is_destroyed() {
     attach(child_s, in_s, 1).unwrap();
     attach(child_t, in_t, 1).unwrap();
 
-    // The scope goes: the connection in it is gone from the child's table (and the launcher's
-    // copy with it), with no word to the server; the sibling still serves.
+    // The scope goes: the connection in it is dead in the child's table (and the launcher's copy
+    // with it) until closed (I17), with no word to the server; the sibling still serves.
     f.as_process(launcher, || Budget::from_handle(scope_s).destroy().unwrap());
-    assert_eq!(attach(child_s, in_s, 2), Err(ClientError::Sys(Error::BadHandle)));
+    assert_eq!(attach(child_s, in_s, 2), Err(ClientError::Sys(Error::Dead)));
     attach(child_t, in_t, 2).unwrap();
-    assert_eq!(f.held(child_s).0, 0, "the child's only handle is gone");
+    f.as_process(child_s, || redoubt_rt::handle::close(in_s).unwrap());
+    assert_eq!(f.held(child_s).0, 0, "the child's only handle is gone once closed");
 
     // The server still holds the dead connection's record (its fids, its admission): the
     // launcher's `disconnect` frees it, by the id, once.
@@ -324,10 +325,13 @@ fn the_fake_kernel_s_mint_only_narrows() {
         let minted = right.mint(badge, Some(&below)).unwrap();
         assert_eq!(right.mint(badge, Some(&Budget::from_handle(elsewhere))).err(), Some(Error::NotPermitted));
         // Destroying the budget named takes the handle minted in it and the budget's own, and
-        // no other: of the seven held (top, the right, elsewhere, below and three mints), five.
+        // no other: of the seven held (top, the right, elsewhere, below and three mints), the
+        // destroy closes the budget's own, and the mint's stays, dead, until closed (I17).
         assert_eq!(f.held(owner).0, 7);
         below.destroy().unwrap();
+        assert_eq!(f.held(owner).0, 6);
+        assert_eq!(Endpoint::from_handle(minted.handle()).mint(badge, None).err(), Some(Error::Dead));
+        redoubt_rt::handle::close(minted.handle()).unwrap();
         assert_eq!(f.held(owner).0, 5);
-        assert_eq!(Endpoint::from_handle(minted.handle()).mint(badge, None).err(), Some(Error::BadHandle));
     });
 }

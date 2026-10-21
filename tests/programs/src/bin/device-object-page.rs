@@ -103,7 +103,7 @@ pub extern "C" fn _start() -> ! {
     let gone = rd::device_info(slot);
     check!(
         out,
-        spawned.is_ok() && faulted && after == before - DEVICE_PAGES && gone == Err(Error::BadHandle),
+        spawned.is_ok() && faulted && after == before - DEVICE_PAGES && gone == Err(Error::Dead),
         "the quarantine destroyed the slot's object: system {} -> {} pages, one page back, and handle {} is gone ({:?})",
         before,
         after,

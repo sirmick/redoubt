@@ -78,7 +78,7 @@ pub extern "C" fn _start() -> ! {
     writeln!(
         out,
         "[launch] {}: the lease's handle is revoked ({:?}); the child's still names its notice",
-        ok(revoked == Some(Error::BadHandle) && rd::usage(process) == Err(Error::WrongObject)),
+        ok(revoked == Some(Error::Dead) && rd::usage(process) == Err(Error::WrongObject)),
         revoked
     )
     .ok();
@@ -118,15 +118,15 @@ pub extern "C" fn _start() -> ! {
     )
     .ok();
 
-    // Nothing leaks: the notice taken, the handle to the child is gone, and once the witness's
-    // budget goes too, `system`'s usage is what it was before the lease (I10).
+    // Nothing leaks: the notice taken, the handle to the child is dead (I17), and once the
+    // witness's budget goes too, `system`'s usage is what it was before the lease (I10).
     rd::destroy(other).unwrap();
     let gone = rd::usage(process).err();
     let after = rd::usage(rd::SYSTEM).unwrap();
     writeln!(
         out,
         "[launch] {}: the child's handle is gone ({:?}) and system's usage restored (before {:?}, after {:?})",
-        ok(gone == Some(Error::BadHandle) && after == before),
+        ok(gone == Some(Error::Dead) && after == before),
         gone,
         before,
         after
