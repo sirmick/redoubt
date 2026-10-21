@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 33
+revision = 88
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -2743,8 +2743,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "AGENTS"
   body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'STEWARD9 rv32 two-hart' (drafted there as SCHED1; that id was taken, so SCHED5) and 'STEWARD13 rv32 one-hart N = 1 decision_wake' (the second row). Brief: to follow (investigation-first; the brief covers both rows). Tier A (kernel scheduler / timer programming), size M, reviewer kernel-red-4. Row 1 (STEWARD9): at rv32 two harts the N=2 round's timer_wake p50 is 31.8 ms against 15 (31,855 then 31,835 us on a rerun alone, icount-deterministic), N=1 5.6 ms and N=3 5.2 ms; lock-wait 249/1000 in that round; one spinner live on the other hart. Row 2 (STEWARD13): at rv32 one hart the N=1 decision_wake p50 moved 24.2 -> 30.4 ms when the launch moved off the loop: a 30 ms receive timeout sleeps 53-62 ms with exactly one runnable VM and 1-3 ms beside a second, the steward idle in the window; the thread moved the receive ~10 ms earlier and the phase landed the sample over instead of under. Hypothesis: a sleeper's timeout does not end the running VM's slice, the timer armed for the slice's end rather than the nearest timeout, visible only when nothing else switches. Investigation: the kernel's timer programming against the slice with one runnable VM (the trace: the timeout's arming, the slice end, the wake); why N=2/one spinner specifically; whether R78's fair-entry order or the timer's arming bounds the wake, or it is a stated residual with its numbers. The implementer measures and brings fix-or-residual to the Architect. The cells are recorded, not judged, by STEWARD9 and STEWARD13 until this lands; no target moves. Pages: scheduling.md 'Responsiveness'/'Residual risks', kernel/timer.md if the arming moves. Logs .tmp/STEWARD9/rv32-14-FAIL-timerwake.log; STEWARD13's report."
-  state = "todo"
-  revision = 4
+  state = "active"
+  revision = 39
 
 [[node]]
   id = "SHELLN1"
@@ -2845,8 +2845,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   parent = "AGENTS"
   needs = ["WRITE1"]
   body = "Train 86 (WRITE1 alone, 777 of 778 green): rv64 lease-writes failed at 198.9 s, the session's ssh 'closed by remote host' right after {:started, 16} (alice holds 106,770 pages, 52 processes), no guest line after the sixteenth start_agent; rv32 passed in 533 s. Logs: .tmp/train-86/fail/ (job, console, ssh). WRITE1-identification.md runs 4-5 saw the same signature under the virtual clock and named a socket timer; the case is on the host clock (forward), where the report said it was not seen. The timer: servers/ipd/src/stack.rs IDLE_TIMEOUT 60 s with KEEP_ALIVE 30 s on every TCP socket (ipd.md: an established socket 60 s without progress is reset). So for 60 s of wall time no keep-alive answer reached the socket while the one-hart guest ran sixteen writing VMs: a starved or lost RX path in the guest (virtio-net wake, ipd's turn under R12, the console/sshd path) or slirp on the host. Identification first, no tuning: reproduce under load (the beamlet set or two whole-class sets beside it, kept logs, the ipd and sshd console lines on, a watchdog on the session's socket state), name the component that stalled and for how long, then a brief; a kernel or ipd fix is Tier A. The case's bound, deadline and N do not move; a miss is a finding. Reviewer kernel-red-4."
-  state = "todo"
-  revision = 4
+  state = "done"
+  revision = 87
 
 [[node]]
   id = "B95"
@@ -2854,8 +2854,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "AGENTS"
   body = "Found by B93's load passes, read by kernel-red-4: beamlet-files failed once per width beside a repeating 8-case boot set (16 jobs a pass); logs .tmp/B93/side/. The window is B26's: init restarts beamlet after its exit 0 (side/rv64:68-69) and the replay's lines land in the bench's GRACE after the last expect. The signature is new: the replay's write answers `files: wrote: {error,eio}` (side/rv64:72) and the restarted VM raises, where B26's eexist at make_dir is already covered by the start-time removal. Two questions, investigation first, no tuning: (1) why a write to walfsd:data returns eio under that load (walfsd's write path, the hub's error mapping, or the volume's state after the first run's exit while its connection is still being released), reproduced with kept logs and the server's console lines, then a brief if it is a server or hub change (Tier A); (2) whether the four cases whose VM exits 0 and is replayed by init should end at their exit (the case's own end, no replay inside the grace) rather than race the grace, stated on testbench.md if the bench changes. Bench/servers, size S. No bound widened; a miss is a finding. Reviewer kernel-red-4."
-  state = "todo"
-  revision = 2
+  state = "done"
+  revision = 66
 
 [[node]]
   id = "IPD2"
@@ -2863,8 +2863,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "AGENTS"
   body = "Owner Q4 (.wash/local/owner-questions-2026-10-18.md, 'Owner's answers'); ruling .wash/local/wave-2026-10-18-rulings.md 'Owner's answers 2026-10-20'. Brief: .wash/local/IPD2-implementer.md. Tier A (ipd's admission and sizing, the serving library's override rule), size M (not S: limits= overrides account-0 root badges only, and a session's /net is admitted in its account's bucket, so the mechanism the question assumed does not reach a session), red review (kernel-red-4 or the orchestrator's ipd red) + simplifier + editor. Base origin/main 453a48bfc. Rule: ipd arg account=ACCOUNT:INFLIGHT:STATE:SOCKETS gives a non-zero account's unlabelled bucket its own caps; libs/rt Override gains the account key, worst case and share rule unchanged; TIME-WAIT counting stands; the image gets account=1001:5:4:32, bob none. Sizing re-derived on ipd.md and servers/ipd/tests/sizing.rs (State 36, fids min(72, 64), 17,408 B a socket, heap cap against max_sockets; a gap today is a finding first). Cases: host tests (parse, unlabelled-only, sizing); a new boot case both widths: alice's SSH session beside the console opens and closes more than the old three connections within TIME-WAIT, all answered (peer's verdict), and the connect past her derived share is emfile (ipd's too_many); session-tcp-*, net-*, sshd-refuses-slots, steward-six-principals unchanged. Pages: ipd.md 'Sizing', serving.md 'Overrides', beamlet.md's 'three sockets' sentence, testbench.md memory table if the heap moves. Hotspots: libs/rt/src/server/admit.rs (sweep every consumer), servers/ipd, image/manifest.json (ipd entry). Independent of SCHED5, B94, B95, WEIGHT1."
-  state = "reported"
-  revision = 33
+  state = "done"
+  revision = 72
 
 [[node]]
   id = "WEIGHT1"
@@ -2881,8 +2881,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "AGENTS"
   body = "Found by WEIGHT1's gate (.wash/local/WEIGHT1-report.md) at 453a48bfc, before WEIGHT1's change; confirmed by weight1-red P3-2. Re-measure the boot profile's prompt row on both widths at main (the recipe beamlet.md names), update the row with its spread, and find which merge moved it (likely BEAM19/B88/READ1-era read-path work) so the page's attribution is right. No bound moves unless a stated target depends on the row. Docs and measurement only: Tier B, one reviewer (editor)."
-  state = "todo"
-  revision = 16
+  state = "done"
+  revision = 47
 
 [[node]]
   id = "B97"
@@ -2892,3 +2892,79 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   body = "Raised by IPD2's red review (round 2, P3, minor). After IPD2 the table is held to 2 x max_sockets; a listener whose backlog was accepted while its bucket was full stays with no backlog, no unit and no charge, yet keeps a table slot. Only a listen-scope holder (the image's sshd, badge 6) can do it, never a person; it is a cross-bucket refusal (an observable bit), not a crash. Either charge an empty listener's entry to its holder's bucket, or state it as a residual on ipd.md 'Residual risks' with the arithmetic. Tier A (ipd admission), small; red review."
   state = "todo"
   revision = 29
+
+[[node]]
+  id = "INIT6"
+  title = "A restarted entry never meets its predecessor's mux session: a Tversion ends everything a connection key holds at a shared server, its fids and its multiplexed session alike"
+  template = "package"
+  parent = "AGENTS"
+  needs = ["B95"]
+  body = "Found by B95 (.wash/local/B95-identification.md step 4, premise corrected on thread B95-cause; servers-red's P3-2). Ruling .wash/local/wave-2026-10-18-rulings.md 'B95-cause' item 3, 'corrected premise', 'B95 review'. Brief: .wash/local/INIT6-implementer.md. Tier A (the serving library), size S, reviewer kernel-red-4 (or the rt red). Gap: init re-mints the same badge number for a restarted entry and a shared server keys its state by it. The fids go at the successor's attach (the plain path's Tversion drops every fid of the key); the mux session does not: it holds its InFlight and its pending requests' Requests and Pages to the session bound, every hold-0 completion call the successor's connect makes is parked on it, answered empty and resets its deadline (a successor retrying faster than the bound never gets a session: 8 failed connects in 250 ms in B95's injected run), and the successor's hold-0 call collects the predecessor's pending answers, R-messages for tags it never sent. The mux path already ends a session at a Tversion; the plain path does not. Rule: a Tversion on a connection key ends everything the key holds, its fids and its mux session (call answered status 4, pending requests and answers dropped, admission released); one rule for both paths; nothing changes in init; init.md's Restart bullet reworded to the truth. Cases: redoubt-rt mux host tests on the held clock (a parked session with pending answers ended by a plain Tversion, nothing of it collected after, the next hold-0 OPENED; a live client's Tversion unchanged); a boot case both widths, a server entry holding a mux session at walfsd:data restarted inside the bound, the successor's first call OPENED, verdict the server's count; init-restart, steward-restart, aio-many-reads*, beamlet-files unchanged. Pages: serving.md 'The end' and 'A client dies', init.md 'Restarts and reboots'; B95's residual goes. Hotspot: libs/rt/src/server/ninep.rs (sweep every consumer). Independent of SCHED5, B94."
+  state = "todo"
+  revision = 58
+
+[[node]]
+  id = "B98"
+  title = "walfsd's mount fails under a whole bench's load with no reason and the box reboots: blkd marks its device broken silently (likely its 10 s timeout under host load), walfsd says nothing"
+  template = "package"
+  parent = "AGENTS"
+  body = "Found by B95's natural load run (B95-report.md 'Other findings' 1; console .tmp/B95/load/rv32-02.kept.smp1.log:48, consoles/run-567976-*). Ruling .wash/local/wave-2026-10-18-rulings.md 'B95's side findings'. Not B51 (a completion call's clock), not B26, not INIT6. rv32 beamlet-files under the 8-case side load: walfsd 'the volume does not mount, and is served as corrupt', no blkd line, every beamlet exits 1, init reboots after five restarts (init's rule as designed, not the finding). blkd prints nothing when it marks its device broken (servers/blkd/src/disk.rs 'Broken stays broken') and walfsd prints no reason for a failed mount. Likely path: blkd's REQUEST_TIMEOUT_US (10 s) missed under host load (a disk case's guest clock follows the host's while the guest idles on a virtio completion), the device broken for ever by a rule whose stated reason is a lie, not a slow host; IPD2's 'volume poisoned: create: blkd answered Failed' is the same signature. Investigation-first, no tuning: (i) blkd says when and why it marks a device broken (the timeout, or which lie), walfsd says why a mount failed (the read's error or the check); (ii) reproduce under the same load with the lines on, logs kept; (iii) if it is the timeout under host load, the design question is the bound's clock, B94's shape: bring the numbers to the Architect, no bound moves here; if the reads returned wrong bytes, a kernel/driver finding, top priority, stop and say so. Tier A (blkd, walfsd; the kernel if (iii) says so), size S-M, reviewer kernel-red-4. Pages: blkd.md 'A lie is permanent' and its failure modes, walfsd.md mounting; the case lines are contracts. Independent of B94, B95, SCHED5."
+  state = "active"
+  revision = 54
+
+[[node]]
+  id = "B99"
+  title = "bootfsd's heap cap fails its check under load: userland-boot rv32 needs 2308 pages for twice a 1154-page peak against a cap of 2304 set at twice the idle peak; the per-request term is underived"
+  template = "package"
+  parent = "AGENTS"
+  body = "Found by B95's natural load run (B95-report.md 'Other findings' 2; .tmp/B95/load/load-*.log, six of six rv32 userland-boot under the 8-case side load; alone it passes). Ruling .wash/local/wave-2026-10-18-rulings.md 'B95's side findings'. The guest reports the failure in guest time, so under testbench.md's shared-host rule it is a verdict, not a flake: the case is red on main under load. The image's bootfsd cap (2304) is twice an idle-measured 1152 (B35/B42 set it at the rule's value); the peak carries a load-dependent term the derivation lacks: the pages of requests outstanding at once (bootfsd admits pages 2 and in_flight 2 a bucket, servers/bootfsd/src/server.rs limits(); clients overlap more under load) and any Vec growth they trigger. Fix: find where the two to four pages come from (the memory scan under the load set, bootfsd's heap by component), then derive the cap as the entries' size plus the admission's worst-case per-request term, stated on bootfsd's page (init.md 'Heaps' names the rule) and in the manifest's comment, the memory cases' peaks under load beside it; if the term cannot be derived, twice the worst measured under the load set, with that stated. Every manifest with a bootfsd entry by the same arithmetic (B42's four BEAM4 manifests included). Gate: userland-boot, init-boot, beamlet-footprint and the memory cases both widths, alone and beside the load set; memory-host-tests. Tier B (a manifest number and its derivation; the editor); re-tier to A if bootfsd's code changes. Independent of B94, B95, SCHED5."
+  state = "done"
+  revision = 78
+
+[[node]]
+  id = "K34"
+  title = "map_anon's placement search is bounded by construction, not by the area: a per-process free-run summary (or a resumed search) makes a placement cost a constant small against a slice"
+  template = "package"
+  parent = "AGENTS"
+  needs = ["SCHED5"]
+  body = "PRIORITY UP (2026-10-20): launch as soon as SCHED5 lands, ahead of anything else on the kernel's memory path. Ruling: .wash/local/wave-2026-10-18-rulings.md 'SCHED5: map_anon's placement search' and 'the search's true worst'. Found by SCHED5's implementer: after the per-call page cap every range call's pages are bounded, but map_anon's placement search (shared by map_device, dma_alloc and a received message's placement) costs one page-table walk per candidate start, so a refusal follows the starts, 65,536 / n for a page pinned per n-page window: 22 / 35 / 61 / 114 ms rv64 (16 / 24 / 38 / 68 rv32) for n = 16 / 8 / 4 / 2 on the base kernel (.wash/local/SCHED5-search-finding.md). A process buys it with 65,536 / n pages of its own budget: a lease about 25-30 ms a call, at will, every wake and every other hart (R78) waiting. SCHED5 states it as the second named exception with the table; this node removes it. Design, the implementer's choice with the reason: (a) a per-process free-run summary over the placement area, kept in step with the page tables (a page is free only if its entry is empty: reservations and both sides of a loan are taken), read a word a level as the frame bitmap is, its memory per process stated and charged; or (b) a search that walks the tables once and iterates entries, resuming across the process's own entries, which removes the per-start walk. Either: R12's sentence loses its second exception; R22's search paragraph and table rewritten with the new bound; the model's contract and a mutation; map-anon-search-bound's bounds re-derived down from the new worst (no target moves elsewhere); the contention cases' hammer re-read. Tier A (kernel), size M, reviewer kernel-red-4 + simplifier + editor. Needs SCHED5 (the cap and the hammer)."
+  state = "todo"
+  revision = 68
+
+[[node]]
+  id = "K35"
+  title = "One small frame costs an idle 4-hart box about 66 cross-hart interrupts and 84 SBI calls: the wake chain from ipd's timer through netd and back is bounded to a handful of wakes"
+  template = "package"
+  parent = "AGENTS"
+  needs = ["B94"]
+  body = "Ruling: .wash/local/wave-2026-10-18-rulings.md 'B94: the keep-alive's idle cost'. Found by B94's cost measurement (.wash/local/B94-idle-cost.md): four extra keep-alive probes a minute on one socket raise launch-idle's m_software on all four harts by about +4.4/s, supervisor ecalls +5.6/s, user ecalls +1.0/s: about 66 interrupts and 84 SBI calls per probe across the machine, while ipd itself wakes once per probe (fake clock: 12 wakes, 12 frames in 120 s). So the cost is the path's: ipd's timer wake, its transmit call to netd, the card's answer interrupt, netd's receive thread and its send to ipd, ipd's wake, each a cross-hart wake (lock hand-off and wake IPIs, IDLE2's shape) on an idle box. This is the box's per-packet cost at rest, paid by every packet of every idle session, and it is what put the derived keep-alive over the idle ceiling. Investigation-first with the trace: count the kernel entries, IPIs and SBI calls one probe round trip costs on 4 harts and name each (a wake sent to a halted hart, a lock hand-off, a timer re-arm, an interrupt claim); then bound the chain to what it needs (a handful of wakes), in the kernel's wake/IPI path or the drivers' threading, no behaviour change at the sockets. Acceptance: the per-probe cost re-measured on launch-idle, stated on ipd.md beside the keep-alive rule and on scheduling.md/idle pages if the kernel's path changes; the idle ceilings do not move; the keep-alive interval is not re-derived unless the loss model changes. Tier A (kernel, netd, ipd), size M, reviewer kernel-red-4 + simplifier + editor. Runs after B94."
+  state = "todo"
+  revision = 67
+
+[[node]]
+  id = "B100"
+  title = "The 9P mux lists a send's messages before admission: 16 lent pages of 7-byte messages make about 240 heap pages at a shared server from any session"
+  template = "package"
+  parent = "AGENTS"
+  needs = ["B95"]
+  body = "Found by B99 (.wash/local/B99-report.md, finding): libs/rt's ninep_mux stored() builds the list of a send's messages before admission, so one session's send of 16 lent pages packed with minimal 7-byte messages makes about 240 pages of heap at any shared 9P server (bootfsd, walfsd, littlefsd, erofsd), outside every budget and cap. Suggested: cap the list at MAX_TAGS (or admit before listing). Needs B95 (same file, ninep_mux.rs). Tier A (serving library, shared servers' memory), S; red review; a host test that fails on main and an attack case from a session. Architect to confirm the shape."
+  state = "todo"
+  revision = 71
+
+[[node]]
+  id = "B101"
+  title = "launch-idle's busiest hart rose from 1.6-1.9 to 2.4-2.8 interrupts/s on main since its ceiling was set, with nothing in the case changed: find the merge and the mechanism"
+  template = "package"
+  parent = "AGENTS"
+  body = "Found by B94's cost measurement and servers-red's P2-1 (.wash/local/B94-idle-cost.md, .tmp/B94/idle/4): base 3e6f29443 reads 2.4-2.8 interrupts/s on the busiest hart in launch-idle, alone, where the ceiling of 3.8 was set at twice 1.6-1.9 (87553025a, 2026-10-14, the one-hart-per-timeout rule), the 30 s keep-alive on both sides. Ruling .wash/local/wave-2026-10-18-rulings.md 'B94 review (servers-red P2-1, P2-2)'. The ceiling does not move (re-deriving to 7 would hide the doubling of base it exists to catch); testbench.md restates the headroom as it is (B94 does that), and this node finds the rise. Investigation-first: bisect by train between 87553025a and 3e6f29443 with launch-idle alone on a quiet machine (each round started only with no other job on q), both widths, the per-hart and per-kind rates kept (m_software hand-offs, timer, external); name the merge and the mechanism (a new periodic wake, a timer re-armed more often, a hand-off per wake that IDLE2 removed coming back, a server polling); then fix it or state it on the page with its number. No ceiling moves; the fix is judged by launch-idle alone, twelve alternating rounds as B94 measured. Tier A (kernel or a driver; Tier B only if it is a userland timer), size S-M, reviewer kernel-red-4. Independent of K35 (the per-packet wake chain) and B94 (the keep-alive); runs beside either."
+  state = "todo"
+  revision = 82
+
+[[node]]
+  id = "B102"
+  title = "steward-context-login hangs to 1,500 s under load (rv32): a console send hits the kernel's 1 ms send rendezvous mid sshd turn, gets a timeout, and the case never fails fast"
+  template = "package"
+  parent = "AGENTS"
+  body = "Train 89 (72c20688c): rv32 steward-context-login FAIL 1500.2 s, session bob.work+x step 1 timed out waiting for 'again-in'; the reattach printed `{:ended, {:error, :timeout}}` for `:redoubt.send(... /dev/cons ...)`. Passes 5/5 alone on the same head both widths (6.4-7.2 s). Read by B95's implementer (.wash/local/B95-report.md 'steward-context-login'): the timeout is beamlet send/2's own SEND_TIMEOUT_US = 1,000 us rendezvous (system.rs:43, 451-463); the receiver is sshd's slot driver, in receive only between turns (SSH core, ipd writes with sleep retries, slot.turn/wake); on one loaded rv32 hart a turn over 1 ms is ordinary. Not B95's mux (sends are one-way). Logs: .tmp/train-89/fail-rv32-steward-context-login.log and the two .ssh.log beside it. Investigation: is a 1 ms rendezvous the right contract for a console send (the case's send, or the session's), or should the case/shell retry or the send block; why one failed send leaves the case hanging, not failing at once. Bench/shell or beamlet, S; Tier A if beamlet's send contract changes."
+  state = "todo"
+  revision = 88
