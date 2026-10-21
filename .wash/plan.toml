@@ -1,7 +1,7 @@
 # wash-plan: written by Wash as the plan changes.
 # Edit it only between workspaces; plan_set {"from": "<this file>"} loads it.
 
-revision = 158
+revision = 168
 legend = "states: todo, active, reported, review-due (merged, review owed), done, failed; 🔴 blocked on the owner; 🧪 in review"
 
 [[node]]
@@ -2985,8 +2985,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "AGENTS"
   body = "Found by SCHED5's implementer (.wash/local/SCHED5-report.md, open items): tools/testbench's tree fingerprint runs `git diff` (and similar) which refreshes the index and takes .git/index.lock; a run killed mid-fingerprint (a session end, a q stop) leaves an empty lock, seen six times on 2026-10-20/21 in the root and in worktrees, each blocking commits until removed by hand. Fix: run the fingerprint's git commands with --no-optional-locks (GIT_OPTIONAL_LOCKS=0), so a read never writes the index; a host test that the fingerprint leaves no lock. Also (B100's report, Observations 2): testbench.md 'Which cases run in guest time' states 145 of 226 boot cases, 38, 8 and 68; the tree has 351 boot cases, 187 under icount. Recount every figure in that paragraph by script, state the script's command in the report, and update the paragraph. Tooling and docs, Tier B, S; one reviewer (editor)."
-  state = "todo"
-  revision = 127
+  state = "done"
+  revision = 168
 
 [[node]]
   id = "B105"
@@ -2994,8 +2994,8 @@ legend = "states: todo, active, reported, review-due (merged, review owed), done
   template = "package"
   parent = "AGENTS"
   body = "Found by B100's attack case (.wash/local/B100-report.md, Observations 1; logs .tmp/B100/run1/): on rv64 `for i <- 0..9361, into: <<>>, do: <<...>>` typed at alice's shell ended her VM with `memory allocation of 3269248 bytes failed` (a Rust panic, exit 101); rv32 passed. beamlet.md 'beamlet on Redoubt' states the shape as a residual for several floods at once or a native's single large allocation: the limits are measurements caught afterwards, and the budget's backstop ends the VM. But this is the VM's own binary construction from one expression, below the 2^27-word process limit and above the session's free pages (a sixteenth is 696 pages, 2.85 MB), so a person's one line logs them out where BEAM would kill the process. Rule to hold: an allocation one Erlang process asks the VM for (a binary's construction or growth, a tuple, a list's copy) is checked against that process's heap limit and the VM's free pages before it is made; past either, the process is killed as max_heap_size kills it (exit reason, an error report the shell prints), and the VM serves on. A native's own allocation and several processes at once stay the stated backstop. Investigation first: where the binary builder allocates (beamlet-vm's bs_* and comprehension into: <<>>), why rv64 and not rv32 (a growth doubling past the pages on one width), and which other single-allocation paths a process can drive the same way. Cases: a host test per path (the process killed, the VM alive); the B100 line at the shell on both widths, the session printing the process's exit and answering the next line. Pages: beamlet.md's limits paragraph and the residual's wording narrowed to what remains. Tier B (beamlet, inside one session's budget), size S-M, one reviewer: the red team (a session's availability)."
-  state = "todo"
-  revision = 126
+  state = "active"
+  revision = 160
 
 [[node]]
   id = "B106"
