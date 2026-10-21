@@ -34,6 +34,10 @@ forbid = [
 # a measured bound, and far below a starved operation. The 20 s step bound is the bench's margin
 # for the line to arrive over ssh on a loaded host, no part of the claim. A probe over 4,000 ms is
 # the finding (R2 or R37 broken), never retried and never loosened.
+# The worsts were measured with the disk flushing to the host's file (QEMU's default cache);
+# the bench's disks no longer do (docs/testbench.md "Disks and network cards"), so the bound is
+# looser than its rule against what a probe now costs: it is re-measured at the next train, and
+# does not move until then.
 [[session]]
 user = "alice"
 forbid = ['\*\* \(']

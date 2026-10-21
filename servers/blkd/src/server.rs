@@ -35,7 +35,7 @@ use redoubt_rt::wire::proto::blkd::{
     ErrorCode, Flush, FlushReply, Info, InfoReply, Message, Read, ReadReply, Reply, Write, WriteReply,
 };
 
-use crate::disk::Disk;
+use crate::disk::{Broke, Disk};
 use crate::range::Range;
 use crate::transport::Transport;
 use crate::virtio::{DATA_LEN, DeviceError, MAX_SECTORS, SECTOR_SIZE};
@@ -82,6 +82,9 @@ impl<T: Transport> BlockServer<T> {
     }
 
     pub fn disk(&self) -> &Disk<T> { &self.disk }
+
+    /// What broke the device, once, when it has just broken ([`Disk::take_broke`]).
+    pub fn take_broke(&mut self) -> Option<Broke> { self.disk.take_broke() }
 
     /// One slot per GPT entry, in entry order; slot *i* is badge *i* + 1.
     pub fn roots(&self) -> &[Option<Range>] { &self.roots }

@@ -13,9 +13,12 @@
 //! 3. **A refusal, not silence.** A device that lies gets an error and is marked broken; it never returns
 //!    data as if it were good.
 
+use redoubt_blkd::disk::Broke;
 use redoubt_blkd::fake::{FakeDevice, Policy, Scribble, policy_from};
 use redoubt_blkd::image::{Entry, Image};
-use redoubt_blkd::virtio::{DeviceError, MAX_SECTORS, SECTOR_SIZE, bit, feature};
+use redoubt_blkd::virtio::{
+    DeviceError, Lie, MAX_SECTORS, REQUEST_TIMEOUT_US, SECTOR_SIZE, bit, feature, request,
+};
 use redoubt_blkd::{Disk, read_partitions};
 
 const SECTORS: u64 = 8192;
@@ -243,6 +246,48 @@ fn a_device_that_lies_about_a_completion_is_refused_and_never_spoken_to_again() 
         assert_eq!(disk.flush(), Err(DeviceError::Broken), "{why}");
         assert_eq!(device.strayed(), 0, "{why}");
     }
+}
+
+/// What broke the device is kept, said once (servers/blkd.md, "A lie is permanent"): the request,
+/// and the rule the device broke, or for a timeout how long the wait lasted and whether the device
+/// had completed by then.
+#[test]
+fn a_broken_device_says_once_what_broke_it() {
+    let device = device();
+    let mut disk = up(&device).expect("bring-up");
+    disk.read(64, &mut vec![0; 8 * SECTOR]).expect("a read");
+    assert_eq!(disk.take_broke(), None, "a healthy device has nothing to say");
+    device.set_policy(Policy { used_idx_delta: Some(2), ..P });
+    assert!(disk.read(64, &mut vec![0; 8 * SECTOR]).is_err());
+    let broke = disk.take_broke().expect("the lie is kept");
+    let Broke { error, kind, sector, sectors, waited } = broke;
+    assert!(
+        matches!(error, DeviceError::Io(Lie::UsedIndex { want, got }) if got == want.wrapping_add(1)),
+        "{error:?}"
+    );
+    assert_eq!((kind, sector, sectors, waited), (request::IN, 64, 8, None));
+    assert!(broke.to_string().starts_with("a read of 8 sectors at 64: Io(UsedIndex"), "{broke}");
+    // Once: the later refusals are `Broken`, and say nothing more.
+    assert_eq!(disk.read(64, &mut vec![0; SECTOR]), Err(DeviceError::Broken));
+    assert_eq!(disk.take_broke(), None);
+
+    let device = self::device();
+    let mut disk = up(&device).expect("bring-up");
+    device.set_policy(Policy { blk_status: Some(3), ..P });
+    assert!(disk.write(100, &[7; SECTOR]).is_err());
+    let broke = disk.take_broke().expect("the lie is kept");
+    assert_eq!(broke.error, DeviceError::Io(Lie::Status(3)));
+    assert_eq!((broke.kind, broke.sector, broke.sectors), (request::OUT, 100, 1));
+
+    let device = self::device();
+    let mut disk = up(&device).expect("bring-up");
+    device.set_policy(Policy { never_complete: true, ..P });
+    assert_eq!(disk.flush(), Err(DeviceError::Timeout));
+    let broke = disk.take_broke().expect("the timeout is kept");
+    assert_eq!((broke.error, broke.kind), (DeviceError::Timeout, request::FLUSH));
+    let (us, moved) = broke.waited.expect("a timeout says how long it waited");
+    assert!(us >= REQUEST_TIMEOUT_US && !moved, "{broke}");
+    assert!(broke.to_string().starts_with("a flush: no completion in "), "{broke}");
 }
 
 /// Some lies are not protocol violations, so they are not refused; what matters is that they

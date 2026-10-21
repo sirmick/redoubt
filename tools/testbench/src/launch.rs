@@ -110,7 +110,7 @@ pub fn system(builder: &Builder, workspace: &Path, logs: &Path, ask: &System) ->
     let firmware = crate::rustsbi_prototyper(target).map_err(|why| anyhow::anyhow!(why))?;
     let disk = kept.clone().unwrap_or_else(|| logs.join(format!("{}-{}.img", case.name, target.name)));
     let made = !disk.exists();
-    let qemu = command(machine, &firmware, &packed, boot, &disk, ask.smp, ask.ssh_port)?;
+    let qemu = command(machine, &firmware, &packed, boot, &disk, ask.smp, ask.ssh_port, qemu::Flush::Host)?;
     let fingerprint = host_key_fingerprint(&std::fs::read(packed.bundle.with_extension("manifest.json"))?)?;
 
     eprintln!("+ {}", qemu::shell_line(&qemu));
@@ -226,7 +226,11 @@ pub fn prove_forward(port: u16, qemu: &mut Child) -> Result<Answer> {
 
 /// The QEMU command that boots the launch machine's `packed` image at `smp` harts, its disk
 /// packed afresh at `disk` (or, kept, as it is there) and the guest's port 22 forwarded from the
-/// host's `port`: what `./launch --system` boots, and the `launch-system` case.
+/// host's `port`: what `./launch --system` boots, and the `launch-system` case. The two differ only
+/// in `flush`: `./launch` passes [`qemu::Flush::Host`], its disks and its host being the user's,
+/// and a launch case [`qemu::Flush::Free`], as every case's disks are (docs/testbench.md, "Disks and
+/// network cards").
+#[allow(clippy::too_many_arguments)]
 pub fn command(
     machine: &Machine,
     firmware: &str,
@@ -235,6 +239,7 @@ pub fn command(
     disk: &Path,
     smp: u32,
     port: u16,
+    flush: qemu::Flush,
 ) -> Result<Command> {
     // The principals' homes and the vault's tree, as `./mkimage` makes them: the disk's stages.
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -247,7 +252,7 @@ pub fn command(
         std::fs::create_dir_all(root.join(dir))?;
     }
     let (devices, _) =
-        qemu::virtio_devices(boot, disk, packed.userland.as_ref(), qemu::HostPorts::Given(&[port]))?;
+        qemu::virtio_devices(boot, disk, packed.userland.as_ref(), qemu::HostPorts::Given(&[port]), flush)?;
     let image = Image {
         machine,
         firmware,
@@ -438,6 +443,35 @@ fn from_nul_separated(bytes: &[u8]) -> Result<Command> {
 mod tests {
     use super::*;
 
+    /// A launch case boots `./launch`'s command line but for one flag: its writable disks cost the
+    /// host no fsync (`cache=unsafe`), where `./launch` keeps QEMU's default. Nothing else differs.
+    #[test]
+    fn a_launch_case_differs_from_launch_only_in_its_disks_cache() {
+        let target = &crate::target::TARGETS[0];
+        let machine = target.machine.as_ref().expect("a bootable target");
+        let packed = Packed { loader: "loader".into(), bundle: "bundle".into(), userland: None };
+        let boot: Boot = toml::from_str(
+            "programs = []\nexpect = []\n[disk]\nsize_kib = 64\n[vault]\nsize_kib = 64\n[net]\nforward = [22]\n",
+        )
+        .unwrap();
+        let dir = std::env::temp_dir().join(format!("testbench-launch-flush-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let disk = dir.join("boot.img");
+        let line = |flush| -> Vec<String> {
+            let qemu = command(machine, "firmware", &packed, &boot, &disk, 2, 2200, flush).unwrap();
+            qemu.get_args().map(|a| a.to_string_lossy().into_owned()).collect()
+        };
+        let (by_hand, case) = (line(qemu::Flush::Host), line(qemu::Flush::Free));
+        assert_eq!(by_hand.len(), case.len(), "{by_hand:?}\n{case:?}");
+        let differ: Vec<_> = by_hand.iter().zip(&case).filter(|(h, c)| h != c).collect();
+        assert_eq!(differ.len(), 2, "the two writable disks' drives, and nothing else: {differ:?}");
+        for (h, c) in differ {
+            assert!(h.starts_with("if=none,") && !h.contains("cache="), "{h}");
+            assert_eq!(*c, format!("{h},cache=unsafe"));
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     /// The fingerprint of the image's host key, seed 11..11, is the one `ssh-keygen -lf` prints
     /// for its public key:
     /// `ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINBKsjJ0K7SrOhNovUYV5ObQIkq3GgFrr4UgozLJd4c3`.
@@ -552,7 +586,8 @@ mod tests {
         let boot: Boot = toml::from_str("programs = []\nexpect = []\n[net]\nforward = [22]\n").unwrap();
         let disk = std::env::temp_dir().join(format!("testbench-launch-forward-{}", std::process::id()));
         let (args, forwards) =
-            qemu::virtio_devices(&boot, &disk, None, qemu::HostPorts::Given(&[2200])).unwrap();
+            qemu::virtio_devices(&boot, &disk, None, qemu::HostPorts::Given(&[2200]), qemu::Flush::Host)
+                .unwrap();
         assert_eq!(forwards, [(22, 2200)]);
         assert!(args.iter().any(|a| a.contains("hostfwd=tcp:127.0.0.1:2200-:22")), "{args:?}");
         assert_eq!(

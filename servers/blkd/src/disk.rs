@@ -14,11 +14,15 @@
 //! on after a lie would mean trusting the liar; `init` restarts `blkd`, which resets the device
 //! from the beginning (servers/init.md, "Restarts and reboots"). A device that merely *reports*
 //! a failure (virtio-blk status `IOERR` or `UNSUPP`) is behaving, so that fails one request and
-//! nothing more.
+//! nothing more. What broke it is kept as a [`Broke`], for `blkd` to say once on its console.
+
+use core::fmt;
 
 use crate::queue::{DATA_OFF, HEADER_OFF, Queue, STATUS_OFF, Segment};
 use crate::transport::Transport;
-use crate::virtio::{self, DATA_LEN, DeviceError, Features, SECTOR_SIZE, blk_status, request};
+use crate::virtio::{
+    self, DATA_LEN, DeviceError, Features, Lie, REQUEST_TIMEOUT_US, SECTOR_SIZE, blk_status, request,
+};
 
 /// The virtio-blk request header, in bytes (§5.2.6).
 const HEADER_BYTES: u32 = 16;
@@ -29,7 +33,44 @@ pub struct Disk<T: Transport> {
     queue: Queue,
     sectors: u64,
     read_only: bool,
-    broken: bool,
+    /// The request being served: virtio-blk's type, its first sector and its sectors.
+    request: (u32, u64, u32),
+    /// What broke the device, once it is broken.
+    broke: Option<Broke>,
+    /// Whether [`Disk::take_broke`] has yet to hand `broke` out.
+    unsaid: bool,
+}
+
+/// The request a device was marked broken on, and why: what `blkd` says once on its console
+/// (servers/blkd.md, "A lie is permanent").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Broke {
+    pub error: DeviceError,
+    /// virtio-blk's request type ([`request`]).
+    pub kind: u32,
+    pub sector: u64,
+    pub sectors: u32,
+    /// For a timeout: how long the wait lasted by `blkd`'s clock, in microseconds, and whether the
+    /// used ring had moved when it was looked at once more, after the wait.
+    pub waited: Option<(u64, bool)>,
+}
+
+impl fmt::Display for Broke {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Broke { error, kind, sector, sectors, waited } = *self;
+        match kind {
+            request::IN => write!(f, "a read of {sectors} sectors at {sector}: ")?,
+            request::OUT => write!(f, "a write of {sectors} sectors at {sector}: ")?,
+            _ => f.write_str("a flush: ")?,
+        }
+        match waited {
+            Some((us, moved)) => {
+                let since = if moved { "the used ring has moved since" } else { "and nothing since" };
+                write!(f, "no completion in {us} us (the bound is {REQUEST_TIMEOUT_US}), {since}")
+            }
+            None => write!(f, "{error:?}"),
+        }
+    }
 }
 
 impl<T: Transport> Disk<T> {
@@ -42,7 +83,7 @@ impl<T: Transport> Disk<T> {
         queue.configure(&transport)?;
         virtio::driver_ok(&transport)?;
         let sectors = virtio::capacity(&transport)?;
-        Ok(Disk { transport, queue, sectors, read_only, broken: false })
+        Ok(Disk { transport, queue, sectors, read_only, request: (0, 0, 0), broke: None, unsaid: false })
     }
 
     /// The disk's size in 512-byte sectors, as the configuration space reported it at bring-up.
@@ -52,7 +93,13 @@ impl<T: Transport> Disk<T> {
 
     pub fn read_only(&self) -> bool { self.read_only }
 
-    pub fn is_broken(&self) -> bool { self.broken }
+    pub fn is_broken(&self) -> bool { self.broke.is_some() }
+
+    /// What broke the device, the first time it is asked after the device broke, and `None`
+    /// otherwise: so it is said once.
+    pub fn take_broke(&mut self) -> Option<Broke> {
+        if core::mem::take(&mut self.unsaid) { self.broke } else { None }
+    }
 
     /// Reads `out.len() / 512` sectors from `sector` into `out`.
     ///
@@ -61,6 +108,7 @@ impl<T: Transport> Disk<T> {
     pub fn read(&mut self, sector: u64, out: &mut [u8]) -> Result<(), DeviceError> {
         self.usable()?;
         let bytes = self.check_span(sector, out.len())?;
+        self.request = (request::IN, sector, bytes / SECTOR_SIZE);
         // The data buffer is cleared before the device is asked to fill it, so a device that
         // writes fewer bytes than it was given — or none — hands back zeros rather than what the
         // last request left there, which may have been another client's. A hostile device can
@@ -89,6 +137,7 @@ impl<T: Transport> Disk<T> {
             return Err(DeviceError::ReadOnly);
         }
         let bytes = self.check_span(sector, data.len())?;
+        self.request = (request::OUT, sector, bytes / SECTOR_SIZE);
         // The client's bytes are copied into the DMA buffer here, and the device is given that
         // buffer; the lend they came from is never named to the device.
         self.transport.dma_write(DATA_OFF, data).map_err(|e| self.break_on(e.into()))?;
@@ -114,6 +163,7 @@ impl<T: Transport> Disk<T> {
             // Nothing was ever written, so there is nothing to make durable.
             return Ok(());
         }
+        self.request = (request::FLUSH, 0, 0);
         self.transaction(
             request::FLUSH,
             0,
@@ -126,7 +176,7 @@ impl<T: Transport> Disk<T> {
 
     /// `Broken` once the device has lied or timed out, and nothing else ever again.
     fn usable(&self) -> Result<(), DeviceError> {
-        if self.broken { Err(DeviceError::Broken) } else { Ok(()) }
+        if self.is_broken() { Err(DeviceError::Broken) } else { Ok(()) }
     }
 
     /// `len` as a sector count that fits the disk, this driver's per-request bound and the data
@@ -176,7 +226,7 @@ impl<T: Transport> Disk<T> {
             blk_status::OK => Ok(()),
             blk_status::IOERR | blk_status::UNSUPP => Err(DeviceError::Rejected),
             // Not one of the three §5.2.6 defines: the device is not speaking virtio-blk.
-            _ => Err(DeviceError::Io),
+            other => Err(DeviceError::Io(Lie::Status(other))),
         }
     }
 
@@ -194,9 +244,22 @@ impl<T: Transport> Disk<T> {
         Ok(())
     }
 
-    /// Marks the device broken and returns the error that did it.
+    /// Marks the device broken and returns the error that did it, keeping why for
+    /// [`Disk::take_broke`]. A timeout costs one more read of the clock and of the used ring; its
+    /// span is the outstanding request's wait, and a timeout with none (only the queue's wait times
+    /// out today) says no span rather than another request's.
     fn break_on(&mut self, error: DeviceError) -> DeviceError {
-        self.broken = true;
+        if self.broke.is_none() {
+            let from = self.queue.waited_from().filter(|_| error == DeviceError::Timeout);
+            debug_assert!(error != DeviceError::Timeout || from.is_some(), "a timeout with no wait");
+            let waited = from.map(|from| {
+                let us = self.transport.now_us().saturating_sub(from);
+                (us, self.queue.moved(&self.transport).unwrap_or(false))
+            });
+            let (kind, sector, sectors) = self.request;
+            self.broke = Some(Broke { error, kind, sector, sectors, waited });
+            self.unsaid = true;
+        }
         error
     }
 }

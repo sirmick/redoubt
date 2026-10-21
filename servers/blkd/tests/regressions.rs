@@ -12,7 +12,7 @@ use redoubt_blkd::fake::{FakeDevice, Policy, Scribble};
 use redoubt_blkd::image::{Entry, Image};
 use redoubt_blkd::queue;
 use redoubt_blkd::transport::{Fault, Transport};
-use redoubt_blkd::virtio::{DeviceError, SECTOR_SIZE, bit, feature, reg};
+use redoubt_blkd::virtio::{DeviceError, Lie, SECTOR_SIZE, bit, feature, reg};
 use redoubt_blkd::{Disk, read_partitions};
 
 const SECTORS: u64 = 8192;
@@ -141,7 +141,7 @@ fn a_broken_read_only_device_does_not_answer_ok_to_a_flush() {
     // Break it.
     device.set_policy(Policy { defer: true, used_idx_delta: Some(9), ..Policy::default() });
     let mut out = vec![0; SECTOR];
-    assert_eq!(disk.read(64, &mut out), Err(DeviceError::Io));
+    assert!(matches!(disk.read(64, &mut out), Err(DeviceError::Io(Lie::UsedIndex { .. }))));
     assert!(disk.is_broken());
     assert_eq!(disk.flush(), Err(DeviceError::Broken), "a broken device promised durability");
 }
@@ -180,7 +180,7 @@ fn a_broken_device_is_never_handed_a_clients_write_payload() {
     let mut disk = Disk::new(&watch).expect("bring-up");
     device.set_policy(Policy { defer: true, used_idx_delta: Some(9), ..Policy::default() });
     let mut out = vec![0; SECTOR];
-    assert_eq!(disk.read(64, &mut out), Err(DeviceError::Io));
+    assert!(matches!(disk.read(64, &mut out), Err(DeviceError::Io(Lie::UsedIndex { .. }))));
     assert!(disk.is_broken());
     watch.payloads.borrow_mut().clear();
 

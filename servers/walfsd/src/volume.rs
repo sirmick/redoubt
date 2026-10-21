@@ -3,6 +3,7 @@
 
 use alloc::rc::Rc;
 use core::cell::Cell;
+use core::fmt;
 
 pub use redoubt_fileserver::range::{Fault, Geometry, Range, SECTOR, Why};
 use walfs::{Block, BlockDevice, Error, Filesystem, Geometry as Shape};
@@ -76,7 +77,48 @@ pub enum Mounted<R: Range> {
     /// fault's reason is kept ([`Blocks`]).
     Files { fs: Filesystem<Blocks<R>>, read_only: bool, why: Rc<Cell<Option<Why>>> },
     /// The range holds something that does not mount (or could not be read): served as corrupt.
-    Corrupt(Error),
+    Corrupt(Unmounted),
+}
+
+/// Why a range does not mount: the step that failed, walfs's error, and the range's reason when
+/// the error was its I/O. `walfsd` says it beside its corrupt line (servers/walfsd.md, "Serving").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Unmounted {
+    pub step: Step,
+    pub error: Error,
+    pub why: Option<Why>,
+}
+
+/// The step of a mount that failed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Step {
+    /// Reading blocks 0 and 1, to learn whether the range is blank.
+    Blank,
+    /// The range is blank and read-only, so it holds no filesystem and never will.
+    BlankReadOnly,
+    /// Formatting a blank range.
+    Format,
+    /// walfs's mount: the superblock, the log's replay and the checks on what it holds.
+    Mount,
+    /// Counting what the volume holds, for the volume root's quota.
+    Count,
+}
+
+impl fmt::Display for Unmounted {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let step = match self.step {
+            Step::Blank => "reading blocks 0 and 1",
+            Step::BlankReadOnly => "blank and read-only",
+            Step::Format => "formatting the blank range",
+            Step::Mount => "mounting",
+            Step::Count => "counting what it holds",
+        };
+        write!(f, "{step}: {:?}", self.error)?;
+        match self.why {
+            Some(why) => write!(f, ": {why}"),
+            None => Ok(()),
+        }
+    }
 }
 
 /// Mounts `range`. A range whose first two blocks (the superblock and the log's header) are all
@@ -91,21 +133,26 @@ pub fn mount<R: Range>(mut range: R) -> Result<Mounted<R>, NoVolume> {
     }
     let why = Rc::new(Cell::new(None));
     let mut blocks = Blocks { range, count, read_only, why: why.clone() };
+    // The range's reason is kept only for its I/O error: any other error is walfs's own finding.
+    let failed = |step, error| {
+        let why = if error == Error::Io { why.get() } else { None };
+        Ok(Mounted::Corrupt(Unmounted { step, error, why }))
+    };
     match blank(&mut blocks) {
         // A blank range that cannot be written holds no filesystem and never will.
-        Ok(true) if read_only => return Ok(Mounted::Corrupt(Error::Invalid)),
+        Ok(true) if read_only => return failed(Step::BlankReadOnly, Error::Invalid),
         Ok(true) => {
             if let Err(e) = Filesystem::format(&mut blocks, Shape::for_blocks(count)) {
-                return Ok(Mounted::Corrupt(e));
+                return failed(Step::Format, e);
             }
         }
         Ok(false) => {}
-        Err(e) => return Ok(Mounted::Corrupt(e)),
+        Err(e) => return failed(Step::Blank, e),
     }
-    Ok(match Filesystem::mount(blocks) {
-        Ok(fs) => Mounted::Files { fs, read_only, why },
-        Err(e) => Mounted::Corrupt(e),
-    })
+    match Filesystem::mount(blocks) {
+        Ok(fs) => Ok(Mounted::Files { fs, read_only, why }),
+        Err(e) => failed(Step::Mount, e),
+    }
 }
 
 /// Whether blocks 0 and 1 read as all zero.

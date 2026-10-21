@@ -3,6 +3,8 @@ arch = ["rv64", "rv32"]
 kind = "boot"
 recipe = "image/boot.toml"
 # Boot launch's own command line; the bench reaches QEMU's log through its monitor.
+# launch's command line but for one flag: its disks are attached cache=unsafe, as every case's
+# are, where ./launch keeps QEMU's default (docs/testbench.md "Disks and network cards").
 launch = true
 smp = [4]
 # The machine launch boots: four harts, launch's default.

@@ -333,16 +333,37 @@ fn noise_is_never_formatted_and_never_mounted() {
         assert_eq!(t.read(&who, 0, 0, 1).unwrap_err(), "unknown fid");
     }
     assert!(disk.bytes() == noise, "a range that holds anything is never formatted");
-    assert!(
-        Walfsd::new(mount(disk.clone()).unwrap(), vec![], None).is_corrupt(),
-        "the program says so on its console"
-    );
+    let walfsd = Walfsd::new(mount(disk.clone()).unwrap(), vec![], None);
+    assert!(walfsd.is_corrupt(), "the program says so on its console");
+    let unmounted = walfsd.unmounted().expect("and why");
+    assert_eq!((unmounted.step, unmounted.error, unmounted.why), (Step::Mount, FsError::Corrupt, None));
+    assert_eq!(unmounted.to_string(), "mounting: Corrupt");
     // A log header with one byte set is not blank either.
     let mut almost = vec![0u8; 512 * S];
     almost[4096 + 100] = 1;
     let disk = Memory::holding(almost.clone());
     assert!(matches!(mount(disk.clone()), Ok(Mounted::Corrupt(_))));
     assert!(disk.bytes() == almost);
+}
+
+/// A range that fails while it is mounted is served as corrupt, and why says the step and walfs's
+/// I/O error; a range in memory gives no reason of its own. A volume that mounts says nothing.
+#[test]
+fn a_mount_that_fails_says_why() {
+    let walfsd = Walfsd::new(mount(Memory::blank(SECTORS)).unwrap(), vec![], None);
+    assert!(!walfsd.is_corrupt() && walfsd.unmounted().is_none());
+    // A blank range whose first write fails, as power does: the format's.
+    let disk = Memory::blank(SECTORS);
+    disk.0.borrow_mut().fail_at = Some(1);
+    let walfsd = Walfsd::new(mount(disk).unwrap(), vec![], None);
+    assert!(walfsd.is_corrupt());
+    let unmounted = walfsd.unmounted().expect("why");
+    assert_eq!((unmounted.step, unmounted.error), (Step::Format, FsError::Io));
+    assert_eq!(unmounted.to_string(), "formatting the blank range: Io");
+
+    let blank = Memory::blank(SECTORS).read_only();
+    let Ok(Mounted::Corrupt(unmounted)) = mount(blank) else { panic!("a blank read-only range mounted") };
+    assert_eq!(unmounted.to_string(), "blank and read-only: Invalid");
 }
 
 /// R49 where it is read: one bit flipped in a file's data block makes a read of that file

@@ -145,12 +145,13 @@ flowchart TB
 
 ### Device lies
 
-<details><summary>Status: built · tested (13)</summary>
+<details><summary>Status: built · tested (14)</summary>
 
 - fuzz:redoubt-blkd/device
 - host:redoubt-blkd::rewriting_the_rings_changes_nothing_the_driver_believes
 - host:redoubt-blkd::a_device_that_lies_about_a_completion_is_refused_and_never_spoken_to_again
 - host:redoubt-blkd::a_lying_device_becomes_failed_and_stays_failed
+- host:redoubt-blkd::a_broken_device_says_once_what_broke_it
 - host:redoubt-blkd::lies_that_are_not_protocol_violations_are_still_harmless
 - host:redoubt-blkd::a_reported_io_error_does_not_break_the_device
 - host:redoubt-blkd::a_device_that_is_not_one_is_refused_at_bring_up
@@ -178,7 +179,11 @@ flowchart TB
   (10 seconds), is marked broken and every later request gets `failed`: carrying on after a
   timeout would mean a completion for a request no longer tracked, and carrying on after a lie
   would mean trusting the liar. A device that merely reports a failure (`IOERR`, `UNSUPP`) fails
-  that one request.
+  that one request. `blkd` says once on its console why it marked the device broken,
+  `blkd: the device is marked broken: <request>: <why>`: the request (a read or a write, its
+  sectors and first sector, or a flush) and the rule the device broke, or for a timeout how long
+  the wait lasted by `blkd`'s clock and whether the used ring had moved by the time it looked
+  again. Its clients see only `failed`.
 - **Interrupt storms are bounded**, by the deadline, and even when the clock has failed.
 
 The fake device (`servers/blkd/src/fake.rs`) is deliberately hostile, and the host tests run the
@@ -305,6 +310,11 @@ Status: built · partly tested: the exits without a device, a disk or a partitio
   or a device that ignores its addresses, can write anywhere in RAM: a compromised kernel.
 - **A slow or lying device holds the disk** for up to `REQUEST_TIMEOUT_US` (10 seconds) before it is
   marked broken; with one request outstanding, every client waits meanwhile.
+- **On a virtualised disk the bound measures the host too.** A guest's flush on QEMU's default
+  cache is an fdatasync on the host's image file, so a host busy writing back can hold one past
+  `REQUEST_TIMEOUT_US`, and `blkd` marks an honest device broken, as on a disk that slow. The
+  bench attaches its case disks so that a flush costs the host nothing
+  ([the bench's disks](../testbench.md#disks-and-network-cards)).
 - **A torn write is the device's to keep.** littlefs's power-loss safety needs a torn write to
   persist a prefix of its sectors; `blkd` sends whole sectors in order but cannot make a device
   that tears differently honour that.

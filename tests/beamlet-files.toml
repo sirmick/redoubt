@@ -40,6 +40,8 @@ forbid = [
     'init: refused the boot',
     '^init: (keyd|consoled|bootfsd|blkd|erofsd|walfsd)\S* .*(exited|faulted|was killed)',
     'init: rebooting',
+    # The disk's fault named where it happened, rather than as the restarts it causes.
+    'blkd: the device is marked broken',
     'EXCEPTION',
     'beamlet: .* not loaded',
     # A first run finds a fresh volume, and the end-time cleanup means a replay finds one too.
