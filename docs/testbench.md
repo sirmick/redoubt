@@ -290,23 +290,26 @@ result under it is worth is the shared-host rule below. A timing gate runs one p
 states its target from a sweep of seeds ([responsiveness](kernel/scheduling.md#responsiveness)).
 
 **Which cases run in guest time.** A boot case runs under `icount = "shift=3,sleep=off"` unless
-something in it waits on the host, and 145 of the 226 do. What keeps a case on the host's clock:
-a disk or a userland disk (38 cases; the rule for a disk is above); host sockets, a `forward`, a
-`poke`, a peer or a dial (8); input the host types on the console, `[[input]]` (4; under `icount`
-the rv32 UART lost a burst of it); and a run whose purpose is the host's
-time (`asid-cost-host`, `sched-latency-tcg`, `timeouts-tcg`, and `smp-evict-mttcg`,
-`smp-shootdown-mttcg`, `console-one-writer`, `sched-lock-contention-4-mttcg`,
-`smp-lock-wait-4-mttcg` and `beamlet-schedulers-mttcg`, which need QEMU's multi-threaded TCG; its one-hart twin
+something in it waits on the host, and 187 of the 352 run under `icount`: 180 so, six with a disk
+at `icount = "shift=3"` (the rule for a disk is above), and `bench-qemu-early-exit`, whose `icount`
+is one QEMU refuses. What keeps the other 165 on the host's clock, a case counted under each it
+has: a disk or a userland disk (138 cases); host sockets, a `forward`, a `poke`, a peer or a dial
+(70); input the host types on the console, `[[input]]` (28; under `icount` the rv32 UART lost a
+burst of it); and, for 13 of the 15 with none of these, a run whose purpose is the host's time
+(`asid-cost-host`, `sched-latency-tcg`, `timeouts-tcg`, and `console-one-writer`,
+`deadline-placement` and every case named `-mttcg` but `beamlet-schedulers-mttcg`, which need
+QEMU's multi-threaded TCG, as does that one, which has a disk and input too; its one-hart twin
 `beamlet-schedulers-one-hart` runs in guest time, since on one hart what it measures is the
-instructions two schedulers' switching costs). Several harts do not keep a case
-on the host's clock: under `icount` QEMU runs the harts in turn on one host thread, and a hart
-waiting for the kernel lock halts rather than spending its turn
-([R78 (fair kernel entry)](kernel/scheduling.md#r78-fair-kernel-entry)). One case reads no host clock and stays on it for now: `redoubt-ipc`
-fails under `icount` on both widths (189 calls abandoned of the 256 it wants), until that is
-understood. A `timeout_secs` is the bench's bound, never a measurement: a case in guest time
-is given at least four times its slowest pass alone on either width, rounded up to 10 s, and
-more than any wait of its own program, so that a stuck check reports itself; it is never raised
-without a measurement. `bench-poweroff-missing` keeps its 3 s: there the deadline is the oracle,
+instructions two schedulers' switching costs). Several harts do not keep a case on the host's
+clock: under `icount` QEMU runs the harts in turn on one host thread, and a hart waiting for the
+kernel lock halts rather than spending its turn
+([R78 (fair kernel entry)](kernel/scheduling.md#r78-fair-kernel-entry)). Of the other two,
+`consrelay-footprint` states no reason to stay on the host's clock, and `redoubt-ipc` reads no
+host clock and stays on it for now: it fails under `icount` on both widths (189 calls abandoned
+of the 256 it wants), until that is understood. A `timeout_secs` is the bench's bound, never a
+measurement: a case in guest time is given at least four times its slowest pass alone on either
+width, rounded up to 10 s, and more than any wait of its own program, so that a stuck check
+reports itself; it is never raised without a measurement. `bench-poweroff-missing` keeps its 3 s: there the deadline is the oracle,
 the timeout its `must_fail` waits for.
 
 **On a shared host.** `cargo testbench` runs its cases one after another; what may run beside
@@ -316,7 +319,7 @@ the host's load does not move a guest time, so its pass, and a failure the guest
 reports, are verdicts whatever ran beside it (a pinned seed adds only that the run repeats
 exactly). Its one exposure to the host's clock is `timeout_secs`, the bench's deadline for the
 boot: a case that only ran out of that deadline beside other work has no verdict, and is rerun
-alone. A boot case without `icount` (68 of them) keeps the host's clock in the guest, so load
+alone. A boot case without `icount` (165 of them) keeps the host's clock in the guest, so load
 lengthens every wait it makes: its pass is a verdict unless what it expects is a timeout or a
 bound on a time, and a failure beside other work has no verdict until it fails alone. Every
 bound a case states on a time, a step's, a probe's or a notice's, is the box's under one
