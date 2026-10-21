@@ -792,9 +792,10 @@ fn a_served_servers_binding_and_handle_go_with_its_budget() {
 }
 
 /// A forgotten connection's hub session is ended at once: a request on it afterwards (a stale
-/// open file's clunk, at its term's collection) is refused rather than sent, so it reaches nobody,
-/// though the VM's handle to the server, closed as its last term went, has its index again by
-/// then as the next launch's send right.
+/// open file's clunk, at its term's collection) is refused rather than sent, so it reaches nobody.
+/// And while its waiter, which calls by the handle's index, has yet to hand its end over, the VM
+/// holds the handle though its last term is gone, so no later handle takes the index under the
+/// waiter; the hand-over lets it go.
 #[test]
 fn a_forgotten_connections_requests_reach_no_later_holder_of_its_index() {
     let f = fake();
@@ -859,13 +860,14 @@ fn a_forgotten_connections_requests_reach_no_later_holder_of_its_index() {
             };
             // The first call starts the pool's thread, with the handles it keeps.
             let warm = returned(p, 3);
-            // The forgotten connection's last term gone, its index is free, and the next handle
-            // the VM gets, the one the second server's reply brings, takes it.
+            // The forgotten connection's last term gone, its handle stays the VM's while the waiter
+            // still calls by its index: the next handle the VM gets, the one the second server's
+            // reply brings, takes another.
             let held = f.held(pid).0;
             drop(conn);
-            assert_eq!(f.held(pid).0, held - 1);
+            assert_eq!(f.held(pid).0, held, "the handle is held for the waiter");
             let reused = returned(p, 4);
-            assert_eq!(f.held(pid).0, held);
+            assert_eq!(f.held(pid).0, held + 1);
             // The stale file's clunk, as its term's collection sends it: refused on the ended
             // session; sent, it would go out on the index and reach the second server.
             p.close(file);
@@ -882,15 +884,16 @@ fn a_forgotten_connections_requests_reach_no_later_holder_of_its_index() {
                 "a request reached the new holder"
             );
             drop((warm, reused));
-            // The server gone, the waiter returns, closing the handle it woke the VM through.
+            // The server gone, the waiter returns, closing the handle it woke the VM through, and its
+            // hand-over lets the forgotten connection's handle go.
             let before = f.held(pid).0;
             assert_eq!(volume.stop(), redoubt_rt::exit::OK);
             // The VM takes the waiter's last hand-over by idling, and the hub lets it go; then the
             // waiter closes its handle, on its thread: waited for, not sampled.
             step_until(p, 5_000_000, |p| p.waiters() != waiters);
             assert_ne!(p.waiters(), waiters, "the waiter handed its end over");
-            let closed = f.wait_held(pid, before - 1, std::time::Duration::from_secs(5));
-            assert!(closed, "the waiter's handle, closed as it returned; the VM holds {}", f.held(pid).0);
+            let closed = f.wait_held(pid, before - 2, std::time::Duration::from_secs(5));
+            assert!(closed, "the waiter's handle and the held one, closed; the VM holds {}", f.held(pid).0);
             drop(again);
             p.budget_destroy(&second).unwrap();
             let (_, event) = next(p);
@@ -1416,23 +1419,27 @@ fn a_launch_that_serves_gives_the_child_the_receive_right_and_its_caller_a_send_
     );
 }
 
-/// Budgets carved to take the indices a destruction freed: as many as the VM's table could have free.
+/// Budgets carved after a destruction: as many as the VM's table could have free.
 const REFILLS: usize = 16;
 
-/// A budget the VM destroyed takes its handle with it, and the kernel gives the index to the next
-/// handle: collecting the old term closes nothing, so the budgets carved after are still held (once,
-/// a later `piped`'s budget lost its handle so, and its carve stayed out of the session for good).
+/// A budget the VM destroyed takes its handle with it: a dead entry, whose index no budget carved
+/// after takes (I17), closed when the old term is collected, so the budgets carved after are still
+/// held (once, a later `piped`'s budget lost its handle to such a close, and its carve stayed out of
+/// the session for good).
 #[test]
-fn a_destroyed_budgets_index_is_not_closed_when_its_term_is_collected() {
+fn a_destroyed_budgets_dead_entry_is_closed_when_its_term_is_collected() {
     let f = fake();
     with_session(
         move |pid| vec![("budget", f.budget(pid))],
-        |p, _| {
+        move |p, pid| {
             let spec = BudgetSpec { pages: 8, ..Default::default() };
             let first = p.budget_create(&spec).unwrap();
             p.budget_destroy(&first).unwrap();
+            let held = f.held(pid).0;
             let carved: Vec<Object> = (0..REFILLS).map(|_| p.budget_create(&spec).unwrap()).collect();
+            assert_eq!(f.held(pid).0, held + REFILLS);
             drop(first);
+            assert_eq!(f.held(pid).0, held + REFILLS - 1);
             for budget in &carved {
                 assert_eq!(p.budget_destroy(budget), Ok(()));
             }
@@ -1441,15 +1448,15 @@ fn a_destroyed_budgets_index_is_not_closed_when_its_term_is_collected() {
 }
 
 /// What calls on a server the VM launched with `serve` return is stamped with the server's budget,
-/// so it goes when the VM destroys that budget, index and all: collecting its terms closes nothing,
-/// so the budgets carved after are still held (a pipeline's stage connections, which `piped`
-/// mints).
+/// so it goes when the VM destroys that budget: a dead entry, whose index no budget carved after
+/// takes (I17), closed when its term is collected, and the carved budgets are still held (a
+/// pipeline's stage connections, which `piped` mints).
 #[test]
-fn what_a_served_server_returned_goes_with_its_budget_and_is_not_closed_again() {
+fn what_a_served_server_returned_goes_with_its_budget_and_is_closed_with_its_term() {
     let f = fake();
     with_session(
         move |pid| vec![("budget", f.budget(pid))],
-        move |p, _| {
+        move |p, pid| {
             let spec = BudgetSpec { pages: 8, processes: 1, weight: 1, ..Default::default() };
             let budget = p.budget_create(&spec).unwrap();
             let launch = Launch {
@@ -1486,8 +1493,11 @@ fn what_a_served_server_returned_goes_with_its_budget_and_is_not_closed_again() 
             p.budget_destroy(&budget).unwrap();
             let (_, event) = next(p);
             assert!(matches!(event, Event::Exit { job: 1, cause: "killed", .. }));
+            let held = f.held(pid).0;
             let carved: Vec<Object> = (0..REFILLS).map(|_| p.budget_create(&spec).unwrap()).collect();
+            assert_eq!(f.held(pid).0, held + REFILLS);
             drop(returned);
+            assert_eq!(f.held(pid).0, held + REFILLS - 1);
             for budget in &carved {
                 assert_eq!(p.budget_destroy(budget), Ok(()));
             }
@@ -1497,10 +1507,10 @@ fn what_a_served_server_returned_goes_with_its_budget_and_is_not_closed_again() 
 
 /// A program launched in a budget the VM carved, given an endpoint the VM serves, gets a send right
 /// with a badge of the launch's own, and what it sends through it is stamped with its budget, so it
-/// goes when the VM destroys that budget, index and all: collecting the request's terms closes
-/// nothing, and the budgets carved after it are still held.
+/// goes when the VM destroys that budget: a dead entry, whose index no budget carved after takes
+/// (I17), closed when the request's term is collected, and the carved budgets are still held.
 #[test]
-fn what_a_launched_program_sends_to_a_served_endpoint_goes_with_its_budget_and_is_not_closed_again() {
+fn what_a_launched_program_sends_to_a_served_endpoint_goes_with_its_budget_and_is_closed_with_its_term() {
     let f = fake();
     with_session(
         move |pid| vec![("budget", f.budget(pid)), ("service", f.endpoint(pid))],
@@ -1541,12 +1551,13 @@ fn what_a_launched_program_sends_to_a_served_endpoint_goes_with_its_budget_and_i
             p.budget_destroy(&budget).unwrap();
             let (_, event) = next(p);
             assert!(matches!(event, Event::Exit { job: 1, cause: "killed", .. }));
-            // The kernel freed the sent handle's index with its budget; the budgets carved now
-            // take the indices freed, and collecting the request's term closes none of them.
+            // The sent handle is a dead entry since; the budgets carved now take other indices,
+            // and collecting the request's term closes the dead entry alone.
             let held = f.held(pid).0;
             let carved: Vec<Object> = (0..REFILLS).map(|_| p.budget_create(&spec).unwrap()).collect();
-            drop(message);
             assert_eq!(f.held(pid).0, held + REFILLS);
+            drop(message);
+            assert_eq!(f.held(pid).0, held + REFILLS - 1);
             for budget in &carved {
                 assert_eq!(p.budget_destroy(budget), Ok(()));
             }

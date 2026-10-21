@@ -672,7 +672,9 @@ its sessions and they re-bind ([steward](steward.md#failure-and-restart)). A res
   owned by `root`, so the budget's destruction does not reach it, and every client's handle to it
   stays good. The badges `init` hands the instance are stamped with its budget
   ([R9 (stamps)](../kernel/objects.md#r9-stamps)), so a copy it passed on dies with it, and the
-  badge minted again for the next instance has no other holder. The steward's entry alone has
+  badge minted again for the next instance has no other holder. `init`'s own handle at the dead
+  instance died with it too, a dead entry in `init`'s table, which `init` closes as it mints the
+  next ([handles](../kernel/objects.md#handles), I17 (a swept index stays dead until closed)). The steward's entry alone has
   its badges, and its console connection, stamped `users`, so that a session's or lease's revocation scope, which lies under
   `users`, narrows the connections the steward mints through them
   ([R41 (narrowing by revocation scope)](steward.md#r41-narrowing-by-revocation-scope)); what the instance stamp bought, the
@@ -683,7 +685,7 @@ its sessions and they re-bind ([steward](steward.md#failure-and-restart)). A res
   the dead instance's end, before its DMA pages were reused
   ([devices](../kernel/devices.md#reset-before-reuse)), and the new instance brings it up from a
   reset of its own. A driver whose device was quarantined is not restarted: `init` finds its own
-  copy of the device handle closed, and reboots
+  copy of the device handle dead (`Dead`, I17), and reboots
   ([devices](../kernel/devices.md#which-process-gets-which-device)).
 - **The boot's own steps, again.** A restart repeats what the boot did after starting that
   server: `keyd` is checked again ([the key-separation check](#the-key-separation-check)),

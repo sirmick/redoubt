@@ -2,9 +2,9 @@
 //! the client library and the runtime's kernel calls.
 //!
 //! - **A handle is a [`Cap`]**, the value behind its resource term: the handle, owned once (closed when its
-//!   last copy goes, unless it went with a budget the VM destroyed ([`Life`]); the namespace's and the named
-//!   handles' never while the VM runs), and what kind it is, which each call checks before the kernel is
-//!   asked. The kind is the platform's knowledge: a namespace entry is a 9P connection, the named handle
+//!   last copy goes, a dead one that went with a budget the VM destroyed too (I17); the namespace's and the
+//!   named handles' never while the VM runs), and what kind it is, which each call checks before the kernel
+//!   is asked. The kind is the platform's knowledge: a namespace entry is a 9P connection, the named handle
 //!   `budget` is the VM's own budget, a budget made here is a budget, and any other handle is an endpoint.
 //! - **The namespace is the files' own** ([`crate::files`]): a bind here is a bind there. A handle is
 //!   attached as a 9P connection at most once (a second `Tversion` on one handle would end the first's fids),
@@ -55,10 +55,10 @@ pub const ATTACH_US: u64 = 1_000_000;
 /// (docs/userland/files.md, "Copying, moving, removing and binds").
 pub const MAX_BINDINGS: usize = 64;
 
-/// A budget the VM carved, as the handles that die with it see it: gone once the VM has destroyed
-/// it. The kernel then frees the slot of every handle that names it or that it stamped, and may
-/// give the index to the next handle the VM gets, so a handle gone with it is never closed again
-/// (docs/userland/beamlet.md, "Handles are resource terms").
+/// A budget the VM carved, as what came through it sees it: gone once the VM has destroyed it, so
+/// the connections and launches that came through it are forgotten. Every handle that names it or
+/// that it stamped is then a dead entry, which answers `Dead` and keeps its index until its term
+/// closes it (I17; docs/userland/beamlet.md, "Handles are resource terms").
 #[derive(Default)]
 pub(crate) struct Life(AtomicBool);
 
@@ -72,29 +72,24 @@ impl Life {
 }
 
 /// A handle the VM holds: one it was given since its start is closed when its last [`Cap`] goes,
-/// unless it has gone with the budget it came through; one it was started with is the process's for
-/// its life, and the namespace's, so never.
+/// dead or live; one it was started with is the process's for its life, and the namespace's, so
+/// never.
 pub(crate) struct Owned {
     pub(crate) handle: Handle,
     close: bool,
-    /// The budget it dies with, if it is one the VM carved.
-    life: Option<Arc<Life>>,
 }
 
 impl Owned {
     /// A handle a reply, a request or a carve brought: closed when its last copy goes.
-    pub(crate) fn new(handle: Handle) -> Owned { Owned::under(handle, None) }
-
-    /// As [`Owned::new`], for a handle that dies with `life`.
-    fn under(handle: Handle, life: Option<Arc<Life>>) -> Owned { Owned { handle, close: true, life } }
+    pub(crate) fn new(handle: Handle) -> Owned { Owned { handle, close: true } }
 
     /// A handle of the startup block: kept as long as the process runs.
-    fn kept(handle: Handle) -> Owned { Owned { handle, close: false, life: None } }
+    fn kept(handle: Handle) -> Owned { Owned { handle, close: false } }
 }
 
 impl Drop for Owned {
     fn drop(&mut self) {
-        if self.close && !self.life.as_ref().is_some_and(|life| life.gone()) {
+        if self.close {
             let _ = redoubt_rt::handle::close(self.handle);
         }
     }
@@ -107,8 +102,9 @@ pub(crate) enum Kind {
     Connection(Connection),
     /// A budget, and its pages: what the VM carved it with, or for its own, what its startup block
     /// told it (0 for none). A child launched in it is told them in its block, so no caller keeps
-    /// a number equal to the budget by hand.
-    Budget { pages: u64 },
+    /// a number equal to the budget by hand. One the VM carved has its [`Life`], which what came
+    /// through it is forgotten with.
+    Budget { pages: u64, life: Option<Arc<Life>> },
     /// Any other handle: an endpoint or a receive right.
     Endpoint,
 }
@@ -119,8 +115,8 @@ pub(crate) struct Cap {
     pub(crate) kind: Kind,
     /// For a connection to a server the VM launched with `serve`, and every handle calls on it
     /// returned: the budget the server runs in, which stamps what it mints, so what calls on it
-    /// return dies with it. A handle it forwarded rather than minted is marked gone with it too, and
-    /// so never closed: the VM cannot tell the two apart.
+    /// return dies with it, and is forgotten with it. A handle it forwarded rather than minted
+    /// lives on; either is closed when its last term goes.
     pub(crate) returns: Option<Arc<Life>>,
 }
 
@@ -133,11 +129,11 @@ impl Cap {
 
     /// A handle a reply brought, on a connection whose returns die with `returns`, or a request
     /// brought, from a launch whose budget is `returns` ([`crate::serve::Served::admit`]): an
-    /// endpoint, closed when its last copy goes unless it has gone with them. A request's from
+    /// endpoint, closed when its last copy goes, dead or live. A request's from
     /// any other client dies with no budget the VM knows: a receiver is told its sender's badge,
     /// account and labels, never its budget.
     pub(crate) fn returned(handle: Handle, returns: Option<Arc<Life>>) -> Object {
-        Cap::serving(Arc::new(Owned::under(handle, returns.clone())), Kind::Endpoint, returns)
+        Cap::serving(Arc::new(Owned::new(handle)), Kind::Endpoint, returns)
     }
 
     pub(crate) fn handle(&self) -> Handle { self.owned.handle }
@@ -212,7 +208,7 @@ impl Sys {
                     owned: Arc::new(Owned::kept(handle)),
                     name: Some(name.to_string()),
                     kind: if name == BUDGET {
-                        Kind::Budget { pages: startup.budget_pages().unwrap_or(0) }
+                        Kind::Budget { pages: startup.budget_pages().unwrap_or(0), life: None }
                     } else {
                         Kind::Endpoint
                     },
@@ -321,7 +317,7 @@ pub(crate) fn worker(
 fn budget(object: &Object) -> Result<(Handle, u64), Refused> {
     let cap = cap(object)?;
     match cap.kind {
-        Kind::Budget { pages } => Ok((cap.handle(), pages)),
+        Kind::Budget { pages, .. } => Ok((cap.handle(), pages)),
         _ => Err(Refused("wrong_object")),
     }
 }
@@ -490,11 +486,11 @@ impl System for Redoubt {
         };
         let child = Budget::from_handle(parent).create_child(&spec).map_err(|e| name(e.into()))?;
         let life = Some(Arc::new(Life::default()));
-        Ok(Cap::object(Arc::new(Owned::under(child.handle(), life)), Kind::Budget { pages: spec.pages }))
+        Ok(Cap::object(Arc::new(Owned::new(child.handle())), Kind::Budget { pages: spec.pages, life }))
     }
 
     /// Destroyed, a budget the VM carved takes its handle with it, and the handles its servers
-    /// minted: they are marked gone, so no collection closes their indices. The VM carves only
+    /// minted: each is a dead entry, closed when its last term goes (I17). The VM carves only
     /// from its own budget, so no budget it carved is below another. It takes the bindings of the
     /// connections that came through it too: every known handle whose returns died with it is
     /// forgotten, every prefix naming its connection unbound, and its hub connection ended
@@ -503,8 +499,9 @@ impl System for Redoubt {
     /// term goes, nothing is sent on it after, and the namespace holds no entry to a server that
     /// is gone.
     fn budget_destroy(&mut self, b: &Object) -> Result<(), Refused> {
-        Budget::from_handle(budget(b)?.0).destroy().map_err(|e| name(e.into()))?;
-        if let Some(life) = &cap(b)?.owned.life {
+        // The handle is the term's, which closes it.
+        Budget::from_handle(budget(b)?.0).destroy_keeping().map_err(|e| name(e.into()))?;
+        if let Kind::Budget { life: Some(life), .. } = &cap(b)?.kind {
             life.end();
             let (ns, io) = (&mut self.files.ns, &mut self.io);
             self.sys.known.retain(|known| {
@@ -513,7 +510,7 @@ impl System for Redoubt {
                 }
                 if let Kind::Connection(conn) = &known.kind {
                     ns.unbind(conn);
-                    io.forget(conn);
+                    io.forget(conn, &known.owned);
                 }
                 false
             });
@@ -542,7 +539,10 @@ impl System for Redoubt {
     fn launch(&mut self, asker: u64, job: u64, launch: Launch) -> Result<Option<Object>, Refused> {
         let (carved, budget_pages) = budget(&launch.budget)?;
         // What calls on the server return dies with the budget it runs in.
-        let returns = cap(&launch.budget)?.owned.life.clone();
+        let returns = match &cap(&launch.budget)?.kind {
+            Kind::Budget { life, .. } => life.clone(),
+            _ => None,
+        };
         let mut minted: Vec<Owned> = Vec::new();
         let mut given = |handle: Handle| -> Result<Handle, Refused> {
             let Some(life) = &returns else { return Ok(handle) };

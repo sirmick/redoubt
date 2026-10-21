@@ -18,6 +18,13 @@
 //! handle costs exactly ceil(n / 64) pages; one with holes costs a page per page in use, which
 //! is what the memory really costs (kernel/objects.md, "Handles").
 //!
+//! # Dead entries (I17)
+//! A sweep never frees an index. A handle a sweep closes becomes a **dead entry**: the slot holds
+//! only the dead mark, no object, badge, stamp or chain link, so it names nothing (I1, I2), and
+//! every call through it is `Dead`. Only the holder's `handle_close` frees it, so an index the
+//! holder still uses can never come to name a later handle. A dead entry counts as a handle on
+//! its page and against `MAX_HANDLES` until then.
+//!
 //! # The chains (kernel/budgets.md, "Residual risks", item 3)
 //! A handle dies when the object it names goes or when the budget that stamped it does. One
 //! held inside that budget's subtree dies with its holder's table, which goes whole. One held
@@ -105,11 +112,22 @@ pub struct Handle {
     pub stamp: BudgetRef,
 }
 
-/// Object kinds in a handle's first word; 0 is an empty slot.
+/// Object kinds in a handle's first word; 0 is an empty slot, and [`KIND_DEAD`] a dead entry.
 const KIND_BUDGET: u64 = 1;
 const KIND_ENDPOINT: u64 = 2;
 const KIND_DEVICE: u64 = 3;
 const KIND_PROCESS: u64 = 4;
+/// A dead entry's mark, the only word it holds (I17).
+const KIND_DEAD: u64 = 5;
+
+/// What a table slot holds.
+#[derive(Clone, Copy)]
+enum Slot {
+    Empty,
+    /// A handle a sweep closed, which its holder has not (I17).
+    Dead,
+    Live(Handle),
+}
 
 impl Handle {
     /// A handle as the four words a table slot holds. `message.rs` keeps copies in the same
@@ -127,7 +145,8 @@ impl Handle {
         [kind << (2 * FRAME_BITS) | sf << FRAME_BITS | of, id, self.badge, self.stamp.id]
     }
 
-    /// The handle four words hold; `None` for an empty slot.
+    /// The handle four words hold; `None` for an empty slot. Never a dead entry: none is
+    /// copied anywhere, and only [`MemoryManager::read_slot`] reads the mark.
     pub fn from_words(words: [u64; HANDLE_WORDS]) -> Option<Handle> {
         let mask = (1u64 << FRAME_BITS) - 1;
         let frame = |shift: u32| ((words[0] >> shift) & mask) as u32;
@@ -137,7 +156,7 @@ impl Handle {
             KIND_ENDPOINT => Object::Endpoint(EndpointRef { frame: frame(0), id: words[1] }),
             KIND_DEVICE => Object::Device(DeviceRef { frame: frame(0), id: words[1] }),
             KIND_PROCESS => Object::Process(ProcessRef { frame: frame(0), id: words[1] }),
-            // Only the kernel writes table pages.
+            // Only the kernel writes table pages, and no dead entry is copied.
             _ => panic!("I1: corrupt handle table"),
         };
         Some(Handle { object, badge: words[2], stamp: BudgetRef { frame: frame(FRAME_BITS), id: words[3] } })
@@ -244,9 +263,21 @@ fn slot_offset(slot: usize, word: usize) -> usize { (slot * SLOT_WORDS + word) *
 impl MemoryManager {
     fn table(&self, pid: Pid) -> Option<&HandleTable> { self.account(pid).map(|a| &a.handles) }
 
-    fn read_slot(&self, frame: u32, slot: usize) -> Option<Handle> {
+    fn read_slot(&self, frame: u32, slot: usize) -> Slot {
         let phys = self.object_phys(frame);
-        Handle::from_words(core::array::from_fn(|w| kframe::read(phys, slot_offset(slot, w))))
+        let words: [u64; HANDLE_WORDS] = core::array::from_fn(|w| kframe::read(phys, slot_offset(slot, w)));
+        if words[0] >> (2 * FRAME_BITS) == KIND_DEAD {
+            return Slot::Dead;
+        }
+        Handle::from_words(words).map_or(Slot::Empty, Slot::Live)
+    }
+
+    /// The live handle in `slot`, if it holds one.
+    fn live_slot(&self, frame: u32, slot: usize) -> Option<Handle> {
+        match self.read_slot(frame, slot) {
+            Slot::Live(h) => Some(h),
+            _ => None,
+        }
     }
 
     fn write_slot(&mut self, frame: u32, slot: usize, words: [u64; HANDLE_WORDS]) {
@@ -256,11 +287,17 @@ impl MemoryManager {
         }
     }
 
-    /// The handle at `index` in `pid`'s table; `BadHandle` if there is none.
+    /// The handle at `index` in `pid`'s table; `BadHandle` if there is none, `Dead` if a sweep
+    /// closed it (I17). Every call that names a handle looks it up here, as its argument or as
+    /// the handle it goes through, so a dead one fails the call before it does anything.
     pub fn handle(&self, pid: Pid, index: u32) -> Result<Handle, Error> {
         let (page, slot) = position(index).ok_or(Error::BadHandle)?;
         let frame = self.table(pid).and_then(|t| t.pages[page]).ok_or(Error::BadHandle)?;
-        let handle = self.read_slot(frame, slot).ok_or(Error::BadHandle)?;
+        let handle = match self.read_slot(frame, slot) {
+            Slot::Empty => return Err(Error::BadHandle),
+            Slot::Dead => return Err(Error::Dead),
+            Slot::Live(h) => h,
+        };
         // Every live handle names a live object, and a live stamp (I1).
         match handle.object {
             Object::Budget(b) => {
@@ -308,8 +345,9 @@ impl MemoryManager {
                     frame
                 }
             };
+            // The lowest index neither live nor dead (I17).
             let slot = (0..HANDLES_PER_PAGE)
-                .find(|slot| self.read_slot(frame, *slot).is_none())
+                .find(|slot| matches!(self.read_slot(frame, *slot), Slot::Empty))
                 .expect("a table page with a free slot");
             self.write_slot(frame, slot, handle.to_words());
             self.account_mut(pid).expect("account").handles.live[page] += 1;
@@ -349,15 +387,19 @@ impl MemoryManager {
         (bought <= pages).then_some(bought as u64)
     }
 
-    /// Remove `pid`'s handle `index`, freeing its table page if it was the page's last.
+    /// Remove `pid`'s handle `index`, live or dead, freeing its table page if it was the page's
+    /// last.
     fn remove_handle(&mut self, pid: Pid, index: u32) {
         let Some((page, slot)) = position(index) else { return };
         let Some(frame) = self.table(pid).and_then(|t| t.pages[page]) else { return };
-        if self.read_slot(frame, slot).is_none() {
-            return;
+        match self.read_slot(frame, slot) {
+            Slot::Empty => return,
+            Slot::Dead => {}
+            Slot::Live(_) => {
+                self.leave(Chain::Object, pid, index);
+                self.leave(Chain::Stamp, pid, index);
+            }
         }
-        self.leave(Chain::Object, pid, index);
-        self.leave(Chain::Stamp, pid, index);
         self.write_slot(frame, slot, [0; HANDLE_WORDS]);
         let budget = self.budget_of(pid).expect("a table belongs to an account");
         let table = &mut self.account_mut(pid).expect("account").handles;
@@ -369,18 +411,36 @@ impl MemoryManager {
         }
     }
 
-    /// `handle_close(h)`: `BadHandle` if `h` is not in the caller's table.
+    /// `handle_close(h)`: `BadHandle` if `h` is not in the caller's table. A dead entry closes
+    /// like a live handle, and its index is free again (I17).
     pub fn handle_close(&mut self, pid: Pid, index: u32) -> Result<(), Error> {
-        self.handle(pid, index)?;
+        match self.handle(pid, index) {
+            Ok(_) | Err(Error::Dead) => {}
+            Err(e) => return Err(e),
+        }
         self.remove_handle(pid, index);
         Ok(())
     }
 
-    /// Remove every handle for which `doomed` holds, from every process's table (R10).
+    /// A sweep's close of `pid`'s handle `index` (R10): out of its chains, and the slot left
+    /// holding the dead mark alone, still counted on its page, until the holder closes it (I17).
+    fn kill_handle(&mut self, pid: Pid, index: u32) {
+        let Some((page, slot)) = position(index) else { return };
+        let Some(frame) = self.table(pid).and_then(|t| t.pages[page]) else { return };
+        if !matches!(self.read_slot(frame, slot), Slot::Live(_)) {
+            return;
+        }
+        self.leave(Chain::Object, pid, index);
+        self.leave(Chain::Stamp, pid, index);
+        self.write_slot(frame, slot, [KIND_DEAD << (2 * FRAME_BITS), 0, 0, 0]);
+    }
+
+    /// Close every handle for which `doomed` holds, in every process's table (R10), each left a
+    /// dead entry (I17).
     pub fn sweep_handles(&mut self, doomed: impl Fn(&Self, &Handle) -> bool) {
         for pid in self.live_pids() {
             if self.account(pid).is_some() {
-                self.remove_handles_where(pid, &doomed);
+                self.kill_handles_where(pid, &doomed);
             }
         }
     }
@@ -437,7 +497,7 @@ impl MemoryManager {
 
     fn close_chain(&mut self, chain: Chain, frame: u32) {
         while let Link::Slot(pid, index) = self.head(chain, frame) {
-            self.remove_handle(pid, index);
+            self.kill_handle(pid, index);
             assert!(self.head(chain, frame) != Link::Slot(pid, index), "I1: a chain names an empty slot");
         }
     }
@@ -454,7 +514,8 @@ impl MemoryManager {
                 let phys = self.object_phys(frame);
                 let mut entries = 0;
                 for slot in 0..HANDLES_PER_PAGE {
-                    let Some(h) = self.read_slot(frame, slot) else { continue };
+                    // A dead entry is in no chain: its links were cleared as it died.
+                    let Some(h) = self.live_slot(frame, slot) else { continue };
                     let (object, stamp) = self.chain_heads(holder, &h);
                     for (chain, head) in [(Chain::Object, object), (Chain::Stamp, stamp)] {
                         let entered = kframe::read(phys, slot_offset(slot, chain.prev_word())) != 0;
@@ -567,13 +628,14 @@ impl MemoryManager {
         *self.chained(pid, index) -= 1;
     }
 
-    fn remove_handles_where(&mut self, pid: Pid, doomed: &impl Fn(&Self, &Handle) -> bool) {
+    /// Kill every handle of `pid`'s for which `doomed` holds. A killed handle keeps its page, so
+    /// each page's frame is read once.
+    fn kill_handles_where(&mut self, pid: Pid, doomed: &impl Fn(&Self, &Handle) -> bool) {
         for page in 0..MAX_HANDLE_PAGES {
+            let Some(frame) = self.table(pid).and_then(|t| t.pages[page]) else { continue };
             for slot in 0..HANDLES_PER_PAGE {
-                // Looked up again for every slot: removing a page's last handle frees the page.
-                let Some(frame) = self.table(pid).and_then(|t| t.pages[page]) else { break };
-                if self.read_slot(frame, slot).is_some_and(|h| doomed(self, &h)) {
-                    self.remove_handle(pid, (page * HANDLES_PER_PAGE + slot + 1) as u32);
+                if self.live_slot(frame, slot).is_some_and(|h| doomed(self, &h)) {
+                    self.kill_handle(pid, (page * HANDLES_PER_PAGE + slot + 1) as u32);
                 }
             }
         }

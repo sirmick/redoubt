@@ -260,7 +260,7 @@ at 1.
 | 11 | `Refused` | the receiver's budget cannot pay for the message (R4) |
 | 12 | `TooLarge` | a count over its fixed limit: body handles, labels, the start list, a lend over `MAX_LEND_PAGES` (16), budget depth, `MAX_HANDLES` (4096) |
 | 13 | `Timeout` | a blocking call's timeout passed |
-| 14 | `Dead` | the object the call needs is gone: its endpoint was destroyed, its server died, or the handle it came through was revoked |
+| 14 | `Dead` | the object the call needs is gone: its endpoint was destroyed, its server died, or the handle it came through, or one it names, was revoked and is a dead entry ([handles](objects.md#handles), I17 (a swept index stays dead until closed)) |
 
 Each call can return only the errors of its row in the table below, plus `InvalidArgument` for
 a malformed encoding; `Number::can_return` in `redoubt-sys` is that set. The kernel checks every
@@ -308,9 +308,12 @@ argument position:
    classification, not a sequence: the first malformed value in register, then slot, order
    wins. Each register is checked whole when it is reached; unused registers come after the
    last argument. This stage never allocates, so it never returns `OutOfMemory`.
-2. **Arguments**, one by one: a handle exists (`BadHandle`) and names the right kind of object
-   (`WrongObject`); a size is within its fixed limit (`TooLarge`); a range is page-aligned,
-   non-empty, inside user space and mapped as the call needs (`InvalidArgument`).
+2. **Arguments**, one by one: a handle exists (`BadHandle`), is not a dead entry (`Dead`, I17)
+   and names the right kind of object (`WrongObject`); a size is within its fixed limit
+   (`TooLarge`); a range is page-aligned, non-empty, inside user space and mapped as the call
+   needs (`InvalidArgument`). Every handle a call names, by itself or in a list, is checked so,
+   and a dead one fails the call before it does anything; the rows below leave this `Dead` out.
+   `handle_close` alone takes a dead entry, and frees it.
 3. **Permission**: `NotPermitted`, `ClassDenied`, `LabelDenied`.
 4. **Resources**: `OutOfMemory`, `OutOfProcesses`, `TooManyThreads`, `Busy`. A call that adds a
    handle to its caller's table (`endpoint_create`, `mint`, `process_create`, `budget_create`)

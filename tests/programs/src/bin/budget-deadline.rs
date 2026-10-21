@@ -80,7 +80,7 @@ extern "C" fn child(arg: usize) -> ! {
             rd::process_exit(0)
         }
         // O: be handed a handle stamped with L, queue a send through it, see it fail with `Dead`
-        // and the handle revoked.
+        // and the handle revoked: a dead entry, `Dead` to every later call too (I17).
         4 => {
             let Ok(Received::Message(m)) = rd::receive(Some(1), rd::FOREVER, 0) else { rd::process_exit(1) };
             let Some(stamped) = m.body.handles.as_slice().first().copied().flatten() else {
@@ -88,7 +88,7 @@ extern "C" fn child(arg: usize) -> ! {
             };
             let first = rd::send(stamped.index(), &rd::body([7, 0, 0, 0]), None, rd::FOREVER);
             let second = rd::send(stamped.index(), &rd::body([8, 0, 0, 0]), None, 0);
-            let good = first == Err(Error::Dead) && second == Err(Error::BadHandle);
+            let good = first == Err(Error::Dead) && second == Err(Error::Dead);
             let _ = rd::send(
                 2,
                 &rd::body([VERDICT, usize::from(good), first.err().map_or(0, |e| e as usize), 0]),
@@ -239,14 +239,15 @@ pub extern "C" fn _start() -> ! {
         .ok();
     writeln!(out, "[deadline] {}: a send queued through a handle stamped with the lease failed Dead, the handle revoked", ok(outsider)).ok();
 
-    // Every handle to the lease and its child is gone, and system's usage is what it was before
-    // the lease (I10): its carve returned and its processes' objects freed with their notices.
+    // Every handle to the lease and its child is revoked, a dead entry until closed (I17), and
+    // system's usage is what it was before the lease (I10): its carve returned and its processes'
+    // objects freed with their notices.
     let after = rd::usage(rd::SYSTEM).unwrap();
     let revoked = [rd::usage(lease).err(), rd::usage(child_budget).err(), rd::usage(stamped).err()];
     writeln!(
         out,
         "[deadline] {}: handles to the lease, its child and stamped with it revoked ({:?})",
-        ok(revoked.iter().all(|e| *e == Some(Error::BadHandle))),
+        ok(revoked.iter().all(|e| *e == Some(Error::Dead))),
         revoked
     )
     .ok();
@@ -275,7 +276,7 @@ pub extern "C" fn _start() -> ! {
     writeln!(
         out,
         "[deadline] {}: a past deadline destroys at once ({:?}); FOREVER never",
-        ok(gone == Some(Error::BadHandle) && alive),
+        ok(gone == Some(Error::Dead) && alive),
         gone
     )
     .ok();

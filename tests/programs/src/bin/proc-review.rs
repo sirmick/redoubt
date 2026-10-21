@@ -99,7 +99,8 @@ pub extern "C" fn _start() -> ! {
             spawn::spawn(&image, source, endpoint, exit_child as *const () as usize, &[], &[]).unwrap();
         let n = notice(root_exit);
         assert_eq!((n.cause, n.code), (Cause::Exited, 42));
-        assert_eq!(rd::usage(actor.process), Err(Error::BadHandle));
+        assert_eq!(rd::usage(actor.process), Err(Error::Dead));
+        rd::close(actor.process).unwrap();
         assert_eq!(rd::usage(source).unwrap(), empty);
         rd::destroy(source).unwrap();
         rd::destroy(receiver).unwrap();

@@ -146,6 +146,47 @@ fn bad_record_interrupt(mutation: Option<Mutation>) -> Result<World, String> {
     Ok(w)
 }
 
+/// I17: a handle a destruction sweeps stays a dead entry in its holder's table. A budget handle
+/// and an endpoint handle stamped with it, both swept by its destruction: every call through
+/// either is `Dead`, as an argument too (a send's list, `mint`'s budget), with `BadHandle` before
+/// it and `WrongObject` after; a new handle never takes a dead index; `handle_close` frees it, and
+/// only then is the index reused.
+pub fn swept_index_stays_dead(mutation: Option<Mutation>) -> Result<(), String> {
+    let mut w = World::new(mutation);
+    let handle = |r: Ret| match r {
+        Ret::Handle(h) => Ok(h),
+        r => Err(format!("not a handle: {r:?}")),
+    };
+    let spec = Syscall::BudgetCreate {
+        parent: 1,
+        pages: 4,
+        processes: 0,
+        weight: 0,
+        labels: vec![],
+        account: 0,
+        deadline: FOREVER,
+    };
+    let b = handle(w.value(1, spec)?)?;
+    let ep = handle(w.value(1, Syscall::EndpointCreate)?)?;
+    let m = handle(w.value(1, Syscall::Mint { source: MintSource::Handle(ep), badge: 5, budget: Some(b) })?)?;
+    expect(w.result(1, Syscall::BudgetDestroy { h: b })? == Ok(Ret::Unit), "destroyed")?;
+    let send =
+        |h: u64, handles: Vec<u64>| Syscall::Send { h, words: [0; 4], handles, transfer: None, timeout: 0 };
+    expect(w.result(1, Syscall::BudgetUsage { h: b })? == Err(Error::Dead), "the budget handle is dead")?;
+    expect(w.result(1, send(m, vec![]))? == Err(Error::Dead), "a send through the swept badge is dead")?;
+    expect(w.result(1, send(ep, vec![m]))? == Err(Error::Dead), "a dead handle in a send's list")?;
+    let mint = Syscall::Mint { source: MintSource::Handle(ep), badge: 6, budget: Some(b) };
+    expect(w.result(1, mint)? == Err(Error::Dead), "a dead budget narrowing a mint")?;
+    expect(w.result(1, Syscall::BudgetUsage { h: m })? == Err(Error::Dead), "Dead before WrongObject")?;
+    expect(w.result(1, Syscall::BudgetUsage { h: ep })? == Err(Error::WrongObject), "a live endpoint")?;
+    let fresh = handle(w.value(1, Syscall::EndpointCreate)?)?;
+    expect(fresh != b && fresh != m, "a new handle takes no dead index")?;
+    expect(w.result(1, Syscall::HandleClose { h: b })? == Ok(Ret::Unit), "a dead entry closes")?;
+    expect(w.result(1, Syscall::HandleClose { h: b })? == Err(Error::BadHandle), "then it is gone")?;
+    let again = handle(w.value(1, Syscall::EndpointCreate)?)?;
+    expect(again == b.min(m), "closed, the lowest dead index is free again")?;
+    trace_roundtrip(&w, mutation)
+}
 /// `budget_reap` (kernel/budgets.md, R10): each call destroys one child of the budget, with
 /// everything below it, and says how many are left; the budget stays, and once the last child is
 /// gone its usage is what it was before the first carve (I10 per child). A child's handle reaps
@@ -177,7 +218,8 @@ pub fn reap_empties_and_keeps(mutation: Option<Mutation>) -> Result<(), String> 
     // The first child is the newest, `b`: it goes with its subtree, and `a` stays.
     expect(w.result(1, Syscall::BudgetReap { h: p })? == Ok(Ret::Remaining(1)), "one child left")?;
     for (h, what) in [(b, "the reaped child"), (g, "a grandchild"), (gg, "a great-grandchild")] {
-        expect(usage(&mut w, h)? == Err(Error::BadHandle), &format!("{what} is gone"))?;
+        // Its handle stays, dead, until the holder closes it (I17).
+        expect(usage(&mut w, h)? == Err(Error::Dead), &format!("{what} is gone"))?;
     }
     expect(usage(&mut w, p)?.is_ok() && usage(&mut w, a)?.is_ok(), "the budget and its other child stay")?;
     // A child's handle reaches only below it: `a` has no children, and its parent keeps it.

@@ -2,7 +2,8 @@
 //! page each, charged to a pool it carves from `users`) until the kernel refuses (`TooLarge` past
 //! `MAX_HANDLES`), makes a process it has no index left for (`TooLarge`, the creation rolled back
 //! whole), closes and reopens across a page boundary, then destroys the pool, which closes every
-//! one of them.
+//! one of them: each a dead entry, holding its index and its table page until the attacker
+//! closes it (I17).
 //! Every table page is charged to the budget it runs in, its own (slot 3), and the victim beside
 //! it, under `system` too, must still get its pages afterwards. See `tests/budget-table-attack.toml`.
 
@@ -61,15 +62,18 @@ pub extern "C" fn _start() -> ! {
     let reopened = rd::create(pool, &rd::spec(0, 0, 0));
     log!(logger, "[table] closed 4033..={}: {}; reopened -> {:?}", last, closed, reopened);
     let destroyed = rd::destroy(pool);
+    let dead = (base..=4033).all(|h| rd::usage(h) == Err(Error::Dead));
+    let still = rd::usage(own).unwrap().pages_usage - before;
+    log!(logger, "[table] destroyed the pool -> {:?}; every swept index dead: {}", destroyed, dead);
+    let closed = (base..=4033).all(|h| rd::close(h) == Ok(()) && rd::usage(h) == Err(Error::BadHandle));
     let after = rd::usage(own).unwrap().pages_usage;
     log!(
         logger,
-        "[table] destroyed the pool -> {:?}; its own usage back where it was: {}",
-        destroyed,
+        "[table] the dead entries kept {} table pages; closed, each index empty: {}; its own usage back where it was: {}",
+        still,
+        closed,
         before == after
     );
-    let gone = (base..=4033).all(|h| rd::usage(h) == Err(Error::BadHandle));
-    log!(logger, "[table] every swept index is empty: {}", gone);
     log!(logger, "[table] attempts done");
     rd::victim::go();
     test_programs::park()

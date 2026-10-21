@@ -4,9 +4,9 @@
 //!
 //! Two drivers hold DMA runs through the same empty virtio-mmio slot, each in its own budget.
 //! The first faults: the slot's first reset fails, so its run is quarantined and the slot with
-//! it, and every handle to the slot is gone (`BadHandle`). Its budget still carries the run; when
-//! the budget is destroyed the charge moves to the parent. The co-holder is destroyed after, and
-//! its run is quarantined too, although a retry would now confirm (a quarantined device never
+//! it, and every handle to the slot is gone (`Dead`, a dead entry until closed: I17). Its budget still
+//! carries the run; when the budget is destroyed the charge moves to the parent. The co-holder is destroyed
+//! after, and its run is quarantined too, although a retry would now confirm (a quarantined device never
 //! counts as reset).
 //!
 //! Then the DMA pool is searched: `users` is destroyed, which gives `root`, this program's budget,
@@ -191,7 +191,7 @@ pub extern "C" fn _start() -> ! {
     let allocated = rd::dma_alloc(deaf, 1).map(|_| ());
     check!(
         out,
-        mapped == Err(Error::BadHandle) && allocated == Err(Error::BadHandle),
+        mapped == Err(Error::Dead) && allocated == Err(Error::Dead),
         "every handle to the quarantined slot is gone (map_device {:?}, dma_alloc {:?})",
         mapped,
         allocated

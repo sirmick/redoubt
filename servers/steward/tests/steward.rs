@@ -105,9 +105,6 @@ enum Call {
     },
     /// The launch thread's report for a job, finished by the loop.
     Launched(u64),
-    /// The install lock taken and released around the destroy pair.
-    Locked,
-    Unlocked,
     /// A context's relay started in `budget`; its control connection is the handle made.
     LaunchRelay {
         budget: usize,
@@ -199,12 +196,15 @@ struct Recorder {
     parents: BTreeMap<usize, usize>,
     /// The budgets live: made and not destroyed, by the steward or by the kernel's deadline.
     budgets: BTreeSet<usize>,
-    /// The handle indices the kernel freed when a deadline took a budget
-    /// ([`Recorder::deadline_takes`]): the next handle made takes the lowest, as the kernel's
-    /// table does. (A destroy the steward makes frees its index on the machine too; not
-    /// modelled: the steward drops the record as it destroys, so nothing of its looks that index
-    /// up again, and the tests' handle numbers stay the kernel's order of making.)
+    /// The handle indices the steward closed: the next handle made takes the lowest, as the
+    /// kernel's table does. (The index a destroy closes, the budget's own, is not modelled but
+    /// with `recycles`: the steward drops the record as it destroys, so nothing of its looks
+    /// that index up again, and the tests' handle numbers stay the kernel's order of making.)
     free: Vec<usize>,
+    /// The handle indices a destruction swept, a deadline's or the steward's: dead entries,
+    /// which no handle made takes until the steward closes them (I17); a destroy by one is
+    /// `Dead`, and closes it.
+    dead: BTreeSet<usize>,
     /// Budgets whose handle the steward lost before their deadline (a bug): a `destroy` of one is
     /// `BadHandle`.
     lost: Vec<usize>,
@@ -259,13 +259,10 @@ struct Recorder {
     launching: BTreeMap<u64, (Option<usize>, Vec<usize>)>,
     /// What the thread reports for every launch: `Ok` unless a test says.
     launch_fails: Option<Error>,
-    /// The install lock is held: the loop's destroy pair runs, and nothing installs.
-    locked: bool,
 }
 
 impl Recorder {
     fn make(&mut self) -> Result<usize, Error> {
-        assert!(!self.locked, "no handle is installed while the install lock is held for the destroy pair");
         if self.fail_at == Some(self.made) {
             return Err(Error::OutOfMemory);
         }
@@ -278,7 +275,7 @@ impl Recorder {
     }
 
     /// The kernel's deadline takes `budget` (R10): it and every budget below it are destroyed,
-    /// their handles revoked and the indices freed for the next handle made. Only once the
+    /// their handles dead entries until the steward closes them (I17). Only once the
     /// clock has passed the deadline the budget was made with, as the kernel's expiry runs.
     fn deadline_takes(&mut self, budget: usize) {
         let (_, deadline) = self.deadlines.iter().find(|d| d.0 == budget).expect("a budget made");
@@ -286,25 +283,24 @@ impl Recorder {
         self.takes(vec![budget]);
     }
 
-    /// The steward's destroy of `budget` took every budget below it too, as the kernel's does,
-    /// their handles revoked and the indices freed for the next handle made; the budget's own
-    /// index stays taken, as [`Recorder::free`] says.
-    fn destroy_took(&mut self, budget: usize) {
-        assert!(!self.budgets.contains(&budget), "budget {budget} was destroyed");
-        let children = self.parents.iter().filter(|(_, p)| **p == budget).map(|(c, _)| *c).collect();
-        self.takes(children);
-    }
-
-    /// Every budget in `doomed` and every budget below it leaves the live set, its index freed.
+    /// Every budget in `doomed` and every budget below it leaves the live set, its index a dead
+    /// entry (I17).
     fn takes(&mut self, mut doomed: Vec<usize>) {
         while let Some(b) = doomed.pop() {
             doomed.extend(self.parents.iter().filter(|(_, p)| **p == b).map(|(c, _)| *c));
-            assert!(self.budgets.remove(&b), "budget {b} was live");
-            self.free.push(b);
-            // A freed index is the next handle's, whatever kind: its place in the tree goes.
-            if self.recycles {
-                self.parents.remove(&b);
+            if self.budgets.remove(&b) {
+                self.dead.insert(b);
             }
+        }
+    }
+
+    /// The steward closed the dead entry `b`: with `recycles` its index is the next handle's,
+    /// whatever kind, and its place in the tree goes.
+    fn closed_dead(&mut self, b: usize) {
+        assert!(self.dead.remove(&b), "index {b} was dead");
+        if self.recycles {
+            self.free.push(b);
+            self.parents.remove(&b);
         }
     }
 
@@ -419,17 +415,18 @@ impl Kernel for Recorder {
 
     fn empty(&mut self, _budget: usize) -> Result<bool, Error> { Ok(!self.users_busy) }
 
-    /// As the kernel answers a `budget_destroy` by index: a free index is `BadHandle`, an index
-    /// holding no budget `WrongObject`, and a budget's index destroys that budget, whichever it
-    /// is now.
+    /// As the kernel answers a `budget_destroy` by index, and the runtime's destroy closes after
+    /// it: a free index is `BadHandle`; a dead entry is `Dead`, and closed; an index holding no
+    /// budget `WrongObject`; and a budget's index destroys that budget, whichever it is now,
+    /// and is closed.
     fn destroy(&mut self, budget: usize) -> Result<(), Error> {
-        assert!(
-            self.locked,
-            "a destroy by a kept handle is made under the install lock, beside its clock read"
-        );
         self.calls.push(Call::Destroy(budget));
         if self.free.contains(&budget) || self.lost.contains(&budget) {
             return Err(Error::BadHandle);
+        }
+        if self.dead.contains(&budget) {
+            self.closed_dead(budget);
+            return Err(Error::Dead);
         }
         if self.recycles {
             // The index names what the kernel put there last: a budget, or another kind of
@@ -443,14 +440,16 @@ impl Kernel for Recorder {
                     "the destroy by handle hit budget {budget}, not budget {expected}, the one made for the lease whose step this is"
                 );
             }
-            // R10: the budget and everything below it go, their handles revoked everywhere.
+            // R10: the budget and everything below it go, their handles dead everywhere.
             self.takes(vec![budget]);
+            self.closed_dead(budget);
             return Ok(());
         }
         if !self.deadlines.iter().any(|d| d.0 == budget) {
             return Err(Error::WrongObject);
         }
-        self.budgets.remove(&budget);
+        self.takes(vec![budget]);
+        self.closed_dead(budget);
         Ok(())
     }
 
@@ -586,18 +585,6 @@ impl Kernel for Recorder {
             self.closes(c);
         }
         Ok((pid, notices))
-    }
-
-    /// Recorded as a bracket, so a test sees what ran inside it: the destroy pair and nothing
-    /// that installs a handle ([`Recorder::make`] refuses one under the lock).
-    fn without_installs<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
-        assert!(!self.locked, "the install lock is not re-entered");
-        self.locked = true;
-        self.calls.push(Call::Locked);
-        let out = f(self);
-        self.calls.push(Call::Unlocked);
-        self.locked = false;
-        out
     }
 
     fn notify(&mut self, notices: usize, lease: u64, name: &str) {
@@ -1233,40 +1220,41 @@ fn sshd_s_end_waits_for_a_logins_launch_and_detaches_the_context_after() {
     assert!(s.exited(pid_of(&s, Kind::Session)).is_some(), "the VM runs on, detached");
 }
 
-/// The deadline witness's pair, the clock read and the destroy by a kept handle, runs under
-/// the install lock, with nothing between them and no handle installed under it (the fake
-/// kernel refuses one): a live lease's end destroys inside the bracket; a lease the deadline
-/// took makes no destroy inside it.
+/// A lease's end destroys its budget by the steward's handle, live or dead, and closes the scope
+/// made in it: a live lease's budget is destroyed; one its deadline took answers `Dead` through
+/// the dead entry the sweep left (I17), and the end is done all the same. Either way no dead
+/// entry is left in the steward's table.
 #[test]
-fn the_destroy_pair_runs_under_the_install_lock_and_nothing_installs_under_it() {
+fn a_leases_end_destroys_by_its_handle_live_or_dead_and_leaves_no_dead_entry() {
     let mut k = Recorder::default();
     let mut s = started(&mut k);
     let u = alice_session(&mut s, &mut k);
     let (lease, budget, _) = lease_for(&mut s, &mut k, u, 60_000_000);
+    let scope = scope_of(&k, budget);
     k.calls.clear();
     let Ok(Reply::EndLease(_)) = call(&mut s, &mut k, u, Message::EndLease(EndLease { lease })) else {
         panic!()
     };
-    let locked = k.calls.iter().position(|c| *c == Call::Locked).unwrap();
-    assert_eq!(
-        &k.calls[locked..locked + 3],
-        &[Call::Locked, Call::Destroy(budget), Call::Unlocked],
+    assert!(
+        k.calls.contains(&Call::Destroy(budget)) && k.calls.contains(&Call::Destroy(scope)),
         "{:?}",
         k.calls
     );
+    assert!(!k.budgets.contains(&budget) && k.dead.is_empty(), "{:?}", k.dead);
     let (_, budget, pid) = lease_for(&mut s, &mut k, u, 2_000_000);
+    let scope = scope_of(&k, budget);
     k.clock += 2_000_000;
     k.deadline_takes(budget);
+    assert!(k.dead.contains(&budget) && k.dead.contains(&scope));
     k.calls.clear();
     let object = s.exited(pid).unwrap();
     s.event(&mut k, EventKind::Exited { object }, 0).unwrap();
-    let locked = k.calls.iter().position(|c| *c == Call::Locked).unwrap();
-    assert_eq!(
-        &k.calls[locked..locked + 2],
-        &[Call::Locked, Call::Unlocked],
-        "no destroy by the revoked handle: {:?}",
+    assert!(
+        k.calls.contains(&Call::Destroy(budget)),
+        "the dead entry is closed by its destroy: {:?}",
         k.calls
     );
+    assert!(k.dead.is_empty(), "{:?}", k.dead);
 }
 
 fn login<'a>(principal: &'a str, label: &'a str, key: &'a [u8]) -> Message<'a> {
@@ -2737,10 +2725,10 @@ fn lease_for(s: &mut Steward<usize, usize>, k: &mut Recorder, u: u64, us: u64) -
 }
 
 /// A lease the kernel's deadline took: its process's exit notice arrives with the budget gone,
-/// and the core's `DestroyBudget` on it is the end asked for, done already: the steward makes no
-/// destroy by the handle the deadline revoked, and no step fails; the sponsor is told all the
-/// same. A budget whose handle answers `BadHandle` before its deadline is a handle the steward
-/// lost, and that step fails.
+/// and the core's `DestroyBudget` on it is the end asked for, done already: the steward's
+/// destroy by its handle meets the dead entry the deadline left (I17), `Dead`, and closes it,
+/// and no step fails; the sponsor is told all the same. A budget whose handle answers
+/// `BadHandle` is a handle the steward lost, and that step fails.
 #[test]
 fn a_leases_deadline_ends_it_without_a_failed_step() {
     let mut k = Recorder::default();
@@ -2753,7 +2741,7 @@ fn a_leases_deadline_ends_it_without_a_failed_step() {
     let object = s.exited(pid).unwrap();
     let outputs = s.event(&mut k, EventKind::Exited { object }, 0).unwrap();
     assert!(s.failed.is_empty(), "{:?}", s.failed);
-    assert!(!k.calls.iter().any(|c| matches!(c, Call::Destroy(_))), "{:?}", k.calls);
+    assert!(k.calls.contains(&Call::Destroy(budget)) && k.dead.is_empty(), "{:?}", k.calls);
     assert!(
         k.calls.iter().any(
             |c| matches!(c, Call::Notify { lease: l, name, .. } if *l == lease && name == "alice/agent-1")
@@ -2839,81 +2827,62 @@ fn a_bursts_notices_all_go_before_any_exits_bookkeeping() {
     assert!(s.failed.is_empty(), "{:?}", s.failed);
 }
 
-/// A lease's deadline passes and the kernel takes its budget, revoking the steward's handle and
-/// freeing its index, which a new lease's budget takes before the first's exit notice reaches
-/// the steward (several leases expiring close together do this): the first's `DestroyBudget`
-/// is not made by that index, and the new budget survives in the kernel. The verdict is the
-/// fake kernel's: the new budget is live after the notice, and its own `end_lease` destroys it.
+/// A lease's deadline passes and the kernel takes its budget: the steward's handle to it, and to
+/// its scope, are dead entries (I17), so what the steward makes before the exit notice reaches
+/// it (a new lease's budget, a connection re-bound at a restarted server) takes other indices.
+/// The first's `DestroyBudget` is made by its own handle, answers `Dead` and closes it, and
+/// fails no step; the new budget survives in the kernel, and its own `end_lease` destroys it.
 #[test]
-fn a_leases_index_recycled_for_a_new_budget_before_its_notice_is_not_destroyed_as_it() {
+fn a_leases_budget_its_deadline_took_keeps_its_index_until_its_end_closes_it() {
     let mut k = Recorder::default();
     let mut s = started(&mut k);
     let u = alice_session(&mut s, &mut k);
     let (first, budget, pid) = lease_for(&mut s, &mut k, u, 2_000_000);
     k.clock += 2_000_000;
     k.deadline_takes(budget);
-    let (second, recycled, _) = lease_for(&mut s, &mut k, u, 60_000_000);
-    assert_eq!(recycled, budget, "the new lease's budget took the freed index");
-    assert!(k.budgets.contains(&recycled));
+    let (second, next, _) = lease_for(&mut s, &mut k, u, 60_000_000);
+    assert_ne!(next, budget, "the new lease's budget takes no dead index");
+    let m = Message::Reconnected(Reconnected { server: "walfsd:data" });
+    let Ok(Reply::Reconnected(_)) = call(&mut s, &mut k, INIT, m) else { panic!() };
+    let Ok(Reply::Rebind(_)) = call(&mut s, &mut k, u, Message::Rebind(Rebind { slot: 1 })) else { panic!() };
+    assert!(!k.at.contains_key(&budget), "nor does a connection");
     k.calls.clear();
     let object = s.exited(pid).unwrap();
     s.event(&mut k, EventKind::Exited { object }, 0).unwrap();
     assert!(s.failed.is_empty(), "{:?}", s.failed);
-    assert!(k.budgets.contains(&recycled), "the new budget survives the old lease's end");
-    assert!(!k.calls.contains(&Call::Destroy(recycled)), "{:?}", k.calls);
+    assert!(k.calls.contains(&Call::Destroy(budget)), "{:?}", k.calls);
+    assert!(k.budgets.contains(&next) && k.dead.is_empty(), "the new budget survives the old lease's end");
     assert!(k.calls.iter().any(|c| matches!(c, Call::Notify { lease, .. } if *lease == first)));
     k.calls.clear();
     let Ok(Reply::EndLease(_)) = call(&mut s, &mut k, u, Message::EndLease(EndLease { lease: second }))
     else {
         panic!()
     };
-    assert!(k.calls.contains(&Call::Destroy(recycled)), "{:?}", k.calls);
-    assert!(!k.budgets.contains(&recycled));
+    assert!(k.calls.contains(&Call::Destroy(next)), "{:?}", k.calls);
+    assert!(!k.budgets.contains(&next));
     assert!(s.failed.is_empty(), "{:?}", s.failed);
-}
-
-/// The freed index taken by something that is no budget (a session re-binding its slot at a
-/// restarted server): the old lease's end is no `WrongObject`, no failed step.
-#[test]
-fn a_leases_index_recycled_for_a_connection_fails_no_step() {
-    let mut k = Recorder::default();
-    let mut s = started(&mut k);
-    let u = alice_session(&mut s, &mut k);
-    let (_, budget, pid) = lease_for(&mut s, &mut k, u, 2_000_000);
-    k.clock += 2_000_000;
-    k.deadline_takes(budget);
-    let m = Message::Reconnected(Reconnected { server: "walfsd:data" });
-    let Ok(Reply::Reconnected(_)) = call(&mut s, &mut k, INIT, m) else { panic!() };
-    let Ok(Reply::Rebind(_)) = call(&mut s, &mut k, u, Message::Rebind(Rebind { slot: 1 })) else { panic!() };
-    assert_eq!(k.at.get(&budget).map(String::as_str), Some("walfsd:data"), "the connection took the index");
-    k.calls.clear();
-    let object = s.exited(pid).unwrap();
-    s.event(&mut k, EventKind::Exited { object }, 0).unwrap();
-    assert!(s.failed.is_empty(), "{:?}", s.failed);
-    assert!(!k.calls.iter().any(|c| matches!(c, Call::Destroy(_))), "{:?}", k.calls);
-    assert_eq!(k.at.get(&budget).map(String::as_str), Some("walfsd:data"), "the connection is untouched");
 }
 
 /// An `end_lease` served after the lease's deadline passed, before its exit notice: the kernel
-/// has the budget already, so the end batch makes no destroy by the revoked handle, whatever
-/// took its index; the late notice then gets its line and no event.
+/// has the budget already, so the end batch's destroy by the steward's handle meets its dead
+/// entry, `Dead`, the end done and the entry closed; the late notice then gets its line and no
+/// event.
 #[test]
-fn an_end_lease_after_the_deadline_makes_no_destroy_by_the_revoked_handle() {
+fn an_end_lease_after_the_deadline_closes_the_dead_handle_and_fails_nothing() {
     let mut k = Recorder::default();
     let mut s = started(&mut k);
     let u = alice_session(&mut s, &mut k);
     let (first, budget, pid) = lease_for(&mut s, &mut k, u, 2_000_000);
     k.clock += 2_000_000;
     k.deadline_takes(budget);
-    let (_, recycled, _) = lease_for(&mut s, &mut k, u, 60_000_000);
-    assert_eq!(recycled, budget);
+    let (_, next, _) = lease_for(&mut s, &mut k, u, 60_000_000);
     k.calls.clear();
     let Ok(Reply::EndLease(_)) = call(&mut s, &mut k, u, Message::EndLease(EndLease { lease: first })) else {
         panic!()
     };
     assert!(s.failed.is_empty(), "{:?}", s.failed);
-    assert!(!k.calls.iter().any(|c| matches!(c, Call::Destroy(_))), "{:?}", k.calls);
-    assert!(k.budgets.contains(&recycled), "the new budget survives");
+    assert!(k.calls.contains(&Call::Destroy(budget)) && k.dead.is_empty(), "{:?}", k.calls);
+    assert!(k.budgets.contains(&next), "the new budget survives");
     assert!(s.exited(pid).is_none());
     assert!(s.ended(pid).is_some_and(|(o, name)| o.id == first && name == "alice/agent-1"));
 }
@@ -2953,6 +2922,7 @@ fn sixteen_leases_ending_by_exit_each_destroy_their_own_budget_and_no_other() {
             running.remove(&n);
             k.exit_taken(pid);
             k.expect_destroy = Some(budget);
+            let scope = scope_of(&k, budget);
             k.calls.clear();
             let object = s
                 .exited(pid)
@@ -2960,8 +2930,12 @@ fn sixteen_leases_ending_by_exit_each_destroy_their_own_budget_and_no_other() {
             assert_eq!(object.id, lease, "the pids map names agent-{n} at its own exit endpoint's report");
             s.event(&mut k, EventKind::Exited { object }, 0).unwrap();
             assert!(s.failed.is_empty(), "agent-{n}: {:?}", s.failed);
-            let destroys = k.calls.iter().filter(|c| matches!(c, Call::Destroy(_))).count();
-            assert_eq!(destroys, 1, "agent-{n}'s end is one destroy by handle: {:?}", k.calls);
+            let destroys: Vec<&Call> = k.calls.iter().filter(|c| matches!(c, Call::Destroy(_))).collect();
+            assert_eq!(
+                destroys,
+                [&Call::Destroy(budget), &Call::Destroy(scope)],
+                "agent-{n}'s end is its budget's destroy by handle, then its scope's dead entry closed"
+            );
             assert_eq!(k.expect_destroy, None, "agent-{n}'s destroy was made");
             assert!(!k.budgets.contains(&budget), "agent-{n}'s budget is gone");
             for m in &running {
@@ -2997,14 +2971,12 @@ fn destroy_step(owner: &Object, slot: u8) -> Batch {
     }
 }
 
-/// A scope is destroyed by its handle as a budget is, with its parent's deadline the witness,
-/// since it was minted with none and the kernel takes it with its parent: a lease the deadline
-/// took, its scope's index recycled for a new lease's scope before the notice, makes no
-/// destroy by it, and the new scope is live in the kernel after (the verdict); ahead of the
-/// deadline a scope's destroy is by its handle, as before. The core names only budgets in its
+/// A scope is destroyed by its handle as a budget is: past its lease's deadline, which took it
+/// with its parent, the destroy meets its dead entry, `Dead`, and closes it, failing no step;
+/// ahead of the deadline it destroys the scope. The core names only budgets in its
 /// `DestroyBudget`s today, so the scope's step is the test's own batch.
 #[test]
-fn a_scopes_index_recycled_after_its_leases_deadline_is_not_destroyed_as_it() {
+fn a_scopes_destroy_after_its_leases_deadline_closes_its_dead_handle() {
     let mut k = Recorder::default();
     let mut s = started(&mut k);
     let u = alice_session(&mut s, &mut k);
@@ -3013,13 +2985,9 @@ fn a_scopes_index_recycled_after_its_leases_deadline_is_not_destroyed_as_it() {
     let destroy_scope = destroy_step(&s.exited(pid).unwrap(), SCOPE);
     k.clock += 2_000_000;
     k.deadline_takes(budget);
-    let (_, recycled, _) = lease_for(&mut s, &mut k, u, 60_000_000);
-    assert_eq!(recycled, budget, "the new lease's budget took the freed index");
-    assert_eq!(scope_of(&k, recycled), scope, "and its scope the old scope's");
     k.calls.clear();
     ran(&mut s, &mut k, destroy_scope).unwrap();
-    assert!(k.budgets.contains(&scope), "the new lease's scope survives");
-    assert!(!k.calls.iter().any(|c| matches!(c, Call::Destroy(_))), "{:?}", k.calls);
+    assert!(k.calls.contains(&Call::Destroy(scope)) && !k.dead.contains(&scope), "{:?}", k.calls);
     let (_, budget, pid) = lease_for(&mut s, &mut k, u, 2_000_000);
     let scope = scope_of(&k, budget);
     k.calls.clear();
@@ -3030,12 +2998,10 @@ fn a_scopes_index_recycled_after_its_leases_deadline_is_not_destroyed_as_it() {
     assert!(s.failed.is_empty(), "{:?}", s.failed);
 }
 
-/// The steward's own destroy of a budget takes its scope with it too, its index freed for the
-/// next handle, which a new lease's budget takes: a destroy of the scope asked for after that,
-/// its parent's record gone, makes no call by its handle, and the budget at the index is live
-/// after (the verdict).
+/// The steward's own destroy of a budget takes its scope with it, and closes the scope's handle,
+/// a dead entry since, with the budget's record: no dead entry is left in its table.
 #[test]
-fn a_scopes_index_recycled_after_its_budgets_destroy_is_not_destroyed_as_it() {
+fn a_budgets_destroy_closes_its_scopes_dead_handle() {
     // The batch's budget slot, `BUDGET` in the core's effects.rs, which is its own.
     const BUDGET: u8 = 0;
     let mut k = Recorder::default();
@@ -3044,15 +3010,10 @@ fn a_scopes_index_recycled_after_its_budgets_destroy_is_not_destroyed_as_it() {
     let (_, budget, pid) = lease_for(&mut s, &mut k, u, 60_000_000);
     let scope = scope_of(&k, budget);
     let owner = s.exited(pid).unwrap();
-    ran(&mut s, &mut k, destroy_step(&owner, BUDGET)).unwrap();
-    assert!(k.calls.contains(&Call::Destroy(budget)), "{:?}", k.calls);
-    k.destroy_took(budget);
-    let (_, recycled, _) = lease_for(&mut s, &mut k, u, 60_000_000);
-    assert_eq!(recycled, scope, "the new lease's budget took the scope's index");
     k.calls.clear();
-    ran(&mut s, &mut k, destroy_step(&owner, SCOPE)).unwrap();
-    assert!(k.budgets.contains(&recycled), "the new lease's budget survives");
-    assert!(!k.calls.iter().any(|c| matches!(c, Call::Destroy(_))), "{:?}", k.calls);
+    ran(&mut s, &mut k, destroy_step(&owner, BUDGET)).unwrap();
+    assert_eq!(k.calls, [Call::Destroy(budget), Call::Destroy(scope)]);
+    assert!(!k.budgets.contains(&scope) && k.dead.is_empty(), "{:?}", k.dead);
     assert!(s.failed.is_empty(), "{:?}", s.failed);
 }
 
@@ -3144,7 +3105,12 @@ fn three_blames_in_the_window_lock_the_domain_out_until_the_window_passes() {
     );
     let destroyed: Vec<usize> =
         k.calls.iter().filter_map(|c| if let Call::Destroy(b) = c { Some(*b) } else { None }).collect();
-    assert_eq!(destroyed, vec![bob_session, bob_lease], "bob's session and lease, nothing else");
+    let (session_scope, lease_scope) = (scope_of(&k, bob_session), scope_of(&k, bob_lease));
+    assert_eq!(
+        destroyed,
+        vec![bob_session, session_scope, bob_lease, lease_scope],
+        "bob's session and lease, their scopes' dead entries closed, nothing else"
+    );
     // The destroy took the relay with the budget: nobody is told, the console alone is given
     // back, so the blame's answer does not wait out a dead relay's bound (init's second).
     assert!(
@@ -3179,7 +3145,12 @@ fn three_blames_in_the_window_lock_the_domain_out_until_the_window_passes() {
     }
     let destroyed: Vec<usize> =
         k.calls.iter().filter_map(|c| if let Call::Destroy(b) = c { Some(*b) } else { None }).collect();
-    assert_eq!(destroyed, vec![alice_session_budget], "alice's unlabelled session alone");
+    let scope = scope_of(&k, alice_session_budget);
+    assert_eq!(
+        destroyed,
+        vec![alice_session_budget, scope],
+        "alice's unlabelled session alone, and its scope closed"
+    );
     assert_eq!(call(&mut s, &mut k, SSHD, login("alice", "", &ALICE_KEY)).unwrap_err(), ErrorCode::LockedOut);
     let vault = Message::Login(Login {
         principal: "alice",

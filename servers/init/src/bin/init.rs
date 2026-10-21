@@ -88,8 +88,8 @@ mod machine {
     static BUDGETS: [AtomicU32; MAX_THREADS] = [const { AtomicU32::new(0) }; MAX_THREADS];
     /// How many of each server's instances have ended. The watching thread counts an end before it
     /// destroys the budget, which sweeps every handle stamped with it, `init`'s own at the server
-    /// among them; so a count read unchanged just before a call says the handle is still the one
-    /// `init` made, not a slot swept and reused.
+    /// among them; so a count read changed says the instance is gone without a call, and a call
+    /// made through a handle swept after the read gets `Dead` (I17).
     static ENDED: [AtomicU32; MAX_THREADS] = [const { AtomicU32::new(0) }; MAX_THREADS];
     /// Each server's last exit notice's blame: the account, the labels' count, then the labels,
     /// each word as two halves, since rv32 has no 64-bit atomics.
@@ -304,8 +304,10 @@ mod machine {
         }
 
         /// `init`'s connection to `consoled`, unless the instance it was made at has ended: its
-        /// handle may have been swept and its slot reused, so nothing more goes through it, and
-        /// `init`'s lines go nowhere until it attaches to the next.
+        /// handle, `init`'s own at that instance, was swept with it, and `init`'s lines go nowhere
+        /// until it attaches to the next. The count saves a write per line that would answer
+        /// `Dead`; it guards nothing, since the swept handle stays dead until `init` closes it
+        /// (I17).
         fn connection(&mut self) -> Option<&Connection> {
             if let (Some(_), Some(c)) = (&self.console, self.consoled) {
                 if ENDED[c].load(Ordering::SeqCst) != self.console_at {
@@ -450,6 +452,11 @@ mod machine {
                 let Ok(own) = at.mint(badge, Some(&budget)) else {
                     self.failed(&s.name, "mint init's handle at")
                 };
+                // The last instance's, stamped with its budget, which its end destroyed: a dead
+                // entry the kernel keeps until `init` closes it (I17).
+                for (_, old) in self.own.iter().filter(|(s, _)| *s == i) {
+                    let _ = redoubt_rt::handle::close(old.handle());
+                }
                 self.own.retain(|(s, _)| *s != i);
                 self.own.push((i, own));
             }

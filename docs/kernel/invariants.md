@@ -1,10 +1,10 @@
 # Invariants
 
-The invariants are the sixteen facts about kernel state that hold between any two steps, after
+The invariants are the seventeen facts about kernel state that hold between any two steps, after
 any sequence of calls with any arguments. The rules say what each call does; the invariants say
 what must still be true when it has done it. The [executable model](model.md) checks all of them
 after every step of every random sequence, and the bench's attack cases try to break them on the
-real kernel. This page owns all sixteen: each section gives the statement, where the kernel
+real kernel. This page owns all seventeen: each section gives the statement, where the kernel
 keeps it, the model's check and the tests that attack it.
 
 ## Purpose
@@ -37,6 +37,7 @@ Most invariants are the state-level form of rules other pages own, such as
 | [I14](#i14-no-call-panics-the-kernel) | no call panics the kernel | [ABI](abi.md#errors-and-the-order-of-checks) |
 | [I15](#i15-abandoned-calls-reported-once) | abandoned calls reported once | [R3 (lends and abandoned calls)](ipc.md#r3-lends-and-abandoned-calls) |
 | [I16](#i16-dma-pages-reset-before-reuse) | DMA pages reset before reuse | R11, [devices](devices.md) |
+| [I17](#i17-a-swept-index-stays-dead-until-closed) | a swept index stays dead until closed | R10, [handles](objects.md#handles) |
 
 ## How the model checks them
 
@@ -88,6 +89,7 @@ flowchart LR
 | I13 | `i13_timeouts` |
 | I14 | the property runner (`model/tests/common/mod.rs`), which counts a panic in any family as a failure |
 | I15 | `Checker::i15_abandoned`, `Checker::flows` |
+| I17 | `i17_swept_indices`, against the ghost's record of every index a sweep closed |
 
 A check that nothing can fail proves nothing, so the model also carries **mutations**: each
 breaks one rule in one place, and `mutations_are_caught` requires every one to make some
@@ -130,7 +132,7 @@ table, as an exit endpoint, or carried in a queued message) names a live object.
 **Attacks:** `budget-forge-attack` passes every unused index, indices on table pages that do not
 exist, 0, past the table and wider than 32 bits to every budget call, while a victim lives in the
 budget a wrong lookup would destroy. `budget-destroy-attack` keeps using indices into a destroyed
-subtree while frames and indices are reused. `process` checks that a process handle closes when
+subtree while frames are reused, each index a dead entry until it closes it (I17). `process` checks that a process handle closes when
 its notice is taken. The model test keeps a process handle and a queued copy of it through the
 process's exit and sees both go at notice receipt, the copy arriving as 0.
 
@@ -468,7 +470,8 @@ Status: built · partly tested: id reuse is not visible to a process, so budget 
 Object ids (budgets, endpoints, devices, process objects) are never reused. A message id is
 never 0 and never reused within its receiving process, and it comes from that process's own
 counter, so it says nothing about anyone else's traffic. A stale id therefore cannot reach a later
-message, and a stale handle cannot reach a later object in the same frame.
+message, and a stale handle cannot reach a later object in the same frame; nor can a stale index
+reach a later handle in the same slot ([I17](#i17-a-swept-index-stays-dead-until-closed)).
 
 **Kept in** `next_object_id` (`kernel/src/budget.rs`: one 64-bit counter for every kind of
 object, checked so it stops rather than wrap) and `next_msg_id` (per process, from 1, in the
@@ -648,6 +651,53 @@ runs are quarantined when it dies, the charges move to the parents, and a search
 takes all of it but the quarantined runs, none of it overlapping them. `dma-rules` checks DMA
 pages cannot be lent, transferred or moved and that `unmap` keeps them. The model tests script the
 co-holder cases.
+
+### I17 (a swept index stays dead until closed)
+
+<details><summary>Status: built · tested (7)</summary>
+
+- bench:budget-destroy-attack
+- bench:budget-table-attack
+- bench:handle-chain-attack
+- bench:init-handed-revoked
+- host:redoubt-model::swept_index_stays_dead_until_closed
+- host:redoubt-steward-server::a_leases_budget_its_deadline_took_keeps_its_index_until_its_end_closes_it
+- mutation:I17SweptIndexFreed
+
+</details>
+
+An index a destruction swept in a live table stays a dead entry until its holder closes it: it
+names nothing, every call through it or naming it is `Dead`, and no new handle takes the index
+until `handle_close` frees it. So a holder never acts by an index that has come to name something
+else: whatever went, the index it kept answers `Dead`, and it learns that without proving when the
+destruction ran. Revocation stays complete (I2: the entry names nothing and grants nothing), and
+I1 is untouched (a dead entry is no object, so no lookup reaches a freed frame).
+
+**Kept in** [`kernel/src/handle.rs`](../../kernel/src/handle.rs): a sweep's close (`kill_handle`)
+takes the slot out of its chains and leaves it holding only the dead mark, still counted on its
+table page; every lookup (`MemoryManager::handle`) answers `Dead` for the mark, after `BadHandle`
+and before any kind check; `install_handle` takes the lowest slot that is neither live nor dead;
+`handle_close` frees a dead entry as it removes a live one. The three sweeps of a live table all
+go through it: a destruction's chains (`close_dependents`), a freed process object's chain
+(`close_handles_to`) and a destroyed device's sweep (`sweep_handles`). A table that ends whole
+(`close_all_handles`) is no sweep: no holder is left. The cost is a slot, against `MAX_HANDLES`,
+and its share of a table page, until the holder closes it ([handles](objects.md#handles)).
+
+**Model check:** `i17_swept_indices`: every (holder, index) the ghost recorded a sweep closing, and
+the holder has not closed since, is in the holder's dead set and holds no handle. The ghost's
+record is kept apart from the table, so a sweep that frees the index shows. `I17SweptIndexFreed`
+(the sweep frees the index) fails here at the first destruction.
+`swept_index_stays_dead_until_closed` scripts the whole contract: `Dead` through a swept budget
+and a swept badge, as a send's handle and as `mint`'s budget, `BadHandle` before it and
+`WrongObject` after, no new handle on a dead index, and the index free again only after its close.
+
+**Attacks:** `budget-destroy-attack` keeps four swept indices across two rounds of churn that make
+and destroy a hundred budgets: every call through each is `Dead`, no handle the churn makes takes
+one, and each closes once. `budget-table-attack` sweeps four thousand handles and sees each dead,
+holding its table pages, until the attacker closes them. `handle-chain-attack` holds swept handles
+of every kind in three tables and sees each `Dead` before its close. `init-handed-revoked` has a
+holder ask a server through a badge whose stamp `init` destroys, until the kernel answers `Dead`,
+and then close it once.
 
 ## Residual risks
 

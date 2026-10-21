@@ -789,8 +789,9 @@ fn error_rows() {
     assert!(has(Number::BudgetCreate, &[ClassDenied, LabelDenied, TooLarge, OutOfProcesses]));
     assert!(lacks(Number::BudgetCreate, &[NotPermitted, Busy]));
     assert!(has(Number::Mint, &[Dead, NotPermitted]));
-    assert!(has(Number::Reply, &[InvalidArgument, BadHandle, TooLarge]));
-    assert!(lacks(Number::Reply, &[OutOfMemory, Dead, Refused]));
+    // A dead entry in a reply's handle list fails the reply, as in any list (I17).
+    assert!(has(Number::Reply, &[InvalidArgument, BadHandle, Dead, TooLarge]));
+    assert!(lacks(Number::Reply, &[OutOfMemory, Refused]));
     assert!(lacks(Number::Serve, &[BadHandle, TooLarge, Dead, NotPermitted]));
     assert!(lacks(Number::Random, &[TooLarge, BadHandle, OutOfMemory]));
     assert!(lacks(Number::TimeNow, &[BadHandle, OutOfMemory]));
@@ -804,6 +805,12 @@ fn error_rows() {
     // `console_hold` fails only on its handle, or on another process's hold (kernel/devices.md).
     assert!(has(Number::ConsoleHold, &[BadHandle, WrongObject, Busy]));
     assert!(lacks(Number::ConsoleHold, &[OutOfMemory, NotPermitted, TooLarge, Timeout]));
+    // Every call that names a handle meets a dead entry as `Dead`, but `handle_close`, which frees
+    // it (I17).
+    for n in Number::ALL {
+        let names = n.can_return(BadHandle);
+        assert!(n.can_return(Dead) == (names && n != Number::HandleClose), "{n:?}");
+    }
     // Every call that adds a handle to its caller's table (`MAX_HANDLES`).
     for n in [Number::ProcessCreate, Number::EndpointCreate, Number::Mint, Number::BudgetCreate] {
         assert!(has(n, &[OutOfMemory, TooLarge]), "{n:?}");

@@ -111,8 +111,10 @@ pub extern "C" fn _start() -> ! {
     );
     let first = reap(p);
     b.check(first == Ok(1), format_args!("the first reap takes the newest child, one left: {first:?}"));
-    let gone =
-        [c, g, stamped].iter().all(|h| rd::usage(*h).is_err() && rd::close(*h) == Err(Error::BadHandle));
+    // Each a dead entry until this closes it, once (I17).
+    let gone = [c, g, stamped].iter().all(|h| {
+        rd::usage(*h) == Err(Error::Dead) && rd::close(*h) == Ok(()) && rd::close(*h) == Err(Error::BadHandle)
+    });
     b.check(
         gone,
         format_args!("the reaped child's and grandchild's handles, and those stamped with them, are closed"),

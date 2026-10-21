@@ -1,8 +1,8 @@
 //! `keeper`: a `servers` entry that keeps the copy `passer` passes it of `passer`'s badge at
 //! `orphan-server`, and tells `passer` to exit. It asks the server through that copy until the
-//! kernel refuses it as a bad handle, gone with the instance that passed it on since `init`
-//! stamped the badge with that instance's budget; then it takes the copy the restarted `passer`
-//! passes, which is answered.
+//! kernel answers `Dead`, the copy gone with the instance that passed it on since `init` stamped
+//! the badge with that instance's budget: a dead entry, which it closes once (I17); then it takes
+//! the copy the restarted `passer` passes, which is answered.
 //! The kernel's and the server's answers are its verdict.
 
 #![cfg_attr(target_os = "none", no_std, no_main)]
@@ -71,17 +71,20 @@ fn check(startup: &Startup) -> Result<(), String> {
         other => return Err(format!("the first copy was not answered: {other:?}")),
     }
     passer.send(&[EXIT, 0, 0, 0], &[], None, FOREVER).map_err(|e| format!("tell passer: {e:?}"))?;
-    // Asked before the new copy is taken, which could land in the old one's slot: a copy arrives
-    // only when this program receives it.
-    // Answered until `init` destroys the dead instance's budget; then the sweep has closed the
-    // copy here, and the call is refused as a bad handle. A call the sweep caught at the server
-    // ends `Dead`, and the next one sees the handle gone. The case's timeout bounds the wait.
+    // Answered until `init` destroys the dead instance's budget; then the sweep has left the copy
+    // here a dead entry, and the call is `Dead`, as is one the sweep caught queued at the server.
+    // The server lives on, so `Dead` says the sweep came. The case's timeout bounds the wait.
     loop {
         match count(old) {
-            Err(Error::BadHandle) => break,
-            Ok(_) | Err(Error::Dead) => sleep(APART).map_err(|e| format!("sleep: {e:?}"))?,
+            Err(Error::Dead) => break,
+            Ok(_) => sleep(APART).map_err(|e| format!("sleep: {e:?}"))?,
             Err(e) => return Err(format!("the old copy failed otherwise: {e:?}")),
         }
+    }
+    // The dead entry holds its index until this closes it, once (I17).
+    match (redoubt_rt::handle::close(old), redoubt_rt::handle::close(old)) {
+        (Ok(()), Err(Error::BadHandle)) => {}
+        other => return Err(format!("the old copy did not close once: {other:?}")),
     }
     let new = passed(&own)?;
     match count(new) {

@@ -42,13 +42,12 @@ pub const CONSOLE: ReplyTo = 2;
 
 /// What a step made, kept under its token until the core forgets its owner.
 pub enum Made<B, H> {
-    /// A budget, with the deadline it was minted with: past it the kernel has destroyed the
-    /// budget and revoked this handle (R10), and the handle is never used again
-    /// ([`Steward::destroy`]).
-    Budget(B, u64),
+    /// A budget. Past its deadline the kernel has destroyed it, and the handle is a dead entry
+    /// until the steward closes it (R10, I17; [`Steward::destroy`]).
+    Budget(B),
     /// A revocation scope, with the token of the budget it was made in: minted with no deadline
-    /// of its own, it ends with that budget, at its deadline or at the steward's own destroy of
-    /// it, and that is when this handle is revoked ([`Steward::deadline_of`]).
+    /// of its own, it ends with that budget, and its handle is then a dead entry, closed with
+    /// that budget's record ([`Steward::end_scopes`]).
     Scope(B, Token),
     /// A connection the session's namespace holds, or none for a slot bound to nothing.
     Connection(Option<H>),
@@ -653,54 +652,36 @@ impl<B: Copy, H: Copy> Steward<B, H> {
 
     fn budget(&self, token: &Token) -> Result<B, Error> {
         match self.made.get(token) {
-            Some(Made::Budget(b, _) | Made::Scope(b, _)) => Ok(*b),
+            Some(Made::Budget(b) | Made::Scope(b, _)) => Ok(*b),
             _ => Err(Error::BadHandle),
         }
     }
 
-    /// The deadline past which the kernel has taken the budget `token` names and revoked the
-    /// steward's handle to it, the witness [`Steward::destroy`] takes: a budget's own; a scope's
-    /// is its parent's, since a scope is minted with none and the kernel destroys a budget's
-    /// whole subtree with it; and none for a scope whose parent the steward destroyed already,
-    /// which went with it, its index free or another object's since. So every destroy by a
-    /// handle the steward keeps has the same guard, whatever kind of record names it.
-    fn deadline_of(&self, token: &Token) -> Option<u64> {
-        match self.made.get(token)? {
-            Made::Budget(_, deadline) => Some(*deadline),
-            Made::Scope(_, parent) => self.deadline_of(parent),
-            _ => None,
+    /// Destroys budget `b` by the steward's handle, which goes with it ([`Kernel::destroy`]).
+    /// `Dead` is the same end: the kernel took the budget already, at its deadline or with the
+    /// budget above it, and the handle has been a dead entry since, which no later handle can
+    /// take (I17); the destroy closes it all the same.
+    fn destroy<K: Kernel<Budget = B, Handle = H>>(kernel: &mut K, b: B) -> Result<(), Error> {
+        match kernel.destroy(b) {
+            Err(Error::Dead) => Ok(()),
+            destroyed => destroyed,
         }
     }
 
-    /// Destroys budget `b`, minted with `deadline`, by its handle only while the steward knows
-    /// the handle still names it. The kernel destroys a budget whose deadline has passed at its
-    /// next entry, before anything else (R10; `kernel/src/time.rs`), revoking every handle to it
-    /// and freeing the steward's index for the next handle the steward installs: a destroy by
-    /// that index afterwards would find the index free (`BadHandle`), another kind of object
-    /// (`WrongObject`), or another budget, which it would destroy with no error. So the clock is
-    /// read right before the call, and the two calls are the loop's, back to back, with no
-    /// install between them (no reply the steward's threads take carries a handle, and the
-    /// launch thread installs only under the install lock the pair holds,
-    /// [`Kernel::without_installs`]; a reply that one day carries a handle would recheck
-    /// this): with the deadline still ahead the handle is the budget's, since
-    /// nothing but the deadline revokes a budget handle the steward holds, and the kernel takes
-    /// a budget at its deadline, never before; with it passed the kernel has taken the budget
-    /// already, and no call is made. A `BadHandle` with the deadline passing between the read
-    /// and the call is the same end (the kernel's expiry ran first at the call's entry, and the
-    /// index was still free); one with the deadline still ahead is a handle the steward lost,
-    /// a failure, as any other error is. A scope's `deadline` is its parent's, and the
-    /// steward's own destroy of the parent revokes the scope's handle too: then the parent's
-    /// record is gone, and [`Steward::deadline_of`] gives no deadline to destroy by.
-    fn destroy<K: Kernel<Budget = B, Handle = H>>(kernel: &mut K, b: B, deadline: u64) -> Result<(), Error> {
-        kernel.without_installs(|kernel| {
-            if kernel.now() >= deadline {
-                return Ok(());
+    /// Closes the scopes made in the budget `budget` names, which ended with it: each handle is a
+    /// dead entry, and [`Steward::destroy`] closes it.
+    fn end_scopes<K: Kernel<Budget = B, Handle = H>>(&mut self, kernel: &mut K, budget: &Token) {
+        let ended: Vec<Token> = self
+            .made
+            .iter()
+            .filter(|(_, m)| matches!(m, Made::Scope(_, parent) if parent == budget))
+            .map(|(t, _)| t.clone())
+            .collect();
+        for t in ended {
+            if let Some(Made::Scope(s, _)) = self.made.remove(&t) {
+                let _ = Self::destroy(kernel, s);
             }
-            match kernel.destroy(b) {
-                Err(Error::BadHandle) if kernel.now() >= deadline => Ok(()),
-                destroyed => destroyed,
-            }
-        })
+        }
     }
 
     fn step<K: Kernel<Budget = B, Handle = H>>(
@@ -722,7 +703,7 @@ impl<B: Copy, H: Copy> Steward<B, H> {
                 };
                 let spec = spec(limits, labels.as_slice(), account, deadline.unwrap_or(FOREVER))?;
                 let b = kernel.create(parent, &spec)?;
-                self.made.insert(token.clone(), Made::Budget(b, spec.deadline));
+                self.made.insert(token.clone(), Made::Budget(b));
                 Ok(Produced::Budget(kernel.budget_id(b)))
             }
             // A zero-limit budget: it holds nothing and runs nothing, so a server given it can
@@ -813,17 +794,15 @@ impl<B: Copy, H: Copy> Steward<B, H> {
             }
             // The owner's process is ending: its exit notice is late from here on. A budget the
             // kernel's deadline took (a lease's at its `Exited`, or at an `end_lease` served
-            // after the deadline but before the notice) is destroyed already, and never by the
-            // handle the steward kept ([`Steward::destroy`]): the end the core asked for is done.
-            // A scope is destroyed the same way, by its parent's deadline, and a scope whose
-            // parent the steward destroyed is gone with it: no call by its handle either.
+            // after the deadline but before the notice) is destroyed already, and its handle is
+            // dead: the end the core asked for is done ([`Steward::destroy`]). The scopes made
+            // in it ended with it.
             Step::DestroyBudget { budget } => {
                 let b = self.budget(budget)?;
                 self.end_pids(owner);
-                if let Some(deadline) = self.deadline_of(budget) {
-                    Self::destroy(kernel, b, deadline)?;
-                }
+                Self::destroy(kernel, b)?;
                 self.made.remove(budget);
+                self.end_scopes(kernel, budget);
                 Ok(Produced::Done)
             }
             // A crossing's read (servers/steward.md, "Declassification and push"; R42): the
@@ -901,14 +880,21 @@ impl<B: Copy, H: Copy> Steward<B, H> {
         }
         let mine: Vec<Token> = self.made.keys().filter(|t| &t.owner == object).cloned().collect();
         let mut connections = Vec::new();
+        let mut scopes = Vec::new();
         for t in mine {
             match self.made.remove(&t) {
                 Some(Made::Connection(Some(h)) | Made::Relay(_, h)) => connections.push(h),
-                Some(Made::Budget(b, deadline)) => {
-                    let _ = Self::destroy(kernel, b, deadline);
+                Some(Made::Budget(b)) => {
+                    let _ = Self::destroy(kernel, b);
                 }
+                Some(Made::Scope(s, _)) => scopes.push(s),
                 _ => {}
             }
+        }
+        // Each made in the object's own budget, so ended with it: a dead entry, which the
+        // destroy closes.
+        for s in scopes {
+            let _ = Self::destroy(kernel, s);
         }
         for h in connections {
             self.give_back(kernel, h);

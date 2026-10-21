@@ -71,6 +71,9 @@ enum Object {
     Budget(usize),
     /// A launched process: the index of a [`State::launched`] entry.
     Process(usize),
+    /// A dead entry: a handle a destruction swept, which names nothing and answers `Dead` until
+    /// its holder closes it (kernel/invariants.md I17).
+    Dead,
 }
 
 impl Object {
@@ -199,8 +202,8 @@ struct State {
     devices: Vec<Device>,
     /// Budgets, by the index their handles carry.
     budgets: Vec<Budget>,
-    /// The handles to budgets a destruction freed, by (process, index): the budget each named,
-    /// for [`Fake::destroyed`] to read after its slot has gone.
+    /// The handles to budgets a destruction swept, by (process, index): the budget each named,
+    /// for [`Fake::destroyed`] to read once its slot is a dead entry or closed.
     freed: HashMap<(usize, usize), usize>,
     /// The pointer `MapAnon` or `device` allocated at each address, so memory nothing frees (a
     /// heap's pages, a device's registers) stays reachable from here and Miri does not report it
@@ -826,7 +829,11 @@ fn at_or_below(s: &State, mut b: usize, top: usize) -> bool {
 }
 
 fn lookup(s: &State, pid: usize, h: Handle) -> Result<Object, Error> {
-    s.processes[pid].handles.get(h.index() as usize).copied().flatten().ok_or(Error::BadHandle)
+    match s.processes[pid].handles.get(h.index() as usize).copied().flatten() {
+        None => Err(Error::BadHandle),
+        Some(Object::Dead) => Err(Error::Dead),
+        Some(object) => Ok(object),
+    }
 }
 
 /// The endpoint `h` names in `pid`, or `WrongObject` if it names a device.
@@ -1084,7 +1091,11 @@ unsafe impl redoubt_rt::Transport for Fake {
             }
             Call::HandleClose { handle } => {
                 let mut s = self.lock();
-                lookup(&s, pid, handle)?;
+                // A dead entry closes like a live handle (I17).
+                match lookup(&s, pid, handle) {
+                    Ok(_) | Err(Error::Dead) => {}
+                    Err(e) => return Err(e),
+                }
                 s.processes[pid].handles[handle.index() as usize] = None;
                 // A test may wait for this close (`wait_held`).
                 self.change(&mut s);
@@ -1273,19 +1284,19 @@ unsafe impl redoubt_rt::Transport for Fake {
                 for child in children {
                     end(&mut s, child, Cause::Killed, 0);
                 }
-                // As the kernel does (kernel/budgets.md R10, objects.md R9): every handle to a
-                // budget destroyed, and every handle one stamped, is gone from every table, its
-                // index free for the next handle installed there.
+                // As the kernel does (kernel/budgets.md R10, objects.md R9, invariants.md I17):
+                // every handle to a budget destroyed, and every handle one stamped, becomes a
+                // dead entry in every table, its index held until its holder closes it.
                 let State { processes, freed, .. } = &mut *s;
                 for (p, process) in processes.iter_mut().enumerate() {
                     for (i, slot) in process.handles.iter_mut().enumerate() {
                         match *slot {
                             Some(Object::Budget(b)) if gone.contains(&b) => {
                                 freed.insert((p, i), b);
-                                *slot = None;
+                                *slot = Some(Object::Dead);
                             }
                             Some(Object::Endpoint(Endpoint { stamp: Some(b), .. })) if gone.contains(&b) => {
-                                *slot = None;
+                                *slot = Some(Object::Dead);
                             }
                             _ => {}
                         }

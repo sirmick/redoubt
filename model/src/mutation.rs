@@ -132,6 +132,9 @@ pub enum Mutation {
     R10RevokedCallAnswered,
     /// A revoked handle in a queued message is dropped from the list instead of arriving as 0.
     R10SweptHandlesDropped,
+    /// A sweep frees the index it closes, so the holder's next new handle may take it, instead of
+    /// leaving a dead entry until the holder closes it.
+    I17SweptIndexFreed,
     /// Destroying a creator's budget leaves the processes it created running.
     R10CreatorDeathSparesProcess,
     /// Destroying a budget drops the count of the PIDs still held for its processes instead of
@@ -436,7 +439,7 @@ pub enum Mutation {
 }
 
 impl Mutation {
-    pub const ALL: [Mutation; 176] = {
+    pub const ALL: [Mutation; 177] = {
         use Mutation::*;
         [
             R1SkipLabelCheck,
@@ -489,6 +492,7 @@ impl Mutation {
             R10RevokedMessageDelivered,
             R10RevokedCallAnswered,
             R10SweptHandlesDropped,
+            I17SweptIndexFreed,
             R10CreatorDeathSparesProcess,
             R10HeldPidsDropped,
             R10ReapDestroysParent,
@@ -744,6 +748,7 @@ impl Mutation {
             | DmaQuarantineChargeDropped
             | DmaQuarantinedDeviceUsable
             | DmaResetClearsCoHolderReach => "I16",
+            I17SweptIndexFreed => "I17",
             PolicyServerHoldsSystemBudget => "R33",
             PolicyLoginWithKeydKey | PolicyApproveWithLoginKey => "R35",
             PolicySequentialIds => "R36",

@@ -190,8 +190,23 @@ impl Budget {
         handle(syscall(&Call::BudgetCreate { parent: self.0, spec_rec: rec.addr() })).map(Budget)
     }
 
-    /// Destroys the budget and everything charged to it (R10).
-    pub fn destroy(self) -> Result<(), Error> { nothing(syscall(&Call::BudgetDestroy { budget: self.0 })) }
+    /// Destroys the budget and everything charged to it (R10), then closes this handle: the
+    /// destruction swept it, and a swept handle stays in the table, dead, until its holder
+    /// closes it (I17). A handle that was dead already is closed too; one the call refused for
+    /// any other reason is kept.
+    pub fn destroy(self) -> Result<(), Error> {
+        let destroyed = self.destroy_keeping();
+        if matches!(destroyed, Ok(()) | Err(Error::Dead)) {
+            let _ = close(self.0);
+        }
+        destroyed
+    }
+
+    /// As [`Budget::destroy`], but the handle stays, dead, for the record that owns it to close:
+    /// for a caller that does not own the handle it destroys by.
+    pub fn destroy_keeping(&self) -> Result<(), Error> {
+        nothing(syscall(&Call::BudgetDestroy { budget: self.0 }))
+    }
 
     /// Destroys the budget's first child and everything below it, keeps the budget, and returns
     /// how many children it still has (`budget_reap`, R10).

@@ -20,7 +20,8 @@
 //! - `kept`: the launcher's endpoint under the launcher's own stamp.
 //!
 //! The launcher destroys `top`, then each holder closes all five. The verdict is the kernel's: a
-//! closed handle is `BadHandle`, a kept one closes `Ok`, and the checked build's chain audit
+//! closed handle is a dead entry, `Dead` until its holder closes it (I17), a kept one closes
+//! `Ok`, and the checked build's chain audit
 //! (`check_handle_chains`, after the walk) finds every live handle where it should be. With
 //! `handle-chain-fault` the kernel installs handles without their stamp entry, and with
 //! `process-chain-fault` without their process object's entry, and that audit must stop it
@@ -57,7 +58,7 @@ extern "C" fn holder(_: usize) -> ! {
     let made = &[process][..usize::from(create && process != 0)];
     let _ = rd::send(rep, &rd::body_with([owned as usize, 0, 0, 0], made), None, rd::FOREVER);
     let _ = rd::receive(Some(go), rd::FOREVER, 0);
-    let gone = |h: u32| rd::close(h) == Err(Error::BadHandle);
+    let gone = |h: u32| rd::usage(h) == Err(Error::Dead) && rd::close(h) == Ok(());
     let right = usize::from(gone(stamped))
         | usize::from(gone(budget)) << 1
         | usize::from(gone(owned)) << 2
@@ -141,7 +142,7 @@ pub extern "C" fn _start() -> ! {
     }
 
     b.check(rd::destroy(top) == Ok(()), format_args!("top is destroyed"));
-    let gone = |h: u32| rd::close(h) == Err(Error::BadHandle);
+    let gone = |h: u32| rd::usage(h) == Err(Error::Dead) && rd::close(h) == Ok(());
     let mine_right = usize::from(gone(stamped))
         | usize::from(gone(low)) << 1
         | usize::from(gone(owned)) << 2

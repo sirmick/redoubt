@@ -1,4 +1,4 @@
-description = "Destroying a budget while handles to it and its descendants are held closes every one of them: each stale index is BadHandle, before and after frames and indices are reused (R10, I1, I2)"
+description = "Destroying a budget while handles to it and its descendants are held closes every one of them: each stale index is a dead entry, Dead to every call before and after frames are reused, taken by no new handle, and freed once by its holder's close (R10, I1, I2, I17)"
 arch = ["rv64", "rv32"]
 kind = "boot"
 icount = "shift=3,sleep=off"
@@ -13,15 +13,16 @@ programs = [
 timeout_secs = 10
 # A handle that outlived its budget would reach a freed frame, and the kernel stops on that
 # (I1): a PANIC, always forbidden. The verdict is the kernel surviving, the victim's pages and
-# its DONE and the power-off. The attacker's lines pin that each stale index was refused and the
-# carve returned, as progress.
+# its DONE and the power-off. The attacker's lines pin the kernel's answers, as progress: each
+# stale index Dead and taken by no new handle (I17), closed once, and the carve returned.
 expect = [
     '^\[server\] started budget-destroy-attack as pid 4$',
     '^\[pid 4\] \[destroy\] held b=\d+ c=\d+ d=\d+ scope=\d+ e=\d+; destroy b -> Ok\(\(\)\)$',
-    '^\[pid 4\] \[destroy\] stale index checks refused: 8 of 8$',
+    '^\[pid 4\] \[destroy\] stale index checks dead: 8 of 8; stale indices taken: 0$',
+    '^\[pid 4\] \[destroy\] stale indices closed once: true$',
     '^\[pid 4\] \[destroy\] own carve returned: true$',
     '^\[pid 4\] \[destroy\] e untouched: Ok\(10\)$',
-    '^\[pid 4\] \[destroy\] destroy users -> Ok\(\(\)\), then Err\(BadHandle\)$',
+    '^\[pid 4\] \[destroy\] destroy users -> Ok\(\(\)\), then Err\(Dead\)$',
     '^\[pid 4\] \[destroy\] attempts done$',
     '^\[pid 3\] \[victim\] mapped and touched 64 pages after the attack; every budget it holds within its limits: true$',
     '^\[server\] done: reported by pid 3; still serving$',

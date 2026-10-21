@@ -334,8 +334,9 @@ impl Job {
     }
 
     /// Ends the child by destroying its budget (kernel/budgets.md R10); its exit notice, `killed`,
-    /// then arrives for [`Job::wait`].
-    pub fn kill(&self) -> Result<(), Error> { Ok(Budget::from_handle(self.budget.handle()).destroy()?) }
+    /// then arrives for [`Job::wait`]. The budget handle is the launcher's, so it stays, dead
+    /// (I17), for the launcher to close.
+    pub fn kill(&self) -> Result<(), Error> { Ok(self.budget.destroy_keeping()?) }
 
     pub fn process(&self) -> &Process { &self.process }
 
