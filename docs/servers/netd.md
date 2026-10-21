@@ -42,7 +42,8 @@ policy. Everything above the link is `ipd`'s.
   transmit ring is `busy`; a broken device is `failed`.
 - **Received frames** go to `ipd` as its `frame` message: a `send`, the frame in one transferred
   page of anonymous memory ([ipd](ipd.md)). A frame `ipd` cannot take within `SEND_TIMEOUT_US`
-  (50 ms) is dropped, as on any wire.
+  (50 ms) is dropped, as on any wire: a silent socket's keep-alives outlast two such drops in a
+  row ([ipd](ipd.md#the-net-tree)).
 
 The table: [libs/wire/tables/netif.md](../../libs/wire/tables/netif.md).
 

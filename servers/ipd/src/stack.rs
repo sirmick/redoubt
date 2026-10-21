@@ -57,9 +57,15 @@ pub const BUFFER: usize = 8 * 1024;
 pub const LINGER_US: u64 = 60_000_000;
 /// How long a half-open connection (SYN received, never answered) holds a backlog slot (µs).
 pub const HALF_OPEN_US: u64 = 3_000_000;
-/// An established socket with data unacknowledged, or silent past keep-alive, this long ends.
+/// An established socket with data unacknowledged, or silent past keep-alive, this long ends:
+/// smoltcp counts it from the last segment received.
 pub const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
-pub const KEEP_ALIVE: Duration = Duration::from_secs(30);
+/// Keep-alive probes a silent socket sends within [`IDLE_TIMEOUT`] of the last segment received.
+pub const PROBES: u64 = 3;
+/// A silent socket's keep-alive interval, counted from the last segment sent: [`PROBES`] probes
+/// fit before the timeout, so a socket survives `PROBES - 1` answers lost in a row (`netd` drops a
+/// frame `ipd` does not take in time: servers/ipd.md, "The `/net` tree").
+pub const KEEP_ALIVE: Duration = Duration::from_micros(IDLE_TIMEOUT.total_micros() / (PROBES + 1));
 /// Ephemeral ports: drawn at random from here, unique among every live socket.
 pub const EPHEMERAL: core::ops::RangeInclusive<u16> = 49152..=65535;
 /// Draws of an ephemeral port before `too_many`.

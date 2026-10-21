@@ -1533,7 +1533,13 @@ window-to-window spread: 3.8 interrupts a second on the busiest hart (1.6 to 1.9
 system calls from user mode (6.0 to 6.1), and 0.01 host cores, the measure's own resolution
 (0.001 to 0.002). Before the one-hart rule the busiest hart took 3.4 to 3.5 a second, three
 quarters of them the kernel lock's hand-off interrupts, each timeout waking every hart
-([the hart timer](kernel/timer.md#the-hart-timer)).
+([the hart timer](kernel/timer.md#the-hart-timer)). The box has since risen with nothing in the
+case changed: alone, three windows a width read 2.4 to 2.8 on the busiest hart, and three more
+2.9 to 3.5 with `ipd` probing a silent socket every 15 s
+([what a probe costs](servers/ipd.md#the-net-tree)). So the ceiling now catches a rise of about a
+tenth, not a doubling. The rise since the ceiling was set is a finding of its own, and the box's
+per-packet cost at rest is where the headroom comes back; the ceiling stays where it was set. A
+miss beside other work is no verdict until the case misses alone, as for any host-clock case.
 
 The window never holds the zeroing of the frames in flight
 ([frames in flight](kernel/memory.md#frames-in-flight)): about 35,000, which the boot and the

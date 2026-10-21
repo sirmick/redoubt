@@ -52,6 +52,9 @@ pub struct Wire {
     pub selfset: Option<SelfSet>,
     /// TCP to these ports is sent but never arrives: a sender that has gone.
     pub blackhole: Vec<u16>,
+    /// The peer's next frames lost before `ipd` takes them, as `netd` drops one `ipd` does not
+    /// take in time.
+    pub lost: u32,
 }
 
 /// `ipd`'s end of the pipe.
@@ -353,6 +356,10 @@ impl World {
             }
             self.peer.iface.poll(instant(self.now), &mut self.peer.dev, &mut self.peer.sockets);
             while let Some(frame) = self.peer.dev.tx.pop_front() {
+                if self.wire.borrow().lost > 0 {
+                    self.wire.borrow_mut().lost -= 1;
+                    continue;
+                }
                 self.nine.fs.stack.ingress(&frame, self.now);
                 moved = true;
             }
