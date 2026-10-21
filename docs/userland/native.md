@@ -79,12 +79,13 @@ calls, made in the bench by a user-class parent, and the stub
 2. It maps the **loader stub** into the process at its fixed address: a flat binary, the same for
    everyone, which needs no parsing to map.
 3. It copies the program's ELF bytes into the process as data, 64 pages at a time, each batch
-   into fresh pages it then moves in, so a launcher never holds more than one batch, writes the
-   startup block (namespace, named handles, arguments) into a page mapped read-only, and starts
-   the process at the stub with the startup page's address as its argument.
+   into fresh pages it then moves in a range call's worth at a time, so a launcher never holds
+   more than one batch, writes the startup block (namespace, named handles, arguments) into a
+   page mapped read-only, and starts the process at the stub with the startup page's address as
+   its argument.
 4. The stub, running inside the new process's own budget, parses the ELF from memory, maps its
-   segments at their link addresses (code executable, never writable), frees the image pages,
-   and jumps to the entry point.
+   segments at their link addresses a range at a time (code executable, never writable), frees
+   the image pages, and jumps to the entry point.
 
 The launcher copies bytes and never parses an ELF, so a malicious ELF can at most compromise the
 process it was going to become. The stub refuses, by exiting: segments that overlap each other,
@@ -323,7 +324,7 @@ the loader stub.
 | --- | --- |
 | `start` | the entry point (`entry!`, and `first_entry!` for `init`), exit codes (`OK` 0, `PANIC` 101, `BAD_STARTUP` 102) and the panic handler |
 | `startup` | the startup block, parsed defensively ([sessions](sessions.md#how-a-program-reads-its-namespace)) |
-| `handle` | typed handles and the system calls that are not IPC |
+| `handle` | typed handles and the system calls that are not IPC; a range over `MAX_RANGE_PAGES` mapped, moved and unmapped a range at a time (below) |
 | `ipc` | lends and transfers, `call`, `send`, `receive`, `reply`, `serve` |
 | `heap` | the global allocator, over `map_anon`, or over one arena mapped once (`fix_heap`, for `init`'s [bound](../kernel/budgets.md#the-tree-from-the-boot-manifest)); capped at the startup block's `heap_pages` ([init](../servers/init.md#the-startup-block)), past which it refuses before `map_anon` is asked (an infallible allocation then panics, and the runtime exits with its panic code, 101: `heap-cap`); and a record of its cap and peak for the bench ([the memory budget](../testbench.md#the-memory-budget)) |
 | `path` | lexical path cleaning, so `..` never climbs above a root |
@@ -332,6 +333,12 @@ the loader stub.
 | `thread` | `spawn`: a closure on a thread of this process, with a stack that outlives it, placed by `map_fixed` in the thread-stack area ([memory layout](../kernel/memory-layout.md#regions)) above an unmapped guard page, so an overflow faults there and the kernel ends the process at once (`thread-stack-guard`) instead of writing over what `map_anon` placed below; painted before the thread starts, so the bench's memory scan reports its peak as `stack NAME thread N PEAK` ([the memory budget](../testbench.md#the-memory-budget)); `scope`: threads that borrow from their caller, all ended before it returns |
 | `sync` | a semaphore, a mutex and a condvar for the threads of one process, whose waiters sleep on an endpoint |
 
+- **A long range goes a range at a time.** A range call names at most `MAX_RANGE_PAGES` (16)
+  pages ([R22 (range cost)](../kernel/memory.md#r22-range-cost)), so `map_fixed`, `unmap` and
+  `Process::map` make one call a range (`redoubt_sys::range_chunks`): a refused `map_fixed`
+  unmaps the ranges before it, so it maps all of a run or none of it, and a refused
+  `Process::map` leaves the ranges it moved in the child, which has not started, and unmaps the
+  rest.
 - **Start and end.** `entry!(run)` receives the startup page's address from the loader stub,
   parses the block, and calls `run`; its return value is the exit code. A block that does not
   parse exits with `BAD_STARTUP`. A panic prints its message once on `/dev/cons`, if the program

@@ -59,7 +59,7 @@ use redoubt_rt::abi::{
     BODY_SLOTS, BUDGET_SPEC_SLOTS, Body, BudgetSpec, Call, CallOutcome, Cause, Error, ExitNotice, FOREVER,
     Handle, Handles, Hold, Labels, LendDisposition, MAX_START_HANDLES, MemFlags, Message, MessageKind,
     MintSource, PAGE_SIZE, Pages, RECEIVED_SLOTS, Received, ReceivedBody, ReceivedHandles, ReplyOutcome,
-    Return,
+    Return, range_cap,
 };
 use redoubt_rt::ipc::{Request, Words};
 use redoubt_rt::server::typed::{Outcome, finish};
@@ -146,6 +146,8 @@ struct Process {
     handles: Vec<Option<Object>>,
     /// Mapped ranges: address -> length.
     mappings: HashMap<usize, usize>,
+    /// Where its `MapAnon` places pages ([`Area`]): its own, as each address space's is.
+    area: Area,
     /// The most pages mapped at once since [`Fake::held_peak`] last read it.
     peak: usize,
 }
@@ -158,6 +160,26 @@ impl Process {
     }
 
     fn held(&self) -> usize { self.mappings.values().map(|len| len / PAGE_SIZE).sum() }
+
+    /// Takes `addr..addr + len` out of the one mapping that holds it, as the kernel unmaps or moves
+    /// any part of a mapping: what is left of it on either side stays mapped, each part a mapping
+    /// of its own. The holding mapping's start and length, or `None` if no one mapping holds it.
+    fn carve(&mut self, addr: usize, len: usize) -> Option<(usize, usize)> {
+        let (&at, &whole) = self.mappings.iter().find(|&(&a, &l)| a <= addr && addr + len <= a + l)?;
+        self.mappings.remove(&at);
+        if addr > at {
+            self.mappings.insert(at, addr - at);
+        }
+        if addr + len < at + whole {
+            self.mappings.insert(addr + len, at + whole - addr - len);
+        }
+        Some((at, whole))
+    }
+
+    /// Whether one mapping holds all of `addr..addr + len`.
+    fn holds(&self, addr: usize, len: usize) -> bool {
+        self.mappings.iter().any(|(&a, &l)| a <= addr && addr + len <= a + l)
+    }
 }
 
 struct Pending {
@@ -217,10 +239,12 @@ struct State {
     /// The pointer `MapAnon` or `device` allocated at each address, so memory nothing frees (a
     /// heap's pages, a device's registers) stays reachable from here and Miri does not report it
     /// leaked. An entry is replaced when its address is allocated again; after an `Unmap` it is
-    /// left dangling, which is harmless because nothing reads it.
+    /// left dangling, which is harmless because nothing reads it (under Miri a run's entry goes
+    /// with its allocation).
     anon: HashMap<usize, AtomicPtr<u8>>,
-    /// The addresses `MapFixed` mapped, host pages from `mmap` at the address the runtime named
-    /// (a spawned thread's stack above its guard page), which `Unmap` gives back with `munmap`.
+    /// The addresses `MapFixed` mapped outside every [`Area`], host pages from `mmap` at the
+    /// address the runtime named (a spawned thread's stack above its guard page), which `Unmap`
+    /// gives back with `munmap`.
     fixed: HashSet<usize>,
     /// Launched processes, by the index their handles carry.
     launched: Vec<Launched>,
@@ -334,6 +358,7 @@ impl Fake {
             killed: false,
             handles: vec![None],
             mappings: HashMap::new(),
+            area: Area::default(),
             peak: 0,
         });
         s.processes.len() - 1
@@ -873,12 +898,116 @@ fn end(s: &mut State, index: usize, cause: Cause, code: u32) {
     s.exits_due.push_back((exit, notice));
 }
 
-/// Frees a mapping this kernel made, which its process no longer holds.
-fn free(addr: usize, len: usize) {
-    // SAFETY: `addr` was returned by `alloc_zeroed` with exactly this layout (MapAnon, or a
-    // transfer or lend of such a mapping), and its caller has just taken it out of its process's
-    // mappings, so it is freed only once.
-    unsafe { dealloc(addr as *mut u8, Layout::from_size_align(len, PAGE_SIZE).unwrap()) };
+/// A process's placement area, which its `MapAnon` searches as the kernel searches its own
+/// (kernel/memory.md, "Where `map_anon` puts pages"): first fit from the start of the run placed
+/// last, then from the area's start, so that `MapFixed` meets the pages `MapAnon` placed, as the
+/// kernel's does. One anonymous host mapping, made at the process's first `MapAnon` and never
+/// unmapped (its address is kept in `State::anon`); a page is zeroed as it is mapped. The processes
+/// share the host's address space, so a page of one's area is free to every process's `MapFixed`
+/// until it is taken.
+///
+/// Not under Miri, which checks each access to an allocation against every pointer and thread
+/// that touched it: one area shared by a test's every run made `rt-miri`'s
+/// `heap_over_map_anon` run past five minutes, against under a minute with an allocation a run.
+/// There each `MapAnon` run is an allocation of its own, as it was before areas, and only a whole
+/// run is unmapped or moved, so `rt-miri` tests no range call split a range at a time.
+#[derive(Default)]
+struct Area {
+    base: usize,
+    /// Whether each page is mapped.
+    taken: Vec<bool>,
+    /// The first page of the run placed last.
+    rover: usize,
+}
+
+impl Area {
+    /// Pages in an area: enough for every host test's live pages.
+    const PAGES: usize = 16384;
+
+    fn base(&mut self, anon: &mut HashMap<usize, AtomicPtr<u8>>) -> usize {
+        if self.base == 0 {
+            // An anonymous mapping, whose pages the host zeroes as they are first touched:
+            // `alloc_zeroed` at a page's alignment writes the whole area at once, 64 MiB a
+            // process, which slowed the timed tests beside it.
+            // SAFETY (host test code only): a fresh private mapping at an address the host
+            // chooses, replacing nothing; never unmapped.
+            let bytes = unsafe {
+                libc::mmap(
+                    std::ptr::null_mut(),
+                    Self::PAGES * PAGE_SIZE,
+                    libc::PROT_READ | libc::PROT_WRITE,
+                    libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+                    -1,
+                    0,
+                )
+            };
+            assert!(bytes != libc::MAP_FAILED, "the fake's placement area");
+            let bytes = bytes as *mut u8;
+            anon.insert(bytes as usize, AtomicPtr::new(bytes));
+            self.base = bytes as usize;
+            self.taken = vec![false; Self::PAGES];
+        }
+        self.base
+    }
+
+    /// The first page index of `addr..addr + len` if it lies wholly in the area, `None` if wholly
+    /// outside it; partly in is `InvalidArgument`.
+    fn pages(&self, addr: usize, len: usize) -> Result<Option<usize>, Error> {
+        let end = self.base + Self::PAGES * PAGE_SIZE;
+        if self.base == 0 || addr + len <= self.base || addr >= end {
+            Ok(None)
+        } else if addr >= self.base && addr + len <= end {
+            Ok(Some((addr - self.base) / PAGE_SIZE))
+        } else {
+            Err(Error::InvalidArgument)
+        }
+    }
+
+    /// Marks `n` pages from `first` mapped and zeroes them, if every one is free.
+    fn take(&mut self, first: usize, n: usize) -> bool {
+        if self.taken[first..first + n].iter().any(|t| *t) {
+            return false;
+        }
+        self.taken[first..first + n].fill(true);
+        // SAFETY: the pages lie inside the area's allocation, and no process maps them (checked
+        // just above), so nothing holds a reference into them.
+        unsafe { std::ptr::write_bytes((self.base + first * PAGE_SIZE) as *mut u8, 0, n * PAGE_SIZE) };
+        true
+    }
+
+    /// The first free run of `n` pages, first fit from the rover, then from the start; its address.
+    fn place(&mut self, n: usize) -> Option<usize> {
+        let fits = |a: &Area, at: usize| at + n <= Self::PAGES && a.taken[at..at + n].iter().all(|t| !*t);
+        let at = (self.rover..Self::PAGES).chain(0..self.rover).find(|&at| fits(self, at))?;
+        self.take(at, n);
+        self.rover = at;
+        Some(self.base + at * PAGE_SIZE)
+    }
+}
+
+/// The area `addr..addr + len` lies in, and its first page there: `None` outside every area,
+/// `InvalidArgument` partly in one.
+fn area_of(s: &mut State, addr: usize, len: usize) -> Result<Option<(&mut Area, usize)>, Error> {
+    for p in &mut s.processes {
+        if let Some(first) = p.area.pages(addr, len)? {
+            return Ok(Some((&mut p.area, first)));
+        }
+    }
+    Ok(None)
+}
+
+/// Frees pages this kernel mapped, which their process no longer holds: pages of an area go back
+/// to it (a lend or transfer of a `MapAnon` run is still its area's); under Miri, a `MapAnon` run's
+/// own allocation is freed when `whole`, the run given up as it was mapped ([`Area`]); a part of
+/// one is not, and no test there gives up a part.
+fn free(s: &mut State, addr: usize, len: usize, whole: bool) {
+    if let Ok(Some((area, first))) = area_of(s, addr, len) {
+        area.taken[first..first + len / PAGE_SIZE].fill(false);
+    } else if cfg!(miri) && whole && s.anon.remove(&addr).is_some() {
+        // SAFETY: under Miri `MapAnon` made `addr` with `alloc_zeroed` and exactly this layout, and
+        // its caller has just taken it out of its process's mappings, so it is freed once.
+        unsafe { dealloc(addr as *mut u8, Layout::from_size_align(len, PAGE_SIZE).unwrap()) };
+    }
 }
 
 /// How long a wait only a change can end may see nothing change before the test is called stuck:
@@ -985,16 +1114,23 @@ unsafe impl redoubt_rt::Transport for Fake {
                 if len == 0 || len % PAGE_SIZE != 0 {
                     return Err(Error::InvalidArgument);
                 }
-                let layout = Layout::from_size_align(len, PAGE_SIZE).map_err(|_| Error::OutOfMemory)?;
-                // SAFETY: the layout has a non-zero size.
-                let pages = unsafe { alloc_zeroed(layout) };
-                let addr = pages as usize;
-                if addr == 0 {
-                    return Err(Error::OutOfMemory);
-                }
                 let mut s = self.lock();
+                if cfg!(miri) {
+                    let layout = Layout::from_size_align(len, PAGE_SIZE).map_err(|_| Error::OutOfMemory)?;
+                    // SAFETY: the layout has a non-zero size.
+                    let pages = unsafe { alloc_zeroed(layout) };
+                    if pages.is_null() {
+                        return Err(Error::OutOfMemory);
+                    }
+                    s.anon.insert(pages as usize, AtomicPtr::new(pages));
+                    s.processes[pid].map(pages as usize, len);
+                    return Ok(Return::Addr(pages as usize));
+                }
+                let State { processes, anon, .. } = &mut *s;
+                let area = &mut processes[pid].area;
+                area.base(anon);
+                let addr = area.place(len / PAGE_SIZE).ok_or(Error::OutOfMemory)?;
                 s.processes[pid].map(addr, len);
-                s.anon.insert(addr, AtomicPtr::new(pages));
                 Ok(Return::Addr(addr))
             }
             Call::MapFixed { addr, len, .. } => {
@@ -1006,10 +1142,20 @@ unsafe impl redoubt_rt::Transport for Fake {
                     return Err(Error::InvalidArgument);
                 }
                 let Some(end) = addr.checked_add(len) else { return Err(Error::InvalidArgument) };
+                range_cap(len)?;
+                let mut s = self.lock();
+                // In a placement area, which lies wherever the host put it, as `MapAnon`'s pages
+                // do: free pages there, as the kernel maps a free range.
+                if let Some((area, first)) = area_of(&mut s, addr, len)? {
+                    if !area.take(first, len / PAGE_SIZE) {
+                        return Err(Error::InvalidArgument);
+                    }
+                    s.processes[pid].map(addr, len);
+                    return Ok(Return::Nothing);
+                }
                 if end > redoubt_rt::abi::USER_AREA_END {
                     return Err(Error::InvalidArgument);
                 }
-                let mut s = self.lock();
                 // SAFETY (host test code only): an anonymous private mapping of fresh pages at
                 // `addr`, replacing nothing (`MAP_FIXED_NOREPLACE`), so no memory of this process
                 // is remapped under a reference; the pages are given back by `Unmap` below, once.
@@ -1037,18 +1183,26 @@ unsafe impl redoubt_rt::Transport for Fake {
                 Ok(Return::Nothing)
             }
             Call::Unmap { addr, len } => {
+                if len == 0 || addr % PAGE_SIZE != 0 || len % PAGE_SIZE != 0 {
+                    return Err(Error::InvalidArgument);
+                }
+                range_cap(len)?;
                 let mut s = self.lock();
-                if s.processes[pid].mappings.get(&addr) != Some(&len) {
+                if !s.processes[pid].holds(addr, len) {
                     return Err(Error::InvalidArgument);
                 }
                 not_given_up(&s, pid, addr, len)?;
-                s.processes[pid].mappings.remove(&addr);
-                if s.fixed.remove(&addr) {
-                    // SAFETY (host test code only): `MapFixed` above mapped exactly `len` bytes at
-                    // `addr`, which its process has just given up, so they are unmapped once.
+                let (at, whole) = s.processes[pid].carve(addr, len).expect("held, checked just above");
+                if s.fixed.remove(&at) {
+                    // What is left of the host mapping on either side is still `MapFixed`'s.
+                    s.fixed.extend((addr > at).then_some(at));
+                    s.fixed.extend((addr + len < at + whole).then_some(addr + len));
+                    // SAFETY (host test code only): `MapFixed` above mapped `at..at + whole`, of
+                    // which its process has just given up `addr..addr + len`, so those pages are
+                    // unmapped once.
                     unsafe { libc::munmap(addr as *mut libc::c_void, len) };
                 } else {
-                    free(addr, len);
+                    free(&mut s, addr, len, (at, whole) == (addr, len));
                 }
                 Ok(Return::Nothing)
             }
@@ -1190,7 +1344,7 @@ unsafe impl redoubt_rt::Transport for Fake {
                 let abandoned = s.abandoned.remove(&msg_id.get());
                 if let Some(Some((addr, len))) = abandoned {
                     s.processes[pid].mappings.remove(&addr);
-                    free(addr, len);
+                    free(&mut s, addr, len, true);
                 }
                 let delivered = abandoned.is_none();
                 let installed = if delivered { (1 << handles.len()) - 1 } else { 0 };
@@ -1245,6 +1399,7 @@ unsafe impl redoubt_rt::Transport for Fake {
                 Ok(Return::Handle(install(&mut s, pid, Object::Process(index))))
             }
             Call::ProcessMap { process, src, dst, len, flags } => {
+                range_cap(len)?;
                 let mut s = self.lock();
                 let Object::Process(index) = lookup(&s, pid, process)? else {
                     return Err(Error::WrongObject);
@@ -1252,15 +1407,19 @@ unsafe impl redoubt_rt::Transport for Fake {
                 if s.launched[index].start.is_some() {
                     return Err(Error::NotPermitted);
                 }
-                if s.processes[pid].mappings.get(&src) != Some(&len) {
+                if len == 0
+                    || src % PAGE_SIZE != 0
+                    || len % PAGE_SIZE != 0
+                    || !s.processes[pid].holds(src, len)
+                {
                     return Err(Error::InvalidArgument);
                 }
                 not_given_up(&s, pid, src, len)?;
-                s.processes[pid].mappings.remove(&src);
-                // SAFETY: `src..src + len` is a whole mapping this kernel made for `pid` (checked
+                let (at, whole) = s.processes[pid].carve(src, len).expect("held, checked just above");
+                // SAFETY: `src..src + len` lies in a mapping this kernel made for `pid` (checked
                 // just above) and has just left its table, so nothing else reads or frees it.
                 let bytes = unsafe { std::slice::from_raw_parts(src as *const u8, len) }.to_vec();
-                free(src, len);
+                free(&mut s, src, len, (at, whole) == (src, len));
                 s.launched[index].maps.push((dst, flags, bytes));
                 Ok(Return::Nothing)
             }
